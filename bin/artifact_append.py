@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import os
 import re
 import sys
 import time
@@ -162,7 +163,8 @@ def main(argv: list[str] | None = None) -> int:
         return 3
 
     lock_path = target.with_name(f".{schema['file']}.lock")
-    deadline = time.monotonic() + 5.0
+    timeout = float(os.environ.get("ARTIFACT_LOCK_TIMEOUT", "5.0"))
+    deadline = time.monotonic() + timeout
     with open(lock_path, "w") as lock_file:
         while True:
             try:
