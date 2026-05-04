@@ -96,7 +96,7 @@ def render_entry(schema: dict, entry_id: int, fields: dict[str, str]) -> str:
     for key in schema["fields"]:
         if key == "title":
             continue
-        if key in fields:
+        if fields.get(key):
             label = schema["labels"].get(key, key)
             lines.append(f"- **{label}**: {fields[key]}")
     lines.append("")

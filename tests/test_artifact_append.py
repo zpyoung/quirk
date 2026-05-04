@@ -48,3 +48,28 @@ def test_append_bug_1_to_empty_file(initialized_project: Path) -> None:
     assert "**File**: login.ts:42" in bugs
     assert "**Severity**: high" in bugs
     assert "BUG-1: auth fails on safari" in result.stdout
+
+
+def test_empty_optional_field_is_omitted(initialized_project: Path) -> None:
+    """A user-supplied optional field with empty value should not render as a bare label."""
+    result = run_script(
+        "artifact_append.py", "bug",
+        "--field", "title=clean entry",
+        "--field", "file=x:1",
+        "--field", "description=test",
+        "--field", "severity=low",
+        "--field", "proposed_fix=",  # explicit empty
+        cwd=initialized_project,
+    )
+    assert result.returncode == 0, result.stderr
+    bugs = (initialized_project / "BUGS.md").read_text()
+    # Extract just the BUG-1 entry (after the schema comment).
+    parts = bugs.split("## BUG-1: clean entry")
+    assert len(parts) == 2, "Entry not found"
+    entry = parts[1]
+    # The proposed_fix label must NOT appear in the rendered entry.
+    assert "**Proposed fix**:" not in entry
+    # But required fields must be there.
+    assert "**File**: x:1" in entry
+    assert "**Description**: test" in entry
+    assert "**Severity**: low" in entry
