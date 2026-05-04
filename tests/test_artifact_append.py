@@ -73,3 +73,19 @@ def test_empty_optional_field_is_omitted(initialized_project: Path) -> None:
     assert "**File**: x:1" in entry
     assert "**Description**: test" in entry
     assert "**Severity**: low" in entry
+
+
+def test_sequential_id_increment(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    bugs.write_text(bugs.read_text() + "\n## BUG-6: prior\n- **File**: x.py:1\n- **Description**: y\n- **Severity**: low\n")
+    result = run_script(
+        "artifact_append.py", "bug",
+        "--field", "title=new bug",
+        "--field", "file=a.py:1",
+        "--field", "description=z",
+        "--field", "severity=low",
+        cwd=initialized_project,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "## BUG-7: new bug" in bugs.read_text()
+    assert "BUG-7: new bug" in result.stdout
