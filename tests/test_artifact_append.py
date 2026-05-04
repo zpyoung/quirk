@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from .conftest import run_script
 
 
@@ -121,3 +123,16 @@ def test_schema_version_mismatch_exits_8(initialized_project: Path) -> None:
     )
     assert result.returncode == 8
     assert "schema" in result.stderr.lower()
+
+
+def test_missing_target_file_exits_3(project_dir: Path) -> None:
+    # project_dir has no BUGS.md
+    result = run_script(
+        "artifact_append.py", "bug",
+        "--field", "title=t", "--field", "file=x:1",
+        "--field", "description=d", "--field", "severity=low",
+        cwd=project_dir,
+    )
+    assert result.returncode == 3
+    assert "BUGS.md not found" in result.stderr
+    assert "init" in result.stderr.lower()
