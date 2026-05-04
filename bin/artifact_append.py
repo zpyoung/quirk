@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
+from datetime import date
 from pathlib import Path
 
 SCHEMAS: dict[str, dict] = {
@@ -80,6 +82,27 @@ SCHEMAS: dict[str, dict] = {
 EXPECTED_SCHEMA_VERSION = 1
 
 
+def find_max_id(text: str, header: str) -> int:
+    """Return max N from '## HEADER-N:' lines, or 0 if none found."""
+    pattern = re.compile(rf"^##\s+{re.escape(header)}-(\d+):", re.MULTILINE)
+    ids = [int(m.group(1)) for m in pattern.finditer(text)]
+    return max(ids) if ids else 0
+
+
+def render_entry(schema: dict, entry_id: int, fields: dict[str, str]) -> str:
+    """Render a markdown entry block for the given schema and fields."""
+    title = fields.get("title", "")
+    lines = [f"## {schema['header']}-{entry_id}: {title}"]
+    for key in schema["fields"]:
+        if key == "title":
+            continue
+        if key in fields:
+            label = schema["labels"].get(key, key)
+            lines.append(f"- **{label}**: {fields[key]}")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Append to a typed-artifact file.")
     parser.add_argument("type", help="Artifact type")
@@ -117,6 +140,32 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    project = Path(args.project_dir).resolve()
+    target = project / schema["file"]
+
+    if not target.exists():
+        print(
+            f"{schema['file']} not found in {project}. "
+            f"Run /quirk:artifacts:init first.",
+            file=sys.stderr,
+        )
+        return 3
+
+    text = target.read_text()
+    next_id = find_max_id(text, schema["header"]) + 1
+
+    if "observed" in schema["fields"] and "observed" not in fields:
+        fields["observed"] = date.today().isoformat()
+    if "deferred" in schema["fields"] and "deferred" not in fields:
+        fields["deferred"] = date.today().isoformat()
+    if "proposed" in schema["fields"] and "proposed" not in fields:
+        fields["proposed"] = date.today().isoformat()
+
+    entry = render_entry(schema, next_id, fields)
+    new_text = text.rstrip() + "\n\n" + entry + "\n"
+    target.write_text(new_text)
+
+    print(f"{schema['header']}-{next_id}: {fields.get('title', '')}")
     return 0
 
 
