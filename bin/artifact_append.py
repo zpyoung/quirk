@@ -94,6 +94,29 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Unknown type {args.type!r}. Valid: {valid}", file=sys.stderr)
         return 2
 
+    schema = SCHEMAS[args.type]
+
+    fields: dict[str, str] = {}
+    for raw in args.field:
+        if "=" not in raw:
+            print(f"Bad --field {raw!r}: expected key=value", file=sys.stderr)
+            return 2
+        key, value = raw.split("=", 1)
+        if key not in schema["fields"]:
+            valid = ", ".join(schema["fields"])
+            print(f"Unknown field {key!r} for {args.type}. Valid: {valid}", file=sys.stderr)
+            return 2
+        fields[key] = value
+
+    missing = [k for k in schema["required"] if k not in fields]
+    if missing:
+        print(
+            f"Missing required field: {', '.join(missing)}. "
+            f"See schema in templates/{schema['file']}.",
+            file=sys.stderr,
+        )
+        return 2
+
     return 0
 
 
