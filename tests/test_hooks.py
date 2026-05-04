@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -40,3 +41,48 @@ def test_load_tail_silent_when_project_dir_unset(project_dir: Path) -> None:
     )
     assert r.returncode == 0
     assert r.stdout == ""
+
+
+def stdin_for_edit(file_path: Path) -> str:
+    return json.dumps({"tool_name": "Edit", "tool_input": {"file_path": str(file_path)}})
+
+
+def run_hook_with_stdin(name: str, stdin: str, project_dir: Path, **extra_env: str) -> subprocess.CompletedProcess:
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project_dir), **extra_env}
+    return subprocess.run(
+        ["bash", str(HOOKS_DIR / name)],
+        env=env, input=stdin, capture_output=True, text=True,
+    )
+
+
+def test_lint_tics_warns_on_match(initialized_project: Path) -> None:
+    bad = initialized_project / "thing.py"
+    bad.write_text("# this is a pre-existing thing — should be flagged\n")
+    r = run_hook_with_stdin("lint_tics.sh", stdin_for_edit(bad), initialized_project)
+    assert r.returncode == 0
+    assert "pre-existing" in r.stdout.lower()
+    assert "BUGS.md" in r.stdout
+
+
+def test_lint_tics_silent_on_no_match(initialized_project: Path) -> None:
+    ok = initialized_project / "thing.py"
+    ok.write_text("# clean code\n")
+    r = run_hook_with_stdin("lint_tics.sh", stdin_for_edit(ok), initialized_project)
+    assert r.returncode == 0
+    assert r.stdout == ""
+
+
+def test_lint_tics_silent_on_binary(initialized_project: Path) -> None:
+    bin_file = initialized_project / "thing.bin"
+    bin_file.write_bytes(b"\x00\x01\x02\x03")
+    r = run_hook_with_stdin("lint_tics.sh", stdin_for_edit(bin_file), initialized_project)
+    assert r.returncode == 0
+    assert r.stdout == ""
+
+
+def test_lint_tics_silent_when_no_artifacts(project_dir: Path) -> None:
+    f = project_dir / "x.py"
+    f.write_text("pre-existing code here\n")
+    r = run_hook_with_stdin("lint_tics.sh", stdin_for_edit(f), project_dir)
+    assert r.returncode == 0
+    assert r.stdout == ""  # no artifacts → don't warn
