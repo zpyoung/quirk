@@ -29,3 +29,19 @@ def test_adr_increments_from_existing(project_dir: Path) -> None:
     assert result.returncode == 0
     assert (adr_dir / "0008-newest-one.md").exists()
     assert "ADR-0008:" in result.stdout
+
+
+def test_kebab_strips_punctuation(project_dir: Path) -> None:
+    result = run_script(
+        "adr_create.py", "--title", "Switch JWT → opaque tokens (V2)!",
+        cwd=project_dir,
+    )
+    assert result.returncode == 0
+    files = list((project_dir / "docs" / "adr").glob("*.md"))
+    assert files[0].name == "0001-switch-jwt-opaque-tokens-v2.md"
+
+
+def test_empty_kebab_exits_2(project_dir: Path) -> None:
+    result = run_script("adr_create.py", "--title", "!!!---!!!", cwd=project_dir)
+    assert result.returncode == 2
+    assert "kebab" in result.stderr.lower()
