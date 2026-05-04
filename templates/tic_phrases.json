@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "patterns": [
+    {"phrase": "pre-existing", "suggested_artifact": "BUGS.md"},
+    {"phrase": "already existed", "suggested_artifact": "BUGS.md"},
+    {"phrase": "introduced before", "suggested_artifact": "BUGS.md"},
+    {"phrase": "out of scope", "suggested_artifact": "DEFERRED.md"},
+    {"phrase": "larger refactor needed", "suggested_artifact": "DEFERRED.md"},
+    {"phrase": "future work", "suggested_artifact": "DEFERRED.md"},
+    {"phrase": "skipped for brevity", "suggested_artifact": "TEST_BACKLOG.md"},
+    {"phrase": "tests can be added later", "suggested_artifact": "TEST_BACKLOG.md"},
+    {"phrase": "worth reconsidering", "suggested_artifact": "proposals.md"},
+    {"phrase": "architectural concern", "suggested_artifact": "proposals.md"},
+    {"phrase": "worth revisiting", "suggested_artifact": "proposals.md"}
+  ]
+}
