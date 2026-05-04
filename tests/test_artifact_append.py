@@ -89,3 +89,21 @@ def test_sequential_id_increment(initialized_project: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert "## BUG-7: new bug" in bugs.read_text()
     assert "BUG-7: new bug" in result.stdout
+
+
+def test_gaps_use_max_plus_one(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    body = bugs.read_text()
+    for n in (3, 7, 12):
+        body += f"\n## BUG-{n}: x\n- **File**: x.py:1\n- **Description**: y\n- **Severity**: low\n"
+    bugs.write_text(body)
+    result = run_script(
+        "artifact_append.py", "bug",
+        "--field", "title=after gaps",
+        "--field", "file=a.py:1",
+        "--field", "description=z",
+        "--field", "severity=low",
+        cwd=initialized_project,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "## BUG-13: after gaps" in bugs.read_text()
