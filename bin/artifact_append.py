@@ -103,6 +103,14 @@ def render_entry(schema: dict, entry_id: int, fields: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
+SCHEMA_VERSION_RE = re.compile(r"<!--\s*schema-version:\s*(\d+)\s*-->")
+
+
+def detect_schema_version(text: str) -> int | None:
+    m = SCHEMA_VERSION_RE.search(text)
+    return int(m.group(1)) if m else None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Append to a typed-artifact file.")
     parser.add_argument("type", help="Artifact type")
@@ -152,6 +160,14 @@ def main(argv: list[str] | None = None) -> int:
         return 3
 
     text = target.read_text()
+    version = detect_schema_version(text)
+    if version is not None and version > EXPECTED_SCHEMA_VERSION:
+        print(
+            f"Schema v{version} file, plugin understands v{EXPECTED_SCHEMA_VERSION}. "
+            "Upgrade quirk.",
+            file=sys.stderr,
+        )
+        return 8
     next_id = find_max_id(text, schema["header"]) + 1
 
     if "observed" in schema["fields"] and "observed" not in fields:

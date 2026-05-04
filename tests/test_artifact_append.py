@@ -107,3 +107,17 @@ def test_gaps_use_max_plus_one(initialized_project: Path) -> None:
     )
     assert result.returncode == 0, result.stderr
     assert "## BUG-13: after gaps" in bugs.read_text()
+
+
+def test_schema_version_mismatch_exits_8(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    text = bugs.read_text().replace("schema-version: 1", "schema-version: 99")
+    bugs.write_text(text)
+    result = run_script(
+        "artifact_append.py", "bug",
+        "--field", "title=t", "--field", "file=x:1",
+        "--field", "description=d", "--field", "severity=low",
+        cwd=initialized_project,
+    )
+    assert result.returncode == 8
+    assert "schema" in result.stderr.lower()
