@@ -2912,8 +2912,8 @@ Change:
     "name": "Zachary Young",
     "email": "zach@fabledfreedom.com"
   },
-  "homepage": "https://github.com/zyoung/quirk",
-  "repository": "https://github.com/zyoung/quirk",
+  "homepage": "https://github.com/zpyoung/quirk",
+  "repository": "https://github.com/zpyoung/quirk",
   "license": "MIT",
   "keywords": [
     "skills",
@@ -2936,8 +2936,8 @@ To:
     "name": "Zachary Young",
     "email": "zach@fabledfreedom.com"
   },
-  "homepage": "https://github.com/zyoung/quirk",
-  "repository": "https://github.com/zyoung/quirk",
+  "homepage": "https://github.com/zpyoung/quirk",
+  "repository": "https://github.com/zpyoung/quirk",
   "license": "MIT",
   "keywords": [
     "skills",
