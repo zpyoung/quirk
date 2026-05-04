@@ -98,3 +98,16 @@ def test_wrap_session_silent_when_no_artifacts(project_dir: Path) -> None:
     r = run_hook("wrap_session.sh", project_dir)
     assert r.returncode == 0
     assert r.stdout == ""
+
+
+def test_hooks_json_structure() -> None:
+    config = json.loads((REPO_ROOT / "hooks" / "hooks.json").read_text())
+    hooks = config["hooks"]
+    assert "SessionStart" in hooks
+    assert "PostToolUse" in hooks
+    assert "Stop" in hooks
+
+    post = hooks["PostToolUse"][0]
+    assert post["matcher"] == "Edit|Write"
+    assert "lint_tics.sh" in post["hooks"][0]["command"]
+    assert "${CLAUDE_PLUGIN_ROOT}" in post["hooks"][0]["command"]
