@@ -86,3 +86,15 @@ def test_lint_tics_silent_when_no_artifacts(project_dir: Path) -> None:
     r = run_hook_with_stdin("lint_tics.sh", stdin_for_edit(f), project_dir)
     assert r.returncode == 0
     assert r.stdout == ""  # no artifacts → don't warn
+
+
+def test_wrap_session_emits_reminder_when_artifacts_exist(initialized_project: Path) -> None:
+    r = run_hook("wrap_session.sh", initialized_project)
+    assert r.returncode == 0
+    assert "Route any unrouted observations" in r.stdout
+
+
+def test_wrap_session_silent_when_no_artifacts(project_dir: Path) -> None:
+    r = run_hook("wrap_session.sh", project_dir)
+    assert r.returncode == 0
+    assert r.stdout == ""
