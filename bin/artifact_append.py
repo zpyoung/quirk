@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""Append an entry to a typed-artifact markdown file."""
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+SCHEMAS: dict[str, dict] = {
+    "bug": {
+        "header": "BUG",
+        "file": "BUGS.md",
+        "required": ["title", "file", "description", "severity"],
+        "fields": [
+            "title", "observed", "file", "description",
+            "introduced_by", "severity", "proposed_fix", "blocker_for",
+        ],
+        "labels": {
+            "observed": "Observed",
+            "file": "File",
+            "description": "Description",
+            "introduced_by": "Introduced by",
+            "severity": "Severity",
+            "proposed_fix": "Proposed fix",
+            "blocker_for": "Blocker for",
+        },
+    },
+    "defer": {
+        "header": "DEFER",
+        "file": "DEFERRED.md",
+        "required": ["title", "why_deferred", "priority"],
+        "fields": [
+            "title", "deferred", "session_context", "why_deferred",
+            "estimated_effort", "priority", "proposed_owner",
+        ],
+        "labels": {
+            "deferred": "Deferred",
+            "session_context": "Session context",
+            "why_deferred": "Why deferred",
+            "estimated_effort": "Estimated effort",
+            "priority": "Priority",
+            "proposed_owner": "Proposed owner",
+        },
+    },
+    "test-skip": {
+        "header": "TEST",
+        "file": "TEST_BACKLOG.md",
+        "required": ["title", "file_under_test", "reason_skipped"],
+        "fields": [
+            "title", "file_under_test", "test_type", "reason_skipped",
+            "edge_cases", "priority",
+        ],
+        "labels": {
+            "file_under_test": "File under test",
+            "test_type": "Test type",
+            "reason_skipped": "Reason skipped",
+            "edge_cases": "Edge cases to cover",
+            "priority": "Priority",
+        },
+    },
+    "proposal": {
+        "header": "PROPOSAL",
+        "file": "proposals.md",
+        "required": ["title", "context", "recommendation"],
+        "fields": [
+            "title", "proposed", "context", "options_considered",
+            "recommendation", "decision_required_from", "status",
+        ],
+        "labels": {
+            "proposed": "Proposed",
+            "context": "Context",
+            "options_considered": "Options considered",
+            "recommendation": "Recommendation",
+            "decision_required_from": "Decision required from",
+            "status": "Status",
+        },
+    },
+}
+
+EXPECTED_SCHEMA_VERSION = 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Append to a typed-artifact file.")
+    parser.add_argument("type", help="Artifact type")
+    parser.add_argument("--field", action="append", default=[],
+                        help="Field as key=value (repeatable)")
+    parser.add_argument("--project-dir", default=".",
+                        help="Project root containing artifact files")
+    args = parser.parse_args(argv)
+
+    if args.type not in SCHEMAS:
+        valid = ", ".join(sorted(SCHEMAS.keys()))
+        print(f"Unknown type {args.type!r}. Valid: {valid}", file=sys.stderr)
+        return 2
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
