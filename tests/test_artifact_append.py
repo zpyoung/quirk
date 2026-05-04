@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import fcntl
+import os
+import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -199,3 +203,24 @@ def test_concurrent_appends_do_not_collide_on_id(initialized_project: Path) -> N
     assert "## BUG-1: concurrent" in bugs
     assert "## BUG-2: concurrent" in bugs
     assert all(r.returncode == 0 for r in results)
+
+
+def test_lock_contention_exits_5(initialized_project: Path) -> None:
+    """If the lock file is already held, the script gives up after the timeout and exits 5."""
+    lock_path = initialized_project / ".BUGS.md.lock"
+    with open(lock_path, "w") as held:
+        fcntl.flock(held.fileno(), fcntl.LOCK_EX)
+        # Run with a short fake timeout via env var
+        env = {**os.environ, "ARTIFACT_LOCK_TIMEOUT": "0.5"}
+        r = subprocess.run(
+            [sys.executable, str(Path(__file__).parent.parent / "bin" / "artifact_append.py"),
+             "bug",
+             "--field", "title=t", "--field", "file=x:1",
+             "--field", "description=d", "--field", "severity=low"],
+            cwd=initialized_project,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert r.returncode == 5
+        assert "lock" in r.stderr.lower()
