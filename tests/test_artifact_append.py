@@ -136,3 +136,38 @@ def test_missing_target_file_exits_3(project_dir: Path) -> None:
     assert result.returncode == 3
     assert "BUGS.md not found" in result.stderr
     assert "init" in result.stderr.lower()
+
+
+@pytest.mark.parametrize(
+    "kind, header, target_file, fields",
+    [
+        ("defer", "DEFER", "DEFERRED.md", [
+            ("title", "ship later"),
+            ("why_deferred", "out of scope"),
+            ("priority", "P3"),
+        ]),
+        ("test-skip", "TEST", "TEST_BACKLOG.md", [
+            ("title", "edge case"),
+            ("file_under_test", "auth.ts"),
+            ("reason_skipped", "complexity"),
+        ]),
+        ("proposal", "PROPOSAL", "proposals.md", [
+            ("title", "rethink session storage"),
+            ("context", "JWT has problems"),
+            ("recommendation", "switch to opaque tokens"),
+        ]),
+    ],
+)
+def test_all_artifact_types_append(
+    initialized_project: Path,
+    kind: str, header: str, target_file: str,
+    fields: list[tuple[str, str]],
+) -> None:
+    args = []
+    for k, v in fields:
+        args += ["--field", f"{k}={v}"]
+    result = run_script("artifact_append.py", kind, *args, cwd=initialized_project)
+    assert result.returncode == 0, result.stderr
+    target = (initialized_project / target_file).read_text()
+    assert f"## {header}-1:" in target
+    assert f"{header}-1:" in result.stdout
