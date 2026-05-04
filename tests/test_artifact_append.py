@@ -224,3 +224,18 @@ def test_lock_contention_exits_5(initialized_project: Path) -> None:
         )
         assert r.returncode == 5
         assert "lock" in r.stderr.lower()
+
+
+def test_unicode_and_special_chars_preserved(initialized_project: Path) -> None:
+    weird = "café — emoji 🐛 quotes \"don't\" newlines\\nliteral"
+    result = run_script(
+        "artifact_append.py", "bug",
+        "--field", f"title={weird}",
+        "--field", "file=x:1",
+        "--field", f"description={weird}",
+        "--field", "severity=low",
+        cwd=initialized_project,
+    )
+    assert result.returncode == 0, result.stderr
+    body = (initialized_project / "BUGS.md").read_text()
+    assert weird in body
