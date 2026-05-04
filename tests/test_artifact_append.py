@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -171,3 +172,30 @@ def test_all_artifact_types_append(
     target = (initialized_project / target_file).read_text()
     assert f"## {header}-1:" in target
     assert f"{header}-1:" in result.stdout
+
+
+def test_concurrent_appends_do_not_collide_on_id(initialized_project: Path) -> None:
+    """Two concurrent runs must produce BUG-1 and BUG-2, not two BUG-1s."""
+    results = []
+
+    def runner() -> None:
+        r = run_script(
+            "artifact_append.py", "bug",
+            "--field", "title=concurrent",
+            "--field", "file=x:1",
+            "--field", "description=d",
+            "--field", "severity=low",
+            cwd=initialized_project,
+        )
+        results.append(r)
+
+    threads = [threading.Thread(target=runner) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    bugs = (initialized_project / "BUGS.md").read_text()
+    assert "## BUG-1: concurrent" in bugs
+    assert "## BUG-2: concurrent" in bugs
+    assert all(r.returncode == 0 for r in results)

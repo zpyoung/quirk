@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import re
 import sys
+import time
 from datetime import date
 from pathlib import Path
 
@@ -159,29 +161,46 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 3
 
-    text = target.read_text()
-    version = detect_schema_version(text)
-    if version is not None and version > EXPECTED_SCHEMA_VERSION:
-        print(
-            f"Schema v{version} file, plugin understands v{EXPECTED_SCHEMA_VERSION}. "
-            "Upgrade quirk.",
-            file=sys.stderr,
-        )
-        return 8
-    next_id = find_max_id(text, schema["header"]) + 1
+    lock_path = target.with_name(f".{schema['file']}.lock")
+    deadline = time.monotonic() + 5.0
+    with open(lock_path, "w") as lock_file:
+        while True:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    print(
+                        f"Could not acquire lock on {lock_path.name}. Retry.",
+                        file=sys.stderr,
+                    )
+                    return 5
+                time.sleep(0.05)
 
-    if "observed" in schema["fields"] and "observed" not in fields:
-        fields["observed"] = date.today().isoformat()
-    if "deferred" in schema["fields"] and "deferred" not in fields:
-        fields["deferred"] = date.today().isoformat()
-    if "proposed" in schema["fields"] and "proposed" not in fields:
-        fields["proposed"] = date.today().isoformat()
+        text = target.read_text()
+        version = detect_schema_version(text)
+        if version is not None and version > EXPECTED_SCHEMA_VERSION:
+            print(
+                f"Schema v{version} file, plugin understands v{EXPECTED_SCHEMA_VERSION}. "
+                "Upgrade quirk.",
+                file=sys.stderr,
+            )
+            return 8
 
-    entry = render_entry(schema, next_id, fields)
-    new_text = text.rstrip() + "\n\n" + entry + "\n"
-    target.write_text(new_text)
+        next_id = find_max_id(text, schema["header"]) + 1
 
-    print(f"{schema['header']}-{next_id}: {fields.get('title', '')}")
+        if "observed" in schema["fields"] and "observed" not in fields:
+            fields["observed"] = date.today().isoformat()
+        if "deferred" in schema["fields"] and "deferred" not in fields:
+            fields["deferred"] = date.today().isoformat()
+        if "proposed" in schema["fields"] and "proposed" not in fields:
+            fields["proposed"] = date.today().isoformat()
+
+        entry = render_entry(schema, next_id, fields)
+        new_text = text.rstrip() + "\n\n" + entry + "\n"
+        target.write_text(new_text)
+
+        print(f"{schema['header']}-{next_id}: {fields.get('title', '')}")
     return 0
 
 
