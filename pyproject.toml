@@ -1,0 +1,8 @@
+[project]
+name = "quirk-typed-artifacts"
+version = "5.1.0"
+requires-python = ">=3.9"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["bin"]
