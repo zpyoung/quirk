@@ -37,6 +37,33 @@ digraph when_to_use {
 - Two-stage review after each task: spec compliance first, then code quality
 - Faster iteration (no human-in-loop between tasks)
 
+## Runtime Selection
+
+**This skill supports two agent runtimes.** Before reading the plan, ask the user
+which to use via `AskUserQuestion`:
+
+> **Which agent runtime for this plan?**
+> - **Claude subagents** (default) — `Task` tool with general-purpose / quirk:code-reviewer agents
+> - **Pi agents** — `pi -p` headless dispatch with codex implementer + gemini reviewer
+
+The choice is locked once and applies uniformly to per-task implementer + per-task
+spec reviewer + per-task code-quality reviewer for the rest of the run.
+
+**The final whole-branch reviewer always uses the Claude `quirk:code-reviewer`
+agent**, regardless of choice — cross-task synthesis benefits from Claude's agent
+context, and pi has no equivalent role.
+
+| Role | Claude path | Pi path |
+|---|---|---|
+| Implementer | `Task` (general-purpose) + `assets/implementer-prompt.md` | `pi -p` codex (`openai-codex/gpt-5-5:xhigh`) + `assets/pi-implementer-prompt.md` |
+| Spec reviewer | `Task` (general-purpose) + `assets/spec-reviewer-prompt.md` | `pi -p` gemini (`google/gemini-3-1-pro-preview:high`) + `assets/pi-spec-reviewer-prompt.md` |
+| Code-quality reviewer | `Task` (quirk:code-reviewer) + `assets/code-quality-reviewer-prompt.md` | `pi -p` gemini (`google/gemini-3-1-pro-preview:high`) + `assets/pi-code-quality-reviewer-prompt.md` |
+| Final whole-branch reviewer | `Task` (quirk:code-reviewer) | `Task` (quirk:code-reviewer) — always Claude |
+
+When the pi path is selected, **REQUIRED:** consult `quirk:pi-dev` for the
+canonical hardened dispatch recipe, failure-detection rules, and reviewer JSON
+parse fallback.
+
 ## The Process
 
 ```dot
@@ -45,48 +72,59 @@ digraph process {
 
     subgraph cluster_per_task {
         label="Per Task";
-        "Dispatch implementer subagent (./implementer-prompt.md)" [shape=box];
-        "Implementer subagent asks questions?" [shape=diamond];
+        "Dispatch implementer (assets/<runtime>-implementer-prompt.md)" [shape=box];
+        "Implementer asks questions?" [shape=diamond];
         "Answer questions, provide context" [shape=box];
-        "Implementer subagent implements, tests, commits, self-reviews" [shape=box];
-        "Dispatch spec reviewer subagent (./spec-reviewer-prompt.md)" [shape=box];
-        "Spec reviewer subagent confirms code matches spec?" [shape=diamond];
-        "Implementer subagent fixes spec gaps" [shape=box];
-        "Dispatch code quality reviewer subagent (./code-quality-reviewer-prompt.md)" [shape=box];
-        "Code quality reviewer subagent approves?" [shape=diamond];
-        "Implementer subagent fixes quality issues" [shape=box];
+        "Implementer implements, tests, commits, self-reviews" [shape=box];
+        "Dispatch spec reviewer (assets/<runtime>-spec-reviewer-prompt.md)" [shape=box];
+        "Spec reviewer confirms code matches spec?" [shape=diamond];
+        "Implementer fixes spec gaps" [shape=box];
+        "Dispatch code quality reviewer (assets/<runtime>-code-quality-reviewer-prompt.md)" [shape=box];
+        "Code quality reviewer approves?" [shape=diamond];
+        "Implementer fixes quality issues" [shape=box];
         "Mark task complete in TodoWrite" [shape=box];
     }
 
+    "Ask: pi or Claude runtime?" [shape=diamond];
     "Read plan, extract all tasks with full text, note context, create TodoWrite" [shape=box];
     "More tasks remain?" [shape=diamond];
-    "Dispatch final code reviewer subagent for entire implementation" [shape=box];
+    "Dispatch final code reviewer (Claude quirk:code-reviewer, regardless of runtime)" [shape=box];
     "Use quirk:finishing-a-development-branch" [shape=box style=filled fillcolor=lightgreen];
 
-    "Read plan, extract all tasks with full text, note context, create TodoWrite" -> "Dispatch implementer subagent (./implementer-prompt.md)";
-    "Dispatch implementer subagent (./implementer-prompt.md)" -> "Implementer subagent asks questions?";
-    "Implementer subagent asks questions?" -> "Answer questions, provide context" [label="yes"];
-    "Answer questions, provide context" -> "Dispatch implementer subagent (./implementer-prompt.md)";
-    "Implementer subagent asks questions?" -> "Implementer subagent implements, tests, commits, self-reviews" [label="no"];
-    "Implementer subagent implements, tests, commits, self-reviews" -> "Dispatch spec reviewer subagent (./spec-reviewer-prompt.md)";
-    "Dispatch spec reviewer subagent (./spec-reviewer-prompt.md)" -> "Spec reviewer subagent confirms code matches spec?";
-    "Spec reviewer subagent confirms code matches spec?" -> "Implementer subagent fixes spec gaps" [label="no"];
-    "Implementer subagent fixes spec gaps" -> "Dispatch spec reviewer subagent (./spec-reviewer-prompt.md)" [label="re-review"];
-    "Spec reviewer subagent confirms code matches spec?" -> "Dispatch code quality reviewer subagent (./code-quality-reviewer-prompt.md)" [label="yes"];
-    "Dispatch code quality reviewer subagent (./code-quality-reviewer-prompt.md)" -> "Code quality reviewer subagent approves?";
-    "Code quality reviewer subagent approves?" -> "Implementer subagent fixes quality issues" [label="no"];
-    "Implementer subagent fixes quality issues" -> "Dispatch code quality reviewer subagent (./code-quality-reviewer-prompt.md)" [label="re-review"];
-    "Code quality reviewer subagent approves?" -> "Mark task complete in TodoWrite" [label="yes"];
+    "Ask: pi or Claude runtime?" -> "Read plan, extract all tasks with full text, note context, create TodoWrite";
+    "Read plan, extract all tasks with full text, note context, create TodoWrite" -> "Dispatch implementer (assets/<runtime>-implementer-prompt.md)";
+    "Dispatch implementer (assets/<runtime>-implementer-prompt.md)" -> "Implementer asks questions?";
+    "Implementer asks questions?" -> "Answer questions, provide context" [label="yes"];
+    "Answer questions, provide context" -> "Dispatch implementer (assets/<runtime>-implementer-prompt.md)";
+    "Implementer asks questions?" -> "Implementer implements, tests, commits, self-reviews" [label="no"];
+    "Implementer implements, tests, commits, self-reviews" -> "Dispatch spec reviewer (assets/<runtime>-spec-reviewer-prompt.md)";
+    "Dispatch spec reviewer (assets/<runtime>-spec-reviewer-prompt.md)" -> "Spec reviewer confirms code matches spec?";
+    "Spec reviewer confirms code matches spec?" -> "Implementer fixes spec gaps" [label="no"];
+    "Implementer fixes spec gaps" -> "Dispatch spec reviewer (assets/<runtime>-spec-reviewer-prompt.md)" [label="re-review"];
+    "Spec reviewer confirms code matches spec?" -> "Dispatch code quality reviewer (assets/<runtime>-code-quality-reviewer-prompt.md)" [label="yes"];
+    "Dispatch code quality reviewer (assets/<runtime>-code-quality-reviewer-prompt.md)" -> "Code quality reviewer approves?";
+    "Code quality reviewer approves?" -> "Implementer fixes quality issues" [label="no"];
+    "Implementer fixes quality issues" -> "Dispatch code quality reviewer (assets/<runtime>-code-quality-reviewer-prompt.md)" [label="re-review"];
+    "Code quality reviewer approves?" -> "Mark task complete in TodoWrite" [label="yes"];
     "Mark task complete in TodoWrite" -> "More tasks remain?";
-    "More tasks remain?" -> "Dispatch implementer subagent (./implementer-prompt.md)" [label="yes"];
-    "More tasks remain?" -> "Dispatch final code reviewer subagent for entire implementation" [label="no"];
-    "Dispatch final code reviewer subagent for entire implementation" -> "Use quirk:finishing-a-development-branch";
+    "More tasks remain?" -> "Dispatch implementer (assets/<runtime>-implementer-prompt.md)" [label="yes"];
+    "More tasks remain?" -> "Dispatch final code reviewer (Claude quirk:code-reviewer, regardless of runtime)" [label="no"];
+    "Dispatch final code reviewer (Claude quirk:code-reviewer, regardless of runtime)" -> "Use quirk:finishing-a-development-branch";
 }
 ```
 
+`<runtime>` is `` (empty) for the Claude path and `pi-` for the pi path. So the
+implementer template is `assets/implementer-prompt.md` (Claude) or
+`assets/pi-implementer-prompt.md` (pi), and so on.
+
 ## Model Selection
 
-Use the least powerful model that can handle each role to conserve cost and increase speed.
+**Pi path:** Models are fixed by role — codex (`openai-codex/gpt-5-5:xhigh`) for the
+implementer, gemini (`google/gemini-3-1-pro-preview:high`) for both reviewers. Skip the
+rest of this section.
+
+**Claude path:** Use the least powerful model that can handle each role to conserve
+cost and increase speed.
 
 **Mechanical implementation tasks** (isolated functions, clear specs, 1-2 files): use a fast, cheap model. Most implementation tasks are mechanical when the plan is well-specified.
 
@@ -119,9 +157,23 @@ Implementer subagents report one of four statuses. Handle each appropriately:
 
 ## Prompt Templates
 
-- `./implementer-prompt.md` - Dispatch implementer subagent
-- `./spec-reviewer-prompt.md` - Dispatch spec compliance reviewer subagent
-- `./code-quality-reviewer-prompt.md` - Dispatch code quality reviewer subagent
+All templates live in `assets/`. The dispatch path is selected by the runtime
+chosen in **Runtime Selection**.
+
+**Claude path:**
+- `assets/implementer-prompt.md` — dispatch implementer via `Task` (general-purpose)
+- `assets/spec-reviewer-prompt.md` — dispatch spec compliance reviewer via `Task` (general-purpose)
+- `assets/code-quality-reviewer-prompt.md` — dispatch code quality reviewer via `Task` (quirk:code-reviewer)
+
+**Pi path:**
+- `assets/pi-implementer-prompt.md` — `pi -p` codex with `--tools read,bash,edit,write`
+- `assets/pi-spec-reviewer-prompt.md` — `pi -p` gemini with `--tools read,bash` (read-only review)
+- `assets/pi-code-quality-reviewer-prompt.md` — `pi -p` gemini with `--tools read,bash` (read-only review)
+
+The pi templates reference **quirk:pi-dev** for the canonical hardened dispatch
+recipe (timeout wrapper, exit-code capture, JSONL events file) and failure-detection
+rules. Use that recipe verbatim when scripting; the pi templates show the minimum
+interactive form.
 
 ## Example Workflow
 
@@ -262,6 +314,26 @@ Done!
 - Dispatch fix subagent with specific instructions
 - Don't try to fix manually (context pollution)
 
+## Fallback (Pi runtime only)
+
+Pi has no built-in retries beyond rate-limit backoff and no auto-detect for stale
+versions. Apply the **quirk:pi-dev → Failure detection** rules in order. On
+detection:
+
+| Failure | Action |
+|---|---|
+| Auth (401, invalid api key, authentication_error) | **Fall back to Claude** for the rest of the run. Warn the user once. Don't consume retry budget — every worker hits the same wall. |
+| Billing (`insufficient_quota`, `quota.exceeded`) | **Fall back to Claude** for the rest of the run. Warn the user once. |
+| Rate limit (429, `rate_limit_error`, `RESOURCE_EXHAUSTED`) | One retry with 60s backoff. If the retry also fails, fall back to Claude for that role only. |
+| Timeout (`gtimeout` exit 124) | Treat the worker as FAIL. Re-dispatch once with a longer timeout; if it times out again, fall back to Claude for that role. |
+| Empty/missing JSONL events | Worker hung or never started. Re-dispatch once. If still empty, fall back to Claude for that role. |
+| Unparseable reviewer output | Apply **quirk:pi-dev → Reviewer JSON parse fallback**. Never count unparseable as PASS — synthesize a NEEDS_FIX verdict and let the implementer fix-and-retry. |
+| Pi version < 0.65.1 (preflight check) | Don't dispatch any pi worker. Tell the user to upgrade (`pnpm add -g @mariozechner/pi-coding-agent`) or fall back to Claude. |
+
+When falling back, mark any partially completed task as needing re-review on the
+Claude path before continuing to the next task. Don't silently continue with a
+mixed-runtime task.
+
 ## Integration
 
 **Required workflow skills:**
@@ -269,6 +341,9 @@ Done!
 - **quirk:writing-plans** - Creates the plan this skill executes
 - **quirk:requesting-code-review** - Code review template for reviewer subagents
 - **quirk:finishing-a-development-branch** - Complete development after all tasks
+
+**Required when pi runtime is selected:**
+- **quirk:pi-dev** - Canonical hardened dispatch recipe, failure detection, reviewer JSON parse fallback, model alias resolution
 
 **Subagents should use:**
 - **quirk:test-driven-development** - Subagents follow TDD for each task
