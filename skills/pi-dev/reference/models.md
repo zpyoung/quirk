@@ -45,7 +45,7 @@ read PI_PROVIDER PI_MODEL PI_THINKING < <(resolve_pi_model xhigh \
     openai-codex/gpt-5.5 openai/gpt-5.5 \
     openai-codex/gpt-5.4 openai/gpt-5.4 github-copilot/gpt-5.4 \
     openai-codex/gpt-5.3-codex openai/gpt-5.3-codex github-copilot/gpt-5.3-codex)
-pi --provider "$PI_PROVIDER" --model "$PI_MODEL" --thinking-level "$PI_THINKING" "..."
+pi --provider "$PI_PROVIDER" --model "$PI_MODEL" --thinking "$PI_THINKING" "..."
 ```
 
 `:xhigh` is the deepest reasoning level. Override the alias resolution only when the user explicitly names a different model.
@@ -157,7 +157,7 @@ read PI_PROVIDER PI_MODEL PI_THINKING < <(resolve_pi_model xhigh \
 Pi accepts a single `provider/model:thinking` shorthand string with `--model` (the provider and thinking level are parsed out). Both forms below are equivalent:
 
 ```bash
-pi --provider openai-codex --model gpt-5.3-codex --thinking-level xhigh "..."
+pi --provider openai-codex --model gpt-5.3-codex --thinking xhigh "..."
 pi --model openai-codex/gpt-5.3-codex:xhigh "..."
 ```
 
@@ -165,12 +165,13 @@ Use whichever is clearer in context. The split form is slightly more robust in s
 
 ## Thinking levels
 
-Recognized values: `off`, `low`, `medium`, `high`, `xhigh`.
+Flag is `--thinking <level>` (NOT `--thinking-level`). Recognized values: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`.
 
 - **`off`** — disable extended reasoning entirely (cheapest, fastest).
+- **`minimal`** — smallest non-zero reasoning budget. Useful when a model requires *some* thinking to function but you want the cheapest tier.
 - **`low`** / **`medium`** — incremental reasoning budget. Default for fast models (Haiku, Flash, Codex Mini).
 - **`high`** — strong reasoning. Default for balanced/strong models (Sonnet, Gemini Pro).
-- **`xhigh`** — maximum reasoning. Default for the project default (`openai-codex/gpt-5.3-codex`) and any review pass.
+- **`xhigh`** — maximum reasoning. Default for the codex alias and any review pass.
 
 Not all models accept all levels — providers that don't support a given level silently clamp. The `thinking` column in `pi --list-models` indicates support. Surface the resolved level in dispatch logs.
 

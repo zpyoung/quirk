@@ -29,7 +29,7 @@ If the user is building a multi-agent system: orchestrator runs as SDK or intera
 Pass either split flags or shorthand:
 
 ```bash
-pi --provider openai-codex --model gpt-5.5 --thinking-level xhigh "..."
+pi --provider openai-codex --model gpt-5.5 --thinking xhigh "..."
 pi --model openai-codex/gpt-5.5:xhigh "..."   # shorthand form
 ```
 
@@ -54,7 +54,7 @@ pi --model openai-codex/gpt-5.5:xhigh "..."   # shorthand form
 
 **Explicit version pins skip the ladder** — "gpt-5.4" or "claude-sonnet-4-6" means that exact version, no upgrade ladder. **Pro-tier variants** (`gpt-5-pro`, `gpt-5.2-pro`, `gpt-5.4-pro`, `gpt-5.5-pro`, `o1-pro`, `o3-pro`, `o3-deep-research`, `o4-mini-deep-research`) are excluded from all alias ladders — ~10–30× cost and multi-minute latency. Only dispatch them on explicit user request.
 
-Thinking levels: `off`, `low`, `medium`, `high`, `xhigh`. Providers that don't support a level silently clamp.
+Thinking levels (`--thinking <level>`): `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. Providers that don't support a level silently clamp.
 
 Full catalog, cross-provider matrix, and dispatch resolution algorithm: `reference/models.md`.
 
@@ -73,7 +73,7 @@ read PI_PROVIDER PI_MODEL PI_THINKING < <(resolve_pi_model xhigh \
 
 # 3. Dispatch; log the resolved triple so the user sees which fallback fired.
 echo "codex routed via $PI_PROVIDER/$PI_MODEL:$PI_THINKING"
-pi --provider "$PI_PROVIDER" --model "$PI_MODEL" --thinking-level "$PI_THINKING" "..."
+pi --provider "$PI_PROVIDER" --model "$PI_MODEL" --thinking "$PI_THINKING" "..."
 
 # 4. On runtime auth/billing failure, retry ONCE with the next preference entry.
 #    No infinite loop — cap at one cross-provider retry per worker.
@@ -255,7 +255,7 @@ bash -c '
           --offline \
           --provider \"\$2\" \
           --model \"\$3\" \
-          --thinking-level \"\$4\"
+          --thinking \"\$4\"
       " _ "$3" "$4" "$5" "$6" \
     > "$7" 2> "$8"
   echo "${PIPESTATUS[1]}" > "$9"
