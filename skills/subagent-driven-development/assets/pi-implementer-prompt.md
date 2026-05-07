@@ -2,7 +2,7 @@
 
 Use this when the runtime is **pi** (see SKILL.md → Runtime Selection).
 
-The implementer model is **pi codex** (`openai-codex/gpt-5-5:xhigh`).
+The implementer model is **pi codex** (`openai-codex/gpt-5.3-codex:xhigh`).
 
 ## Prompt body
 
@@ -23,7 +23,7 @@ cd <worktree>
 pi -p \
   --no-session \
   --offline \
-  --model openai-codex/gpt-5-5:xhigh \
+  --model openai-codex/gpt-5.3-codex:xhigh \
   --tools read,bash,edit,write \
   @prompt.md
 ```

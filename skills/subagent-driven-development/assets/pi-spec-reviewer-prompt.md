@@ -2,7 +2,7 @@
 
 Use this when the runtime is **pi** (see SKILL.md → Runtime Selection).
 
-The spec reviewer model is **pi gemini** (`google/gemini-3-1-pro-preview:high`).
+The spec reviewer model is **pi gemini** (`google/gemini-3.1-pro-preview:high`).
 
 ## Prompt body
 
@@ -20,7 +20,7 @@ cd <worktree>
 pi -p \
   --no-session \
   --offline \
-  --model google/gemini-3-1-pro-preview:high \
+  --model google/gemini-3.1-pro-preview:high \
   --tools read,bash \
   @spec-review-prompt.md
 ```

@@ -2,7 +2,7 @@
 
 Use this when the runtime is **pi** (see SKILL.md → Runtime Selection).
 
-The code-quality reviewer model is **pi gemini** (`google/gemini-3-1-pro-preview:high`).
+The code-quality reviewer model is **pi gemini** (`google/gemini-3.1-pro-preview:high`).
 
 **Only dispatch after spec compliance review passes.**
 
@@ -43,7 +43,7 @@ cd <worktree>
 pi -p \
   --no-session \
   --offline \
-  --model google/gemini-3-1-pro-preview:high \
+  --model google/gemini-3.1-pro-preview:high \
   --tools read,bash \
   @quality-review-prompt.md
 ```

@@ -26,43 +26,81 @@ If the user is building a multi-agent system: orchestrator runs as SDK or intera
 
 ## Provider & model selection
 
-**Default**: `openai-codex / gpt-5-5` with thinking level `xhigh`. Pass as either split flags or shorthand:
+Pass either split flags or shorthand:
 
 ```bash
-pi --provider openai-codex --model gpt-5-5 --thinking-level xhigh "..."
-# or shorthand:
-pi --model openai-codex/gpt-5-5:xhigh "..."
+pi --provider openai-codex --model gpt-5.5 --thinking-level xhigh "..."
+pi --model openai-codex/gpt-5.5:xhigh "..."   # shorthand form
 ```
 
-When the user names a model in natural language, resolve via this alias table:
+**Separator rule:** `anthropic` IDs use **dashes** (`claude-sonnet-4-6`). All other providers — `openai`, `openai-codex`, `google`, `github-copilot` — use **dots** (`gpt-5.5`, `gemini-3.1-pro-preview`, `claude-sonnet-4.6` when routed via copilot). The preference lists below already encode the right form per provider — copy verbatim.
 
-| User says | `--provider` | `--model` | Default thinking |
-|---|---|---|---|
-| (no model) / "use pi" / "pi codex" / "codex" | `openai-codex` | `gpt-5-5` | `xhigh` |
-| "codex max" | `openai-codex` | `gpt-5-1-codex-max` | `xhigh` |
-| "codex mini" / "pi mini" | `openai-codex` | `gpt-5-1-codex-mini` | `medium` |
-| "pi sonnet" / "sonnet" / "claude" | `anthropic` | `claude-sonnet-4-6` | `high` |
-| "pi opus" / "opus" | `anthropic` | `claude-opus-4-7` | `high` |
-| "pi haiku" / "haiku" | `anthropic` | `claude-haiku-4-5` | `medium` |
-| "pi gemini" / "gemini" / "gemini pro" | `google` | `gemini-3-1-pro-preview` | `high` |
-| "pi flash" / "gemini flash" | `google` | `gemini-flash-latest` | `medium` |
-| "pi deepseek" / "deepseek" | `deepseek` | `deepseek-v4-pro` | `high` |
-| "pi grok" / "grok" | `xai` | `grok-code-fast-1` | `medium` |
+**Aliases resolve to a preference list, not a single combo.** Walk top-to-bottom; dispatch the first combo present in `pi --list-models` (i.e., authed locally and shipping in this pi version). Generic aliases lead with newest-first speculative entries (`gpt-5.5`, `claude-opus-4-7`, etc.) — the fallback algorithm skips combos that don't exist yet, so aliases auto-upgrade as pi ships newer models.
+
+| User says | Default thinking | Preference list (first authed wins; → = fall through) |
+|---|---|---|
+| (no model) / "use pi" / "pi codex" / "codex" | `xhigh` | `openai-codex/gpt-5.5` → `openai/gpt-5.5` → `openai-codex/gpt-5.4` → `openai/gpt-5.4` → `github-copilot/gpt-5.4` → `openai-codex/gpt-5.3-codex` → `openai/gpt-5.3-codex` → `github-copilot/gpt-5.3-codex` |
+| "codex max" | `xhigh` | `openai-codex/gpt-5.5-codex-max` → `openai/gpt-5.5-codex-max` → `openai-codex/gpt-5.4-codex-max` → `openai/gpt-5.4-codex-max` → `openai-codex/gpt-5.1-codex-max` → `openai/gpt-5.1-codex-max` → `github-copilot/gpt-5.1-codex-max` |
+| "codex mini" / "pi mini" | `medium` | `openai-codex/gpt-5.4-mini` → `openai/gpt-5.4-mini` → `github-copilot/gpt-5.4-mini` → `openai-codex/gpt-5.1-codex-mini` → `openai/gpt-5.1-codex-mini` → `github-copilot/gpt-5.1-codex-mini` |
+| "codex spark" | `high` | `openai-codex/gpt-5.4-codex-spark` → `openai-codex/gpt-5.3-codex-spark` → `openai/gpt-5.3-codex-spark` |
+| "pi flagship" / "pi gpt" | `xhigh` | `openai-codex/gpt-5.5` → `openai/gpt-5.5` → `openai-codex/gpt-5.4` → `openai/gpt-5.4` → `github-copilot/gpt-5.4` |
+| "gpt-5.4" (explicit version pin) | `xhigh` | `openai-codex/gpt-5.4` → `openai/gpt-5.4` → `github-copilot/gpt-5.4` |
+| "pi sonnet" / "sonnet" / "claude sonnet" | `high` | `anthropic/claude-sonnet-4-7` → `github-copilot/claude-sonnet-4.7` → `anthropic/claude-sonnet-4-6` → `github-copilot/claude-sonnet-4.6` |
+| "pi opus" / "opus" | `high` | `anthropic/claude-opus-4-7` → `github-copilot/claude-opus-4.7` → `anthropic/claude-opus-4-6` → `github-copilot/claude-opus-4.6` |
+| "pi haiku" / "haiku" | `medium` | `anthropic/claude-haiku-4-6` → `github-copilot/claude-haiku-4.6` → `anthropic/claude-haiku-4-5` → `github-copilot/claude-haiku-4.5` |
+| "pi gemini" / "gemini" / "gemini pro" | `high` | `google/gemini-3.2-pro-preview` → `google/gemini-3.1-pro-preview` → `github-copilot/gemini-3.1-pro-preview` → `google/gemini-3-pro-preview` → `github-copilot/gemini-3-pro-preview` |
+| "pi flash" / "gemini flash" | `medium` | `google/gemini-flash-latest` → `google/gemini-3-flash-preview` → `github-copilot/gemini-3-flash-preview` |
+| "pi grok" / "grok" | `medium` | `github-copilot/grok-code-fast-1` |
+
+**Explicit version pins skip the ladder** — "gpt-5.4" or "claude-sonnet-4-6" means that exact version, no upgrade ladder. **Pro-tier variants** (`gpt-5-pro`, `gpt-5.2-pro`, `gpt-5.4-pro`, `gpt-5.5-pro`, `o1-pro`, `o3-pro`, `o3-deep-research`, `o4-mini-deep-research`) are excluded from all alias ladders — ~10–30× cost and multi-minute latency. Only dispatch them on explicit user request.
 
 Thinking levels: `off`, `low`, `medium`, `high`, `xhigh`. Providers that don't support a level silently clamp.
 
-For the full catalog (all model IDs per provider, per-provider auth env vars, resolution algorithm, when to override the default): `reference/models.md`.
+Full catalog, cross-provider matrix, and dispatch resolution algorithm: `reference/models.md`.
+
+## Resolution + fallback (in 4 steps)
+
+```bash
+# 1. Cache available combos. Note: pi writes the table to STDERR.
+PI_AVAILABLE="$(pi --list-models 2>&1 >/dev/null | awk 'NR>1 && NF>=2 {print $1"/"$2}')"
+
+# 2. resolve_pi_model walks a preference list against PI_AVAILABLE.
+#    Full implementation: reference/models.md ("Fallback resolution algorithm").
+read PI_PROVIDER PI_MODEL PI_THINKING < <(resolve_pi_model xhigh \
+    openai-codex/gpt-5.5 openai/gpt-5.5 \
+    openai-codex/gpt-5.4 openai/gpt-5.4 github-copilot/gpt-5.4 \
+    openai-codex/gpt-5.3-codex) || { echo "no codex provider authed"; exit 1; }
+
+# 3. Dispatch; log the resolved triple so the user sees which fallback fired.
+echo "codex routed via $PI_PROVIDER/$PI_MODEL:$PI_THINKING"
+pi --provider "$PI_PROVIDER" --model "$PI_MODEL" --thinking-level "$PI_THINKING" "..."
+
+# 4. On runtime auth/billing failure, retry ONCE with the next preference entry.
+#    No infinite loop — cap at one cross-provider retry per worker.
+```
+
+Substring filter: `pi --list-models 5.5 2>&1 >/dev/null` scopes the table to a single family — use this when confirming whether a specific variant is shipping.
+
+`pi --list-models` is the single source of truth for "is this combo dispatchable now" — it already resolves env vars / `auth.json` / OAuth tokens. Don't duplicate that check manually. Never silently pick a fallback; always log the resolved triple.
+
+## Disambiguate via AskUserQuestion when ambiguous
+
+Stop and ask before dispatching when:
+- Generic family name with multiple shipping variants and no alias-table match.
+- "Best" / "most capable" / "highest quality" — never silently jump to `*-pro`.
+- Specified ID isn't in `pi --list-models <id>`.
+- User wants override but didn't name the target.
+
+Format: 2–4 multiple-choice options, each labeled `provider/model:thinking` + cost/speed hint.
 
 ## Critical preflight (before any mode)
 
-Run these checks before issuing a pi invocation:
-
 1. **`pi --version` ≥ 0.65.1.** Older versions have a JSON+piped-stdin regression where `--mode json` falls back to plain text when stdin is piped. Upgrade with `pnpm add -g @mariozechner/pi-coding-agent`.
-2. **Auth.** Pi resolves credentials in this order: `--api-key` flag → `~/.pi/agent/auth.json` → provider env var (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`) → `models.json`. Never modify `~/.pi/agent/auth.json` — it is the user's. Subscription providers (Claude Pro/Max OAuth, ChatGPT Plus, Copilot) require a one-time interactive `pi /login` first.
-3. **No `--cd` flag.** Pi has no working-directory flag. The caller MUST `cd` before invoking pi.
-4. **No built-in sandbox.** Pi workers can write anywhere under the user's permissions. Filesystem isolation is the caller's responsibility (e.g., git worktrees, containers).
-5. **No built-in timeout.** Wrap with `gtimeout` (macOS, from `brew install coreutils`) or `timeout` (Linux).
-6. **Exit codes are undocumented.** Don't trust `$?` alone — also inspect stderr and the JSONL stream for completion markers and error patterns.
+2. **Auth.** Resolution order: `--api-key` flag → `~/.pi/agent/auth.json` → provider env var (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`) → `models.json`. Never modify `auth.json`. Subscription providers (Claude OAuth, ChatGPT Plus, GitHub Copilot) need a one-time interactive `pi /login`.
+3. **No `--cd` flag.** Pi has no working-directory flag — the caller MUST `cd` before invoking pi.
+4. **No built-in sandbox.** Workers can write anywhere under user permissions. Filesystem isolation is the caller's responsibility (worktrees, containers).
+5. **No built-in timeout.** Wrap with `gtimeout` (macOS) / `timeout` (Linux).
+6. **Exit codes are undocumented.** Don't trust `$?` alone — also inspect stderr and JSONL stream.
 
 ## Print mode — the one-liner
 
@@ -203,9 +241,9 @@ PI_OUT="$SLICE_DIR/events.jsonl"
 PI_ERR="$SLICE_DIR/stderr.log"
 PI_PROMPT="$SLICE_DIR/prompt.txt"
 PI_TIMEOUT=900                   # seconds; 1800 for complex
-PI_PROVIDER=openai-codex         # default; resolve from alias table for user-named models
-PI_MODEL=gpt-5-5                 # default; pair with --thinking-level xhigh
-PI_THINKING=xhigh
+PI_PROVIDER=openai-codex         # placeholder — call resolve_pi_model with the codex preference list
+PI_MODEL=gpt-5.3-codex           # placeholder — fallback walks gpt-5.5 → gpt-5.4 → gpt-5.3-codex
+PI_THINKING=xhigh                # paired default
 
 bash -c '
   cat "$1" \
@@ -237,13 +275,13 @@ Why each piece:
 
 Apply rules in this order, first match wins:
 
-1. **Auth failure** in stderr OR events → ABORT entire run.
-   - OpenAI: `Incorrect API key`, `Invalid API key`, HTTP 401 + `invalid_request_error`
+1. **Auth failure** in stderr OR events → first try the next entry in the model's preference list (one cross-provider retry only); if no fallback remains or it also auth-fails, ABORT entire run. Patterns:
+   - OpenAI / `openai-codex`: `Incorrect API key`, `Invalid API key`, HTTP 401 + `invalid_request_error`
    - Anthropic: `invalid x-api-key`, `authentication_error`
    - Google/Gemini: `API key not valid`, `INVALID_ARGUMENT` (case-sensitive), HTTP 400
-   - DeepSeek: `Authentication Fails`
+   - GitHub Copilot: `not authenticated`, `subscription required`, OAuth token expired
    - Generic: `401 Unauthorized`, `unauthorized`
-2. **Billing failure** (`insufficient_quota`, `quota.exceeded`) → ABORT.
+2. **Billing failure** (`insufficient_quota`, `quota.exceeded`) → try the next preference-list entry once; if it also fails or no fallback exists, ABORT (don't consume retry budget on a misconfigured account).
 3. **Rate limit** (HTTP 429, `rate_limit_error`, `rate_limit_exceeded`, `RESOURCE_EXHAUSTED`, `too many requests`) → RETRIABLE (single retry with 60s backoff).
 4. `events.jsonl` missing/empty → FAIL (worker hung or never started).
 5. Stream is only `error` events with no completion marker → FAIL.

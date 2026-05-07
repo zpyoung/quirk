@@ -55,9 +55,9 @@ context, and pi has no equivalent role.
 
 | Role | Claude path | Pi path |
 |---|---|---|
-| Implementer | `Task` (general-purpose) + `assets/implementer-prompt.md` | `pi -p` codex (`openai-codex/gpt-5-5:xhigh`) + `assets/pi-implementer-prompt.md` |
-| Spec reviewer | `Task` (general-purpose) + `assets/spec-reviewer-prompt.md` | `pi -p` gemini (`google/gemini-3-1-pro-preview:high`) + `assets/pi-spec-reviewer-prompt.md` |
-| Code-quality reviewer | `Task` (quirk:code-reviewer) + `assets/code-quality-reviewer-prompt.md` | `pi -p` gemini (`google/gemini-3-1-pro-preview:high`) + `assets/pi-code-quality-reviewer-prompt.md` |
+| Implementer | `Task` (general-purpose) + `assets/implementer-prompt.md` | `pi -p` codex (`openai-codex/gpt-5.3-codex:xhigh`) + `assets/pi-implementer-prompt.md` |
+| Spec reviewer | `Task` (general-purpose) + `assets/spec-reviewer-prompt.md` | `pi -p` gemini (`google/gemini-3.1-pro-preview:high`) + `assets/pi-spec-reviewer-prompt.md` |
+| Code-quality reviewer | `Task` (quirk:code-reviewer) + `assets/code-quality-reviewer-prompt.md` | `pi -p` gemini (`google/gemini-3.1-pro-preview:high`) + `assets/pi-code-quality-reviewer-prompt.md` |
 | Final whole-branch reviewer | `Task` (quirk:code-reviewer) | `Task` (quirk:code-reviewer) — always Claude |
 
 When the pi path is selected, **REQUIRED:** consult `quirk:pi-dev` for the
@@ -119,8 +119,8 @@ implementer template is `assets/implementer-prompt.md` (Claude) or
 
 ## Model Selection
 
-**Pi path:** Models are fixed by role — codex (`openai-codex/gpt-5-5:xhigh`) for the
-implementer, gemini (`google/gemini-3-1-pro-preview:high`) for both reviewers. Skip the
+**Pi path:** Models are fixed by role — codex (`openai-codex/gpt-5.3-codex:xhigh`) for the
+implementer, gemini (`google/gemini-3.1-pro-preview:high`) for both reviewers. Skip the
 rest of this section.
 
 **Claude path:** Use the least powerful model that can handle each role to conserve
