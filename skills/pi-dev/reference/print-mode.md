@@ -75,6 +75,48 @@ pi --print --no-session --offline --model sonnet --tools read,bash,edit,write \
 
 `--max-turns <n>` and `--max-tokens <n>` are proposed for capping individual subprocess cost in pipelines. Until they ship, time-box with `gtimeout`/`timeout` and rely on the model's own stop conditions.
 
+## Canonical headless recipe
+
+For scripts and CI that dispatch pi as a one-shot worker. Survives paths with spaces, works under both zsh and bash, captures pipeline exit codes correctly, and writes pure JSONL to the events file.
+
+```bash
+PI_WT="$REPO_ROOT"               # or per-worker worktree
+PI_OUT="$SLICE_DIR/events.jsonl"
+PI_ERR="$SLICE_DIR/stderr.log"
+PI_PROMPT="$SLICE_DIR/prompt.txt"
+PI_TIMEOUT=900                   # seconds; 1800 for complex
+PI_PROVIDER=openai-codex
+PI_MODEL=gpt-5.5
+PI_THINKING=xhigh
+
+bash -c '
+  cat "$1" \
+  | gtimeout --kill-after=30 --foreground "$2" \
+      bash -c "
+        cd \"\$1\" && pi \
+          --mode json \
+          --no-session \
+          --offline \
+          --provider \"\$2\" \
+          --model \"\$3\" \
+          --thinking \"\$4\"
+      " _ "$3" "$4" "$5" "$6" \
+    > "$7" 2> "$8"
+  echo "${PIPESTATUS[1]}" > "$9"
+' _ "$PI_PROMPT" "$PI_TIMEOUT" "$PI_WT" "$PI_PROVIDER" "$PI_MODEL" "$PI_THINKING" \
+    "$PI_OUT" "$PI_ERR" "$SLICE_DIR/exit_code"
+```
+
+Why each piece:
+- Outer `bash -c` so `PIPESTATUS` works regardless of caller shell (zsh's `pipestatus` is incompatible).
+- Inner `bash -c "... cd \"\$1\" && pi ..." _ "$path"` because pi has no `--cd` flag; positional args avoid shell-quoting hell on paths with spaces.
+- `gtimeout --kill-after=30 --foreground "$T"` enforces wall-clock cap, escalates SIGTERM → SIGKILL after 30s, keeps signals reaching pi (not just the wrapper).
+- `--mode json --no-session --offline` is the parallel-safe ephemeral combo.
+- For review passes: add `--no-tools` so the reviewer can't edit files.
+- Linux: replace `gtimeout` with `timeout`.
+
+For most cases, prefer `pi-watch --alias <alias>` (see SKILL.md) — it handles fallback, streaming, and the cwd-scan hang automatically. Reach for this raw recipe only when you need orchestrated worker pools writing JSONL files for separate parsing.
+
 ## When NOT to use print mode
 
 - You want to observe streaming tool calls, thinking, or partial output → use **JSON mode**.

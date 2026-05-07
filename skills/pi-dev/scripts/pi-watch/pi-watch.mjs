@@ -1,25 +1,22 @@
 #!/usr/bin/env node
 /**
- * pi-watch — SDK-based pi runner with split streaming output.
+ * pi-watch — high-level pi runner. Agent passes prompt + alias; the script
+ * resolves provider/model/thinking, walks a fallback ladder for whatever is
+ * authed locally, and streams the result.
  *
  *   stdout = assistant text only (caller can capture cleanly with $(...))
- *   stderr = "  ⚙ tool args" lines + final "  ✔ done"
+ *   stderr = "  ▶ resolved <p>/<m>:<t>" header, "  ⚙ tool args" lines, "  ✔ done"
  *
  * Bypasses pi's DefaultResourceLoader (extensions / skills / prompts / themes /
- * AGENTS.md discovery) so it starts instantly regardless of cwd. The pi binary
- * can hang for minutes on workspaces with deep nested trees; this script avoids
- * that path entirely.
- *
- * Caller passes resolved provider/model — the pi-dev skill's resolve_pi_model
- * bash function picks the (provider, model, thinking) triple before invoking.
+ * AGENTS.md discovery) so it starts instantly regardless of cwd.
  *
  * Usage:
- *   pi-watch --provider <p> --model <m> [--thinking <level>] [--tools t1,t2] "<prompt>"
- *
- * Setup (one-time):
- *   cd <this-dir> && pnpm install
+ *   pi-watch --alias <alias> [--thinking <level>] [--tools t1,t2|--no-tools] "<prompt>"
+ *   pi-watch --provider <p> --model <m> [--thinking <level>] [--tools ...] "<prompt>"
+ *   pi-watch --list-aliases
  */
 
+import { spawnSync } from "node:child_process";
 import { getModel } from "@mariozechner/pi-ai";
 import {
     AuthStorage,
@@ -30,26 +27,193 @@ import {
     SettingsManager,
 } from "@mariozechner/pi-coding-agent";
 
+// ---- Aliases -------------------------------------------------------------
+// Each alias = (default thinking level) + ordered preference list. First combo
+// that's both shipping in pi AND authed locally wins. Newest-first so aliases
+// auto-upgrade as new models ship. Pro-tier variants are intentionally absent
+// (~10–30× cost, multi-minute latency) — only dispatch on explicit request.
+const ALIASES = {
+    // Default coding alias — gpt flagship via codex routing
+    codex: {
+        thinking: "xhigh",
+        prefs: [
+            "openai-codex/gpt-5.5", "openai/gpt-5.5",
+            "openai-codex/gpt-5.4", "openai/gpt-5.4", "github-copilot/gpt-5.4",
+            "openai-codex/gpt-5.3-codex", "openai/gpt-5.3-codex", "github-copilot/gpt-5.3-codex",
+        ],
+    },
+    "codex-max": {
+        thinking: "xhigh",
+        prefs: [
+            "openai-codex/gpt-5.5-codex-max", "openai/gpt-5.5-codex-max",
+            "openai-codex/gpt-5.4-codex-max", "openai/gpt-5.4-codex-max",
+            "openai-codex/gpt-5.1-codex-max", "openai/gpt-5.1-codex-max", "github-copilot/gpt-5.1-codex-max",
+        ],
+    },
+    "codex-mini": {
+        thinking: "medium",
+        prefs: [
+            "openai-codex/gpt-5.4-mini", "openai/gpt-5.4-mini", "github-copilot/gpt-5.4-mini",
+            "openai-codex/gpt-5.1-codex-mini", "openai/gpt-5.1-codex-mini", "github-copilot/gpt-5.1-codex-mini",
+        ],
+    },
+    "codex-spark": {
+        thinking: "high",
+        prefs: [
+            "openai-codex/gpt-5.4-codex-spark",
+            "openai-codex/gpt-5.3-codex-spark", "openai/gpt-5.3-codex-spark",
+        ],
+    },
+    sonnet: {
+        thinking: "high",
+        prefs: [
+            "anthropic/claude-sonnet-4-7", "github-copilot/claude-sonnet-4.7",
+            "anthropic/claude-sonnet-4-6", "github-copilot/claude-sonnet-4.6",
+        ],
+    },
+    opus: {
+        thinking: "high",
+        prefs: [
+            "anthropic/claude-opus-4-7", "github-copilot/claude-opus-4.7",
+            "anthropic/claude-opus-4-6", "github-copilot/claude-opus-4.6",
+        ],
+    },
+    haiku: {
+        thinking: "medium",
+        prefs: [
+            "anthropic/claude-haiku-4-6", "github-copilot/claude-haiku-4.6",
+            "anthropic/claude-haiku-4-5", "github-copilot/claude-haiku-4.5",
+        ],
+    },
+    gemini: {
+        thinking: "high",
+        prefs: [
+            "google/gemini-3.2-pro-preview",
+            "google/gemini-3.1-pro-preview", "github-copilot/gemini-3.1-pro-preview",
+            "google/gemini-3-pro-preview", "github-copilot/gemini-3-pro-preview",
+        ],
+    },
+    flash: {
+        thinking: "medium",
+        prefs: [
+            "google/gemini-flash-latest",
+            "google/gemini-3-flash-preview", "github-copilot/gemini-3-flash-preview",
+        ],
+    },
+    grok: {
+        thinking: "medium",
+        prefs: ["github-copilot/grok-code-fast-1"],
+    },
+};
+
+// ---- CLI parsing ---------------------------------------------------------
 const args = process.argv.slice(2);
-const opts = { provider: null, model: null, thinking: "high", tools: ["read", "bash"], prompt: null };
+const opts = {
+    alias: null,
+    provider: null,
+    model: null,
+    thinking: null,
+    tools: ["read", "bash"],
+    prompt: null,
+    listAliases: false,
+};
 for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a === "--provider") opts.provider = args[++i];
+    if (a === "--alias") opts.alias = args[++i];
+    else if (a === "--provider") opts.provider = args[++i];
     else if (a === "--model") opts.model = args[++i];
     else if (a === "--thinking" || a === "--thinking-level") opts.thinking = args[++i];
     else if (a === "--tools") opts.tools = args[++i].split(",").map((s) => s.trim()).filter(Boolean);
     else if (a === "--no-tools") opts.tools = [];
+    else if (a === "--list-aliases") opts.listAliases = true;
+    else if (a === "-h" || a === "--help") { printHelp(); process.exit(0); }
     else if (a.startsWith("--")) { console.error(`pi-watch: unknown flag ${a}`); process.exit(2); }
     else { opts.prompt = (opts.prompt ? opts.prompt + " " : "") + a; }
 }
-if (!opts.provider || !opts.model || !opts.prompt) {
-    console.error('Usage: pi-watch --provider <p> --model <m> [--thinking <level>] [--tools t1,t2] "<prompt>"');
+
+if (opts.listAliases) {
+    for (const [name, cfg] of Object.entries(ALIASES)) {
+        console.log(`${name.padEnd(12)} thinking=${cfg.thinking}  prefs=${cfg.prefs.length}`);
+        for (const combo of cfg.prefs) console.log(`  - ${combo}`);
+    }
+    process.exit(0);
+}
+
+function printHelp() {
+    console.error('Usage:');
+    console.error('  pi-watch --alias <alias> [--thinking <level>] [--tools t1,t2|--no-tools] "<prompt>"');
+    console.error('  pi-watch --provider <p> --model <m> [--thinking <level>] [--tools ...] "<prompt>"');
+    console.error('  pi-watch --list-aliases');
+    console.error('');
+    console.error(`Aliases: ${Object.keys(ALIASES).join(", ")}`);
+}
+
+// ---- Resolve provider/model/thinking -------------------------------------
+function listAvailable() {
+    // pi --list-models writes the table to STDERR. Fast (~0.5s) and does not
+    // trigger pi's slow cwd resource scan, so safe to call from any directory.
+    const res = spawnSync("pi", ["--list-models"], { encoding: "utf8" });
+    if (res.error) {
+        console.error(`pi-watch: cannot run 'pi --list-models': ${res.error.message}`);
+        process.exit(4);
+    }
+    const text = (res.stderr || "") + (res.stdout || "");
+    const set = new Set();
+    for (const line of text.split("\n")) {
+        const stripped = line.replace(/\x1b\[[0-9;]*m/g, "").trim();
+        if (!stripped) continue;
+        const cols = stripped.split(/\s+/);
+        if (cols.length < 2) continue;
+        if (/^provider/i.test(cols[0]) || /^[-=]+$/.test(cols[0])) continue;
+        set.add(`${cols[0]}/${cols[1]}`);
+    }
+    return set;
+}
+
+function resolveAlias(alias, thinkingOverride) {
+    const cfg = ALIASES[alias];
+    if (!cfg) {
+        console.error(`pi-watch: unknown alias '${alias}'. Known: ${Object.keys(ALIASES).join(", ")}`);
+        process.exit(2);
+    }
+    const avail = listAvailable();
+    for (const combo of cfg.prefs) {
+        if (avail.has(combo)) {
+            const slash = combo.indexOf("/");
+            return {
+                provider: combo.slice(0, slash),
+                model: combo.slice(slash + 1),
+                thinking: thinkingOverride ?? cfg.thinking,
+                triedFromAlias: true,
+            };
+        }
+    }
+    console.error(`pi-watch: no provider in alias '${alias}' is authed/shipping. Tried:`);
+    for (const combo of cfg.prefs) console.error(`  - ${combo}`);
+    console.error(`Run 'pi --list-models' to see what's available, or run 'pi /login' for the provider you want.`);
+    process.exit(5);
+}
+
+let resolved;
+if (opts.alias) {
+    resolved = resolveAlias(opts.alias, opts.thinking);
+} else if (opts.provider && opts.model) {
+    resolved = { provider: opts.provider, model: opts.model, thinking: opts.thinking ?? "high", triedFromAlias: false };
+} else {
+    printHelp();
     process.exit(2);
 }
 
-const model = getModel(opts.provider, opts.model);
+if (!opts.prompt) {
+    console.error('pi-watch: missing prompt. Pass it as a positional arg.');
+    process.exit(2);
+}
+
+// ---- Bypass DefaultResourceLoader ----------------------------------------
+const model = getModel(resolved.provider, resolved.model);
 if (!model) {
-    console.error(`pi-watch: model not found in pi-ai registry: ${opts.provider}/${opts.model}`);
+    console.error(`pi-watch: model not in pi-ai registry: ${resolved.provider}/${resolved.model}`);
+    console.error(`(This usually means pi shipped the model in --list-models but pi-ai is older. Run 'pnpm update' in this dir.)`);
     process.exit(3);
 }
 
@@ -74,11 +238,13 @@ const settingsManager = SettingsManager.inMemory({
     retry: { enabled: true, maxRetries: 2 },
 });
 
+process.stderr.write(`  ▶ resolved ${resolved.provider}/${resolved.model}:${resolved.thinking}${resolved.triedFromAlias ? ` (alias ${opts.alias})` : ""}\n`);
+
 const { session } = await createAgentSession({
     cwd,
     agentDir: `${home}/.pi/agent`,
     model,
-    thinkingLevel: opts.thinking,
+    thinkingLevel: resolved.thinking,
     authStorage,
     modelRegistry,
     resourceLoader,

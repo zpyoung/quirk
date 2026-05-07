@@ -1,67 +1,90 @@
 # pi-watch
 
-SDK-based pi runner with split streaming output:
+High-level pi runner. Pass an **alias** (`codex`, `opus`, `sonnet`, `gemini`, etc.) and a prompt. The script picks the first authed model from the alias's preference ladder and runs pi via the SDK with split streaming output:
 
-- **stdout** = assistant text only (caller can capture cleanly with `$(...)`)
-- **stderr** = `⚙ tool args` progress lines + final `✔ done`
+- **stdout** = assistant text only — capture cleanly with `result="$(...)"`
+- **stderr** = `▶ resolved <provider>/<model>:<thinking>` header, `⚙ tool args` progress, `✔ done`
 
-Bypasses pi's `DefaultResourceLoader` (extensions / skills / prompts / themes /
-AGENTS.md discovery) so it starts instantly regardless of cwd. The pi binary
-can hang for minutes on workspaces with deep nested trees (worktrees, plugin
-caches, etc.); this script avoids that path entirely.
+Bypasses pi's `DefaultResourceLoader` (extensions / skills / prompts / themes / AGENTS.md discovery) so it starts instantly regardless of cwd. The `pi` binary can hang for minutes in workspaces with deep nested trees (worktrees, plugin caches, monorepos); this script avoids that path entirely.
 
 ## Setup (one-time)
 
 ```bash
 cd <this-dir>
 pnpm install
-```
-
-Then either invoke by absolute path, or symlink onto your PATH:
-
-```bash
-ln -s "$(pwd)/pi-watch" ~/.local/bin/pi-watch    # or any dir on $PATH
+ln -sf "$(pwd)/pi-watch" ~/.local/bin/pi-watch    # or any dir on $PATH
 ```
 
 ## Usage
 
 ```bash
-pi-watch --provider <p> --model <m> [--thinking <level>] [--tools t1,t2] "<prompt>"
-```
-
-Pair with the `resolve_pi_model` bash function from the pi-dev skill so
-provider/model is auth-aware:
-
-```bash
-read PI_PROVIDER PI_MODEL PI_THINKING < <(resolve_pi_model high \
-    openai-codex/gpt-5.5 openai/gpt-5.5 \
-    openai-codex/gpt-5.4 openai/gpt-5.4 github-copilot/gpt-5.4)
-
-# Watch live (no capture)
-pi-watch --provider "$PI_PROVIDER" --model "$PI_MODEL" --thinking "$PI_THINKING" \
-    --tools read \
-    "Explain the auth flow in src/auth.ts"
+# Primary form — alias + prompt
+pi-watch --alias codex "Explain the auth flow in src/auth.ts"
 
 # Capture for the calling agent (stderr still shows progress to user)
-result="$(pi-watch --provider "$PI_PROVIDER" --model "$PI_MODEL" --thinking "$PI_THINKING" \
-    --tools read \
+result="$(pi-watch --alias sonnet --tools read \
     'Read src/utils.py and list top-level functions, one per line.')"
+
+# Restrict tools / disable tools
+pi-watch --alias opus --tools read,grep "Review src/auth.ts for issues"
+pi-watch --alias haiku --no-tools "Summarize this diff: $(git diff HEAD~1)"
+
+# Override the alias's default thinking level
+pi-watch --alias codex --thinking medium "Quick summary of README.md"
+
+# List all aliases and their preference ladders
+pi-watch --list-aliases
+
+# Explicit override (skip alias resolution)
+pi-watch --provider openai-codex --model gpt-5.5 --thinking xhigh "..."
 ```
+
+## Aliases
+
+| Alias | Default thinking | Routes through (newest first) |
+|---|---|---|
+| `codex` | `xhigh` | gpt-5.5 → 5.4 → 5.3-codex (openai-codex / openai / copilot) |
+| `codex-max` | `xhigh` | gpt-5.5-codex-max → 5.4-codex-max → 5.1-codex-max |
+| `codex-mini` | `medium` | gpt-5.4-mini → 5.1-codex-mini |
+| `codex-spark` | `high` | gpt-5.4-codex-spark → 5.3-codex-spark |
+| `sonnet` | `high` | claude-sonnet-4-7 → 4-6 |
+| `opus` | `high` | claude-opus-4-7 → 4-6 |
+| `haiku` | `medium` | claude-haiku-4-6 → 4-5 |
+| `gemini` | `high` | gemini-3.2-pro-preview → 3.1 → 3 |
+| `flash` | `medium` | gemini-flash-latest → 3-flash-preview |
+| `grok` | `medium` | github-copilot/grok-code-fast-1 |
+
+Aliases auto-upgrade as new models ship. **Pro-tier (`*-pro`, `*-deep-research`) is excluded** — too expensive/slow; only dispatch on explicit user request via `--provider`/`--model`.
 
 ## Flags
 
 | Flag | Purpose |
 |---|---|
-| `--provider <name>` | Required. e.g. `openai-codex`, `anthropic`, `google`, `github-copilot` |
-| `--model <id>` | Required. Literal model ID per provider (dots vs dashes — see pi-dev skill) |
-| `--thinking <level>` | `off` / `minimal` / `low` / `medium` / `high` (default) / `xhigh` |
+| `--alias <name>` | Resolve provider/model/thinking from the alias table |
+| `--provider <p>` | Explicit provider (skip alias) |
+| `--model <m>` | Explicit model (must come with `--provider`) |
+| `--thinking <level>` | `off` / `minimal` / `low` / `medium` / `high` / `xhigh`. Overrides alias default |
 | `--tools t1,t2` | Comma-separated allowlist. Default `read,bash` |
-| `--no-tools` | Disable all tools (LLM only — review/analysis mode) |
+| `--no-tools` | Disable all tools — LLM only (review/analysis mode) |
+| `--list-aliases` | Print alias table and exit |
+| `-h`, `--help` | Print usage and exit |
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | Success |
+| 1 | Runtime error during prompt execution |
+| 2 | Bad CLI args / unknown alias |
+| 3 | Model not in pi-ai registry (run `pnpm update` here) |
+| 4 | Cannot run `pi --list-models` (pi binary missing?) |
+| 5 | No combo in alias ladder is authed/shipping |
 
 ## When to prefer pi-watch over `pi --mode json`
 
-- Calling cwd has a large/deep tree (workspaces, monorepos, worktrees) where pi's startup scan is slow or hangs.
+- Calling cwd has a large/deep tree where pi's startup scan is slow or hangs.
 - You want clean stdout-only capture without `tee >(jq) | jq` shell plumbing.
 - You want type-safe events and direct progress hooks rather than JSONL parsing.
+- You want alias-based model selection with auto-fallback.
 
-For tiny scripts in shallow dirs the bash `pi_watch` from the skill works fine.
+For non-Node hosts, multi-turn control, or worker pools writing JSONL files, see the parent skill's escape-hatch table.
