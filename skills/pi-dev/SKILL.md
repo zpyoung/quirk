@@ -1,6 +1,6 @@
 ---
 name: pi-dev
-description: Use to dispatch the pi coding agent (binary `pi`, package `@mariozechner/pi-coding-agent`) headlessly. Prefer the bundled `pi-watch` script — pass an alias (`codex`, `opus`, `sonnet`, `gemini`, etc.) and a prompt; provider/model/thinking/fallback/streaming are handled. Triggers on "use pi", "pi codex", "pi opus", "pi sonnet", "pi gemini", "pi haiku", "pi grok", "run pi", "pi headless", "pi subagent", "pi --print", "pi --mode json", "pi --mode rpc", "pi sdk".
+description: Use when the user wants to dispatch the pi coding agent for a sub-task — code review, analysis, edits, headless one-shots, or multi-agent orchestration. Triggers on "use pi", "pi codex", "pi opus", "pi sonnet", "pi gemini", "pi haiku", "pi grok", "run pi", "pi headless", "pi subagent", "pi --print", "pi --mode json", "pi --mode rpc", "pi sdk".
 ---
 
 # pi-dev
