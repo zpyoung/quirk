@@ -156,6 +156,30 @@ agent_end               ← final messages
 
 Full event reference: `reference/json-mode.md`.
 
+## Streaming with progress visibility — `pi-watch`
+
+The shipped `scripts/pi-watch/` helper splits the stream so the calling agent gets clean stdout while the user sees tool-call progress on stderr:
+
+```bash
+# After one-time setup (cd scripts/pi-watch && pnpm install):
+pi-watch --provider "$PI_PROVIDER" --model "$PI_MODEL" --thinking "$PI_THINKING" \
+    --tools read \
+    "Explain the auth flow in src/auth.ts"
+
+# stdout = assistant text only (capturable via $(...))
+# stderr = "  ⚙ tool args" lines + final "  ✔ done"
+```
+
+It uses the SDK with a stripped `DefaultResourceLoader`, which sidesteps a startup hang the pi binary can hit in workspaces with deep nested trees (worktrees, plugin caches, monorepos). Prefer `pi-watch` when:
+
+- The cwd has a large tree and `pi --mode json` startup is slow or wedges.
+- You want clean `result="$(...)"` capture without `tee >(jq) | jq` plumbing.
+- You want the calling agent to react to assistant text only (no tool noise).
+
+For shallow dirs and one-off scripts the inline `pi --mode json | jq` recipe in the JSON-mode section is fine.
+
+Full setup, flags, and pairing with `resolve_pi_model`: `scripts/pi-watch/README.md`.
+
 ## RPC mode — bidirectional control
 
 Headless, fully programmatic. Drive pi from any language via JSONL on stdin/stdout.

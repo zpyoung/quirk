@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# pi-watch — wrapper that runs pi-watch.mjs from its own dir so node resolves
+# the local node_modules. Symlink this file onto your PATH for clean usage.
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec node "$DIR/pi-watch.mjs" "$@"

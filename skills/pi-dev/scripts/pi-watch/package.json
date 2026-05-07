@@ -1,0 +1,11 @@
+{
+  "name": "pi-watch",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "bin": { "pi-watch": "./pi-watch.mjs" },
+  "dependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*"
+  }
+}
