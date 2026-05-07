@@ -33,7 +33,7 @@ That's the whole interface. Don't construct `--provider`/`--model`/`--thinking` 
 | `flash` | `medium` | gemini-flash-latest → 3-flash-preview |
 | `grok` | `medium` | github-copilot/grok-code-fast-1 |
 
-Aliases auto-upgrade as new models ship — newest entries at the top of each ladder are speculative and skipped if not yet in `pi --list-models`. **Pro-tier variants (`*-pro`, `*-deep-research`) are deliberately excluded** (~10–30× cost, multi-minute latency); only dispatch them on explicit user request via `--provider`/`--model`.
+Aliases auto-upgrade as new models ship — newest entries at the top of each ladder are speculative and skipped if not yet in `pi --list-models`. **OpenAI pro / deep-research tiers are deliberately excluded** from alias ladders: `gpt-5-pro`, `gpt-5.x-pro`, `o1-pro`, `o3-pro`, `o3-deep-research`, `o4-mini-deep-research` (~10–30× cost, multi-minute latency). Dispatch them only on explicit user request via `--provider`/`--model`. *(Note: `gemini-*-pro-preview` is Google's standard tier, not a pro tier — it routes via the `gemini` alias.)*
 
 To see the full ladders: `pi-watch --list-aliases`.
 

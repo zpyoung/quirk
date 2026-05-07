@@ -2,5 +2,16 @@
 # pi-watch — wrapper that runs pi-watch.mjs from its own dir so node resolves
 # the local node_modules. Symlink this file onto your PATH for clean usage.
 set -euo pipefail
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Resolve symlinks so DIR is the real script dir, not the PATH symlink dir.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+    TARGET="$(readlink "$SOURCE")"
+    if [[ "$TARGET" = /* ]]; then
+        SOURCE="$TARGET"
+    else
+        SOURCE="$(cd "$(dirname "$SOURCE")" && pwd)/$TARGET"
+    fi
+done
+DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 exec node "$DIR/pi-watch.mjs" "$@"

@@ -107,6 +107,7 @@ const ALIASES = {
 };
 
 // ---- CLI parsing ---------------------------------------------------------
+const VALID_THINKING = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
 const args = process.argv.slice(2);
 const opts = {
     alias: null,
@@ -117,18 +118,39 @@ const opts = {
     prompt: null,
     listAliases: false,
 };
+function takeValue(flag, i) {
+    const v = args[i + 1];
+    if (v === undefined || v.startsWith("--")) {
+        console.error(`pi-watch: ${flag} requires a value`);
+        process.exit(2);
+    }
+    return v;
+}
 for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a === "--alias") opts.alias = args[++i];
-    else if (a === "--provider") opts.provider = args[++i];
-    else if (a === "--model") opts.model = args[++i];
-    else if (a === "--thinking" || a === "--thinking-level") opts.thinking = args[++i];
-    else if (a === "--tools") opts.tools = args[++i].split(",").map((s) => s.trim()).filter(Boolean);
+    if (a === "--alias") { opts.alias = takeValue(a, i); i++; }
+    else if (a === "--provider") { opts.provider = takeValue(a, i); i++; }
+    else if (a === "--model") { opts.model = takeValue(a, i); i++; }
+    else if (a === "--thinking" || a === "--thinking-level") { opts.thinking = takeValue(a, i); i++; }
+    else if (a === "--tools") { opts.tools = takeValue(a, i).split(",").map((s) => s.trim()).filter(Boolean); i++; }
     else if (a === "--no-tools") opts.tools = [];
     else if (a === "--list-aliases") opts.listAliases = true;
     else if (a === "-h" || a === "--help") { printHelp(); process.exit(0); }
     else if (a.startsWith("--")) { console.error(`pi-watch: unknown flag ${a}`); process.exit(2); }
     else { opts.prompt = (opts.prompt ? opts.prompt + " " : "") + a; }
+}
+
+if (opts.thinking !== null && !VALID_THINKING.has(opts.thinking)) {
+    console.error(`pi-watch: invalid --thinking '${opts.thinking}'. Valid: ${[...VALID_THINKING].join(", ")}`);
+    process.exit(2);
+}
+if (opts.alias && (opts.provider || opts.model)) {
+    console.error(`pi-watch: --alias is mutually exclusive with --provider/--model`);
+    process.exit(2);
+}
+if ((opts.provider && !opts.model) || (opts.model && !opts.provider)) {
+    console.error(`pi-watch: --provider and --model must be passed together`);
+    process.exit(2);
 }
 
 if (opts.listAliases) {
@@ -152,9 +174,17 @@ function printHelp() {
 function listAvailable() {
     // pi --list-models writes the table to STDERR. Fast (~0.5s) and does not
     // trigger pi's slow cwd resource scan, so safe to call from any directory.
+    // We rely on `pi` (not the SDK registry) to resolve auth — it handles env
+    // vars, ~/.pi/agent/auth.json, OAuth subscription tokens, and models.json
+    // overrides uniformly. Reimplementing that in-process would diverge.
     const res = spawnSync("pi", ["--list-models"], { encoding: "utf8" });
     if (res.error) {
         console.error(`pi-watch: cannot run 'pi --list-models': ${res.error.message}`);
+        process.exit(4);
+    }
+    if (res.status !== 0 && res.status !== null) {
+        console.error(`pi-watch: 'pi --list-models' exited ${res.status}`);
+        if (res.stderr) console.error(res.stderr.slice(0, 2000));
         process.exit(4);
     }
     const text = (res.stderr || "") + (res.stdout || "");
@@ -240,30 +270,30 @@ const settingsManager = SettingsManager.inMemory({
 
 process.stderr.write(`  ▶ resolved ${resolved.provider}/${resolved.model}:${resolved.thinking}${resolved.triedFromAlias ? ` (alias ${opts.alias})` : ""}\n`);
 
-const { session } = await createAgentSession({
-    cwd,
-    agentDir: `${home}/.pi/agent`,
-    model,
-    thinkingLevel: resolved.thinking,
-    authStorage,
-    modelRegistry,
-    resourceLoader,
-    tools: opts.tools,
-    sessionManager: SessionManager.inMemory(cwd),
-    settingsManager,
-});
-
-session.subscribe((event) => {
-    if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
-        process.stdout.write(event.assistantMessageEvent.delta);
-    } else if (event.type === "tool_execution_start") {
-        const a = event.args ?? {};
-        const summary = a.command ?? a.file_path ?? a.path ?? a.pattern ?? "";
-        process.stderr.write(`  ⚙ ${event.toolName} ${summary}\n`);
-    }
-});
-
 try {
+    const { session } = await createAgentSession({
+        cwd,
+        agentDir: `${home}/.pi/agent`,
+        model,
+        thinkingLevel: resolved.thinking,
+        authStorage,
+        modelRegistry,
+        resourceLoader,
+        tools: opts.tools,
+        sessionManager: SessionManager.inMemory(cwd),
+        settingsManager,
+    });
+
+    session.subscribe((event) => {
+        if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
+            process.stdout.write(event.assistantMessageEvent.delta);
+        } else if (event.type === "tool_execution_start") {
+            const a = event.args ?? {};
+            const summary = a.command ?? a.file_path ?? a.path ?? a.pattern ?? "";
+            process.stderr.write(`  ⚙ ${event.toolName} ${summary}\n`);
+        }
+    });
+
     await session.prompt(opts.prompt);
     process.stdout.write("\n");
     process.stderr.write("  ✔ done\n");

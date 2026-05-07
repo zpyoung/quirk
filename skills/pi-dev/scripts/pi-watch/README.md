@@ -54,7 +54,7 @@ pi-watch --provider openai-codex --model gpt-5.5 --thinking xhigh "..."
 | `flash` | `medium` | gemini-flash-latest → 3-flash-preview |
 | `grok` | `medium` | github-copilot/grok-code-fast-1 |
 
-Aliases auto-upgrade as new models ship. **Pro-tier (`*-pro`, `*-deep-research`) is excluded** — too expensive/slow; only dispatch on explicit user request via `--provider`/`--model`.
+Aliases auto-upgrade as new models ship. **OpenAI pro/deep-research tiers are excluded** (`gpt-5*-pro`, `o1-pro`, `o3-pro`, `o3-deep-research`, `o4-mini-deep-research`) — ~10–30× cost, multi-minute latency. Dispatch only on explicit user request via `--provider`/`--model`. (Google's `gemini-*-pro-preview` is the standard tier, not a pro tier — it's the routing target of the `gemini` alias.)
 
 ## Flags
 
