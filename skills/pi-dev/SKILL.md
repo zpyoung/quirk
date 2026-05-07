@@ -1,6 +1,6 @@
 ---
 name: pi-dev
-description: Use when the user wants to dispatch the pi coding agent for a sub-task — code review, analysis, edits, headless one-shots, or multi-agent orchestration. Triggers on "use pi", "pi codex", "pi opus", "pi sonnet", "pi gemini", "pi haiku", "pi grok", "run pi", "pi headless", "pi subagent", "pi --print", "pi --mode json", "pi --mode rpc", "pi sdk".
+description: Use when dispatching the pi coding agent for a sub-task — code review, analysis, edits, or multi-agent orchestration. Triggers on "use pi", "run pi", or "pi <model>" (codex, opus, sonnet, gemini, haiku, grok).
 ---
 
 # pi-dev
