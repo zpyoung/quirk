@@ -1,7 +1,7 @@
 {
   "name": "quirk",
   "description": "Core skills library for Claude Code: TDD, debugging, collaboration patterns, typed artifacts, and proven techniques",
-  "version": "5.3.0",
+  "version": "5.4.0",
   "author": {
     "name": "Zachary Young",
     "email": "zach@fabledfreedom.com"
