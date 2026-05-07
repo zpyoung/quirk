@@ -56,6 +56,31 @@ pi-watch --provider openai-codex --model gpt-5.5 --thinking xhigh "..."
 
 Aliases auto-upgrade as new models ship. **OpenAI pro/deep-research tiers are excluded** (`gpt-5*-pro`, `o1-pro`, `o3-pro`, `o3-deep-research`, `o4-mini-deep-research`) — ~10–30× cost, multi-minute latency. Dispatch only on explicit user request via `--provider`/`--model`. (Google's `gemini-*-pro-preview` is the standard tier, not a pro tier — it's the routing target of the `gemini` alias.)
 
+## Tools
+
+Built-in tool names accepted by `--tools` (comma-separated):
+
+| Tool | Capability |
+|---|---|
+| `read` | Read file contents (default in pi-watch) |
+| `bash` | Execute bash commands (default in pi-watch) |
+| `edit` | Edit files with find/replace |
+| `write` | Write files (create/overwrite) |
+| `grep` | Search file contents — read-only |
+| `find` | Find files by glob — read-only |
+| `ls` | List directory contents — read-only |
+
+Common combinations:
+
+```bash
+--tools read,grep,find,ls                # read-only review / analysis
+--no-tools                                # pure LLM judgment, no filesystem
+--tools read,grep,find,edit,write         # code edits, no shell
+--tools read,bash,edit,write              # full coding worker
+```
+
+Pi has no built-in sandbox — `bash`, `edit`, and `write` operate at the caller's user level. Use git worktrees or containers for isolation when running mutating workers in parallel.
+
 ## Flags
 
 | Flag | Purpose |

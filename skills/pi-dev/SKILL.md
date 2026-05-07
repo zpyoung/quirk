@@ -48,6 +48,29 @@ pi-watch --alias <alias> --thinking medium "<prompt>"        # override default 
 
 Thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. Providers silently clamp unsupported levels.
 
+### Tools
+
+Pi's built-in tool names (pass to `--tools`, comma-separated):
+
+| Tool | Capability | Off by default? |
+|---|---|---|
+| `read` | Read file contents | no — pi-watch enables |
+| `bash` | Execute bash commands | no — pi-watch enables |
+| `edit` | Edit files with find/replace | yes |
+| `write` | Write files (create/overwrite) | yes |
+| `grep` | Search file contents (read-only) | yes |
+| `find` | Find files by glob pattern (read-only) | yes |
+| `ls` | List directory contents (read-only) | yes |
+
+Pick by what the worker needs to *do*, not what would be "complete":
+
+- **Read-only review / analysis / summarization** → `--tools read,grep,find,ls` (no shell, no writes).
+- **Pure LLM judgment, no filesystem** → `--no-tools` (e.g., reviewer worker scoring a diff that's already in the prompt).
+- **Code edits** → `--tools read,grep,find,edit,write` (omit `bash` if you don't want shell execution; add it back when running tests is part of the worker's job).
+- **Default coding worker** (build, test, edit, commit) → omit `--tools` (uses `read,bash`) and add `edit,write` if it needs to mutate files: `--tools read,bash,edit,write`.
+
+Tool grants are an allowlist; whatever you don't list is unavailable to the model. Pi has **no built-in sandbox** — `bash`, `edit`, and `write` give the worker full user-level filesystem access. Run mutating workers in a worktree or container if isolation matters.
+
 ## Disambiguate before dispatching
 
 Stop and ask the user (multiple-choice via AskUserQuestion) when:
