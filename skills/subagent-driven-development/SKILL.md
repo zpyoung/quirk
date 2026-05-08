@@ -317,11 +317,15 @@ chosen in **Runtime Selection**.
 - `assets/implementer-prompt.md` — dispatch implementer via `Task` (general-purpose)
 - `assets/spec-reviewer-prompt.md` — dispatch spec compliance reviewer via `Task` (general-purpose)
 - `assets/code-quality-reviewer-prompt.md` — dispatch code quality reviewer via `Task` (quirk:code-reviewer)
+- `assets/codex-adversarial-prompt.md` — dispatch Codex adversarial reviewer via `mcp__pal__clink` (cli_name=`codex`, role=`codereviewer`)
+- `assets/merge-resolver-prompt.md` — dispatch merge resolver via `Task` (general-purpose) — only used in `WORKTREE_PARALLEL` mode
 
 **Pi path:**
 - `assets/pi-implementer-prompt.md` — `pi -p` codex with `--tools read,bash,edit,write`
 - `assets/pi-spec-reviewer-prompt.md` — `pi -p` gemini with `--tools read,bash` (read-only review)
 - `assets/pi-code-quality-reviewer-prompt.md` — `pi -p` gemini with `--tools read,bash` (read-only review)
+- `assets/pi-codex-adversarial-prompt.md` — `pi -p` codex with `--tools read,bash` (read-only review)
+- `assets/pi-merge-resolver-prompt.md` — `pi -p` codex with `--tools read,bash,edit,write` — only used in `WORKTREE_PARALLEL` mode
 
 The pi templates reference **quirk:pi-dev** for the canonical hardened dispatch
 recipe (timeout wrapper, exit-code capture, JSONL events file) and failure-detection
