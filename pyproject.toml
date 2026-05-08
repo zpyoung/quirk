@@ -1,6 +1,6 @@
 [project]
 name = "quirk-typed-artifacts"
-version = "5.6.0"
+version = "5.6.1"
 requires-python = ">=3.9"
 
 [tool.pytest.ini_options]
