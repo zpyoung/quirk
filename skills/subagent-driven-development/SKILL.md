@@ -503,10 +503,10 @@ mixed-runtime task.
 ## Integration
 
 **Required workflow skills:**
-- **quirk:using-git-worktrees** - REQUIRED: Set up isolated workspace before starting
-- **quirk:writing-plans** - Creates the plan this skill executes
-- **quirk:requesting-code-review** - Code review template for reviewer subagents
-- **quirk:finishing-a-development-branch** - Complete development after all tasks
+- **quirk:using-git-worktrees** — REQUIRED: Set up isolated workspace before starting. **Now load-bearing in `WORKTREE_PARALLEL` mode**: orchestrator creates one worktree per task in the wave (branch convention `<parent-branch>/sdd/<task-id>`), runs reviews inside the worktree pre-merge, rolling-merges back to the parent branch as each task's review chain passes, and tears down the worktree on success.
+- **quirk:writing-plans** — Creates the plan this skill executes. Plans may declare optional task fields (`independent`, `dependencies`, `scope.files`, `cooperative`) that the orchestrator uses for wave compute and mode decision in **Step 0b** / **Step 0c**.
+- **quirk:requesting-code-review** — Code review template for reviewer subagents.
+- **quirk:finishing-a-development-branch** — Complete development after all tasks.
 
 **Required when pi runtime is selected:**
 - **quirk:pi-dev** - Canonical hardened dispatch recipe, failure detection, reviewer JSON parse fallback, model alias resolution
