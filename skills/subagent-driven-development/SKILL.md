@@ -31,6 +31,8 @@ digraph when_to_use {
 }
 ```
 
+**Parallel by default:** when the chosen path is `subagent-driven-development`, the orchestrator computes waves from declared task independence and selects per-wave between `SEQUENTIAL`, `IN_PLACE_PARALLEL`, `WORKTREE_PARALLEL`, and `TEAM` mode. Sequential is reserved for tasks with hard declared dependencies. See **The Process → Step 0b**.
+
 **vs. Executing Plans (parallel session):**
 - Same session (no context switch)
 - Fresh subagent per task (no context pollution)
@@ -72,52 +74,201 @@ parse fallback.
 digraph process {
     rankdir=TB;
 
-    subgraph cluster_per_task {
-        label="Per Task";
-        "Dispatch implementer (assets/<runtime>-implementer-prompt.md)" [shape=box];
-        "Implementer asks questions?" [shape=diamond];
-        "Answer questions, provide context" [shape=box];
-        "Implementer implements, tests, commits, self-reviews" [shape=box];
-        "Dispatch spec reviewer (assets/<runtime>-spec-reviewer-prompt.md)" [shape=box];
-        "Spec reviewer confirms code matches spec?" [shape=diamond];
-        "Implementer fixes spec gaps" [shape=box];
-        "Dispatch code quality reviewer (assets/<runtime>-code-quality-reviewer-prompt.md)" [shape=box];
-        "Code quality reviewer approves?" [shape=diamond];
-        "Implementer fixes quality issues" [shape=box];
-        "Mark task complete in TodoWrite" [shape=box];
-    }
-
     "Ask: pi or Claude runtime?" [shape=diamond];
-    "Read plan, extract all tasks with full text, note context, create TodoWrite" [shape=box];
-    "More tasks remain?" [shape=diamond];
-    "Dispatch final code reviewer (Claude quirk:code-reviewer, regardless of runtime)" [shape=box];
+    "Read plan, extract tasks, compute waves" [shape=box];
+    "More waves remain?" [shape=diamond];
+    "Pick mode for next wave" [shape=box];
+    "Mode = SEQUENTIAL?" [shape=diamond];
+    "Mode = TEAM?" [shape=diamond];
+    "Mode = IN_PLACE_PARALLEL?" [shape=diamond];
+    "Run wave (one task, existing per-task loop)" [shape=box];
+    "Run wave (TeamCreate + parallel implementers + TaskList)" [shape=box];
+    "Run wave (multi Task calls in 1 turn, current branch)" [shape=box];
+    "Run wave (worktree per task, parallel implementers, rolling auto-merge)" [shape=box];
+    "Per-task: implementer -> spec -> quality -> Codex (NEW)" [shape=box];
+    "All waves complete?" [shape=diamond];
+    "Dispatch final whole-branch reviewer (Claude quirk:code-reviewer)" [shape=box];
     "Use quirk:finishing-a-development-branch" [shape=box style=filled fillcolor=lightgreen];
 
-    "Ask: pi or Claude runtime?" -> "Read plan, extract all tasks with full text, note context, create TodoWrite";
-    "Read plan, extract all tasks with full text, note context, create TodoWrite" -> "Dispatch implementer (assets/<runtime>-implementer-prompt.md)";
-    "Dispatch implementer (assets/<runtime>-implementer-prompt.md)" -> "Implementer asks questions?";
-    "Implementer asks questions?" -> "Answer questions, provide context" [label="yes"];
-    "Answer questions, provide context" -> "Dispatch implementer (assets/<runtime>-implementer-prompt.md)";
-    "Implementer asks questions?" -> "Implementer implements, tests, commits, self-reviews" [label="no"];
-    "Implementer implements, tests, commits, self-reviews" -> "Dispatch spec reviewer (assets/<runtime>-spec-reviewer-prompt.md)";
-    "Dispatch spec reviewer (assets/<runtime>-spec-reviewer-prompt.md)" -> "Spec reviewer confirms code matches spec?";
-    "Spec reviewer confirms code matches spec?" -> "Implementer fixes spec gaps" [label="no"];
-    "Implementer fixes spec gaps" -> "Dispatch spec reviewer (assets/<runtime>-spec-reviewer-prompt.md)" [label="re-review"];
-    "Spec reviewer confirms code matches spec?" -> "Dispatch code quality reviewer (assets/<runtime>-code-quality-reviewer-prompt.md)" [label="yes"];
-    "Dispatch code quality reviewer (assets/<runtime>-code-quality-reviewer-prompt.md)" -> "Code quality reviewer approves?";
-    "Code quality reviewer approves?" -> "Implementer fixes quality issues" [label="no"];
-    "Implementer fixes quality issues" -> "Dispatch code quality reviewer (assets/<runtime>-code-quality-reviewer-prompt.md)" [label="re-review"];
-    "Code quality reviewer approves?" -> "Mark task complete in TodoWrite" [label="yes"];
-    "Mark task complete in TodoWrite" -> "More tasks remain?";
-    "More tasks remain?" -> "Dispatch implementer (assets/<runtime>-implementer-prompt.md)" [label="yes"];
-    "More tasks remain?" -> "Dispatch final code reviewer (Claude quirk:code-reviewer, regardless of runtime)" [label="no"];
-    "Dispatch final code reviewer (Claude quirk:code-reviewer, regardless of runtime)" -> "Use quirk:finishing-a-development-branch";
+    "Ask: pi or Claude runtime?" -> "Read plan, extract tasks, compute waves";
+    "Read plan, extract tasks, compute waves" -> "More waves remain?";
+    "More waves remain?" -> "Pick mode for next wave" [label="yes"];
+    "More waves remain?" -> "Dispatch final whole-branch reviewer (Claude quirk:code-reviewer)" [label="no"];
+    "Pick mode for next wave" -> "Mode = SEQUENTIAL?";
+    "Mode = SEQUENTIAL?" -> "Run wave (one task, existing per-task loop)" [label="yes"];
+    "Mode = SEQUENTIAL?" -> "Mode = TEAM?" [label="no"];
+    "Mode = TEAM?" -> "Run wave (TeamCreate + parallel implementers + TaskList)" [label="yes"];
+    "Mode = TEAM?" -> "Mode = IN_PLACE_PARALLEL?" [label="no"];
+    "Mode = IN_PLACE_PARALLEL?" -> "Run wave (multi Task calls in 1 turn, current branch)" [label="yes"];
+    "Mode = IN_PLACE_PARALLEL?" -> "Run wave (worktree per task, parallel implementers, rolling auto-merge)" [label="no (default: WORKTREE_PARALLEL)"];
+    "Run wave (one task, existing per-task loop)" -> "Per-task: implementer -> spec -> quality -> Codex (NEW)";
+    "Run wave (TeamCreate + parallel implementers + TaskList)" -> "Per-task: implementer -> spec -> quality -> Codex (NEW)";
+    "Run wave (multi Task calls in 1 turn, current branch)" -> "Per-task: implementer -> spec -> quality -> Codex (NEW)";
+    "Run wave (worktree per task, parallel implementers, rolling auto-merge)" -> "Per-task: implementer -> spec -> quality -> Codex (NEW)";
+    "Per-task: implementer -> spec -> quality -> Codex (NEW)" -> "All waves complete?";
+    "All waves complete?" -> "More waves remain?" [label="no, more"];
+    "All waves complete?" -> "Dispatch final whole-branch reviewer (Claude quirk:code-reviewer)" [label="yes"];
+    "Dispatch final whole-branch reviewer (Claude quirk:code-reviewer)" -> "Use quirk:finishing-a-development-branch";
 }
 ```
 
-`<runtime>` is `` (empty) for the Claude path and `pi-` for the pi path. So the
-implementer template is `assets/implementer-prompt.md` (Claude) or
-`assets/pi-implementer-prompt.md` (pi), and so on.
+`<runtime>` in asset paths is `` (empty) for the Claude path and `pi-` for the
+pi path. So the implementer template is `assets/implementer-prompt.md` (Claude)
+or `assets/pi-implementer-prompt.md` (pi); the Codex adversarial template is
+`assets/codex-adversarial-prompt.md` (Claude) or `assets/pi-codex-adversarial-prompt.md` (pi);
+and so on for spec reviewer, code-quality reviewer, and merge resolver.
+
+### Step 0: Runtime selection (above)
+
+### Step 0b: Read plan, extract tasks, compute waves
+
+1. Read the plan file once. Extract every task with its full text and surrounding context.
+2. Build a TodoWrite list of all tasks.
+3. For each task, look for these optional fields (added by **quirk:writing-plans**):
+   - `independent: true` — task can run alongside any other task in its eligible wave
+   - `dependencies: [task-id, ...]` — task must wait for all listed tasks to complete
+   - `scope.files: [path, ...]` — files this task is expected to touch
+   - `cooperative: true` — task needs live negotiation with other tasks in its wave (TEAM mode)
+4. Topologically sort tasks by `dependencies`.
+5. Build successive waves: a wave contains tasks whose dependencies have all been satisfied AND that are mutually compatible (see Step 0c).
+
+### Step 0c: Pick the mode for the current wave
+
+```
+if |wave| == 1:
+    mode = SEQUENTIAL
+elif any task in wave has cooperative: true:
+    mode = TEAM
+elif |wave| <= N_INPLACE_THRESHOLD AND scopes are provably disjoint at file level:
+    mode = IN_PLACE_PARALLEL
+else:
+    mode = WORKTREE_PARALLEL    # default for 2+ independent tasks
+```
+
+`N_INPLACE_THRESHOLD = 2` by default. "Scopes provably disjoint at file level"
+means every task in the wave declared `scope.files` AND no two tasks share
+any file path.
+
+If a task declared neither `independent: true`, `dependencies`, nor
+`scope.files`, place it in its own singleton wave (= SEQUENTIAL). This is
+the safe fallback for plans that haven't adopted the new format.
+
+### Mode mechanics
+
+#### SEQUENTIAL
+
+Single Task call; existing per-task pipeline:
+implementer -> spec compliance -> code quality -> Codex adversarial -> mark complete.
+
+#### IN_PLACE_PARALLEL
+
+1. Dispatch all wave implementers in **one message turn** via multiple
+   `Task` calls (or multiple `pi -p` invocations on the Pi path).
+2. All implementers operate on the current branch in the current worktree.
+3. As each implementer finishes, its three-pass review chain
+   (spec -> quality -> Codex) fires concurrently — per-implementer, not
+   wave-batched.
+4. By gate (Step 0c), in-place is only used when scopes are provably
+   disjoint at file level — concurrent edits to the same file cannot happen,
+   so the merge resolver is not invoked in this mode. If the gate is
+   somehow violated and an implementer reports a `git` conflict during
+   commit, abort the wave and escalate to the user (this is a gate bug,
+   not a normal flow).
+
+#### WORKTREE_PARALLEL (default for 2+ independent tasks)
+
+1. For each task in the wave, create a worktree on a task-named branch via
+   **quirk:using-git-worktrees**. Branch naming convention:
+   `<parent-branch>/sdd/<task-id>`.
+2. Dispatch all wave implementers in **one message turn**, each into its own
+   worktree.
+3. Per-task review chain (spec -> quality -> Codex) runs **inside the
+   worktree on the implementer's commits**, before merge. Reviewers see
+   clean, isolated diffs.
+4. When a task's chain reaches PASS, run **rolling auto-merge**:
+   `git merge --no-ff <branch>` from the parent branch. Merges are
+   sequential (one at a time) as tasks finish; there is no wave-level
+   barrier.
+5. On true overlapping-hunk conflict during merge: dispatch the **merge
+   resolver** (`assets/<runtime>merge-resolver-prompt.md`). Worktree is
+   preserved until resolution.
+   - On `Status: SUCCESS`: continue with the next branch in the rolling
+     merge sequence.
+   - On `Status: UNRESOLVABLE`: escalate to the user; preserve the worktree
+     and the conflicted state.
+6. After successful merge, tear down the worktree via
+   **quirk:using-git-worktrees**.
+
+#### TEAM (rare, opt-in via `cooperative: true`)
+
+Adopts the persistent-team pattern: TeamCreate -> spawn all wave
+implementers in one message turn -> TaskList coordination -> SendMessage
+for cross-component negotiation -> TeamDelete after wave completes.
+
+Per-task review chain fires per implementer as each completes. This is
+the only mode where the "fresh subagent per task" guarantee is relaxed
+within a wave; the relaxation is justified only when tasks need live
+negotiation that the orchestrator cannot mediate after the fact.
+
+### Per-task review chain (all modes)
+
+Every task — regardless of mode — proceeds through:
+
+```
+implementer
+  -> spec compliance reviewer  (existing — Task general-purpose / pi gemini)
+  -> code quality reviewer     (existing — Task quirk:code-reviewer / pi gemini)
+  -> Codex adversarial reviewer (NEW — PAL clink codex / pi codex; gap-finder, severity-tagged)
+  -> mark task complete
+```
+
+The Codex adversarial reviewer:
+
+- Reads files via `absolute_file_paths` (Claude path) or via the worktree
+  filesystem (pi path with `--tools read,bash`).
+- Returns SEVERITY-tagged findings (`CRITICAL | HIGH | MEDIUM | LOW`) with
+  file:line citations and a final `VERDICT: PASS | NEEDS_FIXES |
+  CRITICAL_ISSUES`.
+- On CRITICAL/HIGH: dispatch the same implementer subagent with the
+  findings; re-run Codex. **Cap: 2 cycles** total. After cycle 2, mark the
+  task complete with unresolved findings flagged for the final
+  whole-branch reviewer.
+- MEDIUM: noted in the final report; does not block.
+- LOW / VERDICT=PASS: task complete.
+
+Existing spec-compliance and code-quality fix loops remain unbounded
+(unchanged).
+
+### Example (parallel wave under WORKTREE_PARALLEL)
+
+```
+You: I'm using Subagent-Driven Development to execute this plan.
+
+[Read plan; extract 3 tasks]
+[Plan declares: T1 independent, T2 independent, T3 depends: [T1]]
+[Wave 1 = {T1, T2} (size 2, both independent, scopes overlap on README.md)]
+  -> mode = WORKTREE_PARALLEL (overlap forbids IN_PLACE)
+
+[Create worktrees: main/sdd/T1, main/sdd/T2]
+[Dispatch implementers for T1 and T2 in one message turn]
+
+T1 implementer finishes -> spec review (PASS) -> quality review (PASS) -> Codex review (PASS)
+  -> rolling merge: git merge --no-ff main/sdd/T1 -> clean -> teardown worktree
+
+T2 implementer finishes -> spec review (NEEDS_FIX) -> implementer fixes
+  -> spec review (PASS) -> quality review (PASS) -> Codex review (CRITICAL_ISSUES)
+  -> implementer fixes -> Codex review (PASS) [cycle 2 of 2]
+  -> rolling merge: conflict on README.md -> dispatch merge resolver
+  -> resolver: SUCCESS -> teardown worktree
+
+[Wave 1 complete; T3's deps satisfied]
+[Wave 2 = {T3} (singleton -> SEQUENTIAL)]
+[Run T3 normally]
+
+[All waves done]
+[Dispatch final quirk:code-reviewer over the whole branch]
+[Use quirk:finishing-a-development-branch]
+```
 
 ## Model Selection
 
