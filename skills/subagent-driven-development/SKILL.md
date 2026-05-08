@@ -491,6 +491,11 @@ detection:
 | Unparseable reviewer output | Apply **quirk:pi-dev → Reviewer JSON parse fallback**. Never count unparseable as PASS — synthesize a NEEDS_FIX verdict and let the implementer fix-and-retry. |
 | Pi version < 0.65.1 (preflight check) | Don't dispatch any pi worker. Tell the user to upgrade (`pnpm add -g @mariozechner/pi-coding-agent`) or fall back to Claude. |
 
+
+The same failure-detection rules apply uniformly to the new pi roles introduced for parallel mode and Codex review:
+
+- **Codex adversarial reviewer (pi codex)** — same auth/billing/rate-limit/timeout/empty-events handling as the implementer. On unrecoverable failure for this role only, fall back to the **Claude PAL clink codex** path (`assets/codex-adversarial-prompt.md`). Never count an unparseable Codex review as PASS.
+- **Merge resolver (pi codex)** — same auth/billing/rate-limit/timeout/empty-events handling. On unrecoverable failure, fall back to the **Claude `Task` general-purpose** path (`assets/merge-resolver-prompt.md`). On UNRESOLVABLE verdict, escalate to the user; do not retry the resolver in a loop.
 When falling back, mark any partially completed task as needing re-review on the
 Claude path before continuing to the next task. Don't silently continue with a
 mixed-runtime task.
