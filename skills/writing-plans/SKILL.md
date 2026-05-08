@@ -86,8 +86,19 @@ See **quirk:subagent-driven-development → The Process → Step 0b** for the fu
 
 ## Task Structure
 
+Every task follows this template. The `independent` / `dependencies` / `scope.files` / `cooperative` block is optional but **strongly recommended** — it lets `quirk:subagent-driven-development` execute the plan in parallel waves instead of strictly sequentially. Most well-decomposed tasks should declare `independent: true` plus `scope.files`.
+
 ````markdown
 ### Task N: [Component Name]
+
+```yaml
+# Optional — drives parallel execution under quirk:subagent-driven-development.
+# Omit any line that doesn't apply. Omit the whole block to fall back to sequential.
+independent: true
+dependencies: []
+scope:
+  files: [exact/path/to/file.py, tests/exact/path/to/test.py]
+```
 
 **Files:**
 - Create: `exact/path/to/file.py`
@@ -153,6 +164,8 @@ After writing the complete plan, look at the spec with fresh eyes and check the 
 
 **3. Type consistency:** Do the types, method signatures, and property names you used in later tasks match what you defined in earlier tasks? A function called `clearLayers()` in Task 3 but `clearFullLayers()` in Task 7 is a bug.
 
+**4. Parallelism declarations:** For each task, did you accurately declare `independent: true` / `dependencies: [...]` / `scope.files: [...]`? Tasks that genuinely don't depend on each other should say so — otherwise the orchestrator falls back to sequential execution and leaves throughput on the table. Tasks that share a target file (e.g., multiple edits to the same `SKILL.md`) MUST run sequentially — express that with `dependencies`, never with overlapping `scope.files` and `independent: true` together.
+
 If you find issues, fix them inline. No need to re-review — just fix and move on. If you find a spec requirement with no task, add the task.
 
 ## Execution Handoff
@@ -169,7 +182,7 @@ After saving the plan, offer execution choice:
 
 **If Subagent-Driven chosen:**
 - **REQUIRED SUB-SKILL:** Use quirk:subagent-driven-development
-- Fresh subagent per task + two-stage review
+- Fresh subagent per task + three-pass review (spec, quality, Codex adversarial); orchestrator computes parallel waves from the task fields above
 
 **If Inline Execution chosen:**
 - **REQUIRED SUB-SKILL:** Use quirk:executing-plans
