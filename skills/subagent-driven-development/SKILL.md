@@ -5,11 +5,11 @@ description: Use when executing implementation plans with independent tasks in t
 
 # Subagent-Driven Development
 
-Execute plan by dispatching fresh subagent per task, with two-stage review after each: spec compliance review first, then code quality review.
+Execute plan by dispatching fresh subagent per task, with a three-pass review after each: spec compliance, then code quality, then Codex adversarial gap-finding.
 
 **Why subagents:** You delegate tasks to specialized agents with isolated context. By precisely crafting their instructions and context, you ensure they stay focused and succeed at their task. They should never inherit your session's context or history — you construct exactly what they need. This also preserves your own context for coordination work.
 
-**Core principle:** Fresh subagent per task + two-stage review (spec then quality) = high quality, fast iteration
+**Core principle:** Fresh subagent per task + three-pass review (spec, then quality, then Codex adversarial) = high quality, fast iteration
 
 ## When to Use
 
@@ -36,7 +36,7 @@ digraph when_to_use {
 **vs. Executing Plans (parallel session):**
 - Same session (no context switch)
 - Fresh subagent per task (no context pollution)
-- Two-stage review after each task: spec compliance first, then code quality
+- Three-pass review after each task: spec compliance, then code quality, then Codex adversarial
 - Faster iteration (no human-in-loop between tasks)
 
 ## Runtime Selection
@@ -190,7 +190,7 @@ implementer -> spec compliance -> code quality -> Codex adversarial -> mark comp
    sequential (one at a time) as tasks finish; there is no wave-level
    barrier.
 5. On true overlapping-hunk conflict during merge: dispatch the **merge
-   resolver** (`assets/<runtime>merge-resolver-prompt.md`). Worktree is
+   resolver** (`assets/merge-resolver-prompt.md` for Claude, `assets/pi-merge-resolver-prompt.md` for pi). Worktree is
    preserved until resolution.
    - On `Status: SUCCESS`: continue with the next branch in the rolling
      merge sequence.
@@ -363,6 +363,9 @@ Spec reviewer: ✅ Spec compliant - all requirements met, nothing extra
 [Get git SHAs, dispatch code quality reviewer]
 Code reviewer: Strengths: Good test coverage, clean. Issues: None. Approved.
 
+[Dispatch Codex adversarial reviewer (mcp__pal__clink, codex codereviewer)]
+Codex: VERDICT: PASS — no gaps found between spec and implementation.
+
 [Mark Task 1 complete]
 
 Task 2: Recovery modes
@@ -397,6 +400,9 @@ Implementer: Extracted PROGRESS_INTERVAL constant
 [Code reviewer reviews again]
 Code reviewer: ✅ Approved
 
+[Dispatch Codex adversarial reviewer]
+Codex: VERDICT: PASS — adversarial review found no spec-implementation gaps.
+
 [Mark Task 2 complete]
 
 ...
@@ -429,13 +435,13 @@ Done!
 
 **Quality gates:**
 - Self-review catches issues before handoff
-- Two-stage review: spec compliance, then code quality
+- Three-pass review: spec compliance, then code quality, then Codex adversarial
 - Review loops ensure fixes actually work
 - Spec compliance prevents over/under-building
 - Code quality ensures implementation is well-built
 
 **Cost:**
-- More subagent invocations (implementer + 2 reviewers per task)
+- More subagent invocations (implementer + 3 reviewers per task: spec, quality, Codex)
 - Controller does more prep work (extracting all tasks upfront)
 - Review loops add iterations
 - But catches issues early (cheaper than debugging later)
@@ -444,7 +450,7 @@ Done!
 
 **Never:**
 - Start implementation on main/master branch without explicit user consent
-- Skip reviews (spec compliance OR code quality)
+- Skip reviews (spec compliance, code quality, OR Codex adversarial)
 - Proceed with unfixed issues
 - Make subagent read plan file (provide full text instead)
 - Skip scene-setting context (subagent needs to understand where task fits)
