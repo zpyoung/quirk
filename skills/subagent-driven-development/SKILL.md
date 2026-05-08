@@ -54,10 +54,12 @@ agent**, regardless of choice — cross-task synthesis benefits from Claude's ag
 context, and pi has no equivalent role.
 
 | Role | Claude path | Pi path |
-|---|---|---|
+| --- | --- | --- |
 | Implementer | `Task` (general-purpose) + `assets/implementer-prompt.md` | `pi -p` codex (`openai-codex/gpt-5.3-codex:xhigh`) + `assets/pi-implementer-prompt.md` |
 | Spec reviewer | `Task` (general-purpose) + `assets/spec-reviewer-prompt.md` | `pi -p` gemini (`google/gemini-3.1-pro-preview:high`) + `assets/pi-spec-reviewer-prompt.md` |
 | Code-quality reviewer | `Task` (quirk:code-reviewer) + `assets/code-quality-reviewer-prompt.md` | `pi -p` gemini (`google/gemini-3.1-pro-preview:high`) + `assets/pi-code-quality-reviewer-prompt.md` |
+| Codex adversarial reviewer | `mcp__pal__clink` (cli_name=`codex`, role=`codereviewer`) + `assets/codex-adversarial-prompt.md` | `pi -p` codex (`openai-codex/gpt-5.3-codex:xhigh`, `--tools read,bash`) + `assets/pi-codex-adversarial-prompt.md` |
+| Merge resolver (worktree mode only) | `Task` (general-purpose) + `assets/merge-resolver-prompt.md` | `pi -p` codex (`openai-codex/gpt-5.3-codex:xhigh`, `--tools read,bash,edit,write`) + `assets/pi-merge-resolver-prompt.md` |
 | Final whole-branch reviewer | `Task` (quirk:code-reviewer) | `Task` (quirk:code-reviewer) — always Claude |
 
 When the pi path is selected, **REQUIRED:** consult `quirk:pi-dev` for the
