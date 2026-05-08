@@ -446,7 +446,6 @@ Done!
 - Start implementation on main/master branch without explicit user consent
 - Skip reviews (spec compliance OR code quality)
 - Proceed with unfixed issues
-- Dispatch multiple implementation subagents in parallel (conflicts)
 - Make subagent read plan file (provide full text instead)
 - Skip scene-setting context (subagent needs to understand where task fits)
 - Ignore subagent questions (answer before letting them proceed)
@@ -455,6 +454,11 @@ Done!
 - Let implementer self-review replace actual review (both are needed)
 - **Start code quality review before spec compliance is ✅** (wrong order)
 - Move to next task while either review has open issues
+- Skip the wave gate / dispatch parallel implementers without computing a wave first
+- Run reviews against a merged branch instead of the worktree's pre-merge commits
+- Auto-merge a worktree branch before its review chain has reached PASS
+- Force-resolve a merge conflict manually as orchestrator instead of dispatching the merge resolver
+- Exceed 2 Codex adversarial fix cycles
 
 **If subagent asks questions:**
 - Answer clearly and completely
