@@ -42,6 +42,30 @@ This structure informs the task decomposition. Each task should produce self-con
 - "Run the tests and make sure they pass" - step
 - "Commit" - step
 
+## Task Independence (optional)
+
+When the plan will be executed by **quirk:subagent-driven-development**, you can opt into the orchestrator's parallel modes by declaring task independence and scope. All four fields are optional — plans without them produce singleton waves (one task per wave, executed sequentially), which is the legacy behaviour.
+
+Declare any of these fields directly in the task heading area, in a fenced YAML-like block immediately under the `### Task N: ...` heading:
+
+```yaml
+independent: true                     # this task can run alongside any other independent task in its eligible wave
+dependencies: [T1, T3]                # task ids that must complete before this one starts
+scope:
+  files: [path/to/a.py, path/to/b.py] # files this task is expected to touch (used for IN_PLACE_PARALLEL gate)
+cooperative: true                     # task needs live cross-task negotiation (TEAM mode only — rare)
+```
+
+**Guidance:**
+
+- Most tasks should use `independent: true` (with optional `scope.files`) when they truly stand alone. The orchestrator will then group them into parallel waves.
+- Use `dependencies` whenever a task needs another task's output — e.g., a test task that requires a feature task to ship first.
+- Use `scope.files` when you want the orchestrator to consider `IN_PLACE_PARALLEL` mode (lower overhead than worktrees). The gate fires only when every task in the wave declares `scope.files` and no two scopes overlap.
+- Use `cooperative: true` very rarely — only when two or more tasks in the same wave need to negotiate interfaces during work (the orchestrator uses TEAM mode in that case, which relaxes the "fresh subagent per task" guarantee within the wave).
+- Tasks that declare none of these fields fall back to a singleton wave (`SEQUENTIAL` mode). This is safe and matches legacy behaviour.
+
+See **quirk:subagent-driven-development → The Process → Step 0b** for the full wave-compute and mode-decision logic.
+
 ## Plan Document Header
 
 **Every plan MUST start with this header:**
