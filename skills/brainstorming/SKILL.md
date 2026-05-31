@@ -221,6 +221,7 @@ Watch for "also add", "we should also", "what about adding", "could we also", "i
 - Present options conversationally with your recommendation and reasoning, citing relevant research findings (sources can be linked in the spec's Industry Insights section)
 - Lead with your recommended option and explain why
 - For novel, high-stakes, or production-bound work, run **Phase C deep-research** on the chosen approach before writing the design doc
+- **Stuck on the option space?** If after Phase B research you cannot articulate 2–3 *structurally different* approaches (only minor variations of one underlying angle), the `adhd` skill is an opt-in subroutine for parallel divergent ideation under cognitive frames. Invoke it on the framed decision and use the returned `shortlist` + `traps` + `deepened` to seed the proposal; cite the ADHD run in the spec's **Industry Insights** section. ADHD costs roughly 5–10× a single answer — use it only at genuine decision points, not on every option-stuck moment.
 
 **Presenting the design:**
 
