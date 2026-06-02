@@ -220,6 +220,7 @@ Watch for "also add", "we should also", "what about adding", "could we also", "i
 - Propose 2-3 different approaches with trade-offs
 - Present options conversationally with your recommendation and reasoning, citing relevant research findings (sources can be linked in the spec's Industry Insights section)
 - Lead with your recommended option and explain why
+- **Advisory**: For decisions with high uncertainty, 3+ gray areas, or meaningful architectural/UX stakes, consider using the `adhd` skill to surface non-obvious options through structured divergent ideation (5-10× cost, opt-in only)
 - For novel, high-stakes, or production-bound work, run **Phase C deep-research** on the chosen approach before writing the design doc
 
 **Presenting the design:**
