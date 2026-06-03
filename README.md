@@ -53,6 +53,17 @@ All three gate on artifact-file presence — they are inert no-ops in projects t
 
 See `docs/specs/2026-05-04-typed-artifacts-design.md`.
 
+## Agent Isles bridge
+
+Quirk can author Agent Isles-aware artifacts while keeping Markdown canonical and Agent Isles optional. The stdlib-only helper in `bin/agent_isles.py` detects a local `isles` binary, an `isles` on `PATH`, or an explicit `npx agent-isles@next` fallback; it never silently installs packages.
+
+```bash
+python3 bin/agent_isles.py doctor
+python3 bin/agent_isles.py command examples/agent-isles/typed-artifacts-summary.md
+```
+
+The experimental local component pack lives in `packs/quirk/` and covers typed artifact summaries, TDD cycle reports, plan readiness, and review findings. Examples live in `examples/agent-isles/`. See `docs/agent-isles-artifacts.md` for the authoring contract: Markdown source is canonical, generated HTML under `.quirk/isles/` is disposable by default, and the Quirk pack is trusted local code.
+
 ## Development
 
 ```bash
