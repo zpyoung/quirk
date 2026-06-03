@@ -161,7 +161,7 @@ When brainstorming delegates, treat it as an explicit invocation — run the ful
 
 ## Attribution
 
-This skill is based on the ADHD divergent-thinking framework originally developed by [upstream source]. It has been adapted for the Quirk skills library with the following additions:
+This skill is based on the upstream ADHD divergent-thinking framework. It has been adapted for the Quirk skills library with the following additions:
 
 1. **Standalone exit + context handling**: After rendering output for explicit `/adhd`, the skill releases control to the normal agent loop. Context handling clarified as "summarize in next turn" (cannot intercept tool_result blocks).
 

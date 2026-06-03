@@ -6,7 +6,7 @@ Version: **5.6.2**
 
 ## What ships
 
-- **16 skills** under `skills/` covering TDD, systematic debugging, brainstorming, divergent ideation, plan writing, code review, parallel agent dispatch, and more.
+- **19 skills** under `skills/` covering TDD, systematic debugging, brainstorming, divergent ideation, plan writing, code review, parallel agent dispatch, and more.
 - **Typed artifacts** (added in 5.1.0) — surface-routing for observations Claude cannot act on. See below.
 
 ## Installation

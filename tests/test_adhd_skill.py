@@ -8,6 +8,7 @@ SKILL_PATH = REPO_ROOT / "skills" / "adhd" / "SKILL.md"
 FRAMES_PATH = REPO_ROOT / "skills" / "adhd" / "frames.md"
 UPSTREAM_LICENSE_PATH = REPO_ROOT / "skills" / "adhd" / "UPSTREAM-LICENSE"
 PLUGIN_JSON_PATH = REPO_ROOT / ".claude-plugin" / "plugin.json"
+README_PATH = REPO_ROOT / "README.md"
 
 
 def test_adhd_skill_has_valid_frontmatter() -> None:
@@ -151,3 +152,22 @@ def test_adhd_plugin_keywords() -> None:
     assert "adhd" in keywords, "plugin.json missing 'adhd' keyword"
     assert "divergent-ideation" in keywords, "plugin.json missing 'divergent-ideation' keyword"
     assert "divergent-thinking" in keywords, "plugin.json missing 'divergent-thinking' keyword"
+
+
+def test_readme_skill_count_matches_skill_directory() -> None:
+    """README skill count should match directories that ship SKILL.md files."""
+    readme = README_PATH.read_text()
+    skill_dirs = [path for path in (REPO_ROOT / "skills").iterdir() if (path / "SKILL.md").exists()]
+
+    match = re.search(r"\*\*(\d+) skills\*\*", readme)
+    assert match, "README missing skill count in What ships section"
+    assert int(match.group(1)) == len(skill_dirs)
+
+
+def test_adhd_docs_do_not_contain_source_placeholders() -> None:
+    """Attribution text should not leave bracketed source placeholders behind."""
+    docs = [SKILL_PATH, REPO_ROOT / "skills" / "adhd" / "SOURCE-SPEC.md"]
+    for doc in docs:
+        body = doc.read_text().lower()
+        assert "[upstream source]" not in body
+        assert "placeholder" not in body
