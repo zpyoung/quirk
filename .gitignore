@@ -7,3 +7,4 @@ htmlcov/
 *.bak.*
 .lock
 .memsearch/
+.quirk/isles/

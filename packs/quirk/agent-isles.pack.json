@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "name": "quirk",
+  "version": "0.1.0-experimental",
+  "description": "Experimental Quirk Agent Isles component pack for workflow artifacts.",
+  "module": "./quirk-components.js",
+  "styles": ["./quirk-components.css"],
+  "components": [
+    {
+      "tag": "quirk-artifact-summary",
+      "description": "Summarize Quirk typed artifact surfaces.",
+      "sanitizedModeAttributes": ["title", "bugs", "deferred", "test-backlog", "proposals", "adrs", "status"]
+    },
+    {
+      "tag": "quirk-tdd-cycle",
+      "description": "Present red/green/refactor status and verification evidence.",
+      "sanitizedModeAttributes": ["title", "red", "green", "refactor", "verification", "debt", "status"]
+    },
+    {
+      "tag": "quirk-plan-review",
+      "description": "Present plan readiness gates and handoff state.",
+      "sanitizedModeAttributes": ["title", "scope", "clarity", "files", "tests", "risks", "handoff", "status"]
+    },
+    {
+      "tag": "quirk-review-finding",
+      "description": "Present a review finding with severity, location, recommendation, and status.",
+      "sanitizedModeAttributes": ["severity", "path", "recommendation", "status"]
+    }
+  ]
+}
