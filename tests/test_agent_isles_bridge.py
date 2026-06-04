@@ -6,8 +6,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-import agent_isles
 from .conftest import BIN_DIR, REPO_ROOT, run_script
+
+sys.path.insert(0, str(BIN_DIR))
+import agent_isles
 
 
 def _exe(path: Path) -> None:
