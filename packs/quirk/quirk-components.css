@@ -1,0 +1,43 @@
+.quirk-card {
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: 0.75rem;
+  margin: 1rem 0;
+  padding: 1rem;
+  background: color-mix(in srgb, Canvas 96%, currentColor 4%);
+}
+
+.quirk-card h3 {
+  margin: 0 0 0.5rem;
+}
+
+.quirk-badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.85em;
+  font-weight: 700;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.quirk-kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.4rem 0.8rem;
+  margin: 0.75rem 0 0;
+}
+
+.quirk-kv dt {
+  font-weight: 700;
+}
+
+.quirk-kv dd {
+  margin: 0;
+}
+
+.quirk-card details {
+  margin-top: 0.75rem;
+}
+
+.quirk-card pre {
+  white-space: pre-wrap;
+}
