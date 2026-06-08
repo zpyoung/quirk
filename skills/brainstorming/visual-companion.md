@@ -2,6 +2,10 @@
 
 Browser-based visual brainstorming companion for showing mockups, diagrams, and options.
 
+It runs on **Agent Isles** (`isles live`): you author **Markdown screens** with small interactive
+islands instead of hand-writing HTML. Agent Isles renders the newest screen, shows it in the
+browser, and captures clicks back to you as JSONL events.
+
 ## When to Use
 
 Decide per-question, not per-session. The test: **would the user understand this better by seeing it than reading it?**
@@ -9,7 +13,7 @@ Decide per-question, not per-session. The test: **would the user understand this
 **Use the browser** when the content itself is visual:
 
 - **UI mockups** — wireframes, layouts, navigation structures, component designs
-- **Architecture diagrams** — system components, data flow, relationship maps
+- **Architecture diagrams** — system components, data flow, relationship maps (Mermaid/D2 supported)
 - **Side-by-side visual comparisons** — comparing two layouts, two color schemes, two design directions
 - **Design polish** — when the question is about look and feel, spacing, visual hierarchy
 - **Spatial relationships** — state machines, flowcharts, entity relationships rendered as diagrams
@@ -26,262 +30,186 @@ A question *about* a UI topic is not automatically a visual question. "What kind
 
 ## How It Works
 
-The server watches a directory for HTML files and serves the newest one to the browser. You write HTML content to `screen_dir`, the user sees it in their browser and can click to select options. Selections are recorded to `state_dir/events` that you read on your next turn.
+`isles live <dir>` watches a directory for **Markdown** files and serves the **newest one** (by
+modification time) to the browser, auto-switching when you write a newer screen. You write `.md`
+screens to the screen directory; the user sees the rendered result and clicks to select options;
+selections are appended to `<dir>/state/events` (JSONL) that you read on your next turn.
 
-**Content fragments vs full documents:** If your HTML file starts with `<!DOCTYPE` or `<html`, the server serves it as-is (just injects the helper script). Otherwise, the server automatically wraps your content in the frame template — adding the header, CSS theme, selection indicator, and all interactive infrastructure. **Write content fragments by default.** Only write full documents when you need complete control over the page.
+You author **standard Markdown plus Agent Isles islands**. The renderer adds the page chrome,
+theme, dark mode, a live header/footer, and all interactive infrastructure — you never hand-write
+`<html>`, CSS, or `<script>`. Selection wiring is built into the islands; there is **no
+`onclick`/`data-choice`/`toggleSelect`** to manage.
+
+## Requirements
+
+The companion is launched through the Quirk bridge, which finds an Agent Isles runner
+automatically (in order):
+
+1. repo-local `node_modules/.bin/isles`,
+2. `isles` on `PATH`,
+3. an explicit `npx` fallback (`github:zpyoung/agent-isles`, which currently carries `live`).
+
+The npx fallback needs Node + `npx` available and will download Agent Isles on first use. If none
+of these resolve, the bridge prints a clear error instead of launching — fall back to terminal-only
+brainstorming and tell the user Agent Isles isn't available.
+
+Throughout this guide, the bridge is invoked as
+`python3 "$CLAUDE_PLUGIN_ROOT/bin/agent_isles.py"` (the brainstorming skill ships inside the Quirk
+plugin, so the bridge lives at the plugin root).
 
 ## Starting a Session
 
-```bash
-# Start server with persistence (mockups saved to project)
-scripts/start-server.sh --project-dir /path/to/project
-
-# Returns: {"type":"server-started","port":52341,"url":"http://localhost:52341",
-#           "screen_dir":"/path/to/project/.quirk/brainstorm/12345-1706000000/content",
-#           "state_dir":"/path/to/project/.quirk/brainstorm/12345-1706000000/state"}
-```
-
-Save `screen_dir` and `state_dir` from the response. Tell user to open the URL.
-
-**Finding connection info:** The server writes its startup JSON to `$STATE_DIR/server-info`. If you launched the server in the background and didn't capture stdout, read that file to get the URL and port. When using `--project-dir`, check `<project>/.quirk/brainstorm/` for the session directory.
-
-**Note:** Pass the project root as `--project-dir` so mockups persist in `.quirk/brainstorm/` and survive server restarts. Without it, files go to `/tmp` and get cleaned up. Remind the user to add `.quirk/` to `.gitignore` if it's not already there.
-
-**Launching the server by platform:**
-
-**Claude Code (macOS / Linux):**
-```bash
-# Default mode works — the script backgrounds the server itself
-scripts/start-server.sh --project-dir /path/to/project
-```
-
-**Claude Code (Windows):**
-```bash
-# Windows auto-detects and uses foreground mode, which blocks the tool call.
-# Use run_in_background: true on the Bash tool call so the server survives
-# across conversation turns.
-scripts/start-server.sh --project-dir /path/to/project
-```
-When calling this via the Bash tool, set `run_in_background: true`. Then read `$STATE_DIR/server-info` on the next turn to get the URL and port.
-
-**Codex:**
-```bash
-# Codex reaps background processes. The script auto-detects CODEX_CI and
-# switches to foreground mode. Run it normally — no extra flags needed.
-scripts/start-server.sh --project-dir /path/to/project
-```
-
-**Gemini CLI:**
-```bash
-# Use --foreground and set is_background: true on your shell tool call
-# so the process survives across turns
-scripts/start-server.sh --project-dir /path/to/project --foreground
-```
-
-**Other environments:** The server must keep running in the background across conversation turns. If your environment reaps detached processes, use `--foreground` and launch the command with your platform's background execution mechanism.
-
-If the URL is unreachable from your browser (common in remote/containerized setups), bind a non-loopback host:
+Pick a screen directory **inside the user's project** so screens persist and survive restarts.
+Use a unique session subdirectory, e.g. `.quirk/brainstorm/session-1/`:
 
 ```bash
-scripts/start-server.sh \
-  --project-dir /path/to/project \
-  --host 0.0.0.0 \
-  --url-host localhost
+SCREEN_DIR=".quirk/brainstorm/session-1"
+python3 "$CLAUDE_PLUGIN_ROOT/bin/agent_isles.py" live "$SCREEN_DIR"
+# Prints one line of JSON, e.g.:
+# {"type":"server-started","pid":92913,"port":53143,"host":"127.0.0.1",
+#  "url":"http://localhost:53143","screen_dir":".../session-1","state_dir":".../session-1/state"}
 ```
 
-Use `--url-host` to control what hostname is printed in the returned URL JSON.
+The server **self-backgrounds**: the command prints the server-info JSON and returns immediately,
+so you do NOT need `run_in_background`. Save `url`, `screen_dir`, and `state_dir` from the JSON.
+Tell the user to open the `url`.
+
+**Finding connection info later:** the same JSON is written to `<screen_dir>/state/server-info`.
+If the server has shut down, `<screen_dir>/state/server-stopped` exists instead.
+
+**Persistence & git:** screens stay in `.quirk/brainstorm/` for later reference. Remind the user to
+add `.quirk/` to `.gitignore` if it isn't already.
+
+**Remote/containerized setups:** if the printed URL is unreachable from the user's browser, relaunch
+binding a non-loopback host and control the printed hostname:
+
+```bash
+python3 "$CLAUDE_PLUGIN_ROOT/bin/agent_isles.py" live "$SCREEN_DIR" --host 0.0.0.0 --url-host localhost
+```
+
+The server auto-exits after 30 minutes of inactivity (tune with `--idle-timeout <minutes>`).
 
 ## The Loop
 
-1. **Check server is alive**, then **write HTML** to a new file in `screen_dir`:
-   - Before each write, check that `$STATE_DIR/server-info` exists. If it doesn't (or `$STATE_DIR/server-stopped` exists), the server has shut down — restart it with `start-server.sh` before continuing. The server auto-exits after 30 minutes of inactivity.
-   - Use semantic filenames: `platform.html`, `visual-style.html`, `layout.html`
-   - **Never reuse filenames** — each screen gets a fresh file
-   - Use Write tool — **never use cat/heredoc** (dumps noise into terminal)
-   - Server automatically serves the newest file
+1. **Write a Markdown screen** to a new file in `screen_dir`:
+   - Use semantic filenames: `platform.md`, `visual-style.md`, `layout.md`
+   - **Never reuse filenames** — each screen gets a fresh file. The newest by mtime is served.
+   - Use the Write tool — **never use cat/heredoc** (dumps noise into the terminal).
+   - If the server has stopped (`state/server-stopped` exists, or `state/server-info` is gone),
+     relaunch it before writing.
 
-2. **Tell user what to expect and end your turn:**
-   - Remind them of the URL (every step, not just first)
-   - Give a brief text summary of what's on screen (e.g., "Showing 3 layout options for the homepage")
+2. **Tell the user what to expect and end your turn:**
+   - Remind them of the URL (every step, not just the first).
+   - Give a brief text summary of what's on screen (e.g., "Showing 3 layout options for the homepage").
    - Ask them to respond in the terminal: "Take a look and let me know what you think. Click to select an option if you'd like."
 
-3. **On your next turn** — after the user responds in the terminal:
-   - Read `$STATE_DIR/events` if it exists — this contains the user's browser interactions (clicks, selections) as JSON lines
-   - Merge with the user's terminal text to get the full picture
-   - The terminal message is the primary feedback; `state_dir/events` provides structured interaction data
+3. **On your next turn** — after the user responds:
+   - Read `<state_dir>/events` if it exists — JSONL of the user's browser clicks (see format below).
+   - Merge with the user's terminal text. The terminal message is primary; events provide structured
+     interaction data.
 
-4. **Iterate or advance** — if feedback changes current screen, write a new file (e.g., `layout-v2.html`). Only move to the next question when the current step is validated.
+4. **Iterate or advance** — if feedback changes the current screen, write a new file (e.g.
+   `layout-v2.md`). Only move to the next question when the current one is validated.
 
-5. **Unload when returning to terminal** — when the next step doesn't need the browser (e.g., a clarifying question, a tradeoff discussion), push a waiting screen to clear the stale content:
+5. **Unload when returning to the terminal** — when the next step doesn't need the browser, push a
+   waiting screen to clear stale content so the user isn't staring at a resolved choice:
 
-   ```html
-   <!-- filename: waiting.html (or waiting-2.html, etc.) -->
-   <div style="display:flex;align-items:center;justify-content:center;min-height:60vh">
-     <p class="subtitle">Continuing in terminal...</p>
-   </div>
+   ```markdown
+   <!-- filename: waiting.md (or waiting-2.md, etc.) -->
+   ## Continuing in the terminal…
    ```
-
-   This prevents the user from staring at a resolved choice while the conversation has moved on. When the next visual question comes up, push a new content file as usual.
 
 6. Repeat until done.
 
-## Writing Content Fragments
+## Authoring Screens
 
-Write just the content that goes inside the page. The server wraps it in the frame template automatically (header, theme CSS, selection indicator, and all interactive infrastructure).
+Write a normal Markdown document. Reach for islands only where richer UI helps.
 
-**Minimal example:**
+### Selectable options (the core interaction)
 
-```html
-<h2>Which layout works better?</h2>
-<p class="subtitle">Consider readability and visual hierarchy</p>
+Wrap `<agent-choice>` rows in an `<agent-option-set>`. Each choice needs a stable `id` (used as the
+event `choice`) and a short `title` (used as the event `text`); the body is the visible description.
 
-<div class="options">
-  <div class="option" data-choice="a" onclick="toggleSelect(this)">
-    <div class="letter">A</div>
-    <div class="content">
-      <h3>Single Column</h3>
-      <p>Clean, focused reading experience</p>
-    </div>
-  </div>
-  <div class="option" data-choice="b" onclick="toggleSelect(this)">
-    <div class="letter">B</div>
-    <div class="content">
-      <h3>Two Column</h3>
-      <p>Sidebar navigation with main content</p>
-    </div>
-  </div>
-</div>
+```markdown
+## Which homepage layout?
+
+Consider readability and visual hierarchy.
+
+<agent-option-set>
+  <agent-choice id="single-column" title="Single column">Focused, linear reading experience</agent-choice>
+  <agent-choice id="two-column" title="Two column">Sidebar nav beside main content</agent-choice>
+</agent-option-set>
 ```
 
-That's it. No `<html>`, no CSS, no `<script>` tags needed. The server provides all of that.
+**Multi-select:** add `data-multiselect` on the `<agent-option-set>`. Each click toggles a choice;
+the footer shows the count.
 
-## CSS Classes Available
-
-The frame template provides these CSS classes for your content:
-
-### Options (A/B/C choices)
-
-```html
-<div class="options">
-  <div class="option" data-choice="a" onclick="toggleSelect(this)">
-    <div class="letter">A</div>
-    <div class="content">
-      <h3>Title</h3>
-      <p>Description</p>
-    </div>
-  </div>
-</div>
+```markdown
+<agent-option-set data-multiselect>
+  <agent-choice id="risks" title="Risks">Show risk callouts</agent-choice>
+  <agent-choice id="timeline" title="Timeline">Show timeline context</agent-choice>
+</agent-option-set>
 ```
 
-**Multi-select:** Add `data-multiselect` to the container to let users select multiple options. Each click toggles the item. The indicator bar shows the count.
+Selecting one choice in a single-select set deselects its siblings. Add `selected` to a choice only
+for an initial selection (at most one in single-select sets).
 
-```html
-<div class="options" data-multiselect>
-  <!-- same option markup — users can select/deselect multiple -->
-</div>
-```
+### Other islands
 
-### Cards (visual designs)
+- `<agent-decision verdict="go|approved|rejected|deferred|needs-review|ship-with-guardrails" title="…">` — scannable decision cards.
+- `<agent-risk level="low|medium|high|critical" title="…">` — risk/blocker callouts.
+- More components and exact attributes: Agent Isles `docs/component-vocabulary.md`.
 
-```html
-<div class="cards">
-  <div class="card" data-choice="design1" onclick="toggleSelect(this)">
-    <div class="card-image"><!-- mockup content --></div>
-    <div class="card-body">
-      <h3>Name</h3>
-      <p>Description</p>
-    </div>
-  </div>
-</div>
-```
+### Mockups and diagrams
 
-### Mockup container
-
-```html
-<div class="mockup">
-  <div class="mockup-header">Preview: Dashboard Layout</div>
-  <div class="mockup-body"><!-- your mockup HTML --></div>
-</div>
-```
-
-### Split view (side-by-side)
-
-```html
-<div class="split">
-  <div class="mockup"><!-- left --></div>
-  <div class="mockup"><!-- right --></div>
-</div>
-```
-
-### Pros/Cons
-
-```html
-<div class="pros-cons">
-  <div class="pros"><h4>Pros</h4><ul><li>Benefit</li></ul></div>
-  <div class="cons"><h4>Cons</h4><ul><li>Drawback</li></ul></div>
-</div>
-```
-
-### Mock elements (wireframe building blocks)
-
-```html
-<div class="mock-nav">Logo | Home | About | Contact</div>
-<div style="display: flex;">
-  <div class="mock-sidebar">Navigation</div>
-  <div class="mock-content">Main content area</div>
-</div>
-<button class="mock-button">Action Button</button>
-<input class="mock-input" placeholder="Input field">
-<div class="placeholder">Placeholder area</div>
-```
-
-### Typography and sections
-
-- `h2` — page title
-- `h3` — section heading
-- `.subtitle` — secondary text below title
-- `.section` — content block with bottom margin
-- `.label` — small uppercase label text
+- For wireframes/layout mockups, use plain Markdown structure plus Bootstrap markup (cards, grids)
+  inline where you need richer layout.
+- For architecture diagrams, flowcharts, and state machines, use Mermaid or D2 fenced code blocks.
+- Keep mockups simple — focus on layout and structure, not pixel-perfect design. Use real content
+  (e.g. actual images) when it materially affects the design judgment.
 
 ## Browser Events Format
 
-When the user clicks options in the browser, their interactions are recorded to `$STATE_DIR/events` (one JSON object per line). The file is cleared automatically when you push a new screen.
+Clicks are recorded to `<state_dir>/events`, one JSON object per line. The file is cleared
+automatically when you push a newer screen.
 
 ```jsonl
-{"type":"click","choice":"a","text":"Option A - Simple Layout","timestamp":1706000101}
-{"type":"click","choice":"c","text":"Option C - Complex Grid","timestamp":1706000108}
-{"type":"click","choice":"b","text":"Option B - Hybrid","timestamp":1706000115}
+{"type":"click","choice":"two-column","text":"Two column","timestamp":1780956565,"selected":["two-column"]}
+{"type":"click","choice":"single-column","text":"Single column","timestamp":1780956570,"selected":["single-column"]}
 ```
 
-The full event stream shows the user's exploration path — they may click multiple options before settling. The last `choice` event is typically the final selection, but the pattern of clicks can reveal hesitation or preferences worth asking about.
+- `choice` / `text` come from the clicked `<agent-choice>`'s `id` / `title`.
+- `selected` is the full set of currently-selected choice ids (most useful in multi-select).
+- The last event is typically the final selection, but the click sequence can reveal hesitation
+  worth asking about.
 
-If `$STATE_DIR/events` doesn't exist, the user didn't interact with the browser — use only their terminal text.
+If `<state_dir>/events` doesn't exist, the user didn't interact with the browser — use only their
+terminal text.
 
 ## Design Tips
 
-- **Scale fidelity to the question** — wireframes for layout, polish for polish questions
-- **Explain the question on each page** — "Which layout feels more professional?" not just "Pick one"
-- **Iterate before advancing** — if feedback changes current screen, write a new version
-- **2-4 options max** per screen
-- **Use real content when it matters** — for a photography portfolio, use actual images (Unsplash). Placeholder content obscures design issues.
-- **Keep mockups simple** — focus on layout and structure, not pixel-perfect design
+- **Scale fidelity to the question** — wireframes for layout, polish for polish questions.
+- **Explain the question on each screen** — "Which layout feels more professional?" not just "Pick one".
+- **Iterate before advancing** — if feedback changes the current screen, write a new version.
+- **2–4 options max** per screen.
 
 ## File Naming
 
-- Use semantic names: `platform.html`, `visual-style.html`, `layout.html`
-- Never reuse filenames — each screen must be a new file
-- For iterations: append version suffix like `layout-v2.html`, `layout-v3.html`
-- Server serves newest file by modification time
+- Semantic names: `platform.md`, `visual-style.md`, `layout.md`.
+- Never reuse filenames — each screen is a new file.
+- For iterations, append a version suffix: `layout-v2.md`, `layout-v3.md`.
+- Newest file by modification time is served.
 
 ## Cleaning Up
 
 ```bash
-scripts/stop-server.sh $SESSION_DIR
+python3 "$CLAUDE_PLUGIN_ROOT/bin/agent_isles.py" live "$SCREEN_DIR" --stop
 ```
 
-If the session used `--project-dir`, mockup files persist in `.quirk/brainstorm/` for later reference. Only `/tmp` sessions get deleted on stop.
+Screens persist in `.quirk/brainstorm/` for later reference. The server also auto-exits after its
+idle timeout.
 
 ## Reference
 
-- Frame template (CSS reference): `scripts/frame-template.html`
-- Helper script (client-side): `scripts/helper.js`
+- Component vocabulary and exact island attributes: Agent Isles `docs/component-vocabulary.md`.
+- Bridge options: `python3 "$CLAUDE_PLUGIN_ROOT/bin/agent_isles.py" live --help`.

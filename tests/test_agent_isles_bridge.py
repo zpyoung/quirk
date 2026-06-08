@@ -101,3 +101,111 @@ def test_print_command_does_not_create_output_dir(tmp_path: Path) -> None:
     )
     assert result.returncode != 0
     assert not (tmp_path / ".quirk").exists()
+
+
+def test_live_command_basic_never_adds_packs(tmp_path: Path) -> None:
+    local = tmp_path / "node_modules" / ".bin" / "isles"
+    local.parent.mkdir(parents=True)
+    _exe(local)
+    # A Quirk pack exists, but live must NOT pass --pack/--no-user-packs:
+    # `isles live` rejects unknown options with exit 2.
+    (tmp_path / "packs" / "quirk").mkdir(parents=True)
+    screen_dir = tmp_path / ".quirk" / "brainstorm" / "s1"
+
+    cmd = agent_isles.build_live_command(screen_dir, repo_root=tmp_path)
+
+    assert cmd.argv == [str(local), "live", str(screen_dir.resolve())]
+    assert "--pack" not in cmd.argv
+    assert "--no-user-packs" not in cmd.argv
+    assert cmd.output is None
+
+
+def test_live_command_stop(tmp_path: Path) -> None:
+    local = tmp_path / "node_modules" / ".bin" / "isles"
+    local.parent.mkdir(parents=True)
+    _exe(local)
+    screen_dir = tmp_path / ".quirk" / "brainstorm" / "s1"
+
+    cmd = agent_isles.build_live_command(screen_dir, repo_root=tmp_path, stop=True)
+
+    assert cmd.argv == [str(local), "live", str(screen_dir.resolve()), "--stop"]
+
+
+def test_live_command_passthrough_options(tmp_path: Path) -> None:
+    local = tmp_path / "node_modules" / ".bin" / "isles"
+    local.parent.mkdir(parents=True)
+    _exe(local)
+    screen_dir = tmp_path / "screens"
+
+    cmd = agent_isles.build_live_command(
+        screen_dir,
+        repo_root=tmp_path,
+        port=52345,
+        host="0.0.0.0",
+        url_host="localhost",
+        idle_timeout=45,
+        owner_pid=4242,
+    )
+
+    assert cmd.argv[:3] == [str(local), "live", str(screen_dir.resolve())]
+    tail = cmd.argv[3:]
+    assert tail == [
+        "--port", "52345",
+        "--host", "0.0.0.0",
+        "--url-host", "localhost",
+        "--idle-timeout", "45",
+        "--owner-pid", "4242",
+    ]
+
+
+def test_live_command_uses_github_npx_fallback(tmp_path: Path, monkeypatch) -> None:
+    # `live` is not on the published npm `agent-isles@next` yet, so its npx fallback
+    # targets the github spec (which has live) rather than the pinned npm tag.
+    path_dir = tmp_path / "pathbin"
+    path_dir.mkdir()
+    _exe(path_dir / "npx")
+    monkeypatch.setenv("PATH", str(path_dir))
+
+    cmd = agent_isles.build_live_command(tmp_path / "screens", repo_root=tmp_path)
+
+    assert cmd.argv[:3] == [str(path_dir / "npx"), "github:zpyoung/agent-isles", "live"]
+    assert cmd.note == (
+        "npx fallback is explicit; it may download github:zpyoung/agent-isles when executed"
+    )
+
+
+def test_render_npx_fallback_unchanged(tmp_path: Path, monkeypatch) -> None:
+    # render/preview keep the pinned npm tag.
+    path_dir = tmp_path / "pathbin"
+    path_dir.mkdir()
+    _exe(path_dir / "npx")
+    artifact = tmp_path / "artifact.md"
+    artifact.write_text("# Artifact\n")
+    monkeypatch.setenv("PATH", str(path_dir))
+
+    cmd = agent_isles.build_command("render", artifact, repo_root=tmp_path)
+
+    assert cmd.argv[1] == "agent-isles@next"
+
+
+def test_live_print_command_does_not_create_screen_dir(tmp_path: Path) -> None:
+    local = tmp_path / "node_modules" / ".bin" / "isles"
+    local.parent.mkdir(parents=True)
+    _exe(local)
+    screen_dir = tmp_path / ".quirk" / "brainstorm" / "s1"
+
+    result = run_script(
+        "agent_isles.py",
+        "live",
+        str(screen_dir),
+        "--repo-root",
+        str(tmp_path),
+        "--print-command",
+        cwd=tmp_path,
+    )
+
+    assert result.returncode == 0
+    assert "live" in result.stdout
+    assert str(screen_dir.resolve()) in result.stdout
+    assert "--pack" not in result.stdout
+    assert not screen_dir.exists()
