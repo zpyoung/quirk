@@ -157,7 +157,7 @@ Use these as the seed set for the multi-select question. Pick the 3–4 most rel
 
 Before surfacing gray areas, offer to run the `adhd` skill to find **non-obvious** decision areas the static catalog would miss. The catalog is the cheap baseline; adhd is the opt-in, higher-cost expansion.
 
-**Skip this offer entirely on truly trivial work** — the same cases where you skip the research swarm (a config tweak, an obvious one-line utility). Otherwise, present:
+**Skip this offer entirely on truly trivial work** (for example: a config tweak or an obvious one-line utility). Otherwise, present:
 
 ```
 AskUserQuestion:

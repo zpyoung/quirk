@@ -86,9 +86,11 @@ If **"Use the standard set"** (or trivial work): proceed straight to the existin
 | `skills/brainstorming/SKILL.md` — Gray Areas section | **Edit** — add a "Step 0 — Offer adhd discovery" before "Step 1 — Surface gray areas," including the offer `AskUserQuestion`, the merge-and-label instruction, and the discovery-framing note for the adhd delegation |
 | `skills/brainstorming/SKILL.md` — Checklist step 4 | **Edit** — reword to note the optional adhd pass: "Resolve gray areas — optionally surface non-obvious areas via adhd first, then present via `AskUserQuestion` (multiSelect)…" |
 | `skills/brainstorming/SKILL.md` — Exploring approaches (line 223) | **Delete** — remove the advisory adhd bullet |
+| `tests/test_brainstorming_adhd_offer.py` | **Add** — conformance tests for Step 0 offer wording, merge/label guidance, and advisory-bullet removal |
+| `.gitignore` | **Edit** — ignore `.worktrees/` for project-local git worktrees |
 | Process graph, HARD-GATE, all other steps | **Unchanged** |
 
-No changes to `skills/adhd/*`, no version bump, no new tests.
+No changes to `skills/adhd/*` and no version bump.
 
 ---
 
