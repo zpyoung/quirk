@@ -24,7 +24,7 @@ You MUST create a task for each of these items and complete them in order:
 1. **Explore project context** — check files, docs, recent commits
 2. **Detect domain + dispatch context research** — classify the work (Visual / API / CLI / Docs / Organization / Data / Integration) and spawn parallel research agents for domain patterns and anti-patterns. See [Research Agents](#research-agents).
 3. **Offer visual companion** (if topic will involve visual questions) — this is its own message, not combined with a clarifying question. See the Visual Companion section below.
-4. **Resolve gray areas** — present domain-specific ambiguous decision areas via `AskUserQuestion` (multiSelect), then drill into each selected area with batched clarifying questions. See [Gray Areas](#gray-areas).
+4. **Resolve gray areas** — optionally surface non-obvious areas via the `adhd` skill first (see [Gray Areas](#gray-areas) → Step 0), then present domain-specific ambiguous decision areas via `AskUserQuestion` (multiSelect), then drill into each selected area with batched clarifying questions.
 5. **Ask remaining clarifying questions** — one at a time, for anything not covered by gray-area resolution (purpose, constraints, success criteria)
 6. **Dispatch option-validation research** (when proposing approaches) — one research agent per candidate option, in parallel
 7. **Propose 2-3 approaches** — with trade-offs, citing research findings, your recommendation
@@ -153,6 +153,30 @@ Use these as the seed set for the multi-select question. Pick the 3–4 most rel
 - **Data**: input-format, output-format, error-handling, performance-mode, idempotency
 - **Integration**: sync-direction, conflict-resolution, retry-policy, data-mapping, auth-storage
 
+### Step 0 — Offer adhd divergent discovery (optional)
+
+Before surfacing gray areas, offer to run the `adhd` skill to find **non-obvious** decision areas the static catalog would miss. The catalog is the cheap baseline; adhd is the opt-in, higher-cost expansion.
+
+**Skip this offer entirely on truly trivial work** (for example: a config tweak or an obvious one-line utility). This is narrower than the research-swarm skip rule — do **not** suppress the offer just because you've already researched the domain in-session. Otherwise, present:
+
+```
+AskUserQuestion:
+  questions:
+    - question: "Before we pick what to clarify — want me to run adhd to surface non-obvious decision areas specific to this request? (~5–10× cost, parallel divergent ideation)"
+      header: "Find gray areas"
+      multiSelect: false
+      options:
+        - label: "Use the standard set (Recommended)"
+          description: "Surface gray areas from the domain catalog only. No extra cost."
+        - label: "Run adhd first"
+          description: "Spend 5–10× to surface non-obvious ambiguities the catalog misses; they're merged into the areas you choose from."
+```
+
+- **Recommended = the cheap path**, so the default is a one-keystroke "no."
+- If the user picks **"Run adhd first"**: invoke the `adhd` skill with a **discovery-framed** delegation — the decision point you hand adhd is *"what latent ambiguous decisions are in this request?"*, so its returned "options" are candidate gray areas (not solutions). adhd's frames (failure pre-mortem, stakeholder rotation, expert blind spots) are blind-spot finders well-suited to this.
+- **Merge + label** the returned areas into the Step 1 multiSelect alongside the catalog areas, prefixing each adhd-surfaced entry with `adhd:` (e.g. `adhd: offline-degradation`) so the user sees which areas came from divergent ideation.
+- If the user picks **"Use the standard set"**: proceed straight to Step 1 with catalog areas only — identical to the no-adhd flow.
+
 ### Step 1 — Surface gray areas (multiSelect)
 
 Use `AskUserQuestion` with `multiSelect: true`. Each option is a domain-specific area with a description that explains *why* it's ambiguous:
@@ -220,7 +244,6 @@ Watch for "also add", "we should also", "what about adding", "could we also", "i
 - Propose 2-3 different approaches with trade-offs
 - Present options conversationally with your recommendation and reasoning, citing relevant research findings (sources can be linked in the spec's Industry Insights section)
 - Lead with your recommended option and explain why
-- **Advisory**: For decisions with high uncertainty, 3+ gray areas, or meaningful architectural/UX stakes, consider using the `adhd` skill to surface non-obvious options through structured divergent ideation (5-10× cost, opt-in only)
 - For novel, high-stakes, or production-bound work, run **Phase C deep-research** on the chosen approach before writing the design doc
 
 **Presenting the design:**

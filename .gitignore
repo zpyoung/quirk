@@ -8,3 +8,6 @@ htmlcov/
 .lock
 .memsearch/
 .quirk/isles/
+
+# git worktrees
+.worktrees/
