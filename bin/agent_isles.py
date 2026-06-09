@@ -8,15 +8,20 @@ an explicit npx fallback when allowed.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shlex
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 DEFAULT_OUTPUT_DIR = Path(".quirk") / "isles"
+STATE_DIRNAME = "state"
+EVENTS_FILENAME = "events"
 DEFAULT_NPX_PACKAGE = "agent-isles@next"
 # `isles live` is not on the published npm tag yet (it lives on github main). Until a
 # release with `live` ships to npm, the live npx fallback targets the github spec.
@@ -161,6 +166,71 @@ def build_live_command(
     return CommandPlan(argv=argv, output=None, note=note)
 
 
+def _read_events(events_path: Path) -> list[dict]:
+    """Parse the live server's JSONL events file; skip blank/malformed lines."""
+    if not events_path.exists():
+        return []
+    records: list[dict] = []
+    for line in events_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            records.append(obj)
+    return records
+
+
+def latest_proceed_event(events_path: Path) -> dict | None:
+    """Return the newest ``{"type":"proceed",...}`` record, or None if absent."""
+    proceeds = [e for e in _read_events(events_path) if e.get("type") == "proceed"]
+    return proceeds[-1] if proceeds else None
+
+
+def make_file_transport(events_path: Path) -> Callable[[], dict | None]:
+    """Build the file-poll transport: returns the newest proceed record, or None.
+
+    This is the swappable seam. Phase 2 replaces it with a channel transport that
+    returns a pushed proceed event instead of polling the events file — the wait
+    loop and the event shape stay identical.
+    """
+
+    def poll() -> dict | None:
+        return latest_proceed_event(events_path)
+
+    return poll
+
+
+def wait_for_proceed(
+    transport: Callable[[], dict | None],
+    *,
+    timeout: float,
+    poll_interval: float,
+    _clock: Callable[[], float] = time.monotonic,
+    _sleep: Callable[[float], None] = time.sleep,
+) -> dict | None:
+    """Block until ``transport()`` yields a proceed event; return None on timeout.
+
+    ``timeout=0`` checks the transport exactly once (no blocking).
+    """
+    deadline = _clock() + timeout
+    while True:
+        event = transport()
+        if event is not None:
+            return event
+        if _clock() >= deadline:
+            return None
+        _sleep(poll_interval)
+
+
+def resolve_state_dir(screen_dir: Path, state_dir: Path | None = None) -> Path:
+    """Where the live server writes events: ``<screen_dir>/state`` unless overridden."""
+    return state_dir if state_dir is not None else screen_dir / STATE_DIRNAME
+
+
 def doctor(repo_root: Path, *, no_npx: bool = False) -> str:
     repo = repo_root.resolve()
     lines = ["Agent Isles bridge doctor", f"repo root: {repo}"]
@@ -221,6 +291,16 @@ def _parser() -> argparse.ArgumentParser:
     live_p.add_argument("--owner-pid", type=int, help="Shut down when this PID exits.")
     live_p.add_argument("--no-npx", action="store_true", help="Disable explicit npx fallback.")
     live_p.add_argument("--print-command", action="store_true", help="Print the command instead of executing it.")
+
+    wait_p = sub.add_parser(
+        "wait",
+        help="Block until a browser 'proceed' event for <dir>, then print the selection JSON.",
+    )
+    _add_common_options(wait_p)
+    wait_p.add_argument("dir", type=Path, help="Screen directory passed to `live`; events are read from <dir>/state/events.")
+    wait_p.add_argument("--timeout", type=float, default=600.0, help="Max seconds to block (default 600). 0 = check once.")
+    wait_p.add_argument("--poll-interval", type=float, default=0.5, help="Seconds between file polls (default 0.5).")
+    wait_p.add_argument("--state-dir", type=Path, help="Override the events state dir (default <dir>/state).")
     return parser
 
 
@@ -230,6 +310,23 @@ def main(argv: list[str] | None = None) -> int:
     repo_root = args.repo_root.resolve()
     if args.command == "doctor":
         print(doctor(repo_root, no_npx=args.no_npx), end="")
+        return 0
+
+    if args.command == "wait":
+        screen = args.dir if args.dir.is_absolute() else (Path.cwd() / args.dir)
+        screen = screen.resolve()
+        state_dir = resolve_state_dir(screen, args.state_dir.resolve() if args.state_dir else None)
+        events_path = state_dir / EVENTS_FILENAME
+        transport = make_file_transport(events_path)
+        event = wait_for_proceed(transport, timeout=args.timeout, poll_interval=args.poll_interval)
+        if event is None:
+            print(
+                f"agent_isles.py: no proceed event within {args.timeout}s (timed out); "
+                "fall back to terminal-text advance.",
+                file=sys.stderr,
+            )
+            return 1
+        print(json.dumps(event))
         return 0
 
     if args.command == "live":
