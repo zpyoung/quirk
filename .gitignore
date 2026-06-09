@@ -11,3 +11,6 @@ htmlcov/
 
 # git worktrees
 .worktrees/
+
+# local Agent Isles install (copied from npx cache, has `live`)
+node_modules/

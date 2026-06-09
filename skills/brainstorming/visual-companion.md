@@ -121,6 +121,60 @@ The server auto-exits after 30 minutes of inactivity (tune with `--idle-timeout 
 
 6. Repeat until done.
 
+## Advancing with a Proceed button (no terminal round-trip)
+
+By default (step 2 above) you end your turn and the user types in the terminal to advance. To let a
+**browser click** advance you instead, add an `<agent-proceed>` button to the screen and block on it
+with the bridge `wait` command. The tighter loop is: **write screen → `wait` → continue**.
+
+> **Requires the `<agent-proceed>` island.** This is only available when the running Agent Isles build
+> ships that island (Agent Isles with the proceed island merged). If `wait` keeps timing out and the
+> button doesn't render, the build predates it — fall back to the plain click-then-terminal loop above.
+
+1. Author the screen with options plus a Proceed button (the button stays disabled until a choice is
+   selected):
+
+   ```markdown
+   <agent-option-set>
+     <agent-choice id="single-column" title="Single column">Focused reading</agent-choice>
+     <agent-choice id="two-column" title="Two column">Sidebar + main</agent-choice>
+   </agent-option-set>
+
+   <agent-proceed></agent-proceed>
+   ```
+
+2. Instead of ending your turn, **block on the click**:
+
+   ```bash
+   python3 "$CLAUDE_PLUGIN_ROOT/bin/agent_isles.py" wait "$SCREEN_DIR"
+   ```
+
+   It blocks until the user clicks Proceed, then prints the proceed record and exits 0:
+
+   ```json
+   {"type":"proceed","choice":null,"text":"Proceed →","timestamp":1781015420,"selected":["two-column"]}
+   ```
+
+   Read `selected` and continue. `wait` only honors proceeds for the **current screen** — by timestamp
+   (≥ the newest screen's mtime) and by the screen *nonce* the live server stamps on each click — so a
+   stale click left from a previous screen, or from a not-yet-reloaded tab, never false-advances. Both
+   default to the newest screen; pass `--screen <the file you wrote>` (and `--since`) to pin them
+   explicitly. If the server isn't running for `$SCREEN_DIR`, `wait` exits **2** immediately rather than
+   blocking — relaunch `live` first.
+
+   **Timeout & the Bash tool limit:** `wait` defaults to a 110s timeout — deliberately under the Bash
+   tool's 120s default — so on timeout it exits 1 cleanly and you can **re-run `wait`** to keep waiting.
+   The re-run resumes the *same* screen (a click that arrived between turns is not lost); the timeout
+   message prints the exact `--since <epoch>` to pass for an explicit continuation. If you want a single
+   longer block instead, raise *both*: pass `--timeout 590` AND set the Bash tool's own `timeout` to
+   `600000` (ms) on that call — otherwise the tool kills the command at 120s instead of the clean exit-1.
+
+   Always remind the user of the URL and what's on screen before you call `wait`, so they know to click.
+
+This is opt-in: the plain click-then-terminal loop above still applies when you don't add a Proceed
+button, or when Agent Isles is unavailable. (Phase 2 will swap the file poll for a native Claude Code
+channel so the agent truly sleeps until the click — same `proceed` record, no `wait` code change.)
+
 ## Authoring Screens
 
 Write a normal Markdown document. Reach for islands only where richer UI helps.
@@ -158,6 +212,9 @@ for an initial selection (at most one in single-select sets).
 
 - `<agent-decision verdict="go|approved|rejected|deferred|needs-review|ship-with-guardrails" title="…">` — scannable decision cards.
 - `<agent-risk level="low|medium|high|critical" title="…">` — risk/blocker callouts.
+- `<agent-proceed label="Proceed →">` — a commit/advance button. Disabled until the user selects an
+  option; add `allow-empty` for a standalone Continue button on a screen with no options. Lets a
+  browser click advance you with no terminal round-trip — see "Advancing with a Proceed button" above.
 - More components and exact attributes: Agent Isles `docs/component-vocabulary.md`.
 
 ### Mockups and diagrams
