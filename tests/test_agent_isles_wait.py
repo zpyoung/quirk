@@ -93,6 +93,24 @@ def test_latest_proceed_event_filters_by_since(tmp_path: Path) -> None:
     assert agent_isles.latest_proceed_event(events, since=400) is None
 
 
+def test_latest_proceed_event_filters_by_screen(tmp_path: Path) -> None:
+    events = tmp_path / "events"
+    _write_events(
+        events,
+        {"type": "proceed", "selected": ["old"], "timestamp": 300, "screen": "v1.md"},
+        {"type": "proceed", "selected": ["new"], "timestamp": 300, "screen": "v2.md"},
+    )
+    assert agent_isles.latest_proceed_event(events, screen="v2.md")["selected"] == ["new"]
+    assert agent_isles.latest_proceed_event(events, screen="v3.md") is None
+
+
+def test_screen_filter_is_lenient_for_unstamped_records(tmp_path: Path) -> None:
+    # Older Agent Isles builds don't stamp a screen; those records still pass.
+    events = tmp_path / "events"
+    _write_events(events, {"type": "proceed", "selected": ["x"], "timestamp": 300})
+    assert agent_isles.latest_proceed_event(events, screen="v2.md")["selected"] == ["x"]
+
+
 # ---- wait_for_proceed: the transport-agnostic blocking loop ------------------
 
 def test_wait_returns_immediately_when_transport_has_event() -> None:
@@ -242,6 +260,37 @@ def test_wait_cli_missing_events_times_out(tmp_path: Path) -> None:
         "--repo-root", str(tmp_path), cwd=tmp_path,
     )
     assert result.returncode == 1
+
+
+def test_wait_cli_rejects_stale_tab_screen(tmp_path: Path) -> None:
+    # A click from a stale tab (different screen) is rejected even with a fresh
+    # timestamp — the screen nonce closes the cross-screen edge.
+    screen_dir = tmp_path / "session-1"
+    events = _setup_session(screen_dir)  # newest *.md is screen.md → auto --screen
+    _write_events(events, {
+        "type": "proceed", "selected": ["stale"],
+        "timestamp": int(time.time()) + 5, "screen": "old-screen.md",
+    })
+    result = run_script(
+        "agent_isles.py", "wait", str(screen_dir), "--timeout", "0",
+        "--repo-root", str(tmp_path), cwd=tmp_path,
+    )
+    assert result.returncode == 1
+
+
+def test_wait_cli_accepts_matching_screen(tmp_path: Path) -> None:
+    screen_dir = tmp_path / "session-1"
+    events = _setup_session(screen_dir)
+    _write_events(events, {
+        "type": "proceed", "selected": ["ok"],
+        "timestamp": int(time.time()) + 5, "screen": "screen.md",
+    })
+    result = run_script(
+        "agent_isles.py", "wait", str(screen_dir), "--timeout", "0",
+        "--repo-root", str(tmp_path), cwd=tmp_path,
+    )
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["selected"] == ["ok"]
 
 
 def test_wait_cli_no_server_exits_2(tmp_path: Path) -> None:

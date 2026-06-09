@@ -155,10 +155,12 @@ with the bridge `wait` command. The tighter loop is: **write screen → `wait` �
    {"type":"proceed","choice":null,"text":"Proceed →","timestamp":1781015420,"selected":["two-column"]}
    ```
 
-   Read `selected` and continue. `wait` only honors proceeds for the **current screen** (timestamp ≥ the
-   newest screen's mtime), so a stale click left from a previous screen never false-advances. If the
-   server isn't running for `$SCREEN_DIR`, `wait` exits **2** immediately rather than blocking — relaunch
-   `live` first.
+   Read `selected` and continue. `wait` only honors proceeds for the **current screen** — by timestamp
+   (≥ the newest screen's mtime) and by the screen *nonce* the live server stamps on each click — so a
+   stale click left from a previous screen, or from a not-yet-reloaded tab, never false-advances. Both
+   default to the newest screen; pass `--screen <the file you wrote>` (and `--since`) to pin them
+   explicitly. If the server isn't running for `$SCREEN_DIR`, `wait` exits **2** immediately rather than
+   blocking — relaunch `live` first.
 
    **Timeout & the Bash tool limit:** `wait` defaults to a 110s timeout — deliberately under the Bash
    tool's 120s default — so on timeout it exits 1 cleanly and you can **re-run `wait`** to keep waiting.
