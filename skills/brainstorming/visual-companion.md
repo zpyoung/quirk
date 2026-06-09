@@ -127,6 +127,10 @@ By default (step 2 above) you end your turn and the user types in the terminal t
 **browser click** advance you instead, add an `<agent-proceed>` button to the screen and block on it
 with the bridge `wait` command. The tighter loop is: **write screen → `wait` → continue**.
 
+> **Requires the `<agent-proceed>` island.** This is only available when the running Agent Isles build
+> ships that island (Agent Isles with the proceed island merged). If `wait` keeps timing out and the
+> button doesn't render, the build predates it — fall back to the plain click-then-terminal loop above.
+
 1. Author the screen with options plus a Proceed button (the button stays disabled until a choice is
    selected):
 
@@ -151,14 +155,17 @@ with the bridge `wait` command. The tighter loop is: **write screen → `wait` �
    {"type":"proceed","choice":null,"text":"Proceed →","timestamp":1781015420,"selected":["two-column"]}
    ```
 
-   Read `selected` and continue. `wait` ignores any stale proceed left over from a previous screen, so
-   it won't false-advance.
+   Read `selected` and continue. `wait` only honors proceeds for the **current screen** (timestamp ≥ the
+   newest screen's mtime), so a stale click left from a previous screen never false-advances. If the
+   server isn't running for `$SCREEN_DIR`, `wait` exits **2** immediately rather than blocking — relaunch
+   `live` first.
 
    **Timeout & the Bash tool limit:** `wait` defaults to a 110s timeout — deliberately under the Bash
-   tool's 120s default — so on timeout it exits 1 cleanly and you can **re-run `wait`** to keep waiting
-   (or fall back to asking in the terminal). If you want a single longer block instead, raise *both*:
-   pass `--timeout 590` AND set the Bash tool's own `timeout` to `600000` (ms) on that call — otherwise
-   the tool kills the command at 120s with an error instead of the clean exit-1 fallback.
+   tool's 120s default — so on timeout it exits 1 cleanly and you can **re-run `wait`** to keep waiting.
+   The re-run resumes the *same* screen (a click that arrived between turns is not lost); the timeout
+   message prints the exact `--since <epoch>` to pass for an explicit continuation. If you want a single
+   longer block instead, raise *both*: pass `--timeout 590` AND set the Bash tool's own `timeout` to
+   `600000` (ms) on that call — otherwise the tool kills the command at 120s instead of the clean exit-1.
 
    Always remind the user of the URL and what's on screen before you call `wait`, so they know to click.
 
@@ -205,7 +212,7 @@ for an initial selection (at most one in single-select sets).
 - `<agent-risk level="low|medium|high|critical" title="…">` — risk/blocker callouts.
 - `<agent-proceed label="Proceed →">` — a commit/advance button. Disabled until the user selects an
   option; add `allow-empty` for a standalone Continue button on a screen with no options. Lets a
-  browser click advance you with no terminal round-trip — see "Advancing with a Proceed button" below.
+  browser click advance you with no terminal round-trip — see "Advancing with a Proceed button" above.
 - More components and exact attributes: Agent Isles `docs/component-vocabulary.md`.
 
 ### Mockups and diagrams

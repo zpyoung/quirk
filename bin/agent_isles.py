@@ -190,38 +190,39 @@ def _read_events(events_path: Path) -> list[dict]:
     return records
 
 
-def latest_proceed_event(events_path: Path) -> dict | None:
-    """Return the newest ``{"type":"proceed",...}`` record, or None if absent."""
-    proceeds = [e for e in _read_events(events_path) if e.get("type") == "proceed"]
+def _event_ts(event: dict) -> float:
+    """The record's epoch-seconds timestamp, or 0.0 if absent/non-numeric."""
+    ts = event.get("timestamp")
+    return float(ts) if isinstance(ts, (int, float)) and not isinstance(ts, bool) else 0.0
+
+
+def latest_proceed_event(events_path: Path, *, since: float = 0.0) -> dict | None:
+    """Return the newest proceed record with ``timestamp >= since``, or None."""
+    proceeds = [
+        e for e in _read_events(events_path)
+        if e.get("type") == "proceed" and _event_ts(e) >= since
+    ]
     return proceeds[-1] if proceeds else None
 
 
-def make_file_transport(events_path: Path) -> Callable[[], dict | None]:
-    """Build the file-poll transport: returns a NEW proceed record, or None.
+def make_file_transport(events_path: Path, *, since: float = 0.0) -> Callable[[], dict | None]:
+    """Build the file-poll transport: the newest proceed at/after ``since``.
 
-    Baselines at the events already present when the wait begins, so a stale
-    proceed left over from a previous screen — e.g. if the live server's
-    best-effort `clearEvents` did not run (fs.watch can fail silently on network
-    mounts/containers) — cannot trigger a false advance. If the file is truncated
-    or rotated mid-wait (the server clears it when a newer screen is pushed), the
-    baseline resets to 0 so genuinely new proceeds are still seen.
+    ``since`` is the current screen's start time (epoch seconds), so a stale
+    proceed left over from a PREVIOUS screen has an older timestamp and is
+    ignored — it can't false-advance even if the live server's best-effort
+    clearEvents never ran. Crucially ``since`` is SCREEN-scoped, not wait-scoped:
+    re-running ``wait`` after a timeout with the same ``since`` is a true
+    continuation, so a click that arrives between turns is never dropped (a
+    count/start-time baseline would lose it).
 
-    This is the swappable seam. Phase 2 replaces it with a channel transport that
-    returns a pushed proceed event instead of polling the events file — the wait
-    loop and the event shape stay identical, and the baseline makes the two
-    transports semantically equivalent ("only events after the wait started").
+    This is the swappable seam. Phase 2's channel transport returns a pushed
+    proceed with the same "for this screen" semantics — the wait loop and event
+    shape stay identical.
     """
-    start = len(_read_events(events_path))
-    state = {"baseline": start, "seen": start}
 
     def poll() -> dict | None:
-        events = _read_events(events_path)
-        count = len(events)
-        if count < state["seen"]:
-            state["baseline"] = 0  # file cleared/rotated mid-wait; trust all new events
-        state["seen"] = count
-        proceeds = [e for e in events[state["baseline"]:] if e.get("type") == "proceed"]
-        return proceeds[-1] if proceeds else None
+        return latest_proceed_event(events_path, since=since)
 
     return poll
 
@@ -251,6 +252,46 @@ def wait_for_proceed(
 def resolve_state_dir(screen_dir: Path, state_dir: Path | None = None) -> Path:
     """Where the live server writes events: ``<screen_dir>/state`` unless overridden."""
     return state_dir if state_dir is not None else screen_dir / STATE_DIRNAME
+
+
+def newest_screen_mtime(screen_dir: Path) -> int:
+    """Floor of the newest ``*.md`` screen mtime (epoch seconds), or 0 if none.
+
+    Used as the default proceed cutoff so ``wait`` only honors clicks for the
+    current screen. Floored to match the server's integer-second timestamps.
+    """
+    newest = 0.0
+    try:
+        for path in screen_dir.glob("*.md"):
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            if mtime > newest:
+                newest = mtime
+    except OSError:
+        pass
+    return int(newest)
+
+
+def server_running(state_dir: Path) -> bool:
+    """Best-effort: a live server is up for this dir (info present, not stopped, PID alive)."""
+    if (state_dir / "server-stopped").exists():
+        return False
+    try:
+        data = json.loads((state_dir / "server-info").read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        return False
+    pid = data.get("pid")
+    if not isinstance(pid, int):
+        return True  # info present but no PID — assume running
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OSError):
+        return True  # exists but not signalable by us → treat as alive
+    return True
 
 
 def doctor(repo_root: Path, *, no_npx: bool = False) -> str:
@@ -321,8 +362,9 @@ def _parser() -> argparse.ArgumentParser:
     _add_common_options(wait_p)
     wait_p.add_argument("dir", type=Path, help="Screen directory passed to `live`; events are read from <dir>/state/events.")
     wait_p.add_argument("--timeout", type=float, default=110.0, help="Max seconds to block (default 110, under the 120s Bash-tool default). 0 = check once.")
-    wait_p.add_argument("--poll-interval", type=float, default=0.5, help="Seconds between file polls (default 0.5).")
+    wait_p.add_argument("--poll-interval", type=float, default=0.5, help="Seconds between file polls (default 0.5; floored at 0.05).")
     wait_p.add_argument("--state-dir", type=Path, help="Override the events state dir (default <dir>/state).")
+    wait_p.add_argument("--since", type=float, help="Only honor proceeds with timestamp >= this epoch (default: newest screen mtime). Pass the same value across re-runs to continue waiting on one screen.")
     return parser
 
 
@@ -338,13 +380,22 @@ def main(argv: list[str] | None = None) -> int:
         screen = args.dir if args.dir.is_absolute() else (Path.cwd() / args.dir)
         screen = screen.resolve()
         state_dir = resolve_state_dir(screen, args.state_dir.resolve() if args.state_dir else None)
+        if not server_running(state_dir):
+            print(
+                f"agent_isles.py: no live Agent Isles server running for {screen}; "
+                "start one with `live` first (nothing can deliver a proceed).",
+                file=sys.stderr,
+            )
+            return 2
         events_path = state_dir / EVENTS_FILENAME
-        transport = make_file_transport(events_path)
-        event = wait_for_proceed(transport, timeout=args.timeout, poll_interval=args.poll_interval)
+        since = args.since if args.since is not None else float(newest_screen_mtime(screen))
+        transport = make_file_transport(events_path, since=since)
+        event = wait_for_proceed(transport, timeout=args.timeout, poll_interval=max(args.poll_interval, 0.05))
         if event is None:
             print(
                 f"agent_isles.py: no proceed event within {args.timeout}s (timed out); "
-                "re-run wait to keep waiting, or fall back to terminal-text advance.",
+                f"re-run wait to keep waiting (pass --since {since:.0f} to resume the same "
+                "screen), or fall back to terminal-text advance.",
                 file=sys.stderr,
             )
             return 1

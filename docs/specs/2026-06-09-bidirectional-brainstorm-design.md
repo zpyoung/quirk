@@ -77,7 +77,7 @@ Three small pieces. Two live in **Agent Isles** vs **Quirk**, split along a clea
 
 <div class="alert alert-light border mt-3 mb-0">
 <strong>The one thing that connects them</strong> is the record the button writes — the same shape whether a file or a live channel delivers it:
-<pre class="mb-0 mt-2"><code>{ "type": "proceed", "selected": ["two-column"], "ts": 1781003090 }</code></pre>
+<pre class="mb-0 mt-2"><code>{ "type": "proceed", "choice": null, "text": "Proceed →", "timestamp": 1781003090, "selected": ["two-column"] }</code></pre>
 </div>
 
 ---
