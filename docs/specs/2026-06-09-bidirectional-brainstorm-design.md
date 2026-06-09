@@ -124,6 +124,8 @@ Three small pieces. Two live in **Agent Isles** vs **Quirk**, split along a clea
 
 Why the split: the wait is the seam that a channel will later replace — that's a Claude Code concern, not a rendering one. And it only reads the events file, which Quirk already reads every turn, so it adds no new coupling.
 
+A `<quirk-proceed>` **pack** component was considered and rejected — but on honest grounds: now that the live client forwards `agent-isles:proceed` and the server promotes `type:"proceed"`, a pack *could* emit a clean proceed record (no sentinel hack, and `isles live` can load a pack via an `isles.config.json` in the screen dir). The real reason it lives in core is that "advance/commit on click" is a **general** live-agent primitive — any Agent Isles host wants it — and keeping the event contract, its emitter, and the sanitizer allowlist in one reviewed repo beats splitting the component from the plumbing it depends on.
+
 ---
 
 ## Risks & open questions
@@ -141,12 +143,13 @@ Why the split: the wait is the seam that a channel will later replace — that's
 </div>
 </div>
 <div class="col-md-6">
-<div class="card h-100">
+<div class="card h-100 border-success">
 <div class="card-body">
-<h6 class="card-title">Decide while building</h6>
+<h6 class="card-title">Resolved in build (post-review)</h6>
 <ul class="small mb-0 ps-3">
-<li class="mb-1">How long <code>wait</code> waits before falling back to the terminal</li>
-<li class="mb-0">Exactly how the button writes into the events file — check before coding</li>
+<li class="mb-1"><strong>Timeout</strong>: <code>wait</code> defaults to 110s (under the Bash-tool 120s limit) → clean exit-1 + re-run, not a tool kill.</li>
+<li class="mb-1"><strong>Stale events</strong>: <code>wait</code> baselines at start and resets on file-clear, so a leftover proceed can't false-advance even if the server's clear fails.</li>
+<li class="mb-0"><strong>Signal auth</strong>: POST/WS reject cross-origin browser requests; <code>selected</code>/<code>text</code> clamped — a hostile page can't wake or inject the agent.</li>
 </ul>
 </div>
 </div>

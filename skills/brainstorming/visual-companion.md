@@ -142,7 +142,7 @@ with the bridge `wait` command. The tighter loop is: **write screen → `wait` �
 2. Instead of ending your turn, **block on the click**:
 
    ```bash
-   python3 "$CLAUDE_PLUGIN_ROOT/bin/agent_isles.py" wait "$SCREEN_DIR" --timeout 600
+   python3 "$CLAUDE_PLUGIN_ROOT/bin/agent_isles.py" wait "$SCREEN_DIR"
    ```
 
    It blocks until the user clicks Proceed, then prints the proceed record and exits 0:
@@ -151,8 +151,16 @@ with the bridge `wait` command. The tighter loop is: **write screen → `wait` �
    {"type":"proceed","choice":null,"text":"Proceed →","timestamp":1781015420,"selected":["two-column"]}
    ```
 
-   Read `selected` and continue. On **timeout it exits 1** — fall back to asking in the terminal. Still
-   remind the user of the URL and what's on screen before you call `wait`, so they know to click.
+   Read `selected` and continue. `wait` ignores any stale proceed left over from a previous screen, so
+   it won't false-advance.
+
+   **Timeout & the Bash tool limit:** `wait` defaults to a 110s timeout — deliberately under the Bash
+   tool's 120s default — so on timeout it exits 1 cleanly and you can **re-run `wait`** to keep waiting
+   (or fall back to asking in the terminal). If you want a single longer block instead, raise *both*:
+   pass `--timeout 590` AND set the Bash tool's own `timeout` to `600000` (ms) on that call — otherwise
+   the tool kills the command at 120s with an error instead of the clean exit-1 fallback.
+
+   Always remind the user of the URL and what's on screen before you call `wait`, so they know to click.
 
 This is opt-in: the plain click-then-terminal loop above still applies when you don't add a Proceed
 button, or when Agent Isles is unavailable. (Phase 2 will swap the file poll for a native Claude Code

@@ -167,11 +167,17 @@ def build_live_command(
 
 
 def _read_events(events_path: Path) -> list[dict]:
-    """Parse the live server's JSONL events file; skip blank/malformed lines."""
-    if not events_path.exists():
+    """Parse the live server's JSONL events file; skip blank/malformed lines.
+
+    Returns [] if the file is absent or vanishes mid-read (the live server may
+    clear/rotate it between our existence check and the read).
+    """
+    try:
+        raw = events_path.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
         return []
     records: list[dict] = []
-    for line in events_path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in raw.splitlines():
         line = line.strip()
         if not line:
             continue
@@ -191,15 +197,31 @@ def latest_proceed_event(events_path: Path) -> dict | None:
 
 
 def make_file_transport(events_path: Path) -> Callable[[], dict | None]:
-    """Build the file-poll transport: returns the newest proceed record, or None.
+    """Build the file-poll transport: returns a NEW proceed record, or None.
+
+    Baselines at the events already present when the wait begins, so a stale
+    proceed left over from a previous screen — e.g. if the live server's
+    best-effort `clearEvents` did not run (fs.watch can fail silently on network
+    mounts/containers) — cannot trigger a false advance. If the file is truncated
+    or rotated mid-wait (the server clears it when a newer screen is pushed), the
+    baseline resets to 0 so genuinely new proceeds are still seen.
 
     This is the swappable seam. Phase 2 replaces it with a channel transport that
     returns a pushed proceed event instead of polling the events file — the wait
-    loop and the event shape stay identical.
+    loop and the event shape stay identical, and the baseline makes the two
+    transports semantically equivalent ("only events after the wait started").
     """
+    start = len(_read_events(events_path))
+    state = {"baseline": start, "seen": start}
 
     def poll() -> dict | None:
-        return latest_proceed_event(events_path)
+        events = _read_events(events_path)
+        count = len(events)
+        if count < state["seen"]:
+            state["baseline"] = 0  # file cleared/rotated mid-wait; trust all new events
+        state["seen"] = count
+        proceeds = [e for e in events[state["baseline"]:] if e.get("type") == "proceed"]
+        return proceeds[-1] if proceeds else None
 
     return poll
 
@@ -298,7 +320,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     _add_common_options(wait_p)
     wait_p.add_argument("dir", type=Path, help="Screen directory passed to `live`; events are read from <dir>/state/events.")
-    wait_p.add_argument("--timeout", type=float, default=600.0, help="Max seconds to block (default 600). 0 = check once.")
+    wait_p.add_argument("--timeout", type=float, default=110.0, help="Max seconds to block (default 110, under the 120s Bash-tool default). 0 = check once.")
     wait_p.add_argument("--poll-interval", type=float, default=0.5, help="Seconds between file polls (default 0.5).")
     wait_p.add_argument("--state-dir", type=Path, help="Override the events state dir (default <dir>/state).")
     return parser
@@ -322,7 +344,7 @@ def main(argv: list[str] | None = None) -> int:
         if event is None:
             print(
                 f"agent_isles.py: no proceed event within {args.timeout}s (timed out); "
-                "fall back to terminal-text advance.",
+                "re-run wait to keep waiting, or fall back to terminal-text advance.",
                 file=sys.stderr,
             )
             return 1

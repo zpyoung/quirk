@@ -8,7 +8,10 @@ in Phase 2 without changing the wait loop.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 from .conftest import BIN_DIR, run_script
@@ -118,33 +121,82 @@ def test_wait_times_out_returns_none() -> None:
     assert result is None
 
 
-def test_file_transport_reads_proceed(tmp_path: Path) -> None:
+def test_file_transport_sees_proceed_appended_after_start(tmp_path: Path) -> None:
     events = tmp_path / "state" / "events"
-    _write_events(events, {"type": "proceed", "selected": ["z"], "ts": 9})
+    _write_events(events, {"type": "click", "choice": "z", "selected": ["z"]})
     transport = agent_isles.make_file_transport(events)
+    assert transport() is None  # only a click so far
+    with events.open("a") as fh:
+        fh.write(json.dumps({"type": "proceed", "selected": ["z"], "ts": 9}) + "\n")
     assert transport() == {"type": "proceed", "selected": ["z"], "ts": 9}
+
+
+def test_file_transport_ignores_preexisting_proceed(tmp_path: Path) -> None:
+    # A stale proceed already in the file when the wait begins (e.g. the live
+    # server failed to clear it) must NOT trigger a false advance.
+    events = tmp_path / "state" / "events"
+    _write_events(events, {"type": "proceed", "selected": ["stale"], "ts": 1})
+    transport = agent_isles.make_file_transport(events)
+    assert transport() is None
+
+
+def test_file_transport_resets_after_clear(tmp_path: Path) -> None:
+    # The server clears the events file on a new screen (truncates it). After a
+    # shrink, the baseline must reset so a genuinely new proceed is seen.
+    events = tmp_path / "state" / "events"
+    _write_events(events, {"type": "proceed", "selected": ["old"], "ts": 1},
+                  {"type": "click", "choice": "x", "selected": ["x"]})
+    transport = agent_isles.make_file_transport(events)
+    assert transport() is None  # baselined past the old proceed
+    _write_events(events)  # server clears the file (new screen)
+    assert transport() is None  # observes the shrink, resets baseline to 0
+    with events.open("a") as fh:
+        fh.write(json.dumps({"type": "proceed", "selected": ["fresh"], "ts": 2}) + "\n")
+    assert agent_isles.latest_proceed_event(events) == {"type": "proceed", "selected": ["fresh"], "ts": 2}
+    assert transport()["selected"] == ["fresh"]
 
 
 # ---- CLI: `agent_isles.py wait <dir>` ---------------------------------------
 
-def test_wait_cli_prints_selection_on_proceed(tmp_path: Path) -> None:
+def test_wait_cli_blocks_then_returns_on_proceed(tmp_path: Path) -> None:
+    # Mirrors the real flow: wait starts, THEN the user clicks Proceed.
     screen_dir = tmp_path / "session-1"
     events = screen_dir / "state" / "events"
-    _write_events(
-        events,
-        {"type": "click", "choice": "two-column", "selected": ["two-column"]},
-        {"type": "proceed", "selected": ["two-column"], "ts": 1781003090},
+    _write_events(events, {"type": "click", "choice": "two-column", "selected": ["two-column"]})
+
+    proc = subprocess.Popen(
+        [sys.executable, str(BIN_DIR / "agent_isles.py"), "wait", str(screen_dir),
+         "--timeout", "5", "--poll-interval", "0.1", "--repo-root", str(tmp_path)],
+        cwd=str(tmp_path), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
+
+    def _append_proceed() -> None:
+        time.sleep(0.4)
+        with events.open("a") as fh:
+            fh.write(json.dumps({"type": "proceed", "selected": ["two-column"], "ts": 1781003090}) + "\n")
+
+    appender = threading.Thread(target=_append_proceed)
+    appender.start()
+    out, err = proc.communicate(timeout=15)
+    appender.join()
+
+    assert proc.returncode == 0, err
+    payload = json.loads(out)
+    assert payload["type"] == "proceed"
+    assert payload["selected"] == ["two-column"]
+
+
+def test_wait_cli_ignores_preexisting_proceed(tmp_path: Path) -> None:
+    # A stale proceed present before wait starts must not advance (exit 1).
+    screen_dir = tmp_path / "session-1"
+    events = screen_dir / "state" / "events"
+    _write_events(events, {"type": "proceed", "selected": ["stale"], "ts": 1})
 
     result = run_script(
         "agent_isles.py", "wait", str(screen_dir), "--timeout", "0",
         "--repo-root", str(tmp_path), cwd=tmp_path,
     )
-
-    assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout)
-    assert payload["type"] == "proceed"
-    assert payload["selected"] == ["two-column"]
+    assert result.returncode == 1
 
 
 def test_wait_cli_times_out_nonzero_when_no_proceed(tmp_path: Path) -> None:
