@@ -1,8 +1,8 @@
 # Exploring-Ideas Skill Design Specification
 
-**Date**: 2026-06-16
+**Date**: 2026-06-16 (rev. 2026-06-17)
 **Status**: Approved for implementation
-**Version**: 1
+**Version**: 2 — adds intensity dial, technique reference-files, insight-pairing + quality gate, and evals (mechanics adapted from [KorroAi/drunk-claude](https://github.com/KorroAi/drunk-claude), MIT)
 
 ---
 
@@ -10,13 +10,13 @@
 
 This spec defines `quirk:exploring-ideas` — a blended **deep-research + brainstorming** skill that helps the user explore a topic *without* converging to a spec or implementation plan. It reuses the `brainstorming` skill's process shape and Visual Companion GUI, but inverts its terminal gate: where `brainstorming` drives *fuzzy idea → approved spec → writing-plans*, `exploring-ideas` deliberately **dead-ends at an exploratory artifact** (a cited briefing and/or idea-landscape), with any move toward building left entirely to the user.
 
-It is a single blended skill on an emphasis spectrum (research-heavy ↔ ideation-heavy), auto-detecting which way to lean from the request and confirming only when genuinely ambiguous.
+It is a single blended skill governed by **two orthogonal dials**: **emphasis** (research-heavy ↔ ideation-heavy — *what kind of work*) and **intensity** (`--wild 0.1–1.0` — *how far past the obvious to push*). Emphasis is auto-detected from the request (confirmed only when genuinely ambiguous); intensity defaults to 0.5 and is user-settable.
 
 ---
 
 ## Decision
 
-Ship `exploring-ideas` as a **peer skill** at `skills/exploring-ideas/`, alongside `brainstorming`. It copies the Visual Companion scripts in (self-contained), reuses the existing `web-research-agent`/`deep-research-agent` types as its research engine, applies a curated divergent-thinking toolkit, and enforces a hard "no spec" gate. Output auto-saves to `docs/quirk/explorations/`. A thin `/quirk:explore` command provides an explicit entry point in addition to natural-language triggering.
+Ship `exploring-ideas` as a **peer skill** at `skills/exploring-ideas/`, alongside `brainstorming`. It copies the Visual Companion scripts in (self-contained), reuses the existing `web-research-agent`/`deep-research-agent` types as its research engine, and drives a divergent-thinking toolkit delivered as **progressive-disclosure technique files** (`references/techniques/*.md`). A user-settable **intensity dial** (`--wild 0.1–1.0`) modulates how unconventional the ideation gets, every divergent direction must carry a grounded insight (pass an explicit quality gate), and a hard "no spec" gate keeps it exploratory. Output auto-saves to `docs/quirk/explorations/`. A thin `/quirk:explore` command provides an explicit entry point in addition to natural-language triggering, and a shipped `evals/evals.json` makes behavior testable.
 
 ---
 
@@ -35,11 +35,15 @@ Ship `exploring-ideas` as a **peer skill** at `skills/exploring-ideas/`, alongsi
 | 9 | Reuse | Research engine | **Reuse agent types + iterative loop** (Plan→Search→Reflect→Iterate; `web-research-agent` breadth, `deep-research-agent` depth) |
 | 10 | Reuse | Up-front scoping | **Light scoping (2–4 questions)** — not the full gray-areas drill-in |
 | 11 | Reuse | Packaging | **Inside the quirk plugin** (`skills/exploring-ideas/`) |
-| 12 | Safeguards | Divergent techniques | **Curated toolkit, applied selectively** (SCAMPER, analogy, first-principles, assumption-reversal, "how might we", persona lenses) |
+| 12 | Safeguards | Divergent techniques | **Curated toolkit as progressive-disclosure technique files** — `references/techniques/*.md`, applied selectively; de-branded keepers added (extreme-casing, stream-dump, deliberately-wrong, contrarian-inversion, overlooked-value, the-avoided-idea) alongside SCAMPER/analogy/first-principles/assumption-reversal |
 | 13 | Safeguards | Convergence guard | **Quota + iterate-past-obvious** — N distinct directions before drilling; push past clichéd first ideas |
 | 14 | Safeguards | Anti-sycophancy | **Built-in challenge passes** — steelman + strongest counter-argument + "what would disprove this" |
 | 15 | Safeguards | No-spec enforcement | **Hard gate** — must not emit specs, requirements, locked decisions, or implementation actions |
 | 16 | Identity | Name | **`exploring-ideas`** (`quirk:exploring-ideas`, command `/quirk:explore`) |
+| 17 | Safeguards | Intensity dial | **`--wild 0.1–1.0`** (orthogonal to emphasis; default 0.5) modulating idea count, unconventionality, risk tolerance, and which techniques fire |
+| 18 | Safeguards | Idea quality | **Insight-pairing** (every direction carries a grounded "why this might work") + **REJECT gate** (clichéd / weird-without-insight / duplicate); the insight bar stays constant at all intensities |
+| 19 | Reuse | Techniques packaging | **`references/techniques/*.md`** progressive disclosure — SKILL.md stays lean; a file is read only when its technique is selected |
+| 20 | Testing | Evals | **`evals/evals.json`** — prompt→expected-behavior assertions (no-spec, banner, handoff-not-auto-invoked, challenge notes, insight annotations) |
 
 ---
 
@@ -61,6 +65,7 @@ Extending `brainstorming` would have meant a mode flag on a skill whose entire s
 ## Identity, Triggers & the Inverted Gate
 
 - **Skill id:** `quirk:exploring-ideas` · **Command:** `/quirk:explore`
+- **Command syntax:** `/quirk:explore [topic] [--wild 0.1–1.0]`. The `--wild` flag (or a bare number, drunk-claude style) sets intensity; absent, intensity defaults to 0.5 and the user can adjust mid-session ("dial it up / keep it grounded").
 - **Natural-language triggers** (via `using-quirk` description match): "do deep research on X", "research X", "let's brainstorm ideas around X", "explore X", "what are some ideas for X".
 - **Description routing guard:** scope the description to exploration/research/brainstorm intent that explicitly does **not** ask to build, so it does not steal creative-build requests from `brainstorming`. When the user clearly wants to build, `brainstorming` wins (process-skill priority is unchanged).
 
@@ -88,6 +93,23 @@ Detection only shifts weight between the two engines; most runs are blended.
 | research, investigate, find, sources, evidence, compare, "what is", "state of" | Research-heavy | Deeper research loop (more rounds / `deep-research-agent`); ideation pass kept short |
 | brainstorm, ideas, "what if", "ways to", "could we", imagine, riff | Ideation-heavy | Stronger divergent pass; research loop kept to grounding breadth |
 | mixed / unclear | Blended | Balanced; **one** quick confirm question if genuinely ambiguous |
+
+---
+
+## Intensity Dial (`--wild`)
+
+Orthogonal to emphasis: emphasis chooses *what kind of work*; intensity chooses *how far past the obvious the ideation pushes*. Adapted from drunk-claude's `0.1→1.0` slider, de-gimmicked. Default **0.5**; user-settable and adjustable mid-session.
+
+| Range | Label | Behavior |
+|---|---|---|
+| 0.1–0.3 | **Grounded** | Adjacent, low-risk variations; mostly conventional framing; quota ≥3 |
+| 0.4–0.6 | **Exploratory** (default 0.5) | Genuine divergence; cross-domain analogies welcome; quota ≥5 |
+| 0.7–0.9 | **Bold** | Unconventional, contrarian, risk-tolerant; provocation techniques (deliberately-wrong, contrarian-inversion, extreme-casing) fire; quota ≥7 |
+| 1.0 | **Radical** | No filter — provocative directions that would "unsettle a boardroom"; full technique set; as many as genuinely land |
+
+Intensity modulates: **idea count / quota N**, **unconventionality** (how far past-obvious), **risk tolerance** (how provocative), and **technique selection** (higher intensity pulls in the more disruptive techniques).
+
+**Invariant — the bar that does NOT move with intensity:** every idea must still pass the insight-pairing quality gate (§ Divergent Ideation Engine), factual claims stay accurate, and the no-spec HARD-GATE holds. This is the key departure from drunk-claude, which *lowers* its substance bar and *raises* a "viral" bar at the extremes — we hold the insight bar constant so high intensity yields *wilder grounded ideas*, never noise.
 
 ---
 
@@ -136,9 +158,15 @@ The Research loop and Divergent pass are weighted by emphasis (one may be brief)
 
 ### Component: Divergent Ideation Engine
 
-- **Curated toolkit, applied selectively** — choose the 1–2 most relevant of: SCAMPER, analogical / cross-domain transfer, first-principles decomposition, assumption-reversal, "how might we", persona lenses.
-- **Quota** — surface **N (~5) genuinely distinct directions** before drilling into any one.
+Intensity-aware. The engine reads the relevant technique file(s) from `references/techniques/` only when selected (progressive disclosure), runs them, then filters through an explicit quality gate.
+
+- **Technique toolkit (`references/techniques/*.md`)** — each file follows **When to Use → The Method (numbered) → Example (concrete before→after) → Why It Works**. Selection is intensity-aware (pick the 1–2 most relevant; Bold/Radical add the disruptive ones). The set:
+  - *Classic:* `scamper.md`, `analogical-transfer.md`, `first-principles.md`, `assumption-reversal.md`
+  - *Disruptive (de-branded from drunk-claude, rooted in de Bono / lateral thinking):* `extreme-casing.md` (push to the absurd version that still works, to reveal the middle path), `stream-dump.md` (unfiltered brain-dump, then mine the tangent — "the 5th idea is the real one"), `deliberately-wrong.md` (intentionally dumb twist to bypass the reality-check filter, then take it seriously — de Bono's *po*), `contrarian-inversion.md` (argue the opposite of the universal assumption; find the edge case where it wins), `overlooked-value.md` (find value in the boring/ignored part — attention arbitrage), `radical-simplification.md` (strip to the common-sense structural core), `the-avoided-idea.md` (name the bold idea everyone circles but nobody says; deadline pressure surfaces it)
+- **Quota** — surface **N distinct directions** before drilling into any one (N scales with intensity: Grounded ≥3 → Radical "as many as genuinely land").
 - **Iterate-past-obvious** — after the first pass, explicitly push for more unconventional variants and discard clichés (first ideas reflect training-data defaults).
+- **Insight-pairing (required)** — every surviving direction carries a one-line grounded **"why this might actually work"** — the real insight beneath the surface. A direction with no defensible insight is not a direction.
+- **Quality gate (explicit REJECT)** — before a direction enters the artifact it must clear: *clichéd / obvious? → REJECT. Weird with no insight underneath ("random ≠ creative")? → REJECT. A restatement of an existing direction? → REJECT or merge.*
 - **Grounding** — seed directions with the research loop's findings so ideas are informed, not free-floating.
 
 ### Component: Challenge Pass (anti-sycophancy)
@@ -153,7 +181,7 @@ Single template, adapts by emphasis; auto-saved to `docs/quirk/explorations/YYYY
 > 🧭 EXPLORATION — not a spec. No locked decisions; nothing here is build-ready.
 
 # Exploring: <topic>
-**Date** · **Emphasis**: research-heavy | blended | ideation-heavy
+**Date** · **Emphasis**: research-heavy | blended | ideation-heavy · **Intensity**: 0.x (Grounded|Exploratory|Bold|Radical)
 
 ## Framing
 The question/goal and how it was scoped.
@@ -162,8 +190,13 @@ The question/goal and how it was scoped.
 Facets / sub-questions investigated (research) and/or directions generated (brainstorm).
 
 ## Findings / Idea landscape
-Cited findings grouped by theme (research) and/or clustered idea
-directions with brief annotations (brainstorm). NO winner declared.
+Cited findings grouped by theme (research) and/or clustered idea directions
+(brainstorm). NO winner declared. Each idea direction is insight-paired:
+
+  ### Direction: <name>
+  <the idea — one or two lines>
+  *why this might actually work:* <one-line grounded insight>
+  *surfaced by:* <technique>  ·  *sits at intensity:* <Grounded…Radical>
 
 ## Tensions & trade-offs
 Where findings/directions conflict — preserved, not resolved.
@@ -196,6 +229,8 @@ End with a short recap and: *"This is exploration only. If you later want to tur
 |------|--------|
 | `skills/exploring-ideas/SKILL.md` | **Create** — frontmatter + process (checklist + dot flow + the components above) |
 | `skills/exploring-ideas/exploration-artifact-template.md` | **Create** — the adaptive artifact template |
+| `skills/exploring-ideas/references/techniques/*.md` | **Create** — technique files (When-to-use/Method/Example/Why-it-works): `scamper`, `analogical-transfer`, `first-principles`, `assumption-reversal`, `extreme-casing`, `stream-dump`, `deliberately-wrong`, `contrarian-inversion`, `overlooked-value`, `radical-simplification`, `the-avoided-idea` |
+| `skills/exploring-ideas/evals/evals.json` | **Create** — prompt→expected-behavior assertions |
 | `skills/exploring-ideas/visual-companion.md` | **Create** — copied/trimmed companion mechanics |
 | `skills/exploring-ideas/scripts/server.cjs` | **Create** — copied verbatim from `brainstorming` |
 | `skills/exploring-ideas/scripts/helper.js` | **Create** — copied verbatim |
@@ -203,7 +238,7 @@ End with a short recap and: *"This is exploration only. If you later want to tur
 | `skills/exploring-ideas/scripts/start-server.sh` | **Create** — copied verbatim |
 | `skills/exploring-ideas/scripts/stop-server.sh` | **Create** — copied verbatim |
 | `commands/explore.md` | **Create** — thin `/quirk:explore` entry point that invokes the skill |
-| `.claude-plugin/plugin.json` | **Edit** — bump 5.6.2 → 5.7.0; add keywords `research`, `deep-research`, `exploration`, `ideation` |
+| `.claude-plugin/plugin.json` | **Edit** — bump 5.6.2 → 5.7.0; add keywords `research`, `deep-research`, `exploration`, `ideation`, `creative-techniques` |
 | `.claude-plugin/marketplace.json` | **Edit** — bump 5.6.2 → 5.7.0 |
 | `README.md` | **Edit** — skill count 19 → 20; add "deep research & exploration" to description |
 
@@ -232,7 +267,8 @@ End with a short recap and: *"This is exploration only. If you later want to tur
 
 - **Skill quality** — review against `quirk:writing-skills` (frontmatter, description triggering, progressive disclosure).
 - **Scripts smoke test** — Visual Companion launches, serves the newest HTML, and captures `[data-choice]` clicks to the events file.
-- **Dry-run walkthroughs** — one research prompt ("deep research on X") and one brainstorm prompt ("brainstorm ideas around Y"), each confirming: (a) no spec/requirements emitted, (b) artifact saved to `docs/quirk/explorations/` with the NOT-a-spec banner, (c) handoff offered but not auto-invoked, (d) challenge notes present.
+- **Evals (`evals/evals.json`)** — shipped prompt→expected-behavior pairs covering a research prompt, an ideation prompt, and a high-intensity (`--wild 0.9`) prompt. Each asserts: (a) no spec/requirements emitted, (b) artifact saved to `docs/quirk/explorations/` with the NOT-a-spec banner, (c) handoff offered but not auto-invoked, (d) challenge notes present, (e) every idea direction is insight-paired.
+- **Intensity-modulation test** — the same prompt at `--wild 0.2` vs `0.9` yields visibly different idea count / unconventionality, while both still pass the insight gate and stay factually accurate.
 - **Routing test** — a clear build request ("build me X") still routes to `brainstorming`, not `exploring-ideas`.
 
 ---
@@ -246,6 +282,7 @@ Distilled from 2026 research swarm (Phase A). Findings that shaped decisions:
 - **The "idea landscape / briefing" is the right archetype for non-spec output** — maximum coverage, minimal forced conclusion, explicit blindspots; distinct from a decision document. → drove the adaptive artifact (no winner declared, tensions preserved). Source: [Gemini Deep Research docs](https://ai.google.dev/gemini-api/docs/deep-research).
 - **AI brainstorming fails via sycophancy, premature convergence, and clichéd first ideas** — AI won't volunteer challenge; it must be structurally prompted, and obvious first ideas need active pushing-past. → drove the quota + iterate-past-obvious guard and the built-in challenge pass. Sources: [AI Sycophancy](https://www.seangoedecke.com/ai-sycophancy/), [Scaffolding Creativity: Divergent/Convergent LLM Personas (arXiv)](https://arxiv.org/pdf/2510.26490), [AI Can Supercharge Divergent Thinking](https://medium.com/@yujiisobe/ai-can-supercharge-divergent-thinking-modern-ai-like-chatgpt-can-generate-a-high-volume-of-ideas-b37e24c380cc).
 - **Techniques that translate to a conversational AI partner** — SCAMPER, analogical/cross-domain transfer, first-principles, assumption-reversal, "how might we", persona lenses. → drove the curated toolkit.
+- **Mechanics adapted from [KorroAi/drunk-claude](https://github.com/KorroAi/drunk-claude) (MIT)** — its `0.1→1.0` intensity slider, technique-as-reference-file structure (When-to-use/Method/Example/Why-it-works), per-idea insight-pairing ("why it's not stupid"), and explicit REJECT quality gate were adopted **de-gimmicked** (no persona/slang/drink theming). Several of its branded techniques (hold-my-beer, what-if-but-wrong, bar-fight, …) are de Bono / lateral-thinking moves in costume; we kept the mechanics under neutral names. Its key error mode — *lowering* the substance bar at high intensity in favor of "virality" — is explicitly corrected here by holding the insight gate constant across all intensities.
 
 ---
 
@@ -257,6 +294,7 @@ Captured during discussion; out of scope for v1:
 - **Full gray-areas drill-in** — the heavier `brainstorming`-style multiSelect + per-area drill-in (rejected for v1 as over-gating; light scoping chosen instead).
 - **"Seed a brainstorm" auto-carry** — automatically piping a chosen direction into `brainstorming` with context (kept as a manual, user-initiated offer in v1).
 - **Shared Visual Companion module** — extracting the companion scripts into one shared location instead of copying per skill (deferred; self-contained copy chosen for v1 robustness).
+- **Persona / mood / cosmetic theming (from drunk-claude)** — the slang voice, 5 moods, drink-type emojis, and "would it go viral" optimization were deliberately **not** adopted; they conflict with a serious exploration tool. A small set of neutral thinking *lenses* (skeptic / systems / first-principles) could be revisited later, folded into the technique files rather than a separate moods subsystem.
 
 ---
 
