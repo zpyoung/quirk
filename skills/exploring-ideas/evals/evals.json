@@ -1,0 +1,35 @@
+{
+  "skill_name": "exploring-ideas",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Do deep research on the current state of local-first software sync engines.",
+      "expected_output": "Research-heavy run: plans facets, fans out parallel web-research-agents, iterates on gaps. Produces and AUTO-SAVES docs/quirk/explorations/<date>-local-first-sync.md opening with the '🧭 EXPLORATION — not a spec' banner. Themed, cited findings with a Sources section; Tensions and Open-questions sections present. NO spec, requirements, locked decisions, or implementation plan. Ends by offering the brainstorming handoff but does not invoke it.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Let's brainstorm ideas around making a habit-tracking app that doesn't feel like a chore.",
+      "expected_output": "Ideation-heavy run at default intensity 0.5. Light scoping (2-4 questions) then surfaces >=5 distinct directions before drilling. Each direction is insight-paired with a one-line 'why this might actually work'. A challenge pass adds steelman + counter-argument per strong direction. Auto-saves an idea-landscape artifact with the banner and NO winner declared. No spec produced; handoff offered, not auto-invoked.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "explore wild monetization ideas for an open-source CLI tool --wild 0.9",
+      "expected_output": "Intensity parsed as 0.9 (Bold). Pulls in disruptive techniques (deliberately-wrong, contrarian-inversion, extreme-casing); larger quota (>=7) of genuinely unconventional directions. EVERY direction still passes the insight-pairing quality gate (no 'weird-for-weird's-sake' noise) and factual claims stay accurate. Auto-saved artifact records Intensity: 0.9 (Bold). Still no spec; handoff offered only.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "explore wild monetization ideas for an open-source CLI tool --wild 0.2",
+      "expected_output": "Same prompt at intensity 0.2 (Grounded): visibly fewer, more conventional/adjacent directions (quota >=3) than eval 3, while still insight-paired and accurate. Demonstrates the intensity dial modulating idea count and unconventionality without changing the no-spec gate or the insight bar.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "Build me a Stripe billing integration for my SaaS.",
+      "expected_output": "ROUTING NEGATIVE: this is a build request and must NOT trigger exploring-ideas. The correct skill is quirk:brainstorming (creative work that converges to a spec). exploring-ideas should not engage.",
+      "files": []
+    }
+  ]
+}

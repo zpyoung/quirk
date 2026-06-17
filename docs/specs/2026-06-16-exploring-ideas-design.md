@@ -2,7 +2,7 @@
 
 **Date**: 2026-06-16 (rev. 2026-06-17)
 **Status**: Approved for implementation
-**Version**: 2 — adds intensity dial, technique reference-files, insight-pairing + quality gate, and evals (mechanics adapted from [KorroAi/drunk-claude](https://github.com/KorroAi/drunk-claude), MIT)
+**Version**: 3 — implemented. Visual companion corrected to the shared Agent Isles bridge (`bin/agent_isles.py`) after the verbatim `server.cjs` scripts proved obsolete in the current repo (see Implementation Notes). v2 added the intensity dial, technique reference-files, insight-pairing + quality gate, and evals (mechanics adapted from [KorroAi/drunk-claude](https://github.com/KorroAi/drunk-claude), MIT)
 
 ---
 
@@ -31,7 +31,7 @@ Ship `exploring-ideas` as a **peer skill** at `skills/exploring-ideas/`, alongsi
 | 5 | Output | Location | **`docs/quirk/explorations/YYYY-MM-DD-<topic>.md`** |
 | 6 | Output | Save trigger | **Auto-save at end**, with an explicit NOT-a-spec banner |
 | 7 | Output | After exploration | **Dead-end with optional, user-initiated handoff** to `brainstorming` → `writing-plans` |
-| 8 | Reuse | Visual Companion | **Copy scripts into the skill** (self-contained) |
+| 8 | Reuse | Visual Companion | **Reuse the shared Agent Isles bridge** (`bin/agent_isles.py`) — the current visual-companion mechanism; only a skill-local `visual-companion.md` guide is added (corrected from "copy scripts" — see Implementation Notes) |
 | 9 | Reuse | Research engine | **Reuse agent types + iterative loop** (Plan→Search→Reflect→Iterate; `web-research-agent` breadth, `deep-research-agent` depth) |
 | 10 | Reuse | Up-front scoping | **Light scoping (2–4 questions)** — not the full gray-areas drill-in |
 | 11 | Reuse | Packaging | **Inside the quirk plugin** (`skills/exploring-ideas/`) |
@@ -215,7 +215,7 @@ No "Decisions Locked", no requirements, no implementation steps — by gate.
 
 ### Component: Visual Companion (reused)
 
-Copy `server.cjs`, `helper.js`, `frame-template.html`, `start-server.sh`, `stop-server.sh` verbatim into `skills/exploring-ideas/scripts/`, plus a `visual-companion.md` (mechanics). Offered **once, in its own message**, only when visual output is anticipated (idea-landscape, option/cluster map, mind map, comparison matrix). Per-question rule unchanged: browser for visual artifacts, terminal for text choices.
+Reuse the shared **Agent Isles** bridge at `$CLAUDE_PLUGIN_ROOT/bin/agent_isles.py` — the same mechanism the current `brainstorming` skill uses. Author Markdown screens with `<agent-choice>` islands; nothing is copied per-skill. The skill ships a `visual-companion.md` guide (exploration-flavored; screens live under `.quirk/exploring-ideas/`). Offered **once, in its own message**, only when visual output is anticipated (idea-landscape, option/cluster map, mind map, comparison matrix). Per-question rule unchanged: browser for visual artifacts, terminal for text choices.
 
 ### Close: Optional Handoff
 
@@ -232,11 +232,7 @@ End with a short recap and: *"This is exploration only. If you later want to tur
 | `skills/exploring-ideas/references/techniques/*.md` | **Create** — technique files (When-to-use/Method/Example/Why-it-works): `scamper`, `analogical-transfer`, `first-principles`, `assumption-reversal`, `extreme-casing`, `stream-dump`, `deliberately-wrong`, `contrarian-inversion`, `overlooked-value`, `radical-simplification`, `the-avoided-idea` |
 | `skills/exploring-ideas/evals/evals.json` | **Create** — prompt→expected-behavior assertions |
 | `skills/exploring-ideas/visual-companion.md` | **Create** — copied/trimmed companion mechanics |
-| `skills/exploring-ideas/scripts/server.cjs` | **Create** — copied verbatim from `brainstorming` |
-| `skills/exploring-ideas/scripts/helper.js` | **Create** — copied verbatim |
-| `skills/exploring-ideas/scripts/frame-template.html` | **Create** — copied verbatim |
-| `skills/exploring-ideas/scripts/start-server.sh` | **Create** — copied verbatim |
-| `skills/exploring-ideas/scripts/stop-server.sh` | **Create** — copied verbatim |
+| _(no `scripts/`)_ | Visual companion reuses the shared `bin/agent_isles.py` bridge — nothing copied per-skill (corrected; see Implementation Notes) |
 | `commands/explore.md` | **Create** — thin `/quirk:explore` entry point that invokes the skill |
 | `.claude-plugin/plugin.json` | **Edit** — bump 5.6.2 → 5.7.0; add keywords `research`, `deep-research`, `exploration`, `ideation`, `creative-techniques` |
 | `.claude-plugin/marketplace.json` | **Edit** — bump 5.6.2 → 5.7.0 |
@@ -298,4 +294,12 @@ Captured during discussion; out of scope for v1:
 
 ---
 
-*Generated via the `quirk:brainstorming` process (research swarm + gray-area resolution). Terminal state: implementation plan via `quirk:writing-plans`.*
+## Implementation Notes
+
+- **Visual companion (correction):** the spec originally specified copying `brainstorming`'s `server.cjs` / `helper.js` / `frame-template.html` / start-stop scripts verbatim. During implementation those were found only in the released 5.6.2 plugin cache — the current repo's `brainstorming` skill has migrated its visual companion to the shared **Agent Isles** bridge (`bin/agent_isles.py`) and no longer ships those scripts. `exploring-ideas` therefore reuses the same bridge (nothing copied), which is more self-contained and consistent with the current codebase. Decision #8, the Visual Companion component, and Files Changed were updated to match.
+- **Pre-existing gap noted:** the repo's `skills/brainstorming/` documents the companion in `visual-companion.md` but commits no `scripts/` dir (the bridge lives at plugin root). Flagged, not fixed — out of scope here.
+- **Build path:** implemented directly from this spec at the user's request; `writing-plans` was intentionally skipped. The 11 technique files were authored by a parallel agent workflow against a fixed template.
+
+---
+
+*Generated via the `quirk:brainstorming` process (research swarm + gray-area resolution), then implemented directly (writing-plans skipped per user request).*
