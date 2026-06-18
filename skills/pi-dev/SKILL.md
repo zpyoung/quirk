@@ -18,6 +18,26 @@ pi-watch --alias codex "Explain the auth flow in src/auth.ts"
 
 That's the whole interface. Don't construct `--provider`/`--model`/`--thinking` triples by hand or invoke the `pi` binary directly unless one of the [escape hatches](#escape-hatches) below applies.
 
+## Validate before dispatching
+
+An alias only works if a model in its ladder is authed on *this* machine. Don't assume — preflight with `--check`, which resolves the alias against `pi --list-models` **without** running a prompt (or spending tokens):
+
+```bash
+pi-watch --check codex && pi-watch --alias codex "<prompt>"   # dispatch only if codex resolves
+pi-watch --check                                              # ✓/✗ report for every alias
+```
+
+`pi-watch --check <alias>` exits **0** when the alias resolves to an authed/shipping model and **non-zero** otherwise — so gate real dispatches on it (`--check … && pi-watch …`) to never fire a doomed run. With no alias it checks all of them and prints which are ready. `--list-aliases` shows the *static* ladders; `--check` tells you which actually work right now.
+
+The ✓/✗ report prints to **stderr** (like pi-watch's other progress output) and the gate keys off the **exit code** — so wrapping the whole gate in a capture (`result="$(pi-watch --check codex && pi-watch --alias codex '…')"`) keeps `result` to the assistant text only.
+
+| Exit | Meaning |
+|---|---|
+| 0 | Every checked alias resolves to an authed model |
+| 2 | Named alias is unknown |
+| 4 | Can't query `pi` (binary missing — see [Setup](#setup-one-time-per-workstation)) |
+| 5 | At least one checked alias has no authed/shipping model — run `pi /login` for that provider |
+
 ## Aliases
 
 | Alias | Default thinking | Routes to |
@@ -44,6 +64,8 @@ pi-watch --alias <alias> "<prompt>"                          # default tools: re
 pi-watch --alias <alias> --tools read "<prompt>"             # restrict tools
 pi-watch --alias <alias> --no-tools "<prompt>"               # LLM only — review/analysis
 pi-watch --alias <alias> --thinking medium "<prompt>"        # override default thinking
+pi-watch --check <alias>                                     # preflight one alias (exit 0 = authed model resolves)
+pi-watch --check                                             # preflight all aliases — ✓/✗ report
 ```
 
 Thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. Providers silently clamp unsupported levels.
@@ -88,7 +110,7 @@ pnpm install
 ln -sf "$(pwd)/pi-watch" ~/.local/bin/pi-watch     # or any PATH dir
 ```
 
-Verify: `pi --version` → expect ≥ 0.65.1. `pi /login` for any subscription provider you want (Claude, ChatGPT, Copilot).
+Verify: `pi --version` → expect ≥ 0.65.1. `pi /login` for any subscription provider you want (Claude, ChatGPT, Copilot). Then `pi-watch --check` to confirm which aliases resolve to an authed model.
 
 ## Escape hatches
 
