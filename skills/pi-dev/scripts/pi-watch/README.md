@@ -32,6 +32,11 @@ pi-watch --alias haiku --no-tools "Summarize this diff: $(git diff HEAD~1)"
 # Override the alias's default thinking level
 pi-watch --alias codex --thinking medium "Quick summary of README.md"
 
+# Preflight — which aliases resolve to a locally-authed model? (no prompt run)
+pi-watch --check                 # ✓/✗ for every alias
+pi-watch --check codex           # one alias; exit 0 if ready, non-zero if not
+pi-watch --check codex && pi-watch --alias codex "..."   # gate a dispatch on it
+
 # List all aliases and their preference ladders
 pi-watch --list-aliases
 
@@ -91,7 +96,8 @@ Pi has no built-in sandbox — `bash`, `edit`, and `write` operate at the caller
 | `--thinking <level>` | `off` / `minimal` / `low` / `medium` / `high` / `xhigh`. Overrides alias default |
 | `--tools t1,t2` | Comma-separated allowlist. Default `read,bash` |
 | `--no-tools` | Disable all tools — LLM only (review/analysis mode) |
-| `--list-aliases` | Print alias table and exit |
+| `--check [alias]` | Preflight: validate one alias (or all) against `pi --list-models` without running a prompt. Exit 0 = ready, non-zero = not. Gate dispatches with `--check <alias> && pi-watch …` |
+| `--list-aliases` | Print the static alias table and exit (no `pi` call) |
 | `-h`, `--help` | Print usage and exit |
 
 ## Exit codes
@@ -104,6 +110,8 @@ Pi has no built-in sandbox — `bash`, `edit`, and `write` operate at the caller
 | 3 | Model not in pi-ai registry (run `pnpm update` here) |
 | 4 | Cannot run `pi --list-models` (pi binary missing?) |
 | 5 | No combo in alias ladder is authed/shipping |
+
+`--check` uses the same codes: **0** = all checked aliases ready, **5** = at least one not authed/shipping, **2** = unknown alias, **4** = `pi` not runnable.
 
 ## When to prefer pi-watch over `pi --mode json`
 

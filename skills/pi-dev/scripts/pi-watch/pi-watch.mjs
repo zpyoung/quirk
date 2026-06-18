@@ -117,6 +117,8 @@ const opts = {
     tools: ["read", "bash"],
     prompt: null,
     listAliases: false,
+    check: false,
+    checkAlias: null,
 };
 function takeValue(flag, i) {
     const v = args[i + 1];
@@ -135,6 +137,11 @@ for (let i = 0; i < args.length; i++) {
     else if (a === "--tools") { opts.tools = takeValue(a, i).split(",").map((s) => s.trim()).filter(Boolean); i++; }
     else if (a === "--no-tools") opts.tools = [];
     else if (a === "--list-aliases") opts.listAliases = true;
+    else if (a === "--check") {
+        opts.check = true;
+        // Optional alias argument: the next non-flag token, if present.
+        if (args[i + 1] !== undefined && !args[i + 1].startsWith("--")) { opts.checkAlias = args[i + 1]; i++; }
+    }
     else if (a === "-h" || a === "--help") { printHelp(); process.exit(0); }
     else if (a.startsWith("--")) { console.error(`pi-watch: unknown flag ${a}`); process.exit(2); }
     else { opts.prompt = (opts.prompt ? opts.prompt + " " : "") + a; }
@@ -161,10 +168,20 @@ if (opts.listAliases) {
     process.exit(0);
 }
 
+// --check is a preflight mode: validate alias resolution, then exit. It never
+// runs a prompt, so it short-circuits before the prompt-required path below.
+if (opts.check) {
+    if (opts.prompt || opts.provider || opts.model) {
+        process.stderr.write("  ⓘ --check validates aliases only — ignoring prompt/--provider/--model (no model is run)\n");
+    }
+    runCheck(opts.checkAlias ?? opts.alias, opts.thinking);
+}
+
 function printHelp() {
     console.error('Usage:');
     console.error('  pi-watch --alias <alias> [--thinking <level>] [--tools t1,t2|--no-tools] "<prompt>"');
     console.error('  pi-watch --provider <p> --model <m> [--thinking <level>] [--tools ...] "<prompt>"');
+    console.error('  pi-watch --check [alias]       # preflight: which aliases resolve to an authed model');
     console.error('  pi-watch --list-aliases');
     console.error('');
     console.error(`Aliases: ${Object.keys(ALIASES).join(", ")}`);
@@ -200,13 +217,10 @@ function listAvailable() {
     return set;
 }
 
-function resolveAlias(alias, thinkingOverride) {
-    const cfg = ALIASES[alias];
-    if (!cfg) {
-        console.error(`pi-watch: unknown alias '${alias}'. Known: ${Object.keys(ALIASES).join(", ")}`);
-        process.exit(2);
-    }
-    const avail = listAvailable();
+// Walk an alias's preference ladder against a set of authed/shipping combos.
+// Returns the first match as {provider, model, thinking}, or null if none —
+// no process.exit, so callers (resolveAlias, runCheck) decide how to react.
+function resolveAgainst(cfg, avail, thinkingOverride) {
     for (const combo of cfg.prefs) {
         if (avail.has(combo)) {
             const slash = combo.indexOf("/");
@@ -214,13 +228,69 @@ function resolveAlias(alias, thinkingOverride) {
                 provider: combo.slice(0, slash),
                 model: combo.slice(slash + 1),
                 thinking: thinkingOverride ?? cfg.thinking,
-                triedFromAlias: true,
             };
         }
     }
+    return null;
+}
+
+function resolveAlias(alias, thinkingOverride) {
+    const cfg = ALIASES[alias];
+    if (!cfg) {
+        console.error(`pi-watch: unknown alias '${alias}'. Known: ${Object.keys(ALIASES).join(", ")}`);
+        process.exit(2);
+    }
+    const resolved = resolveAgainst(cfg, listAvailable(), thinkingOverride);
+    if (resolved) return { ...resolved, triedFromAlias: true };
     console.error(`pi-watch: no provider in alias '${alias}' is authed/shipping. Tried:`);
     for (const combo of cfg.prefs) console.error(`  - ${combo}`);
     console.error(`Run 'pi --list-models' to see what's available, or run 'pi /login' for the provider you want.`);
+    process.exit(5);
+}
+
+// --check [alias]: preflight which aliases resolve to a locally-authed model
+// WITHOUT running a prompt. Validates one alias (if given) or every alias.
+// Exit 0 = all checked aliases are ready; exit 5 = at least one is not;
+// exit 2 = the named alias is unknown; exit 4 = `pi` itself can't be queried.
+//
+// The report goes to STDERR — pi-watch reserves stdout for assistant text, so
+// gating a captured dispatch (`result="$(pi-watch --check x && pi-watch ...)"`)
+// stays clean. The exit code, not stdout, is the machine-readable gate signal.
+//
+// `checkAlias` is null only when no alias was supplied (→ check all); a
+// provided-but-empty string is an explicit (invalid) alias → exit 2.
+function runCheck(checkAlias, thinkingOverride) {
+    if (checkAlias !== null && !ALIASES[checkAlias]) {
+        console.error(`pi-watch: unknown alias '${checkAlias}'. Known: ${Object.keys(ALIASES).join(", ")}`);
+        process.exit(2);
+    }
+    const names = checkAlias !== null ? [checkAlias] : Object.keys(ALIASES);
+    const avail = listAvailable();   // runs `pi --list-models` once; exits 4 if pi is missing
+    const pad = Math.max(...names.map((n) => n.length));
+    const failed = [];
+    process.stderr.write(`pi-watch: validating ${checkAlias !== null ? `alias '${checkAlias}'` : "aliases"} against authed models (pi --list-models)\n\n`);
+    for (const name of names) {
+        const cfg = ALIASES[name];
+        const resolved = resolveAgainst(cfg, avail, thinkingOverride);
+        if (resolved) {
+            process.stderr.write(`  ✓ ${name.padEnd(pad)}  ${resolved.provider}/${resolved.model}:${resolved.thinking}\n`);
+        } else {
+            failed.push(name);
+            process.stderr.write(`  ✗ ${name.padEnd(pad)}  no authed/shipping model (0/${cfg.prefs.length} combos)\n`);
+        }
+    }
+    const okCount = names.length - failed.length;
+    process.stderr.write("\n");
+    if (failed.length === 0) {
+        process.stderr.write(`${okCount}/${names.length} ${names.length === 1 ? "alias" : "aliases"} ready.\n`);
+        process.exit(0);
+    }
+    process.stderr.write(`${okCount}/${names.length} ready — not available: ${failed.join(", ")}.\n`);
+    process.stderr.write(`Run 'pi /login' for the needed provider, or 'pi --list-models' to see what's authed.\n`);
+    if (checkAlias !== null) {
+        process.stderr.write(`\nLadder tried for '${checkAlias}':\n`);
+        for (const combo of ALIASES[checkAlias].prefs) process.stderr.write(`  - ${combo}\n`);
+    }
     process.exit(5);
 }
 
