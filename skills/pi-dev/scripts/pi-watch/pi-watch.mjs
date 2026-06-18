@@ -171,10 +171,10 @@ if (opts.listAliases) {
 // --check is a preflight mode: validate alias resolution, then exit. It never
 // runs a prompt, so it short-circuits before the prompt-required path below.
 if (opts.check) {
-    if (opts.prompt || opts.provider || opts.model) {
-        process.stderr.write("  ⓘ --check validates aliases only — ignoring prompt/--provider/--model (no model is run)\n");
+    if (opts.prompt || opts.alias || opts.provider || opts.model) {
+        process.stderr.write("  ⓘ --check validates aliases only — ignoring prompt/--alias/--provider/--model (no model is run)\n");
     }
-    runCheck(opts.checkAlias ?? opts.alias, opts.thinking);
+    runCheck(opts.checkAlias, opts.thinking);
 }
 
 function printHelp() {
