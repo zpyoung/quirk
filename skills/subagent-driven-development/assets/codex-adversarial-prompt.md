@@ -36,9 +36,12 @@ mcp__pal__clink:
     Code quality: [verdict + summary]
 
     ## Review Protocol
-    For EACH requirement in the task body:
-    1. Find the file:line where it's implemented — cite evidence.
-    2. Verify the implementation matches task intent.
+    The task specifies BEHAVIOR, not code — it carries a Contract and Acceptance
+    criteria, not a reference implementation. Treat each Acceptance criterion and
+    each Contract clause (preconditions, postconditions, invariants, error
+    behavior) as a requirement. For EACH such requirement:
+    1. Find the file:line where it's satisfied — cite evidence.
+    2. Verify the implementation honors that criterion / contract clause.
     3. Check for hidden complexities (over-engineering, unrequested features).
     4. Check error handling and edge cases.
     5. Verify any cross-file consistency the task implies.

@@ -7,9 +7,11 @@ description: Use when you have a spec or requirements for a multi-step task, bef
 
 ## Overview
 
-Write comprehensive implementation plans assuming the engineer has zero context for our codebase and questionable taste. Document everything they need to know: which files to touch for each task, code, testing, docs they might need to check, how to test it. Give them the whole plan as bite-sized tasks. DRY. YAGNI. TDD. Frequent commits.
+A plan is a **specification of intent, behavior, and contracts that a skilled implementor executes — not a transcript of code to paste.** It answers WHAT must be built and WHY this approach was chosen, and leaves HOW — the actual code — to the implementor, who has full repository context and will write better code than you can pre-write blind. **The implementor writes the code.**
 
-Assume they are a skilled developer, but know almost nothing about our toolset or problem domain. Assume they don't know good test design very well.
+Write for an implementor who has **zero context for our codebase** and needs the domain, constraints, interfaces, and acceptance bar made explicit. Delegate the implementation *approach* — but never delegate *completeness*: the errors to handle, the edge cases, and the test coverage are enumerated in the plan precisely because implementor judgment there is not trusted.
+
+DRY. YAGNI. TDD. Frequent commits.
 
 **Announce at start:** "I'm using the writing-plans skill to create the implementation plan."
 
@@ -17,6 +19,43 @@ Assume they are a skilled developer, but know almost nothing about our toolset o
 
 **Save plans to:** `docs/quirk/plans/YYYY-MM-DD-<feature-name>.md`
 - (User preferences for plan location override this default)
+
+## The No-Code Rule
+
+A plan **MUST NOT contain runnable implementation code or full test bodies.** Pasting code anchors the implementor to one approach, ages the moment the real code changes, duplicates work the implementor will redo anyway, and shifts reviewers from judging *decisions* to reviewing *syntax*.
+
+Instead, every code-touching step carries:
+- the exact **file path**,
+- the **behavioral goal** (what it must do),
+- the **contract** it must satisfy (preconditions, postconditions, invariants, error behavior),
+- the **acceptance check** (an observable, testable success condition).
+
+### When code IS allowed (the narrow exceptions)
+
+Code is allowed ONLY when the literal text *is the contract another party must match exactly*. Tag every permitted block with one of these markers so the no-code audit is a grep, not a judgment call:
+
+- `CONTRACT:` — an interface/signature sketch other tasks depend on (names, parameter/return types, error enums/status codes) — a shape, never a body
+- `SCHEMA:` — exact data-schema field names/types, or an API request/response shape
+- `COMMAND:` — exact shell/git commands the implementor runs verbatim
+- `REGEX:` — a literal pattern that *is* the specification
+- `CONFIG:` — exact config keys, env vars, or values where the literal string matters
+- `PSEUDOCODE (justified):` — ≤3 lines, ONLY for a subtle algorithm where prose is genuinely ambiguous, with a one-line note on why prose failed
+
+**Hard limits (mechanical, so review is a grep):**
+- No runnable **function body**. No complete **test** (no `def test_…`, fixtures, setup, or mocks).
+- Any code block without one of the tags above is a defect.
+- **Expected-value data is contract, not code:** exact expected outputs, exception types, and error identifiers MUST be stated. An `input → expected output` table is a `CONTRACT:` and is allowed. What's forbidden is the surrounding test scaffolding.
+
+**Migration:** Existing plans written in the old code-embedding style remain valid to execute — don't rewrite them just to strip code. New plans follow the no-code rule. Mark an obsolete plan `Status: Superseded` rather than editing it in place.
+
+## Calibrate to the Executor
+
+The plan header names the executor. Branch on it:
+
+- **AI subagents** (`quirk:subagent-driven-development`): a fresh subagent receives only the pasted task text — no conversation history, limited repo-exploration budget. Bias toward MORE scaffolding: name the exact test file, the fixtures/builders to reuse, the assertion targets, and add reuse pointers (e.g. "reuse the builder at `tests/factories.py:40`"). The behavioral spec must be tight enough that two subagents would build the same thing.
+- **Human implementor** (`quirk:executing-plans`): bias toward proportional brevity — enough contract and acceptance to remove ambiguity, no more.
+
+**Tiebreaker** when proportionality and the "zero context" assumption pull in opposite directions: for subagent execution, add detail; for human execution, trim.
 
 ## Scope Check
 
@@ -30,17 +69,20 @@ Before defining tasks, map out which files will be created or modified and what 
 - You reason best about code you can hold in context at once, and your edits are more reliable when files are focused. Prefer smaller, focused files over large ones that do too much.
 - Files that change together should live together. Split by responsibility, not by technical layer.
 - In existing codebases, follow established patterns. If the codebase uses large files, don't unilaterally restructure - but if a file you're modifying has grown unwieldy, including a split in the plan is reasonable.
+- For each unit that other tasks or systems depend on, specify its interface as a behavioral **contract** — signature shape (names, parameter/return types), preconditions, postconditions, invariants — in prose or a `CONTRACT:` sketch, never a body. Accept broad input types; return specific types.
 
 This structure informs the task decomposition. Each task should produce self-contained changes that make sense independently.
 
 ## Bite-Sized Task Granularity
 
-**Each step is one action (2-5 minutes):**
-- "Write the failing test" - step
-- "Run it to make sure it fails" - step
-- "Implement the minimal code to make the test pass" - step
-- "Run the tests and make sure they pass" - step
+Each step is one action in the red-green-commit rhythm. Reframe each as a behavioral instruction the implementor executes — not a container for code:
+- "Write a failing test in `<file>` asserting `<behavior + exact expected values>`" - step
+- "Run it; confirm it fails because `<reason>`" - step
+- "Implement `<unit>` in `<file>` to satisfy `<contract>` and `<acceptance>`" - step
+- "Run the tests; confirm they pass" - step
 - "Commit" - step
+
+Keep one behavior per red-green cycle. A non-trivial behavior may take longer than five minutes to implement, but it is still one test → one implementation → one verification → one commit.
 
 ## Task Independence (optional)
 
@@ -73,23 +115,37 @@ See **quirk:subagent-driven-development → The Process → Step 0b** for the fu
 ```markdown
 # [Feature Name] Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use quirk:subagent-driven-development (recommended) or quirk:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use quirk:subagent-driven-development (recommended) or quirk:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. "Follow the step exactly" means **satisfy the stated acceptance criteria** — if a contract is ambiguous, ask before guessing.
+
+**Status:** Draft | Under Review | Approved | Superseded
 
 **Goal:** [One sentence describing what this builds]
 
+**Goals / Non-Goals:** [bullet lists; non-goals name things a reader might reasonably assume are in scope but that are deliberately excluded]
+
 **Architecture:** [2-3 sentences about approach]
+
+**Alternatives considered:** [the chosen approach + at least one honest rejected alternative + why]
 
 **Tech Stack:** [Key technologies/libraries]
 
+**Constraints:** [hard constraints to preserve (regulatory, security, existing APIs) vs. choices delegated to the implementor]
+
+**Cross-cutting:** [security / observability / data migration / rollback — where relevant]
+
 ---
 ```
+
+Match plan size to task size: a ~2-day change is ~1-2 pages. If writing the plan takes longer than implementing it, the altitude is wrong.
 
 ## Task Structure
 
 Every task follows this template. The `independent` / `dependencies` / `scope.files` / `cooperative` block is optional but **strongly recommended** — it lets `quirk:subagent-driven-development` execute the plan in parallel waves instead of strictly sequentially. Most well-decomposed tasks should declare `independent: true` plus `scope.files`.
 
+Notice what the template does NOT contain: no test body, no implementation body. Each step states behavior, contract, and acceptance — the implementor writes the code. The only code blocks are tagged exceptions (`CONTRACT:`, `COMMAND:`).
+
 ````markdown
-### Task N: [Component Name]
+### Task N: Daily metrics summary
 
 ```yaml
 # Optional — drives parallel execution under quirk:subagent-driven-development.
@@ -97,61 +153,78 @@ Every task follows this template. The `independent` / `dependencies` / `scope.fi
 independent: true
 dependencies: []
 scope:
-  files: [exact/path/to/file.py, tests/exact/path/to/test.py]
+  files: [src/metrics/summary.py, tests/metrics/test_summary.py]
 ```
 
 **Files:**
-- Create: `exact/path/to/file.py`
-- Modify: `exact/path/to/existing.py:123-145`
-- Test: `tests/exact/path/to/test.py`
+- Create: `src/metrics/summary.py`
+- Modify: `src/metrics/__init__.py:1-12` (export `summarize`)
+- Test: `tests/metrics/test_summary.py`
+
+**Contract** — what `summarize` must guarantee:
+- Preconditions: accepts any iterable of `Record` (possibly empty); records may arrive unsorted.
+- Postconditions: returns a `Summary` with `count` (int) and `total` (Decimal); never mutates the input.
+- Invariants: `total` equals the sum of `record.amount` over all records.
+- Errors: a record with a non-numeric `amount` raises `ValueError("amount must be numeric")`.
+
+**Acceptance:** `summarize` returns correct `count`/`total` for empty, single, and mixed inputs, and raises on a non-numeric amount.
 
 - [ ] **Step 1: Write the failing test**
 
-```python
-def test_specific_behavior():
-    result = function(input)
-    assert result == expected
-```
+  In `tests/metrics/test_summary.py`, assert:
+  - Given an empty iterable, When summarized, Then `count == 0` and `total == Decimal("0")`.
+  - Given records `[10.00, 5.50]`, When summarized, Then `count == 2` and `total == Decimal("15.50")`.
+  - Given a record whose `amount` is `"x"`, When summarized, Then it raises `ValueError` with message `"amount must be numeric"`.
+
+  Reuse the `make_record(...)` builder at `tests/factories.py:40`.
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pytest tests/path/test.py::test_name -v`
-Expected: FAIL with "function not defined"
+  Run: `pytest tests/metrics/test_summary.py -v`
+  Expected: FAIL — `summarize` not defined
 
-- [ ] **Step 3: Write minimal implementation**
+- [ ] **Step 3: Implement to satisfy the contract**
 
-```python
-def function(input):
-    return expected
-```
+  Implement `summarize` in `src/metrics/summary.py` to meet the Contract and Acceptance above, then export it from `src/metrics/__init__.py`. The interface other tasks depend on:
+
+  `CONTRACT:`
+  ```
+  def summarize(records: Iterable[Record]) -> Summary: ...
+  ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pytest tests/path/test.py::test_name -v`
-Expected: PASS
+  Run: `pytest tests/metrics/test_summary.py -v`
+  Expected: PASS
 
 - [ ] **Step 5: Commit**
 
-```bash
-git add tests/path/test.py src/path/file.py
-git commit -m "feat: add specific feature"
-```
+  `COMMAND:`
+  ```bash
+  git add src/metrics/summary.py src/metrics/__init__.py tests/metrics/test_summary.py
+  git commit -m "feat(metrics): add daily summary aggregation"
+  ```
 ````
 
-## No Placeholders
+## No Vagueness
 
-Every step must contain the actual content an engineer needs. These are **plan failures** — never write them:
+A plan fails on **ambiguity**, not on the absence of code. These are **plan failures** — never write them:
 - "TBD", "TODO", "implement later", "fill in details"
-- "Add appropriate error handling" / "add validation" / "handle edge cases"
-- "Write tests for the above" (without actual test code)
-- "Similar to Task N" (repeat the code — the engineer may be reading tasks out of order)
-- Steps that describe what to do without showing how (code blocks required for code steps)
+- "Add appropriate error handling" — name WHICH errors and the exact behavior
+- "Handle edge cases" — name the cases and their expected outcomes
+- "Write tests for the above" — give the assertion list (behavior + exact expected values)
+- "Similar to Task N" — restate the contract; the implementor may read tasks out of order
+- A step that states neither a behavioral goal nor an acceptance check
+- An interface or contract referenced but never specified
+- A requirement open to two or more reasonable interpretations
 - References to types, functions, or methods not defined in any task
+- **Pasting a full implementation body or full test body** — that is the implementor's job; it anchors them and ages immediately. Specify behavior, contract, and acceptance instead.
 
 ## Remember
 - Exact file paths always
-- Complete code in every step — if a step changes code, show the code
+- Complete **behavior** in every step — if a step changes code, state the behavioral goal, the contract it must satisfy, and the acceptance check. The implementor writes the code.
 - Exact commands with expected output
+- State the **why** for every non-obvious decision (rationale + rejected alternative) so the implementor can adapt when context shifts
 - DRY, YAGNI, TDD, frequent commits
 
 ## Self-Review
@@ -160,11 +233,15 @@ After writing the complete plan, look at the spec with fresh eyes and check the 
 
 **1. Spec coverage:** Skim each section/requirement in the spec. Can you point to a task that implements it? List any gaps.
 
-**2. Placeholder scan:** Search your plan for red flags — any of the patterns from the "No Placeholders" section above. Fix them.
+**2. Vagueness scan:** Search your plan for the red flags in the "No Vagueness" section above. Fix them.
 
-**3. Type consistency:** Do the types, method signatures, and property names you used in later tasks match what you defined in earlier tasks? A function called `clearLayers()` in Task 3 but `clearFullLayers()` in Task 7 is a bug.
+**3. Altitude / no-code audit:** Find every code block. Each must carry a tag (`CONTRACT:` / `SCHEMA:` / `COMMAND:` / `REGEX:` / `CONFIG:` / `PSEUDOCODE (justified):`). Any untagged block, any runnable function body, or any full test body → remove it and replace with behavior + contract + acceptance.
 
-**4. Parallelism declarations:** For each task, did you accurately declare `independent: true` / `dependencies: [...]` / `scope.files: [...]`? Tasks that genuinely don't depend on each other should say so — otherwise the orchestrator falls back to sequential execution and leaves throughput on the table. Tasks that share a target file (e.g., multiple edits to the same `SKILL.md`) MUST run sequentially — express that with `dependencies`, never with overlapping `scope.files` and `independent: true` together.
+**4. Ambiguity probe:** For each requirement, ask whether a skilled implementor could reasonably build two or more different things. If yes, tighten the behavioral spec — not by adding code.
+
+**5. Contract consistency:** Do the signatures, method names, and property names in your `CONTRACT:` sketches match across tasks? A function called `clearLayers()` in Task 3 but `clearFullLayers()` in Task 7 is a bug.
+
+**6. Parallelism declarations:** For each task, did you accurately declare `independent: true` / `dependencies: [...]` / `scope.files: [...]`? Tasks that genuinely don't depend on each other should say so — otherwise the orchestrator falls back to sequential execution and leaves throughput on the table. Tasks that share a target file MUST run sequentially — express that with `dependencies`, never with overlapping `scope.files` and `independent: true` together.
 
 If you find issues, fix them inline. No need to re-review — just fix and move on. If you find a spec requirement with no task, add the task.
 

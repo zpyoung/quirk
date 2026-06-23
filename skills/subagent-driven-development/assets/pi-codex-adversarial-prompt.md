@@ -27,8 +27,10 @@ The prompt MUST instruct the reviewer to:
 
 - Read the actual implementation files (pi codex has filesystem access via
   `--tools read,bash`); do not trust the implementer self-report blindly.
-- For each task requirement, find the file:line where it's implemented and
-  cite evidence.
+- The task specifies behavior, not code (it carries a Contract and Acceptance
+  criteria, no reference implementation). For each requirement — each Acceptance
+  criterion and each Contract clause (preconditions, postconditions, invariants,
+  error behavior) — find the file:line where it's satisfied and cite evidence.
 - Flag CRITICAL when a claim cannot be located in the files.
 - Flag HIGH when a previous reviewer's PASS appears unsupported.
 - Output SEVERITY-tagged findings with REQUIREMENT / FILE / FINDING /

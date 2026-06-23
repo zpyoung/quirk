@@ -10,7 +10,11 @@ Task tool (general-purpose):
 
     ## Task Description
 
-    [FULL TEXT of task from plan - paste it here, don't make subagent read file]
+    [FULL TEXT of task from plan - paste it here, don't make subagent read file.
+    The task is a BEHAVIORAL spec: it gives a Contract (preconditions,
+    postconditions, invariants, error behavior) and an Acceptance criterion
+    describing observable success — NOT a reference implementation or test
+    bodies. You author the code and the tests yourself to satisfy it.]
 
     ## Context
 
@@ -29,9 +33,9 @@ Task tool (general-purpose):
     ## Your Job
 
     Once you're clear on requirements:
-    1. Implement exactly what the task specifies
-    2. Write tests (following TDD if task says to)
-    3. Verify implementation works
+    1. Write a failing test first that encodes the task's Acceptance criterion
+    2. Implement the minimal code to satisfy the Contract and make the test pass (TDD)
+    3. Verify the implementation works (run the tests)
     4. Commit your work
     5. Self-review (see below)
     6. Report back
@@ -76,7 +80,8 @@ Task tool (general-purpose):
     Review your work with fresh eyes. Ask yourself:
 
     **Completeness:**
-    - Did I fully implement everything in the spec?
+    - Does my code satisfy every Acceptance criterion and honor each Contract
+      clause (preconditions, postconditions, invariants, error behavior)?
     - Did I miss any requirements?
     - Are there edge cases I didn't handle?
 
@@ -92,7 +97,7 @@ Task tool (general-purpose):
 
     **Testing:**
     - Do tests actually verify behavior (not just mock behavior)?
-    - Did I follow TDD if required?
+    - Did I follow TDD (failing test before implementation)?
     - Are tests comprehensive?
 
     If you find issues during self-review, fix them now before reporting.

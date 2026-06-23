@@ -1,5 +1,7 @@
 # SDD `/design:implement` Feature Port — Implementation Plan
 
+> **Historical plan (completed).** Predates the `quirk:writing-plans` Contract+Acceptance format; its embedded code is preserved as a record and is **not** a template for new plans.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use quirk:subagent-driven-development (recommended) or quirk:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Port adaptive parallel execution and Codex adversarial review from `/design:implement` into the `quirk:subagent-driven-development` skill (with worktree-isolated parallel as a third execution mode), and add an optional plan-format extension to `quirk:writing-plans` for declaring task independence and scope.

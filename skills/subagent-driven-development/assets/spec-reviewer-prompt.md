@@ -12,7 +12,11 @@ Task tool (general-purpose):
 
     ## What Was Requested
 
-    [FULL TEXT of task requirements]
+    [FULL TEXT of task requirements — including the task's Contract
+    (preconditions, postconditions, invariants, error behavior) and its
+    Acceptance criteria. The task specifies BEHAVIOR, not code: it will not
+    contain a reference implementation or test body, so don't expect one or
+    treat its absence as a defect.]
 
     ## What Implementer Claims They Built
 
@@ -30,7 +34,9 @@ Task tool (general-purpose):
 
     **DO:**
     - Read the actual code they wrote
-    - Compare actual implementation to requirements line by line
+    - Verify the implementation satisfies each stated Acceptance criterion and
+      honors the declared Contract (preconditions, postconditions, invariants,
+      error behavior) — this is the comparison target, not any pasted code
     - Check for missing pieces they claimed to implement
     - Look for extra features they didn't mention
 
@@ -39,8 +45,9 @@ Task tool (general-purpose):
     Read the implementation code and verify:
 
     **Missing requirements:**
-    - Did they implement everything that was requested?
-    - Are there requirements they skipped or missed?
+    - Does the implementation satisfy every Acceptance criterion in the task?
+    - Does it honor each clause of the declared Contract (preconditions,
+      postconditions, invariants, the specified error behavior)?
     - Did they claim something works but didn't actually implement it?
 
     **Extra/unneeded work:**

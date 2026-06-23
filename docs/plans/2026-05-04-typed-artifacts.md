@@ -1,6 +1,8 @@
 # Typed Artifacts Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical plan (completed).** Predates the `quirk:writing-plans` Contract+Acceptance format; its embedded code is preserved as a record and is **not** a template for new plans.
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use quirk:subagent-driven-development (recommended) or quirk:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a typed-artifacts feature module to the quirk plugin (v5.0.7 → v5.1.0) that gives Claude a structured destination for deferred bugs, skipped tests, out-of-scope tasks, and architectural proposals — replacing prose hedges ("pre-existing", "out of scope") with append-only markdown artifacts.
 

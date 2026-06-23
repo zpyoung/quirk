@@ -19,9 +19,11 @@ Task tool (general-purpose):
 
     | Category | What to Look For |
     |----------|------------------|
-    | Completeness | TODOs, placeholders, incomplete tasks, missing steps |
+    | Completeness | TODOs, placeholders, vague/ambiguous steps (no behavioral goal, no acceptance check) — AND pasted implementation/test bodies (over-specification). Both are defects. |
     | Spec Alignment | Plan covers spec requirements, no major scope creep |
     | Task Decomposition | Tasks have clear boundaries, steps are actionable |
+    | Altitude | Does each task specify WHAT (behavior, contract, acceptance) rather than HOW (literal code)? Any code present must be a justified, tagged exception — `CONTRACT:` signature sketch, `SCHEMA:`, `COMMAND:`, `REGEX:`, `CONFIG:`, or `PSEUDOCODE (justified):` (≤3 lines). Flag any untagged code block, runnable function body, or full test body. |
+    | Acceptance Criteria | Does each task carry an observable, testable success condition? |
     | Buildability | Could an engineer follow this plan without getting stuck? |
 
     ## Calibration
@@ -31,7 +33,9 @@ Task tool (general-purpose):
     Minor wording, stylistic preferences, and "nice to have" suggestions are not.
 
     Approve unless there are serious gaps — missing requirements from the spec,
-    contradictory steps, placeholder content, or tasks so vague they can't be acted on.
+    contradictory steps, ambiguity that yields two or more reasonable
+    implementations, OR full implementation/test bodies that pre-empt the
+    implementor, or tasks so vague they can't be acted on.
 
     ## Output Format
 

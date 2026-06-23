@@ -25,7 +25,7 @@ Load plan, review critically, execute all tasks, report when complete.
 
 For each task:
 1. Mark as in_progress
-2. Follow each step exactly (plan has bite-sized steps)
+2. Follow each step exactly — steps specify behavior (acceptance criteria + contract), not pasted code; you write the implementation. If a contract is ambiguous, ask before guessing.
 3. Run verifications as specified
 4. Mark as completed
 
@@ -56,7 +56,7 @@ After all tasks complete and verified:
 
 ## Remember
 - Review plan critically first
-- Follow plan steps exactly
+- Follow plan steps exactly — satisfy each step's acceptance criteria and contract; don't treat behavioral steps as literal scripts
 - Don't skip verifications
 - Reference skills when plan says to
 - Stop when blocked, don't guess
