@@ -20,54 +20,80 @@ offer the handoff to `brainstorming`, never perform it automatically.
 
 No. The user invoked exploration. Surfacing the option space, the evidence, and the tensions IS the deliverable. Declaring a winner, writing requirements, or starting to code defeats the purpose. If the user later says "ok, let's build the third one," offer the `brainstorming` handoff — do not silently switch modes.
 
-## Two Dials
+## Three Dials
 
-These are orthogonal — set both:
+These are orthogonal — set all three:
 
 - **Emphasis** (auto-detected) — *what kind of work*: research-heavy ↔ ideation-heavy ↔ blended.
 - **Intensity** (`--wild 0.1–1.0`, default 0.5) — *how far past the obvious the ideation pushes*.
+- **Involvement** (`--involve low|medium|high`, default medium) — *how much the skill pauses to include you*: checkpoints, steering, and idea-gate co-creation. `low` is exactly today's behavior. See [Involvement & Checkpoints](#involvement--checkpoints).
 
 ## Checklist
 
-Create a TodoWrite item per step and complete in order:
+Create a TodoWrite item per step and complete in order. Steps tagged *(medium+)* / *(high)* run only at that involve level or above; all checkpoints **auto-skip when headless** (see [Involvement & Checkpoints](#involvement--checkpoints)).
 
-1. **Detect emphasis & intensity** — infer research-vs-ideation lean from the request; read `--wild` (or a bare number) for intensity, else default 0.5. Confirm emphasis with ONE question only if genuinely ambiguous.
+1. **Detect emphasis, intensity & involvement** — infer research-vs-ideation lean; read `--wild` (or a bare number) for intensity, else default 0.5; read `--involve` (low/medium/high, default medium), else medium. Detect headless/subagent context → if headless, auto-skip any active checkpoints, and if any were skipped log them as a *Ran headless* line (at `--involve low` there are none, so nothing is logged — low stays identical to today). Confirm emphasis with ONE question only if genuinely ambiguous.
 2. **Light scoping** — 2–4 `AskUserQuestion` questions to bound the exploration (see below). Keep it light; exploration stays open.
-3. **Offer Visual Companion** (conditional, own message) — only if visual output (idea-landscape, option/cluster map, mind map, comparison matrix) is likely. See [Visual Companion](#visual-companion).
-4. **Research loop** — Plan → Search → Reflect → Iterate, weighted by emphasis. See [Research Engine](#research-engine).
-5. **Divergent ideation pass** — technique files + quota + iterate-past-obvious, weighted by emphasis & intensity. See [Divergent Ideation Engine](#divergent-ideation-engine).
-6. **Challenge pass** — steelman + strongest counter-argument + "what would disprove this" for each surviving direction/cluster.
-7. **Synthesize the adaptive artifact** — using `exploration-artifact-template.md`.
-8. **Auto-save** — write to `docs/quirk/explorations/YYYY-MM-DD-<topic>.md` with the NOT-a-spec banner.
-9. **Close with optional handoff** — recap + a user-initiated offer to carry a direction into `brainstorming` → `writing-plans`.
+3. **Plan-preview checkpoint** *(medium+)* — before any agent runs, surface the plan (emphasis + intensity + involve, research facets, queued techniques, rough scope) and invite *go / adjust scope / add-drop a facet / change a dial*. See [interaction-model.md](references/interaction-model.md).
+4. **Offer Visual Companion** (conditional, own message) — only if visual output (idea-landscape, option/cluster map, mind map, comparison matrix) is likely. See [Visual Companion](#visual-companion).
+5. **Research loop** — Plan → Search → Reflect → Iterate, weighted by emphasis. See [Research Engine](#research-engine).
+6. **Post-research checkpoint** *(high)* — surface findings + gaps; invite a redirect before ideation.
+7. **Divergent ideation pass** — technique files + quota + iterate-past-obvious, weighted by emphasis & intensity. See [Divergent Ideation Engine](#divergent-ideation-engine).
+8. **Idea-landscape review + co-creation** *(medium+)* — surface the N directions (insight-paired); invite react / go-deeper / add-your-own, then **re-ideate** (drop killed, expand flagged, ideate added, one short refill pass holding the quality gate). No ranking. See [interaction-model.md](references/interaction-model.md).
+9. **Challenge pass** — steelman + strongest counter-argument + "what would disprove this" for each surviving direction/cluster.
+10. **Synthesize the adaptive artifact** — using `exploration-artifact-template.md`.
+11. **Pre-save artifact review checkpoint** *(high)* — show the assembled exploration doc, accept edits (still an exploration doc, never a spec), then save.
+12. **Auto-save** — write to `docs/quirk/explorations/YYYY-MM-DD-<topic>.md` with the NOT-a-spec banner.
+13. **Close with optional handoff** — recap + a user-initiated offer to carry a direction into `brainstorming` → `writing-plans`.
 
 ## Process Flow
 
 ```dot
 digraph exploring {
-  "Detect emphasis & intensity" [shape=box];
+  // Boxes = phases; diamonds = checkpoints. A checkpoint auto-skips below its
+  // tagged involve level, and whenever the run is headless (the dial gate).
+  "Detect emphasis,\nintensity & involve" [shape=box];
   "Light scoping (2-4 Q)" [shape=box];
+  "Plan-preview checkpoint\n(medium+)" [shape=diamond];
   "Offer Visual Companion\n(own message, conditional)" [shape=box];
   "Research loop\n(Plan->Search->Reflect->Iterate)" [shape=box];
+  "Post-research checkpoint\n(high)" [shape=diamond];
   "Divergent ideation pass\n(techniques + quota + iterate-past-obvious)" [shape=box];
+  "Idea-landscape review + co-creation\n(medium+): react/add/kill" [shape=diamond];
   "Challenge pass\n(steelman + counter + disprove)" [shape=box];
   "Synthesize adaptive artifact" [shape=box];
+  "Pre-save artifact review\n(high)" [shape=diamond];
   "Auto-save (NOT-a-spec banner)" [shape=box];
   "Close: optional user-initiated handoff" [shape=doublecircle];
 
-  "Detect emphasis & intensity" -> "Light scoping (2-4 Q)";
-  "Light scoping (2-4 Q)" -> "Offer Visual Companion\n(own message, conditional)";
+  "Dial gate: checkpoints auto-skip\nbelow tagged level OR when headless" [shape=note];
+  "Standing steer: redirect anytime;\nhonored at next phase boundary" [shape=note];
+
+  "Detect emphasis,\nintensity & involve" -> "Light scoping (2-4 Q)";
+  "Light scoping (2-4 Q)" -> "Plan-preview checkpoint\n(medium+)";
+  "Plan-preview checkpoint\n(medium+)" -> "Offer Visual Companion\n(own message, conditional)";
   "Offer Visual Companion\n(own message, conditional)" -> "Research loop\n(Plan->Search->Reflect->Iterate)";
-  "Research loop\n(Plan->Search->Reflect->Iterate)" -> "Divergent ideation pass\n(techniques + quota + iterate-past-obvious)";
-  "Divergent ideation pass\n(techniques + quota + iterate-past-obvious)" -> "Research loop\n(Plan->Search->Reflect->Iterate)" [label="gaps surfaced by ideation"];
-  "Divergent ideation pass\n(techniques + quota + iterate-past-obvious)" -> "Challenge pass\n(steelman + counter + disprove)";
+  "Research loop\n(Plan->Search->Reflect->Iterate)" -> "Post-research checkpoint\n(high)";
+  "Post-research checkpoint\n(high)" -> "Divergent ideation pass\n(techniques + quota + iterate-past-obvious)";
+  "Divergent ideation pass\n(techniques + quota + iterate-past-obvious)" -> "Idea-landscape review + co-creation\n(medium+): react/add/kill";
+  "Idea-landscape review + co-creation\n(medium+): react/add/kill" -> "Challenge pass\n(steelman + counter + disprove)";
   "Challenge pass\n(steelman + counter + disprove)" -> "Synthesize adaptive artifact";
-  "Synthesize adaptive artifact" -> "Auto-save (NOT-a-spec banner)";
+  "Synthesize adaptive artifact" -> "Pre-save artifact review\n(high)";
+  "Pre-save artifact review\n(high)" -> "Auto-save (NOT-a-spec banner)";
   "Auto-save (NOT-a-spec banner)" -> "Close: optional user-initiated handoff";
+
+  // Loops, re-ideation, and rewind — all preserve prior outputs:
+  "Divergent ideation pass\n(techniques + quota + iterate-past-obvious)" -> "Research loop\n(Plan->Search->Reflect->Iterate)" [label="gaps surfaced by ideation"];
+  "Idea-landscape review + co-creation\n(medium+): react/add/kill" -> "Divergent ideation pass\n(techniques + quota + iterate-past-obvious)" [label="re-ideate (drop/expand/add)"];
+  "Idea-landscape review + co-creation\n(medium+): react/add/kill" -> "Research loop\n(Plan->Search->Reflect->Iterate)" [style=dashed, label="rewind: 'research X' (preserve outputs)"];
+  "Post-research checkpoint\n(high)" -> "Research loop\n(Plan->Search->Reflect->Iterate)" [style=dashed, label="redirect: another round"];
+
+  // Convergence at any checkpoint never makes a spec — it routes to the handoff:
+  "Idea-landscape review + co-creation\n(medium+): react/add/kill" -> "Close: optional user-initiated handoff" [style=dashed, label="convergence -> brainstorming handoff (HARD-GATE)"];
 }
 ```
 
-The research loop and divergent pass are weighted by emphasis — one may be brief — and feed each other: research grounds ideation; ideation surfaces new gaps to research.
+The research loop and divergent pass are weighted by emphasis — one may be brief — and feed each other: research grounds ideation; ideation surfaces new gaps to research. Checkpoints (diamonds) only fire at their tagged involve level or above and disappear entirely when the run is headless; between them the standing-steer invite stays open, honored at the next phase boundary.
 
 ## Emphasis Auto-Detection
 
@@ -91,6 +117,21 @@ Orthogonal to emphasis. Default **0.5**; user-settable and adjustable mid-sessio
 Intensity modulates idea count/quota, unconventionality, risk tolerance, and which techniques fire.
 
 **Invariant — the bar that does NOT move with intensity:** every idea must still pass the insight-pairing quality gate, factual claims stay accurate, and the no-spec HARD-GATE holds. High intensity yields *wilder grounded ideas*, never noise.
+
+## Involvement & Checkpoints
+
+`--involve` (low | medium | high; default **medium**) controls *how much the skill pauses to include you* — frequency of touchpoints, never the quality bar. Read [interaction-model.md](references/interaction-model.md) for the full mechanics; the load-bearing summary:
+
+| Level | Checkpoints | Co-creation |
+|---|---|---|
+| **low** | none — today's scoping + handoff only | none |
+| **medium** *(default)* | plan preview + idea-landscape review | react / add / kill at the idea gate |
+| **high** | medium + post-research + pre-save artifact review | + per-direction depth prompts |
+
+- **Set at invocation** (`--involve high`; `lo`/`med`/`hi` aliases) or **mid-session** — *"check in less"* drops a level, *"check in more"* raises one; changes apply to all later phases.
+- **Steering vocabulary** (recognized anytime; between-checkpoint input is honored at the next phase boundary): **Direction** — `go deeper on X` / `drop Y` / `add angle Z`; **Dials** — `dial it up` / `keep it grounded` (→ `--wild`), `check in more` / `less` (→ `--involve`); **Scope** — `narrow to …` / `also explore …`. A steer implying an earlier phase **rewinds** to it, preserving prior outputs and logging a *Branch* note.
+- **Checkpoints steer/expand only.** Any convergence move ("this one wins, let's build it") routes to the `brainstorming` handoff — never an inline spec. HARD-GATE holds at every checkpoint.
+- **Headless = no checkpoints.** When run non-interactively (subagent/pipeline), all active checkpoints auto-skip and behavior equals today's autonomous pipeline; if any checkpoint was skipped, log it as a *Ran headless* line in the artifact. At `--involve low` there are no checkpoints to skip, so nothing is logged — `low` is byte-for-behavior identical to the pre-`--involve` skill, headless or not.
 
 ## Light Scoping
 
@@ -157,7 +198,8 @@ If they accept, read `visual-companion.md` for the full mechanics. Decide **per 
 ## Key Principles
 
 - **Explore, don't converge** — the HARD-GATE is the whole point. No spec, no winner, no code.
-- **Two dials, set both** — emphasis (auto) and intensity (`--wild`).
+- **Three dials** — emphasis (auto), intensity (`--wild`), involvement (`--involve`).
+- **Involvement moves frequency, not the bar** — more checkpoints, never lower standards; `low` == today; headless skips them all.
 - **Hold the insight bar constant** — wilder at high intensity, never noisier.
 - **Research in parallel, never sequentially** — same-phase agents ship in one message.
 - **Insight-pair every direction** — the grounded "why" is mandatory.

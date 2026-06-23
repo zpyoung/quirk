@@ -10,6 +10,8 @@ EVERY section present. The banner is mandatory and must be the first line.
 - No winner declared. Preserve tensions; do not resolve them.
 - Every idea direction is insight-paired. Every factual claim is sourced (or marked unverified).
 
+The *Steered*, *Branches*, *Set aside (user)*, and *Ran headless* lines below are **optional and additive** — include one only when it happened. They record `--involve` provenance and never change the banner, the no-winner rule, or insight-pairing.
+
 ---
 
 ```markdown
@@ -26,6 +28,9 @@ The question or goal, and how it was scoped (depth, recency, constraints, what i
 - Facets / sub-questions investigated (research)
 - Directions generated (brainstorm)
 - Anything deliberately left out of scope
+- _Steered (optional):_ one-line summary of how the user redirected the run
+- _Branches (optional):_ rewind note — which phase it looped back to, and why
+- _Ran headless (optional):_ checkpoints auto-skipped; would-be decisions/defaults taken in their place
 
 ## Findings / Idea landscape
 Cited findings grouped by theme (research) and/or clustered idea directions (brainstorm).
@@ -43,6 +48,8 @@ NO winner declared. Each idea direction is insight-paired:
 ### Theme: <name>
 - <finding> — <source>
 - <finding> — <source>
+
+_Set aside (user) (optional):_ directions the user killed at the idea gate — listed for honest provenance, not as live directions.
 
 ## Tensions & trade-offs
 Where findings or directions conflict. State the tension; do not pick a side.
