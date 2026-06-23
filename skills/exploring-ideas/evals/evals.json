@@ -4,7 +4,7 @@
     {
       "id": 1,
       "prompt": "Do deep research on the current state of local-first software sync engines.",
-      "expected_output": "Research-heavy run at the default involve=medium: a plan-preview checkpoint follows scoping (facets/rounds shown) before agents run; then plans facets, fans out parallel web-research-agents, iterates on gaps; a findings/idea-landscape review checkpoint follows the first pass. Produces and AUTO-SAVES docs/quirk/explorations/<date>-local-first-sync.md opening with the '🧭 EXPLORATION — not a spec' banner. Themed, cited findings with a Sources section; Tensions and Open-questions sections present. NO spec, requirements, locked decisions, or implementation plan. Ends by offering the brainstorming handoff but does not invoke it.",
+      "expected_output": "Research-heavy run at the default involve=medium: a plan-preview checkpoint follows scoping (facets/rounds shown) before agents run; then plans facets, fans out parallel web-research-agents, iterates on gaps; a findings/idea-landscape review checkpoint (Checkpoint 2) follows the first divergent ideation pass, before challenge + synthesis. Produces and AUTO-SAVES docs/quirk/explorations/<date>-local-first-sync.md opening with the '🧭 EXPLORATION — not a spec' banner. Themed, cited findings with a Sources section; Tensions and Open-questions sections present. NO spec, requirements, locked decisions, or implementation plan. Ends by offering the brainstorming handoff but does not invoke it.",
       "files": []
     },
     {

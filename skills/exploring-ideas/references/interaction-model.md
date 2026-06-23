@@ -11,7 +11,7 @@ Everything here **steers or expands only**. No checkpoint, steering move, or co-
 | Level | Checkpoints | Co-creation | Steering |
 |---|---|---|---|
 | **low** | none (today's scoping + handoff only) | none | standing invite still honored |
-| **medium** *(default)* | plan preview + idea-landscape | react / add / kill at the idea gate | full vocabulary |
+| **medium** *(default)* | plan preview + idea-landscape | react / go-deeper / add-your-own at the idea gate | full vocabulary |
 | **high** | medium + post-research + pre-save artifact review | + per-direction depth prompts | full vocabulary |
 
 - **Default medium.** Set at invocation (`--involve high`; `lo`/`med`/`hi` aliases accepted) or adjusted mid-session: *"check in less"* drops a level, *"check in more"* raises one.
@@ -107,7 +107,7 @@ Runs at Checkpoint 2 (`medium+`). The user reacts to the surfaced directions and
 
   No rigid forced-choice prompt — exploration stays conversational. An empty or *"looks good"* response just continues to the challenge pass.
 
-- **Visual Companion optional.** When the companion is active, render the directions as clickable **`<agent-option-set data-multiselect>`** cards (keep / drop / deeper); selection events flow through the existing `events` JSONL channel. See `visual-companion.md` → *Idea-gate co-creation*. No new component model.
+- **Visual Companion optional.** When the companion is active, render the directions as clickable **`<agent-option-set data-multiselect>`** cards. A multi-select set yields a single `selected[]`, so the browser carries exactly one signal — **go-deeper** (the directions to expand). Unselected ≠ dropped (keep is the default); **drop** and **add-your-own** come from terminal text, which stays primary. Selection events flow through the existing `events` JSONL channel. See `visual-companion.md` → *Idea-gate co-creation*. No new component model.
 
 ### Actions
 

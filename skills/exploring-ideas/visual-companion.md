@@ -119,14 +119,14 @@ These are exploratory, not ranked — flag the ones that intrigue you.
 
 **Multi-select** (shown above with `data-multiselect`) suits idea-landscapes well — the user can flag several directions to explore further. The footer shows the count. Selecting one choice in a single-select set deselects its siblings. Add `selected` to a choice only for an initial selection.
 
-### Idea-gate co-creation (keep / drop / deeper)
+### Idea-gate co-creation (go-deeper flags)
 
 This is the browser surface for **Checkpoint 2 — the idea-landscape co-creation gate** (`--involve medium+`; see `references/interaction-model.md`). It reuses the same `<agent-option-set>` component — no new model. Render the directions surfaced by the first ideation pass as multi-select cards, one card per direction, each carrying its insight-pairing line:
 
 ```markdown
-## Which directions should we keep exploring?
+## Which directions should I go deeper on?
 
-Exploratory, not ranked — flag the ones to keep, and tell me in the terminal what to drop or add.
+Exploratory, not ranked — flag the ones to expand. Tell me in the terminal what to drop or add; everything else stays.
 
 <agent-option-set data-multiselect>
   <agent-choice id="behavioral-profile" title="Behavioral auto-profile">Build the profile from usage, no forms · *why it might work:* removes the blank-form drop-off</agent-choice>
@@ -135,9 +135,11 @@ Exploratory, not ranked — flag the ones to keep, and tell me in the terminal w
 </agent-option-set>
 ```
 
-- **Selected = keep / go-deeper; unselected = candidate to drop.** Read the final `selected` set from the `events` JSONL (see [Browser Events Format](#browser-events-format)) and merge it with the user's terminal text — the terminal is primary and is where **add-your-own** and explicit drops arrive (the browser has no free-text input).
+- **The browser carries one signal: go-deeper.** A multi-select set yields only a single `selected[]` (see [Browser Events Format](#browser-events-format)), so it maps to exactly one action — the directions to **expand**. Do not overload it with keep/drop semantics.
+- **Unselected ≠ dropped.** Keep is the default: a direction the user simply didn't click stays in the landscape. Never discard directions just because they were left unselected.
+- **Drop and add-your-own come from the terminal.** The browser has no free-text input and no reliable third state, so explicit drops ("kill #2") and new directions arrive as terminal text — which is primary. Merge that text with the go-deeper set.
 - **No ranking, ever** — multi-select flags interest without ordering. Do not add scores, stars, or a "best" affordance; that would breach the no-winner gate in the browser too.
-- After reading selections, run the **re-ideate loop** (drop / expand / ideate-added / one short refill pass), then push a fresh screen or unload to the terminal for the challenge pass.
+- After reading the go-deeper set + terminal text, run the **re-ideate loop** (drop / expand / ideate-added / one short refill pass), then push a fresh screen or unload to the terminal for the challenge pass.
 
 ### Other islands
 

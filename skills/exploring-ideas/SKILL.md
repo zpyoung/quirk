@@ -59,7 +59,7 @@ digraph exploring {
   "Research loop\n(Plan->Search->Reflect->Iterate)" [shape=box];
   "Post-research checkpoint\n(high)" [shape=diamond];
   "Divergent ideation pass\n(techniques + quota + iterate-past-obvious)" [shape=box];
-  "Idea-landscape review + co-creation\n(medium+): react/add/kill" [shape=diamond];
+  "Idea-landscape review + co-creation\n(medium+): react/go-deeper/add" [shape=diamond];
   "Challenge pass\n(steelman + counter + disprove)" [shape=box];
   "Synthesize adaptive artifact" [shape=box];
   "Pre-save artifact review\n(high)" [shape=diamond];
@@ -75,8 +75,8 @@ digraph exploring {
   "Offer Visual Companion\n(own message, conditional)" -> "Research loop\n(Plan->Search->Reflect->Iterate)";
   "Research loop\n(Plan->Search->Reflect->Iterate)" -> "Post-research checkpoint\n(high)";
   "Post-research checkpoint\n(high)" -> "Divergent ideation pass\n(techniques + quota + iterate-past-obvious)";
-  "Divergent ideation pass\n(techniques + quota + iterate-past-obvious)" -> "Idea-landscape review + co-creation\n(medium+): react/add/kill";
-  "Idea-landscape review + co-creation\n(medium+): react/add/kill" -> "Challenge pass\n(steelman + counter + disprove)";
+  "Divergent ideation pass\n(techniques + quota + iterate-past-obvious)" -> "Idea-landscape review + co-creation\n(medium+): react/go-deeper/add";
+  "Idea-landscape review + co-creation\n(medium+): react/go-deeper/add" -> "Challenge pass\n(steelman + counter + disprove)";
   "Challenge pass\n(steelman + counter + disprove)" -> "Synthesize adaptive artifact";
   "Synthesize adaptive artifact" -> "Pre-save artifact review\n(high)";
   "Pre-save artifact review\n(high)" -> "Auto-save (NOT-a-spec banner)";
@@ -84,12 +84,12 @@ digraph exploring {
 
   // Loops, re-ideation, and rewind — all preserve prior outputs:
   "Divergent ideation pass\n(techniques + quota + iterate-past-obvious)" -> "Research loop\n(Plan->Search->Reflect->Iterate)" [label="gaps surfaced by ideation"];
-  "Idea-landscape review + co-creation\n(medium+): react/add/kill" -> "Divergent ideation pass\n(techniques + quota + iterate-past-obvious)" [label="re-ideate (drop/expand/add)"];
-  "Idea-landscape review + co-creation\n(medium+): react/add/kill" -> "Research loop\n(Plan->Search->Reflect->Iterate)" [style=dashed, label="rewind: 'research X' (preserve outputs)"];
+  "Idea-landscape review + co-creation\n(medium+): react/go-deeper/add" -> "Divergent ideation pass\n(techniques + quota + iterate-past-obvious)" [label="re-ideate (drop/expand/add)"];
+  "Idea-landscape review + co-creation\n(medium+): react/go-deeper/add" -> "Research loop\n(Plan->Search->Reflect->Iterate)" [style=dashed, label="rewind: 'research X' (preserve outputs)"];
   "Post-research checkpoint\n(high)" -> "Research loop\n(Plan->Search->Reflect->Iterate)" [style=dashed, label="redirect: another round"];
 
   // Convergence at any checkpoint never makes a spec — it routes to the handoff:
-  "Idea-landscape review + co-creation\n(medium+): react/add/kill" -> "Close: optional user-initiated handoff" [style=dashed, label="convergence -> brainstorming handoff (HARD-GATE)"];
+  "Idea-landscape review + co-creation\n(medium+): react/go-deeper/add" -> "Close: optional user-initiated handoff" [style=dashed, label="convergence -> brainstorming handoff (HARD-GATE)"];
 }
 ```
 
@@ -125,7 +125,7 @@ Intensity modulates idea count/quota, unconventionality, risk tolerance, and whi
 | Level | Checkpoints | Co-creation |
 |---|---|---|
 | **low** | none — today's scoping + handoff only | none |
-| **medium** *(default)* | plan preview + idea-landscape review | react / add / kill at the idea gate |
+| **medium** *(default)* | plan preview + idea-landscape review | react / go-deeper / add-your-own at the idea gate |
 | **high** | medium + post-research + pre-save artifact review | + per-direction depth prompts |
 
 - **Set at invocation** (`--involve high`; `lo`/`med`/`hi` aliases) or **mid-session** — *"check in less"* drops a level, *"check in more"* raises one; changes apply to all later phases.
