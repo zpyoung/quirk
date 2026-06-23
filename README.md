@@ -2,11 +2,11 @@
 
 Core skills library for Claude Code: TDD, debugging, collaboration patterns, typed artifacts, and proven techniques.
 
-Version: **5.7.0**
+Version: **5.9.0**
 
 ## What ships
 
-- **20 skills** under `skills/` covering TDD, systematic debugging, brainstorming, deep-research/brainstorming exploration, divergent ideation, plan writing, code review, parallel agent dispatch, and more.
+- **20 skills** under `skills/` covering TDD, systematic debugging, brainstorming, deep-research/brainstorming exploration (with a `--involve` user-inclusion dial: checkpoints, mid-run steering, and idea-gate co-creation), divergent ideation, plan writing, code review, parallel agent dispatch, and more.
 - **Typed artifacts** (added in 5.1.0) — surface-routing for observations Claude cannot act on. See below.
 
 ## Installation

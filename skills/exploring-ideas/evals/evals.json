@@ -4,31 +4,79 @@
     {
       "id": 1,
       "prompt": "Do deep research on the current state of local-first software sync engines.",
-      "expected_output": "Research-heavy run: plans facets, fans out parallel web-research-agents, iterates on gaps. Produces and AUTO-SAVES docs/quirk/explorations/<date>-local-first-sync.md opening with the '🧭 EXPLORATION — not a spec' banner. Themed, cited findings with a Sources section; Tensions and Open-questions sections present. NO spec, requirements, locked decisions, or implementation plan. Ends by offering the brainstorming handoff but does not invoke it.",
+      "expected_output": "Research-heavy run at the default involve=medium: a plan-preview checkpoint follows scoping (facets/rounds shown) before agents run; then plans facets, fans out parallel web-research-agents, iterates on gaps; a findings/idea-landscape review checkpoint (Checkpoint 2) follows the first divergent ideation pass, before challenge + synthesis. Produces and AUTO-SAVES docs/quirk/explorations/<date>-local-first-sync.md opening with the '🧭 EXPLORATION — not a spec' banner. Themed, cited findings with a Sources section; Tensions and Open-questions sections present. NO spec, requirements, locked decisions, or implementation plan. Ends by offering the brainstorming handoff but does not invoke it.",
       "files": []
     },
     {
       "id": 2,
       "prompt": "Let's brainstorm ideas around making a habit-tracking app that doesn't feel like a chore.",
-      "expected_output": "Ideation-heavy run at default intensity 0.5. Light scoping (2-4 questions) then surfaces >=5 distinct directions before drilling. Each direction is insight-paired with a one-line 'why this might actually work'. A challenge pass adds steelman + counter-argument per strong direction. Auto-saves an idea-landscape artifact with the banner and NO winner declared. No spec produced; handoff offered, not auto-invoked.",
+      "expected_output": "Ideation-heavy run at default intensity 0.5 and default involve=medium. Light scoping (2-4 questions); a plan-preview checkpoint then follows scoping (before ideation); then >=5 distinct directions are surfaced and an idea-landscape co-creation gate offers react / go-deeper / add-your-own (no ranking) before drilling. Each direction is insight-paired with a one-line 'why this might actually work'. A challenge pass adds steelman + counter-argument per strong direction. Auto-saves an idea-landscape artifact with the banner and NO winner declared. No spec produced; handoff offered, not auto-invoked.",
       "files": []
     },
     {
       "id": 3,
       "prompt": "explore wild monetization ideas for an open-source CLI tool --wild 0.9",
-      "expected_output": "Intensity parsed as 0.9 (Bold). Pulls in disruptive techniques (deliberately-wrong, contrarian-inversion, extreme-casing); larger quota (>=7) of genuinely unconventional directions. EVERY direction still passes the insight-pairing quality gate (no 'weird-for-weird's-sake' noise) and factual claims stay accurate. Auto-saved artifact records Intensity: 0.9 (Bold). Still no spec; handoff offered only.",
+      "expected_output": "Intensity parsed as 0.9 (Bold); no --involve given so it runs at default involve=medium (plan-preview checkpoint after scoping, idea-landscape co-creation gate after the first pass). Pulls in disruptive techniques (deliberately-wrong, contrarian-inversion, extreme-casing); larger quota (>=7) of genuinely unconventional directions. EVERY direction still passes the insight-pairing quality gate (no 'weird-for-weird's-sake' noise) and factual claims stay accurate. Auto-saved artifact records Intensity: 0.9 (Bold). Still no spec; handoff offered only.",
       "files": []
     },
     {
       "id": 4,
       "prompt": "explore wild monetization ideas for an open-source CLI tool --wild 0.2",
-      "expected_output": "Same prompt at intensity 0.2 (Grounded): visibly fewer, more conventional/adjacent directions (quota >=3) than eval 3, while still insight-paired and accurate. Demonstrates the intensity dial modulating idea count and unconventionality without changing the no-spec gate or the insight bar.",
+      "expected_output": "Same prompt at intensity 0.2 (Grounded): visibly fewer, more conventional/adjacent directions (quota >=3) than eval 3, while still insight-paired and accurate. Like eval 3 it runs at default involve=medium, so the plan-preview and idea-landscape checkpoints fire in both — the contrast here is intensity only. Demonstrates the intensity dial modulating idea count and unconventionality without changing the no-spec gate or the insight bar.",
       "files": []
     },
     {
       "id": 5,
       "prompt": "Build me a Stripe billing integration for my SaaS.",
       "expected_output": "ROUTING NEGATIVE: this is a build request and must NOT trigger exploring-ideas. The correct skill is quirk:brainstorming (creative work that converges to a spec). exploring-ideas should not engage.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "Brainstorm ideas for reducing onboarding friction in a developer tool.",
+      "expected_output": "Default involve=medium. After light scoping, a PLAN-PREVIEW checkpoint appears (emphasis + intensity + involve, research facets, queued techniques, rough scope) inviting go/adjust/add-drop facet/change dial. After the first ideation pass, an IDEA-LANDSCAPE review checkpoint surfaces the N insight-paired directions and OFFERS co-creation (react / go-deeper / add-your-own, no ranking). No post-research or pre-save checkpoint at medium. Auto-saves docs/quirk/explorations/<date>-*.md with the '🧭 EXPLORATION — not a spec' banner; NO spec, no winner. Handoff offered, not invoked.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "explore monetization angles for a paid newsletter --involve low",
+      "expected_output": "involve=low parsed. NO new checkpoints and NO co-creation prompt — only today's light scoping + close-with-handoff touchpoints. Runs the autonomous pipeline (research/ideation/challenge/synthesize/auto-save) end-to-end. Auto-saves with the NOT-a-spec banner; no spec, no winner. The standing-steer invite is still honored if the user interjects, but the skill never pauses on its own.",
+      "files": []
+    },
+    {
+      "id": 8,
+      "prompt": "research and brainstorm retention strategies for a fitness app --involve high",
+      "expected_output": "involve=high parsed. FOUR checkpoints fire in this order: plan-preview after scoping, then post-research before ideation ('here's what I found + gaps — redirect?'), then idea-landscape co-creation after ideation, then PRE-SAVE artifact review before auto-save (shows the assembled exploration doc, accepts edits). Per-direction depth prompts offered at the direction/finding checkpoints. The pre-save doc stays an exploration doc — edits may not add a winner, decisions, or build steps. Auto-saves to docs/quirk/explorations/<date>-*.md with the '🧭 EXPLORATION — not a spec' banner; no spec.",
+      "files": []
+    },
+    {
+      "id": 9,
+      "prompt": "[mid-session, directions already surfaced at the idea-landscape gate] Great — let's just build the 2nd one.",
+      "expected_output": "HARD-GATE: convergence at the idea gate must NOT produce an inline spec, ranking, locked decision, or declared winner. The skill offers the brainstorming handoff instead ('that's the build step — want me to carry [direction] into quirk:brainstorming -> writing-plans?') and stays in exploration. The exploration artifact is still saved with the NOT-a-spec banner.",
+      "files": []
+    },
+    {
+      "id": 10,
+      "prompt": "[mid-session, ideation has already started] Actually, can you research the privacy-regulation angle first?",
+      "expected_output": "REWIND: the steer implies an earlier phase, so the skill loops back to the research loop, runs the new facet, and resumes forward — PRESERVING all prior outputs (nothing discarded). A 'Branches' note is logged in the artifact (which phase it looped back to and why). Still no spec; the exploration artifact is still auto-saved to docs/quirk/explorations/<date>-*.md with the '🧭 EXPLORATION — not a spec' banner intact.",
+      "files": []
+    },
+    {
+      "id": 11,
+      "prompt": "[invoked as a subagent / non-interactive pipeline] Explore approaches to caching for a read-heavy API.",
+      "expected_output": "HEADLESS-SAFE: best-effort detection flags the run as non-interactive, so ALL checkpoints and the co-creation prompt AUTO-SKIP and behavior equals today's autonomous pipeline. A 'Ran headless' line is logged in the artifact recording that checkpoints were skipped and which would-be decisions/defaults were taken. Auto-saves with the NOT-a-spec banner; no spec, no blocking on input that will never arrive.",
+      "files": []
+    },
+    {
+      "id": 12,
+      "prompt": "[mid-session at involve=medium] check in less",
+      "expected_output": "Mid-run dial change: '--involve' drops one level (medium -> low), so subsequent checkpoints are removed for the rest of the session (e.g. the idea-landscape gate is skipped if not yet reached). Recognized as a dial command, not a content request. 'check in more' would raise a level symmetrically. No effect on the HARD-GATE or insight bar. When the run reaches synthesis it still auto-saves to docs/quirk/explorations/<date>-*.md with the '🧭 EXPLORATION — not a spec' banner and emits no spec/winner.",
+      "files": []
+    },
+    {
+      "id": 13,
+      "prompt": "explore wild monetization ideas for an open-source CLI tool --wild 0.9 --involve low",
+      "expected_output": "NO-REGRESSION (low == today): same prompt as eval 3 but with --involve low. Must reproduce eval 3's INTENSITY/IDEATION trace exactly — intensity 0.9 (Bold), disruptive techniques, quota >=7, every direction insight-paired and accurate — while STRIPPING eval 3's default-medium checkpoints: no plan-preview, no idea-landscape co-creation, no post-research/pre-save, no co-creation prompt (this is the pre-'--involve' behavior). Confirms 'low == today': the dial addition adds nothing power users didn't already have. Auto-saves to docs/quirk/explorations/<date>-*.md with the '🧭 EXPLORATION — not a spec' banner; no spec.",
       "files": []
     }
   ]
