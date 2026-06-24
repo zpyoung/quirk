@@ -4,7 +4,12 @@ Use this template when dispatching a plan document reviewer subagent.
 
 **Purpose:** Verify the plan is complete, matches the spec, and has proper task decomposition.
 
-**Dispatch after:** The complete plan is written.
+**Dispatch:** Automatically, by default, once the in-context plan is drafted (the execution
+skill's planning phase) — this is the standard review step, not optional, and replaces any human
+approval gate.
+
+**Input:** Paste the plan text **inline** (the plan lives in context, not a file). Paste the spec
+text or its path for reference. The reviewer does not read a plan file.
 
 ```
 Task tool (general-purpose):
@@ -12,8 +17,10 @@ Task tool (general-purpose):
   prompt: |
     You are a plan document reviewer. Verify this plan is complete and ready for implementation.
 
-    **Plan to review:** [PLAN_FILE_PATH]
-    **Spec for reference:** [SPEC_FILE_PATH]
+    **Plan to review (inline):**
+    [PASTE FULL PLAN TEXT HERE]
+
+    **Spec for reference:** [PASTE SPEC TEXT OR SPEC_FILE_PATH]
 
     ## What to Check
 

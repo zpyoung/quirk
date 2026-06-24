@@ -1,11 +1,18 @@
 ---
 name: writing-plans
-description: Use when you have a spec or requirements for a multi-step task, before touching code
+description: The planning rubric the execution skills run in-context at the start of a run — turns a spec or requirements into a task breakdown (contracts, acceptance, parallelism) before code
 ---
 
 # Writing Plans
 
 ## Overview
+
+> **How this skill is used:** Planning is **not a separate step** anymore. The execution
+> skills (`quirk:subagent-driven-development` and `quirk:executing-plans`) invoke this skill
+> as their first phase to build the plan **in the orchestrator's working context** — the
+> conversation plus a TodoWrite task list — and then proceed straight into execution. A plan
+> *file* is optional (see "Where the plan lives"). This rubric defines *what a good plan
+> contains*; the calling skill owns *when* it runs and *where* the plan is held.
 
 A plan is a **specification of intent, behavior, and contracts that a skilled implementor executes — not a transcript of code to paste.** It answers WHAT must be built and WHY this approach was chosen, and leaves HOW — the actual code — to the implementor, who has full repository context and will write better code than you can pre-write blind. **The implementor writes the code.**
 
@@ -13,12 +20,21 @@ Write for an implementor who has **zero context for our codebase** and needs the
 
 DRY. YAGNI. TDD. Frequent commits.
 
-**Announce at start:** "I'm using the writing-plans skill to create the implementation plan."
+**Announce at start:** "I'm building the implementation plan in context (writing-plans rubric)."
 
-**Context:** This should be run in a dedicated worktree (created by brainstorming skill).
+**Context:** Runs inside the execution skill's worktree (the execution skill, or brainstorming before it, owns worktree setup).
 
-**Save plans to:** `docs/quirk/plans/YYYY-MM-DD-<feature-name>.md`
-- (User preferences for plan location override this default)
+## Where the plan lives
+
+**Default: in context, not a file.** The plan is the task breakdown the orchestrator holds in
+the conversation **and writes into a TodoWrite list** — one item per task, each carrying its
+contract / acceptance / parallelism fields. TodoWrite is the durable home: it survives context
+compaction, so the breakdown isn't lost if the conversation is summarized mid-run.
+
+**Persist to a file only when you need to** — on explicit request, or to hand the plan to a
+*separate session* (the `quirk:executing-plans` cross-session path), or for a durable record.
+When you do, save to `docs/quirk/plans/YYYY-MM-DD-<feature-name>.md` (user preferences override
+this location). Persisting is a copy of the in-context plan, not a precondition for execution.
 
 ## The No-Code Rule
 
@@ -117,7 +133,7 @@ See **quirk:subagent-driven-development → The Process → Step 0b** for the fu
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use quirk:subagent-driven-development (recommended) or quirk:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. "Follow the step exactly" means **satisfy the stated acceptance criteria** — if a contract is ambiguous, ask before guessing.
 
-**Status:** Draft | Under Review | Approved | Superseded
+**Status:** Draft | Superseded   (the plan is reviewed by an agent automatically before execution — there is no human approval gate)
 
 **Goal:** [One sentence describing what this builds]
 
@@ -245,22 +261,15 @@ After writing the complete plan, look at the spec with fresh eyes and check the 
 
 If you find issues, fix them inline. No need to re-review — just fix and move on. If you find a spec requirement with no task, add the task.
 
-## Execution Handoff
+## After the plan: agent review, then execute
 
-After saving the plan, offer execution choice:
+There is **no separate handoff step and no human approval gate** — you are already inside the
+execution skill that invoked this rubric. Two things happen next, both owned by the calling skill:
 
-**"Plan complete and saved to `docs/quirk/plans/<filename>.md`. Two execution options:**
-
-**1. Subagent-Driven (recommended)** - I dispatch a fresh subagent per task, review between tasks, fast iteration
-
-**2. Inline Execution** - Execute tasks in this session using executing-plans, batch execution with checkpoints
-
-**Which approach?"**
-
-**If Subagent-Driven chosen:**
-- **REQUIRED SUB-SKILL:** Use quirk:subagent-driven-development
-- Fresh subagent per task + three-pass review (spec, quality, Codex adversarial); orchestrator computes parallel waves from the task fields above
-
-**If Inline Execution chosen:**
-- **REQUIRED SUB-SKILL:** Use quirk:executing-plans
-- Batch execution with checkpoints for review
+1. **Agent review (default).** Dispatch the plan-document reviewer
+   (`plan-document-reviewer-prompt.md`) on the in-context plan. Apply its fixes inline. This
+   replaces the old human "Under Review → Approved" gate.
+2. **Execute.** Continue in the same skill — `quirk:subagent-driven-development` computes parallel
+   waves from the task fields above and runs the per-task pipeline; `quirk:executing-plans`
+   executes sequentially. No "which approach?" prompt here: the choice of execution skill was
+   already made when one of them invoked this rubric.

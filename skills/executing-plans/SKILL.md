@@ -1,13 +1,16 @@
 ---
 name: executing-plans
-description: Use when you have a written implementation plan to execute in a separate session with review checkpoints
+description: Use to implement a multi-step task sequentially in one session when subagents aren't available — plans in context, then executes
 ---
 
 # Executing Plans
 
 ## Overview
 
-Load plan, review critically, execute all tasks, report when complete.
+Plan in context, execute all tasks sequentially, report when complete. This is the
+no-subagents path: it builds the plan itself (no separate planning step) and runs the tasks in
+the same session. A persisted plan file is an **optional input** — used only when a plan was
+handed off from a *separate session*.
 
 **Announce at start:** "I'm using the executing-plans skill to implement this plan."
 
@@ -15,11 +18,15 @@ Load plan, review critically, execute all tasks, report when complete.
 
 ## The Process
 
-### Step 1: Load and Review Plan
-1. Read plan file
-2. Review critically - identify any questions or concerns about the plan
-3. If concerns: Raise them with your human partner before starting
-4. If no concerns: Create TodoWrite and proceed
+### Step 1: Build (or load) the plan, then review
+1. **Build the plan in context** via **quirk:writing-plans** — the task breakdown goes into this
+   conversation + a TodoWrite list, no file by default. *(If a persisted plan file was handed off
+   from another session, read it once to seed the in-context plan + TodoWrite instead.)*
+2. **Agent review (default):** dispatch the plan-document reviewer
+   (`../writing-plans/plan-document-reviewer-prompt.md`) on the in-context plan; apply its fixes
+   inline. No human approval gate.
+3. Only stop for your human partner if the reviewer surfaces a genuine ambiguity you cannot
+   resolve (otherwise proceed straight to execution).
 
 ### Step 2: Execute Tasks
 
@@ -66,5 +73,5 @@ After all tasks complete and verified:
 
 **Required workflow skills:**
 - **quirk:using-git-worktrees** - REQUIRED: Set up isolated workspace before starting
-- **quirk:writing-plans** - Creates the plan this skill executes
+- **quirk:writing-plans** - The planning rubric this skill runs in context as Step 1 (file optional)
 - **quirk:finishing-a-development-branch** - Complete development after all tasks
