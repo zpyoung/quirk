@@ -44,7 +44,7 @@ Create a TodoWrite item per step and complete in order. Steps tagged *(medium+)*
 10. **Synthesize the adaptive artifact** — using `exploration-artifact-template.md`.
 11. **Pre-save artifact review checkpoint** *(high)* — show the assembled exploration doc, accept edits (still an exploration doc, never a spec), then save.
 12. **Auto-save** — write to `docs/quirk/explorations/YYYY-MM-DD-<topic>.md` with the NOT-a-spec banner.
-13. **Close with optional handoff** — recap + a user-initiated offer to carry a direction into `brainstorming` → `writing-plans`.
+13. **Close with optional handoff** — recap + a user-initiated offer to carry a direction into `brainstorming` → execution (which plans in context).
 
 ## Process Flow
 
@@ -181,7 +181,7 @@ Remind the user to add `.quirk/` to `.gitignore` if they used the Visual Compani
 
 End with a short recap, then:
 
-> "This is exploration only. If you later want to turn a direction into something buildable, invoke `quirk:brainstorming` → `writing-plans`. Say the word and I'll carry [direction] over."
+> "This is exploration only. If you later want to turn a direction into something buildable, invoke `quirk:brainstorming` → an execution skill (which plans in context). Say the word and I'll carry [direction] over."
 
 Never automatic. If the user asks for a plan/spec mid-session, honor them (user instructions outrank the skill) by offering this handoff rather than silently producing a spec inside this skill.
 

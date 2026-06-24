@@ -15,21 +15,25 @@ Execute plan by dispatching fresh subagent per task, with a three-pass review af
 
 ```dot
 digraph when_to_use {
-    "Have implementation plan?" [shape=diamond];
+    "Have a spec / requirements?" [shape=diamond];
     "Tasks mostly independent?" [shape=diamond];
     "Stay in this session?" [shape=diamond];
     "subagent-driven-development" [shape=box];
     "executing-plans" [shape=box];
-    "Manual execution or brainstorm first" [shape=box];
+    "Brainstorm first" [shape=box];
 
-    "Have implementation plan?" -> "Tasks mostly independent?" [label="yes"];
-    "Have implementation plan?" -> "Manual execution or brainstorm first" [label="no"];
+    "Have a spec / requirements?" -> "Tasks mostly independent?" [label="yes"];
+    "Have a spec / requirements?" -> "Brainstorm first" [label="no"];
     "Tasks mostly independent?" -> "Stay in this session?" [label="yes"];
-    "Tasks mostly independent?" -> "Manual execution or brainstorm first" [label="no - tightly coupled"];
+    "Tasks mostly independent?" -> "executing-plans" [label="no - tightly coupled"];
     "Stay in this session?" -> "subagent-driven-development" [label="yes"];
     "Stay in this session?" -> "executing-plans" [label="no - parallel session"];
 }
 ```
+
+You do **not** need a written plan to start — this skill builds the plan in context as its
+first phase (**Step 0a**). You need a spec or requirements to plan *from*; if you don't have
+one, brainstorm first.
 
 **Parallel by default:** when the chosen path is `subagent-driven-development`, the orchestrator computes waves from declared task independence and selects per-wave between `SEQUENTIAL`, `IN_PLACE_PARALLEL`, `WORKTREE_PARALLEL`, and `TEAM` mode. Sequential is reserved for tasks with hard declared dependencies. See **The Process → Step 0b**.
 
@@ -120,11 +124,33 @@ and so on for spec reviewer, code-quality reviewer, and merge resolver.
 
 ### Step 0: Runtime selection (above)
 
-### Step 0b: Read plan, extract tasks, compute waves
+### Step 0a: Build the plan in context
 
-1. Read the plan file once. Extract every task with its full text and surrounding context.
-2. Build a TodoWrite list of all tasks.
-3. For each task, look for these optional fields (added by **quirk:writing-plans**):
+Unless a plan already exists (in this conversation, or as a persisted file handed to you),
+**build it now** — planning is the first phase of execution, not a prior step:
+
+1. Invoke **quirk:writing-plans** as the rubric. Draft the task breakdown — each task with its
+   Contract, Acceptance, and optional `independent` / `dependencies` / `scope.files` /
+   `cooperative` fields — directly in this conversation **and into a TodoWrite list** (one item
+   per task). TodoWrite is the durable home for the breakdown; it survives context compaction.
+2. **Do not write a plan file** by default. Persist to `docs/quirk/plans/` only if the user asks
+   or the plan must outlive this session.
+3. If a persisted plan file *was* handed off from another session, read it once to seed the
+   in-context plan + TodoWrite, then proceed as above.
+
+### Step 0a-review: Agent reviews the plan (default)
+
+Dispatch the plan-document reviewer (`../writing-plans/plan-document-reviewer-prompt.md`) on the
+**in-context plan** (paste the plan text inline — the reviewer does not read a file). Apply its
+fixes inline. This is automatic and replaces any human approval gate; only stop for the user if
+the reviewer surfaces a genuine ambiguity you cannot resolve.
+
+### Step 0b: Use the in-context plan, compute waves
+
+1. Use the plan from Step 0a — every task's full text and context is already in this conversation
+   and in TodoWrite. (Subagents still receive task text **pasted inline**; they never read a plan.)
+2. The TodoWrite list of all tasks already exists from Step 0a.
+3. For each task, read these optional fields (from the **quirk:writing-plans** rubric):
    - `independent: true` — task can run alongside any other task in its eligible wave
    - `dependencies: [task-id, ...]` — task must wait for all listed tasks to complete
    - `scope.files: [path, ...]` — files this task is expected to touch
@@ -335,11 +361,12 @@ interactive form.
 ## Example Workflow
 
 ```
-You: I'm using Subagent-Driven Development to execute this plan.
+You: I'm using Subagent-Driven Development. First I'll build the plan in context.
 
-[Read plan file once: docs/quirk/plans/feature-plan.md]
-[Extract all 5 tasks with full text and context]
-[Create TodoWrite with all tasks]
+[Step 0a: invoke writing-plans rubric → draft 5 tasks (contracts, acceptance, parallelism)
+ in context + TodoWrite — no file]
+[Step 0a-review: dispatch plan-document reviewer on the in-context plan; apply fixes]
+[Step 0b: tasks already in context + TodoWrite; compute waves]
 
 Task 1: Hook installation script
 
@@ -510,7 +537,7 @@ mixed-runtime task.
 
 **Required workflow skills:**
 - **quirk:using-git-worktrees** — REQUIRED: Set up isolated workspace before starting. **Now load-bearing in `WORKTREE_PARALLEL` mode**: orchestrator creates one worktree per task in the wave (branch convention `<parent-branch>/sdd/<task-id>`), runs reviews inside the worktree pre-merge, rolling-merges back to the parent branch as each task's review chain passes, and tears down the worktree on success.
-- **quirk:writing-plans** — Creates the plan this skill executes. Plans may declare optional task fields (`independent`, `dependencies`, `scope.files`, `cooperative`) that the orchestrator uses for wave compute and mode decision in **Step 0b** / **Step 0c**.
+- **quirk:writing-plans** — The planning rubric this skill runs **in context** as its first phase (**Step 0a**), not a prior step. It produces the task breakdown — held in the conversation + TodoWrite, file optional — including the optional task fields (`independent`, `dependencies`, `scope.files`, `cooperative`) the orchestrator uses for wave compute and mode decision in **Step 0b** / **Step 0c**.
 - **quirk:requesting-code-review** — Code review template for reviewer subagents.
 - **quirk:finishing-a-development-branch** — Complete development after all tasks.
 

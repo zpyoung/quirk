@@ -32,7 +32,7 @@ You MUST create a task for each of these items and complete them in order:
 9. **Write design doc** — save to `docs/quirk/specs/YYYY-MM-DD-<topic>-design.md` and commit
 10. **Spec self-review** — quick inline check for placeholders, contradictions, ambiguity, scope (see below)
 11. **User reviews written spec** — ask user to review the spec file before proceeding
-12. **Transition to implementation** — invoke writing-plans skill to create implementation plan
+12. **Transition to implementation** — invoke an execution skill (quirk:subagent-driven-development, recommended; or quirk:executing-plans), which builds the plan in context as its first phase, then executes
 
 ## Process Flow
 
@@ -51,7 +51,7 @@ digraph brainstorming {
     "Write design doc" [shape=box];
     "Spec self-review\n(fix inline)" [shape=box];
     "User reviews spec?" [shape=diamond];
-    "Invoke writing-plans skill" [shape=doublecircle];
+    "Invoke execution skill\n(plans in context)" [shape=doublecircle];
 
     "Explore project context" -> "Detect domain +\ndispatch context research";
     "Detect domain +\ndispatch context research" -> "Visual questions ahead?";
@@ -68,11 +68,11 @@ digraph brainstorming {
     "Write design doc" -> "Spec self-review\n(fix inline)";
     "Spec self-review\n(fix inline)" -> "User reviews spec?";
     "User reviews spec?" -> "Write design doc" [label="changes requested"];
-    "User reviews spec?" -> "Invoke writing-plans skill" [label="approved"];
+    "User reviews spec?" -> "Invoke execution skill\n(plans in context)" [label="approved"];
 }
 ```
 
-**The terminal state is invoking writing-plans.** Do NOT invoke frontend-design, mcp-builder, or any other implementation skill. The ONLY skill you invoke after brainstorming is writing-plans.
+**The terminal state is invoking an execution skill** — quirk:subagent-driven-development (recommended) or quirk:executing-plans — which builds the implementation plan in context as its first phase, then executes. Do NOT invoke frontend-design, mcp-builder, or any other implementation skill, and do NOT write a separate plan document first.
 
 ## Research Agents
 
@@ -299,8 +299,8 @@ Wait for the user's response. If they request changes, make them and re-run the 
 
 **Implementation:**
 
-- Invoke the writing-plans skill to create a detailed implementation plan
-- Do NOT invoke any other skill. writing-plans is the next step.
+- Invoke an execution skill — quirk:subagent-driven-development (recommended) or quirk:executing-plans. It builds the detailed implementation plan in context as its first phase, then executes.
+- Do NOT invoke any other implementation skill, and do NOT write a separate plan document first.
 
 ## Key Principles
 
