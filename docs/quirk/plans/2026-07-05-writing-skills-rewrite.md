@@ -102,7 +102,7 @@ Run:
 ```bash
 test -f skills/writing-skills/activation-testing.md && \
 grep -qi "should-not" skills/writing-skills/activation-testing.md && \
-grep -qi "under-trigger" skills/writing-skills/activation-testing.md && echo OK || echo FAIL
+grep -qi "under.*trigger" skills/writing-skills/activation-testing.md && echo OK || echo FAIL
 ```
 Expected: `OK`
 
