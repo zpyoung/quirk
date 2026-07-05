@@ -378,9 +378,4 @@ RED-GREEN-REFACTOR for documentation works exactly like RED-GREEN-REFACTOR for c
 
 ## Real-World Impact
 
-From applying TDD to TDD skill itself (2025-10-03):
-- 6 RED-GREEN-REFACTOR iterations to bulletproof
-- Baseline testing revealed 10+ unique rationalizations
-- Each REFACTOR closed specific loopholes
-- Final VERIFY GREEN: 100% compliance under maximum pressure
-- Same process works for any discipline-enforcing skill
+In one worked example — applying this method to a TDD discipline skill itself — several RED-GREEN-REFACTOR iterations surfaced multiple distinct rationalizations, each closed by a specific counter, before the skill held under maximum pressure. The same process works for any discipline-enforcing skill: expect to iterate, and stop only when new rationalizations stop appearing.

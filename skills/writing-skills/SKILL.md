@@ -16,7 +16,7 @@ A **skill** is a reusable reference for a proven technique, pattern, or tool tha
 
 They have different causes and different fixes. Don't conflate them: a perfectly written body is worthless if the skill never activates, and a reliably-firing skill is worthless if its body is ignored.
 
-**Lineage (so you know which rules are which):** the RED-GREEN-REFACTOR discipline, the "Iron Law", "CSO", and rationalization-resistance in this skill come from the community `obra/superpowers` tradition. Anthropic's own framing is lighter — "evaluation-driven development" — and its bundled best-practices doc ([anthropic-best-practices.md](anthropic-best-practices.md)) never mentions rationalization or persuasion. Where the two diverge, this skill says so. Treat the superpowers-heritage rules as sharp tools for a specific job, not universal law.
+**Lineage (so you know which rules are which):** the RED-GREEN-REFACTOR discipline, the "Iron Law", "CSO" (Claude Search Optimization — writing the description so the model discovers and triggers the skill), and rationalization-resistance in this skill come from the community `obra/superpowers` tradition. Anthropic's own framing is lighter — "evaluation-driven development" — and its bundled best-practices doc ([anthropic-best-practices.md](anthropic-best-practices.md)) never mentions rationalization or persuasion. Where the two diverge, this skill says so. Treat the superpowers-heritage rules as sharp tools for a specific job, not universal law.
 
 ## When to Create a Skill
 
@@ -93,7 +93,7 @@ skills/
 
 ```markdown
 ---
-name: Skill-Name-With-Hyphens
+name: skill-name-with-hyphens
 description: Use when [specific triggering conditions and symptoms] — [what the skill does]
 ---
 
@@ -379,34 +379,26 @@ What "validated" means depends on the type:
 
 The deployment checklist below walks through this per skill.
 
-## Skill Creation Checklist (TDD Adapted)
+## Skill Creation Checklist
 
 **IMPORTANT: Use TodoWrite to create todos for EACH checklist item below.**
 
-**RED Phase - Write Failing Test (for discipline-enforcing skills):**
-- [ ] Create pressure scenarios (3+ combined pressures for discipline skills)
-- [ ] Run scenarios WITHOUT skill - document baseline behavior verbatim
-- [ ] Identify patterns in rationalizations/failures
-
-**GREEN Phase - Write Minimal Skill (for discipline-enforcing skills):**
-- [ ] Name uses only letters, numbers, hyphens (no parentheses/special chars)
+**Authoring (every skill):**
+- [ ] Name uses only lowercase letters, numbers, hyphens (no parentheses/special chars); matches the directory name
 - [ ] YAML frontmatter with required `name` and `description` fields (max 1024 chars; see [spec](https://agentskills.io/specification))
 - [ ] Description states both triggers/symptoms AND what the skill does
 - [ ] Description written in third person
 - [ ] Description tested for activation (should-trigger / should-not-trigger)
 - [ ] Keywords throughout for search (errors, symptoms, tools)
 - [ ] Clear overview with core principle
-- [ ] Address specific baseline failures identified in RED
 - [ ] Code inline OR link to separate file
 - [ ] One excellent example (not multi-language)
-- [ ] Run scenarios WITH skill - verify agents now comply
+- [ ] Validated with the type-appropriate method (technique → fresh scenario; pattern → recognition + counter-examples; reference → retrieval; creative → rubric read)
 
-**REFACTOR Phase - Close Loopholes:**
-- [ ] Identify NEW rationalizations from testing
-- [ ] Add explicit counters (if discipline skill)
-- [ ] Build rationalization table from all test iterations
-- [ ] Create red flags list
-- [ ] Re-test until bulletproof
+**Discipline-enforcing skills only — RED-GREEN-REFACTOR:**
+- [ ] RED: create pressure scenarios (3+ combined pressures); run WITHOUT the skill; document baseline behavior and rationalizations verbatim
+- [ ] GREEN: write the minimal skill addressing those specific baseline failures; run WITH the skill; verify agents now comply
+- [ ] REFACTOR: identify NEW rationalizations; add explicit counters; build the rationalization table; create the red-flags list; re-test until bulletproof
 
 **Quality Checks:**
 - [ ] Small flowchart only if decision non-obvious
