@@ -398,18 +398,16 @@ helper1, helper2, step3, pattern4
 
 Skills are trusted-by-proxy: a loaded skill steers the agent. When **authoring**, follow the principle of least surprise (behavior matches description; frontmatter tool lists are documentation, not a sandbox). When **installing** someone else's skill, vet every file (including scripts and test fixtures), scan for hidden/invisible instructions, and confirm stated purpose matches actual instructions. Full checklist: [security-vetting.md](security-vetting.md).
 
-## STOP: Before Moving to Next Skill
+## Before moving to the next skill
 
-**After writing ANY skill, you MUST STOP and complete the deployment process.**
+Validate each skill before you commit it — shipping an unvalidated skill ships unverified behavior, the same way shipping untested code does. Batching several skills and validating none is the failure mode to avoid.
 
-**Do NOT:**
-- Create multiple skills in batch without testing each
-- Move to next skill before current one is verified
-- Skip testing because "batching is more efficient"
+What "validated" means depends on the type:
 
-**The deployment checklist below is MANDATORY for EACH skill.**
+- **Discipline-enforcing skills:** the full gate applies — you can't skip the RED-before-GREEN failing test, so finish that cycle before committing.
+- **Everything else:** complete the skill's type-appropriate validation (see "Testing & validation — scoped by skill type" above) before moving on — a fresh-scenario application for a technique, recognition + counter-examples for a pattern, retrieval for a reference, a rubric read for creative work.
 
-Deploying untested skills = deploying untested code. It's a violation of quality standards.
+The deployment checklist below walks through this per skill.
 
 ## Skill Creation Checklist (TDD Adapted)
 
