@@ -1,3 +1,5 @@
+> **Snapshot, not canonical.** This is a bundled copy of Anthropic's skill-authoring best-practices doc, kept for offline, self-contained reference. It may drift from the live version — the canonical source is https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices. Where this snapshot and SKILL.md differ on scope or testing philosophy, SKILL.md reflects deliberate, attributed choices (see the lineage note in SKILL.md).
+
 # Skill authoring best practices
 
 > Learn how to write effective Skills that Claude can discover and use successfully.
