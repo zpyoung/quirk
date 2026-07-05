@@ -1,5 +1,7 @@
 # Testing Skills With Subagents
 
+> **Scope:** This file is the deep dive for **discipline-enforcing skills** — skills whose job is to make an agent follow a rule it's tempted to rationalize away (TDD discipline, verification-before-completion, safety gates). Pressure scenarios and rationalization tables are the right tools *here*. Other skill types use lighter validation (see "Testing & validation, scoped by skill type" in [SKILL.md](SKILL.md)): technique → apply to a fresh scenario; pattern → recognition + counter-examples; reference → retrieval + correct application; creative/subjective → rubric + human read, not a binary failing test.
+
 **Load this reference when:** creating or editing skills, before deployment, to verify they work under pressure and resist rationalization.
 
 ## Overview
