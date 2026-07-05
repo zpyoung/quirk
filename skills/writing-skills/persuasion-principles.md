@@ -1,3 +1,5 @@
+> **Scope:** These principles apply to **discipline-enforcing skills** — skills whose job is to make an agent follow a rule it's tempted to skip under pressure. They are a specialized toolkit, not a default authoring style. Most skills (technique / pattern / reference / creative) should NOT lean on caps-heavy MUST/NEVER framing — Anthropic's own guidance flags that as a "yellow flag" and prefers explaining the *why*. Reach for this file only when building a guardrail.
+
 # Persuasion Principles for Skill Design
 
 ## Overview
