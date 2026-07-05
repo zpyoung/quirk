@@ -125,6 +125,8 @@ What goes wrong + fixes
 Concrete results
 ```
 
+This template is a menu, not a mandate — pick the sections that fit the skill's type. A creative skill won't want "Core Pattern (before/after code)"; a pure reference skill may skip "When to Use" for a straight index.
+
 ## Activation — getting the skill to fire
 
 The model decides whether to invoke a skill from its `name` + `description` alone. This is the most common real-world failure: the skill never fires.
@@ -186,6 +188,8 @@ Once a skill fires, these determine whether the body is actually followed:
 - getting-started workflows: <150 words each
 - Frequently-loaded skills: <200 words total
 - Other skills: <500 words (still be concise)
+
+These word targets are for **frequently-loaded leaf skills** that pay their token cost on every conversation. Meta and reference skills like this one legitimately run longer — there's no way to teach the whole discipline in 500 words. For those, optimize for clarity within the <500-**line** body budget and push depth into reference files, rather than hitting a word count.
 
 **Techniques:**
 - **Move details to tool help.** Don't document every flag in SKILL.md; reference `--help` instead.
@@ -313,49 +317,15 @@ Match rigor to skill type. Anthropic's own guidance conditions testing on type: 
 | Technique | condition-based-waiting, root-cause-tracing, defensive-programming | Application scenarios; variation/edge-case scenarios; missing-information tests for gaps | Agent successfully applies the technique to a new scenario |
 | Pattern | reducing-complexity, information-hiding | Recognition scenarios; application scenarios; counter-examples (do they know when NOT to apply it?) | Agent correctly identifies when/how to apply the pattern |
 | Reference | API docs, command references, library guides | Retrieval scenarios; application of what was retrieved; gap testing for common use cases | Agent finds and correctly applies the reference information |
+| Creative / subjective | voice, tone, design, ideation | Rubric + human read of the output | Judgment call, not a binary pass/fail |
 
 ### For discipline-enforcing skills only: resisting rationalization
 
 The tools below (rationalization tables, red-flag lists, "violating the letter is violating the spirit", persuasion framing in [persuasion-principles.md](persuasion-principles.md)) are for guardrail skills that must survive adversarial pressure. **Do not apply them by default.** For everything else, prefer explaining the *why* over caps-heavy MUST/NEVER rules — Anthropic's own style guidance flags all-caps absolutism as a "yellow flag".
 
-**Psychology note:** Understanding WHY persuasion techniques work helps you apply them systematically. See [persuasion-principles.md](persuasion-principles.md) for the research foundation on authority, commitment, scarcity, social proof, and unity principles.
+The core moves: operationalize the rule instead of just stating it (close specific loopholes with explicit negations, not general exhortation); keep a rationalization table pairing each excuse agents make against it with the reality; maintain a red-flags list agents can self-check against; and add the foundational "violating the letter is violating the spirit" principle to cut off spirit-vs-letter arguments. Drive all of it with RED-GREEN-REFACTOR: watch an agent fail without the skill, write the minimal skill that closes those exact rationalizations, then plug new loopholes as they surface.
 
-#### Close every loophole explicitly
-
-Don't just state the rule — forbid specific workarounds. Weak: "Write code before test? Delete it." Strong: "Write code before test? Delete it. Start over. No exceptions: don't keep it as reference, don't adapt it while writing tests, don't look at it. Delete means delete."
-
-#### Address "spirit vs letter" arguments
-
-State early: **"Violating the letter of the rules is violating the spirit of the rules."** This cuts off the entire class of "I'm following the spirit" rationalizations.
-
-#### Build a rationalization table
-
-Capture every excuse agents make during baseline testing, paired with the reality:
-
-| Excuse | Reality |
-|--------|---------|
-| "Too simple to test" | Simple code breaks. Test takes 30 seconds. |
-| "I'll test after" | Tests passing immediately prove nothing. |
-| "Skill is obviously clear" | Clear to you ≠ clear to other agents. Test it. |
-| "Testing is overkill" | Untested skills have issues. A few minutes of testing saves hours. |
-| "I'm confident it's good" | Overconfidence guarantees issues. Test anyway. |
-| "No time to test" | Deploying untested skill wastes more time fixing it later. |
-
-**All of these mean: test before deploying. No exceptions — for discipline-enforcing skills.**
-
-#### Create a red-flags list
-
-Make it easy for agents to self-check when rationalizing — e.g. "code before test", "I already manually tested it", "this is different because..." All of these mean: delete, start over.
-
-#### Update the description for violation symptoms
-
-Add symptoms of when the agent is *about to* violate the rule, e.g. `description: use when implementing any feature or bugfix, before writing implementation code`.
-
-### RED-GREEN-REFACTOR for skills
-
-Follow the TDD cycle: **RED** — run the pressure scenario with a subagent WITHOUT the skill; document exact choices and verbatim rationalizations (you must watch it fail before writing the skill). **GREEN** — write the minimal skill addressing those specific rationalizations, then re-run; the agent should now comply. **REFACTOR** — new rationalization surfaces, add an explicit counter, re-test until bulletproof.
-
-**Full methodology** (pressure scenario design, pressure types, plugging holes systematically, meta-testing): [testing-skills-with-subagents.md](testing-skills-with-subagents.md).
+The full toolkit — worked loophole-closing examples, the rationalization table format, red-flags lists, pressure-scenario design, and the RED-GREEN-REFACTOR method — lives in [testing-skills-with-subagents.md](testing-skills-with-subagents.md). Persuasion framing (why authority, commitment, scarcity, social proof, and unity increase compliance) is in [persuasion-principles.md](persuasion-principles.md). Reach for these only when building a guardrail skill.
 
 ## Skills in subagents and Teams
 
