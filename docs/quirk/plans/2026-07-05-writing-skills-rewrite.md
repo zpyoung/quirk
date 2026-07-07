@@ -15,7 +15,7 @@
 ## Conventions for this plan
 
 - **"Failing test" = a shell check that currently fails.** Run it first to confirm the gap, apply the edit, re-run to confirm it passes.
-- Run all commands from the repo root: `/Users/zpyoung/ProjectWorkspaces/quirk-workspace/quirk/.claude/worktrees/loving-lehmann-b97170` (or your worktree root).
+- Run all commands from the repo root (your worktree root).
 - Keep all findings **directional**: no version numbers, no percentages/star-counts, no named version-specific bugs anywhere in the skill.
 - Third person / imperative in descriptions; markdown links (never `@file`) for references.
 

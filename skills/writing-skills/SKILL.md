@@ -85,9 +85,8 @@ skills/
 
 **Frontmatter (YAML):**
 - Two required fields: `name` and `description` (see [agentskills.io/specification](https://agentskills.io/specification) for all supported fields)
-- Max 1024 characters total
-- `name`: Use letters, numbers, and hyphens only (no parentheses, special chars)
-- `description`: Third person, states both what the skill does and when to use it (see Activation, below, for why)
+- `name`: ≤64 characters; letters, numbers, and hyphens only (no parentheses/special chars)
+- `description`: ≤1024 characters; third person; states both what the skill does and when to use it (see Activation, below, for why)
   - Front-load concrete triggers: symptoms, situations, phrasings a user would type
   - Keep under 500 characters if possible
 
