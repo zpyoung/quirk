@@ -384,7 +384,7 @@ The deployment checklist below walks through this per skill.
 
 **Authoring (every skill):**
 - [ ] Name uses only lowercase letters, numbers, hyphens (no parentheses/special chars); matches the directory name
-- [ ] YAML frontmatter with required `name` and `description` fields (max 1024 chars; see [spec](https://agentskills.io/specification))
+- [ ] YAML frontmatter with required `name` (≤64 chars) and `description` (≤1024 chars) fields (see [spec](https://agentskills.io/specification))
 - [ ] Description states both triggers/symptoms AND what the skill does
 - [ ] Description written in third person
 - [ ] Description tested for activation (should-trigger / should-not-trigger)
