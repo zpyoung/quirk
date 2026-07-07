@@ -1,10 +1,12 @@
+> **Scope:** These principles apply to **discipline-enforcing skills** — skills whose job is to make an agent follow a rule it's tempted to skip under pressure. They are a specialized toolkit, not a default authoring style. Most skills (technique / pattern / reference / creative) should NOT lean on caps-heavy MUST/NEVER framing — Anthropic's own guidance flags that as a "yellow flag" and prefers explaining the *why*. Reach for this file only when building a guardrail.
+
 # Persuasion Principles for Skill Design
 
 ## Overview
 
 LLMs respond to the same persuasion principles as humans. Understanding this psychology helps you design more effective skills - not to manipulate, but to ensure critical practices are followed even under pressure.
 
-**Research foundation:** Meincke et al. (2025) tested 7 persuasion principles with N=28,000 AI conversations. Persuasion techniques more than doubled compliance rates (33% → 72%, p < .001).
+**Research foundation:** A large controlled study of persuasion principles applied to LLM conversations found that these techniques substantially increased model compliance compared to neutral phrasing — enough to treat the effect as real and worth designing around, not a rounding error. The framing here is directional; if you want exact figures, consult the primary literature on persuasion and LLM behavior.
 
 ## The Seven Principles
 
@@ -164,17 +166,9 @@ LLMs respond to the same persuasion principles as humans. Understanding this psy
 
 **The test:** Would this technique serve the user's genuine interests if they fully understood it?
 
-## Research Citations
+## Research background
 
-**Cialdini, R. B. (2021).** *Influence: The Psychology of Persuasion (New and Expanded).* Harper Business.
-- Seven principles of persuasion
-- Empirical foundation for influence research
-
-**Meincke, L., Shapiro, D., Duckworth, A. L., Mollick, E., Mollick, L., & Cialdini, R. (2025).** Call Me A Jerk: Persuading AI to Comply with Objectionable Requests. University of Pennsylvania.
-- Tested 7 principles with N=28,000 LLM conversations
-- Compliance increased 33% → 72% with persuasion techniques
-- Authority, commitment, scarcity most effective
-- Validates parahuman model of LLM behavior
+The seven principles come from Cialdini's foundational work on influence — the long-standing empirical basis for persuasion research. More recent controlled work has extended these principles to large language models, finding that persuasion framing substantially raises model compliance, with authority, commitment, and scarcity among the most effective. Together this supports the "parahuman" model: LLMs, trained on human text, respond to the same persuasion patterns humans do. Figures here are deliberately directional — consult the primary literature for exact study parameters.
 
 ## Quick Reference
 

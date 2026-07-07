@@ -1,6 +1,8 @@
 # Testing Skills With Subagents
 
-**Load this reference when:** creating or editing skills, before deployment, to verify they work under pressure and resist rationalization.
+> **Scope:** This file is the deep dive for **discipline-enforcing skills** — skills whose job is to make an agent follow a rule it's tempted to rationalize away (TDD discipline, verification-before-completion, safety gates). Pressure scenarios and rationalization tables are the right tools *here*. Other skill types use lighter validation (see "Testing & validation, scoped by skill type" in [SKILL.md](SKILL.md)): technique → apply to a fresh scenario; pattern → recognition + counter-examples; reference → retrieval + correct application; creative/subjective → rubric + human read, not a binary failing test.
+
+**Load this reference when:** building or hardening a **discipline-enforcing** skill (a rule an agent is tempted to rationalize away), before deployment, to verify it holds under pressure and resists rationalization.
 
 ## Overview
 
@@ -376,9 +378,4 @@ RED-GREEN-REFACTOR for documentation works exactly like RED-GREEN-REFACTOR for c
 
 ## Real-World Impact
 
-From applying TDD to TDD skill itself (2025-10-03):
-- 6 RED-GREEN-REFACTOR iterations to bulletproof
-- Baseline testing revealed 10+ unique rationalizations
-- Each REFACTOR closed specific loopholes
-- Final VERIFY GREEN: 100% compliance under maximum pressure
-- Same process works for any discipline-enforcing skill
+In one worked example — applying this method to a TDD discipline skill itself — several RED-GREEN-REFACTOR iterations surfaced multiple distinct rationalizations, each closed by a specific counter, before the skill held under maximum pressure. The same process works for any discipline-enforcing skill: expect to iterate, and stop only when new rationalizations stop appearing.
