@@ -357,7 +357,7 @@ Don't pre-validate env vars manually before dispatch — `pi --list-models` alre
 
 ## When to override the default
 
-The `openai-codex/gpt-5.3-codex:medium` default balances code-quality and latency on edits. Override when:
+The codex alias defaults to `medium` thinking, which balances code-quality and latency on edits. Override when:
 
 - **Depth over speed** (hard bugs, tricky refactors, review passes) → bump reasoning with `--thinking xhigh`, or use the `codex-max` alias.
 - **Cost-sensitive bulk work** (test generation, docs scaffolding) → `claude-haiku-4-5` or `gpt-5.1-codex-mini`.
