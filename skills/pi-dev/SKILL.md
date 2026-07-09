@@ -42,7 +42,7 @@ The ✓/✗ report prints to **stderr** (like pi-watch's other progress output) 
 
 | Alias | Default thinking | Routes to |
 |---|---|---|
-| `codex` (default coding) | `xhigh` | gpt-5.5 → 5.4 → 5.3-codex (across `openai-codex`/`openai`/`github-copilot`) |
+| `codex` (default coding) | `medium` | gpt-5.5 → 5.4 → 5.3-codex (across `openai-codex`/`openai`/`github-copilot`) |
 | `codex-max` | `xhigh` | gpt-5.5-codex-max → 5.4-codex-max → 5.1-codex-max |
 | `codex-mini` | `medium` | gpt-5.4-mini → 5.1-codex-mini |
 | `codex-spark` | `high` | gpt-5.4-codex-spark → 5.3-codex-spark |

@@ -41,14 +41,14 @@ If no provider/model is specified by the user, dispatch the codex alias and let 
 
 ```bash
 # Resolve via preference list (auto-upgrades as newer models ship):
-read PI_PROVIDER PI_MODEL PI_THINKING < <(resolve_pi_model xhigh \
+read PI_PROVIDER PI_MODEL PI_THINKING < <(resolve_pi_model medium \
     openai-codex/gpt-5.5 openai/gpt-5.5 \
     openai-codex/gpt-5.4 openai/gpt-5.4 github-copilot/gpt-5.4 \
     openai-codex/gpt-5.3-codex openai/gpt-5.3-codex github-copilot/gpt-5.3-codex)
 pi --provider "$PI_PROVIDER" --model "$PI_MODEL" --thinking "$PI_THINKING" "..."
 ```
 
-`:xhigh` is the deepest reasoning level. Override the alias resolution only when the user explicitly names a different model.
+`:medium` is the codex alias default; `:xhigh` is the deepest reasoning level — pass `--thinking xhigh` for a maximum-effort pass. Override the alias resolution only when the user explicitly names a different model.
 
 ## Newest-first principle
 
@@ -68,8 +68,8 @@ When the user's request includes any of these phrases (case-insensitive), resolv
 
 | User phrase | Default thinking | Preference list (first authed wins; → = fall through) |
 |---|---|---|
-| (no model specified), `use pi`, `pi agent`, `pi subagent`, `pi worker` | `xhigh` | `openai-codex/gpt-5.5` → `openai/gpt-5.5` → `openai-codex/gpt-5.4` → `openai/gpt-5.4` → `github-copilot/gpt-5.4` → `openai-codex/gpt-5.3-codex` → `openai/gpt-5.3-codex` → `github-copilot/gpt-5.3-codex` |
-| `pi codex`, `codex`, `with codex`, `codex agent` | `xhigh` | (same as above) |
+| (no model specified), `use pi`, `pi agent`, `pi subagent`, `pi worker` | `medium` | `openai-codex/gpt-5.5` → `openai/gpt-5.5` → `openai-codex/gpt-5.4` → `openai/gpt-5.4` → `github-copilot/gpt-5.4` → `openai-codex/gpt-5.3-codex` → `openai/gpt-5.3-codex` → `github-copilot/gpt-5.3-codex` |
+| `pi codex`, `codex`, `with codex`, `codex agent` | `medium` | (same as above) |
 | `pi codex max`, `codex max` | `xhigh` | `openai-codex/gpt-5.5-codex-max` → `openai/gpt-5.5-codex-max` → `openai-codex/gpt-5.4-codex-max` → `openai/gpt-5.4-codex-max` → `openai-codex/gpt-5.1-codex-max` → `openai/gpt-5.1-codex-max` → `github-copilot/gpt-5.1-codex-max` |
 | `pi codex mini`, `codex mini`, `pi mini` | `medium` | `openai-codex/gpt-5.4-mini` → `openai/gpt-5.4-mini` → `github-copilot/gpt-5.4-mini` → `openai-codex/gpt-5.1-codex-mini` → `openai/gpt-5.1-codex-mini` → `github-copilot/gpt-5.1-codex-mini` |
 | `pi codex spark`, `codex spark` | `high` | `openai-codex/gpt-5.4-codex-spark` → `openai-codex/gpt-5.3-codex-spark` → `openai/gpt-5.3-codex-spark` |
@@ -143,7 +143,7 @@ resolve_pi_model() {
 }
 
 # Usage — codex alias:
-read PI_PROVIDER PI_MODEL PI_THINKING < <(resolve_pi_model xhigh \
+read PI_PROVIDER PI_MODEL PI_THINKING < <(resolve_pi_model medium \
     openai-codex/gpt-5.5 openai/gpt-5.5 \
     openai-codex/gpt-5.4 openai/gpt-5.4 github-copilot/gpt-5.4 \
     openai-codex/gpt-5.3-codex openai/gpt-5.3-codex github-copilot/gpt-5.3-codex \
@@ -169,9 +169,9 @@ Flag is `--thinking <level>` (NOT `--thinking-level`). Recognized values: `off`,
 
 - **`off`** — disable extended reasoning entirely (cheapest, fastest).
 - **`minimal`** — smallest non-zero reasoning budget. Useful when a model requires *some* thinking to function but you want the cheapest tier.
-- **`low`** / **`medium`** — incremental reasoning budget. Default for fast models (Haiku, Flash, Codex Mini).
+- **`low`** / **`medium`** — incremental reasoning budget. `medium` is the default for the codex alias and fast models (Haiku, Flash, Codex Mini).
 - **`high`** — strong reasoning. Default for balanced/strong models (Sonnet, Gemini Pro).
-- **`xhigh`** — maximum reasoning. Default for the codex alias and any review pass.
+- **`xhigh`** — maximum reasoning. Default for `codex-max`; opt into it (`--thinking xhigh`) for a deep review pass or when depth matters more than latency.
 
 Not all models accept all levels — providers that don't support a given level silently clamp. The `thinking` column in `pi --list-models` indicates support. Surface the resolved level in dispatch logs.
 
@@ -357,8 +357,9 @@ Don't pre-validate env vars manually before dispatch — `pi --list-models` alre
 
 ## When to override the default
 
-The `openai-codex/gpt-5.3-codex:xhigh` default optimizes for code-quality on edits. Override when:
+The `openai-codex/gpt-5.3-codex:medium` default balances code-quality and latency on edits. Override when:
 
+- **Depth over speed** (hard bugs, tricky refactors, review passes) → bump reasoning with `--thinking xhigh`, or use the `codex-max` alias.
 - **Cost-sensitive bulk work** (test generation, docs scaffolding) → `claude-haiku-4-5` or `gpt-5.1-codex-mini`.
 - **Adversarial review pass** → use a *different provider* than the worker. If worker is `openai-codex`, reviewer should be `anthropic` (`claude-sonnet-4-6`) or `google` (`gemini-3.1-pro-preview`). Cross-provider review surfaces issues that same-provider review tends to miss.
 - **Long-context refactors** → `gemini-3.1-pro-preview` (1M context) or `claude-opus-4-6` (1M context via `anthropic`) or `gpt-5.4-pro` (1.1M context via `openai`).
