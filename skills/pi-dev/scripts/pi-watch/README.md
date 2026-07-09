@@ -29,8 +29,8 @@ result="$(pi-watch --alias sonnet --tools read \
 pi-watch --alias opus --tools read,grep "Review src/auth.ts for issues"
 pi-watch --alias haiku --no-tools "Summarize this diff: $(git diff HEAD~1)"
 
-# Override the alias's default thinking level
-pi-watch --alias codex --thinking medium "Quick summary of README.md"
+# Override the alias's default thinking level (codex defaults to medium)
+pi-watch --alias codex --thinking xhigh "Find the subtle race in src/queue.ts"
 
 # Preflight — which aliases resolve to a locally-authed model? (no prompt run)
 pi-watch --check                 # ✓/✗ for every alias
@@ -48,7 +48,7 @@ pi-watch --provider openai-codex --model gpt-5.5 --thinking xhigh "..."
 
 | Alias | Default thinking | Routes through (newest first) |
 |---|---|---|
-| `codex` | `xhigh` | gpt-5.5 → 5.4 → 5.3-codex (openai-codex / openai / copilot) |
+| `codex` | `medium` | gpt-5.5 → 5.4 → 5.3-codex (openai-codex / openai / copilot) |
 | `codex-max` | `xhigh` | gpt-5.5-codex-max → 5.4-codex-max → 5.1-codex-max |
 | `codex-mini` | `medium` | gpt-5.4-mini → 5.1-codex-mini |
 | `codex-spark` | `high` | gpt-5.4-codex-spark → 5.3-codex-spark |

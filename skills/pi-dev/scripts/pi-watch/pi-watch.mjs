@@ -35,7 +35,7 @@ import {
 const ALIASES = {
     // Default coding alias — gpt flagship via codex routing
     codex: {
-        thinking: "xhigh",
+        thinking: "medium",
         prefs: [
             "openai-codex/gpt-5.5", "openai/gpt-5.5",
             "openai-codex/gpt-5.4", "openai/gpt-5.4", "github-copilot/gpt-5.4",
