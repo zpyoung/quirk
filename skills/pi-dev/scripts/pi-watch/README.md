@@ -30,7 +30,7 @@ pi-watch --alias opus --tools read,grep "Review src/auth.ts for issues"
 pi-watch --alias haiku --no-tools "Summarize this diff: $(git diff HEAD~1)"
 
 # Override the alias's default thinking level (codex defaults to medium)
-pi-watch --alias codex --thinking xhigh "Find the subtle race in src/queue.ts"
+pi-watch --alias codex --thinking max "Find the subtle race in src/queue.ts"
 
 # Preflight — which aliases resolve to a locally-authed model? (no prompt run)
 pi-watch --check                 # ✓/✗ for every alias
@@ -41,17 +41,18 @@ pi-watch --check codex && pi-watch --alias codex "..."   # gate a dispatch on it
 pi-watch --list-aliases
 
 # Explicit override (skip alias resolution)
-pi-watch --provider openai-codex --model gpt-5.5 --thinking xhigh "..."
+pi-watch --provider openai-codex --model gpt-5.6-sol --thinking max "..."
 ```
 
 ## Aliases
 
 | Alias | Default thinking | Routes through (newest first) |
 |---|---|---|
-| `codex` | `medium` | gpt-5.5 → 5.4 → 5.3-codex (openai-codex / openai / copilot) |
-| `codex-max` | `xhigh` | gpt-5.5-codex-max → 5.4-codex-max → 5.1-codex-max |
-| `codex-mini` | `medium` | gpt-5.4-mini → 5.1-codex-mini |
+| `codex` | `medium` | gpt-5.6-sol → 5.5 → 5.4 → 5.3-codex (openai-codex / openai / copilot) |
+| `codex-max` | `max` | gpt-5.6-sol → 5.5-codex-max → 5.4-codex-max → 5.1-codex-max |
+| `codex-mini` | `medium` | gpt-5.6-luna → 5.4-mini → 5.1-codex-mini |
 | `codex-spark` | `high` | gpt-5.4-codex-spark → 5.3-codex-spark |
+| `terra` | `high` | gpt-5.6-terra → 5.4 |
 | `sonnet` | `high` | claude-sonnet-4-7 → 4-6 |
 | `opus` | `high` | claude-opus-4-7 → 4-6 |
 | `haiku` | `medium` | claude-haiku-4-6 → 4-5 |
@@ -93,7 +94,7 @@ Pi has no built-in sandbox — `bash`, `edit`, and `write` operate at the caller
 | `--alias <name>` | Resolve provider/model/thinking from the alias table |
 | `--provider <p>` | Explicit provider (skip alias) |
 | `--model <m>` | Explicit model (must come with `--provider`) |
-| `--thinking <level>` | `off` / `minimal` / `low` / `medium` / `high` / `xhigh`. Overrides alias default |
+| `--thinking <level>` | `off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`. Overrides alias default |
 | `--tools t1,t2` | Comma-separated allowlist. Default `read,bash` |
 | `--no-tools` | Disable all tools — LLM only (review/analysis mode) |
 | `--check [alias]` | Preflight: validate one alias (or all) against `pi --list-models` without running a prompt. Exit 0 = ready, non-zero = not. Gate dispatches with `--check <alias> && pi-watch …` |
