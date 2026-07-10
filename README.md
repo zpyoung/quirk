@@ -2,7 +2,7 @@
 
 Core skills library for Claude Code: TDD, debugging, collaboration patterns, typed artifacts, and proven techniques.
 
-Version: **5.9.0**
+Version: **2026.7.9**
 
 ## What ships
 

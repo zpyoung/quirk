@@ -1,17 +1,26 @@
 ---
 name: releasing-quirk
-description: Use when releasing the quirk plugin - commits any pending changes, bumps the version using semver based on the actual diff, and pushes to origin. Triggers on "release quirk", "ship quirk", "bump and push quirk", or "cut a quirk release".
+description: Use when releasing the quirk plugin - commits any pending changes, stamps a calendar-based (CalVer) version from today's date, writes the changelog, and pushes to origin autonomously. Triggers on "release quirk", "ship quirk", "bump and push quirk", or "cut a quirk release".
 ---
 
 # Releasing Quirk
 
 ## Overview
 
-Cut a release of the quirk plugin: verify tests, choose a semver bump from the actual diff, sync the three version files, commit, push.
+Cut a release of the quirk plugin: verify tests, stamp today's date as the version (CalVer), sync the three version files, write the changelog, commit, and push — autonomously.
 
-**Core principle:** The bump level is derived from what changed, not from a guess.
+**Core principle:** The version *is* the release date, not a judgment call. Breaking changes are called out in the changelog, since the version no longer encodes them.
 
 **Announce at start:** "I'm using the releasing-quirk skill to cut a release."
+
+## Versioning scheme
+
+Versions are **CalVer**: `YYYY.M.D`, unpadded — `2026.7.9`, never `2026.07.09`.
+
+- The common one-per-day form (`2026.7.9`) is unpadded and is valid strict 3-segment semver, so no validator rejects it. Zero-padding is rejected: PEP 440 tooling normalizes `2026.07.09` → `2026.7.9`, which would silently **desync** the three version files.
+- A 2nd+ release on the same day appends a micro: `2026.7.9.1`, `2026.7.9.2`. This 4-segment form is **not** strict semver (which allows exactly three numeric parts) but is valid PEP 440 and safe for Claude Code, which treats the version as an opaque string.
+- "Today" is the machine's **local** date (`date.today()`), so a release cut just before midnight uses that day's date — no surprises.
+- The scheme is monotonic over the old semver line: `2026.7.9 > 5.9.0` under numeric (semver / PEP 440) comparison, since `2026 > 5`. Naive lexicographic string comparison would sort `2026.…` *before* `5.…`, but that doesn't matter here — Claude Code's update detection is string *inequality* (any change from the installed version triggers an update), not string ordering. No git tags are created (same as before) — same-day detection reads the version files, not tags.
 
 ## Preconditions
 
@@ -32,7 +41,7 @@ If not in the right directory, stop and tell the user.
 pytest -q
 ```
 
-If tests fail, stop. Do not bump or push a broken tree.
+If tests fail, stop. Do not release a broken tree. Autonomy does not mean shipping red.
 
 ### Step 2: Survey Changes
 
@@ -49,36 +58,40 @@ You need to know:
 - What's already committed but unpushed.
 - What's still uncommitted (and whether it should be in this release).
 
-If there are uncommitted changes that don't belong in the release, stop and ask the user.
+If there are uncommitted changes that don't belong in the release, stop and ask the user. Otherwise proceed without a gate.
 
-### Step 3: Decide the Bump
+### Step 3: Compute the CalVer Version
 
-Read the diff, then pick **one** of patch / minor / major using these rules. Don't average — pick the highest level that any single change triggers.
+Derive the version from today's date and the current version. Do **not** use `date +%Y.%-m.%-d` — the `%-` unpadding flag is GNU-only and fails on macOS/BSD `date`. Use `python3` (already a project dependency), reading `pyproject.toml` as the same-day source of truth (there are no tags):
 
-| Bump | When to pick it |
-|------|-----------------|
-| **patch** | Bug fixes, doc fixes, internal refactors, test-only changes, hook lint tweaks, README/typo edits. No user-visible behavior change beyond fixing what was broken. |
-| **minor** | New skill, new slash command, new hook, new template, or new opt-in functionality on an existing skill/command. Backward-compatible additions. |
-| **major** | Removing or renaming a skill / command / hook, breaking change to an artifact file format, breaking change to a hook contract or `plugin.json` schema, anything that would break an existing user's project on upgrade. |
+```bash
+python3 - <<'PY'
+import datetime, re, pathlib
+today = datetime.date.today()
+cal = f"{today.year}.{today.month}.{today.day}"          # unpadded, e.g. 2026.7.9
+current = re.search(r'^version = "([^"]+)"', pathlib.Path("pyproject.toml").read_text(), re.M).group(1)
+parts = current.split(".")
+if parts[:3] == cal.split("."):                          # already released today → advance the micro
+    micro = int(parts[3]) + 1 if len(parts) > 3 else 1
+    print(f"{cal}.{micro}")
+else:                                                    # first release today (or coming from semver)
+    print(cal)
+PY
+```
 
-**Heuristics from commit messages** (use as a sanity check, not the source of truth):
+- First release of the day → `2026.7.9`.
+- Re-run the same day → `2026.7.9.1`, then `.2`, ... (safe to re-run: each run advances the micro, so repeats never collide).
+- Coming from an old semver version like `5.9.0` → `2026.7.9`.
 
-- `feat:` → at least minor.
-- `fix:` / `docs:` / `chore:` / `test:` / `refactor:` → patch unless they remove something user-facing.
-- `BREAKING CHANGE:` in any commit body → major.
-- Skill/command file deleted or renamed in `git diff --stat` → major.
+### Step 4: Sync the Three Version Files
 
-State the chosen bump and the one-sentence reason before editing files.
+The version lives in **all three** of these and they must stay in sync:
 
-### Step 4: Bump the Three Version Files
+- `pyproject.toml` — `version = "..."`
+- `.claude-plugin/plugin.json` — `"version": "..."`
+- `.claude-plugin/marketplace.json` — `"version": "..."` (inside `plugins[0]`)
 
-Current version lives in **all three** of these and they must stay in sync:
-
-- `pyproject.toml` — `version = "X.Y.Z"`
-- `.claude-plugin/plugin.json` — `"version": "X.Y.Z"`
-- `.claude-plugin/marketplace.json` — `"version": "X.Y.Z"` (inside `plugins[0]`)
-
-Read the current version from `pyproject.toml`, compute the new one, then use Edit to update all three. Do not use `sed -i` — Edit is safer and the diff is reviewable.
+Use `Edit` to update all three to the new version. Do **not** use `sed -i` — Edit is safer and the diff is reviewable.
 
 After editing, verify they match:
 
@@ -88,32 +101,52 @@ grep -E '"version"|^version' pyproject.toml .claude-plugin/plugin.json .claude-p
 
 All three should print the new version.
 
-### Step 5: Commit
+### Step 5: Write the Changelog
 
-If there are unrelated uncommitted changes you've already cleared with the user, commit them **first** with their own message, then make a dedicated bump commit. Don't bury the version bump inside an unrelated commit.
+The version no longer signals compatibility, so read the diff **only to write release notes**. `CHANGELOG.md` is [Keep a Changelog](https://keepachangelog.com)-style but CalVer-dated, newest release on top. **Prepend** a section for this release:
 
-```bash
-git add pyproject.toml .claude-plugin/plugin.json .claude-plugin/marketplace.json
-git commit -m "chore: bump version to X.Y.Z"
+```markdown
+## 2026.7.9
+
+### ⚠️ BREAKING
+- <what broke and what the user must do about it>
+
+### Changes
+- <one line per notable commit since the last release>
 ```
 
-Use `chore:` for the bump commit — the substantive `feat:` / `fix:` commits should already exist from the work being released.
+The heading is the version itself (already the date). Fill **Changes** from the notable commits in `git log origin/main..HEAD`.
 
-### Step 6: Push
+Include the **`### ⚠️ BREAKING`** subsection only when one of these breaking signals fires (omit it entirely otherwise):
+- A skill / command / hook file **removed or renamed** (`git diff origin/main..HEAD --stat`).
+- `BREAKING CHANGE:` in any commit body.
+- A breaking change to an artifact file format, a hook contract, or the `plugin.json` schema.
+
+### Step 6: Commit and Push — Autonomously
+
+No confirmation gate. Stage the three version files plus the changelog, commit, and push:
 
 ```bash
+git add pyproject.toml .claude-plugin/plugin.json .claude-plugin/marketplace.json CHANGELOG.md
+git commit -m "chore: release <version>"
 git push origin main
 ```
 
-If the push is rejected (non-fast-forward), stop. Do not force-push. Ask the user how to reconcile.
+If there are unrelated uncommitted changes you've already cleared with the user, commit them **first** with their own message, then make the dedicated release commit — don't bury the release in an unrelated commit.
+
+If the push is rejected (non-fast-forward), stop. Do **not** force-push. Ask the user how to reconcile.
 
 ### Step 7: Report
 
 One short line: new version, commit SHA, how many commits were pushed.
 
 ```
-Released 5.3.0 (abc1234). Pushed 7 commits to origin/main.
+Released 2026.7.9 (abc1234). Pushed 3 commits to origin/main.
 ```
+
+## Dry run (validation)
+
+This is a prose skill, not code. To validate a change to it, do a **dry run**: run Steps 3–5 to compute the version and changelog and show the diff, confirm the three files match via the Step 4 grep, but skip the `git push` in Step 6. The normal release path has no such gate — the dry run is only for verifying the skill itself before a real autonomous run.
 
 ## Quick Reference
 
@@ -121,29 +154,37 @@ Released 5.3.0 (abc1234). Pushed 7 commits to origin/main.
 |------|------------------|
 | 1 | `pytest -q` |
 | 2 | `git status && git log --oneline origin/main..HEAD` |
-| 3 | Pick patch / minor / major from diff |
+| 3 | Compute CalVer from today's date via `python3` + same-day micro from `pyproject.toml` |
 | 4 | Edit `pyproject.toml`, `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` |
-| 5 | `git commit -m "chore: bump version to X.Y.Z"` |
-| 6 | `git push origin main` |
+| 5 | Prepend a `CHANGELOG.md` entry (headline any breaking changes) |
+| 6 | `git commit -m "chore: release <version>" && git push origin main` |
 | 7 | Report new version + SHA |
 
 ## Common Mistakes
 
 **Bumping before tests pass**
-- **Problem:** Tagged release is broken on arrival.
-- **Fix:** `pytest -q` is step 1, no exceptions.
+- **Problem:** The release is broken on arrival.
+- **Fix:** `pytest -q` is Step 1, no exceptions.
+
+**Zero-padding the date**
+- **Problem:** `2026.07.09` gets normalized to `2026.7.9` by PEP 440 tooling, silently desyncing the three files.
+- **Fix:** Always unpadded — `2026.7.9`. The `python3` snippet in Step 3 produces the correct form.
+
+**Using `date` to compute the version**
+- **Problem:** `date +%-m` / `%-d` (unpadded) is GNU-only and fails on macOS/BSD.
+- **Fix:** Use the `python3` snippet in Step 3.
+
+**Adding a micro on the first release of the day**
+- **Problem:** `2026.7.9.1` when no `2026.7.9` shipped yet — wrong and non-obvious.
+- **Fix:** The first release of a day is plain `YYYY.M.D`; `.N` only when today's date already shipped (Step 3 handles this from `pyproject.toml`).
 
 **Only updating one or two version files**
-- **Problem:** Marketplace shows stale version while plugin.json advanced; install-from-marketplace gets the wrong code.
+- **Problem:** Marketplace shows a stale version while `plugin.json` advanced; install-from-marketplace gets the wrong code.
 - **Fix:** Always update all three; verify with the grep in Step 4.
 
-**Patching when you removed a skill**
-- **Problem:** Users upgrade and silently lose a skill they were invoking.
-- **Fix:** Any rename or removal of a skill/command/hook is a major bump.
-
-**Burying the bump in a `feat:` commit**
-- **Problem:** History no longer answers "when did 5.2.0 ship?"
-- **Fix:** Dedicated `chore: bump version to X.Y.Z` commit, separate from feature commits.
+**Skipping the changelog or burying breaking changes**
+- **Problem:** CalVer no longer encodes compatibility, so an unlisted breaking change is invisible to users on upgrade.
+- **Fix:** Always prepend a `CHANGELOG.md` entry; headline breaking changes in a `### ⚠️ BREAKING` subsection.
 
 **Force-pushing on rejection**
 - **Problem:** Overwrites someone else's pushed commits.
@@ -152,13 +193,16 @@ Released 5.3.0 (abc1234). Pushed 7 commits to origin/main.
 ## Red Flags
 
 **Never:**
-- Bump without running tests.
+- Release without running tests.
+- Zero-pad the date segments (`2026.07.09`).
+- Compute the version with `date +%-m` / `%-d` (BSD/macOS unsafe).
 - Use `sed -i` to edit version files.
+- Encode breaking-ness in the version — it goes in the changelog.
 - Force-push to `main`.
-- Decide the bump from the commit message alone — read the diff.
 
 **Always:**
 - Run from the quirk repo root.
+- Compute the date with `python3`, reading `pyproject.toml` as the same-day source of truth.
 - Update all three version files together.
-- State the bump level and reason before editing.
-- Use a dedicated `chore:` commit for the bump.
+- Prepend a `CHANGELOG.md` entry, headlining any breaking changes.
+- Use a dedicated `chore: release <version>` commit.
