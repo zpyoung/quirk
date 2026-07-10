@@ -86,7 +86,7 @@ PI_ERR="$SLICE_DIR/stderr.log"
 PI_PROMPT="$SLICE_DIR/prompt.txt"
 PI_TIMEOUT=900                   # seconds; 1800 for complex
 PI_PROVIDER=openai-codex
-PI_MODEL=gpt-5.5
+PI_MODEL=gpt-5.6-sol
 PI_THINKING=xhigh
 
 bash -c '

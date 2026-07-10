@@ -33,26 +33,34 @@ import {
 // auto-upgrade as new models ship. Pro-tier variants are intentionally absent
 // (~10–30× cost, multi-minute latency) — only dispatch on explicit request.
 const ALIASES = {
-    // Default coding alias — gpt flagship via codex routing
+    // Default coding alias — gpt flagship via codex routing. GPT-5.6 Sol is the
+    // flagship tier (successor to gpt-5.5, same $5/$30 price point).
     codex: {
         thinking: "medium",
         prefs: [
+            "openai-codex/gpt-5.6-sol", "openai/gpt-5.6-sol", "github-copilot/gpt-5.6-sol",
             "openai-codex/gpt-5.5", "openai/gpt-5.5",
             "openai-codex/gpt-5.4", "openai/gpt-5.4", "github-copilot/gpt-5.4",
             "openai-codex/gpt-5.3-codex", "openai/gpt-5.3-codex", "github-copilot/gpt-5.3-codex",
         ],
     },
+    // Deepest reasoning. GPT-5.6 folded the standalone -codex-max model into Sol,
+    // the only tier that natively supports the `max` reasoning effort; older
+    // fallback models clamp max→xhigh.
     "codex-max": {
-        thinking: "xhigh",
+        thinking: "max",
         prefs: [
+            "openai-codex/gpt-5.6-sol", "openai/gpt-5.6-sol", "github-copilot/gpt-5.6-sol",
             "openai-codex/gpt-5.5-codex-max", "openai/gpt-5.5-codex-max",
             "openai-codex/gpt-5.4-codex-max", "openai/gpt-5.4-codex-max",
             "openai-codex/gpt-5.1-codex-max", "openai/gpt-5.1-codex-max", "github-copilot/gpt-5.1-codex-max",
         ],
     },
+    // Fast / cheapest coding tier. GPT-5.6 Luna is the mini/spark successor.
     "codex-mini": {
         thinking: "medium",
         prefs: [
+            "openai-codex/gpt-5.6-luna", "openai/gpt-5.6-luna", "github-copilot/gpt-5.6-luna",
             "openai-codex/gpt-5.4-mini", "openai/gpt-5.4-mini", "github-copilot/gpt-5.4-mini",
             "openai-codex/gpt-5.1-codex-mini", "openai/gpt-5.1-codex-mini", "github-copilot/gpt-5.1-codex-mini",
         ],
@@ -62,6 +70,15 @@ const ALIASES = {
         prefs: [
             "openai-codex/gpt-5.4-codex-spark",
             "openai-codex/gpt-5.3-codex-spark", "openai/gpt-5.3-codex-spark",
+        ],
+    },
+    // Balanced everyday coding tier — GPT-5.6 Terra ($2.50/$15, ~gpt-5.5-class at
+    // half the cost). Falls back to gpt-5.4, the same-priced balanced predecessor.
+    terra: {
+        thinking: "high",
+        prefs: [
+            "openai-codex/gpt-5.6-terra", "openai/gpt-5.6-terra", "github-copilot/gpt-5.6-terra",
+            "openai-codex/gpt-5.4", "openai/gpt-5.4", "github-copilot/gpt-5.4",
         ],
     },
     sonnet: {
@@ -107,7 +124,7 @@ const ALIASES = {
 };
 
 // ---- CLI parsing ---------------------------------------------------------
-const VALID_THINKING = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
+const VALID_THINKING = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const args = process.argv.slice(2);
 const opts = {
     alias: null,

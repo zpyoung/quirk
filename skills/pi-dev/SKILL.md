@@ -1,6 +1,6 @@
 ---
 name: pi-dev
-description: Use when dispatching the pi coding agent for a sub-task — code review, analysis, edits, or multi-agent orchestration. Triggers on "use pi", "run pi", or "pi <model>" (codex, opus, sonnet, gemini, haiku, grok).
+description: Use when dispatching the pi coding agent for a sub-task — code review, analysis, edits, or multi-agent orchestration. Triggers on "use pi", "run pi", or "pi <model>" (codex, terra, opus, sonnet, gemini, haiku, grok).
 ---
 
 # pi-dev
@@ -42,10 +42,11 @@ The ✓/✗ report prints to **stderr** (like pi-watch's other progress output) 
 
 | Alias | Default thinking | Routes to |
 |---|---|---|
-| `codex` (default coding) | `medium` | gpt-5.5 → 5.4 → 5.3-codex (across `openai-codex`/`openai`/`github-copilot`) |
-| `codex-max` | `xhigh` | gpt-5.5-codex-max → 5.4-codex-max → 5.1-codex-max |
-| `codex-mini` | `medium` | gpt-5.4-mini → 5.1-codex-mini |
+| `codex` (default coding) | `medium` | gpt-5.6-sol → 5.5 → 5.4 → 5.3-codex (across `openai-codex`/`openai`/`github-copilot`) |
+| `codex-max` | `max` | gpt-5.6-sol → 5.5-codex-max → 5.4-codex-max → 5.1-codex-max |
+| `codex-mini` | `medium` | gpt-5.6-luna → 5.4-mini → 5.1-codex-mini |
 | `codex-spark` | `high` | gpt-5.4-codex-spark → 5.3-codex-spark |
+| `terra` (balanced) | `high` | gpt-5.6-terra → 5.4 |
 | `sonnet` | `high` | claude-sonnet-4-7 → 4-6 (anthropic + copilot) |
 | `opus` | `high` | claude-opus-4-7 → 4-6 |
 | `haiku` | `medium` | claude-haiku-4-6 → 4-5 |
@@ -53,7 +54,9 @@ The ✓/✗ report prints to **stderr** (like pi-watch's other progress output) 
 | `flash` | `medium` | gemini-flash-latest → 3-flash-preview |
 | `grok` | `medium` | github-copilot/grok-code-fast-1 |
 
-Aliases auto-upgrade as new models ship — newest entries at the top of each ladder are speculative and skipped if not yet in `pi --list-models`. **OpenAI pro / deep-research tiers are deliberately excluded** from alias ladders: `gpt-5-pro`, `gpt-5.x-pro`, `o1-pro`, `o3-pro`, `o3-deep-research`, `o4-mini-deep-research` (~10–30× cost, multi-minute latency). Dispatch them only on explicit user request via `--provider`/`--model`. *(Note: `gemini-*-pro-preview` is Google's standard tier, not a pro tier — it routes via the `gemini` alias.)*
+GPT-5.6 replaced the suffix ladder with three capability tiers: **Sol** (flagship, $5/$30, the only tier that unlocks `max` reasoning effort), **Terra** (balanced, $2.50/$15), **Luna** (fast/cheapest, $1/$6). Sol takes over `codex`/`codex-max`, Luna takes over `codex-mini`, and Terra gets its own `terra` alias.
+
+Aliases auto-upgrade as new models ship — newest entries at the top of each ladder are speculative and skipped if not yet in `pi --list-models`. **OpenAI pro / deep-research tiers are deliberately excluded** from alias ladders: `gpt-5-pro`, `gpt-5.x-pro`, `o1-pro`, `o3-pro`, `o3-deep-research`, `o4-mini-deep-research` (~10–30× cost, multi-minute latency). GPT-5.6's **Sol Pro** and **Ultra mode** are the same lever — they're request-time params (`reasoning.mode`), not separate model IDs, so there's no alias for them. Dispatch pro-tier only on explicit user request via `--provider`/`--model`. *(Note: `gemini-*-pro-preview` is Google's standard tier, not a pro tier — it routes via the `gemini` alias.)*
 
 To see the full ladders: `pi-watch --list-aliases`.
 
@@ -68,7 +71,7 @@ pi-watch --check <alias>                                     # preflight one ali
 pi-watch --check                                             # preflight all aliases — ✓/✗ report
 ```
 
-Thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. Providers silently clamp unsupported levels.
+Thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. `max` is the opt-in ceiling above `xhigh`, native on GPT-5.6 Sol and adaptive Claude models (it's the `codex-max` default); other models silently clamp it — and any unsupported level — down.
 
 ### Tools
 
