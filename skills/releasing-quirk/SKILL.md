@@ -17,10 +17,10 @@ Cut a release of the quirk plugin: verify tests, stamp today's date as the versi
 
 Versions are **CalVer**: `YYYY.M.D`, unpadded — `2026.7.9`, never `2026.07.09`.
 
-- Unpadded is valid 3-segment semver, so no validator rejects it and it sorts correctly. Zero-padding is rejected: PEP 440 tooling normalizes `2026.07.09` → `2026.7.9`, which would silently **desync** the three version files.
-- A 2nd+ release on the same day appends a micro: `2026.7.9.1`, `2026.7.9.2`. The first release of a day stays plain 3-segment (`2026.7.9`).
+- The common one-per-day form (`2026.7.9`) is unpadded and is valid strict 3-segment semver, so no validator rejects it. Zero-padding is rejected: PEP 440 tooling normalizes `2026.07.09` → `2026.7.9`, which would silently **desync** the three version files.
+- A 2nd+ release on the same day appends a micro: `2026.7.9.1`, `2026.7.9.2`. This 4-segment form is **not** strict semver (which allows exactly three numeric parts) but is valid PEP 440 and safe for Claude Code, which treats the version as an opaque string.
 - "Today" is the machine's **local** date (`date.today()`), so a release cut just before midnight uses that day's date — no surprises.
-- The scheme is monotonic over the old semver line: `2026.* > 5.x` because `2026 > 5` under both string and numeric compare. No git tags are created (same as before) — same-day detection reads the version files, not tags.
+- The scheme is monotonic over the old semver line: `2026.7.9 > 5.9.0` under numeric (semver / PEP 440) comparison, since `2026 > 5`. Naive lexicographic string comparison would sort `2026.…` *before* `5.…`, but that doesn't matter here — Claude Code's update detection is string *inequality* (any change from the installed version triggers an update), not string ordering. No git tags are created (same as before) — same-day detection reads the version files, not tags.
 
 ## Preconditions
 
@@ -80,7 +80,7 @@ PY
 ```
 
 - First release of the day → `2026.7.9`.
-- Re-run the same day → `2026.7.9.1`, then `.2`, ... (idempotent: always advances, never collides).
+- Re-run the same day → `2026.7.9.1`, then `.2`, ... (safe to re-run: each run advances the micro, so repeats never collide).
 - Coming from an old semver version like `5.9.0` → `2026.7.9`.
 
 ### Step 4: Sync the Three Version Files

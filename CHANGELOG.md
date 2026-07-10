@@ -2,7 +2,7 @@
 
 All notable changes to quirk are recorded here, newest first. Versions are
 calendar-based (**CalVer**, `YYYY.M.D` unpadded); the `releasing-quirk` skill
-stamps and appends each entry. Since the version no longer encodes
+stamps and prepends each entry (newest on top). Since the version no longer encodes
 compatibility, breaking changes are called out in a `### ⚠️ BREAKING` subsection.
 
 ## 2026.7.9
