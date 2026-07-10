@@ -43,7 +43,7 @@ Here is how information moves through the new pipeline, end to end:
    - **If yes** (multi-session work, a real subsystem boundary, many files touched, or the user asked): it runs the **tech-spec rubric**. This surveys the actual codebase in depth and writes the **tech spec** — the exact files, signatures, contracts, and do-not-touch fences an agent needs. An automated reviewer checks it; the user may optionally skim it. Crucially, if the codebase survey reveals that the approved idea won't work as written, execution **stops and escalates back to the user** rather than quietly changing the plan.
    - **If no** (a bug fix, a config tweak, a one- or two-file change): it skips the tech spec entirely. The logic spec plus the codebase are enough.
 4. The execution skill builds its **in-context task list** (exactly as it does today), reading from the tech spec when one exists, or straight from the logic spec when one doesn't.
-5. It **executes** the tasks through the existing per-task review chain, and finishes through the existing branch-completion flow, which records the final status of the documents.
+5. It **executes** the tasks through the existing per-task review chain, and finishes through the existing branch-completion flow. The documents' `Status` fields are set as the work completes; fuller lifecycle automation is deferred (see [Deferred Ideas](#deferred-ideas)).
 
 The one-line version: **brainstorm → logic spec → (optional tech spec) → build**, with the only mandatory human checkpoint on the logic spec.
 
@@ -165,4 +165,5 @@ Captured so they aren't lost; explicitly out of scope for this change.
 
 **Status:** Draft — awaiting user review. No `tech.md` exists yet; per this design, one will be authored at execution time because the change spans ~6 skills (above the complexity-tier threshold).
 
-**Amendments:** _(none yet)_
+**Amendments:**
+- **2026-07-10** — Data flow (step 5): softened "records the final status of the documents" to "`Status` fields are set as work completes; lifecycle automation deferred," aligning it with the Deferred Ideas entry and removing a promise no work unit implements. Surfaced by the tech-spec review; `finishing-a-development-branch` stays untouched (audited in `tech.md` CU-8).
