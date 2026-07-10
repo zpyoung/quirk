@@ -163,7 +163,8 @@ Captured so they aren't lost; explicitly out of scope for this change.
 
 ## Status & amendments
 
-**Status:** Draft — awaiting user review. No `tech.md` exists yet; per this design, one will be authored at execution time because the change spans ~6 skills (above the complexity-tier threshold).
+**Status:** Draft — awaiting user review. The `tech.md` sibling has been hand-authored (dogfooding), since the change spans 14 files across ~7 skills — above the complexity tier.
 
 **Amendments:**
 - **2026-07-10** — Data flow (step 5): softened "records the final status of the documents" to "`Status` fields are set as work completes; lifecycle automation deferred," aligning it with the Deferred Ideas entry and removing a promise no work unit implements. Surfaced by the tech-spec review; `finishing-a-development-branch` stays untouched (audited in `tech.md` CU-8).
+- **2026-07-10** — Post-red-team hardening of `tech.md` (no logic-level decision changed): R4 feasibility escalation now fires at *any* point after approval (authoring / planning / execution), with an explicit tech-section regeneration owner and a headless-halt rule — closing the hole where a mid-execution conflict could silently edit the plan and override this document. Added the R2 provisional-tier upgrade path + recorded ruling, an R5 canonical-vocabulary / CU-ordering / bootstrap-exemption rule, and a C4.5 pointer-re-resolution step so "re-verified at plan-build" is an owned step rather than a phrase. Status file/skill count corrected to 14 / ~7.
