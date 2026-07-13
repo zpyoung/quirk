@@ -17,7 +17,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { getModel } from "@mariozechner/pi-ai";
+import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import {
     AuthStorage,
     createAgentSession,
@@ -25,7 +25,7 @@ import {
     ModelRegistry,
     SessionManager,
     SettingsManager,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 
 // ---- Aliases -------------------------------------------------------------
 // Each alias = (default thinking level) + ordered preference list. First combo
@@ -284,18 +284,31 @@ function runCheck(checkAlias, thinkingOverride) {
     const names = checkAlias !== null ? [checkAlias] : Object.keys(ALIASES);
     const avail = listAvailable();   // runs `pi --list-models` once; exits 4 if pi is missing
     const pad = Math.max(...names.map((n) => n.length));
-    const failed = [];
+    const noAuth = [];   // ladder has no authed/shipping combo → run `pi /login`
+    const skew = [];     // pi lists the model but the bundled SDK catalog lacks it → run `pnpm update`
     process.stderr.write(`pi-watch: validating ${checkAlias !== null ? `alias '${checkAlias}'` : "aliases"} against authed models (pi --list-models)\n\n`);
     for (const name of names) {
         const cfg = ALIASES[name];
         const resolved = resolveAgainst(cfg, avail, thinkingOverride);
-        if (resolved) {
-            process.stderr.write(`  ✓ ${name.padEnd(pad)}  ${resolved.provider}/${resolved.model}:${resolved.thinking}\n`);
-        } else {
-            failed.push(name);
+        if (!resolved) {
+            noAuth.push(name);
             process.stderr.write(`  ✗ ${name.padEnd(pad)}  no authed/shipping model (0/${cfg.prefs.length} combos)\n`);
+            continue;
         }
+        // Dispatch runs in-process against the bundled pi-ai catalog (see the
+        // getModel guard on the dispatch path). A model the pi binary lists but
+        // the SDK lacks — e.g. after pi ships a new model before pi-ai catches
+        // up — would pass a binary-only preflight yet die at dispatch (exit 3).
+        // Mirror the dispatch precondition here so --check never green-lights a
+        // doomed run.
+        if (!getModel(resolved.provider, resolved.model)) {
+            skew.push(name);
+            process.stderr.write(`  ✗ ${name.padEnd(pad)}  SDK skew — ${resolved.provider}/${resolved.model} in pi, not in bundled pi-ai\n`);
+            continue;
+        }
+        process.stderr.write(`  ✓ ${name.padEnd(pad)}  ${resolved.provider}/${resolved.model}:${resolved.thinking}\n`);
     }
+    const failed = [...noAuth, ...skew];
     const okCount = names.length - failed.length;
     process.stderr.write("\n");
     if (failed.length === 0) {
@@ -303,7 +316,8 @@ function runCheck(checkAlias, thinkingOverride) {
         process.exit(0);
     }
     process.stderr.write(`${okCount}/${names.length} ready — not available: ${failed.join(", ")}.\n`);
-    process.stderr.write(`Run 'pi /login' for the needed provider, or 'pi --list-models' to see what's authed.\n`);
+    if (noAuth.length) process.stderr.write(`  auth: run 'pi /login' for the needed provider (${noAuth.join(", ")}), or 'pi --list-models' to see what's authed.\n`);
+    if (skew.length) process.stderr.write(`  SDK skew: run 'pnpm update' in ${import.meta.dirname} to catch pi-ai up to the pi binary (${skew.join(", ")}).\n`);
     if (checkAlias !== null) {
         process.stderr.write(`\nLadder tried for '${checkAlias}':\n`);
         for (const combo of ALIASES[checkAlias].prefs) process.stderr.write(`  - ${combo}\n`);

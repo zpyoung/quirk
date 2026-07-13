@@ -1,17 +1,17 @@
-# SDK Mode (`@mariozechner/pi-coding-agent`)
+# SDK Mode (`@earendil-works/pi-coding-agent`)
 
 For TypeScript/Node.js, skip the subprocess entirely and embed pi directly. `AgentSession` is the same object the CLI uses internally — no protocol layer to translate, full type safety.
 
 ## Install
 
 ```bash
-pnpm add @mariozechner/pi-coding-agent
+pnpm add @earendil-works/pi-coding-agent
 ```
 
 ## Minimal example
 
 ```typescript
-import { createAgentSession, SessionManager } from "@mariozechner/pi-coding-agent";
+import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 
 const { session } = await createAgentSession({
     sessionManager: SessionManager.inMemory(),
@@ -44,7 +44,7 @@ await session.prompt("What files are in the current directory?");
 Inject Claude Code conventions or custom prompts programmatically:
 
 ```typescript
-import { DefaultResourceLoader } from "@mariozechner/pi-coding-agent";
+import { DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
 
 const loader = new DefaultResourceLoader({
     // Replace system prompt (CLAUDE.md / AGENTS.md still appended)
@@ -115,7 +115,7 @@ import {
     runPrintMode,
     runRpcMode,
     InteractiveMode,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 
 // Single-shot print
 await runPrintMode(runtime, {

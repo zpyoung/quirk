@@ -36,7 +36,7 @@ The ✓/✗ report prints to **stderr** (like pi-watch's other progress output) 
 | 0 | Every checked alias resolves to an authed model |
 | 2 | Named alias is unknown |
 | 4 | Can't query `pi` (binary missing — see [Setup](#setup-one-time-per-workstation)) |
-| 5 | At least one checked alias has no authed/shipping model — run `pi /login` for that provider |
+| 5 | At least one checked alias won't run — no authed/shipping model (run `pi /login`), or SDK skew: pi lists the model but the bundled pi-ai catalog lacks it (run `pnpm update` in the pi-watch dir) |
 
 ## Aliases
 
@@ -124,7 +124,7 @@ Use the raw `pi` binary or the SDK directly only for these cases:
 | One-off script, just want final text, no streaming | `pi -p "..."` | `reference/print-mode.md` |
 | Tooling that consumes JSONL events | `pi --mode json` | `reference/json-mode.md` |
 | Non-Node host (Python/Go/Rust) needing bidirectional control | `pi --mode rpc --no-session` | `reference/rpc-mode.md` |
-| Embedding pi in a Node.js app with type safety | `@mariozechner/pi-coding-agent` SDK | `reference/sdk-mode.md` |
+| Embedding pi in a Node.js app with type safety | `@earendil-works/pi-coding-agent` SDK | `reference/sdk-mode.md` |
 | Multi-agent orchestrator (decompose → dispatch → review → integrate) | RPC subprocess workers + SDK orchestrator | `reference/orchestration.md` |
 | Need a model not covered by an alias, or pinning an exact version | `pi-watch --provider <p> --model <m> [--thinking <l>]` | `reference/models.md` (full catalog, separator quirks, fallback algorithm) |
 

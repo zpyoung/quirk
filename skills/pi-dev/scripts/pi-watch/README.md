@@ -110,7 +110,7 @@ Pi has no built-in sandbox — `bash`, `edit`, and `write` operate at the caller
 | 2 | Bad CLI args / unknown alias |
 | 3 | Model not in pi-ai registry (run `pnpm update` here) |
 | 4 | Cannot run `pi --list-models` (pi binary missing?) |
-| 5 | No combo in alias ladder is authed/shipping |
+| 5 | Alias won't run — no combo authed/shipping (`pi /login`), or SDK skew: pi lists the model but bundled pi-ai lacks it (`pnpm update` here) |
 
 `--check` uses the same codes: **0** = all checked aliases ready, **5** = at least one not authed/shipping, **2** = unknown alias, **4** = `pi` not runnable.
 
