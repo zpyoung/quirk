@@ -300,6 +300,8 @@ After the spec review loop passes, ask the user to review the written spec befor
 
 Wait for the user's response. If they request changes, make them and re-run the spec review loop. Only proceed once the user approves.
 
+**Tech-spec request capture.** If the user's approval also asks for a tech spec, record `Tech spec: requested` in the logic spec's `Status` line and commit that update before handing off to the execution skill — this is what lets `writing-tech-spec`'s complexity-tier gate read the request later without re-asking.
+
 **Implementation:**
 
 - Invoke an execution skill — quirk:subagent-driven-development (recommended) or quirk:executing-plans. It authors a tech spec when warranted, then plans in context, then executes.

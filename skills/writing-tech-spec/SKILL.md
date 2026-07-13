@@ -40,9 +40,9 @@ Below this line, the pipeline is `brainstorm → logic spec → build` — no te
 
 ## Deep-dive method
 
-Before writing a single line of `tech.md`, dispatch **parallel `Explore` subagents** — one per subsystem or file cluster the logic spec touches — to gather precise anchors from the *live* codebase: exact file paths, function/class signatures, symbol names, existing tests that already cover the area, and regions that look stable and load-bearing. Do this in parallel, not sequentially — the clusters are usually independent and the survey is the expensive part this rubric exists to pay for once.
+Before writing a single line of `tech.md`, gather precise anchors from the *live* codebase: exact file paths, function/class signatures, symbol names, existing tests that already cover the area, and regions that look stable and load-bearing. Dispatch **parallel `Explore` subagents** — one per subsystem or file cluster the logic spec touches — **when subagents are available**, and do this in parallel, not sequentially — the clusters are usually independent and the survey is the expensive part this rubric exists to pay for once. On a sequential, no-subagent path (e.g. `quirk:executing-plans`), the orchestrator performs this codebase survey directly, in-session — the anchors still must come from the live tree, never from memory.
 
-This survey is what makes the spec "code-anchored" in the sense the industry means by **heavy code reference**: precise pointers — paths, signatures, symbols, do-not-touch fences — never reference implementations. A tech spec built from memory or from the logic spec's prose alone is not code-anchored; it is guessing with better formatting. If a subagent can't resolve an anchor it was sent to find, that is signal the logic spec's assumption needs a closer look before you write it down as fact — see feasibility escalation below.
+This survey is what makes the spec "code-anchored" in the sense the industry means by **heavy code reference**: precise pointers — paths, signatures, symbols, do-not-touch fences — never reference implementations. A tech spec built from memory or from the logic spec's prose alone is not code-anchored; it is guessing with better formatting. If the survey can't resolve an anchor it was sent to find, that is signal the logic spec's assumption needs a closer look before you write it down as fact — see feasibility escalation below.
 
 ## The `tech.md` template
 
@@ -85,7 +85,7 @@ The reasoning is the same as in a plan: pasted code anchors the implementer to o
 
 ## Where `tech.md` lives
 
-`CONTRACT:` `tech.md` is always a sibling of the logic spec it was authored from, in the same per-topic subfolder:
+`CONTRACT:` `tech.md` is always authored as a **sibling of the actual `logic.md`** — in whatever directory the logic spec was actually saved to, even when a user preference overrode brainstorming's default location. The layout below is the **default example**, not a hard-coded path:
 
 ```
 docs/quirk/specs/YYYY-MM-DD-<topic>/logic.md

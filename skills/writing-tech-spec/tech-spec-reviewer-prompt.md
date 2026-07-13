@@ -10,7 +10,9 @@ spec, and buildable by an implementer with zero conversation history — before 
 and runs before `writing-plans` builds the task breakdown.
 
 **Input:** Paste the `tech.md` text **inline**, and the `logic.md` text **inline** for
-cross-reference. The reviewer reads no file — both documents are pasted.
+cross-reference. The reviewer does not read `tech.md` or `logic.md` from disk — both documents
+are pasted — but it MUST inspect the referenced source files in the working tree to resolve and
+verify pointers (see Pointer precision below).
 
 ```
 Task tool (general-purpose):

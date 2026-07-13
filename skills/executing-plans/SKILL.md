@@ -29,12 +29,15 @@ Step 0 is the first half of the stage that authors a tech spec when warranted, t
 2. **Record the ruling.** Log which criterion fired, or "skipped — none met," in this run (and in
    `logic.md` Status when a tech spec is authored).
 3. **If the gate is met:**
-   - **Idempotency:** if a reviewed `tech.md` already exists at the sibling path
-     (`docs/quirk/specs/YYYY-MM-DD-<topic>/tech.md`, next to `logic.md`, handed off from another
-     session), load it — do not re-author — unless it's absent or your human partner requests a
-     rewrite.
-   - Otherwise, invoke **quirk:writing-tech-spec** to author `tech.md` at the sibling path from
-     the approved logic spec.
+   - **Idempotency:** if a reviewed `tech.md` already exists as the sibling of the actual
+     `logic.md` (wherever it was saved — by default `docs/quirk/specs/YYYY-MM-DD-<topic>/tech.md`
+     next to `docs/quirk/specs/YYYY-MM-DD-<topic>/logic.md`, handed off from another session),
+     load it — do not re-author — unless it's absent or your human partner requests a rewrite.
+   - Otherwise, invoke **quirk:writing-tech-spec** to author `tech.md` next to the logic spec, in
+     the same directory the logic spec was actually saved to (the path above is the default
+     example, not a hard-coded location).
+   - On this no-subagent path, perform writing-tech-spec's deep-dive codebase survey in-session,
+     directly — parallel `Explore` subagents aren't required here.
    - Dispatch its reviewer and apply fixes inline.
    - Offer your human partner an optional skim (not a gate) surfacing the tech spec's most
      consequential calls — anchored subsystem/files, major DO-NOT-CHANGE fences, riskiest

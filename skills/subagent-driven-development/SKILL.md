@@ -139,11 +139,13 @@ tech spec is authored — before continuing.
 
 **If the gate is met:**
 
-1. **Idempotency:** if a reviewed `tech.md` already exists at
-   `docs/quirk/specs/YYYY-MM-DD-<topic>/tech.md` (handed off from another session), load it
-   instead of re-authoring — re-author only if it's absent or the user asks for a rewrite.
-2. Otherwise, invoke **quirk:writing-tech-spec** as the rubric to author `tech.md` from the
-   approved `logic.md`.
+1. **Idempotency:** if a reviewed `tech.md` already exists as the sibling of the actual
+   `logic.md` (wherever it was saved — by default `docs/quirk/specs/YYYY-MM-DD-<topic>/tech.md`,
+   handed off from another session), load it instead of re-authoring — re-author only if it's
+   absent or the user asks for a rewrite.
+2. Otherwise, invoke **quirk:writing-tech-spec** as the rubric to author `tech.md` next to the
+   logic spec, in the same directory the approved `logic.md` was actually saved to (the path
+   above is the default example, not a hard-coded location).
 3. Dispatch the tech-spec reviewer (`../writing-tech-spec/tech-spec-reviewer-prompt.md`)
    against the in-context `tech.md` (paste inline — the reviewer reads no file); apply its fixes.
 4. Offer the user an **optional** skim (not a gate) — surface the tech spec's anchored
@@ -158,10 +160,6 @@ tech spec is authored — before continuing.
 This skill **authors a tech spec when warranted, then plans in context**: `tech.md` (when
 authored) becomes `writing-plans`' input for Step 0a, alongside — or instead of — `logic.md`.
 
-**Upgrade re-check.** After **Step 0b** / **Step 0c** reveal the real file count and task shape,
-re-check the complexity-tier gate against the actual scope: if a skipped run now clears the tier, author `tech.md`
-late (steps 1-5 above) and re-plan the affected tasks before continuing.
-
 ### Step 0a: Build the plan in context
 
 Unless a plan already exists (in this conversation, or as a persisted file handed to you),
@@ -173,9 +171,14 @@ Unless a plan already exists (in this conversation, or as a persisted file hande
    `scope.files` / `cooperative` fields — directly in this conversation **and into a TodoWrite
    list** (one item per task). TodoWrite is the durable home for the breakdown; it survives
    context compaction.
-2. **Do not write a plan file** by default. Persist to `docs/quirk/plans/` only if the user asks
+2. **Complexity-tier upgrade re-check.** Immediately after writing-plans' File Structure pass
+   (part of step 1, above) reveals the real file count and task shape, re-check the
+   complexity-tier gate against the actual scope — **before** Step 0a-review (plan review) and
+   Step 0b / Step 0c (wave computation). If a previously-skipped run now clears the tier, author
+   `tech.md` late (Step 0a-pre's steps 1-5) and re-plan the affected tasks before continuing.
+3. **Do not write a plan file** by default. Persist to `docs/quirk/plans/` only if the user asks
    or the plan must outlive this session.
-3. If a persisted plan file *was* handed off from another session, read it once to seed the
+4. If a persisted plan file *was* handed off from another session, read it once to seed the
    in-context plan + TodoWrite, then proceed as above.
 
 ### Step 0a-review: Agent reviews the plan (default)
