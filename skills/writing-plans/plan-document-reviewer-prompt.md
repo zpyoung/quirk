@@ -2,14 +2,15 @@
 
 Use this template when dispatching a plan document reviewer subagent.
 
-**Purpose:** Verify the plan is complete, matches the spec, and has proper task decomposition.
+**Purpose:** Verify the plan is complete, matches the tech spec (`tech.md`) when present — else the logic spec / requirements — and has proper task decomposition.
 
 **Dispatch:** Automatically, by default, once the in-context plan is drafted (the execution
 skill's planning phase) — this is the standard review step, not optional, and replaces any human
 approval gate.
 
-**Input:** Paste the plan text **inline** (the plan lives in context, not a file). Paste the spec
-text or its path for reference. The reviewer does not read a plan file.
+**Input:** Paste the plan text **inline** (the plan lives in context, not a file). Paste the tech
+spec (`tech.md`) when present — else the logic spec / requirements — text or its path for
+reference. The reviewer does not read a plan file.
 
 ```
 Task tool (general-purpose):
@@ -20,14 +21,14 @@ Task tool (general-purpose):
     **Plan to review (inline):**
     [PASTE FULL PLAN TEXT HERE]
 
-    **Spec for reference:** [PASTE SPEC TEXT OR SPEC_FILE_PATH]
+    **Spec for reference (tech spec `tech.md` when present, else logic spec):** [PASTE TECH.MD OR LOGIC SPEC TEXT / FILE PATH]
 
     ## What to Check
 
     | Category | What to Look For |
     |----------|------------------|
     | Completeness | TODOs, placeholders, vague/ambiguous steps (no behavioral goal, no acceptance check) — AND pasted implementation/test bodies (over-specification). Both are defects. |
-    | Spec Alignment | Plan covers spec requirements, no major scope creep |
+    | Spec Alignment | Plan covers the tech spec (or logic spec) requirements, no major scope creep |
     | Task Decomposition | Tasks have clear boundaries, steps are actionable |
     | Altitude | Does each task specify WHAT (behavior, contract, acceptance) rather than HOW (literal code)? Any code present must be a justified, tagged exception — `CONTRACT:` signature sketch, `SCHEMA:`, `COMMAND:`, `REGEX:`, `CONFIG:`, or `PSEUDOCODE (justified):` (≤3 lines). Flag any untagged code block, runnable function body, or full test body. |
     | Acceptance Criteria | Does each task carry an observable, testable success condition? |
@@ -39,10 +40,10 @@ Task tool (general-purpose):
     An implementer building the wrong thing or getting stuck is an issue.
     Minor wording, stylistic preferences, and "nice to have" suggestions are not.
 
-    Approve unless there are serious gaps — missing requirements from the spec,
-    contradictory steps, ambiguity that yields two or more reasonable
-    implementations, OR full implementation/test bodies that pre-empt the
-    implementor, or tasks so vague they can't be acted on.
+    Approve unless there are serious gaps — missing requirements from the tech
+    spec (or logic spec), contradictory steps, ambiguity that yields two or more
+    reasonable implementations, OR full implementation/test bodies that pre-empt
+    the implementor, or tasks so vague they can't be acted on.
 
     ## Output Format
 

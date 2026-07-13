@@ -31,9 +31,11 @@ digraph when_to_use {
 }
 ```
 
-You do **not** need a written plan to start — this skill builds the plan in context as its
-first phase (**Step 0a**). You need a spec or requirements to plan *from*; if you don't have
-one, brainstorm first.
+You do **not** need a written plan to start — this skill authors a tech spec when warranted,
+then plans in context as its first phase (an optional **Step 0a-pre**, then **Step 0a**). You
+need the tech spec (`tech.md`) when present, else the logic spec / requirements, to plan *from*;
+if you don't have one, brainstorm first. Even when you do, a tech spec may still be authored
+during execution (**Step 0a-pre**) if the work clears the complexity tier.
 
 **Parallel by default:** when the chosen path is `subagent-driven-development`, the orchestrator computes waves from declared task independence and selects per-wave between `SEQUENTIAL`, `IN_PLACE_PARALLEL`, `WORKTREE_PARALLEL`, and `TEAM` mode. Sequential is reserved for tasks with hard declared dependencies. See **The Process → Step 0b**.
 
@@ -79,6 +81,7 @@ digraph process {
     rankdir=TB;
 
     "Ask: pi or Claude runtime?" [shape=diamond];
+    "author tech spec (if tier)" [shape=box];
     "Read plan, extract tasks, compute waves" [shape=box];
     "More waves remain?" [shape=diamond];
     "Pick mode for next wave" [shape=box];
@@ -94,7 +97,8 @@ digraph process {
     "Dispatch final whole-branch reviewer (Claude quirk:code-reviewer)" [shape=box];
     "Use quirk:finishing-a-development-branch" [shape=box style=filled fillcolor=lightgreen];
 
-    "Ask: pi or Claude runtime?" -> "Read plan, extract tasks, compute waves";
+    "Ask: pi or Claude runtime?" -> "author tech spec (if tier)";
+    "author tech spec (if tier)" -> "Read plan, extract tasks, compute waves";
     "Read plan, extract tasks, compute waves" -> "More waves remain?";
     "More waves remain?" -> "Pick mode for next wave" [label="yes"];
     "More waves remain?" -> "Dispatch final whole-branch reviewer (Claude quirk:code-reviewer)" [label="no"];
@@ -124,15 +128,51 @@ and so on for spec reviewer, code-quality reviewer, and merge resolver.
 
 ### Step 0: Runtime selection (above)
 
+### Step 0a-pre: Author the tech spec (only when complexity warrants)
+
+Before building the plan, apply the **complexity-tier gate** (from
+**quirk:writing-tech-spec**): author `tech.md` if execution spans more than one session, crosses
+a subsystem boundary, touches ≳3 source files, or the user asked for a tech spec. This is a
+direct instruction — **author** or **skip**, not a suggestion to weigh. Record the ruling as
+one line (which criterion fired, or "skipped — none met") — and in `logic.md` Status when a
+tech spec is authored — before continuing.
+
+**If the gate is met:**
+
+1. **Idempotency:** if a reviewed `tech.md` already exists at
+   `docs/quirk/specs/YYYY-MM-DD-<topic>/tech.md` (handed off from another session), load it
+   instead of re-authoring — re-author only if it's absent or the user asks for a rewrite.
+2. Otherwise, invoke **quirk:writing-tech-spec** as the rubric to author `tech.md` from the
+   approved `logic.md`.
+3. Dispatch the tech-spec reviewer (`../writing-tech-spec/tech-spec-reviewer-prompt.md`)
+   against the in-context `tech.md` (paste inline — the reviewer reads no file); apply its fixes.
+4. Offer the user an **optional** skim (not a gate) — surface the tech spec's anchored
+   subsystem/files, its major DO-NOT-CHANGE fences, and its riskiest contracts, so they can veto
+   a legal-but-wrong technical bet without reading the whole document.
+5. **Feasibility escalation:** if authoring surfaces a conflict with a `logic.md`
+   Decisions-Locked entry, **STOP**, present it to the user, and record the resolution in
+   `logic.md`'s Amendments log before proceeding — never resolve it silently in `tech.md`.
+
+**If the gate is not met:** skip — proceed straight to **Step 0a** and plan from `logic.md`.
+
+This skill **authors a tech spec when warranted, then plans in context**: `tech.md` (when
+authored) becomes `writing-plans`' input for Step 0a, alongside — or instead of — `logic.md`.
+
+**Upgrade re-check.** After **Step 0b** / **Step 0c** reveal the real file count and task shape,
+re-check the complexity-tier gate against the actual scope: if a skipped run now clears the tier, author `tech.md`
+late (steps 1-5 above) and re-plan the affected tasks before continuing.
+
 ### Step 0a: Build the plan in context
 
 Unless a plan already exists (in this conversation, or as a persisted file handed to you),
 **build it now** — planning is the first phase of execution, not a prior step:
 
-1. Invoke **quirk:writing-plans** as the rubric. Draft the task breakdown — each task with its
-   Contract, Acceptance, and optional `independent` / `dependencies` / `scope.files` /
-   `cooperative` fields — directly in this conversation **and into a TodoWrite list** (one item
-   per task). TodoWrite is the durable home for the breakdown; it survives context compaction.
+1. Invoke **quirk:writing-plans** as the rubric, drafting from `tech.md` when Step 0a-pre
+   authored or loaded one, else from `logic.md` / requirements. Draft the task breakdown — each
+   task with its Contract, Acceptance, and optional `independent` / `dependencies` /
+   `scope.files` / `cooperative` fields — directly in this conversation **and into a TodoWrite
+   list** (one item per task). TodoWrite is the durable home for the breakdown; it survives
+   context compaction.
 2. **Do not write a plan file** by default. Persist to `docs/quirk/plans/` only if the user asks
    or the plan must outlive this session.
 3. If a persisted plan file *was* handed off from another session, read it once to seed the
@@ -330,7 +370,7 @@ Implementer subagents report one of four statuses. Handle each appropriately:
 1. If it's a context problem, provide more context and re-dispatch with the same model
 2. If the task requires more reasoning, re-dispatch with a more capable model
 3. If the task is too large, break it into smaller pieces
-4. If the plan itself is wrong, escalate to the human
+4. If the plan itself is wrong, escalate to the human — and if the wrongness is a conflict with a `logic.md` Decisions-Locked entry, record the resolution as a dated entry in the logic spec's Amendments log before continuing, never a silent plan edit.
 
 **Never** ignore an escalation or force the same model to retry without changes. If the implementer said it's stuck, something needs to change.
 
@@ -361,8 +401,10 @@ interactive form.
 ## Example Workflow
 
 ```
-You: I'm using Subagent-Driven Development. First I'll build the plan in context.
+You: I'm using Subagent-Driven Development. First I'll check whether a tech spec is warranted,
+then build the plan in context.
 
+[Step 0a-pre: complexity-tier gate checked — "skipped, none met" — proceed straight to Step 0a]
 [Step 0a: invoke writing-plans rubric → draft 5 tasks (contracts, acceptance, parallelism)
  in context + TodoWrite — no file]
 [Step 0a-review: dispatch plan-document reviewer on the in-context plan; apply fixes]
@@ -537,7 +579,7 @@ mixed-runtime task.
 
 **Required workflow skills:**
 - **quirk:using-git-worktrees** — REQUIRED: Set up isolated workspace before starting. **Now load-bearing in `WORKTREE_PARALLEL` mode**: orchestrator creates one worktree per task in the wave (branch convention `<parent-branch>/sdd/<task-id>`), runs reviews inside the worktree pre-merge, rolling-merges back to the parent branch as each task's review chain passes, and tears down the worktree on success.
-- **quirk:writing-plans** — The planning rubric this skill runs **in context** as its first phase (**Step 0a**), not a prior step. It produces the task breakdown — held in the conversation + TodoWrite, file optional — including the optional task fields (`independent`, `dependencies`, `scope.files`, `cooperative`) the orchestrator uses for wave compute and mode decision in **Step 0b** / **Step 0c**.
+- **quirk:writing-plans** — The planning rubric this skill runs **in context** as its first phase (**Step 0a**, preceded by the optional **Step 0a-pre** tech-spec authoring), not a prior step. It produces the task breakdown — held in the conversation + TodoWrite, file optional, drafted from `tech.md` when Step 0a-pre produced one, else from `logic.md` / requirements — including the optional task fields (`independent`, `dependencies`, `scope.files`, `cooperative`) the orchestrator uses for wave compute and mode decision in **Step 0b** / **Step 0c**.
 - **quirk:requesting-code-review** — Code review template for reviewer subagents.
 - **quirk:finishing-a-development-branch** — Complete development after all tasks.
 
