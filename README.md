@@ -6,7 +6,7 @@ Version: **2026.7.9**
 
 ## What ships
 
-- **20 skills** under `skills/` covering TDD, systematic debugging, brainstorming, deep-research/brainstorming exploration (with a `--involve` user-inclusion dial: checkpoints, mid-run steering, and idea-gate co-creation), divergent ideation, plan writing, code review, parallel agent dispatch, and more.
+- **21 skills** under `skills/` covering TDD, systematic debugging, brainstorming (which produces a logic spec), deep-research/brainstorming exploration (with a `--involve` user-inclusion dial: checkpoints, mid-run steering, and idea-gate co-creation), divergent ideation, tech-spec authoring and plan writing, code review, parallel agent dispatch, and more.
 - **Typed artifacts** (added in 5.1.0) — surface-routing for observations Claude cannot act on. See below.
 
 ## Installation
@@ -49,9 +49,9 @@ Three lifecycle hooks (warn-only, never block):
 
 All three gate on artifact-file presence — they are inert no-ops in projects that haven't run `/quirk:artifacts:init`.
 
-### Design + spec
+### Logic spec + tech spec
 
-See `docs/specs/2026-05-04-typed-artifacts-design.md`.
+See `docs/specs/2026-05-04-typed-artifacts-design.md` (historical, pre-restructure). Current specs live under a per-topic folder: `docs/quirk/specs/YYYY-MM-DD-<topic>/logic.md` (always) and `docs/quirk/specs/YYYY-MM-DD-<topic>/tech.md` (only when warranted).
 
 ## Agent Isles bridge
 

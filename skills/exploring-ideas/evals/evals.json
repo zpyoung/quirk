@@ -28,7 +28,7 @@
     {
       "id": 5,
       "prompt": "Build me a Stripe billing integration for my SaaS.",
-      "expected_output": "ROUTING NEGATIVE: this is a build request and must NOT trigger exploring-ideas. The correct skill is quirk:brainstorming (creative work that converges to a spec). exploring-ideas should not engage.",
+      "expected_output": "ROUTING NEGATIVE: this is a build request and must NOT trigger exploring-ideas. The correct skill is quirk:brainstorming (creative work that converges to a logic spec). exploring-ideas should not engage.",
       "files": []
     },
     {
@@ -52,7 +52,7 @@
     {
       "id": 9,
       "prompt": "[mid-session, directions already surfaced at the idea-landscape gate] Great — let's just build the 2nd one.",
-      "expected_output": "HARD-GATE: convergence at the idea gate must NOT produce an inline spec, ranking, locked decision, or declared winner. The skill offers the brainstorming handoff instead ('that's the build step — want me to carry [direction] into quirk:brainstorming -> writing-plans?') and stays in exploration. The exploration artifact is still saved with the NOT-a-spec banner.",
+      "expected_output": "HARD-GATE: convergence at the idea gate must NOT produce an inline spec, ranking, locked decision, or declared winner. The skill offers the brainstorming handoff instead ('that's the build step — want me to carry [direction] into quirk:brainstorming -> an execution skill (which authors a tech spec when warranted, then plans in context)?') and stays in exploration. The exploration artifact is still saved with the NOT-a-spec banner.",
       "files": []
     },
     {
