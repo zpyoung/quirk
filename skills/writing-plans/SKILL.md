@@ -75,7 +75,7 @@ The plan header names the executor. Branch on it:
 
 ## Consuming `tech.md`
 
-When a reviewed `tech.md` exists for this work (the sibling of `logic.md`: `docs/quirk/specs/YYYY-MM-DD-<topic>/tech.md`), it is the source of truth for anything code-anchored — architecture, file-level contracts, DO-NOT-CHANGE fences. Absent a `tech.md`, plan from the logic spec / requirements directly; there is nothing to re-resolve or excerpt.
+When a reviewed `tech.md` exists for this work (the sibling of `logic.md`, in the same directory; by default `docs/quirk/specs/YYYY-MM-DD-<topic>/tech.md`), it is the source of truth for anything code-anchored — architecture, file-level contracts, DO-NOT-CHANGE fences. Absent a `tech.md`, plan from the logic spec / requirements directly; there is nothing to re-resolve or excerpt.
 
 **Re-resolve once, at plan-build.** Before the File Structure pass, re-resolve every path/symbol `tech.md` cites against the live tree — `tech.md` is a map authored earlier, not the territory, and anchors drift. On a mismatch, correct `tech.md` itself (and log the correction) before decomposition locks in, so tasks are built against ground truth.
 
