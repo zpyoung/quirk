@@ -51,7 +51,7 @@ All three gate on artifact-file presence — they are inert no-ops in projects t
 
 ### Logic spec + tech spec
 
-See `docs/specs/2026-05-04-typed-artifacts-design.md` (historical, pre-restructure). Current specs live as sibling `logic.md` + `tech.md` files under a per-topic folder: `docs/quirk/specs/YYYY-MM-DD-<topic>/{logic,tech}.md`.
+See `docs/specs/2026-05-04-typed-artifacts-design.md` (historical, pre-restructure). Current specs live under a per-topic folder: `docs/quirk/specs/YYYY-MM-DD-<topic>/logic.md` (always) and `docs/quirk/specs/YYYY-MM-DD-<topic>/tech.md` (only when warranted).
 
 ## Agent Isles bridge
 
