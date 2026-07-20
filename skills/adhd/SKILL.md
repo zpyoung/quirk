@@ -1,6 +1,6 @@
 ---
 name: adhd
-description: "Divergent-ideation subroutine for surfacing N non-obvious viable options when facing decision points. Explicitly invoked via /adhd or delegated from brainstorming step 6. Uses parallel agent dispatch (Diverge + Deepen) + inline Score/Cluster to generate structured option lists with critiques."
+description: "Divergent-ideation subroutine for surfacing N non-obvious viable options when facing decision points. Explicitly invoked via /adhd or delegated from brainstorming's gray-area resolution. Uses parallel agent dispatch (Diverge + Deepen) + inline Score/Cluster to generate structured option lists with critiques."
 ---
 
 # ADHD: Divergent Ideation Framework
@@ -142,12 +142,16 @@ Example:
 
 ## Integration with Brainstorming
 
-The `brainstorming` skill includes an **advisory** sub-bullet in step 6 ("Exploring approaches") suggesting ADHD for decision points with 3+ gray areas or high uncertainty. This is opt-in guidance, not a gate.
+The `brainstorming` skill offers ADHD to the user during checklist step 4, "Resolve gray areas" (see its Gray Areas → Step 0). The offer is an `AskUserQuestion` whose recommended answer is the cheap no-ADHD path, so this remains opt-in, not a gate.
 
-Brainstorming may delegate to ADHD by saying:
+That delegation is **discovery-framed**: the decision point handed to ADHD is *"what latent ambiguous decisions are in this request?"*, so the options you return are candidate **gray areas**, not solutions. Frames that hunt blind spots — failure pre-mortem, stakeholder rotation, expert blind spots — fit this best.
+
+Your returned areas are **additive**: brainstorming dedupes them against its standard catalog set and appends the survivors as extra choices. Nothing you return replaces a catalog area, so don't try to restate or improve on the standard ones — aim for what the catalog would miss.
+
+Brainstorming may also delegate mid-design for ordinary option generation:
 > "This decision has high uncertainty across [areas]. I'm going to use the ADHD skill to surface non-obvious options."
 
-When brainstorming delegates, treat it as an explicit invocation — run the full ADHD process and return the structured output.
+Either way, treat delegation as an explicit invocation — run the full ADHD process and return the structured output.
 
 ## Reference Materials
 
