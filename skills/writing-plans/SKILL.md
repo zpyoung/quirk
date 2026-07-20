@@ -102,24 +102,32 @@ Keep one behavior per red-green cycle. A non-trivial behavior may take longer th
 
 ## Task Independence (optional)
 
-When the plan will be executed by **quirk:subagent-driven-development**, you can opt into the orchestrator's parallel modes by declaring task independence and scope. All four fields are optional — plans without them produce singleton waves (one task per wave, executed sequentially), which is the legacy behaviour.
+When the plan will be executed by **quirk:subagent-driven-development**, you can opt into the orchestrator's parallel modes by declaring task independence and scope. All five fields are optional — plans without them produce singleton waves (one task per wave, executed sequentially), which is the legacy behaviour.
 
 Declare any of these fields directly in the task heading area, in a fenced YAML-like block immediately under the `### Task N: ...` heading:
 
 ```yaml
 independent: true                     # this task can run alongside any other independent task in its eligible wave
-dependencies: [T1, T3]                # task ids that must complete before this one starts
+dependencies: [T1, T3.contract]       # T1 = wait for T1's full review chain; T3.contract = start once T3's exported contracts are spec-verified
 scope:
   files: [path/to/a.py, path/to/b.py] # files this task is expected to touch (used for IN_PLACE_PARALLEL gate)
 cooperative: true                     # task needs live cross-task negotiation (TEAM mode only — rare)
+risk: logic                           # logic (default) | pattern | mechanical — scales SDD's review chain
 ```
 
 **Guidance:**
 
 - Most tasks should use `independent: true` (with optional `scope.files`) when they truly stand alone. The orchestrator will then group them into parallel waves.
 - Use `dependencies` whenever a task needs another task's output — e.g., a test task that requires a feature task to ship first.
+  - Plain `TN` — the dependent waits for TN's entire per-task review chain to pass (the safe default).
+  - `TN.contract` (opt-in) — the dependent may start as soon as TN's implementation is committed and its spec-compliance review has confirmed TN's exported contracts (the interfaces/signatures/schemas the dependent consumes). TN's remaining reviews continue in parallel. Trade-off: if a later TN finding changes a contract, the early-started dependent must be re-checked — use `.contract` only when the consumed surface is a small, explicitly-specified contract (a `CONTRACT:`/`SCHEMA:` block in TN), not when the dependent consumes TN's behavior broadly.
 - Use `scope.files` when you want the orchestrator to consider `IN_PLACE_PARALLEL` mode (lower overhead than worktrees). The gate fires only when every task in the wave declares `scope.files` and no two scopes overlap.
 - Use `cooperative: true` very rarely — only when two or more tasks in the same wave need to negotiate interfaces during work (the orchestrator uses TEAM mode in that case, which relaxes the "fresh subagent per task" guarantee within the wave).
+- Use `risk` to scale how much review the task gets:
+  - `risk: logic` (default when omitted) — the task introduces new behavior, contracts, or algorithms. SDD runs its full three-pass review (spec compliance, code quality, adversarial).
+  - `risk: pattern` — the task mirrors a pattern already implemented AND reviewed earlier on the same branch (e.g. the second feature rewired the same way as the first). SDD skips the standalone code-quality pass (spec + adversarial still run).
+  - `risk: mechanical` — deletions, renames, moves, config/doc updates with no new logic. SDD dispatches no per-task reviewers; the task MUST therefore state a verifiable acceptance gate (exact build/test/grep commands with expected output) because that gate IS the review, backstopped by SDD's final whole-branch reviewer.
+  - Planning-time rule: when in doubt between tiers, pick the higher (more-reviewed) one. Never mark a task `mechanical` if it edits executable logic, even trivially.
 - Tasks that declare none of these fields fall back to a singleton wave (`SEQUENTIAL` mode). This is safe and matches legacy behaviour.
 
 See **quirk:subagent-driven-development → The Process → Step 0b** for the full wave-compute and mode-decision logic.
@@ -257,7 +265,7 @@ After writing the complete plan, look at the spec with fresh eyes and check the 
 
 **5. Contract consistency:** Do the signatures, method names, and property names in your `CONTRACT:` sketches match across tasks? A function called `clearLayers()` in Task 3 but `clearFullLayers()` in Task 7 is a bug.
 
-**6. Parallelism declarations:** For each task, did you accurately declare `independent: true` / `dependencies: [...]` / `scope.files: [...]`? Tasks that genuinely don't depend on each other should say so — otherwise the orchestrator falls back to sequential execution and leaves throughput on the table. Tasks that share a target file MUST run sequentially — express that with `dependencies`, never with overlapping `scope.files` and `independent: true` together.
+**6. Parallelism declarations:** For each task, did you accurately declare `independent: true` / `dependencies: [...]` / `scope.files: [...]`? Tasks that genuinely don't depend on each other should say so — otherwise the orchestrator falls back to sequential execution and leaves throughput on the table. Tasks that share a target file MUST run sequentially — express that with `dependencies`, never with overlapping `scope.files` and `independent: true` together. Also check: (a) each task's `risk` tier is honest — nothing marked `mechanical` touches executable logic, and `pattern` is used only when the mirrored pattern was itself reviewed earlier on this branch; (b) every `.contract` dependency points at a task that actually specifies the consumed contract in a tagged `CONTRACT:`/`SCHEMA:` block.
 
 If you find issues, fix them inline. No need to re-review — just fix and move on. If you find a spec requirement with no task, add the task.
 

@@ -4,7 +4,7 @@ Use this when the runtime is **pi** (see SKILL.md → Runtime Selection).
 
 The Codex adversarial reviewer model is **pi codex** (`openai-codex/gpt-5.3-codex:xhigh`), invoked read-only.
 
-**Only dispatch after both pi spec compliance review and pi code quality review have passed.**
+Dispatched concurrently with the spec-compliance and code-quality reviewers, after the implementer reports.
 
 **Fix loop cap:** 2 cycles. After two cycles of CRITICAL/HIGH findings, remaining issues carry forward to the final whole-branch reviewer (Claude `quirk:code-reviewer`, regardless of runtime).
 
@@ -20,8 +20,13 @@ Build the prompt body using the same review protocol as the Claude path:
 - `TASK_BODY`: full task body, pasted verbatim
 - `FILES_DECLARED`: list of files the task body declared as in scope
 - `IMPLEMENTER_REPORT`: the implementer's structured self-report
-- `SPEC_REVIEW`: verdict + summary from the spec compliance reviewer
-- `QUALITY_REVIEW`: verdict + summary from the code quality reviewer
+- `SPEC_REVIEW`: verdict + summary from the spec compliance reviewer, if
+  available — it runs concurrently with this reviewer, so it will usually
+  still be in progress; note that explicitly in the prompt rather than
+  omitting the placeholder
+- `QUALITY_REVIEW`: verdict + summary from the code quality reviewer, same
+  caveat — assume nothing has been blessed and verify every claim
+  independently
 
 The prompt MUST instruct the reviewer to:
 
@@ -46,6 +51,7 @@ worktree, then:
 
 ```bash
 cd <worktree>
+[ -f codex-adversarial-prompt.md ] || { echo "prompt missing" >&2; exit 1; }
 pi -p \
   --no-session \
   --offline \
@@ -53,6 +59,10 @@ pi -p \
   --tools read,bash \
   @codex-adversarial-prompt.md
 ```
+
+Verify the prompt file exists before dispatching — never fall back to
+something like `cat codex-adversarial-prompt.md || echo MISSING` that pipes
+garbage into a live worker; a bad prompt burns the entire dispatch.
 
 `--tools read,bash` keeps the reviewer read-only. The prompt body forbids
 modifications.
@@ -76,8 +86,12 @@ Same as the Claude path:
 - **PASS / LOW only:** mark task complete (or proceed to rolling auto-merge in
   `WORKTREE_PARALLEL` mode).
 - **NEEDS_FIXES (MEDIUM):** note in the final report; do not block.
-- **CRITICAL or HIGH:** dispatch the same pi implementer subagent with the
-  findings; re-run pi codex review. Cap: 2 cycles total.
+- **CRITICAL or HIGH:** do not dispatch a fix loop yourself. Report findings
+  back to the orchestrator, which merges them with the spec-compliance and
+  code-quality reviewers' findings, adjudicates overlaps/conflicts, and
+  issues one consolidated fix dispatch to the pi implementer covering all
+  three reviews. Re-run pi codex review (and the other reviewers as needed)
+  against the fix. Cap: 2 cycles total.
 
 ## Failure detection
 

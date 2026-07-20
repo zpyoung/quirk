@@ -4,7 +4,7 @@ Use this when the runtime is **pi** (see SKILL.md → Runtime Selection).
 
 The code-quality reviewer model is **pi gemini** (`google/gemini-3.1-pro-preview:high`).
 
-**Only dispatch after spec compliance review passes.**
+Dispatched concurrently with the spec-compliance and Codex adversarial reviewers, after the implementer reports.
 
 ## Prompt body
 
@@ -40,6 +40,7 @@ then:
 
 ```bash
 cd <worktree>
+[ -f quality-review-prompt.md ] || { echo "prompt missing" >&2; exit 1; }
 pi -p \
   --no-session \
   --offline \
@@ -47,6 +48,10 @@ pi -p \
   --tools read,bash \
   @quality-review-prompt.md
 ```
+
+Verify the prompt file exists before dispatching — never fall back to
+something like `cat quality-review-prompt.md || echo MISSING` that pipes
+garbage into a live worker; a bad prompt burns the entire dispatch.
 
 `--tools read,bash` keeps the reviewer read-only. The prompt body forbids
 modifications.

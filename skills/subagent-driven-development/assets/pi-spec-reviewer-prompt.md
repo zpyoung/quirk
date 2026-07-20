@@ -17,6 +17,7 @@ then:
 
 ```bash
 cd <worktree>
+[ -f spec-review-prompt.md ] || { echo "prompt missing" >&2; exit 1; }
 pi -p \
   --no-session \
   --offline \
@@ -24,6 +25,10 @@ pi -p \
   --tools read,bash \
   @spec-review-prompt.md
 ```
+
+Verify the prompt file exists before dispatching — never fall back to
+something like `cat spec-review-prompt.md || echo MISSING` that pipes garbage
+into a live worker; a bad prompt burns the entire dispatch.
 
 `--tools read,bash` lets the reviewer inspect the implementation (read files,
 grep) without granting edit/write — pi's closest match to read-only review.

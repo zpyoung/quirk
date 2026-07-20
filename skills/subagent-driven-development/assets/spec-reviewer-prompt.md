@@ -60,9 +60,17 @@ Task tool (general-purpose):
     - Did they solve the wrong problem?
     - Did they implement the right feature but wrong way?
 
+    **Contract confirmation:**
+    - If the task declares exported contracts (`CONTRACT:`/`SCHEMA:` blocks)
+      that downstream tasks depend on, explicitly state in your report
+      whether each exported contract is implemented as specified —
+      downstream tasks may be gated on this confirmation.
+
     **Verify by reading code, not by trusting report.**
 
     Report:
     - ✅ Spec compliant (if everything matches after code inspection)
     - ❌ Issues found: [list specifically what's missing or extra, with file:line references]
+    - Contract confirmation: [for each exported `CONTRACT:`/`SCHEMA:` block in the task, state
+      whether it is implemented as specified, or "N/A — task declares no exported contracts"]
 ```

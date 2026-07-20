@@ -14,12 +14,20 @@ in Over Your Head, Self-Review, Report Format).
 Substitute Task N, task description, context, and working directory the same
 way you would for the Claude path.
 
+**Parallel-mode note:** in `WORKTREE_PARALLEL` mode the orchestrator may
+instruct the worker NOT to run `git commit` — the orchestrator commits after
+the review chain passes, to avoid git index-lock races across concurrent
+workers. When this instruction is given, strip step 4 ("Commit your work")
+from the prompt body's Your Job list and tell the worker to report files
+changed instead of a commit SHA in its final report.
+
 ## Invocation
 
 Write the assembled prompt body to `prompt.md` in the worktree, then:
 
 ```bash
 cd <worktree>
+[ -f prompt.md ] || { echo "prompt missing" >&2; exit 1; }
 pi -p \
   --no-session \
   --offline \
@@ -27,6 +35,10 @@ pi -p \
   --tools read,bash,edit,write \
   @prompt.md
 ```
+
+Verify the prompt file exists before dispatching — never fall back to
+something like `cat prompt.md || echo MISSING` that pipes garbage into a live
+worker; a bad prompt burns the entire dispatch.
 
 For the canonical hardened dispatch recipe (`gtimeout` wrapper, `PIPESTATUS`
 capture, positional-args quoting, JSONL events file), see **quirk:pi-dev →

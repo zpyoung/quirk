@@ -4,7 +4,7 @@ Use this template when dispatching the **third per-task review pass** — the Co
 
 **Purpose:** Find gaps between the task spec and its implementation that the spec-compliance and code-quality reviewers may have missed. Adversarial: only critique, never validate.
 
-**Only dispatch after both spec compliance review and code quality review have passed.**
+Dispatched concurrently with the spec-compliance and code-quality reviewers, after the implementer reports.
 
 **Fix loop cap:** 2 cycles. After two cycles of CRITICAL/HIGH findings, remaining issues carry forward to the final whole-branch reviewer (do not block the task indefinitely).
 
@@ -32,8 +32,12 @@ mcp__pal__clink:
     [paste implementer's structured output]
 
     ## Prior Reviewer Outputs
-    Spec compliance: [verdict + summary]
-    Code quality: [verdict + summary]
+    Spec compliance / code quality: may still be in progress — these run
+    concurrently with you, so assume nothing has been blessed and verify
+    every claim independently. If either has already produced a verdict by
+    the time you run, it will be pasted below for cross-reference, but treat
+    it as a lead to check, not a conclusion to trust.
+    [verdict + summary, if available]
 
     ## Review Protocol
     The task specifies BEHAVIOR, not code — it carries a Contract and Acceptance
@@ -66,4 +70,4 @@ mcp__pal__clink:
 
 - **PASS / LOW only:** mark task complete (or, in `WORKTREE_PARALLEL` mode, proceed to rolling auto-merge).
 - **NEEDS_FIXES (MEDIUM):** note in the final report; do not block task completion.
-- **NEEDS_FIXES / CRITICAL_ISSUES (CRITICAL or HIGH):** dispatch the **same implementer subagent** with the findings. Re-run Codex. Repeat up to **2 cycles** total. After cycle 2, mark the task complete with unresolved findings flagged for the final whole-branch reviewer.
+- **NEEDS_FIXES / CRITICAL_ISSUES (CRITICAL or HIGH):** do not dispatch a fix loop yourself. Report findings back to the orchestrator, which merges them with the spec-compliance and code-quality reviewers' findings, adjudicates any overlaps or conflicts, and issues **one consolidated fix dispatch** to the implementer covering all three reviews. Re-run Codex (and the other reviewers as needed) against the fix. Repeat up to **2 cycles** total. After cycle 2, mark the task complete with unresolved findings flagged for the final whole-branch reviewer.

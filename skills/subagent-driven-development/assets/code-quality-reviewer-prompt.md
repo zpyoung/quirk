@@ -4,7 +4,7 @@ Use this template when dispatching a code quality reviewer subagent.
 
 **Purpose:** Verify implementation is well-built (clean, tested, maintainable)
 
-**Only dispatch after spec compliance review passes.**
+Dispatched concurrently with the spec-compliance and Codex adversarial reviewers, after the implementer reports.
 
 ```
 Task tool (quirk:code-reviewer):
