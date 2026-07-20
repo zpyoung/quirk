@@ -47,44 +47,57 @@ _stackmeta_read() {
 
     awk -v wanted="$field" -v start_marker="$STACKMETA_START" -v end_marker="$STACKMETA_END" '
         $0 == start_marker {
-            starts++
-            if (starts == 1) {
-                in_block = 1
-                start_line = NR
-            }
+            marker_seen = 1
+            if (in_block) malformed = 1
+            in_block = 1
+            current_start = NR
+            current_parent_count = current_sha_count = current_position_count = 0
+            current_parent = current_sha = current_position = ""
             next
         }
         $0 == end_marker {
-            ends++
-            if (in_block && ends == 1) {
-                in_block = 0
+            marker_seen = 1
+            if (!in_block) {
+                malformed = 1
+                next
+            }
+
+            in_block = 0
+            complete++
+            if (complete == 1) {
+                start_line = current_start
                 end_line = NR
+                parent_count = current_parent_count
+                sha_count = current_sha_count
+                position_count = current_position_count
+                parent = current_parent
+                sha = current_sha
+                position = current_position
             }
             next
         }
         in_block && index($0, "parent: ") == 1 {
-            parent_count++
-            parent = substr($0, 9)
+            current_parent_count++
+            current_parent = substr($0, 9)
             next
         }
         in_block && index($0, "base-sha: ") == 1 {
-            sha_count++
-            sha = substr($0, 11)
+            current_sha_count++
+            current_sha = substr($0, 11)
             next
         }
         in_block && index($0, "position: ") == 1 {
-            position_count++
-            position = substr($0, 11)
+            current_position_count++
+            current_position = substr($0, 11)
             next
         }
         END {
-            # Multiple openings represent multiple attempted blocks. Orphan or
-            # excess closing markers are malformed metadata, not extra blocks.
-            if (starts > 1) exit 4
-            if (starts == 0 && ends == 0) exit 2
-            if (starts != 1 || ends != 1 || !start_line || !end_line || end_line < start_line ||
+            if (!marker_seen) exit 2
+            if (complete > 1) exit 4
+            if (in_block || malformed || complete != 1 ||
                 parent_count != 1 || sha_count != 1 || position_count != 1 ||
-                parent == "" || position == "" || length(sha) != 40 || sha ~ /[^0-9A-Fa-f]/) exit 3
+                parent == "" || position !~ /^[0-9]+\/[0-9]+$/ ||
+                length(sha) != 40 || sha ~ /[^0-9A-Fa-f]/) exit 3
 
             if (wanted == "parent") print parent
             else if (wanted == "base-sha") print sha

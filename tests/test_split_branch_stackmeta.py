@@ -76,6 +76,13 @@ def test_parse_rejects_malformed_sha() -> None:
     assert result.returncode == 3
 
 
+def test_parse_rejects_malformed_positions() -> None:
+    for position in ("garbage", "/", "1/", "x/2", "1/2/3"):
+        result = run_stackmeta("parse", "position", body=block(position=position))
+        assert result.returncode == 3, position
+        assert result.stdout == ""
+
+
 def test_parse_rejects_missing_required_field() -> None:
     malformed = block().replace(f"base-sha: {SHA}\n", "")
     result = run_stackmeta("parse", "parent", body=malformed)
@@ -85,6 +92,13 @@ def test_parse_rejects_missing_required_field() -> None:
 def test_orphan_and_excess_closing_markers_are_malformed() -> None:
     closing = "<!-- /split-branch:stack -->\n"
     for body in (closing, closing + closing, block() + closing):
+        result = run_stackmeta("parse", "parent", body=body)
+        assert result.returncode == 3
+
+
+def test_orphan_and_excess_opening_markers_are_malformed() -> None:
+    opening = "<!-- split-branch:stack -->\n"
+    for body in (opening, opening + opening, block() + opening, opening + block()):
         result = run_stackmeta("parse", "parent", body=body)
         assert result.returncode == 3
 
