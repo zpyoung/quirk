@@ -4,14 +4,16 @@ Use this template when dispatching a code quality reviewer subagent.
 
 **Purpose:** Verify implementation is well-built (clean, tested, maintainable)
 
-**Only dispatch after spec compliance review passes.**
+Dispatched concurrently with the spec-compliance and Codex adversarial reviewers, after the implementer reports.
 
 ```
 Task tool (quirk:code-reviewer):
   Use template at requesting-code-review/code-reviewer.md
 
   WHAT_WAS_IMPLEMENTED: [from implementer's report]
-  PLAN_OR_REQUIREMENTS: Task N from [plan-file]
+  PLAN_OR_REQUIREMENTS / PLAN_REFERENCE: [paste Task N's full text inline — Contract, Acceptance,
+    everything. Plans are in-context by default; never point to a plan file. The underlying
+    template uses both names for the same slot; fill both with the same pasted text.]
   BASE_SHA: [commit before task]
   HEAD_SHA: [current commit]
   DESCRIPTION: [task summary]
