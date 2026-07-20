@@ -24,7 +24,7 @@ You MUST create a task for each of these items and complete them in order:
 1. **Explore project context** — check files, docs, recent commits
 2. **Detect domain + dispatch context research** — classify the work (Visual / API / CLI / Docs / Organization / Data / Integration) and spawn parallel research agents for domain patterns and anti-patterns. See [Research Agents](#research-agents).
 3. **Offer visual companion** (if topic will involve visual questions) — this is its own message, not combined with a clarifying question. See the Visual Companion section below.
-4. **Resolve gray areas** — optionally surface non-obvious areas via the `adhd` skill first (see [Gray Areas](#gray-areas) → Step 0), then present domain-specific ambiguous decision areas via `AskUserQuestion` (multiSelect), then drill into each selected area with batched clarifying questions.
+4. **Resolve gray areas** — optionally surface *additional* non-obvious areas via the `adhd` skill first (see [Gray Areas](#gray-areas) → Step 0), then present the standard domain-specific areas — plus any adhd additions — via `AskUserQuestion` (multiSelect), then drill into each selected area with batched clarifying questions.
 5. **Ask remaining clarifying questions** — one at a time, for anything not covered by gray-area resolution (purpose, constraints, success criteria)
 6. **Dispatch option-validation research** (when proposing approaches) — one research agent per candidate option, in parallel
 7. **Propose 2-3 approaches** — with trade-offs, citing research findings, your recommendation
@@ -143,7 +143,7 @@ Classify the work from the task description before clarifying questions:
 
 ### Expected Gray-Area Catalog
 
-Use these as the seed set for the multi-select question. Pick the 3–4 most relevant for the specific request.
+Use these as the seed set for the multi-select question. Pick the 3–4 most relevant for the specific request. This is the **standard set** — it is chosen the same way whether or not adhd runs, and adhd never removes or rewrites an entry in it.
 
 - **Visual**: layout-style, information-density, loading-pattern, empty-state, error-state, interaction-style
 - **API**: response-format, error-responses, authentication, versioning, rate-limiting, pagination
@@ -157,6 +157,8 @@ Use these as the seed set for the multi-select question. Pick the 3–4 most rel
 
 Before surfacing gray areas, offer to run the `adhd` skill to find **non-obvious** decision areas the static catalog would miss. The catalog is the cheap baseline; adhd is the opt-in, higher-cost expansion.
 
+adhd is **purely additive**: it appends extra candidate areas on top of the standard set. It never drops, replaces, reorders, or reworks a catalog area — running it can only ever grow the set of areas the user chooses from.
+
 **Skip this offer entirely on truly trivial work** (for example: a config tweak or an obvious one-line utility). This is narrower than the research-swarm skip rule — do **not** suppress the offer just because you've already researched the domain in-session. Otherwise, present:
 
 ```
@@ -168,13 +170,13 @@ AskUserQuestion:
       options:
         - label: "Use the standard set (Recommended)"
           description: "Surface gray areas from the domain catalog only. No extra cost."
-        - label: "Run adhd first"
-          description: "Spend 5–10× to surface non-obvious ambiguities the catalog misses; they're merged into the areas you choose from."
+        - label: "Add adhd areas"
+          description: "Spend 5–10× to surface non-obvious ambiguities the catalog misses; they're added on top of the standard set, which stays intact."
 ```
 
 - **Recommended = the cheap path**, so the default is a one-keystroke "no."
-- If the user picks **"Run adhd first"**: invoke the `adhd` skill with a **discovery-framed** delegation — the decision point you hand adhd is *"what latent ambiguous decisions are in this request?"*, so its returned "options" are candidate gray areas (not solutions). adhd's frames (failure pre-mortem, stakeholder rotation, expert blind spots) are blind-spot finders well-suited to this.
-- **Merge + label** the returned areas into the Step 1 multiSelect alongside the catalog areas, prefixing each adhd-surfaced entry with `adhd:` (e.g. `adhd: offline-degradation`) so the user sees which areas came from divergent ideation.
+- If the user picks **"Add adhd areas"**: invoke the `adhd` skill with a **discovery-framed** delegation — the decision point you hand adhd is *"what latent ambiguous decisions are in this request?"*, so its returned "options" are candidate gray areas (not solutions). adhd's frames (failure pre-mortem, stakeholder rotation, expert blind spots) are blind-spot finders well-suited to this.
+- **Dedupe, then append.** Drop any returned area that restates a catalog area already in the standard set (same decision under a different name); keep the catalog wording for those. Carry the remaining 2–4 forward to Step 1 as a *second* question, prefixing each label with `adhd:` (e.g. `adhd: offline-degradation`) so the user sees which areas came from divergent ideation.
 - If the user picks **"Use the standard set"**: proceed straight to Step 1 with catalog areas only — identical to the no-adhd flow.
 
 ### Step 1 — Surface gray areas (multiSelect)
@@ -192,6 +194,29 @@ AskUserQuestion:
           description: "[Why this area matters and what's ambiguous about it]"
         # ... 3–4 total
 ```
+
+**When adhd ran**, send both questions in the **same `AskUserQuestion` call** — the standard question above, unchanged, plus a second question carrying the adhd areas. `AskUserQuestion` caps options at 4 per question, which is why the adhd areas need their own question rather than a longer list:
+
+```
+AskUserQuestion:
+  questions:
+    - question: "Which of these areas should we clarify before designing?"
+      header: "Gray areas"
+      multiSelect: true
+      options:
+        # the 3–4 standard-set areas, verbatim
+    - question: "adhd also surfaced these less-obvious areas — clarify any of them too?"
+      header: "adhd areas"
+      multiSelect: true
+      options:
+        - label: "adhd: [area name]"
+          description: "[Why this area matters and what's ambiguous about it]"
+        # ... 2–4 total
+```
+
+Selecting nothing in the adhd question is a valid answer — the standard areas still proceed to drill-in. If only one adhd area survives deduping, give the second question that area plus a "None of these" option (the tool requires at least 2). If none survive, send the standard question alone and say in the same turn that adhd found nothing beyond the catalog.
+
+Drill-in (Step 2) treats selections from both questions identically — one area at a time, in the order they were presented.
 
 ### Step 2 — Drill-in per selected area (3–7 questions, batched)
 

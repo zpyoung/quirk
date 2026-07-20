@@ -72,11 +72,11 @@
 
 ## Integration with Brainstorming
 
-The `brainstorming` skill includes an **advisory** recommendation in step 6 ("Exploring approaches"):
+The `brainstorming` skill puts the ADHD decision to the user during checklist step 4, "Resolve gray areas" (its Gray Areas → Step 0). The offer is an `AskUserQuestion` with two answers — use the standard catalog set (recommended, no extra cost), or add ADHD-surfaced areas on top of it. The offer is skipped entirely on truly trivial work.
 
-> "For decisions with high uncertainty or 3+ gray areas, consider using `/adhd` to surface non-obvious options through structured divergent ideation."
+That path is **discovery-framed**: ADHD returns candidate gray areas rather than solutions, and they are appended to the standard set, never substituted for it.
 
-This is opt-in guidance. The main agent can:
+Elsewhere in brainstorming, ADHD stays opt-in guidance for ordinary option generation. The main agent can:
 - Invoke ADHD explicitly: "This decision warrants ADHD. Invoking `/adhd` to explore alternatives..."
 - Ask the user: "This is a high-stakes decision. Want me to use the ADHD skill to explore more options? (5-10× cost)"
 - Skip it: "This decision is straightforward. Proposing [standard options] and moving forward."
