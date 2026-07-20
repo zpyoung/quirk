@@ -390,10 +390,11 @@ final whole-branch reviewer's dispatch prompt — a capped-out HIGH finding neve
 disappears from the record. This ledger entry is the sole sanctioned way a task with an
 unresolved accepted finding moves forward (see **Red Flags** below).
 
-Spec-compliance and code-quality CRITICAL/HIGH findings get one targeted
-re-review pass each (uncapped, same as before); they are folded into the
-same consolidated fix and discrepancy check as Codex findings, not run as
-separate loops.
+Spec-compliance and code-quality CRITICAL/HIGH findings trigger a targeted
+re-review by the reviewer that raised them, repeating (fix -> re-review)
+until the accepted findings are resolved — uncapped, unlike the Codex
+2-cycle cap. Each round's fixes are folded into the same consolidated fix
+and discrepancy check as Codex findings, not run as separate loops.
 
 ### Review depth by task risk
 
