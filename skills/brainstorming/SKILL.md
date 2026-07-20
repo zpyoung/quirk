@@ -177,7 +177,7 @@ AskUserQuestion:
 - **Recommended = the cheap path**, so the default is a one-keystroke "no."
 - If the user picks **"Add adhd areas"**: invoke the `adhd` skill with a **discovery-framed** delegation — the decision point you hand adhd is *"what latent ambiguous decisions are in this request?"*, so its returned "options" are candidate gray areas (not solutions). adhd's frames (failure pre-mortem, stakeholder rotation, expert blind spots) are blind-spot finders well-suited to this.
 - **Dedupe, then append.** Drop any returned area that restates a catalog area already in the standard set (same decision under a different name); keep the catalog wording for those. Carry the remaining 2–4 forward to Step 1 as a *second* question, prefixing each label with `adhd:` (e.g. `adhd: offline-degradation`) so the user sees which areas came from divergent ideation.
-- If the user picks **"Use the standard set"**: proceed straight to Step 1 with catalog areas only — identical to the no-adhd flow.
+- If the user picks **"Use the standard set (Recommended)"**: proceed straight to Step 1 with catalog areas only — identical to the no-adhd flow.
 
 ### Step 1 — Surface gray areas (multiSelect)
 
@@ -192,7 +192,7 @@ AskUserQuestion:
       options:
         - label: "[Area name]"
           description: "[Why this area matters and what's ambiguous about it]"
-        # ... 3–4 total
+        # ... 3–4 standard-set areas total (any adhd areas go in their own question, below)
 ```
 
 **When adhd ran**, send both questions in the **same `AskUserQuestion` call** — the standard question above, unchanged, plus a second question carrying the adhd areas. `AskUserQuestion` caps options at 4 per question, which is why the adhd areas need their own question rather than a longer list:
@@ -214,7 +214,12 @@ AskUserQuestion:
         # ... 2–4 total
 ```
 
-Selecting nothing in the adhd question is a valid answer — the standard areas still proceed to drill-in. If only one adhd area survives deduping, give the second question that area plus a "None of these" option (the tool requires at least 2). If none survive, send the standard question alone and say in the same turn that adhd found nothing beyond the catalog.
+Selecting nothing in the adhd question is a valid answer — the standard areas still proceed to drill-in.
+
+Two cases need a different shape:
+
+- **Exactly one adhd area survives.** The tool requires at least 2 options, but do *not* pad a multiSelect list with "None of these" — in a multiSelect the user could check it *and* the area, which is contradictory. Make this question `multiSelect: false` with two mutually exclusive options: `adhd: [area name]` and "Skip it".
+- **No adhd area survives.** Send the standard question alone and say in the same turn that adhd found nothing beyond the catalog.
 
 Drill-in (Step 2) treats selections from both questions identically — one area at a time, in the order they were presented.
 
