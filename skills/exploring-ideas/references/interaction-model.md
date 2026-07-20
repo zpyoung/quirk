@@ -136,7 +136,7 @@ Co-creation and checkpoints exist to broaden the option space, never to converge
 - A checkpoint never asks *"which is best."*
 - If the user signals convergence at any surface — *"this one wins, let's build it"*, *"write the spec for the 2nd"* — **do not** produce a spec, ranking, or decision inline. Offer the `brainstorming` handoff instead:
 
-  > *"That's the build step — exploration stays open here. Want me to carry [direction] into `quirk:brainstorming` → `writing-plans`?"*
+  > *"That's the build step — exploration stays open here. Want me to carry [direction] into `quirk:brainstorming` → an execution skill (which authors a tech spec when warranted, then plans in context)?"*
 
 - This is the HARD-GATE. It holds at every checkpoint, every steer, and every co-creation action, at every involve level.
 

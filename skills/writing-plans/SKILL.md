@@ -1,6 +1,6 @@
 ---
 name: writing-plans
-description: The planning rubric the execution skills run in-context at the start of a run — turns a spec or requirements into a task breakdown (contracts, acceptance, parallelism) before code
+description: The planning rubric the execution skills run in-context at the start of a run — turns the tech spec (tech.md) when present, else the logic spec / requirements, into a task breakdown (contracts, acceptance, parallelism) before code
 ---
 
 # Writing Plans
@@ -73,9 +73,24 @@ The plan header names the executor. Branch on it:
 
 **Tiebreaker** when proportionality and the "zero context" assumption pull in opposite directions: for subagent execution, add detail; for human execution, trim.
 
+## Consuming `tech.md`
+
+When a reviewed `tech.md` exists for this work (the sibling of `logic.md`, in the same directory; by default `docs/quirk/specs/YYYY-MM-DD-<topic>/tech.md`), it is the source of truth for anything code-anchored — architecture, file-level contracts, DO-NOT-CHANGE fences. Absent a `tech.md`, plan from the logic spec / requirements directly; there is nothing to re-resolve or excerpt.
+
+**Re-resolve once, at plan-build.** Before the File Structure pass, re-resolve every path/symbol `tech.md` cites against the live tree — `tech.md` is a map authored earlier, not the territory, and anchors drift. On a mismatch, correct `tech.md` itself (and log the correction) before decomposition locks in, so tasks are built against ground truth.
+
+**Excerpt contracts verbatim, at dispatch.** A task that depends on a `tech.md` contract does not restate or summarize it in the task text — it excerpts the contract **verbatim**, because a dispatched subagent never reads `tech.md` (it receives only the pasted task text). Each excerpt must:
+- include **every DO-NOT-CHANGE fence whose scope intersects the task's files** — dropping one is a defect: the subagent could then edit inside a fenced region unaware it's fenced.
+- cite the `tech.md` section id it came from.
+- come from `tech.md` directly, pasted at the last moment — never paraphrased, never reconstructed from memory.
+
+**Re-resolve again, per dispatch.** Immediately before each task is dispatched, re-resolve every pointer in that task's excerpt against the live tree — an earlier wave may have already moved what `tech.md` pointed at. On a mismatch, update both `tech.md` and the excerpt before dispatching.
+
+**Keep `tech.md` in sync.** When a task *intentionally* changes a symbol `tech.md` points to (e.g. renames a function), update `tech.md` in the same commit. Skip this and a later wave's excerpt — and the reviewer that checks code against it — will certify the drift instead of catching it.
+
 ## Scope Check
 
-If the spec covers multiple independent subsystems, it should have been broken into sub-project specs during brainstorming. If it wasn't, suggest breaking this into separate plans — one per subsystem. Each plan should produce working, testable software on its own.
+If the upstream input — the tech spec (`tech.md`) when present, else the logic spec / requirements — covers multiple independent subsystems, it should have been broken into sub-project specs during brainstorming. If it wasn't, suggest breaking this into separate plans — one per subsystem. Each plan should produce working, testable software on its own.
 
 ## File Structure
 
@@ -136,6 +151,8 @@ See **quirk:subagent-driven-development → The Process → Step 0b** for the fu
 
 **Every plan MUST start with this header:**
 
+When a `tech.md` exists, the **Architecture**, **Tech Stack**, **Constraints**, and **Cross-cutting** fields below become **one-line pointers** into the corresponding `tech.md` section (e.g. `Architecture: see tech.md#architecture`), instead of restated prose — `tech.md` is the single source of truth for that material, and restating it here duplicates and drifts. When there is no `tech.md`, author these fields inline as before. Separately, **Alternatives considered** always points to the logic spec (which owns rationale, and — unlike `tech.md` — always exists): `Alternatives considered: see logic.md#key-decisions--rationale`. If the plan is **persisted to a file** (see "Where the plan lives"), any pointer must carry the **full path** — `docs/quirk/specs/YYYY-MM-DD-<topic>/tech.md#architecture` or `docs/quirk/specs/YYYY-MM-DD-<topic>/logic.md#key-decisions--rationale` — because a bare `tech.md#…` or `logic.md#…` resolves relative to `docs/quirk/plans/` and dangles identically. `Goal`, `Goals / Non-Goals`, and `Status` are always authored inline.
+
 ```markdown
 # [Feature Name] Implementation Plan
 
@@ -147,15 +164,15 @@ See **quirk:subagent-driven-development → The Process → Step 0b** for the fu
 
 **Goals / Non-Goals:** [bullet lists; non-goals name things a reader might reasonably assume are in scope but that are deliberately excluded]
 
-**Architecture:** [2-3 sentences about approach]
+**Architecture:** [tech spec exists → one-line pointer, e.g. "see `tech.md#architecture`" (full path `docs/quirk/specs/YYYY-MM-DD-<topic>/tech.md#architecture` if persisted to a file); no tech spec → 2-3 sentences about approach, authored inline]
 
-**Alternatives considered:** [the chosen approach + at least one honest rejected alternative + why]
+**Alternatives considered:** [logic spec owns rationale → pointer, e.g. "see `logic.md#key-decisions--rationale`" (full path `docs/quirk/specs/YYYY-MM-DD-<topic>/logic.md#key-decisions--rationale` if persisted to a file); no logic-spec rationale → the chosen approach + at least one honest rejected alternative + why]
 
-**Tech Stack:** [Key technologies/libraries]
+**Tech Stack:** [tech spec exists → covered under Architecture, e.g. "see `tech.md#architecture`"; no tech spec → key technologies/libraries]
 
-**Constraints:** [hard constraints to preserve (regulatory, security, existing APIs) vs. choices delegated to the implementor]
+**Constraints:** [tech spec exists → pointer, e.g. "see `tech.md#always--ask--never`"; no tech spec → hard constraints to preserve (regulatory, security, existing APIs) vs. choices delegated to the implementor]
 
-**Cross-cutting:** [security / observability / data migration / rollback — where relevant]
+**Cross-cutting:** [tech spec exists → pointer, e.g. "see `tech.md#cross-cutting`"; no tech spec → security / observability / data migration / rollback — where relevant]
 
 ---
 ```
@@ -253,9 +270,9 @@ A plan fails on **ambiguity**, not on the absence of code. These are **plan fail
 
 ## Self-Review
 
-After writing the complete plan, look at the spec with fresh eyes and check the plan against it. This is a checklist you run yourself — not a subagent dispatch.
+After writing the complete plan, look at the tech spec (`tech.md`) when present, else the logic spec / requirements, with fresh eyes and check the plan against it. This is a checklist you run yourself — not a subagent dispatch.
 
-**1. Spec coverage:** Skim each section/requirement in the spec. Can you point to a task that implements it? List any gaps.
+**1. Spec coverage:** Skim each section/requirement in the tech spec (`tech.md`) when present, else the logic spec / requirements. Can you point to a task that implements it? List any gaps.
 
 **2. Vagueness scan:** Search your plan for the red flags in the "No Vagueness" section above. Fix them.
 
@@ -267,7 +284,7 @@ After writing the complete plan, look at the spec with fresh eyes and check the 
 
 **6. Parallelism declarations:** For each task, did you accurately declare `independent: true` / `dependencies: [...]` / `scope.files: [...]`? Tasks that genuinely don't depend on each other should say so — otherwise the orchestrator falls back to sequential execution and leaves throughput on the table. Tasks that share a target file are NOT automatically forced to run sequentially: file overlap only rules out `IN_PLACE_PARALLEL` (which requires provably disjoint `scope.files`) — `WORKTREE_PARALLEL` handles overlapping files fine, since each task gets its own branch and the rolling merge reconciles them (subagent-driven-development's own worked example runs two independent tasks that both touch README.md under `WORKTREE_PARALLEL`). Reserve `dependencies` for genuine semantic/ordering dependencies — one task needing another's output — never merely for file overlap. Also check: (a) each task's `risk` tier is honest — nothing marked `mechanical` touches executable logic, and `pattern` is used only when the mirrored pattern was itself reviewed earlier on this branch; (b) every `.contract` dependency points at a task that actually specifies the consumed contract in a tagged `CONTRACT:`/`SCHEMA:` block.
 
-If you find issues, fix them inline. No need to re-review — just fix and move on. If you find a spec requirement with no task, add the task.
+If you find issues, fix them inline. No need to re-review — just fix and move on. If you find a requirement in the tech spec (`tech.md`) when present, else the logic spec, with no task, add the task.
 
 ## After the plan: agent review, then execute
 

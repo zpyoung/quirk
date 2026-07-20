@@ -68,5 +68,5 @@ What's still unknown or worth exploring next. Include any coverage the research 
 - (mark "(offline — unverified)" for anything not source-backed)
 
 ---
-*Exploration only. To build a direction: invoke `quirk:brainstorming` → `writing-plans`.*
+*Exploration only. To build a direction: invoke `quirk:brainstorming` → an execution skill (which authors a tech spec when warranted, then plans in context).*
 ```

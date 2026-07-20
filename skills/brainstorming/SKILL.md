@@ -29,10 +29,10 @@ You MUST create a task for each of these items and complete them in order:
 6. **Dispatch option-validation research** (when proposing approaches) — one research agent per candidate option, in parallel
 7. **Propose 2-3 approaches** — with trade-offs, citing research findings, your recommendation
 8. **Present design** — in sections scaled to their complexity, get user approval after each section
-9. **Write design doc** — save to `docs/quirk/specs/YYYY-MM-DD-<topic>-design.md` and commit
-10. **Spec self-review** — quick inline check for placeholders, contradictions, ambiguity, scope (see below)
+9. **Write logic spec** — save to `docs/quirk/specs/YYYY-MM-DD-<topic>/logic.md` and commit
+10. **Logic-spec self-review** — quick inline check for placeholders, contradictions, ambiguity, scope (see below)
 11. **User reviews written spec** — ask user to review the spec file before proceeding
-12. **Transition to implementation** — invoke an execution skill (quirk:subagent-driven-development, recommended; or quirk:executing-plans), which builds the plan in context as its first phase, then executes
+12. **Transition to implementation** — invoke an execution skill (quirk:subagent-driven-development, recommended; or quirk:executing-plans), which authors a tech spec when warranted, then plans in context, then executes
 
 ## Process Flow
 
@@ -48,7 +48,7 @@ digraph brainstorming {
     "Propose 2-3 approaches" [shape=box];
     "Present design sections" [shape=box];
     "User approves design?" [shape=diamond];
-    "Write design doc" [shape=box];
+    "Write logic spec" [shape=box];
     "Spec self-review\n(fix inline)" [shape=box];
     "User reviews spec?" [shape=diamond];
     "Invoke execution skill\n(plans in context)" [shape=doublecircle];
@@ -64,15 +64,15 @@ digraph brainstorming {
     "Propose 2-3 approaches" -> "Present design sections";
     "Present design sections" -> "User approves design?";
     "User approves design?" -> "Present design sections" [label="no, revise"];
-    "User approves design?" -> "Write design doc" [label="yes"];
-    "Write design doc" -> "Spec self-review\n(fix inline)";
+    "User approves design?" -> "Write logic spec" [label="yes"];
+    "Write logic spec" -> "Spec self-review\n(fix inline)";
     "Spec self-review\n(fix inline)" -> "User reviews spec?";
-    "User reviews spec?" -> "Write design doc" [label="changes requested"];
+    "User reviews spec?" -> "Write logic spec" [label="changes requested"];
     "User reviews spec?" -> "Invoke execution skill\n(plans in context)" [label="approved"];
 }
 ```
 
-**The terminal state is invoking an execution skill** — quirk:subagent-driven-development (recommended) or quirk:executing-plans — which builds the implementation plan in context as its first phase, then executes. Do NOT invoke frontend-design, mcp-builder, or any other implementation skill, and do NOT write a separate plan document first.
+**The terminal state is invoking an execution skill** — quirk:subagent-driven-development (recommended) or quirk:executing-plans — which authors a tech spec when warranted, then plans in context, then executes. Do NOT invoke frontend-design, mcp-builder, or any other implementation skill, and do NOT write a separate plan document first.
 
 ## Research Agents
 
@@ -115,7 +115,7 @@ date +%Y
 From each agent response, extract: **Key Findings** (distilled bullets that change a decision) and **Sources** (URLs/refs for traceability). Feed these into:
 - The clarifying questions (refine wording when research surfaces a missed dimension)
 - The option proposals (cite findings in pros/cons)
-- The design doc's "Industry Insights" section
+- The logic spec's "Industry Insights" section
 
 ### Fallback Modes
 
@@ -220,7 +220,7 @@ Example — Visual / "Layout style" (5 questions):
 ### Scope Creep Guard (active during gray-area drill-in)
 
 Watch for "also add", "we should also", "what about adding", "could we also", "it would be nice if". When detected:
-1. Capture the idea in a running **Deferred Ideas** list (carried into the spec doc).
+1. Capture the idea in a running **Deferred Ideas** list (carried into the logic spec).
 2. Acknowledge briefly: "Good idea — captured as a deferred item so we don't lose it. Let's stay focused on [current area]."
 3. Return to the current question without absorbing the new scope.
 
@@ -244,14 +244,14 @@ Watch for "also add", "we should also", "what about adding", "could we also", "i
 - Propose 2-3 different approaches with trade-offs
 - Present options conversationally with your recommendation and reasoning, citing relevant research findings (sources can be linked in the spec's Industry Insights section)
 - Lead with your recommended option and explain why
-- For novel, high-stakes, or production-bound work, run **Phase C deep-research** on the chosen approach before writing the design doc
+- For novel, high-stakes, or production-bound work, run **Phase C deep-research** on the chosen approach before writing the logic spec
 
 **Presenting the design:**
 
 - Once you believe you understand what you're building, present the design
 - Scale each section to its complexity: a few sentences if straightforward, up to 200-300 words if nuanced
 - Ask after each section whether it looks right so far
-- Cover: architecture, components, data flow, error handling, testing
+- Cover: conceptual model, data flow (prose), key decisions & rationale, behavior & scenarios, scope & non-goals, glossary — precise architecture, components, error handling, and testing belong in the tech spec authored later at execution when warranted; name file-level structure here only when it is itself the user-facing decision
 - Be ready to go back and clarify if something doesn't make sense
 
 **Design for isolation and clarity:**
@@ -271,17 +271,20 @@ Watch for "also add", "we should also", "what about adding", "could we also", "i
 
 **Documentation:**
 
-- Write the validated design (spec) to `docs/quirk/specs/YYYY-MM-DD-<topic>-design.md`
+- Write the validated design (logic spec) to `docs/quirk/specs/YYYY-MM-DD-<topic>/logic.md`
   - (User preferences for spec location override this default)
 - Use elements-of-style:writing-clearly-and-concisely skill if available
-- Include these sections (in addition to the architecture/components/etc. you already cover):
+- Include these sections (in addition to the conceptual model, data flow, key decisions & rationale, behavior & scenarios, and scope & non-goals you already cover):
   - **Decisions Locked** — the gray-area decisions confirmed during drill-in (one bullet per locked decision, grouped by area)
   - **Industry Insights** — distilled key findings from research agents, with source URLs; mark "(offline mode — validation pending)" if research was skipped
   - **Deferred Ideas** — anything captured by the Scope Creep Guard (or "None — discussion stayed within scope")
-- Commit the design document to git
+  - **Glossary** — terms and definitions a reader needs to follow the spec
+  - **Status** — one line recording the spec's current state (e.g. "Draft", "Approved", "Tech spec: requested")
+  - **Amendments** — under a `## Status & amendments` heading, a dated `**Amendments:**` log entry for any change to a locked decision made after approval
+- Commit the logic spec to git
 
-**Spec Self-Review:**
-After writing the spec document, look at it with fresh eyes:
+**Logic-spec self-review:**
+After writing the logic spec, look at it with fresh eyes:
 
 1. **Placeholder scan:** Any "TBD", "TODO", incomplete sections, or vague requirements? Fix them.
 2. **Internal consistency:** Do any sections contradict each other? Does the architecture match the feature descriptions?
@@ -293,13 +296,15 @@ Fix any issues inline. No need to re-review — just fix and move on.
 **User Review Gate:**
 After the spec review loop passes, ask the user to review the written spec before proceeding:
 
-> "Spec written and committed to `<path>`. Please review it and let me know if you want to make any changes before we start writing out the implementation plan."
+> "Logic spec written and committed to `<path>`. Please review it and let me know if you want to make any changes before we move to implementation — for larger work, the execution skill may first author a tech spec from it."
 
 Wait for the user's response. If they request changes, make them and re-run the spec review loop. Only proceed once the user approves.
 
+**Tech-spec request capture.** If the user's approval also asks for a tech spec, record `Tech spec: requested` in the logic spec's `Status` line and commit that update before handing off to the execution skill — this is what lets `writing-tech-spec`'s complexity-tier gate read the request later without re-asking.
+
 **Implementation:**
 
-- Invoke an execution skill — quirk:subagent-driven-development (recommended) or quirk:executing-plans. It builds the detailed implementation plan in context as its first phase, then executes.
+- Invoke an execution skill — quirk:subagent-driven-development (recommended) or quirk:executing-plans. It authors a tech spec when warranted, then plans in context, then executes.
 - Do NOT invoke any other implementation skill, and do NOT write a separate plan document first.
 
 ## Key Principles
