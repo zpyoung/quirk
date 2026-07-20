@@ -94,20 +94,49 @@ if [[ "$dry_run" != true ]]; then
     fi
 fi
 
+print_command() {
+    local separator=""
+    local argument
+    for argument in "$@"; do
+        printf '%s' "$separator"
+        printf '%q' "$argument"
+        separator=" "
+    done
+    printf '\n'
+}
+
 run_command() {
     if [[ "$dry_run" == true ]]; then
-        local separator=""
-        local argument
-        for argument in "$@"; do
-            printf '%s' "$separator"
-            printf '%q' "$argument"
-            separator=" "
-        done
-        printf '\n'
+        print_command "$@"
     else
         "$@"
     fi
 }
+
+# Resolve every parent and construct every body before making any remote change.
+# This prevents a malformed later slice from leaving a partially published stack.
+declare -a slice_branches slice_parents slice_titles slice_bodies
+index=0
+while [[ $index -lt $slice_count ]]; do
+    branch=$(jq -r ".slices[$index].branch" "$plan")
+    parent=$(jq -r ".slices[$index].parent" "$plan")
+    title=$(jq -r ".slices[$index].title" "$plan")
+    body=$(jq -r ".slices[$index].body" "$plan")
+    position=$(jq -r ".slices[$index].position" "$plan")
+    if ! base_sha=$(git rev-parse --verify "${parent}^{commit}" 2>/dev/null); then
+        echo "error: slice parent does not resolve locally: $parent" >&2
+        exit 5
+    fi
+    if ! body=$(printf '%s' "$body" | stackmeta_upsert "$parent" "$base_sha" "$position" "$slice_count"); then
+        echo "error: malformed stack metadata in slice body" >&2
+        exit 5
+    fi
+    slice_branches[$index]="$branch"
+    slice_parents[$index]="$parent"
+    slice_titles[$index]="$title"
+    slice_bodies[$index]="$body"
+    index=$((index + 1))
+done
 
 # Remote branches must all exist before any forge operation references them.
 index=0
@@ -133,40 +162,31 @@ else
     fi
 fi
 
-# Stamp each body now: the parent's current commit cannot be reconstructed after
-# a squash merge.
 index=0
 while [[ $index -lt $slice_count ]]; do
-    branch=$(jq -r ".slices[$index].branch" "$plan")
-    parent=$(jq -r ".slices[$index].parent" "$plan")
-    title=$(jq -r ".slices[$index].title" "$plan")
-    body=$(jq -r ".slices[$index].body" "$plan")
-    position=$(jq -r ".slices[$index].position" "$plan")
-    if ! base_sha=$(git rev-parse --verify "${parent}^{commit}" 2>/dev/null); then
-        echo "error: slice parent does not resolve locally: $parent" >&2
-        exit 5
-    fi
-    if ! body=$(printf '%s' "$body" | stackmeta_upsert "$parent" "$base_sha" "$position" "$slice_count"); then
-        echo "error: malformed stack metadata in slice body" >&2
-        exit 5
-    fi
+    branch=${slice_branches[$index]}
+    parent=${slice_parents[$index]}
+    title=${slice_titles[$index]}
+    body=${slice_bodies[$index]}
 
     if [[ "$forge" == "github" ]]; then
         run_command gh pr create --draft --base "$parent" --head "$branch" --title "$title" --body "$body"
     else
-        run_command glab mr create --draft --target-branch "$parent" --source-branch "$branch" --title "$title" --description "$body"
+        run_command glab mr create --draft --yes --target-branch "$parent" --source-branch "$branch" --title "$title" --description "$body"
     fi
     index=$((index + 1))
 done
 
 if [[ "$no_force_push" != true && -n "$original_pr" ]]; then
-    if [[ "$fork" == true && "$forge" == "gitlab" ]]; then
-        echo "NOTE: GitLab fork MR retargeting is never automatic; run the following retarget command manually."
-    fi
     if [[ "$forge" == "github" ]]; then
         run_command gh pr edit "$original_pr" --base "$top_branch"
+    elif [[ "$fork" == true ]]; then
+        echo "NOTE: GitLab fork MR retargeting is never automatic; run the following retarget command manually."
+        # A dry run consists entirely of printable commands. During a real fork
+        # publish, print this one command rather than changing the MR.
+        print_command glab mr update "$original_pr" --yes --target-branch "$top_branch"
     else
-        run_command glab mr update "$original_pr" --target-branch "$top_branch"
+        run_command glab mr update "$original_pr" --yes --target-branch "$top_branch"
     fi
 fi
 
@@ -174,5 +194,5 @@ fi
 if [[ "$forge" == "github" ]]; then
     run_command gh pr ready "$bottom_branch"
 else
-    run_command glab mr update "$bottom_branch" --ready
+    run_command glab mr update "$bottom_branch" --yes --ready
 fi
