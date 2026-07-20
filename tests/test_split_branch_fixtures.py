@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -37,6 +38,18 @@ def test_build_fixture_creates_clean_repo_with_nonempty_diff(tmp_path: Path, kin
     assert git(fixture.path, "status", "--porcelain") == ""
 
 
+def test_simple_fixture_has_three_files_with_two_separate_hunks_each(tmp_path: Path) -> None:
+    fixture = build_fixture(tmp_path, "simple")
+    diff = git(fixture.path, "diff", "-U3", fixture.base, fixture.head)
+    sections = diff.split("diff --git ")[1:]
+
+    assert len(sections) == 3
+    assert all(
+        sum(line.startswith("@@") for line in section.splitlines()) == 2
+        for section in sections
+    )
+
+
 def test_binary_fixture_contains_binary_change(tmp_path: Path) -> None:
     fixture = build_fixture(tmp_path, "binary")
     rows = git(fixture.path, "diff", "--numstat", fixture.base, fixture.head).splitlines()
@@ -66,10 +79,58 @@ def test_closely_spaced_hunks_collapse_with_context(tmp_path: Path) -> None:
     assert sum(line.startswith("@@") for line in normal_context.splitlines()) == 1
 
 
+def test_rename_mode_fixture_renames_and_makes_executable(tmp_path: Path) -> None:
+    fixture = build_fixture(tmp_path, "rename_mode")
+    diff = git(fixture.path, "diff", fixture.base, fixture.head)
+
+    assert "rename from old-script.sh" in diff
+    assert "rename to new-script.sh" in diff
+    assert "old mode 100644" in diff
+    assert "new mode 100755" in diff
+
+
+def test_no_newline_fixture_has_unterminated_line_marker(tmp_path: Path) -> None:
+    fixture = build_fixture(tmp_path, "no_newline_eof")
+    diff = git(fixture.path, "diff", fixture.base, fixture.head)
+
+    assert r"\ No newline at end of file" in diff
+
+
+def test_deletion_only_fixture_has_subtractive_hunk_and_deleted_file(tmp_path: Path) -> None:
+    fixture = build_fixture(tmp_path, "deletion_only")
+    diff = git(fixture.path, "diff", fixture.base, fixture.head)
+    hunks = diff.split("@@")[2::2]
+
+    assert "deleted file mode" in diff
+    assert any(
+        any(line.startswith("-") for line in hunk.splitlines())
+        and not any(line.startswith("+") for line in hunk.splitlines())
+        for hunk in hunks
+    )
+
+
 def test_merge_fixture_contains_merge_commit(tmp_path: Path) -> None:
     fixture = build_fixture(tmp_path, "merge_commits")
 
     assert git(fixture.path, "log", "--merges", "--format=%H", f"{fixture.base}..{fixture.head}").strip()
+
+
+def test_squash_merged_base_makes_naive_rebase_fail(tmp_path: Path) -> None:
+    fixture = build_fixture(tmp_path, "squash_merged_base")
+    worktree = tmp_path / "naive-rebase"
+    git(fixture.path, "worktree", "add", "--detach", str(worktree), fixture.head)
+
+    env = os.environ.copy()
+    env.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull})
+    result = subprocess.run(
+        ["git", "rebase", fixture.base],
+        cwd=worktree,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode != 0, result.stdout + result.stderr
 
 
 def test_unknown_fixture_kind_is_rejected(tmp_path: Path) -> None:

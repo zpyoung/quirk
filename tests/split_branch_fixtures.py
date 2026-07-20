@@ -171,11 +171,16 @@ def _squash_merged_base(tmp_path: Path) -> FixtureRepo:
     repo = make_repo(tmp_path)
     root = _git(repo, "rev-parse", "HEAD")
     _, branch = _start_feature(repo)
-    commit(repo, {"early.txt": "early feature content\n"}, "early feature")
+    commit(repo, {"early.txt": "first part\n"}, "early feature part one")
+    commit(repo, {"early.txt": "first part\nsecond part\n"}, "early feature part two")
     commit(repo, {"late.txt": "late feature content\n"}, "late feature")
     head = _git(repo, "rev-parse", "HEAD")
     _git(repo, "checkout", "--quiet", "main")
-    commit(repo, {"early.txt": "early feature content\n"}, "squash merge early feature")
+    commit(
+        repo,
+        {"early.txt": "first part\nsecond part\n"},
+        "squash merge early feature",
+    )
     base = _git(repo, "rev-parse", "HEAD")
     _git(repo, "checkout", "--quiet", branch)
     assert _git(repo, "merge-base", root, head) == root
