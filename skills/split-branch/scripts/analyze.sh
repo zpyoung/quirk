@@ -105,6 +105,159 @@ classify_file() {
     echo "source"
 }
 
+# Emit changed blocks which are already at git's hard split floor.  Unlike the
+# -U0 inventory, this deliberately reads a context-carrying diff: a context
+# line terminates a consecutive block of changed lines.
+find_split_floor_blocks() {
+    awk '
+        function emit_block() {
+            if (in_block && (old_changed > 1 || new_changed > 1))
+                print path "\t" block_start
+            in_block = old_changed = new_changed = 0
+        }
+        function finish_file() { emit_block() }
+        /^diff --git / { finish_file(); path = ""; next }
+        /^--- / {
+            old_path = substr($0, 5)
+            if (substr(old_path, 1, 2) == "a/") old_path = substr(old_path, 3)
+            next
+        }
+        /^\+\+\+ / {
+            path = substr($0, 5)
+            if (path == "/dev/null") path = old_path
+            else if (substr(path, 1, 2) == "b/") path = substr(path, 3)
+            next
+        }
+        /^@@ / {
+            emit_block()
+            token = $2; sub(/^-/, "", token); split(token, parts, ",")
+            old_line = parts[1] + 0
+            next
+        }
+        /^ / { emit_block(); old_line++; next }
+        /^-/ && !/^--- / {
+            if (!in_block) { in_block = 1; block_start = old_line }
+            old_changed++; old_line++; next
+        }
+        /^\+/ && !/^\+\+\+ / {
+            if (!in_block) { in_block = 1; block_start = old_line }
+            new_changed++; next
+        }
+        END { finish_file() }
+    '
+}
+
+# Parse a -U0 patch into diff-order rows. A metadata-only rename/mode change
+# has no @@ header, so it is represented by one zero-line entry.
+parse_hunk_diff() {
+    awk '
+        function emit_hunk() {
+            if (in_hunk) {
+                print path "\t" old_start "\t" old_count "\t" added "\t" deleted "\t0"
+                entries++; in_hunk = 0
+            }
+        }
+        function finish_file() {
+            emit_hunk()
+            if (binary && path != "") print path "\t0\t0\t0\t0\t1"
+            else if (in_file && entries == 0 && path != "") print path "\t0\t0\t0\t0\t0"
+            binary = in_file = entries = 0
+        }
+        /^diff --git / { finish_file(); in_file = 1; path = old_path = ""; next }
+        /^rename to / { path = substr($0, 11); next }
+        /^--- / {
+            old_path = substr($0, 5)
+            if (substr(old_path, 1, 2) == "a/") old_path = substr(old_path, 3)
+            next
+        }
+        /^\+\+\+ / {
+            path = substr($0, 5)
+            if (path == "/dev/null") path = old_path
+            else if (substr(path, 1, 2) == "b/") path = substr(path, 3)
+            next
+        }
+        /^Binary files / {
+            binary = 1
+            marker = " and b/"; position = index($0, marker)
+            if (position > 0) {
+                path = substr($0, position + length(marker))
+                sub(/ differ$/, "", path)
+            }
+            next
+        }
+        /^GIT binary patch$/ { binary = 1; next }
+        /^@@ / {
+            emit_hunk()
+            token = $2; sub(/^-/, "", token); count = split(token, parts, ",")
+            old_start = parts[1] + 0
+            old_count = (count == 1 ? 1 : parts[2] + 0)
+            added = deleted = 0; in_hunk = 1; next
+        }
+        /^-/ && !/^--- / { if (in_hunk) deleted++; next }
+        /^\+/ && !/^\+\+\+ / { if (in_hunk) added++; next }
+        END { finish_file() }
+    '
+}
+
+analyze_hunks() {
+    local target_branch="$1"
+    local current_branch
+    current_branch=$(get_current_branch)
+
+    if [[ -z "$current_branch" ]]; then
+        echo >&2 -e "${RED}Error: Not on a branch (detached HEAD?)${NC}"
+        exit 1
+    fi
+    if [[ "$current_branch" == "$target_branch" ]]; then
+        echo >&2 -e "${RED}Error: Current branch is the target branch${NC}"
+        exit 1
+    fi
+
+    local base head inventory_file floor_file
+    base=$(git merge-base "$target_branch" HEAD)
+    head=$(git rev-parse HEAD)
+    inventory_file=$(mktemp "${TMPDIR:-/tmp}/split-branch-hunks.XXXXXX")
+    floor_file=$(mktemp "${TMPDIR:-/tmp}/split-branch-floor.XXXXXX")
+    trap 'rm -f "$inventory_file" "$floor_file"' EXIT
+
+    # Keep these explicit two-commit diffs: using only BASE includes worktree
+    # changes, and omitting -M loses the destination path of renames.
+    git diff "$base" HEAD -M -U0 | parse_hunk_diff > "$inventory_file"
+    git diff "$base" HEAD -M -U3 | find_split_floor_blocks > "$floor_file"
+
+    local -a hunks=()
+    local -a unsliceable_files=()
+    local id=0 file old_start old_count added deleted binary kind splittable
+    while IFS=$'\t' read -r file old_start old_count added deleted binary; do
+        [[ -z "$file" ]] && continue
+        kind=$(classify_file "$file")
+        [[ "$kind" == "excluded" ]] && continue
+        ((id++))
+        splittable=true
+        if [[ "$binary" == "1" ]]; then
+            splittable=false
+            unsliceable_files+=("$file")
+        elif awk -F '\t' -v p="$file" -v s="$old_start" '$1 == p && $2 == s { found=1 } END { exit !found }' "$floor_file"; then
+            splittable=false
+        fi
+        hunks+=("$(jq -cn \
+            --arg id "h$id" --arg file "$file" --arg kind "$kind" \
+            --argjson old_start "$old_start" --argjson old_count "$old_count" \
+            --argjson added "$added" --argjson deleted "$deleted" \
+            --argjson is_binary "$([[ "$binary" == "1" ]] && echo true || echo false)" \
+            --argjson splittable "$splittable" \
+            '{id:$id,file:$file,old_start:$old_start,old_count:$old_count,added:$added,deleted:$deleted,is_binary:$is_binary,splittable:$splittable,kind:$kind}')")
+    done < "$inventory_file"
+
+    jq -n --arg base "$base" --arg head "$head" \
+        --argjson hunks "$(printf '%s\n' "${hunks[@]:-}" | jq -s 'map(select(type == "object"))')" \
+        --argjson unsliceable "$(printf '%s\n' "${unsliceable_files[@]:-}" | jq -Rs 'split("\n") | map(select(length > 0)) | unique')" \
+        '{base:$base,head:$head,hunks:$hunks,unsliceable_files:$unsliceable}'
+
+    rm -f "$inventory_file" "$floor_file"
+    trap - EXIT
+}
+
 # Bash 3.2-compatible: emit per-file `dir<TAB>kind<TAB>lines<TAB>filepath` rows
 # from stdin, then aggregate via awk. Avoids associative arrays.
 group_by_directory() {
@@ -266,5 +419,20 @@ $(IFS=,; echo "    ${file_stats[*]:-}" | sed 's/},{/},\n    {/g')
 EOF
 }
 
-# Run main with all arguments
-main "$@"
+# Run main with all arguments. Argument handling is intentionally outside
+# main so the established default-mode implementation remains unchanged.
+if [[ "${1:-}" == "--hunks" ]]; then
+    if [[ "${2:-}" == -* || $# -gt 2 ]]; then
+        echo >&2 "Error: unknown option or argument: ${2:-}"
+        exit 5
+    fi
+    analyze_hunks "$(detect_target_branch "${2:-}")"
+elif [[ "${1:-}" == -* ]]; then
+    echo >&2 "Error: unknown option: $1"
+    exit 5
+elif (( $# > 1 )); then
+    echo >&2 "Error: unknown argument: $2"
+    exit 5
+else
+    main "$@"
+fi
