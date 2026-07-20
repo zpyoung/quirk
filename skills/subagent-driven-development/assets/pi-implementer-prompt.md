@@ -2,7 +2,10 @@
 
 Use this when the runtime is **pi** (see SKILL.md → Runtime Selection).
 
-The implementer model is **pi codex** (`openai-codex/gpt-5.3-codex:xhigh`).
+The implementer model is the **pi-dev `codex` alias at `xhigh` thinking** (see
+**quirk:pi-dev**) — not a frozen model id. `pi-watch` resolves the newest authed model in the
+alias's fallback ladder; hard-pinning an exact id via `--provider`/`--model` is the documented
+exception, not the default.
 
 ## Prompt body
 
@@ -14,37 +17,41 @@ in Over Your Head, Self-Review, Report Format).
 Substitute Task N, task description, context, and working directory the same
 way you would for the Claude path.
 
-**Parallel-mode note:** in `WORKTREE_PARALLEL` mode the orchestrator may
-instruct the worker NOT to run `git commit` — the orchestrator commits after
-the review chain passes, to avoid git index-lock races across concurrent
-workers. When this instruction is given, strip step 4 ("Commit your work")
-from the prompt body's Your Job list and tell the worker to report files
-changed instead of a commit SHA in its final report.
+**Parallel-mode note:** workers commit normally in `WORKTREE_PARALLEL` mode — each worker owns its
+own worktree/branch, and the rolling auto-merge needs their commits to merge. The no-commit +
+orchestrator-commits instruction applies ONLY to the `IN_PLACE_PARALLEL` orchestrator-commits
+fallback (shared working directory, disjoint declared `scope.files` — see SKILL.md → Mode
+mechanics → Pi-runtime parallelism note), where the orchestrator commits each task's files as
+soon as its implementer reports DONE. When that fallback is in effect, strip step 4 ("Commit your
+work") from the prompt body's Your Job list and tell the worker to report files changed instead
+of a commit SHA in its final report.
 
 ## Invocation
 
-Write the assembled prompt body to `prompt.md` in the worktree, then:
+Write the assembled prompt body to a task/role-keyed file **outside the repository**
+(see SKILL.md → Dispatch hygiene — never a generic name inside the worktree, where a
+worker could commit or clobber it), e.g. `<scratch>/t<N>-implementer.md`, then:
 
 ```bash
 cd <worktree>
-[ -f prompt.md ] || { echo "prompt missing" >&2; exit 1; }
-pi -p \
-  --no-session \
-  --offline \
-  --model openai-codex/gpt-5.3-codex:xhigh \
+PROMPT=<scratch>/t<N>-implementer.md
+[ -f "$PROMPT" ] || { echo "prompt missing" >&2; exit 1; }
+pi-watch --alias codex --thinking xhigh \
   --tools read,bash,edit,write \
-  @prompt.md
+  "$(cat "$PROMPT")"
 ```
+
+`pi-watch` has no `@file` include — the prompt is passed as a positional string, so the file's
+contents are inlined via `$(cat ...)`. It resolves the newest authed model in the `codex` alias's
+fallback ladder automatically; hard-pinning an exact model id via `--provider`/`--model` is the
+documented exception (**quirk:pi-dev**), not the default.
 
 Verify the prompt file exists before dispatching — never fall back to
 something like `cat prompt.md || echo MISSING` that pipes garbage into a live
 worker; a bad prompt burns the entire dispatch.
 
-For the canonical hardened dispatch recipe (`gtimeout` wrapper, `PIPESTATUS`
-capture, positional-args quoting, JSONL events file), see **quirk:pi-dev →
-Canonical headless dispatch recipe**. Use that recipe verbatim when running pi
-non-interactively from a script; the snippet above is the minimum viable form
-for an interactive orchestrator session.
+For scripted/CI dispatch that needs JSONL events and exit-code capture instead of this
+interactive form, see **quirk:pi-dev → reference/print-mode.md#canonical-headless-recipe**.
 
 ## Status parsing
 

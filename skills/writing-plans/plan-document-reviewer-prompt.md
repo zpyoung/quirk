@@ -29,6 +29,7 @@ Task tool (general-purpose):
     | Completeness | TODOs, placeholders, vague/ambiguous steps (no behavioral goal, no acceptance check) — AND pasted implementation/test bodies (over-specification). Both are defects. |
     | Spec Alignment | Plan covers spec requirements, no major scope creep |
     | Task Decomposition | Tasks have clear boundaries, steps are actionable |
+    | Risk & Contract Fields | Is every task's `risk` tier plausible? `mechanical` tasks must touch no executable logic AND state an exact, verifiable acceptance gate (build/test/grep command with expected output); `pattern` tasks must name the exemplar task they mirror. Does every `.contract` dependency target a `logic` or `pattern` task (never `mechanical`) that specifies the consumed contract in a tagged `CONTRACT:`/`SCHEMA:` block? |
     | Altitude | Does each task specify WHAT (behavior, contract, acceptance) rather than HOW (literal code)? Any code present must be a justified, tagged exception — `CONTRACT:` signature sketch, `SCHEMA:`, `COMMAND:`, `REGEX:`, `CONFIG:`, or `PSEUDOCODE (justified):` (≤3 lines). Flag any untagged code block, runnable function body, or full test body. |
     | Acceptance Criteria | Does each task carry an observable, testable success condition? |
     | Buildability | Could an engineer follow this plan without getting stuck? |

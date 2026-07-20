@@ -4,8 +4,9 @@ Use this when the runtime is **pi** (see SKILL.md → Runtime Selection) AND
 `git merge --no-ff <task-branch>` reports overlapping-hunk conflicts during
 the rolling auto-merge phase of `WORKTREE_PARALLEL` mode.
 
-The merge resolver model is **pi codex** (`openai-codex/gpt-5.3-codex:xhigh`),
-invoked with full edit/commit tools.
+The merge resolver model is the **pi-dev `codex` alias at `xhigh` thinking** (see
+**quirk:pi-dev**) — not a frozen model id; hard-pinning an exact id via `--provider`/`--model` is
+the documented exception, not the default. Invoked with full edit/commit tools.
 
 **Triggered when:** `git merge` exits non-zero AND `git status` reports
 `Unmerged paths`.
@@ -45,24 +46,35 @@ End the prompt with: "Output `Status: SUCCESS | UNRESOLVABLE`, `Files resolved`,
 
 ## Invocation
 
-Write the assembled prompt body to `merge-resolver-prompt.md` in the worktree,
-then:
+Write the assembled prompt body to a task/role-keyed file **outside the repository**
+(see SKILL.md → Dispatch hygiene — never a generic name inside the worktree, where a
+worker could commit or clobber it), e.g. `<scratch>/t<N>-merge-resolver.md`, then:
 
 ```bash
 cd <worktree>
-pi -p \
-  --no-session \
-  --offline \
-  --model openai-codex/gpt-5.3-codex:xhigh \
+PROMPT=<scratch>/t<N>-merge-resolver.md
+[ -f "$PROMPT" ] || { echo "prompt missing" >&2; exit 1; }
+pi-watch --alias codex --thinking xhigh \
   --tools read,bash,edit,write \
-  @merge-resolver-prompt.md
+  "$(cat "$PROMPT")"
 ```
 
-`--tools read,bash,edit,write` is required: the resolver must edit files and
-run git commands. (Contrast with the read-only reviewer tools.)
+`pi-watch` has no `@file` include — the prompt is passed as a positional string, so the file's
+contents are inlined via `$(cat ...)`. It resolves the newest authed model in the `codex` alias's
+fallback ladder automatically; hard-pinning an exact model id via `--provider`/`--model` is the
+documented exception (**quirk:pi-dev**), not the default.
 
-For the hardened multi-arg recipe, see **quirk:pi-dev → Canonical headless
-dispatch recipe**.
+Verify the prompt file exists before dispatching — never fall back to
+something like `cat merge-resolver-prompt.md || echo MISSING` that pipes
+garbage into a live worker; a bad prompt burns the entire dispatch.
+
+`--tools read,bash,edit,write` is required: the resolver must edit files and
+run git commands. (Contrast with the reviewer templates, which use `read,bash` or the
+actually-read-only `read,grep,find,ls` — this role needs to mutate files, so it gets `edit,write`
+on top.)
+
+For the hardened multi-arg recipe, see **quirk:pi-dev →
+reference/print-mode.md#canonical-headless-recipe**.
 
 ## Output parsing
 
