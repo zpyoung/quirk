@@ -7,10 +7,28 @@ set -euo pipefail
 STACKMETA_START='<!-- split-branch:stack -->'
 STACKMETA_END='<!-- /split-branch:stack -->'
 
+# Values supplied by callers are arguments, so invalid values return 5. Exit 3
+# is reserved for malformed metadata read from a body.
+_stackmeta_validate_values() {
+    if [[ $# -ne 4 ]]; then
+        return 5
+    fi
+
+    local parent="$1"
+    local base_sha="$2"
+    local position="$3"
+    local total="$4"
+
+    [[ -n "$parent" && "$parent" != *$'\n'* && "$parent" != *$'\r'* ]] || return 5
+    [[ "$base_sha" =~ ^[0-9A-Fa-f]{40}$ ]] || return 5
+    [[ "$position" =~ ^[0-9]+$ && "$total" =~ ^[0-9]+$ ]] || return 5
+}
+
 stackmeta_emit() {
     if [[ $# -ne 4 ]]; then
         return 5
     fi
+    _stackmeta_validate_values "$@" || return 5
 
     local parent="$1"
     local base_sha="$2"
@@ -60,7 +78,9 @@ _stackmeta_read() {
             next
         }
         END {
-            if (starts > 1 || ends > 1) exit 4
+            # Multiple openings represent multiple attempted blocks. Orphan or
+            # excess closing markers are malformed metadata, not extra blocks.
+            if (starts > 1) exit 4
             if (starts == 0 && ends == 0) exit 2
             if (starts != 1 || ends != 1 || !start_line || !end_line || end_line < start_line ||
                 parent_count != 1 || sha_count != 1 || position_count != 1 ||
@@ -91,6 +111,7 @@ stackmeta_upsert() {
     if [[ $# -ne 4 ]]; then
         return 5
     fi
+    _stackmeta_validate_values "$@" || return 5
 
     local parent="$1"
     local base_sha="$2"
