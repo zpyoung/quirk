@@ -111,6 +111,23 @@ def test_special_diff_forms(tmp_path: Path, kind: str):
         )
 
 
+def test_binary_and_text_units_are_independently_selected(tmp_path: Path):
+    fixture = build_fixture(tmp_path, "binary")
+    binary_id, text_id = hunk_ids(fixture)
+    base_binary = git(fixture.path, "show", f"{fixture.base}:data.bin", text=False)
+    head_binary = git(fixture.path, "show", f"{fixture.head}:data.bin", text=False)
+
+    binary = run_slice(fixture, "only-binary", [binary_id])
+    assert binary.returncode == 0, binary.stderr
+    assert git(fixture.path, "show", "only-binary:data.bin", text=False) == head_binary
+    assert git(fixture.path, "show", "only-binary:notes.txt") == "before"
+
+    text = run_slice(fixture, "only-text", [text_id])
+    assert text.returncode == 0, text.stderr
+    assert git(fixture.path, "show", "only-text:data.bin", text=False) == base_binary
+    assert git(fixture.path, "show", "only-text:notes.txt") == "after"
+
+
 def test_close_hunks_reconcile_context_and_stack(tmp_path: Path):
     fixture = build_fixture(tmp_path, "closely_spaced")
     first_id, second_id = hunk_ids(fixture)
@@ -127,7 +144,7 @@ def test_close_hunks_reconcile_context_and_stack(tmp_path: Path):
     )
 
 
-def test_documented_errors_and_at_commit(tmp_path: Path):
+def test_documented_errors(tmp_path: Path):
     fixture = build_fixture(tmp_path, "simple")
     missing = run_slice(fixture, "missing", ["hunk-9999"])
     assert missing.returncode == 2
@@ -136,12 +153,74 @@ def test_documented_errors_and_at_commit(tmp_path: Path):
     assert run_slice(fixture, "duplicate", ids[:1]).returncode == 0
     assert run_slice(fixture, "duplicate", ids[:1]).returncode == 4
 
+    bad_args = subprocess.run(
+        [str(SLICE), "--base", fixture.base], cwd=fixture.path,
+        capture_output=True, text=True,
+    )
+    assert bad_args.returncode == 5
+
+    git(fixture.path, "checkout", "--quiet", "-b", "conflict-parent", fixture.base)
+    conflict_file = fixture.path / "file-1.txt"
+    conflict_file.write_text(conflict_file.read_text().replace("line 2\n", "parent version\n"))
+    git(fixture.path, "add", "file-1.txt")
+    git(fixture.path, "commit", "--quiet", "-m", "conflicting parent")
+    conflict_parent = git(fixture.path, "rev-parse", "HEAD")
+    git(fixture.path, "checkout", "--quiet", fixture.branch)
+    conflict = run_slice(fixture, "conflict", ids[:1], parent=conflict_parent)
+    assert conflict.returncode == 3
+    assert subprocess.run(
+        ["git", "show-ref", "--verify", "--quiet", "refs/heads/conflict"],
+        cwd=fixture.path,
+    ).returncode != 0
+
+    binary_fixture = build_fixture(tmp_path / "binary-case", "binary")
+    binary_id = hunk_ids(binary_fixture)[0]
+    # Repeating an atomic binary inventory unit creates an inconsistent
+    # selected/inventory cardinality and exercises the otherwise unreachable
+    # defensive partial-selection check.
+    partial = run_slice(binary_fixture, "partial-binary", [binary_id, binary_id])
+    assert partial.returncode == 6
+
+
+def test_at_commit_replays_onto_divergent_parent(tmp_path: Path):
+    fixture = build_fixture(tmp_path, "simple")
+    git(fixture.path, "checkout", "--quiet", "-b", "replay-parent", fixture.base)
+    (fixture.path / "parent-only.txt").write_text("keep parent change\n")
+    git(fixture.path, "add", "parent-only.txt")
+    git(fixture.path, "commit", "--quiet", "-m", "divergent parent")
+    parent = git(fixture.path, "rev-parse", "HEAD")
+    git(fixture.path, "checkout", "--quiet", fixture.branch)
+
     replay = subprocess.run(
-        [str(SLICE), "--at-commit", fixture.head, "--parent", fixture.base,
+        [str(SLICE), "--at-commit", fixture.head, "--parent", parent,
          "--branch", "commit-replay"],
         cwd=fixture.path, capture_output=True, text=True,
     )
     assert replay.returncode == 0, replay.stderr
-    assert git(fixture.path, "rev-parse", "commit-replay^{tree}") == git(
-        fixture.path, "rev-parse", f"{fixture.head}^{{tree}}"
+    assert git(fixture.path, "rev-parse", "commit-replay^") == parent
+    assert git(fixture.path, "show", "commit-replay:parent-only.txt") == "keep parent change"
+    assert "changed 2" in git(fixture.path, "show", "commit-replay:file-1.txt")
+
+
+def test_at_commit_accepts_root_commit(tmp_path: Path):
+    fixture = build_fixture(tmp_path, "simple")
+    blob = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"], cwd=fixture.path,
+        input="from root\n", capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    tree = subprocess.run(
+        ["git", "mktree"], cwd=fixture.path,
+        input=f"100644 blob {blob}\troot-only.txt\n",
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    root_commit = subprocess.run(
+        ["git", "commit-tree", tree], cwd=fixture.path, input="root source\n",
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    replay = subprocess.run(
+        [str(SLICE), "--at-commit", root_commit, "--parent", fixture.base,
+         "--branch", "root-replay"], cwd=fixture.path, capture_output=True, text=True,
     )
+    assert replay.returncode == 0, replay.stderr
+    assert git(fixture.path, "show", "root-replay:root-only.txt") == "from root"
+    assert git(fixture.path, "rev-parse", "root-replay^") == fixture.base

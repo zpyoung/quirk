@@ -37,8 +37,15 @@ fi
 if [[ -n "$at_commit" ]]; then
     [[ -n "$parent" && -z "$base" && -z "$head" && -z "$hunks" ]] || usage
     git rev-parse --verify "${at_commit}^{commit}" >/dev/null 2>&1 || usage
-    source_base=$(git rev-parse "${at_commit}^") || usage
     source_head=$(git rev-parse "$at_commit")
+    commit_line=$(git rev-list --parents -n 1 "$source_head")
+    if [[ "$commit_line" == *" "* ]]; then
+        source_base=${commit_line#* }
+        source_base=${source_base%% *}
+    else
+        # A root commit replays the difference from Git's canonical empty tree.
+        source_base=$(git hash-object -t tree /dev/null)
+    fi
 else
     [[ -n "$base" && -n "$head" && -n "$hunks" && -z "$at_commit" ]] || usage
     [[ -f "$hunks" ]] || usage
@@ -88,7 +95,10 @@ else
         BEGIN {
             while ((getline line < requested_file) > 0) {
                 sub(/\r$/, "", line)
-                if (line != "") requested[line] = 1
+                if (line != "") {
+                    requested[line] = 1
+                    requested_count[line]++
+                }
             }
             close(requested_file)
             while ((getline line < analyzer_file) > 0) {
@@ -103,14 +113,15 @@ else
             upper_id = sprintf("H%04d", n)
             plain = sprintf("%d", n)
             analyzer_id = analyzer[n]
+            chosen_count = 0
             for (id in requested) {
                 if (id == canonical || id == short_id || id == upper_id ||
                     id == plain || (analyzer_id != "" && id == analyzer_id)) {
                     matched[id] = 1
-                    return 1
+                    chosen_count += requested_count[id]
                 }
             }
-            return 0
+            return chosen_count > 0
         }
         function finish_file(should_emit) {
             if (!in_file) return
@@ -119,6 +130,13 @@ else
             } else {
                 unit++
                 should_emit = choose(unit)
+                # A binary section contributes one atomic inventory unit. Track
+                # inventory and selection cardinalities per file and reject any
+                # inconsistent partial selection (normally impossible via analyze).
+                binary_inventory_units = is_binary ? 1 : 0
+                binary_selected_units = is_binary ? chosen_count : 0
+                if (binary_selected_units > 0 &&
+                    binary_selected_units != binary_inventory_units) partial_binary = 1
                 if (should_emit) printf "%s", header
             }
         }
@@ -128,6 +146,7 @@ else
             saw_hunk = 0
             emitting = 0
             selected_bodies = ""
+            is_binary = 0
             header = $0 ORS
             next
         }
@@ -140,6 +159,7 @@ else
         }
         {
             if (!in_file) next
+            if ($0 == "GIT binary patch" || $0 ~ /^Binary files .* differ$/) is_binary = 1
             if (!saw_hunk) header = header $0 ORS
             else if (emitting) selected_bodies = selected_bodies $0 ORS
         }
@@ -153,12 +173,17 @@ else
                 }
             }
             if (missing) exit 2
+            if (partial_binary) {
+                print "partial selection of binary file" > "/dev/stderr"
+                exit 6
+            }
         }
     ' "$raw_patch" >"$zero_patch"
     code=$?
     set -e
     [[ $code -eq 0 ]] || {
         [[ $code -eq 2 ]] && exit 2
+        [[ $code -eq 6 ]] && exit 6
         exit 5
     }
 fi
@@ -169,7 +194,10 @@ fi
 # including when -U3 would have merged selected and unselected regions.
 GIT_INDEX_FILE="$build_index" git read-tree "$source_base"
 if [[ -s "$zero_patch" ]]; then
-    if ! GIT_INDEX_FILE="$build_index" git apply --cached --unidiff-zero "$zero_patch"; then
+    apply_failed=0
+    # GUARDRAIL-OK: undrifted-base -- zero context only constructs the exact base-relative tree.
+    GIT_INDEX_FILE="$build_index" git apply --cached --unidiff-zero "$zero_patch" || apply_failed=$?
+    if [[ $apply_failed -ne 0 ]]; then
         echo "could not construct selected tree" >&2
         exit 3
     fi
