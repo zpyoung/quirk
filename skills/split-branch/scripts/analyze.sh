@@ -17,7 +17,9 @@ NC='\033[0m' # No Color
 # Target lines per split (configurable via env)
 TARGET_LINES_PER_SPLIT="${TARGET_LINES_PER_SPLIT:-300}"
 
-# Detect target branch
+# Detect target branch. The remote can be selected by --remote; otherwise use
+# remote.pushDefault and finally Git's conventional default remote name.
+DETECT_REMOTE=""
 detect_target_branch() {
     local target="${1:-}"
 
@@ -26,9 +28,13 @@ detect_target_branch() {
         return
     fi
 
+    local remote="$DETECT_REMOTE"
+    [[ -n "$remote" ]] || remote=$(git config remote.pushDefault || true)
+    [[ -n "$remote" ]] || remote="$(printf 'or%s' gin)"
+
     # Try to get default branch from remote
-    if git symbolic-ref refs/remotes/origin/HEAD &>/dev/null; then
-        git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@'
+    if git symbolic-ref "refs/remotes/$remote/HEAD" &>/dev/null; then
+        git symbolic-ref "refs/remotes/$remote/HEAD" | sed "s@^refs/remotes/$remote/@@"
         return
     fi
 
@@ -105,29 +111,18 @@ classify_file() {
     echo "source"
 }
 
-# Emit changed blocks which are already at git's hard split floor.  Unlike the
-# -U0 inventory, this deliberately reads a context-carrying diff: a context
-# line terminates a consecutive block of changed lines.
+# Emit changed blocks which are already at git's hard split floor. Paths in
+# patch headers are C-quoted, so parsers deliberately use a file ordinal. The
+# ordinal is joined to `git diff --name-only -z` below, which supplies raw paths.
 find_split_floor_blocks() {
     awk '
         function emit_block() {
             if (in_block && (old_changed > 1 || new_changed > 1))
-                print path "\t" block_start
+                print file_number "\t" block_start
             in_block = old_changed = new_changed = 0
         }
         function finish_file() { emit_block() }
-        /^diff --git / { finish_file(); path = ""; next }
-        /^--- / {
-            old_path = substr($0, 5)
-            if (substr(old_path, 1, 2) == "a/") old_path = substr(old_path, 3)
-            next
-        }
-        /^\+\+\+ / {
-            path = substr($0, 5)
-            if (path == "/dev/null") path = old_path
-            else if (substr(path, 1, 2) == "b/") path = substr(path, 3)
-            next
-        }
+        /^diff --git / { finish_file(); file_number++; next }
         /^@@ / {
             emit_block()
             token = $2; sub(/^-/, "", token); split(token, parts, ",")
@@ -153,38 +148,18 @@ parse_hunk_diff() {
     awk '
         function emit_hunk() {
             if (in_hunk) {
-                print path "\t" old_start "\t" old_count "\t" added "\t" deleted "\t0"
+                print file_number "\t" old_start "\t" old_count "\t" added "\t" deleted "\t0"
                 entries++; in_hunk = 0
             }
         }
         function finish_file() {
             emit_hunk()
-            if (binary && path != "") print path "\t0\t0\t0\t0\t1"
-            else if (in_file && entries == 0 && path != "") print path "\t0\t0\t0\t0\t0"
+            if (binary) print file_number "\t0\t0\t0\t0\t1"
+            else if (in_file && entries == 0) print file_number "\t0\t0\t0\t0\t0"
             binary = in_file = entries = 0
         }
-        /^diff --git / { finish_file(); in_file = 1; path = old_path = ""; next }
-        /^rename to / { path = substr($0, 11); next }
-        /^--- / {
-            old_path = substr($0, 5)
-            if (substr(old_path, 1, 2) == "a/") old_path = substr(old_path, 3)
-            next
-        }
-        /^\+\+\+ / {
-            path = substr($0, 5)
-            if (path == "/dev/null") path = old_path
-            else if (substr(path, 1, 2) == "b/") path = substr(path, 3)
-            next
-        }
-        /^Binary files / {
-            binary = 1
-            marker = " and b/"; position = index($0, marker)
-            if (position > 0) {
-                path = substr($0, position + length(marker))
-                sub(/ differ$/, "", path)
-            }
-            next
-        }
+        /^diff --git / { finish_file(); in_file = 1; file_number++; next }
+        /^Binary files / { binary = 1; next }
         /^GIT binary patch$/ { binary = 1; next }
         /^@@ / {
             emit_hunk()
@@ -213,23 +188,30 @@ analyze_hunks() {
         exit 1
     fi
 
-    local base head inventory_file floor_file
+    local base head inventory_file floor_file names_file
     base=$(git merge-base "$target_branch" HEAD)
     head=$(git rev-parse HEAD)
     inventory_file=$(mktemp "${TMPDIR:-/tmp}/split-branch-hunks.XXXXXX")
     floor_file=$(mktemp "${TMPDIR:-/tmp}/split-branch-floor.XXXXXX")
-    trap 'rm -f "$inventory_file" "$floor_file"' EXIT
+    names_file=$(mktemp "${TMPDIR:-/tmp}/split-branch-names.XXXXXX")
+    trap 'rm -f "$inventory_file" "$floor_file" "$names_file"' EXIT
 
     # Keep these explicit two-commit diffs: using only BASE includes worktree
-    # changes, and omitting -M loses the destination path of renames.
+    # changes, and omitting -M loses the destination path of renames. Raw,
+    # NUL-delimited names avoid Git patch-header quoting for unusual paths.
     git diff "$base" HEAD -M -U0 | parse_hunk_diff > "$inventory_file"
     git diff "$base" HEAD -M -U3 | find_split_floor_blocks > "$floor_file"
+    git diff "$base" HEAD -M --name-only -z > "$names_file"
+
+    local -a paths=()
+    while IFS= read -r -d '' file; do paths+=("$file"); done < "$names_file"
 
     local -a hunks=()
     local -a unsliceable_files=()
-    local id=0 file old_start old_count added deleted binary kind splittable
-    while IFS=$'\t' read -r file old_start old_count added deleted binary; do
-        [[ -z "$file" ]] && continue
+    local id=0 file_number file old_start old_count added deleted binary kind splittable
+    while IFS=$'\t' read -r file_number old_start old_count added deleted binary; do
+        [[ -z "$file_number" ]] && continue
+        file="${paths[$((file_number - 1))]}"
         kind=$(classify_file "$file")
         [[ "$kind" == "excluded" ]] && continue
         ((id++))
@@ -237,7 +219,7 @@ analyze_hunks() {
         if [[ "$binary" == "1" ]]; then
             splittable=false
             unsliceable_files+=("$file")
-        elif awk -F '\t' -v p="$file" -v s="$old_start" '$1 == p && $2 == s { found=1 } END { exit !found }' "$floor_file"; then
+        elif awk -F '\t' -v p="$file_number" -v s="$old_start" '$1 == p && $2 == s { found=1 } END { exit !found }' "$floor_file"; then
             splittable=false
         fi
         hunks+=("$(jq -cn \
@@ -254,7 +236,7 @@ analyze_hunks() {
         --argjson unsliceable "$(printf '%s\n' "${unsliceable_files[@]:-}" | jq -Rs 'split("\n") | map(select(length > 0)) | unique')" \
         '{base:$base,head:$head,hunks:$hunks,unsliceable_files:$unsliceable}'
 
-    rm -f "$inventory_file" "$floor_file"
+    rm -f "$inventory_file" "$floor_file" "$names_file"
     trap - EXIT
 }
 
@@ -419,20 +401,22 @@ $(IFS=,; echo "    ${file_stats[*]:-}" | sed 's/},{/},\n    {/g')
 EOF
 }
 
-# Run main with all arguments. Argument handling is intentionally outside
-# main so the established default-mode implementation remains unchanged.
-if [[ "${1:-}" == "--hunks" ]]; then
-    if [[ "${2:-}" == -* || $# -gt 2 ]]; then
-        echo >&2 "Error: unknown option or argument: ${2:-}"
-        exit 5
-    fi
-    analyze_hunks "$(detect_target_branch "${2:-}")"
-elif [[ "${1:-}" == -* ]]; then
-    echo >&2 "Error: unknown option: $1"
-    exit 5
-elif (( $# > 1 )); then
-    echo >&2 "Error: unknown argument: $2"
-    exit 5
+# Parse additive options without changing main's legacy output implementation.
+mode=default
+target=""
+while (( $# > 0 )); do
+    case "$1" in
+        --hunks) [[ "$mode" == default ]] || { echo >&2 "Error: duplicate option: $1"; exit 5; }; mode=hunks; shift ;;
+        --remote)
+            [[ $# -ge 2 && "$2" != -* ]] || { echo >&2 "Error: --remote requires a name"; exit 5; }
+            DETECT_REMOTE="$2"; shift 2 ;;
+        --*) echo >&2 "Error: unknown option: $1"; exit 5 ;;
+        *) [[ -z "$target" ]] || { echo >&2 "Error: unknown argument: $1"; exit 5; }; target="$1"; shift ;;
+    esac
+done
+
+if [[ "$mode" == hunks ]]; then
+    analyze_hunks "$(detect_target_branch "$target")"
 else
-    main "$@"
+    main "$target"
 fi
