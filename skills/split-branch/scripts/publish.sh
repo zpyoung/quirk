@@ -65,8 +65,7 @@ if ! jq -e '
 fi
 
 if [[ -z "$remote" ]]; then
-    remote=$(git config --get remote.pushDefault || true)
-    remote=${remote:-origin}
+    remote=$(git config --get remote.pushDefault || printf '%s\n' origin)
 fi
 
 slice_count=$(jq '.slices | length' "$plan")

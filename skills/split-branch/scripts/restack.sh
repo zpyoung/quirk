@@ -42,8 +42,7 @@ if ! git rev-parse --verify --quiet "refs/heads/$branch^{commit}" >/dev/null ||
 fi
 
 if [[ -z "$remote" ]]; then
-    remote=$(git config --get remote.pushDefault 2>/dev/null || true)
-    remote=${remote:-origin}
+    remote=$(git config --get remote.pushDefault 2>/dev/null || printf '%s\n' origin)
 fi
 remote_url=$(git remote get-url "$remote" 2>/dev/null || true)
 repo_slug=""

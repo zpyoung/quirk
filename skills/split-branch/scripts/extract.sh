@@ -86,8 +86,10 @@ validate_inputs() {
 
     # Check if target branch exists
     if ! git show-ref --verify --quiet "refs/heads/$target_branch"; then
-        # Try remote
-        if ! git show-ref --verify --quiet "refs/remotes/origin/$target_branch"; then
+        # Try the configured push remote, with Git's conventional fallback.
+        local remote
+        remote=$(git config --get remote.pushDefault || printf '%s\n' origin)
+        if ! git show-ref --verify --quiet "refs/remotes/$remote/$target_branch"; then
             echo >&2 -e "${RED}Error: Target branch '$target_branch' not found${NC}"
             return 1
         fi
