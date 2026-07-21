@@ -1,6 +1,6 @@
 # Spec Compliance Reviewer Prompt Template
 
-Use this template when dispatching a spec compliance reviewer subagent.
+Use this template when the task captain dispatches a spec compliance reviewer subagent. If no captain can be dispatched, the orchestrator uses it while acting as the fallback dispatcher.
 
 **Purpose:** Verify implementer built what was requested (nothing more, nothing less)
 
@@ -66,11 +66,26 @@ Task tool (general-purpose):
       whether each exported contract is implemented as specified —
       downstream tasks may be gated on this confirmation.
 
+    ## Suggested patch
+
+    For each LOW or MEDIUM finding, and each HIGH finding whose fix is mechanical/objective
+    rather than a judgment call, attach a proposed unified diff capped at roughly 20 changed
+    lines. Patch paths must stay within the task's declared `scope.files` and outside every
+    path in `scope.never_touch`. For CRITICAL findings or any finding requiring judgment,
+    attach no patch; those findings stay report-only.
+
+    The task captain (or fallback orchestrator) may apply an accepted eligible patch only after
+    enforcing the size and scope guards and running `git apply --check` against the current tree.
+    You remain report-only for every finding: propose eligible patch text as part of the finding,
+    but never apply it, run `git apply`, or edit files.
+
     **Verify by reading code, not by trusting report.**
 
     Report:
     - ✅ Spec compliant (if everything matches after code inspection)
     - ❌ Issues found: [list specifically what's missing or extra, with file:line references]
+    - Suggested patch: [required unified diff for each eligible finding; no patch for
+      CRITICAL or judgment-requiring findings]
     - Contract confirmation: [for each exported `CONTRACT:`/`SCHEMA:` block in the task, state
       whether it is implemented as specified, or "N/A — task declares no exported contracts"]
 ```

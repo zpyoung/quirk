@@ -17,6 +17,14 @@ in Over Your Head, Self-Review, Report Format).
 Substitute Task N, task description, context, and working directory the same
 way you would for the Claude path.
 
+The assembled prompt must include the authoritative, provenance-bearing context manifest: task
+text, Contract, `scope.files` and `scope.never_touch`, applicable `CLAUDE.md` rules and spec
+DO-NOT-CHANGE fences, acceptance commands, and relevant SHAs. Instruct the implementer not to
+redundantly re-read `CLAUDE.md` files or spec documents for content the manifest already
+distills, because the manifest exists to remove that dispatch latency. Also instruct it that
+on-demand reads of specs, `CLAUDE.md`, or code remain allowed when the manifest proves
+insufficient — completeness beats purity, and only redundant reads are prohibited.
+
 **Parallel-mode note:** workers commit normally in `WORKTREE_PARALLEL` mode — each worker owns its
 own worktree/branch, and the rolling auto-merge needs their commits to merge. The no-commit +
 orchestrator-commits instruction applies ONLY to the `IN_PLACE_PARALLEL` orchestrator-commits

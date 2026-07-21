@@ -1,11 +1,12 @@
 # Codex Adversarial Reviewer Prompt Template
 
-Use this template when dispatching the **third per-task review pass** — the Codex adversarial reviewer.
+Use this template when the task captain dispatches the **third per-task review pass** — the Codex adversarial reviewer. If no captain can be dispatched, the orchestrator uses it while acting as the fallback dispatcher.
 
 **Purpose:** Find gaps between the task spec and its implementation that the spec-compliance and code-quality reviewers may have missed. Adversarial: only critique, never validate.
 
-Dispatched concurrently with the other reviewers applicable to the task's risk tier (spec
-compliance always runs; code quality only for `logic` tasks — a `pattern` task has no
+The task captain (or the orchestrator acting as fallback dispatcher when no captain can be
+dispatched) dispatches this concurrently with the other reviewers applicable to the task's risk
+tier (spec compliance always runs; code quality only for `logic` tasks — a `pattern` task has no
 code-quality pass), after the implementer reports.
 
 **Fix loop cap:** 2 cycles. After two cycles, an unresolved CRITICAL finding BLOCKS the task
@@ -54,6 +55,16 @@ mcp__pal__clink:
     If a claim cannot be located in the files, rate as CRITICAL.
     If a previous reviewer's PASS verdict appears unsupported by the files, flag as HIGH.
 
+    ## Suggested patch
+    For each LOW or MEDIUM finding, and each HIGH finding whose fix is mechanical/objective
+    rather than a judgment call, attach a proposed unified diff capped at roughly 20 changed
+    lines. Patch paths must stay within the task's declared `scope.files` and outside every
+    path in `scope.never_touch`. For CRITICAL findings or any finding requiring judgment,
+    attach no patch; those findings stay report-only.
+
+    You remain report-only for every finding: propose eligible patch text as part of the
+    finding, but never apply it, run `git apply`, or edit files.
+
     ## Output Format
     For each finding:
     SEVERITY: [CRITICAL | HIGH | MEDIUM | LOW]
@@ -61,6 +72,8 @@ mcp__pal__clink:
     FILE: [file path and line range]
     FINDING: [what's wrong, 1-2 sentences]
     SUGGESTED_FIX: [how to fix, 1-2 sentences]
+    SUGGESTED_PATCH: [required unified diff for LOW/MEDIUM/mechanical-HIGH; NONE for
+      CRITICAL or judgment-requiring findings]
 
     End with:
     SUMMARY: [total counts per severity]
@@ -69,20 +82,26 @@ mcp__pal__clink:
 
 ## Handling the verdict
 
-Codex is **report-only**: it never marks a task complete and never triggers a merge on its own.
-Every verdict and finding — PASS, LOW, MEDIUM, HIGH, or CRITICAL — feeds the orchestrator's
-fan-in across all reviewers applicable to the task's risk tier. Task completion (and, in
+Codex is **report-only**: it never marks a task complete, triggers a merge, applies a patch, runs
+`git apply`, or edits files on its own. Every verdict and finding — PASS, LOW, MEDIUM, HIGH, or
+CRITICAL — feeds the task captain's fan-in across all reviewers applicable to the task's risk
+tier (or the orchestrator's when it is acting as fallback dispatcher). Task completion (and, in
 `WORKTREE_PARALLEL` mode, the rolling auto-merge) is decided only after all applicable reviewers
 have reported and every accepted finding has been resolved, per SKILL.md → Adjudication.
 
-- **PASS / LOW only:** no findings to adjudicate from this reviewer; the orchestrator proceeds
-  once the other applicable reviewers have also cleared.
-- **MEDIUM, HIGH, or CRITICAL findings:** report them back to the orchestrator. Do not dispatch a
-  fix loop yourself. The orchestrator merges them with the spec-compliance and code-quality
-  findings, adjudicates overlaps/conflicts (accepted findings of ANY severity enter the
-  consolidated fix — severity controls re-review depth, not whether a finding gets fixed), and
-  issues **one consolidated fix dispatch** to the implementer covering all applicable reviews.
-  Re-run Codex (and the other reviewers as needed) against the fix for CRITICAL/HIGH findings.
-  Repeat up to **2 cycles** total — see SKILL.md → The Codex adversarial reviewer specifically for
-  the cycle definition and what happens to findings still unresolved after cycle 2 (CRITICAL
-  blocks the task; HIGH may carry forward only via the unresolved-findings ledger).
+- **PASS:** no findings to adjudicate from this reviewer; the captain (or fallback orchestrator)
+  proceeds once the other applicable reviewers have also cleared.
+- **LOW, MEDIUM, or mechanical/objective HIGH findings:** report each with its attached Suggested
+  patch. Do not apply it or dispatch a fix loop yourself. The captain (or fallback orchestrator)
+  adjudicates it and may apply an accepted patch directly only after enforcing the roughly-20-
+  changed-line cap, running `git apply --check` against the current tree, and confirming all patch
+  paths are within `scope.files` and outside `scope.never_touch`; it then reruns the task's affected
+  acceptance checks.
+- **CRITICAL or judgment-requiring findings:** report them with no patch and do not dispatch a fix
+  loop yourself. The captain (or fallback orchestrator) merges them with the spec-compliance and
+  code-quality findings, adjudicates overlaps/conflicts, and routes accepted findings to the fix
+  worker in **one consolidated fix dispatch** covering all applicable reviews. Re-run Codex (and
+  the other reviewers as needed) against the fix for CRITICAL/HIGH findings. Repeat up to **2
+  cycles** total — see SKILL.md → The Codex adversarial reviewer specifically for the cycle
+  definition and what happens to findings still unresolved after cycle 2 (CRITICAL blocks the
+  task; HIGH may carry forward only via the unresolved-findings ledger).

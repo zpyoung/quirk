@@ -7,8 +7,9 @@ The Codex adversarial reviewer model is the **pi-dev `codex` alias at `xhigh` th
 the documented exception, not the default. It runs with `--tools read,bash`, which grants shell
 access, not enforced read-only — see Invocation below.
 
-Dispatched concurrently with the other reviewers applicable to the task's risk tier (spec
-compliance always runs; code quality only for `logic` tasks — a `pattern` task has no
+The task captain (or the orchestrator acting as fallback dispatcher when no captain can be
+dispatched) dispatches this concurrently with the other reviewers applicable to the task's risk
+tier (spec compliance always runs; code quality only for `logic` tasks — a `pattern` task has no
 code-quality pass), after the implementer reports.
 
 **Fix loop cap:** 2 cycles. After two cycles of CRITICAL/HIGH findings, remaining issues carry forward to the final whole-branch reviewer (Claude `quirk:code-reviewer`, regardless of runtime).
@@ -42,8 +43,17 @@ The prompt MUST instruct the reviewer to:
 - Flag CRITICAL when a claim cannot be located in the files.
 - Flag HIGH when a previous reviewer's PASS appears unsupported.
 - Output SEVERITY-tagged findings with REQUIREMENT / FILE / FINDING /
-  SUGGESTED_FIX, ending with SUMMARY (counts per severity) and VERDICT
+  SUGGESTED_FIX / SUGGESTED_PATCH, ending with SUMMARY (counts per severity) and VERDICT
   (`PASS | NEEDS_FIXES | CRITICAL_ISSUES`).
+
+## Suggested patch
+
+The assembled prompt must require `SUGGESTED_PATCH` to contain a proposed unified diff capped at
+roughly 20 changed lines for every LOW/MEDIUM or mechanical/objective HIGH finding. It must
+require `SUGGESTED_PATCH: NONE` for CRITICAL or judgment-requiring findings, and require patch
+paths to stay within the task's declared `scope.files` and outside `scope.never_touch`. The
+reviewer remains report-only: it proposes eligible patch text in its finding but never applies
+it, runs `git apply`, or edits files.
 
 End the prompt with: "Be adversarial. Do NOT validate — only critique."
 
@@ -81,8 +91,8 @@ reference/print-mode.md#canonical-headless-recipe**.
 
 ## Output parsing
 
-The reviewer's final message contains SEVERITY-tagged findings and a final
-SUMMARY + VERDICT line. Parse pi's stdout for that structure.
+The reviewer's final message contains SEVERITY-tagged findings with `SUGGESTED_PATCH` fields and
+a final SUMMARY + VERDICT line. Parse pi's stdout for that structure.
 
 If pi's response is unparseable, apply **quirk:pi-dev → Reviewer JSON parse
 fallback** (cascade: whole-message JSON → fenced block → balanced braces →
@@ -91,21 +101,27 @@ synthesize a NEEDS_FIX verdict). Never count an unparseable response as PASS.
 ## Handling the verdict
 
 Same principle as the Claude path (`codex-adversarial-prompt.md` → Handling the verdict): Codex is
-**report-only**. It never marks a task complete and never triggers rolling auto-merge on its
-own — every verdict and finding (PASS, LOW, MEDIUM, HIGH, CRITICAL) feeds the orchestrator's
-fan-in across all reviewers applicable to the task's risk tier, and completion is decided only
+**report-only**. It never marks a task complete, triggers rolling auto-merge, applies a patch,
+runs `git apply`, or edits files on its own. Every verdict and finding (PASS, LOW, MEDIUM, HIGH,
+CRITICAL) feeds the task captain's fan-in across all reviewers applicable to the task's risk tier
+(or the orchestrator's when it is acting as fallback dispatcher), and completion is decided only
 after adjudication resolves every accepted finding (SKILL.md → Adjudication).
 
-- **PASS / LOW only:** no findings to adjudicate from this reviewer — the orchestrator proceeds
-  once the other applicable reviewers have also cleared.
-- **MEDIUM, HIGH, or CRITICAL findings:** report them back to the orchestrator; do not dispatch a
-  fix loop yourself. The orchestrator merges them with the spec-compliance and code-quality
-  findings, adjudicates overlaps/conflicts (any accepted finding gets fixed regardless of
-  severity — severity only controls re-review depth, not whether it's fixed), and issues one
-  consolidated fix dispatch to the pi implementer covering all applicable reviews. Re-run pi codex
-  review (and the other reviewers as needed) against the fix for CRITICAL/HIGH findings. Cap: 2
-  cycles total (SKILL.md → The Codex adversarial reviewer specifically has the cycle definition
-  and what happens after cap exhaustion).
+- **PASS:** no findings to adjudicate from this reviewer — the captain (or fallback orchestrator)
+  proceeds once the other applicable reviewers have also cleared.
+- **LOW, MEDIUM, or mechanical/objective HIGH findings:** report each with its attached Suggested
+  patch; do not apply it or dispatch a fix loop yourself. The captain (or fallback orchestrator)
+  adjudicates it and may apply an accepted patch directly only after enforcing the roughly-20-
+  changed-line cap, running `git apply --check` against the current tree, and confirming all patch
+  paths are within `scope.files` and outside `scope.never_touch`; it then reruns the task's affected
+  acceptance checks.
+- **CRITICAL or judgment-requiring findings:** report them with no patch and do not dispatch a fix
+  loop yourself. The captain (or fallback orchestrator) merges them with the spec-compliance and
+  code-quality findings, adjudicates overlaps/conflicts, and routes accepted findings to the fix
+  worker in one consolidated fix dispatch covering all applicable reviews. Re-run pi codex review
+  (and the other reviewers as needed) against the fix for CRITICAL/HIGH findings. Cap: 2 cycles
+  total (SKILL.md → The Codex adversarial reviewer specifically has the cycle definition and what
+  happens after cap exhaustion).
 
 ## Failure detection
 

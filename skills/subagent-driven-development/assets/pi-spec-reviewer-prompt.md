@@ -1,6 +1,8 @@
 # Pi Spec Compliance Reviewer Dispatch Template
 
-Use this when the runtime is **pi** (see SKILL.md → Runtime Selection).
+Use this when the task captain dispatches the spec compliance reviewer on the **pi** runtime
+(see SKILL.md → Runtime Selection). If no captain can be dispatched, the orchestrator uses it
+while acting as the fallback dispatcher.
 
 The spec reviewer model is the **pi-dev `gemini` alias** (see **quirk:pi-dev**) — not a frozen
 model id. `pi-watch` resolves the newest authed model in the alias's fallback ladder;
@@ -10,7 +12,15 @@ hard-pinning an exact id via `--provider`/`--model` is the documented exception,
 
 Use the prompt body from `spec-reviewer-prompt.md` (everything inside the
 prompt block — What Was Requested, What Implementer Claims, CRITICAL: Do Not
-Trust the Report, Your Job, Report).
+Trust the Report, Your Job, Suggested patch, Report).
+
+## Suggested patch
+
+The assembled prompt must require the reviewer to attach a unified diff capped at roughly 20
+changed lines for each LOW/MEDIUM or mechanical/objective HIGH finding. It must forbid patches
+for CRITICAL or judgment-requiring findings, confine patch paths to `scope.files` and outside
+`scope.never_touch`, and keep the reviewer report-only: it proposes patch text in the finding
+but never applies it, runs `git apply`, or edits files.
 
 ## Invocation
 
@@ -53,8 +63,13 @@ The prompt body asks the reviewer to end with one of:
 - `✅ Spec compliant`
 - `❌ Issues found: ...`
 
-Parse pi's stdout for that marker. Apply the same review-loop handling as the
-Claude path (SKILL.md → The Process).
+Parse pi's stdout for that marker and any per-finding `Suggested patch` content. The task
+captain (or the orchestrator acting as fallback dispatcher) may apply an accepted eligible patch
+only after enforcing the roughly-20-changed-line cap, confirming its paths are within
+`scope.files` and outside `scope.never_touch`, and running `git apply --check` against the
+current tree. CRITICAL and judgment-requiring findings have no patch and route to the fix worker.
+The reviewer only proposes patch text; it never applies a patch or edits files. Apply the same
+review-loop handling as the Claude path (SKILL.md → The Process).
 
 ## Failure detection
 
