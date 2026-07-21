@@ -264,6 +264,18 @@ trail is mandatory, not optional):
   `scope.never_touch` (forbidden — adjacent files the wave's other tasks own). Captains
   paste both into implementer prompts; negative scope beats positive scope because
   agents drift into adjacent files.
+- **Granularity economics — a split must buy something.** Every task carries a fixed
+  pipeline tax (dispatch, review chain, fix loop, merge-lane handshake — ~5–12 min
+  measured in the kestrel profile), so decomposition is priced, not free: a split is
+  justified only when it (a) lands tasks in **different waves** (real parallelism) or
+  (b) crosses a **risk-tier boundary** (part of the work earns a cheaper review chain).
+  A contiguous run of same-risk, sequentially-dependent tasks collapses into one task;
+  a task with a projected diff under ~50–100 lines and the same tier as its neighbor
+  merges into that neighbor (a merged task takes the max tier of its parts). Review
+  isolation survives via **commit boundaries inside the task** — the implementer
+  commits per sub-step, so reviewers still see clean per-step diffs without another
+  full chain. Target task count follows achievable wave width, never requirement-bullet
+  count. The plan-document reviewer flags overhead-unjustified splits.
 - **Single-implementer fast path = width-1, same machinery.** If partitioning cannot
   produce a wave of ≥2 disjoint tasks, run the **same captain state machine at
   concurrency width 1** — not a separate flat control plane (dual control planes were
@@ -307,6 +319,10 @@ event-by-event against this design:
   session (its value case is long unattended runs).
 - Confirmed wave waste: two independent tasks (`T2`/`T5`) ran sequentially — the mode
   gates in this design would have overlapped them.
+- Confirmed over-decomposition: 7 tasks on a nearly linear dependency chain paid 7
+  pipeline taxes for almost no parallel payoff (T5's whole window was 3.7 min, majority
+  overhead). The §6 granularity rule models to a further ~15–25 min saved by collapsing
+  to ~3 tasks.
 - Surfaced the pi cold-start tax that §5 now addresses.
 
 ## Decisions Locked
@@ -353,6 +369,13 @@ event-by-event against this design:
 - Speculative start explicitly redefines plain-dependency semantics; `[T1.full]` opts a
   dependency back into the full-chain wait (finding #7).
 - Staged delivery in three phases (finding #16) — see Delivery Phases.
+**Granularity amendment (2026-07-21, approved)**
+- Task splits are priced against the fixed pipeline tax: split only for wave
+  parallelism or a risk-tier boundary; collapse same-risk sequential chains; merge
+  sub-100-line same-tier tasks into neighbors; commit boundaries inside a task replace
+  task boundaries for review isolation. (Kestrel evidence: 7 tasks on a near-linear
+  chain, ~15–25 min of pure overhead.)
+
 - Remaining accepted findings folded into §§1–6: FORK_SHA/`--onto` rebase discipline,
   candidate-SHA attestations, CHAIN_COMPLETE worktree teardown and descendant-merge
   barrier, STUB_READY gate, patch-apply guards, exhaustive escalation table,
@@ -428,9 +451,12 @@ event-by-event against this design:
   diff-threshold note; dispatch-context now the captain.
 - `skills/writing-plans/SKILL.md` — explicit per-task `risk` field + per-tier rationale;
   cohesion-aware partitioning with the hub-isolation heuristic in the File Structure
-  pass; vertical-slice discipline; `scope.never_touch` field; width-1 fast-path gate.
+  pass; vertical-slice discipline; `scope.never_touch` field; width-1 fast-path gate;
+  granularity-economics rule (split only for parallelism or tier boundaries; collapse
+  same-risk chains; per-step commit boundaries inside merged tasks).
 - `skills/writing-plans/plan-document-reviewer-prompt.md` — check risk-field presence
-  and rationale quality, never-touch coverage, and partition cohesion.
+  and rationale quality, never-touch coverage, partition cohesion, and
+  overhead-unjustified splits.
 - `skills/subagent-driven-development/assets/implementer-prompt.md` + pi variant —
   contract-first stub commit rule for tasks with dependents.
 - `skills/using-git-worktrees/SKILL.md` (or SDD mode mechanics) — pooled worktree
