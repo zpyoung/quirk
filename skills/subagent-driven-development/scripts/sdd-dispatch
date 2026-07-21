@@ -182,9 +182,11 @@ def stop_process(
     proc: subprocess.Popen[bytes],
     adopted_descendants: bool = False,
 ) -> None:
-    """Terminate the full worker tree and unconditionally escalate after grace."""
+    """Terminate the worker group and currently tracked descendants."""
     descendants = descendant_pids(proc.pid)
-    if adopted_descendants and proc.poll() is not None:
+    if adopted_descendants:
+        # Linux reparents orphaned descendants here even while the worker leader
+        # remains alive, so include this process's full adopted tree.
         descendants.update(descendant_pids(os.getpid()))
     descendants.discard(proc.pid)
 

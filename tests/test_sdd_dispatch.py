@@ -204,6 +204,66 @@ def test_timeout_kills_start_new_session_descendants(tmp_path: Path) -> None:
                 pass
 
 
+@pytest.mark.xfail(
+    sys.platform != "linux",
+    reason=(
+        "double-fork daemon escapes best-effort containment on non-Linux; "
+        "workers are trusted"
+    ),
+    strict=False,
+)
+def test_timeout_kills_double_fork_daemon(tmp_path: Path) -> None:
+    prompt = tmp_path / "prompt.md"
+    prompt.write_text("daemonized work")
+    daemon_pid_file = tmp_path / "daemon.pid"
+    daemonizer = tmp_path / "daemonizer.py"
+    daemonizer.write_text(
+        "import os, signal, time\n"
+        "from pathlib import Path\n"
+        "if os.fork() > 0:\n"
+        "    os._exit(0)\n"
+        "os.setsid()\n"
+        "if os.fork() > 0:\n"
+        "    os._exit(0)\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        f"Path({str(daemon_pid_file)!r}).write_text(str(os.getpid()))\n"
+        "time.sleep(30)\n"
+    )
+    dispatcher = make_dispatcher(
+        tmp_path,
+        "import subprocess, sys, time\n"
+        "from pathlib import Path\n"
+        f"daemon_pid_file = Path({str(daemon_pid_file)!r})\n"
+        f"subprocess.run([sys.executable, {str(daemonizer)!r}], check=True)\n"
+        "deadline = time.monotonic() + 2\n"
+        "while not daemon_pid_file.exists() and time.monotonic() < deadline:\n"
+        "    time.sleep(0.01)\n"
+        "time.sleep(30)\n",
+    )
+
+    daemon_pid = None
+    try:
+        result = run_dispatch(
+            "--prompt", str(prompt),
+            "--provider", "p", "--model", "m", "--thinking", "low",
+            "--dispatcher", str(dispatcher),
+            "--out-dir", str(tmp_path / "daemon-artifacts"),
+            "--timeout", "0.3",
+            cwd=tmp_path,
+        )
+        daemon_pid = int(daemon_pid_file.read_text())
+
+        assert result.returncode == 124
+        with pytest.raises(ProcessLookupError):
+            os.kill(daemon_pid, 0)
+    finally:
+        if daemon_pid is not None:
+            try:
+                os.kill(daemon_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
 def test_repeated_out_dir_dispatches_preserve_monotonic_attempts(tmp_path: Path) -> None:
     prompt = tmp_path / "prompt.md"
     dispatcher = make_dispatcher(
