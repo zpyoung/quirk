@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 from pathlib import Path
 
@@ -25,36 +24,12 @@ def git(repo: Path, *args: str, text: bool = True):
 
 
 def hunk_ids(fixture: FixtureRepo) -> list[str]:
-    # T4 must not depend on T3 landing first. Prefer analyze.sh --hunks when it
-    # exists; otherwise derive the materializer's stable global IDs from -U0.
     result = subprocess.run(
         [str(ANALYZE), "--hunks", "--base", fixture.base, "--head", fixture.head],
         cwd=fixture.path, capture_output=True, text=True,
     )
-    if result.returncode == 0:
-        try:
-            value = json.loads(result.stdout)
-            records = value.get("hunks", value) if isinstance(value, dict) else value
-            ids = [str(record["id"]) for record in records]
-            if ids:
-                return ids
-        except (json.JSONDecodeError, KeyError, TypeError):
-            pass
-
-    diff = git(fixture.path, "diff", "-U0", "--binary", fixture.base, fixture.head)
-    count = len(re.findall(r"^@@ ", diff, re.MULTILINE))
-    # Binary and metadata-only file sections have one all-or-nothing identity.
-    sections = re.split(r"(?=^diff --git )", diff, flags=re.MULTILINE)
-    count += sum(
-        1 for section in sections
-        if section.startswith("diff --git ")
-        and "@@ " not in section
-        and ("GIT binary patch" in section or re.search(
-            r"^(?:old mode|new mode|rename from|rename to|new file mode|deleted file mode) ",
-            section, re.MULTILINE,
-        ))
-    )
-    return [f"hunk-{number:04d}" for number in range(1, count + 1)]
+    assert result.returncode == 0, result.stderr
+    return [str(record["id"]) for record in json.loads(result.stdout)["hunks"]]
 
 
 def run_slice(fixture: FixtureRepo, branch: str, ids: list[str], *, parent: str | None = None):
@@ -67,6 +42,19 @@ def run_slice(fixture: FixtureRepo, branch: str, ids: list[str], *, parent: str 
     if parent:
         args.extend(["--parent", parent])
     return subprocess.run(args, cwd=fixture.path, capture_output=True, text=True)
+
+
+def test_analyzer_ids_slice_correctly_when_excluded_file_precedes_source(tmp_path: Path):
+    fixture = build_fixture(tmp_path, "excluded_first")
+    ids = hunk_ids(fixture)
+    assert ids == ["h1", "h2"]
+
+    result = run_slice(fixture, "slice-analyzer-id", ids)
+    assert result.returncode == 0, result.stderr
+    assert git(fixture.path, "show", "slice-analyzer-id:package-lock.json") == '{"version": 1}'
+    content = git(fixture.path, "show", "slice-analyzer-id:src.txt")
+    assert "changed 2" in content
+    assert "changed 7" in content
 
 
 def test_one_hunk_and_all_hunks_are_exact_and_leave_status_untouched(tmp_path: Path):

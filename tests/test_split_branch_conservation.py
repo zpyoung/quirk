@@ -31,10 +31,9 @@ def inventory_ids(fixture: FixtureRepo) -> list[str]:
     )
     assert result.returncode == 0, result.stderr
     hunks = json.loads(result.stdout)["hunks"]
-    assert all(hunk["id"] for hunk in hunks)
-    # slice.sh's stable canonical aliases address the same globally ordered
-    # inventory units while it computes the source diff from explicit refs.
-    return [f"hunk-{number:04d}" for number in range(1, len(hunks) + 1)]
+    ids = [str(hunk["id"]) for hunk in hunks]
+    assert all(ids)
+    return ids
 
 
 def partitions(ids: list[str]) -> list[tuple[str, list[list[str]]]]:

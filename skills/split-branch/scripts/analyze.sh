@@ -176,21 +176,33 @@ parse_hunk_diff() {
 
 analyze_hunks() {
     local target_branch="$1"
-    local current_branch
-    current_branch=$(get_current_branch)
+    local requested_base="${2:-}"
+    local requested_head="${3:-}"
+    local base head
 
-    if [[ -z "$current_branch" ]]; then
-        echo >&2 -e "${RED}Error: Not on a branch (detached HEAD?)${NC}"
-        exit 1
-    fi
-    if [[ "$current_branch" == "$target_branch" ]]; then
-        echo >&2 -e "${RED}Error: Current branch is the target branch${NC}"
-        exit 1
+    if [[ -n "$requested_base" ]]; then
+        base=$(git rev-parse --verify "${requested_base}^{commit}") || {
+            echo >&2 "Error: invalid base ref: $requested_base"; exit 5;
+        }
+        head=$(git rev-parse --verify "${requested_head}^{commit}") || {
+            echo >&2 "Error: invalid head ref: $requested_head"; exit 5;
+        }
+    else
+        local current_branch
+        current_branch=$(get_current_branch)
+        if [[ -z "$current_branch" ]]; then
+            echo >&2 -e "${RED}Error: Not on a branch (detached HEAD?)${NC}"
+            exit 1
+        fi
+        if [[ "$current_branch" == "$target_branch" ]]; then
+            echo >&2 -e "${RED}Error: Current branch is the target branch${NC}"
+            exit 1
+        fi
+        base=$(git merge-base "$target_branch" HEAD)
+        head=$(git rev-parse HEAD)
     fi
 
-    local base head inventory_file floor_file names_file
-    base=$(git merge-base "$target_branch" HEAD)
-    head=$(git rev-parse HEAD)
+    local inventory_file floor_file names_file
     inventory_file=$(mktemp "${TMPDIR:-/tmp}/split-branch-hunks.XXXXXX")
     floor_file=$(mktemp "${TMPDIR:-/tmp}/split-branch-floor.XXXXXX")
     names_file=$(mktemp "${TMPDIR:-/tmp}/split-branch-names.XXXXXX")
@@ -404,9 +416,21 @@ EOF
 # Parse additive options without changing main's legacy output implementation.
 mode=default
 target=""
+explicit_base=""
+explicit_head=""
 while (( $# > 0 )); do
     case "$1" in
         --hunks) [[ "$mode" == default ]] || { echo >&2 "Error: duplicate option: $1"; exit 5; }; mode=hunks; shift ;;
+        --base|--head)
+            [[ $# -ge 2 && "$2" != -* ]] || { echo >&2 "Error: $1 requires a ref"; exit 5; }
+            if [[ "$1" == --base ]]; then
+                [[ -z "$explicit_base" ]] || { echo >&2 "Error: duplicate option: $1"; exit 5; }
+                explicit_base="$2"
+            else
+                [[ -z "$explicit_head" ]] || { echo >&2 "Error: duplicate option: $1"; exit 5; }
+                explicit_head="$2"
+            fi
+            shift 2 ;;
         --remote)
             [[ $# -ge 2 && "$2" != -* ]] || { echo >&2 "Error: --remote requires a name"; exit 5; }
             DETECT_REMOTE="$2"; shift 2 ;;
@@ -416,7 +440,17 @@ while (( $# > 0 )); do
 done
 
 if [[ "$mode" == hunks ]]; then
-    analyze_hunks "$(detect_target_branch "$target")"
+    if [[ -n "$explicit_base" || -n "$explicit_head" ]]; then
+        [[ -n "$explicit_base" && -n "$explicit_head" && -z "$target" ]] || {
+            echo >&2 "Error: --base and --head must be used together without a target"; exit 5;
+        }
+        analyze_hunks "" "$explicit_base" "$explicit_head"
+    else
+        analyze_hunks "$(detect_target_branch "$target")"
+    fi
 else
+    [[ -z "$explicit_base" && -z "$explicit_head" ]] || {
+        echo >&2 "Error: --base and --head require --hunks"; exit 5;
+    }
     main "$target"
 fi

@@ -68,18 +68,42 @@ raw_patch=$(mktemp)
 zero_patch=$(mktemp)
 subset_patch=$(mktemp)
 inventory_ids=$(mktemp)
+included_files=$(mktemp)
+names_file=$(mktemp)
 cleanup() {
-    rm -f "$GIT_INDEX_FILE" "$build_index" "$raw_patch" "$zero_patch" "$subset_patch" "$inventory_ids"
+    rm -f "$GIT_INDEX_FILE" "$build_index" "$raw_patch" "$zero_patch" "$subset_patch" \
+        "$inventory_ids" "$included_files" "$names_file"
 }
 trap cleanup EXIT HUP INT TERM
 
 git diff --binary --full-index -M -U0 "$source_base" "$source_head" >"$raw_patch"
 
-# When the additive analyzer mode is installed, accept its IDs directly. The
-# ordered fallback aliases below keep this script usable before that task lands.
-script_dir=$(cd "$(dirname "$0")" && pwd)
-if analyzer_json=$("$script_dir/analyze.sh" --hunks --base "$source_base" --head "$source_head" 2>/dev/null); then
-    printf '%s' "$analyzer_json" | jq -r '.. | objects | select(has("id")) | .id' >"$inventory_ids" 2>/dev/null || :
+# The analyzer inventory is the sole authority for selectable IDs. File
+# ordinals join that filtered inventory back to raw patch sections without
+# parsing Git's potentially C-quoted patch headers. Whole-commit replay does
+# not select hunks and therefore needs no inventory.
+if [[ -z "$at_commit" ]]; then
+    script_dir=$(cd "$(dirname "$0")" && pwd)
+    if ! analyzer_json=$("$script_dir/analyze.sh" --hunks --base "$source_base" --head "$source_head"); then
+        echo "could not obtain hunk inventory" >&2
+        exit 5
+    fi
+    if ! printf '%s' "$analyzer_json" | jq -e \
+        '.hunks | type == "array" and all(.[]; (.id | type == "string") and (.file | type == "string"))' \
+        >/dev/null; then
+        echo "invalid hunk inventory" >&2
+        exit 5
+    fi
+    printf '%s' "$analyzer_json" | jq -r '.hunks[].id' >"$inventory_ids"
+    git diff "$source_base" "$source_head" -M --name-only -z >"$names_file"
+    file_number=0
+    while IFS= read -r -d '' file; do
+        file_number=$((file_number + 1))
+        if printf '%s' "$analyzer_json" | jq -e --arg file "$file" \
+            'any(.hunks[]; .file == $file)' >/dev/null; then
+            printf '%s\n' "$file_number" >>"$included_files"
+        fi
+    done <"$names_file"
 fi
 
 if [[ -n "$at_commit" ]]; then
@@ -91,7 +115,7 @@ else
     # The no-newline marker remains in its hunk because hunk bodies are retained
     # as complete line sequences.
     set +e
-    awk -v requested_file="$hunks" -v analyzer_file="$inventory_ids" '
+    awk -v requested_file="$hunks" -v analyzer_file="$inventory_ids" -v included_file="$included_files" '
         BEGIN {
             while ((getline line < requested_file) > 0) {
                 sub(/\r$/, "", line)
@@ -106,17 +130,17 @@ else
                 if (line != "") analyzer[++analyzer_count] = line
             }
             close(analyzer_file)
+            while ((getline line < included_file) > 0) included[line] = 1
+            close(included_file)
         }
-        function choose(n, canonical, short_id, upper_id, plain, analyzer_id, id) {
-            canonical = sprintf("hunk-%04d", n)
-            short_id = sprintf("hunk-%d", n)
-            upper_id = sprintf("H%04d", n)
-            plain = sprintf("%d", n)
-            analyzer_id = analyzer[n]
+        function choose(analyzer_id, id) {
             chosen_count = 0
+            if (!(file_number in included)) return 0
+            analyzer_index++
+            analyzer_id = analyzer[analyzer_index]
+            if (analyzer_id == "") inventory_mismatch = 1
             for (id in requested) {
-                if (id == canonical || id == short_id || id == upper_id ||
-                    id == plain || (analyzer_id != "" && id == analyzer_id)) {
+                if (id == analyzer_id) {
                     matched[id] = 1
                     chosen_count += requested_count[id]
                 }
@@ -128,8 +152,7 @@ else
             if (saw_hunk) {
                 if (selected_bodies != "") printf "%s%s", header, selected_bodies
             } else {
-                unit++
-                should_emit = choose(unit)
+                should_emit = choose()
                 # A binary section contributes one atomic inventory unit. Track
                 # inventory and selection cardinalities per file and reject any
                 # inconsistent partial selection (normally impossible via analyze).
@@ -143,6 +166,7 @@ else
         /^diff --git / {
             finish_file()
             in_file = 1
+            file_number++
             saw_hunk = 0
             emitting = 0
             selected_bodies = ""
@@ -152,8 +176,7 @@ else
         }
         /^@@ / && in_file {
             saw_hunk = 1
-            unit++
-            emitting = choose(unit)
+            emitting = choose()
             if (emitting) selected_bodies = selected_bodies $0 ORS
             next
         }
@@ -173,6 +196,10 @@ else
                 }
             }
             if (missing) exit 2
+            if (inventory_mismatch || analyzer_index != analyzer_count) {
+                print "analyzer inventory does not match source diff" > "/dev/stderr"
+                exit 7
+            }
             if (partial_binary) {
                 print "partial selection of binary file" > "/dev/stderr"
                 exit 6

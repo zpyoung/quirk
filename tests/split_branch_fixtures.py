@@ -90,6 +90,27 @@ def _simple(tmp_path: Path) -> FixtureRepo:
     return _finish(repo, base, branch)
 
 
+def _excluded_first(tmp_path: Path) -> FixtureRepo:
+    repo = make_repo(tmp_path)
+    source = "".join(f"line {number}\n" for number in range(1, 9))
+    commit(
+        repo,
+        {"package-lock.json": '{"version": 1}\n', "src.txt": source},
+        "add source and lockfile",
+    )
+    base, branch = _start_feature(repo)
+    changed = "".join(
+        f"changed {number}\n" if number in (2, 7) else f"line {number}\n"
+        for number in range(1, 9)
+    )
+    commit(
+        repo,
+        {"package-lock.json": '{"version": 2}\n', "src.txt": changed},
+        "change excluded file before source hunks",
+    )
+    return _finish(repo, base, branch)
+
+
 def _closely_spaced(tmp_path: Path) -> FixtureRepo:
     repo = make_repo(tmp_path)
     original = "".join(f"line {number}\n" for number in range(1, 9))
@@ -189,6 +210,7 @@ def _squash_merged_base(tmp_path: Path) -> FixtureRepo:
 
 _BUILDERS = {
     "simple": _simple,
+    "excluded_first": _excluded_first,
     "closely_spaced": _closely_spaced,
     "binary": _binary,
     "split_floor": _split_floor,
