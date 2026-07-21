@@ -17,9 +17,11 @@ The dispatch must provide a provenance-bearing **context manifest**, not a bare 
 - applicable `CLAUDE.md` rules and tech-spec DO-NOT-CHANGE fences;
 - an external run-scratch directory; and
 - the per-role **pinned** `provider/model:thinking` triples for captain, implementer, spec
-  reviewer, quality reviewer, Codex reviewer, fix worker, and merge resolver. Before the first
-  dispatch, the top orchestrator capability-probed canonical `pi-watch`, then resolved each alias
-  once at run start using `pi-watch --check` / `--list-aliases`.
+  reviewer, quality reviewer, Codex reviewer, and fix worker (the merge resolver triple is not
+  part of this manifest — the top orchestrator's serialized merge lane dispatches that role
+  directly, never the captain). Before the first dispatch, the top orchestrator
+  capability-probed canonical `pi-watch`, then resolved each alias once at run start using
+  `pi-watch --check` / `--list-aliases`.
 
 These are authoritative inputs. Do **not** re-derive the manifest, silently default `risk`, or
 run alias resolution inside this captain. Read source documents on demand only when the manifest
@@ -35,9 +37,11 @@ Run this chain without a top-orchestrator turn between stages:
 2. **Implement.** Assemble a task/role-keyed prompt from
    `assets/pi-implementer-prompt.md` plus the context manifest, stage it outside the repository,
    and dispatch it with the pinned implementer triple. Persist output immediately. A valid DONE
-   becomes internal `IMPLEMENTER_DONE`. Resolve `NEEDS_CONTEXT` through the exception rule
-   below; route other blockers as `ESCALATION` rather than asking a user who is absent from this
-   nested chain.
+   becomes internal `IMPLEMENTER_DONE`. Treat `DONE_WITH_CONCERNS` as DONE only after persisting
+   every concern and queuing each as a captain-originated finding for adjudication (Step 4) —
+   never silently proceed past a flagged doubt. Resolve `NEEDS_CONTEXT` through the exception
+   rule below; route other blockers as `ESCALATION` rather than asking a user who is absent from
+   this nested chain.
 3. **Review concurrently by risk.** After DONE, stage and dispatch all applicable read-only
    reviews concurrently over the same commits:
    - `logic`: `assets/pi-spec-reviewer-prompt.md` +
@@ -232,6 +236,14 @@ PROMPT="$SCRATCH/$TASK_ID-fix-$CYCLE.md"
 pi-watch --provider "$FIX_PROVIDER" --model "$FIX_MODEL" \
   --thinking "$FIX_THINKING" --tools read,bash,edit,write "$(cat "$PROMPT")"
 ```
+
+The implementer and fix-worker fragments run alone (nothing else is dispatched concurrently with
+them). The three reviewer fragments are launch shapes, not a sequential script: per Chain step 3,
+start every applicable reviewer for the task's risk tier in one concurrent batch — background
+each `pi-watch` invocation, capture its PID, redirect its stdout/stderr into the matching
+`<scratch>/<task-id>/reviews/{spec,quality,codex}.out` artifact as it streams, then wait on every
+PID and record each exit status before adjudication. Route a nonzero exit or missing output
+through the failure policy below rather than treating it as PASS.
 
 Use pi-dev's canonical hardened headless recipe for timeout, exit-code capture, JSONL/output
 framing, and child cleanup around each invocation. Apply **quirk:pi-dev** failure signatures;

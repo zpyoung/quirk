@@ -39,8 +39,10 @@ Run this chain without a top-orchestrator turn between stages:
    and SHA inputs, and create the external scratch artifacts listed below.
 2. **Implement.** Dispatch the worker with `assets/implementer-prompt.md`, the complete context
    manifest, and the worktree. Persist its output immediately. A valid DONE becomes the internal
-   `IMPLEMENTER_DONE` signal. Resolve `NEEDS_CONTEXT` as described below; route other blockers
-   through `ESCALATION` rather than asking a user who is not in this chain.
+   `IMPLEMENTER_DONE` signal. Treat `DONE_WITH_CONCERNS` as DONE only after persisting every
+   concern and queuing each as a captain-originated finding for adjudication (Step 4) — never
+   silently proceed past a flagged doubt. Resolve `NEEDS_CONTEXT` as described below; route other
+   blockers through `ESCALATION` rather than asking a user who is not in this chain.
 3. **Review concurrently by risk.** After DONE, dispatch all applicable read-only reviews in one
    nested-dispatch turn over the same commits:
    - `logic`: `assets/spec-reviewer-prompt.md` +

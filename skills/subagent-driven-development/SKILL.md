@@ -87,9 +87,10 @@ neither can launch a captain, use the one-paragraph **Flat chain fallback** belo
 For the pi path, consult **quirk:pi-dev**, run `pi-watch --check` / `--list-aliases` **once at run
 start**, and record the resolved `provider/model:thinking` triple for every role. Pin those
 triples for the run. Every pi captain receives them as Inputs and uses explicit
-`--provider`/`--model`/`--thinking`; it never re-resolves an alias per dispatch. A runtime-failure
-re-resolution epoch, if the top orchestrator chooses one, is explicit and recorded rather than a
-silent mid-chain fallback.
+`--provider`/`--model`/`--thinking`; it never re-resolves an alias per dispatch. On the first
+auth/rate failure for a role, the top orchestrator performs exactly one recorded re-resolution
+epoch (re-check the alias, pin the new triple) before falling back — an explicit, recorded step,
+never a silent mid-chain fallback.
 
 Every captain receives a provenance-bearing **context manifest**, not a bare packet: full task
 text, Contract, `scope.files`, `scope.never_touch`, applicable `CLAUDE.md` rules and tech-spec
@@ -587,10 +588,10 @@ a captain to silently fall back. Rate limits get one retry after 60 seconds; emp
 gets one re-dispatch; unparseable reviewer output is never PASS and is synthesized as
 `NEEDS_FIX`. Use pi-dev's bounded timeout handling and hardened JSONL/exit-code recipe.
 
-Only the top orchestrator may choose a runtime fallback or recorded re-resolution epoch. It then
-issues a new context manifest and requires affected work to be re-reviewed; a live captain never
-mutates its pinned triples. If both pi and Claude are dead for a role, use the escalation table's
-runtime-fallback-exhausted row and park the task.
+Only the top orchestrator performs the required re-resolution epoch, and may choose a runtime
+fallback if that epoch still fails. It then issues a new context manifest and requires affected
+work to be re-reviewed; a live captain never mutates its pinned triples. If both pi and Claude are
+dead for a role, use the escalation table's runtime-fallback-exhausted row and park the task.
 
 ## Integration
 
