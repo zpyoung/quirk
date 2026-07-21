@@ -209,7 +209,7 @@ Notice what the template does NOT contain: no test body, no implementation body.
 independent: true
 dependencies: []
 scope:
-  files: [src/metrics/summary.py, tests/metrics/test_summary.py]
+  files: [src/metrics/summary.py, src/metrics/__init__.py, tests/metrics/test_summary.py]
   never_touch: [src/metrics/export.py, tests/metrics/test_export.py]
 risk: logic
 # Risk rationale: Adds aggregation behavior and an exported contract.
