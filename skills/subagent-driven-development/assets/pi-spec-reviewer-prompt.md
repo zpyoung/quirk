@@ -17,8 +17,8 @@ Trust the Report, Your Job, Suggested patch, Report).
 ## Suggested patch
 
 The assembled prompt must require the reviewer to attach a unified diff capped at roughly 20
-changed lines for each LOW/MEDIUM or mechanical/objective HIGH finding. It must forbid patches
-for CRITICAL or judgment-requiring findings, confine patch paths to `scope.files` and outside
+changed lines for each mechanical/objective finding. It must forbid patches for
+judgment-requiring findings, confine patch paths to `scope.files` and outside
 `scope.never_touch`, and keep the reviewer report-only: it proposes patch text in the finding
 but never applies it, runs `git apply`, or edits files.
 

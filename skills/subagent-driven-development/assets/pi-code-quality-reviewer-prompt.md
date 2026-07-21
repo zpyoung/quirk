@@ -39,8 +39,8 @@ Append the same additional checks the Claude path requires:
 ## Suggested patch
 
 The assembled prompt must also require a proposed unified diff capped at roughly 20 changed
-lines for each LOW/MEDIUM or mechanical/objective HIGH finding. It must forbid patches for
-CRITICAL or judgment-requiring findings and require every patch path to stay within the task's
+lines for each Minor or mechanical/objective Important finding. It must forbid patches for
+Critical or judgment-requiring findings and require every patch path to stay within the task's
 `scope.files` and outside `scope.never_touch`. The reviewer remains report-only: it includes
 eligible patch text in its finding, but never applies it, runs `git apply`, or edits files.
 

@@ -29,10 +29,10 @@ Task tool (quirk:code-reviewer):
 
 ## Suggested patch
 
-For each LOW or MEDIUM finding, and each HIGH finding whose fix is mechanical/objective rather
+For each Minor finding, and each Important finding whose fix is mechanical/objective rather
 than a judgment call, the reviewer must attach a proposed unified diff capped at roughly 20
 changed lines. Patch paths must stay within the task's declared `scope.files` and outside every
-path in `scope.never_touch`. CRITICAL findings and findings requiring judgment stay report-only
+path in `scope.never_touch`. Critical findings and findings requiring judgment stay report-only
 with no patch attached.
 
 The task captain (or fallback orchestrator) may apply an accepted eligible patch only after
