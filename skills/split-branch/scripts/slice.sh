@@ -73,7 +73,7 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-git diff --binary --full-index -U0 "$source_base" "$source_head" >"$raw_patch"
+git diff --binary --full-index -M -U0 "$source_base" "$source_head" >"$raw_patch"
 
 # When the additive analyzer mode is installed, accept its IDs directly. The
 # ordered fallback aliases below keep this script usable before that task lands.
@@ -203,7 +203,7 @@ if [[ -s "$zero_patch" ]]; then
     fi
 fi
 selected_tree=$(GIT_INDEX_FILE="$build_index" git write-tree)
-git diff --binary --full-index -U3 "${source_base}^{tree}" "$selected_tree" >"$subset_patch"
+git diff --binary --full-index -M -U3 "${source_base}^{tree}" "$selected_tree" >"$subset_patch"
 
 # Materialize onto the requested parent with the mandated throwaway-index
 # sequence. --3way is paired with --full-index and lets a parent drift from the
