@@ -129,7 +129,7 @@ Keep one behavior per red-green cycle. A non-trivial behavior may take longer th
 
 ## Task Independence
 
-When the plan will be executed by **quirk:subagent-driven-development**, declare task independence and scope so the orchestrator can compute parallel waves. In captain mode, every task MUST declare both `scope.files` and `scope.never_touch`, plus an explicit `risk` and its one-line rationale. `independent`, `dependencies`, and `cooperative` remain optional. Outside captain mode, the whole block remains optional; omitting its parallelism fields produces singleton waves, which is the legacy behaviour.
+When the plan will be executed by **quirk:subagent-driven-development**, declare task independence and scope so the orchestrator can compute parallel waves. **Captain mode** means the plan will be executed by **quirk:subagent-driven-development**'s captain control plane (per-task captain sub-orchestrators). In captain mode, every task MUST declare both `scope.files` and `scope.never_touch`, plus an explicit `risk` and its one-line rationale. `independent`, `dependencies`, and `cooperative` remain optional. Outside captain mode, the whole block remains optional; omitting its parallelism fields produces singleton waves, which is the legacy behaviour.
 
 Declare the fields directly in the task heading area, in a fenced YAML-like block immediately under the `### Task N: ...` heading:
 
