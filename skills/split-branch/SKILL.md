@@ -1,17 +1,17 @@
 ---
 name: split-branch
-description: Use when a feature branch exceeds ~400 lines of diff, when a reviewer asks to "make this PR smaller", when planning a large feature so it ships in reviewable chunks, or when the user invokes /split-branch
+description: Use when splitting a PR, MR, or branch into reviewable stacked slices, or when asked to make a PR smaller without losing the original review.
 ---
 
-# Splitting Branches Into Stacked PRs/MRs
+# Split a Branch into MVP-First Stacked Slices
 
 ## Overview
 
-Split a large branch into a stack of smaller PRs/MRs where each (except the bottom) targets the previous one — true stacked PRs, not "expanding-snapshot" PRs that all target `main`.
+Split a large feature branch into a stack of smaller PRs/MRs. By default, the bottom feature slice is the smallest end-to-end outcome a user can observe: an **MVP-first vertical** slice. Each later PR/MR targets the preceding branch. Preserve and retarget the original PR/MR; never close and recreate it.
 
-**Core principle:** 200-400 line PRs correlate with the highest defect-detection rates and best architectural feedback; beyond ~400 lines feedback degrades to surface-level. Use as a heuristic, not a law — split aggressively, target ~300 lines, adjust per language.
+**MVP-first is a strong default, not a validity gate.** Whether a slice feels vertical is a soft planning prompt, never a STOP condition or an automatic re-split loop. The hard bottom-slice bar is **green + mergeable + main stays releasable**.
 
-**Announce:** "I'm using the split-branch skill to plan/execute the split."
+Announce: “I'm using the split-branch skill to plan and execute an MVP-first split.”
 
 ## Targets and Weighting
 
@@ -23,242 +23,215 @@ Split a large branch into a stack of smaller PRs/MRs where each (except the bott
 | **Default** | **~300 source lines** |
 | Hard cap | 600 source lines |
 
-**LOC** = `added + deleted` for files classified as source. `analyze.sh` excludes lockfiles, generated code (`__generated__`, `_pb.go`, `_pb2.py`, `.min.*`), and vendored dirs (`node_modules`, `vendor`, `dist`, `build`); override via `EXCLUDE_PATTERNS`.
+**LOC** means `added + deleted` for source files. Generated code, lockfiles, and vendored files are excluded by the analyzer; `EXCLUDE_PATTERNS` overrides its defaults.
 
-**Test weighting:** reviewers skim tests, so they count at **~0.5×** weight. `analyze.sh` emits `weighted_review_lines = source + (tests / 2)`. Don't split tests away from their source to hit a raw line count.
+**Test weighting:** reviewers skim tests, so tests count at **~0.5×**. The analyzer reports `weighted_review_lines = source + (tests / 2)`. Keep proving tests with their source rather than splitting them away to meet a raw count. This reviewer-effort weighting is a heuristic, not a claim that tests are less important.
 
-Sources (correlational): SmartBear/Cisco (2,500 reviews), LinearB 2025 (6.1M PRs, elite teams <219 LOC/PR). Graphite reports 50-line PRs merge ~40% faster than 250-line ones.
+Refuse to split under ~200 weighted lines unless the user explicitly asks to proceed. Prefer coherent 450-line slices to arbitrary 300 + 150 partitions: **coherence beats line targets up to the 600-line hard cap**.
 
-**Skip the split** if `weighted_review_lines < 200` — confirm with the user before proceeding anyway.
+Sources are correlational: SmartBear/Cisco (2,500 reviews), LinearB 2025 (6.1M PRs, elite teams under 219 LOC/PR), and Graphite (50-line PRs merge about 40% faster than 250-line PRs).
 
-## Strategies (in order)
+## Strategies
 
-### 0. Self-containment (overrides target, yields to hard cap)
-A definition should ship with at least one usage so reviewers can evaluate the API in context.
+Invocation surface:
 
-**Usage hierarchy:**
-1. Real production caller — ideal.
-2. Contract / integration test — acceptable when (a) the real caller is in a later layer, (b) including it would exceed 600 lines, or (c) the layer *is* a public API where tests are the contract.
-3. Unit test only — last resort; can pass on broken APIs.
+- `--vertical` — force **MVP-first vertical** planning, the default.
+- `--layers` — force **layer-first** planning, the fallback.
+- With neither option, auto-detect using the strategy probe below and present the mechanical recommendation in the plan.
 
-Concretely: new function → real caller; new type → construction site; new module → import wiring; new endpoint → client (or contract test if client is downstream); rename → all call sites in same PR. **Monorepo rename exception:** when N call sites is unmanageable, ship a compatibility shim and phase the migration over follow-up PRs.
+### MVP-first vertical (default)
 
-Prefer 450-line self-contained over 280 + 170 split. Past the 600 cap → split, but flag the dangling definition in "Intentionally Missing" and link forward.
+Choose the smallest user-observable path through the changed layers and put it first. It normally includes an entry point, the core state change, and one proving test. Add subsequent slices by distinct user outcome rather than by technical directory.
 
-**Layer-boundary exception:** when splitting by architectural layer (Strategy 2), it's legitimate for a PR's only "callers" to be tests — the real caller lives in the next layer up. Acknowledge in the PR description.
+### Layer-first (fallback)
 
-### 1. Extract pure refactors first
-Renames, file moves, interface extractions go in PR #1. Often 20-30% of the diff with near-zero defect risk → fast approval, clarifies the actual feature change.
+When no bounded vertical path is available, order architectural layers bottom-up, for example schema → repository → service → API → UI, and bundle tests with each layer. A layer may have only tests as callers; call that out in the PR/MR body. Feature flags may keep incomplete upper layers dark while main remains releasable.
 
-### 2. Split by architectural layer (most common)
-Bottom-up: schema → repository → service → API → frontend. Bundle tests with their layer (tests count at 0.5×, so a layer + its tests usually fits comfortably).
+### Strategy probe
 
-### 3. Split by vertical slice (when possible)
-Independently-shippable sub-units that touch all layers. Hardest to achieve, highest review quality — avoids invoking the layer-boundary exception.
+Seed the probe on a changed entry point: a **route**, **handler**, **CLI command**, or **event registration**. Take its heuristic **compile closure** (changed definitions/imports/callers required to build), estimate its weighted size, and compare it against the 600-line cap. If no changed entry point exists, the closure is ambiguous, or the closure exceeds the cap, recommend layer-first **and name the blocker** (for example, “route closure is 742 weighted lines”). This is a recommendation, not semantic proof.
 
-### 4. Feature flags for mid-stack merges
-Gate incomplete features so each PR is independently mergeable while staying dark.
+## Labelling and Grouping
 
-## Why Stacked, Not "Progressive" PRs
+Grouping is **file-first**. Assign each changed file an intent tag; descend to hunk-level grouping only where a file's hunks carry conflicting intent tags. Do not split an unsplittable binary or a change below Git's hunk floor.
 
-Progressive PRs (each targeting `main`, growing to the full diff) seem flexible but break under merges:
+The intent-tag vocabulary is exactly:
+
+`FEATURE-CORE`, `FEATURE-VARIANT`, `VALIDATION`, `ERROR-HANDLING`, `PERF`, `REFACTOR/PREFACTOR`, `CONFIG-INFRA`, `TEST`, `DOCS`, `COSMETIC`, `UNRELATED`.
+
+The dependency graph **orders and validates but never groups**. Use it after intent grouping to put prerequisites below dependants, detect cycles, and check that each proposed slice can build.
+
+### Deferral ladder
+
+To shrink the first feature slice, use this **deferral ladder** in order, stopping as soon as it fits:
+
+1. Remove `UNRELATED` work from the stack.
+2. Defer `COSMETIC` and nonessential `DOCS`.
+3. Defer optional `FEATURE-VARIANT` behavior and `PERF` work.
+4. Defer nonessential `REFACTOR/PREFACTOR` and `CONFIG-INFRA` work that is not a prerequisite.
+5. Defer additional `VALIDATION` and `ERROR-HANDLING` cases while preserving a safe happy path.
+
+**Never defer:** the entry point, the state change that makes the outcome observable, or the one proving test. Security or data-integrity validation is likewise required, not optional scope.
+
+### Ordering and sizing
+
+- Prerequisite leftovers go in a prep slice **below the MVP slice**; they do not displace MVP-first as the first feature slice.
+- Slices **#2..N are ordered by descending user-facing value**, subject to dependency order.
+- Definitions normally travel with a real caller. At a layer boundary, a contract/integration test may be the caller; unit-test-only is a last resort.
+- Prefer a self-contained slice over a line target, but never exceed the 600-line hard cap.
+- A monorepo-wide rename may use a compatibility shim and phased call-site migration.
+
+## Pipeline and the One Gate
+
+The pipeline is:
+
+**pre-flight → analyze → label → probe → group → plan → GATE → materialize → verify → conserve → publish**
+
+There is exactly one mandatory approval gate. Write the complete grouping and publication plan to `.git/split-branch/<branch>.plan.md`, show it to the user, and obtain approval at **GATE**. This plan file is the approval artifact. Before the gate, do not create branches, commits, worktrees, or remote changes. After approval, do not add another mandatory gate.
+
+The Markdown plan records the base/head SHAs, strategy and blocker/recommendation, file/hunk IDs and tags per slice, dependency/order checks, weighted sizes, branch names, build/test commands, original PR/MR identity and base, remote/forge, and recovery notes. Generate the JSON publication plan required by the publisher from this approved artifact.
+
+## Build and Test Command Discovery
+
+The skill, not a script, discovers commands in this order:
+
+1. Use an **explicit value already recorded for this repo**.
+2. Use **convention detection**: inspect `Makefile` targets, then `package.json` scripts, then `pyproject.toml` / `pytest`, then `cargo`, then `go test`.
+3. Read the **repo's CI config** and use its build and test commands.
+4. **Ask the user once**, then **record the answer in the plan file** so later slices reuse it.
+
+Script-side auto-detection is out of scope. The skill passes the discovered build command and optional test command to `verify.sh`; an explicitly empty build command is valid only when the plan explains why no build exists.
+
+## Execution
+
+### 1. Pre-flight and analyze
+
+Require a repository, attached non-base branch, and clean index/worktree. Determine the base from an existing PR/MR before the remote default. Detect the remote from `--remote`, then `remote.pushDefault`, then the conventional fallback. Surface branch protection, permissions, and merge commits before planning.
+
+Run the analyzer once for weights and once for hunk inventory:
+
+```bash
+scripts/analyze.sh [--remote <name>] <base>
+scripts/analyze.sh --hunks [--remote <name>] <base>
+```
+
+Pin the emitted base and head SHAs. Grouping uses the hunk inventory, not a fresh later diff.
+
+### 2. Label, probe, group, and plan
+
+Apply the vocabulary and file-first rule, run the strategy probe, order groups with dependencies, and write the plan. Present bottom-to-top branches, targets, weighted sizes, hunk IDs, intentionally missing work, original PR/MR retarget, and the command-discovery result. Stop only at the single GATE.
+
+If dependencies form a cycle, **merge cycling slices on a dependency cycle** until the condensation graph is acyclic; if that exceeds the cap, use layer-first or report the blocker. If hunk surgery is blocked by an unsplittable change or repeated application failure, use **commit-boundary splitting when hunk surgery is blocked**, via `slice.sh --at-commit`.
+
+### 3. Materialize
+
+For each approved slice, feed selected analyzer IDs to the materializer. Its throwaway index creates trees and commits without touching the caller's worktree or index:
+
+```bash
+scripts/slice.sh --base <sha> --head <sha> --parent <ref> \
+  --branch <name> --hunks <id-file> --message <message>
+scripts/slice.sh --at-commit <sha> --parent <ref> --branch <name>
+```
+
+Exit codes are: 0 success; 2 unknown hunk ID; 3 patch/application conflict; 4 branch exists; 5 bad arguments, dirty caller state, or internal state error; 6 invalid partial binary selection.
+
+### 4. Verify and conserve
+
+Verify every slice in its own disposable worktree:
+
+```bash
+scripts/verify.sh --branch <ref> --build-cmd <cmd> [--test-cmd <cmd>] \
+  [--worktree-root <dir>] [--keep-on-failure]
+```
+
+Exit codes are: 0 green; 1 build failed; 2 tests failed; 4 worktree infrastructure/cleanup failed; 5 bad arguments.
+
+For each slice, check mergeability and that main would stay releasable. Treat “is this really vertical?” only as a soft review prompt. Finally conserve the original result by comparing trees: the top materialized tree must equal the original head tree.
+
+### 5. Publish and preserve the original review
+
+The publication JSON contains `base`, `original_branch`, optional numeric `original_pr`, and ordered `slices` with `branch`, `parent`, `title`, `body`, and one-based `position`.
+
+```bash
+scripts/publish.sh --plan <plan.json> [--remote <name>] \
+  [--forge github|gitlab] [--dry-run] [--fork] [--no-force-push]
+```
+
+It pushes all branches before forge operations, warns reviewers, creates draft lower PRs/MRs with stack metadata, retargets the original PR/MR to the top split branch, and marks only the bottom ready. Exit codes defined by the script are: 0 success; 3 a local slice branch is missing; 5 bad arguments/malformed plan; 7 required forge CLI missing. Plain `gh` and `glab` are the only forge integrations.
+
+If branch protection prevents rewriting the original, use `--no-force-push`, create new review branches, and explain why the original cannot be retargeted. Otherwise the original PR/MR is preserved and retargeted, never closed and recreated.
+
+## Restacking after Merge
+
+PR/MR bodies carry machine-readable parent, base SHA, and stack position metadata. After a parent is squash-merged or rebased, restack its child onto the new trunk:
+
+```bash
+scripts/restack.sh --branch <child> --onto <new-trunk> \
+  [--base-sha <sha>] [--remote <name>] [--dry-run]
+```
+
+It reads the recorded base from the body unless explicitly supplied, rebases transactionally, updates metadata, and restores the branch if publication fails. Exit codes are: 0 success; 2 recorded base unavailable; 3 content conflict, cleanly aborted; 4 child/new trunk unresolved; 5 bad arguments; 6 forge, rebase, cleanup, or transactional metadata failure.
+
+Forge gotchas:
+
+- **GitLab never auto-retargets fork MRs**; print the manual command.
+- GitLab's **“Delete source branch” suppresses retargeting** of dependent MRs; turn it off until dependants are retargeted.
+- **Squash and rebase both rewrite SHAs**; restack from body metadata rather than assuming ancestry remains.
+
+## Guardrails
+
+Every item below is a rule, not advice:
+
+- **Never pass `--recount` to `git apply`** — recounting can silently reinterpret selected patch boundaries.
+- **Never use `git apply --check` as a pre-flight** — application is already atomic, so a pre-flight adds a drift race.
+- **Never use `--check --3way`** — it is not a safe preview of the real indexed application.
+- **Generate grouping diffs at `-U0` only** — zero context gives stable hunk identity for grouping, not application.
+- **Apply with ordinary context** — context protects against importing adjacent changes.
+- **Never use `--unidiff-zero` against a drifted tree** — zero-context application can land on the wrong content; it is allowed only while constructing the exact undrifted base-relative tree.
+- **Verification uses a dedicated `git worktree` per slice** — isolation prevents caller-worktree contamination.
+- **Never use a `git checkout` loop** — checkout mutates shared caller state and makes cleanup fragile.
+- **Conservation compares trees with `git diff --quiet A B` or `rev-parse <ref>^{tree}`** — tree identity proves the final content is conserved.
+- **Never compare diff-of-diffs** — textual diff formatting is not content identity.
+- **Use `git push --force-with-lease`** — the lease protects collaborators; **never use bare `--force`** because it can overwrite remote work.
+- **Never hardcode `origin`** — accept `--remote`, default to `remote.pushDefault`, then fall back to `origin`; runtime selection keeps nonstandard repositories working.
+- **No interactive commands** — automation must not hang; pass noninteractive flags to Git and forge CLIs.
+- **`--3way` requires `--full-index`** — full blob IDs are required for safe three-way fallback.
+- **`--3way` is mutually exclusive with `--reject`** — the modes have incompatible failure semantics.
+
+## Why Stacked, Not Progressive PRs
+
+Progressive PRs all target main and grow toward the full diff. They lose clean incremental review after a mid-chain merge.
 
 | | Stacked | Progressive |
 |---|---|---|
-| Clean incremental diff | ✅ Always | ❌ Lost after any mid-chain merge |
-| CI overhead per PR | Medium | High (each is full feature) |
+| Clean incremental diff | ✅ Always | ❌ Lost after a mid-chain merge |
+| CI overhead per PR | Medium | High (each is a full feature) |
 | Merge race conditions | Low | High |
 | Partial revert safety | ✅ | ❌ |
 | Reviewer autonomy | Bottom-up order | Free pick |
 
-If rebase-cascade pain is the concern, prefer **trunk + feature flags** — same autonomy, no snapshot bookkeeping.
+If rebase-cascade pain dominates, prefer trunk plus feature flags rather than progressive snapshots.
 
 ## Terminology
 
-- **Stack** — chain of PRs where each (except bottom) targets the previous
-- **Bottom** — PR targeting `main`/`master`. Reviewers read **bottom-up**
-- **Top** — PR farthest from `main`; where the original feature branch points after splitting
-- **`ORIG_BASE`** — branch the feature was originally based on (e.g. `main`)
-- **`ORIG_BASE_SHA`** — `git merge-base "$ORIG_BASE" HEAD` *pinned before any split* — used as the rebase boundary
-- **`SPLIT_BASE`** — new branch created by `extract.sh` to hold the extracted slice
+- **Stack** — chain of PRs/MRs where each slice except the bottom targets the preceding slice branch
+- **Slice** — one coherent review unit represented by a branch and PR/MR
+- **Bottom** — PR/MR targeting the original base; reviewed and merged first
+- **Top** — slice farthest from the original base; the original feature PR/MR is retargeted here
+- **MVP slice** — first feature slice containing the minimum observable user outcome
+- **Prep slice** — prerequisite-only leftovers below the MVP slice
+- **Original base** — the PR/MR's pre-split target branch
+- **Inventory base/head** — immutable SHAs captured before grouping and materialization
 
-## The Process
-
-### Step 1: Pre-flight
-
-```bash
-git rev-parse --is-inside-work-tree
-git status --porcelain   # must be clean
-
-DEFAULT_BASE=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null \
-  | sed 's@^refs/remotes/origin/@@' || echo main)
-
-# Existing PR/MR? Its base overrides DEFAULT_BASE.
-gh pr view --json number,title,baseRefName,url 2>/dev/null \
-  || gh pr list --head "$(git branch --show-current)" \
-       --json number,title,baseRefName,url --jq '.[0]' 2>/dev/null
-# GitLab equivalent: glab mr view --output json (with --repo for nested namespaces)
-```
-
-Set `ORIG_BASE` to the existing PR's base (or `DEFAULT_BASE`). **Stop** if: not in a repo, detached HEAD, on `ORIG_BASE`, or working tree dirty.
-
-**Surface up front** if branch protection on `ORIG_BASE` blocks force-push, requires linear history, or your token can't retarget. The fallback in those cases is to create new branches and new PRs rather than rewriting the existing PR.
-
-### Step 2: Analyze
-
-```bash
-"${CLAUDE_PLUGIN_ROOT}/skills/split-branch/scripts/analyze.sh" "$ORIG_BASE"
-```
-
-Use the JSON's `weighted_review_lines`, `directory_groups[]`, and `excluded_files[]` to design splits. Override budget with `TARGET_LINES_PER_SPLIT`, exclusions with `EXCLUDE_PATTERNS`.
-
-**Detect non-linear history:**
-```bash
-git log --merges --oneline "$ORIG_BASE..HEAD"
-```
-If merge commits exist, `git rebase --onto` linearizes by default. Surface to user; default to **cherry-pick extraction** instead of `--rebase-merges`.
-
-### Step 3: Present the plan (REQUIRED — never skip)
-
-Use AskUserQuestion. Format:
-
-```markdown
-**Stack** — bottom (targets `main`) to top (current work)
-
-1. `feature/json-utils-refactor` (~310 weighted) — bottom, extract first
-2. `feature/payment-schema` (~340)
-3. `feature/payment-service` (~380)
-4. `feature/payment-api` (~300)
-5. `feature/payment-ui` (~420) ← current branch retargets here (top)
-
-Existing PR #456 → main; will retarget to PR #5.
-Branch protections: none / [list]
-```
-
-Options: (A) execute, (B) modify groupings, (C) change names, (D) cancel. **Get explicit approval before any git operation.** Execute one split at a time.
-
-### Step 4: Execute one split
-
-Pin variables before extracting — this is what prevents the `--onto` ambiguity footgun:
-
-```bash
-ORIG_BASE_SHA=$(git merge-base "$ORIG_BASE" HEAD)
-CURRENT="$(git branch --show-current)"
-SPLIT_BASE="<new_branch_name>"
-
-"${CLAUDE_PLUGIN_ROOT}/skills/split-branch/scripts/extract.sh" \
-  "$SPLIT_BASE" "$ORIG_BASE" <file1> <file2> ...
-
-git rebase --onto "$SPLIT_BASE" "$ORIG_BASE_SHA" "$CURRENT"
-git log --oneline "$SPLIT_BASE..$CURRENT"   # verify only non-extracted commits remain
-```
-
-`extract.sh` creates `backup/<branch>_<timestamp>` automatically. On conflicts: report files, point to backup, **don't auto-resolve**.
-
-For subsequent splits in the same stack, the previous `SPLIT_BASE` becomes the next `ORIG_BASE`.
-
-### Step 5: PR descriptions (mandatory stack header)
-
-Without this, reviewers flag intentional placeholders as bugs:
-
-```markdown
-## Stack Position
-[1 (bottom): refactor] → [2: schema] → **[3: service] (this PR)** → [4: API] → [5 (top): UI]
-
-## Feature Goal
-Add user payment method management.
-
-## Review Order
-Bottom-up. Depends on #1, #2.
-
-## Intentionally Missing
-HTTP endpoints in #4, UI in #5 (layer-boundary self-containment exception).
-```
-
-### Step 6: Push, create, retarget — in this order
-
-Order matters: a new branch must exist on the remote before any PR can target it.
-
-```bash
-# a. Push every new split branch
-for b in "${SPLIT_BRANCHES[@]}"; do git push -u origin "$b"; done
-
-# b. Force-push the rebased current branch
-git push --force-with-lease origin "$CURRENT"   # never plain --force
-
-# c. Notify reviewers BEFORE retargeting (inline comments may be invalidated)
-gh pr comment <existing_pr> --body "Splitting into a stack. Old diff: <commit-permalink>. New base: \`$NEW_TOP\`."
-
-# d. Create draft PRs for the lower stack (#1..#N-1)
-gh pr create --base "$ORIG_BASE" --head "$SPLIT_1" --draft ...
-gh pr create --base "$SPLIT_1"   --head "$SPLIT_2" --draft ...
-
-# e. Retarget the existing PR onto the new top
-gh pr edit <existing_pr> --base "$NEW_TOP"
-# GitLab: glab mr update <iid> --target-branch "$NEW_TOP" --repo "$NS/$PROJECT"
-#   On failure: print the web URL and ask the user to retarget manually.
-
-# f. Mark only the bottom PR ready
-gh pr ready "$BOTTOM_PR_NUM"
-```
-
-**Keep all non-bottom PRs in draft** until the full stack is reviewed — prevents premature merges that silently change downstream diffs.
-
-### Step 7: Cleanup & caveats
-
-`extract.sh` accumulates `backup/*` branches (local-only, not pushed). After the stack merges cleanly:
-```bash
-git branch -D $(git branch --list 'backup/*' --format='%(refname:short)')
-```
-Don't auto-delete — user may need to recover from a bad rebase.
-
-**Commit history:** rebasing rewrites SHAs. `Co-authored-by:` trailers survive but references break. Re-sign signed commits (`git rebase --signoff`). Review Conventional Commits history before pushing if you use `release-please`/`semantic-release`.
-
-## Quick Reference
-
-| Symptom | Action |
-|---|---|
-| `weighted_review_lines` >400 / >600 | Split / hard split |
-| Mostly tests (200 src + 500 tests = 450 weighted) | Keep together (0.5× weight) |
-| Mixed refactor + feature | Refactor as PR #1 |
-| Full-stack feature | Layer split; tests satisfy boundary self-containment |
-| Vertical slice possible | Prefer it |
-| Branch has merge commits | Cherry-pick extraction, not `--rebase-merges` |
-| Monorepo rename, N call sites unmanageable | Compatibility shim + phased migration |
-| New definition with caller in diff | Pull caller in |
-| New definition, caller is later layer | Contract test in same PR; flag in "Intentionally Missing" |
-| Branch protections block force-push | New branches/new PRs, don't rewrite existing |
-| Reviewer needs full picture | Compare top-of-stack against `main` |
-| Existing PR | `gh pr view` first; its base = `ORIG_BASE` |
-
-## Common Mistakes
-
-- **Setting target >400 lines** — past the cognitive-load cliff. Default 300, hard cap 600.
-- **Each PR targeting `main` (progressive PRs)** — incremental diff lost after any merge. Use stacked or trunk + flags.
-- **No stack header in PRs** — reviewers flag placeholders as bugs.
-- **Definitions without usage** — bundle a real caller, or a contract test at a layer boundary, or link forward in "Intentionally Missing".
-- **Splitting tests off** — tests are 0.5× weight; almost never needs splitting.
-- **Confusing `ORIG_BASE` and `SPLIT_BASE` in rebase** — pin `ORIG_BASE_SHA` *before* extract; verify with `git log --oneline "$SPLIT_BASE..$CURRENT"`.
-- **Retargeting without warning reviewers** — comment first, link the old commit SHA.
-- **Pushing in the wrong order** — branches must be on the remote *before* PRs can target them.
-- **`--force` instead of `--force-with-lease`** — silently overwrites collaborators.
-- **Splitting after the fact** — for new features, plan layers up front.
-
-## Red Flags — STOP
-
-- Designing splits without running `analyze.sh`
-- Git operations before user approves the plan
-- Suggesting a single 2,000-line split as "good enough"
-- Defining something without including any caller (when one exists in the diff)
-
-## Bundled Scripts
+## Script Reference
 
 `${CLAUDE_PLUGIN_ROOT}/skills/split-branch/scripts/`:
-- `analyze.sh <target>` — JSON budget breakdown (source/test/excluded, weighted), directory groupings. Bash 3.2+.
-- `extract.sh <new> <target> <files>...` — creates timestamped backup, then a new branch from target, populates from feature branch. Handles **modifies, adds, AND deletes**. For renames pass both old and new paths.
 
-## Integration
+- `analyze.sh` `[--hunks] [--remote <name>] [base]` — reports weighted file statistics or immutable hunk inventory.
+- `slice.sh` `--base/--head/--branch/--hunks` or `--at-commit` — materializes a selected slice with a throwaway index.
+- `verify.sh` `--branch --build-cmd [--test-cmd ...]` — builds and tests one ref in a dedicated disposable worktree.
+- `publish.sh` `--plan <json> [forge/remote options]` — pushes the stack, creates reviews, and retargets the original review.
+- `restack.sh` `--branch --onto [metadata options]` — transactionally rebases a child after its parent SHA is rewritten.
+- `stackmeta.sh` `emit|parse|upsert` — manages machine-readable stack metadata in PR/MR bodies and can also be sourced as a library.
 
-- `updating-pr` — refresh PR descriptions with stack metadata after each split
-- `using-git-worktrees` — stage splits in isolated worktrees
-- `finishing-a-development-branch` — once the bottom merges and the stack collapses
+`stackmeta.sh` returns 0 on success, 2 for absent metadata, 3 for malformed metadata, 4 for multiple metadata blocks, and 5 for bad arguments.
