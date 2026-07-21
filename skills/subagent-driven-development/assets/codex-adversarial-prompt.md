@@ -1,13 +1,18 @@
 # Codex Adversarial Reviewer Prompt Template
 
-Use this template when the task captain dispatches the **third per-task review pass** — the Codex adversarial reviewer. If no captain can be dispatched, the orchestrator uses it while acting as the fallback dispatcher.
+Use this template when the task captain dispatches an eligible **per-task Codex adversarial
+pass**. If no captain can be dispatched, the orchestrator uses it while acting as the fallback
+dispatcher.
 
 **Purpose:** Find gaps between the task spec and its implementation that the spec-compliance and code-quality reviewers may have missed. Adversarial: only critique, never validate.
 
 The task captain (or the orchestrator acting as fallback dispatcher when no captain can be
-dispatched) dispatches this concurrently with the other reviewers applicable to the task's risk
-tier (spec compliance always runs; code quality only for `logic` tasks — a `pattern` task has no
-code-quality pass), after the implementer reports.
+dispatched) selects spec/code-quality reviewers by tier (`logic`: spec + quality; `pattern`:
+spec; `mechanical`: none). Separately, it dispatches this pass concurrently for an eligible
+`logic`/`pattern` task only when the task has **>150 added+deleted lines OR changes a contract
+surface** (`CONTRACT:`/`SCHEMA:` hunk or a changed file listed under a contract), after the
+implementer reports. Otherwise it records `CODEX-DEFERRED(task-id)`. Branch-level Codex is
+**Phase 2 (future)** and is not run or simulated in Phase 1.
 
 **Fix loop cap:** 2 cycles. After two cycles, an unresolved CRITICAL finding emits an
 `ESCALATION` event, is appended to the unresolved-findings ledger, and follows the §4 escalation

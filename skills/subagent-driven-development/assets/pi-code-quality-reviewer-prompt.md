@@ -7,8 +7,13 @@ frozen model id. `pi-watch` resolves the newest authed model in the alias's fall
 hard-pinning an exact id via `--provider`/`--model` is the documented exception, not the default.
 
 The task captain (or the orchestrator acting as fallback dispatcher when no captain can be
-dispatched) dispatches this concurrently with the spec-compliance and Codex adversarial
-reviewers, after the implementer reports.
+dispatched) uses this pass only for a `logic` task and dispatches it concurrently with pi spec
+compliance after the implementer reports. Reviewer selection is tier-based (`logic`: spec +
+quality; `pattern`: spec; `mechanical`: none). Pi Codex is separate: an eligible
+`logic`/`pattern` task gets per-task Codex only for **>150 added+deleted lines OR a changed
+contract surface** (`CONTRACT:`/`SCHEMA:` hunk or a changed file listed under a contract).
+Otherwise record `CODEX-DEFERRED(task-id)`; branch-level Codex is **Phase 2 (future)**, not Phase
+1 coverage.
 
 ## Prompt body
 

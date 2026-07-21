@@ -224,9 +224,9 @@ the reviewer surfaces a genuine ambiguity you cannot resolve.
      (see Step 4 below); plain `T1` keeps the full wait.
    - `cooperative: true` is an optional hint that the task needs tighter cross-task interface
      coordination than normal (TEAM mode). Coordination is still asynchronous and
-     orchestrator-mediated — captains exchange information only via `run.jsonl` decision events
-     (read-at-start / append-at-stop), never direct messaging; TEAM mode raises the cadence of
-     those exchanges, not the mechanism.
+     orchestrator-mediated: captains read peer `run.jsonl` decisions only at start and append
+     their own only at stop. A decision needed mid-chain requires `ESCALATION`; the orchestrator
+     resumes affected captains with updated manifests. TEAM never authorizes direct messaging.
 4. Topologically sort tasks by `dependencies`. A `.contract` dependency is satisfied — for
    wave-computation purposes — once the upstream task is COMMITTED and its spec-compliance
    review has confirmed the exported contracts (interfaces/signatures/schemas the dependent
@@ -261,9 +261,10 @@ else:
 means every task in the wave declared `scope.files` AND no two tasks share
 any file path.
 
-If a task declared neither `independent: true`, `dependencies`, nor
-`scope.files`, place it in its own singleton wave (= SEQUENTIAL). This is
-the safe fallback for plans that haven't adopted the new format.
+A handed-off captain-mode task missing either `scope.files` or `scope.never_touch` is **not
+dispatchable**: enrich the plan and re-review it first. Once both mandatory scope guards are
+present, a task with neither `independent: true` nor `dependencies` goes in its own singleton
+wave (= SEQUENTIAL). That mode changes concurrency only; it never supplies missing scope guards.
 
 ### Mode mechanics
 
@@ -513,8 +514,14 @@ statuses directly only in the degraded **Flat chain fallback**.
 
 Do not routinely duplicate verification already run and recorded inside a captain. Captains run
 the manifest's commands exactly as written through `scripts/sdd-acceptance` (including affected
-acceptance checks after guarded patches/fixes) and persist its JSON readiness evidence. The top
-orchestrator re-verifies at three control-plane boundaries only:
+acceptance checks after guarded patches/fixes) and persist its JSON readiness evidence.
+
+Acceptance commands are executable, trusted control-plane input. Derive command text only from
+the reviewed plan—never load a command or `cwd` from a worktree or worker report. Stage the
+acceptance JSON outside the repository/worktree, record and verify its SHA-256, and always
+override `--cwd` with the verified task worktree when executing it.
+
+The top orchestrator re-verifies at three control-plane boundaries only:
 
 1. the wave integration build/test on the merged state;
 2. a reopened adjudication/discrepancy or uncertain candidate SHA; and

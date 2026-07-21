@@ -8,9 +8,12 @@ the documented exception, not the default. It runs with `--tools read,bash`, whi
 access, not enforced read-only — see Invocation below.
 
 The task captain (or the orchestrator acting as fallback dispatcher when no captain can be
-dispatched) dispatches this concurrently with the other reviewers applicable to the task's risk
-tier (spec compliance always runs; code quality only for `logic` tasks — a `pattern` task has no
-code-quality pass), after the implementer reports.
+dispatched) selects spec/code-quality reviewers by tier (`logic`: spec + quality; `pattern`:
+spec; `mechanical`: none). Separately, it dispatches this pass concurrently for an eligible
+`logic`/`pattern` task only when the task has **>150 added+deleted lines OR changes a contract
+surface** (`CONTRACT:`/`SCHEMA:` hunk or a changed file listed under a contract), after the
+implementer reports. Otherwise it records `CODEX-DEFERRED(task-id)`. Branch-level Codex is
+**Phase 2 (future)** and is not run or simulated in Phase 1.
 
 **Fix loop cap:** 2 cycles. After two cycles of CRITICAL/HIGH findings, remaining issues carry forward to the final whole-branch reviewer (Claude `quirk:code-reviewer`, regardless of runtime).
 

@@ -4,7 +4,13 @@ Use this template when the task captain dispatches a code quality reviewer subag
 
 **Purpose:** Verify implementation is well-built (clean, tested, maintainable)
 
-The task captain (or the orchestrator acting as fallback dispatcher when no captain can be dispatched) dispatches this concurrently with the spec-compliance and Codex adversarial reviewers, after the implementer reports.
+The task captain (or the orchestrator acting as fallback dispatcher when no captain can be
+dispatched) uses this pass only for a `logic` task and dispatches it concurrently with spec
+compliance after the implementer reports. Reviewer selection is tier-based (`logic`: spec +
+quality; `pattern`: spec; `mechanical`: none). Codex is separate: an eligible `logic`/`pattern`
+task gets per-task Codex only for **>150 added+deleted lines OR a changed contract surface**
+(`CONTRACT:`/`SCHEMA:` hunk or a changed file listed under a contract). Otherwise record
+`CODEX-DEFERRED(task-id)`; branch-level Codex is **Phase 2 (future)**, not Phase 1 coverage.
 
 ```
 Task tool (quirk:code-reviewer):
