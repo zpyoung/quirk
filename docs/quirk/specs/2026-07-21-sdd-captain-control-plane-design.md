@@ -52,10 +52,14 @@ Rejected alternatives:
   2. `CHAIN_COMPLETE` — trailing passes and fixes done; full adjudication log,
      per-stage timestamps, ledger entries.
 
-  Plus a small closed set of exception events (not free-form messages):
-  `READINESS_REVOKED` (late CRITICAL/behavior finding invalidates a prior
-  `MERGE_READY`), `CONTRACT_CORRECTED` (dependents must re-check),
-  `BRANCH_REQUEST` (trailing-fix micro-branch), `ESCALATION` (feeds §4).
+  Plus a small closed event set (not free-form messages), in two classes:
+  - *Progress events* the orchestrator needs for branching and the merge lane:
+    `IMPLEMENTER_DONE` (speculative-fork point, §3), `STUB_READY` (earliest fork point,
+    §5), `REBASE_REQUEST` (pre-merge chain done — asks the merge lane for a candidate
+    SHA; see §3's handshake).
+  - *Exception events*: `READINESS_REVOKED` (late CRITICAL/behavior finding invalidates
+    a prior `MERGE_READY`), `CONTRACT_CORRECTED` (dependents must re-check),
+    `BRANCH_REQUEST` (trailing-fix micro-branch), `ESCALATION` (feeds §4).
 - **Durable artifacts (crash safety, minimal).** Captains write reviewer outputs, the
   adjudication log, and ledger entries to run-scratch files *as they are produced*, not
   only at report time. If a captain dies mid-chain, the orchestrator adopts the orphaned
@@ -116,10 +120,15 @@ Rejected alternatives:
 
 - **Merge on `MERGE_READY`,** not chain completion — but readiness attaches to a
   **candidate SHA produced after the merge-lane rebase**, not the pre-rebase tree. The
-  merge lane: rebase the task branch onto the parent tip → if any conflict fired or the
-  range-diff is non-trivial, readiness is invalidated and the captain re-verifies →
-  **fresh build/spec attestation on the exact candidate SHA** → merge. Quality/Codex
-  continue as **trailing reviews** after merge.
+  handshake (breaks the request/readiness circularity): captain finishes its pre-merge
+  chain → emits `REBASE_REQUEST` → the orchestrator's serialized merge lane rebases the
+  task branch onto the parent tip and returns the **candidate SHA** (if any conflict
+  fired or the range-diff is non-trivial, the lane returns REBASE_DIRTY instead and the
+  captain re-verifies before re-requesting) → captain runs **fresh build/spec
+  attestation on the exact candidate SHA** → emits `MERGE_READY(candidate)` → the
+  orchestrator merges, provided the parent tip hasn't advanced past the candidate's
+  base (if it has, the lane re-runs the handshake). Quality/Codex continue as
+  **trailing reviews** after merge.
 - **Worktree tears down at `CHAIN_COMPLETE`,** not at merge — trailing reviewers keep a
   leased, read-only view of the exact reviewed tree; no reviewer ever races a deleted
   filesystem. (The pooled worktree returns to the pool at `CHAIN_COMPLETE`; see §5.)
@@ -191,10 +200,11 @@ trail is mandatory, not optional):
    other content.
 4. **Verify-or-quarantine gate:** an `AUTO-RESOLVED-CRITICAL` requires an independent
    reviewer PASS plus green verification **on the final branch SHA** before the run may
-   report clean. If verification fails or the final reviewer confirms the defect, the
-   run ends **QUARANTINED** — branch intact, explicitly not "done" — instead of
-   complete. Auto-resolve removes mid-run stalls; it never manufactures a clean bill of
-   health.
+   report clean. **Only affirmative verification produces a clean finish** — failed
+   verification, a confirmed defect, an unavailable reviewer, an inconclusive verdict,
+   or verification that never ran all end the run **QUARANTINED** (branch intact,
+   explicitly not "done"). Auto-resolve removes mid-run stalls; it never manufactures a
+   clean bill of health.
 
 ### 5. Dispatch-latency reductions (round-2 research amendments)
 
@@ -305,7 +315,9 @@ event-by-event against this design:
 - Codex adversarial: per-task only above the diff threshold; otherwise branch-level.
 - Merge gates on spec-PASS + green build; quality/Codex trail as fix commits.
 - Reviewers attach patches for LOW/MEDIUM + mechanical-HIGH; captain applies directly.
-- Every `risk: logic` tag needs a planner rationale; untagged defaults to `logic`.
+- Captain-mode plans require an explicit `risk` field on every task, with a rationale
+  for every tier (no silent default — superseded the earlier "untagged defaults to
+  logic" form per design-review finding #22).
 
 **Orchestration architecture**
 - Per-task captain agents run the full chain; two-report contract.
@@ -414,11 +426,11 @@ event-by-event against this design:
   pi variants — add *Suggested patch* block; dispatch-context now the captain.
 - `skills/subagent-driven-development/assets/codex-adversarial-prompt.md` + pi variant —
   diff-threshold note; dispatch-context now the captain.
-- `skills/writing-plans/SKILL.md` — `risk: logic` rationale requirement; cohesion-aware
-  partitioning + hub-file isolation in the File Structure pass; vertical-slice
-  discipline; `scope.never_touch` field; single-implementer fast-path gate.
-- `skills/writing-plans/plan-document-reviewer-prompt.md` — check risk rationales,
-  never-touch coverage, and partition cohesion.
+- `skills/writing-plans/SKILL.md` — explicit per-task `risk` field + per-tier rationale;
+  cohesion-aware partitioning with the hub-isolation heuristic in the File Structure
+  pass; vertical-slice discipline; `scope.never_touch` field; width-1 fast-path gate.
+- `skills/writing-plans/plan-document-reviewer-prompt.md` — check risk-field presence
+  and rationale quality, never-touch coverage, and partition cohesion.
 - `skills/subagent-driven-development/assets/implementer-prompt.md` + pi variant —
   contract-first stub commit rule for tasks with dependents.
 - `skills/using-git-worktrees/SKILL.md` (or SDD mode mechanics) — pooled worktree
