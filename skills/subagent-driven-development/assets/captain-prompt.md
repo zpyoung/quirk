@@ -95,15 +95,20 @@ skills/subagent-driven-development/scripts/sdd-dispatch \
 
 The wrapper hard-fails if the prompt is absent, reserves a monotonic `attempt-<n>` below the
 role-keyed output directory, streams output into that attempt's `worker.out` and `worker.err`,
-kills the full descendant set on timeout while preserving partial files, and always writes that
-attempt's `meta.json` with timestamps, exit code, and the resolved triple. Exercise the adapter
-plus wrapper during the capability probe with a no-tools sentinel prompt and short timeout;
-require exit code 0, the sentinel in persisted `worker.out`, a valid `meta.json`, and no surviving
-child.
-Exit 124 is a timeout; any nonzero code, missing artifact/result, or surviving child is launcher
-failure, never PASS. If neither nested nor headless dispatch works, record an `ESCALATION`; only
-the top orchestrator may select the documented flat-chain fallback, and neither it nor the
-captain may improvise an untracked launcher.
+preserves partial files on timeout, and always writes that attempt's `meta.json` with timestamps,
+exit code, and the resolved triple. Timeout containment is platform-qualified: on Linux the
+child-subreaper hardening reaps the full descendant set, including reparented processes; on
+non-Linux cleanup is best effort, using a process-group kill plus still-visible descendants. A
+worker that deliberately daemonizes via double-fork/`setsid` into a new session can survive on
+non-Linux. Phase 1 treats workers as trusted, not adversarial, so this is an accepted limitation;
+untrusted-worker isolation requires Linux. Exercise the adapter plus wrapper during the
+capability probe with a no-tools sentinel prompt and short timeout; require exit code 0, the
+sentinel in persisted `worker.out`, a valid `meta.json`, no surviving in-group process, and, on
+Linux, no surviving reparented descendant.
+Exit 124 is a timeout; any nonzero code, missing artifact/result, or survivor within the stated
+platform boundary is launcher failure, never PASS. If neither nested nor headless dispatch works,
+record an `ESCALATION`; only the top orchestrator may select the documented flat-chain fallback,
+and neither it nor the captain may improvise an untracked launcher.
 
 ## Chain
 

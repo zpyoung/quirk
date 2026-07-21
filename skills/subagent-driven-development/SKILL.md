@@ -81,8 +81,14 @@ choice; cross-task synthesis benefits from Claude's agent context and pi has no 
 Before the first dispatch, capability-probe the selected captain path. A probe selects an
 available launcher; it cannot create missing nested-dispatch capability. Prefer nested dispatch
 where supported. Otherwise use a tested hardened headless launcher with a bounded timeout,
-exit-code capture, framed output, signal-safe child cleanup, and no surviving child process. If
-neither can launch a captain, use the one-paragraph **Flat chain fallback** below.
+exit-code capture, framed output, and signal-safe child cleanup. Timeout containment is
+platform-qualified: on Linux `sdd-dispatch` uses child-subreaper hardening to reap the full
+descendant set, including reparented processes; on non-Linux cleanup is best effort, using a
+process-group kill plus still-visible descendants. A worker that deliberately daemonizes via
+double-fork/`setsid` into a new session can survive on non-Linux. Phase 1 treats workers as
+trusted, not adversarial, so this is an accepted limitation; untrusted-worker isolation requires
+Linux. If neither launcher can start a captain, use the one-paragraph **Flat chain fallback**
+below.
 
 For the pi path, consult **quirk:pi-dev**, run `pi-watch --check` / `--list-aliases` **once at run
 start**, and record the resolved `provider/model:thinking` triple for every role. Pin those

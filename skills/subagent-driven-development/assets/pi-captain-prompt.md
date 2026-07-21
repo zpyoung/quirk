@@ -293,10 +293,15 @@ are all waited before the captain turn can end.
 `sdd-dispatch` hard-fails on a missing prompt, passes the exact pinned triple, reserves a
 monotonic `attempt-<n>` below the role-specific output directory, tees stdout and stderr into
 that attempt's `worker.out`/`worker.err` as they stream, preserves partial files on timeout, and
-always writes that attempt's `meta.json`. After every wait, inspect the newly allocated attempt's
-`meta.json` and read the persisted worker report file. Wrapper stdout/final text is only a
-completion signal/tee, never report transport. A nonzero `meta.json` exit code or missing report
-is not PASS.
+always writes that attempt's `meta.json`. Timeout containment is platform-qualified: on Linux
+the child-subreaper hardening reaps the full descendant set, including reparented processes; on
+non-Linux cleanup is best effort, using a process-group kill plus still-visible descendants. A
+worker that deliberately daemonizes via double-fork/`setsid` into a new session can survive on
+non-Linux. Phase 1 treats workers as trusted, not adversarial, so this is an accepted limitation;
+untrusted-worker isolation requires Linux. After every wait, inspect the newly allocated
+attempt's `meta.json` and read the persisted worker report file. Wrapper stdout/final text is
+only a completion signal/tee, never report transport. A nonzero `meta.json` exit code or missing
+report is not PASS.
 
 Apply **quirk:pi-dev** failure signatures to the persisted artifacts; this template states the
 captain policy rather than re-deriving those signatures:
