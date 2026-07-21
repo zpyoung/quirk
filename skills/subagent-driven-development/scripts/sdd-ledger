@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import sys
@@ -64,7 +65,16 @@ def append_event(args: argparse.Namespace) -> int:
     encoded = (json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n").encode()
     descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
     try:
-        os.write(descriptor, encoded)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        start = os.lseek(descriptor, 0, os.SEEK_END)
+        written = os.write(descriptor, encoded)
+        if written != len(encoded):
+            os.ftruncate(descriptor, start)
+            os.fsync(descriptor)
+            raise OSError(
+                f"short ledger write: wrote {written} of {len(encoded)} bytes"
+            )
+        os.fsync(descriptor)
     finally:
         os.close(descriptor)
     print(json.dumps(record, sort_keys=True))

@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import argparse
+import importlib.util
 import json
 import subprocess
 import sys
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "skills" / "subagent-driven-development" / "scripts"
@@ -58,6 +63,37 @@ def test_append_is_append_only_and_accepts_payload_file(tmp_path: Path) -> None:
     assert records[1]["agent"] == "captain-T2"
     assert records[1]["namespace"] == "T2"
     assert all(record["ts"].endswith("Z") for record in records)
+
+
+def test_append_short_write_rolls_back_partial_json_line(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loader = SourceFileLoader("sdd_ledger_short_write", str(SCRIPT))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    run_dir = tmp_path / "run"
+    args = argparse.Namespace(
+        payload_file=None,
+        payload="{}",
+        agent="captain",
+        namespace="T1",
+        type="finding",
+        run_dir=str(run_dir),
+    )
+    real_write = module.os.write
+
+    def short_write(descriptor: int, encoded: bytes) -> int:
+        return real_write(descriptor, encoded[: max(1, len(encoded) // 2)])
+
+    monkeypatch.setattr(module.os, "write", short_write)
+
+    with pytest.raises(OSError, match="short ledger write"):
+        module.append_event(args)
+
+    assert (run_dir / "run.jsonl").read_bytes() == b""
 
 
 def test_append_rejects_types_outside_closed_set(tmp_path: Path) -> None:
