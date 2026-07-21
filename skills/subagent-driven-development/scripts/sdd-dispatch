@@ -1,0 +1,274 @@
+#!/usr/bin/env python3
+"""Dispatch a staged SDD worker while preserving streamed artifacts."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import signal
+import subprocess
+import sys
+import threading
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import BinaryIO, TextIO
+
+TIMEOUT_EXIT_CODE = 124
+TIMEOUT_GRACE_SECONDS = 0.25
+
+
+def utc_now() -> str:
+    """Return an ISO-8601 UTC timestamp."""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def load_triple(
+    config_path: str | None,
+    role: str | None,
+    overrides: dict[str, str | None],
+) -> dict[str, str]:
+    """Resolve a pinned provider/model/thinking triple."""
+    resolved: dict[str, object] = {}
+    if config_path is not None:
+        if role is None:
+            raise ValueError("--config and --role must be supplied together")
+        path = Path(config_path)
+        if not path.is_file():
+            raise ValueError(f"missing config file: {path}")
+        try:
+            config = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"cannot read config file {path}: {exc}") from exc
+        if not isinstance(config, dict) or not isinstance(config.get(role), dict):
+            raise ValueError(f"config has no triple for role: {role}")
+        resolved.update(config[role])
+        if any(value is not None for value in overrides.values()):
+            raise ValueError(
+                "direct --provider/--model/--thinking flags cannot be combined "
+                "with --config/--role"
+            )
+    elif role is not None:
+        raise ValueError("--config and --role must be supplied together")
+
+    for key, value in overrides.items():
+        if value is not None:
+            resolved[key] = value
+
+    fields = ("provider", "model", "thinking")
+    missing = [
+        field for field in fields
+        if not isinstance(resolved.get(field), str) or not resolved[field]
+    ]
+    if missing:
+        raise ValueError(
+            "unresolved dispatch triple; provide config or direct flags for: "
+            + ", ".join(missing)
+        )
+    return {field: str(resolved[field]) for field in fields}
+
+
+def copy_stream(source: BinaryIO, artifact: BinaryIO, console: TextIO) -> None:
+    """Copy a child stream to an artifact and the corresponding console."""
+    console_buffer = getattr(console, "buffer", None)
+    while True:
+        try:
+            chunk = os.read(source.fileno(), 4096)
+        except (OSError, ValueError):
+            break
+        if not chunk:
+            break
+        artifact.write(chunk)
+        artifact.flush()
+        if console_buffer is not None:
+            console_buffer.write(chunk)
+            console_buffer.flush()
+        else:  # pragma: no cover - normal command-line streams expose ``buffer``
+            console.write(chunk.decode(errors="replace"))
+            console.flush()
+
+
+def stop_process(proc: subprocess.Popen[bytes]) -> None:
+    """Terminate the dispatcher's process group, escalating when necessary."""
+    try:
+        if os.name == "posix":
+            os.killpg(proc.pid, signal.SIGTERM)
+        else:  # pragma: no cover - exercised on non-POSIX hosts
+            proc.terminate()
+    except ProcessLookupError:
+        return
+    try:
+        proc.wait(timeout=1)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        if os.name == "posix":
+            os.killpg(proc.pid, signal.SIGKILL)
+        else:  # pragma: no cover - exercised on non-POSIX hosts
+            proc.kill()
+    except ProcessLookupError:
+        pass
+    proc.wait()
+
+
+def remaining_time(deadline: float | None) -> float | None:
+    """Return the non-negative budget remaining before *deadline*."""
+    if deadline is None:
+        return None
+    return max(0.0, deadline - time.monotonic())
+
+
+def output_paths(prompt: Path, out_dir: str | None) -> tuple[Path, Path, Path]:
+    """Return stdout, stderr, and metadata artifact paths."""
+    if out_dir is not None:
+        directory = Path(out_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory / "worker.out", directory / "worker.err", directory / "meta.json"
+    return (
+        Path(f"{prompt}.out"),
+        Path(f"{prompt}.err"),
+        Path(f"{prompt}.meta.json"),
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Dispatch a staged prompt and tee output as it streams.",
+        epilog=(
+            "With --out-dir, artifacts are worker.out, worker.err, and meta.json. "
+            "Without it, <prompt>.out, <prompt>.err, and <prompt>.meta.json are used."
+        ),
+    )
+    parser.add_argument("prompt_path", nargs="?", help="prompt file path (alternative to --prompt)")
+    parser.add_argument("--prompt", help="staged prompt file path")
+    parser.add_argument("--config", help="per-run JSON file containing role triples")
+    parser.add_argument("--role", help="role key in --config")
+    parser.add_argument("--provider", help="direct provider override")
+    parser.add_argument("--model", help="direct model override")
+    parser.add_argument("--thinking", help="direct thinking-level override")
+    parser.add_argument("--tools", default="read,bash", help="dispatcher --tools value")
+    parser.add_argument("--dispatcher", default="pi-watch", help="dispatcher executable (default: pi-watch)")
+    parser.add_argument("--out-dir", help="artifact directory")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        help=(
+            "maximum worker runtime in seconds "
+            f"(plus up to {TIMEOUT_GRACE_SECONDS:g}s launch/pipe-drain grace)"
+        ),
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.prompt and args.prompt_path:
+        parser.error("provide the prompt with --prompt or positionally, not both")
+    prompt_arg = args.prompt or args.prompt_path
+    if not prompt_arg:
+        parser.error("a prompt file is required (use --prompt <path>)")
+    prompt = Path(prompt_arg)
+    if not prompt.is_file():
+        print(f"sdd-dispatch: missing prompt file: {prompt}", file=sys.stderr)
+        return 2
+    if args.timeout is not None and args.timeout <= 0:
+        parser.error("--timeout must be greater than zero")
+
+    try:
+        triple = load_triple(
+            args.config,
+            args.role,
+            {
+                "provider": args.provider,
+                "model": args.model,
+                "thinking": args.thinking,
+            },
+        )
+        prompt_content = prompt.read_text()
+    except (OSError, UnicodeError, ValueError) as exc:
+        print(f"sdd-dispatch: {exc}", file=sys.stderr)
+        return 2
+
+    stdout_path, stderr_path, meta_path = output_paths(prompt, args.out_dir)
+    stdout_path.parent.mkdir(parents=True, exist_ok=True)
+    stderr_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    start = utc_now()
+    exit_code = 127
+    command = [
+        args.dispatcher,
+        "--provider", triple["provider"],
+        "--model", triple["model"],
+        "--thinking", triple["thinking"],
+        "--tools", args.tools,
+        prompt_content,
+    ]
+
+    with stdout_path.open("wb") as stdout_artifact, stderr_path.open("wb") as stderr_artifact:
+        try:
+            proc = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            message = f"sdd-dispatch: cannot start dispatcher {args.dispatcher}: {exc}\n"
+            encoded = message.encode()
+            stderr_artifact.write(encoded)
+            stderr_artifact.flush()
+            sys.stderr.write(message)
+        else:
+            with proc:
+                assert proc.stdout is not None
+                assert proc.stderr is not None
+                readers = [
+                    threading.Thread(
+                        target=copy_stream,
+                        args=(proc.stdout, stdout_artifact, sys.stdout),
+                        daemon=True,
+                    ),
+                    threading.Thread(
+                        target=copy_stream,
+                        args=(proc.stderr, stderr_artifact, sys.stderr),
+                        daemon=True,
+                    ),
+                ]
+                deadline = (
+                    None
+                    if args.timeout is None
+                    else time.monotonic() + args.timeout + TIMEOUT_GRACE_SECONDS
+                )
+                for reader in readers:
+                    reader.start()
+
+                timed_out = False
+                try:
+                    exit_code = proc.wait(timeout=remaining_time(deadline))
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    stop_process(proc)
+
+                for reader in readers:
+                    reader.join(timeout=remaining_time(deadline))
+                if any(reader.is_alive() for reader in readers):
+                    timed_out = True
+                    stop_process(proc)
+                if timed_out:
+                    exit_code = TIMEOUT_EXIT_CODE
+
+    meta = {
+        "start": start,
+        "end": utc_now(),
+        "exit_code": exit_code,
+        **triple,
+    }
+    meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n")
+    return exit_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
