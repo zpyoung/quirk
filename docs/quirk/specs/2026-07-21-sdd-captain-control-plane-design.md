@@ -283,6 +283,48 @@ trail is mandatory, not optional):
   gate: two disjoint tasks are a valid width-2 wave. Per-task risk tiers, fresh context,
   and the report contract all still apply; only the parallelism is gone.
 
+### 7. Phase 1.5 — run-hardening (added 2026-07-21 after the first dogfood run)
+
+The first dogfood run validated the control plane but exposed tooling fragility: 3/3
+captains stalled on background-dispatch re-invocation, one fix-worker report was lost
+to a foreground timeout (commit survived), captains hand-rolled divergent artifact
+conventions, two captains had to guess the fork SHA, and acceptance greps differed
+between captain and orchestrator on flags. Hardening, all run through the captain
+pipeline itself:
+
+- **Scripts** (in `skills/subagent-driven-development/scripts/`, python3, with tests):
+  - `sdd-dispatch` — hardened worker wrapper: stages the prompt (hard-fail if
+    missing), reads pinned `provider/model:thinking` triples from a per-run config,
+    tees worker stdout/stderr to artifact files, writes a sidecar `meta.json`
+    (ISO start/end, exit code, triple), and preserves partial output on timeout.
+  - `sdd-wave` — worktree lifecycle: serial `git worktree add` with the
+    parent-safe branch scheme, baseline check, and a merge-lane subcommand running
+    the scope audit mechanically (`git diff --name-only` vs `scope.files` +
+    `scope.never_touch` → pass/fail) before `--no-ff` merge and teardown.
+  - `sdd-acceptance` — executes a manifest's acceptance commands verbatim, emits
+    pass/fail JSON (eliminates captain-vs-orchestrator flag drift).
+  - `sdd-ledger` — append/query/report over the run ledger (below); renders the
+    run-summary latency table from captains' timestamps.
+- **File-based report transport.** Worker and captain reports live in artifact
+  files; stdout is a completion signal only. A timeout can no longer destroy a
+  report. Captain templates amended accordingly.
+- **`FORK_SHA` manifest field.** Every context manifest carries the task's exact
+  fork SHA; captains never infer it.
+- **Run ledger + decisions log.** One per-run append-only JSONL
+  (`run.jsonl`): events `{ts, agent, namespace, type: finding | adjudication |
+  escalation | assumption | timestamp | decision, payload}`, per-agent namespaces,
+  append-only (the community blackboard pattern; namespacing + append-only prevents
+  the documented overwrite failure mode). `decision` events are the sanctioned
+  cross-captain read surface — captains read others' decisions at start, append at
+  stop. **No direct captain↔captain messaging**; control flow stays
+  orchestrator-mediated. Orchestrator audits become mechanical queries.
+- **writing-plans coherence sweep.** When a plan changes a protocol, vocabulary, or
+  event set, it must grep-enumerate every file referencing those terms and either
+  scope each into a task or record "unchanged, verified consistent" (first run's
+  `never_touch` lists hid stale escalation language until final review).
+  `pattern`-tier tasks name their exemplar. Acceptance criteria are copy-runnable
+  commands, never prose descriptions.
+
 ## Delivery Phases
 
 Codex-max design review (2026-07-21, 22 findings, verdict CRITICAL_ISSUES — all
@@ -294,6 +336,11 @@ independently shippable and testable:
    milestone reports + exception events, durable artifacts, adjudication-with-audit)
    with the **existing pre-merge full-chain gate** — no trailing merge yet. This alone
    removes the orchestrator-turn tax and serialization.
+1.5. **Phase 1.5 — Run-hardening** (§7): dispatch/wave/acceptance/ledger scripts,
+   file-based report transport, `FORK_SHA` manifests, run ledger + decisions log,
+   writing-plans coherence sweep. Motivated entirely by first-run incidents; must
+   land before Phase 2 (the trailing-merge lane assumes reliable report transport).
+
 2. **Phase 2 — Trailing merge + audit.** Merge-on-MERGE_READY with candidate-SHA
    attestations, trailing reviews on leased worktrees, trailing-fix micro-branches,
    exhaustive escalation table + verify-or-quarantine gate.
