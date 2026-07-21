@@ -374,8 +374,9 @@ It never silently invents a class or drops an event.
 
 Phase 1 keeps the audit portions that are compatible with its conservative gate: all carried or
 parked findings remain in the ledger, that ledger is pasted verbatim into the final whole-branch
-review prompt, and the run summary lists escalations and parked tasks first. The §4
-**verify-or-quarantine gate is Phase 2 (future)**: an `AUTO-RESOLVED-CRITICAL` can finish clean
+review prompt, and the run summary lists escalations and parked tasks first. The orchestrator
+also aggregates every captain's per-stage timestamps into a latency table in the run summary.
+The §4 **verify-or-quarantine gate is Phase 2 (future)**: an `AUTO-RESOLVED-CRITICAL` can finish clean
 only after an independent PASS plus green verification on the final branch SHA; failed,
 unavailable, missing, or inconclusive verification yields `QUARANTINED`. Phase 1 does not use
 that mechanism to force a CRITICAL through its full-chain gate.
@@ -403,8 +404,8 @@ the captain template apply to whichever subset runs:
 
 | Risk | Reviewers dispatched | When to use |
 | --- | --- | --- |
-| `logic` | Spec compliance + code quality; per-task Codex only when added+deleted lines against the fork base are **>150**, a modified hunk contains a `CONTRACT:`/`SCHEMA:` anchor, or the diff changes a file the plan lists under a contract. Otherwise queue the branch-level adversarial pass. | New behavior, contracts, or algorithms |
-| `pattern` | Spec compliance (skip standalone code quality); per-task Codex uses the same **>150 lines or contract-surface** gate as `logic`, otherwise queue the branch-level adversarial pass. | Mirrors a pattern already reviewed on this branch (e.g. a second feature rewired the same way as the first) |
+| `logic` | Spec compliance + code quality; per-task Codex only when added+deleted lines against the fork base are **>150**, a modified hunk contains a `CONTRACT:`/`SCHEMA:` anchor, or the diff changes a file the plan lists under a contract. Otherwise there is no Phase 1 Codex adversarial pass; record `CODEX-DEFERRED(task-id)` in the unresolved-findings ledger. | New behavior, contracts, or algorithms |
+| `pattern` | Spec compliance (skip standalone code quality); per-task Codex uses the same **>150 lines or contract-surface** gate as `logic`. Otherwise there is no Phase 1 Codex adversarial pass; record `CODEX-DEFERRED(task-id)` in the unresolved-findings ledger. | Mirrors a pattern already reviewed on this branch (e.g. a second feature rewired the same way as the first) |
 | `mechanical` | None — acceptance is the task's own verifiable gate (build/tests/grep, stated in the task) | Deletions, renames, config/doc updates with no new logic; backstopped by the final whole-branch reviewer |
 
 **`.contract` upstream restriction:** a task may be a `.contract` upstream (i.e. a dependent may
@@ -490,6 +491,11 @@ re-running every worker command is not.
 
 ## Dispatch hygiene
 
+Captains **MUST** run worker dispatches in the foreground, or under equivalent supervision that
+guarantees the captain's own turn cannot end while a worker is outstanding. Background dispatch
+followed by later re-invocation is not reliable: this exact stall stranded 3/3 captains in the
+first dogfood run.
+
 - **Stage ahead.** The top orchestrator stages all captain prompts/manifests before the wave's
   one-turn launch. Each captain stages the next role prompt while its current worker runs, so
   internal transitions do not wait on prompt assembly.
@@ -564,10 +570,10 @@ final verification gate before `quirk:finishing-a-development-branch`; never hid
 ledger entries behind a generally positive verdict.
 
 Eligible `logic`/`pattern` tasks whose per-task diffs stayed at or below 150 changed lines and did
-not touch a `CONTRACT:`/`SCHEMA:` surface are covered by the Codex branch-level adversarial pass
-bound to this final whole-branch review, not by a per-task Codex pass. This keeps adversarial
-coverage exhaustive across the run while avoiding per-task latency for small diffs; a later task
-owns the full branch-level protocol implementation.
+not touch a `CONTRACT:`/`SCHEMA:` surface receive **no Codex adversarial pass in Phase 1**. Each
+captain records that skip as `CODEX-DEFERRED(task-id)` in the unresolved-findings ledger, and the
+final whole-branch reviewer's prompt must receive the complete `CODEX-DEFERRED` list. The
+branch-level Codex protocol ships in **Phase 2 (future)**; it is not active or simulated here.
 
 ## Advantages
 
@@ -605,15 +611,21 @@ never an ad hoc retry or silent assumption.
 ## Pi failure routing
 
 Follow **quirk:pi-dev** failure signatures and the concrete
-`assets/pi-captain-prompt.md` policy. Auth/billing failures emit `ESCALATION` rather than causing
-a captain to silently fall back. Rate limits get one retry after 60 seconds; empty/missing output
-gets one re-dispatch; unparseable reviewer output is never PASS and is synthesized as
-`NEEDS_FIX`. Use pi-dev's bounded timeout handling and hardened JSONL/exit-code recipe.
+`assets/pi-captain-prompt.md` policy. Captains perform the bounded retry below, persist the
+failure evidence, and emit `ESCALATION`; they never silently mutate a pinned triple or choose a
+fallback. At the orchestrator control point, apply these fallback scopes:
 
-Only the top orchestrator performs the required re-resolution epoch, and may choose a runtime
-fallback if that epoch still fails. It then issues a new context manifest and requires affected
-work to be re-reviewed; a live captain never mutates its pinned triples. If both pi and Claude are
-dead for a role, use the escalation table's runtime-fallback-exhausted row and park the task.
+| Failure class | Captain action before `ESCALATION` | Orchestrator fallback scope |
+| --- | --- | --- |
+| Auth or billing | No retry | Fall back the **whole run** to Claude and warn the user once. |
+| Rate limit | Retry once after 60 seconds | If the retry fails, fall back that **role for the rest of the run** to Claude. |
+| Timeout or empty/missing events | Re-dispatch once (using the documented bounded timeout for a timeout) | If the re-dispatch fails, fall back that **role for the rest of the run** to Claude. |
+
+Unparseable reviewer output is never PASS and is synthesized as `NEEDS_FIX`; use pi-dev's
+hardened JSONL/exit-code recipe throughout. Only the top orchestrator performs any required
+re-resolution epoch and fallback, then issues a new context manifest and requires affected work
+to be re-reviewed; a live captain never mutates its pinned triples. If both pi and Claude are dead
+for a role, use the escalation table's runtime-fallback-exhausted row and park the task.
 
 ## Integration
 

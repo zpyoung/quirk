@@ -92,8 +92,9 @@ Same as the Claude path:
 
 - **SUCCESS:** orchestrator continues with the next branch in the rolling
   merge sequence; teardown the merged worktree via `quirk:using-git-worktrees`.
-- **UNRESOLVABLE:** orchestrator escalates to the user with the resolver's
-  report. Worktree and conflicts are preserved.
+- **UNRESOLVABLE:** emit `ESCALATION`; the orchestrator appends the resolver's report to the
+  unresolved-findings ledger, parks the branch with its worktree/conflict state preserved, and
+  continues the run with other independent work.
 
 ## Failure detection
 

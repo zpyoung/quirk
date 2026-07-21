@@ -51,10 +51,12 @@ Run this chain without a top-orchestrator turn between stages:
    hunks and Contract: a task touches a `CONTRACT:`/`SCHEMA:` surface when a modified hunk
    contains either anchor or the diff changes a file the plan lists under a contract. Dispatch
    per-task pi Codex only when the
-   sum is **>150** or that surface test is true. If neither condition is true, do not dispatch
-   per-task Codex; append a `queued-for-branch-adversarial` decision with the base/task SHAs,
-   line count, and surface-test result to both the ledger and adjudication artifact so the task
-   is covered by the branch-level adversarial pass.
+   sum is **>150** or that surface test is true. If neither condition is true, Phase 1 gives this
+   task **no Codex adversarial pass**. Append `CODEX-DEFERRED(<task-id>)` with the base/task SHAs,
+   line count, and surface-test result to both the unresolved-findings ledger and adjudication
+   artifact. The final whole-branch reviewer's prompt must receive the complete
+   `CODEX-DEFERRED` list. The branch-level Codex protocol ships in **Phase 2 (future)**; do not
+   claim or simulate that coverage in Phase 1.
 
    Stage and dispatch all applicable read-only reviews concurrently over the same commits:
    - `logic`: `assets/pi-spec-reviewer-prompt.md` +
@@ -66,7 +68,10 @@ Run this chain without a top-orchestrator turn between stages:
    Persist each output on arrival. Augment each reviewer prompt to require evidence and, for
    every LOW/MEDIUM or mechanical-HIGH finding, a delimited `Suggested patch` block when the fix
    is safely mechanical (otherwise `Suggested patch: none — judgment required`).
-4. **Adjudicate.** Normalize severities to `CRITICAL | HIGH | MEDIUM | LOW`, assign stable IDs
+4. **Adjudicate.** Normalize reviewer vocabularies onto
+   `CRITICAL | HIGH | MEDIUM | LOW`: code-quality `Critical` → `CRITICAL`, `Important` → `HIGH`,
+   and `Minor` → `LOW`; spec-compliance missing-requirement or extra-requirement findings default
+   to `HIGH` because spec compliance has no severity vocabulary of its own. Assign stable IDs
    (`F1`, `F2`, ...), and accept/reject every finding against the task Contract, verified
    codebase behavior, and locked decisions. Append one-line reasoning in a machine-readable
    record such as `F1 | reviewer | normalized-severity | ACCEPT/REJECT | reason | patch-status`.

@@ -31,8 +31,11 @@ Read source material on demand only if the manifest proves insufficient.
 Before the first captain dispatch, the capability probe must verify the complete nesting shape:
 a captain launched through the harness can launch a no-op nested worker and return its sentinel.
 When that probe passes, nested dispatch is the run default for the captain and every internal
-worker supported by that mechanism. Use the harness's equivalent syntax when it does not call
-the mechanism `Task`; the dispatch shape is:
+worker supported by that mechanism. Captains **MUST** run worker dispatches in the foreground,
+or under equivalent supervision that guarantees the captain's own turn cannot end while any
+worker is outstanding. Do not rely on background dispatch followed by later re-invocation: that
+exact stall stranded 3/3 captains in the first dogfood run. Use the harness's equivalent syntax
+when it does not call the mechanism `Task`; the dispatch shape is:
 
 ```text
 Task tool (general-purpose):
@@ -162,10 +165,12 @@ Run this chain without a top-orchestrator turn between stages:
    hunks and Contract: a task touches a `CONTRACT:`/`SCHEMA:` surface when a modified hunk
    contains either anchor or the diff changes a file the plan lists under a contract. Dispatch
    per-task Codex only when the
-   sum is **>150** or that surface test is true. If neither condition is true, do not dispatch
-   per-task Codex; append a `queued-for-branch-adversarial` decision with the base/task SHAs,
-   line count, and surface-test result to both the ledger and adjudication artifact so the task
-   is covered by the branch-level adversarial pass.
+   sum is **>150** or that surface test is true. If neither condition is true, Phase 1 gives this
+   task **no Codex adversarial pass**. Append `CODEX-DEFERRED(<task-id>)` with the base/task SHAs,
+   line count, and surface-test result to both the unresolved-findings ledger and adjudication
+   artifact. The final whole-branch reviewer's prompt must receive the complete
+   `CODEX-DEFERRED` list. The branch-level Codex protocol ships in **Phase 2 (future)**; do not
+   claim or simulate that coverage in Phase 1.
 
    Dispatch all applicable read-only reviews in one nested-dispatch turn over the same commits:
    - `logic`: `assets/spec-reviewer-prompt.md` +
@@ -177,7 +182,10 @@ Run this chain without a top-orchestrator turn between stages:
    Persist every output when it arrives. Augment each reviewer prompt to require evidence and,
    for every LOW/MEDIUM or mechanical-HIGH finding, a delimited `Suggested patch` block when the
    fix is safely mechanical (otherwise `Suggested patch: none — judgment required`).
-4. **Adjudicate.** Normalize severities to `CRITICAL | HIGH | MEDIUM | LOW`, assign stable IDs
+4. **Adjudicate.** Normalize reviewer vocabularies onto
+   `CRITICAL | HIGH | MEDIUM | LOW`: code-quality `Critical` → `CRITICAL`, `Important` → `HIGH`,
+   and `Minor` → `LOW`; spec-compliance missing-requirement or extra-requirement findings default
+   to `HIGH` because spec compliance has no severity vocabulary of its own. Assign stable IDs
    (`F1`, `F2`, ...), and accept or reject every finding against the task Contract, verified
    codebase behavior, and locked decisions. Record each decision with one-line reasoning in a
    machine-readable record such as

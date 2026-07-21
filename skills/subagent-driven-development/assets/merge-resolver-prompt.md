@@ -76,4 +76,4 @@ Task tool (general-purpose):
 ## Handling the result
 
 - **SUCCESS:** orchestrator continues with the next branch in the rolling merge sequence; teardown the merged worktree via `quirk:using-git-worktrees`.
-- **UNRESOLVABLE:** orchestrator escalates to the user. The worktree and the conflicted state are preserved. The user can resolve manually, abort the wave, or split the conflicting task into smaller pieces and re-run.
+- **UNRESOLVABLE:** emit `ESCALATION`; the orchestrator appends it to the unresolved-findings ledger, parks the branch with its worktree/conflict state preserved, and continues the run with other independent work.

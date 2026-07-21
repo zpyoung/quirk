@@ -9,10 +9,11 @@ dispatched) dispatches this concurrently with the other reviewers applicable to 
 tier (spec compliance always runs; code quality only for `logic` tasks — a `pattern` task has no
 code-quality pass), after the implementer reports.
 
-**Fix loop cap:** 2 cycles. After two cycles, an unresolved CRITICAL finding BLOCKS the task
-(escalate to the user); an unresolved HIGH finding may carry forward only via the
-unresolved-findings ledger pasted into the final whole-branch reviewer's dispatch prompt (SKILL.md
-→ The Codex adversarial reviewer specifically).
+**Fix loop cap:** 2 cycles. After two cycles, an unresolved CRITICAL finding emits an
+`ESCALATION` event, is appended to the unresolved-findings ledger, and follows the §4 escalation
+handling in `SKILL.md`; the Phase 1 full-chain gate remains closed. An unresolved HIGH finding
+may carry forward only via that ledger pasted into the final whole-branch reviewer's dispatch
+prompt (SKILL.md → The Codex adversarial reviewer specifically).
 
 ## Invocation
 
