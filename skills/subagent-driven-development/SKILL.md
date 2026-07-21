@@ -94,9 +94,10 @@ never a silent mid-chain fallback.
 
 Every captain receives a provenance-bearing **context manifest**, not a bare packet: full task
 text, Contract, `scope.files`, `scope.never_touch`, applicable `CLAUDE.md` rules and tech-spec
-DO-NOT-CHANGE fences, acceptance commands, risk tier/rationale, worktree/scratch paths, relevant
-SHAs, selected launcher, and (pi path) the pinned role triples. Captains do not re-derive these
-inputs. Workers may still read source documents when the manifest proves insufficient.
+DO-NOT-CHANGE fences, acceptance commands, risk tier/rationale, execution mode,
+worktree/scratch paths, relevant SHAs, selected launcher, and (pi path) the pinned role triples.
+Captains do not re-derive these inputs. Workers may still read source documents when the manifest
+proves insufficient.
 
 ## The Process
 
@@ -159,9 +160,11 @@ tech spec is authored — before continuing.
 4. Offer the user an **optional** skim (not a gate) — surface the tech spec's anchored
    subsystem/files, its major DO-NOT-CHANGE fences, and its riskiest contracts, so they can veto
    a legal-but-wrong technical bet without reading the whole document.
-5. **Feasibility escalation:** if authoring surfaces a conflict with a `logic.md`
-   Decisions-Locked entry, **STOP**, present it to the user, and record the resolution in
-   `logic.md`'s Amendments log before proceeding — never resolve it silently in `tech.md`.
+5. **Feasibility conflict routing:** if authoring surfaces a conflict with a `logic.md`
+   Decisions-Locked entry, follow the locked decision and record the dated, conforming
+   resolution in `logic.md`'s Amendments log — never resolve it silently in `tech.md`. If the
+   locked decision cannot be followed without violating scope, record the escalation and park
+   the affected planning work rather than adding another hard user gate.
 
 **If the gate is not met:** skip — proceed straight to **Step 0a** and plan from `logic.md`.
 
@@ -175,12 +178,12 @@ Unless a plan already exists (in this conversation, or as a persisted file hande
 
 1. Invoke **quirk:writing-plans** as the rubric, drafting from `tech.md` when Step 0a-pre
    authored or loaded one, else from `logic.md` / requirements. Draft the task breakdown — each
-   task with its Contract, Acceptance, optional `independent` / `dependencies` /
-   `scope.files` / `scope.never_touch` / `cooperative` fields, and a **required explicit**
-   `risk: logic | pattern | mechanical` plus one-line rationale — directly in this conversation
-   **and into a TodoWrite list** (one item per task). There is no silent risk default; omission or
-   weak downgrade rationale is a plan-review finding. TodoWrite is the durable home for the
-   breakdown; it survives context compaction.
+   task with its Contract, Acceptance, **required** `scope.files` and `scope.never_touch`,
+   optional `independent` / `dependencies` / `cooperative` wave-shape hints, and a **required
+   explicit** `risk: logic | pattern | mechanical` plus one-line rationale — directly in this
+   conversation **and into a TodoWrite list** (one item per task). There is no silent risk
+   default; omission or weak downgrade rationale is a plan-review finding. TodoWrite is the
+   durable home for the breakdown; it survives context compaction.
 2. **Complexity-tier upgrade re-check.** Immediately after writing-plans' File Structure pass
    (part of step 1, above) reveals the real file count and task shape, re-check the
    complexity-tier gate against the actual scope — **before** Step 0a-review (plan review) and
@@ -203,17 +206,21 @@ the reviewer surfaces a genuine ambiguity you cannot resolve.
 1. Use the plan from Step 0a — every task's full text and context is already in this conversation
    and in TodoWrite. (Subagents still receive task text **pasted inline**; they never read a plan.)
 2. The TodoWrite list of all tasks already exists from Step 0a.
-3. For each task, read these optional fields (from the **quirk:writing-plans** rubric):
-   - `independent: true` — task can run alongside any other task in its eligible wave
-   - `dependencies: [task-id, ...]` — task must wait for all listed tasks to complete. Opt-in
-     per-dependency form `dependencies: [T1.contract, ...]` lets the dependent start once T1's
-     *contract* is confirmed rather than waiting for T1's full chain (see Step 4 below); plain
-     `T1` keeps the full wait.
-   - `scope.files: [path, ...]` — files this task is allowed to touch
-   - `scope.never_touch: [path, ...]` — forbidden adjacent files; negative scope wins
-   - `cooperative: true` — task needs live negotiation with other tasks in its wave (TEAM mode)
-   - `risk: logic | pattern | mechanical` — required, with a one-line rationale; scales the
-     review chain. No default is inferred. See **Review depth by task risk**.
+3. For each task, require the fields that feed its captain manifest and separately read the
+   optional wave-shape hints (from the **quirk:writing-plans** rubric):
+   - `scope.files: [path, ...]` and `scope.never_touch: [path, ...]` are required inputs to every
+     captain context manifest, not optional plan fields. Negative scope wins; do not dispatch a
+     captain until both lists are present.
+   - `risk: logic | pattern | mechanical` is also required, with a one-line rationale; it scales
+     the review chain. No default is inferred. See **Review depth by task risk**.
+   - `independent: true` is an optional hint that the task can run alongside any other task in
+     its eligible wave.
+   - `dependencies: [task-id, ...]` is an optional hint that the task must wait for all listed
+     tasks to complete. Opt-in per-dependency form `dependencies: [T1.contract, ...]` lets the
+     dependent start once T1's *contract* is confirmed rather than waiting for T1's full chain
+     (see Step 4 below); plain `T1` keeps the full wait.
+   - `cooperative: true` is an optional hint that the task needs live negotiation with other
+     tasks in its wave (TEAM mode).
 4. Topologically sort tasks by `dependencies`. A `.contract` dependency is satisfied — for
    wave-computation purposes — once the upstream task is COMMITTED and its spec-compliance
    review has confirmed the exported contracts (interfaces/signatures/schemas the dependent
@@ -277,7 +284,9 @@ workers cannot commit safely from the shared directory, retain the orchestrator-
 coordinator: each captain's internal `IMPLEMENTER_DONE` signal queues only that task's declared
 files for an automated serialized commit before its reviews start. This is a git-lock
 coordination action, not a stage-by-stage top-orchestrator reasoning turn. Any overlap or commit
-conflict is a mode-gate defect: stop the wave and emit `ESCALATION`.
+conflict is a mode-gate defect: stop the wave and emit `ESCALATION`. Whichever serialized commit
+path is used records each task's latest task-owned commit SHA; that is the in-place captain's
+candidate SHA, rather than a later resampling of shared `HEAD` after a sibling commit advances it.
 
 #### WORKTREE_PARALLEL (default for 2+ independent tasks)
 
@@ -306,9 +315,10 @@ captains reach `CHAIN_COMPLETE` or are parked and the wave integration gate has 
 
 Before a wave launch, stage every captain prompt and manifest under external run scratch with
 task/role-keyed names and hard-fail if either is absent. Include task/Contract, both scope lists,
-acceptance, explicit risk/rationale, worktree, relevant SHAs, rules/fences, launcher selection,
-and pinned pi triples where applicable. Dispatch all captains in **one top-orchestrator turn per
-wave**. Captains persist worker outputs, timestamps, adjudication, ledger, and events as produced;
+acceptance, explicit risk/rationale, execution mode, worktree, relevant SHAs, rules/fences,
+launcher selection, and pinned pi triples where applicable. Dispatch all captains in **one
+top-orchestrator turn per wave**. Captains persist worker outputs, timestamps, adjudication,
+ledger, and events as produced;
 if one dies, adopt the orphaned chain from those artifacts and resume or park it.
 
 In **Phase 1**, a captain emits no milestone until its entire pre-merge chain is PASS/resolved.
@@ -316,10 +326,16 @@ It then emits `MERGE_READY(candidate SHA + adjudication log)` and
 `CHAIN_COMPLETE(timestamps + ledger)` **together**. `MERGE_READY` readiness is tier-specific:
 `logic`/`pattern` requires spec-compliance PASS and a green build; `mechanical` requires declared
 acceptance evidence and a green build. Because the reports coincide in this phase, the merge
-lane accepts a task only after `CHAIN_COMPLETE`, verifies the branch still names the reported
-candidate SHA, and spot-audits the captain's adjudication log. The top orchestrator does not
-re-adjudicate every finding; it may reopen a questionable call, in which case the captain resumes
-and must return a new paired report before merge.
+lane accepts a task only after `CHAIN_COMPLETE`, performs a mode-aware candidate-SHA binding
+check, and spot-audits the captain's adjudication log. For `WORKTREE_PARALLEL` (and `TEAM` or
+`SEQUENTIAL` when operating on their own branch/singleton tip), the branch tip must literally
+equal the reported candidate SHA. For `IN_PLACE_PARALLEL`, sibling commits legitimately advance
+the shared `HEAD`: instead require the reported task-owned commit to remain an ancestor of
+current `HEAD` (for example, `git merge-base --is-ancestor`) and require no later operation to
+have changed that task's declared files (for example, `git diff --quiet "$candidate" HEAD --
+<scope.files...>`). The top orchestrator does not re-adjudicate every finding; it may reopen a
+questionable call, in which case the captain resumes and must return a new paired report before
+merge.
 
 Merges are serialized. For a worktree branch, run `git merge --no-ff <task-branch>` on the parent
 only after the paired report and audit; never let a captain edit the parent. On a real overlap,
@@ -387,8 +403,8 @@ the captain template apply to whichever subset runs:
 
 | Risk | Reviewers dispatched | When to use |
 | --- | --- | --- |
-| `logic` | Full three-pass: spec compliance + code quality + Codex adversarial | New behavior, contracts, or algorithms |
-| `pattern` | Spec compliance + Codex adversarial (skip the standalone code-quality pass) | Mirrors a pattern already reviewed on this branch (e.g. a second feature rewired the same way as the first) |
+| `logic` | Spec compliance + code quality; per-task Codex only when added+deleted lines against the fork base are **>150**, a modified hunk contains a `CONTRACT:`/`SCHEMA:` anchor, or the diff changes a file the plan lists under a contract. Otherwise queue the branch-level adversarial pass. | New behavior, contracts, or algorithms |
+| `pattern` | Spec compliance (skip standalone code quality); per-task Codex uses the same **>150 lines or contract-surface** gate as `logic`, otherwise queue the branch-level adversarial pass. | Mirrors a pattern already reviewed on this branch (e.g. a second feature rewired the same way as the first) |
 | `mechanical` | None — acceptance is the task's own verifiable gate (build/tests/grep, stated in the task) | Deletions, renames, config/doc updates with no new logic; backstopped by the final whole-branch reviewer |
 
 **`.contract` upstream restriction:** a task may be a `.contract` upstream (i.e. a dependent may
@@ -411,8 +427,8 @@ mid-run to save time.
 [Create sdd/kestrel/T1 and sdd/kestrel/T2 worktrees serially]
 [Stage two context manifests and dispatch two captains in one top-orchestrator turn]
 
-T1 captain (internally): implement -> spec ∥ quality ∥ Codex -> adjudicate -> PASS
-T2 captain (internally): implement -> spec ∥ Codex -> consolidated fix -> targeted re-review -> PASS
+T1 captain (internally): implement -> spec ∥ quality ∥ Codex-if-gated -> adjudicate -> PASS
+T2 captain (internally): implement -> spec ∥ Codex-if-gated -> consolidated fix -> targeted re-review -> PASS
 
 T1 -> MERGE_READY(sha1) + CHAIN_COMPLETE together
 [top spot-audits adjudication; serialized merge T1; teardown]
@@ -546,6 +562,12 @@ list, and unresolved-findings ledger verbatim. The reviewer must re-examine ever
 and every future-schema `AUTO-RESOLVED-CRITICAL` entry. Resolve its accepted findings and run the
 final verification gate before `quirk:finishing-a-development-branch`; never hide parked tasks or
 ledger entries behind a generally positive verdict.
+
+Eligible `logic`/`pattern` tasks whose per-task diffs stayed at or below 150 changed lines and did
+not touch a `CONTRACT:`/`SCHEMA:` surface are covered by the Codex branch-level adversarial pass
+bound to this final whole-branch review, not by a per-task Codex pass. This keeps adversarial
+coverage exhaustive across the run while avoiding per-task latency for small diffs; a later task
+owns the full branch-level protocol implementation.
 
 ## Advantages
 

@@ -13,7 +13,7 @@ The dispatch must provide a provenance-bearing **context manifest**, not a bare 
 - `scope.files` and `scope.never_touch` (negative scope wins);
 - acceptance/build commands and expected evidence;
 - an explicit `risk: logic | pattern | mechanical` and one-line rationale (no default);
-- absolute worktree path and relevant fork/base/HEAD SHAs;
+- execution mode, absolute worktree path, and relevant fork/base/HEAD SHAs;
 - applicable `CLAUDE.md` rules and tech-spec DO-NOT-CHANGE fences;
 - an external run-scratch directory; and
 - the per-role **pinned** `provider/model:thinking` triples for captain, implementer, spec
@@ -42,12 +42,25 @@ Run this chain without a top-orchestrator turn between stages:
    never silently proceed past a flagged doubt. Resolve `NEEDS_CONTEXT` through the exception
    rule below; route other blockers as `ESCALATION` rather than asking a user who is absent from
    this nested chain.
-3. **Review concurrently by risk.** After DONE, stage and dispatch all applicable read-only
-   reviews concurrently over the same commits:
+3. **Review concurrently by risk.** After DONE, bind `TASK_HEAD` to the exact task tree under
+   review (`HEAD` on an own-branch/singleton path, or the recorded latest task-owned commit for
+   `IN_PLACE_PARALLEL`). Compute the task diff against its supplied fork base by summing the
+   numeric added+deleted columns from
+   `git diff --numstat "$FORK_BASE" "$TASK_HEAD" -- "${SCOPE_FILES[@]}"`, where `SCOPE_FILES`
+   is the manifest's list. Also inspect the changed
+   hunks and Contract: a task touches a `CONTRACT:`/`SCHEMA:` surface when a modified hunk
+   contains either anchor or the diff changes a file the plan lists under a contract. Dispatch
+   per-task pi Codex only when the
+   sum is **>150** or that surface test is true. If neither condition is true, do not dispatch
+   per-task Codex; append a `queued-for-branch-adversarial` decision with the base/task SHAs,
+   line count, and surface-test result to both the ledger and adjudication artifact so the task
+   is covered by the branch-level adversarial pass.
+
+   Stage and dispatch all applicable read-only reviews concurrently over the same commits:
    - `logic`: `assets/pi-spec-reviewer-prompt.md` +
-     `assets/pi-code-quality-reviewer-prompt.md` +
-     `assets/pi-codex-adversarial-prompt.md`;
-   - `pattern`: pi spec compliance + pi Codex adversarial; and
+     `assets/pi-code-quality-reviewer-prompt.md`, plus
+     `assets/pi-codex-adversarial-prompt.md` only when the diff gate above passes;
+   - `pattern`: pi spec compliance, plus pi Codex adversarial only when the diff gate passes; and
    - `mechanical`: no per-task reviewer; declared acceptance and green build are its gate.
 
    Persist each output on arrival. Augment each reviewer prompt to require evidence and, for
@@ -125,8 +138,10 @@ Use only this closed vocabulary.
 `CHAIN_COMPLETE` **together to the top orchestrator**, in that order, at chain end. This keeps
 the schema forward-compatible without activating Phase 2's temporal separation.
 
-- `MERGE_READY`: task ID, exact candidate SHA (`git rev-parse HEAD` after every Phase 1 fix),
-  fork/base SHA, effective risk tier, readiness evidence, acceptance/build results, and the
+- `MERGE_READY`: task ID, exact candidate SHA (`git rev-parse HEAD` after every Phase 1 fix on
+  an own-branch/singleton path; the recorded latest task-owned commit on
+  `IN_PLACE_PARALLEL`, never a later sibling-advanced shared `HEAD`), fork/base SHA, effective
+  risk tier, readiness evidence, acceptance/build results, and the
   complete adjudication log or artifact path. `logic`/`pattern` readiness means spec-compliance
   PASS plus green build; `mechanical` readiness means declared acceptance evidence plus green
   build. All other required reviews/fixes are also complete before this Phase 1 report.

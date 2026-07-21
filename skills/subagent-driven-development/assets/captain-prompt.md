@@ -13,7 +13,7 @@ The dispatch must provide a provenance-bearing **context manifest**, not a bare 
 - `scope.files` and `scope.never_touch` (negative scope wins);
 - acceptance/build commands and expected evidence;
 - an explicit `risk: logic | pattern | mechanical` plus its rationale (there is no default);
-- the absolute worktree path and relevant fork/base/HEAD SHAs;
+- the execution mode, absolute worktree path, and relevant fork/base/HEAD SHAs;
 - applicable `CLAUDE.md` rules and tech-spec DO-NOT-CHANGE fences;
 - the run-scratch directory, which must be outside the repository/worktree; and
 - the runtime and the already-probed captain/worker launcher selected for this run. On the pi
@@ -24,12 +24,122 @@ These are authoritative inputs. Do **not** re-derive them, re-read source planni
 to reconstruct them, select another runtime, silently default `risk`, or re-resolve a pi alias.
 Read source material on demand only if the manifest proves insufficient.
 
-Before the run's first captain dispatch, the top orchestrator must capability-probe nested
-dispatch and select a tested launcher. Use the supplied launcher; do not discover capability by
-burning a task dispatch. Prefer nested `Task`/the runtime's equivalent. If the probe selected
-headless `claude -p`, use the hardened supplied recipe: bounded timeout, captured exit code,
-unambiguous output framing, signal-safe child cleanup, and no surviving child on timeout.
-Launcher failure is an `ESCALATION`, never permission to improvise an untracked fallback.
+## Dispatch
+
+### Nested dispatch (preferred)
+
+Before the first captain dispatch, the capability probe must verify the complete nesting shape:
+a captain launched through the harness can launch a no-op nested worker and return its sentinel.
+When that probe passes, nested dispatch is the run default for the captain and every internal
+worker supported by that mechanism. Use the harness's equivalent syntax when it does not call
+the mechanism `Task`; the dispatch shape is:
+
+```text
+Task tool (general-purpose):
+  description: "Captain <task-id>: <task-name>"
+  prompt: |
+    You are the per-task captain for <task-id>.
+    [contents of this staged captain template]
+    ## Context manifest
+    [complete staged manifest]
+```
+
+The captain dispatches each internal worker the same way, using the role-specific agent named by
+the manifest (for example, general-purpose for the implementer and `quirk:code-reviewer` for the
+quality reviewer) and pasting the staged worker asset, manifest, and required prior-stage output
+into the prompt. Dispatch all applicable initial reviewers in one nested-dispatch turn, not as a
+serial sequence:
+
+```text
+Task tool (<role-specific agent>):
+  description: "<role> for <task-id>"
+  prompt: |
+    [contents of the staged role asset]
+    [complete context manifest]
+    [implementer report or accepted-finding packet required by this stage]
+```
+
+### Hardened headless fallback
+
+Use headless `claude -p` only when the run-start probe proves nested dispatch unavailable. The
+same launcher runs a captain or one of its workers by changing the staged prompt, model, and tool
+allowlist. This Bash recipe requires GNU `timeout` (or macOS Homebrew `gtimeout`), keeps the raw
+JSONL streaming into its durable artifact, captures the exit code, frames the output for an
+unambiguous parser handoff, and kills the timeout-owned process group on timeout or caller signal:
+
+```bash
+#!/usr/bin/env bash
+set -u
+
+: "${WORKTREE:?}" "${SCRATCH:?}" "${TASK_ID:?}" "${ROLE:?}"
+: "${PROMPT:?}" "${CLAUDE_MODEL:?}" "${CLAUDE_ALLOWED_TOOLS?}"
+CLAUDE_TIMEOUT="${CLAUDE_TIMEOUT:-900}"
+[ -f "$PROMPT" ] || { printf 'missing prompt: %s\n' "$PROMPT" >&2; exit 1; }
+TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
+[ -n "$TIMEOUT_BIN" ] || { printf 'ESCALATION: GNU timeout unavailable\n' >&2; exit 125; }
+
+OUT_DIR="$SCRATCH/$TASK_ID/headless"
+RAW="$OUT_DIR/$ROLE.stream.jsonl"
+ERR="$OUT_DIR/$ROLE.stderr.log"
+FRAMED="$OUT_DIR/$ROLE.framed.out"
+RC_FILE="$OUT_DIR/$ROLE.exit-code"
+mkdir -p "$OUT_DIR"
+child=""
+
+alive() {
+  [ -n "$child" ] &&
+    { kill -0 -- "-$child" 2>/dev/null || kill -0 "$child" 2>/dev/null; }
+}
+cleanup() {
+  if alive; then
+    kill -TERM -- "-$child" 2>/dev/null || kill -TERM "$child" 2>/dev/null || true
+    for _ in {1..30}; do alive || break; sleep 1; done
+    if alive; then
+      kill -KILL -- "-$child" 2>/dev/null || kill -KILL "$child" 2>/dev/null || true
+    fi
+  fi
+  [ -z "$child" ] || wait "$child" 2>/dev/null || true
+}
+trap 'exit 130' HUP INT TERM
+trap cleanup EXIT
+
+# Do not add --foreground: GNU timeout must own and signal the worker process group.
+"$TIMEOUT_BIN" --kill-after=30 "$CLAUDE_TIMEOUT" \
+  bash -c 'cd "$1" && exec claude -p \
+    --model "$2" \
+    --permission-mode dontAsk \
+    --tools "$3" \
+    --allowedTools "$3" \
+    --no-session-persistence \
+    --output-format stream-json \
+    --verbose < "$4"' \
+  _ "$WORKTREE" "$CLAUDE_MODEL" "$CLAUDE_ALLOWED_TOOLS" "$PROMPT" \
+  >"$RAW" 2>"$ERR" &
+child=$!
+wait "$child"
+rc=$?
+cleanup                         # reap/kill any group member before reporting
+child=""
+trap - EXIT HUP INT TERM
+printf '%s\n' "$rc" >"$RC_FILE.tmp" && mv "$RC_FILE.tmp" "$RC_FILE"
+{
+  printf '<<<CLAUDE_WORKER_OUTPUT_BEGIN task=%s role=%s>>>\n' "$TASK_ID" "$ROLE"
+  cat "$RAW"
+  printf '\n<<<CLAUDE_WORKER_OUTPUT_END task=%s role=%s>>>\n' "$TASK_ID" "$ROLE"
+  printf '<<<CLAUDE_WORKER_PARSE_BEGIN task=%s role=%s>>>\n' "$TASK_ID" "$ROLE"
+  printf 'exit_code=%s stderr=%s\n' "$rc" "$ERR"
+  printf '<<<CLAUDE_WORKER_PARSE_END task=%s role=%s>>>\n' "$TASK_ID" "$ROLE"
+} >"$FRAMED"
+exit "$rc"
+```
+
+Exercise this recipe once during the capability probe with a no-tools sentinel prompt and a
+short timeout; require exit code 0, both frame pairs, the sentinel in the JSONL result, and no
+remaining process-group member before selecting it. Exit 124/137 is a timeout, and any nonzero
+code, missing frame/result, or surviving child is launcher failure, never PASS. If neither nested
+nor headless dispatch works, record an `ESCALATION`; only the top orchestrator may select the
+documented flat-chain fallback, and neither it nor the captain may improvise an untracked
+launcher.
 
 ## Chain
 
@@ -43,12 +153,25 @@ Run this chain without a top-orchestrator turn between stages:
    concern and queuing each as a captain-originated finding for adjudication (Step 4) — never
    silently proceed past a flagged doubt. Resolve `NEEDS_CONTEXT` as described below; route other
    blockers through `ESCALATION` rather than asking a user who is not in this chain.
-3. **Review concurrently by risk.** After DONE, dispatch all applicable read-only reviews in one
-   nested-dispatch turn over the same commits:
+3. **Review concurrently by risk.** After DONE, bind `TASK_HEAD` to the exact task tree under
+   review (`HEAD` on an own-branch/singleton path, or the recorded latest task-owned commit for
+   `IN_PLACE_PARALLEL`). Compute the task diff against its supplied fork base by summing the
+   numeric added+deleted columns from
+   `git diff --numstat "$FORK_BASE" "$TASK_HEAD" -- "${SCOPE_FILES[@]}"`, where `SCOPE_FILES`
+   is the manifest's list. Also inspect the changed
+   hunks and Contract: a task touches a `CONTRACT:`/`SCHEMA:` surface when a modified hunk
+   contains either anchor or the diff changes a file the plan lists under a contract. Dispatch
+   per-task Codex only when the
+   sum is **>150** or that surface test is true. If neither condition is true, do not dispatch
+   per-task Codex; append a `queued-for-branch-adversarial` decision with the base/task SHAs,
+   line count, and surface-test result to both the ledger and adjudication artifact so the task
+   is covered by the branch-level adversarial pass.
+
+   Dispatch all applicable read-only reviews in one nested-dispatch turn over the same commits:
    - `logic`: `assets/spec-reviewer-prompt.md` +
-     `assets/code-quality-reviewer-prompt.md` +
-     `assets/codex-adversarial-prompt.md`;
-   - `pattern`: spec compliance + Codex adversarial; and
+     `assets/code-quality-reviewer-prompt.md`, plus `assets/codex-adversarial-prompt.md` only
+     when the diff gate above passes;
+   - `pattern`: spec compliance, plus Codex adversarial only when the diff gate passes; and
    - `mechanical`: no per-task reviewer; declared acceptance and a green build are its gate.
 
    Persist every output when it arrives. Augment each reviewer prompt to require evidence and,
@@ -127,8 +250,10 @@ Use only this closed vocabulary.
 `CHAIN_COMPLETE` **together to the top orchestrator**, in that order, at chain end. This
 preserves the two-report schema for Phase 2 without activating its temporal separation.
 
-- `MERGE_READY`: task ID, exact candidate SHA (`git rev-parse HEAD` after all Phase 1 fixes),
-  fork/base SHA, effective risk tier, readiness evidence, acceptance/build results, and the
+- `MERGE_READY`: task ID, exact candidate SHA (`git rev-parse HEAD` after all Phase 1 fixes on
+  an own-branch/singleton path; the recorded latest task-owned commit on
+  `IN_PLACE_PARALLEL`, never a later sibling-advanced shared `HEAD`), fork/base SHA, effective
+  risk tier, readiness evidence, acceptance/build results, and the
   complete adjudication log or its artifact path. Readiness evidence is tier-specific:
   `logic`/`pattern` requires spec-compliance PASS plus green build; `mechanical` requires its
   declared acceptance evidence plus green build. In Phase 1 the other required reviews and
