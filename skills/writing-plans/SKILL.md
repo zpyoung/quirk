@@ -44,7 +44,7 @@ Instead, every code-touching step carries:
 - the exact **file path**,
 - the **behavioral goal** (what it must do),
 - the **contract** it must satisfy (preconditions, postconditions, invariants, error behavior),
-- the **acceptance check** (an observable, testable success condition).
+- the **acceptance check** — one or more literal, copy-runnable commands with exact flags and an expected result, never a prose description of a check.
 
 ### When code IS allowed (the narrow exceptions)
 
@@ -96,6 +96,8 @@ If the upstream input — the tech spec (`tech.md`) when present, else the logic
 
 Before defining tasks, map out which files will be created or modified and what each one is responsible for. This is where decomposition decisions get locked in. Also build a **file-coupling map** from imports and shared files, then use it to minimize cross-task coupling before declaring `independent` / `dependencies` or computing waves.
 
+When the work changes a protocol, vocabulary, or event set, perform a **coherence sweep** before locking that map: use repository-wide grep commands to enumerate every file that references the changed old or new terms. Every referencing file MUST either be scoped into a task or explicitly recorded as `unchanged, verified consistent`; a `scope.never_touch` entry is not a substitute for verification. This prevents the first dogfood run's failure mode, where `never_touch` lists hid stale escalation language until final review because planning never enumerated all references to the changed protocol/event vocabulary.
+
 - Design units with clear boundaries and well-defined interfaces. Each file should have one clear responsibility.
 - You reason best about code you can hold in context at once, and your edits are more reliable when files are focused. Prefer smaller, focused files over large ones that do too much.
 - Files that change together should live together. Split by responsibility, not by technical layer.
@@ -122,7 +124,7 @@ Each step is one action in the red-green-commit rhythm. Reframe each as a behavi
 - "Write a failing test in `<file>` asserting `<behavior + exact expected values>`" - step
 - "Run it; confirm it fails because `<reason>`" - step
 - "Implement `<unit>` in `<file>` to satisfy `<contract>` and `<acceptance>`" - step
-- "Run the tests; confirm they pass" - step
+- "Run `<literal copy-runnable test command with exact flags>`; confirm the stated expected result" - step
 - "Commit" - step
 
 Keep one behavior per red-green cycle. A non-trivial behavior may take longer than five minutes to implement, but it is still one test → one implementation → one verification → one commit.
@@ -154,7 +156,7 @@ risk: logic                           # captain mode: explicit logic | pattern |
 - Use `cooperative: true` very rarely — only when two or more tasks in the same wave need to negotiate interfaces during work (the orchestrator uses TEAM mode in that case, which relaxes the "fresh subagent per task" guarantee within the wave).
 - Use `risk` to scale how much review the task gets. Captain-mode plans require an **explicit `risk` field on every task**: there is no silent default, and omission is a plan-review finding. Put a one-line rationale immediately after the field for every tier, including `logic`; a downgrade to `pattern` or `mechanical` needs the strongest justification because it removes review passes. Outside captain mode only, omitted risk retains the legacy `logic` default.
   - `risk: logic` — the task introduces new behavior, contracts, or algorithms. SDD runs its full three-pass review (spec compliance, code quality, adversarial).
-  - `risk: pattern` — the task mirrors a pattern already implemented AND reviewed earlier on the same branch (e.g. the second feature rewired the same way as the first). SDD skips the standalone code-quality pass (spec + adversarial still run). When the exemplar is another task in the same plan, the task body MUST name that exemplar task explicitly (e.g. "mirrors Task 3's rewiring") and declare a plain `dependencies: [T3]` on it — the full-chain form, because a `pattern` task needs the exemplar's reviewed, merged implementation to mirror, not just its confirmed contract. If the implementation ends up deviating from the exemplar's pattern during execution, the SDD orchestrator promotes the task to full `logic` treatment (dispatching the code-quality pass it would otherwise have skipped) — promoting up mid-run is always allowed; downgrading a declared tier is never allowed (see SDD's Red Flags).
+  - `risk: pattern` — the task mirrors a pattern already implemented AND reviewed earlier on the same branch (e.g. the second feature rewired the same way as the first). SDD skips the standalone code-quality pass (spec + adversarial still run). Every `pattern` task body MUST explicitly name its exemplar task, whether that exemplar is in the current plan or is an earlier task outside the plan; for an outside-plan exemplar, name the task and its identifying reviewed commit. When the exemplar is another task in the same plan (e.g. "mirrors Task 3's rewiring"), also declare a plain `dependencies: [T3]` on it — the full-chain form, because a `pattern` task needs the exemplar's reviewed, merged implementation to mirror, not just its confirmed contract. If the implementation ends up deviating from the exemplar's pattern during execution, the SDD orchestrator promotes the task to full `logic` treatment (dispatching the code-quality pass it would otherwise have skipped) — promoting up mid-run is always allowed; downgrading a declared tier is never allowed (see SDD's Red Flags).
   - `risk: mechanical` — deletions, renames, moves, config/doc updates with no new logic. SDD dispatches no per-task reviewers; the task MUST therefore state a verifiable acceptance gate (exact build/test/grep commands with expected output) because that gate IS the review, backstopped by SDD's final whole-branch reviewer.
   - Planning-time rule: when in doubt between tiers, pick the higher (more-reviewed) one. Never mark a task `mechanical` if it edits executable logic, even trivially.
 - If cohesion-aware partitioning cannot produce a wave of at least two disjoint tasks, use the **same captain state machine at concurrency width 1**, not a separate flat control plane. Task count alone is not the gate: two disjoint tasks make a valid width-2 wave. Per-task risk tiers, fresh context, and the captain report contract still apply at width 1; only parallelism is removed.
@@ -200,6 +202,8 @@ Every task follows this template. Use the captain-mode declarations required by 
 
 Notice what the template does NOT contain: no test body, no implementation body. Each step states behavior, contract, and acceptance — the implementor writes the code. The only code blocks are tagged exceptions (`CONTRACT:`, `COMMAND:`).
 
+The task's **Acceptance:** field MUST contain one or more literal, copy-runnable commands with every flag fixed, plus the expected result. Never substitute prose such as "run the relevant tests" or a description of what someone should check; captain and orchestrator must be able to execute exactly the same command without choosing different flags.
+
 ````markdown
 ### Task N: Daily metrics summary
 
@@ -226,7 +230,9 @@ risk: logic
 - Invariants: `total` equals the sum of `record.amount` over all records.
 - Errors: a record with a non-numeric `amount` raises `ValueError("amount must be numeric")`.
 
-**Acceptance:** `summarize` returns correct `count`/`total` for empty, single, and mixed inputs, and raises on a non-numeric amount.
+**Acceptance (`COMMAND:`):** `pytest tests/metrics/test_summary.py -v`
+
+Expected: exits 0; the passing tests demonstrate that `summarize` returns correct `count`/`total` for empty, single, and mixed inputs, and raises on a non-numeric amount.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -274,6 +280,7 @@ A plan fails on **ambiguity**, not on the absence of code. These are **plan fail
 - "Write tests for the above" — give the assertion list (behavior + exact expected values)
 - "Similar to Task N" — restate the contract; the implementor may read tasks out of order
 - A step that states neither a behavioral goal nor an acceptance check
+- An acceptance criterion stated as prose rather than a literal, copy-runnable command with exact flags
 - An interface or contract referenced but never specified
 - A requirement open to two or more reasonable interpretations
 - References to types, functions, or methods not defined in any task
@@ -282,7 +289,7 @@ A plan fails on **ambiguity**, not on the absence of code. These are **plan fail
 ## Remember
 - Exact file paths always
 - Complete **behavior** in every step — if a step changes code, state the behavioral goal, the contract it must satisfy, and the acceptance check. The implementor writes the code.
-- Exact commands with expected output
+- Every acceptance criterion is an exact, copy-runnable command with all flags and expected output — never a prose description of a check
 - State the **why** for every non-obvious decision (rationale + rejected alternative) so the implementor can adapt when context shifts
 - DRY, YAGNI, TDD, frequent commits
 
@@ -300,7 +307,11 @@ After writing the complete plan, look at the tech spec (`tech.md`) when present,
 
 **5. Contract consistency:** Do the signatures, method names, and property names in your `CONTRACT:` sketches match across tasks? A function called `clearLayers()` in Task 3 but `clearFullLayers()` in Task 7 is a bug.
 
-**6. Parallelism declarations:** For each task, did you accurately declare `independent: true` / `dependencies: [...]` / `scope.files: [...]` / `scope.never_touch: [...]`? In captain mode, verify that every task has both scope lists and that its forbidden list protects adjacent files owned by wave peers. Tasks that genuinely don't depend on each other should say so — otherwise the orchestrator falls back to sequential execution and leaves throughput on the table. Tasks that share a target file are NOT automatically forced to run sequentially: file overlap only rules out `IN_PLACE_PARALLEL` (which requires provably disjoint `scope.files`) — `WORKTREE_PARALLEL` handles overlapping files fine, since each task gets its own branch and the rolling merge reconciles them (subagent-driven-development's own worked example runs two independent tasks that both touch README.md under `WORKTREE_PARALLEL`). Reserve `dependencies` for genuine semantic/ordering dependencies — one task needing another's output — never merely for file overlap. Also check: (a) every captain-mode task has an explicit, honest `risk` tier and a one-line rationale — nothing marked `mechanical` touches executable logic, and `pattern` is used only when the mirrored pattern was itself reviewed earlier on this branch; (b) every `.contract` dependency points at a task that actually specifies the consumed contract in a tagged `CONTRACT:`/`SCHEMA:` block.
+**6. Acceptance-command audit:** Inspect every acceptance criterion. Is each one a literal, copy-runnable command with exact flags and an expected result, rather than prose that leaves the captain and orchestrator to choose how to run the check? Fix every mismatch.
+
+**7. Coherence sweep:** If the plan changes a protocol, vocabulary, or event set, did you grep-enumerate every file referencing the changed old or new terms? Verify that each result is either scoped into a task or explicitly recorded as `unchanged, verified consistent`; check that `scope.never_touch` has not hidden a stale reference.
+
+**8. Parallelism declarations:** For each task, did you accurately declare `independent: true` / `dependencies: [...]` / `scope.files: [...]` / `scope.never_touch: [...]`? In captain mode, verify that every task has both scope lists and that its forbidden list protects adjacent files owned by wave peers. Tasks that genuinely don't depend on each other should say so — otherwise the orchestrator falls back to sequential execution and leaves throughput on the table. Tasks that share a target file are NOT automatically forced to run sequentially: file overlap only rules out `IN_PLACE_PARALLEL` (which requires provably disjoint `scope.files`) — `WORKTREE_PARALLEL` handles overlapping files fine, since each task gets its own branch and the rolling merge reconciles them (subagent-driven-development's own worked example runs two independent tasks that both touch README.md under `WORKTREE_PARALLEL`). Reserve `dependencies` for genuine semantic/ordering dependencies — one task needing another's output — never merely for file overlap. Also check: (a) every captain-mode task has an explicit, honest `risk` tier and a one-line rationale — nothing marked `mechanical` touches executable logic, and `pattern` is used only when the mirrored pattern was itself reviewed earlier on this branch; every `pattern` task names its exemplar task regardless of whether the exemplar is inside or outside the current plan, and a same-plan exemplar has a plain dependency; (b) every `.contract` dependency points at a task that actually specifies the consumed contract in a tagged `CONTRACT:`/`SCHEMA:` block.
 
 If you find issues, fix them inline. No need to re-review — just fix and move on. If you find a requirement in the tech spec (`tech.md`) when present, else the logic spec, with no task, add the task.
 
