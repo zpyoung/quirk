@@ -222,8 +222,11 @@ the reviewer surfaces a genuine ambiguity you cannot resolve.
      tasks to complete. Opt-in per-dependency form `dependencies: [T1.contract, ...]` lets the
      dependent start once T1's *contract* is confirmed rather than waiting for T1's full chain
      (see Step 4 below); plain `T1` keeps the full wait.
-   - `cooperative: true` is an optional hint that the task needs live negotiation with other
-     tasks in its wave (TEAM mode).
+   - `cooperative: true` is an optional hint that the task needs tighter cross-task interface
+     coordination than normal (TEAM mode). Coordination is still asynchronous and
+     orchestrator-mediated — captains exchange information only via `run.jsonl` decision events
+     (read-at-start / append-at-stop), never direct messaging; TEAM mode raises the cadence of
+     those exchanges, not the mechanism.
 4. Topologically sort tasks by `dependencies`. A `.contract` dependency is satisfied — for
    wave-computation purposes — once the upstream task is COMMITTED and its spec-compliance
    review has confirmed the exported contracts (interfaces/signatures/schemas the dependent
@@ -400,8 +403,10 @@ It never silently invents a class or drops an event.
 
 Phase 1 keeps the audit portions that are compatible with its conservative gate: all carried or
 parked findings remain in the ledger, that ledger is pasted verbatim into the final whole-branch
-review prompt, and the run summary lists escalations and parked tasks first. The orchestrator records timestamp events with `scripts/sdd-ledger append --type timestamp` and
-renders their per-stage latency table with `scripts/sdd-ledger report` for the run summary.
+review prompt, and the run summary lists escalations and parked tasks first. Each captain records
+its own per-stage timestamp events with `scripts/sdd-ledger append --type timestamp` (no
+top-orchestrator turn exists between captain-internal stages to observe them); the orchestrator
+renders the per-stage latency table with `scripts/sdd-ledger report` for the run summary.
 The §4 **verify-or-quarantine gate is Phase 2 (future)**: an `AUTO-RESOLVED-CRITICAL` can finish clean
 only after an independent PASS plus green verification on the final branch SHA; failed,
 unavailable, missing, or inconclusive verification yields `QUARANTINED`. Phase 1 does not use
@@ -562,8 +567,11 @@ chosen in **Runtime Selection**.
   worker bodies selected by the captain and task risk
 - `assets/pi-merge-resolver-prompt.md` — top-orchestrator merge-lane resolver
 
-In captain mode, the run-pinned exact triples in `assets/pi-captain-prompt.md` supersede the
-standalone worker templates' alias-form invocation examples. Implementer/fix workers receive
+In captain mode, `assets/pi-captain-prompt.md` is authoritative for ALL dispatch mechanics —
+its run-pinned exact triples, `sdd-dispatch` file-based report transport, and ESCALATION-only
+failure routing supersede the standalone worker templates' alias-form invocation examples,
+stdout-marker output parsing, and any self-directed fallback language those templates retain
+(pending their migration, tracked as a follow-up task). Implementer/fix workers receive
 `read,bash,edit,write`; reviewers receive `read,grep,find,ls`. Follow **quirk:pi-dev** for the
 canonical hardened recipe and failure signatures. Every applicable initial reviewer is launched
 concurrently by the captain; the top orchestrator never dispatches those stages itself except in

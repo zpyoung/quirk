@@ -49,7 +49,8 @@ Run this chain without a top-orchestrator turn between stages:
    this nested chain.
 3. **Review concurrently by risk.** After DONE, bind `TASK_HEAD` to the exact task tree under
    review (`HEAD` on an own-branch/singleton path, or the recorded latest task-owned commit for
-   `IN_PLACE_PARALLEL`). Compute the task diff against its supplied fork base by summing the
+   `IN_PLACE_PARALLEL`). Compute the task diff against its supplied fork base — bind
+   `$FORK_BASE` to the manifest's `FORK_SHA` (they are the same value) — by summing the
    numeric added+deleted columns from
    `git diff --numstat "$FORK_BASE" "$TASK_HEAD" -- "${SCOPE_FILES[@]}"`, where `SCOPE_FILES`
    is the manifest's list. Also inspect the changed
