@@ -95,9 +95,12 @@ never a silent mid-chain fallback.
 Every captain receives a provenance-bearing **context manifest**, not a bare packet: full task
 text, Contract, `scope.files`, `scope.never_touch`, applicable `CLAUDE.md` rules and tech-spec
 DO-NOT-CHANGE fences, acceptance commands, risk tier/rationale, execution mode,
-worktree/scratch paths, relevant SHAs, selected launcher, and (pi path) the pinned role triples.
-Captains do not re-derive these inputs. Workers may still read source documents when the manifest
-proves insufficient.
+worktree/scratch paths, the required `FORK_SHA` (the exact commit from which this task or
+speculative dependent branched), explicit base/HEAD SHAs, selected launcher, and (pi path) the
+pinned role triples. Captains do not infer or re-derive `FORK_SHA` or these other inputs. Workers
+may still read source documents when the manifest proves insufficient. Stage command-line
+dispatch through `scripts/sdd-dispatch`; it validates the prompt, uses the pinned triple, streams
+stdout/stderr to artifacts, and always writes `meta.json`.
 
 ## The Process
 
@@ -290,8 +293,9 @@ candidate SHA, rather than a later resampling of shared `HEAD` after a sibling c
 
 #### WORKTREE_PARALLEL (default for 2+ independent tasks)
 
-1. Serialize worktree creation via **quirk:using-git-worktrees**, one isolated worktree per task.
-   Branches use `sdd/<run-slug>/<task-id>` (for example `sdd/kestrel/T1`), where `run-slug`
+1. Serialize worktree creation via `scripts/sdd-wave create` and
+   **quirk:using-git-worktrees**, one isolated worktree per task. Branches use
+   `sdd/<run-slug>/<task-id>` (for example `sdd/kestrel/T1`), where `run-slug`
    identifies this plan run. Never prefix the branch with the parent branch: an existing leaf
    such as `refs/heads/main` conflicts with trying to create `refs/heads/main/sdd/...` in Git's
    ref namespace. An explicit `.contract` dependency retains Step 0b's existing opt-in fork from
@@ -315,11 +319,19 @@ captains reach `CHAIN_COMPLETE` or are parked and the wave integration gate has 
 
 Before a wave launch, stage every captain prompt and manifest under external run scratch with
 task/role-keyed names and hard-fail if either is absent. Include task/Contract, both scope lists,
-acceptance, explicit risk/rationale, execution mode, worktree, relevant SHAs, rules/fences,
-launcher selection, and pinned pi triples where applicable. Dispatch all captains in **one
-top-orchestrator turn per wave**. Captains persist worker outputs, timestamps, adjudication,
-ledger, and events as produced;
-if one dies, adopt the orphaned chain from those artifacts and resume or park it.
+acceptance, explicit risk/rationale, execution mode, worktree, required `FORK_SHA`, explicit
+base/HEAD SHAs, rules/fences, launcher selection, and pinned pi triples where applicable.
+Command-line launches go through `scripts/sdd-dispatch`, producing streamed `worker.out`,
+`worker.err`, and `meta.json` artifacts. Dispatch all captains in **one top-orchestrator turn per
+wave**. Captains persist worker outputs, timestamps, adjudication, ledger, events, and milestone
+reports as produced; if one dies, adopt the orphaned chain from those artifacts and resume or
+park it.
+
+**File-based report transport is mandatory:** worker and captain reports live in artifact
+**files**. Stdout or a final message is a completion signal only (for example, “done” or a status
+word); after the command returns, read the persisted report file. Never use remembered stdout as
+the report body. This applies equally to nested dispatch and command-line fallback, and makes a
+partial report recoverable after timeout.
 
 In **Phase 1**, a captain emits no milestone until its entire pre-merge chain is PASS/resolved.
 It then emits `MERGE_READY(candidate SHA + adjudication log)` and
@@ -337,8 +349,10 @@ have changed that task's declared files (for example, `git diff --quiet "$candid
 questionable call, in which case the captain resumes and must return a new paired report before
 merge.
 
-Merges are serialized. For a worktree branch, run `git merge --no-ff <task-branch>` on the parent
-only after the paired report and audit; never let a captain edit the parent. On a real overlap,
+Merges are serialized. For a worktree branch, invoke `scripts/sdd-wave merge-lane` on the parent
+only after the paired report and audit; it mechanically checks `base..head` against
+`scope.files` and subtractive `scope.never_touch`, then runs `git merge --no-ff <task-branch>` and
+tears down only on audit/merge success. Never let a captain edit the parent. On a real overlap,
 dispatch the runtime's merge-resolver asset. `SUCCESS` continues the lane;
 `UNRESOLVABLE` is recorded and parked with its worktree/conflict state. Run one integration
 build/test after all mergeable captains in the wave have landed, then proceed to the next wave.
@@ -352,7 +366,17 @@ trail on leased worktrees and fixes use `BRANCH_REQUEST` micro-branches. Do not 
 starts with FORK_SHA/`--onto` barriers, worktree pooling with lease/reset, and rerere with
 `rerere.autoUpdate` off. No pooling, lease reuse, rerere, or new speculative start is active here.
 
-### Escalation ledger
+### Run ledger, decisions log, and escalation
+
+The run owns one append-only `<run-dir>/run.jsonl`, managed with `scripts/sdd-ledger append` and
+queried mechanically with `scripts/sdd-ledger query`. Its event schema is `{ts, agent,
+namespace, type, payload}`, where `type` is exactly `finding | adjudication | escalation |
+assumption | timestamp | decision`; every producer uses its own agent namespace. At start, each
+captain queries and reads other captains' `decision` events. At stop, it appends its own
+`decision` events. This decisions log is the only sanctioned cross-captain read surface: **no
+direct captain-to-captain messaging** is allowed, and all control flow remains
+orchestrator-mediated. Existing per-task `ledger.md`, `events.jsonl`, and `timestamps.tsv` may
+remain recovery artifacts, but they do not replace the run-wide ledger.
 
 `ESCALATION` is the only load-bearing exception event in Phase 1. A captain handles
 `NEEDS_CONTEXT` first from its manifest/spec/codebase and records a conservative assumption if
@@ -374,8 +398,8 @@ It never silently invents a class or drops an event.
 
 Phase 1 keeps the audit portions that are compatible with its conservative gate: all carried or
 parked findings remain in the ledger, that ledger is pasted verbatim into the final whole-branch
-review prompt, and the run summary lists escalations and parked tasks first. The orchestrator
-also aggregates every captain's per-stage timestamps into a latency table in the run summary.
+review prompt, and the run summary lists escalations and parked tasks first. The orchestrator records timestamp events with `scripts/sdd-ledger append --type timestamp` and
+renders their per-stage latency table with `scripts/sdd-ledger report` for the run summary.
 The §4 **verify-or-quarantine gate is Phase 2 (future)**: an `AUTO-RESOLVED-CRITICAL` can finish clean
 only after an independent PASS plus green verification on the final branch SHA; failed,
 unavailable, missing, or inconclusive verification yields `QUARANTINED`. Phase 1 does not use
@@ -476,7 +500,8 @@ statuses directly only in the degraded **Flat chain fallback**.
 ## Verification economics
 
 Do not routinely duplicate verification already run and recorded inside a captain. Captains run
-affected acceptance checks after guarded patches/fixes and provide readiness evidence. The top
+the manifest's commands exactly as written through `scripts/sdd-acceptance` (including affected
+acceptance checks after guarded patches/fixes) and persist its JSON readiness evidence. The top
 orchestrator re-verifies at three control-plane boundaries only:
 
 1. the wave integration build/test on the merged state;
@@ -499,10 +524,14 @@ first dogfood run.
 - **Stage ahead.** The top orchestrator stages all captain prompts/manifests before the wave's
   one-turn launch. Each captain stages the next role prompt while its current worker runs, so
   internal transitions do not wait on prompt assembly.
-- **Hard-fail on a missing prompt file.** A dispatch command must refuse to run if its prompt
-  file is absent — e.g. `[ -f prompt.md ] || exit 1` before invoking. Never fall back to a
+- **Use the hardened wrapper.** Route command-line worker dispatch through
+  `scripts/sdd-dispatch --prompt <path> ...`; it hard-fails on an absent prompt, resolves the
+  run-pinned triple, streams stdout/stderr to artifact files, preserves partial output on
+  timeout, and records the exit code/timestamps/triple in `meta.json`. Never fall back to a
   placeholder (`cat prompt.md || echo MISSING` piped into a live dispatch); a garbage prompt
-  burns a full worker round-trip and is far more expensive than failing fast.
+  burns a full worker round-trip and is far more expensive than failing fast. Read the report
+  artifact after completion; wrapper stdout is only a completion signal/tee, never report
+  transport.
 - **Stage prompt and artifact files outside the repository.** Write them to run scratch, never
   inside a worktree—a captain/worker with edit tools could commit or clobber them there. Use
   task/role-keyed filenames (`t3-captain.md`, `t3-spec-review.md`, not `prompt.md`) so concurrent

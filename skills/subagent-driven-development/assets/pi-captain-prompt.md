@@ -13,9 +13,10 @@ The dispatch must provide a provenance-bearing **context manifest**, not a bare 
 - `scope.files` and `scope.never_touch` (negative scope wins);
 - acceptance/build commands and expected evidence;
 - an explicit `risk: logic | pattern | mechanical` and one-line rationale (no default);
-- execution mode, absolute worktree path, and relevant fork/base/HEAD SHAs;
+- execution mode, absolute worktree path, required `FORK_SHA` (the exact commit this task or
+  dependent branched from), and explicit base/HEAD SHAs;
 - applicable `CLAUDE.md` rules and tech-spec DO-NOT-CHANGE fences;
-- an external run-scratch directory; and
+- an external run-scratch directory and a per-run dispatch-config JSON path; and
 - the per-role **pinned** `provider/model:thinking` triples for captain, implementer, spec
   reviewer, quality reviewer, Codex reviewer, and fix worker (the merge resolver triple is not
   part of this manifest — the top orchestrator's serialized merge lane dispatches that role
@@ -25,15 +26,19 @@ The dispatch must provide a provenance-bearing **context manifest**, not a bare 
 
 These are authoritative inputs. Do **not** re-derive the manifest, silently default `risk`, or
 run alias resolution inside this captain. Read source documents on demand only when the manifest
-is insufficient. Use the received pinned triples for every dispatch in this chain; any recorded
-re-resolution epoch belongs to the top orchestrator, not a per-dispatch fallback here.
+is insufficient. Never infer `FORK_SHA` from branch topology. Use the received pinned triples
+and per-run config for every dispatch in this chain; any recorded re-resolution epoch belongs to
+the top orchestrator, not a per-dispatch fallback here.
 
 ## Chain
 
 Run this chain without a top-orchestrator turn between stages:
 
-1. **Initialize.** Validate the manifest and pinned triples, record dispatch/start timestamps,
-   confirm the worktree and SHA inputs, and create the external scratch artifacts below.
+1. **Initialize.** Validate the manifest including required `FORK_SHA`, pinned triples, and
+   dispatch config; record dispatch/start timestamps, confirm the worktree and SHA inputs, and
+   create the external scratch artifacts below. Query `<run-dir>/run.jsonl` with
+   `scripts/sdd-ledger query --type decision` and read other captains' decisions before
+   dispatching the implementer.
 2. **Implement.** Assemble a task/role-keyed prompt from
    `assets/pi-implementer-prompt.md` plus the context manifest, stage it outside the repository,
    and dispatch it with the pinned implementer triple. Persist output immediately. A valid DONE
@@ -79,7 +84,9 @@ Run this chain without a top-orchestrator turn between stages:
 5. **Fix economically.** Apply a reviewer-attached patch directly only for an accepted
    LOW/MEDIUM or mechanical-HIGH finding and only if it changes at most 20 lines,
    `git apply --check` succeeds, every path is within `scope.files` and outside
-   `scope.never_touch`, and affected acceptance checks pass after apply. A behavior change,
+   `scope.never_touch`, and affected acceptance checks pass after apply. Execute the manifest
+   commands exactly as supplied with `scripts/sdd-acceptance` and persist its JSON result; do
+   not restate or mutate command flags. A behavior change,
    exported-contract change, or cross-file fix always requires normal re-review. If any guard
    fails, apply none of that patch. Send all CRITICAL, judgment-requiring, rejected-patch, and
    remaining accepted findings to **one consolidated fix worker** using the pinned fix-worker
@@ -99,9 +106,11 @@ Run this chain without a top-orchestrator turn between stages:
    `CONTRACT_CORRECTED` event in Phase 1.
 8. **Phase 1 full-chain gate.** The implementer, every risk-required review, adjudication,
    fixes, discrepancy checks, targeted re-reviews, and verification must all be PASS/resolved
-   before **any** milestone report. Do not emit `MERGE_READY` early. Do not merge, initiate a
-   candidate-SHA/rebase handshake, start a dependent speculatively, lease a worktree, or perform
-   trailing review. Phase 1 has no temporal gap between readiness and completion.
+   before **any** milestone report. Before stopping, append this captain's own `decision` events
+   through `scripts/sdd-ledger append`; do not message another captain directly. Do not emit
+   `MERGE_READY` early. Do not merge, initiate a candidate-SHA/rebase handshake, start a
+   dependent speculatively, lease a worktree, or perform trailing review. Phase 1 has no temporal
+   gap between readiness and completion.
 
 ### Exception routing
 
@@ -139,9 +148,11 @@ unavailable, missing, or inconclusive verification yields `QUARANTINED`, never d
 
 Use only this closed vocabulary.
 
-**Phase 1 milestones:** after the full chain is green, emit `MERGE_READY` and
-`CHAIN_COMPLETE` **together to the top orchestrator**, in that order, at chain end. This keeps
-the schema forward-compatible without activating Phase 2's temporal separation.
+**Phase 1 milestones:** after the full chain is green, persist complete `MERGE_READY` and
+`CHAIN_COMPLETE` report files **together**, in that order, at chain end. Then emit only a
+completion/status signal to the top orchestrator. The orchestrator reads those files, never
+remembered stdout, before audit and `scripts/sdd-wave merge-lane`. This keeps the schema
+forward-compatible without activating Phase 2's temporal separation.
 
 - `MERGE_READY`: task ID, exact candidate SHA (`git rev-parse HEAD` after every Phase 1 fix on
   an own-branch/singleton path; the recorded latest task-owned commit on
@@ -185,9 +196,14 @@ trailing-fix micro-branches, and guarded auto-resolution/quarantine. **Phase 3 (
 ## Durable Artifacts
 
 Write artifacts **as produced**, never only when formatting reports. They live in external run
-scratch, never in the repository/worktree:
+scratch, never in the repository/worktree. `scripts/sdd-dispatch` owns each role's streamed
+`worker.out`, `worker.err`, and `meta.json`; the worker/captain owns its structured report file:
 
 ```text
+<scratch>/run.jsonl
+<scratch>/<task-id>/dispatch/<role>/worker.out
+<scratch>/<task-id>/dispatch/<role>/worker.err
+<scratch>/<task-id>/dispatch/<role>/meta.json
 <scratch>/<task-id>/implementer.out
 <scratch>/<task-id>/reviews/spec.out
 <scratch>/<task-id>/reviews/quality.out
@@ -197,12 +213,21 @@ scratch, never in the repository/worktree:
 <scratch>/<task-id>/timestamps.tsv
 <scratch>/<task-id>/ledger.md
 <scratch>/<task-id>/events.jsonl
+<scratch>/<task-id>/reports/MERGE_READY.json
+<scratch>/<task-id>/reports/CHAIN_COMPLETE.json
 ```
 
+The run-wide `run.jsonl` is append-only and namespaced per agent. Captains read other captains'
+`decision` events at start and append their own at stop using `scripts/sdd-ledger`; this is the
+only sanctioned cross-captain read surface. **No direct captain-to-captain messaging** is
+allowed; control flow stays orchestrator-mediated.
+
 Append atomically where possible and include task ID, base/candidate SHA, finding IDs, producer
-role, and the pinned triple used. These files are the recovery boundary: if this captain dies,
-the top orchestrator can adopt the orphaned chain, identify the last completed stage, and resume
-or park it without trusting an incomplete final message.
+role, and the pinned triple used. Worker and captain stdout/final messages are completion signals
+only; their report content lives in these artifact files and must be read from disk. These files
+are the recovery boundary: if this captain dies, the top orchestrator can adopt the orphaned
+chain, identify the last completed stage, and resume or park it without trusting an incomplete
+final message or remembered stdout.
 
 ## Timestamps
 
@@ -210,64 +235,66 @@ Append ISO-8601 timestamps to `timestamps.tsv` at captain dispatch/start, implem
 and DONE/`IMPLEMENTER_DONE`, review dispatch/start and each review end, adjudication start/end,
 each patch/fix dispatch and end, discrepancy check, each targeted re-review start/end, final
 verification, `MERGE_READY`, and `CHAIN_COMPLETE`. Include stage, role/cycle, status, current SHA,
-and pinned triple. Aggregate the same records into `CHAIN_COMPLETE`; do not reconstruct them at
-report time.
+and pinned triple. Also append matching `{stage, status: start|end}` timestamp events to
+`run.jsonl` with `scripts/sdd-ledger append --type timestamp`; the orchestrator uses
+`scripts/sdd-ledger report` for the deterministic latency table. Aggregate the same records into
+`CHAIN_COMPLETE`; do not reconstruct them at report time.
 
 ## Dispatch & Failure Handling
 
-`pi-watch` is the canonical dispatcher from **quirk:pi-dev**. Raw `pi -p` is permitted only by
-pi-dev's documented escape hatches. Before every worker dispatch, write one task/role-keyed
-prompt outside the repository (for example `<scratch>/<task-id>-implementer.md` or
-`<scratch>/<task-id>-spec-review.md`) and hard-fail if absent. Never use a generic prompt name or
-pipe placeholder text into a live worker.
+`pi-watch` remains the canonical dispatcher from **quirk:pi-dev**, but every captain/worker
+command-line launch goes through `scripts/sdd-dispatch` (which defaults to `pi-watch`). Raw
+`pi -p` remains limited to pi-dev's documented escape hatches. The top orchestrator materializes
+the run-pinned triples as the manifest's per-run JSON config, keyed by role. Never invoke
+`pi-watch` directly, hand-roll redirection/timeout handling, call an alias, or re-run `--check` /
+`--list-aliases` inside a captain.
 
-The variables below come directly from the pinned triples in Inputs. Do not call an alias or
-re-run `--check` / `--list-aliases` here.
+Stage one task/role-keyed prompt outside the repository for each launch, then use the wrapper:
 
 ```bash
-# implementer
+: "${WORKTREE:?}" "${SCRATCH:?}" "${TASK_ID:?}" "${PINNED_CONFIG:?}"
+WORKER_TIMEOUT="${WORKER_TIMEOUT:-900}"
 cd "$WORKTREE"
-PROMPT="$SCRATCH/$TASK_ID-implementer.md"
-[ -f "$PROMPT" ] || exit 1
-pi-watch --provider "$IMPL_PROVIDER" --model "$IMPL_MODEL" \
-  --thinking "$IMPL_THINKING" --tools read,bash,edit,write "$(cat "$PROMPT")"
 
-# spec reviewer (dispatch concurrently with the other applicable reviewers)
-PROMPT="$SCRATCH/$TASK_ID-spec-review.md"
-[ -f "$PROMPT" ] || exit 1
-pi-watch --provider "$SPEC_PROVIDER" --model "$SPEC_MODEL" \
-  --thinking "$SPEC_THINKING" --tools read,grep,find,ls "$(cat "$PROMPT")"
+dispatch_role() {
+  role="$1" tools="$2" prompt="$3" artifact_key="${4:-$1}"
+  skills/subagent-driven-development/scripts/sdd-dispatch \
+    --prompt "$prompt" \
+    --config "$PINNED_CONFIG" --role "$role" \
+    --tools "$tools" \
+    --out-dir "$SCRATCH/$TASK_ID/dispatch/$artifact_key" \
+    --timeout "$WORKER_TIMEOUT"
+}
 
-# code-quality reviewer
-PROMPT="$SCRATCH/$TASK_ID-quality-review.md"
-[ -f "$PROMPT" ] || exit 1
-pi-watch --provider "$QUALITY_PROVIDER" --model "$QUALITY_MODEL" \
-  --thinking "$QUALITY_THINKING" --tools read,grep,find,ls "$(cat "$PROMPT")"
+# Implementer and fix roles run alone.
+dispatch_role implementer read,bash,edit,write \
+  "$SCRATCH/$TASK_ID-implementer.md"
+dispatch_role fix read,bash,edit,write \
+  "$SCRATCH/$TASK_ID-fix-$CYCLE.md" "fix-$CYCLE"
 
-# Codex adversarial reviewer
-PROMPT="$SCRATCH/$TASK_ID-codex-review.md"
-[ -f "$PROMPT" ] || exit 1
-pi-watch --provider "$CODEX_PROVIDER" --model "$CODEX_MODEL" \
-  --thinking "$CODEX_THINKING" --tools read,grep,find,ls "$(cat "$PROMPT")"
-
-# consolidated fix worker
-PROMPT="$SCRATCH/$TASK_ID-fix-$CYCLE.md"
-[ -f "$PROMPT" ] || exit 1
-pi-watch --provider "$FIX_PROVIDER" --model "$FIX_MODEL" \
-  --thinking "$FIX_THINKING" --tools read,bash,edit,write "$(cat "$PROMPT")"
+# Start every risk-applicable reviewer in one batch, retain all PIDs, then wait for all.
+dispatch_role spec read,grep,find,ls \
+  "$SCRATCH/$TASK_ID-spec-review.md" & spec_pid=$!
+dispatch_role quality read,grep,find,ls \
+  "$SCRATCH/$TASK_ID-quality-review.md" & quality_pid=$!
+dispatch_role codex read,grep,find,ls \
+  "$SCRATCH/$TASK_ID-codex-review.md" & codex_pid=$!
+# Wait for each retained PID and record each wrapper status before adjudication.
 ```
 
-The implementer and fix-worker fragments run alone (nothing else is dispatched concurrently with
-them). The three reviewer fragments are launch shapes, not a sequential script: per Chain step 3,
-start every applicable reviewer for the task's risk tier in one concurrent batch — background
-each `pi-watch` invocation, capture its PID, redirect its stdout/stderr into the matching
-`<scratch>/<task-id>/reviews/{spec,quality,codex}.out` artifact as it streams, then wait on every
-PID and record each exit status before adjudication. Route a nonzero exit or missing output
-through the failure policy below rather than treating it as PASS.
+These are role launch shapes, not one sequential script: run the implementer first, launch only
+the risk-applicable reviewers after `IMPLEMENTER_DONE`, and launch `fix` only when adjudication
+requires it. Reviewer wrappers may run in the background only as one supervised batch whose PIDs
+are all waited before the captain turn can end.
 
-Use pi-dev's canonical hardened headless recipe for timeout, exit-code capture, JSONL/output
-framing, and child cleanup around each invocation. Apply **quirk:pi-dev** failure signatures;
-this template states the captain policy rather than re-deriving those signatures:
+`sdd-dispatch` hard-fails on a missing prompt, passes the exact pinned triple, tees stdout and
+stderr into role-specific `worker.out`/`worker.err` as they stream, preserves partial files on
+timeout, and always writes `meta.json`. After every wait, inspect `meta.json` and read the
+persisted worker report file. Wrapper stdout/final text is only a completion signal/tee, never
+report transport. A nonzero `meta.json` exit code or missing report is not PASS.
+
+Apply **quirk:pi-dev** failure signatures to the persisted artifacts; this template states the
+captain policy rather than re-deriving those signatures:
 
 - auth/billing failure: emit `ESCALATION` with the role and pinned triple; never silently switch
   provider/model or runtime mid-chain (the captain has no user to ask);
