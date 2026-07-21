@@ -356,9 +356,13 @@ questionable call, in which case the captain resumes and must return a new paire
 merge.
 
 Merges are serialized. For a worktree branch, invoke `scripts/sdd-wave merge-lane` on the parent
-only after the paired report and audit; it mechanically checks `base..head` against
-`scope.files` and subtractive `scope.never_touch`, then runs `git merge --no-ff <task-branch>` and
-tears down only on audit/merge success. Never let a captain edit the parent. On a real overlap,
+only after the paired report and audit, passing the reported candidate as required
+`--candidate-sha` and the recorded receiving tip as required `--expected-parent`. The lane
+resolves the base, candidate, and task branch to commit OIDs before use; requires the branch,
+candidate, expected parent, and registered task worktree to agree; audits every path in the
+immutable `base..candidate` diff with rename detection off against `scope.files` and subtractive
+`scope.never_touch`; merges only that audited OID; and rechecks branch/worktree identity before
+teardown. Never let a captain edit the parent. On a real overlap,
 dispatch the runtime's merge-resolver asset. `SUCCESS` continues the lane;
 `UNRESOLVABLE` is recorded and parked with its worktree/conflict state. Run one integration
 build/test after all mergeable captains in the wave have landed, then proceed to the next wave.
