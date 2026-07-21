@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+"""Run SDD acceptance commands exactly as declared and report JSON results."""
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+
+def load_manifest(path_arg: str) -> tuple[str | None, list[str]]:
+    """Load and validate an acceptance manifest."""
+    path = Path(path_arg)
+    if not path.is_file():
+        raise ValueError(f"missing manifest: {path}")
+    try:
+        manifest = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read manifest {path}: {exc}") from exc
+    if not isinstance(manifest, dict):
+        raise ValueError("manifest must be a JSON object")
+    commands = manifest.get("commands")
+    if not isinstance(commands, list) or not commands or not all(
+        isinstance(command, str) for command in commands
+    ):
+        raise ValueError("manifest.commands must be a non-empty array of strings")
+    cwd = manifest.get("cwd")
+    if cwd is not None and not isinstance(cwd, str):
+        raise ValueError("manifest.cwd must be a string")
+    return cwd, commands
+
+
+def execute(commands: list[str], cwd: Path) -> tuple[int, dict[str, Any]]:
+    """Run every command through the shell without changing its text."""
+    results: list[dict[str, Any]] = []
+    for command in commands:
+        completed = subprocess.run(
+            command,
+            cwd=cwd,
+            shell=True,
+            capture_output=True,
+            text=True,
+        )
+        status = "pass" if completed.returncode == 0 else "fail"
+        results.append({
+            "command": command,
+            "exit_code": completed.returncode,
+            "stdout": completed.stdout,
+            "stderr": completed.stderr,
+            "status": status,
+        })
+    overall = "pass" if all(item["status"] == "pass" for item in results) else "fail"
+    return (0 if overall == "pass" else 1), {"status": overall, "results": results}
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Execute acceptance commands verbatim through the shell and emit JSON.",
+    )
+    parser.add_argument("--manifest", help='JSON file with "cwd" and "commands"')
+    parser.add_argument("--cmd", action="append", default=[], help="exact shell command (repeatable)")
+    parser.add_argument("--cwd", help="working directory for commands (default: current directory)")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.manifest and args.cmd:
+        parser.error("use --manifest or repeatable --cmd flags, not both")
+    if not args.manifest and not args.cmd:
+        parser.error("provide --manifest or at least one --cmd")
+
+    try:
+        if args.manifest:
+            manifest_cwd, commands = load_manifest(args.manifest)
+            cwd_arg = args.cwd if args.cwd is not None else manifest_cwd
+        else:
+            commands = args.cmd
+            cwd_arg = args.cwd
+        cwd = Path(cwd_arg or ".").resolve()
+        if not cwd.is_dir():
+            raise ValueError(f"working directory does not exist: {cwd}")
+        exit_code, payload = execute(commands, cwd)
+    except (OSError, ValueError) as exc:
+        print(f"sdd-acceptance: {exc}", file=sys.stderr)
+        return 2
+
+    print(json.dumps(payload, sort_keys=True))
+    return exit_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
