@@ -396,10 +396,19 @@ try {
     });
 
     await session.prompt(opts.prompt);
-    process.stdout.write("\n");
-    process.stderr.write("  ✔ done\n");
+    // stdout/stderr to a pipe flush asynchronously, and process.exit() drops
+    // queued writes — long responses got truncated when the final burst of
+    // deltas outran the reader. Per-stream writes are ordered, so awaiting one
+    // last write's callback guarantees everything before it has flushed.
+    await Promise.all([
+        new Promise((resolve) => process.stdout.write("\n", resolve)),
+        new Promise((resolve) => process.stderr.write("  ✔ done\n", resolve)),
+    ]);
     process.exit(0);
 } catch (err) {
-    process.stderr.write(`\n  ✖ error: ${err?.message ?? err}\n`);
+    await Promise.all([
+        new Promise((resolve) => process.stdout.write("\n", resolve)),
+        new Promise((resolve) => process.stderr.write(`\n  ✖ error: ${err?.message ?? err}\n`, resolve)),
+    ]);
     process.exit(1);
 }
