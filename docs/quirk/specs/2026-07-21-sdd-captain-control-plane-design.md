@@ -93,10 +93,12 @@ Rejected alternatives:
   the boundary is resolved per §4 (auto-resolve + ledger) before the next wave starts —
   the boundary never idles on a human.
 - **Speculative dependent start.** Dependents branch from the upstream task branch at
-  the **implementer-DONE commit** — before spec confirmation. The existing
-  contract-invalidation rule handles corrections (upstream captain notifies the
-  orchestrator; the orchestrator triggers the dependent's re-check). The **early-merge
-  barrier holds**: a speculative dependent never merges before its upstream has merged.
+  the earliest safe point: the **contract-stub commit** when the upstream task produced
+  one (see §5), else the **implementer-DONE commit** — both before spec confirmation.
+  The existing contract-invalidation rule handles corrections (upstream captain notifies
+  the orchestrator; the orchestrator triggers the dependent's re-check). The
+  **early-merge barrier holds**: a speculative dependent never merges before its
+  upstream has merged.
 
 ### 4. Escalation auto-resolve + audit
 
@@ -120,6 +122,64 @@ trail is mandatory, not optional):
    entry; its prompt receives the ledger verbatim (as in PR #24).
 3. The run summary lists all auto-resolutions at the top, before any other content.
 
+### 5. Dispatch-latency reductions (round-2 research amendments)
+
+- **Contract-first stubs.** When a task has dependents in a later wave, its captain's
+  implementer commits the interface stubs (signatures/schemas matching the plan's
+  `CONTRACT:` surface) as its **first commit**, before the full implementation.
+  Dependents branch from the stub commit immediately — the earliest speculative start
+  point (§3). Stubs make speculative starts systematic instead of ad hoc.
+- **Pin the pi alias once per run.** The orchestrator resolves each pi-dev alias once at
+  run start (through the pi-dev → `pi-watch` → `pi -p` ladder) and hard-pins the
+  resolved provider/model for every worker dispatch in the run. This inverts the current
+  "hard-pinning is the exception" rule *within a run only* — freshness is preserved
+  run-to-run. Rationale: the kestrel profile showed each dispatch re-resolving the model
+  and re-reading `CLAUDE.md` + the spec (measured cold-start tax on all 24 dispatches).
+- **Minimal context packets.** Workers receive a staged prompt file containing the task
+  text, contract, and scope — and are instructed not to re-read `CLAUDE.md`/spec files
+  the packet already distills (suppressed via CLI flags where the runtime supports it).
+- **Pre-warmed worktree pool.** The orchestrator provisions the wave's worktrees up
+  front (serial `git worktree add`, as PR #24 requires) and **reuses/resets pooled
+  worktrees across waves** instead of add/remove per task; dependencies shared via
+  copy-on-write (`cp -c` on APFS) or the pnpm store rather than per-worktree installs.
+- **Merge-lane git hygiene.** `git config rerere.enabled true` on the parent repo;
+  each task branch rebases onto the parent tip before its rolling merge.
+
+### 6. Decomposition upgrades (writing-plans)
+
+- **Cohesion-aware partitioning.** During the File Structure pass, build a
+  file-coupling map (imports/shared files), **isolate hub files into their own task**,
+  and partition the remaining work to minimize cross-task coupling *before* declaring
+  `independent`/`dependencies` and computing waves. (Co-Coder, arXiv:2606.00953: up to
+  2.1× wall-clock on dependency-dense projects; parallelism without cohesion awareness
+  can be worse than sequential.)
+- **Vertical-slice discipline.** Decompose by user-visible behavior slices, not
+  horizontal layers ("all API routes") — fewer inherent cross-wave dependencies.
+- **Never-touch lists.** Each task declares `scope.files` (allowed) **and**
+  `scope.never_touch` (forbidden — adjacent files the wave's other tasks own). Captains
+  paste both into implementer prompts; negative scope beats positive scope because
+  agents drift into adjacent files.
+- **Single-implementer fast path.** If the plan is small or heavily coupled (guideline:
+  <3 tasks, or partitioning cannot produce a wave of ≥2 disjoint tasks), skip the
+  captain/wave machinery entirely — one implementer + reviewer chain. Multi-agent
+  overhead scales with agent count regardless of task size.
+
+## Validation Against a Real Session
+
+The kestrel "kanban→list redesign" session (2026-07-20, 6h00m) was profiled
+event-by-event against this design:
+
+- 64% of wall-clock was human-in-the-loop (two ~103-min away gaps during brainstorming
+  questions) — out of scope for this design by deliberate choice.
+- Implementation + review took 101 min; this design's levers model out to **~55–60 min
+  (40–45% reduction)**. Largest measured lever: speculative dependent start (37.5 min of
+  trailing-tail delay observed; 25–35 min recoverable). Reviewer patches and
+  merge-on-spec-PASS each 10–15 min (overlapping). Escalation auto-resolve: ~0 in this
+  session (its value case is long unattended runs).
+- Confirmed wave waste: two independent tasks (`T2`/`T5`) ran sequentially — the mode
+  gates in this design would have overlapped them.
+- Surfaced the pi cold-start tax that §5 now addresses.
+
 ## Decisions Locked
 
 **Quality-vs-speed budget**
@@ -142,6 +202,14 @@ trail is mandatory, not optional):
 **Approach**
 - B: restructure around captains; flat chain becomes an inline fallback paragraph.
 - Pi-path dispatch: pi-dev skill → `pi-watch` → `pi -p` ladder (user amendment).
+
+**Round-2 research amendments (approved 2026-07-21)**
+- Group A — dispatch-latency fixes (§5): contract-first stubs, per-run alias pinning,
+  minimal context packets, pre-warmed worktree pool, rerere + rebase-before-merge.
+- Group B — decomposition upgrades (§6): cohesion-aware partitioning, vertical slices,
+  never-touch lists, single-implementer fast path.
+- Groups C (robustness guards) and D (brainstorming idle-while-away fix) were reviewed
+  and deferred — see Deferred Ideas.
 
 ## Industry Insights
 
@@ -168,9 +236,28 @@ trail is mandatory, not optional):
 - **Adversarial second-model review earns its cost** on architectural violations,
   negation-encoded constraints, and performance contracts — not on routine diffs.
   (asdlc.io adversarial-code-review)
+- **Cohesion-aware partitioning beats naive decomposition**: up to 2.1× wall-clock, 14%
+  pass-rate lift, 35% cost cut on dependency-dense projects; parallelism that ignores
+  coupling can be worse than sequential. (Co-Coder, arXiv:2606.00953)
+- **Contract/interface-first stubs enable true parallelism** — backend agents emit
+  interface definitions that dependents consume directly. (Osmani, "Code Agent
+  Orchestra"; multiple practitioner writeups)
+- **Community-converged practices** (Reddit, 27 threads deep-read): file-ownership
+  boundaries decided before dispatch (8+ independent posters); 4–6 concurrent agents
+  before merge overhead dominates; never-touch negative scope lists; reviewers
+  committing patches instead of prose; verify diffs, never agent summaries.
 
 ## Deferred Ideas
 
+- **Robustness guards (round-2 group C, deferred by user):** wave width capped by
+  review/adjudication throughput (community sweet spot 4–6 concurrent); stuck-agent
+  detection via failure-signature hashing → fresh-context hint after 3 identical
+  failures; hook-enforced tests-pass gate before implementer→reviewer handoff; per-wave
+  append-only decision log against cross-captain drift.
+- **Brainstorming idle-while-away fix (round-2 group D, deferred by user):** deliver
+  queued research results and pre-draft artifacts while an `AskUserQuestion` is
+  outstanding — the kestrel session's #1 sink (57% of wall-clock) lives in the
+  brainstorming skill, not SDD.
 - **Deterministic Workflow-engine core** (Approach C): encode the per-task chain as a
   harness Workflow/pipeline script — zero control-loop turns between stages. Revisit
   once captain-mode latency data exists.
@@ -190,5 +277,12 @@ trail is mandatory, not optional):
   pi variants — add *Suggested patch* block; dispatch-context now the captain.
 - `skills/subagent-driven-development/assets/codex-adversarial-prompt.md` + pi variant —
   diff-threshold note; dispatch-context now the captain.
-- `skills/writing-plans/SKILL.md` — `risk: logic` rationale requirement.
-- `skills/writing-plans/plan-document-reviewer-prompt.md` — check risk rationales.
+- `skills/writing-plans/SKILL.md` — `risk: logic` rationale requirement; cohesion-aware
+  partitioning + hub-file isolation in the File Structure pass; vertical-slice
+  discipline; `scope.never_touch` field; single-implementer fast-path gate.
+- `skills/writing-plans/plan-document-reviewer-prompt.md` — check risk rationales,
+  never-touch coverage, and partition cohesion.
+- `skills/subagent-driven-development/assets/implementer-prompt.md` + pi variant —
+  contract-first stub commit rule for tasks with dependents.
+- `skills/using-git-worktrees/SKILL.md` (or SDD mode mechanics) — pooled worktree
+  reuse/reset + copy-on-write dependency sharing.
