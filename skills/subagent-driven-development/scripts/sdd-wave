@@ -1,0 +1,249 @@
+#!/usr/bin/env python3
+"""Create SDD task worktrees and audit their serialized merge lane."""
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def emit(payload: dict[str, Any]) -> None:
+    """Write one deterministic JSON result to stdout."""
+    print(json.dumps(payload, sort_keys=True))
+
+
+def run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """Run git in *repo* without hiding its result."""
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+    )
+
+
+def safe_component(value: str, flag: str) -> str:
+    """Validate one component of the fixed sdd/<run>/<task> ref."""
+    if not SAFE_COMPONENT.fullmatch(value) or value.endswith(".") or ".." in value:
+        raise ValueError(f"{flag} must be a safe single branch component")
+    return value
+
+
+def create_worktree(args: argparse.Namespace) -> int:
+    """Create one task worktree and run its baseline command."""
+    repo = Path(args.repo).resolve()
+    if not repo.is_dir():
+        raise ValueError(f"repository does not exist: {repo}")
+    run_slug = safe_component(args.run_slug, "--run-slug")
+    task_id = safe_component(args.task_id, "--task-id")
+    branch = f"sdd/{run_slug}/{task_id}"
+    parent = Path(args.worktree_dir).resolve()
+    parent.mkdir(parents=True, exist_ok=True)
+    worktree = parent / f"{run_slug}-{task_id}"
+
+    added = run_git(repo, "worktree", "add", "-b", branch, str(worktree), args.base)
+    if added.returncode != 0:
+        emit({
+            "status": "fail",
+            "stage": "worktree-add",
+            "branch": branch,
+            "worktree": str(worktree),
+            "exit_code": added.returncode,
+            "stdout": added.stdout,
+            "stderr": added.stderr,
+        })
+        return 1
+
+    baseline = subprocess.run(
+        args.baseline_cmd,
+        cwd=worktree,
+        shell=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = {
+        "status": "pass" if baseline.returncode == 0 else "fail",
+        "stage": "baseline",
+        "branch": branch,
+        "worktree": str(worktree),
+        "exit_code": baseline.returncode,
+        "stdout": baseline.stdout,
+        "stderr": baseline.stderr,
+    }
+    emit(payload)
+    return 0 if baseline.returncode == 0 else 1
+
+
+def read_scope(args: argparse.Namespace) -> tuple[list[str], list[str]]:
+    """Combine repeatable scope flags with an optional JSON scope."""
+    allowed = list(args.scope_file)
+    forbidden = list(args.never_touch)
+    if args.scope_json:
+        path = Path(args.scope_json)
+        if not path.is_file():
+            raise ValueError(f"missing scope JSON: {path}")
+        try:
+            scope = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"cannot read scope JSON {path}: {exc}") from exc
+        if not isinstance(scope, dict):
+            raise ValueError("scope JSON must be an object")
+        for key, target in (("files", allowed), ("never_touch", forbidden)):
+            values = scope.get(key, [])
+            if not isinstance(values, list) or not all(isinstance(item, str) for item in values):
+                raise ValueError(f"scope.{key} must be an array of strings")
+            target.extend(values)
+    return allowed, forbidden
+
+
+def path_matches(path: str, rule: str) -> bool:
+    """Match an exact path, directory prefix, or shell-style path pattern."""
+    normalized_path = path.removeprefix("./")
+    normalized_rule = rule.removeprefix("./").rstrip("/")
+    if not normalized_rule:
+        return False
+    return (
+        normalized_path == normalized_rule
+        or normalized_path.startswith(normalized_rule + "/")
+        or fnmatch.fnmatchcase(normalized_path, normalized_rule)
+    )
+
+
+def audit_paths(
+    changed: list[str],
+    allowed: list[str],
+    forbidden: list[str],
+) -> list[dict[str, str]]:
+    """Return deterministic scope violations; forbidden rules are absolute."""
+    violations: list[dict[str, str]] = []
+    for path in sorted(changed):
+        if any(path_matches(path, rule) for rule in forbidden):
+            violations.append({"path": path, "reason": "never_touch"})
+        elif not any(path_matches(path, rule) for rule in allowed):
+            violations.append({"path": path, "reason": "outside_scope"})
+    return violations
+
+
+def merge_lane(args: argparse.Namespace) -> int:
+    """Audit a task diff, then merge and remove its worktree only on pass."""
+    repo = Path(args.repo).resolve()
+    if not repo.is_dir():
+        raise ValueError(f"repository does not exist: {repo}")
+    allowed, forbidden = read_scope(args)
+    head = args.head or args.task_branch
+    diff = run_git(repo, "diff", "--name-only", f"{args.base}..{head}", "--")
+    if diff.returncode != 0:
+        emit({
+            "status": "fail",
+            "stage": "diff",
+            "violations": [],
+            "exit_code": diff.returncode,
+            "stdout": diff.stdout,
+            "stderr": diff.stderr,
+        })
+        return 1
+
+    changed = [line for line in diff.stdout.splitlines() if line]
+    violations = audit_paths(changed, allowed, forbidden)
+    if violations:
+        emit({
+            "status": "fail",
+            "stage": "scope-audit",
+            "changed": sorted(changed),
+            "violations": violations,
+        })
+        return 1
+
+    merged = run_git(repo, "merge", "--no-ff", "--no-edit", args.task_branch)
+    if merged.returncode != 0:
+        emit({
+            "status": "fail",
+            "stage": "merge",
+            "changed": sorted(changed),
+            "violations": [],
+            "exit_code": merged.returncode,
+            "stdout": merged.stdout,
+            "stderr": merged.stderr,
+        })
+        return 1
+
+    removed = run_git(repo, "worktree", "remove", str(Path(args.worktree).resolve()))
+    if removed.returncode != 0:
+        emit({
+            "status": "fail",
+            "stage": "worktree-remove",
+            "changed": sorted(changed),
+            "violations": [],
+            "exit_code": removed.returncode,
+            "stdout": removed.stdout,
+            "stderr": removed.stderr,
+        })
+        return 1
+
+    emit({
+        "status": "pass",
+        "stage": "complete",
+        "changed": sorted(changed),
+        "violations": [],
+        "branch": args.task_branch,
+        "worktree": str(Path(args.worktree).resolve()),
+    })
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Create task worktrees or scope-audit and merge a completed lane.",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    create = subparsers.add_parser(
+        "create",
+        help="create <worktree-dir>/<run-slug>-<task-id> on sdd/<run-slug>/<task-id>",
+    )
+    create.add_argument("--repo", required=True, help="parent Git repository")
+    create.add_argument("--run-slug", required=True)
+    create.add_argument("--task-id", required=True)
+    create.add_argument("--base", required=True, help="branch or SHA to fork")
+    create.add_argument("--worktree-dir", required=True, help="parent directory for worktrees")
+    create.add_argument(
+        "--baseline-cmd",
+        default="git status --short",
+        help="shell command run inside the new worktree (default: git status --short)",
+    )
+    create.set_defaults(handler=create_worktree)
+
+    merge = subparsers.add_parser(
+        "merge-lane",
+        help="audit base..head, then --no-ff merge and remove the task worktree",
+    )
+    merge.add_argument("--repo", required=True, help="repository whose current branch receives the merge")
+    merge.add_argument("--base", required=True, help="diff base SHA or ref")
+    merge.add_argument("--task-branch", required=True, help="branch to merge")
+    merge.add_argument("--head", help="diff head (defaults to --task-branch)")
+    merge.add_argument("--worktree", required=True, help="task worktree removed after merge")
+    merge.add_argument("--scope-json", help='JSON object with "files" and "never_touch" arrays')
+    merge.add_argument("--scope-file", action="append", default=[], help="allowed path/pattern (repeatable)")
+    merge.add_argument("--never-touch", action="append", default=[], help="forbidden path/pattern (repeatable)")
+    merge.set_defaults(handler=merge_lane)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        return args.handler(args)
+    except (OSError, ValueError) as exc:
+        print(f"sdd-wave: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
