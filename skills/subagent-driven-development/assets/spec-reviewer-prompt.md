@@ -84,7 +84,7 @@ Task tool (general-purpose):
     - ✅ Spec compliant (if everything matches after code inspection)
     - ❌ Issues found: [list specifically what's missing or extra, with file:line references]
     - Suggested patch: [required unified diff for each eligible finding; no patch for
-      CRITICAL or judgment-requiring findings]
+      judgment-requiring findings]
     - Contract confirmation: [for each exported `CONTRACT:`/`SCHEMA:` block in the task, state
       whether it is implemented as specified, or "N/A — task declares no exported contracts"]
 ```

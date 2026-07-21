@@ -67,7 +67,7 @@ Parse pi's stdout for that marker and any per-finding `Suggested patch` content.
 captain (or the orchestrator acting as fallback dispatcher) may apply an accepted eligible patch
 only after enforcing the roughly-20-changed-line cap, confirming its paths are within
 `scope.files` and outside `scope.never_touch`, and running `git apply --check` against the
-current tree. CRITICAL and judgment-requiring findings have no patch and route to the fix worker.
+current tree. Judgment-requiring findings have no patch and route to the fix worker.
 The reviewer only proposes patch text; it never applies a patch or edits files. Apply the same
 review-loop handling as the Claude path (SKILL.md → The Process).
 

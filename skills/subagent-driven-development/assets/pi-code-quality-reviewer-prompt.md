@@ -87,7 +87,7 @@ for that structure. Findings are returned to the task captain for fan-in and adj
 alongside the other reviewers applicable to the task's risk tier (or to the orchestrator when it
 is acting as fallback dispatcher). The captain may apply an accepted eligible patch directly only
 after enforcing the roughly-20-changed-line cap, running `git apply --check`, and confirming all
-paths are within `scope.files` and outside `scope.never_touch`; CRITICAL and judgment-requiring
+paths are within `scope.files` and outside `scope.never_touch`; Critical and judgment-requiring
 findings route to the fix worker. The reviewer only proposes patches and never applies them.
 There is no per-reviewer fix loop (SKILL.md → Per-task review chain).
 
