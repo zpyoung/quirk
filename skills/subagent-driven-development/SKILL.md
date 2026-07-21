@@ -310,10 +310,12 @@ candidate SHA, rather than a later resampling of shared `HEAD` after a sibling c
 
 #### TEAM (rare, opt-in via `cooperative: true`)
 
-Create the team, then dispatch one captain per task in one turn. Captains may use the team's
-TaskList/SendMessage channel for the live negotiation the plan requested, while each captain
-still owns its task's complete Phase 1 chain and report artifacts. Delete the team after all
-captains reach `CHAIN_COMPLETE` or are parked and the wave integration gate has run.
+Create the team, then dispatch one captain per task in one turn. Captains must not use the
+team's TaskList/SendMessage channel to message each other directly — the run-wide `run.jsonl`
+decisions log remains the only sanctioned cross-captain read surface, and control flow stays
+orchestrator-mediated, same as every other mode. Each captain still owns its task's complete
+Phase 1 chain and report artifacts. Delete the team after all captains reach `CHAIN_COMPLETE` or
+are parked and the wave integration gate has run.
 
 ### Captain dispatch, Phase 1 merge lane, and audit
 
