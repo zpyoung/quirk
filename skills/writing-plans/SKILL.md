@@ -202,7 +202,7 @@ Every task follows this template. Use the captain-mode declarations required by 
 
 Notice what the template does NOT contain: no test body, no implementation body. Each step states behavior, contract, and acceptance — the implementor writes the code. The only code blocks are tagged exceptions (`CONTRACT:`, `COMMAND:`).
 
-The task's **Acceptance:** field MUST contain one or more literal, copy-runnable commands with every flag fixed, plus the expected result. Never substitute prose such as "run the relevant tests" or a description of what someone should check; captain and orchestrator must be able to execute exactly the same command without choosing different flags.
+The task's **Acceptance:** field MUST contain one or more literal, copy-runnable commands with every flag fixed, plus the expected result. Never substitute prose such as "run the relevant tests" or a description of what someone should check; captain and orchestrator must be able to execute exactly the same command without choosing different flags. This prevents the first dogfood run's real captain-vs-orchestrator acceptance-grep flag mismatch, where the two ran the same check with different flags and got different pass/fail results.
 
 ````markdown
 ### Task N: Daily metrics summary
