@@ -93,11 +93,13 @@ skills/subagent-driven-development/scripts/sdd-dispatch \
   --timeout "${CLAUDE_TIMEOUT:-900}"
 ```
 
-The wrapper hard-fails if the prompt is absent, streams output into `worker.out` and
-`worker.err`, kills the child process group on timeout while preserving partial files, and always
-writes `meta.json` with timestamps, exit code, and the resolved triple. Exercise the adapter plus
-wrapper during the capability probe with a no-tools sentinel prompt and short timeout; require
-exit code 0, the sentinel in persisted `worker.out`, a valid `meta.json`, and no surviving child.
+The wrapper hard-fails if the prompt is absent, reserves a monotonic `attempt-<n>` below the
+role-keyed output directory, streams output into that attempt's `worker.out` and `worker.err`,
+kills the full descendant set on timeout while preserving partial files, and always writes that
+attempt's `meta.json` with timestamps, exit code, and the resolved triple. Exercise the adapter
+plus wrapper during the capability probe with a no-tools sentinel prompt and short timeout;
+require exit code 0, the sentinel in persisted `worker.out`, a valid `meta.json`, and no surviving
+child.
 Exit 124 is a timeout; any nonzero code, missing artifact/result, or surviving child is launcher
 failure, never PASS. If neither nested nor headless dispatch works, record an `ESCALATION`; only
 the top orchestrator may select the documented flat-chain fallback, and neither it nor the
@@ -271,14 +273,15 @@ and rerere with `rerere.autoUpdate` off. None is active in this template.
 
 Write artifacts **as produced**, never only while composing the final reports. Use external
 run scratch, not the repository or any worktree. `scripts/sdd-dispatch` owns each command-line
-role's streamed `worker.out`, `worker.err`, and `meta.json`; the role/captain owns its structured
-report file:
+role's monotonic attempt directory and its streamed `worker.out`, `worker.err`, and `meta.json`;
+the role/captain owns its structured report file. Retries always allocate the next attempt and
+never replace prior evidence:
 
 ```text
 <scratch>/run.jsonl
-<scratch>/<task-id>/dispatch/<role>/worker.out
-<scratch>/<task-id>/dispatch/<role>/worker.err
-<scratch>/<task-id>/dispatch/<role>/meta.json
+<scratch>/<task-id>/dispatch/<role>/attempt-<n>/worker.out
+<scratch>/<task-id>/dispatch/<role>/attempt-<n>/worker.err
+<scratch>/<task-id>/dispatch/<role>/attempt-<n>/meta.json
 <scratch>/<task-id>/implementer.out
 <scratch>/<task-id>/reviews/spec.out
 <scratch>/<task-id>/reviews/quality.out

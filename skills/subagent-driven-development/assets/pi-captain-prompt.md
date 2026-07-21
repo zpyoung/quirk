@@ -197,14 +197,16 @@ trailing-fix micro-branches, and guarded auto-resolution/quarantine. **Phase 3 (
 ## Durable Artifacts
 
 Write artifacts **as produced**, never only when formatting reports. They live in external run
-scratch, never in the repository/worktree. `scripts/sdd-dispatch` owns each role's streamed
-`worker.out`, `worker.err`, and `meta.json`; the worker/captain owns its structured report file:
+scratch, never in the repository/worktree. `scripts/sdd-dispatch` owns each role's monotonic
+attempt directory and its streamed `worker.out`, `worker.err`, and `meta.json`; the worker/captain
+owns its structured report file. Every mandated retry allocates the next attempt and preserves
+all earlier evidence:
 
 ```text
 <scratch>/run.jsonl
-<scratch>/<task-id>/dispatch/<role>/worker.out
-<scratch>/<task-id>/dispatch/<role>/worker.err
-<scratch>/<task-id>/dispatch/<role>/meta.json
+<scratch>/<task-id>/dispatch/<role>/attempt-<n>/worker.out
+<scratch>/<task-id>/dispatch/<role>/attempt-<n>/worker.err
+<scratch>/<task-id>/dispatch/<role>/attempt-<n>/meta.json
 <scratch>/<task-id>/implementer.out
 <scratch>/<task-id>/reviews/spec.out
 <scratch>/<task-id>/reviews/quality.out
@@ -288,11 +290,13 @@ the risk-applicable reviewers after `IMPLEMENTER_DONE`, and launch `fix` only wh
 requires it. Reviewer wrappers may run in the background only as one supervised batch whose PIDs
 are all waited before the captain turn can end.
 
-`sdd-dispatch` hard-fails on a missing prompt, passes the exact pinned triple, tees stdout and
-stderr into role-specific `worker.out`/`worker.err` as they stream, preserves partial files on
-timeout, and always writes `meta.json`. After every wait, inspect `meta.json` and read the
-persisted worker report file. Wrapper stdout/final text is only a completion signal/tee, never
-report transport. A nonzero `meta.json` exit code or missing report is not PASS.
+`sdd-dispatch` hard-fails on a missing prompt, passes the exact pinned triple, reserves a
+monotonic `attempt-<n>` below the role-specific output directory, tees stdout and stderr into
+that attempt's `worker.out`/`worker.err` as they stream, preserves partial files on timeout, and
+always writes that attempt's `meta.json`. After every wait, inspect the newly allocated attempt's
+`meta.json` and read the persisted worker report file. Wrapper stdout/final text is only a
+completion signal/tee, never report transport. A nonzero `meta.json` exit code or missing report
+is not PASS.
 
 Apply **quirk:pi-dev** failure signatures to the persisted artifacts; this template states the
 captain policy rather than re-deriving those signatures:

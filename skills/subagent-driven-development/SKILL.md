@@ -327,8 +327,9 @@ task/role-keyed names and hard-fail if either is absent. Include task/Contract, 
 acceptance, explicit risk/rationale, execution mode, worktree, required `FORK_SHA`, explicit
 base/HEAD SHAs, rules/fences, launcher selection, and pinned pi triples where applicable.
 Command-line launches go through `scripts/sdd-dispatch`, producing streamed `worker.out`,
-`worker.err`, and `meta.json` artifacts. Dispatch all captains in **one top-orchestrator turn per
-wave**. Captains persist worker outputs, timestamps, adjudication, ledger, events, and milestone
+`worker.err`, and `meta.json` artifacts in monotonic per-role `attempt-<n>` directories so retries
+preserve earlier evidence. Dispatch all captains in **one top-orchestrator turn per wave**.
+Captains persist worker outputs, timestamps, adjudication, ledger, events, and milestone
 reports as produced; if one dies, adopt the orphaned chain from those artifacts and resume or
 park it.
 
@@ -533,8 +534,9 @@ first dogfood run.
   internal transitions do not wait on prompt assembly.
 - **Use the hardened wrapper.** Route command-line worker dispatch through
   `scripts/sdd-dispatch --prompt <path> ...`; it hard-fails on an absent prompt, resolves the
-  run-pinned triple, streams stdout/stderr to artifact files, preserves partial output on
-  timeout, and records the exit code/timestamps/triple in `meta.json`. Never fall back to a
+  run-pinned triple, streams stdout/stderr to a newly allocated per-role `attempt-<n>` artifact
+  directory, preserves partial output and every prior attempt on timeout/retry, and records the
+  exit code/timestamps/triple in that attempt's `meta.json`. Never fall back to a
   placeholder (`cat prompt.md || echo MISSING` piped into a live dispatch); a garbage prompt
   burns a full worker round-trip and is far more expensive than failing fast. Read the report
   artifact after completion; wrapper stdout is only a completion signal/tee, never report
