@@ -17,8 +17,9 @@ The dispatch must provide a provenance-bearing **context manifest**, not a bare 
 - applicable `CLAUDE.md` rules and tech-spec DO-NOT-CHANGE fences;
 - an external run-scratch directory; and
 - the per-role **pinned** `provider/model:thinking` triples for captain, implementer, spec
-  reviewer, quality reviewer, Codex reviewer, and fix worker. The top orchestrator resolved each
-  alias once at run start using `pi-watch --check` / `--list-aliases`.
+  reviewer, quality reviewer, Codex reviewer, fix worker, and merge resolver. Before the first
+  dispatch, the top orchestrator capability-probed canonical `pi-watch`, then resolved each alias
+  once at run start using `pi-watch --check` / `--list-aliases`.
 
 These are authoritative inputs. Do **not** re-derive the manifest, silently default `risk`, or
 run alias resolution inside this captain. Read source documents on demand only when the manifest
@@ -50,8 +51,9 @@ Run this chain without a top-orchestrator turn between stages:
    is safely mechanical (otherwise `Suggested patch: none — judgment required`).
 4. **Adjudicate.** Normalize severities to `CRITICAL | HIGH | MEDIUM | LOW`, assign stable IDs
    (`F1`, `F2`, ...), and accept/reject every finding against the task Contract, verified
-   codebase behavior, and locked decisions. Append one-line reasoning for every decision to the
-   adjudication log. The implementer never adjudicates its own work.
+   codebase behavior, and locked decisions. Append one-line reasoning in a machine-readable
+   record such as `F1 | reviewer | normalized-severity | ACCEPT/REJECT | reason | patch-status`.
+   The implementer never adjudicates its own work.
 5. **Fix economically.** Apply a reviewer-attached patch directly only for an accepted
    LOW/MEDIUM or mechanical-HIGH finding and only if it changes at most 20 lines,
    `git apply --check` succeeds, every path is within `scope.files` and outside
@@ -81,11 +83,12 @@ Run this chain without a top-orchestrator turn between stages:
 
 ### Exception routing
 
-For `NEEDS_CONTEXT`, derive the answer first from the supplied spec/Contract and codebase. If it
-is truly underivable, make the most conservative assumption, append it to the ledger and report,
-and continue only when it can be verified. Otherwise emit a structured `ESCALATION` to the top
-orchestrator containing task ID, class, finding IDs/evidence, attempted resolution, safest next
-action, pinned role/triple involved where relevant, and artifact paths.
+For `NEEDS_CONTEXT`, derive the answer first from the supplied spec/Contract and codebase;
+record the derived answer and continue. If it is truly underivable, make the most conservative
+assumption, append it to the ledger and report, and continue only when it can be verified. If
+neither path is safe, emit a structured `ESCALATION` to the top orchestrator containing task ID,
+class, finding IDs/evidence, attempted resolution, safest next action, pinned role/triple
+involved where relevant, and artifact paths.
 
 Classify every exception with this exhaustive table; unknown classes take the default row. The
 table's auto-resolution outcomes and verify-or-quarantine gate are **Phase 2 (future)**. In
@@ -115,8 +118,8 @@ unavailable, missing, or inconclusive verification yields `QUARANTINED`, never d
 Use only this closed vocabulary.
 
 **Phase 1 milestones:** after the full chain is green, emit `MERGE_READY` and
-`CHAIN_COMPLETE` **together**, in that order, at chain end. This keeps the schema
-forward-compatible without activating Phase 2's temporal separation.
+`CHAIN_COMPLETE` **together to the top orchestrator**, in that order, at chain end. This keeps
+the schema forward-compatible without activating Phase 2's temporal separation.
 
 - `MERGE_READY`: task ID, exact candidate SHA (`git rev-parse HEAD` after every Phase 1 fix),
   fork/base SHA, effective risk tier, readiness evidence, acceptance/build results, and the
@@ -126,14 +129,28 @@ forward-compatible without activating Phase 2's temporal separation.
 - `CHAIN_COMPLETE`: task ID/candidate SHA, final PASS/resolved state, per-stage timestamps,
   ledger entries, reviewer-output paths, and adjudication artifact path.
 
-**Progress events:** `IMPLEMENTER_DONE` is a live internal Phase 1 signal and is persisted; it is
-not a speculative fork invitation. `STUB_READY` and `REBASE_REQUEST` are reserved for Phase 3 and
-Phase 2 respectively, and must not be emitted or acted on in Phase 1.
+**Progress events:**
 
-**Exception events:** `ESCALATION` is live and load-bearing in Phase 1 and follows the routing
-table. `READINESS_REVOKED`, `CONTRACT_CORRECTED`, and `BRANCH_REQUEST` are reserved for the
-Phase 2/3 trailing-review, dependent-recheck, and trailing-fix protocols; document but do not
-emit or act on them in Phase 1.
+- `IMPLEMENTER_DONE` is a live internal Phase 1 signal and is persisted, not sent as permission
+  for speculative branching.
+- `STUB_READY` is **Phase 3 (future)**. A contract-stub commit is branchable only when its
+  signatures/schemas match the Contract, typecheck/build and baseline tests are green, and
+  callable placeholders fail explicitly as not implemented rather than returning plausible
+  fakes. If the gate cannot pass, publish only a non-branchable contract artifact and wait for
+  implementer DONE. Do not create or emit this commit/event in Phase 1.
+- `REBASE_REQUEST` is **Phase 2 (future)**: after the pre-merge chain it asks the serialized lane
+  to rebase and return an exact candidate SHA for fresh attestation. Do not emit it in Phase 1.
+
+**Exception events:**
+
+- `ESCALATION` is live and load-bearing in Phase 1 and follows the routing table.
+- `READINESS_REVOKED` is **Phase 2 (future)** and invalidates prior readiness after a late
+  CRITICAL/behavior finding.
+- `CONTRACT_CORRECTED` is **Phase 2/3 (future)** and taints dependents for contract/behavior
+  re-check after correction.
+- `BRANCH_REQUEST` is **Phase 2 (future)** and asks the lane for a trailing-fix micro-branch.
+
+Do not emit or act on the three future exception events in Phase 1.
 
 **Future compatibility only:** **Phase 2 (future)** separates merge-on-`MERGE_READY` from
 trailing `CHAIN_COMPLETE` through a candidate-SHA/rebase handshake, leased review worktrees,

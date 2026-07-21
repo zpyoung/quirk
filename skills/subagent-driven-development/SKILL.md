@@ -366,7 +366,11 @@ that mechanism to force a CRITICAL through its full-chain gate.
 `READINESS_REVOKED`, `CONTRACT_CORRECTED`, and `BRANCH_REQUEST` are documented in the captain
 templates for forward compatibility but are not active exception paths in Phase 1. Likewise,
 `STUB_READY` and `REBASE_REQUEST` are reserved progress events; only internal
-`IMPLEMENTER_DONE` is live, and it does not authorize speculative branching.
+`IMPLEMENTER_DONE` is live, and it does not authorize speculative branching. The **Phase 3
+(future)** `STUB_READY` gate requires Contract-matching signatures/schemas, green typecheck/build
+and baseline tests, and explicit not-implemented placeholder behavior (never plausible fakes);
+otherwise only a non-branchable contract artifact is published. The **Phase 2 (future)**
+`REBASE_REQUEST` asks the lane for the exact rebased candidate SHA before fresh attestation.
 
 ### Flat chain fallback
 
