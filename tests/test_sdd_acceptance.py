@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -78,6 +79,24 @@ def test_repeatable_cmd_preserves_shell_flags_and_uses_cwd(tmp_path: Path) -> No
     assert payload["results"][0]["command"] == command
     assert payload["results"][0]["stdout"] == "--fixed-string -e value\n"
     assert all(item["status"] == "pass" for item in payload["results"])
+
+
+def test_non_utf8_output_is_replaced_without_changing_command_status(
+    tmp_path: Path,
+) -> None:
+    command = (
+        f"{shlex.quote(sys.executable)} "
+        "-c \"import os; os.write(1, b'\\\\xff')\""
+    )
+
+    result = run_acceptance("--cmd", command, cwd=tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "pass"
+    assert payload["results"][0]["status"] == "pass"
+    assert payload["results"][0]["exit_code"] == 0
+    assert payload["results"][0]["stdout"] == "\ufffd"
 
 
 def test_requires_a_manifest_or_at_least_one_command(tmp_path: Path) -> None:

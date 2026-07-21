@@ -90,6 +90,24 @@ def test_create_reports_baseline_failure(tmp_path: Path) -> None:
     assert Path(payload["worktree"]).exists()
 
 
+def test_create_requires_an_explicit_baseline_command(tmp_path: Path) -> None:
+    repo, base = make_repo(tmp_path)
+
+    result = run_wave(
+        "create",
+        "--repo", str(repo),
+        "--run-slug", "no-baseline",
+        "--task-id", "T3",
+        "--base", base,
+        "--worktree-dir", str(tmp_path / "worktrees"),
+        cwd=tmp_path,
+    )
+
+    assert result.returncode == 2
+    assert "--baseline-cmd" in result.stderr
+    assert not git(repo, "branch", "--list", "sdd/no-baseline/T3")
+
+
 def test_merge_lane_never_touch_wins_and_preserves_branch(tmp_path: Path) -> None:
     repo, base = make_repo(tmp_path)
     git(repo, "switch", "-c", "sdd/audit/T3")
@@ -135,6 +153,7 @@ def test_merge_lane_merges_only_after_scope_pass_and_tears_down(tmp_path: Path) 
         "--task-id", "T4",
         "--base", base,
         "--worktree-dir", str(tmp_path / "worktrees"),
+        "--baseline-cmd", "true",
         cwd=tmp_path,
     )
     assert create.returncode == 0, create.stderr
@@ -162,3 +181,24 @@ def test_merge_lane_merges_only_after_scope_pass_and_tears_down(tmp_path: Path) 
     assert (repo / "allowed.txt").read_text() == "task change\n"
     assert len(git(repo, "log", "-1", "--pretty=%P").split()) == 2
     assert not worktree.exists()
+
+
+def test_merge_lane_rejects_an_independent_diff_head(tmp_path: Path) -> None:
+    repo, base = make_repo(tmp_path)
+    retained = tmp_path / "retained-worktree"
+    retained.mkdir()
+
+    result = run_wave(
+        "merge-lane",
+        "--repo", str(repo),
+        "--base", base,
+        "--task-branch", "main",
+        "--head", "different-ref",
+        "--worktree", str(retained),
+        "--scope-file", "allowed.txt",
+        cwd=tmp_path,
+    )
+
+    assert result.returncode == 2
+    assert "unrecognized arguments: --head" in result.stderr
+    assert retained.exists()

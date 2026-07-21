@@ -9,12 +9,13 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO, TextIO
 
 TIMEOUT_EXIT_CODE = 124
-LAUNCH_GRACE_SECONDS = 1.0
+TIMEOUT_GRACE_SECONDS = 0.25
 
 
 def utc_now() -> str:
@@ -42,6 +43,11 @@ def load_triple(
         if not isinstance(config, dict) or not isinstance(config.get(role), dict):
             raise ValueError(f"config has no triple for role: {role}")
         resolved.update(config[role])
+        if any(value is not None for value in overrides.values()):
+            raise ValueError(
+                "direct --provider/--model/--thinking flags cannot be combined "
+                "with --config/--role"
+            )
     elif role is not None:
         raise ValueError("--config and --role must be supplied together")
 
@@ -66,7 +72,10 @@ def copy_stream(source: BinaryIO, artifact: BinaryIO, console: TextIO) -> None:
     """Copy a child stream to an artifact and the corresponding console."""
     console_buffer = getattr(console, "buffer", None)
     while True:
-        chunk = os.read(source.fileno(), 4096)
+        try:
+            chunk = os.read(source.fileno(), 4096)
+        except (OSError, ValueError):
+            break
         if not chunk:
             break
         artifact.write(chunk)
@@ -103,6 +112,13 @@ def stop_process(proc: subprocess.Popen[bytes]) -> None:
     proc.wait()
 
 
+def remaining_time(deadline: float | None) -> float | None:
+    """Return the non-negative budget remaining before *deadline*."""
+    if deadline is None:
+        return None
+    return max(0.0, deadline - time.monotonic())
+
+
 def output_paths(prompt: Path, out_dir: str | None) -> tuple[Path, Path, Path]:
     """Return stdout, stderr, and metadata artifact paths."""
     if out_dir is not None:
@@ -134,7 +150,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tools", default="read,bash", help="dispatcher --tools value")
     parser.add_argument("--dispatcher", default="pi-watch", help="dispatcher executable (default: pi-watch)")
     parser.add_argument("--out-dir", help="artifact directory")
-    parser.add_argument("--timeout", type=float, help="maximum worker runtime in seconds")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        help=(
+            "maximum worker runtime in seconds "
+            f"(plus up to {TIMEOUT_GRACE_SECONDS:g}s launch/pipe-drain grace)"
+        ),
+    )
     return parser
 
 
@@ -199,34 +222,43 @@ def main(argv: list[str] | None = None) -> int:
             stderr_artifact.flush()
             sys.stderr.write(message)
         else:
-            assert proc.stdout is not None
-            assert proc.stderr is not None
-            readers = [
-                threading.Thread(
-                    target=copy_stream,
-                    args=(proc.stdout, stdout_artifact, sys.stdout),
-                    daemon=True,
-                ),
-                threading.Thread(
-                    target=copy_stream,
-                    args=(proc.stderr, stderr_artifact, sys.stderr),
-                    daemon=True,
-                ),
-            ]
-            for reader in readers:
-                reader.start()
-            try:
-                timeout = (
+            with proc:
+                assert proc.stdout is not None
+                assert proc.stderr is not None
+                readers = [
+                    threading.Thread(
+                        target=copy_stream,
+                        args=(proc.stdout, stdout_artifact, sys.stdout),
+                        daemon=True,
+                    ),
+                    threading.Thread(
+                        target=copy_stream,
+                        args=(proc.stderr, stderr_artifact, sys.stderr),
+                        daemon=True,
+                    ),
+                ]
+                deadline = (
                     None
                     if args.timeout is None
-                    else args.timeout + LAUNCH_GRACE_SECONDS
+                    else time.monotonic() + args.timeout + TIMEOUT_GRACE_SECONDS
                 )
-                exit_code = proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                stop_process(proc)
-                exit_code = TIMEOUT_EXIT_CODE
-            for reader in readers:
-                reader.join()
+                for reader in readers:
+                    reader.start()
+
+                timed_out = False
+                try:
+                    exit_code = proc.wait(timeout=remaining_time(deadline))
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    stop_process(proc)
+
+                for reader in readers:
+                    reader.join(timeout=remaining_time(deadline))
+                if any(reader.is_alive() for reader in readers):
+                    timed_out = True
+                    stop_process(proc)
+                if timed_out:
+                    exit_code = TIMEOUT_EXIT_CODE
 
     meta = {
         "start": start,

@@ -136,8 +136,13 @@ def merge_lane(args: argparse.Namespace) -> int:
     if not repo.is_dir():
         raise ValueError(f"repository does not exist: {repo}")
     allowed, forbidden = read_scope(args)
-    head = args.head or args.task_branch
-    diff = run_git(repo, "diff", "--name-only", f"{args.base}..{head}", "--")
+    diff = run_git(
+        repo,
+        "diff",
+        "--name-only",
+        f"{args.base}..{args.task_branch}",
+        "--",
+    )
     if diff.returncode != 0:
         emit({
             "status": "fail",
@@ -214,19 +219,18 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--worktree-dir", required=True, help="parent directory for worktrees")
     create.add_argument(
         "--baseline-cmd",
-        default="git status --short",
-        help="shell command run inside the new worktree (default: git status --short)",
+        required=True,
+        help="gating shell command run inside the new worktree",
     )
     create.set_defaults(handler=create_worktree)
 
     merge = subparsers.add_parser(
         "merge-lane",
-        help="audit base..head, then --no-ff merge and remove the task worktree",
+        help="audit and --no-ff merge the task branch, then remove its worktree",
     )
     merge.add_argument("--repo", required=True, help="repository whose current branch receives the merge")
     merge.add_argument("--base", required=True, help="diff base SHA or ref")
-    merge.add_argument("--task-branch", required=True, help="branch to merge")
-    merge.add_argument("--head", help="diff head (defaults to --task-branch)")
+    merge.add_argument("--task-branch", required=True, help="branch to audit and merge")
     merge.add_argument("--worktree", required=True, help="task worktree removed after merge")
     merge.add_argument("--scope-json", help='JSON object with "files" and "never_touch" arrays')
     merge.add_argument("--scope-file", action="append", default=[], help="allowed path/pattern (repeatable)")
