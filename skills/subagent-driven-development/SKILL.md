@@ -5,11 +5,18 @@ description: Use when executing implementation plans with independent tasks in t
 
 # Subagent-Driven Development
 
-Execute plan by dispatching fresh subagent per task, with a review after each by every reviewer applicable to the task's risk tier — spec compliance, code quality, and Codex adversarial gap-finding for the default `logic` tier (full three-pass), fewer for `pattern`/`mechanical` — dispatched **concurrently**, then reconciled by the orchestrator through adjudication and a single consolidated fix.
+Execute a plan through one fresh **captain sub-orchestrator per task**. Each captain owns the
+complete Phase 1 chain—implementer, risk-scaled concurrent review, adjudication, consolidated
+fix, and targeted re-review—without returning to the top orchestrator between stages.
 
-**Why subagents:** You delegate tasks to specialized agents with isolated context. By precisely crafting their instructions and context, you ensure they stay focused and succeed at their task. They should never inherit your session's context or history — you construct exactly what they need. This also preserves your own context for coordination work.
+**Why captains:** Specialized workers still receive isolated, curated context, while a fresh
+captain removes the top-orchestrator turn from every internal stage. The top orchestrator keeps
+only runtime/plan gates, wave computation, captain dispatch, the serialized merge lane,
+adjudication spot-audits, the escalation ledger, and final whole-branch review.
 
-**Core principle:** Fresh subagent per task + concurrent review by all reviewers applicable to the task's risk tier (spec, quality, Codex adversarial — full three-pass for `logic` tasks — dispatched together) + orchestrator-adjudicated consolidated fix = high quality, fast iteration
+**Core principle:** one captain per task + one top-orchestrator dispatch turn per wave + the full
+pre-merge chain inside each captain = fresh context and conservative quality gates without
+stage-by-stage control-plane latency.
 
 ## When to Use
 
@@ -41,9 +48,9 @@ during execution (**Step 0a-pre**) if the work clears the complexity tier.
 
 **vs. Executing Plans (parallel session):**
 - Same session (no context switch)
-- Fresh subagent per task (no context pollution)
-- Review after each task by every reviewer applicable to the task's risk tier — spec compliance, code quality, Codex adversarial (full three-pass for `logic` tasks) — dispatched concurrently
-- Faster iteration (no human-in-loop between tasks)
+- Fresh captain and workers per task (no context pollution)
+- Full risk-scaled review chain remains pre-merge in Phase 1
+- Faster iteration (no human or top-orchestrator turn between internal task stages)
 
 ## Runtime Selection
 
@@ -51,32 +58,44 @@ during execution (**Step 0a-pre**) if the work clears the complexity tier.
 which to use via `AskUserQuestion`:
 
 > **Which agent runtime for this plan?**
-> - **Claude subagents** (default) — `Task` tool with general-purpose / quirk:code-reviewer agents
-> - **Pi agents** — `pi -p` headless dispatch with codex implementer + gemini reviewer
+> - **Claude subagents** (default) — captain via `Task`/tested nested dispatch, with a hardened
+>   headless `claude -p` fallback selected by capability probe
+> - **Pi agents** — captain and workers through canonical `pi-watch` dispatch
 
-The choice is locked once and applies uniformly to per-task implementer + per-task
-spec reviewer + per-task code-quality reviewer for the rest of the run.
-
-**The final whole-branch reviewer always uses the Claude `quirk:code-reviewer`
-agent**, regardless of choice — cross-task synthesis benefits from Claude's agent
-context, and pi has no equivalent role.
+The choice is locked once and applies uniformly to every per-task captain and its workers. The
+final whole-branch reviewer always uses Claude `Task` (`quirk:code-reviewer`), regardless of the
+choice; cross-task synthesis benefits from Claude's agent context and pi has no equivalent role.
 
 | Role | Claude path | Pi path |
 | --- | --- | --- |
-| Implementer | `Task` (general-purpose) + `assets/implementer-prompt.md` | `pi-watch --alias codex --thinking xhigh` + `assets/pi-implementer-prompt.md` |
-| Spec reviewer | `Task` (general-purpose) + `assets/spec-reviewer-prompt.md` | `pi-watch --alias gemini` + `assets/pi-spec-reviewer-prompt.md` |
-| Code-quality reviewer | `Task` (quirk:code-reviewer) + `assets/code-quality-reviewer-prompt.md` | `pi-watch --alias gemini` + `assets/pi-code-quality-reviewer-prompt.md` |
-| Codex adversarial reviewer | `mcp__pal__clink` (cli_name=`codex`, role=`codereviewer`) + `assets/codex-adversarial-prompt.md` | `pi-watch --alias codex --thinking xhigh` (`--tools read,bash`) + `assets/pi-codex-adversarial-prompt.md` |
-| Merge resolver (worktree mode only) | `Task` (general-purpose) + `assets/merge-resolver-prompt.md` | `pi-watch --alias codex --thinking xhigh` (`--tools read,bash,edit,write`) + `assets/pi-merge-resolver-prompt.md` |
+| Per-task captain | `assets/captain-prompt.md` via the probed nested/headless launcher | `assets/pi-captain-prompt.md` via canonical `pi-watch` |
+| Implementer | Captain dispatches `Task` (general-purpose) + `assets/implementer-prompt.md` | Captain dispatches pinned codex triple + `assets/pi-implementer-prompt.md` |
+| Spec reviewer | Captain dispatches `Task` (general-purpose) + `assets/spec-reviewer-prompt.md` | Captain dispatches pinned gemini triple + `assets/pi-spec-reviewer-prompt.md` |
+| Code-quality reviewer | Captain dispatches `Task` (quirk:code-reviewer) + `assets/code-quality-reviewer-prompt.md` | Captain dispatches pinned gemini triple + `assets/pi-code-quality-reviewer-prompt.md` |
+| Codex adversarial reviewer | Captain uses `mcp__pal__clink` + `assets/codex-adversarial-prompt.md` | Captain dispatches pinned codex triple + `assets/pi-codex-adversarial-prompt.md` |
+| Merge resolver (worktree mode only) | Top orchestrator dispatches `assets/merge-resolver-prompt.md` | Top orchestrator dispatches pinned triple + `assets/pi-merge-resolver-prompt.md` |
 | Final whole-branch reviewer | `Task` (quirk:code-reviewer) | `Task` (quirk:code-reviewer) — always Claude |
 
-`pi-watch` resolves each alias to the newest authed model in its fallback ladder (see
-**quirk:pi-dev**); no exact model id is pinned here — hard-pinning via `--provider`/`--model` is
-the documented exception, not the default.
+### Run-start pinning, launcher probe, and context manifests
 
-When the pi path is selected, **REQUIRED:** consult `quirk:pi-dev` for the
-canonical hardened dispatch recipe, failure-detection rules, and reviewer JSON
-parse fallback.
+Before the first dispatch, capability-probe the selected captain path. A probe selects an
+available launcher; it cannot create missing nested-dispatch capability. Prefer nested dispatch
+where supported. Otherwise use a tested hardened headless launcher with a bounded timeout,
+exit-code capture, framed output, signal-safe child cleanup, and no surviving child process. If
+neither can launch a captain, use the one-paragraph **Flat chain fallback** below.
+
+For the pi path, consult **quirk:pi-dev**, run `pi-watch --check` / `--list-aliases` **once at run
+start**, and record the resolved `provider/model:thinking` triple for every role. Pin those
+triples for the run. Every pi captain receives them as Inputs and uses explicit
+`--provider`/`--model`/`--thinking`; it never re-resolves an alias per dispatch. A runtime-failure
+re-resolution epoch, if the top orchestrator chooses one, is explicit and recorded rather than a
+silent mid-chain fallback.
+
+Every captain receives a provenance-bearing **context manifest**, not a bare packet: full task
+text, Contract, `scope.files`, `scope.never_touch`, applicable `CLAUDE.md` rules and tech-spec
+DO-NOT-CHANGE fences, acceptance commands, risk tier/rationale, worktree/scratch paths, relevant
+SHAs, selected launcher, and (pi path) the pinned role triples. Captains do not re-derive these
+inputs. Workers may still read source documents when the manifest proves insufficient.
 
 ## The Process
 
@@ -85,50 +104,34 @@ digraph process {
     rankdir=TB;
 
     "Ask: pi or Claude runtime?" [shape=diamond];
-    "author tech spec (if tier)" [shape=box];
-    "Read plan, extract tasks, compute waves" [shape=box];
-    "More waves remain?" [shape=diamond];
-    "Pick mode for next wave" [shape=box];
-    "Mode = SEQUENTIAL?" [shape=diamond];
-    "Mode = TEAM?" [shape=diamond];
-    "Mode = IN_PLACE_PARALLEL?" [shape=diamond];
-    "Run wave (one task, existing per-task loop)" [shape=box];
-    "Run wave (TeamCreate + parallel implementers + TaskList)" [shape=box];
-    "Run wave (multi Task calls in 1 turn, current branch)" [shape=box];
-    "Run wave (worktree per task, parallel implementers, rolling auto-merge)" [shape=box];
-    "Per-task: implementer -> concurrent review (by risk tier) -> consolidated fix" [shape=box];
-    "All waves complete?" [shape=diamond];
-    "Dispatch final whole-branch reviewer (Claude quirk:code-reviewer)" [shape=box];
+    "Capability probe; pin pi triples once" [shape=box];
+    "Author/review spec and plan" [shape=box];
+    "Compute waves and pick mode" [shape=box];
+    "Dispatch one captain per wave task in one turn" [shape=box];
+    "Captains run full Phase 1 chains internally" [shape=box];
+    "Receive paired MERGE_READY + CHAIN_COMPLETE" [shape=box];
+    "Spot-audit adjudication; serialized merge" [shape=box];
+    "More waves?" [shape=diamond];
+    "Final whole-branch reviewer (Claude)" [shape=box];
     "Use quirk:finishing-a-development-branch" [shape=box style=filled fillcolor=lightgreen];
 
-    "Ask: pi or Claude runtime?" -> "author tech spec (if tier)";
-    "author tech spec (if tier)" -> "Read plan, extract tasks, compute waves";
-    "Read plan, extract tasks, compute waves" -> "More waves remain?";
-    "More waves remain?" -> "Pick mode for next wave" [label="yes"];
-    "More waves remain?" -> "Dispatch final whole-branch reviewer (Claude quirk:code-reviewer)" [label="no"];
-    "Pick mode for next wave" -> "Mode = SEQUENTIAL?";
-    "Mode = SEQUENTIAL?" -> "Run wave (one task, existing per-task loop)" [label="yes"];
-    "Mode = SEQUENTIAL?" -> "Mode = TEAM?" [label="no"];
-    "Mode = TEAM?" -> "Run wave (TeamCreate + parallel implementers + TaskList)" [label="yes"];
-    "Mode = TEAM?" -> "Mode = IN_PLACE_PARALLEL?" [label="no"];
-    "Mode = IN_PLACE_PARALLEL?" -> "Run wave (multi Task calls in 1 turn, current branch)" [label="yes"];
-    "Mode = IN_PLACE_PARALLEL?" -> "Run wave (worktree per task, parallel implementers, rolling auto-merge)" [label="no (default: WORKTREE_PARALLEL)"];
-    "Run wave (one task, existing per-task loop)" -> "Per-task: implementer -> concurrent review (by risk tier) -> consolidated fix";
-    "Run wave (TeamCreate + parallel implementers + TaskList)" -> "Per-task: implementer -> concurrent review (by risk tier) -> consolidated fix";
-    "Run wave (multi Task calls in 1 turn, current branch)" -> "Per-task: implementer -> concurrent review (by risk tier) -> consolidated fix";
-    "Run wave (worktree per task, parallel implementers, rolling auto-merge)" -> "Per-task: implementer -> concurrent review (by risk tier) -> consolidated fix";
-    "Per-task: implementer -> concurrent review (by risk tier) -> consolidated fix" -> "All waves complete?";
-    "All waves complete?" -> "More waves remain?" [label="no, more"];
-    "All waves complete?" -> "Dispatch final whole-branch reviewer (Claude quirk:code-reviewer)" [label="yes"];
-    "Dispatch final whole-branch reviewer (Claude quirk:code-reviewer)" -> "Use quirk:finishing-a-development-branch";
+    "Ask: pi or Claude runtime?" -> "Capability probe; pin pi triples once";
+    "Capability probe; pin pi triples once" -> "Author/review spec and plan";
+    "Author/review spec and plan" -> "Compute waves and pick mode";
+    "Compute waves and pick mode" -> "Dispatch one captain per wave task in one turn";
+    "Dispatch one captain per wave task in one turn" -> "Captains run full Phase 1 chains internally";
+    "Captains run full Phase 1 chains internally" -> "Receive paired MERGE_READY + CHAIN_COMPLETE";
+    "Receive paired MERGE_READY + CHAIN_COMPLETE" -> "Spot-audit adjudication; serialized merge";
+    "Spot-audit adjudication; serialized merge" -> "More waves?";
+    "More waves?" -> "Compute waves and pick mode" [label="yes"];
+    "More waves?" -> "Final whole-branch reviewer (Claude)" [label="no"];
+    "Final whole-branch reviewer (Claude)" -> "Use quirk:finishing-a-development-branch";
 }
 ```
 
-`<runtime>` in asset paths is `` (empty) for the Claude path and `pi-` for the
-pi path. So the implementer template is `assets/implementer-prompt.md` (Claude)
-or `assets/pi-implementer-prompt.md` (pi); the Codex adversarial template is
-`assets/codex-adversarial-prompt.md` (Claude) or `assets/pi-codex-adversarial-prompt.md` (pi);
-and so on for spec reviewer, code-quality reviewer, and merge resolver.
+The Claude captain uses `assets/captain-prompt.md`; the pi captain uses
+`assets/pi-captain-prompt.md`. Those templates select the corresponding worker assets and are
+the authoritative home of the implementer → reviewers → adjudication → fix → re-review chain.
 
 ### Step 0: Runtime selection (above)
 
@@ -171,10 +174,12 @@ Unless a plan already exists (in this conversation, or as a persisted file hande
 
 1. Invoke **quirk:writing-plans** as the rubric, drafting from `tech.md` when Step 0a-pre
    authored or loaded one, else from `logic.md` / requirements. Draft the task breakdown — each
-   task with its Contract, Acceptance, and optional `independent` / `dependencies` /
-   `scope.files` / `cooperative` / `risk` fields — directly in this conversation **and into a
-   TodoWrite list** (one item per task). TodoWrite is the durable home for the breakdown; it
-   survives context compaction.
+   task with its Contract, Acceptance, optional `independent` / `dependencies` /
+   `scope.files` / `scope.never_touch` / `cooperative` fields, and a **required explicit**
+   `risk: logic | pattern | mechanical` plus one-line rationale — directly in this conversation
+   **and into a TodoWrite list** (one item per task). There is no silent risk default; omission or
+   weak downgrade rationale is a plan-review finding. TodoWrite is the durable home for the
+   breakdown; it survives context compaction.
 2. **Complexity-tier upgrade re-check.** Immediately after writing-plans' File Structure pass
    (part of step 1, above) reveals the real file count and task shape, re-check the
    complexity-tier gate against the actual scope — **before** Step 0a-review (plan review) and
@@ -203,10 +208,11 @@ the reviewer surfaces a genuine ambiguity you cannot resolve.
      per-dependency form `dependencies: [T1.contract, ...]` lets the dependent start once T1's
      *contract* is confirmed rather than waiting for T1's full chain (see Step 4 below); plain
      `T1` keeps the full wait.
-   - `scope.files: [path, ...]` — files this task is expected to touch
+   - `scope.files: [path, ...]` — files this task is allowed to touch
+   - `scope.never_touch: [path, ...]` — forbidden adjacent files; negative scope wins
    - `cooperative: true` — task needs live negotiation with other tasks in its wave (TEAM mode)
-   - `risk: logic | pattern | mechanical` — scales the review chain for this task; default
-     `logic`. See **Review depth by task risk**.
+   - `risk: logic | pattern | mechanical` — required, with a one-line rationale; scales the
+     review chain. No default is inferred. See **Review depth by task risk**.
 4. Topologically sort tasks by `dependencies`. A `.contract` dependency is satisfied — for
    wave-computation purposes — once the upstream task is COMMITTED and its spec-compliance
    review has confirmed the exported contracts (interfaces/signatures/schemas the dependent
@@ -247,208 +253,136 @@ the safe fallback for plans that haven't adopted the new format.
 
 ### Mode mechanics
 
-**Pi-runtime parallelism note.** Parallel pi workers must never edit OVERLAPPING files — the
-pi CLI has no sandbox, so two workers touching the same file will clobber each other's edits.
-Sharing a working directory is sanctioned ONLY under the orchestrator-commits fallback below, and
-only when the wave's tasks declared disjoint `scope.files`. Separately, `git worktree add` calls
-race on `.git/config.lock` and must be issued serially. Neither constraint is a reason to
-serialize the wave itself — both have a sanctioned parallel-safe pattern:
+For every mode, the top orchestrator builds each task's context manifest, stages the captain
+prompt outside the repository, and dispatches **one captain per task**. For a parallel wave all
+captains are launched in one message/control turn; there is no top-orchestrator turn between a
+captain's worker stages. The Claude path uses `assets/captain-prompt.md`; the pi path uses
+`assets/pi-captain-prompt.md` with the run-pinned triples.
 
-1. **WORKTREE_PARALLEL (preferred):** the orchestrator serially creates all of the wave's
-   worktrees up front (one `git worktree add` at a time, no lock race), then dispatches all
-   workers in parallel — one per worktree, each with its own working directory.
-2. **ORCHESTRATOR-COMMITS fallback for IN_PLACE_PARALLEL** (only when the wave's tasks declared
-   disjoint `scope.files`): workers edit and verify but do **not** run `git commit` themselves.
-   The orchestrator commits each task's declared `scope.files` **as soon as that task's
-   implementer reports DONE** — commits are serialized by the orchestrator (one `git commit` at a
-   time), so there is no lock race even though multiple workers share the directory. This gives
-   the review chain a stable target immediately (BASE_SHA/HEAD_SHA both exist) instead of waiting
-   for review to pass before there's anything to diff. The same immediate-commit rule applies to
-   the consolidated fix worker's changes later in the chain.
+Pi workers must never edit overlapping files in one working directory, and `git worktree add`
+operations remain serialized to avoid `.git/config.lock` races. These constraints choose the
+safe mode; they do not serialize independent captain chains.
 
 #### SEQUENTIAL
 
-Single Task call; existing per-task pipeline:
-implementer -> concurrent review by all reviewers applicable to the task's risk tier (spec ∥ quality ∥ Codex for the default `logic` tier) -> consolidated fix -> mark complete.
+Dispatch one captain for the singleton task. Width 1 uses the same captain state machine and
+paired report contract as parallel modes; it is not the degraded flat-chain fallback.
 
 #### IN_PLACE_PARALLEL
 
-1. Dispatch all wave implementers in **one message turn** via multiple
-   `Task` calls (or multiple `pi -p` invocations on the Pi path).
-2. All implementers operate on the current branch in the current worktree.
-3. As each implementer finishes, review by all reviewers applicable to its risk tier (spec ∥
-   quality ∥ Codex for the default `logic` tier, all dispatched in one message turn) fires
-   immediately — per-implementer, not wave-batched, and the applicable passes within a chain run
-   concurrently with each other rather than in sequence.
-4. By gate (Step 0c), in-place is only used when scopes are provably
-   disjoint at file level — concurrent edits to the same file cannot happen,
-   so the merge resolver is not invoked in this mode. If the gate is
-   somehow violated and an implementer reports a `git` conflict during
-   commit, abort the wave and escalate to the user (this is a gate bug,
-   not a normal flow).
+Dispatch all wave captains in one turn against the current worktree only when Step 0c proved
+file-level-disjoint `scope.files`. Captains enforce both positive and negative scope. If pi
+workers cannot commit safely from the shared directory, retain the orchestrator-commits
+coordinator: each captain's internal `IMPLEMENTER_DONE` signal queues only that task's declared
+files for an automated serialized commit before its reviews start. This is a git-lock
+coordination action, not a stage-by-stage top-orchestrator reasoning turn. Any overlap or commit
+conflict is a mode-gate defect: stop the wave and emit `ESCALATION`.
 
 #### WORKTREE_PARALLEL (default for 2+ independent tasks)
 
-1. For each task in the wave, create a worktree on a task-named branch via
-   **quirk:using-git-worktrees**. Branch naming convention:
-   `<parent-branch>/sdd/<task-id>`. **Exception:** a task that early-started against
-   `TN.contract` (Step 0b) branches from `TN`'s task branch at the contract-confirmed commit, not
-   from the parent branch.
-2. Dispatch all wave implementers in **one message turn**, each into its own
-   worktree.
-3. Per-task review chain (spec ∥ quality ∥ Codex, dispatched concurrently in
-   one message turn) runs **inside the worktree on the implementer's
-   commits**, before merge. Reviewers see clean, isolated diffs.
-4. When a task's chain reaches PASS, run **rolling auto-merge**:
-   `git merge --no-ff <branch>` from the parent branch. Merges are
-   sequential (one at a time) as tasks finish; there is no wave-level
-   barrier. **`.contract` dependents:** a task that early-started against `TN.contract` is
-   deferred here even after its own chain reaches PASS — its merge waits until `TN`'s branch has
-   passed its full review chain and merged first (early START is allowed, early MERGE is not).
-5. On true overlapping-hunk conflict during merge: dispatch the **merge
-   resolver** (`assets/merge-resolver-prompt.md` for Claude, `assets/pi-merge-resolver-prompt.md` for pi). Worktree is
-   preserved until resolution.
-   - On `Status: SUCCESS`: continue with the next branch in the rolling
-     merge sequence.
-   - On `Status: UNRESOLVABLE`: escalate to the user; preserve the worktree
-     and the conflicted state.
-6. After successful merge, tear down the worktree via
-   **quirk:using-git-worktrees**.
+1. Serialize worktree creation via **quirk:using-git-worktrees**, one isolated worktree per task.
+   Branches use `sdd/<run-slug>/<task-id>` (for example `sdd/kestrel/T1`), where `run-slug`
+   identifies this plan run. Never prefix the branch with the parent branch: an existing leaf
+   such as `refs/heads/main` conflicts with trying to create `refs/heads/main/sdd/...` in Git's
+   ref namespace. An explicit `.contract` dependency retains Step 0b's existing opt-in fork from
+   the upstream task branch at its contract-confirmed commit.
+2. Dispatch all wave captains in one top-orchestrator turn, one per worktree. Each captain runs
+   its complete pre-merge chain over isolated commits and writes durable scratch artifacts.
+3. As paired reports arrive, feed the task to the **Phase 1 serialized merge lane** below. An
+   explicit `.contract` dependent still cannot merge until its upstream full chain has completed
+   and the upstream has merged.
+4. Tear down a task worktree only after its `CHAIN_COMPLETE`/`MERGE_READY` pair passes audit and
+   its branch merges successfully. Preserve parked/conflicted worktrees.
 
 #### TEAM (rare, opt-in via `cooperative: true`)
 
-Adopts the persistent-team pattern: TeamCreate -> spawn all wave
-implementers in one message turn -> TaskList coordination -> SendMessage
-for cross-component negotiation -> TeamDelete after wave completes.
+Create the team, then dispatch one captain per task in one turn. Captains may use the team's
+TaskList/SendMessage channel for the live negotiation the plan requested, while each captain
+still owns its task's complete Phase 1 chain and report artifacts. Delete the team after all
+captains reach `CHAIN_COMPLETE` or are parked and the wave integration gate has run.
 
-Per-task review chain (all reviewers applicable to the task's risk tier, dispatched concurrently
-in one message turn) fires per implementer as each completes. This is the only mode where
-the "fresh subagent per task" guarantee is relaxed within a wave; the
-relaxation is justified only when tasks need live negotiation that the
-orchestrator cannot mediate after the fact.
+### Captain dispatch, Phase 1 merge lane, and audit
 
-### Per-task review chain (all modes)
+Before a wave launch, stage every captain prompt and manifest under external run scratch with
+task/role-keyed names and hard-fail if either is absent. Include task/Contract, both scope lists,
+acceptance, explicit risk/rationale, worktree, relevant SHAs, rules/fences, launcher selection,
+and pinned pi triples where applicable. Dispatch all captains in **one top-orchestrator turn per
+wave**. Captains persist worker outputs, timestamps, adjudication, ledger, and events as produced;
+if one dies, adopt the orphaned chain from those artifacts and resume or park it.
 
-Every task — regardless of mode — proceeds through:
+In **Phase 1**, a captain emits no milestone until its entire pre-merge chain is PASS/resolved.
+It then emits `MERGE_READY(candidate SHA + adjudication log)` and
+`CHAIN_COMPLETE(timestamps + ledger)` **together**. `MERGE_READY` readiness is tier-specific:
+`logic`/`pattern` requires spec-compliance PASS and a green build; `mechanical` requires declared
+acceptance evidence and a green build. Because the reports coincide in this phase, the merge
+lane accepts a task only after `CHAIN_COMPLETE`, verifies the branch still names the reported
+candidate SHA, and spot-audits the captain's adjudication log. The top orchestrator does not
+re-adjudicate every finding; it may reopen a questionable call, in which case the captain resumes
+and must return a new paired report before merge.
 
-```
-implementer (reports DONE)
-  -> dispatch spec compliance ∥ code quality ∥ Codex adversarial reviewers,
-     ALL IN ONE MESSAGE TURN (concurrent — independent read-only passes over
-     the same commits; existing — Task general-purpose / pi gemini, Task
-     quirk:code-reviewer / pi gemini, PAL clink codex / pi codex)
-  -> orchestrator adjudicates findings across all three reports
-  -> dispatch ONE consolidated fix worker with the union of accepted findings
-     (skip this step entirely if no findings were accepted)
-  -> re-review: re-dispatch only the reviewer(s) whose accepted findings were
-     CRITICAL/HIGH; LOW/MEDIUM verified by the orchestrator reading the diff
-  -> mark task complete
-```
+Merges are serialized. For a worktree branch, run `git merge --no-ff <task-branch>` on the parent
+only after the paired report and audit; never let a captain edit the parent. On a real overlap,
+dispatch the runtime's merge-resolver asset. `SUCCESS` continues the lane;
+`UNRESOLVABLE` is recorded and parked with its worktree/conflict state. Run one integration
+build/test after all mergeable captains in the wave have landed, then proceed to the next wave.
+In-place tasks are already committed on the parent but still require the same paired-report audit
+before their wave is considered complete.
 
-This is the full chain, used for `risk: logic` tasks (the default). See
-**Review depth by task risk** below for how `pattern` and `mechanical` tasks
-skip passes.
+**Phase 2 (future)**, not active in this revision, separates these milestones: a
+`REBASE_REQUEST`/candidate-SHA attestation permits merge-on-`MERGE_READY`, then quality/Codex
+trail on leased worktrees and fixes use `BRANCH_REQUEST` micro-branches. Do not merge before
+`CHAIN_COMPLETE` in Phase 1. **Phase 3 (future)** adds `STUB_READY`/implementer-DONE speculative
+starts with FORK_SHA/`--onto` barriers, worktree pooling with lease/reset, and rerere with
+`rerere.autoUpdate` off. No pooling, lease reuse, rerere, or new speculative start is active here.
 
-**Concurrent dispatch.** The three reviewers never depend on each other's
-output — each reads the same implementer commits independently. Dispatch
-every applicable reviewer for a task in a single message turn (multiple
-`Task` calls, or multiple `pi -p` invocations on the Pi path). Strict
-ordering never applies to this initial dispatch; it only applies to the
-**fix loop** below, where adjudicated findings must be resolved before
-re-review.
+### Escalation ledger
 
-**Adjudication.** Reviewers can be wrong. Before dispatching any fix, read
-every finding from all three reports and decide accept/reject for each —
-reject findings that contradict the spec, the codebase's verified behavior,
-or an earlier deliberate decision. Record the rejection reasoning (even one
-line) so the final whole-branch reviewer and the user can audit the call.
+`ESCALATION` is the only load-bearing exception event in Phase 1. A captain handles
+`NEEDS_CONTEXT` first from its manifest/spec/codebase and records a conservative assumption if
+underivable; only a question it still cannot safely resolve reaches the top orchestrator. The top
+orchestrator classifies every event against the exhaustive routing table, appends the event and
+disposition to the unresolved-findings ledger, and returns a recorded decision or parks the task.
+It never silently invents a class or drops an event.
 
-**Severity normalization.** Reviewers use different vocabularies; adjudication normalizes every
-finding onto one CRITICAL/HIGH/MEDIUM/LOW scale before accept/reject decisions are made:
-code-quality's `Critical` → CRITICAL, `Important` → HIGH, `Minor` → LOW; a spec-compliance
-missing-requirement or extra-requirement finding defaults to HIGH (spec compliance has no
-severity vocabulary of its own). Each accepted finding gets a stable ID (`F1`..`Fn`). The
-consolidated fix prompt lists findings by ID, and the fix worker's report must state per-ID
-status (fixed / not-applicable / disputed) — this per-ID list is what the discrepancy check
-(below) compares against.
+| Escalation class | Phase 1 conservative routing | Phase 2 (future) auto-resolution |
+| --- | --- | --- |
+| `NEEDS_CONTEXT` after captain attempt | Derive from spec/codebase; use and record the most conservative verifiable assumption, else park | Same recorded conservative default |
+| Plan-vs-spec conflict | Follow `logic.md` Decisions-Locked and record the dated Amendments entry; park if that cannot be done without violating scope | Same |
+| Capped-out CRITICAL after Codex cycle 2 | Full-chain gate remains closed; park, do not merge | Safest fix interpretation, tagged `AUTO-RESOLVED-CRITICAL`, then verify-or-quarantine |
+| Capped-out HIGH | Carry only in the explicit ledger for final review | Same ledger carry-forward |
+| Merge resolver `UNRESOLVABLE` | Park branch and preserve worktree/conflict state | Same |
+| Failing baseline/worktree preflight | Park affected task; continue other independent work | Same |
+| Runtime fallback exhausted (pi and Claude dead for a role) | Park affected task; continue other independent work | Same |
+| Any class without a defined row | Park affected task; never invent a default | Same |
 
-**Consolidated fix.** Dispatch a single fix worker (the same implementer
-subagent) with the union of all accepted findings — never a separate fix
-loop per reviewer. This collapses what used to be up to three sequential
-fix-and-re-review round trips into one.
+Phase 1 keeps the audit portions that are compatible with its conservative gate: all carried or
+parked findings remain in the ledger, that ledger is pasted verbatim into the final whole-branch
+review prompt, and the run summary lists escalations and parked tasks first. The §4
+**verify-or-quarantine gate is Phase 2 (future)**: an `AUTO-RESOLVED-CRITICAL` can finish clean
+only after an independent PASS plus green verification on the final branch SHA; failed,
+unavailable, missing, or inconclusive verification yields `QUARANTINED`. Phase 1 does not use
+that mechanism to force a CRITICAL through its full-chain gate.
 
-**Discrepancy check (mandatory).** After the fix worker reports, compare its
-claimed-fixed list against the requested (accepted) findings list, per finding ID (see
-**Adjudication** above). A mismatch — findings silently skipped, vague "addressed most of it"
-language, missing per-item confirmation — means the orchestrator re-dispatches the worker with
-the gap called out explicitly. The ONE sanctioned exception: if the gap is small (a few lines)
-and already fully specified by the finding text (no judgment call left for the orchestrator to
-make), the orchestrator may apply the missing fix directly instead of re-dispatching — this is
-the exception to "don't try to fix manually" in **Red Flags** below; anything larger is always
-re-dispatched. Never accept "all done" on trust.
+`READINESS_REVOKED`, `CONTRACT_CORRECTED`, and `BRANCH_REQUEST` are documented in the captain
+templates for forward compatibility but are not active exception paths in Phase 1. Likewise,
+`STUB_READY` and `REBASE_REQUEST` are reserved progress events; only internal
+`IMPLEMENTER_DONE` is live, and it does not authorize speculative branching.
 
-**Targeted re-review.** Only findings adjudicated CRITICAL or HIGH earn a
-re-dispatch of the reviewer that raised them. LOW/MEDIUM findings are
-verified by the orchestrator reading the diff directly — no reviewer
-re-dispatch needed.
+### Flat chain fallback
 
-Severity is not the only trigger: re-review is ultimately driven by the **fix's scope**, not only
-the original finding's severity. A fix that changes runtime behavior, changes an exported
-contract (a `CONTRACT:`/`SCHEMA:` surface), or crosses into files outside the original finding
-earns a reviewer re-dispatch even when the finding that prompted it was MEDIUM or LOW — read the
-fix diff, not just the finding's severity label, before deciding to skip re-dispatch.
-
-**Contract invalidation.** If a consolidated fix changes an exported contract (the
-`CONTRACT:`/`SCHEMA:` surface a `.contract` dependent consumed), the fix INVALIDATES prior
-contract confirmations for that task. The spec-compliance reviewer's re-review (above) must
-re-confirm the contract explicitly, and any dependent that early-started against the old
-confirmation must be re-checked against the corrected contract — and fixed if affected — before
-that dependent's own review chain completes or it merges.
-
-The Codex adversarial reviewer specifically:
-
-- Reads files via `absolute_file_paths` (Claude path) or via the worktree
-  filesystem (pi path with `--tools read,bash`).
-- Returns SEVERITY-tagged findings (`CRITICAL | HIGH | MEDIUM | LOW`) with
-  file:line citations and a final `VERDICT: PASS | NEEDS_FIXES |
-  CRITICAL_ISSUES`.
-- On CRITICAL/HIGH (post-adjudication): included in the consolidated fix,
-  then Codex is re-dispatched for that task alone. **Cap: 2 cycles** total
-  (see **Cycle definition** below for what counts as one).
-- MEDIUM: included in the consolidated fix like any other accepted finding — severity does not
-  exempt it from being fixed, only from earning a reviewer re-dispatch (**Targeted re-review**
-  above).
-- LOW / VERDICT=PASS: no findings from this reviewer to adjudicate.
-
-**Cycle definition.** A "cycle" = one consolidated fix dispatch that included at least one
-accepted Codex finding, plus the Codex re-review that follows it. The initial review (before any
-fix) is not a cycle. A consolidated fix containing only spec-compliance and/or code-quality
-findings — no accepted Codex finding — does not consume a Codex cycle.
-
-**After cycle 2 (cap exhaustion):** any CRITICAL finding still unresolved BLOCKS the task —
-escalate to the user; never mark a task complete with an unresolved CRITICAL finding. Any HIGH
-finding still unresolved may carry forward, but ONLY into an explicit **unresolved-findings
-ledger** (task, finding, severity, why it wasn't resolved) that MUST be pasted verbatim into the
-final whole-branch reviewer's dispatch prompt — a capped-out HIGH finding never just silently
-disappears from the record. This ledger entry is the sole sanctioned way a task with an
-unresolved accepted finding moves forward (see **Red Flags** below).
-
-Spec-compliance and code-quality CRITICAL/HIGH findings trigger a targeted
-re-review by the reviewer that raised them, repeating (fix -> re-review)
-until the accepted findings are resolved — uncapped, unlike the Codex
-2-cycle cap. Each round's fixes are folded into the same consolidated fix
-and discrepancy check as Codex findings, not run as separate loops.
+Only when the run-start capability probe proves that no captain can be dispatched, the top orchestrator runs a degraded flat chain inline with one turn per stage; it applies exactly the same risk-tier reviewer scaling, concurrent initial review, stable-ID severity-normalized adjudication, guarded reviewer patches/consolidated fix, discrepancy check, contract invalidation, targeted re-review, Codex cycle definition/cap, durable artifacts, timestamps, Phase 1 report gate, and escalation routing defined authoritatively in `assets/captain-prompt.md` or `assets/pi-captain-prompt.md`, rather than maintaining a second protocol here.
 
 ### Review depth by task risk
 
-Each task carries an optional `risk` field from the plan (**quirk:writing-plans**
-defines it): `logic` (default) | `pattern` | `mechanical`. It scales which
-reviewers get dispatched — the concurrent-dispatch and adjudication rules
-above still apply to whatever subset runs:
+Each task carries a required explicit `risk` field from the plan
+(`logic | pattern | mechanical`) plus a one-line rationale. There is no silent default: omission
+is a plan-review finding, and lower tiers need the strongest justification because they remove
+review passes. It scales the reviewers the captain dispatches; the authoritative chain rules in
+the captain template apply to whichever subset runs:
 
 | Risk | Reviewers dispatched | When to use |
 | --- | --- | --- |
-| `logic` (default) | Full three-pass: spec compliance + code quality + Codex adversarial | New behavior, contracts, or algorithms |
+| `logic` | Full three-pass: spec compliance + code quality + Codex adversarial | New behavior, contracts, or algorithms |
 | `pattern` | Spec compliance + Codex adversarial (skip the standalone code-quality pass) | Mirrors a pattern already reviewed on this branch (e.g. a second feature rewired the same way as the first) |
 | `mechanical` | None — acceptance is the task's own verifiable gate (build/tests/grep, stated in the task) | Deletions, renames, config/doc updates with no new logic; backstopped by the final whole-branch reviewer |
 
@@ -466,49 +400,35 @@ mid-run to save time.
 
 ### Example (parallel wave under WORKTREE_PARALLEL)
 
-```
-You: I'm using Subagent-Driven Development to execute this plan.
+```text
+[Plan: T1 risk=logic, T2 risk=pattern, T3 depends on T1]
+[Wave 1={T1,T2}; choose WORKTREE_PARALLEL]
+[Create sdd/kestrel/T1 and sdd/kestrel/T2 worktrees serially]
+[Stage two context manifests and dispatch two captains in one top-orchestrator turn]
 
-[Read plan; extract 3 tasks]
-[Plan declares: T1 independent, T2 independent, T3 depends: [T1]]
-[Wave 1 = {T1, T2} (size 2, both independent, scopes overlap on README.md)]
-  -> mode = WORKTREE_PARALLEL (overlap forbids IN_PLACE)
+T1 captain (internally): implement -> spec ∥ quality ∥ Codex -> adjudicate -> PASS
+T2 captain (internally): implement -> spec ∥ Codex -> consolidated fix -> targeted re-review -> PASS
 
-[Create worktrees: main/sdd/T1, main/sdd/T2]
-[Dispatch implementers for T1 and T2 in one message turn]
-
-T1 implementer finishes -> dispatch spec ∥ quality ∥ Codex concurrently, one
-  message turn -> all three PASS -> adjudicate: no findings, nothing to fix
-  -> rolling merge: git merge --no-ff main/sdd/T1 -> clean -> teardown worktree
-
-T2 implementer finishes -> dispatch spec ∥ quality ∥ Codex concurrently, one
-  message turn -> spec: NEEDS_FIX (missing field), quality: 1 MEDIUM, Codex:
-  1 CRITICAL -> adjudicate: accept all three (each verified against the
-  spec/diff) -> dispatch ONE consolidated fix worker with all 3 findings
-  -> fix worker reports 3/3 fixed -> discrepancy check: claimed list matches
-  requested list, proceed -> re-dispatch only spec + Codex (the CRITICAL/HIGH
-  sources) [Codex cycle 1 of 2]: both PASS -> quality MEDIUM verified by
-  orchestrator reading the diff, confirmed fixed
-  -> rolling merge: conflict on README.md -> dispatch merge resolver
-  -> resolver: SUCCESS -> teardown worktree
-
-[Wave 1 complete; T3's deps satisfied]
-[Wave 2 = {T3} (singleton -> SEQUENTIAL)]
-[Run T3 normally]
-
-[All waves done]
-[Dispatch final quirk:code-reviewer over the whole branch]
-[Use quirk:finishing-a-development-branch]
+T1 -> MERGE_READY(sha1) + CHAIN_COMPLETE together
+[top spot-audits adjudication; serialized merge T1; teardown]
+T2 -> MERGE_READY(sha2) + CHAIN_COMPLETE together
+[top spot-audits adjudication; serialized merge T2; teardown]
+[Wave integration checks pass; compute Wave 2]
+[Dispatch one captain for T3]
+[After all waves: final Claude quirk:code-reviewer receives the unresolved-findings ledger]
 ```
 
 ## Model Selection
 
-**Pi path:** Models are fixed by role via pi-dev aliases — `codex` at `xhigh` thinking for the
-implementer, Codex adversarial reviewer, and merge resolver; `gemini` (alias default thinking)
-for the spec-compliance and code-quality reviewers. `pi-watch` resolves each alias to the newest
-authed model; skip the rest of this section.
+**Captains:** use Sonnet (or the runtime's orchestration-tier equivalent). Captain selection is
+separate from task risk and worker model selection.
 
-**Claude path:** Use the least powerful model that can handle each role to conserve
+**Pi path:** Role aliases are resolved once at run start and their exact
+`provider/model:thinking` triples are pinned into every captain manifest. Use those recorded
+triples for implementer, reviewers, fix worker, and merge resolver; never resolve an alias inside
+a live captain. Skip the rest of this section for pi workers.
+
+**Claude workers:** Use the least powerful model that can handle each role to conserve
 cost and increase speed.
 
 **Low-complexity implementation tasks** (isolated functions, clear specs, 1-2 files): use a fast, cheap model. Most implementation tasks are low-complexity when the plan is well-specified. This is a model-selection bucket, not the plan's `risk` field — model choice does NOT determine `risk`; a low-complexity change can still be `risk: logic`.
@@ -524,58 +444,43 @@ cost and increase speed.
 
 ## Handling Implementer Status
 
-Implementer subagents report one of four statuses. Handle each appropriately:
-
-**DONE:** Dispatch the concurrent review by all reviewers applicable to the task's risk tier (spec compliance ∥ code quality ∥ Codex adversarial, per **Review depth by task risk**) in one message turn.
-
-**DONE_WITH_CONCERNS:** The implementer completed the work but flagged doubts. Read the concerns before proceeding. If the concerns are about correctness or scope, address them before review. If they're observations (e.g., "this file is getting large"), note them and proceed to review.
-
-**NEEDS_CONTEXT:** The implementer needs information that wasn't provided. Provide the missing context and re-dispatch.
-
-**BLOCKED:** The implementer cannot complete the task. Assess the blocker:
-1. If it's a context problem, provide more context and re-dispatch with the same model
-2. If the task requires more reasoning, re-dispatch with a more capable model
-3. If the task is too large, break it into smaller pieces
-4. If the plan itself is wrong, escalate to the human — and if the wrongness is a conflict with a `logic.md` Decisions-Locked entry, record the resolution as a dated entry in the logic spec's Amendments log before continuing, never a silent plan edit.
-
-**Never** ignore an escalation or force the same model to retry without changes. If the implementer said it's stuck, something needs to change.
+The captain, not the top orchestrator, handles implementer DONE, DONE_WITH_CONCERNS,
+NEEDS_CONTEXT, and BLOCKED according to its runtime's captain template. `IMPLEMENTER_DONE` is an
+internal durable Phase 1 signal; it starts risk-tier review but never speculative branching.
+`NEEDS_CONTEXT` is self-resolved from the manifest/spec/codebase first. Only a concern the
+captain cannot conservatively resolve becomes `ESCALATION`. The top orchestrator handles these
+statuses directly only in the degraded **Flat chain fallback**.
 
 ## Verification economics
 
-The orchestrator does **not** routinely re-run builds, tests, or linters a worker already ran
-and reported — worker-reported verification is trusted. Re-verify only:
+Do not routinely duplicate verification already run and recorded inside a captain. Captains run
+affected acceptance checks after guarded patches/fixes and provide readiness evidence. The top
+orchestrator re-verifies at three control-plane boundaries only:
 
-1. **At wave boundaries** — one integration build/test on the merged state.
-2. **On a discrepancy** — claimed-fixed doesn't match requested, results are vague, numbers are
-   missing (see the discrepancy check in **Per-task review chain**).
-3. **At the final gate** — before the whole-branch review.
+1. the wave integration build/test on the merged state;
+2. a reopened adjudication/discrepancy or uncertain candidate SHA; and
+3. the final branch gate before whole-branch review.
 
-**On wave-boundary failure:** if the integration build/test at a wave boundary fails, the
-orchestrator identifies the offending task from the failure output (stack trace, failing test
-name, file path) and dispatches that task's implementer with the failure details — this is a fix
-dispatch like any other, subject to the normal discrepancy check (**Per-task review chain**).
-Re-run the wave-boundary verification after the fix lands. The task's prior reviews are not
-invalidated by this alone — only a fix that changes reviewed behavior earns a reviewer
-re-dispatch (**Targeted re-review**).
-
-Spot-reading the diff of high-risk changes is encouraged and cheap; wholesale re-execution of a
-worker's own verification is not — it burns exactly the wall-clock this set of amendments exists
-to remove.
+On wave-boundary failure, identify the responsible task from the evidence and re-dispatch/resume
+that task's captain with the failure in its manifest. The captain applies its authoritative
+adjudication, discrepancy-check, fix, and targeted re-review contract and returns a fresh paired
+report. Re-run the wave gate after the fix lands. Spot-reading high-risk diffs is encouraged;
+re-running every worker command is not.
 
 ## Dispatch hygiene
 
-- **Stage the next prompt while a worker runs.** Write out the next task's full dispatch prompt
-  during the current worker's turn so the gap between one worker finishing and the next starting
-  is near zero.
+- **Stage ahead.** The top orchestrator stages all captain prompts/manifests before the wave's
+  one-turn launch. Each captain stages the next role prompt while its current worker runs, so
+  internal transitions do not wait on prompt assembly.
 - **Hard-fail on a missing prompt file.** A dispatch command must refuse to run if its prompt
   file is absent — e.g. `[ -f prompt.md ] || exit 1` before invoking. Never fall back to a
   placeholder (`cat prompt.md || echo MISSING` piped into a live dispatch); a garbage prompt
   burns a full worker round-trip and is far more expensive than failing fast.
-- **Stage prompt files outside the repository.** Write staged prompts to the session scratch
-  directory (or equivalent), never inside the worktree — a worker with `edit`/`write`/`bash`
-  tools could commit, clobber, or read a staged prompt meant for a later dispatch if it lives
-  inside the repo it's working on. Use task/role-keyed filenames (`t3-spec-review.md`, not a
-  generic `prompt.md`) so concurrent staged prompts for different tasks and roles never collide.
+- **Stage prompt and artifact files outside the repository.** Write them to run scratch, never
+  inside a worktree—a captain/worker with edit tools could commit or clobber them there. Use
+  task/role-keyed filenames (`t3-captain.md`, `t3-spec-review.md`, not `prompt.md`) so concurrent
+  chains never collide. Reviewer outputs, adjudication, timestamps, ledger, and events are
+  appended there as produced so an orphaned captain can be adopted.
 
 ## Prompt Templates
 
@@ -583,224 +488,117 @@ All templates live in `assets/`. The dispatch path is selected by the runtime
 chosen in **Runtime Selection**.
 
 **Claude path:**
-- `assets/implementer-prompt.md` — dispatch implementer via `Task` (general-purpose)
-- `assets/spec-reviewer-prompt.md` — dispatch spec compliance reviewer via `Task` (general-purpose)
-- `assets/code-quality-reviewer-prompt.md` — dispatch code quality reviewer via `Task` (quirk:code-reviewer)
-- `assets/codex-adversarial-prompt.md` — dispatch Codex adversarial reviewer via `mcp__pal__clink` (cli_name=`codex`, role=`codereviewer`)
-- `assets/merge-resolver-prompt.md` — dispatch merge resolver via `Task` (general-purpose) — only used in `WORKTREE_PARALLEL` mode
+- `assets/captain-prompt.md` — authoritative per-task chain; dispatch the captain through the
+  capability-probed nested or hardened headless launcher
+- `assets/implementer-prompt.md`, `assets/spec-reviewer-prompt.md`,
+  `assets/code-quality-reviewer-prompt.md`, `assets/codex-adversarial-prompt.md` — worker prompts
+  selected by the captain and task risk
+- `assets/merge-resolver-prompt.md` — top-orchestrator merge-lane resolver for
+  `WORKTREE_PARALLEL`
 
-**Pi path:** (`--tools read,bash` grants shell access, not enforced read-only — the prompt body
-forbids edits behaviorally, not via the tool grant; see `assets/pi-spec-reviewer-prompt.md` →
-Invocation for the actually-read-only `read,grep,find,ls` alternative)
-- `assets/pi-implementer-prompt.md` — pi-dev `codex` alias, `xhigh` thinking, with `--tools read,bash,edit,write`
-- `assets/pi-spec-reviewer-prompt.md` — pi-dev `gemini` alias with `--tools read,bash`
-- `assets/pi-code-quality-reviewer-prompt.md` — pi-dev `gemini` alias with `--tools read,bash`
-- `assets/pi-codex-adversarial-prompt.md` — pi-dev `codex` alias, `xhigh` thinking, with `--tools read,bash`
-- `assets/pi-merge-resolver-prompt.md` — pi-dev `codex` alias, `xhigh` thinking, with `--tools read,bash,edit,write` — only used in `WORKTREE_PARALLEL` mode
+**Pi path:**
+- `assets/pi-captain-prompt.md` — authoritative per-task chain and concrete canonical
+  `pi-watch --provider ... --model ... --thinking ...` dispatch/failure protocol
+- `assets/pi-implementer-prompt.md`, `assets/pi-spec-reviewer-prompt.md`,
+  `assets/pi-code-quality-reviewer-prompt.md`, `assets/pi-codex-adversarial-prompt.md` — staged
+  worker bodies selected by the captain and task risk
+- `assets/pi-merge-resolver-prompt.md` — top-orchestrator merge-lane resolver
 
-The pi templates reference **quirk:pi-dev** for the canonical hardened dispatch
-recipe (timeout wrapper, exit-code capture, JSONL events file) and failure-detection
-rules. Use that recipe verbatim when scripting; the pi templates show the minimum
-interactive form.
-
-All reviewer templates are written for concurrent dispatch — once the implementer reports
-DONE, dispatch every applicable reviewer in one message turn per **Per-task review chain
-(all modes)** above.
+In captain mode, the run-pinned exact triples in `assets/pi-captain-prompt.md` supersede the
+standalone worker templates' alias-form invocation examples. Implementer/fix workers receive
+`read,bash,edit,write`; reviewers receive `read,grep,find,ls`. Follow **quirk:pi-dev** for the
+canonical hardened recipe and failure signatures. Every applicable initial reviewer is launched
+concurrently by the captain; the top orchestrator never dispatches those stages itself except in
+the flat fallback.
 
 ## Example Workflow
 
+```text
+[Step 0: user selects runtime]
+[Probe captain launcher; on pi, resolve and pin every role triple once]
+[Step 0a-pre / 0a / 0a-review: author as warranted, plan in context, review plan]
+[Step 0b / 0c: compute Wave 1 and select WORKTREE_PARALLEL]
+[Create worktrees serially; build provenance-bearing context manifests]
+[Dispatch one captain per Wave 1 task in one top-orchestrator turn]
+
+[Captains run their full chains without top-level stage turns and persist artifacts]
+Captain T1: MERGE_READY(sha1, adjudication) + CHAIN_COMPLETE(timestamps, ledger)
+Captain T2: ESCALATION(class, evidence, artifacts)
+
+[Spot-audit T1; merge in serialized lane]
+[Route T2 through exhaustive ledger table; resume or park]
+[Run wave integration checks; repeat for later waves]
+[Final Claude quirk:code-reviewer receives final SHA + unresolved-findings ledger]
+[Use quirk:finishing-a-development-branch]
 ```
-You: I'm using Subagent-Driven Development. First I'll check whether a tech spec is warranted,
-then build the plan in context.
 
-[Step 0a-pre: complexity-tier gate checked — "skipped, none met" — proceed straight to Step 0a]
-[Step 0a: invoke writing-plans rubric → draft 5 tasks (contracts, acceptance, parallelism)
- in context + TodoWrite — no file]
-[Step 0a-review: dispatch plan-document reviewer on the in-context plan; apply fixes]
-[Step 0b: tasks already in context + TodoWrite; compute waves]
+## Final whole-branch review
 
-Task 1: Hook installation script
-
-[Get Task 1 text and context (already extracted)]
-[Dispatch implementation subagent with full task text + context]
-
-Implementer: "Before I begin - should the hook be installed at user or system level?"
-
-You: "User level (~/.config/quirk/hooks/)"
-
-Implementer: "Got it. Implementing now..."
-[Later] Implementer:
-  - Implemented install-hook command
-  - Added tests, 5/5 passing
-  - Self-review: Found I missed --force flag, added it
-  - Committed
-
-[Implementer reports DONE — dispatch spec ∥ quality ∥ Codex in one message turn]
-Spec reviewer: ✅ Spec compliant - all requirements met, nothing extra
-Code reviewer: Strengths: Good test coverage, clean. Issues: None. Approved.
-Codex: VERDICT: PASS — no gaps found between spec and implementation.
-
-[Adjudicate: no findings from any reviewer — nothing to fix]
-[Mark Task 1 complete]
-
-Task 2: Recovery modes
-
-[Get Task 2 text and context (already extracted)]
-[Dispatch implementation subagent with full task text + context]
-
-Implementer: [No questions, proceeds]
-Implementer:
-  - Added verify/repair modes
-  - 8/8 tests passing
-  - Self-review: All good
-  - Committed
-
-[Implementer reports DONE — dispatch spec ∥ quality ∥ Codex in one message turn]
-Spec reviewer: ❌ Issues:
-  - Missing: Progress reporting (spec says "report every 100 items")
-  - Extra: Added --json flag (not requested)
-Code reviewer: Strengths: Solid. Issues (Important): Magic number (100)
-Codex: VERDICT: NEEDS_FIXES — CRITICAL: repair mode can corrupt state on a
-  partial write (recovery.py:42)
-
-[Adjudicate all three reports: accept the 2 spec findings (verified against
- plan text), accept the magic-number finding (verified: 100 is a bare
- literal), accept the CRITICAL finding (verified: reproducible from the
- diff) — 4 findings accepted, 0 rejected]
-
-[Dispatch ONE consolidated fix worker with the union of accepted findings]
-Implementer: Removed --json flag, added progress reporting, extracted
-  PROGRESS_INTERVAL constant, fixed partial-write corruption with an atomic
-  rename. Claimed-fixed: all 4 items.
-
-[Discrepancy check: claimed-fixed list matches the 4 requested items — proceed]
-
-[CRITICAL came from Codex, HIGH-equivalent from spec (missing requirement) —
- re-dispatch spec reviewer and Codex only, cycle 1 of 2 for Codex]
-Spec reviewer: ✅ Spec compliant now
-Codex: VERDICT: PASS
-
-[Magic-number finding (MEDIUM, code quality) verified by orchestrator
- reading the diff — PROGRESS_INTERVAL constant confirmed present]
-
-[Mark Task 2 complete]
-
-...
-
-[After all tasks]
-[Dispatch final code-reviewer]
-Final reviewer: All requirements met, ready to merge
-
-Done!
-```
+After all waves' mergeable tasks have passed integration verification, dispatch the final
+whole-branch reviewer with Claude `Task` (`quirk:code-reviewer`) regardless of worker runtime.
+Bind the prompt to explicit base/head SHAs and include the aggregated task Contracts, parked-task
+list, and unresolved-findings ledger verbatim. The reviewer must re-examine every carried HIGH
+and every future-schema `AUTO-RESOLVED-CRITICAL` entry. Resolve its accepted findings and run the
+final verification gate before `quirk:finishing-a-development-branch`; never hide parked tasks or
+ledger entries behind a generally positive verdict.
 
 ## Advantages
 
-**vs. Manual execution:**
-- Subagents follow TDD naturally
-- Fresh context per task (no confusion)
-- Parallel-safe (subagents don't interfere)
-- Subagent can ask questions (before AND during work)
-
-**vs. Executing Plans:**
-- Same session (no handoff)
-- Continuous progress (no waiting)
-- Review checkpoints automatic
-
-**Efficiency gains:**
-- No file reading overhead (controller provides full text)
-- Controller curates exactly what context is needed
-- Subagent gets complete information upfront
-- Questions surfaced before work begins (not after)
-
-**Quality gates:**
-- Self-review catches issues before handoff
-- Review dispatched concurrently by all reviewers applicable to the task's risk tier: spec compliance, code quality, and Codex adversarial (full three-pass for `logic` tasks)
-- Adjudicated, consolidated fix loop ensures fixes actually work without serial round-trips
-- Spec compliance prevents over/under-building
-- Code quality ensures implementation is well-built
-
-**Cost:**
-- More subagent invocations (implementer + up to 3 reviewers per task, scaled by risk tier: spec, quality, Codex)
-- Controller does more prep work (extracting all tasks upfront, adjudicating findings)
-- One consolidated fix pass plus targeted re-review adds an iteration when findings land
-- But catches issues early (cheaper than debugging later) without paying serial review latency
+- Captains preserve fresh worker context and risk-scaled quality gates.
+- Concurrent captain chains use the plan's real wave width.
+- The top orchestrator pays one dispatch/control turn per wave, not one per worker stage.
+- Durable artifacts make a half-finished chain adoptable after captain failure.
+- Context manifests and run-pinned pi triples remove repeated planning/model-resolution work.
+- Phase 1 keeps every review and fix before merge while the control plane is proven.
 
 ## Red Flags
 
 **Never:**
-- Start implementation on main/master branch without explicit user consent
-- Skip reviews a task's risk tier requires (and never downgrade a tier mid-run to save time)
-- Proceed with unfixed, accepted findings — the ONLY sanctioned exception is a HIGH finding that
-  exhausted the 2-cycle Codex cap and was recorded in the unresolved-findings ledger passed to
-  the final whole-branch reviewer (**The Codex adversarial reviewer specifically**); an unresolved
-  CRITICAL finding always BLOCKS the task, cap or no cap
-- Make subagent read plan file (provide full text instead)
-- Skip scene-setting context (subagent needs to understand where task fits)
-- Ignore subagent questions (answer before letting them proceed)
-- Accept "close enough" on spec compliance (spec reviewer found issues = not done)
-- Skip the fix-and-re-review loop (accepted findings = one consolidated fix = targeted re-review)
-- Let implementer self-review replace actual review (both are needed)
-- **Dispatch reviewers one-at-a-time when they could run concurrently** (reviews are independent read-only passes — serializing them wastes a full review-latency per pass)
-- **Dispatch a fix worker without first adjudicating findings** (blind fix loops implement reviewers' mistakes)
-- Move to next task while any adjudicated (accepted) finding remains unresolved — see the ledger exception above
-- Skip the wave gate / dispatch parallel implementers without computing a wave first
-- Run reviews against a merged branch instead of the worktree's pre-merge commits
-- Auto-merge a worktree branch before its review chain has reached PASS
-- Force-resolve a merge conflict manually as orchestrator instead of dispatching the merge resolver
-- Exceed 2 Codex adversarial fix cycles
-- **Serialize a wave whose tasks declared disjoint scopes because of git-lock concerns** — use worktrees or the orchestrator-commits fallback; the waves exist to be used
+- Start implementation on main/master without explicit user consent.
+- Infer a missing risk tier, accept a rationale-free tier, or downgrade risk mid-run.
+- Send a captain/worker a bare task packet or omit `scope.never_touch` and applicable fences.
+- Re-resolve pi aliases inside a captain or silently change provider/model/runtime mid-chain.
+- Dispatch one top-level worker per stage when a captain launcher is available.
+- Treat `IMPLEMENTER_DONE` as permission for speculative branching in Phase 1.
+- Count missing/unparseable reviewer output as PASS.
+- Emit `MERGE_READY` or `CHAIN_COMPLETE` before the full Phase 1 chain is PASS/resolved, or emit
+  them separately in this phase.
+- Merge a task before its captain's paired `MERGE_READY` + `CHAIN_COMPLETE` report and
+  adjudication spot-audit.
+- Activate trailing merge, candidate-SHA rebase handshakes, leased/pool worktrees,
+  trailing-fix micro-branches, new speculative starts, or rerere; those are Phase 2/3 future.
+- Drop an `ESCALATION`, unrecognized class, parked task, or unresolved finding from the ledger.
+- Tear down a parked/conflicted worktree or write staged prompts/artifacts inside a repository.
+- Reimplement the internal chain from memory; the captain templates are authoritative.
 
-**If subagent asks questions:**
-- Answer clearly and completely
-- Provide additional context if needed
-- Don't rush them into implementation
+Questions and blockers are handled inside the captain first. If the captain cannot resolve one
+conservatively, it emits `ESCALATION`; the top orchestrator uses the exhaustive ledger table,
+never an ad hoc retry or silent assumption.
 
-**If reviewers find issues:**
-- Adjudicate every finding across all reports before dispatching anything — reject findings that contradict the spec, verified codebase behavior, or an earlier deliberate decision, and record why
-- Dispatch ONE consolidated fix worker (same implementer subagent) with the union of accepted findings
-- Run the discrepancy check: claimed-fixed vs. requested, by ID — re-dispatch anything silently skipped; apply a small, fully-specified gap directly only as the documented exception
-- Re-dispatch the reviewer(s) whose accepted findings were CRITICAL/HIGH, or whose fix changed behavior/an exported contract/crossed files regardless of severity; verify remaining LOW/MEDIUM fixes by reading the diff
-- Don't skip the discrepancy check or the targeted re-review
+## Pi failure routing
 
-**If subagent fails task:**
-- Dispatch fix subagent with specific instructions
-- Don't try to fix manually (context pollution) — except the small, fully-specified omitted-fix
-  exception in the discrepancy check (**Per-task review chain**)
+Follow **quirk:pi-dev** failure signatures and the concrete
+`assets/pi-captain-prompt.md` policy. Auth/billing failures emit `ESCALATION` rather than causing
+a captain to silently fall back. Rate limits get one retry after 60 seconds; empty/missing output
+gets one re-dispatch; unparseable reviewer output is never PASS and is synthesized as
+`NEEDS_FIX`. Use pi-dev's bounded timeout handling and hardened JSONL/exit-code recipe.
 
-## Fallback (Pi runtime only)
-
-Pi has no built-in retries beyond rate-limit backoff and no auto-detect for stale
-versions. The table below is this skill's concrete failure-detection ruleset — there is no single
-"Failure detection" section in `quirk:pi-dev` to defer to; the underlying primitives are spread
-across **quirk:pi-dev → reference/orchestration.md → Failure handling at scale** and
-**reference/json-mode.md → Failure signatures inside the stream**. Apply these rules in order. On
-detection:
-
-| Failure | Action |
-|---|---|
-| Auth (401, invalid api key, authentication_error) | **Fall back to Claude** for the rest of the run. Warn the user once. Don't consume retry budget — every worker hits the same wall. |
-| Billing (`insufficient_quota`, `quota.exceeded`) | **Fall back to Claude** for the rest of the run. Warn the user once. |
-| Rate limit (429, `rate_limit_error`, `RESOURCE_EXHAUSTED`) | One retry with 60s backoff. If the retry also fails, fall back to Claude for that role only. |
-| Timeout (`gtimeout` exit 124) | Treat the worker as FAIL. Re-dispatch once with a longer timeout; if it times out again, fall back to Claude for that role. |
-| Empty/missing JSONL events | Worker hung or never started. Re-dispatch once. If still empty, fall back to Claude for that role. |
-| Unparseable reviewer output | No dedicated parse-cascade section exists in `quirk:pi-dev` to defer to — apply this rule directly: never count unparseable output as PASS. Synthesize a NEEDS_FIX verdict and let the implementer fix-and-retry. |
-| Pi version < 0.65.1 (preflight check) | Don't dispatch any pi worker. Tell the user to upgrade (`pnpm add -g @mariozechner/pi-coding-agent`) or fall back to Claude. |
-
-
-The same failure-detection rules apply uniformly to the new pi roles introduced for parallel mode and Codex review:
-
-- **Codex adversarial reviewer (pi codex)** — same auth/billing/rate-limit/timeout/empty-events handling as the implementer. On unrecoverable failure for this role only, fall back to the **Claude PAL clink codex** path (`assets/codex-adversarial-prompt.md`). Never count an unparseable Codex review as PASS.
-- **Merge resolver (pi codex)** — same auth/billing/rate-limit/timeout/empty-events handling. On unrecoverable failure, fall back to the **Claude `Task` general-purpose** path (`assets/merge-resolver-prompt.md`). On UNRESOLVABLE verdict, escalate to the user; do not retry the resolver in a loop.
-When falling back, mark any partially completed task as needing re-review on the
-Claude path before continuing to the next task. Don't silently continue with a
-mixed-runtime task.
+Only the top orchestrator may choose a runtime fallback or recorded re-resolution epoch. It then
+issues a new context manifest and requires affected work to be re-reviewed; a live captain never
+mutates its pinned triples. If both pi and Claude are dead for a role, use the escalation table's
+runtime-fallback-exhausted row and park the task.
 
 ## Integration
 
 **Required workflow skills:**
-- **quirk:using-git-worktrees** — REQUIRED: Set up isolated workspace before starting. **Now load-bearing in `WORKTREE_PARALLEL` mode**: orchestrator creates one worktree per task in the wave (branch convention `<parent-branch>/sdd/<task-id>`), runs reviews inside the worktree pre-merge, rolling-merges back to the parent branch as each task's review chain passes, and tears down the worktree on success.
-- **quirk:writing-plans** — The planning rubric this skill runs **in context** as its first phase (**Step 0a**, preceded by the optional **Step 0a-pre** tech-spec authoring), not a prior step. It produces the task breakdown — held in the conversation + TodoWrite, file optional, drafted from `tech.md` when Step 0a-pre produced one, else from `logic.md` / requirements — including the optional task fields (`independent`, `dependencies`, `scope.files`, `cooperative`) the orchestrator uses for wave compute and mode decision in **Step 0b** / **Step 0c**, plus `risk` (**Review depth by task risk**), which scales the per-task review chain rather than affecting wave shape.
+- **quirk:using-git-worktrees** — REQUIRED: set up isolation before starting. In
+  `WORKTREE_PARALLEL`, create one worktree per task on `sdd/<run-slug>/<task-id>`, run each
+  captain's full chain pre-merge, serialize paired-report merges, and tear down only after
+  successful merge. The run slug prevents concurrent-plan collisions without embedding an
+  existing parent ref as an invalid namespace prefix.
+- **quirk:writing-plans** — The in-context Step 0a rubric. It produces Contracts, acceptance,
+  wave fields, both scope lists, and a required explicit `risk` plus rationale. Wave fields feed
+  Step 0b/0c; risk scales the captain's reviewer set rather than wave shape.
 - **quirk:requesting-code-review** — Code review template for reviewer subagents.
 - **quirk:finishing-a-development-branch** — Complete development after all tasks.
 
