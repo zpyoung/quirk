@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""Append, query, and report on the append-only SDD run ledger."""
+from __future__ import annotations
+
+import argparse
+import fcntl
+import json
+import os
+import sys
+from collections import defaultdict, deque
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Deque
+
+EVENT_TYPES = (
+    "finding",
+    "adjudication",
+    "escalation",
+    "assumption",
+    "timestamp",
+    "decision",
+)
+
+
+def utc_now() -> str:
+    """Return an ISO-8601 UTC timestamp."""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def ledger_path(run_dir: str) -> Path:
+    """Return the fixed per-run ledger path."""
+    return Path(run_dir) / "run.jsonl"
+
+
+def parse_payload(text: str, source: str) -> dict[str, Any]:
+    """Parse a JSON-object payload."""
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid JSON payload from {source}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be a JSON object")
+    return payload
+
+
+def append_event(args: argparse.Namespace) -> int:
+    """Append one event with a generated UTC timestamp."""
+    if args.payload_file:
+        path = Path(args.payload_file)
+        if not path.is_file():
+            raise ValueError(f"missing payload file: {path}")
+        payload = parse_payload(path.read_text(), str(path))
+    else:
+        payload = parse_payload(args.payload, "--payload")
+
+    record = {
+        "ts": utc_now(),
+        "agent": args.agent,
+        "namespace": args.namespace,
+        "type": args.type,
+        "payload": payload,
+    }
+    path = ledger_path(args.run_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    encoded = (json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n").encode()
+    descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        start = os.lseek(descriptor, 0, os.SEEK_END)
+        written = os.write(descriptor, encoded)
+        if written != len(encoded):
+            os.ftruncate(descriptor, start)
+            os.fsync(descriptor)
+            raise OSError(
+                f"short ledger write: wrote {written} of {len(encoded)} bytes"
+            )
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    print(json.dumps(record, sort_keys=True))
+    return 0
+
+
+def read_records(path: Path) -> list[dict[str, Any]]:
+    """Read a ledger, treating a missing or empty file as no events."""
+    if not path.is_file():
+        return []
+    records: list[dict[str, Any]] = []
+    for line_number, line in enumerate(path.read_text().splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid ledger JSON on line {line_number}: {exc}") from exc
+        if not isinstance(record, dict):
+            raise ValueError(f"ledger line {line_number} is not a JSON object")
+        records.append(record)
+    return records
+
+
+def query_events(args: argparse.Namespace) -> int:
+    """Print ledger events matching all supplied filters."""
+    records = read_records(ledger_path(args.run_dir))
+    filters = {
+        "type": args.type,
+        "agent": args.agent,
+        "namespace": args.namespace,
+    }
+    matches = [
+        record
+        for record in records
+        if all(value is None or record.get(key) == value for key, value in filters.items())
+    ]
+    print(json.dumps(matches, sort_keys=True))
+    return 0
+
+
+def parse_timestamp(value: object) -> datetime:
+    """Parse one event's ISO-8601 timestamp."""
+    if not isinstance(value, str):
+        raise ValueError("timestamp event has a non-string ts")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"invalid timestamp event ts: {value}") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def latency_rows(records: list[dict[str, Any]]) -> list[tuple[str, str, str, str, str, float]]:
+    """Pair each stage start with the next unmatched end in ledger order."""
+    pending: dict[
+        tuple[str, str, str], Deque[tuple[str, datetime]]
+    ] = defaultdict(deque)
+    rows: list[tuple[str, str, str, str, str, float]] = []
+    for record in records:
+        if record.get("type") != "timestamp":
+            continue
+        payload = record.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        stage = payload.get("stage")
+        status = payload.get("status")
+        agent = record.get("agent")
+        namespace = record.get("namespace")
+        if not all(isinstance(value, str) for value in (stage, status, agent, namespace)):
+            continue
+        key = (agent, namespace, stage)
+        original_ts = record.get("ts")
+        parsed_ts = parse_timestamp(original_ts)
+        if status == "start":
+            pending[key].append((str(original_ts), parsed_ts))
+        elif status == "end" and pending[key]:
+            start_text, start_ts = pending[key].popleft()
+            rows.append((
+                agent,
+                namespace,
+                stage,
+                start_text,
+                str(original_ts),
+                (parsed_ts - start_ts).total_seconds(),
+            ))
+    return sorted(rows, key=lambda row: (row[0], row[1], row[2], row[3], row[4]))
+
+
+def report_latency(args: argparse.Namespace) -> int:
+    """Render deterministic paired-stage latency rows."""
+    records = read_records(ledger_path(args.run_dir))
+    print("AGENT\tNAMESPACE\tSTAGE\tSTART\tEND\tELAPSED_SECONDS")
+    for agent, namespace, stage, start, end, elapsed in latency_rows(records):
+        print(f"{agent}\t{namespace}\t{stage}\t{start}\t{end}\t{elapsed:.3f}")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Maintain the append-only <run-dir>/run.jsonl SDD ledger.",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    append = subparsers.add_parser("append", help="append one namespaced event")
+    append.add_argument("--run-dir", required=True)
+    append.add_argument("--agent", required=True)
+    append.add_argument("--namespace", required=True)
+    append.add_argument("--type", required=True, choices=EVENT_TYPES)
+    payload = append.add_mutually_exclusive_group(required=True)
+    payload.add_argument("--payload", help="JSON object string")
+    payload.add_argument("--payload-file", help="file containing a JSON object")
+    append.set_defaults(handler=append_event)
+
+    query = subparsers.add_parser("query", help="query events as a JSON array")
+    query.add_argument("--run-dir", required=True)
+    query.add_argument("--type", choices=EVENT_TYPES)
+    query.add_argument("--agent")
+    query.add_argument("--namespace")
+    query.set_defaults(handler=query_events)
+
+    report = subparsers.add_parser("report", help="render paired timestamp-event latencies")
+    report.add_argument("--run-dir", required=True)
+    report.set_defaults(handler=report_latency)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        return args.handler(args)
+    except (OSError, UnicodeError, ValueError) as exc:
+        print(f"sdd-ledger: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

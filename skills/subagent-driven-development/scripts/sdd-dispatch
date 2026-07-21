@@ -1,0 +1,431 @@
+#!/usr/bin/env python3
+"""Dispatch a staged SDD worker while preserving streamed artifacts."""
+from __future__ import annotations
+
+import argparse
+import ctypes
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import threading
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import BinaryIO, TextIO
+
+TIMEOUT_EXIT_CODE = 124
+TIMEOUT_GRACE_SECONDS = 0.25
+PROCESS_REAP_SECONDS = 1.0
+ATTEMPT_DIR = re.compile(r"^attempt-([1-9][0-9]*)$")
+
+
+def utc_now() -> str:
+    """Return an ISO-8601 UTC timestamp."""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def load_triple(
+    config_path: str | None,
+    role: str | None,
+    overrides: dict[str, str | None],
+) -> dict[str, str]:
+    """Resolve a pinned provider/model/thinking triple."""
+    resolved: dict[str, object] = {}
+    if config_path is not None:
+        if role is None:
+            raise ValueError("--config and --role must be supplied together")
+        path = Path(config_path)
+        if not path.is_file():
+            raise ValueError(f"missing config file: {path}")
+        try:
+            config = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"cannot read config file {path}: {exc}") from exc
+        if not isinstance(config, dict) or not isinstance(config.get(role), dict):
+            raise ValueError(f"config has no triple for role: {role}")
+        resolved.update(config[role])
+        if any(value is not None for value in overrides.values()):
+            raise ValueError(
+                "direct --provider/--model/--thinking flags cannot be combined "
+                "with --config/--role"
+            )
+    elif role is not None:
+        raise ValueError("--config and --role must be supplied together")
+
+    for key, value in overrides.items():
+        if value is not None:
+            resolved[key] = value
+
+    fields = ("provider", "model", "thinking")
+    missing = [
+        field for field in fields
+        if not isinstance(resolved.get(field), str) or not resolved[field]
+    ]
+    if missing:
+        raise ValueError(
+            "unresolved dispatch triple; provide config or direct flags for: "
+            + ", ".join(missing)
+        )
+    return {field: str(resolved[field]) for field in fields}
+
+
+def copy_stream(source: BinaryIO, artifact: BinaryIO, console: TextIO) -> None:
+    """Copy a child stream to an artifact and the corresponding console."""
+    console_buffer = getattr(console, "buffer", None)
+    while True:
+        try:
+            chunk = os.read(source.fileno(), 4096)
+        except (OSError, ValueError):
+            break
+        if not chunk:
+            break
+        artifact.write(chunk)
+        artifact.flush()
+        if console_buffer is not None:
+            console_buffer.write(chunk)
+            console_buffer.flush()
+        else:  # pragma: no cover - normal command-line streams expose ``buffer``
+            console.write(chunk.decode(errors="replace"))
+            console.flush()
+
+
+def enable_child_subreaper() -> bool:
+    """Ask Linux to reparent orphaned worker descendants to this process."""
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        return libc.prctl(36, 1, 0, 0, 0) == 0  # PR_SET_CHILD_SUBREAPER
+    except (AttributeError, OSError):  # pragma: no cover - unusual libc/platform
+        return False
+
+
+def descendant_pids(root_pid: int) -> set[int]:
+    """Return the current recursive descendants of *root_pid* on POSIX."""
+    if os.name != "posix":
+        return set()
+    try:
+        listed = subprocess.run(
+            ["/bin/ps", "-axo", "pid=,ppid="],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return set()
+    if listed.returncode != 0:
+        return set()
+
+    children: dict[int, set[int]] = {}
+    for line in listed.stdout.splitlines():
+        fields = line.split()
+        if len(fields) != 2:
+            continue
+        try:
+            pid, parent = (int(field) for field in fields)
+        except ValueError:
+            continue
+        children.setdefault(parent, set()).add(pid)
+
+    found: set[int] = set()
+    pending = list(children.get(root_pid, ()))
+    while pending:
+        pid = pending.pop()
+        if pid in found:
+            continue
+        found.add(pid)
+        pending.extend(children.get(pid, ()))
+    return found
+
+
+def signal_pid(pid: int, sig: signal.Signals) -> None:
+    """Signal a PID that may already have exited."""
+    try:
+        os.kill(pid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def signal_group(pid: int, sig: signal.Signals) -> None:
+    """Signal a dispatch process group that may already have exited."""
+    try:
+        os.killpg(pid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def reap_tracked_pids(pids: set[int]) -> None:
+    """Reap adopted descendants where possible and wait until tracked PIDs vanish."""
+    pending = set(pids)
+    deadline = time.monotonic() + PROCESS_REAP_SECONDS
+    while pending and time.monotonic() < deadline:
+        for pid in tuple(pending):
+            try:
+                reaped, _ = os.waitpid(pid, os.WNOHANG)
+            except (ChildProcessError, OSError):
+                reaped = 0
+            if reaped == pid:
+                pending.discard(pid)
+                continue
+            try:
+                os.kill(pid, 0)
+            except (ProcessLookupError, PermissionError):
+                pending.discard(pid)
+        if pending:
+            time.sleep(0.01)
+
+
+def stop_process(
+    proc: subprocess.Popen[bytes],
+    adopted_descendants: bool = False,
+) -> None:
+    """Terminate the worker group and currently tracked descendants."""
+    descendants = descendant_pids(proc.pid)
+    if adopted_descendants:
+        # Linux reparents orphaned descendants here even while the worker leader
+        # remains alive, so include this process's full adopted tree.
+        descendants.update(descendant_pids(os.getpid()))
+    descendants.discard(proc.pid)
+
+    if os.name == "posix":
+        signal_group(proc.pid, signal.SIGTERM)
+        for pid in descendants:
+            signal_pid(pid, signal.SIGTERM)
+    else:  # pragma: no cover - exercised on non-POSIX hosts
+        try:
+            proc.terminate()
+        except ProcessLookupError:
+            pass
+
+    # Do not let an early leader exit suppress escalation: same-group children may
+    # ignore SIGTERM, and setsid descendants are outside that group entirely.
+    time.sleep(TIMEOUT_GRACE_SECONDS)
+    if os.name == "posix":
+        signal_group(proc.pid, signal.SIGKILL)
+        for pid in descendants:
+            signal_pid(pid, signal.SIGKILL)
+    else:  # pragma: no cover - exercised on non-POSIX hosts
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+
+    try:
+        proc.wait(timeout=PROCESS_REAP_SECONDS)
+    except subprocess.TimeoutExpired:  # pragma: no cover - uninterruptible process
+        pass
+    reap_tracked_pids(descendants)
+
+
+def remaining_time(deadline: float | None) -> float | None:
+    """Return the non-negative budget remaining before *deadline*."""
+    if deadline is None:
+        return None
+    return max(0.0, deadline - time.monotonic())
+
+
+def output_paths(
+    prompt: Path,
+    out_dir: str | None,
+    allow_populated: bool,
+) -> tuple[Path, Path, Path, str]:
+    """Reserve and return stdout, stderr, and metadata artifact paths."""
+    if out_dir is not None:
+        base = Path(out_dir)
+        base.mkdir(parents=True, exist_ok=True)
+        entries = list(base.iterdir())
+        unexpected = [entry for entry in entries if ATTEMPT_DIR.fullmatch(entry.name) is None]
+        if unexpected and not allow_populated:
+            names = ", ".join(sorted(entry.name for entry in unexpected))
+            raise ValueError(
+                f"output directory contains unmanaged artifacts: {base} ({names}); "
+                "use --allow-populated-out-dir to keep them"
+            )
+        attempt_numbers = [
+            int(match.group(1))
+            for entry in entries
+            if (match := ATTEMPT_DIR.fullmatch(entry.name)) is not None
+        ]
+        attempt = max(attempt_numbers, default=0) + 1
+        while True:
+            directory = base / f"attempt-{attempt}"
+            try:
+                directory.mkdir()
+                break
+            except FileExistsError:  # another dispatch reserved this attempt
+                attempt += 1
+        return (
+            directory / "worker.out",
+            directory / "worker.err",
+            directory / "meta.json",
+            "xb",
+        )
+
+    paths = (
+        Path(f"{prompt}.out"),
+        Path(f"{prompt}.err"),
+        Path(f"{prompt}.meta.json"),
+    )
+    if not allow_populated and any(path.exists() for path in paths):
+        raise ValueError(
+            "prompt-adjacent artifacts already exist; use --allow-populated-out-dir "
+            "to overwrite them"
+        )
+    return *paths, "wb" if allow_populated else "xb"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Dispatch a staged prompt and tee output as it streams.",
+        epilog=(
+            "With --out-dir <role-dir>, each dispatch reserves "
+            "<role-dir>/attempt-<n> containing worker.out, worker.err, and meta.json. "
+            "Without it, <prompt>.out, <prompt>.err, and <prompt>.meta.json are used."
+        ),
+    )
+    parser.add_argument("prompt_path", nargs="?", help="prompt file path (alternative to --prompt)")
+    parser.add_argument("--prompt", help="staged prompt file path")
+    parser.add_argument("--config", help="per-run JSON file containing role triples")
+    parser.add_argument("--role", help="role key in --config")
+    parser.add_argument("--provider", help="direct provider override")
+    parser.add_argument("--model", help="direct model override")
+    parser.add_argument("--thinking", help="direct thinking-level override")
+    parser.add_argument("--tools", default="read,bash", help="dispatcher --tools value")
+    parser.add_argument("--dispatcher", default="pi-watch", help="dispatcher executable (default: pi-watch)")
+    parser.add_argument("--out-dir", help="role artifact directory; attempts are nested below it")
+    parser.add_argument(
+        "--allow-populated-out-dir",
+        action="store_true",
+        help="keep unmanaged --out-dir entries or overwrite prompt-adjacent artifacts",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        help=(
+            "maximum worker runtime in seconds "
+            f"(plus up to {TIMEOUT_GRACE_SECONDS:g}s launch/pipe-drain grace)"
+        ),
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.prompt and args.prompt_path:
+        parser.error("provide the prompt with --prompt or positionally, not both")
+    prompt_arg = args.prompt or args.prompt_path
+    if not prompt_arg:
+        parser.error("a prompt file is required (use --prompt <path>)")
+    prompt = Path(prompt_arg)
+    if not prompt.is_file():
+        print(f"sdd-dispatch: missing prompt file: {prompt}", file=sys.stderr)
+        return 2
+    if args.timeout is not None and args.timeout <= 0:
+        parser.error("--timeout must be greater than zero")
+
+    try:
+        triple = load_triple(
+            args.config,
+            args.role,
+            {
+                "provider": args.provider,
+                "model": args.model,
+                "thinking": args.thinking,
+            },
+        )
+        prompt_content = prompt.read_text()
+        stdout_path, stderr_path, meta_path, artifact_mode = output_paths(
+            prompt,
+            args.out_dir,
+            args.allow_populated_out_dir,
+        )
+    except (OSError, UnicodeError, ValueError) as exc:
+        print(f"sdd-dispatch: {exc}", file=sys.stderr)
+        return 2
+
+    stdout_path.parent.mkdir(parents=True, exist_ok=True)
+    stderr_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    start = utc_now()
+    exit_code = 127
+    command = [
+        args.dispatcher,
+        "--provider", triple["provider"],
+        "--model", triple["model"],
+        "--thinking", triple["thinking"],
+        "--tools", args.tools,
+        prompt_content,
+    ]
+
+    with stdout_path.open(artifact_mode) as stdout_artifact, stderr_path.open(artifact_mode) as stderr_artifact:
+        try:
+            adopted_descendants = enable_child_subreaper()
+            proc = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            message = f"sdd-dispatch: cannot start dispatcher {args.dispatcher}: {exc}\n"
+            encoded = message.encode()
+            stderr_artifact.write(encoded)
+            stderr_artifact.flush()
+            sys.stderr.write(message)
+        else:
+            with proc:
+                assert proc.stdout is not None
+                assert proc.stderr is not None
+                readers = [
+                    threading.Thread(
+                        target=copy_stream,
+                        args=(proc.stdout, stdout_artifact, sys.stdout),
+                        daemon=True,
+                    ),
+                    threading.Thread(
+                        target=copy_stream,
+                        args=(proc.stderr, stderr_artifact, sys.stderr),
+                        daemon=True,
+                    ),
+                ]
+                deadline = (
+                    None
+                    if args.timeout is None
+                    else time.monotonic() + args.timeout + TIMEOUT_GRACE_SECONDS
+                )
+                for reader in readers:
+                    reader.start()
+
+                timed_out = False
+                try:
+                    exit_code = proc.wait(timeout=remaining_time(deadline))
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    stop_process(proc, adopted_descendants)
+
+                for reader in readers:
+                    reader.join(timeout=remaining_time(deadline))
+                if any(reader.is_alive() for reader in readers):
+                    timed_out = True
+                    stop_process(proc, adopted_descendants)
+                if timed_out:
+                    exit_code = TIMEOUT_EXIT_CODE
+
+    meta = {
+        "start": start,
+        "end": utc_now(),
+        "exit_code": exit_code,
+        "artifact_dir": str(meta_path.parent),
+        **triple,
+    }
+    meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n")
+    return exit_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

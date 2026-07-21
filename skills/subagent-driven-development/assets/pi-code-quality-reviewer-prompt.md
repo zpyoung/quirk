@@ -6,7 +6,14 @@ The code-quality reviewer model is the **pi-dev `gemini` alias** (see **quirk:pi
 frozen model id. `pi-watch` resolves the newest authed model in the alias's fallback ladder;
 hard-pinning an exact id via `--provider`/`--model` is the documented exception, not the default.
 
-Dispatched concurrently with the spec-compliance and Codex adversarial reviewers, after the implementer reports.
+The task captain (or the orchestrator acting as fallback dispatcher when no captain can be
+dispatched) uses this pass only for a `logic` task and dispatches it concurrently with pi spec
+compliance after the implementer reports. Reviewer selection is tier-based (`logic`: spec +
+quality; `pattern`: spec; `mechanical`: none). Pi Codex is separate: an eligible
+`logic`/`pattern` task gets per-task Codex only for **>150 added+deleted lines OR a changed
+contract surface** (`CONTRACT:`/`SCHEMA:` hunk or a changed file listed under a contract).
+Otherwise record `CODEX-DEFERRED(task-id)`; branch-level Codex is **Phase 2 (future)**, not Phase
+1 coverage.
 
 ## Prompt body
 
@@ -33,6 +40,14 @@ Append the same additional checks the Claude path requires:
 - Did this implementation create new files that are already large, or
   significantly grow existing files? (Don't flag pre-existing file sizes —
   focus on what this change contributed.)
+
+## Suggested patch
+
+The assembled prompt must also require a proposed unified diff capped at roughly 20 changed
+lines for each Minor or mechanical/objective Important finding. It must forbid patches for
+Critical or judgment-requiring findings and require every patch path to stay within the task's
+`scope.files` and outside `scope.never_touch`. The reviewer remains report-only: it includes
+eligible patch text in its finding, but never applies it, runs `git apply`, or edits files.
 
 End the prompt with: "Return Strengths, Issues grouped Critical/Important/Minor,
 and an Assessment line."
@@ -72,10 +87,14 @@ reference/print-mode.md#canonical-headless-recipe**.
 ## Output parsing
 
 The reviewer's final message contains `Strengths`, `Issues` grouped by
-severity, and an `Assessment`. Parse pi's stdout for that structure. Findings are returned to the
-orchestrator for fan-in and adjudication alongside the other reviewers applicable to the task's
-risk tier, then folded into the single consolidated fix — there is no per-reviewer fix loop
-(SKILL.md → Per-task review chain).
+severity, an `Assessment`, and `Suggested patch` content for eligible findings. Parse pi's stdout
+for that structure. Findings are returned to the task captain for fan-in and adjudication
+alongside the other reviewers applicable to the task's risk tier (or to the orchestrator when it
+is acting as fallback dispatcher). The captain may apply an accepted eligible patch directly only
+after enforcing the roughly-20-changed-line cap, running `git apply --check`, and confirming all
+paths are within `scope.files` and outside `scope.never_touch`; Critical and judgment-requiring
+findings route to the fix worker. The reviewer only proposes patches and never applies them.
+There is no per-reviewer fix loop (SKILL.md → Per-task review chain).
 
 If pi's response is unparseable, apply **quirk:pi-dev → Reviewer JSON parse
 fallback** (cascade: whole-message JSON → fenced block → balanced braces →

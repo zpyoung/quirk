@@ -1,0 +1,413 @@
+#!/usr/bin/env python3
+"""Create SDD task worktrees and audit their serialized merge lane."""
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def emit(payload: dict[str, Any]) -> None:
+    """Write one deterministic JSON result to stdout."""
+    print(json.dumps(payload, sort_keys=True))
+
+
+def run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """Run git in *repo* without hiding its result."""
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+    )
+
+
+def safe_component(value: str, flag: str) -> str:
+    """Validate one component of the fixed sdd/<run>/<task> ref."""
+    if not SAFE_COMPONENT.fullmatch(value) or value.endswith(".") or ".." in value:
+        raise ValueError(f"{flag} must be a safe single branch component")
+    return value
+
+
+def resolve_commit(repo: Path, revision: str, flag: str) -> str:
+    """Resolve one untrusted revision to an immutable commit object ID."""
+    resolved = run_git(
+        repo,
+        "rev-parse",
+        "--verify",
+        "--end-of-options",
+        f"{revision}^{{commit}}",
+    )
+    oid = resolved.stdout.strip()
+    if resolved.returncode != 0 or not re.fullmatch(r"[0-9a-fA-F]{40,64}", oid):
+        detail = resolved.stderr.strip()
+        suffix = f": {detail}" if detail else ""
+        raise ValueError(f"{flag} does not resolve to a commit: {revision}{suffix}")
+    return oid.lower()
+
+
+def resolve_branch(repo: Path, revision: str) -> str:
+    """Resolve a task ref to its canonical local branch name."""
+    resolved = run_git(
+        repo,
+        "rev-parse",
+        "--symbolic-full-name",
+        "--verify",
+        "--end-of-options",
+        revision,
+    )
+    branch = resolved.stdout.strip()
+    if resolved.returncode != 0 or not branch.startswith("refs/heads/") or "\n" in branch:
+        raise ValueError(f"--task-branch is not a local branch: {revision}")
+    return branch
+
+
+def current_head(repo: Path) -> str:
+    """Return the current parent-lane commit object ID."""
+    return resolve_commit(repo, "HEAD", "HEAD")
+
+
+def parse_worktrees(repo: Path) -> list[dict[str, str]]:
+    """Parse this repository's machine-readable worktree inventory."""
+    listed = run_git(repo, "worktree", "list", "--porcelain", "-z")
+    if listed.returncode != 0:
+        raise ValueError(f"cannot list repository worktrees: {listed.stderr.strip()}")
+    records: list[dict[str, str]] = []
+    record: dict[str, str] = {}
+    for field in listed.stdout.split("\0"):
+        if not field:
+            if record:
+                records.append(record)
+                record = {}
+            continue
+        key, separator, value = field.partition(" ")
+        record[key] = value if separator else "true"
+    if record:
+        records.append(record)
+    return records
+
+
+def worktree_problem(
+    repo: Path,
+    supplied_path: Path,
+    branch: str,
+    task_oid: str,
+) -> str | None:
+    """Return why a supplied worktree is not the audited task worktree."""
+    matches = [
+        record
+        for record in parse_worktrees(repo)
+        if "worktree" in record
+        and Path(record["worktree"]).resolve() == supplied_path
+    ]
+    if len(matches) != 1:
+        return "path is not a unique worktree registered to this repository"
+    record = matches[0]
+    if record.get("branch") != branch:
+        return f"branch is {record.get('branch', 'detached')}, expected {branch}"
+    if record.get("HEAD", "").lower() != task_oid:
+        return f"HEAD is {record.get('HEAD', 'missing')}, expected {task_oid}"
+    return None
+
+
+def emit_guard_failure(stage: str, message: str, **fields: Any) -> int:
+    """Emit one merge-lane guard failure."""
+    emit({
+        "status": "fail",
+        "stage": stage,
+        "violations": [],
+        "message": message,
+        **fields,
+    })
+    return 1
+
+
+def create_worktree(args: argparse.Namespace) -> int:
+    """Create one task worktree and run its baseline command."""
+    repo = Path(args.repo).resolve()
+    if not repo.is_dir():
+        raise ValueError(f"repository does not exist: {repo}")
+    run_slug = safe_component(args.run_slug, "--run-slug")
+    task_id = safe_component(args.task_id, "--task-id")
+    base_oid = resolve_commit(repo, args.base, "--base")
+    branch = f"sdd/{run_slug}/{task_id}"
+    parent = Path(args.worktree_dir).resolve()
+    parent.mkdir(parents=True, exist_ok=True)
+    worktree = parent / f"{run_slug}-{task_id}"
+
+    added = run_git(repo, "worktree", "add", "-b", branch, str(worktree), base_oid)
+    if added.returncode != 0:
+        emit({
+            "status": "fail",
+            "stage": "worktree-add",
+            "branch": branch,
+            "worktree": str(worktree),
+            "exit_code": added.returncode,
+            "stdout": added.stdout,
+            "stderr": added.stderr,
+        })
+        return 1
+
+    baseline = subprocess.run(
+        args.baseline_cmd,
+        cwd=worktree,
+        shell=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = {
+        "status": "pass" if baseline.returncode == 0 else "fail",
+        "stage": "baseline",
+        "branch": branch,
+        "worktree": str(worktree),
+        "exit_code": baseline.returncode,
+        "stdout": baseline.stdout,
+        "stderr": baseline.stderr,
+    }
+    emit(payload)
+    return 0 if baseline.returncode == 0 else 1
+
+
+def read_scope(args: argparse.Namespace) -> tuple[list[str], list[str]]:
+    """Combine repeatable scope flags with an optional JSON scope."""
+    allowed = list(args.scope_file)
+    forbidden = list(args.never_touch)
+    if args.scope_json:
+        path = Path(args.scope_json)
+        if not path.is_file():
+            raise ValueError(f"missing scope JSON: {path}")
+        try:
+            scope = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"cannot read scope JSON {path}: {exc}") from exc
+        if not isinstance(scope, dict):
+            raise ValueError("scope JSON must be an object")
+        for key, target in (("files", allowed), ("never_touch", forbidden)):
+            values = scope.get(key, [])
+            if not isinstance(values, list) or not all(isinstance(item, str) for item in values):
+                raise ValueError(f"scope.{key} must be an array of strings")
+            target.extend(values)
+    return allowed, forbidden
+
+
+def path_matches(path: str, rule: str) -> bool:
+    """Match an exact path, directory prefix, or shell-style path pattern."""
+    normalized_path = path.removeprefix("./")
+    normalized_rule = rule.removeprefix("./").rstrip("/")
+    if not normalized_rule:
+        return False
+    return (
+        normalized_path == normalized_rule
+        or normalized_path.startswith(normalized_rule + "/")
+        or fnmatch.fnmatchcase(normalized_path, normalized_rule)
+    )
+
+
+def audit_paths(
+    changed: list[str],
+    allowed: list[str],
+    forbidden: list[str],
+) -> list[dict[str, str]]:
+    """Return deterministic scope violations; forbidden rules are absolute."""
+    violations: list[dict[str, str]] = []
+    for path in sorted(changed):
+        if any(path_matches(path, rule) for rule in forbidden):
+            violations.append({"path": path, "reason": "never_touch"})
+        elif not any(path_matches(path, rule) for rule in allowed):
+            violations.append({"path": path, "reason": "outside_scope"})
+    return violations
+
+
+def merge_lane(args: argparse.Namespace) -> int:
+    """Audit one immutable task candidate, merge it, and remove its worktree."""
+    repo = Path(args.repo).resolve()
+    if not repo.is_dir():
+        raise ValueError(f"repository does not exist: {repo}")
+    allowed, forbidden = read_scope(args)
+    base_oid = resolve_commit(repo, args.base, "--base")
+    task_oid = resolve_commit(repo, args.task_branch, "--task-branch")
+    task_branch = resolve_branch(repo, args.task_branch)
+    candidate_oid = resolve_commit(repo, args.candidate_sha, "--candidate-sha")
+    expected_parent = resolve_commit(repo, args.expected_parent, "--expected-parent")
+    worktree = Path(args.worktree).resolve()
+
+    if task_oid != candidate_oid:
+        return emit_guard_failure(
+            "candidate-mismatch",
+            "task branch does not equal the reported candidate",
+            task_oid=task_oid,
+            candidate_oid=candidate_oid,
+        )
+    parent_oid = current_head(repo)
+    if parent_oid != expected_parent:
+        return emit_guard_failure(
+            "expected-parent-mismatch",
+            "merge lane HEAD does not equal the expected parent",
+            expected_parent=expected_parent,
+            actual_parent=parent_oid,
+        )
+    problem = worktree_problem(repo, worktree, task_branch, task_oid)
+    if problem:
+        return emit_guard_failure("worktree-validation", problem, worktree=str(worktree))
+
+    diff = run_git(
+        repo,
+        "diff",
+        "--no-renames",
+        "--name-only",
+        "-z",
+        f"{base_oid}..{task_oid}",
+        "--",
+    )
+    if diff.returncode != 0:
+        emit({
+            "status": "fail",
+            "stage": "diff",
+            "violations": [],
+            "exit_code": diff.returncode,
+            "stdout": diff.stdout,
+            "stderr": diff.stderr,
+        })
+        return 1
+
+    changed = [path for path in diff.stdout.split("\0") if path]
+    violations = audit_paths(changed, allowed, forbidden)
+    if violations:
+        emit({
+            "status": "fail",
+            "stage": "scope-audit",
+            "changed": sorted(changed),
+            "violations": violations,
+        })
+        return 1
+
+    # Re-resolve only for a movement check. The audited OID remains the sole merge
+    # endpoint, so a subsequent ref race cannot substitute unaudited content.
+    current_task_oid = resolve_commit(repo, args.task_branch, "--task-branch")
+    if current_task_oid != task_oid:
+        return emit_guard_failure(
+            "task-ref-moved",
+            "task branch moved after audit",
+            audited_oid=task_oid,
+            actual_oid=current_task_oid,
+        )
+    actual_parent = current_head(repo)
+    if actual_parent != expected_parent:
+        return emit_guard_failure(
+            "expected-parent-moved",
+            "merge lane HEAD moved after audit",
+            expected_parent=expected_parent,
+            actual_parent=actual_parent,
+        )
+    problem = worktree_problem(repo, worktree, task_branch, task_oid)
+    if problem:
+        return emit_guard_failure("worktree-validation", problem, worktree=str(worktree))
+
+    merged = run_git(repo, "merge", "--no-ff", "--no-edit", task_oid)
+    if merged.returncode != 0:
+        emit({
+            "status": "fail",
+            "stage": "merge",
+            "changed": sorted(changed),
+            "violations": [],
+            "exit_code": merged.returncode,
+            "stdout": merged.stdout,
+            "stderr": merged.stderr,
+        })
+        return 1
+
+    current_task_oid = resolve_commit(repo, args.task_branch, "--task-branch")
+    if current_task_oid != task_oid:
+        return emit_guard_failure(
+            "task-ref-moved",
+            "task branch moved before worktree removal",
+            audited_oid=task_oid,
+            actual_oid=current_task_oid,
+        )
+    problem = worktree_problem(repo, worktree, task_branch, task_oid)
+    if problem:
+        return emit_guard_failure("worktree-validation", problem, worktree=str(worktree))
+
+    removed = run_git(repo, "worktree", "remove", str(worktree))
+    if removed.returncode != 0:
+        emit({
+            "status": "fail",
+            "stage": "worktree-remove",
+            "changed": sorted(changed),
+            "violations": [],
+            "exit_code": removed.returncode,
+            "stdout": removed.stdout,
+            "stderr": removed.stderr,
+        })
+        return 1
+
+    emit({
+        "status": "pass",
+        "stage": "complete",
+        "changed": sorted(changed),
+        "violations": [],
+        "branch": args.task_branch,
+        "candidate_oid": task_oid,
+        "parent_oid": expected_parent,
+        "worktree": str(worktree),
+    })
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Create task worktrees or scope-audit and merge a completed lane.",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    create = subparsers.add_parser(
+        "create",
+        help="create <worktree-dir>/<run-slug>-<task-id> on sdd/<run-slug>/<task-id>",
+    )
+    create.add_argument("--repo", required=True, help="parent Git repository")
+    create.add_argument("--run-slug", required=True)
+    create.add_argument("--task-id", required=True)
+    create.add_argument("--base", required=True, help="branch or SHA to fork")
+    create.add_argument("--worktree-dir", required=True, help="parent directory for worktrees")
+    create.add_argument(
+        "--baseline-cmd",
+        required=True,
+        help="gating shell command run inside the new worktree",
+    )
+    create.set_defaults(handler=create_worktree)
+
+    merge = subparsers.add_parser(
+        "merge-lane",
+        help="audit and --no-ff merge the task branch, then remove its worktree",
+    )
+    merge.add_argument("--repo", required=True, help="repository whose current branch receives the merge")
+    merge.add_argument("--base", required=True, help="diff base SHA or ref")
+    merge.add_argument("--task-branch", required=True, help="branch to audit and merge")
+    merge.add_argument("--candidate-sha", required=True, help="reported task candidate SHA")
+    merge.add_argument("--expected-parent", required=True, help="required receiving-branch HEAD")
+    merge.add_argument("--worktree", required=True, help="task worktree removed after merge")
+    merge.add_argument("--scope-json", help='JSON object with "files" and "never_touch" arrays')
+    merge.add_argument("--scope-file", action="append", default=[], help="allowed path/pattern (repeatable)")
+    merge.add_argument("--never-touch", action="append", default=[], help="forbidden path/pattern (repeatable)")
+    merge.set_defaults(handler=merge_lane)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        return args.handler(args)
+    except (OSError, ValueError) as exc:
+        print(f"sdd-wave: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -20,6 +20,19 @@ Task tool (general-purpose):
 
     [Scene-setting: where this fits, dependencies, architectural context]
 
+    ## Context Manifest
+
+    You receive an authoritative, provenance-bearing context manifest containing the task text,
+    Contract, declared scope (`scope.files` and `scope.never_touch`), applicable `CLAUDE.md`
+    rules and spec DO-NOT-CHANGE fences, acceptance commands, and relevant SHAs. Treat that
+    manifest as the source of truth for the context it distills.
+
+    Do not redundantly re-read `CLAUDE.md` files or spec documents for content already distilled
+    in the manifest; avoiding that wasted dispatch latency is why the manifest exists. If the
+    manifest proves insufficient for the task at hand, you may read source files on demand —
+    including specs, `CLAUDE.md`, and code. Completeness beats purity: this rule prohibits
+    redundant reads, not necessary investigation.
+
     ## Before You Begin
 
     If you have questions about:
