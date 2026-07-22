@@ -18,7 +18,7 @@ def test_gray_area_discovery_offer_present() -> None:
     assert "Find gray areas" in body, "missing AskUserQuestion header for the offer"
     assert "Use the standard set (Recommended)" in body, \
         "missing recommended cheap-path option"
-    assert "Run adhd first" in body, "missing adhd opt-in option"
+    assert "Add adhd areas" in body, "missing adhd opt-in option"
 
 
 def test_offer_uses_discovery_framing() -> None:
@@ -29,10 +29,10 @@ def test_offer_uses_discovery_framing() -> None:
 
 
 def test_offer_merges_and_labels() -> None:
-    """adhd-surfaced areas merge into the multiSelect, labeled."""
+    """adhd-surfaced areas are appended as their own labeled question."""
     body = SKILL_PATH.read_text()
-    assert "prefixing each adhd-surfaced entry with `adhd:`" in body, \
-        "missing merge+label instruction for adhd-surfaced areas"
+    assert "prefixing each label with `adhd:`" in body, \
+        "missing append+label instruction for adhd-surfaced areas"
     assert "truly-trivial" in body or "truly trivial" in body, \
         "missing trivial-work suppression rule"
 
@@ -40,7 +40,7 @@ def test_offer_merges_and_labels() -> None:
 def test_checklist_step_4_reworded() -> None:
     """Checklist step 4 mentions the optional adhd pass."""
     body = SKILL_PATH.read_text()
-    assert "optionally surface non-obvious areas via the `adhd` skill first" in body, \
+    assert "optionally surface *additional* non-obvious areas via the `adhd` skill first" in body, \
         "checklist step 4 not reworded for the adhd pass"
 
 
