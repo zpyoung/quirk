@@ -107,13 +107,22 @@ Stop and ask the user (multiple-choice via AskUserQuestion) when:
 
 ## Setup (one-time per workstation)
 
+Install the launcher **as a copy** on your PATH. The launcher resolves the
+*currently installed* quirk version on every run (from `installed_plugins.json`),
+so it keeps tracking `claude plugin update` — unlike a symlink into a versioned
+cache dir, which freezes at install-time and dangles when that version is pruned.
+
 ```bash
-cd $(claude plugin path quirk)/skills/pi-dev/scripts/pi-watch
-pnpm install
-ln -sf "$(pwd)/pi-watch" ~/.local/bin/pi-watch     # or any PATH dir
+# Resolve the install dir directly — there is no `claude plugin path` command.
+QUIRK="$(node -e 'const fs=require("fs"),os=require("os"),p=require("path");const P=JSON.parse(fs.readFileSync(p.join(os.homedir(),".claude/plugins/installed_plugins.json"),"utf8")).plugins;const k=P["quirk@quirk-dev"]?"quirk@quirk-dev":Object.keys(P).find(x=>x.startsWith("quirk@"));process.stdout.write(k?P[k][0].installPath:"")')"
+install -m755 "$QUIRK/skills/pi-dev/scripts/pi-watch/pi-watch" ~/.local/bin/pi-watch  # or any PATH dir
 ```
 
-Verify: `pi --version` → expect ≥ 0.65.1. `pi /login` for any subscription provider you want (Claude, ChatGPT, Copilot). Then `pi-watch --check` to confirm which aliases resolve to an authed model.
+Verify: `pi --version` → expect ≥ 0.65.1. `pi /login` for any subscription provider you want (Claude, ChatGPT, Copilot). Then `pi-watch --check` to confirm which aliases resolve to an authed model — the first run also auto-installs the current version's Node deps if they're missing.
+
+**Updating:** `claude plugin update quirk` is enough — `pi-watch` auto-follows. Run `pi-watch --where` to see which version/dir it resolves to (and whether that copy has the current alias ladder). Re-run the `install` line above only if the launcher script itself changes (rare); mjs/alias updates are picked up automatically.
+
+*(Dev checkout: point the launcher at a working tree instead — `ln -sf "$(pwd)/pi-watch" ~/.local/bin/pi-watch` from `skills/pi-dev/scripts/pi-watch`, or set `PI_WATCH_DIR`. A launcher whose own dir holds the code and sits outside the plugin cache runs that tree, so local edits are live.)*
 
 ## Escape hatches
 

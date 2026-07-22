@@ -1,9 +1,27 @@
 #!/usr/bin/env bash
-# pi-watch — wrapper that runs pi-watch.mjs from its own dir so node resolves
-# the local node_modules. Symlink this file onto your PATH for clean usage.
+# pi-watch — launcher for pi-watch.mjs.
+#
+# The launcher deliberately does NOT run whatever copy of pi-watch.mjs happens
+# to sit next to it. The Claude plugin cache stores every installed quirk
+# version in its own immutable dir (…/cache/quirk-dev/quirk/<version>/), so a
+# PATH symlink into one of those dirs would freeze at that version forever —
+# `claude plugin update` lands new code in a *new* dir and never repoints the
+# link. Instead, on every run we resolve the *currently installed* quirk path
+# from installed_plugins.json, so pi-watch always tracks the latest update.
+#
+# Resolution order (first hit wins):
+#   1. $PI_WATCH_DIR                    — explicit override (testing / power use)
+#   2. dev checkout                     — own dir has the code AND is not inside
+#                                         the plugin cache → run it (tracks repo)
+#   3. installed plugin                 — installPath from installed_plugins.json
+#   4. own dir                          — last-ditch, if it carries the code
+#
+# `pi-watch --where` prints the resolved source + dir (and whether the resolved
+# copy has the GPT-5.6 alias ladder) and exits — use it to diagnose "which
+# version am I actually running".
 set -euo pipefail
 
-# Resolve symlinks so DIR is the real script dir, not the PATH symlink dir.
+# --- resolve this launcher's real directory (follow the PATH symlink) --------
 SOURCE="${BASH_SOURCE[0]}"
 while [ -L "$SOURCE" ]; do
     TARGET="$(readlink "$SOURCE")"
@@ -14,4 +32,81 @@ while [ -L "$SOURCE" ]; do
     fi
 done
 DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
-exec node "$DIR/pi-watch.mjs" "$@"
+
+CACHE_PREFIX="$HOME/.claude/plugins/cache/"
+SUBPATH="skills/pi-dev/scripts/pi-watch"
+
+# Reads the live installPath for the quirk plugin. Prefers the quirk@quirk-dev
+# key, falls back to any quirk@* entry. Prints nothing (exit 1) if unavailable.
+resolve_installed() {
+    node -e '
+        const fs = require("fs"), os = require("os"), path = require("path");
+        try {
+            const f = path.join(os.homedir(), ".claude/plugins/installed_plugins.json");
+            const plugins = JSON.parse(fs.readFileSync(f, "utf8")).plugins || {};
+            const key = plugins["quirk@quirk-dev"]
+                ? "quirk@quirk-dev"
+                : Object.keys(plugins).find((k) => k.startsWith("quirk@"));
+            const entry = key && plugins[key] && plugins[key][0];
+            if (!entry || !entry.installPath) process.exit(1);
+            process.stdout.write(entry.installPath);
+        } catch { process.exit(1); }
+    ' 2>/dev/null || true
+}
+
+PLUGIN_DIR=""
+SOURCE_KIND=""
+
+if [ -n "${PI_WATCH_DIR:-}" ] && [ -f "$PI_WATCH_DIR/pi-watch.mjs" ]; then
+    PLUGIN_DIR="$PI_WATCH_DIR"; SOURCE_KIND="override"
+elif [[ "$DIR" != "$CACHE_PREFIX"* ]] && [ -f "$DIR/pi-watch.mjs" ]; then
+    PLUGIN_DIR="$DIR"; SOURCE_KIND="dev-checkout"
+else
+    INSTALL_PATH="$(resolve_installed)"
+    if [ -n "$INSTALL_PATH" ] && [ -f "$INSTALL_PATH/$SUBPATH/pi-watch.mjs" ]; then
+        PLUGIN_DIR="$INSTALL_PATH/$SUBPATH"; SOURCE_KIND="installed"
+    elif [ -f "$DIR/pi-watch.mjs" ]; then
+        PLUGIN_DIR="$DIR"; SOURCE_KIND="own-dir"
+    fi
+fi
+
+if [ -z "$PLUGIN_DIR" ]; then
+    echo "pi-watch: could not locate an installed quirk pi-dev skill." >&2
+    echo "  Install/enable the quirk plugin, or set PI_WATCH_DIR to a checkout's" >&2
+    echo "  skills/pi-dev/scripts/pi-watch directory." >&2
+    exit 1
+fi
+
+# --- diagnostics: pi-watch --where -------------------------------------------
+for a in "$@"; do
+    if [ "$a" = "--where" ]; then
+        if grep -q "gpt-5.6" "$PLUGIN_DIR/pi-watch.mjs" 2>/dev/null; then
+            ladder="has gpt-5.6 alias ladder"
+        else
+            ladder="pre-5.6 alias ladder (stale)"
+        fi
+        echo "source : $SOURCE_KIND"
+        echo "dir    : $PLUGIN_DIR"
+        echo "ladder : $ladder"
+        exit 0
+    fi
+done
+
+# --- ensure deps for the resolved version ------------------------------------
+# Published versions bundle node_modules, but self-heal if a version dir lacks
+# the SDK (e.g. shipped without deps, or after a manual cache prune).
+if [ ! -d "$PLUGIN_DIR/node_modules/@earendil-works/pi-coding-agent" ]; then
+    if command -v pnpm >/dev/null 2>&1; then
+        echo "pi-watch: installing dependencies in $PLUGIN_DIR (first run for this version)…" >&2
+        if ! (cd "$PLUGIN_DIR" && pnpm install --silent) >&2; then
+            echo "pi-watch: 'pnpm install' failed in $PLUGIN_DIR." >&2
+            exit 1
+        fi
+    else
+        echo "pi-watch: dependencies missing in $PLUGIN_DIR and pnpm is not on PATH." >&2
+        echo "  Install pnpm (https://pnpm.io/installation) or run 'pnpm install' there." >&2
+        exit 1
+    fi
+fi
+
+exec node "$PLUGIN_DIR/pi-watch.mjs" "$@"
