@@ -153,7 +153,15 @@ def test_slice_patch_diffs_enable_rename_detection() -> None:
 
 
 def test_scripts_remain_bash_3_2_compatible() -> None:
-    incompatible = re.compile(r"\b(?:mapfile|readarray)\b|\bdeclare\s+-A\b")
+    # Constructs that only exist in Bash 4+ (macOS ships 3.2): associative and
+    # global declares, case-modification expansions, coprocesses, appending
+    # merge redirection, and the array-read builtins.
+    incompatible = re.compile(
+        r"\b(?:mapfile|readarray|coproc)\b"
+        r"|\bdeclare\s+-[A-Za-z]*[Ag]"
+        r"|\$\{[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?(?:,,|\^\^)"
+        r"|&>>"
+    )
     violations = [
         location(path, number, line)
         for path in scripts()

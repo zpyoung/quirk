@@ -108,6 +108,14 @@ Script-side auto-detection is out of scope. The skill passes the discovered buil
 
 Require a repository, attached non-base branch, and clean index/worktree. Determine the base from an existing PR/MR before the remote default. Detect the remote from `--remote`, then `remote.pushDefault`, then the conventional fallback. Surface branch protection, permissions, and merge commits before planning.
 
+Before touching anything, create a restorable backup of the branch tip and capture its name:
+
+```bash
+backup_ref=$(scripts/preflight.sh --base <base> [--branch <ref>])
+```
+
+`preflight.sh` enforces the state checks above and creates `backup/<branch>_<ts>` pointing at the current tip, so any later slice, rebase, or force-push can be undone with `git reset --hard <backup_ref>` (or `git branch --force <branch> <backup_ref>` from another branch). Exit codes are: 0 success, ref name on stdout; 2 dirty index/work tree; 3 detached HEAD or the target branch equals the base; 4 not a git work tree, base/branch unresolved, or the backup could not be created; 5 bad arguments. Keep `backup_ref` for the whole run — the verify-failure protocol below cites it in the restore command it reports.
+
 Run the analyzer once for weights and once for hunk inventory:
 
 ```bash
@@ -145,6 +153,8 @@ scripts/verify.sh --branch <ref> --build-cmd <cmd> [--test-cmd <cmd>] \
 ```
 
 Exit codes are: 0 green; 1 build failed; 2 tests failed; 4 worktree infrastructure/cleanup failed; 5 bad arguments.
+
+**On verify failure, retry once, then stop.** When a slice fails to build or test, it usually references a symbol defined by a hunk that landed in a later slice. Consult the dependency graph for that symbol, pull the defining hunk up into the failing slice, and retry once. If it still fails after that single retry, stop: keep the slices that already verified as local branches, push nothing, and report the failing slice together with the restore command `git reset --hard <backup_ref>` from pre-flight. Never force a non-building slice forward, never silently merge it into its successor, and never exceed the one retry.
 
 For each slice, check mergeability and that main would stay releasable. Treat “is this really vertical?” only as a soft review prompt. Finally conserve the original result by comparing trees: the top materialized tree must equal the original head tree.
 
@@ -227,6 +237,7 @@ If rebase-cascade pain dominates, prefer trunk plus feature flags rather than pr
 
 `${CLAUDE_PLUGIN_ROOT}/skills/split-branch/scripts/`:
 
+- `preflight.sh` `--base <ref> [--branch <ref>]` — verifies a clean non-base branch and creates a restorable `backup/<branch>_<ts>` ref, printing its name.
 - `analyze.sh` `[--hunks] [--remote <name>] [base]` — reports weighted file statistics or immutable hunk inventory.
 - `slice.sh` `--base/--head/--branch/--hunks` or `--at-commit` — materializes a selected slice with a throwaway index.
 - `verify.sh` `--branch --build-cmd [--test-cmd ...]` — builds and tests one ref in a dedicated disposable worktree.

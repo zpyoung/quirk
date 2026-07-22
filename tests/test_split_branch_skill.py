@@ -137,6 +137,26 @@ def test_build_and_test_discovery_ladder_is_in_order_and_skill_side() -> None:
     assert re.search(r"skill.*passes.*verify\.sh", text, re.IGNORECASE)
 
 
+def test_preflight_backup_and_restore_are_documented() -> None:
+    text = skill_text()
+    assert "preflight.sh" in text
+    assert re.search(r"backup/<branch>_<ts>", text)
+    # A concrete, backup-referencing restore command must be present.
+    assert re.search(r"git reset --hard <?backup", text, re.IGNORECASE)
+    # preflight.sh must appear in the script reference with a description.
+    assert re.search(r"`preflight\.sh`[^\n]+ — [^\n]+", text)
+
+
+def test_verify_failure_protocol_is_documented() -> None:
+    text = skill_text()
+    assert re.search(r"pull the defining hunk up|pull .* hunk up", text, re.IGNORECASE)
+    assert re.search(r"retry once", text, re.IGNORECASE)
+    assert re.search(r"push nothing", text, re.IGNORECASE)
+    # On terminal failure it must point back at the pre-flight backup.
+    assert re.search(r"restore command `git reset --hard <backup_ref>`", text)
+    assert re.search(r"never.*force a non-building slice forward", text, re.IGNORECASE)
+
+
 def test_slice_ordering_sizing_and_bottom_bar() -> None:
     text = skill_text()
     assert re.search(r"leftovers.*prep slice.*below.*MVP slice", text, re.IGNORECASE)
