@@ -68,6 +68,16 @@ judgment (attack surfaces, the refute mandate, adjudication). This mirrors SDD's
 
 Back-link for the whole migration: logic.md § Decisions Locked → Integration.
 
+**Reading of "a `quick` pass".** The Integration decision says tasks below SDD's old
+`>150 lines OR contract-surface` gate "get a `quick` pass instead of recording `CODEX-DEFERRED`."
+Taken literally against this spec's depth table, a 51–150-line task without a contract surface
+auto-selects `standard`, not `quick`. This spec reads the locked decision as *"a pass rather than
+no pass"* — the intent it states — and lets the depth table assign the tier, which gives such a
+task **more** review than the literal reading, never less. No SDD task can now record
+`CODEX-DEFERRED`, which is the substance of the decision. If you intended `quick` as a literal
+ceiling for sub-threshold SDD tasks, the depth table needs an SDD-specific clamp and this
+paragraph changes.
+
 ### Existing patterns to follow
 
 - `skills/subagent-driven-development/scripts/sdd-acceptance` — argparse structure, JSON-to-stdout,
@@ -96,8 +106,8 @@ adversarial-review select-model --author-family <family> [--model <alias>]
                                 [--check-cmd <cmd>]
   -> stdout: ModelSelection ; exit 0 resolved, 1 no rung resolved, 2 error
 
-adversarial-review gate      --findings <path> [--depth <quick|standard|deep>]
-                             [--repo-root <path>]
+adversarial-review gate      --findings <path> --model <path> --prepass <path>
+                             [--depth <quick|standard|deep>] [--repo-root <path>]
   -> stdout: GateResult ; exit 0 PASS, 1 NEEDS_FIXES, 3 CRITICAL_ISSUES, 4 NOT_REVIEWABLE, 2 error
 
 adversarial-review manifest  --resolve <path> --prepass <path> --model <path> --gate <path>
@@ -120,11 +130,18 @@ Back-link: logic.md § Composition contract.
 verified   : evidence re-resolves AND >=1 item of kind "command" | "prepass"
              -> severity unchanged, confidence unchanged
 unverified : evidence re-resolves, no reproduction item
-             -> severity unchanged, confidence capped at "LOW"
+             -> severity unchanged; confidence capped at "LOW" ONLY when
+                severity is CRITICAL or HIGH
 falsified  : evidence does NOT re-resolve (path/line absent, quote not present in
              artifact, or absence-search now returns hits)
              -> finding dropped, suppressed_count += 1
 ```
+
+The confidence cap is scoped to CRITICAL/HIGH because that is exactly where logic.md § Decisions
+Locked → Posture requires reproduction; below it, "reasoned argument permitted" means the
+reviewer's own confidence judgment stands unmodified. Applying the cap uniformly would flatten the
+confidence axis for every MEDIUM and LOW finding and silently re-impose a proof requirement the
+logic spec declined to make.
 
 Verdict is computed from surviving **severity** only, per logic.md's verdict table; confidence
 never affects it.
@@ -153,6 +170,27 @@ depth deep             : contested findings go to tiebreak; tiebreak verdict is 
 Falsified evidence is never contested — it is dropped at any depth, since the drop is mechanical
 rather than a judgment. Back-link: logic.md § Decisions Locked → Reviewer supply & adjudication.
 
+### `quick` depth is one dispatch, not two
+
+logic.md § Data flow → Depth dial defines `quick` as "single pass with self-refute in the same
+dispatch." It is a distinct pipeline shape, not merely a cheaper `standard`:
+
+| | `quick` | `standard` / `deep` |
+|---|---|---|
+| Dispatches | 1 | 2 (+1 at `deep`) |
+| Refute context | Same context, second section of one reply | Fresh context, separate dispatch |
+| Independence | Reduced — self-refutation is subject to the same self-recognition bias the two-stage protocol exists to defeat | Full |
+| `Finding.stage` | `"promote"` for surviving items; self-refuted items are emitted under `suppressed` with stage `"promote"` | `"promote"` / `"refute"` as dispatched |
+
+`assets/promote-prompt.md` carries a `quick`-mode section instructing the reviewer to produce its
+candidate list, then refute its own list under the kill mandate, and emit only survivors plus a
+suppressed list. There is no `refute-prompt.md` dispatch at `quick`.
+
+Because `quick` cannot deliver structural independence, `GateResult` carries it forward: a `quick`
+run sets `manifest.reviewer.independence = "reduced"` regardless of model family, so a `PASS` from
+a `quick` pass is never read as equivalent to a `standard` one. Back-link: logic.md § Data flow →
+Depth dial, and § Decisions Locked → Reviewer supply & adjudication.
+
 ### Unfalsifiable-claim detection
 
 The promote stage emits a finding with `category: "unfalsifiable-claim"` when the artifact's
@@ -160,14 +198,31 @@ central claim admits no test. `gate` treats this category specially:
 
 `CONTRACT:`
 ```
-unfalsifiable-claim present            -> sorted first in findings[], severity as reported
-unfalsifiable-claim present AND it is
-  the only finding AND prepass could
-  not run                              -> verdict NOT_REVIEWABLE
-otherwise                              -> normal verdict computation, review proceeds
+unfalsifiable-claim present  -> sorted first in findings[], severity as reported;
+                                review proceeds and the verdict is computed normally
 ```
 
 Back-link: logic.md § Decisions Locked → Evidence across artifact types.
+
+### `NOT_REVIEWABLE` — both disjuncts
+
+logic.md's verdict table makes `NOT_REVIEWABLE` a two-branch condition. `gate` therefore requires
+`--model` and `--prepass` in addition to `--findings`; without them the ladder-exhausted branch is
+unreachable and an unreviewed artifact would emit `PASS`, which logic.md § Composition contract
+forbids in terms.
+
+`CONTRACT:`
+```
+NOT_REVIEWABLE if:
+    model.resolved == false                       # no ladder rung resolved
+  OR (prepass.status == "could-not-run"
+      AND any finding.category == "unfalsifiable-claim")
+evaluated BEFORE severity-based verdict computation; it takes precedence over
+PASS, NEEDS_FIXES, and CRITICAL_ISSUES.
+```
+
+`gate` exits 2 if `--model` or `--prepass` is absent — a missing input must fail loudly rather
+than silently collapse to the severity path. Back-link: logic.md § Composition contract.
 
 ### Human summary
 
@@ -212,10 +267,24 @@ depth_suggestion : "quick" | "standard" | "deep"
 contract_surface : bool
 ```
 
+`SCHEMA:` PrepassResult
+```
+status : "pass" | "fail" | "could-not-run"
+         # could-not-run = no check was executable at all (no discovered command
+         #   for code-diff; unreadable target for prose). Distinct from "fail",
+         #   which means checks ran and something did not pass.
+checks : array of {name, command, exit_code, status, output}
+findings : array of Finding   # stage "prepass", severity HIGH, confidence HIGH
+```
+
 `SCHEMA:` ModelSelection
 ```
-alias        : str
-family       : "anthropic" | "openai" | "google" | "other"
+resolved     : bool           # false when no ladder rung resolved; drives NOT_REVIEWABLE
+alias        : str | null     # null when resolved == false
+family       : "anthropic" | "openai" | "google" | "other" | null
+provider     : str | null
+model        : str | null
+thinking     : str | null
 independence : "full" | "reduced"
 ladder       : array of {alias, checked, resolved}
 ```
@@ -392,8 +461,10 @@ harness:
 
 logic.md contains two entries that under-specify their interaction:
 
-- *Decisions Locked → Posture:* "Reproduction required for CRITICAL/HIGH ... or they get
-  **downgraded**" — without naming which axis is downgraded.
+- *Data flow, step 7* (logic.md:70–71): "A CRITICAL or HIGH finding lacking a reproduction is
+  **downgraded**" — without naming which axis is downgraded. (The companion bullet at *Decisions
+  Locked → Posture*, logic.md:154, states the reproduction requirement itself but does not use the
+  word "downgraded"; the ambiguity lives in the Data flow wording.)
 - *Behavior & scenarios:* "A high-consequence finding cannot be proven. It survives as **CRITICAL
   severity with LOW confidence** rather than being downgraded into invisibility."
 
