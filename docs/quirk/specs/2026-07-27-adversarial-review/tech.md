@@ -150,7 +150,11 @@ originally cited is gone. The surviving in-repo models:
 `CONTRACT:`
 ```
 adversarial-review resolve   --target <str> [--profile <name>] [--repo-root <path>]
+                             [--diff-file <path>]
   -> stdout: ResolveResult ; exit 0 ok, 2 usage/IO error
+  # --diff-file reads the diff from a file instead of invoking git. Testing seam,
+  #   mirroring select-model's --check-cmd: depth thresholds and contract-surface
+  #   detection are verifiable without constructing real git history.
 
 adversarial-review prepass   --profile <name> --target <str> [--repo-root <path>]
                              [--check-cmd <cmd> ...]
