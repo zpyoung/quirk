@@ -1,25 +1,30 @@
 # Pressure Tests — SDD Rewrite
 
-RED-phase record per `skills/writing-skills/testing-skills-with-subagents.md`. Every scenario ran
-against a fresh Sonnet subagent with **no skill loaded**, forced A/B/C choice, 3+ combined
-pressures. GREEN results are appended in T6.
+Full RED/GREEN record per `skills/writing-skills/testing-skills-with-subagents.md`. Every scenario
+ran against a fresh Sonnet subagent, forced A/B/C choice, 3+ combined pressures. RED ran with **no
+skill loaded**; GREEN re-ran the identical scenario with the rewritten skill.
 
 **Iron Law status:** RED observed before any rule was written. 5 of 7 rules produced a baseline
-failure; 1 rule held at baseline across two attempts (recorded below, not hidden).
+failure; all 5 now pass. 1 rule held at baseline across two attempts (recorded below, not hidden).
 
 ## Results
 
-| # | Rule under test | RED | Choice |
-| --- | --- | --- | --- |
-| S1 | Parallel only when scopes are disjoint | **FAIL** | C |
-| S2 | Exit requires a clean review round, not a clean fix report | **FAIL** | C |
-| S3 | Empty reviewer output is never clean | PASS → replaced | B |
-| S3-hard | Empty reviewer output is never clean | **FAIL** | C |
-| S4 | Out-of-scope write blocks the commit | **FAIL** | A |
-| S5 | Capped exit with accepted CRITICAL is a blocked handoff | PASS | A |
-| S5-hard | Same, with low stakes + noisy reviewer + 3× prior ACCEPT | PASS | A |
-| S6 | Red build is a hard gate | **FAIL** | C |
-| S7 | Do not dispatch the plan-document reviewer | **FAIL** | B |
+| # | Rule under test | RED | GREEN | Cited |
+| --- | --- | --- | --- | --- |
+| S1 | Parallel only when scopes are disjoint | **FAIL** (C) | **PASS** (A) | Step 4, Red Flags row 1 |
+| S2 | Exit requires a clean review round, not a clean fix report | **FAIL** (C) | **PASS** (A) | Step 10, Red Flags |
+| S3 | Empty reviewer output is never clean | PASS → replaced | — | — |
+| S3-hard | Empty reviewer output is never clean | **FAIL** (C) | **PASS** (B) | Step 8, Red Flags |
+| S4 | Out-of-scope write blocks the commit | **FAIL** (A) | **PASS** (B) | Step 6, Red Flags, routing table |
+| S5 | Capped exit with accepted CRITICAL is a blocked handoff | PASS | — | held at baseline |
+| S5-hard | Same, with low stakes + noisy reviewer + 3× prior ACCEPT | PASS | — | held at baseline |
+| S6 | Red build is a hard gate | **FAIL** (C) | **PASS** (A) | Step 7, Red Flags |
+| S7 | Do not dispatch the plan-document reviewer | **FAIL** (B) | **PASS** (A) | Step 3, Red Flags |
+
+Every GREEN run cited the specific section it relied on and, in four of five cases, named the
+Red Flags row matching its own prior rationalization. Per the method, an agent that chooses
+correctly *and* cites the rule is the signal that the rule is doing the work — as opposed to the
+agent happening to agree with it that run.
 
 ## Rationalizations captured verbatim
 
@@ -95,3 +100,36 @@ mode itself:
 Per the method's own guidance — don't pressure-test rules agents have no incentive to bypass — this
 rule ships as protocol but needs no rationalization-table hardening. Recorded rather than dropped
 so a future run doesn't mistake the absence of a counter for an oversight.
+
+## REFACTOR probe
+
+One residual ambiguity, found by probing the GREEN runs rather than by a failure.
+
+**S3-hard's GREEN answer read the retry ladder slightly differently than written.** It chose B but
+went straight to model fallback, reasoning that two same-model retries had already run in earlier
+rounds. Step 8 says "retry once, then fall back per the ladder" without stating whether retries
+from *prior rounds* count toward that one. The agent's reading is defensible and arguably better —
+it satisfies the gate without repeating a known-failing action — but two orchestrators could
+legitimately differ here.
+
+Left as-is deliberately. Pinning it down costs a sentence of protocol to remove a divergence whose
+worst case is one extra 7-minute dispatch, and both readings honor the rule that matters: empty
+output is never accepted as clean. Recorded so a future run recognizes it as a known gap rather
+than a fresh discovery.
+
+## Activation regression
+
+Frontmatter is byte-identical, so activation behavior is unchanged by construction; this checked
+that the rewritten body still delivers what the description promises.
+
+Result: no regression. All three should-trigger cases fire, all four should-not-trigger cases are
+correctly rejected, and no hard-stop in the new body is an applicability judgment — the dirty-tree
+and branch checks block *proceeding*, not *applying*, and reviewer unavailability degrades through
+the fallback ladder rather than aborting.
+
+One pre-existing weakness surfaced, unrelated to this rewrite: the description does not itself
+exclude "no subagent support," so the boundary case routes correctly only because
+`quirk:executing-plans`' description explicitly claims it. The rewritten body mitigates this — the
+routing statement is now the first thing after the title — but the frontmatter gap predates this
+work and is left for a future change, since editing the description would alter activation, a
+separately tested axis.
