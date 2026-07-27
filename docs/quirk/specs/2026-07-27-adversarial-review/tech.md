@@ -447,9 +447,30 @@ plan        : Task ; Contract ; Acceptance
 prose-claim : (none — coverage check reports "not-applicable")
 ```
 
-Every failed reference resolution becomes a `stage: "prepass"` Finding at severity `HIGH`,
-confidence `HIGH`, with a `kind: "prepass"` evidence item — true by construction, so it bypasses
-the promote/refute stages entirely. Back-link: logic.md § Data flow step 3.
+Every failed reference resolution becomes a `stage: "prepass"` Finding with a `kind: "prepass"`
+evidence item, bypassing the promote/refute stages. Severity and confidence are **calibrated to
+how decidable the failure actually is** (revised 2026-07-27 after dogfooding — see below):
+
+`CONFIG:` prepass finding calibration
+```
+path/symbol unresolved, profile prose-claim   -> HIGH severity,   HIGH confidence
+path/symbol unresolved, profile spec-design
+                        or plan               -> MEDIUM severity, LOW confidence
+command not on PATH, any profile              -> MEDIUM severity, LOW confidence
+```
+
+**Why not uniformly HIGH/HIGH.** Running this check against this repo's own `tech.md` produced 40
+findings, nearly all false positives; tightening classification (document-relative resolution,
+line-anchor stripping, rejecting globs/placeholders/shebangs/prose) reduced it to 20, and the
+remainder proved semantic rather than mechanical. A spec-design or plan document names files that
+do not exist *yet* — that is its job — and no heuristic separates "stale reference" from "planned
+artifact." Asserting HIGH confidence on an undecidable question is how a check earns the 70–90%
+ignore rate recorded in logic.md § Industry Insights. The claim text must state the ambiguity
+rather than hide it. `prose-claim` documents describe current state, so the original calibration
+holds there. Command-vs-prose is undecidable in every profile.
+
+Back-link: logic.md § Data flow step 3, and § Decisions Locked → Output format (severity is
+consequence, confidence is likelihood — this is that model doing its job).
 
 ## DO-NOT-CHANGE fences
 

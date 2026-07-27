@@ -315,3 +315,75 @@ def test_code_discovery_finds_pytest_from_pyproject(tmp_path):
     result = prepass("--profile", "code-diff", "--target", "WORKTREE",
                      "--repo-root", str(tmp_path), "--check-cmd", "true")
     assert result["status"] == "pass"
+
+
+# --- prepass finding calibration ---------------------------------------------------
+# A spec or plan names artifacts that do not exist yet; asserting HIGH confidence on
+# that is undecidable and is what earns a check its ignore rate.
+
+def test_spec_design_unresolved_path_is_medium_low_and_names_the_ambiguity(tmp_path):
+    doc = _touch(tmp_path / "tech.md", "Create `skills/new-thing/SKILL.md` in this work.\n")
+    result = prepass("--profile", "spec-design", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    finding = result["findings"][0]
+    assert finding["severity"] == "MEDIUM"
+    assert finding["confidence"] == "LOW"
+    assert "plans to create" in finding["claim"]
+
+
+def test_plan_profile_uses_the_same_forward_looking_calibration(tmp_path):
+    doc = _touch(tmp_path / "docs/plans/p.md", "Create `src/new.py`.\n")
+    result = prepass("--profile", "plan", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    finding = result["findings"][0]
+    assert (finding["severity"], finding["confidence"]) == ("MEDIUM", "LOW")
+
+
+def test_prose_claim_unresolved_path_stays_high_high(tmp_path):
+    """A README describes current state, so an unresolved path really is a defect."""
+    doc = _touch(tmp_path / "notes.md", "See `src/gone.py`.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    finding = result["findings"][0]
+    assert (finding["severity"], finding["confidence"]) == ("HIGH", "HIGH")
+
+
+def test_command_not_on_path_is_never_asserted_confidently(tmp_path):
+    """Command-vs-prose is undecidable in every profile."""
+    doc = _touch(tmp_path / "notes.md", "Run `definitely-not-real-xyz --help`.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    finding = next(f for f in result["findings"] if "definitely-not-real-xyz" in f["claim"])
+    assert (finding["severity"], finding["confidence"]) == ("MEDIUM", "LOW")
+    assert "may instead be prose" in finding["claim"]
+
+
+# --- noise regressions found by dogfooding -----------------------------------------
+
+@pytest.mark.parametrize("token", [
+    "scripts/sdd-*",           # glob
+    "<path>",                  # placeholder
+    "#!/usr/bin/env python3",  # shebang
+    "/quirk:adversarial-review",
+    "resolve --> depth_suggestion",
+    "only critique",           # prose, not a command
+])
+def test_non_reference_tokens_produce_no_finding(token, tmp_path):
+    doc = _touch(tmp_path / "notes.md", f"Text with `{token}` inline.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc), "--repo-root", str(tmp_path))
+    assert result["findings"] == [], f"{token!r} should not be treated as a reference"
+
+
+def test_line_anchor_is_stripped_before_resolving(tmp_path):
+    _touch(tmp_path / "tests/conftest.py", "x = 1\n")
+    doc = _touch(tmp_path / "notes.md", "See `tests/conftest.py:35-42`.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc), "--repo-root", str(tmp_path))
+    assert result["findings"] == []
+
+
+def test_relative_reference_resolves_against_the_document_directory(tmp_path):
+    """`logic.md` in a spec means its sibling, not a repo-root path."""
+    _touch(tmp_path / "docs/spec/logic.md", "# Purpose\n")
+    doc = _touch(tmp_path / "docs/spec/tech.md", "See `logic.md` for rationale.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc), "--repo-root", str(tmp_path))
+    assert result["findings"] == []

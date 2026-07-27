@@ -195,10 +195,11 @@ def run_check(command: str, repo_root: Path) -> dict[str, Any]:
 def classify_reference(token: str) -> str | None:
     """Return the reference kind, or None when the token is not a reference at all.
 
-    Returning None is the main defense against noise. A pre-pass that flags prose,
-    globs, and placeholders produces the false-positive flood that gets review
-    gates switched off, and every finding here is emitted at HIGH confidence
-    because it claims to be mechanically true — so a wrong one is expensive.
+    Returning None is the first defense against noise: a pre-pass that flags prose,
+    globs, and placeholders produces the false-positive flood that gets review gates
+    switched off. Calibrated severity in `prepass_finding` is the second — this
+    function decides *whether* something is a reference, that one decides how
+    confidently a failure to resolve it can be asserted.
     """
     token = token.strip()
     if not token:
@@ -214,10 +215,16 @@ def classify_reference(token: str) -> str | None:
 
     if " " in token:
         # Distinguishing a shell command from prose-in-backticks is not reliably
-        # decidable, and guessing wrong here is what floods a report. Require the
-        # first word to actually be on PATH; anything else is treated as prose.
-        first = token.split()[0]
-        return "command" if IDENTIFIER.match(first.replace("-", "_")) else None
+        # decidable, and guessing wrong floods the report. Treat a multi-word token
+        # as a command only on positive evidence: it carries a --flag, or its first
+        # word is genuinely an executable. `only critique` is prose; `pytest -q` is
+        # not. This trades recall for precision, deliberately.
+        words = token.split()
+        first = words[0]
+        has_flag = any(word.startswith("--") and len(word) > 2 for word in words[1:])
+        if not IDENTIFIER.match(first.replace("-", "_")):
+            return None
+        return "command" if (has_flag or shutil.which(first) is not None) else None
 
     if "/" in token or Path(strip_line_anchor(token)).suffix in SOURCE_SUFFIXES \
             or Path(strip_line_anchor(token)).suffix == ".md":
@@ -268,7 +275,7 @@ def resolve_reference(
 
 
 def check_references(
-    text: str, repo_root: Path, doc_dir: Path | None = None
+    text: str, repo_root: Path, profile: str, doc_dir: Path | None = None
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     tokens: list[str] = []
     for match in BACKTICK_TOKEN.finditer(text):
@@ -289,7 +296,7 @@ def check_references(
         ok, detail = resolve_reference(kind, token, repo_root, doc_dir)
         lines.append(f"{'ok' if ok else 'MISSING'} {kind} {token} — {detail}")
         if not ok:
-            findings.append(prepass_finding(token, kind, detail))
+            findings.append(prepass_finding(token, kind, detail, profile))
 
     check = {
         "name": "reference-resolution",
@@ -301,15 +308,40 @@ def check_references(
     return check, findings
 
 
-def prepass_finding(token: str, kind: str, detail: str) -> dict[str, Any]:
+# A spec or plan names artifacts that do not exist *yet* — that is its purpose —
+# and no heuristic separates a stale reference from a planned one. Claiming HIGH
+# confidence on an undecidable question is what makes a check get ignored.
+FORWARD_LOOKING_PROFILES = ("spec-design", "plan")
+
+
+def prepass_finding(token: str, kind: str, detail: str, profile: str) -> dict[str, Any]:
+    undecidable = kind == "command" or profile in FORWARD_LOOKING_PROFILES
+    if undecidable:
+        severity, confidence = "MEDIUM", "LOW"
+    else:
+        severity, confidence = "HIGH", "HIGH"
+
+    if kind == "command":
+        claim = (
+            f"The document names a command not found on PATH: {token}. This may instead be "
+            f"prose that resembles a command."
+        )
+    elif profile in FORWARD_LOOKING_PROFILES:
+        claim = (
+            f"The document names a {kind} that does not resolve: {token}. This is either a "
+            f"stale reference or an artifact the document plans to create."
+        )
+    else:
+        claim = f"The document names a {kind} that does not resolve: {token}"
+
     return {
         "id": "",
-        "severity": "HIGH",
-        "confidence": "HIGH",
+        "severity": severity,
+        "confidence": confidence,
         "category": "unresolvable-reference",
-        "claim": f"The document names a {kind} that does not resolve: {token}",
+        "claim": claim,
         "evidence": [{"kind": "prepass", "ref": token, "output": detail}],
-        "remediation": f"Correct or remove the reference to {token}.",
+        "remediation": f"Confirm whether {token} should exist; correct or remove the reference.",
         "patch": None,
         "stage": "prepass",
     }
@@ -363,7 +395,7 @@ def run_prepass(
             # No check could run at all — distinct from a check that ran and failed.
             return 1, {"status": "could-not-run", "checks": [], "findings": []}
         text = path.read_text(errors="replace")
-        reference_check, findings = check_references(text, repo_root, path.parent)
+        reference_check, findings = check_references(text, repo_root, profile, path.parent)
         checks = [reference_check, check_sections(text, profile)]
 
     if not checks:
