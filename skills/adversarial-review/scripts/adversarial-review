@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+"""Mechanical layer of the adversarial-review skill.
+
+Owns only what is decidable without a model: target resolution, ground-truth
+pre-pass, reviewer preflight, evidence gating, and the replay manifest. Model
+dispatch belongs to the invoking agent — see the skill's SKILL.md.
+
+Every subcommand emits exactly one JSON object on stdout and keeps diagnostics
+on stderr, so a calling skill can parse the result without stripping chatter.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+PROFILES = ("code-diff", "spec-design", "plan", "prose-claim")
+
+# A contract surface is a contract being *introduced or changed*, so the anchor
+# must appear on an added line — deleting a contract is not changing one.
+CONTRACT_SURFACE = re.compile(r"^\+.*\b(CONTRACT|SCHEMA):", re.MULTILINE)
+
+CODE_QUICK_MAX = 50
+CODE_DEEP_MIN = 151
+PROSE_QUICK_MAX = 499
+
+SPEC_DESIGN_NAMES = {"logic.md", "tech.md"}
+SPEC_DESIGN_HINT = re.compile(r"(spec|design)", re.IGNORECASE)
+PLAN_HINT = re.compile(r"^plan", re.IGNORECASE)
+SOURCE_SUFFIXES = {".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".rb", ".java", ".sh"}
+
+
+class UsageError(Exception):
+    """A caller-facing error: bad arguments, missing input, unreadable target."""
+
+
+# --- target resolution ------------------------------------------------------------
+
+def classify_target(target: str) -> str:
+    if ".." in target:
+        return "git-range"
+    if target.strip() in ("", "WORKTREE"):
+        return "worktree"
+    return "path"
+
+
+def detect_profile(target: str, target_kind: str) -> str:
+    """First match wins. Order is the specification, not an optimization."""
+    if target_kind in ("git-range", "worktree"):
+        return "code-diff"
+
+    path = Path(target)
+    parts = set(path.parts)
+    name = path.name
+
+    if "plans" in parts or PLAN_HINT.match(name):
+        return "plan"
+    if name in SPEC_DESIGN_NAMES or "adr" in parts or SPEC_DESIGN_HINT.search(name):
+        return "spec-design"
+    if path.suffix == ".md":
+        return "prose-claim"
+    return "code-diff"
+
+
+def read_diff(target: str, repo_root: Path, diff_file: str | None) -> str:
+    if diff_file is not None:
+        path = Path(diff_file)
+        if not path.is_file():
+            raise UsageError(f"missing diff file: {path}")
+        return path.read_text(errors="replace")
+
+    argv = ["git", "diff", "--no-renames"]
+    if target and target.strip() != "WORKTREE":
+        argv.append(target)
+    try:
+        completed = subprocess.run(
+            argv, cwd=repo_root, capture_output=True, text=True, errors="replace"
+        )
+    except OSError as exc:
+        raise UsageError(f"cannot run git diff: {exc}") from exc
+    # A non-repo or unknown range yields no diff rather than failing the run;
+    # size 0 simply selects the cheapest depth.
+    return completed.stdout if completed.returncode == 0 else ""
+
+
+def changed_line_count(diff: str) -> int:
+    count = 0
+    for line in diff.splitlines():
+        if line.startswith(("+++", "---")):
+            continue
+        if line.startswith(("+", "-")):
+            count += 1
+    return count
+
+
+def suggest_depth(profile: str, size_metric: int, contract_surface: bool) -> str:
+    if contract_surface:
+        return "deep"
+    if profile == "code-diff":
+        if size_metric <= CODE_QUICK_MAX:
+            return "quick"
+        return "deep" if size_metric >= CODE_DEEP_MIN else "standard"
+    return "quick" if size_metric <= PROSE_QUICK_MAX else "standard"
+
+
+def resolve_target(
+    target: str, profile: str | None, repo_root: Path, diff_file: str | None
+) -> dict[str, Any]:
+    if profile is not None and profile not in PROFILES:
+        raise UsageError(f"unknown profile: {profile} (expected one of {', '.join(PROFILES)})")
+
+    target_kind = classify_target(target)
+    resolved_profile = profile or detect_profile(target, target_kind)
+
+    if target_kind == "path":
+        path = Path(target)
+        if not path.is_absolute():
+            path = repo_root / path
+        if not path.is_file():
+            raise UsageError(f"target does not exist: {path}")
+        content = path.read_text(errors="replace")
+        return {
+            "profile": resolved_profile,
+            "target_kind": target_kind,
+            "target_ref": str(path),
+            "artifact_hash": hashlib.sha256(content.encode()).hexdigest(),
+            "size_metric": len(content.split()),
+            "depth_suggestion": suggest_depth(resolved_profile, len(content.split()), False),
+            "contract_surface": False,
+        }
+
+    diff = read_diff(target, repo_root, diff_file)
+    size_metric = changed_line_count(diff)
+    contract_surface = bool(CONTRACT_SURFACE.search(diff))
+    return {
+        "profile": resolved_profile,
+        "target_kind": target_kind,
+        "target_ref": target or "WORKTREE",
+        "artifact_hash": hashlib.sha256(diff.encode()).hexdigest(),
+        "size_metric": size_metric,
+        "depth_suggestion": suggest_depth(resolved_profile, size_metric, contract_surface),
+        "contract_surface": contract_surface,
+    }
+
+
+# --- cli --------------------------------------------------------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="adversarial-review",
+        description="Mechanical layer of the adversarial-review skill.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    resolve_cmd = sub.add_parser("resolve", help="classify a target and suggest a depth")
+    resolve_cmd.add_argument("--target", default="", help="path, git range, or empty for worktree")
+    resolve_cmd.add_argument("--profile", help=f"override detection ({', '.join(PROFILES)})")
+    resolve_cmd.add_argument("--repo-root", default=".", help="repository root")
+    resolve_cmd.add_argument(
+        "--diff-file", help="read the diff from a file instead of git (testing seam)"
+    )
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        repo_root = Path(args.repo_root).resolve()
+        if not repo_root.is_dir():
+            raise UsageError(f"repo root does not exist: {repo_root}")
+        if args.command == "resolve":
+            payload = resolve_target(args.target, args.profile, repo_root, args.diff_file)
+        else:  # pragma: no cover - argparse rejects unknown subcommands
+            raise UsageError(f"unhandled command: {args.command}")
+    except (UsageError, OSError, ValueError) as exc:
+        print(f"adversarial-review: {exc}", file=sys.stderr)
+        return 2
+
+    print(json.dumps(payload, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
