@@ -406,6 +406,82 @@ def run_prepass(
     return (1 if failed else 0), {"status": status, "checks": checks, "findings": findings}
 
 
+# --- reviewer selection -----------------------------------------------------------
+#
+# Independence is structural, not rhetorical: a model favors its own output and
+# misses errors in self-review that it catches when the same content is framed as
+# external. Prompt wording cannot repair that; a different model family can.
+
+# Alias -> dispatch triple, mirroring skills/pi-dev/SKILL.md. Ordered by preference
+# within each family; the ladder is walked in this order once the author's family
+# is filtered out.
+ALIAS_LADDER = (
+    ("codex", "openai", "openai-codex/gpt-5.6-sol", "high"),
+    ("gemini", "google", "google/gemini-3.2-pro-preview", "high"),
+    ("terra", "openai", "openai-codex/gpt-5.6-terra", "high"),
+    ("opus", "anthropic", "anthropic/claude-opus-4-7", "high"),
+    ("sonnet", "anthropic", "anthropic/claude-sonnet-4-7", "high"),
+    ("flash", "google", "google/gemini-flash-latest", "medium"),
+)
+
+DEFAULT_CHECK_CMD = "pi-watch --check"
+
+
+def alias_entry(alias: str) -> tuple[str, str, str, str] | None:
+    return next((entry for entry in ALIAS_LADDER if entry[0] == alias), None)
+
+
+def preflight(alias: str, check_cmd: str) -> bool:
+    """A rung resolves only when its preflight exits 0 — never assume availability."""
+    completed = subprocess.run(
+        f"{check_cmd} {alias}", shell=True, capture_output=True, text=True, errors="replace"
+    )
+    return completed.returncode == 0
+
+
+def select_reviewer(
+    author_family: str, model: str | None, check_cmd: str
+) -> tuple[int, dict[str, Any]]:
+    if model is not None and alias_entry(model) is None:
+        known = ", ".join(entry[0] for entry in ALIAS_LADDER)
+        raise UsageError(f"unknown alias: {model} (known aliases: {known})")
+
+    # An explicit --model is a caller instruction, not a suggestion: it is tried
+    # alone, and its failure is reported rather than papered over with a fallback.
+    candidates = [alias_entry(model)] if model else [
+        entry for entry in ALIAS_LADDER if entry[1] != author_family
+    ] + [entry for entry in ALIAS_LADDER if entry[1] == author_family]
+
+    ladder: list[dict[str, Any]] = []
+    for alias, family, triple, thinking in candidates:
+        ok = preflight(alias, check_cmd)
+        ladder.append({"alias": alias, "checked": True, "resolved": ok})
+        if not ok:
+            continue
+        provider, _, model_id = triple.partition("/")
+        return 0, {
+            "resolved": True,
+            "alias": alias,
+            "family": family,
+            "provider": provider,
+            "model": model_id,
+            "thinking": thinking,
+            "independence": "reduced" if family == author_family else "full",
+            "ladder": ladder,
+        }
+
+    return 1, {
+        "resolved": False,
+        "alias": None,
+        "family": None,
+        "provider": None,
+        "model": None,
+        "thinking": None,
+        "independence": "reduced",
+        "ladder": ladder,
+    }
+
+
 # --- cli --------------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -432,6 +508,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="exact shell command, repeatable; overrides code-check discovery",
     )
 
+    select_cmd = sub.add_parser("select-model", help="pick and preflight an independent reviewer")
+    select_cmd.add_argument(
+        "--author-family", required=True,
+        help="model family that produced the artifact; excluded from selection",
+    )
+    select_cmd.add_argument("--model", help="force a specific alias, skipping family exclusion")
+    select_cmd.add_argument(
+        "--check-cmd", default=DEFAULT_CHECK_CMD,
+        help=f"preflight command, alias appended (default: {DEFAULT_CHECK_CMD})",
+    )
+
     return parser
 
 
@@ -439,13 +526,16 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     exit_code = 0
     try:
-        repo_root = Path(args.repo_root).resolve()
-        if not repo_root.is_dir():
+        # Not every subcommand is repo-scoped — select-model only talks to preflight.
+        repo_root = Path(getattr(args, "repo_root", ".")).resolve()
+        if hasattr(args, "repo_root") and not repo_root.is_dir():
             raise UsageError(f"repo root does not exist: {repo_root}")
         if args.command == "resolve":
             payload = resolve_target(args.target, args.profile, repo_root, args.diff_file)
         elif args.command == "prepass":
             exit_code, payload = run_prepass(args.profile, args.target, repo_root, args.check_cmd)
+        elif args.command == "select-model":
+            exit_code, payload = select_reviewer(args.author_family, args.model, args.check_cmd)
         else:  # pragma: no cover - argparse rejects unknown subcommands
             raise UsageError(f"unhandled command: {args.command}")
     except (UsageError, OSError, ValueError) as exc:

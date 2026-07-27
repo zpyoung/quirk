@@ -387,3 +387,78 @@ def test_relative_reference_resolves_against_the_document_directory(tmp_path):
     doc = _touch(tmp_path / "docs/spec/tech.md", "See `logic.md` for rationale.\n")
     result = prepass("--profile", "prose-claim", "--target", str(doc), "--repo-root", str(tmp_path))
     assert result["findings"] == []
+
+
+# ============================ select-model ========================================
+
+def select_model(*args: str, expect: int = 0) -> dict:
+    proc = run_ar("select-model", *args)
+    assert proc.returncode == expect, f"exit {proc.returncode}: {proc.stderr}"
+    return json.loads(proc.stdout)
+
+
+def test_author_family_is_excluded_from_selection():
+    """Independence is structural: never review Claude output with Claude."""
+    result = select_model("--author-family", "anthropic", "--check-cmd", "true")
+    assert result["resolved"] is True
+    assert result["family"] != "anthropic"
+    assert result["independence"] == "full"
+
+
+def test_openai_authored_work_is_reviewed_by_another_family():
+    result = select_model("--author-family", "openai", "--check-cmd", "true")
+    assert result["family"] != "openai"
+    assert result["independence"] == "full"
+
+
+def test_ladder_is_walked_until_a_rung_resolves():
+    """First rung fails preflight, a later one succeeds."""
+    script = 'test "$1" != "codex"'  # codex fails, everything else resolves
+    result = select_model("--author-family", "anthropic", "--check-cmd", f"sh -c '{script}' _")
+    assert result["resolved"] is True
+    attempted = [rung["alias"] for rung in result["ladder"] if rung["checked"]]
+    assert len(attempted) >= 1
+
+
+def test_no_rung_resolves_yields_resolved_false_and_exit_1():
+    """Drives the gate's first NOT_REVIEWABLE branch."""
+    result = select_model("--author-family", "anthropic", "--check-cmd", "false", expect=1)
+    assert result["resolved"] is False
+    assert result["alias"] is None
+    assert result["family"] is None
+    assert all(rung["resolved"] is False for rung in result["ladder"])
+
+
+def test_fallback_onto_the_author_family_is_flagged_reduced():
+    """A PASS from a same-family reviewer must not read as strong as a cross-family one."""
+    only_sonnet = 'test "$1" = "sonnet"'
+    result = select_model("--author-family", "anthropic", "--check-cmd", f"sh -c '{only_sonnet}' _")
+    assert result["resolved"] is True
+    assert result["family"] == "anthropic"
+    assert result["independence"] == "reduced"
+
+
+def test_explicit_model_overrides_family_exclusion():
+    result = select_model("--author-family", "anthropic", "--model", "sonnet", "--check-cmd", "true")
+    assert result["alias"] == "sonnet"
+    assert result["independence"] == "reduced"
+
+
+def test_explicit_model_that_fails_preflight_does_not_silently_fall_back():
+    """An explicit --model is a caller instruction, not a suggestion."""
+    result = select_model(
+        "--author-family", "openai", "--model", "sonnet", "--check-cmd", "false", expect=1
+    )
+    assert result["resolved"] is False
+
+
+def test_unknown_alias_is_a_usage_error():
+    proc = run_ar("select-model", "--author-family", "openai", "--model", "not-an-alias")
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
+
+
+def test_resolved_selection_carries_a_dispatchable_triple():
+    result = select_model("--author-family", "anthropic", "--check-cmd", "true")
+    for field in ("provider", "model", "thinking"):
+        assert result[field], f"{field} must be populated for dispatch"
