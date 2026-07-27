@@ -182,3 +182,136 @@ def test_no_subcommand_is_a_usage_error():
 def _diff_with_added_lines(n: int) -> str:
     body = "".join(f"+line {i}\n" for i in range(n))
     return f"--- a/x.py\n+++ b/x.py\n@@ -0,0 +1,{n} @@\n{body}"
+
+
+# ============================ prepass =============================================
+
+def prepass(*args: str, cwd: Path | None = None, expect: int = 0) -> dict:
+    proc = run_ar("prepass", *args, cwd=cwd)
+    assert proc.returncode == expect, f"exit {proc.returncode}: {proc.stderr}"
+    return json.loads(proc.stdout)
+
+
+def _findings_by_name(result: dict) -> dict:
+    return {f["evidence"][0]["ref"]: f for f in result["findings"]}
+
+
+# --- prose: reference resolution --------------------------------------------------
+
+def test_unresolvable_path_reference_becomes_a_high_prepass_finding(tmp_path):
+    doc = _touch(tmp_path / "notes.md", "See `src/does_not_exist.py` for details.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert result["status"] == "fail"
+    refs = [f["evidence"][0]["ref"] for f in result["findings"]]
+    assert "src/does_not_exist.py" in refs
+    finding = next(f for f in result["findings"] if f["evidence"][0]["ref"] == "src/does_not_exist.py")
+    assert finding["severity"] == "HIGH"
+    assert finding["confidence"] == "HIGH"
+    assert finding["stage"] == "prepass"
+    assert finding["evidence"][0]["kind"] == "prepass"
+
+
+def test_resolvable_path_reference_produces_no_finding(tmp_path):
+    _touch(tmp_path / "src/real.py", "x = 1\n")
+    doc = _touch(tmp_path / "notes.md", "See `src/real.py` for details.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc), "--repo-root", str(tmp_path))
+    assert result["status"] == "pass"
+    assert result["findings"] == []
+
+
+def test_unresolvable_markdown_link_becomes_a_finding(tmp_path):
+    doc = _touch(tmp_path / "notes.md", "See [the design](./design.md).\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    refs = [f["evidence"][0]["ref"] for f in result["findings"]]
+    assert "./design.md" in refs
+
+
+def test_http_links_are_recorded_skipped_and_never_fetched(tmp_path):
+    doc = _touch(tmp_path / "notes.md", "See [spec](https://example.invalid/nope).\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc), "--repo-root", str(tmp_path))
+    assert result["status"] == "pass"
+    assert result["findings"] == []
+    ref_check = next(c for c in result["checks"] if c["name"] == "reference-resolution")
+    assert "skipped" in ref_check["output"]
+
+
+def test_unresolvable_command_reference_becomes_a_finding(tmp_path):
+    doc = _touch(tmp_path / "notes.md", "Run `definitely-not-a-real-binary-xyz --help`.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    refs = [f["evidence"][0]["ref"] for f in result["findings"]]
+    assert any("definitely-not-a-real-binary-xyz" in r for r in refs)
+
+
+# --- prose: section coverage ------------------------------------------------------
+
+def test_missing_required_heading_is_reported(tmp_path):
+    doc = _touch(tmp_path / "logic.md", "# Purpose\n\nsome text\n")
+    result = prepass("--profile", "spec-design", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    coverage = next(c for c in result["checks"] if c["name"] == "section-coverage")
+    assert coverage["status"] == "fail"
+    assert "Decisions Locked" in coverage["output"]
+
+
+def test_all_required_headings_present_passes_coverage(tmp_path):
+    doc = _touch(
+        tmp_path / "logic.md",
+        "# Purpose\n\n## Scope\n\n## Decisions Locked\n\ntext\n",
+    )
+    result = prepass("--profile", "spec-design", "--target", str(doc), "--repo-root", str(tmp_path))
+    coverage = next(c for c in result["checks"] if c["name"] == "section-coverage")
+    assert coverage["status"] == "pass"
+
+
+def test_prose_claim_profile_reports_coverage_not_applicable(tmp_path):
+    doc = _touch(tmp_path / "notes.md", "a claim\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc), "--repo-root", str(tmp_path))
+    coverage = next(c for c in result["checks"] if c["name"] == "section-coverage")
+    assert coverage["status"] == "not-applicable"
+
+
+# --- could-not-run vs fail --------------------------------------------------------
+
+def test_unreadable_prose_target_is_could_not_run_not_fail(tmp_path):
+    """T4's NOT_REVIEWABLE branch depends on this distinction."""
+    result = prepass("--profile", "prose-claim", "--target", str(tmp_path / "absent.md"),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert result["status"] == "could-not-run"
+
+
+def test_code_profile_with_no_discoverable_command_is_could_not_run(tmp_path):
+    result = prepass("--profile", "code-diff", "--target", "WORKTREE",
+                     "--repo-root", str(tmp_path), expect=1)
+    assert result["status"] == "could-not-run"
+    assert result["checks"] == []
+
+
+def test_failing_check_is_fail_not_could_not_run(tmp_path):
+    result = prepass("--profile", "code-diff", "--target", "WORKTREE",
+                     "--repo-root", str(tmp_path), "--check-cmd", "exit 3", expect=1)
+    assert result["status"] == "fail"
+    assert result["checks"][0]["exit_code"] == 3
+
+
+def test_passing_check_exits_zero(tmp_path):
+    result = prepass("--profile", "code-diff", "--target", "WORKTREE",
+                     "--repo-root", str(tmp_path), "--check-cmd", "true")
+    assert result["status"] == "pass"
+    assert result["checks"][0]["status"] == "pass"
+
+
+def test_check_cmd_overrides_discovery(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
+    result = prepass("--profile", "code-diff", "--target", "WORKTREE",
+                     "--repo-root", str(tmp_path), "--check-cmd", "true")
+    assert [c["command"] for c in result["checks"]] == ["true"]
+
+
+def test_code_discovery_finds_pytest_from_pyproject(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
+    result = prepass("--profile", "code-diff", "--target", "WORKTREE",
+                     "--repo-root", str(tmp_path), "--check-cmd", "true")
+    assert result["status"] == "pass"

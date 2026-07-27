@@ -14,6 +14,7 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -148,6 +149,231 @@ def resolve_target(
     }
 
 
+# --- pre-pass: the ground-truth layer ---------------------------------------------
+#
+# Nothing here involves a model. Whatever this layer reports is true by
+# construction, which is why its findings skip the promote/refute stages.
+
+# Probed against the repo root, in order. Overridable with repeatable --check-cmd.
+CODE_CHECK_DISCOVERY = (
+    ("pyproject.toml", "python3 -m pytest -q"),
+    ("package.json", "pnpm test"),
+    ("Cargo.toml", "cargo test --quiet"),
+)
+
+REQUIRED_HEADINGS = {
+    "spec-design": ("Purpose|Overview", "Scope|Non-goals", "Decisions Locked"),
+    "plan": ("Task", "Contract", "Acceptance"),
+    "prose-claim": (),
+}
+
+BACKTICK_TOKEN = re.compile(r"`([^`\n]+)`")
+MD_LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
+IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def discover_code_checks(repo_root: Path, overrides: list[str]) -> list[str]:
+    if overrides:
+        return list(overrides)
+    return [cmd for marker, cmd in CODE_CHECK_DISCOVERY if (repo_root / marker).is_file()]
+
+
+def run_check(command: str, repo_root: Path) -> dict[str, Any]:
+    """Run a declared check verbatim through the shell, as the profile wrote it."""
+    completed = subprocess.run(
+        command, cwd=repo_root, shell=True, capture_output=True, text=True, errors="replace"
+    )
+    return {
+        "name": "code-check",
+        "command": command,
+        "exit_code": completed.returncode,
+        "status": "pass" if completed.returncode == 0 else "fail",
+        "output": (completed.stdout + completed.stderr)[-4000:],
+    }
+
+
+def classify_reference(token: str) -> str | None:
+    """Return the reference kind, or None when the token is not a reference at all.
+
+    Returning None is the main defense against noise. A pre-pass that flags prose,
+    globs, and placeholders produces the false-positive flood that gets review
+    gates switched off, and every finding here is emitted at HIGH confidence
+    because it claims to be mechanically true — so a wrong one is expensive.
+    """
+    token = token.strip()
+    if not token:
+        return None
+    if token.startswith(("http://", "https://")):
+        return "url"
+    # Globs, placeholders, shebangs, slash-commands, and arrow-prose describe a
+    # shape or a concept, not a file on disk.
+    if any(ch in token for ch in "*?<>{}") or token.startswith(("#!", "/quirk:", "-->")):
+        return None
+    if "->" in token or "—" in token:
+        return None
+
+    if " " in token:
+        # Distinguishing a shell command from prose-in-backticks is not reliably
+        # decidable, and guessing wrong here is what floods a report. Require the
+        # first word to actually be on PATH; anything else is treated as prose.
+        first = token.split()[0]
+        return "command" if IDENTIFIER.match(first.replace("-", "_")) else None
+
+    if "/" in token or Path(strip_line_anchor(token)).suffix in SOURCE_SUFFIXES \
+            or Path(strip_line_anchor(token)).suffix == ".md":
+        return "path"
+    if IDENTIFIER.match(token):
+        return "symbol"
+    return None
+
+
+def strip_line_anchor(token: str) -> str:
+    """`tests/conftest.py:35-42` names a real file; the anchor is not part of it."""
+    return re.sub(r":\d+(?:-\d+)?$", "", token)
+
+
+def resolve_reference(
+    kind: str, token: str, repo_root: Path, doc_dir: Path | None = None
+) -> tuple[bool, str]:
+    if kind == "url":
+        return True, "skipped (no network I/O)"
+    if kind == "path":
+        bare = strip_line_anchor(token)
+        candidate = Path(bare)
+        if candidate.is_absolute():
+            return (True, "exists") if candidate.exists() else (False, "no such absolute path")
+        # A document's own relative links resolve against the document, not the
+        # repo root — `logic.md` in a spec means its sibling.
+        bases = [doc_dir, repo_root] if doc_dir is not None else [repo_root]
+        for base in bases:
+            if (base / bare).exists():
+                rel = "document directory" if base is doc_dir else "repository root"
+                return True, f"exists (relative to {rel})"
+        return False, "no such path relative to the document or the repository root"
+    if kind == "command":
+        binary = token.split()[0]
+        if shutil.which(binary) is not None:
+            return True, f"{binary} on PATH"
+        # Not on PATH is weak evidence: the token may simply be prose that
+        # survived classification. Report it, but never as a mechanical fact.
+        return False, f"{binary} not found on PATH (may be prose rather than a command)"
+    # symbol
+    completed = subprocess.run(
+        ["git", "grep", "-nF", "--", token],
+        cwd=repo_root, capture_output=True, text=True, errors="replace",
+    )
+    if completed.returncode == 0 and completed.stdout.strip():
+        return True, "found by git grep"
+    return False, "no occurrence found by git grep"
+
+
+def check_references(
+    text: str, repo_root: Path, doc_dir: Path | None = None
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    tokens: list[str] = []
+    for match in BACKTICK_TOKEN.finditer(text):
+        tokens.append(match.group(1))
+    for match in MD_LINK.finditer(text):
+        tokens.append(match.group(1))
+
+    lines: list[str] = []
+    findings: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for token in tokens:
+        if token in seen:
+            continue
+        seen.add(token)
+        kind = classify_reference(token)
+        if kind is None:
+            continue
+        ok, detail = resolve_reference(kind, token, repo_root, doc_dir)
+        lines.append(f"{'ok' if ok else 'MISSING'} {kind} {token} — {detail}")
+        if not ok:
+            findings.append(prepass_finding(token, kind, detail))
+
+    check = {
+        "name": "reference-resolution",
+        "command": "(internal) resolve named references against the repository",
+        "exit_code": 1 if findings else 0,
+        "status": "fail" if findings else "pass",
+        "output": "\n".join(lines),
+    }
+    return check, findings
+
+
+def prepass_finding(token: str, kind: str, detail: str) -> dict[str, Any]:
+    return {
+        "id": "",
+        "severity": "HIGH",
+        "confidence": "HIGH",
+        "category": "unresolvable-reference",
+        "claim": f"The document names a {kind} that does not resolve: {token}",
+        "evidence": [{"kind": "prepass", "ref": token, "output": detail}],
+        "remediation": f"Correct or remove the reference to {token}.",
+        "patch": None,
+        "stage": "prepass",
+    }
+
+
+def check_sections(text: str, profile: str) -> dict[str, Any]:
+    required = REQUIRED_HEADINGS.get(profile, ())
+    if not required:
+        return {
+            "name": "section-coverage",
+            "command": "(internal) scan for required headings",
+            "exit_code": 0,
+            "status": "not-applicable",
+            "output": "no required headings for this profile",
+        }
+
+    headings = "\n".join(
+        line for line in text.splitlines() if line.lstrip().startswith("#")
+    )
+    missing = [
+        group for group in required
+        if not any(re.search(rf"\b{re.escape(alt)}\b", headings, re.IGNORECASE)
+                   for alt in group.split("|"))
+    ]
+    return {
+        "name": "section-coverage",
+        "command": "(internal) scan for required headings",
+        "exit_code": 1 if missing else 0,
+        "status": "fail" if missing else "pass",
+        "output": ("missing: " + ", ".join(missing)) if missing else "all required headings present",
+    }
+
+
+def run_prepass(
+    profile: str, target: str, repo_root: Path, check_cmds: list[str]
+) -> tuple[int, dict[str, Any]]:
+    if profile not in PROFILES:
+        raise UsageError(f"unknown profile: {profile} (expected one of {', '.join(PROFILES)})")
+
+    checks: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = []
+
+    if profile == "code-diff":
+        commands = discover_code_checks(repo_root, check_cmds)
+        checks = [run_check(command, repo_root) for command in commands]
+    else:
+        path = Path(target)
+        if not path.is_absolute():
+            path = repo_root / target
+        if not path.is_file():
+            # No check could run at all — distinct from a check that ran and failed.
+            return 1, {"status": "could-not-run", "checks": [], "findings": []}
+        text = path.read_text(errors="replace")
+        reference_check, findings = check_references(text, repo_root, path.parent)
+        checks = [reference_check, check_sections(text, profile)]
+
+    if not checks:
+        return 1, {"status": "could-not-run", "checks": [], "findings": []}
+
+    failed = any(check["status"] == "fail" for check in checks)
+    status = "fail" if failed else "pass"
+    return (1 if failed else 0), {"status": status, "checks": checks, "findings": findings}
+
+
 # --- cli --------------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -165,17 +391,29 @@ def build_parser() -> argparse.ArgumentParser:
         "--diff-file", help="read the diff from a file instead of git (testing seam)"
     )
 
+    prepass_cmd = sub.add_parser("prepass", help="run the deterministic ground-truth checks")
+    prepass_cmd.add_argument("--profile", required=True, help=", ".join(PROFILES))
+    prepass_cmd.add_argument("--target", default="", help="path, git range, or empty for worktree")
+    prepass_cmd.add_argument("--repo-root", default=".", help="repository root")
+    prepass_cmd.add_argument(
+        "--check-cmd", action="append", default=[],
+        help="exact shell command, repeatable; overrides code-check discovery",
+    )
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    exit_code = 0
     try:
         repo_root = Path(args.repo_root).resolve()
         if not repo_root.is_dir():
             raise UsageError(f"repo root does not exist: {repo_root}")
         if args.command == "resolve":
             payload = resolve_target(args.target, args.profile, repo_root, args.diff_file)
+        elif args.command == "prepass":
+            exit_code, payload = run_prepass(args.profile, args.target, repo_root, args.check_cmd)
         else:  # pragma: no cover - argparse rejects unknown subcommands
             raise UsageError(f"unhandled command: {args.command}")
     except (UsageError, OSError, ValueError) as exc:
@@ -183,7 +421,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     print(json.dumps(payload, sort_keys=True))
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":
