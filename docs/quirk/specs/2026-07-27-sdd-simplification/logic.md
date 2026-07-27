@@ -65,8 +65,9 @@ It then decomposes the spec into tasks **inline**, in conversation and into Todo
 
 Task fields reuse `quirk:writing-plans`' schema definitions by cross-reference rather than
 restating them: contract, acceptance commands, dependencies, and `scope.files`. The
-plan-document-reviewer dispatch is not used. `scope.files` is required for any task that will run
-in parallel and optional for sequential ones; the scope audit applies to any task that declares it.
+plan-document-reviewer dispatch is not used. `scope.files` is required on every task, parallel or
+sequential — the scope audit and the implementer's hard fence both read it, so a task without one
+has no auditable boundary and no scope contract.
 
 ### Waves
 
@@ -80,10 +81,12 @@ fact; it does not imply simultaneous dispatch.
 Each task gets its own worktree and branch, forked from the feature branch tip
 (`WAVE_BASE = HEAD` before the wave). Implementers work only inside their worktree.
 
-When a task returns, the orchestrator audits that branch's `WAVE_BASE..branch-tip` diff against the
-task's declared scope. Because the branch contains only that task's commits, attribution is exact.
-The audit uses an immutable commit range, NUL-delimited paths, and rename detection off, and it
-covers untracked files added by the worker.
+When a task returns, the orchestrator audits its still-uncommitted work — a single-rev diff of
+`WAVE_BASE` against the worktree — against the task's declared scope. Implementers do not commit, so
+the audit necessarily precedes the commit; a two-commit range would report nothing. Because the
+worktree holds only that task's work, attribution is exact. The audit pins `WAVE_BASE` to a commit
+OID, uses NUL-delimited paths and rename detection off, and covers untracked files added by the
+worker. Acceptance runs next, then the orchestrator commits, then the branch merges.
 
 Branches then merge into the feature branch with `git merge --no-ff`, one at a time. Disjoint
 scopes are guaranteed at plan time, so these merges cannot conflict; a conflict means the
@@ -381,10 +384,9 @@ prompts — not a cap that licenses omitting required behavior.
 
 - Parallel tasks each get a worktree and branch forked from `WAVE_BASE`; sequential tasks work in
   the main tree.
-- `scope.files` required for parallel tasks, optional for sequential; the audit applies wherever
-  declared.
-- The orchestrator audits each parallel branch's `WAVE_BASE..tip` range before merging `--no-ff`,
-  and audits the working tree for sequential tasks.
+- `scope.files` required on every task, parallel or sequential; the audit always has a boundary.
+- The orchestrator audits the task's uncommitted worktree against `WAVE_BASE` **before** committing
+  it, then merges `--no-ff`. Same command for parallel and sequential tasks.
 - Merge conflict in a parallel wave means disjointness was violated: stop and re-plan.
 - Scope widening is a user-facing re-plan decision, never a silent orchestrator override.
 - Clean-tree preflight required; `RUN_BASE` recorded at run start.

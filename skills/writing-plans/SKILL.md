@@ -110,11 +110,11 @@ Treat hub-file isolation as a **scored heuristic, not a mandate**. Prefer assign
 
 ### Task-Boundary Granularity Economics
 
-Every task pays a fixed pipeline tax: dispatch, review chain, fix loop, and merge-lane handshake. Price a split rather than treating it as free:
+Every task pays a fixed pipeline tax: dispatch, scope audit, acceptance run, commit, and merge. Price a split rather than treating it as free:
 
-- Split only when the result (a) lands tasks in **different waves** and therefore buys real parallelism, or (b) crosses a **risk-tier boundary** so part of the work earns a cheaper review chain.
-- Collapse a contiguous run of same-risk, sequentially-dependent work into one task.
-- Merge a task with a projected diff under roughly 50–100 lines into its same-tier neighbor. The merged task takes the **maximum risk tier** of its parts.
+- Split only when the result lands tasks in **different waves** and therefore buys real parallelism. A split whose halves stay in the same sequential run buys nothing and pays the tax twice.
+- Collapse a contiguous run of sequentially-dependent work into one task.
+- Merge a task with a projected diff under roughly 50–100 lines into its neighbor.
 - Preserve review isolation with **commit boundaries inside the task**: commit each sub-step separately instead of paying for separate task pipelines.
 - Set the target task count from achievable wave width, never from the number of requirement bullets.
 
@@ -131,7 +131,7 @@ Keep one behavior per red-green cycle. A non-trivial behavior may take longer th
 
 ## Task Independence
 
-When the plan will be executed by **quirk:subagent-driven-development**, declare dependencies and scope so the orchestrator can compute waves. Both fields are optional; a task declaring neither runs in its own singleton wave, which is always safe.
+When the plan will be executed by **quirk:subagent-driven-development**, declare dependencies and scope so the orchestrator can compute waves. `dependencies` is optional — a task declaring none is eligible for the first wave. `scope.files` is **required on every task**.
 
 Declare them in a fenced YAML-like block immediately under the `### Task N: ...` heading:
 
@@ -144,8 +144,8 @@ scope:
 **Guidance:**
 
 - Use `dependencies` for genuine semantic ordering — one task needing another's output — never merely for file overlap. File overlap is handled by scope, not by dependencies.
-- `scope.files` is **required for any task that may run in parallel** and optional for a task that will run alone. It is the boundary the orchestrator audits each task's diff against before committing, so an incomplete list reads as a scope violation and stops the wave.
-- Tasks in the same wave run in parallel **only if their `scope.files` are disjoint**. Any shared path forces the wave to run sequentially — there is no small-overlap exemption, because two agents editing one file lose one of the two writes silently.
+- `scope.files` is **required on every task**, whether or not it will run in parallel. It is the boundary the orchestrator audits each task's diff against before committing, and the same list it hands the implementer as a hard fence — a task without it has neither. An incomplete list reads as a scope violation and stops the wave.
+- Tasks in the same wave run in parallel **only if their `scope.files` are disjoint**. Any shared path forces the wave to run sequentially — there is no small-overlap exemption: the two branches either conflict at merge, costing the parallelism the overlap was meant to buy, or auto-merge into a file version neither agent tested.
 - List every file the task will touch, including tests and any index/barrel file it must re-export from. Under-declaring is the common failure: the task gets blocked mid-wave for touching a file it always needed.
 
 ## Plan Document Header
@@ -182,7 +182,7 @@ Match plan size to task size: a ~2-day change is ~1-2 pages. If writing the plan
 
 ## Task Structure
 
-Every task follows this template. Use the scope and dependency declarations described in **Task Independence** above; both are optional, but a task that may run in parallel MUST declare `scope.files`.
+Every task follows this template. Use the scope and dependency declarations described in **Task Independence** above; `dependencies` is optional, but every task MUST declare `scope.files`.
 
 Notice what the template does NOT contain: no test body, no implementation body. Each step states behavior, contract, and acceptance — the implementor writes the code. The only code blocks are tagged exceptions (`CONTRACT:`, `COMMAND:`).
 
@@ -290,7 +290,7 @@ After writing the complete plan, look at the tech spec (`tech.md`) when present,
 
 **7. Coherence sweep:** If the plan changes a protocol, vocabulary, or event set, did you grep-enumerate every file referencing the changed old or new terms? Verify that each result is either scoped into a task or explicitly recorded as `unchanged, verified consistent`. Check that you searched for the vocabulary terms themselves, not only the names of the components being changed — a file can encode a protocol without naming the skill or module that owns it.
 
-**8. Scope and dependency declarations:** For each task, did you declare `scope.files` accurately and `dependencies` only for genuine semantic ordering? Every task that may run in parallel needs a complete `scope.files` — including its tests and any index/barrel file it re-exports from — because the orchestrator audits each task's diff against that list and an under-declared file stops the wave. Tasks that genuinely don't depend on each other should say so, otherwise execution falls back to sequential and leaves throughput on the table. Tasks sharing any file path cannot run in parallel at all: reserve `dependencies` for one task needing another's output, never for file overlap.
+**8. Scope and dependency declarations:** For each task, did you declare `scope.files` accurately and `dependencies` only for genuine semantic ordering? Every task needs a complete `scope.files` — including its tests and any index/barrel file it re-exports from — because the orchestrator audits each task's diff against that list and an under-declared file stops the wave. Tasks that genuinely don't depend on each other should say so, otherwise execution falls back to sequential and leaves throughput on the table. Tasks sharing any file path cannot run in parallel at all: reserve `dependencies` for one task needing another's output, never for file overlap.
 
 If you find issues, fix them inline. No need to re-review — just fix and move on. If you find a requirement in the tech spec (`tech.md`) when present, else the logic spec, with no task, add the task.
 

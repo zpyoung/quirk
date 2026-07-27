@@ -268,14 +268,18 @@ get read-only repo access for surrounding context.
 
 ```
 COMMAND:
-git diff --name-only -z --no-renames "$WAVE_BASE" "$BRANCH_TIP"
+git diff --name-only -z --no-renames "$WAVE_BASE"
 git ls-files --others --exclude-standard -z
 ```
 
-Preconditions: `$WAVE_BASE` and `$BRANCH_TIP` resolved to commit OIDs, not refs. Postcondition: the
-changed-path set is a subset of the task's declared `scope.files`. Rename detection is off so a
-rename reports both paths. Untracked files are included — a worker adding an out-of-scope file must
-be caught. Violation blocks the commit or merge; widening is a user-facing re-plan decision.
+Run in the task's tree — its worktree, or the main tree for a sequential task. Preconditions:
+`$WAVE_BASE` resolved to a commit OID, not a ref; the task's work is present but **not yet
+committed**, which is why this is a single-rev diff against the working tree rather than a
+commit range — implementers do not commit, so a two-commit range would report nothing.
+Postcondition: the changed-path set is a subset of the task's declared `scope.files`. Rename
+detection is off so a rename reports both paths. Untracked files are included — a worker adding an
+out-of-scope file must be caught. Violation blocks the commit; widening is a user-facing re-plan
+decision.
 
 ### Merge
 
@@ -293,7 +297,7 @@ guaranteed at plan time, so a conflict means the precondition was violated; stop
 SCHEMA:
 dependencies: [T1, T3]                 # optional; task IDs that must complete first
 scope:
-  files: [path/to/a.py, path/to/b.py]  # required when the task may run in parallel
+  files: [path/to/a.py, path/to/b.py]  # required on every task
 ```
 
 Contract and acceptance remain prose fields in the task body, unchanged. Deleted from the schema:

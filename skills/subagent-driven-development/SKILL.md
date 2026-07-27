@@ -55,7 +55,7 @@ digraph process {
     "Tech spec if warranted" [shape=box];
     "Decompose inline" [shape=box];
     "Dispatch wave" [shape=box];
-    "Audit scope, commit" [shape=box];
+    "Audit, accept, commit, merge" [shape=box];
     "Build/test gate" [shape=box];
     "Has a successor?" [shape=diamond];
     "Checkpoint review (1 round)" [shape=box];
@@ -64,7 +64,7 @@ digraph process {
     "finishing-a-development-branch" [shape=box style=filled fillcolor=lightgreen];
 
     "Preflight" -> "Tech spec if warranted" -> "Decompose inline" -> "Dispatch wave";
-    "Dispatch wave" -> "Audit scope, commit" -> "Build/test gate" -> "Has a successor?";
+    "Dispatch wave" -> "Audit, accept, commit, merge" -> "Build/test gate" -> "Has a successor?";
     "Has a successor?" -> "Checkpoint review (1 round)" [label="yes"];
     "Has a successor?" -> "More waves?" [label="no"];
     "Checkpoint review (1 round)" -> "More waves?";
@@ -85,17 +85,21 @@ git rev-parse HEAD                 # record as RUN_BASE
 A dirty tree stops the run. Pre-existing changes contaminate every scope audit that follows —
 you cannot tell a worker's write from what was already there.
 
-Pin the reviewer model once:
+Confirm the reviewer path is reachable once:
 
 ```bash
 pi-watch --check codex
 ```
 
-Reviewers run `--provider openai-codex --model gpt-5.6-sol --thinking high`. **`--alias codex` is
-not sufficient** — it is a fallback ladder (`gpt-5.6-sol → 5.5 → 5.4 → 5.3-codex`) and `--check`
-passes if any rung resolves, so the alias silently gives you a weaker reviewer. If Sol is
-unavailable, fall back to the alias and record which model resolved; if that fails too, use Claude
-`quirk:code-reviewer` subagents with the same three lenses. Warn the user once per degradation.
+This is an availability floor, not a pin. It exits 0 if **any** rung of the `codex` ladder
+(`gpt-5.6-sol → 5.5 → 5.4 → 5.3-codex`) resolves to an authed model, so a green check is fully
+compatible with Sol being unavailable.
+
+Pinning happens per dispatch instead: reviewers run `--provider openai-codex --model gpt-5.6-sol
+--thinking high`, and those explicit flags are the pin. **`--alias codex` is not sufficient** —
+the ladder silently substitutes a weaker reviewer. If Sol is unavailable, fall back to the alias and
+record which model resolved; if that fails too, use Claude `quirk:code-reviewer` subagents with the
+same three lenses. Warn the user once per degradation.
 
 Open the **run journal** in scratch, outside the repository (a worker with edit tools could
 otherwise commit or clobber it). It holds `RUN_BASE`, each `WAVE_BASE`, task status and commits,
@@ -116,16 +120,20 @@ Break the spec into tasks **in this conversation and into TodoWrite**. Do not wr
 unless the user asks or it must outlive the session.
 
 Each task carries: a **contract**, **acceptance commands** (literal and copy-runnable, exact flags),
-optional `dependencies`, and `scope.files` — required for any task that may run in parallel,
-optional for a sequential one. Cross-reference **quirk:writing-plans** for the field schema.
+optional `dependencies`, and `scope.files` — **required on every task**, parallel or not. Step 6
+audits every task's diff against it and the implementer prompt hands it to the worker as a hard
+boundary, so a task without one leaves the audit with nothing to audit against and the worker with
+no scope contract. Cross-reference **quirk:writing-plans** for the field schema.
 
 **Do not dispatch the plan-document reviewer.** That prompt describes its own dispatch as "the
 standard gate, not optional" — that wording governs plans built *by* `writing-plans` as a
-standalone workflow, not this skill's inline decomposition. The reason it is skipped here: its
-rubric is built around a control plane this skill no longer has, so it reports absent fields as
-defects and costs a round arguing about vocabulary. Skipping it is a decision already made, not an
-oversight for you to correct — and "this plan is unusually high-stakes" is not new information,
-because every run believes that.
+standalone workflow, not this skill's inline decomposition. The reason it is skipped here: this
+control plane spends its review budget on the branch, where a reviewer reads the code that exists,
+rather than at plan time, where it reads a prediction of it. A decomposition defect surfaces
+mechanically anyway — through the scope audit, the build/test gate, or the final loop — so the round
+costs more than it returns. Skipping it is a decision already made, not an oversight for you to
+correct — and "this plan is unusually high-stakes" is not new information, because every run
+believes that.
 
 ### Step 4: Waves
 
@@ -134,11 +142,13 @@ A **wave** is a set of tasks whose dependencies are satisfied. Sort by `dependen
 Within a wave, tasks run **in parallel if and only if their declared `scope.files` are disjoint**.
 Any overlap means the wave runs sequentially.
 
-There is no "small overlap" exemption. Two agents editing one file in separate worktrees do not
-collide in git — they collide when both branches merge, and the later merge wins silently for any
-region both touched. Inspecting the file afterward does not recover the lost write, because you
-have nothing to compare against: the losing version was never committed anywhere. Distance within
-the file is irrelevant; the unit of loss is the write, not the line.
+There is no "small overlap" exemption. Two agents editing one file in separate worktrees collide at
+merge, and both outcomes cost more than serializing would have. Overlapping hunks conflict, which
+stops the wave and throws away the parallelism the overlap was meant to buy. Disjoint hunks are
+worse: git combines them cleanly into a version **neither agent wrote or tested** — each one's
+acceptance passed against its own copy of the file, and nothing re-checks the combination until the
+wave's build/test gate, where you meet it as a symptom rather than a cause. Distance within the file
+does not make overlap safe; it only decides which of the two failures you get.
 
 ### Step 5: Dispatch
 
@@ -154,12 +164,18 @@ path, and any DO-NOT-CHANGE fences, then dispatch one implementer per task.
 Run dispatches in the **foreground**. Background dispatch followed by later re-invocation is not
 reliable — that exact stall stranded 3/3 workers in the first dogfood run.
 
-### Step 6: Audit and commit
+### Step 6: Audit, accept, commit, merge
 
-Per task, before anything is committed or merged:
+Per task, in this order. The order *is* the gate — each step is what makes the next one safe, so
+none of them moves.
+
+**1. Audit the scope.** Implementers do not commit, so their work sits uncommitted in the task's
+tree. Diff against the working tree, not between two commits — a two-commit range reports nothing,
+because nothing has been committed yet:
 
 ```bash
-git diff --name-only -z --no-renames "$WAVE_BASE" "$BRANCH_TIP"
+# run in the task's tree: its worktree, or the main tree for a sequential task
+git diff --name-only -z --no-renames "$WAVE_BASE"
 git ls-files --others --exclude-standard -z
 ```
 
@@ -168,15 +184,22 @@ reports both paths; untracked files are included so a new out-of-scope file is c
 
 **A scope violation blocks the commit — including when the out-of-scope change is correct.**
 Correctness is not the question the audit asks. A parallel sibling is editing that file right now
-in another worktree, so the "necessary" fix either vanishes at merge or silently destroys the
-sibling's work; either way you learn about it much later, from a symptom rather than a cause. Stop
-the wave, surface it, and re-plan. Widening scope is a decision you surface to the user, not one
-you make to keep moving — in a parallel wave, widening retroactively breaks the disjointness that
-made the wave legal.
+in another worktree, so the "necessary" fix either conflicts at merge or disappears into an
+auto-combined version nobody tested; either way you learn about it much later, from a symptom rather
+than a cause. Stop the wave, surface it, and re-plan. Widening scope is a decision you surface to
+the user, not one you make to keep moving — in a parallel wave, widening retroactively breaks the
+disjointness that made the wave legal.
 
 Never message another worker to coordinate around this. All coordination is orchestrator-mediated.
 
-Then merge each audited branch, one at a time:
+**2. Run the task's acceptance commands** in that same tree, exactly as written. Acceptance gates the
+commit: a failure means nothing is committed and nothing is merged.
+
+**3. Commit** the audited, accepted work on the task's branch. You commit it — the worker never
+does, because a worker that commits its own work has already bypassed steps 1 and 2.
+
+**4. Merge** each audited branch into the feature branch, one at a time (parallel waves only — a
+sequential task committed in step 3 is already on the feature branch):
 
 ```bash
 git merge --no-ff --no-edit "$BRANCH"
@@ -185,8 +208,7 @@ git merge --no-ff --no-edit "$BRANCH"
 Disjoint scopes are guaranteed at plan time, so these cannot conflict. **A conflict means the
 precondition was violated** — stop and re-plan rather than resolving it.
 
-Run each task's acceptance commands before its commit. Tear down a worktree only after its branch
-merges; preserve it on failure.
+Tear down a worktree only after its branch merges; preserve it on failure.
 
 ### Step 7: Gates
 
@@ -299,9 +321,9 @@ rationalization is quoted; the reason it fails follows.
 
 | Rationalization | Why it fails |
 | --- | --- |
-| "Run the overlapping tasks in parallel, then inspect the shared file afterward and fix anything clobbered." | You cannot detect the loss. The overwritten version was never committed, so there is nothing to diff against. |
+| "Run the overlapping tasks in parallel, then inspect the shared file afterward and fix anything clobbered." | Inspection shows the file's final state, not whether anyone tested that state. A clean auto-merge of two disjoint hunks is exactly the case with nothing to notice. |
 | "Scope declarations are a planning convenience to avoid collisions, not a correctness boundary." | They are exactly a correctness boundary. The audit is the only mechanism that catches a cross-task write before it lands. |
-| "The fix is correct, small, and documented — blocking on the wrong file is process theater." | A correct six-line fix to a file a sibling is editing is the change most likely to vanish silently. |
+| "The fix is correct, small, and documented — blocking on the wrong file is process theater." | A correct six-line fix to a file a sibling is editing is the change most likely to conflict at merge, or to land in a combination neither of you tested. |
 | "I'd message the other agent to make sure it rebases onto my commit." | No direct worker-to-worker messaging. All coordination is orchestrator-mediated. |
 | "The findings are fixed and the build is green — that's the definition of done." | The reviewer that would catch an incomplete fix has not looked at it yet. |
 | "Ship it, but note in the summary that the fixes weren't independently verified." | Disclosure changes what the user knows, not what shipped. |

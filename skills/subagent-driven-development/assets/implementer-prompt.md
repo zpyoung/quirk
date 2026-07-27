@@ -34,14 +34,14 @@ You may create or modify only these files:
 
 **This is a hard boundary, not a guideline.** Other agents are working in parallel on files outside
 your scope, and their working copies are live right now. A write outside your scope is not a
-helpful extra — it either gets discarded, or it silently overwrites work you cannot see, and the
-loss is invisible until much later.
+helpful extra: the orchestrator audits your diff against this list, and a violation blocks the
+commit for the whole task — so the extra write costs you everything else you did and buys nothing.
 
 If finishing your task *requires* touching a file outside your scope — a bug in a dependency, a
 missing export, a type that needs widening — **stop and return `BLOCKED`** with the file and what
 it needs. Do not fix it yourself, even when the fix is small, obvious, and correct. Especially
-then: a correct six-line fix to a file another agent is editing is exactly the change that
-disappears without a trace. The orchestrator will re-plan.
+then: a correct six-line fix to a file another agent is editing is exactly the change that collides
+with what its real owner is writing right now. The orchestrator will re-plan.
 
 ## Do not change
 
