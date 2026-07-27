@@ -312,8 +312,17 @@ leads with the open finding.
 
 **In scope:** rewriting `skills/subagent-driven-development/SKILL.md`; replacing twelve prompt
 assets with three (lens-parameterized reviewer, implementer, fixer); deleting all four Python
-scripts; RED/GREEN pressure tests and activation tests for the rewritten skill; updating
+scripts **and their four pytest suites** (`tests/test_sdd_{wave,dispatch,ledger,acceptance}.py`,
+1,090 lines); rewriting `skills/writing-plans/SKILL.md`'s task-schema sections to the new
+vocabulary; RED/GREEN pressure tests and activation tests for the rewritten skill; updating
 cross-references in sibling skills that describe this one.
+
+`skills/writing-plans/SKILL.md` requires real editing rather than a passive cross-reference. Its
+"Task Independence" section (`:133-166`), YAML example (`:205-215`), and plan-review checklist item
+8 (`:314`) are built from vocabulary this rewrite deletes — captain mode, `scope.never_touch`,
+`cooperative`/TEAM, the three `risk` tiers, `.contract` dependencies, `IN_PLACE_PARALLEL`,
+`CODEX-DEFERRED`, and Phase 2 references. The corrected schema keeps four fields: contract,
+acceptance, `dependencies`, and `scope.files`.
 
 **Testing is mandatory, not optional.** `quirk:writing-skills` classifies discipline-enforcing
 skills under the Iron Law — no such skill without a failing test first — and this rewrite changes
@@ -401,8 +410,10 @@ prompts — not a cap that licenses omitting required behavior.
 
 - Replace `skills/subagent-driven-development/` in place; keep the name and description.
 - Implementers and fixers are Claude Sonnet subagents via `Task`.
-- Optional tech-spec gate retained; task breakdown inline, reusing `quirk:writing-plans`' field
-  schema by cross-reference without dispatching its plan reviewer.
+- Optional tech-spec gate retained; task breakdown inline, cross-referencing
+  `quirk:writing-plans`' field schema without dispatching its plan reviewer. That schema is
+  rewritten as part of this work to the four surviving fields — contract, acceptance,
+  `dependencies`, `scope.files` — because its current form encodes deleted vocabulary.
 - Run state lives in an orchestrator-owned scratch journal.
 - Workers return a closed status vocabulary: `DONE | NEEDS_CONTEXT | BLOCKED | FAILED`; an
   unvalidatable report is `FAILED`.
@@ -483,7 +494,8 @@ consumed from remembered stdout.
 
 ## Status & amendments
 
-**Status:** Approved — reworked after adversarial review; ready for execution.
+**Status:** In execution — tech spec authored (complexity gate met: ≳3 source files, crosses a
+subsystem boundary).
 
 **Amendments:**
 
@@ -503,3 +515,13 @@ consumed from remembered stdout.
 - **2026-07-27** — Defined the closed worker status vocabulary
   (`DONE | NEEDS_CONTEXT | BLOCKED | FAILED`), which the failure-routing table referenced without
   establishing.
+- **2026-07-27** — Feasibility escalation raised while authoring `tech.md` and resolved with the
+  user. The locked decision to reuse `quirk:writing-plans`' field schema "by cross-reference"
+  assumed that schema was reusable; the in-session codebase survey found it encodes the exact
+  vocabulary this rewrite deletes (captain mode, `scope.never_touch`, `cooperative`/TEAM, the three
+  `risk` tiers, `.contract`, `IN_PLACE_PARALLEL`, `CODEX-DEFERRED`, Phase 2). **Resolution:**
+  rewrite that skill's task-schema sections to the four surviving fields rather than leaving a
+  sibling documenting a deleted control plane. `skills/writing-plans/SKILL.md` is added to scope.
+- **2026-07-27** — Survey also found four pytest suites covering the deleted scripts
+  (`tests/test_sdd_{wave,dispatch,ledger,acceptance}.py`, 1,090 lines). They are deleted with the
+  scripts they cover; added to scope.
