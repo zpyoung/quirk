@@ -179,10 +179,11 @@ emitted as a top finding, and review proceeds over whatever remains falsifiable.
 - Refute wins ties; `deep` depth escalates to a cross-model tiebreak.
 
 **Integration**
-- This skill is the single source; SDD's `codex-adversarial-prompt.md` and its pi twin become thin delegations.
+- This skill is the single source; **SDD's Step 8 review loop delegates to it, one invocation per
+  lens** (amended 2026-07-27 — see Amendments 1).
 - v1 ships all four profiles: `code-diff`, `spec-design`, `plan`, `prose-claim`.
-- SDD's `>150 lines OR contract surface` test becomes the depth *selector* rather than an on/off
-  gate. Tasks below the threshold get a `quick` pass instead of recording `CODEX-DEFERRED`.
+- The contract carries `dismissed[]` in and stable finding IDs out, so SDD's cross-round
+  carry-forward survives delegation (added 2026-07-27 — see Amendments 1).
 
 ## Industry Insights
 
@@ -256,4 +257,45 @@ emitted as a top finding, and review proceeds over whatever remains falsifiable.
 
 ## Status & amendments
 
-**Status:** Approved — 2026-07-27
+**Status:** Approved — 2026-07-27. Tech spec authored. Amended twice on 2026-07-27 after
+`52f5865` rewrote SDD's control plane.
+
+**Amendments:**
+
+**1 — 2026-07-27 — Integration decision retargeted.** Upstream commit `52f5865`
+("refactor(sdd)!: rewrite the control plane around branch-level adversarial review") deleted
+`assets/codex-adversarial-prompt.md`, `assets/pi-codex-adversarial-prompt.md`, both captain
+prompts, all four `scripts/sdd-*`, and the `>150 lines OR contract surface` gate. Every referent
+of the original Integration decision ceased to exist, so it could not be implemented as written.
+
+*Resolution (user, 2026-07-27):* SDD's **Step 8 review loop** delegates to this skill — one
+invocation per lens (correctness/logic, spec compliance, security/failure modes), replacing the
+direct `pi-watch` dispatch of `assets/reviewer-prompt.md`. SDD retains ownership of rounds,
+adjudication, stable-ID assignment, fixer dispatch, and the five-round cap; this skill owns the
+review itself and returns structured findings instead of a text block SDD must parse.
+
+*Contract consequences:* delegation requires two additions not in the original design —
+`dismissed[]` as an input (SDD carries dismissed findings forward so a re-report is matched to its
+prior ruling) and stable, caller-supplied-or-preserved finding IDs as an output (SDD's IDs persist
+across rounds). Both are recorded in Decisions Locked → Integration above.
+
+*Risk accepted:* this option was flagged as the highest-risk of four, because it modifies a
+control plane rewritten one commit earlier and not yet proven in use. The user selected it over
+narrowing scope to non-code artifacts.
+
+**2 — 2026-07-27 — Reviewer `bash` grant retained over a contrary security finding.** The same
+commit added an explicit constraint to `skills/subagent-driven-development/SKILL.md`: *"Reviewers
+get read-only tools. `pi` has no sandbox — a reviewer with `bash` or `write` has full filesystem
+access."* That contradicts this spec's locked decision that the reviewer may run its own read-only
+commands, on the `pi-watch` dispatch path specifically. A Claude `Task` reviewer is bounded by
+permission mode; a `pi` reviewer is not.
+
+*Resolution (user, 2026-07-27):* keep read-only `bash` on **both** dispatch paths. The locked
+decision stands unchanged.
+
+*Risk accepted, stated explicitly:* on the `pi` path this grants the reviewer unsandboxed
+filesystem access for the duration of the review. The mitigation is prompt-level only — the stage
+templates instruct read-only use — and prompt-level constraints are not enforcement. The reviewed
+artifact is untrusted input (see Industry Insights → review agents are socially engineerable), so
+a crafted artifact that induces a reviewer to run a destructive command is not blocked by any
+mechanism in this design. This entry exists so the trade is traceable rather than implicit.

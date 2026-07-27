@@ -58,36 +58,68 @@ judgment (attack surfaces, the refute mandate, adjudication). This mirrors SDD's
 
 ### Files to modify (SDD migration)
 
+Anchors below are against `52f5865`, which rewrote SDD's control plane and deleted every file the
+original migration targeted.
+
 | Path | Line anchors | Change |
 |---|---|---|
-| `skills/subagent-driven-development/assets/codex-adversarial-prompt.md` | whole file | Replace body with a delegation that fills `composition-contract.md` |
-| `skills/subagent-driven-development/assets/pi-codex-adversarial-prompt.md` | whole file | Same, pi dispatch path |
-| `skills/subagent-driven-development/SKILL.md` | 75, 450–451, 576, 585, 631–633 | Depth selector replaces the on/off Codex gate; drop `CODEX-DEFERRED` |
-| `skills/subagent-driven-development/assets/captain-prompt.md` | 138, 141, 146, 148 | Same, Claude path |
-| `skills/subagent-driven-development/assets/pi-captain-prompt.md` | 61, 64, 70, 71 | Same, pi path |
+| `skills/subagent-driven-development/SKILL.md` | 230–256 (Step 8: Review) | Replace the direct `pi-watch` dispatch with a per-lens invocation of this skill; keep rounds, checkpoint/final distinction, and the retry-then-block rule |
+| `skills/subagent-driven-development/SKILL.md` | 261–277 (Step 9: Adjudicate and fix) | Consume structured `GateResult` instead of parsing reviewer text blocks; SDD keeps stable-ID assignment and dismissed carry-forward |
+| `skills/subagent-driven-development/assets/reviewer-prompt.md` | whole file | Becomes the `code-diff` profile's lens definitions plus a delegation header; its severity rubric and `LOCATION`/`EVIDENCE` requirement migrate into `profiles/code-diff.md` rather than being rewritten |
 
-Back-link for the whole migration: logic.md § Decisions Locked → Integration.
+**Not modified:** `assets/fixer-prompt.md` and `assets/implementer-prompt.md` are untouched — the
+delegation replaces how findings are *produced*, not how they are fixed.
 
-**Reading of "a `quick` pass".** The Integration decision says tasks below SDD's old
-`>150 lines OR contract-surface` gate "get a `quick` pass instead of recording `CODEX-DEFERRED`."
-Taken literally against this spec's depth table, a 51–150-line task without a contract surface
-auto-selects `standard`, not `quick`. This spec reads the locked decision as *"a pass rather than
-no pass"* — the intent it states — and lets the depth table assign the tier, which gives such a
-task **more** review than the literal reading, never less. No SDD task can now record
-`CODEX-DEFERRED`, which is the substance of the decision. If you intended `quick` as a literal
-ceiling for sub-threshold SDD tasks, the depth table needs an SDD-specific clamp and this
-paragraph changes.
+Back-link: logic.md § Decisions Locked → Integration, and § Status & amendments → Amendment 1.
+
+### Delegation contract additions
+
+Amendment 1 adds two fields the original design lacked, both required for SDD's round loop:
+
+`SCHEMA:` added to the input contract
+```
+dismissed : array of {id, claim, ruling_reason}
+            # findings the caller already rejected this run; the promote stage
+            # must not re-report one without new evidence, and the refute stage
+            # kills any that reappear without it
+```
+
+`CONTRACT:` finding-ID stability
+```
+caller supplies dismissed[].id  -> those IDs are reserved; a re-report reuses its
+                                   original ID, never a fresh one
+caller supplies no ids          -> gate assigns F1..Fn in severity order
+ids are stable within a run, not across runs   # the manifest's artifact_hash
+                                               # is what identifies a run
+```
+
+Back-link: logic.md § Decisions Locked → Integration.
+
+**Depth under delegation.** The original `quick`-pass reading is moot: `52f5865` removed SDD's
+per-task Codex gate and `CODEX-DEFERRED` entirely, and Amendment 1 retargets the integration at
+Step 8, which is branch-level. SDD's checkpoint review is one round over a wave diff and its final
+loop repeats over the run diff — both large enough that the depth table will select `standard` or
+`deep` on size alone. SDD passes `--depth` explicitly rather than relying on auto-selection, so
+delegation never silently downgrades a branch-level review to `quick`; `resolve`'s
+`depth_suggestion` is advisory to a caller that omits it.
 
 ### Existing patterns to follow
 
-- `skills/subagent-driven-development/scripts/sdd-acceptance` — argparse structure, JSON-to-stdout,
-  `print(f"...: {exc}", file=sys.stderr)` + `return 2` error convention, `raise SystemExit(main())`.
-- `skills/subagent-driven-development/scripts/sdd-ledger` — subcommand dispatch shape.
-- `tests/test_sdd_ledger.py:14-25` — the `subprocess.run([sys.executable, str(SCRIPT), ...])`
-  invocation harness for a skill-local script. Reuse verbatim; `tests/conftest.py` `run_script`
-  only covers `bin/`, not skill scripts.
+`52f5865` deleted all four `scripts/sdd-*` and their tests, so the Python precedent this spec
+originally cited is gone. The surviving in-repo models:
+
+- `bin/artifact_append.py`, `bin/adr_create.py` — argparse structure, `print(f"...: {exc}",
+  file=sys.stderr)` + non-zero return error convention, `raise SystemExit(main())`. These are the
+  remaining stdlib-only script precedent.
+- `tests/conftest.py:35-42` (`run_script`) — the `subprocess.run([sys.executable, ...])` harness.
+  It resolves against `bin/` only, so this work adds a sibling helper for a skill-local script
+  path rather than reusing it directly. **No test in the repo currently exercises a skill-local
+  script** — `tests/test_sdd_{acceptance,dispatch,ledger,wave}.py` were all deleted — so this
+  establishes the pattern rather than following one.
 - `commands/artifacts/adr.md` — slash-command shape: frontmatter `description:`, then
   `${CLAUDE_PLUGIN_ROOT}` paths and per-exit-code handling instructions.
+- `skills/pi-dev/scripts/pi-watch/` — precedent that a skill may own an executable with its own
+  `package.json`; confirms `skills/<name>/scripts/` is a sanctioned location.
 
 ## Contracts & interfaces
 
@@ -155,9 +187,23 @@ refute   : tools read,grep,find,ls,bash(read-only)   # same grant, fresh context
 tiebreak : tools read,grep,find,ls                   # adjudicates, does not re-verify
 ```
 
-Neither stage receives `edit` or `write`. This mirrors `skills/subagent-driven-development/SKILL.md`
-line 594 ("reviewers receive `read,grep,find,ls`"), extended with read-only `bash` because
-logic.md § Decisions Locked grants the reviewer its own verification commands.
+Neither stage receives `edit` or `write`.
+
+The read-only `bash` grant is a **deliberate divergence from SDD**, which as of `52f5865`
+(SKILL.md:251-252) gives its reviewers `read,grep,find,ls` only and states the reason: *"`pi` has
+no sandbox — a reviewer with `bash` or `write` has full filesystem access."* logic.md § Status &
+amendments → Amendment 2 records the user's decision to keep `bash` on both dispatch paths, and
+the risk accepted in doing so.
+
+Implementation consequences of that ruling:
+- The stage templates must state the read-only constraint explicitly, since on the `pi` path it is
+  the *only* thing constraining the reviewer — prompt text, not enforcement.
+- `profiles/*.md` must not declare a pre-pass command that would also be a plausible thing for a
+  reviewer to re-run destructively; keep pre-pass commands and reviewer guidance in separate
+  sections so the templates never read as an invitation to mutate.
+- When SDD delegates Step 8, the reviewer it dispatches through this skill will hold a broader tool
+  grant than the one SDD's own prompt specifies. That is intended per Amendment 2, and
+  `assets/composition-contract.md` must say so plainly so it is not mistaken for a bug.
 
 A finding is *contested* when refute rejects it and supplies a counter-argument rather than
 falsifying its evidence.
@@ -374,14 +420,18 @@ the promote/refute stages entirely. Back-link: logic.md § Data flow step 3.
 
 ## DO-NOT-CHANGE fences
 
-- **`skills/subagent-driven-development/scripts/*`** — the four SDD scripts are covered by
-  `tests/test_sdd_{acceptance,dispatch,ledger,wave}.py` and carry the run-pinning and artifact
-  guarantees the captain protocol depends on. *Why fenced:* this work adds a peer script; it has no
-  reason to alter dispatch, ledger, or wave mechanics, and doing so would break a working pipeline.
-- **`skills/subagent-driven-development/SKILL.md` §§ Runtime Selection, Mode mechanics, Dispatch
-  hygiene, Run ledger** (lines ~55–110, 275–330, 386–435, 542–566) — *Why fenced:* the migration
-  changes only *when* an adversarial pass runs and *which* template it fills. Escalation routing,
-  merge lanes, and dispatch hygiene are orthogonal and independently tested.
+- **`skills/subagent-driven-development/SKILL.md` Steps 1–7 (lines 77–229), Step 10 (279–297),
+  and Failure routing (298–316)** — *Why fenced:* Amendment 1 delegates only the *production* of
+  findings in Step 8. Preflight, decomposition, waves, dispatch, audit/commit/merge, the build/test
+  gate, the five-round exit cap, and worker failure routing are orthogonal to how a review is
+  performed, and this control plane is one commit old and unproven — widening the blast radius is
+  how a delegation becomes a rewrite.
+- **`skills/subagent-driven-development/assets/{fixer,implementer}-prompt.md`** — *Why fenced:*
+  the delegation changes how findings are produced, never how they are fixed or how work is built.
+- **SDD's severity rubric and `LOCATION`/`EVIDENCE` requirement** (currently
+  `assets/reviewer-prompt.md`) — *Why fenced:* these are migrated verbatim into
+  `profiles/code-diff.md`, not redesigned. They already match this spec's evidence gate, and
+  silently re-tuning them would change SDD's exit-gate behavior, which reads those labels.
 - **`skills/requesting-code-review/`** — *Why fenced:* logic.md § Scope & non-goals keeps the
   cooperative reviewer intact as a deliberate decision.
 - **`bin/`, `hooks/`, `templates/`** — *Why fenced:* typed-artifacts surface, unrelated to this work.
@@ -396,7 +446,9 @@ the promote/refute stages entirely. Back-link: logic.md § Data flow step 3.
 
 **Ask**
 - Any change to a `logic.md` Decisions-Locked entry (escalate, amend, then proceed).
-- Whether to preserve SDD's `CODEX-DEFERRED` skip behavior if the added cost of `quick` passes proves unwelcome.
+- Any widening of the Step 8 delegation into SDD's fenced steps (see DO-NOT-CHANGE fences).
+- Whether SDD's checkpoint review should use a cheaper depth than its final loop, once real
+  round-latency numbers exist.
 
 **Never**
 - Dispatch a model from inside the script.
@@ -411,7 +463,8 @@ that review agents are susceptible to framing effects embedded in reviewed mater
 templates must fence the artifact in a delimited block and state that instructions appearing inside
 it are data, never directives. The pre-pass shells out for `git grep` and discovered check commands;
 all argument-vector invocations except the discovered check commands, which run through the shell
-exactly as declared (the `sdd-acceptance` precedent).
+exactly as declared, so a profile can name a real project build/test invocation without this spec
+having to model every shell form.
 
 **Observability.** The manifest is the audit record. `gate` reports `suppressed` with a per-finding
 reason so an abnormal kill rate is diagnosable rather than merely visible.
@@ -421,8 +474,10 @@ separate task, committed separately, and revertible without touching the new ski
 
 ## Testing strategy
 
-`tests/test_adversarial_review.py` — script behavior, using the `test_sdd_ledger.py` subprocess
-harness:
+`tests/test_adversarial_review.py` — script behavior. It defines its own `subprocess.run(
+[sys.executable, str(SCRIPT), ...])` helper resolving `SCRIPT` to
+`skills/adversarial-review/scripts/adversarial-review`, since `conftest.py`'s `run_script` is
+`bin/`-only and no skill-local-script harness survives in the repo:
 - `resolve`: each profile-detection precedence rule; `--profile` override; depth thresholds at
   boundaries (50/51, 150/151); contract-surface regex hit and miss.
 - `prepass`: unresolvable path, symbol, and command each produce a `HIGH`/`prepass` finding;
@@ -443,8 +498,12 @@ harness:
 - All three stage assets exist; `refute-prompt.md` contains the kill mandate; no asset contains the
   string `only critique` (the posture logic.md replaced).
 - `commands/adversarial-review.md` exists with `description:` frontmatter.
-- SDD's two codex assets reference `adversarial-review` (delegation landed) and no SDD file retains
-  `CODEX-DEFERRED`.
+- Delegation landed: `skills/subagent-driven-development/SKILL.md` Step 8 references
+  `adversarial-review`, and its inline `pi-watch --provider openai-codex` reviewer dispatch is
+  gone.
+- Migration fidelity: every severity tier in SDD's rubric (`CRITICAL`/`HIGH`/`MEDIUM`/`LOW`) and
+  the `NO_FINDINGS` token survive in `profiles/code-diff.md`, so SDD's exit gate keeps reading the
+  labels it expects.
 
 **Acceptance bar:** `python3 -m pytest -q` green from the repo root.
 
