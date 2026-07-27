@@ -59,6 +59,12 @@ name: subagent-driven-development
 description: Use when executing implementation plans with independent tasks in the current session
 ```
 
+`skills/writing-plans/plan-document-reviewer-prompt.md` — rubric rows 32, 33, 36, 38. Found by the
+plan-build coherence sweep, not the initial survey, because it names only the vocabulary terms
+(`captain`, `never_touch`, `risk`, `.contract`) and never the skill or script names the survey
+searched for. Left as-is it would flag correct new-style plans as defective — row 33 demands
+`scope.never_touch`, row 36 demands an explicit `risk` field and validates `.contract` targets.
+
 `skills/writing-plans/SKILL.md` — three regions, per the logic spec's Amendments entry:
 
 | Region | Lines | Action |
@@ -128,6 +134,23 @@ above. Its neighbouring line 197 cites `**executing-plans** (Step 5)`, which is 
 
 Historical records under `docs/plans/` and `docs/specs/` are **not** updated — they record past
 decisions and must continue to.
+
+### Coherence sweep disposition
+
+Every tracked file referencing the deleted vocabulary
+(`captain|MERGE_READY|CHAIN_COMPLETE|IMPLEMENTER_DONE|STUB_READY|REBASE_REQUEST|READINESS_REVOKED|CONTRACT_CORRECTED|BRANCH_REQUEST|IN_PLACE_PARALLEL|WORKTREE_PARALLEL|never_touch|CODEX-DEFERRED|sdd-*`)
+is dispositioned:
+
+| File | Hits | Disposition |
+| --- | --- | --- |
+| `skills/writing-plans/SKILL.md` | 16 | Scoped into a task |
+| `skills/writing-plans/plan-document-reviewer-prompt.md` | 5 | Scoped into a task |
+| `tests/test_sdd_{ledger,wave,dispatch,acceptance}.py` | 21 | Deleted with their scripts |
+| `skills/pi-dev/reference/print-mode.md:60` | 1 | **Unchanged, verified consistent** — "pi-captain style" is pi-dev's own orchestration pattern, unrelated to SDD's captain tier |
+| `docs/quirk/specs/2026-07-21-sdd-captain-control-plane-design.md` | 81 | **Unchanged, verified consistent** — historical record of the design being replaced |
+| `docs/plans/2026-05-08-sdd-design-implement-port.md` | 26 | **Unchanged, verified consistent** — historical |
+| `docs/specs/2026-05-08-sdd-design-implement-port-design.md` | 7 | **Unchanged, verified consistent** — historical |
+| `docs/quirk/plans/2026-07-05-writing-skills-rewrite.md` | 1 | **Unchanged, verified consistent** — historical |
 
 ## Contracts & interfaces
 
