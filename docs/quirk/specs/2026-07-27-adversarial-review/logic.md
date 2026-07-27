@@ -1,7 +1,8 @@
 # Logic Spec — `adversarial-review` skill
 
 **Date:** 2026-07-27
-**Status:** Approved
+**Status:** Approved — tech spec authored (`tech.md`); complexity-tier gate met on ≳3 source files,
+subsystem boundary crossed, and multi-session scope
 
 ## Purpose
 
