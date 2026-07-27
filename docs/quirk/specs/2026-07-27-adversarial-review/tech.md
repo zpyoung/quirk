@@ -234,13 +234,31 @@ Implementation consequences of that ruling:
 A finding is *contested* when refute rejects it and supplies a counter-argument rather than
 falsifying its evidence.
 
+`gate` reads this from each finding's `disposition` field — it has no other way to know a refuter
+rejected something, and inferring it from `stage` alone is impossible because both survivors and
+casualties carry `stage: "refute"`.
+
 `CONTRACT:`
 ```
-depth quick | standard : refute wins    -> finding dropped, suppressed reason "refuted"
-depth deep             : contested findings go to tiebreak; tiebreak verdict is final
+disposition "refuted",   any depth       -> dropped, suppressed reason "refuted"
+disposition "contested", quick|standard  -> dropped, suppressed reason "refuted"
+                                            (refute wins; there is no tiebreak below deep)
+disposition "contested", deep            -> withheld from findings[], emitted in
+                                            contested[] for the caller to route to
+                                            the tiebreak stage; not counted as suppressed
+disposition "standing" or absent         -> retained, subject to the evidence gate
 ```
+
 Falsified evidence is never contested — it is dropped at any depth, since the drop is mechanical
 rather than a judgment. Back-link: logic.md § Decisions Locked → Reviewer supply & adjudication.
+
+### `gate` merges the pre-pass findings itself
+
+`gate` already requires `--prepass`, so it appends `PrepassResult.findings` to the findings under
+adjudication rather than requiring the caller to pre-merge them. Leaving the merge to the caller
+would make forgetting it a silent loss of the only findings that are true by construction. Pre-pass
+findings carry `disposition: "standing"` and bypass the reproduction requirement — a `kind:
+"prepass"` evidence item already satisfies it.
 
 ### `quick` depth is one dispatch, not two
 
@@ -317,6 +335,12 @@ evidence      : array, >=1 item
 remediation   : str, non-empty
 patch         : str (unified diff) | null
 stage         : "prepass" | "promote" | "refute" | "tiebreak"
+disposition   : "standing" | "refuted" | "contested"
+                # Stamped by the stage that last judged the finding, and the only
+                # way `gate` can know a refuter rejected it. Absent = "standing".
+                #   standing  — no stage has rejected it
+                #   refuted   — the refute stage falsified or rejected it outright
+                #   contested — the refute stage disagrees on judgment, not evidence
 ```
 
 `SCHEMA:` Evidence item — `kind` selects which other fields are required
@@ -367,6 +391,15 @@ verdict          : "PASS" | "NEEDS_FIXES" | "CRITICAL_ISSUES" | "NOT_REVIEWABLE"
 findings         : array of Finding (survivors, with confidence caps applied)
 suppressed_count : int
 suppressed       : array of {id, reason}
+depth            : "quick" | "standard" | "deep"
+                   # Echoed from --depth so `manifest` records the depth actually
+                   # used, not resolve's advisory depth_suggestion. SDD overrides
+                   # --depth explicitly, so deriving it from ResolveResult would
+                   # silently record the wrong value.
+contested        : array of Finding
+                   # Non-empty only at deep depth: findings the caller must route
+                   # to the tiebreak stage. Empty at quick/standard, where refute
+                   # wins outright.
 ```
 
 `SCHEMA:` Manifest — the replay record from logic.md § Composition contract
