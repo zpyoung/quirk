@@ -195,7 +195,13 @@ per the ladder above, then blocks the review round if both fail.
 
 ## Failure routing
 
-A compact table, not an event system. Every row's default is stop and ask rather than improvise.
+Every worker returns one of a closed status vocabulary: `DONE`, `NEEDS_CONTEXT`, `BLOCKED`, or
+`FAILED`. A report the orchestrator cannot validate against that vocabulary is `FAILED`.
+`NEEDS_CONTEXT` is answered from the spec and codebase when derivable, and becomes a question to
+the user when not.
+
+Routing is a compact table, not an event system. Every row's default is stop and ask rather than
+improvise.
 
 | Situation | Response |
 | --- | --- |
@@ -398,6 +404,8 @@ prompts — not a cap that licenses omitting required behavior.
 - Optional tech-spec gate retained; task breakdown inline, reusing `quirk:writing-plans`' field
   schema by cross-reference without dispatching its plan reviewer.
 - Run state lives in an orchestrator-owned scratch journal.
+- Workers return a closed status vocabulary: `DONE | NEEDS_CONTEXT | BLOCKED | FAILED`; an
+  unvalidatable report is `FAILED`.
 - RED/GREEN pressure tests and activation tests are in scope.
 
 ## Industry Insights
@@ -492,3 +500,6 @@ consumed from remembered stdout.
   per-task acceptance gating; connected-component fixer grouping; reviewer output validation; and a
   blocked-handoff state for capped exits. Length target raised from ~350 to ~600 lines total after
   the review showed the original budget was forcing required state transitions out of the design.
+- **2026-07-27** — Defined the closed worker status vocabulary
+  (`DONE | NEEDS_CONTEXT | BLOCKED | FAILED`), which the failure-routing table referenced without
+  establishing.
