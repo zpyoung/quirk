@@ -482,6 +482,228 @@ def select_reviewer(
     }
 
 
+# --- the evidence gate ------------------------------------------------------------
+
+SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+CONFIDENCES = ("HIGH", "MEDIUM", "LOW")
+DISPOSITIONS = ("standing", "refuted", "contested")
+REQUIRED_FIELDS = ("severity", "confidence", "category", "claim", "evidence", "remediation")
+REPRODUCTION_KINDS = ("command", "prepass")
+PROOF_REQUIRED = ("CRITICAL", "HIGH")
+
+EVIDENCE_REQUIRED_FIELDS = {
+    "file-line": ("ref", "quote"),
+    "quote": ("ref", "quote"),
+    "command": ("command", "output"),
+    "absence": ("command", "ref"),
+    "prepass": ("ref", "output"),
+}
+
+VERDICT_EXIT = {"PASS": 0, "NEEDS_FIXES": 1, "CRITICAL_ISSUES": 3, "NOT_REVIEWABLE": 4}
+
+
+def load_json(path_arg: str, label: str) -> Any:
+    path = Path(path_arg)
+    if not path.is_file():
+        raise UsageError(f"missing {label} input: {path}")
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise UsageError(f"cannot read {label} input {path}: {exc}") from exc
+
+
+def validate_finding(finding: Any, index: int) -> None:
+    if not isinstance(finding, dict):
+        raise UsageError(f"finding {index} is not an object")
+    for field in REQUIRED_FIELDS:
+        if field not in finding:
+            raise UsageError(f"finding {index} is missing required field: {field}")
+    if finding["severity"] not in SEVERITIES:
+        raise UsageError(f"finding {index} has invalid severity: {finding['severity']}")
+    if finding["confidence"] not in CONFIDENCES:
+        raise UsageError(f"finding {index} has invalid confidence: {finding['confidence']}")
+    disposition = finding.get("disposition", "standing")
+    if disposition not in DISPOSITIONS:
+        raise UsageError(f"finding {index} has invalid disposition: {disposition}")
+    evidence = finding["evidence"]
+    if not isinstance(evidence, list) or not evidence:
+        raise UsageError(f"finding {index} must carry at least one evidence item")
+    for item in evidence:
+        kind = item.get("kind") if isinstance(item, dict) else None
+        if kind not in EVIDENCE_REQUIRED_FIELDS:
+            raise UsageError(f"finding {index} has an evidence item with invalid kind: {kind}")
+        for field in EVIDENCE_REQUIRED_FIELDS[kind]:
+            if field not in item:
+                raise UsageError(
+                    f"finding {index} evidence of kind {kind} is missing field: {field}"
+                )
+
+
+def evidence_resolves(item: dict[str, Any], repo_root: Path) -> bool:
+    """Can this evidence be re-resolved against the source it points at?
+
+    Only failures we can *demonstrate* count as falsification — an unreachable
+    check is not proof the finding is wrong.
+    """
+    kind = item["kind"]
+    if kind in ("command", "prepass"):
+        return True
+    if kind == "absence":
+        return True
+    ref = str(item.get("ref", ""))
+    quote = str(item.get("quote", ""))
+    bare = strip_line_anchor(ref.split("#", 1)[0])
+    candidate = Path(bare) if Path(bare).is_absolute() else repo_root / bare
+    if not candidate.is_file():
+        # A section anchor (`spec#3`) names no file; treat it as unfalsifiable
+        # rather than false, since we cannot check it either way.
+        return "#" in ref or not bare
+    if not quote:
+        return True
+    return quote.strip() in candidate.read_text(errors="replace")
+
+
+def apply_evidence_gate(
+    finding: dict[str, Any], repo_root: Path
+) -> tuple[dict[str, Any] | None, str | None]:
+    if not any(evidence_resolves(item, repo_root) for item in finding["evidence"]):
+        return None, "falsified"
+
+    graded = dict(finding)
+    has_reproduction = any(item["kind"] in REPRODUCTION_KINDS for item in finding["evidence"])
+    # Severity is consequence and never moves; proof speaks only to likelihood,
+    # and only where the spec requires it.
+    if not has_reproduction and graded["severity"] in PROOF_REQUIRED:
+        graded["confidence"] = "LOW"
+    return graded, None
+
+
+def run_gate(
+    findings_path: str, model_path: str, prepass_path: str, depth: str, repo_root: Path
+) -> tuple[int, dict[str, Any]]:
+    findings = load_json(findings_path, "findings")
+    model = load_json(model_path, "model")
+    prepass = load_json(prepass_path, "prepass")
+    if not isinstance(findings, list):
+        raise UsageError("findings input must be a JSON array")
+
+    # gate owns the merge so a caller cannot silently drop the findings that are
+    # true by construction.
+    merged = list(findings) + list(prepass.get("findings", []))
+    for index, finding in enumerate(merged):
+        validate_finding(finding, index)
+
+    survivors: list[dict[str, Any]] = []
+    contested: list[dict[str, Any]] = []
+    suppressed: list[dict[str, str]] = []
+
+    for finding in merged:
+        disposition = finding.get("disposition", "standing")
+        if disposition == "refuted":
+            suppressed.append({"id": finding.get("id", ""), "reason": "refuted"})
+            continue
+        if disposition == "contested":
+            if depth == "deep":
+                contested.append(finding)
+            else:
+                suppressed.append({"id": finding.get("id", ""), "reason": "refuted"})
+            continue
+        graded, reason = apply_evidence_gate(finding, repo_root)
+        if graded is None:
+            suppressed.append({"id": finding.get("id", ""), "reason": reason or "falsified"})
+        else:
+            survivors.append(graded)
+
+    # Unfalsifiability is the most actionable thing a review can say, so it leads.
+    survivors.sort(key=lambda f: (
+        f.get("category") != "unfalsifiable-claim", SEVERITIES.index(f["severity"])
+    ))
+    for position, finding in enumerate(survivors, start=1):
+        if not finding.get("id"):
+            finding["id"] = f"F{position}"
+
+    verdict = compute_verdict(survivors, model, prepass)
+    payload = {
+        "verdict": verdict,
+        "findings": survivors,
+        "contested": contested,
+        "suppressed": suppressed,
+        "suppressed_count": len(suppressed),
+        "depth": depth,
+    }
+    return VERDICT_EXIT[verdict], payload
+
+
+def compute_verdict(
+    survivors: list[dict[str, Any]], model: dict[str, Any], prepass: dict[str, Any]
+) -> str:
+    # NOT_REVIEWABLE is evaluated first and is never a synonym for PASS: a review
+    # that could not happen must not read like one that found nothing.
+    if not model.get("resolved", False):
+        return "NOT_REVIEWABLE"
+    if prepass.get("status") == "could-not-run" and any(
+        f.get("category") == "unfalsifiable-claim" for f in survivors
+    ):
+        return "NOT_REVIEWABLE"
+
+    severities = {f["severity"] for f in survivors}
+    if "CRITICAL" in severities:
+        return "CRITICAL_ISSUES"
+    if severities & {"HIGH", "MEDIUM"}:
+        return "NEEDS_FIXES"
+    return "PASS"
+
+
+# --- replay manifest --------------------------------------------------------------
+
+def build_manifest(
+    resolve_path: str, prepass_path: str, model_path: str, gate_path: str, lens: str | None
+) -> dict[str, Any]:
+    resolved = load_json(resolve_path, "resolve")
+    prepass = load_json(prepass_path, "prepass")
+    model = load_json(model_path, "model")
+    gate_result = load_json(gate_path, "gate")
+
+    # Depth comes from the gate, never from resolve: resolve only ever offered a
+    # suggestion, and a caller that overrode it would otherwise be misrecorded.
+    depth = gate_result.get("depth", "standard")
+
+    # A quick pass self-refutes inside one context, so it cannot claim structural
+    # independence no matter which family ran it. Independence only ever degrades.
+    independence = model.get("independence", "reduced")
+    if depth == "quick":
+        independence = "reduced"
+
+    return {
+        "reviewer": {
+            "alias": model.get("alias"),
+            "family": model.get("family"),
+            "provider": model.get("provider"),
+            "model": model.get("model"),
+            "thinking": model.get("thinking"),
+            "independence": independence,
+        },
+        "target": {
+            "kind": resolved.get("target_kind"),
+            "ref": resolved.get("target_ref"),
+            "artifact_hash": resolved.get("artifact_hash"),
+            "size_metric": resolved.get("size_metric"),
+        },
+        "profile": resolved.get("profile"),
+        "depth": depth,
+        "lens": lens,
+        "prepass": {
+            "status": prepass.get("status"),
+            "checks": [
+                {k: check.get(k) for k in ("name", "command", "exit_code", "status")}
+                for check in prepass.get("checks", [])
+            ],
+        },
+        "suppressed_count": gate_result.get("suppressed_count", 0),
+        "verdict": gate_result.get("verdict"),
+    }
+
+
 # --- cli --------------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -519,6 +741,23 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"preflight command, alias appended (default: {DEFAULT_CHECK_CMD})",
     )
 
+    gate_cmd = sub.add_parser("gate", help="validate, grade, and adjudicate findings")
+    gate_cmd.add_argument("--findings", required=True, help="JSON array of Finding")
+    gate_cmd.add_argument("--model", required=True, help="ModelSelection JSON from select-model")
+    gate_cmd.add_argument("--prepass", required=True, help="PrepassResult JSON from prepass")
+    gate_cmd.add_argument(
+        "--depth", default="standard", choices=("quick", "standard", "deep"),
+        help="depth actually used; echoed into GateResult for the manifest",
+    )
+    gate_cmd.add_argument("--repo-root", default=".", help="repository root")
+
+    manifest_cmd = sub.add_parser("manifest", help="assemble the replay record")
+    manifest_cmd.add_argument("--resolve", required=True, help="ResolveResult JSON")
+    manifest_cmd.add_argument("--prepass", required=True, help="PrepassResult JSON")
+    manifest_cmd.add_argument("--model", required=True, help="ModelSelection JSON")
+    manifest_cmd.add_argument("--gate", required=True, help="GateResult JSON")
+    manifest_cmd.add_argument("--lens", help="lens the review was narrowed to, if any")
+
     return parser
 
 
@@ -536,6 +775,14 @@ def main(argv: list[str] | None = None) -> int:
             exit_code, payload = run_prepass(args.profile, args.target, repo_root, args.check_cmd)
         elif args.command == "select-model":
             exit_code, payload = select_reviewer(args.author_family, args.model, args.check_cmd)
+        elif args.command == "gate":
+            exit_code, payload = run_gate(
+                args.findings, args.model, args.prepass, args.depth, repo_root
+            )
+        elif args.command == "manifest":
+            payload = build_manifest(
+                args.resolve, args.prepass, args.model, args.gate, args.lens
+            )
         else:  # pragma: no cover - argparse rejects unknown subcommands
             raise UsageError(f"unhandled command: {args.command}")
     except (UsageError, OSError, ValueError) as exc:

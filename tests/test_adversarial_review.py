@@ -462,3 +462,296 @@ def test_resolved_selection_carries_a_dispatchable_triple():
     result = select_model("--author-family", "anthropic", "--check-cmd", "true")
     for field in ("provider", "model", "thinking"):
         assert result[field], f"{field} must be populated for dispatch"
+
+
+# ============================ gate + manifest =====================================
+
+def _finding(**over) -> dict:
+    base = {
+        "id": "F1", "severity": "HIGH", "confidence": "HIGH",
+        "category": "correctness", "claim": "x breaks",
+        "evidence": [{"kind": "command", "command": "pytest -q", "output": "1 failed"}],
+        "remediation": "fix x", "patch": None, "stage": "promote",
+        "disposition": "standing",
+    }
+    base.update(over)
+    return base
+
+
+def _write(tmp_path: Path, name: str, payload) -> str:
+    p = tmp_path / name
+    p.write_text(json.dumps(payload))
+    return str(p)
+
+
+def _inputs(tmp_path, findings, *, model=None, prepass_status="pass", prepass_findings=None):
+    model = model or {"resolved": True, "alias": "codex", "family": "openai",
+                      "provider": "openai-codex", "model": "gpt-5.6-sol",
+                      "thinking": "high", "independence": "full", "ladder": []}
+    pre = {"status": prepass_status, "checks": [], "findings": prepass_findings or []}
+    return (
+        "--findings", _write(tmp_path, "f.json", findings),
+        "--model", _write(tmp_path, "m.json", model),
+        "--prepass", _write(tmp_path, "p.json", pre),
+    )
+
+
+def gate(tmp_path, findings, *, expect=0, extra=(), **kw) -> dict:
+    proc = run_ar("gate", *_inputs(tmp_path, findings, **kw), *extra)
+    assert proc.returncode == expect, f"exit {proc.returncode}: {proc.stderr}"
+    return json.loads(proc.stdout)
+
+
+# --- required inputs --------------------------------------------------------------
+
+def test_gate_without_model_input_fails_loudly(tmp_path):
+    """A missing input must never collapse silently onto the severity path."""
+    proc = run_ar("gate", "--findings", _write(tmp_path, "f.json", []),
+                  "--prepass", _write(tmp_path, "p.json", {"status": "pass", "checks": [], "findings": []}))
+    assert proc.returncode == 2
+
+
+def test_gate_without_prepass_input_fails_loudly(tmp_path):
+    proc = run_ar("gate", "--findings", _write(tmp_path, "f.json", []),
+                  "--model", _write(tmp_path, "m.json", {"resolved": True, "independence": "full"}))
+    assert proc.returncode == 2
+
+
+# --- verdicts ---------------------------------------------------------------------
+
+def test_verdict_pass_when_only_low_survives(tmp_path):
+    result = gate(tmp_path, [_finding(severity="LOW")], expect=0)
+    assert result["verdict"] == "PASS"
+
+
+def test_verdict_needs_fixes_on_medium(tmp_path):
+    assert gate(tmp_path, [_finding(severity="MEDIUM")], expect=1)["verdict"] == "NEEDS_FIXES"
+
+
+def test_verdict_critical_issues(tmp_path):
+    assert gate(tmp_path, [_finding(severity="CRITICAL")], expect=3)["verdict"] == "CRITICAL_ISSUES"
+
+
+def test_not_reviewable_when_no_reviewer_resolved(tmp_path):
+    """First branch: the review never happened."""
+    dead = {"resolved": False, "alias": None, "family": None, "provider": None,
+            "model": None, "thinking": None, "independence": "reduced", "ladder": []}
+    result = gate(tmp_path, [], model=dead, expect=4)
+    assert result["verdict"] == "NOT_REVIEWABLE"
+
+
+def test_not_reviewable_beats_pass_with_zero_findings(tmp_path):
+    """The dangerous case: no reviewer AND no findings must not read as PASS."""
+    dead = {"resolved": False, "alias": None, "family": None, "provider": None,
+            "model": None, "thinking": None, "independence": "reduced", "ladder": []}
+    assert gate(tmp_path, [], model=dead, expect=4)["verdict"] == "NOT_REVIEWABLE"
+
+
+def test_not_reviewable_second_branch_unfalsifiable_plus_could_not_run(tmp_path):
+    result = gate(tmp_path, [_finding(category="unfalsifiable-claim", severity="MEDIUM")],
+                  prepass_status="could-not-run", expect=4)
+    assert result["verdict"] == "NOT_REVIEWABLE"
+
+
+def test_unfalsifiable_alone_does_not_block_when_prepass_ran(tmp_path):
+    """Review proceeds; the claim is reported, not fatal."""
+    result = gate(tmp_path, [_finding(category="unfalsifiable-claim", severity="MEDIUM")], expect=1)
+    assert result["verdict"] == "NEEDS_FIXES"
+    assert result["findings"][0]["category"] == "unfalsifiable-claim"
+
+
+def test_unfalsifiable_claim_sorts_first(tmp_path):
+    findings = [_finding(id="F1", severity="CRITICAL"),
+                _finding(id="F2", category="unfalsifiable-claim", severity="LOW")]
+    result = gate(tmp_path, findings, expect=3)
+    assert result["findings"][0]["category"] == "unfalsifiable-claim"
+
+
+# --- evidence gate: three outcomes ------------------------------------------------
+
+def test_verified_finding_keeps_its_confidence(tmp_path):
+    result = gate(tmp_path, [_finding(severity="CRITICAL", confidence="HIGH")], expect=3)
+    assert result["findings"][0]["confidence"] == "HIGH"
+
+
+def test_unverified_critical_is_capped_to_low_confidence_not_downgraded(tmp_path):
+    """Severity tracks consequence; proof only speaks to likelihood."""
+    unproven = _finding(severity="CRITICAL", confidence="HIGH",
+                        evidence=[{"kind": "quote", "ref": "spec#3", "quote": "must not lose data"}])
+    result = gate(tmp_path, [unproven], expect=3)
+    assert result["findings"][0]["severity"] == "CRITICAL"
+    assert result["findings"][0]["confidence"] == "LOW"
+    assert result["verdict"] == "CRITICAL_ISSUES"
+
+
+def test_unverified_medium_keeps_its_confidence(tmp_path):
+    """logic.md permits reasoned argument below CRITICAL/HIGH — no cap there."""
+    unproven = _finding(severity="MEDIUM", confidence="HIGH",
+                        evidence=[{"kind": "quote", "ref": "spec#3", "quote": "text"}])
+    assert gate(tmp_path, [unproven], expect=1)["findings"][0]["confidence"] == "HIGH"
+
+
+def test_falsified_evidence_is_dropped_and_counted(tmp_path):
+    bad = _finding(evidence=[{"kind": "file-line", "ref": "no/such/file.py:1-2", "quote": "zzz"}])
+    result = gate(tmp_path, [bad], expect=0)
+    assert result["findings"] == []
+    assert result["suppressed_count"] == 1
+    assert result["suppressed"][0]["reason"] == "falsified"
+
+
+# --- disposition / tie resolution -------------------------------------------------
+
+def test_refuted_finding_is_dropped_at_any_depth(tmp_path):
+    result = gate(tmp_path, [_finding(disposition="refuted")], expect=0)
+    assert result["findings"] == []
+    assert result["suppressed"][0]["reason"] == "refuted"
+
+
+def test_contested_is_dropped_below_deep(tmp_path):
+    result = gate(tmp_path, [_finding(disposition="contested")],
+                  extra=("--depth", "standard"), expect=0)
+    assert result["findings"] == []
+    assert result["contested"] == []
+    assert result["suppressed"][0]["reason"] == "refuted"
+
+
+def test_contested_at_deep_is_withheld_not_suppressed(tmp_path):
+    result = gate(tmp_path, [_finding(disposition="contested")],
+                  extra=("--depth", "deep"), expect=0)
+    assert result["findings"] == []
+    assert [f["id"] for f in result["contested"]] == ["F1"]
+    assert result["suppressed_count"] == 0
+
+
+def test_absent_disposition_is_treated_as_standing(tmp_path):
+    f = _finding()
+    del f["disposition"]
+    assert gate(tmp_path, [f], expect=1)["findings"][0]["id"] == "F1"
+
+
+# --- prepass merge ----------------------------------------------------------------
+
+def test_gate_merges_prepass_findings_itself(tmp_path):
+    pre = _finding(id="", severity="HIGH", stage="prepass",
+                   evidence=[{"kind": "prepass", "ref": "x.py", "output": "missing"}])
+    result = gate(tmp_path, [], prepass_findings=[pre], expect=1)
+    assert len(result["findings"]) == 1
+    assert result["findings"][0]["stage"] == "prepass"
+
+
+def test_prepass_evidence_satisfies_the_reproduction_requirement(tmp_path):
+    pre = _finding(id="", severity="HIGH", confidence="HIGH", stage="prepass",
+                   evidence=[{"kind": "prepass", "ref": "x.py", "output": "missing"}])
+    result = gate(tmp_path, [], prepass_findings=[pre], expect=1)
+    assert result["findings"][0]["confidence"] == "HIGH"
+
+
+# --- schema validation ------------------------------------------------------------
+
+@pytest.mark.parametrize("field", ["severity", "confidence", "claim", "evidence", "remediation"])
+def test_missing_required_field_is_rejected(field, tmp_path):
+    bad = _finding()
+    del bad[field]
+    proc = run_ar("gate", *_inputs(tmp_path, [bad]))
+    assert proc.returncode == 2
+    assert field in proc.stderr
+
+
+def test_invalid_severity_is_rejected(tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(severity="SEVERE")]))
+    assert proc.returncode == 2
+
+
+def test_empty_evidence_array_is_rejected(tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(evidence=[])]))
+    assert proc.returncode == 2
+
+
+# --- ids and depth ----------------------------------------------------------------
+
+def test_ids_are_assigned_in_severity_order_when_absent(tmp_path):
+    findings = [_finding(id="", severity="LOW"), _finding(id="", severity="CRITICAL")]
+    result = gate(tmp_path, findings, expect=3)
+    assert result["findings"][0]["id"] == "F1"
+    assert result["findings"][0]["severity"] == "CRITICAL"
+
+
+def test_gate_echoes_the_depth_it_used(tmp_path):
+    assert gate(tmp_path, [], extra=("--depth", "deep"))["depth"] == "deep"
+
+
+# --- manifest ---------------------------------------------------------------------
+
+def _manifest_inputs(tmp_path, *, depth="standard", independence="full", family="openai"):
+    resolve_doc = {"profile": "code-diff", "target_kind": "git-range", "target_ref": "main..HEAD",
+                   "artifact_hash": "abc", "size_metric": 200, "depth_suggestion": "deep",
+                   "contract_surface": False}
+    prepass_doc = {"status": "pass", "checks": [{"name": "code-check", "command": "pytest -q",
+                                                 "exit_code": 0, "status": "pass", "output": ""}],
+                   "findings": []}
+    model_doc = {"resolved": True, "alias": "codex", "family": family, "provider": "openai-codex",
+                 "model": "gpt-5.6-sol", "thinking": "high", "independence": independence,
+                 "ladder": []}
+    gate_doc = {"verdict": "PASS", "findings": [], "contested": [], "suppressed": [],
+                "suppressed_count": 2, "depth": depth}
+    return (
+        "--resolve", _write(tmp_path, "r.json", resolve_doc),
+        "--prepass", _write(tmp_path, "p2.json", prepass_doc),
+        "--model", _write(tmp_path, "m2.json", model_doc),
+        "--gate", _write(tmp_path, "g.json", gate_doc),
+    )
+
+
+def manifest(tmp_path, *, extra=(), expect=0, **kw) -> dict:
+    proc = run_ar("manifest", *_manifest_inputs(tmp_path, **kw), *extra)
+    assert proc.returncode == expect, f"exit {proc.returncode}: {proc.stderr}"
+    return json.loads(proc.stdout)
+
+
+def test_manifest_records_the_depth_actually_used_not_the_suggestion(tmp_path):
+    """resolve suggested deep; the caller ran standard. The manifest must say standard."""
+    result = manifest(tmp_path, depth="standard")
+    assert result["depth"] == "standard"
+
+
+def test_manifest_carries_a_replayable_reviewer_triple(tmp_path):
+    reviewer = manifest(tmp_path)["reviewer"]
+    assert reviewer["provider"] == "openai-codex"
+    assert reviewer["model"] == "gpt-5.6-sol"
+    assert reviewer["thinking"] == "high"
+
+
+def test_quick_depth_forces_reduced_independence_even_cross_family(tmp_path):
+    """Self-refutation in one context cannot deliver structural independence."""
+    result = manifest(tmp_path, depth="quick", independence="full", family="openai")
+    assert result["reviewer"]["independence"] == "reduced"
+
+
+def test_standard_depth_preserves_full_independence(tmp_path):
+    result = manifest(tmp_path, depth="standard", independence="full")
+    assert result["reviewer"]["independence"] == "full"
+
+
+def test_reduced_independence_is_never_upgraded(tmp_path):
+    result = manifest(tmp_path, depth="deep", independence="reduced")
+    assert result["reviewer"]["independence"] == "reduced"
+
+
+def test_manifest_propagates_verdict_and_suppressed_count(tmp_path):
+    result = manifest(tmp_path)
+    assert result["verdict"] == "PASS"
+    assert result["suppressed_count"] == 2
+
+
+def test_manifest_records_the_lens(tmp_path):
+    assert manifest(tmp_path, extra=("--lens", "security"))["lens"] == "security"
+    assert manifest(tmp_path)["lens"] is None
+
+
+def test_manifest_fails_cleanly_on_a_missing_input(tmp_path):
+    proc = run_ar("manifest", "--resolve", str(tmp_path / "absent.json"),
+                  "--prepass", _write(tmp_path, "p3.json", {}),
+                  "--model", _write(tmp_path, "m3.json", {}),
+                  "--gate", _write(tmp_path, "g3.json", {}))
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
