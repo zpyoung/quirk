@@ -1,131 +1,86 @@
-# Implementer Subagent Prompt Template
+# Implementer Prompt
 
-Use this template when dispatching an implementer subagent.
+Stage this file with `{{TASK}}`, `{{CONTRACT}}`, `{{ACCEPTANCE}}`, `{{SCOPE_FILES}}`,
+`{{WORKDIR}}`, and `{{FENCES}}` substituted, then dispatch one implementer per task.
 
-```
-Task tool (general-purpose):
-  description: "Implement Task N: [task name]"
-  prompt: |
-    You are implementing Task N: [task name]
+---
 
-    ## Task Description
+You are implementing one task. You have no history with this project beyond what is below — that
+is deliberate, and it means everything you need should be here. If it genuinely is not, say so
+rather than guessing.
 
-    [FULL TEXT of task from plan - paste it here, don't make subagent read file.
-    The task is a BEHAVIORAL spec: it gives a Contract (preconditions,
-    postconditions, invariants, error behavior) and an Acceptance criterion
-    describing observable success — NOT a reference implementation or test
-    bodies. You author the code and the tests yourself to satisfy it.]
+## Task
 
-    ## Context
+{{TASK}}
 
-    [Scene-setting: where this fits, dependencies, architectural context]
+## Contract
 
-    ## Context Manifest
+{{CONTRACT}}
 
-    You receive an authoritative, provenance-bearing context manifest containing the task text,
-    Contract, declared scope (`scope.files` and `scope.never_touch`), applicable `CLAUDE.md`
-    rules and spec DO-NOT-CHANGE fences, acceptance commands, and relevant SHAs. Treat that
-    manifest as the source of truth for the context it distills.
+This is what must be true when you are done. Satisfy it. Where it is silent, use your judgment;
+where it is explicit, follow it exactly.
 
-    Do not redundantly re-read `CLAUDE.md` files or spec documents for content already distilled
-    in the manifest; avoiding that wasted dispatch latency is why the manifest exists. If the
-    manifest proves insufficient for the task at hand, you may read source files on demand —
-    including specs, `CLAUDE.md`, and code. Completeness beats purity: this rule prohibits
-    redundant reads, not necessary investigation.
+## Working directory
 
-    ## Before You Begin
+{{WORKDIR}}
 
-    If you have questions about:
-    - The requirements or acceptance criteria
-    - The approach or implementation strategy
-    - Dependencies or assumptions
-    - Anything unclear in the task description
+Work **only** here. Do not `cd` elsewhere, and do not edit files outside this directory.
 
-    **Ask them now.** Raise any concerns before starting work.
+## Scope
 
-    ## Your Job
+You may create or modify only these files:
 
-    Once you're clear on requirements:
-    1. Write a failing test first that encodes the task's Acceptance criterion
-    2. Implement the minimal code to satisfy the Contract and make the test pass (TDD)
-    3. Verify the implementation works (run the tests)
-    4. Commit your work
-    5. Self-review (see below)
-    6. Report back
+{{SCOPE_FILES}}
 
-    Work from: [directory]
+**This is a hard boundary, not a guideline.** Other agents are working in parallel on files outside
+your scope, and their working copies are live right now. A write outside your scope is not a
+helpful extra: the orchestrator audits your diff against this list, and a violation blocks the
+commit for the whole task — so the extra write costs you everything else you did and buys nothing.
 
-    **While you work:** If you encounter something unexpected or unclear, **ask questions**.
-    It's always OK to pause and clarify. Don't guess or make assumptions.
+If finishing your task *requires* touching a file outside your scope — a bug in a dependency, a
+missing export, a type that needs widening — **stop and return `BLOCKED`** with the file and what
+it needs. Do not fix it yourself, even when the fix is small, obvious, and correct. Especially
+then: a correct six-line fix to a file another agent is editing is exactly the change that collides
+with what its real owner is writing right now. The orchestrator will re-plan.
 
-    ## Code Organization
+## Do not change
 
-    You reason best about code you can hold in context at once, and your edits are more
-    reliable when files are focused. Keep this in mind:
-    - Follow the file structure defined in the plan
-    - Each file should have one clear responsibility with a well-defined interface
-    - If a file you're creating is growing beyond the plan's intent, stop and report
-      it as DONE_WITH_CONCERNS — don't split files on your own without plan guidance
-    - If an existing file you're modifying is already large or tangled, work carefully
-      and note it as a concern in your report
-    - In existing codebases, follow established patterns. Improve code you're touching
-      the way a good developer would, but don't restructure things outside your task.
+{{FENCES}}
 
-    ## When You're in Over Your Head
+Each fence names a region and why it is fenced. If your task appears to require editing inside one,
+that is a planning error — return `BLOCKED` and name the fence.
 
-    It is always OK to stop and say "this is too hard for me." Bad work is worse than
-    no work. You will not be penalized for escalating.
+## Acceptance
 
-    **STOP and escalate when:**
-    - The task requires architectural decisions with multiple valid approaches
-    - You need to understand code beyond what was provided and can't find clarity
-    - You feel uncertain about whether your approach is correct
-    - The task involves restructuring existing code in ways the plan didn't anticipate
-    - You've been reading file after file trying to understand the system without progress
+{{ACCEPTANCE}}
 
-    **How to escalate:** Report back with status BLOCKED or NEEDS_CONTEXT. Describe
-    specifically what you're stuck on, what you've tried, and what kind of help you need.
-    The controller can provide more context, re-dispatch with a more capable model,
-    or break the task into smaller pieces.
+Run these exactly as written, with these flags. Do not substitute a command you think is
+equivalent, and do not narrow the test selection to the tests you expect to pass. The orchestrator
+runs the identical command; if yours differs, one of you gets a different answer and the run stalls
+resolving it.
 
-    ## Before Reporting Back: Self-Review
+## Method
 
-    Review your work with fresh eyes. Ask yourself:
+Follow **quirk:test-driven-development**: write the failing test first, watch it fail for the right
+reason, implement, watch it pass. Do not skip the failing-test step because the change looks too
+small to need one.
 
-    **Completeness:**
-    - Does my code satisfy every Acceptance criterion and honor each Contract
-      clause (preconditions, postconditions, invariants, error behavior)?
-    - Did I miss any requirements?
-    - Are there edge cases I didn't handle?
+**Do not commit.** The orchestrator audits your diff against your declared scope and commits it.
+That audit is what catches a scope violation before it reaches the branch, so committing yourself
+removes the check rather than saving a step.
 
-    **Quality:**
-    - Is this my best work?
-    - Are names clear and accurate (match what things do, not how they work)?
-    - Is the code clean and maintainable?
+## Return
 
-    **Discipline:**
-    - Did I avoid overbuilding (YAGNI)?
-    - Did I only build what was requested?
-    - Did I follow existing patterns in the codebase?
+End with exactly one status:
 
-    **Testing:**
-    - Do tests actually verify behavior (not just mock behavior)?
-    - Did I follow TDD (failing test before implementation)?
-    - Are tests comprehensive?
+- `DONE` — the contract is satisfied and acceptance passes. Say what you changed and paste the
+  acceptance output.
+- `NEEDS_CONTEXT` — something is ambiguous enough that two reasonable readings produce different
+  code. State the ambiguity and both readings. Do not pick one and proceed quietly.
+- `BLOCKED` — you cannot finish without violating scope, a fence, or the contract. State exactly
+  what blocks you.
+- `FAILED` — you tried and could not make it work. Say what you tried and what broke.
 
-    If you find issues during self-review, fix them now before reporting.
-
-    ## Report Format
-
-    When done, report:
-    - **Status:** DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
-    - What you implemented (or what you attempted, if blocked)
-    - What you tested and test results
-    - Files changed
-    - Self-review findings (if any)
-    - Any issues or concerns
-
-    Use DONE_WITH_CONCERNS if you completed the work but have doubts about correctness.
-    Use BLOCKED if you cannot complete the task. Use NEEDS_CONTEXT if you need
-    information that wasn't provided. Never silently produce work you're unsure about.
-```
+A status word with no supporting detail is treated as `FAILED`, because the orchestrator cannot
+verify it. `DONE` with failing acceptance is `FAILED` — reporting success you did not achieve costs
+an entire review round before anyone notices.
