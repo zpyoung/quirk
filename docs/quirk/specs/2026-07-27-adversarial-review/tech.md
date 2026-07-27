@@ -63,7 +63,7 @@ original migration targeted.
 
 | Path | Line anchors | Change |
 |---|---|---|
-| `skills/subagent-driven-development/SKILL.md` | 230–256 (Step 8: Review) | Replace the direct `pi-watch` dispatch with a per-lens invocation of this skill; keep rounds, checkpoint/final distinction, and the retry-then-block rule |
+| `skills/subagent-driven-development/SKILL.md` | 230–259 (Step 8: Review) | Replace the direct `pi-watch` dispatch with a per-lens invocation of this skill; keep rounds and the checkpoint/final distinction; **adapt** the retry-then-block rule (see below) |
 | `skills/subagent-driven-development/SKILL.md` | 261–277 (Step 9: Adjudicate and fix) | Consume structured `GateResult` instead of parsing reviewer text blocks; SDD keeps stable-ID assignment and dismissed carry-forward |
 | `skills/subagent-driven-development/assets/reviewer-prompt.md` | whole file | Becomes the `code-diff` profile's lens definitions plus a delegation header; its severity rubric and `LOCATION`/`EVIDENCE` requirement migrate into `profiles/code-diff.md` rather than being rewritten |
 
@@ -71,6 +71,28 @@ original migration targeted.
 delegation replaces how findings are *produced*, not how they are fixed.
 
 Back-link: logic.md § Decisions Locked → Integration, and § Status & amendments → Amendment 1.
+
+### The crashed-vs-clean signal must be re-expressed, not preserved
+
+`SKILL.md:253-258` currently distinguishes a reviewer that *found nothing* (emits `NO_FINDINGS`)
+from one that *crashed* (produces no output), because SDD parses raw `pi-watch` stdout and silence
+is otherwise ambiguous. Delegation changes the mechanism, so a verbatim copy of that paragraph
+would describe a parsing problem that no longer exists.
+
+`CONTRACT:` the equivalent signal under delegation
+```
+gate exit 0/1/3  + valid GateResult JSON  -> review completed; verdict is authoritative
+  (PASS with zero findings IS the NO_FINDINGS case — a real, clean review)
+gate exit 4      + valid GateResult JSON  -> NOT_REVIEWABLE; never a pass
+gate exit 2, non-JSON stdout, or no
+  stdout at all                           -> the run FAILED; retry once, then walk the
+                                             ladder, then block the round
+```
+
+SDD's operational rule is unchanged in substance and must survive rewording: a repeatedly-empty
+reviewer is evidence the reviewer is broken, not evidence the branch is clean. What changes is
+that "empty" is now a decidable condition (exit code plus JSON validity) rather than an inference
+from silence. Back-link: logic.md § Composition contract.
 
 ### Delegation contract additions
 
@@ -386,6 +408,13 @@ Back-link: logic.md § Decisions Locked → Evidence across artifact types (type
 auto-detected and caller-overridable), and § Data flow steps 1–2.
 
 ## Pre-pass definitions
+
+**Where profile data lives (clarified at plan-build, 2026-07-27).** The script does **not** parse
+`profiles/*.md`. The pre-pass command discovery table and the required-headings table below are
+internal `CONFIG` in `scripts/adversarial-review`, keyed by profile name; `profiles/*.md` carry
+only model-facing prose (attack surface, evidence rules, lens definitions) consumed by the stage
+templates. This keeps the script hermetically testable with no markdown-parsing dependency, and
+means a profile's prose can change without touching script behavior or its tests.
 
 **code-diff.** Commands are discovered by probing the repo root, in this order, and may be
 overridden with repeatable `--check-cmd`:
