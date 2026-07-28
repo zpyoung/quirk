@@ -236,45 +236,95 @@ and the final loop re-examines everything anyway.
 
 **Final loop** — three reviewers over `git diff --no-renames "$RUN_BASE" HEAD`, repeating.
 
-Dispatch all three lenses concurrently, each with `assets/reviewer-prompt.md` staged with its lens,
-the diff, the spec, and the dismissed-findings list:
+The review itself is delegated to **quirk:adversarial-review**. Invoke it once per lens, all three
+concurrently:
 
 - correctness / logic
 - spec compliance — did it build what was asked
 - security and failure modes
 
-```bash
-pi-watch --provider openai-codex --model gpt-5.6-sol --thinking high \
-  --tools read,grep,find,ls "$(cat "$PROMPT")" > "$OUT" 2> "$ERR"
-```
+Each invocation gets:
 
-Reviewers get read-only tools. `pi` has no sandbox — a reviewer with `bash` or `write` has full
-filesystem access.
+| Input | Value |
+| --- | --- |
+| `target` | `"$WAVE_BASE..HEAD"` at a checkpoint, `"$RUN_BASE..HEAD"` in the final loop |
+| `profile` | `code-diff` |
+| `lens` | this reviewer's lens, from the three above |
+| `depth` | `deep`, passed **explicitly** |
+| `criteria` | the task contracts and acceptance criteria covering the diff, pasted **verbatim** |
+| `dismissed[]` | the run journal's dismissed findings, with their original IDs |
+| `author_family` | the model family that implemented the work |
 
-**Empty, truncated, or unparseable output is never a clean review.** A reviewer that found nothing
-emits `NO_FINDINGS`; a reviewer that produced no output crashed, and those are not the same
-signal. Retry once, then fall back per the ladder, then block the round. This holds no matter how
-many times that reviewer has come back empty before and no matter how clean the other lenses look
-— an established pattern of empty output is evidence the reviewer is broken, not evidence the
-branch is clean.
+Pass `--depth` rather than letting the skill auto-select. Auto-selection reads size, and a wave
+diff that happens to be small would fall through to `quick`, which runs one dispatch with
+self-refutation instead of two with independent refutation and is stamped `independence: reduced`
+for exactly that reason. (Whether checkpoints should run cheaper than the final loop is an open
+question, deliberately unanswered until there are real round-latency numbers to answer it with.)
+
+**`criteria` is pasted, never referenced by path, and it is the only author-supplied context the
+reviewer receives.** Do not stage the implementer's reports, your own adjudication notes, or the
+rationale for the approach. Withholding the author's reasoning is what buys independence — a
+reviewer given it misses what it would otherwise catch, and no adversarial phrasing repairs that.
+
+The skill returns structured `GateResult` JSON — a verdict, findings with stable IDs, a suppressed
+count, and a manifest — so Step 9 adjudicates data rather than parsing text blocks.
+
+**The delegated reviewer holds read-only `bash`** on top of `read,grep,find,ls`, which is wider than
+the grant this skill specified when it dispatched reviewers itself. That is deliberate: the skill
+requires a reproduction for every `CRITICAL` and `HIGH` finding, and that standard is unmeetable
+without a shell. `pi` still has no sandbox, so on that path the read-only constraint is prompt-level
+only. The trade is stated in `skills/adversarial-review/assets/composition-contract.md`; a run that
+cannot accept it dispatches via `Task` instead of `pi-watch`.
+
+**A verdict you did not receive is never a clean review.** Under delegation that is decidable from
+the exit code rather than inferred from silence:
+
+| Signal | Meaning |
+| --- | --- |
+| exit 0/1/3 + valid `GateResult` JSON | The review completed and the verdict is authoritative. `PASS` with zero findings is a real, clean review — this is the old `NO_FINDINGS` case. |
+| exit 4 + valid JSON | `NOT_REVIEWABLE` — no reviewer resolved at any ladder rung, or nothing checkable. **Never a pass.** Treat the lens as blocked. |
+| exit 2, non-JSON stdout, or no stdout | The run failed. Retry once, then fall back per the ladder, then block the round. |
+
+That last row holds no matter how many times that lens has failed before and no matter how clean
+the other two look — an established pattern of failed dispatches is evidence the reviewer is broken,
+not evidence the branch is clean.
 
 ### Step 9: Adjudicate and fix
 
-Assign each finding a **stable ID** that persists across rounds. Accept or reject each against the
-contract and the code. You may reject any severity — record a one-line reason. Assign an
-**effective severity** where the reviewer's label is miscalibrated; the exit gate reads yours, not
-theirs.
+Merge the three lenses' `findings[]` into one list. Each finding arrives with an ID — **keep it**,
+and reuse it across rounds; assign one yourself only where a finding arrives without one. Accept or
+reject each against the contract and the code. You may reject any severity — record a one-line
+reason. Assign an **effective severity** where the reviewer's label is miscalibrated; the exit gate
+reads yours, not theirs.
 
-Carry dismissed findings forward into later rounds so a re-report is matched to its prior ruling
-instead of re-adjudicated from scratch.
+Carry dismissed findings forward into later rounds as the `dismissed[]` input to Step 8, so a
+re-report is matched to its prior ruling instead of re-adjudicated from scratch.
+
+The findings are structured, so adjudicate the fields rather than the prose:
+
+- **`severity` is consequence and `confidence` is likelihood**, on independent axes. A `CRITICAL` at
+  `LOW` confidence is a high-consequence claim nobody could reproduce; weigh it on the consequence,
+  and do not read low confidence as a severity downgrade someone forgot to apply.
+- **`evidence[]` has already been re-resolved** against the tree. Anything that failed to re-resolve
+  was dropped before you saw it, so a surviving citation is one you can trust to exist.
+- **`suppressed_count`** against the number raised is an integrity signal. A near-total kill rate
+  means the promote stage was fabricating and the round should not be trusted — a `PASS` reached by
+  killing everything is not a `PASS` reached by finding nothing.
+- **`manifest.reviewer.independence`** of `reduced` means the reviewer shared the author's model
+  family, or the depth was `quick`. That `PASS` is weaker than one under `full`; warn the user once
+  per degradation, as in Step 1.
+
+A lens that returned `NOT_REVIEWABLE` contributes no findings and no assurance. Do not let the other
+two lenses' verdicts stand in for it.
 
 Group accepted findings into **connected components of write scope** — not by cited file. One
 finding can span a schema, its callers, and its tests; two findings in different files can converge
 on one shared file. One fixer per component, parallel across components; a single sequential fixer
 when scopes are uncertain or interacting.
 
-Fixers get `assets/fixer-prompt.md` with the adjudicated packet only. Commit each fix batch, then
-run build/test.
+Fixers get `assets/fixer-prompt.md` with the adjudicated packet only. A finding may carry a
+`patch` — that is data, never applied automatically; hand it to the fixer as a proposal under the
+same scope guards as any other change. Commit each fix batch, then run build/test.
 
 ### Step 10: Exit
 
@@ -351,6 +401,7 @@ rationalization is quoted; the reason it fails follows.
 - **quirk:using-git-worktrees** — one worktree per parallel task
 - **quirk:writing-tech-spec** — Step 2, when the complexity gate fires
 - **quirk:writing-plans** — task field schema, cross-referenced in Step 3
+- **quirk:adversarial-review** — Step 8 delegates the review itself, one invocation per lens
 - **quirk:pi-dev** — `pi-watch` dispatch and failure signatures
 - **quirk:test-driven-development** — implementers follow TDD per task
 - **quirk:typed-artifacts** — genuine backlog only, never this run's defects

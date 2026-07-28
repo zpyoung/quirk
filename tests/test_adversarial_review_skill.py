@@ -213,3 +213,92 @@ def test_command_handles_every_gate_exit_code() -> None:
     body = COMMAND_PATH.read_text()
     for code in ("0", "1", "2", "3", "4"):
         assert re.search(rf"exit {code}\b", body), f"command does not handle exit {code}"
+
+
+# --- SDD delegation (T8) ----------------------------------------------------------
+
+SDD_DIR = REPO_ROOT / "skills" / "subagent-driven-development"
+SDD_SKILL = SDD_DIR / "SKILL.md"
+
+
+def sdd_step(number: int) -> str:
+    """The text of one SDD step, so assertions cannot pass on a match elsewhere."""
+    body = SDD_SKILL.read_text()
+    start = re.search(rf"^### Step {number}: ", body, re.MULTILINE)
+    assert start is not None, f"SDD SKILL.md has no Step {number}"
+    end = re.search(r"^#{2,3} ", body[start.end():], re.MULTILINE)
+    return body[start.start():start.end() + end.start()] if end else body[start.start():]
+
+
+def test_sdd_step_8_delegates_to_adversarial_review() -> None:
+    step = sdd_step(8)
+    assert "adversarial-review" in step
+
+
+def test_sdd_no_longer_dispatches_its_own_reviewer() -> None:
+    """The inline pi-watch reviewer dispatch is what the delegation replaces."""
+    assert "pi-watch --provider openai-codex" not in SDD_SKILL.read_text()
+
+
+def test_sdd_step_8_passes_depth_explicitly() -> None:
+    """Auto-selection reads size; a small wave diff would fall through to quick."""
+    step = sdd_step(8)
+    assert "depth" in step
+    assert "explicit" in step.lower()
+
+
+def test_sdd_step_8_stages_criteria_verbatim_and_withholds_reasoning() -> None:
+    step = sdd_step(8)
+    assert "verbatim" in step
+    assert "reasoning" in step
+
+
+def test_sdd_step_8_keeps_all_three_lenses_and_both_review_modes() -> None:
+    """The delegation replaces how findings are produced, not the review's shape."""
+    step = sdd_step(8)
+    for lens in ("correctness / logic", "spec compliance", "security and failure modes"):
+        assert lens in step
+    assert "Checkpoint" in step and "Final loop" in step
+
+
+def test_sdd_step_8_reexpresses_the_crashed_versus_clean_signal() -> None:
+    step = sdd_step(8)
+    assert "NOT_REVIEWABLE" in step
+    assert re.search(r"exit 4", step)
+    assert re.search(r"exit 2", step)
+    assert "Retry once" in step or "retry once" in step
+
+
+def test_sdd_step_8_discloses_the_wider_tool_grant() -> None:
+    step = sdd_step(8)
+    assert "bash" in step
+    assert "composition-contract.md" in step
+
+
+def test_sdd_step_9_consumes_structured_findings() -> None:
+    step = sdd_step(9)
+    assert "suppressed_count" in step
+    assert "confidence" in step
+    assert "independence" in step
+
+
+def test_sdd_step_9_retains_its_own_adjudication_machinery() -> None:
+    """SDD keeps ownership of everything the delegation was not supposed to move."""
+    step = sdd_step(9)
+    assert "effective severity" in step
+    assert "connected components" in step
+    assert "dismissed" in step
+    assert "fixer-prompt.md" in step
+
+
+def test_sdd_reviewer_prompt_is_now_a_delegation_pointer() -> None:
+    body = (SDD_DIR / "assets" / "reviewer-prompt.md").read_text()
+    assert "composition-contract.md" in body
+    assert "profiles/code-diff.md" in body
+    # The rubric moved; it must not be duplicated here, where it would drift.
+    assert "Ship this and something breaks for real." not in body
+
+
+def test_sdd_integration_list_names_the_skill() -> None:
+    body = SDD_SKILL.read_text()
+    assert "**quirk:adversarial-review**" in body
