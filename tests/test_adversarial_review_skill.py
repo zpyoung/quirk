@@ -203,16 +203,39 @@ def test_command_exists_with_description_frontmatter() -> None:
     assert "name:" not in fm, "commands take description-only frontmatter"
 
 
-def test_command_resolves_the_script_through_plugin_root() -> None:
+def test_command_routes_to_the_skill_and_passes_arguments() -> None:
     body = COMMAND_PATH.read_text()
-    assert "${CLAUDE_PLUGIN_ROOT}/skills/adversarial-review/scripts/adversarial-review" in body
+    assert "quirk:adversarial-review" in body
     assert "$ARGUMENTS" in body
 
 
-def test_command_handles_every_gate_exit_code() -> None:
+def test_command_passes_every_flag_through() -> None:
     body = COMMAND_PATH.read_text()
-    for code in ("0", "1", "2", "3", "4"):
-        assert re.search(rf"exit {code}\b", body), f"command does not handle exit {code}"
+    for flag in ("--profile", "--lens", "--depth", "--model"):
+        assert flag in body, f"command does not pass through {flag}"
+
+
+def test_command_does_not_duplicate_the_skills_protocol() -> None:
+    """The command is an entry point, not a second home for the rules.
+
+    An earlier version restated the exit-code table, the never-a-pass rule, and the
+    kill-rate signal — four rules that then had to be edited in two files at once.
+    SKILL.md owns the protocol; this guards the split that keeps them from drifting.
+    """
+    body = COMMAND_PATH.read_text()
+    skill = SKILL_PATH.read_text()
+    for rule in ("NOT_REVIEWABLE", "suppressed_count", "CRITICAL_ISSUES", "NEEDS_FIXES"):
+        assert rule in skill, f"SKILL.md should own {rule}"
+        assert rule not in body, (
+            f"{rule} is duplicated in the command; it belongs only in SKILL.md"
+        )
+    assert not re.search(r"exit \d", body), "exit-code handling belongs in SKILL.md"
+
+
+def test_command_stays_a_thin_entry_point() -> None:
+    """Matches commands/explore.md in shape — routing, not procedure."""
+    body = COMMAND_PATH.read_text()
+    assert len(body.splitlines()) < 25, "command has grown into a second protocol document"
 
 
 # --- SDD delegation (T8) ----------------------------------------------------------
