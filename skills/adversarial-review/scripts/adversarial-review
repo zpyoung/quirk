@@ -5,8 +5,10 @@ Owns only what is decidable without a model: target resolution, ground-truth
 pre-pass, reviewer preflight, evidence gating, and the replay manifest. Model
 dispatch belongs to the invoking agent — see the skill's SKILL.md.
 
-Every subcommand emits exactly one JSON object on stdout and keeps diagnostics
-on stderr, so a calling skill can parse the result without stripping chatter.
+A subcommand that runs emits exactly one JSON object on stdout and keeps diagnostics
+on stderr, so a calling skill can parse the result without stripping chatter. A
+subcommand that fails (exit 2) writes stderr only — empty stdout is the caller's
+signal that the run failed rather than found nothing.
 """
 from __future__ import annotations
 
@@ -23,8 +25,9 @@ from typing import Any
 PROFILES = ("code-diff", "spec-design", "plan", "prose-claim")
 
 # A contract surface is a contract being *introduced or changed*, so the anchor
-# must appear on an added line — deleting a contract is not changing one.
-CONTRACT_SURFACE = re.compile(r"^\+.*\b(CONTRACT|SCHEMA):", re.MULTILINE)
+# must appear on an added line — deleting a contract is not changing one. Matched
+# per line, against content lines only; see has_contract_surface.
+CONTRACT_SURFACE = re.compile(r"^\+.*\b(CONTRACT|SCHEMA):")
 
 CODE_QUICK_MAX = 50
 CODE_DEEP_MIN = 151
@@ -84,19 +87,54 @@ def read_diff(target: str, repo_root: Path, diff_file: str | None) -> str:
         )
     except OSError as exc:
         raise UsageError(f"cannot run git diff: {exc}") from exc
-    # A non-repo or unknown range yields no diff rather than failing the run;
-    # size 0 simply selects the cheapest depth.
-    return completed.stdout if completed.returncode == 0 else ""
+    if completed.returncode != 0:
+        # A typo'd range must never resolve to size 0 and read as a clean review of
+        # nothing. An empty diff is a claim about the target; this is a failure to
+        # read it at all.
+        detail = completed.stderr.strip().splitlines()
+        raise UsageError(
+            f"cannot read target {target or 'WORKTREE'}: "
+            f"{detail[0] if detail else f'git diff exited {completed.returncode}'}"
+        )
+    return completed.stdout
+
+
+def is_diff_metadata(line: str) -> bool:
+    """`+++`/`---` name files rather than adding or removing content.
+
+    Every scan over a diff must agree on this, or a filename can trip a rule that
+    only added lines are supposed to trip.
+    """
+    return line.startswith(("+++", "---"))
 
 
 def changed_line_count(diff: str) -> int:
     count = 0
     for line in diff.splitlines():
-        if line.startswith(("+++", "---")):
+        if is_diff_metadata(line):
             continue
         if line.startswith(("+", "-")):
             count += 1
     return count
+
+
+def has_contract_surface(diff: str) -> bool:
+    return any(
+        CONTRACT_SURFACE.match(line)
+        for line in diff.splitlines()
+        if not is_diff_metadata(line)
+    )
+
+
+def size_of(profile: str, content: str) -> int:
+    """The unit belongs to the profile, not to the target kind.
+
+    `code-diff` thresholds are line counts wherever they are applied, so a source
+    file reviewed by path is measured the same way its diff would be.
+    """
+    if profile == "code-diff":
+        return len(content.splitlines())
+    return len(content.split())
 
 
 def suggest_depth(profile: str, size_metric: int, contract_surface: bool) -> str:
@@ -125,19 +163,20 @@ def resolve_target(
         if not path.is_file():
             raise UsageError(f"target does not exist: {path}")
         content = path.read_text(errors="replace")
+        size_metric = size_of(resolved_profile, content)
         return {
             "profile": resolved_profile,
             "target_kind": target_kind,
             "target_ref": str(path),
             "artifact_hash": hashlib.sha256(content.encode()).hexdigest(),
-            "size_metric": len(content.split()),
-            "depth_suggestion": suggest_depth(resolved_profile, len(content.split()), False),
+            "size_metric": size_metric,
+            "depth_suggestion": suggest_depth(resolved_profile, size_metric, False),
             "contract_surface": False,
         }
 
     diff = read_diff(target, repo_root, diff_file)
     size_metric = changed_line_count(diff)
-    contract_surface = bool(CONTRACT_SURFACE.search(diff))
+    contract_surface = has_contract_surface(diff)
     return {
         "profile": resolved_profile,
         "target_kind": target_kind,
@@ -545,7 +584,9 @@ def evidence_resolves(item: dict[str, Any], repo_root: Path) -> bool:
     """Can this evidence be re-resolved against the source it points at?
 
     Only failures we can *demonstrate* count as falsification — an unreachable
-    check is not proof the finding is wrong.
+    check is not proof the finding is wrong, so anything we cannot check is True.
+    That is what lets the gate demand *every* item hold without punishing findings
+    whose evidence is merely unverifiable.
     """
     kind = item["kind"]
     if kind in ("command", "prepass"):
@@ -568,7 +609,9 @@ def evidence_resolves(item: dict[str, Any], repo_root: Path) -> bool:
 def apply_evidence_gate(
     finding: dict[str, Any], repo_root: Path
 ) -> tuple[dict[str, Any] | None, str | None]:
-    if not any(evidence_resolves(item, repo_root) for item in finding["evidence"]):
+    # Every item must hold: one true citation must not launder a fabricated one
+    # riding alongside it.
+    if not all(evidence_resolves(item, repo_root) for item in finding["evidence"]):
         return None, "falsified"
 
     graded = dict(finding)

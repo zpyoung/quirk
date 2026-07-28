@@ -53,9 +53,12 @@ def resolve(*args: str, cwd: Path | None = None) -> dict:
     ],
 )
 def test_profile_detection_precedence(target, expected_profile, expected_kind, tmp_path):
+    extra: tuple[str, ...] = ()
     if expected_kind == "path":
         _touch(tmp_path / target)
-    result = resolve("--target", target, "--repo-root", str(tmp_path))
+    else:
+        extra = ("--diff-file", str(_touch(tmp_path / "empty.patch", "")))
+    result = resolve("--target", target, "--repo-root", str(tmp_path), *extra)
     assert result["profile"] == expected_profile
     assert result["target_kind"] == expected_kind
 
@@ -73,9 +76,17 @@ def _touch(path: Path, content: str = "placeholder\n") -> Path:
     return path
 
 
+def _git_repo(path: Path) -> Path:
+    """A real repo, so `git diff` succeeds instead of erroring on a non-repo."""
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True, capture_output=True)
+    return path
+
+
 def test_explicit_profile_overrides_detection(tmp_path):
+    patch = _touch(tmp_path / "empty.patch", "")
     result = resolve(
-        "--target", "main..HEAD", "--profile", "prose-claim", "--repo-root", str(tmp_path)
+        "--target", "main..HEAD", "--profile", "prose-claim",
+        "--repo-root", str(tmp_path), "--diff-file", str(patch),
     )
     assert result["profile"] == "prose-claim"
 
@@ -113,6 +124,19 @@ def test_prose_depth_thresholds(words, expected_depth, tmp_path):
     assert result["depth_suggestion"] == expected_depth
 
 
+def test_code_path_target_is_measured_in_lines_not_words(tmp_path):
+    """The unit belongs to the profile: `code-diff` thresholds are lines everywhere.
+
+    160 lines of 4 words reads as `deep` by line count and `standard` by word count.
+    """
+    src = tmp_path / "auth.py"
+    src.write_text("".join("a b c d\n" for _ in range(160)))
+    result = resolve("--target", str(src), "--repo-root", str(tmp_path))
+    assert result["profile"] == "code-diff"
+    assert result["size_metric"] == 160
+    assert result["depth_suggestion"] == "deep"
+
+
 def test_contract_surface_forces_deep_regardless_of_size(tmp_path):
     """A tiny diff touching a contract surface still gets the deepest review."""
     patch = tmp_path / "d.patch"
@@ -143,6 +167,21 @@ def test_contract_anchor_on_removed_line_is_not_a_contract_surface(tmp_path):
     assert result["contract_surface"] is False
 
 
+def test_contract_anchor_in_diff_metadata_is_not_a_contract_surface(tmp_path):
+    """`+++` names a file; a filename containing `SCHEMA:` is not a changed contract.
+
+    The size metric already skips these headers, so the two must agree on what counts
+    as an added line.
+    """
+    patch = tmp_path / "d.patch"
+    patch.write_text("--- a/SCHEMA:weird.py\n+++ b/SCHEMA:weird.py\n@@ -1 +1,2 @@\n+x = 1\n")
+    result = resolve(
+        "--target", "main..HEAD", "--repo-root", str(tmp_path), "--diff-file", str(patch)
+    )
+    assert result["contract_surface"] is False
+    assert result["depth_suggestion"] == "quick"
+
+
 # --- artifact hash ----------------------------------------------------------------
 
 def test_path_target_hashes_content_and_is_stable(tmp_path):
@@ -164,9 +203,37 @@ def test_missing_path_target_is_an_error(tmp_path):
     assert "adversarial-review:" in proc.stderr
 
 
+# --- unreadable targets -----------------------------------------------------------
+#
+# The worst failure mode a review tool has is reviewing nothing and saying so
+# calmly. A target we cannot read is an error, never an empty artifact.
+
+def test_unknown_git_range_is_an_error_not_an_empty_review(tmp_path):
+    _git_repo(tmp_path)
+    proc = run_ar("resolve", "--target", "no-such-ref-xyz..also-fake", "--repo-root", str(tmp_path))
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
+    assert proc.stdout == ""
+
+
+def test_non_repo_root_is_an_error(tmp_path):
+    proc = run_ar("resolve", "--target", "WORKTREE", "--repo-root", str(tmp_path))
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
+
+
+def test_valid_range_with_no_changes_is_still_a_clean_zero(tmp_path):
+    """The legitimate empty case must stay distinguishable from the broken one."""
+    _git_repo(tmp_path)
+    result = resolve("--target", "WORKTREE", "--repo-root", str(tmp_path))
+    assert result["size_metric"] == 0
+    assert result["depth_suggestion"] == "quick"
+
+
 # --- output conventions -----------------------------------------------------------
 
 def test_stdout_is_exactly_one_sorted_json_object(tmp_path):
+    _git_repo(tmp_path)
     proc = run_ar("resolve", "--target", "WORKTREE", "--repo-root", str(tmp_path))
     assert proc.returncode == 0
     payload = json.loads(proc.stdout)  # raises if not exactly one object
@@ -599,6 +666,28 @@ def test_falsified_evidence_is_dropped_and_counted(tmp_path):
     assert result["findings"] == []
     assert result["suppressed_count"] == 1
     assert result["suppressed"][0]["reason"] == "falsified"
+
+
+def test_one_true_evidence_item_does_not_shield_a_fabricated_one(tmp_path):
+    """Every falsifiable item must hold. Otherwise a real citation launders a bogus one."""
+    mixed = _finding(evidence=[
+        {"kind": "command", "command": "pytest -q", "output": "1 failed"},
+        {"kind": "file-line", "ref": "no/such/file.py:1-2", "quote": "zzz"},
+    ])
+    result = gate(tmp_path, [mixed], expect=0)
+    assert result["findings"] == []
+    assert result["suppressed"][0]["reason"] == "falsified"
+
+
+def test_unfalsifiable_items_alongside_a_real_one_still_survive(tmp_path):
+    """`all` must not become a purity test: what we cannot check is not a failure."""
+    survivor = _finding(severity="MEDIUM", evidence=[
+        {"kind": "command", "command": "pytest -q", "output": "1 failed"},
+        {"kind": "quote", "ref": "spec#3", "quote": "must not lose data"},
+    ])
+    result = gate(tmp_path, [survivor], expect=1)
+    assert len(result["findings"]) == 1
+    assert result["suppressed_count"] == 0
 
 
 # --- disposition / tie resolution -------------------------------------------------

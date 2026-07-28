@@ -76,6 +76,10 @@ Target is a path, a git range (`a..b`), or `WORKTREE`/empty for uncommitted chan
 inferred from the target's shape; `--profile` overrides. `ResolveResult` carries `profile`,
 `target_kind`, `artifact_hash`, `size_metric`, `depth_suggestion`, and `contract_surface`.
 
+A target that cannot be read — a typo'd range, a non-repo root, a missing file — exits 2. It never
+resolves to size 0, because a review of nothing must not be reportable as a review that found
+nothing. `size_metric` is lines under `code-diff` and words under the prose profiles.
+
 **3. Pre-pass.**
 
 ```bash
@@ -193,7 +197,9 @@ only where proof is required:
   `LOW`, and only for `CRITICAL`/`HIGH`, which is exactly where reproduction is required. A
   high-consequence finding nobody can prove survives as `CRITICAL`/`LOW` rather than being
   downgraded into invisibility.
-- **falsified** — evidence does not re-resolve → dropped and counted.
+- **falsified** — *any* evidence item fails to re-resolve → dropped and counted. One true citation
+  does not shield a fabricated one beside it; evidence that cannot be checked either way counts as
+  holding, so this drops only demonstrable falsehoods.
 
 ## Output
 
