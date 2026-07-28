@@ -367,6 +367,8 @@ def test_command_not_on_path_is_never_asserted_confidently(tmp_path):
     "/quirk:adversarial-review",
     "resolve --> depth_suggestion",
     "only critique",           # prose, not a command
+    "$WORK/findings.json",     # unexpanded shell variable
+    "${CLAUDE_PLUGIN_ROOT}/skills/adversarial-review/scripts/adversarial-review",
 ])
 def test_non_reference_tokens_produce_no_finding(token, tmp_path):
     doc = _touch(tmp_path / "notes.md", f"Text with `{token}` inline.\n")

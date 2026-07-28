@@ -206,9 +206,11 @@ def classify_reference(token: str) -> str | None:
         return None
     if token.startswith(("http://", "https://")):
         return "url"
-    # Globs, placeholders, shebangs, slash-commands, and arrow-prose describe a
-    # shape or a concept, not a file on disk.
-    if any(ch in token for ch in "*?<>{}") or token.startswith(("#!", "/quirk:", "-->")):
+    # Globs, placeholders, shell variables, shebangs, slash-commands, and
+    # arrow-prose describe a shape or a concept, not a file on disk. `$WORK/out.json`
+    # names whatever the caller exported; resolving it against the tree asks a
+    # question the token cannot answer.
+    if any(ch in token for ch in "*?<>{}$") or token.startswith(("#!", "/quirk:", "-->")):
         return None
     if "->" in token or "—" in token:
         return None
