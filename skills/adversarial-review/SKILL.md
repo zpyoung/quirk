@@ -78,7 +78,8 @@ inferred from the target's shape; `--profile` overrides. `ResolveResult` carries
 
 A target that cannot be read — a typo'd range, a non-repo root, a missing file — exits 2. It never
 resolves to size 0, because a review of nothing must not be reportable as a review that found
-nothing. `size_metric` is lines under `code-diff` and words under the prose profiles.
+nothing. `size_metric` is lines under `code-diff` and words under the prose profiles, on both the
+path and the diff paths. `WORKTREE` diffs against `HEAD`, so staged work is part of the artifact.
 
 **3. Pre-pass.**
 
@@ -89,6 +90,10 @@ nothing. `size_metric` is lines under `code-diff` and words under the prose prof
 Exit 1 means a check failed — that is a finding, not an error. Only exit 2 is a failure. `status:
 "could-not-run"` means no check was executable at all, which is distinct from `"fail"` and feeds
 the `NOT_REVIEWABLE` condition.
+
+A failed check is filed as a `failing-check` finding, not merely recorded in `checks[]`. The verdict
+is computed from findings alone, so a failure that lived only in `checks[]` would let a red suite
+report `PASS`.
 
 **4. Select the adversary.**
 
@@ -125,6 +130,11 @@ Skip this step entirely at `quick` depth — promote already self-refuted.
 `--model` and `--prepass` are required; without them the `NOT_REVIEWABLE` branch is unreachable and
 an unreviewed artifact would emit `PASS`. The gate merges the pre-pass findings itself — do not
 pre-merge them.
+
+`--findings` takes either a bare array or `quick`'s `{"findings": [...], "suppressed": [...]}`
+object. Pass the quick object through whole: its self-refuted entries are carried into
+`suppressed_count`, and dropping them would report a kill rate of zero for the one depth that
+refutes itself.
 
 **8. Tiebreak.** At `deep` depth only, and only if `gate.json` has a non-empty `contested[]`. Stage
 `assets/tiebreak-prompt.md`, dispatch to a **third** family, merge its rulings onto those findings,
@@ -201,6 +211,21 @@ only where proof is required:
   does not shield a fabricated one beside it; evidence that cannot be checked either way counts as
   holding, so this drops only demonstrable falsehoods.
 
+What "re-resolve" checks, per evidence kind:
+
+| Kind | Checked | Not checked |
+| --- | --- | --- |
+| `file-line`, `quote` | The file exists, and the quote appears **within the cited line range** | — |
+| `absence` | The scope it names exists — a search over a missing file proves nothing | The search is never re-run |
+| `command`, `prepass` | — | Never re-run |
+
+A cited range is a claim about location, so citing `src.py:400` for a quote that lives at line 12
+is falsified even though the quote is real. A ref with no anchor makes no such claim and is matched
+against the whole file. **Commands are never re-executed**: running model-supplied shell inside the
+one deterministic stage would make it neither deterministic nor safe. That is a deliberate limit —
+`command` evidence is trusted as written, which is why it grants reproduction credit but cannot be
+falsified here.
+
 ## Output
 
 Render at most **10 lines** of human summary above the findings block. Derive every line of it from
@@ -242,6 +267,11 @@ path, where permission mode bounds the reviewer.
 **`Task` path** — when `pi` is unavailable or the risk is unacceptable. Dispatch a subagent with the
 staged prompt as its whole instruction. Same-family review is still a real review; it is stamped
 `independence: "reduced"` and read accordingly.
+
+**Strip one fenced block before parsing.** Every stage prompt says to emit JSON and nothing else,
+and reviewers still wrap it in ` ```json ` fences often enough to matter. A fenced payload is a
+formatting deviation, not a crashed dispatch — unwrap a single leading fence, then parse. Treat it
+as failed output only if what is inside does not parse.
 
 **A dispatch that returns nothing crashed.** It did not find nothing. A reviewer that found nothing
 emits `[]`; one that produced no output at all failed. Retry once, then walk the ladder, then block.

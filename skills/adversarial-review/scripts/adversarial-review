@@ -71,6 +71,17 @@ def detect_profile(target: str, target_kind: str) -> str:
     return "code-diff"
 
 
+def has_head(repo_root: Path) -> bool:
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", "HEAD"],
+            cwd=repo_root, capture_output=True, text=True,
+        )
+    except OSError:
+        return False
+    return completed.returncode == 0
+
+
 def read_diff(target: str, repo_root: Path, diff_file: str | None) -> str:
     if diff_file is not None:
         path = Path(diff_file)
@@ -81,6 +92,12 @@ def read_diff(target: str, repo_root: Path, diff_file: str | None) -> str:
     argv = ["git", "diff", "--no-renames"]
     if target and target.strip() != "WORKTREE":
         argv.append(target)
+    elif has_head(repo_root):
+        # WORKTREE means every uncommitted change. Plain `git diff` compares against
+        # the index, so staged work would be invisible in the artifact it reviews.
+        # Before the first commit there is no HEAD to compare against, and the
+        # unstaged-only view is the only one available.
+        argv.append("HEAD")
     try:
         completed = subprocess.run(
             argv, cwd=repo_root, capture_output=True, text=True, errors="replace"
@@ -137,6 +154,17 @@ def size_of(profile: str, content: str) -> int:
     return len(content.split())
 
 
+def diff_size(profile: str, diff: str) -> int:
+    """Same rule as size_of, over the changed lines of a diff."""
+    if profile == "code-diff":
+        return changed_line_count(diff)
+    return sum(
+        len(line[1:].split())
+        for line in diff.splitlines()
+        if not is_diff_metadata(line) and line.startswith(("+", "-"))
+    )
+
+
 def suggest_depth(profile: str, size_metric: int, contract_surface: bool) -> str:
     if contract_surface:
         return "deep"
@@ -175,7 +203,7 @@ def resolve_target(
         }
 
     diff = read_diff(target, repo_root, diff_file)
-    size_metric = changed_line_count(diff)
+    size_metric = diff_size(resolved_profile, diff)
     contract_surface = has_contract_surface(diff)
     return {
         "profile": resolved_profile,
@@ -275,9 +303,26 @@ def classify_reference(token: str) -> str | None:
     return None
 
 
+LINE_ANCHOR = re.compile(r":(\d+)(?:-(\d+))?$")
+
+
 def strip_line_anchor(token: str) -> str:
     """`tests/conftest.py:35-42` names a real file; the anchor is not part of it."""
-    return re.sub(r":\d+(?:-\d+)?$", "", token)
+    return LINE_ANCHOR.sub("", token)
+
+
+def parse_line_anchor(token: str) -> tuple[int, int] | None:
+    """The 1-based inclusive range a ref cites, or None when it cites no location."""
+    match = LINE_ANCHOR.search(token)
+    if not match:
+        return None
+    start = int(match.group(1))
+    return start, int(match.group(2) or start)
+
+
+def looks_like_path(token: str) -> bool:
+    bare = strip_line_anchor(token)
+    return "/" in bare or Path(bare).suffix in SOURCE_SUFFIXES or Path(bare).suffix == ".md"
 
 
 def resolve_reference(
@@ -286,7 +331,11 @@ def resolve_reference(
     if kind == "url":
         return True, "skipped (no network I/O)"
     if kind == "path":
-        bare = strip_line_anchor(token)
+        # `./design.md#goals` names design.md; the fragment is an in-document anchor,
+        # not part of the filename.
+        bare = strip_line_anchor(token.split("#", 1)[0])
+        if not bare:
+            return True, "in-document anchor (names no file)"
         candidate = Path(bare)
         if candidate.is_absolute():
             return (True, "exists") if candidate.exists() else (False, "no such absolute path")
@@ -353,6 +402,24 @@ def check_references(
 # and no heuristic separates a stale reference from a planned one. Claiming HIGH
 # confidence on an undecidable question is what makes a check get ignored.
 FORWARD_LOOKING_PROFILES = ("spec-design", "plan")
+
+
+def failed_check_finding(check: dict[str, Any]) -> dict[str, Any]:
+    """A check that ran and failed is true by construction — the strongest evidence there is."""
+    return {
+        "id": "",
+        "severity": "HIGH",
+        "confidence": "HIGH",
+        "category": "failing-check",
+        "claim": (
+            f"A repository check fails on this target: {check['command']} "
+            f"exited {check['exit_code']}."
+        ),
+        "evidence": [{"kind": "prepass", "ref": check["command"], "output": check["output"][-2000:]}],
+        "remediation": "Make the check pass, or explain why its failure is expected here.",
+        "patch": None,
+        "stage": "prepass",
+    }
 
 
 def prepass_finding(token: str, kind: str, detail: str, profile: str) -> dict[str, Any]:
@@ -428,6 +495,10 @@ def run_prepass(
     if profile == "code-diff":
         commands = discover_code_checks(repo_root, check_cmds)
         checks = [run_check(command, repo_root) for command in commands]
+        # A failed check has to become a finding. `compute_verdict` reads surviving
+        # findings, never `checks`, so a failure recorded only there is a red suite
+        # that reports PASS.
+        findings = [failed_check_finding(c) for c in checks if c["status"] == "fail"]
     else:
         path = Path(target)
         if not path.is_absolute():
@@ -591,9 +662,18 @@ def evidence_resolves(item: dict[str, Any], repo_root: Path) -> bool:
     kind = item["kind"]
     if kind in ("command", "prepass"):
         return True
-    if kind == "absence":
-        return True
     ref = str(item.get("ref", ""))
+    if kind == "absence":
+        # The cited search is never re-run. Executing model-supplied shell inside the
+        # one deterministic stage would make it neither deterministic nor safe. The
+        # scope the search names is still checkable, and a search over a file that
+        # does not exist proves nothing about what is absent from it.
+        if not looks_like_path(ref):
+            return True
+        bare = strip_line_anchor(ref)
+        candidate = Path(bare) if Path(bare).is_absolute() else repo_root / bare
+        return candidate.exists()
+
     quote = str(item.get("quote", ""))
     bare = strip_line_anchor(ref.split("#", 1)[0])
     candidate = Path(bare) if Path(bare).is_absolute() else repo_root / bare
@@ -603,7 +683,17 @@ def evidence_resolves(item: dict[str, Any], repo_root: Path) -> bool:
         return "#" in ref or not bare
     if not quote:
         return True
-    return quote.strip() in candidate.read_text(errors="replace")
+
+    text = candidate.read_text(errors="replace")
+    anchor = parse_line_anchor(ref.split("#", 1)[0])
+    if anchor is None:
+        # No anchor is no claim about location, so the whole file is in scope.
+        return quote.strip() in text
+    start, end = anchor
+    lines = text.splitlines()
+    if start < 1 or start > len(lines):
+        return False
+    return quote.strip() in "\n".join(lines[start - 1:end])
 
 
 def apply_evidence_gate(
@@ -629,6 +719,18 @@ def run_gate(
     findings = load_json(findings_path, "findings")
     model = load_json(model_path, "model")
     prepass = load_json(prepass_path, "prepass")
+    for label, value in (("model", model), ("prepass", prepass)):
+        if not isinstance(value, dict):
+            raise UsageError(f"{label} input must be a JSON object")
+
+    # `quick` runs both stages in one reply and reports {findings, suppressed}. Its
+    # self-refuted list is carried through rather than dropped: suppressed_count is
+    # the kill-rate signal, and a quick run that silently reported zero would hide
+    # exactly the fabrication it is there to expose.
+    carried_suppressed: list[dict[str, str]] = []
+    if isinstance(findings, dict):
+        carried_suppressed = list(findings.get("suppressed", []))
+        findings = findings.get("findings", [])
     if not isinstance(findings, list):
         raise UsageError("findings input must be a JSON array")
 
@@ -640,7 +742,7 @@ def run_gate(
 
     survivors: list[dict[str, Any]] = []
     contested: list[dict[str, Any]] = []
-    suppressed: list[dict[str, str]] = []
+    suppressed: list[dict[str, str]] = list(carried_suppressed)
 
     for finding in merged:
         disposition = finding.get("disposition", "standing")
@@ -663,9 +765,17 @@ def run_gate(
     survivors.sort(key=lambda f: (
         f.get("category") != "unfalsifiable-claim", SEVERITIES.index(f["severity"])
     ))
-    for position, finding in enumerate(survivors, start=1):
-        if not finding.get("id"):
-            finding["id"] = f"F{position}"
+    # IDs already carried by a finding are reserved before any are handed out;
+    # positional assignment alone would re-issue one and break ID stability.
+    taken = {f["id"] for f in survivors if f.get("id")}
+    next_number = 1
+    for finding in survivors:
+        if finding.get("id"):
+            continue
+        while f"F{next_number}" in taken:
+            next_number += 1
+        finding["id"] = f"F{next_number}"
+        taken.add(finding["id"])
 
     verdict = compute_verdict(survivors, model, prepass)
     payload = {

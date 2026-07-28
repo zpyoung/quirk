@@ -82,6 +82,10 @@ def _git_repo(path: Path) -> Path:
     return path
 
 
+def _git(path: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=path, check=True, capture_output=True)
+
+
 def test_explicit_profile_overrides_detection(tmp_path):
     patch = _touch(tmp_path / "empty.patch", "")
     result = resolve(
@@ -230,6 +234,35 @@ def test_valid_range_with_no_changes_is_still_a_clean_zero(tmp_path):
     assert result["depth_suggestion"] == "quick"
 
 
+def test_worktree_includes_staged_changes(tmp_path):
+    """WORKTREE promises the uncommitted work — `git diff` alone hides the index."""
+    _git_repo(tmp_path)
+    src = tmp_path / "a.py"
+    src.write_text("original\n")
+    _git(tmp_path, "add", "a.py")
+    _git(tmp_path, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
+    src.write_text("original\nstaged change\n")
+    _git(tmp_path, "add", "a.py")
+    result = resolve("--target", "WORKTREE", "--repo-root", str(tmp_path))
+    assert result["size_metric"] == 1, "staged change was omitted from the artifact"
+
+
+def test_worktree_still_works_before_the_first_commit(tmp_path):
+    """An unborn branch has no HEAD to diff against; that is not a failure."""
+    _git_repo(tmp_path)
+    assert resolve("--target", "WORKTREE", "--repo-root", str(tmp_path))["size_metric"] == 0
+
+
+def test_prose_profile_override_on_a_range_is_measured_in_words(tmp_path):
+    """The unit follows the profile on the diff path too, not just the path target."""
+    patch = tmp_path / "d.patch"
+    patch.write_text("--- a/doc.md\n+++ b/doc.md\n@@ -0,0 +1,2 @@\n"
+                     + "".join("+" + "word " * 50 + "\n" for _ in range(2)))
+    result = resolve("--target", "main..HEAD", "--profile", "prose-claim",
+                     "--repo-root", str(tmp_path), "--diff-file", str(patch))
+    assert result["size_metric"] == 100
+
+
 # --- output conventions -----------------------------------------------------------
 
 def test_stdout_is_exactly_one_sorted_json_object(tmp_path):
@@ -293,6 +326,22 @@ def test_unresolvable_markdown_link_becomes_a_finding(tmp_path):
                      "--repo-root", str(tmp_path), expect=1)
     refs = [f["evidence"][0]["ref"] for f in result["findings"]]
     assert "./design.md" in refs
+
+
+def test_link_fragment_is_not_part_of_the_filesystem_path(tmp_path):
+    """`./design.md#goals` names design.md; the fragment is an in-document anchor."""
+    _touch(tmp_path / "design.md", "# Goals\n")
+    doc = _touch(tmp_path / "notes.md", "See [goals](./design.md#goals).\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc), "--repo-root", str(tmp_path))
+    assert result["status"] == "pass"
+    assert result["findings"] == []
+
+
+def test_link_fragment_does_not_hide_a_genuinely_missing_file(tmp_path):
+    doc = _touch(tmp_path / "notes.md", "See [goals](./gone.md#goals).\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert "./gone.md#goals" in [f["evidence"][0]["ref"] for f in result["findings"]]
 
 
 def test_http_links_are_recorded_skipped_and_never_fetched(tmp_path):
@@ -361,6 +410,31 @@ def test_failing_check_is_fail_not_could_not_run(tmp_path):
                      "--repo-root", str(tmp_path), "--check-cmd", "exit 3", expect=1)
     assert result["status"] == "fail"
     assert result["checks"][0]["exit_code"] == 3
+
+
+def test_failing_code_check_files_a_finding(tmp_path):
+    """A failed check must become a finding, or nothing carries it to the verdict.
+
+    The prose branch already files findings; the code branch recorded the failure in
+    `checks` alone, where `compute_verdict` never looks.
+    """
+    result = prepass("--profile", "code-diff", "--target", "WORKTREE",
+                     "--repo-root", str(tmp_path), "--check-cmd", "exit 3", expect=1)
+    assert len(result["findings"]) == 1
+    finding = result["findings"][0]
+    assert finding["severity"] == "HIGH"
+    assert finding["stage"] == "prepass"
+    assert finding["category"] == "failing-check"
+    assert finding["evidence"][0]["kind"] == "prepass"
+
+
+def test_failing_code_check_cannot_produce_a_pass_verdict(tmp_path):
+    """The end-to-end version of the same defect: red tests must never read as PASS."""
+    pre = prepass("--profile", "code-diff", "--target", "WORKTREE",
+                  "--repo-root", str(tmp_path), "--check-cmd", "exit 1", expect=1)
+    result = gate(tmp_path, [], prepass_status=pre["status"],
+                  prepass_findings=pre["findings"], expect=1)
+    assert result["verdict"] == "NEEDS_FIXES"
 
 
 def test_passing_check_exits_zero(tmp_path):
@@ -565,7 +639,9 @@ def _inputs(tmp_path, findings, *, model=None, prepass_status="pass", prepass_fi
     )
 
 
-def gate(tmp_path, findings, *, expect=0, extra=(), **kw) -> dict:
+def gate(tmp_path, findings, *, expect=0, extra=(), repo_root=None, **kw) -> dict:
+    if repo_root is not None:
+        extra = (*extra, "--repo-root", str(repo_root))
     proc = run_ar("gate", *_inputs(tmp_path, findings, **kw), *extra)
     assert proc.returncode == expect, f"exit {proc.returncode}: {proc.stderr}"
     return json.loads(proc.stdout)
@@ -690,6 +766,94 @@ def test_unfalsifiable_items_alongside_a_real_one_still_survive(tmp_path):
     assert result["suppressed_count"] == 0
 
 
+# --- evidence gate: the cited location ---------------------------------------------
+
+def test_line_anchor_beyond_end_of_file_is_falsified(tmp_path):
+    """A quote that exists somewhere must not launder an impossible line number."""
+    (tmp_path / "src.py").write_text("a\nb\nc\nthe quoted text\n")
+    bad = _finding(evidence=[
+        {"kind": "file-line", "ref": "src.py:999999-1000000", "quote": "the quoted text"},
+    ])
+    result = gate(tmp_path, [bad], expect=0, repo_root=tmp_path)
+    assert result["findings"] == []
+    assert result["suppressed"][0]["reason"] == "falsified"
+
+
+def test_quote_outside_the_cited_range_is_falsified(tmp_path):
+    (tmp_path / "src.py").write_text("a\nb\nc\nthe quoted text\n")
+    bad = _finding(evidence=[
+        {"kind": "file-line", "ref": "src.py:1-2", "quote": "the quoted text"},
+    ])
+    result = gate(tmp_path, [bad], expect=0, repo_root=tmp_path)
+    assert result["findings"] == []
+
+
+def test_quote_inside_the_cited_range_resolves(tmp_path):
+    (tmp_path / "src.py").write_text("a\nb\nc\nthe quoted text\n")
+    good = _finding(severity="MEDIUM", evidence=[
+        {"kind": "file-line", "ref": "src.py:4", "quote": "the quoted text"},
+    ])
+    assert len(gate(tmp_path, [good], expect=1, repo_root=tmp_path)["findings"]) == 1
+
+
+def test_file_line_evidence_without_an_anchor_still_searches_the_whole_file(tmp_path):
+    """No anchor is no claim about location; only a cited range is checked."""
+    (tmp_path / "src.py").write_text("a\nb\nc\nthe quoted text\n")
+    good = _finding(severity="MEDIUM", evidence=[
+        {"kind": "file-line", "ref": "src.py", "quote": "the quoted text"},
+    ])
+    assert len(gate(tmp_path, [good], expect=1, repo_root=tmp_path)["findings"]) == 1
+
+
+def test_absence_evidence_naming_a_missing_file_is_falsified(tmp_path):
+    """The search is not re-run, but the scope it names is checkable."""
+    bad = _finding(evidence=[
+        {"kind": "absence", "command": "grep -rn foo src/gone.py", "ref": "src/gone.py"},
+    ])
+    result = gate(tmp_path, [bad], expect=0, repo_root=tmp_path)
+    assert result["findings"] == []
+    assert result["suppressed"][0]["reason"] == "falsified"
+
+
+def test_absence_evidence_naming_a_real_scope_survives(tmp_path):
+    (tmp_path / "src.py").write_text("nothing here\n")
+    good = _finding(severity="MEDIUM", evidence=[
+        {"kind": "absence", "command": "grep -rn foo src.py", "ref": "src.py"},
+    ])
+    assert len(gate(tmp_path, [good], expect=1, repo_root=tmp_path)["findings"]) == 1
+
+
+# --- gate input shapes -------------------------------------------------------------
+
+def test_gate_accepts_the_quick_mode_object_and_keeps_its_suppressed_count(tmp_path):
+    """`quick` emits {findings, suppressed}; rejecting it breaks the documented pipeline.
+
+    The self-refuted count must survive, or the kill-rate integrity signal reads zero.
+    """
+    quick = {"findings": [_finding(severity="MEDIUM")],
+             "suppressed": [{"id": "F7", "reason": "refuted"}]}
+    result = gate(tmp_path, quick, extra=("--depth", "quick"), expect=1)
+    assert len(result["findings"]) == 1
+    assert result["suppressed_count"] == 1
+    assert result["suppressed"][0]["id"] == "F7"
+
+
+@pytest.mark.parametrize("bad", ["a string", 42, ["not", "an", "object"]])
+def test_gate_rejects_non_object_model_input_with_exit_2(tmp_path, bad):
+    """Valid JSON of the wrong shape must be a diagnostic, not an AttributeError."""
+    proc = run_ar("gate", *_inputs(tmp_path, [], model=bad))
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
+
+
+def test_gate_rejects_non_object_prepass_input_with_exit_2(tmp_path):
+    proc = run_ar("gate", "--findings", _write(tmp_path, "f.json", []),
+                  "--model", _write(tmp_path, "m.json", {"resolved": True}),
+                  "--prepass", _write(tmp_path, "p.json", ["not", "an", "object"]))
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
+
+
 # --- disposition / tie resolution -------------------------------------------------
 
 def test_refuted_finding_is_dropped_at_any_depth(tmp_path):
@@ -765,6 +929,18 @@ def test_ids_are_assigned_in_severity_order_when_absent(tmp_path):
     result = gate(tmp_path, findings, expect=3)
     assert result["findings"][0]["id"] == "F1"
     assert result["findings"][0]["severity"] == "CRITICAL"
+
+
+def test_assigned_ids_never_collide_with_ids_already_present(tmp_path):
+    """Finding-ID stability is a contract: two findings must never share an ID.
+
+    A blank-ID finding sorting into position 1 must not be handed an ID that a
+    reviewer-supplied finding already carries.
+    """
+    findings = [_finding(id="F1", severity="LOW"), _finding(id="", severity="CRITICAL")]
+    result = gate(tmp_path, findings, expect=3)
+    ids = [f["id"] for f in result["findings"]]
+    assert len(ids) == len(set(ids)), f"duplicate ids: {ids}"
 
 
 def test_gate_echoes_the_depth_it_used(tmp_path):
