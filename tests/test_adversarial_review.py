@@ -171,6 +171,28 @@ def test_contract_anchor_on_removed_line_is_not_a_contract_surface(tmp_path):
     assert result["contract_surface"] is False
 
 
+def test_added_lines_whose_text_begins_with_plus_or_minus_are_counted(tmp_path):
+    """`git diff` renders an added line containing `++i` as `+++i` — that is content.
+
+    Only a `+++`/`---` pair outside a hunk names a file.
+    """
+    patch = tmp_path / "d.patch"
+    patch.write_text("--- a/x.py\n+++ b/x.py\n@@ -0,0 +1,3 @@\n+normal\n+++counter\n+--dashes\n")
+    result = resolve(
+        "--target", "main..HEAD", "--repo-root", str(tmp_path), "--diff-file", str(patch)
+    )
+    assert result["size_metric"] == 3
+
+
+def test_a_contract_anchor_on_an_added_line_beginning_with_plus_still_counts(tmp_path):
+    patch = tmp_path / "d.patch"
+    patch.write_text("--- a/x.py\n+++ b/x.py\n@@ -0,0 +1 @@\n+++ CONTRACT: def f() -> int\n")
+    result = resolve(
+        "--target", "main..HEAD", "--repo-root", str(tmp_path), "--diff-file", str(patch)
+    )
+    assert result["contract_surface"] is True
+
+
 def test_contract_anchor_in_diff_metadata_is_not_a_contract_surface(tmp_path):
     """`+++` names a file; a filename containing `SCHEMA:` is not a changed contract.
 
@@ -435,6 +457,74 @@ def test_failing_code_check_cannot_produce_a_pass_verdict(tmp_path):
     result = gate(tmp_path, [], prepass_status=pre["status"],
                   prepass_findings=pre["findings"], expect=1)
     assert result["verdict"] == "NEEDS_FIXES"
+
+
+# --- the class invariant: no failed check reaches the verdict as a pass ------------
+#
+# Three separate defects were the same defect — a failure recorded somewhere the
+# verdict does not read. These cover the rule itself, per branch, rather than the
+# instance that happened to be found.
+
+def _failing_prepass_cases(tmp_path):
+    """(label, argv) for each way a check can fail, one per pre-pass branch."""
+    code = tmp_path / "code"
+    code.mkdir()
+    spec = tmp_path / "spec"
+    spec.mkdir()
+    # Required headings absent, and no references at all, so the reference check passes
+    # and only section coverage fails.
+    (spec / "logic.md").write_text("# Unrelated Heading\n\nProse with no references.\n")
+    prose = tmp_path / "prose"
+    prose.mkdir()
+    (prose / "notes.md").write_text("See `src/does_not_exist.py`.\n")
+    return [
+        ("code-diff / failing check",
+         ("--profile", "code-diff", "--target", "WORKTREE",
+          "--repo-root", str(code), "--check-cmd", "exit 3")),
+        ("spec-design / section coverage",
+         ("--profile", "spec-design", "--target", str(spec / "logic.md"),
+          "--repo-root", str(spec))),
+        ("prose-claim / reference resolution",
+         ("--profile", "prose-claim", "--target", str(prose / "notes.md"),
+          "--repo-root", str(prose))),
+    ]
+
+
+def test_every_failed_check_is_carried_by_a_finding(tmp_path):
+    """`status: fail` with an empty findings list is the bug, in any branch."""
+    for label, argv in _failing_prepass_cases(tmp_path):
+        result = prepass(*argv, expect=1)
+        assert result["status"] == "fail", label
+        failed = [c["name"] for c in result["checks"] if c["status"] == "fail"]
+        assert failed, label
+        assert result["findings"], f"{label}: failed {failed} but filed no finding"
+
+
+def test_no_failing_prepass_branch_can_reach_a_pass_verdict(tmp_path):
+    """The invariant that actually matters, asserted end-to-end for every branch."""
+    for label, argv in _failing_prepass_cases(tmp_path):
+        pre = prepass(*argv, expect=1)
+        result = gate(tmp_path, [], prepass_status=pre["status"],
+                      prepass_findings=pre["findings"], expect=1)
+        assert result["verdict"] != "PASS", f"{label}: failed pre-pass produced PASS"
+
+
+def test_a_failed_check_that_files_no_finding_of_its_own_still_gets_one(tmp_path):
+    """Section coverage reports no per-heading findings; the generic one covers it."""
+    (tmp_path / "logic.md").write_text("# Unrelated\n\nNo references here.\n")
+    result = prepass("--profile", "spec-design", "--target", str(tmp_path / "logic.md"),
+                     "--repo-root", str(tmp_path), expect=1)
+    categories = {f["category"] for f in result["findings"]}
+    assert "failing-check" in categories
+
+
+def test_reference_failures_are_not_double_reported(tmp_path):
+    """A check that files its own findings must not also get the generic one."""
+    doc = _touch(tmp_path / "notes.md", "See `src/does_not_exist.py`.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    categories = [f["category"] for f in result["findings"]]
+    assert categories == ["unresolvable-reference"], categories
 
 
 def test_passing_check_exits_zero(tmp_path):
@@ -823,6 +913,38 @@ def test_absence_evidence_naming_a_real_scope_survives(tmp_path):
     assert len(gate(tmp_path, [good], expect=1, repo_root=tmp_path)["findings"]) == 1
 
 
+def test_a_fragment_does_not_shield_a_missing_file(tmp_path):
+    """`spec#3` names a section; `no/such/file.md#x` names a file that is not there."""
+    bad = _finding(evidence=[
+        {"kind": "file-line", "ref": "no/such/file.md#section", "quote": "zzz"},
+    ])
+    result = gate(tmp_path, [bad], expect=0, repo_root=tmp_path)
+    assert result["findings"] == []
+    assert result["suppressed"][0]["reason"] == "falsified"
+
+
+def test_a_section_anchor_naming_no_file_is_still_unfalsifiable(tmp_path):
+    """The escape hatch stays open for what it was for."""
+    survivor = _finding(severity="MEDIUM", evidence=[
+        {"kind": "quote", "ref": "spec#3", "quote": "must not lose data"},
+    ])
+    assert len(gate(tmp_path, [survivor], expect=1, repo_root=tmp_path)["findings"]) == 1
+
+
+# --- evidence schema ---------------------------------------------------------------
+
+@pytest.mark.parametrize("evidence", [
+    {"kind": "command", "command": "", "output": ""},
+    {"kind": "command", "command": "pytest -q", "output": "   "},
+    {"kind": "file-line", "ref": "", "quote": "x"},
+])
+def test_empty_evidence_values_are_rejected(tmp_path, evidence):
+    """Presence is not content: an empty command must not buy reproduction credit."""
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(evidence=[evidence])]))
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
+
+
 # --- gate input shapes -------------------------------------------------------------
 
 def test_gate_accepts_the_quick_mode_object_and_keeps_its_suppressed_count(tmp_path):
@@ -836,6 +958,16 @@ def test_gate_accepts_the_quick_mode_object_and_keeps_its_suppressed_count(tmp_p
     assert len(result["findings"]) == 1
     assert result["suppressed_count"] == 1
     assert result["suppressed"][0]["id"] == "F7"
+
+
+@pytest.mark.parametrize("suppressed", [5, "refuted", {"id": "F1"}])
+def test_quick_object_with_a_wrong_shaped_suppressed_is_a_diagnostic(tmp_path, suppressed):
+    """Exit 2 with a message, never a traceback — the same rule as any bad input."""
+    quick = {"findings": [], "suppressed": suppressed}
+    proc = run_ar("gate", *_inputs(tmp_path, quick), "--depth", "quick")
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
+    assert "Traceback" not in proc.stderr
 
 
 @pytest.mark.parametrize("bad", ["a string", 42, ["not", "an", "object"]])
@@ -940,6 +1072,34 @@ def test_assigned_ids_never_collide_with_ids_already_present(tmp_path):
     findings = [_finding(id="F1", severity="LOW"), _finding(id="", severity="CRITICAL")]
     result = gate(tmp_path, findings, expect=3)
     ids = [f["id"] for f in result["findings"]]
+    assert len(ids) == len(set(ids)), f"duplicate ids: {ids}"
+
+
+def test_suppressed_records_carry_a_usable_id(tmp_path):
+    """The promote prompt instructs `id: null`; a null in `suppressed` names nothing.
+
+    A caller cannot carry a dismissal forward — or reuse its ID, as the prompt
+    requires — if the record it was given has no ID.
+    """
+    result = gate(tmp_path, [_finding(id=None, disposition="refuted")], expect=0)
+    assert result["suppressed"][0]["id"], "suppressed record has no usable id"
+
+
+def test_contested_records_carry_a_usable_id(tmp_path):
+    result = gate(tmp_path, [_finding(id=None, disposition="contested")],
+                  extra=("--depth", "deep"), expect=0)
+    assert result["contested"][0]["id"], "contested record has no usable id"
+
+
+def test_ids_are_unique_across_survivors_suppressed_and_contested(tmp_path):
+    findings = [_finding(id=None, disposition="refuted"),
+                _finding(id=None, disposition="contested"),
+                _finding(id=None, disposition="standing", severity="MEDIUM")]
+    result = gate(tmp_path, findings, extra=("--depth", "deep"), expect=1)
+    ids = ([f["id"] for f in result["findings"]]
+           + [f["id"] for f in result["contested"]]
+           + [s["id"] for s in result["suppressed"]])
+    assert all(ids), f"blank id present: {ids}"
     assert len(ids) == len(set(ids)), f"duplicate ids: {ids}"
 
 

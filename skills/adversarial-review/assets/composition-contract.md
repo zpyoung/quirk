@@ -40,6 +40,11 @@ re-report one without new evidence; the refute stage kills any that reappear wit
 original `id` — a re-report reuses it rather than getting a fresh one, which is what lets a caller
 match a finding to its prior ruling across rounds.
 
+The gate assigns IDs to **every** finding it is given, before dispositions are applied, so entries in
+`suppressed[]` and `contested[]` carry real IDs too. Reviewers are told to emit `id: null`; a
+dismissal a caller cannot name is a dismissal it cannot carry forward. IDs are assigned in severity
+order, so a suppressed finding leaves a gap in the surviving sequence rather than renumbering it.
+
 ## Output
 
 ```

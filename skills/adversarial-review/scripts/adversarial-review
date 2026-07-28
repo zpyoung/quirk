@@ -116,31 +116,44 @@ def read_diff(target: str, repo_root: Path, diff_file: str | None) -> str:
     return completed.stdout
 
 
-def is_diff_metadata(line: str) -> bool:
-    """`+++`/`---` name files rather than adding or removing content.
+def diff_content_lines(diff: str) -> list[str]:
+    """The added and removed lines of a diff, excluding file metadata.
 
-    Every scan over a diff must agree on this, or a filename can trip a rule that
-    only added lines are supposed to trip.
+    Position decides, not the prefix. `+++ b/x.py` names a file only where a header
+    can appear; inside a hunk, `+++counter` is an added line whose own text begins
+    with `++`, and git emits exactly that. Treating the prefix alone as metadata
+    silently undercounts such lines.
+
+    Every scan over a diff shares this, so a filename cannot trip a rule meant for
+    added lines and an added line cannot be mistaken for a filename.
     """
-    return line.startswith(("+++", "---"))
+    lines = diff.splitlines()
+    content: list[str] = []
+    in_hunk = False
+    for index, line in enumerate(lines):
+        if line.startswith("@@"):
+            in_hunk = True
+            continue
+        if line.startswith("diff --git "):
+            in_hunk = False
+            continue
+        # A `--- `/`+++ ` pair introduces a file wherever it appears. Requiring the
+        # pair is what keeps it distinguishable from hunk content.
+        if line.startswith("--- ") and index + 1 < len(lines) \
+                and lines[index + 1].startswith("+++ "):
+            in_hunk = False
+            continue
+        if in_hunk and line.startswith(("+", "-")):
+            content.append(line)
+    return content
 
 
 def changed_line_count(diff: str) -> int:
-    count = 0
-    for line in diff.splitlines():
-        if is_diff_metadata(line):
-            continue
-        if line.startswith(("+", "-")):
-            count += 1
-    return count
+    return len(diff_content_lines(diff))
 
 
 def has_contract_surface(diff: str) -> bool:
-    return any(
-        CONTRACT_SURFACE.match(line)
-        for line in diff.splitlines()
-        if not is_diff_metadata(line)
-    )
+    return any(CONTRACT_SURFACE.match(line) for line in diff_content_lines(diff))
 
 
 def size_of(profile: str, content: str) -> int:
@@ -158,11 +171,7 @@ def diff_size(profile: str, diff: str) -> int:
     """Same rule as size_of, over the changed lines of a diff."""
     if profile == "code-diff":
         return changed_line_count(diff)
-    return sum(
-        len(line[1:].split())
-        for line in diff.splitlines()
-        if not is_diff_metadata(line) and line.startswith(("+", "-"))
-    )
+    return sum(len(line[1:].split()) for line in diff_content_lines(diff))
 
 
 def suggest_depth(profile: str, size_metric: int, contract_surface: bool) -> str:
@@ -415,7 +424,11 @@ def failed_check_finding(check: dict[str, Any]) -> dict[str, Any]:
             f"A repository check fails on this target: {check['command']} "
             f"exited {check['exit_code']}."
         ),
-        "evidence": [{"kind": "prepass", "ref": check["command"], "output": check["output"][-2000:]}],
+        "evidence": [{
+            "kind": "prepass",
+            "ref": check["command"],
+            "output": check["output"][-2000:].strip() or f"(no output; exit {check['exit_code']})",
+        }],
         "remediation": "Make the check pass, or explain why its failure is expected here.",
         "patch": None,
         "stage": "prepass",
@@ -491,14 +504,14 @@ def run_prepass(
 
     checks: list[dict[str, Any]] = []
     findings: list[dict[str, Any]] = []
+    # Checks that file their own, more specific findings. Everything else relies on
+    # the generic coverage below — and the default is deliberately "does not report",
+    # so a check added later is covered unless it opts out.
+    self_reporting: set[str] = set()
 
     if profile == "code-diff":
         commands = discover_code_checks(repo_root, check_cmds)
         checks = [run_check(command, repo_root) for command in commands]
-        # A failed check has to become a finding. `compute_verdict` reads surviving
-        # findings, never `checks`, so a failure recorded only there is a red suite
-        # that reports PASS.
-        findings = [failed_check_finding(c) for c in checks if c["status"] == "fail"]
     else:
         path = Path(target)
         if not path.is_absolute():
@@ -508,10 +521,22 @@ def run_prepass(
             return 1, {"status": "could-not-run", "checks": [], "findings": []}
         text = path.read_text(errors="replace")
         reference_check, findings = check_references(text, repo_root, profile, path.parent)
+        self_reporting.add(reference_check["name"])
         checks = [reference_check, check_sections(text, profile)]
 
     if not checks:
         return 1, {"status": "could-not-run", "checks": [], "findings": []}
+
+    # The invariant, enforced once for every branch rather than per branch: the
+    # verdict is computed from findings alone, so a failure that stops at `checks[]`
+    # is a failure that silently passes. This was the same defect three times — an
+    # unreadable target, a red test suite, a missing required section — because each
+    # was fixed where it was found instead of here.
+    findings = findings + [
+        failed_check_finding(check)
+        for check in checks
+        if check["status"] == "fail" and check["name"] not in self_reporting
+    ]
 
     failed = any(check["status"] == "fail" for check in checks)
     status = "fail" if failed else "pass"
@@ -649,6 +674,14 @@ def validate_finding(finding: Any, index: int) -> None:
                 raise UsageError(
                     f"finding {index} evidence of kind {kind} is missing field: {field}"
                 )
+            # Presence is not content. An empty `command`/`output` pair would
+            # otherwise satisfy the schema and buy reproduction credit, holding a
+            # finding at HIGH confidence on evidence of nothing.
+            value = item[field]
+            if not isinstance(value, str) or not value.strip():
+                raise UsageError(
+                    f"finding {index} evidence of kind {kind} has an empty {field}"
+                )
 
 
 def evidence_resolves(item: dict[str, Any], repo_root: Path) -> bool:
@@ -678,9 +711,13 @@ def evidence_resolves(item: dict[str, Any], repo_root: Path) -> bool:
     bare = strip_line_anchor(ref.split("#", 1)[0])
     candidate = Path(bare) if Path(bare).is_absolute() else repo_root / bare
     if not candidate.is_file():
-        # A section anchor (`spec#3`) names no file; treat it as unfalsifiable
-        # rather than false, since we cannot check it either way.
-        return "#" in ref or not bare
+        if not bare:
+            # A bare `#section` is an in-document anchor and names no file.
+            return True
+        # A section anchor (`spec#3`) names no file either, and stays unfalsifiable.
+        # But `no/such/file.md#section` does name one, and the fragment must not
+        # shield it from the check that would show it is not there.
+        return not looks_like_path(bare)
     if not quote:
         return True
 
@@ -713,6 +750,24 @@ def apply_evidence_gate(
     return graded, None
 
 
+def finding_order(finding: dict[str, Any]) -> tuple[bool, int]:
+    """Unfalsifiability is the most actionable thing a review can say, so it leads."""
+    return finding.get("category") != "unfalsifiable-claim", SEVERITIES.index(finding["severity"])
+
+
+def assign_ids(findings: list[dict[str, Any]]) -> None:
+    """Fill in `F1..Fn` for anything lacking an ID, reserving the ones already taken."""
+    taken = {f["id"] for f in findings if f.get("id")}
+    next_number = 1
+    for finding in findings:
+        if finding.get("id"):
+            continue
+        while f"F{next_number}" in taken:
+            next_number += 1
+        finding["id"] = f"F{next_number}"
+        taken.add(finding["id"])
+
+
 def run_gate(
     findings_path: str, model_path: str, prepass_path: str, depth: str, repo_root: Path
 ) -> tuple[int, dict[str, Any]]:
@@ -729,7 +784,13 @@ def run_gate(
     # exactly the fabrication it is there to expose.
     carried_suppressed: list[dict[str, str]] = []
     if isinstance(findings, dict):
-        carried_suppressed = list(findings.get("suppressed", []))
+        carried = findings.get("suppressed", [])
+        if not isinstance(carried, list):
+            raise UsageError("findings.suppressed must be a JSON array")
+        for entry in carried:
+            if not isinstance(entry, dict):
+                raise UsageError("each findings.suppressed entry must be a JSON object")
+        carried_suppressed = list(carried)
         findings = findings.get("findings", [])
     if not isinstance(findings, list):
         raise UsageError("findings input must be a JSON array")
@@ -739,6 +800,13 @@ def run_gate(
     merged = list(findings) + list(prepass.get("findings", []))
     for index, finding in enumerate(merged):
         validate_finding(finding, index)
+
+    # Sort first so severity still drives the numbering, then assign to *every*
+    # record rather than to survivors alone. The promote prompt tells reviewers to
+    # emit `id: null` and to reuse a dismissed finding's original ID when re-raising
+    # it — neither works if the suppressed record it was handed has no ID.
+    merged.sort(key=finding_order)
+    assign_ids(merged)
 
     survivors: list[dict[str, Any]] = []
     contested: list[dict[str, Any]] = []
@@ -761,21 +829,7 @@ def run_gate(
         else:
             survivors.append(graded)
 
-    # Unfalsifiability is the most actionable thing a review can say, so it leads.
-    survivors.sort(key=lambda f: (
-        f.get("category") != "unfalsifiable-claim", SEVERITIES.index(f["severity"])
-    ))
-    # IDs already carried by a finding are reserved before any are handed out;
-    # positional assignment alone would re-issue one and break ID stability.
-    taken = {f["id"] for f in survivors if f.get("id")}
-    next_number = 1
-    for finding in survivors:
-        if finding.get("id"):
-            continue
-        while f"F{next_number}" in taken:
-            next_number += 1
-        finding["id"] = f"F{next_number}"
-        taken.add(finding["id"])
+    survivors.sort(key=finding_order)
 
     verdict = compute_verdict(survivors, model, prepass)
     payload = {

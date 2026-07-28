@@ -91,9 +91,11 @@ Exit 1 means a check failed — that is a finding, not an error. Only exit 2 is 
 "could-not-run"` means no check was executable at all, which is distinct from `"fail"` and feeds
 the `NOT_REVIEWABLE` condition.
 
-A failed check is filed as a `failing-check` finding, not merely recorded in `checks[]`. The verdict
-is computed from findings alone, so a failure that lived only in `checks[]` would let a red suite
-report `PASS`.
+**Every failed check becomes a finding**, in every branch. The verdict is computed from findings
+alone, so a failure that stops at `checks[]` is a failure that silently passes. Checks that file
+their own, more specific findings (reference resolution) are covered by those; everything else gets
+a generic `failing-check` finding. The default for a new check is *covered*, so forgetting to wire
+one up fails safe.
 
 **4. Select the adversary.**
 
@@ -218,6 +220,11 @@ What "re-resolve" checks, per evidence kind:
 | `file-line`, `quote` | The file exists, and the quote appears **within the cited line range** | — |
 | `absence` | The scope it names exists — a search over a missing file proves nothing | The search is never re-run |
 | `command`, `prepass` | — | Never re-run |
+
+Every evidence field must be a non-empty string. Presence is not content: an empty `command`/`output`
+pair would otherwise satisfy the schema and buy reproduction credit, holding a finding at `HIGH`
+confidence on evidence of nothing. A `#fragment` keeps a ref unfalsifiable only when what precedes it
+names no file — `spec#3` is a section, `docs/gone.md#x` is a missing file and is falsified.
 
 A cited range is a claim about location, so citing `src.py:400` for a quote that lives at line 12
 is falsified even though the quote is real. A ref with no anchor makes no such claim and is matched
