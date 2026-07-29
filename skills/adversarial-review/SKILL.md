@@ -157,11 +157,19 @@ disagreement, and adjudicating one costs a third dispatch to learn nothing.
 and re-run `gate`. Contested findings are withheld from `findings[]` and are not counted as
 suppressed — ignoring `contested[]` silently drops them.
 
+**The tree must not move between stages.** Every stage judges the artifact `resolve` hashed. Apply a
+fix mid-run — or let a rebase or a concurrent edit land — and the later stages review something the
+earlier ones never saw. The refute stage then "refutes" real findings because they no longer
+reproduce, and the run comes out looking clean. Pass `--verify-artifact` at step 9 to make that
+condition fail loudly instead: it re-hashes the target and exits 2 on drift. Fix after the manifest,
+never during.
+
 **9. Emit.**
 
 ```bash
 "$SCRIPT" manifest --resolve "$WORK/resolve.json" --prepass "$WORK/prepass.json" \
-  --model "$WORK/model.json" --gate "$WORK/gate.json" ${LENS:+--lens "$LENS"} > "$WORK/manifest.json"
+  --model "$WORK/model.json" --gate "$WORK/gate.json" --verify-artifact \
+  ${LENS:+--lens "$LENS"} > "$WORK/manifest.json"
 ```
 
 Then render the human summary, the findings block, and the manifest.

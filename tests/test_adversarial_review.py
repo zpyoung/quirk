@@ -1586,6 +1586,59 @@ def test_manifest_rejects_unrelated_json_for_any_input(tmp_path, broken):
     assert "adversarial-review:" in proc.stderr
 
 
+def _review_inputs(work, repo):
+    """A complete set of stage outputs for a real target, written outside the repo."""
+    proc = run_ar("resolve", "--target", "WORKTREE", "--repo-root", str(repo))
+    assert proc.returncode == 0, proc.stderr
+    (work / "r.json").write_text(proc.stdout)
+    _write(work, "p.json", {"status": "pass", "checks": [], "findings": []})
+    _write(work, "m.json", {"resolved": True, "alias": "codex", "family": "openai",
+                            "provider": "openai-codex", "model": "gpt-5.6-sol",
+                            "thinking": "high", "independence": "full", "ladder": []})
+    _write(work, "g.json", {"verdict": "PASS", "findings": [], "contested": [],
+                            "suppressed": [], "suppressed_count": 0, "depth": "quick"})
+    return ["--resolve", str(work / "r.json"), "--prepass", str(work / "p.json"),
+            "--model", str(work / "m.json"), "--gate", str(work / "g.json"),
+            "--repo-root", str(repo), "--verify-artifact"]
+
+
+def test_manifest_verify_artifact_passes_on_an_unchanged_tree(tmp_path):
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    _git_repo(repo)
+    (repo / "x.py").write_text("a\nb\n")
+    proc = run_ar("manifest", *_review_inputs(work, repo))
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_manifest_verify_artifact_catches_a_tree_that_moved_mid_review(tmp_path):
+    """A fix applied between stages makes refute 'refute' findings that were real.
+
+    The stages after it judged content the earlier ones never saw, and the run
+    comes out looking clean — the opposite of what happened.
+    """
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    _git_repo(repo)
+    (repo / "x.py").write_text("a\nb\n")
+    args = _review_inputs(work, repo)
+    (repo / "x.py").write_text("a\nb\nc\nd\n")   # the tree moves under the review
+    proc = run_ar("manifest", *args)
+    assert proc.returncode == 2
+    assert "artifact changed during the review" in proc.stderr
+
+
+def test_manifest_without_verify_artifact_does_not_re_resolve(tmp_path):
+    """Opt-in: a caller reviewing a detached diff has no tree to re-hash."""
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    _git_repo(repo)
+    (repo / "x.py").write_text("a\nb\n")
+    args = [a for a in _review_inputs(work, repo) if a != "--verify-artifact"]
+    (repo / "x.py").write_text("totally different\n")
+    assert run_ar("manifest", *args).returncode == 0
+
+
 def test_manifest_fails_cleanly_on_a_missing_input(tmp_path):
     proc = run_ar("manifest", "--resolve", str(tmp_path / "absent.json"),
                   "--prepass", _write(tmp_path, "p3.json", {}),
