@@ -349,7 +349,7 @@ MD_LINK = re.compile(
     # The <angle-bracket> form exists so a destination may contain spaces, and the
     # optional title is ordinary syntax. Matching neither meant a broken link passed
     # silently — a false clean, which is the worse direction to fail.
-    r"\[[^\]]*\]\(\s*(?:<([^>]+)>|([^)\s]+))(?:\s+[\"\'(][^)]*)?\s*\)"
+    r"\[[^\]]*\]\(\s*(?:<([^>]+)>|((?:[^()\s]|\([^()\s]*\))+))(?:\s+[\"\'(][^)]*)?\s*\)"
 )
 # `[label]: ./target.md "Title"` — the definition half of a reference-style link.
 REF_LINK_DEF = re.compile(r"^[ ]{0,3}\[[^\]]+\]:\s*<?([^\s>]+)>?", re.MULTILINE)
@@ -854,6 +854,12 @@ DISPOSITIONS = ("standing", "refuted", "contested")
 STAGES = ("promote", "refute", "tiebreak", "prepass")
 REQUIRED_FIELDS = ("severity", "confidence", "category", "claim", "evidence", "remediation")
 CATEGORY_SHAPE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+# Callers match a re-reported finding to its prior ruling by id, so a malformed
+# one silently breaks dismissed carry-forward across rounds. The prefix is
+# configurable (--id-prefix), so the shape is built against whichever is in use
+# rather than hardcoding "F" and rejecting every legitimate custom namespace.
+def finding_id_shape(prefix: str) -> "re.Pattern[str]":
+    return re.compile(rf"^{re.escape(prefix)}[1-9][0-9]*$")
 REPRODUCTION_KINDS = ("command", "prepass")
 PROOF_REQUIRED = ("CRITICAL", "HIGH")
 
@@ -878,7 +884,7 @@ def load_json(path_arg: str, label: str) -> Any:
         raise UsageError(f"cannot read {label} input {path}: {exc}") from exc
 
 
-def validate_finding(finding: Any, index: int) -> None:
+def validate_finding(finding: Any, index: int, id_prefix: str = "F") -> None:
     if not isinstance(finding, dict):
         raise UsageError(f"finding {index} is not an object")
     for field in REQUIRED_FIELDS:
@@ -911,6 +917,12 @@ def validate_finding(finding: Any, index: int) -> None:
     disposition = finding.get("disposition", "standing")
     if disposition not in DISPOSITIONS:
         raise UsageError(f"finding {index} has invalid disposition: {disposition}")
+    supplied_id = finding.get("id")
+    if supplied_id and not finding_id_shape(id_prefix).match(str(supplied_id)):
+        raise UsageError(
+            f"finding {index} has invalid id: {supplied_id!r} "
+            f"(expected {id_prefix} followed by a positive integer)"
+        )
     patch = finding.get("patch")
     if patch is not None and not isinstance(patch, str):
         raise UsageError(
@@ -1103,6 +1115,23 @@ def run_gate(
     # the kill-rate signal, and a quick run that silently reported zero would hide
     # exactly the fabrication it is there to expose.
     carried_suppressed: list[dict[str, str]] = []
+    # The report's shape *is* its provenance. `{findings, suppressed}` is what a
+    # quick-depth reviewer emits after refuting its own list in one context; a bare
+    # array is what the two-stage protocol produces. Accepting the quick shape under
+    # `--depth standard` recorded same-context self-refutation as fully independent,
+    # which is the one guarantee this whole protocol exists to provide. Requiring the
+    # two to agree makes the label unforgeable by a caller who simply passes a flag.
+    quick_shaped = isinstance(findings, dict)
+    if quick_shaped and depth != "quick":
+        raise UsageError(
+            f"findings are quick-shaped ({{findings, suppressed}}) but --depth is "
+            f"{depth}: a self-refuted report cannot be recorded as independent"
+        )
+    if depth == "quick" and not quick_shaped:
+        raise UsageError(
+            "--depth quick expects the quick-shaped {findings, suppressed} report "
+            "that promote-prompt.md specifies, not a bare array"
+        )
     if isinstance(findings, dict):
         carried = findings.get("suppressed", [])
         if not isinstance(carried, list):
@@ -1122,7 +1151,7 @@ def run_gate(
     prepass_origin = {id(f) for f in prepass.get("findings", [])}
     merged = list(findings) + list(prepass.get("findings", []))
     for index, finding in enumerate(merged):
-        validate_finding(finding, index)
+        validate_finding(finding, index, id_prefix)
 
     # Sort first so severity still drives the numbering, then assign to *every*
     # record rather than to survivors alone. The promote prompt tells reviewers to

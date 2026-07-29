@@ -1935,3 +1935,66 @@ def test_a_setext_document_actually_missing_a_section_still_fails(tmp_path):
     coverage = next(c for c in result["checks"] if c["name"] == "section-coverage")
     assert coverage["status"] == "fail"
     assert "Decisions Locked" in coverage["output"]
+
+
+# ============ twelfth review pass =================================================
+
+def _quick_payload():
+    """Exactly what assets/promote-prompt.md tells a quick-depth reviewer to emit."""
+    return {"findings": [_finding()], "suppressed": [{"id": "F3", "reason": "refuted"}]}
+
+
+def test_quick_mode_output_cannot_be_laundered_into_standard_depth(tmp_path):
+    """Accepting it at standard recorded same-context self-refutation as fully
+    independent, which defeats the guarantee the whole protocol rests on."""
+    proc = run_ar("gate",
+                  "--findings", _write(tmp_path, "f.json", _quick_payload()),
+                  "--model", _write(tmp_path, "m.json",
+                                    {"resolved": True, "alias": "codex", "family": "openai",
+                                     "provider": "p", "model": "m", "thinking": "high",
+                                     "independence": "full", "ladder": []}),
+                  "--prepass", _write(tmp_path, "p.json",
+                                      {"status": "pass", "checks": [], "findings": []}),
+                  "--depth", "standard")
+    assert proc.returncode == 2
+    assert "quick" in proc.stderr.lower()
+
+
+def test_quick_mode_output_is_accepted_at_quick_depth(tmp_path):
+    proc = run_ar("gate",
+                  "--findings", _write(tmp_path, "f.json", _quick_payload()),
+                  "--model", _write(tmp_path, "m.json",
+                                    {"resolved": True, "alias": "codex", "family": "openai",
+                                     "provider": "p", "model": "m", "thinking": "high",
+                                     "independence": "full", "ladder": []}),
+                  "--prepass", _write(tmp_path, "p.json",
+                                      {"status": "pass", "checks": [], "findings": []}),
+                  "--depth", "quick")
+    assert proc.returncode == 1, proc.stderr
+    assert json.loads(proc.stdout)["depth"] == "quick"
+
+
+def test_a_plain_array_is_rejected_at_quick_depth(tmp_path):
+    """The provenance check runs both ways: quick depth means a quick-shaped report."""
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding()]), "--depth", "quick")
+    assert proc.returncode == 2
+    assert "quick" in proc.stderr.lower()
+
+
+def test_a_link_destination_with_balanced_parentheses_is_not_truncated(tmp_path):
+    _touch(tmp_path / "file(1).md", "x\n")
+    doc = _touch(tmp_path / "doc.md", "See [d](./file(1).md).\n")
+    assert prepass("--profile", "prose-claim", "--target", str(doc),
+                   "--repo-root", str(tmp_path))["findings"] == []
+
+
+@pytest.mark.parametrize("bad_id", ["not-an-id", "F0", "F-1", "1", "FF1", "F1x"])
+def test_a_supplied_finding_id_violating_the_schema_is_rejected(bad_id, tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(id=bad_id)]))
+    assert proc.returncode == 2
+    assert "id" in proc.stderr
+
+
+def test_a_valid_supplied_id_is_preserved(tmp_path):
+    """Dismissed findings reuse their original ID across rounds — that must survive."""
+    assert gate(tmp_path, [_finding(id="F7")], expect=1)["findings"][0]["id"] == "F7"
