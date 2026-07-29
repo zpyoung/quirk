@@ -98,6 +98,50 @@ Nothing is dropped by that rule — it decides what buys a fix round, not what i
 **`PASS` means no unresolved finding met the blocking bar**, not that the artifact is clean; a
 caller rendering it must show `advisory_count`, `limitations[]`, and `questions[]` beside it.
 
+### How the gate scores evidence
+
+Severity is consequence; confidence is likelihood. The evidence gate moves only confidence, and
+only where proof is required:
+
+- **verified** — evidence re-resolves and includes a `command` or `prepass` item → unchanged.
+- **unverified** — evidence re-resolves, no reproduction → severity unchanged, confidence capped at
+  `LOW`, and only for `CRITICAL`/`HIGH`, which is exactly where reproduction is required. A
+  high-consequence finding nobody can prove survives as `CRITICAL`/`LOW` rather than being
+  downgraded into invisibility.
+- **falsified** — *any* evidence item fails to re-resolve → dropped and counted. One true citation
+  does not shield a fabricated one beside it; evidence that cannot be checked either way counts as
+  holding, so this drops only demonstrable falsehoods.
+
+What "re-resolve" checks, per evidence kind:
+
+| Kind | Checked | Not checked |
+| --- | --- | --- |
+| `file-line`, `quote` | The file exists, and the quote **begins** within the cited line range | Whether it ends there |
+| `absence` | The scope it names exists — a search over a missing file proves nothing | The search is never re-run |
+| `command`, `prepass` | — | Never re-run |
+
+A quote may run past the end of its cited range: reviewers routinely cite where a passage starts and
+undershoot where it stops, and killing those drops real findings without catching anything a
+fabricator would do. A quote that begins *outside* the range is still falsified — that is pointing
+at the wrong place, not measuring it short.
+
+**Only a `stage: "prepass"` finding may claim `prepass` evidence.** That kind means the
+deterministic layer produced it, which is why it counts as reproduction; a reviewer that can
+self-declare it can hold any `CRITICAL`/`HIGH` at full confidence on evidence of its own invention.
+A promote-stage finding carrying `prepass` evidence gets the unverified cap.
+
+Every evidence field must be a non-empty string. Presence is not content: an empty `command`/`output`
+pair would otherwise satisfy the schema and buy reproduction credit, holding a finding at `HIGH`
+confidence on evidence of nothing. A `#fragment` keeps a ref unfalsifiable only when what precedes it
+names no file — `spec#3` is a section, `docs/gone.md#x` is a missing file and is falsified.
+
+A cited range is a claim about location, so citing `src.py:400` for a quote that lives at line 12
+is falsified even though the quote is real. A ref with no anchor makes no such claim and is matched
+against the whole file. **Commands are never re-executed**: running model-supplied shell inside the
+one deterministic stage would make it neither deterministic nor safe. That is a deliberate limit —
+`command` evidence is trusted as written, which is why it grants reproduction credit but cannot be
+falsified here.
+
 ### `NOT_REVIEWABLE` is never a synonym for `PASS`
 
 It means the review did not happen. No reviewer could be reached, or the artifact could not be

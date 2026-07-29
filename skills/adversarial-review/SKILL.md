@@ -50,11 +50,10 @@ Not the commit messages, not the design rationale, not the implementer's account
 approach is right. Criteria — what the artifact was supposed to achieve — are staged verbatim. Every
 other author-supplied context is withheld.
 
-This is why the older prior-art instruction *"Do NOT validate — only critique"* is replaced rather
-than inherited. That phrasing produces **inverse sycophancy**: a critic that manufactures findings
-to appear useful, because it was told validation is not an acceptable output. Noise is the dominant
-failure mode of AI review — 70–90% of findings get ignored as false positives, and teams switch
-gates off over it. Every design choice below is downstream of that number.
+Never instruct a reviewer to *"only critique"*. That produces **inverse sycophancy** — a critic that
+manufactures findings because it was told validation is not an acceptable output. Noise, not
+laxity, is the dominant failure mode of AI review: 70–90% of findings get ignored as false
+positives and teams switch the gate off over it.
 
 ## Data flow
 
@@ -115,9 +114,9 @@ Defaults to a family different from the author's, gates each candidate on `pi-wa
 
 `author_family` resolves in order: the explicit input; else the family in the manifest of the run
 that produced the artifact; else the family of this session. It is matched case- and
-whitespace-insensitively, and an unknown family is **exit 2**, not a silent pass — the whole
-independence guarantee is one string comparison, and a miscased `OpenAI` once matched nothing, left
-the author's own family in the pool, and stamped the result `full`. Exit 1 means no rung resolved —
+whitespace-insensitively, and an unknown family is **exit 2**, not a silent pass: the independence
+guarantee is one string comparison, and a name nothing matches leaves the author's own family in the
+pool while stamping the result `full`. Exit 1 means no rung resolved —
 continue anyway, with `resolved: false`. The gate turns that into `NOT_REVIEWABLE`; do not stop
 here and do not treat it as a pass.
 
@@ -233,11 +232,10 @@ promote proposed.
 | `PASS` | No blocking findings above `LOW` | 0 |
 | `NOT_REVIEWABLE` | No reviewer resolved at any rung, **or** the pre-pass could not run and the artifact's core claims are unfalsifiable | 4 |
 
-**A finding blocks unless it is a promote-only hypothesis.** A `HIGH` or `MEDIUM` that only the
-recall stage ever asserted, at `LOW` confidence, ships as an **advisory**: reported in `findings[]`
-with `blocking: false`, counted in `advisory_count`, and not escalating the verdict. `CRITICAL` is
-exempt — being wrong about possible data loss is the expensive direction. Nothing is dropped by this
-rule; it decides what buys a fix round, not what gets reported.
+**A finding blocks unless it is a promote-only hypothesis** — a `HIGH`/`MEDIUM` at `LOW` confidence
+that only the recall stage asserted ships as an advisory, `blocking: false`, not escalating the
+verdict. `CRITICAL` is exempt. Nothing is dropped; the rule decides what buys a fix round, not what
+gets reported. Full rule in [`assets/composition-contract.md`](assets/composition-contract.md).
 
 **So `PASS` does not mean "clean".** It means *no unresolved finding met the blocking bar under this
 scope and protocol*. Report `advisory_count`, `limitations[]`, and `questions[]` alongside it, or
@@ -249,47 +247,14 @@ examined and nothing was cleared. Handle all four verdicts by name. A caller wri
 
 ### Severity and confidence are independent axes
 
-Severity is consequence; confidence is likelihood. The evidence gate moves only confidence, and
-only where proof is required:
+Severity is consequence; confidence is likelihood. The evidence gate moves only confidence, and only
+where proof is required — a `CRITICAL`/`HIGH` with no reproduction keeps its severity and is capped
+at `LOW` confidence, so a high-consequence finding nobody can prove survives rather than being
+downgraded into invisibility. Evidence that fails to re-resolve falsifies the whole finding.
 
-- **verified** — evidence re-resolves and includes a `command` or `prepass` item → unchanged.
-- **unverified** — evidence re-resolves, no reproduction → severity unchanged, confidence capped at
-  `LOW`, and only for `CRITICAL`/`HIGH`, which is exactly where reproduction is required. A
-  high-consequence finding nobody can prove survives as `CRITICAL`/`LOW` rather than being
-  downgraded into invisibility.
-- **falsified** — *any* evidence item fails to re-resolve → dropped and counted. One true citation
-  does not shield a fabricated one beside it; evidence that cannot be checked either way counts as
-  holding, so this drops only demonstrable falsehoods.
-
-What "re-resolve" checks, per evidence kind:
-
-| Kind | Checked | Not checked |
-| --- | --- | --- |
-| `file-line`, `quote` | The file exists, and the quote **begins** within the cited line range | Whether it ends there |
-| `absence` | The scope it names exists — a search over a missing file proves nothing | The search is never re-run |
-| `command`, `prepass` | — | Never re-run |
-
-A quote may run past the end of its cited range: reviewers routinely cite where a passage starts and
-undershoot where it stops, and killing those drops real findings without catching anything a
-fabricator would do. A quote that begins *outside* the range is still falsified — that is pointing
-at the wrong place, not measuring it short.
-
-**Only a `stage: "prepass"` finding may claim `prepass` evidence.** That kind means the
-deterministic layer produced it, which is why it counts as reproduction; a reviewer that can
-self-declare it can hold any `CRITICAL`/`HIGH` at full confidence on evidence of its own invention.
-A promote-stage finding carrying `prepass` evidence gets the unverified cap.
-
-Every evidence field must be a non-empty string. Presence is not content: an empty `command`/`output`
-pair would otherwise satisfy the schema and buy reproduction credit, holding a finding at `HIGH`
-confidence on evidence of nothing. A `#fragment` keeps a ref unfalsifiable only when what precedes it
-names no file — `spec#3` is a section, `docs/gone.md#x` is a missing file and is falsified.
-
-A cited range is a claim about location, so citing `src.py:400` for a quote that lives at line 12
-is falsified even though the quote is real. A ref with no anchor makes no such claim and is matched
-against the whole file. **Commands are never re-executed**: running model-supplied shell inside the
-one deterministic stage would make it neither deterministic nor safe. That is a deliberate limit —
-`command` evidence is trusted as written, which is why it grants reproduction credit but cannot be
-falsified here.
+What "re-resolve" checks per evidence kind, and the edge cases it deliberately tolerates, are in
+[`assets/composition-contract.md`](assets/composition-contract.md) § How the gate scores evidence.
+Read it when a suppression surprises you; nothing on the dispatch path needs it.
 
 ## Output
 
@@ -312,11 +277,6 @@ top: Step 7's "downgraded" names no axis, so two implementations diverge on whic
 ```
 
 Then the findings array verbatim, then the manifest.
-
-**Watch the kill rate.** `suppressed_count` against the number raised is an integrity signal. A
-near-total kill rate means the promote stage was fabricating and the run itself should not be
-trusted — a `PASS` reached by killing everything is not a `PASS` reached by finding nothing. Say so
-in the summary when you see it.
 
 ## Dispatch
 

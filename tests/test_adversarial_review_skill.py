@@ -558,3 +558,36 @@ def test_the_composition_contract_output_matches_what_the_gate_emits() -> None:
                   "adjudicated_severity", "severity_histogram", "advisory_count"):
         assert field in body, f"contract does not document {field}"
     assert "surviving **severity** only" not in body
+
+
+def test_the_two_claude_facing_docs_do_not_restate_each_other() -> None:
+    """SKILL.md and composition-contract.md drifted apart once already: the verdict
+    rule changed in the script and only SKILL.md was updated, leaving the contract
+    describing behaviour the gate no longer had. Relocating the overlap fixed that
+    instance; this keeps it from growing back. Single shared sentences are fine —
+    consecutive runs mean a passage was copied rather than cross-referenced."""
+    def substantive(line: str) -> bool:
+        line = re.sub(r"\s+", " ", line).strip()
+        return len(line) > 40 and not line.startswith(("|", "-", "*", "#", "```"))
+
+    def normalise(path: Path) -> list[str]:
+        return [re.sub(r"\s+", " ", l).strip() for l in path.read_text().splitlines()]
+
+    skill = normalise(SKILL_PATH)
+    contract = {l for l in normalise(ASSETS_DIR / "composition-contract.md") if substantive(l)}
+
+    runs, current = [], []
+    for index, line in enumerate(skill, start=1):
+        if substantive(line) and line in contract:
+            current.append(index)
+        else:
+            if len(current) >= 2:
+                runs.append((current[0], current[-1]))
+            current = []
+    if len(current) >= 2:
+        runs.append((current[0], current[-1]))
+
+    assert not runs, (
+        f"SKILL.md restates composition-contract.md at line ranges {runs} — "
+        "cross-reference the canonical copy instead of duplicating it"
+    )
