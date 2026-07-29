@@ -1348,8 +1348,11 @@ def test_a_promote_finding_cannot_claim_prepass_evidence(tmp_path):
     """
     faked = _finding(stage="promote", severity="HIGH", confidence="HIGH",
                      evidence=[{"kind": "prepass", "ref": "invented", "output": "anything"}])
-    result = gate(tmp_path, [faked], expect=1, repo_root=tmp_path)
+    result = gate(tmp_path, [faked], expect=0, repo_root=tmp_path)
     assert result["findings"][0]["confidence"] == "LOW"
+    # Stripped of its faked reproduction credit it is a promote-only hypothesis,
+    # so it reports as an advisory rather than buying a fix round.
+    assert result["findings"][0]["blocking"] is False
 
 
 def test_prepass_stage_findings_keep_their_reproduction_credit(tmp_path):
@@ -1781,7 +1784,7 @@ def test_a_quote_citation_with_an_anchor_passes_when_the_quote_is_real(tmp_path)
     _touch(tmp_path / "spec.md", "# Spec\n\nthe real sentence\n")
     good = _finding(evidence=[{"kind": "quote", "ref": "spec.md#intro",
                                "quote": "the real sentence"}])
-    assert gate(tmp_path, [good], expect=1,
+    assert gate(tmp_path, [good], expect=0,
                 extra=("--repo-root", str(tmp_path)))["findings"]
 
 
@@ -1861,7 +1864,7 @@ def test_absence_evidence_with_an_empty_output_field_is_accepted(tmp_path):
     """Empty output IS the claim for an absence — the one place empty is content."""
     f = _finding(evidence=[{"kind": "absence", "command": "grep -r zzz .",
                             "ref": "tests/", "output": ""}])
-    assert gate(tmp_path, [f], expect=1)["findings"]
+    assert gate(tmp_path, [f], expect=0)["findings"]
 
 
 @pytest.mark.parametrize("patch", [{"not": "a diff"}, 42, ["a"], True])
@@ -2053,3 +2056,102 @@ def test_an_empty_bare_array_is_not_a_licence_to_launder_quick_into_standard(tmp
                   "--depth", "standard")
     assert proc.returncode == 2
     assert "quick" in proc.stderr.lower()
+
+
+# ============ severity adjudication and record kinds ==============================
+
+def test_refute_can_downgrade_a_finding_instead_of_only_killing_it(tmp_path):
+    """The structural fix. Promote raises candidates at ~60% confidence under a
+    recall mandate, and the verdict used to read promote's own severity — so refute
+    could uphold, delete, or contest, but never say "real defect, but LOW". Every
+    inflated-but-true finding therefore bought a fix round."""
+    downgraded = _finding(severity="HIGH", confidence="HIGH", stage="refute",
+                          adjudicated_severity="LOW")
+    result = gate(tmp_path, [downgraded], expect=0)
+    assert result["verdict"] == "PASS"
+    assert result["findings"][0]["effective_severity"] == "LOW"
+    assert result["findings"][0]["severity"] == "HIGH", "the proposal is preserved"
+    assert result["regrade_count"] == 1
+
+
+def test_refute_can_also_escalate(tmp_path):
+    escalated = _finding(severity="LOW", confidence="HIGH", stage="refute",
+                         adjudicated_severity="CRITICAL")
+    assert gate(tmp_path, [escalated], expect=3)["verdict"] == "CRITICAL_ISSUES"
+
+
+def test_promote_cannot_grade_its_own_finding(tmp_path):
+    """Otherwise the recall stage keeps the authority this field exists to move."""
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(stage="promote",
+                                                       adjudicated_severity="CRITICAL")]))
+    assert proc.returncode == 2
+    assert "only refute and tiebreak may re-grade" in proc.stderr
+
+
+def test_an_invalid_adjudicated_severity_is_rejected(tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(stage="refute",
+                                                       adjudicated_severity="SEVERE")]))
+    assert proc.returncode == 2
+
+
+def test_a_promote_only_low_confidence_high_is_advisory_not_blocking(tmp_path):
+    """It is still reported. It just does not by itself buy another fix round."""
+    hypothesis = _finding(severity="HIGH", confidence="LOW", stage="promote")
+    result = gate(tmp_path, [hypothesis], expect=0)
+    assert result["verdict"] == "PASS"
+    assert len(result["findings"]) == 1, "advisories are reported, not dropped"
+    assert result["findings"][0]["blocking"] is False
+    assert result["advisory_count"] == 1 and result["blocking_count"] == 0
+
+
+def test_the_same_claim_confirmed_by_refute_does_block(tmp_path):
+    confirmed = _finding(severity="HIGH", confidence="LOW", stage="refute")
+    result = gate(tmp_path, [confirmed], expect=1)
+    assert result["verdict"] == "NEEDS_FIXES"
+    assert result["findings"][0]["blocking"] is True
+
+
+def test_an_unproven_critical_still_blocks(tmp_path):
+    """Consequence, not likelihood: being wrong about possible data loss is the
+    expensive direction, so CRITICAL is exempt from the advisory rule."""
+    result = gate(tmp_path, [_finding(severity="CRITICAL", confidence="LOW",
+                                      stage="promote")], expect=3)
+    assert result["verdict"] == "CRITICAL_ISSUES"
+
+
+def test_a_limitation_is_reported_without_driving_the_verdict(tmp_path):
+    """"The protocol could not evaluate this" is a fact about the review, not a
+    defect in the artifact. Filing it as a finding is how prose review becomes
+    endless — there is always another sentence that could have been clearer."""
+    result = gate(tmp_path, [_finding(kind="limitation", severity="HIGH")], expect=0)
+    assert result["verdict"] == "PASS"
+    assert result["findings"] == []
+    assert len(result["limitations"]) == 1
+
+
+def test_a_question_is_routed_away_from_findings(tmp_path):
+    result = gate(tmp_path, [_finding(kind="question", severity="HIGH")], expect=0)
+    assert result["findings"] == [] and len(result["questions"]) == 1
+
+
+def test_an_unknown_record_kind_is_rejected(tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(kind="nitpick")]))
+    assert proc.returncode == 2
+    assert "invalid kind" in proc.stderr
+
+
+def test_limitations_still_pass_the_evidence_gate(tmp_path):
+    """Routing a record out of the verdict is not a licence to fabricate its citation."""
+    bogus = _finding(kind="limitation",
+                     evidence=[{"kind": "file-line", "ref": "nope.py:1", "quote": "x"}])
+    result = gate(tmp_path, [bogus], expect=0, repo_root=tmp_path)
+    assert result["limitations"] == []
+    assert result["suppressed_count"] == 1
+
+
+def test_the_severity_histogram_reports_adjudicated_grades(tmp_path):
+    findings = [_finding(id="F1", severity="HIGH", stage="refute",
+                         adjudicated_severity="LOW"),
+                _finding(id="F2", severity="MEDIUM", confidence="HIGH")]
+    result = gate(tmp_path, findings, expect=1)
+    assert result["severity_histogram"] == {"MEDIUM": 1, "LOW": 1}

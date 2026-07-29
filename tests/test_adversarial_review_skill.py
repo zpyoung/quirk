@@ -435,7 +435,7 @@ def test_a_tiebreak_can_move_the_severity_it_was_asked_to_adjudicate() -> None:
     assert "set `severity`" in body
     step = SKILL_PATH.read_text()
     step = step[step.index("**8. Tiebreak.**"):]
-    assert "`severity` whenever the ruling" in step[:600]
+    assert "`adjudicated_severity`" in step[:700]
 
 
 def test_the_declared_target_kinds_are_the_ones_the_script_can_produce() -> None:
@@ -461,3 +461,100 @@ def test_the_no_write_invariant_is_qualified_by_the_checks_it_runs() -> None:
     body = SKILL_PATH.read_text()
     assert "Nothing writes\nto the repository." not in body
     assert "as read-only as the commands themselves" in body
+
+
+# ============ severity calibration and self-limiting review =======================
+
+PROSE_PROFILES = ("spec-design", "plan", "prose-claim")
+
+
+@pytest.mark.parametrize("profile", PROFILES)
+def test_every_profile_defines_a_severity_rubric(profile: str) -> None:
+    """Only code-diff had one. A reviewer working on prose had no anchor for what
+    HIGH meant, and returned 5-of-5 HIGH on a round where about two were."""
+    body = (PROFILES_DIR / f"{profile}.md").read_text()
+    for tier in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
+        assert f"`{tier}`" in body, f"{profile} has no {tier} tier"
+
+
+@pytest.mark.parametrize("profile", PROSE_PROFILES)
+def test_every_prose_profile_states_what_is_not_a_finding(profile: str) -> None:
+    """The floor is the point. Without it, "this sentence could be clearer" is a
+    defect, and a prose review has an unbounded supply of those."""
+    body = (PROFILES_DIR / f"{profile}.md").read_text()
+    assert "**Not a finding at all:**" in body
+
+
+@pytest.mark.parametrize("profile", PROSE_PROFILES)
+def test_every_prose_profile_requires_a_witness_above_low(profile: str) -> None:
+    """A grep proving a word is absent does not prove the behavior is unspecified."""
+    body = (PROFILES_DIR / f"{profile}.md").read_text()
+    assert "witness" in body
+    assert "`MEDIUM` or higher must name three things" in body
+
+
+def test_promote_is_told_its_severity_is_a_proposal() -> None:
+    body = (ASSETS_DIR / "promote-prompt.md").read_text()
+    assert "Your severity is a **proposal**" in body
+
+
+def test_promote_offers_limitation_and_question_as_first_class_outcomes() -> None:
+    body = (ASSETS_DIR / "promote-prompt.md").read_text()
+    assert '`"limitation"`' in body and '`"question"`' in body
+    assert "neither counts toward the verdict" in body
+
+
+def test_refute_can_grade_severity_and_is_told_not_to_contest_it() -> None:
+    body = (ASSETS_DIR / "refute-prompt.md").read_text()
+    assert "Set `severity` to what the profile's rubric says" in body
+    assert "A severity disagreement is no longer a reason to contest." in body
+
+
+def test_refute_is_given_the_rubric_without_being_given_the_criteria() -> None:
+    """The criteria stay withheld by design — whether a finding matters to this
+    project is the caller's call. The rubric is a different question and rides in
+    on the profile the stage already receives."""
+    body = (ASSETS_DIR / "refute-prompt.md").read_text()
+    assert "The criteria are **not** staged here" in body
+    assert "{{PROFILE}}`, and it carries the severity rubric" in body
+
+
+def test_pass_is_documented_as_a_bar_not_a_clean_bill_of_health() -> None:
+    body = SKILL_PATH.read_text()
+    assert "does not mean \"clean\"" in body
+    assert "no unresolved finding met the blocking bar" in body.lower()
+
+
+def test_the_skill_gives_callers_a_contract_for_running_rounds() -> None:
+    """It disclaimed round counts and exit conditions while giving the caller nothing
+    to implement them with, so the obvious loop — re-run discovery over a target that
+    just changed — was the one that does not terminate."""
+    body = SKILL_PATH.read_text()
+    section = body[body.index("## Running rounds"):body.index("## Red Flags")]
+    assert 'Do not target "review until clean."' in section
+    for state in ("fixed", "still-open", "regression", "out-of-campaign-scope"):
+        assert state in section
+    assert "new, independently confirmed blockers" in section
+
+
+def test_the_closure_pass_still_reviews_the_fix_delta() -> None:
+    """Freezing the target outright would hide fix-induced regressions — which is
+    exactly how the NO_FINDINGS defect surfaced."""
+    body = SKILL_PATH.read_text()
+    section = body[body.index("## Running rounds"):body.index("## Red Flags")]
+    assert "Fixes introduce defects" in section
+
+
+def test_the_composition_contract_points_callers_at_the_round_protocol() -> None:
+    body = (ASSETS_DIR / "composition-contract.md").read_text()
+    assert "Running rounds" in body
+
+
+def test_the_composition_contract_output_matches_what_the_gate_emits() -> None:
+    """The caller-facing schema is the thing most likely to drift silently, because
+    nothing consumes it mechanically."""
+    body = (ASSETS_DIR / "composition-contract.md").read_text()
+    for field in ("limitations[]", "questions[]", "blocking", "effective_severity",
+                  "adjudicated_severity", "severity_histogram", "advisory_count"):
+        assert field in body, f"contract does not document {field}"
+    assert "surviving **severity** only" not in body

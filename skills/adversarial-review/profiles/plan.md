@@ -32,6 +32,28 @@ would pass on broken work, two "parallel" tasks writing the same file.
 - **Scope the plan silently widens.** A task that touches something the plan's own fences or
   non-goals put off limits.
 
+## Severity
+
+Grade on whether the plan can be *executed*, not on whether it reads well.
+
+| Severity | Means |
+| --- | --- |
+| `CRITICAL` | Executing the plan as written destroys data or ships a security hole. |
+| `HIGH` | A core task is unexecutable as written, the dependency graph cannot complete, or acceptance can pass while the central contract is broken. |
+| `MEDIUM` | A non-core task is underspecified, an error path or rollback is missing, or sequencing costs bounded rework. |
+| `LOW` | Naming, ordering preference, an estimate you doubt, a step that could be clearer. Anything you would not delay the work for. |
+
+**Not a finding at all:**
+
+- A file the plan says a later step creates — unresolved now is correct.
+- A step whose detail an executor can infer uniquely.
+- A different decomposition you would have preferred, absent a concrete failure.
+- Missing detail with no execution consequence you can name.
+
+Every `MEDIUM` or higher must name three things: the criterion violated, a concrete witness (an
+execution trace showing the missing input or dependency, or an implementation satisfying acceptance
+while violating the contract), and the outcome. Without the witness, file a `question`.
+
 ## Evidence rules
 
 Every finding cites the plan, by anchor and by quote:

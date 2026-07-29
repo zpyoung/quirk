@@ -113,7 +113,21 @@ per finding:
 - `id` — leave `null`; the caller assigns and the gate fills in `F1..Fn`. The one exception is a
   dismissed finding you are re-raising with new evidence: reuse its original ID.
 - `severity` is consequence; `confidence` is likelihood. They move independently. A consequence you
-  cannot prove stays at its severity and drops in confidence.
+  cannot prove stays at its severity and drops in confidence. Your severity is a **proposal**: you
+  are raising candidates at a deliberately low bar, so a later stage that attacks the finding
+  settles the grade the verdict is computed from. Propose honestly rather than defensively — you
+  gain nothing by inflating, and a `HIGH` you cannot support is downgraded rather than believed.
+- `kind` — omit it, or `"finding"`, for an actual defect. Two other values exist and using them is
+  not a lesser result:
+  - `"limitation"` — something the protocol could not evaluate. A claim you cannot test with the
+    tools you hold, a surface outside the artifact, a premise that needs a runtime you do not have.
+  - `"question"` — a decision that needs its owner, where more than one answer is defensible and
+    the artifact does not say which was intended.
+
+  Both are reported to the caller; neither counts toward the verdict. **Reach for them.** A review
+  that files every uncertainty as a defect is how prose review becomes endless — there is always
+  another sentence that could have been clearer, and dressing that up as a finding costs the caller
+  a fix round and costs you the reader's trust.
 - `evidence` needs at least one item, and every `ref` and `quote` is re-resolved against the source
   after you report. A quote that drifted by a word does not re-resolve and the finding is dropped
   and counted. Copy; do not paraphrase.

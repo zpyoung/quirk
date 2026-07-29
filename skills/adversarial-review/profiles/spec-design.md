@@ -31,6 +31,28 @@ yes, the spec has a hole, and the hole is the finding.
   cannot be re-evaluated when its premise changes, and is the first thing to be reverted by
   accident.
 
+## Severity
+
+Grade on what happens *downstream* of the spec, not on how the sentence reads.
+
+| Severity | Means |
+| --- | --- |
+| `CRITICAL` | Building to this spec produces data loss, corruption, or a security hole. |
+| `HIGH` | Two competent implementers reading this reach materially different externally observable behavior, or implementation cannot proceed without inventing a contract the spec was supposed to supply. |
+| `MEDIUM` | A real edge case, error path, or migration is unspecified; or a material ambiguity outside the core contract that costs bounded rework. |
+| `LOW` | Editorial drift, a stale name, a harmless inconsistency, a rationale that could be stronger. Anything you would not delay implementation for. |
+
+**Not a finding at all:**
+
+- Wording you would have chosen differently, with no divergent outcome behind it.
+- A detail an implementer can infer uniquely from what *is* written.
+- An artifact the spec says will exist later — that is the spec doing its job.
+- A concern with no identified consumer. Name who is harmed, or drop it.
+
+Every `MEDIUM` or higher must name three things: the contract or criterion violated, a concrete
+witness (the two readings and where they diverge), and the materially different outcome. A finding
+that cannot supply the witness is a `question`, not a defect.
+
 ## Evidence rules
 
 Every finding cites the document, by anchor and by quote:

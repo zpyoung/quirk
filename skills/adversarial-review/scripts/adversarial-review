@@ -852,6 +852,20 @@ SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 CONFIDENCES = ("HIGH", "MEDIUM", "LOW")
 DISPOSITIONS = ("standing", "refuted", "contested")
 STAGES = ("promote", "refute", "tiebreak", "prepass")
+# Promote runs under a recall mandate — it is told to raise a candidate at ~60%
+# confidence because weak candidates are cheap to refute. They are not cheap if
+# they keep their severity, because the verdict is computed from severity: a
+# HIGH the refuter never confirmed still forces NEEDS_FIXES, and the caller
+# spends a fix round on a hypothesis. So severity as promote reports it is a
+# *proposal*. A later stage may replace it here, and the verdict reads this
+# field rather than the one the recall stage owns.
+ADJUDICATED_SEVERITY = "adjudicated_severity"
+# Not every true statement about an artifact is a defect in it. A claim the
+# protocol could not evaluate is a limitation of the review; a decision that
+# needs its owner is a question. Filing either as a finding is how a review of
+# prose becomes unfalsifiable and endless — there is always another sentence
+# that could have been clearer. Only findings drive the verdict.
+RECORD_KINDS = ("finding", "limitation", "question")
 REQUIRED_FIELDS = ("severity", "confidence", "category", "claim", "evidence", "remediation")
 CATEGORY_SHAPE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 # Callers match a re-reported finding to its prior ruling by id, so a malformed
@@ -917,6 +931,26 @@ def validate_finding(finding: Any, index: int, id_prefix: str = "F") -> None:
     disposition = finding.get("disposition", "standing")
     if disposition not in DISPOSITIONS:
         raise UsageError(f"finding {index} has invalid disposition: {disposition}")
+    kind = finding.get("kind", "finding")
+    if kind not in RECORD_KINDS:
+        raise UsageError(
+            f"finding {index} has invalid kind: {kind!r} "
+            f"(expected one of {', '.join(RECORD_KINDS)})"
+        )
+    adjudicated = finding.get(ADJUDICATED_SEVERITY)
+    if adjudicated is not None:
+        if adjudicated not in SEVERITIES:
+            raise UsageError(
+                f"finding {index} has invalid {ADJUDICATED_SEVERITY}: {adjudicated!r}"
+            )
+        # Only a stage that saw the finding independently may re-grade it. Letting
+        # promote stamp its own adjudicated severity would hand the recall stage
+        # the very authority this field exists to take away from it.
+        if finding.get("stage") not in ("refute", "tiebreak"):
+            raise UsageError(
+                f"finding {index} carries {ADJUDICATED_SEVERITY} but its stage is "
+                f"{finding.get('stage')!r}: only refute and tiebreak may re-grade"
+            )
     supplied_id = finding.get("id")
     if supplied_id and not finding_id_shape(id_prefix).match(str(supplied_id)):
         raise UsageError(
@@ -1048,9 +1082,38 @@ def apply_evidence_gate(
     return graded, None
 
 
+def effective_severity(finding: dict[str, Any]) -> str:
+    """The grade the verdict is computed from: whatever a stage that saw the finding
+    independently settled on, else the proposal promote opened with."""
+    return finding.get(ADJUDICATED_SEVERITY) or finding["severity"]
+
+
+def is_blocking(finding: dict[str, Any]) -> bool:
+    """Severe enough to matter, and asserted by someone other than the recall stage.
+
+    Promote is instructed to raise a candidate it is only ~60% sure of, on the
+    theory that weak candidates are cheap to refute. They are cheap to refute and
+    expensive to *keep*: while the verdict read promote's severity directly, a
+    LOW-confidence HIGH that no other stage ever confirmed still forced
+    NEEDS_FIXES, and the caller paid a fix round for a hypothesis. That is the
+    mechanism behind a review loop that never comes back clean. Such a finding is
+    still reported — it is an advisory, not a blocker, and it is not dropped.
+    """
+    severity = effective_severity(finding)
+    if severity not in ("CRITICAL", "HIGH", "MEDIUM"):
+        return False
+    # CRITICAL is the exception. Severity tracks consequence and confidence tracks
+    # likelihood, and a possible data-loss or security claim is worth a fix round
+    # even unproven — the asymmetry of being wrong runs the other way there.
+    if severity == "CRITICAL":
+        return True
+    return not (finding.get("confidence") == "LOW" and finding.get("stage") == "promote")
+
+
 def finding_order(finding: dict[str, Any]) -> tuple[bool, int]:
     """Unfalsifiability is the most actionable thing a review can say, so it leads."""
-    return finding.get("category") != "unfalsifiable-claim", SEVERITIES.index(finding["severity"])
+    return (finding.get("category") != "unfalsifiable-claim",
+            SEVERITIES.index(effective_severity(finding)))
 
 
 def assign_ids(
@@ -1171,6 +1234,8 @@ def run_gate(
     assign_ids(carried_suppressed, id_prefix, {str(f["id"]) for f in merged if f.get("id")})
 
     survivors: list[dict[str, Any]] = []
+    limitations: list[dict[str, Any]] = []
+    questions: list[dict[str, Any]] = []
     contested: list[dict[str, Any]] = []
     suppressed: list[dict[str, str]] = list(carried_suppressed)
 
@@ -1196,35 +1261,74 @@ def run_gate(
             else:
                 suppressed.append({"id": graded["id"], "reason": "refuted"})
             continue
+
+        # A limitation is something the protocol could not evaluate; a question is
+        # a decision that needs its owner. Both are worth reporting and neither is
+        # a defect, so neither reaches the verdict.
+        record_kind = graded.get("kind", "finding")
+        if record_kind == "limitation":
+            limitations.append(graded)
+            continue
+        if record_kind == "question":
+            questions.append(graded)
+            continue
+
+        graded["effective_severity"] = effective_severity(graded)
+        graded["blocking"] = is_blocking(graded)
         survivors.append(graded)
 
     survivors.sort(key=finding_order)
+    limitations.sort(key=finding_order)
+    questions.sort(key=finding_order)
 
-    verdict = compute_verdict(survivors, model, prepass)
+    blocking = [f for f in survivors if f["blocking"]]
+    verdict = compute_verdict(blocking, model, prepass, survivors)
     payload = {
         "verdict": verdict,
         "findings": survivors,
+        "limitations": limitations,
+        "questions": questions,
         "contested": contested,
         "suppressed": suppressed,
         "suppressed_count": len(suppressed),
         "depth": depth,
+        # Telemetry a caller can calibrate on. A run where nothing was ever
+        # re-graded and every survivor shares one severity is a statement about
+        # the reviewer, not about the artifact — but only across runs, which is
+        # why these are counts to accumulate rather than a flag to act on here.
+        "severity_histogram": {
+            level: sum(1 for f in survivors if f["effective_severity"] == level)
+            for level in SEVERITIES
+            if any(f["effective_severity"] == level for f in survivors)
+        },
+        "blocking_count": len(blocking),
+        "advisory_count": len(survivors) - len(blocking),
+        "regrade_count": sum(1 for f in survivors if f.get(ADJUDICATED_SEVERITY)),
     }
     return VERDICT_EXIT[verdict], payload
 
 
 def compute_verdict(
-    survivors: list[dict[str, Any]], model: dict[str, Any], prepass: dict[str, Any]
+    blocking: list[dict[str, Any]], model: dict[str, Any], prepass: dict[str, Any],
+    survivors: list[dict[str, Any]] | None = None,
 ) -> str:
+    """`blocking` is the subset that may escalate; `survivors` is everything reported.
+
+    They differ by the advisories — real findings that no stage beyond promote
+    stood behind. Those still print, and they still say `PASS` is not a clean bill
+    of health, but they do not by themselves buy the caller another fix round.
+    """
     # NOT_REVIEWABLE is evaluated first and is never a synonym for PASS: a review
     # that could not happen must not read like one that found nothing.
     if not model.get("resolved", False):
         return "NOT_REVIEWABLE"
     if prepass.get("status") == "could-not-run" and any(
-        f.get("category") == "unfalsifiable-claim" for f in survivors
+        f.get("category") == "unfalsifiable-claim"
+        for f in (survivors if survivors is not None else blocking)
     ):
         return "NOT_REVIEWABLE"
 
-    severities = {f["severity"] for f in survivors}
+    severities = {effective_severity(f) for f in blocking}
     if "CRITICAL" in severities:
         return "CRITICAL_ISSUES"
     if severities & {"HIGH", "MEDIUM"}:
@@ -1314,6 +1418,16 @@ def build_manifest(
             ],
         },
         "suppressed_count": gate_result.get("suppressed_count", 0),
+        # Calibration telemetry. One run cannot tell you whether a reviewer grades
+        # well — a narrow review may honestly find one class of defect. Accumulated
+        # across runs, a reviewer that never re-grades and never files a limitation
+        # is describing itself rather than the artifacts.
+        "severity_histogram": gate_result.get("severity_histogram", {}),
+        "blocking_count": gate_result.get("blocking_count", 0),
+        "advisory_count": gate_result.get("advisory_count", 0),
+        "regrade_count": gate_result.get("regrade_count", 0),
+        "limitation_count": len(gate_result.get("limitations", [])),
+        "question_count": len(gate_result.get("questions", [])),
         "verdict": gate_result.get("verdict"),
     }
 

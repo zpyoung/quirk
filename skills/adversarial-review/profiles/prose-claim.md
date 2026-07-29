@@ -32,6 +32,28 @@ That changes the standard. A spec may name things that do not exist yet; a READM
 - **The central claim's falsifiability.** Ask early what observation would show this document to be
   wrong. If nothing would, that is the finding.
 
+## Severity
+
+Grade on what happens to a *reader who acts on this*, not on precision for its own sake.
+
+| Severity | Means |
+| --- | --- |
+| `CRITICAL` | A reader following this loses data, exposes a secret, or takes a destructive action. |
+| `HIGH` | A likely reader following the document cannot complete a core task, or is told something false about current state that changes what they do. |
+| `MEDIUM` | A claim is wrong or stale on a non-core path, or an ambiguity sends a reader down a wrong branch they can recover from. |
+| `LOW` | Stale phrasing, a dead link with an obvious replacement, an inconsistency a reader routes around without noticing. |
+
+**Not a finding at all:**
+
+- A sentence that could be more precise but leads a competent reader to the right action.
+- Detail you would have added. Absence is not error.
+- A claim you cannot check — that is a `limitation`, and filing it as a defect is the single
+  fastest way to make a prose review unfalsifiable and endless.
+
+Every `MEDIUM` or higher must name three things: the claim (quoted), a witness that contradicts it
+(an authoritative source or a safely reproduced result), and the reader task that goes wrong.
+A grep proving a word is absent does not prove the behavior is unspecified.
+
 ## Evidence rules
 
 Every finding cites the document and, where the claim concerns the world, the world:

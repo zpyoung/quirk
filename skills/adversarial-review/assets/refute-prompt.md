@@ -11,7 +11,12 @@ The claim and the evidence are what get tested; how the promoter arrived at them
 what to think, and that is exactly what this stage is built to withhold.
 
 The criteria are **not** staged here either. Whether a finding is *real* is a question about the
-artifact and the evidence. Whether it *matters* is the caller's call, made later.
+artifact and the evidence. Whether it *matters to this project* is the caller's call, made later.
+
+You do, however, hold `{{PROFILE}}`, and it carries the severity rubric. Grading a finding against
+that rubric is not the same question as whether the caller cares: it asks how bad this *class* of
+defect is, which is answerable from the artifact alone. You are the first stage that can answer it
+without the promoter's framing, and the verdict is computed from your answer.
 
 ---
 
@@ -92,7 +97,8 @@ and nothing else:
 
 ```json
 [
-  {"id": "F1", "disposition": "standing",  "reason": "Re-ran the cited command; the failure reproduces at that line."},
+  {"id": "F1", "disposition": "standing",  "severity": "HIGH",
+   "reason": "Re-ran the cited command; the failure reproduces at that line."},
   {"id": "F2", "disposition": "refuted",   "reason": "The quoted text is not at path/to/file.py:214; that line is a comment."},
   {"id": "F3", "disposition": "contested", "reason": "The evidence resolves, but the path requires a state the caller cannot construct.",
    "counter_evidence": [{"kind": "file-line", "ref": "path/to/caller.py:40-52", "quote": "the guard, copied exactly"}]}
@@ -102,14 +108,22 @@ and nothing else:
 The three dispositions are not interchangeable, and the difference between the last two is where
 this stage earns its keep:
 
-- **`standing`** — you attacked it and it held. It survives to the evidence gate unchanged.
+- **`standing`** — you attacked it and it held. Set `severity` to what the profile's rubric says
+  this defect is worth, on the evidence that survived your attack. Omit the field only if you
+  genuinely cannot grade it; omitting it leaves the promoter's proposal in force, and the promoter
+  raised this at a low bar without having attacked it. **A true finding at the wrong severity is
+  the common case, and it is the one this field exists for** — before it, a real-but-inflated
+  finding could only be upheld at its inflated grade, contested (and dropped below `deep`), or
+  killed outright, so every one of them bought the caller a fix round.
 - **`refuted`** — you can *demonstrate* it is wrong. The evidence does not re-resolve, the
   reproduction does not reproduce, the premise is false. Dropped at every depth and counted in the
   suppressed total.
-- **`contested`** — the evidence resolves and you disagree on judgment: severity, reachability,
-  whether it matters. Below `deep` depth, refute wins and a contested finding is dropped, so use
-  this honestly rather than as a soft `refuted`. At `deep` depth it goes to a third model family
-  that sees your reason and the original claim side by side.
+- **`contested`** — the evidence resolves and you disagree on judgment: reachability, whether the
+  path is constructible, whether the premise holds. Below `deep` depth, refute wins and a contested
+  finding is dropped, so use this honestly rather than as a soft `refuted`. At `deep` depth it goes
+  to a third model family that sees your reason and the original claim side by side.
+  **A severity disagreement is no longer a reason to contest.** Grade it on `standing` and move on —
+  contesting it below `deep` deletes a real finding over a difference you were equipped to settle.
 
 Give a `reason` for every judgment, including `standing` ones — it is the audit record for why a
 finding lived or died. `counter_evidence` is optional and follows the same evidence schema; supply

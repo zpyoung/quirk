@@ -127,7 +127,15 @@ here and do not treat it as a pass.
 **6. Refute.** Stage `assets/refute-prompt.md` with promote's six claim fields only — `id`,
 `severity`, `confidence`, `category`, `claim`, `evidence[]` — and dispatch **in a fresh context**.
 It returns judgments, not findings. Merge each judgment onto its finding: set `disposition` from
-the judgment and `stage` to `"refute"`. Never let refute rewrite a `claim`.
+the judgment, `stage` to `"refute"`, and — when the judgment carries `severity` — set
+`adjudicated_severity` to it. Never let refute rewrite a `claim`.
+
+That last merge is load-bearing. Promote raises candidates at roughly 60% confidence by design, and
+while the verdict read promote's own `severity`, a real-but-inflated finding could only be upheld at
+the inflated grade, contested (and dropped below `deep`), or killed. Every one of them bought a fix
+round. `adjudicated_severity` is what the verdict is computed from; the promoter's proposal is kept
+beside it so the correction stays visible. The gate rejects it on a `promote`-stage finding — the
+recall stage does not get to grade itself.
 
 Skip this step entirely at `quick` depth — promote already self-refuted.
 
@@ -157,9 +165,10 @@ disagreement, and adjudicating one costs a third dispatch to learn nothing.
 
 **8. Tiebreak.** At `deep` depth only, and only if `gate.json` has a non-empty `contested[]`. Stage
 `assets/tiebreak-prompt.md`, dispatch to a **third** family, merge its rulings onto those findings,
-and re-run `gate`. Merge `disposition` always, and `confidence` and `severity` whenever the ruling
-carries them — a tiebreak that settled a severity dispute has moved the field the verdict is
-computed from, and dropping it re-runs the gate on the label the tiebreak just rejected. Contested findings are withheld from `findings[]` and are not counted as
+and re-run `gate`. Merge `disposition` always, `confidence` when the ruling carries it, and a ruling's
+`severity` onto `adjudicated_severity` — a tiebreak that settled a severity dispute has moved the
+field the verdict is computed from, and dropping it re-runs the gate on the label the tiebreak just
+rejected. Set `stage` to `"tiebreak"`; the gate refuses an adjudicated grade from any other stage. Contested findings are withheld from `findings[]` and are not counted as
 suppressed — ignoring `contested[]` silently drops them.
 
 **The tree must not move between stages.** Every stage judges the artifact `resolve` hashed. Apply a
@@ -213,14 +222,26 @@ can change without touching script behavior.
 
 ## Verdict contract
 
-Computed mechanically from surviving **severity** only. Confidence never affects it.
+Computed mechanically from the **effective severity of the blocking findings**. Effective severity
+is `adjudicated_severity` when a stage that attacked the finding supplied one, else the severity
+promote proposed.
 
 | Verdict | Condition | Exit |
 | --- | --- | --- |
-| `CRITICAL_ISSUES` | Any surviving `CRITICAL` | 3 |
-| `NEEDS_FIXES` | Any surviving `HIGH` or `MEDIUM`, no `CRITICAL` | 1 |
-| `PASS` | Only `LOW` findings survive, or none | 0 |
+| `CRITICAL_ISSUES` | Any blocking `CRITICAL` | 3 |
+| `NEEDS_FIXES` | Any blocking `HIGH` or `MEDIUM`, no `CRITICAL` | 1 |
+| `PASS` | No blocking findings above `LOW` | 0 |
 | `NOT_REVIEWABLE` | No reviewer resolved at any rung, **or** the pre-pass could not run and the artifact's core claims are unfalsifiable | 4 |
+
+**A finding blocks unless it is a promote-only hypothesis.** A `HIGH` or `MEDIUM` that only the
+recall stage ever asserted, at `LOW` confidence, ships as an **advisory**: reported in `findings[]`
+with `blocking: false`, counted in `advisory_count`, and not escalating the verdict. `CRITICAL` is
+exempt — being wrong about possible data loss is the expensive direction. Nothing is dropped by this
+rule; it decides what buys a fix round, not what gets reported.
+
+**So `PASS` does not mean "clean".** It means *no unresolved finding met the blocking bar under this
+scope and protocol*. Report `advisory_count`, `limitations[]`, and `questions[]` alongside it, or
+the reader will hear a completeness guarantee this protocol cannot give.
 
 **`NOT_REVIEWABLE` is never a synonym for `PASS`.** It means the review did not happen — nothing was
 examined and nothing was cleared. Handle all four verdicts by name. A caller writing `if verdict !=
@@ -273,9 +294,11 @@ falsified here.
 ## Output
 
 Render at most **10 lines** of human summary above the findings block. Derive every line of it from
-the two machine outputs: `GateResult` supplies the verdict, the counts by severity, the suppressed
-count, and the highest-severity claim; the **manifest** supplies the reviewer alias, its family, the
-`independence` flag, the depth, and the profile. `GateResult` carries none of the reviewer fields,
+the two machine outputs: `GateResult` supplies the verdict, `severity_histogram`, `blocking_count`,
+`advisory_count`, the suppressed count, and the highest-severity claim; the **manifest** supplies the
+reviewer alias, its family, the `independence` flag, the depth, and the profile. When
+`advisory_count`, `limitations[]`, or `questions[]` are non-empty, say so on their own line — a
+`PASS` printed without them reads as a clean bill of health the protocol did not issue. `GateResult` carries none of the reviewer fields,
 so a summary that tries to source them from it has nothing to read. Take `independence` from the
 manifest specifically, not from `model.json` — the manifest is where a `quick` run is downgraded to
 `reduced`, and quoting the raw model file would over-report the one field the summary exists to
@@ -342,6 +365,41 @@ clean-versus-crashed table, and the tool-grant trade stated plainly.
 
 The caller keeps adjudication, patch application, round counts, and exit conditions. This skill
 reviews once per invocation and returns findings; it does not decide what to do about them.
+
+## Running rounds
+
+The skill reviews once. Callers run it repeatedly, and doing that naively does not terminate — not
+because the artifact is bad, but because each round is a fresh discovery pass over a target that
+just changed. Findings-per-round then measures the *reviewer*, not the artifact, and a caller
+reading it as convergence will keep fixing forever.
+
+**Do not target "review until clean."** Clean implies a completeness guarantee this protocol cannot
+give. Target this instead:
+
+> Review once against a fixed bar, remediate the accepted blockers, then run one bounded closure
+> pass. Stop at a declared cap.
+
+**A campaign holds five things fixed:** the baseline the review is measured from, the criteria, the
+profile, the lens and scope, and the severity rubric. The *snapshot* is expected to move — that is
+what fixing does. Change any of the five and you have started a new campaign, and its yield numbers
+do not continue the old one's.
+
+**Round 1 is discovery.** Every round after it is **closure**, which is a different job:
+
+1. Re-check each accepted finding against the new snapshot — `fixed`, or `still-open`.
+2. Review the fix delta itself for `regression`. Fixes introduce defects; the pass that finds them
+   is the one worth running. Do not skip this to keep the target frozen.
+3. Inspect the contract seams those fixes touched, and nothing else.
+4. Do not reopen the whole artifact. A finding outside the touched scope is
+   `out-of-campaign-scope` — record it, do not fix it in this campaign.
+
+Carry the prior findings in `dismissed[]` with their IDs so a re-report has to bring new evidence.
+
+**Measure marginal yield in new, independently confirmed blockers** — not raw findings. A round that
+returns four advisories and two limitations has converged; a caller counting rows has not noticed.
+Stop when closure is complete, at the declared cap, or when a round adds no confirmed blocker.
+Remaining advisories ship as advisories. Diminishing yield is a cost signal, not proof of
+correctness, so say what the review covered rather than that the artifact is sound.
 
 ## Red Flags
 

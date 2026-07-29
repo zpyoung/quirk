@@ -39,6 +39,13 @@ author's own model in the candidate pool and stamp the result `full`. A caller w
 not one of `anthropic`, `google`, `openai` must pass `other` — naming the gap is the contract, and
 guessing a label the script does not know is a usage error.
 
+**Running more than one round?** Read SKILL.md § Running rounds first. Round 1 is discovery;
+every round after it is a closure pass over the prior findings, the fix delta, and the seams those
+fixes touched — not a fresh discovery pass over a target that just moved. Re-running discovery each
+round makes findings-per-round a measure of the reviewer rather than the artifact, and it does not
+terminate. Hold the baseline, criteria, profile, lens/scope, and rubric fixed for the campaign;
+changing any of them starts a new one.
+
 **`dismissed[]`** carries findings the caller already ruled out this run. The promote stage will not
 re-report one without new evidence; the refute stage kills any that reappear without it. Supply the
 original `id` — a re-report reuses it rather than getting a fresh one, which is what lets a caller
@@ -54,23 +61,42 @@ order, so a suppressed finding leaves a gap in the surviving sequence rather tha
 ```
 {
   verdict          : "PASS" | "NEEDS_FIXES" | "CRITICAL_ISSUES" | "NOT_REVIEWABLE"
-  findings[]       : {id, severity, confidence, category, claim, evidence[], remediation, patch, stage, disposition}
+  findings[]       : {id, severity, adjudicated_severity?, effective_severity, blocking,
+                      confidence, category, kind, claim, evidence[], remediation, patch,
+                      stage, disposition}
+  limitations[]    : Finding    # kind: "limitation" — the protocol could not evaluate it
+  questions[]      : Finding    # kind: "question"   — a decision needing its owner
   contested[]      : Finding    # deep depth only; route these to the tiebreak stage
   suppressed[]     : {id, reason}
   suppressed_count : int
   depth            : str
-  manifest         : { reviewer, target, profile, depth, lens, prepass, suppressed_count, verdict }
+  severity_histogram : {SEVERITY: int}   # by effective severity, survivors only
+  blocking_count   : int
+  advisory_count   : int
+  regrade_count    : int        # findings a later stage re-graded
+  manifest         : { reviewer, target, profile, depth, lens, prepass, verdict,
+                       suppressed_count, severity_histogram, blocking_count,
+                       advisory_count, regrade_count, limitation_count, question_count }
 }
 ```
 
-`verdict` is computed mechanically from surviving **severity** only. Confidence never affects it.
+`verdict` is computed from the **effective severity of the blocking findings**. Effective severity
+is `adjudicated_severity` when a stage that attacked the finding supplied one, else the severity
+promote proposed — promote raises candidates at a deliberately low bar, so it proposes rather than
+decides.
 
 | Verdict | Condition | `gate` exit |
 | --- | --- | --- |
-| `CRITICAL_ISSUES` | Any surviving `CRITICAL` | 3 |
-| `NEEDS_FIXES` | Any surviving `HIGH` or `MEDIUM`, no `CRITICAL` | 1 |
-| `PASS` | Only `LOW` findings survive, or none | 0 |
+| `CRITICAL_ISSUES` | Any blocking `CRITICAL` | 3 |
+| `NEEDS_FIXES` | Any blocking `HIGH` or `MEDIUM`, no `CRITICAL` | 1 |
+| `PASS` | No blocking finding above `LOW` | 0 |
 | `NOT_REVIEWABLE` | No reviewer resolved at any ladder rung, **or** the pre-pass could not run and the artifact's core claims are unfalsifiable | 4 |
+
+A `HIGH` or `MEDIUM` that only the recall stage asserted, at `LOW` confidence, is an **advisory**:
+`blocking: false`, reported in `findings[]`, not escalating the verdict. `CRITICAL` is exempt.
+Nothing is dropped by that rule — it decides what buys a fix round, not what is reported. So
+**`PASS` means no unresolved finding met the blocking bar**, not that the artifact is clean; a
+caller rendering it must show `advisory_count`, `limitations[]`, and `questions[]` beside it.
 
 ### `NOT_REVIEWABLE` is never a synonym for `PASS`
 
