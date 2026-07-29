@@ -39,7 +39,7 @@ Every finding cites the plan, by anchor and by quote:
 | Claim shape | `kind` | Required fields |
 | --- | --- | --- |
 | The plan says something unexecutable or contradictory | `quote` | `ref` = the task heading or line anchor, `quote` = the sentence, copied verbatim |
-| The plan cites something that does not resolve | `file-line` | `ref` = the cited `path:line`, `quote` = the citing sentence |
+| The plan cites something that does not resolve | `quote` + `command` | `quote`: `ref` = the plan's own `path:line`, `quote` = the citing sentence. `command`: the check showing the cited path is not there, with its output |
 | The plan never specifies X | `absence` | `command` = a re-runnable search over the plan, `output` = empty, `ref` = the scope searched |
 | The plan's premise about the tree is false | `command` | `command` = the check you ran, `output` = what it showed |
 
@@ -88,6 +88,8 @@ whatever remains falsifiable. Do not manufacture findings to fill the gap.
 
 ## When you find nothing
 
-Emit `NO_FINDINGS` literally. A plan with no findings is a legitimate outcome; reaching it by not
-looking hard is not. Producing no output at all is a failed dispatch, not a clean review, and the
-caller retries it.
+Emit `[]` — the empty JSON array, matching the output format above. A plan with no findings is a
+legitimate outcome; reaching it by not looking hard is not. Producing no output at all is a failed
+dispatch, not a clean review, and the caller retries it. So is any output that does not parse as
+JSON, which is why the clean result is an empty array and not a word: the caller parses your reply
+before it can read anything you meant by it.

@@ -355,7 +355,7 @@ kind = "prepass"   : ref (check name), output
 `SCHEMA:` ResolveResult
 ```
 profile          : "code-diff" | "spec-design" | "plan" | "prose-claim"
-target_kind      : "git-range" | "worktree" | "path" | "inline"
+target_kind      : "git-range" | "worktree" | "path"
 target_ref       : str
 artifact_hash    : str        # sha256 of content, or resolved git SHA
 size_metric      : int        # changed lines for code, words for prose

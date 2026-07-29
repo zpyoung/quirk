@@ -5,6 +5,10 @@ a changelog entry, a post-mortem, an announcement, or a single claim submitted f
 the catch-all profile and the only one where the document describes **current state** rather than
 intended state.
 
+Every target is a file. A bare claim has no inline input mode — write it to a file and point at
+that. `resolve` classifies anything that is not a git range or the worktree as a path and requires
+it to exist, so passing the claim text itself fails with `target does not exist`.
+
 That changes the standard. A spec may name things that do not exist yet; a README may not. Here,
 "this reference does not resolve" is a defect on its face, not an open question.
 
@@ -36,7 +40,7 @@ Every finding cites the document and, where the claim concerns the world, the wo
 | --- | --- | --- |
 | The document asserts something false | `quote` | `ref` = the section anchor, `quote` = the assertion, copied verbatim |
 | ...and here is what is actually true | `command` | `command` = what you ran, `output` = what it showed |
-| The document cites something that does not exist | `file-line` | `ref` = the cited path, `quote` = the citing sentence |
+| The document cites something that does not exist | `quote` + `command` | `quote`: `ref` = the document's own `path:line`, `quote` = the citing sentence. `command`: the check showing the cited path is not there, with its output |
 | The document never states X | `absence` | `command` = a re-runnable search, `output` = empty, `ref` = the scope searched |
 
 Rows one and two travel together for a factual claim: quote what the document says, then show what
@@ -83,6 +87,8 @@ as written" is the honest and useful answer, and it is treated as a real finding
 
 ## When you find nothing
 
-Emit `NO_FINDINGS` literally. A document with no findings is a legitimate outcome; reaching it by
-not looking hard is not. Producing no output at all is a failed dispatch, not a clean review, and
-the caller retries it.
+Emit `[]` — the empty JSON array, matching the output format above. A document with no findings is
+a legitimate outcome; reaching it by not looking hard is not. Producing no output at all is a failed
+dispatch, not a clean review, and the caller retries it. So is any output that does not parse as
+JSON, which is why the clean result is an empty array and not a word: the caller parses your reply
+before it can read anything you meant by it.

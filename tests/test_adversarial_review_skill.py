@@ -122,10 +122,14 @@ def test_code_diff_profile_retains_location_and_evidence_requirement() -> None:
     assert "will be dropped" in body
 
 
-def test_code_diff_profile_retains_no_findings_token() -> None:
+def test_code_diff_profile_keeps_silence_distinct_from_a_clean_review() -> None:
+    """The distinction SDD's loop depends on. It used to be carried by a literal
+    `NO_FINDINGS` token, which the fourteenth pass found was not JSON and was never
+    normalized anywhere — a clean review that used it came back as a crashed dispatch.
+    The distinction survives; the token it rode in on does not."""
     body = (PROFILES_DIR / "code-diff.md").read_text()
-    assert "NO_FINDINGS" in body
-    assert "Silence is not the same as `NO_FINDINGS`" in body
+    assert "Silence is not the same as `[]`" in body
+    assert "failed dispatch" in body
 
 
 def test_code_diff_profile_retains_all_three_lenses() -> None:
@@ -380,3 +384,80 @@ def test_composition_contract_matches_the_script_on_unknown_families() -> None:
     assert "exit 2" in body
     assert "`other`" in body
     assert "There is no unknown case" not in body
+
+
+# ============ fourteenth review pass ==============================================
+
+@pytest.mark.parametrize("profile", PROFILES)
+def test_a_clean_review_is_instructed_as_json_not_a_bare_token(profile: str) -> None:
+    """Profiles told a clean reviewer to emit `NO_FINDINGS` while the enclosing prompt
+    required `[]`. The token is not JSON and nothing ever normalized it, so a reviewer
+    that followed the profile had its clean review read as a crashed dispatch and
+    retried — the PASS path was unreachable through the staged instructions."""
+    body = (PROFILES_DIR / f"{profile}.md").read_text()
+    assert "NO_FINDINGS" not in body
+    nothing = body[body.index("## When you find nothing"):]
+    assert "[]" in nothing
+
+
+def test_no_asset_promises_a_normalization_that_does_not_exist() -> None:
+    script = (SKILL_DIR / "scripts" / "adversarial-review").read_text()
+    assert "NO_FINDINGS" not in script
+    for asset in ASSETS_DIR.glob("*.md"):
+        assert "NO_FINDINGS" not in asset.read_text(), asset.name
+
+
+@pytest.mark.parametrize("profile", ("plan", "spec-design", "prose-claim"))
+def test_a_missing_citation_is_not_evidenced_by_pairing_it_with_its_own_target(
+    profile: str,
+) -> None:
+    """These profiles instructed `file-line` evidence whose `ref` was the *cited* path
+    and whose `quote` was the sentence doing the citing. The gate opens `ref` and looks
+    for `quote` inside it, so the pairing falsified itself — and did so precisely when
+    the cited path was missing, which is when the finding is true."""
+    body = (PROFILES_DIR / f"{profile}.md").read_text()
+    row = next(line for line in body.splitlines()
+               if "citing sentence" in line and line.startswith("|"))
+    assert "`file-line`" not in row
+    assert "`quote` + `command`" in row
+
+
+def test_the_promote_prompt_states_which_file_a_ref_names() -> None:
+    body = (ASSETS_DIR / "promote-prompt.md").read_text()
+    assert "never the file the quote talks about" in body
+
+
+def test_a_tiebreak_can_move_the_severity_it_was_asked_to_adjudicate() -> None:
+    """tiebreak-prompt.md scopes severity disputes in ("except where severity *is* the
+    disagreement") but its ruling shape carried no severity field, so the verdict was
+    still computed from the label the tiebreak had just rejected."""
+    body = (ASSETS_DIR / "tiebreak-prompt.md").read_text()
+    assert "set `severity`" in body
+    step = SKILL_PATH.read_text()
+    step = step[step.index("**8. Tiebreak.**"):]
+    assert "`severity` whenever the ruling" in step[:600]
+
+
+def test_the_declared_target_kinds_are_the_ones_the_script_can_produce() -> None:
+    """tech.md declared an `inline` kind that classify_target cannot return, and
+    prose-claim.md offered "a single claim submitted for testing" as a use case with
+    no input mode behind it."""
+    import ast
+
+    script = (SKILL_DIR / "scripts" / "adversarial-review").read_text()
+    fn = next(n for n in ast.walk(ast.parse(script))
+              if isinstance(n, ast.FunctionDef) and n.name == "classify_target")
+    produced = {n.value.value for n in ast.walk(fn)
+                if isinstance(n, ast.Return) and isinstance(n.value, ast.Constant)}
+    spec = (REPO_ROOT / "docs/quirk/specs/2026-07-27-adversarial-review/tech.md").read_text()
+    declared = set(re.findall(r'"([a-z-]+)"',
+                              next(line for line in spec.splitlines()
+                                   if line.startswith("target_kind"))))
+    assert declared == produced, f"spec declares {declared}, script produces {produced}"
+
+
+def test_the_no_write_invariant_is_qualified_by_the_checks_it_runs() -> None:
+    """`prepass` shells out to discovered test runners, which drop caches into the tree."""
+    body = SKILL_PATH.read_text()
+    assert "Nothing writes\nto the repository." not in body
+    assert "as read-only as the commands themselves" in body

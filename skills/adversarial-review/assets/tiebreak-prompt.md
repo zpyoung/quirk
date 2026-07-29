@@ -94,8 +94,11 @@ nothing else:
 ```
 
 - **`standing`** — the finding holds. Set `confidence` to what the record supports; omit the field
-  to leave the original confidence unchanged. Severity is not yours to move unless severity was the
-  disagreement, in which case say so in `reason`.
+  to leave the original confidence unchanged. Severity is not yours to move unless severity *was*
+  the disagreement — in which case set `severity` to one of `CRITICAL`, `HIGH`, `MEDIUM`, `LOW` and
+  say why in `reason`. Omit the field in every other case. Recording a severity ruling only in
+  `reason` leaves the verdict computed from the label you just rejected, which is the one outcome
+  adjudicating a severity dispute exists to prevent.
 - **`refuted`** — the refuter was right. The finding is dropped and counted in the suppressed total.
 
 `reason` is required on every ruling. It is the audit record for a decision no other stage will

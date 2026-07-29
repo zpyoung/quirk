@@ -1128,8 +1128,8 @@ def run_gate(
             f"{depth}: a self-refuted report cannot be recorded as independent"
         )
     # A clean review is the one case the shape rule must not catch. Every profile
-    # tells a reviewer that found nothing to emit `NO_FINDINGS`, which the promote
-    # prompt renders as `[]`. An empty report has no findings whose provenance could
+    # tells a reviewer that found nothing to emit an empty JSON array. An empty
+    # report has no findings whose provenance could
     # be misstated, so demanding the quick shape here bought no guarantee and left a
     # clean quick review with no expressible form — PASS became exit 2. A *non-empty*
     # bare array at quick depth still means the self-refute pass never ran.

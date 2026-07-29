@@ -38,7 +38,7 @@ Every finding cites the document, by anchor and by quote:
 | Claim shape | `kind` | Required fields |
 | --- | --- | --- |
 | The document says something wrong or ambiguous | `quote` | `ref` = the section heading or anchor, `quote` = the sentence, copied verbatim |
-| The document names something that does not exist | `file-line` | `ref` = the path or `path:line` cited, `quote` = the citing sentence |
+| The document names something that does not exist | `quote` + `command` | `quote`: `ref` = the document's own `path:line`, `quote` = the citing sentence. `command`: the check showing the named path is not there, with its output |
 | The document never says X | `absence` | `command` = a re-runnable search over the document, `output` = empty, `ref` = the scope searched |
 
 **An absence claim must be re-runnable.** "The spec never defines the error path" is an assertion;
@@ -86,6 +86,8 @@ as written" is a real finding and is treated as one.
 
 ## When you find nothing
 
-Emit `NO_FINDINGS` literally. A spec with no findings is a legitimate outcome; reaching it by not
-looking hard is not. Producing no output at all is a failed dispatch, not a clean review, and the
-caller retries it.
+Emit `[]` — the empty JSON array, matching the output format above. A spec with no findings is a
+legitimate outcome; reaching it by not looking hard is not. Producing no output at all is a failed
+dispatch, not a clean review, and the caller retries it. So is any output that does not parse as
+JSON, which is why the clean result is an empty array and not a word: the caller parses your reply
+before it can read anything you meant by it.

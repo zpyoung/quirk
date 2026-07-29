@@ -111,14 +111,15 @@ one that reports five inventions.
 
 If you find nothing through your lens, emit exactly:
 
-```
-NO_FINDINGS
+```json
+[]
 ```
 
-Emit that token literally. **Silence is not the same as `NO_FINDINGS`** — if you produce no output
-at all, the orchestrator must treat your review as failed and re-run it, because it cannot
-distinguish "found nothing" from "crashed before writing." Say it explicitly.
+**Silence is not the same as `[]`** — if you produce no output at all, the orchestrator must treat
+your review as failed and re-run it, because it cannot distinguish "found nothing" from "crashed
+before writing." Say it explicitly, in the output format above.
 
-`NO_FINDINGS` becomes an empty findings array, and the gate turns that into `PASS` — a real, clean
-review that the caller reads as one. No output at all is a failed dispatch, which the caller
-retries. Keeping the two distinguishable is the whole reason the token is literal.
+An empty array is a real, clean review that the caller reads as one, and the gate turns it into
+`PASS`. No output at all is a failed dispatch, which the caller retries — and so is any reply that
+does not parse as JSON. That is why the clean result is an empty array rather than a word: your
+reply is parsed before it is read, so a bare token meaning "nothing found" arrives as a crash.

@@ -117,6 +117,12 @@ per finding:
 - `evidence` needs at least one item, and every `ref` and `quote` is re-resolved against the source
   after you report. A quote that drifted by a word does not re-resolve and the finding is dropped
   and counted. Copy; do not paraphrase.
+- **A `ref` names the file the `quote` was copied out of** — never the file the quote talks about.
+  The gate opens `ref` and looks for `quote` inside it, so pairing a sentence from a document with
+  the path that sentence *mentions* falsifies your own evidence. To report that something cited does
+  not exist, quote the citing sentence against the citing document, and prove the absence with a
+  separate `command` item. A cited path that is missing is exactly the case where the pairing fails,
+  so this shape suppresses the finding precisely when it is true.
 - `patch` — a unified diff, only for a mechanical fix small enough to be obviously right. `null`
   for every judgment call.
 

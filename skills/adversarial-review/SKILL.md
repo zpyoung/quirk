@@ -63,8 +63,11 @@ SCRIPT="${CLAUDE_PLUGIN_ROOT}/skills/adversarial-review/scripts/adversarial-revi
 WORK="$(mktemp -d)"
 ```
 
-Each subcommand writes exactly one JSON object to stdout. Diagnostics go to stderr. Nothing writes
-to the repository.
+Each subcommand writes exactly one JSON object to stdout. Diagnostics go to stderr. No subcommand
+edits the repository itself — but `prepass` and `select-model` run declared check commands through
+the shell, and those are only as read-only as the commands themselves. The default probes are test
+and lint runners, which routinely drop caches (`.pytest_cache`, `.coverage`) into the tree. Treat
+`--check-cmd` as trusted input: it is executed verbatim.
 
 **1–2. Resolve the target and select the profile.**
 
@@ -154,7 +157,9 @@ disagreement, and adjudicating one costs a third dispatch to learn nothing.
 
 **8. Tiebreak.** At `deep` depth only, and only if `gate.json` has a non-empty `contested[]`. Stage
 `assets/tiebreak-prompt.md`, dispatch to a **third** family, merge its rulings onto those findings,
-and re-run `gate`. Contested findings are withheld from `findings[]` and are not counted as
+and re-run `gate`. Merge `disposition` always, and `confidence` and `severity` whenever the ruling
+carries them — a tiebreak that settled a severity dispute has moved the field the verdict is
+computed from, and dropping it re-runs the gate on the label the tiebreak just rejected. Contested findings are withheld from `findings[]` and are not counted as
 suppressed — ignoring `contested[]` silently drops them.
 
 **The tree must not move between stages.** Every stage judges the artifact `resolve` hashed. Apply a
