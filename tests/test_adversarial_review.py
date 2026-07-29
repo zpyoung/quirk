@@ -341,6 +341,40 @@ def test_staged_new_file_is_visible_before_the_first_commit(tmp_path):
     assert resolve("--target", "WORKTREE", "--repo-root", str(tmp_path))["size_metric"] == 2
 
 
+def test_headings_inside_a_code_fence_do_not_satisfy_required_sections(tmp_path):
+    """Showing `## Purpose` in a sample block is not declaring the section.
+
+    Raised in the very first review pass and left unfixed until the eighth.
+    """
+    doc = _touch(tmp_path / "logic.md",
+                 "# Title\n\n```markdown\n## Purpose\n## Scope\n## Decisions Locked\n```\n\n"
+                 "Body text with no references.\n")
+    result = prepass("--profile", "spec-design", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert result["status"] == "fail"
+    section = next(c for c in result["checks"] if c["name"] == "section-coverage")
+    assert section["status"] == "fail"
+
+
+def test_real_headings_outside_a_fence_still_satisfy_required_sections(tmp_path):
+    doc = _touch(tmp_path / "logic.md",
+                 "# Title\n\n## Purpose\nwhy\n\n## Scope\nwhat\n\n## Decisions Locked\nchoices\n\n"
+                 "```python\n# not a heading\n```\n")
+    assert prepass("--profile", "spec-design", "--target", str(doc),
+                   "--repo-root", str(tmp_path))["status"] == "pass"
+
+
+def test_untracked_files_with_non_ascii_names_are_included(tmp_path):
+    """git C-quotes them; the quoted string is not a path any command can open."""
+    _git_repo(tmp_path)
+    (tmp_path / "seed.txt").write_text("x\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
+    (tmp_path / "café.py").write_text("def f():\n    return 1\n")
+    result = resolve("--target", "WORKTREE", "--repo-root", str(tmp_path))
+    assert result["size_metric"] == 2, "C-quoted filename dropped from the artifact"
+
+
 def test_a_backticked_token_does_not_suppress_the_same_named_link(tmp_path):
     """Two different claims about the same text; only the link is unambiguous."""
     doc = _touch(tmp_path / "notes.md",
@@ -966,6 +1000,31 @@ def test_a_model_claiming_resolved_must_actually_name_a_reviewer(tmp_path, model
     proc = run_ar("gate", *_inputs(tmp_path, [], model=model))
     assert proc.returncode == 2
     assert "adversarial-review:" in proc.stderr
+
+
+@pytest.mark.parametrize("bad", [{}, {"unrelated": "object"}, {"status": "pass"}])
+def test_a_prepass_that_never_ran_cannot_supply_a_clean_result(tmp_path, bad):
+    """An empty object defaults to no findings — the shape of a clean pre-pass."""
+    proc = run_ar("gate", "--findings", _write(tmp_path, "f.json", []),
+                  "--model", _write(tmp_path, "m.json", {
+                      "resolved": True, "alias": "codex", "family": "openai",
+                      "provider": "openai-codex", "model": "gpt-5.6-sol",
+                      "thinking": "high", "independence": "full", "ladder": []}),
+                  "--prepass", _write(tmp_path, "p.json", bad))
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
+
+
+def test_duplicate_caller_supplied_ids_are_rejected(tmp_path):
+    """IDs match a finding to its prior ruling; an ambiguous one must not pass.
+
+    Silently renumbering would be worse than failing — it breaks the match a
+    caller relies on across rounds.
+    """
+    findings = [_finding(id="F1", severity="HIGH"), _finding(id="F1", severity="MEDIUM")]
+    proc = run_ar("gate", *_inputs(tmp_path, findings))
+    assert proc.returncode == 2
+    assert "duplicate ids" in proc.stderr
 
 
 def test_an_unresolved_model_needs_no_reviewer_fields(tmp_path):
@@ -1647,3 +1706,57 @@ def test_manifest_fails_cleanly_on_a_missing_input(tmp_path):
     assert proc.returncode == 2
     assert "adversarial-review:" in proc.stderr
 
+
+
+# ============ eighth review pass ==================================================
+
+@pytest.mark.parametrize("target", ["vendor/plans/notes.md", "third_party/adr/notes.md"])
+def test_a_nested_plans_or_adr_directory_does_not_hijack_the_profile(target, tmp_path):
+    """Detection is specified as docs/plans/ and docs/adr/, not any directory so named."""
+    _touch(tmp_path / target, "# Notes\n")
+    assert resolve("--target", target, "--repo-root", str(tmp_path))["profile"] == "prose-claim"
+
+
+@pytest.mark.parametrize("target", ["docs/plans/p.md", "docs/adr/0001-x.md"])
+def test_the_documented_plan_and_adr_locations_still_detect(target, tmp_path):
+    _touch(tmp_path / target, "# X\n")
+    expected = "plan" if "plans" in target else "spec-design"
+    assert resolve("--target", target, "--repo-root", str(tmp_path))["profile"] == expected
+
+
+@pytest.mark.parametrize("suffix", [".c", ".h", ".cpp", ".hpp", ".cc", ".m", ".swift", ".kt",
+                                    ".php", ".cs", ".scala", ".ex", ".erl", ".lua", ".pl", ".r"])
+def test_unresolved_source_references_are_not_silently_skipped(suffix, tmp_path):
+    """An unrecognized suffix meant the token was not a reference at all — a false pass."""
+    doc = _touch(tmp_path / "notes.md", f"See `src/missing{suffix}`.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert any(f"missing{suffix}" in f["evidence"][0]["ref"] for f in result["findings"])
+
+
+def test_a_markdown_link_to_a_directory_is_not_a_resolved_file_reference(tmp_path):
+    (tmp_path / "somedir").mkdir()
+    doc = _touch(tmp_path / "doc.md", "See [d](./somedir).\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert any("somedir" in f["evidence"][0]["ref"] for f in result["findings"])
+
+
+def test_a_backticked_directory_path_still_resolves(tmp_path):
+    """Prose legitimately names directories; only link targets must be files."""
+    (tmp_path / "somedir").mkdir()
+    doc = _touch(tmp_path / "doc.md", "Files live under `somedir/`.\n")
+    assert prepass("--profile", "prose-claim", "--target", str(doc),
+                   "--repo-root", str(tmp_path))["findings"] == []
+
+
+@pytest.mark.parametrize("category", ["Not Kebab Case", "has_underscores", "x" * 41, ""])
+def test_a_category_violating_the_schema_is_rejected(category, tmp_path):
+    """The gate emitted these unchanged, so a caller keying on category got garbage."""
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(category=category)]))
+    assert proc.returncode == 2
+    assert "category" in proc.stderr
+
+
+def test_a_valid_kebab_category_is_accepted(tmp_path):
+    assert gate(tmp_path, [_finding(category="missing-error-path")], expect=1)["findings"]

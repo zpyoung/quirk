@@ -48,7 +48,12 @@ AUTHOR_FAMILIES = {"anthropic", "openai", "google", "other"}
 SPEC_DESIGN_NAMES = {"logic.md", "tech.md"}
 SPEC_DESIGN_HINT = re.compile(r"(spec|design)", re.IGNORECASE)
 PLAN_HINT = re.compile(r"^plan", re.IGNORECASE)
-SOURCE_SUFFIXES = {".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".rb", ".java", ".sh"}
+SOURCE_SUFFIXES = {
+    ".py", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".go", ".rs", ".rb", ".java",
+    ".sh", ".bash", ".zsh", ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".m", ".mm",
+    ".swift", ".kt", ".kts", ".php", ".cs", ".scala", ".ex", ".exs", ".erl", ".lua",
+    ".pl", ".pm", ".r", ".jl", ".dart", ".sql", ".json", ".toml", ".yaml", ".yml",
+}
 
 
 class UsageError(Exception):
@@ -65,18 +70,30 @@ def classify_target(target: str) -> str:
     return "path"
 
 
+def under(path: Path, *segments: str) -> bool:
+    """True when the path contains the segments consecutively.
+
+    Detection is specified as `docs/plans/` and `docs/adr/`. Matching a bare
+    directory name anywhere would let a vendored `plans/` folder change which
+    attack surface a document is reviewed against.
+    """
+    parts = path.parts
+    return any(parts[i:i + len(segments)] == segments
+               for i in range(len(parts) - len(segments) + 1))
+
+
 def detect_profile(target: str, target_kind: str) -> str:
     """First match wins. Order is the specification, not an optimization."""
     if target_kind in ("git-range", "worktree"):
         return "code-diff"
 
     path = Path(target)
-    parts = set(path.parts)
     name = path.name
 
-    if "plans" in parts or PLAN_HINT.match(name):
+    if under(path, "docs", "plans") or PLAN_HINT.match(name):
         return "plan"
-    if name in SPEC_DESIGN_NAMES or "adr" in parts or SPEC_DESIGN_HINT.search(name):
+    if name in SPEC_DESIGN_NAMES or under(path, "docs", "adr") \
+            or SPEC_DESIGN_HINT.search(name):
         return "spec-design"
     if path.suffix == ".md":
         return "prose-claim"
@@ -143,8 +160,12 @@ def untracked_diff(repo_root: Path) -> str:
     keeps ignored files out, since those are not work under review.
     """
     try:
+        # `-z` because git C-quotes any path it considers unusual — `café.py` comes
+        # back as `"caf\303\251.py"`, and passing that literal to `git diff` fails
+        # with exit 1, which is indistinguishable from "no difference". The file
+        # then vanishes from the artifact without a word.
         listing = subprocess.run(
-            ["git", "ls-files", "--others", "--exclude-standard"],
+            ["git", "ls-files", "-z", "--others", "--exclude-standard"],
             cwd=repo_root, capture_output=True, text=True, errors="replace",
         )
     except OSError as exc:
@@ -159,7 +180,7 @@ def untracked_diff(repo_root: Path) -> str:
         )
 
     parts: list[str] = []
-    for relative in listing.stdout.splitlines():
+    for relative in listing.stdout.split("\0"):
         if not relative.strip():
             continue
         # `--no-index` against /dev/null renders a new file as an all-added diff.
@@ -426,7 +447,7 @@ def looks_like_path(token: str) -> bool:
 
 def resolve_reference(
     kind: str, token: str, repo_root: Path, doc_dir: Path | None = None,
-    doc_path: Path | None = None,
+    doc_path: Path | None = None, is_link: bool = False,
 ) -> tuple[bool, str]:
     if kind == "url":
         return True, "skipped (no network I/O)"
@@ -436,17 +457,25 @@ def resolve_reference(
         bare = strip_line_anchor(token.split("#", 1)[0])
         if not bare:
             return True, "in-document anchor (names no file)"
+        # A markdown link is a navigation promise: following it must land on a
+        # document. Prose in backticks legitimately names a directory, so only the
+        # link form demands a file.
+        exists = Path.is_file if is_link else Path.exists
+        wanted = "file" if is_link else "path"
         candidate = Path(bare)
         if candidate.is_absolute():
-            return (True, "exists") if candidate.exists() else (False, "no such absolute path")
+            return ((True, "exists") if exists(candidate)
+                    else (False, f"no such absolute {wanted}"))
         # A document's own relative links resolve against the document, not the
         # repo root — `logic.md` in a spec means its sibling.
         bases = [doc_dir, repo_root] if doc_dir is not None else [repo_root]
         for base in bases:
-            if (base / bare).exists():
+            if exists(base / bare):
                 rel = "document directory" if base is doc_dir else "repository root"
                 return True, f"exists (relative to {rel})"
-        return False, "no such path relative to the document or the repository root"
+        if is_link and any((base / bare).is_dir() for base in bases):
+            return False, "link target is a directory, not a document"
+        return False, f"no such {wanted} relative to the document or the repository root"
     if kind == "command":
         binary = token.split()[0]
         if shutil.which(binary) is not None:
@@ -504,7 +533,7 @@ def check_references(
         kind = classify_reference(token, is_link)
         if kind is None:
             continue
-        ok, detail = resolve_reference(kind, token, repo_root, doc_dir, doc_path)
+        ok, detail = resolve_reference(kind, token, repo_root, doc_dir, doc_path, is_link)
         lines.append(f"{'ok' if ok else 'MISSING'} {kind} {token} — {detail}")
         if not ok:
             findings.append(prepass_finding(token, kind, detail, profile))
@@ -580,6 +609,27 @@ def prepass_finding(token: str, kind: str, detail: str, profile: str) -> dict[st
     }
 
 
+def outside_code_fences(text: str) -> list[str]:
+    """Lines that are prose, not fenced sample content.
+
+    A spec that *shows* `## Purpose` inside a ```markdown block has not declared
+    that section. Counting it means a document missing every required heading
+    passes the one check that is supposed to be true by construction.
+    """
+    lines: list[str] = []
+    fence: str | None = None
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if fence is None:
+            if stripped.startswith("```") or stripped.startswith("~~~"):
+                fence = stripped[:3]
+                continue
+            lines.append(line)
+        elif stripped.startswith(fence):
+            fence = None
+    return lines
+
+
 def check_sections(text: str, profile: str) -> dict[str, Any]:
     required = REQUIRED_HEADINGS.get(profile, ())
     if not required:
@@ -592,7 +642,7 @@ def check_sections(text: str, profile: str) -> dict[str, Any]:
         }
 
     headings = "\n".join(
-        line for line in text.splitlines() if line.lstrip().startswith("#")
+        line for line in outside_code_fences(text) if line.lstrip().startswith("#")
     )
     missing = [
         group for group in required
@@ -752,6 +802,7 @@ CONFIDENCES = ("HIGH", "MEDIUM", "LOW")
 DISPOSITIONS = ("standing", "refuted", "contested")
 STAGES = ("promote", "refute", "tiebreak", "prepass")
 REQUIRED_FIELDS = ("severity", "confidence", "category", "claim", "evidence", "remediation")
+CATEGORY_SHAPE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 REPRODUCTION_KINDS = ("command", "prepass")
 PROOF_REQUIRED = ("CRITICAL", "HIGH")
 
@@ -797,6 +848,15 @@ def validate_finding(finding: Any, index: int) -> None:
         raise UsageError(f"finding {index} has invalid severity: {finding['severity']}")
     if finding["confidence"] not in CONFIDENCES:
         raise UsageError(f"finding {index} has invalid confidence: {finding['confidence']}")
+    # Callers key on category to group and route findings, so an unconstrained
+    # value propagates straight into their logic.
+    category = finding["category"]
+    if not isinstance(category, str) or len(category) > 40 \
+            or not CATEGORY_SHAPE.match(category):
+        raise UsageError(
+            f"finding {index} has invalid category: {category!r} "
+            f"(kebab-case, 1-40 chars)"
+        )
     disposition = finding.get("disposition", "standing")
     if disposition not in DISPOSITIONS:
         raise UsageError(f"finding {index} has invalid disposition: {disposition}")
@@ -925,7 +985,15 @@ def assign_ids(
     `reserved` carries IDs that appear nowhere in `findings` but must not be reused —
     quick mode's carried suppressions, which are already spoken for.
     """
-    taken = {f["id"] for f in findings if f.get("id")} | (reserved or set())
+    supplied = [f["id"] for f in findings if f.get("id")]
+    duplicates = sorted({i for i in supplied if supplied.count(i) > 1})
+    if duplicates:
+        # Renumbering silently would be worse: IDs are how a caller matches a
+        # finding to its prior ruling across rounds, so an ambiguous one has to be
+        # reported rather than guessed at.
+        raise UsageError(f"findings carry duplicate ids: {', '.join(duplicates)}")
+
+    taken = set(supplied) | (reserved or set())
     next_number = 1
     for finding in findings:
         if finding.get("id"):
@@ -957,6 +1025,14 @@ def run_gate(
                 f"model input claims resolved but names no reviewer: missing "
                 f"{', '.join(missing)}"
             )
+    # Same reasoning on the other required input: an empty or unrelated object
+    # defaults to `status` absent and `findings` empty, which is the shape of a
+    # clean pre-pass. A pre-pass that never ran must not supply one.
+    missing_prepass = [f for f in ("status", "checks", "findings") if f not in prepass]
+    if missing_prepass:
+        raise UsageError(
+            f"prepass input is not a prepass result: missing {', '.join(missing_prepass)}"
+        )
 
     # `quick` runs both stages in one reply and reports {findings, suppressed}. Its
     # self-refuted list is carried through rather than dropped: suppressed_count is
