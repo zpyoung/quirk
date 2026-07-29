@@ -1998,3 +1998,58 @@ def test_a_supplied_finding_id_violating_the_schema_is_rejected(bad_id, tmp_path
 def test_a_valid_supplied_id_is_preserved(tmp_path):
     """Dismissed findings reuse their original ID across rounds — that must survive."""
     assert gate(tmp_path, [_finding(id="F7")], expect=1)["findings"][0]["id"] == "F7"
+
+
+# ============ thirteenth review pass ==============================================
+
+def test_a_clean_quick_review_is_accepted_as_a_bare_empty_array(tmp_path):
+    """Regression from the twelfth pass. Every profile tells a reviewer that found
+    nothing to emit NO_FINDINGS, and promote-prompt.md turns that into `[]`. Making
+    quick depth demand the {findings, suppressed} shape left a clean quick review
+    with no expressible form at all: the one verdict the protocol most needs to be
+    able to reach became exit 2."""
+    proc = run_ar("gate", *_inputs(tmp_path, []), "--depth", "quick")
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout)
+    assert result["verdict"] == "PASS"
+    assert result["depth"] == "quick"
+
+
+def test_a_non_empty_bare_array_is_still_rejected_at_quick_depth(tmp_path):
+    """The provenance rule still binds where it can be violated: a quick report with
+    findings and no suppressed list never ran the self-refute pass."""
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding()]), "--depth", "quick")
+    assert proc.returncode == 2
+    assert "quick" in proc.stderr.lower()
+
+
+def test_an_empty_quick_shaped_report_is_still_accepted(tmp_path):
+    proc = run_ar("gate",
+                  "--findings", _write(tmp_path, "f.json",
+                                       {"findings": [], "suppressed": []}),
+                  "--model", _write(tmp_path, "m.json",
+                                    {"resolved": True, "alias": "codex", "family": "openai",
+                                     "provider": "p", "model": "m", "thinking": "high",
+                                     "independence": "full", "ladder": []}),
+                  "--prepass", _write(tmp_path, "p.json",
+                                      {"status": "pass", "checks": [], "findings": []}),
+                  "--depth", "quick")
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["verdict"] == "PASS"
+
+
+def test_an_empty_bare_array_is_not_a_licence_to_launder_quick_into_standard(tmp_path):
+    """Empty is accepted at quick because nothing can be misattributed; the reverse
+    direction — quick-shaped input at standard depth — stays closed."""
+    proc = run_ar("gate",
+                  "--findings", _write(tmp_path, "f.json",
+                                       {"findings": [], "suppressed": []}),
+                  "--model", _write(tmp_path, "m.json",
+                                    {"resolved": True, "alias": "codex", "family": "openai",
+                                     "provider": "p", "model": "m", "thinking": "high",
+                                     "independence": "full", "ladder": []}),
+                  "--prepass", _write(tmp_path, "p.json",
+                                      {"status": "pass", "checks": [], "findings": []}),
+                  "--depth", "standard")
+    assert proc.returncode == 2
+    assert "quick" in proc.stderr.lower()

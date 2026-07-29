@@ -32,8 +32,12 @@ stages the author's rationale has disabled the mechanism, not enriched it.
 
 **`author_family` resolves in this order:** the explicit input; else the family recorded in the
 manifest of the run that produced the artifact, when one exists; else the family of the invoking
-session. There is no unknown case — a wrong guess degrades to `independence: "reduced"` rather than
-to a silent same-family review.
+session. A *wrong* guess among the known families degrades to `independence: "reduced"` rather than
+to a silent same-family review. An *unrecognized* string is **exit 2**, not a degrade: the whole
+independence guarantee is one string comparison, and a family nothing matches would leave the
+author's own model in the candidate pool and stamp the result `full`. A caller whose producer is
+not one of `anthropic`, `google`, `openai` must pass `other` — naming the gap is the contract, and
+guessing a label the script does not know is a usage error.
 
 **`dismissed[]`** carries findings the caller already ruled out this run. The promote stage will not
 re-report one without new evidence; the refute stage kills any that reappear without it. Supply the

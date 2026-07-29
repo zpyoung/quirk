@@ -268,9 +268,14 @@ falsified here.
 ## Output
 
 Render at most **10 lines** of human summary above the findings block. Derive every line of it from
-`GateResult` — verdict, reviewer alias and its `independence` flag, counts by severity, suppressed
-count, the highest-severity claim. **Never author the summary independently**; a hand-written
-summary and a machine-computed findings block drift, and the reader trusts the wrong one.
+the two machine outputs: `GateResult` supplies the verdict, the counts by severity, the suppressed
+count, and the highest-severity claim; the **manifest** supplies the reviewer alias, its family, the
+`independence` flag, the depth, and the profile. `GateResult` carries none of the reviewer fields,
+so a summary that tries to source them from it has nothing to read. Take `independence` from the
+manifest specifically, not from `model.json` — the manifest is where a `quick` run is downgraded to
+`reduced`, and quoting the raw model file would over-report the one field the summary exists to
+qualify. **Never author the summary independently**; a hand-written summary and a machine-computed
+findings block drift, and the reader trusts the wrong one.
 
 ```
 NEEDS_FIXES — 4 findings (1 HIGH, 2 MEDIUM, 1 LOW), 3 suppressed
@@ -316,6 +321,13 @@ as failed output only if what is inside does not parse.
 emits `[]`; one that produced no output at all failed. Retry once, then walk the ladder, then block.
 This holds no matter how many times that reviewer has come back empty — an established pattern of
 empty output is evidence the reviewer is broken, not evidence the artifact is clean.
+
+**Output that does not parse takes the same path.** Unparseable is a failed dispatch, not an empty
+one: retry once, then walk the ladder, then block — never hand-repair the JSON. Editing a reviewer's
+malformed reply into shape makes the orchestrator a silent co-author of the findings it is supposed
+to be merely transporting, and a truncated reply repaired this way loses whatever it was cut off
+mid-sentence about. Reviewers do emit malformed JSON in practice; treat it as the reviewer failing,
+which is what it is.
 
 ## Composing this skill
 

@@ -1127,10 +1127,16 @@ def run_gate(
             f"findings are quick-shaped ({{findings, suppressed}}) but --depth is "
             f"{depth}: a self-refuted report cannot be recorded as independent"
         )
-    if depth == "quick" and not quick_shaped:
+    # A clean review is the one case the shape rule must not catch. Every profile
+    # tells a reviewer that found nothing to emit `NO_FINDINGS`, which the promote
+    # prompt renders as `[]`. An empty report has no findings whose provenance could
+    # be misstated, so demanding the quick shape here bought no guarantee and left a
+    # clean quick review with no expressible form — PASS became exit 2. A *non-empty*
+    # bare array at quick depth still means the self-refute pass never ran.
+    if depth == "quick" and not quick_shaped and findings:
         raise UsageError(
             "--depth quick expects the quick-shaped {findings, suppressed} report "
-            "that promote-prompt.md specifies, not a bare array"
+            "that promote-prompt.md specifies, not a bare array of findings"
         )
     if isinstance(findings, dict):
         carried = findings.get("suppressed", [])

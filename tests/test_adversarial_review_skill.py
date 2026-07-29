@@ -325,3 +325,58 @@ def test_sdd_reviewer_prompt_is_now_a_delegation_pointer() -> None:
 def test_sdd_integration_list_names_the_skill() -> None:
     body = SDD_SKILL.read_text()
     assert "**quirk:adversarial-review**" in body
+
+
+# ============ thirteenth review pass ==============================================
+
+def test_the_summary_names_the_manifest_as_the_source_of_reviewer_fields() -> None:
+    """GateResult carries verdict/findings/contested/suppressed/suppressed_count/depth
+    and no reviewer identity at all. Telling the operator to derive the reviewer line
+    from it, while forbidding a hand-written summary, described an impossible step."""
+    body = SKILL_PATH.read_text()
+    output = body[body.index("## Output"):]
+    assert "manifest" in output
+    assert "independence" in output
+    assert "`GateResult` carries none of the reviewer fields" in output
+
+
+def test_gate_result_really_does_lack_the_reviewer_fields() -> None:
+    """Guards the claim above against the script growing them later and the prose
+    quietly becoming wrong in the other direction."""
+    import ast
+
+    script = (SKILL_DIR / "scripts" / "adversarial-review").read_text()
+    fn = next(n for n in ast.walk(ast.parse(script))
+              if isinstance(n, ast.FunctionDef) and n.name == "run_gate")
+    assign = next(n for n in ast.walk(fn)
+                  if isinstance(n, ast.Assign)
+                  and isinstance(n.value, ast.Dict)
+                  and any(getattr(t, "id", "") == "payload" for t in n.targets))
+    assert isinstance(assign.value, ast.Dict)
+    keys = {k.value for k in assign.value.keys if isinstance(k, ast.Constant)}
+    assert not keys & {"reviewer", "alias", "independence", "profile"}
+
+
+def test_unparseable_reviewer_output_has_a_stated_recovery() -> None:
+    """The Dispatch section classified it as failed output but stated the retry ladder
+    only for the empty case, leaving a defined failure with no defined response."""
+    dispatch = SKILL_PATH.read_text()
+    dispatch = dispatch[dispatch.index("## Dispatch"):]
+    assert "does not parse takes the same path" in dispatch
+    assert "never hand-repair" in dispatch
+
+
+def test_code_diff_profile_covers_a_whole_file_target() -> None:
+    """`code-diff` is the catch-all, so a source-file path lands here with no diff to
+    scope against; without this case the staged profile said to review nothing."""
+    body = (PROFILES_DIR / "code-diff.md").read_text()
+    assert "single source file" in body
+    assert "whole file is the artifact" in body
+
+
+def test_composition_contract_matches_the_script_on_unknown_families() -> None:
+    """The caller-facing contract promised a graceful degrade where the script exits 2."""
+    body = (ASSETS_DIR / "composition-contract.md").read_text()
+    assert "exit 2" in body
+    assert "`other`" in body
+    assert "There is no unknown case" not in body

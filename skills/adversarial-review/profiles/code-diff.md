@@ -5,6 +5,13 @@ patch. Code outside the diff is context you may read but must not review. A find
 diff did not touch is project backlog, not a review finding, and filing it as one buys a fix cycle
 on work nobody asked for.
 
+**When the target is a single source file rather than a diff**, this profile is still the right one
+— it is the catch-all for anything code-shaped — and the whole file is the artifact, as though every
+line had just been added. The scope rule above is unchanged in spirit: review that file, and treat
+everything it merely calls or imports as context. Without this case stated, a path target staged a
+profile that scoped the review to changed lines when no diff existed, which reads as an instruction
+to review nothing.
+
 ## Attack surface
 
 The mandate is open unless a lens was supplied. When one was, review **only** through that lens —
