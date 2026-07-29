@@ -1874,3 +1874,64 @@ def test_a_patch_that_is_not_a_diff_string_or_null_is_rejected(patch, tmp_path):
 def test_a_string_patch_and_a_null_patch_are_both_accepted(tmp_path):
     assert gate(tmp_path, [_finding(patch=None)], expect=1)["findings"]
     assert gate(tmp_path, [_finding(patch="--- a\n+++ b\n")], expect=1)["findings"]
+
+
+# ============ eleventh review pass ================================================
+
+def test_a_nested_relative_link_is_not_rescued_by_a_root_file_of_the_same_name(tmp_path):
+    """Markdown resolves a link against its own document. Falling back to the repo
+    root let a broken sibling link pass because an unrelated root file matched."""
+    _touch(tmp_path / "sibling.md", "root copy\n")
+    doc = _touch(tmp_path / "nested/doc.md", "See [s](./sibling.md).\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert any("sibling.md" in f["evidence"][0]["ref"] for f in result["findings"])
+
+
+def test_a_nested_relative_link_to_a_real_sibling_still_passes(tmp_path):
+    _touch(tmp_path / "nested/sibling.md", "the real one\n")
+    doc = _touch(tmp_path / "nested/doc.md", "See [s](./sibling.md).\n")
+    assert prepass("--profile", "prose-claim", "--target", str(doc),
+                   "--repo-root", str(tmp_path))["findings"] == []
+
+
+def test_a_backticked_path_may_still_resolve_against_the_repository_root(tmp_path):
+    """Only links carry document-relative meaning; prose names repo paths freely."""
+    _touch(tmp_path / "src/real.py", "x = 1\n")
+    doc = _touch(tmp_path / "nested/doc.md", "See `src/real.py`.\n")
+    assert prepass("--profile", "prose-claim", "--target", str(doc),
+                   "--repo-root", str(tmp_path))["findings"] == []
+
+
+def test_reference_style_link_definitions_are_extracted(tmp_path):
+    doc = _touch(tmp_path / "doc.md", "See [ref][a].\n\n[a]: ./missing.md\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert any("missing.md" in f["evidence"][0]["ref"] for f in result["findings"])
+
+
+def test_a_reference_style_definition_pointing_at_a_real_file_passes(tmp_path):
+    _touch(tmp_path / "real.md", "x\n")
+    doc = _touch(tmp_path / "doc.md", "See [ref][a].\n\n[a]: ./real.md\n")
+    assert prepass("--profile", "prose-claim", "--target", str(doc),
+                   "--repo-root", str(tmp_path))["findings"] == []
+
+
+def test_setext_headings_satisfy_section_coverage(tmp_path):
+    """A compliant document received a HIGH failing-check finding — a false positive
+    on exactly the artifact the check exists to approve."""
+    doc = _touch(tmp_path / "logic.md",
+                 "Purpose\n=======\n\nScope\n-----\n\nDecisions Locked\n----------------\n\ntext\n")
+    result = prepass("--profile", "spec-design", "--target", str(doc),
+                     "--repo-root", str(tmp_path))
+    coverage = next(c for c in result["checks"] if c["name"] == "section-coverage")
+    assert coverage["status"] == "pass", coverage["output"]
+
+
+def test_a_setext_document_actually_missing_a_section_still_fails(tmp_path):
+    doc = _touch(tmp_path / "logic.md", "Purpose\n=======\n\nScope\n-----\n\ntext\n")
+    result = prepass("--profile", "spec-design", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    coverage = next(c for c in result["checks"] if c["name"] == "section-coverage")
+    assert coverage["status"] == "fail"
+    assert "Decisions Locked" in coverage["output"]

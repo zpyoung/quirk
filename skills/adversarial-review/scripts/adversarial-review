@@ -351,6 +351,8 @@ MD_LINK = re.compile(
     # silently — a false clean, which is the worse direction to fail.
     r"\[[^\]]*\]\(\s*(?:<([^>]+)>|([^)\s]+))(?:\s+[\"\'(][^)]*)?\s*\)"
 )
+# `[label]: ./target.md "Title"` — the definition half of a reference-style link.
+REF_LINK_DEF = re.compile(r"^[ ]{0,3}\[[^\]]+\]:\s*<?([^\s>]+)>?", re.MULTILINE)
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -485,7 +487,14 @@ def resolve_reference(
                     else (False, f"no such absolute {wanted}"))
         # A document's own relative links resolve against the document, not the
         # repo root — `logic.md` in a spec means its sibling.
-        bases = [doc_dir, repo_root] if doc_dir is not None else [repo_root]
+        # A markdown link means what Markdown says it means: relative to the
+        # document. Backticked prose may name a repo path, so only the link form
+        # is restricted — otherwise a root file of the same name rescues a link
+        # that resolves to nothing where it is written.
+        if is_link and doc_dir is not None:
+            bases = [doc_dir]
+        else:
+            bases = [doc_dir, repo_root] if doc_dir is not None else [repo_root]
         for base in bases:
             if exists(base / bare):
                 rel = "document directory" if base is doc_dir else "repository root"
@@ -537,6 +546,8 @@ def check_references(
     for match in MD_LINK.finditer(text):
         # group 1 is the <angle-bracketed> form, group 2 the bare one.
         tokens.append((match.group(1) or match.group(2), True))
+    for match in REF_LINK_DEF.finditer(text):
+        tokens.append((match.group(1), True))
 
     lines: list[str] = []
     findings: list[dict[str, Any]] = []
@@ -648,6 +659,30 @@ def outside_code_fences(text: str) -> list[str]:
     return lines
 
 
+SETEXT_UNDERLINE = re.compile(r"^[ ]{0,3}(=+|-+)[ \t]*$")
+
+
+def heading_lines(lines: list[str]) -> list[str]:
+    """Every heading in the document, ATX (`# X`) and Setext (`X` over `===`).
+
+    Recognising only ATX made a compliant Setext document fail coverage and emit a
+    HIGH finding — a false positive on exactly the artifact the check exists to
+    approve, which is the failure mode that gets a check switched off.
+    """
+    found: list[str] = []
+    for index, line in enumerate(lines):
+        if line.lstrip().startswith("#"):
+            found.append(line)
+            continue
+        # A Setext underline titles the line above it, which must be non-blank and
+        # not itself a heading — otherwise a horizontal rule swallows its neighbour.
+        if index and SETEXT_UNDERLINE.match(line):
+            previous = lines[index - 1]
+            if previous.strip() and not previous.lstrip().startswith("#"):
+                found.append(previous)
+    return found
+
+
 def check_sections(text: str, profile: str) -> dict[str, Any]:
     required = REQUIRED_HEADINGS.get(profile, ())
     if not required:
@@ -659,9 +694,7 @@ def check_sections(text: str, profile: str) -> dict[str, Any]:
             "output": "no required headings for this profile",
         }
 
-    headings = "\n".join(
-        line for line in outside_code_fences(text) if line.lstrip().startswith("#")
-    )
+    headings = "\n".join(heading_lines(outside_code_fences(text)))
     missing = [
         group for group in required
         if not any(re.search(rf"\b{re.escape(alt)}\b", headings, re.IGNORECASE)
