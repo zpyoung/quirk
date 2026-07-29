@@ -330,6 +330,26 @@ def test_worktree_includes_untracked_files(tmp_path):
     assert result["size_metric"] == 2, "untracked file was omitted from the artifact"
 
 
+def test_staged_new_file_is_visible_before_the_first_commit(tmp_path):
+    """The gap between `git diff` (blind to it) and the untracked scan (skips staged).
+
+    With no HEAD the empty tree is the baseline, so nothing falls between the two.
+    """
+    _git_repo(tmp_path)
+    (tmp_path / "new.py").write_text("def f():\n    return 1\n")
+    _git(tmp_path, "add", "new.py")
+    assert resolve("--target", "WORKTREE", "--repo-root", str(tmp_path))["size_metric"] == 2
+
+
+def test_a_backticked_token_does_not_suppress_the_same_named_link(tmp_path):
+    """Two different claims about the same text; only the link is unambiguous."""
+    doc = _touch(tmp_path / "notes.md",
+                 "Mentioned as `missing.pdf` first, then [linked](missing.pdf).\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert "missing.pdf" in [f["evidence"][0]["ref"] for f in result["findings"]]
+
+
 def test_worktree_respects_gitignore(tmp_path):
     """`--exclude-standard`: ignored files are not uncommitted work under review."""
     _git_repo(tmp_path)
@@ -796,6 +816,16 @@ def test_an_unknown_author_family_is_rejected_rather_than_silently_trusted():
     assert "adversarial-review:" in proc.stderr
 
 
+def test_the_documented_other_author_family_is_accepted():
+    """`other` is in the composition contract: an author this ladder cannot be.
+
+    Rejecting it locks out every caller whose author is a human or a local model.
+    """
+    result = select_model("--author-family", "other", "--check-cmd", "true")
+    assert result["resolved"] is True
+    assert result["independence"] == "full"
+
+
 def test_ladder_is_walked_until_a_rung_resolves():
     """First rung fails preflight, a later one succeeds."""
     script = 'test "$1" != "codex"'  # codex fails, everything else resolves
@@ -1030,6 +1060,20 @@ def test_quote_outside_the_cited_range_is_falsified(tmp_path):
     assert result["findings"] == []
 
 
+def test_a_quote_whose_first_line_merely_recurs_in_range_is_falsified(tmp_path):
+    """The whole quote must start in the range — not its first line, separately.
+
+    Checking "first line in range" and "quote somewhere in file" independently lets
+    two different places each satisfy half the test.
+    """
+    (tmp_path / "src.py").write_text("alpha\nbeta\ngamma\nalpha\nomega\n")
+    bad = _finding(evidence=[
+        {"kind": "file-line", "ref": "src.py:1-2", "quote": "alpha\nomega"},
+    ])
+    result = gate(tmp_path, [bad], expect=0, repo_root=tmp_path)
+    assert result["findings"] == []
+
+
 def test_a_quote_running_past_the_end_of_its_cited_range_still_resolves(tmp_path):
     """A short range is a citation nit; pointing somewhere else is the falsehood.
 
@@ -1081,6 +1125,16 @@ def test_absence_scope_is_checked_whatever_the_extension(tmp_path, ref):
     """
     bad = _finding(severity="MEDIUM",
                    evidence=[{"kind": "absence", "command": f"grep -rn x {ref}", "ref": ref}])
+    result = gate(tmp_path, [bad], expect=0, repo_root=tmp_path)
+    assert result["findings"] == []
+    assert result["suppressed"][0]["reason"] == "falsified"
+
+
+def test_absence_evidence_whose_own_output_shows_a_hit_is_falsified(tmp_path):
+    """The claim is that the search came back empty; its own output says otherwise."""
+    (tmp_path / "src.py").write_text("x = 1\n")
+    bad = _finding(evidence=[{"kind": "absence", "command": "grep -rn foo src.py",
+                              "ref": "src.py", "output": "src.py:1:foo is right here"}])
     result = gate(tmp_path, [bad], expect=0, repo_root=tmp_path)
     assert result["findings"] == []
     assert result["suppressed"][0]["reason"] == "falsified"
@@ -1139,6 +1193,13 @@ def test_gate_accepts_the_quick_mode_object_and_keeps_its_suppressed_count(tmp_p
     assert len(result["findings"]) == 1
     assert result["suppressed_count"] == 1
     assert result["suppressed"][0]["id"] == "F7"
+
+
+def test_carried_quick_suppressed_entries_without_ids_are_assigned_one(tmp_path):
+    """Reviewers emit `id: null` everywhere, including in a quick self-refute."""
+    quick = {"findings": [], "suppressed": [{"id": None, "reason": "refuted"}]}
+    result = gate(tmp_path, quick, extra=("--depth", "quick"), expect=0)
+    assert result["suppressed"][0]["id"], "null id survived to output"
 
 
 def test_carried_quick_suppressed_ids_are_reserved_by_the_allocator(tmp_path):

@@ -32,9 +32,18 @@ CONTRACT_SURFACE = re.compile(r"^\+.*\b(CONTRACT|SCHEMA):")
 
 HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
+# git's canonical empty tree — present in every repository, including one with no
+# commits yet, which is what makes it a usable baseline before the first commit.
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
 CODE_QUICK_MAX = 50
 CODE_DEEP_MIN = 151
 PROSE_QUICK_MAX = 499
+
+# `other` is documented in the composition contract: the author was a family this
+# ladder does not dispatch to (a human, a local model). It matches no candidate, so
+# every rung is fully independent — which is the correct answer, not an error.
+AUTHOR_FAMILIES = {"anthropic", "openai", "google", "other"}
 
 SPEC_DESIGN_NAMES = {"logic.md", "tech.md"}
 SPEC_DESIGN_HINT = re.compile(r"(spec|design)", re.IGNORECASE)
@@ -95,12 +104,13 @@ def read_diff(target: str, repo_root: Path, diff_file: str | None) -> str:
     argv = ["git", "diff", "--no-renames"]
     if target and target.strip() != "WORKTREE":
         argv.append(target)
-    elif has_head(repo_root):
+    else:
         # WORKTREE means every uncommitted change. Plain `git diff` compares against
         # the index, so staged work would be invisible in the artifact it reviews.
-        # Before the first commit there is no HEAD to compare against, and the
-        # unstaged-only view is the only one available.
-        argv.append("HEAD")
+        # Before the first commit there is no HEAD, and the empty tree is the right
+        # baseline — otherwise a staged new file falls in the gap between `git diff`
+        # (which cannot see it) and the untracked scan (which skips anything staged).
+        argv.append("HEAD" if has_head(repo_root) else EMPTY_TREE)
     try:
         completed = subprocess.run(
             argv, cwd=repo_root, capture_output=True, text=True, errors="replace"
@@ -463,11 +473,14 @@ def check_references(
 
     lines: list[str] = []
     findings: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, bool]] = set()
     for token, is_link in tokens:
-        if token in seen:
+        # Keyed on the role too: the same text in backticks and in a link are two
+        # different claims, and the backtick — which the allowlist may discard as
+        # prose — must not stand in for the link, which is unambiguous.
+        if (token, is_link) in seen:
             continue
-        seen.add(token)
+        seen.add((token, is_link))
         kind = classify_reference(token, is_link)
         if kind is None:
             continue
@@ -670,11 +683,10 @@ def select_reviewer(
     # — was then stamped `full`. A typo must fail loudly rather than silently
     # produce a same-family review wearing a full-independence label.
     author_family = author_family.strip().lower()
-    known_families = sorted({entry[1] for entry in ALIAS_LADDER})
-    if author_family not in known_families:
+    if author_family not in AUTHOR_FAMILIES:
         raise UsageError(
             f"unknown author family: {author_family} "
-            f"(known families: {', '.join(known_families)})"
+            f"(known families: {', '.join(sorted(AUTHOR_FAMILIES))})"
         )
 
     # An explicit --model is a caller instruction, not a suggestion: it is tried
@@ -807,6 +819,10 @@ def evidence_resolves(item: dict[str, Any], repo_root: Path) -> bool:
         # one deterministic stage would make it neither deterministic nor safe. The
         # scope the search names is still checkable, and a search over a file that
         # does not exist proves nothing about what is absent from it.
+        # An absence claim asserts the search came back empty. Output showing
+        # otherwise falsifies it on its own terms, with nothing to re-run.
+        if str(item.get("output", "")).strip():
+            return False
         if not looks_like_path(ref):
             return True
         bare = strip_line_anchor(ref)
@@ -839,10 +855,16 @@ def evidence_resolves(item: dict[str, Any], repo_root: Path) -> bool:
     # The quote must *begin* inside the cited range but may run past its end.
     # Reviewers routinely cite where a passage starts and undershoot where it stops;
     # killing those drops real findings, which happened twice in one live run.
-    # Pointing at an entirely different place is still falsified.
-    window = "\n".join(lines[start - 1:end])
-    first = quote.strip().splitlines()[0].strip()
-    return first in window and quote.strip() in text
+    # Pointing at an entirely different place is still falsified — so this locates
+    # the whole quote and asks where it starts, rather than testing its first line
+    # and its body separately, which two different places can each satisfy.
+    needle = quote.strip()
+    position = text.find(needle)
+    while position != -1:
+        if start <= text.count("\n", 0, position) + 1 <= end:
+            return True
+        position = text.find(needle, position + 1)
+    return False
 
 
 def apply_evidence_gate(
@@ -930,7 +952,11 @@ def run_gate(
     # emit `id: null` and to reuse a dismissed finding's original ID when re-raising
     # it — neither works if the suppressed record it was handed has no ID.
     merged.sort(key=finding_order)
-    assign_ids(merged, id_prefix, {str(s.get("id")) for s in carried_suppressed if s.get("id")})
+    # Carried suppressions take part in the same allocation: their IDs are reserved
+    # so nothing is re-issued, and any that arrived null get one, since a suppressed
+    # record a caller cannot name is a dismissal it cannot carry forward.
+    assign_ids(merged, id_prefix, {str(s["id"]) for s in carried_suppressed if s.get("id")})
+    assign_ids(carried_suppressed, id_prefix, {str(f["id"]) for f in merged if f.get("id")})
 
     survivors: list[dict[str, Any]] = []
     contested: list[dict[str, Any]] = []
