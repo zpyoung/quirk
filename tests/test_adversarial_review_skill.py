@@ -431,7 +431,7 @@ def test_a_tiebreak_can_move_the_severity_it_was_asked_to_adjudicate() -> None:
     assert "set `severity`" in body
     step = SKILL_PATH.read_text()
     step = step[step.index("**8. Tiebreak.**"):]
-    assert "merge --stage tiebreak" in step[:700]
+    assert "--stage tiebreak" in step[:900]
 
 
 def test_the_declared_target_kinds_are_the_ones_the_script_can_produce() -> None:
@@ -587,3 +587,27 @@ def test_the_two_claude_facing_docs_do_not_restate_each_other() -> None:
         f"SKILL.md restates composition-contract.md at line ranges {runs} — "
         "cross-reference the canonical copy instead of duplicating it"
     )
+
+
+def test_the_documented_pipeline_files_chain_together() -> None:
+    """The written commands drifted into a pipeline that could not run: `claims` read a
+    file promote never wrote, and `gate` read the pre-merge findings."""
+    body = SKILL_PATH.read_text()
+    steps = body[body.index("## Data flow"):body.index("## Depth")]
+    # These three are collected from a model dispatch rather than a shell redirect.
+    dispatched = {"findings.json", "refute.json", "tiebreak.json"}
+    for name in dispatched:
+        assert name in steps, f"{name} is consumed but never named as a dispatch target"
+    produced = set(re.findall(r'> "\$WORK/([a-z]+\.json)"', steps)) | dispatched
+    consumed = set(re.findall(r'--(?:findings|judgments|model|prepass|gate|resolve) '
+                              r'"\$WORK/([a-z]+\.json)"', steps))
+    assert consumed <= produced, (
+        f"these steps read files no earlier step writes: {sorted(consumed - produced)}"
+    )
+    assert "merged.json" in produced and "merged.json" in consumed
+
+
+def test_the_gate_is_fed_merge_output_not_raw_promote_output() -> None:
+    body = SKILL_PATH.read_text()
+    gate_step = body[body.index("**7. Evidence gate.**"):body.index("**8. Tiebreak.**")]
+    assert '--findings "$WORK/merged.json"' in gate_step

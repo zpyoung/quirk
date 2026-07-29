@@ -1213,22 +1213,42 @@ def run_gate(
     # `--depth standard` recorded same-context self-refutation as fully independent,
     # which is the one guarantee this whole protocol exists to provide. Requiring the
     # two to agree makes the label unforgeable by a caller who simply passes a flag.
-    quick_shaped = isinstance(findings, dict)
+    # Shape is provenance. A quick reviewer emits {findings, suppressed} after
+    # self-refuting in one context; `merge` emits {findings, stage, judged} and is the
+    # only thing that produces it. A bare array is raw promote output, which at
+    # standard or deep means the refute dispatch it claims never happened. Checking
+    # the reviewer-supplied per-finding `stage` instead let a promote record relabel
+    # itself and pass.
+    quick_shaped = isinstance(findings, dict) and "suppressed" in findings
+    merged_shaped = isinstance(findings, dict) and "judged" in findings
+    if isinstance(findings, dict) and not (quick_shaped or merged_shaped):
+        raise UsageError(
+            "findings object is neither a quick report ({findings, suppressed}) nor "
+            "`merge` output ({findings, stage, judged})"
+        )
     if quick_shaped and depth != "quick":
         raise UsageError(
-            f"findings are quick-shaped ({{findings, suppressed}}) but --depth is "
-            f"{depth}: a self-refuted report cannot be recorded as independent"
+            f"findings are quick-shaped but --depth is {depth}: a self-refuted report "
+            f"cannot be recorded as independent"
         )
-    # A clean review is the one case the shape rule must not catch. Every profile
-    # tells a reviewer that found nothing to emit an empty JSON array. An empty
-    # report has no findings whose provenance could
-    # be misstated, so demanding the quick shape here bought no guarantee and left a
-    # clean quick review with no expressible form — PASS became exit 2. A *non-empty*
-    # bare array at quick depth still means the self-refute pass never ran.
-    if depth == "quick" and not quick_shaped and findings:
+    if merged_shaped and depth == "quick":
         raise UsageError(
-            "--depth quick expects the quick-shaped {findings, suppressed} report "
-            "that promote-prompt.md specifies, not a bare array of findings"
+            "--depth quick takes the self-refuted {findings, suppressed} report, not "
+            "`merge` output: quick has no separate refute stage"
+        )
+    if depth == "quick" and not quick_shaped:
+        # An empty bare array is the one exception: the profiles tell a reviewer that
+        # found nothing to emit `[]`, and an empty report has no provenance to state.
+        if not (isinstance(findings, list) and not findings):
+            raise UsageError(
+                "--depth quick expects the quick-shaped {findings, suppressed} report "
+                "that promote-prompt.md specifies"
+            )
+    if depth in ("standard", "deep") and not merged_shaped:
+        raise UsageError(
+            f"--depth {depth} expects `merge` output, not a bare array: run `claims` "
+            f"before the refute dispatch and `merge --judgments` after it. The merge "
+            f"is what establishes that the stage ran; a depth flag only asserts it."
         )
     if isinstance(findings, dict):
         carried = findings.get("suppressed", [])
@@ -1263,24 +1283,6 @@ def run_gate(
     # record rather than to survivors alone. The promote prompt tells reviewers to
     # emit `id: null` and to reuse a dismissed finding's original ID when re-raising
     # it — neither works if the suppressed record it was handed has no ID.
-    # A depth flag is the caller's assertion; the stage stamp is evidence. Exempt:
-    # prepass is true by construction, quick self-refutes in one context, and
-    # limitations and questions were never refutable.
-    if depth in ("standard", "deep") and isinstance(findings, list):
-        unrefuted = [
-            str(f.get("id") or f"#{i}") for i, f in enumerate(findings)
-            if isinstance(f, dict)
-            and f.get("kind", "finding") == "finding"
-            and f.get("stage") == "promote"
-        ]
-        if unrefuted:
-            raise UsageError(
-                f"--depth {depth} but {len(unrefuted)} finding(s) still carry "
-                f"stage \"promote\" ({', '.join(unrefuted[:5])}): the refute stage "
-                f"did not run on them. Use `merge --judgments` to apply refute's "
-                f"rulings, which stamps the stage it actually ran."
-            )
-
     merged.sort(key=finding_order)
     # Carried suppressions take part in the same allocation: their IDs are reserved
     # so nothing is re-issued, and any that arrived null get one, since a suppressed
@@ -1297,7 +1299,10 @@ def run_gate(
     for finding in merged:
         disposition = finding.get("disposition", "standing")
         if disposition == "refuted":
-            suppressed.append({"id": finding["id"], "reason": "refuted"})
+            record = {"id": finding["id"], "reason": "refuted"}
+            if finding.get("ruling_reason"):
+                record["ruling"] = finding["ruling_reason"]
+            suppressed.append(record)
             continue
 
         # The evidence gate runs before the tie is routed. A demonstrable falsehood
@@ -1435,8 +1440,10 @@ def merge_judgments(
         raise UsageError(f"stage must be refute or tiebreak, got {stage!r}")
     findings = load_json(findings_path, "findings")
     judgments = load_json(judgments_path, "judgments")
+    if isinstance(findings, dict) and "findings" in findings:
+        findings = findings["findings"]
     if not isinstance(findings, list):
-        raise UsageError("findings input must be a JSON array")
+        raise UsageError("findings input must be `claims` output or a JSON array")
     if not isinstance(judgments, list):
         raise UsageError("judgments input must be a JSON array")
 
@@ -1473,36 +1480,64 @@ def merge_judgments(
         if judgment_id in seen:
             raise UsageError(f"two judgments for finding {judgment_id}")
         seen.add(judgment_id)
-        disposition = judgment.get("disposition")
-        if disposition not in DISPOSITIONS:
-            raise UsageError(
-                f"judgment for {judgment_id} has invalid disposition: {disposition!r}"
-            )
         finding = by_id[judgment_id]
         if finding.get("kind", "finding") != "finding":
             raise UsageError(
                 f"judgment for {judgment_id} judges a "
                 f"{finding.get('kind')}: only findings are refutable"
             )
+        disposition = judgment.get("disposition")
+        if disposition not in DISPOSITIONS:
+            raise UsageError(
+                f"judgment for {judgment_id} has invalid disposition: {disposition!r}"
+            )
+        # Tiebreak is the last word, so it has to produce one.
+        if stage == "tiebreak" and disposition == "contested":
+            raise UsageError(
+                f"tiebreak returned `contested` for {judgment_id}: it adjudicates the "
+                f"disagreement, and re-contesting leaves a deep review with an "
+                f"unresolved dispute the manifest will refuse to record"
+            )
+        reason = judgment.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise UsageError(
+                f"judgment for {judgment_id} has no reason: it is the audit record "
+                f"for why a finding lived or died, and tiebreak is handed it verbatim"
+            )
         finding["disposition"] = disposition
         finding["stage"] = stage
-        if judgment.get("confidence"):
+        finding["ruling_reason"] = reason
+        # Presence, not truthiness: `severity: ""` and `confidence: 0` were silently
+        # dropped, leaving the promoter's proposal in force under a ruling.
+        if "confidence" in judgment:
             if judgment["confidence"] not in CONFIDENCES:
                 raise UsageError(
                     f"judgment for {judgment_id} has invalid confidence: "
                     f"{judgment['confidence']!r}"
                 )
             finding["confidence"] = judgment["confidence"]
-        if judgment.get("severity"):
+        if "severity" in judgment:
             if judgment["severity"] not in SEVERITIES:
                 raise UsageError(
                     f"judgment for {judgment_id} has invalid severity: "
                     f"{judgment['severity']!r}"
                 )
             finding[ADJUDICATED_SEVERITY] = judgment["severity"]
-        if judgment.get("counter_evidence"):
+        if "counter_evidence" in judgment:
+            if not isinstance(judgment["counter_evidence"], list):
+                raise UsageError(
+                    f"judgment for {judgment_id} has non-array counter_evidence"
+                )
             finding["counter_evidence"] = judgment["counter_evidence"]
 
+    # Tiebreak rules on the contested set and nothing else. Without this it could
+    # refute a standing finding nobody had disputed.
+    out_of_scope = sorted(seen - expected)
+    if out_of_scope:
+        raise UsageError(
+            f"{stage} ruled on {', '.join(out_of_scope)}, which "
+            f"{'was not contested' if stage == 'tiebreak' else 'it was not given'}"
+        )
     unanswered = sorted(expected - seen)
     if unanswered:
         raise UsageError(
@@ -1544,6 +1579,16 @@ def build_manifest(
     # Depth comes from the gate, never from resolve: resolve only ever offered a
     # suggestion, and a caller that overrode it would otherwise be misrecorded.
     depth = gate_result.get("depth", "standard")
+
+    # `contested[]` is the deep pipeline's mid-flight state, cleared by routing it to
+    # tiebreak and re-running the gate. Recording it as final published a PASS over a
+    # dispute nobody settled.
+    if gate_result.get("contested"):
+        raise UsageError(
+            f"gate result still has {len(gate_result['contested'])} contested "
+            f"finding(s): route them to tiebreak, merge the rulings, and re-run gate "
+            f"before recording the manifest"
+        )
 
     if verify_artifact:
         # Every stage judges the artifact resolve hashed. If the tree moved under

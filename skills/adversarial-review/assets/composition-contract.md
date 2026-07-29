@@ -42,9 +42,14 @@ guessing a label the script does not know is a usage error.
 **The refute seam is mechanical, not prose.** Run `claims` before the refute dispatch and `merge`
 after it. `claims` assigns IDs (promote emits `id: null`, but refute keys judgments by ID) and holds
 `limitation`/`question` records back from a stage that has no mandate over them. `merge` proves the
-stage ran: it fails when a claim went unjudged, when a judgment names an unknown ID, or when one
-finding draws two rulings. At `standard` and `deep` the gate refuses findings still stamped
-`stage: "promote"`, so a skipped or truncated refute cannot be recorded as an independent review.
+stage ran: every judgment needs a `reason`, and it fails when a claim went unjudged, when a judgment
+names an unknown ID, when one finding draws two rulings, or when tiebreak rules on something nobody
+contested. Feed its output to `gate` directly — **the shape is the provenance**, and `standard` and
+`deep` reject the bare array promote emits. A per-finding `stage` string would not do: the reviewer
+writes that field, so a promote record could relabel itself.
+
+`manifest` refuses a gate result with a non-empty `contested[]`. Route those to tiebreak, merge the
+rulings, and re-run `gate` first; a deep review must not be recorded over an unsettled dispute.
 
 **`model.resolved` must be a JSON boolean** and `triple_verified` tells you whether the returned
 provider/model pair was confirmed dispatchable or came from the static ladder.

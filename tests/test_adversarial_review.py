@@ -950,11 +950,18 @@ def _write(tmp_path: Path, name: str, payload) -> str:
     return str(p)
 
 
-def _inputs(tmp_path, findings, *, model=None, prepass_status="pass", prepass_findings=None):
+def _inputs(tmp_path, findings, *, model=None, prepass_status="pass", prepass_findings=None,
+            raw=False):
+    """Wraps a plain list in a `merge` envelope, which is what standard depth requires.
+
+    Pass raw=True to send the bare array a promote stage emits.
+    """
     model = model or {"resolved": True, "alias": "codex", "family": "openai",
                       "provider": "openai-codex", "model": "gpt-5.6-sol",
                       "thinking": "high", "independence": "full", "ladder": []}
     pre = {"status": prepass_status, "checks": [], "findings": prepass_findings or []}
+    if isinstance(findings, list) and not raw:
+        findings = {"findings": findings, "stage": "refute", "judged": len(findings)}
     return (
         "--findings", _write(tmp_path, "f.json", findings),
         "--model", _write(tmp_path, "m.json", model),
@@ -1981,7 +1988,7 @@ def test_quick_mode_output_is_accepted_at_quick_depth(tmp_path):
 
 def test_a_plain_array_is_rejected_at_quick_depth(tmp_path):
     """The provenance check runs both ways: quick depth means a quick-shaped report."""
-    proc = run_ar("gate", *_inputs(tmp_path, [_finding()]), "--depth", "quick")
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding()], raw=True), "--depth", "quick")
     assert proc.returncode == 2
     assert "quick" in proc.stderr.lower()
 
@@ -2010,7 +2017,7 @@ def test_a_valid_supplied_id_is_preserved(tmp_path):
 def test_a_clean_quick_review_is_accepted_as_a_bare_empty_array(tmp_path):
     """Profiles tell a clean reviewer to emit `[]`, so demanding the quick shape here
     left PASS with no expressible form."""
-    proc = run_ar("gate", *_inputs(tmp_path, []), "--depth", "quick")
+    proc = run_ar("gate", *_inputs(tmp_path, [], raw=True), "--depth", "quick")
     assert proc.returncode == 0, proc.stderr
     result = json.loads(proc.stdout)
     assert result["verdict"] == "PASS"
@@ -2262,16 +2269,20 @@ def test_a_triple_reported_for_a_different_alias_is_not_adopted(tmp_path):
 
 # ============ claims / merge: the refute seam =====================================
 
-def test_gate_refuses_promote_stage_findings_at_standard_depth(tmp_path):
-    """A depth flag asserted independent refutation; nothing established it."""
-    proc = run_ar("gate", *_inputs(tmp_path, [_finding(stage="promote")]),
-                  "--depth", "standard")
+@pytest.mark.parametrize("depth", ["standard", "deep"])
+def test_gate_refuses_a_bare_promote_array(depth, tmp_path):
+    """A depth flag asserts independent refutation; only `merge` establishes it. Keying
+    on the reviewer-supplied `stage` let a promote record relabel itself and pass."""
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(stage="promote")], raw=True),
+                  "--depth", depth)
     assert proc.returncode == 2
-    assert 'stage "promote"' in proc.stderr
+    assert "`merge` output" in proc.stderr
 
 
-def test_gate_refuses_promote_stage_findings_at_deep_depth(tmp_path):
-    proc = run_ar("gate", *_inputs(tmp_path, [_finding(stage="promote")]), "--depth", "deep")
+@pytest.mark.parametrize("depth", ["standard", "deep"])
+def test_a_relabelled_promote_finding_cannot_forge_refutation(depth, tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(stage="refute")], raw=True),
+                  "--depth", depth)
     assert proc.returncode == 2
 
 
@@ -2349,8 +2360,8 @@ def test_merge_rejects_a_judgment_for_an_unknown_id(tmp_path):
     proc = run_ar("merge",
                   "--findings", _write(tmp_path, "f.json", [_finding(id="F1", stage="promote")]),
                   "--judgments", _write(tmp_path, "j.json",
-                                        [{"id": "F1", "disposition": "standing"},
-                                         {"id": "F9", "disposition": "refuted"}]))
+                                        [{"id": "F1", "disposition": "standing", "reason": "r"},
+                                         {"id": "F9", "disposition": "refuted", "reason": "r"}]))
     assert proc.returncode == 2
     assert "unknown finding id" in proc.stderr
 
@@ -2359,8 +2370,8 @@ def test_merge_rejects_two_judgments_for_one_finding(tmp_path):
     proc = run_ar("merge",
                   "--findings", _write(tmp_path, "f.json", [_finding(id="F1", stage="promote")]),
                   "--judgments", _write(tmp_path, "j.json",
-                                        [{"id": "F1", "disposition": "standing"},
-                                         {"id": "F1", "disposition": "refuted"}]))
+                                        [{"id": "F1", "disposition": "standing", "reason": "r"},
+                                         {"id": "F1", "disposition": "refuted", "reason": "r"}]))
     assert proc.returncode == 2
     assert "two judgments" in proc.stderr
 
@@ -2370,7 +2381,8 @@ def test_merge_rejects_a_judgment_on_a_limitation(tmp_path):
                   "--findings", _write(tmp_path, "f.json",
                                        [_finding(id="F1", stage="promote", kind="limitation")]),
                   "--judgments", _write(tmp_path, "j.json",
-                                        [{"id": "F1", "disposition": "refuted"}]))
+                                        [{"id": "F1", "disposition": "refuted",
+                                          "reason": "r"}]))
     assert proc.returncode == 2
     assert "only findings are refutable" in proc.stderr
 
@@ -2389,7 +2401,7 @@ def test_tiebreak_merge_only_expects_rulings_on_contested_findings(tmp_path):
     proc = run_ar("merge", "--findings", _write(tmp_path, "f.json", findings),
                   "--judgments", _write(tmp_path, "j.json",
                                         [{"id": "F1", "disposition": "standing",
-                                          "severity": "MEDIUM"}]),
+                                          "severity": "MEDIUM", "reason": "r"}]),
                   "--stage", "tiebreak")
     assert proc.returncode == 0, proc.stderr
     merged = {f["id"]: f for f in json.loads(proc.stdout)["findings"]}
@@ -2408,8 +2420,100 @@ def test_merge_output_feeds_the_gate_at_standard_depth(tmp_path):
         "--judgments", _write(tmp_path, "j.json",
                               [{"id": ids[0], "disposition": "standing",
                                 "severity": "LOW", "reason": "r"}])).stdout)
-    proc = run_ar("gate", *_inputs(tmp_path, merged["findings"]), "--depth", "standard")
+    proc = run_ar("gate", "--findings", _write(tmp_path, "m.json", merged),
+                  "--model", _write(tmp_path, "mo.json",
+                                    {"resolved": True, "alias": "c", "family": "openai",
+                                     "provider": "p", "model": "m", "thinking": "high",
+                                     "independence": "full", "ladder": []}),
+                  "--prepass", _write(tmp_path, "p.json",
+                                      {"status": "pass", "checks": [], "findings": []}),
+                  "--depth", "standard")
     assert proc.returncode == 0, proc.stderr
     gated = json.loads(proc.stdout)
     assert gated["verdict"] == "PASS"
     assert gated["findings"][0]["effective_severity"] == "LOW"
+
+
+# ============ the merge contract ==================================================
+
+def test_merge_requires_a_reason_on_every_judgment(tmp_path):
+    """The refute prompt calls it the audit record, and tiebreak is handed it verbatim."""
+    proc = run_ar("merge",
+                  "--findings", _write(tmp_path, "f.json", [_finding(id="F1", stage="promote")]),
+                  "--judgments", _write(tmp_path, "j.json",
+                                        [{"id": "F1", "disposition": "refuted"}]))
+    assert proc.returncode == 2
+    assert "no reason" in proc.stderr
+
+
+@pytest.mark.parametrize("field,value", [("severity", ""), ("confidence", 0),
+                                         ("severity", "SEVERE"), ("confidence", "SURE")])
+def test_merge_rejects_a_malformed_ruling_field(field, value, tmp_path):
+    """Truthiness dropped `severity: ""` and `confidence: 0`, silently leaving the
+    promoter's proposal in force under what looked like a ruling."""
+    judgment = {"id": "F1", "disposition": "standing", "reason": "r", field: value}
+    proc = run_ar("merge",
+                  "--findings", _write(tmp_path, "f.json", [_finding(id="F1", stage="promote")]),
+                  "--judgments", _write(tmp_path, "j.json", [judgment]))
+    assert proc.returncode == 2
+
+
+def test_merge_keeps_the_ruling_reason_on_the_finding(tmp_path):
+    proc = run_ar("merge",
+                  "--findings", _write(tmp_path, "f.json", [_finding(id="F1", stage="promote")]),
+                  "--judgments", _write(tmp_path, "j.json",
+                                        [{"id": "F1", "disposition": "standing",
+                                          "reason": "reproduces at line 40"}]))
+    assert json.loads(proc.stdout)["findings"][0]["ruling_reason"] == "reproduces at line 40"
+
+
+def test_a_suppression_carries_the_refuters_argument(tmp_path):
+    merged = json.loads(run_ar(
+        "merge", "--findings", _write(tmp_path, "f.json", [_finding(id="F1", stage="promote")]),
+        "--judgments", _write(tmp_path, "j.json",
+                              [{"id": "F1", "disposition": "refuted",
+                                "reason": "the quote is not at that line"}])).stdout)
+    result = gate(tmp_path, merged["findings"], expect=0)
+    assert result["suppressed"][0]["ruling"] == "the quote is not at that line"
+
+
+def test_tiebreak_cannot_rule_on_a_finding_nobody_contested(tmp_path):
+    findings = [_finding(id="F1", disposition="contested"),
+                _finding(id="F2", disposition="standing")]
+    proc = run_ar("merge", "--findings", _write(tmp_path, "f.json", findings),
+                  "--judgments", _write(tmp_path, "j.json",
+                                        [{"id": "F1", "disposition": "refuted", "reason": "r"},
+                                         {"id": "F2", "disposition": "refuted", "reason": "r"}]),
+                  "--stage", "tiebreak")
+    assert proc.returncode == 2
+    assert "was not contested" in proc.stderr
+
+
+def test_tiebreak_cannot_re_contest(tmp_path):
+    """It adjudicates the disagreement; leaving it open strands a deep review."""
+    proc = run_ar("merge",
+                  "--findings", _write(tmp_path, "f.json",
+                                       [_finding(id="F1", disposition="contested")]),
+                  "--judgments", _write(tmp_path, "j.json",
+                                        [{"id": "F1", "disposition": "contested",
+                                          "reason": "still unsure"}]),
+                  "--stage", "tiebreak")
+    assert proc.returncode == 2
+    assert "re-contesting" in proc.stderr
+
+
+def test_the_manifest_refuses_an_unresolved_contested_finding(tmp_path):
+    """`contested[]` is mid-flight state. Recording it published a PASS over a dispute
+    nobody settled."""
+    gate_result = {"verdict": "PASS", "findings": [], "suppressed_count": 0,
+                   "contested": [_finding(id="F1")], "depth": "deep"}
+    proc = run_ar("manifest",
+                  "--resolve", _write(tmp_path, "r.json",
+                                      {"profile": "code-diff", "target_kind": "path",
+                                       "target_ref": "x", "artifact_hash": "h"}),
+                  "--prepass", _write(tmp_path, "p.json", {"status": "pass", "checks": []}),
+                  "--model", _write(tmp_path, "m.json",
+                                    {"resolved": True, "independence": "full"}),
+                  "--gate", _write(tmp_path, "g.json", gate_result))
+    assert proc.returncode == 2
+    assert "contested" in proc.stderr

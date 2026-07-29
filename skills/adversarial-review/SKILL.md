@@ -125,33 +125,36 @@ here and do not treat it as a pass.
 **5. Promote.** Stage `assets/promote-prompt.md` and dispatch. Collect its JSON array to
 `$WORK/findings.json`. See Dispatch below.
 
-**6. Refute.** Stage the claims, dispatch **in a fresh context**, then merge the rulings
-mechanically:
+**6. Refute.** Stage the claims, dispatch **in a fresh context**, then merge the rulings:
 
 ```bash
-"$SCRIPT" claims --findings "$WORK/promote.json" > "$WORK/claims.json"
-# stage assets/refute-prompt.md with .claims, dispatch, collect to refute.json
-"$SCRIPT" merge --findings <(python3 -c 'import json,sys;json.dump(json.load(open(sys.argv[1]))["findings"],sys.stdout)' "$WORK/claims.json") \
-  --judgments "$WORK/refute.json" > "$WORK/merged.json"
+"$SCRIPT" claims --findings "$WORK/findings.json" > "$WORK/claims.json"
+# stage assets/refute-prompt.md with claims.json's .claims, dispatch, collect to refute.json
+"$SCRIPT" merge --findings "$WORK/claims.json" --judgments "$WORK/refute.json" \
+  > "$WORK/merged.json"
 ```
 
-`claims` assigns the IDs and emits the six claim fields — `id`, `severity`, `confidence`,
-`category`, `claim`, `evidence[]` — plus the full `findings[]` to feed `merge`. Promote emits
-`id: null` and refute keys its judgments by `id`, so the IDs must exist before the dispatch, not
-after it. `claims` also withholds `limitation` and `question` records: refute has no mandate over a
-claim nobody offered as a defect, and staged as claims they come back `refuted`.
+`claims` assigns the IDs and emits `.claims` — the six fields `id`, `severity`, `confidence`,
+`category`, `claim`, `evidence[]` — alongside the full `.findings`. Promote emits `id: null` and
+refute keys its judgments by `id`, so the IDs have to exist before the dispatch. `claims` also
+withholds `limitation` and `question` records: refute has no mandate over a claim nobody offered as
+a defect, and staged as claims they come back `refuted`.
 
-`merge` applies each ruling — `disposition`, `confidence` when present, `severity` onto
-`adjudicated_severity` — stamps `stage`, and **fails if any claim went unjudged**. That is what
-proves the stage ran. Never hand-merge: the gate refuses `promote`-stage findings at `standard` and
-`deep`, because a depth flag is a caller's assertion and the stage stamp is evidence.
+`merge` reads either `claims` output or a bare findings array, applies each ruling — `disposition`,
+`confidence`, `severity` onto `adjudicated_severity`, `reason` onto `ruling_reason` — and **fails if
+any claim went unjudged, if a judgment names an unknown ID, or if one finding draws two rulings**.
+Every judgment must carry a `reason`; it is the audit record, and tiebreak is handed it verbatim.
 
-Skip all of this at `quick` depth — one dispatch, self-refuted, findings stay at `stage: "promote"`.
+Feed `merged.json` straight to the gate. Its shape is the provenance: `merge` is the only thing that
+produces it, so `standard` and `deep` reject the bare array promote emits. Checking a per-finding
+`stage` string instead let a promote record relabel itself and pass.
+
+Skip all of this at `quick` depth — one dispatch, self-refuted, `{findings, suppressed}` to the gate.
 
 **7. Evidence gate.**
 
 ```bash
-"$SCRIPT" gate --findings "$WORK/findings.json" --model "$WORK/model.json" \
+"$SCRIPT" gate --findings "$WORK/merged.json" --model "$WORK/model.json" \
   --prepass "$WORK/prepass.json" --depth "$DEPTH" > "$WORK/gate.json"
 ```
 
@@ -173,10 +176,19 @@ demonstrably false is suppressed as `falsified` rather than sent to tiebreak. A 
 disagreement, and adjudicating one costs a third dispatch to learn nothing.
 
 **8. Tiebreak.** At `deep` depth only, and only if `gate.json` has a non-empty `contested[]`. Stage
-`assets/tiebreak-prompt.md`, dispatch to a **third** family, then merge with
-`merge --stage tiebreak` and re-run `gate`. That merge expects a ruling for every `contested`
-finding and nothing else. Contested findings are withheld from `findings[]` and are not counted as
-suppressed — ignoring `contested[]` silently drops them.
+`assets/tiebreak-prompt.md` with those findings — including each one's `ruling_reason`, so the third
+family sees both sides — dispatch to a **third** family, then:
+
+```bash
+"$SCRIPT" merge --findings "$WORK/merged.json" --judgments "$WORK/tiebreak.json" \
+  --stage tiebreak > "$WORK/tiebroken.json"
+"$SCRIPT" gate --findings "$WORK/tiebroken.json" --model "$WORK/model.json" \
+  --prepass "$WORK/prepass.json" --depth deep > "$WORK/gate.json"
+```
+
+That merge expects a ruling for every `contested` finding and nothing else, and refuses a ruling of
+`contested` — tiebreak is the last word. The manifest refuses a gate result that still has
+`contested[]`, so a deep review cannot be recorded over a dispute nobody settled.
 
 **9. Emit.**
 
