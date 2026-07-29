@@ -111,7 +111,10 @@ Defaults to a family different from the author's, gates each candidate on `pi-wa
 `independence` is stamped `"reduced"`.
 
 `author_family` resolves in order: the explicit input; else the family in the manifest of the run
-that produced the artifact; else the family of this session. Exit 1 means no rung resolved —
+that produced the artifact; else the family of this session. It is matched case- and
+whitespace-insensitively, and an unknown family is **exit 2**, not a silent pass — the whole
+independence guarantee is one string comparison, and a miscased `OpenAI` once matched nothing, left
+the author's own family in the pool, and stamped the result `full`. Exit 1 means no rung resolved —
 continue anyway, with `resolved: false`. The gate turns that into `NOT_REVIEWABLE`; do not stop
 here and do not treat it as a pass.
 
@@ -228,9 +231,19 @@ What "re-resolve" checks, per evidence kind:
 
 | Kind | Checked | Not checked |
 | --- | --- | --- |
-| `file-line`, `quote` | The file exists, and the quote appears **within the cited line range** | — |
+| `file-line`, `quote` | The file exists, and the quote **begins** within the cited line range | Whether it ends there |
 | `absence` | The scope it names exists — a search over a missing file proves nothing | The search is never re-run |
 | `command`, `prepass` | — | Never re-run |
+
+A quote may run past the end of its cited range: reviewers routinely cite where a passage starts and
+undershoot where it stops, and killing those drops real findings without catching anything a
+fabricator would do. A quote that begins *outside* the range is still falsified — that is pointing
+at the wrong place, not measuring it short.
+
+**Only a `stage: "prepass"` finding may claim `prepass` evidence.** That kind means the
+deterministic layer produced it, which is why it counts as reproduction; a reviewer that can
+self-declare it can hold any `CRITICAL`/`HIGH` at full confidence on evidence of its own invention.
+A promote-stage finding carrying `prepass` evidence gets the unverified cap.
 
 Every evidence field must be a non-empty string. Presence is not content: an empty `command`/`output`
 pair would otherwise satisfy the schema and buy reproduction credit, holding a finding at `HIGH`

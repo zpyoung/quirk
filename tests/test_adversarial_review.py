@@ -416,6 +416,48 @@ def test_unresolvable_markdown_link_becomes_a_finding(tmp_path):
     assert "./design.md" in refs
 
 
+@pytest.mark.parametrize("target", ["missing.pdf", "gone.csv", "absent.xlsx", "nope.tar.gz"])
+def test_a_broken_markdown_link_is_reported_whatever_the_extension(tmp_path, target):
+    """`[text](target)` is a link by construction — no suffix guessing needed.
+
+    The allowlist exists to keep backticked *prose* from being read as a path. A
+    Markdown link carries no such ambiguity.
+    """
+    doc = _touch(tmp_path / "notes.md", f"See [the thing]({target}).\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert target in [f["evidence"][0]["ref"] for f in result["findings"]]
+
+
+def test_a_resolvable_markdown_link_with_an_odd_extension_passes(tmp_path):
+    _touch(tmp_path / "paper.pdf", "%PDF\n")
+    doc = _touch(tmp_path / "notes.md", "See [the paper](paper.pdf).\n")
+    assert prepass("--profile", "prose-claim", "--target", str(doc),
+                   "--repo-root", str(tmp_path))["findings"] == []
+
+
+def test_prose_in_backticks_is_still_not_treated_as_a_path(tmp_path):
+    """The noise guard stays: a link is explicit, a backticked phrase is not."""
+    doc = _touch(tmp_path / "notes.md", "Handle this `carefully. always` when reviewing.\n")
+    assert prepass("--profile", "prose-claim", "--target", str(doc),
+                   "--repo-root", str(tmp_path))["findings"] == []
+
+
+def test_symbol_resolution_outside_a_git_worktree_is_could_not_run(tmp_path):
+    """A tool that failed proves nothing about absence.
+
+    Outside a worktree `git grep` errors, and reading that as "not found" turns
+    every symbol in the document into a HIGH finding — the noise flood the pre-pass
+    exists to avoid.
+    """
+    doc = _touch(tmp_path / "notes.md", "The `retry_handler` helper does the work.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path))
+    high = [f for f in result["findings"] if f["severity"] == "HIGH"]
+    assert not high, f"tool failure reported as absence: {[f['claim'] for f in high]}"
+    assert "skipped" in result["checks"][0]["output"]
+
+
 def test_a_symbol_is_not_resolved_by_the_document_that_names_it(tmp_path):
     """The document's own mention is the claim, not evidence for it.
 
@@ -735,6 +777,25 @@ def test_openai_authored_work_is_reviewed_by_another_family():
     assert result["independence"] == "full"
 
 
+@pytest.mark.parametrize("family", ["OPENAI", "OpenAI", " openai ", "OpenAI\n"])
+def test_author_family_matching_is_not_case_or_whitespace_sensitive(family):
+    """The one invariant the skill is built on must not turn on a capital letter.
+
+    A miscased family failed to match, so the author's own family was selected and
+    then stamped `full` — same-family review reported as structurally independent.
+    """
+    result = select_model("--author-family", family, "--check-cmd", "true")
+    assert result["family"] != "openai", "author's own family selected"
+    assert result["independence"] == "full"
+
+
+def test_an_unknown_author_family_is_rejected_rather_than_silently_trusted():
+    """`--author-family typo` must not look identical to a genuine cross-family run."""
+    proc = run_ar("select-model", "--author-family", "not-a-real-family", "--check-cmd", "true")
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
+
+
 def test_ladder_is_walked_until_a_rung_resolves():
     """First rung fails preflight, a later one succeeds."""
     script = 'test "$1" != "codex"'  # codex fails, everything else resolves
@@ -969,6 +1030,21 @@ def test_quote_outside_the_cited_range_is_falsified(tmp_path):
     assert result["findings"] == []
 
 
+def test_a_quote_running_past_the_end_of_its_cited_range_still_resolves(tmp_path):
+    """A short range is a citation nit; pointing somewhere else is the falsehood.
+
+    Reviewers routinely cite the line a passage starts on and undershoot its end.
+    Killing those drops real findings — observed twice in one live run — while
+    catching nothing a fabricator would do.
+    """
+    (tmp_path / "src.py").write_text("a\nb\nfirst line\nsecond line\nthird line\n")
+    finding = _finding(severity="MEDIUM", evidence=[
+        {"kind": "file-line", "ref": "src.py:3-4",
+         "quote": "first line\nsecond line\nthird line"},
+    ])
+    assert len(gate(tmp_path, [finding], expect=1, repo_root=tmp_path)["findings"]) == 1
+
+
 def test_quote_inside_the_cited_range_resolves(tmp_path):
     (tmp_path / "src.py").write_text("a\nb\nc\nthe quoted text\n")
     good = _finding(severity="MEDIUM", evidence=[
@@ -991,6 +1067,20 @@ def test_absence_evidence_naming_a_missing_file_is_falsified(tmp_path):
     bad = _finding(evidence=[
         {"kind": "absence", "command": "grep -rn foo src/gone.py", "ref": "src/gone.py"},
     ])
+    result = gate(tmp_path, [bad], expect=0, repo_root=tmp_path)
+    assert result["findings"] == []
+    assert result["suppressed"][0]["reason"] == "falsified"
+
+
+@pytest.mark.parametrize("ref", ["pyproject.toml", "config.yaml", "data.csv", "notes.rst"])
+def test_absence_scope_is_checked_whatever_the_extension(tmp_path, ref):
+    """The scope check must not depend on a source-suffix allowlist.
+
+    `evidence.ref` is a declared scope, not prose that might be a path, so any
+    token carrying an extension is checkable.
+    """
+    bad = _finding(severity="MEDIUM",
+                   evidence=[{"kind": "absence", "command": f"grep -rn x {ref}", "ref": ref}])
     result = gate(tmp_path, [bad], expect=0, repo_root=tmp_path)
     assert result["findings"] == []
     assert result["suppressed"][0]["reason"] == "falsified"
@@ -1062,6 +1152,26 @@ def test_carried_quick_suppressed_ids_are_reserved_by_the_allocator(tmp_path):
 
 
 # --- id namespacing across invocations ---------------------------------------------
+
+def test_a_promote_finding_cannot_claim_prepass_evidence(tmp_path):
+    """`prepass` means "this layer produced it". Only the pre-pass may say so.
+
+    Reproduction credit is what holds a CRITICAL/HIGH at full confidence, and a
+    reviewer that can self-declare it can hold any claim there.
+    """
+    faked = _finding(stage="promote", severity="HIGH", confidence="HIGH",
+                     evidence=[{"kind": "prepass", "ref": "invented", "output": "anything"}])
+    result = gate(tmp_path, [faked], expect=1, repo_root=tmp_path)
+    assert result["findings"][0]["confidence"] == "LOW"
+
+
+def test_prepass_stage_findings_keep_their_reproduction_credit(tmp_path):
+    """The pre-pass is the one layer whose word is true by construction."""
+    genuine = _finding(id="", stage="prepass", severity="HIGH", confidence="HIGH",
+                       evidence=[{"kind": "prepass", "ref": "x.py", "output": "missing"}])
+    result = gate(tmp_path, [], prepass_findings=[genuine], expect=1)
+    assert result["findings"][0]["confidence"] == "HIGH"
+
 
 def test_id_prefix_namespaces_assigned_ids(tmp_path):
     """Callers that merge several invocations need IDs that cannot collide.
@@ -1180,6 +1290,19 @@ def test_missing_required_field_is_rejected(field, tmp_path):
     proc = run_ar("gate", *_inputs(tmp_path, [bad]))
     assert proc.returncode == 2
     assert field in proc.stderr
+
+
+@pytest.mark.parametrize("field", ["claim", "category", "remediation"])
+def test_blank_core_fields_are_rejected(field, tmp_path):
+    """A finding with no claim is not a finding; presence is not content."""
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(**{field: "   "})]))
+    assert proc.returncode == 2
+    assert field in proc.stderr
+
+
+def test_invalid_stage_is_rejected(tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(stage="invented")]))
+    assert proc.returncode == 2
 
 
 def test_invalid_severity_is_rejected(tmp_path):
@@ -1311,6 +1434,28 @@ def test_manifest_propagates_verdict_and_suppressed_count(tmp_path):
 def test_manifest_records_the_lens(tmp_path):
     assert manifest(tmp_path, extra=("--lens", "security"))["lens"] == "security"
     assert manifest(tmp_path)["lens"] is None
+
+
+@pytest.mark.parametrize("broken", ["resolve", "prepass", "model", "gate"])
+def test_manifest_rejects_unrelated_json_for_any_input(tmp_path, broken):
+    """A replay record of nulls is worse than no record — it looks like a real run."""
+    payloads = {
+        "resolve": {"profile": "code-diff", "target_kind": "git-range", "target_ref": "a..b",
+                    "artifact_hash": "x", "size_metric": 1, "depth_suggestion": "quick",
+                    "contract_surface": False},
+        "prepass": {"status": "pass", "checks": [], "findings": []},
+        "model": {"resolved": True, "alias": "codex", "family": "openai", "provider": "openai-codex",
+                  "model": "gpt-5.6-sol", "thinking": "high", "independence": "full", "ladder": []},
+        "gate": {"verdict": "PASS", "findings": [], "contested": [], "suppressed": [],
+                 "suppressed_count": 0, "depth": "quick"},
+    }
+    payloads[broken] = {"unrelated": "object"}
+    args = []
+    for name, payload in payloads.items():
+        args += [f"--{name}", _write(tmp_path, f"{name}.json", payload)]
+    proc = run_ar("manifest", *args)
+    assert proc.returncode == 2, f"accepted an unrelated {broken} payload"
+    assert "adversarial-review:" in proc.stderr
 
 
 def test_manifest_fails_cleanly_on_a_missing_input(tmp_path):

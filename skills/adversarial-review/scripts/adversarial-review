@@ -315,7 +315,7 @@ def run_check(command: str, repo_root: Path) -> dict[str, Any]:
     }
 
 
-def classify_reference(token: str) -> str | None:
+def classify_reference(token: str, is_link: bool = False) -> str | None:
     """Return the reference kind, or None when the token is not a reference at all.
 
     Returning None is the first defense against noise: a pre-pass that flags prose,
@@ -337,6 +337,13 @@ def classify_reference(token: str) -> str | None:
         return None
     if "->" in token or "—" in token:
         return None
+
+    # `[text](target)` declares a link, so no suffix guessing is needed or wanted.
+    # The allowlist below exists to keep backticked *prose* from being read as a
+    # path; a link carries no such ambiguity, and applying the allowlist to one
+    # silently ignores every broken `.pdf`, `.csv`, or `.yaml` link in the document.
+    if is_link:
+        return None if token.startswith("#") else "path"
 
     if " " in token:
         # Distinguishing a shell command from prose-in-backticks is not reliably
@@ -377,8 +384,14 @@ def parse_line_anchor(token: str) -> tuple[int, int] | None:
 
 
 def looks_like_path(token: str) -> bool:
+    """Structured evidence declares a scope, so any extension counts.
+
+    The narrow source-suffix allowlist belongs to `classify_reference`, where the
+    job is telling a path from prose. Here the caller has already said this is a
+    path, and an allowlist only creates holes — `pyproject.toml` was unfalsifiable.
+    """
     bare = strip_line_anchor(token)
-    return "/" in bare or Path(bare).suffix in SOURCE_SUFFIXES or Path(bare).suffix == ".md"
+    return "/" in bare or bool(Path(bare).suffix)
 
 
 def resolve_reference(
@@ -416,6 +429,13 @@ def resolve_reference(
         ["git", "grep", "-lF", "--", token],
         cwd=repo_root, capture_output=True, text=True, errors="replace",
     )
+    # git grep exits 1 for "no match" and >1 for "could not look" — outside a
+    # worktree, bad pathspec, unreadable index. Reading a failed search as proof of
+    # absence turns every symbol in the document into a HIGH finding, which is the
+    # noise flood this layer exists to prevent. Unknown is not absent.
+    if completed.returncode > 1:
+        detail = completed.stderr.strip().splitlines()
+        return True, f"skipped ({detail[0] if detail else 'git grep unavailable'})"
     if completed.returncode != 0 or not completed.stdout.strip():
         return False, "no occurrence found by git grep"
 
@@ -435,20 +455,20 @@ def check_references(
     text: str, repo_root: Path, profile: str, doc_dir: Path | None = None,
     doc_path: Path | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    tokens: list[str] = []
+    tokens: list[tuple[str, bool]] = []
     for match in BACKTICK_TOKEN.finditer(text):
-        tokens.append(match.group(1))
+        tokens.append((match.group(1), False))
     for match in MD_LINK.finditer(text):
-        tokens.append(match.group(1))
+        tokens.append((match.group(1), True))
 
     lines: list[str] = []
     findings: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for token in tokens:
+    for token, is_link in tokens:
         if token in seen:
             continue
         seen.add(token)
-        kind = classify_reference(token)
+        kind = classify_reference(token, is_link)
         if kind is None:
             continue
         ok, detail = resolve_reference(kind, token, repo_root, doc_dir, doc_path)
@@ -644,6 +664,19 @@ def select_reviewer(
         known = ", ".join(entry[0] for entry in ALIAS_LADDER)
         raise UsageError(f"unknown alias: {model} (known aliases: {known})")
 
+    # Independence is the one invariant this skill exists to buy, and it is decided
+    # by a string comparison. An unnormalised `OpenAI` matched nothing, so the
+    # author's own family stayed in the candidate pool and — having matched nothing
+    # — was then stamped `full`. A typo must fail loudly rather than silently
+    # produce a same-family review wearing a full-independence label.
+    author_family = author_family.strip().lower()
+    known_families = sorted({entry[1] for entry in ALIAS_LADDER})
+    if author_family not in known_families:
+        raise UsageError(
+            f"unknown author family: {author_family} "
+            f"(known families: {', '.join(known_families)})"
+        )
+
     # An explicit --model is a caller instruction, not a suggestion: it is tried
     # alone, and its failure is reported rather than papered over with a fallback.
     candidates = [alias_entry(model)] if model else [
@@ -685,6 +718,7 @@ def select_reviewer(
 SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 CONFIDENCES = ("HIGH", "MEDIUM", "LOW")
 DISPOSITIONS = ("standing", "refuted", "contested")
+STAGES = ("promote", "refute", "tiebreak", "prepass")
 REQUIRED_FIELDS = ("severity", "confidence", "category", "claim", "evidence", "remediation")
 REPRODUCTION_KINDS = ("command", "prepass")
 PROOF_REQUIRED = ("CRITICAL", "HIGH")
@@ -716,6 +750,17 @@ def validate_finding(finding: Any, index: int) -> None:
     for field in REQUIRED_FIELDS:
         if field not in finding:
             raise UsageError(f"finding {index} is missing required field: {field}")
+    # A finding with no claim is not a finding, and a blank remediation gives the
+    # reader nothing to act on. Presence is not content.
+    for field in ("claim", "category", "remediation"):
+        value = finding[field]
+        if not isinstance(value, str) or not value.strip():
+            raise UsageError(f"finding {index} has an empty {field}")
+    if finding.get("stage") not in STAGES:
+        raise UsageError(
+            f"finding {index} has invalid stage: {finding.get('stage')} "
+            f"(expected one of {', '.join(STAGES)})"
+        )
     if finding["severity"] not in SEVERITIES:
         raise UsageError(f"finding {index} has invalid severity: {finding['severity']}")
     if finding["confidence"] not in CONFIDENCES:
@@ -791,7 +836,13 @@ def evidence_resolves(item: dict[str, Any], repo_root: Path) -> bool:
     lines = text.splitlines()
     if start < 1 or start > len(lines):
         return False
-    return quote.strip() in "\n".join(lines[start - 1:end])
+    # The quote must *begin* inside the cited range but may run past its end.
+    # Reviewers routinely cite where a passage starts and undershoot where it stops;
+    # killing those drops real findings, which happened twice in one live run.
+    # Pointing at an entirely different place is still falsified.
+    window = "\n".join(lines[start - 1:end])
+    first = quote.strip().splitlines()[0].strip()
+    return first in window and quote.strip() in text
 
 
 def apply_evidence_gate(
@@ -803,7 +854,12 @@ def apply_evidence_gate(
         return None, "falsified"
 
     graded = dict(finding)
-    has_reproduction = any(item["kind"] in REPRODUCTION_KINDS for item in finding["evidence"])
+    # `prepass` means "the deterministic layer produced this", which is why it counts
+    # as reproduction. Only a finding that layer actually filed may claim it —
+    # otherwise a reviewer can self-declare the credit that holds any CRITICAL/HIGH
+    # at full confidence.
+    trusted = REPRODUCTION_KINDS if finding.get("stage") == "prepass" else ("command",)
+    has_reproduction = any(item["kind"] in trusted for item in finding["evidence"])
     # Severity is consequence and never moves; proof speaks only to likelihood,
     # and only where the spec requires it.
     if not has_reproduction and graded["severity"] in PROOF_REQUIRED:
@@ -945,6 +1001,23 @@ def build_manifest(
     prepass = load_json(prepass_path, "prepass")
     model = load_json(model_path, "model")
     gate_result = load_json(gate_path, "gate")
+
+    # The manifest is the replay record. Built from the wrong objects it emits a
+    # well-formed document full of nulls, which reads as a run that happened and
+    # found nothing rather than as the mistake it is.
+    for label, payload, required in (
+        ("resolve", resolved, ("profile", "target_kind", "target_ref", "artifact_hash")),
+        ("prepass", prepass, ("status", "checks")),
+        ("model", model, ("resolved", "independence")),
+        ("gate", gate_result, ("verdict", "findings", "suppressed_count")),
+    ):
+        if not isinstance(payload, dict):
+            raise UsageError(f"{label} input must be a JSON object")
+        missing = [field for field in required if field not in payload]
+        if missing:
+            raise UsageError(
+                f"{label} input is not a {label} result: missing {', '.join(missing)}"
+            )
 
     # Depth comes from the gate, never from resolve: resolve only ever offered a
     # suggestion, and a caller that overrode it would otherwise be misrecorded.
