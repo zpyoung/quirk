@@ -250,6 +250,7 @@ Each invocation gets:
 | `target` | `"$WAVE_BASE..HEAD"` at a checkpoint, `"$RUN_BASE..HEAD"` in the final loop |
 | `profile` | `code-diff` |
 | `lens` | this reviewer's lens, from the three above |
+| `id_prefix` | a distinct prefix per lens — `C` correctness, `S` spec, `X` security. Each gate numbers from 1 on its own, so without this all three lenses return an `F1` and Step 9's merge cannot tell them apart |
 | `depth` | `deep`, passed **explicitly** |
 | `criteria` | the task contracts and acceptance criteria covering the diff, pasted **verbatim** |
 | `dismissed[]` | the run journal's dismissed findings, with their original IDs |
@@ -292,7 +293,9 @@ not evidence the branch is clean.
 ### Step 9: Adjudicate and fix
 
 Merge the three lenses' `findings[]` into one list. Each finding arrives with an ID — **keep it**,
-and reuse it across rounds; assign one yourself only where a finding arrives without one. Accept or
+and reuse it across rounds; assign one yourself only where a finding arrives without one. The
+per-lens `id_prefix` from Step 8 is what makes those IDs unique across the three, so merging cannot
+silently collapse two findings into one. Accept or
 reject each against the contract and the code. You may reject any severity — record a one-line
 reason. Assign an **effective severity** where the reviewer's label is miscalibrated; the exit gate
 reads yours, not theirs.

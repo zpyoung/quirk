@@ -171,6 +171,50 @@ def test_contract_anchor_on_removed_line_is_not_a_contract_surface(tmp_path):
     assert result["contract_surface"] is False
 
 
+def test_a_replacement_hunk_of_dash_and_plus_prefixed_text_is_counted(tmp_path):
+    """`--- old` / `+++ new` inside a hunk is content, not a file-header pair.
+
+    No prefix rule can decide this. The hunk header declares how many lines follow,
+    and that is the only unambiguous answer.
+    """
+    patch = tmp_path / "d.patch"
+    patch.write_text("--- a/x.md\n+++ b/x.md\n@@ -1 +1 @@\n--- old bullet\n+++ new bullet\n")
+    result = resolve(
+        "--target", "main..HEAD", "--repo-root", str(tmp_path), "--diff-file", str(patch)
+    )
+    assert result["size_metric"] == 2
+
+
+def test_context_lines_are_not_counted_as_changes(tmp_path):
+    patch = tmp_path / "d.patch"
+    patch.write_text("--- a/x.py\n+++ b/x.py\n@@ -1,3 +1,3 @@\n context\n-removed\n+added\n")
+    result = resolve(
+        "--target", "main..HEAD", "--repo-root", str(tmp_path), "--diff-file", str(patch)
+    )
+    assert result["size_metric"] == 2
+
+
+def test_no_newline_marker_is_not_counted(tmp_path):
+    patch = tmp_path / "d.patch"
+    patch.write_text("--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-a\n+b\n\\ No newline at end of file\n")
+    result = resolve(
+        "--target", "main..HEAD", "--repo-root", str(tmp_path), "--diff-file", str(patch)
+    )
+    assert result["size_metric"] == 2
+
+
+def test_multi_file_diff_counts_every_hunk(tmp_path):
+    patch = tmp_path / "d.patch"
+    patch.write_text(
+        "diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -0,0 +1 @@\n+one\n"
+        "diff --git a/y.py b/y.py\n--- a/y.py\n+++ b/y.py\n@@ -0,0 +1,2 @@\n+two\n+three\n"
+    )
+    result = resolve(
+        "--target", "main..HEAD", "--repo-root", str(tmp_path), "--diff-file", str(patch)
+    )
+    assert result["size_metric"] == 3
+
+
 def test_added_lines_whose_text_begins_with_plus_or_minus_are_counted(tmp_path):
     """`git diff` renders an added line containing `++i` as `+++i` — that is content.
 
@@ -275,6 +319,28 @@ def test_worktree_still_works_before_the_first_commit(tmp_path):
     assert resolve("--target", "WORKTREE", "--repo-root", str(tmp_path))["size_metric"] == 0
 
 
+def test_worktree_includes_untracked_files(tmp_path):
+    """A brand-new module is uncommitted work; leaving it out reviews a hole."""
+    _git_repo(tmp_path)
+    (tmp_path / "seed.txt").write_text("x\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
+    (tmp_path / "brand_new.py").write_text("def f():\n    return 1\n")
+    result = resolve("--target", "WORKTREE", "--repo-root", str(tmp_path))
+    assert result["size_metric"] == 2, "untracked file was omitted from the artifact"
+
+
+def test_worktree_respects_gitignore(tmp_path):
+    """`--exclude-standard`: ignored files are not uncommitted work under review."""
+    _git_repo(tmp_path)
+    (tmp_path / ".gitignore").write_text("junk/\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
+    (tmp_path / "junk").mkdir()
+    (tmp_path / "junk" / "noise.py").write_text("noise = 1\n" * 20)
+    assert resolve("--target", "WORKTREE", "--repo-root", str(tmp_path))["size_metric"] == 0
+
+
 def test_prose_profile_override_on_a_range_is_measured_in_words(tmp_path):
     """The unit follows the profile on the diff path too, not just the path target."""
     patch = tmp_path / "d.patch"
@@ -348,6 +414,31 @@ def test_unresolvable_markdown_link_becomes_a_finding(tmp_path):
                      "--repo-root", str(tmp_path), expect=1)
     refs = [f["evidence"][0]["ref"] for f in result["findings"]]
     assert "./design.md" in refs
+
+
+def test_a_symbol_is_not_resolved_by_the_document_that_names_it(tmp_path):
+    """The document's own mention is the claim, not evidence for it.
+
+    `git grep` searches the whole tree including the tracked target, so a document
+    citing an invented symbol was satisfying its own reference check.
+    """
+    _git_repo(tmp_path)
+    doc = _touch(tmp_path / "notes.md",
+                 "The function `totally_invented_symbol_xyz` handles retries.\n")
+    _git(tmp_path, "add", "-A")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    refs = [f["evidence"][0]["ref"] for f in result["findings"]]
+    assert "totally_invented_symbol_xyz" in refs
+
+
+def test_a_symbol_defined_elsewhere_still_resolves(tmp_path):
+    _git_repo(tmp_path)
+    _touch(tmp_path / "src.py", "def genuinely_present_symbol():\n    return 1\n")
+    doc = _touch(tmp_path / "notes.md", "See `genuinely_present_symbol` for details.\n")
+    _git(tmp_path, "add", "-A")
+    result = prepass("--profile", "prose-claim", "--target", str(doc), "--repo-root", str(tmp_path))
+    assert result["findings"] == []
 
 
 def test_link_fragment_is_not_part_of_the_filesystem_path(tmp_path):
@@ -960,6 +1051,40 @@ def test_gate_accepts_the_quick_mode_object_and_keeps_its_suppressed_count(tmp_p
     assert result["suppressed"][0]["id"] == "F7"
 
 
+def test_carried_quick_suppressed_ids_are_reserved_by_the_allocator(tmp_path):
+    """A carried ID is a taken ID — otherwise quick output can emit F1 twice."""
+    quick = {"findings": [_finding(id=None, severity="MEDIUM")],
+             "suppressed": [{"id": "F1", "reason": "refuted"}]}
+    result = gate(tmp_path, quick, extra=("--depth", "quick"), expect=1)
+    assigned = {f["id"] for f in result["findings"]}
+    carried = {s["id"] for s in result["suppressed"]}
+    assert not (assigned & carried), f"id collision: {assigned & carried}"
+
+
+# --- id namespacing across invocations ---------------------------------------------
+
+def test_id_prefix_namespaces_assigned_ids(tmp_path):
+    """Callers that merge several invocations need IDs that cannot collide.
+
+    SDD runs three lenses concurrently and keeps each finding's ID; without a
+    per-invocation prefix all three produce F1.
+    """
+    result = gate(tmp_path, [_finding(id=None, severity="MEDIUM")],
+                  extra=("--id-prefix", "SEC"), expect=1)
+    assert result["findings"][0]["id"] == "SEC1"
+
+
+def test_id_prefix_defaults_to_f(tmp_path):
+    assert gate(tmp_path, [_finding(id=None, severity="MEDIUM")], expect=1)["findings"][0]["id"] == "F1"
+
+
+def test_id_prefix_still_respects_ids_already_present(tmp_path):
+    findings = [_finding(id="SEC1", severity="LOW"), _finding(id=None, severity="CRITICAL")]
+    result = gate(tmp_path, findings, extra=("--id-prefix", "SEC"), expect=3)
+    ids = [f["id"] for f in result["findings"]]
+    assert len(ids) == len(set(ids)), ids
+
+
 @pytest.mark.parametrize("suppressed", [5, "refuted", {"id": "F1"}])
 def test_quick_object_with_a_wrong_shaped_suppressed_is_a_diagnostic(tmp_path, suppressed):
     """Exit 2 with a message, never a traceback — the same rule as any bad input."""
@@ -1000,6 +1125,19 @@ def test_contested_is_dropped_below_deep(tmp_path):
     assert result["findings"] == []
     assert result["contested"] == []
     assert result["suppressed"][0]["reason"] == "refuted"
+
+
+def test_contested_finding_with_false_evidence_is_falsified_not_tiebroken(tmp_path):
+    """The evidence gate runs first: a demonstrable falsehood is not a disagreement.
+
+    Sending one to a third model spends a dispatch adjudicating something already
+    known to be wrong.
+    """
+    bogus = _finding(disposition="contested", severity="MEDIUM",
+                     evidence=[{"kind": "file-line", "ref": "no/such/file.py:1-2", "quote": "zzz"}])
+    result = gate(tmp_path, [bogus], extra=("--depth", "deep"), expect=0, repo_root=tmp_path)
+    assert result["contested"] == []
+    assert result["suppressed"][0]["reason"] == "falsified"
 
 
 def test_contested_at_deep_is_withheld_not_suppressed(tmp_path):

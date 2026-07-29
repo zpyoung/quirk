@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -28,6 +29,8 @@ PROFILES = ("code-diff", "spec-design", "plan", "prose-claim")
 # must appear on an added line — deleting a contract is not changing one. Matched
 # per line, against content lines only; see has_contract_surface.
 CONTRACT_SURFACE = re.compile(r"^\+.*\b(CONTRACT|SCHEMA):")
+
+HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 CODE_QUICK_MAX = 50
 CODE_DEEP_MIN = 151
@@ -113,38 +116,82 @@ def read_diff(target: str, repo_root: Path, diff_file: str | None) -> str:
             f"cannot read target {target or 'WORKTREE'}: "
             f"{detail[0] if detail else f'git diff exited {completed.returncode}'}"
         )
+    if not target or target.strip() == "WORKTREE":
+        return completed.stdout + untracked_diff(repo_root)
     return completed.stdout
+
+
+def untracked_diff(repo_root: Path) -> str:
+    """The uncommitted work git will not diff for you.
+
+    A brand-new module is uncommitted work, and `git diff` in any form ignores it
+    until it is added. Reviewing a worktree without it silently omits whole files —
+    the review would report on everything except the new code. `--exclude-standard`
+    keeps ignored files out, since those are not work under review.
+    """
+    try:
+        listing = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard"],
+            cwd=repo_root, capture_output=True, text=True, errors="replace",
+        )
+    except OSError:
+        return ""
+    if listing.returncode != 0:
+        return ""
+
+    parts: list[str] = []
+    for relative in listing.stdout.splitlines():
+        if not relative.strip():
+            continue
+        # `--no-index` against /dev/null renders a new file as an all-added diff.
+        # It exits 1 precisely when there is a difference, which is the normal case.
+        rendered = subprocess.run(
+            ["git", "diff", "--no-index", "--no-renames", "--", os.devnull, relative],
+            cwd=repo_root, capture_output=True, text=True, errors="replace",
+        )
+        parts.append(rendered.stdout)
+    return "".join(parts)
 
 
 def diff_content_lines(diff: str) -> list[str]:
     """The added and removed lines of a diff, excluding file metadata.
 
-    Position decides, not the prefix. `+++ b/x.py` names a file only where a header
-    can appear; inside a hunk, `+++counter` is an added line whose own text begins
-    with `++`, and git emits exactly that. Treating the prefix alone as metadata
-    silently undercounts such lines.
+    No prefix rule can separate content from headers, because both `+++ b/x.py` and
+    an added line reading `++ new bullet` render as `+++ ...`. The hunk header is
+    the only unambiguous signal: `@@ -a,b +c,d @@` declares exactly how many old and
+    new lines follow, so everything consumed against that budget is content whatever
+    it starts with, and everything outside a hunk is metadata whatever it starts with.
 
     Every scan over a diff shares this, so a filename cannot trip a rule meant for
     added lines and an added line cannot be mistaken for a filename.
     """
     lines = diff.splitlines()
     content: list[str] = []
-    in_hunk = False
-    for index, line in enumerate(lines):
-        if line.startswith("@@"):
-            in_hunk = True
+    index = 0
+    while index < len(lines):
+        header = HUNK_HEADER.match(lines[index])
+        index += 1
+        if not header:
             continue
-        if line.startswith("diff --git "):
-            in_hunk = False
-            continue
-        # A `--- `/`+++ ` pair introduces a file wherever it appears. Requiring the
-        # pair is what keeps it distinguishable from hunk content.
-        if line.startswith("--- ") and index + 1 < len(lines) \
-                and lines[index + 1].startswith("+++ "):
-            in_hunk = False
-            continue
-        if in_hunk and line.startswith(("+", "-")):
-            content.append(line)
+        old_left = int(header.group(2) if header.group(2) is not None else 1)
+        new_left = int(header.group(4) if header.group(4) is not None else 1)
+        while index < len(lines) and (old_left > 0 or new_left > 0):
+            line = lines[index]
+            # A malformed or truncated hunk must not swallow the next file.
+            if HUNK_HEADER.match(line) or line.startswith("diff --git "):
+                break
+            index += 1
+            if line.startswith("\\"):  # "\ No newline at end of file"
+                continue
+            if line.startswith("-"):
+                old_left -= 1
+                content.append(line)
+            elif line.startswith("+"):
+                new_left -= 1
+                content.append(line)
+            else:  # context, counted against both sides and reported as neither
+                old_left -= 1
+                new_left -= 1
     return content
 
 
@@ -335,7 +382,8 @@ def looks_like_path(token: str) -> bool:
 
 
 def resolve_reference(
-    kind: str, token: str, repo_root: Path, doc_dir: Path | None = None
+    kind: str, token: str, repo_root: Path, doc_dir: Path | None = None,
+    doc_path: Path | None = None,
 ) -> tuple[bool, str]:
     if kind == "url":
         return True, "skipped (no network I/O)"
@@ -365,16 +413,27 @@ def resolve_reference(
         return False, f"{binary} not found on PATH (may be prose rather than a command)"
     # symbol
     completed = subprocess.run(
-        ["git", "grep", "-nF", "--", token],
+        ["git", "grep", "-lF", "--", token],
         cwd=repo_root, capture_output=True, text=True, errors="replace",
     )
-    if completed.returncode == 0 and completed.stdout.strip():
+    if completed.returncode != 0 or not completed.stdout.strip():
+        return False, "no occurrence found by git grep"
+
+    matches = [line for line in completed.stdout.splitlines() if line.strip()]
+    # The document's own mention is the claim under review, not evidence for it. A
+    # tracked target would otherwise satisfy every reference it makes by making it.
+    elsewhere = [
+        match for match in matches
+        if doc_path is None or (repo_root / match).resolve() != doc_path.resolve()
+    ]
+    if elsewhere:
         return True, "found by git grep"
-    return False, "no occurrence found by git grep"
+    return False, "found only in the document under review"
 
 
 def check_references(
-    text: str, repo_root: Path, profile: str, doc_dir: Path | None = None
+    text: str, repo_root: Path, profile: str, doc_dir: Path | None = None,
+    doc_path: Path | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     tokens: list[str] = []
     for match in BACKTICK_TOKEN.finditer(text):
@@ -392,7 +451,7 @@ def check_references(
         kind = classify_reference(token)
         if kind is None:
             continue
-        ok, detail = resolve_reference(kind, token, repo_root, doc_dir)
+        ok, detail = resolve_reference(kind, token, repo_root, doc_dir, doc_path)
         lines.append(f"{'ok' if ok else 'MISSING'} {kind} {token} — {detail}")
         if not ok:
             findings.append(prepass_finding(token, kind, detail, profile))
@@ -520,7 +579,9 @@ def run_prepass(
             # No check could run at all — distinct from a check that ran and failed.
             return 1, {"status": "could-not-run", "checks": [], "findings": []}
         text = path.read_text(errors="replace")
-        reference_check, findings = check_references(text, repo_root, profile, path.parent)
+        reference_check, findings = check_references(
+            text, repo_root, profile, path.parent, path
+        )
         self_reporting.add(reference_check["name"])
         checks = [reference_check, check_sections(text, profile)]
 
@@ -755,21 +816,28 @@ def finding_order(finding: dict[str, Any]) -> tuple[bool, int]:
     return finding.get("category") != "unfalsifiable-claim", SEVERITIES.index(finding["severity"])
 
 
-def assign_ids(findings: list[dict[str, Any]]) -> None:
-    """Fill in `F1..Fn` for anything lacking an ID, reserving the ones already taken."""
-    taken = {f["id"] for f in findings if f.get("id")}
+def assign_ids(
+    findings: list[dict[str, Any]], prefix: str = "F", reserved: set[str] | None = None
+) -> None:
+    """Fill in `<prefix>1..n` for anything lacking an ID, reserving the ones taken.
+
+    `reserved` carries IDs that appear nowhere in `findings` but must not be reused —
+    quick mode's carried suppressions, which are already spoken for.
+    """
+    taken = {f["id"] for f in findings if f.get("id")} | (reserved or set())
     next_number = 1
     for finding in findings:
         if finding.get("id"):
             continue
-        while f"F{next_number}" in taken:
+        while f"{prefix}{next_number}" in taken:
             next_number += 1
-        finding["id"] = f"F{next_number}"
+        finding["id"] = f"{prefix}{next_number}"
         taken.add(finding["id"])
 
 
 def run_gate(
-    findings_path: str, model_path: str, prepass_path: str, depth: str, repo_root: Path
+    findings_path: str, model_path: str, prepass_path: str, depth: str, repo_root: Path,
+    id_prefix: str = "F",
 ) -> tuple[int, dict[str, Any]]:
     findings = load_json(findings_path, "findings")
     model = load_json(model_path, "model")
@@ -806,7 +874,7 @@ def run_gate(
     # emit `id: null` and to reuse a dismissed finding's original ID when re-raising
     # it — neither works if the suppressed record it was handed has no ID.
     merged.sort(key=finding_order)
-    assign_ids(merged)
+    assign_ids(merged, id_prefix, {str(s.get("id")) for s in carried_suppressed if s.get("id")})
 
     survivors: list[dict[str, Any]] = []
     contested: list[dict[str, Any]] = []
@@ -815,19 +883,24 @@ def run_gate(
     for finding in merged:
         disposition = finding.get("disposition", "standing")
         if disposition == "refuted":
-            suppressed.append({"id": finding.get("id", ""), "reason": "refuted"})
+            suppressed.append({"id": finding["id"], "reason": "refuted"})
             continue
-        if disposition == "contested":
-            if depth == "deep":
-                contested.append(finding)
-            else:
-                suppressed.append({"id": finding.get("id", ""), "reason": "refuted"})
-            continue
+
+        # The evidence gate runs before the tie is routed. A demonstrable falsehood
+        # is not a disagreement, and sending one to a third model spends a dispatch
+        # adjudicating something already known to be wrong.
         graded, reason = apply_evidence_gate(finding, repo_root)
         if graded is None:
-            suppressed.append({"id": finding.get("id", ""), "reason": reason or "falsified"})
-        else:
-            survivors.append(graded)
+            suppressed.append({"id": finding["id"], "reason": reason or "falsified"})
+            continue
+
+        if disposition == "contested":
+            if depth == "deep":
+                contested.append(graded)
+            else:
+                suppressed.append({"id": graded["id"], "reason": "refuted"})
+            continue
+        survivors.append(graded)
 
     survivors.sort(key=finding_order)
 
@@ -959,6 +1032,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="depth actually used; echoed into GateResult for the manifest",
     )
     gate_cmd.add_argument("--repo-root", default=".", help="repository root")
+    gate_cmd.add_argument(
+        "--id-prefix", default="F",
+        help="prefix for assigned finding IDs; give concurrent invocations distinct "
+             "prefixes so a caller merging them cannot collide",
+    )
 
     manifest_cmd = sub.add_parser("manifest", help="assemble the replay record")
     manifest_cmd.add_argument("--resolve", required=True, help="ResolveResult JSON")
@@ -986,7 +1064,8 @@ def main(argv: list[str] | None = None) -> int:
             exit_code, payload = select_reviewer(args.author_family, args.model, args.check_cmd)
         elif args.command == "gate":
             exit_code, payload = run_gate(
-                args.findings, args.model, args.prepass, args.depth, repo_root
+                args.findings, args.model, args.prepass, args.depth, repo_root,
+                args.id_prefix,
             )
         elif args.command == "manifest":
             payload = build_manifest(

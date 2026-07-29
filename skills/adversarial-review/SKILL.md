@@ -79,7 +79,10 @@ inferred from the target's shape; `--profile` overrides. `ResolveResult` carries
 A target that cannot be read — a typo'd range, a non-repo root, a missing file — exits 2. It never
 resolves to size 0, because a review of nothing must not be reportable as a review that found
 nothing. `size_metric` is lines under `code-diff` and words under the prose profiles, on both the
-path and the diff paths. `WORKTREE` diffs against `HEAD`, so staged work is part of the artifact.
+path and the diff paths. `WORKTREE` covers **all** uncommitted work — unstaged, staged (it diffs
+against `HEAD`), and untracked files that git would not diff at all. A brand-new module is
+uncommitted work, and omitting it would review everything except the new code. `.gitignore` is
+honoured.
 
 **3. Pre-pass.**
 
@@ -137,6 +140,14 @@ pre-merge them.
 object. Pass the quick object through whole: its self-refuted entries are carried into
 `suppressed_count`, and dropping them would report a kill rate of zero for the one depth that
 refutes itself.
+
+**Running several invocations and merging them?** Give each a distinct `--id-prefix`. Every gate
+numbers from 1 independently, so three concurrent lenses all produce `F1` and a caller that keeps
+the IDs — as the dismissal carry-forward requires — cannot tell them apart.
+
+The evidence gate runs *before* the tie is routed, so a `contested` finding whose evidence is
+demonstrably false is suppressed as `falsified` rather than sent to tiebreak. A falsehood is not a
+disagreement, and adjudicating one costs a third dispatch to learn nothing.
 
 **8. Tiebreak.** At `deep` depth only, and only if `gate.json` has a non-empty `contested[]`. Stage
 `assets/tiebreak-prompt.md`, dispatch to a **third** family, merge its rulings onto those findings,
