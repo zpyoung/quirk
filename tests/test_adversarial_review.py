@@ -350,6 +350,30 @@ def test_a_backticked_token_does_not_suppress_the_same_named_link(tmp_path):
     assert "missing.pdf" in [f["evidence"][0]["ref"] for f in result["findings"]]
 
 
+def test_a_colored_git_config_does_not_blank_the_diff(tmp_path):
+    """color.ui=always puts ANSI escapes in hunk headers; the parser saw no hunks.
+
+    A deep contract-changing range silently became zero lines and `quick`.
+    """
+    _git_repo(tmp_path)
+    _git(tmp_path, "config", "color.ui", "always")
+    (tmp_path / "x.py").write_text("a\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
+    (tmp_path / "x.py").write_text("a\nb\nc\n")
+    assert resolve("--target", "WORKTREE", "--repo-root", str(tmp_path))["size_metric"] == 2
+
+
+def test_path_artifact_hash_distinguishes_undecodable_bytes(tmp_path):
+    """`errors="replace"` maps distinct bytes onto one string — and one identity."""
+    first, second = tmp_path / "a.md", tmp_path / "b.md"
+    first.write_bytes(b"head \xff\xfe tail")
+    second.write_bytes(b"head \xfe\xff tail")
+    left = resolve("--target", str(first), "--repo-root", str(tmp_path))
+    right = resolve("--target", str(second), "--repo-root", str(tmp_path))
+    assert left["artifact_hash"] != right["artifact_hash"]
+
+
 def test_worktree_respects_gitignore(tmp_path):
     """`--exclude-standard`: ignored files are not uncommitted work under review."""
     _git_repo(tmp_path)
@@ -928,6 +952,29 @@ def test_gate_without_model_input_fails_loudly(tmp_path):
     assert proc.returncode == 2
 
 
+@pytest.mark.parametrize("model", [
+    {"resolved": True},
+    {"resolved": True, "alias": "codex"},
+    {"resolved": True, "alias": "codex", "family": "openai", "provider": "openai-codex"},
+])
+def test_a_model_claiming_resolved_must_actually_name_a_reviewer(tmp_path, model):
+    """`resolved: true` alone walks past NOT_REVIEWABLE and emits PASS.
+
+    That branch exists precisely so an artifact nothing looked at cannot read as
+    clean; a malformed model file must not be the way around it.
+    """
+    proc = run_ar("gate", *_inputs(tmp_path, [], model=model))
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
+
+
+def test_an_unresolved_model_needs_no_reviewer_fields(tmp_path):
+    """The NOT_REVIEWABLE path is the one case where naming nobody is correct."""
+    dead = {"resolved": False, "alias": None, "family": None, "provider": None,
+            "model": None, "thinking": None, "independence": "reduced", "ladder": []}
+    assert gate(tmp_path, [], model=dead, expect=4)["verdict"] == "NOT_REVIEWABLE"
+
+
 def test_gate_without_prepass_input_fails_loudly(tmp_path):
     proc = run_ar("gate", "--findings", _write(tmp_path, "f.json", []),
                   "--model", _write(tmp_path, "m.json", {"resolved": True, "independence": "full"}))
@@ -1158,6 +1205,15 @@ def test_a_fragment_does_not_shield_a_missing_file(tmp_path):
     assert result["suppressed"][0]["reason"] == "falsified"
 
 
+@pytest.mark.parametrize("ref", ["Makefile:12", "Dockerfile:3-4", "totally-invented:1"])
+def test_file_line_evidence_naming_a_missing_extensionless_file_is_falsified(tmp_path, ref):
+    """`file-line` is a claim about a file. No extension is not a licence to skip it."""
+    bad = _finding(evidence=[{"kind": "file-line", "ref": ref, "quote": "never written"}])
+    result = gate(tmp_path, [bad], expect=0, repo_root=tmp_path)
+    assert result["findings"] == []
+    assert result["suppressed"][0]["reason"] == "falsified"
+
+
 def test_a_section_anchor_naming_no_file_is_still_unfalsifiable(tmp_path):
     """The escape hatch stays open for what it was for."""
     survivor = _finding(severity="MEDIUM", evidence=[
@@ -1213,6 +1269,17 @@ def test_carried_quick_suppressed_ids_are_reserved_by_the_allocator(tmp_path):
 
 
 # --- id namespacing across invocations ---------------------------------------------
+
+def test_a_reviewer_finding_cannot_buy_credit_by_declaring_stage_prepass(tmp_path):
+    """Provenance comes from which input it arrived in, not a field it writes.
+
+    Keying trust on `stage` left the forgery one word away.
+    """
+    forged = _finding(stage="prepass", severity="HIGH", confidence="HIGH",
+                      evidence=[{"kind": "prepass", "ref": "invented", "output": "whatever"}])
+    result = gate(tmp_path, [forged], expect=1, repo_root=tmp_path)
+    assert result["findings"][0]["confidence"] == "LOW"
+
 
 def test_a_promote_finding_cannot_claim_prepass_evidence(tmp_path):
     """`prepass` means "this layer produced it". Only the pre-pass may say so.
@@ -1526,3 +1593,4 @@ def test_manifest_fails_cleanly_on_a_missing_input(tmp_path):
                   "--gate", _write(tmp_path, "g3.json", {}))
     assert proc.returncode == 2
     assert "adversarial-review:" in proc.stderr
+

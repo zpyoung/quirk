@@ -101,7 +101,10 @@ def read_diff(target: str, repo_root: Path, diff_file: str | None) -> str:
             raise UsageError(f"missing diff file: {path}")
         return path.read_text(errors="replace")
 
-    argv = ["git", "diff", "--no-renames"]
+    # `--no-color` is not cosmetic: a user with color.ui=always gets ANSI escapes
+    # inside the hunk headers, the parser matches none of them, and a deep
+    # contract-changing range silently resolves to zero lines and `quick`.
+    argv = ["git", "--no-pager", "diff", "--no-renames", "--no-color"]
     if target and target.strip() != "WORKTREE":
         argv.append(target)
     else:
@@ -144,21 +147,35 @@ def untracked_diff(repo_root: Path) -> str:
             ["git", "ls-files", "--others", "--exclude-standard"],
             cwd=repo_root, capture_output=True, text=True, errors="replace",
         )
-    except OSError:
-        return ""
+    except OSError as exc:
+        raise UsageError(f"cannot enumerate untracked files: {exc}") from exc
     if listing.returncode != 0:
-        return ""
+        # Swallowing this would quietly review a subset of the worktree and report
+        # it as the whole thing — the same failure as a review of nothing.
+        detail = listing.stderr.strip().splitlines()
+        raise UsageError(
+            f"cannot enumerate untracked files: "
+            f"{detail[0] if detail else f'git ls-files exited {listing.returncode}'}"
+        )
 
     parts: list[str] = []
     for relative in listing.stdout.splitlines():
         if not relative.strip():
             continue
         # `--no-index` against /dev/null renders a new file as an all-added diff.
-        # It exits 1 precisely when there is a difference, which is the normal case.
+        # It exits 1 precisely when there is a difference, which is the normal case;
+        # anything above that is a failure to read and must not pass as "no content".
         rendered = subprocess.run(
-            ["git", "diff", "--no-index", "--no-renames", "--", os.devnull, relative],
+            ["git", "--no-pager", "diff", "--no-index", "--no-renames", "--no-color",
+             "--", os.devnull, relative],
             cwd=repo_root, capture_output=True, text=True, errors="replace",
         )
+        if rendered.returncode > 1:
+            detail = rendered.stderr.strip().splitlines()
+            raise UsageError(
+                f"cannot read untracked file {relative}: "
+                f"{detail[0] if detail else f'git diff exited {rendered.returncode}'}"
+            )
         parts.append(rendered.stdout)
     return "".join(parts)
 
@@ -262,7 +279,10 @@ def resolve_target(
             "profile": resolved_profile,
             "target_kind": target_kind,
             "target_ref": str(path),
-            "artifact_hash": hashlib.sha256(content.encode()).hexdigest(),
+            # Hash the bytes, not the lossily-decoded text: `errors="replace"` maps
+            # distinct byte sequences onto the same string, so two different
+            # artifacts would share one replay identity.
+            "artifact_hash": hashlib.sha256(path.read_bytes()).hexdigest(),
             "size_metric": size_metric,
             "depth_suggestion": suggest_depth(resolved_profile, size_metric, False),
             "contract_surface": False,
@@ -836,9 +856,12 @@ def evidence_resolves(item: dict[str, Any], repo_root: Path) -> bool:
         if not bare:
             # A bare `#section` is an in-document anchor and names no file.
             return True
-        # A section anchor (`spec#3`) names no file either, and stays unfalsifiable.
-        # But `no/such/file.md#section` does name one, and the fragment must not
-        # shield it from the check that would show it is not there.
+        # `file-line` *is* a claim about a file, so the file has to be there —
+        # extensionless names like `Makefile` are not a licence to skip the check.
+        # Only `quote` may name something that is not a path at all (`spec#3` is a
+        # section), and only then does the unfalsifiable escape apply.
+        if kind == "file-line":
+            return False
         return not looks_like_path(bare)
     if not quote:
         return True
@@ -868,7 +891,7 @@ def evidence_resolves(item: dict[str, Any], repo_root: Path) -> bool:
 
 
 def apply_evidence_gate(
-    finding: dict[str, Any], repo_root: Path
+    finding: dict[str, Any], repo_root: Path, from_prepass: bool = False
 ) -> tuple[dict[str, Any] | None, str | None]:
     # Every item must hold: one true citation must not launder a fabricated one
     # riding alongside it.
@@ -877,10 +900,10 @@ def apply_evidence_gate(
 
     graded = dict(finding)
     # `prepass` means "the deterministic layer produced this", which is why it counts
-    # as reproduction. Only a finding that layer actually filed may claim it —
-    # otherwise a reviewer can self-declare the credit that holds any CRITICAL/HIGH
-    # at full confidence.
-    trusted = REPRODUCTION_KINDS if finding.get("stage") == "prepass" else ("command",)
+    # as reproduction. Provenance is decided by which input the finding arrived in —
+    # never by its own `stage` field, which the reviewer writes and can therefore
+    # forge to buy the credit that holds any CRITICAL/HIGH at full confidence.
+    trusted = REPRODUCTION_KINDS if from_prepass else ("command",)
     has_reproduction = any(item["kind"] in trusted for item in finding["evidence"])
     # Severity is consequence and never moves; proof speaks only to likelihood,
     # and only where the spec requires it.
@@ -923,6 +946,17 @@ def run_gate(
     for label, value in (("model", model), ("prepass", prepass)):
         if not isinstance(value, dict):
             raise UsageError(f"{label} input must be a JSON object")
+    # `resolved: true` alone is not a reviewer. Accepting it lets a malformed or
+    # hand-written model file walk straight past NOT_REVIEWABLE and emit PASS for an
+    # artifact nothing ever looked at — the exact outcome that branch exists to stop.
+    if model.get("resolved"):
+        missing = [f for f in ("alias", "family", "provider", "model", "independence")
+                   if not model.get(f)]
+        if missing:
+            raise UsageError(
+                f"model input claims resolved but names no reviewer: missing "
+                f"{', '.join(missing)}"
+            )
 
     # `quick` runs both stages in one reply and reports {findings, suppressed}. Its
     # self-refuted list is carried through rather than dropped: suppressed_count is
@@ -943,6 +977,9 @@ def run_gate(
 
     # gate owns the merge so a caller cannot silently drop the findings that are
     # true by construction.
+    # Provenance is recorded here, where it is still known, rather than read off a
+    # field the reviewer controls.
+    prepass_origin = {id(f) for f in prepass.get("findings", [])}
     merged = list(findings) + list(prepass.get("findings", []))
     for index, finding in enumerate(merged):
         validate_finding(finding, index)
@@ -971,7 +1008,9 @@ def run_gate(
         # The evidence gate runs before the tie is routed. A demonstrable falsehood
         # is not a disagreement, and sending one to a third model spends a dispatch
         # adjudicating something already known to be wrong.
-        graded, reason = apply_evidence_gate(finding, repo_root)
+        graded, reason = apply_evidence_gate(
+            finding, repo_root, id(finding) in prepass_origin
+        )
         if graded is None:
             suppressed.append({"id": finding["id"], "reason": reason or "falsified"})
             continue
@@ -1021,7 +1060,8 @@ def compute_verdict(
 # --- replay manifest --------------------------------------------------------------
 
 def build_manifest(
-    resolve_path: str, prepass_path: str, model_path: str, gate_path: str, lens: str | None
+    resolve_path: str, prepass_path: str, model_path: str, gate_path: str, lens: str | None,
+    repo_root: Path | None = None, verify_artifact: bool = False,
 ) -> dict[str, Any]:
     resolved = load_json(resolve_path, "resolve")
     prepass = load_json(prepass_path, "prepass")
@@ -1048,6 +1088,24 @@ def build_manifest(
     # Depth comes from the gate, never from resolve: resolve only ever offered a
     # suggestion, and a caller that overrode it would otherwise be misrecorded.
     depth = gate_result.get("depth", "standard")
+
+    if verify_artifact:
+        # Every stage judges the artifact resolve hashed. If the tree moved under
+        # the review — a fix applied mid-run, a rebase, a concurrent edit — the
+        # later stages reviewed something the earlier ones never saw, and the
+        # refute stage will "refute" real findings because they no longer
+        # reproduce. That reads as a clean run and is the opposite of one.
+        current = resolve_target(
+            resolved.get("target_ref", ""), resolved.get("profile"),
+            repo_root or Path("."), None,
+        )
+        if current["artifact_hash"] != resolved.get("artifact_hash"):
+            raise UsageError(
+                "artifact changed during the review: "
+                f"resolve saw {str(resolved.get('artifact_hash'))[:12]}, "
+                f"the tree now hashes {current['artifact_hash'][:12]}. "
+                "Findings from this run judged different content — re-run it."
+            )
 
     # A quick pass self-refutes inside one context, so it cannot claim structural
     # independence no matter which family ran it. Independence only ever degrades.
@@ -1143,6 +1201,11 @@ def build_parser() -> argparse.ArgumentParser:
     manifest_cmd.add_argument("--model", required=True, help="ModelSelection JSON")
     manifest_cmd.add_argument("--gate", required=True, help="GateResult JSON")
     manifest_cmd.add_argument("--lens", help="lens the review was narrowed to, if any")
+    manifest_cmd.add_argument("--repo-root", default=".", help="repository root")
+    manifest_cmd.add_argument(
+        "--verify-artifact", action="store_true",
+        help="re-hash the target and fail if it changed during the review",
+    )
 
     return parser
 
@@ -1168,7 +1231,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "manifest":
             payload = build_manifest(
-                args.resolve, args.prepass, args.model, args.gate, args.lens
+                args.resolve, args.prepass, args.model, args.gate, args.lens,
+                repo_root, args.verify_artifact,
             )
         else:  # pragma: no cover - argparse rejects unknown subcommands
             raise UsageError(f"unhandled command: {args.command}")
