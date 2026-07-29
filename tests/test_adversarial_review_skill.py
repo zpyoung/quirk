@@ -123,10 +123,8 @@ def test_code_diff_profile_retains_location_and_evidence_requirement() -> None:
 
 
 def test_code_diff_profile_keeps_silence_distinct_from_a_clean_review() -> None:
-    """The distinction SDD's loop depends on. It used to be carried by a literal
-    `NO_FINDINGS` token, which the fourteenth pass found was not JSON and was never
-    normalized anywhere — a clean review that used it came back as a crashed dispatch.
-    The distinction survives; the token it rode in on does not."""
+    """The distinction SDD's loop depends on. A literal token carried it once; the
+    token was not JSON and nothing normalised it, so a clean review read as a crash."""
     body = (PROFILES_DIR / "code-diff.md").read_text()
     assert "Silence is not the same as `[]`" in body
     assert "failed dispatch" in body
@@ -331,7 +329,7 @@ def test_sdd_integration_list_names_the_skill() -> None:
     assert "**quirk:adversarial-review**" in body
 
 
-# ============ thirteenth review pass ==============================================
+# ============ clean-path reachability ========================================
 
 def test_the_summary_names_the_manifest_as_the_source_of_reviewer_fields() -> None:
     """GateResult carries verdict/findings/contested/suppressed/suppressed_count/depth
@@ -386,7 +384,7 @@ def test_composition_contract_matches_the_script_on_unknown_families() -> None:
     assert "There is no unknown case" not in body
 
 
-# ============ fourteenth review pass ==============================================
+# ============ prompt/gate contract agreement =================================
 
 @pytest.mark.parametrize("profile", PROFILES)
 def test_a_clean_review_is_instructed_as_json_not_a_bare_token(profile: str) -> None:
@@ -428,14 +426,12 @@ def test_the_promote_prompt_states_which_file_a_ref_names() -> None:
 
 
 def test_a_tiebreak_can_move_the_severity_it_was_asked_to_adjudicate() -> None:
-    """tiebreak-prompt.md scopes severity disputes in ("except where severity *is* the
-    disagreement") but its ruling shape carried no severity field, so the verdict was
-    still computed from the label the tiebreak had just rejected."""
+    """Tiebreak may rule on severity, so its ruling has to be able to carry one."""
     body = (ASSETS_DIR / "tiebreak-prompt.md").read_text()
     assert "set `severity`" in body
     step = SKILL_PATH.read_text()
     step = step[step.index("**8. Tiebreak.**"):]
-    assert "`adjudicated_severity`" in step[:700]
+    assert "merge --stage tiebreak" in step[:700]
 
 
 def test_the_declared_target_kinds_are_the_ones_the_script_can_produce() -> None:

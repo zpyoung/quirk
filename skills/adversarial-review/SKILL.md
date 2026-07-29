@@ -109,7 +109,9 @@ one up fails safe.
 ```
 
 Defaults to a family different from the author's, gates each candidate on `pi-watch --check
-<alias>`, and walks the ladder on failure. If the resolved rung lands on the author's own family,
+<alias>`, and walks the ladder on failure. The returned triple is the one the check itself reported;
+`triple_verified: false` means only the alias was confirmed and dispatch may still fail on a stale
+model id. If the resolved rung lands on the author's own family,
 `independence` is stamped `"reduced"`.
 
 `author_family` resolves in order: the explicit input; else the family in the manifest of the run
@@ -123,20 +125,28 @@ here and do not treat it as a pass.
 **5. Promote.** Stage `assets/promote-prompt.md` and dispatch. Collect its JSON array to
 `$WORK/findings.json`. See Dispatch below.
 
-**6. Refute.** Stage `assets/refute-prompt.md` with promote's six claim fields only — `id`,
-`severity`, `confidence`, `category`, `claim`, `evidence[]` — and dispatch **in a fresh context**.
-It returns judgments, not findings. Merge each judgment onto its finding: set `disposition` from
-the judgment, `stage` to `"refute"`, and — when the judgment carries `severity` — set
-`adjudicated_severity` to it. Never let refute rewrite a `claim`.
+**6. Refute.** Stage the claims, dispatch **in a fresh context**, then merge the rulings
+mechanically:
 
-That last merge is load-bearing. Promote raises candidates at roughly 60% confidence by design, and
-while the verdict read promote's own `severity`, a real-but-inflated finding could only be upheld at
-the inflated grade, contested (and dropped below `deep`), or killed. Every one of them bought a fix
-round. `adjudicated_severity` is what the verdict is computed from; the promoter's proposal is kept
-beside it so the correction stays visible. The gate rejects it on a `promote`-stage finding — the
-recall stage does not get to grade itself.
+```bash
+"$SCRIPT" claims --findings "$WORK/promote.json" > "$WORK/claims.json"
+# stage assets/refute-prompt.md with .claims, dispatch, collect to refute.json
+"$SCRIPT" merge --findings <(python3 -c 'import json,sys;json.dump(json.load(open(sys.argv[1]))["findings"],sys.stdout)' "$WORK/claims.json") \
+  --judgments "$WORK/refute.json" > "$WORK/merged.json"
+```
 
-Skip this step entirely at `quick` depth — promote already self-refuted.
+`claims` assigns the IDs and emits the six claim fields — `id`, `severity`, `confidence`,
+`category`, `claim`, `evidence[]` — plus the full `findings[]` to feed `merge`. Promote emits
+`id: null` and refute keys its judgments by `id`, so the IDs must exist before the dispatch, not
+after it. `claims` also withholds `limitation` and `question` records: refute has no mandate over a
+claim nobody offered as a defect, and staged as claims they come back `refuted`.
+
+`merge` applies each ruling — `disposition`, `confidence` when present, `severity` onto
+`adjudicated_severity` — stamps `stage`, and **fails if any claim went unjudged**. That is what
+proves the stage ran. Never hand-merge: the gate refuses `promote`-stage findings at `standard` and
+`deep`, because a depth flag is a caller's assertion and the stage stamp is evidence.
+
+Skip all of this at `quick` depth — one dispatch, self-refuted, findings stay at `stage: "promote"`.
 
 **7. Evidence gate.**
 
@@ -163,19 +173,10 @@ demonstrably false is suppressed as `falsified` rather than sent to tiebreak. A 
 disagreement, and adjudicating one costs a third dispatch to learn nothing.
 
 **8. Tiebreak.** At `deep` depth only, and only if `gate.json` has a non-empty `contested[]`. Stage
-`assets/tiebreak-prompt.md`, dispatch to a **third** family, merge its rulings onto those findings,
-and re-run `gate`. Merge `disposition` always, `confidence` when the ruling carries it, and a ruling's
-`severity` onto `adjudicated_severity` — a tiebreak that settled a severity dispute has moved the
-field the verdict is computed from, and dropping it re-runs the gate on the label the tiebreak just
-rejected. Set `stage` to `"tiebreak"`; the gate refuses an adjudicated grade from any other stage. Contested findings are withheld from `findings[]` and are not counted as
+`assets/tiebreak-prompt.md`, dispatch to a **third** family, then merge with
+`merge --stage tiebreak` and re-run `gate`. That merge expects a ruling for every `contested`
+finding and nothing else. Contested findings are withheld from `findings[]` and are not counted as
 suppressed — ignoring `contested[]` silently drops them.
-
-**The tree must not move between stages.** Every stage judges the artifact `resolve` hashed. Apply a
-fix mid-run — or let a rebase or a concurrent edit land — and the later stages review something the
-earlier ones never saw. The refute stage then "refutes" real findings because they no longer
-reproduce, and the run comes out looking clean. Pass `--verify-artifact` at step 9 to make that
-condition fail loudly instead: it re-hashes the target and exits 2 on drift. Fix after the manifest,
-never during.
 
 **9. Emit.**
 

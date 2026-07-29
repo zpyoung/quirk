@@ -342,10 +342,7 @@ def test_staged_new_file_is_visible_before_the_first_commit(tmp_path):
 
 
 def test_headings_inside_a_code_fence_do_not_satisfy_required_sections(tmp_path):
-    """Showing `## Purpose` in a sample block is not declaring the section.
-
-    Raised in the very first review pass and left unfixed until the eighth.
-    """
+    """Showing `## Purpose` in a sample block is not declaring the section."""
     doc = _touch(tmp_path / "logic.md",
                  "# Title\n\n```markdown\n## Purpose\n## Scope\n## Decisions Locked\n```\n\n"
                  "Body text with no references.\n")
@@ -456,10 +453,6 @@ def prepass(*args: str, cwd: Path | None = None, expect: int = 0) -> dict:
     proc = run_ar("prepass", *args, cwd=cwd)
     assert proc.returncode == expect, f"exit {proc.returncode}: {proc.stderr}"
     return json.loads(proc.stdout)
-
-
-def _findings_by_name(result: dict) -> dict:
-    return {f["evidence"][0]["ref"]: f for f in result["findings"]}
 
 
 # --- prose: reference resolution --------------------------------------------------
@@ -944,7 +937,7 @@ def _finding(**over) -> dict:
         "id": "F1", "severity": "HIGH", "confidence": "HIGH",
         "category": "correctness", "claim": "x breaks",
         "evidence": [{"kind": "command", "command": "pytest -q", "output": "1 failed"}],
-        "remediation": "fix x", "patch": None, "stage": "promote",
+        "remediation": "fix x", "patch": None, "stage": "refute",
         "disposition": "standing",
     }
     base.update(over)
@@ -967,6 +960,17 @@ def _inputs(tmp_path, findings, *, model=None, prepass_status="pass", prepass_fi
         "--model", _write(tmp_path, "m.json", model),
         "--prepass", _write(tmp_path, "p.json", pre),
     )
+
+
+def gate_quick(tmp_path, findings, *, expect=0, repo_root=None, **kw) -> dict:
+    """Quick depth: one dispatch, self-refuted, so findings stay at stage promote."""
+    extra = ("--depth", "quick")
+    if repo_root is not None:
+        extra = (*extra, "--repo-root", str(repo_root))
+    payload = {"findings": findings, "suppressed": []}
+    proc = run_ar("gate", *_inputs(tmp_path, payload, **kw), *extra)
+    assert proc.returncode == expect, f"exit {proc.returncode}: {proc.stderr}"
+    return json.loads(proc.stdout)
 
 
 def gate(tmp_path, findings, *, expect=0, extra=(), repo_root=None, **kw) -> dict:
@@ -1348,10 +1352,8 @@ def test_a_promote_finding_cannot_claim_prepass_evidence(tmp_path):
     """
     faked = _finding(stage="promote", severity="HIGH", confidence="HIGH",
                      evidence=[{"kind": "prepass", "ref": "invented", "output": "anything"}])
-    result = gate(tmp_path, [faked], expect=0, repo_root=tmp_path)
+    result = gate_quick(tmp_path, [faked], expect=0, repo_root=tmp_path)
     assert result["findings"][0]["confidence"] == "LOW"
-    # Stripped of its faked reproduction credit it is a promote-only hypothesis,
-    # so it reports as an advisory rather than buying a fix round.
     assert result["findings"][0]["blocking"] is False
 
 
@@ -1712,7 +1714,7 @@ def test_manifest_fails_cleanly_on_a_missing_input(tmp_path):
 
 
 
-# ============ eighth review pass ==================================================
+# ============ evidence provenance and id allocation ==========================
 
 @pytest.mark.parametrize("target", ["vendor/plans/notes.md", "third_party/adr/notes.md"])
 def test_a_nested_plans_or_adr_directory_does_not_hijack_the_profile(target, tmp_path):
@@ -1766,7 +1768,7 @@ def test_a_valid_kebab_category_is_accepted(tmp_path):
     assert gate(tmp_path, [_finding(category="missing-error-path")], expect=1)["findings"]
 
 
-# ============ ninth review pass ===================================================
+# ============ reference resolution ===========================================
 
 def test_a_quote_citation_with_a_section_anchor_still_checks_the_quote(tmp_path):
     """A ref naming no file excused the quote entirely, so a fabricated one survived."""
@@ -1784,7 +1786,7 @@ def test_a_quote_citation_with_an_anchor_passes_when_the_quote_is_real(tmp_path)
     _touch(tmp_path / "spec.md", "# Spec\n\nthe real sentence\n")
     good = _finding(evidence=[{"kind": "quote", "ref": "spec.md#intro",
                                "quote": "the real sentence"}])
-    assert gate(tmp_path, [good], expect=0,
+    assert gate(tmp_path, [good], expect=1,
                 extra=("--repo-root", str(tmp_path)))["findings"]
 
 
@@ -1828,7 +1830,7 @@ def test_a_bare_uninstalled_unknown_token_is_still_reported(tmp_path):
     assert result["findings"]
 
 
-# ============ tenth review pass ===================================================
+# ============ diff parsing and anchors =======================================
 
 def test_a_backticked_path_containing_spaces_is_still_a_reference(tmp_path):
     """A space meant 'command or prose', so a path with a space left the scan."""
@@ -1864,7 +1866,7 @@ def test_absence_evidence_with_an_empty_output_field_is_accepted(tmp_path):
     """Empty output IS the claim for an absence — the one place empty is content."""
     f = _finding(evidence=[{"kind": "absence", "command": "grep -r zzz .",
                             "ref": "tests/", "output": ""}])
-    assert gate(tmp_path, [f], expect=0)["findings"]
+    assert gate(tmp_path, [f], expect=1)["findings"]
 
 
 @pytest.mark.parametrize("patch", [{"not": "a diff"}, 42, ["a"], True])
@@ -1879,7 +1881,7 @@ def test_a_string_patch_and_a_null_patch_are_both_accepted(tmp_path):
     assert gate(tmp_path, [_finding(patch="--- a\n+++ b\n")], expect=1)["findings"]
 
 
-# ============ eleventh review pass ================================================
+# ============ markdown links and headings ====================================
 
 def test_a_nested_relative_link_is_not_rescued_by_a_root_file_of_the_same_name(tmp_path):
     """Markdown resolves a link against its own document. Falling back to the repo
@@ -1940,7 +1942,7 @@ def test_a_setext_document_actually_missing_a_section_still_fails(tmp_path):
     assert "Decisions Locked" in coverage["output"]
 
 
-# ============ twelfth review pass =================================================
+# ============ depth provenance and id shape ==================================
 
 def _quick_payload():
     """Exactly what assets/promote-prompt.md tells a quick-depth reviewer to emit."""
@@ -2003,14 +2005,11 @@ def test_a_valid_supplied_id_is_preserved(tmp_path):
     assert gate(tmp_path, [_finding(id="F7")], expect=1)["findings"][0]["id"] == "F7"
 
 
-# ============ thirteenth review pass ==============================================
+# ============ clean-path reachability ========================================
 
 def test_a_clean_quick_review_is_accepted_as_a_bare_empty_array(tmp_path):
-    """Regression from the twelfth pass. Every profile tells a reviewer that found
-    nothing to emit NO_FINDINGS, and promote-prompt.md turns that into `[]`. Making
-    quick depth demand the {findings, suppressed} shape left a clean quick review
-    with no expressible form at all: the one verdict the protocol most needs to be
-    able to reach became exit 2."""
+    """Profiles tell a clean reviewer to emit `[]`, so demanding the quick shape here
+    left PASS with no expressible form."""
     proc = run_ar("gate", *_inputs(tmp_path, []), "--depth", "quick")
     assert proc.returncode == 0, proc.stderr
     result = json.loads(proc.stdout)
@@ -2061,10 +2060,7 @@ def test_an_empty_bare_array_is_not_a_licence_to_launder_quick_into_standard(tmp
 # ============ severity adjudication and record kinds ==============================
 
 def test_refute_can_downgrade_a_finding_instead_of_only_killing_it(tmp_path):
-    """The structural fix. Promote raises candidates at ~60% confidence under a
-    recall mandate, and the verdict used to read promote's own severity — so refute
-    could uphold, delete, or contest, but never say "real defect, but LOW". Every
-    inflated-but-true finding therefore bought a fix round."""
+    """Refute must be able to say "real defect, but LOW" — not only uphold or kill."""
     downgraded = _finding(severity="HIGH", confidence="HIGH", stage="refute",
                           adjudicated_severity="LOW")
     result = gate(tmp_path, [downgraded], expect=0)
@@ -2095,9 +2091,9 @@ def test_an_invalid_adjudicated_severity_is_rejected(tmp_path):
 
 
 def test_a_promote_only_low_confidence_high_is_advisory_not_blocking(tmp_path):
-    """It is still reported. It just does not by itself buy another fix round."""
+    """Quick depth self-refutes in one context, so nothing independent backs it."""
     hypothesis = _finding(severity="HIGH", confidence="LOW", stage="promote")
-    result = gate(tmp_path, [hypothesis], expect=0)
+    result = gate_quick(tmp_path, [hypothesis], expect=0)
     assert result["verdict"] == "PASS"
     assert len(result["findings"]) == 1, "advisories are reported, not dropped"
     assert result["findings"][0]["blocking"] is False
@@ -2114,15 +2110,14 @@ def test_the_same_claim_confirmed_by_refute_does_block(tmp_path):
 def test_an_unproven_critical_still_blocks(tmp_path):
     """Consequence, not likelihood: being wrong about possible data loss is the
     expensive direction, so CRITICAL is exempt from the advisory rule."""
-    result = gate(tmp_path, [_finding(severity="CRITICAL", confidence="LOW",
-                                      stage="promote")], expect=3)
+    result = gate_quick(tmp_path, [_finding(severity="CRITICAL", confidence="LOW",
+                                            stage="promote")], expect=3)
     assert result["verdict"] == "CRITICAL_ISSUES"
 
 
 def test_a_limitation_is_reported_without_driving_the_verdict(tmp_path):
-    """"The protocol could not evaluate this" is a fact about the review, not a
-    defect in the artifact. Filing it as a finding is how prose review becomes
-    endless — there is always another sentence that could have been clearer."""
+    """A claim the protocol could not evaluate is a fact about the review, not a
+    defect in the artifact."""
     result = gate(tmp_path, [_finding(kind="limitation", severity="HIGH")], expect=0)
     assert result["verdict"] == "PASS"
     assert result["findings"] == []
@@ -2155,3 +2150,266 @@ def test_the_severity_histogram_reports_adjudicated_grades(tmp_path):
                 _finding(id="F2", severity="MEDIUM", confidence="HIGH")]
     result = gate(tmp_path, findings, expect=1)
     assert result["severity_histogram"] == {"MEDIUM": 1, "LOW": 1}
+
+
+# ============ fail-unsafe input validation ========================================
+
+def test_a_non_boolean_resolved_flag_is_a_usage_error(tmp_path):
+    """`"resolved": "false"` is truthy. Reading it as resolved emitted PASS for a
+    review nothing ran — the exact outcome NOT_REVIEWABLE exists to prevent, reached
+    by a plausible serialization bug rather than by hostile input."""
+    proc = run_ar("gate", *_inputs(tmp_path, [], model={
+        "resolved": "false", "alias": "c", "family": "openai", "provider": "p",
+        "model": "m", "thinking": "high", "independence": "full", "ladder": []}))
+    assert proc.returncode == 2
+    assert "must be a JSON boolean" in proc.stderr
+
+
+@pytest.mark.parametrize("resolved", [1, 0, "true", None, [], {}])
+def test_only_a_real_boolean_resolves(resolved, tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [], model={
+        "resolved": resolved, "alias": "c", "family": "openai", "provider": "p",
+        "model": "m", "thinking": "high", "independence": "full", "ladder": []}))
+    assert proc.returncode == 2
+
+
+def test_a_quick_report_missing_its_findings_key_is_a_failed_dispatch(tmp_path):
+    """A truncated object read as a clean review. `{"findings": []}` says "found
+    nothing"; omitting the key says nothing at all."""
+    proc = run_ar("gate",
+                  "--findings", _write(tmp_path, "f.json", {"suppressed": []}),
+                  "--model", _write(tmp_path, "m.json",
+                                    {"resolved": True, "alias": "c", "family": "openai",
+                                     "provider": "p", "model": "m", "thinking": "high",
+                                     "independence": "full", "ladder": []}),
+                  "--prepass", _write(tmp_path, "p.json",
+                                      {"status": "pass", "checks": [], "findings": []}),
+                  "--depth", "quick")
+    assert proc.returncode == 2
+    assert "no `findings` key" in proc.stderr
+
+
+def test_an_explicitly_empty_quick_report_is_still_a_clean_pass(tmp_path):
+    proc = run_ar("gate",
+                  "--findings", _write(tmp_path, "f.json",
+                                       {"findings": [], "suppressed": []}),
+                  "--model", _write(tmp_path, "m.json",
+                                    {"resolved": True, "alias": "c", "family": "openai",
+                                     "provider": "p", "model": "m", "thinking": "high",
+                                     "independence": "full", "ladder": []}),
+                  "--prepass", _write(tmp_path, "p.json",
+                                      {"status": "pass", "checks": [], "findings": []}),
+                  "--depth", "quick")
+    assert proc.returncode == 0
+
+
+def test_malformed_nested_input_exits_two_rather_than_tracebacking(tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [], prepass_findings=42))
+    assert proc.returncode == 2
+    assert "Traceback" not in proc.stderr
+
+
+# ============ reviewer selection returns a dispatchable triple ====================
+
+def _fake_check(tmp_path, line, exit_code=0):
+    """Stands in for `pi-watch --check <alias>`, which reports the triple it resolved."""
+    script = tmp_path / "check"
+    script.write_text(f"#!/bin/sh\nprintf '%s\\n' \"{line}\" >&2\nexit {exit_code}\n")
+    script.chmod(0o755)
+    return str(script)
+
+
+def test_the_checked_triple_wins_over_the_static_ladder(tmp_path):
+    """The ladder hardcoded gemini-3.2-pro-preview while pi-watch validated 3.1, so a
+    passing alias check returned a model that could not be dispatched. The check knows
+    which version it resolved; the table only remembers a preference order."""
+    check = _fake_check(tmp_path, "  ✓ gemini  google/gemini-9.9-pro-preview:high")
+    proc = run_ar("select-model", "--author-family", "openai", "--check-cmd", check)
+    assert proc.returncode == 0, proc.stderr
+    model = json.loads(proc.stdout)
+    assert model["model"] == "gemini-9.9-pro-preview"
+    assert model["provider"] == "google"
+    assert model["triple_verified"] is True
+
+
+def test_an_unparseable_check_still_resolves_but_says_it_is_unverified(tmp_path):
+    """A check that proves the alias is authed without naming a model is still a
+    resolution — it just cannot promise the triple dispatches, and says so."""
+    check = _fake_check(tmp_path, "everything looks fine")
+    proc = run_ar("select-model", "--author-family", "openai", "--check-cmd", check)
+    assert proc.returncode == 0, proc.stderr
+    model = json.loads(proc.stdout)
+    assert model["resolved"] is True
+    assert model["triple_verified"] is False
+
+
+def test_the_thinking_level_comes_from_the_check_when_it_names_one(tmp_path):
+    check = _fake_check(tmp_path, "  ✓ gemini  google/gemini-3.1-pro-preview:medium")
+    model = json.loads(run_ar("select-model", "--author-family", "openai",
+                              "--check-cmd", check).stdout)
+    assert model["thinking"] == "medium"
+
+
+def test_a_triple_reported_for_a_different_alias_is_not_adopted(tmp_path):
+    """Guards against matching whatever line happens to be in the output."""
+    check = _fake_check(tmp_path, "  ✓ codex  openai-codex/gpt-9:high")
+    model = json.loads(run_ar("select-model", "--author-family", "openai",
+                              "--check-cmd", check).stdout)
+    assert model["alias"] == "gemini"
+    assert model["model"] != "gpt-9"
+    assert model["triple_verified"] is False
+
+
+# ============ claims / merge: the refute seam =====================================
+
+def test_gate_refuses_promote_stage_findings_at_standard_depth(tmp_path):
+    """A depth flag asserted independent refutation; nothing established it."""
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(stage="promote")]),
+                  "--depth", "standard")
+    assert proc.returncode == 2
+    assert 'stage "promote"' in proc.stderr
+
+
+def test_gate_refuses_promote_stage_findings_at_deep_depth(tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(stage="promote")]), "--depth", "deep")
+    assert proc.returncode == 2
+
+
+def test_prepass_findings_are_exempt_from_the_refute_requirement(tmp_path):
+    """The deterministic layer is true by construction; no reviewer judges it."""
+    proc = run_ar("gate", *_inputs(tmp_path, [], prepass_findings=[
+        _finding(id="", stage="prepass", category="failing-check")]), "--depth", "standard")
+    assert proc.returncode == 1, proc.stderr
+
+
+def test_limitations_are_exempt_from_the_refute_requirement(tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(kind="limitation", stage="promote")]),
+                  "--depth", "standard")
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_claims_assigns_ids_and_emits_only_the_six_claim_fields(tmp_path):
+    """Promote emits id: null but refute keys its judgments by id, so the ids have to
+    exist before the dispatch rather than after it."""
+    payload = [_finding(id=None, stage="promote", severity="HIGH"),
+               _finding(id=None, stage="promote", severity="LOW")]
+    proc = run_ar("claims", "--findings", _write(tmp_path, "f.json", payload))
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout)
+    assert [c["id"] for c in result["claims"]] == ["F1", "F2"]
+    assert [f["id"] for f in result["findings"]] == ["F1", "F2"]
+    for claim in result["claims"]:
+        assert set(claim) == {"id", "severity", "confidence", "category", "claim", "evidence"}
+
+
+def test_claims_withholds_limitations_and_questions_from_refute(tmp_path):
+    """Staged as claims they arrive looking like unsupported defects and come back
+    refuted, which deletes exactly the records a caller most needs."""
+    payload = [_finding(id=None, stage="promote"),
+               _finding(id=None, stage="promote", kind="limitation"),
+               _finding(id=None, stage="promote", kind="question")]
+    result = json.loads(run_ar("claims", "--findings",
+                               _write(tmp_path, "f.json", payload)).stdout)
+    assert len(result["claims"]) == 1
+    assert len(result["findings"]) == 3
+    assert result["carried_kinds"] == ["limitation", "question"]
+
+
+def test_claims_rejects_a_quick_shaped_payload(tmp_path):
+    proc = run_ar("claims", "--findings",
+                  _write(tmp_path, "f.json", {"findings": [], "suppressed": []}))
+    assert proc.returncode == 2
+
+
+def test_merge_applies_dispositions_and_severity_rulings(tmp_path):
+    findings = [_finding(id="F1", stage="promote", severity="HIGH"),
+                _finding(id="F2", stage="promote", severity="HIGH")]
+    judgments = [{"id": "F1", "disposition": "standing", "severity": "LOW", "reason": "r"},
+                 {"id": "F2", "disposition": "refuted", "reason": "r"}]
+    proc = run_ar("merge", "--findings", _write(tmp_path, "f.json", findings),
+                  "--judgments", _write(tmp_path, "j.json", judgments))
+    assert proc.returncode == 0, proc.stderr
+    merged = {f["id"]: f for f in json.loads(proc.stdout)["findings"]}
+    assert merged["F1"]["adjudicated_severity"] == "LOW"
+    assert merged["F1"]["stage"] == "refute"
+    assert merged["F2"]["disposition"] == "refuted"
+
+
+def test_merge_rejects_a_missing_judgment(tmp_path):
+    """A truncated judgment list would otherwise be recorded as a full review."""
+    findings = [_finding(id="F1", stage="promote"), _finding(id="F2", stage="promote")]
+    judgments = [{"id": "F1", "disposition": "standing", "reason": "r"}]
+    proc = run_ar("merge", "--findings", _write(tmp_path, "f.json", findings),
+                  "--judgments", _write(tmp_path, "j.json", judgments))
+    assert proc.returncode == 2
+    assert "no judgment for F2" in proc.stderr
+
+
+def test_merge_rejects_a_judgment_for_an_unknown_id(tmp_path):
+    proc = run_ar("merge",
+                  "--findings", _write(tmp_path, "f.json", [_finding(id="F1", stage="promote")]),
+                  "--judgments", _write(tmp_path, "j.json",
+                                        [{"id": "F1", "disposition": "standing"},
+                                         {"id": "F9", "disposition": "refuted"}]))
+    assert proc.returncode == 2
+    assert "unknown finding id" in proc.stderr
+
+
+def test_merge_rejects_two_judgments_for_one_finding(tmp_path):
+    proc = run_ar("merge",
+                  "--findings", _write(tmp_path, "f.json", [_finding(id="F1", stage="promote")]),
+                  "--judgments", _write(tmp_path, "j.json",
+                                        [{"id": "F1", "disposition": "standing"},
+                                         {"id": "F1", "disposition": "refuted"}]))
+    assert proc.returncode == 2
+    assert "two judgments" in proc.stderr
+
+
+def test_merge_rejects_a_judgment_on_a_limitation(tmp_path):
+    proc = run_ar("merge",
+                  "--findings", _write(tmp_path, "f.json",
+                                       [_finding(id="F1", stage="promote", kind="limitation")]),
+                  "--judgments", _write(tmp_path, "j.json",
+                                        [{"id": "F1", "disposition": "refuted"}]))
+    assert proc.returncode == 2
+    assert "only findings are refutable" in proc.stderr
+
+
+def test_merge_requires_ids_to_exist_already(tmp_path):
+    proc = run_ar("merge",
+                  "--findings", _write(tmp_path, "f.json", [_finding(id=None, stage="promote")]),
+                  "--judgments", _write(tmp_path, "j.json", []))
+    assert proc.returncode == 2
+    assert "run `claims`" in proc.stderr
+
+
+def test_tiebreak_merge_only_expects_rulings_on_contested_findings(tmp_path):
+    findings = [_finding(id="F1", stage="refute", disposition="contested"),
+                _finding(id="F2", stage="refute", disposition="standing")]
+    proc = run_ar("merge", "--findings", _write(tmp_path, "f.json", findings),
+                  "--judgments", _write(tmp_path, "j.json",
+                                        [{"id": "F1", "disposition": "standing",
+                                          "severity": "MEDIUM"}]),
+                  "--stage", "tiebreak")
+    assert proc.returncode == 0, proc.stderr
+    merged = {f["id"]: f for f in json.loads(proc.stdout)["findings"]}
+    assert merged["F1"]["stage"] == "tiebreak"
+    assert merged["F1"]["adjudicated_severity"] == "MEDIUM"
+
+
+def test_merge_output_feeds_the_gate_at_standard_depth(tmp_path):
+    """The seam end to end: claims -> judgments -> merge -> gate."""
+    promoted = [_finding(id=None, stage="promote", severity="HIGH", confidence="HIGH")]
+    claims = json.loads(run_ar("claims", "--findings",
+                               _write(tmp_path, "p.json", promoted)).stdout)
+    ids = [c["id"] for c in claims["claims"]]
+    merged = json.loads(run_ar(
+        "merge", "--findings", _write(tmp_path, "f.json", claims["findings"]),
+        "--judgments", _write(tmp_path, "j.json",
+                              [{"id": ids[0], "disposition": "standing",
+                                "severity": "LOW", "reason": "r"}])).stdout)
+    proc = run_ar("gate", *_inputs(tmp_path, merged["findings"]), "--depth", "standard")
+    assert proc.returncode == 0, proc.stderr
+    gated = json.loads(proc.stdout)
+    assert gated["verdict"] == "PASS"
+    assert gated["findings"][0]["effective_severity"] == "LOW"

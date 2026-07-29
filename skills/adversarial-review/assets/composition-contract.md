@@ -39,6 +39,16 @@ author's own model in the candidate pool and stamp the result `full`. A caller w
 not one of `anthropic`, `google`, `openai` must pass `other` — naming the gap is the contract, and
 guessing a label the script does not know is a usage error.
 
+**The refute seam is mechanical, not prose.** Run `claims` before the refute dispatch and `merge`
+after it. `claims` assigns IDs (promote emits `id: null`, but refute keys judgments by ID) and holds
+`limitation`/`question` records back from a stage that has no mandate over them. `merge` proves the
+stage ran: it fails when a claim went unjudged, when a judgment names an unknown ID, or when one
+finding draws two rulings. At `standard` and `deep` the gate refuses findings still stamped
+`stage: "promote"`, so a skipped or truncated refute cannot be recorded as an independent review.
+
+**`model.resolved` must be a JSON boolean** and `triple_verified` tells you whether the returned
+provider/model pair was confirmed dispatchable or came from the static ladder.
+
 **Running more than one round?** Read SKILL.md § Running rounds first. Round 1 is discovery;
 every round after it is a closure pass over the prior findings, the fix delta, and the seams those
 fixes touched — not a fresh discovery pass over a target that just moved. Re-running discovery each

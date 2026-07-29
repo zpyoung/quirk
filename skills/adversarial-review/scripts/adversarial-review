@@ -783,12 +783,36 @@ def alias_entry(alias: str) -> tuple[str, str, str, str] | None:
     return next((entry for entry in ALIAS_LADDER if entry[0] == alias), None)
 
 
-def preflight(alias: str, check_cmd: str) -> bool:
-    """A rung resolves only when its preflight exits 0 — never assume availability."""
+# `pi-watch --check <alias>` reports what it resolved: `✓ gemini  google/g-3.1:high`.
+# Reading it separates "the alias is authed" from "this exact model dispatches"; the
+# ladder below is a preference order, not an authority on the current version.
+CHECKED_TRIPLE = re.compile(
+    r"^\s*[^\s]?\s*(?P<alias>[a-z0-9-]+)\s+"
+    r"(?P<provider>[A-Za-z0-9_-]+)/(?P<model>[A-Za-z0-9._-]+)"
+    r"(?::(?P<thinking>[a-z]+))?\s*$",
+    re.MULTILINE,
+)
+
+
+def preflight(alias: str, check_cmd: str) -> tuple[bool, dict[str, str] | None]:
+    """A rung resolves only when its preflight exits 0 — never assume availability.
+
+    Returns the triple the check itself reported, when it names one.
+    """
     completed = subprocess.run(
         f"{check_cmd} {alias}", shell=True, capture_output=True, text=True, errors="replace"
     )
-    return completed.returncode == 0
+    if completed.returncode != 0:
+        return False, None
+    for stream in (completed.stderr or "", completed.stdout or ""):
+        for match in CHECKED_TRIPLE.finditer(stream):
+            if match.group("alias") == alias:
+                return True, {
+                    "provider": match.group("provider"),
+                    "model": match.group("model"),
+                    "thinking": match.group("thinking") or "",
+                }
+    return True, None
 
 
 def select_reviewer(
@@ -818,11 +842,17 @@ def select_reviewer(
 
     ladder: list[dict[str, Any]] = []
     for alias, family, triple, thinking in candidates:
-        ok = preflight(alias, check_cmd)
+        ok, checked = preflight(alias, check_cmd)
         ladder.append({"alias": alias, "checked": True, "resolved": ok})
         if not ok:
             continue
         provider, _, model_id = triple.partition("/")
+        # Prefer what the check resolved over what the table remembers.
+        triple_verified = checked is not None
+        if checked:
+            provider = checked["provider"]
+            model_id = checked["model"]
+            thinking = checked["thinking"] or thinking
         return 0, {
             "resolved": True,
             "alias": alias,
@@ -830,6 +860,9 @@ def select_reviewer(
             "provider": provider,
             "model": model_id,
             "thinking": thinking,
+            # False: the alias is authed but the triple came from the static
+            # table and was never confirmed dispatchable.
+            "triple_verified": triple_verified,
             "independence": "reduced" if family == author_family else "full",
             "ladder": ladder,
         }
@@ -841,6 +874,7 @@ def select_reviewer(
         "provider": None,
         "model": None,
         "thinking": None,
+        "triple_verified": False,
         "independence": "reduced",
         "ladder": ladder,
     }
@@ -852,19 +886,11 @@ SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 CONFIDENCES = ("HIGH", "MEDIUM", "LOW")
 DISPOSITIONS = ("standing", "refuted", "contested")
 STAGES = ("promote", "refute", "tiebreak", "prepass")
-# Promote runs under a recall mandate — it is told to raise a candidate at ~60%
-# confidence because weak candidates are cheap to refute. They are not cheap if
-# they keep their severity, because the verdict is computed from severity: a
-# HIGH the refuter never confirmed still forces NEEDS_FIXES, and the caller
-# spends a fix round on a hypothesis. So severity as promote reports it is a
-# *proposal*. A later stage may replace it here, and the verdict reads this
-# field rather than the one the recall stage owns.
+# Severity from the recall stage is a proposal. A stage that attacked the finding
+# may replace it here, and the verdict reads this field rather than `severity`.
 ADJUDICATED_SEVERITY = "adjudicated_severity"
-# Not every true statement about an artifact is a defect in it. A claim the
-# protocol could not evaluate is a limitation of the review; a decision that
-# needs its owner is a question. Filing either as a finding is how a review of
-# prose becomes unfalsifiable and endless — there is always another sentence
-# that could have been clearer. Only findings drive the verdict.
+# A claim the protocol could not evaluate is a limitation; a decision needing its
+# owner is a question. Neither is a defect, so neither drives the verdict.
 RECORD_KINDS = ("finding", "limitation", "question")
 REQUIRED_FIELDS = ("severity", "confidence", "category", "claim", "evidence", "remediation")
 CATEGORY_SHAPE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -1091,13 +1117,8 @@ def effective_severity(finding: dict[str, Any]) -> str:
 def is_blocking(finding: dict[str, Any]) -> bool:
     """Severe enough to matter, and asserted by someone other than the recall stage.
 
-    Promote is instructed to raise a candidate it is only ~60% sure of, on the
-    theory that weak candidates are cheap to refute. They are cheap to refute and
-    expensive to *keep*: while the verdict read promote's severity directly, a
-    LOW-confidence HIGH that no other stage ever confirmed still forced
-    NEEDS_FIXES, and the caller paid a fix round for a hypothesis. That is the
-    mechanism behind a review loop that never comes back clean. Such a finding is
-    still reported — it is an advisory, not a blocker, and it is not dropped.
+    Promote raises candidates at ~60% confidence, so a LOW-confidence claim only it
+    made is a hypothesis. Still reported, as an advisory rather than a blocker.
     """
     severity = effective_severity(finding)
     if severity not in ("CRITICAL", "HIGH", "MEDIUM"):
@@ -1156,7 +1177,15 @@ def run_gate(
     # `resolved: true` alone is not a reviewer. Accepting it lets a malformed or
     # hand-written model file walk straight past NOT_REVIEWABLE and emit PASS for an
     # artifact nothing ever looked at — the exact outcome that branch exists to stop.
-    if model.get("resolved"):
+    # Truthiness accepts the string "false". A reviewer that cannot be established
+    # is NOT_REVIEWABLE, so the type is checked rather than the value.
+    if not isinstance(model.get("resolved"), bool):
+        raise UsageError(
+            f"model.resolved must be a JSON boolean, got "
+            f"{type(model.get('resolved')).__name__}: a review whose reviewer cannot "
+            f"be established is NOT_REVIEWABLE, never PASS"
+        )
+    if model["resolved"]:
         missing = [f for f in ("alias", "family", "provider", "model", "independence")
                    if not model.get(f)]
         if missing:
@@ -1209,7 +1238,15 @@ def run_gate(
             if not isinstance(entry, dict):
                 raise UsageError("each findings.suppressed entry must be a JSON object")
         carried_suppressed = list(carried)
-        findings = findings.get("findings", [])
+        if "findings" in findings:
+            findings = findings["findings"]
+        else:
+            # An empty array says "found nothing"; an absent key says nothing at
+            # all, and defaulting it to [] reads a truncated report as clean.
+            raise UsageError(
+                "quick-shaped findings object has no `findings` key: a truncated "
+                "report is a failed dispatch, not a clean review"
+            )
     if not isinstance(findings, list):
         raise UsageError("findings input must be a JSON array")
 
@@ -1226,6 +1263,24 @@ def run_gate(
     # record rather than to survivors alone. The promote prompt tells reviewers to
     # emit `id: null` and to reuse a dismissed finding's original ID when re-raising
     # it — neither works if the suppressed record it was handed has no ID.
+    # A depth flag is the caller's assertion; the stage stamp is evidence. Exempt:
+    # prepass is true by construction, quick self-refutes in one context, and
+    # limitations and questions were never refutable.
+    if depth in ("standard", "deep") and isinstance(findings, list):
+        unrefuted = [
+            str(f.get("id") or f"#{i}") for i, f in enumerate(findings)
+            if isinstance(f, dict)
+            and f.get("kind", "finding") == "finding"
+            and f.get("stage") == "promote"
+        ]
+        if unrefuted:
+            raise UsageError(
+                f"--depth {depth} but {len(unrefuted)} finding(s) still carry "
+                f"stage \"promote\" ({', '.join(unrefuted[:5])}): the refute stage "
+                f"did not run on them. Use `merge --judgments` to apply refute's "
+                f"rulings, which stamps the stage it actually ran."
+            )
+
     merged.sort(key=finding_order)
     # Carried suppressions take part in the same allocation: their IDs are reserved
     # so nothing is re-issued, and any that arrived null get one, since a suppressed
@@ -1334,6 +1389,128 @@ def compute_verdict(
     if severities & {"HIGH", "MEDIUM"}:
         return "NEEDS_FIXES"
     return "PASS"
+
+
+# --- staging and merging the refute stage -----------------------------------------
+
+# Six fields and no more. The claim and the evidence get tested; how the promoter
+# arrived at them would tell the refuter what to think, which is what this stage
+# exists to withhold.
+CLAIM_FIELDS = ("id", "severity", "confidence", "category", "claim", "evidence")
+
+
+def build_claims(findings_path: str, id_prefix: str = "F") -> dict[str, Any]:
+    """Assign IDs, then split what refute judges from what it has no mandate over.
+
+    Refute keys judgments by id, so ids must exist before it runs, not after.
+    """
+    findings = load_json(findings_path, "findings")
+    if isinstance(findings, dict):
+        raise UsageError(
+            "claims takes the promote stage's bare array, not a quick-shaped object: "
+            "quick depth has no separate refute stage to stage claims for"
+        )
+    if not isinstance(findings, list):
+        raise UsageError("findings input must be a JSON array")
+    for index, finding in enumerate(findings):
+        validate_finding(finding, index, id_prefix)
+    findings = list(findings)
+    findings.sort(key=finding_order)
+    assign_ids(findings, id_prefix)
+
+    judged = [f for f in findings if f.get("kind", "finding") == "finding"]
+    carried = [f for f in findings if f.get("kind", "finding") != "finding"]
+    return {
+        "claims": [{k: f[k] for k in CLAIM_FIELDS} for f in judged],
+        "findings": findings,
+        "carried_kinds": sorted({f["kind"] for f in carried}),
+    }
+
+
+def merge_judgments(
+    findings_path: str, judgments_path: str, stage: str = "refute",
+) -> dict[str, Any]:
+    """Apply refute's or tiebreak's rulings, and prove the stage actually ran."""
+    if stage not in ("refute", "tiebreak"):
+        raise UsageError(f"stage must be refute or tiebreak, got {stage!r}")
+    findings = load_json(findings_path, "findings")
+    judgments = load_json(judgments_path, "judgments")
+    if not isinstance(findings, list):
+        raise UsageError("findings input must be a JSON array")
+    if not isinstance(judgments, list):
+        raise UsageError("judgments input must be a JSON array")
+
+    by_id: dict[str, dict[str, Any]] = {}
+    for index, finding in enumerate(findings):
+        if not isinstance(finding, dict):
+            raise UsageError(f"finding {index} is not an object")
+        finding_id = finding.get("id")
+        if not finding_id:
+            raise UsageError(
+                f"finding {index} has no id: run `claims` before the {stage} stage so "
+                f"its judgments have something to key on"
+            )
+        if finding_id in by_id:
+            raise UsageError(f"duplicate finding id: {finding_id}")
+        by_id[finding_id] = finding
+
+    # tiebreak rules only on what was contested; refute must answer every claim.
+    expected = {i for i, f in by_id.items() if f.get("kind", "finding") == "finding"}
+    if stage == "tiebreak":
+        expected = {i for i in expected
+                    if by_id[i].get("disposition") == "contested"}
+
+    seen: set[str] = set()
+    for index, judgment in enumerate(judgments):
+        if not isinstance(judgment, dict):
+            raise UsageError(f"judgment {index} is not an object")
+        judgment_id = judgment.get("id")
+        if judgment_id not in by_id:
+            raise UsageError(
+                f"judgment {index} names unknown finding id {judgment_id!r} "
+                f"(known: {', '.join(sorted(by_id))})"
+            )
+        if judgment_id in seen:
+            raise UsageError(f"two judgments for finding {judgment_id}")
+        seen.add(judgment_id)
+        disposition = judgment.get("disposition")
+        if disposition not in DISPOSITIONS:
+            raise UsageError(
+                f"judgment for {judgment_id} has invalid disposition: {disposition!r}"
+            )
+        finding = by_id[judgment_id]
+        if finding.get("kind", "finding") != "finding":
+            raise UsageError(
+                f"judgment for {judgment_id} judges a "
+                f"{finding.get('kind')}: only findings are refutable"
+            )
+        finding["disposition"] = disposition
+        finding["stage"] = stage
+        if judgment.get("confidence"):
+            if judgment["confidence"] not in CONFIDENCES:
+                raise UsageError(
+                    f"judgment for {judgment_id} has invalid confidence: "
+                    f"{judgment['confidence']!r}"
+                )
+            finding["confidence"] = judgment["confidence"]
+        if judgment.get("severity"):
+            if judgment["severity"] not in SEVERITIES:
+                raise UsageError(
+                    f"judgment for {judgment_id} has invalid severity: "
+                    f"{judgment['severity']!r}"
+                )
+            finding[ADJUDICATED_SEVERITY] = judgment["severity"]
+        if judgment.get("counter_evidence"):
+            finding["counter_evidence"] = judgment["counter_evidence"]
+
+    unanswered = sorted(expected - seen)
+    if unanswered:
+        raise UsageError(
+            f"{stage} returned no judgment for {', '.join(unanswered)}: a stage that "
+            f"skipped a claim did not review it, and the result cannot be recorded as "
+            f"though it had"
+        )
+    return {"findings": findings, "stage": stage, "judged": len(seen)}
 
 
 # --- replay manifest --------------------------------------------------------------
@@ -1484,6 +1661,20 @@ def build_parser() -> argparse.ArgumentParser:
              "prefixes so a caller merging them cannot collide",
     )
 
+    claims_cmd = sub.add_parser(
+        "claims", help="assign IDs and stage the refute stage's claim subset")
+    claims_cmd.add_argument("--findings", required=True, help="promote stage output")
+    claims_cmd.add_argument(
+        "--id-prefix", default="F",
+        help="prefix for assigned finding IDs; must match the later gate invocation")
+
+    merge_cmd = sub.add_parser(
+        "merge", help="apply refute or tiebreak rulings and prove the stage ran")
+    merge_cmd.add_argument("--findings", required=True,
+                           help="the ID-assigned findings from `claims`")
+    merge_cmd.add_argument("--judgments", required=True, help="the stage's rulings")
+    merge_cmd.add_argument("--stage", default="refute", choices=("refute", "tiebreak"))
+
     manifest_cmd = sub.add_parser("manifest", help="assemble the replay record")
     manifest_cmd.add_argument("--resolve", required=True, help="ResolveResult JSON")
     manifest_cmd.add_argument("--prepass", required=True, help="PrepassResult JSON")
@@ -1518,6 +1709,10 @@ def main(argv: list[str] | None = None) -> int:
                 args.findings, args.model, args.prepass, args.depth, repo_root,
                 args.id_prefix,
             )
+        elif args.command == "claims":
+            payload = build_claims(args.findings, args.id_prefix)
+        elif args.command == "merge":
+            payload = merge_judgments(args.findings, args.judgments, args.stage)
         elif args.command == "manifest":
             payload = build_manifest(
                 args.resolve, args.prepass, args.model, args.gate, args.lens,
@@ -1525,7 +1720,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:  # pragma: no cover - argparse rejects unknown subcommands
             raise UsageError(f"unhandled command: {args.command}")
-    except (UsageError, OSError, ValueError) as exc:
+    except (UsageError, OSError, ValueError, TypeError, KeyError) as exc:
         print(f"adversarial-review: {exc}", file=sys.stderr)
         return 2
 
