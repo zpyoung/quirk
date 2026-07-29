@@ -345,7 +345,12 @@ BACKTICK_TOKEN = re.compile(r"`([^`\n]+)`")
 # The optional title is part of the link syntax: `[d](./x.md "Title")`. Requiring
 # the target to be followed immediately by `)` matched nothing at all for a titled
 # link, so a missing target passed silently — a false clean, the worse direction.
-MD_LINK = re.compile(r"\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+[\"'(][^)]*)?\s*\)")
+MD_LINK = re.compile(
+    # The <angle-bracket> form exists so a destination may contain spaces, and the
+    # optional title is ordinary syntax. Matching neither meant a broken link passed
+    # silently — a false clean, which is the worse direction to fail.
+    r"\[[^\]]*\]\(\s*(?:<([^>]+)>|([^)\s]+))(?:\s+[\"\'(][^)]*)?\s*\)"
+)
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -398,6 +403,11 @@ def classify_reference(token: str, is_link: bool = False) -> str | None:
     # silently ignores every broken `.pdf`, `.csv`, or `.yaml` link in the document.
     if is_link:
         return None if token.startswith("#") else "path"
+
+    if " " in token and "/" in token and Path(strip_line_anchor(token)).suffix:
+        # `docs/my notes/x.md` is unmistakably a path; treating any spaced token as
+        # prose dropped it from the scan entirely.
+        return "path"
 
     if " " in token:
         # Distinguishing a shell command from prose-in-backticks is not reliably
@@ -525,7 +535,8 @@ def check_references(
     for match in BACKTICK_TOKEN.finditer(text):
         tokens.append((match.group(1), False))
     for match in MD_LINK.finditer(text):
-        tokens.append((match.group(1), True))
+        # group 1 is the <angle-bracketed> form, group 2 the bare one.
+        tokens.append((match.group(1) or match.group(2), True))
 
     lines: list[str] = []
     findings: list[dict[str, Any]] = []
@@ -817,7 +828,7 @@ EVIDENCE_REQUIRED_FIELDS = {
     "file-line": ("ref", "quote"),
     "quote": ("ref", "quote"),
     "command": ("command", "output"),
-    "absence": ("command", "ref"),
+    "absence": ("command", "ref", "output"),
     "prepass": ("ref", "output"),
 }
 
@@ -867,6 +878,12 @@ def validate_finding(finding: Any, index: int) -> None:
     disposition = finding.get("disposition", "standing")
     if disposition not in DISPOSITIONS:
         raise UsageError(f"finding {index} has invalid disposition: {disposition}")
+    patch = finding.get("patch")
+    if patch is not None and not isinstance(patch, str):
+        raise UsageError(
+            f"finding {index} has invalid patch: expected a unified-diff string or "
+            f"null, got {type(patch).__name__}"
+        )
     evidence = finding["evidence"]
     if not isinstance(evidence, list) or not evidence:
         raise UsageError(f"finding {index} must carry at least one evidence item")
@@ -882,8 +899,15 @@ def validate_finding(finding: Any, index: int) -> None:
             # Presence is not content. An empty `command`/`output` pair would
             # otherwise satisfy the schema and buy reproduction credit, holding a
             # finding at HIGH confidence on evidence of nothing.
+            # An absence claim is the one case where empty output *is* the content:
+            # it asserts the cited search came back with nothing. The field must be
+            # present — omitting it asserts nothing at all — but it may be empty.
             value = item[field]
-            if not isinstance(value, str) or not value.strip():
+            if not isinstance(value, str):
+                raise UsageError(
+                    f"finding {index} evidence of kind {kind} has a non-string {field}"
+                )
+            if not value.strip() and not (kind == "absence" and field == "output"):
                 raise UsageError(
                     f"finding {index} evidence of kind {kind} has an empty {field}"
                 )

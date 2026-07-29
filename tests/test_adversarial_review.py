@@ -1215,7 +1215,7 @@ def test_file_line_evidence_without_an_anchor_still_searches_the_whole_file(tmp_
 def test_absence_evidence_naming_a_missing_file_is_falsified(tmp_path):
     """The search is not re-run, but the scope it names is checkable."""
     bad = _finding(evidence=[
-        {"kind": "absence", "command": "grep -rn foo src/gone.py", "ref": "src/gone.py"},
+        {"kind": "absence", "command": "grep -rn foo src/gone.py", "ref": "src/gone.py", "output": ""},
     ])
     result = gate(tmp_path, [bad], expect=0, repo_root=tmp_path)
     assert result["findings"] == []
@@ -1230,7 +1230,7 @@ def test_absence_scope_is_checked_whatever_the_extension(tmp_path, ref):
     token carrying an extension is checkable.
     """
     bad = _finding(severity="MEDIUM",
-                   evidence=[{"kind": "absence", "command": f"grep -rn x {ref}", "ref": ref}])
+                   evidence=[{"kind": "absence", "command": f"grep -rn x {ref}", "ref": ref, "output": ""}])
     result = gate(tmp_path, [bad], expect=0, repo_root=tmp_path)
     assert result["findings"] == []
     assert result["suppressed"][0]["reason"] == "falsified"
@@ -1249,7 +1249,7 @@ def test_absence_evidence_whose_own_output_shows_a_hit_is_falsified(tmp_path):
 def test_absence_evidence_naming_a_real_scope_survives(tmp_path):
     (tmp_path / "src.py").write_text("nothing here\n")
     good = _finding(severity="MEDIUM", evidence=[
-        {"kind": "absence", "command": "grep -rn foo src.py", "ref": "src.py"},
+        {"kind": "absence", "command": "grep -rn foo src.py", "ref": "src.py", "output": ""},
     ])
     assert len(gate(tmp_path, [good], expect=1, repo_root=tmp_path)["findings"]) == 1
 
@@ -1823,3 +1823,54 @@ def test_a_bare_uninstalled_unknown_token_is_still_reported(tmp_path):
     result = prepass("--profile", "prose-claim", "--target", str(doc),
                      "--repo-root", str(tmp_path), expect=1)
     assert result["findings"]
+
+
+# ============ tenth review pass ===================================================
+
+def test_a_backticked_path_containing_spaces_is_still_a_reference(tmp_path):
+    """A space meant 'command or prose', so a path with a space left the scan."""
+    doc = _touch(tmp_path / "doc.md", "See `docs/my notes/missing.md` for detail.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert any("my notes" in f["evidence"][0]["ref"] for f in result["findings"])
+
+
+def test_prose_with_spaces_is_still_not_treated_as_a_reference(tmp_path):
+    """The fix must not reclassify ordinary backticked prose as a path."""
+    doc = _touch(tmp_path / "doc.md", "The `review loop` runs twice.\n")
+    assert prepass("--profile", "prose-claim", "--target", str(doc),
+                   "--repo-root", str(tmp_path))["findings"] == []
+
+
+def test_an_angle_bracket_link_destination_with_spaces_is_extracted(tmp_path):
+    doc = _touch(tmp_path / "doc.md", "See [d](<missing file.md>).\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert any("missing file.md" in f["evidence"][0]["ref"] for f in result["findings"])
+
+
+def test_absence_evidence_omitting_output_is_rejected(tmp_path):
+    """Omitting it asserted nothing, yet read as 'the search came back empty'."""
+    f = _finding(evidence=[{"kind": "absence", "command": "grep -r zzz .", "ref": "skills/"}])
+    proc = run_ar("gate", *_inputs(tmp_path, [f]))
+    assert proc.returncode == 2
+    assert "output" in proc.stderr
+
+
+def test_absence_evidence_with_an_empty_output_field_is_accepted(tmp_path):
+    """Empty output IS the claim for an absence — the one place empty is content."""
+    f = _finding(evidence=[{"kind": "absence", "command": "grep -r zzz .",
+                            "ref": "tests/", "output": ""}])
+    assert gate(tmp_path, [f], expect=1)["findings"]
+
+
+@pytest.mark.parametrize("patch", [{"not": "a diff"}, 42, ["a"], True])
+def test_a_patch_that_is_not_a_diff_string_or_null_is_rejected(patch, tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(patch=patch)]))
+    assert proc.returncode == 2
+    assert "patch" in proc.stderr
+
+
+def test_a_string_patch_and_a_null_patch_are_both_accepted(tmp_path):
+    assert gate(tmp_path, [_finding(patch=None)], expect=1)["findings"]
+    assert gate(tmp_path, [_finding(patch="--- a\n+++ b\n")], expect=1)["findings"]
