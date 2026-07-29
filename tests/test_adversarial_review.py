@@ -1448,7 +1448,8 @@ def test_contested_at_deep_is_withheld_not_suppressed(tmp_path):
 def test_absent_disposition_is_treated_as_standing(tmp_path):
     f = _finding()
     del f["disposition"]
-    assert gate(tmp_path, [f], expect=1)["findings"][0]["id"] == "F1"
+    assert gate(tmp_path, [f], expect=1,
+                extra=("--repo-root", str(tmp_path)))["findings"][0]["id"] == "F1"
 
 
 # --- prepass merge ----------------------------------------------------------------
@@ -1760,3 +1761,65 @@ def test_a_category_violating_the_schema_is_rejected(category, tmp_path):
 
 def test_a_valid_kebab_category_is_accepted(tmp_path):
     assert gate(tmp_path, [_finding(category="missing-error-path")], expect=1)["findings"]
+
+
+# ============ ninth review pass ===================================================
+
+def test_a_quote_citation_with_a_section_anchor_still_checks_the_quote(tmp_path):
+    """A ref naming no file excused the quote entirely, so a fabricated one survived."""
+    doc = _touch(tmp_path / "spec.md", "# Spec\n\nreal text here\n")
+    bad = _finding(evidence=[{"kind": "quote", "ref": "spec.md#3",
+                              "quote": "THIS TEXT APPEARS NOWHERE"}])
+    result = gate(tmp_path, [bad], expect=0,
+                  extra=("--repo-root", str(tmp_path)))
+    assert result["findings"] == []
+    assert result["suppressed"][0]["reason"] == "falsified"
+    assert doc.exists()
+
+
+def test_a_quote_citation_with_an_anchor_passes_when_the_quote_is_real(tmp_path):
+    _touch(tmp_path / "spec.md", "# Spec\n\nthe real sentence\n")
+    good = _finding(evidence=[{"kind": "quote", "ref": "spec.md#intro",
+                               "quote": "the real sentence"}])
+    assert gate(tmp_path, [good], expect=1,
+                extra=("--repo-root", str(tmp_path)))["findings"]
+
+
+def test_an_anchor_naming_no_resolvable_file_is_unverifiable_not_falsified(tmp_path):
+    """We cannot check it either way; killing it would suppress real defects."""
+    f = _finding(severity="MEDIUM",
+                 evidence=[{"kind": "quote", "ref": "#section-3", "quote": "anything"}])
+    assert gate(tmp_path, [f], expect=1,
+                extra=("--repo-root", str(tmp_path)))["findings"]
+
+
+def test_a_markdown_link_carrying_a_title_is_still_resolved(tmp_path):
+    """[d](./nope.md "Title") matched nothing, so a missing target passed silently."""
+    doc = _touch(tmp_path / "t.md", 'See [d](./nope.md "The Title").\n')
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert any("nope.md" in f["evidence"][0]["ref"] for f in result["findings"])
+
+
+def test_a_titled_link_to_a_real_file_produces_no_finding(tmp_path):
+    _touch(tmp_path / "real.md", "x\n")
+    doc = _touch(tmp_path / "t.md", 'See [d](./real.md "The Title").\n')
+    assert prepass("--profile", "prose-claim", "--target", str(doc),
+                   "--repo-root", str(tmp_path))["findings"] == []
+
+
+def test_a_bare_installed_executable_is_not_a_false_unresolved_symbol(tmp_path):
+    """`pytest` in a repo that never mentions it produced a false HIGH."""
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    doc = _touch(tmp_path / "doc.md", "Run `python3` to verify.\n")
+    assert prepass("--profile", "prose-claim", "--target", str(doc),
+                   "--repo-root", str(tmp_path))["findings"] == []
+
+
+def test_a_bare_uninstalled_unknown_token_is_still_reported(tmp_path):
+    """The fix must not blanket-excuse every single-word token."""
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    doc = _touch(tmp_path / "doc.md", "Call `someFunctionNobodyDefined` first.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert result["findings"]

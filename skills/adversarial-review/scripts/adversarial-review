@@ -342,7 +342,10 @@ REQUIRED_HEADINGS = {
 }
 
 BACKTICK_TOKEN = re.compile(r"`([^`\n]+)`")
-MD_LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
+# The optional title is part of the link syntax: `[d](./x.md "Title")`. Requiring
+# the target to be followed immediately by `)` matched nothing at all for a titled
+# link, so a missing target passed silently — a false clean, the worse direction.
+MD_LINK = re.compile(r"\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+[\"'(][^)]*)?\s*\)")
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -413,7 +416,11 @@ def classify_reference(token: str, is_link: bool = False) -> str | None:
             or Path(strip_line_anchor(token)).suffix == ".md":
         return "path"
     if IDENTIFIER.match(token):
-        return "symbol"
+        # A bare word that is an installed executable is a command, not a symbol.
+        # Calling it a symbol sent it to `git grep`, and a doc saying "run `pytest`"
+        # in a repo that never names pytest produced a false HIGH — a confidently
+        # wrong finding, which is precisely what this design exists to avoid.
+        return "command" if shutil.which(token) is not None else "symbol"
     return None
 
 
