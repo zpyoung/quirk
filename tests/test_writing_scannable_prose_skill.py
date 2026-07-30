@@ -19,7 +19,12 @@ ALL_CHECK_IDS = [
 
 
 def test_skill_has_valid_frontmatter() -> None:
-    """Test 1: YAML frontmatter parse — name and description fields both present"""
+    """Test 1: frontmatter block present, with name and description fields.
+
+    A delimiter-and-field check, not a YAML parse — malformed YAML inside the
+    block would pass. Mirrors test_adhd_skill.py, whose shape this module
+    follows; adding a parser here alone would diverge from it for no gain,
+    since a broken block fails the field regexes anyway."""
     body = SKILL_PATH.read_text()
     fm = re.match(r"^---\n(.*?)\n---\n", body, re.DOTALL)
     assert fm is not None, "SKILL.md missing YAML frontmatter"

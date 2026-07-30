@@ -26,11 +26,11 @@ Diátaxis mode (tutorial / how-to / reference / explanation) is **not** an autho
 
 ## Revision protocol
 
-1. **Derive F1's line.** Check sibling artifacts, the template, and whether the content already lives canonically; state the result: `Reader: <who> — Decision: <what they do next>`. No signal resolves it → say so.
-2. **Run F2 against every section** against F1's line: does its absence change the named decision? Mark keep or remove. **F1 is unresolved whenever either field is missing — a reader named with no decision, or a decision with no reader — and an unresolved F1 means F2 doesn't run; every section defaults to keep.** Name the gap as a non-blocking escalation — not a second blocking point, since it doesn't halt the pass.
+1. **Derive F1's line.** Check sibling artifacts **of the same genre**, the template, and whether the content already lives canonically; state the result: `Reader: <who> — Decision: <what they do next>`. No signal resolves it → say so.
+2. **Run F2 against every section** against F1's line: does its absence change the named decision? Mark keep or remove. **F1 is unresolved whenever either field is missing — a reader named with no decision, or a decision with no reader — and an unresolved F1 means F2 doesn't run; every section defaults to keep.** The same applies to every check that reads F1's line: F4 and A6 both route by what the named reader needs, so an unresolved F1 skips them too and their candidate material stays put. A–E otherwise run normally. Name each skip as a non-blocking escalation — not a second blocking point, since none of it halts the pass.
 3. **For every section marked remove, run F3**: name the section that owns each load-bearing item; no owning section → find one, or reclassify it as not load-bearing only when it fails F1's line like any other cut, naming the reclassification to the user beside the removal proposal.
 4. **Emit the removal proposal** (shape below) in one batch, then **stop for an answer before step 5** — the protocol's one blocking point. Nothing marked → straight to step 5.
-5. **If removals were proposed, apply the answer**: perform the approved F2 removals and their F3 moves, and retain the sections the user rejected. Then **run F4** on every surviving section: route author-facing detail to its destination (table below); a deliberately-not-made decision stays.
+5. **If removals were proposed, apply the answer**: perform the approved F2 removals and their F3 moves, and retain the sections the user rejected. Then **run F4** on every surviving section: route author-facing detail to its destination (table below); a deliberately-not-made decision stays. F4 and A6 may not empty a section whose removal was rejected — a section gutted to nothing is an F2 removal the user declined, taken anyway.
 6. **Run groups A–E** on the surviving, routed content. Reuse a passage's procedural/explanatory classification from the authoring phase when one was made there; otherwise — the common case, since authoring rarely runs against an existing draft — classify it in place, immediately before A4 fires, passage grain only, never at document or section grain. A call here that can't be self-verified is non-blocking: apply it provisionally and name it in the report.
 7. **Emit the revision report** (shape below): everything steps 1–6 changed and why, including the escalations from steps 2 and 6.
 
@@ -67,49 +67,49 @@ Group F runs first: compressing a doomed section risks a **residue stub** — bu
 | ID | Check | Tag |
 |---|---|---|
 | F1 | Name the reader and decision in one visible line, from repo signals — everything downstream tests against it | `judg` |
-| F2 | Section materiality: absence unchanged decision → section goes, not compressed. Removals proposed, not performed | `judg` |
-| F3 | Re-home before removing: every load-bearing item lands in the section that owns it — no stub left behind | `judg` |
-| F4 | Detail level: within a surviving section, route author-facing detail away from what the reader needs | `judg` |
+| F2 | Section materiality: absence unchanged decision → the section goes — not compressed, not tightened, not reduced to a summary. Removals proposed, not performed | `judg` |
+| F3 | Re-home before removing: every load-bearing item lands in the section that owns it, and the proposal names where. Deleting wholesale takes the survivors with it; keeping a compressed shell fails F2 | `judg` |
+| F4 | Detail level: within a surviving section, separate what the named reader needs from what the author wanted on record — each recurring author-facing category has a destination that is not this document | `judg` |
 
 F4 routes surviving detail to:
 
 | Category | Destination |
 |---|---|
-| Review-round history, feedback tables | The review threads themselves |
+| Review-round history, per-note feedback tables | The review threads themselves |
 | Approaches tried and rejected | Commit body, or an ADR if it outlives the change |
 | How it was verified — transcripts, run counts, methodology | Test docstrings, or the test itself |
 | Tooling and process narrative | Nowhere; work-in-progress residue |
 | A decision deliberately not made, with its rationale | Stays — changes what a reader concludes |
 
-These categories make F4 actionable, not exhaustive: content outside the table is still tested against F1's line rather than passing by default. And a destination outside the document under revision — for F4 or A6 alike — is proposed, not performed, unless that file is already in the task's scope; the material stays put until the move is authorized. Non-blocking: it routes to the report like any other non-blocking item, not a second checkpoint.
+These categories make F4 actionable, not exhaustive: content outside the table is still tested against F1's line rather than passing by default. **Scope guard, applying to every check in this skill, not just F4.** An edit to any file other than the document under revision — F4's ADR or commit body, A6's owning document, E1's CI assertion, E2's runnable quickstart — is proposed, not performed, unless that file is already in the task's scope. Read such files freely; the material stays put until the move is authorized. Non-blocking: it routes to the report like any other non-blocking item, not a second checkpoint.
 
 ### A — What a cut may touch
 
 | ID | Check | Tag |
 |---|---|---|
-| A1 | Name the operation: word, claim, or qualifier scoping a surviving claim | `judg` |
+| A1 | Name the operation **before editing**: removing a word, a claim, or a qualifier that scopes a surviving claim | `judg` |
 | A2 | Qualifiers (hedges), scope conditions, sample sizes, exceptions, platform caveats stay in the same visual unit as their claim — never demoted to a footnote or a later bullet. Tighten wording, not the fact | `judg` |
-| A3 | **Orphan check.** Diff backward pointers and demonstratives against the deletion — cut pointer with referent, inline a restatement, or keep both | `mech` |
-| A4 | Cut license by content class: procedural cuts toward bare imperatives; explanatory cuts filler only — trade-offs, scope conditions, sample sizes, limitations survive. `precautionary` | `judg` |
-| A5 | Dead words: nominalizations back to verbs, expletive constructions, circumlocutions, redundant intensifiers | `mech` |
-| A6 | Route before deleting: material that is true and relevant but doesn't change the reader's action moves — footnote, appendix, its owning document — never dies | `judg` |
+| A3 | **Orphan check.** Every backward pointer ("as noted above", "see §X") and every demonstrative whose nearest antecedent falls inside the deletion range — diff against what was cut, then cut pointer with referent, inline a minimal restatement, or keep both | `mech` |
+| A4 | Cut license by content class: procedural cuts hard toward bare imperatives; explanatory cuts filler only — trade-offs, scope conditions, sample sizes, limitations survive. `precautionary` | `judg` |
+| A5 | Dead words: nominalizations back to verbs, expletive constructions, circumlocutions, redundant intensifiers. Default-on, no review | `mech` |
+| A6 | Route before deleting: material that is true and relevant but doesn't change the reader's next action moves — footnote, appendix, the document that owns that mode — rather than dying | `judg` |
 
 ### B — Which device carries the logic
 
 | ID | Check | Tag |
 |---|---|---|
-| B1 | **Reversal test.** Reversing two items changes what's true or doable → chain with a *because*-class connective; independent items may stay bulleted — burden of proof favors keeping the list. `precautionary` | `judg` |
+| B1 | **Reversal test.** Reversing two items changes what is true, or what a reader could correctly do → the pair is chained, so prose with a *because*-class connective; independent items may stay bulleted — burden of proof favors keeping the list. `precautionary` | `judg` |
 | B2 | Label the list relation — order / choose one / all must hold. A bare list implies AND | `judg` |
 | B3 | A table earns its place by being countable, not by attribute count: multiply condition cardinalities, check row count, mark gaps `impossible per §X` or `unspecified` — never blank, never "N/A". Band continuous conditions first. `precautionary` | `judg` |
-| B4 | A figure needs genuine spatial, sequential, or relational shape, paired with a sentence naming what it shows; keep diagrams as text, so they diff | `judg` |
-| B5 | Code answers mechanical "how do I call this." Composition, design rationale, version scope need prose | `judg` |
+| B4 | A figure needs genuine spatial, sequential, or relational shape; one encoding no structure actively hurts comprehension. Pair a load-bearing figure with a sentence stating what it shows. Diagrams as text source, so they diff | `judg` |
+| B5 | Code answers mechanical "how do I call this." Composition across calls, design rationale, and version scope need prose — another snippet will not supply them | `judg` |
 
 ### C — Order and repetition
 
 | ID | Check | Tag |
 |---|---|---|
-| C1 | **Tail-chain test.** Read each sentence's last words alone, top to bottom: advancing facts, or filler and a repeated noun? | `judg` |
-| C2 | **Subject-swap test.** Passive's subject echoes the prior sentence → leave it. No echo → rewrite active | `mech` |
+| C1 | **Tail-chain test.** Read the last few words of each sentence in a paragraph, alone, top to bottom: advancing facts, or filler and a repeated noun? | `judg` |
+| C2 | **Subject-swap test.** For each passive, does its grammatical subject echo the prior sentence? Yes → leave it, the passive is preserving a topic. No → rewrite active. One lookup, no judgment about agency or vagueness | `mech` |
 | C3 | Sections open with the conclusion, so a reader who stops there still has the takeaway | `judg` |
 | C4 | Restate only where the thread was plausibly lost — heading intervened, or antecedent distant and ambiguous. One orienting clause or a real link, never a re-explanation. Aggressive on reference/how-to, light on tutorial, never changelogs. `precautionary` | `judg` |
 
@@ -121,7 +121,7 @@ These categories make F4 actionable, not exhaustive: content outside the table i
 | D2 | Emphasis goes to the claim whose misreading is unrecoverable (data loss, security exposure, binding commitment), not to what feels important | `judg` |
 | D3 | The heading outline must convey the document alone: no skipped levels, no "Overview" / "Details" / "More" | `mech` |
 | D4 | Nothing load-bearing carried only by bold, color, position, or emoji | `mech` |
-| D5 | List length is channel-dependent: a re-consultable list may run long; an unaided one stays short, split with prose | `judg` |
+| D5 | List length is a function of channel: a list the reader can visually re-consult may run long; an unaided one stays short and gets split with intervening prose | `judg` |
 | D6 | Tables need header cells with `scope`, and a caption | `mech` |
 
 ### E — Staying true

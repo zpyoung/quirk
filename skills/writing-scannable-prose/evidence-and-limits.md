@@ -1,6 +1,6 @@
 # Evidence and limits
 
-This file records what each of the 28 checks in [SKILL.md](SKILL.md) rests on, which four are `precautionary` rather than settled, the four falsification notes in full, the claims deliberately left out because they could not be sourced, and the gap this skill cannot close on its own. It is the citation layer — see "Pointer to the source research" below for the two documents everything here traces back to.
+This file records what each of the 28 checks in [SKILL.md](SKILL.md) rests on, which four are `precautionary` rather than settled, the four falsification notes in full, the claims deliberately left out because they could not be sourced, and the gap this skill cannot close on its own. It is the citation layer — see "Pointer to the source research" below for the two documents every literature-backed claim here traces back to. Group F is the exception: F1–F4 were added by the 2026-07-30 amendment to the logic spec and rest on an observed failure in a worked example, not on anything in those explorations.
 
 ## Per-rule evidence status
 

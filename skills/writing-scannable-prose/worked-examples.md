@@ -48,7 +48,7 @@ rate limiter and contention there was unpredictable.
 (section removed)
 ```
 
-Changed: the section's absence doesn't change whether the on-call enables the flag, so it fails materiality outright — not shortened, removed. The removal itself is proposed to the reader before it happens; every other check in this file applies directly, without that step.
+Changed: the section's absence doesn't change whether the on-call enables the flag, so it fails materiality outright — not shortened, removed. This removal was proposed and approved before it was made.
 
 Full case: [verbose_example.md](../../docs/quirk/specs/2026-07-29-writing-scannable-prose/verbose_example.md) → [scannable_example.md](../../docs/quirk/specs/2026-07-29-writing-scannable-prose/scannable_example.md).
 
@@ -115,7 +115,7 @@ Fan-out uses Postgres `LISTEN/NOTIFY` (approaches considered and rejected are
 recorded in ADR-0032).
 ```
 
-Changed: "approaches tried and rejected" is author-facing detail with a destination that isn't this document — moved to the ADR that outlives the change. The surviving fact, which mechanism is in use, stays.
+Changed: "approaches tried and rejected" is author-facing detail with a destination that isn't this document. ADR-0032 was already in the task's scope, so the move was performed; had it not been, F4 would have proposed the move and left the material in place until authorized. The surviving fact, which mechanism is in use, stays.
 
 Full case: [verbose_example.md](../../docs/quirk/specs/2026-07-29-writing-scannable-prose/verbose_example.md) → [scannable_example.md](../../docs/quirk/specs/2026-07-29-writing-scannable-prose/scannable_example.md) — the same fixture pair shows author-facing detail (the considered-and-rejected approaches) routed out of the surviving sections rather than left inline.
 
@@ -330,7 +330,8 @@ flowchart LR
   D -- no --> E[Reject 422]
   D -- yes --> C
 ```
-The guard's four-branch decision path.
+The diagram shows the guard's four-branch decision path: a positive credit is
+allowed unless the account is pinned and the rate disagrees with the pin.
 ````
 
 Changed: the flat image had no spatial or sequential shape to justify a figure. Replaced with a text-based diagram carrying a real decision structure, captioned in one sentence, and expressed as text so it diffs.
