@@ -173,12 +173,22 @@ adversarial-review select-model --author-family <family> --resolve <path>
   -> stdout: ModelSelection ; exit 0 resolved, 1 no rung resolved, 2 error
 
 adversarial-review gate      --findings <path> --model <path> --prepass <path>
-                             [--depth <quick|standard|deep>] [--repo-root <path>]
+                             --resolve <path> [--depth <quick|standard|deep>]
+                             [--repo-root <path>] [--no-verify-artifact]
   -> stdout: GateResult ; exit 0 PASS, 1 NEEDS_FIXES, 3 CRITICAL_ISSUES, 4 NOT_REVIEWABLE, 2 error
+  # --resolve names the run and artifact. The chain proves the inputs agree with each
+  #   other; run ids are random, so an intact bundle from an earlier round agrees with
+  #   itself. gate re-hashes the target against resolve's hash to refuse that — the only
+  #   check that separates this review from a replay, and the only one covering quick,
+  #   where the reviewer hand-writes its report and there is no findings chain.
+  # --no-verify-artifact for a target with no tree behind it. It disables that check.
 
 adversarial-review manifest  --resolve <path> --prepass <path> --model <path> --gate <path>
-                             [--lens <str>]
+                             [--lens <str>] [--no-verify-artifact]
   -> stdout: Manifest ; exit 0 ok, 2 error
+  # Re-hashing is the default. It was --verify-artifact, opt-in, which meant the guard
+  #   against recording a stale run was one most callers would never pass. The old flag
+  #   is still accepted and ignored so documented invocations keep working.
 ```
 
 Preconditions: every `--*` path argument must be an existing readable file containing the JSON

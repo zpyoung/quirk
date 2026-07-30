@@ -178,12 +178,24 @@ Skip all of this at `quick` depth — one dispatch, self-refuted, `{findings, su
 
 ```bash
 "$SCRIPT" gate --findings "$WORK/merged.json" --model "$WORK/model.json" \
-  --prepass "$WORK/prepass.json" --depth "$DEPTH" > "$WORK/gate.json"
+  --prepass "$WORK/prepass.json" --resolve "$WORK/resolve.json" \
+  --depth "$DEPTH" > "$WORK/gate.json"
 ```
 
 `--model` and `--prepass` are required; without them the `NOT_REVIEWABLE` branch is unreachable and
 an unreviewed artifact would emit `PASS`. The gate merges the pre-pass findings itself — do not
 pre-merge them.
+
+`--resolve` is what ties the verdict to *this* review rather than to any consistent set of files.
+The gate re-hashes the target and refuses if the tree no longer matches what `resolve` saw — run IDs
+are minted at random, so an intact bundle left over from an earlier round satisfies every other
+check. This matters most at `quick`, where the reviewer hand-writes its report and there is no
+findings chain to anchor. `--no-verify-artifact` turns the re-hash off for a target with no tree
+behind it; it also turns off the only thing separating a current review from a stale one.
+
+**If this fires on a run you know is honest, look at your own check output first.** The pre-pass
+runs its commands inside the tree it hashes, so an ungitignored `.pytest_cache/`, `__pycache__/`, or
+build directory *is* a worktree change by the time the gate looks. Gitignore them.
 
 `--findings` takes either a bare array or `quick`'s `{"findings": [...], "suppressed": [...]}`
 object. Pass the quick object through whole: its self-refuted entries are carried into
@@ -206,7 +218,8 @@ family sees both sides — dispatch to a **third** family, then:
 "$SCRIPT" merge --findings "$WORK/merged.json" --judgments "$WORK/tiebreak.json" \
   --stage tiebreak > "$WORK/tiebroken.json"
 "$SCRIPT" gate --findings "$WORK/tiebroken.json" --model "$WORK/model.json" \
-  --prepass "$WORK/prepass.json" --depth deep > "$WORK/gate.json"
+  --prepass "$WORK/prepass.json" --resolve "$WORK/resolve.json" \
+  --depth deep > "$WORK/gate.json"
 ```
 
 That merge expects a ruling for every `contested` finding and nothing else, and refuses a ruling of
@@ -223,7 +236,7 @@ run; that is this step's cue, not a fix round. The second gate, after the tiebre
 
 ```bash
 "$SCRIPT" manifest --resolve "$WORK/resolve.json" --prepass "$WORK/prepass.json" \
-  --model "$WORK/model.json" --gate "$WORK/gate.json" --verify-artifact \
+  --model "$WORK/model.json" --gate "$WORK/gate.json" \
   ${LENS:+--lens "$LENS"} > "$WORK/manifest.json"
 ```
 

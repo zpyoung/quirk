@@ -1281,13 +1281,38 @@ def assign_ids(
         taken.add(finding["id"])
 
 
+def verify_artifact_is_current(resolved: dict[str, Any], repo_root: Path) -> None:
+    """Refuse to judge an artifact that is no longer the one `resolve` identified.
+
+    This is the only check that distinguishes *this* review from a consistent replay of
+    an older one: run IDs are minted at random, so nothing else separates a fresh bundle
+    from an intact stale one. Every other binding proves the inputs agree with each
+    other, not that they describe the tree as it stands now.
+    """
+    current = artifact_hash_of(
+        resolved.get("target_ref", ""), repo_root, None,
+    )
+    if current == resolved.get("artifact_hash"):
+        return
+    raise UsageError(
+        "artifact changed during the review: "
+        f"resolve saw {str(resolved.get('artifact_hash'))[:12]}, "
+        f"the tree now hashes {current[:12]}. Findings from this run judged different "
+        "content — re-run it. If the only difference is your own check output "
+        "(`.pytest_cache/`, `__pycache__/`, build directories), gitignore it: the "
+        "pre-pass runs its checks inside the tree it hashes, and an untracked file is "
+        "part of the worktree under review."
+    )
+
+
 def run_gate(
     findings_path: str, model_path: str, prepass_path: str, depth: str, repo_root: Path,
-    id_prefix: str = "F",
+    id_prefix: str = "F", resolve_path: str | None = None, verify_artifact: bool = True,
 ) -> tuple[int, dict[str, Any]]:
     findings = load_json(findings_path, "findings")
     model = load_json(model_path, "model")
     prepass = load_json(prepass_path, "prepass")
+    resolved = load_json(resolve_path, "resolve") if resolve_path else None
     for label, value in (("model", model), ("prepass", prepass)):
         if not isinstance(value, dict):
             raise UsageError(f"{label} input must be a JSON object")
@@ -1400,11 +1425,24 @@ def run_gate(
             f"{prepass_link['run_id']}): one of them is left over from an earlier review"
         )
     # Quick depth has no chained findings — the reviewer hand-writes that report — so
-    # there is nothing to compare against there beyond the two agreeing with each other.
+    # without `resolve` the binding degrades to "model and prepass agree with each
+    # other", which any single earlier run satisfies. `--resolve` is what makes the
+    # quick call name a run at all, and the artifact check below is what makes that run
+    # have to be the current one.
     if gate_chain and gate_chain["run_id"] != prepass_link["run_id"]:
         raise UsageError(
             f"findings belong to run {gate_chain['run_id']} but model and prepass "
             f"belong to run {prepass_link['run_id']}: inputs from two different reviews"
+        )
+    resolve_link = chain_of(resolved, "resolve")
+    if resolve_link["step"] != "resolve":
+        raise UsageError(
+            f"resolve input was produced by {resolve_link['step']!r}, not 'resolve'"
+        )
+    if resolve_link["run_id"] != prepass_link["run_id"]:
+        raise UsageError(
+            f"model and prepass belong to run {prepass_link['run_id']}, but resolve "
+            f"opened {resolve_link['run_id']}: inputs from two different reviews"
         )
     observed = prepass.get("observed_artifact_hash")
     if "observed_artifact_hash" not in prepass:
@@ -1429,6 +1467,11 @@ def run_gate(
             f"(saw {observed[:12]}, resolve identified {prepass_link['artifact_hash'][:12]}): "
             f"re-run the pre-pass"
         )
+    # Callers are told a gate exit of 0/1/3 means the review completed, so they stop
+    # here rather than at the manifest. An intact bundle from an earlier run satisfies
+    # every check above — this is the one that refuses to judge a tree that has moved on.
+    if verify_artifact:
+        verify_artifact_is_current(resolved, repo_root)
     if isinstance(findings, dict):
         carried = findings.get("suppressed", [])
         if not isinstance(carried, list):
@@ -1777,7 +1820,7 @@ def merge_judgments(
 
 def build_manifest(
     resolve_path: str, prepass_path: str, model_path: str, gate_path: str, lens: str | None,
-    repo_root: Path | None = None, verify_artifact: bool = False,
+    repo_root: Path | None = None, verify_artifact: bool = True,
 ) -> dict[str, Any]:
     resolved = load_json(resolve_path, "resolve")
     prepass = load_json(prepass_path, "prepass")
@@ -1849,17 +1892,7 @@ def build_manifest(
         # later stages reviewed something the earlier ones never saw, and the
         # refute stage will "refute" real findings because they no longer
         # reproduce. That reads as a clean run and is the opposite of one.
-        current = resolve_target(
-            resolved.get("target_ref", ""), resolved.get("profile"),
-            repo_root or Path("."), None,
-        )
-        if current["artifact_hash"] != resolved.get("artifact_hash"):
-            raise UsageError(
-                "artifact changed during the review: "
-                f"resolve saw {str(resolved.get('artifact_hash'))[:12]}, "
-                f"the tree now hashes {current['artifact_hash'][:12]}. "
-                "Findings from this run judged different content — re-run it."
-            )
+        verify_artifact_is_current(resolved, repo_root or Path("."))
 
     # A quick pass self-refutes inside one context, so it cannot claim structural
     # independence no matter which family ran it. Independence only ever degrades.
@@ -1960,6 +1993,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="depth actually used; echoed into GateResult for the manifest",
     )
     gate_cmd.add_argument("--repo-root", default=".", help="repository root")
+    gate_cmd.add_argument("--resolve", required=True,
+                          help="ResolveResult JSON — the run and artifact being judged")
+    gate_cmd.add_argument(
+        "--no-verify-artifact", action="store_true",
+        help="skip the check that the tree still matches what resolve hashed; a stale "
+             "but internally consistent bundle then reads as a current review",
+    )
     gate_cmd.add_argument(
         "--id-prefix", default="F",
         help="prefix for assigned finding IDs; give concurrent invocations distinct "
@@ -1991,7 +2031,12 @@ def build_parser() -> argparse.ArgumentParser:
     manifest_cmd.add_argument("--repo-root", default=".", help="repository root")
     manifest_cmd.add_argument(
         "--verify-artifact", action="store_true",
-        help="re-hash the target and fail if it changed during the review",
+        help="accepted and ignored; re-hashing is the default and this used to enable it",
+    )
+    manifest_cmd.add_argument(
+        "--no-verify-artifact", action="store_true",
+        help="skip the re-hash. An opt-in guarantee is one most callers never opt into, "
+             "so the flag now turns the check off rather than on",
     )
 
     return parser
@@ -2028,7 +2073,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "gate":
             exit_code, payload = run_gate(
                 args.findings, args.model, args.prepass, args.depth, repo_root,
-                args.id_prefix,
+                args.id_prefix, args.resolve, not args.no_verify_artifact,
             )
         elif args.command == "claims":
             payload = build_claims(args.findings, args.resolve, args.id_prefix)
@@ -2037,7 +2082,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "manifest":
             payload = build_manifest(
                 args.resolve, args.prepass, args.model, args.gate, args.lens,
-                repo_root, args.verify_artifact,
+                repo_root, not args.no_verify_artifact,
             )
         else:  # pragma: no cover - argparse rejects unknown subcommands
             raise UsageError(f"unhandled command: {args.command}")

@@ -54,6 +54,17 @@ saved before the break, or a hand-written `{"resolved": true}` — and neither s
 anything. `prepass` also records the artifact hash it observed, so `gate` can tell a pre-pass that
 ran against other content from one that ran against the artifact under review.
 
+**Every binding above proves the inputs agree with each other, not that they describe the tree as it
+stands.** Run IDs are minted at random, so a complete, unmodified bundle from an earlier round — no
+forgery, just stale paths — satisfies all of them. `gate` therefore takes `--resolve` and re-hashes
+the target, refusing a verdict over an artifact that has moved on; `manifest` does the same, and
+both do it by default rather than behind a flag, because an opt-in guarantee is one most callers
+never opt into. `--no-verify-artifact` exists for a target with no tree behind it and turns off the
+one check that distinguishes this review from a replay of the last one.
+
+This is what covers `quick`, where the reviewer hand-writes its report and no findings chain exists
+to anchor — and `quick` is what auto-selection picks for a small diff, not an exotic opt-in.
+
 **Read the guarantee precisely.** The chain makes a skipped stage, an out-of-order call, and a file
 from another run fail loudly. It does not authenticate content: nothing in this script observes a
 model dispatch, so an orchestrator that fabricates a consistent chain end to end still can. A
@@ -194,6 +205,8 @@ gate exit 0/1/3 + valid GateResult JSON   -> review completed; the verdict is au
                                              PASS with zero findings IS the clean-review case.
 gate exit 1/3   + contested_count > 0     -> mid-flight, not completed. The tiebreak stage
                                              never ran. Adjudicate; do not spend a fix round.
+gate exit 2     + "artifact changed"      -> the tree moved, or the bundle is left over from
+                                             an earlier round. Re-run; do not record.
 gate exit 4     + valid GateResult JSON   -> NOT_REVIEWABLE. Never a pass.
 gate exit 2, non-JSON stdout, or no
   stdout at all                           -> the run FAILED. Retry once, then walk the model

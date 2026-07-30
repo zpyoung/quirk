@@ -634,6 +634,19 @@ def test_sdd_does_not_overstate_what_the_verdict_proves() -> None:
 # run lost six findings here — the prompt told the reviewer to prove an absence with a
 # `command` item, and `command` rejects the empty output an absence has by definition.
 
+def _ar_module():
+    import importlib.machinery
+    import importlib.util
+
+    spec = importlib.util.spec_from_loader(
+        "ar", importlib.machinery.SourceFileLoader(
+            "ar", str(SKILL_DIR / "scripts" / "adversarial-review"))
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _example_findings() -> list:
     """The JSON array the promote prompt shows the reviewer, parsed as a reviewer would
     copy it: comments stripped, since the prompt annotates its example."""
@@ -656,14 +669,7 @@ def _example_findings() -> list:
 def test_the_promote_examples_pass_the_scripts_own_validator() -> None:
     """A prompt whose example the validator rejects costs the caller a whole dispatch,
     and the reviewer is blamed for what the asset told it to do."""
-    import importlib.util
-
-    spec = importlib.util.spec_from_loader(
-        "ar", importlib.machinery.SourceFileLoader(
-            "ar", str(SKILL_DIR / "scripts" / "adversarial-review"))
-    )
-    ar = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(ar)
+    ar = _ar_module()
     for index, finding in enumerate(_example_findings()):
         ar.validate_finding(finding, index)
 
@@ -671,14 +677,7 @@ def test_the_promote_examples_pass_the_scripts_own_validator() -> None:
 def test_the_promote_prompt_names_every_evidence_kind_the_script_accepts() -> None:
     """A kind the reviewer is never shown is a kind it will not emit — and it will reach
     for a wrong one that the validator refuses."""
-    import importlib.util
-
-    spec = importlib.util.spec_from_loader(
-        "ar", importlib.machinery.SourceFileLoader(
-            "ar", str(SKILL_DIR / "scripts" / "adversarial-review"))
-    )
-    ar = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(ar)
+    ar = _ar_module()
     prompt = (ASSETS_DIR / "promote-prompt.md").read_text()
     for kind in ar.EVIDENCE_REQUIRED_FIELDS:
         assert f"`{kind}`" in prompt, f"promote-prompt.md never names evidence kind {kind}"
@@ -689,3 +688,63 @@ def test_the_promote_prompt_does_not_route_absence_claims_through_command() -> N
     prompt = (ASSETS_DIR / "promote-prompt.md").read_text()
     assert not re.search(r"absence with a separate `command`", prompt)
     assert re.search(r"absence.{0,80}`absence`", prompt, re.DOTALL)
+
+
+def _json_array(asset: str) -> list:
+    import json
+
+    text = (ASSETS_DIR / asset).read_text()
+    for block in re.findall(r"```json\n(.*?)```", text, re.DOTALL):
+        try:
+            parsed = json.loads(re.sub(r"/\*.*?\*/", "", block, flags=re.DOTALL))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, list) and parsed:
+            return parsed
+    pytest.fail(f"no parseable JSON array in {asset}")
+
+
+@pytest.mark.parametrize("asset,stage", [
+    ("refute-prompt.md", "refute"),
+    ("tiebreak-prompt.md", "tiebreak"),
+])
+def test_the_judgment_examples_survive_the_merge_validator(tmp_path, asset, stage) -> None:
+    """The `absence` bug was a prompt promising a shape the script refuses. These two
+    assets have judgment examples with the same exposure and had no equivalent test."""
+    import json
+    import subprocess
+    import sys
+
+    judgments = _json_array(asset)
+    # `merge` rules on what it was given, so the staged findings have to be the ones the
+    # example judges — and for tiebreak they have to be contested, which is its mandate.
+    disposition = "contested" if stage == "tiebreak" else "standing"
+    findings = [{
+        "id": j["id"], "severity": "HIGH", "confidence": "HIGH", "category": "correctness",
+        "claim": f"claim {j['id']}", "remediation": "fix",
+        "evidence": [{"kind": "command", "command": "pytest -q", "output": "1 failed"}],
+        "patch": None, "stage": "refute", "disposition": disposition,
+    } for j in judgments]
+    chain = {"run_id": "0" * 16, "artifact_hash": "a" * 64, "predecessor": "0" * 64,
+             "step": "claims" if stage == "refute" else "merge"}
+    if stage == "tiebreak":
+        # The refute stage it adjudicates is named on the chain link, not the envelope.
+        chain["stage"] = "refute"
+    envelope = {"findings": findings, "chain": chain}
+    if stage == "tiebreak":
+        envelope["stage"] = "refute"
+        envelope["judged"] = len(findings)
+
+    findings_file = tmp_path / "f.json"
+    findings_file.write_text(json.dumps(envelope))
+    judgments_file = tmp_path / "j.json"
+    judgments_file.write_text(json.dumps(judgments))
+    proc = subprocess.run(
+        [sys.executable, str(SKILL_DIR / "scripts" / "adversarial-review"), "merge",
+         "--findings", str(findings_file), "--judgments", str(judgments_file),
+         "--stage", stage],
+        capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, (
+        f"{asset}'s own example is refused by `merge --stage {stage}`: {proc.stderr}"
+    )

@@ -1072,10 +1072,14 @@ def _inputs(tmp_path, findings, *, model=None, prepass_status="pass", prepass_fi
     )
     if isinstance(findings, list) and not raw:
         findings = _merged(findings)
+    # `--no-verify-artifact` because these fixtures carry a synthetic `ART_HASH` that no
+    # tree hashes to. The currency check has its own tests against a real repository.
     return (
         "--findings", _write(tmp_path, "f.json", findings),
         "--model", _write(tmp_path, "m.json", model),
         "--prepass", _write(tmp_path, "p.json", pre),
+        "--resolve", _write(tmp_path, "res-gate.json", _resolved()),
+        "--no-verify-artifact",
     )
 
 
@@ -1103,7 +1107,9 @@ def gate(tmp_path, findings, *, expect=0, extra=(), repo_root=None, **kw) -> dic
 def test_gate_without_model_input_fails_loudly(tmp_path):
     """A missing input must never collapse silently onto the severity path."""
     proc = run_ar("gate", "--findings", _write(tmp_path, "f.json", []),
-                  "--prepass", _write(tmp_path, "p.json", _prepass_doc()))
+                  "--prepass", _write(tmp_path, "p.json", _prepass_doc()),
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
     assert proc.returncode == 2
 
 
@@ -1131,7 +1137,9 @@ def test_a_prepass_that_never_ran_cannot_supply_a_clean_result(tmp_path, bad):
                       "resolved": True, "alias": "codex", "family": "openai",
                       "provider": "openai-codex", "model": "gpt-5.6-sol",
                       "thinking": "high", "independence": "full", "ladder": []}),
-                  "--prepass", _write(tmp_path, "p.json", bad))
+                  "--prepass", _write(tmp_path, "p.json", bad),
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
     assert proc.returncode == 2
     assert "adversarial-review:" in proc.stderr
 
@@ -1157,7 +1165,9 @@ def test_an_unresolved_model_needs_no_reviewer_fields(tmp_path):
 
 def test_gate_without_prepass_input_fails_loudly(tmp_path):
     proc = run_ar("gate", "--findings", _write(tmp_path, "f.json", []),
-                  "--model", _write(tmp_path, "m.json", {"resolved": True, "independence": "full"}))
+                  "--model", _write(tmp_path, "m.json", {"resolved": True, "independence": "full"}),
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
     assert proc.returncode == 2
 
 
@@ -1525,7 +1535,9 @@ def test_gate_rejects_non_object_model_input_with_exit_2(tmp_path, bad):
 def test_gate_rejects_non_object_prepass_input_with_exit_2(tmp_path):
     proc = run_ar("gate", "--findings", _write(tmp_path, "f.json", []),
                   "--model", _write(tmp_path, "m.json", {"resolved": True}),
-                  "--prepass", _write(tmp_path, "p.json", ["not", "an", "object"]))
+                  "--prepass", _write(tmp_path, "p.json", ["not", "an", "object"]),
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
     assert proc.returncode == 2
     assert "adversarial-review:" in proc.stderr
 
@@ -1723,11 +1735,14 @@ def _manifest_inputs(tmp_path, *, depth="standard", independence="full", family=
     model_doc = _model_doc(family=family, independence=independence)
     gate_doc = {"verdict": "PASS", "findings": [], "contested": [], "suppressed": [],
                 "suppressed_count": 2, "depth": depth, "chain": _chain("gate")}
+    # These carry a synthetic ART_HASH no tree hashes to, so the currency check would
+    # fire on every one. It has its own tests against a real repository below.
     return (
         "--resolve", _write(tmp_path, "r.json", resolve_doc),
         "--prepass", _write(tmp_path, "p2.json", prepass_doc),
         "--model", _write(tmp_path, "m2.json", model_doc),
         "--gate", _write(tmp_path, "g.json", gate_doc),
+        "--no-verify-artifact",
     )
 
 
@@ -1845,15 +1860,45 @@ def test_manifest_verify_artifact_catches_a_tree_that_moved_mid_review(tmp_path)
     assert "artifact changed during the review" in proc.stderr
 
 
-def test_manifest_without_verify_artifact_does_not_re_resolve(tmp_path):
-    """Opt-in: a caller reviewing a detached diff has no tree to re-hash."""
+def test_the_currency_check_is_on_by_default_not_opt_in(tmp_path):
+    """It was the only thing separating this review from an intact replay of an older
+    one, and it was a flag most callers would never pass."""
     repo, work = tmp_path / "repo", tmp_path / "work"
     repo.mkdir(); work.mkdir()
     _git_repo(repo)
     (repo / "x.py").write_text("a\nb\n")
     args = [a for a in _review_inputs(work, repo) if a != "--verify-artifact"]
     (repo / "x.py").write_text("totally different\n")
-    assert run_ar("manifest", *args).returncode == 0
+    proc = run_ar("manifest", *args)
+    assert proc.returncode == 2
+    assert "artifact changed during the review" in proc.stderr
+
+
+def test_no_verify_artifact_still_lets_a_detached_diff_through(tmp_path):
+    """A caller reviewing a diff with no tree behind it has nothing to re-hash."""
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    _git_repo(repo)
+    (repo / "x.py").write_text("a\nb\n")
+    args = [a for a in _review_inputs(work, repo) if a != "--verify-artifact"]
+    (repo / "x.py").write_text("totally different\n")
+    assert run_ar("manifest", *args, "--no-verify-artifact").returncode == 0
+
+
+def test_the_currency_error_names_check_output_as_the_likely_cause(tmp_path):
+    """The pre-pass runs its checks inside the tree it hashes, so an ungitignored
+    `.pytest_cache/` fires this on an honest run. Without the hint that reads as
+    tampering, and the caller re-runs into the same wall."""
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    _git_repo(repo)
+    (repo / "x.py").write_text("a\nb\n")
+    args = [a for a in _review_inputs(work, repo) if a != "--verify-artifact"]
+    (repo / ".pytest_cache").mkdir()
+    (repo / ".pytest_cache" / "v").write_text("x")
+    proc = run_ar("manifest", *args)
+    assert proc.returncode == 2
+    assert "gitignore" in proc.stderr
 
 
 def test_manifest_fails_cleanly_on_a_missing_input(tmp_path):
@@ -2110,7 +2155,9 @@ def test_quick_mode_output_cannot_be_laundered_into_standard_depth(tmp_path):
                                     _model_doc(alias="codex", provider="p", model="m")),
                   "--prepass", _write(tmp_path, "p.json",
                                       _prepass_doc()),
-                  "--depth", "standard")
+                  "--depth", "standard",
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
     assert proc.returncode == 2
     assert "quick" in proc.stderr.lower()
 
@@ -2122,7 +2169,9 @@ def test_quick_mode_output_is_accepted_at_quick_depth(tmp_path):
                                     _model_doc(alias="codex", provider="p", model="m")),
                   "--prepass", _write(tmp_path, "p.json",
                                       _prepass_doc()),
-                  "--depth", "quick")
+                  "--depth", "quick",
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
     assert proc.returncode == 1, proc.stderr
     assert json.loads(proc.stdout)["depth"] == "quick"
 
@@ -2181,7 +2230,9 @@ def test_an_empty_quick_shaped_report_is_still_accepted(tmp_path):
                                     _model_doc(alias="codex", provider="p", model="m")),
                   "--prepass", _write(tmp_path, "p.json",
                                       _prepass_doc()),
-                  "--depth", "quick")
+                  "--depth", "quick",
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout)["verdict"] == "PASS"
 
@@ -2196,7 +2247,9 @@ def test_an_empty_bare_array_is_not_a_licence_to_launder_quick_into_standard(tmp
                                     _model_doc(alias="codex", provider="p", model="m")),
                   "--prepass", _write(tmp_path, "p.json",
                                       _prepass_doc()),
-                  "--depth", "standard")
+                  "--depth", "standard",
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
     assert proc.returncode == 2
     assert "quick" in proc.stderr.lower()
 
@@ -2326,7 +2379,9 @@ def test_a_quick_report_missing_its_findings_key_is_a_failed_dispatch(tmp_path):
                                     _model_doc(alias="c", provider="p", model="m")),
                   "--prepass", _write(tmp_path, "p.json",
                                       _prepass_doc()),
-                  "--depth", "quick")
+                  "--depth", "quick",
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
     assert proc.returncode == 2
     assert "no `findings` key" in proc.stderr
 
@@ -2339,7 +2394,9 @@ def test_an_explicitly_empty_quick_report_is_still_a_clean_pass(tmp_path):
                                     _model_doc(alias="c", provider="p", model="m")),
                   "--prepass", _write(tmp_path, "p.json",
                                       _prepass_doc()),
-                  "--depth", "quick")
+                  "--depth", "quick",
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
     assert proc.returncode == 0
 
 
@@ -2592,7 +2649,9 @@ def test_merge_output_feeds_the_gate_at_standard_depth(tmp_path):
                                     _model_doc(alias="c", provider="p", model="m")),
                   "--prepass", _write(tmp_path, "p.json",
                                       _prepass_doc()),
-                  "--depth", "standard")
+                  "--depth", "standard",
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
     assert proc.returncode == 0, proc.stderr
     gated = json.loads(proc.stdout)
     assert gated["verdict"] == "PASS"
@@ -2714,7 +2773,9 @@ def test_a_hand_written_model_envelope_cannot_assert_a_reviewer(tmp_path):
                   "--findings", _write(tmp_path, "f.json", _merged([])),
                   "--model", _write(tmp_path, "m.json", forged),
                   "--prepass", _write(tmp_path, "p.json", _prepass_doc()),
-                  "--depth", "standard")
+                  "--depth", "standard",
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
     assert proc.returncode == 2
     assert "no run chain" in proc.stderr
 
@@ -2764,6 +2825,105 @@ def test_the_manifest_refuses_a_prepass_from_another_run(tmp_path):
                                                                 run_id="f" * 16))))
     assert proc.returncode == 2
     assert "another run" in proc.stderr
+
+
+def _live_run(repo: Path, work: Path, label: str) -> dict:
+    """A genuine resolve/prepass/select-model bundle for `repo` as it stands now."""
+    proc = run_ar("resolve", "--target", "WORKTREE", "--repo-root", str(repo))
+    assert proc.returncode == 0, proc.stderr
+    files = {"resolve": _write(work, f"{label}-r.json", json.loads(proc.stdout))}
+    for step, args in (
+        ("prepass", ("prepass", "--profile", "code-diff", "--target", "WORKTREE",
+                     "--repo-root", str(repo), "--check-cmd", "true")),
+        ("model", ("select-model", "--author-family", "anthropic", "--check-cmd", "true")),
+    ):
+        out = run_ar(*args, "--resolve", files["resolve"])
+        assert out.returncode in (0, 1), out.stderr
+        files[step] = _write(work, f"{label}-{step}.json", json.loads(out.stdout))
+    return files
+
+
+def test_a_whole_stale_bundle_cannot_pass_a_quick_gate(tmp_path):
+    """Quick depth has no chained findings, so `model` and `prepass` could only anchor
+    each other — which any single earlier run satisfies. Reusing an intact bundle needs
+    no forgery at all, just stale paths, and `quick` is what auto-selection picks for a
+    small diff. Only the artifact itself distinguishes this run from that one."""
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    _git_repo(repo)
+    (repo / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
+    (repo / "x.py").write_text("def f():\n    return 1\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "healthy"], cwd=repo, check=True)
+    old = _live_run(repo, work, "old")
+
+    (repo / "x.py").write_text("def f():\n    return None  # regression\n")
+
+    quick = _write(work, "quick.json", {"findings": [], "suppressed": []})
+    proc = run_ar("gate", "--findings", quick, "--model", old["model"],
+                  "--prepass", old["prepass"], "--resolve", old["resolve"],
+                  "--depth", "quick", "--repo-root", str(repo))
+    assert proc.returncode == 2, f"stale bundle produced {proc.stdout[:200]}"
+    assert "artifact changed during the review" in proc.stderr
+
+
+def test_a_current_bundle_still_passes_a_quick_gate(tmp_path):
+    """The other half: the check must not refuse an honest quick review."""
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    _git_repo(repo)
+    (repo / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
+    (repo / "x.py").write_text("def f():\n    return 1\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "healthy"], cwd=repo, check=True)
+    current = _live_run(repo, work, "now")
+
+    quick = _write(work, "quick.json", {"findings": [], "suppressed": []})
+    proc = run_ar("gate", "--findings", quick, "--model", current["model"],
+                  "--prepass", current["prepass"], "--resolve", current["resolve"],
+                  "--depth", "quick", "--repo-root", str(repo))
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["verdict"] == "PASS"
+
+
+def test_a_stale_bundle_cannot_pass_a_standard_gate_either(tmp_path):
+    """Same class one depth up: the findings chain proves the stages ran, not that they
+    ran against the tree as it stands."""
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    _git_repo(repo)
+    (repo / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
+    (repo / "x.py").write_text("def f():\n    return 1\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "healthy"], cwd=repo, check=True)
+    old = _live_run(repo, work, "old")
+    empty = _write(work, "f.json", [])
+    claims = run_ar("claims", "--findings", empty, "--resolve", old["resolve"])
+    assert claims.returncode == 0, claims.stderr
+    merged = run_ar("merge", "--findings", _write(work, "c.json", json.loads(claims.stdout)),
+                    "--judgments", _write(work, "j.json", []), "--stage", "refute")
+    assert merged.returncode == 0, merged.stderr
+
+    (repo / "x.py").write_text("def f():\n    return None  # regression\n")
+
+    proc = run_ar("gate", "--findings", _write(work, "m.json", json.loads(merged.stdout)),
+                  "--model", old["model"], "--prepass", old["prepass"],
+                  "--resolve", old["resolve"], "--depth", "standard",
+                  "--repo-root", str(repo))
+    assert proc.returncode == 2
+    assert "artifact changed during the review" in proc.stderr
+
+
+def test_gate_refuses_a_resolve_from_a_different_run(tmp_path):
+    stale = _write(tmp_path, "other-r.json",
+                   _resolved(chain=_chain("resolve", run_id="f" * 16)))
+    proc = run_ar("gate",
+                  "--findings", _write(tmp_path, "f.json", _merged([])),
+                  "--model", _write(tmp_path, "m.json", _model_doc()),
+                  "--prepass", _write(tmp_path, "p.json", _prepass_doc()),
+                  "--resolve", stale, "--no-verify-artifact", "--depth", "standard")
+    assert proc.returncode == 2
+    assert "two different reviews" in proc.stderr
 
 
 def test_the_prepass_hash_is_taken_before_its_own_checks_pollute_the_tree(tmp_path):
@@ -2838,7 +2998,9 @@ def test_the_gate_validates_the_envelope_it_is_handed(envelope, tmp_path):
                                     _model_doc(alias="c", provider="p", model="m")),
                   "--prepass", _write(tmp_path, "p.json",
                                       _prepass_doc()),
-                  "--depth", "standard")
+                  "--depth", "standard",
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
     assert proc.returncode == 2
 
 
@@ -2849,7 +3011,9 @@ def test_an_unchained_envelope_is_refused(tmp_path):
                                     _model_doc(alias="c", provider="p", model="m")),
                   "--prepass", _write(tmp_path, "p.json",
                                       _prepass_doc()),
-                  "--depth", "standard")
+                  "--depth", "standard",
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
     assert proc.returncode == 2
     assert "no run chain" in proc.stderr
 
