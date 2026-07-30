@@ -28,9 +28,9 @@ Diátaxis mode (tutorial / how-to / reference / explanation) is **not** an autho
 
 1. **Derive F1's line.** Check sibling artifacts, the template, and whether the content already lives canonically; state the result: `Reader: <who> — Decision: <what they do next>`. No signal resolves it → say so.
 2. **Run F2 against every section** against F1's line: does its absence change the named decision? Mark keep or remove. **No F1 line → F2 doesn't run; every section defaults to keep.** Name the gap as a non-blocking escalation — not a second blocking point, since it doesn't halt the pass.
-3. **For every section marked remove, run F3**: name where each load-bearing item re-homes; no destination → find one or reclassify it as not load-bearing.
+3. **For every section marked remove, run F3**: name the section that owns each load-bearing item; no owning section → find one or reclassify it as not load-bearing.
 4. **Emit the removal proposal** (shape below) in one batch, then **stop for an answer before step 5** — the protocol's one blocking point. Nothing marked → straight to step 5.
-5. **Run F4** on every surviving section: route author-facing detail to its destination (table below); a deliberately-not-made decision stays.
+5. **Apply the answer**: perform the approved F2 removals and their F3 moves, and retain the sections the user rejected. Then **run F4** on every surviving section: route author-facing detail to its destination (table below); a deliberately-not-made decision stays.
 6. **Run groups A–E** on the surviving, routed content. Before A4 touches a passage, classify it procedural or explanatory — passage grain only, right before A4 fires, never at document or section grain. A call here that can't be self-verified is non-blocking: apply it provisionally and name it in the report.
 7. **Emit the revision report** (shape below): everything steps 1–6 changed and why, including the escalations from steps 2 and 6.
 
@@ -51,7 +51,7 @@ Escalation has two modes, and only one of them blocks:
 | Mode | Applies to | Behavior |
 |---|---|---|
 | Blocking | F2 section removals only | Proposed in one batch before A–E begins; the pass waits |
-| Non-blocking | Any unverifiable A–E judgment call | Applied provisionally, named in the report; the pass doesn't wait |
+| Non-blocking | Any unverifiable A–E judgment call, or an unresolved F1 line | Applied provisionally, named in the report; the pass doesn't wait |
 
 The asymmetry is reversibility: an A–E edit is visible in a diff, so a wrong call costs a word. A section removal leaves no trace once gone.
 
@@ -67,7 +67,7 @@ Group F runs first: compressing a doomed section risks a **residue stub** — bu
 |---|---|---|
 | F1 | Name the reader and decision in one visible line, from repo signals — everything downstream tests against it | `judg` |
 | F2 | Section materiality: absence unchanged decision → section goes, not compressed. Removals proposed, not performed | `judg` |
-| F3 | Re-home before removing: every load-bearing item gets a named destination — no stub left behind | `judg` |
+| F3 | Re-home before removing: every load-bearing item lands in the section that owns it — no stub left behind | `judg` |
 | F4 | Detail level: within a surviving section, route author-facing detail away from what the reader needs | `judg` |
 
 F4 routes surviving detail to:
@@ -87,7 +87,7 @@ F4 routes surviving detail to:
 | A1 | Name the operation: word, claim, or qualifier scoping a surviving claim | `judg` |
 | A2 | Scope conditions, sample sizes, platform caveats stay in the same visual unit as their claim — never demoted to a footnote or a later bullet. Tighten wording, not the fact | `judg` |
 | A3 | **Orphan check.** Diff backward pointers and demonstratives against the deletion — cut pointer with referent, inline a restatement, or keep both | `mech` |
-| A4 | Cut license by content class: procedural cuts toward bare imperatives; explanatory cuts filler only — trade-offs, scope conditions, limitations survive. `precautionary` | `judg` |
+| A4 | Cut license by content class: procedural cuts toward bare imperatives; explanatory cuts filler only — trade-offs, scope conditions, sample sizes, limitations survive. `precautionary` | `judg` |
 | A5 | Dead words: nominalizations back to verbs, expletive constructions, circumlocutions, redundant intensifiers | `mech` |
 | A6 | Route before deleting: material not changing the reader's action moves — footnote, appendix, its owning document — never dies | `judg` |
 
@@ -95,9 +95,9 @@ F4 routes surviving detail to:
 
 | ID | Check | Tag |
 |---|---|---|
-| B1 | **Reversal test.** Reversing two items changes what's true or doable → chain with a *because*-class connective; independent items may stay bulleted. `precautionary` | `judg` |
+| B1 | **Reversal test.** Reversing two items changes what's true or doable → chain with a *because*-class connective; independent items may stay bulleted — burden of proof favors keeping the list. `precautionary` | `judg` |
 | B2 | Label the list relation — order / choose one / all must hold. A bare list implies AND | `judg` |
-| B3 | A table earns its place by being countable: multiply condition cardinalities, check row count, mark gaps `impossible per §X` or `unspecified` — never blank. Band continuous conditions first. `precautionary` | `judg` |
+| B3 | A table earns its place by being countable, not by attribute count: multiply condition cardinalities, check row count, mark gaps `impossible per §X` or `unspecified` — never blank, never "N/A". Band continuous conditions first. `precautionary` | `judg` |
 | B4 | A figure needs genuine spatial, sequential, or relational shape, paired with a sentence naming what it shows; keep diagrams as text, so they diff | `judg` |
 | B5 | Code answers mechanical "how do I call this." Composition, design rationale, version scope need prose | `judg` |
 
@@ -108,7 +108,7 @@ F4 routes surviving detail to:
 | C1 | **Tail-chain test.** Read each sentence's last words alone, top to bottom: advancing facts, or filler and a repeated noun? | `judg` |
 | C2 | **Subject-swap test.** Passive's subject echoes the prior sentence → leave it. No echo → rewrite active | `mech` |
 | C3 | Sections open with the conclusion, so a reader who stops there still has the takeaway | `judg` |
-| C4 | Restate only where the thread was plausibly lost — heading intervened, or antecedent distant. One orienting clause, never a re-explanation. Aggressive on reference/how-to, light on tutorial, never changelogs. `precautionary` | `judg` |
+| C4 | Restate only where the thread was plausibly lost — heading intervened, or antecedent distant and ambiguous. One orienting clause or a real link, never a re-explanation. Aggressive on reference/how-to, light on tutorial, never changelogs. `precautionary` | `judg` |
 
 ### D — Emphasis and the linear channel
 
