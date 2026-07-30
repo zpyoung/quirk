@@ -88,6 +88,13 @@ gate exit 1/3    + contested_count > 0    -> mid-flight, not completed; the tieb
 any exit + unreviewed_paths nonempty      -> the verdict does not cover those files; they
                                              appeared after the artifact was captured and no
                                              stage saw them. Report alongside the verdict.
+any exit + advisory_count > 0             -> findings no stage beyond promote stood behind;
+                                             reported, not blocking, not dismissed.
+any exit + limitations nonempty           -> the protocol could not evaluate these.
+any exit + questions nonempty             -> decisions needing their owner.
+  # These five are SCOPE_BOUNDING_FIELDS in the script. Each can be non-empty beside a
+  #   PASS, so a caller reading the verdict alone is told less than the run found. The
+  #   structural tests read that constant rather than restating the list.
 gate exit 4      + valid GateResult JSON  -> NOT_REVIEWABLE; never a pass
 gate exit 2, non-JSON stdout, or no
   stdout at all                           -> the run FAILED; retry once, then walk the

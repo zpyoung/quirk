@@ -757,34 +757,78 @@ def test_the_judgment_examples_survive_the_merge_validator(tmp_path, asset, stag
 # about something it had started doing. A field that bounds what a verdict covers is
 # useless if the tables a caller gates on never mention it.
 
-SCOPE_BOUNDING_FIELDS = ("contested_count", "unreviewed_paths", "advisory_count")
-
 CALLER_FACING = (
     SKILL_PATH,
     ASSETS_DIR / "composition-contract.md",
 )
 
+DECISION_BLOCK = "Distinguishing a clean review from a crashed one"
 
-@pytest.mark.parametrize("field", SCOPE_BOUNDING_FIELDS)
+
+def _scope_bounding_fields() -> tuple:
+    """Read the set from the script instead of restating it.
+
+    A second copy is a second thing to forget when a field joins the set — which is how
+    `limitations` and `questions` stayed out of the decision tables while a guard that
+    was supposed to catch exactly that reported green.
+    """
+    return _ar_module().SCOPE_BOUNDING_FIELDS
+
+
+def _fenced_block_after(text: str, heading: str) -> str:
+    """The first fenced block below a heading, and nothing else.
+
+    Slicing a character window instead let prose *after* the fence satisfy the check: a
+    table with no rows for a field passed as long as some later sentence named it.
+    """
+    start = text.index(heading)
+    fence = text.index("```", start)
+    return text[fence + 3:text.index("```", fence + 3)]
+
+
+def test_the_scope_bounding_set_is_not_silently_narrowed() -> None:
+    """The constant is the contract these guards enforce; an empty or truncated one
+    would make every assertion below pass by covering nothing."""
+    fields = _scope_bounding_fields()
+    assert len(fields) >= 5, f"scope-bounding set shrank to {fields}"
+    for expected in ("contested_count", "unreviewed_paths", "advisory_count",
+                     "limitations", "questions"):
+        assert expected in fields, f"{expected} dropped out of the scope-bounding set"
+
+
 @pytest.mark.parametrize("doc", CALLER_FACING, ids=lambda p: p.name)
-def test_scope_bounding_fields_appear_in_the_caller_facing_docs(field, doc) -> None:
-    assert field in doc.read_text(), (
-        f"{doc.name} never mentions `{field}`, so a caller reading it cannot know the "
-        f"verdict's scope is bounded by it"
-    )
+def test_scope_bounding_fields_appear_in_the_caller_facing_docs(doc) -> None:
+    text = doc.read_text()
+    for field in _scope_bounding_fields():
+        assert field in text, (
+            f"{doc.name} never mentions `{field}`, so a caller reading it cannot know "
+            f"the verdict's scope is bounded by it"
+        )
 
 
-def test_the_clean_versus_crashed_table_covers_every_qualifier(
-) -> None:
-    """The table a caller gates on. `contested_count` earned a row there; anything that
-    similarly narrows what a `PASS` means has to earn one too."""
+def test_every_scope_bounding_field_has_its_own_decision_row() -> None:
+    """The table a caller gates on, and a row is what it must have — not a mention.
+
+    Presence anywhere in the document is what the earlier version of this guard checked,
+    and a doc that named a field only to tell the reader to ignore it satisfied it. The
+    same "presence is not content" trap the evidence validator names.
+    """
     contract = (ASSETS_DIR / "composition-contract.md").read_text()
-    start = contract.index("Distinguishing a clean review from a crashed one")
-    table = contract[start:start + 2000]
-    for field in ("contested_count", "unreviewed_paths"):
-        assert field in table, (
-            f"`{field}` narrows what a PASS covers but is absent from the "
+    table = _fenced_block_after(contract, DECISION_BLOCK)
+    rows = [line for line in table.splitlines() if "->" in line]
+    assert rows, "the clean-versus-crashed block has no decision rows at all"
+    for field in _scope_bounding_fields():
+        owning = [line for line in table.splitlines() if field in line]
+        assert owning, (
+            f"`{field}` narrows what a PASS covers but has no row in the "
             f"clean-versus-crashed decision block"
+        )
+        # The row has to be the one that *decides* something, not a continuation line
+        # of some other row's prose.
+        index = table.splitlines().index(owning[0])
+        window = table.splitlines()[index:index + 2]
+        assert any("->" in line for line in window), (
+            f"`{field}` appears in the block but not on a line that decides anything"
         )
 
 

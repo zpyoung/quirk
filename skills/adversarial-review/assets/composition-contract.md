@@ -211,6 +211,14 @@ any exit        + unreviewed_paths nonempty -> the verdict does not cover those 
                                              stage saw them. Usually the review's own check
                                              output; when it is real work, `PASS` stopped
                                              short of it and only this says so.
+any exit        + advisory_count > 0      -> real findings that no stage beyond promote stood
+                                             behind. Reported, not blocking; `PASS` does not
+                                             mean they were dismissed.
+any exit        + limitations nonempty    -> the protocol could not evaluate these. Not defects
+                                             and not clean either — they mark where the review
+                                             could not reach.
+any exit        + questions nonempty      -> decisions that need their owner. `PASS` means no
+                                             finding met the bar, not that these were answered.
 gate exit 2     + "artifact changed"      -> the tree moved, or the bundle is left over from
                                              an earlier round. Re-run; do not record.
 gate exit 4     + valid GateResult JSON   -> NOT_REVIEWABLE. Never a pass.
