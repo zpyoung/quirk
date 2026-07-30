@@ -21,6 +21,27 @@ additions, not reinterpretations — none of them narrows or contradicts a Decis
 
 ---
 
+## Purpose
+
+Make the `filing-requests` skill buildable and testable without reopening any behavioral question
+`logic.md` already settled.
+
+Concretely, this document pins down four things the logic spec deliberately left open:
+
+1. **The canonical JSON schema** — exact keys, types, and which sibling keys each `provenance`
+   value requires, so the "invented specificity has nowhere to enter" guarantee is enforced by
+   validation rather than by model discipline.
+2. **CLI contracts for six stdlib-only scripts** — arguments, stdin/stdout shapes, exit codes, and
+   failure modes, so every deterministic layer is provable by fixture with no model in the loop.
+3. **The three algorithms** whose ambiguity the logic spec's adversarial review flagged as
+   implementation-diverging: template resolution, drift carry-over, and the non-waivable gate.
+4. **The test plan** — specifically which behaviors are fixture-provable and which are only
+   exercisable through a live session, so the boundary is a stated design property rather than an
+   accident of what was easy to test.
+
+Out of its scope: `SKILL.md`'s interview prose and the script bodies. Those are the implementer's,
+written against the contracts here.
+
 ## Architecture
 
 *Back-link: [logic.md → Skill-level](./logic.md#decisions-locked)*
