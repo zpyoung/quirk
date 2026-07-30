@@ -18,7 +18,6 @@ if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
 from _common import (  # noqa: E402
-    CORE_FIELDS,
     NON_WAIVABLE,
     SchemaVersionError,
     check_schema_version,
@@ -37,6 +36,31 @@ _EMISSION_REQUIRED_ROOT_KEYS = (
     "template", "fields", "verified_against", "disclosure_required",
 )
 
+_REDACT_THRESHOLD = 8
+
+
+def _redact(value) -> str:
+    """Redact a document-derived value before it appears in an error message.
+
+    Mirrors secret_scan.py's own redaction shape (first 4 + last 4 chars, ellipsis between)
+    so an error message can never be used to exfiltrate what the secret scanner exists to catch.
+    """
+    text = str(value)
+    if len(text) <= _REDACT_THRESHOLD:
+        return text
+    return f"{text[:4]}…{text[-4:]}"
+
+
+def _is_nonempty_str(value) -> bool:
+    return isinstance(value, str) and value.strip() != ""
+
+
+def _is_valid_repo(repo) -> bool:
+    if not isinstance(repo, str):
+        return False
+    parts = repo.split("/")
+    return len(parts) == 2 and all(parts)
+
 
 def _validate_target(target) -> list:
     if not isinstance(target, dict):
@@ -44,9 +68,12 @@ def _validate_target(target) -> list:
     errors = []
     kind = target.get("kind")
     if kind not in _TARGET_KINDS:
-        errors.append({"path": "target.kind", "message": f"unknown kind {kind!r}"})
-    if kind == "github" and not isinstance(target.get("repo"), str):
-        errors.append({"path": "target.repo", "message": "repo is required when kind == 'github'"})
+        errors.append({"path": "target.kind", "message": f"unknown kind {_redact(kind)!r}"})
+    if kind == "github" and not _is_valid_repo(target.get("repo")):
+        errors.append({
+            "path": "target.repo",
+            "message": "repo is required and must be exactly two non-empty 'owner/repo' segments when kind == 'github'",
+        })
     if not isinstance(target.get("writable"), bool):
         errors.append({"path": "target.writable", "message": "writable is required and must be a boolean"})
     if target.get("third_party") not in _TRI_STATE:
@@ -66,6 +93,26 @@ def _validate_template(template) -> list:
         errors.append({"path": "template.path", "message": "path is required (string or null)"})
     elif template["path"] is not None and not isinstance(template["path"], str):
         errors.append({"path": "template.path", "message": "path must be a string or null"})
+    if "fields" in template:
+        errors.extend(_validate_template_fields(template["fields"]))
+    return errors
+
+
+def _validate_template_fields(fields) -> list:
+    if not isinstance(fields, list):
+        return [{"path": "template.fields", "message": "template.fields must be an array"}]
+    errors = []
+    for i, entry in enumerate(fields):
+        path = f"template.fields[{i}]"
+        if not isinstance(entry, dict):
+            errors.append({"path": path, "message": "template field entry must be an object"})
+            continue
+        if not isinstance(entry.get("name"), str):
+            errors.append({"path": f"{path}.name", "message": "name is required and must be a string"})
+        if not isinstance(entry.get("required"), bool):
+            errors.append({"path": f"{path}.required", "message": "required is required and must be a boolean"})
+        if entry.get("source") not in ("template", "core"):
+            errors.append({"path": f"{path}.source", "message": "source must be 'template' or 'core'"})
     return errors
 
 
@@ -102,25 +149,34 @@ def _validate_field(field, index: int) -> list:
 
     provenance = field.get("provenance")
     if provenance not in _PROVENANCES:
-        errors.append({"path": f"{path}.provenance", "message": f"unknown provenance {provenance!r}"})
+        errors.append({"path": f"{path}.provenance", "message": f"unknown provenance {_redact(provenance)!r}"})
         return errors  # sibling-key rules below all depend on a recognized provenance
 
-    has_value = "value" in field
-    if provenance in ("observed", "reported", "inferred") and not has_value:
-        errors.append({"path": f"{path}.value", "message": f"value is required when provenance == '{provenance}'"})
-    elif provenance == "missing" and has_value:
+    if provenance in ("observed", "reported", "inferred"):
+        if not _is_nonempty_str(field.get("value")):
+            errors.append({
+                "path": f"{path}.value",
+                "message": f"value is required and must be a non-empty string when provenance == '{provenance}'",
+            })
+    elif "value" in field:
         errors.append({"path": f"{path}.value", "message": "value is forbidden when provenance == 'missing'"})
 
-    has_source = "source" in field
-    if provenance == "observed" and not has_source:
-        errors.append({"path": f"{path}.source", "message": "source is required when provenance == 'observed'"})
-    elif provenance != "observed" and has_source:
+    if provenance == "observed":
+        if not _is_nonempty_str(field.get("source")):
+            errors.append({
+                "path": f"{path}.source",
+                "message": "source is required and must be a non-empty string when provenance == 'observed'",
+            })
+    elif "source" in field:
         errors.append({"path": f"{path}.source", "message": "source is only legal when provenance == 'observed'"})
 
-    has_reason = "reason" in field
-    if provenance == "missing" and not has_reason:
-        errors.append({"path": f"{path}.reason", "message": "reason is required when provenance == 'missing'"})
-    elif provenance != "missing" and has_reason:
+    if provenance == "missing":
+        if not _is_nonempty_str(field.get("reason")):
+            errors.append({
+                "path": f"{path}.reason",
+                "message": "reason is required and must be a non-empty string when provenance == 'missing'",
+            })
+    elif "reason" in field:
         errors.append({"path": f"{path}.reason", "message": "reason is only legal when provenance == 'missing'"})
 
     if "polarity" in field:
@@ -149,12 +205,44 @@ def _validate_verified_against(verified_against, fields) -> list:
             errors.append({"path": path, "message": "verified_against entries must be strings"})
             continue
         if not any(entry == source or entry in source for source in sources):
-            errors.append({"path": path, "message": f"{entry!r} does not match any observed field's source"})
+            errors.append({
+                "path": path,
+                "message": f"{_redact(entry)!r} does not match any observed field's source",
+            })
     return errors
 
 
-def _check_emission_readiness(doc: dict):
-    """Return (errors, halted) for the --for-emission core-field-resolution check."""
+def _resolves_non_waivable(entry) -> bool:
+    """Whether `entry` satisfies the non-waivable gate -- stricter than ordinary core resolution.
+
+    Only `observed`/`reported` with a real value counts; `inferred`, `missing`, and a value still
+    carrying `needs_confirmation: true` all fail the gate.
+    """
+    if entry is None or entry.get("needs_confirmation") is True:
+        return False
+    if entry.get("provenance") not in ("observed", "reported"):
+        return False
+    return _is_nonempty_str(entry.get("value"))
+
+
+def _non_waivable_halt_reason(entry) -> str:
+    if entry is not None and entry.get("needs_confirmation") is True:
+        return "value needs user confirmation before it can be treated as resolved"
+    if entry is not None and entry.get("provenance") == "missing":
+        reason = entry.get("reason")
+        if _is_nonempty_str(reason):
+            return reason
+    if entry is not None and entry.get("provenance") == "inferred":
+        return "an inferred value is not sufficient for a non-waivable field"
+    return "no value has been established for this field"
+
+
+def _check_emission_readiness(doc: dict, fields: list):
+    """Return (errors, halted) for the --for-emission core-field-resolution check.
+
+    `fields` is the caller's already-normalized `doc["fields"]` (an array, possibly empty) --
+    `validate()` has already reduced any structurally invalid value to `[]` before this runs.
+    """
     errors = []
     halted = None
 
@@ -162,24 +250,36 @@ def _check_emission_readiness(doc: dict):
         if key not in doc:
             errors.append({"path": key, "message": "required for emission"})
 
+    template = doc.get("template")
+    template_fields = template.get("fields") if isinstance(template, dict) else None
+    if not isinstance(template_fields, list) or not template_fields:
+        # the union of required fields lives on the document, not the per-type table -- an
+        # absent or empty template.fields is a structural error, never a fallback to CORE_FIELDS
+        errors.append({
+            "path": "template.fields",
+            "message": "template.fields is required and non-empty for emission",
+        })
+        return errors, halted
+
     doc_type = doc.get("type")
     non_waivable = set(NON_WAIVABLE.get(doc_type, []))
     fields_by_name = {
-        f["name"]: f for f in doc.get("fields", []) if isinstance(f, dict) and isinstance(f.get("name"), str)
+        f["name"]: f for f in fields if isinstance(f, dict) and isinstance(f.get("name"), str)
     }
+    required_names = [
+        entry["name"] for entry in template_fields
+        if isinstance(entry, dict) and entry.get("required") is True and isinstance(entry.get("name"), str)
+    ]
 
-    for field_name in CORE_FIELDS.get(doc_type, []):
+    for field_name in required_names:
         entry = fields_by_name.get(field_name)
-        provenance = entry.get("provenance") if entry else None
         if field_name in non_waivable:
             if halted is not None:
                 continue  # report only the first unresolved non-waivable field
-            if entry is None or provenance not in ("observed", "reported", "inferred") or "value" not in entry:
-                reason = entry.get("reason") if entry and provenance == "missing" else (
-                    "no value has been established for this field"
-                )
-                halted = {"field": field_name, "reason": reason}
+            if not _resolves_non_waivable(entry):
+                halted = {"field": field_name, "reason": _non_waivable_halt_reason(entry)}
         else:
+            provenance = entry.get("provenance") if entry else None
             resolved = entry is not None and (
                 (provenance in ("observed", "reported") and "value" in entry)
                 or (provenance == "missing" and "reason" in entry)
@@ -200,17 +300,18 @@ def validate(doc, for_emission: bool = False) -> dict:
 
     errors = []
 
-    if not isinstance(doc.get("schema_version"), int):
+    schema_version = doc.get("schema_version")
+    if not isinstance(schema_version, int) or isinstance(schema_version, bool):
         errors.append({"path": "schema_version", "message": "schema_version is required and must be an integer"})
 
     if "type" in doc and doc["type"] not in _TYPES:
-        errors.append({"path": "type", "message": f"unknown type {doc['type']!r}"})
+        errors.append({"path": "type", "message": f"unknown type {_redact(doc['type'])!r}"})
 
     if "headless" in doc and not isinstance(doc["headless"], bool):
         errors.append({"path": "headless", "message": "headless must be a boolean"})
 
     if "depth" in doc and doc["depth"] not in _DEPTHS:
-        errors.append({"path": "depth", "message": f"unknown depth {doc['depth']!r}"})
+        errors.append({"path": "depth", "message": f"unknown depth {_redact(doc['depth'])!r}"})
 
     if "title" in doc and not isinstance(doc["title"], str):
         errors.append({"path": "title", "message": "title must be a string"})
@@ -222,7 +323,7 @@ def validate(doc, for_emission: bool = False) -> dict:
         errors.extend(_validate_template(doc["template"]))
 
     fields = doc.get("fields")
-    if fields is not None:
+    if "fields" in doc:
         if not isinstance(fields, list):
             errors.append({"path": "fields", "message": "fields must be an array"})
             fields = []
@@ -240,15 +341,34 @@ def validate(doc, for_emission: bool = False) -> dict:
         else:
             errors.extend(_validate_verified_against(verified_against, fields or []))
 
-    if "disclosure_required" in doc and not isinstance(doc["disclosure_required"], bool):
-        errors.append({"path": "disclosure_required", "message": "disclosure_required must be a boolean"})
+    if "disclosure_required" in doc:
+        if not isinstance(doc["disclosure_required"], bool):
+            errors.append({"path": "disclosure_required", "message": "disclosure_required must be a boolean"})
+        else:
+            target = doc.get("target")
+            if isinstance(target, dict):
+                visibility = target.get("visibility")
+                third_party = target.get("third_party")
+                # only derivable once target's own axes are well-formed -- _validate_target
+                # already flags a malformed target, so this doesn't pile a confusing second
+                # error on top of that one
+                if visibility in _VISIBILITY and third_party in _TRI_STATE:
+                    expected = (visibility != "private") or (third_party != "no")
+                    if doc["disclosure_required"] != expected:
+                        errors.append({
+                            "path": "disclosure_required",
+                            "message": (
+                                "disclosure_required must be derived from target: "
+                                "(visibility != 'private') or (third_party != 'no')"
+                            ),
+                        })
 
     if doc.get("halted") is not None:
         errors.extend(_validate_halted(doc["halted"]))
 
     halted = None
     if for_emission:
-        emission_errors, halted = _check_emission_readiness(doc)
+        emission_errors, halted = _check_emission_readiness(doc, fields or [])
         errors.extend(emission_errors)
 
     return {"valid": len(errors) == 0 and halted is None, "errors": errors, "halted": halted}
@@ -262,7 +382,7 @@ def main(argv=None) -> int:
 
     try:
         doc = read_json_arg(args.input)
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError, RecursionError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
 

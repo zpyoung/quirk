@@ -11,7 +11,16 @@
     "third_party": "no",
     "visibility": "private"
   },
-  "template": { "applied": false, "path": null },
+  "template": {
+    "applied": false,
+    "path": null,
+    "fields": [
+      { "name": "problem", "required": true, "source": "core" },
+      { "name": "who_benefits", "required": true, "source": "core" },
+      { "name": "current_behavior", "required": true, "source": "core" },
+      { "name": "acceptance_criteria", "required": true, "source": "core" }
+    ]
+  },
   "fields": [
     {
       "name": "problem",

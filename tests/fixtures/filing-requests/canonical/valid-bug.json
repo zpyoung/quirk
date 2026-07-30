@@ -11,7 +11,16 @@
     "third_party": "no",
     "visibility": "private"
   },
-  "template": { "applied": false, "path": null },
+  "template": {
+    "applied": false,
+    "path": null,
+    "fields": [
+      { "name": "current_behavior", "required": true, "source": "core" },
+      { "name": "expected_behavior", "required": true, "source": "core" },
+      { "name": "steps_to_reproduce", "required": true, "source": "core" },
+      { "name": "environment", "required": true, "source": "core" }
+    ]
+  },
   "fields": [
     {
       "name": "current_behavior",

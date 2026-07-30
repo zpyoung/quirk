@@ -61,7 +61,7 @@ def check_schema_version(doc: dict) -> None:
     if not isinstance(doc, dict):
         return
     version = doc.get("schema_version")
-    if isinstance(version, int) and version > CURRENT_SCHEMA_VERSION:
+    if isinstance(version, int) and not isinstance(version, bool) and version > CURRENT_SCHEMA_VERSION:
         raise SchemaVersionError(
             f"schema_version {version} exceeds CURRENT_SCHEMA_VERSION {CURRENT_SCHEMA_VERSION}"
         )
