@@ -1,8 +1,15 @@
 # filing-requests — Logic Spec
 
+## Purpose
+
 A quirk skill that runs a guided, evidence-gathering session about a request the user wants to
 file — a bug report, a feature request, or a code-change request — and emits a terse, provenance-
 marked artifact as markdown and, on explicit confirmation, as a GitHub issue.
+
+It exists because the fields developers most need are the ones reporters most often omit, and
+because a coding agent can establish several of them by reading the repository instead of asking.
+Its first version covers the session, the markdown artifact, and GitHub filing; GitLab and Jira
+projections are deferred.
 
 ## Conceptual model
 
@@ -199,11 +206,46 @@ are type-shaped and run in both directions:
 *config error*, and they address the documented failure of agents proposing work a project has
 already decided against.
 
-With type confirmed, the field set is fixed — from the repo's template when one was found,
-otherwise from the per-type core above. The skill walks the field set. For each field it first
-attempts resolution by inspection at the permitted depth; what resolves becomes an `observed`
-field with its source recorded, including negative observations. What does not resolve becomes a
-question to the user, and the answer becomes a `reported` field.
+### Choosing among templates
+
+The glob usually matches more than one file, so "the repo's template" needs a selection rule.
+Resolution runs in this order, and stops at the first step that yields exactly one template:
+
+1. **Discard non-templates.** `.github/ISSUE_TEMPLATE/config.yml` is GitHub's chooser
+   configuration, not a template, and is never a candidate. Neither is any file whose parsed form
+   has no body sections.
+2. **Match the confirmed type against each candidate's declared identity** — a YAML form's `name`
+   and `labels`, then its filename stem. `bug`, `defect`, `regression` match the bug type;
+   `feature`, `enhancement`, `proposal`, `idea` match feature; `chore`, `task`, `refactor`,
+   `maintenance` match code-change.
+3. **If exactly one candidate matches, use it.** If several do, ask the user to choose, listing
+   each by name and path. If none match, fall back to the per-type core and record that no
+   template applied.
+
+The fallback is not a failure mode to be avoided — a repo whose templates do not cover the
+confirmed type is better served by the per-type core than by a template written for something
+else. The one thing the skill must not do is pick silently among several: which template is chosen
+determines the field set, so a silent pick is a silent change to what gets asked and emitted.
+
+### Required sections in a template
+
+GitHub YAML issue forms mark required inputs with `validations.required`, and that marking is
+authoritative: those inputs are the core fields, and the rest are optional.
+
+Markdown templates have no such mechanism, and inventing a convention for them would be guessing
+at a maintainer's intent from formatting. So for a markdown template the rule is: **its sections
+supply the artifact's structure and ordering, and the per-type core supplies which fields are
+required.** A markdown template's headings therefore shape the output, while the core decides what
+blocks emission. Where the template omits a section the per-type core requires, that field is
+still gathered and is appended in core order after the template's own sections.
+
+This keeps two guarantees that would otherwise collide: the maintainer's declared structure is
+honored, and a feature request still cannot ship without `problem` and `acceptance_criteria`.
+
+With type confirmed and the template resolved, the field set is fixed. The skill walks it. For
+each field it first attempts resolution by inspection at the permitted depth; what resolves becomes
+an `observed` field with its source recorded, including negative observations. What does not
+resolve becomes a question to the user, and the answer becomes a `reported` field.
 
 Two interrupts can fire during this walk. A **contradiction** — inspection disagrees with
 something the user stated — is surfaced immediately with a citation, and the user's resolution
@@ -215,9 +257,29 @@ not re-asked.
 Drift is symmetric and both directions are expected. Feature → bug fires when a request for new
 behavior turns out to describe a regression against behavior that used to work. Bug → feature
 fires when nothing is broken and the reporter is asking for behavior the system never had — the
-more common direction, and the one maintainers most often have to re-triage by hand. The
-bug → feature transition is lossy in a specific way worth stating: `steps_to_reproduce` does not
-map onto the feature core, and is carried over into `current_behavior` rather than discarded.
+more common direction, and the one maintainers most often have to re-triage by hand.
+
+**Nothing the user supplied is ever discarded on drift.** Carry-over runs by explicit mapping,
+and anything without a mapping is preserved rather than dropped:
+
+| From (bug) | To (feature) | Why |
+|---|---|---|
+| `steps_to_reproduce` | `current_behavior` | what the user did and saw is a description of how the system behaves today |
+| `expected_behavior` | `acceptance_criteria`, as a `reported` draft the user must confirm | it states a desired outcome, but a criterion has to be testable and the user's phrasing may not be |
+| `environment` | `constraints` | where it has to work is a constraint on the feature |
+| `current_behavior` | `current_behavior` | same field, carried as-is |
+
+| From (feature) | To (bug) | Why |
+|---|---|---|
+| `current_behavior` | `current_behavior` | same field, carried as-is |
+| `acceptance_criteria` | `expected_behavior` | the desired outcome becomes the expectation that was violated |
+| `who_benefits` | dropped from the core, retained as an optional `affected_users` | who wants it is context for a bug, not a required field |
+| `problem` | `current_behavior` if that field is still empty, else retained as optional context | the problem statement usually describes the symptom |
+
+A field with no row in the applicable table is retained as an optional field under its original
+name and rendered after the new type's sections. Every carried field keeps the provenance it
+already had, and `expected_behavior → acceptance_criteria` is the one mapping that re-opens a
+question, because a testable criterion is a stronger claim than the phrasing it came from.
 
 **Core fields** are the required subset of the active field set — the sections the repo's template
 marks required, or, absent a template, the required core listed for that type above. A core field
@@ -243,8 +305,13 @@ filled — a stop, not a spin.
 Once every core field is resolved, the skill renders the canonical form to markdown and shows it.
 Remaining questions are then driven by what the draft makes visibly thin or wrong.
 
-At emission, the secret scanner runs over the canonical form's field values and reports any match
-by field name. The skill will not proceed until the user resolves each finding (redact or keep).
+At emission, the secret scanner runs over **every string the artifact will render** — the
+`fields[]` values, and equally `title`, `proposed_solution`, the `verified_against` entries, and
+the `reason` text on `missing` fields. Scanning only `fields[]` would leave the title and the reporter's
+proposed fix unscanned, and both render into the emitted issue. The rule is scope-by-output: if it
+can appear in the artifact, it is scanned. Matches are reported by the path that located them
+(`fields[2].value`, `title`) so the user can see exactly what leaked and where. The skill will not
+proceed until the user resolves each finding (redact or keep).
 The markdown artifact is then written to `docs/quirk/requests/YYYY-MM-DD-<slug>.md`
 unconditionally. Only then, and only on a separate confirmation that displays the exact body and
 destination, does the skill shell out to `gh issue create`.
@@ -417,7 +484,9 @@ and traceback are resolved by inspection; expected behavior and business impact 
   feature (already exists, previously rejected, support question); code-change (already done)
 - Request type is inferred from the description, then confirmed before branching
 - Type drift is surfaced with evidence and runs in both directions; on switch, existing answers
-  carry over, with `steps_to_reproduce` mapping into `current_behavior` on bug → feature
+  carry over by an explicit per-direction mapping table, nothing the user supplied is discarded,
+  unmapped fields are retained as optionals under their original names, and only
+  `expected_behavior → acceptance_criteria` re-opens a question
 
 **evidence-authority**
 
@@ -437,7 +506,12 @@ and traceback are resolved by inspection; expected behavior and business impact 
 
 **artifact-structure**
 
-- An existing repo issue template is detected and conformed to
+- An existing repo issue template is detected and conformed to; among several candidates the skill
+  discards non-templates (`config.yml`), matches the confirmed type against each candidate's name,
+  labels, and filename stem, asks the user when more than one still matches, and falls back to the
+  per-type core when none do — it never picks silently
+- A YAML form's `validations.required` is authoritative for which fields are core; a markdown
+  template supplies structure and ordering only, with the per-type core deciding what is required
 - Absent a template: required core plus optional extras, with empty sections pruned
 - Unobtainable fields are emitted as sections marked missing, with the reason — except the two
   non-waivable fields (a feature request's `problem` and `acceptance_criteria`), which halt
@@ -462,7 +536,9 @@ and traceback are resolved by inspection; expected behavior and business impact 
 
 - AI-assistance disclosure appears when the target is public or third-party; when visibility or
   ownership cannot be determined confidently, the skill discloses
-- Secrets are scanned for and reported by field; emission blocks until acknowledged
+- Secrets are scanned for across every string that renders into the artifact — not only `fields[]`
+  but `title`, `proposed_solution`, `verified_against`, and `missing` reasons — reported by the
+  path that located them; emission blocks until acknowledged
 - The artifact carries conclusions only; the session trail may optionally be saved locally
 - A brief "verified against" line names what was actually checked
 
@@ -604,3 +680,34 @@ answers gathered since.
   terseness ceiling made genuinely per-type, exempting acceptance criteria and reproduction steps.
   Also recorded, under Key decisions, that the inspection advantage is structurally weaker for
   feature requests rather than papering over it.
+
+- **2026-07-30 — adversarial review round 1.** Reviewed with the `adversarial-review` skill at
+  `deep` depth, profile `spec-design`, reviewer `gemini-3.1-pro-preview` (google), independence
+  `full`; refute stage `gpt-5.6-sol` (openai). Verdict `NEEDS_FIXES`, 0 suppressed, 0 contested.
+  Three findings survived refutation at `HIGH` and are closed here:
+  - `missing-mapping-logic` (F1) — template conformance named no selection rule when a repo has
+    several templates. Added an ordered resolution: discard non-templates, match the confirmed type
+    against name/labels/filename, ask when ambiguous, fall back to the per-type core. Never a
+    silent pick, because the choice determines the field set.
+  - `undefined-contract` (F2) — "sections the template marks required" assumed a mechanism markdown
+    templates lack. Split the contract: YAML `validations.required` is authoritative; markdown
+    templates supply structure and ordering while the per-type core decides what is required. This
+    was a collision between the template-conformance decision and the non-waivable cores, added in
+    separate passes and not reconciled at the time.
+  - `unhandled-state` (F3) — drift carry-over specified only `steps_to_reproduce`. Added explicit
+    mapping tables for both directions, with unmapped fields retained as optionals rather than
+    dropped.
+
+  Also closed `failing-check` (F4) by adding the `Purpose` heading the section-coverage check
+  requires.
+
+  **Fixed but not adjudicated:** the secret scan was scoped to `fields[]` values while `title` and
+  `proposed_solution` are top-level keys that also render into the emitted issue. Raised by a
+  promote run that was discarded on a harness fault rather than refuted, so it carries no ruling;
+  verified directly against the text and fixed by scoping the scan to every string that renders.
+  Recorded here as unadjudicated rather than confirmed.
+
+  **Not addressed:** 22 `unresolvable-reference` pre-pass findings blocked the verdict. They name
+  the spec's own schema field names and paths it plans to create — which the `spec-design` profile
+  itself classifies as "not a finding at all" — but no stage adjudicated them, so they blocked by
+  default. Left standing rather than self-graded.
