@@ -193,21 +193,23 @@ check. This matters most at `quick`, where the reviewer hand-writes its report a
 findings chain to anchor. `--no-verify-artifact` turns the re-hash off for a target with no tree
 behind it; it also turns off the only thing separating a current review from a stale one.
 
-**If this fires on a run you know is honest, suspect the review before the artifact.** An untracked
-file is part of the worktree under review, so anything the run itself writes into the tree trips it:
+**The artifact is what `resolve` captured, not whatever is in the directory now.** `resolve` records
+the untracked files that were part of it, and every later stage re-derives the hash over exactly
+that set. This is what keeps the check usable: the review writes into the tree as it runs — the
+pre-pass runs the repo's own test command, and `cargo test` alone leaves a `Cargo.lock` that stock
+scaffolding does not gitignore — and none of that is the artifact moving. A file that appeared after
+`resolve` was never reviewed, so the verdict says nothing about it either way.
 
-- The pre-pass runs its commands inside the tree it hashes. An ungitignored `.pytest_cache/`,
-  `__pycache__/`, `node_modules/.cache`, or `target/` *is* a worktree change by the time the gate
-  looks. Gitignore them.
-- A dispatched reviewer wrote into the repository. The stages hold read-only tools by grant, not by
-  sandbox, and a tool that caches beside its input will do this.
+What does trip the check is that captured content changing: an edit to a tracked file, or to an
+untracked file that was part of the artifact. That includes a dispatched reviewer editing something
+it was only meant to read — the stages hold read-only tools by grant, not by sandbox.
 
-Reviewer selection is exempt by construction: its preflight runs in a scratch directory, because
-asking whether a model is reachable has nothing to do with the artifact and a check command that
-cached beside itself used to fail the gate on a run where nothing was stale.
+Reviewer selection cannot trip it at all: its preflight runs in a scratch directory, because asking
+whether a model is reachable has nothing to do with the artifact, and a check command that cached
+beside itself used to fail the gate on a run where nothing was stale.
 
 Reaching for `--no-verify-artifact` to silence a repeat offender trades the whole guarantee away —
-it is the only check that separates this review from a replay of the last one. Fix the pollution.
+it is the only check that separates this review from a replay of the last one.
 
 `--findings` takes either a bare array or `quick`'s `{"findings": [...], "suppressed": [...]}`
 object. Pass the quick object through whole: its self-refuted entries are carried into

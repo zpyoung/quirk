@@ -382,6 +382,15 @@ artifact_hash    : str        # sha256 of content, or resolved git SHA
 size_metric      : int        # changed lines for code, words for prose
 depth_suggestion : "quick" | "standard" | "deep"
 contract_surface : bool
+untracked_paths  : array of str
+                   # The untracked files that were part of the artifact when it was
+                   #   captured; empty for path and git-range targets. Later stages scan
+                   #   exactly this set rather than rescanning, because the review writes
+                   #   into the tree as it runs — the pre-pass runs the repo's own test
+                   #   command, and `cargo test` leaves a Cargo.lock that stock cargo
+                   #   scaffolding does not gitignore. Rescanning refused honest first
+                   #   reviews of ordinary projects. A file that appeared after resolve
+                   #   was never reviewed, so the verdict says nothing about it.
 diff_file        : str | null  # absolute path when --diff-file was used, else null
                    # Every later stage re-derives artifact_hash to prove it is judging
                    #   the artifact resolve identified. Without this record they would

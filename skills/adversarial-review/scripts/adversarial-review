@@ -113,7 +113,8 @@ def has_head(repo_root: Path) -> bool:
     return completed.returncode == 0
 
 
-def read_diff(target: str, repo_root: Path, diff_file: str | None) -> str:
+def read_diff(target: str, repo_root: Path, diff_file: str | None,
+              untracked_only: list[str] | None = None) -> str:
     if diff_file is not None:
         path = Path(diff_file)
         if not path.is_file():
@@ -149,17 +150,14 @@ def read_diff(target: str, repo_root: Path, diff_file: str | None) -> str:
             f"{detail[0] if detail else f'git diff exited {completed.returncode}'}"
         )
     if not target or target.strip() == "WORKTREE":
-        return completed.stdout + untracked_diff(repo_root)
+        return completed.stdout + untracked_diff(repo_root, untracked_only)
     return completed.stdout
 
 
-def untracked_diff(repo_root: Path) -> str:
-    """The uncommitted work git will not diff for you.
+def untracked_paths(repo_root: Path) -> list[str]:
+    """The untracked files that count as work under review, in git's own order.
 
-    A brand-new module is uncommitted work, and `git diff` in any form ignores it
-    until it is added. Reviewing a worktree without it silently omits whole files —
-    the review would report on everything except the new code. `--exclude-standard`
-    keeps ignored files out, since those are not work under review.
+    `--exclude-standard` keeps ignored files out, since those are not work under review.
     """
     try:
         # `-z` because git C-quotes any path it considers unusual — `café.py` comes
@@ -180,10 +178,34 @@ def untracked_diff(repo_root: Path) -> str:
             f"cannot enumerate untracked files: "
             f"{detail[0] if detail else f'git ls-files exited {listing.returncode}'}"
         )
+    return [p for p in listing.stdout.split("\0") if p.strip()]
+
+
+def untracked_diff(repo_root: Path, only: list[str] | None = None) -> str:
+    """The uncommitted work git will not diff for you.
+
+    A brand-new module is uncommitted work, and `git diff` in any form ignores it
+    until it is added. Reviewing a worktree without it silently omits whole files —
+    the review would report on everything except the new code. `--exclude-standard`
+    keeps ignored files out, since those are not work under review.
+
+    `only` restricts the scan to a recorded set of paths. The artifact under review is
+    what `resolve` captured, so a file that appeared afterwards was never part of it —
+    and the review's own checks create files. `cargo test` writes `Cargo.lock`, which
+    cargo's scaffolded `.gitignore` does not exclude; a coverage run writes `coverage/`.
+    Re-deriving the hash over everything present *now* would refuse an honest review of
+    a stock Rust project on its first run.
+    """
+    listed = untracked_paths(repo_root) if only is None else list(only)
 
     parts: list[str] = []
-    for relative in listing.stdout.split("\0"):
+    for relative in listed:
         if not relative.strip():
+            continue
+        # A recorded path that has since been deleted renders as nothing rather than
+        # raising, so the check reports a changed artifact instead of an unreadable one.
+        if only is not None and not (repo_root / relative).exists():
+            parts.append(f"--- a/{relative}\n+++ /dev/null\n")
             continue
         # `--no-index` against /dev/null renders a new file as an all-added diff.
         # It exits 1 precisely when there is a difference, which is the normal case;
@@ -282,7 +304,8 @@ def suggest_depth(profile: str, size_metric: int, contract_surface: bool) -> str
 
 
 def artifact_hash_of(
-    target: str, repo_root: Path, diff_file: str | None, diff: str | None = None
+    target: str, repo_root: Path, diff_file: str | None, diff: str | None = None,
+    untracked_only: list[str] | None = None,
 ) -> str:
     """The replay identity of a target — one definition, so every stage derives it alike.
 
@@ -301,7 +324,7 @@ def artifact_hash_of(
         # would share one replay identity.
         return hashlib.sha256(path.read_bytes()).hexdigest()
     if diff is None:
-        diff = read_diff(target, repo_root, diff_file)
+        diff = read_diff(target, repo_root, diff_file, untracked_only)
     return hashlib.sha256(diff.encode()).hexdigest()
 
 
@@ -346,6 +369,13 @@ def resolve_target(
         # Absolute: the later stages that re-derive this hash need not share a cwd with
         # the invocation that recorded it.
         "diff_file": str(Path(diff_file).resolve()) if diff_file else None,
+        # The untracked files that were part of the artifact when it was captured. The
+        # stages that re-derive the hash scan exactly these, so a file the review's own
+        # checks create is not mistaken for the artifact moving underneath it.
+        "untracked_paths": (
+            untracked_paths(repo_root)
+            if not diff_file and target_kind == "worktree" else []
+        ),
         "size_metric": size_metric,
         "depth_suggestion": suggest_depth(resolved_profile, size_metric, contract_surface),
         "contract_surface": contract_surface,
@@ -740,7 +770,7 @@ def check_sections(text: str, profile: str) -> dict[str, Any]:
 
 def run_prepass(
     profile: str, target: str, repo_root: Path, check_cmds: list[str],
-    diff_file: str | None = None,
+    diff_file: str | None = None, untracked_only: list[str] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     if profile not in PROFILES:
         raise UsageError(f"unknown profile: {profile} (expected one of {', '.join(PROFILES)})")
@@ -750,7 +780,8 @@ def run_prepass(
     # a hash taken afterwards describes an artifact the checks themselves created and
     # never matches what `resolve` saw.
     try:
-        observed = artifact_hash_of(target, repo_root, diff_file)
+        observed = artifact_hash_of(target, repo_root, diff_file,
+                                    untracked_only=untracked_only)
     except UsageError:
         # An artifact that cannot be read cannot be hashed, and that is already what
         # `could-not-run` means. Failing hard here would turn the input to the
@@ -1306,11 +1337,13 @@ def verify_artifact_is_current(resolved: dict[str, Any], repo_root: Path) -> Non
     from an intact stale one. Every other binding proves the inputs agree with each
     other, not that they describe the tree as it stands now.
     """
-    # `resolve`'s own `diff_file`, not None: a review of a detached diff must be checked
-    # against that diff, or this re-runs `git` and compares the answer to a hash git
-    # never produced — refusing every honest run of the documented seam.
+    # `resolve`'s own `diff_file` and untracked set, not fresh ones: this must re-derive
+    # the artifact the way it was captured. Passing None for the diff file re-ran `git`
+    # for a review that never came from git; rescanning untracked files counted the ones
+    # the review's own checks had just written.
     current = artifact_hash_of(
         resolved.get("target_ref", ""), repo_root, resolved.get("diff_file"),
+        untracked_only=resolved.get("untracked_paths") or [],
     )
     if current == resolved.get("artifact_hash"):
         return
@@ -1319,14 +1352,11 @@ def verify_artifact_is_current(resolved: dict[str, Any], repo_root: Path) -> Non
         f"resolve saw {str(resolved.get('artifact_hash'))[:12]}, "
         f"the tree now hashes {current[:12]}. Findings from this run judged different "
         "content — re-run it.\n"
-        "An untracked file is part of the worktree under review, so this also fires when "
-        "the review wrote into the tree itself. Two causes worth ruling out before you "
-        "conclude the artifact moved:\n"
-        "  - the pre-pass runs its checks inside the tree it hashes, so an ungitignored "
-        "`.pytest_cache/`, `__pycache__/`, or build directory counts. Gitignore them.\n"
-        "  - a dispatched reviewer wrote into the repository. The stages hold read-only "
-        "tools by grant, not by sandbox, and a tool that caches beside its input will "
-        "trip this."
+        "Files that appeared after `resolve` do not cause this: the artifact is what "
+        "`resolve` captured, so the review's own check output is not counted. What does "
+        "cause it is that content changing — including a dispatched reviewer editing a "
+        "file it was only meant to read, since the stages hold read-only tools by grant "
+        "rather than by sandbox."
     )
 
 
@@ -2090,8 +2120,11 @@ def main(argv: list[str] | None = None) -> int:
             diff_file = args.diff_file
             if diff_file is None and isinstance(resolved, dict):
                 diff_file = resolved.get("diff_file")
+            untracked = None
+            if isinstance(resolved, dict) and resolved.get("untracked_paths") is not None:
+                untracked = resolved["untracked_paths"]
             exit_code, payload = run_prepass(
-                args.profile, args.target, repo_root, args.check_cmd, diff_file
+                args.profile, args.target, repo_root, args.check_cmd, diff_file, untracked
             )
             payload["chain"] = link_from(resolved, "prepass", "resolve")
         elif args.command == "select-model":
