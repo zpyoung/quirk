@@ -681,7 +681,7 @@ answers gathered since.
 
 ## Status & amendments
 
-**Status:** Draft — awaiting user review.
+**Status:** Reviewed (adversarial-review rounds 1–2 closed). Tech spec: requested.
 
 **Amendments:**
 
