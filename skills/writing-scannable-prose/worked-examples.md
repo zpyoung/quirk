@@ -131,6 +131,8 @@ in which case it may back off substantially before completing, due to the
 fact that each attempt widens the backoff window.
 ```
 
+*Operation named before editing: word-level — replacing a circumlocution. The hedges are not in scope for this cut.*
+
 **After**
 
 ```markdown
@@ -599,15 +601,15 @@ to test the guard.
 
 ````markdown
 ```bash
-curl -X POST https://stage.example.com/api/credit_accounts/42/credit_adjustments \
+curl -X POST "$API_BASE/api/credit_accounts/$PINNED_ACCOUNT_ID/credit_adjustments" \
   -H 'Content-Type: application/json' \
   -d '{"amount": "100.00", "type": "credit"}'
 ```
-This exact call is exercised in
-`test_credit_adjustments_api.py::test_pinned_account_rejects_topup`.
+`API_BASE` and `PINNED_ACCOUNT_ID` come from the test fixture; CI runs this exact
+invocation via `pytest test_credit_adjustments_api.py::test_pinned_account_rejects_topup`.
 ````
 
-Changed: the placeholder call became the literal one the CI suite runs, so drift between doc and behavior fails a test instead of shipping silently.
+Changed: the hand-waved call became the literal invocation CI runs, parameterized from the fixture rather than a placeholder host that cannot resolve, so drift between doc and behavior fails a test instead of shipping silently.
 
 ### E3 — Never gate on a readability score
 

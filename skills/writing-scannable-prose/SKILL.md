@@ -30,8 +30,8 @@ Diátaxis mode (tutorial / how-to / reference / explanation) is **not** an autho
 2. **Run F2 against every section** against F1's line: does its absence change the named decision? Mark keep or remove. **F1 is unresolved whenever either field is missing — a reader named with no decision, or a decision with no reader — and an unresolved F1 means F2 doesn't run; every section defaults to keep.** The same applies to every check that reads F1's line: F4 and A6 both route by what the named reader needs, so an unresolved F1 skips them too and their candidate material stays put. A–E otherwise run normally. Name each skip as a non-blocking escalation — not a second blocking point, since none of it halts the pass.
 3. **For every section marked remove, run F3**: name the section that owns each load-bearing item; no owning section → find one, or reclassify it as not load-bearing only when it fails F1's line like any other cut, naming the reclassification to the user beside the removal proposal.
 4. **Emit the removal proposal** (shape below) in one batch, then **stop for an answer before step 5** — the protocol's one blocking point. Nothing marked → straight to step 5.
-5. **If removals were proposed, apply the answer**: perform the approved F2 removals and their F3 moves, and retain the sections the user rejected. Then **run F4** on every surviving section: route author-facing detail to its destination (table below); a deliberately-not-made decision stays. F4 and A6 may not empty a section whose removal was rejected — a section gutted to nothing is an F2 removal the user declined, taken anyway.
-6. **Run groups A–E** on the surviving, routed content. Reuse a passage's procedural/explanatory classification from the authoring phase when one was made there; otherwise — the common case, since authoring rarely runs against an existing draft — classify it in place, immediately before A4 fires, passage grain only, never at document or section grain. A call here that can't be self-verified is non-blocking: apply it provisionally and name it in the report.
+5. **If removals were proposed, apply the answer**: perform the approved F2 removals and their F3 moves, and retain the sections the user rejected. Then, **if F1 resolved**, **run F4** on every surviving section: route author-facing detail to its destination (table below); a deliberately-not-made decision stays. If F1 did not resolve, F4 does not run and its candidate material stays put. F4 and A6 may not empty a section whose removal was rejected — a section gutted to nothing is an F2 removal the user declined, taken anyway.
+6. **Run groups A–E** on the surviving content — all of them if F1 resolved; all but A6 if it did not, since A6 routes by the reader's next action. Reuse a passage's procedural/explanatory classification from the authoring phase when one was made there; otherwise — the common case, since authoring rarely runs against an existing draft — classify it in place, immediately before A4 fires, passage grain only, never at document or section grain. A call here that can't be self-verified is non-blocking: apply it provisionally and name it in the report.
 7. **Emit the revision report** (shape below): everything steps 1–6 changed and why, including the escalations from steps 2 and 6.
 
 **Removal proposal shape** (step 4's output):
@@ -51,7 +51,7 @@ Escalation has two modes, and only one of them blocks:
 | Mode | Applies to | Behavior |
 |---|---|---|
 | Blocking | F2 section removals only | Proposed in one batch before A–E begins; the pass waits |
-| Non-blocking | An unresolved F1 line | Not applied: F2 is skipped, every section defaults to keep, the gap is named in the report |
+| Non-blocking | An unresolved F1 line | Not applied: F2, F4 and A6 are all skipped, every section and its contents default to keep, and each skip is named in the report |
 | Non-blocking | Any unverifiable A–E judgment call | Applied provisionally, named in the report; the pass doesn't wait |
 
 The asymmetry is reversibility: an A–E edit is visible in a diff, so a wrong call costs a word. A section removal leaves no trace once gone.
@@ -172,7 +172,8 @@ Step 7's output:
 - Removed: <section> — <one-line F2 reason>. Moved: <item> → <destination> (repeat per item)
 - Routed (F4): <item> — <category> → <destination>
 - Changed (A–E): <check ID> — <what changed> — <why>
-- Escalated (non-blocking, F1 undecided): <repo signals checked> — <why no reader/decision line could be derived> — F2 skipped, every section kept
+- Escalated (non-blocking, F1 undecided): <repo signals checked> — <why no reader/decision line could be derived> — F2, F4 and A6 skipped, every section and its contents kept
+- Proposed, not performed (out of scope): <item> → <destination file> — material left in place pending authorization
 - Escalated (non-blocking, A–E only): <check ID> — <the call> — <how to reverse it>
 ```
 
