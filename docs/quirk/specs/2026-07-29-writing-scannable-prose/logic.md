@@ -103,6 +103,8 @@ This is deliberately in tension with A6 (route, don't delete), and the boundary 
 
 The failure mode this closes is specific and was observed in a worked example before it was written down: the pass routed a section's bulk out, kept two genuinely load-bearing items, and left them in a compressed shell of the original section. The result satisfied every clause-grain check while preserving a section the reader did not want.
 
+A residue stub has two routes, and F3 only guards one. F3 stops a section *being removed* from leaving a shell behind. But a section that passes F2 and is then hollowed by F4's routing arrives at the identical result without F3 ever firing — the guard is scoped to removed sections, and this one survived. So F4 carries the second half of the guard, and the ordering matters: the re-test is an *assessment* of what routing would leave, made while F2 is still marking sections and therefore before the proposal is emitted — not a second pass after routing has happened. That keeps three properties the design already has. One batch, because both routes to removal land in the same proposal. One wait, because nothing re-opens the checkpoint after it closes. And termination, because a rejection is final for the pass and no section is re-proposed. Materiality is judged on what a section would end up holding, not on what it held when F2 first looked at it.
+
 ### Removal is the one edit that gets a checkpoint
 
 Every check outside group F is local and recoverable — a wrong call costs a word and is visible in the diff. Section removal is the opposite on both axes: it is the highest-blast-radius edit available, and it is where the agent's inference is weakest, because what a section is *for* usually lives outside the document in team convention, in what the reader already knows, or in a past incident that made someone start including it.
@@ -134,7 +136,7 @@ The linear channel (screen readers, TTS) is not a competing third reader — it 
 | F1 | **Name the reader and the decision**, in one line, written where the user can see it. Derive it from repo signals before guessing: sibling artifacts of the same genre, the template if one exists, and whether the content already lives somewhere canonical. Everything downstream tests against that line — without it, "load-bearing" has no referent and collapses into the author's own sense of what was hard to write | `judg` |
 | F2 | **Section materiality.** For each section, does its absence change the named decision? If not the section goes — not compressed, not tightened, not reduced to a summary. **Removals are proposed to the user, not performed**; every other check in the skill applies directly | `judg` |
 | F3 | **Re-home before removing.** Every load-bearing item inside a removed section must land in the section that owns it, and the removal proposal names where each one goes. A removed section may not leave a stub: deleting wholesale takes its survivors with it, keeping a compressed shell fails F2 | `judg` |
-| F4 | **Detail level.** Within a surviving section, separate what the named reader needs from what the *author* wanted on record. The recurring author-facing categories, each with a destination that is not this document | `judg` |
+| F4 | **Detail level.** Within a surviving section, separate what the named reader needs from what the *author* wanted on record. The recurring author-facing categories, each with a destination that is not this document. What routing would leave a surviving section holding is re-tested against F1's line *before* the removal proposal is emitted, so a section hollowed below materiality joins that one batch rather than being left as a shell | `judg` |
 
 F4's categories and where they belong instead:
 
@@ -270,6 +272,7 @@ Concretely: run the revision pass against a real document in this repo that was 
 - Removals are proposed in one batch, not performed; every other check applies directly.
 - Load-bearing contents are re-homed first, and the proposal names each destination; a removed section leaves no stub.
 - F4 names the recurring author-facing categories, each with a destination that is not this document. A deliberately-not-made decision is explicitly not one of them.
+- F4's effect on a surviving section is re-tested against F1's line before the removal proposal is emitted. A section hollowed below materiality is a residue stub reached by the second route and joins the same batch, so the pass keeps one proposal and one wait. A rejection is final for the pass.
 
 **Which failure the skill fights**
 - Over-compression is the primary target; verbosity secondary.
@@ -368,6 +371,12 @@ Gray-area discovery used `adhd` (6 parallel divergence frames, 25 raw areas). It
 ## Status & amendments
 
 **Amendments:**
+
+**2026-07-30 — closed the second route to a residue stub (F4 re-tests materiality).** Implementation review found that F3's no-stub guard is scoped to sections being *removed*, so it never fires on a section that passes F2 and is then hollowed by F4's routing. Both routes end at the same artifact: a section the reader did not want, kept as a shell around whatever survived. The gap surfaced running the pass against `verbose_example.md`, where F2 keeps `Test Coverage` (a reviewer needs coverage evidence) while F4 routes most of its bulk out as author-facing methodology.
+
+Changes: while F2 marks sections, each one marked keep is additionally assessed for what F4 routing would leave it holding, and that is re-tested against F1's line; a section hollowed below materiality is marked remove and joins the same proposal batch, passing through F3 re-homing like any other removal. F4's routing edit still happens after the checkpoint, on sections that survived it. The section-grain rationale states that a residue stub has two routes and which check guards each; the locked decision list records the re-test and that a rejection is final for the pass.
+
+The assessment deliberately runs *before* the proposal rather than after routing. An after-the-fact re-test was drafted first and rejected in review: it opened a second batch and a second wait, let a newly-failing section reach the proposal without F3 re-homing, and could re-propose a section the user had already rejected, with nothing bounding the cycle. No check was added or renumbered — the inventory stays at 28, F2 remains the only blocking point, and the protocol stays at seven steps.
 
 **2026-07-30 — added rule group F (section grain), 24 checks → 28.** Trialling the pass against a real MR description exposed a structural gap: all 24 checks operated at clause, sentence, list, or table grain, so the pass could compress a section but never ask whether the section should exist. On that example it routed a review-history section's bulk out, kept its two load-bearing items, and left a residue stub — satisfying every check while preserving a section the reader wanted gone.
 

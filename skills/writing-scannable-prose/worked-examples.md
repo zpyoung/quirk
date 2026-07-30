@@ -115,7 +115,7 @@ Fan-out uses Postgres `LISTEN/NOTIFY` (approaches considered and rejected are
 recorded in ADR-0032).
 ```
 
-Changed: "approaches tried and rejected" is author-facing detail with a destination that isn't this document. ADR-0032 was already in the task's scope, so the move was performed; had it not been, F4 would have proposed the move and left the material in place until authorized. The surviving fact, which mechanism is in use, stays.
+Changed: "approaches tried and rejected" is author-facing detail with a destination that isn't this document. Before any of it was routed, step 2 projected what routing would leave — the mechanism in use — and re-tested that against the reader's decision. It still changes that decision, so the section was marked keep. Had the projection come back immaterial, the section would have joined the one removal batch instead of surviving as a shell. ADR-0032 was already in the task's scope, so the move was performed; had it not been, F4 would have proposed the move and left the material in place until authorized. The surviving fact, which mechanism is in use, stays.
 
 Full case: [verbose_example.md](../../docs/quirk/specs/2026-07-29-writing-scannable-prose/verbose_example.md) → [scannable_example.md](../../docs/quirk/specs/2026-07-29-writing-scannable-prose/scannable_example.md) — note what the fixture *keeps*: the rejected beta-flag decision and its rationale survive into the after-state, because a decision deliberately not made is the one author-facing-looking category F4 leaves in place. It tells the reader why the obvious alternative is absent.
 
