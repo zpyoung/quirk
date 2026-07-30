@@ -158,12 +158,18 @@ adversarial-review resolve   --target <str> [--profile <name>] [--repo-root <pat
   #   mirroring select-model's --check-cmd: depth thresholds and contract-surface
   #   detection are verifiable without constructing real git history.
 
-adversarial-review prepass   --profile <name> --target <str> [--repo-root <path>]
+adversarial-review prepass   --profile <name> --target <str> --resolve <path>
+                             [--repo-root <path>] [--diff-file <path>]
                              [--check-cmd <cmd> ...]
   -> stdout: PrepassResult ; exit 0 all checks pass, 1 one or more failed, 2 error
+  # --resolve anchors the pre-pass to the run. Both this and select-model sat outside
+  #   the chain, which made them swappable for a file from an earlier run: a pre-pass
+  #   captured while the suite was green turned a failing suite into PASS. The result
+  #   also records observed_artifact_hash, derived independently rather than copied,
+  #   so gate can reject a pre-pass that ran against different content.
 
-adversarial-review select-model --author-family <family> [--model <alias>]
-                                [--check-cmd <cmd>]
+adversarial-review select-model --author-family <family> --resolve <path>
+                                [--model <alias>] [--check-cmd <cmd>]
   -> stdout: ModelSelection ; exit 0 resolved, 1 no rung resolved, 2 error
 
 adversarial-review gate      --findings <path> --model <path> --prepass <path>
@@ -376,6 +382,13 @@ status : "pass" | "fail" | "could-not-run"
          #   which means checks ran and something did not pass.
 checks : array of {name, command, exit_code, status, output}
 findings : array of Finding   # stage "prepass", severity HIGH, confidence HIGH
+observed_artifact_hash : str | null
+         # The hash of what the pre-pass actually read, derived the same way resolve
+         #   derives its own rather than copied from the chain — copying would prove
+         #   nothing. gate refuses a mismatch. Null only when status is could-not-run:
+         #   an unreadable artifact cannot be hashed, and failing hard there would turn
+         #   the input to NOT_REVIEWABLE into a crash.
+chain  : ChainLink            # step "prepass", predecessor resolve
 ```
 
 `SCHEMA:` ModelSelection

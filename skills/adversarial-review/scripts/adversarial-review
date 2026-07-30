@@ -280,6 +280,30 @@ def suggest_depth(profile: str, size_metric: int, contract_surface: bool) -> str
     return "quick" if size_metric <= PROSE_QUICK_MAX else "standard"
 
 
+def artifact_hash_of(
+    target: str, repo_root: Path, diff_file: str | None, diff: str | None = None
+) -> str:
+    """The replay identity of a target — one definition, so every stage derives it alike.
+
+    `prepass` re-derives this rather than copying the hash `resolve` recorded, which is
+    what lets `gate` notice a pre-pass that ran against a different artifact than the
+    one under review. Pass `diff` when the caller already has it to skip a second `git`.
+    """
+    if classify_target(target) == "path":
+        path = Path(target)
+        if not path.is_absolute():
+            path = repo_root / path
+        if not path.is_file():
+            raise UsageError(f"target does not exist: {path}")
+        # Hash the bytes, not the lossily-decoded text: `errors="replace"` maps
+        # distinct byte sequences onto the same string, so two different artifacts
+        # would share one replay identity.
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    if diff is None:
+        diff = read_diff(target, repo_root, diff_file)
+    return hashlib.sha256(diff.encode()).hexdigest()
+
+
 def resolve_target(
     target: str, profile: str | None, repo_root: Path, diff_file: str | None
 ) -> dict[str, Any]:
@@ -301,10 +325,7 @@ def resolve_target(
             "profile": resolved_profile,
             "target_kind": target_kind,
             "target_ref": str(path),
-            # Hash the bytes, not the lossily-decoded text: `errors="replace"` maps
-            # distinct byte sequences onto the same string, so two different
-            # artifacts would share one replay identity.
-            "artifact_hash": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "artifact_hash": artifact_hash_of(target, repo_root, diff_file),
             "size_metric": size_metric,
             "depth_suggestion": suggest_depth(resolved_profile, size_metric, False),
             "contract_surface": False,
@@ -317,7 +338,7 @@ def resolve_target(
         "profile": resolved_profile,
         "target_kind": target_kind,
         "target_ref": target or "WORKTREE",
-        "artifact_hash": hashlib.sha256(diff.encode()).hexdigest(),
+        "artifact_hash": artifact_hash_of(target, repo_root, diff_file, diff),
         "size_metric": size_metric,
         "depth_suggestion": suggest_depth(resolved_profile, size_metric, contract_surface),
         "contract_surface": contract_surface,
@@ -711,10 +732,23 @@ def check_sections(text: str, profile: str) -> dict[str, Any]:
 
 
 def run_prepass(
-    profile: str, target: str, repo_root: Path, check_cmds: list[str]
+    profile: str, target: str, repo_root: Path, check_cmds: list[str],
+    diff_file: str | None = None,
 ) -> tuple[int, dict[str, Any]]:
     if profile not in PROFILES:
         raise UsageError(f"unknown profile: {profile} (expected one of {', '.join(PROFILES)})")
+
+    # Hashed before the checks run, never after: a test suite writes `.pytest_cache/`
+    # and `__pycache__/` into the tree, and the worktree diff counts untracked files, so
+    # a hash taken afterwards describes an artifact the checks themselves created and
+    # never matches what `resolve` saw.
+    try:
+        observed = artifact_hash_of(target, repo_root, diff_file)
+    except UsageError:
+        # An artifact that cannot be read cannot be hashed, and that is already what
+        # `could-not-run` means. Failing hard here would turn the input to the
+        # NOT_REVIEWABLE branch into a crash, losing the distinction it exists to draw.
+        observed = None
 
     checks: list[dict[str, Any]] = []
     findings: list[dict[str, Any]] = []
@@ -732,7 +766,8 @@ def run_prepass(
             path = repo_root / target
         if not path.is_file():
             # No check could run at all — distinct from a check that ran and failed.
-            return 1, {"status": "could-not-run", "checks": [], "findings": []}
+            return 1, {"status": "could-not-run", "checks": [], "findings": [],
+                       "observed_artifact_hash": observed}
         text = path.read_text(errors="replace")
         reference_check, findings = check_references(
             text, repo_root, profile, path.parent, path
@@ -741,7 +776,8 @@ def run_prepass(
         checks = [reference_check, check_sections(text, profile)]
 
     if not checks:
-        return 1, {"status": "could-not-run", "checks": [], "findings": []}
+        return 1, {"status": "could-not-run", "checks": [], "findings": [],
+                   "observed_artifact_hash": observed}
 
     # The invariant, enforced once for every branch rather than per branch: the
     # verdict is computed from findings alone, so a failure that stops at `checks[]`
@@ -756,7 +792,15 @@ def run_prepass(
 
     failed = any(check["status"] == "fail" for check in checks)
     status = "fail" if failed else "pass"
-    return (1 if failed else 0), {"status": status, "checks": checks, "findings": findings}
+    return (1 if failed else 0), {
+        "status": status,
+        "checks": checks,
+        "findings": findings,
+        # Independently derived, never copied from the chain: a pre-pass whose ground
+        # truth describes a different artifact than the one under review is worse than
+        # no pre-pass, because `gate` reports its silence as a clean bill of health.
+        "observed_artifact_hash": observed,
+    }
 
 
 # --- reviewer selection -----------------------------------------------------------
@@ -900,6 +944,8 @@ CHAIN_PREDECESSOR = {
     "claims": ("resolve",),
     "merge": ("claims", "merge"),
     "gate": ("merge",),
+    "prepass": ("resolve",),
+    "select-model": ("resolve",),
 }
 
 
@@ -1074,8 +1120,18 @@ def validate_finding(finding: Any, index: int, id_prefix: str = "F") -> None:
                     f"finding {index} evidence of kind {kind} has a non-string {field}"
                 )
             if not value.strip() and not (kind == "absence" and field == "output"):
+                # Real reviewers reach for `command` to prove an absence and leave the
+                # output empty, which used to fail with no hint that a kind exists for
+                # exactly that. The reply is refused whole, so the message has to say
+                # what to change or a whole promote round is discarded over wording.
+                hint = (
+                    ". A search that proves nothing was found is `kind: \"absence\"` "
+                    "(command, ref, output) — `command` means a run whose output shows "
+                    "the failure, so it cannot be empty"
+                    if kind == "command" and field == "output" else ""
+                )
                 raise UsageError(
-                    f"finding {index} evidence of kind {kind} has an empty {field}"
+                    f"finding {index} evidence of kind {kind} has an empty {field}{hint}"
                 )
 
 
@@ -1323,6 +1379,55 @@ def run_gate(
             f"--depth {depth} expects `merge` output, not a bare array: run `claims` "
             f"before the refute dispatch and `merge --judgments` after it. The merge "
             f"is what establishes that the stage ran; a depth flag only asserts it."
+        )
+
+    # The two inputs that make NOT_REVIEWABLE detectable were the two the run chain did
+    # not cover, so either could be swapped for a file from an earlier run: a pre-pass
+    # captured while the suite was green turned a failing suite into PASS, and a
+    # hand-written `{"resolved": true}` turned NOT_REVIEWABLE into PASS. Neither needs
+    # forging a chain — there was none to forge.
+    model_link = chain_of(model, "model")
+    prepass_link = chain_of(prepass, "prepass")
+    for label, link, step in (("model", model_link, "select-model"),
+                              ("prepass", prepass_link, "prepass")):
+        if link["step"] != step:
+            raise UsageError(
+                f"{label} input was produced by {link['step']!r}, not {step!r}"
+            )
+    if model_link["run_id"] != prepass_link["run_id"]:
+        raise UsageError(
+            f"model and prepass belong to different runs ({model_link['run_id']} vs "
+            f"{prepass_link['run_id']}): one of them is left over from an earlier review"
+        )
+    # Quick depth has no chained findings — the reviewer hand-writes that report — so
+    # there is nothing to compare against there beyond the two agreeing with each other.
+    if gate_chain and gate_chain["run_id"] != prepass_link["run_id"]:
+        raise UsageError(
+            f"findings belong to run {gate_chain['run_id']} but model and prepass "
+            f"belong to run {prepass_link['run_id']}: inputs from two different reviews"
+        )
+    observed = prepass.get("observed_artifact_hash")
+    if "observed_artifact_hash" not in prepass:
+        raise UsageError(
+            "prepass input records no observed_artifact_hash: it predates the artifact "
+            "binding, so nothing establishes it ran against the artifact under review"
+        )
+    # A null is the pre-pass saying it could not read the artifact at all. That claims
+    # no ground truth, so it cannot launder a stale clean result into a verdict — which
+    # is what the binding defends against — and it is the input NOT_REVIEWABLE reads.
+    if observed is None:
+        if prepass.get("status") != "could-not-run":
+            raise UsageError(
+                f"prepass reports status {prepass.get('status')!r} but recorded no "
+                f"artifact hash: only a pre-pass that could not run may omit one"
+            )
+    elif not isinstance(observed, str) or not observed:
+        raise UsageError("prepass observed_artifact_hash must be a string or null")
+    elif observed != prepass_link["artifact_hash"]:
+        raise UsageError(
+            f"prepass ran against a different artifact than the one under review "
+            f"(saw {observed[:12]}, resolve identified {prepass_link['artifact_hash'][:12]}): "
+            f"re-run the pre-pass"
         )
     if isinstance(findings, dict):
         carried = findings.get("suppressed", [])
@@ -1723,6 +1828,21 @@ def build_manifest(
             f"before recording the manifest"
         )
 
+    # The manifest re-reads these two rather than taking the gate's word, so without
+    # this a caller could gate on one pre-pass and record another — publishing a replay
+    # record whose ground truth belongs to a different run than the verdict above it.
+    resolve_run = chain_of(resolved, "resolve")["run_id"]
+    for label, payload, step in (("prepass", prepass, "prepass"),
+                                 ("model", model, "select-model")):
+        link = chain_of(payload, label)
+        if link["step"] != step:
+            raise UsageError(f"{label} input was produced by {link['step']!r}, not {step!r}")
+        if link["run_id"] != resolve_run:
+            raise UsageError(
+                f"{label} input belongs to run {link['run_id']}, but resolve opened "
+                f"{resolve_run}: the manifest would record another run's {label}"
+            )
+
     if verify_artifact:
         # Every stage judges the artifact resolve hashed. If the tree moved under
         # the review — a fix applied mid-run, a rebase, a concurrent edit — the
@@ -1808,6 +1928,11 @@ def build_parser() -> argparse.ArgumentParser:
     prepass_cmd.add_argument("--profile", required=True, help=", ".join(PROFILES))
     prepass_cmd.add_argument("--target", default="", help="path, git range, or empty for worktree")
     prepass_cmd.add_argument("--repo-root", default=".", help="repository root")
+    prepass_cmd.add_argument("--resolve", required=True,
+                             help="ResolveResult JSON — anchors the pre-pass to this run")
+    prepass_cmd.add_argument(
+        "--diff-file", help="read the diff from a file instead of git (testing seam)"
+    )
     prepass_cmd.add_argument(
         "--check-cmd", action="append", default=[],
         help="exact shell command, repeatable; overrides code-check discovery",
@@ -1819,6 +1944,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="model family that produced the artifact; excluded from selection",
     )
     select_cmd.add_argument("--model", help="force a specific alias, skipping family exclusion")
+    select_cmd.add_argument("--resolve", required=True,
+                            help="ResolveResult JSON — anchors the selection to this run")
     select_cmd.add_argument(
         "--check-cmd", default=DEFAULT_CHECK_CMD,
         help=f"preflight command, alias appended (default: {DEFAULT_CHECK_CMD})",
@@ -1887,9 +2014,17 @@ def main(argv: list[str] | None = None) -> int:
                 "predecessor": None,
             }
         elif args.command == "prepass":
-            exit_code, payload = run_prepass(args.profile, args.target, repo_root, args.check_cmd)
+            exit_code, payload = run_prepass(
+                args.profile, args.target, repo_root, args.check_cmd, args.diff_file
+            )
+            payload["chain"] = link_from(
+                load_json(args.resolve, "resolve"), "prepass", "resolve"
+            )
         elif args.command == "select-model":
             exit_code, payload = select_reviewer(args.author_family, args.model, args.check_cmd)
+            payload["chain"] = link_from(
+                load_json(args.resolve, "resolve"), "select-model", "resolve"
+            )
         elif args.command == "gate":
             exit_code, payload = run_gate(
                 args.findings, args.model, args.prepass, args.depth, repo_root,

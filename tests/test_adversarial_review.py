@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -449,7 +450,56 @@ def _diff_with_added_lines(n: int) -> str:
 
 # ============================ prepass =============================================
 
-def prepass(*args: str, cwd: Path | None = None, expect: int = 0) -> dict:
+_SHARED_RESOLVE: dict[str, str] = {}
+
+
+def _shared_resolve() -> str:
+    """One real ResolveResult on disk, reused by subcommands that only need *a* run.
+
+    `select-model` binds to the run without reading the artifact, so which target
+    minted the chain is irrelevant to it — only that the script produced one.
+    """
+    if "path" not in _SHARED_RESOLVE:
+        _SHARED_RESOLVE["path"] = _run_resolve_file(
+            Path(tempfile.mkdtemp()), "README.md", cwd=REPO_ROOT
+        )
+    return _SHARED_RESOLVE["path"]
+
+
+def _run_resolve_file(tmp: Path, target: str, cwd: Path | None = None) -> str:
+    """A real `resolve` output for the same target, which `prepass` now anchors to.
+
+    Hand-writing one would not do: the artifact hash `gate` compares against has to be
+    the one `resolve` actually derived, so these tests run the real subcommand.
+    """
+    proc = run_ar("resolve", "--target", target, cwd=cwd)
+    path = tmp / "resolve-for-prepass.json"
+    if proc.returncode != 0:
+        # Some pre-pass tests point at a target `resolve` itself rejects — a missing
+        # file, a directory outside a worktree — to prove the pre-pass degrades to
+        # `could-not-run`. Those still need *a* run to anchor to.
+        path.write_text(json.dumps(_resolved()))
+    else:
+        path.write_text(proc.stdout)
+    return str(path)
+
+
+def prepass(*args: str, cwd: Path | None = None, expect: int = 0,
+            resolve: str | None = None) -> dict:
+    """`prepass` now derives the artifact hash itself, so a `code-diff` run needs a real
+    repository — `resolve` already did, so no live pipeline reaches it without one."""
+    root = Path(args[args.index("--repo-root") + 1]) if "--repo-root" in args else cwd
+    code_diff = "code-diff" in args
+    # Only for `code-diff`: several prose tests exist precisely to assert what happens
+    # *outside* a worktree, and initialising one there would delete the thing they test.
+    if code_diff and root is not None and not (Path(root) / ".git").exists():
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    if "--resolve" not in args:
+        if resolve is None:
+            target = args[args.index("--target") + 1] if "--target" in args else ""
+            base = Path(root) if root else Path(tempfile.mkdtemp())
+            resolve = _run_resolve_file(base, target, cwd=root or cwd)
+        args = (*args, "--resolve", resolve)
     proc = run_ar("prepass", *args, cwd=cwd)
     assert proc.returncode == expect, f"exit {proc.returncode}: {proc.stderr}"
     return json.loads(proc.stdout)
@@ -829,7 +879,7 @@ def test_relative_reference_resolves_against_the_document_directory(tmp_path):
 # ============================ select-model ========================================
 
 def select_model(*args: str, expect: int = 0) -> dict:
-    proc = run_ar("select-model", *args)
+    proc = run_ar("select-model", *args, "--resolve", _shared_resolve())
     assert proc.returncode == expect, f"exit {proc.returncode}: {proc.stderr}"
     return json.loads(proc.stdout)
 
@@ -862,7 +912,7 @@ def test_author_family_matching_is_not_case_or_whitespace_sensitive(family):
 
 def test_an_unknown_author_family_is_rejected_rather_than_silently_trusted():
     """`--author-family typo` must not look identical to a genuine cross-family run."""
-    proc = run_ar("select-model", "--author-family", "not-a-real-family", "--check-cmd", "true")
+    proc = run_ar("select-model", "--author-family", "not-a-real-family", "--check-cmd", "true", "--resolve", _shared_resolve())
     assert proc.returncode == 2
     assert "adversarial-review:" in proc.stderr
 
@@ -919,7 +969,7 @@ def test_explicit_model_that_fails_preflight_does_not_silently_fall_back():
 
 
 def test_unknown_alias_is_a_usage_error():
-    proc = run_ar("select-model", "--author-family", "openai", "--model", "not-an-alias")
+    proc = run_ar("select-model", "--author-family", "openai", "--model", "not-an-alias", "--resolve", _shared_resolve())
     assert proc.returncode == 2
     assert "adversarial-review:" in proc.stderr
 
@@ -957,6 +1007,23 @@ def _chain(step, *, stage=None, run_id=RUN_ID, artifact_hash=ART_HASH):
     return link
 
 
+def _model_doc(*, alias="codex", provider="openai-codex", model="gpt-5.6-sol", **over):
+    """A resolved ModelSelection carrying the run chain `select-model` now stamps."""
+    doc = {"resolved": True, "alias": alias, "family": "openai", "provider": provider,
+           "model": model, "thinking": "high", "independence": "full", "ladder": [],
+           "chain": _chain("select-model")}
+    doc.update(over)
+    return doc
+
+
+def _prepass_doc(**over):
+    """A clean PrepassResult bound to the same run and artifact as `_resolved()`."""
+    doc = {"status": "pass", "checks": [], "findings": [],
+           "observed_artifact_hash": ART_HASH, "chain": _chain("prepass")}
+    doc.update(over)
+    return doc
+
+
 def _resolved(**over):
     payload = {"profile": "code-diff", "target_kind": "path", "target_ref": "x",
                "artifact_hash": ART_HASH, "chain": _chain("resolve")}
@@ -985,7 +1052,7 @@ def _write(tmp_path: Path, name: str, payload) -> str:
 
 
 def _inputs(tmp_path, findings, *, model=None, prepass_status="pass", prepass_findings=None,
-            raw=False):
+            prepass_doc=None, raw=False):
     """Wraps a plain list in a `merge` envelope, which is what standard depth requires.
 
     Pass raw=True to send the bare array a promote stage emits.
@@ -993,7 +1060,16 @@ def _inputs(tmp_path, findings, *, model=None, prepass_status="pass", prepass_fi
     model = model or {"resolved": True, "alias": "codex", "family": "openai",
                       "provider": "openai-codex", "model": "gpt-5.6-sol",
                       "thinking": "high", "independence": "full", "ladder": []}
-    pre = {"status": prepass_status, "checks": [], "findings": prepass_findings or []}
+    # Deliberately malformed models are passed through untouched — several tests hand
+    # `gate` a string or a list to prove it exits 2 rather than tracebacking.
+    if isinstance(model, dict):
+        model = dict(model)
+        model.setdefault("chain", _chain("select-model"))
+    # `observed_artifact_hash` must equal the chain's artifact_hash or `gate` reads it
+    # as a pre-pass that ran against something other than the artifact under review.
+    pre = prepass_doc if prepass_doc is not None else _prepass_doc(
+        status=prepass_status, findings=prepass_findings or []
+    )
     if isinstance(findings, list) and not raw:
         findings = _merged(findings)
     return (
@@ -1027,7 +1103,7 @@ def gate(tmp_path, findings, *, expect=0, extra=(), repo_root=None, **kw) -> dic
 def test_gate_without_model_input_fails_loudly(tmp_path):
     """A missing input must never collapse silently onto the severity path."""
     proc = run_ar("gate", "--findings", _write(tmp_path, "f.json", []),
-                  "--prepass", _write(tmp_path, "p.json", {"status": "pass", "checks": [], "findings": []}))
+                  "--prepass", _write(tmp_path, "p.json", _prepass_doc()))
     assert proc.returncode == 2
 
 
@@ -1642,12 +1718,9 @@ def _manifest_inputs(tmp_path, *, depth="standard", independence="full", family=
     resolve_doc = {"profile": "code-diff", "target_kind": "git-range", "target_ref": "main..HEAD",
                    "artifact_hash": ART_HASH, "size_metric": 200, "depth_suggestion": "deep",
                    "contract_surface": False, "chain": _chain("resolve")}
-    prepass_doc = {"status": "pass", "checks": [{"name": "code-check", "command": "pytest -q",
-                                                 "exit_code": 0, "status": "pass", "output": ""}],
-                   "findings": []}
-    model_doc = {"resolved": True, "alias": "codex", "family": family, "provider": "openai-codex",
-                 "model": "gpt-5.6-sol", "thinking": "high", "independence": independence,
-                 "ladder": []}
+    prepass_doc = _prepass_doc(checks=[{"name": "code-check", "command": "pytest -q",
+                                        "exit_code": 0, "status": "pass", "output": ""}])
+    model_doc = _model_doc(family=family, independence=independence)
     gate_doc = {"verdict": "PASS", "findings": [], "contested": [], "suppressed": [],
                 "suppressed_count": 2, "depth": depth, "chain": _chain("gate")}
     return (
@@ -1711,7 +1784,7 @@ def test_manifest_rejects_unrelated_json_for_any_input(tmp_path, broken):
         "resolve": {"profile": "code-diff", "target_kind": "git-range", "target_ref": "a..b",
                     "artifact_hash": "x", "size_metric": 1, "depth_suggestion": "quick",
                     "contract_surface": False},
-        "prepass": {"status": "pass", "checks": [], "findings": []},
+        "prepass": _prepass_doc(),
         "model": {"resolved": True, "alias": "codex", "family": "openai", "provider": "openai-codex",
                   "model": "gpt-5.6-sol", "thinking": "high", "independence": "full", "ladder": []},
         "gate": {"verdict": "PASS", "findings": [], "contested": [], "suppressed": [],
@@ -1731,10 +1804,14 @@ def _review_inputs(work, repo):
     proc = run_ar("resolve", "--target", "WORKTREE", "--repo-root", str(repo))
     assert proc.returncode == 0, proc.stderr
     (work / "r.json").write_text(proc.stdout)
-    _write(work, "p.json", {"status": "pass", "checks": [], "findings": []})
-    _write(work, "m.json", {"resolved": True, "alias": "codex", "family": "openai",
-                            "provider": "openai-codex", "model": "gpt-5.6-sol",
-                            "thinking": "high", "independence": "full", "ladder": []})
+    # These carry the *real* run's identity, not the fixture's: `manifest` now refuses a
+    # pre-pass or a model selection minted by a different run than the one it records.
+    real = json.loads(proc.stdout)
+    run = {"run_id": real["chain"]["run_id"], "artifact_hash": real["artifact_hash"],
+           "predecessor": "0" * 64}
+    _write(work, "p.json", _prepass_doc(
+        observed_artifact_hash=real["artifact_hash"], chain={**run, "step": "prepass"}))
+    _write(work, "m.json", _model_doc(chain={**run, "step": "select-model"}))
     _write(work, "g.json", {"verdict": "PASS", "findings": [], "contested": [],
                             "suppressed": [], "suppressed_count": 0, "depth": "quick"})
     return ["--resolve", str(work / "r.json"), "--prepass", str(work / "p.json"),
@@ -2030,11 +2107,9 @@ def test_quick_mode_output_cannot_be_laundered_into_standard_depth(tmp_path):
     proc = run_ar("gate",
                   "--findings", _write(tmp_path, "f.json", _quick_payload()),
                   "--model", _write(tmp_path, "m.json",
-                                    {"resolved": True, "alias": "codex", "family": "openai",
-                                     "provider": "p", "model": "m", "thinking": "high",
-                                     "independence": "full", "ladder": []}),
+                                    _model_doc(alias="codex", provider="p", model="m")),
                   "--prepass", _write(tmp_path, "p.json",
-                                      {"status": "pass", "checks": [], "findings": []}),
+                                      _prepass_doc()),
                   "--depth", "standard")
     assert proc.returncode == 2
     assert "quick" in proc.stderr.lower()
@@ -2044,11 +2119,9 @@ def test_quick_mode_output_is_accepted_at_quick_depth(tmp_path):
     proc = run_ar("gate",
                   "--findings", _write(tmp_path, "f.json", _quick_payload()),
                   "--model", _write(tmp_path, "m.json",
-                                    {"resolved": True, "alias": "codex", "family": "openai",
-                                     "provider": "p", "model": "m", "thinking": "high",
-                                     "independence": "full", "ladder": []}),
+                                    _model_doc(alias="codex", provider="p", model="m")),
                   "--prepass", _write(tmp_path, "p.json",
-                                      {"status": "pass", "checks": [], "findings": []}),
+                                      _prepass_doc()),
                   "--depth", "quick")
     assert proc.returncode == 1, proc.stderr
     assert json.loads(proc.stdout)["depth"] == "quick"
@@ -2105,11 +2178,9 @@ def test_an_empty_quick_shaped_report_is_still_accepted(tmp_path):
                   "--findings", _write(tmp_path, "f.json",
                                        {"findings": [], "suppressed": []}),
                   "--model", _write(tmp_path, "m.json",
-                                    {"resolved": True, "alias": "codex", "family": "openai",
-                                     "provider": "p", "model": "m", "thinking": "high",
-                                     "independence": "full", "ladder": []}),
+                                    _model_doc(alias="codex", provider="p", model="m")),
                   "--prepass", _write(tmp_path, "p.json",
-                                      {"status": "pass", "checks": [], "findings": []}),
+                                      _prepass_doc()),
                   "--depth", "quick")
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout)["verdict"] == "PASS"
@@ -2122,11 +2193,9 @@ def test_an_empty_bare_array_is_not_a_licence_to_launder_quick_into_standard(tmp
                   "--findings", _write(tmp_path, "f.json",
                                        {"findings": [], "suppressed": []}),
                   "--model", _write(tmp_path, "m.json",
-                                    {"resolved": True, "alias": "codex", "family": "openai",
-                                     "provider": "p", "model": "m", "thinking": "high",
-                                     "independence": "full", "ladder": []}),
+                                    _model_doc(alias="codex", provider="p", model="m")),
                   "--prepass", _write(tmp_path, "p.json",
-                                      {"status": "pass", "checks": [], "findings": []}),
+                                      _prepass_doc()),
                   "--depth", "standard")
     assert proc.returncode == 2
     assert "quick" in proc.stderr.lower()
@@ -2254,11 +2323,9 @@ def test_a_quick_report_missing_its_findings_key_is_a_failed_dispatch(tmp_path):
     proc = run_ar("gate",
                   "--findings", _write(tmp_path, "f.json", {"suppressed": []}),
                   "--model", _write(tmp_path, "m.json",
-                                    {"resolved": True, "alias": "c", "family": "openai",
-                                     "provider": "p", "model": "m", "thinking": "high",
-                                     "independence": "full", "ladder": []}),
+                                    _model_doc(alias="c", provider="p", model="m")),
                   "--prepass", _write(tmp_path, "p.json",
-                                      {"status": "pass", "checks": [], "findings": []}),
+                                      _prepass_doc()),
                   "--depth", "quick")
     assert proc.returncode == 2
     assert "no `findings` key" in proc.stderr
@@ -2269,11 +2336,9 @@ def test_an_explicitly_empty_quick_report_is_still_a_clean_pass(tmp_path):
                   "--findings", _write(tmp_path, "f.json",
                                        {"findings": [], "suppressed": []}),
                   "--model", _write(tmp_path, "m.json",
-                                    {"resolved": True, "alias": "c", "family": "openai",
-                                     "provider": "p", "model": "m", "thinking": "high",
-                                     "independence": "full", "ladder": []}),
+                                    _model_doc(alias="c", provider="p", model="m")),
                   "--prepass", _write(tmp_path, "p.json",
-                                      {"status": "pass", "checks": [], "findings": []}),
+                                      _prepass_doc()),
                   "--depth", "quick")
     assert proc.returncode == 0
 
@@ -2299,7 +2364,7 @@ def test_the_checked_triple_wins_over_the_static_ladder(tmp_path):
     passing alias check returned a model that could not be dispatched. The check knows
     which version it resolved; the table only remembers a preference order."""
     check = _fake_check(tmp_path, "  ✓ gemini  google/gemini-9.9-pro-preview:high")
-    proc = run_ar("select-model", "--author-family", "openai", "--check-cmd", check)
+    proc = run_ar("select-model", "--author-family", "openai", "--check-cmd", check, "--resolve", _shared_resolve())
     assert proc.returncode == 0, proc.stderr
     model = json.loads(proc.stdout)
     assert model["model"] == "gemini-9.9-pro-preview"
@@ -2311,7 +2376,7 @@ def test_an_unparseable_check_still_resolves_but_says_it_is_unverified(tmp_path)
     """A check that proves the alias is authed without naming a model is still a
     resolution — it just cannot promise the triple dispatches, and says so."""
     check = _fake_check(tmp_path, "everything looks fine")
-    proc = run_ar("select-model", "--author-family", "openai", "--check-cmd", check)
+    proc = run_ar("select-model", "--author-family", "openai", "--check-cmd", check, "--resolve", _shared_resolve())
     assert proc.returncode == 0, proc.stderr
     model = json.loads(proc.stdout)
     assert model["resolved"] is True
@@ -2321,7 +2386,7 @@ def test_an_unparseable_check_still_resolves_but_says_it_is_unverified(tmp_path)
 def test_the_thinking_level_comes_from_the_check_when_it_names_one(tmp_path):
     check = _fake_check(tmp_path, "  ✓ gemini  google/gemini-3.1-pro-preview:medium")
     model = json.loads(run_ar("select-model", "--author-family", "openai",
-                              "--check-cmd", check).stdout)
+                              "--check-cmd", check, "--resolve", _shared_resolve()).stdout)
     assert model["thinking"] == "medium"
 
 
@@ -2329,7 +2394,7 @@ def test_a_triple_reported_for_a_different_alias_is_not_adopted(tmp_path):
     """Guards against matching whatever line happens to be in the output."""
     check = _fake_check(tmp_path, "  ✓ codex  openai-codex/gpt-9:high")
     model = json.loads(run_ar("select-model", "--author-family", "openai",
-                              "--check-cmd", check).stdout)
+                              "--check-cmd", check, "--resolve", _shared_resolve()).stdout)
     assert model["alias"] == "gemini"
     assert model["model"] != "gpt-9"
     assert model["triple_verified"] is False
@@ -2524,11 +2589,9 @@ def test_merge_output_feeds_the_gate_at_standard_depth(tmp_path):
                                 "severity": "LOW", "reason": "r"}])).stdout)
     proc = run_ar("gate", "--findings", _write(tmp_path, "m.json", merged),
                   "--model", _write(tmp_path, "mo.json",
-                                    {"resolved": True, "alias": "c", "family": "openai",
-                                     "provider": "p", "model": "m", "thinking": "high",
-                                     "independence": "full", "ladder": []}),
+                                    _model_doc(alias="c", provider="p", model="m")),
                   "--prepass", _write(tmp_path, "p.json",
-                                      {"status": "pass", "checks": [], "findings": []}),
+                                      _prepass_doc()),
                   "--depth", "standard")
     assert proc.returncode == 0, proc.stderr
     gated = json.loads(proc.stdout)
@@ -2622,6 +2685,123 @@ def test_the_manifest_refuses_an_unresolved_contested_finding(tmp_path):
 
 # ============ the run chain =======================================================
 
+def test_a_prepass_from_another_run_cannot_supply_the_ground_truth(tmp_path):
+    """The bypass: capture a pre-pass while the suite is green, edit until it breaks,
+    then gate against the saved one. The checks the verdict rests on describe an
+    artifact nobody reviewed, and a real failing suite comes out `PASS`."""
+    stale = _prepass_doc(chain=_chain("prepass", run_id="f" * 16),
+                         observed_artifact_hash=ART_HASH)
+    proc = run_ar("gate", *_inputs(tmp_path, [], prepass_doc=stale), "--depth", "standard")
+    assert proc.returncode == 2
+    assert "different runs" in proc.stderr
+
+
+def test_a_model_selection_from_another_run_is_refused(tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [],
+                                   model=_model_doc(chain=_chain("select-model",
+                                                                 run_id="f" * 16))),
+                  "--depth", "standard")
+    assert proc.returncode == 2
+    assert "different runs" in proc.stderr
+
+
+def test_a_hand_written_model_envelope_cannot_assert_a_reviewer(tmp_path):
+    """`resolved: true` with no chain was the whole bypass — it turned NOT_REVIEWABLE,
+    the verdict for a review that never happened, into PASS."""
+    forged = {"resolved": True, "alias": "codex", "family": "openai", "provider": "p",
+              "model": "m", "thinking": "high", "independence": "full", "ladder": []}
+    proc = run_ar("gate",
+                  "--findings", _write(tmp_path, "f.json", _merged([])),
+                  "--model", _write(tmp_path, "m.json", forged),
+                  "--prepass", _write(tmp_path, "p.json", _prepass_doc()),
+                  "--depth", "standard")
+    assert proc.returncode == 2
+    assert "no run chain" in proc.stderr
+
+
+def test_a_hand_written_prepass_cannot_supply_a_clean_bill_of_health(tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [],
+                                   prepass_doc={"status": "pass", "checks": [],
+                                                "findings": []}),
+                  "--depth", "standard")
+    assert proc.returncode == 2
+    assert "no run chain" in proc.stderr
+
+
+def test_a_prepass_that_ran_against_a_different_artifact_is_refused(tmp_path):
+    """Same run, but the tree moved between `resolve` and the pre-pass, so its ground
+    truth describes content no other stage judged."""
+    drifted = _prepass_doc(observed_artifact_hash="b" * 64)
+    proc = run_ar("gate", *_inputs(tmp_path, [], prepass_doc=drifted), "--depth", "standard")
+    assert proc.returncode == 2
+    assert "different artifact" in proc.stderr
+
+
+def test_a_prepass_that_could_not_run_may_omit_the_artifact_hash(tmp_path):
+    """An unreadable artifact cannot be hashed, and that is what `could-not-run` means.
+    Refusing it here would turn the input to NOT_REVIEWABLE into a crash."""
+    blocked = _prepass_doc(status="could-not-run", observed_artifact_hash=None)
+    proc = run_ar("gate", *_inputs(tmp_path, [], prepass_doc=blocked), "--depth", "standard")
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_a_passing_prepass_may_not_omit_the_artifact_hash(tmp_path):
+    """Otherwise the null is a free pass out of the binding for the one status that
+    can actually launder a clean result."""
+    proc = run_ar("gate", *_inputs(tmp_path, [],
+                                   prepass_doc=_prepass_doc(observed_artifact_hash=None)),
+                  "--depth", "standard")
+    assert proc.returncode == 2
+    assert "could not run" in proc.stderr
+
+
+def test_the_manifest_refuses_a_prepass_from_another_run(tmp_path):
+    """`gate` and `manifest` read these files separately, so a caller could gate on one
+    pre-pass and record another."""
+    proc = run_ar("manifest", *_manifest_inputs(tmp_path),
+                  "--prepass", _write(tmp_path, "other.json",
+                                      _prepass_doc(chain=_chain("prepass",
+                                                                run_id="f" * 16))))
+    assert proc.returncode == 2
+    assert "another run" in proc.stderr
+
+
+def test_the_prepass_hash_is_taken_before_its_own_checks_pollute_the_tree(tmp_path):
+    """A test suite writes `.pytest_cache/` and `__pycache__/` as it runs, and the
+    worktree diff counts untracked files. Hashing afterwards described an artifact the
+    checks themselves created, so every honest code-diff run failed the binding."""
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    (repo / "pyproject.toml").write_text('[project]\nname = "d"\nversion = "0.1"\n')
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+    # Written outside the repo: an untracked file in it would move the worktree diff
+    # and stage a false failure of the very thing under test.
+    resolve_proc = run_ar("resolve", "--target", "WORKTREE", "--repo-root", str(repo))
+    assert resolve_proc.returncode == 0, resolve_proc.stderr
+    resolve_doc = json.loads(resolve_proc.stdout)
+    resolve_file = _write(work, "r.json", resolve_doc)
+
+    litter = "sh -c 'mkdir -p .pytest_cache && echo x > .pytest_cache/v'"
+    result = prepass("--profile", "code-diff", "--target", "WORKTREE",
+                     "--repo-root", str(repo), "--check-cmd", litter,
+                     resolve=resolve_file)
+    assert result["observed_artifact_hash"] == resolve_doc["artifact_hash"], (
+        "the pre-pass hashed the tree its own checks had already written to"
+    )
+
+
+def test_prepass_output_is_anchored_to_the_run_that_resolved_the_target(tmp_path):
+    doc = _touch(tmp_path / "notes.md", "Plain prose with no references.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path))
+    assert result["chain"]["step"] == "prepass"
+    assert result["observed_artifact_hash"], "prepass must record what it actually read"
+
+
+
 def test_tiebreak_merge_cannot_run_before_refute(tmp_path):
     """The bypass this chain exists for. `merge --stage tiebreak` on `claims` output
     found nothing contested, accepted `[]`, and emitted an envelope whose findings had
@@ -2655,11 +2835,9 @@ def test_the_gate_validates_the_envelope_it_is_handed(envelope, tmp_path):
     envelope = dict(envelope, chain=_chain("merge", stage=envelope["stage"]))
     proc = run_ar("gate", "--findings", _write(tmp_path, "f.json", envelope),
                   "--model", _write(tmp_path, "m.json",
-                                    {"resolved": True, "alias": "c", "family": "openai",
-                                     "provider": "p", "model": "m", "thinking": "high",
-                                     "independence": "full", "ladder": []}),
+                                    _model_doc(alias="c", provider="p", model="m")),
                   "--prepass", _write(tmp_path, "p.json",
-                                      {"status": "pass", "checks": [], "findings": []}),
+                                      _prepass_doc()),
                   "--depth", "standard")
     assert proc.returncode == 2
 
@@ -2668,11 +2846,9 @@ def test_an_unchained_envelope_is_refused(tmp_path):
     proc = run_ar("gate", "--findings", _write(tmp_path, "f.json",
                                                {"findings": [], "stage": "refute", "judged": 0}),
                   "--model", _write(tmp_path, "m.json",
-                                    {"resolved": True, "alias": "c", "family": "openai",
-                                     "provider": "p", "model": "m", "thinking": "high",
-                                     "independence": "full", "ladder": []}),
+                                    _model_doc(alias="c", provider="p", model="m")),
                   "--prepass", _write(tmp_path, "p.json",
-                                      {"status": "pass", "checks": [], "findings": []}),
+                                      _prepass_doc()),
                   "--depth", "standard")
     assert proc.returncode == 2
     assert "no run chain" in proc.stderr

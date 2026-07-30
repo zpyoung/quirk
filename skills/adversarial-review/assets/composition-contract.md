@@ -47,7 +47,12 @@ round to overturn it. `merge` proves the stage ran: every judgment needs a `reas
 names an unknown ID, when one finding draws two rulings, or when tiebreak rules on something nobody
 contested. Feed its output to `gate` directly. Each script-produced payload carries a `chain` — run ID,
 artifact hash, producing step, and a digest of the input it came from — and every stage refuses
-input whose chain does not name its expected predecessor.
+input whose chain does not name its expected predecessor. `prepass` and `select-model` take
+`--resolve` for this reason: they are the two inputs the `NOT_REVIEWABLE` branch rests on, and while
+they carried no chain either could be swapped for a file from an earlier run — a green pre-pass
+saved before the break, or a hand-written `{"resolved": true}` — and neither swap needed forging
+anything. `prepass` also records the artifact hash it observed, so `gate` can tell a pre-pass that
+ran against other content from one that ran against the artifact under review.
 
 **Read the guarantee precisely.** The chain makes a skipped stage, an out-of-order call, and a file
 from another run fail loudly. It does not authenticate content: nothing in this script observes a

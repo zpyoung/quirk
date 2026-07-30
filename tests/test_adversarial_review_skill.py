@@ -625,3 +625,67 @@ def test_the_skill_does_not_claim_the_chain_proves_a_dispatch() -> None:
 def test_sdd_does_not_overstate_what_the_verdict_proves() -> None:
     body = (REPO_ROOT / "skills/subagent-driven-development/SKILL.md").read_text()
     assert "not proof the dispatches happened" in body
+
+
+# --- the prompts must produce what the script accepts -------------------------------
+#
+# The seam these guard is the one no unit test reaches: a reviewer copies the shape the
+# prompt shows it, and the script either takes it or refuses the whole dispatch. A real
+# run lost six findings here — the prompt told the reviewer to prove an absence with a
+# `command` item, and `command` rejects the empty output an absence has by definition.
+
+def _example_findings() -> list:
+    """The JSON array the promote prompt shows the reviewer, parsed as a reviewer would
+    copy it: comments stripped, since the prompt annotates its example."""
+    import json
+
+    text = (ASSETS_DIR / "promote-prompt.md").read_text()
+    blocks = re.findall(r"```json\n(.*?)```", text, re.DOTALL)
+    assert blocks, "promote-prompt.md shows no ```json output example"
+    for block in blocks:
+        stripped = re.sub(r"/\*.*?\*/", "", block, flags=re.DOTALL)
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, list) and parsed:
+            return parsed
+    pytest.fail("no parseable findings array in promote-prompt.md")
+
+
+def test_the_promote_examples_pass_the_scripts_own_validator() -> None:
+    """A prompt whose example the validator rejects costs the caller a whole dispatch,
+    and the reviewer is blamed for what the asset told it to do."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_loader(
+        "ar", importlib.machinery.SourceFileLoader(
+            "ar", str(SKILL_DIR / "scripts" / "adversarial-review"))
+    )
+    ar = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ar)
+    for index, finding in enumerate(_example_findings()):
+        ar.validate_finding(finding, index)
+
+
+def test_the_promote_prompt_names_every_evidence_kind_the_script_accepts() -> None:
+    """A kind the reviewer is never shown is a kind it will not emit — and it will reach
+    for a wrong one that the validator refuses."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_loader(
+        "ar", importlib.machinery.SourceFileLoader(
+            "ar", str(SKILL_DIR / "scripts" / "adversarial-review"))
+    )
+    ar = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ar)
+    prompt = (ASSETS_DIR / "promote-prompt.md").read_text()
+    for kind in ar.EVIDENCE_REQUIRED_FIELDS:
+        assert f"`{kind}`" in prompt, f"promote-prompt.md never names evidence kind {kind}"
+
+
+def test_the_promote_prompt_does_not_route_absence_claims_through_command() -> None:
+    """The exact regression: `prove the absence with a separate `command` item`."""
+    prompt = (ASSETS_DIR / "promote-prompt.md").read_text()
+    assert not re.search(r"absence with a separate `command`", prompt)
+    assert re.search(r"absence.{0,80}`absence`", prompt, re.DOTALL)

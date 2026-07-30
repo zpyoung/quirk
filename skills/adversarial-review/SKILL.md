@@ -89,7 +89,8 @@ honoured.
 **3. Pre-pass.**
 
 ```bash
-"$SCRIPT" prepass --profile "$PROFILE" --target "$TARGET" > "$WORK/prepass.json"
+"$SCRIPT" prepass --profile "$PROFILE" --target "$TARGET" \
+  --resolve "$WORK/resolve.json" > "$WORK/prepass.json"
 ```
 
 Exit 1 means a check failed — that is a finding, not an error. Only exit 2 is a failure. `status:
@@ -105,7 +106,8 @@ one up fails safe.
 **4. Select the adversary.**
 
 ```bash
-"$SCRIPT" select-model --author-family "$AUTHOR_FAMILY" > "$WORK/model.json"
+"$SCRIPT" select-model --author-family "$AUTHOR_FAMILY" \
+  --resolve "$WORK/resolve.json" > "$WORK/model.json"
 ```
 
 Defaults to a family different from the author's, gates each candidate on `pi-watch --check
@@ -155,6 +157,14 @@ Feed `merged.json` straight to the gate. Every script-produced payload carries a
 run, the artifact, and the step before it, and each stage refuses input whose chain does not name
 its expected predecessor — so a skipped stage, an out-of-order call, or a file from another run
 fails loudly instead of producing a verdict.
+
+That covers `prepass.json` and `model.json` too, which is why both take `--resolve`. They were the
+last two outside it, and they are the two the `NOT_REVIEWABLE` branch depends on: a pre-pass
+captured while the suite was green turned a failing suite into `PASS`, and a hand-written
+`{"resolved": true}` turned "no reviewer resolved" into `PASS`. Neither needed a forged chain,
+because neither had one. `prepass` additionally records the artifact hash it actually observed, so a
+pre-pass whose ground truth describes different content than the artifact under review is refused
+rather than believed.
 
 **What the chain does not do is prove a dispatch happened.** Nothing in this script observes one; it
 only ever sees files the orchestrator hands it. The chain raises a bypass from a one-flag accident

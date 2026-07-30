@@ -100,7 +100,8 @@ per finding:
     "claim": "One sentence naming what breaks and when.",
     "evidence": [
       {"kind": "file-line", "ref": "path/to/file.py:214-218", "quote": "the lines, copied exactly"},
-      {"kind": "command", "command": "python3 -m pytest tests/test_x.py -q", "output": "the failure"}
+      {"kind": "command", "command": "python3 -m pytest tests/test_x.py -q", "output": "the failure"},
+      {"kind": "absence", "command": "grep -rn 'retry_after' src/", "ref": "src/", "output": ""}
     ],
     "remediation": "One sentence on what would fix it.",
     "patch": null,
@@ -131,12 +132,29 @@ per finding:
 - `evidence` needs at least one item, and every `ref` and `quote` is re-resolved against the source
   after you report. A quote that drifted by a word does not re-resolve and the finding is dropped
   and counted. Copy; do not paraphrase.
+- **Every evidence item is one of these five kinds, and the required fields are checked
+  mechanically.** An item missing a field, or carrying an empty one, is rejected outright — the
+  whole reply is refused, not just that finding.
+
+  | `kind` | Required fields | Use it for |
+  | --- | --- | --- |
+  | `file-line` | `ref`, `quote` | These exact lines are wrong |
+  | `quote` | `ref`, `quote` | This exact sentence is wrong |
+  | `command` | `command`, `output` | I ran this and it failed — `output` must be non-empty |
+  | `absence` | `command`, `ref`, `output` | I searched and found nothing — `output` **is** empty |
+  | `prepass` | `ref`, `output` | A ground-truth check already established this |
+
+- **A search that found nothing is `absence`, never `command`.** `command` means "I ran this and
+  here is the failure," so an empty `output` on it is evidence of nothing and is rejected. `absence`
+  is the one kind where empty output is the content: it asserts the cited search came back clean, so
+  the field must be present and may be empty. Getting this wrong costs the entire dispatch.
 - **A `ref` names the file the `quote` was copied out of** — never the file the quote talks about.
   The gate opens `ref` and looks for `quote` inside it, so pairing a sentence from a document with
   the path that sentence *mentions* falsifies your own evidence. To report that something cited does
   not exist, quote the citing sentence against the citing document, and prove the absence with a
-  separate `command` item. A cited path that is missing is exactly the case where the pairing fails,
-  so this shape suppresses the finding precisely when it is true.
+  separate `absence` item whose `ref` is the scope you searched. A cited path that is missing is
+  exactly the case where the pairing fails, so this shape suppresses the finding precisely when it
+  is true.
 - `patch` — a unified diff, only for a mechanical fix small enough to be obviously right. `null`
   for every judgment call.
 
