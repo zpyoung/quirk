@@ -61,15 +61,22 @@ output.
 
    The author's family resolves in this order: the explicit `author_family` input; else the family
    recorded in the manifest of the run that produced the artifact, when one exists; else the family
-   of the invoking session. There is no "unknown" case — the fallback always yields a value, and a
-   wrong guess degrades to `independence: reduced` rather than to a silent same-family review.
+   of the invoking session. A wrong guess degrades to `independence: reduced` rather than to a
+   silent same-family review.
+
+   The accepted values are a closed set — `anthropic`, `openai`, `google`, `other` — and anything
+   else is a usage error, exit 2. It is not treated as an unknown that degrades safely: the
+   independence guarantee turns on one string comparison, so a name nothing matches would leave the
+   author's own family in the candidate pool while stamping the result `full`. `other` is the
+   explicit escape hatch for an author outside the known families, and it excludes nothing.
 5. **Promote.** Dispatch with artifact, criteria, ground truth, and lens. Read-only tools. Recall
    maximized, low bar for raising a candidate.
 6. **Refute.** Fresh dispatch with artifact, ground truth, and promote's claims only. Kill
    mandate: assume each finding is false and attempt to refute it.
 7. **Evidence gate.** The script validates findings against the schema. A CRITICAL or HIGH finding
-   lacking a reproduction is downgraded. A finding whose evidence cannot be re-resolved against
-   source is dropped and counted.
+   lacking a reproduction has its **confidence capped at `LOW`; its severity does not move** —
+   severity tracks consequence and confidence tracks likelihood, and proof speaks only to the
+   second. A finding whose evidence cannot be re-resolved against source is dropped and counted.
 8. **Tiebreak.** At `deep` depth only, contested findings go to a third model family.
 9. **Emit.** Human summary, structured findings block, manifest.
 

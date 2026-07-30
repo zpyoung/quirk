@@ -839,3 +839,45 @@ def test_the_worktree_promise_is_scoped_to_capture_time() -> None:
     skill = SKILL_PATH.read_text()
     assert "covers **all** uncommitted work" not in skill
     assert re.search(r"WORKTREE` covers all uncommitted work \*\*as of this moment\*\*", skill)
+
+
+# --- the specs must describe the contract the script implements ---------------------
+#
+# All three findings from the PR review were this shape: a doc asserting behaviour the
+# code does not have. The logic spec is the design record the implementation is read
+# against, so drift there is not cosmetic — a caller trusting it plans around a
+# guarantee that does not exist.
+
+SPEC_DIR = REPO_ROOT / "docs" / "quirk" / "specs" / "2026-07-27-adversarial-review"
+
+
+def test_the_logic_spec_names_the_author_families_the_script_accepts() -> None:
+    """The spec claimed there was no unknown-family case and that a wrong guess degrades
+    safely. The script rejects anything outside a closed set with exit 2, precisely
+    because the independence guarantee turns on one string comparison."""
+    logic = (SPEC_DIR / "logic.md").read_text()
+    for family in _ar_module().AUTHOR_FAMILIES:
+        assert f"`{family}`" in logic, f"logic.md never names the `{family}` author family"
+    assert "no \"unknown\" case" not in logic, (
+        "logic.md still claims unknown families degrade safely; they are exit 2"
+    )
+
+
+def test_the_logic_spec_does_not_claim_the_gate_moves_severity() -> None:
+    """`apply_evidence_gate` caps confidence and leaves severity alone — the two are
+    independent axes and proof speaks only to likelihood. A spec saying an unproven
+    finding is 'downgraded' reads as a severity change and contradicts its own later text."""
+    logic = (SPEC_DIR / "logic.md").read_text()
+    assert "lacking a reproduction is downgraded" not in logic
+    assert re.search(r"confidence capped at `LOW`.{0,40}severity does not move", logic,
+                     re.DOTALL | re.IGNORECASE)
+
+
+def test_the_slash_command_adds_no_target_semantics_of_its_own() -> None:
+    """It declares itself a thin entry point. It had also invented a default — reviewing
+    the branch diff against main — that the script does not implement."""
+    command = COMMAND_PATH.read_text()
+    assert "branch diff against main" not in command, (
+        "the command reintroduced a default target the script does not implement"
+    )
+    assert "WORKTREE" in command

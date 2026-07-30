@@ -7,6 +7,6 @@ Invoke the `quirk:adversarial-review` skill and follow its data flow to review t
 $ARGUMENTS
 
 Notes:
-- `$ARGUMENTS` is an optional target — a path, a git range (`a..b`), or `WORKTREE`. When empty, review the uncommitted changes plus the branch diff against main.
+- `$ARGUMENTS` is an optional target — a path, a git range (`a..b`), or `WORKTREE`. Empty means `WORKTREE`: the uncommitted changes, as the skill defines them. To review a branch, pass the range.
 - Flags in `$ARGUMENTS` pass straight through to the skill: `--profile`, `--lens`, `--depth`, `--model`. Anything not recognized as a flag is the target.
 - The skill owns the protocol, the verdict contract, and how findings are reported. This command only routes to it — do not restate its rules here.

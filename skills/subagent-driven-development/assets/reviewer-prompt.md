@@ -7,10 +7,10 @@ Everything this file used to carry is still in force — it moved rather than ch
 
 | Was here | Now lives in |
 | --- | --- |
-| The severity rubric (`CRITICAL` / `HIGH` / `MEDIUM` / `LOW`) | `skills/adversarial-review/profiles/code-diff.md` — migrated verbatim, because Step 10's exit gate reads these labels and re-tuning them would move when the loop terminates |
-| The `LOCATION` and `EVIDENCE` requirement | same file, expressed as the `evidence[].ref` and `evidence[].quote` fields the gate re-resolves against the tree |
-| The three lens definitions | same file |
-| The `NO_FINDINGS` token, and that silence is not the same signal | same file, plus the exit-code table in Step 8 |
+| The severity rubric (`CRITICAL` / `HIGH` / `MEDIUM` / `LOW`) | `skills/adversarial-review/profiles/code-diff.md` § Severity — migrated verbatim, because Step 10's exit gate reads these labels and re-tuning them would move when the loop terminates |
+| The `LOCATION` and `EVIDENCE` requirement | `profiles/code-diff.md` § Evidence rules, expressed as the `evidence[].ref` and `evidence[].quote` fields the gate re-resolves against the tree |
+| The three lens definitions | `profiles/code-diff.md` § Attack surface |
+| That silence is not the same signal as finding nothing | `profiles/code-diff.md` § When you find nothing, plus the exit-code table in Step 8. **The `NO_FINDINGS` token is retired** — a reviewer that finds nothing now emits `[]`, and a crashed one is identified by exit code and JSON validity rather than by a sentinel string |
 | The dispatch invocation and the review protocol | `skills/adversarial-review/SKILL.md` |
 
 **The interface is `skills/adversarial-review/assets/composition-contract.md`** — what Step 8 passes
