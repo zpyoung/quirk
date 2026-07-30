@@ -193,9 +193,21 @@ check. This matters most at `quick`, where the reviewer hand-writes its report a
 findings chain to anchor. `--no-verify-artifact` turns the re-hash off for a target with no tree
 behind it; it also turns off the only thing separating a current review from a stale one.
 
-**If this fires on a run you know is honest, look at your own check output first.** The pre-pass
-runs its commands inside the tree it hashes, so an ungitignored `.pytest_cache/`, `__pycache__/`, or
-build directory *is* a worktree change by the time the gate looks. Gitignore them.
+**If this fires on a run you know is honest, suspect the review before the artifact.** An untracked
+file is part of the worktree under review, so anything the run itself writes into the tree trips it:
+
+- The pre-pass runs its commands inside the tree it hashes. An ungitignored `.pytest_cache/`,
+  `__pycache__/`, `node_modules/.cache`, or `target/` *is* a worktree change by the time the gate
+  looks. Gitignore them.
+- A dispatched reviewer wrote into the repository. The stages hold read-only tools by grant, not by
+  sandbox, and a tool that caches beside its input will do this.
+
+Reviewer selection is exempt by construction: its preflight runs in a scratch directory, because
+asking whether a model is reachable has nothing to do with the artifact and a check command that
+cached beside itself used to fail the gate on a run where nothing was stale.
+
+Reaching for `--no-verify-artifact` to silence a repeat offender trades the whole guarantee away —
+it is the only check that separates this review from a replay of the last one. Fix the pollution.
 
 `--findings` takes either a bare array or `quick`'s `{"findings": [...], "suppressed": [...]}`
 object. Pass the quick object through whole: its self-refuted entries are carried into

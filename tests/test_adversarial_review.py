@@ -2926,6 +2926,38 @@ def test_gate_refuses_a_resolve_from_a_different_run(tmp_path):
     assert "two different reviews" in proc.stderr
 
 
+def test_the_preflight_cannot_write_into_the_artifact_it_helps_review(tmp_path):
+    """A preflight asks whether a model is reachable; it has no business in the repo. With
+    no `cwd` it inherited the orchestrator's, which is the repo root — so a check command
+    that caches beside itself became an untracked file, and the mandatory currency check
+    failed an honest run. The escape from that is `--no-verify-artifact`, which reopens
+    the replay hole, so a false positive here costs the protection outright."""
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    _git_repo(repo)
+    (repo / "x.py").write_text("def f():\n    return 1\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+    resolve_proc = run_ar("resolve", "--target", "WORKTREE", "--repo-root", str(repo))
+    assert resolve_proc.returncode == 0, resolve_proc.stderr
+    resolve_doc = json.loads(resolve_proc.stdout)
+    resolve_file = _write(work, "r.json", resolve_doc)
+
+    littering = "sh -c 'echo cached > .preflight.cache; exit 0' _"
+    model = run_ar("select-model", "--author-family", "anthropic",
+                   "--check-cmd", littering, "--resolve", resolve_file, cwd=repo)
+    assert model.returncode == 0, model.stderr
+    assert not (repo / ".preflight.cache").exists(), (
+        "the preflight wrote into the repository it was selecting a reviewer for"
+    )
+
+    after = run_ar("resolve", "--target", "WORKTREE", "--repo-root", str(repo))
+    assert json.loads(after.stdout)["artifact_hash"] == resolve_doc["artifact_hash"], (
+        "selecting a reviewer perturbed the artifact hash"
+    )
+
+
 def test_a_detached_diff_review_survives_the_currency_check(tmp_path):
     """`--diff-file` is a documented seam. Verification re-ran `git` and compared the
     answer to a hash git never produced, so making the check mandatory would have

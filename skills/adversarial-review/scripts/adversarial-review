@@ -21,6 +21,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -850,9 +851,19 @@ def preflight(alias: str, check_cmd: str) -> tuple[bool, dict[str, str] | None]:
 
     Returns the triple the check itself reported, when it names one.
     """
-    completed = subprocess.run(
-        f"{check_cmd} {alias}", shell=True, capture_output=True, text=True, errors="replace"
-    )
+    # Run it somewhere it cannot touch the artifact. A preflight asks whether a model is
+    # reachable — it has no business in the repository, and with no `cwd` it inherits the
+    # orchestrator's, which is the repo root. Anything it writes there (a cache, a token,
+    # a log) is an untracked file by the time `gate` re-hashes the tree, and an honest
+    # run fails the currency check for a reason that has nothing to do with staleness.
+    scratch = tempfile.mkdtemp(prefix="adversarial-review-preflight-")
+    try:
+        completed = subprocess.run(
+            f"{check_cmd} {alias}", shell=True, cwd=scratch,
+            capture_output=True, text=True, errors="replace",
+        )
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
     if completed.returncode != 0:
         return False, None
     for stream in (completed.stderr or "", completed.stdout or ""):
@@ -1307,10 +1318,15 @@ def verify_artifact_is_current(resolved: dict[str, Any], repo_root: Path) -> Non
         "artifact changed during the review: "
         f"resolve saw {str(resolved.get('artifact_hash'))[:12]}, "
         f"the tree now hashes {current[:12]}. Findings from this run judged different "
-        "content — re-run it. If the only difference is your own check output "
-        "(`.pytest_cache/`, `__pycache__/`, build directories), gitignore it: the "
-        "pre-pass runs its checks inside the tree it hashes, and an untracked file is "
-        "part of the worktree under review."
+        "content — re-run it.\n"
+        "An untracked file is part of the worktree under review, so this also fires when "
+        "the review wrote into the tree itself. Two causes worth ruling out before you "
+        "conclude the artifact moved:\n"
+        "  - the pre-pass runs its checks inside the tree it hashes, so an ungitignored "
+        "`.pytest_cache/`, `__pycache__/`, or build directory counts. Gitignore them.\n"
+        "  - a dispatched reviewer wrote into the repository. The stages hold read-only "
+        "tools by grant, not by sandbox, and a tool that caches beside its input will "
+        "trip this."
     )
 
 
