@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "type": "feature",
+  "headless": false,
+  "depth": "read",
+  "title": "Add fuzzy search to the command palette",
+  "target": {
+    "kind": "github",
+    "repo": "acme/app",
+    "writable": true,
+    "third_party": "no",
+    "visibility": "private"
+  },
+  "template": { "applied": false, "path": null },
+  "fields": [
+    {
+      "name": "problem",
+      "value": "the command palette only matches exact substrings, so a typo returns no results",
+      "provenance": "reported"
+    },
+    {
+      "name": "who_benefits",
+      "value": "anyone using the command palette who mistypes a command name",
+      "provenance": "reported"
+    },
+    {
+      "name": "current_behavior",
+      "value": "no fuzzy matching exists; src/palette/search.py does an exact substring match only",
+      "provenance": "observed",
+      "source": "src/palette/search.py"
+    },
+    {
+      "name": "acceptance_criteria",
+      "provenance": "missing",
+      "reason": "no testable pass/fail condition established"
+    }
+  ],
+  "verified_against": ["src/palette/search.py"],
+  "disclosure_required": false
+}

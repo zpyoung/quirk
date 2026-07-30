@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "type": "feature",
+  "headless": false,
+  "depth": "read",
+  "title": "Export reports as PDF",
+  "target": {
+    "kind": "github",
+    "repo": "acme/reports",
+    "writable": true,
+    "third_party": "no",
+    "visibility": "private"
+  },
+  "template": { "applied": false, "path": null },
+  "fields": [
+    {
+      "name": "problem",
+      "value": "finance forwards reports to auditors who reject CSV; they retype them by hand",
+      "provenance": "reported"
+    },
+    {
+      "name": "who_benefits",
+      "value": "finance team, ~6 people, monthly close",
+      "provenance": "reported"
+    },
+    {
+      "name": "current_behavior",
+      "value": "no PDF export path exists; src/export/ implements CSV and JSON only",
+      "provenance": "observed",
+      "source": "src/export/__init__.py, grep -r 'pdf' src/ (no matches)",
+      "polarity": "negative"
+    },
+    {
+      "name": "acceptance_criteria",
+      "value": "Given a report with 50+ rows, When the user exports as PDF, Then a paginated PDF downloads with the same column order as the CSV export",
+      "provenance": "reported"
+    },
+    {
+      "name": "constraints",
+      "value": "must work on the 3.9 floor declared in pyproject.toml",
+      "provenance": "observed",
+      "source": "pyproject.toml"
+    }
+  ],
+  "verified_against": ["src/export/__init__.py", "pyproject.toml"],
+  "disclosure_required": false
+}

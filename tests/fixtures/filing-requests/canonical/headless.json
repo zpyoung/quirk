@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "type": "bug",
+  "headless": true,
+  "depth": "read",
+  "title": "CI test suite fails on test_export_roundtrip after dependency bump",
+  "target": {
+    "kind": "github",
+    "repo": "acme/reports",
+    "writable": true,
+    "third_party": "no",
+    "visibility": "private"
+  },
+  "template": { "applied": false, "path": null },
+  "fields": [
+    {
+      "name": "current_behavior",
+      "value": "test_export_roundtrip fails with AssertionError: columns out of order",
+      "provenance": "observed",
+      "source": "pytest output, tests/test_export.py::test_export_roundtrip"
+    },
+    {
+      "name": "environment",
+      "value": "reports 2.5.0, Python 3.11.6",
+      "provenance": "observed",
+      "source": "poetry.lock, pyproject.toml"
+    },
+    {
+      "name": "expected_behavior",
+      "provenance": "missing",
+      "reason": "no human in session"
+    },
+    {
+      "name": "steps_to_reproduce",
+      "value": "run `pytest tests/test_export.py::test_export_roundtrip`",
+      "provenance": "observed",
+      "source": "tests/test_export.py"
+    }
+  ],
+  "verified_against": [
+    "pytest output, tests/test_export.py::test_export_roundtrip",
+    "poetry.lock",
+    "pyproject.toml",
+    "tests/test_export.py"
+  ],
+  "disclosure_required": false
+}
