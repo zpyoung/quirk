@@ -116,12 +116,33 @@ is called out rather than silently assumed.
 | `depth` | enum `none` \| `read` \| `run` | Orient | yes |
 | `title` | string | Establish (drafted once core fields resolve) | yes |
 | `target` | object, see below | Orient | yes |
-| `template` | object `{applied: bool, path: string \| null}` | Establish (after template resolution) | yes |
+| `template` | object `{applied: bool, path: string \| null, fields: [{name: string, required: bool, source: "template" \| "core"}]}` | Establish (after template resolution) | yes |
 | `fields` | array of field objects, see below | Establish (may be `[]` at doc creation) | yes |
 | `proposed_solution` | object `{value: string, attributed_to: "reporter"}` | Establish, only if the reporter proposes a fix | no |
 | `verified_against` | array of strings | Establish (grows as `observed` sources accrue) | yes (may be `[]`) |
 | `disclosure_required` | bool | derived, not hand-authored | yes |
 | `halted` | object `{field: string, reason: string}` | only when the non-waivable gate blocks (see below) | absence = not halted |
+
+**The core field set is read from `template.fields`, not recomputed.** `template_resolve.py fields`
+computes the union once when template resolution settles, and its output is written onto the
+document. Every later consumer — `canonical_schema.py --for-emission` above all — reads the union
+from the document it is already holding.
+
+This is what makes the union rule enforceable at all. `canonical_schema.py`'s interface is
+`--input <doc>`; without the union on the document, the gate meant to enforce
+"a template can add requirements but never subtract them"
+([logic.md → Required sections in a template](./logic.md#required-sections-in-a-template)) can only
+see the fixed per-type table, and a template-added required field left unresolved passes
+emission silently. Passing the union as a separate CLI argument was considered and rejected: an
+omitted flag degrades to the weaker check with no signal, which is a failure that hides precisely
+when it matters. A document that carries its own field set cannot be validated against the wrong
+one.
+
+`template.fields` is therefore **required and non-empty on any document reaching `--for-emission`**,
+including the `--no-template` fallback path — there the entries are all `source: "core"`. A document
+whose `template.fields` is absent or empty fails `--for-emission` with a structural error (exit `3`)
+rather than falling back to the per-type table, because a silent fallback is the exact failure this
+key exists to prevent.
 
 **Tech-spec call (logic.md silent):** `template` and `halted` are inventions of this tech spec.
 `logic.md` requires that template resolution "record that no template applied"
@@ -252,9 +273,9 @@ python3 skills/filing-requests/scripts/canonical_schema.py --input <path|-> [--f
 - Checks performed: every `fields[]` entry obeys the provenance/sibling-key table above; every
   `verified_against[]` entry equals (or is contained in) some field's `source` value — see
   [§The "verified against" line](./logic.md#the-canonical-form-is-the-spine); `target` is well-formed.
-- With `--for-emission`: additionally requires every **core** field (the union computed by
-  `template_resolve.py fields`, see below) to be *resolved* — `observed`/`reported` with a value,
-  or `missing` with a `reason` — **except** the two non-waivable fields on a `feature` request
+- With `--for-emission`: additionally requires every **core** field to be *resolved* —
+  `observed`/`reported` with a value, or `missing` with a `reason` — **except** the two
+  non-waivable fields on a `feature` request
   (`problem`, `acceptance_criteria`), which must carry a real value; if either does not, `halted` is
   populated and the overall result is `valid: false` (exit `3`). See
   [The non-waivable gate](#the-non-waivable-gate) below for the full contract.
