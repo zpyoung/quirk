@@ -31,7 +31,11 @@ The skill loads when an agent is about to write, or has just written, a document
 
 **Authoring (short).** Before drafting, three decisions get made: which Diátaxis-style mode the document is in, who reads it, and which passages are procedural versus explanatory. These decisions determine how hard later cutting may go, so making them up front avoids re-deriving them per edit.
 
-**Revision (substantial).** The agent works the checks against the draft, grouped by what the writer is doing. Checks tagged mechanical run without judgment. Checks tagged judgment reduce to a specific yes/no. Where a call genuinely cannot be self-verified, the agent surfaces it to the user rather than resolving it silently — this is the honest substitute for the independent second reader the source material assumes exists and that an agent does not have.
+**Revision (substantial), in two passes.** First the section pass (group F): name the reader and the decision, then decide which sections survive at all. Only then the within-section checks (groups A–E), grouped by what the writer is doing.
+
+The order is load-bearing. Running A–E first produces locally tidy prose inside sections that should not exist, and it is the failure the pass falls into by default: every check from A to E operates at clause, sentence, list, or table grain, so without F the question "should this section exist?" cannot be posed at all.
+
+Checks tagged mechanical run without judgment. Checks tagged judgment reduce to a specific yes/no. Where a call genuinely cannot be self-verified, the agent surfaces it to the user rather than resolving it silently — this is the honest substitute for the independent second reader the source material assumes exists and that an agent does not have.
 
 Output is the revised document plus a report of **what changed and why** — not a checklist transcript. The report exists so the pass is visibly either run or not run; a silent pass can be skipped with no signal, which is how these rules decay.
 
@@ -61,6 +65,14 @@ Every judgment-tier rule in the source assumes an independent reader who can con
 
 Resolution: named self-checks, plus explicit escalation of calls that cannot be self-verified. The skill states this limit rather than implying self-review equals review.
 
+### Section grain is a distinct unit, and it comes first
+
+The largest available win is usually not inside a section — it is a section that should not be there. Compression at clause grain cannot find it, because the question never arises: a check that asks "may I cut this qualifier?" presupposes the surrounding passage belongs.
+
+This is deliberately in tension with A6 (route, don't delete), and the boundary is scope. A6 governs clause- and paragraph-grain material inside a section that is staying: such material has a destination and moves there rather than dying. F2 governs whether the section survives at all, and its answer may be plain deletion. F3 is the guard between them — a section may only be removed after its load-bearing contents are re-homed, which is what stops F from becoming a licence to delete anything inconvenient.
+
+The failure mode this closes is specific and was observed in a worked example before it was written down: the pass routed a section's bulk out, kept two genuinely load-bearing items, and left them in a compressed shell of the original section. The result satisfied every clause-grain check while preserving a section the reader did not want.
+
 ### Proxies are smoke detectors, never targets
 
 A 2024 study found 50 years of plain-language mandates produced no measurable decline in processing-difficulty features. The mandates targeted the proxy. A proxy may prompt a look here; it may never be the optimization target or the evidence a document is good. No readability score is ever a gate.
@@ -73,7 +85,18 @@ The linear channel (screen readers, TTS) is not a competing third reader — it 
 
 ## Rule inventory
 
-24 checks in five groups. Tags as above; `precautionary` marks a rule resting on convergence rather than a settled result, and each carries a falsification note.
+28 checks in six groups. Tags as above; `precautionary` marks a rule resting on convergence rather than a settled result, and each carries a falsification note.
+
+**Group F runs first, and the ordering is part of the contract** — compressing a section you are about to remove is wasted work, and worse, it produces the residue-stub failure F3 exists to prevent.
+
+### F — Does this section belong?
+
+| | Check | Tag |
+|---|---|---|
+| F1 | **Name the reader and the decision**, in one written line: who opens this document, and what they do next. Everything downstream tests against that line. Without it, "is this load-bearing?" has no referent and collapses into the author's own sense of what was hard to write | `judg` |
+| F2 | **Section materiality.** For each section, does its absence change the named decision? If not, the section goes — it is not compressed, tightened, or reduced to a summary | `judg` |
+| F3 | **Re-home before removing.** Every load-bearing item inside a removed section must land in the section that owns it. A removed section may not leave a stub behind. Deleting a section wholesale takes its survivors with it; keeping a compressed shell of it fails F2 | `judg` |
+| F4 | **Detail level.** Within a surviving section, separate detail the named reader needs from detail the *author* wanted on record — process history, what was tried, review rounds, how something was verified. Author-facing detail is a different document, not a shorter paragraph | `judg` |
 
 ### A — What a cut may touch
 
@@ -189,6 +212,13 @@ Concretely: run the revision pass against a real document in this repo that was 
 
 ## Decisions locked
 
+**Section grain** *(added 2026-07-30)*
+- Group F runs before A–E, and the ordering is part of the contract.
+- Section materiality is tested against a written statement of the reader and their decision.
+- A section failing materiality is removed, not compressed.
+- Load-bearing contents are re-homed first; a removed section leaves no stub.
+- Author-facing detail (process history, review rounds, verification narrative) is a different document.
+
 **Which failure the skill fights**
 - Over-compression is the primary target; verbosity secondary.
 - Qualifiers stay in the same visual unit as their claim; wording tightenable, fact not removable.
@@ -262,7 +292,7 @@ Gray-area discovery used `adhd` (6 parallel divergence frames, 25 raw areas). It
 
 ## Deferred ideas
 
-- **optimization-unit** (adhd, expert-blind-spots frame) — whether locally scannable sentences compose into a globally scannable document, or whether per-paragraph optimization destroys document-level scan cues. Genuine and unresolved; dropped only to respect the 4-option cap. Revisit if the skill's output reads as locally clean but hard to navigate.
+*`optimization-unit` was promoted out of this list into rule group F — see the amendment log.*
 - **Interleaved prose-gate plus scoped grid layout** — how to typeset B1's mixed-content output without the layout becoming a new scannability problem. The exploration flagged this and did not solve it.
 - **Genre-specific sub-guides** — whether a README's scannability and an ADR's share enough mechanics to be taught once. Assumed yes by shipping one skill; adhd flagged it as possibly a surface-level illusion.
 - **Documents serving two audiences with conflicting natural sequences** (end user vs contributor). The honest fix is probably two documents; no method exists here for detecting the fork.
@@ -279,7 +309,14 @@ Gray-area discovery used `adhd` (6 parallel divergence frames, 25 raw areas). It
 - **Perishable fact** — a specific default value, version, path, count, or topology that changes at code speed.
 - **Precautionary rule** — a rule resting on convergence across related findings rather than a direct result, shipped with a falsification note.
 - **Serialization check** — verifying a document still works when read as a linear stream.
+- **Section materiality** — whether a section's absence would change the named reader's decision. Distinct from whether its contents are true or well-written.
+- **Residue stub** — what remains when a section's bulk is removed but the section itself is kept, holding the few items that survived. Satisfies clause-grain checks while failing the reader.
+- **Author-facing detail** — content recording how the work was done (process history, review rounds, what was tried, how it was verified) rather than what the reader must know to act.
 
 ## Status & amendments
 
-**Amendments:** none yet.
+**Amendments:**
+
+**2026-07-30 — added rule group F (section grain), 24 checks → 28.** Trialling the pass against a real MR description exposed a structural gap: all 24 checks operated at clause, sentence, list, or table grain, so the pass could compress a section but never ask whether the section should exist. On that example it routed a review-history section's bulk out, kept its two load-bearing items, and left a residue stub — satisfying every check while preserving a section the reader wanted gone.
+
+Changes: new group F (F1 name the reader and decision, F2 section materiality, F3 re-home before removing, F4 detail level), ordered before A–E; a rationale section fixing the F2/A6 boundary by scope; `optimization-unit` promoted out of Deferred Ideas, which is where this gap was already sitting unrecognised. No existing check was altered or removed.
