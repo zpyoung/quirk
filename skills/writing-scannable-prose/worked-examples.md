@@ -18,7 +18,7 @@ mismatched-rate top-up.
 **After**
 
 ```markdown
-**Reader: the on-call engineer deciding whether to enable
+**Reader: the on-call engineer — Decision: whether to enable
 `multicurrency_credit_issuance_enabled`.** Everything below is tested against
 that decision.
 
@@ -26,7 +26,7 @@ This PR reworks the credit guard so a pinned account can no longer receive a
 mismatched-rate top-up.
 ```
 
-Changed: added the one line naming who reads this and what they decide next, sourced from the flag's rollout ticket rather than guessed.
+Changed: added the one line naming who reads this and what they decide next, in the `Reader: <who> — Decision: <what they do next>` form, sourced from the flag's rollout ticket rather than guessed.
 
 Full case: [verbose_example.md](../../docs/quirk/specs/2026-07-29-writing-scannable-prose/verbose_example.md) → [scannable_example.md](../../docs/quirk/specs/2026-07-29-writing-scannable-prose/scannable_example.md).
 
@@ -117,6 +117,8 @@ recorded in ADR-0032).
 
 Changed: "approaches tried and rejected" is author-facing detail with a destination that isn't this document — moved to the ADR that outlives the change. The surviving fact, which mechanism is in use, stays.
 
+Full case: [verbose_example.md](../../docs/quirk/specs/2026-07-29-writing-scannable-prose/verbose_example.md) → [scannable_example.md](../../docs/quirk/specs/2026-07-29-writing-scannable-prose/scannable_example.md) — the same fixture pair shows author-facing detail (the considered-and-rejected approaches) routed out of the surviving sections rather than left inline.
+
 ## A — What a cut may touch
 
 ### A1 — Name the operation
@@ -178,7 +180,7 @@ The service retries failed calls with exponential backoff, so the
 client-side timeout was shortened to 2s to match.
 ```
 
-Changed: cutting the backoff-detail section left "for this reason" pointing at nothing. Resolved by inlining a minimal restatement instead of leaving the dangling reference.
+Changed: the orphaned pointer is "(details in the section below)" — its referent, the section itself, is what gets cut, so both are removed together, A3's cut-pointer-with-referent resolution. "For this reason" points at the retry claim in the same sentence, which survives the cut and was never orphaned; it's reworded to "so" only because the two sentences merged into one.
 
 ### A4 — Cut license by content class
 
@@ -196,7 +198,7 @@ the migration script.
 Check out `main`, then run the migration script.
 ```
 
-Changed: procedural prose cuts hard to bare imperatives. Explanatory prose earns the same treatment only on filler — every caveat and scope condition in it survives (see A2).
+Changed: "you will want to first make sure that you have checked out the latest version of" and "and then you can proceed to" dropped as filler around the same two steps, leaving "Check out `main`, then run the migration script" as bare imperatives.
 
 ### A5 — Dead words
 
