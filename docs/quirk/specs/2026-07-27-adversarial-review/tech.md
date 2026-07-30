@@ -83,6 +83,8 @@ would describe a parsing problem that no longer exists.
 ```
 gate exit 0/1/3  + valid GateResult JSON  -> review completed; verdict is authoritative
   (PASS with zero findings IS the NO_FINDINGS case — a real, clean review)
+gate exit 1/3    + contested_count > 0    -> mid-flight, not completed; the tiebreak stage
+                                             never ran. Adjudicate, do not fix.
 gate exit 4      + valid GateResult JSON  -> NOT_REVIEWABLE; never a pass
 gate exit 2, non-JSON stdout, or no
   stdout at all                           -> the run FAILED; retry once, then walk the
@@ -245,7 +247,10 @@ disposition "contested", quick|standard  -> dropped, suppressed reason "refuted"
                                             (refute wins; there is no tiebreak below deep)
 disposition "contested", deep            -> withheld from findings[], emitted in
                                             contested[] for the caller to route to
-                                            the tiebreak stage; not counted as suppressed
+                                            the tiebreak stage; not counted as suppressed;
+                                            escalates the verdict on presence, so a
+                                            pending contest is never PASS and never
+                                            exits 0 whatever its severity
 disposition "standing" or absent         -> retained, subject to the evidence gate
 ```
 
@@ -400,6 +405,10 @@ contested        : array of Finding
                    # Non-empty only at deep depth: findings the caller must route
                    # to the tiebreak stage. Empty at quick/standard, where refute
                    # wins outright.
+contested_count  : int
+                   # len(contested). A caller reading blocking_count alone sees a
+                   # non-PASS verdict beside zero blocking findings, since a pending
+                   # contest escalates from contested[] and is withheld from findings[].
 ```
 
 `SCHEMA:` Manifest — the replay record from logic.md § Composition contract

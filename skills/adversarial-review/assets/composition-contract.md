@@ -40,9 +40,10 @@ not one of `anthropic`, `google`, `openai` must pass `other` — naming the gap 
 guessing a label the script does not know is a usage error.
 
 **The refute seam is mechanical, not prose.** Run `claims` before the refute dispatch and `merge`
-after it. `claims` assigns IDs (promote emits `id: null`, but refute keys judgments by ID) and holds
-`limitation`/`question` records back from a stage that has no mandate over them. `merge` proves the
-stage ran: every judgment needs a `reason`, and it fails when a claim went unjudged, when a judgment
+after it. `claims` assigns IDs (promote emits `id: null`, but refute keys judgments by ID), holds
+`limitation`/`question` records back from a stage that has no mandate over them, and refuses a
+finding some stage already ruled on — re-staging one discards the ruling and buys a second refute
+round to overturn it. `merge` proves the stage ran: every judgment needs a `reason`, and it fails when a claim went unjudged, when a judgment
 names an unknown ID, when one finding draws two rulings, or when tiebreak rules on something nobody
 contested. Feed its output to `gate` directly. Each script-produced payload carries a `chain` — run ID,
 artifact hash, producing step, and a digest of the input it came from — and every stage refuses
@@ -95,6 +96,7 @@ order, so a suppressed finding leaves a gap in the surviving sequence rather tha
   severity_histogram : {SEVERITY: int}   # by effective severity, survivors only
   blocking_count   : int
   advisory_count   : int
+  contested_count  : int        # pending disputes; non-zero means the result is not final
   regrade_count    : int        # findings a later stage re-graded
   manifest         : { reviewer, target, profile, depth, lens, prepass, verdict,
                        suppressed_count, severity_histogram, blocking_count,
@@ -109,10 +111,16 @@ decides.
 
 | Verdict | Condition | `gate` exit |
 | --- | --- | --- |
-| `CRITICAL_ISSUES` | Any blocking `CRITICAL` | 3 |
-| `NEEDS_FIXES` | Any blocking `HIGH` or `MEDIUM`, no `CRITICAL` | 1 |
-| `PASS` | No blocking finding above `LOW` | 0 |
+| `CRITICAL_ISSUES` | Any blocking `CRITICAL`, or any pending `contested` `CRITICAL` | 3 |
+| `NEEDS_FIXES` | Any blocking `HIGH` or `MEDIUM`, or any pending `contested` finding at all, and no `CRITICAL` | 1 |
+| `PASS` | No blocking finding above `LOW` and nothing contested | 0 |
 | `NOT_REVIEWABLE` | No reviewer resolved at any ladder rung, **or** the pre-pass could not run and the artifact's core claims are unfalsifiable | 4 |
+
+**A pending contest never yields `PASS`, at any severity.** An unadjudicated finding has no settled
+grade — tiebreak may re-grade it in either direction — so `contested[]` escalates on presence rather
+than on severity, and `contested_count` is what explains a non-`PASS` verdict sitting beside a
+`blocking_count` of zero. Run the tiebreak stage and gate again; the second gate's verdict is the
+final one.
 
 A `HIGH` or `MEDIUM` that only the recall stage asserted, at `LOW` confidence, is an **advisory**:
 `blocking: false`, reported in `findings[]`, not escalating the verdict. `CRITICAL` is exempt.
@@ -179,6 +187,8 @@ run at all without `--model` and `--prepass`, the two inputs that make the condi
 ```
 gate exit 0/1/3 + valid GateResult JSON   -> review completed; the verdict is authoritative.
                                              PASS with zero findings IS the clean-review case.
+gate exit 1/3   + contested_count > 0     -> mid-flight, not completed. The tiebreak stage
+                                             never ran. Adjudicate; do not spend a fix round.
 gate exit 4     + valid GateResult JSON   -> NOT_REVIEWABLE. Never a pass.
 gate exit 2, non-JSON stdout, or no
   stdout at all                           -> the run FAILED. Retry once, then walk the model
@@ -208,7 +218,8 @@ to `quick` gets a weaker guarantee than it thinks.
 At `deep` depth, `contested[]` is non-empty when the refute stage disagreed on judgment rather than
 evidence. Those findings are **withheld** from `findings[]` and are **not** counted as suppressed;
 routing them to `tiebreak-prompt.md` and merging the rulings back is the caller's job. Ignoring
-`contested[]` silently drops real findings.
+`contested[]` silently drops real findings — which is why a gate result carrying one is never
+`PASS` and never exits 0, and why `manifest` refuses to record it.
 
 ## The reviewer's tool grant is wider than it looks
 

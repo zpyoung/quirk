@@ -1416,7 +1416,7 @@ def run_gate(
     questions.sort(key=finding_order)
 
     blocking = [f for f in survivors if f["blocking"]]
-    verdict = compute_verdict(blocking, model, prepass, survivors)
+    verdict = compute_verdict(blocking, model, prepass, survivors, contested)
     payload = {
         "verdict": verdict,
         "findings": survivors,
@@ -1437,6 +1437,10 @@ def run_gate(
         },
         "blocking_count": len(blocking),
         "advisory_count": len(survivors) - len(blocking),
+        # Without this a caller rendering `blocking_count` sees a non-PASS verdict
+        # beside zero blocking findings, since a pending contest escalates from
+        # `contested[]` and is withheld from `findings[]`.
+        "contested_count": len(contested),
         "regrade_count": sum(1 for f in survivors if f.get(ADJUDICATED_SEVERITY)),
     }
     if gate_chain:
@@ -1447,17 +1451,24 @@ def run_gate(
 def compute_verdict(
     blocking: list[dict[str, Any]], model: dict[str, Any], prepass: dict[str, Any],
     survivors: list[dict[str, Any]] | None = None,
+    contested: list[dict[str, Any]] | None = None,
 ) -> str:
     """`blocking` is the subset that may escalate; `survivors` is everything reported.
 
     They differ by the advisories — real findings that no stage beyond promote
     stood behind. Those still print, and they still say `PASS` is not a clean bill
     of health, but they do not by themselves buy the caller another fix round.
+
+    `contested` is the deep path's pending disputes, and it never yields `PASS`.
     """
+    contested = contested or []
     # NOT_REVIEWABLE is evaluated first and is never a synonym for PASS: a review
     # that could not happen must not read like one that found nothing.
     if not model.get("resolved", False):
         return "NOT_REVIEWABLE"
+    # A *contested* unfalsifiable-claim is deliberately not enough: the stages disagreed
+    # over whether the artifact can be reviewed at all, which is a pending dispute to
+    # adjudicate, not an established finding that no review happened.
     if prepass.get("status") == "could-not-run" and any(
         f.get("category") == "unfalsifiable-claim"
         for f in (survivors if survivors is not None else blocking)
@@ -1465,9 +1476,15 @@ def compute_verdict(
         return "NOT_REVIEWABLE"
 
     severities = {effective_severity(f) for f in blocking}
-    if "CRITICAL" in severities:
+    if "CRITICAL" in severities or any(
+        effective_severity(f) == "CRITICAL" for f in contested
+    ):
         return "CRITICAL_ISSUES"
-    if severities & {"HIGH", "MEDIUM"}:
+    # A pending contest has no settled grade — tiebreak may re-grade it in either
+    # direction — so it cannot buy `PASS` even at LOW. `manifest` already refuses the
+    # state; the verdict has to refuse it too, because a caller that stops at exit 0
+    # never reaches the manifest to be told.
+    if severities & {"HIGH", "MEDIUM"} or contested:
         return "NEEDS_FIXES"
     return "PASS"
 
@@ -1498,6 +1515,17 @@ def build_claims(findings_path: str, resolve_path: str,
         raise UsageError("findings input must be a JSON array")
     for index, finding in enumerate(findings):
         validate_finding(finding, index, id_prefix)
+        # Re-staging an adjudicated finding is a re-roll: the ruling that killed it is
+        # discarded and a fresh refute round gets to answer the same claim differently.
+        # One refutation per claim, so a stage that already ruled ends the matter.
+        if finding.get("stage") in ("refute", "tiebreak") \
+                or finding.get("disposition", "standing") != "standing":
+            raise UsageError(
+                f"finding {index} has already been adjudicated (stage "
+                f"{finding.get('stage')!r}, disposition "
+                f"{finding.get('disposition', 'standing')!r}): claims stages the promote "
+                f"stage's output, and a ruled claim is not re-opened"
+            )
     findings = list(findings)
     findings.sort(key=finding_order)
     assign_ids(findings, id_prefix)

@@ -141,6 +141,11 @@ refute keys its judgments by `id`, so the IDs have to exist before the dispatch.
 withholds `limitation` and `question` records: refute has no mandate over a claim nobody offered as
 a defect, and staged as claims they come back `refuted`.
 
+It takes the promote stage's output and **refuses an already-adjudicated finding** — anything at
+stage `refute` or `tiebreak`, or carrying a `disposition` other than `standing`. Re-staging a ruled
+claim is a re-roll: the ruling that killed it is discarded and a fresh refute round gets to answer
+differently. One refutation per claim.
+
 `merge` reads either `claims` output or a bare findings array, applies each ruling — `disposition`,
 `confidence`, `severity` onto `adjudicated_severity`, `reason` onto `ruling_reason` — and **fails if
 any claim went unjudged, if a judgment names an unknown ID, or if one finding draws two rulings**.
@@ -198,6 +203,12 @@ That merge expects a ruling for every `contested` finding and nothing else, and 
 `contested` — tiebreak is the last word. The manifest refuses a gate result that still has
 `contested[]`, so a deep review cannot be recorded over a dispute nobody settled.
 
+**A gate result with a pending `contested[]` is mid-flight, not a verdict.** It never reads `PASS`
+and never exits 0, whatever the contested severities are — a caller that stops at exit 0 would never
+reach the manifest to be told, and an unadjudicated finding has no settled grade to pass on. Expect
+`NEEDS_FIXES` with `blocking_count: 0` and `contested_count` above zero on the first gate of a deep
+run; that is this step's cue, not a fix round. The second gate, after the tiebreak merge, is final.
+
 **9. Emit.**
 
 ```bash
@@ -248,9 +259,9 @@ promote proposed.
 
 | Verdict | Condition | Exit |
 | --- | --- | --- |
-| `CRITICAL_ISSUES` | Any blocking `CRITICAL` | 3 |
-| `NEEDS_FIXES` | Any blocking `HIGH` or `MEDIUM`, no `CRITICAL` | 1 |
-| `PASS` | No blocking findings above `LOW` | 0 |
+| `CRITICAL_ISSUES` | Any blocking `CRITICAL`, or a pending `contested` `CRITICAL` | 3 |
+| `NEEDS_FIXES` | Any blocking `HIGH` or `MEDIUM`, or anything pending in `contested[]`, and no `CRITICAL` | 1 |
+| `PASS` | No blocking findings above `LOW`, and nothing contested | 0 |
 | `NOT_REVIEWABLE` | No reviewer resolved at any rung, **or** the pre-pass could not run and the artifact's core claims are unfalsifiable | 4 |
 
 **A finding blocks unless it is a promote-only hypothesis** — a `HIGH`/`MEDIUM` at `LOW` confidence
@@ -393,4 +404,5 @@ correctness, so say what the review covered rather than that the artifact is sou
 | "Everything got suppressed, but the verdict is `PASS`" | A near-total kill rate means the run is untrustworthy. Say so. |
 | "I'll summarize the findings in my own words" | Derive the summary from `GateResult` or it drifts from the block below it. |
 | "`contested[]` is probably fine to skip" | At `deep` those are withheld findings, not dropped ones. Route them to tiebreak. |
+| "`NEEDS_FIXES` with no blocking findings — nothing to do" | Read `contested_count`. The dispute needs adjudicating, not fixing. |
 | "It's a small change, `quick` is fine" | `quick` cannot deliver structural independence, and its `PASS` says so. Choose it knowingly. |

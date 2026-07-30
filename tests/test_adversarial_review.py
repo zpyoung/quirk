@@ -1485,7 +1485,7 @@ def test_contested_finding_with_false_evidence_is_falsified_not_tiebroken(tmp_pa
 
 def test_contested_at_deep_is_withheld_not_suppressed(tmp_path):
     result = gate(tmp_path, [_finding(disposition="contested")],
-                  extra=("--depth", "deep"), expect=0)
+                  extra=("--depth", "deep"), expect=1)
     assert result["findings"] == []
     assert [f["id"] for f in result["contested"]] == ["F1"]
     assert result["suppressed_count"] == 0
@@ -1582,7 +1582,7 @@ def test_suppressed_records_carry_a_usable_id(tmp_path):
 
 def test_contested_records_carry_a_usable_id(tmp_path):
     result = gate(tmp_path, [_finding(id=None, disposition="contested")],
-                  extra=("--depth", "deep"), expect=0)
+                  extra=("--depth", "deep"), expect=1)
     assert result["contested"][0]["id"], "contested record has no usable id"
 
 
@@ -1596,6 +1596,40 @@ def test_ids_are_unique_across_survivors_suppressed_and_contested(tmp_path):
            + [s["id"] for s in result["suppressed"]])
     assert all(ids), f"blank id present: {ids}"
     assert len(ids) == len(set(ids)), f"duplicate ids: {ids}"
+
+
+def test_a_pending_contest_cannot_read_as_a_clean_review(tmp_path):
+    """The bypass: `manifest` refuses a gate result that still has `contested[]`, but a
+    caller gating on exit 0 stops at the gate and never reaches the manifest to hear it."""
+    result = gate(tmp_path, [_finding(disposition="contested", severity="LOW",
+                                      confidence="LOW")],
+                  extra=("--depth", "deep"), expect=1)
+    assert result["verdict"] == "NEEDS_FIXES"
+    assert result["blocking_count"] == 0
+    assert result["contested_count"] == 1
+
+
+def test_a_contested_critical_escalates_rather_than_reading_as_needs_fixes(tmp_path):
+    result = gate(tmp_path, [_finding(disposition="contested", severity="CRITICAL")],
+                  extra=("--depth", "deep"), expect=3)
+    assert result["verdict"] == "CRITICAL_ISSUES"
+
+
+def test_a_contested_unfalsifiable_claim_is_a_dispute_not_an_unreviewable_artifact(tmp_path):
+    """A standing one means both stages agreed nothing here can be checked. A contested
+    one means they disagreed about that, which tiebreak settles."""
+    result = gate(tmp_path, [_finding(disposition="contested", category="unfalsifiable-claim")],
+                  prepass_status="could-not-run", extra=("--depth", "deep"), expect=1)
+    assert result["verdict"] == "NEEDS_FIXES"
+
+
+def test_contested_at_shallow_depth_does_not_escalate(tmp_path):
+    """Below `deep` a contest resolves in the refuter's favour and is suppressed, so
+    there is no pending dispute left for the verdict to withhold PASS over."""
+    result = gate(tmp_path, [_finding(disposition="contested")], extra=("--depth", "standard"))
+    assert result["verdict"] == "PASS"
+    assert result["contested_count"] == 0
+    assert result["suppressed_count"] == 1
 
 
 def test_gate_echoes_the_depth_it_used(tmp_path):
@@ -2365,6 +2399,38 @@ def test_claims_rejects_a_quick_shaped_payload(tmp_path):
     proc = run_ar("claims", "--findings", _write(tmp_path, "f.json", {"findings": [], "suppressed": []}),
                   "--resolve", _write(tmp_path, "res.json", _resolved()))
     assert proc.returncode == 2
+
+
+def test_claims_refuses_to_re_stage_a_refuted_finding(tmp_path):
+    """The re-roll: extract a merge's findings[] as a bare array and stage it again, and
+    the ruling that killed the claim is discarded for a fresh refute round to overturn."""
+    ruled = [_finding(id="F1", stage="refute", disposition="refuted",
+                      ruling_reason="evidence does not reproduce")]
+    proc = run_ar("claims", "--findings", _write(tmp_path, "f.json", ruled),
+                  "--resolve", _write(tmp_path, "res.json", _resolved()))
+    assert proc.returncode == 2
+    assert "already been adjudicated" in proc.stderr
+
+
+def test_claims_refuses_to_re_stage_a_contested_finding(tmp_path):
+    """A contest belongs to tiebreak, and re-staging it buys a second refute instead."""
+    proc = run_ar("claims",
+                  "--findings", _write(tmp_path, "f.json",
+                                       [_finding(id="F1", stage="refute", disposition="contested")]),
+                  "--resolve", _write(tmp_path, "res.json", _resolved()))
+    assert proc.returncode == 2
+    assert "already been adjudicated" in proc.stderr
+
+
+def test_claims_refuses_a_tiebreak_stage_finding_even_when_standing(tmp_path):
+    """Stripping the disposition back to `standing` must not launder the stage away."""
+    proc = run_ar("claims",
+                  "--findings", _write(tmp_path, "f.json",
+                                       [_finding(id="F1", stage="tiebreak",
+                                                 disposition="standing")]),
+                  "--resolve", _write(tmp_path, "res.json", _resolved()))
+    assert proc.returncode == 2
+    assert "already been adjudicated" in proc.stderr
 
 
 def test_merge_applies_dispositions_and_severity_rulings(tmp_path):

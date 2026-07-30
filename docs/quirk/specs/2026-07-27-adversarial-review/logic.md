@@ -96,10 +96,14 @@ mechanically from the surviving findings:
 
 | Verdict | Condition |
 |---|---|
-| `CRITICAL_ISSUES` | Any surviving CRITICAL finding |
-| `NEEDS_FIXES` | Any surviving HIGH or MEDIUM finding, no CRITICAL |
-| `PASS` | Only LOW findings survive, or none |
+| `CRITICAL_ISSUES` | Any surviving CRITICAL finding, or a contested one awaiting tiebreak |
+| `NEEDS_FIXES` | Any surviving HIGH or MEDIUM finding, or anything at all awaiting tiebreak, and no CRITICAL |
+| `PASS` | Only LOW findings survive, or none, and nothing awaits tiebreak |
 | `NOT_REVIEWABLE` | No adversary resolved at any ladder rung, **or** the pre-pass could not run and the artifact's core claims are unfalsifiable |
+
+A contested finding awaiting tiebreak has no settled grade — the tiebreak may move it in either
+direction — so it withholds `PASS` on presence rather than on severity. The gate that runs after the
+tiebreak merge produces the final verdict.
 
 `NOT_REVIEWABLE` is never a synonym for `PASS`. A calling skill that treats an unrecognized
 verdict as passing is misusing the contract; the skill's own composition template says so
