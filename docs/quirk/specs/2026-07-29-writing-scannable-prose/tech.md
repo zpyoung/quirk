@@ -52,7 +52,7 @@ Nothing pre-existing is modified. What gets created, exactly:
 - `skills/writing-scannable-prose/evidence-and-limits.md` — new file, structure per "File manifest" below.
 - `tests/test_writing_scannable_prose_skill.py` — new file, per "Test contract" below. Naming follows the repo's per-skill test-file precedent (`tests/test_adhd_skill.py`, both reference-file constants and per-test docstrings), not the single generic `tests/test_skill.py` (that name is already claimed by `typed-artifacts` and is a one-off, not a convention — confirmed by grep: it is the only test module using the bare name).
 - `README.md:9` — the line `**21 skills** under \`skills/\` covering …` must become `**22 skills**`. This is not optional busywork: `tests/test_adhd_skill.py::test_readme_skill_count_matches_skill_directory` already asserts the digit in that line equals the count of `skills/*/SKILL.md` files, and it will fail the moment the new directory lands with no README edit. No new test is needed for this — the existing one already covers it.
-- `.claude-plugin/plugin.json` — **no change required.** It lists `"skills"` as a directory path (`.claude-plugin/plugin.json:13`), not an enumerated list of skill names; a new subdirectory is auto-discovered. Confirmed by reading the file: its `keywords` array names specific *techniques* (`"adhd"`, `"divergent-ideation"`, …) for discoverability, not skill directory names, so adding scannable-prose keywords there is optional polish, not a contract this spec requires.
+- `.claude-plugin/plugin.json` — **no change required, re-derived empirically rather than from a specific line.** Correction from an earlier draft of this spec: `.claude-plugin/plugin.json:13` is not a directory-path declaration — it is the string `"skills"` inside the `keywords` array (line 12 opens `"keywords": [`), i.e. the first of sixteen freeform marketplace-search tags. The file contains no field that enumerates or paths to individual skills at all. This repo's own files don't state the discovery mechanism explicitly either (checked: no line in `README.md`, `.claude-plugin/marketplace.json`, or `skills/using-quirk/SKILL.md` documents it for Claude Code specifically — `using-quirk/SKILL.md` states auto-discovery only for Copilot CLI, "Skills are auto-discovered from installed plugins"), so the exact mechanism is a platform-level convention external to what this repo declares, not something this spec can cite a repo line for. What *is* verifiable in-repo: of the 21 existing skill directories, only 2 (`adhd`, `typed-artifacts`) happen to appear as `keywords` entries, and the other 19 — including `writing-skills`, `writing-plans`, `writing-tech-spec`, `systematic-debugging`, `test-driven-development` — are absent from both `plugin.json` and `marketplace.json` entirely, yet all load and run (this very tech spec was authored using several of the absent ones). That precedent is the basis for the conclusion: a 22nd skill needs no `plugin.json` entry to be discoverable, because most of the current 21 have none. Adding `keywords` for `writing-scannable-prose` remains available as optional discoverability polish, not a requirement.
 
 Back-links: logic.md's [Rule inventory](logic.md#rule-inventory), [File layout](logic.md#file-layout).
 
@@ -82,7 +82,7 @@ Target: **~1,650 words total, under 350 lines** for SKILL.md's body (frontmatter
 | Frontmatter | Verbatim block above | — (not counted) |
 | Overview | Dependency-checker framing, orphaning-vs-verbosity, two-reader model, gate (fires on claims/reasoning/procedure, not line count) | 130 |
 | Authoring inputs | The 2-row table: reader+decision → F1/F2/F4; procedural-vs-explanatory → A4. States mode is *not* an authoring input | 70 |
-| Revision protocol | The two-pass procedure — see "Revision protocol as executable procedure" below for its exact shape | 180 |
+| Revision protocol | The two-pass procedure — see "Revision protocol as executable procedure" below for its exact shape, including the F1-undecided fail-safe (F2 skips, sections default to keep) and the passage-grain procedural/explanatory classification A4 consumes | 210 |
 | Escalation modes | Blocking (F2 only) vs. non-blocking (A–E), one short table, the reversibility justification in one sentence | 90 |
 | Group F table + F4 category table | 4 rows + the 5-row category→destination table | 190 |
 | Group A table | 6 rows | 130 |
@@ -97,7 +97,7 @@ Target: **~1,650 words total, under 350 lines** for SKILL.md's body (frontmatter
 | Report shape | The revision-report shape, see below | 90 |
 | Real-user gap | One short paragraph | 40 |
 | Links out | Pointers to `worked-examples.md` and `evidence-and-limits.md` | 20 |
-| **Total** | | **~1,590** |
+| **Total** | | **~1,620** |
 
 Everything longer than the budget above routes to a reference file, never inline — in particular, per-check worked examples and the grounded/precautionary evidence table are **reference-file content by construction**, not a SKILL.md section; SKILL.md states the tag and one line of falsification note at most.
 
@@ -120,12 +120,12 @@ Back-links: logic.md's [Rule inventory](logic.md#rule-inventory), [Structure by 
 This is the literal step sequence SKILL.md's "Revision protocol" section instructs the agent to run — write it in SKILL.md as numbered steps, not prose paragraphs, so it is followed rather than summarized:
 
 1. **Derive F1's line.** Check sibling artifacts of the same genre, the project template if one exists, and whether the content already lives somewhere canonical. State the result as one visible line: `Reader: <who> — Decision: <what they do next>`. If no repo signal resolves it, say so explicitly rather than guessing silently.
-2. **Run F2 against every section**, using F1's line as the test: does this section's absence change the named decision? Mark each section keep/remove.
+2. **Run F2 against every section**, using F1's line as the test: does this section's absence change the named decision? Mark each section keep/remove. **If step 1 could not derive F1's line, F2 does not run at all: every section defaults to keep.** This is the fail-safe direction, not an arbitrary tiebreak — F2 removal is the one edit in this whole protocol that a report cannot walk back (per logic.md's "Removal is the one edit that gets a checkpoint"), so removing a section against a premise nobody stated is strictly worse than removing nothing. Name the undecided F1 line in the report as a non-blocking escalation (see "Report shape") so the user can supply it and re-run F2 later. This does not add a second blocking point: logic.md's escalation-modes section locks exactly one blocking case — F2 removals proposed for an answer — and halting the entire pass here to demand an F1 line would create a second, which the locked design does not have.
 3. **For every section marked remove, run F3**: name where each load-bearing item inside it re-homes. A section with an item that has no destination is not yet ready to propose — find the destination or reclassify the item as not load-bearing.
-4. **Emit the removal proposal** — see "Removal proposal shape" below — as one batch, covering every section marked remove in steps 2–3 together. **Stop and wait for the user's answer before proceeding to step 5.** This is the one blocking point in the whole protocol.
+4. **Emit the removal proposal** — see "Removal proposal shape" below — as one batch, covering every section marked remove in steps 2–3 together. **Stop and wait for the user's answer before proceeding to step 5.** This is the one blocking point in the whole protocol. (If step 2 produced no removals — either because every section passed F2, or because F1 could not be derived — this step emits nothing and the pass proceeds straight to step 5.)
 5. **Run F4** on every surviving section: route author-facing detail (per the category table) to its named destination; leave a deliberately-not-made decision in place.
-6. **Run groups A–E** on the surviving, F4-routed content. No step here pauses for a reply. Where a specific judgment call cannot be self-verified, apply the edit provisionally and add one line to the report (see "Report shape") naming the call and enough detail to reverse it.
-7. **Emit the revision report** — see "Report shape" below — covering everything steps 1–6 changed and why, including the non-blocking escalations from step 6.
+6. **Run groups A–E** on the surviving, F4-routed content. Before applying A4 to any given passage, classify that passage procedural (steps executed) or explanatory (reasoning believed) — this is the second authoring-table input (logic.md's Data flow), made at **passage grain only**, never at document or section grain, and consumed by A4 alone. When the authoring phase already set this for a freshly-drafted passage, reuse that call; for a passage entering the pass in revision-only mode — the common case, since the authoring phase never ran against an existing draft — classify it in place, immediately before A4 fires on it, so A4 never consumes a classification the procedure itself never produced. No step in this group pauses for a reply. Where a specific judgment call — including this classification, when genuinely ambiguous — cannot be self-verified, apply the edit provisionally and add one line to the report (see "Report shape") naming the call and enough detail to reverse it.
+7. **Emit the revision report** — see "Report shape" below — covering everything steps 1–6 changed and why, including the non-blocking escalations from steps 2 and 6.
 
 **Removal proposal shape** (step 4's output):
 
@@ -135,7 +135,7 @@ This is the literal step sequence SKILL.md's "Revision protocol" section instruc
 |---|---|---|---|
 ```
 
-One row per section marked for removal. The `Load-bearing items` / `Destination` columns are F3's output attached to F2's proposal — this is what stops a removal proposal from being approved without also committing to where its survivors land.
+One row per section marked for removal. The `Load-bearing items` / `Destination` columns are F3's output attached to F2's proposal — this is what stops a removal proposal from being approved without also committing to where its survivors land. Empty (no rows) whenever step 2 found nothing to remove, including the F1-undecided case — an empty proposal is not itself the F1 escalation; that is named separately in the report.
 
 **Report shape** (step 7's output):
 
@@ -144,6 +144,7 @@ One row per section marked for removal. The `Load-bearing items` / `Destination`
 - Removed: <section> — <one-line F2 reason>. Moved: <item> → <destination> (repeat per item)
 - Routed (F4): <item> — <category> → <destination>
 - Changed (A–E): <check ID> — <what changed> — <why>
+- Escalated (non-blocking, F1 undecided): <repo signals checked> — <why no reader/decision line could be derived> — F2 skipped, every section kept
 - Escalated (non-blocking, A–E only): <check ID> — <the call> — <how to reverse it>
 ```
 
@@ -157,9 +158,9 @@ This is a Markdown skill with no function signatures, but it has one behavioral 
 
 **CONTRACT:** (procedural, not code) the revision pass, run against any document:
 - Preconditions: a document containing claims, reasoning, or procedure (the Gate in logic.md's Behavior and scenarios); an explicit user request for expansiveness on some part of the document, if any, is known before the pass starts.
-- Postconditions: every section either passed F2 or was proposed for removal with F3 re-homing named; every surviving section passed F4 routing; groups A–E ran over the surviving, routed content; a report was produced.
-- Invariants: F2 removals are never performed unasked; A–E never pauses for a reply; no qualifier, scope condition, sample size, or exception attached to a surviving claim is removed (A2); no numeric threshold is introduced anywhere in the output document by this skill's own suggestions.
-- Error/edge behavior: if F1 cannot be derived from any repo signal, the pass states that explicitly rather than fabricating a reader/decision line; if the user's explicit request conflicts with a cut, the request wins and the skill states which checks it still applied (structure, orphan checks, linear channel) per logic.md's deference scenario.
+- Postconditions: every section either passed F2, was proposed for removal with F3 re-homing named, or defaulted to keep because F1 could not be derived; every surviving section passed F4 routing; groups A–E ran over the surviving, routed content, with every A4-governed passage classified procedural or explanatory immediately before A4 fired on it; a report was produced.
+- Invariants: F2 removals are never performed unasked; F2 never removes a section when F1's line could not be derived (fail-safe default: keep); A–E never pauses for a reply; A4 never runs against a passage with no procedural/explanatory classification; no qualifier, scope condition, sample size, or exception attached to a surviving claim is removed (A2); no numeric threshold is introduced anywhere in the output document by this skill's own suggestions.
+- Error/edge behavior: if F1 cannot be derived from any repo signal, the pass states that explicitly, skips F2 entirely (no section is removed on an underived premise), and names the gap as a non-blocking escalation rather than halting the whole pass or fabricating a reader/decision line; if the user's explicit request conflicts with a cut, the request wins and the skill states which checks it still applied (structure, orphan checks, linear channel) per logic.md's deference scenario.
 
 Back-links: logic.md's [Behavior and scenarios](logic.md#behavior-and-scenarios), [Key decisions and rationale](logic.md#key-decisions-and-rationale).
 
