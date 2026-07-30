@@ -229,18 +229,25 @@ determines the field set, so a silent pick is a silent change to what gets asked
 
 ### Required sections in a template
 
-GitHub YAML issue forms mark required inputs with `validations.required`, and that marking is
-authoritative: those inputs are the core fields, and the rest are optional.
+Three rules apply in order, and they apply identically to YAML forms and markdown templates:
 
-Markdown templates have no such mechanism, and inventing a convention for them would be guessing
-at a maintainer's intent from formatting. So for a markdown template the rule is: **its sections
-supply the artifact's structure and ordering, and the per-type core supplies which fields are
-required.** A markdown template's headings therefore shape the output, while the core decides what
-blocks emission. Where the template omits a section the per-type core requires, that field is
-still gathered and is appended in core order after the template's own sections.
+1. **The template supplies structure and ordering.** Its sections, in its order, shape the emitted
+   artifact.
+2. **Requiredness is the union of the template's own markings and the per-type core.** A GitHub
+   YAML form declares its markings with `validations.required`, and those inputs are required.
+   Markdown templates have no such mechanism, so they contribute no markings — inventing a
+   convention from their formatting would be guessing at a maintainer's intent. In both cases the
+   per-type core is *additive*: any core field the template omits is still gathered, and is
+   appended in core order after the template's own sections. A template can add requirements; it
+   cannot subtract them.
+3. **The non-waivable gate is global and overrides both.** No template, of either kind, can waive
+   a feature request's `problem` or `acceptance_criteria`. A YAML form that marks neither required
+   does not thereby make them optional — it only declines to add requirements of its own.
 
-This keeps two guarantees that would otherwise collide: the maintainer's declared structure is
-honored, and a feature request still cannot ship without `problem` and `acceptance_criteria`.
+The asymmetry to notice is that markdown's lack of markings is not a special case needing its own
+rule; it is the empty set going into the same union. That keeps two guarantees that would
+otherwise collide: the maintainer's declared structure and requirements are honored, and a feature
+request still cannot ship without a stated problem and a testable criterion.
 
 With type confirmed and the template resolved, the field set is fixed. The skill walks it. For
 each field it first attempts resolution by inspection at the permitted depth; what resolves becomes
@@ -264,17 +271,24 @@ and anything without a mapping is preserved rather than dropped:
 
 | From (bug) | To (feature) | Why |
 |---|---|---|
-| `steps_to_reproduce` | `current_behavior` | what the user did and saw is a description of how the system behaves today |
+| `current_behavior` | `current_behavior` | same field, carried as-is |
+| `steps_to_reproduce` | appended to `current_behavior` if that field already holds content, else becomes it | what the user did and saw describes how the system behaves today |
 | `expected_behavior` | `acceptance_criteria`, as a `reported` draft the user must confirm | it states a desired outcome, but a criterion has to be testable and the user's phrasing may not be |
 | `environment` | `constraints` | where it has to work is a constraint on the feature |
-| `current_behavior` | `current_behavior` | same field, carried as-is |
 
 | From (feature) | To (bug) | Why |
 |---|---|---|
 | `current_behavior` | `current_behavior` | same field, carried as-is |
 | `acceptance_criteria` | `expected_behavior` | the desired outcome becomes the expectation that was violated |
 | `who_benefits` | dropped from the core, retained as an optional `affected_users` | who wants it is context for a bug, not a required field |
-| `problem` | `current_behavior` if that field is still empty, else retained as optional context | the problem statement usually describes the symptom |
+| `problem` | appended to `current_behavior` if that field already holds content, else becomes it | the problem statement usually describes the symptom |
+
+**Where two source fields map to one destination, the table is applied top to bottom and the later
+row appends rather than overwrites** — the destination's existing content is kept and the incoming
+value is added below it, under a short lead-in naming where it came from. Ordering the identity
+mapping first is what makes this deterministic: `current_behavior` lands before
+`steps_to_reproduce` is appended to it, and `problem` before it is folded in on the reverse
+direction.
 
 A field with no row in the applicable table is retained as an optional field under its original
 name and rendered after the new type's sections. Every carried field keeps the provenance it
@@ -510,8 +524,11 @@ and traceback are resolved by inspection; expected behavior and business impact 
   discards non-templates (`config.yml`), matches the confirmed type against each candidate's name,
   labels, and filename stem, asks the user when more than one still matches, and falls back to the
   per-type core when none do — it never picks silently
-- A YAML form's `validations.required` is authoritative for which fields are core; a markdown
-  template supplies structure and ordering only, with the per-type core deciding what is required
+- A template supplies structure and ordering; requiredness is the **union** of the template's own
+  markings (a YAML form's `validations.required`; markdown contributes none) and the per-type core,
+  so a template can add requirements but never subtract them, and core fields the template omits
+  are appended in core order. The non-waivable gate is global and overrides both — no template of
+  either kind can waive a feature request's `problem` or `acceptance_criteria`
 - Absent a template: required core plus optional extras, with empty sections pruned
 - Unobtainable fields are emitted as sections marked missing, with the reason — except the two
   non-waivable fields (a feature request's `problem` and `acceptance_criteria`), which halt
@@ -711,3 +728,23 @@ answers gathered since.
   the spec's own schema field names and paths it plans to create — which the `spec-design` profile
   itself classifies as "not a finding at all" — but no stage adjudicated them, so they blocked by
   default. Left standing rather than self-graded.
+
+- **2026-07-30 — adversarial review round 2 (closure).** Bounded closure pass over the round-1 fix
+  delta, same reviewer and profile, lens narrowed to re-checking the closed findings and hunting
+  regressions in the delta itself. `section-coverage` verified passing. F1 and F3 held. **Two
+  regressions introduced by the round-1 fixes were caught and closed:**
+  - The YAML rule ("`validations.required` is authoritative: those inputs are the core fields, and
+    the rest are optional") contradicted the global non-waivable guarantee, and specified an append
+    behavior for markdown templates that it never stated for YAML. Replaced with three ordered
+    rules applying identically to both kinds: template supplies structure; requiredness is the
+    union of template markings and the per-type core, so a template can add but never subtract;
+    the non-waivable gate is global and overrides both.
+  - The bug → feature drift table mapped both `steps_to_reproduce` and `current_behavior` onto
+    `current_behavior` with no collision rule, while the reverse table handled its `problem`
+    collision. Added an explicit rule — tables apply top to bottom, later rows append rather than
+    overwrite, identity mappings ordered first so the result is deterministic — and made the
+    reverse table's `problem` row use the same append semantics.
+
+  These two were raised by a single promote dispatch with no independent refute stage, so they
+  carry no refutation ruling. Both were verified directly against the text before fixing: a table
+  with two rows sharing one destination, and a local rule contradicting a global one.
