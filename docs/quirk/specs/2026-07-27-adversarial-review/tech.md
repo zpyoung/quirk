@@ -85,6 +85,9 @@ gate exit 0/1/3  + valid GateResult JSON  -> review completed; verdict is author
   (PASS with zero findings IS the NO_FINDINGS case — a real, clean review)
 gate exit 1/3    + contested_count > 0    -> mid-flight, not completed; the tiebreak stage
                                              never ran. Adjudicate, do not fix.
+any exit + unreviewed_paths nonempty      -> the verdict does not cover those files; they
+                                             appeared after the artifact was captured and no
+                                             stage saw them. Report alongside the verdict.
 gate exit 4      + valid GateResult JSON  -> NOT_REVIEWABLE; never a pass
 gate exit 2, non-JSON stdout, or no
   stdout at all                           -> the run FAILED; retry once, then walk the

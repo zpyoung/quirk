@@ -748,3 +748,50 @@ def test_the_judgment_examples_survive_the_merge_validator(tmp_path, asset, stag
     assert proc.returncode == 0, (
         f"{asset}'s own example is refused by `merge --stage {stage}`: {proc.stderr}"
     )
+
+
+# --- the decision tables must keep up with what the gate emits ----------------------
+#
+# Every defect this skill's own review rounds rated most serious was the same shape: the
+# caller-facing contract promising something the code no longer did, or staying silent
+# about something it had started doing. A field that bounds what a verdict covers is
+# useless if the tables a caller gates on never mention it.
+
+SCOPE_BOUNDING_FIELDS = ("contested_count", "unreviewed_paths", "advisory_count")
+
+CALLER_FACING = (
+    SKILL_PATH,
+    ASSETS_DIR / "composition-contract.md",
+)
+
+
+@pytest.mark.parametrize("field", SCOPE_BOUNDING_FIELDS)
+@pytest.mark.parametrize("doc", CALLER_FACING, ids=lambda p: p.name)
+def test_scope_bounding_fields_appear_in_the_caller_facing_docs(field, doc) -> None:
+    assert field in doc.read_text(), (
+        f"{doc.name} never mentions `{field}`, so a caller reading it cannot know the "
+        f"verdict's scope is bounded by it"
+    )
+
+
+def test_the_clean_versus_crashed_table_covers_every_qualifier(
+) -> None:
+    """The table a caller gates on. `contested_count` earned a row there; anything that
+    similarly narrows what a `PASS` means has to earn one too."""
+    contract = (ASSETS_DIR / "composition-contract.md").read_text()
+    start = contract.index("Distinguishing a clean review from a crashed one")
+    table = contract[start:start + 2000]
+    for field in ("contested_count", "unreviewed_paths"):
+        assert field in table, (
+            f"`{field}` narrows what a PASS covers but is absent from the "
+            f"clean-versus-crashed decision block"
+        )
+
+
+def test_the_worktree_promise_is_scoped_to_capture_time() -> None:
+    """`WORKTREE` used to claim it covered *all* uncommitted work. Since the artifact is
+    fixed at capture, that is now true only as of `resolve`, and a caller told otherwise
+    would read a `PASS` as covering files no stage ever saw."""
+    skill = SKILL_PATH.read_text()
+    assert "covers **all** uncommitted work" not in skill
+    assert re.search(r"WORKTREE` covers all uncommitted work \*\*as of this moment\*\*", skill)

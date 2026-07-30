@@ -81,10 +81,15 @@ inferred from the target's shape; `--profile` overrides. `ResolveResult` carries
 A target that cannot be read — a typo'd range, a non-repo root, a missing file — exits 2. It never
 resolves to size 0, because a review of nothing must not be reportable as a review that found
 nothing. `size_metric` is lines under `code-diff` and words under the prose profiles, on both the
-path and the diff paths. `WORKTREE` covers **all** uncommitted work — unstaged, staged (it diffs
+path and the diff paths. `WORKTREE` covers all uncommitted work **as of this moment** — unstaged, staged (it diffs
 against `HEAD`), and untracked files that git would not diff at all. A brand-new module is
 uncommitted work, and omitting it would review everything except the new code. `.gitignore` is
 honoured.
+
+The artifact is fixed here, at capture. Work that appears afterwards is not in it and no stage will
+see it — the later stages re-derive their hash over exactly this set, which is what stops the
+review's own check output from reading as the artifact moving. `gate` reports anything that showed
+up since, in `unreviewed_paths[]`.
 
 **3. Pre-pass.**
 

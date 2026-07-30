@@ -206,6 +206,11 @@ gate exit 0/1/3 + valid GateResult JSON   -> review completed; the verdict is au
                                              PASS with zero findings IS the clean-review case.
 gate exit 1/3   + contested_count > 0     -> mid-flight, not completed. The tiebreak stage
                                              never ran. Adjudicate; do not spend a fix round.
+any exit        + unreviewed_paths nonempty -> the verdict does not cover those files. They
+                                             appeared after the artifact was captured, so no
+                                             stage saw them. Usually the review's own check
+                                             output; when it is real work, `PASS` stopped
+                                             short of it and only this says so.
 gate exit 2     + "artifact changed"      -> the tree moved, or the bundle is left over from
                                              an earlier round. Re-run; do not record.
 gate exit 4     + valid GateResult JSON   -> NOT_REVIEWABLE. Never a pass.
@@ -213,6 +218,12 @@ gate exit 2, non-JSON stdout, or no
   stdout at all                           -> the run FAILED. Retry once, then walk the model
                                              ladder, then block the round.
 ```
+
+**The verdict is authoritative over the artifact `resolve` captured, which is not the same as the
+tree as it stands.** A `WORKTREE` target fixes its untracked set at capture; anything appearing
+afterwards is outside the review by construction, and `unreviewed_paths[]` is the only place that
+says so. Check it before reporting a `PASS` as covering everything currently in the tree — the same
+obligation as `contested_count`, for the same reason.
 
 A repeatedly-empty reviewer is evidence the reviewer is broken, not evidence the artifact is clean.
 Under delegation that is a decidable condition — exit code plus JSON validity — rather than an
