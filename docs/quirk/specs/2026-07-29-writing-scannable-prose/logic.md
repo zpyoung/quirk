@@ -31,9 +31,13 @@ The skill loads when an agent is about to write, or has just written, a document
 
 **Authoring (short).** Before drafting, three decisions get made: which Diátaxis-style mode the document is in, who reads it, and which passages are procedural versus explanatory. These decisions determine how hard later cutting may go, so making them up front avoids re-deriving them per edit.
 
-**Revision (substantial), in two passes.** First the section pass (group F): name the reader and the decision, then decide which sections survive at all. Only then the within-section checks (groups A–E), grouped by what the writer is doing.
+**Revision (substantial), in two passes with one checkpoint between them.**
 
-The order is load-bearing. Running A–E first produces locally tidy prose inside sections that should not exist, and it is the failure the pass falls into by default: every check from A to E operates at clause, sentence, list, or table grain, so without F the question "should this section exist?" cannot be posed at all.
+First the section pass (group F). The agent reads repo signals — sibling artifacts, the template, whether content is duplicated somewhere canonical — states the reader and their decision in one visible line, then identifies sections failing materiality and the re-homing plan for their load-bearing contents. **It proposes those removals rather than performing them**, in one batch, and proceeds once answered.
+
+Then the within-section checks (groups A–E), applied directly with no further interaction.
+
+Two orderings are load-bearing here. F before A–E: running A–E first produces locally tidy prose inside sections that should not exist, and it is the failure the pass falls into by default, because every check from A to E operates at clause, sentence, list, or table grain — without F, "should this section exist?" cannot be posed at all. And the checkpoint before A–E rather than after: confirming removals first means no effort is spent polishing content that is about to go.
 
 Checks tagged mechanical run without judgment. Checks tagged judgment reduce to a specific yes/no. Where a call genuinely cannot be self-verified, the agent surfaces it to the user rather than resolving it silently — this is the honest substitute for the independent second reader the source material assumes exists and that an agent does not have.
 
@@ -73,6 +77,14 @@ This is deliberately in tension with A6 (route, don't delete), and the boundary 
 
 The failure mode this closes is specific and was observed in a worked example before it was written down: the pass routed a section's bulk out, kept two genuinely load-bearing items, and left them in a compressed shell of the original section. The result satisfied every clause-grain check while preserving a section the reader did not want.
 
+### Removal is the one edit that gets a checkpoint
+
+Every check outside group F is local and recoverable — a wrong call costs a word and is visible in the diff. Section removal is the opposite on both axes: it is the highest-blast-radius edit available, and it is where the agent's inference is weakest, because what a section is *for* usually lives outside the document in team convention, in what the reader already knows, or in a past incident that made someone start including it.
+
+So the asymmetry is deliberate. A–E run with no interaction; F2 removals are proposed in one batch. This is not a general preference for asking — it is the escalation rule already locked under enforcement shape, applied to the one class of edit that warrants it.
+
+Repo signals do most of the work before a question is needed. Whether sibling artifacts of the same genre carry a given section answers most materiality questions outright, and content that already exists somewhere canonical is far safer to remove than content that exists only here. That check is mechanical, not a judgment call, and it should run before the agent forms an opinion.
+
 ### Proxies are smoke detectors, never targets
 
 A 2024 study found 50 years of plain-language mandates produced no measurable decline in processing-difficulty features. The mandates targeted the proxy. A proxy may prompt a look here; it may never be the optimization target or the evidence a document is good. No readability score is ever a gate.
@@ -93,10 +105,22 @@ The linear channel (screen readers, TTS) is not a competing third reader — it 
 
 | | Check | Tag |
 |---|---|---|
-| F1 | **Name the reader and the decision**, in one written line: who opens this document, and what they do next. Everything downstream tests against that line. Without it, "is this load-bearing?" has no referent and collapses into the author's own sense of what was hard to write | `judg` |
-| F2 | **Section materiality.** For each section, does its absence change the named decision? If not, the section goes — it is not compressed, tightened, or reduced to a summary | `judg` |
-| F3 | **Re-home before removing.** Every load-bearing item inside a removed section must land in the section that owns it. A removed section may not leave a stub behind. Deleting a section wholesale takes its survivors with it; keeping a compressed shell of it fails F2 | `judg` |
-| F4 | **Detail level.** Within a surviving section, separate detail the named reader needs from detail the *author* wanted on record — process history, what was tried, review rounds, how something was verified. Author-facing detail is a different document, not a shorter paragraph | `judg` |
+| F1 | **Name the reader and the decision**, in one line, written where the user can see it. Derive it from repo signals before guessing: sibling artifacts of the same genre, the template if one exists, and whether the content already lives somewhere canonical. Everything downstream tests against that line — without it, "load-bearing" has no referent and collapses into the author's own sense of what was hard to write | `judg` |
+| F2 | **Section materiality.** For each section, does its absence change the named decision? If not the section goes — not compressed, not tightened, not reduced to a summary. **Removals are proposed to the user, not performed**; every other check in the skill applies directly | `judg` |
+| F3 | **Re-home before removing.** Every load-bearing item inside a removed section must land in the section that owns it, and the removal proposal names where each one goes. A removed section may not leave a stub: deleting wholesale takes its survivors with it, keeping a compressed shell fails F2 | `judg` |
+| F4 | **Detail level.** Within a surviving section, separate what the named reader needs from what the *author* wanted on record. The recurring author-facing categories, each with a destination that is not this document | `judg` |
+
+F4's categories and where they belong instead:
+
+| Category | Destination |
+|---|---|
+| Review-round history, per-note feedback tables | The review threads themselves |
+| Approaches tried and rejected | Commit body, or an ADR if the decision outlives the change |
+| How something was verified — probe transcripts, run counts, methodology | Test docstrings, or the test itself |
+| Tooling and process narrative | Nowhere; it is work-in-progress residue |
+| A decision deliberately not made, with its rationale | Stays — this changes what a reader concludes |
+
+The last row is the guard. A deferred or rejected decision reads like process history and is not: it tells a reader why the obvious alternative is absent, which is exactly what stops them re-opening it. Naming the categories is meant to make F4 actionable, not exhaustive — content outside this table still gets tested against F1's line rather than passing by default.
 
 ### A — What a cut may touch
 
@@ -215,9 +239,11 @@ Concretely: run the revision pass against a real document in this repo that was 
 **Section grain** *(added 2026-07-30)*
 - Group F runs before A–E, and the ordering is part of the contract.
 - Section materiality is tested against a written statement of the reader and their decision.
+- That statement is derived from repo signals — sibling artifacts, template, canonical duplication — before guessing, and stated where the user can see and reject it.
 - A section failing materiality is removed, not compressed.
-- Load-bearing contents are re-homed first; a removed section leaves no stub.
-- Author-facing detail (process history, review rounds, verification narrative) is a different document.
+- Removals are proposed in one batch, not performed; every other check applies directly.
+- Load-bearing contents are re-homed first, and the proposal names each destination; a removed section leaves no stub.
+- F4 names the recurring author-facing categories, each with a destination that is not this document. A deliberately-not-made decision is explicitly not one of them.
 
 **Which failure the skill fights**
 - Over-compression is the primary target; verbosity secondary.
@@ -320,3 +346,7 @@ Gray-area discovery used `adhd` (6 parallel divergence frames, 25 raw areas). It
 **2026-07-30 — added rule group F (section grain), 24 checks → 28.** Trialling the pass against a real MR description exposed a structural gap: all 24 checks operated at clause, sentence, list, or table grain, so the pass could compress a section but never ask whether the section should exist. On that example it routed a review-history section's bulk out, kept its two load-bearing items, and left a residue stub — satisfying every check while preserving a section the reader wanted gone.
 
 Changes: new group F (F1 name the reader and decision, F2 section materiality, F3 re-home before removing, F4 detail level), ordered before A–E; a rationale section fixing the F2/A6 boundary by scope; `optimization-unit` promoted out of Deferred Ideas, which is where this gap was already sitting unrecognised. No existing check was altered or removed.
+
+**2026-07-30 — specified how F1 and F2 actually run.** Group F as first written said to name the reader and decide materiality, but not where either judgment comes from. In the worked example the agent inferred both silently and got F2 wrong, which is the same author-is-its-own-reviewer problem the spec addresses elsewhere, resurfacing at the one grain where the edit is irreversible.
+
+Changes: F1 now derives its line from repo signals (sibling artifacts, template, canonical duplication) before guessing, and states it visibly so a wrong premise can be rejected in one line rather than audited across a diff. F2 removals are proposed in one batch rather than performed, with F3's re-homing plan attached — an asymmetry justified by removal being both the highest-blast-radius edit and the weakest-inference one; A–E still run with no interaction. F4 gains a category-to-destination table, making it a routing rule consistent with A6 rather than a deletion rule, with a deliberately-not-made decision explicitly excluded from the author-facing categories. This narrows the previously-locked "reports what it changed, no checkpoint" decision to A–E only.
