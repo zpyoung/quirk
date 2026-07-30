@@ -125,17 +125,19 @@ Changed: "approaches tried and rejected" is author-facing detail with a destinat
 
 ```markdown
 The retry logic will generally succeed unless the queue is under heavy load,
-in which case it may back off substantially before completing.
+in which case it may back off substantially before completing, due to the
+fact that each attempt widens the backoff window.
 ```
 
 **After**
 
 ```markdown
-The retry logic succeeds unless the queue is under heavy load, in which case
-it backs off before completing.
+The retry logic will generally succeed unless the queue is under heavy load,
+in which case it may back off substantially before completing, because each
+attempt widens the backoff window.
 ```
 
-Changed: a word-level cut (hedges "generally", "substantially") — not a claim or qualifier cut. The heavy-load caveat, a qualifier scoping the claim, survives intact.
+Changed: the only edit is lexical — "due to the fact that" becomes "because," a circumlocution with no information lost. "generally" and "may" are hedges scoping the claim; naming them correctly means handing them to A2/A4 rather than cutting them here. The heavy-load caveat survives intact either way.
 
 ### A2 — Scope conditions stay with the claim
 
