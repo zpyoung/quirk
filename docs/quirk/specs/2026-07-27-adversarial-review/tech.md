@@ -382,6 +382,13 @@ artifact_hash    : str        # sha256 of content, or resolved git SHA
 size_metric      : int        # changed lines for code, words for prose
 depth_suggestion : "quick" | "standard" | "deep"
 contract_surface : bool
+diff_file        : str | null  # absolute path when --diff-file was used, else null
+                   # Every later stage re-derives artifact_hash to prove it is judging
+                   #   the artifact resolve identified. Without this record they would
+                   #   re-run git for a review that never came from git, and compare the
+                   #   result to a hash git never produced — refusing every honest run
+                   #   of the detached-diff seam.
+chain            : ChainLink   # step "resolve", predecessor null; mints the run id
 ```
 
 `SCHEMA:` PrepassResult

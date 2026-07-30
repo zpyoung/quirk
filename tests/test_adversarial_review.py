@@ -2926,6 +2926,55 @@ def test_gate_refuses_a_resolve_from_a_different_run(tmp_path):
     assert "two different reviews" in proc.stderr
 
 
+def test_a_detached_diff_review_survives_the_currency_check(tmp_path):
+    """`--diff-file` is a documented seam. Verification re-ran `git` and compared the
+    answer to a hash git never produced, so making the check mandatory would have
+    refused every honest run of it. `resolve` records the file; the rest re-read it."""
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    _git_repo(repo)
+    patch = work / "patch.diff"
+    patch.write_text("--- a/x.py\n+++ b/x.py\n@@ -0,0 +1,2 @@\n+def f():\n+    return 1\n")
+
+    resolve_proc = run_ar("resolve", "--target", "main..HEAD", "--diff-file", str(patch),
+                          "--repo-root", str(repo))
+    assert resolve_proc.returncode == 0, resolve_proc.stderr
+    resolve_doc = json.loads(resolve_proc.stdout)
+    assert resolve_doc["diff_file"] == str(patch.resolve())
+    resolve_file = _write(work, "r.json", resolve_doc)
+
+    # Deliberately without `--diff-file`: the run record is what keeps the hashes
+    # agreeing, so a caller cannot break the pipeline by not repeating the flag.
+    pre = run_ar("prepass", "--profile", "code-diff", "--target", "main..HEAD",
+                 "--repo-root", str(repo), "--resolve", resolve_file, "--check-cmd", "true")
+    assert pre.returncode == 0, pre.stderr
+    prepass_doc = json.loads(pre.stdout)
+    assert prepass_doc["observed_artifact_hash"] == resolve_doc["artifact_hash"]
+
+    model = run_ar("select-model", "--author-family", "anthropic", "--check-cmd", "true",
+                   "--resolve", resolve_file)
+    assert model.returncode == 0, model.stderr
+    claims = run_ar("claims", "--findings", _write(work, "f.json", []),
+                    "--resolve", resolve_file)
+    merged = run_ar("merge", "--findings", _write(work, "c.json", json.loads(claims.stdout)),
+                    "--judgments", _write(work, "j.json", []), "--stage", "refute")
+    proc = run_ar("gate", "--findings", _write(work, "m.json", json.loads(merged.stdout)),
+                  "--model", _write(work, "mo.json", json.loads(model.stdout)),
+                  "--prepass", _write(work, "p.json", prepass_doc),
+                  "--resolve", resolve_file, "--depth", "standard",
+                  "--repo-root", str(repo))
+    assert proc.returncode == 0, proc.stderr
+
+    patch.write_text("--- a/x.py\n+++ b/x.py\n@@ -0,0 +1,1 @@\n+something else\n")
+    moved = run_ar("gate", "--findings", _write(work, "m.json", json.loads(merged.stdout)),
+                   "--model", _write(work, "mo.json", json.loads(model.stdout)),
+                   "--prepass", _write(work, "p.json", prepass_doc),
+                   "--resolve", resolve_file, "--depth", "standard",
+                   "--repo-root", str(repo))
+    assert moved.returncode == 2, "a diff that changed under the review must not pass"
+    assert "artifact changed during the review" in moved.stderr
+
+
 def test_the_prepass_hash_is_taken_before_its_own_checks_pollute_the_tree(tmp_path):
     """A test suite writes `.pytest_cache/` and `__pycache__/` as it runs, and the
     worktree diff counts untracked files. Hashing afterwards described an artifact the

@@ -326,6 +326,9 @@ def resolve_target(
             "target_kind": target_kind,
             "target_ref": str(path),
             "artifact_hash": artifact_hash_of(target, repo_root, diff_file),
+            # Recorded so the later stages can re-derive this hash the same way rather
+            # than re-running git and comparing against a number git never produced.
+            "diff_file": None,
             "size_metric": size_metric,
             "depth_suggestion": suggest_depth(resolved_profile, size_metric, False),
             "contract_surface": False,
@@ -339,6 +342,9 @@ def resolve_target(
         "target_kind": target_kind,
         "target_ref": target or "WORKTREE",
         "artifact_hash": artifact_hash_of(target, repo_root, diff_file, diff),
+        # Absolute: the later stages that re-derive this hash need not share a cwd with
+        # the invocation that recorded it.
+        "diff_file": str(Path(diff_file).resolve()) if diff_file else None,
         "size_metric": size_metric,
         "depth_suggestion": suggest_depth(resolved_profile, size_metric, contract_surface),
         "contract_surface": contract_surface,
@@ -1289,8 +1295,11 @@ def verify_artifact_is_current(resolved: dict[str, Any], repo_root: Path) -> Non
     from an intact stale one. Every other binding proves the inputs agree with each
     other, not that they describe the tree as it stands now.
     """
+    # `resolve`'s own `diff_file`, not None: a review of a detached diff must be checked
+    # against that diff, or this re-runs `git` and compares the answer to a hash git
+    # never produced — refusing every honest run of the documented seam.
     current = artifact_hash_of(
-        resolved.get("target_ref", ""), repo_root, None,
+        resolved.get("target_ref", ""), repo_root, resolved.get("diff_file"),
     )
     if current == resolved.get("artifact_hash"):
         return
@@ -2059,12 +2068,16 @@ def main(argv: list[str] | None = None) -> int:
                 "predecessor": None,
             }
         elif args.command == "prepass":
+            resolved = load_json(args.resolve, "resolve")
+            # Falls back to the run's own record so a caller reviewing a detached diff
+            # need not repeat `--diff-file` at every stage to keep the hashes agreeing.
+            diff_file = args.diff_file
+            if diff_file is None and isinstance(resolved, dict):
+                diff_file = resolved.get("diff_file")
             exit_code, payload = run_prepass(
-                args.profile, args.target, repo_root, args.check_cmd, args.diff_file
+                args.profile, args.target, repo_root, args.check_cmd, diff_file
             )
-            payload["chain"] = link_from(
-                load_json(args.resolve, "resolve"), "prepass", "resolve"
-            )
+            payload["chain"] = link_from(resolved, "prepass", "resolve")
         elif args.command == "select-model":
             exit_code, payload = select_reviewer(args.author_family, args.model, args.check_cmd)
             payload["chain"] = link_from(
