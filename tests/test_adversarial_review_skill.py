@@ -611,3 +611,17 @@ def test_the_gate_is_fed_merge_output_not_raw_promote_output() -> None:
     body = SKILL_PATH.read_text()
     gate_step = body[body.index("**7. Evidence gate.**"):body.index("**8. Tiebreak.**")]
     assert '--findings "$WORK/merged.json"' in gate_step
+
+
+def test_the_skill_does_not_claim_the_chain_proves_a_dispatch() -> None:
+    """Nothing here observes a dispatch; the chain orders stages and binds files. The
+    earlier "shape is the provenance" framing claimed more than the code can support."""
+    for path in (SKILL_PATH, ASSETS_DIR / "composition-contract.md"):
+        body = path.read_text()
+        assert "shape is the provenance" not in body.lower()
+        assert "not the same as unforgeability" in body or "does not authenticate content" in body
+
+
+def test_sdd_does_not_overstate_what_the_verdict_proves() -> None:
+    body = (REPO_ROOT / "skills/subagent-driven-development/SKILL.md").read_text()
+    assert "not proof the dispatches happened" in body

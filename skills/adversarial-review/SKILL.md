@@ -128,7 +128,8 @@ here and do not treat it as a pass.
 **6. Refute.** Stage the claims, dispatch **in a fresh context**, then merge the rulings:
 
 ```bash
-"$SCRIPT" claims --findings "$WORK/findings.json" > "$WORK/claims.json"
+"$SCRIPT" claims --findings "$WORK/findings.json" --resolve "$WORK/resolve.json" \
+  > "$WORK/claims.json"
 # stage assets/refute-prompt.md with claims.json's .claims, dispatch, collect to refute.json
 "$SCRIPT" merge --findings "$WORK/claims.json" --judgments "$WORK/refute.json" \
   > "$WORK/merged.json"
@@ -145,9 +146,16 @@ a defect, and staged as claims they come back `refuted`.
 any claim went unjudged, if a judgment names an unknown ID, or if one finding draws two rulings**.
 Every judgment must carry a `reason`; it is the audit record, and tiebreak is handed it verbatim.
 
-Feed `merged.json` straight to the gate. Its shape is the provenance: `merge` is the only thing that
-produces it, so `standard` and `deep` reject the bare array promote emits. Checking a per-finding
-`stage` string instead let a promote record relabel itself and pass.
+Feed `merged.json` straight to the gate. Every script-produced payload carries a `chain` naming the
+run, the artifact, and the step before it, and each stage refuses input whose chain does not name
+its expected predecessor — so a skipped stage, an out-of-order call, or a file from another run
+fails loudly instead of producing a verdict.
+
+**What the chain does not do is prove a dispatch happened.** Nothing in this script observes one; it
+only ever sees files the orchestrator hands it. The chain raises a bypass from a one-flag accident
+to a deliberate, self-consistent fabrication. That is the right bar for the real failure mode — an
+orchestrator taking a shortcut — and it is not the same as unforgeability. Do not describe a verdict
+as proof that the review occurred.
 
 Skip all of this at `quick` depth — one dispatch, self-refuted, `{findings, suppressed}` to the gate.
 

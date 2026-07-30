@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -880,6 +881,66 @@ def select_reviewer(
     }
 
 
+# --- run chain --------------------------------------------------------------------
+#
+# Every provenance check here used to sniff the shape of a caller-written file. Shape
+# is a schema hint, not proof: the orchestrator writing those files is the fallible
+# party these checks exist to constrain, and it could reach `gate` with a stage
+# skipped or a stale file. Each script-produced payload now carries a `chain` naming
+# the run, the artifact, the step that produced it, and a digest of the input it came
+# from. A stage refuses input whose chain does not name its expected predecessor.
+#
+# What this buys: out-of-order execution and cross-run file reuse fail loudly. What it
+# does not buy: authenticity. Nothing here observes a dispatch, so an orchestrator
+# willing to fabricate a whole consistent chain still can. It raises a bypass from a
+# one-flag accident to a deliberate multi-step act — which is the right bar for the
+# actual threat, and is not the same as unforgeability. Do not describe it as such.
+
+CHAIN_PREDECESSOR = {
+    "claims": ("resolve",),
+    "merge": ("claims", "merge"),
+    "gate": ("merge",),
+}
+
+
+def digest(payload: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def chain_of(payload: Any, label: str) -> dict[str, Any]:
+    if not isinstance(payload, dict) or not isinstance(payload.get("chain"), dict):
+        raise UsageError(
+            f"{label} input carries no run chain: it was not produced by this script, "
+            f"or a stage was skipped"
+        )
+    link = payload["chain"]
+    for field in ("run_id", "artifact_hash", "step"):
+        if not isinstance(link.get(field), str) or not link[field]:
+            raise UsageError(f"{label} input has a malformed chain: bad {field}")
+    return link
+
+
+def link_from(previous: dict[str, Any], step: str, label: str,
+              **extra: Any) -> dict[str, Any]:
+    """Verify `previous` is an allowed predecessor of `step`, and mint the next link."""
+    link = chain_of(previous, label)
+    allowed = CHAIN_PREDECESSOR[step]
+    if link["step"] not in allowed:
+        raise UsageError(
+            f"{step} expects input from {' or '.join(allowed)}, but its chain says "
+            f"{link['step']!r}: the pipeline ran out of order"
+        )
+    return {
+        "run_id": link["run_id"],
+        "artifact_hash": link["artifact_hash"],
+        "step": step,
+        "predecessor": digest(previous),
+        **extra,
+    }
+
+
 # --- the evidence gate ------------------------------------------------------------
 
 SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
@@ -1219,8 +1280,21 @@ def run_gate(
     # standard or deep means the refute dispatch it claims never happened. Checking
     # the reviewer-supplied per-finding `stage` instead let a promote record relabel
     # itself and pass.
+    gate_chain: dict[str, Any] | None = None
     quick_shaped = isinstance(findings, dict) and "suppressed" in findings
     merged_shaped = isinstance(findings, dict) and "judged" in findings
+    if merged_shaped:
+        # Key presence was the whole check, so a hand-written
+        # {"findings": [], "stage": "banana", "judged": "not-a-count"} passed.
+        link = link_from(findings, "gate", "findings")
+        if findings.get("stage") not in ("refute", "tiebreak"):
+            raise UsageError(
+                f"merge envelope names stage {findings.get('stage')!r}: expected "
+                f"refute or tiebreak"
+            )
+        if not isinstance(findings.get("judged"), int) or findings["judged"] < 0:
+            raise UsageError("merge envelope has a non-integer `judged` count")
+        gate_chain = link
     if isinstance(findings, dict) and not (quick_shaped or merged_shaped):
         raise UsageError(
             "findings object is neither a quick report ({findings, suppressed}) nor "
@@ -1365,6 +1439,8 @@ def run_gate(
         "advisory_count": len(survivors) - len(blocking),
         "regrade_count": sum(1 for f in survivors if f.get(ADJUDICATED_SEVERITY)),
     }
+    if gate_chain:
+        payload["chain"] = gate_chain
     return VERDICT_EXIT[verdict], payload
 
 
@@ -1404,12 +1480,15 @@ def compute_verdict(
 CLAIM_FIELDS = ("id", "severity", "confidence", "category", "claim", "evidence")
 
 
-def build_claims(findings_path: str, id_prefix: str = "F") -> dict[str, Any]:
+def build_claims(findings_path: str, resolve_path: str,
+                 id_prefix: str = "F") -> dict[str, Any]:
     """Assign IDs, then split what refute judges from what it has no mandate over.
 
     Refute keys judgments by id, so ids must exist before it runs, not after.
     """
     findings = load_json(findings_path, "findings")
+    resolved = load_json(resolve_path, "resolve")
+    link = link_from(resolved, "claims", "resolve")
     if isinstance(findings, dict):
         raise UsageError(
             "claims takes the promote stage's bare array, not a quick-shaped object: "
@@ -1429,6 +1508,7 @@ def build_claims(findings_path: str, id_prefix: str = "F") -> dict[str, Any]:
         "claims": [{k: f[k] for k in CLAIM_FIELDS} for f in judged],
         "findings": findings,
         "carried_kinds": sorted({f["kind"] for f in carried}),
+        "chain": link,
     }
 
 
@@ -1438,10 +1518,22 @@ def merge_judgments(
     """Apply refute's or tiebreak's rulings, and prove the stage actually ran."""
     if stage not in ("refute", "tiebreak"):
         raise UsageError(f"stage must be refute or tiebreak, got {stage!r}")
-    findings = load_json(findings_path, "findings")
+    source = load_json(findings_path, "findings")
     judgments = load_json(judgments_path, "judgments")
-    if isinstance(findings, dict) and "findings" in findings:
-        findings = findings["findings"]
+    link = link_from(source, "merge", "findings", stage=stage)
+    previous = chain_of(source, "findings")
+    # A tiebreak adjudicates a refute stage's disagreements, so one has to have run.
+    # Without this, `merge --stage tiebreak` on `claims` output found nothing contested,
+    # accepted `[]` judgments, and emitted an envelope whose findings had never been
+    # refuted at all.
+    if stage == "tiebreak" and previous.get("stage") != "refute":
+        raise UsageError(
+            "tiebreak expects the output of `merge --stage refute`: nothing has been "
+            "contested yet, so there is no disagreement to adjudicate"
+        )
+    if stage == "refute" and previous["step"] != "claims":
+        raise UsageError("refute merge expects `claims` output")
+    findings = source["findings"] if isinstance(source, dict) else source
     if not isinstance(findings, list):
         raise UsageError("findings input must be `claims` output or a JSON array")
     if not isinstance(judgments, list):
@@ -1545,7 +1637,7 @@ def merge_judgments(
             f"skipped a claim did not review it, and the result cannot be recorded as "
             f"though it had"
         )
-    return {"findings": findings, "stage": stage, "judged": len(seen)}
+    return {"findings": findings, "stage": stage, "judged": len(seen), "chain": link}
 
 
 # --- replay manifest --------------------------------------------------------------
@@ -1579,6 +1671,19 @@ def build_manifest(
     # Depth comes from the gate, never from resolve: resolve only ever offered a
     # suggestion, and a caller that overrode it would otherwise be misrecorded.
     depth = gate_result.get("depth", "standard")
+
+    # A gate result from a different run, or from a pipeline that skipped a stage,
+    # would otherwise be recorded against this artifact.
+    if depth != "quick":
+        gate_link = chain_of(gate_result, "gate")
+        resolve_link = chain_of(resolved, "resolve")
+        if gate_link["run_id"] != resolve_link["run_id"]:
+            raise UsageError(
+                f"gate result belongs to run {gate_link['run_id']}, but resolve opened "
+                f"{resolve_link['run_id']}: these are different reviews"
+            )
+        if gate_link["artifact_hash"] != resolve_link["artifact_hash"]:
+            raise UsageError("gate result was computed against a different artifact")
 
     # `contested[]` is the deep pipeline's mid-flight state, cleared by routing it to
     # tiebreak and re-running the gate. Recording it as final published a PASS over a
@@ -1709,6 +1814,8 @@ def build_parser() -> argparse.ArgumentParser:
     claims_cmd = sub.add_parser(
         "claims", help="assign IDs and stage the refute stage's claim subset")
     claims_cmd.add_argument("--findings", required=True, help="promote stage output")
+    claims_cmd.add_argument("--resolve", required=True,
+                            help="ResolveResult JSON — anchors the claims to this run")
     claims_cmd.add_argument(
         "--id-prefix", default="F",
         help="prefix for assigned finding IDs; must match the later gate invocation")
@@ -1745,6 +1852,12 @@ def main(argv: list[str] | None = None) -> int:
             raise UsageError(f"repo root does not exist: {repo_root}")
         if args.command == "resolve":
             payload = resolve_target(args.target, args.profile, repo_root, args.diff_file)
+            payload["chain"] = {
+                "run_id": secrets.token_hex(8),
+                "artifact_hash": payload["artifact_hash"],
+                "step": "resolve",
+                "predecessor": None,
+            }
         elif args.command == "prepass":
             exit_code, payload = run_prepass(args.profile, args.target, repo_root, args.check_cmd)
         elif args.command == "select-model":
@@ -1755,7 +1868,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.id_prefix,
             )
         elif args.command == "claims":
-            payload = build_claims(args.findings, args.id_prefix)
+            payload = build_claims(args.findings, args.resolve, args.id_prefix)
         elif args.command == "merge":
             payload = merge_judgments(args.findings, args.judgments, args.stage)
         elif args.command == "manifest":

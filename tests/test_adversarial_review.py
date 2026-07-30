@@ -944,6 +944,40 @@ def _finding(**over) -> dict:
     return base
 
 
+RUN_ID = "0123456789abcdef"
+ART_HASH = "a" * 64
+
+
+def _chain(step, *, stage=None, run_id=RUN_ID, artifact_hash=ART_HASH):
+    """A chain link of the shape each subcommand stamps on its output."""
+    link = {"run_id": run_id, "artifact_hash": artifact_hash, "step": step,
+            "predecessor": "0" * 64}
+    if stage is not None:
+        link["stage"] = stage
+    return link
+
+
+def _resolved(**over):
+    payload = {"profile": "code-diff", "target_kind": "path", "target_ref": "x",
+               "artifact_hash": ART_HASH, "chain": _chain("resolve")}
+    payload.update(over)
+    return payload
+
+
+def _claims_output(findings, **over):
+    payload = {"claims": [], "findings": findings, "carried_kinds": [],
+               "chain": _chain("claims")}
+    payload.update(over)
+    return payload
+
+
+def _merged(findings, *, stage="refute", **over):
+    payload = {"findings": findings, "stage": stage, "judged": len(findings),
+               "chain": _chain("merge", stage=stage)}
+    payload.update(over)
+    return payload
+
+
 def _write(tmp_path: Path, name: str, payload) -> str:
     p = tmp_path / name
     p.write_text(json.dumps(payload))
@@ -961,7 +995,7 @@ def _inputs(tmp_path, findings, *, model=None, prepass_status="pass", prepass_fi
                       "thinking": "high", "independence": "full", "ladder": []}
     pre = {"status": prepass_status, "checks": [], "findings": prepass_findings or []}
     if isinstance(findings, list) and not raw:
-        findings = {"findings": findings, "stage": "refute", "judged": len(findings)}
+        findings = _merged(findings)
     return (
         "--findings", _write(tmp_path, "f.json", findings),
         "--model", _write(tmp_path, "m.json", model),
@@ -1572,8 +1606,8 @@ def test_gate_echoes_the_depth_it_used(tmp_path):
 
 def _manifest_inputs(tmp_path, *, depth="standard", independence="full", family="openai"):
     resolve_doc = {"profile": "code-diff", "target_kind": "git-range", "target_ref": "main..HEAD",
-                   "artifact_hash": "abc", "size_metric": 200, "depth_suggestion": "deep",
-                   "contract_surface": False}
+                   "artifact_hash": ART_HASH, "size_metric": 200, "depth_suggestion": "deep",
+                   "contract_surface": False, "chain": _chain("resolve")}
     prepass_doc = {"status": "pass", "checks": [{"name": "code-check", "command": "pytest -q",
                                                  "exit_code": 0, "status": "pass", "output": ""}],
                    "findings": []}
@@ -1581,7 +1615,7 @@ def _manifest_inputs(tmp_path, *, depth="standard", independence="full", family=
                  "model": "gpt-5.6-sol", "thinking": "high", "independence": independence,
                  "ladder": []}
     gate_doc = {"verdict": "PASS", "findings": [], "contested": [], "suppressed": [],
-                "suppressed_count": 2, "depth": depth}
+                "suppressed_count": 2, "depth": depth, "chain": _chain("gate")}
     return (
         "--resolve", _write(tmp_path, "r.json", resolve_doc),
         "--prepass", _write(tmp_path, "p2.json", prepass_doc),
@@ -2304,7 +2338,8 @@ def test_claims_assigns_ids_and_emits_only_the_six_claim_fields(tmp_path):
     exist before the dispatch rather than after it."""
     payload = [_finding(id=None, stage="promote", severity="HIGH"),
                _finding(id=None, stage="promote", severity="LOW")]
-    proc = run_ar("claims", "--findings", _write(tmp_path, "f.json", payload))
+    proc = run_ar("claims", "--findings", _write(tmp_path, "f.json", payload),
+                  "--resolve", _write(tmp_path, "res.json", _resolved()))
     assert proc.returncode == 0, proc.stderr
     result = json.loads(proc.stdout)
     assert [c["id"] for c in result["claims"]] == ["F1", "F2"]
@@ -2319,16 +2354,16 @@ def test_claims_withholds_limitations_and_questions_from_refute(tmp_path):
     payload = [_finding(id=None, stage="promote"),
                _finding(id=None, stage="promote", kind="limitation"),
                _finding(id=None, stage="promote", kind="question")]
-    result = json.loads(run_ar("claims", "--findings",
-                               _write(tmp_path, "f.json", payload)).stdout)
+    result = json.loads(run_ar("claims", "--findings", _write(tmp_path, "f.json", payload),
+                  "--resolve", _write(tmp_path, "res.json", _resolved())).stdout)
     assert len(result["claims"]) == 1
     assert len(result["findings"]) == 3
     assert result["carried_kinds"] == ["limitation", "question"]
 
 
 def test_claims_rejects_a_quick_shaped_payload(tmp_path):
-    proc = run_ar("claims", "--findings",
-                  _write(tmp_path, "f.json", {"findings": [], "suppressed": []}))
+    proc = run_ar("claims", "--findings", _write(tmp_path, "f.json", {"findings": [], "suppressed": []}),
+                  "--resolve", _write(tmp_path, "res.json", _resolved()))
     assert proc.returncode == 2
 
 
@@ -2337,7 +2372,7 @@ def test_merge_applies_dispositions_and_severity_rulings(tmp_path):
                 _finding(id="F2", stage="promote", severity="HIGH")]
     judgments = [{"id": "F1", "disposition": "standing", "severity": "LOW", "reason": "r"},
                  {"id": "F2", "disposition": "refuted", "reason": "r"}]
-    proc = run_ar("merge", "--findings", _write(tmp_path, "f.json", findings),
+    proc = run_ar("merge", "--findings", _write(tmp_path, "f.json", _claims_output(findings)),
                   "--judgments", _write(tmp_path, "j.json", judgments))
     assert proc.returncode == 0, proc.stderr
     merged = {f["id"]: f for f in json.loads(proc.stdout)["findings"]}
@@ -2350,7 +2385,7 @@ def test_merge_rejects_a_missing_judgment(tmp_path):
     """A truncated judgment list would otherwise be recorded as a full review."""
     findings = [_finding(id="F1", stage="promote"), _finding(id="F2", stage="promote")]
     judgments = [{"id": "F1", "disposition": "standing", "reason": "r"}]
-    proc = run_ar("merge", "--findings", _write(tmp_path, "f.json", findings),
+    proc = run_ar("merge", "--findings", _write(tmp_path, "f.json", _claims_output(findings)),
                   "--judgments", _write(tmp_path, "j.json", judgments))
     assert proc.returncode == 2
     assert "no judgment for F2" in proc.stderr
@@ -2358,7 +2393,7 @@ def test_merge_rejects_a_missing_judgment(tmp_path):
 
 def test_merge_rejects_a_judgment_for_an_unknown_id(tmp_path):
     proc = run_ar("merge",
-                  "--findings", _write(tmp_path, "f.json", [_finding(id="F1", stage="promote")]),
+                  "--findings", _write(tmp_path, "f.json", _claims_output([_finding(id="F1", stage="promote")])),
                   "--judgments", _write(tmp_path, "j.json",
                                         [{"id": "F1", "disposition": "standing", "reason": "r"},
                                          {"id": "F9", "disposition": "refuted", "reason": "r"}]))
@@ -2368,7 +2403,7 @@ def test_merge_rejects_a_judgment_for_an_unknown_id(tmp_path):
 
 def test_merge_rejects_two_judgments_for_one_finding(tmp_path):
     proc = run_ar("merge",
-                  "--findings", _write(tmp_path, "f.json", [_finding(id="F1", stage="promote")]),
+                  "--findings", _write(tmp_path, "f.json", _claims_output([_finding(id="F1", stage="promote")])),
                   "--judgments", _write(tmp_path, "j.json",
                                         [{"id": "F1", "disposition": "standing", "reason": "r"},
                                          {"id": "F1", "disposition": "refuted", "reason": "r"}]))
@@ -2379,7 +2414,8 @@ def test_merge_rejects_two_judgments_for_one_finding(tmp_path):
 def test_merge_rejects_a_judgment_on_a_limitation(tmp_path):
     proc = run_ar("merge",
                   "--findings", _write(tmp_path, "f.json",
-                                       [_finding(id="F1", stage="promote", kind="limitation")]),
+                                       _claims_output([_finding(id="F1", stage="promote",
+                                                                kind="limitation")])),
                   "--judgments", _write(tmp_path, "j.json",
                                         [{"id": "F1", "disposition": "refuted",
                                           "reason": "r"}]))
@@ -2389,7 +2425,7 @@ def test_merge_rejects_a_judgment_on_a_limitation(tmp_path):
 
 def test_merge_requires_ids_to_exist_already(tmp_path):
     proc = run_ar("merge",
-                  "--findings", _write(tmp_path, "f.json", [_finding(id=None, stage="promote")]),
+                  "--findings", _write(tmp_path, "f.json", _claims_output([_finding(id=None, stage="promote")])),
                   "--judgments", _write(tmp_path, "j.json", []))
     assert proc.returncode == 2
     assert "run `claims`" in proc.stderr
@@ -2398,7 +2434,7 @@ def test_merge_requires_ids_to_exist_already(tmp_path):
 def test_tiebreak_merge_only_expects_rulings_on_contested_findings(tmp_path):
     findings = [_finding(id="F1", stage="refute", disposition="contested"),
                 _finding(id="F2", stage="refute", disposition="standing")]
-    proc = run_ar("merge", "--findings", _write(tmp_path, "f.json", findings),
+    proc = run_ar("merge", "--findings", _write(tmp_path, "f.json", _merged(findings)),
                   "--judgments", _write(tmp_path, "j.json",
                                         [{"id": "F1", "disposition": "standing",
                                           "severity": "MEDIUM", "reason": "r"}]),
@@ -2412,11 +2448,11 @@ def test_tiebreak_merge_only_expects_rulings_on_contested_findings(tmp_path):
 def test_merge_output_feeds_the_gate_at_standard_depth(tmp_path):
     """The seam end to end: claims -> judgments -> merge -> gate."""
     promoted = [_finding(id=None, stage="promote", severity="HIGH", confidence="HIGH")]
-    claims = json.loads(run_ar("claims", "--findings",
-                               _write(tmp_path, "p.json", promoted)).stdout)
+    claims = json.loads(run_ar("claims", "--findings", _write(tmp_path, "p.json", promoted),
+                  "--resolve", _write(tmp_path, "res.json", _resolved())).stdout)
     ids = [c["id"] for c in claims["claims"]]
     merged = json.loads(run_ar(
-        "merge", "--findings", _write(tmp_path, "f.json", claims["findings"]),
+        "merge", "--findings", _write(tmp_path, "f.json", claims),
         "--judgments", _write(tmp_path, "j.json",
                               [{"id": ids[0], "disposition": "standing",
                                 "severity": "LOW", "reason": "r"}])).stdout)
@@ -2439,7 +2475,7 @@ def test_merge_output_feeds_the_gate_at_standard_depth(tmp_path):
 def test_merge_requires_a_reason_on_every_judgment(tmp_path):
     """The refute prompt calls it the audit record, and tiebreak is handed it verbatim."""
     proc = run_ar("merge",
-                  "--findings", _write(tmp_path, "f.json", [_finding(id="F1", stage="promote")]),
+                  "--findings", _write(tmp_path, "f.json", _claims_output([_finding(id="F1", stage="promote")])),
                   "--judgments", _write(tmp_path, "j.json",
                                         [{"id": "F1", "disposition": "refuted"}]))
     assert proc.returncode == 2
@@ -2453,14 +2489,14 @@ def test_merge_rejects_a_malformed_ruling_field(field, value, tmp_path):
     promoter's proposal in force under what looked like a ruling."""
     judgment = {"id": "F1", "disposition": "standing", "reason": "r", field: value}
     proc = run_ar("merge",
-                  "--findings", _write(tmp_path, "f.json", [_finding(id="F1", stage="promote")]),
+                  "--findings", _write(tmp_path, "f.json", _claims_output([_finding(id="F1", stage="promote")])),
                   "--judgments", _write(tmp_path, "j.json", [judgment]))
     assert proc.returncode == 2
 
 
 def test_merge_keeps_the_ruling_reason_on_the_finding(tmp_path):
     proc = run_ar("merge",
-                  "--findings", _write(tmp_path, "f.json", [_finding(id="F1", stage="promote")]),
+                  "--findings", _write(tmp_path, "f.json", _claims_output([_finding(id="F1", stage="promote")])),
                   "--judgments", _write(tmp_path, "j.json",
                                         [{"id": "F1", "disposition": "standing",
                                           "reason": "reproduces at line 40"}]))
@@ -2469,7 +2505,7 @@ def test_merge_keeps_the_ruling_reason_on_the_finding(tmp_path):
 
 def test_a_suppression_carries_the_refuters_argument(tmp_path):
     merged = json.loads(run_ar(
-        "merge", "--findings", _write(tmp_path, "f.json", [_finding(id="F1", stage="promote")]),
+        "merge", "--findings", _write(tmp_path, "f.json", _claims_output([_finding(id="F1", stage="promote")])),
         "--judgments", _write(tmp_path, "j.json",
                               [{"id": "F1", "disposition": "refuted",
                                 "reason": "the quote is not at that line"}])).stdout)
@@ -2480,7 +2516,7 @@ def test_a_suppression_carries_the_refuters_argument(tmp_path):
 def test_tiebreak_cannot_rule_on_a_finding_nobody_contested(tmp_path):
     findings = [_finding(id="F1", disposition="contested"),
                 _finding(id="F2", disposition="standing")]
-    proc = run_ar("merge", "--findings", _write(tmp_path, "f.json", findings),
+    proc = run_ar("merge", "--findings", _write(tmp_path, "f.json", _merged(findings)),
                   "--judgments", _write(tmp_path, "j.json",
                                         [{"id": "F1", "disposition": "refuted", "reason": "r"},
                                          {"id": "F2", "disposition": "refuted", "reason": "r"}]),
@@ -2493,7 +2529,7 @@ def test_tiebreak_cannot_re_contest(tmp_path):
     """It adjudicates the disagreement; leaving it open strands a deep review."""
     proc = run_ar("merge",
                   "--findings", _write(tmp_path, "f.json",
-                                       [_finding(id="F1", disposition="contested")]),
+                                       _merged([_finding(id="F1", disposition="contested")])),
                   "--judgments", _write(tmp_path, "j.json",
                                         [{"id": "F1", "disposition": "contested",
                                           "reason": "still unsure"}]),
@@ -2506,14 +2542,114 @@ def test_the_manifest_refuses_an_unresolved_contested_finding(tmp_path):
     """`contested[]` is mid-flight state. Recording it published a PASS over a dispute
     nobody settled."""
     gate_result = {"verdict": "PASS", "findings": [], "suppressed_count": 0,
-                   "contested": [_finding(id="F1")], "depth": "deep"}
+                   "contested": [_finding(id="F1")], "depth": "deep",
+                   "chain": _chain("gate")}
     proc = run_ar("manifest",
-                  "--resolve", _write(tmp_path, "r.json",
-                                      {"profile": "code-diff", "target_kind": "path",
-                                       "target_ref": "x", "artifact_hash": "h"}),
+                  "--resolve", _write(tmp_path, "r.json", _resolved()),
                   "--prepass", _write(tmp_path, "p.json", {"status": "pass", "checks": []}),
                   "--model", _write(tmp_path, "m.json",
                                     {"resolved": True, "independence": "full"}),
                   "--gate", _write(tmp_path, "g.json", gate_result))
     assert proc.returncode == 2
     assert "contested" in proc.stderr
+
+
+# ============ the run chain =======================================================
+
+def test_tiebreak_merge_cannot_run_before_refute(tmp_path):
+    """The bypass this chain exists for. `merge --stage tiebreak` on `claims` output
+    found nothing contested, accepted `[]`, and emitted an envelope whose findings had
+    never been refuted — which the standard gate then accepted."""
+    proc = run_ar("merge",
+                  "--findings", _write(tmp_path, "f.json",
+                                       _claims_output([_finding(id="F1", stage="promote")])),
+                  "--judgments", _write(tmp_path, "j.json", []),
+                  "--stage", "tiebreak")
+    assert proc.returncode == 2
+    assert "merge --stage refute" in proc.stderr
+
+
+def test_a_refute_merge_cannot_consume_a_merge(tmp_path):
+    proc = run_ar("merge",
+                  "--findings", _write(tmp_path, "f.json", _merged([_finding(id="F1")])),
+                  "--judgments", _write(tmp_path, "j.json",
+                                        [{"id": "F1", "disposition": "standing", "reason": "r"}]))
+    assert proc.returncode == 2
+    assert "claims" in proc.stderr
+
+
+@pytest.mark.parametrize("envelope", [
+    {"findings": [], "stage": "banana", "judged": 0},
+    {"findings": [], "stage": "refute", "judged": "not-a-count"},
+    {"findings": [], "stage": "refute", "judged": -1},
+])
+def test_the_gate_validates_the_envelope_it_is_handed(envelope, tmp_path):
+    """Key presence was the whole check, so a hand-written envelope naming a nonsense
+    stage and a non-numeric count returned PASS."""
+    envelope = dict(envelope, chain=_chain("merge", stage=envelope["stage"]))
+    proc = run_ar("gate", "--findings", _write(tmp_path, "f.json", envelope),
+                  "--model", _write(tmp_path, "m.json",
+                                    {"resolved": True, "alias": "c", "family": "openai",
+                                     "provider": "p", "model": "m", "thinking": "high",
+                                     "independence": "full", "ladder": []}),
+                  "--prepass", _write(tmp_path, "p.json",
+                                      {"status": "pass", "checks": [], "findings": []}),
+                  "--depth", "standard")
+    assert proc.returncode == 2
+
+
+def test_an_unchained_envelope_is_refused(tmp_path):
+    proc = run_ar("gate", "--findings", _write(tmp_path, "f.json",
+                                               {"findings": [], "stage": "refute", "judged": 0}),
+                  "--model", _write(tmp_path, "m.json",
+                                    {"resolved": True, "alias": "c", "family": "openai",
+                                     "provider": "p", "model": "m", "thinking": "high",
+                                     "independence": "full", "ladder": []}),
+                  "--prepass", _write(tmp_path, "p.json",
+                                      {"status": "pass", "checks": [], "findings": []}),
+                  "--depth", "standard")
+    assert proc.returncode == 2
+    assert "no run chain" in proc.stderr
+
+
+def test_the_manifest_refuses_a_gate_result_from_another_run(tmp_path):
+    """Stale-file reuse: a gate result that belongs to a different review."""
+    proc = run_ar("manifest", *_manifest_inputs(tmp_path), "--repo-root", str(tmp_path))
+    assert proc.returncode == 0, proc.stderr
+    other = _write(tmp_path, "g_other.json",
+                   {"verdict": "PASS", "findings": [], "contested": [], "suppressed": [],
+                    "suppressed_count": 0, "depth": "standard",
+                    "chain": _chain("gate", run_id="ffffffffffffffff")})
+    args = list(_manifest_inputs(tmp_path))
+    args[args.index("--gate") + 1] = other
+    proc = run_ar("manifest", *args, "--repo-root", str(tmp_path))
+    assert proc.returncode == 2
+    assert "different reviews" in proc.stderr
+
+
+def test_the_manifest_refuses_a_gate_result_for_another_artifact(tmp_path):
+    other = _write(tmp_path, "g_other.json",
+                   {"verdict": "PASS", "findings": [], "contested": [], "suppressed": [],
+                    "suppressed_count": 0, "depth": "standard",
+                    "chain": _chain("gate", artifact_hash="b" * 64)})
+    args = list(_manifest_inputs(tmp_path))
+    args[args.index("--gate") + 1] = other
+    proc = run_ar("manifest", *args, "--repo-root", str(tmp_path))
+    assert proc.returncode == 2
+    assert "different artifact" in proc.stderr
+
+
+def test_claims_is_anchored_to_the_run_resolve_opened(tmp_path):
+    result = json.loads(run_ar(
+        "claims", "--findings", _write(tmp_path, "f.json", [_finding(id=None, stage="promote")]),
+        "--resolve", _write(tmp_path, "r.json", _resolved())).stdout)
+    assert result["chain"]["run_id"] == RUN_ID
+    assert result["chain"]["step"] == "claims"
+
+
+def test_claims_refuses_an_unchained_resolve(tmp_path):
+    proc = run_ar("claims",
+                  "--findings", _write(tmp_path, "f.json", [_finding(id=None, stage="promote")]),
+                  "--resolve", _write(tmp_path, "r.json", {"artifact_hash": "h"}))
+    assert proc.returncode == 2
+    assert "no run chain" in proc.stderr

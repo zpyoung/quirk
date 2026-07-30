@@ -282,7 +282,7 @@ the exit code rather than inferred from silence:
 
 | Signal | Meaning |
 | --- | --- |
-| exit 0/1/3 + valid `GateResult` JSON | The review completed and the verdict is authoritative. `PASS` with zero findings is a real, clean review — this is the old `NO_FINDINGS` case. |
+| exit 0/1/3 + valid `GateResult` JSON | The review completed. The verdict is authoritative over the inputs the gate received — not proof the dispatches happened, which nothing mechanically establishes. `PASS` with zero findings is a real, clean review — this is the old `NO_FINDINGS` case. |
 | exit 4 + valid JSON | `NOT_REVIEWABLE` — no reviewer resolved at any ladder rung, or nothing checkable. **Never a pass.** Treat the lens as blocked. |
 | exit 2, non-JSON stdout, or no stdout | The run failed. Retry once, then fall back per the ladder, then block the round. |
 

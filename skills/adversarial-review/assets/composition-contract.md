@@ -44,9 +44,16 @@ after it. `claims` assigns IDs (promote emits `id: null`, but refute keys judgme
 `limitation`/`question` records back from a stage that has no mandate over them. `merge` proves the
 stage ran: every judgment needs a `reason`, and it fails when a claim went unjudged, when a judgment
 names an unknown ID, when one finding draws two rulings, or when tiebreak rules on something nobody
-contested. Feed its output to `gate` directly — **the shape is the provenance**, and `standard` and
-`deep` reject the bare array promote emits. A per-finding `stage` string would not do: the reviewer
-writes that field, so a promote record could relabel itself.
+contested. Feed its output to `gate` directly. Each script-produced payload carries a `chain` — run ID,
+artifact hash, producing step, and a digest of the input it came from — and every stage refuses
+input whose chain does not name its expected predecessor.
+
+**Read the guarantee precisely.** The chain makes a skipped stage, an out-of-order call, and a file
+from another run fail loudly. It does not authenticate content: nothing in this script observes a
+model dispatch, so an orchestrator that fabricates a consistent chain end to end still can. A
+verdict means *the deterministic math was applied correctly to the inputs received* — not that the
+dispatches happened. Callers that need the stronger claim must supply it themselves, by journalling
+each stage's real prompt and raw response for a human to audit.
 
 `manifest` refuses a gate result with a non-empty `contested[]`. Route those to tiebreak, merge the
 rulings, and re-run `gate` first; a deep review must not be recorded over an unsettled dispute.
