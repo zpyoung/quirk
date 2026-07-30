@@ -2,9 +2,15 @@
 
 **Date**: 2026-07-29 · **Domain**: Docs · **Source**: [exploration](../../explorations/2026-07-29-scannable-prose.md) + [mechanisms companion](../../explorations/2026-07-29-scannable-prose-mechanisms.md)
 
+## Purpose
+
+Specify a quirk skill, `writing-scannable-prose`, that an agent loads when writing or revising a human-facing technical document — README, guide, ADR, PR description, changelog — and that makes the document scannable and information-dense without silently destroying what its claims depend on.
+
+The deliverable is a new skill directory under `skills/`, named for the skill, holding SKILL.md plus reference files, and a test module under `tests/`. Exact layout is in File layout below. This document is what an implementer builds from.
+
 ## Status
 
-Draft — approved for implementation. Tech spec: not requested.
+Draft — approved for implementation, revised after adversarial review (see Amendments). Tech spec: requested.
 
 ## Conceptual model
 
@@ -29,17 +35,37 @@ So the skill ships **structural and relational rules with no numeric thresholds 
 
 The skill loads when an agent is about to write, or has just written, a document that carries claims, reasoning, or procedure. It runs in two phases.
 
-**Authoring (short).** Before drafting, three decisions get made: which Diátaxis-style mode the document is in, who reads it, and which passages are procedural versus explanatory. These decisions determine how hard later cutting may go, so making them up front avoids re-deriving them per edit.
+**Authoring (short).** Before drafting, two decisions get made, each with a named consumer downstream:
+
+| Decision | Consumed by | What it controls |
+|---|---|---|
+| Who reads this, and what they decide next | F1, F2, F4 | Whether a section survives, and what counts as author-facing detail |
+| Which passages are procedural (steps executed) versus explanatory (reasoning believed) | A4 | How hard cutting may go within a passage |
+
+Making them up front avoids re-deriving them per edit. **Nothing else is decided at authoring time** — in particular, the document's Diátaxis mode (tutorial / how-to / reference / explanation) is *not* an authoring input and does not affect cut aggressiveness. Mode has exactly one consumer, A6, where a paragraph written in a different mode from the section around it is diagnosed as misfiled rather than verbose, and gets relocated. Cut aggressiveness is set by content class at passage grain (A4), never by document mode or genre — see the locked decision under "Which failure the skill fights."
 
 **Revision (substantial), in two passes with one checkpoint between them.**
 
 First the section pass (group F). The agent reads repo signals — sibling artifacts, the template, whether content is duplicated somewhere canonical — states the reader and their decision in one visible line, then identifies sections failing materiality and the re-homing plan for their load-bearing contents. **It proposes those removals rather than performing them**, in one batch, and proceeds once answered.
 
-Then the within-section checks (groups A–E), applied directly with no further interaction.
+Then the within-section checks (groups A–E). These never pause the pass.
 
 Two orderings are load-bearing here. F before A–E: running A–E first produces locally tidy prose inside sections that should not exist, and it is the failure the pass falls into by default, because every check from A to E operates at clause, sentence, list, or table grain — without F, "should this section exist?" cannot be posed at all. And the checkpoint before A–E rather than after: confirming removals first means no effort is spent polishing content that is about to go.
 
-Checks tagged mechanical run without judgment. Checks tagged judgment reduce to a specific yes/no. Where a call genuinely cannot be self-verified, the agent surfaces it to the user rather than resolving it silently — this is the honest substitute for the independent second reader the source material assumes exists and that an agent does not have.
+### Escalation has two modes, and only one of them blocks
+
+Checks tagged mechanical run without judgment. Checks tagged judgment reduce to a specific yes/no. Where a judgment call genuinely cannot be self-verified, the agent surfaces it — but *surfacing* and *pausing* are separate things, and conflating them is what makes this contract ambiguous:
+
+| Mode | Applies to | Behavior |
+|---|---|---|
+| **Blocking** | F2 section removals only | Proposed in one batch before A–E begins. The pass waits for an answer. |
+| **Non-blocking** | Any A–E judgment call that cannot be self-verified | The edit is applied, and the uncertainty is named in the report with enough detail to reverse it. The pass does not wait. |
+
+So an unverifiable A–E call is never resolved silently — it is resolved *provisionally and visibly*. That satisfies the escalation rule locked under enforcement shape (which requires surfacing, not blocking) while keeping A–E interaction-free. **A–E raises no question the user must answer before the pass completes.**
+
+The asymmetry is justified by reversibility. An A–E edit is local and visible in a diff, so a wrong call costs a word and the report tells you where to look. A section removal is not recoverable by reading the output, because what is gone leaves no trace in it.
+
+This is the honest substitute for the independent second reader the source material assumes exists and that an agent does not have.
 
 Output is the revised document plus a report of **what changed and why** — not a checklist transcript. The report exists so the pass is visibly either run or not run; a silent pass can be skipped with no signal, which is how these rules decay.
 
@@ -198,7 +224,7 @@ The last row is the guard. A deferred or rejected decision reads like process hi
 
 ```
 skills/writing-scannable-prose/
-  SKILL.md              # gate, model, 24 checks by topic with tags, blocklist,
+  SKILL.md              # gate, model, 28 checks by topic with tags, blocklist,
                         # deference rules, self-check protocol
   worked-examples.md    # one before/after per check
   evidence-and-limits.md # grounded vs precautionary status, falsification
@@ -207,7 +233,7 @@ skills/writing-scannable-prose/
 
 Plus: both exploration documents committed to `docs/quirk/explorations/` on this branch. They are currently untracked and live in the main checkout, so the skill's citation pointer would otherwise be a dead link for anyone else. They are the evidence layer several locked decisions depend on.
 
-Plus: a test module following `tests/test_skill.py`'s shape — frontmatter valid, name matches directory, description carries the intended trigger phrases, blocklist entries present in SKILL.md, all 24 check IDs present.
+Plus: a test module following `tests/test_skill.py`'s shape — frontmatter valid, name matches directory, description carries the intended trigger phrases, blocklist entries present in SKILL.md, and all 28 check IDs present — F1–F4 included, since the section-grain group is the newest and the one a stale count would silently omit.
 
 ## Activation
 
@@ -350,3 +376,11 @@ Changes: new group F (F1 name the reader and decision, F2 section materiality, F
 **2026-07-30 — specified how F1 and F2 actually run.** Group F as first written said to name the reader and decide materiality, but not where either judgment comes from. In the worked example the agent inferred both silently and got F2 wrong, which is the same author-is-its-own-reviewer problem the spec addresses elsewhere, resurfacing at the one grain where the edit is irreversible.
 
 Changes: F1 now derives its line from repo signals (sibling artifacts, template, canonical duplication) before guessing, and states it visibly so a wrong premise can be rejected in one line rather than audited across a diff. F2 removals are proposed in one batch rather than performed, with F3's re-homing plan attached — an asymmetry justified by removal being both the highest-blast-radius edit and the weakest-inference one; A–E still run with no interaction. F4 gains a category-to-destination table, making it a routing rule consistent with A6 rather than a deletion rule, with a deliberately-not-made decision explicitly excluded from the author-facing categories. This narrows the previously-locked "reports what it changed, no checkpoint" decision to A–E only.
+
+**2026-07-30 — fixed four findings from adversarial review** (`spec-design` profile, `deep`, reviewer `gpt-5.6-sol`/openai, `independence: full`, verdict `NEEDS_FIXES`). All four were contract-integrity defects; three were damage from the two amendments above. Nothing was found against the substance of the rule set.
+
+- **F1, HIGH, internal contradiction.** "A–E run with no further interaction" contradicted the locked escalation rule requiring unverifiable judgment calls to be surfaced. Resolved by separating *surfacing* from *pausing*: escalation now has a blocking mode (F2 removals only) and a non-blocking mode (A–E uncertainty applied provisionally, named in the report). Justified by reversibility — an A–E edit is visible in the diff, a removal leaves no trace in the output.
+- **F2, HIGH, missing behavior contract.** The authoring phase required classifying the document's Diátaxis mode without defining the modes or what the classification controlled, and it contradicted A4 and the locked "by content class, not genre" decision. Resolved by removing mode from the authoring inputs, giving the two surviving inputs a named downstream consumer each, and stating that mode's sole consumer is A6 routing.
+- **F3, MEDIUM, stale acceptance contract.** The file layout and test contract still specified 24 checks after the inventory reached 28, permitting a spec-conformant test that omits all of group F. Both now say 28 and name F1–F4 explicitly. Historical counts in this log are left as written.
+- **F4, HIGH, failing pre-pass check.** No `Purpose`/`Overview` heading; the document opened on `## Status`. Added a Purpose section naming the deliverable.
+
