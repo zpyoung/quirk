@@ -27,11 +27,11 @@ Diátaxis mode (tutorial / how-to / reference / explanation) is **not** an autho
 ## Revision protocol
 
 1. **Derive F1's line.** Check sibling artifacts, the template, and whether the content already lives canonically; state the result: `Reader: <who> — Decision: <what they do next>`. No signal resolves it → say so.
-2. **Run F2 against every section** against F1's line: does its absence change the named decision? Mark keep or remove. **No F1 line → F2 doesn't run; every section defaults to keep.** Name the gap as a non-blocking escalation — not a second blocking point, since it doesn't halt the pass.
-3. **For every section marked remove, run F3**: name the section that owns each load-bearing item; no owning section → find one or reclassify it as not load-bearing.
+2. **Run F2 against every section** against F1's line: does its absence change the named decision? Mark keep or remove. **F1 is unresolved whenever either field is missing — a reader named with no decision, or a decision with no reader — and an unresolved F1 means F2 doesn't run; every section defaults to keep.** Name the gap as a non-blocking escalation — not a second blocking point, since it doesn't halt the pass.
+3. **For every section marked remove, run F3**: name the section that owns each load-bearing item; no owning section → find one, or reclassify it as not load-bearing only when it fails F1's line like any other cut, naming the reclassification to the user beside the removal proposal.
 4. **Emit the removal proposal** (shape below) in one batch, then **stop for an answer before step 5** — the protocol's one blocking point. Nothing marked → straight to step 5.
-5. **Apply the answer**: perform the approved F2 removals and their F3 moves, and retain the sections the user rejected. Then **run F4** on every surviving section: route author-facing detail to its destination (table below); a deliberately-not-made decision stays.
-6. **Run groups A–E** on the surviving, routed content. Before A4 touches a passage, classify it procedural or explanatory — passage grain only, right before A4 fires, never at document or section grain. A call here that can't be self-verified is non-blocking: apply it provisionally and name it in the report.
+5. **If removals were proposed, apply the answer**: perform the approved F2 removals and their F3 moves, and retain the sections the user rejected. Then **run F4** on every surviving section: route author-facing detail to its destination (table below); a deliberately-not-made decision stays.
+6. **Run groups A–E** on the surviving, routed content. Reuse a passage's procedural/explanatory classification from the authoring phase when one was made there; otherwise — the common case, since authoring rarely runs against an existing draft — classify it in place, immediately before A4 fires, passage grain only, never at document or section grain. A call here that can't be self-verified is non-blocking: apply it provisionally and name it in the report.
 7. **Emit the revision report** (shape below): everything steps 1–6 changed and why, including the escalations from steps 2 and 6.
 
 **Removal proposal shape** (step 4's output):
@@ -42,7 +42,7 @@ Diátaxis mode (tutorial / how-to / reference / explanation) is **not** an autho
 |---|---|---|---|
 ```
 
-One row per removed section, empty when nothing was marked — including the F1-undecided case, named in the report.
+One row per removed section, empty when nothing was marked — including the F1-undecided case, named in the report. An item F3 reclassifies out of load-bearing status is named beside the proposal too, with the F1 line it failed — approving a removal means approving what goes with it.
 
 ## Escalation modes
 
@@ -51,7 +51,8 @@ Escalation has two modes, and only one of them blocks:
 | Mode | Applies to | Behavior |
 |---|---|---|
 | Blocking | F2 section removals only | Proposed in one batch before A–E begins; the pass waits |
-| Non-blocking | Any unverifiable A–E judgment call, or an unresolved F1 line | Applied provisionally, named in the report; the pass doesn't wait |
+| Non-blocking | An unresolved F1 line | Not applied: F2 is skipped, every section defaults to keep, the gap is named in the report |
+| Non-blocking | Any unverifiable A–E judgment call | Applied provisionally, named in the report; the pass doesn't wait |
 
 The asymmetry is reversibility: an A–E edit is visible in a diff, so a wrong call costs a word. A section removal leaves no trace once gone.
 
@@ -80,16 +81,18 @@ F4 routes surviving detail to:
 | Tooling and process narrative | Nowhere; work-in-progress residue |
 | A decision deliberately not made, with its rationale | Stays — changes what a reader concludes |
 
+These categories make F4 actionable, not exhaustive: content outside the table is still tested against F1's line rather than passing by default. And a destination outside the document under revision — for F4 or A6 alike — is proposed, not performed, unless that file is already in the task's scope; the material stays put until the move is authorized. Non-blocking: it routes to the report like any other non-blocking item, not a second checkpoint.
+
 ### A — What a cut may touch
 
 | ID | Check | Tag |
 |---|---|---|
 | A1 | Name the operation: word, claim, or qualifier scoping a surviving claim | `judg` |
-| A2 | Scope conditions, sample sizes, platform caveats stay in the same visual unit as their claim — never demoted to a footnote or a later bullet. Tighten wording, not the fact | `judg` |
+| A2 | Qualifiers (hedges), scope conditions, sample sizes, exceptions, platform caveats stay in the same visual unit as their claim — never demoted to a footnote or a later bullet. Tighten wording, not the fact | `judg` |
 | A3 | **Orphan check.** Diff backward pointers and demonstratives against the deletion — cut pointer with referent, inline a restatement, or keep both | `mech` |
 | A4 | Cut license by content class: procedural cuts toward bare imperatives; explanatory cuts filler only — trade-offs, scope conditions, sample sizes, limitations survive. `precautionary` | `judg` |
 | A5 | Dead words: nominalizations back to verbs, expletive constructions, circumlocutions, redundant intensifiers | `mech` |
-| A6 | Route before deleting: material not changing the reader's action moves — footnote, appendix, its owning document — never dies | `judg` |
+| A6 | Route before deleting: material that is true and relevant but doesn't change the reader's action moves — footnote, appendix, its owning document — never dies | `judg` |
 
 ### B — Which device carries the logic
 
