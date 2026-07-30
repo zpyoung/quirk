@@ -307,8 +307,11 @@ verdict. `CRITICAL` is exempt. Nothing is dropped; the rule decides what buys a 
 gets reported. Full rule in [`assets/composition-contract.md`](assets/composition-contract.md).
 
 **So `PASS` does not mean "clean".** It means *no unresolved finding met the blocking bar under this
-scope and protocol*. Report `advisory_count`, `limitations[]`, and `questions[]` alongside it, or
-the reader will hear a completeness guarantee this protocol cannot give.
+scope and protocol*. Report `advisory_count`, `limitations[]`, `questions[]`, and
+`unreviewed_paths[]` alongside it, or the reader will hear a completeness guarantee this protocol
+cannot give. `unreviewed_paths[]` is the scope one: files that appeared after the artifact was
+captured, which no stage looked at. Usually that is the review's own check output and means nothing;
+when it is real new work, the verdict stopped short of it and only this says so.
 
 **`NOT_REVIEWABLE` is never a synonym for `PASS`.** It means the review did not happen — nothing was
 examined and nothing was cleared. Handle all four verdicts by name. A caller writing `if verdict !=

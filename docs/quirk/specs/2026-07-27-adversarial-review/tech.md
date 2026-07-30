@@ -444,6 +444,11 @@ contested        : array of Finding
                    # Non-empty only at deep depth: findings the caller must route
                    # to the tiebreak stage. Empty at quick/standard, where refute
                    # wins outright.
+unreviewed_paths : array of str
+                   # Untracked files present now that were absent when the artifact was
+                   #   captured. They do not refuse the run — most are the review's own
+                   #   check output — but a PASS that stopped short of real new work has
+                   #   to say so, so they are reported and carried into the manifest.
 contested_count  : int
                    # len(contested). A caller reading blocking_count alone sees a
                    # non-PASS verdict beside zero blocking findings, since a pending

@@ -1902,6 +1902,33 @@ def test_files_the_review_itself_creates_do_not_read_as_a_changed_artifact(tmp_p
     assert run_ar("manifest", *args).returncode == 0
 
 
+def test_work_added_after_capture_is_reported_rather_than_passed_over(tmp_path):
+    """Scoping the check to the captured set is what keeps it usable, but silence about
+    the difference would be its own fail-open — new work no stage looked at, under a
+    `PASS`. Refusing is wrong (most of these are the review's own check output), so the
+    caller is told instead."""
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    _git_repo(repo)
+    (repo / "x.py").write_text("a\nb\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "committed"], cwd=repo, check=True)
+    bundle = _live_run(repo, work, "run")
+
+    (repo / "vuln.py").write_text("def exploit():\n    pass\n")
+
+    quick = _write(work, "q.json", {"findings": [], "suppressed": []})
+    proc = run_ar("gate", "--findings", quick, "--model", bundle["model"],
+                  "--prepass", bundle["prepass"], "--resolve", bundle["resolve"],
+                  "--depth", "quick", "--repo-root", str(repo))
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout)
+    assert result["verdict"] == "PASS"
+    assert result["unreviewed_paths"] == ["vuln.py"], (
+        "a PASS that stopped short of real new work must say so"
+    )
+
+
 def test_an_untracked_file_that_was_part_of_the_artifact_still_counts(tmp_path):
     """The relaxation is scoped to files that appeared after `resolve`. Uncommitted new
     work present when the artifact was captured is under review like anything else."""

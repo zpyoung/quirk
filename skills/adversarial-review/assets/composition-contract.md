@@ -113,6 +113,7 @@ order, so a suppressed finding leaves a gap in the surviving sequence rather tha
   blocking_count   : int
   advisory_count   : int
   contested_count  : int        # pending disputes; non-zero means the result is not final
+  unreviewed_paths[] : str      # appeared after the artifact was captured; no stage saw them
   regrade_count    : int        # findings a later stage re-graded
   manifest         : { reviewer, target, profile, depth, lens, prepass, verdict,
                        suppressed_count, severity_histogram, blocking_count,

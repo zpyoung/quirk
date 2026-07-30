@@ -1329,6 +1329,28 @@ def assign_ids(
         taken.add(finding["id"])
 
 
+def unreviewed_since_capture(resolved: dict[str, Any], repo_root: Path) -> list[str]:
+    """Untracked files that appeared after the artifact was captured.
+
+    Scoping the currency check to the captured set is what keeps it usable, but silence
+    about the difference would be its own fail-open: a file added mid-review is real work
+    that no stage looked at, and a caller reading `PASS` would have no way to know the
+    review's coverage stopped short of it. Refusing is wrong — most of these are the
+    review's own check output — so it is reported instead.
+    """
+    if resolved.get("diff_file") or classify_target(
+        resolved.get("target_ref", "")
+    ) != "worktree":
+        return []
+    captured = set(resolved.get("untracked_paths") or [])
+    try:
+        return sorted(p for p in untracked_paths(repo_root) if p not in captured)
+    except UsageError:
+        # Outside a worktree there is nothing to enumerate. That is not a review defect
+        # and must not turn a completed review into a crash.
+        return []
+
+
 def verify_artifact_is_current(resolved: dict[str, Any], repo_root: Path) -> None:
     """Refuse to judge an artifact that is no longer the one `resolve` identified.
 
@@ -1525,8 +1547,10 @@ def run_gate(
     # Callers are told a gate exit of 0/1/3 means the review completed, so they stop
     # here rather than at the manifest. An intact bundle from an earlier run satisfies
     # every check above — this is the one that refuses to judge a tree that has moved on.
+    unreviewed: list[str] = []
     if verify_artifact:
         verify_artifact_is_current(resolved, repo_root)
+        unreviewed = unreviewed_since_capture(resolved, repo_root)
     if isinstance(findings, dict):
         carried = findings.get("suppressed", [])
         if not isinstance(carried, list):
@@ -1644,6 +1668,11 @@ def run_gate(
         # beside zero blocking findings, since a pending contest escalates from
         # `contested[]` and is withheld from `findings[]`.
         "contested_count": len(contested),
+        # Files that appeared after the artifact was captured. Mostly the review's own
+        # check output, which is why they do not refuse the run — but a `PASS` that
+        # silently stopped short of real new work would be the same lie by omission the
+        # suppressed count exists to prevent, so the caller is told either way.
+        "unreviewed_paths": unreviewed,
         "regrade_count": sum(1 for f in survivors if f.get(ADJUDICATED_SEVERITY)),
     }
     if gate_chain:
@@ -1991,6 +2020,9 @@ def build_manifest(
         "regrade_count": gate_result.get("regrade_count", 0),
         "limitation_count": len(gate_result.get("limitations", [])),
         "question_count": len(gate_result.get("questions", [])),
+        # Part of the replay record because it bounds what the verdict covered: these
+        # appeared after the artifact was captured and no stage looked at them.
+        "unreviewed_paths": gate_result.get("unreviewed_paths", []),
         "verdict": gate_result.get("verdict"),
     }
 
