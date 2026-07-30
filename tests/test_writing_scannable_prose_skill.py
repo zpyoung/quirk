@@ -91,13 +91,13 @@ def test_skill_blocklist_entries_present() -> None:
     Matched on the shortest substring that still distinguishes each item, so the
     test pins the claim rather than the sentence someone wrote around it. "30%"
     alone would not distinguish the bold-ceiling item from the scanning-speed one,
-    so those two carry one extra word each."""
+    so each carries the percentage that identifies it."""
     body = SKILL_PATH.read_text()
     required_substrings = [
         "30%-bold",
         "25% faster",
         "7±2",
-        "faster scanning",
+        "30% faster scanning",
         "F-pattern",
     ]
     missing = [s for s in required_substrings if s not in body]
