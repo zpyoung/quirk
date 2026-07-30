@@ -351,6 +351,33 @@ markdown_render.py --input <path|-> [--output <path>] [--write <project-root>] [
   `inferred` fields render with a fixed hedge prefix; `missing` fields render their `reason`; the
   "Verified against" section lists `verified_against[]` verbatim; empty optional sections are
   pruned entirely, never rendered as an empty heading.
+- **Every top-level key has a rendering rule.** A key defined in the schema with no stated
+  projection is a contract hole — the renderer is a pure function of the document, so anything the
+  document carries and the renderer ignores is silently dropped from the artifact. In document
+  order:
+
+  | Key | Rendered as |
+  |---|---|
+  | `title` | the artifact's `#` heading, and the issue title on the GitHub path |
+  | `fields[]` | body sections, per the provenance rules above, in field-set order |
+  | `proposed_solution` | a `## Proposed approach` section placed **after** the problem and evidence sections, never before, prefixed with a fixed attribution line naming `attributed_to` and framing it as open rather than directed ([§Decisions Locked → tone-and-length](./logic.md#decisions-locked): the problem stays primary and the proposal is a marked suggestion). Omitted entirely when the key is absent |
+  | `verified_against[]` | the "Verified against" section, verbatim |
+  | `disclosure_required` | when `true`, a fixed single-line footer naming AI assistance, rendered last. When `false`, **nothing** — no footer, no placeholder ([§Decisions Locked → provenance-and-safety](./logic.md#decisions-locked): disclosure is conditional on public-or-third-party) |
+  | `halted` | never rendered — a halted document fails the `--for-emission` precondition and is refused before any rendering occurs |
+  | `headless` | not rendered as content; selects the banner below |
+  | `template`, `target`, `schema_version`, `type`, `depth` | never rendered; they are provenance about the document, not content of the artifact |
+
+  **Tech-spec call (logic.md silent):** the exact wording of the hedge prefix, the attribution line,
+  the headless banner, and the disclosure footer is fixed in `_common.py` as four module-level
+  string constants rather than being composed per call. They are asserted verbatim in tests, so a
+  wording change is a deliberate edit with a failing test behind it, not drift.
+- **`headless: true` renders a banner.** The artifact opens — above the title, first thing a reader
+  sees — with the fixed statement that no human confirmed it ([§Data flow](./logic.md#data-flow):
+  "The artifact carries a prominent statement that no human confirmed it"). The root `headless` key
+  already carries this fact, so the renderer reads it rather than inferring from a heuristic like
+  "every unresolved field says *no human in session*" — that inference breaks the moment a headless
+  run resolves everything by inspection, which is the case it most needs to catch. `headless` is
+  the one root key that is neither rendered as content nor ignored: it selects the banner.
   **Tech-spec call (logic.md silent):** the per-type terseness ceiling
   ([§Decisions Locked → tone-and-length](./logic.md#decisions-locked)) is **not** enforced by this
   script. It's a constraint on what the model writes into a field's `value` during Establish, not
@@ -491,11 +518,34 @@ markdown template's own leading frontmatter (`name:`/`labels:`/`about:`) is pars
 mapping-parsing routine in `_yaml_mini.py` and supplies the `name`/`labels` step-2 classifies
 against, exactly as a YAML form's top-level `name`/`labels` do.
 
-### Field-name mapping (YAML form → canonical `fields[].name`)
+### Field-name mapping (template → canonical `fields[].name`)
 
-A body element's canonical field name is its `id` when present, else `slugify(attributes.label,
-sep="_")` (snake_case, to match the per-type core naming convention —
-`current_behavior`, not `current-behavior`).
+Both template kinds produce canonical field names, and the union-of-requiredness rule below cannot
+run without them — it has to compare a template's field set against the per-type core, which means
+both sides must be in the same namespace. The rule is stated per kind rather than left to be
+composed from the section-boundary rule and the slug convention:
+
+**YAML form.** A body element's canonical field name is its `id` when present, else
+`slugify(attributes.label, sep="_")`.
+
+**Markdown template.** Each `##`-or-deeper heading is one section boundary (above), and its
+canonical field name is `slugify(<heading text>, sep="_")` — the heading text with any leading
+markdown markers and trailing punctuation stripped. The section's content is everything up to the
+next heading at any depth.
+
+Both produce snake_case, matching the per-type core naming convention — `current_behavior`, not
+`current-behavior` — which is what lets a template-derived name collide with a core name and be
+recognized as the same field rather than added twice.
+
+**Tech-spec call (logic.md silent):** heading text is matched against core names after slugging,
+case-insensitively, with a small fixed synonym table in `_common.py` (`steps to reproduce` →
+`steps_to_reproduce`, `expected behaviour`/`expected behavior` → `expected_behavior`, `actual
+behaviour`/`actual behavior` → `current_behavior`). Without it, a template heading of "Steps To
+Reproduce" produces `steps_to_reproduce` and matches, but "Expected behaviour" produces
+`expected_behaviour` and silently becomes a *second* field alongside the core's
+`expected_behavior` — asking the user the same question twice and rendering two near-identical
+sections. The table is deliberately small and closed; an unmatched heading becomes its own
+template-supplied field, which is the correct outcome for a genuinely novel section.
 
 ### The union-of-requiredness rule
 
