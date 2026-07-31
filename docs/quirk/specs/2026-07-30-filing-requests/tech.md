@@ -184,7 +184,7 @@ whatever was there. This keeps the stored value from drifting out of sync with i
 | `source` | string | required **iff** `provenance == observed` |
 | `reason` | string | required **iff** `provenance == missing` |
 | `polarity` | enum `"negative"` | optional; legal **only if** `provenance == observed` — its absence means an ordinary (non-negative) observation, per `logic.md`'s own examples (the `environment` field carries no `polarity` key at all) |
-| `needs_confirmation` | bool | optional; set only by `drift_apply.py` on the one mapping `logic.md` calls out as re-opening a question ([§Data flow](./logic.md#data-flow): `expected_behavior → acceptance_criteria`); cleared once the user edits or confirms the value |
+| `needs_confirmation` | bool | optional; set only by `drift_apply.py` — on the one mapping `logic.md` calls out as re-opening a question ([§Data flow](./logic.md#data-flow): `expected_behavior → acceptance_criteria`), and on a merge that appends weaker-provenance content onto a stronger field (see [Drift carry-over](#drift-carry-over)); cleared once the user edits or confirms the value |
 
 **Tech-spec call (logic.md silent):** `needs_confirmation` is this tech spec's representation of
 "a `reported` draft the user must confirm" ([§Data flow](./logic.md#data-flow)). Without it, a
@@ -345,10 +345,15 @@ secret_scan.py --input <path|->
   xox[baprs]-[A-Za-z0-9-]{10,}                        # Slack token
   eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+   # JWT
   -----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----     # private key block
-  [a-zA-Z][a-zA-Z0-9+.-]*://[^/\s:]+:[^/\s@]+@         # connection string with embedded credential
+  [a-zA-Z][a-zA-Z0-9+.-]{0,31}://[^/\s:]{1,256}:[^/\s@]{1,256}@   # connection string with credential
   (?i)(api[_-]?key|secret|token|password)\s*[:=]\s*['"]?[A-Za-z0-9_\-]{16,}  # generic assignment
   ```
   Expanding this list is a script change only, never a schema change.
+  **Tech-spec call (logic.md silent):** the connection-string pattern's repetitions are
+  *bounded*. Unbounded `*`/`+` runs make each of the N positions `finditer` tries scan to the
+  end of the input before failing, so a long alphabetic run carrying no `://` costs O(N²) and
+  stalls the scan — and with it, filing. The bounds are far past any real scheme (RFC 3986
+  schemes are a handful of characters) or userinfo pair, so nothing legitimate stops matching.
 
 ### `markdown_render.py`
 
@@ -367,6 +372,12 @@ markdown_render.py --input <path|-> [--output <path>] [--write <project-root>] [
   `slugify(doc["title"])`) under `<project-root>`, writes it, and prints the resulting relative
   path to stdout, the same "compute a path, write it, print a confirmation" shape `bin/adr_create.py`
   uses (though that script confirms with an ID line, not the path itself).
+  **Tech-spec call (logic.md silent):** `--slug` goes through the same `slugify` the title does,
+  and an override that slugifies to nothing is exit `2`. The slug is interpolated into a path, so
+  taking it verbatim lets separators and `..` segments walk out of `docs/quirk/requests/` and
+  overwrite an arbitrary file — `--write` promises one new file in one directory, and a slug is
+  a filename fragment, never a path. A *title* that slugifies to nothing falls back to
+  `untitled` instead of erroring, since the user never chose that filename.
 - Rendering rules (pure function of the document, no model in the loop, per
   [§Projection](./logic.md#the-canonical-form-is-the-spine)): `observed`/`reported` fields render plainly;
   `inferred` fields render with a fixed hedge prefix; `missing` fields render their `reason`; the
@@ -433,6 +444,29 @@ drift_apply.py --input <path|-> --to bug|feature [--output <path>]
 - Postcondition: every field from the source type is accounted for — mapped per the table, or
   retained as an optional field under its original name if the table has no row for it
   ([§Data flow](./logic.md#data-flow): "nothing the user supplied is ever discarded on drift").
+  **This holds when two of them collide.** Two source entries can land on one destination — an
+  `environment → constraints` rename onto a document that already carries `constraints`, or two
+  entries that simply share a name — and the second must merge, never overwrite. Overwriting is
+  how a field gets discarded, and "nothing is ever discarded" admits no exception for collisions
+  the tables didn't anticipate. A merge with no `lead_in` of its own uses
+  `Also supplied for <name>:`.
+- Postcondition: `template.fields` is carried across the same mapping the values took, whenever
+  the document already has one. Left behind, the union the emission gate reads still describes
+  the *source* type: `--for-emission` reports the source type's fields missing and never enforces
+  the destination type's own required set — on a `feature`, the non-waivable gate would check the
+  bug's field list and pass a request with no `acceptance_criteria`. The rebuild applies
+  [The union-of-requiredness rule](#the-union-of-requiredness-rule) to the new type: mapped
+  entries keep their `source` and the template's ordering, requiredness unions when two entries
+  collapse onto one name (`demote_optional` contributes `required: false`), the destination
+  core is additive, and the non-waivable pair is forced `required: true`. An **absent or empty**
+  `template.fields` is left alone — template resolution has not settled, and synthesizing a union
+  here would manufacture the exact silent fallback the key exists to prevent.
+  **Tech-spec call (logic.md silent):** an `append_or_become` merge whose incoming provenance is
+  *weaker* than the destination's sets `needs_confirmation: true` on the merged field. A field
+  has one provenance slot; appending a `reported` claim onto an `observed` value would otherwise
+  re-label it `observed` and lose the distinction, which is the ambiguity `logic.md` is careful
+  to avoid everywhere else provenance is concerned. This widens `needs_confirmation` beyond the
+  single `expected_behavior → acceptance_criteria` mapping the schema table names.
 
 ### `github_file.py`
 
@@ -445,10 +479,20 @@ github_file.py --input <path|-> --repo <owner/repo> [--execute]
   **Tech-spec call (logic.md silent):** this override exists purely for testability — it lets
   `test_filing_github_file.py` point `GH_BIN` at a repo-local stub that just echoes its argv, so
   `--execute` is exercised with no real network or `gh` install required in CI.
-- **Defense in depth:** before honoring `--execute`, this script itself re-runs
-  `canonical_schema.validate(doc, for_emission=True)` and `secret_scan.scan(doc)` — it does not
-  trust that the caller already gated on both. Exit `3` (validation) or `1` (secrets found) if
-  either fails, and `gh` is never invoked. The same re-check also refuses `--execute` (exit `3`)
+- **`--repo` must equal `doc["target"]["repo"]`** (exit `2` otherwise). The body's disclosure
+  footer is derived from *this document's* `target`, so filing it at some other repository can
+  send a disclosure-free body to a public or third-party tracker. The document names its own
+  destination; `--repo` restates it, and a disagreement is the caller pointing at something the
+  document was not prepared for, not a destination to honor.
+- **Defense in depth:** this script itself re-runs
+  `canonical_schema.validate(doc, for_emission=True)` and, under `--execute`, `secret_scan.scan(doc)`
+  — it does not trust that the caller already gated on both. Exit `3` (validation) or `1` (secrets
+  found) if either fails, and `gh` is never invoked. **The validation runs before rendering, and
+  it gates the dry run too**: `markdown_render.render()` assumes a validated document and indexes
+  keys directly, so rendering first turns a structural error into a `KeyError` traceback instead
+  of the exit `3` this table promises — and `markdown_render.py`'s own contract refuses a halted
+  or core-incomplete document "including for the on-screen draft preview", which is exactly what
+  the dry run is. The same re-check also refuses `--execute` (exit `3`)
   when `doc["headless"] == true`: [§session-economics](./logic.md#decisions-locked) says headless
   output "is never filed to a tracker automatically," and that guarantee should not rest solely on
   `SKILL.md` never reaching the confirmation step in a headless run — the script that performs the
@@ -518,6 +562,19 @@ all scalars** (`[a, "b", c]`, including the empty `[]`). **Not** supported: flow
 flow sequences containing a nested collection, anchors/aliases, multi-document `---`/`...`
 separators, tags, merge keys — a file using any of these raises `TemplateParseError` naming the file
 and line, which `discover` (above) catches per-file rather than propagating.
+
+**Tech-spec call (logic.md silent):** two bounds keep that per-file guarantee honest, because
+`discover` can only catch what arrives as a `TemplateParseError`.
+
+- **Nesting is bounded** (64 levels, far past anything a real issue form uses) and both tiers
+  additionally catch `RecursionError`. Otherwise a deeply nested file raises `RecursionError` out
+  of `parse` and aborts discovery for the whole repo — the exact all-or-nothing failure the
+  per-file exclusion rule exists to prevent.
+- **Double-quoted escapes are decoded in full, and an unknown escape is rejected** rather than
+  having its backslash silently dropped. The two tiers must never disagree about the *content* of
+  a template ID or field name: PyYAML decodes `"_"` to `_`, and a tier that yields `u005f`
+  produces a different field set on a machine without PyYAML, which is precisely the
+  environment-dependent divergence `yaml_tier` reporting exists to make visible.
 
 **Why scalar flow sequences are in the subset.** GitHub's documented Issue Forms schema declares
 labels as `labels: ["bug", "needs-triage"]`, and that flow form is what real templates use — a
