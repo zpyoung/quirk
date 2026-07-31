@@ -104,6 +104,90 @@ def test_empty_document_is_none(yaml_mini) -> None:
     assert yaml_mini.parse("\n\n# just a comment\n", "empty2.yml") is None
 
 
+# ---- scalar flow sequences (T11: the one flow form the mini tier admits) -----------
+
+
+def test_flow_sequence_of_plain_scalars(yaml_mini) -> None:
+    text = "labels: [bug, needs-triage]\n"
+    assert yaml_mini.parse(text, "flow-plain.yml") == {"labels": ["bug", "needs-triage"]}
+
+
+def test_flow_sequence_of_quoted_scalars(yaml_mini) -> None:
+    text = 'labels: ["bug", "needs-triage"]\n'
+    assert yaml_mini.parse(text, "flow-quoted.yml") == {"labels": ["bug", "needs-triage"]}
+
+
+def test_flow_sequence_of_mixed_scalars(yaml_mini) -> None:
+    text = "labels: [bug, \"needs-triage\", 'urgent']\n"
+    assert yaml_mini.parse(text, "flow-mixed.yml") == {
+        "labels": ["bug", "needs-triage", "urgent"]
+    }
+
+
+def test_flow_sequence_empty(yaml_mini) -> None:
+    text = "labels: []\n"
+    assert yaml_mini.parse(text, "flow-empty.yml") == {"labels": []}
+
+
+def test_flow_sequence_trailing_comma(yaml_mini) -> None:
+    text = "labels: [bug, needs-triage,]\n"
+    assert yaml_mini.parse(text, "flow-trailing.yml") == {"labels": ["bug", "needs-triage"]}
+
+
+def test_flow_sequence_extra_whitespace(yaml_mini) -> None:
+    text = "labels: [  bug ,   needs-triage  ]\n"
+    assert yaml_mini.parse(text, "flow-whitespace.yml") == {
+        "labels": ["bug", "needs-triage"]
+    }
+
+
+def test_flow_sequence_as_root_document(yaml_mini) -> None:
+    text = "[a, b, c]\n"
+    assert yaml_mini.parse(text, "flow-root.yml") == ["a", "b", "c"]
+
+
+def test_flow_sequence_as_sequence_item(yaml_mini) -> None:
+    text = "- [a, b]\n- c\n"
+    assert yaml_mini.parse(text, "flow-item.yml") == [["a", "b"], "c"]
+
+
+def test_github_issue_form_with_flow_labels(yaml_mini) -> None:
+    text = (
+        "name: Bug Report\n"
+        "description: File a bug\n"
+        'labels: ["bug", "needs-triage"]\n'
+        "body:\n"
+        "  - type: input\n"
+        "    id: current_behavior\n"
+        "    attributes:\n"
+        "      label: Current behavior\n"
+        "    validations:\n"
+        "      required: true\n"
+        "  - type: textarea\n"
+        "    id: steps_to_reproduce\n"
+        "    attributes:\n"
+        "      label: Steps to reproduce\n"
+    )
+    assert yaml_mini.parse(text, "issue-form.yml") == {
+        "name": "Bug Report",
+        "description": "File a bug",
+        "labels": ["bug", "needs-triage"],
+        "body": [
+            {
+                "type": "input",
+                "id": "current_behavior",
+                "attributes": {"label": "Current behavior"},
+                "validations": {"required": True},
+            },
+            {
+                "type": "textarea",
+                "id": "steps_to_reproduce",
+                "attributes": {"label": "Steps to reproduce"},
+            },
+        ],
+    }
+
+
 # ---- unsupported constructs -- one fixture per construct ----------------
 
 
@@ -115,11 +199,19 @@ def test_flow_mapping_rejected(yaml_mini) -> None:
     assert exc_info.value.line == 1
 
 
-def test_flow_sequence_rejected(yaml_mini) -> None:
-    text = "labels: [bug, urgent]\n"
+def test_flow_mapping_nested_in_sequence_rejected(yaml_mini) -> None:
+    text = "labels: [{k: v}]\n"
     with pytest.raises(yaml_mini.TemplateParseError) as exc_info:
-        yaml_mini.parse(text, "flow-seq.yml")
-    assert exc_info.value.path == "flow-seq.yml"
+        yaml_mini.parse(text, "flow-seq-nested-map.yml")
+    assert exc_info.value.path == "flow-seq-nested-map.yml"
+    assert exc_info.value.line == 1
+
+
+def test_flow_sequence_nested_in_sequence_rejected(yaml_mini) -> None:
+    text = "labels: [[a], b]\n"
+    with pytest.raises(yaml_mini.TemplateParseError) as exc_info:
+        yaml_mini.parse(text, "flow-seq-nested-seq.yml")
+    assert exc_info.value.path == "flow-seq-nested-seq.yml"
     assert exc_info.value.line == 1
 
 
@@ -179,7 +271,7 @@ def test_parse_yaml_raises_template_parse_error_on_forced_mini_tier(monkeypatch)
     monkeypatch.setitem(sys.modules, "yaml", None)
     forced = load_filing_module("_yaml_mini")
     with pytest.raises(forced.TemplateParseError):
-        forced.parse_yaml("key: [1, 2]\n", "forced-bad.yml")
+        forced.parse_yaml("key: {a: 1}\n", "forced-bad.yml")
 
 
 # ---- parity between tiers on the shared subset ---------------------------
@@ -199,6 +291,10 @@ PARITY_FIXTURES = [
     "description: >\n  line one\n  line two\n\n  line three\n",
     "title: 'It''s broken'\n",
     'detail: "needs \\"quotes\\""\n',
+    "labels: [bug, needs-triage]\n",
+    'labels: ["bug", "needs-triage"]\n',
+    "labels: []\n",
+    "labels: [bug, needs-triage,]\n",
 ]
 
 
