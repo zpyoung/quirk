@@ -6,7 +6,7 @@ Version: **2026.7.9**
 
 ## What ships
 
-- **23 skills** under `skills/` covering TDD, systematic debugging, brainstorming (which produces a logic spec), deep-research/brainstorming exploration (with a `--involve` user-inclusion dial: checkpoints, mid-run steering, and idea-gate co-creation), divergent ideation, tech-spec authoring and plan writing, scannable-prose revision, code review, adversarial review (typed profiles, a promote/refute two-stage, and an evidence gate), parallel agent dispatch, and more.
+- **24 skills** under `skills/` covering TDD, systematic debugging, brainstorming (which produces a logic spec), deep-research/brainstorming exploration (with a `--involve` user-inclusion dial: checkpoints, mid-run steering, and idea-gate co-creation), divergent ideation, tech-spec authoring and plan writing, scannable-prose revision, code review, adversarial review (typed profiles, a promote/refute two-stage, and an evidence gate), parallel agent dispatch, guided bug/feature/code-change filing with provenance-marked artifacts, and more.
 - **Typed artifacts** (added in 5.1.0) — surface-routing for observations Claude cannot act on. See below.
 
 ## Installation

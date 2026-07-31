@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "type": "bug",
+  "headless": false,
+  "depth": "read",
+  "title": "Export fails with UnicodeDecodeError on reports containing em-dashes",
+  "target": {
+    "kind": "github",
+    "repo": "acme/reports",
+    "writable": true,
+    "third_party": "no",
+    "visibility": "private"
+  },
+  "template": {
+    "applied": false,
+    "path": null,
+    "fields": [
+      { "name": "current_behavior", "required": true, "source": "core" },
+      { "name": "expected_behavior", "required": true, "source": "core" },
+      { "name": "steps_to_reproduce", "required": true, "source": "core" },
+      { "name": "environment", "required": true, "source": "core" }
+    ]
+  },
+  "fields": [
+    {
+      "name": "current_behavior",
+      "value": "Export as PDF raises UnicodeDecodeError when the report title contains an em-dash",
+      "provenance": "reported"
+    },
+    {
+      "name": "expected_behavior",
+      "value": "the PDF export completes and the em-dash renders correctly",
+      "provenance": "reported"
+    },
+    {
+      "name": "steps_to_reproduce",
+      "value": "1. Create a report titled with an em-dash\n2. Click Export as PDF",
+      "provenance": "reported"
+    },
+    {
+      "name": "environment",
+      "value": "reports 2.4.1, Python 3.11.6",
+      "provenance": "observed",
+      "source": "poetry.lock, pyproject.toml"
+    },
+    {
+      "name": "root_cause",
+      "value": "src/export.py:142 opens the output file without an encoding argument",
+      "provenance": "inferred"
+    }
+  ],
+  "verified_against": ["poetry.lock", "pyproject.toml"],
+  "disclosure_required": false
+}
