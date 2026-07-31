@@ -128,7 +128,7 @@ No confirmation gate. Stage the three version files plus the changelog, commit, 
 
 ```bash
 git add pyproject.toml .claude-plugin/plugin.json .claude-plugin/marketplace.json CHANGELOG.md
-git commit -m "chore: release <version>"
+git commit -m "chore: bump version to <version>"
 git push origin main
 ```
 
@@ -157,7 +157,7 @@ This is a prose skill, not code. To validate a change to it, do a **dry run**: r
 | 3 | Compute CalVer from today's date via `python3` + same-day micro from `pyproject.toml` |
 | 4 | Edit `pyproject.toml`, `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` |
 | 5 | Prepend a `CHANGELOG.md` entry (headline any breaking changes) |
-| 6 | `git commit -m "chore: release <version>" && git push origin main` |
+| 6 | `git commit -m "chore: bump version to <version>" && git push origin main` |
 | 7 | Report new version + SHA |
 
 ## Common Mistakes
@@ -205,4 +205,4 @@ This is a prose skill, not code. To validate a change to it, do a **dry run**: r
 - Compute the date with `python3`, reading `pyproject.toml` as the same-day source of truth.
 - Update all three version files together.
 - Prepend a `CHANGELOG.md` entry, headlining any breaking changes.
-- Use a dedicated `chore: release <version>` commit.
+- Use a dedicated `chore: bump version to <version>` commit.
