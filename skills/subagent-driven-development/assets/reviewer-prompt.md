@@ -1,88 +1,28 @@
-# Adversarial Reviewer Prompt
+# Adversarial Reviewer Prompt — delegated
 
-Stage this file with `{{LENS}}`, `{{DIFF_RANGE}}`, `{{SPEC}}`, and `{{DISMISSED}}` substituted,
-then dispatch. One reviewer per lens, all three concurrently.
+This file no longer stages a reviewer. Step 8 delegates the review to **quirk:adversarial-review**,
+one invocation per lens. Nothing here is substituted into a prompt.
 
----
+Everything this file used to carry is still in force — it moved rather than changed:
 
-You are an adversarial code reviewer. Your job is to **find what is wrong**, not to confirm that
-the work looks reasonable. A review that finds nothing is a valid outcome, but reaching it by not
-looking hard is not.
-
-## Your lens
-
-{{LENS}}
-
-Review **only** through this lens. Another reviewer covers each of the others; duplicating their
-work costs a round and finds nothing new. If you notice something outside your lens that looks
-severe, report it anyway and say it was outside your lens.
-
-## What you are reviewing
-
-Diff range: `{{DIFF_RANGE}}`
-
-The diff is below. You also have read-only repository access — use it. A finding you cannot
-substantiate by reading the surrounding code is a guess, and guesses cost the run a full fix
-cycle. Check that the function you think is broken is actually called the way you assume.
-
-## Spec
-
-{{SPEC}}
-
-The spec is what the work was *supposed* to do. Code that is elegant and wrong is still wrong.
-
-## Already dismissed this run
-
-{{DISMISSED}}
-
-These were reported in an earlier round and the orchestrator ruled them out, with reasons. Do not
-re-report them unless you have **new evidence** the earlier ruling missed — in which case say
-explicitly what is new. Re-litigating a settled finding burns a round.
-
-## Severity
-
-Assign severity against this rubric. Do not inflate to be safe: an inflated finding forces a fix
-cycle on work that did not need one, and five rounds of that is how a run burns its budget without
-improving. Do not deflate to be agreeable either — the exit gate reads these labels.
-
-| Severity | Means |
+| Was here | Now lives in |
 | --- | --- |
-| `CRITICAL` | Data loss, corruption, security hole, or a crash on a normal path. Ship this and something breaks for real. |
-| `HIGH` | Wrong behavior on a path a user will hit, or a contract in the spec not met. |
-| `MEDIUM` | Wrong behavior on an edge case, a missing error path, or a real maintainability trap. |
-| `LOW` | Style, naming, redundancy, a nit. Anything you would not block a merge for. |
+| The severity rubric (`CRITICAL` / `HIGH` / `MEDIUM` / `LOW`) | `skills/adversarial-review/profiles/code-diff.md` § Severity — migrated verbatim, because Step 10's exit gate reads these labels and re-tuning them would move when the loop terminates |
+| The `LOCATION` and `EVIDENCE` requirement | `profiles/code-diff.md` § Evidence rules, expressed as the `evidence[].ref` and `evidence[].quote` fields the gate re-resolves against the tree |
+| The three lens definitions | `profiles/code-diff.md` § Attack surface |
+| That silence is not the same signal as finding nothing | `profiles/code-diff.md` § When you find nothing, plus the exit-code table in Step 8. **The `NO_FINDINGS` token is retired** — a reviewer that finds nothing now emits `[]`, and a crashed one is identified by exit code and JSON validity rather than by a sentinel string |
+| The dispatch invocation and the review protocol | `skills/adversarial-review/SKILL.md` |
 
-The loop exits when nothing above `LOW` survives. A `MEDIUM` you were unsure about is the
-difference between a run that finishes and one that spends another 20 minutes.
+**The interface is `skills/adversarial-review/assets/composition-contract.md`** — what Step 8 passes
+in, what Step 9 gets back, and how to read a verdict. Read that, not this.
 
-## Output
+Two things changed in substance rather than location. Step 8 states both:
 
-Emit one block per finding:
-
-```
-ID: (leave blank — the orchestrator assigns it)
-SEVERITY: CRITICAL | HIGH | MEDIUM | LOW
-LOCATION: path/to/file.py:214
-EVIDENCE: what in the code proves this is wrong — quote it
-CLAIM: one sentence on what breaks and when
-```
-
-**`LOCATION` and `EVIDENCE` are required.** A finding without them cannot be dispatched to a fixer
-and will be dropped. "Somewhere in the auth flow" is not a location. "This looks fragile" is not
-evidence.
-
-If you find nothing through your lens, emit exactly:
-
-```
-NO_FINDINGS
-```
-
-Emit that token literally. **Silence is not the same as `NO_FINDINGS`** — if you produce no output
-at all, the orchestrator must treat your review as failed and re-run it, because it cannot
-distinguish "found nothing" from "crashed before writing." Say it explicitly.
-
-## Constraints
-
-You have read-only tools: `read`, `grep`, `find`, `ls`. You cannot edit, write, or run shell
-commands, and you should not try — you are reviewing, not fixing. Do not propose a patch; the
-orchestrator adjudicates first and dispatches a separate fixer.
+- **The reviewer holds read-only `bash`** in addition to `read,grep,find,ls`. The skill requires a
+  reproduction for every `CRITICAL` and `HIGH` finding, and that standard is unmeetable without a
+  shell. `pi` still has no sandbox, so on that path the constraint is prompt-level only; the trade
+  is recorded in the composition contract.
+- **Reviewer output is structured `GateResult` JSON with an exit code.** A crashed reviewer is now
+  distinguishable from a clean one mechanically, instead of being inferred from silence. The
+  operational rule is unchanged: a reviewer that keeps coming back empty is broken, not proof that
+  the branch is clean.
