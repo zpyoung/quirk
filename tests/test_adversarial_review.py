@@ -1,0 +1,3229 @@
+"""Behavior tests for skills/adversarial-review/scripts/adversarial-review.
+
+`conftest.py`'s `run_script` resolves against `bin/` only, and no skill-local-script
+harness survived the SDD rewrite, so this module defines its own.
+"""
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPT = REPO_ROOT / "skills" / "adversarial-review" / "scripts" / "adversarial-review"
+
+
+def run_ar(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), *args],
+        cwd=cwd or REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+
+def resolve(*args: str, cwd: Path | None = None) -> dict:
+    """Run `resolve` and parse its single JSON object; assert it succeeded."""
+    proc = run_ar("resolve", *args, cwd=cwd)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+# --- profile detection precedence -------------------------------------------------
+
+@pytest.mark.parametrize(
+    "target, expected_profile, expected_kind",
+    [
+        ("main..HEAD", "code-diff", "git-range"),
+        ("origin/main..feature", "code-diff", "git-range"),
+        ("", "code-diff", "worktree"),
+        ("WORKTREE", "code-diff", "worktree"),
+        ("docs/plans/2026-01-01-thing.md", "plan", "path"),
+        ("notes/plan-for-x.md", "plan", "path"),
+        ("docs/quirk/specs/x/logic.md", "spec-design", "path"),
+        ("docs/quirk/specs/x/tech.md", "spec-design", "path"),
+        ("docs/adr/0001-choice.md", "spec-design", "path"),
+        ("notes/my-design.md", "spec-design", "path"),
+        ("notes/api-spec.md", "spec-design", "path"),
+        ("README.md", "prose-claim", "path"),
+        ("src/auth.py", "code-diff", "path"),
+    ],
+)
+def test_profile_detection_precedence(target, expected_profile, expected_kind, tmp_path):
+    extra: tuple[str, ...] = ()
+    if expected_kind == "path":
+        _touch(tmp_path / target)
+    else:
+        extra = ("--diff-file", str(_touch(tmp_path / "empty.patch", "")))
+    result = resolve("--target", target, "--repo-root", str(tmp_path), *extra)
+    assert result["profile"] == expected_profile
+    assert result["target_kind"] == expected_kind
+
+
+def test_plan_precedence_beats_spec_design(tmp_path):
+    """A file under docs/plans/ named like a spec is still a plan (rule 3 before rule 4)."""
+    _touch(tmp_path / "docs/plans/my-design.md")
+    result = resolve("--target", "docs/plans/my-design.md", "--repo-root", str(tmp_path))
+    assert result["profile"] == "plan"
+
+
+def _touch(path: Path, content: str = "placeholder\n") -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+    return path
+
+
+def _git_repo(path: Path) -> Path:
+    """A real repo, so `git diff` succeeds instead of erroring on a non-repo."""
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True, capture_output=True)
+    return path
+
+
+def _git(path: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=path, check=True, capture_output=True)
+
+
+def test_explicit_profile_overrides_detection(tmp_path):
+    patch = _touch(tmp_path / "empty.patch", "")
+    result = resolve(
+        "--target", "main..HEAD", "--profile", "prose-claim",
+        "--repo-root", str(tmp_path), "--diff-file", str(patch),
+    )
+    assert result["profile"] == "prose-claim"
+
+
+def test_unknown_profile_is_an_error(tmp_path):
+    _touch(tmp_path / "x.md")
+    proc = run_ar("resolve", "--target", "x.md", "--profile", "nope", "--repo-root", str(tmp_path))
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
+
+
+# --- depth auto-selection ---------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "changed_lines, expected_depth",
+    [(10, "quick"), (50, "quick"), (51, "standard"), (150, "standard"), (151, "deep")],
+)
+def test_code_depth_thresholds(changed_lines, expected_depth, tmp_path):
+    diff = _diff_with_added_lines(changed_lines)
+    patch = tmp_path / "d.patch"
+    patch.write_text(diff)
+    result = resolve(
+        "--target", "main..HEAD", "--repo-root", str(tmp_path), "--diff-file", str(patch)
+    )
+    assert result["size_metric"] == changed_lines
+    assert result["depth_suggestion"] == expected_depth
+
+
+@pytest.mark.parametrize("words, expected_depth", [(100, "quick"), (499, "quick"), (500, "standard")])
+def test_prose_depth_thresholds(words, expected_depth, tmp_path):
+    doc = tmp_path / "notes.md"
+    doc.write_text(" ".join(["word"] * words) + "\n")
+    result = resolve("--target", str(doc), "--repo-root", str(tmp_path))
+    assert result["size_metric"] == words
+    assert result["depth_suggestion"] == expected_depth
+
+
+def test_code_path_target_is_measured_in_lines_not_words(tmp_path):
+    """The unit belongs to the profile: `code-diff` thresholds are lines everywhere.
+
+    160 lines of 4 words reads as `deep` by line count and `standard` by word count.
+    """
+    src = tmp_path / "auth.py"
+    src.write_text("".join("a b c d\n" for _ in range(160)))
+    result = resolve("--target", str(src), "--repo-root", str(tmp_path))
+    assert result["profile"] == "code-diff"
+    assert result["size_metric"] == 160
+    assert result["depth_suggestion"] == "deep"
+
+
+def test_contract_surface_forces_deep_regardless_of_size(tmp_path):
+    """A tiny diff touching a contract surface still gets the deepest review."""
+    patch = tmp_path / "d.patch"
+    patch.write_text("--- a/x.py\n+++ b/x.py\n@@ -1 +1,2 @@\n+`CONTRACT:` def f() -> int: ...\n")
+    result = resolve(
+        "--target", "main..HEAD", "--repo-root", str(tmp_path), "--diff-file", str(patch)
+    )
+    assert result["contract_surface"] is True
+    assert result["depth_suggestion"] == "deep"
+
+
+def test_schema_anchor_also_counts_as_contract_surface(tmp_path):
+    patch = tmp_path / "d.patch"
+    patch.write_text("--- a/x.py\n+++ b/x.py\n@@ -1 +1,2 @@\n+# SCHEMA: {id: str}\n")
+    result = resolve(
+        "--target", "main..HEAD", "--repo-root", str(tmp_path), "--diff-file", str(patch)
+    )
+    assert result["contract_surface"] is True
+
+
+def test_contract_anchor_on_removed_line_is_not_a_contract_surface(tmp_path):
+    """The regex anchors on added lines only — deleting a contract is not changing one."""
+    patch = tmp_path / "d.patch"
+    patch.write_text("--- a/x.py\n+++ b/x.py\n@@ -1,2 +1 @@\n-# CONTRACT: def f() -> int\n")
+    result = resolve(
+        "--target", "main..HEAD", "--repo-root", str(tmp_path), "--diff-file", str(patch)
+    )
+    assert result["contract_surface"] is False
+
+
+def test_a_replacement_hunk_of_dash_and_plus_prefixed_text_is_counted(tmp_path):
+    """`--- old` / `+++ new` inside a hunk is content, not a file-header pair.
+
+    No prefix rule can decide this. The hunk header declares how many lines follow,
+    and that is the only unambiguous answer.
+    """
+    patch = tmp_path / "d.patch"
+    patch.write_text("--- a/x.md\n+++ b/x.md\n@@ -1 +1 @@\n--- old bullet\n+++ new bullet\n")
+    result = resolve(
+        "--target", "main..HEAD", "--repo-root", str(tmp_path), "--diff-file", str(patch)
+    )
+    assert result["size_metric"] == 2
+
+
+def test_context_lines_are_not_counted_as_changes(tmp_path):
+    patch = tmp_path / "d.patch"
+    patch.write_text("--- a/x.py\n+++ b/x.py\n@@ -1,3 +1,3 @@\n context\n-removed\n+added\n")
+    result = resolve(
+        "--target", "main..HEAD", "--repo-root", str(tmp_path), "--diff-file", str(patch)
+    )
+    assert result["size_metric"] == 2
+
+
+def test_no_newline_marker_is_not_counted(tmp_path):
+    patch = tmp_path / "d.patch"
+    patch.write_text("--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-a\n+b\n\\ No newline at end of file\n")
+    result = resolve(
+        "--target", "main..HEAD", "--repo-root", str(tmp_path), "--diff-file", str(patch)
+    )
+    assert result["size_metric"] == 2
+
+
+def test_multi_file_diff_counts_every_hunk(tmp_path):
+    patch = tmp_path / "d.patch"
+    patch.write_text(
+        "diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -0,0 +1 @@\n+one\n"
+        "diff --git a/y.py b/y.py\n--- a/y.py\n+++ b/y.py\n@@ -0,0 +1,2 @@\n+two\n+three\n"
+    )
+    result = resolve(
+        "--target", "main..HEAD", "--repo-root", str(tmp_path), "--diff-file", str(patch)
+    )
+    assert result["size_metric"] == 3
+
+
+def test_added_lines_whose_text_begins_with_plus_or_minus_are_counted(tmp_path):
+    """`git diff` renders an added line containing `++i` as `+++i` — that is content.
+
+    Only a `+++`/`---` pair outside a hunk names a file.
+    """
+    patch = tmp_path / "d.patch"
+    patch.write_text("--- a/x.py\n+++ b/x.py\n@@ -0,0 +1,3 @@\n+normal\n+++counter\n+--dashes\n")
+    result = resolve(
+        "--target", "main..HEAD", "--repo-root", str(tmp_path), "--diff-file", str(patch)
+    )
+    assert result["size_metric"] == 3
+
+
+def test_a_contract_anchor_on_an_added_line_beginning_with_plus_still_counts(tmp_path):
+    patch = tmp_path / "d.patch"
+    patch.write_text("--- a/x.py\n+++ b/x.py\n@@ -0,0 +1 @@\n+++ CONTRACT: def f() -> int\n")
+    result = resolve(
+        "--target", "main..HEAD", "--repo-root", str(tmp_path), "--diff-file", str(patch)
+    )
+    assert result["contract_surface"] is True
+
+
+def test_contract_anchor_in_diff_metadata_is_not_a_contract_surface(tmp_path):
+    """`+++` names a file; a filename containing `SCHEMA:` is not a changed contract.
+
+    The size metric already skips these headers, so the two must agree on what counts
+    as an added line.
+    """
+    patch = tmp_path / "d.patch"
+    patch.write_text("--- a/SCHEMA:weird.py\n+++ b/SCHEMA:weird.py\n@@ -1 +1,2 @@\n+x = 1\n")
+    result = resolve(
+        "--target", "main..HEAD", "--repo-root", str(tmp_path), "--diff-file", str(patch)
+    )
+    assert result["contract_surface"] is False
+    assert result["depth_suggestion"] == "quick"
+
+
+# --- artifact hash ----------------------------------------------------------------
+
+def test_path_target_hashes_content_and_is_stable(tmp_path):
+    doc = tmp_path / "a.md"
+    doc.write_text("hello")
+    first = resolve("--target", str(doc), "--repo-root", str(tmp_path))
+    second = resolve("--target", str(doc), "--repo-root", str(tmp_path))
+    assert first["artifact_hash"] == second["artifact_hash"]
+    assert len(first["artifact_hash"]) == 64
+
+    doc.write_text("goodbye")
+    changed = resolve("--target", str(doc), "--repo-root", str(tmp_path))
+    assert changed["artifact_hash"] != first["artifact_hash"]
+
+
+def test_missing_path_target_is_an_error(tmp_path):
+    proc = run_ar("resolve", "--target", str(tmp_path / "nope.md"), "--repo-root", str(tmp_path))
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
+
+
+# --- unreadable targets -----------------------------------------------------------
+#
+# The worst failure mode a review tool has is reviewing nothing and saying so
+# calmly. A target we cannot read is an error, never an empty artifact.
+
+def test_unknown_git_range_is_an_error_not_an_empty_review(tmp_path):
+    _git_repo(tmp_path)
+    proc = run_ar("resolve", "--target", "no-such-ref-xyz..also-fake", "--repo-root", str(tmp_path))
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
+    assert proc.stdout == ""
+
+
+def test_non_repo_root_is_an_error(tmp_path):
+    proc = run_ar("resolve", "--target", "WORKTREE", "--repo-root", str(tmp_path))
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
+
+
+def test_valid_range_with_no_changes_is_still_a_clean_zero(tmp_path):
+    """The legitimate empty case must stay distinguishable from the broken one."""
+    _git_repo(tmp_path)
+    result = resolve("--target", "WORKTREE", "--repo-root", str(tmp_path))
+    assert result["size_metric"] == 0
+    assert result["depth_suggestion"] == "quick"
+
+
+def test_worktree_includes_staged_changes(tmp_path):
+    """WORKTREE promises the uncommitted work — `git diff` alone hides the index."""
+    _git_repo(tmp_path)
+    src = tmp_path / "a.py"
+    src.write_text("original\n")
+    _git(tmp_path, "add", "a.py")
+    _git(tmp_path, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
+    src.write_text("original\nstaged change\n")
+    _git(tmp_path, "add", "a.py")
+    result = resolve("--target", "WORKTREE", "--repo-root", str(tmp_path))
+    assert result["size_metric"] == 1, "staged change was omitted from the artifact"
+
+
+def test_worktree_still_works_before_the_first_commit(tmp_path):
+    """An unborn branch has no HEAD to diff against; that is not a failure."""
+    _git_repo(tmp_path)
+    assert resolve("--target", "WORKTREE", "--repo-root", str(tmp_path))["size_metric"] == 0
+
+
+def test_worktree_includes_untracked_files(tmp_path):
+    """A brand-new module is uncommitted work; leaving it out reviews a hole."""
+    _git_repo(tmp_path)
+    (tmp_path / "seed.txt").write_text("x\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
+    (tmp_path / "brand_new.py").write_text("def f():\n    return 1\n")
+    result = resolve("--target", "WORKTREE", "--repo-root", str(tmp_path))
+    assert result["size_metric"] == 2, "untracked file was omitted from the artifact"
+
+
+def test_staged_new_file_is_visible_before_the_first_commit(tmp_path):
+    """The gap between `git diff` (blind to it) and the untracked scan (skips staged).
+
+    With no HEAD the empty tree is the baseline, so nothing falls between the two.
+    """
+    _git_repo(tmp_path)
+    (tmp_path / "new.py").write_text("def f():\n    return 1\n")
+    _git(tmp_path, "add", "new.py")
+    assert resolve("--target", "WORKTREE", "--repo-root", str(tmp_path))["size_metric"] == 2
+
+
+def test_headings_inside_a_code_fence_do_not_satisfy_required_sections(tmp_path):
+    """Showing `## Purpose` in a sample block is not declaring the section."""
+    doc = _touch(tmp_path / "logic.md",
+                 "# Title\n\n```markdown\n## Purpose\n## Scope\n## Decisions Locked\n```\n\n"
+                 "Body text with no references.\n")
+    result = prepass("--profile", "spec-design", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert result["status"] == "fail"
+    section = next(c for c in result["checks"] if c["name"] == "section-coverage")
+    assert section["status"] == "fail"
+
+
+def test_real_headings_outside_a_fence_still_satisfy_required_sections(tmp_path):
+    doc = _touch(tmp_path / "logic.md",
+                 "# Title\n\n## Purpose\nwhy\n\n## Scope\nwhat\n\n## Decisions Locked\nchoices\n\n"
+                 "```python\n# not a heading\n```\n")
+    assert prepass("--profile", "spec-design", "--target", str(doc),
+                   "--repo-root", str(tmp_path))["status"] == "pass"
+
+
+def test_untracked_files_with_non_ascii_names_are_included(tmp_path):
+    """git C-quotes them; the quoted string is not a path any command can open."""
+    _git_repo(tmp_path)
+    (tmp_path / "seed.txt").write_text("x\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
+    (tmp_path / "café.py").write_text("def f():\n    return 1\n")
+    result = resolve("--target", "WORKTREE", "--repo-root", str(tmp_path))
+    assert result["size_metric"] == 2, "C-quoted filename dropped from the artifact"
+
+
+def test_a_backticked_token_does_not_suppress_the_same_named_link(tmp_path):
+    """Two different claims about the same text; only the link is unambiguous."""
+    doc = _touch(tmp_path / "notes.md",
+                 "Mentioned as `missing.pdf` first, then [linked](missing.pdf).\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert "missing.pdf" in [f["evidence"][0]["ref"] for f in result["findings"]]
+
+
+def test_a_colored_git_config_does_not_blank_the_diff(tmp_path):
+    """color.ui=always puts ANSI escapes in hunk headers; the parser saw no hunks.
+
+    A deep contract-changing range silently became zero lines and `quick`.
+    """
+    _git_repo(tmp_path)
+    _git(tmp_path, "config", "color.ui", "always")
+    (tmp_path / "x.py").write_text("a\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
+    (tmp_path / "x.py").write_text("a\nb\nc\n")
+    assert resolve("--target", "WORKTREE", "--repo-root", str(tmp_path))["size_metric"] == 2
+
+
+def test_path_artifact_hash_distinguishes_undecodable_bytes(tmp_path):
+    """`errors="replace"` maps distinct bytes onto one string — and one identity."""
+    first, second = tmp_path / "a.md", tmp_path / "b.md"
+    first.write_bytes(b"head \xff\xfe tail")
+    second.write_bytes(b"head \xfe\xff tail")
+    left = resolve("--target", str(first), "--repo-root", str(tmp_path))
+    right = resolve("--target", str(second), "--repo-root", str(tmp_path))
+    assert left["artifact_hash"] != right["artifact_hash"]
+
+
+def test_worktree_respects_gitignore(tmp_path):
+    """`--exclude-standard`: ignored files are not uncommitted work under review."""
+    _git_repo(tmp_path)
+    (tmp_path / ".gitignore").write_text("junk/\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
+    (tmp_path / "junk").mkdir()
+    (tmp_path / "junk" / "noise.py").write_text("noise = 1\n" * 20)
+    assert resolve("--target", "WORKTREE", "--repo-root", str(tmp_path))["size_metric"] == 0
+
+
+def test_prose_profile_override_on_a_range_is_measured_in_words(tmp_path):
+    """The unit follows the profile on the diff path too, not just the path target."""
+    patch = tmp_path / "d.patch"
+    patch.write_text("--- a/doc.md\n+++ b/doc.md\n@@ -0,0 +1,2 @@\n"
+                     + "".join("+" + "word " * 50 + "\n" for _ in range(2)))
+    result = resolve("--target", "main..HEAD", "--profile", "prose-claim",
+                     "--repo-root", str(tmp_path), "--diff-file", str(patch))
+    assert result["size_metric"] == 100
+
+
+# --- output conventions -----------------------------------------------------------
+
+def test_stdout_is_exactly_one_sorted_json_object(tmp_path):
+    _git_repo(tmp_path)
+    proc = run_ar("resolve", "--target", "WORKTREE", "--repo-root", str(tmp_path))
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)  # raises if not exactly one object
+    assert proc.stdout == json.dumps(payload, sort_keys=True) + "\n"
+    assert proc.stderr == ""
+
+
+def test_no_subcommand_is_a_usage_error():
+    proc = run_ar()
+    assert proc.returncode != 0
+
+
+def _diff_with_added_lines(n: int) -> str:
+    body = "".join(f"+line {i}\n" for i in range(n))
+    return f"--- a/x.py\n+++ b/x.py\n@@ -0,0 +1,{n} @@\n{body}"
+
+
+# ============================ prepass =============================================
+
+_SHARED_RESOLVE: dict[str, str] = {}
+
+
+def _shared_resolve() -> str:
+    """One real ResolveResult on disk, reused by subcommands that only need *a* run.
+
+    `select-model` binds to the run without reading the artifact, so which target
+    minted the chain is irrelevant to it — only that the script produced one.
+    """
+    if "path" not in _SHARED_RESOLVE:
+        _SHARED_RESOLVE["path"] = _run_resolve_file(
+            Path(tempfile.mkdtemp()), "README.md", cwd=REPO_ROOT
+        )
+    return _SHARED_RESOLVE["path"]
+
+
+def _run_resolve_file(tmp: Path, target: str, cwd: Path | None = None) -> str:
+    """A real `resolve` output for the same target, which `prepass` now anchors to.
+
+    Hand-writing one would not do: the artifact hash `gate` compares against has to be
+    the one `resolve` actually derived, so these tests run the real subcommand.
+    """
+    proc = run_ar("resolve", "--target", target, cwd=cwd)
+    path = tmp / "resolve-for-prepass.json"
+    if proc.returncode != 0:
+        # Some pre-pass tests point at a target `resolve` itself rejects — a missing
+        # file, a directory outside a worktree — to prove the pre-pass degrades to
+        # `could-not-run`. Those still need *a* run to anchor to.
+        path.write_text(json.dumps(_resolved()))
+    else:
+        path.write_text(proc.stdout)
+    return str(path)
+
+
+def prepass(*args: str, cwd: Path | None = None, expect: int = 0,
+            resolve: str | None = None) -> dict:
+    """`prepass` now derives the artifact hash itself, so a `code-diff` run needs a real
+    repository — `resolve` already did, so no live pipeline reaches it without one."""
+    root = Path(args[args.index("--repo-root") + 1]) if "--repo-root" in args else cwd
+    code_diff = "code-diff" in args
+    # Only for `code-diff`: several prose tests exist precisely to assert what happens
+    # *outside* a worktree, and initialising one there would delete the thing they test.
+    if code_diff and root is not None and not (Path(root) / ".git").exists():
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    if "--resolve" not in args:
+        if resolve is None:
+            target = args[args.index("--target") + 1] if "--target" in args else ""
+            base = Path(root) if root else Path(tempfile.mkdtemp())
+            resolve = _run_resolve_file(base, target, cwd=root or cwd)
+        args = (*args, "--resolve", resolve)
+    proc = run_ar("prepass", *args, cwd=cwd)
+    assert proc.returncode == expect, f"exit {proc.returncode}: {proc.stderr}"
+    return json.loads(proc.stdout)
+
+
+# --- prose: reference resolution --------------------------------------------------
+
+def test_unresolvable_path_reference_becomes_a_high_prepass_finding(tmp_path):
+    doc = _touch(tmp_path / "notes.md", "See `src/does_not_exist.py` for details.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert result["status"] == "fail"
+    refs = [f["evidence"][0]["ref"] for f in result["findings"]]
+    assert "src/does_not_exist.py" in refs
+    finding = next(f for f in result["findings"] if f["evidence"][0]["ref"] == "src/does_not_exist.py")
+    assert finding["severity"] == "HIGH"
+    assert finding["confidence"] == "HIGH"
+    assert finding["stage"] == "prepass"
+    assert finding["evidence"][0]["kind"] == "prepass"
+
+
+def test_resolvable_path_reference_produces_no_finding(tmp_path):
+    _touch(tmp_path / "src/real.py", "x = 1\n")
+    doc = _touch(tmp_path / "notes.md", "See `src/real.py` for details.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc), "--repo-root", str(tmp_path))
+    assert result["status"] == "pass"
+    assert result["findings"] == []
+
+
+def test_unresolvable_markdown_link_becomes_a_finding(tmp_path):
+    doc = _touch(tmp_path / "notes.md", "See [the design](./design.md).\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    refs = [f["evidence"][0]["ref"] for f in result["findings"]]
+    assert "./design.md" in refs
+
+
+@pytest.mark.parametrize("target", ["missing.pdf", "gone.csv", "absent.xlsx", "nope.tar.gz"])
+def test_a_broken_markdown_link_is_reported_whatever_the_extension(tmp_path, target):
+    """`[text](target)` is a link by construction — no suffix guessing needed.
+
+    The allowlist exists to keep backticked *prose* from being read as a path. A
+    Markdown link carries no such ambiguity.
+    """
+    doc = _touch(tmp_path / "notes.md", f"See [the thing]({target}).\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert target in [f["evidence"][0]["ref"] for f in result["findings"]]
+
+
+def test_a_resolvable_markdown_link_with_an_odd_extension_passes(tmp_path):
+    _touch(tmp_path / "paper.pdf", "%PDF\n")
+    doc = _touch(tmp_path / "notes.md", "See [the paper](paper.pdf).\n")
+    assert prepass("--profile", "prose-claim", "--target", str(doc),
+                   "--repo-root", str(tmp_path))["findings"] == []
+
+
+def test_prose_in_backticks_is_still_not_treated_as_a_path(tmp_path):
+    """The noise guard stays: a link is explicit, a backticked phrase is not."""
+    doc = _touch(tmp_path / "notes.md", "Handle this `carefully. always` when reviewing.\n")
+    assert prepass("--profile", "prose-claim", "--target", str(doc),
+                   "--repo-root", str(tmp_path))["findings"] == []
+
+
+def test_symbol_resolution_outside_a_git_worktree_is_could_not_run(tmp_path):
+    """A tool that failed proves nothing about absence.
+
+    Outside a worktree `git grep` errors, and reading that as "not found" turns
+    every symbol in the document into a HIGH finding — the noise flood the pre-pass
+    exists to avoid.
+    """
+    doc = _touch(tmp_path / "notes.md", "The `retry_handler` helper does the work.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path))
+    high = [f for f in result["findings"] if f["severity"] == "HIGH"]
+    assert not high, f"tool failure reported as absence: {[f['claim'] for f in high]}"
+    assert "skipped" in result["checks"][0]["output"]
+
+
+def test_a_symbol_is_not_resolved_by_the_document_that_names_it(tmp_path):
+    """The document's own mention is the claim, not evidence for it.
+
+    `git grep` searches the whole tree including the tracked target, so a document
+    citing an invented symbol was satisfying its own reference check.
+    """
+    _git_repo(tmp_path)
+    doc = _touch(tmp_path / "notes.md",
+                 "The function `totally_invented_symbol_xyz` handles retries.\n")
+    _git(tmp_path, "add", "-A")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    refs = [f["evidence"][0]["ref"] for f in result["findings"]]
+    assert "totally_invented_symbol_xyz" in refs
+
+
+def test_a_symbol_defined_elsewhere_still_resolves(tmp_path):
+    _git_repo(tmp_path)
+    _touch(tmp_path / "src.py", "def genuinely_present_symbol():\n    return 1\n")
+    doc = _touch(tmp_path / "notes.md", "See `genuinely_present_symbol` for details.\n")
+    _git(tmp_path, "add", "-A")
+    result = prepass("--profile", "prose-claim", "--target", str(doc), "--repo-root", str(tmp_path))
+    assert result["findings"] == []
+
+
+def test_link_fragment_is_not_part_of_the_filesystem_path(tmp_path):
+    """`./design.md#goals` names design.md; the fragment is an in-document anchor."""
+    _touch(tmp_path / "design.md", "# Goals\n")
+    doc = _touch(tmp_path / "notes.md", "See [goals](./design.md#goals).\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc), "--repo-root", str(tmp_path))
+    assert result["status"] == "pass"
+    assert result["findings"] == []
+
+
+def test_link_fragment_does_not_hide_a_genuinely_missing_file(tmp_path):
+    doc = _touch(tmp_path / "notes.md", "See [goals](./gone.md#goals).\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert "./gone.md#goals" in [f["evidence"][0]["ref"] for f in result["findings"]]
+
+
+def test_http_links_are_recorded_skipped_and_never_fetched(tmp_path):
+    doc = _touch(tmp_path / "notes.md", "See [spec](https://example.invalid/nope).\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc), "--repo-root", str(tmp_path))
+    assert result["status"] == "pass"
+    assert result["findings"] == []
+    ref_check = next(c for c in result["checks"] if c["name"] == "reference-resolution")
+    assert "skipped" in ref_check["output"]
+
+
+def test_unresolvable_command_reference_becomes_a_finding(tmp_path):
+    doc = _touch(tmp_path / "notes.md", "Run `definitely-not-a-real-binary-xyz --help`.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    refs = [f["evidence"][0]["ref"] for f in result["findings"]]
+    assert any("definitely-not-a-real-binary-xyz" in r for r in refs)
+
+
+# --- prose: section coverage ------------------------------------------------------
+
+def test_missing_required_heading_is_reported(tmp_path):
+    doc = _touch(tmp_path / "logic.md", "# Purpose\n\nsome text\n")
+    result = prepass("--profile", "spec-design", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    coverage = next(c for c in result["checks"] if c["name"] == "section-coverage")
+    assert coverage["status"] == "fail"
+    assert "Decisions Locked" in coverage["output"]
+
+
+def test_all_required_headings_present_passes_coverage(tmp_path):
+    doc = _touch(
+        tmp_path / "logic.md",
+        "# Purpose\n\n## Scope\n\n## Decisions Locked\n\ntext\n",
+    )
+    result = prepass("--profile", "spec-design", "--target", str(doc), "--repo-root", str(tmp_path))
+    coverage = next(c for c in result["checks"] if c["name"] == "section-coverage")
+    assert coverage["status"] == "pass"
+
+
+def test_prose_claim_profile_reports_coverage_not_applicable(tmp_path):
+    doc = _touch(tmp_path / "notes.md", "a claim\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc), "--repo-root", str(tmp_path))
+    coverage = next(c for c in result["checks"] if c["name"] == "section-coverage")
+    assert coverage["status"] == "not-applicable"
+
+
+# --- could-not-run vs fail --------------------------------------------------------
+
+def test_unreadable_prose_target_is_could_not_run_not_fail(tmp_path):
+    """T4's NOT_REVIEWABLE branch depends on this distinction."""
+    result = prepass("--profile", "prose-claim", "--target", str(tmp_path / "absent.md"),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert result["status"] == "could-not-run"
+
+
+def test_code_profile_with_no_discoverable_command_is_could_not_run(tmp_path):
+    result = prepass("--profile", "code-diff", "--target", "WORKTREE",
+                     "--repo-root", str(tmp_path), expect=1)
+    assert result["status"] == "could-not-run"
+    assert result["checks"] == []
+
+
+def test_failing_check_is_fail_not_could_not_run(tmp_path):
+    result = prepass("--profile", "code-diff", "--target", "WORKTREE",
+                     "--repo-root", str(tmp_path), "--check-cmd", "exit 3", expect=1)
+    assert result["status"] == "fail"
+    assert result["checks"][0]["exit_code"] == 3
+
+
+def test_failing_code_check_files_a_finding(tmp_path):
+    """A failed check must become a finding, or nothing carries it to the verdict.
+
+    The prose branch already files findings; the code branch recorded the failure in
+    `checks` alone, where `compute_verdict` never looks.
+    """
+    result = prepass("--profile", "code-diff", "--target", "WORKTREE",
+                     "--repo-root", str(tmp_path), "--check-cmd", "exit 3", expect=1)
+    assert len(result["findings"]) == 1
+    finding = result["findings"][0]
+    assert finding["severity"] == "HIGH"
+    assert finding["stage"] == "prepass"
+    assert finding["category"] == "failing-check"
+    assert finding["evidence"][0]["kind"] == "prepass"
+
+
+def test_failing_code_check_cannot_produce_a_pass_verdict(tmp_path):
+    """The end-to-end version of the same defect: red tests must never read as PASS."""
+    pre = prepass("--profile", "code-diff", "--target", "WORKTREE",
+                  "--repo-root", str(tmp_path), "--check-cmd", "exit 1", expect=1)
+    result = gate(tmp_path, [], prepass_status=pre["status"],
+                  prepass_findings=pre["findings"], expect=1)
+    assert result["verdict"] == "NEEDS_FIXES"
+
+
+# --- the class invariant: no failed check reaches the verdict as a pass ------------
+#
+# Three separate defects were the same defect — a failure recorded somewhere the
+# verdict does not read. These cover the rule itself, per branch, rather than the
+# instance that happened to be found.
+
+def _failing_prepass_cases(tmp_path):
+    """(label, argv) for each way a check can fail, one per pre-pass branch."""
+    code = tmp_path / "code"
+    code.mkdir()
+    spec = tmp_path / "spec"
+    spec.mkdir()
+    # Required headings absent, and no references at all, so the reference check passes
+    # and only section coverage fails.
+    (spec / "logic.md").write_text("# Unrelated Heading\n\nProse with no references.\n")
+    prose = tmp_path / "prose"
+    prose.mkdir()
+    (prose / "notes.md").write_text("See `src/does_not_exist.py`.\n")
+    return [
+        ("code-diff / failing check",
+         ("--profile", "code-diff", "--target", "WORKTREE",
+          "--repo-root", str(code), "--check-cmd", "exit 3")),
+        ("spec-design / section coverage",
+         ("--profile", "spec-design", "--target", str(spec / "logic.md"),
+          "--repo-root", str(spec))),
+        ("prose-claim / reference resolution",
+         ("--profile", "prose-claim", "--target", str(prose / "notes.md"),
+          "--repo-root", str(prose))),
+    ]
+
+
+def test_every_failed_check_is_carried_by_a_finding(tmp_path):
+    """`status: fail` with an empty findings list is the bug, in any branch."""
+    for label, argv in _failing_prepass_cases(tmp_path):
+        result = prepass(*argv, expect=1)
+        assert result["status"] == "fail", label
+        failed = [c["name"] for c in result["checks"] if c["status"] == "fail"]
+        assert failed, label
+        assert result["findings"], f"{label}: failed {failed} but filed no finding"
+
+
+def test_no_failing_prepass_branch_can_reach_a_pass_verdict(tmp_path):
+    """The invariant that actually matters, asserted end-to-end for every branch."""
+    for label, argv in _failing_prepass_cases(tmp_path):
+        pre = prepass(*argv, expect=1)
+        result = gate(tmp_path, [], prepass_status=pre["status"],
+                      prepass_findings=pre["findings"], expect=1)
+        assert result["verdict"] != "PASS", f"{label}: failed pre-pass produced PASS"
+
+
+def test_a_failed_check_that_files_no_finding_of_its_own_still_gets_one(tmp_path):
+    """Section coverage reports no per-heading findings; the generic one covers it."""
+    (tmp_path / "logic.md").write_text("# Unrelated\n\nNo references here.\n")
+    result = prepass("--profile", "spec-design", "--target", str(tmp_path / "logic.md"),
+                     "--repo-root", str(tmp_path), expect=1)
+    categories = {f["category"] for f in result["findings"]}
+    assert "failing-check" in categories
+
+
+def test_reference_failures_are_not_double_reported(tmp_path):
+    """A check that files its own findings must not also get the generic one."""
+    doc = _touch(tmp_path / "notes.md", "See `src/does_not_exist.py`.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    categories = [f["category"] for f in result["findings"]]
+    assert categories == ["unresolvable-reference"], categories
+
+
+def test_passing_check_exits_zero(tmp_path):
+    result = prepass("--profile", "code-diff", "--target", "WORKTREE",
+                     "--repo-root", str(tmp_path), "--check-cmd", "true")
+    assert result["status"] == "pass"
+    assert result["checks"][0]["status"] == "pass"
+
+
+def test_check_cmd_overrides_discovery(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
+    result = prepass("--profile", "code-diff", "--target", "WORKTREE",
+                     "--repo-root", str(tmp_path), "--check-cmd", "true")
+    assert [c["command"] for c in result["checks"]] == ["true"]
+
+
+def test_code_discovery_finds_pytest_from_pyproject(tmp_path):
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
+    result = prepass("--profile", "code-diff", "--target", "WORKTREE",
+                     "--repo-root", str(tmp_path), "--check-cmd", "true")
+    assert result["status"] == "pass"
+
+
+# --- prepass finding calibration ---------------------------------------------------
+# A spec or plan names artifacts that do not exist yet; asserting HIGH confidence on
+# that is undecidable and is what earns a check its ignore rate.
+
+def test_spec_design_unresolved_path_is_medium_low_and_names_the_ambiguity(tmp_path):
+    doc = _touch(tmp_path / "tech.md", "Create `skills/new-thing/SKILL.md` in this work.\n")
+    result = prepass("--profile", "spec-design", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    finding = result["findings"][0]
+    assert finding["severity"] == "MEDIUM"
+    assert finding["confidence"] == "LOW"
+    assert "plans to create" in finding["claim"]
+
+
+def test_plan_profile_uses_the_same_forward_looking_calibration(tmp_path):
+    doc = _touch(tmp_path / "docs/plans/p.md", "Create `src/new.py`.\n")
+    result = prepass("--profile", "plan", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    finding = result["findings"][0]
+    assert (finding["severity"], finding["confidence"]) == ("MEDIUM", "LOW")
+
+
+def test_prose_claim_unresolved_path_stays_high_high(tmp_path):
+    """A README describes current state, so an unresolved path really is a defect."""
+    doc = _touch(tmp_path / "notes.md", "See `src/gone.py`.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    finding = result["findings"][0]
+    assert (finding["severity"], finding["confidence"]) == ("HIGH", "HIGH")
+
+
+def test_command_not_on_path_is_never_asserted_confidently(tmp_path):
+    """Command-vs-prose is undecidable in every profile."""
+    doc = _touch(tmp_path / "notes.md", "Run `definitely-not-real-xyz --help`.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    finding = next(f for f in result["findings"] if "definitely-not-real-xyz" in f["claim"])
+    assert (finding["severity"], finding["confidence"]) == ("MEDIUM", "LOW")
+    assert "may instead be prose" in finding["claim"]
+
+
+# --- noise regressions found by dogfooding -----------------------------------------
+
+@pytest.mark.parametrize("token", [
+    "scripts/sdd-*",           # glob
+    "<path>",                  # placeholder
+    "#!/usr/bin/env python3",  # shebang
+    "/quirk:adversarial-review",
+    "resolve --> depth_suggestion",
+    "only critique",           # prose, not a command
+    "$WORK/findings.json",     # unexpanded shell variable
+    "${CLAUDE_PLUGIN_ROOT}/skills/adversarial-review/scripts/adversarial-review",
+])
+def test_non_reference_tokens_produce_no_finding(token, tmp_path):
+    doc = _touch(tmp_path / "notes.md", f"Text with `{token}` inline.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc), "--repo-root", str(tmp_path))
+    assert result["findings"] == [], f"{token!r} should not be treated as a reference"
+
+
+def test_line_anchor_is_stripped_before_resolving(tmp_path):
+    _touch(tmp_path / "tests/conftest.py", "x = 1\n")
+    doc = _touch(tmp_path / "notes.md", "See `tests/conftest.py:35-42`.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc), "--repo-root", str(tmp_path))
+    assert result["findings"] == []
+
+
+def test_relative_reference_resolves_against_the_document_directory(tmp_path):
+    """`logic.md` in a spec means its sibling, not a repo-root path."""
+    _touch(tmp_path / "docs/spec/logic.md", "# Purpose\n")
+    doc = _touch(tmp_path / "docs/spec/tech.md", "See `logic.md` for rationale.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc), "--repo-root", str(tmp_path))
+    assert result["findings"] == []
+
+
+# ============================ select-model ========================================
+
+def select_model(*args: str, expect: int = 0) -> dict:
+    proc = run_ar("select-model", *args, "--resolve", _shared_resolve())
+    assert proc.returncode == expect, f"exit {proc.returncode}: {proc.stderr}"
+    return json.loads(proc.stdout)
+
+
+def test_author_family_is_excluded_from_selection():
+    """Independence is structural: never review Claude output with Claude."""
+    result = select_model("--author-family", "anthropic", "--check-cmd", "true")
+    assert result["resolved"] is True
+    assert result["family"] != "anthropic"
+    assert result["independence"] == "full"
+
+
+def test_openai_authored_work_is_reviewed_by_another_family():
+    result = select_model("--author-family", "openai", "--check-cmd", "true")
+    assert result["family"] != "openai"
+    assert result["independence"] == "full"
+
+
+@pytest.mark.parametrize("family", ["OPENAI", "OpenAI", " openai ", "OpenAI\n"])
+def test_author_family_matching_is_not_case_or_whitespace_sensitive(family):
+    """The one invariant the skill is built on must not turn on a capital letter.
+
+    A miscased family failed to match, so the author's own family was selected and
+    then stamped `full` — same-family review reported as structurally independent.
+    """
+    result = select_model("--author-family", family, "--check-cmd", "true")
+    assert result["family"] != "openai", "author's own family selected"
+    assert result["independence"] == "full"
+
+
+def test_an_unknown_author_family_is_rejected_rather_than_silently_trusted():
+    """`--author-family typo` must not look identical to a genuine cross-family run."""
+    proc = run_ar("select-model", "--author-family", "not-a-real-family", "--check-cmd", "true", "--resolve", _shared_resolve())
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
+
+
+def test_the_documented_other_author_family_is_accepted():
+    """`other` is in the composition contract: an author this ladder cannot be.
+
+    Rejecting it locks out every caller whose author is a human or a local model.
+    """
+    result = select_model("--author-family", "other", "--check-cmd", "true")
+    assert result["resolved"] is True
+    assert result["independence"] == "full"
+
+
+def test_ladder_is_walked_until_a_rung_resolves():
+    """First rung fails preflight, a later one succeeds."""
+    script = 'test "$1" != "codex"'  # codex fails, everything else resolves
+    result = select_model("--author-family", "anthropic", "--check-cmd", f"sh -c '{script}' _")
+    assert result["resolved"] is True
+    attempted = [rung["alias"] for rung in result["ladder"] if rung["checked"]]
+    assert len(attempted) >= 1
+
+
+def test_no_rung_resolves_yields_resolved_false_and_exit_1():
+    """Drives the gate's first NOT_REVIEWABLE branch."""
+    result = select_model("--author-family", "anthropic", "--check-cmd", "false", expect=1)
+    assert result["resolved"] is False
+    assert result["alias"] is None
+    assert result["family"] is None
+    assert all(rung["resolved"] is False for rung in result["ladder"])
+
+
+def test_fallback_onto_the_author_family_is_flagged_reduced():
+    """A PASS from a same-family reviewer must not read as strong as a cross-family one."""
+    only_sonnet = 'test "$1" = "sonnet"'
+    result = select_model("--author-family", "anthropic", "--check-cmd", f"sh -c '{only_sonnet}' _")
+    assert result["resolved"] is True
+    assert result["family"] == "anthropic"
+    assert result["independence"] == "reduced"
+
+
+def test_explicit_model_overrides_family_exclusion():
+    result = select_model("--author-family", "anthropic", "--model", "sonnet", "--check-cmd", "true")
+    assert result["alias"] == "sonnet"
+    assert result["independence"] == "reduced"
+
+
+def test_explicit_model_that_fails_preflight_does_not_silently_fall_back():
+    """An explicit --model is a caller instruction, not a suggestion."""
+    result = select_model(
+        "--author-family", "openai", "--model", "sonnet", "--check-cmd", "false", expect=1
+    )
+    assert result["resolved"] is False
+
+
+def test_unknown_alias_is_a_usage_error():
+    proc = run_ar("select-model", "--author-family", "openai", "--model", "not-an-alias", "--resolve", _shared_resolve())
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
+
+
+def test_resolved_selection_carries_a_dispatchable_triple():
+    result = select_model("--author-family", "anthropic", "--check-cmd", "true")
+    for field in ("provider", "model", "thinking"):
+        assert result[field], f"{field} must be populated for dispatch"
+
+
+# ============================ gate + manifest =====================================
+
+def _finding(**over) -> dict:
+    base = {
+        "id": "F1", "severity": "HIGH", "confidence": "HIGH",
+        "category": "correctness", "claim": "x breaks",
+        "evidence": [{"kind": "command", "command": "pytest -q", "output": "1 failed"}],
+        "remediation": "fix x", "patch": None, "stage": "refute",
+        "disposition": "standing",
+    }
+    base.update(over)
+    return base
+
+
+RUN_ID = "0123456789abcdef"
+ART_HASH = "a" * 64
+
+
+def _chain(step, *, stage=None, run_id=RUN_ID, artifact_hash=ART_HASH):
+    """A chain link of the shape each subcommand stamps on its output."""
+    link = {"run_id": run_id, "artifact_hash": artifact_hash, "step": step,
+            "predecessor": "0" * 64}
+    if stage is not None:
+        link["stage"] = stage
+    return link
+
+
+def _model_doc(*, alias="codex", provider="openai-codex", model="gpt-5.6-sol", **over):
+    """A resolved ModelSelection carrying the run chain `select-model` now stamps."""
+    doc = {"resolved": True, "alias": alias, "family": "openai", "provider": provider,
+           "model": model, "thinking": "high", "independence": "full", "ladder": [],
+           "chain": _chain("select-model")}
+    doc.update(over)
+    return doc
+
+
+def _prepass_doc(**over):
+    """A clean PrepassResult bound to the same run and artifact as `_resolved()`."""
+    doc = {"status": "pass", "checks": [], "findings": [],
+           "observed_artifact_hash": ART_HASH, "chain": _chain("prepass")}
+    doc.update(over)
+    return doc
+
+
+def _resolved(**over):
+    payload = {"profile": "code-diff", "target_kind": "path", "target_ref": "x",
+               "artifact_hash": ART_HASH, "chain": _chain("resolve")}
+    payload.update(over)
+    return payload
+
+
+def _claims_output(findings, **over):
+    payload = {"claims": [], "findings": findings, "carried_kinds": [],
+               "chain": _chain("claims")}
+    payload.update(over)
+    return payload
+
+
+def _merged(findings, *, stage="refute", **over):
+    payload = {"findings": findings, "stage": stage, "judged": len(findings),
+               "chain": _chain("merge", stage=stage)}
+    payload.update(over)
+    return payload
+
+
+def _write(tmp_path: Path, name: str, payload) -> str:
+    p = tmp_path / name
+    p.write_text(json.dumps(payload))
+    return str(p)
+
+
+def _inputs(tmp_path, findings, *, model=None, prepass_status="pass", prepass_findings=None,
+            prepass_doc=None, raw=False):
+    """Wraps a plain list in a `merge` envelope, which is what standard depth requires.
+
+    Pass raw=True to send the bare array a promote stage emits.
+    """
+    model = model or {"resolved": True, "alias": "codex", "family": "openai",
+                      "provider": "openai-codex", "model": "gpt-5.6-sol",
+                      "thinking": "high", "independence": "full", "ladder": []}
+    # Deliberately malformed models are passed through untouched — several tests hand
+    # `gate` a string or a list to prove it exits 2 rather than tracebacking.
+    if isinstance(model, dict):
+        model = dict(model)
+        model.setdefault("chain", _chain("select-model"))
+    # `observed_artifact_hash` must equal the chain's artifact_hash or `gate` reads it
+    # as a pre-pass that ran against something other than the artifact under review.
+    pre = prepass_doc if prepass_doc is not None else _prepass_doc(
+        status=prepass_status, findings=prepass_findings or []
+    )
+    if isinstance(findings, list) and not raw:
+        findings = _merged(findings)
+    # `--no-verify-artifact` because these fixtures carry a synthetic `ART_HASH` that no
+    # tree hashes to. The currency check has its own tests against a real repository.
+    return (
+        "--findings", _write(tmp_path, "f.json", findings),
+        "--model", _write(tmp_path, "m.json", model),
+        "--prepass", _write(tmp_path, "p.json", pre),
+        "--resolve", _write(tmp_path, "res-gate.json", _resolved()),
+        "--no-verify-artifact",
+    )
+
+
+def gate_quick(tmp_path, findings, *, expect=0, repo_root=None, **kw) -> dict:
+    """Quick depth: one dispatch, self-refuted, so findings stay at stage promote."""
+    extra = ("--depth", "quick")
+    if repo_root is not None:
+        extra = (*extra, "--repo-root", str(repo_root))
+    payload = {"findings": findings, "suppressed": []}
+    proc = run_ar("gate", *_inputs(tmp_path, payload, **kw), *extra)
+    assert proc.returncode == expect, f"exit {proc.returncode}: {proc.stderr}"
+    return json.loads(proc.stdout)
+
+
+def gate(tmp_path, findings, *, expect=0, extra=(), repo_root=None, **kw) -> dict:
+    if repo_root is not None:
+        extra = (*extra, "--repo-root", str(repo_root))
+    proc = run_ar("gate", *_inputs(tmp_path, findings, **kw), *extra)
+    assert proc.returncode == expect, f"exit {proc.returncode}: {proc.stderr}"
+    return json.loads(proc.stdout)
+
+
+# --- required inputs --------------------------------------------------------------
+
+def test_gate_without_model_input_fails_loudly(tmp_path):
+    """A missing input must never collapse silently onto the severity path."""
+    proc = run_ar("gate", "--findings", _write(tmp_path, "f.json", []),
+                  "--prepass", _write(tmp_path, "p.json", _prepass_doc()),
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
+    assert proc.returncode == 2
+
+
+@pytest.mark.parametrize("model", [
+    {"resolved": True},
+    {"resolved": True, "alias": "codex"},
+    {"resolved": True, "alias": "codex", "family": "openai", "provider": "openai-codex"},
+])
+def test_a_model_claiming_resolved_must_actually_name_a_reviewer(tmp_path, model):
+    """`resolved: true` alone walks past NOT_REVIEWABLE and emits PASS.
+
+    That branch exists precisely so an artifact nothing looked at cannot read as
+    clean; a malformed model file must not be the way around it.
+    """
+    proc = run_ar("gate", *_inputs(tmp_path, [], model=model))
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
+
+
+@pytest.mark.parametrize("bad", [{}, {"unrelated": "object"}, {"status": "pass"}])
+def test_a_prepass_that_never_ran_cannot_supply_a_clean_result(tmp_path, bad):
+    """An empty object defaults to no findings — the shape of a clean pre-pass."""
+    proc = run_ar("gate", "--findings", _write(tmp_path, "f.json", []),
+                  "--model", _write(tmp_path, "m.json", {
+                      "resolved": True, "alias": "codex", "family": "openai",
+                      "provider": "openai-codex", "model": "gpt-5.6-sol",
+                      "thinking": "high", "independence": "full", "ladder": []}),
+                  "--prepass", _write(tmp_path, "p.json", bad),
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
+
+
+def test_duplicate_caller_supplied_ids_are_rejected(tmp_path):
+    """IDs match a finding to its prior ruling; an ambiguous one must not pass.
+
+    Silently renumbering would be worse than failing — it breaks the match a
+    caller relies on across rounds.
+    """
+    findings = [_finding(id="F1", severity="HIGH"), _finding(id="F1", severity="MEDIUM")]
+    proc = run_ar("gate", *_inputs(tmp_path, findings))
+    assert proc.returncode == 2
+    assert "duplicate ids" in proc.stderr
+
+
+def test_an_unresolved_model_needs_no_reviewer_fields(tmp_path):
+    """The NOT_REVIEWABLE path is the one case where naming nobody is correct."""
+    dead = {"resolved": False, "alias": None, "family": None, "provider": None,
+            "model": None, "thinking": None, "independence": "reduced", "ladder": []}
+    assert gate(tmp_path, [], model=dead, expect=4)["verdict"] == "NOT_REVIEWABLE"
+
+
+def test_gate_without_prepass_input_fails_loudly(tmp_path):
+    proc = run_ar("gate", "--findings", _write(tmp_path, "f.json", []),
+                  "--model", _write(tmp_path, "m.json", {"resolved": True, "independence": "full"}),
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
+    assert proc.returncode == 2
+
+
+# --- verdicts ---------------------------------------------------------------------
+
+def test_verdict_pass_when_only_low_survives(tmp_path):
+    result = gate(tmp_path, [_finding(severity="LOW")], expect=0)
+    assert result["verdict"] == "PASS"
+
+
+def test_verdict_needs_fixes_on_medium(tmp_path):
+    assert gate(tmp_path, [_finding(severity="MEDIUM")], expect=1)["verdict"] == "NEEDS_FIXES"
+
+
+def test_verdict_critical_issues(tmp_path):
+    assert gate(tmp_path, [_finding(severity="CRITICAL")], expect=3)["verdict"] == "CRITICAL_ISSUES"
+
+
+def test_not_reviewable_when_no_reviewer_resolved(tmp_path):
+    """First branch: the review never happened."""
+    dead = {"resolved": False, "alias": None, "family": None, "provider": None,
+            "model": None, "thinking": None, "independence": "reduced", "ladder": []}
+    result = gate(tmp_path, [], model=dead, expect=4)
+    assert result["verdict"] == "NOT_REVIEWABLE"
+
+
+def test_not_reviewable_beats_pass_with_zero_findings(tmp_path):
+    """The dangerous case: no reviewer AND no findings must not read as PASS."""
+    dead = {"resolved": False, "alias": None, "family": None, "provider": None,
+            "model": None, "thinking": None, "independence": "reduced", "ladder": []}
+    assert gate(tmp_path, [], model=dead, expect=4)["verdict"] == "NOT_REVIEWABLE"
+
+
+def test_not_reviewable_second_branch_unfalsifiable_plus_could_not_run(tmp_path):
+    result = gate(tmp_path, [_finding(category="unfalsifiable-claim", severity="MEDIUM")],
+                  prepass_status="could-not-run", expect=4)
+    assert result["verdict"] == "NOT_REVIEWABLE"
+
+
+def test_unfalsifiable_alone_does_not_block_when_prepass_ran(tmp_path):
+    """Review proceeds; the claim is reported, not fatal."""
+    result = gate(tmp_path, [_finding(category="unfalsifiable-claim", severity="MEDIUM")], expect=1)
+    assert result["verdict"] == "NEEDS_FIXES"
+    assert result["findings"][0]["category"] == "unfalsifiable-claim"
+
+
+def test_unfalsifiable_claim_sorts_first(tmp_path):
+    findings = [_finding(id="F1", severity="CRITICAL"),
+                _finding(id="F2", category="unfalsifiable-claim", severity="LOW")]
+    result = gate(tmp_path, findings, expect=3)
+    assert result["findings"][0]["category"] == "unfalsifiable-claim"
+
+
+# --- evidence gate: three outcomes ------------------------------------------------
+
+def test_verified_finding_keeps_its_confidence(tmp_path):
+    result = gate(tmp_path, [_finding(severity="CRITICAL", confidence="HIGH")], expect=3)
+    assert result["findings"][0]["confidence"] == "HIGH"
+
+
+def test_unverified_critical_is_capped_to_low_confidence_not_downgraded(tmp_path):
+    """Severity tracks consequence; proof only speaks to likelihood."""
+    unproven = _finding(severity="CRITICAL", confidence="HIGH",
+                        evidence=[{"kind": "quote", "ref": "spec#3", "quote": "must not lose data"}])
+    result = gate(tmp_path, [unproven], expect=3)
+    assert result["findings"][0]["severity"] == "CRITICAL"
+    assert result["findings"][0]["confidence"] == "LOW"
+    assert result["verdict"] == "CRITICAL_ISSUES"
+
+
+def test_unverified_medium_keeps_its_confidence(tmp_path):
+    """logic.md permits reasoned argument below CRITICAL/HIGH — no cap there."""
+    unproven = _finding(severity="MEDIUM", confidence="HIGH",
+                        evidence=[{"kind": "quote", "ref": "spec#3", "quote": "text"}])
+    assert gate(tmp_path, [unproven], expect=1)["findings"][0]["confidence"] == "HIGH"
+
+
+def test_falsified_evidence_is_dropped_and_counted(tmp_path):
+    bad = _finding(evidence=[{"kind": "file-line", "ref": "no/such/file.py:1-2", "quote": "zzz"}])
+    result = gate(tmp_path, [bad], expect=0)
+    assert result["findings"] == []
+    assert result["suppressed_count"] == 1
+    assert result["suppressed"][0]["reason"] == "falsified"
+
+
+def test_one_true_evidence_item_does_not_shield_a_fabricated_one(tmp_path):
+    """Every falsifiable item must hold. Otherwise a real citation launders a bogus one."""
+    mixed = _finding(evidence=[
+        {"kind": "command", "command": "pytest -q", "output": "1 failed"},
+        {"kind": "file-line", "ref": "no/such/file.py:1-2", "quote": "zzz"},
+    ])
+    result = gate(tmp_path, [mixed], expect=0)
+    assert result["findings"] == []
+    assert result["suppressed"][0]["reason"] == "falsified"
+
+
+def test_unfalsifiable_items_alongside_a_real_one_still_survive(tmp_path):
+    """`all` must not become a purity test: what we cannot check is not a failure."""
+    survivor = _finding(severity="MEDIUM", evidence=[
+        {"kind": "command", "command": "pytest -q", "output": "1 failed"},
+        {"kind": "quote", "ref": "spec#3", "quote": "must not lose data"},
+    ])
+    result = gate(tmp_path, [survivor], expect=1)
+    assert len(result["findings"]) == 1
+    assert result["suppressed_count"] == 0
+
+
+# --- evidence gate: the cited location ---------------------------------------------
+
+def test_line_anchor_beyond_end_of_file_is_falsified(tmp_path):
+    """A quote that exists somewhere must not launder an impossible line number."""
+    (tmp_path / "src.py").write_text("a\nb\nc\nthe quoted text\n")
+    bad = _finding(evidence=[
+        {"kind": "file-line", "ref": "src.py:999999-1000000", "quote": "the quoted text"},
+    ])
+    result = gate(tmp_path, [bad], expect=0, repo_root=tmp_path)
+    assert result["findings"] == []
+    assert result["suppressed"][0]["reason"] == "falsified"
+
+
+def test_quote_outside_the_cited_range_is_falsified(tmp_path):
+    (tmp_path / "src.py").write_text("a\nb\nc\nthe quoted text\n")
+    bad = _finding(evidence=[
+        {"kind": "file-line", "ref": "src.py:1-2", "quote": "the quoted text"},
+    ])
+    result = gate(tmp_path, [bad], expect=0, repo_root=tmp_path)
+    assert result["findings"] == []
+
+
+def test_a_quote_whose_first_line_merely_recurs_in_range_is_falsified(tmp_path):
+    """The whole quote must start in the range — not its first line, separately.
+
+    Checking "first line in range" and "quote somewhere in file" independently lets
+    two different places each satisfy half the test.
+    """
+    (tmp_path / "src.py").write_text("alpha\nbeta\ngamma\nalpha\nomega\n")
+    bad = _finding(evidence=[
+        {"kind": "file-line", "ref": "src.py:1-2", "quote": "alpha\nomega"},
+    ])
+    result = gate(tmp_path, [bad], expect=0, repo_root=tmp_path)
+    assert result["findings"] == []
+
+
+def test_a_quote_running_past_the_end_of_its_cited_range_still_resolves(tmp_path):
+    """A short range is a citation nit; pointing somewhere else is the falsehood.
+
+    Reviewers routinely cite the line a passage starts on and undershoot its end.
+    Killing those drops real findings — observed twice in one live run — while
+    catching nothing a fabricator would do.
+    """
+    (tmp_path / "src.py").write_text("a\nb\nfirst line\nsecond line\nthird line\n")
+    finding = _finding(severity="MEDIUM", evidence=[
+        {"kind": "file-line", "ref": "src.py:3-4",
+         "quote": "first line\nsecond line\nthird line"},
+    ])
+    assert len(gate(tmp_path, [finding], expect=1, repo_root=tmp_path)["findings"]) == 1
+
+
+def test_quote_inside_the_cited_range_resolves(tmp_path):
+    (tmp_path / "src.py").write_text("a\nb\nc\nthe quoted text\n")
+    good = _finding(severity="MEDIUM", evidence=[
+        {"kind": "file-line", "ref": "src.py:4", "quote": "the quoted text"},
+    ])
+    assert len(gate(tmp_path, [good], expect=1, repo_root=tmp_path)["findings"]) == 1
+
+
+def test_file_line_evidence_without_an_anchor_still_searches_the_whole_file(tmp_path):
+    """No anchor is no claim about location; only a cited range is checked."""
+    (tmp_path / "src.py").write_text("a\nb\nc\nthe quoted text\n")
+    good = _finding(severity="MEDIUM", evidence=[
+        {"kind": "file-line", "ref": "src.py", "quote": "the quoted text"},
+    ])
+    assert len(gate(tmp_path, [good], expect=1, repo_root=tmp_path)["findings"]) == 1
+
+
+def test_absence_evidence_naming_a_missing_file_is_falsified(tmp_path):
+    """The search is not re-run, but the scope it names is checkable."""
+    bad = _finding(evidence=[
+        {"kind": "absence", "command": "grep -rn foo src/gone.py", "ref": "src/gone.py", "output": ""},
+    ])
+    result = gate(tmp_path, [bad], expect=0, repo_root=tmp_path)
+    assert result["findings"] == []
+    assert result["suppressed"][0]["reason"] == "falsified"
+
+
+@pytest.mark.parametrize("ref", ["pyproject.toml", "config.yaml", "data.csv", "notes.rst"])
+def test_absence_scope_is_checked_whatever_the_extension(tmp_path, ref):
+    """The scope check must not depend on a source-suffix allowlist.
+
+    `evidence.ref` is a declared scope, not prose that might be a path, so any
+    token carrying an extension is checkable.
+    """
+    bad = _finding(severity="MEDIUM",
+                   evidence=[{"kind": "absence", "command": f"grep -rn x {ref}", "ref": ref, "output": ""}])
+    result = gate(tmp_path, [bad], expect=0, repo_root=tmp_path)
+    assert result["findings"] == []
+    assert result["suppressed"][0]["reason"] == "falsified"
+
+
+def test_absence_evidence_whose_own_output_shows_a_hit_is_falsified(tmp_path):
+    """The claim is that the search came back empty; its own output says otherwise."""
+    (tmp_path / "src.py").write_text("x = 1\n")
+    bad = _finding(evidence=[{"kind": "absence", "command": "grep -rn foo src.py",
+                              "ref": "src.py", "output": "src.py:1:foo is right here"}])
+    result = gate(tmp_path, [bad], expect=0, repo_root=tmp_path)
+    assert result["findings"] == []
+    assert result["suppressed"][0]["reason"] == "falsified"
+
+
+def test_absence_evidence_naming_a_real_scope_survives(tmp_path):
+    (tmp_path / "src.py").write_text("nothing here\n")
+    good = _finding(severity="MEDIUM", evidence=[
+        {"kind": "absence", "command": "grep -rn foo src.py", "ref": "src.py", "output": ""},
+    ])
+    assert len(gate(tmp_path, [good], expect=1, repo_root=tmp_path)["findings"]) == 1
+
+
+def test_a_fragment_does_not_shield_a_missing_file(tmp_path):
+    """`spec#3` names a section; `no/such/file.md#x` names a file that is not there."""
+    bad = _finding(evidence=[
+        {"kind": "file-line", "ref": "no/such/file.md#section", "quote": "zzz"},
+    ])
+    result = gate(tmp_path, [bad], expect=0, repo_root=tmp_path)
+    assert result["findings"] == []
+    assert result["suppressed"][0]["reason"] == "falsified"
+
+
+@pytest.mark.parametrize("ref", ["Makefile:12", "Dockerfile:3-4", "totally-invented:1"])
+def test_file_line_evidence_naming_a_missing_extensionless_file_is_falsified(tmp_path, ref):
+    """`file-line` is a claim about a file. No extension is not a licence to skip it."""
+    bad = _finding(evidence=[{"kind": "file-line", "ref": ref, "quote": "never written"}])
+    result = gate(tmp_path, [bad], expect=0, repo_root=tmp_path)
+    assert result["findings"] == []
+    assert result["suppressed"][0]["reason"] == "falsified"
+
+
+def test_a_section_anchor_naming_no_file_is_still_unfalsifiable(tmp_path):
+    """The escape hatch stays open for what it was for."""
+    survivor = _finding(severity="MEDIUM", evidence=[
+        {"kind": "quote", "ref": "spec#3", "quote": "must not lose data"},
+    ])
+    assert len(gate(tmp_path, [survivor], expect=1, repo_root=tmp_path)["findings"]) == 1
+
+
+# --- evidence schema ---------------------------------------------------------------
+
+@pytest.mark.parametrize("evidence", [
+    {"kind": "command", "command": "", "output": ""},
+    {"kind": "command", "command": "pytest -q", "output": "   "},
+    {"kind": "file-line", "ref": "", "quote": "x"},
+])
+def test_empty_evidence_values_are_rejected(tmp_path, evidence):
+    """Presence is not content: an empty command must not buy reproduction credit."""
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(evidence=[evidence])]))
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
+
+
+# --- gate input shapes -------------------------------------------------------------
+
+def test_gate_accepts_the_quick_mode_object_and_keeps_its_suppressed_count(tmp_path):
+    """`quick` emits {findings, suppressed}; rejecting it breaks the documented pipeline.
+
+    The self-refuted count must survive, or the kill-rate integrity signal reads zero.
+    """
+    quick = {"findings": [_finding(severity="MEDIUM")],
+             "suppressed": [{"id": "F7", "reason": "refuted"}]}
+    result = gate(tmp_path, quick, extra=("--depth", "quick"), expect=1)
+    assert len(result["findings"]) == 1
+    assert result["suppressed_count"] == 1
+    assert result["suppressed"][0]["id"] == "F7"
+
+
+def test_carried_quick_suppressed_entries_without_ids_are_assigned_one(tmp_path):
+    """Reviewers emit `id: null` everywhere, including in a quick self-refute."""
+    quick = {"findings": [], "suppressed": [{"id": None, "reason": "refuted"}]}
+    result = gate(tmp_path, quick, extra=("--depth", "quick"), expect=0)
+    assert result["suppressed"][0]["id"], "null id survived to output"
+
+
+def test_carried_quick_suppressed_ids_are_reserved_by_the_allocator(tmp_path):
+    """A carried ID is a taken ID — otherwise quick output can emit F1 twice."""
+    quick = {"findings": [_finding(id=None, severity="MEDIUM")],
+             "suppressed": [{"id": "F1", "reason": "refuted"}]}
+    result = gate(tmp_path, quick, extra=("--depth", "quick"), expect=1)
+    assigned = {f["id"] for f in result["findings"]}
+    carried = {s["id"] for s in result["suppressed"]}
+    assert not (assigned & carried), f"id collision: {assigned & carried}"
+
+
+# --- id namespacing across invocations ---------------------------------------------
+
+def test_a_reviewer_finding_cannot_buy_credit_by_declaring_stage_prepass(tmp_path):
+    """Provenance comes from which input it arrived in, not a field it writes.
+
+    Keying trust on `stage` left the forgery one word away.
+    """
+    forged = _finding(stage="prepass", severity="HIGH", confidence="HIGH",
+                      evidence=[{"kind": "prepass", "ref": "invented", "output": "whatever"}])
+    result = gate(tmp_path, [forged], expect=1, repo_root=tmp_path)
+    assert result["findings"][0]["confidence"] == "LOW"
+
+
+def test_a_promote_finding_cannot_claim_prepass_evidence(tmp_path):
+    """`prepass` means "this layer produced it". Only the pre-pass may say so.
+
+    Reproduction credit is what holds a CRITICAL/HIGH at full confidence, and a
+    reviewer that can self-declare it can hold any claim there.
+    """
+    faked = _finding(stage="promote", severity="HIGH", confidence="HIGH",
+                     evidence=[{"kind": "prepass", "ref": "invented", "output": "anything"}])
+    result = gate_quick(tmp_path, [faked], expect=0, repo_root=tmp_path)
+    assert result["findings"][0]["confidence"] == "LOW"
+    assert result["findings"][0]["blocking"] is False
+
+
+def test_prepass_stage_findings_keep_their_reproduction_credit(tmp_path):
+    """The pre-pass is the one layer whose word is true by construction."""
+    genuine = _finding(id="", stage="prepass", severity="HIGH", confidence="HIGH",
+                       evidence=[{"kind": "prepass", "ref": "x.py", "output": "missing"}])
+    result = gate(tmp_path, [], prepass_findings=[genuine], expect=1)
+    assert result["findings"][0]["confidence"] == "HIGH"
+
+
+def test_id_prefix_namespaces_assigned_ids(tmp_path):
+    """Callers that merge several invocations need IDs that cannot collide.
+
+    SDD runs three lenses concurrently and keeps each finding's ID; without a
+    per-invocation prefix all three produce F1.
+    """
+    result = gate(tmp_path, [_finding(id=None, severity="MEDIUM")],
+                  extra=("--id-prefix", "SEC"), expect=1)
+    assert result["findings"][0]["id"] == "SEC1"
+
+
+def test_id_prefix_defaults_to_f(tmp_path):
+    assert gate(tmp_path, [_finding(id=None, severity="MEDIUM")], expect=1)["findings"][0]["id"] == "F1"
+
+
+def test_id_prefix_still_respects_ids_already_present(tmp_path):
+    findings = [_finding(id="SEC1", severity="LOW"), _finding(id=None, severity="CRITICAL")]
+    result = gate(tmp_path, findings, extra=("--id-prefix", "SEC"), expect=3)
+    ids = [f["id"] for f in result["findings"]]
+    assert len(ids) == len(set(ids)), ids
+
+
+@pytest.mark.parametrize("suppressed", [5, "refuted", {"id": "F1"}])
+def test_quick_object_with_a_wrong_shaped_suppressed_is_a_diagnostic(tmp_path, suppressed):
+    """Exit 2 with a message, never a traceback — the same rule as any bad input."""
+    quick = {"findings": [], "suppressed": suppressed}
+    proc = run_ar("gate", *_inputs(tmp_path, quick), "--depth", "quick")
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
+    assert "Traceback" not in proc.stderr
+
+
+@pytest.mark.parametrize("bad", ["a string", 42, ["not", "an", "object"]])
+def test_gate_rejects_non_object_model_input_with_exit_2(tmp_path, bad):
+    """Valid JSON of the wrong shape must be a diagnostic, not an AttributeError."""
+    proc = run_ar("gate", *_inputs(tmp_path, [], model=bad))
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
+
+
+def test_gate_rejects_non_object_prepass_input_with_exit_2(tmp_path):
+    proc = run_ar("gate", "--findings", _write(tmp_path, "f.json", []),
+                  "--model", _write(tmp_path, "m.json", {"resolved": True}),
+                  "--prepass", _write(tmp_path, "p.json", ["not", "an", "object"]),
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
+
+
+# --- disposition / tie resolution -------------------------------------------------
+
+def test_refuted_finding_is_dropped_at_any_depth(tmp_path):
+    result = gate(tmp_path, [_finding(disposition="refuted")], expect=0)
+    assert result["findings"] == []
+    assert result["suppressed"][0]["reason"] == "refuted"
+
+
+def test_contested_is_dropped_below_deep(tmp_path):
+    result = gate(tmp_path, [_finding(disposition="contested")],
+                  extra=("--depth", "standard"), expect=0)
+    assert result["findings"] == []
+    assert result["contested"] == []
+    assert result["suppressed"][0]["reason"] == "refuted"
+
+
+def test_contested_finding_with_false_evidence_is_falsified_not_tiebroken(tmp_path):
+    """The evidence gate runs first: a demonstrable falsehood is not a disagreement.
+
+    Sending one to a third model spends a dispatch adjudicating something already
+    known to be wrong.
+    """
+    bogus = _finding(disposition="contested", severity="MEDIUM",
+                     evidence=[{"kind": "file-line", "ref": "no/such/file.py:1-2", "quote": "zzz"}])
+    result = gate(tmp_path, [bogus], extra=("--depth", "deep"), expect=0, repo_root=tmp_path)
+    assert result["contested"] == []
+    assert result["suppressed"][0]["reason"] == "falsified"
+
+
+def test_contested_at_deep_is_withheld_not_suppressed(tmp_path):
+    result = gate(tmp_path, [_finding(disposition="contested")],
+                  extra=("--depth", "deep"), expect=1)
+    assert result["findings"] == []
+    assert [f["id"] for f in result["contested"]] == ["F1"]
+    assert result["suppressed_count"] == 0
+
+
+def test_absent_disposition_is_treated_as_standing(tmp_path):
+    f = _finding()
+    del f["disposition"]
+    assert gate(tmp_path, [f], expect=1,
+                extra=("--repo-root", str(tmp_path)))["findings"][0]["id"] == "F1"
+
+
+# --- prepass merge ----------------------------------------------------------------
+
+def test_gate_merges_prepass_findings_itself(tmp_path):
+    pre = _finding(id="", severity="HIGH", stage="prepass",
+                   evidence=[{"kind": "prepass", "ref": "x.py", "output": "missing"}])
+    result = gate(tmp_path, [], prepass_findings=[pre], expect=1)
+    assert len(result["findings"]) == 1
+    assert result["findings"][0]["stage"] == "prepass"
+
+
+def test_prepass_evidence_satisfies_the_reproduction_requirement(tmp_path):
+    pre = _finding(id="", severity="HIGH", confidence="HIGH", stage="prepass",
+                   evidence=[{"kind": "prepass", "ref": "x.py", "output": "missing"}])
+    result = gate(tmp_path, [], prepass_findings=[pre], expect=1)
+    assert result["findings"][0]["confidence"] == "HIGH"
+
+
+# --- schema validation ------------------------------------------------------------
+
+@pytest.mark.parametrize("field", ["severity", "confidence", "claim", "evidence", "remediation"])
+def test_missing_required_field_is_rejected(field, tmp_path):
+    bad = _finding()
+    del bad[field]
+    proc = run_ar("gate", *_inputs(tmp_path, [bad]))
+    assert proc.returncode == 2
+    assert field in proc.stderr
+
+
+@pytest.mark.parametrize("field", ["claim", "category", "remediation"])
+def test_blank_core_fields_are_rejected(field, tmp_path):
+    """A finding with no claim is not a finding; presence is not content."""
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(**{field: "   "})]))
+    assert proc.returncode == 2
+    assert field in proc.stderr
+
+
+def test_invalid_stage_is_rejected(tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(stage="invented")]))
+    assert proc.returncode == 2
+
+
+def test_invalid_severity_is_rejected(tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(severity="SEVERE")]))
+    assert proc.returncode == 2
+
+
+def test_empty_evidence_array_is_rejected(tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(evidence=[])]))
+    assert proc.returncode == 2
+
+
+# --- ids and depth ----------------------------------------------------------------
+
+def test_ids_are_assigned_in_severity_order_when_absent(tmp_path):
+    findings = [_finding(id="", severity="LOW"), _finding(id="", severity="CRITICAL")]
+    result = gate(tmp_path, findings, expect=3)
+    assert result["findings"][0]["id"] == "F1"
+    assert result["findings"][0]["severity"] == "CRITICAL"
+
+
+def test_assigned_ids_never_collide_with_ids_already_present(tmp_path):
+    """Finding-ID stability is a contract: two findings must never share an ID.
+
+    A blank-ID finding sorting into position 1 must not be handed an ID that a
+    reviewer-supplied finding already carries.
+    """
+    findings = [_finding(id="F1", severity="LOW"), _finding(id="", severity="CRITICAL")]
+    result = gate(tmp_path, findings, expect=3)
+    ids = [f["id"] for f in result["findings"]]
+    assert len(ids) == len(set(ids)), f"duplicate ids: {ids}"
+
+
+def test_suppressed_records_carry_a_usable_id(tmp_path):
+    """The promote prompt instructs `id: null`; a null in `suppressed` names nothing.
+
+    A caller cannot carry a dismissal forward — or reuse its ID, as the prompt
+    requires — if the record it was given has no ID.
+    """
+    result = gate(tmp_path, [_finding(id=None, disposition="refuted")], expect=0)
+    assert result["suppressed"][0]["id"], "suppressed record has no usable id"
+
+
+def test_contested_records_carry_a_usable_id(tmp_path):
+    result = gate(tmp_path, [_finding(id=None, disposition="contested")],
+                  extra=("--depth", "deep"), expect=1)
+    assert result["contested"][0]["id"], "contested record has no usable id"
+
+
+def test_ids_are_unique_across_survivors_suppressed_and_contested(tmp_path):
+    findings = [_finding(id=None, disposition="refuted"),
+                _finding(id=None, disposition="contested"),
+                _finding(id=None, disposition="standing", severity="MEDIUM")]
+    result = gate(tmp_path, findings, extra=("--depth", "deep"), expect=1)
+    ids = ([f["id"] for f in result["findings"]]
+           + [f["id"] for f in result["contested"]]
+           + [s["id"] for s in result["suppressed"]])
+    assert all(ids), f"blank id present: {ids}"
+    assert len(ids) == len(set(ids)), f"duplicate ids: {ids}"
+
+
+def test_a_pending_contest_cannot_read_as_a_clean_review(tmp_path):
+    """The bypass: `manifest` refuses a gate result that still has `contested[]`, but a
+    caller gating on exit 0 stops at the gate and never reaches the manifest to hear it."""
+    result = gate(tmp_path, [_finding(disposition="contested", severity="LOW",
+                                      confidence="LOW")],
+                  extra=("--depth", "deep"), expect=1)
+    assert result["verdict"] == "NEEDS_FIXES"
+    assert result["blocking_count"] == 0
+    assert result["contested_count"] == 1
+
+
+def test_a_contested_critical_escalates_rather_than_reading_as_needs_fixes(tmp_path):
+    result = gate(tmp_path, [_finding(disposition="contested", severity="CRITICAL")],
+                  extra=("--depth", "deep"), expect=3)
+    assert result["verdict"] == "CRITICAL_ISSUES"
+
+
+def test_a_contested_unfalsifiable_claim_is_a_dispute_not_an_unreviewable_artifact(tmp_path):
+    """A standing one means both stages agreed nothing here can be checked. A contested
+    one means they disagreed about that, which tiebreak settles."""
+    result = gate(tmp_path, [_finding(disposition="contested", category="unfalsifiable-claim")],
+                  prepass_status="could-not-run", extra=("--depth", "deep"), expect=1)
+    assert result["verdict"] == "NEEDS_FIXES"
+
+
+def test_contested_at_shallow_depth_does_not_escalate(tmp_path):
+    """Below `deep` a contest resolves in the refuter's favour and is suppressed, so
+    there is no pending dispute left for the verdict to withhold PASS over."""
+    result = gate(tmp_path, [_finding(disposition="contested")], extra=("--depth", "standard"))
+    assert result["verdict"] == "PASS"
+    assert result["contested_count"] == 0
+    assert result["suppressed_count"] == 1
+
+
+def test_gate_echoes_the_depth_it_used(tmp_path):
+    assert gate(tmp_path, [], extra=("--depth", "deep"))["depth"] == "deep"
+
+
+# --- manifest ---------------------------------------------------------------------
+
+def _manifest_inputs(tmp_path, *, depth="standard", independence="full", family="openai"):
+    resolve_doc = {"profile": "code-diff", "target_kind": "git-range", "target_ref": "main..HEAD",
+                   "artifact_hash": ART_HASH, "size_metric": 200, "depth_suggestion": "deep",
+                   "contract_surface": False, "chain": _chain("resolve")}
+    prepass_doc = _prepass_doc(checks=[{"name": "code-check", "command": "pytest -q",
+                                        "exit_code": 0, "status": "pass", "output": ""}])
+    model_doc = _model_doc(family=family, independence=independence)
+    gate_doc = {"verdict": "PASS", "findings": [], "contested": [], "suppressed": [],
+                "suppressed_count": 2, "depth": depth, "chain": _chain("gate")}
+    # These carry a synthetic ART_HASH no tree hashes to, so the currency check would
+    # fire on every one. It has its own tests against a real repository below.
+    return (
+        "--resolve", _write(tmp_path, "r.json", resolve_doc),
+        "--prepass", _write(tmp_path, "p2.json", prepass_doc),
+        "--model", _write(tmp_path, "m2.json", model_doc),
+        "--gate", _write(tmp_path, "g.json", gate_doc),
+        "--no-verify-artifact",
+    )
+
+
+def manifest(tmp_path, *, extra=(), expect=0, **kw) -> dict:
+    proc = run_ar("manifest", *_manifest_inputs(tmp_path, **kw), *extra)
+    assert proc.returncode == expect, f"exit {proc.returncode}: {proc.stderr}"
+    return json.loads(proc.stdout)
+
+
+def test_manifest_records_the_depth_actually_used_not_the_suggestion(tmp_path):
+    """resolve suggested deep; the caller ran standard. The manifest must say standard."""
+    result = manifest(tmp_path, depth="standard")
+    assert result["depth"] == "standard"
+
+
+def test_manifest_carries_a_replayable_reviewer_triple(tmp_path):
+    reviewer = manifest(tmp_path)["reviewer"]
+    assert reviewer["provider"] == "openai-codex"
+    assert reviewer["model"] == "gpt-5.6-sol"
+    assert reviewer["thinking"] == "high"
+
+
+def test_quick_depth_forces_reduced_independence_even_cross_family(tmp_path):
+    """Self-refutation in one context cannot deliver structural independence."""
+    result = manifest(tmp_path, depth="quick", independence="full", family="openai")
+    assert result["reviewer"]["independence"] == "reduced"
+
+
+def test_standard_depth_preserves_full_independence(tmp_path):
+    result = manifest(tmp_path, depth="standard", independence="full")
+    assert result["reviewer"]["independence"] == "full"
+
+
+def test_reduced_independence_is_never_upgraded(tmp_path):
+    result = manifest(tmp_path, depth="deep", independence="reduced")
+    assert result["reviewer"]["independence"] == "reduced"
+
+
+def test_manifest_propagates_verdict_and_suppressed_count(tmp_path):
+    result = manifest(tmp_path)
+    assert result["verdict"] == "PASS"
+    assert result["suppressed_count"] == 2
+
+
+def test_manifest_records_the_lens(tmp_path):
+    assert manifest(tmp_path, extra=("--lens", "security"))["lens"] == "security"
+    assert manifest(tmp_path)["lens"] is None
+
+
+@pytest.mark.parametrize("broken", ["resolve", "prepass", "model", "gate"])
+def test_manifest_rejects_unrelated_json_for_any_input(tmp_path, broken):
+    """A replay record of nulls is worse than no record — it looks like a real run."""
+    payloads = {
+        "resolve": {"profile": "code-diff", "target_kind": "git-range", "target_ref": "a..b",
+                    "artifact_hash": "x", "size_metric": 1, "depth_suggestion": "quick",
+                    "contract_surface": False},
+        "prepass": _prepass_doc(),
+        "model": {"resolved": True, "alias": "codex", "family": "openai", "provider": "openai-codex",
+                  "model": "gpt-5.6-sol", "thinking": "high", "independence": "full", "ladder": []},
+        "gate": {"verdict": "PASS", "findings": [], "contested": [], "suppressed": [],
+                 "suppressed_count": 0, "depth": "quick"},
+    }
+    payloads[broken] = {"unrelated": "object"}
+    args = []
+    for name, payload in payloads.items():
+        args += [f"--{name}", _write(tmp_path, f"{name}.json", payload)]
+    proc = run_ar("manifest", *args)
+    assert proc.returncode == 2, f"accepted an unrelated {broken} payload"
+    assert "adversarial-review:" in proc.stderr
+
+
+def _review_inputs(work, repo):
+    """A complete set of stage outputs for a real target, written outside the repo."""
+    proc = run_ar("resolve", "--target", "WORKTREE", "--repo-root", str(repo))
+    assert proc.returncode == 0, proc.stderr
+    (work / "r.json").write_text(proc.stdout)
+    # These carry the *real* run's identity, not the fixture's: `manifest` now refuses a
+    # pre-pass or a model selection minted by a different run than the one it records.
+    real = json.loads(proc.stdout)
+    run = {"run_id": real["chain"]["run_id"], "artifact_hash": real["artifact_hash"],
+           "predecessor": "0" * 64}
+    _write(work, "p.json", _prepass_doc(
+        observed_artifact_hash=real["artifact_hash"], chain={**run, "step": "prepass"}))
+    _write(work, "m.json", _model_doc(chain={**run, "step": "select-model"}))
+    _write(work, "g.json", {"verdict": "PASS", "findings": [], "contested": [],
+                            "suppressed": [], "suppressed_count": 0, "depth": "quick"})
+    return ["--resolve", str(work / "r.json"), "--prepass", str(work / "p.json"),
+            "--model", str(work / "m.json"), "--gate", str(work / "g.json"),
+            "--repo-root", str(repo), "--verify-artifact"]
+
+
+def test_manifest_verify_artifact_passes_on_an_unchanged_tree(tmp_path):
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    _git_repo(repo)
+    (repo / "x.py").write_text("a\nb\n")
+    proc = run_ar("manifest", *_review_inputs(work, repo))
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_manifest_verify_artifact_catches_a_tree_that_moved_mid_review(tmp_path):
+    """A fix applied between stages makes refute 'refute' findings that were real.
+
+    The stages after it judged content the earlier ones never saw, and the run
+    comes out looking clean — the opposite of what happened.
+    """
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    _git_repo(repo)
+    (repo / "x.py").write_text("a\nb\n")
+    args = _review_inputs(work, repo)
+    (repo / "x.py").write_text("a\nb\nc\nd\n")   # the tree moves under the review
+    proc = run_ar("manifest", *args)
+    assert proc.returncode == 2
+    assert "artifact changed during the review" in proc.stderr
+
+
+def test_the_currency_check_is_on_by_default_not_opt_in(tmp_path):
+    """It was the only thing separating this review from an intact replay of an older
+    one, and it was a flag most callers would never pass."""
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    _git_repo(repo)
+    (repo / "x.py").write_text("a\nb\n")
+    args = [a for a in _review_inputs(work, repo) if a != "--verify-artifact"]
+    (repo / "x.py").write_text("totally different\n")
+    proc = run_ar("manifest", *args)
+    assert proc.returncode == 2
+    assert "artifact changed during the review" in proc.stderr
+
+
+def test_no_verify_artifact_still_lets_a_detached_diff_through(tmp_path):
+    """A caller reviewing a diff with no tree behind it has nothing to re-hash."""
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    _git_repo(repo)
+    (repo / "x.py").write_text("a\nb\n")
+    args = [a for a in _review_inputs(work, repo) if a != "--verify-artifact"]
+    (repo / "x.py").write_text("totally different\n")
+    assert run_ar("manifest", *args, "--no-verify-artifact").returncode == 0
+
+
+def test_files_the_review_itself_creates_do_not_read_as_a_changed_artifact(tmp_path):
+    """The check runs after the pre-pass has run the repo's own test command, which
+    writes into the tree — `cargo test` alone leaves a `Cargo.lock` that stock cargo
+    scaffolding does not gitignore. Counting those refused honest reviews of ordinary
+    projects, and the escape from that is the flag that reopens the replay hole."""
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    _git_repo(repo)
+    (repo / "x.py").write_text("a\nb\n")
+    args = [a for a in _review_inputs(work, repo) if a != "--verify-artifact"]
+    (repo / ".pytest_cache").mkdir()
+    (repo / ".pytest_cache" / "v").write_text("x")
+    (repo / "Cargo.lock").write_text("# generated by the check that just ran\n")
+    assert run_ar("manifest", *args).returncode == 0
+
+
+def test_work_added_after_capture_is_reported_rather_than_passed_over(tmp_path):
+    """Scoping the check to the captured set is what keeps it usable, but silence about
+    the difference would be its own fail-open — new work no stage looked at, under a
+    `PASS`. Refusing is wrong (most of these are the review's own check output), so the
+    caller is told instead."""
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    _git_repo(repo)
+    (repo / "x.py").write_text("a\nb\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "committed"], cwd=repo, check=True)
+    bundle = _live_run(repo, work, "run")
+
+    (repo / "vuln.py").write_text("def exploit():\n    pass\n")
+
+    quick = _write(work, "q.json", {"findings": [], "suppressed": []})
+    proc = run_ar("gate", "--findings", quick, "--model", bundle["model"],
+                  "--prepass", bundle["prepass"], "--resolve", bundle["resolve"],
+                  "--depth", "quick", "--repo-root", str(repo))
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout)
+    assert result["verdict"] == "PASS"
+    assert result["unreviewed_paths"] == ["vuln.py"], (
+        "a PASS that stopped short of real new work must say so"
+    )
+
+
+def test_an_untracked_file_that_was_part_of_the_artifact_still_counts(tmp_path):
+    """The relaxation is scoped to files that appeared after `resolve`. Uncommitted new
+    work present when the artifact was captured is under review like anything else."""
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    _git_repo(repo)
+    (repo / "x.py").write_text("a\nb\n")
+    (repo / "new_module.py").write_text("def f():\n    return 1\n")
+    args = [a for a in _review_inputs(work, repo) if a != "--verify-artifact"]
+    (repo / "new_module.py").write_text("def f():\n    return 2\n")
+    proc = run_ar("manifest", *args)
+    assert proc.returncode == 2
+    assert "artifact changed during the review" in proc.stderr
+
+
+def test_manifest_fails_cleanly_on_a_missing_input(tmp_path):
+    proc = run_ar("manifest", "--resolve", str(tmp_path / "absent.json"),
+                  "--prepass", _write(tmp_path, "p3.json", {}),
+                  "--model", _write(tmp_path, "m3.json", {}),
+                  "--gate", _write(tmp_path, "g3.json", {}))
+    assert proc.returncode == 2
+    assert "adversarial-review:" in proc.stderr
+
+
+
+# ============ evidence provenance and id allocation ==========================
+
+@pytest.mark.parametrize("target", ["vendor/plans/notes.md", "third_party/adr/notes.md"])
+def test_a_nested_plans_or_adr_directory_does_not_hijack_the_profile(target, tmp_path):
+    """Detection is specified as docs/plans/ and docs/adr/, not any directory so named."""
+    _touch(tmp_path / target, "# Notes\n")
+    assert resolve("--target", target, "--repo-root", str(tmp_path))["profile"] == "prose-claim"
+
+
+@pytest.mark.parametrize("target", ["docs/plans/p.md", "docs/adr/0001-x.md"])
+def test_the_documented_plan_and_adr_locations_still_detect(target, tmp_path):
+    _touch(tmp_path / target, "# X\n")
+    expected = "plan" if "plans" in target else "spec-design"
+    assert resolve("--target", target, "--repo-root", str(tmp_path))["profile"] == expected
+
+
+@pytest.mark.parametrize("suffix", [".c", ".h", ".cpp", ".hpp", ".cc", ".m", ".swift", ".kt",
+                                    ".php", ".cs", ".scala", ".ex", ".erl", ".lua", ".pl", ".r"])
+def test_unresolved_source_references_are_not_silently_skipped(suffix, tmp_path):
+    """An unrecognized suffix meant the token was not a reference at all — a false pass."""
+    doc = _touch(tmp_path / "notes.md", f"See `src/missing{suffix}`.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert any(f"missing{suffix}" in f["evidence"][0]["ref"] for f in result["findings"])
+
+
+def test_a_markdown_link_to_a_directory_is_not_a_resolved_file_reference(tmp_path):
+    (tmp_path / "somedir").mkdir()
+    doc = _touch(tmp_path / "doc.md", "See [d](./somedir).\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert any("somedir" in f["evidence"][0]["ref"] for f in result["findings"])
+
+
+def test_a_backticked_directory_path_still_resolves(tmp_path):
+    """Prose legitimately names directories; only link targets must be files."""
+    (tmp_path / "somedir").mkdir()
+    doc = _touch(tmp_path / "doc.md", "Files live under `somedir/`.\n")
+    assert prepass("--profile", "prose-claim", "--target", str(doc),
+                   "--repo-root", str(tmp_path))["findings"] == []
+
+
+@pytest.mark.parametrize("category", ["Not Kebab Case", "has_underscores", "x" * 41, ""])
+def test_a_category_violating_the_schema_is_rejected(category, tmp_path):
+    """The gate emitted these unchanged, so a caller keying on category got garbage."""
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(category=category)]))
+    assert proc.returncode == 2
+    assert "category" in proc.stderr
+
+
+def test_a_valid_kebab_category_is_accepted(tmp_path):
+    assert gate(tmp_path, [_finding(category="missing-error-path")], expect=1)["findings"]
+
+
+# ============ reference resolution ===========================================
+
+def test_a_quote_citation_with_a_section_anchor_still_checks_the_quote(tmp_path):
+    """A ref naming no file excused the quote entirely, so a fabricated one survived."""
+    doc = _touch(tmp_path / "spec.md", "# Spec\n\nreal text here\n")
+    bad = _finding(evidence=[{"kind": "quote", "ref": "spec.md#3",
+                              "quote": "THIS TEXT APPEARS NOWHERE"}])
+    result = gate(tmp_path, [bad], expect=0,
+                  extra=("--repo-root", str(tmp_path)))
+    assert result["findings"] == []
+    assert result["suppressed"][0]["reason"] == "falsified"
+    assert doc.exists()
+
+
+def test_a_quote_citation_with_an_anchor_passes_when_the_quote_is_real(tmp_path):
+    _touch(tmp_path / "spec.md", "# Spec\n\nthe real sentence\n")
+    good = _finding(evidence=[{"kind": "quote", "ref": "spec.md#intro",
+                               "quote": "the real sentence"}])
+    assert gate(tmp_path, [good], expect=1,
+                extra=("--repo-root", str(tmp_path)))["findings"]
+
+
+def test_an_anchor_naming_no_resolvable_file_is_unverifiable_not_falsified(tmp_path):
+    """We cannot check it either way; killing it would suppress real defects."""
+    f = _finding(severity="MEDIUM",
+                 evidence=[{"kind": "quote", "ref": "#section-3", "quote": "anything"}])
+    assert gate(tmp_path, [f], expect=1,
+                extra=("--repo-root", str(tmp_path)))["findings"]
+
+
+def test_a_markdown_link_carrying_a_title_is_still_resolved(tmp_path):
+    """[d](./nope.md "Title") matched nothing, so a missing target passed silently."""
+    doc = _touch(tmp_path / "t.md", 'See [d](./nope.md "The Title").\n')
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert any("nope.md" in f["evidence"][0]["ref"] for f in result["findings"])
+
+
+def test_a_titled_link_to_a_real_file_produces_no_finding(tmp_path):
+    _touch(tmp_path / "real.md", "x\n")
+    doc = _touch(tmp_path / "t.md", 'See [d](./real.md "The Title").\n')
+    assert prepass("--profile", "prose-claim", "--target", str(doc),
+                   "--repo-root", str(tmp_path))["findings"] == []
+
+
+def test_a_bare_installed_executable_is_not_a_false_unresolved_symbol(tmp_path):
+    """`pytest` in a repo that never mentions it produced a false HIGH."""
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    doc = _touch(tmp_path / "doc.md", "Run `python3` to verify.\n")
+    assert prepass("--profile", "prose-claim", "--target", str(doc),
+                   "--repo-root", str(tmp_path))["findings"] == []
+
+
+def test_a_bare_uninstalled_unknown_token_is_still_reported(tmp_path):
+    """The fix must not blanket-excuse every single-word token."""
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    doc = _touch(tmp_path / "doc.md", "Call `someFunctionNobodyDefined` first.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert result["findings"]
+
+
+# ============ diff parsing and anchors =======================================
+
+def test_a_backticked_path_containing_spaces_is_still_a_reference(tmp_path):
+    """A space meant 'command or prose', so a path with a space left the scan."""
+    doc = _touch(tmp_path / "doc.md", "See `docs/my notes/missing.md` for detail.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert any("my notes" in f["evidence"][0]["ref"] for f in result["findings"])
+
+
+def test_prose_with_spaces_is_still_not_treated_as_a_reference(tmp_path):
+    """The fix must not reclassify ordinary backticked prose as a path."""
+    doc = _touch(tmp_path / "doc.md", "The `review loop` runs twice.\n")
+    assert prepass("--profile", "prose-claim", "--target", str(doc),
+                   "--repo-root", str(tmp_path))["findings"] == []
+
+
+def test_an_angle_bracket_link_destination_with_spaces_is_extracted(tmp_path):
+    doc = _touch(tmp_path / "doc.md", "See [d](<missing file.md>).\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert any("missing file.md" in f["evidence"][0]["ref"] for f in result["findings"])
+
+
+def test_absence_evidence_omitting_output_is_rejected(tmp_path):
+    """Omitting it asserted nothing, yet read as 'the search came back empty'."""
+    f = _finding(evidence=[{"kind": "absence", "command": "grep -r zzz .", "ref": "skills/"}])
+    proc = run_ar("gate", *_inputs(tmp_path, [f]))
+    assert proc.returncode == 2
+    assert "output" in proc.stderr
+
+
+def test_absence_evidence_with_an_empty_output_field_is_accepted(tmp_path):
+    """Empty output IS the claim for an absence — the one place empty is content."""
+    f = _finding(evidence=[{"kind": "absence", "command": "grep -r zzz .",
+                            "ref": "tests/", "output": ""}])
+    assert gate(tmp_path, [f], expect=1)["findings"]
+
+
+@pytest.mark.parametrize("patch", [{"not": "a diff"}, 42, ["a"], True])
+def test_a_patch_that_is_not_a_diff_string_or_null_is_rejected(patch, tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(patch=patch)]))
+    assert proc.returncode == 2
+    assert "patch" in proc.stderr
+
+
+def test_a_string_patch_and_a_null_patch_are_both_accepted(tmp_path):
+    assert gate(tmp_path, [_finding(patch=None)], expect=1)["findings"]
+    assert gate(tmp_path, [_finding(patch="--- a\n+++ b\n")], expect=1)["findings"]
+
+
+# ============ markdown links and headings ====================================
+
+def test_a_nested_relative_link_is_not_rescued_by_a_root_file_of_the_same_name(tmp_path):
+    """Markdown resolves a link against its own document. Falling back to the repo
+    root let a broken sibling link pass because an unrelated root file matched."""
+    _touch(tmp_path / "sibling.md", "root copy\n")
+    doc = _touch(tmp_path / "nested/doc.md", "See [s](./sibling.md).\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert any("sibling.md" in f["evidence"][0]["ref"] for f in result["findings"])
+
+
+def test_a_nested_relative_link_to_a_real_sibling_still_passes(tmp_path):
+    _touch(tmp_path / "nested/sibling.md", "the real one\n")
+    doc = _touch(tmp_path / "nested/doc.md", "See [s](./sibling.md).\n")
+    assert prepass("--profile", "prose-claim", "--target", str(doc),
+                   "--repo-root", str(tmp_path))["findings"] == []
+
+
+def test_a_backticked_path_may_still_resolve_against_the_repository_root(tmp_path):
+    """Only links carry document-relative meaning; prose names repo paths freely."""
+    _touch(tmp_path / "src/real.py", "x = 1\n")
+    doc = _touch(tmp_path / "nested/doc.md", "See `src/real.py`.\n")
+    assert prepass("--profile", "prose-claim", "--target", str(doc),
+                   "--repo-root", str(tmp_path))["findings"] == []
+
+
+def test_reference_style_link_definitions_are_extracted(tmp_path):
+    doc = _touch(tmp_path / "doc.md", "See [ref][a].\n\n[a]: ./missing.md\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    assert any("missing.md" in f["evidence"][0]["ref"] for f in result["findings"])
+
+
+def test_a_reference_style_definition_pointing_at_a_real_file_passes(tmp_path):
+    _touch(tmp_path / "real.md", "x\n")
+    doc = _touch(tmp_path / "doc.md", "See [ref][a].\n\n[a]: ./real.md\n")
+    assert prepass("--profile", "prose-claim", "--target", str(doc),
+                   "--repo-root", str(tmp_path))["findings"] == []
+
+
+def test_setext_headings_satisfy_section_coverage(tmp_path):
+    """A compliant document received a HIGH failing-check finding — a false positive
+    on exactly the artifact the check exists to approve."""
+    doc = _touch(tmp_path / "logic.md",
+                 "Purpose\n=======\n\nScope\n-----\n\nDecisions Locked\n----------------\n\ntext\n")
+    result = prepass("--profile", "spec-design", "--target", str(doc),
+                     "--repo-root", str(tmp_path))
+    coverage = next(c for c in result["checks"] if c["name"] == "section-coverage")
+    assert coverage["status"] == "pass", coverage["output"]
+
+
+def test_a_setext_document_actually_missing_a_section_still_fails(tmp_path):
+    doc = _touch(tmp_path / "logic.md", "Purpose\n=======\n\nScope\n-----\n\ntext\n")
+    result = prepass("--profile", "spec-design", "--target", str(doc),
+                     "--repo-root", str(tmp_path), expect=1)
+    coverage = next(c for c in result["checks"] if c["name"] == "section-coverage")
+    assert coverage["status"] == "fail"
+    assert "Decisions Locked" in coverage["output"]
+
+
+# ============ depth provenance and id shape ==================================
+
+def _quick_payload():
+    """Exactly what assets/promote-prompt.md tells a quick-depth reviewer to emit."""
+    return {"findings": [_finding()], "suppressed": [{"id": "F3", "reason": "refuted"}]}
+
+
+def test_quick_mode_output_cannot_be_laundered_into_standard_depth(tmp_path):
+    """Accepting it at standard recorded same-context self-refutation as fully
+    independent, which defeats the guarantee the whole protocol rests on."""
+    proc = run_ar("gate",
+                  "--findings", _write(tmp_path, "f.json", _quick_payload()),
+                  "--model", _write(tmp_path, "m.json",
+                                    _model_doc(alias="codex", provider="p", model="m")),
+                  "--prepass", _write(tmp_path, "p.json",
+                                      _prepass_doc()),
+                  "--depth", "standard",
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
+    assert proc.returncode == 2
+    assert "quick" in proc.stderr.lower()
+
+
+def test_quick_mode_output_is_accepted_at_quick_depth(tmp_path):
+    proc = run_ar("gate",
+                  "--findings", _write(tmp_path, "f.json", _quick_payload()),
+                  "--model", _write(tmp_path, "m.json",
+                                    _model_doc(alias="codex", provider="p", model="m")),
+                  "--prepass", _write(tmp_path, "p.json",
+                                      _prepass_doc()),
+                  "--depth", "quick",
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
+    assert proc.returncode == 1, proc.stderr
+    assert json.loads(proc.stdout)["depth"] == "quick"
+
+
+def test_a_plain_array_is_rejected_at_quick_depth(tmp_path):
+    """The provenance check runs both ways: quick depth means a quick-shaped report."""
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding()], raw=True), "--depth", "quick")
+    assert proc.returncode == 2
+    assert "quick" in proc.stderr.lower()
+
+
+def test_a_link_destination_with_balanced_parentheses_is_not_truncated(tmp_path):
+    _touch(tmp_path / "file(1).md", "x\n")
+    doc = _touch(tmp_path / "doc.md", "See [d](./file(1).md).\n")
+    assert prepass("--profile", "prose-claim", "--target", str(doc),
+                   "--repo-root", str(tmp_path))["findings"] == []
+
+
+@pytest.mark.parametrize("bad_id", ["not-an-id", "F0", "F-1", "1", "FF1", "F1x"])
+def test_a_supplied_finding_id_violating_the_schema_is_rejected(bad_id, tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(id=bad_id)]))
+    assert proc.returncode == 2
+    assert "id" in proc.stderr
+
+
+def test_a_valid_supplied_id_is_preserved(tmp_path):
+    """Dismissed findings reuse their original ID across rounds — that must survive."""
+    assert gate(tmp_path, [_finding(id="F7")], expect=1)["findings"][0]["id"] == "F7"
+
+
+# ============ clean-path reachability ========================================
+
+def test_a_clean_quick_review_is_accepted_as_a_bare_empty_array(tmp_path):
+    """Profiles tell a clean reviewer to emit `[]`, so demanding the quick shape here
+    left PASS with no expressible form."""
+    proc = run_ar("gate", *_inputs(tmp_path, [], raw=True), "--depth", "quick")
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout)
+    assert result["verdict"] == "PASS"
+    assert result["depth"] == "quick"
+
+
+def test_a_non_empty_bare_array_is_still_rejected_at_quick_depth(tmp_path):
+    """The provenance rule still binds where it can be violated: a quick report with
+    findings and no suppressed list never ran the self-refute pass."""
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding()]), "--depth", "quick")
+    assert proc.returncode == 2
+    assert "quick" in proc.stderr.lower()
+
+
+def test_an_empty_quick_shaped_report_is_still_accepted(tmp_path):
+    proc = run_ar("gate",
+                  "--findings", _write(tmp_path, "f.json",
+                                       {"findings": [], "suppressed": []}),
+                  "--model", _write(tmp_path, "m.json",
+                                    _model_doc(alias="codex", provider="p", model="m")),
+                  "--prepass", _write(tmp_path, "p.json",
+                                      _prepass_doc()),
+                  "--depth", "quick",
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["verdict"] == "PASS"
+
+
+def test_an_empty_bare_array_is_not_a_licence_to_launder_quick_into_standard(tmp_path):
+    """Empty is accepted at quick because nothing can be misattributed; the reverse
+    direction — quick-shaped input at standard depth — stays closed."""
+    proc = run_ar("gate",
+                  "--findings", _write(tmp_path, "f.json",
+                                       {"findings": [], "suppressed": []}),
+                  "--model", _write(tmp_path, "m.json",
+                                    _model_doc(alias="codex", provider="p", model="m")),
+                  "--prepass", _write(tmp_path, "p.json",
+                                      _prepass_doc()),
+                  "--depth", "standard",
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
+    assert proc.returncode == 2
+    assert "quick" in proc.stderr.lower()
+
+
+# ============ severity adjudication and record kinds ==============================
+
+def test_refute_can_downgrade_a_finding_instead_of_only_killing_it(tmp_path):
+    """Refute must be able to say "real defect, but LOW" — not only uphold or kill."""
+    downgraded = _finding(severity="HIGH", confidence="HIGH", stage="refute",
+                          adjudicated_severity="LOW")
+    result = gate(tmp_path, [downgraded], expect=0)
+    assert result["verdict"] == "PASS"
+    assert result["findings"][0]["effective_severity"] == "LOW"
+    assert result["findings"][0]["severity"] == "HIGH", "the proposal is preserved"
+    assert result["regrade_count"] == 1
+
+
+def test_refute_can_also_escalate(tmp_path):
+    escalated = _finding(severity="LOW", confidence="HIGH", stage="refute",
+                         adjudicated_severity="CRITICAL")
+    assert gate(tmp_path, [escalated], expect=3)["verdict"] == "CRITICAL_ISSUES"
+
+
+def test_promote_cannot_grade_its_own_finding(tmp_path):
+    """Otherwise the recall stage keeps the authority this field exists to move."""
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(stage="promote",
+                                                       adjudicated_severity="CRITICAL")]))
+    assert proc.returncode == 2
+    assert "only refute and tiebreak may re-grade" in proc.stderr
+
+
+def test_an_invalid_adjudicated_severity_is_rejected(tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(stage="refute",
+                                                       adjudicated_severity="SEVERE")]))
+    assert proc.returncode == 2
+
+
+def test_a_promote_only_low_confidence_high_is_advisory_not_blocking(tmp_path):
+    """Quick depth self-refutes in one context, so nothing independent backs it."""
+    hypothesis = _finding(severity="HIGH", confidence="LOW", stage="promote")
+    result = gate_quick(tmp_path, [hypothesis], expect=0)
+    assert result["verdict"] == "PASS"
+    assert len(result["findings"]) == 1, "advisories are reported, not dropped"
+    assert result["findings"][0]["blocking"] is False
+    assert result["advisory_count"] == 1 and result["blocking_count"] == 0
+
+
+def test_the_same_claim_confirmed_by_refute_does_block(tmp_path):
+    confirmed = _finding(severity="HIGH", confidence="LOW", stage="refute")
+    result = gate(tmp_path, [confirmed], expect=1)
+    assert result["verdict"] == "NEEDS_FIXES"
+    assert result["findings"][0]["blocking"] is True
+
+
+def test_an_unproven_critical_still_blocks(tmp_path):
+    """Consequence, not likelihood: being wrong about possible data loss is the
+    expensive direction, so CRITICAL is exempt from the advisory rule."""
+    result = gate_quick(tmp_path, [_finding(severity="CRITICAL", confidence="LOW",
+                                            stage="promote")], expect=3)
+    assert result["verdict"] == "CRITICAL_ISSUES"
+
+
+def test_a_limitation_is_reported_without_driving_the_verdict(tmp_path):
+    """A claim the protocol could not evaluate is a fact about the review, not a
+    defect in the artifact."""
+    result = gate(tmp_path, [_finding(kind="limitation", severity="HIGH")], expect=0)
+    assert result["verdict"] == "PASS"
+    assert result["findings"] == []
+    assert len(result["limitations"]) == 1
+
+
+def test_a_question_is_routed_away_from_findings(tmp_path):
+    result = gate(tmp_path, [_finding(kind="question", severity="HIGH")], expect=0)
+    assert result["findings"] == [] and len(result["questions"]) == 1
+
+
+def test_an_unknown_record_kind_is_rejected(tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(kind="nitpick")]))
+    assert proc.returncode == 2
+    assert "invalid kind" in proc.stderr
+
+
+def test_limitations_still_pass_the_evidence_gate(tmp_path):
+    """Routing a record out of the verdict is not a licence to fabricate its citation."""
+    bogus = _finding(kind="limitation",
+                     evidence=[{"kind": "file-line", "ref": "nope.py:1", "quote": "x"}])
+    result = gate(tmp_path, [bogus], expect=0, repo_root=tmp_path)
+    assert result["limitations"] == []
+    assert result["suppressed_count"] == 1
+
+
+def test_the_severity_histogram_reports_adjudicated_grades(tmp_path):
+    findings = [_finding(id="F1", severity="HIGH", stage="refute",
+                         adjudicated_severity="LOW"),
+                _finding(id="F2", severity="MEDIUM", confidence="HIGH")]
+    result = gate(tmp_path, findings, expect=1)
+    assert result["severity_histogram"] == {"MEDIUM": 1, "LOW": 1}
+
+
+# ============ fail-unsafe input validation ========================================
+
+def test_a_non_boolean_resolved_flag_is_a_usage_error(tmp_path):
+    """`"resolved": "false"` is truthy. Reading it as resolved emitted PASS for a
+    review nothing ran — the exact outcome NOT_REVIEWABLE exists to prevent, reached
+    by a plausible serialization bug rather than by hostile input."""
+    proc = run_ar("gate", *_inputs(tmp_path, [], model={
+        "resolved": "false", "alias": "c", "family": "openai", "provider": "p",
+        "model": "m", "thinking": "high", "independence": "full", "ladder": []}))
+    assert proc.returncode == 2
+    assert "must be a JSON boolean" in proc.stderr
+
+
+@pytest.mark.parametrize("resolved", [1, 0, "true", None, [], {}])
+def test_only_a_real_boolean_resolves(resolved, tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [], model={
+        "resolved": resolved, "alias": "c", "family": "openai", "provider": "p",
+        "model": "m", "thinking": "high", "independence": "full", "ladder": []}))
+    assert proc.returncode == 2
+
+
+def test_a_quick_report_missing_its_findings_key_is_a_failed_dispatch(tmp_path):
+    """A truncated object read as a clean review. `{"findings": []}` says "found
+    nothing"; omitting the key says nothing at all."""
+    proc = run_ar("gate",
+                  "--findings", _write(tmp_path, "f.json", {"suppressed": []}),
+                  "--model", _write(tmp_path, "m.json",
+                                    _model_doc(alias="c", provider="p", model="m")),
+                  "--prepass", _write(tmp_path, "p.json",
+                                      _prepass_doc()),
+                  "--depth", "quick",
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
+    assert proc.returncode == 2
+    assert "no `findings` key" in proc.stderr
+
+
+def test_an_explicitly_empty_quick_report_is_still_a_clean_pass(tmp_path):
+    proc = run_ar("gate",
+                  "--findings", _write(tmp_path, "f.json",
+                                       {"findings": [], "suppressed": []}),
+                  "--model", _write(tmp_path, "m.json",
+                                    _model_doc(alias="c", provider="p", model="m")),
+                  "--prepass", _write(tmp_path, "p.json",
+                                      _prepass_doc()),
+                  "--depth", "quick",
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
+    assert proc.returncode == 0
+
+
+def test_malformed_nested_input_exits_two_rather_than_tracebacking(tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [], prepass_findings=42))
+    assert proc.returncode == 2
+    assert "Traceback" not in proc.stderr
+
+
+# ============ reviewer selection returns a dispatchable triple ====================
+
+def _fake_check(tmp_path, line, exit_code=0):
+    """Stands in for `pi-watch --check <alias>`, which reports the triple it resolved."""
+    script = tmp_path / "check"
+    script.write_text(f"#!/bin/sh\nprintf '%s\\n' \"{line}\" >&2\nexit {exit_code}\n")
+    script.chmod(0o755)
+    return str(script)
+
+
+def test_the_checked_triple_wins_over_the_static_ladder(tmp_path):
+    """The ladder hardcoded gemini-3.2-pro-preview while pi-watch validated 3.1, so a
+    passing alias check returned a model that could not be dispatched. The check knows
+    which version it resolved; the table only remembers a preference order."""
+    check = _fake_check(tmp_path, "  ✓ gemini  google/gemini-9.9-pro-preview:high")
+    proc = run_ar("select-model", "--author-family", "openai", "--check-cmd", check, "--resolve", _shared_resolve())
+    assert proc.returncode == 0, proc.stderr
+    model = json.loads(proc.stdout)
+    assert model["model"] == "gemini-9.9-pro-preview"
+    assert model["provider"] == "google"
+    assert model["triple_verified"] is True
+
+
+def test_an_unparseable_check_still_resolves_but_says_it_is_unverified(tmp_path):
+    """A check that proves the alias is authed without naming a model is still a
+    resolution — it just cannot promise the triple dispatches, and says so."""
+    check = _fake_check(tmp_path, "everything looks fine")
+    proc = run_ar("select-model", "--author-family", "openai", "--check-cmd", check, "--resolve", _shared_resolve())
+    assert proc.returncode == 0, proc.stderr
+    model = json.loads(proc.stdout)
+    assert model["resolved"] is True
+    assert model["triple_verified"] is False
+
+
+def test_the_thinking_level_comes_from_the_check_when_it_names_one(tmp_path):
+    check = _fake_check(tmp_path, "  ✓ gemini  google/gemini-3.1-pro-preview:medium")
+    model = json.loads(run_ar("select-model", "--author-family", "openai",
+                              "--check-cmd", check, "--resolve", _shared_resolve()).stdout)
+    assert model["thinking"] == "medium"
+
+
+def test_a_triple_reported_for_a_different_alias_is_not_adopted(tmp_path):
+    """Guards against matching whatever line happens to be in the output."""
+    check = _fake_check(tmp_path, "  ✓ codex  openai-codex/gpt-9:high")
+    model = json.loads(run_ar("select-model", "--author-family", "openai",
+                              "--check-cmd", check, "--resolve", _shared_resolve()).stdout)
+    assert model["alias"] == "gemini"
+    assert model["model"] != "gpt-9"
+    assert model["triple_verified"] is False
+
+
+# ============ claims / merge: the refute seam =====================================
+
+@pytest.mark.parametrize("depth", ["standard", "deep"])
+def test_gate_refuses_a_bare_promote_array(depth, tmp_path):
+    """A depth flag asserts independent refutation; only `merge` establishes it. Keying
+    on the reviewer-supplied `stage` let a promote record relabel itself and pass."""
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(stage="promote")], raw=True),
+                  "--depth", depth)
+    assert proc.returncode == 2
+    assert "`merge` output" in proc.stderr
+
+
+@pytest.mark.parametrize("depth", ["standard", "deep"])
+def test_a_relabelled_promote_finding_cannot_forge_refutation(depth, tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(stage="refute")], raw=True),
+                  "--depth", depth)
+    assert proc.returncode == 2
+
+
+def test_prepass_findings_are_exempt_from_the_refute_requirement(tmp_path):
+    """The deterministic layer is true by construction; no reviewer judges it."""
+    proc = run_ar("gate", *_inputs(tmp_path, [], prepass_findings=[
+        _finding(id="", stage="prepass", category="failing-check")]), "--depth", "standard")
+    assert proc.returncode == 1, proc.stderr
+
+
+def test_limitations_are_exempt_from_the_refute_requirement(tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [_finding(kind="limitation", stage="promote")]),
+                  "--depth", "standard")
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_claims_assigns_ids_and_emits_only_the_six_claim_fields(tmp_path):
+    """Promote emits id: null but refute keys its judgments by id, so the ids have to
+    exist before the dispatch rather than after it."""
+    payload = [_finding(id=None, stage="promote", severity="HIGH"),
+               _finding(id=None, stage="promote", severity="LOW")]
+    proc = run_ar("claims", "--findings", _write(tmp_path, "f.json", payload),
+                  "--resolve", _write(tmp_path, "res.json", _resolved()))
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout)
+    assert [c["id"] for c in result["claims"]] == ["F1", "F2"]
+    assert [f["id"] for f in result["findings"]] == ["F1", "F2"]
+    for claim in result["claims"]:
+        assert set(claim) == {"id", "severity", "confidence", "category", "claim", "evidence"}
+
+
+def test_claims_withholds_limitations_and_questions_from_refute(tmp_path):
+    """Staged as claims they arrive looking like unsupported defects and come back
+    refuted, which deletes exactly the records a caller most needs."""
+    payload = [_finding(id=None, stage="promote"),
+               _finding(id=None, stage="promote", kind="limitation"),
+               _finding(id=None, stage="promote", kind="question")]
+    result = json.loads(run_ar("claims", "--findings", _write(tmp_path, "f.json", payload),
+                  "--resolve", _write(tmp_path, "res.json", _resolved())).stdout)
+    assert len(result["claims"]) == 1
+    assert len(result["findings"]) == 3
+    assert result["carried_kinds"] == ["limitation", "question"]
+
+
+def test_claims_rejects_a_quick_shaped_payload(tmp_path):
+    proc = run_ar("claims", "--findings", _write(tmp_path, "f.json", {"findings": [], "suppressed": []}),
+                  "--resolve", _write(tmp_path, "res.json", _resolved()))
+    assert proc.returncode == 2
+
+
+def test_claims_refuses_to_re_stage_a_refuted_finding(tmp_path):
+    """The re-roll: extract a merge's findings[] as a bare array and stage it again, and
+    the ruling that killed the claim is discarded for a fresh refute round to overturn."""
+    ruled = [_finding(id="F1", stage="refute", disposition="refuted",
+                      ruling_reason="evidence does not reproduce")]
+    proc = run_ar("claims", "--findings", _write(tmp_path, "f.json", ruled),
+                  "--resolve", _write(tmp_path, "res.json", _resolved()))
+    assert proc.returncode == 2
+    assert "already been adjudicated" in proc.stderr
+
+
+def test_claims_refuses_to_re_stage_a_contested_finding(tmp_path):
+    """A contest belongs to tiebreak, and re-staging it buys a second refute instead."""
+    proc = run_ar("claims",
+                  "--findings", _write(tmp_path, "f.json",
+                                       [_finding(id="F1", stage="refute", disposition="contested")]),
+                  "--resolve", _write(tmp_path, "res.json", _resolved()))
+    assert proc.returncode == 2
+    assert "already been adjudicated" in proc.stderr
+
+
+def test_claims_refuses_a_tiebreak_stage_finding_even_when_standing(tmp_path):
+    """Stripping the disposition back to `standing` must not launder the stage away."""
+    proc = run_ar("claims",
+                  "--findings", _write(tmp_path, "f.json",
+                                       [_finding(id="F1", stage="tiebreak",
+                                                 disposition="standing")]),
+                  "--resolve", _write(tmp_path, "res.json", _resolved()))
+    assert proc.returncode == 2
+    assert "already been adjudicated" in proc.stderr
+
+
+def test_merge_applies_dispositions_and_severity_rulings(tmp_path):
+    findings = [_finding(id="F1", stage="promote", severity="HIGH"),
+                _finding(id="F2", stage="promote", severity="HIGH")]
+    judgments = [{"id": "F1", "disposition": "standing", "severity": "LOW", "reason": "r"},
+                 {"id": "F2", "disposition": "refuted", "reason": "r"}]
+    proc = run_ar("merge", "--findings", _write(tmp_path, "f.json", _claims_output(findings)),
+                  "--judgments", _write(tmp_path, "j.json", judgments))
+    assert proc.returncode == 0, proc.stderr
+    merged = {f["id"]: f for f in json.loads(proc.stdout)["findings"]}
+    assert merged["F1"]["adjudicated_severity"] == "LOW"
+    assert merged["F1"]["stage"] == "refute"
+    assert merged["F2"]["disposition"] == "refuted"
+
+
+def test_merge_rejects_a_missing_judgment(tmp_path):
+    """A truncated judgment list would otherwise be recorded as a full review."""
+    findings = [_finding(id="F1", stage="promote"), _finding(id="F2", stage="promote")]
+    judgments = [{"id": "F1", "disposition": "standing", "reason": "r"}]
+    proc = run_ar("merge", "--findings", _write(tmp_path, "f.json", _claims_output(findings)),
+                  "--judgments", _write(tmp_path, "j.json", judgments))
+    assert proc.returncode == 2
+    assert "no judgment for F2" in proc.stderr
+
+
+def test_merge_rejects_a_judgment_for_an_unknown_id(tmp_path):
+    proc = run_ar("merge",
+                  "--findings", _write(tmp_path, "f.json", _claims_output([_finding(id="F1", stage="promote")])),
+                  "--judgments", _write(tmp_path, "j.json",
+                                        [{"id": "F1", "disposition": "standing", "reason": "r"},
+                                         {"id": "F9", "disposition": "refuted", "reason": "r"}]))
+    assert proc.returncode == 2
+    assert "unknown finding id" in proc.stderr
+
+
+def test_merge_rejects_two_judgments_for_one_finding(tmp_path):
+    proc = run_ar("merge",
+                  "--findings", _write(tmp_path, "f.json", _claims_output([_finding(id="F1", stage="promote")])),
+                  "--judgments", _write(tmp_path, "j.json",
+                                        [{"id": "F1", "disposition": "standing", "reason": "r"},
+                                         {"id": "F1", "disposition": "refuted", "reason": "r"}]))
+    assert proc.returncode == 2
+    assert "two judgments" in proc.stderr
+
+
+def test_merge_rejects_a_judgment_on_a_limitation(tmp_path):
+    proc = run_ar("merge",
+                  "--findings", _write(tmp_path, "f.json",
+                                       _claims_output([_finding(id="F1", stage="promote",
+                                                                kind="limitation")])),
+                  "--judgments", _write(tmp_path, "j.json",
+                                        [{"id": "F1", "disposition": "refuted",
+                                          "reason": "r"}]))
+    assert proc.returncode == 2
+    assert "only findings are refutable" in proc.stderr
+
+
+def test_merge_requires_ids_to_exist_already(tmp_path):
+    proc = run_ar("merge",
+                  "--findings", _write(tmp_path, "f.json", _claims_output([_finding(id=None, stage="promote")])),
+                  "--judgments", _write(tmp_path, "j.json", []))
+    assert proc.returncode == 2
+    assert "run `claims`" in proc.stderr
+
+
+def test_tiebreak_merge_only_expects_rulings_on_contested_findings(tmp_path):
+    findings = [_finding(id="F1", stage="refute", disposition="contested"),
+                _finding(id="F2", stage="refute", disposition="standing")]
+    proc = run_ar("merge", "--findings", _write(tmp_path, "f.json", _merged(findings)),
+                  "--judgments", _write(tmp_path, "j.json",
+                                        [{"id": "F1", "disposition": "standing",
+                                          "severity": "MEDIUM", "reason": "r"}]),
+                  "--stage", "tiebreak")
+    assert proc.returncode == 0, proc.stderr
+    merged = {f["id"]: f for f in json.loads(proc.stdout)["findings"]}
+    assert merged["F1"]["stage"] == "tiebreak"
+    assert merged["F1"]["adjudicated_severity"] == "MEDIUM"
+
+
+def test_merge_output_feeds_the_gate_at_standard_depth(tmp_path):
+    """The seam end to end: claims -> judgments -> merge -> gate."""
+    promoted = [_finding(id=None, stage="promote", severity="HIGH", confidence="HIGH")]
+    claims = json.loads(run_ar("claims", "--findings", _write(tmp_path, "p.json", promoted),
+                  "--resolve", _write(tmp_path, "res.json", _resolved())).stdout)
+    ids = [c["id"] for c in claims["claims"]]
+    merged = json.loads(run_ar(
+        "merge", "--findings", _write(tmp_path, "f.json", claims),
+        "--judgments", _write(tmp_path, "j.json",
+                              [{"id": ids[0], "disposition": "standing",
+                                "severity": "LOW", "reason": "r"}])).stdout)
+    proc = run_ar("gate", "--findings", _write(tmp_path, "m.json", merged),
+                  "--model", _write(tmp_path, "mo.json",
+                                    _model_doc(alias="c", provider="p", model="m")),
+                  "--prepass", _write(tmp_path, "p.json",
+                                      _prepass_doc()),
+                  "--depth", "standard",
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
+    assert proc.returncode == 0, proc.stderr
+    gated = json.loads(proc.stdout)
+    assert gated["verdict"] == "PASS"
+    assert gated["findings"][0]["effective_severity"] == "LOW"
+
+
+# ============ the merge contract ==================================================
+
+def test_merge_requires_a_reason_on_every_judgment(tmp_path):
+    """The refute prompt calls it the audit record, and tiebreak is handed it verbatim."""
+    proc = run_ar("merge",
+                  "--findings", _write(tmp_path, "f.json", _claims_output([_finding(id="F1", stage="promote")])),
+                  "--judgments", _write(tmp_path, "j.json",
+                                        [{"id": "F1", "disposition": "refuted"}]))
+    assert proc.returncode == 2
+    assert "no reason" in proc.stderr
+
+
+@pytest.mark.parametrize("field,value", [("severity", ""), ("confidence", 0),
+                                         ("severity", "SEVERE"), ("confidence", "SURE")])
+def test_merge_rejects_a_malformed_ruling_field(field, value, tmp_path):
+    """Truthiness dropped `severity: ""` and `confidence: 0`, silently leaving the
+    promoter's proposal in force under what looked like a ruling."""
+    judgment = {"id": "F1", "disposition": "standing", "reason": "r", field: value}
+    proc = run_ar("merge",
+                  "--findings", _write(tmp_path, "f.json", _claims_output([_finding(id="F1", stage="promote")])),
+                  "--judgments", _write(tmp_path, "j.json", [judgment]))
+    assert proc.returncode == 2
+
+
+def test_merge_keeps_the_ruling_reason_on_the_finding(tmp_path):
+    proc = run_ar("merge",
+                  "--findings", _write(tmp_path, "f.json", _claims_output([_finding(id="F1", stage="promote")])),
+                  "--judgments", _write(tmp_path, "j.json",
+                                        [{"id": "F1", "disposition": "standing",
+                                          "reason": "reproduces at line 40"}]))
+    assert json.loads(proc.stdout)["findings"][0]["ruling_reason"] == "reproduces at line 40"
+
+
+def test_a_suppression_carries_the_refuters_argument(tmp_path):
+    merged = json.loads(run_ar(
+        "merge", "--findings", _write(tmp_path, "f.json", _claims_output([_finding(id="F1", stage="promote")])),
+        "--judgments", _write(tmp_path, "j.json",
+                              [{"id": "F1", "disposition": "refuted",
+                                "reason": "the quote is not at that line"}])).stdout)
+    result = gate(tmp_path, merged["findings"], expect=0)
+    assert result["suppressed"][0]["ruling"] == "the quote is not at that line"
+
+
+def test_tiebreak_cannot_rule_on_a_finding_nobody_contested(tmp_path):
+    findings = [_finding(id="F1", disposition="contested"),
+                _finding(id="F2", disposition="standing")]
+    proc = run_ar("merge", "--findings", _write(tmp_path, "f.json", _merged(findings)),
+                  "--judgments", _write(tmp_path, "j.json",
+                                        [{"id": "F1", "disposition": "refuted", "reason": "r"},
+                                         {"id": "F2", "disposition": "refuted", "reason": "r"}]),
+                  "--stage", "tiebreak")
+    assert proc.returncode == 2
+    assert "was not contested" in proc.stderr
+
+
+def test_tiebreak_cannot_re_contest(tmp_path):
+    """It adjudicates the disagreement; leaving it open strands a deep review."""
+    proc = run_ar("merge",
+                  "--findings", _write(tmp_path, "f.json",
+                                       _merged([_finding(id="F1", disposition="contested")])),
+                  "--judgments", _write(tmp_path, "j.json",
+                                        [{"id": "F1", "disposition": "contested",
+                                          "reason": "still unsure"}]),
+                  "--stage", "tiebreak")
+    assert proc.returncode == 2
+    assert "re-contesting" in proc.stderr
+
+
+def test_the_manifest_refuses_an_unresolved_contested_finding(tmp_path):
+    """`contested[]` is mid-flight state. Recording it published a PASS over a dispute
+    nobody settled."""
+    gate_result = {"verdict": "PASS", "findings": [], "suppressed_count": 0,
+                   "contested": [_finding(id="F1")], "depth": "deep",
+                   "chain": _chain("gate")}
+    proc = run_ar("manifest",
+                  "--resolve", _write(tmp_path, "r.json", _resolved()),
+                  "--prepass", _write(tmp_path, "p.json", {"status": "pass", "checks": []}),
+                  "--model", _write(tmp_path, "m.json",
+                                    {"resolved": True, "independence": "full"}),
+                  "--gate", _write(tmp_path, "g.json", gate_result))
+    assert proc.returncode == 2
+    assert "contested" in proc.stderr
+
+
+# ============ the run chain =======================================================
+
+def test_a_prepass_from_another_run_cannot_supply_the_ground_truth(tmp_path):
+    """The bypass: capture a pre-pass while the suite is green, edit until it breaks,
+    then gate against the saved one. The checks the verdict rests on describe an
+    artifact nobody reviewed, and a real failing suite comes out `PASS`."""
+    stale = _prepass_doc(chain=_chain("prepass", run_id="f" * 16),
+                         observed_artifact_hash=ART_HASH)
+    proc = run_ar("gate", *_inputs(tmp_path, [], prepass_doc=stale), "--depth", "standard")
+    assert proc.returncode == 2
+    assert "different runs" in proc.stderr
+
+
+def test_a_model_selection_from_another_run_is_refused(tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [],
+                                   model=_model_doc(chain=_chain("select-model",
+                                                                 run_id="f" * 16))),
+                  "--depth", "standard")
+    assert proc.returncode == 2
+    assert "different runs" in proc.stderr
+
+
+def test_a_hand_written_model_envelope_cannot_assert_a_reviewer(tmp_path):
+    """`resolved: true` with no chain was the whole bypass — it turned NOT_REVIEWABLE,
+    the verdict for a review that never happened, into PASS."""
+    forged = {"resolved": True, "alias": "codex", "family": "openai", "provider": "p",
+              "model": "m", "thinking": "high", "independence": "full", "ladder": []}
+    proc = run_ar("gate",
+                  "--findings", _write(tmp_path, "f.json", _merged([])),
+                  "--model", _write(tmp_path, "m.json", forged),
+                  "--prepass", _write(tmp_path, "p.json", _prepass_doc()),
+                  "--depth", "standard",
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
+    assert proc.returncode == 2
+    assert "no run chain" in proc.stderr
+
+
+def test_a_hand_written_prepass_cannot_supply_a_clean_bill_of_health(tmp_path):
+    proc = run_ar("gate", *_inputs(tmp_path, [],
+                                   prepass_doc={"status": "pass", "checks": [],
+                                                "findings": []}),
+                  "--depth", "standard")
+    assert proc.returncode == 2
+    assert "no run chain" in proc.stderr
+
+
+def test_a_prepass_that_ran_against_a_different_artifact_is_refused(tmp_path):
+    """Same run, but the tree moved between `resolve` and the pre-pass, so its ground
+    truth describes content no other stage judged."""
+    drifted = _prepass_doc(observed_artifact_hash="b" * 64)
+    proc = run_ar("gate", *_inputs(tmp_path, [], prepass_doc=drifted), "--depth", "standard")
+    assert proc.returncode == 2
+    assert "different artifact" in proc.stderr
+
+
+def test_a_prepass_that_could_not_run_may_omit_the_artifact_hash(tmp_path):
+    """An unreadable artifact cannot be hashed, and that is what `could-not-run` means.
+    Refusing it here would turn the input to NOT_REVIEWABLE into a crash."""
+    blocked = _prepass_doc(status="could-not-run", observed_artifact_hash=None)
+    proc = run_ar("gate", *_inputs(tmp_path, [], prepass_doc=blocked), "--depth", "standard")
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_a_passing_prepass_may_not_omit_the_artifact_hash(tmp_path):
+    """Otherwise the null is a free pass out of the binding for the one status that
+    can actually launder a clean result."""
+    proc = run_ar("gate", *_inputs(tmp_path, [],
+                                   prepass_doc=_prepass_doc(observed_artifact_hash=None)),
+                  "--depth", "standard")
+    assert proc.returncode == 2
+    assert "could not run" in proc.stderr
+
+
+def test_the_manifest_refuses_a_prepass_from_another_run(tmp_path):
+    """`gate` and `manifest` read these files separately, so a caller could gate on one
+    pre-pass and record another."""
+    proc = run_ar("manifest", *_manifest_inputs(tmp_path),
+                  "--prepass", _write(tmp_path, "other.json",
+                                      _prepass_doc(chain=_chain("prepass",
+                                                                run_id="f" * 16))))
+    assert proc.returncode == 2
+    assert "another run" in proc.stderr
+
+
+def _live_run(repo: Path, work: Path, label: str) -> dict:
+    """A genuine resolve/prepass/select-model bundle for `repo` as it stands now."""
+    proc = run_ar("resolve", "--target", "WORKTREE", "--repo-root", str(repo))
+    assert proc.returncode == 0, proc.stderr
+    files = {"resolve": _write(work, f"{label}-r.json", json.loads(proc.stdout))}
+    for step, args in (
+        ("prepass", ("prepass", "--profile", "code-diff", "--target", "WORKTREE",
+                     "--repo-root", str(repo), "--check-cmd", "true")),
+        ("model", ("select-model", "--author-family", "anthropic", "--check-cmd", "true")),
+    ):
+        out = run_ar(*args, "--resolve", files["resolve"])
+        assert out.returncode in (0, 1), out.stderr
+        files[step] = _write(work, f"{label}-{step}.json", json.loads(out.stdout))
+    return files
+
+
+def test_a_whole_stale_bundle_cannot_pass_a_quick_gate(tmp_path):
+    """Quick depth has no chained findings, so `model` and `prepass` could only anchor
+    each other — which any single earlier run satisfies. Reusing an intact bundle needs
+    no forgery at all, just stale paths, and `quick` is what auto-selection picks for a
+    small diff. Only the artifact itself distinguishes this run from that one."""
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    _git_repo(repo)
+    (repo / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
+    (repo / "x.py").write_text("def f():\n    return 1\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "healthy"], cwd=repo, check=True)
+    old = _live_run(repo, work, "old")
+
+    (repo / "x.py").write_text("def f():\n    return None  # regression\n")
+
+    quick = _write(work, "quick.json", {"findings": [], "suppressed": []})
+    proc = run_ar("gate", "--findings", quick, "--model", old["model"],
+                  "--prepass", old["prepass"], "--resolve", old["resolve"],
+                  "--depth", "quick", "--repo-root", str(repo))
+    assert proc.returncode == 2, f"stale bundle produced {proc.stdout[:200]}"
+    assert "artifact changed during the review" in proc.stderr
+
+
+def test_a_current_bundle_still_passes_a_quick_gate(tmp_path):
+    """The other half: the check must not refuse an honest quick review."""
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    _git_repo(repo)
+    (repo / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
+    (repo / "x.py").write_text("def f():\n    return 1\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "healthy"], cwd=repo, check=True)
+    current = _live_run(repo, work, "now")
+
+    quick = _write(work, "quick.json", {"findings": [], "suppressed": []})
+    proc = run_ar("gate", "--findings", quick, "--model", current["model"],
+                  "--prepass", current["prepass"], "--resolve", current["resolve"],
+                  "--depth", "quick", "--repo-root", str(repo))
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["verdict"] == "PASS"
+
+
+def test_a_stale_bundle_cannot_pass_a_standard_gate_either(tmp_path):
+    """Same class one depth up: the findings chain proves the stages ran, not that they
+    ran against the tree as it stands."""
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    _git_repo(repo)
+    (repo / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
+    (repo / "x.py").write_text("def f():\n    return 1\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "healthy"], cwd=repo, check=True)
+    old = _live_run(repo, work, "old")
+    empty = _write(work, "f.json", [])
+    claims = run_ar("claims", "--findings", empty, "--resolve", old["resolve"])
+    assert claims.returncode == 0, claims.stderr
+    merged = run_ar("merge", "--findings", _write(work, "c.json", json.loads(claims.stdout)),
+                    "--judgments", _write(work, "j.json", []), "--stage", "refute")
+    assert merged.returncode == 0, merged.stderr
+
+    (repo / "x.py").write_text("def f():\n    return None  # regression\n")
+
+    proc = run_ar("gate", "--findings", _write(work, "m.json", json.loads(merged.stdout)),
+                  "--model", old["model"], "--prepass", old["prepass"],
+                  "--resolve", old["resolve"], "--depth", "standard",
+                  "--repo-root", str(repo))
+    assert proc.returncode == 2
+    assert "artifact changed during the review" in proc.stderr
+
+
+def test_gate_refuses_a_resolve_from_a_different_run(tmp_path):
+    stale = _write(tmp_path, "other-r.json",
+                   _resolved(chain=_chain("resolve", run_id="f" * 16)))
+    proc = run_ar("gate",
+                  "--findings", _write(tmp_path, "f.json", _merged([])),
+                  "--model", _write(tmp_path, "m.json", _model_doc()),
+                  "--prepass", _write(tmp_path, "p.json", _prepass_doc()),
+                  "--resolve", stale, "--no-verify-artifact", "--depth", "standard")
+    assert proc.returncode == 2
+    assert "two different reviews" in proc.stderr
+
+
+@pytest.mark.skipif(shutil.which("cargo") is None, reason="cargo not installed")
+def test_a_stock_cargo_project_survives_its_own_first_review(tmp_path):
+    """`cargo new --lib` scaffolds a `.gitignore` holding only `/target`, and the first
+    `cargo test` writes an untracked `Cargo.lock`. Counting that as the artifact moving
+    refused the first honest review of the most vanilla Rust layout there is — and
+    `Cargo.lock` is a lockfile, not a cache, so no amount of `gitignore` advice in the
+    error would have told the operator what to do."""
+    work = tmp_path / "work"
+    work.mkdir()
+    subprocess.run(["cargo", "new", "--lib", "demo", "--vcs", "git", "-q"],
+                   cwd=tmp_path, check=True, capture_output=True)
+    repo = tmp_path / "demo"
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "initial"], cwd=repo, check=True)
+
+    resolve_proc = run_ar("resolve", "--target", "WORKTREE", "--repo-root", str(repo))
+    assert resolve_proc.returncode == 0, resolve_proc.stderr
+    resolve_file = _write(work, "r.json", json.loads(resolve_proc.stdout))
+
+    pre = run_ar("prepass", "--profile", "code-diff", "--target", "WORKTREE",
+                 "--repo-root", str(repo), "--resolve", resolve_file)
+    assert pre.returncode == 0, pre.stderr
+    assert (repo / "Cargo.lock").exists(), "cargo did not write the lockfile this guards"
+
+    model = run_ar("select-model", "--author-family", "anthropic", "--check-cmd", "true",
+                   "--resolve", resolve_file)
+    claims = run_ar("claims", "--findings", _write(work, "f.json", []),
+                    "--resolve", resolve_file)
+    merged = run_ar("merge", "--findings", _write(work, "c.json", json.loads(claims.stdout)),
+                    "--judgments", _write(work, "j.json", []), "--stage", "refute")
+    proc = run_ar("gate", "--findings", _write(work, "m.json", json.loads(merged.stdout)),
+                  "--model", _write(work, "mo.json", json.loads(model.stdout)),
+                  "--prepass", _write(work, "p.json", json.loads(pre.stdout)),
+                  "--resolve", resolve_file, "--depth", "standard", "--repo-root", str(repo))
+    assert proc.returncode == 0, proc.stderr
+
+    (repo / "src" / "lib.rs").write_text("pub fn f() -> i32 { 1 }\n")
+    moved = run_ar("gate", "--findings", _write(work, "m.json", json.loads(merged.stdout)),
+                   "--model", _write(work, "mo.json", json.loads(model.stdout)),
+                   "--prepass", _write(work, "p.json", json.loads(pre.stdout)),
+                   "--resolve", resolve_file, "--depth", "standard", "--repo-root", str(repo))
+    assert moved.returncode == 2, "an edit to the crate's own source must still be caught"
+
+
+def test_the_preflight_cannot_write_into_the_artifact_it_helps_review(tmp_path):
+    """A preflight asks whether a model is reachable; it has no business in the repo. With
+    no `cwd` it inherited the orchestrator's, which is the repo root — so a check command
+    that caches beside itself became an untracked file, and the mandatory currency check
+    failed an honest run. The escape from that is `--no-verify-artifact`, which reopens
+    the replay hole, so a false positive here costs the protection outright."""
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    _git_repo(repo)
+    (repo / "x.py").write_text("def f():\n    return 1\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+    resolve_proc = run_ar("resolve", "--target", "WORKTREE", "--repo-root", str(repo))
+    assert resolve_proc.returncode == 0, resolve_proc.stderr
+    resolve_doc = json.loads(resolve_proc.stdout)
+    resolve_file = _write(work, "r.json", resolve_doc)
+
+    littering = "sh -c 'echo cached > .preflight.cache; exit 0' _"
+    model = run_ar("select-model", "--author-family", "anthropic",
+                   "--check-cmd", littering, "--resolve", resolve_file, cwd=repo)
+    assert model.returncode == 0, model.stderr
+    assert not (repo / ".preflight.cache").exists(), (
+        "the preflight wrote into the repository it was selecting a reviewer for"
+    )
+
+    after = run_ar("resolve", "--target", "WORKTREE", "--repo-root", str(repo))
+    assert json.loads(after.stdout)["artifact_hash"] == resolve_doc["artifact_hash"], (
+        "selecting a reviewer perturbed the artifact hash"
+    )
+
+
+def test_a_detached_diff_review_survives_the_currency_check(tmp_path):
+    """`--diff-file` is a documented seam. Verification re-ran `git` and compared the
+    answer to a hash git never produced, so making the check mandatory would have
+    refused every honest run of it. `resolve` records the file; the rest re-read it."""
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    _git_repo(repo)
+    patch = work / "patch.diff"
+    patch.write_text("--- a/x.py\n+++ b/x.py\n@@ -0,0 +1,2 @@\n+def f():\n+    return 1\n")
+
+    resolve_proc = run_ar("resolve", "--target", "main..HEAD", "--diff-file", str(patch),
+                          "--repo-root", str(repo))
+    assert resolve_proc.returncode == 0, resolve_proc.stderr
+    resolve_doc = json.loads(resolve_proc.stdout)
+    assert resolve_doc["diff_file"] == str(patch.resolve())
+    resolve_file = _write(work, "r.json", resolve_doc)
+
+    # Deliberately without `--diff-file`: the run record is what keeps the hashes
+    # agreeing, so a caller cannot break the pipeline by not repeating the flag.
+    pre = run_ar("prepass", "--profile", "code-diff", "--target", "main..HEAD",
+                 "--repo-root", str(repo), "--resolve", resolve_file, "--check-cmd", "true")
+    assert pre.returncode == 0, pre.stderr
+    prepass_doc = json.loads(pre.stdout)
+    assert prepass_doc["observed_artifact_hash"] == resolve_doc["artifact_hash"]
+
+    model = run_ar("select-model", "--author-family", "anthropic", "--check-cmd", "true",
+                   "--resolve", resolve_file)
+    assert model.returncode == 0, model.stderr
+    claims = run_ar("claims", "--findings", _write(work, "f.json", []),
+                    "--resolve", resolve_file)
+    merged = run_ar("merge", "--findings", _write(work, "c.json", json.loads(claims.stdout)),
+                    "--judgments", _write(work, "j.json", []), "--stage", "refute")
+    proc = run_ar("gate", "--findings", _write(work, "m.json", json.loads(merged.stdout)),
+                  "--model", _write(work, "mo.json", json.loads(model.stdout)),
+                  "--prepass", _write(work, "p.json", prepass_doc),
+                  "--resolve", resolve_file, "--depth", "standard",
+                  "--repo-root", str(repo))
+    assert proc.returncode == 0, proc.stderr
+
+    patch.write_text("--- a/x.py\n+++ b/x.py\n@@ -0,0 +1,1 @@\n+something else\n")
+    moved = run_ar("gate", "--findings", _write(work, "m.json", json.loads(merged.stdout)),
+                   "--model", _write(work, "mo.json", json.loads(model.stdout)),
+                   "--prepass", _write(work, "p.json", prepass_doc),
+                   "--resolve", resolve_file, "--depth", "standard",
+                   "--repo-root", str(repo))
+    assert moved.returncode == 2, "a diff that changed under the review must not pass"
+    assert "artifact changed during the review" in moved.stderr
+
+
+def test_the_prepass_hash_is_taken_before_its_own_checks_pollute_the_tree(tmp_path):
+    """A test suite writes `.pytest_cache/` and `__pycache__/` as it runs, and the
+    worktree diff counts untracked files. Hashing afterwards described an artifact the
+    checks themselves created, so every honest code-diff run failed the binding."""
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    repo.mkdir(); work.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    (repo / "pyproject.toml").write_text('[project]\nname = "d"\nversion = "0.1"\n')
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+    # Written outside the repo: an untracked file in it would move the worktree diff
+    # and stage a false failure of the very thing under test.
+    resolve_proc = run_ar("resolve", "--target", "WORKTREE", "--repo-root", str(repo))
+    assert resolve_proc.returncode == 0, resolve_proc.stderr
+    resolve_doc = json.loads(resolve_proc.stdout)
+    resolve_file = _write(work, "r.json", resolve_doc)
+
+    litter = "sh -c 'mkdir -p .pytest_cache && echo x > .pytest_cache/v'"
+    result = prepass("--profile", "code-diff", "--target", "WORKTREE",
+                     "--repo-root", str(repo), "--check-cmd", litter,
+                     resolve=resolve_file)
+    assert result["observed_artifact_hash"] == resolve_doc["artifact_hash"], (
+        "the pre-pass hashed the tree its own checks had already written to"
+    )
+
+
+def test_prepass_output_is_anchored_to_the_run_that_resolved_the_target(tmp_path):
+    doc = _touch(tmp_path / "notes.md", "Plain prose with no references.\n")
+    result = prepass("--profile", "prose-claim", "--target", str(doc),
+                     "--repo-root", str(tmp_path))
+    assert result["chain"]["step"] == "prepass"
+    assert result["observed_artifact_hash"], "prepass must record what it actually read"
+
+
+
+def test_tiebreak_merge_cannot_run_before_refute(tmp_path):
+    """The bypass this chain exists for. `merge --stage tiebreak` on `claims` output
+    found nothing contested, accepted `[]`, and emitted an envelope whose findings had
+    never been refuted — which the standard gate then accepted."""
+    proc = run_ar("merge",
+                  "--findings", _write(tmp_path, "f.json",
+                                       _claims_output([_finding(id="F1", stage="promote")])),
+                  "--judgments", _write(tmp_path, "j.json", []),
+                  "--stage", "tiebreak")
+    assert proc.returncode == 2
+    assert "merge --stage refute" in proc.stderr
+
+
+def test_a_refute_merge_cannot_consume_a_merge(tmp_path):
+    proc = run_ar("merge",
+                  "--findings", _write(tmp_path, "f.json", _merged([_finding(id="F1")])),
+                  "--judgments", _write(tmp_path, "j.json",
+                                        [{"id": "F1", "disposition": "standing", "reason": "r"}]))
+    assert proc.returncode == 2
+    assert "claims" in proc.stderr
+
+
+@pytest.mark.parametrize("envelope", [
+    {"findings": [], "stage": "banana", "judged": 0},
+    {"findings": [], "stage": "refute", "judged": "not-a-count"},
+    {"findings": [], "stage": "refute", "judged": -1},
+])
+def test_the_gate_validates_the_envelope_it_is_handed(envelope, tmp_path):
+    """Key presence was the whole check, so a hand-written envelope naming a nonsense
+    stage and a non-numeric count returned PASS."""
+    envelope = dict(envelope, chain=_chain("merge", stage=envelope["stage"]))
+    proc = run_ar("gate", "--findings", _write(tmp_path, "f.json", envelope),
+                  "--model", _write(tmp_path, "m.json",
+                                    _model_doc(alias="c", provider="p", model="m")),
+                  "--prepass", _write(tmp_path, "p.json",
+                                      _prepass_doc()),
+                  "--depth", "standard",
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
+    assert proc.returncode == 2
+
+
+def test_an_unchained_envelope_is_refused(tmp_path):
+    proc = run_ar("gate", "--findings", _write(tmp_path, "f.json",
+                                               {"findings": [], "stage": "refute", "judged": 0}),
+                  "--model", _write(tmp_path, "m.json",
+                                    _model_doc(alias="c", provider="p", model="m")),
+                  "--prepass", _write(tmp_path, "p.json",
+                                      _prepass_doc()),
+                  "--depth", "standard",
+                  "--resolve", _write(tmp_path, "res-g.json", _resolved()),
+                  "--no-verify-artifact")
+    assert proc.returncode == 2
+    assert "no run chain" in proc.stderr
+
+
+def test_the_manifest_refuses_a_gate_result_from_another_run(tmp_path):
+    """Stale-file reuse: a gate result that belongs to a different review."""
+    proc = run_ar("manifest", *_manifest_inputs(tmp_path), "--repo-root", str(tmp_path))
+    assert proc.returncode == 0, proc.stderr
+    other = _write(tmp_path, "g_other.json",
+                   {"verdict": "PASS", "findings": [], "contested": [], "suppressed": [],
+                    "suppressed_count": 0, "depth": "standard",
+                    "chain": _chain("gate", run_id="ffffffffffffffff")})
+    args = list(_manifest_inputs(tmp_path))
+    args[args.index("--gate") + 1] = other
+    proc = run_ar("manifest", *args, "--repo-root", str(tmp_path))
+    assert proc.returncode == 2
+    assert "different reviews" in proc.stderr
+
+
+def test_the_manifest_refuses_a_gate_result_for_another_artifact(tmp_path):
+    other = _write(tmp_path, "g_other.json",
+                   {"verdict": "PASS", "findings": [], "contested": [], "suppressed": [],
+                    "suppressed_count": 0, "depth": "standard",
+                    "chain": _chain("gate", artifact_hash="b" * 64)})
+    args = list(_manifest_inputs(tmp_path))
+    args[args.index("--gate") + 1] = other
+    proc = run_ar("manifest", *args, "--repo-root", str(tmp_path))
+    assert proc.returncode == 2
+    assert "different artifact" in proc.stderr
+
+
+def test_claims_is_anchored_to_the_run_resolve_opened(tmp_path):
+    result = json.loads(run_ar(
+        "claims", "--findings", _write(tmp_path, "f.json", [_finding(id=None, stage="promote")]),
+        "--resolve", _write(tmp_path, "r.json", _resolved())).stdout)
+    assert result["chain"]["run_id"] == RUN_ID
+    assert result["chain"]["step"] == "claims"
+
+
+def test_claims_refuses_an_unchained_resolve(tmp_path):
+    proc = run_ar("claims",
+                  "--findings", _write(tmp_path, "f.json", [_finding(id=None, stage="promote")]),
+                  "--resolve", _write(tmp_path, "r.json", {"artifact_hash": "h"}))
+    assert proc.returncode == 2
+    assert "no run chain" in proc.stderr

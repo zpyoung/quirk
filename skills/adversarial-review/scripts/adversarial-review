@@ -1,0 +1,2204 @@
+#!/usr/bin/env python3
+"""Mechanical layer of the adversarial-review skill.
+
+Owns only what is decidable without a model: target resolution, ground-truth
+pre-pass, reviewer preflight, evidence gating, and the replay manifest. Model
+dispatch belongs to the invoking agent — see the skill's SKILL.md.
+
+A subcommand that runs emits exactly one JSON object on stdout and keeps diagnostics
+on stderr, so a calling skill can parse the result without stripping chatter. A
+subcommand that fails (exit 2) writes stderr only — empty stdout is the caller's
+signal that the run failed rather than found nothing.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import secrets
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any
+
+PROFILES = ("code-diff", "spec-design", "plan", "prose-claim")
+
+# A contract surface is a contract being *introduced or changed*, so the anchor
+# must appear on an added line — deleting a contract is not changing one. Matched
+# per line, against content lines only; see has_contract_surface.
+CONTRACT_SURFACE = re.compile(r"^\+.*\b(CONTRACT|SCHEMA):")
+
+HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+# git's canonical empty tree — present in every repository, including one with no
+# commits yet, which is what makes it a usable baseline before the first commit.
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+CODE_QUICK_MAX = 50
+CODE_DEEP_MIN = 151
+PROSE_QUICK_MAX = 499
+
+# `other` is documented in the composition contract: the author was a family this
+# ladder does not dispatch to (a human, a local model). It matches no candidate, so
+# every rung is fully independent — which is the correct answer, not an error.
+AUTHOR_FAMILIES = {"anthropic", "openai", "google", "other"}
+
+SPEC_DESIGN_NAMES = {"logic.md", "tech.md"}
+SPEC_DESIGN_HINT = re.compile(r"(spec|design)", re.IGNORECASE)
+PLAN_HINT = re.compile(r"^plan", re.IGNORECASE)
+SOURCE_SUFFIXES = {
+    ".py", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".go", ".rs", ".rb", ".java",
+    ".sh", ".bash", ".zsh", ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".m", ".mm",
+    ".swift", ".kt", ".kts", ".php", ".cs", ".scala", ".ex", ".exs", ".erl", ".lua",
+    ".pl", ".pm", ".r", ".jl", ".dart", ".sql", ".json", ".toml", ".yaml", ".yml",
+}
+
+
+class UsageError(Exception):
+    """A caller-facing error: bad arguments, missing input, unreadable target."""
+
+
+# --- target resolution ------------------------------------------------------------
+
+def classify_target(target: str) -> str:
+    if ".." in target:
+        return "git-range"
+    if target.strip() in ("", "WORKTREE"):
+        return "worktree"
+    return "path"
+
+
+def under(path: Path, *segments: str) -> bool:
+    """True when the path contains the segments consecutively.
+
+    Detection is specified as `docs/plans/` and `docs/adr/`. Matching a bare
+    directory name anywhere would let a vendored `plans/` folder change which
+    attack surface a document is reviewed against.
+    """
+    parts = path.parts
+    return any(parts[i:i + len(segments)] == segments
+               for i in range(len(parts) - len(segments) + 1))
+
+
+def detect_profile(target: str, target_kind: str) -> str:
+    """First match wins. Order is the specification, not an optimization."""
+    if target_kind in ("git-range", "worktree"):
+        return "code-diff"
+
+    path = Path(target)
+    name = path.name
+
+    if under(path, "docs", "plans") or PLAN_HINT.match(name):
+        return "plan"
+    if name in SPEC_DESIGN_NAMES or under(path, "docs", "adr") \
+            or SPEC_DESIGN_HINT.search(name):
+        return "spec-design"
+    if path.suffix == ".md":
+        return "prose-claim"
+    return "code-diff"
+
+
+def has_head(repo_root: Path) -> bool:
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", "HEAD"],
+            cwd=repo_root, capture_output=True, text=True,
+        )
+    except OSError:
+        return False
+    return completed.returncode == 0
+
+
+def read_diff(target: str, repo_root: Path, diff_file: str | None,
+              untracked_only: list[str] | None = None) -> str:
+    if diff_file is not None:
+        path = Path(diff_file)
+        if not path.is_file():
+            raise UsageError(f"missing diff file: {path}")
+        return path.read_text(errors="replace")
+
+    # `--no-color` is not cosmetic: a user with color.ui=always gets ANSI escapes
+    # inside the hunk headers, the parser matches none of them, and a deep
+    # contract-changing range silently resolves to zero lines and `quick`.
+    argv = ["git", "--no-pager", "diff", "--no-renames", "--no-color"]
+    if target and target.strip() != "WORKTREE":
+        argv.append(target)
+    else:
+        # WORKTREE means every uncommitted change. Plain `git diff` compares against
+        # the index, so staged work would be invisible in the artifact it reviews.
+        # Before the first commit there is no HEAD, and the empty tree is the right
+        # baseline — otherwise a staged new file falls in the gap between `git diff`
+        # (which cannot see it) and the untracked scan (which skips anything staged).
+        argv.append("HEAD" if has_head(repo_root) else EMPTY_TREE)
+    try:
+        completed = subprocess.run(
+            argv, cwd=repo_root, capture_output=True, text=True, errors="replace"
+        )
+    except OSError as exc:
+        raise UsageError(f"cannot run git diff: {exc}") from exc
+    if completed.returncode != 0:
+        # A typo'd range must never resolve to size 0 and read as a clean review of
+        # nothing. An empty diff is a claim about the target; this is a failure to
+        # read it at all.
+        detail = completed.stderr.strip().splitlines()
+        raise UsageError(
+            f"cannot read target {target or 'WORKTREE'}: "
+            f"{detail[0] if detail else f'git diff exited {completed.returncode}'}"
+        )
+    if not target or target.strip() == "WORKTREE":
+        return completed.stdout + untracked_diff(repo_root, untracked_only)
+    return completed.stdout
+
+
+def untracked_paths(repo_root: Path) -> list[str]:
+    """The untracked files that count as work under review, in git's own order.
+
+    `--exclude-standard` keeps ignored files out, since those are not work under review.
+    """
+    try:
+        # `-z` because git C-quotes any path it considers unusual — `café.py` comes
+        # back as `"caf\303\251.py"`, and passing that literal to `git diff` fails
+        # with exit 1, which is indistinguishable from "no difference". The file
+        # then vanishes from the artifact without a word.
+        listing = subprocess.run(
+            ["git", "ls-files", "-z", "--others", "--exclude-standard"],
+            cwd=repo_root, capture_output=True, text=True, errors="replace",
+        )
+    except OSError as exc:
+        raise UsageError(f"cannot enumerate untracked files: {exc}") from exc
+    if listing.returncode != 0:
+        # Swallowing this would quietly review a subset of the worktree and report
+        # it as the whole thing — the same failure as a review of nothing.
+        detail = listing.stderr.strip().splitlines()
+        raise UsageError(
+            f"cannot enumerate untracked files: "
+            f"{detail[0] if detail else f'git ls-files exited {listing.returncode}'}"
+        )
+    return [p for p in listing.stdout.split("\0") if p.strip()]
+
+
+def untracked_diff(repo_root: Path, only: list[str] | None = None) -> str:
+    """The uncommitted work git will not diff for you.
+
+    A brand-new module is uncommitted work, and `git diff` in any form ignores it
+    until it is added. Reviewing a worktree without it silently omits whole files —
+    the review would report on everything except the new code. `--exclude-standard`
+    keeps ignored files out, since those are not work under review.
+
+    `only` restricts the scan to a recorded set of paths. The artifact under review is
+    what `resolve` captured, so a file that appeared afterwards was never part of it —
+    and the review's own checks create files. `cargo test` writes `Cargo.lock`, which
+    cargo's scaffolded `.gitignore` does not exclude; a coverage run writes `coverage/`.
+    Re-deriving the hash over everything present *now* would refuse an honest review of
+    a stock Rust project on its first run.
+    """
+    listed = untracked_paths(repo_root) if only is None else list(only)
+
+    parts: list[str] = []
+    for relative in listed:
+        if not relative.strip():
+            continue
+        # A recorded path that has since been deleted renders as nothing rather than
+        # raising, so the check reports a changed artifact instead of an unreadable one.
+        if only is not None and not (repo_root / relative).exists():
+            parts.append(f"--- a/{relative}\n+++ /dev/null\n")
+            continue
+        # `--no-index` against /dev/null renders a new file as an all-added diff.
+        # It exits 1 precisely when there is a difference, which is the normal case;
+        # anything above that is a failure to read and must not pass as "no content".
+        rendered = subprocess.run(
+            ["git", "--no-pager", "diff", "--no-index", "--no-renames", "--no-color",
+             "--", os.devnull, relative],
+            cwd=repo_root, capture_output=True, text=True, errors="replace",
+        )
+        if rendered.returncode > 1:
+            detail = rendered.stderr.strip().splitlines()
+            raise UsageError(
+                f"cannot read untracked file {relative}: "
+                f"{detail[0] if detail else f'git diff exited {rendered.returncode}'}"
+            )
+        parts.append(rendered.stdout)
+    return "".join(parts)
+
+
+def diff_content_lines(diff: str) -> list[str]:
+    """The added and removed lines of a diff, excluding file metadata.
+
+    No prefix rule can separate content from headers, because both `+++ b/x.py` and
+    an added line reading `++ new bullet` render as `+++ ...`. The hunk header is
+    the only unambiguous signal: `@@ -a,b +c,d @@` declares exactly how many old and
+    new lines follow, so everything consumed against that budget is content whatever
+    it starts with, and everything outside a hunk is metadata whatever it starts with.
+
+    Every scan over a diff shares this, so a filename cannot trip a rule meant for
+    added lines and an added line cannot be mistaken for a filename.
+    """
+    lines = diff.splitlines()
+    content: list[str] = []
+    index = 0
+    while index < len(lines):
+        header = HUNK_HEADER.match(lines[index])
+        index += 1
+        if not header:
+            continue
+        old_left = int(header.group(2) if header.group(2) is not None else 1)
+        new_left = int(header.group(4) if header.group(4) is not None else 1)
+        while index < len(lines) and (old_left > 0 or new_left > 0):
+            line = lines[index]
+            # A malformed or truncated hunk must not swallow the next file.
+            if HUNK_HEADER.match(line) or line.startswith("diff --git "):
+                break
+            index += 1
+            if line.startswith("\\"):  # "\ No newline at end of file"
+                continue
+            if line.startswith("-"):
+                old_left -= 1
+                content.append(line)
+            elif line.startswith("+"):
+                new_left -= 1
+                content.append(line)
+            else:  # context, counted against both sides and reported as neither
+                old_left -= 1
+                new_left -= 1
+    return content
+
+
+def changed_line_count(diff: str) -> int:
+    return len(diff_content_lines(diff))
+
+
+def has_contract_surface(diff: str) -> bool:
+    return any(CONTRACT_SURFACE.match(line) for line in diff_content_lines(diff))
+
+
+def size_of(profile: str, content: str) -> int:
+    """The unit belongs to the profile, not to the target kind.
+
+    `code-diff` thresholds are line counts wherever they are applied, so a source
+    file reviewed by path is measured the same way its diff would be.
+    """
+    if profile == "code-diff":
+        return len(content.splitlines())
+    return len(content.split())
+
+
+def diff_size(profile: str, diff: str) -> int:
+    """Same rule as size_of, over the changed lines of a diff."""
+    if profile == "code-diff":
+        return changed_line_count(diff)
+    return sum(len(line[1:].split()) for line in diff_content_lines(diff))
+
+
+def suggest_depth(profile: str, size_metric: int, contract_surface: bool) -> str:
+    if contract_surface:
+        return "deep"
+    if profile == "code-diff":
+        if size_metric <= CODE_QUICK_MAX:
+            return "quick"
+        return "deep" if size_metric >= CODE_DEEP_MIN else "standard"
+    return "quick" if size_metric <= PROSE_QUICK_MAX else "standard"
+
+
+def artifact_hash_of(
+    target: str, repo_root: Path, diff_file: str | None, diff: str | None = None,
+    untracked_only: list[str] | None = None,
+) -> str:
+    """The replay identity of a target — one definition, so every stage derives it alike.
+
+    `prepass` re-derives this rather than copying the hash `resolve` recorded, which is
+    what lets `gate` notice a pre-pass that ran against a different artifact than the
+    one under review. Pass `diff` when the caller already has it to skip a second `git`.
+    """
+    if classify_target(target) == "path":
+        path = Path(target)
+        if not path.is_absolute():
+            path = repo_root / path
+        if not path.is_file():
+            raise UsageError(f"target does not exist: {path}")
+        # Hash the bytes, not the lossily-decoded text: `errors="replace"` maps
+        # distinct byte sequences onto the same string, so two different artifacts
+        # would share one replay identity.
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    if diff is None:
+        diff = read_diff(target, repo_root, diff_file, untracked_only)
+    return hashlib.sha256(diff.encode()).hexdigest()
+
+
+def resolve_target(
+    target: str, profile: str | None, repo_root: Path, diff_file: str | None
+) -> dict[str, Any]:
+    if profile is not None and profile not in PROFILES:
+        raise UsageError(f"unknown profile: {profile} (expected one of {', '.join(PROFILES)})")
+
+    target_kind = classify_target(target)
+    resolved_profile = profile or detect_profile(target, target_kind)
+
+    if target_kind == "path":
+        path = Path(target)
+        if not path.is_absolute():
+            path = repo_root / path
+        if not path.is_file():
+            raise UsageError(f"target does not exist: {path}")
+        content = path.read_text(errors="replace")
+        size_metric = size_of(resolved_profile, content)
+        return {
+            "profile": resolved_profile,
+            "target_kind": target_kind,
+            "target_ref": str(path),
+            "artifact_hash": artifact_hash_of(target, repo_root, diff_file),
+            # Recorded so the later stages can re-derive this hash the same way rather
+            # than re-running git and comparing against a number git never produced.
+            "diff_file": None,
+            "size_metric": size_metric,
+            "depth_suggestion": suggest_depth(resolved_profile, size_metric, False),
+            "contract_surface": False,
+        }
+
+    diff = read_diff(target, repo_root, diff_file)
+    size_metric = diff_size(resolved_profile, diff)
+    contract_surface = has_contract_surface(diff)
+    return {
+        "profile": resolved_profile,
+        "target_kind": target_kind,
+        "target_ref": target or "WORKTREE",
+        "artifact_hash": artifact_hash_of(target, repo_root, diff_file, diff),
+        # Absolute: the later stages that re-derive this hash need not share a cwd with
+        # the invocation that recorded it.
+        "diff_file": str(Path(diff_file).resolve()) if diff_file else None,
+        # The untracked files that were part of the artifact when it was captured. The
+        # stages that re-derive the hash scan exactly these, so a file the review's own
+        # checks create is not mistaken for the artifact moving underneath it.
+        "untracked_paths": (
+            untracked_paths(repo_root)
+            if not diff_file and target_kind == "worktree" else []
+        ),
+        "size_metric": size_metric,
+        "depth_suggestion": suggest_depth(resolved_profile, size_metric, contract_surface),
+        "contract_surface": contract_surface,
+    }
+
+
+# --- pre-pass: the ground-truth layer ---------------------------------------------
+#
+# Nothing here involves a model. Whatever this layer reports is true by
+# construction, which is why its findings skip the promote/refute stages.
+
+# Probed against the repo root, in order. Overridable with repeatable --check-cmd.
+CODE_CHECK_DISCOVERY = (
+    ("pyproject.toml", "python3 -m pytest -q"),
+    ("package.json", "pnpm test"),
+    ("Cargo.toml", "cargo test --quiet"),
+)
+
+REQUIRED_HEADINGS = {
+    "spec-design": ("Purpose|Overview", "Scope|Non-goals", "Decisions Locked"),
+    "plan": ("Task", "Contract", "Acceptance"),
+    "prose-claim": (),
+}
+
+BACKTICK_TOKEN = re.compile(r"`([^`\n]+)`")
+# The optional title is part of the link syntax: `[d](./x.md "Title")`. Requiring
+# the target to be followed immediately by `)` matched nothing at all for a titled
+# link, so a missing target passed silently — a false clean, the worse direction.
+MD_LINK = re.compile(
+    # The <angle-bracket> form exists so a destination may contain spaces, and the
+    # optional title is ordinary syntax. Matching neither meant a broken link passed
+    # silently — a false clean, which is the worse direction to fail.
+    r"\[[^\]]*\]\(\s*(?:<([^>]+)>|((?:[^()\s]|\([^()\s]*\))+))(?:\s+[\"\'(][^)]*)?\s*\)"
+)
+# `[label]: ./target.md "Title"` — the definition half of a reference-style link.
+REF_LINK_DEF = re.compile(r"^[ ]{0,3}\[[^\]]+\]:\s*<?([^\s>]+)>?", re.MULTILINE)
+IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def discover_code_checks(repo_root: Path, overrides: list[str]) -> list[str]:
+    if overrides:
+        return list(overrides)
+    return [cmd for marker, cmd in CODE_CHECK_DISCOVERY if (repo_root / marker).is_file()]
+
+
+def run_check(command: str, repo_root: Path) -> dict[str, Any]:
+    """Run a declared check verbatim through the shell, as the profile wrote it."""
+    completed = subprocess.run(
+        command, cwd=repo_root, shell=True, capture_output=True, text=True, errors="replace"
+    )
+    return {
+        "name": "code-check",
+        "command": command,
+        "exit_code": completed.returncode,
+        "status": "pass" if completed.returncode == 0 else "fail",
+        "output": (completed.stdout + completed.stderr)[-4000:],
+    }
+
+
+def classify_reference(token: str, is_link: bool = False) -> str | None:
+    """Return the reference kind, or None when the token is not a reference at all.
+
+    Returning None is the first defense against noise: a pre-pass that flags prose,
+    globs, and placeholders produces the false-positive flood that gets review gates
+    switched off. Calibrated severity in `prepass_finding` is the second — this
+    function decides *whether* something is a reference, that one decides how
+    confidently a failure to resolve it can be asserted.
+    """
+    token = token.strip()
+    if not token:
+        return None
+    if token.startswith(("http://", "https://")):
+        return "url"
+    # Globs, placeholders, shell variables, shebangs, slash-commands, and
+    # arrow-prose describe a shape or a concept, not a file on disk. `$WORK/out.json`
+    # names whatever the caller exported; resolving it against the tree asks a
+    # question the token cannot answer.
+    if any(ch in token for ch in "*?<>{}$") or token.startswith(("#!", "/quirk:", "-->")):
+        return None
+    if "->" in token or "—" in token:
+        return None
+
+    # `[text](target)` declares a link, so no suffix guessing is needed or wanted.
+    # The allowlist below exists to keep backticked *prose* from being read as a
+    # path; a link carries no such ambiguity, and applying the allowlist to one
+    # silently ignores every broken `.pdf`, `.csv`, or `.yaml` link in the document.
+    if is_link:
+        return None if token.startswith("#") else "path"
+
+    if " " in token and "/" in token and Path(strip_line_anchor(token)).suffix:
+        # `docs/my notes/x.md` is unmistakably a path; treating any spaced token as
+        # prose dropped it from the scan entirely.
+        return "path"
+
+    if " " in token:
+        # Distinguishing a shell command from prose-in-backticks is not reliably
+        # decidable, and guessing wrong floods the report. Treat a multi-word token
+        # as a command only on positive evidence: it carries a --flag, or its first
+        # word is genuinely an executable. `only critique` is prose; `pytest -q` is
+        # not. This trades recall for precision, deliberately.
+        words = token.split()
+        first = words[0]
+        has_flag = any(word.startswith("--") and len(word) > 2 for word in words[1:])
+        if not IDENTIFIER.match(first.replace("-", "_")):
+            return None
+        return "command" if (has_flag or shutil.which(first) is not None) else None
+
+    if "/" in token or Path(strip_line_anchor(token)).suffix in SOURCE_SUFFIXES \
+            or Path(strip_line_anchor(token)).suffix == ".md":
+        return "path"
+    if IDENTIFIER.match(token):
+        # A bare word that is an installed executable is a command, not a symbol.
+        # Calling it a symbol sent it to `git grep`, and a doc saying "run `pytest`"
+        # in a repo that never names pytest produced a false HIGH — a confidently
+        # wrong finding, which is precisely what this design exists to avoid.
+        return "command" if shutil.which(token) is not None else "symbol"
+    return None
+
+
+LINE_ANCHOR = re.compile(r":(\d+)(?:-(\d+))?$")
+
+
+def strip_line_anchor(token: str) -> str:
+    """`tests/conftest.py:35-42` names a real file; the anchor is not part of it."""
+    return LINE_ANCHOR.sub("", token)
+
+
+def parse_line_anchor(token: str) -> tuple[int, int] | None:
+    """The 1-based inclusive range a ref cites, or None when it cites no location."""
+    match = LINE_ANCHOR.search(token)
+    if not match:
+        return None
+    start = int(match.group(1))
+    return start, int(match.group(2) or start)
+
+
+def looks_like_path(token: str) -> bool:
+    """Structured evidence declares a scope, so any extension counts.
+
+    The narrow source-suffix allowlist belongs to `classify_reference`, where the
+    job is telling a path from prose. Here the caller has already said this is a
+    path, and an allowlist only creates holes — `pyproject.toml` was unfalsifiable.
+    """
+    bare = strip_line_anchor(token)
+    return "/" in bare or bool(Path(bare).suffix)
+
+
+def resolve_reference(
+    kind: str, token: str, repo_root: Path, doc_dir: Path | None = None,
+    doc_path: Path | None = None, is_link: bool = False,
+) -> tuple[bool, str]:
+    if kind == "url":
+        return True, "skipped (no network I/O)"
+    if kind == "path":
+        # `./design.md#goals` names design.md; the fragment is an in-document anchor,
+        # not part of the filename.
+        bare = strip_line_anchor(token.split("#", 1)[0])
+        if not bare:
+            return True, "in-document anchor (names no file)"
+        # A markdown link is a navigation promise: following it must land on a
+        # document. Prose in backticks legitimately names a directory, so only the
+        # link form demands a file.
+        exists = Path.is_file if is_link else Path.exists
+        wanted = "file" if is_link else "path"
+        candidate = Path(bare)
+        if candidate.is_absolute():
+            return ((True, "exists") if exists(candidate)
+                    else (False, f"no such absolute {wanted}"))
+        # A document's own relative links resolve against the document, not the
+        # repo root — `logic.md` in a spec means its sibling.
+        # A markdown link means what Markdown says it means: relative to the
+        # document. Backticked prose may name a repo path, so only the link form
+        # is restricted — otherwise a root file of the same name rescues a link
+        # that resolves to nothing where it is written.
+        if is_link and doc_dir is not None:
+            bases = [doc_dir]
+        else:
+            bases = [doc_dir, repo_root] if doc_dir is not None else [repo_root]
+        for base in bases:
+            if exists(base / bare):
+                rel = "document directory" if base is doc_dir else "repository root"
+                return True, f"exists (relative to {rel})"
+        if is_link and any((base / bare).is_dir() for base in bases):
+            return False, "link target is a directory, not a document"
+        return False, f"no such {wanted} relative to the document or the repository root"
+    if kind == "command":
+        binary = token.split()[0]
+        if shutil.which(binary) is not None:
+            return True, f"{binary} on PATH"
+        # Not on PATH is weak evidence: the token may simply be prose that
+        # survived classification. Report it, but never as a mechanical fact.
+        return False, f"{binary} not found on PATH (may be prose rather than a command)"
+    # symbol
+    completed = subprocess.run(
+        ["git", "grep", "-lF", "--", token],
+        cwd=repo_root, capture_output=True, text=True, errors="replace",
+    )
+    # git grep exits 1 for "no match" and >1 for "could not look" — outside a
+    # worktree, bad pathspec, unreadable index. Reading a failed search as proof of
+    # absence turns every symbol in the document into a HIGH finding, which is the
+    # noise flood this layer exists to prevent. Unknown is not absent.
+    if completed.returncode > 1:
+        detail = completed.stderr.strip().splitlines()
+        return True, f"skipped ({detail[0] if detail else 'git grep unavailable'})"
+    if completed.returncode != 0 or not completed.stdout.strip():
+        return False, "no occurrence found by git grep"
+
+    matches = [line for line in completed.stdout.splitlines() if line.strip()]
+    # The document's own mention is the claim under review, not evidence for it. A
+    # tracked target would otherwise satisfy every reference it makes by making it.
+    elsewhere = [
+        match for match in matches
+        if doc_path is None or (repo_root / match).resolve() != doc_path.resolve()
+    ]
+    if elsewhere:
+        return True, "found by git grep"
+    return False, "found only in the document under review"
+
+
+def check_references(
+    text: str, repo_root: Path, profile: str, doc_dir: Path | None = None,
+    doc_path: Path | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    tokens: list[tuple[str, bool]] = []
+    for match in BACKTICK_TOKEN.finditer(text):
+        tokens.append((match.group(1), False))
+    for match in MD_LINK.finditer(text):
+        # group 1 is the <angle-bracketed> form, group 2 the bare one.
+        tokens.append((match.group(1) or match.group(2), True))
+    for match in REF_LINK_DEF.finditer(text):
+        tokens.append((match.group(1), True))
+
+    lines: list[str] = []
+    findings: list[dict[str, Any]] = []
+    seen: set[tuple[str, bool]] = set()
+    for token, is_link in tokens:
+        # Keyed on the role too: the same text in backticks and in a link are two
+        # different claims, and the backtick — which the allowlist may discard as
+        # prose — must not stand in for the link, which is unambiguous.
+        if (token, is_link) in seen:
+            continue
+        seen.add((token, is_link))
+        kind = classify_reference(token, is_link)
+        if kind is None:
+            continue
+        ok, detail = resolve_reference(kind, token, repo_root, doc_dir, doc_path, is_link)
+        lines.append(f"{'ok' if ok else 'MISSING'} {kind} {token} — {detail}")
+        if not ok:
+            findings.append(prepass_finding(token, kind, detail, profile))
+
+    check = {
+        "name": "reference-resolution",
+        "command": "(internal) resolve named references against the repository",
+        "exit_code": 1 if findings else 0,
+        "status": "fail" if findings else "pass",
+        "output": "\n".join(lines),
+    }
+    return check, findings
+
+
+# A spec or plan names artifacts that do not exist *yet* — that is its purpose —
+# and no heuristic separates a stale reference from a planned one. Claiming HIGH
+# confidence on an undecidable question is what makes a check get ignored.
+FORWARD_LOOKING_PROFILES = ("spec-design", "plan")
+
+
+def failed_check_finding(check: dict[str, Any]) -> dict[str, Any]:
+    """A check that ran and failed is true by construction — the strongest evidence there is."""
+    return {
+        "id": "",
+        "severity": "HIGH",
+        "confidence": "HIGH",
+        "category": "failing-check",
+        "claim": (
+            f"A repository check fails on this target: {check['command']} "
+            f"exited {check['exit_code']}."
+        ),
+        "evidence": [{
+            "kind": "prepass",
+            "ref": check["command"],
+            "output": check["output"][-2000:].strip() or f"(no output; exit {check['exit_code']})",
+        }],
+        "remediation": "Make the check pass, or explain why its failure is expected here.",
+        "patch": None,
+        "stage": "prepass",
+    }
+
+
+def prepass_finding(token: str, kind: str, detail: str, profile: str) -> dict[str, Any]:
+    undecidable = kind == "command" or profile in FORWARD_LOOKING_PROFILES
+    if undecidable:
+        severity, confidence = "MEDIUM", "LOW"
+    else:
+        severity, confidence = "HIGH", "HIGH"
+
+    if kind == "command":
+        claim = (
+            f"The document names a command not found on PATH: {token}. This may instead be "
+            f"prose that resembles a command."
+        )
+    elif profile in FORWARD_LOOKING_PROFILES:
+        claim = (
+            f"The document names a {kind} that does not resolve: {token}. This is either a "
+            f"stale reference or an artifact the document plans to create."
+        )
+    else:
+        claim = f"The document names a {kind} that does not resolve: {token}"
+
+    return {
+        "id": "",
+        "severity": severity,
+        "confidence": confidence,
+        "category": "unresolvable-reference",
+        "claim": claim,
+        "evidence": [{"kind": "prepass", "ref": token, "output": detail}],
+        "remediation": f"Confirm whether {token} should exist; correct or remove the reference.",
+        "patch": None,
+        "stage": "prepass",
+    }
+
+
+def outside_code_fences(text: str) -> list[str]:
+    """Lines that are prose, not fenced sample content.
+
+    A spec that *shows* `## Purpose` inside a ```markdown block has not declared
+    that section. Counting it means a document missing every required heading
+    passes the one check that is supposed to be true by construction.
+    """
+    lines: list[str] = []
+    fence: str | None = None
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if fence is None:
+            if stripped.startswith("```") or stripped.startswith("~~~"):
+                fence = stripped[:3]
+                continue
+            lines.append(line)
+        elif stripped.startswith(fence):
+            fence = None
+    return lines
+
+
+SETEXT_UNDERLINE = re.compile(r"^[ ]{0,3}(=+|-+)[ \t]*$")
+
+
+def heading_lines(lines: list[str]) -> list[str]:
+    """Every heading in the document, ATX (`# X`) and Setext (`X` over `===`).
+
+    Recognising only ATX made a compliant Setext document fail coverage and emit a
+    HIGH finding — a false positive on exactly the artifact the check exists to
+    approve, which is the failure mode that gets a check switched off.
+    """
+    found: list[str] = []
+    for index, line in enumerate(lines):
+        if line.lstrip().startswith("#"):
+            found.append(line)
+            continue
+        # A Setext underline titles the line above it, which must be non-blank and
+        # not itself a heading — otherwise a horizontal rule swallows its neighbour.
+        if index and SETEXT_UNDERLINE.match(line):
+            previous = lines[index - 1]
+            if previous.strip() and not previous.lstrip().startswith("#"):
+                found.append(previous)
+    return found
+
+
+def check_sections(text: str, profile: str) -> dict[str, Any]:
+    required = REQUIRED_HEADINGS.get(profile, ())
+    if not required:
+        return {
+            "name": "section-coverage",
+            "command": "(internal) scan for required headings",
+            "exit_code": 0,
+            "status": "not-applicable",
+            "output": "no required headings for this profile",
+        }
+
+    headings = "\n".join(heading_lines(outside_code_fences(text)))
+    missing = [
+        group for group in required
+        if not any(re.search(rf"\b{re.escape(alt)}\b", headings, re.IGNORECASE)
+                   for alt in group.split("|"))
+    ]
+    return {
+        "name": "section-coverage",
+        "command": "(internal) scan for required headings",
+        "exit_code": 1 if missing else 0,
+        "status": "fail" if missing else "pass",
+        "output": ("missing: " + ", ".join(missing)) if missing else "all required headings present",
+    }
+
+
+def run_prepass(
+    profile: str, target: str, repo_root: Path, check_cmds: list[str],
+    diff_file: str | None = None, untracked_only: list[str] | None = None,
+) -> tuple[int, dict[str, Any]]:
+    if profile not in PROFILES:
+        raise UsageError(f"unknown profile: {profile} (expected one of {', '.join(PROFILES)})")
+
+    # Hashed before the checks run, never after: a test suite writes `.pytest_cache/`
+    # and `__pycache__/` into the tree, and the worktree diff counts untracked files, so
+    # a hash taken afterwards describes an artifact the checks themselves created and
+    # never matches what `resolve` saw.
+    try:
+        observed = artifact_hash_of(target, repo_root, diff_file,
+                                    untracked_only=untracked_only)
+    except UsageError:
+        # An artifact that cannot be read cannot be hashed, and that is already what
+        # `could-not-run` means. Failing hard here would turn the input to the
+        # NOT_REVIEWABLE branch into a crash, losing the distinction it exists to draw.
+        observed = None
+
+    checks: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = []
+    # Checks that file their own, more specific findings. Everything else relies on
+    # the generic coverage below — and the default is deliberately "does not report",
+    # so a check added later is covered unless it opts out.
+    self_reporting: set[str] = set()
+
+    if profile == "code-diff":
+        commands = discover_code_checks(repo_root, check_cmds)
+        checks = [run_check(command, repo_root) for command in commands]
+    else:
+        path = Path(target)
+        if not path.is_absolute():
+            path = repo_root / target
+        if not path.is_file():
+            # No check could run at all — distinct from a check that ran and failed.
+            return 1, {"status": "could-not-run", "checks": [], "findings": [],
+                       "observed_artifact_hash": observed}
+        text = path.read_text(errors="replace")
+        reference_check, findings = check_references(
+            text, repo_root, profile, path.parent, path
+        )
+        self_reporting.add(reference_check["name"])
+        checks = [reference_check, check_sections(text, profile)]
+
+    if not checks:
+        return 1, {"status": "could-not-run", "checks": [], "findings": [],
+                   "observed_artifact_hash": observed}
+
+    # The invariant, enforced once for every branch rather than per branch: the
+    # verdict is computed from findings alone, so a failure that stops at `checks[]`
+    # is a failure that silently passes. This was the same defect three times — an
+    # unreadable target, a red test suite, a missing required section — because each
+    # was fixed where it was found instead of here.
+    findings = findings + [
+        failed_check_finding(check)
+        for check in checks
+        if check["status"] == "fail" and check["name"] not in self_reporting
+    ]
+
+    failed = any(check["status"] == "fail" for check in checks)
+    status = "fail" if failed else "pass"
+    return (1 if failed else 0), {
+        "status": status,
+        "checks": checks,
+        "findings": findings,
+        # Independently derived, never copied from the chain: a pre-pass whose ground
+        # truth describes a different artifact than the one under review is worse than
+        # no pre-pass, because `gate` reports its silence as a clean bill of health.
+        "observed_artifact_hash": observed,
+    }
+
+
+# --- reviewer selection -----------------------------------------------------------
+#
+# Independence is structural, not rhetorical: a model favors its own output and
+# misses errors in self-review that it catches when the same content is framed as
+# external. Prompt wording cannot repair that; a different model family can.
+
+# Alias -> dispatch triple, mirroring skills/pi-dev/SKILL.md. Ordered by preference
+# within each family; the ladder is walked in this order once the author's family
+# is filtered out.
+ALIAS_LADDER = (
+    ("codex", "openai", "openai-codex/gpt-5.6-sol", "high"),
+    ("gemini", "google", "google/gemini-3.2-pro-preview", "high"),
+    ("terra", "openai", "openai-codex/gpt-5.6-terra", "high"),
+    ("opus", "anthropic", "anthropic/claude-opus-4-7", "high"),
+    ("sonnet", "anthropic", "anthropic/claude-sonnet-4-7", "high"),
+    ("flash", "google", "google/gemini-flash-latest", "medium"),
+)
+
+DEFAULT_CHECK_CMD = "pi-watch --check"
+
+
+def alias_entry(alias: str) -> tuple[str, str, str, str] | None:
+    return next((entry for entry in ALIAS_LADDER if entry[0] == alias), None)
+
+
+# `pi-watch --check <alias>` reports what it resolved: `✓ gemini  google/g-3.1:high`.
+# Reading it separates "the alias is authed" from "this exact model dispatches"; the
+# ladder below is a preference order, not an authority on the current version.
+CHECKED_TRIPLE = re.compile(
+    r"^\s*[^\s]?\s*(?P<alias>[a-z0-9-]+)\s+"
+    r"(?P<provider>[A-Za-z0-9_-]+)/(?P<model>[A-Za-z0-9._-]+)"
+    r"(?::(?P<thinking>[a-z]+))?\s*$",
+    re.MULTILINE,
+)
+
+
+def preflight(alias: str, check_cmd: str) -> tuple[bool, dict[str, str] | None]:
+    """A rung resolves only when its preflight exits 0 — never assume availability.
+
+    Returns the triple the check itself reported, when it names one.
+    """
+    # Run it somewhere it cannot touch the artifact. A preflight asks whether a model is
+    # reachable — it has no business in the repository, and with no `cwd` it inherits the
+    # orchestrator's, which is the repo root. Anything it writes there (a cache, a token,
+    # a log) is an untracked file by the time `gate` re-hashes the tree, and an honest
+    # run fails the currency check for a reason that has nothing to do with staleness.
+    scratch = tempfile.mkdtemp(prefix="adversarial-review-preflight-")
+    try:
+        completed = subprocess.run(
+            f"{check_cmd} {alias}", shell=True, cwd=scratch,
+            capture_output=True, text=True, errors="replace",
+        )
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    if completed.returncode != 0:
+        return False, None
+    for stream in (completed.stderr or "", completed.stdout or ""):
+        for match in CHECKED_TRIPLE.finditer(stream):
+            if match.group("alias") == alias:
+                return True, {
+                    "provider": match.group("provider"),
+                    "model": match.group("model"),
+                    "thinking": match.group("thinking") or "",
+                }
+    return True, None
+
+
+def select_reviewer(
+    author_family: str, model: str | None, check_cmd: str
+) -> tuple[int, dict[str, Any]]:
+    if model is not None and alias_entry(model) is None:
+        known = ", ".join(entry[0] for entry in ALIAS_LADDER)
+        raise UsageError(f"unknown alias: {model} (known aliases: {known})")
+
+    # Independence is the one invariant this skill exists to buy, and it is decided
+    # by a string comparison. An unnormalised `OpenAI` matched nothing, so the
+    # author's own family stayed in the candidate pool and — having matched nothing
+    # — was then stamped `full`. A typo must fail loudly rather than silently
+    # produce a same-family review wearing a full-independence label.
+    author_family = author_family.strip().lower()
+    if author_family not in AUTHOR_FAMILIES:
+        raise UsageError(
+            f"unknown author family: {author_family} "
+            f"(known families: {', '.join(sorted(AUTHOR_FAMILIES))})"
+        )
+
+    # An explicit --model is a caller instruction, not a suggestion: it is tried
+    # alone, and its failure is reported rather than papered over with a fallback.
+    candidates = [alias_entry(model)] if model else [
+        entry for entry in ALIAS_LADDER if entry[1] != author_family
+    ] + [entry for entry in ALIAS_LADDER if entry[1] == author_family]
+
+    ladder: list[dict[str, Any]] = []
+    for alias, family, triple, thinking in candidates:
+        ok, checked = preflight(alias, check_cmd)
+        ladder.append({"alias": alias, "checked": True, "resolved": ok})
+        if not ok:
+            continue
+        provider, _, model_id = triple.partition("/")
+        # Prefer what the check resolved over what the table remembers.
+        triple_verified = checked is not None
+        if checked:
+            provider = checked["provider"]
+            model_id = checked["model"]
+            thinking = checked["thinking"] or thinking
+        return 0, {
+            "resolved": True,
+            "alias": alias,
+            "family": family,
+            "provider": provider,
+            "model": model_id,
+            "thinking": thinking,
+            # False: the alias is authed but the triple came from the static
+            # table and was never confirmed dispatchable.
+            "triple_verified": triple_verified,
+            "independence": "reduced" if family == author_family else "full",
+            "ladder": ladder,
+        }
+
+    return 1, {
+        "resolved": False,
+        "alias": None,
+        "family": None,
+        "provider": None,
+        "model": None,
+        "thinking": None,
+        "triple_verified": False,
+        "independence": "reduced",
+        "ladder": ladder,
+    }
+
+
+# --- run chain --------------------------------------------------------------------
+#
+# Every provenance check here used to sniff the shape of a caller-written file. Shape
+# is a schema hint, not proof: the orchestrator writing those files is the fallible
+# party these checks exist to constrain, and it could reach `gate` with a stage
+# skipped or a stale file. Each script-produced payload now carries a `chain` naming
+# the run, the artifact, the step that produced it, and a digest of the input it came
+# from. A stage refuses input whose chain does not name its expected predecessor.
+#
+# What this buys: out-of-order execution and cross-run file reuse fail loudly. What it
+# does not buy: authenticity. Nothing here observes a dispatch, so an orchestrator
+# willing to fabricate a whole consistent chain still can. It raises a bypass from a
+# one-flag accident to a deliberate multi-step act — which is the right bar for the
+# actual threat, and is not the same as unforgeability. Do not describe it as such.
+
+CHAIN_PREDECESSOR = {
+    "claims": ("resolve",),
+    "merge": ("claims", "merge"),
+    "gate": ("merge",),
+    "prepass": ("resolve",),
+    "select-model": ("resolve",),
+}
+
+
+def digest(payload: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def chain_of(payload: Any, label: str) -> dict[str, Any]:
+    if not isinstance(payload, dict) or not isinstance(payload.get("chain"), dict):
+        raise UsageError(
+            f"{label} input carries no run chain: it was not produced by this script, "
+            f"or a stage was skipped"
+        )
+    link = payload["chain"]
+    for field in ("run_id", "artifact_hash", "step"):
+        if not isinstance(link.get(field), str) or not link[field]:
+            raise UsageError(f"{label} input has a malformed chain: bad {field}")
+    return link
+
+
+def link_from(previous: dict[str, Any], step: str, label: str,
+              **extra: Any) -> dict[str, Any]:
+    """Verify `previous` is an allowed predecessor of `step`, and mint the next link."""
+    link = chain_of(previous, label)
+    allowed = CHAIN_PREDECESSOR[step]
+    if link["step"] not in allowed:
+        raise UsageError(
+            f"{step} expects input from {' or '.join(allowed)}, but its chain says "
+            f"{link['step']!r}: the pipeline ran out of order"
+        )
+    return {
+        "run_id": link["run_id"],
+        "artifact_hash": link["artifact_hash"],
+        "step": step,
+        "predecessor": digest(previous),
+        **extra,
+    }
+
+
+# --- the evidence gate ------------------------------------------------------------
+
+SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+CONFIDENCES = ("HIGH", "MEDIUM", "LOW")
+DISPOSITIONS = ("standing", "refuted", "contested")
+STAGES = ("promote", "refute", "tiebreak", "prepass")
+# Severity from the recall stage is a proposal. A stage that attacked the finding
+# may replace it here, and the verdict reads this field rather than `severity`.
+ADJUDICATED_SEVERITY = "adjudicated_severity"
+# A claim the protocol could not evaluate is a limitation; a decision needing its
+# owner is a question. Neither is a defect, so neither drives the verdict.
+RECORD_KINDS = ("finding", "limitation", "question")
+REQUIRED_FIELDS = ("severity", "confidence", "category", "claim", "evidence", "remediation")
+CATEGORY_SHAPE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+# Callers match a re-reported finding to its prior ruling by id, so a malformed
+# one silently breaks dismissed carry-forward across rounds. The prefix is
+# configurable (--id-prefix), so the shape is built against whichever is in use
+# rather than hardcoding "F" and rejecting every legitimate custom namespace.
+def finding_id_shape(prefix: str) -> "re.Pattern[str]":
+    return re.compile(rf"^{re.escape(prefix)}[1-9][0-9]*$")
+REPRODUCTION_KINDS = ("command", "prepass")
+PROOF_REQUIRED = ("CRITICAL", "HIGH")
+
+EVIDENCE_REQUIRED_FIELDS = {
+    "file-line": ("ref", "quote"),
+    "quote": ("ref", "quote"),
+    "command": ("command", "output"),
+    "absence": ("command", "ref", "output"),
+    "prepass": ("ref", "output"),
+}
+
+VERDICT_EXIT = {"PASS": 0, "NEEDS_FIXES": 1, "CRITICAL_ISSUES": 3, "NOT_REVIEWABLE": 4}
+
+# Fields that narrow what a verdict covers. Each can be non-empty beside a `PASS`, so a
+# caller reading the verdict alone is told less than the run actually found. They belong
+# in the caller-facing decision tables, and the tests read this list rather than keeping
+# their own — a second copy is a second thing to forget when a field joins the set.
+SCOPE_BOUNDING_FIELDS = (
+    "contested_count",    # pending disputes; the result is not final
+    "unreviewed_paths",   # appeared after capture; no stage saw them
+    "advisory_count",     # real findings that no stage beyond promote stood behind
+    "limitations",        # the protocol could not evaluate these
+    "questions",          # decisions needing their owner
+)
+
+
+def load_json(path_arg: str, label: str) -> Any:
+    path = Path(path_arg)
+    if not path.is_file():
+        raise UsageError(f"missing {label} input: {path}")
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise UsageError(f"cannot read {label} input {path}: {exc}") from exc
+
+
+def validate_finding(finding: Any, index: int, id_prefix: str = "F") -> None:
+    if not isinstance(finding, dict):
+        raise UsageError(f"finding {index} is not an object")
+    for field in REQUIRED_FIELDS:
+        if field not in finding:
+            raise UsageError(f"finding {index} is missing required field: {field}")
+    # A finding with no claim is not a finding, and a blank remediation gives the
+    # reader nothing to act on. Presence is not content.
+    for field in ("claim", "category", "remediation"):
+        value = finding[field]
+        if not isinstance(value, str) or not value.strip():
+            raise UsageError(f"finding {index} has an empty {field}")
+    if finding.get("stage") not in STAGES:
+        raise UsageError(
+            f"finding {index} has invalid stage: {finding.get('stage')} "
+            f"(expected one of {', '.join(STAGES)})"
+        )
+    if finding["severity"] not in SEVERITIES:
+        raise UsageError(f"finding {index} has invalid severity: {finding['severity']}")
+    if finding["confidence"] not in CONFIDENCES:
+        raise UsageError(f"finding {index} has invalid confidence: {finding['confidence']}")
+    # Callers key on category to group and route findings, so an unconstrained
+    # value propagates straight into their logic.
+    category = finding["category"]
+    if not isinstance(category, str) or len(category) > 40 \
+            or not CATEGORY_SHAPE.match(category):
+        raise UsageError(
+            f"finding {index} has invalid category: {category!r} "
+            f"(kebab-case, 1-40 chars)"
+        )
+    disposition = finding.get("disposition", "standing")
+    if disposition not in DISPOSITIONS:
+        raise UsageError(f"finding {index} has invalid disposition: {disposition}")
+    kind = finding.get("kind", "finding")
+    if kind not in RECORD_KINDS:
+        raise UsageError(
+            f"finding {index} has invalid kind: {kind!r} "
+            f"(expected one of {', '.join(RECORD_KINDS)})"
+        )
+    adjudicated = finding.get(ADJUDICATED_SEVERITY)
+    if adjudicated is not None:
+        if adjudicated not in SEVERITIES:
+            raise UsageError(
+                f"finding {index} has invalid {ADJUDICATED_SEVERITY}: {adjudicated!r}"
+            )
+        # Only a stage that saw the finding independently may re-grade it. Letting
+        # promote stamp its own adjudicated severity would hand the recall stage
+        # the very authority this field exists to take away from it.
+        if finding.get("stage") not in ("refute", "tiebreak"):
+            raise UsageError(
+                f"finding {index} carries {ADJUDICATED_SEVERITY} but its stage is "
+                f"{finding.get('stage')!r}: only refute and tiebreak may re-grade"
+            )
+    supplied_id = finding.get("id")
+    if supplied_id and not finding_id_shape(id_prefix).match(str(supplied_id)):
+        raise UsageError(
+            f"finding {index} has invalid id: {supplied_id!r} "
+            f"(expected {id_prefix} followed by a positive integer)"
+        )
+    patch = finding.get("patch")
+    if patch is not None and not isinstance(patch, str):
+        raise UsageError(
+            f"finding {index} has invalid patch: expected a unified-diff string or "
+            f"null, got {type(patch).__name__}"
+        )
+    evidence = finding["evidence"]
+    if not isinstance(evidence, list) or not evidence:
+        raise UsageError(f"finding {index} must carry at least one evidence item")
+    for item in evidence:
+        kind = item.get("kind") if isinstance(item, dict) else None
+        if kind not in EVIDENCE_REQUIRED_FIELDS:
+            raise UsageError(f"finding {index} has an evidence item with invalid kind: {kind}")
+        for field in EVIDENCE_REQUIRED_FIELDS[kind]:
+            if field not in item:
+                raise UsageError(
+                    f"finding {index} evidence of kind {kind} is missing field: {field}"
+                )
+            # Presence is not content. An empty `command`/`output` pair would
+            # otherwise satisfy the schema and buy reproduction credit, holding a
+            # finding at HIGH confidence on evidence of nothing.
+            # An absence claim is the one case where empty output *is* the content:
+            # it asserts the cited search came back with nothing. The field must be
+            # present — omitting it asserts nothing at all — but it may be empty.
+            value = item[field]
+            if not isinstance(value, str):
+                raise UsageError(
+                    f"finding {index} evidence of kind {kind} has a non-string {field}"
+                )
+            if not value.strip() and not (kind == "absence" and field == "output"):
+                # Real reviewers reach for `command` to prove an absence and leave the
+                # output empty, which used to fail with no hint that a kind exists for
+                # exactly that. The reply is refused whole, so the message has to say
+                # what to change or a whole promote round is discarded over wording.
+                hint = (
+                    ". A search that proves nothing was found is `kind: \"absence\"` "
+                    "(command, ref, output) — `command` means a run whose output shows "
+                    "the failure, so it cannot be empty"
+                    if kind == "command" and field == "output" else ""
+                )
+                raise UsageError(
+                    f"finding {index} evidence of kind {kind} has an empty {field}{hint}"
+                )
+
+
+def evidence_resolves(item: dict[str, Any], repo_root: Path) -> bool:
+    """Can this evidence be re-resolved against the source it points at?
+
+    Only failures we can *demonstrate* count as falsification — an unreachable
+    check is not proof the finding is wrong, so anything we cannot check is True.
+    That is what lets the gate demand *every* item hold without punishing findings
+    whose evidence is merely unverifiable.
+    """
+    kind = item["kind"]
+    if kind in ("command", "prepass"):
+        return True
+    ref = str(item.get("ref", ""))
+    if kind == "absence":
+        # The cited search is never re-run. Executing model-supplied shell inside the
+        # one deterministic stage would make it neither deterministic nor safe. The
+        # scope the search names is still checkable, and a search over a file that
+        # does not exist proves nothing about what is absent from it.
+        # An absence claim asserts the search came back empty. Output showing
+        # otherwise falsifies it on its own terms, with nothing to re-run.
+        if str(item.get("output", "")).strip():
+            return False
+        if not looks_like_path(ref):
+            return True
+        bare = strip_line_anchor(ref)
+        candidate = Path(bare) if Path(bare).is_absolute() else repo_root / bare
+        return candidate.exists()
+
+    quote = str(item.get("quote", ""))
+    bare = strip_line_anchor(ref.split("#", 1)[0])
+    candidate = Path(bare) if Path(bare).is_absolute() else repo_root / bare
+    if not candidate.is_file():
+        if not bare:
+            # A bare `#section` is an in-document anchor and names no file.
+            return True
+        # `file-line` *is* a claim about a file, so the file has to be there —
+        # extensionless names like `Makefile` are not a licence to skip the check.
+        # Only `quote` may name something that is not a path at all (`spec#3` is a
+        # section), and only then does the unfalsifiable escape apply.
+        if kind == "file-line":
+            return False
+        return not looks_like_path(bare)
+    if not quote:
+        return True
+
+    text = candidate.read_text(errors="replace")
+    anchor = parse_line_anchor(ref.split("#", 1)[0])
+    if anchor is None:
+        # No anchor is no claim about location, so the whole file is in scope.
+        return quote.strip() in text
+    start, end = anchor
+    lines = text.splitlines()
+    if start < 1 or start > len(lines):
+        return False
+    # The quote must *begin* inside the cited range but may run past its end.
+    # Reviewers routinely cite where a passage starts and undershoot where it stops;
+    # killing those drops real findings, which happened twice in one live run.
+    # Pointing at an entirely different place is still falsified — so this locates
+    # the whole quote and asks where it starts, rather than testing its first line
+    # and its body separately, which two different places can each satisfy.
+    needle = quote.strip()
+    position = text.find(needle)
+    while position != -1:
+        if start <= text.count("\n", 0, position) + 1 <= end:
+            return True
+        position = text.find(needle, position + 1)
+    return False
+
+
+def apply_evidence_gate(
+    finding: dict[str, Any], repo_root: Path, from_prepass: bool = False
+) -> tuple[dict[str, Any] | None, str | None]:
+    # Every item must hold: one true citation must not launder a fabricated one
+    # riding alongside it.
+    if not all(evidence_resolves(item, repo_root) for item in finding["evidence"]):
+        return None, "falsified"
+
+    graded = dict(finding)
+    # `prepass` means "the deterministic layer produced this", which is why it counts
+    # as reproduction. Provenance is decided by which input the finding arrived in —
+    # never by its own `stage` field, which the reviewer writes and can therefore
+    # forge to buy the credit that holds any CRITICAL/HIGH at full confidence.
+    trusted = REPRODUCTION_KINDS if from_prepass else ("command",)
+    has_reproduction = any(item["kind"] in trusted for item in finding["evidence"])
+    # Severity is consequence and never moves; proof speaks only to likelihood,
+    # and only where the spec requires it.
+    if not has_reproduction and graded["severity"] in PROOF_REQUIRED:
+        graded["confidence"] = "LOW"
+    return graded, None
+
+
+def effective_severity(finding: dict[str, Any]) -> str:
+    """The grade the verdict is computed from: whatever a stage that saw the finding
+    independently settled on, else the proposal promote opened with."""
+    return finding.get(ADJUDICATED_SEVERITY) or finding["severity"]
+
+
+def is_blocking(finding: dict[str, Any]) -> bool:
+    """Severe enough to matter, and asserted by someone other than the recall stage.
+
+    Promote raises candidates at ~60% confidence, so a LOW-confidence claim only it
+    made is a hypothesis. Still reported, as an advisory rather than a blocker.
+    """
+    severity = effective_severity(finding)
+    if severity not in ("CRITICAL", "HIGH", "MEDIUM"):
+        return False
+    # CRITICAL is the exception. Severity tracks consequence and confidence tracks
+    # likelihood, and a possible data-loss or security claim is worth a fix round
+    # even unproven — the asymmetry of being wrong runs the other way there.
+    if severity == "CRITICAL":
+        return True
+    return not (finding.get("confidence") == "LOW" and finding.get("stage") == "promote")
+
+
+def finding_order(finding: dict[str, Any]) -> tuple[bool, int]:
+    """Unfalsifiability is the most actionable thing a review can say, so it leads."""
+    return (finding.get("category") != "unfalsifiable-claim",
+            SEVERITIES.index(effective_severity(finding)))
+
+
+def assign_ids(
+    findings: list[dict[str, Any]], prefix: str = "F", reserved: set[str] | None = None
+) -> None:
+    """Fill in `<prefix>1..n` for anything lacking an ID, reserving the ones taken.
+
+    `reserved` carries IDs that appear nowhere in `findings` but must not be reused —
+    quick mode's carried suppressions, which are already spoken for.
+    """
+    supplied = [f["id"] for f in findings if f.get("id")]
+    duplicates = sorted({i for i in supplied if supplied.count(i) > 1})
+    if duplicates:
+        # Renumbering silently would be worse: IDs are how a caller matches a
+        # finding to its prior ruling across rounds, so an ambiguous one has to be
+        # reported rather than guessed at.
+        raise UsageError(f"findings carry duplicate ids: {', '.join(duplicates)}")
+
+    taken = set(supplied) | (reserved or set())
+    next_number = 1
+    for finding in findings:
+        if finding.get("id"):
+            continue
+        while f"{prefix}{next_number}" in taken:
+            next_number += 1
+        finding["id"] = f"{prefix}{next_number}"
+        taken.add(finding["id"])
+
+
+def unreviewed_since_capture(resolved: dict[str, Any], repo_root: Path) -> list[str]:
+    """Untracked files that appeared after the artifact was captured.
+
+    Scoping the currency check to the captured set is what keeps it usable, but silence
+    about the difference would be its own fail-open: a file added mid-review is real work
+    that no stage looked at, and a caller reading `PASS` would have no way to know the
+    review's coverage stopped short of it. Refusing is wrong — most of these are the
+    review's own check output — so it is reported instead.
+    """
+    if resolved.get("diff_file") or classify_target(
+        resolved.get("target_ref", "")
+    ) != "worktree":
+        return []
+    captured = set(resolved.get("untracked_paths") or [])
+    try:
+        return sorted(p for p in untracked_paths(repo_root) if p not in captured)
+    except UsageError:
+        # Outside a worktree there is nothing to enumerate. That is not a review defect
+        # and must not turn a completed review into a crash.
+        return []
+
+
+def verify_artifact_is_current(resolved: dict[str, Any], repo_root: Path) -> None:
+    """Refuse to judge an artifact that is no longer the one `resolve` identified.
+
+    This is the only check that distinguishes *this* review from a consistent replay of
+    an older one: run IDs are minted at random, so nothing else separates a fresh bundle
+    from an intact stale one. Every other binding proves the inputs agree with each
+    other, not that they describe the tree as it stands now.
+    """
+    # `resolve`'s own `diff_file` and untracked set, not fresh ones: this must re-derive
+    # the artifact the way it was captured. Passing None for the diff file re-ran `git`
+    # for a review that never came from git; rescanning untracked files counted the ones
+    # the review's own checks had just written.
+    current = artifact_hash_of(
+        resolved.get("target_ref", ""), repo_root, resolved.get("diff_file"),
+        untracked_only=resolved.get("untracked_paths") or [],
+    )
+    if current == resolved.get("artifact_hash"):
+        return
+    raise UsageError(
+        "artifact changed during the review: "
+        f"resolve saw {str(resolved.get('artifact_hash'))[:12]}, "
+        f"the tree now hashes {current[:12]}. Findings from this run judged different "
+        "content — re-run it.\n"
+        "Files that appeared after `resolve` do not cause this: the artifact is what "
+        "`resolve` captured, so the review's own check output is not counted. What does "
+        "cause it is that content changing — including a dispatched reviewer editing a "
+        "file it was only meant to read, since the stages hold read-only tools by grant "
+        "rather than by sandbox."
+    )
+
+
+def run_gate(
+    findings_path: str, model_path: str, prepass_path: str, depth: str, repo_root: Path,
+    id_prefix: str = "F", resolve_path: str | None = None, verify_artifact: bool = True,
+) -> tuple[int, dict[str, Any]]:
+    findings = load_json(findings_path, "findings")
+    model = load_json(model_path, "model")
+    prepass = load_json(prepass_path, "prepass")
+    resolved = load_json(resolve_path, "resolve") if resolve_path else None
+    for label, value in (("model", model), ("prepass", prepass)):
+        if not isinstance(value, dict):
+            raise UsageError(f"{label} input must be a JSON object")
+    # `resolved: true` alone is not a reviewer. Accepting it lets a malformed or
+    # hand-written model file walk straight past NOT_REVIEWABLE and emit PASS for an
+    # artifact nothing ever looked at — the exact outcome that branch exists to stop.
+    # Truthiness accepts the string "false". A reviewer that cannot be established
+    # is NOT_REVIEWABLE, so the type is checked rather than the value.
+    if not isinstance(model.get("resolved"), bool):
+        raise UsageError(
+            f"model.resolved must be a JSON boolean, got "
+            f"{type(model.get('resolved')).__name__}: a review whose reviewer cannot "
+            f"be established is NOT_REVIEWABLE, never PASS"
+        )
+    if model["resolved"]:
+        missing = [f for f in ("alias", "family", "provider", "model", "independence")
+                   if not model.get(f)]
+        if missing:
+            raise UsageError(
+                f"model input claims resolved but names no reviewer: missing "
+                f"{', '.join(missing)}"
+            )
+    # Same reasoning on the other required input: an empty or unrelated object
+    # defaults to `status` absent and `findings` empty, which is the shape of a
+    # clean pre-pass. A pre-pass that never ran must not supply one.
+    missing_prepass = [f for f in ("status", "checks", "findings") if f not in prepass]
+    if missing_prepass:
+        raise UsageError(
+            f"prepass input is not a prepass result: missing {', '.join(missing_prepass)}"
+        )
+
+    # `quick` runs both stages in one reply and reports {findings, suppressed}. Its
+    # self-refuted list is carried through rather than dropped: suppressed_count is
+    # the kill-rate signal, and a quick run that silently reported zero would hide
+    # exactly the fabrication it is there to expose.
+    carried_suppressed: list[dict[str, str]] = []
+    # The report's shape *is* its provenance. `{findings, suppressed}` is what a
+    # quick-depth reviewer emits after refuting its own list in one context; a bare
+    # array is what the two-stage protocol produces. Accepting the quick shape under
+    # `--depth standard` recorded same-context self-refutation as fully independent,
+    # which is the one guarantee this whole protocol exists to provide. Requiring the
+    # two to agree makes the label unforgeable by a caller who simply passes a flag.
+    # Shape is provenance. A quick reviewer emits {findings, suppressed} after
+    # self-refuting in one context; `merge` emits {findings, stage, judged} and is the
+    # only thing that produces it. A bare array is raw promote output, which at
+    # standard or deep means the refute dispatch it claims never happened. Checking
+    # the reviewer-supplied per-finding `stage` instead let a promote record relabel
+    # itself and pass.
+    gate_chain: dict[str, Any] | None = None
+    quick_shaped = isinstance(findings, dict) and "suppressed" in findings
+    merged_shaped = isinstance(findings, dict) and "judged" in findings
+    if merged_shaped:
+        # Key presence was the whole check, so a hand-written
+        # {"findings": [], "stage": "banana", "judged": "not-a-count"} passed.
+        link = link_from(findings, "gate", "findings")
+        if findings.get("stage") not in ("refute", "tiebreak"):
+            raise UsageError(
+                f"merge envelope names stage {findings.get('stage')!r}: expected "
+                f"refute or tiebreak"
+            )
+        if not isinstance(findings.get("judged"), int) or findings["judged"] < 0:
+            raise UsageError("merge envelope has a non-integer `judged` count")
+        gate_chain = link
+    if isinstance(findings, dict) and not (quick_shaped or merged_shaped):
+        raise UsageError(
+            "findings object is neither a quick report ({findings, suppressed}) nor "
+            "`merge` output ({findings, stage, judged})"
+        )
+    if quick_shaped and depth != "quick":
+        raise UsageError(
+            f"findings are quick-shaped but --depth is {depth}: a self-refuted report "
+            f"cannot be recorded as independent"
+        )
+    if merged_shaped and depth == "quick":
+        raise UsageError(
+            "--depth quick takes the self-refuted {findings, suppressed} report, not "
+            "`merge` output: quick has no separate refute stage"
+        )
+    if depth == "quick" and not quick_shaped:
+        # An empty bare array is the one exception: the profiles tell a reviewer that
+        # found nothing to emit `[]`, and an empty report has no provenance to state.
+        if not (isinstance(findings, list) and not findings):
+            raise UsageError(
+                "--depth quick expects the quick-shaped {findings, suppressed} report "
+                "that promote-prompt.md specifies"
+            )
+    if depth in ("standard", "deep") and not merged_shaped:
+        raise UsageError(
+            f"--depth {depth} expects `merge` output, not a bare array: run `claims` "
+            f"before the refute dispatch and `merge --judgments` after it. The merge "
+            f"is what establishes that the stage ran; a depth flag only asserts it."
+        )
+
+    # The two inputs that make NOT_REVIEWABLE detectable were the two the run chain did
+    # not cover, so either could be swapped for a file from an earlier run: a pre-pass
+    # captured while the suite was green turned a failing suite into PASS, and a
+    # hand-written `{"resolved": true}` turned NOT_REVIEWABLE into PASS. Neither needs
+    # forging a chain — there was none to forge.
+    model_link = chain_of(model, "model")
+    prepass_link = chain_of(prepass, "prepass")
+    for label, link, step in (("model", model_link, "select-model"),
+                              ("prepass", prepass_link, "prepass")):
+        if link["step"] != step:
+            raise UsageError(
+                f"{label} input was produced by {link['step']!r}, not {step!r}"
+            )
+    if model_link["run_id"] != prepass_link["run_id"]:
+        raise UsageError(
+            f"model and prepass belong to different runs ({model_link['run_id']} vs "
+            f"{prepass_link['run_id']}): one of them is left over from an earlier review"
+        )
+    # Quick depth has no chained findings — the reviewer hand-writes that report — so
+    # without `resolve` the binding degrades to "model and prepass agree with each
+    # other", which any single earlier run satisfies. `--resolve` is what makes the
+    # quick call name a run at all, and the artifact check below is what makes that run
+    # have to be the current one.
+    if gate_chain and gate_chain["run_id"] != prepass_link["run_id"]:
+        raise UsageError(
+            f"findings belong to run {gate_chain['run_id']} but model and prepass "
+            f"belong to run {prepass_link['run_id']}: inputs from two different reviews"
+        )
+    resolve_link = chain_of(resolved, "resolve")
+    if resolve_link["step"] != "resolve":
+        raise UsageError(
+            f"resolve input was produced by {resolve_link['step']!r}, not 'resolve'"
+        )
+    if resolve_link["run_id"] != prepass_link["run_id"]:
+        raise UsageError(
+            f"model and prepass belong to run {prepass_link['run_id']}, but resolve "
+            f"opened {resolve_link['run_id']}: inputs from two different reviews"
+        )
+    observed = prepass.get("observed_artifact_hash")
+    if "observed_artifact_hash" not in prepass:
+        raise UsageError(
+            "prepass input records no observed_artifact_hash: it predates the artifact "
+            "binding, so nothing establishes it ran against the artifact under review"
+        )
+    # A null is the pre-pass saying it could not read the artifact at all. That claims
+    # no ground truth, so it cannot launder a stale clean result into a verdict — which
+    # is what the binding defends against — and it is the input NOT_REVIEWABLE reads.
+    if observed is None:
+        if prepass.get("status") != "could-not-run":
+            raise UsageError(
+                f"prepass reports status {prepass.get('status')!r} but recorded no "
+                f"artifact hash: only a pre-pass that could not run may omit one"
+            )
+    elif not isinstance(observed, str) or not observed:
+        raise UsageError("prepass observed_artifact_hash must be a string or null")
+    elif observed != prepass_link["artifact_hash"]:
+        raise UsageError(
+            f"prepass ran against a different artifact than the one under review "
+            f"(saw {observed[:12]}, resolve identified {prepass_link['artifact_hash'][:12]}): "
+            f"re-run the pre-pass"
+        )
+    # Callers are told a gate exit of 0/1/3 means the review completed, so they stop
+    # here rather than at the manifest. An intact bundle from an earlier run satisfies
+    # every check above — this is the one that refuses to judge a tree that has moved on.
+    unreviewed: list[str] = []
+    if verify_artifact:
+        verify_artifact_is_current(resolved, repo_root)
+        unreviewed = unreviewed_since_capture(resolved, repo_root)
+    if isinstance(findings, dict):
+        carried = findings.get("suppressed", [])
+        if not isinstance(carried, list):
+            raise UsageError("findings.suppressed must be a JSON array")
+        for entry in carried:
+            if not isinstance(entry, dict):
+                raise UsageError("each findings.suppressed entry must be a JSON object")
+        carried_suppressed = list(carried)
+        if "findings" in findings:
+            findings = findings["findings"]
+        else:
+            # An empty array says "found nothing"; an absent key says nothing at
+            # all, and defaulting it to [] reads a truncated report as clean.
+            raise UsageError(
+                "quick-shaped findings object has no `findings` key: a truncated "
+                "report is a failed dispatch, not a clean review"
+            )
+    if not isinstance(findings, list):
+        raise UsageError("findings input must be a JSON array")
+
+    # gate owns the merge so a caller cannot silently drop the findings that are
+    # true by construction.
+    # Provenance is recorded here, where it is still known, rather than read off a
+    # field the reviewer controls.
+    prepass_origin = {id(f) for f in prepass.get("findings", [])}
+    merged = list(findings) + list(prepass.get("findings", []))
+    for index, finding in enumerate(merged):
+        validate_finding(finding, index, id_prefix)
+
+    # Sort first so severity still drives the numbering, then assign to *every*
+    # record rather than to survivors alone. The promote prompt tells reviewers to
+    # emit `id: null` and to reuse a dismissed finding's original ID when re-raising
+    # it — neither works if the suppressed record it was handed has no ID.
+    merged.sort(key=finding_order)
+    # Carried suppressions take part in the same allocation: their IDs are reserved
+    # so nothing is re-issued, and any that arrived null get one, since a suppressed
+    # record a caller cannot name is a dismissal it cannot carry forward.
+    assign_ids(merged, id_prefix, {str(s["id"]) for s in carried_suppressed if s.get("id")})
+    assign_ids(carried_suppressed, id_prefix, {str(f["id"]) for f in merged if f.get("id")})
+
+    survivors: list[dict[str, Any]] = []
+    limitations: list[dict[str, Any]] = []
+    questions: list[dict[str, Any]] = []
+    contested: list[dict[str, Any]] = []
+    suppressed: list[dict[str, str]] = list(carried_suppressed)
+
+    for finding in merged:
+        disposition = finding.get("disposition", "standing")
+        if disposition == "refuted":
+            record = {"id": finding["id"], "reason": "refuted"}
+            if finding.get("ruling_reason"):
+                record["ruling"] = finding["ruling_reason"]
+            suppressed.append(record)
+            continue
+
+        # The evidence gate runs before the tie is routed. A demonstrable falsehood
+        # is not a disagreement, and sending one to a third model spends a dispatch
+        # adjudicating something already known to be wrong.
+        graded, reason = apply_evidence_gate(
+            finding, repo_root, id(finding) in prepass_origin
+        )
+        if graded is None:
+            suppressed.append({"id": finding["id"], "reason": reason or "falsified"})
+            continue
+
+        if disposition == "contested":
+            if depth == "deep":
+                contested.append(graded)
+            else:
+                suppressed.append({"id": graded["id"], "reason": "refuted"})
+            continue
+
+        # A limitation is something the protocol could not evaluate; a question is
+        # a decision that needs its owner. Both are worth reporting and neither is
+        # a defect, so neither reaches the verdict.
+        record_kind = graded.get("kind", "finding")
+        if record_kind == "limitation":
+            limitations.append(graded)
+            continue
+        if record_kind == "question":
+            questions.append(graded)
+            continue
+
+        graded["effective_severity"] = effective_severity(graded)
+        graded["blocking"] = is_blocking(graded)
+        survivors.append(graded)
+
+    survivors.sort(key=finding_order)
+    limitations.sort(key=finding_order)
+    questions.sort(key=finding_order)
+
+    blocking = [f for f in survivors if f["blocking"]]
+    verdict = compute_verdict(blocking, model, prepass, survivors, contested)
+    payload = {
+        "verdict": verdict,
+        "findings": survivors,
+        "limitations": limitations,
+        "questions": questions,
+        "contested": contested,
+        "suppressed": suppressed,
+        "suppressed_count": len(suppressed),
+        "depth": depth,
+        # Telemetry a caller can calibrate on. A run where nothing was ever
+        # re-graded and every survivor shares one severity is a statement about
+        # the reviewer, not about the artifact — but only across runs, which is
+        # why these are counts to accumulate rather than a flag to act on here.
+        "severity_histogram": {
+            level: sum(1 for f in survivors if f["effective_severity"] == level)
+            for level in SEVERITIES
+            if any(f["effective_severity"] == level for f in survivors)
+        },
+        "blocking_count": len(blocking),
+        "advisory_count": len(survivors) - len(blocking),
+        # Without this a caller rendering `blocking_count` sees a non-PASS verdict
+        # beside zero blocking findings, since a pending contest escalates from
+        # `contested[]` and is withheld from `findings[]`.
+        "contested_count": len(contested),
+        # Files that appeared after the artifact was captured. Mostly the review's own
+        # check output, which is why they do not refuse the run — but a `PASS` that
+        # silently stopped short of real new work would be the same lie by omission the
+        # suppressed count exists to prevent, so the caller is told either way.
+        "unreviewed_paths": unreviewed,
+        "regrade_count": sum(1 for f in survivors if f.get(ADJUDICATED_SEVERITY)),
+    }
+    if gate_chain:
+        payload["chain"] = gate_chain
+    return VERDICT_EXIT[verdict], payload
+
+
+def compute_verdict(
+    blocking: list[dict[str, Any]], model: dict[str, Any], prepass: dict[str, Any],
+    survivors: list[dict[str, Any]] | None = None,
+    contested: list[dict[str, Any]] | None = None,
+) -> str:
+    """`blocking` is the subset that may escalate; `survivors` is everything reported.
+
+    They differ by the advisories — real findings that no stage beyond promote
+    stood behind. Those still print, and they still say `PASS` is not a clean bill
+    of health, but they do not by themselves buy the caller another fix round.
+
+    `contested` is the deep path's pending disputes, and it never yields `PASS`.
+    """
+    contested = contested or []
+    # NOT_REVIEWABLE is evaluated first and is never a synonym for PASS: a review
+    # that could not happen must not read like one that found nothing.
+    if not model.get("resolved", False):
+        return "NOT_REVIEWABLE"
+    # A *contested* unfalsifiable-claim is deliberately not enough: the stages disagreed
+    # over whether the artifact can be reviewed at all, which is a pending dispute to
+    # adjudicate, not an established finding that no review happened.
+    if prepass.get("status") == "could-not-run" and any(
+        f.get("category") == "unfalsifiable-claim"
+        for f in (survivors if survivors is not None else blocking)
+    ):
+        return "NOT_REVIEWABLE"
+
+    severities = {effective_severity(f) for f in blocking}
+    if "CRITICAL" in severities or any(
+        effective_severity(f) == "CRITICAL" for f in contested
+    ):
+        return "CRITICAL_ISSUES"
+    # A pending contest has no settled grade — tiebreak may re-grade it in either
+    # direction — so it cannot buy `PASS` even at LOW. `manifest` already refuses the
+    # state; the verdict has to refuse it too, because a caller that stops at exit 0
+    # never reaches the manifest to be told.
+    if severities & {"HIGH", "MEDIUM"} or contested:
+        return "NEEDS_FIXES"
+    return "PASS"
+
+
+# --- staging and merging the refute stage -----------------------------------------
+
+# Six fields and no more. The claim and the evidence get tested; how the promoter
+# arrived at them would tell the refuter what to think, which is what this stage
+# exists to withhold.
+CLAIM_FIELDS = ("id", "severity", "confidence", "category", "claim", "evidence")
+
+
+def build_claims(findings_path: str, resolve_path: str,
+                 id_prefix: str = "F") -> dict[str, Any]:
+    """Assign IDs, then split what refute judges from what it has no mandate over.
+
+    Refute keys judgments by id, so ids must exist before it runs, not after.
+    """
+    findings = load_json(findings_path, "findings")
+    resolved = load_json(resolve_path, "resolve")
+    link = link_from(resolved, "claims", "resolve")
+    if isinstance(findings, dict):
+        raise UsageError(
+            "claims takes the promote stage's bare array, not a quick-shaped object: "
+            "quick depth has no separate refute stage to stage claims for"
+        )
+    if not isinstance(findings, list):
+        raise UsageError("findings input must be a JSON array")
+    for index, finding in enumerate(findings):
+        validate_finding(finding, index, id_prefix)
+        # Re-staging an adjudicated finding is a re-roll: the ruling that killed it is
+        # discarded and a fresh refute round gets to answer the same claim differently.
+        # One refutation per claim, so a stage that already ruled ends the matter.
+        if finding.get("stage") in ("refute", "tiebreak") \
+                or finding.get("disposition", "standing") != "standing":
+            raise UsageError(
+                f"finding {index} has already been adjudicated (stage "
+                f"{finding.get('stage')!r}, disposition "
+                f"{finding.get('disposition', 'standing')!r}): claims stages the promote "
+                f"stage's output, and a ruled claim is not re-opened"
+            )
+    findings = list(findings)
+    findings.sort(key=finding_order)
+    assign_ids(findings, id_prefix)
+
+    judged = [f for f in findings if f.get("kind", "finding") == "finding"]
+    carried = [f for f in findings if f.get("kind", "finding") != "finding"]
+    return {
+        "claims": [{k: f[k] for k in CLAIM_FIELDS} for f in judged],
+        "findings": findings,
+        "carried_kinds": sorted({f["kind"] for f in carried}),
+        "chain": link,
+    }
+
+
+def merge_judgments(
+    findings_path: str, judgments_path: str, stage: str = "refute",
+) -> dict[str, Any]:
+    """Apply refute's or tiebreak's rulings, and prove the stage actually ran."""
+    if stage not in ("refute", "tiebreak"):
+        raise UsageError(f"stage must be refute or tiebreak, got {stage!r}")
+    source = load_json(findings_path, "findings")
+    judgments = load_json(judgments_path, "judgments")
+    link = link_from(source, "merge", "findings", stage=stage)
+    previous = chain_of(source, "findings")
+    # A tiebreak adjudicates a refute stage's disagreements, so one has to have run.
+    # Without this, `merge --stage tiebreak` on `claims` output found nothing contested,
+    # accepted `[]` judgments, and emitted an envelope whose findings had never been
+    # refuted at all.
+    if stage == "tiebreak" and previous.get("stage") != "refute":
+        raise UsageError(
+            "tiebreak expects the output of `merge --stage refute`: nothing has been "
+            "contested yet, so there is no disagreement to adjudicate"
+        )
+    if stage == "refute" and previous["step"] != "claims":
+        raise UsageError("refute merge expects `claims` output")
+    findings = source["findings"] if isinstance(source, dict) else source
+    if not isinstance(findings, list):
+        raise UsageError("findings input must be `claims` output or a JSON array")
+    if not isinstance(judgments, list):
+        raise UsageError("judgments input must be a JSON array")
+
+    by_id: dict[str, dict[str, Any]] = {}
+    for index, finding in enumerate(findings):
+        if not isinstance(finding, dict):
+            raise UsageError(f"finding {index} is not an object")
+        finding_id = finding.get("id")
+        if not finding_id:
+            raise UsageError(
+                f"finding {index} has no id: run `claims` before the {stage} stage so "
+                f"its judgments have something to key on"
+            )
+        if finding_id in by_id:
+            raise UsageError(f"duplicate finding id: {finding_id}")
+        by_id[finding_id] = finding
+
+    # tiebreak rules only on what was contested; refute must answer every claim.
+    expected = {i for i, f in by_id.items() if f.get("kind", "finding") == "finding"}
+    if stage == "tiebreak":
+        expected = {i for i in expected
+                    if by_id[i].get("disposition") == "contested"}
+
+    seen: set[str] = set()
+    for index, judgment in enumerate(judgments):
+        if not isinstance(judgment, dict):
+            raise UsageError(f"judgment {index} is not an object")
+        judgment_id = judgment.get("id")
+        if judgment_id not in by_id:
+            raise UsageError(
+                f"judgment {index} names unknown finding id {judgment_id!r} "
+                f"(known: {', '.join(sorted(by_id))})"
+            )
+        if judgment_id in seen:
+            raise UsageError(f"two judgments for finding {judgment_id}")
+        seen.add(judgment_id)
+        finding = by_id[judgment_id]
+        if finding.get("kind", "finding") != "finding":
+            raise UsageError(
+                f"judgment for {judgment_id} judges a "
+                f"{finding.get('kind')}: only findings are refutable"
+            )
+        disposition = judgment.get("disposition")
+        if disposition not in DISPOSITIONS:
+            raise UsageError(
+                f"judgment for {judgment_id} has invalid disposition: {disposition!r}"
+            )
+        # Tiebreak is the last word, so it has to produce one.
+        if stage == "tiebreak" and disposition == "contested":
+            raise UsageError(
+                f"tiebreak returned `contested` for {judgment_id}: it adjudicates the "
+                f"disagreement, and re-contesting leaves a deep review with an "
+                f"unresolved dispute the manifest will refuse to record"
+            )
+        reason = judgment.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise UsageError(
+                f"judgment for {judgment_id} has no reason: it is the audit record "
+                f"for why a finding lived or died, and tiebreak is handed it verbatim"
+            )
+        finding["disposition"] = disposition
+        finding["stage"] = stage
+        finding["ruling_reason"] = reason
+        # Presence, not truthiness: `severity: ""` and `confidence: 0` were silently
+        # dropped, leaving the promoter's proposal in force under a ruling.
+        if "confidence" in judgment:
+            if judgment["confidence"] not in CONFIDENCES:
+                raise UsageError(
+                    f"judgment for {judgment_id} has invalid confidence: "
+                    f"{judgment['confidence']!r}"
+                )
+            finding["confidence"] = judgment["confidence"]
+        if "severity" in judgment:
+            if judgment["severity"] not in SEVERITIES:
+                raise UsageError(
+                    f"judgment for {judgment_id} has invalid severity: "
+                    f"{judgment['severity']!r}"
+                )
+            finding[ADJUDICATED_SEVERITY] = judgment["severity"]
+        if "counter_evidence" in judgment:
+            if not isinstance(judgment["counter_evidence"], list):
+                raise UsageError(
+                    f"judgment for {judgment_id} has non-array counter_evidence"
+                )
+            finding["counter_evidence"] = judgment["counter_evidence"]
+
+    # Tiebreak rules on the contested set and nothing else. Without this it could
+    # refute a standing finding nobody had disputed.
+    out_of_scope = sorted(seen - expected)
+    if out_of_scope:
+        raise UsageError(
+            f"{stage} ruled on {', '.join(out_of_scope)}, which "
+            f"{'was not contested' if stage == 'tiebreak' else 'it was not given'}"
+        )
+    unanswered = sorted(expected - seen)
+    if unanswered:
+        raise UsageError(
+            f"{stage} returned no judgment for {', '.join(unanswered)}: a stage that "
+            f"skipped a claim did not review it, and the result cannot be recorded as "
+            f"though it had"
+        )
+    return {"findings": findings, "stage": stage, "judged": len(seen), "chain": link}
+
+
+# --- replay manifest --------------------------------------------------------------
+
+def build_manifest(
+    resolve_path: str, prepass_path: str, model_path: str, gate_path: str, lens: str | None,
+    repo_root: Path | None = None, verify_artifact: bool = True,
+) -> dict[str, Any]:
+    resolved = load_json(resolve_path, "resolve")
+    prepass = load_json(prepass_path, "prepass")
+    model = load_json(model_path, "model")
+    gate_result = load_json(gate_path, "gate")
+
+    # The manifest is the replay record. Built from the wrong objects it emits a
+    # well-formed document full of nulls, which reads as a run that happened and
+    # found nothing rather than as the mistake it is.
+    for label, payload, required in (
+        ("resolve", resolved, ("profile", "target_kind", "target_ref", "artifact_hash")),
+        ("prepass", prepass, ("status", "checks")),
+        ("model", model, ("resolved", "independence")),
+        ("gate", gate_result, ("verdict", "findings", "suppressed_count")),
+    ):
+        if not isinstance(payload, dict):
+            raise UsageError(f"{label} input must be a JSON object")
+        missing = [field for field in required if field not in payload]
+        if missing:
+            raise UsageError(
+                f"{label} input is not a {label} result: missing {', '.join(missing)}"
+            )
+
+    # Depth comes from the gate, never from resolve: resolve only ever offered a
+    # suggestion, and a caller that overrode it would otherwise be misrecorded.
+    depth = gate_result.get("depth", "standard")
+
+    # A gate result from a different run, or from a pipeline that skipped a stage,
+    # would otherwise be recorded against this artifact.
+    if depth != "quick":
+        gate_link = chain_of(gate_result, "gate")
+        resolve_link = chain_of(resolved, "resolve")
+        if gate_link["run_id"] != resolve_link["run_id"]:
+            raise UsageError(
+                f"gate result belongs to run {gate_link['run_id']}, but resolve opened "
+                f"{resolve_link['run_id']}: these are different reviews"
+            )
+        if gate_link["artifact_hash"] != resolve_link["artifact_hash"]:
+            raise UsageError("gate result was computed against a different artifact")
+
+    # `contested[]` is the deep pipeline's mid-flight state, cleared by routing it to
+    # tiebreak and re-running the gate. Recording it as final published a PASS over a
+    # dispute nobody settled.
+    if gate_result.get("contested"):
+        raise UsageError(
+            f"gate result still has {len(gate_result['contested'])} contested "
+            f"finding(s): route them to tiebreak, merge the rulings, and re-run gate "
+            f"before recording the manifest"
+        )
+
+    # The manifest re-reads these two rather than taking the gate's word, so without
+    # this a caller could gate on one pre-pass and record another — publishing a replay
+    # record whose ground truth belongs to a different run than the verdict above it.
+    resolve_run = chain_of(resolved, "resolve")["run_id"]
+    for label, payload, step in (("prepass", prepass, "prepass"),
+                                 ("model", model, "select-model")):
+        link = chain_of(payload, label)
+        if link["step"] != step:
+            raise UsageError(f"{label} input was produced by {link['step']!r}, not {step!r}")
+        if link["run_id"] != resolve_run:
+            raise UsageError(
+                f"{label} input belongs to run {link['run_id']}, but resolve opened "
+                f"{resolve_run}: the manifest would record another run's {label}"
+            )
+
+    if verify_artifact:
+        # Every stage judges the artifact resolve hashed. If the tree moved under
+        # the review — a fix applied mid-run, a rebase, a concurrent edit — the
+        # later stages reviewed something the earlier ones never saw, and the
+        # refute stage will "refute" real findings because they no longer
+        # reproduce. That reads as a clean run and is the opposite of one.
+        verify_artifact_is_current(resolved, repo_root or Path("."))
+
+    # A quick pass self-refutes inside one context, so it cannot claim structural
+    # independence no matter which family ran it. Independence only ever degrades.
+    independence = model.get("independence", "reduced")
+    if depth == "quick":
+        independence = "reduced"
+
+    return {
+        "reviewer": {
+            "alias": model.get("alias"),
+            "family": model.get("family"),
+            "provider": model.get("provider"),
+            "model": model.get("model"),
+            "thinking": model.get("thinking"),
+            "independence": independence,
+        },
+        "target": {
+            "kind": resolved.get("target_kind"),
+            "ref": resolved.get("target_ref"),
+            "artifact_hash": resolved.get("artifact_hash"),
+            "size_metric": resolved.get("size_metric"),
+        },
+        "profile": resolved.get("profile"),
+        "depth": depth,
+        "lens": lens,
+        "prepass": {
+            "status": prepass.get("status"),
+            "checks": [
+                {k: check.get(k) for k in ("name", "command", "exit_code", "status")}
+                for check in prepass.get("checks", [])
+            ],
+        },
+        "suppressed_count": gate_result.get("suppressed_count", 0),
+        # Calibration telemetry. One run cannot tell you whether a reviewer grades
+        # well — a narrow review may honestly find one class of defect. Accumulated
+        # across runs, a reviewer that never re-grades and never files a limitation
+        # is describing itself rather than the artifacts.
+        "severity_histogram": gate_result.get("severity_histogram", {}),
+        "blocking_count": gate_result.get("blocking_count", 0),
+        "advisory_count": gate_result.get("advisory_count", 0),
+        "regrade_count": gate_result.get("regrade_count", 0),
+        "limitation_count": len(gate_result.get("limitations", [])),
+        "question_count": len(gate_result.get("questions", [])),
+        # Part of the replay record because it bounds what the verdict covered: these
+        # appeared after the artifact was captured and no stage looked at them.
+        "unreviewed_paths": gate_result.get("unreviewed_paths", []),
+        "verdict": gate_result.get("verdict"),
+    }
+
+
+# --- cli --------------------------------------------------------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="adversarial-review",
+        description="Mechanical layer of the adversarial-review skill.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    resolve_cmd = sub.add_parser("resolve", help="classify a target and suggest a depth")
+    resolve_cmd.add_argument("--target", default="", help="path, git range, or empty for worktree")
+    resolve_cmd.add_argument("--profile", help=f"override detection ({', '.join(PROFILES)})")
+    resolve_cmd.add_argument("--repo-root", default=".", help="repository root")
+    resolve_cmd.add_argument(
+        "--diff-file", help="read the diff from a file instead of git (testing seam)"
+    )
+
+    prepass_cmd = sub.add_parser("prepass", help="run the deterministic ground-truth checks")
+    prepass_cmd.add_argument("--profile", required=True, help=", ".join(PROFILES))
+    prepass_cmd.add_argument("--target", default="", help="path, git range, or empty for worktree")
+    prepass_cmd.add_argument("--repo-root", default=".", help="repository root")
+    prepass_cmd.add_argument("--resolve", required=True,
+                             help="ResolveResult JSON — anchors the pre-pass to this run")
+    prepass_cmd.add_argument(
+        "--diff-file", help="read the diff from a file instead of git (testing seam)"
+    )
+    prepass_cmd.add_argument(
+        "--check-cmd", action="append", default=[],
+        help="exact shell command, repeatable; overrides code-check discovery",
+    )
+
+    select_cmd = sub.add_parser("select-model", help="pick and preflight an independent reviewer")
+    select_cmd.add_argument(
+        "--author-family", required=True,
+        help="model family that produced the artifact; excluded from selection",
+    )
+    select_cmd.add_argument("--model", help="force a specific alias, skipping family exclusion")
+    select_cmd.add_argument("--resolve", required=True,
+                            help="ResolveResult JSON — anchors the selection to this run")
+    select_cmd.add_argument(
+        "--check-cmd", default=DEFAULT_CHECK_CMD,
+        help=f"preflight command, alias appended (default: {DEFAULT_CHECK_CMD})",
+    )
+
+    gate_cmd = sub.add_parser("gate", help="validate, grade, and adjudicate findings")
+    gate_cmd.add_argument("--findings", required=True, help="JSON array of Finding")
+    gate_cmd.add_argument("--model", required=True, help="ModelSelection JSON from select-model")
+    gate_cmd.add_argument("--prepass", required=True, help="PrepassResult JSON from prepass")
+    gate_cmd.add_argument(
+        "--depth", default="standard", choices=("quick", "standard", "deep"),
+        help="depth actually used; echoed into GateResult for the manifest",
+    )
+    gate_cmd.add_argument("--repo-root", default=".", help="repository root")
+    gate_cmd.add_argument("--resolve", required=True,
+                          help="ResolveResult JSON — the run and artifact being judged")
+    gate_cmd.add_argument(
+        "--no-verify-artifact", action="store_true",
+        help="skip the check that the tree still matches what resolve hashed; a stale "
+             "but internally consistent bundle then reads as a current review",
+    )
+    gate_cmd.add_argument(
+        "--id-prefix", default="F",
+        help="prefix for assigned finding IDs; give concurrent invocations distinct "
+             "prefixes so a caller merging them cannot collide",
+    )
+
+    claims_cmd = sub.add_parser(
+        "claims", help="assign IDs and stage the refute stage's claim subset")
+    claims_cmd.add_argument("--findings", required=True, help="promote stage output")
+    claims_cmd.add_argument("--resolve", required=True,
+                            help="ResolveResult JSON — anchors the claims to this run")
+    claims_cmd.add_argument(
+        "--id-prefix", default="F",
+        help="prefix for assigned finding IDs; must match the later gate invocation")
+
+    merge_cmd = sub.add_parser(
+        "merge", help="apply refute or tiebreak rulings and prove the stage ran")
+    merge_cmd.add_argument("--findings", required=True,
+                           help="the ID-assigned findings from `claims`")
+    merge_cmd.add_argument("--judgments", required=True, help="the stage's rulings")
+    merge_cmd.add_argument("--stage", default="refute", choices=("refute", "tiebreak"))
+
+    manifest_cmd = sub.add_parser("manifest", help="assemble the replay record")
+    manifest_cmd.add_argument("--resolve", required=True, help="ResolveResult JSON")
+    manifest_cmd.add_argument("--prepass", required=True, help="PrepassResult JSON")
+    manifest_cmd.add_argument("--model", required=True, help="ModelSelection JSON")
+    manifest_cmd.add_argument("--gate", required=True, help="GateResult JSON")
+    manifest_cmd.add_argument("--lens", help="lens the review was narrowed to, if any")
+    manifest_cmd.add_argument("--repo-root", default=".", help="repository root")
+    manifest_cmd.add_argument(
+        "--verify-artifact", action="store_true",
+        help="accepted and ignored; re-hashing is the default and this used to enable it",
+    )
+    manifest_cmd.add_argument(
+        "--no-verify-artifact", action="store_true",
+        help="skip the re-hash. An opt-in guarantee is one most callers never opt into, "
+             "so the flag now turns the check off rather than on",
+    )
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    exit_code = 0
+    try:
+        # Not every subcommand is repo-scoped — select-model only talks to preflight.
+        repo_root = Path(getattr(args, "repo_root", ".")).resolve()
+        if hasattr(args, "repo_root") and not repo_root.is_dir():
+            raise UsageError(f"repo root does not exist: {repo_root}")
+        if args.command == "resolve":
+            payload = resolve_target(args.target, args.profile, repo_root, args.diff_file)
+            payload["chain"] = {
+                "run_id": secrets.token_hex(8),
+                "artifact_hash": payload["artifact_hash"],
+                "step": "resolve",
+                "predecessor": None,
+            }
+        elif args.command == "prepass":
+            resolved = load_json(args.resolve, "resolve")
+            # Falls back to the run's own record so a caller reviewing a detached diff
+            # need not repeat `--diff-file` at every stage to keep the hashes agreeing.
+            diff_file = args.diff_file
+            if diff_file is None and isinstance(resolved, dict):
+                diff_file = resolved.get("diff_file")
+            untracked = None
+            if isinstance(resolved, dict) and resolved.get("untracked_paths") is not None:
+                untracked = resolved["untracked_paths"]
+            exit_code, payload = run_prepass(
+                args.profile, args.target, repo_root, args.check_cmd, diff_file, untracked
+            )
+            payload["chain"] = link_from(resolved, "prepass", "resolve")
+        elif args.command == "select-model":
+            exit_code, payload = select_reviewer(args.author_family, args.model, args.check_cmd)
+            payload["chain"] = link_from(
+                load_json(args.resolve, "resolve"), "select-model", "resolve"
+            )
+        elif args.command == "gate":
+            exit_code, payload = run_gate(
+                args.findings, args.model, args.prepass, args.depth, repo_root,
+                args.id_prefix, args.resolve, not args.no_verify_artifact,
+            )
+        elif args.command == "claims":
+            payload = build_claims(args.findings, args.resolve, args.id_prefix)
+        elif args.command == "merge":
+            payload = merge_judgments(args.findings, args.judgments, args.stage)
+        elif args.command == "manifest":
+            payload = build_manifest(
+                args.resolve, args.prepass, args.model, args.gate, args.lens,
+                repo_root, not args.no_verify_artifact,
+            )
+        else:  # pragma: no cover - argparse rejects unknown subcommands
+            raise UsageError(f"unhandled command: {args.command}")
+    except (UsageError, OSError, ValueError, TypeError, KeyError) as exc:
+        print(f"adversarial-review: {exc}", file=sys.stderr)
+        return 2
+
+    print(json.dumps(payload, sort_keys=True))
+    return exit_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
