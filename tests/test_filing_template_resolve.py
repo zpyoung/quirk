@@ -482,3 +482,105 @@ def test_discover_and_fields_agree_across_both_yaml_tiers(
     without_pyyaml = template_resolve.discover(root)
 
     assert without_pyyaml == with_pyyaml
+
+
+# ---- production-review round 2 -------------------------------------------
+
+
+FENCED_MARKDOWN = """\
+---
+name: Bug report
+labels: bug
+---
+
+## What happened
+
+Describe it.
+
+```
+## Not a real section
+  File "x.py", line 1
+```
+
+## Environment
+"""
+
+DUPLICATE_HEADINGS = """\
+---
+name: Bug report
+labels: bug
+---
+
+## Client
+### Version
+## Server
+### Version
+"""
+
+STRING_REQUIRED_FORM = """\
+name: Bug Report
+labels: ["bug"]
+body:
+  - type: textarea
+    id: optional_notes
+    attributes:
+      label: Notes
+    validations:
+      required: "false"
+"""
+
+
+def test_headings_inside_a_fenced_block_are_not_sections(
+    template_resolve, tmp_path: Path,
+) -> None:
+    # a template showing example output is displaying text, not declaring a section
+    entries = _fields_for(template_resolve, tmp_path, "bug.md", FENCED_MARKDOWN, "bug")
+    names = [entry["name"] for entry in entries]
+    assert "not_a_real_section" not in names
+    assert names[:2] == ["what_happened", "environment"]
+
+
+def test_two_sections_that_slug_alike_both_survive(template_resolve, tmp_path: Path) -> None:
+    # a template asking for a client version and a server version is asking twice; collapsing
+    # them by name silently drops the maintainer's second question
+    entries = _fields_for(template_resolve, tmp_path, "bug.md", DUPLICATE_HEADINGS, "bug")
+    names = [entry["name"] for entry in entries]
+    assert names[:4] == ["client", "version", "server", "version_2"]
+
+
+def test_non_boolean_required_is_not_truthiness_coerced(
+    template_resolve, tmp_path: Path,
+) -> None:
+    # `validations.required` is a YAML boolean; `"false"` is schema-invalid and coercing it
+    # makes the template add a requirement it explicitly declined to add
+    entries = _fields_for(template_resolve, tmp_path, "bug.yml", STRING_REQUIRED_FORM, "bug")
+    assert _by_name(entries)["optional_notes"]["required"] is False
+
+
+def test_filename_stem_narrows_two_identity_matches_rather_than_widening(
+    template_resolve,
+) -> None:
+    # both declare themselves as bug templates; the stem is the tie-break the ordered rule
+    # specifies, so this settles rather than asking the user
+    candidates = [
+        _candidate(name="Bug Report", stem="bug"),
+        _candidate(name="Defect Report", stem="question"),
+    ]
+    result = template_resolve.select(candidates, "bug")
+    assert result["resolution"] == "single"
+    assert result["template"]["filename_stem"] == "bug"
+
+
+def test_a_stem_only_candidate_never_outvotes_two_self_declaring_templates(
+    template_resolve,
+) -> None:
+    # narrowing must stay inside the identity matches -- a candidate that declared nothing
+    # cannot win over templates that did
+    candidates = [
+        _candidate(name="Bug Report", stem="one"),
+        _candidate(name="Defect Report", stem="two"),
+        _candidate(name="Support question", stem="bug_ish"),
+    ]
+    result = template_resolve.select(candidates, "bug")
+    assert result["resolution"] == "ambiguous"
+    assert [c["name"] for c in result["ambiguous_candidates"]] == ["Bug Report", "Defect Report"]

@@ -313,8 +313,12 @@ template_resolve.py fields --type bug|feature|code-change [--template <path|-> |
   it does not abort discovery for the rest of the repo. `logic.md` doesn't address malformed
   templates; failing the whole session over one bad file would be a worse outcome than skipping it.
 - `select` — takes `discover`'s output (already has-body-filtered) and applies step 2/3 of the
-  ordered rule: match `name`/`labels`/`filename_stem` against the per-type keyword lists
-  ([§Choosing among templates](./logic.md#choosing-among-templates)); output
+  ordered rule against the per-type keyword lists
+  ([§Choosing among templates](./logic.md#choosing-among-templates)): first `name`/`labels`, and
+  if that does not yield exactly one, `filename_stem`. **The stem narrows the identity matches
+  rather than widening them** — it is the tie-break the ordered rule names, so two
+  self-declaring templates are settled by whichever the filename also names, while a candidate
+  that declared nothing never outvotes ones that did. Output
   `{"resolution": "single"|"ambiguous"|"none", "template": {...}|null, "ambiguous_candidates": [...]}`.
   All three resolutions are exit `0` — "ambiguous" and "none" are valid outcomes the caller must
   act on (ask the user; fall back to the per-type core), not error states.
@@ -455,6 +459,12 @@ drift_apply.py --input <path|-> --to bug|feature [--output <path>]
   how a field gets discarded, and "nothing is ever discarded" admits no exception for collisions
   the tables didn't anticipate. A merge with no `lead_in` of its own uses
   `Also supplied for <name>:`.
+- Postcondition: a `halted` key on the input is **dropped**, not carried. The halt was computed
+  against the source type's field set and may name a field the destination type does not have;
+  carried over, it would block the drifted document permanently, and since `--for-emission` now
+  honors a stored halt (see [The non-waivable gate](#the-non-waivable-gate)) there would be no
+  way past it. Drift is itself the "keep working on it" exit from a halt — re-deriving is the
+  point.
 - Postcondition: `template.fields` is carried across the same mapping the values took, whenever
   the document already has one. Left behind, the union the emission gate reads still describes
   the *source* type: `--for-emission` reports the source type's fields missing and never enforces
@@ -468,9 +478,15 @@ drift_apply.py --input <path|-> --to bug|feature [--output <path>]
   here would manufacture the exact silent fallback the key exists to prevent.
   **Tech-spec call (logic.md silent):** an `append_or_become` row appends **only when the merge
   keeps both provenance claims true** — that is, when the incoming field has content and its
-  provenance is at least as strong as the destination's (`observed` > `reported` > `inferred` >
-  `missing`). Otherwise the incoming field is retained under its *own* name instead, exactly as
-  an unmapped field would be.
+  provenance *equals* the destination's (`observed` > `reported` > `inferred` > `missing`).
+  Otherwise the incoming field is retained under its *own* name instead, exactly as an unmapped
+  field would be. When two `observed` fields do merge, their `source` values are unioned, since
+  `verified_against` entries are matched against field sources and keeping only one would strand
+  the other's citation.
+
+  Equality, not "at least as strong", is the condition — a stronger incoming understates its own
+  claim harmlessly, but the merged field has one `source` slot, so the incoming's citation would
+  be dropped and every `verified_against` entry naming it would fail validation.
 
   Two locked rules collide here. The carry-over tables say `problem` appends onto
   `current_behavior`; [§Data flow](./logic.md#data-flow) says "every carried field keeps the
@@ -639,7 +655,16 @@ composed from the section-boundary rule and the slug convention:
 **Markdown template.** Each `##`-or-deeper heading is one section boundary (above), and its
 canonical field name is `slugify(<heading text>, sep="_")` — the heading text with any leading
 markdown markers and trailing punctuation stripped. The section's content is everything up to the
-next heading at any depth.
+next heading at any depth. A heading inside a fenced code block (` ``` ` or `~~~`) is **not** a
+section boundary: a template showing example output or a traceback is displaying text, and
+treating it as a declaration injects a field the maintainer never asked for into the interview.
+
+**Two template sections whose names slug alike are still two sections**, in either kind. The
+second and subsequent get a `_2`, `_3` suffix rather than collapsing onto the first — a template
+asking for a client version and a server version under separate parents is asking twice, and
+merging them by name drops the maintainer's second question. This applies only to
+*template-internal* duplicates; a template name that collides with a **core** name is the same
+field, which is exactly what the snake_case convention exists to make recognizable.
 
 Both produce snake_case, matching the per-type core naming convention — `current_behavior`, not
 `current-behavior` — which is what lets a template-derived name collide with a core name and be
@@ -662,10 +687,14 @@ template](./logic.md#required-sections-in-a-template)'s three ordered rules, ide
 and markdown:
 
 1. The template's sections, in its own order, seed the field list.
-2. `required: true` comes from a YAML form's `validations.required`; a markdown template
-   contributes **no** requiredness markings (it has no mechanism to). In both cases the per-type
-   core is additive: any core field the template's section list omits is appended, in core order,
-   after the template's own sections, marked `required: true`.
+2. `required: true` comes from a YAML form's `validations.required`, read **strictly** — the key
+   must be the YAML boolean `true`. Anything else (a quoted `"false"`, a number, a missing
+   `validations` block) is not a requiredness marking, because truthiness-coercing a
+   schema-invalid value would have the template add a requirement it explicitly declined to add,
+   inverting rule 2's own direction. A markdown template contributes **no** requiredness markings
+   (it has no mechanism to). In both cases the per-type core is additive: any core field the
+   template's section list omits is appended, in core order, after the template's own sections,
+   marked `required: true`.
 3. The non-waivable gate is global and cannot be unset by a template of either kind: on a `feature`
    request, `problem` and `acceptance_criteria` are forced `required: true` in the output
    regardless of what the template declared or omitted.

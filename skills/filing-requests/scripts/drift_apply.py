@@ -74,15 +74,21 @@ def _rank(entry: dict) -> int:
 def _can_merge_into(existing: dict, incoming: dict) -> bool:
     """Whether appending `incoming` onto `existing` keeps both provenance claims true.
 
-    A field has exactly one provenance slot, so an append makes the destination's provenance
-    speak for the incoming content too. That is honest only when the incoming claim is at
-    least as strong: folding `reported` text into an `observed` field would assert it was
-    verified, and folding a `missing` field in would lose its reason entirely. Two locked
-    rules collide here -- the carry-over tables' `append_or_become`, and "every carried field
-    keeps the provenance it already had" -- and provenance wins, because it is the invariant
-    the renderer enforces rather than a mapping the caller can re-derive.
+    A field has exactly one provenance slot and one `source` slot, so an append makes the
+    destination's provenance speak for the incoming content too. That is honest only when the
+    two claims are *equal*:
+
+    - a weaker incoming (`reported` into `observed`) would assert it was verified, and a
+      `missing` one would lose its reason entirely;
+    - a stronger incoming (`observed` into `reported`) understates the claim, which is safe on
+      its own -- but it strands the incoming's `source`, and `verified_against` cites that
+      source, so the drift would produce a document that no longer validates.
+
+    Two locked rules collide here -- the carry-over tables' `append_or_become`, and "every
+    carried field keeps the provenance it already had" -- and provenance wins, because it is
+    the invariant the renderer enforces rather than a mapping the caller can re-derive.
     """
-    return _has_content(incoming) and _rank(incoming) >= _rank(existing)
+    return _has_content(incoming) and _rank(incoming) == _rank(existing)
 
 
 def _merge(existing: dict, incoming: dict, lead_in: str) -> dict:
@@ -90,6 +96,14 @@ def _merge(existing: dict, incoming: dict, lead_in: str) -> dict:
     merged["value"] = f"{existing['value']}\n\n{lead_in}\n{incoming['value']}"
     if incoming.get("needs_confirmation") is True:
         merged["needs_confirmation"] = True
+    # two observed claims each cite what verified them, and `verified_against` entries are
+    # matched against field sources -- keeping only one would strand the other's citation
+    existing_source, incoming_source = existing.get("source"), incoming.get("source")
+    if isinstance(incoming_source, str) and incoming_source.strip():
+        if not isinstance(existing_source, str) or not existing_source.strip():
+            merged["source"] = incoming_source
+        elif incoming_source not in existing_source:
+            merged["source"] = f"{existing_source}; {incoming_source}"
     return merged
 
 
@@ -211,6 +225,10 @@ def apply_drift(doc: dict, to: str) -> dict:
     new_doc = dict(doc)
     new_doc["type"] = to
     new_doc["fields"] = list(mapped.values())
+    # a halt was computed against the *source* type's field set -- carrying it over would block
+    # the destination on a field the new type may not even have. Drift is itself the "keep
+    # working on it" exit from a halt, so re-deriving is the whole point.
+    new_doc.pop("halted", None)
 
     template = doc.get("template")
     if isinstance(template, dict):

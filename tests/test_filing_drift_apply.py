@@ -607,3 +607,69 @@ def test_drifted_feature_missing_acceptance_criteria_halts_at_emission(
     assert verdict["halted"] is not None
     assert verdict["halted"]["field"] in ("problem", "acceptance_criteria")
     assert not any(e["path"].endswith("steps_to_reproduce") for e in verdict["errors"])
+
+
+# ---- production-review round 2 -------------------------------------------
+
+
+def test_stronger_incoming_is_retained_so_its_source_is_not_stranded(
+    drift_apply, canonical_schema,
+) -> None:
+    # merging an `observed` field into a `reported` one understates the claim, which is safe --
+    # but it drops the incoming's `source`, and verified_against cites that source, so the
+    # drifted document would no longer validate
+    doc = _feature_doc()
+    doc["fields"] = [
+        {"name": "current_behavior", "provenance": "reported",
+         "value": "no PDF export path exists"}
+        if f["name"] == "current_behavior" else f
+        for f in doc["fields"]
+    ]
+    doc["fields"] = [
+        dict(f, provenance="observed", source="docs/finance-workflow.md")
+        if f["name"] == "problem" else f
+        for f in doc["fields"]
+    ]
+    doc["verified_against"] = ["docs/finance-workflow.md"]
+    assert canonical_schema.validate(doc)["valid"] is True
+
+    result = drift_apply.apply_drift(doc, "bug")
+    assert canonical_schema.validate(result) == {"valid": True, "errors": [], "halted": None}
+    problem = _field(result["fields"], "problem")
+    assert problem["provenance"] == "observed"
+    assert problem["source"] == "docs/finance-workflow.md"
+
+
+def test_two_observed_fields_merging_keep_both_sources(drift_apply, canonical_schema) -> None:
+    doc = _bug_doc()
+    doc["fields"] = [
+        {"name": "steps_to_reproduce", "provenance": "observed",
+         "value": "ran the export path directly", "source": "tests/test_export.py"}
+        if f["name"] == "steps_to_reproduce" else f
+        for f in doc["fields"]
+    ]
+    doc["fields"] = [
+        dict(f, provenance="observed", source="src/export.py")
+        if f["name"] == "current_behavior" else f
+        for f in doc["fields"]
+    ]
+    doc["verified_against"] = ["src/export.py", "tests/test_export.py", "pyproject.toml"]
+
+    result = drift_apply.apply_drift(doc, "feature")
+    current_behavior = _field(result["fields"], "current_behavior")
+    assert "src/export.py" in current_behavior["source"]
+    assert "tests/test_export.py" in current_behavior["source"]
+    # every verified_against entry still cites a live observed source
+    assert canonical_schema.validate(result)["valid"] is True
+
+
+def test_drift_drops_a_halt_computed_against_the_source_type(
+    drift_apply, canonical_schema,
+) -> None:
+    # the halt named a field the destination type may not even have; carrying it over would
+    # block the drifted document forever, and drift *is* the "keep working on it" exit
+    doc = _feature_doc()
+    doc["halted"] = {"field": "acceptance_criteria", "reason": "no testable condition"}
+    result = drift_apply.apply_drift(doc, "bug")
+    assert "halted" not in result
+    assert canonical_schema.validate(result, for_emission=True)["halted"] is None

@@ -574,13 +574,40 @@ def test_headless_feature_halts_even_with_every_core_field_resolved(canonical_sc
     assert "headless" in result["halted"]["reason"]
 
 
-@pytest.mark.parametrize("request_type", ["bug", "code-change"])
-def test_headless_does_not_halt_the_inspectable_types(canonical_schema, request_type) -> None:
+def _headless_code_change_doc() -> dict:
+    """A complete code-change document -- no fixture ships for this type."""
+    core = ["scope", "why_now", "blast_radius"]
+    return {
+        "schema_version": 1, "type": "code-change", "headless": True, "depth": "read",
+        "title": "Split the export pipeline out of the report renderer",
+        "target": {"kind": "github", "repo": "acme/reports", "writable": True,
+                   "third_party": "no", "visibility": "private"},
+        "template": {"applied": False, "path": None,
+                     "fields": [{"name": n, "required": True, "source": "core"} for n in core]},
+        "fields": [
+            {"name": "scope", "provenance": "observed", "value": "src/export/ and its two callers",
+             "source": "src/export/__init__.py"},
+            {"name": "why_now", "provenance": "missing", "reason": "no human in session"},
+            {"name": "blast_radius", "provenance": "observed",
+             "value": "two importers, both internal", "source": "grep -r 'from export' src/"},
+        ],
+        "verified_against": ["src/export/__init__.py"],
+        "disclosure_required": False,
+    }
+
+
+def test_headless_bug_does_not_halt(canonical_schema) -> None:
     doc = _emission_fixture("valid-bug.json")
     doc["headless"] = True
-    if request_type == "code-change":
-        return  # no code-change fixture ships; the bug path proves the type-scoped rule
     assert canonical_schema.validate(doc, for_emission=True)["halted"] is None
+
+
+def test_headless_code_change_does_not_halt(canonical_schema) -> None:
+    # the halt is scoped to `feature`; bug and code-change cores are substantially inspectable,
+    # so a headless run of either is a supported outcome rather than a hollow artifact
+    result = canonical_schema.validate(_headless_code_change_doc(), for_emission=True)
+    assert result["halted"] is None
+    assert result["valid"] is True, result["errors"]
 
 
 def test_observed_fields_require_a_non_empty_verified_against(canonical_schema) -> None:

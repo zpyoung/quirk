@@ -84,11 +84,28 @@ def _as_label_list(value) -> list:
 
 
 def _markdown_headings(body: str) -> list:
-    """Every `##`-or-deeper heading, in document order, with its content."""
+    """Every `##`-or-deeper heading, in document order, with its content.
+
+    Fenced code blocks are skipped: a template that shows example output containing `##` is
+    displaying text, not declaring a section, and treating it as one injects a field the
+    maintainer never asked for into the interview.
+    """
     sections = []
     current = None
+    fence = None
     for line in body.splitlines():
         stripped = line.strip()
+        if fence is not None:
+            if stripped.startswith(fence):
+                fence = None
+            if current is not None:
+                current["lines"].append(line)
+            continue
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            fence = stripped[:3]
+            if current is not None:
+                current["lines"].append(line)
+            continue
         if stripped.startswith("##"):
             marker = stripped.lstrip("#")
             if marker.startswith(" ") or marker == "":
@@ -190,9 +207,10 @@ def _matches(haystacks: list, request_type: str) -> bool:
 def select(candidates: list, request_type: str) -> dict:
     """logic.md step 2/3: match on declared identity, then filename stem; never pick silently.
 
-    Ordered, stopping at the first stage that yields exactly one template -- the declared
-    identity (`name`, `labels`) is a stronger signal than a filename, so a stem-only match
-    never outvotes it.
+    Ordered, stopping at the first stage that yields exactly one template. The filename stem is
+    the *tie-break*, so it narrows the identity matches rather than widening them: a stem-only
+    candidate never outvotes templates that declared themselves, and two self-declaring
+    templates are settled by whichever one the filename also names.
     """
     by_identity = [
         c for c in candidates
@@ -201,16 +219,12 @@ def select(candidates: list, request_type: str) -> dict:
     if len(by_identity) == 1:
         return {"resolution": "single", "template": by_identity[0], "ambiguous_candidates": []}
 
-    with_stem = [
-        c for c in candidates
-        if _matches(
-            [c.get("name"), c.get("filename_stem")] + list(c.get("labels") or []), request_type
-        )
-    ]
-    if len(with_stem) == 1:
-        return {"resolution": "single", "template": with_stem[0], "ambiguous_candidates": []}
+    pool = by_identity if by_identity else candidates
+    by_stem = [c for c in pool if _matches([c.get("filename_stem")], request_type)]
+    if len(by_stem) == 1:
+        return {"resolution": "single", "template": by_stem[0], "ambiguous_candidates": []}
 
-    pool = by_identity or with_stem
+    pool = by_identity or by_stem
     if pool:
         # several match: the caller asks the user to choose, listing each by name and path.
         # Picking here would be a silent change to what gets asked and emitted.
@@ -224,6 +238,26 @@ def select(candidates: list, request_type: str) -> dict:
 def _canonical_field_name(raw: str) -> str:
     slug = slugify(raw, sep="_")
     return HEADING_SYNONYMS.get(slug, slug)
+
+
+def _distinct(entries: list) -> list:
+    """Two template sections that slug alike are still two sections.
+
+    Collapsing them by name drops one -- a template asking for a client version and a server
+    version under separate parents both slug to `version`, and the maintainer's second question
+    would silently vanish from the interview.
+    """
+    seen: dict = {}
+    out = []
+    for entry in entries:
+        name = entry["name"]
+        if name not in seen:
+            seen[name] = 1
+            out.append(entry)
+            continue
+        seen[name] += 1
+        out.append(dict(entry, name=f"{name}_{seen[name]}"))
+    return out
 
 
 def _template_field_entries(parsed: dict, kind: str) -> list:
@@ -243,9 +277,12 @@ def _template_field_entries(parsed: dict, kind: str) -> list:
                     continue
                 name = _canonical_field_name(label)
             validations = element.get("validations")
-            required = bool(validations.get("required")) if isinstance(validations, dict) else False
+            # `validations.required` is a YAML boolean. Anything else is schema-invalid, and
+            # truthiness-coercing it turns `required: "false"` into a required field -- the
+            # template adding a requirement it explicitly declined to add.
+            required = isinstance(validations, dict) and validations.get("required") is True
             entries.append({"name": name, "required": required, "source": "template"})
-        return entries
+        return _distinct(entries)
 
     for section in parsed["sections"]:
         name = _canonical_field_name(section["title"])
@@ -254,7 +291,7 @@ def _template_field_entries(parsed: dict, kind: str) -> list:
         # a markdown template has no requiredness mechanism, so it contributes no markings;
         # inventing them would let a template silently subtract from the core
         entries.append({"name": name, "required": False, "source": "template"})
-    return entries
+    return _distinct(entries)
 
 
 def fields(request_type: str, parsed: dict | None, kind: str | None) -> list:
