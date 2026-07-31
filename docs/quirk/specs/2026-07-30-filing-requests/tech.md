@@ -465,6 +465,11 @@ drift_apply.py --input <path|-> --to bug|feature [--output <path>]
   honors a stored halt (see [The non-waivable gate](#the-non-waivable-gate)) there would be no
   way past it. Drift is itself the "keep working on it" exit from a halt — re-deriving is the
   point.
+- Postcondition: the carried `fields` are reordered to follow the rebuilt `template.fields`,
+  with anything the union does not name keeping its relative order behind them. The renderer
+  projects `fields` in document order and the union is where the template's structure and
+  ordering live, so leaving the values in carry-table order would emit an artifact that ignores
+  the maintainer's section order for no reason but which row happened to fire first.
 - Postcondition: `template.fields` is carried across the same mapping the values took, whenever
   the document already has one. Left behind, the union the emission gate reads still describes
   the *source* type: `--for-emission` reports the source type's fields missing and never enforces

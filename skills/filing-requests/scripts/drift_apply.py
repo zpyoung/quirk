@@ -241,8 +241,22 @@ def apply_drift(doc: dict, to: str) -> dict:
             new_template = dict(template)
             new_template["fields"] = _drift_template_fields(template_fields, table, to)
             new_doc["template"] = new_template
+            new_doc["fields"] = _in_union_order(new_doc["fields"], new_template["fields"])
 
     return new_doc
+
+
+def _in_union_order(fields: list, union: list) -> list:
+    """Reorder carried values to the rebuilt union's order.
+
+    The renderer projects `fields` in document order, and the union is where the template's
+    own structure and ordering live -- so leaving the values in carry-table order would emit an
+    artifact that ignores the maintainer's section order for no reason other than which row
+    happened to fire first. Anything the union doesn't name (a field retained beside a stronger
+    destination, say) keeps its relative order and follows behind.
+    """
+    order = {entry["name"]: i for i, entry in enumerate(union) if isinstance(entry, dict)}
+    return sorted(fields, key=lambda f: order.get(f["name"], len(order)))
 
 
 def _collision_lead_in(name: str) -> str:

@@ -166,15 +166,27 @@ def test_headless_false_renders_no_banner(markdown_render) -> None:
 
 
 def test_never_rendered_keys_do_not_leak_into_output(markdown_render) -> None:
+    # asserted as an exact whole-output match rather than a set of substring checks: `depth`'s
+    # values are ordinary English words, so "'read' not in text" is either tautological or
+    # flaky, and an equality assertion cannot be satisfied by a leak of any kind.
     doc = _doc(
         type="bug",
         depth="read",
         target={"kind": "github", "repo": "acme/app", "writable": True, "third_party": "no", "visibility": "private"},
         template={"applied": False, "path": None, "fields": [{"name": "x", "required": True, "source": "core"}]},
+        schema_version=1,
     )
-    text = markdown_render.render(doc)
-    assert "acme/app" not in text
-    assert "read" not in text or "read" not in text.lower()
+    assert markdown_render.render(doc) == "# Something broke\n"
+
+
+@pytest.mark.parametrize("depth", ["none", "read", "run"])
+def test_no_depth_value_reaches_the_artifact(markdown_render, depth: str) -> None:
+    doc = _doc(depth=depth, fields=[
+        {"name": "current_behavior", "provenance": "reported", "value": "it crashes"},
+    ])
+    assert markdown_render.render(doc) == (
+        "# Something broke\n\n## Current Behavior\n\nit crashes\n"
+    )
 
 
 # ---- full fixture end-to-end renders ------------------------------------

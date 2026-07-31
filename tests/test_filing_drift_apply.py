@@ -722,3 +722,33 @@ def test_cli_validation_does_not_require_emission_readiness(tmp_path: Path) -> N
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["type"] == "feature"
+
+
+def test_drifted_fields_follow_the_rebuilt_union_order(drift_apply) -> None:
+    # the renderer projects `fields` in document order, and the union is where the template's
+    # structure and ordering live -- so a post-drift artifact that follows carry-table order
+    # ignores the maintainer's section order for no reason but which row fired first
+    doc = _feature_doc()
+    doc["template"]["fields"] = [
+        {"name": "who_benefits", "required": True, "source": "template"},
+        {"name": "acceptance_criteria", "required": True, "source": "template"},
+        {"name": "current_behavior", "required": True, "source": "template"},
+        {"name": "problem", "required": True, "source": "template"},
+    ]
+    result = drift_apply.apply_drift(doc, "bug")
+    union_order = [e["name"] for e in result["template"]["fields"]]
+    field_order = [f["name"] for f in result["fields"]]
+    ranked = [n for n in field_order if n in union_order]
+    assert ranked == [n for n in union_order if n in field_order]
+
+
+def test_fields_outside_the_union_keep_their_order_and_follow_behind(drift_apply) -> None:
+    doc = _bug_doc()
+    doc["fields"].append({
+        "name": "root_cause", "provenance": "inferred", "value": "an encoding bug",
+    })
+    result = drift_apply.apply_drift(doc, "feature")
+    union_names = {e["name"] for e in result["template"]["fields"]}
+    field_order = [f["name"] for f in result["fields"]]
+    assert "root_cause" not in union_names
+    assert field_order[-1] == "root_cause"
