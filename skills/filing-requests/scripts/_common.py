@@ -26,6 +26,30 @@ NON_WAIVABLE = {
     "feature": ["problem", "acceptance_criteria"],
 }
 
+# tech.md -> Choosing among templates, step 2. A candidate matches the confirmed type when one
+# of these appears in its declared identity.
+TYPE_KEYWORDS = {
+    "bug": ["bug", "defect", "regression"],
+    "feature": ["feature", "enhancement", "proposal", "idea"],
+    "code-change": ["chore", "task", "refactor", "maintenance"],
+}
+
+# tech.md -> Field-name mapping. Deliberately small and closed: without it, a heading of
+# "Expected behaviour" slugs to `expected_behaviour` and becomes a *second* field beside the
+# core's `expected_behavior`, asking the user the same question twice. An unmatched heading
+# becoming its own template-supplied field is the correct outcome for a genuinely novel section.
+HEADING_SYNONYMS = {
+    "steps_to_reproduce": "steps_to_reproduce",
+    "steps_to_reproduce_the_behavior": "steps_to_reproduce",
+    "reproduction_steps": "steps_to_reproduce",
+    "to_reproduce": "steps_to_reproduce",
+    "expected_behaviour": "expected_behavior",
+    "expected_behavior": "expected_behavior",
+    "actual_behaviour": "current_behavior",
+    "actual_behavior": "current_behavior",
+    "current_behaviour": "current_behavior",
+}
+
 # tech.md -> markdown_render.py -> "the exact wording of the hedge prefix, the attribution line,
 # the headless banner, and the disclosure footer is fixed in _common.py as four module-level
 # string constants". They are asserted verbatim in tests, so a wording change is a deliberate
