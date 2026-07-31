@@ -22,18 +22,26 @@ if _SCRIPT_DIR not in sys.path:
 
 import canonical_schema  # noqa: E402
 from _common import (  # noqa: E402
+    ATTRIBUTION_LINE,
+    DISCLOSURE_FOOTER,
+    HEADLESS_BANNER,
+    HEDGE_PREFIX,
     SchemaVersionError,
     check_schema_version,
     read_json_arg,
     slugify,
 )
 
-# Fixed wording, asserted verbatim in tests -- a change here is a deliberate
-# edit with a failing test behind it, not drift.
-HEDGE_PREFIX = "Inferred, not directly confirmed — "
-ATTRIBUTION_LINE = "*Proposed by the reporter, included as an open suggestion rather than a directive.*"
-HEADLESS_BANNER = "> **Headless run: no human confirmed this artifact.**"
-DISCLOSURE_FOOTER = "*This report was drafted with AI assistance.*"
+# The four fixed wordings live in _common.py (tech.md -> markdown_render.py). They are
+# re-exported here because this is the module that renders them, and tests assert them
+# through the renderer they belong to.
+__all__ = [
+    "ATTRIBUTION_LINE", "DISCLOSURE_FOOTER", "HEADLESS_BANNER", "HEDGE_PREFIX", "render", "main",
+]
+
+# a slug that survives slugify() unchanged is the only thing that reaches a filename --
+# the artifact path is built by joining, so an unsanitized slug is a path-traversal write.
+FALLBACK_SLUG = "untitled"
 
 
 def _humanize_field_name(name: str) -> str:
@@ -87,8 +95,24 @@ def _today_str() -> str:
     return date.today().isoformat()
 
 
+class SlugError(ValueError):
+    """Raised when an explicit --slug carries nothing a filename can be built from."""
+
+
 def _artifact_relative_path(doc: dict, slug_override: str | None) -> Path:
-    slug = slug_override if slug_override else slugify(doc["title"])
+    """Compute `docs/quirk/requests/YYYY-MM-DD-<slug>.md`, always a single new filename.
+
+    `--slug` is user input that lands in a path, so it goes through the same `slugify` the
+    title does -- separators and `..` segments cannot survive it. An override that slugifies
+    to nothing is a usage error rather than a silent write to a different filename; a *title*
+    that slugifies to nothing falls back, since the user never chose the filename there.
+    """
+    if slug_override is not None:
+        slug = slugify(slug_override)
+        if slug == "":
+            raise SlugError(f"--slug {slug_override!r} contains no usable characters")
+    else:
+        slug = slugify(doc["title"]) or FALLBACK_SLUG
     return Path("docs") / "quirk" / "requests" / f"{_today_str()}-{slug}.md"
 
 
@@ -120,8 +144,18 @@ def main(argv=None) -> int:
     text = render(doc)
 
     if args.write:
-        rel_path = _artifact_relative_path(doc, args.slug)
-        full_path = Path(args.write) / rel_path
+        try:
+            rel_path = _artifact_relative_path(doc, args.slug)
+        except SlugError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        root = Path(args.write).resolve()
+        full_path = root / rel_path
+        # belt and braces: the slug is already sanitized, so this can only fire if that
+        # ever regresses -- and the failure it would catch is an overwrite outside the root.
+        if root not in full_path.resolve().parents:
+            print(f"refusing to write outside {args.write}: {rel_path}", file=sys.stderr)
+            return 2
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_text(text, encoding="utf-8")
         print(str(rel_path))

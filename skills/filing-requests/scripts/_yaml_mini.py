@@ -41,6 +41,10 @@ def parse_yaml(text: str, path: str = "<string>") -> Any:
                 line = mark.line + 1
             reason = str(exc).splitlines()[0] if str(exc) else "invalid YAML"
             raise TemplateParseError(reason, path, line) from exc
+        except RecursionError as exc:
+            # a deeply nested template is one bad file, not a reason to abort discovery for
+            # the rest of the repo -- both tiers surface it as the same per-file failure
+            raise TemplateParseError("nesting is too deep to parse", path, 1) from exc
     return parse(text, path)
 
 
@@ -58,6 +62,11 @@ _BOOL_TRUE = ("true", "True", "TRUE")
 _BOOL_FALSE = ("false", "False", "FALSE")
 _NULL = ("null", "Null", "NULL", "~")
 
+# Nesting is bounded so a pathological template fails as this module's own per-file error
+# rather than as a RecursionError escaping into the caller's discovery loop. Real issue
+# templates nest three or four levels; 64 is far past anything legitimate.
+_MAX_DEPTH = 64
+
 
 def parse(text: str, path: str = "<string>") -> Any:
     """Parse `text` against the bounded YAML subset described above.
@@ -66,7 +75,10 @@ def parse(text: str, path: str = "<string>") -> Any:
     that subset.
     """
     cur = _Cursor(text.splitlines())
-    node = _parse_node(cur, 0, path)
+    try:
+        node = _parse_node(cur, 0, path, 0)
+    except RecursionError as exc:  # pragma: no cover - _MAX_DEPTH fires first
+        raise TemplateParseError("nesting is too deep to parse", path, 1) from exc
     leftover = cur.peek_logical()
     if leftover is not None:
         j, _indent, content = leftover
@@ -169,13 +181,21 @@ def _reject_doc_markers(content: str, path: str, lineno: int) -> None:
         raise TemplateParseError("YAML directives are not supported", path, lineno)
 
 
-def _parse_node(cur: _Cursor, min_indent: int, path: str) -> Any:
+def _check_depth(depth: int, path: str, lineno: int) -> None:
+    if depth > _MAX_DEPTH:
+        raise TemplateParseError(
+            f"nesting deeper than {_MAX_DEPTH} levels is not supported", path, lineno
+        )
+
+
+def _parse_node(cur: _Cursor, min_indent: int, path: str, depth: int) -> Any:
     peek = cur.peek_logical()
     if peek is None:
         return None
     j, indent, content = peek
     if indent < min_indent:
         return None
+    _check_depth(depth, path, j + 1)
     _reject_doc_markers(content, path, j + 1)
     if content[0] == "{":
         raise TemplateParseError(f"flow mappings are not supported: {content!r}", path, j + 1)
@@ -183,9 +203,9 @@ def _parse_node(cur: _Cursor, min_indent: int, path: str) -> Any:
         cur.advance_to(j)
         return _parse_flow_sequence(content, path, j + 1)
     if content == "-" or content.startswith("- "):
-        return _parse_sequence(cur, indent, path)
+        return _parse_sequence(cur, indent, path, depth)
     if _find_colon(content) is not None:
-        return _parse_mapping(cur, indent, path)
+        return _parse_mapping(cur, indent, path, depth)
     cur.advance_to(j)
     return _parse_scalar(content, path, j + 1)
 
@@ -202,21 +222,23 @@ def _split_key(content: str, path: str, lineno: int) -> Tuple[str, str]:
     return key, content[idx + 1 :].strip()
 
 
-def _consume_value(cur: _Cursor, key_indent: int, value_part: str, path: str, lineno: int) -> Any:
+def _consume_value(
+    cur: _Cursor, key_indent: int, value_part: str, path: str, lineno: int, depth: int
+) -> Any:
     """Given the text after a mapping key's `:`, return its value, consuming any nested
     lines it owns (a block scalar body, or a mapping/sequence indented under an empty value).
     """
     if value_part == "":
         nxt = cur.peek_logical()
         if nxt is not None and nxt[1] > key_indent:
-            return _parse_node(cur, nxt[1], path)
+            return _parse_node(cur, nxt[1], path, depth + 1)
         return None
     if value_part in _BLOCK_SCALAR_INDICATORS:
         return _parse_block_scalar(cur, value_part, key_indent, path, lineno)
     return _parse_scalar(value_part, path, lineno)
 
 
-def _parse_mapping(cur: _Cursor, indent: int, path: str) -> dict:
+def _parse_mapping(cur: _Cursor, indent: int, path: str, depth: int) -> dict:
     result: dict = {}
     while True:
         peek = cur.peek_logical()
@@ -230,11 +252,11 @@ def _parse_mapping(cur: _Cursor, indent: int, path: str) -> dict:
         _reject_doc_markers(content, path, j + 1)
         key, value_part = _split_key(content, path, j + 1)
         cur.advance_to(j)
-        result[key] = _consume_value(cur, indent, value_part, path, j + 1)
+        result[key] = _consume_value(cur, indent, value_part, path, j + 1, depth)
     return result
 
 
-def _parse_sequence(cur: _Cursor, indent: int, path: str) -> list:
+def _parse_sequence(cur: _Cursor, indent: int, path: str, depth: int) -> list:
     items: list = []
     while True:
         peek = cur.peek_logical()
@@ -251,7 +273,7 @@ def _parse_sequence(cur: _Cursor, indent: int, path: str) -> list:
         if rest == "":
             nxt = cur.peek_logical()
             if nxt is not None and nxt[1] > indent:
-                items.append(_parse_node(cur, nxt[1], path))
+                items.append(_parse_node(cur, nxt[1], path, depth + 1))
             else:
                 items.append(None)
             continue
@@ -267,8 +289,9 @@ def _parse_sequence(cur: _Cursor, indent: int, path: str) -> list:
         if _find_colon(rest) is None:
             items.append(_parse_scalar(rest, path, j + 1))
             continue
+        _check_depth(depth, path, j + 1)
         key, value_part = _split_key(rest, path, j + 1)
-        mapping = {key: _consume_value(cur, item_col, value_part, path, j + 1)}
+        mapping = {key: _consume_value(cur, item_col, value_part, path, j + 1, depth + 1)}
         while True:
             sibling = cur.peek_logical()
             if sibling is None:
@@ -283,7 +306,7 @@ def _parse_sequence(cur: _Cursor, indent: int, path: str) -> list:
             _reject_doc_markers(content2, path, j2 + 1)
             key2, value_part2 = _split_key(content2, path, j2 + 1)
             cur.advance_to(j2)
-            mapping[key2] = _consume_value(cur, item_col, value_part2, path, j2 + 1)
+            mapping[key2] = _consume_value(cur, item_col, value_part2, path, j2 + 1, depth + 1)
         items.append(mapping)
     return items
 
@@ -424,7 +447,16 @@ def _parse_scalar(raw: str, path: str, lineno: int) -> Any:
     return raw
 
 
-_DOUBLE_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\", "0": "\0"}
+# The full YAML double-quoted escape table. A shorter table that silently drops the backslash
+# from anything it doesn't know makes this tier disagree with PyYAML about the *content* of a
+# template ID or field name -- the one thing the two tiers must never do.
+_DOUBLE_ESCAPES = {
+    "0": "\0", "a": "\a", "b": "\b", "t": "\t", "\t": "\t", "n": "\n", "v": "\v",
+    "f": "\f", "r": "\r", "e": "\x1b", " ": " ", '"': '"', "/": "/", "\\": "\\",
+    "N": "\x85", "_": "\xa0", "L": "\u2028", "P": "\u2029",
+}
+# escape -> number of hex digits that follow it
+_DOUBLE_HEX_ESCAPES = {"x": 2, "u": 4, "U": 8}
 
 
 def _parse_double_quoted(raw: str, path: str, lineno: int) -> str:
@@ -435,12 +467,31 @@ def _parse_double_quoted(raw: str, path: str, lineno: int) -> str:
     i, n = 0, len(body)
     while i < n:
         ch = body[i]
-        if ch == "\\" and i + 1 < n:
-            out.append(_DOUBLE_ESCAPES.get(body[i + 1], body[i + 1]))
-            i += 2
+        if ch != "\\":
+            out.append(ch)
+            i += 1
             continue
-        out.append(ch)
-        i += 1
+        if i + 1 >= n:
+            raise TemplateParseError(
+                f"trailing backslash in double-quoted scalar: {raw!r}", path, lineno
+            )
+        esc = body[i + 1]
+        width = _DOUBLE_HEX_ESCAPES.get(esc)
+        if width is not None:
+            digits = body[i + 2 : i + 2 + width]
+            if len(digits) != width or any(c not in "0123456789abcdefABCDEF" for c in digits):
+                raise TemplateParseError(
+                    rf"expected {width} hex digits after \{esc} in {raw!r}", path, lineno
+                )
+            out.append(chr(int(digits, 16)))
+            i += 2 + width
+            continue
+        if esc not in _DOUBLE_ESCAPES:
+            raise TemplateParseError(
+                rf"unknown escape \{esc} in double-quoted scalar: {raw!r}", path, lineno
+            )
+        out.append(_DOUBLE_ESCAPES[esc])
+        i += 2
     return "".join(out)
 
 

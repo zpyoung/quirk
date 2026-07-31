@@ -301,3 +301,60 @@ def test_cli_write_with_slug_override_uses_given_slug_verbatim(tmp_path: Path) -
     printed = result.stdout.strip()
     assert printed.endswith("-custom-slug.md")
     assert (tmp_path / printed).exists()
+
+
+# ---- wave-3 checkpoint regressions ---------------------------------------
+
+
+def test_cli_write_rejects_a_slug_that_escapes_the_artifact_directory(tmp_path: Path) -> None:
+    # --slug is user input that lands in a path. Unsanitized, `..` segments walk out of
+    # docs/quirk/requests/ and overwrite an unrelated file under (or above) the root.
+    doc = _load_fixture("valid-bug.json")
+    root = tmp_path / "project"
+    root.mkdir()
+    victim = tmp_path / "PWNED.md"
+    result = run_filing_script(
+        "markdown_render.py", "--input", "-", "--write", str(root),
+        "--slug", "../../../PWNED", cwd=tmp_path, stdin=json.dumps(doc),
+    )
+    assert result.returncode == 0, result.stderr
+    printed = result.stdout.strip()
+    assert ".." not in printed
+    assert not victim.exists()
+    written = (root / printed).resolve()
+    assert written.exists()
+    assert root.resolve() in written.parents
+
+
+def test_cli_write_slug_override_is_slugified(tmp_path: Path) -> None:
+    doc = _load_fixture("valid-bug.json")
+    result = run_filing_script(
+        "markdown_render.py", "--input", "-", "--write", str(tmp_path),
+        "--slug", "Nested/Path Segment", cwd=tmp_path, stdin=json.dumps(doc),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().endswith("-nested-path-segment.md")
+
+
+def test_cli_write_slug_with_no_usable_characters_exits_2(tmp_path: Path) -> None:
+    doc = _load_fixture("valid-bug.json")
+    result = run_filing_script(
+        "markdown_render.py", "--input", "-", "--write", str(tmp_path),
+        "--slug", "../..", cwd=tmp_path, stdin=json.dumps(doc),
+    )
+    assert result.returncode == 2
+    assert not list(tmp_path.rglob("*.md"))
+
+
+def test_fixed_wordings_are_defined_in_common_not_this_module(markdown_render) -> None:
+    # tech.md fixes all four in _common.py; markdown_render imports them, so there is never
+    # a second copy that can drift from the one the contract names.
+    common = load_filing_module("_common")
+    names = ("HEDGE_PREFIX", "ATTRIBUTION_LINE", "HEADLESS_BANNER", "DISCLOSURE_FOOTER")
+    scripts_dir = Path(markdown_render.__file__).parent
+    render_source = (scripts_dir / "markdown_render.py").read_text(encoding="utf-8")
+    common_source = (scripts_dir / "_common.py").read_text(encoding="utf-8")
+    for name in names:
+        assert getattr(markdown_render, name) == getattr(common, name)
+        assert f"{name} = " in common_source
+        assert f"{name} = " not in render_source

@@ -26,6 +26,15 @@ NON_WAIVABLE = {
     "feature": ["problem", "acceptance_criteria"],
 }
 
+# tech.md -> markdown_render.py -> "the exact wording of the hedge prefix, the attribution line,
+# the headless banner, and the disclosure footer is fixed in _common.py as four module-level
+# string constants". They are asserted verbatim in tests, so a wording change is a deliberate
+# edit with a failing test behind it, not drift.
+HEDGE_PREFIX = "Inferred, not directly confirmed — "
+ATTRIBUTION_LINE = "*Proposed by the reporter, included as an open suggestion rather than a directive.*"
+HEADLESS_BANNER = "> **Headless run: no human confirmed this artifact.**"
+DISCLOSURE_FOOTER = "*This report was drafted with AI assistance.*"
+
 _SLUG_COLLAPSE = re.compile(r"[^a-z0-9]+")
 
 

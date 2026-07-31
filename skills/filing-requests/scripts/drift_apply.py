@@ -18,6 +18,8 @@ if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
 from _common import (  # noqa: E402
+    CORE_FIELDS,
+    NON_WAIVABLE,
     SchemaVersionError,
     check_schema_version,
     read_json_arg,
@@ -51,6 +53,12 @@ DRIFT_TABLES = {
 }
 
 
+# How much a provenance claims. An append that lands weaker content on a stronger destination
+# cannot re-label that content -- the canonical form has one provenance slot per field -- so the
+# merged field is flagged instead of silently inheriting the destination's stronger claim.
+_PROVENANCE_RANK = {"observed": 3, "reported": 2, "inferred": 1, "missing": 0}
+
+
 def _has_content(entry: dict) -> bool:
     """Whether `entry` already carries a resolved value -- a `missing` field never does."""
     if entry.get("provenance") == "missing":
@@ -59,60 +67,136 @@ def _has_content(entry: dict) -> bool:
     return isinstance(value, str) and value.strip() != ""
 
 
+def _rank(entry: dict) -> int:
+    return _PROVENANCE_RANK.get(entry.get("provenance"), 0)
+
+
+def _place(mapped: dict, dest_name: str, entry: dict, lead_in: str) -> None:
+    """Put `entry` at `dest_name`, merging rather than overwriting whatever is already there.
+
+    Overwriting is what discards a field: two source entries can land on one destination
+    (`environment -> constraints` onto an existing `constraints`, or two entries that simply
+    share a name), and "nothing the user supplied is ever discarded on drift" makes the
+    already-settled value and the incoming one both survive.
+    """
+    new_entry = dict(entry)
+    new_entry["name"] = dest_name
+
+    existing = mapped.get(dest_name)
+    if existing is None or not _has_content(existing):
+        # nothing settled here yet -- the incoming becomes the destination outright
+        mapped[dest_name] = new_entry
+        return
+    if not _has_content(new_entry):
+        # a `missing` field's reason explains an absence; it is not content to append
+        return
+
+    merged = dict(existing)
+    merged["value"] = f"{existing['value']}\n\n{lead_in}\n{new_entry['value']}"
+    if _rank(new_entry) < _rank(existing) or new_entry.get("needs_confirmation") is True:
+        # the appended claim is weaker than the field's own provenance, or arrives already
+        # unconfirmed -- either way the merged field is no longer settled
+        merged["needs_confirmation"] = True
+    mapped[dest_name] = merged
+
+
+def _drift_template_fields(template_fields: list, table: list, to: str) -> list:
+    """Carry `template.fields` across the same mapping the values took.
+
+    Left behind, the union the emission gate reads still describes the *source* type: the
+    destination type's own required fields are never enforced and the source type's are
+    reported missing. Rebuilding it here applies the union rule to the new type -- mapped
+    entries keep the template's structure and ordering, the destination core is additive,
+    and the non-waivable gate overrides both.
+    """
+    rows = {row["from"]: row for row in table}
+    out: dict = {}
+    for entry in template_fields:
+        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
+            continue
+        row = rows.get(entry["name"])
+        dest_name = row["to"] if row is not None else entry["name"]
+        required = bool(entry.get("required"))
+        if row is not None and row["mode"] == "demote_optional":
+            required = False  # dropped from the core; retained as an optional field
+        source = entry.get("source") if entry.get("source") in ("template", "core") else "core"
+
+        prev = out.get(dest_name)
+        if prev is None:
+            out[dest_name] = {"name": dest_name, "required": required, "source": source}
+            continue
+        # two template entries collapsed onto one destination: a template can add
+        # requirements but never subtract them, so requiredness is the union
+        prev["required"] = prev["required"] or required
+        if source == "template":
+            prev["source"] = "template"
+
+    for name in CORE_FIELDS.get(to, []):
+        if name not in out:
+            out[name] = {"name": name, "required": True, "source": "core"}
+
+    for name in NON_WAIVABLE.get(to, []):
+        if name in out:
+            out[name]["required"] = True
+
+    return list(out.values())
+
+
 def apply_drift(doc: dict, to: str) -> dict:
     """Apply the drift carry-over table for `doc["type"]` -> `to` and return a new document.
 
     Every field the table names is mapped per its row; every field the table doesn't name is
-    retained under its original name. `doc` itself is never mutated.
+    retained under its original name; nothing is dropped when two of them collide. `doc`
+    itself is never mutated.
     """
     table = DRIFT_TABLES[(doc.get("type"), to)]
 
     source_fields = doc.get("fields")
     if not isinstance(source_fields, list):
         source_fields = []
-    by_name = {
-        f["name"]: f for f in source_fields
-        if isinstance(f, dict) and isinstance(f.get("name"), str)
-    }
+    # name -> every entry carrying it, not just the last: collapsing to one entry per name
+    # silently discards the others, and drift's whole contract is that it discards nothing
+    by_name: dict = {}
+    for f in source_fields:
+        if isinstance(f, dict) and isinstance(f.get("name"), str):
+            by_name.setdefault(f["name"], []).append(f)
 
     mapped: dict = {}
-    consumed = set()
     for row in table:
-        consumed.add(row["from"])
-        entry = by_name.get(row["from"])
-        if entry is None:
+        for entry in by_name.get(row["from"], []):
+            new_entry = dict(entry)
+            if row["mode"] == "rename_reopen":
+                new_entry["needs_confirmation"] = True
+            _place(mapped, row["to"], new_entry, row.get("lead_in") or _collision_lead_in(row["from"]))
+
+    consumed = {row["from"] for row in table}
+    for name, entries in by_name.items():
+        if name in consumed:
             continue
-
-        dest_name = row["to"]
-        mode = row["mode"]
-
-        if mode == "append_or_become":
-            existing = mapped.get(dest_name)
-            if existing is not None and _has_content(existing):
-                incoming = entry.get("value") or entry.get("reason") or ""
-                merged = dict(existing)
-                merged["value"] = f"{existing['value']}\n\n{row['lead_in']}\n{incoming}"
-                mapped[dest_name] = merged
-            else:
-                new_entry = dict(entry)
-                new_entry["name"] = dest_name
-                mapped[dest_name] = new_entry
-            continue
-
-        new_entry = dict(entry)
-        new_entry["name"] = dest_name
-        if mode == "rename_reopen":
-            new_entry["needs_confirmation"] = True
-        mapped[dest_name] = new_entry
-
-    for name, entry in by_name.items():
-        if name not in consumed:
-            mapped.setdefault(name, dict(entry))
+        for entry in entries:
+            _place(mapped, name, entry, _collision_lead_in(name))
 
     new_doc = dict(doc)
     new_doc["type"] = to
     new_doc["fields"] = list(mapped.values())
+
+    template = doc.get("template")
+    if isinstance(template, dict):
+        template_fields = template.get("fields")
+        # rebuilt only from a union that already exists -- an absent or empty template.fields
+        # means template resolution has not settled yet, and inventing one here would
+        # manufacture the very fallback the emission gate exists to refuse
+        if isinstance(template_fields, list) and template_fields:
+            new_template = dict(template)
+            new_template["fields"] = _drift_template_fields(template_fields, table, to)
+            new_doc["template"] = new_template
+
     return new_doc
+
+
+def _collision_lead_in(name: str) -> str:
+    """Lead-in for a merge the tables don't name -- two fields landing on one destination."""
+    return f"Also supplied for {name}:"
 
 
 def main(argv=None) -> int:

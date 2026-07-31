@@ -418,3 +418,139 @@ def test_cli_reads_from_file_path(tmp_path: Path) -> None:
         "drift_apply.py", "--input", str(input_path), "--to", "feature", cwd=tmp_path,
     )
     assert result.returncode == 0, result.stderr
+
+
+# ---- wave-3 checkpoint regressions ---------------------------------------
+
+
+def test_duplicate_source_field_names_are_all_carried(drift_apply) -> None:
+    # collapsing fields into one entry per name silently drops every entry but the last,
+    # and "nothing the user supplied is ever discarded on drift" admits no exceptions.
+    doc = _bug_doc()
+    doc["fields"].append({
+        "name": "current_behavior", "provenance": "reported",
+        "value": "it also drops the trailing page when the report is long",
+    })
+    result = drift_apply.apply_drift(doc, "feature")
+    current_behavior = _field(result["fields"], "current_behavior")
+    assert "it also drops the trailing page when the report is long" in current_behavior["value"]
+    assert "export as PDF raises UnicodeDecodeError" in current_behavior["value"]
+    assert sum(1 for f in result["fields"] if f["name"] == "current_behavior") == 1
+
+
+def test_mapped_destination_colliding_with_an_existing_field_keeps_both(drift_apply) -> None:
+    # environment -> constraints lands on a document that already carries `constraints`
+    doc = _bug_doc()
+    doc["fields"].append({
+        "name": "constraints", "provenance": "reported",
+        "value": "must keep working on the 2.3 LTS line",
+    })
+    result = drift_apply.apply_drift(doc, "feature")
+    constraints = _field(result["fields"], "constraints")
+    assert "reports 2.4.1, Python 3.11.6" in constraints["value"]
+    assert "must keep working on the 2.3 LTS line" in constraints["value"]
+    assert sum(1 for f in result["fields"] if f["name"] == "constraints") == 1
+
+
+def test_append_of_weaker_provenance_flags_the_merged_field(drift_apply) -> None:
+    # a `reported` problem appended onto an `observed` current_behavior cannot silently
+    # inherit "observed" -- the field has one provenance slot and now carries both claims
+    doc = _feature_doc()
+    result = drift_apply.apply_drift(doc, "bug")
+    current_behavior = _field(result["fields"], "current_behavior")
+    assert current_behavior["needs_confirmation"] is True
+
+
+def test_append_of_equal_provenance_does_not_flag_the_merged_field(drift_apply) -> None:
+    doc = _bug_doc()  # steps_to_reproduce and current_behavior are both `reported`
+    result = drift_apply.apply_drift(doc, "feature")
+    assert "needs_confirmation" not in _field(result["fields"], "current_behavior")
+
+
+def test_collision_result_is_structurally_valid(drift_apply, canonical_schema) -> None:
+    doc = _bug_doc()
+    doc["fields"].append({
+        "name": "constraints", "provenance": "reported", "value": "2.3 LTS must keep working",
+    })
+    result = drift_apply.apply_drift(doc, "feature")
+    assert canonical_schema.validate(result) == {"valid": True, "errors": [], "halted": None}
+
+
+# ---- template.fields carries across the drift ----------------------------
+
+
+def _template_names(doc: dict) -> list:
+    return [entry["name"] for entry in doc["template"]["fields"]]
+
+
+def test_bug_to_feature_rewrites_template_fields_to_the_new_type(drift_apply) -> None:
+    # left behind, template.fields still describes the *bug* union: --for-emission would
+    # report steps_to_reproduce missing and never enforce the feature's own required fields.
+    doc = _bug_doc()
+    result = drift_apply.apply_drift(doc, "feature")
+    names = _template_names(result)
+    assert "steps_to_reproduce" not in names
+    assert "expected_behavior" not in names
+    assert "environment" not in names
+    assert set(names) == {
+        "current_behavior", "acceptance_criteria", "constraints", "problem", "who_benefits",
+    }
+
+
+def test_bug_to_feature_template_fields_force_the_non_waivable_pair_required(drift_apply) -> None:
+    doc = _bug_doc()
+    result = drift_apply.apply_drift(doc, "feature")
+    by_name = {entry["name"]: entry for entry in result["template"]["fields"]}
+    assert by_name["problem"]["required"] is True
+    assert by_name["acceptance_criteria"]["required"] is True
+
+
+def test_feature_to_bug_template_fields_demote_who_benefits(drift_apply) -> None:
+    doc = _feature_doc()
+    result = drift_apply.apply_drift(doc, "bug")
+    by_name = {entry["name"]: entry for entry in result["template"]["fields"]}
+    assert "who_benefits" not in by_name
+    assert by_name["affected_users"]["required"] is False
+    # the bug core is additive -- nothing the destination type requires is left out
+    assert {"current_behavior", "expected_behavior", "steps_to_reproduce", "environment"} <= set(by_name)
+
+
+def test_template_fields_keep_template_sourcing_across_the_rename(drift_apply) -> None:
+    doc = _bug_doc()
+    doc["template"] = {
+        "applied": True, "path": ".github/ISSUE_TEMPLATE/bug.yml",
+        "fields": [
+            {"name": "current_behavior", "required": True, "source": "template"},
+            {"name": "environment", "required": False, "source": "template"},
+        ],
+    }
+    result = drift_apply.apply_drift(doc, "feature")
+    by_name = {entry["name"]: entry for entry in result["template"]["fields"]}
+    assert by_name["constraints"] == {
+        "name": "constraints", "required": False, "source": "template",
+    }
+    assert by_name["current_behavior"]["source"] == "template"
+
+
+def test_drift_does_not_invent_a_union_when_template_fields_is_absent(drift_apply) -> None:
+    # an unsettled template resolution must stay unsettled: manufacturing the union here
+    # is exactly the silent fallback the emission gate exists to refuse.
+    doc = _bug_doc()
+    doc["template"] = {"applied": False, "path": None}
+    result = drift_apply.apply_drift(doc, "feature")
+    assert "fields" not in result["template"]
+
+
+def test_drifted_feature_missing_acceptance_criteria_halts_at_emission(
+    drift_apply, canonical_schema,
+) -> None:
+    # the end-to-end payoff: the drifted document is validated against the feature union,
+    # so the non-waivable gate fires instead of checking the bug's field list.
+    doc = _bug_doc()
+    doc["fields"] = [f for f in doc["fields"] if f["name"] != "expected_behavior"]
+    result = drift_apply.apply_drift(doc, "feature")
+    verdict = canonical_schema.validate(result, for_emission=True)
+    assert verdict["valid"] is False
+    assert verdict["halted"] is not None
+    assert verdict["halted"]["field"] in ("problem", "acceptance_criteria")
+    assert not any(e["path"].endswith("steps_to_reproduce") for e in verdict["errors"])

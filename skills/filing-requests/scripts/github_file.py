@@ -58,6 +58,28 @@ def main(argv=None) -> int:
         print(f"unsupported target.kind {kind!r}; github_file.py only files to github", file=sys.stderr)
         return 6
 
+    # the body's disclosure footer is derived from *this document's* target, so filing it
+    # anywhere else can send a disclosure-free body to a public or third-party repo. A
+    # mismatch is the caller pointing --repo at something the document was not built for.
+    doc_repo = target.get("repo") if isinstance(target, dict) else None
+    if isinstance(doc_repo, str) and doc_repo != args.repo:
+        print(
+            f"--repo {args.repo!r} does not match target.repo {doc_repo!r}; "
+            "refusing to file this document to a repository it was not prepared for",
+            file=sys.stderr,
+        )
+        return 2
+
+    # defense in depth, and it runs before rendering rather than after: markdown_render.render()
+    # assumes a validated document and indexes keys directly, so rendering first turns a
+    # structural error into a KeyError traceback instead of the exit 3 the contract promises.
+    # It also gates the dry run, because a halted or core-incomplete document is never
+    # rendered -- including for the on-screen draft preview.
+    result = canonical_schema.validate(doc, for_emission=True)
+    if not result["valid"]:
+        print(json.dumps(result, ensure_ascii=False))
+        return 3
+
     title = doc.get("title", "")
     # the one renderer: never reimplement formatting here, or the filed issue and the
     # written artifact become two independently-formatted copies of the same document.
@@ -74,13 +96,8 @@ def main(argv=None) -> int:
         }, ensure_ascii=False))
         return 0
 
-    # defense in depth: don't trust that the caller already gated on emission-readiness,
-    # secrets, or headlessness -- this script is the last one before an irreversible action.
-    result = canonical_schema.validate(doc, for_emission=True)
-    if not result["valid"]:
-        print(json.dumps(result, ensure_ascii=False))
-        return 3
-
+    # the remaining gates are emission-only: a dry run displays what would be filed, and
+    # only --execute performs the irreversible action these two guard.
     findings = secret_scan.scan(doc)
     if findings:
         print(json.dumps(findings, ensure_ascii=False))

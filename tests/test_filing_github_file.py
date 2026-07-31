@@ -108,7 +108,7 @@ def test_dry_run_body_preview_is_byte_identical_to_markdown_render(
     monkeypatch.setenv("GH_BIN", "gh")
     doc = _load_fixture("valid-feature.json")
     result = run_filing_script(
-        "github_file.py", "--input", "-", "--repo", "acme/widgets",
+        "github_file.py", "--input", "-", "--repo", doc["target"]["repo"],
         cwd=tmp_path, stdin=json.dumps(doc),
     )
     assert result.returncode == 0, result.stderr
@@ -274,3 +274,76 @@ def test_unreadable_file_exits_2(tmp_path: Path) -> None:
         cwd=tmp_path,
     )
     assert result.returncode == 2
+
+
+# ---- wave-3 checkpoint regressions ---------------------------------------
+
+
+def test_repo_mismatching_target_repo_exits_2_and_never_renders(tmp_path: Path, monkeypatch) -> None:
+    # the body's disclosure footer is derived from *this document's* target, so filing it
+    # at another repo can send a disclosure-free body to a public or third-party tracker.
+    monkeypatch.setenv("GH_BIN", "gh")
+    doc = _load_fixture("valid-feature.json")
+    result = run_filing_script(
+        "github_file.py", "--input", "-", "--repo", "someone-else/fork",
+        cwd=tmp_path, stdin=json.dumps(doc),
+    )
+    assert result.returncode == 2
+    assert "target.repo" in result.stderr
+    assert result.stdout == ""
+
+
+def test_execute_repo_mismatching_target_repo_never_invokes_gh(tmp_path: Path, monkeypatch) -> None:
+    marker = tmp_path / "gh-invoked.marker"
+    stub = _gh_stub(tmp_path, marker=marker)
+    monkeypatch.setenv("GH_BIN", str(stub))
+    doc = _load_fixture("valid-feature.json")
+    result = run_filing_script(
+        "github_file.py", "--input", "-", "--repo", "someone-else/fork", "--execute",
+        cwd=tmp_path, stdin=json.dumps(doc),
+    )
+    assert result.returncode == 2
+    assert not marker.exists()
+
+
+def test_structurally_invalid_document_exits_3_rather_than_crashing(tmp_path: Path, monkeypatch) -> None:
+    # render() assumes a validated document and indexes keys directly -- rendering before
+    # validating turns a missing `title` into a KeyError traceback instead of exit 3.
+    monkeypatch.setenv("GH_BIN", "gh")
+    doc = _load_fixture("valid-feature.json")
+    del doc["title"]
+    result = run_filing_script(
+        "github_file.py", "--input", "-", "--repo", doc["target"]["repo"], "--execute",
+        cwd=tmp_path, stdin=json.dumps(doc),
+    )
+    assert result.returncode == 3, result.stderr
+    assert "Traceback" not in result.stderr
+    assert json.loads(result.stdout)["valid"] is False
+
+
+def test_dry_run_of_a_structurally_invalid_document_exits_3(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("GH_BIN", "gh")
+    doc = _load_fixture("valid-feature.json")
+    del doc["title"]
+    result = run_filing_script(
+        "github_file.py", "--input", "-", "--repo", doc["target"]["repo"],
+        cwd=tmp_path, stdin=json.dumps(doc),
+    )
+    assert result.returncode == 3, result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_dry_run_of_a_halted_document_is_refused_before_rendering(tmp_path: Path, monkeypatch) -> None:
+    # "a halted or core-incomplete document is never rendered, including for the on-screen
+    # draft preview" -- the dry run is that preview, so it is gated too.
+    monkeypatch.setenv("GH_BIN", "gh")
+    doc = _load_fixture("halted-feature.json")
+    result = run_filing_script(
+        "github_file.py", "--input", "-", "--repo", doc["target"]["repo"],
+        cwd=tmp_path, stdin=json.dumps(doc),
+    )
+    assert result.returncode == 3
+    payload = json.loads(result.stdout)
+    assert payload["valid"] is False
+    assert payload["halted"] is not None
+    assert "body_preview" not in payload

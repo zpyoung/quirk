@@ -304,3 +304,67 @@ def test_mini_matches_pyyaml_on_shared_subset(yaml_mini, text) -> None:
     import yaml
 
     assert yaml_mini.parse(text, "parity.yml") == yaml.safe_load(text)
+
+
+# ---- wave-3 checkpoint regressions ---------------------------------------
+
+
+def test_deeply_nested_mapping_raises_template_parse_error_not_recursion_error(yaml_mini) -> None:
+    # discovery parses every candidate in a repo; one pathological file must fail as this
+    # module's own per-file error, not as a RecursionError crashing the whole sweep.
+    text = "".join(f"{' ' * (2 * i)}k{i}:\n" for i in range(400)) + " " * 800 + "leaf: 1\n"
+    with pytest.raises(yaml_mini.TemplateParseError) as excinfo:
+        yaml_mini.parse(text, "deep.yml")
+    assert "nesting" in str(excinfo.value)
+    assert excinfo.value.path == "deep.yml"
+
+
+def test_deeply_nested_sequence_raises_template_parse_error(yaml_mini) -> None:
+    text = "".join(f"{' ' * (2 * i)}- a{i}:\n" for i in range(400)) + " " * 800 + "leaf: 1\n"
+    with pytest.raises(yaml_mini.TemplateParseError):
+        yaml_mini.parse(text, "deep.yml")
+
+
+def test_nesting_within_the_bound_still_parses(yaml_mini) -> None:
+    depth = 10
+    text = "".join(f"{' ' * (2 * i)}k{i}:\n" for i in range(depth)) + f"{' ' * (2 * depth)}leaf: 1\n"
+    node = yaml_mini.parse(text, "shallow.yml")
+    for i in range(depth):
+        node = node[f"k{i}"]
+    assert node == {"leaf": "1"}  # plain scalars stay strings in this tier
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ('id: "\\u005f"', "_"),
+        ('id: "\\x41"', "A"),
+        ('id: "\\U0001F600"', "\U0001f600"),
+        ('id: "a\\/b"', "a/b"),
+        ('id: "a\\ab"', "a\ab"),
+        ('id: "a\\eb"', "a\x1bb"),
+    ],
+)
+def test_double_quoted_escapes_decode_rather_than_dropping_the_backslash(
+    yaml_mini, text, expected,
+) -> None:
+    # silently stripping the backslash makes this tier disagree with PyYAML about the
+    # *content* of a template id or field name -- the one thing the tiers must never do.
+    assert yaml_mini.parse(text, "escapes.yml") == {"id": expected}
+
+
+@pytest.mark.parametrize("text", ['id: "\\q"', 'id: "\\u00"', 'id: "\\xZZ"'])
+def test_unknown_or_truncated_double_quoted_escape_is_rejected(yaml_mini, text) -> None:
+    with pytest.raises(yaml_mini.TemplateParseError):
+        yaml_mini.parse(text, "escapes.yml")
+
+
+@pytest.mark.skipif(not _pyyaml_available(), reason="PyYAML not installed; nothing to compare against")
+@pytest.mark.parametrize(
+    "text",
+    ['id: "\\u005f"', 'id: "\\x41"', 'id: "\\U0001F600"', 'id: "a\\/b"', 'id: "a\\eb"'],
+)
+def test_escape_decoding_matches_pyyaml(yaml_mini, text) -> None:
+    import yaml
+
+    assert yaml_mini.parse(text, "escapes.yml") == yaml.safe_load(text)

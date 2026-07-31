@@ -29,7 +29,12 @@ _PATTERNS = (
     ("slack_token", re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}")),
     ("jwt", re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")),
     ("private_key_block", re.compile(r"-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----")),
-    ("connection_string_credential", re.compile(r"[a-zA-Z][a-zA-Z0-9+.-]*://[^/\s:]+:[^/\s@]+@")),
+    # every repetition here is bounded. Unbounded `*`/`+` runs make each of the N start
+    # positions finditer() tries scan to the end of the string before failing, which is
+    # quadratic on hostile content -- a long alphabetic run with no `://` stalls the scan
+    # and, with it, filing. The bounds are far past any real scheme or credential:
+    # RFC 3986 schemes are a handful of characters and the userinfo is a login pair.
+    ("connection_string_credential", re.compile(r"[a-zA-Z][a-zA-Z0-9+.-]{0,31}://[^/\s:]{1,256}:[^/\s@]{1,256}@")),
     ("generic_assignment", re.compile(r"(?i)(api[_-]?key|secret|token|password)\s*[:=]\s*['\"]?[A-Za-z0-9_\-]{16,}")),
 )
 

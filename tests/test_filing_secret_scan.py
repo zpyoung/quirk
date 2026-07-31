@@ -269,3 +269,32 @@ def test_cli_reads_from_file_path(tmp_path: Path) -> None:
         "secret_scan.py", "--input", str(input_path), cwd=tmp_path,
     )
     assert result.returncode == 1
+
+
+# ---- wave-3 checkpoint regressions ---------------------------------------
+
+
+def test_connection_string_pattern_does_not_backtrack_superlinearly(secret_scan) -> None:
+    # hostile content must not be able to stall the scan, and with it filing. Unbounded
+    # repetition made every start position scan to the end of the string before failing.
+    import time
+
+    def elapsed(size: int) -> float:
+        text = "a" * size
+        start = time.perf_counter()
+        secret_scan.scan({"title": "t", "fields": [{"name": "f", "value": text}]})
+        return time.perf_counter() - start
+
+    small = max(elapsed(2_000), 1e-4)
+    large = elapsed(20_000)
+    # a 10x longer input on a linear scanner costs ~10x; the quadratic version cost ~100x
+    assert large < small * 25, f"{small=} {large=}"
+
+
+def test_connection_string_credential_is_still_matched(secret_scan) -> None:
+    findings = secret_scan.scan(
+        {"title": "t", "fields": [{
+            "name": "f", "value": "postgres://admin:hunter2hunter2@db.internal/reports",
+        }]}
+    )
+    assert [f["pattern"] for f in findings] == ["connection_string_credential"]
