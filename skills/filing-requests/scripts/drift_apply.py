@@ -17,6 +17,7 @@ _SCRIPT_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
+import canonical_schema  # noqa: E402
 from _common import (  # noqa: E402
     CORE_FIELDS,
     NON_WAIVABLE,
@@ -269,6 +270,15 @@ def main(argv=None) -> int:
     except SchemaVersionError as exc:
         print(str(exc), file=sys.stderr)
         return 8
+
+    # Structural validity only -- never --for-emission, since drift routinely fires mid-session
+    # before the core fields are resolved. Without this the carry-over silently normalizes a
+    # malformed `fields` (an object where an array belongs, say) to empty and reports success,
+    # so the user's answers vanish from a document that then looks like a clean drift.
+    result = canonical_schema.validate(doc)
+    if not result["valid"]:
+        print(json.dumps(result, ensure_ascii=False))
+        return 3
 
     current_type = doc.get("type") if isinstance(doc, dict) else None
 

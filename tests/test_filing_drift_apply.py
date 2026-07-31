@@ -673,3 +673,52 @@ def test_drift_drops_a_halt_computed_against_the_source_type(
     result = drift_apply.apply_drift(doc, "bug")
     assert "halted" not in result
     assert canonical_schema.validate(result, for_emission=True)["halted"] is None
+
+
+# ---- production-review round 4 -------------------------------------------
+
+
+def test_cli_structurally_invalid_input_exits_3_and_drifts_nothing(tmp_path: Path) -> None:
+    # the contract's first precondition is that the input passes canonical_schema without
+    # --for-emission. Unenforced, the carry-over normalizes a malformed `fields` to empty and
+    # reports success, so the user's answers vanish from what looks like a clean drift.
+    doc = _bug_doc()
+    doc["fields"] = {"name": "steps_to_reproduce", "provenance": "reported", "value": "the repro"}
+    result = run_filing_script(
+        "drift_apply.py", "--input", "-", "--to", "feature",
+        cwd=tmp_path, stdin=json.dumps(doc),
+    )
+    assert result.returncode == 3
+    payload = json.loads(result.stdout)
+    assert payload["valid"] is False
+    assert any(e["path"] == "fields" for e in payload["errors"])
+    assert "type" not in payload  # no drifted document was emitted
+
+
+def test_cli_field_level_structural_error_exits_3(tmp_path: Path) -> None:
+    doc = _bug_doc()
+    # `source` is only legal when provenance == "observed"
+    doc["fields"][0] = {
+        "name": "current_behavior", "provenance": "reported", "value": "x", "source": "nope",
+    }
+    result = run_filing_script(
+        "drift_apply.py", "--input", "-", "--to", "feature",
+        cwd=tmp_path, stdin=json.dumps(doc),
+    )
+    assert result.returncode == 3
+
+
+def test_cli_validation_does_not_require_emission_readiness(tmp_path: Path) -> None:
+    # drift routinely fires mid-session, before the core fields are resolved -- the gate is
+    # structural only, and tightening it to --for-emission would block the common case
+    doc = _bug_doc()
+    doc["fields"] = [
+        {"name": "current_behavior", "provenance": "reported", "value": "it crashes"},
+    ]
+    doc["verified_against"] = []
+    result = run_filing_script(
+        "drift_apply.py", "--input", "-", "--to", "feature",
+        cwd=tmp_path, stdin=json.dumps(doc),
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["type"] == "feature"
