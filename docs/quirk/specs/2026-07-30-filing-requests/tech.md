@@ -513,10 +513,22 @@ and simple frontmatter, no more:
 
 `PSEUDOCODE (justified, ≤3 lines):` supported: block mappings (`key: value`, nested via
 indentation), block sequences (`- item`, including `- key: value` list items), plain/single/double-
-quoted scalars, booleans, `|`/`>` block scalars, `#` comments. **Not** supported: flow collections
-(`{...}`/`[...]`), anchors/aliases, multi-document `---`/`...` separators, tags, merge keys — a file
-using any of these raises `TemplateParseError` naming the file and line, which `discover` (above)
-catches per-file rather than propagating.
+quoted scalars, booleans, `|`/`>` block scalars, `#` comments, **and flow sequences whose items are
+all scalars** (`[a, "b", c]`, including the empty `[]`). **Not** supported: flow mappings (`{...}`),
+flow sequences containing a nested collection, anchors/aliases, multi-document `---`/`...`
+separators, tags, merge keys — a file using any of these raises `TemplateParseError` naming the file
+and line, which `discover` (above) catches per-file rather than propagating.
+
+**Why scalar flow sequences are in the subset.** GitHub's documented Issue Forms schema declares
+labels as `labels: ["bug", "needs-triage"]`, and that flow form is what real templates use — a
+sample of issue-form templates on a working machine found the flow form in every one, with the
+block form in none. Excluding it would mean the fallback tier rejects essentially every real GitHub
+Issue Form, so `discover` drops them all, `select` returns `"none"`, and template conformance
+silently degrades to the per-type core on exactly the machines the fallback exists to serve. Since
+`select` also matches on `labels`, losing them degrades selection even for a template that
+otherwise survived. The subset is widened by the narrowest thing that fixes this — scalar items
+only — rather than by general flow-collection support, which would reintroduce the unbounded
+parser this tier is deliberately not.
 
 `SCHEMA:` a parsed YAML form: `{"name": str, "description": str, "labels": [str],
 "body": [{"type": str, "id": str|null, "attributes": {...}, "validations": {"required": bool}}]}`.
