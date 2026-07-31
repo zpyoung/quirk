@@ -545,16 +545,42 @@ def _emission_fixture(name: str) -> dict:
     return json.loads((FIXTURES_DIR / name).read_text())
 
 
-def test_a_stored_halted_key_is_honored_not_recomputed_away(canonical_schema) -> None:
-    # the gate's own output is what the "save the partial canonical form" exit writes, so a
-    # resumed document arrives carrying it -- recomputing would walk it past its own block
+def _still_halted_doc() -> dict:
+    """The resumed fixture with its named field genuinely unresolved again."""
     doc = _emission_fixture("resumed-halted-feature.json")
-    result = canonical_schema.validate(doc, for_emission=True)
+    doc["fields"] = [
+        {"name": "acceptance_criteria", "provenance": "missing",
+         "reason": "the user has not stated one yet"}
+        if f["name"] == "acceptance_criteria" else f
+        for f in doc["fields"]
+    ]
+    return doc
+
+
+def test_a_stored_halt_still_blocks_while_its_field_is_unresolved(canonical_schema) -> None:
+    result = canonical_schema.validate(_still_halted_doc(), for_emission=True)
     assert result["valid"] is False
-    assert result["halted"] == {
-        "field": "acceptance_criteria",
-        "reason": "no testable pass/fail condition established",
-    }
+    assert result["halted"]["field"] == "acceptance_criteria"
+
+
+def test_a_stored_halt_keeps_its_own_wording_while_it_still_holds(canonical_schema) -> None:
+    # the session wrote that sentence and showed it to the user; recomputing the halt should
+    # not silently replace it with a generic one
+    result = canonical_schema.validate(_still_halted_doc(), for_emission=True)
+    assert result["halted"]["reason"] == "no testable pass/fail condition established"
+
+
+def test_a_stored_halt_clears_once_the_user_resolves_its_field(canonical_schema) -> None:
+    # `halted` is this gate's own output, not an input. Honoring a stored copy unconditionally
+    # leaves a resumed session blocked forever the moment the user actually answers.
+    doc = _emission_fixture("resumed-halted-feature.json")
+    assert doc["halted"]["field"] == "acceptance_criteria"
+    resolved = next(f for f in doc["fields"] if f["name"] == "acceptance_criteria")
+    assert resolved["provenance"] in ("observed", "reported")
+
+    result = canonical_schema.validate(doc, for_emission=True)
+    assert result["halted"] is None
+    assert result["valid"] is True, result["errors"]
 
 
 def test_a_stored_halt_does_not_affect_structural_validation(canonical_schema) -> None:

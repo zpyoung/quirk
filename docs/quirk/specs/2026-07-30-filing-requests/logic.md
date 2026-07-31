@@ -479,6 +479,17 @@ and traceback are resolved by inspection; expected behavior and business impact 
 - **Multi-target emission.** One target per session.
 - **Splitting scope-spanning requests** into multiple artifacts.
 - **PR authoring.** This skill files requests; it does not implement them.
+- **Round-trip drift fidelity.** The two carry-over tables are deliberately lossy in one
+  direction, and drifting back does not undo them. Bug → feature folds `steps_to_reproduce` into
+  `current_behavior` and renames `environment` to `constraints`; feature → bug has no rows that
+  split them back out, so a bug → feature → bug round trip leaves both unresolved and the skill
+  asks for them again. Nothing is *discarded* — the content is visible in the fields it merged
+  into — but the answers no longer sit where the bug field set looks for them. Adding inverse
+  rows was considered and rejected: `append_or_become` merges two fields into one string, so any
+  reverse row would have to re-split prose by guessing where the boundary was, which is exactly
+  the invented specificity the whole design exists to prevent. Round trips are rare (drift fires
+  on evidence, and evidence rarely reverses twice), and the honest cost of re-asking is smaller
+  than the cost of a fabricated split.
 
 ### Deferred to later versions
 

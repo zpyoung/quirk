@@ -237,6 +237,24 @@ def _non_waivable_halt_reason(entry) -> str:
     return "no value has been established for this field"
 
 
+def _stored_halt_reason(doc: dict, field_name: str):
+    """The reason a *stored* halt gave for this field, if it named the same one.
+
+    `halted` is derived state -- the gate's own output, which `SKILL.md` writes back when the
+    user takes the "save the partial canonical form" exit. So it is recomputed from the fields
+    every time rather than trusted: honoring a stored halt unconditionally would leave a resumed
+    session blocked forever once the user actually resolved the field it named, with no
+    documented way to clear it. What the stored copy is still good for is its *wording* -- the
+    session wrote that sentence and showed it to the user -- so it carries over whenever the
+    recomputed halt lands on the same field.
+    """
+    stored = doc.get("halted")
+    if not isinstance(stored, dict) or stored.get("field") != field_name:
+        return None
+    reason = stored.get("reason")
+    return reason if isinstance(reason, str) and reason.strip() else None
+
+
 def _check_emission_readiness(doc: dict, fields: list):
     """Return (errors, halted) for the --for-emission core-field-resolution check.
 
@@ -249,18 +267,6 @@ def _check_emission_readiness(doc: dict, fields: list):
     for key in _EMISSION_REQUIRED_ROOT_KEYS:
         if key not in doc:
             errors.append({"path": key, "message": "required for emission"})
-
-    # A `halted` key already on the document means the gate fired earlier and the session saved
-    # its partial form. Recomputing from scratch and reporting `halted: null` would let a resumed
-    # document walk straight past the block it was saved under -- "its absence means not halted"
-    # only holds if a *present* one is honored.
-    stored_halt = doc.get("halted")
-    if isinstance(stored_halt, dict) and isinstance(stored_halt.get("field"), str):
-        reason = stored_halt.get("reason")
-        halted = {
-            "field": stored_halt["field"],
-            "reason": reason if isinstance(reason, str) and reason.strip() else "halted earlier in this session",
-        }
 
     # logic.md: "A headless feature request halts with the same non-waivable message rather than
     # emitting a hollow artifact." An unattended process cannot know who benefits or what "done"
@@ -310,7 +316,10 @@ def _check_emission_readiness(doc: dict, fields: list):
             if halted is not None:
                 continue  # report only the first unresolved non-waivable field
             if not _resolves_non_waivable(entry):
-                halted = {"field": field_name, "reason": _non_waivable_halt_reason(entry)}
+                halted = {
+                    "field": field_name,
+                    "reason": _stored_halt_reason(doc, field_name) or _non_waivable_halt_reason(entry),
+                }
         else:
             provenance = entry.get("provenance") if entry else None
             resolved = entry is not None and (

@@ -219,6 +219,14 @@ def _split_key(content: str, path: str, lineno: int) -> Tuple[str, str]:
         raise TemplateParseError("merge keys are not supported", path, lineno)
     if key == "":
         raise TemplateParseError(f"expected 'key: value', got {content!r}", path, lineno)
+    # A quoted key is the same key: `"name": x` and `name: x` are one mapping under PyYAML, and
+    # a tier that keeps the quotes produces a document whose keys nothing matches -- so the
+    # template silently resolves to no fields on exactly the machines this tier serves.
+    if len(key) >= 2 and key[0] == key[-1] and key[0] in "\"'":
+        key = (
+            _parse_double_quoted(key, path, lineno) if key[0] == '"'
+            else _parse_single_quoted(key, path, lineno)
+        )
     return key, content[idx + 1 :].strip()
 
 

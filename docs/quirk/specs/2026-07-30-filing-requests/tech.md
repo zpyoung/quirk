@@ -770,11 +770,15 @@ the rendered content the append produces.
   and only on `type == "feature"`. A `bug`/`code-change` document can resolve every core field via
   `missing` + `reason`; `--for-emission` never sets `halted` for those two types *on field
   grounds* — see the headless rule below, which halts a `feature` regardless of field state.
-- **A `halted` key already on the document is honored, not recomputed away.** The gate's own
-  output is what `SKILL.md` saves when the user takes the "save the partial canonical form" exit,
-  so a resumed document arrives carrying it. Recomputing from scratch and reporting
-  `halted: null` would let that document walk straight past the block it was saved under —
-  "absence means not halted" only holds if a present one still means halted.
+- **`halted` is derived, always recomputed, and never trusted as input.** It is this gate's own
+  *output* — what `SKILL.md` writes back when the user takes the "save the partial canonical
+  form" exit — so a resumed document arrives carrying it. Honoring a stored copy would leave that
+  session blocked forever the moment the user actually resolved the field it named, with no
+  documented way to clear it; and a document whose fields all resolve is, by the gate's own
+  definition, not halted. What the stored copy is still good for is its **wording**: when the
+  recomputed halt lands on the same field, the stored `reason` carries over, because that is the
+  sentence the session wrote and showed the user. `drift_apply.py` drops the key outright, since
+  a halt computed against the source type's field set says nothing about the destination's.
 - **A headless `feature` request halts, whatever its fields say.**
   [§Data flow](./logic.md#data-flow) states this outright: "A headless feature request halts with
   the same non-waivable message rather than emitting a hollow artifact." The gate cannot reach

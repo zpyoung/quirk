@@ -349,9 +349,30 @@ def test_dry_run_of_a_halted_document_is_refused_before_rendering(tmp_path: Path
     assert "body_preview" not in payload
 
 
-def test_execute_refuses_a_document_carrying_a_stored_halt(tmp_path: Path, monkeypatch) -> None:
-    # the halted-feature fixture is *computed* halted; this one carries the gate's own saved
-    # output, which is what a resumed session hands back
+def test_execute_refuses_a_document_still_halted_on_resume(tmp_path: Path, monkeypatch) -> None:
+    marker = tmp_path / "gh-invoked.marker"
+    stub = _gh_stub(tmp_path, marker=marker, exit_code=0, stdout="https://example.invalid/filed\n")
+    monkeypatch.setenv("GH_BIN", str(stub))
+    doc = _load_fixture("resumed-halted-feature.json")
+    doc["fields"] = [
+        {"name": "acceptance_criteria", "provenance": "missing", "reason": "none stated yet"}
+        if f["name"] == "acceptance_criteria" else f
+        for f in doc["fields"]
+    ]
+    result = run_filing_script(
+        "github_file.py", "--input", "-", "--repo", doc["target"]["repo"], "--execute",
+        cwd=tmp_path, stdin=json.dumps(doc),
+    )
+    assert result.returncode == 3
+    assert not marker.exists()
+    assert json.loads(result.stdout)["halted"]["field"] == "acceptance_criteria"
+
+
+def test_execute_files_a_resumed_document_once_its_halt_is_resolved(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    # the other half of the resume story: answering the question has to actually unblock filing,
+    # or the "keep working on it" exit leads nowhere
     marker = tmp_path / "gh-invoked.marker"
     stub = _gh_stub(tmp_path, marker=marker, exit_code=0, stdout="https://example.invalid/filed\n")
     monkeypatch.setenv("GH_BIN", str(stub))
@@ -360,9 +381,8 @@ def test_execute_refuses_a_document_carrying_a_stored_halt(tmp_path: Path, monke
         "github_file.py", "--input", "-", "--repo", doc["target"]["repo"], "--execute",
         cwd=tmp_path, stdin=json.dumps(doc),
     )
-    assert result.returncode == 3
-    assert not marker.exists()
-    assert json.loads(result.stdout)["halted"]["field"] == "acceptance_criteria"
+    assert result.returncode == 0, result.stderr
+    assert marker.exists()
 
 
 def test_execute_refuses_a_headless_feature_before_reaching_the_headless_gate(

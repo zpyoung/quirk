@@ -368,3 +368,47 @@ def test_escape_decoding_matches_pyyaml(yaml_mini, text) -> None:
     import yaml
 
     assert yaml_mini.parse(text, "escapes.yml") == yaml.safe_load(text)
+
+
+# ---- production-review round 3 -------------------------------------------
+
+
+QUOTED_KEY_FIXTURES = [
+    '"name": Bug report\n',
+    "'name': Bug report\n",
+    '"name": Bug report\nlabels: [bug]\nbody:\n  - type: textarea\n    "id": what\n',
+    'body:\n  - "type": textarea\n    id: what\n',
+]
+
+
+@pytest.mark.parametrize("text", QUOTED_KEY_FIXTURES)
+def test_quoted_mapping_keys_parse_to_the_same_key_as_unquoted(yaml_mini, text) -> None:
+    # `"name": x` and `name: x` are one mapping. A tier that keeps the quotes produces a
+    # document whose keys nothing matches, so a valid template resolves to no fields at all --
+    # on exactly the machines this tier exists to serve.
+    parsed = yaml_mini.parse(text, "quoted.yml")
+    assert all("'" not in key and '"' not in key for key in parsed)
+
+
+def test_quoted_key_template_survives_discovery_on_the_mini_tier(yaml_mini) -> None:
+    text = (
+        '"name": Bug report\n'
+        '"labels": [bug]\n'
+        "body:\n"
+        "  - type: textarea\n"
+        '    "id": what_happened\n'
+        "    attributes:\n"
+        "      label: What happened?\n"
+    )
+    parsed = yaml_mini.parse(text, "quoted.yml")
+    assert parsed["name"] == "Bug report"
+    assert parsed["labels"] == ["bug"]
+    assert parsed["body"][0]["id"] == "what_happened"
+
+
+@pytest.mark.skipif(not _pyyaml_available(), reason="PyYAML not installed; nothing to compare against")
+@pytest.mark.parametrize("text", QUOTED_KEY_FIXTURES)
+def test_quoted_key_parsing_matches_pyyaml(yaml_mini, text) -> None:
+    import yaml
+
+    assert yaml_mini.parse(text, "quoted.yml") == yaml.safe_load(text)
