@@ -48,8 +48,10 @@ def parse_yaml(text: str, path: str = "<string>") -> Any:
 #
 # Supported: block mappings (nested via indentation), block sequences (including
 # `- key: value` list items), plain/single/double-quoted scalars, booleans, `|`/`>`
-# block scalars, `#` comments. Not supported: flow collections, anchors/aliases,
-# multi-document separators, tags, merge keys -- each raises TemplateParseError.
+# block scalars, `#` comments, and flow sequences whose items are all scalars
+# (`[a, "b", c]`, including the empty `[]`). Not supported: flow mappings, flow
+# sequences containing a nested collection, anchors/aliases, multi-document
+# separators, tags, merge keys -- each raises TemplateParseError.
 
 _BLOCK_SCALAR_INDICATORS = ("|", ">", "|-", "|+", ">-", ">+")
 _BOOL_TRUE = ("true", "True", "TRUE")
@@ -175,8 +177,11 @@ def _parse_node(cur: _Cursor, min_indent: int, path: str) -> Any:
     if indent < min_indent:
         return None
     _reject_doc_markers(content, path, j + 1)
-    if content[0] in "{[":
-        raise TemplateParseError(f"flow collections are not supported: {content!r}", path, j + 1)
+    if content[0] == "{":
+        raise TemplateParseError(f"flow mappings are not supported: {content!r}", path, j + 1)
+    if content[0] == "[":
+        cur.advance_to(j)
+        return _parse_flow_sequence(content, path, j + 1)
     if content == "-" or content.startswith("- "):
         return _parse_sequence(cur, indent, path)
     if _find_colon(content) is not None:
@@ -254,8 +259,11 @@ def _parse_sequence(cur: _Cursor, indent: int, path: str) -> list:
         if rest in _BLOCK_SCALAR_INDICATORS:
             items.append(_parse_block_scalar(cur, rest, indent, path, j + 1))
             continue
-        if rest[0] in "{[":
-            raise TemplateParseError(f"flow collections are not supported: {rest!r}", path, j + 1)
+        if rest[0] == "{":
+            raise TemplateParseError(f"flow mappings are not supported: {rest!r}", path, j + 1)
+        if rest[0] == "[":
+            items.append(_parse_flow_sequence(rest, path, j + 1))
+            continue
         if _find_colon(rest) is None:
             items.append(_parse_scalar(rest, path, j + 1))
             continue
@@ -323,6 +331,73 @@ def _fold(lines: List[str]) -> str:
     return "".join(out)
 
 
+def _parse_flow_sequence(content: str, path: str, lineno: int) -> list:
+    """Parse a bracketed flow sequence of scalar items -- `[a, "b", c]`, including the
+    empty `[]` -- tolerating surrounding whitespace and a trailing comma. Raises
+    TemplateParseError if an item is itself a collection (`[[a], b]`, `[{k: v}]`).
+    """
+    if not content.endswith("]"):
+        raise TemplateParseError(f"unterminated flow sequence: {content!r}", path, lineno)
+    inner = content[1:-1].strip()
+    if inner == "":
+        return []
+    raw_items = _split_flow_items(inner)
+    if raw_items and raw_items[-1].strip() == "":
+        raw_items.pop()
+    items = []
+    for raw_item in raw_items:
+        item = raw_item.strip()
+        if item == "" or item[0] in "{[":
+            raise TemplateParseError(
+                f"flow sequences may only contain scalar items: {content!r}", path, lineno
+            )
+        items.append(_parse_scalar(item, path, lineno))
+    return items
+
+
+def _split_flow_items(inner: str) -> List[str]:
+    """Split a flow sequence's inner text on top-level commas, honoring quotes and
+    nested brackets so a rejected nested collection stays intact as one item.
+    """
+    items: List[str] = []
+    depth = 0
+    in_single = in_double = False
+    start = 0
+    i, n = 0, len(inner)
+    while i < n:
+        ch = inner[i]
+        if in_single:
+            if ch == "'":
+                if i + 1 < n and inner[i + 1] == "'":
+                    i += 2
+                    continue
+                in_single = False
+            i += 1
+            continue
+        if in_double:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == '"':
+                in_double = False
+            i += 1
+            continue
+        if ch == "'":
+            in_single = True
+        elif ch == '"':
+            in_double = True
+        elif ch in "[{":
+            depth += 1
+        elif ch in "]}":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            items.append(inner[start:i])
+            start = i + 1
+        i += 1
+    items.append(inner[start:])
+    return items
+
+
 def _parse_scalar(raw: str, path: str, lineno: int) -> Any:
     raw = raw.strip()
     first = raw[0]
@@ -330,8 +405,10 @@ def _parse_scalar(raw: str, path: str, lineno: int) -> Any:
         return _parse_double_quoted(raw, path, lineno)
     if first == "'":
         return _parse_single_quoted(raw, path, lineno)
-    if first in "{[":
-        raise TemplateParseError(f"flow collections are not supported: {raw!r}", path, lineno)
+    if first == "{":
+        raise TemplateParseError(f"flow mappings are not supported: {raw!r}", path, lineno)
+    if first == "[":
+        return _parse_flow_sequence(raw, path, lineno)
     if first in "&*":
         raise TemplateParseError(f"anchors and aliases are not supported: {raw!r}", path, lineno)
     if first == "!":
