@@ -358,3 +358,28 @@ def test_fixed_wordings_are_defined_in_common_not_this_module(markdown_render) -
         assert getattr(markdown_render, name) == getattr(common, name)
         assert f"{name} = " in common_source
         assert f"{name} = " not in render_source
+
+
+def test_cli_write_never_overwrites_an_existing_artifact(tmp_path: Path) -> None:
+    # tech.md -> Rollback: "the markdown artifact write is additive ... nothing here mutates an
+    # existing file". Two same-day requests whose titles slug alike must not collide.
+    doc = _load_fixture("valid-bug.json")
+    first = run_filing_script(
+        "markdown_render.py", "--input", "-", "--write", str(tmp_path), "--slug", "collision",
+        cwd=tmp_path, stdin=json.dumps(doc),
+    )
+    assert first.returncode == 0, first.stderr
+    first_path = tmp_path / first.stdout.strip()
+    original = first_path.read_text()
+
+    second_doc = dict(doc, title="A completely different request")
+    second = run_filing_script(
+        "markdown_render.py", "--input", "-", "--write", str(tmp_path), "--slug", "collision",
+        cwd=tmp_path, stdin=json.dumps(second_doc),
+    )
+    assert second.returncode == 0, second.stderr
+    second_path = tmp_path / second.stdout.strip()
+
+    assert second_path != first_path
+    assert first_path.read_text() == original
+    assert second_path.read_text().startswith("# A completely different request")

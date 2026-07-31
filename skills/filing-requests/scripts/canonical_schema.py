@@ -250,6 +250,39 @@ def _check_emission_readiness(doc: dict, fields: list):
         if key not in doc:
             errors.append({"path": key, "message": "required for emission"})
 
+    # A `halted` key already on the document means the gate fired earlier and the session saved
+    # its partial form. Recomputing from scratch and reporting `halted: null` would let a resumed
+    # document walk straight past the block it was saved under -- "its absence means not halted"
+    # only holds if a *present* one is honored.
+    stored_halt = doc.get("halted")
+    if isinstance(stored_halt, dict) and isinstance(stored_halt.get("field"), str):
+        reason = stored_halt.get("reason")
+        halted = {
+            "field": stored_halt["field"],
+            "reason": reason if isinstance(reason, str) and reason.strip() else "halted earlier in this session",
+        }
+
+    # logic.md: "A headless feature request halts with the same non-waivable message rather than
+    # emitting a hollow artifact." An unattended process cannot know who benefits or what "done"
+    # means, so the type is refused outright rather than field-by-field.
+    if halted is None and doc.get("headless") is True and doc.get("type") == "feature":
+        halted = {
+            "field": "problem",
+            "reason": "a headless run cannot establish a feature request's non-waivable fields: "
+                      "no human is in session to state the problem or the acceptance criteria",
+        }
+
+    # The "verified against" line is assembled from `observed` sources, not written freehand.
+    # An observed claim with nothing naming what was checked is an unbacked assertion.
+    observed_present = any(
+        isinstance(f, dict) and f.get("provenance") == "observed" for f in fields
+    )
+    if observed_present and not doc.get("verified_against"):
+        errors.append({
+            "path": "verified_against",
+            "message": "at least one field is 'observed'; verified_against must name what was checked",
+        })
+
     template = doc.get("template")
     template_fields = template.get("fields") if isinstance(template, dict) else None
     if not isinstance(template_fields, list) or not template_fields:

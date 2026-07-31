@@ -298,9 +298,14 @@ template_resolve.py fields --type bug|feature|code-change [--template <path|-> |
   `.gitlab/issue_templates/*.md`; excludes `config.yml` outright ([§Choosing among
   templates](./logic.md#choosing-among-templates), step 1); parses each remaining file and excludes
   any with no body sections (see Template resolution, below, for what "body sections" means per
-  format); outputs a JSON array of
-  `{"path": str, "kind": "github-yaml"|"github-markdown"|"gitlab-markdown", "name": str|null,
-  "labels": [str], "filename_stem": str}`. A `--repo-root` that doesn't exist or isn't a directory
+  format); outputs
+  `{"yaml_tier": "pyyaml"|"mini", "candidates": [{"path": str, "kind":
+  "github-yaml"|"github-markdown"|"gitlab-markdown", "name": str|null, "labels": [str],
+  "filename_stem": str}, ...]}`. **Tech-spec call (logic.md silent):** the candidate list is
+  wrapped in an object rather than emitted as a bare array, because
+  [The YAML tier](#the-yaml-tier-pyyaml-then-_yaml_mini) below requires `discover` to report the
+  active tier "in its JSON output" and a bare array has nowhere to carry it. `select --candidates`
+  accepts either shape, so the two still compose directly. A `--repo-root` that doesn't exist or isn't a directory
   is exit `2` (usage error), same as any other bad-argument case; a repo with no template
   directories at all is not an error — it's an empty candidate array, exit `0`.
   **Tech-spec call (logic.md silent):** a template file that fails to parse (violates the
@@ -461,12 +466,25 @@ drift_apply.py --input <path|-> --to bug|feature [--output <path>]
   core is additive, and the non-waivable pair is forced `required: true`. An **absent or empty**
   `template.fields` is left alone — template resolution has not settled, and synthesizing a union
   here would manufacture the exact silent fallback the key exists to prevent.
-  **Tech-spec call (logic.md silent):** an `append_or_become` merge whose incoming provenance is
-  *weaker* than the destination's sets `needs_confirmation: true` on the merged field. A field
-  has one provenance slot; appending a `reported` claim onto an `observed` value would otherwise
-  re-label it `observed` and lose the distinction, which is the ambiguity `logic.md` is careful
-  to avoid everywhere else provenance is concerned. This widens `needs_confirmation` beyond the
-  single `expected_behavior → acceptance_criteria` mapping the schema table names.
+  **Tech-spec call (logic.md silent):** an `append_or_become` row appends **only when the merge
+  keeps both provenance claims true** — that is, when the incoming field has content and its
+  provenance is at least as strong as the destination's (`observed` > `reported` > `inferred` >
+  `missing`). Otherwise the incoming field is retained under its *own* name instead, exactly as
+  an unmapped field would be.
+
+  Two locked rules collide here. The carry-over tables say `problem` appends onto
+  `current_behavior`; [§Data flow](./logic.md#data-flow) says "every carried field keeps the
+  provenance it already had". A field has one provenance slot, so appending `reported` content
+  into an `observed` field asserts the appended claim was verified, and appending a `missing`
+  field discards its `reason` outright — and that reason is the diagnostic content
+  [§Data flow](./logic.md#data-flow) specifically defends ("maintainers prefer an honest
+  'intermittent, no reliable trigger'"). Provenance wins the collision: it is the invariant the
+  renderer enforces, whereas the destination name is a mapping the caller can still see. Nothing
+  is discarded either way — the content simply keeps its own section.
+
+  Downgrading the merged field's provenance instead was considered and rejected: dropping
+  `source` from a demoted `observed` field strands every `verified_against` entry that cited it,
+  so the drift would produce a structurally invalid document.
 
 ### `github_file.py`
 
@@ -721,7 +739,29 @@ the rendered content the append produces.
   the document is already valid JSON and the resume case doesn't call for markdown rendering).
 - Which fields are non-waivable is fixed, not configurable: `problem` and `acceptance_criteria`,
   and only on `type == "feature"`. A `bug`/`code-change` document can resolve every core field via
-  `missing` + `reason`; `--for-emission` never sets `halted` for those two types.
+  `missing` + `reason`; `--for-emission` never sets `halted` for those two types *on field
+  grounds* — see the headless rule below, which halts a `feature` regardless of field state.
+- **A `halted` key already on the document is honored, not recomputed away.** The gate's own
+  output is what `SKILL.md` saves when the user takes the "save the partial canonical form" exit,
+  so a resumed document arrives carrying it. Recomputing from scratch and reporting
+  `halted: null` would let that document walk straight past the block it was saved under —
+  "absence means not halted" only holds if a present one still means halted.
+- **A headless `feature` request halts, whatever its fields say.**
+  [§Data flow](./logic.md#data-flow) states this outright: "A headless feature request halts with
+  the same non-waivable message rather than emitting a hollow artifact." The gate cannot reach
+  that outcome field-by-field, because a document can arrive with `problem` and
+  `acceptance_criteria` populated and `headless: true` — resolved by something other than a human
+  in session, which is exactly the hollow artifact the rule exists to refuse. The check is
+  therefore on the type, not the fields.
+- **An `observed` field obliges a non-empty `verified_against`.**
+  [§The canonical form is the spine](./logic.md#the-canonical-form-is-the-spine) locks the
+  "verified against" line as "assembled from `observed` sources, not written freehand", and
+  [§Decisions Locked](./logic.md#decisions-locked) requires it to name "what was actually
+  checked". The existing per-entry check runs one way only — every entry must cite some field's
+  `source` — so a document with observed claims and an empty list passed, shipping verified
+  assertions with nothing naming the verification. The reverse check is deliberately coarse
+  (non-empty, not per-source matching): a `source` is free text that may name several artifacts in
+  one string, and a stricter comparison would fail on formatting rather than on substance.
 
 ---
 

@@ -347,3 +347,35 @@ def test_dry_run_of_a_halted_document_is_refused_before_rendering(tmp_path: Path
     assert payload["valid"] is False
     assert payload["halted"] is not None
     assert "body_preview" not in payload
+
+
+def test_execute_refuses_a_document_carrying_a_stored_halt(tmp_path: Path, monkeypatch) -> None:
+    # the halted-feature fixture is *computed* halted; this one carries the gate's own saved
+    # output, which is what a resumed session hands back
+    marker = tmp_path / "gh-invoked.marker"
+    stub = _gh_stub(tmp_path, marker=marker, exit_code=0, stdout="https://example.invalid/filed\n")
+    monkeypatch.setenv("GH_BIN", str(stub))
+    doc = _load_fixture("resumed-halted-feature.json")
+    result = run_filing_script(
+        "github_file.py", "--input", "-", "--repo", doc["target"]["repo"], "--execute",
+        cwd=tmp_path, stdin=json.dumps(doc),
+    )
+    assert result.returncode == 3
+    assert not marker.exists()
+    assert json.loads(result.stdout)["halted"]["field"] == "acceptance_criteria"
+
+
+def test_execute_refuses_a_headless_feature_before_reaching_the_headless_gate(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    marker = tmp_path / "gh-invoked.marker"
+    stub = _gh_stub(tmp_path, marker=marker)
+    monkeypatch.setenv("GH_BIN", str(stub))
+    doc = _load_fixture("valid-feature.json")
+    doc["headless"] = True
+    result = run_filing_script(
+        "github_file.py", "--input", "-", "--repo", doc["target"]["repo"], "--execute",
+        cwd=tmp_path, stdin=json.dumps(doc),
+    )
+    assert result.returncode == 3
+    assert not marker.exists()

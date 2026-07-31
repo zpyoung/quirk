@@ -71,7 +71,46 @@ def _rank(entry: dict) -> int:
     return _PROVENANCE_RANK.get(entry.get("provenance"), 0)
 
 
-def _place(mapped: dict, dest_name: str, entry: dict, lead_in: str) -> None:
+def _can_merge_into(existing: dict, incoming: dict) -> bool:
+    """Whether appending `incoming` onto `existing` keeps both provenance claims true.
+
+    A field has exactly one provenance slot, so an append makes the destination's provenance
+    speak for the incoming content too. That is honest only when the incoming claim is at
+    least as strong: folding `reported` text into an `observed` field would assert it was
+    verified, and folding a `missing` field in would lose its reason entirely. Two locked
+    rules collide here -- the carry-over tables' `append_or_become`, and "every carried field
+    keeps the provenance it already had" -- and provenance wins, because it is the invariant
+    the renderer enforces rather than a mapping the caller can re-derive.
+    """
+    return _has_content(incoming) and _rank(incoming) >= _rank(existing)
+
+
+def _merge(existing: dict, incoming: dict, lead_in: str) -> dict:
+    merged = dict(existing)
+    merged["value"] = f"{existing['value']}\n\n{lead_in}\n{incoming['value']}"
+    if incoming.get("needs_confirmation") is True:
+        merged["needs_confirmation"] = True
+    return merged
+
+
+def _retain_beside(mapped: dict, name: str, entry: dict) -> None:
+    """Keep `entry` under its own name rather than folding it into a stronger destination."""
+    existing = mapped.get(name)
+    if existing is None or not _has_content(existing):
+        mapped[name] = dict(entry, name=name)
+        return
+    if _can_merge_into(existing, entry):
+        mapped[name] = _merge(existing, dict(entry, name=name), _collision_lead_in(name))
+        return
+    # its own name is taken by a stronger claim too -- park it rather than drop it, because
+    # nothing the user supplied is ever discarded on drift
+    suffix = 2
+    while f"{name}_{suffix}" in mapped:
+        suffix += 1
+    mapped[f"{name}_{suffix}"] = dict(entry, name=f"{name}_{suffix}")
+
+
+def _place(mapped: dict, dest_name: str, entry: dict, lead_in: str, original_name: str) -> None:
     """Put `entry` at `dest_name`, merging rather than overwriting whatever is already there.
 
     Overwriting is what discards a field: two source entries can land on one destination
@@ -79,25 +118,15 @@ def _place(mapped: dict, dest_name: str, entry: dict, lead_in: str) -> None:
     share a name), and "nothing the user supplied is ever discarded on drift" makes the
     already-settled value and the incoming one both survive.
     """
-    new_entry = dict(entry)
-    new_entry["name"] = dest_name
-
     existing = mapped.get(dest_name)
     if existing is None or not _has_content(existing):
         # nothing settled here yet -- the incoming becomes the destination outright
-        mapped[dest_name] = new_entry
+        mapped[dest_name] = dict(entry, name=dest_name)
         return
-    if not _has_content(new_entry):
-        # a `missing` field's reason explains an absence; it is not content to append
+    if _can_merge_into(existing, entry):
+        mapped[dest_name] = _merge(existing, dict(entry, name=dest_name), lead_in)
         return
-
-    merged = dict(existing)
-    merged["value"] = f"{existing['value']}\n\n{lead_in}\n{new_entry['value']}"
-    if _rank(new_entry) < _rank(existing) or new_entry.get("needs_confirmation") is True:
-        # the appended claim is weaker than the field's own provenance, or arrives already
-        # unconfirmed -- either way the merged field is no longer settled
-        merged["needs_confirmation"] = True
-    mapped[dest_name] = merged
+    _retain_beside(mapped, original_name, entry)
 
 
 def _drift_template_fields(template_fields: list, table: list, to: str) -> list:
@@ -167,14 +196,17 @@ def apply_drift(doc: dict, to: str) -> dict:
             new_entry = dict(entry)
             if row["mode"] == "rename_reopen":
                 new_entry["needs_confirmation"] = True
-            _place(mapped, row["to"], new_entry, row.get("lead_in") or _collision_lead_in(row["from"]))
+            _place(
+                mapped, row["to"], new_entry,
+                row.get("lead_in") or _collision_lead_in(row["from"]), row["from"],
+            )
 
     consumed = {row["from"] for row in table}
     for name, entries in by_name.items():
         if name in consumed:
             continue
         for entry in entries:
-            _place(mapped, name, entry, _collision_lead_in(name))
+            _place(mapped, name, entry, _collision_lead_in(name), name)
 
     new_doc = dict(doc)
     new_doc["type"] = to

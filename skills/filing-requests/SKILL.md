@@ -192,8 +192,18 @@ Three steps, in this order. See `reference/guardrails.md`.
 python3 skills/filing-requests/scripts/secret_scan.py --input doc.json
 ```
 Exit `1` means findings. Show each one by the path that located it (`fields[2].value`, `title`) and
-do not proceed until the user resolves every one — redact or keep. The scanner redacts its own
-output; never echo a full secret back.
+do not proceed until the user has decided about every one. The scanner redacts its own output;
+never echo a full secret back.
+
+Two resolutions, and they are not equivalent:
+
+- **Redact** — edit the value so it no longer carries the secret. Re-scan. Both the artifact and
+  filing are then unblocked.
+- **Keep** — the user judges it a false positive or accepts it. The local artifact still writes,
+  because it is theirs. **Filing stays blocked**: `github_file.py --execute` re-scans and refuses
+  with exit `1`, and there is no override. If they want it filed, the text has to change.
+
+Say which of the two you are doing. "Keep" is not a way past the filing gate.
 
 **2. Write the markdown artifact.** Unconditional.
 ```

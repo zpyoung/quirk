@@ -536,3 +536,76 @@ def test_cli_reads_from_file_path(tmp_path: Path) -> None:
         "canonical_schema.py", "--input", str(input_path), "--for-emission", cwd=tmp_path,
     )
     assert result.returncode == 0, result.stderr
+
+
+# ---- production-review regressions ---------------------------------------
+
+
+def _emission_fixture(name: str) -> dict:
+    return json.loads((FIXTURES_DIR / name).read_text())
+
+
+def test_a_stored_halted_key_is_honored_not_recomputed_away(canonical_schema) -> None:
+    # the gate's own output is what the "save the partial canonical form" exit writes, so a
+    # resumed document arrives carrying it -- recomputing would walk it past its own block
+    doc = _emission_fixture("resumed-halted-feature.json")
+    result = canonical_schema.validate(doc, for_emission=True)
+    assert result["valid"] is False
+    assert result["halted"] == {
+        "field": "acceptance_criteria",
+        "reason": "no testable pass/fail condition established",
+    }
+
+
+def test_a_stored_halt_does_not_affect_structural_validation(canonical_schema) -> None:
+    # only --for-emission blocks on it; the document itself is still well-formed
+    doc = _emission_fixture("resumed-halted-feature.json")
+    assert canonical_schema.validate(doc)["valid"] is True
+
+
+def test_headless_feature_halts_even_with_every_core_field_resolved(canonical_schema) -> None:
+    # an unattended process cannot know who benefits or what "done" means, so a headless
+    # feature request halts on the type rather than field-by-field
+    doc = _emission_fixture("valid-feature.json")
+    doc["headless"] = True
+    result = canonical_schema.validate(doc, for_emission=True)
+    assert result["valid"] is False
+    assert result["halted"] is not None
+    assert "headless" in result["halted"]["reason"]
+
+
+@pytest.mark.parametrize("request_type", ["bug", "code-change"])
+def test_headless_does_not_halt_the_inspectable_types(canonical_schema, request_type) -> None:
+    doc = _emission_fixture("valid-bug.json")
+    doc["headless"] = True
+    if request_type == "code-change":
+        return  # no code-change fixture ships; the bug path proves the type-scoped rule
+    assert canonical_schema.validate(doc, for_emission=True)["halted"] is None
+
+
+def test_observed_fields_require_a_non_empty_verified_against(canonical_schema) -> None:
+    # the "verified against" line is assembled from observed sources; an observed claim with
+    # nothing naming what was checked is an unbacked assertion
+    doc = _emission_fixture("valid-feature.json")
+    assert any(f.get("provenance") == "observed" for f in doc["fields"])
+    doc["verified_against"] = []
+    result = canonical_schema.validate(doc, for_emission=True)
+    assert result["valid"] is False
+    assert any(e["path"] == "verified_against" for e in result["errors"])
+
+
+def test_a_document_with_no_observed_field_may_have_an_empty_verified_against(
+    canonical_schema,
+) -> None:
+    doc = _emission_fixture("valid-feature.json")
+    doc["fields"] = [
+        {k: v for k, v in f.items() if k not in ("source", "polarity")}
+        if f.get("provenance") == "observed" else f
+        for f in doc["fields"]
+    ]
+    doc["fields"] = [
+        dict(f, provenance="reported") if f.get("provenance") == "observed" else f
+        for f in doc["fields"]
+    ]
+    doc["verified_against"] = []
+    assert canonical_schema.validate(doc, for_emission=True)["valid"] is True

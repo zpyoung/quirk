@@ -116,6 +116,20 @@ def _artifact_relative_path(doc: dict, slug_override: str | None) -> Path:
     return Path("docs") / "quirk" / "requests" / f"{_today_str()}-{slug}.md"
 
 
+def _unique_path(root: Path, rel_path: Path) -> Path:
+    """Never mutate an existing artifact -- the write is additive, always a new file.
+
+    Two requests filed the same day whose titles slug identically would otherwise land on one
+    path, and the second would silently overwrite the first session's work.
+    """
+    if not (root / rel_path).exists():
+        return rel_path
+    suffix = 2
+    while (root / rel_path.with_name(f"{rel_path.stem}-{suffix}{rel_path.suffix}")).exists():
+        suffix += 1
+    return rel_path.with_name(f"{rel_path.stem}-{suffix}{rel_path.suffix}")
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Render a filing-requests canonical document to markdown.")
     parser.add_argument("--input", required=True)
@@ -150,6 +164,7 @@ def main(argv=None) -> int:
             print(str(exc), file=sys.stderr)
             return 2
         root = Path(args.write).resolve()
+        rel_path = _unique_path(root, rel_path)
         full_path = root / rel_path
         # belt and braces: the slug is already sanitized, so this can only fire if that
         # ever regresses -- and the failure it would catch is an overwrite outside the root.

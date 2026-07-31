@@ -272,8 +272,15 @@ def test_bug_to_feature_result_is_structurally_valid(drift_apply, canonical_sche
 # ---- apply_drift(): feature -> bug ---------------------------------------
 
 
-def test_problem_collision_append_lands_on_already_settled_current_behavior(drift_apply) -> None:
+def test_problem_collision_appends_when_the_destination_is_no_stronger(drift_apply) -> None:
     doc = _feature_doc()
+    doc["fields"] = [
+        {"name": "current_behavior", "provenance": "reported",
+         "value": "no PDF export path exists; src/export/ implements CSV and JSON only"}
+        if f["name"] == "current_behavior" else f
+        for f in doc["fields"]
+    ]
+    doc["verified_against"] = []
     result = drift_apply.apply_drift(doc, "bug")
     current_behavior = _field(result["fields"], "current_behavior")
     assert current_behavior["value"] == (
@@ -281,8 +288,9 @@ def test_problem_collision_append_lands_on_already_settled_current_behavior(drif
         "\n\nProblem statement (from the original feature request):"
         "\nfinance forwards reports to auditors who reject CSV"
     )
-    assert current_behavior["provenance"] == "observed"
+    assert current_behavior["provenance"] == "reported"
     assert sum(1 for f in result["fields"] if f["name"] == "current_behavior") == 1
+    assert not any(f["name"] == "problem" for f in result["fields"])
 
 
 def test_acceptance_criteria_maps_to_expected_behavior_identity_rename(drift_apply) -> None:
@@ -439,26 +447,71 @@ def test_duplicate_source_field_names_are_all_carried(drift_apply) -> None:
 
 
 def test_mapped_destination_colliding_with_an_existing_field_keeps_both(drift_apply) -> None:
-    # environment -> constraints lands on a document that already carries `constraints`
+    # environment (observed) -> constraints lands on a document that already carries a
+    # `reported` constraints. Neither may be dropped, and neither may be relabelled as the
+    # other's provenance, so they end up as two fields rather than one merged one.
     doc = _bug_doc()
     doc["fields"].append({
         "name": "constraints", "provenance": "reported",
         "value": "must keep working on the 2.3 LTS line",
     })
     result = drift_apply.apply_drift(doc, "feature")
+    blob = json.dumps(result)
+    assert "reports 2.4.1, Python 3.11.6" in blob
+    assert "must keep working on the 2.3 LTS line" in blob
+    carried = [f for f in result["fields"] if f["name"].startswith("constraints")]
+    assert {f["provenance"] for f in carried} == {"observed", "reported"}
+
+
+def test_colliding_fields_of_equal_provenance_do_merge(drift_apply) -> None:
+    doc = _bug_doc()
+    doc["fields"] = [
+        {"name": "environment", "provenance": "reported", "value": "reports 2.4.1"}
+        if f["name"] == "environment" else f
+        for f in doc["fields"]
+    ]
+    doc["fields"].append({
+        "name": "constraints", "provenance": "reported", "value": "2.3 LTS must keep working",
+    })
+    doc["verified_against"] = []
+    result = drift_apply.apply_drift(doc, "feature")
     constraints = _field(result["fields"], "constraints")
-    assert "reports 2.4.1, Python 3.11.6" in constraints["value"]
-    assert "must keep working on the 2.3 LTS line" in constraints["value"]
-    assert sum(1 for f in result["fields"] if f["name"] == "constraints") == 1
+    assert "reports 2.4.1" in constraints["value"]
+    assert "2.3 LTS must keep working" in constraints["value"]
+    assert sum(1 for f in result["fields"] if f["name"].startswith("constraints")) == 1
 
 
-def test_append_of_weaker_provenance_flags_the_merged_field(drift_apply) -> None:
-    # a `reported` problem appended onto an `observed` current_behavior cannot silently
-    # inherit "observed" -- the field has one provenance slot and now carries both claims
+def test_weaker_incoming_is_retained_rather_than_relabelled(drift_apply) -> None:
+    # a `reported` problem must not be folded into an `observed` current_behavior: the field
+    # has one provenance slot, so the append would assert the problem statement was verified.
     doc = _feature_doc()
     result = drift_apply.apply_drift(doc, "bug")
+
     current_behavior = _field(result["fields"], "current_behavior")
-    assert current_behavior["needs_confirmation"] is True
+    assert current_behavior["provenance"] == "observed"
+    assert current_behavior["source"] == "src/export/__init__.py"
+    assert "finance forwards reports" not in current_behavior["value"]
+
+    problem = _field(result["fields"], "problem")
+    assert problem["provenance"] == "reported"
+    assert problem["value"] == "finance forwards reports to auditors who reject CSV"
+
+
+def test_missing_field_reason_survives_a_mapped_drift(drift_apply) -> None:
+    # a `missing` reason is the diagnostic content the spec defends -- folding it into a
+    # settled destination would drop it, and dropping it discards what the user supplied
+    doc = _bug_doc()
+    doc["fields"] = [
+        {"name": "steps_to_reproduce", "provenance": "missing",
+         "reason": "intermittent; observed 3x over two weeks with no identified trigger"}
+        if f["name"] == "steps_to_reproduce" else f
+        for f in doc["fields"]
+    ]
+    result = drift_apply.apply_drift(doc, "feature")
+    steps = _field(result["fields"], "steps_to_reproduce")
+    assert steps["provenance"] == "missing"
+    assert steps["reason"] == "intermittent; observed 3x over two weeks with no identified trigger"
+    assert "value" not in steps
 
 
 def test_append_of_equal_provenance_does_not_flag_the_merged_field(drift_apply) -> None:
