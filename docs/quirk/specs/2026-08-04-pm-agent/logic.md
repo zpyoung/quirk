@@ -216,8 +216,15 @@ transitivity falls out for free and there is no graph walk in the read path.
   → must PASS, else refuse and leave in_progress
   → entry becomes:
     - **Status**: closed — 2026-08-05 — probe: test:… — baseline: fail → pass
-  → adapter, if present, also signals the PM session
+  → adapter, if present, signals the PM session: outcome=succeeded
 ```
+
+**Both terminal transitions signal; a refusal does not.** `finish` signals `succeeded` and `park`
+signals `failed`. A `finish` that refuses because the probe still fails signals nothing — the task
+is not terminal, the worker is presumably still on it, and a notification per failed attempt is
+how a channel becomes noise that gets muted. `park` signalling matters more than `finish` does:
+the PM most needs to hear the case where the worker gave up, and that is the case least likely to
+be reported any other way.
 
 **The probe runs at the destination, the write lands at the origin.** These are different
 directories and the split is deliberate: a probe is only meaningful against the code being
@@ -254,6 +261,9 @@ It carries:
   command to run.
 - **The ledger address** — the absolute path to the origin project, and the explicit statement
   that the ledger is *there*, not here.
+- **The return address** — the run and dispatch IDs, when the handoff was made under an
+  orchestrator. Recorded so the completion signal can be addressed even when `finish` runs outside
+  the dispatched terminal. Absent for an unadapted handoff, which is fine.
 - **The write-back contract** — three obligations, stated as instructions rather than prose:
   1. When the probe passes, run `finish` against the origin ledger.
   2. If you cannot finish, run `park` with a reason. Do not leave it `in_progress`.
@@ -278,7 +288,7 @@ static file decay within a session while tool responses are read every time.
 |---|---|---|
 | `create_worktree(repo, branch)` | Produce a path | `git worktree add` |
 | `launch(path, prompt)` | Start an agent session there | print the prompt, exit 0 |
-| `signal_done(task, outcome)` | Notify the dispatching session | no-op — the ledger is the record |
+| `signal_done(task, outcome)` | Notify the dispatching session; `outcome ∈ {succeeded, failed}` | no-op — the ledger is the record |
 
 With no adapter present, `start` still creates the worktree, still runs the probe, still writes the
 packet and the ledger, and prints the prompt for you to paste. Nothing about the verification
@@ -287,8 +297,21 @@ contract depends on the launcher.
 **The orca adapter** maps onto existing primitives with little glue: `orchestration task-create`
 then `worker-start --task <id> --worktree new-child --agent claude --repo <selector>` covers the
 first two calls, and `orchestration send --type worker_done --outcome succeeded|failed --task-id
-<id>` covers the third. `worker_done` defaults to its owning Run mailbox when no recipient is
-given, so the worker never needs to know the PM's handle.
+<id>` covers the third.
+
+**Addressing the signal needs care.** `worker_done` is an *exact-Dispatch* signal: omitting the
+recipient falls back to the owning Run mailbox only **from an active Dispatch**. A worker launched
+via `worker-start` satisfies that, but the same `finish` run from a terminal you opened yourself in
+that worktree does not — there is no Dispatch to inherit from. So the packet records the run and
+dispatch IDs at handoff, and `signal_done` resolves a recipient in this order:
+
+1. The ambient Dispatch context, when `orchestration run-current` reports a binding.
+2. The run/dispatch ID recorded in the packet.
+3. Neither — skip the signal.
+
+Step 3 is a normal outcome, not an error. It is what happens with no adapter, outside orca, or in a
+worktree whose Run has since been reset, and it costs nothing because the ledger already holds the
+result.
 
 The completion signal is **additive, never authoritative**. The ledger write is what makes a task
 closed; the signal only makes the PM session notice sooner. If the signal is lost, the state is
@@ -542,6 +565,8 @@ Stated rather than papered over. None of these has a fix inside this design.
 - The launcher is pluggable behind a three-call adapter, with a git-only fallback.
 - The worker writes back to the ledger always; under orca it additionally signals the PM session.
   The signal is additive, never authoritative.
+- `finish` signals `succeeded`, `park` signals `failed`, a refused `finish` signals nothing.
+- The signal recipient resolves as ambient Dispatch → IDs recorded in the packet → skip.
 - The entry records a `Handoff` line: repo, branch, worktree path.
 
 **Completion evidence**
@@ -702,3 +727,21 @@ the write-back contract.
   Known limits 4 and 5 were added to record what this amendment cannot enforce: nothing compels a
   worker to read the packet, and the origin cannot distinguish a working worker from a dead one
   from a forgetful one — all three present as a stall.
+
+- **2026-08-05 — completion signal corrected and completed.** Review of the amendment against
+  orca's actual semantics found the signal-back under-specified in three ways.
+
+  **An overstatement was removed.** The spec had claimed `worker_done` "defaults to its owning Run
+  mailbox when no recipient is given, so the worker never needs to know the PM's handle." That is
+  true only *from an active Dispatch* — `worker_done` is an exact-Dispatch signal. A worker started
+  by `worker-start` qualifies, but the same `finish` run from a terminal opened by hand in that
+  worktree does not. The packet now records run and dispatch IDs, and `signal_done` resolves
+  ambient Dispatch → recorded IDs → skip, with skipping treated as a normal outcome.
+
+  **`park` now signals.** The original text put the signal only on `finish`, which inverted the
+  priority: the case the PM most needs to hear is the one where the worker gave up, and it is the
+  least likely to surface any other way. `finish` signals `succeeded`, `park` signals `failed`.
+
+  **A refused `finish` signals nothing**, now stated explicitly. The task is not terminal and the
+  worker is presumably still on it; one notification per failed attempt is how a channel becomes
+  noise that gets muted.
