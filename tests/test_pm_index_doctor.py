@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import threading
 from pathlib import Path
+
+import pytest
 
 import pm
 
-from .conftest import run_script
+from .conftest import BIN_DIR, run_script
 
 
 def append_bug(path: Path, entry_id: int, title: str, severity: str | None = None, observed: str | None = None) -> None:
@@ -283,6 +289,90 @@ def test_read_and_parse_gives_a_concrete_reason_for_a_vanished_file(initialized_
     assert fp is None
     assert skip_reason is not None
     assert skip_reason != "None"
+
+
+def test_read_and_parse_skips_a_fifo_without_blocking(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    bugs.unlink()
+    os.mkfifo(bugs)
+
+    outcome: list[tuple] = []
+    thread = threading.Thread(
+        target=lambda: outcome.append(pm._read_and_parse(initialized_project, pm.BACKLOG_FILES[0])),
+        daemon=True,
+    )
+    thread.start()
+    thread.join(timeout=5)
+    assert not thread.is_alive(), "_read_and_parse blocked opening a FIFO instead of skipping it"
+
+    fp, skip_reason = outcome[0]
+    assert fp is None
+    assert skip_reason is not None and skip_reason != "None"
+
+
+def test_index_skips_a_fifo_at_an_artifact_path(initialized_project: Path) -> None:
+    # bounded directly (not via run_script) so a regression fails fast instead of
+    # hanging the whole suite forever on a blocking FIFO open
+    bugs = initialized_project / "BUGS.md"
+    bugs.unlink()
+    os.mkfifo(bugs)
+
+    try:
+        result = subprocess.run(
+            [sys.executable, str(BIN_DIR / "pm.py"), "--index"],
+            cwd=initialized_project,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("pm.py --index blocked opening a FIFO instead of skipping it")
+
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    assert "BUGS.md: not a regular file, skipping" in out
+    assert "0 unplaced (0 ready, 0 blocked, 0 malformed)" in out
+    assert "BUGS 0/0 open" not in out
+
+
+def test_max_file_bytes_falls_back_when_override_is_too_large_to_use(monkeypatch) -> None:
+    monkeypatch.setenv("QUIRK_PM_MAX_FILE_BYTES", "99999999999999999999")
+    assert pm._max_file_bytes() == pm.DEFAULT_MAX_FILE_BYTES
+
+
+def test_index_does_not_crash_on_an_unusably_large_max_file_bytes(initialized_project: Path, monkeypatch) -> None:
+    append_bug(initialized_project / "BUGS.md", 1, "alpha", severity="high", observed="2026-08-01")
+    monkeypatch.setenv("QUIRK_PM_MAX_FILE_BYTES", "99999999999999999999")
+    result = run_script("pm.py", "--index", cwd=initialized_project)
+    assert result.returncode == 0, result.stderr
+    assert "BUGS 1/1 open" in result.stdout
+
+
+def test_read_and_parse_falls_back_to_locale_encoding_when_utf8_fails(
+    initialized_project: Path, monkeypatch
+) -> None:
+    bugs = initialized_project / "BUGS.md"
+    # 'é' as a lone latin-1 byte (0xE9) is not a valid utf-8 continuation sequence
+    entry = "\n## BUG-1: caf\xe9 bug\n- **Severity**: high\n".encode("latin-1")
+    bugs.write_bytes(bugs.read_bytes() + entry)
+    monkeypatch.setattr(pm.locale, "getpreferredencoding", lambda do_setlocale=True: "latin-1")
+
+    fp, skip_reason = pm._read_and_parse(initialized_project, pm.BACKLOG_FILES[0])
+    assert skip_reason is None
+    assert fp is not None
+    assert len(fp.entries) == 1
+
+
+def test_read_and_parse_still_skips_content_invalid_under_both_encodings(
+    initialized_project: Path, monkeypatch
+) -> None:
+    bugs = initialized_project / "BUGS.md"
+    bugs.write_bytes(b"\xff\xfe\x00\x01not utf-8")
+    monkeypatch.setattr(pm.locale, "getpreferredencoding", lambda do_setlocale=True: "ascii")
+
+    fp, skip_reason = pm._read_and_parse(initialized_project, pm.BACKLOG_FILES[0])
+    assert fp is None
+    assert skip_reason == "parse error, skipping"
 
 
 def test_index_never_renders_the_none_skip_reason(initialized_project: Path, monkeypatch) -> None:

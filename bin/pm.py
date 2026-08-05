@@ -9,7 +9,9 @@ roadmap-derived findings are Phase-2+ and never appear here.
 from __future__ import annotations
 
 import argparse
+import locale
 import os
+import stat
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -68,6 +70,10 @@ def _max_file_bytes() -> int:
         return DEFAULT_MAX_FILE_BYTES
     if value <= 0:
         return DEFAULT_MAX_FILE_BYTES
+    if value > sys.maxsize - 1:
+        # f.read() takes a Py_ssize_t; an override this large can never be used as
+        # a read size, so it's treated the same as unset rather than raising.
+        return DEFAULT_MAX_FILE_BYTES
     return value
 
 
@@ -84,6 +90,14 @@ def _read_and_parse(project: Path, spec: ArtifactSpec) -> tuple[FileParse | None
     path = project / spec.filename
     max_bytes = _max_file_bytes()
     try:
+        # os.stat, not path.open: opening a FIFO for reading blocks until a
+        # writer appears, which would hang the SessionStart hook that runs this.
+        mode = os.stat(path).st_mode
+    except OSError:
+        return None, "parse error, skipping"
+    if not stat.S_ISREG(mode):
+        return None, "not a regular file, skipping"
+    try:
         with path.open("rb") as f:
             data = f.read(max_bytes + 1)
     except OSError:
@@ -92,6 +106,14 @@ def _read_and_parse(project: Path, spec: ArtifactSpec) -> tuple[FileParse | None
         return None, f"exceeds {max_bytes} bytes, skipping"
     try:
         text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        # artifact_append.py writes with the platform default encoding, not
+        # explicit utf-8; a file quirk itself wrote must not be dropped over that.
+        try:
+            text = data.decode(locale.getpreferredencoding(False))
+        except (UnicodeDecodeError, LookupError):
+            return None, "parse error, skipping"
+    try:
         result = parse_entries(text, spec.header)
     except Exception:
         return None, "parse error, skipping"
