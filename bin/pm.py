@@ -9,6 +9,7 @@ roadmap-derived findings are Phase-2+ and never appear here.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,7 @@ SEVERITY_URGENCY = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 PRIORITY_URGENCY = {"p1": 0, "p2": 1, "p3": 2, "p4": 3}
 
 NEXT_TOP_N = 5
+DEFAULT_MAX_FILE_BYTES = 1_048_576
 
 
 @dataclass(frozen=True)
@@ -56,25 +58,45 @@ def _any_artifact_file_exists(project: Path) -> bool:
     return any((project / spec.filename).exists() for spec in ALL_SPECS)
 
 
-def _read_and_parse(project: Path, spec: ArtifactSpec) -> FileParse | None:
-    """Return None if the file is absent, a FileParse (possibly empty) otherwise.
+def _max_file_bytes() -> int:
+    raw = os.environ.get("QUIRK_PM_MAX_FILE_BYTES")
+    if raw is None:
+        return DEFAULT_MAX_FILE_BYTES
+    try:
+        return int(raw)
+    except ValueError:
+        return DEFAULT_MAX_FILE_BYTES
 
-    A read/parse failure is reported as an empty FileParse paired with a
-    caller-visible error line rather than raised, so one bad file never takes
-    down the whole read layer.
+
+def _read_and_parse(project: Path, spec: ArtifactSpec) -> tuple[FileParse | None, str | None]:
+    """Return (FileParse, None) on success, else (None, skip-reason).
+
+    A read/parse failure or an oversize file is reported as a caller-visible
+    skip reason rather than raised, so one bad file never takes down the
+    whole read layer. The size check runs before the file is ever read, so
+    pm.py — which runs on every SessionStart — never loads an unbounded file.
     """
     path = project / spec.filename
     if not path.exists():
-        return None
+        return None, None
+    max_bytes = _max_file_bytes()
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return None, "parse error, skipping"
+    if size > max_bytes:
+        return None, f"exceeds {max_bytes} bytes, skipping"
     try:
         text = path.read_text()
         result = parse_entries(text, spec.header)
     except Exception:
-        return None
-    return FileParse(spec, result.entries, result.malformed)
+        return None, "parse error, skipping"
+    return FileParse(spec, result.entries, result.malformed), None
 
 
 def _urgency(spec: ArtifactSpec, fields: dict[str, str]) -> int:
+    if spec.urgency_field is None or spec.urgency_table is None:
+        return 2
     raw = (fields.get(spec.urgency_field) or "").strip().lower()
     return spec.urgency_table.get(raw, 2)
 
@@ -101,11 +123,13 @@ def _doctor_findings(fp: FileParse) -> list[tuple[str, str]]:
             f"{spec.header}-{m.id} in {spec.filename} — heading claims an ID with no title",
         ))
     seen: set[int] = set()
+    dup_seen: set[int] = set()
     dup_ids: list[int] = []
-    for e in fp.entries:
-        if e.id in seen and e.id not in dup_ids:
-            dup_ids.append(e.id)
-        seen.add(e.id)
+    for claimed_id in (*(e.id for e in fp.entries), *(m.id for m in fp.malformed)):
+        if claimed_id in seen and claimed_id not in dup_seen:
+            dup_ids.append(claimed_id)
+            dup_seen.add(claimed_id)
+        seen.add(claimed_id)
     for eid in dup_ids:
         findings.append((
             "DUPLICATE_ID",
@@ -131,9 +155,9 @@ def render_index(project: Path) -> str:
         path = project / spec.filename
         if not path.exists():
             continue
-        fp = _read_and_parse(project, spec)
+        fp, skip_reason = _read_and_parse(project, spec)
         if fp is None:
-            parse_error_lines.append(f"[quirk:pm] {spec.filename}: parse error, skipping")
+            parse_error_lines.append(f"[quirk:pm] {spec.filename}: {skip_reason}")
             continue
         open_count = len(fp.entries)
         total = open_count + len(fp.malformed)
@@ -143,9 +167,9 @@ def render_index(project: Path) -> str:
         findings.extend(_doctor_findings(fp))
 
     if (project / PROPOSALS.filename).exists():
-        proposals_fp = _read_and_parse(project, PROPOSALS)
+        proposals_fp, proposals_skip_reason = _read_and_parse(project, PROPOSALS)
         if proposals_fp is None:
-            parse_error_lines.append(f"[quirk:pm] {PROPOSALS.filename}: parse error, skipping")
+            parse_error_lines.append(f"[quirk:pm] {PROPOSALS.filename}: {proposals_skip_reason}")
         else:
             findings.extend(_doctor_findings(proposals_fp))
 
@@ -177,9 +201,9 @@ def render_next(project: Path) -> str:
         path = project / spec.filename
         if not path.exists():
             continue
-        fp = _read_and_parse(project, spec)
+        fp, skip_reason = _read_and_parse(project, spec)
         if fp is None:
-            parse_error_lines.append(f"[quirk:pm] {spec.filename}: parse error, skipping")
+            parse_error_lines.append(f"[quirk:pm] {spec.filename}: {skip_reason}")
             continue
         ready += len(fp.entries)
         malformed_total += len(fp.malformed)
@@ -216,9 +240,9 @@ def render_doctor(project: Path) -> str:
         path = project / spec.filename
         if not path.exists():
             continue
-        fp = _read_and_parse(project, spec)
+        fp, skip_reason = _read_and_parse(project, spec)
         if fp is None:
-            lines.append(f"[quirk:pm] {spec.filename}: parse error, skipping")
+            lines.append(f"[quirk:pm] {spec.filename}: {skip_reason}")
             continue
         findings.extend(_doctor_findings(fp))
 

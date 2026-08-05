@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pm
+
 from .conftest import run_script
 
 
@@ -85,6 +87,16 @@ def test_index_skips_file_that_fails_to_parse(initialized_project: Path) -> None
     out = result.stdout
     assert "BUGS.md: parse error, skipping" in out
     assert "BUGS" not in out.split("parse error, skipping")[1].split("\n")[0]
+
+
+def test_index_skips_file_over_the_size_bound(initialized_project: Path, monkeypatch) -> None:
+    monkeypatch.setenv("QUIRK_PM_MAX_FILE_BYTES", "10")
+    result = run_script("pm.py", "--index", cwd=initialized_project)
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    assert "BUGS.md: exceeds 10 bytes, skipping" in out
+    assert "0 unplaced (0 ready, 0 blocked, 0 malformed)" in out
+    assert "BUGS 0/0 open" not in out
 
 
 # --- --next --------------------------------------------------------------
@@ -177,6 +189,34 @@ def test_doctor_reports_duplicate_id(initialized_project: Path) -> None:
     assert "BUG-5" in out
 
 
+def test_doctor_reports_duplicate_id_when_one_heading_is_malformed(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    bugs.write_text(bugs.read_text() + (
+        "\n## BUG-7: the real one\n- **Severity**: high\n"
+        "\n## BUG-7:\n- **Severity**: critical\n"
+    ))
+    result = run_script("pm.py", "--doctor", cwd=initialized_project)
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    assert "MALFORMED_HEADING" in out
+    assert "DUPLICATE_ID" in out
+    assert out.count("BUG-7") >= 2
+
+
+def test_doctor_reports_duplicate_id_for_two_malformed_headings(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    bugs.write_text(bugs.read_text() + (
+        "\n## BUG-9:\n- **Severity**: high\n"
+        "\n## BUG-9:\n- **Severity**: low\n"
+    ))
+    result = run_script("pm.py", "--doctor", cwd=initialized_project)
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    assert out.count("MALFORMED_HEADING") == 2
+    assert out.count("DUPLICATE_ID") == 1
+    assert "BUG-9" in out
+
+
 def test_doctor_exits_zero_with_findings(initialized_project: Path) -> None:
     bugs = initialized_project / "BUGS.md"
     bugs.write_text(bugs.read_text() + "\n## BUG-1:\n- **Severity**: high\n")
@@ -192,3 +232,11 @@ def test_doctor_scans_proposals_file_too(initialized_project: Path) -> None:
     out = result.stdout
     assert "MALFORMED_HEADING" in out
     assert "PROPOSAL-1" in out
+
+
+# --- internal helpers ------------------------------------------------------
+
+
+def test_urgency_is_total_for_a_spec_with_no_urgency_table() -> None:
+    assert pm._urgency(pm.PROPOSALS, {}) == 2
+    assert pm._urgency(pm.PROPOSALS, {"Anything": "value"}) == 2
