@@ -1,6 +1,31 @@
 # Tech spec — `pm-agent`
 
-**Status:** Draft (awaiting review)
+**Status:** **Phase 1 sections approved for implementation. Phases 2–3 are a reviewed draft with
+known critical defects — do not build from them.**
+
+> **Scope gate — read before implementing anything.**
+>
+> This document was adversarially reviewed on 2026-08-05
+> ([`review-2026-08-05-codex-tech.md`](./review-2026-08-05-codex-tech.md), 15 findings: 3 critical,
+> 10 high, 2 medium). Its verdict was *not buildable as written*, and every critical landed in the
+> write and dispatch layers.
+>
+> **Approved — Phase 1 (read layer).** *Architecture*, *Code references*, *Parser strict vs.
+> compatibility modes*, the `artifact_lib.py` contract, the index/status/doctor read layer, *DO-NOT-
+> CHANGE fences*, and the Phase 1 rows of *Testing strategy*. The parser section has been corrected
+> since the review — see below — and its defect was found and fixed here, not deferred.
+>
+> **Not approved — Phases 2–3.** The lifecycle/CAS mechanism, `park` persistence, schema-v2
+> migration, `reconcile`, the probe contract, the packet, and the Orca adapter. Confirmed defects
+> include: CAS silently dropped the `attempt` key the logic spec locks, so a stale `finish` can
+> write attempt-1 evidence into attempt 2; `park` records neither reason nor attempt count; the Orca
+> adapter omits `orca orchestration send`'s **required** `--subject` and reads `result.dispatch.id`
+> where the CLI returns a flat `dispatchId`; and with `EXPECTED_SCHEMA_VERSION` raised to 2,
+> `artifact_append.py`'s `version > EXPECTED` guard accepts a **v1** file and writes v2 fields into
+> it — the mixed-schema state v2 exists to prevent.
+>
+> These sections stay in the document as a starting point for a later pass. They are not a build
+> target.
 **Logic spec:** [`logic.md`](./logic.md) — owns *why* and *behavior*, including the threat model
 (cooperative worker, legibility not enforcement — every check named below is a mistake-catcher, none
 is a security control). This document owns *where* and *contracts*. Every technical section
@@ -171,16 +196,59 @@ disk." Any heading claiming an ID — however malformed — has claimed it, so t
 or a titleless legacy heading becomes an invisible, re-issuable ID. **This is unchanged behavior**:
 `bin/artifact_lib.find_max_id(text, header)` is `bin/artifact_append.py:88-92` moved verbatim.
 
-`REGEX:` — **strict (entry detection), used everywhere the backlog is computed:**
+`REGEX:` — **strict (title validation), used to classify blocks:**
 ```
-^##\s+{header}-(\d+):\s*(.+)$
+^##[ \t]+{header}-(\d+):[ \t]*(\S.*)$
 ```
-Verbatim from `bin/artifact_review.py:20`. Every consumer that decides what's `open`, `ready`,
-`unplaced`, or roadmap-eligible — `pm.py next/start/finish/park/decide/reconcile/status/doctor/index`
-and the refactored `artifact_review.py` — uses this one regex. This is the convergence
-`logic.md`'s Key Decisions section requires ("Job 1 and job 2 must agree on what 'open' means"):
-there is now exactly one strict-mode entry detector, imported everywhere, not two copies that can
-drift again.
+
+**This is NOT verbatim from `bin/artifact_review.py:20`, and the difference is a live bug.** The
+existing regex is `^##\s+{header}-(\d+):\s*(.+)$`, and an earlier draft of this section reproduced
+it while claiming it "requires a non-empty title". It does not. `\s` matches newlines, so `\s*`
+happily crosses the line break and `(.+)` then consumes the *next line* as the title. Verified:
+
+```
+## BUG-7:                     →  matches, with title = '- **Severity**: low'
+- **Severity**: low
+```
+
+Two consequences, both silent today: the entry is admitted as *valid* with a garbage title, and the
+swallowed line is no longer part of the block, so **that field is lost from the parse**. A
+whitespace-only title (`## BUG-1:` plus trailing spaces) is admitted the same way, since `\s*`
+backtracks to leave one space for `(.+)`; `.strip()` then yields `''`.
+
+The corrected regex restricts post-colon whitespace to horizontal (`[ \t]*`) and requires the title
+to begin with a non-whitespace character (`\S`), so a titleless heading genuinely fails to match.
+
+`ALGORITHM:` — **loose headings are the block boundaries; strict classifies what is inside them.**
+
+This ordering is load-bearing and is the second half of the fix. If strict matches were used as
+boundaries — as `bin/artifact_review.py:23-28` does today — then a heading that fails strict is not
+a boundary at all, so the preceding entry's block runs on through it and the field scan absorbs its
+fields under last-value-wins. A malformed heading would silently overwrite its predecessor's
+`Status`. Slicing on loose and classifying afterwards makes every ID-claiming heading terminate the
+block before it, whether or not it is well-formed:
+
+```python
+bounds = list(LOOSE.finditer(text))
+for i, m in enumerate(bounds):
+    end   = bounds[i + 1].start() if i + 1 < len(bounds) else len(text)
+    block = text[m.start():end]
+    → STRICT.match(block) ? Entry(...) : MalformedHeading(...)
+```
+
+Verified against the three-entry case (valid / titleless / valid): the titleless heading no longer
+swallows a line, the preceding entry keeps its own fields, and the malformed block is reported
+*with* its fields intact so `--doctor` can show what is in it.
+
+Every consumer that decides what's `open`, `ready`, `unplaced`, or roadmap-eligible —
+`pm.py next/start/finish/park/decide/reconcile/status/doctor/index` and the refactored
+`artifact_review.py` — uses this one classifier. That is the convergence `logic.md`'s Key Decisions
+section requires ("Job 1 and job 2 must agree on what 'open' means").
+
+**This is a behavior change, and it is deliberate.** `artifact_review.py`'s output changes for files
+containing a titleless heading: an entry that today renders with a garbage title and a missing field
+becomes a `--doctor` finding instead. No existing test covers that input (see *No-behavior-change
+verification* below), and the current behavior is not worth preserving — it is data loss.
 
 `CONTRACT:`
 ```python
@@ -212,9 +280,12 @@ def detect_schema_version(text: str) -> int | None: ...
 
 **What happens to entries the old parsers disagreed about.** A titleless `## BUG-7:` heading:
 `find_max_id` still counts ID 7 as claimed (loose regex, unchanged) — a later append still allocates
-`BUG-8`, not a colliding `BUG-7`. `parse_entries` excludes it from `.entries` (strict regex, matching
-today's `artifact_review.py` behavior) and instead returns it in `.malformed` with
-`reason="no title"`. Every backlog computation (`ready`, `unplaced`, `--next`'s shortlist) therefore
+`BUG-8`, not a colliding `BUG-7`. `parse_entries` excludes it from `.entries` and returns it in
+`.malformed` with `reason="no title"`, carrying its parsed fields so `--doctor` can display them.
+
+Note this is *not* "matching today's `artifact_review.py` behavior" — today that heading is admitted
+as a valid entry with the next line as its title, and that line's field is dropped. The new
+behavior is the corrected one. Every backlog computation (`ready`, `unplaced`, `--next`'s shortlist) therefore
 never sees it — consistent with today's `artifact_review.py`, and now *also* consistent with
 `--next`/`--doctor`, which didn't exist before. `--doctor` surfaces it as a `MALFORMED_HEADING`
 finding (id, header, line) — see [§Doctor findings catalog](#doctor-findings-catalog) — so the
@@ -236,13 +307,21 @@ acceptance bar: every test in both files must pass unmodified against `bin/artif
 (`tests/test_artifact_append.py:101-116`) and `test_sequential_id_increment` (`:85-98`) pin
 `find_max_id`'s loose behavior; `test_review_lists_populated_entries`
 (`tests/test_artifact_review.py:16-33`) pins `parse_entries`'s strict behavior and its exact
-`render_report` output shape. Neither fixture set includes a titleless or duplicate heading today, so
-the convergence above changes zero currently-asserted output — the divergence it closes was
-previously *unobserved* by any test, which is exactly the risk `logic.md`'s Key Decisions section
-names. `tests/test_artifact_lib.py` adds the fixtures that make the convergence itself provable: a
-titleless heading (asserts `find_max_id` still counts it, `parse_entries` excludes it and reports it
-malformed), a duplicate-ID heading pair, and the existing gap/sequential/unicode cases re-run directly
-against `artifact_lib.find_max_id`/`parse_entries`.
+`render_report` output shape. Neither fixture set includes a titleless, whitespace-titled, or duplicate heading today, so the
+change above alters zero currently-asserted output. That absence is exactly why the defect survived:
+the behavior it corrects was never observed by any test.
+
+`tests/test_artifact_lib.py` adds the fixtures that pin it, and these are the acceptance bar for
+Phase 1 — each corresponds to a failure verified against the live code:
+
+| Fixture | Asserts |
+|---|---|
+| `## BUG-7:` alone on its line, followed by a field line | strict does **not** match; the following line is **not** consumed as a title; the field remains in the malformed block |
+| `## BUG-1:` + trailing spaces | strict does **not** match — guards the `\s*` backtrack |
+| valid / titleless / valid, in that order | the middle heading terminates the first block; entry 1 keeps its own fields and acquires none from entry 2 |
+| titleless heading | `find_max_id` still counts the ID (loose unchanged), so it is never re-issued |
+| duplicate-ID heading pair | both returned as separate `Entry` objects; lookup-by-ID refuses with exit 4 |
+| existing gap / sequential / unicode cases | re-run directly against `artifact_lib` |
 
 **No "compatibility mode" flag.** `logic.md`'s amendment log uses the phrase "parser strict vs.
 compatibility modes" naming what to specify, not naming two runtime-selectable behaviors. There is
