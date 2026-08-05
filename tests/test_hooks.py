@@ -25,12 +25,13 @@ def test_load_tail_suggests_init_when_no_artifacts(project_dir: Path) -> None:
     assert "/quirk:artifacts:init" in r.stdout
 
 
-def test_load_tail_emits_tail_when_artifacts_exist(initialized_project: Path) -> None:
+def test_load_tail_calls_pm_index_when_artifacts_exist(initialized_project: Path) -> None:
     bugs = initialized_project / "BUGS.md"
     bugs.write_text(bugs.read_text() + "\n## BUG-1: alpha\n- **Severity**: high\n")
     r = run_hook("load_artifact_tail.sh", initialized_project)
     assert r.returncode == 0
-    assert "BUG-1: alpha" in r.stdout
+    assert "[quirk:pm]" in r.stdout
+    assert "BUGS 1/1 open" in r.stdout
 
 
 def test_load_tail_silent_when_project_dir_unset(project_dir: Path) -> None:
@@ -41,6 +42,34 @@ def test_load_tail_silent_when_project_dir_unset(project_dir: Path) -> None:
     )
     assert r.returncode == 0
     assert r.stdout == ""
+
+
+def test_load_tail_falls_back_when_pm_missing(initialized_project: Path, tmp_path: Path) -> None:
+    fake_plugin_root = tmp_path / "fake_plugin_no_pm"
+    fake_plugin_root.mkdir()
+    r = run_hook("load_artifact_tail.sh", initialized_project, CLAUDE_PLUGIN_ROOT=str(fake_plugin_root))
+    assert r.returncode == 0
+    assert r.stdout.strip() == "[quirk:pm] index unavailable"
+
+
+def test_load_tail_falls_back_when_pm_exits_nonzero(initialized_project: Path, tmp_path: Path) -> None:
+    fake_plugin_root = tmp_path / "fake_plugin_bad_exit"
+    (fake_plugin_root / "bin").mkdir(parents=True)
+    (fake_plugin_root / "bin" / "pm.py").write_text("import sys\nsys.exit(1)\n")
+    r = run_hook("load_artifact_tail.sh", initialized_project, CLAUDE_PLUGIN_ROOT=str(fake_plugin_root))
+    assert r.returncode == 0
+    assert r.stdout.strip() == "[quirk:pm] index unavailable"
+
+
+def test_load_tail_suppresses_pm_traceback(initialized_project: Path, tmp_path: Path) -> None:
+    fake_plugin_root = tmp_path / "fake_plugin_traceback"
+    (fake_plugin_root / "bin").mkdir(parents=True)
+    (fake_plugin_root / "bin" / "pm.py").write_text("raise RuntimeError('boom')\n")
+    r = run_hook("load_artifact_tail.sh", initialized_project, CLAUDE_PLUGIN_ROOT=str(fake_plugin_root))
+    assert r.returncode == 0
+    assert r.stdout.strip() == "[quirk:pm] index unavailable"
+    assert "Traceback" not in r.stdout
+    assert "RuntimeError" not in r.stdout
 
 
 def stdin_for_edit(file_path: Path) -> str:
