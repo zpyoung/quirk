@@ -1036,7 +1036,7 @@ overridable via `QUIRK_PM_INTEGRATION_REF`.
 
 ## Status & amendments
 
-**Status:** Approved — accepted 2026-08-04; amended twice and reworked 2026-08-05; threat model revised 2026-08-05 after a second adversarial review (`review-2026-08-05-codex-round2.md`).
+**Status:** Approved — accepted 2026-08-04; amended twice and reworked 2026-08-05; threat model revised 2026-08-05 after a second adversarial review (`review-2026-08-05-codex-round2.md`). **Tech spec: requested.**
 2026-08-05, then reworked 2026-08-05 following adversarial review
 (`review-2026-08-05-codex.md`, 18 findings).
 
