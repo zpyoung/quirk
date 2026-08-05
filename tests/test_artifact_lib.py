@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import artifact_lib
+import artifact_review
 
 
 def test_titleless_heading_does_not_consume_following_line_as_title() -> None:
@@ -79,3 +80,29 @@ def test_parse_entries_preserves_unicode() -> None:
     assert len(result.entries) == 1
     assert result.entries[0].title == weird
     assert result.entries[0].fields == {"Description": weird}
+
+
+def test_render_report_does_not_drop_a_file_whose_entries_are_all_malformed(tmp_path) -> None:
+    (tmp_path / "BUGS.md").write_text(
+        "<!-- schema-version: 1 -->\n# BUGS\n\n"
+        "## BUG-7:\n- **Severity**: critical\n- **Description**: data loss on save\n"
+    )
+    out = artifact_review.render_report(tmp_path)
+    bugs_line = next(line for line in out.splitlines() if line.startswith("## BUGS.md"))
+    assert "no entries" not in bugs_line.lower()
+    assert "BUGS.md: 1 entries" in out
+    assert "BUG-7" in out
+    assert "no title" in out
+
+
+def test_render_report_count_line_includes_malformed_alongside_well_formed(tmp_path) -> None:
+    (tmp_path / "BUGS.md").write_text(
+        "<!-- schema-version: 1 -->\n# BUGS\n\n"
+        "## BUG-1: alpha\n- **Severity**: high\n"
+        "\n## BUG-2:\n- **Severity**: oops\n"
+    )
+    out = artifact_review.render_report(tmp_path)
+    assert "BUGS.md: 2 entries" in out
+    assert "BUG-1 [high] alpha" in out
+    assert "BUG-2" in out
+    assert "no title" in out

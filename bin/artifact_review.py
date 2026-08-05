@@ -23,14 +23,17 @@ def render_report(project: Path) -> str:
         if not path.exists():
             lines.append(f"## {filename}: file not found")
             continue
-        entries = parse_entries(path.read_text(), header).entries
-        if not entries:
+        result = parse_entries(path.read_text(), header)
+        entries, malformed = result.entries, result.malformed
+        if not entries and not malformed:
             lines.append(f"## {filename}: no entries")
             continue
-        lines.append(f"## {filename}: {len(entries)} entries")
+        lines.append(f"## {filename}: {len(entries) + len(malformed)} entries")
         for e in entries:
             sev = e.fields.get("Severity") or e.fields.get("Priority") or "-"
             lines.append(f"  - {header}-{e.id} [{sev}] {e.title}")
+        for m in malformed:
+            lines.append(f"  - {header}-{m.id} [malformed heading]: {m.reason}")
     adr_dir = project / "docs" / "adr"
     if adr_dir.exists():
         adrs = sorted(adr_dir.glob("[0-9][0-9][0-9][0-9]-*.md"))
