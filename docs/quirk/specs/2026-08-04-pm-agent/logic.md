@@ -99,31 +99,88 @@ The mechanism at the center of job 2.
 
 At `start`, a probe is supplied and **run immediately**. It must **fail**. A probe that already
 passes does not discriminate the entry, so a later pass would prove nothing — `start` refuses it.
-The failing result is written into the entry as a baseline.
+The failing result and a fingerprint of the probe are written into the entry as a baseline.
 
-At `finish`, the same probe is re-run and must now **pass**.
+At `finish`, the same probe is re-run against a **committed** revision and must now **pass**.
 
-This is hard to game honestly. Deleting the test does not help: `finish` can no longer run the
-probe, so it refuses. The bar is fixed while the agent still has an interest in it being real —
-which is what distinguishes this from every evidence scheme that checks a condition only at
-closing time.
+The bar is fixed while the agent still has an interest in it being real, which is what
+distinguishes this from every evidence scheme that checks a condition only at closing time. But
+red→green alone is not sufficient, and this design does not claim it is — see *What red→green does
+not prove*.
 
 The verb set is **closed**. The script owns the verbs; the agent supplies only arguments. This is
 not incidental: an allowlisted script that executes an agent-chosen command string is an
 unsandboxed bypass of the Bash permission surface, which is why the arbitrary-probe variant was
 rejected.
 
-| Kind | Mechanism | Strength |
+| Kind | Passes when | Refuses when |
 |---|---|---|
-| `test:<nodeid>` | red→green transition | strongest |
-| `grep:<pattern>` | baselined match-count decrease | strong |
-| `commit:<sha>` | `git cat-file -e` | audit trail only — forgeable |
-| `none` | explicitly unverified | honest; reported by `--doctor` |
+| `test:<nodeid>` | the node runs and passes on `HEAD` | node missing, errors, or fails |
+| `grep:<pattern> [-- <paths>]` | baseline count > 0, final count == 0 | a file that matched at baseline no longer exists |
+| `none` | never checked — explicitly unverified | — |
 
-`commit:` is deliberately labelled as audit trail rather than verification.
-`git commit --allow-empty -m "Closes: BUG-1"` produces a SHA that passes `git cat-file -e`; the
-check refuses a *random* SHA, not a *manufactured* one. Most `DEFER` and `PROPOSAL` entries will
-close as `none`. The value is the label, not the coverage.
+Two rules close deletion loopholes. `test:` refuses when the node is **missing** rather than
+reading absence as success, so deleting the test cannot close the entry. `grep:` refuses when a
+file that matched at baseline is **gone**, because deleting the code that carried the symptom is
+not a fix, and a naive count-decrease is satisfied by it.
+
+`commit:<sha>` was removed from this table. It cannot be a probe: red→green requires the checked
+condition to be false at `start`, and no worker can name the SHA of a commit it has not yet made.
+The commit belongs to the `delivered` state below, which is where it always belonged.
+
+Most `DEFER` and `PROPOSAL` entries will use `none`. The value is the label, not the coverage.
+
+### What red→green does not prove
+
+Three gaps, each with a stated response rather than a claim of coverage.
+
+**It does not prove the fix was delivered.** A probe passing in a worktree says nothing about the
+origin's integration branch. This is why closure splits into two states, below.
+
+**It does not distinguish a fix from flakiness.** A probe with independent pass probability *p*
+eventually passes under enough retries. The design does not try to eliminate this, because it
+cannot. It records **every attempt, including refused ones**, so an entry that reached green on the
+fourth try says so on its face and `--doctor` flags it. Retrying becomes visible rather than free.
+
+**It does not prevent the probe being weakened.** A worker with filesystem access can edit the test
+it is measured by. The probe spec, and for `test:` its containing file, are hashed at `start` and
+re-hashed at `finish`; a change is **recorded and flagged, not blocked** — adding a regression test
+is a normal and correct part of fixing a bug, and blocking mutation would refuse the healthiest
+version of the work.
+
+### Delivered is what a worker asserts; closed is what the origin verifies
+
+The terminal transition splits in two, because "a probe passed somewhere" and "the fix reached the
+project" are different facts and only the second is what anyone means by done.
+
+**`delivered`** — the worker's tree was clean, its repository identity matched the recorded
+handoff, and the probe passed on a named commit. This is the furthest a worker may move an entry.
+A worker cannot close.
+
+**`closed`** — the delivering commit is reachable from the project's integration ref. Computed **by
+the origin**, from git, with no worker involvement:
+
+```
+git merge-base --is-ancestor <delivered-sha> <integration-ref>
+```
+
+The integration ref defaults to the repository's default branch, resolved from
+`refs/remotes/origin/HEAD`, and is overridable via `QUIRK_PM_INTEGRATION_REF` for projects that
+integrate onto `develop`, a release branch, or a train.
+
+This removes the worker's ability to declare victory. Its best available outcome is an honest one,
+and reachability is not something it can fabricate from inside its own worktree.
+
+**The squash-merge caveat is real and not hidden.** Squashing rewrites the commit, so a delivered
+SHA is never an ancestor of the integration ref. When reachability fails, `reconcile` falls back to
+searching integration-ref commit messages for the entry ID, records that promotion rested on the
+weaker signal, and `--doctor` reports the distinction. A squashing project gets correct promotion
+with a labelled, lower-grade justification — not silence, and not a false stall.
+
+**Reachability proves the change landed, not that it survived.** A later commit can revert it.
+`reconcile --verify` re-runs the probe against the integration ref in a temporary worktree for
+projects wanting the stronger check. The default is reachability alone, because the cheap version
+is honest about what it measures and CI is the right place to catch regressions.
 
 ## Data flow
 
@@ -144,8 +201,8 @@ Answering what's next:
 ```
 /quirk:pm:next
   → pm.py computes, in Python:
-      ready(e)     := status is open AND every blocker is not-open
-      unplaced(e)  := ready(e) AND e is in no milestone
+      ready(e)     := status is open AND every blocker resolves AND is not-open
+      unplaced(e)  := status is open AND e is in no milestone     # NOT limited to ready
       eligible(e)  := ready(e) AND (e is in a milestone OR urgency(e) <= 1)
       sort key     := (milestone rank, urgency, age) — ascending, ascending, oldest first
       take         := top 5
@@ -184,6 +241,14 @@ are never eligible for `--next`; they are decisions awaiting a human, not work.
 burying it behind the whole plan would defeat the escape hatch. Concretely: un-roadmapped entries
 take milestone rank `-1`.
 
+**Age needs a definition that works for every type.** `BUG`, `DEFER`, and `PROPOSAL` entries get an
+auto-stamped date (`Observed` / `Deferred` / `Proposed`), but `TEST` entries have **no date field**
+in the template or in the append schema — so a date-only rule leaves a third of the sort key
+undefined for an entire artifact type. Age is therefore: the entry's date when it has one,
+otherwise its **ID ordinal**, which is monotonic per file and so orders creation correctly within a
+type. Cross-type ties fall back to ID ordinal as well, then to type name, so the sort is total and
+reproducible across clones.
+
 Age sorts last but is present deliberately: it counteracts the recency bias measured in the
 current SessionStart tail, where the entries dropped from view were the oldest and longest-open.
 
@@ -195,47 +260,86 @@ blockers are open, and what would unblock the most work. A dependency graph that
 Readiness uses **direct blockers only**. A closed blocker's own blockers cannot matter, so
 transitivity falls out for free and there is no graph walk in the read path.
 
+**An unresolvable blocker blocks — it never unblocks.** If `Blocked by: BUG-99` names an entry that
+does not exist, a naive reading of "every blocker is not-open" treats the missing entry as
+satisfied and marks the work ready. That is a silent false-ready, and the only safe direction is
+fail-closed: an ID that does not resolve leaves the entry blocked and raises a `DANGLING` finding.
+The same applies to a self-block and to any entry participating in a cycle, both of which are
+`--doctor` findings rather than silent behavior.
+
+**Unplaced counts all open entries, not just ready ones.** Restricting it to ready entries would
+leave blocked, unroadmapped, medium-urgency work counted nowhere — invisible to the shortlist *and*
+absent from the plan, which is the exact failure this reporting exists to prevent. The count is
+broken out as ready / blocked / malformed so a large number is diagnosable rather than merely
+alarming.
+
 ### Job 2 — ushering a started task
 
 ```
 /quirk:pm:start BUG-7 --probe test:tests/test_auth.py::test_safari [--repo <selector>]
   1. resolve target        → new child worktree of the current repo by default
-  2. create the worktree   → adapter, or plain `git worktree add`
+  2. create the worktree   → adapter's create_worktree, or plain `git worktree add`.
+                             NOTHING IS LAUNCHED YET.
   3. run the probe THERE   → must FAIL; if it passes, refuse and do not dispatch
   4. write the origin ledger:
-       - **Status**:  in_progress — 2026-08-05 — probe: test:… — baseline: fail
-       - **Handoff**: quirk @ pm/bug-7 — /Users/…/worktrees/bug-7
+       - **Status**:  in_progress — 2026-08-05 — attempt 1
+       - **Probe**:   test:tests/test_auth.py::test_safari — baseline: fail — spec#a1b2 file#c3d4
+       - **Handoff**: quirk @ pm/bug-7 — /Users/…/worktrees/bug-7 — gitdir#e5f6
   5. write the packet into the destination worktree
-  6. launch the worker with a prompt pointing at the packet
+  6. launch the worker against THAT worktree, with a prompt pointing at the packet
 
   … the worker implements; the PM is not in the loop …
 
 /quirk:pm:finish BUG-7 --project-dir <origin>     # run BY THE WORKER, in the worktree
-  → probe re-runs in the CWD (where the code is)
-  → ledger write goes to --project-dir (where the truth is)
-  → must PASS, else refuse and leave in_progress
-  → entry becomes:
-    - **Status**: closed — 2026-08-05 — probe: test:… — baseline: fail → pass
+  preconditions, each refusing on failure:
+    a. CWD's git common dir matches the recorded gitdir fingerprint
+    b. working tree is clean            → no passing on uncommitted edits
+    c. probe passes on HEAD             → a real, named commit
+  → re-hash the probe spec and file; record any change, do not block
+  → ledger write goes to --project-dir:
+    - **Status**: delivered — 2026-08-05 — attempt 1 — commit: 9a3f21c
   → adapter, if present, signals the PM session: outcome=succeeded
+
+/quirk:pm:reconcile [--verify]                    # run BY THE ORIGIN, later, no worker
+  → for each delivered entry: git merge-base --is-ancestor <sha> <integration-ref>
+  → reachable      → **Status**: closed — 2026-08-06 — integrated: 9a3f21c
+  → not reachable  → stays delivered; --doctor reports "awaiting integration, N days"
 ```
 
-**Both terminal transitions signal; a refusal does not.** `finish` signals `succeeded` and `park`
-signals `failed`. A `finish` that refuses because the probe still fails signals nothing — the task
-is not terminal, the worker is presumably still on it, and a notification per failed attempt is
-how a channel becomes noise that gets muted. `park` signalling matters more than `finish` does:
-the PM most needs to hear the case where the worker gave up, and that is the case least likely to
-be reported any other way.
+**A worker can never write `closed`.** `finish` produces `delivered` and stops there. Promotion is
+the origin's job, computed from git. This is the structural answer to the question the earlier
+design got wrong — it had `finish` writing `closed` from inside a worktree that the origin's
+default branch had never seen.
 
-**The probe runs at the destination, the write lands at the origin.** These are different
-directories and the split is deliberate: a probe is only meaningful against the code being
-changed, while the ledger must stay singular. `artifact_append.py` already accepts
-`--project-dir`, so the write half of this works today.
+**Three preconditions guard `finish`, and each closes a specific hole.** Matching the git common
+dir stops a worker passing the probe in some other checkout. Requiring a clean tree stops it
+passing on uncommitted edits it could then discard. Running against `HEAD` rather than the working
+tree means the evidence names a commit that can be checked later by someone else.
+
+**Both terminal transitions signal; a refusal does not.** `finish` signals `succeeded` and `park`
+signals `failed`. A `finish` that refuses signals nothing — the task is not terminal, the worker is
+presumably still on it, and a notification per failed attempt is how a channel becomes noise that
+gets muted. `park` signalling matters more than `finish` does: the PM most needs to hear the case
+where the worker gave up, and that is the case least likely to surface any other way.
+
+**Every attempt is recorded, including refusals.** `start` stamps an attempt number; each refused
+`finish` increments a refusal count on the entry. This is what makes retry-until-green visible
+rather than free, and it is the only defence the design has against probe flakiness.
+
+**The probe runs at the destination, the write lands at the origin.** A probe is only meaningful
+against the code being changed, while the ledger must stay singular. Note the write path is *new
+code*: `artifact_append.py` accepts `--project-dir` (`bin/artifact_append.py:122`) but only appends
+whole entries and rejects unknown fields (`:139`), so it cannot perform a lifecycle transition. The
+mutator is `bin/pm.py`, which reuses the same `--project-dir` convention and locking discipline.
 
 **Refusal happens before the worker is launched.** If the probe passes at step 3, the entry does
-not move to `in_progress` and no agent is started — dispatching a worker against a bar that is
-already met is how a task gets "completed" without anything happening. The created worktree is
-left in place rather than silently removed, because a probe that unexpectedly passes is evidence
-worth inspecting.
+not move to `in_progress` and no agent starts — dispatching a worker against a bar already met is
+how a task gets "completed" without anything happening. This ordering constrains the adapter: it
+must be able to create a worktree *without* launching into it, and launch into an existing one.
+
+The created worktree is left in place rather than silently removed, because a probe that
+unexpectedly passes is evidence worth inspecting. `start` refuses to reuse a name that already
+exists and reports the path, so a retry cannot silently collide with it.
 
 `park` is the honest exit. Without it, the only ways out of `in_progress` are closing it and lying.
 
@@ -261,14 +365,23 @@ It carries:
   command to run.
 - **The ledger address** — the absolute path to the origin project, and the explicit statement
   that the ledger is *there*, not here.
-- **The return address** — the run and dispatch IDs, when the handoff was made under an
-  orchestrator. Recorded so the completion signal can be addressed even when `finish` runs outside
-  the dispatched terminal. Absent for an unadapted handoff, which is fine.
+- **The return address** — the run, task, and dispatch IDs when the handoff was made under an
+  orchestrator. These identify the attempt for logging and correlation. They do **not** authorize a
+  completion signal from an arbitrary terminal; see the adapter contract.
+- **Provenance and integrity** — a packet schema version and a digest of the ledger entry as of
+  handoff, so a stale packet can be detected rather than silently trusted.
 - **The write-back contract** — three obligations, stated as instructions rather than prose:
-  1. When the probe passes, run `finish` against the origin ledger.
-  2. If you cannot finish, run `park` with a reason. Do not leave it `in_progress`.
+  1. When the probe passes, commit, then run `finish` against the origin ledger. `finish` yields
+     `delivered`, not `closed`; you cannot close an entry and should not try.
+  2. If you cannot finish, run `park --project-dir <origin> --reason "<why>"`. Do not leave it
+     `in_progress`.
   3. Any *new* observation you make — a bug you noticed, a test you skipped — is filed to the
      **origin** ledger with `--project-dir`, not to the destination project.
+
+**The copied entry text is data, not instruction.** The packet reproduces the ledger entry
+verbatim, and that text was written by whoever filed the observation. It is fenced and explicitly
+marked untrusted, because an entry body is an injection surface into every worker the packet is
+handed to.
 
 The third obligation is the one most likely to be missed and the most costly to miss. A worker
 dispatched into another repo will otherwise file its observations into that repo's ledger, or into
@@ -286,32 +399,46 @@ static file decay within a session while tool responses are read every time.
 
 | Call | Must do | Fallback when no adapter |
 |---|---|---|
-| `create_worktree(repo, branch)` | Produce a path | `git worktree add` |
-| `launch(path, prompt)` | Start an agent session there | print the prompt, exit 0 |
-| `signal_done(task, outcome)` | Notify the dispatching session; `outcome ∈ {succeeded, failed}` | no-op — the ledger is the record |
+| `create_worktree(repo, name, base)` | Produce a path. **Must not launch anything.** | `git worktree add` |
+| `launch(path, prompt)` | Start an agent session in an **existing** worktree | print the prompt, exit 0 |
+| `signal_done(attempt, task, dispatch, outcome)` | Notify the dispatching session; `outcome ∈ {succeeded, failed}` | no-op — the ledger is the record |
+
+**The split between the first two calls is a hard requirement, not a convenience.** The probe must
+run and possibly refuse between them. An adapter that can only create-and-launch atomically cannot
+implement this contract, because it would start a worker before the bar was checked.
 
 With no adapter present, `start` still creates the worktree, still runs the probe, still writes the
 packet and the ledger, and prints the prompt for you to paste. Nothing about the verification
 contract depends on the launcher.
 
-**The orca adapter** maps onto existing primitives with little glue: `orchestration task-create`
-then `worker-start --task <id> --worktree new-child --agent claude --repo <selector>` covers the
-first two calls, and `orchestration send --type worker_done --outcome succeeded|failed --task-id
-<id>` covers the third.
+**The orca adapter** must therefore use the two-step path, not the convenience path:
 
-**Addressing the signal needs care.** `worker_done` is an *exact-Dispatch* signal: omitting the
-recipient falls back to the owning Run mailbox only **from an active Dispatch**. A worker launched
-via `worker-start` satisfies that, but the same `finish` run from a terminal you opened yourself in
-that worktree does not — there is no Dispatch to inherit from. So the packet records the run and
-dispatch IDs at handoff, and `signal_done` resolves a recipient in this order:
+```
+create_worktree → orca worktree create --name <n> --repo <sel> [--base-branch <ref>]
+                  (deliberately WITHOUT --agent, so nothing launches)
+     … probe runs here, may refuse …
+launch          → orca orchestration task-create
+                  orca orchestration worker-start --task <id> --worktree path:<path> --agent claude
+signal_done     → orca orchestration send --type worker_done --outcome <o> --task-id <id>
+```
 
-1. The ambient Dispatch context, when `orchestration run-current` reports a binding.
-2. The run/dispatch ID recorded in the packet.
-3. Neither — skip the signal.
+`worker-start --worktree new-child` is **not** usable: it creates the worktree and launches the
+worker as one operation, leaving nowhere to run the baseline. Targeting `path:<path>` against the
+already-created worktree is what makes refusal-before-launch possible.
 
-Step 3 is a normal outcome, not an error. It is what happens with no adapter, outside orca, or in a
-worktree whose Run has since been reset, and it costs nothing because the ledger already holds the
-result.
+**The signal can only be sent from the live assigned Dispatch.** Orca rejects `worker_done` from a
+foreign pane even when the payload carries the correct task and dispatch IDs — rejection keys on
+the sender's pane identity and returns `sender_not_assignee`
+(`orca/hind/src/main/runtime/orchestration/lifecycle-reconciliation.test.ts:178`). Recorded IDs
+therefore do **not** authorize a signal, and `signal_done` resolves in two cases only:
+
+1. Running as the assigned Dispatch → send `worker_done`.
+2. Anything else → **skip the signal** and write only the ledger.
+
+Case 2 covers a hand-opened terminal, a reset Run, a non-orca launcher, and no adapter at all. It is
+a normal outcome, not an error: the ledger already holds the result and the coordinator reconciles
+from it. An earlier draft of this spec proposed falling back to the packet's recorded IDs; that
+cannot work and has been removed.
 
 The completion signal is **additive, never authoritative**. The ledger write is what makes a task
 closed; the signal only makes the PM session notice sooner. If the signal is lost, the state is
@@ -340,10 +467,19 @@ grouping-and-ordering layer, so a roadmap edit can never contradict an entry.
 **Milestones are ordered and carry no dates.** Order is cheap to keep true; dates rot on contact.
 Dates would also require sizing, which is the operation the research measures models as weakest at.
 
-**Linkage lives in the roadmap, not on the entry.** A `Milestone:` field on each entry would read
-better in isolation, but it means mutating existing entries in place — breaking quirk's append-only
-guarantee and multiplying the surface where two worktrees conflict on one line. One file changes
-for roadmap changes.
+**Linkage lives in the roadmap, not on the entry.** The reason is single-source-of-truth for
+*position*, not append-only purity: a milestone's membership is one fact, and putting it on both
+the entry and the roadmap would make two places able to disagree. One file changes for roadmap
+changes, and reordering a milestone touches no entries at all.
+
+**Append-only applies to an entry's substance, not its lifecycle.** This needs saying plainly
+because an earlier draft rejected the `Milestone` field *on append-only grounds* and then added
+mutable `Status` and `Handoff` fields to the same entries — an incoherent pair. The actual rule:
+title, description, file, severity, and the other observation fields are never rewritten by any
+script; lifecycle fields are mutable in place by `pm.py` alone. Lifecycle history is not preserved
+by field duplication — the existing parser collapses repeated labels into a dict
+(`bin/artifact_review.py:29`) — but by an attempt counter and the recorded refusal count, which are
+single-valued and survive that collapse.
 
 **Critical and high severity may bypass the roadmap.** Roadmap discipline should not be able to
 hide a production bug behind planning ceremony.
@@ -377,9 +513,14 @@ backlog and the user will trust neither.
 | `/quirk:pm:roadmap` | Propose or revise milestone grouping | **user ratifies** before write |
 | `/quirk:pm:next` | Report unplaced count, offer intake, shortlist ~5, recommend 1 | read-only; intake write **ratified** |
 | `/quirk:pm:start <ID> --probe K:ARG [--repo S] [--here]` | Create worktree, baseline the probe, write packet, dispatch | unattended |
-| `/quirk:pm:finish <ID> [--project-dir P]` | Re-run probe in CWD, close against the ledger, or refuse | unattended |
-| `/quirk:pm:park <ID> [--reason]` | Return to `open`, keep attempt on record | unattended |
+| `/quirk:pm:finish <ID> [--project-dir P]` | Check preconditions, probe `HEAD`, mark **delivered** | unattended |
+| `/quirk:pm:park <ID> --reason R [--project-dir P]` | Return to `open`, keep the attempt on record | unattended |
+| `/quirk:pm:reconcile [--verify]` | Promote `delivered` → `closed` from git | unattended, origin-side |
 | `/quirk:pm:status` | Index + doctor findings | read-only |
+
+`park` takes `--project-dir` for the same reason `finish` does — a dispatched worker parks against
+the **origin** ledger, and the packet instructs it to. Its `--reason` is required rather than
+optional: the entire value of park over abandonment is the recorded why.
 
 `--here` opts out of dispatch and runs the task in the current worktree — the original local
 behavior, retained because not every task is worth a worktree.
@@ -389,11 +530,27 @@ behavior, retained because not every task is worth a worktree.
 **Probe already green at `start`.** Refuse. The probe does not discriminate this entry. The user
 supplies a different probe, or starts with `--probe none` and accepts an unverified close.
 
-**Probe still failing at `finish`.** Refuse to close; entry stays `in_progress`. This is the one
-moment the tool tells the user no, and it is the point of job 2.
+**Probe still failing at `finish`.** Refuse; entry stays `in_progress` and its refusal count
+increments. This is the one moment the tool tells the user no, and it is the point of job 2.
 
-**No probe applies.** Closes with `evidence: none`; `--doctor` lists it under unverified closures.
-Labelled, never blocked.
+**Dirty working tree at `finish`.** Refuse, naming the uncommitted paths. Passing on edits that are
+then discarded is the most direct route to a false `delivered`.
+
+**`finish` run in the wrong checkout.** Refuse. The recorded git-common-dir fingerprint did not
+match, which means the probe would have measured code the handoff never pointed at.
+
+**`--probe none` entries.** These skip `delivered` and close directly at `finish` with
+`evidence: none`, because there is no probe to verify and no SHA for `reconcile` to check
+reachability against — routing them through `delivered` would strand them there forever. `--doctor`
+reports them under unverified closures. This is the honest handling of `DEFER` and `PROPOSAL` work,
+which is most of it.
+
+**Delivered but never merged.** Stays `delivered`. `--doctor` reports "awaiting integration, N
+days". The work is done and the ledger says exactly that — neither closed nor stalled, because
+neither would be true.
+
+**Squash-merged.** Reachability fails, so `reconcile` falls back to matching the entry ID in
+integration-ref commit messages, promotes on that, and records the weaker justification.
 
 **Nothing ready.** `--next` explains which blockers are open and what would unblock the most work.
 
@@ -402,8 +559,10 @@ Labelled, never blocked.
 **Task stalls.** Stays `in_progress`, ages, appears in the index and `--doctor` with its age.
 
 **Two worktrees in parallel.** `flock` is per-directory and **does not coordinate across
-worktrees**. Two sessions may start the same entry. `finish` is idempotent, so the cost is
-duplicated effort, never corrupted state. A conflicting status line is an ordinary git conflict.
+worktrees**. Two sessions may start the same entry and both reach `delivered` with different SHAs.
+Transitions are compare-and-swap on `(ID, attempt, expected status)`, so the second write is
+refused rather than silently overwriting the first; the cost stays duplicated effort. A conflicting
+status line is an ordinary git conflict.
 
 **Milestone finishes.** Derived, not stored — complete when every entry it names is closed.
 Nothing to update, nothing to drift.
@@ -444,26 +603,32 @@ still both pass it — but `finish` is idempotent, so the cost stays duplicated 
 
 ### In scope for v1
 
-- Two optional ledger fields: `Status` (absent = open) and `Blocked by` (flat comma-separated ID
-  trailer). Both additive; zero migration. They apply to `BUG`, `DEFER`, and `TEST` entries only —
-  `proposals.md` keeps its own human-only vocabulary and gains neither field.
+- **Schema version 2.** Templates and the shared schema dict declare the new fields and the version
+  marker moves to 2. An earlier draft claimed "additive; zero migration" — that was wrong. Adding
+  lifecycle semantics while leaving files marked v1 would let a mixed-version install write and
+  read incompatible interpretations without the existing version guard ever firing
+  (`bin/artifact_append.py:184-190`). *No entry is rewritten* is the guarantee worth keeping; *no
+  schema migration* is not one this design can honestly make.
+- New ledger fields on `BUG`, `DEFER`, and `TEST` entries: `Status` (absent = open), `Probe`,
+  `Blocked by`, and `Handoff`. `proposals.md` keeps its own human-only vocabulary and gains none of
+  them.
 - `ROADMAP.md` — ordered milestones naming entry IDs. A milestone may reference `BUG`, `DEFER`, and
   `TEST` entries; it may not reference a `PROPOSAL`, which is a decision awaiting a human rather
   than a unit of work. `--doctor` reports a `PROPOSAL` reference in a milestone as a finding.
-- A third optional field, `Handoff`, auto-populated at dispatch: repo, branch, and worktree path.
-  Never model-supplied. A record of where work went, explicitly **not** a lock.
+  `Handoff` is auto-populated at dispatch — repo, branch, worktree path, and a git-common-dir
+  fingerprint — never model-supplied. It records where work went and is explicitly **not** a lock.
 - `bin/artifact_lib.py` — extracted shared parse/render, no behavior change.
-- `bin/pm.py` — next / start / finish / park / roadmap / status / doctor / index.
+- `bin/pm.py` — next / start / finish / park / reconcile / roadmap / status / doctor / index.
 - `artifact_append.py` and `artifact_review.py` refactored to import the lib.
 - `hooks/load_artifact_tail.sh` rewritten to call `--index`.
 - The handoff packet written to `.quirk/handoff/<ID>.md` in the destination worktree.
 - The adapter interface (three calls) plus a git-only fallback path.
-- One orca adapter over `orchestration task-create` / `worker-start` / `send --type worker_done`.
-- One skill and six commands under `/quirk:pm:*`.
+- One orca adapter over `worktree create` / `worker-start --worktree path:` / `send worker_done`.
+- One skill and seven commands under `/quirk:pm:*`.
 
 ### Sequencing
 
-The structure chosen affords a natural two-phase rollout, and the phases are ordered by
+The structure chosen affords a natural three-phase rollout, and the phases are ordered by
 falsifiability rather than by convenience.
 
 **Phase 1 — read layer.** Extract `bin/artifact_lib.py`, add `--index` / `--next` / `--doctor`,
@@ -472,8 +637,10 @@ adversarial agent can game, and nothing to migrate. It is also the precondition 
 honestly whether the rest is needed — until the backlog can be *seen*, claims about improving it
 are unfalsifiable.
 
-**Phase 2 — write layer.** `Status`, `Blocked by`, probes, the lifecycle commands, `ROADMAP.md`,
-and the `--next` intake step. `start` runs locally here (`--here` semantics as the only behavior).
+**Phase 2 — write layer.** Schema v2, `Status`, `Probe`, `Blocked by`, the lifecycle commands
+including `reconcile`, `ROADMAP.md`, and the `--next` intake step. `start` runs locally here
+(`--here` semantics as the only behavior), so the full `open → in_progress → delivered → closed`
+machine including integration checking is exercised **before** any cross-process complexity exists.
 
 **Phase 3 — handoff.** The `Handoff` field, the packet, the adapter interface with its git-only
 fallback, and the orca adapter. `start` gains dispatch as its default.
@@ -524,9 +691,11 @@ Each was proposed during design and rejected on evidence. Recorded so they are n
 
 Stated rather than papered over. None of these has a fix inside this design.
 
-1. **Closure is forgeable.** `git commit --allow-empty` passes a `git cat-file -e` check. The
-   `test:` red→green probe is materially harder to fake; `commit:` and `none` are audit trail only.
-   Effort goes into making degradation legible, not into a gate that would be theater.
+1. **`delivered` is asserted; `closed` is verified.** A worker can still reach `delivered`
+   dishonestly — by weakening the probe it is measured by, or by retrying a flaky one until it goes
+   green. Both are recorded and flagged, neither is prevented. `closed` is the state that resists
+   this, because reachability from the integration ref is computed by the origin from git and is
+   not something a worktree can fabricate. Read `delivered` as a claim and `closed` as a fact.
 2. **`flock` does not span worktrees.** Parallel sessions can duplicate effort. `finish` is
    idempotent so state stays correct.
 3. **Probes cover perhaps a third of `BUGS.md` and almost none of `DEFERRED.md`.** Most closures
@@ -566,13 +735,27 @@ Stated rather than papered over. None of these has a fix inside this design.
 - The worker writes back to the ledger always; under orca it additionally signals the PM session.
   The signal is additive, never authoritative.
 - `finish` signals `succeeded`, `park` signals `failed`, a refused `finish` signals nothing.
-- The signal recipient resolves as ambient Dispatch → IDs recorded in the packet → skip.
+- The signal is sent **only** from the live assigned Dispatch; otherwise it is skipped. Recorded IDs
+  do not authorize it — orca rejects a foreign pane with `sender_not_assignee`.
+- `create_worktree` must not launch; `launch` targets an existing worktree. Refusal happens between
+  them, so `worker-start --worktree new-child` is unusable.
+- The packet marks the copied entry body as untrusted data and carries a schema version and a
+  digest of the entry as of handoff.
 - The entry records a `Handoff` line: repo, branch, worktree path.
 
-**Completion evidence**
-- States: `open → in_progress → closed`, with `wontfix` / `superseded` as terminal exits.
-- Fixed-verb probe with a baseline captured at `start`.
-- Agent closes when the probe passes; `--doctor` flags self-authored evidence.
+**Completion evidence** *(reworked 2026-08-05)*
+- States: `open → in_progress → delivered → closed`, with `wontfix` / `superseded` as terminal
+  exits. `--probe none` entries go `in_progress → closed` directly.
+- A worker may reach `delivered` and no further. Only the origin promotes to `closed`.
+- `delivered` requires: matching git-common-dir fingerprint, clean tree, probe passing on `HEAD`.
+- `closed` requires the delivered SHA reachable from the integration ref
+  (`refs/remotes/origin/HEAD` by default, `QUIRK_PM_INTEGRATION_REF` to override), with an entry-ID
+  commit-message fallback for squash-merges, recorded as the weaker signal.
+- Probe verbs are `test:`, `grep:`, `none`. `commit:` is not a probe.
+- Probe spec and test file are hashed at `start` and `finish`; changes are recorded and flagged,
+  never blocked.
+- Every attempt is recorded, including refusals.
+- Transitions are compare-and-swap on `(ID, attempt, expected status)`.
 - Stalls flagged by doctor and surfaced at SessionStart; never aged out.
 
 **Agent autonomy**
@@ -686,10 +869,18 @@ the write-back contract.
 **Origin** — the project whose ledger holds the entry, regardless of where the work is performed.
 **Adapter** — a pluggable implementation of `create_worktree` / `launch` / `signal_done`.
 **Worker** — the dispatched session that implements the task and writes back.
+**Delivered** — the worker committed and the probe passed on that commit. A claim, not a fact.
+**Closed** — the delivering commit is reachable from the integration ref. Verified by the origin.
+**Integration ref** — what a project treats as integrated; `refs/remotes/origin/HEAD` by default,
+overridable via `QUIRK_PM_INTEGRATION_REF`.
+**Reconcile** — the origin-side pass promoting `delivered` entries to `closed`.
+**Attempt** — one `start`-to-terminal cycle; numbered on the entry and counted across refusals.
 
 ## Status & amendments
 
-**Status:** Approved — design accepted 2026-08-04 across three review sections; amended 2026-08-05.
+**Status:** Approved — design accepted 2026-08-04 across three review sections; amended twice
+2026-08-05, then reworked 2026-08-05 following adversarial review
+(`review-2026-08-05-codex.md`, 18 findings).
 
 **Amendments:**
 
@@ -745,3 +936,64 @@ the write-back contract.
   **A refused `finish` signals nothing**, now stated explicitly. The task is not terminal and the
   worker is presumably still on it; one notification per failed attempt is how a channel becomes
   noise that gets muted.
+
+- **2026-08-05 — completion contract reworked after adversarial review.** An adversarial review
+  (`review-2026-08-05-codex.md`, 18 findings: 5 critical, 9 high, 4 medium) verified the spec
+  against quirk's source and orca's runtime. Two findings were not patchable and forced a design
+  change; the rest were corrections.
+
+  **`closed` no longer means "a probe passed somewhere".** The design had `finish` writing `closed`
+  to the origin after a probe passed in whatever directory invoked it — no check that the tree was
+  clean, that the checkout matched the handoff, or that anything was committed, let alone merged.
+  A worker could pass on uncommitted edits, close the entry, and delete the worktree while the
+  origin's default branch still carried the bug. The terminal transition now splits:
+  `delivered` is the furthest a worker may go and requires a matching git-common-dir fingerprint,
+  a clean tree, and the probe passing on a named commit; `closed` is computed by the origin from
+  `git merge-base --is-ancestor` against a configurable integration ref. Squash-merge falls back to
+  an entry-ID commit-message match, recorded as the weaker signal. `--probe none` entries close
+  directly, since they have no SHA for reconcile to check.
+
+  **The packet-ID signal fallback was removed, not fixed.** The previous amendment had
+  `signal_done` fall back to run/dispatch IDs recorded in the packet when no ambient Dispatch
+  existed. Orca rejects `worker_done` from a foreign pane *even with correct task and dispatch IDs*
+  — rejection keys on sender pane identity and returns `sender_not_assignee`
+  (`lifecycle-reconciliation.test.ts:178`). The fallback could never work in the scenario it was
+  added for. Signalling now happens only from the live assigned Dispatch, and is skipped otherwise.
+
+  **The orca adapter sequencing was wrong.** `worker-start --worktree new-child` creates the
+  worktree and launches atomically, leaving nowhere to run the baseline probe — so refusal could
+  not precede launch. The adapter now uses `orca worktree create` without `--agent`, then
+  `worker-start --worktree path:<path>`. `create_worktree` must not launch is now a stated contract
+  requirement rather than an implicit assumption.
+
+  Corrections applied in the same pass:
+  - `commit:` removed from the probe table — it cannot be a red→green probe, since no worker can
+    name the SHA of a commit it has not made.
+  - `grep:` now refuses when a file that matched at baseline is gone; `test:` refuses on a missing
+    node. Deleting the evidence no longer reads as fixing the bug.
+  - Age defined for `TEST` entries, which have no date field in the template or append schema —
+    date when present, ID ordinal otherwise. A third of the sort key had been undefined for a whole
+    artifact type.
+  - `unplaced` widened from ready-only to all open entries, broken out ready / blocked / malformed.
+    The previous definition left blocked unroadmapped work counted nowhere — the invisible-work
+    hole the intake amendment claimed to close.
+  - An unresolvable `Blocked by` ID now blocks fail-closed and raises `DANGLING`, instead of reading
+    as "not open" and silently marking work ready.
+  - `park` gained `--project-dir` and a required `--reason`; the packet had instructed workers to
+    park against the origin using a command that could not target it.
+  - Schema bumped to v2. "Additive; zero migration" was false — lifecycle semantics in files still
+    marked v1 would let mixed versions disagree without the version guard firing.
+  - The append-only rationale was corrected: it governs an entry's substance, not its lifecycle
+    fields. The earlier draft rejected a `Milestone` field on append-only grounds and then added
+    mutable `Status` and `Handoff` to the same entries.
+  - Transitions are compare-and-swap on `(ID, attempt, expected status)`; every attempt including
+    refusals is recorded, making retry-until-green visible.
+  - The packet marks copied entry text as untrusted data and carries a schema version and digest.
+
+  Deferred to the tech spec rather than fixed here: `ROADMAP.md` grammar, `Blocked by` lexical
+  rules, parser strict/compat modes, exit-code table, and the fault-injection test matrix. The
+  review filed these as logic defects; they are implementation contracts and belong in `tech.md`.
+
+  Not adopted: re-running the probe on the integrated revision by default. `reconcile --verify`
+  offers it, but reachability alone is the default because it is cheap, honest about what it
+  measures, and CI is the right place to catch a post-merge regression.
