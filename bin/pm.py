@@ -63,9 +63,12 @@ def _max_file_bytes() -> int:
     if raw is None:
         return DEFAULT_MAX_FILE_BYTES
     try:
-        return int(raw)
+        value = int(raw)
     except ValueError:
         return DEFAULT_MAX_FILE_BYTES
+    if value <= 0:
+        return DEFAULT_MAX_FILE_BYTES
+    return value
 
 
 def _read_and_parse(project: Path, spec: ArtifactSpec) -> tuple[FileParse | None, str | None]:
@@ -73,21 +76,22 @@ def _read_and_parse(project: Path, spec: ArtifactSpec) -> tuple[FileParse | None
 
     A read/parse failure or an oversize file is reported as a caller-visible
     skip reason rather than raised, so one bad file never takes down the
-    whole read layer. The size check runs before the file is ever read, so
-    pm.py — which runs on every SessionStart — never loads an unbounded file.
+    whole read layer. The file is opened once and read up to max_bytes + 1
+    bytes in a single call, so pm.py — which runs on every SessionStart —
+    never loads more than that bound into memory, even if the file grows
+    between a caller's existence check and this read.
     """
     path = project / spec.filename
-    if not path.exists():
-        return None, None
     max_bytes = _max_file_bytes()
     try:
-        size = path.stat().st_size
+        with path.open("rb") as f:
+            data = f.read(max_bytes + 1)
     except OSError:
         return None, "parse error, skipping"
-    if size > max_bytes:
+    if len(data) > max_bytes:
         return None, f"exceeds {max_bytes} bytes, skipping"
     try:
-        text = path.read_text()
+        text = data.decode("utf-8")
         result = parse_entries(text, spec.header)
     except Exception:
         return None, "parse error, skipping"
@@ -157,7 +161,8 @@ def render_index(project: Path) -> str:
             continue
         fp, skip_reason = _read_and_parse(project, spec)
         if fp is None:
-            parse_error_lines.append(f"[quirk:pm] {spec.filename}: {skip_reason}")
+            if skip_reason is not None:
+                parse_error_lines.append(f"[quirk:pm] {spec.filename}: {skip_reason}")
             continue
         open_count = len(fp.entries)
         total = open_count + len(fp.malformed)
@@ -169,7 +174,8 @@ def render_index(project: Path) -> str:
     if (project / PROPOSALS.filename).exists():
         proposals_fp, proposals_skip_reason = _read_and_parse(project, PROPOSALS)
         if proposals_fp is None:
-            parse_error_lines.append(f"[quirk:pm] {PROPOSALS.filename}: {proposals_skip_reason}")
+            if proposals_skip_reason is not None:
+                parse_error_lines.append(f"[quirk:pm] {PROPOSALS.filename}: {proposals_skip_reason}")
         else:
             findings.extend(_doctor_findings(proposals_fp))
 
@@ -203,7 +209,8 @@ def render_next(project: Path) -> str:
             continue
         fp, skip_reason = _read_and_parse(project, spec)
         if fp is None:
-            parse_error_lines.append(f"[quirk:pm] {spec.filename}: {skip_reason}")
+            if skip_reason is not None:
+                parse_error_lines.append(f"[quirk:pm] {spec.filename}: {skip_reason}")
             continue
         ready += len(fp.entries)
         malformed_total += len(fp.malformed)
@@ -242,7 +249,8 @@ def render_doctor(project: Path) -> str:
             continue
         fp, skip_reason = _read_and_parse(project, spec)
         if fp is None:
-            lines.append(f"[quirk:pm] {spec.filename}: {skip_reason}")
+            if skip_reason is not None:
+                lines.append(f"[quirk:pm] {spec.filename}: {skip_reason}")
             continue
         findings.extend(_doctor_findings(fp))
 

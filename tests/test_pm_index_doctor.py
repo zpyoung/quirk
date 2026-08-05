@@ -99,6 +99,26 @@ def test_index_skips_file_over_the_size_bound(initialized_project: Path, monkeyp
     assert "BUGS 0/0 open" not in out
 
 
+def test_index_ignores_non_positive_max_file_bytes(initialized_project: Path, monkeypatch) -> None:
+    append_bug(initialized_project / "BUGS.md", 1, "alpha", severity="high", observed="2026-08-01")
+    for bad_value in ("-1", "0"):
+        monkeypatch.setenv("QUIRK_PM_MAX_FILE_BYTES", bad_value)
+        result = run_script("pm.py", "--index", cwd=initialized_project)
+        assert result.returncode == 0, result.stderr
+        out = result.stdout
+        assert "BUGS 1/1 open" in out, out
+        assert "1 unplaced (1 ready, 0 blocked, 0 malformed)" in out
+        assert "exceeds" not in out
+
+
+def test_index_honors_a_raised_max_file_bytes(initialized_project: Path, monkeypatch) -> None:
+    append_bug(initialized_project / "BUGS.md", 1, "alpha", severity="high", observed="2026-08-01")
+    monkeypatch.setenv("QUIRK_PM_MAX_FILE_BYTES", "99999999")
+    result = run_script("pm.py", "--index", cwd=initialized_project)
+    assert result.returncode == 0, result.stderr
+    assert "BUGS 1/1 open" in result.stdout
+
+
 # --- --next --------------------------------------------------------------
 
 
@@ -234,9 +254,65 @@ def test_doctor_scans_proposals_file_too(initialized_project: Path) -> None:
     assert "PROPOSAL-1" in out
 
 
+# --- _read_and_parse --------------------------------------------------------
+
+
+def test_read_and_parse_does_not_stat_before_reading(initialized_project: Path, monkeypatch) -> None:
+    """A stat-then-read gap would let a concurrent append smuggle bytes past the size
+    bound between the two calls; the read must be bounded in a single open+read."""
+    bugs = initialized_project / "BUGS.md"
+    bugs.write_text(bugs.read_text() + "\n## BUG-1: alpha\n- **Severity**: high\n")
+
+    real_stat = Path.stat
+
+    def refuse_stat(self, *args, **kwargs):
+        if self == bugs:
+            raise AssertionError("_read_and_parse must not stat() before reading")
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", refuse_stat)
+    fp, skip_reason = pm._read_and_parse(initialized_project, pm.BACKLOG_FILES[0])
+    assert skip_reason is None
+    assert fp is not None
+    assert len(fp.entries) == 1
+
+
+def test_read_and_parse_gives_a_concrete_reason_for_a_vanished_file(initialized_project: Path) -> None:
+    (initialized_project / "BUGS.md").unlink()
+    fp, skip_reason = pm._read_and_parse(initialized_project, pm.BACKLOG_FILES[0])
+    assert fp is None
+    assert skip_reason is not None
+    assert skip_reason != "None"
+
+
+def test_index_never_renders_the_none_skip_reason(initialized_project: Path, monkeypatch) -> None:
+    append_bug(initialized_project / "BUGS.md", 1, "alpha", severity="high", observed="2026-08-01")
+    monkeypatch.setattr(pm, "_read_and_parse", lambda project, spec: (None, None))
+    assert "None" not in pm.render_index(initialized_project)
+
+
+def test_next_never_renders_the_none_skip_reason(initialized_project: Path, monkeypatch) -> None:
+    append_bug(initialized_project / "BUGS.md", 1, "alpha", severity="high", observed="2026-08-01")
+    monkeypatch.setattr(pm, "_read_and_parse", lambda project, spec: (None, None))
+    assert "None" not in pm.render_next(initialized_project)
+
+
+def test_doctor_never_renders_the_none_skip_reason(initialized_project: Path, monkeypatch) -> None:
+    append_bug(initialized_project / "BUGS.md", 1, "alpha", severity="high", observed="2026-08-01")
+    monkeypatch.setattr(pm, "_read_and_parse", lambda project, spec: (None, None))
+    assert "None" not in pm.render_doctor(initialized_project)
+
+
 # --- internal helpers ------------------------------------------------------
 
 
 def test_urgency_is_total_for_a_spec_with_no_urgency_table() -> None:
     assert pm._urgency(pm.PROPOSALS, {}) == 2
     assert pm._urgency(pm.PROPOSALS, {"Anything": "value"}) == 2
+
+
+def test_max_file_bytes_treats_non_positive_as_unset(monkeypatch) -> None:
+    monkeypatch.setenv("QUIRK_PM_MAX_FILE_BYTES", "-1")
+    assert pm._max_file_bytes() == pm.DEFAULT_MAX_FILE_BYTES
+    monkeypatch.setenv("QUIRK_PM_MAX_FILE_BYTES", "0")
+    assert pm._max_file_bytes() == pm.DEFAULT_MAX_FILE_BYTES
