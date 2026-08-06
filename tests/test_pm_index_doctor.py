@@ -291,6 +291,74 @@ def test_read_and_parse_gives_a_concrete_reason_for_a_vanished_file(initialized_
     assert skip_reason != "None"
 
 
+def test_read_and_parse_type_checks_the_opened_fd_not_a_separately_stat_path(
+    initialized_project: Path, monkeypatch
+) -> None:
+    """A regular file could be replaced by a FIFO between a stat(path) call and a
+    later open(path) call; fstat-ing the fd actually opened closes that gap
+    instead of moving it. os.stat must not be used for this check at all."""
+    bugs = initialized_project / "BUGS.md"
+    bugs.write_text(bugs.read_text() + "\n## BUG-1: alpha\n- **Severity**: high\n")
+
+    real_stat = os.stat
+
+    def refuse_stat(path, *args, **kwargs):
+        if Path(os.fspath(path)) == bugs:
+            raise AssertionError("_read_and_parse must not os.stat() the path separately from opening it")
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", refuse_stat)
+    fp, skip_reason = pm._read_and_parse(initialized_project, pm.BACKLOG_FILES[0])
+    assert skip_reason is None
+    assert fp is not None
+    assert len(fp.entries) == 1
+
+
+def test_read_and_parse_closes_the_fd_after_a_successful_read(initialized_project: Path, monkeypatch) -> None:
+    bugs = initialized_project / "BUGS.md"
+    bugs.write_text(bugs.read_text() + "\n## BUG-1: alpha\n- **Severity**: high\n")
+
+    captured: list[int] = []
+    real_open = os.open
+
+    def capturing_open(path, flags, *args, **kwargs):
+        fd = real_open(path, flags, *args, **kwargs)
+        captured.append(fd)
+        return fd
+
+    monkeypatch.setattr(os, "open", capturing_open)
+    fp, skip_reason = pm._read_and_parse(initialized_project, pm.BACKLOG_FILES[0])
+    assert skip_reason is None
+    assert fp is not None
+    assert captured, "expected _read_and_parse to open the file via os.open"
+    with pytest.raises(OSError):
+        os.fstat(captured[0])
+
+
+def test_read_and_parse_closes_the_fd_when_the_target_is_not_a_regular_file(
+    initialized_project: Path, monkeypatch
+) -> None:
+    bugs = initialized_project / "BUGS.md"
+    bugs.unlink()
+    os.mkfifo(bugs)
+
+    captured: list[int] = []
+    real_open = os.open
+
+    def capturing_open(path, flags, *args, **kwargs):
+        fd = real_open(path, flags, *args, **kwargs)
+        captured.append(fd)
+        return fd
+
+    monkeypatch.setattr(os, "open", capturing_open)
+    fp, skip_reason = pm._read_and_parse(initialized_project, pm.BACKLOG_FILES[0])
+    assert fp is None
+    assert skip_reason == "not a regular file, skipping"
+    assert captured, "expected _read_and_parse to open the fifo"
+    with pytest.raises(OSError):
+        os.fstat(captured[0])
+
+
 def test_read_and_parse_skips_a_fifo_without_blocking(initialized_project: Path) -> None:
     bugs = initialized_project / "BUGS.md"
     bugs.unlink()
@@ -348,6 +416,38 @@ def test_index_does_not_crash_on_an_unusably_large_max_file_bytes(initialized_pr
     assert "BUGS 1/1 open" in result.stdout
 
 
+def test_max_file_bytes_honors_the_top_of_the_usable_range(monkeypatch) -> None:
+    monkeypatch.setenv("QUIRK_PM_MAX_FILE_BYTES", str(pm.MAX_USABLE_FILE_BYTES))
+    assert pm._max_file_bytes() == pm.MAX_USABLE_FILE_BYTES
+
+
+def test_max_file_bytes_falls_back_just_above_the_usable_range(monkeypatch) -> None:
+    monkeypatch.setenv("QUIRK_PM_MAX_FILE_BYTES", str(pm.MAX_USABLE_FILE_BYTES + 1))
+    assert pm._max_file_bytes() == pm.DEFAULT_MAX_FILE_BYTES
+
+
+def test_index_does_not_crash_at_the_top_of_the_usable_max_file_bytes_range(
+    initialized_project: Path, monkeypatch
+) -> None:
+    """max_bytes + 1 at this boundary must be a read() size that never raises
+    OverflowError, unlike the old sys.maxsize-relative bound it replaced."""
+    append_bug(initialized_project / "BUGS.md", 1, "alpha", severity="high", observed="2026-08-01")
+    monkeypatch.setenv("QUIRK_PM_MAX_FILE_BYTES", str(pm.MAX_USABLE_FILE_BYTES))
+    result = run_script("pm.py", "--index", cwd=initialized_project)
+    assert result.returncode == 0, result.stderr
+    assert "BUGS 1/1 open" in result.stdout
+
+
+@pytest.mark.parametrize("value", [sys.maxsize - 1, sys.maxsize])
+def test_index_does_not_crash_near_sys_maxsize(initialized_project: Path, monkeypatch, value: int) -> None:
+    append_bug(initialized_project / "BUGS.md", 1, "alpha", severity="high", observed="2026-08-01")
+    monkeypatch.setenv("QUIRK_PM_MAX_FILE_BYTES", str(value))
+    result = run_script("pm.py", "--index", cwd=initialized_project)
+    assert result.returncode == 0, result.stderr
+    # far above MAX_USABLE_FILE_BYTES, so this falls back to the default bound
+    assert "BUGS 1/1 open" in result.stdout
+
+
 def test_read_and_parse_falls_back_to_locale_encoding_when_utf8_fails(
     initialized_project: Path, monkeypatch
 ) -> None:
@@ -373,6 +473,33 @@ def test_read_and_parse_still_skips_content_invalid_under_both_encodings(
     fp, skip_reason = pm._read_and_parse(initialized_project, pm.BACKLOG_FILES[0])
     assert fp is None
     assert skip_reason == "parse error, skipping"
+
+
+@pytest.mark.parametrize("platform_encoding", ["UTF-8", "utf8", "utf_8", "UTF8"])
+def test_read_and_parse_skips_the_encoding_fallback_when_the_platform_is_already_utf8(
+    initialized_project: Path, monkeypatch, platform_encoding: str
+) -> None:
+    """Retrying a failed strict-utf-8 decode under an alias of the same codec
+    (UTF-8, utf8, utf_8, ...) can only fail identically, so the platform
+    encoding must be compared by canonical codec name via codecs.lookup, not
+    by string equality, and the comparison must gate the fallback decode."""
+    bugs = initialized_project / "BUGS.md"
+    bugs.write_bytes(b"\xff\xfe\x00\x01not utf-8")
+
+    lookups: list[str] = []
+    real_lookup = pm.codecs.lookup
+
+    def spying_lookup(name):
+        lookups.append(name)
+        return real_lookup(name)
+
+    monkeypatch.setattr(pm.codecs, "lookup", spying_lookup)
+    monkeypatch.setattr(pm.locale, "getpreferredencoding", lambda do_setlocale=True: platform_encoding)
+
+    fp, skip_reason = pm._read_and_parse(initialized_project, pm.BACKLOG_FILES[0])
+    assert fp is None
+    assert skip_reason == "parse error, skipping"
+    assert platform_encoding in lookups, "expected the platform encoding to be compared via codecs.lookup"
 
 
 def test_index_never_renders_the_none_skip_reason(initialized_project: Path, monkeypatch) -> None:

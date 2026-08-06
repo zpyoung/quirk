@@ -9,6 +9,7 @@ roadmap-derived findings are Phase-2+ and never appear here.
 from __future__ import annotations
 
 import argparse
+import codecs
 import locale
 import os
 import stat
@@ -23,6 +24,13 @@ PRIORITY_URGENCY = {"p1": 0, "p2": 1, "p3": 2, "p4": 3}
 
 NEXT_TOP_N = 5
 DEFAULT_MAX_FILE_BYTES = 1_048_576
+# Above this, max_bytes + 1 is still a valid Py_ssize_t on every platform, but
+# a sys.maxsize-relative bound isn't: CPython accepts a read() size far below
+# sys.maxsize on the stack but still fails to actually service it (OverflowError
+# or MemoryError) once the size is absurdly large, and where that line falls is
+# host-dependent. 1 GiB is comfortably past any real artifact file and
+# comfortably short of that failure mode on any real host.
+MAX_USABLE_FILE_BYTES = 1_073_741_824
 
 
 @dataclass(frozen=True)
@@ -70,9 +78,7 @@ def _max_file_bytes() -> int:
         return DEFAULT_MAX_FILE_BYTES
     if value <= 0:
         return DEFAULT_MAX_FILE_BYTES
-    if value > sys.maxsize - 1:
-        # f.read() takes a Py_ssize_t; an override this large can never be used as
-        # a read size, so it's treated the same as unset rather than raising.
+    if value > MAX_USABLE_FILE_BYTES:
         return DEFAULT_MAX_FILE_BYTES
     return value
 
@@ -90,27 +96,49 @@ def _read_and_parse(project: Path, spec: ArtifactSpec) -> tuple[FileParse | None
     path = project / spec.filename
     max_bytes = _max_file_bytes()
     try:
-        # os.stat, not path.open: opening a FIFO for reading blocks until a
-        # writer appears, which would hang the SessionStart hook that runs this.
-        mode = os.stat(path).st_mode
+        # O_NONBLOCK, not path.open: opening a FIFO for reading otherwise blocks
+        # until a writer appears, which would hang the SessionStart hook that
+        # runs this. The type is then checked against this same fd's fstat, not
+        # a separate stat(path) call, so nothing can swap the target in between.
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
     except OSError:
         return None, "parse error, skipping"
-    if not stat.S_ISREG(mode):
-        return None, "not a regular file, skipping"
+    close_fd = True
     try:
-        with path.open("rb") as f:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None, "not a regular file, skipping"
+        # a regular file ignores O_NONBLOCK on read, so this reads normally
+        with os.fdopen(fd, "rb") as f:
+            close_fd = False  # fdopen owns fd now; its context manager closes it
             data = f.read(max_bytes + 1)
     except OSError:
         return None, "parse error, skipping"
+    finally:
+        if close_fd:
+            os.close(fd)
     if len(data) > max_bytes:
         return None, f"exceeds {max_bytes} bytes, skipping"
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
-        # artifact_append.py writes with the platform default encoding, not
-        # explicit utf-8; a file quirk itself wrote must not be dropped over that.
+        platform_encoding = locale.getpreferredencoding(False)
         try:
-            text = data.decode(locale.getpreferredencoding(False))
+            platform_is_utf8 = codecs.lookup(platform_encoding).name == codecs.lookup("utf-8").name
+        except LookupError:
+            platform_is_utf8 = False
+        if platform_is_utf8:
+            # the strict utf-8 decode above already spoke for the platform
+            # encoding in this case; retrying it would just fail the same way.
+            return None, "parse error, skipping"
+        # artifact_append.py writes with the platform default encoding, not
+        # explicit utf-8; a file quirk itself wrote must not be dropped over
+        # that. On a non-utf-8 host this is still a genuine guess: bytes invalid
+        # under utf-8 but valid under the platform encoding are indistinguishable
+        # from bytes actually written in some third encoding that also happens
+        # to decode cleanly here. No reader can resolve that from the bytes
+        # alone, so this fallback stays best-effort.
+        try:
+            text = data.decode(platform_encoding)
         except (UnicodeDecodeError, LookupError):
             return None, "parse error, skipping"
     try:
