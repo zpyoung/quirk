@@ -100,7 +100,9 @@ def _read_and_parse(project: Path, spec: ArtifactSpec) -> tuple[FileParse | None
         # until a writer appears, which would hang the SessionStart hook that
         # runs this. The type is then checked against this same fd's fstat, not
         # a separate stat(path) call, so nothing can swap the target in between.
-        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        # O_NONBLOCK doesn't exist on Windows, which also has no POSIX FIFOs to
+        # block on, so 0 (a no-op flag) is the correct fallback there.
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
     except OSError:
         return None, "parse error, skipping"
     close_fd = True
@@ -118,29 +120,29 @@ def _read_and_parse(project: Path, spec: ArtifactSpec) -> tuple[FileParse | None
             os.close(fd)
     if len(data) > max_bytes:
         return None, f"exceeds {max_bytes} bytes, skipping"
+    # artifact_append.py writes these files with the platform default encoding,
+    # not explicit utf-8 (fenced there). Bytes valid under both codecs must
+    # decode as the writer actually wrote them, not as whichever codec is
+    # tried first, so the platform codec goes first whenever it differs from
+    # utf-8 — this couples the reader to that locale-dependent write.
+    platform_encoding = locale.getpreferredencoding(False)
     try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError:
-        platform_encoding = locale.getpreferredencoding(False)
+        platform_is_utf8 = codecs.lookup(platform_encoding).name == codecs.lookup("utf-8").name
+    except LookupError:
+        platform_is_utf8 = False
+    if platform_is_utf8:
         try:
-            platform_is_utf8 = codecs.lookup(platform_encoding).name == codecs.lookup("utf-8").name
-        except LookupError:
-            platform_is_utf8 = False
-        if platform_is_utf8:
-            # the strict utf-8 decode above already spoke for the platform
-            # encoding in this case; retrying it would just fail the same way.
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
             return None, "parse error, skipping"
-        # artifact_append.py writes with the platform default encoding, not
-        # explicit utf-8; a file quirk itself wrote must not be dropped over
-        # that. On a non-utf-8 host this is still a genuine guess: bytes invalid
-        # under utf-8 but valid under the platform encoding are indistinguishable
-        # from bytes actually written in some third encoding that also happens
-        # to decode cleanly here. No reader can resolve that from the bytes
-        # alone, so this fallback stays best-effort.
+    else:
         try:
             text = data.decode(platform_encoding)
         except (UnicodeDecodeError, LookupError):
-            return None, "parse error, skipping"
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
+                return None, "parse error, skipping"
     try:
         result = parse_entries(text, spec.header)
     except Exception:

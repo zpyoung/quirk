@@ -502,6 +502,39 @@ def test_read_and_parse_skips_the_encoding_fallback_when_the_platform_is_already
     assert platform_encoding in lookups, "expected the platform encoding to be compared via codecs.lookup"
 
 
+def test_read_and_parse_prefers_the_platform_encoding_when_both_decode_cleanly(
+    initialized_project: Path, monkeypatch
+) -> None:
+    """artifact_append.py writes with the platform default codec, not utf-8. When
+    bytes happen to be valid under both codecs, decoding must match what that
+    writer actually produced instead of guessing utf-8 first."""
+    bugs = initialized_project / "BUGS.md"
+    # b"\xc3\xa9" is the utf-8 encoding of 'é'; every byte also decodes cleanly
+    # under latin-1, just to different (mojibake) characters
+    entry = b"\n## BUG-1: caf\xc3\xa9 bug\n- **Severity**: high\n"
+    bugs.write_bytes(bugs.read_bytes() + entry)
+    monkeypatch.setattr(pm.locale, "getpreferredencoding", lambda do_setlocale=True: "latin-1")
+
+    fp, skip_reason = pm._read_and_parse(initialized_project, pm.BACKLOG_FILES[0])
+    assert skip_reason is None
+    assert fp is not None
+    assert fp.entries[0].title == "caf\xc3\xa9 bug"
+
+
+def test_read_and_parse_works_when_o_nonblock_is_unavailable(initialized_project: Path, monkeypatch) -> None:
+    """os.O_NONBLOCK is Unix-only; Windows has no POSIX FIFOs and does not
+    define it, so the open flags must degrade to a no-op there instead of
+    raising AttributeError before any OSError handler can run."""
+    bugs = initialized_project / "BUGS.md"
+    bugs.write_text(bugs.read_text() + "\n## BUG-1: alpha\n- **Severity**: high\n")
+    monkeypatch.delattr(os, "O_NONBLOCK", raising=False)
+
+    fp, skip_reason = pm._read_and_parse(initialized_project, pm.BACKLOG_FILES[0])
+    assert skip_reason is None
+    assert fp is not None
+    assert len(fp.entries) == 1
+
+
 def test_index_never_renders_the_none_skip_reason(initialized_project: Path, monkeypatch) -> None:
     append_bug(initialized_project / "BUGS.md", 1, "alpha", severity="high", observed="2026-08-01")
     monkeypatch.setattr(pm, "_read_and_parse", lambda project, spec: (None, None))
