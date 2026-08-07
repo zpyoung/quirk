@@ -73,7 +73,7 @@ reopening any behavioral question `logic.md` already settled. Concretely, this d
 1. **The formal grammars** `logic.md` deliberately left to implementation: `ROADMAP.md`'s milestone
    syntax, `Blocked by`'s lexical rules, and the on-disk rendering of every new field.
 2. **The parser convergence** that `logic.md`'s own Key Decisions flags as a precondition for
-   shipping anything: `artifact_append.py:88-92` and `artifact_review.py:18-31` have already
+   shipping anything: the two divergent parsers that predated Phase 1 had already
    diverged, and this document picks — and justifies — the one canonical behavior
    `bin/artifact_lib.py` implements.
 3. **Five algorithms** logic.md names but leaves as prose: the probe execution contract, the
@@ -157,7 +157,7 @@ testing needs (the adapter tests stub `git`/`orca`; the lifecycle tests don't to
 2. **Inert in a project that has not run init.** `pm.py` degrades exactly like `artifact_append.py`
    does today: no `BUGS.md`/etc. → the same "run `/quirk:artifacts:init` first" message, never a
    traceback. See [§Inertness and v1/v2 back-compat](#inertness-and-v1v2-back-compat).
-3. Hooks remain warn-only and always `exit 0` — see `hooks/load_artifact_tail.sh:9-10,36` for the
+3. Hooks remain warn-only and always `exit 0` — see `hooks/load_artifact_tail.sh:9-10,48` for the
    existing gate pattern this module's hook change preserves.
 
 ---
@@ -166,27 +166,29 @@ testing needs (the adapter tests stub `git`/`orca`; the lifecycle tests don't to
 
 *Back-link: [logic.md → bin/artifact_lib.py is extracted before any feature lands](./logic.md#key-decisions--rationale)*
 
-| Symbol | Today | After this work |
+**This table was rewritten 2026-08-07.** Its "Today" column described the tree as it stood *before*
+Phase 1 shipped, so every row pointed an implementer at a location the symbol had already moved out
+of. The column now names where each symbol actually lives.
+
+| Symbol | Where it lives now (Phase 1, shipped) | Phase 2 change |
 |---|---|---|
-| `find_max_id` | `bin/artifact_append.py:88-92` (loose, no title capture) | moved verbatim to `bin/artifact_lib.py`, unchanged regex — see [§Parser strict vs. compatibility modes](#parser-strict-vs-compatibility-modes) |
-| `render_entry` | `bin/artifact_append.py:95-106` | moved verbatim to `bin/artifact_lib.py` |
-| `SCHEMA_VERSION_RE` / `detect_schema_version` | `bin/artifact_append.py:109-114` | moved verbatim to `bin/artifact_lib.py` |
-| `parse_entries` | `bin/artifact_review.py:18-31` (strict, title required, dict-collapses repeated field labels) | reimplemented in `bin/artifact_lib.py` as `parse_entries` returning `Entry`/`MalformedHeading`, strict by construction — see below |
-| `SCHEMAS` dict | `bin/artifact_append.py:14-83` | moved to `bin/artifact_lib.py`, `bug`/`defer`/`test-skip` gain `blocked_by`; `test-skip` gains `logged` |
-| `EXPECTED_SCHEMA_VERSION = 1` | `bin/artifact_append.py:85` | `SCHEMA_VERSION = 2` in `bin/artifact_lib.py`, imported by both `artifact_append.py` and `artifact_review.py` |
+| `find_max_id` | `bin/artifact_lib.py:105-108` (loose, no title capture) | none — see [§Parser strict vs. compatibility modes](#parser-strict-vs-compatibility-modes) |
+| `render_entry` | `bin/artifact_lib.py:141-152` | gains v2-only-field suppression on a v1 file — see [§v1/v2 back-compat matrix](#v1v2-back-compat-matrix) |
+| `SCHEMA_VERSION_RE` / `detect_schema_version` | `bin/artifact_lib.py:10`, `:155-157` | none |
+| `parse_entries` | `bin/artifact_lib.py:111-138`, returning `Entry` / `MalformedHeading` | `Entry` gains `end: int` — see [§Parsing contracts](#parsing-contracts) |
+| `_mask_quoted` (fence/comment masking) | `bin/artifact_lib.py:35-70` | none |
+| `SCHEMAS` dict | `bin/artifact_append.py:20-89` (still there; **not** moved to `artifact_lib`) | `bug`/`defer`/`test-skip` gain `blocked_by`; `test-skip` gains `logged` |
+| `EXPECTED_SCHEMA_VERSION = 1` | `bin/artifact_append.py:91` | becomes `2`, and gains the missing lower-bound check — see [§`artifact_append.py` needs a lower bound](#artifact_appendpy-needs-a-lower-bound-not-just-an-upper-one) |
+| `ensure_lock_dir` | `bin/artifact_lib.py:15-28` | reused by `pm.py`'s writers |
 | flock discipline | `bin/artifact_append.py:142-155` (`.quirk/locks/{file}.lock`, `ARTIFACT_LOCK_TIMEOUT`, 5s default) | reused verbatim (same lock file, same env var) by `pm.py` — see [§The CAS transition mechanism](#the-cas-transition-mechanism) |
-| `--project-dir` convention | `bin/artifact_append.py:122-123`, all four `bin/*.py` scripts | reused by every `pm.py` subcommand |
+| `--project-dir` convention | `bin/artifact_append.py:99-100` (declared), `:131` (used); all four `bin/*.py` scripts | reused by every `pm.py` subcommand |
+| `atomic_write` | **does not exist yet** | new in `bin/artifact_lib.py` — see [§The CAS transition mechanism](#the-cas-transition-mechanism) |
+| `splice_field` | **does not exist yet** | new in `bin/artifact_lib.py` — see [§`splice_field`](#splice_field--the-in-place-field-writer) |
 | ADR ID allocation pattern (retry-on-collision) | `bin/adr_create.py:60-71` | referenced, not reused — `pm.py` never allocates new ledger IDs, only `artifact_append.py` does |
 
-**The divergence team-lead flagged, confirmed at these exact lines:**
-`bin/artifact_append.py:90` — `re.compile(rf"^##\s+{re.escape(header)}-(\d+):", re.MULTILINE)` — no
-title captured, no title required. `bin/artifact_review.py:20` —
-`re.compile(rf"^##\s+{re.escape(header)}-(\d+):\s*(.+)$", re.MULTILINE)` — requires `\s*(.+)$`, i.e.
-at least one non-whitespace-trimmed character before end of line. A heading `## BUG-7:` with nothing
-after the colon matches the first and not the second. `bin/artifact_review.py:29` collapses repeated
-field labels into a `dict` — the reason `logic.md` repeatedly cites for why lifecycle history can't
-be preserved by field duplication (`logic.md` → [Attempt and refusal counts are aggregates, not a
-history](./logic.md#job-2--ushering-a-started-task)).
+**`SCHEMAS` stays in `artifact_append.py`.** An earlier draft said it moves to `artifact_lib.py`;
+Phase 1 shipped without moving it, and nothing in Phase 2 needs it moved. `pm.py` does not allocate
+IDs or render new entries, so it has no use for the dict.
 
 ---
 
@@ -203,40 +205,45 @@ break the backlog's agreement property.**
 ```
 ^##\s+{header}-(\d+):
 ```
-Verbatim from `bin/artifact_append.py:90`. Its job is "never allocate an ID that's already claimed on
-disk." Any heading claiming an ID — however malformed — has claimed it, so this regex must stay loose
-or a titleless legacy heading becomes an invisible, re-issuable ID. **This is unchanged behavior**:
-`bin/artifact_lib.find_max_id(text, header)` is `bin/artifact_append.py:88-92` moved verbatim.
+Shipped at `bin/artifact_lib.py:73-74`, used by `find_max_id` (`:105-108`). Its job is "never
+allocate an ID that's already claimed on disk." Any heading claiming an ID — however malformed — has
+claimed it, so this regex must stay loose or a titleless legacy heading becomes an invisible,
+re-issuable ID.
 
 `REGEX:` — **strict (title validation), used to classify blocks:**
 ```
 ^##[ \t]+{header}-(\d+):[ \t]*(\S.*)$
 ```
 
-**This is NOT verbatim from `bin/artifact_review.py:20`, and the difference is a live bug.** The
-existing regex is `^##\s+{header}-(\d+):\s*(.+)$`, and an earlier draft of this section reproduced
-it while claiming it "requires a non-empty title". It does not. `\s` matches newlines, so `\s*`
-happily crosses the line break and `(.+)` then consumes the *next line* as the title. Verified:
+Shipped at `bin/artifact_lib.py:77-78`. **This section is now a record of a fix that landed in
+Phase 1, not a proposal.** It is kept because the reasoning is the contract Phase 2 must not break,
+and because the bug it describes is easy to reintroduce.
+
+The pre-Phase-1 regex was `^##\s+{header}-(\d+):\s*(.+)$`, which an earlier draft reproduced while
+claiming it "required a non-empty title". It did not. `\s` matches newlines, so `\s*` crossed the
+line break and `(.+)` consumed the *next line* as the title:
 
 ```
 ## BUG-7:                     →  matches, with title = '- **Severity**: low'
 - **Severity**: low
 ```
 
-Two consequences, both silent today: the entry is admitted as *valid* with a garbage title, and the
-swallowed line is no longer part of the block, so **that field is lost from the parse**. A
-whitespace-only title (`## BUG-1:` plus trailing spaces) is admitted the same way, since `\s*`
-backtracks to leave one space for `(.+)`; `.strip()` then yields `''`.
+Two consequences, both silent: the entry was admitted as *valid* with a garbage title, and the
+swallowed line left the block, so **that field was lost from the parse**. A whitespace-only title
+was admitted the same way, since `\s*` backtracks to leave one space for `(.+)`; `.strip()` then
+yielded `''`.
 
-The corrected regex restricts post-colon whitespace to horizontal (`[ \t]*`) and requires the title
-to begin with a non-whitespace character (`\S`), so a titleless heading genuinely fails to match.
+The shipped regex restricts post-colon whitespace to horizontal (`[ \t]*`) and requires the title to
+begin with a non-whitespace character (`\S`), so a titleless heading fails to match. Pinned by
+`tests/test_artifact_lib.py`.
 
 `ALGORITHM:` — **loose headings are the block boundaries; strict classifies what is inside them.**
 
-This ordering is load-bearing and is the second half of the fix. If strict matches were used as
-boundaries — as `bin/artifact_review.py:23-28` does today — then a heading that fails strict is not
-a boundary at all, so the preceding entry's block runs on through it and the field scan absorbs its
-fields under last-value-wins. A malformed heading would silently overwrite its predecessor's
+This ordering is load-bearing and is the second half of the fix, shipped at
+`bin/artifact_lib.py:111-138` with the same rationale in its own docstring. If strict matches were
+used as boundaries — as the pre-Phase-1 `artifact_review.py` did — then a heading that fails strict
+is not a boundary at all, so the preceding entry's block runs on through it and the field scan
+absorbs its fields under last-value-wins. A malformed heading would silently overwrite its predecessor's
 `Status`. Slicing on loose and classifying afterwards makes every ID-claiming heading terminate the
 block before it, whether or not it is well-formed:
 
@@ -319,7 +326,7 @@ any command was run against it.
 **No-behavior-change verification.** `test_artifact_append.py` and `test_artifact_review.py` are the
 acceptance bar: every test in both files must pass unmodified against `bin/artifact_lib`-backed
 `artifact_append.py`/`artifact_review.py`. Concretely: `test_gaps_use_max_plus_one`
-(`tests/test_artifact_append.py:101-116`) and `test_sequential_id_increment` (`:85-98`) pin
+(`tests/test_artifact_append.py:102-117`) and `test_sequential_id_increment` (`:86-99`) pin
 `find_max_id`'s loose behavior; `test_review_lists_populated_entries`
 (`tests/test_artifact_review.py:16-33`) pins `parse_entries`'s strict behavior and its exact
 `render_report` output shape. Neither fixture set includes a titleless, whitespace-titled, or duplicate heading today, so the
@@ -495,7 +502,7 @@ Two deliberate narrowings from the obvious `\d+`:
 | **Separator** | Comma, optional surrounding whitespace. No other separator is recognized; a `;`-joined list is one token that fails the ID regex, and is malformed. |
 | **Line continuation** | A blocker list wrapped across lines is **not** malformed and is **not** fully read — `FIELD_RE` (`bin/artifact_lib.py:9`) is line-anchored under `re.MULTILINE`, so `- **Blocked by**: BUG-3,` followed by an indented `BUG-7` yields the value `BUG-3,` and the continuation is invisible to the parser. `BUG-7` is silently dropped, which fails **open** on a blocker — the one direction this design must never fail. `Blocked by` values are therefore validated at parse time: a value whose last non-space character is a comma is reported `BLOCKED_BY_TRUNCATED` and treated as `DANGLING` (blocks). An earlier draft claimed such input was "entirely malformed"; that was wrong about the parser and hid a silent drop behind a reassuring word. |
 | **Whitespace** | Stripped at token boundaries only. Internal whitespace inside a token (`BUG - 3`) fails the fullmatch — malformed, not normalized. |
-| **Case** | Header must be uppercase (`BUG`/`DEFER`/`TEST`) — case-sensitive, never normalized. **Tech-spec call (logic.md silent):** entry IDs are always upper-case by construction (`SCHEMAS[*]["header"]`, `bin/artifact_append.py:16,34,51`); accepting `bug-3` and silently uppercasing it would let two spellings of the same reference draft differently in different sessions, for no benefit. |
+| **Case** | Header must be uppercase (`BUG`/`DEFER`/`TEST`) — case-sensitive, never normalized. **Tech-spec call (logic.md silent):** entry IDs are always upper-case by construction (`SCHEMAS[*]["header"]`, `bin/artifact_append.py:22,40,57,73`); accepting `bug-3` and silently uppercasing it would let two spellings of the same reference draft differently in different sessions, for no benefit. |
 | **Malformed token** | Treated identically to an unknown ID (below) — fail-closed, blocks, never silently dropped. Reported as `DANGLING` with `reason="malformed token"`. |
 | **Duplicate IDs in one field** | `Blocked by: BUG-3, BUG-3` — de-duplicated for satisfaction purposes (semantically a no-op), and separately reported as `BLOCKED_BY_DUPLICATE` (low severity — a hygiene hint, not a correctness issue, since dedup makes it behaviorally identical to listing once). |
 | **Self-reference** | `BUG-7` naming itself. **Subsumed by cycle detection** (below) as a length-1 cycle — needs no special-case code. While `BUG-7` is `open`, `ready(BUG-7)` requires `BUG-7` to already be `closed`/`wontfix`/`superseded`, which is impossible while it's still `open`; it can only exit via `decide`, which doesn't consult blockers at all ([logic.md → decide may be invoked from any non-terminal state](./logic.md#command-surface)). |
@@ -542,7 +549,7 @@ accidentally-quadratic or non-terminating reimplementation.
 [logic.md → Decisions Locked → Completion evidence](./logic.md#decisions-locked)*
 
 All three are **single-valued fields, overwritten in place on every transition** — never duplicated,
-consistent with `bin/artifact_review.py:29`'s existing dict-collapse of repeated labels, and with
+consistent with `bin/artifact_lib.py:129`'s dict-collapse of repeated labels, and with
 `logic.md`'s own statement that history survives only via the attempt/refusal *counters*, not field
 duplication ([logic.md → Attempt and refusal counts are aggregates, not a
 history](./logic.md#job-2--ushering-a-started-task)). `logic.md`'s worked examples in its Data flow
@@ -799,7 +806,7 @@ entry:
 
 - **Duplicate labels.** If the block contains more than one line matching `label`, `splice_field`
   **refuses** (the caller exits `4`) rather than guessing which one is authoritative. This is
-  reachable through hand-editing, and `bin/artifact_review.py:29`'s dict-collapse means the parsed
+  reachable through hand-editing, and `bin/artifact_lib.py:129`'s dict-collapse means the parsed
   view would silently show only the last — so the writer must not act on a view the file does not
   support. `doctor` reports it as `DUPLICATE_LIFECYCLE_FIELD`.
 - **Entry end.** The block is bounded by `entry.start` and `entry.end` — **not** by scanning forward
@@ -1300,7 +1307,7 @@ bump." Keeping all four ledger files on one shared version number avoids a perma
 change with zero behavioral cost (`proposals.md` was never in the mixed-version hazard `logic.md`
 warns about in the first place, since it never gained lifecycle semantics to be mismatched about).
 
-`ROADMAP.md` is **created**, not migrated, by `artifact_init.py` (`bin/artifact_init.py:38-48`'s
+`ROADMAP.md` is **created**, not migrated, by `artifact_init.py` (`bin/artifact_init.py:40-51`'s
 existing per-file create-or-skip loop gains one more entry) — a project with no `ROADMAP.md` simply
 has an empty roadmap; `migrate` never needs to touch it, since it doesn't pre-exist.
 
@@ -1499,7 +1506,7 @@ which is distinct from verified-and-passing and is reported as neither.
 *Back-link: [logic.md → The read layer](./logic.md#the-read-layer)*
 
 `hooks/load_artifact_tail.sh` is rewritten to call `pm.py --index` (replacing its current `tail -n
-50` loop, `hooks/load_artifact_tail.sh:31-33`) and print its stdout, preserving the existing
+50` loop, removed in Phase 1) and print its stdout, preserving the existing
 gates that must survive unchanged: `CLAUDE_PROJECT_DIR` unset → silent exit 0
 (`hooks/load_artifact_tail.sh:9`), no artifact files present → the exact existing
 "`/quirk:artifacts:init`" suggestion (`:18-20`), and the hook **always** `exit 0` regardless of
@@ -1530,7 +1537,7 @@ section is exactly the kind of implementation-detail gap the tech spec exists to
 Caps: up to 10 `in_progress` rows and up to 5 `delivered`-awaiting-integration rows, each with title
 truncated to 60 characters; beyond the cap, a trailing `"…and N more"` line — a bounded, ID-based
 projection replacing the byte-count/line-count cap the current hook uses
-(`hooks/load_artifact_tail.sh:26-30`'s 1MB check), applied to a smarter selection instead of a raw
+(the read layer's `QUIRK_PM_MAX_FILE_BYTES` bound, `bin/pm.py:26`), applied to a smarter selection instead of a raw
 tail. A ledger file that fails to parse entirely is reported as `"[quirk:pm] {file}: parse error,
 skipping"` and excluded from the counts — never a crash, mirroring the existing per-file resilience
 posture.
@@ -1673,7 +1680,7 @@ starting state.
 | `bin/artifact_append.py:180` (`target.write_text(new_text)`) | Left as a plain, non-atomic write deliberately — the "no behavior change" mandate on this refactor covers *parsing*, not a crash-safety upgrade nobody asked this script to gain; `pm.py`'s new writers use `atomic_write` instead, see [§The CAS transition mechanism](#the-cas-transition-mechanism). Backporting atomicity here is a defensible future improvement, not part of this work — see [§Concerns](#concerns). |
 | `tests/test_artifact_append.py`, `tests/test_artifact_review.py` (entire files) | The acceptance bar for "no behavior change" in the parser convergence — every assertion in both must keep passing unmodified; see [§Parser strict vs. compatibility modes](#parser-strict-vs-compatibility-modes). |
 | `tests/conftest.py`'s existing fixtures (`project_dir`, `initialized_project`, `run_script`, `BIN_DIR`, `TEMPLATES_DIR`, `REPO_ROOT`) | Load-bearing for both the typed-artifacts suite and this work; this document adds fixtures alongside them (§Testing strategy), never repurposes them. |
-| `bin/artifact_init.py`'s existing `ROOT_TEMPLATES`/backup/`--force` logic (`bin/artifact_init.py:14,38-48`) | This work adds one entry to `ROOT_TEMPLATES` (`ROADMAP.md`) and nothing else in this file — the create-or-skip, backup-on-`--force`, and CLAUDE.md-snippet logic are unrelated to this feature and untouched. |
+| `bin/artifact_init.py`'s existing `ROOT_TEMPLATES`/backup/`--force` logic (`bin/artifact_init.py:16,40-51`) | This work adds one entry to `ROOT_TEMPLATES` (`ROADMAP.md`) and nothing else in this file — the create-or-skip, backup-on-`--force`, and CLAUDE.md-snippet logic are unrelated to this feature and untouched. |
 | `hooks/hooks.json` | Unchanged — this work modifies `load_artifact_tail.sh`'s body, not its registration; the `SessionStart`/`matcher: "*"` wiring (`hooks/hooks.json:14-22`) stays as-is. |
 | `templates/claude_md_snippet.md` | Unrelated to PM; this work adds no new surface-routing tic phrases. |
 | Every existing skill under `skills/` other than the new `skills/pm/` | Purely additive work; nothing here reads or writes another skill's files. |
