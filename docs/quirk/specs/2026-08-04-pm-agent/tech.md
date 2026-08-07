@@ -1581,7 +1581,7 @@ Key-Decisions bullet under this reading.
 
 Continues `bin/artifact_append.py`'s scheme (2/3/5/8) and implements the code the original design
 promised but never shipped (`docs/specs/2026-05-04-typed-artifacts-design.md:329`'s "Corrupt entry
-mid-file → exit 4," absent from `bin/artifact_append.py:126-190`'s actual codes — confirmed absent).
+mid-file → exit 4," absent from `bin/artifact_append.py:94-184`'s actual codes — confirmed absent).
 
 | Code | Meaning | Reachable from |
 |---:|---|---|
