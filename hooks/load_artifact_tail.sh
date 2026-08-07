@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 # SessionStart hook for typed-artifacts.
-# - If artifact files exist: print last lines so Claude has context.
+# - If artifact files exist: call pm.py --index for a bounded summary.
 # - If artifact files are missing: suggest /quirk:artifacts:init.
 # - If $CLAUDE_PROJECT_DIR is unset: silent no-op.
 # Always exits 0.
@@ -20,17 +20,29 @@ if [[ $present -eq 0 ]]; then
   exit 0
 fi
 
-for f in "${ARTIFACTS[@]}"; do
-  path="$CLAUDE_PROJECT_DIR/$f"
-  [[ -f "$path" ]] || continue
-  size=$(wc -c <"$path" 2>/dev/null || echo 0)
-  if [[ "$size" -gt 1048576 ]]; then
-    echo "[quirk:typed-artifacts] $f >1MB; skipping tail load."
-    continue
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(dirname "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")")}"
+PM="$PLUGIN_ROOT/bin/pm.py"
+
+status=1
+output=""
+if [[ -f "$PM" ]]; then
+  output="$(python3 "$PM" --index --project-dir "$CLAUDE_PROJECT_DIR" 2>/dev/null)"
+  status=$?
+fi
+
+# A broken pm.py (non-zero exit, traceback, empty output, uninitialized
+# project) must never break session start — fall back to one line instead.
+if [[ $status -eq 0 && -n "$output" ]]; then
+  echo "$output"
+  # --index is counts only; --next is the one surface that names entries, and
+  # a session that knows "BUGS 4/4 open" and nothing else cannot act on it.
+  shortlist="$(python3 "$PM" --next --project-dir "$CLAUDE_PROJECT_DIR" 2>/dev/null)"
+  next_status=$?
+  if [[ $next_status -eq 0 && -n "$shortlist" ]]; then
+    grep -v 'unplaced (' <<<"$shortlist" || true
   fi
-  echo "----- $f (last 50 lines) -----"
-  tail -n 50 "$path"
-  echo ""
-done
+else
+  echo "[quirk:pm] index unavailable"
+fi
 
 exit 0

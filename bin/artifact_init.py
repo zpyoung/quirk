@@ -8,6 +8,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from artifact_lib import ensure_lock_dir
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = REPO_ROOT / "templates"
 
@@ -71,9 +73,21 @@ def main(argv: list[str] | None = None) -> int:
             claude_md.write_text(new_text)
             created.append("CLAUDE.md (snippet appended)" if existing else "CLAUDE.md")
 
+    lock_dir = ensure_lock_dir(project)
+
+    removed: list[str] = []
+    for name in ROOT_TEMPLATES:
+        stale = project / f".{name}.lock"
+        if stale.exists():
+            stale.unlink()
+            removed.append(stale.name)
+
     print(f"Created: {', '.join(created) if created else '(none)'}")
     if skipped:
         print(f"Skipped: {', '.join(skipped)}")
+    if removed:
+        rel = lock_dir.relative_to(project)
+        print(f"Removed legacy lock files: {', '.join(removed)} (locks now live in {rel}/)")
     return 0
 
 

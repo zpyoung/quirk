@@ -70,3 +70,30 @@ def test_init_no_claude_md_flag(project_dir: Path) -> None:
     result = run_script("artifact_init.py", "--no-claude-md", cwd=project_dir)
     assert result.returncode == 0
     assert not (project_dir / "CLAUDE.md").exists()
+
+
+def test_init_creates_self_ignoring_lock_dir(project_dir: Path) -> None:
+    """The lock dir ships ignoring itself, so init never has to edit the project's .gitignore."""
+    result = run_script("artifact_init.py", cwd=project_dir)
+    assert result.returncode == 0, result.stderr
+    assert (project_dir / ".quirk" / "locks" / ".gitignore").read_text().strip() == "*"
+    assert not (project_dir / ".gitignore").exists()
+
+
+def test_init_removes_legacy_root_locks(project_dir: Path) -> None:
+    """Projects that adopted artifacts before the move get their stray root locks cleaned up."""
+    run_script("artifact_init.py", cwd=project_dir)
+    for name in ["BUGS.md", "DEFERRED.md", "TEST_BACKLOG.md"]:
+        (project_dir / f".{name}.lock").write_text("")
+
+    result = run_script("artifact_init.py", cwd=project_dir)
+    assert result.returncode == 0, result.stderr
+    assert not list(project_dir.glob(".*.md.lock"))
+    assert "legacy lock" in result.stdout.lower()
+
+
+def test_init_silent_when_no_legacy_locks(project_dir: Path) -> None:
+    """A clean project gets no cleanup noise."""
+    result = run_script("artifact_init.py", cwd=project_dir)
+    assert result.returncode == 0
+    assert "legacy lock" not in result.stdout.lower()

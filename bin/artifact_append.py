@@ -5,11 +5,17 @@ from __future__ import annotations
 import argparse
 import fcntl
 import os
-import re
 import sys
 import time
 from datetime import date
 from pathlib import Path
+
+from artifact_lib import (
+    detect_schema_version,
+    ensure_lock_dir,
+    find_max_id,
+    render_entry,
+)
 
 SCHEMAS: dict[str, dict] = {
     "bug": {
@@ -85,35 +91,6 @@ SCHEMAS: dict[str, dict] = {
 EXPECTED_SCHEMA_VERSION = 1
 
 
-def find_max_id(text: str, header: str) -> int:
-    """Return max N from '## HEADER-N:' lines, or 0 if none found."""
-    pattern = re.compile(rf"^##\s+{re.escape(header)}-(\d+):", re.MULTILINE)
-    ids = [int(m.group(1)) for m in pattern.finditer(text)]
-    return max(ids) if ids else 0
-
-
-def render_entry(schema: dict, entry_id: int, fields: dict[str, str]) -> str:
-    """Render a markdown entry block for the given schema and fields."""
-    title = fields.get("title", "")
-    lines = [f"## {schema['header']}-{entry_id}: {title}"]
-    for key in schema["fields"]:
-        if key == "title":
-            continue
-        if fields.get(key):
-            label = schema["labels"].get(key, key)
-            lines.append(f"- **{label}**: {fields[key]}")
-    lines.append("")
-    return "\n".join(lines)
-
-
-SCHEMA_VERSION_RE = re.compile(r"<!--\s*schema-version:\s*(\d+)\s*-->")
-
-
-def detect_schema_version(text: str) -> int | None:
-    m = SCHEMA_VERSION_RE.search(text)
-    return int(m.group(1)) if m else None
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Append to a typed-artifact file.")
     parser.add_argument("type", help="Artifact type")
@@ -162,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 3
 
-    lock_path = target.with_name(f".{schema['file']}.lock")
+    lock_path = ensure_lock_dir(project) / f"{schema['file']}.lock"
     timeout = float(os.environ.get("ARTIFACT_LOCK_TIMEOUT", "5.0"))
     deadline = time.monotonic() + timeout
     with open(lock_path, "w") as lock_file:
