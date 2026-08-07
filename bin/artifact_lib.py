@@ -4,9 +4,28 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 FIELD_RE = re.compile(r"^-\s+\*\*(.+?)\*\*:\s*(.+)$", re.MULTILINE)
 SCHEMA_VERSION_RE = re.compile(r"<!--\s*schema-version:\s*(\d+)\s*-->")
+
+LOCK_DIR_PARTS = (".quirk", "locks")
+
+
+def ensure_lock_dir(project: Path) -> Path:
+    """Return the project's lock directory, creating it as self-ignoring if absent.
+
+    The directory carries its own `.gitignore` of `*` rather than an entry in the project's
+    root `.gitignore`, so adopting quirk never edits a file the project owns and a project
+    initialized before this existed self-heals on its next append. Scoped to `.quirk/locks/`
+    because `.quirk/` also holds tracked content.
+    """
+    lock_dir = project.joinpath(*LOCK_DIR_PARTS)
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    ignore = lock_dir / ".gitignore"
+    if not ignore.exists():
+        ignore.write_text("*\n", encoding="utf-8")
+    return lock_dir
 
 
 def _loose_re(header: str) -> re.Pattern[str]:

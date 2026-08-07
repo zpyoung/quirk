@@ -27,6 +27,7 @@ entries' IDs; manual edits to fix typos are fine.
 - **Introduced by**: pre-dates this session
 - **Severity**: low
 - **Proposed fix**: Add a '.*.lock' pattern to the templates and have artifact_init.py append it to the target project's .gitignore.
+- **Resolved**: 2026-08-07. Fixed differently than proposed: locks moved to .quirk/locks/ which carries its own .gitignore of '*', so no project's root .gitignore is edited and projects that adopted artifacts earlier self-heal on their next append. artifact_init.py also removes legacy root locks. Phase 1 has no Status field, so --index still counts this entry open; see DEFER-1.
 
 ## BUG-2: artifact_append.py writes non-atomically while pm.py writes atomically
 - **Observed**: 2026-08-06

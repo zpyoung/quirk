@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fcntl
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -205,9 +206,47 @@ def test_concurrent_appends_do_not_collide_on_id(initialized_project: Path) -> N
     assert all(r.returncode == 0 for r in results)
 
 
+def test_lock_lives_under_quirk_locks(initialized_project: Path) -> None:
+    """Locks are runtime state under .quirk/locks/, never loose files in the project root."""
+    result = run_script(
+        "artifact_append.py", "bug",
+        "--field", "title=t", "--field", "file=x:1",
+        "--field", "description=d", "--field", "severity=low",
+        cwd=initialized_project,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (initialized_project / ".quirk" / "locks" / "BUGS.md.lock").exists()
+    assert not (initialized_project / ".BUGS.md.lock").exists()
+
+
+def test_lock_dir_ignores_itself(initialized_project: Path) -> None:
+    """The lock dir carries its own .gitignore so no project's root .gitignore needs editing."""
+    run_script(
+        "artifact_append.py", "bug",
+        "--field", "title=t", "--field", "file=x:1",
+        "--field", "description=d", "--field", "severity=low",
+        cwd=initialized_project,
+    )
+    assert (initialized_project / ".quirk" / "locks" / ".gitignore").read_text().strip() == "*"
+
+
+def test_append_recreates_deleted_lock_dir(initialized_project: Path) -> None:
+    """Appending self-heals the lock dir, so projects initialized before it existed still work."""
+    shutil.rmtree(initialized_project / ".quirk", ignore_errors=True)
+    result = run_script(
+        "artifact_append.py", "bug",
+        "--field", "title=t", "--field", "file=x:1",
+        "--field", "description=d", "--field", "severity=low",
+        cwd=initialized_project,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (initialized_project / ".quirk" / "locks" / ".gitignore").exists()
+
+
 def test_lock_contention_exits_5(initialized_project: Path) -> None:
     """If the lock file is already held, the script gives up after the timeout and exits 5."""
-    lock_path = initialized_project / ".BUGS.md.lock"
+    lock_path = initialized_project / ".quirk" / "locks" / "BUGS.md.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
     with open(lock_path, "w") as held:
         fcntl.flock(held.fileno(), fcntl.LOCK_EX)
         # Run with a short fake timeout via env var

@@ -10,7 +10,12 @@ import time
 from datetime import date
 from pathlib import Path
 
-from artifact_lib import detect_schema_version, find_max_id, render_entry
+from artifact_lib import (
+    detect_schema_version,
+    ensure_lock_dir,
+    find_max_id,
+    render_entry,
+)
 
 SCHEMAS: dict[str, dict] = {
     "bug": {
@@ -134,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 3
 
-    lock_path = target.with_name(f".{schema['file']}.lock")
+    lock_path = ensure_lock_dir(project) / f"{schema['file']}.lock"
     timeout = float(os.environ.get("ARTIFACT_LOCK_TIMEOUT", "5.0"))
     deadline = time.monotonic() + timeout
     with open(lock_path, "w") as lock_file:
