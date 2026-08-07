@@ -418,11 +418,22 @@ Absent field = no blockers (matches the existing "empty optional field omitted" 
 `tests/test_artifact_append.py:60-82`).
 
 `REGEX:` token split — `re.split(r'\s*,\s*', value.strip())`. Each token must then fully match
-`^(BUG|DEFER|TEST)-\d+$` (`re.fullmatch`) or it is malformed.
+`^(BUG|DEFER|TEST)-(0|[1-9][0-9]*)$` (`re.fullmatch`) or it is malformed.
+
+Two deliberate narrowings from the obvious `\d+`:
+
+- **`[0-9]`, not `\d`.** Python's `\d` matches every Unicode decimal digit, so `BUG-٣`
+  (Arabic-Indic three) would fullmatch *and* `int()` would parse it as `3` — two different on-disk
+  spellings silently resolving to the same entry. Entry IDs are ASCII by construction
+  (`bin/artifact_append.py` renders them from `int`), so the grammar is ASCII.
+- **No leading zeros.** `BUG-007` is malformed rather than normalized to `BUG-7`. Normalizing would
+  make two spellings of one reference both valid, and the fail-closed rule below already makes
+  malformed safe.
 
 | Rule | Behavior |
 |---|---|
-| **Separator** | Comma, optional surrounding whitespace. No other separator recognized (a `;`- or newline-joined list is entirely malformed — one token that fails the ID regex). |
+| **Separator** | Comma, optional surrounding whitespace. No other separator is recognized; a `;`-joined list is one token that fails the ID regex, and is malformed. |
+| **Line continuation** | A blocker list wrapped across lines is **not** malformed and is **not** fully read — `FIELD_RE` (`bin/artifact_lib.py:9`) is line-anchored under `re.MULTILINE`, so `- **Blocked by**: BUG-3,` followed by an indented `BUG-7` yields the value `BUG-3,` and the continuation is invisible to the parser. `BUG-7` is silently dropped, which fails **open** on a blocker — the one direction this design must never fail. `Blocked by` values are therefore validated at parse time: a value whose last non-space character is a comma is reported `BLOCKED_BY_TRUNCATED` and treated as `DANGLING` (blocks). An earlier draft claimed such input was "entirely malformed"; that was wrong about the parser and hid a silent drop behind a reassuring word. |
 | **Whitespace** | Stripped at token boundaries only. Internal whitespace inside a token (`BUG - 3`) fails the fullmatch — malformed, not normalized. |
 | **Case** | Header must be uppercase (`BUG`/`DEFER`/`TEST`) — case-sensitive, never normalized. **Tech-spec call (logic.md silent):** entry IDs are always upper-case by construction (`SCHEMAS[*]["header"]`, `bin/artifact_append.py:16,34,51`); accepting `bug-3` and silently uppercasing it would let two spellings of the same reference draft differently in different sessions, for no benefit. |
 | **Malformed token** | Treated identically to an unknown ID (below) — fail-closed, blocks, never silently dropped. Reported as `DANGLING` with `reason="malformed token"`. |
@@ -581,29 +592,35 @@ accident — a `spec#` mismatch means the `Probe:` line's verb/arg text was edit
 
 `SCHEMA:` `Handoff` field:
 ```markdown
-- **Handoff**: quirk @ pm/bug-7 — /Users/…/worktrees/bug-7 — repo:/Users/…/origin-quirk
+- **Handoff**: quirk @ pm/bug-7 — worktree:/Users/…/worktrees/bug-7 — dest:/Users/…/quirk — origin:/Users/…/origin-quirk
 ```
-Three components: `<dest-repo-label> @ <branch> — <worktree-abs-path> — repo:<origin-abs-path>`.
+Four components:
+`<dest-repo-label> @ <branch> — worktree:<worktree-abs-path> — dest:<dest-repo-root> — origin:<origin-abs-path>`.
 
-**Tech-spec call (logic.md silent) — resolving an internal tension between the worked example and
-the functional requirement.** `logic.md`'s worked example literally renders the third component as
-`repo:<origin-abs-path>` (`logic.md:357`), but its Scope section separately states "`reconcile` reads
-the repo path from it to know where the delivered commit can be resolved" ([logic.md → In scope for
-v1](./logic.md#in-scope-for-v1)) — which only makes sense if that path names the *destination*
-(reconcile always runs *in* the origin already, so recording the origin's own path on itself would
-be functionally inert for that purpose). This document resolves it by observing the two components
-serve two different, non-conflicting jobs, and keeping both:
+**`dest:` exists because the worktree is ephemeral and `reconcile` is not.** An earlier draft carried
+only the worktree path and argued no separate destination-repository path was needed, since the
+worktree is itself a valid checkout. That holds only while the worktree exists — and removing it is
+the *normal* end of a task, not an edge case. Once removed, `reconcile` has no directory to run
+`git` in and the entry stalls in `delivered` permanently, unable to be evaluated even though the
+destination repository is still right there. `dest:` is the stable repository root
+(`git -C <worktree> rev-parse --path-format=absolute --git-common-dir`, resolved to its parent at
+`start`), and it is what every `reconcile` git invocation targets.
 
-- `<worktree-abs-path>` is what `finish`'s worktree-root precondition compares CWD against, **and**
-  what `reconcile` actually runs its `git -C <worktree-abs-path> ...` commands against. It is a
-  valid checkout of the destination repo regardless of whether dispatch was same-repo or
-  cross-project — `reconcile`'s functional requirement is satisfied by this component alone; no
-  separate "destination repo path" field is needed.
-- `repo:<origin-abs-path>`, exactly as `logic.md`'s worked example literally renders it, is
-  self-identifying provenance — useful when the entry text is copied verbatim into the handoff
-  packet and read far from its origin context (the packet's own separate "ledger address" field
-  already carries this too; this is deliberate redundancy, not a bug, matching the design's stated
-  preference for a false report being *visible* over being merely non-duplicated).
+Each component's job, now that they are distinct:
+
+- `worktree:` — what `finish`'s worktree-root precondition compares CWD against. Compared with
+  `git rev-parse --show-toplevel`, **not** the git common dir, which is identical across every
+  worktree of a repository and so identifies only the repo
+  ([logic.md → Decisions Locked](./logic.md#decisions-locked)).
+- `dest:` — the durable destination repository root. `reconcile` runs `git -C <dest:> …` here.
+  Survives worktree removal.
+- `origin:` — the ledger's own repository, self-identifying provenance for when the entry text is
+  copied verbatim into the handoff packet and read far from its origin context.
+
+This resolves the tension the earlier draft flagged between `logic.md`'s worked example (which
+renders an origin path) and its Scope statement that "`reconcile` reads the repo path from it to
+know where the delivered commit can be resolved" — the two sentences wanted two different paths, so
+the field carries both under distinct labels rather than overloading one.
 
 `logic.md` states three `finish` preconditions (worktree root, clean tree, probe passes —
 [logic.md → Decisions Locked → Completion evidence](./logic.md#decisions-locked)) and no fourth
@@ -917,16 +934,37 @@ erroring, and passing cases each run directly):
 | 5 | no tests collected (nodeid resolved a file but not a specific test) | `missing` |
 | 2, 3, or `subprocess.TimeoutExpired` | interrupted / internal error / exceeded `QUIRK_PM_PROBE_TIMEOUT` | `error` |
 
-**At `start`:** any outcome other than `pass` is an acceptable baseline (`fail`, `missing`, or
-`error`) — `start` refuses only when the probe already `pass`es
-([logic.md → Probe already green at start](./logic.md#scenarios)). **Tech-spec call (logic.md
-silent):** `missing` is accepted as a valid baseline deliberately — this is the ordinary
-write-the-test-first flow (the worker's task is partly "write `test_safari`, then make it pass"),
-which `logic.md` doesn't call out but doesn't forbid either; refusing it would block a legitimate TDD
-usage the "red→green" framing itself suggests. At `finish`: `pass` is the only passing outcome;
-`fail`, `missing`, and `error` all refuse — matching the locked table exactly (`test:` "refuses when
-node missing, errors, or fails" — [logic.md → The red→green
-baseline](./logic.md#the-redgreen-baseline)).
+**At `start`: only `fail` is an acceptable baseline.** `missing`, `error`, and timeout all refuse
+(exit `4`), and nothing is written.
+
+`logic.md` says the probe "must **fail**" ([logic.md → The red→green
+baseline](./logic.md#the-redgreen-baseline)), and its verb table lists "node missing, errors, or
+fails" as the conditions under which `test:` **refuses**. A missing node is not a failing test; it is
+an unrunnable probe. An earlier draft accepted `missing` as a valid baseline on the argument that it
+supports write-the-test-first, and that is the defect: it makes a **typo in a nodeid** indistinguishable
+from a red test. `start` records `baseline: missing`, the worker later creates *any* test matching
+that nodeid, `finish` sees `pass`, and the ledger presents a full red→green transition that measured
+nothing. The same holds for a timeout or a pytest usage error — broken configuration becoming
+accepted evidence.
+
+The TDD flow this appeared to block is not actually blocked: write the failing test first, *then*
+`start`. That ordering is what makes the baseline meaningful, and it costs one step.
+
+**At `finish`:** `pass` is the only passing outcome; `fail`, `missing`, and `error` all refuse —
+matching the locked table exactly.
+
+**The recorded outcome is the exact one, never collapsed to `fail`.** The `Probe:` field renders the
+literal outcome token (`baseline: fail`, and at `finish` one of `final: pass` / `final: fail` /
+`final: missing` / `final: error`). Rendering four distinct outcomes as one word was how the
+contradiction above stayed invisible in the ledger.
+
+**Configured runners.** `QUIRK_PM_TEST_RUNNER` changes the command but **not** the exit-code mapping,
+which is pytest's. A project pointing it at a different runner gets a mapping that is wrong for that
+runner, so `start` refuses with exit `4` unless `QUIRK_PM_TEST_EXIT_MAP` is also set. `CONFIG:`
+`QUIRK_PM_TEST_EXIT_MAP` is a comma-separated `code:outcome` list, e.g.
+`0:pass,1:fail,4:missing,5:missing`; any code absent from the map is `error`. Silently reusing
+pytest's codes for an arbitrary runner is how exit 2 ("interrupted" in pytest) would be read as a
+legitimate baseline somewhere it means something else entirely.
 
 ### `grep:<pattern> [-- <paths>]` outcome mapping
 
@@ -940,9 +978,52 @@ whenever rendered into the literal `finish` command shown in the handoff packet 
 round-1 review's "generating a literal shell command from an arbitrary pattern/path requires
 escaping that is not specified" finding directly (`review-2026-08-05-codex.md` → packet finding).
 
+#### Argument tokenization
+
+`CONTRACT:` the probe argument after `grep:` is split on the **first** occurrence of the standalone
+token ` -- ` (space, two hyphens, space). Everything before it is the pattern, verbatim and
+un-tokenized; everything after is a path list split by `shlex.split()`. A pattern containing ` -- `
+is therefore expressible only by placing it after an explicit earlier split — documented as a known
+limit rather than escaped, matching the field-rendering decision in §Field rendering.
+
+With no ` -- `, the whole remainder is the pattern and `paths` defaults to `[worktree_root]`.
+
+#### Refusal and error outcomes
+
+Every one of these refuses at `start` (exit `4`) and refuses at `finish`, and none is ever silently
+treated as a zero count — a scan that could not run is not a scan that found nothing:
+
+| Condition | Outcome |
+|---|---|
+| `pattern` fails `re.compile` | `error` — the `re.error` message is relayed verbatim |
+| a listed path does not exist | `error` — names the missing path |
+| a listed path is unreadable (`PermissionError`) | `error` — names the path |
+| a file under a valid path is unreadable mid-walk | **skipped**, and the count of skipped files is recorded on the `Probe:` line |
+| scan exceeds `QUIRK_PM_PROBE_TIMEOUT` | `error` |
+| `baseline_count == 0` at `start` | refuse — the pattern does not discriminate this entry |
+
+The unreadable-path/unreadable-file split is deliberate: a path the user *named* being unreadable is
+a broken probe, while one file deep in a tree being unreadable is ordinary and must not fail the
+whole scan — but it is counted, because a silent skip is how a count reaches zero dishonestly.
+
+`CONFIG:` **symlinks are not followed** (`os.walk(followlinks=False)`), and a symlinked file is
+scanned only if it resolves inside one of the listed paths. Following them makes the scan
+non-terminating on a cycle and lets a link outside the worktree contribute matches.
+
+**Timeout enforcement.** The scan is in-process, so `subprocess` timeouts do not apply. The walk
+checks elapsed time against `QUIRK_PM_PROBE_TIMEOUT` **once per file** before opening it, and aborts
+with `error`. Checking per-file rather than per-line bounds the check's own cost while still
+guaranteeing termination on a large tree.
+
+`REGEX:` `pattern` is compiled with **no** implicit flags — not `re.UNICODE`-normalized, not
+case-folded. `\d` therefore carries Python 3's default Unicode semantics, which is stated here
+because it differs from POSIX `grep` and would otherwise be discovered by surprise.
+
+#### Baseline and final
+
 At `start`: scan, record `baseline_count` and the sorted list of every distinct file with ≥1 match.
-Refuse if `baseline_count == 0` (matches nothing — the pattern doesn't discriminate this entry).
-Record the file list inline in the `Probe:` field ([§Field rendering](#field-rendering--status-probe-handoff)).
+Record that list inline in the `Probe:` field
+([§Field rendering](#field-rendering--status-probe-handoff)).
 
 At `finish`: re-scan the same `pattern`/`paths`. First, check every file in the recorded baseline
 list still exists — if any is missing, refuse regardless of count ("deleting the code that carried
@@ -1186,32 +1267,59 @@ duration where none is required.
 
 ```
 PSEUDOCODE (justified, ≤3 lines): for each `delivered` entry (read once, strict parse, no lock
-held): resolve Handoff.worktree_path; if missing on disk → "cannot evaluate — worktree missing";
-else `git -C path fetch origin` (cache per unique path this run) then resolve integration_ref
-(QUIRK_PM_INTEGRATION_REF, else `origin/HEAD`, else current branch — locked fallback chain) then
-`git -C path merge-base --is-ancestor <sha> <integration_ref>`, mapping its exit code per the
-three-way table below. This needs justifying because the "fetch once per repo, not once per entry"
-memoization and the fetch-before-resolve-ref ordering are easy to get backwards and silently produce
-stale results.
+held): resolve Handoff.dest_repo_root; if absent → "cannot evaluate — destination repo missing";
+else `git -C dest fetch` (cache per unique repo this run), then pre-resolve integration_ref and the
+recorded sha *separately* (below), then `git -C dest merge-base --is-ancestor <sha>
+<integration_ref>`, mapping exit per the table. This needs justifying because the "fetch once per
+repo, not once per entry" memoization and the fetch-before-resolve ordering are easy to get
+backwards and silently produce stale results.
 ```
 
-| `merge-base --is-ancestor` exit | Meaning | Recorded (locked, [logic.md →
-Delivered is what the worker reported](./logic.md#delivered-is-what-the-worker-reported-closed-is-what-the-origin-observed)) |
-|---:|---|---|
-| 0 | reachable | promote to `closed` |
-| 1 | known, not reachable | stays `delivered`; doctor: `AWAITING_INTEGRATION`, "N days" |
-| 128 | object unknown in this checkout | stays `delivered`; doctor: `CANNOT_EVALUATE`, "commit not in this repo" |
-| worktree path missing | *(not a git exit — checked before the git call)* | stays `delivered`; doctor: `CANNOT_EVALUATE`, "worktree missing" |
-| fetch failed | *(checked before the git call)* | stays `delivered`; doctor: `CANNOT_EVALUATE`, "fetch failed" |
+**Evaluation runs against `dest:`, not the worktree.** The worktree is routinely deleted when a task
+finishes; the destination repository is not. An earlier draft targeted the worktree, which made
+ordinary cleanup indistinguishable from a missing repository and stalled the entry forever.
+
+**Pre-resolve both operands, because exit 128 is not one condition.** `merge-base --is-ancestor`
+returns 128 for an unknown commit *and* for an unresolvable integration ref — different faults with
+different remedies, collapsed into one diagnostic by the earlier draft. Two checks run first:
+`git -C dest cat-file -e <sha>^{commit}` and `git -C dest rev-parse --verify
+<integration_ref>^{commit}`. Each failure is reported as itself.
+
+| Condition | Meaning | Recorded |
+|---|---|---|
+| ancestor exit 0 | reachable | promote to `closed` |
+| ancestor exit 1 | known, not reachable | stays `delivered`; doctor: `AWAITING_INTEGRATION`, "N days" |
+| `cat-file -e` fails | recorded commit absent from the destination repo | stays `delivered`; doctor: `CANNOT_EVALUATE`, "commit not in destination repo" |
+| `rev-parse --verify` fails | integration ref unresolvable | stays `delivered`; doctor: `CANNOT_EVALUATE`, "integration ref unresolvable: {ref}" |
+| `dest:` missing on disk | *(checked before any git call)* | stays `delivered`; doctor: `CANNOT_EVALUATE`, "destination repo missing" |
+| fetch failed | *(checked before the ancestry call)* | stays `delivered`; doctor: `CANNOT_EVALUATE`, "fetch failed" |
 | any other exit | unexpected git failure | stays `delivered`; doctor: `CANNOT_EVALUATE`, "git error: {stderr excerpt}" — never promoted on an ambiguous signal |
 
-Rebase/cherry-pick/squash (commit identity broken, ancestry legitimately returns false for landed
-work): reported identically to plain "not reachable" (`AWAITING_INTEGRATION`) — there is no separate
-detection for this case, because the removed commit-message-search fallback was the only mechanism
-that could have distinguished it, and it was removed as unbounded and unsafe ("an old commit, a
-revert, or a doc merely mentioning `BUG-7` could close the entry" — [logic.md → Rebase, cherry-pick,
-and squash all break commit identity](./logic.md#delivered-is-what-the-worker-reported-closed-is-what-the-origin-observed)).
-A human resolves these via `decide` once they confirm the work landed by other means.
+**Rewritten history is `UNDETERMINED`, not `AWAITING_INTEGRATION`.** Rebase, cherry-pick, and squash
+break commit identity, so ancestry returns false for work that genuinely landed. `logic.md` locks
+this outcome as *undetermined, surfaced for a human*
+([logic.md → Decisions Locked](./logic.md#decisions-locked)); reporting it as "awaiting integration"
+states the opposite of what is known — that the work has *not* landed — when the truth is that this
+mechanism cannot tell. `pm.py` cannot distinguish the two exit-1 cases (that is what made the
+commit-message fallback tempting, and it was removed as unbounded), so both render
+`AWAITING_INTEGRATION` **until** the entry passes `QUIRK_PM_UNDETERMINED_AFTER_DAYS` (default `14`),
+after which doctor reports `UNDETERMINED` with "not reachable after N days — rebase/squash or not yet
+merged; a human must resolve". Age is the only signal available, and the finding says so rather than
+implying a determination.
+
+**The human-ratified close path.** `decide` produces only `wontfix` or `superseded`
+([logic.md → Command surface](./logic.md#command-surface)) — neither means "this landed". An earlier
+draft directed humans to `decide`, which would have recorded a delivered-and-integrated fix as a
+refusal. Since `closed` is locked as the origin's verdict via `reconcile`, the ratification is a
+`reconcile` mode, not a `decide` one:
+
+`COMMAND:` `pm.py reconcile --close <ID> --integrated <full-sha> --reason <text>`
+
+Human-gated (never run unattended), CAS-guarded like every other write, and requires the entry to be
+`delivered`. It records `closed` with `integrated:` set to the **human-supplied** SHA — which is the
+rewritten commit, not the one the worker reported — and appends the reason. `--integrated` is
+verified to exist and to be an ancestor of the integration ref before the write; a human asserting
+closure is still not permitted to record a SHA the repository cannot resolve.
 
 **Write-back is itself CAS-guarded**, closing the gap between the read-only computation pass and the
 locked write: an entry is promoted only if, *at write time under the lock*, it is still `delivered`
@@ -1219,15 +1327,30 @@ with the **same** recorded commit sha the read pass computed against. If a racin
 (or a hand-edit) changed it in the interim, that entry is silently skipped this run — the underlying
 git facts don't change, so the next `reconcile` invocation re-evaluates it correctly.
 
-**`--verify`.** After exit-0 ancestry confirms closure, additionally: `git -C worktree_path worktree
-add --detach <tmpdir> <integration_ref>`, re-run the entry's recorded probe against `<tmpdir>`,
-`git -C worktree_path worktree remove <tmpdir> --force` in a `finally` block. A failing re-run does
-**not** un-promote the entry — reachability alone is the default and the entry is already correctly
-`closed` by that definition; a `--verify` failure adds a `--doctor` `POST_MERGE_PROBE_REGRESSION`
-finding instead. Locked: "the default is reachability alone, because CI is the right place to catch a
-post-merge regression" ([logic.md → Reachability proves the change landed, not that it
+**`--verify`.** After exit-0 ancestry confirms closure, additionally: `git -C dest worktree add
+--detach <tmpdir> <integration_ref>`, re-run the entry's recorded probe against `<tmpdir>`,
+`git -C dest worktree remove <tmpdir> --force` in a `finally` block. A failing re-run does **not**
+un-promote the entry — reachability alone is the default and the entry is already correctly `closed`
+by that definition. Locked: "the default is reachability alone, because CI is the right place to
+catch a post-merge regression" ([logic.md → Reachability proves the change landed, not that it
 survived](./logic.md#delivered-is-what-the-worker-reported-closed-is-what-the-origin-observed)) — a
 stricter `--verify` gate that could *block* closing would contradict that.
+
+**A verify result is written to the ledger, because doctor findings are derived from disk.** Every
+other `--doctor` finding is recomputed from the file on each run. A `POST_MERGE_PROBE_REGRESSION`
+held only in the memory of the `reconcile` process that found it would print once and then be gone —
+and it can never be recomputed, because `doctor` does not run probes or touch git. The earlier draft
+specified exactly that, so the one observation `--verify` exists to produce did not survive the
+command that produced it.
+
+`SCHEMA:` `--verify` writes a `Verify` field under the same lock as the promotion:
+```markdown
+- **Verify**: 2026-08-07 — integration_ref: origin/main — probe: pass
+```
+`probe:` carries the same outcome vocabulary as `Probe`'s `final:` (`pass` / `fail` / `missing` /
+`error`). `doctor` reads this field and reports `POST_MERGE_PROBE_REGRESSION` for any value other
+than `pass`, on every run, until a later `--verify` overwrites it. Absent field = never verified,
+which is distinct from verified-and-passing and is reported as neither.
 
 ---
 
