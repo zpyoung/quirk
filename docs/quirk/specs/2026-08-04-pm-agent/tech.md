@@ -1,31 +1,36 @@
 # Tech spec — `pm-agent`
 
-**Status:** **Phase 1 sections approved for implementation. Phases 2–3 are a reviewed draft with
-known critical defects — do not build from them.**
+**Status:** **Phase 1 shipped. Phase 2 sections reworked 2026-08-07 and pending re-review. Phase 3
+remains a draft with known critical defects — do not build from it.**
 
 > **Scope gate — read before implementing anything.**
 >
 > This document was adversarially reviewed on 2026-08-05
 > ([`review-2026-08-05-codex-tech.md`](./review-2026-08-05-codex-tech.md), 15 findings: 3 critical,
-> 10 high, 2 medium). Its verdict was *not buildable as written*, and every critical landed in the
-> write and dispatch layers.
+> 10 high, 2 medium). Its verdict was *not buildable as written*.
 >
-> **Approved — Phase 1 (read layer).** *Architecture*, *Code references*, *Parser strict vs.
+> **Shipped — Phase 1 (read layer).** *Architecture*, *Code references*, *Parser strict vs.
 > compatibility modes*, the `artifact_lib.py` contract, the index/status/doctor read layer, *DO-NOT-
-> CHANGE fences*, and the Phase 1 rows of *Testing strategy*. The parser section has been corrected
-> since the review — see below — and its defect was found and fixed here, not deferred.
+> CHANGE fences*, and the Phase 1 rows of *Testing strategy*.
 >
-> **Not approved — Phases 2–3.** The lifecycle/CAS mechanism, `park` persistence, schema-v2
-> migration, `reconcile`, the probe contract, the packet, and the Orca adapter. Confirmed defects
-> include: CAS silently dropped the `attempt` key the logic spec locks, so a stale `finish` can
-> write attempt-1 evidence into attempt 2; `park` records neither reason nor attempt count; the Orca
-> adapter omits `orca orchestration send`'s **required** `--subject` and reads `result.dispatch.id`
-> where the CLI returns a flat `dispatchId`; and with `EXPECTED_SCHEMA_VERSION` raised to 2,
-> `artifact_append.py`'s `version > EXPECTED` guard accepts a **v1** file and writes v2 fields into
-> it — the mixed-schema state v2 exists to prevent.
+> **Reworked 2026-08-07, pending re-review — Phase 2.** All 12 Phase-2 findings are closed:
+> CAS now compares the full `(id, attempt, state, probe_spec, handoff)` expectation tuple captured
+> before the slow work; `park` retains a `Status` line carrying attempt, refusal count and reason;
+> lifecycle fields gained a segment grammar and three total parsers; the ROADMAP grammar accepts its
+> own template and can diagnose a `PROPOSAL` reference; `artifact_append.py` gained the missing lower
+> bound so v2 fields cannot enter a v1 file; probe baselines accept only a genuine failure;
+> `reconcile` evaluates against a stable `dest:` repo root and persists `--verify` results; `start`
+> states one ordering with a recoverable launch receipt; the exit-code table gained per-command
+> precedence and aggregate outcomes; and the test matrix gained a regression fixture per finding.
+> Every fix implements a contract `logic.md` already locked — **no `logic.md` amendment was required**,
+> which is recorded here because a rework that quietly redefines locked behavior is the failure mode
+> this gate exists to catch.
 >
-> These sections stay in the document as a starting point for a later pass. They are not a build
-> target.
+> **Not approved — Phase 3.** The handoff packet, the three-call adapter interface, and the Orca
+> adapter. Confirmed defects remain: the adapter omits `orca orchestration send`'s **required**
+> `--subject` and reads `result.dispatch.id` where the CLI returns a flat `dispatchId`; and the packet
+> has no implementable schema, digest algorithm, or validation point. These sections stay in the
+> document as a starting point for a later pass. They are not a build target.
 **Logic spec:** [`logic.md`](./logic.md) — owns *why* and *behavior*, including the threat model
 (cooperative worker, legibility not enforcement — every check named below is a mistake-catcher, none
 is a security control). This document owns *where* and *contracts*. Every technical section
@@ -162,7 +167,7 @@ testing needs (the adapter tests stub `git`/`orca`; the lifecycle tests don't to
 | `parse_entries` | `bin/artifact_review.py:18-31` (strict, title required, dict-collapses repeated field labels) | reimplemented in `bin/artifact_lib.py` as `parse_entries` returning `Entry`/`MalformedHeading`, strict by construction — see below |
 | `SCHEMAS` dict | `bin/artifact_append.py:14-83` | moved to `bin/artifact_lib.py`, `bug`/`defer`/`test-skip` gain `blocked_by`; `test-skip` gains `logged` |
 | `EXPECTED_SCHEMA_VERSION = 1` | `bin/artifact_append.py:85` | `SCHEMA_VERSION = 2` in `bin/artifact_lib.py`, imported by both `artifact_append.py` and `artifact_review.py` |
-| flock discipline | `bin/artifact_append.py:165-180` (`.{file}.lock`, `ARTIFACT_LOCK_TIMEOUT`, 5s default) | reused verbatim (same lock file, same env var) by `pm.py` — see [§The CAS transition mechanism](#the-cas-transition-mechanism) |
+| flock discipline | `bin/artifact_append.py:142-155` (`.quirk/locks/{file}.lock`, `ARTIFACT_LOCK_TIMEOUT`, 5s default) | reused verbatim (same lock file, same env var) by `pm.py` — see [§The CAS transition mechanism](#the-cas-transition-mechanism) |
 | `--project-dir` convention | `bin/artifact_append.py:122-123`, all four `bin/*.py` scripts | reused by every `pm.py` subcommand |
 | ADR ID allocation pattern (retry-on-collision) | `bin/adr_create.py:60-71` | referenced, not reused — `pm.py` never allocates new ledger IDs, only `artifact_append.py` does |
 
@@ -366,10 +371,53 @@ ID, no slug — milestones are referenced only by document position, never by id
 rationale](./logic.md#key-decisions--rationale)) applies symmetrically: nothing outside `ROADMAP.md`
 ever names a milestone).
 
-`REGEX:` membership line, one ID per line — `^- (BUG|DEFER|TEST)-(\d+)\s*$`. Any other line under a
-milestone heading (a restated title, a description, a line with trailing content after the ID) is
-excluded from membership and reported by `--doctor` as `ROADMAP_LINE_MALFORMED` (milestone name, raw
-line) — never a hard parse failure, matching `bin/artifact_lib`'s per-line resilience posture.
+#### Line classes
+
+Every line in the file falls into exactly one class. An earlier draft defined only "membership line"
+and "any other line", which made the schema example above **invalid against its own grammar** — the
+blank line between milestones is "any other line", so `roadmap --write` would have refused the
+literal template this document ships. The classes are therefore enumerated:
+
+| Class | Pattern | Treatment |
+|---|---|---|
+| Blank | `^\s*$` | Ignored everywhere. Legal anywhere, including between milestones and between members. |
+| HTML comment | inside `<!-- … -->` | Ignored for parsing, **preserved** on rewrite. |
+| Schema marker | `^<!-- schema-version: \d+ -->$` | Read; rewritten by `migrate` only. |
+| Title | `^# ROADMAP\s*$` | Ignored for parsing, preserved on rewrite. |
+| Milestone heading | `^## Milestone: (.+)$` | Opens a milestone. |
+| Member | `^- (BUG\|DEFER\|TEST)-(0\|[1-9][0-9]*)\s*$` | Membership. |
+| Disallowed member | `^- ([A-Z]+)-(0\|[1-9][0-9]*)\s*$` where the header is not `BUG`/`DEFER`/`TEST` | **Syntactically valid, semantically refused.** `PROPOSAL-N` reaches `PROPOSAL_IN_ROADMAP`; any other header reaches `UNKNOWN_HEADER_IN_ROADMAP`. |
+| Malformed | anything else under a milestone | `ROADMAP_LINE_MALFORMED` (milestone name, raw line) — never a hard parse failure, matching `bin/artifact_lib`'s per-line resilience posture. |
+
+**The disallowed-member class is what makes `PROPOSAL_IN_ROADMAP` reachable at all.** With a single
+membership regex restricted to `BUG|DEFER|TEST`, a `- PROPOSAL-1` line fails to match and is simply
+"malformed" — so the `PROPOSAL_IN_ROADMAP` finding this document promises, and that `logic.md` locks
+([logic.md → In scope for v1](./logic.md#in-scope-for-v1)), could never fire. Recognizing the shape
+first and rejecting the header second is what lets the diagnosis name the real problem.
+
+`REGEX:` member IDs use `(0|[1-9][0-9]*)`, not `\d+`, for the same two reasons given under
+[§`Blocked by` lexical rules](#blocked-by-lexical-rules): `\d` admits non-ASCII digits that `int()`
+would silently fold onto the same entry, and leading zeros would make `BUG-007` and `BUG-7` two
+spellings of one reference.
+
+#### Parse and render contracts
+
+`CONTRACT:` `parse_roadmap(text: str) -> RoadmapParse`, total — never raises.
+
+`SCHEMA:` `RoadmapParse` — `milestones: list[Milestone]`, `findings: list[tuple[str, str]]`,
+`preamble: str` (everything above the first milestone heading, verbatim).
+`Milestone` — `name: str`, `rank: int`, `members: list[str]`, `raw_lines: list[str]`.
+
+`CONTRACT:` `render_roadmap(parse: RoadmapParse) -> str`, the exact inverse for any file that parses
+with no findings. **Round-trip is a tested property**: `render_roadmap(parse_roadmap(t)) == t` for
+every valid `t`, including one carrying comments and blank lines.
+
+**Preservation.** `roadmap --write` regenerates milestone headings and member lines, and copies
+`preamble` plus every comment line through byte-for-byte. A human's hand-written note above the first
+milestone survives an agent rewrite; a note *inside* a milestone does not, and is reported as
+`ROADMAP_LINE_MALFORMED` at write time so the loss is announced rather than silent. This is the
+narrower promise the parser can actually keep — preserving arbitrary interleaved prose would require
+an editing model this design does not have.
 
 **Ordering.** Milestone rank is 0-based document position (first `## Milestone:` heading = rank 0).
 An eligible entry in no milestone sorts at rank `-1` (already locked: [logic.md → Milestone rank for
@@ -397,8 +445,10 @@ happens when a hand-edit violates it.
 
 **Write-time is stricter than read-time.** `pm.py roadmap --write <path>` (§Contracts, below)
 validates a *freshly agent-proposed* file before committing it and **refuses** (exit 2) on any of:
-malformed membership line, unknown ID, `PROPOSAL` reference, or duplicate membership — there is no
-legacy content to be lenient about at the moment new content is generated. `--doctor`, reading
+malformed line, unknown ID, disallowed member header, or duplicate membership — there is no
+legacy content to be lenient about at the moment new content is generated. Blank lines, comments,
+and the title are legal at write time exactly as at read time, per the line-class table above; the
+literal template this document ships must pass `roadmap --write` unchanged, and that is a test. `--doctor`, reading
 whatever is *already on disk* (possibly hand-edited, possibly older than this validation existed),
 reports the same four conditions as non-blocking findings instead. This is the same split the read
 layer already uses for the ledger files (`artifact_append.py` refuses malformed input at write time;
@@ -633,7 +683,7 @@ display-only, never parsed back by any code path.
 `<branch>` follows the naming convention the worked example itself fixes:
 `pm/<header-lowercase>-<id>`, e.g. `pm/bug-7`.
 
-`<worktree-abs-path>` and `<origin-abs-path>` are **rejected at the CLI** (exit `2`) if either
+All three paths — `worktree:`, `dest:`, and `origin:` — are **rejected at the CLI** (exit `2`) if any
 contains ` — `, a newline, or a carriage return, by the same Rule 2 above. A path that cannot be
 rendered unambiguously is refused at `start` rather than written and mis-parsed later.
 
@@ -659,7 +709,7 @@ segment is absent), `commit: str | None`, `integrated: str | None`, `by: str | N
 
 `SCHEMA:` `MalformedField` — `raw: str`, `reason: str`. Every consumer treats it as **unknown state,
 never as a default**: `doctor` reports it as `MALFORMED_LIFECYCLE_FIELD`, and every transition
-command refuses to write over it (exit `6`). Silently coercing an unparseable status to `open` would
+command refuses to write over it (exit `4` — corrupt entry). Silently coercing an unparseable status to `open` would
 let a corrupt line be overwritten by a transition that assumed the wrong prior state — the exact
 class of loss CAS exists to prevent.
 
@@ -697,7 +747,7 @@ Four behaviors the earlier draft left undefined, each of which is a way to corru
 entry:
 
 - **Duplicate labels.** If the block contains more than one line matching `label`, `splice_field`
-  **refuses** (the caller exits `6`) rather than guessing which one is authoritative. This is
+  **refuses** (the caller exits `4`) rather than guessing which one is authoritative. This is
   reachable through hand-editing, and `bin/artifact_review.py:29`'s dict-collapse means the parsed
   view would silently show only the last — so the writer must not act on a view the file does not
   support. `doctor` reports it as `DUPLICATE_LIFECYCLE_FIELD`.
@@ -746,7 +796,7 @@ def splice_field(entry: Entry, label: str, value: str, full_text: str) -> str: .
 `atomic_write` is the crash-safety primitive shared by every writer added in this document
 (`pm.py`'s lifecycle transitions and `migrate`) — see [§The CAS transition
 mechanism](#the-cas-transition-mechanism) for why this supersedes the plain `target.write_text(...)`
-`artifact_append.py:203` uses today (kept as-is there; see [DO-NOT-CHANGE
+`artifact_append.py:180` uses today (kept as-is there; see [DO-NOT-CHANGE
 fences](#do-not-change-fences)).
 
 ### `bin/pm.py` — CLI surface
@@ -935,7 +985,7 @@ erroring, and passing cases each run directly):
 | 2, 3, or `subprocess.TimeoutExpired` | interrupted / internal error / exceeded `QUIRK_PM_PROBE_TIMEOUT` | `error` |
 
 **At `start`: only `fail` is an acceptable baseline.** `missing`, `error`, and timeout all refuse
-(exit `4`), and nothing is written.
+(exit `9`), and nothing is written.
 
 `logic.md` says the probe "must **fail**" ([logic.md → The red→green
 baseline](./logic.md#the-redgreen-baseline)), and its verb table lists "node missing, errors, or
@@ -960,7 +1010,7 @@ contradiction above stayed invisible in the ledger.
 
 **Configured runners.** `QUIRK_PM_TEST_RUNNER` changes the command but **not** the exit-code mapping,
 which is pytest's. A project pointing it at a different runner gets a mapping that is wrong for that
-runner, so `start` refuses with exit `4` unless `QUIRK_PM_TEST_EXIT_MAP` is also set. `CONFIG:`
+runner, so `start` refuses with exit `2` unless `QUIRK_PM_TEST_EXIT_MAP` is also set. `CONFIG:`
 `QUIRK_PM_TEST_EXIT_MAP` is a comma-separated `code:outcome` list, e.g.
 `0:pass,1:fail,4:missing,5:missing`; any code absent from the map is `error`. Silently reusing
 pytest's codes for an arbitrary runner is how exit 2 ("interrupted" in pytest) would be read as a
@@ -990,7 +1040,7 @@ With no ` -- `, the whole remainder is the pattern and `paths` defaults to `[wor
 
 #### Refusal and error outcomes
 
-Every one of these refuses at `start` (exit `4`) and refuses at `finish`, and none is ever silently
+Every one of these refuses at `start` (exit `9`) and refuses at `finish`, and none is ever silently
 treated as a zero count — a scan that could not run is not a scan that found nothing:
 
 | Condition | Outcome |
@@ -1060,7 +1110,7 @@ prose alone, it invites a read-then-later-write race exactly like the one it exi
 
 `CONTRACT:` every mutating command compares, under the held lock, the tuple `(id, attempt, state,
 probe_spec, handoff)` against the values it captured **before** it did any slow work. A mismatch on
-any element refuses with exit `7` and writes nothing.
+any element refuses with exit `6` and writes nothing.
 
 `logic.md` locks compare-and-swap on `(ID, attempt, expected status)` ([logic.md → Decisions
 Locked](./logic.md#decisions-locked)). Comparing `state` alone is **not** a valid reduction of that,
@@ -1483,19 +1533,68 @@ mid-file → exit 4," absent from `bin/artifact_append.py:126-190`'s actual code
 | 2 | bad argument / bad field value / malformed `ROADMAP.md --write` content | every command; `roadmap --write`'s grammar refusals ([§ROADMAP.md formal grammar](#roadmapmd-formal-grammar)) |
 | 3 | target ledger/roadmap file missing, or entry ID not found | every command targeting a specific ID or file |
 | 4 | corrupt/ambiguous entry — malformed heading claiming the requested ID, or duplicate ID | `start`, `finish`, `park`, `decide` |
-| 5 | lock timeout (`ARTIFACT_LOCK_TIMEOUT`, reused from `bin/artifact_append.py:166`) | every mutating command |
-| 6 | CAS failure — entry not in the expected state for this transition (includes: `PROPOSAL` ID rejected) | `start`, `finish`, `park`, `decide`, `reconcile` write-back |
-| 7 | project dir not found / not writable (reused from `bin/artifact_init.py`'s existing convention) | every command |
-| 8 | schema-version mismatch — file newer than this plugin understands, or (write commands only) file not yet migrated to v2 | every command; `migrate` |
-| 9 | probe refused — already green at `start`, or still failing at `finish` | `start`, `finish` |
+| 5 | lock timeout (`ARTIFACT_LOCK_TIMEOUT`, reused from `bin/artifact_append.py:143`) | every mutating command |
+| 6 | CAS failure — the expectation tuple did not match at write time (includes: `PROPOSAL` ID rejected) | `start`, `finish`, `park`, `decide`, `reconcile --close` |
+| 7 | project dir not found, or not a directory (`bin/artifact_init.py:31-34`'s actual check) | every command |
+| 8 | schema-version mismatch — file newer than this plugin understands, or (write commands only) file not yet migrated to v2 | every command; `migrate`; `artifact_append.py` on a v2-only field |
+| 9 | probe refused — already green at `start`, non-`fail` baseline, or still failing at `finish` | `start`, `finish` |
 | 10 | `finish` precondition failed — dirty tree, or worktree root doesn't match `Handoff` | `finish` |
-| 11 | adapter/launcher failure — worktree creation or agent launch failed at the git/orca layer | `start` |
+| 11 | adapter/launcher failure — worktree creation or agent launch failed at the git/orca layer | `start`, `start --resume-launch` |
 
-`reconcile` and `doctor`/`index`/`status` never return 4/6/9/10/11 in normal operation — they process
-many entries and record per-entry outcomes in their *output*, not via aggregate process exit code, so
-they stay safely composable/unattended (a script wrapping `reconcile` shouldn't fail just because
-zero entries promoted this run). `--doctor` never exits non-zero for findings — see [§The read
+**Exit 7 is "not found or not a directory", not "not writable".** `artifact_init.py` checks
+`exists()` and `is_dir()` and nothing else (`bin/artifact_init.py:31-34`); a read-only project
+directory passes that check and fails later at open time, surfacing as exit `1`. Describing 7 as
+covering unwritable projects claimed a check no code performs. Adding a `os.access(W_OK)` probe was
+rejected — it is advisory on most platforms and lies under ACLs, so the honest contract is that
+permission failures land in the catch-all.
+
+#### Per-command precedence
+
+When several conditions hold at once, the **first matching row wins**, top to bottom. Without a
+stated order two implementations disagree on which of two true facts to report:
+
+| Command | Precedence |
+|---|---|
+| `start` | 7 → 3 → 2 → 8 → 4 → 6 → 9 → 11 |
+| `finish` | 7 → 3 → 2 → 8 → 4 → 6 → 10 → 9 |
+| `park` / `decide` | 7 → 3 → 2 → 8 → 4 → 6 |
+| `reconcile --close` | 7 → 3 → 2 → 8 → 4 → 6 |
+| `migrate` | 7 → 3 → 8 → 5 |
+| `roadmap --write` | 7 → 2 → 5 |
+| read commands | 7 → 0 |
+
+Lock timeout (5) can interrupt any mutating command at the moment it takes the lock and is therefore
+not placed in these chains; it preempts everything after the point of acquisition.
+
+`finish` checks preconditions (10) **before** the probe (9) because the probe is the expensive step
+and a dirty tree invalidates it anyway.
+
+#### Aggregate outcomes for multi-entry commands
+
+`reconcile` (without `--close`) and `migrate` process many targets, so a single process exit cannot
+describe per-entry results. Both record per-entry outcomes in their **output** and exit:
+
+- `0` — the run completed, whatever the per-entry mix. Zero promotions is a normal outcome, and a
+  wrapping script must not fail because nothing was ready this run.
+- `5` — could not acquire a lock; nothing was written.
+- `7` / `3` — the project or a ledger file is missing; nothing was attempted.
+- `1` — an unexpected error aborted the run partway. Every write already committed stands, because
+  each is an independent `atomic_write` under its own lock.
+
+`reconcile` therefore never returns `6`. An earlier draft listed it as a source of `6` and, three
+sections later, said it silently skips CAS mismatches — both cannot be true. The resolution: a CAS
+mismatch during batch write-back is a *per-entry skip* reported in the output, since the git facts
+have not changed and the next run re-evaluates correctly. Only `reconcile --close`, which targets one
+human-named entry, returns `6`.
+
+`--doctor` never exits non-zero for findings — see [§The read
 layer](#the-read-layer--index--status--doctor).
+
+**A missing `ROADMAP.md` is never exit 3.** It is an empty roadmap: every entry sorts at rank `-1`
+and `--next` behaves exactly as it does before any milestone exists. Exit `3` applies to a missing
+**ledger** file, and to `roadmap --write` given a path it cannot create. Treating absence as an error
+would make `--next` fail on every project that has not yet written a roadmap, which is the ordinary
+starting state.
 
 ---
 
@@ -1505,7 +1604,7 @@ layer](#the-read-layer--index--status--doctor).
 
 | Region | Why fenced |
 |---|---|
-| `bin/artifact_append.py:203` (`target.write_text(new_text)`) | Left as a plain, non-atomic write deliberately — the "no behavior change" mandate on this refactor covers *parsing*, not a crash-safety upgrade nobody asked this script to gain; `pm.py`'s new writers use `atomic_write` instead, see [§The CAS transition mechanism](#the-cas-transition-mechanism). Backporting atomicity here is a defensible future improvement, not part of this work — see [§Concerns](#concerns). |
+| `bin/artifact_append.py:180` (`target.write_text(new_text)`) | Left as a plain, non-atomic write deliberately — the "no behavior change" mandate on this refactor covers *parsing*, not a crash-safety upgrade nobody asked this script to gain; `pm.py`'s new writers use `atomic_write` instead, see [§The CAS transition mechanism](#the-cas-transition-mechanism). Backporting atomicity here is a defensible future improvement, not part of this work — see [§Concerns](#concerns). |
 | `tests/test_artifact_append.py`, `tests/test_artifact_review.py` (entire files) | The acceptance bar for "no behavior change" in the parser convergence — every assertion in both must keep passing unmodified; see [§Parser strict vs. compatibility modes](#parser-strict-vs-compatibility-modes). |
 | `tests/conftest.py`'s existing fixtures (`project_dir`, `initialized_project`, `run_script`, `BIN_DIR`, `TEMPLATES_DIR`, `REPO_ROOT`) | Load-bearing for both the typed-artifacts suite and this work; this document adds fixtures alongside them (§Testing strategy), never repurposes them. |
 | `bin/artifact_init.py`'s existing `ROOT_TEMPLATES`/backup/`--force` logic (`bin/artifact_init.py:14,38-48`) | This work adds one entry to `ROOT_TEMPLATES` (`ROADMAP.md`) and nothing else in this file — the create-or-skip, backup-on-`--force`, and CLAUDE.md-snippet logic are unrelated to this feature and untouched. |
@@ -1676,13 +1775,14 @@ def stub_orca_cli(tmp_path: Path, responses: dict) -> Path:
   mechanism](#the-cas-transition-mechanism)'s table; a CAS race fixture (two `finish` calls against
   the same entry from two threads, asserting exactly one succeeds and the other gets exit 6 — mirrors
   `test_concurrent_appends_do_not_collide_on_id`'s threading pattern,
-  `tests/test_artifact_append.py:181-205`); crash-mid-transition (monkeypatch `os.replace` to raise
+  `tests/test_artifact_append.py:182-206`); crash-mid-transition (monkeypatch `os.replace` to raise
   mid-`atomic_write`, assert the file is byte-identical to its pre-write state); every exit code in
   [§Exit codes](#exit-codes) reached by at least one fixture; `PROPOSAL` ID rejected by
   `start`/`finish`/`park`/`decide` (exit 6); `decide` from each of `open`/`in_progress`/`delivered`;
-  `park` resets the next `start`'s attempt number to 1 (documenting the [§Concerns](#concerns) call).
-- **`test_pm_probes.py`** — the full `test:` pytest-exit-code mapping table (start-time `missing`
-  accepted as baseline, finish-time `missing`/`fail`/`error` all refuse); `grep:` baseline-count-zero
+  `park` preserves the attempt number and refusal count on the retained `Status` line, and the
+  next `start` increments from it (§Field rendering).
+- **`test_pm_probes.py`** — the full `test:` pytest-exit-code mapping table (start-time `missing`,
+  `error` and timeout all **refused** as baselines, finish-time `missing`/`fail`/`error` all refuse); `grep:` baseline-count-zero
   refusal, final-count-nonzero refusal, baseline-file-deleted refusal even when count is zero;
   `none`'s Probe field never changes across start→finish; `spec#`/`file#` hash mismatch detection
   (hand-edit the `Probe:` line between start and finish, assert `PROBE_SPEC_CHANGED` fires and finish
@@ -1701,8 +1801,8 @@ def stub_orca_cli(tmp_path: Path, responses: dict) -> Path:
   `SignalResult(sent=False, reason="sender_not_assignee")` without raising; any non-JSON/non-zero
   stub response is swallowed the same way; `run_id`/`task_id` are populated pre-launch, `dispatch_id`
   only post-launch.
-- **`test_pm_reconcile.py`** — the full three-way exit table (0/1/128, plus worktree-missing and
-  fetch-failed as additional `CANNOT_EVALUATE` reasons) against `fake_git_repo`; fetch is called
+- **`test_pm_reconcile.py`** — the full condition table (ancestor 0/1, unknown commit, unresolvable
+  integration ref, missing `dest:`, and fetch-failed) against `fake_git_repo`; fetch is called
   exactly once per unique `Handoff` path across a multi-entry run; `--verify`'s temporary detached
   worktree is always removed, including when the probe re-run itself fails; a race fixture where an
   entry's status changes between the read pass and the write-back pass (assert it's skipped, not
@@ -1718,6 +1818,38 @@ def stub_orca_cli(tmp_path: Path, responses: dict) -> Path:
   [doctor findings catalog](#doctor-findings-catalog) reached by at least one fixture; `--doctor`
   exits 0 with findings present; the hook wrapper's exit-0 guarantee even when `pm.py --index` itself
   raises (simulated via a broken fixture project).
+
+### Regression fixtures for the 2026-08-05 review findings
+
+The per-area coverage above describes the *intended* behavior, and a matrix written only against
+intent is how a spec defect survives into code that passes its tests. Each row below fails if the
+corresponding defect returns. These are required, not illustrative.
+
+| # | Defect it guards | Fixture |
+|---|---|---|
+| 1 | CAS dropping `attempt` | **Stale-finish interleaving.** `start` (attempt 1) → capture `finish`'s pre-work read → `park` → `start` (attempt 2) → let the original `finish` proceed. Assert exit `6` and that the ledger still shows attempt 2 `in_progress` with no attempt-1 commit anywhere. A status-only compare passes this sequence, so this test is the whole point. |
+| 2 | `park` discarding counters | Refuse `finish` twice, `park --reason "out of budget"`, assert the `Status` line still carries `attempt 1`, `refused 2`, and the reason verbatim. Then `start` again and assert `attempt 2` with `refused 2` **preserved** and `parked:` cleared. |
+| 5 | Unparseable lifecycle fields | Round-trip `render → parse → render` for every state in the `Status` table, including a `--reason` containing an em-dash (assert exit `2`, ledger untouched), a newline, and a leading/trailing space. Plus: `splice_field` against an entry with a duplicated `Status` line (exit `4`), against the file's **last** entry with no trailing newline, and against an entry containing a fenced `## BUG-N:` heading. |
+| 6 | ROADMAP grammar rejecting its own example | Feed the literal template shipped in §`ROADMAP.md` formal grammar to `roadmap --write` and assert exit `0`. Assert `- PROPOSAL-1` produces `PROPOSAL_IN_ROADMAP` and **not** `ROADMAP_LINE_MALFORMED`. Round-trip a file with comments and blank lines byte-for-byte. |
+| 8 | v2 fields into a v1 file | With `EXPECTED_SCHEMA_VERSION == 2`, run `artifact_append.py` against a file marked `<!-- schema-version: 1 -->`: assert a v1-only append succeeds and writes **no** v2 field, and that explicitly passing `--field blocked_by=BUG-1` exits `8` and writes nothing. |
+| 9 | Non-`fail` baselines accepted | `start` against a nodeid that does not exist → exit `9`. Against a test that errors at import → exit `9`. Against a sleeping test with `QUIRK_PM_PROBE_TIMEOUT=1` → exit `9`. Only a genuinely failing test reaches `in_progress`. Assert the `Probe` line records the exact outcome token, not `fail` for all of them. |
+| 10 | Undefined grep inputs | Invalid regex → `error` naming the `re.error`. Nonexistent listed path → `error`. Unreadable file *inside* a valid path → scanned-around, skip counted on the `Probe` line. Symlink loop → terminates. `QUIRK_PM_PROBE_TIMEOUT=1` against a large tree → `error`. |
+| 10 | `Blocked by` continuation | A wrapped blocker list (`BUG-3,` then an indented `BUG-7`) asserts `BLOCKED_BY_TRUNCATED` and that the entry stays blocked — **not** that it reads as blocked only by `BUG-3`. Plus `BUG-007` and a non-ASCII-digit ID both malformed. |
+| 11 | reconcile against a deleted worktree | **Real git, cross-project.** Create an origin repo and a separate destination repo, `start` into it, `finish`, then `rm -rf` the worktree while leaving the destination repo intact. Assert `reconcile` still promotes to `closed` via `dest:`. Also: unresolvable integration ref reports `integration ref unresolvable`, not `commit not in destination repo`. |
+| 11 | Verify result vanishing | Run `reconcile --verify` where the post-merge probe fails, then run `doctor` **as a separate process**. Assert `POST_MERGE_PROBE_REGRESSION` still reports, from the `Verify` field on disk. |
+| 12 | Launch-failure state | Adapter stub raises during `launch`. Assert the entry is `in_progress`, the receipt exists with `launched: false`, `doctor` reports `LAUNCH_INCOMPLETE`, and `start --resume-launch` re-runs only the launch (probe mock uncalled) and flips the receipt. |
+| 13 | Exit-code contradictions | One fixture per row of the per-command precedence table, each constructed so **two** conditions hold at once, asserting the higher-precedence code wins. Plus: batch `reconcile` with a CAS mismatch on one entry exits `0` and reports the skip, while `reconcile --close` on the same mismatch exits `6`. |
+
+**The Orca stub must validate, not accept.** `stub_orca_cli` currently returns canned success for any
+invocation, which cannot catch a missing required flag or a misread response shape — the three
+failures the round-1 review found in the adapter. It is required to **assert** the exact argv it
+receives (rejecting a `send` without `--subject`, and a `worker-start` whose prompt was discarded)
+and to reply with a **captured real response envelope**, so `dispatch_id` is read from the shape the
+CLI actually returns rather than the one this document guessed. A stub that accepts everything tests
+only that the code runs.
+
+Those adapter rows belong to Phase 3 and are listed here so the matrix is complete; they are not
+build targets under the Phase 2 gate.
 
 ### Session-only behaviors (not script-provable)
 
@@ -1765,13 +1897,12 @@ session-only behavior is named here rather than silently assumed covered.
 Observations that don't rise to a Decisions-Locked contradiction, but that a fresh implementer
 should see rather than discover mid-build.
 
-1. **`park`'s attempt-number reset.** [§The CAS transition mechanism](#the-cas-transition-mechanism)
-   resolves "keep the attempt on record" by resetting the visible attempt counter to 1 on the next
-   `start` after a `park`, since `open` (absent `Status`) has nowhere to persist it. This narrows
-   "on record" further than `logic.md`'s wording suggests, in the same direction `logic.md` already
-   accepts for `Probe`/`Handoff` ("earlier values are gone... git history holds them") but not
-   explicitly stated for the attempt *count* itself. Worth a locked-decision amendment if the
-   distinction matters in practice.
+1. **A parked entry is `open` with a `Status` line.** The 2026-08-07 rework gave parked-`open` its
+   own rendering so the attempt and refusal counters survive, resolving what was previously listed
+   here as an accepted narrowing of "keep the attempt on record". The residual concern is smaller
+   and worth stating: `open` is now reachable in two shapes — absent field, and present-with-`parked:`
+   — and every consumer must treat them as the same state. §Field rendering says so, and the
+   regression matrix tests it, but a future reader adding a fourth consumer is the risk.
 2. **`test:` is pytest-shaped by default.** `QUIRK_PM_TEST_RUNNER` makes it overridable, but nodeid
    syntax, the outcome-mapping table (§The probe execution contract), and the empirically-derived
    exit-code semantics are all pytest-specific. A JS/Jest or other-ecosystem target project gets a
@@ -1782,7 +1913,7 @@ should see rather than discover mid-build.
    it as a genuine mistake-catcher (catches `finish --project-dir` pointed at the wrong project
    entirely) without contradicting anything currently locked.
 4. **`artifact_append.py`'s write path stays non-atomic.** `pm.py`'s new writes use `atomic_write`;
-   the pre-existing append path (`bin/artifact_append.py:203`) does not, per the DO-NOT-CHANGE fence.
+   the pre-existing append path (`bin/artifact_append.py:180`) does not, per the DO-NOT-CHANGE fence.
    The two scripts now have different crash-safety properties for the same files — worth a follow-up
    `DEFER` entry, not fixed here.
 5. **A single `QUIRK_PM_INTEGRATION_REF` override doesn't vary per destination repo.** For
