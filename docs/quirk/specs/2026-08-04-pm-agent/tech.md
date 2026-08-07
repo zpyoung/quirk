@@ -1168,11 +1168,12 @@ retained because it does prevent the *same-directory* race... it is simply not a
 Runs once per ledger file (`BUGS.md`, `DEFERRED.md`, `TEST_BACKLOG.md`, `proposals.md` — **all
 four**, see the version-bump call below), independently, each under its own `flock`:
 
-1. Acquire `.{file}.lock` (same lock namespace as every other writer of that file).
+1. Acquire `.quirk/locks/{file}.lock` (same lock namespace as every other writer of that file —
+   `bin/artifact_append.py:142`).
 2. Read current text; `detect_schema_version` (absent marker treated as legacy v1, not an error).
 3. If version `== 2`: no-op, report `"{file}: already v2"`, exit 0. If version `> 2`: refuse — this
    plugin doesn't understand a newer schema — exit 8, reusing the existing schema-mismatch code
-   (`bin/artifact_append.py:184-190`'s convention).
+   (`bin/artifact_append.py:161-167`'s convention).
 4. If version `<= 1` (including absent): replace the `<!-- schema-version: N -->` line with
    `<!-- schema-version: 2 -->` (inserting one if entirely absent) and replace the schema-comment
    block with the v2 text (§Schema v2 templates, below). **Touches no entry body** — every existing
@@ -1244,11 +1245,43 @@ line changed.
 
 *Back-link: [logic.md → Additive; zero migration was wrong](./logic.md#in-scope-for-v1)*
 
-| Scenario | Read commands (`--index`, `--next`, `--doctor`, `--status`) | Write commands (`start`/`finish`/`park`/`decide`/`reconcile`/`roadmap --write`) |
-|---|---|---|
-| v1 file, v2 plugin, not yet migrated | Work unmodified — every entry has no `Status` field, which already means `open` under both schema versions. No degradation, because v1 files are a strict subset of what v2 read-paths already handle. | **Refuse, exit 8**, instructing `/quirk:pm:migrate`. Writing a `Status`/`Probe`/`Handoff` line onto a file still marked v1 is exactly the mixed-version hazard `logic.md` names as the reason "additive; zero migration" was retracted ([logic.md → In scope for v1](./logic.md#in-scope-for-v1)) — a v1-only reader (an older `artifact_append.py`/`artifact_review.py` from before this work) would silently disagree with what the file now contains, with the version guard never firing to catch it. |
-| v2 file, v1 plugin (a project rolled back to a pre-PM quirk install) | `artifact_append.py`'s existing `version > EXPECTED_SCHEMA_VERSION` guard (`bin/artifact_append.py:184-190`) already refuses with exit 8 — no new code needed; the mechanism generalizes automatically once `EXPECTED_SCHEMA_VERSION` bumps from 1 to 2. | Same — the v1 `artifact_append.py` refuses before ever writing. |
-| Fresh project, `/quirk:artifacts:init` never run | Same "run `/quirk:artifacts:init` first" message every `bin/*.py` script already gives on a missing target file (`bin/artifact_append.py:157-163`) — reused verbatim, exit 3. | Same, exit 3. |
+| Scenario | Read commands (`--index`, `--next`, `--doctor`, `--status`) | `pm.py` write commands (`start`/`finish`/`park`/`decide`/`reconcile`/`roadmap --write`) | `artifact_append.py` (`/quirk:artifacts:bug` etc.) |
+|---|---|---|---|
+| v1 file, v2 plugin, not yet migrated | Work unmodified — every entry has no `Status` field, which already means `open` under both schema versions. No degradation, because v1 files are a strict subset of what v2 read-paths already handle. | **Refuse, exit 8**, instructing `/quirk:pm:migrate`. Writing a `Status`/`Probe`/`Handoff` line onto a file still marked v1 is exactly the mixed-version hazard `logic.md` names as the reason "additive; zero migration" was retracted ([logic.md → In scope for v1](./logic.md#in-scope-for-v1)) — a v1-only reader would silently disagree with what the file now contains, with the version guard never firing to catch it. | **v1-only fields: append normally. v2-only field requested: refuse, exit 8.** See below. |
+| v2 file, v1 plugin (a project rolled back to a pre-PM quirk install) | `artifact_append.py`'s existing `version > EXPECTED_SCHEMA_VERSION` guard (`bin/artifact_append.py:161-167`) already refuses with exit 8 — no new code needed; the mechanism generalizes automatically once `EXPECTED_SCHEMA_VERSION` bumps from 1 to 2. | Same — the v1 `artifact_append.py` refuses before ever writing. | Same, exit 8. |
+| Fresh project, `/quirk:artifacts:init` never run | Same "run `/quirk:artifacts:init` first" message every `bin/*.py` script already gives on a missing target file (`bin/artifact_append.py:136-140`) — reused verbatim, exit 3. | Same, exit 3. | Same, exit 3. |
+
+#### `artifact_append.py` needs a lower bound, not just an upper one
+
+Its guard is one-sided: `version is not None and version > EXPECTED_SCHEMA_VERSION`
+(`bin/artifact_append.py:161`). Nothing rejects a version *below* expected, and nothing rejects an
+absent marker. Once `EXPECTED_SCHEMA_VERSION` becomes `2` and `SCHEMAS` grows the v2-only fields
+(`blocked_by`, and the auto-stamped `logged` on `test-skip`), a file still marked
+`<!-- schema-version: 1 -->` passes that check — `1 > 2` is false — and `render_entry` happily emits
+v2 fields into it. `render_entry` has no per-field version gating; it iterates `schema["fields"]` and
+writes whatever is populated (`bin/artifact_lib.py:141-152`). Every existing project would drift into
+the mixed-schema state v2 exists to prevent, through the ordinary `/quirk:artifacts:bug` path, with
+no command ever reporting an error.
+
+`CONTRACT:` on a file whose declared version is below `EXPECTED_SCHEMA_VERSION` (or absent):
+
+- **v2-only fields are not written.** They are excluded from `render_entry`'s field loop for that
+  file, so a v1 file never receives a v2 field.
+- **An explicitly-requested v2-only field refuses**, exit `8`, naming the field and instructing
+  `/quirk:pm:migrate`. Silently dropping a field the caller passed is worse than refusing: the
+  command reports success and the data is gone.
+- **Everything else appends normally.** Refusing all appends until migration was rejected — it
+  breaks `/quirk:artifacts:bug` in every existing project the moment quirk updates, for a hazard
+  that only the v2-only fields actually create.
+
+`SCHEMA:` the v2-only set is `{blocked_by}` for `bug`/`defer`/`test-skip`, plus `{logged}` for
+`test-skip`. `proposals.md` has none.
+
+**Existing-project sequence.** `migrate` bumps the four ledgers but does **not** create `ROADMAP.md`
+— `artifact_init.py` does, and an already-initialized project never re-runs it. `/quirk:pm:migrate`
+therefore also creates `ROADMAP.md` when absent, using the same create-or-skip semantics
+`artifact_init.py` uses, so an existing project reaches a complete v2 layout from `migrate` alone.
+A project with no `ROADMAP.md` is a valid empty roadmap, so this is convenience, not a precondition.
 
 ---
 
@@ -1551,19 +1584,53 @@ algorithm](#the-migrate-algorithm) and [§v1/v2 back-compat matrix](#v1v2-back-c
 the ledger/roadmap file like any other tracked change, same as today. `start`'s worktree creation has
 no automatic rollback on a later failure (a probe that unexpectedly passes leaves the worktree in
 place *deliberately*, per [logic.md → The created worktree is left in place](./logic.md#job-2--ushering-a-started-task));
-an adapter failure during `launch` (exit 11) leaves the worktree created but the ledger still `open`
-(the ledger write, step 5, happens *after* the probe runs but the exact ordering relative to `launch`,
-step 6, means a `launch` failure is caught before the ledger is written — `start`'s internal sequence
-in this document is: create → probe → **write ledger + packet** → launch, so a `launch` failure after
-a successful probe leaves `in_progress` correctly recorded with an intact `Handoff`, recoverable by
-re-running `launch` manually against the same worktree using the adapter's own CLI, or by `park`ing
-and retrying `start --here` against the same code). This reordering (ledger-write before launch,
-rather than logic.md's illustrative step numbering which shows packet-write at step 4 and launch at
-step 6 with no explicit statement about *ledger*-write's position relative to launch) is a
-**Tech-spec call (logic.md silent):** logic.md fixes packet-before-launch and probe-before-ledger
-(implicitly, since the ledger records the probe's baseline result) but is silent on ledger-vs-launch
-ordering specifically; writing the ledger before attempting launch means a launch failure is always
-recoverable from ledger state alone, which failing to do so would not guarantee.
+and an adapter failure during `launch` is covered below.
+
+#### `start`'s ordering and its launch-failure state — one ordering, one result
+
+`CONTRACT:` `start`'s internal sequence is fixed:
+
+```
+create worktree → run baseline probe → write ledger + packet (CAS, under lock) → launch
+```
+
+**A `launch` failure leaves the entry `in_progress`.** The ledger write precedes the launch and is
+not rolled back. An earlier draft asserted both outcomes in a single sentence — "leaves the worktree
+created but the ledger still `open`" followed by "leaves `in_progress` correctly recorded" — which
+left an implementer no way to know which state to handle, and no way to write a test at all. The
+ordering here matches `logic.md`'s own numbered flow, which already places the ledger write before
+launch ([logic.md → Job 2](./logic.md#job-2--ushering-a-started-task)); the ambiguity was introduced
+by this document, not inherited.
+
+Rolling the ledger back on launch failure was rejected: the probe baseline is real work already
+performed against a real worktree, and discarding it would make a transient launcher outage
+indistinguishable from a probe that never ran.
+
+**The launch receipt.** `start` writes a receipt *before* attempting launch, so a failure is
+recoverable from persisted state rather than from the operator's memory.
+
+`SCHEMA:` `$XDG_STATE_HOME/quirk/handoff/<ID>.launch.json` (falling back to
+`~/.local/state`) — the same directory the Phase 3 packet uses:
+```json
+{"schema": 1, "id": "BUG-7", "attempt": 2, "adapter": "orca",
+ "worktree": "/abs/path", "dest": "/abs/path", "branch": "pm/bug-7",
+ "packet": "/abs/path", "launched": false, "error": "orca: connection refused"}
+```
+`launched` flips to `true` after the adapter reports success. A receipt with `launched: false` is the
+marker that an entry is `in_progress` with no worker attached.
+
+`COMMAND:` `pm.py start --resume-launch <ID>` re-reads the receipt, re-runs **only** the adapter's
+`launch` call against the existing worktree, and flips `launched`. It does not re-probe, does not
+re-write the ledger, and CAS-checks that the entry is still `in_progress` at the same attempt — so a
+resume cannot revive a task that was parked in the meantime.
+
+`doctor` reports `LAUNCH_INCOMPLETE` for any `in_progress` entry whose receipt exists with
+`launched: false`. Without it, this state is indistinguishable from a worker that started and went
+quiet — which is exactly the confusion the stall finding is meant to surface, and would be
+mis-diagnosed.
+
+`park` remains available as the alternative: it returns the entry to `open` with the attempt and a
+reason on record, per §Field rendering.
 
 ---
 
