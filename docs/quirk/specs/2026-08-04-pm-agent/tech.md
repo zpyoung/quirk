@@ -481,23 +481,67 @@ literal grammar covering every state, always including the attempt number, since
 exactly the state most likely to be read much later would lose the retry-visibility counters exist
 to provide.
 
-`SCHEMA:` `Status` field, one line per state (absent field = `open`, unchanged v1 semantics):
+#### Lexical rules — the segment grammar
+
+Every lifecycle field is **one line**, split into segments by the literal three-character sequence
+`space em-dash space` (`U+0020 U+2014 U+0020`). Two rules make that split unambiguous, and both are
+enforced at the CLI boundary rather than trusted:
+
+**Rule 1 — free text is always the last segment.** Exactly one segment per field may carry
+user-supplied text (`reason:`, `parked:`). It is always final, and its value runs verbatim to
+end-of-line. A parser therefore splits at most *k* times, where *k* is fixed per state by the table
+below, and never has to decide which of several em-dashes is structural. This is why `superseded`
+renders `by:` **before** `reason:` — the earlier draft put the free-text segment in the middle, which
+is unparseable for any reason containing the delimiter.
+
+**Rule 2 — free text is validated, not escaped.** `--reason` is **rejected** (exit `2`, no write) if
+it contains a newline, a carriage return, or the sequence ` — `. Escaping was rejected as the
+alternative: an escape scheme has to survive a human hand-editing the ledger in a diff, and a reason
+that renders with visible backslashes defeats the legibility the field exists for. Rejection is
+loud, immediate, and leaves the ledger untouched.
+
+`REGEX:` the delimiter, and the free-text rejection test applied to every `--reason` value:
+```
+DELIM       = " — "
+REASON_BAD  = /[\r\n]| — /
+```
+
+`SCHEMA:` `Status` field, one line per state. **Absent field = `open`, never started** — unchanged
+v1 semantics, which is what keeps a v1 entry readable under v2:
 
 | State | Literal rendering |
 |---|---|
-| `open` | *(field absent — never rendered)* |
+| `open`, never started | *(field absent — never rendered)* |
+| `open`, after a `park` | `- **Status**: open — 2026-08-07 — attempt 1 — refused 2 — parked: ran out of budget` |
 | `in_progress` | `- **Status**: in_progress — 2026-08-05 — attempt 1` |
 | `in_progress`, after ≥1 refused `finish` | `- **Status**: in_progress — 2026-08-05 — attempt 1 — refused 2` |
 | `delivered` | `- **Status**: delivered — 2026-08-05 — attempt 1 — commit: 9a3f21c` |
 | `closed` | `- **Status**: closed — 2026-08-06 — attempt 1 — integrated: 9a3f21c` |
-| `wontfix` | `- **Status**: wontfix — 2026-08-05 — attempt 1 — reason: superseded by redesign` |
-| `superseded` | `- **Status**: superseded — 2026-08-05 — attempt 1 — reason: folded into BUG-12 — by: BUG-12` |
+| `wontfix` | `- **Status**: wontfix — 2026-08-05 — attempt 1 — reason: folded into the redesign` |
+| `superseded` | `- **Status**: superseded — 2026-08-05 — attempt 1 — by: BUG-12 — reason: folded into BUG-12` |
 
-The date is always the date of *that* transition (start date for `in_progress`, finish date for
-`delivered`, reconcile date for `closed`, decide date for `wontfix`/`superseded`) — never the
-original `start` date once the entry has moved past its first transition. The refusal count is
-appended only when non-zero, keeping the common (never-refused) case terse, matching every other
-worked example in `logic.md`.
+**`park` writes a Status line; it does not delete one.** The earlier draft removed the field
+entirely, which discarded the attempt number, the refusal count, and the reason in one move — the
+precise moment the design most needs to stay legible, and a direct contradiction of `park`'s locked
+purpose ("return to `open`, **keep the attempt on record**", [logic.md → Command
+surface](./logic.md#command-surface)) and of the locked promise that "an entry that took four tries
+shows it". `open`-with-a-Status-line and `open`-with-no-field are the same state to every consumer;
+they differ only in carrying history.
+
+The counters are **aggregates that survive across attempts**, per [logic.md → Decisions
+Locked](./logic.md#decisions-locked) ("Attempt and refusal counts are aggregates, not per-attempt
+history"). Concretely: `start` on a parked entry increments `attempt` and **preserves** the
+accumulated `refused` count; it overwrites `parked:` with nothing (the new attempt is not parked).
+The *previous* park's reason is gone at that point — which is exactly what `logic.md` says is not
+preserved, so no history is claimed that the parser cannot express.
+
+`refused` and `parked:` are each rendered only when they carry a value, keeping the common
+never-refused, never-parked case terse.
+
+The date is always the date of *that* transition (start date for `in_progress`, park date for a
+parked `open`, finish date for `delivered`, reconcile date for `closed`, decide date for
+`wontfix`/`superseded`) — never the original `start` date once the entry has moved past its first
+transition.
 
 `SCHEMA:` `Probe` field. At `start`:
 ```markdown
@@ -571,6 +615,92 @@ display-only, never parsed back by any code path.
 
 `<branch>` follows the naming convention the worked example itself fixes:
 `pm/<header-lowercase>-<id>`, e.g. `pm/bug-7`.
+
+`<worktree-abs-path>` and `<origin-abs-path>` are **rejected at the CLI** (exit `2`) if either
+contains ` — `, a newline, or a carriage return, by the same Rule 2 above. A path that cannot be
+rendered unambiguously is refused at `start` rather than written and mis-parsed later.
+
+#### Parsing contracts
+
+Renderings without parsers are half a contract: `Status`, `Probe`, and `Handoff` are the
+authoritative machine-readable state, and every one of them is read back by `finish`, `park`,
+`reconcile`, and `doctor`. Each renderer below has exactly one inverse, and round-tripping is a
+tested property, not an assumption.
+
+`CONTRACT:` three parsers in `bin/pm.py`, each total — they return a result object, never raise, and
+never partially mutate:
+
+```
+parse_status(line: str)   -> StatusField | MalformedField
+parse_probe(line: str)    -> ProbeField  | MalformedField
+parse_handoff(line: str)  -> HandoffField | MalformedField
+```
+
+`SCHEMA:` `StatusField` — `state: str`, `date: str`, `attempt: int`, `refused: int` (0 when the
+segment is absent), `commit: str | None`, `integrated: str | None`, `by: str | None`,
+`reason: str | None`, `parked: str | None`.
+
+`SCHEMA:` `MalformedField` — `raw: str`, `reason: str`. Every consumer treats it as **unknown state,
+never as a default**: `doctor` reports it as `MALFORMED_LIFECYCLE_FIELD`, and every transition
+command refuses to write over it (exit `6`). Silently coercing an unparseable status to `open` would
+let a corrupt line be overwritten by a transition that assumed the wrong prior state — the exact
+class of loss CAS exists to prevent.
+
+**Parse algorithm, stated once and shared by all three.** Split the value on `DELIM` into at most
+*k+1* parts, where *k* is the count of structural segments the state's grammar declares; match each
+fixed segment against its own anchored pattern; take the final part verbatim if the grammar ends in
+free text. Anything that fails to match at any position yields `MalformedField` naming the first
+segment that failed — never a partial parse.
+
+`REGEX:` the anchored segment patterns. Full SHAs are required wherever a commit is recorded, so
+that a short SHA cannot become ambiguous as the repository grows:
+
+```
+STATE      = /^(open|in_progress|delivered|closed|wontfix|superseded)$/
+DATE       = /^\d{4}-\d{2}-\d{2}$/
+ATTEMPT    = /^attempt (\d+)$/
+REFUSED    = /^refused (\d+)$/
+COMMIT     = /^commit: ([0-9a-f]{40})$/
+INTEGRATED = /^integrated: ([0-9a-f]{40})$/
+BY         = /^by: ([A-Z]+-\d+)$/
+REASON     = /^reason: (.+)$/
+PARKED     = /^parked: (.+)$/
+```
+
+The worked examples above render 7-character SHAs for readability; the literal on-disk form is the
+full 40. `doctor` reports a short SHA as `MALFORMED_LIFECYCLE_FIELD` rather than accepting it.
+
+#### `splice_field` — the in-place field writer
+
+`CONTRACT:` `splice_field(text: str, entry: Entry, label: str, value: str | None) -> str`. Replaces
+the single `- **<label>**:` line inside `entry`'s block, inserts one if absent, or removes it when
+`value is None`. Returns new text; never writes.
+
+Four behaviors the earlier draft left undefined, each of which is a way to corrupt a neighbouring
+entry:
+
+- **Duplicate labels.** If the block contains more than one line matching `label`, `splice_field`
+  **refuses** (the caller exits `6`) rather than guessing which one is authoritative. This is
+  reachable through hand-editing, and `bin/artifact_review.py:29`'s dict-collapse means the parsed
+  view would silently show only the last — so the writer must not act on a view the file does not
+  support. `doctor` reports it as `DUPLICATE_LIFECYCLE_FIELD`.
+- **Entry end.** The block is bounded by `entry.start` and `entry.end` — **not** by scanning forward
+  for the next `##`, which would run past the entry whenever the file's final entry is being edited
+  or a fenced heading sits inside it.
+- **Insertion point.** A new field line is inserted immediately after the last existing
+  `- **…**:` line in the block, before any trailing blank line or prose. An entry with no field
+  lines at all takes the insertion directly after its `##` heading line.
+- **No trailing newline.** An entry block that does not end in a newline (last entry, no trailing
+  blank line) gets one synthesized before insertion, so the spliced line cannot fuse onto the
+  preceding line.
+
+**`bin/artifact_lib.py` gains `Entry.end: int`** — the exclusive end offset of the entry's block,
+which `parse_entries` already computes as a local (`bin/artifact_lib.py:125`) and currently discards.
+Adding it as a dataclass field with **no default** is safe: `Entry` is constructed in exactly one
+place (`bin/artifact_lib.py:132-135`) and every consumer reads it by attribute name
+(`bin/artifact_review.py:33-34`), never positionally. Deriving the end as
+`entry.start + len(entry.raw)` instead was rejected — it re-derives a value the parser already knew
+and silently drifts if `raw` is ever normalized.
 
 ---
 
@@ -836,66 +966,107 @@ the other two `finish` preconditions (clean tree, worktree root) still applying 
 Every `pm.py` command that mutates an entry (`start`, `finish`, `park`, `decide`, and `reconcile`'s
 write-back phase) follows one procedure:
 
-`PSEUDOCODE (justified, ≤3 lines):` acquire `flock` on `.{TARGET_FILE}.lock` (the **same** lock file
-`artifact_append.py:165` already uses for that ledger file — this is what serializes `pm.py` against
-concurrent `artifact_append.py` appends to the same file, not a new lock namespace); read, locate the
-entry by ID via strict `parse_entries`, check `entry.status in EXPECTED_FROM_STATES[command]`; on
-match, splice the new field lines and `atomic_write`; on mismatch, refuse without writing. This needs
-justifying (not left to "obviously implement CAS") because "compare-and-swap" is a well-known pattern
-whose correctness depends entirely on the compare and the write happening inside one held lock —
-stated as prose alone, it invites a read-then-later-write race exactly like the one it exists to
-close.
+`PSEUDOCODE (justified, ≤3 lines):` acquire `flock` on `.quirk/locks/{TARGET_FILE}.lock` (the
+**same** lock file `artifact_append.py:142` already uses for that ledger — this serializes `pm.py`
+against concurrent `artifact_append.py` appends, not a new lock namespace); read, locate the entry by
+ID via strict `parse_entries`, and compare the **full expectation tuple** below; on match, splice the
+new field lines and `atomic_write`; on mismatch, refuse without writing. This needs justifying (not
+left to "obviously implement CAS") because "compare-and-swap" is a well-known pattern whose
+correctness depends entirely on the compare and the write happening inside one held lock — stated as
+prose alone, it invites a read-then-later-write race exactly like the one it exists to close.
+
+#### The expectation tuple
+
+`CONTRACT:` every mutating command compares, under the held lock, the tuple `(id, attempt, state,
+probe_spec, handoff)` against the values it captured **before** it did any slow work. A mismatch on
+any element refuses with exit `7` and writes nothing.
+
+`logic.md` locks compare-and-swap on `(ID, attempt, expected status)` ([logic.md → Decisions
+Locked](./logic.md#decisions-locked)). Comparing `state` alone is **not** a valid reduction of that,
+and the earlier draft's argument that it was — "there is exactly one live attempt per entry at a
+time" — confuses an invariant over *states* with an invariant over *time*. `start` does refuse on an
+already-`in_progress` entry, so two attempts are never live simultaneously. That says nothing about
+whether the attempt live at the end of a command is the one live at its beginning.
+
+**The window is real and it is wide.** `finish` reads the entry to learn its probe, then *runs that
+probe* — a test suite, taking seconds to minutes — then acquires the lock and writes. Between the
+read and the write, another process can legitimately `park` (→ `open`, attempt 1) and `start`
+(→ `in_progress`, attempt 2). At write time the state is `in_progress`, exactly what a status-only
+compare expects, so the stale `finish` writes **attempt 1's evidence — its commit SHA and its probe
+result — onto attempt 2**. The ledger then reports a `delivered` attempt 2 whose commit came from an
+abandoned attempt. That is the precise same-directory stale-transition race CAS was locked in to
+prevent, so removing `attempt` removes the mechanism's reason to exist.
+
+**Where each command gets its expected tuple.** No caller supplies `--attempt`; every command
+*derives* the expectation from its own pre-work read, which is what makes this optimistic CAS rather
+than caller-asserted CAS:
+
+| Command | Captures the tuple at | Slow work in between |
+|---|---|---|
+| `start` | its single read (no pre-work read; expects *no* live attempt) | worktree creation, baseline probe run |
+| `finish` | the read that supplies the probe spec and `Handoff` | probe execution against `HEAD` |
+| `park` | the read that confirms `in_progress` | none — but the tuple is still compared, for uniformity |
+| `decide` | the read that confirms a non-terminal state | none |
+| `reconcile` | the read that supplies the delivered commit | `git fetch` + reachability query |
+
+`start`'s expectation is the absence of a live attempt, so its compare is "state is `open` (field
+absent, or present with `parked:`)" plus "no second entry claims this ID".
 
 | Command | Requires current state | Produces | Attempt handling |
 |---|---|---|---|
-| `start` | `open` (absent Status), and no other `Entry` with the same ID (§Parser) | `in_progress` | attempt = 1, or previous attempt + 1 if this ID was `park`ed before |
-| `finish` | `in_progress` | `delivered` (preconditions pass) or stays `in_progress` with `refused` incremented | unchanged |
-| `park` | `in_progress` | `open` (Status field **removed** — matches v1 absent-means-open) | attempt number preserved via a comment `logic.md` doesn't require persisting past `open`; see [§Concerns](#concerns) |
+| `start` | `open` — field absent, or present after a `park` — and no other `Entry` with the same ID (§Parser) | `in_progress` | `attempt` = previous attempt + 1, or 1 if never started; `refused` carried forward |
+| `finish` | `in_progress`, **same attempt/probe/handoff as captured** | `delivered` (preconditions pass) or stays `in_progress` with `refused` incremented | unchanged |
+| `park` | `in_progress`, **same attempt as captured** | `open`, Status line **retained** with `attempt`, `refused`, and `parked: <reason>` | preserved and rendered |
 | `decide` | any non-terminal state (`open`, `in_progress`, `delivered`) | `wontfix` \| `superseded` | unchanged |
 | `reconcile` (write-back only) | `delivered`, **same** recorded commit sha as when the promotion was computed | `closed` | unchanged |
 
-**Why "attempt" isn't a caller-supplied compare key.** `finish`/`park` take no `--attempt` flag —
-there is exactly one live attempt per entry at a time under the courtesy-check model (`start`
-refuses on an already-`in_progress` entry — [logic.md → Two workers dispatched for the same
-entry](./logic.md#handoff-scenarios)), so "compare-and-swap on `(ID, attempt, expected status)`"
-([logic.md → Decisions Locked](./logic.md#decisions-locked)) reduces in practice to comparing
-`expected status` alone, with `attempt` carried forward unchanged by every command except `start`
-(which increments it) — there is no scenario where a caller needs to assert a *specific* attempt
-number to guard against, because the status comparison already rejects any state the caller didn't
-expect.
+**`park` keeps the counters because the schema now has somewhere to put them.** The earlier draft
+concluded that `open` means an absent `Status` field, therefore a parked entry must forget its
+attempt number, and that the next `start` restarts at attempt 1. That conclusion followed from the
+rendering, not from `logic.md` — and it directly contradicts the locked "an entry that took four
+tries shows it" plus `park`'s own locked purpose, "keep the attempt on record". §Field rendering now
+defines a Status line for parked-`open` carrying `attempt`, `refused`, and `parked:`, so the counters
+survive a park with nothing inferred from git history and no reset. Absent-field still means
+`open`-never-started, so v1 entries keep reading correctly.
 
-**`park` and the "attempt number preserved" question.** `logic.md` requires `park` to "return to
-`open`, keep the attempt on record" ([logic.md → Command
-surface](./logic.md#command-surface)) — but `open` is defined as *absent* `Status` field
-throughout this design, which has nowhere to keep an attempt number once the field is gone.
-**Tech-spec call (logic.md silent):** "keep the attempt on record" is satisfied by the **refusal
-count and attempt number `start` re-reads and increments on the *next* `start`** — i.e., "on record"
-means "recoverable from the next transition," not "visible while `open`." A subsequent `start` on the
-same ID computes its new attempt number as `(highest attempt number this ID has ever recorded, read
-from git history if needed) + 1` — but since the current, un-parked Status line is gone once parked,
-`pm.py` cannot read the prior attempt number from the *current* file state at all. Given `logic.md`
-explicitly accepts that "a later `start` overwrites `Probe` and `Handoff` for the new attempt and the
-earlier values are gone. Git history holds the prior values for anyone who needs them" ([logic.md →
-Attempt and refusal counts are aggregates](./logic.md#job-2--ushering-a-started-task)), this document
-makes the parallel call for the attempt *number* itself: after `park`, the next `start` on that ID
-begins again at **attempt 1** — a fresh, visible attempt count that undercounts the true historical
-total, exactly as the entry's own text already does for `Probe`/`Handoff`. This is flagged explicitly
-in [§Concerns](#concerns) rather than silently narrowed, since it is a real information loss beyond
-what `logic.md`'s own "earlier values are gone" acknowledgment covers (that passage is about
-`Probe`/`Handoff` being overwritten, not about the attempt counter resetting).
+What is *not* preserved remains exactly what `logic.md` says is not preserved: the previous park's
+reason and the previous attempt's `Probe`/`Handoff`, all overwritten by the next `start`. That is a
+bounded, stated loss of *history*; the *aggregates* survive, which is the locked contract.
 
-**Crash-mid-transition.** `atomic_write` (§`bin/artifact_lib.py`) writes the full new file content to
-a temp file in the same directory, then `os.replace()` — atomic on POSIX. A crash before the replace
-leaves the original file completely untouched (the orphaned temp file is inert); a crash after is
-indistinguishable from a normal completed write. **Tech-spec call (logic.md silent):** this is a
-strictly stronger version of the crash-safety property `logic.md` states for `migrate` specifically
-("A partial run is safe to repeat, because the marker is written last" — [logic.md → In scope for
-v1](./logic.md#in-scope-for-v1)) — sequential "marker last" ordering only prevents a *torn* file if
-each individual write is itself atomic, which a plain `write_text()` call is not guaranteed to be
-under power loss. `atomic_write` makes the whole rewrite indivisible, so there is no ordering to get
-right in the first place. Every `pm.py` writer (lifecycle transitions and `migrate` alike) uses it;
-`artifact_append.py`'s existing `target.write_text(new_text)` (`bin/artifact_append.py:203`) is left
-untouched — see [DO-NOT-CHANGE fences](#do-not-change-fences).
+**Crash-mid-transition, and the exact property being claimed.** `atomic_write`
+(§`bin/artifact_lib.py`) writes the full new content to a temp file in the same directory, then
+`os.replace()`.
+
+`CONTRACT:` what this guarantees is **atomicity, not durability**, and the two are worth separating
+because the earlier draft conflated them:
+
+- **Atomicity (guaranteed).** No reader ever observes a partially-written ledger. `os.replace` is a
+  single rename within one directory, so every concurrent `pm.py`/`artifact_append.py` reader sees
+  either the entire old file or the entire new one. This holds for process death at any point,
+  including `SIGKILL`.
+- **Durability across power loss (NOT guaranteed without fsync).** A rename can reach the directory
+  before the temp file's data reaches the disk. After a power cut the entry can therefore be present
+  but empty or truncated. Claiming the pre-replace state is "completely untouched" under power loss
+  is wrong: what is untouched is the *original file's inode*, which the rename has already stopped
+  pointing at.
+
+`atomic_write` therefore `fsync`s the temp file **before** `os.replace`, and `fsync`s the containing
+directory **after** it. Both are required and neither substitutes for the other — the first makes
+the new content real, the second makes the rename itself survive. This is stated because "write temp,
+then rename" is widely repeated as if it were sufficient, and a spec that repeats it without the two
+syncs specifies a ledger that loses a transition to a power cut.
+
+Under `SIGKILL` alone (no power loss) the fsyncs are unnecessary — the page cache survives process
+death — so this cost is paid for the rarer failure, deliberately.
+
+**Tech-spec call (logic.md silent):** this is a strictly stronger property than the one `logic.md`
+states for `migrate` ("A partial run is safe to repeat, because the marker is written last" —
+[logic.md → In scope for v1](./logic.md#in-scope-for-v1)). Sequential "marker last" ordering only
+prevents a torn file if each individual write is itself atomic, which a plain `write_text()` is not.
+`atomic_write` makes the whole rewrite indivisible, so there is no ordering to get right. Every
+`pm.py` writer (lifecycle transitions and `migrate` alike) uses it; `artifact_append.py`'s existing
+`target.write_text(new_text)` (`bin/artifact_append.py:180`) is left untouched — see
+[DO-NOT-CHANGE fences](#do-not-change-fences) and `BUGS.md` BUG-2, which files that asymmetry.
 
 `flock` itself needs no crash-recovery logic: it is process-scoped, so a killed process (even
 `SIGKILL`) releases the lock automatically — there is no stuck-lock file to clean up, unlike a
