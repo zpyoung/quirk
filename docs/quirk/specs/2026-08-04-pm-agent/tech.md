@@ -13,18 +13,25 @@ remains a draft with known critical defects — do not build from it.**
 > compatibility modes*, the `artifact_lib.py` contract, the index/status/doctor read layer, *DO-NOT-
 > CHANGE fences*, and the Phase 1 rows of *Testing strategy*.
 >
-> **Reworked 2026-08-07, pending re-review — Phase 2.** All 12 Phase-2 findings are closed:
-> CAS now compares the full `(id, attempt, state, probe_spec, handoff)` expectation tuple captured
-> before the slow work; `park` retains a `Status` line carrying attempt, refusal count and reason;
-> lifecycle fields gained a segment grammar and three total parsers; the ROADMAP grammar accepts its
-> own template and can diagnose a `PROPOSAL` reference; `artifact_append.py` gained the missing lower
-> bound so v2 fields cannot enter a v1 file; probe baselines accept only a genuine failure;
-> `reconcile` evaluates against a stable `dest:` repo root and persists `--verify` results; `start`
-> states one ordering with a recoverable launch receipt; the exit-code table gained per-command
-> precedence and aggregate outcomes; and the test matrix gained a regression fixture per finding.
-> Every fix implements a contract `logic.md` already locked — **no `logic.md` amendment was required**,
-> which is recorded here because a rework that quietly redefines locked behavior is the failure mode
-> this gate exists to catch.
+> **Reworked 2026-08-07 — Phase 2.** CAS now compares the full `(id, attempt, state, probe_spec)`
+> expectation tuple captured before the slow work; `park` retains a `Status` line carrying attempt,
+> refusal count and reason; lifecycle fields gained a segment grammar and total parsers; the ROADMAP
+> grammar accepts its own template and can diagnose a `PROPOSAL` reference; `artifact_append.py`
+> gained the missing lower bound so v2 fields cannot enter a v1 file; probe baselines accept only a
+> genuine failure; `reconcile` disambiguates its git failures, ages rewritten history into
+> `UNDETERMINED`, gains a human-ratified `--close`, and persists `--verify` results; the exit-code
+> table gained per-command precedence and aggregate outcomes; and the test matrix gained a regression
+> fixture per finding. Every fix implements a contract `logic.md` already locked — **no `logic.md`
+> amendment was required**, which is recorded here because a rework that quietly redefines locked
+> behavior is the failure mode this gate exists to catch.
+>
+> **Phase 2 is `--here` only.** `logic.md:778-782` locks Phase 2's `start` to local execution and
+> puts the `Handoff` field, dispatch, and the adapters in Phase 3. Two pieces of the 2026-08-07
+> rework therefore land in **Phase 3, not Phase 2**, and are marked as such where they appear: the
+> `Handoff` field's `dest:` component (§Field rendering) and `start`'s launch receipt / resume path
+> (§Cross-cutting). Phase 2's `reconcile` needs neither — under `--here` the destination *is* the
+> origin repo. A 2026-08-07 review caught these being presented as Phase 2 closures; the fixes are
+> sound, the labelling was not.
 >
 > **Not approved — Phase 3.** The handoff packet, the three-call adapter interface, and the Orca
 > adapter. Confirmed defects remain: the adapter omits `orca orchestration send`'s **required**
@@ -301,9 +308,12 @@ visible, actionable finding instead of a second silent disagreement.
 case `logic.md`'s non-goals section accepts as intentionally loud): `parse_entries` returns *both* as
 separate `Entry` objects sharing `.id == 7` in `.entries` (matching today's block-slicing behavior,
 which already tolerates this without crashing). **Tech-spec call (logic.md silent):** any `pm.py`
-lookup-by-ID (`start`, `finish`, `park`, `decide`, blocker resolution) that resolves to more than one
-`Entry` for the requested ID refuses — exit 4 (§Exit codes) — naming both line numbers, rather than
-guessing which block to mutate. `--doctor` also reports it as `DUPLICATE_ID`, independent of whether
+lookup-by-ID (`start`, `finish`, `park`, `decide`) that resolves to more than one `Entry` for the
+requested ID refuses — exit 4 (§Exit codes) — naming both line numbers, rather than guessing which
+block to mutate. **Blocker resolution is excluded**: it runs inside `ready()` during `--next`, a read
+command that never exits non-zero (§Exit codes). A duplicate ID encountered while resolving a blocker
+leaves the blocker unsatisfied — fail-closed, the same as a dangling reference — and reports
+`DUPLICATE_ID`. `--doctor` also reports it as `DUPLICATE_ID`, independent of whether
 any command was run against it.
 
 **No-behavior-change verification.** `test_artifact_append.py` and `test_artifact_review.py` are the
@@ -495,7 +505,7 @@ Two deliberate narrowings from the obvious `\d+`:
 
 **Why `PROPOSAL-N` is rejected as a blocker target — a landmine this document closes before it ships.**
 `proposals.md` entries render their own `- **Status**: [proposed / accepted / rejected /
-superseded]` field (`templates/proposals.md:9`) — the *same field label* the PM lifecycle uses on
+superseded]` field (`templates/proposals.md:10`) — the *same field label* the PM lifecycle uses on
 `BUG`/`DEFER`/`TEST` entries, but with an incompatible value vocabulary. `superseded` is a **legal
 value in both vocabularies**. A blocker-satisfaction check that naively reads *any* referenced
 entry's `Status` field and string-matches against the allowlist (`closed`/`wontfix`/`superseded`)
@@ -577,7 +587,9 @@ v1 semantics, which is what keeps a v1 entry readable under v2:
 | `in_progress` | `- **Status**: in_progress — 2026-08-05 — attempt 1` |
 | `in_progress`, after ≥1 refused `finish` | `- **Status**: in_progress — 2026-08-05 — attempt 1 — refused 2` |
 | `delivered` | `- **Status**: delivered — 2026-08-05 — attempt 1 — commit: 9a3f21c` |
+| `delivered`, after ≥1 refused `finish` | `- **Status**: delivered — 2026-08-05 — attempt 2 — refused 3 — commit: 9a3f21c` |
 | `closed` | `- **Status**: closed — 2026-08-06 — attempt 1 — integrated: 9a3f21c` |
+| `closed`, after ≥1 refused `finish` | `- **Status**: closed — 2026-08-06 — attempt 2 — refused 3 — integrated: 9a3f21c` |
 | `wontfix` | `- **Status**: wontfix — 2026-08-05 — attempt 1 — reason: folded into the redesign` |
 | `superseded` | `- **Status**: superseded — 2026-08-05 — attempt 1 — by: BUG-12 — reason: folded into BUG-12` |
 
@@ -598,6 +610,21 @@ preserved, so no history is claimed that the parser cannot express.
 
 `refused` and `parked:` are each rendered only when they carry a value, keeping the common
 never-refused, never-parked case terse.
+
+**`refused` survives into every terminal state**, which is why the table spells out the
+after-refusal rendering for `delivered` and `closed` rather than leaving it to the general rule.
+`logic.md` locks "an entry that reached green on the fourth try shows it"
+([logic.md → What red→green does not prove](./logic.md#what-redgreen-does-not-prove)) — an entry that
+drops its refusal count at the moment it succeeds shows the opposite. The counter is cleared by
+nothing; only a new `start` increments `attempt` alongside it.
+
+**A never-started entry has no `attempt`, and `decide` may still act on it.** `decide` is locked as
+reachable from `open` ([logic.md → Command surface](./logic.md#command-surface)), including work that
+never started at all — a `DEFER` resolved by deciding not to do it. For that entry the `attempt`
+segment is **omitted**, not rendered as `attempt 0`:
+`- **Status**: wontfix — 2026-08-05 — reason: not worth the maintenance`. `ATTEMPT` is therefore an
+optional segment in the grammar below, present whenever the entry has ever been started. Rendering
+`attempt 0` was rejected — it reads as a failed attempt rather than none.
 
 The date is always the date of *that* transition (start date for `in_progress`, park date for a
 parked `open`, finish date for `delivered`, reconcile date for `closed`, decide date for
@@ -646,6 +673,11 @@ accident — a `spec#` mismatch means the `Probe:` line's verb/arg text was edit
 ```
 Four components:
 `<dest-repo-label> @ <branch> — worktree:<worktree-abs-path> — dest:<dest-repo-root> — origin:<origin-abs-path>`.
+
+> **Phase 3 section.** `logic.md:778-785` locks the `Handoff` field to Phase 3; Phase 2's `start`
+> is `--here` only and writes no `Handoff` at all. Phase 2's `finish` compares the worktree root
+> against the **project's own repo**, and Phase 2's `reconcile` evaluates in that same repo. This
+> section specifies the field for when dispatch arrives.
 
 **`dest:` exists because the worktree is ephemeral and `reconcile` is not.** An earlier draft carried
 only the worktree path and argued no separate destination-repository path was needed, since the
@@ -707,6 +739,25 @@ parse_handoff(line: str)  -> HandoffField | MalformedField
 segment is absent), `commit: str | None`, `integrated: str | None`, `by: str | None`,
 `reason: str | None`, `parked: str | None`.
 
+`SCHEMA:` `ProbeField` — `verb: str` (`test` / `grep` / `none`), `arg: str`,
+`baseline: str | None` (outcome token, or the literal match count for `grep`),
+`baseline_files: list[str]` (`grep` only), `final: str | None`, `spec_hash: str | None`,
+`file_hash: str | None`, `skipped_files: int`.
+
+`SCHEMA:` `HandoffField` — `dest_label: str`, `branch: str`, `worktree: str`, `dest_repo_root: str`,
+`origin: str`. **Phase 3 only** — Phase 2 never writes or reads this field.
+
+`REGEX:` the `Probe` and `Handoff` segment patterns, applied by the same shared algorithm:
+```
+PROBE_VERB   = /^(test|grep|none):?(.*)$/
+BASELINE     = /^baseline: (.+)$/
+FINAL        = /^final: (.+)$/
+HASHES       = /^spec#([0-9a-f]{8})(?: file#([0-9a-f]{8}))?$/
+SKIPPED      = /^skipped (\d+) unreadable$/
+HANDOFF_HEAD = /^(.+) @ (.+)$/
+HANDOFF_PATH = /^(worktree|dest|origin): (.+)$/
+```
+
 `SCHEMA:` `MalformedField` — `raw: str`, `reason: str`. Every consumer treats it as **unknown state,
 never as a default**: `doctor` reports it as `MALFORMED_LIFECYCLE_FIELD`, and every transition
 command refuses to write over it (exit `4` — corrupt entry). Silently coercing an unparseable status to `open` would
@@ -725,7 +776,7 @@ that a short SHA cannot become ambiguous as the repository grows:
 ```
 STATE      = /^(open|in_progress|delivered|closed|wontfix|superseded)$/
 DATE       = /^\d{4}-\d{2}-\d{2}$/
-ATTEMPT    = /^attempt (\d+)$/
+ATTEMPT    = /^attempt (\d+)$/          # optional: absent on a never-started entry
 REFUSED    = /^refused (\d+)$/
 COMMIT     = /^commit: ([0-9a-f]{40})$/
 INTEGRATED = /^integrated: ([0-9a-f]{40})$/
@@ -1350,7 +1401,8 @@ duration where none is required.
 
 ```
 PSEUDOCODE (justified, ≤3 lines): for each `delivered` entry (read once, strict parse, no lock
-held): resolve Handoff.dest_repo_root; if absent → "cannot evaluate — destination repo missing";
+held): resolve the target repo (Phase 2: the project dir; Phase 3: Handoff.dest_repo_root); if
+absent → "cannot evaluate — destination repo missing";
 else `git -C dest fetch` (cache per unique repo this run), then pre-resolve integration_ref and the
 recorded sha *separately* (below), then `git -C dest merge-base --is-ancestor <sha>
 <integration_ref>`, mapping exit per the table. This needs justifying because the "fetch once per
@@ -1358,9 +1410,14 @@ repo, not once per entry" memoization and the fetch-before-resolve ordering are 
 backwards and silently produce stale results.
 ```
 
-**Evaluation runs against `dest:`, not the worktree.** The worktree is routinely deleted when a task
-finishes; the destination repository is not. An earlier draft targeted the worktree, which made
-ordinary cleanup indistinguishable from a missing repository and stalled the entry forever.
+**Which repository `reconcile` evaluates in, by phase.** In **Phase 2** there is no `Handoff`, so
+the repository is the project's own — the ledger and the code are the same checkout under `--here`,
+and `reconcile` runs `git -C <project-dir>`. In **Phase 3**, evaluation runs against `Handoff`'s
+`dest:` root. The worktree is routinely deleted when a task finishes; the destination repository is
+not. An earlier draft targeted the worktree, which made ordinary cleanup indistinguishable from a
+missing repository and stalled the entry forever. Everything else in this section — the
+disambiguated failures, `UNDETERMINED`, `--close`, and the persisted `Verify` field — is Phase 2 and
+applies unchanged in both.
 
 **Pre-resolve both operands, because exit 128 is not one condition.** `merge-base --is-ancestor`
 returns 128 for an unknown commit *and* for an unresolvable integration ref — different faults with
@@ -1374,7 +1431,7 @@ different remedies, collapsed into one diagnostic by the earlier draft. Two chec
 | ancestor exit 1 | known, not reachable | stays `delivered`; doctor: `AWAITING_INTEGRATION`, "N days" |
 | `cat-file -e` fails | recorded commit absent from the destination repo | stays `delivered`; doctor: `CANNOT_EVALUATE`, "commit not in destination repo" |
 | `rev-parse --verify` fails | integration ref unresolvable | stays `delivered`; doctor: `CANNOT_EVALUATE`, "integration ref unresolvable: {ref}" |
-| `dest:` missing on disk | *(checked before any git call)* | stays `delivered`; doctor: `CANNOT_EVALUATE`, "destination repo missing" |
+| target repo missing on disk (`dest:` in Phase 3, project dir in Phase 2) | *(checked before any git call)* | stays `delivered`; doctor: `CANNOT_EVALUATE`, "destination repo missing" |
 | fetch failed | *(checked before the ancestry call)* | stays `delivered`; doctor: `CANNOT_EVALUATE`, "fetch failed" |
 | any other exit | unexpected git failure | stays `delivered`; doctor: `CANNOT_EVALUATE`, "git error: {stderr excerpt}" — never promoted on an ambiguous signal |
 
@@ -1535,7 +1592,7 @@ mid-file → exit 4," absent from `bin/artifact_append.py:126-190`'s actual code
 | 4 | corrupt/ambiguous entry — malformed heading claiming the requested ID, or duplicate ID | `start`, `finish`, `park`, `decide` |
 | 5 | lock timeout (`ARTIFACT_LOCK_TIMEOUT`, reused from `bin/artifact_append.py:143`) | every mutating command |
 | 6 | CAS failure — the expectation tuple did not match at write time (includes: `PROPOSAL` ID rejected) | `start`, `finish`, `park`, `decide`, `reconcile --close` |
-| 7 | project dir not found, or not a directory (`bin/artifact_init.py:31-34`'s actual check) | every command |
+| 7 | project dir not found, or not a directory (`bin/artifact_init.py:31-34`'s actual check) | **mutating commands only** — see below |
 | 8 | schema-version mismatch — file newer than this plugin understands, or (write commands only) file not yet migrated to v2 | every command; `migrate`; `artifact_append.py` on a v2-only field |
 | 9 | probe refused — already green at `start`, non-`fail` baseline, or still failing at `finish` | `start`, `finish` |
 | 10 | `finish` precondition failed — dirty tree, or worktree root doesn't match `Handoff` | `finish` |
@@ -1547,6 +1604,15 @@ directory passes that check and fails later at open time, surfacing as exit `1`.
 covering unwritable projects claimed a check no code performs. Adding a `os.access(W_OK)` probe was
 rejected — it is advisory on most platforms and lies under ACLs, so the honest contract is that
 permission failures land in the catch-all.
+
+**Exit 7 is not reachable from a read command, because that would change shipped behavior.**
+`bin/pm.py:317-333` performs no project-dir check: `--index` against a nonexistent directory
+resolves the path, finds no artifact files, prints the not-initialized message and returns `0`
+(`tests/test_pm_index_doctor.py:47-52` pins this). The read layer's contract is that it never fails
+a SessionStart hook, and a nonexistent project is an ordinary state there, not an error. An earlier
+draft of this table listed 7 as reachable from "every command", which would have silently mandated a
+behavior change to already-shipped, already-tested Phase 1 code — exactly the kind of unannounced
+Phase-1 edit the DO-NOT-CHANGE fences exist to prevent. Read commands exit `0` unconditionally.
 
 #### Per-command precedence
 
@@ -1561,7 +1627,7 @@ stated order two implementations disagree on which of two true facts to report:
 | `reconcile --close` | 7 → 3 → 2 → 8 → 4 → 6 |
 | `migrate` | 7 → 3 → 8 → 5 |
 | `roadmap --write` | 7 → 2 → 5 |
-| read commands | 7 → 0 |
+| read commands | 0 — always |
 
 Lock timeout (5) can interrupt any mutating command at the moment it takes the lock and is therefore
 not placed in these chains; it preempts everything after the point of acquisition.
@@ -1686,6 +1752,11 @@ place *deliberately*, per [logic.md → The created worktree is left in place](.
 and an adapter failure during `launch` is covered below.
 
 #### `start`'s ordering and its launch-failure state — one ordering, one result
+
+> **Phase 3 section.** Dispatch is Phase 3 (`logic.md:784-785`). Phase 2's `start` runs `--here`,
+> has no adapter and no launch step, and therefore cannot reach a launch failure at all: its
+> sequence is *probe → write ledger*, and exit `11` is unreachable. This section specifies the
+> dispatching form.
 
 `CONTRACT:` `start`'s internal sequence is fixed:
 
