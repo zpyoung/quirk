@@ -55,3 +55,35 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: medium
 - **Proposed fix**: Pin encoding='utf-8' on both calls, with a one-time migration for any ledger written under a non-utf-8 locale.
 
+## BUG-5: MemoryError escapes _read_and_parse's OSError guard
+- **Observed**: 2026-08-07
+- **File**: bin/pm.py:115
+- **Description**: data = f.read(max_bytes + 1) is wrapped in except OSError, but CPython pre-allocates the read buffer, so a large QUIRK_PM_MAX_FILE_BYTES (up to the permitted MAX_USABLE_FILE_BYTES of 1 GiB) can raise MemoryError, which is not an OSError. It escapes _read_and_parse and crashes pm.py, contradicting the module docstring's promise that one bad file never takes down the whole read layer. The SessionStart hook masks it as 'index unavailable'; --index/--next/--doctor run directly will traceback.
+- **Introduced by**: the Phase 1 pm.py work on this branch
+- **Severity**: low
+- **Proposed fix**: Widen the guard to except (OSError, MemoryError).
+
+## BUG-6: Every TEST_BACKLOG entry sorts as maximally old in --next
+- **Observed**: 2026-08-07
+- **File**: bin/pm.py:160
+- **Description**: _age_sort_key returns the empty string whenever spec.date_field is None, and TEST_BACKLOG.md has no date field at all. The empty string precedes every ISO date lexically, so TEST entries outrank every same-priority BUG or DEFER entry permanently, regardless of real age. The 'missing date sorts oldest' rule is right for an absent value but wrong for a file that structurally has none. Visible in this repo: TEST-1 [P3] holds a top-5 slot.
+- **Introduced by**: the Phase 1 pm.py work on this branch
+- **Severity**: low
+- **Proposed fix**: Sort date-less specs neutrally rather than oldest, or give TEST_BACKLOG a date field in schema v2.
+
+## BUG-7: The index's doctor hint names a command no surface exposes
+- **Observed**: 2026-08-07
+- **File**: bin/pm.py:242
+- **Description**: The index emits 'run pm.py --doctor for details', but no command, skill, hook, or README entry exposes pm.py, and no path is given - it lives at ${CLAUDE_PLUGIN_ROOT}/bin/pm.py. tech.md:1093 specifies this hint as /quirk:pm:status, which also does not exist. The one actionable line the index produces is not actionable.
+- **Introduced by**: the Phase 1 pm.py work on this branch
+- **Severity**: low
+- **Proposed fix**: Either ship the slash command the hint names or make the hint carry a runnable absolute path.
+
+## BUG-8: README still describes the removed SessionStart tail loading
+- **Observed**: 2026-08-07
+- **File**: README.md:46
+- **Description**: README reads 'SessionStart loads tail of artifact files (or suggests /init if none exist)'. As of this branch the hook calls pm.py and emits an index counts line plus the --next shortlist; it has not loaded file tails since. The parenthetical also names /init rather than the actual /quirk:artifacts:init.
+- **Introduced by**: the Phase 1 pm.py work on this branch
+- **Severity**: low
+- **Proposed fix**: Rewrite the bullet to describe the index-plus-shortlist output and correct the command name.
+

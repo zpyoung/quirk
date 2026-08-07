@@ -34,6 +34,13 @@ fi
 # project) must never break session start — fall back to one line instead.
 if [[ $status -eq 0 && -n "$output" ]]; then
   echo "$output"
+  # --index is counts only; --next is the one surface that names entries, and
+  # a session that knows "BUGS 4/4 open" and nothing else cannot act on it.
+  shortlist="$(python3 "$PM" --next --project-dir "$CLAUDE_PROJECT_DIR" 2>/dev/null)"
+  next_status=$?
+  if [[ $next_status -eq 0 && -n "$shortlist" ]]; then
+    grep -v 'unplaced (' <<<"$shortlist" || true
+  fi
 else
   echo "[quirk:pm] index unavailable"
 fi

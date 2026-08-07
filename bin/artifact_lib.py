@@ -28,6 +28,48 @@ def ensure_lock_dir(project: Path) -> Path:
     return lock_dir
 
 
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+_FENCE_OPEN_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
+
+
+def _mask_quoted(text: str) -> str:
+    """Return text with fenced code and HTML comments blanked, preserving every offset.
+
+    A heading quoted inside a fence is not an entry, and scanning raw text both invents it
+    and truncates the block of the entry doing the quoting. Blanking rather than deleting
+    keeps `Entry.start` and `Entry.raw` valid against the original file.
+
+    An unterminated fence is left unmasked, deviating from CommonMark: running it to EOF
+    would silently hide every entry after a stray backtick, and over-reporting is the safer
+    failure for a ledger.
+    """
+    chars = list(text)
+
+    def blank(start: int, end: int) -> None:
+        for i in range(start, end):
+            if chars[i] != "\n":
+                chars[i] = " "
+
+    for m in _HTML_COMMENT_RE.finditer(text):
+        blank(m.start(), m.end())
+
+    pos = 0
+    opener: tuple[str, int, int] | None = None
+    for line in "".join(chars).splitlines(keepends=True):
+        if opener is None:
+            m = _FENCE_OPEN_RE.match(line)
+            if m is not None:
+                opener = (m.group(1)[0], len(m.group(1)), pos)
+        else:
+            fence_char, fence_len, start = opener
+            closer = line.strip()
+            if closer and set(closer) == {fence_char} and len(closer) >= fence_len:
+                blank(start, pos + len(line))
+                opener = None
+        pos += len(line)
+    return "".join(chars)
+
+
 def _loose_re(header: str) -> re.Pattern[str]:
     return re.compile(rf"^##\s+{re.escape(header)}-(\d+):", re.MULTILINE)
 
@@ -62,7 +104,7 @@ class ParseResult:
 
 def find_max_id(text: str, header: str) -> int:
     """Return max N from '## HEADER-N:' lines, or 0 if none found."""
-    ids = [int(m.group(1)) for m in _loose_re(header).finditer(text)]
+    ids = [int(m.group(1)) for m in _loose_re(header).finditer(_mask_quoted(text))]
     return max(ids) if ids else 0
 
 
@@ -74,16 +116,18 @@ def parse_entries(text: str, header: str) -> ParseResult:
     slicing on the strict regex instead would let a malformed heading's block
     run on into its predecessor's and absorb that entry's fields.
     """
-    bounds = list(_loose_re(header).finditer(text))
+    scan = _mask_quoted(text)
+    bounds = list(_loose_re(header).finditer(scan))
     strict = _strict_re(header)
     entries: list[Entry] = []
     malformed: list[MalformedHeading] = []
     for i, m in enumerate(bounds):
         end = bounds[i + 1].start() if i + 1 < len(bounds) else len(text)
         block = text[m.start():end]
+        masked_block = scan[m.start():end]
         entry_id = int(m.group(1))
-        fields = {fm.group(1): fm.group(2).strip() for fm in FIELD_RE.finditer(block)}
-        sm = strict.match(block)
+        fields = {fm.group(1): fm.group(2).strip() for fm in FIELD_RE.finditer(masked_block)}
+        sm = strict.match(masked_block)
         if sm is not None:
             entries.append(Entry(
                 id=entry_id, header=header, title=sm.group(2).strip(),

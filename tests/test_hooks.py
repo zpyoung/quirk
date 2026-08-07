@@ -140,3 +140,37 @@ def test_hooks_json_structure() -> None:
     assert post["matcher"] == "Edit|Write"
     assert "lint_tics.sh" in post["hooks"][0]["command"]
     assert "${CLAUDE_PLUGIN_ROOT}" in post["hooks"][0]["command"]
+
+
+def test_load_tail_names_the_work_not_just_the_count(initialized_project: Path) -> None:
+    """A counts line alone tells a session nothing actionable; titles are the point."""
+    bugs = initialized_project / "BUGS.md"
+    bugs.write_text(bugs.read_text() + "\n## BUG-1: safari drops the session cookie\n- **Severity**: high\n")
+    r = run_hook("load_artifact_tail.sh", initialized_project)
+    assert r.returncode == 0
+    assert "BUGS 1/1 open" in r.stdout
+    assert "safari drops the session cookie" in r.stdout
+
+
+def test_load_tail_does_not_repeat_the_unplaced_summary(initialized_project: Path) -> None:
+    """--index and --next each end with it; emitting both would print it twice."""
+    bugs = initialized_project / "BUGS.md"
+    bugs.write_text(bugs.read_text() + "\n## BUG-1: alpha\n- **Severity**: high\n")
+    r = run_hook("load_artifact_tail.sh", initialized_project)
+    assert r.stdout.count("unplaced (") == 1
+
+
+def test_load_tail_still_falls_back_when_next_fails(initialized_project: Path, tmp_path: Path) -> None:
+    """The shortlist must not become a new way for session start to break."""
+    fake_plugin_root = tmp_path / "plugin"
+    (fake_plugin_root / "bin").mkdir(parents=True)
+    (fake_plugin_root / "bin" / "pm.py").write_text(
+        "import sys\n"
+        "if '--next' in sys.argv:\n"
+        "    sys.stderr.write('boom\\n'); sys.exit(1)\n"
+        "print('[quirk:pm] BUGS 1/1 open')\n"
+    )
+    r = run_hook("load_artifact_tail.sh", initialized_project, CLAUDE_PLUGIN_ROOT=str(fake_plugin_root))
+    assert r.returncode == 0
+    assert "BUGS 1/1 open" in r.stdout
+    assert "boom" not in r.stdout

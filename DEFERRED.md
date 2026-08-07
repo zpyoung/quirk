@@ -58,3 +58,10 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Priority**: P2
 - **Proposed owner**: unassigned
 
+## DEFER-6: pm.py ships only top-level flags, not the subcommands tech.md specifies
+- **Deferred**: 2026-08-07
+- **Session context**: Surfaced by a code review of the Phase 1 branch; no caller depends on the subcommand form today.
+- **Why deferred**: tech.md:617-625 specifies pm.py index / doctor / status / roadmap / migrate as subcommands, with --index and --doctor as equivalent top-level flags checked before subparser dispatch. Phase 1 implemented only the flags, so pm.py index exits 2. Deferred rather than fixed because the subcommand surface is mostly Phase 2 verbs (roadmap, migrate, status) and adding a parser for them now would front-run DEFER-3's rework of those spec sections.
+- **Estimated effort**: S
+- **Priority**: P3
+

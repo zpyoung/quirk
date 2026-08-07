@@ -106,3 +106,57 @@ def test_render_report_count_line_includes_malformed_alongside_well_formed(tmp_p
     assert "BUG-1 [high] alpha" in out
     assert "BUG-2" in out
     assert "no title" in out
+
+
+FENCED = (
+    "## BUG-1: quoting a ledger entry\n"
+    "- **Description**: the schema looks like this:\n"
+    "\n"
+    "```\n"
+    "## BUG-9: inside a fence\n"
+    "- **Severity**: critical\n"
+    "```\n"
+    "\n"
+    "- **Severity**: low\n"
+)
+
+
+def test_fenced_heading_is_not_an_entry() -> None:
+    result = artifact_lib.parse_entries(FENCED, "BUG")
+    assert [e.id for e in result.entries] == [1]
+    assert result.malformed == []
+
+
+def test_fenced_heading_does_not_split_the_entry_that_quotes_it() -> None:
+    """The real damage: the fence terminated BUG-1's block, orphaning its Severity."""
+    result = artifact_lib.parse_entries(FENCED, "BUG")
+    assert result.entries[0].fields["Severity"] == "low"
+
+
+def test_find_max_id_ignores_fenced_headings() -> None:
+    """A quoted ID must not push the next allocated ID past it."""
+    assert artifact_lib.find_max_id(FENCED, "BUG") == 1
+
+
+def test_tilde_fenced_heading_is_not_an_entry() -> None:
+    text = "## BUG-1: real\n~~~\n## BUG-9: tilde fence\n~~~\n- **Severity**: low\n"
+    result = artifact_lib.parse_entries(text, "BUG")
+    assert [e.id for e in result.entries] == [1]
+    assert result.entries[0].fields["Severity"] == "low"
+
+
+def test_commented_out_heading_is_not_an_entry() -> None:
+    """The artifact templates ship a schema block in an HTML comment."""
+    text = "<!--\n## BUG-9: schema example\n-->\n## BUG-1: real\n- **Severity**: low\n"
+    result = artifact_lib.parse_entries(text, "BUG")
+    assert [e.id for e in result.entries] == [1]
+    assert artifact_lib.find_max_id(text, "BUG") == 1
+
+
+def test_entry_offsets_still_index_the_original_text() -> None:
+    """Masking must preserve offsets: `start` and `raw` are used to slice the real file."""
+    result = artifact_lib.parse_entries(FENCED, "BUG")
+    entry = result.entries[0]
+    assert FENCED[entry.start:entry.start + len("## BUG-1:")] == "## BUG-1:"
+    assert entry.raw.startswith("## BUG-1: quoting")
+    assert "inside a fence" in entry.raw
