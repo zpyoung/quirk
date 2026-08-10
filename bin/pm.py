@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Subcommand CLI over typed-artifact markdown files: index/next/doctor/status/migrate,
-plus stubs for the Phase-3 lifecycle commands (start/finish/park/decide/reconcile/roadmap).
+"""Subcommand CLI over typed-artifact markdown files: index/next/doctor/status/migrate/roadmap,
+plus stubs for the Phase-3 lifecycle commands (start/finish/park/decide/reconcile).
 
-The read layer (index/next/doctor/status) predates the lifecycle schema: no Status field,
-no Blocked by, no ROADMAP.md membership feed into it, so every well-formed entry is open,
-nothing is blocked, and every open entry is unplaced. Lifecycle counts
-(in_progress/delivered/closed) and roadmap-derived findings are added by a later task.
+The read layer (index/next/doctor/status/roadmap) consumes `Status`, `Blocked by`, and
+`ROADMAP.md` membership to compute readiness (`ready`/`eligible`/`unplaced`) and to run
+cross-ledger doctor findings (`CYCLE`, `DANGLING`, `BLOCKED_BY_*`, roadmap findings). Lifecycle
+writers (start/finish/park/decide/reconcile) are added by a later task.
 """
 from __future__ import annotations
 
@@ -26,12 +26,16 @@ from typing import IO
 from artifact_lib import (
     Entry,
     MalformedHeading,
+    RoadmapParse,
     atomic_write,
     detect_schema_version,
     ensure_lock_dir,
     hash_file,
     hash_probe_spec,
     parse_entries,
+    parse_roadmap,
+    render_roadmap,
+    validate_roadmap_for_write,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -80,8 +84,7 @@ class ArtifactSpec:
 BACKLOG_FILES: list[ArtifactSpec] = [
     ArtifactSpec("BUGS.md", "BUG", "BUGS", "Severity", SEVERITY_URGENCY, "Observed"),
     ArtifactSpec("DEFERRED.md", "DEFER", "DEFERRED", "Priority", PRIORITY_URGENCY, "Deferred"),
-    # TEST entries carry no date field until the schema-v2 migration adds one.
-    ArtifactSpec("TEST_BACKLOG.md", "TEST", "TEST", "Priority", PRIORITY_URGENCY, None),
+    ArtifactSpec("TEST_BACKLOG.md", "TEST", "TEST", "Priority", PRIORITY_URGENCY, "Logged"),
 ]
 PROPOSALS = ArtifactSpec("proposals.md", "PROPOSAL", "PROPOSALS", None, None, "Proposed")
 ALL_SPECS = [*BACKLOG_FILES, PROPOSALS]
@@ -266,6 +269,8 @@ def render_index(project: Path) -> str:
         else:
             findings.extend(_doctor_findings(proposals_fp))
 
+    findings.extend(_cross_ledger_doctor_findings(project))
+
     unplaced_total = ready + malformed_total
     counts_line = "[quirk:pm] " + " · ".join(counts_segments)
     if counts_segments:
@@ -285,39 +290,40 @@ def render_next(project: Path) -> str:
     if not _any_artifact_file_exists(project):
         return NOT_INITIALIZED_MESSAGE
 
-    parse_error_lines: list[str] = []
-    candidates: list[tuple[int, str, int, str, Entry, ArtifactSpec]] = []
-    ready = 0
-    malformed_total = 0
+    world = _load_ledger_world(project)
+    roadmap = _read_roadmap(project)
+    ranks = _milestone_ranks(roadmap)
 
-    for spec in BACKLOG_FILES:
-        path = project / spec.filename
-        if not path.exists():
+    candidates: list[tuple[int, int, str, int, str, Entry, ArtifactSpec]] = []
+    for key, (entry, spec) in world.entries.items():
+        if not (_is_open(entry) and eligible(world, ranks, key)):
             continue
-        fp, skip_reason = _read_and_parse(project, spec)
-        if fp is None:
-            if skip_reason is not None:
-                parse_error_lines.append(f"[quirk:pm] {spec.filename}: {skip_reason}")
-            continue
-        ready += len(fp.entries)
-        malformed_total += len(fp.malformed)
-        for e in fp.entries:
-            candidates.append((_urgency(spec, e.fields), _age_sort_key(spec, e.fields), e.id, spec.header, e, spec))
-
-    candidates.sort(key=lambda c: (c[0], c[1], c[2], c[3]))
+        rank = ranks.get(key, -1)
+        urgency = _urgency(spec, entry.fields)
+        age = _age_sort_key(spec, entry.fields)
+        candidates.append((rank, urgency, age, entry.id, spec.header, entry, spec))
+    candidates.sort(key=lambda c: (c[0], c[1], c[2], c[3], c[4]))
     top = candidates[:NEXT_TOP_N]
 
-    lines = list(parse_error_lines)
+    lines = list(world.parse_errors)
     if top:
-        lines.append(f"[quirk:pm] next candidates ({len(top)} of {len(candidates)} ready):")
-        for urgency, _age, eid, header, e, spec in top:
+        lines.append(f"[quirk:pm] next candidates ({len(top)} of {len(candidates)} eligible):")
+        for _rank, _urgency_val, _age, eid, header, e, spec in top:
             rank_label = e.fields.get(spec.urgency_field) or "unranked"
             lines.append(f"  - {header}-{eid} [{rank_label}] {e.title} — {_display_age(spec, e.fields)}")
     else:
         lines.append("[quirk:pm] no ready candidates")
+        culprits = _blocking_culprits(world)
+        if culprits:
+            named = ", ".join(f"{blocker_id} (blocks {count})" for blocker_id, count in culprits)
+            lines.append(f"[quirk:pm] blocked by: {named}")
 
-    unplaced_total = ready + malformed_total
-    lines.append(f"[quirk:pm] {unplaced_total} unplaced ({ready} ready, 0 blocked, {malformed_total} malformed)")
+    ready_count, blocked_count, malformed_count = _unplaced_counts(world, ranks)
+    unplaced_total = ready_count + blocked_count + malformed_count
+    lines.append(
+        f"[quirk:pm] {unplaced_total} unplaced "
+        f"({ready_count} ready, {blocked_count} blocked, {malformed_count} malformed)"
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -340,6 +346,8 @@ def render_doctor(project: Path) -> str:
                 lines.append(f"[quirk:pm] {spec.filename}: {skip_reason}")
             continue
         findings.extend(_doctor_findings(fp))
+
+    findings.extend(_cross_ledger_doctor_findings(project))
 
     if not findings:
         lines.append("[quirk:pm] doctor: no findings")
@@ -576,6 +584,8 @@ class ProbeField:
     final: str | None = None
     spec_hash: str | None = None
     file_hash: str | None = None
+    final_spec_hash: str | None = None
+    final_file_hash: str | None = None
     skipped_files: int = 0
 
 
@@ -703,10 +713,11 @@ def _render_probe_hashes(spec_hash: str | None, file_hash: str | None) -> str:
 def render_probe(probe: ProbeField) -> str:
     """Render a `ProbeField` to its `Probe` field value (the text after `- **Probe**: `).
 
-    `parse_probe` is its exact inverse whenever a `ProbeField`'s baseline and final hashes
-    agree, which is every field a real `start`-then-`finish` sequence over an untouched
-    `Probe:` line produces — the grammar carries one hash pair's worth of state, re-displayed
-    at both occurrences once `final` is set, not two independently stored pairs.
+    `parse_probe` is its exact inverse. Baseline and final each carry their own hash pair —
+    `spec_hash`/`file_hash` for the baseline occurrence, `final_spec_hash`/`final_file_hash` for
+    the `final:` occurrence — so a hand-edit of the `Probe:` line between `start` and `finish`
+    changes only the pair that actually changed, instead of forcing both occurrences to agree by
+    construction.
     """
     if probe.verb == "none":
         return "none"
@@ -726,7 +737,7 @@ def render_probe(probe: ProbeField) -> str:
 
     if probe.final is not None:
         segments.append(f"final: {probe.final}")
-        segments.append(_render_probe_hashes(probe.spec_hash, probe.file_hash))
+        segments.append(_render_probe_hashes(probe.final_spec_hash, probe.final_file_hash))
 
     return DELIM.join(segments)
 
@@ -778,6 +789,7 @@ def parse_probe(line: str) -> ProbeField | MalformedField:
     i += 1
 
     final = None
+    final_spec_hash = final_file_hash = None
     if i < len(parts):
         m = _FINAL_RE.match(parts[i])
         if m is None:
@@ -793,7 +805,7 @@ def parse_probe(line: str) -> ProbeField | MalformedField:
         m = _HASHES_RE.match(parts[i]) if i < len(parts) else None
         if m is None:
             return MalformedField(raw=line, reason="hashes")
-        spec_hash, file_hash = m.group(1), m.group(2)
+        final_spec_hash, final_file_hash = m.group(1), m.group(2)
         i += 1
 
     if i != len(parts):
@@ -801,8 +813,374 @@ def parse_probe(line: str) -> ProbeField | MalformedField:
 
     return ProbeField(
         verb=verb, arg=arg, baseline=baseline, baseline_files=baseline_files,
-        final=final, spec_hash=spec_hash, file_hash=file_hash, skipped_files=skipped_files,
+        final=final, spec_hash=spec_hash, file_hash=file_hash,
+        final_spec_hash=final_spec_hash, final_file_hash=final_file_hash,
+        skipped_files=skipped_files,
     )
+
+
+# --- Blocked by: lexical rules -------------------------------------------
+#
+# docs/quirk/specs/2026-08-04-pm-agent/tech.md, §`Blocked by` lexical rules;
+# docs/quirk/specs/2026-08-04-pm-agent/logic.md, §Job 1 — roadmap and what's next.
+
+# [0-9], not \d: \d admits non-ASCII decimal digits that int() would fold onto the same
+# ASCII-spelled id; 0|[1-9][0-9]* also excludes leading zeros, so BUG-007 and BUG-7 stay two
+# spellings rather than being silently normalized to one.
+_BLOCKED_BY_ID_RE = re.compile(r"^(BUG|DEFER|TEST)-(0|[1-9][0-9]*)$")
+_BLOCKED_BY_ANY_HEADER_RE = re.compile(r"^([A-Z]+)-(0|[1-9][0-9]*)$")
+
+_SATISFIED_STATES = frozenset({"closed", "wontfix", "superseded"})
+
+
+@dataclass(frozen=True)
+class BlockedByToken:
+    raw: str
+    kind: str  # "id" | "proposal" | "malformed"
+    id: str | None = None
+
+
+@dataclass(frozen=True)
+class BlockedByField:
+    tokens: tuple[BlockedByToken, ...]
+    truncated: bool
+    duplicate_ids: tuple[str, ...]
+
+
+def parse_blocked_by(value: str) -> BlockedByField:
+    """Parse a `Blocked by` field's value into its tokens, total over all input.
+
+    A value whose last non-space character is a comma means `FIELD_RE`'s line-anchored match
+    silently dropped a wrapped continuation line — `truncated` records that so the caller can
+    fail closed on it, since the dropped text could have named anything.
+    """
+    stripped = value.strip()
+    if not stripped:
+        return BlockedByField(tokens=(), truncated=False, duplicate_ids=())
+
+    truncated = stripped.endswith(",")
+    body = stripped[:-1].strip() if truncated else stripped
+
+    tokens: list[BlockedByToken] = []
+    seen: set[str] = set()
+    dup_ids: list[str] = []
+    if body:
+        for raw in re.split(r"\s*,\s*", body):
+            m = _BLOCKED_BY_ID_RE.fullmatch(raw)
+            if m is not None:
+                entry_id = f"{m.group(1)}-{m.group(2)}"
+                if entry_id in seen and entry_id not in dup_ids:
+                    dup_ids.append(entry_id)
+                seen.add(entry_id)
+                tokens.append(BlockedByToken(raw=raw, kind="id", id=entry_id))
+                continue
+            header_m = _BLOCKED_BY_ANY_HEADER_RE.fullmatch(raw)
+            if header_m is not None and header_m.group(1) == "PROPOSAL":
+                tokens.append(BlockedByToken(raw=raw, kind="proposal"))
+                continue
+            tokens.append(BlockedByToken(raw=raw, kind="malformed"))
+
+    return BlockedByField(tokens=tuple(tokens), truncated=truncated, duplicate_ids=tuple(dup_ids))
+
+
+# --- readiness -------------------------------------------------------------
+#
+# docs/quirk/specs/2026-08-04-pm-agent/logic.md, §Job 1 — roadmap and what's next.
+
+
+@dataclass(frozen=True)
+class LedgerWorld:
+    """Every well-formed BUG/DEFER/TEST entry in the project, keyed `"HEADER-N"`.
+
+    Built fresh on every call — nothing here is cached across invocations, matching the design's
+    "every finding is computed fresh from the files on disk" observability contract.
+    """
+    entries: dict[str, tuple[Entry, ArtifactSpec]]
+    parse_errors: list[str]
+    malformed_total: int
+
+
+def _load_ledger_world(project: Path) -> LedgerWorld:
+    entries: dict[str, tuple[Entry, ArtifactSpec]] = {}
+    parse_errors: list[str] = []
+    malformed_total = 0
+    for spec in BACKLOG_FILES:
+        path = project / spec.filename
+        if not path.exists():
+            continue
+        fp, skip_reason = _read_and_parse(project, spec)
+        if fp is None:
+            if skip_reason is not None:
+                parse_errors.append(f"[quirk:pm] {spec.filename}: {skip_reason}")
+            continue
+        malformed_total += len(fp.malformed)
+        for e in fp.entries:
+            entries[f"{spec.header}-{e.id}"] = (e, spec)
+    return LedgerWorld(entries=entries, parse_errors=parse_errors, malformed_total=malformed_total)
+
+
+def _read_roadmap(project: Path) -> RoadmapParse:
+    """Return `project`'s parsed `ROADMAP.md`, or an empty roadmap if it is missing or unreadable.
+
+    A missing file is the ordinary starting state, not an error — every entry then sorts at
+    milestone rank -1, exactly as if `ROADMAP.md` existed with no milestones in it.
+    """
+    path = project / "ROADMAP.md"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return RoadmapParse(milestones=[], findings=[], preamble="")
+    return parse_roadmap(text)
+
+
+def _milestone_ranks(roadmap: RoadmapParse) -> dict[str, int]:
+    ranks: dict[str, int] = {}
+    for milestone in roadmap.milestones:
+        for member_id in milestone.members:
+            ranks.setdefault(member_id, milestone.rank)
+    return ranks
+
+
+def _entry_status(entry: Entry) -> StatusField | MalformedField:
+    raw = entry.fields.get("Status")
+    if raw is None:
+        return StatusField(state="open", date="")
+    return parse_status(raw)
+
+
+def _is_open(entry: Entry) -> bool:
+    status = _entry_status(entry)
+    return isinstance(status, StatusField) and status.state == "open"
+
+
+def _blocked_by(entry: Entry) -> BlockedByField:
+    raw = entry.fields.get("Blocked by")
+    if not raw:
+        return BlockedByField(tokens=(), truncated=False, duplicate_ids=())
+    return parse_blocked_by(raw)
+
+
+def satisfied(world: LedgerWorld, key: str) -> bool:
+    """Return whether `key` (e.g. `"BUG-3"`) is a satisfied blocker: it resolves to a known
+    entry whose status is `closed`, `wontfix`, or `superseded`.
+
+    Only those three terminal states satisfy — `in_progress`/`delivered` do not, so a blocker
+    merely being started or reported delivered never unblocks its dependents early.
+    """
+    target = world.entries.get(key)
+    if target is None:
+        return False
+    entry, _spec = target
+    status = _entry_status(entry)
+    return isinstance(status, StatusField) and status.state in _SATISFIED_STATES
+
+
+def ready(world: LedgerWorld, key: str) -> bool:
+    """Return whether the entry named `key` is open and every one of its blockers is satisfied.
+
+    Uses only `key`'s direct blockers — a satisfied blocker's own blockers never matter, so this
+    stays O(1) per entry with no graph walk. A truncated `Blocked by` value fails closed: the
+    dropped continuation could have named anything, so it blocks rather than being read as
+    satisfied by what little survived the parse.
+    """
+    target = world.entries.get(key)
+    if target is None:
+        return False
+    entry, _spec = target
+    if not _is_open(entry):
+        return False
+    blocked = _blocked_by(entry)
+    if blocked.truncated:
+        return False
+    for token in blocked.tokens:
+        if token.kind != "id" or not satisfied(world, token.id):
+            return False
+    return True
+
+
+def eligible(world: LedgerWorld, ranks: dict[str, int], key: str) -> bool:
+    entry, spec = world.entries[key]
+    if not ready(world, key):
+        return False
+    return key in ranks or _urgency(spec, entry.fields) <= 1
+
+
+def _entry_sort_key(key: str) -> tuple[str, int]:
+    header, _, num = key.partition("-")
+    return (header, int(num))
+
+
+def _unplaced_counts(world: LedgerWorld, ranks: dict[str, int]) -> tuple[int, int, int]:
+    """Return (ready, blocked, malformed) among open entries in no milestone.
+
+    Restricting the count to ready entries would leave blocked, unroadmapped, medium-urgency
+    work counted nowhere; malformed headings are counted regardless of milestone membership,
+    since a malformed heading has no readable ID to check membership against.
+    """
+    ready_count = blocked_count = 0
+    for key, (entry, _spec) in world.entries.items():
+        if key in ranks:
+            continue
+        if not _is_open(entry):
+            continue
+        if ready(world, key):
+            ready_count += 1
+        else:
+            blocked_count += 1
+    return ready_count, blocked_count, world.malformed_total
+
+
+def _blocking_culprits(world: LedgerWorld) -> list[tuple[str, int]]:
+    """Return `(blocker_id, how_many_open_entries_it_blocks)`, most-blocking first.
+
+    Used to explain an empty ready-set: only named, resolvable IDs are counted, since those are
+    the ones a human can act on to unblock the most work.
+    """
+    counts: dict[str, int] = {}
+    for _key, (entry, _spec) in world.entries.items():
+        if not _is_open(entry):
+            continue
+        blocked = _blocked_by(entry)
+        if blocked.truncated:
+            continue
+        for token in blocked.tokens:
+            if token.kind == "id" and not satisfied(world, token.id):
+                counts[token.id] = counts.get(token.id, 0) + 1
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+# --- doctor: cross-ledger findings ------------------------------------------
+
+
+def _blocked_by_doctor_findings(world: LedgerWorld) -> list[tuple[str, str]]:
+    findings: list[tuple[str, str]] = []
+    for key in sorted(world.entries, key=_entry_sort_key):
+        entry, _spec = world.entries[key]
+        blocked = _blocked_by(entry)
+        if blocked.truncated:
+            findings.append((
+                "BLOCKED_BY_TRUNCATED",
+                f"{key}: Blocked by value ends with a trailing comma — a wrapped continuation "
+                "may have been dropped",
+            ))
+        for token in blocked.tokens:
+            if token.kind == "malformed":
+                findings.append(("DANGLING", f"{key}: malformed token {token.raw!r}"))
+            elif token.kind == "proposal":
+                findings.append(("BLOCKED_BY_PROPOSAL", f"{key}: references {token.raw}"))
+            elif token.id not in world.entries:
+                findings.append(("DANGLING", f"{key}: references unknown {token.id}"))
+        for dup_id in blocked.duplicate_ids:
+            findings.append(("BLOCKED_BY_DUPLICATE", f"{key}: {dup_id} listed more than once"))
+    return findings
+
+
+def _blocked_by_edges(world: LedgerWorld) -> dict[str, list[str]]:
+    return {
+        key: [t.id for t in _blocked_by(entry).tokens if t.kind == "id"]
+        for key, (entry, _spec) in world.entries.items()
+    }
+
+
+def _find_cycles(edges: dict[str, list[str]]) -> list[tuple[str, ...]]:
+    """Return every cycle in `edges`, each reported once regardless of which member it is
+    discovered from (deduped by rotation).
+
+    Iterative DFS with an explicit frame stack and a recursion-stack color set — never recursive
+    — so a large or adversarially deep graph terminates in bounded, linear time instead of
+    risking a stack overflow or an accidentally-quadratic reimplementation.
+    """
+    color: dict[str, int] = {}  # 0 unvisited (default), 1 on stack, 2 done
+    found: list[tuple[str, ...]] = []
+    seen_rotations: set[tuple[str, ...]] = set()
+
+    def normalize(cycle: list[str]) -> tuple[str, ...]:
+        start = min(range(len(cycle)), key=lambda i: cycle[i])
+        return tuple(cycle[start:] + cycle[:start])
+
+    for root in sorted(edges):
+        if color.get(root, 0) != 0:
+            continue
+        path = [root]
+        color[root] = 1
+        frames = [(root, 0)]
+        while frames:
+            node, idx = frames[-1]
+            neighbors = edges.get(node, [])
+            if idx < len(neighbors):
+                frames[-1] = (node, idx + 1)
+                nxt = neighbors[idx]
+                state = color.get(nxt, 0)
+                if state == 1:
+                    cyc = normalize(path[path.index(nxt):])
+                    if cyc not in seen_rotations:
+                        seen_rotations.add(cyc)
+                        found.append(cyc)
+                elif state == 0:
+                    color[nxt] = 1
+                    path.append(nxt)
+                    frames.append((nxt, 0))
+            else:
+                color[node] = 2
+                path.pop()
+                frames.pop()
+    return found
+
+
+def _cycle_doctor_findings(world: LedgerWorld) -> list[tuple[str, str]]:
+    cycles = _find_cycles(_blocked_by_edges(world))
+    return [("CYCLE", " -> ".join((*cyc, cyc[0]))) for cyc in cycles]
+
+
+def _roadmap_doctor_findings(project: Path, known_ids: set[str]) -> list[tuple[str, str]]:
+    roadmap = _read_roadmap(project)
+    findings = list(roadmap.findings)
+    referenced = {member_id for milestone in roadmap.milestones for member_id in milestone.members}
+    findings.extend(("DANGLING_ROADMAP_REF", member_id) for member_id in sorted(referenced - known_ids))
+    return findings
+
+
+def _cross_ledger_doctor_findings(project: Path) -> list[tuple[str, str]]:
+    world = _load_ledger_world(project)
+    findings = _blocked_by_doctor_findings(world)
+    findings.extend(_cycle_doctor_findings(world))
+    findings.extend(_roadmap_doctor_findings(project, set(world.entries)))
+    return findings
+
+
+# --- roadmap ---------------------------------------------------------------
+
+
+def render_roadmap_show(project: Path) -> str:
+    if not _any_artifact_file_exists(project):
+        return NOT_INITIALIZED_MESSAGE
+
+    roadmap = _read_roadmap(project)
+    world = _load_ledger_world(project)
+    ranks = _milestone_ranks(roadmap)
+
+    lines: list[str] = []
+    if roadmap.milestones:
+        for milestone in roadmap.milestones:
+            lines.append(f"[quirk:pm] Milestone: {milestone.name}")
+            for member_id in milestone.members:
+                lines.append(f"  - {member_id}")
+    else:
+        lines.append("[quirk:pm] no milestones")
+
+    ready_keys = sorted((key for key in world.entries if ready(world, key)), key=_entry_sort_key)
+    if ready_keys:
+        lines.append(f"[quirk:pm] {len(ready_keys)} ready: {', '.join(ready_keys)}")
+    else:
+        lines.append("[quirk:pm] 0 ready")
+
+    ready_count, blocked_count, malformed_count = _unplaced_counts(world, ranks)
+    unplaced_total = ready_count + blocked_count + malformed_count
+    lines.append(
+        f"[quirk:pm] {unplaced_total} unplaced "
+        f"({ready_count} ready, {blocked_count} blocked, {malformed_count} malformed)"
+    )
+    return "\n".join(lines) + "\n"
 
 
 # --- not-yet-implemented lifecycle commands -----------------------------
@@ -834,7 +1212,45 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
 
 
 def cmd_roadmap(args: argparse.Namespace) -> int:
-    return _not_implemented("roadmap")
+    project = Path(args.project_dir).resolve()
+
+    if args.show:
+        sys.stdout.write(render_roadmap_show(project))
+        return EXIT_OK
+
+    if not project.exists() or not project.is_dir():
+        print(f"Project dir not found: {project}", file=sys.stderr)
+        return EXIT_PROJECT_DIR_NOT_FOUND
+
+    write_path = Path(args.write)
+    try:
+        text = write_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"[quirk:pm] cannot read {args.write}: {exc}", file=sys.stderr)
+        return EXIT_NOT_FOUND
+
+    parse = parse_roadmap(text)
+    known_ids = set(_load_ledger_world(project).entries)
+    findings = validate_roadmap_for_write(parse, known_ids)
+    if findings:
+        for code, detail in findings:
+            print(f"[quirk:pm] {code}: {detail}", file=sys.stderr)
+        return EXIT_BAD_ARGUMENT
+
+    lock_dir = ensure_lock_dir(project)
+    timeout = float(os.environ.get("ARTIFACT_LOCK_TIMEOUT", "5.0"))
+    deadline = time.monotonic() + timeout
+    lock_file = _acquire_ledger_lock(lock_dir / "ROADMAP.md.lock", deadline)
+    if lock_file is None:
+        print("[quirk:pm] could not acquire lock on ROADMAP.md, nothing written", file=sys.stderr)
+        return EXIT_LOCK_TIMEOUT
+    try:
+        atomic_write(project / "ROADMAP.md", render_roadmap(parse))
+    finally:
+        lock_file.close()
+
+    print(f"[quirk:pm] ROADMAP.md written from {args.write}")
+    return EXIT_OK
 
 
 # --- CLI dispatch --------------------------------------------------------

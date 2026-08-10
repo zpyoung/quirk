@@ -134,6 +134,12 @@ def test_next_sorts_by_urgency_then_age(initialized_project: Path) -> None:
     append_bug(bugs, 2, "critical new", severity="critical", observed="2026-08-01")
     defers = initialized_project / "DEFERRED.md"
     append_defer(defers, 1, "high pri", priority="P2", deferred="2026-08-01")
+    # BUG-1 needs a milestone to be eligible at all: low urgency in no milestone is
+    # deliberately absent from the shortlist. Placing it also pins the escape hatch —
+    # the two unroadmapped entries rank -1 and must still sort ahead of it.
+    (initialized_project / "ROADMAP.md").write_text(
+        "# ROADMAP\n\n## Milestone: Cleanup\n- BUG-1\n", encoding="utf-8"
+    )
     result = run_script("pm.py", "--next", cwd=initialized_project)
     assert result.returncode == 0, result.stderr
     out = result.stdout

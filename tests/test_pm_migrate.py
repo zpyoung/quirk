@@ -328,7 +328,6 @@ def test_migrate_lock_timeout_on_a_later_ledger_writes_nothing_at_all(
         ["park", "BUG-1", "--reason", "waiting on upstream"],
         ["decide", "BUG-1", "--as", "wontfix", "--reason", "not worth it"],
         ["reconcile"],
-        ["roadmap", "--show"],
     ],
 )
 def test_unimplemented_subcommands_exit_two_and_say_so(
