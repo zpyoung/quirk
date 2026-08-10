@@ -1,23 +1,54 @@
 #!/usr/bin/env python3
-"""Read-only view over typed-artifact markdown files: --index, --next, --doctor.
+"""Subcommand CLI over typed-artifact markdown files: index/next/doctor/status/migrate,
+plus stubs for the Phase-3 lifecycle commands (start/finish/park/decide/reconcile/roadmap).
 
-Phase 1: no Status field, no Blocked by, no ROADMAP.md exist yet anywhere in
-the schema, so every well-formed entry is open, nothing is blocked, and every
-open entry is unplaced. Lifecycle counts (in_progress/delivered/closed) and
-roadmap-derived findings are Phase-2+ and never appear here.
+The read layer (index/next/doctor/status) predates the lifecycle schema: no Status field,
+no Blocked by, no ROADMAP.md membership feed into it, so every well-formed entry is open,
+nothing is blocked, and every open entry is unplaced. Lifecycle counts
+(in_progress/delivered/closed) and roadmap-derived findings are added by a later task.
 """
 from __future__ import annotations
 
 import argparse
 import codecs
+import fcntl
 import locale
 import os
+import re
+import shutil
 import stat
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from artifact_lib import Entry, MalformedHeading, parse_entries
+from artifact_lib import (
+    Entry,
+    MalformedHeading,
+    atomic_write,
+    detect_schema_version,
+    ensure_lock_dir,
+    parse_entries,
+)
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+TEMPLATES_DIR = REPO_ROOT / "templates"
+
+# bin/artifact_append.py's scheme (2/3/5/8), extended per docs/quirk/specs/2026-08-04-pm-agent/
+# tech.md's Exit codes table. Shared here so every later pm.py subcommand reuses one table
+# instead of re-deriving its own numbering.
+EXIT_OK = 0
+EXIT_UNEXPECTED_ERROR = 1
+EXIT_BAD_ARGUMENT = 2
+EXIT_NOT_FOUND = 3
+EXIT_CORRUPT_ENTRY = 4
+EXIT_LOCK_TIMEOUT = 5
+EXIT_CAS_FAILURE = 6
+EXIT_PROJECT_DIR_NOT_FOUND = 7
+EXIT_SCHEMA_MISMATCH = 8
+EXIT_PROBE_REFUSED = 9
+EXIT_FINISH_PRECONDITION_FAILED = 10
+EXIT_ADAPTER_FAILURE = 11
 
 SEVERITY_URGENCY = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 PRIORITY_URGENCY = {"p1": 0, "p2": 1, "p3": 2, "p4": 3}
@@ -51,6 +82,7 @@ BACKLOG_FILES: list[ArtifactSpec] = [
 ]
 PROPOSALS = ArtifactSpec("proposals.md", "PROPOSAL", "PROPOSALS", None, None, "Proposed")
 ALL_SPECS = [*BACKLOG_FILES, PROPOSALS]
+LEDGER_FILES: list[str] = [spec.filename for spec in ALL_SPECS]
 
 NOT_INITIALIZED_MESSAGE = (
     "[quirk:pm] No artifact files found. Run /quirk:artifacts:init to scaffold.\n"
@@ -314,23 +346,276 @@ def render_doctor(project: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Read-only view of typed-artifact entries.")
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--index", action="store_true", help="Bounded summary of backlog state")
-    group.add_argument("--next", action="store_true", help="Top-5 shortlist of ready work")
-    group.add_argument("--doctor", action="store_true", help="Structural findings across artifact files")
+# --- migrate -----------------------------------------------------------
+
+# matches an optional legacy `<!-- schema-version: N -->` line followed by the mandatory
+# `<!-- ... SCHEMA ... -->` comment, both anchored to the file's first byte — every ledger
+# this plugin ships (templates and every fixture) puts the schema comment first
+_LEGACY_PREAMBLE_RE = re.compile(
+    r"\A(?:<!--\s*schema-version:\s*\d+\s*-->\n)?(<!--.*?-->\n?)", re.DOTALL
+)
+
+
+def _v2_schema_block(filename: str) -> str:
+    """Return `templates/{filename}`'s leading version marker + schema-comment block.
+
+    Sourced from the template rather than duplicated as a string literal, so the template
+    stays the single definition of the v2 comment text and a future edit to it can't drift
+    out of sync with what `migrate` writes.
+    """
+    template_text = (TEMPLATES_DIR / filename).read_text()
+    m = _LEGACY_PREAMBLE_RE.match(template_text)
+    if m is None:
+        raise RuntimeError(f"templates/{filename} has no leading schema-comment block")
+    return template_text[:m.end()]
+
+
+def _migrate_ledger_text(text: str, filename: str) -> str:
+    """Return `text` with its schema-comment block replaced by the v2 one, entries untouched."""
+    v2_block = _v2_schema_block(filename)
+    m = _LEGACY_PREAMBLE_RE.match(text)
+    if m is None:
+        return v2_block + text
+    return v2_block + text[m.end():]
+
+
+def _migrate_one_ledger(project: Path, filename: str) -> tuple[str, str]:
+    """Migrate one ledger file to schema v2 under its own lock.
+
+    Mirrors the lock/read/decide/write shape `artifact_append.py:142-184` uses for the same
+    lock file (`.quirk/locks/{filename}.lock`), so `migrate` serializes against a concurrent
+    `/quirk:artifacts:*` append rather than opening a second lock namespace. Returns
+    `(outcome, message)`; `outcome` is one of `"already_v2"` / `"migrated"` / `"too_new"` /
+    `"lock_timeout"`, folded by the caller into `migrate`'s per-file report and aggregate
+    exit code. Any exception other than the lock timeout propagates to the caller uncaught,
+    so an unexpected failure aborts the run rather than being silently absorbed per-file.
+    """
+    lock_path = ensure_lock_dir(project) / f"{filename}.lock"
+    timeout = float(os.environ.get("ARTIFACT_LOCK_TIMEOUT", "5.0"))
+    deadline = time.monotonic() + timeout
+    with open(lock_path, "w") as lock_file:
+        while True:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    return "lock_timeout", f"{filename}: could not acquire lock, skipped"
+                time.sleep(0.05)
+
+        target = project / filename
+        text = target.read_text()
+        version = detect_schema_version(text)
+        if version == 2:
+            return "already_v2", f"{filename}: already v2"
+        if version is not None and version > 2:
+            return (
+                "too_new",
+                f"{filename}: schema v{version} file, plugin understands v2. Upgrade quirk.",
+            )
+
+        atomic_write(target, _migrate_ledger_text(text, filename))
+        return "migrated", f"{filename}: migrated to v2"
+
+
+def cmd_migrate(args: argparse.Namespace) -> int:
+    project = Path(args.project_dir).resolve()
+    if not project.exists() or not project.is_dir():
+        print(f"Project dir not found: {project}", file=sys.stderr)
+        return EXIT_PROJECT_DIR_NOT_FOUND
+
+    missing = [name for name in LEDGER_FILES if not (project / name).exists()]
+    if missing:
+        print(
+            f"{', '.join(missing)} not found in {project}. Run /quirk:artifacts:init first.",
+            file=sys.stderr,
+        )
+        return EXIT_NOT_FOUND
+
+    saw_too_new = False
+    saw_lock_timeout = False
+    for filename in LEDGER_FILES:
+        outcome, message = _migrate_one_ledger(project, filename)
+        print(f"[quirk:pm] {message}")
+        saw_too_new = saw_too_new or outcome == "too_new"
+        saw_lock_timeout = saw_lock_timeout or outcome == "lock_timeout"
+
+    roadmap_path = project / "ROADMAP.md"
+    if roadmap_path.exists():
+        print("[quirk:pm] ROADMAP.md: already exists")
+    else:
+        shutil.copy(TEMPLATES_DIR / "ROADMAP.md", roadmap_path)
+        print("[quirk:pm] ROADMAP.md: created")
+
+    if saw_too_new:
+        return EXIT_SCHEMA_MISMATCH
+    if saw_lock_timeout:
+        return EXIT_LOCK_TIMEOUT
+    return EXIT_OK
+
+
+# --- read-command handlers ---------------------------------------------
+
+
+def cmd_index(args: argparse.Namespace) -> int:
+    sys.stdout.write(render_index(Path(args.project_dir).resolve()))
+    return EXIT_OK
+
+
+def cmd_next(args: argparse.Namespace) -> int:
+    sys.stdout.write(render_next(Path(args.project_dir).resolve()))
+    return EXIT_OK
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    sys.stdout.write(render_doctor(Path(args.project_dir).resolve()))
+    return EXIT_OK
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    project = Path(args.project_dir).resolve()
+    sys.stdout.write(render_index(project) + render_doctor(project))
+    return EXIT_OK
+
+
+# --- not-yet-implemented lifecycle commands -----------------------------
+
+
+def _not_implemented(name: str) -> int:
+    print(f"pm.py {name}: not implemented yet", file=sys.stderr)
+    return EXIT_BAD_ARGUMENT
+
+
+def cmd_start(args: argparse.Namespace) -> int:
+    return _not_implemented("start")
+
+
+def cmd_finish(args: argparse.Namespace) -> int:
+    return _not_implemented("finish")
+
+
+def cmd_park(args: argparse.Namespace) -> int:
+    return _not_implemented("park")
+
+
+def cmd_decide(args: argparse.Namespace) -> int:
+    return _not_implemented("decide")
+
+
+def cmd_reconcile(args: argparse.Namespace) -> int:
+    return _not_implemented("reconcile")
+
+
+def cmd_roadmap(args: argparse.Namespace) -> int:
+    return _not_implemented("roadmap")
+
+
+# --- CLI dispatch --------------------------------------------------------
+
+
+def _add_project_dir(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--project-dir", default=".", help="Project root containing artifact files")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="pm.py — typed-artifact lifecycle manager.")
+    # --index/--next/--doctor predate the subcommand surface: hooks/load_artifact_tail.sh
+    # (a later task's file) still invokes `pm.py --next`, and tests/test_pm_index_doctor.py
+    # pins all three bare flags, so they stay live as top-level options rather than being
+    # retired in favor of the equivalent subcommands.
+    parser.add_argument("--index", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--next", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--doctor", action="store_true", help=argparse.SUPPRESS)
+    _add_project_dir(parser)
+
+    subparsers = parser.add_subparsers(dest="command")
+
+    p_next = subparsers.add_parser("next", help="Top-5 shortlist of ready work")
+    _add_project_dir(p_next)
+    p_next.set_defaults(func=cmd_next)
+
+    p_start = subparsers.add_parser("start", help="Start work on an entry (not yet implemented)")
+    p_start.add_argument("id")
+    p_start.add_argument("--probe", required=True, metavar="VERB:ARG")
+    p_start.add_argument("--repo", metavar="SEL")
+    p_start.add_argument("--here", action="store_true")
+    _add_project_dir(p_start)
+    p_start.set_defaults(func=cmd_start)
+
+    p_finish = subparsers.add_parser("finish", help="Finish work on an entry (not yet implemented)")
+    p_finish.add_argument("id")
+    _add_project_dir(p_finish)
+    p_finish.set_defaults(func=cmd_finish)
+
+    p_park = subparsers.add_parser("park", help="Park an in-progress entry (not yet implemented)")
+    p_park.add_argument("id")
+    p_park.add_argument("--reason", required=True, metavar="TEXT")
+    _add_project_dir(p_park)
+    p_park.set_defaults(func=cmd_park)
+
+    p_decide = subparsers.add_parser("decide", help="Decide an entry's fate (not yet implemented)")
+    p_decide.add_argument("id")
+    p_decide.add_argument("--as", dest="as_", required=True, choices=["wontfix", "superseded"])
+    p_decide.add_argument("--reason", required=True, metavar="TEXT")
+    p_decide.add_argument("--by", metavar="ID")
+    _add_project_dir(p_decide)
+    p_decide.set_defaults(func=cmd_decide)
+
+    p_reconcile = subparsers.add_parser("reconcile", help="Reconcile delivered entries (not yet implemented)")
+    p_reconcile.add_argument("--verify", action="store_true")
+    _add_project_dir(p_reconcile)
+    p_reconcile.set_defaults(func=cmd_reconcile)
+
+    p_roadmap = subparsers.add_parser("roadmap", help="Show or write ROADMAP.md (not yet implemented)")
+    roadmap_group = p_roadmap.add_mutually_exclusive_group(required=True)
+    roadmap_group.add_argument("--show", action="store_true")
+    roadmap_group.add_argument("--write", metavar="PATH")
+    _add_project_dir(p_roadmap)
+    p_roadmap.set_defaults(func=cmd_roadmap)
+
+    p_status = subparsers.add_parser("status", help="Index output followed by doctor output")
+    _add_project_dir(p_status)
+    p_status.set_defaults(func=cmd_status)
+
+    p_index = subparsers.add_parser("index", help="Bounded summary of backlog state")
+    _add_project_dir(p_index)
+    p_index.set_defaults(func=cmd_index)
+
+    p_doctor = subparsers.add_parser("doctor", help="Structural findings across artifact files")
+    _add_project_dir(p_doctor)
+    p_doctor.set_defaults(func=cmd_doctor)
+
+    p_migrate = subparsers.add_parser("migrate", help="Migrate ledger files to schema v2")
+    _add_project_dir(p_migrate)
+    p_migrate.set_defaults(func=cmd_migrate)
+
+    return parser
+
+
+def _dispatch(argv: list[str] | None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
 
-    project = Path(args.project_dir).resolve()
+    # checked ahead of subparser dispatch — see build_parser's --index/--next/--doctor comment
     if args.index:
-        sys.stdout.write(render_index(project))
-    elif args.next:
-        sys.stdout.write(render_next(project))
-    elif args.doctor:
-        sys.stdout.write(render_doctor(project))
-    return 0
+        return cmd_index(args)
+    if args.next:
+        return cmd_next(args)
+    if args.doctor:
+        return cmd_doctor(args)
+
+    if args.command is None:
+        parser.print_usage(sys.stderr)
+        return EXIT_BAD_ARGUMENT
+    return args.func(args)
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        return _dispatch(argv)
+    except Exception as exc:
+        print(f"[quirk:pm] unexpected error: {exc}", file=sys.stderr)
+        return EXIT_UNEXPECTED_ERROR
 
 
 if __name__ == "__main__":
