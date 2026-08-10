@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 import pm
 
-from .conftest import TEMPLATES_DIR, run_pm
+from .conftest import BIN_DIR, TEMPLATES_DIR, run_pm
 
 V1_BUGS = """<!-- schema-version: 1 -->
 <!-- BUGS.md SCHEMA (append only — do not rewrite existing entries)
@@ -190,6 +194,50 @@ def test_migrate_test_backlog_adds_logged_without_touching_existing_entries(
     assert "- **Logged**: [date, auto-stamped like Observed/Deferred/Proposed on every other type]" in after_text
 
 
+# --- CRLF ledgers round-trip byte-for-byte -----------------------------------
+
+
+def test_migrate_ledger_text_preserves_crlf_in_the_entry_body() -> None:
+    raw = (
+        b"<!-- schema-version: 1 -->\r\n"
+        b"<!-- old SCHEMA -->\r\n"
+        b"\r\n# BUGS\r\n\r\n"
+        b"## BUG-1: title\r\n"
+        b"- **Description**: body\r\n"
+    )
+    text = raw.decode()  # only \n and \r\n present, so a plain decode leaves both intact
+    out = pm._migrate_ledger_text(text, "BUGS.md")
+
+    before = raw.split(b"## BUG-1:", 1)[1]
+    after = out.encode().split(b"## BUG-1:", 1)[1]
+    assert after == before
+
+
+def test_migrate_preserves_crlf_line_endings_through_the_full_command(
+    legacy_project: Path,
+) -> None:
+    """`migrate`'s contract is that it touches no entry body — universal-newline translation on
+    read would silently flatten every CRLF in the file to LF, which is exactly such a touch.
+    """
+    raw = (
+        b"<!-- schema-version: 1 -->\r\n"
+        b"<!-- old SCHEMA -->\r\n"
+        b"\r\n# BUGS\r\n\r\n"
+        b"## BUG-1: title\r\n"
+        b"- **Description**: body\r\n"
+    )
+    bugs = legacy_project / "BUGS.md"
+    bugs.write_bytes(raw)
+
+    result = run_pm("migrate", cwd=legacy_project)
+    assert result.returncode == 0, result.stderr
+
+    before_body = raw.split(b"## BUG-1:", 1)[1]
+    after_body = bugs.read_bytes().split(b"## BUG-1:", 1)[1]
+    assert after_body == before_body
+    assert pm.detect_schema_version(bugs.read_text()) == 2
+
+
 # --- ROADMAP.md create-or-skip --------------------------------------------
 
 
@@ -237,6 +285,36 @@ def test_migrate_exits_7_when_the_project_dir_is_missing(project_dir: Path) -> N
     result = run_pm("migrate", "--project-dir", str(missing), cwd=project_dir)
 
     assert result.returncode == pm.EXIT_PROJECT_DIR_NOT_FOUND
+
+
+# --- lock timeout: exit 5 means nothing was written -------------------------
+
+
+def test_migrate_lock_timeout_on_a_later_ledger_writes_nothing_at_all(
+    legacy_project: Path,
+) -> None:
+    """A timeout acquiring any one ledger's lock must not leave earlier ledgers already
+    migrated — exit 5's contract is that migrate wrote nothing, not that it wrote some.
+    """
+    before = {name: (legacy_project / name).read_bytes() for name in pm.LEDGER_FILES}
+    lock_path = legacy_project / ".quirk" / "locks" / "TEST_BACKLOG.md.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(lock_path, "w") as held:
+        fcntl.flock(held.fileno(), fcntl.LOCK_EX)
+        env = {**os.environ, "ARTIFACT_LOCK_TIMEOUT": "0.3"}
+        result = subprocess.run(
+            [sys.executable, str(BIN_DIR / "pm.py"), "migrate", "--project-dir", str(legacy_project)],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+    assert result.returncode == pm.EXIT_LOCK_TIMEOUT
+    assert "lock" in result.stderr.lower()
+    for name in pm.LEDGER_FILES:
+        assert (legacy_project / name).read_bytes() == before[name], name
+    assert not (legacy_project / "ROADMAP.md").exists()
 
 
 # --- CLI surface: every subcommand registered ------------------------------
@@ -297,3 +375,88 @@ def test_status_equals_index_output_followed_by_doctor_output(initialized_projec
 
     assert status_result.returncode == 0
     assert status_result.stdout == index_result.stdout + doctor_result.stdout
+
+
+# --- --project-dir: same effect before or after the subcommand --------------
+
+
+def _make_populated_project(root: Path) -> Path:
+    root.mkdir()
+    for name in pm.LEDGER_FILES:
+        shutil.copy(TEMPLATES_DIR / name, root / name)
+    return root
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [["--project-dir", "{target}", "migrate"], ["migrate", "--project-dir", "{target}"]],
+    ids=["before-subcommand", "after-subcommand"],
+)
+def test_project_dir_reaches_migrate_regardless_of_position(
+    project_dir: Path, argv: list[str]
+) -> None:
+    """A `--project-dir` naming a path that doesn't exist must be the path `migrate` checks,
+    not silently discarded in favor of the current directory (which does exist) — see the
+    subparser-default-clobbers-the-outer-namespace mechanism the fix addresses.
+    """
+    missing = project_dir / "does-not-exist"
+    resolved_argv = [a.format(target=str(missing)) for a in argv]
+
+    result = run_pm(*resolved_argv, cwd=project_dir)
+
+    assert result.returncode == pm.EXIT_PROJECT_DIR_NOT_FOUND
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [["--project-dir", "{target}", "--index"], ["--index", "--project-dir", "{target}"]],
+    ids=["before-flag", "after-flag"],
+)
+def test_project_dir_reaches_bare_index_flag_regardless_of_position(
+    tmp_path: Path, argv: list[str]
+) -> None:
+    target = _make_populated_project(tmp_path / "target")
+    empty_cwd = tmp_path / "empty"
+    empty_cwd.mkdir()
+    resolved_argv = [a.format(target=str(target)) for a in argv]
+
+    result = run_pm(*resolved_argv, cwd=empty_cwd)
+
+    assert result.returncode == 0
+    assert result.stdout == pm.render_index(target)
+
+
+
+def _latin1_env() -> dict[str, str] | None:
+    """An env whose preferred encoding is latin-1, or None if this host cannot produce one."""
+    env = dict(os.environ)
+    env.update(LC_ALL="en_US.ISO8859-1", LANG="en_US.ISO8859-1", PYTHONUTF8="0")
+    probe = subprocess.run(
+        [sys.executable, "-c", "import locale; print(locale.getpreferredencoding(False))"],
+        env=env, capture_output=True, text=True,
+    )
+    return env if "8859" in probe.stdout else None
+
+
+def test_migrate_preserves_non_ascii_entry_bodies(pm_project: Path) -> None:
+    """migrate's read encoding must match atomic_write's, or non-ASCII bodies transcode.
+
+    Forced to a latin-1 locale because the defect is invisible on a utf-8 host: there the two
+    encodings agree and the assertion holds whether or not the read is pinned.
+    """
+    env = _latin1_env()
+    if env is None:
+        pytest.skip("host cannot produce a non-utf-8 preferred encoding")
+
+    bugs = pm_project / "BUGS.md"
+    text = bugs.read_text(encoding="utf-8").replace("schema-version: 2", "schema-version: 1")
+    entry = "\n## BUG-1: em\u2014dash and \u00fcnicode\n- **Description**: na\u00efve caf\u00e9\n"
+    bugs.write_text(text + entry, encoding="utf-8")
+    before = bugs.read_bytes().split(b"## BUG-1:", 1)[1]
+
+    result = subprocess.run(
+        [sys.executable, str(BIN_DIR / "pm.py"), "migrate"],
+        cwd=pm_project, env=env, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert bugs.read_bytes().split(b"## BUG-1:", 1)[1] == before
