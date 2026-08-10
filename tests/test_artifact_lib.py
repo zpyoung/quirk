@@ -569,6 +569,23 @@ def test_parse_roadmap_never_raises_on_arbitrary_text() -> None:
         assert isinstance(result, artifact_lib.RoadmapParse)
 
 
+# splitlines() treats each of these as a line terminator too, unlike \r\n/\r/\n; masking a
+# comment blanks the character but the raw/masked line counts must still agree either way
+@pytest.mark.parametrize(
+    "separator", ["\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"]
+)
+def test_parse_roadmap_never_raises_on_a_line_separator_inside_a_comment(separator: str) -> None:
+    text = f"<!-- comment with a separator{separator}inside -->\n## Milestone: X\n"
+    result = artifact_lib.parse_roadmap(text)
+    assert isinstance(result, artifact_lib.RoadmapParse)
+
+
+def test_parse_roadmap_never_raises_on_cr_only_input_with_a_multiline_comment() -> None:
+    text = "<!-- line one\rline two -->\r## Milestone: X\r- BUG-1\r"
+    result = artifact_lib.parse_roadmap(text)
+    assert isinstance(result, artifact_lib.RoadmapParse)
+
+
 def test_parse_roadmap_with_no_milestones_treats_whole_file_as_preamble() -> None:
     text = "# ROADMAP\n\nNo milestones yet.\n"
     result = artifact_lib.parse_roadmap(text)
@@ -624,6 +641,21 @@ def test_round_trip_preserves_comments_and_blank_lines_between_milestones_and_me
     )
     result = artifact_lib.parse_roadmap(text)
     assert result.findings == []
+    assert artifact_lib.render_roadmap(result) == text
+
+
+def test_round_trip_preserves_crlf_line_endings() -> None:
+    text = "## Milestone: Alpha\r\n- BUG-1\r\n\r\n## Milestone: Beta\r\n- BUG-2\r\n"
+    result = artifact_lib.parse_roadmap(text)
+    assert result.findings == []
+    assert artifact_lib.render_roadmap(result) == text
+
+
+def test_round_trip_preserves_a_final_milestone_heading_with_no_trailing_newline() -> None:
+    text = "## Milestone: Alpha\n- BUG-1\n\n## Milestone: Beta"
+    result = artifact_lib.parse_roadmap(text)
+    assert result.findings == []
+    assert result.milestones[-1].members == []
     assert artifact_lib.render_roadmap(result) == text
 
 
@@ -721,6 +753,25 @@ def test_prose_note_in_preamble_survives_byte_for_byte() -> None:
     result = artifact_lib.parse_roadmap(text)
     assert result.preamble == "A hand-written note above the milestones.\n\n"
     assert artifact_lib.render_roadmap(result).startswith(result.preamble)
+
+
+def test_fenced_content_under_a_milestone_is_malformed_not_masked_away() -> None:
+    """The roadmap grammar has no fence class — `_mask_quoted`'s fence handling is for
+    `parse_entries` only, and must not let arbitrary fenced prose read as blank (legal) here.
+    """
+    text = "## Milestone: X\n```text\nnot roadmap grammar\n```\n- BUG-1\n"
+    result = artifact_lib.parse_roadmap(text)
+    codes = [code for code, _ in result.findings]
+    assert codes.count("ROADMAP_LINE_MALFORMED") == 3
+    assert artifact_lib.validate_roadmap_for_write(result) != []
+
+
+def test_title_line_under_a_milestone_is_recognized_not_malformed() -> None:
+    text = "## Milestone: A\n# ROADMAP\n- BUG-1\n"
+    result = artifact_lib.parse_roadmap(text)
+    assert result.findings == []
+    assert artifact_lib.validate_roadmap_for_write(result) == []
+    assert artifact_lib.render_roadmap(result) == text
 
 
 def test_validate_roadmap_for_write_refuses_malformed_line() -> None:

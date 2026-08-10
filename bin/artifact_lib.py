@@ -233,12 +233,15 @@ def atomic_write(path: Path, text: str) -> None:
     a directory for reading (Windows) degrade silently rather than raising. Once open, an actual
     fsync failure propagates instead of being swallowed, except on filesystems that reject
     directory fsync outright (EINVAL/ENOTSUP), which degrade the same as a failed open.
+
+    Writes with `newline=""`: `text`'s line terminators reach the disk exactly as given, so a
+    caller preserving a file's original CRLF has that preserved through this call too.
     """
     directory = path.parent
     fd, tmp_name = tempfile.mkstemp(dir=directory, prefix=f".{path.name}.", suffix=".tmp")
     tmp_path = Path(tmp_name)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
@@ -321,6 +324,7 @@ def splice_field(text: str, entry: Entry, label: str, value: str | None) -> str:
 
 
 _MILESTONE_HEADING_RE = re.compile(r"^## Milestone: (.+)$")
+_ROADMAP_TITLE_RE = re.compile(r"^# ROADMAP\s*$")
 _ROADMAP_BLANK_RE = re.compile(r"^\s*$")
 # [0-9], not \d: \d admits non-ASCII decimal digits that int() would fold onto an ASCII-spelled
 # id; 0|[1-9][0-9]* additionally excludes leading zeros, so BUG-007 and BUG-7 stay two spellings
@@ -342,6 +346,7 @@ class Milestone:
     rank: int
     members: list[str]
     raw_lines: list[str]
+    heading_line: str
 
 
 @dataclass(frozen=True)
@@ -352,21 +357,77 @@ class RoadmapParse:
 
 
 def _line_body(line: str) -> str:
-    """Return `line` without its trailing line terminator, or "" for an empty string."""
-    return line.splitlines()[0] if line else ""
+    """Return `line` without its trailing `\\r\\n`, `\\r`, or `\\n` terminator, if any.
+
+    Deliberately not `str.splitlines()`: that also breaks on `\\v`, `\\f`, `\\x1c`-`\\x1e`,
+    `\\x85`, U+2028 and U+2029, any of which can survive inside a masked comment and would then
+    strip content the caller expects kept.
+    """
+    if line.endswith("\r\n"):
+        return line[:-2]
+    if line and line[-1] in "\r\n":
+        return line[:-1]
+    return line
+
+
+def _line_spans(text: str) -> list[tuple[int, int]]:
+    """Return each line's (start, end) offsets in `text`, terminator included, splitting only on
+    `\\r\\n`, `\\r`, or `\\n`.
+
+    `str.splitlines()` also breaks on `\\v`, `\\f`, `\\x1c`-`\\x1e`, `\\x85`, U+2028 and U+2029 —
+    splitting `text` and a masked view of it separately, each with its own `splitlines()` call,
+    lets those two line counts disagree whenever masking blanks one of those characters out from
+    inside a comment. Spans computed once from `text` and reused to slice the masked view keep
+    both views aligned by construction, since masking changes characters but never the length.
+    """
+    spans: list[tuple[int, int]] = []
+    start = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == "\n":
+            spans.append((start, i + 1))
+            i += 1
+            start = i
+        elif c == "\r":
+            end = i + 2 if i + 1 < n and text[i + 1] == "\n" else i + 1
+            spans.append((start, end))
+            i = end
+            start = end
+        else:
+            i += 1
+    if start < n:
+        spans.append((start, n))
+    return spans
+
+
+def _mask_html_comments(text: str) -> str:
+    """Blank HTML comments only, preserving every offset — the roadmap grammar has no fence class.
+
+    `_mask_quoted` also blanks fenced code, which is correct for `parse_entries` but would let
+    fenced prose under a milestone read as blank (legal) instead of `ROADMAP_LINE_MALFORMED`.
+    """
+    chars = list(text)
+    for m in _HTML_COMMENT_RE.finditer(text):
+        for i in range(m.start(), m.end()):
+            if chars[i] != "\n":
+                chars[i] = " "
+    return "".join(chars)
 
 
 def parse_roadmap(text: str) -> RoadmapParse:
     """Parse `ROADMAP.md`'s milestone/member grammar into structured form.
 
-    Total: no input raises. Every line falls into exactly one class (blank, comment, milestone
-    heading, member, disallowed member, or malformed); a line under a milestone that matches none
-    of the recognized shapes is reported as a `ROADMAP_LINE_MALFORMED` finding rather than failing
-    the parse.
+    Total: no input raises. Every line falls into exactly one class (blank, comment, title,
+    milestone heading, member, disallowed member, or malformed); a line under a milestone that
+    matches none of the recognized shapes is reported as a `ROADMAP_LINE_MALFORMED` finding
+    rather than failing the parse.
     """
-    masked = _mask_quoted(text)
-    lines = text.splitlines(keepends=True)
-    masked_lines = masked.splitlines(keepends=True)
+    masked = _mask_html_comments(text)
+    spans = _line_spans(text)
+    lines = [text[s:e] for s, e in spans]
+    masked_lines = [masked[s:e] for s, e in spans]
 
     # matched against masked text so a heading quoted inside the schema's HTML comment (the
     # worked example in its own docstring) is never mistaken for a real milestone
@@ -389,11 +450,15 @@ def parse_roadmap(text: str) -> RoadmapParse:
     name: str | None = None
     members: list[str] = []
     raw_lines: list[str] = []
+    heading_line = ""
 
     def close_milestone() -> None:
         if name is not None:
             milestones.append(
-                Milestone(name=name, rank=len(milestones), members=members, raw_lines=raw_lines)
+                Milestone(
+                    name=name, rank=len(milestones), members=members,
+                    raw_lines=raw_lines, heading_line=heading_line,
+                )
             )
 
     for i in range(first_idx, len(lines)):
@@ -409,6 +474,11 @@ def parse_roadmap(text: str) -> RoadmapParse:
             seen_milestone_names.add(name)
             members = []
             raw_lines = []
+            heading_line = raw_line
+            continue
+
+        if _ROADMAP_TITLE_RE.match(body):
+            raw_lines.append(raw_line)
             continue
 
         if _ROADMAP_BLANK_RE.match(body):
@@ -449,14 +519,15 @@ def parse_roadmap(text: str) -> RoadmapParse:
 def render_roadmap(parse: RoadmapParse) -> str:
     """Reconstruct `ROADMAP.md` text from a parse; byte-for-byte for any input with no findings.
 
-    Milestone bodies come from `raw_lines`, not `members`: a finding-free parse never dropped a
-    line, so this is a lossless inverse of `parse_roadmap`. A parse carrying a
-    `ROADMAP_LINE_MALFORMED` finding already dropped that line when it was parsed and cannot
+    Milestone headings come from `heading_line`, bodies from `raw_lines` — never synthesized —
+    so a CRLF file or a final heading with no trailing newline round-trips exactly. A finding-free
+    parse never dropped a line, so this is a lossless inverse of `parse_roadmap`. A parse carrying
+    a `ROADMAP_LINE_MALFORMED` finding already dropped that line when it was parsed and cannot
     round-trip it back in.
     """
     parts = [parse.preamble]
     for milestone in parse.milestones:
-        parts.append(f"## Milestone: {milestone.name}\n")
+        parts.append(milestone.heading_line)
         parts.extend(milestone.raw_lines)
     return "".join(parts)
 

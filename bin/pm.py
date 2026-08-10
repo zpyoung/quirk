@@ -21,6 +21,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import IO
 
 from artifact_lib import (
     Entry,
@@ -350,9 +351,11 @@ def render_doctor(project: Path) -> str:
 
 # matches an optional legacy `<!-- schema-version: N -->` line followed by the mandatory
 # `<!-- ... SCHEMA ... -->` comment, both anchored to the file's first byte — every ledger
-# this plugin ships (templates and every fixture) puts the schema comment first
+# this plugin ships (templates and every fixture) puts the schema comment first. Line
+# terminators are matched as `\r\n` or `\n` (never a bare `\n`), since the ledger being
+# migrated is now read with its original bytes intact and may be CRLF.
 _LEGACY_PREAMBLE_RE = re.compile(
-    r"\A(?:<!--\s*schema-version:\s*\d+\s*-->\n)?(<!--.*?-->\n?)", re.DOTALL
+    r"\A(?:<!--\s*schema-version:\s*\d+\s*-->(?:\r\n|\n))?(<!--.*?-->(?:\r\n|\n)?)", re.DOTALL
 )
 
 
@@ -363,7 +366,7 @@ def _v2_schema_block(filename: str) -> str:
     stays the single definition of the v2 comment text and a future edit to it can't drift
     out of sync with what `migrate` writes.
     """
-    template_text = (TEMPLATES_DIR / filename).read_text()
+    template_text = (TEMPLATES_DIR / filename).read_text(encoding="utf-8")
     m = _LEGACY_PREAMBLE_RE.match(template_text)
     if m is None:
         raise RuntimeError(f"templates/{filename} has no leading schema-comment block")
@@ -379,43 +382,53 @@ def _migrate_ledger_text(text: str, filename: str) -> str:
     return v2_block + text[m.end():]
 
 
-def _migrate_one_ledger(project: Path, filename: str) -> tuple[str, str]:
-    """Migrate one ledger file to schema v2 under its own lock.
+def _acquire_ledger_lock(lock_path: Path, deadline: float) -> IO[str] | None:
+    """Open `lock_path` and block (polling) for its exclusive flock until acquired or `deadline`.
 
-    Mirrors the lock/read/decide/write shape `artifact_append.py:142-184` uses for the same
-    lock file (`.quirk/locks/{filename}.lock`), so `migrate` serializes against a concurrent
-    `/quirk:artifacts:*` append rather than opening a second lock namespace. Returns
-    `(outcome, message)`; `outcome` is one of `"already_v2"` / `"migrated"` / `"too_new"` /
-    `"lock_timeout"`, folded by the caller into `migrate`'s per-file report and aggregate
-    exit code. Any exception other than the lock timeout propagates to the caller uncaught,
-    so an unexpected failure aborts the run rather than being silently absorbed per-file.
+    Returns the open, locked file object, or `None` on timeout. Closing the returned object is
+    what releases the flock, so on timeout the caller owes nothing back for this call — the file
+    opened here is already closed before `None` is returned.
     """
-    lock_path = ensure_lock_dir(project) / f"{filename}.lock"
-    timeout = float(os.environ.get("ARTIFACT_LOCK_TIMEOUT", "5.0"))
-    deadline = time.monotonic() + timeout
-    with open(lock_path, "w") as lock_file:
-        while True:
-            try:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if time.monotonic() > deadline:
-                    return "lock_timeout", f"{filename}: could not acquire lock, skipped"
-                time.sleep(0.05)
+    lock_file = open(lock_path, "w")
+    while True:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return lock_file
+        except BlockingIOError:
+            if time.monotonic() > deadline:
+                lock_file.close()
+                return None
+            time.sleep(0.05)
 
-        target = project / filename
-        text = target.read_text()
-        version = detect_schema_version(text)
-        if version == 2:
-            return "already_v2", f"{filename}: already v2"
-        if version is not None and version > 2:
-            return (
-                "too_new",
-                f"{filename}: schema v{version} file, plugin understands v2. Upgrade quirk.",
-            )
 
-        atomic_write(target, _migrate_ledger_text(text, filename))
-        return "migrated", f"{filename}: migrated to v2"
+def _migrate_one_ledger(project: Path, filename: str) -> tuple[str, str]:
+    """Migrate one ledger file to schema v2. Caller must already hold `filename`'s lock.
+
+    Returns `(outcome, message)`; `outcome` is one of `"already_v2"` / `"migrated"` / `"too_new"`,
+    folded by the caller into `migrate`'s per-file report and aggregate exit code. Any exception
+    propagates to the caller uncaught, so an unexpected failure aborts the run rather than being
+    silently absorbed per-file.
+
+    Reads and writes with `newline=""`: `migrate`'s contract is that it touches no entry body,
+    and universal-newline translation on read would silently rewrite every CRLF line ending in
+    the file to LF, which is exactly such a touch. The encoding is pinned to match
+    `atomic_write`'s for the same reason — reading in the host locale and writing utf-8
+    transcodes every non-ASCII byte on a host where those differ.
+    """
+    target = project / filename
+    with target.open(encoding="utf-8", newline="") as f:
+        text = f.read()
+    version = detect_schema_version(text)
+    if version == 2:
+        return "already_v2", f"{filename}: already v2"
+    if version is not None and version > 2:
+        return (
+            "too_new",
+            f"{filename}: schema v{version} file, plugin understands v2. Upgrade quirk.",
+        )
+
+    atomic_write(target, _migrate_ledger_text(text, filename))
+    return "migrated", f"{filename}: migrated to v2"
 
 
 def cmd_migrate(args: argparse.Namespace) -> int:
@@ -432,25 +445,44 @@ def cmd_migrate(args: argparse.Namespace) -> int:
         )
         return EXIT_NOT_FOUND
 
-    saw_too_new = False
-    saw_lock_timeout = False
-    for filename in LEDGER_FILES:
-        outcome, message = _migrate_one_ledger(project, filename)
-        print(f"[quirk:pm] {message}")
-        saw_too_new = saw_too_new or outcome == "too_new"
-        saw_lock_timeout = saw_lock_timeout or outcome == "lock_timeout"
+    lock_dir = ensure_lock_dir(project)
+    timeout = float(os.environ.get("ARTIFACT_LOCK_TIMEOUT", "5.0"))
+    deadline = time.monotonic() + timeout
 
-    roadmap_path = project / "ROADMAP.md"
-    if roadmap_path.exists():
-        print("[quirk:pm] ROADMAP.md: already exists")
-    else:
-        shutil.copy(TEMPLATES_DIR / "ROADMAP.md", roadmap_path)
-        print("[quirk:pm] ROADMAP.md: created")
+    held_locks: list[IO[str]] = []
+    try:
+        # every lock is held before any file is touched, so a timeout partway through never
+        # leaves an earlier ledger migrated while a later one wasn't — a fixed order (this list's)
+        # is what keeps that safe against deadlock, since two acquirers taking locks in different
+        # orders can wait on each other forever
+        for filename in LEDGER_FILES:
+            lock_file = _acquire_ledger_lock(lock_dir / f"{filename}.lock", deadline)
+            if lock_file is None:
+                print(
+                    f"[quirk:pm] could not acquire lock on {filename}, nothing written",
+                    file=sys.stderr,
+                )
+                return EXIT_LOCK_TIMEOUT
+            held_locks.append(lock_file)
+
+        saw_too_new = False
+        for filename in LEDGER_FILES:
+            outcome, message = _migrate_one_ledger(project, filename)
+            print(f"[quirk:pm] {message}")
+            saw_too_new = saw_too_new or outcome == "too_new"
+
+        roadmap_path = project / "ROADMAP.md"
+        if roadmap_path.exists():
+            print("[quirk:pm] ROADMAP.md: already exists")
+        else:
+            shutil.copy(TEMPLATES_DIR / "ROADMAP.md", roadmap_path)
+            print("[quirk:pm] ROADMAP.md: created")
+    finally:
+        for lock_file in held_locks:
+            lock_file.close()
 
     if saw_too_new:
         return EXIT_SCHEMA_MISMATCH
-    if saw_lock_timeout:
-        return EXIT_LOCK_TIMEOUT
     return EXIT_OK
 
 
@@ -513,8 +545,13 @@ def cmd_roadmap(args: argparse.Namespace) -> int:
 # --- CLI dispatch --------------------------------------------------------
 
 
-def _add_project_dir(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--project-dir", default=".", help="Project root containing artifact files")
+def _add_project_dir(parser: argparse.ArgumentParser, *, top_level: bool = False) -> None:
+    # a subparser reparses into its own fresh namespace and then copies every one of its keys
+    # onto the outer namespace (argparse._SubParsersAction.__call__), so a real default here would
+    # always clobber a --project-dir the top-level parser already captured before the subcommand;
+    # SUPPRESS keeps that key out of the subparser's namespace unless the flag actually follows it
+    default = "." if top_level else argparse.SUPPRESS
+    parser.add_argument("--project-dir", default=default, help="Project root containing artifact files")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -526,7 +563,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--index", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--next", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--doctor", action="store_true", help=argparse.SUPPRESS)
-    _add_project_dir(parser)
+    _add_project_dir(parser, top_level=True)
 
     subparsers = parser.add_subparsers(dest="command")
 
