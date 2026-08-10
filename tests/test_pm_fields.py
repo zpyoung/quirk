@@ -220,6 +220,57 @@ def test_status_trailing_garbage_is_malformed() -> None:
     assert isinstance(parsed, pm.MalformedField)
 
 
+# --- Status/Probe: total means it never raises, even on an oversized number -
+
+
+def _int_that_refuses_long_digit_strings(digits: str) -> int:
+    # simulates CPython's int()-from-string digit-count cap without depending on the
+    # interpreter actually enforcing one, so the test is meaningful on every Python build;
+    # ordinary short segments (attempt counts, refusal counts) still convert normally
+    if len(digits) > 10:
+        raise ValueError("too long")
+    return int(digits)
+
+
+def test_status_attempt_that_cannot_convert_to_int_is_malformed_not_a_crash(monkeypatch) -> None:
+    monkeypatch.setattr(pm, "int", _int_that_refuses_long_digit_strings, raising=False)
+    parsed = pm.parse_status("open — 2026-08-05 — attempt 999999999999999999999999999999999999999")
+    assert isinstance(parsed, pm.MalformedField)
+    assert parsed.reason == "attempt"
+
+
+def test_status_refused_that_cannot_convert_to_int_is_malformed_not_a_crash(monkeypatch) -> None:
+    monkeypatch.setattr(pm, "int", _int_that_refuses_long_digit_strings, raising=False)
+    parsed = pm.parse_status(
+        "open — 2026-08-05 — attempt 1 — refused 999999999999999999999999999999999999999"
+    )
+    assert isinstance(parsed, pm.MalformedField)
+    assert parsed.reason == "refused"
+
+
+def test_probe_skipped_that_cannot_convert_to_int_is_malformed_not_a_crash(monkeypatch) -> None:
+    monkeypatch.setattr(pm, "int", _int_that_refuses_long_digit_strings, raising=False)
+    line = (
+        "grep:TODO_AUTH -- src/auth/ — baseline: 3 matches in 2 files — "
+        "skipped 999999999999999999999999999999999999999 unreadable — spec#a1b2c3d4"
+    )
+    parsed = pm.parse_probe(line)
+    assert isinstance(parsed, pm.MalformedField)
+    assert parsed.reason == "skipped"
+
+
+def test_probe_final_skipped_that_cannot_convert_to_int_is_malformed_not_a_crash(monkeypatch) -> None:
+    monkeypatch.setattr(pm, "int", _int_that_refuses_long_digit_strings, raising=False)
+    line = (
+        "grep:TODO_AUTH -- src/auth/ — baseline: 3 matches in 2 files — spec#a1b2c3d4 — "
+        "final: 0 matches in 2 files — "
+        "skipped 999999999999999999999999999999999999999 unreadable — spec#c1c2c3c4"
+    )
+    parsed = pm.parse_probe(line)
+    assert isinstance(parsed, pm.MalformedField)
+    assert parsed.reason == "skipped"
+
+
 # --- Status: park preserves counters, next start increments ----------------
 
 
@@ -396,6 +447,41 @@ def test_probe_malformed_names_first_failing_segment_hashes() -> None:
 def test_probe_hashes_require_exactly_8_hex_chars() -> None:
     parsed = pm.parse_probe("test:tests/test_auth.py::test_safari — baseline: fail — spec#a1b2c3d")
     assert isinstance(parsed, pm.MalformedField)
+
+
+# --- Probe: file# is test:-only, never grep: or none -------------------------
+
+
+def test_probe_grep_verb_rejects_a_file_hash_in_the_baseline_hashes() -> None:
+    parsed = pm.parse_probe(
+        "grep:TODO_AUTH -- src/auth/ — baseline: 3 matches in 2 files — spec#aaaaaaaa file#bbbbbbbb"
+    )
+    assert isinstance(parsed, pm.MalformedField)
+    assert parsed.reason == "hashes"
+
+
+def test_probe_grep_verb_rejects_a_file_hash_in_the_final_hashes() -> None:
+    line = (
+        "grep:TODO_AUTH -- src/auth/ — baseline: 3 matches in 2 files — spec#aaaaaaaa — "
+        "final: 0 matches in 2 files — spec#cccccccc file#dddddddd"
+    )
+    parsed = pm.parse_probe(line)
+    assert isinstance(parsed, pm.MalformedField)
+    assert parsed.reason == "hashes"
+
+
+def test_probe_none_verb_rejects_a_hash_segment() -> None:
+    parsed = pm.parse_probe("none — spec#aaaaaaaa file#bbbbbbbb")
+    assert isinstance(parsed, pm.MalformedField)
+
+
+def test_probe_test_verb_without_a_file_hash_still_parses() -> None:
+    """`hash_file` returns `None` for an unreadable or missing source file, so a `test:` probe
+    legitimately renders with no `file#` — this must stay accepted, not become malformed."""
+    line = "test:tests/test_auth.py::test_safari — baseline: fail — spec#a1b2c3d4"
+    parsed = pm.parse_probe(line)
+    assert isinstance(parsed, pm.ProbeField)
+    assert parsed.file_hash is None
 
 
 # --- --reason at the CLI boundary: rejected, nothing written ---------------

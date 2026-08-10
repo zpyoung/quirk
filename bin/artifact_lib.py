@@ -152,6 +152,20 @@ def parse_entries(text: str, header: str) -> ParseResult:
     return ParseResult(entries=entries, malformed=malformed)
 
 
+def field_present_but_empty(entry: Entry, label: str) -> bool:
+    """Return whether `entry`'s block writes `label`'s field line with nothing after the colon.
+
+    `FIELD_RE` requires at least one character after the colon, so a field written as
+    `- **{label}**:` with nothing (or only whitespace) following it never reaches `entry.fields`
+    with a genuine value — indistinguishable there from the field never having been written at
+    all. Matched against the masked block, the same way `parse_entries` builds `fields`, so a
+    label quoted inside a fenced example is never mistaken for a live one.
+    """
+    masked_block = _mask_quoted(entry.raw)
+    pattern = re.compile(rf"^-\s+\*\*{re.escape(label)}\*\*:\s*$", re.MULTILINE)
+    return pattern.search(masked_block) is not None
+
+
 def render_entry(
     schema: dict, entry_id: int, fields: dict[str, str], *, schema_version: int | None = None
 ) -> str:
@@ -532,18 +546,40 @@ def render_roadmap(parse: RoadmapParse) -> str:
     return "".join(parts)
 
 
+def _preamble_member_findings(preamble: str) -> list[tuple[str, str]]:
+    """Return a `MEMBER_OUTSIDE_MILESTONE` finding for every member-shaped line in `preamble`.
+
+    `preamble` (everything above the first `## Milestone:` heading) is otherwise preserved
+    verbatim and never classified — ordinary prose there is legal by design. But a line shaped
+    like a milestone member (`- BUG-1`, `- PROPOSAL-1`, ...) sitting above every milestone would
+    write cleanly and then silently rank -1, contributing no membership at all. Matched against
+    the masked text so the schema comment's own worked example — real member-shaped lines,
+    quoted for documentation — is never mistaken for a live one.
+    """
+    masked = _mask_html_comments(preamble)
+    findings: list[tuple[str, str]] = []
+    for start, end in _line_spans(preamble):
+        body = _line_body(masked[start:end])
+        member = _ROADMAP_DISALLOWED_MEMBER_RE.match(body)
+        if member is not None:
+            findings.append(("MEMBER_OUTSIDE_MILESTONE", f"{member.group(1)}-{member.group(2)}"))
+    return findings
+
+
 def validate_roadmap_for_write(
     parse: RoadmapParse, known_ids: set[str] | None = None
 ) -> list[tuple[str, str]]:
     """Return the findings that must block `roadmap --write`.
 
-    Blocking regardless of input: malformed lines, disallowed member headers, and duplicate
-    membership — a freshly agent-proposed file has no legacy content to be lenient about.
-    Dangling references block too, but only once `known_ids` is supplied; `None` means the ledger
-    was not checked, not that every id is known. `DUPLICATE_MILESTONE_NAME` never blocks: rank
-    comes from document position, never from name, so a name collision can't corrupt a write.
+    Blocking regardless of input: malformed lines, disallowed member headers, duplicate
+    membership, and a member-shaped preamble line (`MEMBER_OUTSIDE_MILESTONE`) — a freshly
+    agent-proposed file has no legacy content to be lenient about. Dangling references block
+    too, but only once `known_ids` is supplied; `None` means the ledger was not checked, not
+    that every id is known. `DUPLICATE_MILESTONE_NAME` never blocks: rank comes from document
+    position, never from name, so a name collision can't corrupt a write.
     """
     blocking = [f for f in parse.findings if f[0] in _ROADMAP_WRITE_BLOCKING_CODES]
+    blocking.extend(_preamble_member_findings(parse.preamble))
     if known_ids is not None:
         referenced = {member_id for milestone in parse.milestones for member_id in milestone.members}
         blocking.extend(
