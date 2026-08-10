@@ -34,6 +34,33 @@ def initialized_project(project_dir: Path) -> Path:
     return project_dir
 
 
+@pytest.fixture
+def pm_project(initialized_project: Path) -> Path:
+    """initialized_project, additionally at schema v2 and given an empty ROADMAP.md."""
+    shutil.copy(TEMPLATES_DIR / "ROADMAP.md", initialized_project / "ROADMAP.md")
+    return initialized_project
+
+
+@pytest.fixture
+def fake_git_repo(tmp_path: Path) -> Path:
+    """A real `git init`-ed repo with one commit, for worktree/reconcile tests — no network."""
+    repo = tmp_path / "fake_git_repo"
+    repo.mkdir()
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+
+    git("init", "-q")
+    # local, not --global: a CI runner has no global git identity or signing config to fall back on
+    git("config", "user.email", "quirk-test@example.invalid")
+    git("config", "user.name", "Quirk Test")
+    git("config", "commit.gpgsign", "false")
+    (repo / "README.md").write_text("fake repo for tests\n")
+    git("add", "README.md")
+    git("commit", "-q", "-m", "initial commit")
+    return repo
+
+
 def run_script(script_name: str, *args: str, cwd: Path) -> subprocess.CompletedProcess:
     """Invoke a bin/*.py script in a child process; return CompletedProcess."""
     return subprocess.run(
@@ -42,6 +69,11 @@ def run_script(script_name: str, *args: str, cwd: Path) -> subprocess.CompletedP
         capture_output=True,
         text=True,
     )
+
+
+def run_pm(*args: str, cwd: Path) -> subprocess.CompletedProcess:
+    """Invoke bin/pm.py in a child process; mirrors the existing run_script helper."""
+    return run_script("pm.py", *args, cwd=cwd)
 
 
 def load_filing_module(name: str) -> ModuleType:

@@ -119,7 +119,7 @@ def test_gaps_use_max_plus_one(initialized_project: Path) -> None:
 
 def test_schema_version_mismatch_exits_8(initialized_project: Path) -> None:
     bugs = initialized_project / "BUGS.md"
-    text = bugs.read_text().replace("schema-version: 1", "schema-version: 99")
+    text = bugs.read_text().replace("schema-version: 2", "schema-version: 99")
     bugs.write_text(text)
     result = run_script(
         "artifact_append.py", "bug",
