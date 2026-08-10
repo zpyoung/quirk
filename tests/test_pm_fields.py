@@ -272,6 +272,8 @@ def test_probe_test_verb_final_appended_in_place_not_second_line() -> None:
         spec_hash=spec_hash,
         file_hash=file_hash,
         final="pass",
+        final_spec_hash=spec_hash,
+        final_file_hash=file_hash,
     )
     value = pm.render_probe(field)
     assert "\n" not in value
@@ -281,6 +283,34 @@ def test_probe_test_verb_final_appended_in_place_not_second_line() -> None:
     )
     parsed = pm.parse_probe(value)
     assert parsed == field
+    assert pm.render_probe(parsed) == value
+
+
+def test_probe_baseline_and_final_hashes_are_independent() -> None:
+    """A `spec#`/`file#` pair that differs between baseline and final is exactly the case
+    `PROBE_SPEC_CHANGED`/`PROBE_FILE_CHANGED` exist to report — it must survive the round trip
+    rather than being forced to agree with the other occurrence."""
+    field = pm.ProbeField(
+        verb="test",
+        arg="tests/test_auth.py::test_safari",
+        baseline="fail",
+        spec_hash="a1b2c3d4",
+        file_hash="e5f6a7b8",
+        final="pass",
+        final_spec_hash="11112222",
+        final_file_hash="33334444",
+    )
+    value = pm.render_probe(field)
+    assert value == (
+        "test:tests/test_auth.py::test_safari — baseline: fail — "
+        "spec#a1b2c3d4 file#e5f6a7b8 — final: pass — spec#11112222 file#33334444"
+    )
+    parsed = pm.parse_probe(value)
+    assert parsed == field
+    assert parsed.spec_hash == "a1b2c3d4"
+    assert parsed.file_hash == "e5f6a7b8"
+    assert parsed.final_spec_hash == "11112222"
+    assert parsed.final_file_hash == "33334444"
     assert pm.render_probe(parsed) == value
 
 
