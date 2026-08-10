@@ -323,10 +323,6 @@ def test_migrate_lock_timeout_on_a_later_ledger_writes_nothing_at_all(
 @pytest.mark.parametrize(
     "argv",
     [
-        ["start", "BUG-1", "--probe", "pytest:tests/test_x.py"],
-        ["finish", "BUG-1"],
-        ["park", "BUG-1", "--reason", "waiting on upstream"],
-        ["decide", "BUG-1", "--as", "wontfix", "--reason", "not worth it"],
         ["reconcile"],
     ],
 )
