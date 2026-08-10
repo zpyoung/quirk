@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import shutil
 import subprocess
 import sys
@@ -14,6 +15,21 @@ BIN_DIR = REPO_ROOT / "bin"
 TEMPLATES_DIR = REPO_ROOT / "templates"
 HOOKS_DIR = REPO_ROOT / "hooks"
 FILING_SCRIPTS_DIR = REPO_ROOT / "skills" / "filing-requests" / "scripts"
+
+
+def isolated_git_env() -> dict[str, str]:
+    """Environment for a git subprocess call that ignores the machine's global/system config.
+
+    Shared by `fake_git_repo` and any later caller (worktree/fetch/merge-base tests) that runs
+    git against its repo — without this, an ambient `core.hooksPath` or `init.templateDir` can
+    run hook code the test never asked for, reaching the network or hanging on a machine the
+    author never tested against.
+    """
+    env = dict(os.environ)
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_CONFIG_SYSTEM"] = os.devnull
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    return env
 
 
 @pytest.fixture
@@ -46,11 +62,21 @@ def fake_git_repo(tmp_path: Path) -> Path:
     """A real `git init`-ed repo with one commit, for worktree/reconcile tests — no network."""
     repo = tmp_path / "fake_git_repo"
     repo.mkdir()
+    empty_template = tmp_path / "fake_git_repo_template"
+    empty_template.mkdir()
+    empty_hooks = tmp_path / "fake_git_repo_hooks"
+    empty_hooks.mkdir()
+    env = isolated_git_env()
 
     def git(*args: str) -> None:
-        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", *args], cwd=repo, check=True, capture_output=True, text=True, env=env
+        )
 
-    git("init", "-q")
+    # --template neutralizes a global `init.templateDir`; core.hooksPath below neutralizes a
+    # global `core.hooksPath` set after init — either would otherwise let hook code run
+    git("init", "-q", f"--template={empty_template}")
+    git("config", "core.hooksPath", str(empty_hooks))
     # local, not --global: a CI runner has no global git identity or signing config to fall back on
     git("config", "user.email", "quirk-test@example.invalid")
     git("config", "user.name", "Quirk Test")
