@@ -174,8 +174,22 @@ def render_entry(
     return "\n".join(lines)
 
 
+_ENTRY_HEADING_RE = re.compile(r"^## ", re.MULTILINE)
+
+
 def detect_schema_version(text: str) -> int | None:
-    m = SCHEMA_VERSION_RE.search(text)
+    """Return the schema-version the file itself declares in its preamble, or None if undeclared.
+
+    Scoped to the text before the first entry heading, found the same masked way `parse_entries`
+    finds entry boundaries, so a marker quoted inside an entry's own body — this repo's BUGS.md
+    and DEFERRED.md discuss past schema migrations in prose — is never mistaken for the file's
+    declaration. The boundary search runs on masked text (fences/comments blanked) but the marker
+    search runs on the raw preamble, since the marker is itself an HTML comment that masking would
+    blank along with everything else.
+    """
+    heading = _ENTRY_HEADING_RE.search(_mask_quoted(text))
+    preamble = text if heading is None else text[:heading.start()]
+    m = SCHEMA_VERSION_RE.search(preamble)
     return int(m.group(1)) if m else None
 
 

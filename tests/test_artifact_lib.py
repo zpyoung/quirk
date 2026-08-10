@@ -520,3 +520,33 @@ def test_render_entry_without_v2_fields_key_is_unaffected_by_schema_version() ->
     fields = {"title": "alpha", "severity": "high"}
     result = artifact_lib.render_entry(schema, 1, fields, schema_version=1)
     assert "- **Severity**: high" in result
+
+
+# --- detect_schema_version ---------------------------------------------------
+
+
+def test_detect_schema_version_finds_a_real_preamble_marker() -> None:
+    text = "<!-- schema-version: 2 -->\n# BUGS\n\n## BUG-1: alpha\n- **Severity**: high\n"
+    assert artifact_lib.detect_schema_version(text) == 2
+
+
+def test_detect_schema_version_ignores_a_marker_quoted_inside_an_entry_body() -> None:
+    """A legacy file with no preamble marker of its own must not be misread as v2 just
+    because an entry discusses the marker in prose.
+    """
+    text = (
+        "# BUGS\n\n"
+        "## BUG-1: migration note\n"
+        "- **Description**: this file was migrated, the marker looked like "
+        "<!-- schema-version: 2 --> in the changelog.\n"
+    )
+    assert artifact_lib.detect_schema_version(text) is None
+
+
+def test_detect_schema_version_prefers_the_preamble_marker_over_a_quoted_one() -> None:
+    text = (
+        "<!-- schema-version: 2 -->\n# BUGS\n\n"
+        "## BUG-1: migration note\n"
+        "- **Description**: an earlier draft said <!-- schema-version: 99 --> by mistake.\n"
+    )
+    assert artifact_lib.detect_schema_version(text) == 2

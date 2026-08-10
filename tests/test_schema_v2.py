@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import subprocess
 from datetime import date
 from pathlib import Path
 
 import pytest
 
-from .conftest import TEMPLATES_DIR, run_script
+from .conftest import TEMPLATES_DIR, isolated_git_env, run_script
 
 ROOT_TEMPLATES = ["BUGS.md", "DEFERRED.md", "TEST_BACKLOG.md", "proposals.md"]
 
@@ -205,6 +206,38 @@ def test_test_skip_v1_file_appends_with_no_logged_line(initialized_project: Path
     assert "**Logged**" not in entry
 
 
+def test_v1_file_with_quoted_marker_in_entry_body_still_refuses_v2_field(
+    initialized_project: Path,
+) -> None:
+    """A legacy file with no preamble marker, whose lone entry quotes the v2 marker in prose,
+    must still be treated as v1 — proving the detector can't be used to defeat the lower-bound
+    guard that refuses a v2-only field on an unmigrated file.
+    """
+    bugs = initialized_project / "BUGS.md"
+    text = bugs.read_text().replace("<!-- schema-version: 2 -->\n", "", 1)
+    text += (
+        "\n## BUG-1: prior migration note\n"
+        "- **Description**: the changelog says this file used to declare "
+        "<!-- schema-version: 2 --> before rollback.\n"
+        "- **Severity**: low\n"
+    )
+    bugs.write_text(text)
+    before = bugs.read_text()
+
+    result = run_script(
+        "artifact_append.py", "bug",
+        "--field", "title=v1 append",
+        "--field", "file=x:1",
+        "--field", "description=d",
+        "--field", "severity=low",
+        "--field", "blocked_by=BUG-1",
+        cwd=initialized_project,
+    )
+    assert result.returncode == 8
+    assert "blocked_by" in result.stderr.lower()
+    assert bugs.read_text() == before
+
+
 def test_v3_file_still_refused_upper_bound(initialized_project: Path) -> None:
     bugs = initialized_project / "BUGS.md"
     bugs.write_text(bugs.read_text().replace("schema-version: 2", "schema-version: 3"))
@@ -216,3 +249,32 @@ def test_v3_file_still_refused_upper_bound(initialized_project: Path) -> None:
         cwd=initialized_project,
     )
     assert result.returncode == 8
+
+
+def test_fake_git_repo_is_a_usable_isolated_repo(fake_git_repo: Path) -> None:
+    """Guards the fixture itself: a usable one-commit repo whose local config, not ambient
+    machine state, decides where hooks live.
+    """
+    env = isolated_git_env()
+
+    rev_parse = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=fake_git_repo, check=True, capture_output=True, text=True, env=env,
+    )
+    assert rev_parse.stdout.strip()
+
+    log = subprocess.run(
+        ["git", "log", "--oneline"],
+        cwd=fake_git_repo, check=True, capture_output=True, text=True, env=env,
+    )
+    assert len(log.stdout.strip().splitlines()) == 1
+
+    hooks_path = subprocess.run(
+        ["git", "config", "core.hooksPath"],
+        cwd=fake_git_repo, check=True, capture_output=True, text=True, env=env,
+    )
+    hooks_dir = Path(hooks_path.stdout.strip())
+    assert hooks_dir.is_dir()
+    assert list(hooks_dir.iterdir()) == []
+    assert hooks_dir != fake_git_repo / ".git" / "hooks"
+    assert hooks_dir.resolve().is_relative_to(fake_git_repo.parent.resolve())
