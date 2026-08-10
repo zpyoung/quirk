@@ -2,15 +2,23 @@
 """Shared markdown-artifact parsing and rendering primitives."""
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import re
+import stat
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 FIELD_RE = re.compile(r"^-\s+\*\*(.+?)\*\*:\s*(.+)$", re.MULTILINE)
+SPLICE_FIELD_LINE_RE = re.compile(r"^-\s+\*\*(.+?)\*\*:.*$", re.MULTILINE)
 SCHEMA_VERSION_RE = re.compile(r"<!--\s*schema-version:\s*(\d+)\s*-->")
+
+# filesystems that legitimately reject directory fsync entirely, rather than failing this call
+_DIR_FSYNC_UNSUPPORTED_ERRNOS = {errno.EINVAL}
+if hasattr(errno, "ENOTSUP"):
+    _DIR_FSYNC_UNSUPPORTED_ERRNOS.add(errno.ENOTSUP)
 
 LOCK_DIR_PARTS = (".quirk", "locks")
 
@@ -177,11 +185,28 @@ def hash_probe_spec(spec: str) -> str:
 
 
 def hash_file(path: Path) -> str | None:
-    """Return the first 8 hex characters of sha256(file bytes), or None if the file can't be read."""
+    """Return the first 8 hex characters of sha256(file bytes), or None if `path` is not a
+    readable regular file.
+    """
     try:
-        data = path.read_bytes()
-    except OSError:
+        # O_NONBLOCK: opening a FIFO for reading otherwise blocks until a writer appears.
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    except (OSError, ValueError):
         return None
+    close_fd = True
+    try:
+        # checked against this fd's fstat, not a separate stat(path), so the target can't be
+        # swapped out between the open and the check
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        with os.fdopen(fd, "rb") as f:
+            close_fd = False
+            data = f.read()
+    except (OSError, ValueError):
+        return None
+    finally:
+        if close_fd:
+            os.close(fd)
     return hashlib.sha256(data).hexdigest()[:8]
 
 
@@ -190,8 +215,10 @@ def atomic_write(path: Path, text: str) -> None:
 
     Fsyncs the temp file before the replace and the containing directory after — the first makes
     the new content durable, the second makes the rename itself survive a power cut; neither
-    substitutes for the other. Directory fsync is best-effort: platforms that refuse to open a
-    directory for reading (Windows) degrade silently rather than raising.
+    substitutes for the other. Opening the directory is best-effort: platforms that refuse to open
+    a directory for reading (Windows) degrade silently rather than raising. Once open, an actual
+    fsync failure propagates instead of being swallowed, except on filesystems that reject
+    directory fsync outright (EINVAL/ENOTSUP), which degrade the same as a failed open.
     """
     directory = path.parent
     fd, tmp_name = tempfile.mkstemp(dir=directory, prefix=f".{path.name}.", suffix=".tmp")
@@ -206,15 +233,17 @@ def atomic_write(path: Path, text: str) -> None:
         tmp_path.unlink(missing_ok=True)
         raise
 
-    dir_fd = None
     try:
         dir_fd = os.open(directory, os.O_RDONLY)
-        os.fsync(dir_fd)
     except OSError:
-        pass
+        return
+    try:
+        os.fsync(dir_fd)
+    except OSError as e:
+        if e.errno not in _DIR_FSYNC_UNSUPPORTED_ERRNOS:
+            raise
     finally:
-        if dir_fd is not None:
-            os.close(dir_fd)
+        os.close(dir_fd)
 
 
 def field_line(label: str, value: str) -> str:
@@ -249,7 +278,10 @@ def splice_field(text: str, entry: Entry, label: str, value: str | None) -> str:
             if line_end < len(block) and block[line_end] == "\n":
                 new_block = block[:line_start] + block[line_end + 1:]
             else:
-                new_block = block[:line_start - 1] + block[line_end:]
+                sep_start = line_start - 1
+                if sep_start > 0 and block[sep_start - 1] == "\r":
+                    sep_start -= 1
+                new_block = block[:sep_start] + block[line_end:]
         else:
             new_block = block[:line_start] + field_line(label, value) + block[line_end:]
         return text[:entry.start] + new_block + text[entry.end:]
@@ -257,7 +289,7 @@ def splice_field(text: str, entry: Entry, label: str, value: str | None) -> str:
     if value is None:
         return text
 
-    field_matches = list(FIELD_RE.finditer(masked_block))
+    field_matches = list(SPLICE_FIELD_LINE_RE.finditer(masked_block))
     if field_matches:
         anchor_end = field_matches[-1].end()
     else:

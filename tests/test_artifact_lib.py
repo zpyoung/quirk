@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import re
+from pathlib import Path
 
 import pytest
 
@@ -246,6 +248,25 @@ def test_hash_file_returns_none_for_a_directory(tmp_path) -> None:
     assert artifact_lib.hash_file(tmp_path) is None
 
 
+def test_hash_file_returns_none_for_dev_null() -> None:
+    dev_null = Path("/dev/null")
+    if not dev_null.exists():
+        pytest.skip("no /dev/null on this platform")
+    assert artifact_lib.hash_file(dev_null) is None
+
+
+def test_hash_file_returns_none_for_a_fifo_without_blocking(tmp_path) -> None:
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("no FIFOs on this platform")
+    fifo_path = tmp_path / "fifo"
+    os.mkfifo(fifo_path)
+    assert artifact_lib.hash_file(fifo_path) is None
+
+
+def test_hash_file_returns_none_for_a_path_with_an_embedded_null_byte() -> None:
+    assert artifact_lib.hash_file(Path("bad\0name")) is None
+
+
 # --- atomic_write --------------------------------------------------------------
 
 
@@ -322,6 +343,45 @@ def test_atomic_write_fsyncs_temp_file_before_replace_and_directory_after(
     assert target.read_text() == "content\n"
 
 
+def test_atomic_write_propagates_a_real_directory_fsync_failure(tmp_path, monkeypatch) -> None:
+    target = tmp_path / "BUGS.md"
+    real_fsync = os.fsync
+    calls = 0
+
+    def fail_the_directory_fsync(fd):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("simulated directory fsync failure")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", fail_the_directory_fsync)
+    with pytest.raises(OSError):
+        artifact_lib.atomic_write(target, "new\n")
+
+    assert target.read_text() == "new\n"
+
+
+def test_atomic_write_degrades_quietly_when_directory_fsync_is_unsupported(
+    tmp_path, monkeypatch
+) -> None:
+    target = tmp_path / "BUGS.md"
+    real_fsync = os.fsync
+    calls = 0
+
+    def einval_the_directory_fsync(fd):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError(errno.EINVAL, "simulated EINVAL on directory fsync")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", einval_the_directory_fsync)
+    artifact_lib.atomic_write(target, "new\n")
+
+    assert target.read_text() == "new\n"
+
+
 # --- field_line ------------------------------------------------------------------
 
 
@@ -353,6 +413,13 @@ def test_splice_field_inserts_after_heading_when_no_field_lines_exist() -> None:
     entry = artifact_lib.parse_entries(text, "BUG").entries[0]
     result = artifact_lib.splice_field(text, entry, "Status", "open")
     assert result == "## BUG-1: alpha\n- **Status**: open\n\nSome prose.\n"
+
+
+def test_splice_field_anchors_after_an_empty_valued_field_line() -> None:
+    text = "## BUG-1: alpha\n- **Empty**:\nSome prose.\n"
+    entry = artifact_lib.parse_entries(text, "BUG").entries[0]
+    result = artifact_lib.splice_field(text, entry, "Status", "open")
+    assert result == "## BUG-1: alpha\n- **Empty**:\n- **Status**: open\nSome prose.\n"
 
 
 def test_splice_field_removes_the_line_when_value_is_none() -> None:
@@ -392,6 +459,13 @@ def test_splice_field_inserts_into_the_last_entry_with_no_trailing_newline() -> 
 
 def test_splice_field_removes_the_only_field_from_the_last_entry_with_no_trailing_newline() -> None:
     text = "## BUG-1: alpha\n- **Status**: open"
+    entry = artifact_lib.parse_entries(text, "BUG").entries[0]
+    result = artifact_lib.splice_field(text, entry, "Status", None)
+    assert result == "## BUG-1: alpha"
+
+
+def test_splice_field_removing_the_final_crlf_field_leaves_no_stray_carriage_return() -> None:
+    text = "## BUG-1: alpha\r\n- **Status**: open"
     entry = artifact_lib.parse_entries(text, "BUG").entries[0]
     result = artifact_lib.splice_field(text, entry, "Status", None)
     assert result == "## BUG-1: alpha"
