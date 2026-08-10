@@ -19,7 +19,7 @@ import shutil
 import stat
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO
 
@@ -29,6 +29,8 @@ from artifact_lib import (
     atomic_write,
     detect_schema_version,
     ensure_lock_dir,
+    hash_file,
+    hash_probe_spec,
     parse_entries,
 )
 
@@ -508,6 +510,299 @@ def cmd_status(args: argparse.Namespace) -> int:
     project = Path(args.project_dir).resolve()
     sys.stdout.write(render_index(project) + render_doctor(project))
     return EXIT_OK
+
+
+# --- lifecycle field grammar: Status, Probe -----------------------------
+#
+# docs/quirk/specs/2026-08-04-pm-agent/tech.md, §Field rendering. `Handoff` is Phase 3
+# (logic.md:778-785 locks Phase 2's `start` to `--here`, which never writes it) and is not
+# implemented here.
+
+DELIM = " — "  # space, em dash, space: the one delimiter every lifecycle field splits on
+_FREE_TEXT_BAD_RE = re.compile(r"[\r\n]| — ")
+
+_STATE_RE = re.compile(r"^(open|in_progress|delivered|closed|wontfix|superseded)$")
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_ATTEMPT_RE = re.compile(r"^attempt (\d+)$")
+_REFUSED_RE = re.compile(r"^refused (\d+)$")
+_COMMIT_RE = re.compile(r"^commit: ([0-9a-f]{40})$")
+_INTEGRATED_RE = re.compile(r"^integrated: ([0-9a-f]{40})$")
+_BY_RE = re.compile(r"^by: ([A-Z]+-\d+)$")
+_REASON_RE = re.compile(r"^reason: (.+)$")
+_PARKED_RE = re.compile(r"^parked: (.+)$")
+
+_PROBE_VERB_RE = re.compile(r"^(test|grep|none):?(.*)$")
+_BASELINE_RE = re.compile(r"^baseline: (.+)$")
+_FINAL_RE = re.compile(r"^final: (.+)$")
+_HASHES_RE = re.compile(r"^spec#([0-9a-f]{8})(?: file#([0-9a-f]{8}))?$")
+_SKIPPED_RE = re.compile(r"^skipped (\d+) unreadable$")
+_GREP_BASELINE_FILES_RE = re.compile(r"^(.*) \((.*)\)$")
+
+# in_progress/delivered/closed/open can only be reached by way of a start, so a missing
+# attempt segment there is corruption, not a never-started entry; wontfix/superseded are the
+# only states `decide` can reach directly from a never-started `open`.
+_STATUS_ATTEMPT_REQUIRED = frozenset({"open", "in_progress", "delivered", "closed"})
+
+
+def is_valid_free_text(value: str) -> bool:
+    """Return whether `value` is safe as a lifecycle field's one free-text segment.
+
+    Rejects a newline, a carriage return, or the field delimiter itself — any of these
+    would make the delimiter-split grammar ambiguous when the field is parsed back. Shared by
+    `start`/`park`/`decide` to validate `--reason`/`--parked` before writing anything.
+    """
+    return _FREE_TEXT_BAD_RE.search(value) is None
+
+
+@dataclass(frozen=True)
+class StatusField:
+    state: str
+    date: str
+    attempt: int = 0
+    refused: int = 0
+    commit: str | None = None
+    integrated: str | None = None
+    by: str | None = None
+    reason: str | None = None
+    parked: str | None = None
+
+
+@dataclass(frozen=True)
+class ProbeField:
+    verb: str
+    arg: str
+    baseline: str | None = None
+    baseline_files: list[str] = field(default_factory=list)
+    final: str | None = None
+    spec_hash: str | None = None
+    file_hash: str | None = None
+    skipped_files: int = 0
+
+
+@dataclass(frozen=True)
+class MalformedField:
+    raw: str
+    reason: str
+
+
+def render_status(status: StatusField) -> str:
+    """Render a `StatusField` to its `Status` field value (the text after `- **Status**: `).
+
+    `parse_status` is its exact inverse for any `StatusField` a real transition produces.
+    """
+    segments = [status.state, status.date]
+    if status.attempt > 0:
+        segments.append(f"attempt {status.attempt}")
+    if status.refused > 0:
+        segments.append(f"refused {status.refused}")
+    if status.state == "delivered":
+        segments.append(f"commit: {status.commit}")
+    elif status.state == "closed":
+        segments.append(f"integrated: {status.integrated}")
+    elif status.state == "superseded":
+        segments.append(f"by: {status.by}")
+        segments.append(f"reason: {status.reason}")
+    elif status.state == "wontfix":
+        segments.append(f"reason: {status.reason}")
+    elif status.state == "open" and status.parked is not None:
+        segments.append(f"parked: {status.parked}")
+    return DELIM.join(segments)
+
+
+def parse_status(line: str) -> StatusField | MalformedField:
+    """Parse a `Status` field's value into a `StatusField`, total over all input.
+
+    Matches segments left to right against their anchored patterns; a segment that fails to
+    match — including one missing where the state requires it — yields `MalformedField` naming
+    that segment, never a partially filled `StatusField` and never a coercion to `open`: an
+    unparseable line is unknown state, and a transition command must refuse to write over it.
+    """
+    parts = line.split(DELIM)
+
+    if not parts or not _STATE_RE.match(parts[0]):
+        return MalformedField(raw=line, reason="state")
+    state = parts[0]
+    i = 1
+
+    if i >= len(parts) or not _DATE_RE.match(parts[i]):
+        return MalformedField(raw=line, reason="date")
+    date = parts[i]
+    i += 1
+
+    attempt = 0
+    m = _ATTEMPT_RE.match(parts[i]) if i < len(parts) else None
+    if m is not None:
+        attempt = int(m.group(1))
+        i += 1
+    elif state in _STATUS_ATTEMPT_REQUIRED:
+        return MalformedField(raw=line, reason="attempt")
+
+    refused = 0
+    m = _REFUSED_RE.match(parts[i]) if i < len(parts) else None
+    if m is not None:
+        refused = int(m.group(1))
+        i += 1
+
+    commit = integrated = by = reason = parked = None
+
+    if state == "delivered":
+        m = _COMMIT_RE.match(parts[i]) if i < len(parts) else None
+        if m is None:
+            return MalformedField(raw=line, reason="commit")
+        commit = m.group(1)
+        i += 1
+    elif state == "closed":
+        m = _INTEGRATED_RE.match(parts[i]) if i < len(parts) else None
+        if m is None:
+            return MalformedField(raw=line, reason="integrated")
+        integrated = m.group(1)
+        i += 1
+    elif state == "superseded":
+        m = _BY_RE.match(parts[i]) if i < len(parts) else None
+        if m is None:
+            return MalformedField(raw=line, reason="by")
+        by = m.group(1)
+        i += 1
+        if i >= len(parts):
+            return MalformedField(raw=line, reason="reason")
+        m = _REASON_RE.match(DELIM.join(parts[i:]))
+        if m is None:
+            return MalformedField(raw=line, reason="reason")
+        reason = m.group(1)
+        i = len(parts)
+    elif state == "wontfix":
+        if i >= len(parts):
+            return MalformedField(raw=line, reason="reason")
+        m = _REASON_RE.match(DELIM.join(parts[i:]))
+        if m is None:
+            return MalformedField(raw=line, reason="reason")
+        reason = m.group(1)
+        i = len(parts)
+    elif state == "open" and i < len(parts):
+        m = _PARKED_RE.match(DELIM.join(parts[i:]))
+        if m is None:
+            return MalformedField(raw=line, reason="parked")
+        parked = m.group(1)
+        i = len(parts)
+
+    if i != len(parts):
+        return MalformedField(raw=line, reason="trailing segment")
+
+    return StatusField(
+        state=state, date=date, attempt=attempt, refused=refused,
+        commit=commit, integrated=integrated, by=by, reason=reason, parked=parked,
+    )
+
+
+def _render_probe_hashes(spec_hash: str | None, file_hash: str | None) -> str:
+    if file_hash is not None:
+        return f"spec#{spec_hash} file#{file_hash}"
+    return f"spec#{spec_hash}"
+
+
+def render_probe(probe: ProbeField) -> str:
+    """Render a `ProbeField` to its `Probe` field value (the text after `- **Probe**: `).
+
+    `parse_probe` is its exact inverse whenever a `ProbeField`'s baseline and final hashes
+    agree, which is every field a real `start`-then-`finish` sequence over an untouched
+    `Probe:` line produces — the grammar carries one hash pair's worth of state, re-displayed
+    at both occurrences once `final` is set, not two independently stored pairs.
+    """
+    if probe.verb == "none":
+        return "none"
+
+    segments = [f"{probe.verb}:{probe.arg}" if probe.arg else probe.verb]
+
+    if probe.verb == "grep" and probe.baseline_files:
+        baseline_text = f"{probe.baseline} ({', '.join(probe.baseline_files)})"
+    else:
+        baseline_text = probe.baseline
+    segments.append(f"baseline: {baseline_text}")
+
+    if probe.verb == "grep" and probe.skipped_files > 0:
+        segments.append(f"skipped {probe.skipped_files} unreadable")
+
+    segments.append(_render_probe_hashes(probe.spec_hash, probe.file_hash))
+
+    if probe.final is not None:
+        segments.append(f"final: {probe.final}")
+        segments.append(_render_probe_hashes(probe.spec_hash, probe.file_hash))
+
+    return DELIM.join(segments)
+
+
+def parse_probe(line: str) -> ProbeField | MalformedField:
+    """Parse a `Probe` field's value into a `ProbeField`, total over all input.
+
+    Matches segments left to right against their anchored patterns, exactly as `parse_status`
+    does; a segment that fails to match yields `MalformedField` naming that segment, never a
+    partial `ProbeField`.
+    """
+    parts = line.split(DELIM)
+
+    m = _PROBE_VERB_RE.match(parts[0]) if parts else None
+    if m is None:
+        return MalformedField(raw=line, reason="verb")
+    verb, arg = m.group(1), m.group(2)
+    i = 1
+
+    if verb == "none":
+        if i != len(parts):
+            return MalformedField(raw=line, reason="trailing segment")
+        return ProbeField(verb=verb, arg=arg)
+
+    m = _BASELINE_RE.match(parts[i]) if i < len(parts) else None
+    if m is None:
+        return MalformedField(raw=line, reason="baseline")
+    baseline_raw = m.group(1)
+    i += 1
+
+    baseline = baseline_raw
+    baseline_files: list[str] = []
+    if verb == "grep":
+        fm = _GREP_BASELINE_FILES_RE.match(baseline_raw)
+        if fm is not None:
+            baseline = fm.group(1)
+            baseline_files = fm.group(2).split(", ") if fm.group(2) else []
+
+    skipped_files = 0
+    m = _SKIPPED_RE.match(parts[i]) if verb == "grep" and i < len(parts) else None
+    if m is not None:
+        skipped_files = int(m.group(1))
+        i += 1
+
+    m = _HASHES_RE.match(parts[i]) if i < len(parts) else None
+    if m is None:
+        return MalformedField(raw=line, reason="hashes")
+    spec_hash, file_hash = m.group(1), m.group(2)
+    i += 1
+
+    final = None
+    if i < len(parts):
+        m = _FINAL_RE.match(parts[i])
+        if m is None:
+            return MalformedField(raw=line, reason="final")
+        final = m.group(1)
+        i += 1
+
+        m = _SKIPPED_RE.match(parts[i]) if verb == "grep" and i < len(parts) else None
+        if m is not None:
+            skipped_files = int(m.group(1))
+            i += 1
+
+        m = _HASHES_RE.match(parts[i]) if i < len(parts) else None
+        if m is None:
+            return MalformedField(raw=line, reason="hashes")
+        spec_hash, file_hash = m.group(1), m.group(2)
+        i += 1
+
+    if i != len(parts):
+        return MalformedField(raw=line, reason="trailing segment")
+
+    return ProbeField(
+        verb=verb, arg=arg, baseline=baseline, baseline_files=baseline_files,
+        final=final, spec_hash=spec_hash, file_hash=file_hash, skipped_files=skipped_files,
+    )
 
 
 # --- not-yet-implemented lifecycle commands -----------------------------
