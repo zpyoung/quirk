@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """Subcommand CLI over typed-artifact markdown files: index/next/doctor/status/migrate/roadmap,
-plus stubs for the Phase-3 lifecycle commands (start/finish/park/decide/reconcile).
+plus the Phase-2 lifecycle commands start/finish/park/decide (reconcile is a later task's stub).
 
 The read layer (index/next/doctor/status/roadmap) consumes `Status`, `Blocked by`, and
 `ROADMAP.md` membership to compute readiness (`ready`/`eligible`/`unplaced`) and to run
-cross-ledger doctor findings (`CYCLE`, `DANGLING`, `BLOCKED_BY_*`, roadmap findings). Lifecycle
-writers (start/finish/park/decide/reconcile) are added by a later task.
+cross-ledger doctor findings (`CYCLE`, `DANGLING`, `BLOCKED_BY_*`, roadmap findings). The
+lifecycle commands mutate an entry's `Status`/`Probe` fields under the same compare-and-swap
+procedure — acquire the ledger's lock, re-read, compare the expectation tuple captured before any
+slow work, splice and write on match, refuse without writing on mismatch. `start` here is
+`--here`-only (Phase 2): no `Handoff` field, no worktree, no dispatch.
 """
 from __future__ import annotations
 
 import argparse
 import codecs
+import datetime
 import fcntl
 import locale
 import os
@@ -21,11 +25,12 @@ import stat
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import IO, Iterable, Iterator
+from typing import Callable, IO, Iterable, Iterator
 
 from artifact_lib import (
+    DuplicateFieldError,
     Entry,
     MalformedHeading,
     RoadmapParse,
@@ -38,6 +43,7 @@ from artifact_lib import (
     parse_entries,
     parse_roadmap,
     render_roadmap,
+    splice_field,
     validate_roadmap_for_write,
 )
 
@@ -1575,7 +1581,12 @@ def grep_baseline_files_missing(root: Path, baseline_files: Iterable[str]) -> li
     return [name for name in baseline_files if not (root / name).exists()]
 
 
-# --- not-yet-implemented lifecycle commands -----------------------------
+# --- lifecycle commands: start, finish, park, decide ----------------------
+#
+# docs/quirk/specs/2026-08-04-pm-agent/tech.md, §The CAS transition mechanism, §Exit codes
+# (per-command precedence). Phase 2 is --here only (logic.md:778-785): no `Handoff` field, no
+# worktree, no dispatch — `start`'s sequence is baseline probe -> write ledger, and `finish`
+# compares the worktree root against the project's own repo.
 
 
 def _not_implemented(name: str) -> int:
@@ -1583,20 +1594,475 @@ def _not_implemented(name: str) -> int:
     return EXIT_BAD_ARGUMENT
 
 
+@dataclass(frozen=True)
+class _Refusal:
+    code: int
+    message: str
+
+
+def _refuse(code: int, message: str) -> _Refusal:
+    return _Refusal(code, message)
+
+
+@dataclass(frozen=True)
+class _Prepared:
+    spec: ArtifactSpec
+    entry_id: int
+    entry: Entry
+    status: StatusField
+
+
+_ENTRY_ID_ARG_RE = re.compile(r"^([A-Z]+)-(0|[1-9][0-9]*)$")
+
+
+def _today() -> str:
+    return datetime.date.today().isoformat()
+
+
+def _resolve_ledger(project: Path, id_str: str) -> tuple[ArtifactSpec, int, Path] | _Refusal:
+    m = _ENTRY_ID_ARG_RE.match(id_str)
+    spec = None
+    if m is not None:
+        spec = next((s for s in ALL_SPECS if s.header == m.group(1)), None)
+    if m is None or spec is None:
+        return _refuse(EXIT_NOT_FOUND, f"{id_str}: no such entry")
+    path = project / spec.filename
+    if not path.exists():
+        return _refuse(EXIT_NOT_FOUND, f"{spec.filename} not found in {project}")
+    return spec, int(m.group(2)), path
+
+
+def _prepare_transition(
+    project: Path,
+    id_str: str,
+    *,
+    validate_args: Callable[[], _Refusal | None],
+    allowed_states: frozenset[str],
+) -> _Prepared | _Refusal:
+    """Run every check that precedes the CAS write, in the exit-code table's precedence order:
+    not-found (3) -> bad argument (2) -> schema mismatch (8) -> corrupt entry (4) -> CAS (6).
+
+    `validate_args` supplies the command-specific "2" checks (probe syntax, `--reason`, `--by`,
+    `--repo`) — they run after the not-found check and before the schema/corrupt checks, per
+    tech.md's per-command precedence table, so a not-found ID always outranks a bad argument.
+    """
+    resolved = _resolve_ledger(project, id_str)
+    if isinstance(resolved, _Refusal):
+        return resolved
+    spec, entry_id, path = resolved
+
+    with path.open(encoding="utf-8", newline="") as f:
+        text = f.read()
+    parse = parse_entries(text, spec.header)
+    matches = [e for e in parse.entries if e.id == entry_id]
+    malformed = [m for m in parse.malformed if m.id == entry_id]
+    if not matches and not malformed:
+        return _refuse(EXIT_NOT_FOUND, f"{spec.header}-{entry_id}: not found in {spec.filename}")
+
+    arg_error = validate_args()
+    if arg_error is not None:
+        return arg_error
+
+    if detect_schema_version(text) != 2:
+        return _refuse(
+            EXIT_SCHEMA_MISMATCH, f"{spec.filename} is not on schema v2. Run /quirk:pm:migrate first."
+        )
+
+    if len(matches) + len(malformed) > 1:
+        return _refuse(EXIT_CORRUPT_ENTRY, f"{spec.header}-{entry_id}: duplicate ID in {spec.filename}")
+    if malformed:
+        return _refuse(EXIT_CORRUPT_ENTRY, f"{spec.header}-{entry_id}: malformed heading, no title")
+    entry = matches[0]
+    status = _entry_status(entry)
+    if isinstance(status, MalformedField):
+        return _refuse(
+            EXIT_CORRUPT_ENTRY, f"{spec.header}-{entry_id}: malformed Status field ({status.reason})"
+        )
+
+    if spec.header == "PROPOSAL":
+        return _refuse(
+            EXIT_CAS_FAILURE, f"{spec.header}-{entry_id}: PROPOSAL entries are not part of the PM lifecycle"
+        )
+    if status.state not in allowed_states:
+        return _refuse(
+            EXIT_CAS_FAILURE,
+            f"{spec.header}-{entry_id}: expected state in {sorted(allowed_states)}, found {status.state!r}",
+        )
+
+    return _Prepared(spec=spec, entry_id=entry_id, entry=entry, status=status)
+
+
+def _expectation(prepared: _Prepared) -> tuple[int, int, str, str | None]:
+    return (
+        prepared.entry_id, prepared.status.attempt, prepared.status.state,
+        prepared.entry.fields.get("Probe"),
+    )
+
+
+def _commit_transition(
+    project: Path,
+    spec: ArtifactSpec,
+    entry_id: int,
+    expected: tuple[int, int, str, str | None],
+    new_status: StatusField,
+    new_probe: ProbeField | None,
+) -> _Refusal | None:
+    """Re-read, re-locate, and compare `expected` under the held lock; splice and write on match.
+
+    The compare and the write happen inside this one lock acquisition — splitting them into a
+    read-then-later-write would reopen exactly the race the CAS procedure exists to close.
+    """
+    path = project / spec.filename
+    lock_dir = ensure_lock_dir(project)
+    timeout = float(os.environ.get("ARTIFACT_LOCK_TIMEOUT", "5.0"))
+    deadline = time.monotonic() + timeout
+    lock_file = _acquire_ledger_lock(lock_dir / f"{spec.filename}.lock", deadline)
+    if lock_file is None:
+        return _refuse(EXIT_LOCK_TIMEOUT, f"could not acquire lock on {spec.filename}, nothing written")
+    try:
+        with path.open(encoding="utf-8", newline="") as f:
+            text = f.read()
+        parse = parse_entries(text, spec.header)
+        matches = [e for e in parse.entries if e.id == entry_id]
+        malformed = [m for m in parse.malformed if m.id == entry_id]
+        if len(matches) != 1 or malformed:
+            return _refuse(EXIT_CAS_FAILURE, f"{spec.header}-{entry_id}: entry changed, refusing")
+        entry = matches[0]
+        status = _entry_status(entry)
+        if isinstance(status, MalformedField):
+            return _refuse(
+                EXIT_CORRUPT_ENTRY, f"{spec.header}-{entry_id}: malformed Status field ({status.reason})"
+            )
+        # attempt, not just state, closes the stale-transition race: a status-only compare
+        # can't tell this in_progress from a different, later attempt at the same state
+        current = (entry.id, status.attempt, status.state, entry.fields.get("Probe"))
+        if current != expected:
+            return _refuse(EXIT_CAS_FAILURE, f"{spec.header}-{entry_id}: CAS mismatch, refusing")
+
+        try:
+            new_text = splice_field(text, entry, "Status", render_status(new_status))
+            if new_probe is not None:
+                reparsed = parse_entries(new_text, spec.header)
+                entry2 = next(e for e in reparsed.entries if e.id == entry_id)
+                new_text = splice_field(new_text, entry2, "Probe", render_probe(new_probe))
+        except DuplicateFieldError:
+            return _refuse(EXIT_CORRUPT_ENTRY, f"{spec.header}-{entry_id}: duplicated field line, refusing")
+
+        atomic_write(path, new_text)
+        return None
+    finally:
+        lock_file.close()
+
+
+# --- git plumbing for `finish`'s preconditions -----------------------------
+
+
+def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess | None:
+    try:
+        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _git_show_toplevel(cwd: Path) -> str | None:
+    proc = _run_git(["rev-parse", "--show-toplevel"], cwd)
+    if proc is None or proc.returncode != 0:
+        return None
+    return proc.stdout.strip()
+
+
+def _git_dirty_paths(cwd: Path) -> list[str] | None:
+    proc = _run_git(["status", "--porcelain"], cwd)
+    if proc is None or proc.returncode != 0:
+        return None
+    return [line for line in proc.stdout.splitlines() if line.strip()]
+
+
+def _git_head_sha(cwd: Path) -> str | None:
+    proc = _run_git(["rev-parse", "HEAD"], cwd)
+    if proc is None or proc.returncode != 0:
+        return None
+    sha = proc.stdout.strip()
+    return sha if re.fullmatch(r"[0-9a-f]{40}", sha) else None
+
+
+# --- Probe field construction for start/finish -----------------------------
+
+
+def _grep_summary(count: int, nfiles: int | None = None) -> str:
+    word = "match" if count == 1 else "matches"
+    if nfiles is None:
+        return f"{count} {word}"
+    file_word = "file" if nfiles == 1 else "files"
+    return f"{count} {word} in {nfiles} {file_word}"
+
+
+def _probe_field_from_baseline(spec: ProbeSpec, result: ProbeResult, root: Path) -> ProbeField:
+    if spec.verb == "none":
+        return ProbeField(verb="none", arg="")
+    raw = f"{spec.verb}:{spec.arg}"
+    spec_hash = hash_probe_spec(raw)
+    file_hash = None
+    baseline_files: list[str] = []
+    skipped_files = 0
+    if spec.verb == "test":
+        baseline = result.outcome
+        file_hash = hash_file(root / spec.nodeid.split("::", 1)[0])
+    else:
+        baseline = _grep_summary(result.count or 0, len(result.files))
+        baseline_files = list(result.files)
+        skipped_files = result.skipped_files
+    return ProbeField(
+        verb=spec.verb, arg=spec.arg, baseline=baseline, baseline_files=baseline_files,
+        spec_hash=spec_hash, file_hash=file_hash, skipped_files=skipped_files,
+    )
+
+
+def _probe_field_with_final(current: ProbeField, spec: ProbeSpec, result: ProbeResult, root: Path) -> ProbeField:
+    if spec.verb == "none":
+        return current
+    raw = f"{spec.verb}:{spec.arg}"
+    final_spec_hash = hash_probe_spec(raw)
+    final_file_hash = None
+    if spec.verb == "test":
+        final = result.outcome
+        final_file_hash = hash_file(root / spec.nodeid.split("::", 1)[0])
+    else:
+        final = _grep_summary(result.count or 0)
+    return replace(current, final=final, final_spec_hash=final_spec_hash, final_file_hash=final_file_hash)
+
+
 def cmd_start(args: argparse.Namespace) -> int:
-    return _not_implemented("start")
+    project = Path(args.project_dir).resolve()
+    if not project.exists() or not project.is_dir():
+        print(f"Project dir not found: {project}", file=sys.stderr)
+        return EXIT_PROJECT_DIR_NOT_FOUND
+
+    probe_spec_box: list[ProbeSpec] = []
+
+    def validate_args() -> _Refusal | None:
+        if args.repo is not None:
+            return _refuse(
+                EXIT_BAD_ARGUMENT, "dispatch is not available yet (Phase 2 is --here only); drop --repo"
+            )
+        parsed = parse_probe_spec(args.probe)
+        if isinstance(parsed, ProbeArgError):
+            return _refuse(EXIT_BAD_ARGUMENT, parsed.detail)
+        probe_spec_box.append(parsed)
+        return None
+
+    prepared = _prepare_transition(
+        project, args.id, validate_args=validate_args, allowed_states=frozenset({"open"}),
+    )
+    if isinstance(prepared, _Refusal):
+        print(f"[quirk:pm] {prepared.message}", file=sys.stderr)
+        return prepared.code
+    probe_spec = probe_spec_box[0]
+    expected = _expectation(prepared)
+
+    baseline = run_probe(probe_spec, project)
+    if not probe_accepts_baseline(probe_spec, baseline):
+        print(
+            f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: baseline probe outcome "
+            f"{baseline.outcome!r} does not discriminate this entry",
+            file=sys.stderr,
+        )
+        return EXIT_PROBE_REFUSED
+
+    new_status = StatusField(
+        state="in_progress", date=_today(),
+        attempt=prepared.status.attempt + 1, refused=prepared.status.refused,
+    )
+    new_probe = _probe_field_from_baseline(probe_spec, baseline, project)
+
+    refusal = _commit_transition(project, prepared.spec, prepared.entry_id, expected, new_status, new_probe)
+    if refusal is not None:
+        print(f"[quirk:pm] {refusal.message}", file=sys.stderr)
+        return refusal.code
+
+    print(f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: started (attempt {new_status.attempt})")
+    return EXIT_OK
 
 
 def cmd_finish(args: argparse.Namespace) -> int:
-    return _not_implemented("finish")
+    project = Path(args.project_dir).resolve()
+    if not project.exists() or not project.is_dir():
+        print(f"Project dir not found: {project}", file=sys.stderr)
+        return EXIT_PROJECT_DIR_NOT_FOUND
+
+    prepared = _prepare_transition(
+        project, args.id, validate_args=lambda: None, allowed_states=frozenset({"in_progress"}),
+    )
+    if isinstance(prepared, _Refusal):
+        print(f"[quirk:pm] {prepared.message}", file=sys.stderr)
+        return prepared.code
+    expected = _expectation(prepared)
+
+    probe_raw = prepared.entry.fields.get("Probe")
+    current_probe = parse_probe(probe_raw) if probe_raw is not None else ProbeField(verb="none", arg="")
+    if isinstance(current_probe, MalformedField):
+        print(
+            f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: malformed Probe field "
+            f"({current_probe.reason})",
+            file=sys.stderr,
+        )
+        return EXIT_CORRUPT_ENTRY
+    probe_verb_arg = "none" if current_probe.verb == "none" else f"{current_probe.verb}:{current_probe.arg}"
+    probe_spec = parse_probe_spec(probe_verb_arg)
+    if isinstance(probe_spec, ProbeArgError):
+        print(
+            f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: recorded Probe is unusable "
+            f"({probe_spec.detail})",
+            file=sys.stderr,
+        )
+        return EXIT_CORRUPT_ENTRY
+
+    # preconditions checked before the probe: it's the expensive step, and a dirty tree
+    # invalidates it anyway
+    toplevel = _git_show_toplevel(project)
+    # --show-toplevel, not --git-common-dir: the common dir is identical across every worktree
+    # of a repository, so it identifies only the repo, never this specific checkout
+    if toplevel is None or Path(toplevel).resolve() != project:
+        print(
+            f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: worktree root does not "
+            "match the project directory",
+            file=sys.stderr,
+        )
+        return EXIT_FINISH_PRECONDITION_FAILED
+
+    dirty = _git_dirty_paths(project)
+    if dirty is None:
+        print(
+            f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: could not read working tree status",
+            file=sys.stderr,
+        )
+        return EXIT_FINISH_PRECONDITION_FAILED
+    if dirty:
+        print(
+            f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: working tree is dirty: " + ", ".join(dirty),
+            file=sys.stderr,
+        )
+        return EXIT_FINISH_PRECONDITION_FAILED
+
+    result = run_probe(probe_spec, project)
+    missing_files = (
+        grep_baseline_files_missing(project, current_probe.baseline_files)
+        if probe_spec.verb == "grep" else []
+    )
+    accepted = probe_accepts_final(probe_spec, result) and not missing_files
+
+    if not accepted:
+        new_status = StatusField(
+            state="in_progress", date=_today(),
+            attempt=prepared.status.attempt, refused=prepared.status.refused + 1,
+        )
+        refusal = _commit_transition(project, prepared.spec, prepared.entry_id, expected, new_status, None)
+        if refusal is not None:
+            print(f"[quirk:pm] {refusal.message}", file=sys.stderr)
+            return refusal.code
+        print(
+            f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: probe refused "
+            f"(refused {new_status.refused})",
+            file=sys.stderr,
+        )
+        return EXIT_PROBE_REFUSED
+
+    commit_sha = _git_head_sha(project)
+    if commit_sha is None:
+        print(f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: could not resolve HEAD", file=sys.stderr)
+        return EXIT_FINISH_PRECONDITION_FAILED
+
+    new_status = StatusField(
+        state="delivered", date=_today(),
+        attempt=prepared.status.attempt, refused=prepared.status.refused, commit=commit_sha,
+    )
+    new_probe = _probe_field_with_final(current_probe, probe_spec, result, project)
+
+    refusal = _commit_transition(project, prepared.spec, prepared.entry_id, expected, new_status, new_probe)
+    if refusal is not None:
+        print(f"[quirk:pm] {refusal.message}", file=sys.stderr)
+        return refusal.code
+
+    print(f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: delivered ({commit_sha})")
+    return EXIT_OK
 
 
 def cmd_park(args: argparse.Namespace) -> int:
-    return _not_implemented("park")
+    project = Path(args.project_dir).resolve()
+    if not project.exists() or not project.is_dir():
+        print(f"Project dir not found: {project}", file=sys.stderr)
+        return EXIT_PROJECT_DIR_NOT_FOUND
+
+    def validate_args() -> _Refusal | None:
+        if not is_valid_free_text(args.reason):
+            return _refuse(EXIT_BAD_ARGUMENT, "--reason contains a newline, carriage return, or ' — '")
+        return None
+
+    prepared = _prepare_transition(
+        project, args.id, validate_args=validate_args, allowed_states=frozenset({"in_progress"}),
+    )
+    if isinstance(prepared, _Refusal):
+        print(f"[quirk:pm] {prepared.message}", file=sys.stderr)
+        return prepared.code
+    expected = _expectation(prepared)
+
+    new_status = StatusField(
+        state="open", date=_today(),
+        attempt=prepared.status.attempt, refused=prepared.status.refused, parked=args.reason,
+    )
+    refusal = _commit_transition(project, prepared.spec, prepared.entry_id, expected, new_status, None)
+    if refusal is not None:
+        print(f"[quirk:pm] {refusal.message}", file=sys.stderr)
+        return refusal.code
+
+    print(f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: parked")
+    return EXIT_OK
 
 
 def cmd_decide(args: argparse.Namespace) -> int:
-    return _not_implemented("decide")
+    project = Path(args.project_dir).resolve()
+    if not project.exists() or not project.is_dir():
+        print(f"Project dir not found: {project}", file=sys.stderr)
+        return EXIT_PROJECT_DIR_NOT_FOUND
+
+    def validate_args() -> _Refusal | None:
+        if not is_valid_free_text(args.reason):
+            return _refuse(EXIT_BAD_ARGUMENT, "--reason contains a newline, carriage return, or ' — '")
+        if args.as_ == "superseded":
+            if not args.by:
+                return _refuse(EXIT_BAD_ARGUMENT, "--as superseded requires --by")
+            if not _ENTRY_ID_ARG_RE.match(args.by):
+                return _refuse(EXIT_BAD_ARGUMENT, f"--by {args.by!r} is not a valid entry ID")
+        return None
+
+    prepared = _prepare_transition(
+        project, args.id, validate_args=validate_args,
+        allowed_states=frozenset({"open", "in_progress", "delivered"}),
+    )
+    if isinstance(prepared, _Refusal):
+        print(f"[quirk:pm] {prepared.message}", file=sys.stderr)
+        return prepared.code
+    expected = _expectation(prepared)
+
+    if args.as_ == "wontfix":
+        new_status = StatusField(
+            state="wontfix", date=_today(),
+            attempt=prepared.status.attempt, refused=prepared.status.refused, reason=args.reason,
+        )
+    else:
+        new_status = StatusField(
+            state="superseded", date=_today(),
+            attempt=prepared.status.attempt, refused=prepared.status.refused,
+            by=args.by, reason=args.reason,
+        )
+
+    refusal = _commit_transition(project, prepared.spec, prepared.entry_id, expected, new_status, None)
+    if refusal is not None:
+        print(f"[quirk:pm] {refusal.message}", file=sys.stderr)
+        return refusal.code
+
+    print(f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: {args.as_}")
+    return EXIT_OK
 
 
 def cmd_reconcile(args: argparse.Namespace) -> int:
@@ -1677,7 +2143,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_project_dir(p_next)
     p_next.set_defaults(func=cmd_next)
 
-    p_start = subparsers.add_parser("start", help="Start work on an entry (not yet implemented)")
+    p_start = subparsers.add_parser("start", help="Start work on an entry (--here only)")
     p_start.add_argument("id")
     p_start.add_argument("--probe", required=True, metavar="VERB:ARG")
     p_start.add_argument("--repo", metavar="SEL")
@@ -1685,18 +2151,18 @@ def build_parser() -> argparse.ArgumentParser:
     _add_project_dir(p_start)
     p_start.set_defaults(func=cmd_start)
 
-    p_finish = subparsers.add_parser("finish", help="Finish work on an entry (not yet implemented)")
+    p_finish = subparsers.add_parser("finish", help="Finish work on an entry")
     p_finish.add_argument("id")
     _add_project_dir(p_finish)
     p_finish.set_defaults(func=cmd_finish)
 
-    p_park = subparsers.add_parser("park", help="Park an in-progress entry (not yet implemented)")
+    p_park = subparsers.add_parser("park", help="Park an in-progress entry")
     p_park.add_argument("id")
     p_park.add_argument("--reason", required=True, metavar="TEXT")
     _add_project_dir(p_park)
     p_park.set_defaults(func=cmd_park)
 
-    p_decide = subparsers.add_parser("decide", help="Decide an entry's fate (not yet implemented)")
+    p_decide = subparsers.add_parser("decide", help="Decide an entry's fate")
     p_decide.add_argument("id")
     p_decide.add_argument("--as", dest="as_", required=True, choices=["wontfix", "superseded"])
     p_decide.add_argument("--reason", required=True, metavar="TEXT")
