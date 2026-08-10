@@ -15,13 +15,15 @@ import fcntl
 import locale
 import os
 import re
+import shlex
 import shutil
 import stat
+import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import IO
+from typing import IO, Iterable, Iterator
 
 from artifact_lib import (
     Entry,
@@ -70,6 +72,10 @@ DEFAULT_MAX_FILE_BYTES = 1_048_576
 # host-dependent. 1 GiB is comfortably past any real artifact file and
 # comfortably short of that failure mode on any real host.
 MAX_USABLE_FILE_BYTES = 1_073_741_824
+
+DEFAULT_PROBE_TIMEOUT = 120.0
+DEFAULT_TEST_RUNNER = "python3 -m pytest"
+DEFAULT_TEST_EXIT_MAP: dict[int, str] = {0: "pass", 1: "fail", 4: "missing", 5: "missing"}
 
 
 @dataclass(frozen=True)
@@ -1269,6 +1275,304 @@ def render_roadmap_show(project: Path) -> str:
         f"({ready_count} ready, {blocked_count} blocked, {malformed_count} malformed)"
     )
     return "\n".join(lines) + "\n"
+
+
+# --- The probe execution contract ----------------------------------------
+#
+# docs/quirk/specs/2026-08-04-pm-agent/tech.md, §The probe execution contract.
+# Runs a `--probe VERB:ARG` spec and reports what happened; never prints, never exits, never
+# raises on an ordinary probe outcome. `start`/`finish` (a later task) call this engine rather
+# than reaching into it.
+
+
+@dataclass(frozen=True)
+class ProbeSpec:
+    """A parsed `--probe VERB:ARG` argument, ready for `run_probe`.
+
+    `arg` is the exact text after `verb:` — `f"{verb}:{arg}"` (or just `"none"`) reconstructs
+    the original value byte-for-byte, which is what `ProbeField.arg` stores and what gets hashed
+    for `spec#`.
+    """
+    verb: str
+    arg: str
+    nodeid: str | None = None
+    pattern: str | None = None
+    paths: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ProbeArgError:
+    """`parse_probe_spec` could not make sense of a `--probe` value."""
+    detail: str
+
+
+@dataclass(frozen=True)
+class ProbeResult:
+    """What running a `ProbeSpec` observed.
+
+    `outcome` is `pass`/`fail`/`missing`/`error` for `test:`, `ok`/`error` for `grep:`, and
+    `none` for `none`. `test:` additionally reaches `config_error` when `QUIRK_PM_TEST_RUNNER`
+    is set to something other than the default without a matching `QUIRK_PM_TEST_EXIT_MAP` —
+    distinct from `error` because it is a refusal to guess, not an observed probe outcome.
+    """
+    outcome: str
+    count: int | None = None
+    files: tuple[str, ...] = ()
+    skipped_files: int = 0
+    detail: str | None = None
+
+
+def parse_probe_spec(value: str) -> ProbeSpec | ProbeArgError:
+    """Parse a `--probe VERB:ARG` command-line value into a `ProbeSpec`, total over its input.
+
+    `grep:`'s argument splits on the first standalone ` -- ` token only: everything before is
+    the pattern, verbatim; everything after is `shlex.split()` into `paths`. No ` -- ` means the
+    whole remainder is the pattern and `paths` stays empty (`run_probe` defaults that to the
+    worktree root).
+    """
+    if value == "none":
+        return ProbeSpec(verb="none", arg="")
+
+    if value.startswith("test:"):
+        nodeid = value[len("test:"):]
+        if not nodeid:
+            return ProbeArgError("test: probe requires a nodeid")
+        return ProbeSpec(verb="test", arg=nodeid, nodeid=nodeid)
+
+    if value.startswith("grep:"):
+        rest = value[len("grep:"):]
+        pattern, sep, paths_text = rest.partition(" -- ")
+        if not pattern:
+            return ProbeArgError("grep: probe requires a pattern")
+        paths: tuple[str, ...] = ()
+        if sep:
+            try:
+                paths = tuple(shlex.split(paths_text))
+            except ValueError as exc:
+                return ProbeArgError(f"grep: probe paths are not valid shell syntax: {exc}")
+        return ProbeSpec(verb="grep", arg=rest, pattern=pattern, paths=paths)
+
+    return ProbeArgError(f"unrecognized probe verb in {value!r} (expected test:, grep:, or none)")
+
+
+def _probe_timeout() -> float:
+    """The `QUIRK_PM_PROBE_TIMEOUT` bound (seconds) in effect, defaulting to 120."""
+    raw = os.environ.get("QUIRK_PM_PROBE_TIMEOUT")
+    if raw is None:
+        return DEFAULT_PROBE_TIMEOUT
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_PROBE_TIMEOUT
+    return value if value > 0 else DEFAULT_PROBE_TIMEOUT
+
+
+def _parse_test_exit_map(raw: str) -> dict[int, str] | None:
+    """Parse `QUIRK_PM_TEST_EXIT_MAP`'s `code:outcome` list; `None` if any entry is malformed."""
+    mapping: dict[int, str] = {}
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        code_text, sep, outcome = item.partition(":")
+        if not sep or not outcome:
+            return None
+        try:
+            code = int(code_text)
+        except ValueError:
+            return None
+        mapping[code] = outcome
+    return mapping if mapping else None
+
+
+def _test_exit_map() -> tuple[dict[int, str] | None, str | None]:
+    """The pytest-exit-code -> outcome mapping in effect, or `(None, reason)` if none applies.
+
+    `QUIRK_PM_TEST_EXIT_MAP`, when set, always governs. Otherwise the default (pytest's own
+    codes) applies only while `QUIRK_PM_TEST_RUNNER` is still the default — reusing pytest's
+    codes for an arbitrary configured runner would silently misread whatever that runner's exit
+    statuses actually mean.
+    """
+    raw = os.environ.get("QUIRK_PM_TEST_EXIT_MAP")
+    if raw is not None:
+        parsed = _parse_test_exit_map(raw)
+        if parsed is None:
+            return None, f"QUIRK_PM_TEST_EXIT_MAP is malformed: {raw!r}"
+        return parsed, None
+
+    runner = os.environ.get("QUIRK_PM_TEST_RUNNER", DEFAULT_TEST_RUNNER)
+    if runner != DEFAULT_TEST_RUNNER:
+        return None, "QUIRK_PM_TEST_RUNNER is set without QUIRK_PM_TEST_EXIT_MAP"
+    return DEFAULT_TEST_EXIT_MAP, None
+
+
+def _run_test_probe(spec: ProbeSpec, root: Path, timeout: float) -> ProbeResult:
+    exit_map, error = _test_exit_map()
+    if exit_map is None:
+        return ProbeResult(outcome="config_error", detail=error)
+
+    runner = os.environ.get("QUIRK_PM_TEST_RUNNER", DEFAULT_TEST_RUNNER)
+    try:
+        command = [*shlex.split(runner), spec.nodeid]
+    except ValueError as exc:
+        return ProbeResult(
+            outcome="config_error", detail=f"QUIRK_PM_TEST_RUNNER is malformed: {exc}"
+        )
+
+    try:
+        proc = subprocess.run(command, cwd=root, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return ProbeResult(outcome="error", detail=f"probe exceeded {timeout}s timeout")
+    except OSError as exc:
+        return ProbeResult(outcome="error", detail=f"could not run test runner: {exc}")
+
+    outcome = exit_map.get(proc.returncode, "error")
+    detail = None if outcome != "error" else f"unmapped exit code {proc.returncode}"
+    return ProbeResult(outcome=outcome, detail=detail)
+
+
+def _display_grep_path(root: Path, path: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
+
+
+def _grep_walk_targets(base: Path, allowed_roots: list[Path]) -> Iterator[Path]:
+    if base.is_file():
+        yield base
+        return
+    # followlinks=False: a symlinked directory is left unvisited rather than recursed into,
+    # which is what keeps a self-referential symlink from walking forever
+    for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
+        dirnames[:] = [name for name in dirnames if name != ".git"]
+        for name in filenames:
+            file_path = Path(dirpath) / name
+            if file_path.is_symlink():
+                real = Path(os.path.realpath(file_path))
+                if not any(real.is_relative_to(allowed) for allowed in allowed_roots):
+                    continue
+            yield file_path
+
+
+def _run_grep_probe(spec: ProbeSpec, root: Path, timeout: float) -> ProbeResult:
+    try:
+        regex = re.compile(spec.pattern)
+    except re.error as exc:
+        return ProbeResult(outcome="error", detail=str(exc))
+
+    if spec.paths:
+        bases: list[Path] = []
+        for raw in spec.paths:
+            candidate = Path(raw)
+            candidate = candidate if candidate.is_absolute() else root / candidate
+            if not candidate.exists():
+                return ProbeResult(outcome="error", detail=f"path not found: {raw}")
+            try:
+                if candidate.is_dir():
+                    with os.scandir(candidate):
+                        pass
+                else:
+                    with open(candidate, "rb"):
+                        pass
+            except PermissionError:
+                return ProbeResult(outcome="error", detail=f"path not readable: {raw}")
+            bases.append(candidate.resolve())
+    else:
+        bases = [root.resolve()]
+
+    started = time.monotonic()
+    count = 0
+    skipped = 0
+    matched_files: set[str] = set()
+
+    for base in bases:
+        for file_path in _grep_walk_targets(base, bases):
+            # per file, not per line: bounds the check's own cost while still guaranteeing
+            # termination on a tree too large to finish scanning inside the timeout
+            if time.monotonic() - started > timeout:
+                return ProbeResult(
+                    outcome="error", detail="scan exceeded timeout", skipped_files=skipped,
+                )
+            try:
+                text = file_path.read_bytes().decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            except OSError:
+                skipped += 1
+                continue
+
+            file_hit = False
+            for line in text.splitlines():
+                if regex.search(line):
+                    count += 1
+                    file_hit = True
+            if file_hit:
+                matched_files.add(_display_grep_path(root, file_path))
+
+    return ProbeResult(
+        outcome="ok", count=count, files=tuple(sorted(matched_files)), skipped_files=skipped,
+    )
+
+
+def run_probe(spec: ProbeSpec, root: Path, *, timeout: float | None = None) -> ProbeResult:
+    """Execute `spec` against worktree `root` and report what happened.
+
+    Never raises on an ordinary probe outcome or a misconfigured runner — a failed probe is
+    data. `none` is never actually executed: this returns its fixed result without touching the
+    filesystem or spawning anything.
+    """
+    if timeout is None:
+        timeout = _probe_timeout()
+
+    if spec.verb == "none":
+        return ProbeResult(outcome="none")
+    if spec.verb == "test":
+        return _run_test_probe(spec, root, timeout)
+    if spec.verb == "grep":
+        return _run_grep_probe(spec, root, timeout)
+    raise ValueError(f"unknown probe verb {spec.verb!r}")
+
+
+def probe_accepts_baseline(spec: ProbeSpec, result: ProbeResult) -> bool:
+    """Whether `result` is a `start`-acceptable baseline for `spec`.
+
+    `none` has no baseline to judge, so it always accepts. `grep:` needs at least one match —
+    `baseline_count == 0` means the pattern doesn't discriminate this entry.
+    """
+    if spec.verb == "none":
+        return True
+    if spec.verb == "test":
+        # only a genuinely failing test is evidence; missing/error/timeout would make a typo'd
+        # nodeid or broken config indistinguishable from a real red baseline
+        return result.outcome == "fail"
+    if spec.verb == "grep":
+        return result.outcome == "ok" and (result.count or 0) > 0
+    raise ValueError(f"unknown probe verb {spec.verb!r}")
+
+
+def probe_accepts_final(spec: ProbeSpec, result: ProbeResult) -> bool:
+    """Whether `result` is a `finish`-acceptable outcome for `spec`.
+
+    For `grep:` this covers only the count half of the rule — see `grep_baseline_files_missing`
+    for the "did the baseline's files survive" half, which `finish` must check first.
+    """
+    if spec.verb == "none":
+        return True
+    if spec.verb == "test":
+        return result.outcome == "pass"
+    if spec.verb == "grep":
+        return result.outcome == "ok" and result.count == 0
+    raise ValueError(f"unknown probe verb {spec.verb!r}")
+
+
+def grep_baseline_files_missing(root: Path, baseline_files: Iterable[str]) -> list[str]:
+    """Baseline files (as recorded by `start`, relative to `root`) that no longer exist.
+
+    `finish` must refuse if this is non-empty regardless of the new scan's count: deleting the
+    code that carried the symptom is not a fix.
+    """
+    return [name for name in baseline_files if not (root / name).exists()]
 
 
 # --- not-yet-implemented lifecycle commands -----------------------------
