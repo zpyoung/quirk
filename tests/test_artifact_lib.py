@@ -825,3 +825,66 @@ def test_member_line_allows_trailing_whitespace() -> None:
     assert result.findings == []
     assert result.milestones[0].members == ["BUG-1"]
     assert artifact_lib.render_roadmap(result) == text
+
+
+# --- a member-shaped line outside every milestone: write-time only ---------
+
+
+def test_member_line_outside_every_milestone_is_not_flagged_by_parse_alone() -> None:
+    """Scoped to write time only: an ordinary parse (as `--doctor`/`--index` would run against
+    an already-committed ROADMAP.md) must not gain a new blocking finding from this."""
+    result = artifact_lib.parse_roadmap("# ROADMAP\n- BUG-1\n\n## Milestone: A\n- BUG-2\n")
+    assert result.findings == []
+
+
+def test_validate_roadmap_for_write_refuses_a_member_line_outside_every_milestone() -> None:
+    result = artifact_lib.parse_roadmap("# ROADMAP\n- BUG-1\n\n## Milestone: A\n- BUG-2\n")
+    blocking = artifact_lib.validate_roadmap_for_write(result, known_ids={"BUG-1", "BUG-2"})
+    assert ("MEMBER_OUTSIDE_MILESTONE", "BUG-1") in blocking
+
+
+def test_validate_roadmap_for_write_refuses_a_member_line_when_no_milestone_exists_at_all() -> None:
+    """The reviewer's exact reproduction: `- BUG-1` with no `## Milestone:` heading anywhere in
+    the file writes cleanly today and then contributes no membership at all."""
+    result = artifact_lib.parse_roadmap("# ROADMAP\n- BUG-1\n")
+    blocking = artifact_lib.validate_roadmap_for_write(result, known_ids={"BUG-1"})
+    assert blocking == [("MEMBER_OUTSIDE_MILESTONE", "BUG-1")]
+
+
+def test_validate_roadmap_for_write_refuses_a_disallowed_header_line_outside_every_milestone() -> None:
+    result = artifact_lib.parse_roadmap("# ROADMAP\n- PROPOSAL-1\n")
+    blocking = artifact_lib.validate_roadmap_for_write(result)
+    assert ("MEMBER_OUTSIDE_MILESTONE", "PROPOSAL-1") in blocking
+
+
+def test_validate_roadmap_for_write_ignores_a_member_line_quoted_inside_the_schema_comment() -> None:
+    """The shipped template's schema comment quotes `- BUG-3`, `- DEFER-7`, etc. as a worked
+    example above the first milestone; those are documentation, not a real write-time defect."""
+    result = artifact_lib.parse_roadmap(SPEC_ROADMAP_EXAMPLE)
+    assert artifact_lib.validate_roadmap_for_write(result) == []
+
+
+def test_prose_only_preamble_with_no_milestones_still_passes_write() -> None:
+    result = artifact_lib.parse_roadmap("# ROADMAP\nthis is not legal\n")
+    assert artifact_lib.validate_roadmap_for_write(result) == []
+
+
+# --- field_present_but_empty ------------------------------------------------
+
+
+def test_field_present_but_empty_detects_a_value_less_field_line() -> None:
+    text = "## BUG-1: alpha\n- **Blocked by**:\n"
+    entry = artifact_lib.parse_entries(text, "BUG").entries[0]
+    assert artifact_lib.field_present_but_empty(entry, "Blocked by") is True
+
+
+def test_field_present_but_empty_is_false_when_the_field_is_never_written() -> None:
+    text = "## BUG-1: alpha\n- **Severity**: high\n"
+    entry = artifact_lib.parse_entries(text, "BUG").entries[0]
+    assert artifact_lib.field_present_but_empty(entry, "Blocked by") is False
+
+
+def test_field_present_but_empty_is_false_when_the_field_has_a_real_value() -> None:
+    text = "## BUG-1: alpha\n- **Blocked by**: BUG-2\n"
+    entry = artifact_lib.parse_entries(text, "BUG").entries[0]
+    assert artifact_lib.field_present_but_empty(entry, "Blocked by") is False

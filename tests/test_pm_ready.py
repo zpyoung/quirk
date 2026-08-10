@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -245,6 +247,42 @@ def test_dangling_finding_for_malformed_token(pm_project: Path) -> None:
     assert "DANGLING" in result.stdout
 
 
+# --- a present-but-empty Blocked by field fails closed, not open ------------
+
+
+def test_present_but_empty_blocked_by_stays_blocked(pm_project: Path) -> None:
+    append_bug(pm_project, 1, "dependent", **{"Blocked by": ""})
+    world = pm._load_ledger_world(pm_project)
+    assert pm.ready(world, "BUG-1") is False
+
+    result = run_pm("--doctor", cwd=pm_project)
+    assert "DANGLING" in result.stdout
+    assert "BUG-1" in result.stdout
+
+
+def test_present_but_empty_blocked_by_with_nothing_at_all_after_the_colon_stays_blocked(
+    pm_project: Path,
+) -> None:
+    bugs = pm_project / "BUGS.md"
+    bugs.write_text(bugs.read_text() + "\n## BUG-1: dependent\n- **Blocked by**:\n")
+    world = pm._load_ledger_world(pm_project)
+    assert pm.ready(world, "BUG-1") is False
+
+    result = run_pm("--doctor", cwd=pm_project)
+    assert "DANGLING" in result.stdout
+
+
+def test_blocked_by_present_but_empty_field_is_recorded_distinct_from_absent(
+    pm_project: Path,
+) -> None:
+    append_bug(pm_project, 1, "dependent", **{"Blocked by": ""})
+    world = pm._load_ledger_world(pm_project)
+    entry, _spec = world.entries["BUG-1"]
+    blocked = pm._blocked_by(entry)
+    assert blocked.empty is True
+    assert blocked.tokens == ()
+
+
 # --- regression row 10: wrapped blocker list --------------------------------
 
 
@@ -340,6 +378,66 @@ def test_cycle_detection_terminates_on_a_self_loop(pm_project: Path) -> None:
     assert result.stdout.count("CYCLE") == 1
 
 
+def test_cycle_detection_is_not_quadratic_on_a_long_path_with_many_back_edges() -> None:
+    """A back edge from node i to i-2, on every node of a long chain, is adversarial for a
+    path.index() cycle-start lookup: by the time each back edge is processed the path has
+    already grown to ~i, so an O(path length) scan per back edge is O(n^2) overall even though
+    every individual cycle found is short. This would take many seconds under that quadratic
+    form; the O(1) position index this guards must keep it well under a second."""
+    n = 60000
+    edges: dict[str, list[str]] = {}
+    for i in range(1, n + 1):
+        node = f"N{i}"
+        neighbors = []
+        if i < n:
+            neighbors.append(f"N{i + 1}")
+        if i >= 3:
+            neighbors.append(f"N{i - 2}")
+        edges[node] = neighbors
+
+    start = time.monotonic()
+    cycles = pm._find_cycles(edges)
+    elapsed = time.monotonic() - start
+
+    assert len(cycles) == n - 2
+    assert all(len(c) == 3 for c in cycles)
+    assert elapsed < 3.0, f"_find_cycles took {elapsed:.2f}s — path.index() quadratic regression?"
+
+
+# --- lock acquisition: a symlinked lock path must be refused, not followed -
+
+
+def test_acquire_ledger_lock_refuses_a_symlink_and_leaves_target_untouched(tmp_path: Path) -> None:
+    target = tmp_path / "secret.txt"
+    target.write_bytes(b"do not touch\n")
+    lock_path = tmp_path / "some.lock"
+    lock_path.symlink_to(target)
+
+    with pytest.raises(OSError):
+        pm._acquire_ledger_lock(lock_path, deadline=time.monotonic() + 1.0)
+
+    assert target.read_bytes() == b"do not touch\n"
+
+
+def test_roadmap_write_refuses_a_symlinked_lock_path_and_leaves_target_untouched(
+    pm_project: Path,
+) -> None:
+    append_bug(pm_project, 1, "x")
+    target = pm_project / "secret.txt"
+    target.write_bytes(b"do not touch\n")
+    lock_dir = pm.ensure_lock_dir(pm_project)
+    (lock_dir / "ROADMAP.md.lock").symlink_to(target)
+
+    before = (pm_project / "ROADMAP.md").read_text()
+    proposed = pm_project / "proposed.md"
+    proposed.write_text("# ROADMAP\n\n## Milestone: M1\n- BUG-1\n")
+    result = run_pm("roadmap", "--write", str(proposed), cwd=pm_project)
+
+    assert result.returncode != 0
+    assert target.read_bytes() == b"do not touch\n"
+    assert (pm_project / "ROADMAP.md").read_text() == before
+
+
 # --- regression row 6: ROADMAP grammar rejecting its own example -----------
 
 
@@ -412,6 +510,34 @@ def test_roadmap_write_exits_seven_when_project_dir_missing(tmp_path: Path) -> N
     assert result.returncode == pm.EXIT_PROJECT_DIR_NOT_FOUND
 
 
+def test_roadmap_write_refuses_a_member_line_outside_every_milestone(pm_project: Path) -> None:
+    """A member-shaped line above the first milestone heading writes cleanly today and then
+    contributes no membership at all — the entry silently ranks -1 as though never placed."""
+    append_bug(pm_project, 1, "x")
+    before = (pm_project / "ROADMAP.md").read_text()
+    content = "# ROADMAP\n- BUG-1\n\n## Milestone: M1\n"
+    proposed = pm_project / "proposed.md"
+    proposed.write_text(content)
+    result = run_pm("roadmap", "--write", str(proposed), cwd=pm_project)
+    assert result.returncode == pm.EXIT_BAD_ARGUMENT
+    assert "MEMBER_OUTSIDE_MILESTONE" in result.stderr
+    assert "BUG-1" in result.stderr
+    assert (pm_project / "ROADMAP.md").read_text() == before
+
+
+def test_roadmap_write_refuses_a_member_line_when_no_milestone_exists_at_all(
+    pm_project: Path,
+) -> None:
+    append_bug(pm_project, 1, "x")
+    before = (pm_project / "ROADMAP.md").read_text()
+    proposed = pm_project / "proposed.md"
+    proposed.write_text("# ROADMAP\n- BUG-1\n")
+    result = run_pm("roadmap", "--write", str(proposed), cwd=pm_project)
+    assert result.returncode == pm.EXIT_BAD_ARGUMENT
+    assert "MEMBER_OUTSIDE_MILESTONE" in result.stderr
+    assert (pm_project / "ROADMAP.md").read_text() == before
+
+
 # --- a missing ROADMAP.md is an empty roadmap, not an error -----------------
 
 
@@ -424,6 +550,46 @@ def test_missing_roadmap_is_empty_not_an_error(initialized_project: Path) -> Non
 
     ranks = pm._milestone_ranks(pm._read_roadmap(initialized_project))
     assert ranks == {}
+
+
+# --- an unreadable/undecodable ROADMAP.md is not silently "missing" --------
+
+
+def test_unreadable_roadmap_is_not_silently_treated_as_missing(pm_project: Path) -> None:
+    roadmap_path = pm_project / "ROADMAP.md"
+    roadmap_path.chmod(0o000)
+    try:
+        if os.access(roadmap_path, os.R_OK):
+            pytest.skip("running as a user that bypasses file permissions")
+
+        roadmap = pm._read_roadmap(pm_project)
+        assert roadmap.milestones == []
+        assert any(code == "ROADMAP_UNREADABLE" for code, _detail in roadmap.findings)
+
+        result = run_pm("--doctor", cwd=pm_project)
+        assert "ROADMAP_UNREADABLE" in result.stdout
+    finally:
+        roadmap_path.chmod(0o644)
+
+
+def test_undecodable_roadmap_is_not_silently_treated_as_missing(pm_project: Path) -> None:
+    roadmap_path = pm_project / "ROADMAP.md"
+    roadmap_path.write_bytes(b"\xff\xfe\x00\x01 not valid utf-8 or anything sane")
+
+    roadmap = pm._read_roadmap(pm_project)
+    assert roadmap.milestones == []
+    assert any(code == "ROADMAP_UNREADABLE" for code, _detail in roadmap.findings)
+
+    result = run_pm("--doctor", cwd=pm_project)
+    assert "ROADMAP_UNREADABLE" in result.stdout
+
+
+def test_roadmap_write_exits_two_on_an_undecodable_proposal_file(pm_project: Path) -> None:
+    proposed = pm_project / "proposed.md"
+    proposed.write_bytes(b"\xff\xfe\x00\x01 not valid utf-8")
+    result = run_pm("roadmap", "--write", str(proposed), cwd=pm_project)
+    assert result.returncode == pm.EXIT_BAD_ARGUMENT
+    assert "proposed.md" in result.stderr
 
 
 def test_roadmap_show_exits_zero_always(pm_project: Path) -> None:
@@ -449,6 +615,23 @@ def test_empty_ready_set_explains_the_blockers_responsible(pm_project: Path) -> 
     out = result.stdout
     assert "no ready candidates" in out.lower()
     assert "BUG-2" in out
+
+
+def test_empty_shortlist_because_ready_work_is_ineligible_does_not_claim_nothing_is_ready(
+    pm_project: Path,
+) -> None:
+    """Medium urgency and no milestone: BUG-1 is ready (nothing blocks it) but not eligible for
+    the shortlist. There are no blockers to name, so this is a different empty-shortlist cause
+    than test_empty_ready_set_explains_the_blockers_responsible, and must say so rather than
+    printing "no ready candidates" right above a line that counts it as ready."""
+    append_bug(pm_project, 1, "ready but unplaced", Severity="medium", Observed="2026-08-01")
+
+    result = run_pm("--next", cwd=pm_project)
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    assert "no ready candidates" not in out.lower()
+    assert "ready but not eligible" in out.lower()
+    assert "1 unplaced (1 ready, 0 blocked, 0 malformed)" in out
 
 
 # --- hooks/load_artifact_tail.sh's grep must keep matching -----------------

@@ -30,6 +30,7 @@ from artifact_lib import (
     atomic_write,
     detect_schema_version,
     ensure_lock_dir,
+    field_present_but_empty,
     hash_file,
     hash_probe_spec,
     parse_entries,
@@ -121,18 +122,15 @@ def _max_file_bytes() -> int:
     return value
 
 
-def _read_and_parse(project: Path, spec: ArtifactSpec) -> tuple[FileParse | None, str | None]:
-    """Return (FileParse, None) on success, else (None, skip-reason).
+def _read_file_safely(path: Path, max_bytes: int) -> tuple[bytes | None, str | None]:
+    """Return (bytes, None) on success, else (None, skip-reason).
 
-    A read/parse failure or an oversize file is reported as a caller-visible
-    skip reason rather than raised, so one bad file never takes down the
-    whole read layer. The file is opened once and read up to max_bytes + 1
-    bytes in a single call, so pm.py — which runs on every SessionStart —
-    never loads more than that bound into memory, even if the file grows
-    between a caller's existence check and this read.
+    A read failure or an oversize file is reported as a caller-visible skip reason rather than
+    raised, so one bad file never takes down the whole read layer. The file is opened once and
+    read up to max_bytes + 1 bytes in a single call, so a caller that runs on every SessionStart
+    never loads more than that bound into memory, even if the file grows between a caller's
+    existence check and this read.
     """
-    path = project / spec.filename
-    max_bytes = _max_file_bytes()
     try:
         # O_NONBLOCK, not path.open: opening a FIFO for reading otherwise blocks
         # until a writer appears, which would hang the SessionStart hook that
@@ -158,11 +156,17 @@ def _read_and_parse(project: Path, spec: ArtifactSpec) -> tuple[FileParse | None
             os.close(fd)
     if len(data) > max_bytes:
         return None, f"exceeds {max_bytes} bytes, skipping"
-    # artifact_append.py writes these files with the platform default encoding,
-    # not explicit utf-8 (fenced there). Bytes valid under both codecs must
-    # decode as the writer actually wrote them, not as whichever codec is
-    # tried first, so the platform codec goes first whenever it differs from
-    # utf-8 — this couples the reader to that locale-dependent write.
+    return data, None
+
+
+def _decode_platform_text(data: bytes) -> str | None:
+    """Return `data` decoded to text, or `None` if it decodes under neither candidate encoding.
+
+    artifact_append.py writes these files with the platform default encoding, not explicit
+    utf-8 (fenced there). Bytes valid under both codecs must decode as the writer actually wrote
+    them, not as whichever codec is tried first, so the platform codec goes first whenever it
+    differs from utf-8 — this couples the reader to that locale-dependent write.
+    """
     platform_encoding = locale.getpreferredencoding(False)
     try:
         platform_is_utf8 = codecs.lookup(platform_encoding).name == codecs.lookup("utf-8").name
@@ -170,17 +174,36 @@ def _read_and_parse(project: Path, spec: ArtifactSpec) -> tuple[FileParse | None
         platform_is_utf8 = False
     if platform_is_utf8:
         try:
-            text = data.decode("utf-8")
+            return data.decode("utf-8")
         except UnicodeDecodeError:
-            return None, "parse error, skipping"
-    else:
+            return None
+    try:
+        return data.decode(platform_encoding)
+    except (UnicodeDecodeError, LookupError):
         try:
-            text = data.decode(platform_encoding)
-        except (UnicodeDecodeError, LookupError):
-            try:
-                text = data.decode("utf-8")
-            except UnicodeDecodeError:
-                return None, "parse error, skipping"
+            return data.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+
+
+def _read_and_parse(project: Path, spec: ArtifactSpec) -> tuple[FileParse | None, str | None]:
+    """Return (FileParse, None) on success, else (None, skip-reason).
+
+    A read/parse failure or an oversize file is reported as a caller-visible
+    skip reason rather than raised, so one bad file never takes down the
+    whole read layer. The file is opened once and read up to max_bytes + 1
+    bytes in a single call, so pm.py — which runs on every SessionStart —
+    never loads more than that bound into memory, even if the file grows
+    between a caller's existence check and this read.
+    """
+    path = project / spec.filename
+    max_bytes = _max_file_bytes()
+    data, skip_reason = _read_file_safely(path, max_bytes)
+    if data is None:
+        return None, skip_reason
+    text = _decode_platform_text(data)
+    if text is None:
+        return None, "parse error, skipping"
     try:
         result = parse_entries(text, spec.header)
     except Exception:
@@ -294,9 +317,13 @@ def render_next(project: Path) -> str:
     roadmap = _read_roadmap(project)
     ranks = _milestone_ranks(roadmap)
 
+    ready_keys: list[str] = []
     candidates: list[tuple[int, int, str, int, str, Entry, ArtifactSpec]] = []
     for key, (entry, spec) in world.entries.items():
-        if not (_is_open(entry) and eligible(world, ranks, key)):
+        if not (_is_open(entry) and ready(world, key)):
+            continue
+        ready_keys.append(key)
+        if not eligible(world, ranks, key):
             continue
         rank = ranks.get(key, -1)
         urgency = _urgency(spec, entry.fields)
@@ -311,6 +338,14 @@ def render_next(project: Path) -> str:
         for _rank, _urgency_val, _age, eid, header, e, spec in top:
             rank_label = e.fields.get(spec.urgency_field) or "unranked"
             lines.append(f"  - {header}-{eid} [{rank_label}] {e.title} — {_display_age(spec, e.fields)}")
+    elif ready_keys:
+        # the shortlist can be empty with ready work still on the board: medium/low-urgency
+        # entries in no milestone are ready but not eligible, so this must not say "no ready
+        # candidates" — that would contradict the "N ready" count printed two lines down
+        lines.append(
+            f"[quirk:pm] {len(ready_keys)} ready but not eligible: sitting in no milestone at "
+            "medium/low urgency — place them on the roadmap to make them visible"
+        )
     else:
         lines.append("[quirk:pm] no ready candidates")
         culprits = _blocking_culprits(world)
@@ -399,7 +434,11 @@ def _acquire_ledger_lock(lock_path: Path, deadline: float) -> IO[str] | None:
     what releases the flock, so on timeout the caller owes nothing back for this call — the file
     opened here is already closed before `None` is returned.
     """
-    lock_file = open(lock_path, "w")
+    # a lock file's contents are never read or written, only its existence and its flock, so
+    # O_NOFOLLOW refuses a symlink planted at this path instead of opening (and O_CREAT|O_RDWR
+    # truncating) whatever it points at
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    lock_file = os.fdopen(fd, "r+")
     while True:
         try:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -552,6 +591,18 @@ _GREP_BASELINE_FILES_RE = re.compile(r"^(.*) \((.*)\)$")
 _STATUS_ATTEMPT_REQUIRED = frozenset({"open", "in_progress", "delivered", "closed"})
 
 
+def _safe_int(digits: str) -> int | None:
+    """Convert a regex-captured decimal digit string to `int`, or `None` if it is too long to
+    convert — CPython caps integer string conversion length, and `parse_status`/`parse_probe`
+    are contracted to be total, so an oversized numeric segment must fail like any other
+    malformed one, not raise.
+    """
+    try:
+        return int(digits)
+    except ValueError:
+        return None
+
+
 def is_valid_free_text(value: str) -> bool:
     """Return whether `value` is safe as a lifecycle field's one free-text segment.
 
@@ -642,7 +693,9 @@ def parse_status(line: str) -> StatusField | MalformedField:
     attempt = 0
     m = _ATTEMPT_RE.match(parts[i]) if i < len(parts) else None
     if m is not None:
-        attempt = int(m.group(1))
+        attempt = _safe_int(m.group(1))
+        if attempt is None:
+            return MalformedField(raw=line, reason="attempt")
         i += 1
     elif state in _STATUS_ATTEMPT_REQUIRED:
         return MalformedField(raw=line, reason="attempt")
@@ -650,7 +703,9 @@ def parse_status(line: str) -> StatusField | MalformedField:
     refused = 0
     m = _REFUSED_RE.match(parts[i]) if i < len(parts) else None
     if m is not None:
-        refused = int(m.group(1))
+        refused = _safe_int(m.group(1))
+        if refused is None:
+            return MalformedField(raw=line, reason="refused")
         i += 1
 
     commit = integrated = by = reason = parked = None
@@ -779,13 +834,17 @@ def parse_probe(line: str) -> ProbeField | MalformedField:
     skipped_files = 0
     m = _SKIPPED_RE.match(parts[i]) if verb == "grep" and i < len(parts) else None
     if m is not None:
-        skipped_files = int(m.group(1))
+        skipped_files = _safe_int(m.group(1))
+        if skipped_files is None:
+            return MalformedField(raw=line, reason="skipped")
         i += 1
 
     m = _HASHES_RE.match(parts[i]) if i < len(parts) else None
     if m is None:
         return MalformedField(raw=line, reason="hashes")
     spec_hash, file_hash = m.group(1), m.group(2)
+    if verb == "grep" and file_hash is not None:
+        return MalformedField(raw=line, reason="hashes")
     i += 1
 
     final = None
@@ -799,13 +858,17 @@ def parse_probe(line: str) -> ProbeField | MalformedField:
 
         m = _SKIPPED_RE.match(parts[i]) if verb == "grep" and i < len(parts) else None
         if m is not None:
-            skipped_files = int(m.group(1))
+            skipped_files = _safe_int(m.group(1))
+            if skipped_files is None:
+                return MalformedField(raw=line, reason="skipped")
             i += 1
 
         m = _HASHES_RE.match(parts[i]) if i < len(parts) else None
         if m is None:
             return MalformedField(raw=line, reason="hashes")
         final_spec_hash, final_file_hash = m.group(1), m.group(2)
+        if verb == "grep" and final_file_hash is not None:
+            return MalformedField(raw=line, reason="hashes")
         i += 1
 
     if i != len(parts):
@@ -845,6 +908,7 @@ class BlockedByField:
     tokens: tuple[BlockedByToken, ...]
     truncated: bool
     duplicate_ids: tuple[str, ...]
+    empty: bool = False
 
 
 def parse_blocked_by(value: str) -> BlockedByField:
@@ -920,16 +984,27 @@ def _load_ledger_world(project: Path) -> LedgerWorld:
 
 
 def _read_roadmap(project: Path) -> RoadmapParse:
-    """Return `project`'s parsed `ROADMAP.md`, or an empty roadmap if it is missing or unreadable.
+    """Return `project`'s parsed `ROADMAP.md`.
 
     A missing file is the ordinary starting state, not an error — every entry then sorts at
-    milestone rank -1, exactly as if `ROADMAP.md` existed with no milestones in it.
+    milestone rank -1, exactly as if `ROADMAP.md` existed with no milestones in it. A file that
+    exists but cannot be read, is oversized, or fails to decode is not that state and must not
+    collapse into it silently — instead of falling back to an empty roadmap unremarked, it
+    carries a `ROADMAP_UNREADABLE` finding so the corruption is visible to `--doctor`/`--index`.
     """
     path = project / "ROADMAP.md"
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    if not path.exists():
         return RoadmapParse(milestones=[], findings=[], preamble="")
+    # reuses the ledger files' guarded reader: --index/--next run on every SessionStart, and an
+    # unbounded, blocking read here would hang on a FIFO or exhaust memory on an oversized file
+    data, skip_reason = _read_file_safely(path, _max_file_bytes())
+    if data is None:
+        return RoadmapParse(milestones=[], findings=[("ROADMAP_UNREADABLE", skip_reason)], preamble="")
+    text = _decode_platform_text(data)
+    if text is None:
+        return RoadmapParse(
+            milestones=[], findings=[("ROADMAP_UNREADABLE", "parse error, skipping")], preamble=""
+        )
     return parse_roadmap(text)
 
 
@@ -956,6 +1031,12 @@ def _is_open(entry: Entry) -> bool:
 def _blocked_by(entry: Entry) -> BlockedByField:
     raw = entry.fields.get("Blocked by")
     if not raw:
+        # a value-less field line never reaches `entry.fields` at all, so it and a field that
+        # was simply never written are otherwise indistinguishable here; a hand-edit that
+        # truncated the field is far likelier than a deliberate "nothing blocks this", so this
+        # fails closed the same direction as a truncated or malformed value, not open
+        if field_present_but_empty(entry, "Blocked by"):
+            return BlockedByField(tokens=(), truncated=False, duplicate_ids=(), empty=True)
         return BlockedByField(tokens=(), truncated=False, duplicate_ids=())
     return parse_blocked_by(raw)
 
@@ -990,7 +1071,7 @@ def ready(world: LedgerWorld, key: str) -> bool:
     if not _is_open(entry):
         return False
     blocked = _blocked_by(entry)
-    if blocked.truncated:
+    if blocked.truncated or blocked.empty:
         return False
     for token in blocked.tokens:
         if token.kind != "id" or not satisfied(world, token.id):
@@ -1063,6 +1144,8 @@ def _blocked_by_doctor_findings(world: LedgerWorld) -> list[tuple[str, str]]:
                 f"{key}: Blocked by value ends with a trailing comma — a wrapped continuation "
                 "may have been dropped",
             ))
+        if blocked.empty:
+            findings.append(("DANGLING", f"{key}: Blocked by field is present but empty"))
         for token in blocked.tokens:
             if token.kind == "malformed":
                 findings.append(("DANGLING", f"{key}: malformed token {token.raw!r}"))
@@ -1103,6 +1186,9 @@ def _find_cycles(edges: dict[str, list[str]]) -> list[tuple[str, ...]]:
             continue
         path = [root]
         color[root] = 1
+        # node -> its index in `path` while on the stack, so a back edge locates the cycle's
+        # start in O(1) instead of a path.index() scan that is O(path length) per back edge
+        pos_in_path: dict[str, int] = {root: 0}
         frames = [(root, 0)]
         while frames:
             node, idx = frames[-1]
@@ -1112,17 +1198,19 @@ def _find_cycles(edges: dict[str, list[str]]) -> list[tuple[str, ...]]:
                 nxt = neighbors[idx]
                 state = color.get(nxt, 0)
                 if state == 1:
-                    cyc = normalize(path[path.index(nxt):])
+                    cyc = normalize(path[pos_in_path[nxt]:])
                     if cyc not in seen_rotations:
                         seen_rotations.add(cyc)
                         found.append(cyc)
                 elif state == 0:
                     color[nxt] = 1
                     path.append(nxt)
+                    pos_in_path[nxt] = len(path) - 1
                     frames.append((nxt, 0))
             else:
                 color[node] = 2
                 path.pop()
+                del pos_in_path[node]
                 frames.pop()
     return found
 
@@ -1228,6 +1316,9 @@ def cmd_roadmap(args: argparse.Namespace) -> int:
     except OSError as exc:
         print(f"[quirk:pm] cannot read {args.write}: {exc}", file=sys.stderr)
         return EXIT_NOT_FOUND
+    except UnicodeDecodeError as exc:
+        print(f"[quirk:pm] cannot read {args.write}: not valid utf-8 ({exc})", file=sys.stderr)
+        return EXIT_BAD_ARGUMENT
 
     parse = parse_roadmap(text)
     known_ids = set(_load_ledger_world(project).entries)
