@@ -25,6 +25,7 @@ SCHEMAS: dict[str, dict] = {
         "fields": [
             "title", "observed", "file", "description",
             "introduced_by", "severity", "proposed_fix", "blocker_for",
+            "blocked_by",
         ],
         "labels": {
             "observed": "Observed",
@@ -34,7 +35,9 @@ SCHEMAS: dict[str, dict] = {
             "severity": "Severity",
             "proposed_fix": "Proposed fix",
             "blocker_for": "Blocker for",
+            "blocked_by": "Blocked by",
         },
+        "v2_fields": ("blocked_by",),
     },
     "defer": {
         "header": "DEFER",
@@ -43,6 +46,7 @@ SCHEMAS: dict[str, dict] = {
         "fields": [
             "title", "deferred", "session_context", "why_deferred",
             "estimated_effort", "priority", "proposed_owner",
+            "blocked_by",
         ],
         "labels": {
             "deferred": "Deferred",
@@ -51,23 +55,28 @@ SCHEMAS: dict[str, dict] = {
             "estimated_effort": "Estimated effort",
             "priority": "Priority",
             "proposed_owner": "Proposed owner",
+            "blocked_by": "Blocked by",
         },
+        "v2_fields": ("blocked_by",),
     },
     "test-skip": {
         "header": "TEST",
         "file": "TEST_BACKLOG.md",
         "required": ["title", "file_under_test", "reason_skipped"],
         "fields": [
-            "title", "file_under_test", "test_type", "reason_skipped",
-            "edge_cases", "priority",
+            "title", "logged", "file_under_test", "test_type", "reason_skipped",
+            "edge_cases", "priority", "blocked_by",
         ],
         "labels": {
+            "logged": "Logged",
             "file_under_test": "File under test",
             "test_type": "Test type",
             "reason_skipped": "Reason skipped",
             "edge_cases": "Edge cases to cover",
             "priority": "Priority",
+            "blocked_by": "Blocked by",
         },
+        "v2_fields": ("blocked_by", "logged"),
     },
     "proposal": {
         "header": "PROPOSAL",
@@ -85,10 +94,11 @@ SCHEMAS: dict[str, dict] = {
             "decision_required_from": "Decision required from",
             "status": "Status",
         },
+        "v2_fields": (),
     },
 }
 
-EXPECTED_SCHEMA_VERSION = 1
+EXPECTED_SCHEMA_VERSION = 2
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -166,6 +176,19 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 8
 
+        # absent marker is legacy v1, the same convention `migrate` uses, so a v2-only
+        # field is refused here rather than silently written where a v1 reader can't see it
+        effective_version = version if version is not None else 1
+        if effective_version < EXPECTED_SCHEMA_VERSION:
+            requested_v2 = [k for k in schema.get("v2_fields", ()) if k in fields]
+            if requested_v2:
+                print(
+                    f"Field {requested_v2[0]!r} needs schema v{EXPECTED_SCHEMA_VERSION}, "
+                    f"this file is v{effective_version}. Run /quirk:pm:migrate.",
+                    file=sys.stderr,
+                )
+                return 8
+
         next_id = find_max_id(text, schema["header"]) + 1
 
         if "observed" in schema["fields"] and "observed" not in fields:
@@ -174,8 +197,10 @@ def main(argv: list[str] | None = None) -> int:
             fields["deferred"] = date.today().isoformat()
         if "proposed" in schema["fields"] and "proposed" not in fields:
             fields["proposed"] = date.today().isoformat()
+        if "logged" in schema["fields"] and "logged" not in fields:
+            fields["logged"] = date.today().isoformat()
 
-        entry = render_entry(schema, next_id, fields)
+        entry = render_entry(schema, next_id, fields, schema_version=effective_version)
         new_text = text.rstrip() + "\n\n" + entry + "\n"
         target.write_text(new_text)
 

@@ -1,4 +1,4 @@
-<!-- schema-version: 1 -->
+<!-- schema-version: 2 -->
 <!-- proposals.md SCHEMA (append only)
 Entry format:
 ## PROPOSAL-[N]: [Title]

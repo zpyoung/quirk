@@ -13,7 +13,7 @@ from artifact_lib import ensure_lock_dir
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = REPO_ROOT / "templates"
 
-ROOT_TEMPLATES = ["BUGS.md", "DEFERRED.md", "TEST_BACKLOG.md", "proposals.md"]
+ROOT_TEMPLATES = ["BUGS.md", "DEFERRED.md", "TEST_BACKLOG.md", "proposals.md", "ROADMAP.md"]
 ADR_TEMPLATE = TEMPLATES_DIR / "adr" / "0000-record-architecture-decisions.md"
 SNIPPET_TEMPLATE = TEMPLATES_DIR / "claude_md_snippet.md"
 SNIPPET_MARKER = "<!-- quirk-typed-artifacts:trigger -->"

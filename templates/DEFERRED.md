@@ -1,4 +1,4 @@
-<!-- schema-version: 1 -->
+<!-- schema-version: 2 -->
 <!-- DEFERRED.md SCHEMA (append only)
 Entry format:
 ## DEFER-[N]: [Task title]
@@ -8,8 +8,15 @@ Entry format:
 - **Estimated effort**: [S/M/L]
 - **Priority**: [P1/P2/P3/P4]
 - **Proposed owner**: [Claude / name / unassigned]
+- **Blocked by**: [comma-separated BUG-N/DEFER-N/TEST-N, or omit]
 
 Required fields: title, why_deferred, priority.
+
+The fields below are written only by pm.py — never by hand, never via
+artifact_append.py. Absent Status means open.
+- **Status**: [in_progress / delivered / closed / wontfix / superseded — see /quirk:pm:status]
+- **Probe**: [set at `pm start`, updated at `pm finish`]
+- **Handoff**: [set at `pm start` when dispatched]
 -->
 
 # DEFERRED
