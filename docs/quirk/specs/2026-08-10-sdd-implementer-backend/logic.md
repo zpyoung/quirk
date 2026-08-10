@@ -1,0 +1,352 @@
+# Selectable implementer backend for subagent-driven-development
+
+## Status
+
+Draft.
+
+## Problem
+
+`quirk:subagent-driven-development` hard-codes its worker fleet. Implementers and fixers are Sonnet
+subagents dispatched via `Task`; reviewers are pinned to `--provider openai-codex --model
+gpt-5.6-sol --thinking high`. A user who wants codex to *write* the code has no lever, and the one
+place the skill mentions an alternative — a fallback to "Claude `quirk:code-reviewer` subagents" —
+names a skill that does not exist in `skills/`.
+
+The naive change (add a flag, dispatch pi instead of `Task`) breaks three things that are not
+visible from Step 5:
+
+1. **Reviewer independence.** Step 8 passes `author_family` to `quirk:adversarial-review`, whose
+   `select-model` deliberately resolves a family *different* from the author's. With implementers
+   flipped to codex and the reviewer still pinned to `gpt-5.6-sol`, the loop silently becomes a
+   same-family self-review — the exact failure the skill is built to prevent.
+2. **Containment.** `pi` has no sandbox and `pi-watch.mjs:363` hard-codes `process.cwd()`. A pi
+   implementer holds full user-level filesystem access, and Step 6's per-task scope audit only
+   diffs *inside* the task's own tree, so a write into a sibling worktree is structurally
+   invisible to it.
+3. **Prompt resolvability.** `implementer-prompt.md` instructs the worker to "Follow
+   quirk:test-driven-development". A pi worker has no `Skill` tool and cannot resolve that
+   reference.
+
+## Conceptual model
+
+The run acquires a **backend record**, resolved once during preflight and immutable for the run:
+
+| Field | Values | Derivation |
+| --- | --- | --- |
+| `IMPLEMENTER` | `claude-task` \| `pi-codex` | User choice at preflight |
+| `AUTHOR_FAMILY` | `anthropic` \| `openai` | Mechanical from `IMPLEMENTER` |
+| `REVIEWER_ALIAS` | a pi alias | User choice at preflight, cross-family options offered first |
+
+The record is written to the run journal beside `RUN_BASE`. Every later step **reads** it; no step
+re-derives it.
+
+Exactly one seam branches on `IMPLEMENTER`: a **Dispatch** block in Step 5. Step 9's fixers point at
+that block rather than restating it. Steps 6 and 8 consume recorded values and do not branch at all.
+
+Counting the branch points is what selected this shape. Only "dispatch a worker" genuinely differs
+between backends; everything else either reads a recorded value or should apply to both paths
+regardless of who wrote the code.
+
+## Data flow
+
+Preflight resolves the backend record and writes it to the run journal. Decomposition is unchanged —
+tasks carry contracts, acceptance commands, `dependencies`, and `scope.files` exactly as today, and
+none of those fields mention a backend.
+
+At dispatch, the orchestrator stages the shared prompt core, appends the pi delta when
+`IMPLEMENTER` is `pi-codex`, and hands each task to the binding named by the Dispatch block. Workers
+return a status; the pi path additionally returns an exit code that encodes whether the status was
+well-formed.
+
+Once the whole wave has returned, the orchestrator verifies every live worktree's HEAD against the
+value recorded at dispatch, then scope-audits every live worktree against its owning task's
+`scope.files`. Only then does per-task acceptance, commit, and merge proceed.
+
+At review, the orchestrator passes the recorded `AUTHOR_FAMILY` and `REVIEWER_ALIAS` into
+`quirk:adversarial-review` as `author_family` and `model`. The reviewer's dispatch mechanism, ladder
+resolution, and `Task` backstop remain that skill's business.
+
+## Design
+
+### Preflight (Step 1)
+
+Ordered, because step 4's option set depends on step 3's result:
+
+1. Existing git checks — branch, dirty tree, `RUN_BASE`.
+2. **Implementer question.** Claude subagents (recommended) or pi codex. `pi-codex` is offered only
+   when `pi-watch --check codex` exits 0.
+3. Derive `AUTHOR_FAMILY`: `claude-task → anthropic`, `pi-codex → openai`.
+4. **Reviewer-alias question.** Cross-family options first. Author `anthropic` → `codex`
+   (recommended), `gemini`. Author `openai` → `opus` (recommended), `gemini`. Same-family picks stay
+   selectable but are labeled as degrading independence.
+5. `pi-watch --check "$REVIEWER_ALIAS"`. On failure, offer the implementer flip — but only when the
+   flipped pairing actually resolves. If neither pairing resolves, fall back to
+   `quirk:adversarial-review`'s documented `Task` path and warn once.
+6. Record all three fields in the run journal.
+
+**Removed:** the `--provider openai-codex --model gpt-5.6-sol --thinking high` pin and the prose
+around it, including the `--alias codex is not sufficient` warning that only made sense under a pin.
+
+**Fixed:** the dangling `quirk:code-reviewer` fallback. The real fallback is
+`quirk:adversarial-review`'s `Task` path.
+
+### Dispatch block (Step 5)
+
+Common to both bindings: stage the prompt, create one worktree per task from `WAVE_BASE`, create
+worktrees **serially**, and record each worktree's HEAD as `TASK_HEAD_<n>` at dispatch time.
+
+**Claude binding.** `Task` subagent, Sonnet, foreground, one per task in a single message.
+Unchanged from today.
+
+**pi binding.** Append `assets/pi-worker-delta.md` to the staged prompt, then per task:
+
+```bash
+gtimeout 1800 pi-watch --cwd "$WT" --alias codex \
+  --tools read,bash,edit,write --require-trailer STATUS "$(cat "$PROMPT")"
+```
+
+Dispatched with `run_in_background: true`, one Bash call per task. The Bash tool caps foreground
+calls at 600s, which an implementer-scale task can exceed; a task killed at the ceiling leaves a
+partial dirty worktree the audit will reject.
+
+Step 5's foreground rule gains a **scoped carve-out** naming why this does not reopen the failure
+that rule exists for. The stall that stranded 3/3 workers was the harness failing to re-invoke on
+*subagent* completion. A backgrounded Bash has a real process exit and a captured exit code, which
+is a different mechanism. The carve-out is limited to Bash dispatch — background `Task` dispatch
+stays banned.
+
+`gtimeout`/`timeout` wrapping follows `quirk:pi-dev`, which already prescribes it because `pi` has
+no built-in timeout.
+
+### Prompt assets
+
+`implementer-prompt.md` and `fixer-prompt.md` are **unchanged**. One new asset,
+`assets/pi-worker-delta.md`, is appended on the pi path:
+
+- **All pi workers** — the `STATUS: <word>` trailer requirement (final line, one key, four legal
+  values, prose detail above it); the no-commit rule restated with the HEAD check named as a
+  mechanical verification; a note that no `Skill` tool is available.
+- **Implementers only**, in a marked section — a condensed red-green TDD block replacing the
+  `quirk:test-driven-development` reference a pi worker cannot resolve.
+
+One file rather than two, because the fixer delta is a strict subset of the implementer delta. This
+is the conditional-block pattern rejected for the prompt core, accepted here at ~30 lines with one
+marked section rather than across 400.
+
+### Audit (Step 6)
+
+Two additions, both **unconditional** — they apply to Claude runs too. Contamination is not
+backend-specific and the commands are cheap, so branching would buy nothing and would leave the
+Claude path with a weaker audit for no reason.
+
+**HEAD verification.** Each worktree's HEAD must equal its recorded `TASK_HEAD_<n>`. A moved HEAD
+means the worker committed and bypassed the audit: the task stops. No soft reset — absorbing the
+violation would discard the signal that a worker ignored an explicit instruction.
+
+**Wave-level scope audit.** The per-task audit is hoisted to run for every live worktree once the
+whole wave has returned, each checked against **its own** task's `scope.files`. A path outside its
+owner's declared scope is a violation regardless of which worker wrote it. The report names the
+victim rather than the culprit; that is sufficient, because the response is the same either way —
+stop the wave and re-plan.
+
+These are one pass, not two: auditing every worktree against its owner's scope subsumes the per-task
+audit.
+
+Step 6's order becomes:
+
+> wave returns → HEAD-check all trees → scope-audit all trees → **then per task:** acceptance →
+> commit → merge
+
+The per-task gate order (audit → accept → commit → merge) is preserved exactly. What changes is that
+no task commits until the whole wave has returned. The skill currently states that this order never
+moves, so the change is written as a deliberate amendment carrying its reason, not slipped in.
+
+Cost: slight serialization at wave end, bounded because the build/test gate already waits for the
+full wave. Sequential tasks see no change — one tree means the wave-level audit and the per-task
+audit are the same operation.
+
+### Review (Step 8) and fixers (Step 9)
+
+Step 8's input table gains `model`, set to `REVIEWER_ALIAS`. `author_family` reads the recorded value
+instead of assuming `anthropic`. A same-family reviewer pick warns once and is expected to stamp
+`manifest.reviewer.independence: reduced`, which Step 9 already reads.
+
+`quirk:adversarial-review` accepts `model` as a pi alias that overrides family selection, and
+resolves the specific rung within it. So an explicit user choice and `select-model`'s ladder
+resolution compose rather than conflict.
+
+Step 9 fixers use the binding named by the Dispatch block — a pointer, not a restatement.
+
+### pi-watch changes
+
+| Flag | Behavior |
+| --- | --- |
+| `--cwd <dir>` | Sets the session working directory instead of inheriting `process.cwd()` (`pi-watch.mjs:363`, `:384`) |
+| `--require-trailer <KEY>` | The final non-empty assistant line must match `^KEY: (\S+)$`. The value is echoed to stderr on the `✔ done` line. Exit **6** when absent or malformed. |
+
+Exit codes 0–5 are already in use; 6 is free.
+
+`--require-trailer` is deliberately **generic**. Teaching `pi-watch` the vocabulary
+`DONE | NEEDS_CONTEXT | BLOCKED | FAILED` would put this skill's return contract inside a
+general-purpose wrapper that `quirk:adversarial-review` and ad-hoc dispatches also use. The wrapper
+verifies that a trailer *exists and is well-formed*; the calling skill owns which values are legal.
+
+`--cwd` is the higher-value change of the two. Without it every worktree dispatch is a
+`(cd "$WT" && pi-watch …)` subshell whose failure mode is silent: a `cd` that does not fire runs the
+implementer against the main tree, which is precisely the contamination the wave-level audit can
+detect but not attribute.
+
+Both flags are documented in `pi-dev/SKILL.md` (usage block and flags table) and the pi-watch README.
+`.mjs` changes propagate via `claude plugin update quirk` with no reinstall; only launcher-script
+changes require re-running `install`.
+
+## Behavior and scenarios
+
+**Default run, nothing chosen.** Preflight recommends Claude subagents and `codex` as reviewer. The
+run behaves as it does today, with two additions: HEAD verification and a wave-level rather than
+per-task scope audit.
+
+**pi-codex implementers, codex unavailable at preflight.** `pi-watch --check codex` fails, so the
+implementer question offers only Claude subagents. No dead end is ever presented.
+
+**pi-codex implementers, no Anthropic reviewer reachable.** Preflight offers the flip to Claude
+implementers, since that pairing's reviewer (`codex`) is known reachable. If the user declines, the
+run proceeds through `adversarial-review`'s `Task` path with a single warning.
+
+**A pi worker commits its own work.** HEAD verification catches it before any audit runs. The task
+stops and is surfaced; it is not silently reset.
+
+**A pi worker writes into a sibling worktree.** The wave-level audit reports a path outside the
+*victim's* declared scope. The wave stops and is re-planned. The orchestrator cannot name the
+culprit, and does not try to.
+
+**A pi worker omits its status trailer.** `pi-watch` exits 6. The orchestrator treats the task as
+`FAILED` under the existing rule that a report it cannot validate is `FAILED`, and retries once with
+a fresh worker.
+
+**A user picks a same-family reviewer deliberately.** Allowed. Preflight warns once; the manifest
+stamps `independence: reduced`; Step 9 reads that field and weighs the `PASS` accordingly.
+
+## Failure routing — new rows
+
+| Situation | Response |
+| --- | --- |
+| `pi-watch` exit 6 (trailer missing or malformed) | Status unvalidatable → `FAILED`; retry once with a fresh worker |
+| Worktree HEAD moved since dispatch | Worker committed and bypassed the audit; stop the task, surface |
+| Cross-worktree contamination at wave end | Stop the wave, re-plan — same response as any scope violation |
+| Reviewer alias unreachable at preflight | Offer the implementer flip; else `Task` path with a warning |
+
+## Red Flags — new rows
+
+| Rationalization | Why it fails |
+| --- | --- |
+| "pi workers are told to stay in the worktree, so the boundary holds." | The prompt is not a boundary; the audit is. pi has no sandbox, which is exactly why the audit went wave-level. |
+| "The report clearly says DONE — close enough." | Exit 6 is the contract. A status word appearing in prose is not a validated status. |
+
+## Scope and non-goals
+
+- **`quirk:executing-plans` is untouched.** It exists as the no-subagents fallback and runs
+  sequentially in-session; adding a dispatch backend there changes what the skill is for and needs
+  its own design pass. See Deferred Ideas.
+- **No `pi-sonnet` / `pi-opus` implementer options.** Routing Claude models through pi buys nothing
+  over `Task` subagents, loses permission gating, and adds metered spend.
+- **No `--timeout` flag on pi-watch.** `quirk:pi-dev` already prescribes `gtimeout`/`timeout`
+  wrapping, so the capability exists today without changing the wrapper.
+- **Reviewer dispatch mechanism stays `quirk:adversarial-review`'s business.** This skill supplies
+  an alias and a family; it does not choose between `pi-watch` and `Task` for reviewers.
+- **No per-wave or per-task backend selection.** One choice per run.
+
+## Decisions Locked
+
+**Selection granularity**
+- Backend is chosen once per run and fixed for the branch. Per-wave and per-task were rejected
+  because they make the final loop's `RUN_BASE..HEAD` diff mixed-family, leaving no honest
+  `author_family` for the most important review of the run.
+- The choice is elicited by `AskUserQuestion` at preflight. A skill argument was rejected because
+  `quirk:brainstorming` hands off without arguments, so on the main entry path the lever would not
+  exist.
+- Step 9 fixers inherit the implementer choice, keeping everything written into the branch
+  single-family. "Fixers follow the reviewer family" was rejected explicitly: in round N+1 that
+  reviewer would be reviewing its own family's fix.
+- Default with no preference stated: Claude Sonnet subagents. Status quo, no metered spend, no
+  behavior change for existing runs.
+
+**Reviewer-family coupling**
+- The reviewer is a second explicit `AskUserQuestion`, not a mechanical derivation. Deriving it
+  silently was rejected in favor of making a deliberate same-family run possible and visible.
+- Preflight checks only the chosen reviewer's alias, after the implementer choice is known.
+- When the chosen reviewer family has no reachable model, preflight offers to flip the implementer
+  choice — independence is load-bearing, the implementer preference is not.
+- A codex-implemented branch is reviewed by whatever `select-model` resolves, with
+  `adversarial-review`'s `Task` path as the backstop when pi cannot run at all.
+
+**Containment and audit**
+- pi implementer tool grant: `read,bash,edit,write`. `bash` is required because the TDD method
+  depends on the worker watching its own test fail.
+- The scope audit runs at wave end against every live worktree, each checked against its own task's
+  scope.
+- pi implementers may run parallel waves under the existing disjoint-scope rule. The rule does not
+  care which model is writing.
+- Dispatch is a backgrounded Bash call per task, because the 600s foreground ceiling cannot hold an
+  implementer-scale task.
+
+**Prompt portability**
+- Shared prompt core plus one small pi delta file, appended by the orchestrator. Two fully
+  self-contained files were rejected as the drift failure this skill's own Red Flags table warns
+  about.
+- The TDD discipline is inlined into the delta as a condensed red-green block, not pasted verbatim
+  from `quirk:test-driven-development` (a pasted copy diverges silently) and not dropped (the two
+  backends would build differently, invisibly).
+- Status is extracted via a generic `--require-trailer` in `pi-watch`, with the implementer emitting
+  `STATUS: <word>` on its own final line.
+
+**pi-watch scope**
+- `--cwd <dir>` and `--require-trailer <KEY>` are in scope. `--timeout` is not.
+
+**Preflight option set**
+- Two implementer options: Claude subagents, pi codex.
+
+**Sibling skills**
+- `quirk:executing-plans` does not get the backend choice this round.
+
+## Industry Insights
+
+(Offline mode — no research swarm was dispatched.) This work is internal to quirk's own skill
+architecture rather than a domain with external literature, and the operating instructions for this
+session prohibit dispatching subagents unless requested. Every constraint in this spec was derived
+by reading the repository directly:
+
+- `skills/subagent-driven-development/SKILL.md` — the review loop's `author_family` coupling and the
+  gpt-5.6-sol pin.
+- `skills/adversarial-review/assets/composition-contract.md` — `select-model` resolves a family
+  different from the author's; `model` is a pi alias that overrides family selection.
+- `skills/pi-dev/scripts/pi-watch/pi-watch.mjs:363` — `process.cwd()` is hard-coded; exit codes 0–5
+  are taken.
+- `skills/pi-dev/SKILL.md` — pi has no sandbox, no `--cd`, and no built-in timeout; `.mjs` updates
+  propagate without reinstall.
+
+## Deferred Ideas
+
+- **Backend choice for `quirk:executing-plans`.** `pi-watch` is a bash dispatch, so it works on
+  platforms with no `Task` tool at all. This would turn `executing-plans` from the degraded path
+  into a parallel-capable one — a genuinely compelling change that roughly doubles this project's
+  scope and rewrites a skill's stated purpose. Needs its own design pass.
+- **A `FILES:` trailer alongside `STATUS:`.** A worker's self-reported file list, compared against
+  the real diff, would make a claim/reality mismatch its own signal. Deferred because multi-key
+  trailers make `--require-trailer` less trivially generic.
+- **`--timeout` on `pi-watch`.** Deferred in favor of `gtimeout` wrapping, which works today.
+
+## Glossary
+
+| Term | Meaning |
+| --- | --- |
+| **Backend record** | The `IMPLEMENTER` / `AUTHOR_FAMILY` / `REVIEWER_ALIAS` triple resolved at preflight and stored in the run journal |
+| **Dispatch block** | The single section of Step 5 that branches on `IMPLEMENTER`; referenced by Step 9 |
+| **pi delta** | `assets/pi-worker-delta.md`, appended to the shared prompt core on the pi path |
+| **Trailer** | A `KEY: value` line required as a worker's final output line, verified by `pi-watch --require-trailer` |
+| **Wave-level audit** | Scope-auditing every live worktree against its own task's scope once the whole wave has returned |
+| **Implementer flip** | Preflight's offer to change the implementer choice when the chosen reviewer family is unreachable, preserving cross-family independence |
+
+## Status & amendments
+
+**Amendments:** none yet.
