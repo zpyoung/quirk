@@ -2,7 +2,10 @@
 """Shared markdown-artifact parsing and rendering primitives."""
 from __future__ import annotations
 
+import hashlib
+import os
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,6 +13,8 @@ FIELD_RE = re.compile(r"^-\s+\*\*(.+?)\*\*:\s*(.+)$", re.MULTILINE)
 SCHEMA_VERSION_RE = re.compile(r"<!--\s*schema-version:\s*(\d+)\s*-->")
 
 LOCK_DIR_PARTS = (".quirk", "locks")
+
+SCHEMA_VERSION: int = 2
 
 
 def ensure_lock_dir(project: Path) -> Path:
@@ -86,6 +91,7 @@ class Entry:
     fields: dict[str, str]
     raw: str
     start: int
+    end: int
 
 
 @dataclass(frozen=True)
@@ -131,19 +137,27 @@ def parse_entries(text: str, header: str) -> ParseResult:
         if sm is not None:
             entries.append(Entry(
                 id=entry_id, header=header, title=sm.group(2).strip(),
-                fields=fields, raw=block, start=m.start(),
+                fields=fields, raw=block, start=m.start(), end=end,
             ))
         else:
             malformed.append(MalformedHeading(id=entry_id, header=header, reason="no title", fields=fields))
     return ParseResult(entries=entries, malformed=malformed)
 
 
-def render_entry(schema: dict, entry_id: int, fields: dict[str, str]) -> str:
-    """Render a markdown entry block for the given schema and fields."""
+def render_entry(
+    schema: dict, entry_id: int, fields: dict[str, str], *, schema_version: int | None = None
+) -> str:
+    """Render a markdown entry block for the given schema and fields.
+
+    `schema_version` gates fields listed in `schema["v2_fields"]`: below 2, they are omitted so a
+    v1 file never receives a field a v1 reader wouldn't understand. Omitting the parameter (the
+    default) preserves the pre-v2 behavior of emitting every populated field.
+    """
     title = fields.get("title", "")
     lines = [f"## {schema['header']}-{entry_id}: {title}"]
+    suppressed = schema.get("v2_fields", ()) if schema_version is not None and schema_version < 2 else ()
     for key in schema["fields"]:
-        if key == "title":
+        if key == "title" or key in suppressed:
             continue
         if fields.get(key):
             label = schema["labels"].get(key, key)
@@ -155,3 +169,106 @@ def render_entry(schema: dict, entry_id: int, fields: dict[str, str]) -> str:
 def detect_schema_version(text: str) -> int | None:
     m = SCHEMA_VERSION_RE.search(text)
     return int(m.group(1)) if m else None
+
+
+def hash_probe_spec(spec: str) -> str:
+    """Return the first 8 hex characters of sha256(spec) for the `Probe` field's `spec#` fragment."""
+    return hashlib.sha256(spec.encode()).hexdigest()[:8]
+
+
+def hash_file(path: Path) -> str | None:
+    """Return the first 8 hex characters of sha256(file bytes), or None if the file can't be read."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    return hashlib.sha256(data).hexdigest()[:8]
+
+
+def atomic_write(path: Path, text: str) -> None:
+    """Replace `path`'s contents with `text` via a same-directory temp file and `os.replace`.
+
+    Fsyncs the temp file before the replace and the containing directory after — the first makes
+    the new content durable, the second makes the rename itself survive a power cut; neither
+    substitutes for the other. Directory fsync is best-effort: platforms that refuse to open a
+    directory for reading (Windows) degrade silently rather than raising.
+    """
+    directory = path.parent
+    fd, tmp_name = tempfile.mkstemp(dir=directory, prefix=f".{path.name}.", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+    dir_fd = None
+    try:
+        dir_fd = os.open(directory, os.O_RDONLY)
+        os.fsync(dir_fd)
+    except OSError:
+        pass
+    finally:
+        if dir_fd is not None:
+            os.close(dir_fd)
+
+
+def field_line(label: str, value: str) -> str:
+    return f"- **{label}**: {value}"
+
+
+class DuplicateFieldError(Exception):
+    """Raised when an entry's block contains more than one line for the same field label."""
+
+
+def splice_field(text: str, entry: Entry, label: str, value: str | None) -> str:
+    """Replace, insert, or remove `label`'s field line inside `entry`'s block.
+
+    Bounded by `entry.start`/`entry.end`, never by scanning forward for the next `##`, so this is
+    safe against both the file's last entry and a fenced heading nested inside the block. Matching
+    runs against masked text — the same technique `parse_entries` uses when computing `fields` —
+    so a label quoted inside a fenced example is never mistaken for a live duplicate or edited in
+    place of the real line.
+    """
+    scan = _mask_quoted(text)
+    block = text[entry.start:entry.end]
+    masked_block = scan[entry.start:entry.end]
+
+    label_re = re.compile(rf"^-\s+\*\*{re.escape(label)}\*\*:.*$", re.MULTILINE)
+    matches = list(label_re.finditer(masked_block))
+    if len(matches) > 1:
+        raise DuplicateFieldError(label)
+
+    if matches:
+        line_start, line_end = matches[0].start(), matches[0].end()
+        if value is None:
+            if line_end < len(block) and block[line_end] == "\n":
+                new_block = block[:line_start] + block[line_end + 1:]
+            else:
+                new_block = block[:line_start - 1] + block[line_end:]
+        else:
+            new_block = block[:line_start] + field_line(label, value) + block[line_end:]
+        return text[:entry.start] + new_block + text[entry.end:]
+
+    if value is None:
+        return text
+
+    field_matches = list(FIELD_RE.finditer(masked_block))
+    if field_matches:
+        anchor_end = field_matches[-1].end()
+    else:
+        nl = block.find("\n")
+        anchor_end = nl if nl != -1 else len(block)
+
+    new_line = field_line(label, value)
+    if anchor_end < len(block) and block[anchor_end] == "\n":
+        insert_at = anchor_end + 1
+        new_block = block[:insert_at] + new_line + "\n" + block[insert_at:]
+    else:
+        new_block = block[:anchor_end] + "\n" + new_line
+
+    return text[:entry.start] + new_block + text[entry.end:]

@@ -1,7 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+import os
+import re
+
+import pytest
+
 import artifact_lib
 import artifact_review
+
+HEX8_RE = re.compile(r"^[0-9a-f]{8}$")
 
 
 def test_titleless_heading_does_not_consume_following_line_as_title() -> None:
@@ -160,3 +168,281 @@ def test_entry_offsets_still_index_the_original_text() -> None:
     assert FENCED[entry.start:entry.start + len("## BUG-1:")] == "## BUG-1:"
     assert entry.raw.startswith("## BUG-1: quoting")
     assert "inside a fence" in entry.raw
+
+
+# --- Entry.end ---------------------------------------------------------------
+
+
+def test_entry_end_is_len_of_text_for_the_only_entry() -> None:
+    text = "## BUG-1: alpha\n- **Severity**: high\n"
+    entry = artifact_lib.parse_entries(text, "BUG").entries[0]
+    assert entry.end == len(text)
+
+
+def test_entry_end_bounds_a_non_final_entry_at_the_next_headings_start() -> None:
+    text = "## BUG-1: alpha\n- **Severity**: high\n\n## BUG-2: beta\n- **Severity**: low\n"
+    entry_1 = artifact_lib.parse_entries(text, "BUG").entries[0]
+    assert entry_1.end == text.index("## BUG-2:")
+
+
+def test_entry_end_for_the_final_entry_with_no_trailing_newline() -> None:
+    text = "## BUG-1: alpha\n- **Severity**: high"
+    entry = artifact_lib.parse_entries(text, "BUG").entries[0]
+    assert entry.end == len(text)
+
+
+def test_entry_end_respects_a_fenced_heading_inside_the_block() -> None:
+    """A fenced `## BUG-N:` is not a boundary, so `end` must run past it to the real end."""
+    entry = artifact_lib.parse_entries(FENCED, "BUG").entries[0]
+    assert entry.end == len(FENCED)
+
+
+# --- hash_probe_spec / hash_file ----------------------------------------------
+
+
+def test_hash_probe_spec_matches_sha256_prefix() -> None:
+    spec = "test:tests/test_auth.py::test_safari"
+    result = artifact_lib.hash_probe_spec(spec)
+    assert HEX8_RE.match(result)
+    assert result == hashlib.sha256(spec.encode()).hexdigest()[:8]
+
+
+def test_hash_probe_spec_is_deterministic() -> None:
+    spec = "grep:TODO_AUTH -- src/auth/"
+    assert artifact_lib.hash_probe_spec(spec) == artifact_lib.hash_probe_spec(spec)
+
+
+def test_hash_file_matches_sha256_prefix(tmp_path) -> None:
+    target = tmp_path / "sample.txt"
+    target.write_bytes(b"some file contents\n")
+    result = artifact_lib.hash_file(target)
+    assert HEX8_RE.match(result)
+    assert result == hashlib.sha256(b"some file contents\n").hexdigest()[:8]
+
+
+def test_hash_file_is_deterministic(tmp_path) -> None:
+    target = tmp_path / "sample.txt"
+    target.write_bytes(b"stable content")
+    assert artifact_lib.hash_file(target) == artifact_lib.hash_file(target)
+
+
+def test_hash_file_returns_none_for_missing_path(tmp_path) -> None:
+    assert artifact_lib.hash_file(tmp_path / "does-not-exist.txt") is None
+
+
+def test_hash_file_returns_none_for_unreadable_path(tmp_path) -> None:
+    target = tmp_path / "locked.txt"
+    target.write_bytes(b"secret")
+    target.chmod(0o000)
+    try:
+        if os.access(target, os.R_OK):
+            pytest.skip("running as a user that bypasses file permissions")
+        assert artifact_lib.hash_file(target) is None
+    finally:
+        target.chmod(0o644)
+
+
+def test_hash_file_returns_none_for_a_directory(tmp_path) -> None:
+    assert artifact_lib.hash_file(tmp_path) is None
+
+
+# --- atomic_write --------------------------------------------------------------
+
+
+def test_atomic_write_creates_a_new_file_with_the_given_text(tmp_path) -> None:
+    target = tmp_path / "BUGS.md"
+    artifact_lib.atomic_write(target, "hello\n")
+    assert target.read_text() == "hello\n"
+
+
+def test_atomic_write_replaces_existing_content(tmp_path) -> None:
+    target = tmp_path / "BUGS.md"
+    target.write_text("old\n")
+    artifact_lib.atomic_write(target, "new\n")
+    assert target.read_text() == "new\n"
+
+
+def test_atomic_write_leaves_the_original_byte_identical_when_replace_fails(
+    tmp_path, monkeypatch
+) -> None:
+    target = tmp_path / "BUGS.md"
+    target.write_bytes(b"original\n")
+
+    def boom(*args, **kwargs):
+        raise OSError("simulated crash before replace")
+
+    monkeypatch.setattr(os, "replace", boom)
+    with pytest.raises(OSError):
+        artifact_lib.atomic_write(target, "new\n")
+
+    assert target.read_bytes() == b"original\n"
+
+
+def test_atomic_write_leaves_no_temp_file_behind_when_replace_fails(tmp_path, monkeypatch) -> None:
+    target = tmp_path / "BUGS.md"
+    target.write_text("original\n")
+
+    def boom(*args, **kwargs):
+        raise OSError("simulated crash before replace")
+
+    monkeypatch.setattr(os, "replace", boom)
+    with pytest.raises(OSError):
+        artifact_lib.atomic_write(target, "new\n")
+
+    leftover = [p.name for p in tmp_path.iterdir() if p.name != "BUGS.md"]
+    assert leftover == []
+
+
+def test_atomic_write_fsyncs_temp_file_before_replace_and_directory_after(
+    tmp_path, monkeypatch
+) -> None:
+    target = tmp_path / "BUGS.md"
+    calls: list[str] = []
+    real_fsync = os.fsync
+    real_replace = os.replace
+
+    def tracking_fsync(fd):
+        calls.append("fsync")
+        return real_fsync(fd)
+
+    def tracking_replace(src, dst):
+        calls.append("replace")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "fsync", tracking_fsync)
+    monkeypatch.setattr(os, "replace", tracking_replace)
+
+    artifact_lib.atomic_write(target, "content\n")
+
+    assert calls.count("fsync") == 2
+    assert calls.count("replace") == 1
+    assert calls[0] == "fsync", "temp file must be fsynced before the replace"
+    assert calls[-1] == "fsync", "directory must be fsynced after the replace"
+    assert calls.index("replace") == 1, "replace must happen strictly between the two fsyncs"
+    assert target.read_text() == "content\n"
+
+
+# --- field_line ------------------------------------------------------------------
+
+
+def test_field_line_renders_label_and_value() -> None:
+    assert artifact_lib.field_line("Severity", "critical") == "- **Severity**: critical"
+
+
+# --- splice_field ----------------------------------------------------------------
+
+
+def test_splice_field_replaces_an_existing_field_line() -> None:
+    text = "## BUG-1: alpha\n- **Status**: open\n- **Severity**: high\n"
+    entry = artifact_lib.parse_entries(text, "BUG").entries[0]
+    result = artifact_lib.splice_field(text, entry, "Status", "in-progress")
+    assert result == "## BUG-1: alpha\n- **Status**: in-progress\n- **Severity**: high\n"
+
+
+def test_splice_field_inserts_after_the_last_field_line_when_absent() -> None:
+    text = "## BUG-1: alpha\n- **Status**: open\n- **Severity**: high\n"
+    entry = artifact_lib.parse_entries(text, "BUG").entries[0]
+    result = artifact_lib.splice_field(text, entry, "Probe", "none")
+    assert result == (
+        "## BUG-1: alpha\n- **Status**: open\n- **Severity**: high\n- **Probe**: none\n"
+    )
+
+
+def test_splice_field_inserts_after_heading_when_no_field_lines_exist() -> None:
+    text = "## BUG-1: alpha\n\nSome prose.\n"
+    entry = artifact_lib.parse_entries(text, "BUG").entries[0]
+    result = artifact_lib.splice_field(text, entry, "Status", "open")
+    assert result == "## BUG-1: alpha\n- **Status**: open\n\nSome prose.\n"
+
+
+def test_splice_field_removes_the_line_when_value_is_none() -> None:
+    text = "## BUG-1: alpha\n- **Status**: open\n- **Severity**: high\n"
+    entry = artifact_lib.parse_entries(text, "BUG").entries[0]
+    result = artifact_lib.splice_field(text, entry, "Status", None)
+    assert result == "## BUG-1: alpha\n- **Severity**: high\n"
+
+
+def test_splice_field_removing_an_absent_field_is_a_no_op() -> None:
+    text = "## BUG-1: alpha\n- **Severity**: high\n"
+    entry = artifact_lib.parse_entries(text, "BUG").entries[0]
+    result = artifact_lib.splice_field(text, entry, "Status", None)
+    assert result == text
+
+
+def test_splice_field_refuses_on_a_duplicated_label() -> None:
+    text = "## BUG-1: alpha\n- **Status**: open\n- **Status**: closed\n"
+    entry = artifact_lib.parse_entries(text, "BUG").entries[0]
+    with pytest.raises(artifact_lib.DuplicateFieldError):
+        artifact_lib.splice_field(text, entry, "Status", "in-progress")
+
+
+def test_splice_field_replaces_in_the_last_entry_with_no_trailing_newline() -> None:
+    text = "## BUG-1: alpha\n- **Status**: open"
+    entry = artifact_lib.parse_entries(text, "BUG").entries[0]
+    result = artifact_lib.splice_field(text, entry, "Status", "closed")
+    assert result == "## BUG-1: alpha\n- **Status**: closed"
+
+
+def test_splice_field_inserts_into_the_last_entry_with_no_trailing_newline() -> None:
+    text = "## BUG-1: alpha\n- **Status**: open"
+    entry = artifact_lib.parse_entries(text, "BUG").entries[0]
+    result = artifact_lib.splice_field(text, entry, "Severity", "high")
+    assert result == "## BUG-1: alpha\n- **Status**: open\n- **Severity**: high"
+
+
+def test_splice_field_removes_the_only_field_from_the_last_entry_with_no_trailing_newline() -> None:
+    text = "## BUG-1: alpha\n- **Status**: open"
+    entry = artifact_lib.parse_entries(text, "BUG").entries[0]
+    result = artifact_lib.splice_field(text, entry, "Status", None)
+    assert result == "## BUG-1: alpha"
+
+
+def test_splice_field_ignores_a_fenced_duplicate_and_edits_only_the_real_field() -> None:
+    """A field label quoted inside a fenced example must not count toward the duplicate check
+    or be mistaken for the field to edit — masking must apply the same way `parse_entries` does.
+    """
+    entry = artifact_lib.parse_entries(FENCED, "BUG").entries[0]
+    result = artifact_lib.splice_field(FENCED, entry, "Severity", "critical-updated")
+    assert result == FENCED.replace("- **Severity**: low", "- **Severity**: critical-updated")
+    assert "- **Severity**: critical\n" in result, "the fenced example must stay untouched"
+
+
+# --- render_entry: v2-field suppression -------------------------------------------
+
+
+SCHEMA_WITH_V2_FIELD = {
+    "header": "BUG",
+    "fields": ["title", "severity", "blocked_by"],
+    "labels": {"severity": "Severity", "blocked_by": "Blocker for"},
+    "v2_fields": {"blocked_by"},
+}
+
+
+def test_render_entry_suppresses_v2_fields_when_schema_version_is_1() -> None:
+    fields = {"title": "alpha", "severity": "high", "blocked_by": "BUG-2"}
+    result = artifact_lib.render_entry(SCHEMA_WITH_V2_FIELD, 1, fields, schema_version=1)
+    assert "Blocker for" not in result
+    assert "- **Severity**: high" in result
+
+
+def test_render_entry_emits_v2_fields_when_schema_version_is_omitted() -> None:
+    fields = {"title": "alpha", "severity": "high", "blocked_by": "BUG-2"}
+    result = artifact_lib.render_entry(SCHEMA_WITH_V2_FIELD, 1, fields)
+    assert "- **Blocker for**: BUG-2" in result
+
+
+def test_render_entry_emits_v2_fields_when_schema_version_is_2() -> None:
+    fields = {"title": "alpha", "severity": "high", "blocked_by": "BUG-2"}
+    result = artifact_lib.render_entry(SCHEMA_WITH_V2_FIELD, 1, fields, schema_version=2)
+    assert "- **Blocker for**: BUG-2" in result
+
+
+def test_render_entry_without_v2_fields_key_is_unaffected_by_schema_version() -> None:
+    schema = {
+        "header": "BUG",
+        "fields": ["title", "severity"],
+        "labels": {"severity": "Severity"},
+    }
+    fields = {"title": "alpha", "severity": "high"}
+    result = artifact_lib.render_entry(schema, 1, fields, schema_version=1)
+    assert "- **Severity**: high" in result
