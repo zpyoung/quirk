@@ -135,14 +135,42 @@ Dispatched with `run_in_background: true`, one Bash call per task. The Bash tool
 calls at 600s, which an implementer-scale task can exceed; a task killed at the ceiling leaves a
 partial dirty worktree the audit will reject.
 
-Step 5's foreground rule gains a **scoped carve-out** naming why this does not reopen the failure
-that rule exists for. The stall that stranded 3/3 workers was the harness failing to re-invoke on
-*subagent* completion. A backgrounded Bash has a real process exit and a captured exit code, which
-is a different mechanism. The carve-out is limited to Bash dispatch — background `Task` dispatch
-stays banned.
+**The tree is the source of truth; the worker's report is advisory.** This is the amendment that
+makes background dispatch safe, and it is what Step 5's foreground rule gets modified by — not a
+carve-out claiming background Bash is exempt.
+
+The record behind that rule documents failures on *both* paths in one sentence: "3/3 captains
+stalled on background-dispatch re-invocation, one fix-worker report was lost to a foreground
+timeout (commit survived)"
+(`docs/quirk/specs/2026-07-21-sdd-captain-control-plane-design.md:288`). It describes the background
+stall generically, not as `Task`-specific, so any argument that backgrounded Bash is categorically
+different is unsupported by the only evidence there is. The parenthetical is the useful part:
+**the commit survived.** The work was never at risk, because the orchestrator — not the worker —
+audits the diff and runs acceptance.
+
+So the gate becomes tree state, and the report becomes diagnosis:
+
+| Observation | Outcome |
+| --- | --- |
+| Report absent or unvalidatable, audit clean, acceptance passes | **Accept.** Record that no validated status was received. |
+| Report absent or unvalidatable, acceptance fails | `FAILED`; retry once, as today |
+| Report says `DONE`, acceptance fails | `FAILED` — unchanged; a claim never overrides a run |
+| Report says `BLOCKED` / `NEEDS_CONTEXT` | Route as today. These carry information the tree cannot. |
+
+This amends `SKILL.md:357–358` ("A report you cannot validate against that vocabulary is `FAILED`").
+That rule was written for a control plane where the orchestrator had only the worker's word; it
+still has the diff and the acceptance commands, so the rule was belt-and-braces rather than the
+gate. What is genuinely lost: a worker that returns `BLOCKED` for a real reason — an out-of-scope
+dependency, a fence collision — degrades to "acceptance failed, retry" when its report goes missing.
+That is a worse diagnosis, not an unsafe outcome, and it is the price of surviving both recorded
+failure modes.
 
 `gtimeout`/`timeout` wrapping follows `quirk:pi-dev`, which already prescribes it because `pi` has
-no built-in timeout.
+no built-in timeout. Under background dispatch it is additionally **load-bearing for liveness**:
+it is what guarantees every dispatch terminates and produces an exit code, so a hung worker becomes
+a timed-out one rather than a wave that never completes. And because completion is decidable from
+the tree, a lost re-invocation notification no longer strands the run the way it stranded 3/3 —
+the orchestrator can determine what happened by looking, instead of waiting to be told.
 
 ### Prompt assets
 
@@ -273,9 +301,15 @@ stops and is surfaced; it is not silently reset.
 *victim's* declared scope. The wave stops and is re-planned. The orchestrator cannot name the
 culprit, and does not try to.
 
-**A pi worker omits its status trailer.** `pi-watch` exits 6. The orchestrator treats the task as
-`FAILED` under the existing rule that a report it cannot validate is `FAILED`, and retries once with
-a fresh worker.
+**A pi worker omits its status trailer.** `pi-watch` exits 6. The orchestrator has no validated
+status, so it falls through to tree evaluation: HEAD-check, scope audit, acceptance. Green means the
+task is accepted with a journal note that no status was received; red means `FAILED` and one retry.
+A missing status word is not itself a defect.
+
+**The harness never re-invokes on a backgrounded dispatch.** `gtimeout` has already bounded the job,
+so it is not still running. The orchestrator determines completion by inspecting the tree, which is
+the gate anyway. This is the failure that stranded 3/3 workers in the first dogfood run; it now
+costs a status word rather than the wave.
 
 **A user picks a same-family reviewer deliberately.** Allowed. Preflight warns once; the manifest
 stamps `independence: reduced`; Step 9 reads that field and weighs the `PASS` accordingly.
@@ -284,7 +318,8 @@ stamps `independence: reduced`; Step 9 reads that field and weighs the `PASS` ac
 
 | Situation | Response |
 | --- | --- |
-| `pi-watch` exit 6 (trailer missing or malformed) | Status unvalidatable → `FAILED`; retry once with a fresh worker |
+| `pi-watch` exit 6 (trailer missing or malformed) | No validated status. Fall through to tree evaluation: audit and run acceptance, accept on green, `FAILED` on red. Record the missing status. |
+| Background dispatch never re-invokes the orchestrator | `gtimeout` bounds every dispatch, so the job terminates regardless; completion is decidable from the tree rather than from a notification |
 | Any task retried after the wave-level audit | Re-run HEAD-check and scope-audit on that tree before its acceptance step |
 | Worktree HEAD moved since dispatch | Worker committed and bypassed the audit; stop the task, surface |
 | Cross-worktree contamination at wave end | Stop the wave, re-plan — same response as any scope violation |
@@ -295,7 +330,8 @@ stamps `independence: reduced`; Step 9 reads that field and weighs the `PASS` ac
 | Rationalization | Why it fails |
 | --- | --- |
 | "pi workers are told to stay in the worktree, so the boundary holds." | The prompt is not a boundary; the audit is. pi has no sandbox, which is exactly why the audit went wave-level. |
-| "The report clearly says DONE — close enough." | Exit 6 is the contract. A status word appearing in prose is not a validated status. |
+| "The report clearly says DONE — close enough." | A claim never overrides a run. `DONE` with failing acceptance is `FAILED`, exactly as before; making the report advisory relaxed what a *missing* report costs, not what a *false* one buys. |
+| "No report came back, so the task failed." | Absent is not failed. Audit the tree and run acceptance — the recorded dogfood failure lost a report while the commit survived, and treating that as a failure discards finished work. |
 
 ## Scope and non-goals
 
@@ -343,6 +379,10 @@ stamps `independence: reduced`; Step 9 reads that field and weighs the `PASS` ac
   care which model is writing.
 - Dispatch is a backgrounded Bash call per task, because the 600s foreground ceiling cannot hold an
   implementer-scale task.
+- The worker's report is advisory; tree state is the gate. Chosen over a background carve-out
+  (whose justification the incident record does not support) and over staying foreground (the path
+  that already lost a report in that same run). This is the only option that survives both
+  documented failure modes, and it amends `SKILL.md:357–358`.
 
 **Prompt portability**
 - Shared prompt core plus one small pi delta file, appended by the orchestrator. Two fully
@@ -403,4 +443,14 @@ by reading the repository directly:
 
 ## Status & amendments
 
-**Amendments:** none yet.
+**Amendments:**
+
+- **2026-08-10** — Fable review round. Reviewer options constrained to `adversarial-review`'s
+  6-alias table; corrected the claim that an explicit `model` walks a ladder (it does not, which
+  makes preflight load-bearing); retried tasks re-enter the audit; `--require-trailer` widened to a
+  3-line backward scan; HEAD verification restated as a heuristic; stale Roles table added to edit
+  scope.
+- **2026-08-10** — Dispatch decision reopened and changed. The original background carve-out
+  asserted a `Task`-specific root cause the incident record does not support. Replaced with: tree
+  state is the gate, the worker's report is advisory. This amends `SKILL.md:357–358` and is the
+  most consequential change in this spec — flagged for the tech spec to treat as its own task.
