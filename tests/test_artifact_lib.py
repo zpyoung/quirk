@@ -11,6 +11,9 @@ import pytest
 import artifact_lib
 import artifact_review
 
+from .conftest import TEMPLATES_DIR
+from .test_schema_v2 import SPEC_ROADMAP_EXAMPLE
+
 HEX8_RE = re.compile(r"^[0-9a-f]{8}$")
 
 
@@ -550,3 +553,224 @@ def test_detect_schema_version_prefers_the_preamble_marker_over_a_quoted_one() -
         "- **Description**: an earlier draft said <!-- schema-version: 99 --> by mistake.\n"
     )
     assert artifact_lib.detect_schema_version(text) == 2
+
+
+def test_parse_roadmap_never_raises_on_arbitrary_text() -> None:
+    for text in [
+        "",
+        "\n\n\n",
+        "not a roadmap at all",
+        "<!-- unterminated comment\n## Milestone: X\n- BUG-1\n",
+        "## Milestone: \n- \n-BUG-1\n--- BUG-2\n",
+        "## Milestone: X\n" + "�" * 50 + "\n",
+        "# ROADMAP\n## Milestone:\n## Milestone: Y\n- TEST-9999999999999999999999999\n",
+    ]:
+        result = artifact_lib.parse_roadmap(text)
+        assert isinstance(result, artifact_lib.RoadmapParse)
+
+
+def test_parse_roadmap_with_no_milestones_treats_whole_file_as_preamble() -> None:
+    text = "# ROADMAP\n\nNo milestones yet.\n"
+    result = artifact_lib.parse_roadmap(text)
+    assert result.milestones == []
+    assert result.findings == []
+    assert result.preamble == text
+
+
+def test_shipped_roadmap_template_parses_with_zero_findings() -> None:
+    text = (TEMPLATES_DIR / "ROADMAP.md").read_text()
+    result = artifact_lib.parse_roadmap(text)
+    assert result.milestones == []
+    assert result.findings == []
+
+
+def test_shipped_roadmap_template_passes_write_time_validation_unchanged() -> None:
+    text = (TEMPLATES_DIR / "ROADMAP.md").read_text()
+    result = artifact_lib.parse_roadmap(text)
+    assert artifact_lib.validate_roadmap_for_write(result) == []
+
+
+def test_spec_roadmap_example_parses_with_zero_findings() -> None:
+    result = artifact_lib.parse_roadmap(SPEC_ROADMAP_EXAMPLE)
+    assert result.findings == []
+    assert [m.name for m in result.milestones] == ["Auth hardening", "Search v2"]
+    assert result.milestones[0].members == ["BUG-3", "DEFER-7", "TEST-12"]
+    assert result.milestones[1].members == ["BUG-9"]
+
+
+def test_spec_roadmap_example_passes_write_time_validation_unchanged() -> None:
+    result = artifact_lib.parse_roadmap(SPEC_ROADMAP_EXAMPLE)
+    assert artifact_lib.validate_roadmap_for_write(result) == []
+
+
+def test_spec_roadmap_example_round_trips_byte_for_byte() -> None:
+    result = artifact_lib.parse_roadmap(SPEC_ROADMAP_EXAMPLE)
+    assert artifact_lib.render_roadmap(result) == SPEC_ROADMAP_EXAMPLE
+
+
+def test_round_trip_preserves_comments_and_blank_lines_between_milestones_and_members() -> None:
+    text = (
+        "<!-- schema-version: 2 -->\n"
+        "# ROADMAP\n\n"
+        "## Milestone: Alpha\n"
+        "- BUG-1\n"
+        "\n"
+        "- BUG-2\n"
+        "<!-- a note about ordering -->\n"
+        "- DEFER-3\n"
+        "\n"
+        "## Milestone: Beta\n"
+        "- TEST-4\n"
+    )
+    result = artifact_lib.parse_roadmap(text)
+    assert result.findings == []
+    assert artifact_lib.render_roadmap(result) == text
+
+
+def test_milestone_rank_is_zero_based_document_position() -> None:
+    text = "## Milestone: First\n- BUG-1\n\n## Milestone: Second\n- BUG-2\n\n## Milestone: Third\n- BUG-3\n"
+    result = artifact_lib.parse_roadmap(text)
+    assert [m.rank for m in result.milestones] == [0, 1, 2]
+    assert [m.name for m in result.milestones] == ["First", "Second", "Third"]
+
+
+def test_blank_line_between_milestones_is_legal() -> None:
+    text = "## Milestone: A\n- BUG-1\n\n\n## Milestone: B\n- BUG-2\n"
+    result = artifact_lib.parse_roadmap(text)
+    assert result.findings == []
+    assert artifact_lib.validate_roadmap_for_write(result) == []
+
+
+def test_proposal_member_produces_proposal_in_roadmap_not_malformed() -> None:
+    text = "## Milestone: X\n- PROPOSAL-1\n"
+    result = artifact_lib.parse_roadmap(text)
+    assert result.findings == [("PROPOSAL_IN_ROADMAP", "PROPOSAL-1")]
+    assert result.milestones[0].members == []
+
+
+def test_unknown_header_member_produces_unknown_header_in_roadmap() -> None:
+    text = "## Milestone: X\n- WIDGET-1\n"
+    result = artifact_lib.parse_roadmap(text)
+    assert result.findings == [("UNKNOWN_HEADER_IN_ROADMAP", "WIDGET-1")]
+    assert result.milestones[0].members == []
+
+
+def test_leading_zero_id_is_malformed_not_normalized() -> None:
+    text = "## Milestone: X\n- BUG-007\n"
+    result = artifact_lib.parse_roadmap(text)
+    assert len(result.findings) == 1
+    code, detail = result.findings[0]
+    assert code == "ROADMAP_LINE_MALFORMED"
+    assert "BUG-007" in detail
+    assert result.milestones[0].members == []
+
+
+def test_non_ascii_digit_id_is_malformed_not_normalized() -> None:
+    text = "## Milestone: X\n- BUG-٣\n"
+    result = artifact_lib.parse_roadmap(text)
+    assert len(result.findings) == 1
+    assert result.findings[0][0] == "ROADMAP_LINE_MALFORMED"
+    assert result.milestones[0].members == []
+
+
+def test_duplicate_membership_first_occurrence_wins_for_rank() -> None:
+    text = "## Milestone: Alpha\n- BUG-1\n\n## Milestone: Beta\n- BUG-1\n"
+    result = artifact_lib.parse_roadmap(text)
+    first = next(m for m in result.milestones if "BUG-1" in m.members)
+    assert first.name == "Alpha"
+    assert first.rank == 0
+
+
+def test_duplicate_membership_finding_names_both_milestones() -> None:
+    text = "## Milestone: Alpha\n- BUG-1\n\n## Milestone: Beta\n- BUG-1\n"
+    result = artifact_lib.parse_roadmap(text)
+    assert len(result.findings) == 1
+    code, detail = result.findings[0]
+    assert code == "DUPLICATE_MEMBERSHIP"
+    assert "Alpha" in detail
+    assert "Beta" in detail
+    assert "BUG-1" in detail
+
+
+def test_duplicate_milestone_name_does_not_disturb_rank() -> None:
+    text = "## Milestone: A\n- BUG-1\n\n## Milestone: A\n- BUG-2\n"
+    result = artifact_lib.parse_roadmap(text)
+    assert result.findings == [("DUPLICATE_MILESTONE_NAME", "A")]
+    assert [m.rank for m in result.milestones] == [0, 1]
+    assert [m.members for m in result.milestones] == [["BUG-1"], ["BUG-2"]]
+
+
+def test_prose_note_inside_a_milestone_is_malformed() -> None:
+    text = "## Milestone: A\nplease group these later\n- BUG-1\n"
+    result = artifact_lib.parse_roadmap(text)
+    assert len(result.findings) == 1
+    code, detail = result.findings[0]
+    assert code == "ROADMAP_LINE_MALFORMED"
+    assert "A" in detail
+    assert "please group these later" in detail
+
+
+def test_prose_note_inside_a_milestone_is_lost_on_rewrite() -> None:
+    text = "## Milestone: A\nplease group these later\n- BUG-1\n"
+    result = artifact_lib.parse_roadmap(text)
+    assert artifact_lib.render_roadmap(result) == "## Milestone: A\n- BUG-1\n"
+
+
+def test_prose_note_in_preamble_survives_byte_for_byte() -> None:
+    text = "A hand-written note above the milestones.\n\n## Milestone: A\n- BUG-1\n"
+    result = artifact_lib.parse_roadmap(text)
+    assert result.preamble == "A hand-written note above the milestones.\n\n"
+    assert artifact_lib.render_roadmap(result).startswith(result.preamble)
+
+
+def test_validate_roadmap_for_write_refuses_malformed_line() -> None:
+    result = artifact_lib.parse_roadmap("## Milestone: A\nprose\n- BUG-1\n")
+    blocking = artifact_lib.validate_roadmap_for_write(result)
+    assert ("ROADMAP_LINE_MALFORMED", "A: prose") in blocking
+
+
+def test_validate_roadmap_for_write_refuses_disallowed_member_headers() -> None:
+    result = artifact_lib.parse_roadmap("## Milestone: A\n- PROPOSAL-1\n- WIDGET-2\n")
+    blocking = artifact_lib.validate_roadmap_for_write(result)
+    assert ("PROPOSAL_IN_ROADMAP", "PROPOSAL-1") in blocking
+    assert ("UNKNOWN_HEADER_IN_ROADMAP", "WIDGET-2") in blocking
+
+
+def test_validate_roadmap_for_write_refuses_duplicate_membership() -> None:
+    text = "## Milestone: Alpha\n- BUG-1\n\n## Milestone: Beta\n- BUG-1\n"
+    result = artifact_lib.parse_roadmap(text)
+    blocking = artifact_lib.validate_roadmap_for_write(result)
+    assert len(blocking) == 1
+    assert blocking[0][0] == "DUPLICATE_MEMBERSHIP"
+
+
+def test_validate_roadmap_for_write_does_not_refuse_duplicate_milestone_name() -> None:
+    text = "## Milestone: A\n- BUG-1\n\n## Milestone: A\n- BUG-2\n"
+    result = artifact_lib.parse_roadmap(text)
+    assert result.findings == [("DUPLICATE_MILESTONE_NAME", "A")]
+    assert artifact_lib.validate_roadmap_for_write(result) == []
+
+
+def test_validate_roadmap_for_write_skips_dangling_check_when_known_ids_is_none() -> None:
+    result = artifact_lib.parse_roadmap("## Milestone: A\n- BUG-999\n")
+    assert artifact_lib.validate_roadmap_for_write(result, known_ids=None) == []
+
+
+def test_validate_roadmap_for_write_flags_dangling_ref_against_known_ids() -> None:
+    result = artifact_lib.parse_roadmap("## Milestone: A\n- BUG-1\n- BUG-999\n")
+    blocking = artifact_lib.validate_roadmap_for_write(result, known_ids={"BUG-1"})
+    assert blocking == [("DANGLING_ROADMAP_REF", "BUG-999")]
+
+
+def test_validate_roadmap_for_write_passes_when_all_ids_known() -> None:
+    result = artifact_lib.parse_roadmap("## Milestone: A\n- BUG-1\n- DEFER-2\n")
+    blocking = artifact_lib.validate_roadmap_for_write(result, known_ids={"BUG-1", "DEFER-2"})
+    assert blocking == []
+
+
+def test_member_line_allows_trailing_whitespace() -> None:
+    text = "## Milestone: A\n- BUG-1  \n"
+    result = artifact_lib.parse_roadmap(text)
+    assert result.findings == []
+    assert result.milestones[0].members == ["BUG-1"]
+    assert artifact_lib.render_roadmap(result) == text
