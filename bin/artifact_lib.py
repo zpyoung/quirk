@@ -318,3 +318,164 @@ def splice_field(text: str, entry: Entry, label: str, value: str | None) -> str:
         new_block = block[:anchor_end] + "\n" + new_line
 
     return text[:entry.start] + new_block + text[entry.end:]
+
+
+_MILESTONE_HEADING_RE = re.compile(r"^## Milestone: (.+)$")
+_ROADMAP_BLANK_RE = re.compile(r"^\s*$")
+# [0-9], not \d: \d admits non-ASCII decimal digits that int() would fold onto an ASCII-spelled
+# id; 0|[1-9][0-9]* additionally excludes leading zeros, so BUG-007 and BUG-7 stay two spellings
+# rather than being silently normalized to one.
+_ROADMAP_MEMBER_RE = re.compile(r"^- (BUG|DEFER|TEST)-(0|[1-9][0-9]*)\s*$")
+_ROADMAP_DISALLOWED_MEMBER_RE = re.compile(r"^- ([A-Z]+)-(0|[1-9][0-9]*)\s*$")
+
+_ROADMAP_WRITE_BLOCKING_CODES = frozenset({
+    "ROADMAP_LINE_MALFORMED",
+    "PROPOSAL_IN_ROADMAP",
+    "UNKNOWN_HEADER_IN_ROADMAP",
+    "DUPLICATE_MEMBERSHIP",
+})
+
+
+@dataclass(frozen=True)
+class Milestone:
+    name: str
+    rank: int
+    members: list[str]
+    raw_lines: list[str]
+
+
+@dataclass(frozen=True)
+class RoadmapParse:
+    milestones: list[Milestone]
+    findings: list[tuple[str, str]]
+    preamble: str
+
+
+def _line_body(line: str) -> str:
+    """Return `line` without its trailing line terminator, or "" for an empty string."""
+    return line.splitlines()[0] if line else ""
+
+
+def parse_roadmap(text: str) -> RoadmapParse:
+    """Parse `ROADMAP.md`'s milestone/member grammar into structured form.
+
+    Total: no input raises. Every line falls into exactly one class (blank, comment, milestone
+    heading, member, disallowed member, or malformed); a line under a milestone that matches none
+    of the recognized shapes is reported as a `ROADMAP_LINE_MALFORMED` finding rather than failing
+    the parse.
+    """
+    masked = _mask_quoted(text)
+    lines = text.splitlines(keepends=True)
+    masked_lines = masked.splitlines(keepends=True)
+
+    # matched against masked text so a heading quoted inside the schema's HTML comment (the
+    # worked example in its own docstring) is never mistaken for a real milestone
+    first_idx = None
+    for i, mline in enumerate(masked_lines):
+        if _MILESTONE_HEADING_RE.match(_line_body(mline)):
+            first_idx = i
+            break
+
+    if first_idx is None:
+        return RoadmapParse(milestones=[], findings=[], preamble=text)
+
+    preamble = "".join(lines[:first_idx])
+
+    milestones: list[Milestone] = []
+    findings: list[tuple[str, str]] = []
+    first_milestone_for_id: dict[str, str] = {}
+    seen_milestone_names: set[str] = set()
+
+    name: str | None = None
+    members: list[str] = []
+    raw_lines: list[str] = []
+
+    def close_milestone() -> None:
+        if name is not None:
+            milestones.append(
+                Milestone(name=name, rank=len(milestones), members=members, raw_lines=raw_lines)
+            )
+
+    for i in range(first_idx, len(lines)):
+        raw_line = lines[i]
+        body = _line_body(masked_lines[i])
+
+        heading = _MILESTONE_HEADING_RE.match(body)
+        if heading is not None:
+            close_milestone()
+            name = heading.group(1)
+            if name in seen_milestone_names:
+                findings.append(("DUPLICATE_MILESTONE_NAME", name))
+            seen_milestone_names.add(name)
+            members = []
+            raw_lines = []
+            continue
+
+        if _ROADMAP_BLANK_RE.match(body):
+            raw_lines.append(raw_line)
+            continue
+
+        # member shape is checked before header identity, so a header outside BUG/DEFER/TEST
+        # (e.g. PROPOSAL) still reaches a named finding instead of falling through to "malformed"
+        member = _ROADMAP_MEMBER_RE.match(body)
+        if member is not None:
+            entry_id = f"{member.group(1)}-{member.group(2)}"
+            raw_lines.append(raw_line)
+            if entry_id in first_milestone_for_id:
+                findings.append((
+                    "DUPLICATE_MEMBERSHIP",
+                    f"{entry_id}: first in '{first_milestone_for_id[entry_id]}', "
+                    f"duplicated in '{name}'",
+                ))
+            else:
+                first_milestone_for_id[entry_id] = name
+            members.append(entry_id)
+            continue
+
+        disallowed = _ROADMAP_DISALLOWED_MEMBER_RE.match(body)
+        if disallowed is not None:
+            header, num = disallowed.group(1), disallowed.group(2)
+            raw_lines.append(raw_line)
+            code = "PROPOSAL_IN_ROADMAP" if header == "PROPOSAL" else "UNKNOWN_HEADER_IN_ROADMAP"
+            findings.append((code, f"{header}-{num}"))
+            continue
+
+        findings.append(("ROADMAP_LINE_MALFORMED", f"{name}: {body}"))
+
+    close_milestone()
+    return RoadmapParse(milestones=milestones, findings=findings, preamble=preamble)
+
+
+def render_roadmap(parse: RoadmapParse) -> str:
+    """Reconstruct `ROADMAP.md` text from a parse; byte-for-byte for any input with no findings.
+
+    Milestone bodies come from `raw_lines`, not `members`: a finding-free parse never dropped a
+    line, so this is a lossless inverse of `parse_roadmap`. A parse carrying a
+    `ROADMAP_LINE_MALFORMED` finding already dropped that line when it was parsed and cannot
+    round-trip it back in.
+    """
+    parts = [parse.preamble]
+    for milestone in parse.milestones:
+        parts.append(f"## Milestone: {milestone.name}\n")
+        parts.extend(milestone.raw_lines)
+    return "".join(parts)
+
+
+def validate_roadmap_for_write(
+    parse: RoadmapParse, known_ids: set[str] | None = None
+) -> list[tuple[str, str]]:
+    """Return the findings that must block `roadmap --write`.
+
+    Blocking regardless of input: malformed lines, disallowed member headers, and duplicate
+    membership — a freshly agent-proposed file has no legacy content to be lenient about.
+    Dangling references block too, but only once `known_ids` is supplied; `None` means the ledger
+    was not checked, not that every id is known. `DUPLICATE_MILESTONE_NAME` never blocks: rank
+    comes from document position, never from name, so a name collision can't corrupt a write.
+    """
+    blocking = [f for f in parse.findings if f[0] in _ROADMAP_WRITE_BLOCKING_CODES]
+    if known_ids is not None:
+        referenced = {member_id for milestone in parse.milestones for member_id in milestone.members}
+        blocking.extend(
+            ("DANGLING_ROADMAP_REF", member_id) for member_id in sorted(referenced - known_ids)
+        )
+    return blocking
