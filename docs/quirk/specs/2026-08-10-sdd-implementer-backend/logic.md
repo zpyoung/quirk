@@ -79,16 +79,42 @@ Ordered, because step 4's option set depends on step 3's result:
 4. **Reviewer-alias question.** Cross-family options first. Author `anthropic` → `codex`
    (recommended), `gemini`. Author `openai` → `opus` (recommended), `gemini`. Same-family picks stay
    selectable but are labeled as degrading independence.
+
+   **Options are drawn only from `quirk:adversarial-review`'s own alias table**, not from
+   `pi-watch`'s. The two namespaces differ: `pi-watch` knows 11 aliases
+   (`pi-watch.mjs:35–124`), `adversarial-review` knows 6 — `codex, gemini, terra, opus, sonnet,
+   flash` (`scripts/adversarial-review:853–860`) — and `select_reviewer` raises `UsageError` on
+   anything outside its own set (`:914`), which `main` converts to **exit 2 with no JSON on
+   stdout** (`:2195`). An alias like `haiku` is a natural same-family Anthropic pick that
+   `pi-watch --check` would green-light and Step 8 would then crash on deterministically, burning
+   the retry budget on a config mismatch. The offered set is therefore the intersection, which is
+   `adversarial-review`'s table.
 5. `pi-watch --check "$REVIEWER_ALIAS"`. On failure, offer the implementer flip — but only when the
    flipped pairing actually resolves. If neither pairing resolves, fall back to
    `quirk:adversarial-review`'s documented `Task` path and warn once.
+
+   This check is **load-bearing, not a convenience**. An explicit `model` makes
+   `select_reviewer` build a single-candidate list — "tried alone, and its failure is reported
+   rather than papered over with a fallback" (`:930–934`). Supplying a reviewer alias therefore
+   *disables* the ladder walk that would otherwise recover from an unreachable rung, so an
+   unverified alias yields `NOT_REVIEWABLE` with nothing behind it.
 6. Record all three fields in the run journal.
 
 **Removed:** the `--provider openai-codex --model gpt-5.6-sol --thinking high` pin and the prose
 around it, including the `--alias codex is not sufficient` warning that only made sense under a pin.
 
-**Fixed:** the dangling `quirk:code-reviewer` fallback. The real fallback is
-`quirk:adversarial-review`'s `Task` path.
+**Fixed:** the dangling `quirk:code-reviewer` fallback (`SKILL.md:101`). The real fallback is
+`quirk:adversarial-review`'s `Task` path. Note the precise defect: `quirk:code-reviewer` was never a
+skill, only a `Task` naming convention borrowed from `quirk:requesting-code-review` — the reference
+is dangling either way, but the spec should not claim a skill was deleted.
+
+### Roles table (Step 0 header)
+
+`SKILL.md:41–43` states Implementer and Fixer as "Sonnet subagent via `Task`" and Reviewer as
+"`gpt-5.6-sol` high via `pi-watch`". All three rows go stale under this change: the first two become
+backend-dependent, and the third becomes a user-picked alias. The Reviewer row was already stale
+before this spec — Step 8 has delegated dispatch to `adversarial-review`'s own resolution for some
+time, so the literal model pin described a mechanism that no longer ran. The table is in edit scope.
 
 ### Dispatch block (Step 5)
 
@@ -143,6 +169,13 @@ Claude path with a weaker audit for no reason.
 means the worker committed and bypassed the audit: the task stops. No soft reset — absorbing the
 violation would discard the signal that a worker ignored an explicit instruction.
 
+This is a **detection heuristic, not a guarantee**, and the spec states it as such. It catches a
+plain commit and a `--amend`; it does not catch a commit followed by `git reset --soft` back to
+`TASK_HEAD_<n>`, which restores the checked value while leaving the tree exactly as committed. The
+downstream safety property survives that gap regardless: the scope audit, acceptance, and commit
+all operate on the true working-tree diff, not on commit history. What is lost is the signal that a
+worker ignored an instruction — worth having, not worth a stronger mechanism.
+
 **Wave-level scope audit.** The per-task audit is hoisted to run for every live worktree once the
 whole wave has returned, each checked against **its own** task's `scope.files`. A path outside its
 owner's declared scope is a violation regardless of which worker wrote it. The report names the
@@ -161,6 +194,18 @@ The per-task gate order (audit → accept → commit → merge) is preserved exa
 no task commits until the whole wave has returned. The skill currently states that this order never
 moves, so the change is written as a deliberate amendment carrying its reason, not slipped in.
 
+**Retries re-enter the audit.** The invariant the hoist must preserve is: *no tree's diff reaches
+acceptance without an audit that observed that diff.* The wave-level pass satisfies it for first
+attempts only. Both existing retry paths — `Implementer BLOCKED / FAILED → retry once with a fresh
+worker` and `Task acceptance fails → retry once` (`SKILL.md:362`, `:364`) — produce a *new* diff
+after the wave-level pass has already completed, and under a naive hoist nothing would ever audit
+it. A retried task therefore re-runs HEAD-check and scope-audit against its own tree before its
+acceptance step.
+
+This is the defect the hoist introduces if written carelessly, and it is the one that matters most:
+a retried pi worker is exactly the case where an unsandboxed writer gets a second, unobserved pass
+at the tree.
+
 Cost: slight serialization at wave end, bounded because the build/test gate already waits for the
 full wave. Sequential tasks see no change — one tree means the wave-level audit and the per-task
 audit are the same operation.
@@ -171,9 +216,11 @@ Step 8's input table gains `model`, set to `REVIEWER_ALIAS`. `author_family` rea
 instead of assuming `anthropic`. A same-family reviewer pick warns once and is expected to stamp
 `manifest.reviewer.independence: reduced`, which Step 9 already reads.
 
-`quirk:adversarial-review` accepts `model` as a pi alias that overrides family selection, and
-resolves the specific rung within it. So an explicit user choice and `select-model`'s ladder
-resolution compose rather than conflict.
+`quirk:adversarial-review` accepts `model` as a pi alias that overrides family selection. It does
+**not** walk a ladder within that alias — `select_reviewer` builds a single-candidate list from it
+and reports failure rather than falling back (`scripts/adversarial-review:930–934`), and each alias
+maps to one fixed triple (`:853–860`). An explicit user choice therefore *replaces* ladder
+resolution rather than composing with it, which is why preflight must verify the alias itself.
 
 Step 9 fixers use the binding named by the Dispatch block — a pointer, not a restatement.
 
@@ -182,9 +229,15 @@ Step 9 fixers use the binding named by the Dispatch block — a pointer, not a r
 | Flag | Behavior |
 | --- | --- |
 | `--cwd <dir>` | Sets the session working directory instead of inheriting `process.cwd()` (`pi-watch.mjs:363`, `:384`) |
-| `--require-trailer <KEY>` | The final non-empty assistant line must match `^KEY: (\S+)$`. The value is echoed to stderr on the `✔ done` line. Exit **6** when absent or malformed. |
+| `--require-trailer <KEY>` | Scan backward through the last **3** non-empty assistant lines for `^KEY: (\S+)$`, stripping surrounding markdown emphasis and backticks first. First match wins. The value is echoed to stderr on the `✔ done` line. Exit **6** when no line matches. |
 
 Exit codes 0–5 are already in use; 6 is free.
+
+The three-line backward scan exists because a strict last-line match is fragile against ordinary
+model behavior, not against bugs: a trailing sign-off or a bolded status line makes the literal
+final line not the trailer, and the resulting exit 6 is *deterministic* — the retry draws the same
+model with the same tic and fails identically. Tolerating a short tail costs nothing and removes a
+failure mode retry cannot clear.
 
 `--require-trailer` is deliberately **generic**. Teaching `pi-watch` the vocabulary
 `DONE | NEEDS_CONTEXT | BLOCKED | FAILED` would put this skill's return contract inside a
@@ -232,6 +285,7 @@ stamps `independence: reduced`; Step 9 reads that field and weighs the `PASS` ac
 | Situation | Response |
 | --- | --- |
 | `pi-watch` exit 6 (trailer missing or malformed) | Status unvalidatable → `FAILED`; retry once with a fresh worker |
+| Any task retried after the wave-level audit | Re-run HEAD-check and scope-audit on that tree before its acceptance step |
 | Worktree HEAD moved since dispatch | Worker committed and bypassed the audit; stop the task, surface |
 | Cross-worktree contamination at wave end | Stop the wave, re-plan — same response as any scope violation |
 | Reviewer alias unreachable at preflight | Offer the implementer flip; else `Task` path with a warning |
