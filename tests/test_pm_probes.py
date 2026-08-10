@@ -7,8 +7,10 @@ commands that call this engine are a later task and remain unimplemented stubs.
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -274,6 +276,39 @@ def test_default_runner_explicitly_set_to_the_default_string_does_not_refuse(
     assert result.outcome == "pass"
 
 
+# --- QUIRK_PM_PROBE_TIMEOUT ---------------------------------------------------
+
+
+def test_probe_timeout_infinite_falls_back_to_the_default(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    # a subprocess timeout of infinity raises rather than bounding anything, so the value that
+    # parses to "unbounded" must be rejected, not honored
+    monkeypatch.setenv("QUIRK_PM_PROBE_TIMEOUT", "inf")
+    assert pm._probe_timeout() == pm.DEFAULT_PROBE_TIMEOUT
+    assert "QUIRK_PM_PROBE_TIMEOUT" in capsys.readouterr().err
+
+
+def test_probe_timeout_nan_falls_back_to_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("QUIRK_PM_PROBE_TIMEOUT", "nan")
+    assert pm._probe_timeout() == pm.DEFAULT_PROBE_TIMEOUT
+
+
+def test_probe_timeout_negative_falls_back_to_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("QUIRK_PM_PROBE_TIMEOUT", "-5")
+    assert pm._probe_timeout() == pm.DEFAULT_PROBE_TIMEOUT
+
+
+def test_probe_timeout_zero_falls_back_to_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("QUIRK_PM_PROBE_TIMEOUT", "0")
+    assert pm._probe_timeout() == pm.DEFAULT_PROBE_TIMEOUT
+
+
+def test_probe_timeout_finite_positive_value_is_honored(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("QUIRK_PM_PROBE_TIMEOUT", "45")
+    assert pm._probe_timeout() == 45.0
+
+
 # --- grep: pure-Python scan ---------------------------------------------------
 
 
@@ -375,6 +410,21 @@ def test_regression_10_invalid_regex_is_error_naming_the_re_error(tmp_path: Path
     assert result.detail == expected
 
 
+def test_regression_10_compile_failure_other_than_re_error_is_a_result_not_an_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # some catastrophic patterns fail re.compile with RecursionError/OverflowError, not re.error
+    # -- run_probe is contractually not supposed to raise on an ordinary probe failure
+    def fake_compile(pattern: str, *args: object, **kwargs: object) -> None:
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr(pm.re, "compile", fake_compile)
+    spec = pm.parse_probe_spec("grep:TODO")
+    result = pm.run_probe(spec, tmp_path, timeout=30)
+    assert result.outcome == "error"
+    assert result.detail
+
+
 def test_regression_10_nonexistent_listed_path_is_error_naming_the_path(tmp_path: Path) -> None:
     spec = pm.parse_probe_spec("grep:TODO -- does/not/exist")
     result = pm.run_probe(spec, tmp_path, timeout=30)
@@ -407,6 +457,27 @@ def test_regression_10_unreadable_file_mid_walk_is_skipped_and_counted(tmp_path:
     assert result.skipped_files == 1
     assert result.files == ("dir/readable.txt",)
     assert result.count == 1
+
+
+def test_regression_12_grep_skips_a_fifo_mid_walk_without_blocking(tmp_path: Path) -> None:
+    write(tmp_path, "dir/readable.txt", "TODO here\n")
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("no FIFOs on this platform")
+    os.mkfifo(tmp_path / "dir" / "a.fifo")
+
+    outcome: list[pm.ProbeResult] = []
+    thread = threading.Thread(
+        target=lambda: outcome.append(pm.run_probe(pm.parse_probe_spec("grep:TODO -- dir"), tmp_path, timeout=30)),
+        daemon=True,
+    )
+    thread.start()
+    thread.join(timeout=5)
+    assert not thread.is_alive(), "grep probe blocked opening a FIFO instead of skipping it"
+
+    result = outcome[0]
+    assert result.outcome == "ok"
+    assert result.skipped_files == 1
+    assert result.files == ("dir/readable.txt",)
 
 
 def test_regression_10_symlink_loop_terminates(tmp_path: Path) -> None:
@@ -471,6 +542,19 @@ def test_grep_baseline_files_missing_is_empty_when_all_still_exist(tmp_path: Pat
 
     missing = pm.grep_baseline_files_missing(tmp_path, baseline_result.files)
     assert missing == []
+
+
+def test_grep_baseline_files_missing_reports_a_file_replaced_by_a_directory(tmp_path: Path) -> None:
+    write(tmp_path, "f.txt", "TODO here\n")
+    spec = pm.parse_probe_spec("grep:TODO")
+    baseline_result = pm.run_probe(spec, tmp_path, timeout=30)
+    assert baseline_result.files == ("f.txt",)
+
+    (tmp_path / "f.txt").unlink()
+    (tmp_path / "f.txt").mkdir()
+
+    missing = pm.grep_baseline_files_missing(tmp_path, baseline_result.files)
+    assert missing == ["f.txt"]
 
 
 def test_finish_refuses_on_deleted_baseline_file_even_when_count_is_zero(tmp_path: Path) -> None:

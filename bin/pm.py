@@ -17,6 +17,7 @@ import codecs
 import datetime
 import fcntl
 import locale
+import math
 import os
 import re
 import shlex
@@ -650,6 +651,7 @@ class ProbeField:
     final_spec_hash: str | None = None
     final_file_hash: str | None = None
     skipped_files: int = 0
+    final_skipped_files: int = 0
 
 
 @dataclass(frozen=True)
@@ -804,6 +806,8 @@ def render_probe(probe: ProbeField) -> str:
 
     if probe.final is not None:
         segments.append(f"final: {probe.final}")
+        if probe.verb == "grep" and probe.final_skipped_files > 0:
+            segments.append(f"skipped {probe.final_skipped_files} unreadable")
         segments.append(_render_probe_hashes(probe.final_spec_hash, probe.final_file_hash))
 
     return DELIM.join(segments)
@@ -861,6 +865,7 @@ def parse_probe(line: str) -> ProbeField | MalformedField:
 
     final = None
     final_spec_hash = final_file_hash = None
+    final_skipped_files = 0
     if i < len(parts):
         m = _FINAL_RE.match(parts[i])
         if m is None:
@@ -870,8 +875,8 @@ def parse_probe(line: str) -> ProbeField | MalformedField:
 
         m = _SKIPPED_RE.match(parts[i]) if verb == "grep" and i < len(parts) else None
         if m is not None:
-            skipped_files = _safe_int(m.group(1))
-            if skipped_files is None:
+            final_skipped_files = _safe_int(m.group(1))
+            if final_skipped_files is None:
                 return MalformedField(raw=line, reason="skipped")
             i += 1
 
@@ -890,7 +895,7 @@ def parse_probe(line: str) -> ProbeField | MalformedField:
         verb=verb, arg=arg, baseline=baseline, baseline_files=baseline_files,
         final=final, spec_hash=spec_hash, file_hash=file_hash,
         final_spec_hash=final_spec_hash, final_file_hash=final_file_hash,
-        skipped_files=skipped_files,
+        skipped_files=skipped_files, final_skipped_files=final_skipped_files,
     )
 
 
@@ -1362,7 +1367,13 @@ def parse_probe_spec(value: str) -> ProbeSpec | ProbeArgError:
 
 
 def _probe_timeout() -> float:
-    """The `QUIRK_PM_PROBE_TIMEOUT` bound (seconds) in effect, defaulting to 120."""
+    """The `QUIRK_PM_PROBE_TIMEOUT` bound (seconds) in effect, defaulting to 120.
+
+    A value that isn't a finite positive number (`inf`, `nan`, zero, negative) falls back to the
+    default with a message on stderr rather than being honored: `subprocess` raises rather than
+    bounding anything given an infinite timeout, so accepting one would silently strip the bound
+    every later probe execution depends on.
+    """
     raw = os.environ.get("QUIRK_PM_PROBE_TIMEOUT")
     if raw is None:
         return DEFAULT_PROBE_TIMEOUT
@@ -1370,7 +1381,14 @@ def _probe_timeout() -> float:
         value = float(raw)
     except ValueError:
         return DEFAULT_PROBE_TIMEOUT
-    return value if value > 0 else DEFAULT_PROBE_TIMEOUT
+    if math.isfinite(value) and value > 0:
+        return value
+    print(
+        f"[quirk:pm] QUIRK_PM_PROBE_TIMEOUT={raw!r} is not a finite positive number, "
+        f"using the default ({DEFAULT_PROBE_TIMEOUT}s)",
+        file=sys.stderr,
+    )
+    return DEFAULT_PROBE_TIMEOUT
 
 
 def _parse_test_exit_map(raw: str) -> dict[int, str] | None:
@@ -1464,7 +1482,7 @@ def _grep_walk_targets(base: Path, allowed_roots: list[Path]) -> Iterator[Path]:
 def _run_grep_probe(spec: ProbeSpec, root: Path, timeout: float) -> ProbeResult:
     try:
         regex = re.compile(spec.pattern)
-    except re.error as exc:
+    except (re.error, RecursionError, OverflowError) as exc:
         return ProbeResult(outcome="error", detail=str(exc))
 
     if spec.paths:
@@ -1500,12 +1518,13 @@ def _run_grep_probe(spec: ProbeSpec, root: Path, timeout: float) -> ProbeResult:
                 return ProbeResult(
                     outcome="error", detail="scan exceeded timeout", skipped_files=skipped,
                 )
-            try:
-                text = file_path.read_bytes().decode("utf-8")
-            except UnicodeDecodeError:
-                continue
-            except OSError:
+            data, _skip_reason = _read_file_safely(file_path, MAX_USABLE_FILE_BYTES)
+            if data is None:
                 skipped += 1
+                continue
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
                 continue
 
             file_hit = False
@@ -1576,9 +1595,10 @@ def grep_baseline_files_missing(root: Path, baseline_files: Iterable[str]) -> li
     """Baseline files (as recorded by `start`, relative to `root`) that no longer exist.
 
     `finish` must refuse if this is non-empty regardless of the new scan's count: deleting the
-    code that carried the symptom is not a fix.
+    code that carried the symptom is not a fix, and replacing it with a directory of the same
+    name is the same deletion wearing a hat — `is_file` catches both, `exists` only the first.
     """
-    return [name for name in baseline_files if not (root / name).exists()]
+    return [name for name in baseline_files if not (root / name).is_file()]
 
 
 # --- lifecycle commands: start, finish, park, decide ----------------------
@@ -1678,6 +1698,10 @@ def _prepare_transition(
         return _refuse(
             EXIT_CORRUPT_ENTRY, f"{spec.header}-{entry_id}: malformed Status field ({status.reason})"
         )
+    try:
+        splice_field(text, entry, "Status", render_status(status))
+    except DuplicateFieldError:
+        return _refuse(EXIT_CORRUPT_ENTRY, f"{spec.header}-{entry_id}: duplicated field line, refusing")
 
     if spec.header == "PROPOSAL":
         return _refuse(
@@ -1824,12 +1848,25 @@ def _probe_field_with_final(current: ProbeField, spec: ProbeSpec, result: ProbeR
     raw = f"{spec.verb}:{spec.arg}"
     final_spec_hash = hash_probe_spec(raw)
     final_file_hash = None
+    final_skipped_files = 0
     if spec.verb == "test":
         final = result.outcome
         final_file_hash = hash_file(root / spec.nodeid.split("::", 1)[0])
     else:
         final = _grep_summary(result.count or 0)
-    return replace(current, final=final, final_spec_hash=final_spec_hash, final_file_hash=final_file_hash)
+        final_skipped_files = result.skipped_files
+    return replace(
+        current, final=final, final_spec_hash=final_spec_hash, final_file_hash=final_file_hash,
+        final_skipped_files=final_skipped_files,
+    )
+
+
+def _config_error_refusal(prepared: _Prepared, result: ProbeResult) -> _Refusal | None:
+    if result.outcome != "config_error":
+        return None
+    # a misconfigured runner is a refusal to guess, not an observed outcome — must not be
+    # collapsed into an ordinary probe refusal
+    return _refuse(EXIT_BAD_ARGUMENT, f"{prepared.spec.header}-{prepared.entry_id}: {result.detail}")
 
 
 def cmd_start(args: argparse.Namespace) -> int:
@@ -1841,10 +1878,14 @@ def cmd_start(args: argparse.Namespace) -> int:
     probe_spec_box: list[ProbeSpec] = []
 
     def validate_args() -> _Refusal | None:
+        if args.probe is None:
+            return _refuse(EXIT_BAD_ARGUMENT, "--probe is required")
         if args.repo is not None:
             return _refuse(
                 EXIT_BAD_ARGUMENT, "dispatch is not available yet (Phase 2 is --here only); drop --repo"
             )
+        if not is_valid_free_text(args.probe):
+            return _refuse(EXIT_BAD_ARGUMENT, "--probe contains a newline, carriage return, or ' — '")
         parsed = parse_probe_spec(args.probe)
         if isinstance(parsed, ProbeArgError):
             return _refuse(EXIT_BAD_ARGUMENT, parsed.detail)
@@ -1861,10 +1902,15 @@ def cmd_start(args: argparse.Namespace) -> int:
     expected = _expectation(prepared)
 
     baseline = run_probe(probe_spec, project)
+    config_refusal = _config_error_refusal(prepared, baseline)
+    if config_refusal is not None:
+        print(f"[quirk:pm] {config_refusal.message}", file=sys.stderr)
+        return config_refusal.code
     if not probe_accepts_baseline(probe_spec, baseline):
+        detail_suffix = f" ({baseline.detail})" if baseline.detail else ""
         print(
             f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: baseline probe outcome "
-            f"{baseline.outcome!r} does not discriminate this entry",
+            f"{baseline.outcome!r} does not discriminate this entry{detail_suffix}",
             file=sys.stderr,
         )
         return EXIT_PROBE_REFUSED
@@ -1899,7 +1945,15 @@ def cmd_finish(args: argparse.Namespace) -> int:
     expected = _expectation(prepared)
 
     probe_raw = prepared.entry.fields.get("Probe")
-    current_probe = parse_probe(probe_raw) if probe_raw is not None else ProbeField(verb="none", arg="")
+    if probe_raw is None:
+        # in_progress is only reached by way of start, which always writes a Probe field — an
+        # absent one is corruption, never the deliberate `--probe none` choice
+        print(
+            f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: in_progress entry has no Probe field",
+            file=sys.stderr,
+        )
+        return EXIT_CORRUPT_ENTRY
+    current_probe = parse_probe(probe_raw)
     if isinstance(current_probe, MalformedField):
         print(
             f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: malformed Probe field "
@@ -1945,6 +1999,10 @@ def cmd_finish(args: argparse.Namespace) -> int:
         return EXIT_FINISH_PRECONDITION_FAILED
 
     result = run_probe(probe_spec, project)
+    config_refusal = _config_error_refusal(prepared, result)
+    if config_refusal is not None:
+        print(f"[quirk:pm] {config_refusal.message}", file=sys.stderr)
+        return config_refusal.code
     missing_files = (
         grep_baseline_files_missing(project, current_probe.baseline_files)
         if probe_spec.verb == "grep" else []
@@ -1956,13 +2014,17 @@ def cmd_finish(args: argparse.Namespace) -> int:
             state="in_progress", date=_today(),
             attempt=prepared.status.attempt, refused=prepared.status.refused + 1,
         )
-        refusal = _commit_transition(project, prepared.spec, prepared.entry_id, expected, new_status, None)
+        # a refused finish still writes the outcome it observed — the Probe line must never be
+        # left untouched just because the transition itself didn't go through
+        new_probe = _probe_field_with_final(current_probe, probe_spec, result, project)
+        refusal = _commit_transition(project, prepared.spec, prepared.entry_id, expected, new_status, new_probe)
         if refusal is not None:
             print(f"[quirk:pm] {refusal.message}", file=sys.stderr)
             return refusal.code
+        detail_suffix = f" ({result.detail})" if result.detail else ""
         print(
             f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: probe refused "
-            f"(refused {new_status.refused})",
+            f"(refused {new_status.refused}){detail_suffix}",
             file=sys.stderr,
         )
         return EXIT_PROBE_REFUSED
@@ -1987,6 +2049,19 @@ def cmd_finish(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _validate_reason(reason: str | None) -> _Refusal | None:
+    """`--reason`'s value for `park`/`decide`: required, non-empty once stripped, and safe as a
+    lifecycle field's free-text segment.
+    """
+    if reason is None:
+        return _refuse(EXIT_BAD_ARGUMENT, "--reason is required")
+    if not reason.strip():
+        return _refuse(EXIT_BAD_ARGUMENT, "--reason must not be empty or whitespace-only")
+    if not is_valid_free_text(reason):
+        return _refuse(EXIT_BAD_ARGUMENT, "--reason contains a newline, carriage return, or ' — '")
+    return None
+
+
 def cmd_park(args: argparse.Namespace) -> int:
     project = Path(args.project_dir).resolve()
     if not project.exists() or not project.is_dir():
@@ -1994,9 +2069,7 @@ def cmd_park(args: argparse.Namespace) -> int:
         return EXIT_PROJECT_DIR_NOT_FOUND
 
     def validate_args() -> _Refusal | None:
-        if not is_valid_free_text(args.reason):
-            return _refuse(EXIT_BAD_ARGUMENT, "--reason contains a newline, carriage return, or ' — '")
-        return None
+        return _validate_reason(args.reason)
 
     prepared = _prepare_transition(
         project, args.id, validate_args=validate_args, allowed_states=frozenset({"in_progress"}),
@@ -2026,8 +2099,11 @@ def cmd_decide(args: argparse.Namespace) -> int:
         return EXIT_PROJECT_DIR_NOT_FOUND
 
     def validate_args() -> _Refusal | None:
-        if not is_valid_free_text(args.reason):
-            return _refuse(EXIT_BAD_ARGUMENT, "--reason contains a newline, carriage return, or ' — '")
+        if args.as_ is None:
+            return _refuse(EXIT_BAD_ARGUMENT, "--as is required")
+        reason_error = _validate_reason(args.reason)
+        if reason_error is not None:
+            return reason_error
         if args.as_ == "superseded":
             if not args.by:
                 return _refuse(EXIT_BAD_ARGUMENT, "--as superseded requires --by")
@@ -2145,7 +2221,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_start = subparsers.add_parser("start", help="Start work on an entry (--here only)")
     p_start.add_argument("id")
-    p_start.add_argument("--probe", required=True, metavar="VERB:ARG")
+    p_start.add_argument("--probe", metavar="VERB:ARG")
     p_start.add_argument("--repo", metavar="SEL")
     p_start.add_argument("--here", action="store_true")
     _add_project_dir(p_start)
@@ -2158,14 +2234,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_park = subparsers.add_parser("park", help="Park an in-progress entry")
     p_park.add_argument("id")
-    p_park.add_argument("--reason", required=True, metavar="TEXT")
+    p_park.add_argument("--reason", metavar="TEXT")
     _add_project_dir(p_park)
     p_park.set_defaults(func=cmd_park)
 
     p_decide = subparsers.add_parser("decide", help="Decide an entry's fate")
     p_decide.add_argument("id")
-    p_decide.add_argument("--as", dest="as_", required=True, choices=["wontfix", "superseded"])
-    p_decide.add_argument("--reason", required=True, metavar="TEXT")
+    p_decide.add_argument("--as", dest="as_", choices=["wontfix", "superseded"])
+    p_decide.add_argument("--reason", metavar="TEXT")
     p_decide.add_argument("--by", metavar="ID")
     _add_project_dir(p_decide)
     p_decide.set_defaults(func=cmd_decide)
