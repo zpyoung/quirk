@@ -388,6 +388,39 @@ def test_probe_grep_verb_with_match_count_files_and_skipped_round_trips() -> Non
     assert pm.render_probe(parsed) == value
 
 
+def test_probe_grep_final_skipped_count_is_independent_of_baseline_skipped_count() -> None:
+    """The finish-time scan's skip count must survive the round trip on its own — collapsing it
+    into (or dropping it in favor of) the baseline's count would hide files the final scan
+    itself never read."""
+    spec_hash = pm.hash_probe_spec("grep:TODO_AUTH -- src/auth/")
+    field = pm.ProbeField(
+        verb="grep",
+        arg="TODO_AUTH -- src/auth/",
+        baseline="3 matches in 2 files",
+        baseline_files=["src/auth/login.py", "src/auth/session.py"],
+        skipped_files=1,
+        spec_hash=spec_hash,
+        final="0 matches",
+        final_spec_hash=spec_hash,
+        final_skipped_files=2,
+    )
+    value = pm.render_probe(field)
+    assert value == (
+        "grep:TODO_AUTH -- src/auth/ — "
+        "baseline: 3 matches in 2 files (src/auth/login.py, src/auth/session.py) — "
+        "skipped 1 unreadable — "
+        f"spec#{spec_hash} — "
+        "final: 0 matches — "
+        "skipped 2 unreadable — "
+        f"spec#{spec_hash}"
+    )
+    parsed = pm.parse_probe(value)
+    assert parsed == field
+    assert parsed.skipped_files == 1
+    assert parsed.final_skipped_files == 2
+    assert pm.render_probe(parsed) == value
+
+
 def test_probe_grep_literal_spec_example_round_trips() -> None:
     line = (
         "grep:TODO_AUTH -- src/auth/ — "

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import fcntl
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -157,6 +158,52 @@ def test_start_repo_flag_refuses_with_exit_2_in_phase_2(pm_project: Path) -> Non
     assert (pm_project / "BUGS.md").read_bytes() == before
 
 
+def test_start_config_error_exits_2_not_9_and_writes_nothing(
+    pm_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("QUIRK_PM_TEST_RUNNER", "some-other-runner")
+    append_bug(pm_project, 1)
+    before = (pm_project / "BUGS.md").read_bytes()
+
+    result = run_pm("start", "BUG-1", "--probe", "test:whatever", "--here", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_BAD_ARGUMENT, result.stdout
+    assert "QUIRK_PM_TEST_EXIT_MAP" in result.stderr
+    assert (pm_project / "BUGS.md").read_bytes() == before
+
+
+def test_start_probe_rejects_the_delimiter_before_writing(pm_project: Path) -> None:
+    (pm_project / "note.txt").write_text("TODO — AUTH needs work\n")
+    append_bug(pm_project, 1)
+    before = (pm_project / "BUGS.md").read_bytes()
+
+    result = run_pm("start", "BUG-1", "--probe", "grep:TODO — AUTH", "--here", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_BAD_ARGUMENT, result.stdout
+    assert (pm_project / "BUGS.md").read_bytes() == before
+
+
+def test_start_probe_error_detail_surfaces_in_stderr(pm_project: Path) -> None:
+    append_bug(pm_project, 1)
+    try:
+        re.compile("(unclosed")
+    except re.error as exc:
+        expected_detail = str(exc)
+
+    result = run_pm("start", "BUG-1", "--probe", "grep:(unclosed", "--here", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_PROBE_REFUSED, result.stdout
+    assert expected_detail in result.stderr
+
+
+def test_start_missing_probe_flag_exits_2(pm_project: Path) -> None:
+    append_bug(pm_project, 1)
+
+    result = run_pm("start", "BUG-1", "--here", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_BAD_ARGUMENT, result.stdout
+
+
 # --- transition table: finish -----------------------------------------------
 
 
@@ -188,6 +235,105 @@ def test_finish_refuses_when_probe_still_fails_and_increments_refused(pm_git_pro
     assert "- **Status**: in_progress" in text
     assert "refused 1" in text
     assert "commit:" not in text
+
+
+def _probe_line(text: str, heading: str) -> str:
+    """The `Probe` line inside the entry whose heading starts with `heading` — mirrors
+    `status_line`'s scoping, since the schema comment's own worked example also contains the
+    literal substring `**Probe**`."""
+    entry_text = text.split(heading, 1)[1]
+    return next(line for line in entry_text.splitlines() if "**Probe**" in line)
+
+
+def test_finish_refusal_records_the_observed_final_outcome(pm_git_project: Path) -> None:
+    # scoped to marker.txt, not the whole tree: an unscoped scan would also match the recorded
+    # `Probe` field's own spec text once BUGS.md is written, inflating the count
+    (pm_git_project / "marker.txt").write_text("PM_LIFECYCLE_MARKER\n")
+    append_bug(pm_git_project, 1)
+    commit_all(pm_git_project, "add BUG-1 and marker")
+    run_pm("start", "BUG-1", "--probe", "grep:PM_LIFECYCLE_MARKER -- marker.txt", "--here", cwd=pm_git_project)
+    commit_all(pm_git_project, "start BUG-1")
+
+    result = run_pm("finish", "BUG-1", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_PROBE_REFUSED, result.stdout
+    probe_line = _probe_line(bugs_text(pm_git_project), "## BUG-1:")
+    assert "final: 1 match" in probe_line
+
+
+def test_finish_final_scan_skipped_files_are_disclosed_on_the_probe_line(pm_git_project: Path) -> None:
+    (pm_git_project / "src").mkdir()
+    (pm_git_project / "src" / "a.txt").write_text("TODO_AUTH here\n")
+    # untracked and ignored, not merely uncommitted: a tracked file's permission bits alone can
+    # make `git status` report it modified, masking the refusal path this test exercises
+    (pm_git_project / ".gitignore").write_text("src/blocked.txt\n")
+    append_bug(pm_git_project, 1)
+    commit_all(pm_git_project, "add BUG-1, src files, and gitignore")
+    run_pm("start", "BUG-1", "--probe", "grep:TODO_AUTH -- src", "--here", cwd=pm_git_project)
+    commit_all(pm_git_project, "start BUG-1")
+
+    (pm_git_project / "src" / "a.txt").write_text("clean now\n")
+    commit_all(pm_git_project, "fix a.txt")
+    blocked = pm_git_project / "src" / "blocked.txt"
+    blocked.write_text("TODO_AUTH still here\n")
+    blocked.chmod(0o000)
+    try:
+        result = run_pm("finish", "BUG-1", cwd=pm_git_project)
+    finally:
+        blocked.chmod(0o644)
+
+    assert result.returncode == pm.EXIT_OK, result.stderr
+    probe_line = _probe_line(bugs_text(pm_git_project), "## BUG-1:")
+    final_idx = probe_line.index("final:")
+    skipped_idx = probe_line.index("skipped 1 unreadable")
+    assert skipped_idx > final_idx
+
+
+def test_finish_config_error_exits_2_not_9_and_writes_nothing(
+    pm_git_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (pm_git_project / "test_thing.py").write_text("def test_bad():\n    assert False\n")
+    append_bug(pm_git_project, 1)
+    commit_all(pm_git_project, "add BUG-1 and failing test")
+    run_pm("start", "BUG-1", "--probe", "test:test_thing.py::test_bad", "--here", cwd=pm_git_project)
+    commit_all(pm_git_project, "start BUG-1")
+    before = bugs_text(pm_git_project)
+
+    monkeypatch.setenv("QUIRK_PM_TEST_RUNNER", "some-other-runner")
+    result = run_pm("finish", "BUG-1", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_BAD_ARGUMENT, result.stdout
+    assert "QUIRK_PM_TEST_EXIT_MAP" in result.stderr
+    assert bugs_text(pm_git_project) == before
+
+
+def test_finish_probe_error_detail_surfaces_in_stderr(pm_git_project: Path) -> None:
+    (pm_git_project / "dir").mkdir()
+    (pm_git_project / "dir" / "f.txt").write_text("TODO here\n")
+    append_bug(pm_git_project, 1)
+    commit_all(pm_git_project, "add BUG-1 and dir")
+    run_pm("start", "BUG-1", "--probe", "grep:TODO -- dir", "--here", cwd=pm_git_project)
+    commit_all(pm_git_project, "start BUG-1")
+
+    shutil.rmtree(pm_git_project / "dir")
+    commit_all(pm_git_project, "delete dir")
+
+    result = run_pm("finish", "BUG-1", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_PROBE_REFUSED, result.stdout
+    assert "not found" in result.stderr
+    assert "dir" in result.stderr
+
+
+def test_finish_with_no_probe_field_is_corrupt_not_implicit_none(pm_git_project: Path) -> None:
+    append_bug(pm_git_project, 1, Status="in_progress — 2026-08-05 — attempt 1")
+    commit_all(pm_git_project, "add BUG-1 without a Probe field")
+    before = bugs_text(pm_git_project)
+
+    result = run_pm("finish", "BUG-1", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_CORRUPT_ENTRY, result.stdout
+    assert bugs_text(pm_git_project) == before
 
 
 def test_finish_refuses_on_dirty_working_tree(pm_git_project: Path) -> None:
@@ -273,6 +419,37 @@ def test_park_refuses_a_proposal_id(pm_project: Path) -> None:
     assert (pm_project / "proposals.md").read_bytes() == before
 
 
+def test_park_rejects_an_empty_reason(pm_project: Path) -> None:
+    append_bug(pm_project, 1)
+    run_pm("start", "BUG-1", "--probe", "none", "--here", cwd=pm_project)
+    before = (pm_project / "BUGS.md").read_bytes()
+
+    result = run_pm("park", "BUG-1", "--reason", "", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_BAD_ARGUMENT, result.stdout
+    assert (pm_project / "BUGS.md").read_bytes() == before
+
+
+def test_park_rejects_a_whitespace_only_reason(pm_project: Path) -> None:
+    append_bug(pm_project, 1)
+    run_pm("start", "BUG-1", "--probe", "none", "--here", cwd=pm_project)
+    before = (pm_project / "BUGS.md").read_bytes()
+
+    result = run_pm("park", "BUG-1", "--reason", "   ", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_BAD_ARGUMENT, result.stdout
+    assert (pm_project / "BUGS.md").read_bytes() == before
+
+
+def test_park_missing_reason_flag_exits_2(pm_project: Path) -> None:
+    append_bug(pm_project, 1)
+    run_pm("start", "BUG-1", "--probe", "none", "--here", cwd=pm_project)
+
+    result = run_pm("park", "BUG-1", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_BAD_ARGUMENT, result.stdout
+
+
 # --- transition table: decide ------------------------------------------------
 
 
@@ -307,6 +484,32 @@ def test_decide_wontfix_from_delivered(pm_project: Path) -> None:
 
     assert result.returncode == pm.EXIT_OK, result.stderr
     assert "- **Status**: wontfix" in bugs_text(pm_project)
+
+
+def test_decide_rejects_an_empty_reason(pm_project: Path) -> None:
+    append_bug(pm_project, 1)
+    before = (pm_project / "BUGS.md").read_bytes()
+
+    result = run_pm("decide", "BUG-1", "--as", "wontfix", "--reason", "", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_BAD_ARGUMENT, result.stdout
+    assert (pm_project / "BUGS.md").read_bytes() == before
+
+
+def test_decide_missing_as_flag_exits_2(pm_project: Path) -> None:
+    append_bug(pm_project, 1)
+
+    result = run_pm("decide", "BUG-1", "--reason", "x", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_BAD_ARGUMENT, result.stdout
+
+
+def test_decide_missing_reason_flag_exits_2(pm_project: Path) -> None:
+    append_bug(pm_project, 1)
+
+    result = run_pm("decide", "BUG-1", "--as", "wontfix", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_BAD_ARGUMENT, result.stdout
 
 
 def test_decide_superseded_requires_by(pm_project: Path) -> None:
@@ -530,6 +733,31 @@ def test_duplicated_status_line_refuses_exit4_via_splice_field(pm_project: Path)
     assert bugs.read_bytes() == before
 
 
+def test_duplicated_status_line_with_differing_values_refuses_exit4_not_exit6(pm_project: Path) -> None:
+    """Precedence is 4 -> 6: the second (different-valued) `Status` line collapses via
+    `entry.fields`'s last-write-wins dict to a state outside `park`'s allowed set, which — absent
+    a duplicate check ahead of that comparison — looks exactly like an ordinary CAS mismatch.
+
+    The second line's state is `wontfix`, not `open`: `open` is also in `_STATUS_ATTEMPT_REQUIRED`
+    and a bare `open — <date>` is itself malformed (missing `attempt`), which would reach exit 4
+    by a different, unrelated path and defeat the point of this fixture.
+    """
+    append_bug(pm_project, 1)
+    bugs = pm_project / "BUGS.md"
+    text = bugs.read_text()
+    marker = "\n## BUG-1: a bug"
+    idx = text.index(marker) + len(marker)
+    line_a = "\n- **Status**: in_progress — 2026-08-05 — attempt 1"
+    line_b = "\n- **Status**: wontfix — 2026-08-06 — reason: already decided"
+    bugs.write_text(text[:idx] + line_a + line_b + text[idx:])
+    before = bugs.read_bytes()
+
+    result = run_pm("park", "BUG-1", "--reason", "x", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_CORRUPT_ENTRY, result.stdout
+    assert bugs.read_bytes() == before
+
+
 # --- v1 ledger: exit 8 ------------------------------------------------------
 
 
@@ -583,6 +811,26 @@ def test_precedence_park_schema_mismatch_beats_corrupt_entry(pm_project: Path) -
 def test_precedence_decide_not_found_beats_bad_reason(pm_project: Path) -> None:
     result = run_pm("decide", "BUG-999", "--as", "wontfix", "--reason", "bad — reason", cwd=pm_project)
     assert result.returncode == pm.EXIT_NOT_FOUND, result.stdout
+
+
+def test_precedence_start_missing_project_dir_beats_missing_probe(project_dir: Path) -> None:
+    # --probe used to be required=True at the argparse layer, so argparse's own exit 2 fired
+    # before the handler ever got to check --project-dir; 7 must win over 2
+    missing = project_dir / "does-not-exist"
+    result = run_pm("start", "BUG-1", "--here", "--project-dir", str(missing), cwd=project_dir)
+    assert result.returncode == pm.EXIT_PROJECT_DIR_NOT_FOUND, result.stdout
+
+
+def test_precedence_park_missing_project_dir_beats_missing_reason(project_dir: Path) -> None:
+    missing = project_dir / "does-not-exist"
+    result = run_pm("park", "BUG-1", "--project-dir", str(missing), cwd=project_dir)
+    assert result.returncode == pm.EXIT_PROJECT_DIR_NOT_FOUND, result.stdout
+
+
+def test_precedence_decide_missing_project_dir_beats_missing_as_and_reason(project_dir: Path) -> None:
+    missing = project_dir / "does-not-exist"
+    result = run_pm("decide", "BUG-1", "--project-dir", str(missing), cwd=project_dir)
+    assert result.returncode == pm.EXIT_PROJECT_DIR_NOT_FOUND, result.stdout
 
 
 # --- lock timeout: exit 5 means nothing was written -------------------------
