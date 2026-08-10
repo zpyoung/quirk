@@ -94,3 +94,12 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: medium
 - **Proposed fix**: Make the preflight prove liveness, not just alias resolution — have --check issue a trivial dispatch and require non-empty output before reporting the alias ready, or have select-model degrade triple_verified to false when the check cannot demonstrate one.
 
+## BUG-17: artifact_append.py opens its lock file with mode 'w', truncating through a symlink
+- **Observed**: 2026-08-10
+- **File**: bin/artifact_append.py:145
+- **Description**: The lock is acquired with open(lock_path, 'w'), which truncates the target and follows symlinks. .quirk/locks/ lives inside the project, so a symlink planted at .quirk/locks/BUGS.md.lock is truncated to zero bytes the moment any append runs — before the flock is even attempted. A lock file's contents are never read; only its existence and its flock matter, so the write mode buys nothing. pm.py's own lock acquisition was fixed to os.open(..., O_CREAT|O_RDWR|O_NOFOLLOW, 0o600) during Phase 2; this is the same pattern left in the older script. Not an authorization hole — the design assumes a cooperative worker and states it is not a security boundary — but it destroys a file for no benefit.
+- **Introduced by**: pre-dates this session
+- **Severity**: medium
+- **Proposed fix**: Mirror pm.py's _acquire_ledger_lock: os.open with O_CREAT|O_RDWR|O_NOFOLLOW and no truncation. Ideally hoist the shared acquisition into artifact_lib so the two cannot drift again.
+- **Blocker for**: nothing — but the two scripts now have different lock-safety properties for the same lock files
+
