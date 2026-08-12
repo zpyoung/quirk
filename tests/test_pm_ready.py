@@ -335,6 +335,23 @@ def test_blocker_with_malformed_status_leaves_dependent_blocked(pm_project: Path
     assert pm.ready(world, "BUG-1") is False
 
 
+def test_duplicate_blocker_id_fails_closed_for_readiness(pm_project: Path) -> None:
+    """Two headings claiming BUG-2 must not let readiness resolve to whichever parsed last —
+    DUPLICATE_ID makes the collision visible, but an ambiguous id must never itself satisfy a
+    blocker, even though one of the two BUG-2 entries here is closed."""
+    append_bug(pm_project, 2, "blocker (open)")
+    append_bug(pm_project, 2, "blocker (closed)", Status=STATUS_CLOSED)
+    append_bug(pm_project, 1, "dependent", **{"Blocked by": "BUG-2"})
+
+    world = pm._load_ledger_world(pm_project)
+    assert pm.satisfied(world, "BUG-2") is False
+    assert pm.ready(world, "BUG-1") is False
+
+    result = run_pm("--doctor", cwd=pm_project)
+    assert "DUPLICATE_ID" in result.stdout
+    assert "BUG-2" in result.stdout
+
+
 # --- CYCLE detection ---------------------------------------------------------
 
 
@@ -536,6 +553,20 @@ def test_roadmap_write_refuses_a_member_line_when_no_milestone_exists_at_all(
     assert result.returncode == pm.EXIT_BAD_ARGUMENT
     assert "MEMBER_OUTSIDE_MILESTONE" in result.stderr
     assert (pm_project / "ROADMAP.md").read_text() == before
+
+
+def test_doctor_reports_member_outside_milestone(pm_project: Path) -> None:
+    """`MEMBER_OUTSIDE_MILESTONE` must be visible at read time too, matching the write-time
+    refusal above — a hand-edited `ROADMAP.md` with a member line above every milestone
+    contributes no membership at all and, until now, no diagnostic either."""
+    append_bug(pm_project, 1, "x")
+    (pm_project / "ROADMAP.md").write_text("# ROADMAP\n- BUG-1\n\n## Milestone: M1\n")
+
+    result = run_pm("--doctor", cwd=pm_project)
+
+    assert result.returncode == 0, result.stderr
+    assert "MEMBER_OUTSIDE_MILESTONE" in result.stdout
+    assert "BUG-1" in result.stdout
 
 
 # --- a missing ROADMAP.md is an empty roadmap, not an error -----------------

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import threading
 from pathlib import Path
@@ -16,6 +17,8 @@ from pathlib import Path
 import pytest
 
 import pm
+
+from .conftest import TEMPLATES_DIR, isolated_git_env, run_pm
 
 
 @pytest.fixture(autouse=True)
@@ -593,3 +596,77 @@ def test_none_probe_always_accepted_as_baseline_and_final(tmp_path: Path) -> Non
     result = pm.run_probe(spec, tmp_path, timeout=30)
     assert pm.probe_accepts_baseline(spec, result) is True
     assert pm.probe_accepts_final(spec, result) is True
+
+
+# --- finish: a refusal names the outcome it observed -------------------------
+#
+# `commands/pm/finish.md` relays the recorded outcome on exit 9 so the worker can tell "still
+# broken" (fail) apart from "the probe itself broke" (missing/error/deleted baseline files) — the
+# command can only relay what `finish` prints.
+
+
+def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", *args], cwd=repo, capture_output=True, text=True, env=isolated_git_env(), check=True,
+    )
+
+
+@pytest.fixture
+def pm_git_project(fake_git_repo: Path) -> Path:
+    """`fake_git_repo`, additionally scaffolded with v2 ledgers and committed — `finish`'s
+    worktree-root precondition needs the project directory to itself be a git checkout."""
+    for name in pm.LEDGER_FILES:
+        shutil.copy(TEMPLATES_DIR / name, fake_git_repo / name)
+    shutil.copy(TEMPLATES_DIR / "ROADMAP.md", fake_git_repo / "ROADMAP.md")
+    (fake_git_repo / "docs" / "adr").mkdir(parents=True, exist_ok=True)
+    _git(fake_git_repo, "add", "-A")
+    _git(fake_git_repo, "commit", "-q", "-m", "seed ledger")
+    return fake_git_repo
+
+
+def commit_all(repo: Path, message: str = "commit") -> None:
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", message)
+
+
+def append_bug(project: Path, entry_id: int, title: str = "a bug", **fields: str) -> None:
+    path = project / "BUGS.md"
+    lines = [f"\n## BUG-{entry_id}: {title}"]
+    for label, value in fields.items():
+        lines.append(f"- **{label}**: {value}")
+    path.write_text(path.read_text() + "\n".join(lines) + "\n")
+
+
+def test_finish_refusal_names_the_observed_outcome_for_a_failing_test(pm_git_project: Path) -> None:
+    (pm_git_project / "test_thing.py").write_text("def test_bad():\n    assert False\n")
+    append_bug(pm_git_project, 1)
+    commit_all(pm_git_project, "add BUG-1 and a failing test")
+    run_pm("start", "BUG-1", "--probe", "test:test_thing.py::test_bad", "--here", cwd=pm_git_project)
+    commit_all(pm_git_project, "start BUG-1")
+
+    result = run_pm("finish", "BUG-1", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_PROBE_REFUSED, result.stdout
+    assert "fail" in result.stderr
+
+
+def test_finish_refusal_names_deleted_baseline_files(pm_git_project: Path) -> None:
+    # two files in the scanned directory, only one carrying the marker: deleting it leaves the
+    # directory itself intact, so the scan comes back a clean "ok" (no `result.detail`) — the
+    # missing-baseline-files reason would otherwise be indistinguishable from a bare refusal
+    (pm_git_project / "src").mkdir()
+    (pm_git_project / "src" / "a.txt").write_text("MARKER here\n")
+    (pm_git_project / "src" / "b.txt").write_text("other content\n")
+    append_bug(pm_git_project, 1)
+    commit_all(pm_git_project, "add BUG-1 and src files")
+    run_pm("start", "BUG-1", "--probe", "grep:MARKER -- src", "--here", cwd=pm_git_project)
+    commit_all(pm_git_project, "start BUG-1")
+
+    (pm_git_project / "src" / "a.txt").unlink()
+    commit_all(pm_git_project, "delete a.txt without touching the marker's cause")
+
+    result = run_pm("finish", "BUG-1", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_PROBE_REFUSED, result.stdout
+    assert "missing baseline files" in result.stderr
+    assert "a.txt" in result.stderr
