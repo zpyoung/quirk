@@ -18,8 +18,11 @@ python3 ${CLAUDE_PLUGIN_ROOT}/bin/pm.py start "$ID" --probe "$PROBE" --here --pr
 ```
 
 After the script returns:
-1. On exit 0: relay `started (attempt N)`. Tell the user the probe failed as expected (the
-   baseline) and that `/quirk:pm:finish` is what closes the loop once it passes.
+1. On exit 0: relay `started (attempt N)`, then say what the baseline actually established. For a
+   `test:` or `grep:` probe it failed as expected — that red baseline is the evidence `finish`
+   later measures against. For `--probe none` **no probe ran at all**; say so plainly rather than
+   claiming a failure that never happened, and note the entry will deliver unverified. Either way,
+   `/quirk:pm:finish` closes the loop.
 2. On exit 7 (project dir not found): tell the user to check `$CLAUDE_PROJECT_DIR`.
 3. On exit 3 (ledger missing, or `ID` not found): if a ledger file is missing, direct to
    `/quirk:artifacts:init`; if the ID just isn't found, relay the message and check for a typo.

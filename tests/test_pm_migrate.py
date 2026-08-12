@@ -171,10 +171,35 @@ def test_migrate_refuses_a_schema_version_newer_than_it_understands(
 
     assert result.returncode == pm.EXIT_SCHEMA_MISMATCH
     assert bugs.read_bytes() == before
-    assert "BUGS.md" in result.stdout
-    assert "DEFERRED.md: already v2" in result.stdout
-    assert "TEST_BACKLOG.md: already v2" in result.stdout
-    assert "proposals.md: already v2" in result.stdout
+    assert "BUGS.md" in result.stderr
+    # the too-new schema is discovered in a read-only preflight before any lock is taken or any
+    # file touched, so no other ledger's per-file report ever runs
+    assert not (initialized_project / "ROADMAP.md").exists()
+
+
+def test_migrate_too_new_ledger_outranks_lock_contention_on_another_file(
+    initialized_project: Path,
+) -> None:
+    """tech.md's exit-code precedence (7 -> 3 -> 8 -> 5): a too-new schema must be discovered
+    before any lock is even attempted, so contention on an unrelated ledger's lock can never mask
+    it behind a 5.
+    """
+    bugs = initialized_project / "BUGS.md"
+    bugs.write_text(bugs.read_text().replace("schema-version: 2", "schema-version: 3"))
+
+    lock_path = initialized_project / ".quirk" / "locks" / "DEFERRED.md.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "w") as held:
+        fcntl.flock(held.fileno(), fcntl.LOCK_EX)
+        env = {**os.environ, "ARTIFACT_LOCK_TIMEOUT": "0.3"}
+        result = subprocess.run(
+            [sys.executable, str(BIN_DIR / "pm.py"), "migrate", "--project-dir", str(initialized_project)],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+    assert result.returncode == pm.EXIT_SCHEMA_MISMATCH
 
 
 # --- TEST_BACKLOG.md gains Logged without touching entries ----------------

@@ -279,6 +279,17 @@ def test_default_runner_explicitly_set_to_the_default_string_does_not_refuse(
     assert result.outcome == "pass"
 
 
+def test_exit_map_with_an_out_of_vocabulary_outcome_is_a_config_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # code:outcome shape is fine, but "bogus" isn't pass/fail/missing/error
+    monkeypatch.setenv("QUIRK_PM_TEST_EXIT_MAP", "0:bogus,1:fail")
+    spec = pm.parse_probe_spec("test:irrelevant")
+    result = pm.run_probe(spec, tmp_path, timeout=30)
+    assert result.outcome == "config_error"
+    assert result.detail
+
+
 # --- QUIRK_PM_PROBE_TIMEOUT ---------------------------------------------------
 
 
@@ -332,6 +343,18 @@ def test_grep_paths_restrict_the_scan(tmp_path: Path) -> None:
     assert result.outcome == "ok"
     assert result.count == 1
     assert result.files == ("a/match.txt",)
+
+
+def test_grep_explicit_path_rejects_a_fifo_without_blocking(tmp_path: Path) -> None:
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("no FIFOs on this platform")
+    os.mkfifo(tmp_path / "fifo")
+    spec = pm.parse_probe_spec("grep:TODO -- fifo")
+
+    result = pm.run_probe(spec, tmp_path, timeout=5)
+
+    assert result.outcome == "error"
+    assert "fifo" in result.detail
 
 
 def test_grep_no_paths_defaults_to_worktree_root(tmp_path: Path) -> None:
@@ -574,6 +597,25 @@ def test_finish_refuses_on_deleted_baseline_file_even_when_count_is_zero(tmp_pat
     assert final_result.count == 0
     assert pm.probe_accepts_final(spec, final_result) is True
     assert missing == ["f.txt"]
+
+
+# --- _grep_baseline_files_unsafe: round-trip hazards in matched filenames ----------------------
+
+
+def test_grep_baseline_files_unsafe_accepts_an_ordinary_filename() -> None:
+    assert pm._grep_baseline_files_unsafe(["ordinary.py"]) == []
+
+
+def test_grep_baseline_files_unsafe_flags_the_join_separator() -> None:
+    assert pm._grep_baseline_files_unsafe(["a, b.py"]) == ["a, b.py"]
+
+
+def test_grep_baseline_files_unsafe_flags_the_field_delimiter() -> None:
+    assert pm._grep_baseline_files_unsafe(["weird — file.py"]) == ["weird — file.py"]
+
+
+def test_grep_baseline_files_unsafe_flags_an_embedded_newline() -> None:
+    assert pm._grep_baseline_files_unsafe(["line\nbreak.py"]) == ["line\nbreak.py"]
 
 
 # --- none: never executed, always passes --------------------------------------

@@ -725,6 +725,38 @@ def test_doctor_reports_a_present_but_empty_status_field(initialized_project: Pa
     assert "Status" in out
 
 
+def test_doctor_reports_a_present_but_empty_probe_field(initialized_project: Path) -> None:
+    """Same defect as the empty `Status` case, one field over: a written-but-empty `Probe` line
+    must not be indistinguishable from an absent one."""
+    bugs = initialized_project / "BUGS.md"
+    bugs.write_text(
+        bugs.read_text()
+        + "\n## BUG-1: hollow probe\n"
+        + "- **Status**: " + _status_line(state="in_progress", date="2026-08-01", attempt=1) + "\n"
+        + "- **Probe**:\n"
+    )
+    out = pm.render_doctor(initialized_project, today="2026-08-01")
+    assert "MALFORMED_LIFECYCLE_FIELD" in out
+    assert "BUG-1" in out
+    assert "Probe" in out
+
+
+def test_doctor_reports_a_present_but_empty_verify_field(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    bugs.write_text(
+        bugs.read_text()
+        + "\n## BUG-1: hollow verify\n"
+        + "- **Status**: "
+        + _status_line(state="closed", date="2026-08-01", attempt=1, integrated="a" * 40)
+        + "\n"
+        + "- **Verify**:\n"
+    )
+    out = pm.render_doctor(initialized_project)
+    assert "MALFORMED_LIFECYCLE_FIELD" in out
+    assert "BUG-1" in out
+    assert "Verify" in out
+
+
 def test_doctor_reports_duplicate_status_field(initialized_project: Path) -> None:
     bugs = initialized_project / "BUGS.md"
     _bug_with_fields(

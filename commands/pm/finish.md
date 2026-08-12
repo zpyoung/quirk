@@ -8,8 +8,11 @@ Required: the entry `ID` (e.g. `BUG-7`). Parse it from `$ARGUMENTS`.
 python3 ${CLAUDE_PLUGIN_ROOT}/bin/pm.py finish "$ID" --project-dir "$CLAUDE_PROJECT_DIR"
 ```
 
-Pass `--project-dir` pointed at the origin project if you're finishing on behalf of work done
-elsewhere; otherwise it defaults to the current project.
+`--project-dir` must name the checkout the work was committed in — `finish` probes and records
+*that* directory's `HEAD`. In Phase 2 `start` is `--here`-only, so the ledger and the code are the
+same checkout and the default is almost always right. Do not point it at some other project on
+behalf of work done elsewhere: the probe would run against the wrong tree and record the wrong
+commit. Cross-checkout finishing arrives with the handoff packet in a later phase.
 
 After the script returns:
 1. On exit 0: relay `delivered (<commit>)`. This is `delivered`, not `closed` — say so if the user
