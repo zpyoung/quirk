@@ -262,6 +262,49 @@ def test_migrate_leaves_an_existing_roadmap_alone(legacy_project: Path) -> None:
     assert "ROADMAP.md: already exists" in result.stdout
 
 
+def test_migrate_roadmap_creation_survives_a_crash_and_resumes_cleanly(
+    initialized_project: Path, monkeypatch
+) -> None:
+    """A crash while creating `ROADMAP.md` must never leave a truncated file behind —
+    `atomic_write`'s same-directory-temp-plus-rename means the file either doesn't exist or is
+    the real template, never a partial copy a later `migrate` would then skip as "already
+    exists" forever."""
+    def raising_replace(*args, **kwargs):
+        raise OSError("simulated crash mid-roadmap-write")
+
+    monkeypatch.setattr(os, "replace", raising_replace)
+    rc = pm.main(["migrate", "--project-dir", str(initialized_project)])
+    assert rc == pm.EXIT_UNEXPECTED_ERROR
+    assert not (initialized_project / "ROADMAP.md").exists()
+    assert not list(initialized_project.glob(".ROADMAP.md.*.tmp"))
+
+    monkeypatch.undo()
+    rc = pm.main(["migrate", "--project-dir", str(initialized_project)])
+    assert rc == pm.EXIT_OK
+    assert (initialized_project / "ROADMAP.md").read_text() == (TEMPLATES_DIR / "ROADMAP.md").read_text()
+
+
+def test_migrate_takes_the_roadmap_lock_before_writing_it(initialized_project: Path) -> None:
+    """`migrate`'s `ROADMAP.md` creation must be serialized under `.quirk/locks/ROADMAP.md.lock`,
+    the same lock `roadmap --write` takes — an externally held lock must block `migrate` exactly
+    as an externally held ledger lock already does, instead of writing straight past it."""
+    lock_path = initialized_project / ".quirk" / "locks" / "ROADMAP.md.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(lock_path, "w") as held:
+        fcntl.flock(held.fileno(), fcntl.LOCK_EX)
+        env = {**os.environ, "ARTIFACT_LOCK_TIMEOUT": "0.3"}
+        result = subprocess.run(
+            [sys.executable, str(BIN_DIR / "pm.py"), "migrate", "--project-dir", str(initialized_project)],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+    assert result.returncode == pm.EXIT_LOCK_TIMEOUT
+    assert not (initialized_project / "ROADMAP.md").exists()
+
+
 # --- aggregate precondition failures --------------------------------------
 
 
@@ -315,6 +358,36 @@ def test_migrate_lock_timeout_on_a_later_ledger_writes_nothing_at_all(
     for name in pm.LEDGER_FILES:
         assert (legacy_project / name).read_bytes() == before[name], name
     assert not (legacy_project / "ROADMAP.md").exists()
+
+
+# --- ARTIFACT_LOCK_TIMEOUT: validated, not honored verbatim -----------------
+
+
+@pytest.mark.parametrize("raw", ["inf", "-inf", "nan", "0", "-1", "not-a-number", ""])
+def test_lock_timeout_rejects_bad_values_and_falls_back_to_the_default(
+    raw: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ARTIFACT_LOCK_TIMEOUT", raw)
+    assert pm._lock_timeout() == pm.DEFAULT_LOCK_TIMEOUT
+
+
+def test_lock_timeout_honors_a_valid_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ARTIFACT_LOCK_TIMEOUT", "0.3")
+    assert pm._lock_timeout() == 0.3
+
+
+def test_migrate_survives_a_non_numeric_lock_timeout_env_value(legacy_project: Path) -> None:
+    """A non-numeric `ARTIFACT_LOCK_TIMEOUT` must not raise `ValueError` out of the command —
+    proves the validated helper is actually wired into `migrate`'s call site, not just defined."""
+    env = {**os.environ, "ARTIFACT_LOCK_TIMEOUT": "banana"}
+    result = subprocess.run(
+        [sys.executable, str(BIN_DIR / "pm.py"), "migrate", "--project-dir", str(legacy_project)],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == pm.EXIT_OK, result.stderr
+    assert "Traceback" not in result.stderr
 
 
 # --- CLI surface: every subcommand registered ------------------------------

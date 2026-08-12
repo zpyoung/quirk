@@ -684,6 +684,47 @@ def test_doctor_reports_malformed_status_for_an_impossible_calendar_date(
     assert "STALLED" not in out
 
 
+def test_doctor_reports_malformed_status_for_an_impossible_calendar_date_on_a_terminal_state(
+    initialized_project: Path,
+) -> None:
+    # _status_age_findings only runs for in_progress/delivered, so the calendar-date check must
+    # not live there — a closed entry's impossible date must still be caught.
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(
+        bugs, 1, "bad closed date",
+        ("Status", _status_line(state="closed", date="2026-02-30", attempt=1, integrated="a" * 40)),
+    )
+    out = pm.render_doctor(initialized_project)
+    assert "MALFORMED_LIFECYCLE_FIELD" in out
+    assert "BUG-1" in out
+
+
+def test_doctor_reports_malformed_verify_for_an_impossible_calendar_date(
+    initialized_project: Path,
+) -> None:
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(
+        bugs, 1, "bad verify date",
+        ("Status", _status_line(state="closed", date="2026-08-01", attempt=1, integrated="a" * 40)),
+        ("Verify", _verify_line(date="2026-02-30", integration_ref="a" * 40, probe="pass")),
+    )
+    out = pm.render_doctor(initialized_project)
+    assert "MALFORMED_LIFECYCLE_FIELD" in out
+    assert "Verify" in out
+
+
+def test_doctor_reports_a_present_but_empty_status_field(initialized_project: Path) -> None:
+    """A `Status` field line with nothing after the colon must not be silently read as the
+    ordinary never-started `open` state — the label was written, so a missing value is
+    corruption, and must surface as a finding rather than vanish."""
+    bugs = initialized_project / "BUGS.md"
+    bugs.write_text(bugs.read_text() + "\n## BUG-1: hollow status\n- **Status**:\n")
+    out = pm.render_doctor(initialized_project)
+    assert "MALFORMED_LIFECYCLE_FIELD" in out
+    assert "BUG-1" in out
+    assert "Status" in out
+
+
 def test_doctor_reports_duplicate_status_field(initialized_project: Path) -> None:
     bugs = initialized_project / "BUGS.md"
     _bug_with_fields(

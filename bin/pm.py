@@ -37,6 +37,7 @@ from artifact_lib import (
     Entry,
     MalformedHeading,
     RoadmapParse,
+    _preamble_member_findings,
     atomic_write,
     detect_schema_version,
     ensure_lock_dir,
@@ -85,6 +86,7 @@ DEFAULT_MAX_FILE_BYTES = 1_048_576
 # comfortably short of that failure mode on any real host.
 MAX_USABLE_FILE_BYTES = 1_073_741_824
 
+DEFAULT_LOCK_TIMEOUT = 5.0
 DEFAULT_PROBE_TIMEOUT = 120.0
 DEFAULT_TEST_RUNNER = "python3 -m pytest"
 DEFAULT_TEST_EXIT_MAP: dict[int, str] = {0: "pass", 1: "fail", 4: "missing", 5: "missing"}
@@ -141,6 +143,24 @@ def _max_file_bytes() -> int:
         return DEFAULT_MAX_FILE_BYTES
     if value > MAX_USABLE_FILE_BYTES:
         return DEFAULT_MAX_FILE_BYTES
+    return value
+
+
+def _lock_timeout() -> float:
+    """The `ARTIFACT_LOCK_TIMEOUT` bound (seconds) in effect, mirroring `_max_file_bytes()`'s
+    validation shape: a non-numeric, non-finite, or non-positive value falls back to the default
+    rather than being honored — `inf` would make a contended lock's caller wait forever, and a
+    bare `float()` on a non-numeric value would raise `ValueError` out of the command.
+    """
+    raw = os.environ.get("ARTIFACT_LOCK_TIMEOUT")
+    if raw is None:
+        return DEFAULT_LOCK_TIMEOUT
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_LOCK_TIMEOUT
+    if not math.isfinite(value) or value <= 0:
+        return DEFAULT_LOCK_TIMEOUT
     return value
 
 
@@ -266,6 +286,7 @@ FINDING_SEVERITY: dict[str, str] = {
     "DUPLICATE_ID": "warning",
     "MALFORMED_HEADING": "warning",
     "DANGLING_ROADMAP_REF": "warning",
+    "MEMBER_OUTSIDE_MILESTONE": "warning",
     "PROPOSAL_IN_ROADMAP": "warning",
     "ROADMAP_LINE_MALFORMED": "warning",
     "MALFORMED_LIFECYCLE_FIELD": "warning",
@@ -658,16 +679,16 @@ def cmd_migrate(args: argparse.Namespace) -> int:
         return EXIT_NOT_FOUND
 
     lock_dir = ensure_lock_dir(project)
-    timeout = float(os.environ.get("ARTIFACT_LOCK_TIMEOUT", "5.0"))
+    timeout = _lock_timeout()
     deadline = time.monotonic() + timeout
 
     held_locks: list[IO[str]] = []
     try:
         # every lock is held before any file is touched, so a timeout partway through never
-        # leaves an earlier ledger migrated while a later one wasn't — a fixed order (this list's)
-        # is what keeps that safe against deadlock, since two acquirers taking locks in different
-        # orders can wait on each other forever
-        for filename in LEDGER_FILES:
+        # leaves an earlier ledger migrated while a later one wasn't — a fixed order (this
+        # list's, with ROADMAP.md's lock taken last) is what keeps that safe against deadlock,
+        # since two acquirers taking locks in different orders can wait on each other forever
+        for filename in (*LEDGER_FILES, "ROADMAP.md"):
             lock_file = _acquire_ledger_lock(lock_dir / f"{filename}.lock", deadline)
             if lock_file is None:
                 print(
@@ -687,7 +708,8 @@ def cmd_migrate(args: argparse.Namespace) -> int:
         if roadmap_path.exists():
             print("[quirk:pm] ROADMAP.md: already exists")
         else:
-            shutil.copy(TEMPLATES_DIR / "ROADMAP.md", roadmap_path)
+            template_text = (TEMPLATES_DIR / "ROADMAP.md").read_text(encoding="utf-8")
+            atomic_write(roadmap_path, template_text)
             print("[quirk:pm] ROADMAP.md: created")
     finally:
         for lock_file in held_locks:
@@ -755,6 +777,23 @@ _GREP_BASELINE_FILES_RE = re.compile(r"^(.*) \((.*)\)$")
 # attempt segment there is corruption, not a never-started entry; wontfix/superseded are the
 # only states `decide` can reach directly from a never-started `open`.
 _STATUS_ATTEMPT_REQUIRED = frozenset({"open", "in_progress", "delivered", "closed"})
+
+
+def _valid_lifecycle_date(value: str) -> bool:
+    """Whether `value` is a real calendar date shaped `YYYY-MM-DD`.
+
+    `_DATE_RE` alone only checks digit shape and accepts a nonexistent date like `2026-02-30`;
+    checking it here — inside `parse_status`/`parse_verify` themselves — is what rejects that
+    date at every lifecycle state, not just the two states `_status_age_findings` happens to
+    age-check.
+    """
+    if not _DATE_RE.match(value):
+        return False
+    try:
+        datetime.date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
 
 
 def _safe_int(digits: str) -> int | None:
@@ -856,7 +895,7 @@ def parse_status(line: str) -> StatusField | MalformedField:
     state = parts[0]
     i = 1
 
-    if i >= len(parts) or not _DATE_RE.match(parts[i]):
+    if i >= len(parts) or not _valid_lifecycle_date(parts[i]):
         return MalformedField(raw=line, reason="date")
     date = parts[i]
     i += 1
@@ -1091,7 +1130,7 @@ def parse_verify(line: str) -> VerifyField | MalformedField:
     """
     parts = line.split(DELIM)
 
-    if not parts or not _DATE_RE.match(parts[0]):
+    if not parts or not _valid_lifecycle_date(parts[0]):
         return MalformedField(raw=line, reason="date")
     date = parts[0]
 
@@ -1330,10 +1369,12 @@ class LedgerWorld:
     entries: dict[str, tuple[Entry, ArtifactSpec]]
     parse_errors: list[str]
     malformed_total: int
+    ambiguous_ids: frozenset[str]
 
 
 def _load_ledger_world(project: Path) -> LedgerWorld:
     entries: dict[str, tuple[Entry, ArtifactSpec]] = {}
+    ambiguous_ids: set[str] = set()
     parse_errors: list[str] = []
     malformed_total = 0
     for spec in BACKLOG_FILES:
@@ -1347,8 +1388,14 @@ def _load_ledger_world(project: Path) -> LedgerWorld:
             continue
         malformed_total += len(fp.malformed)
         for e in fp.entries:
-            entries[f"{spec.header}-{e.id}"] = (e, spec)
-    return LedgerWorld(entries=entries, parse_errors=parse_errors, malformed_total=malformed_total)
+            key = f"{spec.header}-{e.id}"
+            if key in entries:
+                ambiguous_ids.add(key)
+            entries[key] = (e, spec)
+    return LedgerWorld(
+        entries=entries, parse_errors=parse_errors, malformed_total=malformed_total,
+        ambiguous_ids=frozenset(ambiguous_ids),
+    )
 
 
 def _read_roadmap(project: Path) -> RoadmapParse:
@@ -1387,6 +1434,10 @@ def _milestone_ranks(roadmap: RoadmapParse) -> dict[str, int]:
 def _entry_status(entry: Entry) -> StatusField | MalformedField:
     raw = entry.fields.get("Status")
     if raw is None:
+        # a value-less `Status` line is corruption (someone deleted the value but not the
+        # label), not the ordinary never-started state, so it must not silently default to open
+        if field_present_but_empty(entry, "Status"):
+            return MalformedField(raw="", reason="empty")
         return StatusField(state="open", date="")
     return parse_status(raw)
 
@@ -1414,8 +1465,13 @@ def satisfied(world: LedgerWorld, key: str) -> bool:
     entry whose status is `closed`, `wontfix`, or `superseded`.
 
     Only those three terminal states satisfy — `in_progress`/`delivered` do not, so a blocker
-    merely being started or reported delivered never unblocks its dependents early.
+    merely being started or reported delivered never unblocks its dependents early. An id claimed
+    by more than one live entry (`DUPLICATE_ID`) never satisfies either, regardless of what any
+    one of those entries says — resolving the ambiguity to "whichever parsed last" would let a
+    still-open duplicate's dependents unblock on a different, closed one's say-so.
     """
+    if key in world.ambiguous_ids:
+        return False
     target = world.entries.get(key)
     if target is None:
         return False
@@ -1591,6 +1647,7 @@ def _cycle_doctor_findings(world: LedgerWorld) -> list[tuple[str, str]]:
 def _roadmap_doctor_findings(project: Path, known_ids: set[str]) -> list[tuple[str, str]]:
     roadmap = _read_roadmap(project)
     findings = list(roadmap.findings)
+    findings.extend(_preamble_member_findings(roadmap.preamble))
     referenced = {member_id for milestone in roadmap.milestones for member_id in milestone.members}
     findings.extend(("DANGLING_ROADMAP_REF", member_id) for member_id in sorted(referenced - known_ids))
     return findings
@@ -2108,7 +2165,7 @@ def _commit_transition(
     """
     path = project / spec.filename
     lock_dir = ensure_lock_dir(project)
-    timeout = float(os.environ.get("ARTIFACT_LOCK_TIMEOUT", "5.0"))
+    timeout = _lock_timeout()
     deadline = time.monotonic() + timeout
     lock_file = _acquire_ledger_lock(lock_dir / f"{spec.filename}.lock", deadline)
     if lock_file is None:
@@ -2602,10 +2659,16 @@ def cmd_finish(args: argparse.Namespace) -> int:
         if refusal is not None:
             print(f"[quirk:pm] {refusal.message}", file=sys.stderr)
             return refusal.code
+        # named so commands/pm/finish.md can relay which outcome was recorded on exit 9 — the
+        # difference between a genuinely failing probe and a broken one (missing/error) — without
+        # needing to re-read the ledger for it
+        outcome_label = (
+            f"missing baseline files: {', '.join(missing_files)}" if missing_files else result.outcome
+        )
         detail_suffix = f" ({result.detail})" if result.detail else ""
         print(
             f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: probe refused "
-            f"(refused {new_status.refused}){detail_suffix}",
+            f"(refused {new_status.refused}) — outcome {outcome_label}{detail_suffix}",
             file=sys.stderr,
         )
         return EXIT_PROBE_REFUSED
@@ -2992,7 +3055,7 @@ def cmd_roadmap(args: argparse.Namespace) -> int:
         return EXIT_BAD_ARGUMENT
 
     lock_dir = ensure_lock_dir(project)
-    timeout = float(os.environ.get("ARTIFACT_LOCK_TIMEOUT", "5.0"))
+    timeout = _lock_timeout()
     deadline = time.monotonic() + timeout
     lock_file = _acquire_ledger_lock(lock_dir / "ROADMAP.md.lock", deadline)
     if lock_file is None:
