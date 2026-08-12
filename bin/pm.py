@@ -17,6 +17,7 @@ import argparse
 import codecs
 import datetime
 import fcntl
+import io
 import locale
 import math
 import os
@@ -1684,23 +1685,103 @@ def _blocked_by_edges(world: LedgerWorld) -> dict[str, list[str]]:
     }
 
 
-def _find_cycles(edges: dict[str, list[str]]) -> list[tuple[str, ...]]:
+def _find_cycles(
+    edges: dict[str, list[str]], *, _op_counter: list[int] | None = None
+) -> list[tuple[str, ...]]:
     """Return cycles in `edges` sufficient to name every node that participates in at least one,
     each reported once regardless of which member it is discovered from (deduped by rotation).
 
-    Iterative DFS with an explicit frame stack and a recursion-stack color set — never recursive
-    — so a large or adversarially deep graph terminates in bounded, linear time instead of
-    risking a stack overflow or an accidentally-quadratic reimplementation.
+    A node can sit on a cycle only if it belongs to a nontrivial strongly connected component
+    (SCC) — more than one member, or a single member with a self-loop — so an iterative Tarjan
+    pass over the whole graph first narrows the search to just those nodes, in O(V+E). On an
+    ordinary acyclic graph that candidate set is empty and the cycle-listing pass below never
+    runs at all: restarting a full DFS from every node a single pass left uncovered, with no way
+    to know in advance which nodes could possibly be on a cycle, is what made this quadratic.
 
-    A single DFS pass retires (colors 2) a node once every edge leaving it has been explored, and
-    never revisits it — the standard shape for detecting *that* a graph has a cycle, but not for
-    naming every node that sits on one: two cycles sharing a node can have the pass finish that
-    node while walking the first, so the edge into it from the second is seen already-retired and
-    silently dropped, leaving the second cycle's other members in no reported path at all. A node
-    restarted as its own fresh root stays on the stack for the whole of its own traversal, so
-    retrying from any node the first pass left uncovered is guaranteed to surface a cycle through
-    it if one exists; `covered` tracks that and the restarts stop once it can't grow.
+    Cycle listing itself still uses that restart shape. A single DFS pass retires (colors 2) a
+    node once every edge leaving it has been explored, and never revisits it — the standard shape
+    for detecting *that* a graph has a cycle, but not for naming every node that sits on one: two
+    cycles sharing a node can have the pass finish that node while walking the first, so the edge
+    into it from the second is seen already-retired and silently dropped, leaving the second
+    cycle's other members in no reported path at all. A node restarted as its own fresh root
+    stays on the stack for the whole of its own traversal, so retrying from any candidate the
+    first pass left uncovered is guaranteed to surface a cycle through it if one exists; `covered`
+    tracks that and the restarts stop once it can't grow. Restricting restarts to the SCC-derived
+    candidates keeps the total bounded by the size of the graph's cyclic portion, not the whole
+    graph.
+
+    Both passes are iterative — an explicit frame stack, never recursion — so a large or
+    adversarially deep graph terminates in bounded, linear-in-size time instead of risking a
+    stack overflow.
+
+    `_op_counter`, when given a one-element list, has its element incremented once per edge either
+    pass examines — a scaling test's hook to assert the work stays linear without depending on
+    wall-clock time, which is flaky on a shared machine.
     """
+
+    def count_edge() -> None:
+        if _op_counter is not None:
+            _op_counter[0] += 1
+
+    def tarjan_scc(nodes: Iterable[str]) -> dict[str, int]:
+        index: dict[str, int] = {}
+        lowlink: dict[str, int] = {}
+        on_stack: dict[str, bool] = {}
+        tarjan_stack: list[str] = []
+        scc_id: dict[str, int] = {}
+        next_index = 0
+        next_scc = 0
+
+        def discover(node: str) -> None:
+            nonlocal next_index
+            index[node] = next_index
+            lowlink[node] = next_index
+            next_index += 1
+            tarjan_stack.append(node)
+            on_stack[node] = True
+
+        for start in nodes:
+            if start in index:
+                continue
+            discover(start)
+            work = [(start, 0)]
+            while work:
+                node, pi = work[-1]
+                neighbors = edges.get(node, [])
+                if pi < len(neighbors):
+                    work[-1] = (node, pi + 1)
+                    count_edge()
+                    nxt = neighbors[pi]
+                    if nxt not in index:
+                        discover(nxt)
+                        work.append((nxt, 0))
+                    elif on_stack.get(nxt, False):
+                        lowlink[node] = min(lowlink[node], index[nxt])
+                else:
+                    work.pop()
+                    if work:
+                        parent = work[-1][0]
+                        lowlink[parent] = min(lowlink[parent], lowlink[node])
+                    if lowlink[node] == index[node]:
+                        nonlocal_next_scc = next_scc
+                        while True:
+                            member = tarjan_stack.pop()
+                            on_stack[member] = False
+                            scc_id[member] = nonlocal_next_scc
+                            if member == node:
+                                break
+                        next_scc += 1
+        return scc_id
+
+    scc_id = tarjan_scc(sorted(edges))
+    scc_sizes: dict[int, int] = {}
+    for sid in scc_id.values():
+        scc_sizes[sid] = scc_sizes.get(sid, 0) + 1
+    candidates = sorted(
+        node for node, sid in scc_id.items()
+        if scc_sizes[sid] > 1 or node in edges.get(node, [])
+    )
+
     found: list[tuple[str, ...]] = []
     seen_rotations: set[tuple[str, ...]] = set()
     covered: set[str] = set()
@@ -1725,6 +1806,7 @@ def _find_cycles(edges: dict[str, list[str]]) -> list[tuple[str, ...]]:
                 neighbors = edges.get(node, [])
                 if idx < len(neighbors):
                     frames[-1] = (node, idx + 1)
+                    count_edge()
                     nxt = neighbors[idx]
                     state = color.get(nxt, 0)
                     if state == 1:
@@ -1744,8 +1826,8 @@ def _find_cycles(edges: dict[str, list[str]]) -> list[tuple[str, ...]]:
                     del pos_in_path[node]
                     frames.pop()
 
-    run(sorted(edges))
-    for node in sorted(set(edges) - covered):
+    run(candidates)
+    for node in sorted(set(candidates) - covered):
         if node not in covered:
             run([node])
     return found
@@ -2047,12 +2129,84 @@ def _grep_walk_targets(base: Path, allowed_roots: list[Path]) -> Iterator[Path]:
             yield file_path
 
 
+class _GrepReadCapExceeded(Exception):
+    """Raised by `_GrepReadCap` once more than its byte allowance has been read."""
+
+
+class _GrepReadCap(io.RawIOBase):
+    """A read-only view over `inner` that raises `_GrepReadCapExceeded` once more than
+    `max_bytes` total have come through it — `_scan_file_for_grep`'s way of enforcing the same
+    per-file cap `_read_file_safely` does without reading the file's size up front, so a file
+    that grows while being scanned is still bounded.
+    """
+
+    def __init__(self, inner: IO[bytes], max_bytes: int) -> None:
+        self._inner = inner
+        self._max_bytes = max_bytes
+        self._total = 0
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, b: bytearray) -> int:
+        n = self._inner.readinto(b)
+        if n:
+            self._total += n
+            if self._total > self._max_bytes:
+                raise _GrepReadCapExceeded()
+        return n
+
+
+def _scan_file_for_grep(
+    path: Path, regex: re.Pattern[str], max_bytes: int
+) -> tuple[int, bool, bool]:
+    """Scan `path` for `regex` a line at a time and return (match_count, file_hit, skipped).
+
+    Mirrors `_read_file_safely`'s FIFO-safe open, regular-file check, and per-file byte cap, but
+    decodes and splits into lines incrementally instead of materializing the whole file as bytes,
+    then again as one decoded string, then again as a list of its lines — copies whose combined
+    size is a multiple of the file's own, which is what let one large tracked file exhaust the
+    process. A file that decodes as invalid UTF-8 anywhere contributes nothing, same as the
+    whole-file decode this replaces: a partial scan up to the bad byte isn't the same file a
+    plain grep would have matched against.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return 0, False, True
+    close_fd = True
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return 0, False, True
+        count = 0
+        file_hit = False
+        with os.fdopen(fd, "rb") as raw:
+            close_fd = False  # fdopen owns fd now; its context manager closes it
+            capped = _GrepReadCap(raw, max_bytes)
+            with io.TextIOWrapper(io.BufferedReader(capped), encoding="utf-8") as text:
+                for line in text:
+                    if regex.search(line.removesuffix("\n")):
+                        count += 1
+                        file_hit = True
+        return count, file_hit, False
+    except _GrepReadCapExceeded:
+        return 0, False, True
+    except UnicodeDecodeError:
+        return 0, False, False
+    except OSError:
+        return 0, False, True
+    finally:
+        if close_fd:
+            os.close(fd)
+
+
 def _run_grep_probe(spec: ProbeSpec, root: Path, timeout: float) -> ProbeResult:
     try:
         regex = re.compile(spec.pattern)
     except (re.error, RecursionError, OverflowError) as exc:
         return ProbeResult(outcome="error", detail=str(exc))
 
+    raw_for_base: dict[Path, str] = {}
     if spec.paths:
         bases: list[Path] = []
         for raw in spec.paths:
@@ -2078,7 +2232,9 @@ def _run_grep_probe(spec: ProbeSpec, root: Path, timeout: float) -> ProbeResult:
                 # so a path that disappears (or a directory replaced by something scandir can't
                 # read) in between must resolve here rather than raise past run_probe's contract
                 return ProbeResult(outcome="error", detail=f"path not readable: {raw}")
-            bases.append(candidate.resolve())
+            resolved = candidate.resolve()
+            bases.append(resolved)
+            raw_for_base[resolved] = raw
     else:
         bases = [root.resolve()]
 
@@ -2088,29 +2244,31 @@ def _run_grep_probe(spec: ProbeSpec, root: Path, timeout: float) -> ProbeResult:
     matched_files: set[str] = set()
 
     for base in bases:
+        base_had_targets = False
         for file_path in _grep_walk_targets(base, bases):
+            base_had_targets = True
             # per file, not per line: bounds the check's own cost while still guaranteeing
             # termination on a tree too large to finish scanning inside the timeout
             if time.monotonic() - started > timeout:
                 return ProbeResult(
                     outcome="error", detail="scan exceeded timeout", skipped_files=skipped,
                 )
-            data, _skip_reason = _read_file_safely(file_path, MAX_USABLE_FILE_BYTES)
-            if data is None:
+            file_count, file_hit, file_skipped = _scan_file_for_grep(
+                file_path, regex, MAX_USABLE_FILE_BYTES
+            )
+            if file_skipped:
                 skipped += 1
                 continue
-            try:
-                text = data.decode("utf-8")
-            except UnicodeDecodeError:
-                continue
-
-            file_hit = False
-            for line in text.splitlines():
-                if regex.search(line):
-                    count += 1
-                    file_hit = True
+            count += file_count
             if file_hit:
                 matched_files.add(_display_grep_path(root, file_path))
+        if not base_had_targets and not base.exists():
+            # validation opened and closed its own handle on `base` successfully; if `base` is
+            # gone by the time traversal starts, a walk that finds nothing must not read back as
+            # a clean zero-match scan — the whole meaning of a `grep:` probe is that zero matches
+            # is evidence, and zero because the target vanished isn't evidence of anything
+            raw = raw_for_base.get(base, _display_grep_path(root, base))
+            return ProbeResult(outcome="error", detail=f"path not found: {raw}")
 
     return ProbeResult(
         outcome="ok", count=count, files=tuple(sorted(matched_files)), skipped_files=skipped,

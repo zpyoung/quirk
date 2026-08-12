@@ -48,15 +48,25 @@ declining is fine. Placement is a roadmap write and goes through the same ratifi
 | `/quirk:pm:park` | Return to `open`, keep the attempt on record | unattended |
 | `/quirk:pm:decide` | Terminal `wontfix`/`superseded` | **human-gated — never unattended** |
 | `/quirk:pm:reconcile` | Promote `delivered` → `closed` from git ancestry | unattended, origin-side |
+| `/quirk:pm:reconcile --close` | Record `closed` on a human-supplied SHA | **human-gated — never unattended** |
 
 The red→green baseline is the mechanism: a probe must **fail** at `start` — a probe that already
 passes doesn't discriminate the entry, and `start` refuses it — and must **pass** at `finish`.
 Working unverified is a deliberate choice, never a default: `--probe none`, typed out.
 
-`decide` is the one transition that removes work from the board without anything being done, and
-it's the only one locked human-gated. Confirm the exact ID, the `--as` value, and the reason with
-the user before running it — every time, even mid-session, even if the request seemed to already
-authorize it.
+Two transitions are locked human-gated, for opposite reasons, and both need the exact values
+confirmed with the user before running — every time, even mid-session, even if the request seemed
+to already authorize it.
+
+`decide` removes work from the board without anything being done. Confirm the ID, the `--as` value,
+and the reason.
+
+`reconcile --close` records the opposite: work that landed but that ancestry can never prove landed,
+because rebase or squash broke commit identity. Confirm the ID, the full SHA being recorded, and
+the reason. Reach for it only on an entry doctor reports as `UNDETERMINED` — and never substitute
+`decide`, whose `wontfix`/`superseded` both mean the work was *not* done.
+
+The plain `reconcile` sweep is unattended; only `--close` is gated.
 
 Phase note: `start` runs locally only (`--here`) in this build. Cross-repo dispatch — `--repo`,
 worktree creation, the handoff packet — is a later phase and isn't available yet.

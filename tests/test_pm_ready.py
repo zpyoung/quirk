@@ -486,6 +486,28 @@ def test_cycle_detection_is_not_quadratic_on_a_long_path_with_many_back_edges() 
     assert elapsed < 3.0, f"_find_cycles took {elapsed:.2f}s — path.index() quadratic regression?"
 
 
+def test_cycle_detection_is_not_quadratic_on_an_acyclic_chain() -> None:
+    """Restarting a full DFS from every node a single pass left uncovered is quadratic once
+    nothing is ever covered, which is exactly the ordinary acyclic case. Counting edges examined,
+    not wall-clock, catches the shape regardless of machine speed: linear work roughly doubles
+    when the chain doubles, where the quadratic shape this guards against would roughly
+    quadruple it."""
+
+    def chain(n: int) -> dict[str, list[str]]:
+        return {f"N{i}": ([f"N{i + 1}"] if i < n else []) for i in range(1, n + 1)}
+
+    small_ops = [0]
+    pm._find_cycles(chain(200), _op_counter=small_ops)
+
+    large_ops = [0]
+    pm._find_cycles(chain(400), _op_counter=large_ops)
+
+    assert small_ops[0] > 0
+    assert large_ops[0] < small_ops[0] * 3, (
+        f"edges examined went {small_ops[0]} -> {large_ops[0]} for a 2x chain — quadratic?"
+    )
+
+
 # --- lock acquisition: a symlinked lock path must be refused, not followed -
 
 
