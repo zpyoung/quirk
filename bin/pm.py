@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Subcommand CLI over typed-artifact markdown files: index/next/doctor/status/migrate/roadmap,
-plus the Phase-2 lifecycle commands start/finish/park/decide (reconcile is a later task's stub).
+plus the Phase-2 lifecycle commands start/finish/park/decide/reconcile.
 
 The read layer (index/next/doctor/status/roadmap) consumes `Status`, `Blocked by`, and
 `ROADMAP.md` membership to compute readiness (`ready`/`eligible`/`unplaced`) and to run
@@ -8,7 +8,8 @@ cross-ledger doctor findings (`CYCLE`, `DANGLING`, `BLOCKED_BY_*`, roadmap findi
 lifecycle commands mutate an entry's `Status`/`Probe` fields under the same compare-and-swap
 procedure — acquire the ledger's lock, re-read, compare the expectation tuple captured before any
 slow work, splice and write on match, refuse without writing on mismatch. `start` here is
-`--here`-only (Phase 2): no `Handoff` field, no worktree, no dispatch.
+`--here`-only (Phase 2): no `Handoff` field, no worktree, no dispatch; `reconcile` likewise
+evaluates ancestry in the project's own repo rather than a `Handoff.dest:`.
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -674,6 +676,10 @@ def render_status(status: StatusField) -> str:
         segments.append(f"commit: {status.commit}")
     elif status.state == "closed":
         segments.append(f"integrated: {status.integrated}")
+        # only `reconcile --close` supplies a reason; automatic promotion never does, so this
+        # stays absent for the ordinary case the schema table shows
+        if status.reason is not None:
+            segments.append(f"reason: {status.reason}")
     elif status.state == "superseded":
         segments.append(f"by: {status.by}")
         segments.append(f"reason: {status.reason}")
@@ -736,6 +742,12 @@ def parse_status(line: str) -> StatusField | MalformedField:
             return MalformedField(raw=line, reason="integrated")
         integrated = m.group(1)
         i += 1
+        if i < len(parts):
+            m = _REASON_RE.match(DELIM.join(parts[i:]))
+            if m is None:
+                return MalformedField(raw=line, reason="reason")
+            reason = m.group(1)
+            i = len(parts)
     elif state == "superseded":
         m = _BY_RE.match(parts[i]) if i < len(parts) else None
         if m is None:
@@ -897,6 +909,59 @@ def parse_probe(line: str) -> ProbeField | MalformedField:
         final_spec_hash=final_spec_hash, final_file_hash=final_file_hash,
         skipped_files=skipped_files, final_skipped_files=final_skipped_files,
     )
+
+
+@dataclass(frozen=True)
+class VerifyField:
+    date: str
+    integration_ref: str
+    probe: str  # "pass" | "fail" | "missing" | "error"
+
+
+_VERIFY_INTEGRATION_REF_RE = re.compile(r"^integration_ref: (\S+)$")
+_VERIFY_PROBE_RE = re.compile(r"^probe: (pass|fail|missing|error)$")
+
+
+def render_verify(verify: VerifyField) -> str:
+    """Render a `VerifyField` to its `Verify` field value (the text after `- **Verify**: `).
+
+    `parse_verify` is its exact inverse.
+    """
+    return DELIM.join([
+        verify.date, f"integration_ref: {verify.integration_ref}", f"probe: {verify.probe}",
+    ])
+
+
+def parse_verify(line: str) -> VerifyField | MalformedField:
+    """Parse a `Verify` field's value into a `VerifyField`, total over all input.
+
+    Matches segments left to right against their anchored patterns, exactly as `parse_status`/
+    `parse_probe` do; a segment that fails to match yields `MalformedField` naming that segment.
+    """
+    parts = line.split(DELIM)
+
+    if not parts or not _DATE_RE.match(parts[0]):
+        return MalformedField(raw=line, reason="date")
+    date = parts[0]
+
+    if len(parts) < 2:
+        return MalformedField(raw=line, reason="integration_ref")
+    m = _VERIFY_INTEGRATION_REF_RE.match(parts[1])
+    if m is None:
+        return MalformedField(raw=line, reason="integration_ref")
+    integration_ref = m.group(1)
+
+    if len(parts) < 3:
+        return MalformedField(raw=line, reason="probe")
+    m = _VERIFY_PROBE_RE.match(parts[2])
+    if m is None:
+        return MalformedField(raw=line, reason="probe")
+    probe = m.group(1)
+
+    if len(parts) != 3:
+        return MalformedField(raw=line, reason="trailing segment")
+
+    return VerifyField(date=date, integration_ref=integration_ref, probe=probe)
 
 
 # --- Blocked by: lexical rules -------------------------------------------
@@ -1601,6 +1666,16 @@ def grep_baseline_files_missing(root: Path, baseline_files: Iterable[str]) -> li
     return [name for name in baseline_files if not (root / name).is_file()]
 
 
+def _reconstruct_probe_spec(probe: ProbeField) -> ProbeSpec | ProbeArgError:
+    """Reconstruct the `ProbeSpec` `run_probe` needs from a parsed `ProbeField` — re-parses the
+    same `verb:arg` text a recorded `Probe:` line encodes, the way `--probe` originally was.
+    Shared by `finish` (re-running the recorded probe against `HEAD`) and `reconcile --verify`
+    (re-running it against the integration ref).
+    """
+    verb_arg = "none" if probe.verb == "none" else f"{probe.verb}:{probe.arg}"
+    return parse_probe_spec(verb_arg)
+
+
 # --- lifecycle commands: start, finish, park, decide ----------------------
 #
 # docs/quirk/specs/2026-08-04-pm-agent/tech.md, §The CAS transition mechanism, §Exit codes
@@ -1730,11 +1805,20 @@ def _commit_transition(
     expected: tuple[int, int, str, str | None],
     new_status: StatusField,
     new_probe: ProbeField | None,
+    *,
+    extra: Callable[[Entry, StatusField], str | None] | None = None,
+    new_verify: VerifyField | None = None,
 ) -> _Refusal | None:
     """Re-read, re-locate, and compare `expected` under the held lock; splice and write on match.
 
     The compare and the write happen inside this one lock acquisition — splitting them into a
     read-then-later-write would reopen exactly the race the CAS procedure exists to close.
+
+    `extra` overrides the tuple's fourth element (default: the raw `Probe` field, matching every
+    lifecycle command's compare); `reconcile`'s write-back passes the recorded commit sha
+    instead, since a hand-edit that only changes `commit:` at the same attempt/state is exactly
+    the staleness a Probe-only compare would miss. `new_verify`, when given, splices a `Verify`
+    field alongside `Status`/`Probe` under the same lock — reconcile's `--verify` write.
     """
     path = project / spec.filename
     lock_dir = ensure_lock_dir(project)
@@ -1759,7 +1843,8 @@ def _commit_transition(
             )
         # attempt, not just state, closes the stale-transition race: a status-only compare
         # can't tell this in_progress from a different, later attempt at the same state
-        current = (entry.id, status.attempt, status.state, entry.fields.get("Probe"))
+        extra_value = entry.fields.get("Probe") if extra is None else extra(entry, status)
+        current = (entry.id, status.attempt, status.state, extra_value)
         if current != expected:
             return _refuse(EXIT_CAS_FAILURE, f"{spec.header}-{entry_id}: CAS mismatch, refusing")
 
@@ -1769,6 +1854,10 @@ def _commit_transition(
                 reparsed = parse_entries(new_text, spec.header)
                 entry2 = next(e for e in reparsed.entries if e.id == entry_id)
                 new_text = splice_field(new_text, entry2, "Probe", render_probe(new_probe))
+            if new_verify is not None:
+                reparsed = parse_entries(new_text, spec.header)
+                entry3 = next(e for e in reparsed.entries if e.id == entry_id)
+                new_text = splice_field(new_text, entry3, "Verify", render_verify(new_verify))
         except DuplicateFieldError:
             return _refuse(EXIT_CORRUPT_ENTRY, f"{spec.header}-{entry_id}: duplicated field line, refusing")
 
@@ -1808,6 +1897,140 @@ def _git_head_sha(cwd: Path) -> str | None:
         return None
     sha = proc.stdout.strip()
     return sha if re.fullmatch(r"[0-9a-f]{40}", sha) else None
+
+
+# --- git plumbing for `reconcile` -------------------------------------------
+#
+# docs/quirk/specs/2026-08-04-pm-agent/tech.md, §The reconcile algorithm.
+
+
+def _repo_missing(repo: Path) -> bool:
+    return not repo.exists() or not repo.is_dir()
+
+
+def _resolve_integration_ref(repo: Path) -> str:
+    """The ref `reconcile` measures ancestry against for `repo` this run (logic.md:205-207).
+
+    `QUIRK_PM_INTEGRATION_REF` always wins when set. Otherwise the repo's default branch via
+    `refs/remotes/origin/HEAD`; repos made by `git init` plus `git remote add` carry no such
+    symref, so this falls back to the currently checked-out branch. Always returns some ref
+    string — whether it actually resolves to a commit is a separate check the caller makes.
+    """
+    override = os.environ.get("QUIRK_PM_INTEGRATION_REF")
+    if override:
+        return override
+    proc = _run_git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], repo)
+    if proc is not None and proc.returncode == 0 and proc.stdout.strip():
+        return proc.stdout.strip()
+    proc = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], repo)
+    if proc is not None and proc.returncode == 0 and proc.stdout.strip():
+        return proc.stdout.strip()
+    return "HEAD"
+
+
+def _stderr_excerpt(proc: subprocess.CompletedProcess) -> str:
+    first_line = (proc.stderr or "").strip().splitlines()
+    return first_line[0] if first_line else f"exit {proc.returncode}"
+
+
+@dataclass(frozen=True)
+class _RepoState:
+    """Per-repo git facts computed at most once per `reconcile` run — the fetch/integration-ref
+    memoization tech.md requires ("fetch once per repo, not once per entry").
+    """
+    fetch_ok: bool
+    integration_ref: str
+    integration_ref_ok: bool
+
+
+def _repo_state(repo: Path, cache: dict[Path, _RepoState]) -> _RepoState:
+    cached = cache.get(repo)
+    if cached is not None:
+        return cached
+    fetch_proc = _run_git(["fetch"], repo)
+    fetch_ok = fetch_proc is not None and fetch_proc.returncode == 0
+    integration_ref = _resolve_integration_ref(repo)
+    integration_ref_ok = False
+    if fetch_ok:
+        verify_proc = _run_git(["rev-parse", "--verify", f"{integration_ref}^{{commit}}"], repo)
+        integration_ref_ok = verify_proc is not None and verify_proc.returncode == 0
+    state = _RepoState(fetch_ok=fetch_ok, integration_ref=integration_ref, integration_ref_ok=integration_ref_ok)
+    cache[repo] = state
+    return state
+
+
+def _target_repo(project: Path, entry: Entry) -> Path:
+    """The repository `reconcile` evaluates `entry`'s ancestry in.
+
+    Phase 2: always the project's own repo — `start` is `--here`-only (logic.md:778-785), so no
+    `Handoff` field is ever written and there is no `dest:` to read. Phase 3 substitutes a
+    `Handoff.dest:` lookup here instead.
+    """
+    return project
+
+
+def _evaluate_delivered(repo: Path, sha: str, cache: dict[Path, _RepoState]) -> tuple[str, str | None]:
+    """The condition table from tech.md's reconcile algorithm, evaluated for one `delivered`
+    entry's recorded `commit:` sha against `repo`. Returns `(outcome, detail)`; `outcome` is one
+    of `"promote"` / `"not_yet"` / `"cannot_evaluate"`, never promoting on an ambiguous signal.
+    """
+    if _repo_missing(repo):
+        return "cannot_evaluate", "destination repo missing"
+    state = _repo_state(repo, cache)
+    if not state.fetch_ok:
+        return "cannot_evaluate", "fetch failed"
+    cat_proc = _run_git(["cat-file", "-e", f"{sha}^{{commit}}"], repo)
+    if cat_proc is None or cat_proc.returncode != 0:
+        return "cannot_evaluate", "commit not in destination repo"
+    if not state.integration_ref_ok:
+        return "cannot_evaluate", f"integration ref unresolvable: {state.integration_ref}"
+    anc_proc = _run_git(["merge-base", "--is-ancestor", sha, state.integration_ref], repo)
+    if anc_proc is None:
+        return "cannot_evaluate", "git error: could not run git"
+    if anc_proc.returncode == 0:
+        return "promote", None
+    if anc_proc.returncode == 1:
+        return "not_yet", None
+    return "cannot_evaluate", f"git error: {_stderr_excerpt(anc_proc)}"
+
+
+def _verify_probe_outcome(spec: ProbeSpec, result: ProbeResult) -> str:
+    """Map a probe re-run's `ProbeResult` onto the pass/fail/missing/error vocabulary `Verify`
+    shares with `Probe`'s `final:` (tech.md's `Verify` schema) — `grep:`'s own outcome vocabulary
+    (`ok`/`error` plus a count) has no `missing` case, but `Verify` needs one uniform scale
+    regardless of which verb the entry recorded.
+    """
+    if spec.verb == "none":
+        return "pass"
+    if spec.verb == "test":
+        return result.outcome if result.outcome in {"pass", "fail", "missing", "error"} else "error"
+    if spec.verb == "grep":
+        if result.outcome == "error":
+            return "error"
+        return "pass" if (result.count or 0) == 0 else "fail"
+    raise ValueError(f"unknown probe verb {spec.verb!r}")
+
+
+def _run_verify(repo: Path, integration_ref: str, probe_spec: ProbeSpec) -> VerifyField:
+    """Re-run `probe_spec` in a detached worktree at `integration_ref`, reporting the outcome as
+    a `VerifyField`. The worktree is always removed, even when `worktree add` itself fails or
+    the probe re-run raises — a failing or erroring re-run never blocks the promotion this
+    accompanies, only its own field (tech.md: "a failing re-run does not un-promote the entry").
+    """
+    tmpdir = Path(tempfile.mkdtemp(prefix="quirk-pm-verify-"))
+    outcome = "error"
+    try:
+        add_proc = _run_git(["worktree", "add", "--detach", str(tmpdir), integration_ref], repo)
+        if add_proc is not None and add_proc.returncode == 0:
+            try:
+                result = run_probe(probe_spec, tmpdir)
+                outcome = _verify_probe_outcome(probe_spec, result)
+            except Exception:
+                outcome = "error"
+    finally:
+        _run_git(["worktree", "remove", str(tmpdir), "--force"], repo)
+        shutil.rmtree(tmpdir, ignore_errors=True)
+    return VerifyField(date=_today(), integration_ref=integration_ref, probe=outcome)
 
 
 # --- Probe field construction for start/finish -----------------------------
@@ -1961,8 +2184,7 @@ def cmd_finish(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return EXIT_CORRUPT_ENTRY
-    probe_verb_arg = "none" if current_probe.verb == "none" else f"{current_probe.verb}:{current_probe.arg}"
-    probe_spec = parse_probe_spec(probe_verb_arg)
+    probe_spec = _reconstruct_probe_spec(current_probe)
     if isinstance(probe_spec, ProbeArgError):
         print(
             f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: recorded Probe is unusable "
@@ -2141,8 +2363,210 @@ def cmd_decide(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+@dataclass(frozen=True)
+class _ReconcileEval:
+    """One `delivered` entry's outcome from reconcile's lock-free read pass."""
+    spec: ArtifactSpec
+    entry_id: int
+    status: StatusField
+    repo: Path
+    outcome: str  # "promote" | "not_yet" | "cannot_evaluate"
+    detail: str | None = None
+    integration_ref: str | None = None  # set only when outcome == "promote"
+    probe_field: ProbeField | None = None  # set only when outcome == "promote" and Probe parses
+
+
+def _reconcile_read_pass(project: Path) -> list[_ReconcileEval]:
+    """Lock-free evaluation of every `delivered` entry's ancestry (tech.md's read pass): read
+    once, strict parse, no lock held. Only the caller's later write-back, per promotable entry,
+    takes a lock, briefly.
+    """
+    world = _load_ledger_world(project)
+    repo_cache: dict[Path, _RepoState] = {}
+    evals: list[_ReconcileEval] = []
+    for entry, spec in world.entries.values():
+        status = _entry_status(entry)
+        if not isinstance(status, StatusField) or status.state != "delivered":
+            continue
+        repo = _target_repo(project, entry)
+        outcome, detail = _evaluate_delivered(repo, status.commit, repo_cache)
+        integration_ref = None
+        probe_field = None
+        if outcome == "promote":
+            integration_ref = repo_cache[repo].integration_ref
+            probe_raw = entry.fields.get("Probe")
+            parsed_probe = parse_probe(probe_raw) if probe_raw is not None else None
+            probe_field = parsed_probe if isinstance(parsed_probe, ProbeField) else None
+        evals.append(_ReconcileEval(
+            spec=spec, entry_id=entry.id, status=status, repo=repo,
+            outcome=outcome, detail=detail, integration_ref=integration_ref, probe_field=probe_field,
+        ))
+    return evals
+
+
+def _reconcile_write_back(project: Path, ev: _ReconcileEval, verify: bool) -> tuple[str, str | None]:
+    """Attempt the CAS-guarded write-back for one promotable entry.
+
+    Returns `(result, verify_outcome)`: `result` is `"closed"`, `"lock timeout"`, or `"skipped"`
+    (a CAS mismatch — the entry moved since the read pass, silently left for the next run per
+    tech.md). `--verify`'s probe re-run happens here, still lock-free, before the lock this
+    function's own write takes.
+    """
+    verify_field = None
+    if verify and ev.probe_field is not None:
+        parsed_spec = _reconstruct_probe_spec(ev.probe_field)
+        if isinstance(parsed_spec, ProbeSpec):
+            verify_field = _run_verify(ev.repo, ev.integration_ref, parsed_spec)
+
+    new_status = StatusField(
+        state="closed", date=_today(),
+        attempt=ev.status.attempt, refused=ev.status.refused, integrated=ev.status.commit,
+    )
+    expected = (ev.entry_id, ev.status.attempt, ev.status.state, ev.status.commit)
+    refusal = _commit_transition(
+        project, ev.spec, ev.entry_id, expected, new_status, None,
+        extra=lambda entry, status: status.commit, new_verify=verify_field,
+    )
+    if refusal is None:
+        return "closed", (verify_field.probe if verify_field is not None else None)
+    if refusal.code == EXIT_LOCK_TIMEOUT:
+        return "lock timeout", None
+    return "skipped", None
+
+
+_FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _cmd_reconcile_close(args: argparse.Namespace, project: Path) -> int:
+    """`reconcile --close`: the human-ratified promotion path (tech.md's "The human-ratified
+    close path"). CAS-guarded like every other write, via the same `_expectation`/
+    `_commit_transition` machinery `start`/`finish`/`park`/`decide` use — this is the one
+    reconcile mode that returns exit 6 on a mismatch, since it targets a single human-named
+    entry rather than a batch the next run re-evaluates.
+    """
+    def validate_args() -> _Refusal | None:
+        if not args.integrated:
+            return _refuse(EXIT_BAD_ARGUMENT, "--integrated is required with --close")
+        if not _FULL_SHA_RE.match(args.integrated):
+            return _refuse(EXIT_BAD_ARGUMENT, "--integrated must be a full 40-character commit sha")
+        reason_error = _validate_reason(args.reason)
+        if reason_error is not None:
+            return reason_error
+        # Phase 2: reconcile always evaluates in the project's own repo (logic.md:778-785 — no
+        # `Handoff.dest:` is ever written). The entry itself isn't parsed yet at this point, so
+        # this can't route through `_target_repo` the way the batch read pass does, but in
+        # Phase 2 the answer is the same constant either way.
+        repo = project
+        if _repo_missing(repo):
+            return _refuse(EXIT_BAD_ARGUMENT, "--integrated cannot be verified: destination repo missing")
+        fetch_proc = _run_git(["fetch"], repo)
+        if fetch_proc is None or fetch_proc.returncode != 0:
+            return _refuse(EXIT_BAD_ARGUMENT, "--integrated cannot be verified: fetch failed")
+        cat_proc = _run_git(["cat-file", "-e", f"{args.integrated}^{{commit}}"], repo)
+        if cat_proc is None or cat_proc.returncode != 0:
+            return _refuse(
+                EXIT_BAD_ARGUMENT, f"--integrated {args.integrated} is not a known commit in {repo}"
+            )
+        integration_ref = _resolve_integration_ref(repo)
+        ref_proc = _run_git(["rev-parse", "--verify", f"{integration_ref}^{{commit}}"], repo)
+        if ref_proc is None or ref_proc.returncode != 0:
+            return _refuse(EXIT_BAD_ARGUMENT, f"integration ref unresolvable: {integration_ref}")
+        anc_proc = _run_git(["merge-base", "--is-ancestor", args.integrated, integration_ref], repo)
+        if anc_proc is None or anc_proc.returncode != 0:
+            return _refuse(
+                EXIT_BAD_ARGUMENT,
+                f"--integrated {args.integrated} is not an ancestor of {integration_ref}",
+            )
+        return None
+
+    prepared = _prepare_transition(
+        project, args.close, validate_args=validate_args, allowed_states=frozenset({"delivered"}),
+    )
+    if isinstance(prepared, _Refusal):
+        print(f"[quirk:pm] {prepared.message}", file=sys.stderr)
+        return prepared.code
+    expected = _expectation(prepared)
+
+    new_status = StatusField(
+        state="closed", date=_today(),
+        attempt=prepared.status.attempt, refused=prepared.status.refused,
+        integrated=args.integrated, reason=args.reason,
+    )
+    refusal = _commit_transition(project, prepared.spec, prepared.entry_id, expected, new_status, None)
+    if refusal is not None:
+        print(f"[quirk:pm] {refusal.message}", file=sys.stderr)
+        return refusal.code
+
+    print(f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: closed ({args.integrated})")
+    return EXIT_OK
+
+
 def cmd_reconcile(args: argparse.Namespace) -> int:
-    return _not_implemented("reconcile")
+    """Promote `delivered` entries to `closed` by git ancestry (batch), or ratify one entry via
+    `--close`. Batch `reconcile` never returns 6 — a CAS mismatch on write-back is a per-entry
+    skip reported in the output, since the underlying git facts don't change and the next run
+    re-evaluates correctly (tech.md's aggregate-outcomes rule).
+    """
+    project = Path(args.project_dir).resolve()
+    if not project.exists() or not project.is_dir():
+        print(f"Project dir not found: {project}", file=sys.stderr)
+        return EXIT_PROJECT_DIR_NOT_FOUND
+
+    if args.close is not None:
+        return _cmd_reconcile_close(args, project)
+
+    if args.integrated is not None or args.reason is not None:
+        print("[quirk:pm] --integrated/--reason require --close", file=sys.stderr)
+        return EXIT_BAD_ARGUMENT
+
+    missing = [s.filename for s in BACKLOG_FILES if not (project / s.filename).exists()]
+    if missing:
+        print(
+            f"{', '.join(missing)} not found in {project}. Run /quirk:artifacts:init first.",
+            file=sys.stderr,
+        )
+        return EXIT_NOT_FOUND
+
+    evals = _reconcile_read_pass(project)
+    if not evals:
+        print("[quirk:pm] reconcile: no delivered entries to evaluate")
+        return EXIT_OK
+
+    promoted = not_yet = cannot_evaluate = skipped = 0
+    # exit 5 means "nothing was written" (tech.md's aggregate-outcomes rule) — a lock timeout on
+    # one entry never overrides a promotion another entry already committed this run
+    lock_timeout_seen = False
+    for ev in evals:
+        label = f"{ev.spec.header}-{ev.entry_id}"
+        if ev.outcome == "not_yet":
+            not_yet += 1
+            print(f"[quirk:pm] {label}: awaiting integration")
+            continue
+        if ev.outcome == "cannot_evaluate":
+            cannot_evaluate += 1
+            print(f"[quirk:pm] {label}: cannot evaluate ({ev.detail})")
+            continue
+
+        result, verify_outcome = _reconcile_write_back(project, ev, args.verify)
+        if result == "closed":
+            promoted += 1
+            suffix = f" — verify: {verify_outcome}" if verify_outcome is not None else ""
+            print(f"[quirk:pm] {label}: closed ({ev.status.commit}){suffix}")
+        elif result == "lock timeout":
+            lock_timeout_seen = True
+            skipped += 1
+            print(f"[quirk:pm] {label}: skipped (lock timeout, retry next run)")
+        else:
+            skipped += 1
+            print(f"[quirk:pm] {label}: skipped (entry changed since read pass)")
+
+    print(
+        f"[quirk:pm] reconcile: {promoted} closed, {not_yet} awaiting integration, "
+        f"{cannot_evaluate} cannot evaluate, {skipped} skipped (of {len(evals)} delivered)"
+    )
+    if lock_timeout_seen and promoted == 0:
+        return EXIT_LOCK_TIMEOUT
+    return EXIT_OK
 
 
 def cmd_roadmap(args: argparse.Namespace) -> int:
@@ -2246,8 +2670,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_project_dir(p_decide)
     p_decide.set_defaults(func=cmd_decide)
 
-    p_reconcile = subparsers.add_parser("reconcile", help="Reconcile delivered entries (not yet implemented)")
+    p_reconcile = subparsers.add_parser("reconcile", help="Promote delivered entries reachable from the integration ref")
     p_reconcile.add_argument("--verify", action="store_true")
+    p_reconcile.add_argument("--close", metavar="ID")
+    p_reconcile.add_argument("--integrated", metavar="SHA")
+    p_reconcile.add_argument("--reason", metavar="TEXT")
     _add_project_dir(p_reconcile)
     p_reconcile.set_defaults(func=cmd_reconcile)
 
