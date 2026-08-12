@@ -10,7 +10,7 @@ import pytest
 
 import pm
 
-from .conftest import BIN_DIR, run_script
+from .conftest import BIN_DIR, HOOKS_DIR, run_script
 
 
 def append_bug(path: Path, entry_id: int, title: str, severity: str | None = None, observed: str | None = None) -> None:
@@ -56,11 +56,14 @@ def test_index_empty_project_shows_zero_counts(initialized_project: Path) -> Non
     result = run_script("pm.py", "--index", cwd=initialized_project)
     assert result.returncode == 0, result.stderr
     out = result.stdout
-    assert "BUGS 0/0 open" in out
-    assert "DEFERRED 0/0 open" in out
-    assert "TEST 0/0 open" in out
+    assert "BUGS 0 open" in out
+    assert "DEFERRED 0 open" in out
+    assert "TEST 0 open" in out
     assert "0 unplaced (0 ready, 0 blocked, 0 malformed)" in out
     assert "doctor:" not in out
+    assert "in_progress" not in out
+    assert "delivered" not in out
+    assert "closed" not in out
 
 
 def test_index_counts_open_entries_as_unplaced(initialized_project: Path) -> None:
@@ -69,20 +72,32 @@ def test_index_counts_open_entries_as_unplaced(initialized_project: Path) -> Non
     result = run_script("pm.py", "--index", cwd=initialized_project)
     assert result.returncode == 0, result.stderr
     out = result.stdout
-    assert "BUGS 1/1 open" in out
-    assert "DEFERRED 1/1 open" in out
+    assert "BUGS 1 open" in out
+    assert "DEFERRED 1 open" in out
     assert "2 unplaced (2 ready, 0 blocked, 0 malformed)" in out
 
 
-def test_index_reports_malformed_heading_in_denominator_and_unplaced(initialized_project: Path) -> None:
+def test_index_reports_a_blocked_open_entry_inline_on_its_file_segment(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    append_bug(bugs, 2, "blocker", severity="high", observed="2026-08-01")
+    _bug_with_fields(bugs, 1, "waits on its blocker", ("Blocked by", "BUG-2"))
+    result = run_script("pm.py", "--index", cwd=initialized_project)
+    assert result.returncode == 0, result.stderr
+    assert "BUGS 2 open (1 blocked)" in result.stdout
+
+
+def test_index_excludes_malformed_headings_from_open_but_counts_them_unplaced(
+    initialized_project: Path,
+) -> None:
     bugs = initialized_project / "BUGS.md"
     bugs.write_text(bugs.read_text() + "\n## BUG-1:\n- **Severity**: high\n")
     result = run_script("pm.py", "--index", cwd=initialized_project)
     assert result.returncode == 0, result.stderr
     out = result.stdout
-    assert "BUGS 0/1 open" in out
+    assert "BUGS 0 open" in out
     assert "1 unplaced (0 ready, 0 blocked, 1 malformed)" in out
     assert "doctor: 1 findings" in out
+    assert "run /quirk:pm:status for details" in out
 
 
 def test_index_skips_file_that_fails_to_parse(initialized_project: Path) -> None:
@@ -102,7 +117,7 @@ def test_index_skips_file_over_the_size_bound(initialized_project: Path, monkeyp
     out = result.stdout
     assert "BUGS.md: exceeds 10 bytes, skipping" in out
     assert "0 unplaced (0 ready, 0 blocked, 0 malformed)" in out
-    assert "BUGS 0/0 open" not in out
+    assert "BUGS" not in out.splitlines()[0]
 
 
 def test_index_ignores_non_positive_max_file_bytes(initialized_project: Path, monkeypatch) -> None:
@@ -112,7 +127,7 @@ def test_index_ignores_non_positive_max_file_bytes(initialized_project: Path, mo
         result = run_script("pm.py", "--index", cwd=initialized_project)
         assert result.returncode == 0, result.stderr
         out = result.stdout
-        assert "BUGS 1/1 open" in out, out
+        assert "BUGS 1 open" in out, out
         assert "1 unplaced (1 ready, 0 blocked, 0 malformed)" in out
         assert "exceeds" not in out
 
@@ -122,7 +137,201 @@ def test_index_honors_a_raised_max_file_bytes(initialized_project: Path, monkeyp
     monkeypatch.setenv("QUIRK_PM_MAX_FILE_BYTES", "99999999")
     result = run_script("pm.py", "--index", cwd=initialized_project)
     assert result.returncode == 0, result.stderr
-    assert "BUGS 1/1 open" in result.stdout
+    assert "BUGS 1 open" in result.stdout
+
+
+# --- --index: bounded in_progress / delivered / closed sections ------------
+
+
+def test_index_renders_in_progress_and_delivered_sections(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    defers = initialized_project / "DEFERRED.md"
+    _bug_with_fields(
+        bugs, 7, "auth fails on safari",
+        ("Status", _status_line(state="in_progress", date="2026-08-01", attempt=1)),
+    )
+    _bug_with_fields(
+        bugs, 2, "auth cookie fix",
+        ("Status", _status_line(state="delivered", date="2026-08-04", attempt=1, commit="a" * 40)),
+    )
+    _entry_with_fields(
+        defers, "DEFER", 3, "rethink session storage",
+        ("Status", _status_line(state="in_progress", date="2026-07-20", attempt=1)),
+    )
+    out = pm.render_index(initialized_project, today="2026-08-05")
+
+    assert "[quirk:pm] in_progress (2 shown / 2 total):" in out
+    assert "  - BUG-7 auth fails on safari — started 2026-08-01 (4d ago)" in out
+    assert "  - DEFER-3 rethink session storage — started 2026-07-20 (16d ago) — STALLED" in out
+    assert "worktree:" not in out  # Phase 3 field, never written by Phase 2's --here-only start
+
+    assert "[quirk:pm] delivered, awaiting integration (1 shown / 1 total):" in out
+    assert "  - BUG-2 auth cookie fix — delivered 2026-08-04 (1d ago)" in out
+
+
+def test_index_orders_in_progress_oldest_first(initialized_project: Path) -> None:
+    """A bounded list should trim the freshest entries first, not the stalest — so when the cap
+    bites it's the newest (least urgent to see) work that gets folded into the overflow line."""
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(
+        bugs, 1, "newer", ("Status", _status_line(state="in_progress", date="2026-08-04", attempt=1))
+    )
+    _bug_with_fields(
+        bugs, 2, "older", ("Status", _status_line(state="in_progress", date="2026-07-01", attempt=1))
+    )
+    out = pm.render_index(initialized_project, today="2026-08-05")
+    assert out.index("BUG-2 older") < out.index("BUG-1 newer")
+
+
+def test_index_caps_in_progress_at_ten(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    for i in range(1, 12):
+        _bug_with_fields(
+            bugs, i, f"bug {i}",
+            ("Status", _status_line(state="in_progress", date=f"2026-07-{i:02d}", attempt=1)),
+        )
+    out = pm.render_index(initialized_project, today="2026-08-01")
+    assert "[quirk:pm] in_progress (10 shown / 11 total):" in out
+    shown_rows = [line for line in out.splitlines() if line.startswith("  - BUG-")]
+    assert len(shown_rows) == 10
+    assert "…and 1 more" in out
+
+
+def test_index_caps_delivered_at_five(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    for i in range(1, 7):
+        _bug_with_fields(
+            bugs, i, f"bug {i}",
+            ("Status", _status_line(
+                state="delivered", date=f"2026-07-{i:02d}", attempt=1, commit="a" * 40
+            )),
+        )
+    out = pm.render_index(initialized_project, today="2026-08-01")
+    assert "[quirk:pm] delivered, awaiting integration (5 shown / 6 total):" in out
+    assert "…and 1 more" in out
+
+
+def test_index_truncates_titles_at_sixty_characters(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    long_title = "T" * 70
+    _bug_with_fields(
+        bugs, 1, long_title,
+        ("Status", _status_line(state="in_progress", date="2026-08-01", attempt=1)),
+    )
+    out = pm.render_index(initialized_project, today="2026-08-01")
+    assert f"- BUG-1 {'T' * 60} —" in out
+    assert "T" * 61 not in out
+
+
+def test_index_omits_lifecycle_sections_when_only_open_entries_exist(initialized_project: Path) -> None:
+    append_bug(initialized_project / "BUGS.md", 1, "alpha", severity="high", observed="2026-08-01")
+    out = pm.render_index(initialized_project, today="2026-08-05")
+    assert "in_progress" not in out
+    assert "delivered" not in out
+    assert "closed" not in out
+
+
+def test_index_reports_closed_evidence_mix(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(
+        bugs, 1, "probed closure",
+        ("Status", _status_line(state="closed", date="2026-08-01", attempt=1, integrated="a" * 40)),
+        ("Probe", _probe_line(
+            verb="test", arg="tests/test_x.py::test_y", baseline="fail",
+            spec_hash="aaaaaaaa", file_hash="bbbbbbbb",
+            final="pass", final_spec_hash="aaaaaaaa", final_file_hash="bbbbbbbb",
+        )),
+    )
+    _bug_with_fields(
+        bugs, 2, "unverified closure",
+        ("Status", _status_line(state="closed", date="2026-08-01", attempt=1, integrated="b" * 40)),
+        ("Probe", _probe_line(verb="none", arg="")),
+    )
+    out = pm.render_index(initialized_project, today="2026-08-01")
+    assert "[quirk:pm] closed 2 total (1 probed, 1 unverified/none)" in out
+
+
+def test_index_reports_a_blocked_open_entry_inline_across_files(initialized_project: Path) -> None:
+    """`Blocked by` can name an ID in a different ledger; the per-file blocked count must still
+    catch it, since readiness is computed over the whole cross-ledger world, not one file."""
+    bugs = initialized_project / "BUGS.md"
+    defers = initialized_project / "DEFERRED.md"
+    append_defer(defers, 1, "blocker", priority="P2", deferred="2026-08-01")
+    _bug_with_fields(bugs, 1, "waits on a defer", ("Blocked by", "DEFER-1"))
+    out = pm.render_index(initialized_project, today="2026-08-01")
+    assert "BUGS 1 open (1 blocked)" in out
+
+
+def test_index_finding_count_matches_doctor_finding_count(initialized_project: Path) -> None:
+    """`--index`'s summary count and `--doctor`'s actual list must never disagree, since `status`
+    prints them back to back in one message."""
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(bugs, 1, "waits on nothing real", ("Blocked by", "BUG-999"))
+    _bug_with_fields(
+        bugs, 2, "stalled", ("Status", _status_line(state="in_progress", date="2026-08-01", attempt=1))
+    )
+    index_out = pm.render_index(initialized_project, today="2026-08-20")
+    doctor_out = pm.render_doctor(initialized_project, today="2026-08-20")
+
+    reported = int(index_out.split("doctor: ")[1].split(" findings")[0])
+    assert reported == len(doctor_out.splitlines())
+    assert reported == 2
+
+
+def test_index_skips_file_that_fails_to_parse_but_still_names_other_files_work(
+    initialized_project: Path,
+) -> None:
+    """A parse error in one ledger must not silence the bounded sections built from the others."""
+    bugs = initialized_project / "BUGS.md"
+    bugs.write_bytes(b"\xff\xfe\x00\x01not utf-8")
+    defers = initialized_project / "DEFERRED.md"
+    _entry_with_fields(
+        defers, "DEFER", 1, "still visible",
+        ("Status", _status_line(state="in_progress", date="2026-08-01", attempt=1)),
+    )
+    out = pm.render_index(initialized_project, today="2026-08-05")
+    assert "BUGS.md: parse error, skipping" in out
+    assert "still visible" in out
+    assert "[quirk:pm] in_progress (1 shown / 1 total):" in out
+
+
+# --- SessionStart hook: exit-0 guarantee ------------------------------------
+
+
+def test_hook_falls_back_when_pm_index_raises(initialized_project: Path, tmp_path: Path) -> None:
+    """The hook's exit-0 guarantee must hold even when pm.py --index itself raises — simulated
+    via a broken fixture project standing in for a corrupted plugin install."""
+    append_bug(initialized_project / "BUGS.md", 1, "alpha", severity="high", observed="2026-08-01")
+    broken_plugin_root = tmp_path / "broken_plugin"
+    (broken_plugin_root / "bin").mkdir(parents=True)
+    (broken_plugin_root / "bin" / "pm.py").write_text("raise RuntimeError('simulated crash')\n")
+
+    env = {
+        **os.environ,
+        "CLAUDE_PROJECT_DIR": str(initialized_project),
+        "CLAUDE_PLUGIN_ROOT": str(broken_plugin_root),
+    }
+    result = subprocess.run(
+        ["bash", str(HOOKS_DIR / "load_artifact_tail.sh")], env=env, capture_output=True, text=True,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "[quirk:pm] index unavailable"
+    assert "Traceback" not in result.stdout
+    assert "RuntimeError" not in result.stdout
+
+
+def test_hook_surfaces_bounded_index_output_through_pm(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(
+        bugs, 1, "auth fails on safari",
+        ("Status", _status_line(state="in_progress", date="2026-08-01", attempt=1)),
+    )
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(initialized_project)}
+    result = subprocess.run(
+        ["bash", str(HOOKS_DIR / "load_artifact_tail.sh")], env=env, capture_output=True, text=True,
+    )
+    assert result.returncode == 0
+    assert "auth fails on safari" in result.stdout
 
 
 # --- --next --------------------------------------------------------------
@@ -284,12 +493,18 @@ def _verify_line(**kwargs) -> str:
     return pm.render_verify(pm.VerifyField(**kwargs))
 
 
-def _bug_with_fields(path: Path, entry_id: int, title: str, *field_lines: tuple[str, str]) -> None:
-    """Append a BUG-N entry whose field lines are given verbatim (label, value) pairs — allows a
-    duplicated label, unlike a kwargs-based helper.
+def _entry_with_fields(
+    path: Path, header: str, entry_id: int, title: str, *field_lines: tuple[str, str]
+) -> None:
+    """Append a `{header}-N` entry whose field lines are given verbatim (label, value) pairs —
+    allows a duplicated label, unlike a kwargs-based helper.
     """
     body = "\n".join(f"- **{label}**: {value}" for label, value in field_lines)
-    path.write_text(path.read_text() + f"\n## BUG-{entry_id}: {title}\n{body}\n")
+    path.write_text(path.read_text() + f"\n## {header}-{entry_id}: {title}\n{body}\n")
+
+
+def _bug_with_fields(path: Path, entry_id: int, title: str, *field_lines: tuple[str, str]) -> None:
+    _entry_with_fields(path, "BUG", entry_id, title, *field_lines)
 
 
 def test_doctor_reports_dangling_blocked_by(initialized_project: Path) -> None:
@@ -775,7 +990,7 @@ def test_index_skips_a_fifo_at_an_artifact_path(initialized_project: Path) -> No
     out = result.stdout
     assert "BUGS.md: not a regular file, skipping" in out
     assert "0 unplaced (0 ready, 0 blocked, 0 malformed)" in out
-    assert "BUGS 0/0 open" not in out
+    assert "BUGS" not in out.splitlines()[0]
 
 
 def test_max_file_bytes_falls_back_when_override_is_too_large_to_use(monkeypatch) -> None:
@@ -788,7 +1003,7 @@ def test_index_does_not_crash_on_an_unusably_large_max_file_bytes(initialized_pr
     monkeypatch.setenv("QUIRK_PM_MAX_FILE_BYTES", "99999999999999999999")
     result = run_script("pm.py", "--index", cwd=initialized_project)
     assert result.returncode == 0, result.stderr
-    assert "BUGS 1/1 open" in result.stdout
+    assert "BUGS 1 open" in result.stdout
 
 
 def test_max_file_bytes_honors_the_top_of_the_usable_range(monkeypatch) -> None:
@@ -810,7 +1025,7 @@ def test_index_does_not_crash_at_the_top_of_the_usable_max_file_bytes_range(
     monkeypatch.setenv("QUIRK_PM_MAX_FILE_BYTES", str(pm.MAX_USABLE_FILE_BYTES))
     result = run_script("pm.py", "--index", cwd=initialized_project)
     assert result.returncode == 0, result.stderr
-    assert "BUGS 1/1 open" in result.stdout
+    assert "BUGS 1 open" in result.stdout
 
 
 @pytest.mark.parametrize("value", [sys.maxsize - 1, sys.maxsize])
@@ -820,7 +1035,7 @@ def test_index_does_not_crash_near_sys_maxsize(initialized_project: Path, monkey
     result = run_script("pm.py", "--index", cwd=initialized_project)
     assert result.returncode == 0, result.stderr
     # far above MAX_USABLE_FILE_BYTES, so this falls back to the default bound
-    assert "BUGS 1/1 open" in result.stdout
+    assert "BUGS 1 open" in result.stdout
 
 
 def test_read_and_parse_falls_back_to_locale_encoding_when_utf8_fails(

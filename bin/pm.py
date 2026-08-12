@@ -73,6 +73,9 @@ SEVERITY_URGENCY = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 PRIORITY_URGENCY = {"p1": 0, "p2": 1, "p3": 2, "p4": 3}
 
 NEXT_TOP_N = 5
+INDEX_IN_PROGRESS_CAP = 10
+INDEX_DELIVERED_CAP = 5
+INDEX_TITLE_TRUNCATE = 60
 DEFAULT_MAX_FILE_BYTES = 1_048_576
 # Above this, max_bytes + 1 is still a valid Py_ssize_t on every platform, but
 # a sys.maxsize-relative bound isn't: CPython accepts a read() size far below
@@ -311,51 +314,139 @@ def _doctor_findings(fp: FileParse) -> list[tuple[str, str]]:
 # --- --index -----------------------------------------------------------
 
 
-def render_index(project: Path) -> str:
+def _index_counts_segments(
+    project: Path, world: LedgerWorld, parse_error_lines: list[str]
+) -> list[str]:
+    """Return one `"{label} N open (M blocked)"` segment per readable, present backlog file.
+
+    A missing file contributes no segment, matching Phase 1's behavior. A file that failed to
+    parse likewise contributes none — its parse-error line (already in `parse_error_lines`, from
+    the same `ALL_SPECS` pass `--doctor` uses) is what reports it instead, so the two never
+    disagree about which files are readable.
+    """
+    by_file: dict[str, list[tuple[str, Entry]]] = {spec.filename: [] for spec in BACKLOG_FILES}
+    for key, (entry, spec) in world.entries.items():
+        by_file[spec.filename].append((key, entry))
+
+    segments: list[str] = []
+    for spec in BACKLOG_FILES:
+        if not (project / spec.filename).exists():
+            continue
+        if any(line.startswith(f"[quirk:pm] {spec.filename}:") for line in parse_error_lines):
+            continue
+        open_count = blocked_count = 0
+        for key, entry in by_file[spec.filename]:
+            if not _is_open(entry):
+                continue
+            open_count += 1
+            if not ready(world, key):
+                blocked_count += 1
+        segment = f"{spec.label} {open_count} open"
+        if blocked_count:
+            segment += f" ({blocked_count} blocked)"
+        segments.append(segment)
+    return segments
+
+
+def _index_closed_evidence(world: LedgerWorld) -> tuple[int, int, int]:
+    """Return `(total closed, probed, unverified/none)` — the same `Probe.verb == "none"` split
+    `UNVERIFIED_DELIVERY` draws in the doctor catalog, so the two surfaces never disagree about
+    which closures carry independent evidence.
+    """
+    total = probed = unverified = 0
+    for _key, (entry, _spec) in world.entries.items():
+        status = _entry_status(entry)
+        if not isinstance(status, StatusField) or status.state != "closed":
+            continue
+        total += 1
+        probe = _entry_probe(entry)
+        if isinstance(probe, ProbeField) and probe.verb == "none":
+            unverified += 1
+        else:
+            probed += 1
+    return total, probed, unverified
+
+
+def _index_lifecycle_section(
+    world: LedgerWorld, today: str, *, state: str, verb: str, header: str, cap: int
+) -> list[str]:
+    """Render a bounded, ID-based `state` section (`in_progress` / `delivered`), oldest first so
+    a cap trims the freshest — least actionable — entries rather than the ones most worth seeing.
+
+    Omitted entirely when `state` has no matching entries, per the read layer's contract that a
+    zero-entry section renders nothing rather than a count of zero.
+    """
+    candidates: list[tuple[str, Entry, StatusField]] = []
+    for key, (entry, _spec) in world.entries.items():
+        status = _entry_status(entry)
+        if isinstance(status, StatusField) and status.state == state:
+            candidates.append((key, entry, status))
+    if not candidates:
+        return []
+
+    def sort_key(item: tuple[str, Entry, StatusField]) -> tuple[int, str, int]:
+        key, _entry, status = item
+        age = _days_since(today, status.date)
+        return (-(age if age is not None else -1), *_entry_sort_key(key))
+
+    candidates.sort(key=sort_key)
+    shown = candidates[:cap]
+
+    lines = [f"[quirk:pm] {header} ({len(shown)} shown / {len(candidates)} total):"]
+    for key, entry, status in shown:
+        title = entry.title[:INDEX_TITLE_TRUNCATE]
+        age = _days_since(today, status.date)
+        age_part = f" ({age}d ago)" if age is not None else ""
+        row = f"  - {key} {title} — {verb} {status.date}{age_part}"
+        if state == "in_progress":
+            # reuses doctor's own threshold check so --index and --doctor can never disagree
+            # about which in_progress entries are stalled
+            if any(code == "STALLED" for code, _detail in _status_age_findings(key, status, today)):
+                row += " — STALLED"
+        lines.append(row)
+
+    remaining = len(candidates) - len(shown)
+    if remaining > 0:
+        lines.append(f"  …and {remaining} more")
+    return lines
+
+
+def render_index(project: Path, *, today: str | None = None) -> str:
     if not _any_artifact_file_exists(project):
         return NOT_INITIALIZED_MESSAGE
+    if today is None:
+        today = _today()
 
-    parse_error_lines: list[str] = []
-    counts_segments: list[str] = []
-    ready = 0
-    malformed_total = 0
-    findings: list[tuple[str, str]] = []
+    world = _load_ledger_world(project)
+    roadmap = _read_roadmap(project)
+    ranks = _milestone_ranks(roadmap)
+    findings, parse_error_lines = _collect_all_findings(project, today)
 
-    for spec in BACKLOG_FILES:
-        path = project / spec.filename
-        if not path.exists():
-            continue
-        fp, skip_reason = _read_and_parse(project, spec)
-        if fp is None:
-            if skip_reason is not None:
-                parse_error_lines.append(f"[quirk:pm] {spec.filename}: {skip_reason}")
-            continue
-        open_count = len(fp.entries)
-        total = open_count + len(fp.malformed)
-        counts_segments.append(f"{spec.label} {open_count}/{total} open")
-        ready += open_count
-        malformed_total += len(fp.malformed)
-        findings.extend(_doctor_findings(fp))
+    ready_count, blocked_count, malformed_count = _unplaced_counts(world, ranks)
+    unplaced_total = ready_count + blocked_count + malformed_count
+    counts_segments = _index_counts_segments(project, world, parse_error_lines)
+    counts_segments.append(
+        f"{unplaced_total} unplaced ({ready_count} ready, {blocked_count} blocked, {malformed_count} malformed)"
+    )
+    lines = ["[quirk:pm] " + " · ".join(counts_segments), *parse_error_lines]
 
-    if (project / PROPOSALS.filename).exists():
-        proposals_fp, proposals_skip_reason = _read_and_parse(project, PROPOSALS)
-        if proposals_fp is None:
-            if proposals_skip_reason is not None:
-                parse_error_lines.append(f"[quirk:pm] {PROPOSALS.filename}: {proposals_skip_reason}")
-        else:
-            findings.extend(_doctor_findings(proposals_fp))
+    lines.extend(_index_lifecycle_section(
+        world, today, state="in_progress", verb="started",
+        header="in_progress", cap=INDEX_IN_PROGRESS_CAP,
+    ))
+    lines.extend(_index_lifecycle_section(
+        world, today, state="delivered", verb="delivered",
+        header="delivered, awaiting integration", cap=INDEX_DELIVERED_CAP,
+    ))
 
-    findings.extend(_cross_ledger_doctor_findings(project))
+    closed_total, closed_probed, closed_unverified = _index_closed_evidence(world)
+    if closed_total:
+        lines.append(
+            f"[quirk:pm] closed {closed_total} total ({closed_probed} probed, {closed_unverified} unverified/none)"
+        )
 
-    unplaced_total = ready + malformed_total
-    counts_line = "[quirk:pm] " + " · ".join(counts_segments)
-    if counts_segments:
-        counts_line += " · "
-    counts_line += f"{unplaced_total} unplaced ({ready} ready, 0 blocked, {malformed_total} malformed)"
-
-    lines = [counts_line, *parse_error_lines]
     if findings:
-        lines.append(f"[quirk:pm] doctor: {len(findings)} findings — run `pm.py --doctor` for details")
+        lines.append(f"[quirk:pm] doctor: {len(findings)} findings — run /quirk:pm:status for details")
     return "\n".join(lines) + "\n"
 
 
@@ -418,13 +509,14 @@ def render_next(project: Path) -> str:
 # --- --doctor --------------------------------------------------------------
 
 
-def render_doctor(project: Path, *, today: str | None = None) -> str:
-    if not _any_artifact_file_exists(project):
-        return NOT_INITIALIZED_MESSAGE
-    if today is None:
-        today = _today()
+def _collect_all_findings(project: Path, today: str) -> tuple[list[tuple[str, str]], list[str]]:
+    """Return `(findings, parse_error_lines)` exactly as `render_doctor` computes them.
 
-    lines: list[str] = []
+    Factored out so `--index`'s finding count and per-entry `STALLED` check can share this one
+    computation with `--doctor` instead of a second, independently-drifting implementation of
+    the same catalog.
+    """
+    parse_error_lines: list[str] = []
     findings: list[tuple[str, str]] = []
     for spec in ALL_SPECS:
         path = project / spec.filename
@@ -433,13 +525,23 @@ def render_doctor(project: Path, *, today: str | None = None) -> str:
         fp, skip_reason = _read_and_parse(project, spec)
         if fp is None:
             if skip_reason is not None:
-                lines.append(f"[quirk:pm] {spec.filename}: {skip_reason}")
+                parse_error_lines.append(f"[quirk:pm] {spec.filename}: {skip_reason}")
             continue
         findings.extend(_doctor_findings(fp))
         if spec.header != "PROPOSAL":
             findings.extend(_lifecycle_doctor_findings(fp, today))
 
     findings.extend(_cross_ledger_doctor_findings(project))
+    return findings, parse_error_lines
+
+
+def render_doctor(project: Path, *, today: str | None = None) -> str:
+    if not _any_artifact_file_exists(project):
+        return NOT_INITIALIZED_MESSAGE
+    if today is None:
+        today = _today()
+
+    findings, lines = _collect_all_findings(project, today)
 
     if not findings:
         lines.append("[quirk:pm] doctor: no findings")
@@ -616,7 +718,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 def cmd_status(args: argparse.Namespace) -> int:
     project = Path(args.project_dir).resolve()
-    sys.stdout.write(render_index(project) + render_doctor(project))
+    # one shared `today` for both halves, so a midnight rollover between the two calls can
+    # never make the index's finding count disagree with the doctor findings printed under it
+    today = _today()
+    sys.stdout.write(render_index(project, today=today) + render_doctor(project, today=today))
     return EXIT_OK
 
 
