@@ -86,6 +86,9 @@ DEFAULT_PROBE_TIMEOUT = 120.0
 DEFAULT_TEST_RUNNER = "python3 -m pytest"
 DEFAULT_TEST_EXIT_MAP: dict[int, str] = {0: "pass", 1: "fail", 4: "missing", 5: "missing"}
 
+DEFAULT_STALL_DAYS = 7
+DEFAULT_UNDETERMINED_AFTER_DAYS = 14
+
 
 @dataclass(frozen=True)
 class ArtifactSpec:
@@ -116,6 +119,7 @@ class FileParse:
     spec: ArtifactSpec
     entries: list[Entry]
     malformed: list[MalformedHeading]
+    text: str
 
 
 def _any_artifact_file_exists(project: Path) -> bool:
@@ -223,7 +227,7 @@ def _read_and_parse(project: Path, spec: ArtifactSpec) -> tuple[FileParse | None
         result = parse_entries(text, spec.header)
     except Exception:
         return None, "parse error, skipping"
-    return FileParse(spec, result.entries, result.malformed), None
+    return FileParse(spec, result.entries, result.malformed, text), None
 
 
 def _urgency(spec: ArtifactSpec, fields: dict[str, str]) -> int:
@@ -244,6 +248,40 @@ def _display_age(spec: ArtifactSpec, fields: dict[str, str]) -> str:
     if spec.date_field is None:
         return "no date"
     return fields.get(spec.date_field) or "no date"
+
+
+# docs/quirk/specs/2026-08-04-pm-agent/tech.md, §Doctor findings catalog. Codes this module
+# surfaces but that aren't catalog rows (BLOCKED_BY_TRUNCATED, UNKNOWN_HEADER_IN_ROADMAP,
+# ROADMAP_UNREADABLE — forwarded from artifact_lib) fall back to "warning" below, the same tier
+# as the DANGLING-adjacent findings they stand in for.
+SEVERITY_ORDER = ("warning", "notice", "informational")
+
+FINDING_SEVERITY: dict[str, str] = {
+    "DANGLING": "warning",
+    "BLOCKED_BY_PROPOSAL": "warning",
+    "CYCLE": "warning",
+    "DUPLICATE_ID": "warning",
+    "MALFORMED_HEADING": "warning",
+    "DANGLING_ROADMAP_REF": "warning",
+    "PROPOSAL_IN_ROADMAP": "warning",
+    "ROADMAP_LINE_MALFORMED": "warning",
+    "MALFORMED_LIFECYCLE_FIELD": "warning",
+    "DUPLICATE_LIFECYCLE_FIELD": "warning",
+    "POST_MERGE_PROBE_REGRESSION": "warning",
+    "DUPLICATE_MEMBERSHIP": "notice",
+    "DUPLICATE_MILESTONE_NAME": "notice",
+    "BLOCKED_BY_DUPLICATE": "notice",
+    "PROBE_SPEC_CHANGED": "notice",
+    "PROBE_FILE_CHANGED": "notice",
+    "STALLED": "informational",
+    "AWAITING_INTEGRATION": "informational",
+    "UNDETERMINED": "informational",
+    "UNVERIFIED_DELIVERY": "informational",
+}
+
+
+def _finding_severity(code: str) -> str:
+    return FINDING_SEVERITY.get(code, "warning")
 
 
 def _doctor_findings(fp: FileParse) -> list[tuple[str, str]]:
@@ -380,9 +418,11 @@ def render_next(project: Path) -> str:
 # --- --doctor --------------------------------------------------------------
 
 
-def render_doctor(project: Path) -> str:
+def render_doctor(project: Path, *, today: str | None = None) -> str:
     if not _any_artifact_file_exists(project):
         return NOT_INITIALIZED_MESSAGE
+    if today is None:
+        today = _today()
 
     lines: list[str] = []
     findings: list[tuple[str, str]] = []
@@ -396,14 +436,20 @@ def render_doctor(project: Path) -> str:
                 lines.append(f"[quirk:pm] {spec.filename}: {skip_reason}")
             continue
         findings.extend(_doctor_findings(fp))
+        if spec.header != "PROPOSAL":
+            findings.extend(_lifecycle_doctor_findings(fp, today))
 
     findings.extend(_cross_ledger_doctor_findings(project))
 
     if not findings:
         lines.append("[quirk:pm] doctor: no findings")
     else:
+        grouped: dict[str, list[tuple[str, str]]] = {severity: [] for severity in SEVERITY_ORDER}
         for code, detail in findings:
-            lines.append(f"[quirk:pm] {code}: {detail}")
+            grouped[_finding_severity(code)].append((code, detail))
+        for severity in SEVERITY_ORDER:
+            for code, detail in grouped[severity]:
+                lines.append(f"[quirk:pm] {code}: {detail}")
     return "\n".join(lines) + "\n"
 
 
@@ -962,6 +1008,141 @@ def parse_verify(line: str) -> VerifyField | MalformedField:
         return MalformedField(raw=line, reason="trailing segment")
 
     return VerifyField(date=date, integration_ref=integration_ref, probe=probe)
+
+
+# --- doctor: lifecycle findings ------------------------------------------
+#
+# docs/quirk/specs/2026-08-04-pm-agent/tech.md, §Doctor findings catalog, §The reconcile
+# algorithm. `doctor` never touches git or runs a probe (tech.md:1489-1491), so every finding
+# here is derived from the entry's own fields on disk — which is why `AWAITING_INTEGRATION` and
+# `UNDETERMINED` are an age-based guess standing in for the ancestry check only `reconcile` can
+# make.
+
+_LIFECYCLE_FIELD_LABELS = ("Status", "Probe", "Verify")
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _stall_days() -> int:
+    return _positive_int_env("QUIRK_PM_STALL_DAYS", DEFAULT_STALL_DAYS)
+
+
+def _undetermined_after_days() -> int:
+    return _positive_int_env("QUIRK_PM_UNDETERMINED_AFTER_DAYS", DEFAULT_UNDETERMINED_AFTER_DAYS)
+
+
+def _days_since(today: str, date: str) -> int | None:
+    """Whole days from `date` to `today`, or `None` if either fails to parse as a real calendar
+    date — `_DATE_RE` only checks digit shape, not that e.g. day 30 exists in February.
+    """
+    try:
+        t = datetime.date.fromisoformat(today)
+        d = datetime.date.fromisoformat(date)
+    except ValueError:
+        return None
+    return (t - d).days
+
+
+def _malformed_lifecycle_finding(key: str, label: str, reason: str) -> tuple[str, str]:
+    return ("MALFORMED_LIFECYCLE_FIELD", f"{key}: {label} field does not parse ({reason})")
+
+
+def _entry_probe(entry: Entry) -> ProbeField | MalformedField | None:
+    raw = entry.fields.get("Probe")
+    return None if raw is None else parse_probe(raw)
+
+
+def _entry_verify(entry: Entry) -> VerifyField | MalformedField | None:
+    raw = entry.fields.get("Verify")
+    return None if raw is None else parse_verify(raw)
+
+
+def _duplicate_lifecycle_field_labels(text: str, entry: Entry) -> list[str]:
+    """Labels among `Status`/`Probe`/`Verify` with more than one live field line in `entry`.
+
+    Reuses `splice_field`'s own fenced-region masking — the value passed is irrelevant, only the
+    `DuplicateFieldError` it can raise is — so a label quoted inside a fenced example is never
+    mistaken for a live duplicate.
+    """
+    duplicates = []
+    for label in _LIFECYCLE_FIELD_LABELS:
+        try:
+            splice_field(text, entry, label, None)
+        except DuplicateFieldError:
+            duplicates.append(label)
+    return duplicates
+
+
+def _status_age_findings(key: str, status: StatusField, today: str) -> list[tuple[str, str]]:
+    if status.state not in ("in_progress", "delivered"):
+        return []
+    age = _days_since(today, status.date)
+    if age is None:
+        return [_malformed_lifecycle_finding(key, "Status", "date")]
+    if status.state == "in_progress":
+        if age > _stall_days():
+            return [("STALLED", f"{key}: in_progress since {status.date} ({age}d ago)")]
+        return []
+    if age >= _undetermined_after_days():
+        return [(
+            "UNDETERMINED",
+            f"{key}: not reachable after {age} days — rebase/squash or not yet merged; "
+            "a human must resolve",
+        )]
+    return [("AWAITING_INTEGRATION", f"{key}: {age} days")]
+
+
+def _lifecycle_doctor_findings(fp: FileParse, today: str) -> list[tuple[str, str]]:
+    findings: list[tuple[str, str]] = []
+    for entry in fp.entries:
+        key = f"{fp.spec.header}-{entry.id}"
+
+        for label in _duplicate_lifecycle_field_labels(fp.text, entry):
+            findings.append(("DUPLICATE_LIFECYCLE_FIELD", f"{key}: more than one {label} field line"))
+
+        status = _entry_status(entry)
+        if isinstance(status, MalformedField):
+            findings.append(_malformed_lifecycle_finding(key, "Status", status.reason))
+            status = None
+        else:
+            findings.extend(_status_age_findings(key, status, today))
+
+        probe = _entry_probe(entry)
+        if isinstance(probe, MalformedField):
+            findings.append(_malformed_lifecycle_finding(key, "Probe", probe.reason))
+            probe = None
+
+        verify = _entry_verify(entry)
+        if isinstance(verify, MalformedField):
+            findings.append(_malformed_lifecycle_finding(key, "Verify", verify.reason))
+            verify = None
+
+        delivered_or_closed = status is not None and status.state in ("delivered", "closed")
+        if delivered_or_closed and probe is not None and probe.verb == "none":
+            findings.append(("UNVERIFIED_DELIVERY", f"{key}: delivered via probe none"))
+
+        if probe is not None and probe.final is not None:
+            if probe.final_spec_hash != probe.spec_hash:
+                findings.append(("PROBE_SPEC_CHANGED", f"{key}: spec hash changed between start and finish"))
+            if probe.final_file_hash != probe.file_hash:
+                findings.append(("PROBE_FILE_CHANGED", f"{key}: file hash changed between start and finish"))
+
+        if verify is not None and verify.probe != "pass":
+            findings.append((
+                "POST_MERGE_PROBE_REGRESSION",
+                f"{key}: verify probe outcome is {verify.probe!r}, not pass",
+            ))
+
+    return findings
 
 
 # --- Blocked by: lexical rules -------------------------------------------

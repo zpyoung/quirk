@@ -266,6 +266,375 @@ def test_doctor_scans_proposals_file_too(initialized_project: Path) -> None:
     assert "PROPOSAL-1" in out
 
 
+# --- doctor: catalog rows already implemented, reached here too ------------
+#
+# tech.md:1894-1898 requires every row of the doctor findings catalog be reached by a fixture in
+# this file specifically, even where another test file already exercises the same code path.
+
+
+def _status_line(**kwargs) -> str:
+    return pm.render_status(pm.StatusField(**kwargs))
+
+
+def _probe_line(**kwargs) -> str:
+    return pm.render_probe(pm.ProbeField(**kwargs))
+
+
+def _verify_line(**kwargs) -> str:
+    return pm.render_verify(pm.VerifyField(**kwargs))
+
+
+def _bug_with_fields(path: Path, entry_id: int, title: str, *field_lines: tuple[str, str]) -> None:
+    """Append a BUG-N entry whose field lines are given verbatim (label, value) pairs — allows a
+    duplicated label, unlike a kwargs-based helper.
+    """
+    body = "\n".join(f"- **{label}**: {value}" for label, value in field_lines)
+    path.write_text(path.read_text() + f"\n## BUG-{entry_id}: {title}\n{body}\n")
+
+
+def test_doctor_reports_dangling_blocked_by(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(bugs, 1, "waits on nothing real", ("Blocked by", "BUG-999"))
+    out = run_script("pm.py", "--doctor", cwd=initialized_project).stdout
+    assert "DANGLING" in out
+    assert "BUG-999" in out
+
+
+def test_doctor_reports_blocked_by_proposal(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(bugs, 1, "waits on a proposal", ("Blocked by", "PROPOSAL-1"))
+    out = run_script("pm.py", "--doctor", cwd=initialized_project).stdout
+    assert "BLOCKED_BY_PROPOSAL" in out
+
+
+def test_doctor_reports_blocked_by_duplicate(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    append_bug(bugs, 2, "blocker", severity="high", observed="2026-08-01")
+    _bug_with_fields(bugs, 1, "double-lists its blocker", ("Blocked by", "BUG-2, BUG-2"))
+    out = run_script("pm.py", "--doctor", cwd=initialized_project).stdout
+    assert "BLOCKED_BY_DUPLICATE" in out
+
+
+def test_doctor_reports_cycle(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(bugs, 1, "cycle a", ("Blocked by", "BUG-2"))
+    _bug_with_fields(bugs, 2, "cycle b", ("Blocked by", "BUG-1"))
+    out = run_script("pm.py", "--doctor", cwd=initialized_project).stdout
+    assert "CYCLE" in out
+
+
+def test_doctor_reports_dangling_roadmap_ref(initialized_project: Path) -> None:
+    (initialized_project / "ROADMAP.md").write_text("# ROADMAP\n\n## Milestone: A\n- BUG-999\n")
+    out = run_script("pm.py", "--doctor", cwd=initialized_project).stdout
+    assert "DANGLING_ROADMAP_REF" in out
+    assert "BUG-999" in out
+
+
+def test_doctor_reports_proposal_in_roadmap(initialized_project: Path) -> None:
+    (initialized_project / "ROADMAP.md").write_text("# ROADMAP\n\n## Milestone: A\n- PROPOSAL-1\n")
+    out = run_script("pm.py", "--doctor", cwd=initialized_project).stdout
+    assert "PROPOSAL_IN_ROADMAP" in out
+
+
+def test_doctor_reports_roadmap_line_malformed(initialized_project: Path) -> None:
+    (initialized_project / "ROADMAP.md").write_text(
+        "# ROADMAP\n\n## Milestone: A\nnot a valid member line\n"
+    )
+    out = run_script("pm.py", "--doctor", cwd=initialized_project).stdout
+    assert "ROADMAP_LINE_MALFORMED" in out
+
+
+def test_doctor_reports_duplicate_membership(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    append_bug(bugs, 1, "in two milestones", severity="high", observed="2026-08-01")
+    (initialized_project / "ROADMAP.md").write_text(
+        "# ROADMAP\n\n## Milestone: A\n- BUG-1\n\n## Milestone: B\n- BUG-1\n"
+    )
+    out = run_script("pm.py", "--doctor", cwd=initialized_project).stdout
+    assert "DUPLICATE_MEMBERSHIP" in out
+
+
+def test_doctor_reports_duplicate_milestone_name(initialized_project: Path) -> None:
+    (initialized_project / "ROADMAP.md").write_text("# ROADMAP\n\n## Milestone: A\n\n## Milestone: A\n")
+    out = run_script("pm.py", "--doctor", cwd=initialized_project).stdout
+    assert "DUPLICATE_MILESTONE_NAME" in out
+
+
+# --- doctor: lifecycle findings ---------------------------------------------
+
+
+def test_doctor_reports_stalled_in_progress_entry(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(
+        bugs, 1, "stuck", ("Status", _status_line(state="in_progress", date="2026-08-01", attempt=1))
+    )
+    out = pm.render_doctor(initialized_project, today="2026-08-10")
+    assert "STALLED" in out
+    assert "BUG-1" in out
+
+
+def test_doctor_does_not_flag_in_progress_entry_at_exactly_the_stall_boundary(
+    initialized_project: Path,
+) -> None:
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(
+        bugs, 1, "fresh", ("Status", _status_line(state="in_progress", date="2026-08-01", attempt=1))
+    )
+    # exactly QUIRK_PM_STALL_DAYS (7) days old: STALLED requires *more than* the threshold
+    out = pm.render_doctor(initialized_project, today="2026-08-08")
+    assert "STALLED" not in out
+
+
+def test_doctor_honors_a_custom_stall_days_env(initialized_project: Path, monkeypatch) -> None:
+    monkeypatch.setenv("QUIRK_PM_STALL_DAYS", "2")
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(
+        bugs, 1, "stuck", ("Status", _status_line(state="in_progress", date="2026-08-01", attempt=1))
+    )
+    out = pm.render_doctor(initialized_project, today="2026-08-04")  # 3 days old
+    assert "STALLED" in out
+
+
+def test_doctor_reports_awaiting_integration_under_the_undetermined_threshold(
+    initialized_project: Path,
+) -> None:
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(
+        bugs, 1, "shipped",
+        ("Status", _status_line(state="delivered", date="2026-08-01", attempt=1, commit="a" * 40)),
+    )
+    out = pm.render_doctor(initialized_project, today="2026-08-14")  # 13 days
+    assert "AWAITING_INTEGRATION" in out
+    assert "13 days" in out
+    assert "UNDETERMINED" not in out
+
+
+def test_doctor_reports_undetermined_at_the_threshold(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(
+        bugs, 1, "shipped",
+        ("Status", _status_line(state="delivered", date="2026-08-01", attempt=1, commit="a" * 40)),
+    )
+    # AWAITING_INTEGRATION and UNDETERMINED are mutually exclusive, chosen by age: exactly at
+    # QUIRK_PM_UNDETERMINED_AFTER_DAYS (14) must already be UNDETERMINED, never both.
+    out = pm.render_doctor(initialized_project, today="2026-08-15")  # 14 days
+    assert "UNDETERMINED" in out
+    assert "AWAITING_INTEGRATION" not in out
+
+
+def test_doctor_reports_malformed_status_field(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(bugs, 1, "broken", ("Status", "bogus"))
+    out = pm.render_doctor(initialized_project)
+    assert "MALFORMED_LIFECYCLE_FIELD" in out
+    assert "BUG-1" in out
+    assert "Status" in out
+
+
+def test_doctor_reports_malformed_probe_field(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(
+        bugs, 1, "broken probe",
+        ("Status", _status_line(state="in_progress", date="2026-08-01", attempt=1)),
+        ("Probe", "bogus"),
+    )
+    out = pm.render_doctor(initialized_project, today="2026-08-01")
+    assert "MALFORMED_LIFECYCLE_FIELD" in out
+    assert "Probe" in out
+
+
+def test_doctor_reports_malformed_verify_field(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(
+        bugs, 1, "broken verify",
+        ("Status", _status_line(state="closed", date="2026-08-01", attempt=1, integrated="a" * 40)),
+        ("Verify", "not-a-date"),
+    )
+    out = pm.render_doctor(initialized_project)
+    assert "MALFORMED_LIFECYCLE_FIELD" in out
+    assert "Verify" in out
+
+
+def test_doctor_reports_malformed_status_for_an_impossible_calendar_date(
+    initialized_project: Path,
+) -> None:
+    # "2026-02-30" matches the YYYY-MM-DD shape but is not a real date: must not crash and must
+    # not be silently treated as infinitely old (no STALLED).
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(
+        bugs, 1, "bad date", ("Status", _status_line(state="in_progress", date="2026-02-30", attempt=1))
+    )
+    out = pm.render_doctor(initialized_project, today="2026-08-10")
+    assert "MALFORMED_LIFECYCLE_FIELD" in out
+    assert "STALLED" not in out
+
+
+def test_doctor_reports_duplicate_status_field(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(
+        bugs, 1, "dup status",
+        ("Status", _status_line(state="in_progress", date="2026-08-01", attempt=1)),
+        ("Status", _status_line(state="in_progress", date="2026-08-02", attempt=1)),
+    )
+    out = pm.render_doctor(initialized_project, today="2026-08-02")
+    assert "DUPLICATE_LIFECYCLE_FIELD" in out
+    assert "Status" in out
+
+
+def test_doctor_does_not_flag_a_fenced_status_example_as_duplicate(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    live_status = _status_line(state="in_progress", date="2026-08-01", attempt=1)
+    fenced_status = _status_line(state="delivered", date="2026-08-02", attempt=1, commit="a" * 40)
+    bugs.write_text(
+        bugs.read_text()
+        + "\n## BUG-1: fenced example\n"
+        + f"- **Status**: {live_status}\n"
+        + "- **Severity**: high\n"
+        + "\n"
+        + "Example of the ledger grammar:\n"
+        + "```\n"
+        + f"- **Status**: {fenced_status}\n"
+        + "```\n"
+    )
+    out = pm.render_doctor(initialized_project, today="2026-08-01")
+    assert "DUPLICATE_LIFECYCLE_FIELD" not in out
+
+
+def test_doctor_reports_unverified_delivery_for_probe_none(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(
+        bugs, 1, "no evidence",
+        ("Status", _status_line(state="delivered", date="2026-08-01", attempt=1, commit="a" * 40)),
+        ("Probe", _probe_line(verb="none", arg="")),
+    )
+    out = pm.render_doctor(initialized_project, today="2026-08-01")
+    assert "UNVERIFIED_DELIVERY" in out
+
+
+def test_doctor_does_not_flag_unverified_delivery_when_probe_is_not_none(
+    initialized_project: Path,
+) -> None:
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(
+        bugs, 1, "has evidence",
+        ("Status", _status_line(state="delivered", date="2026-08-01", attempt=1, commit="a" * 40)),
+        ("Probe", _probe_line(
+            verb="test", arg="tests/test_x.py::test_y", baseline="fail",
+            spec_hash="aaaaaaaa", file_hash="bbbbbbbb",
+            final="pass", final_spec_hash="aaaaaaaa", final_file_hash="bbbbbbbb",
+        )),
+    )
+    out = pm.render_doctor(initialized_project, today="2026-08-01")
+    assert "UNVERIFIED_DELIVERY" not in out
+
+
+def test_doctor_reports_probe_spec_changed(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(
+        bugs, 1, "spec drift",
+        ("Status", _status_line(state="delivered", date="2026-08-01", attempt=1, commit="a" * 40)),
+        ("Probe", _probe_line(
+            verb="test", arg="tests/test_x.py::test_y", baseline="fail",
+            spec_hash="aaaaaaaa", file_hash="bbbbbbbb",
+            final="pass", final_spec_hash="cccccccc", final_file_hash="bbbbbbbb",
+        )),
+    )
+    out = pm.render_doctor(initialized_project, today="2026-08-01")
+    assert "PROBE_SPEC_CHANGED" in out
+    assert "PROBE_FILE_CHANGED" not in out
+
+
+def test_doctor_reports_probe_file_changed(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(
+        bugs, 1, "file drift",
+        ("Status", _status_line(state="delivered", date="2026-08-01", attempt=1, commit="a" * 40)),
+        ("Probe", _probe_line(
+            verb="test", arg="tests/test_x.py::test_y", baseline="fail",
+            spec_hash="aaaaaaaa", file_hash="bbbbbbbb",
+            final="pass", final_spec_hash="aaaaaaaa", final_file_hash="dddddddd",
+        )),
+    )
+    out = pm.render_doctor(initialized_project, today="2026-08-01")
+    assert "PROBE_FILE_CHANGED" in out
+    assert "PROBE_SPEC_CHANGED" not in out
+
+
+def test_doctor_reports_post_merge_probe_regression_from_disk_in_a_separate_process(
+    initialized_project: Path,
+) -> None:
+    """Regression fixture for the defect where a `--verify` result existed only in the memory of
+    the process that computed it (tech.md:1917): write the `Verify` field directly to disk, then
+    read it back via a freshly spawned `pm.py --doctor` process.
+    """
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(
+        bugs, 1, "regressed after merge",
+        ("Status", _status_line(state="closed", date="2026-08-01", attempt=1, integrated="a" * 40)),
+        ("Probe", _probe_line(
+            verb="test", arg="tests/test_x.py::test_y", baseline="fail",
+            spec_hash="aaaaaaaa", file_hash="bbbbbbbb",
+            final="pass", final_spec_hash="aaaaaaaa", final_file_hash="bbbbbbbb",
+        )),
+        ("Verify", _verify_line(date="2026-08-02", integration_ref="origin/main", probe="fail")),
+    )
+    result = run_script("pm.py", "--doctor", cwd=initialized_project)
+    assert result.returncode == 0, result.stderr
+    assert "POST_MERGE_PROBE_REGRESSION" in result.stdout
+    assert "BUG-1" in result.stdout
+
+
+def test_doctor_does_not_flag_post_merge_probe_regression_when_verify_passed(
+    initialized_project: Path,
+) -> None:
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(
+        bugs, 1, "verified clean",
+        ("Status", _status_line(state="closed", date="2026-08-01", attempt=1, integrated="a" * 40)),
+        ("Probe", _probe_line(
+            verb="test", arg="tests/test_x.py::test_y", baseline="fail",
+            spec_hash="aaaaaaaa", file_hash="bbbbbbbb",
+            final="pass", final_spec_hash="aaaaaaaa", final_file_hash="bbbbbbbb",
+        )),
+        ("Verify", _verify_line(date="2026-08-02", integration_ref="origin/main", probe="pass")),
+    )
+    out = run_script("pm.py", "--doctor", cwd=initialized_project).stdout
+    assert "POST_MERGE_PROBE_REGRESSION" not in out
+
+
+# --- doctor: severity grouping -----------------------------------------------
+
+
+def test_doctor_groups_findings_by_severity_in_order(initialized_project: Path) -> None:
+    bugs = initialized_project / "BUGS.md"
+    append_bug(bugs, 2, "blocker", severity="high", observed="2026-08-01")
+    _bug_with_fields(bugs, 3, "dangling", ("Blocked by", "BUG-999"))  # warning
+    _bug_with_fields(bugs, 4, "dup blocker", ("Blocked by", "BUG-2, BUG-2"))  # notice
+    _bug_with_fields(
+        bugs, 5, "stalled",
+        ("Status", _status_line(state="in_progress", date="2026-08-01", attempt=1)),
+    )  # informational
+
+    out = pm.render_doctor(initialized_project, today="2026-08-20")
+    warning_idx = out.index("DANGLING")
+    notice_idx = out.index("BLOCKED_BY_DUPLICATE")
+    informational_idx = out.index("STALLED")
+    assert warning_idx < notice_idx < informational_idx
+
+
+def test_doctor_skips_file_that_fails_to_parse_and_still_reports_other_findings(
+    initialized_project: Path,
+) -> None:
+    bugs = initialized_project / "BUGS.md"
+    bugs.write_bytes(b"\xff\xfe\x00\x01not utf-8")
+    defers = initialized_project / "DEFERRED.md"
+    defers.write_text(defers.read_text() + "\n## DEFER-1:\n- **Priority**: P2\n")
+    out = run_script("pm.py", "--doctor", cwd=initialized_project).stdout
+    assert "BUGS.md: parse error, skipping" in out
+    assert "MALFORMED_HEADING" in out
+    assert "DEFER-1" in out
+
+
 # --- _read_and_parse --------------------------------------------------------
 
 
