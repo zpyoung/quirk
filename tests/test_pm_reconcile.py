@@ -527,6 +527,85 @@ def test_batch_reconcile_exits_0_and_reports_skip_on_cas_mismatch(
     assert "wontfix" in status_line(text, "## BUG-1:")
 
 
+# --- write-back: a malformed/duplicated sibling field must not reach closed ---
+
+
+def test_write_back_reports_corrupt_and_leaves_delivered_on_a_malformed_probe_field(
+    pm_git_project: Path,
+) -> None:
+    """`closed` is terminal, and `park`/`decide`/`reconcile --close` all refuse to make an entry
+    terminal over a corrupt sibling field. Batch reconcile's ancestry check alone says promote —
+    it must not silently write through the same corruption those commands refuse on."""
+    sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+    append_bug(
+        pm_git_project, 1,
+        Status=f"delivered — 2026-08-05 — attempt 1 — commit: {sha}",
+        Probe="not a valid probe at all",
+    )
+
+    evals, _parse_error_lines = pm._reconcile_read_pass(pm_git_project)
+    assert len(evals) == 1
+    ev = evals[0]
+    assert ev.outcome == "promote"  # ancestry alone doesn't see the corrupt Probe
+
+    result, verify_outcome = pm._reconcile_write_back(pm_git_project, ev, verify=False)
+
+    assert result == "corrupt"
+    assert verify_outcome is None
+    line = status_line(bugs_text(pm_git_project), "## BUG-1:")
+    assert line.startswith("- **Status**: delivered")
+    assert "closed" not in line
+
+
+def test_batch_reconcile_exits_0_and_reports_skip_on_a_malformed_probe_field(
+    pm_git_project: Path,
+) -> None:
+    # regression: a malformed sibling field is a per-entry skip, not a hard refusal that would
+    # abort the run or a nonzero exit — batch reconcile's aggregate-outcome contract stays {0, 5}
+    sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+    append_bug(
+        pm_git_project, 1,
+        Status=f"delivered — 2026-08-05 — attempt 1 — commit: {sha}",
+        Probe="not a valid probe at all",
+    )
+
+    result = run_pm("reconcile", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_OK, result.stderr
+    assert "0 closed" in result.stdout
+    assert "1 skipped" in result.stdout
+    text = bugs_text(pm_git_project)
+    assert status_line(text, "## BUG-1:").startswith("- **Status**: delivered")
+
+
+def test_write_back_reports_corrupt_on_a_duplicated_verify_field(pm_git_project: Path) -> None:
+    # a second Verify line is invisible to entry.fields (last one wins the dict-collapse) and
+    # parses cleanly on its own, so this is a distinct defect from the malformed-field case above
+    sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+    append_bug(
+        pm_git_project, 1,
+        Status=f"delivered — 2026-08-05 — attempt 1 — commit: {sha}", Probe="none",
+        Verify="2026-08-05 — integration_ref: main — probe: pass",
+    )
+    bugs = pm_git_project / "BUGS.md"
+    text = bugs.read_text()
+    marker = "- **Verify**: 2026-08-05 — integration_ref: main — probe: pass"
+    idx = text.index(marker) + len(marker)
+    extra_verify = "\n- **Verify**: 2026-08-06 — integration_ref: main — probe: fail"
+    bugs.write_text(text[:idx] + extra_verify + text[idx:])
+
+    evals, _parse_error_lines = pm._reconcile_read_pass(pm_git_project)
+    ev = evals[0]
+    assert ev.outcome == "promote"
+
+    result, verify_outcome = pm._reconcile_write_back(pm_git_project, ev, verify=False)
+
+    assert result == "corrupt"
+    assert verify_outcome is None
+    line = status_line(bugs_text(pm_git_project), "## BUG-1:")
+    assert line.startswith("- **Status**: delivered")
+
+
 # --- --close: the human-ratified path ---------------------------------------
 
 
@@ -834,11 +913,14 @@ def test_verify_writes_probe_error_when_probe_field_does_not_reconstruct(pm_git_
     assert "probe: error" in verify_line
 
 
-def test_verify_writes_probe_error_for_a_genuinely_malformed_probe_field(pm_git_project: Path) -> None:
+def test_a_genuinely_malformed_probe_field_is_skipped_not_promoted_even_with_verify(
+    pm_git_project: Path,
+) -> None:
     # a third failure mode, distinct from the two above: `Probe` is present but fails
     # `parse_probe` outright (unrecognized verb) rather than being absent or unreconstructable.
-    # `_reconcile_read_pass` must filter the resulting MalformedField the same way it filters an
-    # absent field — never pass it to `_reconstruct_probe_spec`/`run_probe` as if it had parsed
+    # Unlike those two, this is genuine field corruption — the same corruption park/decide/
+    # reconcile --close already refuse to make an entry terminal over — so reconcile must skip
+    # it rather than promote past it, and --verify must not bypass that skip.
     sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
     append_bug(
         pm_git_project, 1,
@@ -850,9 +932,9 @@ def test_verify_writes_probe_error_for_a_genuinely_malformed_probe_field(pm_git_
 
     assert result.returncode == pm.EXIT_OK, result.stderr
     text = bugs_text(pm_git_project)
-    assert "- **Status**: closed" in status_line(text, "## BUG-1:")
-    verify_line = field_line(text, "## BUG-1:", "Verify")
-    assert "probe: error" in verify_line
+    assert status_line(text, "## BUG-1:").startswith("- **Status**: delivered")
+    assert "**Verify**" not in text.split("## BUG-1:", 1)[1]
+    assert "skipped" in result.stdout
 
 
 # --- --verify: grep must not treat deleted baseline files as a fix ---------

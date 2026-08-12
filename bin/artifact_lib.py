@@ -213,6 +213,9 @@ def hash_probe_spec(spec: str) -> str:
     return hashlib.sha256(spec.encode()).hexdigest()[:8]
 
 
+_HASH_CHUNK_BYTES = 1_048_576
+
+
 def hash_file(path: Path) -> str | None:
     """Return the first 8 hex characters of sha256(file bytes), or None if `path` is not a
     readable regular file.
@@ -228,15 +231,19 @@ def hash_file(path: Path) -> str | None:
         # swapped out between the open and the check
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             return None
+        digest = hashlib.sha256()
         with os.fdopen(fd, "rb") as f:
             close_fd = False
-            data = f.read()
+            # chunked so a large source file is never held in memory whole — this is the same
+            # bound the read layer's own QUIRK_PM_MAX_FILE_BYTES enforces one function over
+            for chunk in iter(lambda: f.read(_HASH_CHUNK_BYTES), b""):
+                digest.update(chunk)
     except (OSError, ValueError):
         return None
     finally:
         if close_fd:
             os.close(fd)
-    return hashlib.sha256(data).hexdigest()[:8]
+    return digest.hexdigest()[:8]
 
 
 class SymlinkedLedgerError(Exception):

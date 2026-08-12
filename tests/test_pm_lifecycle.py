@@ -231,6 +231,18 @@ def test_start_probe_rejects_the_delimiter_before_writing(pm_project: Path) -> N
     assert (pm_project / "BUGS.md").read_bytes() == before
 
 
+def test_start_probe_rejects_an_html_comment_before_writing(pm_project: Path) -> None:
+    # parse_entries masks HTML comments, so `grep:<!-- TODO -->` would be stored as `grep:`
+    # padded with spaces — a pattern nothing actually ran, silently accepted at finish
+    append_bug(pm_project, 1)
+    before = (pm_project / "BUGS.md").read_bytes()
+
+    result = run_pm("start", "BUG-1", "--probe", "grep:<!-- TODO -->", "--here", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_BAD_ARGUMENT, result.stdout
+    assert (pm_project / "BUGS.md").read_bytes() == before
+
+
 def test_start_refuses_when_a_matched_grep_filename_cannot_round_trip(pm_project: Path) -> None:
     # render_probe joins matched filenames on ", "; a name containing that same separator would
     # split back into phantom baseline files on the next read
@@ -430,6 +442,50 @@ def test_finish_with_a_genuinely_malformed_probe_field_is_corrupt(pm_git_project
     assert bugs_text(pm_git_project) == before
 
 
+def test_finish_refuses_exit4_when_malformed_probe_field_and_state_mismatch_both_hold(
+    pm_git_project: Path,
+) -> None:
+    """4-before-6: an entry both outside finish's allowed states (never started -> open) and
+    carrying a malformed Probe must report corrupt-entry, not CAS failure — a fixture where only
+    one condition holds can't tell an inverted precedence from an unrelated exit code.
+    """
+    append_bug(
+        pm_git_project, 1,
+        Status="open — 2026-08-05 — attempt 1",
+        Probe="not a valid probe at all",
+    )
+    commit_all(pm_git_project, "add BUG-1 open with a malformed Probe field")
+    before = bugs_text(pm_git_project)
+
+    result = run_pm("finish", "BUG-1", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_CORRUPT_ENTRY, result.stdout
+    assert bugs_text(pm_git_project) == before
+
+
+def test_finish_refuses_on_a_duplicated_probe_field(pm_git_project: Path) -> None:
+    # a second Probe line is invisible to entry.fields (last one wins the dict-collapse) and
+    # parses cleanly on its own, so this is a distinct defect from the malformed-field case above
+    append_bug(pm_git_project, 1)
+    commit_all(pm_git_project, "add BUG-1")
+    run_pm("start", "BUG-1", "--probe", "none", "--here", cwd=pm_git_project)
+    commit_all(pm_git_project, "start BUG-1")
+    bugs = pm_git_project / "BUGS.md"
+    text = bugs.read_text()
+    marker = "- **Probe**: none"
+    idx = text.index(marker) + len(marker)
+    extra_probe = "\n- **Probe**: grep:TODO — baseline: 1 match — spec#12345678"
+    bugs.write_text(text[:idx] + extra_probe + text[idx:])
+    commit_all(pm_git_project, "inject a duplicate Probe line")
+    before = bugs.read_bytes()
+
+    result = run_pm("finish", "BUG-1", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_CORRUPT_ENTRY, result.stdout
+    assert "duplicated Probe field" in result.stderr
+    assert bugs.read_bytes() == before
+
+
 def test_finish_refuses_on_dirty_working_tree(pm_git_project: Path) -> None:
     append_bug(pm_git_project, 1)
     commit_all(pm_git_project, "add BUG-1")
@@ -608,6 +664,19 @@ def test_park_rejects_a_reason_containing_the_delimiter(pm_project: Path) -> Non
     before = (pm_project / "BUGS.md").read_bytes()
 
     result = run_pm("park", "BUG-1", "--reason", "bad — reason", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_BAD_ARGUMENT, result.stdout
+    assert (pm_project / "BUGS.md").read_bytes() == before
+
+
+def test_park_rejects_a_reason_containing_an_html_comment(pm_project: Path) -> None:
+    # the same masking that corrupts --probe applies to every free-text field value, --reason
+    # included — it lands in Status's `parked:`/`reason:` segment the same way
+    append_bug(pm_project, 1)
+    run_pm("start", "BUG-1", "--probe", "none", "--here", cwd=pm_project)
+    before = (pm_project / "BUGS.md").read_bytes()
+
+    result = run_pm("park", "BUG-1", "--reason", "waiting on <!-- design review -->", cwd=pm_project)
 
     assert result.returncode == pm.EXIT_BAD_ARGUMENT, result.stdout
     assert (pm_project / "BUGS.md").read_bytes() == before
@@ -1122,6 +1191,42 @@ def test_park_rechecks_schema_version_under_the_lock_and_refuses_on_a_race(
     text = bugs.read_text()
     assert pm.detect_schema_version(text) == 3  # the race-injected mutation, untouched by park
     assert "- **Status**: in_progress" in text
+    assert "parked:" not in text
+
+
+def test_park_rechecks_sibling_fields_under_the_lock_and_refuses_on_a_race(
+    pm_project: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_prepare_transition`'s Probe/Verify check runs before any lock is taken — a preflight,
+    not a substitute for `_commit_transition`'s own guarded check. A concurrent hand-edit that
+    introduces a malformed Verify field in the window between the two must not let the entry
+    become terminal carrying it.
+    """
+    append_bug(pm_project, 1)
+    run_pm("start", "BUG-1", "--probe", "none", "--here", cwd=pm_project)
+    bugs = pm_project / "BUGS.md"
+
+    real_acquire = pm._acquire_ledger_lock
+    raced = False
+
+    def racing_acquire(lock_path: Path, deadline: float):
+        nonlocal raced
+        if not raced and lock_path.name == "BUGS.md.lock":
+            text = bugs.read_text()
+            marker = "\n## BUG-1: a bug"
+            idx = text.index(marker) + len(marker)
+            injected = "\n- **Verify**: not a valid verify field"
+            bugs.write_text(text[:idx] + injected + text[idx:])
+            raced = True
+        return real_acquire(lock_path, deadline)
+
+    monkeypatch.setattr(pm, "_acquire_ledger_lock", racing_acquire)
+
+    rc = pm.main(["park", "BUG-1", "--reason", "x", "--project-dir", str(pm_project)])
+
+    assert rc == pm.EXIT_CORRUPT_ENTRY
+    text = bugs.read_text()
+    assert "- **Status**: in_progress" in text  # the race-injected field, untouched by park
     assert "parked:" not in text
 
 
