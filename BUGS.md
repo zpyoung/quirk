@@ -104,3 +104,11 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: high
 - **Proposed fix**: Capture field values by offset from the original block using positions found in the masked block, rather than storing the masked capture. Add a round-trip fixture for a field value containing an HTML comment and one containing a fenced span.
 
+## BUG-11: artifact_init --force follows a symlinked ledger and overwrites the external target, destroying data outside the project
+- **Observed**: 2026-08-12
+- **File**: bin/artifact_init.py:40-50
+- **Description**: The --force path calls shutil.copy(src, dst) with dst a plain path, and shutil.copy follows symlinks, so a ledger that is a symlink has its TARGET overwritten with the template. The backup taken first is also copied through the link, so it preserves the target's content under a .bak name inside the project but the original external file is still destroyed in place. Reproduced for both ROADMAP.md and BUGS.md: create proj/BUGS.md as a symlink to ../outside.md containing 'PRECIOUS BUGS CONTENT', run artifact_init --project-dir proj --force, and outside.md now contains the BUGS.md template. This affects every entry in ROOT_TEMPLATES, so it pre-dates the pm-agent branch; that branch added ROADMAP.md to the list, which widens the blast radius by one file but is not the cause. Third member of a family: pm.py's atomic_write now refuses a symlinked ledger, BUG-9 covers artifact_append.py's lock file, and this is the init path.
+- **Introduced by**: pre-dates the pm-agent Phase 2 branch; ROADMAP.md was added to ROOT_TEMPLATES by fc79a92 on it
+- **Severity**: critical
+- **Proposed fix**: Refuse when the destination is a symlink, matching the mistake-catcher refusal pm.py's atomic_write already implements, or open the destination with O_NOFOLLOW. Whichever is chosen should be applied uniformly across the three paths so a fourth does not drift.
+
