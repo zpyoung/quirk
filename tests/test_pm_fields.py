@@ -31,6 +31,22 @@ def test_free_text_accepts_lone_ascii_hyphen() -> None:
     assert pm.is_valid_free_text("one - two") is True
 
 
+def test_free_text_rejects_an_html_comment() -> None:
+    # parse_entries masks HTML comments before a field's value ever reaches entry.fields, so a
+    # value containing one would round-trip as something other than what was written
+    assert pm.is_valid_free_text("grep:<!-- TODO -->") is False
+
+
+def test_free_text_rejects_an_html_comment_regardless_of_where_it_sits() -> None:
+    assert pm.is_valid_free_text("before <!-- hidden --> after") is False
+
+
+def test_free_text_accepts_an_unterminated_html_comment_open() -> None:
+    # mask_quoted only blanks a *complete* <!-- ... --> span; a bare "<!--" with no closer is
+    # left untouched, so it round-trips fine and must not be rejected
+    assert pm.is_valid_free_text("grep:weird <!-- but no closer") is True
+
+
 # --- Status: render/parse round trip ---------------------------------------
 
 

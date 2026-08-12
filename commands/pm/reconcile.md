@@ -3,11 +3,14 @@ description: Promote delivered entries to closed by checking whether their commi
 ---
 
 Run in the origin repository, not a worktree — this checks ancestry against the project's own
-integration ref. Takes no ID; it sweeps every `delivered` entry in one pass.
+integration ref. The sweep takes no ID; it walks every `delivered` entry in one pass.
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/bin/pm.py reconcile --project-dir "$CLAUDE_PROJECT_DIR"
 ```
+
+There is a second mode, `--close`, described at the bottom of this file. It is **human-gated and
+never run unattended** — do not reach for it while handling an ordinary sweep.
 
 If `$ARGUMENTS` asks for the stronger check (e.g. "verify", "also check for regressions"), add
 `--verify` — it additionally re-runs each entry's probe against the integration ref in a temporary
@@ -39,5 +42,38 @@ After the script returns:
    already promoted before the error.
 7. On any other non-zero exit: relay stderr verbatim plus a one-line plain-language summary and a
    remediation hint.
+
+## `--close` — the human-ratified close
+
+Rebase, cherry-pick and squash break commit identity, so work that genuinely landed can never be
+proved reachable by ancestry. Those entries surface as `AWAITING_INTEGRATION`, then `UNDETERMINED`
+once they age past the threshold. `--close` is how a human resolves one, and it is the only way an
+entry reaches `closed` without ancestry proving it.
+
+<HARD-GATE>
+Never run this unattended, and never as part of handling a sweep. State back to the user the exact
+entry ID, the exact full 40-character SHA you are about to record as `integrated:`, and the exact
+reason text — then get explicit confirmation of that specific combination. `decide` is not the
+alternative here: `wontfix` and `superseded` both mean the work was not done, which is the opposite
+of what this records.
+</HARD-GATE>
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/bin/pm.py reconcile --close "$ID" \
+  --integrated "$FULL_SHA" --reason "$REASON" --project-dir "$CLAUDE_PROJECT_DIR"
+```
+
+The SHA is the **rewritten** commit — the one that actually landed on the integration branch, not
+the one the worker originally reported. The entry must currently be `delivered`.
+
+Unlike the sweep, this targets one entry, so its exit code describes that entry:
+1. On exit 0: relay the entry ID and the recorded SHA.
+2. On exit 2: `--integrated` is not a full 40-character SHA, is not a commit this repo knows, or is
+   not an ancestor of the integration ref; or `--reason` contains a newline or the ` — ` delimiter.
+   A human asserting closure still cannot record a SHA the repository cannot resolve — relay which
+   of those it was and re-confirm before retrying.
+3. On exit 4 (corrupt entry): relay stderr; do not guess a fix.
+4. On exit 6 (CAS failure): the entry is not `delivered`, or it changed since you read it. Re-read
+   with `/quirk:pm:status` and re-confirm with the user rather than retrying blind.
 
 User input: $ARGUMENTS

@@ -859,14 +859,32 @@ def _safe_int(digits: str) -> int | None:
         return None
 
 
+def _free_text_violation(value: str) -> str | None:
+    """Return why `value` is unsafe as a lifecycle field's one free-text segment, or `None` if
+    it's safe.
+
+    Rejects a newline, a carriage return, or the field delimiter itself — any of these would
+    make the delimiter-split grammar ambiguous when the field is parsed back. Also rejects
+    anything `mask_quoted` blanks — an HTML comment or a fenced code span — reusing that same
+    masking rather than hand-listing the triggering characters: `parse_entries` runs every field
+    value through it before a `--probe`/`--reason` value is ever read back, so a value the mask
+    changes would round-trip as something other than what was written (e.g. `grep:<!-- x -->`
+    is stored as `grep:` padded with spaces).
+    """
+    if _FREE_TEXT_BAD_RE.search(value) is not None:
+        return "a newline, carriage return, or ' — '"
+    if mask_quoted(value) != value:
+        return "an HTML comment or fenced code span (blanked when the ledger is parsed back)"
+    return None
+
+
 def is_valid_free_text(value: str) -> bool:
     """Return whether `value` is safe as a lifecycle field's one free-text segment.
 
-    Rejects a newline, a carriage return, or the field delimiter itself — any of these
-    would make the delimiter-split grammar ambiguous when the field is parsed back. Shared by
-    `start`/`park`/`decide` to validate `--reason`/`--parked` before writing anything.
+    Shared by `start`/`park`/`decide` to validate `--probe`/`--reason`/`--parked` before
+    writing anything.
     """
-    return _FREE_TEXT_BAD_RE.search(value) is None
+    return _free_text_violation(value) is None
 
 
 @dataclass(frozen=True)
@@ -1605,8 +1623,10 @@ def _unplaced_counts(world: LedgerWorld, ranks: dict[str, int]) -> tuple[int, in
 def _blocking_culprits(world: LedgerWorld) -> list[tuple[str, int]]:
     """Return `(blocker_id, how_many_open_entries_it_blocks)`, most-blocking first.
 
-    Used to explain an empty ready-set: only named, resolvable IDs are counted, since those are
-    the ones a human can act on to unblock the most work.
+    Used to explain an empty ready-set: only named, resolvable IDs are counted — an id-shaped
+    token that names no known entry is `DANGLING`, not a blocker a human can act on — and each
+    blocked entry counts once per blocker regardless of how many times that blocker's id is
+    repeated in its own `Blocked by` field (`BLOCKED_BY_DUPLICATE` already reports that repeat).
     """
     counts: dict[str, int] = {}
     for _key, (entry, _spec) in world.entries.items():
@@ -1615,9 +1635,12 @@ def _blocking_culprits(world: LedgerWorld) -> list[tuple[str, int]]:
         blocked = _blocked_by(entry)
         if blocked.truncated:
             continue
-        for token in blocked.tokens:
-            if token.kind == "id" and not satisfied(world, token.id):
-                counts[token.id] = counts.get(token.id, 0) + 1
+        culprits = {
+            token.id for token in blocked.tokens
+            if token.kind == "id" and token.id in world.entries and not satisfied(world, token.id)
+        }
+        for blocker_id in culprits:
+            counts[blocker_id] = counts.get(blocker_id, 0) + 1
     return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
 
 
@@ -1662,52 +1685,69 @@ def _blocked_by_edges(world: LedgerWorld) -> dict[str, list[str]]:
 
 
 def _find_cycles(edges: dict[str, list[str]]) -> list[tuple[str, ...]]:
-    """Return every cycle in `edges`, each reported once regardless of which member it is
-    discovered from (deduped by rotation).
+    """Return cycles in `edges` sufficient to name every node that participates in at least one,
+    each reported once regardless of which member it is discovered from (deduped by rotation).
 
     Iterative DFS with an explicit frame stack and a recursion-stack color set — never recursive
     — so a large or adversarially deep graph terminates in bounded, linear time instead of
     risking a stack overflow or an accidentally-quadratic reimplementation.
+
+    A single DFS pass retires (colors 2) a node once every edge leaving it has been explored, and
+    never revisits it — the standard shape for detecting *that* a graph has a cycle, but not for
+    naming every node that sits on one: two cycles sharing a node can have the pass finish that
+    node while walking the first, so the edge into it from the second is seen already-retired and
+    silently dropped, leaving the second cycle's other members in no reported path at all. A node
+    restarted as its own fresh root stays on the stack for the whole of its own traversal, so
+    retrying from any node the first pass left uncovered is guaranteed to surface a cycle through
+    it if one exists; `covered` tracks that and the restarts stop once it can't grow.
     """
-    color: dict[str, int] = {}  # 0 unvisited (default), 1 on stack, 2 done
     found: list[tuple[str, ...]] = []
     seen_rotations: set[tuple[str, ...]] = set()
+    covered: set[str] = set()
 
     def normalize(cycle: list[str]) -> tuple[str, ...]:
         start = min(range(len(cycle)), key=lambda i: cycle[i])
         return tuple(cycle[start:] + cycle[:start])
 
-    for root in sorted(edges):
-        if color.get(root, 0) != 0:
-            continue
-        path = [root]
-        color[root] = 1
-        # node -> its index in `path` while on the stack, so a back edge locates the cycle's
-        # start in O(1) instead of a path.index() scan that is O(path length) per back edge
-        pos_in_path: dict[str, int] = {root: 0}
-        frames = [(root, 0)]
-        while frames:
-            node, idx = frames[-1]
-            neighbors = edges.get(node, [])
-            if idx < len(neighbors):
-                frames[-1] = (node, idx + 1)
-                nxt = neighbors[idx]
-                state = color.get(nxt, 0)
-                if state == 1:
-                    cyc = normalize(path[pos_in_path[nxt]:])
-                    if cyc not in seen_rotations:
-                        seen_rotations.add(cyc)
-                        found.append(cyc)
-                elif state == 0:
-                    color[nxt] = 1
-                    path.append(nxt)
-                    pos_in_path[nxt] = len(path) - 1
-                    frames.append((nxt, 0))
-            else:
-                color[node] = 2
-                path.pop()
-                del pos_in_path[node]
-                frames.pop()
+    def run(roots: Iterable[str]) -> None:
+        color: dict[str, int] = {}  # 0 unvisited (default), 1 on stack, 2 done
+        for root in roots:
+            if color.get(root, 0) != 0:
+                continue
+            path = [root]
+            color[root] = 1
+            # node -> its index in `path` while on the stack, so a back edge locates the cycle's
+            # start in O(1) instead of a path.index() scan that is O(path length) per back edge
+            pos_in_path: dict[str, int] = {root: 0}
+            frames = [(root, 0)]
+            while frames:
+                node, idx = frames[-1]
+                neighbors = edges.get(node, [])
+                if idx < len(neighbors):
+                    frames[-1] = (node, idx + 1)
+                    nxt = neighbors[idx]
+                    state = color.get(nxt, 0)
+                    if state == 1:
+                        cyc = normalize(path[pos_in_path[nxt]:])
+                        covered.update(cyc)
+                        if cyc not in seen_rotations:
+                            seen_rotations.add(cyc)
+                            found.append(cyc)
+                    elif state == 0:
+                        color[nxt] = 1
+                        path.append(nxt)
+                        pos_in_path[nxt] = len(path) - 1
+                        frames.append((nxt, 0))
+                else:
+                    color[node] = 2
+                    path.pop()
+                    del pos_in_path[node]
+                    frames.pop()
+
+    run(sorted(edges))
+    for node in sorted(set(edges) - covered):
+        if node not in covered:
+            run([node])
     return found
 
 
@@ -1924,6 +1964,16 @@ def _test_exit_map() -> tuple[dict[int, str] | None, str | None]:
     return DEFAULT_TEST_EXIT_MAP, None
 
 
+def _kill_probe_group(proc: subprocess.Popen) -> None:
+    """Best-effort SIGKILL to `proc`'s own process group — a group that's already gone (the
+    process exited normally, or an earlier call already killed it) is not an error.
+    """
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
 def _run_test_probe(spec: ProbeSpec, root: Path, timeout: float) -> ProbeResult:
     exit_map, error = _test_exit_map()
     if exit_map is None:
@@ -1940,36 +1990,33 @@ def _run_test_probe(spec: ProbeSpec, root: Path, timeout: float) -> ProbeResult:
     try:
         # start_new_session: the runner becomes its own process group leader (pgid == its pid),
         # separate from pm.py's — so a timeout can signal that whole group without touching the
-        # group pm.py itself runs in.
+        # group pm.py itself runs in. stdout/stderr are never read (only the exit code is), so
+        # DEVNULL discards them at the OS level rather than having communicate() accumulate an
+        # unbounded amount of a noisy runner's output in memory.
         proc = subprocess.Popen(
-            command, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            command, cwd=root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
     except OSError as exc:
         return ProbeResult(outcome="error", detail=f"could not run test runner: {exc}")
 
     try:
-        proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        # a runner that spawns its own children (a server, a worker pool, ...) leaves them in
-        # the same group by default, so the group — not just the runner's own pid — is what
-        # must be signaled for the timeout to actually bound the work
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        try:
-            proc.communicate(timeout=PROBE_KILL_DRAIN_TIMEOUT)
+            proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            # a descendant the kill never reached (it left the group before the kill, e.g. its
-            # own setsid) can still hold the pipe open, so close it directly rather than waiting
-            # on a read that has nothing left to make it return
-            if proc.stdout is not None:
-                proc.stdout.close()
-            if proc.stderr is not None:
-                proc.stderr.close()
-            proc.wait()
-        return ProbeResult(outcome="error", detail=f"probe exceeded {timeout}s timeout")
+            # a runner that spawns its own children (a server, a worker pool, ...) leaves them in
+            # the same group by default, so the group — not just the runner's own pid — is what
+            # must be signaled for the timeout to actually bound the work
+            _kill_probe_group(proc)
+            try:
+                proc.communicate(timeout=PROBE_KILL_DRAIN_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                proc.wait()
+            return ProbeResult(outcome="error", detail=f"probe exceeded {timeout}s timeout")
+    finally:
+        # however the probe was abandoned — timeout (already handled above), KeyboardInterrupt,
+        # or any other exception — the runner's isolated group must not outlive this call
+        _kill_probe_group(proc)
 
     outcome = exit_map.get(proc.returncode, "error")
     detail = None if outcome != "error" else f"unmapped exit code {proc.returncode}"
@@ -2026,7 +2073,10 @@ def _run_grep_probe(spec: ProbeSpec, root: Path, timeout: float) -> ProbeResult:
                 else:
                     with open(candidate, "rb"):
                         pass
-            except PermissionError:
+            except OSError:
+                # validation (exists/is_dir/is_file above) and this open are separate stat calls,
+                # so a path that disappears (or a directory replaced by something scandir can't
+                # read) in between must resolve here rather than raise past run_probe's contract
                 return ProbeResult(outcome="error", detail=f"path not readable: {raw}")
             bases.append(candidate.resolve())
     else:
@@ -2195,7 +2245,7 @@ def _prepare_transition(
     *,
     validate_args: Callable[[], _Refusal | None],
     allowed_states: frozenset[str],
-    check_siblings: bool = False,
+    sibling_fields: tuple[str, ...] = (),
 ) -> _Prepared | _Refusal:
     """Run every check that precedes the CAS write, in the exit-code table's precedence order:
     not-found (3) -> bad argument (2) -> schema mismatch (8) -> corrupt entry (4) -> CAS (6).
@@ -2208,13 +2258,13 @@ def _prepare_transition(
     ID, missing title), which applies to any file, then a PROPOSAL guard (6) ahead of the `Status`
     parse — proposals.md has its own `Status` vocabulary, so parsing it as a PM lifecycle field
     would report a false "malformed" finding instead of the true "not part of the lifecycle" one —
-    then, when `check_siblings` is set, `_sibling_field_refusal`'s malformed/duplicated `Probe`/
-    `Verify` check. All of it precedes the state comparison (6): `park`/`decide`/
-    `reconcile --close` are about to declare the entry terminal, so a corrupt entry must be
-    reported as corrupt even when its state also happens to mismatch — a fixture where only one
-    condition holds can't tell that precedence apart from an unrelated exit code. `start`/`finish`
-    leave `check_siblings` `False`: `start` always supplies a fresh `Probe`, so refusing on an old
-    corrupt one would strand an entry nothing could repair.
+    then, when `sibling_fields` is non-empty, `_sibling_field_refusal`'s malformed/duplicated
+    check over those fields. All of it precedes the state comparison (6): `park`/`decide`/
+    `reconcile --close` are about to declare the entry terminal, and `finish` is about to read and
+    execute its `Probe`, so a corrupt entry must be reported as corrupt even when its state also
+    happens to mismatch — a fixture where only one condition holds can't tell that precedence
+    apart from an unrelated exit code. `start` leaves `sibling_fields` empty: it always supplies a
+    fresh `Probe`, so refusing on an old corrupt one would strand an entry nothing could repair.
     """
     resolved = _resolve_ledger(project, id_str)
     if isinstance(resolved, _Refusal):
@@ -2264,8 +2314,8 @@ def _prepare_transition(
 
     prepared = _Prepared(spec=spec, entry_id=entry_id, entry=entry, status=status)
 
-    if check_siblings:
-        sibling_refusal = _sibling_field_refusal(prepared, mask_quoted(text))
+    if sibling_fields:
+        sibling_refusal = _sibling_field_refusal(prepared, mask_quoted(text), sibling_fields)
         if sibling_refusal is not None:
             return sibling_refusal
 
@@ -2285,36 +2335,42 @@ def _expectation(prepared: _Prepared) -> tuple[int, int, str, str | None]:
     )
 
 
-def _sibling_field_refusal(prepared: _Prepared, masked_text: str) -> _Refusal | None:
-    """Refuse (`EXIT_CORRUPT_ENTRY`) if `prepared.entry`'s `Probe` or `Verify` field is malformed
-    or duplicated.
+def _sibling_field_refusal(
+    prepared: _Prepared, masked_text: str, labels: tuple[str, ...]
+) -> _Refusal | None:
+    """Refuse (`EXIT_CORRUPT_ENTRY`) if any of `prepared.entry`'s fields named in `labels` —
+    `Probe` and/or `Verify` — is malformed or duplicated.
 
-    `park`/`decide`/`reconcile --close` transition `Status` without ever reading `Probe`/`Verify`
-    themselves, but leaving a corrupt sibling field in place on an entry they're about to declare
-    terminal — with no diagnostic at the moment a human is deciding its fate — is the same
-    corruption a malformed `Status` already refuses on in `_prepare_transition`. Duplication is
-    the same class of corruption as malformed, just invisible to it: `artifact_lib`'s parse
-    dict-collapses a repeated label, so a second `Probe`/`Verify` line parses cleanly as whichever
-    one wins the collapse and would otherwise be left in place by a transition that only ever
-    reads and rewrites `Status`. `start` is exempt from both: it always supplies a fresh `Probe`,
-    so refusing on an old corrupt one would strand an entry nothing could repair.
+    `park`/`decide`/`reconcile --close`/batch `reconcile` transition `Status` without ever
+    reading `Verify` themselves (and without reading `Probe` either, apart from `finish`), but
+    leaving a corrupt sibling field in place on an entry they're about to declare terminal — with
+    no diagnostic at the moment its fate is decided — is the same corruption a malformed `Status`
+    already refuses on in `_prepare_transition`. Duplication is the same class of corruption as
+    malformed, just invisible to it: `artifact_lib`'s parse dict-collapses a repeated label, so a
+    second `Probe`/`Verify` line parses cleanly as whichever one wins the collapse and would
+    otherwise be left in place by a transition that doesn't rewrite that field. `start` is exempt
+    from both: it always supplies a fresh `Probe`, so refusing on an old corrupt one would strand
+    an entry nothing could repair. `finish` checks only `Probe`, since it neither reads nor writes
+    `Verify`.
     """
-    for label in duplicate_field_labels(masked_text, prepared.entry, ("Probe", "Verify")):
+    for label in duplicate_field_labels(masked_text, prepared.entry, labels):
         return _refuse(
             EXIT_CORRUPT_ENTRY,
             f"{prepared.spec.header}-{prepared.entry_id}: duplicated {label} field line, refusing",
         )
-    probe = _entry_probe(prepared.entry)
-    if isinstance(probe, MalformedField):
-        return _refuse(
-            EXIT_CORRUPT_ENTRY, f"{prepared.spec.header}-{prepared.entry_id}: malformed Probe field ({probe.reason})"
-        )
-    verify = _entry_verify(prepared.entry)
-    if isinstance(verify, MalformedField):
-        return _refuse(
-            EXIT_CORRUPT_ENTRY,
-            f"{prepared.spec.header}-{prepared.entry_id}: malformed Verify field ({verify.reason})",
-        )
+    if "Probe" in labels:
+        probe = _entry_probe(prepared.entry)
+        if isinstance(probe, MalformedField):
+            return _refuse(
+                EXIT_CORRUPT_ENTRY, f"{prepared.spec.header}-{prepared.entry_id}: malformed Probe field ({probe.reason})"
+            )
+    if "Verify" in labels:
+        verify = _entry_verify(prepared.entry)
+        if isinstance(verify, MalformedField):
+            return _refuse(
+                EXIT_CORRUPT_ENTRY,
+                f"{prepared.spec.header}-{prepared.entry_id}: malformed Verify field ({verify.reason})",
+            )
     return None
 
 
@@ -2328,6 +2384,7 @@ def _commit_transition(
     *,
     extra: Callable[[Entry, StatusField], str | None] | None = None,
     new_verify: VerifyField | None = None,
+    sibling_fields: tuple[str, ...] = (),
 ) -> _Refusal | None:
     """Re-read, re-locate, and compare `expected` under the held lock; splice and write on match.
 
@@ -2344,6 +2401,12 @@ def _commit_transition(
     `_prepare_transition` applies before the lock is even taken: that earlier check is a
     preflight, not a substitute for this one — a ledger `migrate` upgrades in the window between
     the two must not be written by a transition that validated a different version of the file.
+    `sibling_fields`, when non-empty, re-runs `_sibling_field_refusal` over those fields against
+    this same locked re-read for the identical reason: `park`/`decide`/`reconcile --close`/batch
+    `reconcile` only ever splice `Status` (plus, for batch `reconcile --verify`, `Verify`), so
+    nothing else here would ever notice a `Probe`/`Verify` a concurrent hand-edit corrupted
+    between the preflight and this write — the CAS compare above only covers whichever field
+    `expected`'s fourth element happens to track.
     """
     path = project / spec.filename
     lock_dir = ensure_lock_dir(project)
@@ -2370,6 +2433,13 @@ def _commit_transition(
             return _refuse(
                 EXIT_CORRUPT_ENTRY, f"{spec.header}-{entry_id}: malformed Status field ({status.reason})"
             )
+        if sibling_fields:
+            sibling_refusal = _sibling_field_refusal(
+                _Prepared(spec=spec, entry_id=entry_id, entry=entry, status=status),
+                mask_quoted(text), sibling_fields,
+            )
+            if sibling_refusal is not None:
+                return sibling_refusal
         # attempt, not just state, closes the stale-transition race: a status-only compare
         # can't tell this in_progress from a different, later attempt at the same state
         extra_value = entry.fields.get("Probe") if extra is None else extra(entry, status)
@@ -2757,8 +2827,9 @@ def cmd_start(args: argparse.Namespace) -> int:
             return _refuse(
                 EXIT_BAD_ARGUMENT, "dispatch is not available yet (Phase 2 is --here only); drop --repo"
             )
-        if not is_valid_free_text(args.probe):
-            return _refuse(EXIT_BAD_ARGUMENT, "--probe contains a newline, carriage return, or ' — '")
+        violation = _free_text_violation(args.probe)
+        if violation is not None:
+            return _refuse(EXIT_BAD_ARGUMENT, f"--probe contains {violation}")
         parsed = parse_probe_spec(args.probe)
         if isinstance(parsed, ProbeArgError):
             return _refuse(EXIT_BAD_ARGUMENT, parsed.detail)
@@ -2822,6 +2893,7 @@ def cmd_finish(args: argparse.Namespace) -> int:
 
     prepared = _prepare_transition(
         project, args.id, validate_args=lambda: None, allowed_states=frozenset({"in_progress"}),
+        sibling_fields=("Probe",),
     )
     if isinstance(prepared, _Refusal):
         print(f"[quirk:pm] {prepared.message}", file=sys.stderr)
@@ -2980,8 +3052,9 @@ def _validate_reason(reason: str | None) -> _Refusal | None:
         return _refuse(EXIT_BAD_ARGUMENT, "--reason is required")
     if not reason.strip():
         return _refuse(EXIT_BAD_ARGUMENT, "--reason must not be empty or whitespace-only")
-    if not is_valid_free_text(reason):
-        return _refuse(EXIT_BAD_ARGUMENT, "--reason contains a newline, carriage return, or ' — '")
+    violation = _free_text_violation(reason)
+    if violation is not None:
+        return _refuse(EXIT_BAD_ARGUMENT, f"--reason contains {violation}")
     return None
 
 
@@ -2996,7 +3069,7 @@ def cmd_park(args: argparse.Namespace) -> int:
 
     prepared = _prepare_transition(
         project, args.id, validate_args=validate_args, allowed_states=frozenset({"in_progress"}),
-        check_siblings=True,
+        sibling_fields=("Probe", "Verify"),
     )
     if isinstance(prepared, _Refusal):
         print(f"[quirk:pm] {prepared.message}", file=sys.stderr)
@@ -3007,7 +3080,10 @@ def cmd_park(args: argparse.Namespace) -> int:
         state="open", date=_today(),
         attempt=prepared.status.attempt, refused=prepared.status.refused, parked=args.reason,
     )
-    refusal = _commit_transition(project, prepared.spec, prepared.entry_id, expected, new_status, None)
+    refusal = _commit_transition(
+        project, prepared.spec, prepared.entry_id, expected, new_status, None,
+        sibling_fields=("Probe", "Verify"),
+    )
     if refusal is not None:
         print(f"[quirk:pm] {refusal.message}", file=sys.stderr)
         return refusal.code
@@ -3038,7 +3114,7 @@ def cmd_decide(args: argparse.Namespace) -> int:
     prepared = _prepare_transition(
         project, args.id, validate_args=validate_args,
         allowed_states=frozenset({"open", "in_progress", "delivered"}),
-        check_siblings=True,
+        sibling_fields=("Probe", "Verify"),
     )
     if isinstance(prepared, _Refusal):
         print(f"[quirk:pm] {prepared.message}", file=sys.stderr)
@@ -3057,7 +3133,10 @@ def cmd_decide(args: argparse.Namespace) -> int:
             by=args.by, reason=args.reason,
         )
 
-    refusal = _commit_transition(project, prepared.spec, prepared.entry_id, expected, new_status, None)
+    refusal = _commit_transition(
+        project, prepared.spec, prepared.entry_id, expected, new_status, None,
+        sibling_fields=("Probe", "Verify"),
+    )
     if refusal is not None:
         print(f"[quirk:pm] {refusal.message}", file=sys.stderr)
         return refusal.code
@@ -3135,16 +3214,20 @@ def _reconcile_read_pass(project: Path) -> tuple[list[_ReconcileEval], list[str]
 def _reconcile_write_back(project: Path, ev: _ReconcileEval, verify: bool) -> tuple[str, str | None]:
     """Attempt the CAS-guarded write-back for one promotable entry.
 
-    Returns `(result, verify_outcome)`: `result` is `"closed"`, `"lock timeout"`, or `"skipped"`
-    (a CAS mismatch — the entry moved since the read pass, silently left for the next run per
-    tech.md). `--verify`'s probe re-run happens here, still lock-free, before the lock this
-    function's own write takes.
+    Returns `(result, verify_outcome)`: `result` is `"closed"`, `"lock timeout"`, `"corrupt"` (a
+    malformed or duplicated `Probe`/`Verify` field — the entry is left `delivered` for the next
+    run to re-evaluate once the field is repaired), or `"skipped"` (a CAS mismatch — the entry
+    moved since the read pass, silently left for the next run per tech.md). `--verify`'s probe
+    re-run happens here, still lock-free, before the lock this function's own write takes.
 
-    Ancestry alone is what makes an entry `closed` — an absent, malformed, or unreconstructable
-    `Probe` field never blocks that promotion. But when `--verify` was requested, skipping the
-    re-run silently would leave no `Verify` field at all, which reads as "never verified" — a
-    different, false claim from "verification was attempted and couldn't run." So an unusable
-    probe still records a `Verify` field, just with `probe: error` instead of a real outcome.
+    Ancestry alone is what makes an entry `closed` — an absent or unreconstructable `Probe` field
+    never blocks that promotion. A genuinely malformed or duplicated one does: `park`/`decide`/
+    `reconcile --close` all refuse to make an entry terminal over a corrupt sibling field, and
+    silently promoting straight past that same corruption here would be the one lifecycle
+    transition that doesn't. But when `--verify` was requested, skipping the re-run silently
+    would leave no `Verify` field at all, which reads as "never verified" — a different, false
+    claim from "verification was attempted and couldn't run." So an unusable probe still records
+    a `Verify` field, just with `probe: error` instead of a real outcome.
     """
     verify_field = None
     if verify:
@@ -3162,11 +3245,14 @@ def _reconcile_write_back(project: Path, ev: _ReconcileEval, verify: bool) -> tu
     refusal = _commit_transition(
         project, ev.spec, ev.entry_id, expected, new_status, None,
         extra=lambda entry, status: status.commit, new_verify=verify_field,
+        sibling_fields=("Probe", "Verify"),
     )
     if refusal is None:
         return "closed", (verify_field.probe if verify_field is not None else None)
     if refusal.code == EXIT_LOCK_TIMEOUT:
         return "lock timeout", None
+    if refusal.code == EXIT_CORRUPT_ENTRY:
+        return "corrupt", None
     return "skipped", None
 
 
@@ -3219,7 +3305,7 @@ def _cmd_reconcile_close(args: argparse.Namespace, project: Path) -> int:
 
     prepared = _prepare_transition(
         project, args.close, validate_args=validate_args, allowed_states=frozenset({"delivered"}),
-        check_siblings=True,
+        sibling_fields=("Probe", "Verify"),
     )
     if isinstance(prepared, _Refusal):
         print(f"[quirk:pm] {prepared.message}", file=sys.stderr)
@@ -3231,7 +3317,10 @@ def _cmd_reconcile_close(args: argparse.Namespace, project: Path) -> int:
         attempt=prepared.status.attempt, refused=prepared.status.refused,
         integrated=args.integrated, reason=args.reason,
     )
-    refusal = _commit_transition(project, prepared.spec, prepared.entry_id, expected, new_status, None)
+    refusal = _commit_transition(
+        project, prepared.spec, prepared.entry_id, expected, new_status, None,
+        sibling_fields=("Probe", "Verify"),
+    )
     if refusal is not None:
         print(f"[quirk:pm] {refusal.message}", file=sys.stderr)
         return refusal.code
@@ -3311,6 +3400,9 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
             lock_timeout_seen = True
             skipped += 1
             print(f"[quirk:pm] {label}: skipped (lock timeout, retry next run)")
+        elif result == "corrupt":
+            skipped += 1
+            print(f"[quirk:pm] {label}: skipped (malformed or duplicated Probe/Verify field, repair and re-run)")
         else:
             skipped += 1
             print(f"[quirk:pm] {label}: skipped (entry changed since read pass)")

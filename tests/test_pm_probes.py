@@ -234,6 +234,92 @@ def test_test_probe_timeout_bounds_the_drain_when_a_descendant_escapes_the_proce
             pass
 
 
+def test_test_probe_discards_output_at_the_os_level_not_via_pipes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only the exit code is ever consulted, so capturing stdout/stderr via PIPE would have
+    `communicate()` accumulate a noisy runner's entire output in memory even though nothing reads
+    it. DEVNULL discards it at the OS level, before it ever reaches pm.py."""
+    captured: dict[str, object] = {}
+    real_popen = pm.subprocess.Popen
+
+    def spying_popen(*args, **kwargs):
+        captured["stdout"] = kwargs.get("stdout")
+        captured["stderr"] = kwargs.get("stderr")
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr(pm.subprocess, "Popen", spying_popen)
+    write(tmp_path, "test_x.py", "def test_ok():\n    assert True\n")
+    spec = pm.parse_probe_spec("test:test_x.py::test_ok")
+
+    result = pm.run_probe(spec, tmp_path, timeout=30)
+
+    assert result.outcome == "pass"
+    assert captured["stdout"] == pm.subprocess.DEVNULL
+    assert captured["stderr"] == pm.subprocess.DEVNULL
+
+
+def test_test_probe_group_is_killed_when_communicate_is_abandoned_by_something_other_than_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The round-3 fix tears down the process group only on the `TimeoutExpired` path. A
+    `KeyboardInterrupt` (or any other exception) raised while waiting on the probe must not leave
+    its isolated group running — the same leak the timeout fix closed, on the path it didn't
+    cover."""
+    pid_file = tmp_path / "child.pid"
+    runner = tmp_path / "spawning_runner.sh"
+    runner.write_text(
+        "#!/bin/sh\n"
+        "sleep 30 &\n"
+        f"echo $! > {pid_file}\n"
+        "sleep 30\n"
+    )
+    runner.chmod(0o755)
+    monkeypatch.setenv("QUIRK_PM_TEST_RUNNER", str(runner))
+    monkeypatch.setenv("QUIRK_PM_TEST_EXIT_MAP", "0:pass,1:fail")
+
+    real_popen = pm.subprocess.Popen
+
+    def interrupting_popen(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        real_communicate = proc.communicate
+
+        def raising_communicate(*a, **kw):
+            proc.communicate = real_communicate
+            # give the runner a chance to actually background its child and record the pid
+            # before the group gets torn down out from under it
+            deadline = time.monotonic() + 5
+            while not pid_file.exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            raise KeyboardInterrupt
+
+        proc.communicate = raising_communicate
+        return proc
+
+    monkeypatch.setattr(pm.subprocess, "Popen", interrupting_popen)
+
+    spec = pm.parse_probe_spec("test:irrelevant")
+    with pytest.raises(KeyboardInterrupt):
+        pm.run_probe(spec, tmp_path, timeout=30)
+
+    deadline = time.monotonic() + 5
+    while not pid_file.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert pid_file.exists(), "runner never recorded its background child's pid"
+    child_pid = int(pid_file.read_text().strip())
+
+    child_alive = True
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            child_alive = False
+            break
+        time.sleep(0.05)
+    assert not child_alive, f"child pid {child_pid} outlived the abandoned probe"
+
+
 # --- regression row 9: only a genuinely failing test is an acceptable baseline ----------------
 
 
@@ -437,6 +523,29 @@ def test_grep_explicit_path_rejects_a_fifo_without_blocking(tmp_path: Path) -> N
 
     assert result.outcome == "error"
     assert "fifo" in result.detail
+
+
+def test_grep_explicit_file_path_disappearing_before_open_becomes_a_probe_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Validation (`exists`/`is_file`) and the open that follows it are separate stat calls —
+    a path removed in the window between them must resolve to a `ProbeResult`, not escape as an
+    uncaught `FileNotFoundError` (a subclass of `OSError`, not of `PermissionError`)."""
+    target = write(tmp_path, "f.txt", "TODO here\n")
+    real_open = open
+
+    def racing_open(file, *args, **kwargs):
+        if Path(file) == target:
+            target.unlink()
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", racing_open)
+    spec = pm.parse_probe_spec("grep:TODO -- f.txt")
+
+    result = pm.run_probe(spec, tmp_path, timeout=5)
+
+    assert result.outcome == "error"
+    assert "f.txt" in result.detail
 
 
 def test_grep_no_paths_defaults_to_worktree_root(tmp_path: Path) -> None:

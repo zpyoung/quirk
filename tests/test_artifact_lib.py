@@ -232,6 +232,36 @@ def test_hash_file_is_deterministic(tmp_path) -> None:
     assert artifact_lib.hash_file(target) == artifact_lib.hash_file(target)
 
 
+def test_hash_file_reads_in_bounded_chunks_not_the_whole_file_at_once(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content = b"x" * (3 * artifact_lib._HASH_CHUNK_BYTES + 17)
+    target = tmp_path / "big.bin"
+    target.write_bytes(content)
+
+    sizes: list[int] = []
+    real_fdopen = os.fdopen
+
+    def tracking_fdopen(fd, *args, **kwargs):
+        f = real_fdopen(fd, *args, **kwargs)
+        real_read = f.read
+
+        def tracking_read(size=-1):
+            sizes.append(size)
+            return real_read(size)
+
+        f.read = tracking_read
+        return f
+
+    monkeypatch.setattr(artifact_lib.os, "fdopen", tracking_fdopen)
+
+    result = artifact_lib.hash_file(target)
+
+    assert result == hashlib.sha256(content).hexdigest()[:8]
+    assert len(sizes) > 1, "the whole file was read in a single call"
+    assert all(size == artifact_lib._HASH_CHUNK_BYTES for size in sizes)
+
+
 def test_hash_file_returns_none_for_missing_path(tmp_path) -> None:
     assert artifact_lib.hash_file(tmp_path / "does-not-exist.txt") is None
 

@@ -372,6 +372,36 @@ def test_ambiguous_entrys_own_id_is_not_ready(pm_project: Path) -> None:
     assert "0 ready" in result.stdout
 
 
+# --- _blocking_culprits: only resolvable blockers, distinct blocked entries --
+
+
+def test_blocking_culprits_excludes_a_dangling_unresolvable_id(pm_project: Path) -> None:
+    """An id-shaped `Blocked by` token naming no known entry is `DANGLING`, not a blocker a human
+    can act on — counting it would inflate the summary with work nothing can actually unblock."""
+    append_bug(pm_project, 1, **{"Blocked by": "DEFER-99"})
+    world = pm._load_ledger_world(pm_project)
+    assert pm._blocking_culprits(world) == []
+
+
+def test_blocking_culprits_counts_a_blocked_entry_once_despite_a_duplicate_token(
+    pm_project: Path,
+) -> None:
+    """`Blocked by: BUG-2, BUG-2` still blocks BUG-1 on BUG-2 exactly once — the repeat is
+    `BLOCKED_BY_DUPLICATE`'s finding to report, not a second count of blocked work here."""
+    append_bug(pm_project, 1, **{"Blocked by": "BUG-2, BUG-2"})
+    append_bug(pm_project, 2)
+    world = pm._load_ledger_world(pm_project)
+    assert pm._blocking_culprits(world) == [("BUG-2", 1)]
+
+
+def test_blocking_culprits_counts_distinct_blocked_entries(pm_project: Path) -> None:
+    append_bug(pm_project, 1, **{"Blocked by": "BUG-3"})
+    append_bug(pm_project, 2, **{"Blocked by": "BUG-3"})
+    append_bug(pm_project, 3)
+    world = pm._load_ledger_world(pm_project)
+    assert pm._blocking_culprits(world) == [("BUG-3", 2)]
+
+
 # --- CYCLE detection ---------------------------------------------------------
 
 
@@ -403,6 +433,21 @@ def test_cycle_detection_deduped_by_rotation(pm_project: Path) -> None:
     world = pm._load_ledger_world(pm_project)
     cycles = pm._find_cycles(pm._blocked_by_edges(world))
     assert len(cycles) == 1
+
+
+def test_cycle_detection_covers_every_entry_in_overlapping_cycles(pm_project: Path) -> None:
+    """Two cycles overlap at BUG-4: BUG-1 -> BUG-2 -> BUG-4 -> BUG-1 and
+    BUG-1 -> BUG-3 -> BUG-4 -> BUG-1. A DFS that retires BUG-4 while walking the first branch
+    before trying the second must still surface BUG-3 in some reported cycle, not drop it because
+    the shared node was already marked done."""
+    append_bug(pm_project, 1, "a", **{"Blocked by": "BUG-2, BUG-3"})
+    append_bug(pm_project, 2, "b", **{"Blocked by": "BUG-4"})
+    append_bug(pm_project, 3, "c", **{"Blocked by": "BUG-4"})
+    append_bug(pm_project, 4, "d", **{"Blocked by": "BUG-1"})
+    world = pm._load_ledger_world(pm_project)
+    cycles = pm._find_cycles(pm._blocked_by_edges(world))
+    covered = {node for cyc in cycles for node in cyc}
+    assert covered == {"BUG-1", "BUG-2", "BUG-3", "BUG-4"}
 
 
 def test_cycle_detection_terminates_on_a_self_loop(pm_project: Path) -> None:
