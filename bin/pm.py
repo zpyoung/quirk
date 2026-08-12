@@ -92,6 +92,10 @@ MAX_USABLE_FILE_BYTES = 1_073_741_824
 
 DEFAULT_LOCK_TIMEOUT = 5.0
 DEFAULT_PROBE_TIMEOUT = 120.0
+# bounds the post-timeout drain: a descendant that left the process group (its own setsid, or a
+# daemon) and still holds the runner's stdout/stderr pipe open keeps communicate() blocked on EOF
+# past the group kill, so this second wait can't be unbounded either
+PROBE_KILL_DRAIN_TIMEOUT = 5.0
 DEFAULT_TEST_RUNNER = "python3 -m pytest"
 DEFAULT_TEST_EXIT_MAP: dict[int, str] = {0: "pass", 1: "fail", 4: "missing", 5: "missing"}
 _PROBE_OUTCOMES = frozenset({"pass", "fail", "missing", "error"})
@@ -622,11 +626,21 @@ def _acquire_ledger_lock(lock_path: Path, deadline: float) -> IO[str] | None:
     Returns the open, locked file object, or `None` on timeout. Closing the returned object is
     what releases the flock, so on timeout the caller owes nothing back for this call — the file
     opened here is already closed before `None` is returned.
+
+    Raises `SymlinkedLedgerError` — the same refusal `atomic_write` raises for a symlinked ledger
+    — when `lock_path` is itself a symlink, so `main()`'s existing handler for that reports it as
+    a deliberate refusal (exit 2) rather than letting the `OSError` `O_NOFOLLOW` raises reach the
+    catch-all and blame pm.py for the user's setup.
     """
     # a lock file's contents are never read or written, only its existence and its flock, so
     # O_NOFOLLOW refuses a symlink planted at this path instead of opening (and O_CREAT|O_RDWR
     # truncating) whatever it points at
-    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    except OSError as exc:
+        if lock_path.is_symlink():
+            raise SymlinkedLedgerError(f"refusing to use a symlinked lock file: {lock_path}") from exc
+        raise
     lock_file = os.fdopen(fd, "r+")
     while True:
         try:
@@ -1413,6 +1427,7 @@ class LedgerWorld:
     parse_errors: list[str]
     malformed_total: int
     ambiguous_ids: frozenset[str]
+    skipped_headers: frozenset[str]
 
 
 def _load_ledger_world(project: Path) -> LedgerWorld:
@@ -1420,6 +1435,7 @@ def _load_ledger_world(project: Path) -> LedgerWorld:
     ambiguous_ids: set[str] = set()
     parse_errors: list[str] = []
     malformed_total = 0
+    skipped_headers: set[str] = set()
     for spec in BACKLOG_FILES:
         path = project / spec.filename
         if not path.exists():
@@ -1428,6 +1444,7 @@ def _load_ledger_world(project: Path) -> LedgerWorld:
         if fp is None:
             if skip_reason is not None:
                 parse_errors.append(f"[quirk:pm] {spec.filename}: {skip_reason}")
+            skipped_headers.add(spec.header)
             continue
         malformed_total += len(fp.malformed)
         for e in fp.entries:
@@ -1437,7 +1454,7 @@ def _load_ledger_world(project: Path) -> LedgerWorld:
             entries[key] = (e, spec)
     return LedgerWorld(
         entries=entries, parse_errors=parse_errors, malformed_total=malformed_total,
-        ambiguous_ids=frozenset(ambiguous_ids),
+        ambiguous_ids=frozenset(ambiguous_ids), skipped_headers=frozenset(skipped_headers),
     )
 
 
@@ -1530,7 +1547,14 @@ def ready(world: LedgerWorld, key: str) -> bool:
     stays O(1) per entry with no graph walk. A truncated `Blocked by` value fails closed: the
     dropped continuation could have named anything, so it blocks rather than being read as
     satisfied by what little survived the parse.
+
+    An id claimed by more than one live entry (`DUPLICATE_ID`) is never ready either, the same
+    way it never satisfies a dependent in `satisfied()` — resolving the ambiguity to whichever
+    heading `_load_ledger_world` happened to keep last would let a still-ambiguous entry be
+    reported ready and recommended by `next`.
     """
+    if key in world.ambiguous_ids:
+        return False
     target = world.entries.get(key)
     if target is None:
         return False
@@ -1619,7 +1643,12 @@ def _blocked_by_doctor_findings(world: LedgerWorld) -> list[tuple[str, str]]:
             elif token.kind == "proposal":
                 findings.append(("BLOCKED_BY_PROPOSAL", f"{key}: references {token.raw}"))
             elif token.id not in world.entries:
-                findings.append(("DANGLING", f"{key}: references unknown {token.id}"))
+                # a ledger `doctor` skipped (oversize, parse error) is could-not-look, not
+                # looked-and-found-nothing — a reference into that ledger's id space must not
+                # assert the id doesn't exist when the truth is the file was never read
+                header, _, _num = token.id.partition("-")
+                if header not in world.skipped_headers:
+                    findings.append(("DANGLING", f"{key}: references unknown {token.id}"))
         for dup_id in blocked.duplicate_ids:
             findings.append(("BLOCKED_BY_DUPLICATE", f"{key}: {dup_id} listed more than once"))
     return findings
@@ -1687,12 +1716,21 @@ def _cycle_doctor_findings(world: LedgerWorld) -> list[tuple[str, str]]:
     return [("CYCLE", " -> ".join((*cyc, cyc[0]))) for cyc in cycles]
 
 
-def _roadmap_doctor_findings(project: Path, known_ids: set[str]) -> list[tuple[str, str]]:
+def _roadmap_doctor_findings(
+    project: Path, known_ids: set[str], skipped_headers: frozenset[str]
+) -> list[tuple[str, str]]:
     roadmap = _read_roadmap(project)
     findings = list(roadmap.findings)
     findings.extend(_preamble_member_findings(roadmap.preamble))
     referenced = {member_id for milestone in roadmap.milestones for member_id in milestone.members}
-    findings.extend(("DANGLING_ROADMAP_REF", member_id) for member_id in sorted(referenced - known_ids))
+    for member_id in sorted(referenced - known_ids):
+        # a ledger `doctor` skipped (oversize, parse error) is could-not-look, not
+        # looked-and-found-nothing — a reference into that ledger's id space must not assert
+        # the id doesn't exist when the truth is the file was never read, the same reasoning
+        # `_blocked_by_doctor_findings` applies to `Blocked by`
+        header, _, _num = member_id.partition("-")
+        if header not in skipped_headers:
+            findings.append(("DANGLING_ROADMAP_REF", member_id))
     return findings
 
 
@@ -1700,7 +1738,7 @@ def _cross_ledger_doctor_findings(project: Path) -> list[tuple[str, str]]:
     world = _load_ledger_world(project)
     findings = _blocked_by_doctor_findings(world)
     findings.extend(_cycle_doctor_findings(world))
-    findings.extend(_roadmap_doctor_findings(project, set(world.entries)))
+    findings.extend(_roadmap_doctor_findings(project, set(world.entries), world.skipped_headers))
     return findings
 
 
@@ -1920,7 +1958,17 @@ def _run_test_probe(spec: ProbeSpec, root: Path, timeout: float) -> ProbeResult:
             os.killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        proc.communicate()
+        try:
+            proc.communicate(timeout=PROBE_KILL_DRAIN_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            # a descendant the kill never reached (it left the group before the kill, e.g. its
+            # own setsid) can still hold the pipe open, so close it directly rather than waiting
+            # on a read that has nothing left to make it return
+            if proc.stdout is not None:
+                proc.stdout.close()
+            if proc.stderr is not None:
+                proc.stderr.close()
+            proc.wait()
         return ProbeResult(outcome="error", detail=f"probe exceeded {timeout}s timeout")
 
     outcome = exit_map.get(proc.returncode, "error")
@@ -2147,6 +2195,7 @@ def _prepare_transition(
     *,
     validate_args: Callable[[], _Refusal | None],
     allowed_states: frozenset[str],
+    check_siblings: bool = False,
 ) -> _Prepared | _Refusal:
     """Run every check that precedes the CAS write, in the exit-code table's precedence order:
     not-found (3) -> bad argument (2) -> schema mismatch (8) -> corrupt entry (4) -> CAS (6).
@@ -2155,10 +2204,17 @@ def _prepare_transition(
     `--repo`) — they run after the not-found check and before the schema/corrupt checks, per
     tech.md's per-command precedence table, so a not-found ID always outranks a bad argument.
 
-    The corrupt-entry (4) step is itself two checks in sequence: heading ambiguity (duplicate ID,
-    missing title), which applies to any file, then a PROPOSAL guard (6) ahead of the `Status`
+    The corrupt-entry (4) step is itself several checks in sequence: heading ambiguity (duplicate
+    ID, missing title), which applies to any file, then a PROPOSAL guard (6) ahead of the `Status`
     parse — proposals.md has its own `Status` vocabulary, so parsing it as a PM lifecycle field
-    would report a false "malformed" finding instead of the true "not part of the lifecycle" one.
+    would report a false "malformed" finding instead of the true "not part of the lifecycle" one —
+    then, when `check_siblings` is set, `_sibling_field_refusal`'s malformed/duplicated `Probe`/
+    `Verify` check. All of it precedes the state comparison (6): `park`/`decide`/
+    `reconcile --close` are about to declare the entry terminal, so a corrupt entry must be
+    reported as corrupt even when its state also happens to mismatch — a fixture where only one
+    condition holds can't tell that precedence apart from an unrelated exit code. `start`/`finish`
+    leave `check_siblings` `False`: `start` always supplies a fresh `Probe`, so refusing on an old
+    corrupt one would strand an entry nothing could repair.
     """
     resolved = _resolve_ledger(project, id_str)
     if isinstance(resolved, _Refusal):
@@ -2206,13 +2262,20 @@ def _prepare_transition(
     except DuplicateFieldError:
         return _refuse(EXIT_CORRUPT_ENTRY, f"{spec.header}-{entry_id}: duplicated field line, refusing")
 
+    prepared = _Prepared(spec=spec, entry_id=entry_id, entry=entry, status=status)
+
+    if check_siblings:
+        sibling_refusal = _sibling_field_refusal(prepared, mask_quoted(text))
+        if sibling_refusal is not None:
+            return sibling_refusal
+
     if status.state not in allowed_states:
         return _refuse(
             EXIT_CAS_FAILURE,
             f"{spec.header}-{entry_id}: expected state in {sorted(allowed_states)}, found {status.state!r}",
         )
 
-    return _Prepared(spec=spec, entry_id=entry_id, entry=entry, status=status)
+    return prepared
 
 
 def _expectation(prepared: _Prepared) -> tuple[int, int, str, str | None]:
@@ -2222,16 +2285,25 @@ def _expectation(prepared: _Prepared) -> tuple[int, int, str, str | None]:
     )
 
 
-def _malformed_sibling_field_refusal(prepared: _Prepared) -> _Refusal | None:
-    """Refuse (`EXIT_CORRUPT_ENTRY`) if `prepared.entry`'s `Probe` or `Verify` field is malformed.
+def _sibling_field_refusal(prepared: _Prepared, masked_text: str) -> _Refusal | None:
+    """Refuse (`EXIT_CORRUPT_ENTRY`) if `prepared.entry`'s `Probe` or `Verify` field is malformed
+    or duplicated.
 
     `park`/`decide`/`reconcile --close` transition `Status` without ever reading `Probe`/`Verify`
-    themselves, but leaving a malformed sibling field in place on an entry they're about to
-    declare terminal — with no diagnostic at the moment a human is deciding its fate — is the
-    same corruption a malformed `Status` already refuses on in `_prepare_transition`. `start` is
-    exempt: it always supplies a fresh `Probe`, so refusing on an old malformed one would strand
-    an entry nothing could repair.
+    themselves, but leaving a corrupt sibling field in place on an entry they're about to declare
+    terminal — with no diagnostic at the moment a human is deciding its fate — is the same
+    corruption a malformed `Status` already refuses on in `_prepare_transition`. Duplication is
+    the same class of corruption as malformed, just invisible to it: `artifact_lib`'s parse
+    dict-collapses a repeated label, so a second `Probe`/`Verify` line parses cleanly as whichever
+    one wins the collapse and would otherwise be left in place by a transition that only ever
+    reads and rewrites `Status`. `start` is exempt from both: it always supplies a fresh `Probe`,
+    so refusing on an old corrupt one would strand an entry nothing could repair.
     """
+    for label in duplicate_field_labels(masked_text, prepared.entry, ("Probe", "Verify")):
+        return _refuse(
+            EXIT_CORRUPT_ENTRY,
+            f"{prepared.spec.header}-{prepared.entry_id}: duplicated {label} field line, refusing",
+        )
     probe = _entry_probe(prepared.entry)
     if isinstance(probe, MalformedField):
         return _refuse(
@@ -2267,6 +2339,11 @@ def _commit_transition(
     instead, since a hand-edit that only changes `commit:` at the same attempt/state is exactly
     the staleness a Probe-only compare would miss. `new_verify`, when given, splices a `Verify`
     field alongside `Status`/`Probe` under the same lock — reconcile's `--verify` write.
+
+    Re-checks the schema version on the text read under the lock, the same guard
+    `_prepare_transition` applies before the lock is even taken: that earlier check is a
+    preflight, not a substitute for this one — a ledger `migrate` upgrades in the window between
+    the two must not be written by a transition that validated a different version of the file.
     """
     path = project / spec.filename
     lock_dir = ensure_lock_dir(project)
@@ -2278,6 +2355,10 @@ def _commit_transition(
     try:
         with path.open(encoding="utf-8", newline="") as f:
             text = f.read()
+        if detect_schema_version(text) != 2:
+            return _refuse(
+                EXIT_SCHEMA_MISMATCH, f"{spec.filename} is not on schema v2. Run /quirk:pm:migrate first."
+            )
         parse = parse_entries(text, spec.header)
         matches = [e for e in parse.entries if e.id == entry_id]
         malformed = [m for m in parse.malformed if m.id == entry_id]
@@ -2356,13 +2437,18 @@ def _repo_missing(repo: Path) -> bool:
     return not repo.exists() or not repo.is_dir()
 
 
-def _resolve_integration_ref(repo: Path) -> str:
-    """The ref `reconcile` measures ancestry against for `repo` this run (logic.md:205-207).
+def _resolve_integration_ref(repo: Path) -> str | None:
+    """The ref `reconcile` measures ancestry against for `repo` this run (logic.md:205-207), or
+    `None` when no such ref can be resolved.
 
     `QUIRK_PM_INTEGRATION_REF` always wins when set. Otherwise the repo's default branch via
     `refs/remotes/origin/HEAD`; repos made by `git init` plus `git remote add` carry no such
-    symref, so this falls back to the currently checked-out branch. Always returns some ref
-    string — whether it actually resolves to a commit is a separate check the caller makes.
+    symref, so this falls back to the currently checked-out branch — but only a real one.
+    `git rev-parse --abbrev-ref HEAD` returns the literal string `"HEAD"` on a detached checkout
+    and would look like a resolved branch name to a caller that only checks whether the result
+    verifies as a commit, since "HEAD" always does; `symbolic-ref` instead fails outright when
+    `HEAD` is detached, which is what lets this report `None` instead of a false ref name a wrong
+    close could be measured against.
     """
     override = os.environ.get("QUIRK_PM_INTEGRATION_REF")
     if override:
@@ -2370,10 +2456,16 @@ def _resolve_integration_ref(repo: Path) -> str:
     proc = _run_git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], repo)
     if proc is not None and proc.returncode == 0 and proc.stdout.strip():
         return proc.stdout.strip()
-    proc = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], repo)
+    proc = _run_git(["symbolic-ref", "-q", "--short", "HEAD"], repo)
     if proc is not None and proc.returncode == 0 and proc.stdout.strip():
         return proc.stdout.strip()
-    return "HEAD"
+    return None
+
+
+_DETACHED_HEAD_DETAIL = (
+    "cannot resolve integration ref: detached HEAD, no origin/HEAD, and "
+    "QUIRK_PM_INTEGRATION_REF is not set"
+)
 
 
 def _stderr_excerpt(proc: subprocess.CompletedProcess) -> str:
@@ -2387,7 +2479,7 @@ class _RepoState:
     memoization tech.md requires ("fetch once per repo, not once per entry").
     """
     fetch_ok: bool
-    integration_ref: str
+    integration_ref: str | None
     integration_ref_ok: bool
 
 
@@ -2399,7 +2491,7 @@ def _repo_state(repo: Path, cache: dict[Path, _RepoState]) -> _RepoState:
     fetch_ok = fetch_proc is not None and fetch_proc.returncode == 0
     integration_ref = _resolve_integration_ref(repo)
     integration_ref_ok = False
-    if fetch_ok:
+    if fetch_ok and integration_ref is not None:
         verify_proc = _run_git(["rev-parse", "--verify", f"{integration_ref}^{{commit}}"], repo)
         integration_ref_ok = verify_proc is not None and verify_proc.returncode == 0
     state = _RepoState(fetch_ok=fetch_ok, integration_ref=integration_ref, integration_ref_ok=integration_ref_ok)
@@ -2430,6 +2522,8 @@ def _evaluate_delivered(repo: Path, sha: str, cache: dict[Path, _RepoState]) -> 
     cat_proc = _run_git(["cat-file", "-e", f"{sha}^{{commit}}"], repo)
     if cat_proc is None or cat_proc.returncode != 0:
         return "cannot_evaluate", "commit not in destination repo"
+    if state.integration_ref is None:
+        return "cannot_evaluate", _DETACHED_HEAD_DETAIL
     if not state.integration_ref_ok:
         return "cannot_evaluate", f"integration ref unresolvable: {state.integration_ref}"
     anc_proc = _run_git(["merge-base", "--is-ancestor", sha, state.integration_ref], repo)
@@ -2466,29 +2560,46 @@ def _verify_probe_outcome(spec: ProbeSpec, result: ProbeResult, baseline_files_m
 
 
 def _rebase_verify_paths(spec: ProbeSpec, repo: Path, tmpdir: Path) -> ProbeSpec | None:
-    """Rewrite `spec`'s absolute `grep:` paths from `repo` onto `tmpdir`.
+    """Rewrite `spec`'s absolute path(s) — `grep:`'s `paths`, `test:`'s nodeid file part — from
+    `repo` onto `tmpdir`.
 
     `run_probe` keeps an absolute path as-is rather than resolving it under `root`, so without
     this a probe recorded with an absolute target would silently re-scan the original checkout
-    instead of the detached `--verify` worktree it's supposed to measure. `None` when a path lies
-    outside `repo` entirely — there is nothing under `tmpdir` for it to correspond to, and the
-    caller reports `error` rather than guessing.
+    instead of the detached `--verify` worktree it's supposed to measure — true of a `test:`
+    nodeid's file part exactly as it is of a `grep:` path. `None` when a path lies outside `repo`
+    entirely — there is nothing under `tmpdir` for it to correspond to, and the caller reports
+    `error` rather than guessing.
     """
-    if spec.verb != "grep" or not spec.paths:
-        return spec
     repo_resolved = repo.resolve()
-    rebased: list[str] = []
-    for raw in spec.paths:
+
+    def rebase_one(raw: str) -> str | None:
         candidate = Path(raw)
         if not candidate.is_absolute():
-            rebased.append(raw)
-            continue
+            return raw
         try:
             rel = candidate.resolve().relative_to(repo_resolved)
         except ValueError:
             return None
-        rebased.append(str(tmpdir / rel))
-    return replace(spec, paths=tuple(rebased))
+        return str(tmpdir / rel)
+
+    if spec.verb == "grep" and spec.paths:
+        rebased: list[str] = []
+        for raw in spec.paths:
+            new_raw = rebase_one(raw)
+            if new_raw is None:
+                return None
+            rebased.append(new_raw)
+        return replace(spec, paths=tuple(rebased))
+
+    if spec.verb == "test" and spec.nodeid:
+        file_part, sep, rest = spec.nodeid.partition("::")
+        new_file_part = rebase_one(file_part)
+        if new_file_part is None:
+            return None
+        new_nodeid = f"{new_file_part}{sep}{rest}"
+        return replace(spec, nodeid=new_nodeid, arg=new_nodeid)
+
+    return spec
 
 
 def _worktree_still_registered(repo: Path, tmpdir: Path) -> bool:
@@ -2885,14 +2996,11 @@ def cmd_park(args: argparse.Namespace) -> int:
 
     prepared = _prepare_transition(
         project, args.id, validate_args=validate_args, allowed_states=frozenset({"in_progress"}),
+        check_siblings=True,
     )
     if isinstance(prepared, _Refusal):
         print(f"[quirk:pm] {prepared.message}", file=sys.stderr)
         return prepared.code
-    sibling_refusal = _malformed_sibling_field_refusal(prepared)
-    if sibling_refusal is not None:
-        print(f"[quirk:pm] {sibling_refusal.message}", file=sys.stderr)
-        return sibling_refusal.code
     expected = _expectation(prepared)
 
     new_status = StatusField(
@@ -2930,14 +3038,11 @@ def cmd_decide(args: argparse.Namespace) -> int:
     prepared = _prepare_transition(
         project, args.id, validate_args=validate_args,
         allowed_states=frozenset({"open", "in_progress", "delivered"}),
+        check_siblings=True,
     )
     if isinstance(prepared, _Refusal):
         print(f"[quirk:pm] {prepared.message}", file=sys.stderr)
         return prepared.code
-    sibling_refusal = _malformed_sibling_field_refusal(prepared)
-    if sibling_refusal is not None:
-        print(f"[quirk:pm] {sibling_refusal.message}", file=sys.stderr)
-        return sibling_refusal.code
     expected = _expectation(prepared)
 
     if args.as_ == "wontfix":
@@ -3099,6 +3204,8 @@ def _cmd_reconcile_close(args: argparse.Namespace, project: Path) -> int:
                 EXIT_BAD_ARGUMENT, f"--integrated {args.integrated} is not a known commit in {repo}"
             )
         integration_ref = _resolve_integration_ref(repo)
+        if integration_ref is None:
+            return _refuse(EXIT_BAD_ARGUMENT, _DETACHED_HEAD_DETAIL)
         ref_proc = _run_git(["rev-parse", "--verify", f"{integration_ref}^{{commit}}"], repo)
         if ref_proc is None or ref_proc.returncode != 0:
             return _refuse(EXIT_BAD_ARGUMENT, f"integration ref unresolvable: {integration_ref}")
@@ -3112,14 +3219,11 @@ def _cmd_reconcile_close(args: argparse.Namespace, project: Path) -> int:
 
     prepared = _prepare_transition(
         project, args.close, validate_args=validate_args, allowed_states=frozenset({"delivered"}),
+        check_siblings=True,
     )
     if isinstance(prepared, _Refusal):
         print(f"[quirk:pm] {prepared.message}", file=sys.stderr)
         return prepared.code
-    sibling_refusal = _malformed_sibling_field_refusal(prepared)
-    if sibling_refusal is not None:
-        print(f"[quirk:pm] {sibling_refusal.message}", file=sys.stderr)
-        return sibling_refusal.code
     expected = _expectation(prepared)
 
     new_status = StatusField(
@@ -3245,8 +3349,12 @@ def cmd_roadmap(args: argparse.Namespace) -> int:
         return EXIT_BAD_ARGUMENT
 
     parse = parse_roadmap(text)
-    known_ids = set(_load_ledger_world(project).entries)
-    findings = validate_roadmap_for_write(parse, known_ids)
+    world = _load_ledger_world(project)
+    # surfaced regardless of outcome below: a skipped ledger makes this validation partial, and
+    # that must be visible whether the write proceeds on it or is refused for an unrelated reason
+    for line in world.parse_errors:
+        print(line)
+    findings = validate_roadmap_for_write(parse, set(world.entries), skipped_headers=world.skipped_headers)
     if findings:
         for code, detail in findings:
             print(f"[quirk:pm] {code}: {detail}", file=sys.stderr)

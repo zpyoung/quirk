@@ -352,6 +352,26 @@ def test_duplicate_blocker_id_fails_closed_for_readiness(pm_project: Path) -> No
     assert "BUG-2" in result.stdout
 
 
+def test_ambiguous_entrys_own_id_is_not_ready(pm_project: Path) -> None:
+    """Round 1 made a duplicate id fail closed for its *dependents* (`satisfied()` returns False
+    for an ambiguous id). The ambiguous entry itself must fail closed the same way — not flow
+    through readiness on whichever heading `_load_ledger_world` happened to keep last — so it
+    can't be reported ready or recommended by `next`/`roadmap --show`.
+
+    The heading that wins the dict-collapse (the second one, parsed last) is open with no
+    blockers here specifically so that, absent the fix, `ready()` would return True for it.
+    """
+    append_bug(pm_project, 2, "first (closed)", Status=STATUS_CLOSED)
+    append_bug(pm_project, 2, "second (open)")
+
+    world = pm._load_ledger_world(pm_project)
+    assert "BUG-2" in world.ambiguous_ids
+    assert pm.ready(world, "BUG-2") is False
+
+    result = run_pm("roadmap", "--show", cwd=pm_project)
+    assert "0 ready" in result.stdout
+
+
 # --- CYCLE detection ---------------------------------------------------------
 
 
@@ -430,7 +450,9 @@ def test_acquire_ledger_lock_refuses_a_symlink_and_leaves_target_untouched(tmp_p
     lock_path = tmp_path / "some.lock"
     lock_path.symlink_to(target)
 
-    with pytest.raises(OSError):
+    # a deliberate, named refusal — not the OSError O_NOFOLLOW raises reaching main()'s exit-1
+    # catch-all, which would blame pm.py for the user's setup
+    with pytest.raises(pm.SymlinkedLedgerError):
         pm._acquire_ledger_lock(lock_path, deadline=time.monotonic() + 1.0)
 
     assert target.read_bytes() == b"do not touch\n"
@@ -450,7 +472,11 @@ def test_roadmap_write_refuses_a_symlinked_lock_path_and_leaves_target_untouched
     proposed.write_text("# ROADMAP\n\n## Milestone: M1\n- BUG-1\n")
     result = run_pm("roadmap", "--write", str(proposed), cwd=pm_project)
 
-    assert result.returncode != 0
+    # exit 2, not the exit-1 catch-all: the ledger case already gets this treatment, and the
+    # lock file has the identical hazard
+    assert result.returncode == pm.EXIT_BAD_ARGUMENT, result.stdout
+    assert "unexpected error" not in result.stderr
+    assert "symlinked lock file" in result.stderr
     assert target.read_bytes() == b"do not touch\n"
     assert (pm_project / "ROADMAP.md").read_text() == before
 
@@ -516,6 +542,47 @@ def test_roadmap_write_refuses_unknown_id_and_writes_nothing(pm_project: Path) -
     proposed.write_text(content)
     result = run_pm("roadmap", "--write", str(proposed), cwd=pm_project)
     assert result.returncode == pm.EXIT_BAD_ARGUMENT
+    assert (pm_project / "ROADMAP.md").read_text() == before
+
+
+def test_roadmap_write_does_not_refuse_on_a_reference_into_a_ledger_it_could_not_read(
+    pm_project: Path,
+) -> None:
+    """A ledger `--write` cannot read is could-not-look, not looked-and-found-nothing —
+    refusing the whole write on that false premise would mean a user with one oversized or
+    corrupt ledger can never write a roadmap at all. The skip is surfaced instead of being
+    silently treated as a clean pass."""
+    deferred = pm_project / "DEFERRED.md"
+    deferred.write_bytes(b"\xff\xfe\x00\x01not utf-8")
+
+    content = "# ROADMAP\n\n## Milestone: M1\n- DEFER-1\n"
+    proposed = pm_project / "proposed.md"
+    proposed.write_text(content)
+
+    result = run_pm("roadmap", "--write", str(proposed), cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_OK, result.stderr
+    assert (pm_project / "ROADMAP.md").read_text() == content
+    assert "DEFERRED.md: parse error, skipping" in result.stdout
+
+
+def test_roadmap_write_still_refuses_an_unknown_id_in_a_readable_ledger_alongside_a_skip(
+    pm_project: Path,
+) -> None:
+    # proves the skip isn't a blanket pass: a genuinely unknown id in a ledger that *was* read
+    # must still refuse the write, even while another ledger is unreadable
+    deferred = pm_project / "DEFERRED.md"
+    deferred.write_bytes(b"\xff\xfe\x00\x01not utf-8")
+    before = (pm_project / "ROADMAP.md").read_text()
+
+    content = "# ROADMAP\n\n## Milestone: M1\n- BUG-999\n"
+    proposed = pm_project / "proposed.md"
+    proposed.write_text(content)
+
+    result = run_pm("roadmap", "--write", str(proposed), cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_BAD_ARGUMENT, result.stdout
+    assert "DANGLING_ROADMAP_REF: BUG-999" in result.stderr
     assert (pm_project / "ROADMAP.md").read_text() == before
 
 

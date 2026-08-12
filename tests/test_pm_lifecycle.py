@@ -672,6 +672,42 @@ def test_park_refuses_on_a_malformed_probe_field(pm_project: Path) -> None:
     assert (pm_project / "BUGS.md").read_bytes() == before
 
 
+def test_park_refuses_exit4_when_malformed_sibling_field_and_state_mismatch_both_hold(
+    pm_project: Path,
+) -> None:
+    """4-before-6: an entry both outside park's allowed states (never started -> open) and
+    carrying a malformed Probe must report corrupt-entry, not CAS failure — a fixture where only
+    one condition holds can't tell an inverted precedence from an unrelated exit code.
+    """
+    append_bug(pm_project, 1, Probe="not a valid probe at all")
+    before = (pm_project / "BUGS.md").read_bytes()
+
+    result = run_pm("park", "BUG-1", "--reason", "x", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_CORRUPT_ENTRY, result.stdout
+    assert (pm_project / "BUGS.md").read_bytes() == before
+
+
+def test_park_refuses_on_a_duplicated_probe_field(pm_project: Path) -> None:
+    # a second Probe line is invisible to entry.fields (last one wins the dict-collapse) and
+    # parses cleanly on its own, so this is a distinct defect from the malformed-field case above
+    append_bug(pm_project, 1)
+    run_pm("start", "BUG-1", "--probe", "none", "--here", cwd=pm_project)
+    bugs = pm_project / "BUGS.md"
+    text = bugs.read_text()
+    marker = "- **Probe**: none"
+    idx = text.index(marker) + len(marker)
+    extra_probe = "\n- **Probe**: grep:TODO — baseline: 1 match — spec#12345678"
+    bugs.write_text(text[:idx] + extra_probe + text[idx:])
+    before = bugs.read_bytes()
+
+    result = run_pm("park", "BUG-1", "--reason", "x", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_CORRUPT_ENTRY, result.stdout
+    assert "duplicated Probe field" in result.stderr
+    assert bugs.read_bytes() == before
+
+
 # --- transition table: decide ------------------------------------------------
 
 
@@ -796,6 +832,49 @@ def test_decide_refuses_on_a_malformed_verify_field(pm_project: Path) -> None:
     assert result.returncode == pm.EXIT_CORRUPT_ENTRY, result.stdout
     assert "malformed Verify field" in result.stderr
     assert (pm_project / "BUGS.md").read_bytes() == before
+
+
+def test_decide_refuses_exit4_when_malformed_sibling_field_and_state_mismatch_both_hold(
+    pm_project: Path,
+) -> None:
+    """4-before-6: an entry both outside decide's allowed states (a terminal state) and carrying
+    a malformed Probe must report corrupt-entry, not CAS failure — a fixture where only one
+    condition holds can't tell an inverted precedence from an unrelated exit code.
+    """
+    append_bug(
+        pm_project, 1,
+        Status="wontfix — 2026-08-05 — reason: already decided",
+        Probe="not a valid probe at all",
+    )
+    before = (pm_project / "BUGS.md").read_bytes()
+
+    result = run_pm("decide", "BUG-1", "--as", "wontfix", "--reason", "again", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_CORRUPT_ENTRY, result.stdout
+    assert (pm_project / "BUGS.md").read_bytes() == before
+
+
+def test_decide_refuses_on_a_duplicated_verify_field(pm_project: Path) -> None:
+    # a second Verify line is invisible to entry.fields (last one wins the dict-collapse) and
+    # parses cleanly on its own, so this is a distinct defect from the malformed-field case above
+    append_bug(
+        pm_project, 1,
+        Status="in_progress — 2026-08-05 — attempt 1",
+        Verify="2026-08-05 — integration_ref: main — probe: pass",
+    )
+    bugs = pm_project / "BUGS.md"
+    text = bugs.read_text()
+    marker = "- **Verify**: 2026-08-05 — integration_ref: main — probe: pass"
+    idx = text.index(marker) + len(marker)
+    extra_verify = "\n- **Verify**: 2026-08-06 — integration_ref: main — probe: fail"
+    bugs.write_text(text[:idx] + extra_verify + text[idx:])
+    before = bugs.read_bytes()
+
+    result = run_pm("decide", "BUG-1", "--as", "wontfix", "--reason", "x", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_CORRUPT_ENTRY, result.stdout
+    assert "duplicated Verify field" in result.stderr
+    assert bugs.read_bytes() == before
 
 
 # --- regression row 1: the stale-finish interleaving ------------------------
@@ -1011,6 +1090,39 @@ def test_v1_ledger_refuses_write_with_exit8(pm_project: Path) -> None:
 
     assert result.returncode == pm.EXIT_SCHEMA_MISMATCH, result.stdout
     assert bugs.read_bytes() == before
+
+
+def test_park_rechecks_schema_version_under_the_lock_and_refuses_on_a_race(
+    pm_project: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_prepare_transition`'s schema check runs before any lock is taken — a preflight, not a
+    substitute for the guarded check `migrate` already gets. A ledger upgraded in the window
+    between that preflight and `_commit_transition`'s own locked read must not be written by a
+    command that validated a different version of the file.
+    """
+    append_bug(pm_project, 1)
+    run_pm("start", "BUG-1", "--probe", "none", "--here", cwd=pm_project)
+    bugs = pm_project / "BUGS.md"
+
+    real_acquire = pm._acquire_ledger_lock
+    bumped = False
+
+    def bumping_acquire(lock_path: Path, deadline: float):
+        nonlocal bumped
+        if not bumped and lock_path.name == "BUGS.md.lock":
+            bugs.write_text(bugs.read_text().replace("schema-version: 2", "schema-version: 3"))
+            bumped = True
+        return real_acquire(lock_path, deadline)
+
+    monkeypatch.setattr(pm, "_acquire_ledger_lock", bumping_acquire)
+
+    rc = pm.main(["park", "BUG-1", "--reason", "x", "--project-dir", str(pm_project)])
+
+    assert rc == pm.EXIT_SCHEMA_MISMATCH
+    text = bugs.read_text()
+    assert pm.detect_schema_version(text) == 3  # the race-injected mutation, untouched by park
+    assert "- **Status**: in_progress" in text
+    assert "parked:" not in text
 
 
 # --- exit-code precedence: one fixture per command's chain -----------------

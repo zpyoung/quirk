@@ -515,6 +515,26 @@ def test_doctor_reports_dangling_blocked_by(initialized_project: Path) -> None:
     assert "BUG-999" in out
 
 
+def test_doctor_suppresses_dangling_for_a_reference_into_a_ledger_it_could_not_read(
+    initialized_project: Path,
+) -> None:
+    """A ledger `doctor` skipped (parse error, oversize) is could-not-look, not
+    looked-and-found-nothing — a `Blocked by` reference into that ledger's id space must not
+    assert the id doesn't exist. A reference into a ledger that *was* read still reports DANGLING
+    normally, so this isn't a blanket suppression."""
+    bugs = initialized_project / "BUGS.md"
+    _bug_with_fields(bugs, 1, "waits on two things", ("Blocked by", "BUG-999, DEFER-1"))
+
+    deferred = initialized_project / "DEFERRED.md"
+    deferred.write_bytes(b"\xff\xfe\x00\x01not utf-8")
+
+    out = run_script("pm.py", "--doctor", cwd=initialized_project).stdout
+
+    assert "DEFERRED.md: parse error, skipping" in out
+    assert "references unknown BUG-999" in out
+    assert "DEFER-1" not in out
+
+
 def test_doctor_reports_blocked_by_proposal(initialized_project: Path) -> None:
     bugs = initialized_project / "BUGS.md"
     _bug_with_fields(bugs, 1, "waits on a proposal", ("Blocked by", "PROPOSAL-1"))
@@ -543,6 +563,25 @@ def test_doctor_reports_dangling_roadmap_ref(initialized_project: Path) -> None:
     out = run_script("pm.py", "--doctor", cwd=initialized_project).stdout
     assert "DANGLING_ROADMAP_REF" in out
     assert "BUG-999" in out
+
+
+def test_doctor_suppresses_dangling_roadmap_ref_for_a_reference_into_a_ledger_it_could_not_read(
+    initialized_project: Path,
+) -> None:
+    """Same class as the `Blocked by` DANGLING suppression: a roadmap reference into a ledger
+    `doctor` couldn't read is could-not-look, not looked-and-found-nothing. A reference into a
+    ledger that *was* read still reports DANGLING_ROADMAP_REF normally."""
+    (initialized_project / "ROADMAP.md").write_text(
+        "# ROADMAP\n\n## Milestone: A\n- BUG-999\n- DEFER-1\n"
+    )
+    deferred = initialized_project / "DEFERRED.md"
+    deferred.write_bytes(b"\xff\xfe\x00\x01not utf-8")
+
+    out = run_script("pm.py", "--doctor", cwd=initialized_project).stdout
+
+    assert "DEFERRED.md: parse error, skipping" in out
+    assert "DANGLING_ROADMAP_REF: BUG-999" in out
+    assert "DEFER-1" not in out
 
 
 def test_doctor_reports_proposal_in_roadmap(initialized_project: Path) -> None:

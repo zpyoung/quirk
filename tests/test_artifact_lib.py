@@ -867,6 +867,24 @@ def test_validate_roadmap_for_write_passes_when_all_ids_known() -> None:
     assert blocking == []
 
 
+def test_validate_roadmap_for_write_withholds_dangling_ref_for_a_skipped_header() -> None:
+    result = artifact_lib.parse_roadmap("## Milestone: A\n- BUG-1\n- DEFER-999\n")
+    blocking = artifact_lib.validate_roadmap_for_write(
+        result, known_ids={"BUG-1"}, skipped_headers={"DEFER"},
+    )
+    assert blocking == []
+
+
+def test_validate_roadmap_for_write_still_flags_dangling_ref_for_a_readable_header() -> None:
+    # a skipped header must not become a blanket pass: an unknown id in a header that *was*
+    # checked still blocks, even while another header is skipped
+    result = artifact_lib.parse_roadmap("## Milestone: A\n- BUG-999\n- DEFER-1\n")
+    blocking = artifact_lib.validate_roadmap_for_write(
+        result, known_ids={"DEFER-1"}, skipped_headers={"DEFER"},
+    )
+    assert blocking == [("DANGLING_ROADMAP_REF", "BUG-999")]
+
+
 def test_member_line_allows_trailing_whitespace() -> None:
     text = "## Milestone: A\n- BUG-1  \n"
     result = artifact_lib.parse_roadmap(text)

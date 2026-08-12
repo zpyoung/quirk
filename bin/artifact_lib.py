@@ -616,7 +616,7 @@ def _preamble_member_findings(preamble: str) -> list[tuple[str, str]]:
 
 
 def validate_roadmap_for_write(
-    parse: RoadmapParse, known_ids: set[str] | None = None
+    parse: RoadmapParse, known_ids: set[str] | None = None, skipped_headers: set[str] | None = None
 ) -> list[tuple[str, str]]:
     """Return the findings that must block `roadmap --write`.
 
@@ -626,12 +626,20 @@ def validate_roadmap_for_write(
     too, but only once `known_ids` is supplied; `None` means the ledger was not checked, not
     that every id is known. `DUPLICATE_MILESTONE_NAME` never blocks: rank comes from document
     position, never from name, so a name collision can't corrupt a write.
+
+    A reference whose header is in `skipped_headers` never blocks either, even when its id is
+    absent from `known_ids`: that ledger was could-not-look (oversize, parse error), not
+    looked-and-found-nothing, so the caller must not refuse the write on the strength of an id
+    it never actually checked.
     """
     blocking = [f for f in parse.findings if f[0] in _ROADMAP_WRITE_BLOCKING_CODES]
     blocking.extend(_preamble_member_findings(parse.preamble))
     if known_ids is not None:
         referenced = {member_id for milestone in parse.milestones for member_id in milestone.members}
+        skipped = skipped_headers or set()
         blocking.extend(
-            ("DANGLING_ROADMAP_REF", member_id) for member_id in sorted(referenced - known_ids)
+            ("DANGLING_ROADMAP_REF", member_id)
+            for member_id in sorted(referenced - known_ids)
+            if member_id.split("-", 1)[0] not in skipped
         )
     return blocking

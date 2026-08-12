@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -190,6 +191,47 @@ def test_test_probe_timeout_kills_children_the_runner_spawned(
             break
         time.sleep(0.05)
     assert not child_alive, f"child pid {child_pid} outlived the probe timeout"
+
+
+def test_test_probe_timeout_bounds_the_drain_when_a_descendant_escapes_the_process_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The process-group kill only reaches processes still in the runner's group. A descendant
+    that calls its own `setsid` before the timeout fires leaves the group but keeps its inherited
+    copy of the runner's stdout/stderr pipe open — `communicate()` reads until EOF, so that
+    descendant alone can hold the post-kill drain open indefinitely unless it's bounded."""
+    pid_file = tmp_path / "escapee.pid"
+    runner = tmp_path / "escaping_runner.py"
+    runner.write_text(
+        "import os, time\n"
+        "pid = os.fork()\n"
+        "if pid == 0:\n"
+        "    os.setsid()\n"
+        f"    open({str(pid_file)!r}, 'w').write(str(os.getpid()))\n"
+        "    time.sleep(30)\n"
+        "else:\n"
+        "    time.sleep(30)\n"
+    )
+    monkeypatch.setenv("QUIRK_PM_TEST_RUNNER", f"{sys.executable} {runner}")
+    monkeypatch.setenv("QUIRK_PM_TEST_EXIT_MAP", "0:pass,1:fail")
+
+    spec = pm.parse_probe_spec("test:irrelevant")
+    started = time.monotonic()
+    result = pm.run_probe(spec, tmp_path, timeout=1)
+    elapsed = time.monotonic() - started
+
+    assert result.outcome == "error"
+    assert elapsed < pm.PROBE_KILL_DRAIN_TIMEOUT + 5, (
+        f"run_probe took {elapsed:.1f}s past its 1s timeout — the post-kill drain is unbounded"
+    )
+
+    # cleanup only, not part of the assertion: the escapee left the group specifically so the
+    # timeout's killpg wouldn't reach it
+    if pid_file.exists():
+        try:
+            os.kill(int(pid_file.read_text().strip()), 9)
+        except ProcessLookupError:
+            pass
 
 
 # --- regression row 9: only a genuinely failing test is an acceptable baseline ----------------
