@@ -10,6 +10,7 @@ import stat
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable
 
 FIELD_RE = re.compile(r"^-\s+\*\*(.+?)\*\*:\s*(.+)$", re.MULTILINE)
 SPLICE_FIELD_LINE_RE = re.compile(r"^-\s+\*\*(.+?)\*\*:.*$", re.MULTILINE)
@@ -45,7 +46,7 @@ _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _FENCE_OPEN_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
 
 
-def _mask_quoted(text: str) -> str:
+def mask_quoted(text: str) -> str:
     """Return text with fenced code and HTML comments blanked, preserving every offset.
 
     A heading quoted inside a fence is not an entry, and scanning raw text both invents it
@@ -118,7 +119,7 @@ class ParseResult:
 
 def find_max_id(text: str, header: str) -> int:
     """Return max N from '## HEADER-N:' lines, or 0 if none found."""
-    ids = [int(m.group(1)) for m in _loose_re(header).finditer(_mask_quoted(text))]
+    ids = [int(m.group(1)) for m in _loose_re(header).finditer(mask_quoted(text))]
     return max(ids) if ids else 0
 
 
@@ -130,7 +131,7 @@ def parse_entries(text: str, header: str) -> ParseResult:
     slicing on the strict regex instead would let a malformed heading's block
     run on into its predecessor's and absorb that entry's fields.
     """
-    scan = _mask_quoted(text)
+    scan = mask_quoted(text)
     bounds = list(_loose_re(header).finditer(scan))
     strict = _strict_re(header)
     entries: list[Entry] = []
@@ -161,7 +162,7 @@ def field_present_but_empty(entry: Entry, label: str) -> bool:
     all. Matched against the masked block, the same way `parse_entries` builds `fields`, so a
     label quoted inside a fenced example is never mistaken for a live one.
     """
-    masked_block = _mask_quoted(entry.raw)
+    masked_block = mask_quoted(entry.raw)
     pattern = re.compile(rf"^-\s+\*\*{re.escape(label)}\*\*:\s*$", re.MULTILINE)
     return pattern.search(masked_block) is not None
 
@@ -201,7 +202,7 @@ def detect_schema_version(text: str) -> int | None:
     search runs on the raw preamble, since the marker is itself an HTML comment that masking would
     blank along with everything else.
     """
-    heading = _ENTRY_HEADING_RE.search(_mask_quoted(text))
+    heading = _ENTRY_HEADING_RE.search(mask_quoted(text))
     preamble = text if heading is None else text[:heading.start()]
     m = SCHEMA_VERSION_RE.search(preamble)
     return int(m.group(1)) if m else None
@@ -323,7 +324,7 @@ def splice_field(text: str, entry: Entry, label: str, value: str | None) -> str:
     so a label quoted inside a fenced example is never mistaken for a live duplicate or edited in
     place of the real line.
     """
-    scan = _mask_quoted(text)
+    scan = mask_quoted(text)
     block = text[entry.start:entry.end]
     masked_block = scan[entry.start:entry.end]
 
@@ -364,6 +365,25 @@ def splice_field(text: str, entry: Entry, label: str, value: str | None) -> str:
         new_block = block[:anchor_end] + "\n" + new_line
 
     return text[:entry.start] + new_block + text[entry.end:]
+
+
+def duplicate_field_labels(masked_text: str, entry: Entry, labels: Iterable[str]) -> list[str]:
+    """Return every label in `labels` with more than one live field line inside `entry`'s block.
+
+    Takes `text` already run through `mask_quoted` rather than masking itself, so a caller
+    sweeping many entries and labels over one file — `splice_field`'s own `DuplicateFieldError`
+    would otherwise mean re-masking the whole file per (entry, label) — can mask once and reuse
+    it. One pass over the block classifies every field line by label, so checking several labels
+    costs the same single pass as checking one.
+    """
+    masked_block = masked_text[entry.start:entry.end]
+    wanted = set(labels)
+    counts: dict[str, int] = {}
+    for m in SPLICE_FIELD_LINE_RE.finditer(masked_block):
+        label = m.group(1)
+        if label in wanted:
+            counts[label] = counts.get(label, 0) + 1
+    return [label for label in labels if counts.get(label, 0) > 1]
 
 
 _MILESTONE_HEADING_RE = re.compile(r"^## Milestone: (.+)$")
@@ -448,7 +468,7 @@ def _line_spans(text: str) -> list[tuple[int, int]]:
 def _mask_html_comments(text: str) -> str:
     """Blank HTML comments only, preserving every offset — the roadmap grammar has no fence class.
 
-    `_mask_quoted` also blanks fenced code, which is correct for `parse_entries` but would let
+    `mask_quoted` also blanks fenced code, which is correct for `parse_entries` but would let
     fenced prose under a milestone read as blank (legal) instead of `ROADMAP_LINE_MALFORMED`.
     """
     chars = list(text)

@@ -245,6 +245,20 @@ def test_start_refuses_when_a_matched_grep_filename_cannot_round_trip(pm_project
     assert (pm_project / "BUGS.md").read_bytes() == before
 
 
+def test_start_refuses_when_a_matched_grep_filename_contains_an_open_paren(pm_project: Path) -> None:
+    # "baseline (f1, f2)" is recovered by scanning for the outermost " (" / ")" pair; a filename
+    # containing " (" can be mistaken for that boundary itself and split the group wrong
+    (pm_project / "weird (name).py").write_text("MARKER_XYZ present\n")
+    append_bug(pm_project, 1)
+    before = (pm_project / "BUGS.md").read_bytes()
+
+    result = run_pm("start", "BUG-1", "--probe", "grep:MARKER_XYZ", "--here", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_BAD_ARGUMENT, result.stdout
+    assert "weird (name).py" in result.stderr
+    assert (pm_project / "BUGS.md").read_bytes() == before
+
+
 def test_start_probe_error_detail_surfaces_in_stderr(pm_project: Path) -> None:
     append_bug(pm_project, 1)
     try:
@@ -486,6 +500,60 @@ def test_finish_refuses_when_the_probe_moves_head(
     assert head_after != head_before_finish
 
 
+def test_finish_refuses_when_a_failing_probe_leaves_the_tree_dirty(
+    pm_git_project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # the post-probe dirty-tree recheck must fire on the refusal path too, not just the delivered
+    # one — a refused finish still records what it observed, and that record is worthless once
+    # the tree it was measured against no longer exists
+    (pm_git_project / "test_thing.py").write_text("def test_bad():\n    assert False\n")
+    (pm_git_project / "marker.txt").write_text("clean\n")
+    append_bug(pm_git_project, 1)
+    commit_all(pm_git_project, "add BUG-1, a failing test, and marker.txt")
+    run_pm("start", "BUG-1", "--probe", "test:test_thing.py::test_bad", "--here", cwd=pm_git_project)
+    commit_all(pm_git_project, "start BUG-1")
+    before = bugs_text(pm_git_project)
+
+    dirtying_runner = tmp_path / "dirtying_failing_runner.sh"
+    dirtying_runner.write_text("#!/bin/sh\necho dirtied >> marker.txt\nexit 1\n")
+    dirtying_runner.chmod(0o755)
+    monkeypatch.setenv("QUIRK_PM_TEST_RUNNER", str(dirtying_runner))
+    monkeypatch.setenv("QUIRK_PM_TEST_EXIT_MAP", "0:pass,1:fail")
+
+    result = run_pm("finish", "BUG-1", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_FINISH_PRECONDITION_FAILED, result.stdout
+    assert "dirty" in result.stderr
+    assert bugs_text(pm_git_project) == before
+    assert "refused" not in bugs_text(pm_git_project)
+
+
+def test_finish_refuses_when_a_failing_probe_moves_head(
+    pm_git_project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (pm_git_project / "test_thing.py").write_text("def test_bad():\n    assert False\n")
+    append_bug(pm_git_project, 1)
+    commit_all(pm_git_project, "add BUG-1 and a failing test")
+    run_pm("start", "BUG-1", "--probe", "test:test_thing.py::test_bad", "--here", cwd=pm_git_project)
+    commit_all(pm_git_project, "start BUG-1")
+    before = bugs_text(pm_git_project)
+    head_before_finish = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+
+    committing_runner = tmp_path / "committing_failing_runner.sh"
+    committing_runner.write_text("#!/bin/sh\ngit commit --allow-empty -q -m sneaky\nexit 1\n")
+    committing_runner.chmod(0o755)
+    monkeypatch.setenv("QUIRK_PM_TEST_RUNNER", str(committing_runner))
+    monkeypatch.setenv("QUIRK_PM_TEST_EXIT_MAP", "0:pass,1:fail")
+
+    result = run_pm("finish", "BUG-1", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_FINISH_PRECONDITION_FAILED, result.stdout
+    assert "HEAD moved" in result.stderr
+    assert bugs_text(pm_git_project) == before
+    head_after = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+    assert head_after != head_before_finish
+
+
 def test_finish_refuses_when_project_dir_is_not_a_git_worktree(pm_project: Path) -> None:
     append_bug(pm_project, 1)
     run_pm("start", "BUG-1", "--probe", "none", "--here", cwd=pm_project)
@@ -584,6 +652,24 @@ def test_park_missing_reason_flag_exits_2(pm_project: Path) -> None:
     result = run_pm("park", "BUG-1", cwd=pm_project)
 
     assert result.returncode == pm.EXIT_BAD_ARGUMENT, result.stdout
+
+
+def test_park_refuses_on_a_malformed_probe_field(pm_project: Path) -> None:
+    # park never reads Probe itself, but leaving a malformed sibling field in place on an entry
+    # it's about to declare terminal — with no diagnostic — is the same corruption a malformed
+    # Status already refuses on
+    append_bug(
+        pm_project, 1,
+        Status="in_progress — 2026-08-05 — attempt 1",
+        Probe="not a valid probe at all",
+    )
+    before = (pm_project / "BUGS.md").read_bytes()
+
+    result = run_pm("park", "BUG-1", "--reason", "x", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_CORRUPT_ENTRY, result.stdout
+    assert "malformed Probe field" in result.stderr
+    assert (pm_project / "BUGS.md").read_bytes() == before
 
 
 # --- transition table: decide ------------------------------------------------
@@ -692,6 +778,24 @@ def test_decide_refuses_a_proposal_id(pm_project: Path) -> None:
 
     assert result.returncode == pm.EXIT_CAS_FAILURE, result.stdout
     assert (pm_project / "proposals.md").read_bytes() == before
+
+
+def test_decide_refuses_on_a_malformed_verify_field(pm_project: Path) -> None:
+    # decide never reads Verify itself, but the same reasoning as park's malformed-Probe refusal
+    # applies to Verify: a corrupt sibling field on an entry decide is about to declare terminal
+    # deserves a diagnostic, not silence
+    append_bug(
+        pm_project, 1,
+        Status="in_progress — 2026-08-05 — attempt 1",
+        Verify="not a valid verify field",
+    )
+    before = (pm_project / "BUGS.md").read_bytes()
+
+    result = run_pm("decide", "BUG-1", "--as", "wontfix", "--reason", "x", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_CORRUPT_ENTRY, result.stdout
+    assert "malformed Verify field" in result.stderr
+    assert (pm_project / "BUGS.md").read_bytes() == before
 
 
 # --- regression row 1: the stale-finish interleaving ------------------------
