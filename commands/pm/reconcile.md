@@ -66,14 +66,24 @@ python3 ${CLAUDE_PLUGIN_ROOT}/bin/pm.py reconcile --close "$ID" \
 The SHA is the **rewritten** commit — the one that actually landed on the integration branch, not
 the one the worker originally reported. The entry must currently be `delivered`.
 
-Unlike the sweep, this targets one entry, so its exit code describes that entry:
+Unlike the sweep, this targets one entry, so its exit code describes that entry. Checks run in this
+order, so the first matching condition is what you get:
 1. On exit 0: relay the entry ID and the recorded SHA.
-2. On exit 2: `--integrated` is not a full 40-character SHA, is not a commit this repo knows, or is
-   not an ancestor of the integration ref; or `--reason` contains a newline or the ` — ` delimiter.
-   A human asserting closure still cannot record a SHA the repository cannot resolve — relay which
-   of those it was and re-confirm before retrying.
-3. On exit 4 (corrupt entry): relay stderr; do not guess a fix.
-4. On exit 6 (CAS failure): the entry is not `delivered`, or it changed since you read it. Re-read
+2. On exit 7 (project dir not found): tell the user to check the path they passed.
+3. On exit 3 (ledger missing, or `ID` not found): if a ledger file is missing, direct to
+   `/quirk:artifacts:init`; otherwise relay the message and check for a typo in the ID.
+4. On exit 2: `--integrated` is not a full 40-character SHA, is not a commit this repo knows, or is
+   not an ancestor of the integration ref; or `--reason` contains a newline, the ` — ` delimiter, or
+   an HTML comment. A human asserting closure still cannot record a SHA the repository cannot
+   resolve — relay which of those it was and re-confirm before retrying.
+5. On exit 8 (schema mismatch): direct to `/quirk:pm:migrate`. Nothing was written.
+6. On exit 4 (corrupt entry): a heading or a lifecycle field on this entry is malformed or
+   duplicated. Relay stderr; do not guess a fix.
+7. On exit 6 (CAS failure): the entry is not `delivered`, or it changed since you read it. Re-read
    with `/quirk:pm:status` and re-confirm with the user rather than retrying blind.
+8. On exit 5 (lock timeout): another process holds the ledger lock; nothing was written. Offer to
+   retry.
+9. On any other non-zero exit: relay stderr verbatim plus a one-line plain-language summary and a
+   remediation hint.
 
 User input: $ARGUMENTS

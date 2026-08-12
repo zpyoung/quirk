@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+import tracemalloc
 from pathlib import Path
 
 import pytest
@@ -548,6 +549,68 @@ def test_grep_explicit_file_path_disappearing_before_open_becomes_a_probe_error(
     assert "f.txt" in result.detail
 
 
+def test_grep_listed_file_removed_after_validation_is_a_probe_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The previous fix covers a file removed while validation's own `open()` is running. This
+    is the next window: that handle already closed successfully, then the file is removed before
+    traversal gets to it. A walk that then finds nothing must not read back as a clean zero-match
+    scan — the probe's whole meaning is that zero matches is evidence."""
+    target = write(tmp_path, "f.txt", "TODO here\n")
+    real_walk_targets = pm._grep_walk_targets
+
+    def racing_walk_targets(base, allowed_roots):
+        if base == target.resolve():
+            target.unlink()
+        return real_walk_targets(base, allowed_roots)
+
+    monkeypatch.setattr(pm, "_grep_walk_targets", racing_walk_targets)
+    spec = pm.parse_probe_spec("grep:TODO -- f.txt")
+
+    result = pm.run_probe(spec, tmp_path, timeout=5)
+
+    assert result.outcome == "error"
+    assert "f.txt" in result.detail
+
+
+def test_grep_listed_directory_removed_after_validation_is_a_probe_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same window as the file case above, but for a listed directory: validation's `scandir`
+    handle closes successfully, then the whole directory is removed before the walk starts."""
+    target = tmp_path / "dir"
+    write(tmp_path, "dir/f.txt", "TODO here\n")
+    real_walk_targets = pm._grep_walk_targets
+
+    def racing_walk_targets(base, allowed_roots):
+        if base == target.resolve():
+            shutil.rmtree(target)
+        return real_walk_targets(base, allowed_roots)
+
+    monkeypatch.setattr(pm, "_grep_walk_targets", racing_walk_targets)
+    spec = pm.parse_probe_spec("grep:TODO -- dir")
+
+    result = pm.run_probe(spec, tmp_path, timeout=5)
+
+    assert result.outcome == "error"
+    assert "dir" in result.detail
+
+
+def test_grep_listed_directory_that_is_genuinely_empty_is_a_clean_zero_match_scan(
+    tmp_path: Path,
+) -> None:
+    """The fix above must not mistake an ordinary empty directory — one that still exists, just
+    has nothing in it — for a vanished one; only "the path itself is gone" is an error."""
+    (tmp_path / "dir").mkdir()
+    spec = pm.parse_probe_spec("grep:TODO -- dir")
+
+    result = pm.run_probe(spec, tmp_path, timeout=5)
+
+    assert result.outcome == "ok"
+    assert result.count == 0
+    assert result.files == ()
+
+
 def test_grep_no_paths_defaults_to_worktree_root(tmp_path: Path) -> None:
     write(tmp_path, "a/match.txt", "TODO here\n")
     write(tmp_path, "b/match.txt", "TODO here too\n")
@@ -735,6 +798,59 @@ def test_regression_10_large_tree_over_timeout_is_error(
     spec = pm.parse_probe_spec("grep:TODO")
     result = pm.run_probe(spec, tmp_path, timeout=1)
     assert result.outcome == "error"
+
+
+# --- _scan_file_for_grep: line-at-a-time scan, bounded memory -----------------
+
+
+def test_scan_file_for_grep_counts_matches_within_the_cap(tmp_path: Path) -> None:
+    path = write(tmp_path, "f.txt", "TODO here\nnothing\nTODO again\n")
+    result = pm._scan_file_for_grep(path, re.compile("TODO"), max_bytes=1_000_000)
+    assert result == (2, True, False)
+
+
+def test_scan_file_for_grep_skips_a_file_over_the_byte_cap(tmp_path: Path) -> None:
+    path = write(tmp_path, "f.txt", "TODO TODO TODO\n")
+    result = pm._scan_file_for_grep(path, re.compile("TODO"), max_bytes=5)
+    assert result == (0, False, True)
+
+
+def test_scan_file_for_grep_skips_invalid_utf8_without_counting_it_as_skipped(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "bin.dat"
+    path.write_bytes(b"TODO \xff\xfe TODO\n")
+    result = pm._scan_file_for_grep(path, re.compile("TODO"), max_bytes=1_000_000)
+    assert result == (0, False, False)
+
+
+def test_grep_scans_a_large_file_without_holding_several_full_copies_in_memory(
+    tmp_path: Path,
+) -> None:
+    """A whole-file read, decode, and `.splitlines()` held bytes, decoded text, and a line list
+    all at once — several multiples of one file's size. Streaming the scan should keep peak
+    allocation for the whole probe run well under one copy of the file, not several; tracemalloc
+    gives a real byte count instead of a wall-clock proxy that would be flaky under load."""
+    size = 8 * 1024 * 1024
+    with open(tmp_path / "big.txt", "wb") as f:
+        written = 0
+        line = b"filler filler filler filler filler filler filler filler\n"
+        while written < size:
+            f.write(line)
+            written += len(line)
+    write(tmp_path, "hit.txt", "TODO here\n")
+    spec = pm.parse_probe_spec("grep:TODO")
+
+    tracemalloc.start()
+    try:
+        result = pm.run_probe(spec, tmp_path, timeout=30)
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert result.outcome == "ok"
+    assert result.files == ("hit.txt",)
+    assert peak < size // 2, f"peak traced allocation {peak} for an {size}-byte file"
 
 
 # --- grep_baseline_files_missing / finish-time deleted-baseline-file refusal -------------------
