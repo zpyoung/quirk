@@ -96,3 +96,11 @@ entries' IDs; manual edits to fix typos are fine.
 - **Proposed fix**: Mirror pm.py's _acquire_ledger_lock: os.open with O_CREAT|O_RDWR|O_NOFOLLOW and no truncation. Ideally hoist the shared acquisition into artifact_lib so the two cannot drift again.
 - **Blocker for**: nothing — but the two scripts now have different lock-safety properties for the same lock files
 
+## BUG-10: parse_entries reads field values from the fence-masked text, silently blanking any HTML comment or fenced span inside a field value
+- **Observed**: 2026-08-12
+- **File**: bin/artifact_lib.py:140-145
+- **Description**: parse_entries builds each entry's fields dict from masked_block (the fence/comment-masked copy) rather than the original block, so any field VALUE containing an HTML comment or a fenced span is stored with that span replaced by spaces. Reproduced: a Description of 'fails when the tag <!-- keep --> is present' parses as 'fails when the tag               is present', and a Probe of 'grep:<!-- TODO -->' parses as 'grep:' plus 14 spaces. The masking is correct for locating headings and field LABELS (that is what it was added for, commit 264c9fe); applying it to the captured VALUE is the defect. Blast radius is every consumer of Entry.fields, including artifact_append.py and artifact_review.py. The probe-specific consequence is the sharpest: a grep probe whose pattern contains a comment re-runs at finish as a blanked pattern, matches nothing, and delivers the entry while the symptom it tracked is still present.
+- **Introduced by**: 264c9fe, which pre-dates the pm-agent Phase 2 branch
+- **Severity**: high
+- **Proposed fix**: Capture field values by offset from the original block using positions found in the masked block, rather than storing the masked capture. Add a round-trip fixture for a field value containing an HTML comment and one containing a fenced span.
+
