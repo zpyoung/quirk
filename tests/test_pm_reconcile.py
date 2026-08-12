@@ -223,6 +223,60 @@ def test_reconcile_reports_integration_ref_unresolvable_distinct_from_unknown_co
     assert "commit not in destination repo" not in result.stdout
 
 
+def test_resolve_integration_ref_returns_none_when_detached_with_no_origin_head(
+    pm_git_project: Path,
+) -> None:
+    sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+    _git(pm_git_project, "checkout", "-q", "--detach", sha)
+    assert pm._resolve_integration_ref(pm_git_project) is None
+
+
+def test_resolve_integration_ref_env_override_wins_even_when_detached(
+    pm_git_project: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+    _git(pm_git_project, "checkout", "-q", "--detach", sha)
+    monkeypatch.setenv("QUIRK_PM_INTEGRATION_REF", "explicit-ref")
+    assert pm._resolve_integration_ref(pm_git_project) == "explicit-ref"
+
+
+def test_reconcile_reports_cannot_evaluate_on_a_detached_checkout_with_no_origin_head(
+    pm_git_project: Path,
+) -> None:
+    # regression: on a detached checkout, `git rev-parse --abbrev-ref HEAD` returns the literal
+    # string "HEAD", which resolves as a commit and would let merge-base --is-ancestor succeed
+    # against whatever happens to be checked out — a wrong close is worse than an unresolved one
+    sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+    _git(pm_git_project, "checkout", "-q", "--detach", sha)
+    append_bug(pm_git_project, 1, Status=f"delivered — 2026-08-05 — attempt 1 — commit: {sha}", Probe="none")
+
+    result = run_pm("reconcile", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_OK, result.stderr
+    assert "cannot evaluate" in result.stdout
+    text = bugs_text(pm_git_project)
+    line = status_line(text, "## BUG-1:")
+    assert line.startswith("- **Status**: delivered")
+    assert "closed" not in line
+
+
+def test_close_refuses_when_the_repo_is_detached_with_no_resolvable_integration_ref(
+    pm_git_project: Path,
+) -> None:
+    sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+    append_bug(pm_git_project, 1, Status=f"delivered — 2026-08-05 — attempt 1 — commit: {sha}", Probe="none")
+    _git(pm_git_project, "checkout", "-q", "--detach", sha)
+    before = bugs_text(pm_git_project)
+
+    result = run_pm(
+        "reconcile", "--close", "BUG-1", "--integrated", sha,
+        "--reason", "already merged", cwd=pm_git_project,
+    )
+
+    assert result.returncode == pm.EXIT_BAD_ARGUMENT, result.stdout
+    assert bugs_text(pm_git_project) == before
+
+
 def test_evaluate_delivered_reports_destination_repo_missing(tmp_path: Path) -> None:
     outcome, detail = pm._evaluate_delivered(tmp_path / "does-not-exist", "a" * 40, {})
     assert outcome == "cannot_evaluate"
@@ -597,6 +651,53 @@ def test_close_refuses_on_a_malformed_probe_field(pm_git_project: Path) -> None:
     assert bugs_text(pm_git_project) == before
 
 
+def test_close_refuses_exit4_when_malformed_sibling_field_and_state_mismatch_both_hold(
+    pm_git_project: Path,
+) -> None:
+    """4-before-6: an entry both outside --close's allowed states (never started -> open) and
+    carrying a malformed Probe must report corrupt-entry, not CAS failure — a fixture where only
+    one condition holds can't tell an inverted precedence from an unrelated exit code.
+    """
+    sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+    append_bug(pm_git_project, 1, Probe="not a valid probe at all")  # never started: state "open"
+    before = bugs_text(pm_git_project)
+
+    result = run_pm(
+        "reconcile", "--close", "BUG-1", "--integrated", sha,
+        "--reason", "already merged", cwd=pm_git_project,
+    )
+
+    assert result.returncode == pm.EXIT_CORRUPT_ENTRY, result.stdout
+    assert bugs_text(pm_git_project) == before
+
+
+def test_close_refuses_on_a_duplicated_probe_field(pm_git_project: Path) -> None:
+    # a second Probe line is invisible to entry.fields (last one wins the dict-collapse) and
+    # parses cleanly on its own, so this is a distinct defect from the malformed-field case above
+    sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+    append_bug(
+        pm_git_project, 1,
+        Status=f"delivered — 2026-08-05 — attempt 1 — commit: {sha}",
+        Probe="none",
+    )
+    bugs = pm_git_project / "BUGS.md"
+    text = bugs.read_text()
+    marker = "- **Probe**: none"
+    idx = text.index(marker) + len(marker)
+    extra_probe = "\n- **Probe**: grep:TODO — baseline: 1 match — spec#12345678"
+    bugs.write_text(text[:idx] + extra_probe + text[idx:])
+    before = bugs.read_bytes()
+
+    result = run_pm(
+        "reconcile", "--close", "BUG-1", "--integrated", sha,
+        "--reason", "already merged", cwd=pm_git_project,
+    )
+
+    assert result.returncode == pm.EXIT_CORRUPT_ENTRY, result.stdout
+    assert "duplicated Probe field" in result.stderr
+    assert bugs.read_bytes() == before
+
+
 def test_close_cas_race_two_calls_exactly_one_succeeds_other_gets_exit6(pm_git_project: Path) -> None:
     # regression: --close is the *only* reconcile path that returns 6 on a CAS mismatch
     sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
@@ -825,6 +926,56 @@ def test_verify_reports_error_for_absolute_grep_path_outside_the_repo(pm_git_pro
             f"grep:OUTSIDE_MARKER -- {outside_path} — "
             f"baseline: 1 match ({outside_path}) — spec#12345678"
         ),
+    )
+
+    result = run_pm("reconcile", "--verify", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_OK, result.stderr
+    text = bugs_text(pm_git_project)
+    # reachability alone still promotes even though the probe can't be verified at all
+    assert "- **Status**: closed" in status_line(text, "## BUG-1:")
+    verify_line = field_line(text, "## BUG-1:", "Verify")
+    assert "probe: error" in verify_line
+
+
+# --- --verify: absolute test: nodeids must resolve inside the verify worktree -
+
+
+def test_verify_rebases_absolute_test_nodeid_onto_the_verify_worktree(pm_git_project: Path) -> None:
+    test_file = pm_git_project / "test_probe_target.py"
+    test_file.write_text("def test_ok():\n    assert True\n")
+    commit_all(pm_git_project, "add passing probe target test")
+    sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+
+    append_bug(
+        pm_git_project, 1,
+        Status=f"delivered — 2026-08-05 — attempt 1 — commit: {sha}",
+        Probe=f"test:{test_file}::test_ok — baseline: fail — spec#12345678",
+    )
+
+    # dirty the *original* checkout only, never committed — a verify that (incorrectly) re-ran
+    # the recorded absolute nodeid against this checkout instead of the detached integration-ref
+    # worktree would see the failing version and report `fail`
+    test_file.write_text("def test_ok():\n    assert False\n")
+
+    result = run_pm("reconcile", "--verify", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_OK, result.stderr
+    text = bugs_text(pm_git_project)
+    assert "- **Status**: closed" in status_line(text, "## BUG-1:")
+    verify_line = field_line(text, "## BUG-1:", "Verify")
+    assert "probe: pass" in verify_line
+
+
+def test_verify_reports_error_for_absolute_test_nodeid_outside_the_repo(pm_git_project: Path) -> None:
+    sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+    outside_path = pm_git_project.parent / "outside-the-repo.py"
+    outside_path.write_text("def test_ok():\n    assert True\n")
+
+    append_bug(
+        pm_git_project, 1,
+        Status=f"delivered — 2026-08-05 — attempt 1 — commit: {sha}",
+        Probe=f"test:{outside_path}::test_ok — baseline: fail — spec#12345678",
     )
 
     result = run_pm("reconcile", "--verify", cwd=pm_git_project)
