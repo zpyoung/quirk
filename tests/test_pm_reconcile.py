@@ -297,6 +297,36 @@ def test_reconcile_batch_rejects_integrated_without_close(pm_project: Path) -> N
     assert result.returncode == pm.EXIT_BAD_ARGUMENT
 
 
+# --- batch reconcile: ledger schema guard -----------------------------------
+
+
+def test_reconcile_batch_refuses_v1_ledger_with_exit8(pm_project: Path) -> None:
+    # an unmigrated ledger must refuse, not silently report "no delivered entries" — the same
+    # false all-clear `reconcile --close` already avoids via `_prepare_transition`
+    append_bug(pm_project, 1, Status=f"delivered — 2026-08-05 — attempt 1 — commit: {'a' * 40}", Probe="none")
+    bugs = pm_project / "BUGS.md"
+    bugs.write_text(bugs.read_text().replace("schema-version: 2", "schema-version: 1"))
+    before = bugs.read_bytes()
+
+    result = run_pm("reconcile", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_SCHEMA_MISMATCH, result.stdout
+    assert "no delivered entries" not in result.stdout
+    assert bugs.read_bytes() == before
+
+
+def test_reconcile_batch_refuses_too_new_ledger_with_exit8(pm_project: Path) -> None:
+    append_bug(pm_project, 1, Status=f"delivered — 2026-08-05 — attempt 1 — commit: {'a' * 40}", Probe="none")
+    bugs = pm_project / "BUGS.md"
+    bugs.write_text(bugs.read_text().replace("schema-version: 2", "schema-version: 3"))
+    before = bugs.read_bytes()
+
+    result = run_pm("reconcile", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_SCHEMA_MISMATCH, result.stdout
+    assert bugs.read_bytes() == before
+
+
 # --- fetch memoization: once per unique repo per run ------------------------
 
 
@@ -603,3 +633,163 @@ def test_verify_removes_temporary_worktree_even_when_probe_rerun_raises(
     assert "- **Status**: closed" in status_line(text, "## BUG-1:")
     verify_line = field_line(text, "## BUG-1:", "Verify")
     assert "probe: error" in verify_line
+
+
+# --- --verify: an unusable Probe field still records a Verify field ---------
+
+
+def test_verify_writes_probe_error_when_entry_has_no_probe_field(pm_git_project: Path) -> None:
+    # absent Probe = the recorded probe cannot be reconstructed at all, but ancestry alone still
+    # promotes; `--verify` was requested, so silently writing no `Verify` field would read as
+    # "never verified" rather than "verification was attempted and couldn't run"
+    sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+    append_bug(pm_git_project, 1, Status=f"delivered — 2026-08-05 — attempt 1 — commit: {sha}")
+
+    result = run_pm("reconcile", "--verify", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_OK, result.stderr
+    text = bugs_text(pm_git_project)
+    assert "- **Status**: closed" in status_line(text, "## BUG-1:")
+    verify_line = field_line(text, "## BUG-1:", "Verify")
+    assert "probe: error" in verify_line
+    assert "verify: error" in result.stdout
+
+
+def test_verify_writes_probe_error_when_probe_field_does_not_reconstruct(pm_git_project: Path) -> None:
+    # `grep:` with an empty pattern parses into a well-formed ProbeField (verb/baseline/hashes all
+    # match) but `_reconstruct_probe_spec` rejects the empty arg — a different failure mode than
+    # an absent or MalformedField Probe, and one the original code didn't guard at all
+    sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+    append_bug(
+        pm_git_project, 1,
+        Status=f"delivered — 2026-08-05 — attempt 1 — commit: {sha}",
+        Probe="grep: — baseline: 0 matches — spec#12345678",
+    )
+
+    result = run_pm("reconcile", "--verify", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_OK, result.stderr
+    text = bugs_text(pm_git_project)
+    assert "- **Status**: closed" in status_line(text, "## BUG-1:")
+    verify_line = field_line(text, "## BUG-1:", "Verify")
+    assert "probe: error" in verify_line
+
+
+# --- --verify: grep must not treat deleted baseline files as a fix ---------
+
+
+def test_verify_reports_fail_when_grep_baseline_files_were_deleted_not_fixed(pm_git_project: Path) -> None:
+    (pm_git_project / "marker.txt").write_text("PM_DELETED_MARKER still broken\n")
+    commit_all(pm_git_project, "add marker file with the symptom")
+
+    # "fixed" by deleting the file outright rather than removing the matched text — the same
+    # hazard `grep_baseline_files_missing` exists to catch on the `finish` path
+    (pm_git_project / "marker.txt").unlink()
+    commit_all(pm_git_project, "delete marker file instead of fixing it")
+    sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+
+    append_bug(
+        pm_git_project, 1,
+        Status=f"delivered — 2026-08-05 — attempt 1 — commit: {sha}",
+        Probe="grep:PM_DELETED_MARKER — baseline: 1 match (marker.txt) — spec#12345678",
+    )
+
+    result = run_pm("reconcile", "--verify", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_OK, result.stderr
+    text = bugs_text(pm_git_project)
+    # reachability alone still promotes — a failing re-run never un-promotes the entry
+    assert "- **Status**: closed" in status_line(text, "## BUG-1:")
+    verify_line = field_line(text, "## BUG-1:", "Verify")
+    assert "probe: fail" in verify_line
+    assert "verify: fail" in result.stdout
+
+
+# --- --verify: absolute grep paths must resolve inside the verify worktree -
+
+
+def test_verify_rebases_absolute_grep_path_onto_the_verify_worktree(pm_git_project: Path) -> None:
+    sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+    readme = pm_git_project / "README.md"
+    assert "ABS_PATH_MARKER" not in readme.read_text()
+
+    append_bug(
+        pm_git_project, 1,
+        Status=f"delivered — 2026-08-05 — attempt 1 — commit: {sha}",
+        Probe=f"grep:ABS_PATH_MARKER -- {readme} — baseline: 0 matches (README.md) — spec#12345678",
+    )
+
+    # dirty the *original* checkout only, never committed — the integration ref (and the detached
+    # verify worktree checked out from it) never sees this text
+    readme.write_text(readme.read_text() + "ABS_PATH_MARKER still here\n")
+
+    result = run_pm("reconcile", "--verify", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_OK, result.stderr
+    text = bugs_text(pm_git_project)
+    assert "- **Status**: closed" in status_line(text, "## BUG-1:")
+    verify_line = field_line(text, "## BUG-1:", "Verify")
+    # the committed integration-ref content has zero matches; a verify that (incorrectly) read
+    # the dirtied original checkout instead would see one and report `fail`
+    assert "probe: pass" in verify_line
+
+
+def test_verify_reports_error_for_absolute_grep_path_outside_the_repo(pm_git_project: Path) -> None:
+    sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+    outside_path = pm_git_project.parent / "outside-the-repo.txt"
+    outside_path.write_text("OUTSIDE_MARKER present\n")
+
+    append_bug(
+        pm_git_project, 1,
+        Status=f"delivered — 2026-08-05 — attempt 1 — commit: {sha}",
+        Probe=(
+            f"grep:OUTSIDE_MARKER -- {outside_path} — "
+            f"baseline: 1 match ({outside_path}) — spec#12345678"
+        ),
+    )
+
+    result = run_pm("reconcile", "--verify", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_OK, result.stderr
+    text = bugs_text(pm_git_project)
+    # reachability alone still promotes even though the probe can't be verified at all
+    assert "- **Status**: closed" in status_line(text, "## BUG-1:")
+    verify_line = field_line(text, "## BUG-1:", "Verify")
+    assert "probe: error" in verify_line
+
+
+# --- --verify: temporary worktree cleanup never blocks the promotion -------
+
+
+def test_verify_worktree_cleanup_failure_is_diagnosed_but_does_not_block_promotion(
+    pm_git_project: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+    append_bug(pm_git_project, 1, Status=f"delivered — 2026-08-05 — attempt 1 — commit: {sha}", Probe="none")
+
+    real_run_git = pm._run_git
+    prune_calls: list[list[str]] = []
+
+    def fake_run_git(args: list[str], cwd: Path):
+        if args[:2] == ["worktree", "remove"]:
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="simulated remove failure\n")
+        if args[:2] == ["worktree", "prune"]:
+            # a no-op stand-in for a prune that also fails to clear the stale registration —
+            # otherwise a real prune would clean it up and the diagnostic would never fire
+            prune_calls.append(args)
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        return real_run_git(args, cwd)
+
+    monkeypatch.setattr(pm, "_run_git", fake_run_git)
+
+    args = _parse_args("reconcile", "--verify", "--project-dir", str(pm_git_project))
+    exit_code = pm.cmd_reconcile(args)
+
+    assert exit_code == pm.EXIT_OK
+    assert len(prune_calls) == 1  # bounded: exactly one follow-up, never a retry loop
+    text = bugs_text(pm_git_project)
+    assert "- **Status**: closed" in status_line(text, "## BUG-1:")
+    verify_line = field_line(text, "## BUG-1:", "Verify")
+    assert "probe: pass" in verify_line
+    stderr = capsys.readouterr().err
+    assert "verify worktree" in stderr
