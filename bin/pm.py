@@ -23,6 +23,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -41,10 +42,12 @@ from artifact_lib import (
     _preamble_member_findings,
     atomic_write,
     detect_schema_version,
+    duplicate_field_labels,
     ensure_lock_dir,
     field_present_but_empty,
     hash_file,
     hash_probe_spec,
+    mask_quoted,
     parse_entries,
     parse_roadmap,
     render_roadmap,
@@ -725,11 +728,20 @@ def cmd_migrate(args: argparse.Namespace) -> int:
                 return EXIT_LOCK_TIMEOUT
             held_locks.append(lock_file)
 
-        saw_too_new = False
+        # re-run under lock, over every ledger, before any of them is written: a file can become
+        # too new in the window between the read-only preflight above and the lock actually
+        # being held, and the all-or-nothing property every lock is acquired up front for must
+        # hold here too — discovering the problem mid-write-loop, after an earlier ledger has
+        # already been migrated, is the same partial-migration failure the preflight exists to
+        # prevent, just moved one step later
+        too_new_message = _migrate_preflight_too_new(project)
+        if too_new_message is not None:
+            print(f"[quirk:pm] {too_new_message}", file=sys.stderr)
+            return EXIT_SCHEMA_MISMATCH
+
         for filename in LEDGER_FILES:
-            outcome, message = _migrate_one_ledger(project, filename)
+            _outcome, message = _migrate_one_ledger(project, filename)
             print(f"[quirk:pm] {message}")
-            saw_too_new = saw_too_new or outcome == "too_new"
 
         roadmap_path = project / "ROADMAP.md"
         if roadmap_path.exists():
@@ -742,8 +754,6 @@ def cmd_migrate(args: argparse.Namespace) -> int:
         for lock_file in held_locks:
             lock_file.close()
 
-    if saw_too_new:
-        return EXIT_SCHEMA_MISMATCH
     return EXIT_OK
 
 
@@ -1247,20 +1257,15 @@ def _entry_verify(entry: Entry) -> VerifyField | MalformedField | None:
     return parse_verify(raw)
 
 
-def _duplicate_lifecycle_field_labels(text: str, entry: Entry) -> list[str]:
+def _duplicate_lifecycle_field_labels(masked_text: str, entry: Entry) -> list[str]:
     """Labels among `Status`/`Probe`/`Verify` with more than one live field line in `entry`.
 
-    Reuses `splice_field`'s own fenced-region masking — the value passed is irrelevant, only the
-    `DuplicateFieldError` it can raise is — so a label quoted inside a fenced example is never
-    mistaken for a live duplicate.
+    `masked_text` is the file's full text already run through `artifact_lib.mask_quoted`, so a
+    label quoted inside a fenced example is never mistaken for a live duplicate — and so a caller
+    checking every entry in the file can mask once and pass the same text into every call here,
+    rather than each call re-masking the whole file.
     """
-    duplicates = []
-    for label in _LIFECYCLE_FIELD_LABELS:
-        try:
-            splice_field(text, entry, label, None)
-        except DuplicateFieldError:
-            duplicates.append(label)
-    return duplicates
+    return duplicate_field_labels(masked_text, entry, _LIFECYCLE_FIELD_LABELS)
 
 
 def _status_age_findings(key: str, status: StatusField, today: str) -> list[tuple[str, str]]:
@@ -1284,10 +1289,11 @@ def _status_age_findings(key: str, status: StatusField, today: str) -> list[tupl
 
 def _lifecycle_doctor_findings(fp: FileParse, today: str) -> list[tuple[str, str]]:
     findings: list[tuple[str, str]] = []
+    masked_text = mask_quoted(fp.text)
     for entry in fp.entries:
         key = f"{fp.spec.header}-{entry.id}"
 
-        for label in _duplicate_lifecycle_field_labels(fp.text, entry):
+        for label in _duplicate_lifecycle_field_labels(masked_text, entry):
             findings.append(("DUPLICATE_LIFECYCLE_FIELD", f"{key}: more than one {label} field line"))
 
         status = _entry_status(entry)
@@ -1894,11 +1900,28 @@ def _run_test_probe(spec: ProbeSpec, root: Path, timeout: float) -> ProbeResult:
         )
 
     try:
-        proc = subprocess.run(command, cwd=root, capture_output=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return ProbeResult(outcome="error", detail=f"probe exceeded {timeout}s timeout")
+        # start_new_session: the runner becomes its own process group leader (pgid == its pid),
+        # separate from pm.py's — so a timeout can signal that whole group without touching the
+        # group pm.py itself runs in.
+        proc = subprocess.Popen(
+            command, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
     except OSError as exc:
         return ProbeResult(outcome="error", detail=f"could not run test runner: {exc}")
+
+    try:
+        proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # a runner that spawns its own children (a server, a worker pool, ...) leaves them in
+        # the same group by default, so the group — not just the runner's own pid — is what
+        # must be signaled for the timeout to actually bound the work
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.communicate()
+        return ProbeResult(outcome="error", detail=f"probe exceeded {timeout}s timeout")
 
     outcome = exit_map.get(proc.returncode, "error")
     detail = None if outcome != "error" else f"unmapped exit code {proc.returncode}"
@@ -2197,6 +2220,30 @@ def _expectation(prepared: _Prepared) -> tuple[int, int, str, str | None]:
         prepared.entry_id, prepared.status.attempt, prepared.status.state,
         prepared.entry.fields.get("Probe"),
     )
+
+
+def _malformed_sibling_field_refusal(prepared: _Prepared) -> _Refusal | None:
+    """Refuse (`EXIT_CORRUPT_ENTRY`) if `prepared.entry`'s `Probe` or `Verify` field is malformed.
+
+    `park`/`decide`/`reconcile --close` transition `Status` without ever reading `Probe`/`Verify`
+    themselves, but leaving a malformed sibling field in place on an entry they're about to
+    declare terminal — with no diagnostic at the moment a human is deciding its fate — is the
+    same corruption a malformed `Status` already refuses on in `_prepare_transition`. `start` is
+    exempt: it always supplies a fresh `Probe`, so refusing on an old malformed one would strand
+    an entry nothing could repair.
+    """
+    probe = _entry_probe(prepared.entry)
+    if isinstance(probe, MalformedField):
+        return _refuse(
+            EXIT_CORRUPT_ENTRY, f"{prepared.spec.header}-{prepared.entry_id}: malformed Probe field ({probe.reason})"
+        )
+    verify = _entry_verify(prepared.entry)
+    if isinstance(verify, MalformedField):
+        return _refuse(
+            EXIT_CORRUPT_ENTRY,
+            f"{prepared.spec.header}-{prepared.entry_id}: malformed Verify field ({verify.reason})",
+        )
+    return None
 
 
 def _commit_transition(
@@ -2559,12 +2606,21 @@ def _probe_field_with_final(current: ProbeField, spec: ProbeSpec, result: ProbeR
 
 
 def _grep_baseline_files_unsafe(files: Iterable[str]) -> list[str]:
-    """Matched filenames that would not round-trip through the `Probe` field's `(f1, f2, ...)`
-    grammar: `render_probe` joins them on `", "` and `parse_probe` splits back on the same
-    string, so a name containing it — or the field's own `DELIM` — corrupts the split, and an
-    embedded newline breaks the field's single-line grammar outright.
+    """Matched filenames that would not round-trip through the `Probe` field's `baseline (f1,
+    f2, ...)` grammar.
+
+    `render_probe` joins them on `", "` inside a `(...)` group appended to `baseline`, and
+    `_GREP_BASELINE_FILES_RE` recovers that group by scanning the rendered segment for its
+    outermost `" ("` / `")"` — not by position, so any of those literal sequences appearing
+    inside a name, not just between names, can move the boundary it finds. `", "` or `DELIM`
+    inside a name corrupts the join/split the same way; an embedded newline breaks the field's
+    single-line grammar outright.
     """
-    return [name for name in files if "\r" in name or "\n" in name or ", " in name or DELIM in name]
+    return [
+        name for name in files
+        if "\r" in name or "\n" in name or ", " in name or DELIM in name
+        or "(" in name or ")" in name
+    ]
 
 
 def _config_error_refusal(prepared: _Prepared, result: ProbeResult) -> _Refusal | None:
@@ -2627,7 +2683,7 @@ def cmd_start(args: argparse.Namespace) -> int:
             print(
                 f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: matched filename "
                 f"{unsafe[0]!r} cannot be recorded in the Probe field (contains ', ', ' — ', "
-                "or a newline)",
+                "'(', ')', or a newline)",
                 file=sys.stderr,
             )
             return EXIT_BAD_ARGUMENT
@@ -2726,6 +2782,38 @@ def cmd_finish(args: argparse.Namespace) -> int:
     if config_refusal is not None:
         print(f"[quirk:pm] {config_refusal.message}", file=sys.stderr)
         return config_refusal.code
+
+    # re-checked after the probe, before either outcome below is committed: a probe that writes
+    # tracked files leaves the tree dirty (or HEAD moved) at the moment of delivery, and a
+    # refusal is recorded evidence just as much as a delivered commit is — both must describe
+    # what was actually measured, not a tree the probe has since changed out from under it
+    dirty_after = _git_dirty_paths(project)
+    if dirty_after is None:
+        print(
+            f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: could not read working tree status",
+            file=sys.stderr,
+        )
+        return EXIT_FINISH_PRECONDITION_FAILED
+    if dirty_after:
+        print(
+            f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: probe left the working tree "
+            "dirty: " + ", ".join(dirty_after),
+            file=sys.stderr,
+        )
+        return EXIT_FINISH_PRECONDITION_FAILED
+
+    commit_sha = _git_head_sha(project)
+    if commit_sha is None:
+        print(f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: could not resolve HEAD", file=sys.stderr)
+        return EXIT_FINISH_PRECONDITION_FAILED
+    if commit_sha != head_before:
+        print(
+            f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: HEAD moved during the probe "
+            f"({head_before} -> {commit_sha})",
+            file=sys.stderr,
+        )
+        return EXIT_FINISH_PRECONDITION_FAILED
+
     missing_files = (
         grep_baseline_files_missing(project, current_probe.baseline_files)
         if probe_spec.verb == "grep" else []
@@ -2757,36 +2845,6 @@ def cmd_finish(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return EXIT_PROBE_REFUSED
-
-    # re-checked after the probe, not just before it: a probe that writes tracked files leaves
-    # the tree dirty (or HEAD moved) at the moment of delivery, and the sha recorded below must
-    # describe what was actually measured
-    dirty_after = _git_dirty_paths(project)
-    if dirty_after is None:
-        print(
-            f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: could not read working tree status",
-            file=sys.stderr,
-        )
-        return EXIT_FINISH_PRECONDITION_FAILED
-    if dirty_after:
-        print(
-            f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: probe left the working tree "
-            "dirty: " + ", ".join(dirty_after),
-            file=sys.stderr,
-        )
-        return EXIT_FINISH_PRECONDITION_FAILED
-
-    commit_sha = _git_head_sha(project)
-    if commit_sha is None:
-        print(f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: could not resolve HEAD", file=sys.stderr)
-        return EXIT_FINISH_PRECONDITION_FAILED
-    if commit_sha != head_before:
-        print(
-            f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: HEAD moved during the probe "
-            f"({head_before} -> {commit_sha})",
-            file=sys.stderr,
-        )
-        return EXIT_FINISH_PRECONDITION_FAILED
 
     new_status = StatusField(
         state="delivered", date=_today(),
@@ -2831,6 +2889,10 @@ def cmd_park(args: argparse.Namespace) -> int:
     if isinstance(prepared, _Refusal):
         print(f"[quirk:pm] {prepared.message}", file=sys.stderr)
         return prepared.code
+    sibling_refusal = _malformed_sibling_field_refusal(prepared)
+    if sibling_refusal is not None:
+        print(f"[quirk:pm] {sibling_refusal.message}", file=sys.stderr)
+        return sibling_refusal.code
     expected = _expectation(prepared)
 
     new_status = StatusField(
@@ -2872,6 +2934,10 @@ def cmd_decide(args: argparse.Namespace) -> int:
     if isinstance(prepared, _Refusal):
         print(f"[quirk:pm] {prepared.message}", file=sys.stderr)
         return prepared.code
+    sibling_refusal = _malformed_sibling_field_refusal(prepared)
+    if sibling_refusal is not None:
+        print(f"[quirk:pm] {sibling_refusal.message}", file=sys.stderr)
+        return sibling_refusal.code
     expected = _expectation(prepared)
 
     if args.as_ == "wontfix":
@@ -2929,10 +2995,14 @@ def _reconcile_schema_refusal(project: Path) -> _Refusal | None:
     return None
 
 
-def _reconcile_read_pass(project: Path) -> list[_ReconcileEval]:
+def _reconcile_read_pass(project: Path) -> tuple[list[_ReconcileEval], list[str]]:
     """Lock-free evaluation of every `delivered` entry's ancestry (tech.md's read pass): read
     once, strict parse, no lock held. Only the caller's later write-back, per promotable entry,
     takes a lock, briefly.
+
+    Returns `(evals, parse_error_lines)` — `parse_error_lines` mirrors `LedgerWorld.parse_errors`
+    verbatim, so a ledger too large or malformed to read is reported to the caller rather than
+    silently contributing zero entries indistinguishable from a ledger with none to report.
     """
     world = _load_ledger_world(project)
     repo_cache: dict[Path, _RepoState] = {}
@@ -2954,7 +3024,7 @@ def _reconcile_read_pass(project: Path) -> list[_ReconcileEval]:
             spec=spec, entry_id=entry.id, status=status, repo=repo,
             outcome=outcome, detail=detail, integration_ref=integration_ref, probe_field=probe_field,
         ))
-    return evals
+    return evals, world.parse_errors
 
 
 def _reconcile_write_back(project: Path, ev: _ReconcileEval, verify: bool) -> tuple[str, str | None]:
@@ -3046,6 +3116,10 @@ def _cmd_reconcile_close(args: argparse.Namespace, project: Path) -> int:
     if isinstance(prepared, _Refusal):
         print(f"[quirk:pm] {prepared.message}", file=sys.stderr)
         return prepared.code
+    sibling_refusal = _malformed_sibling_field_refusal(prepared)
+    if sibling_refusal is not None:
+        print(f"[quirk:pm] {sibling_refusal.message}", file=sys.stderr)
+        return sibling_refusal.code
     expected = _expectation(prepared)
 
     new_status = StatusField(
@@ -3093,9 +3167,20 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         print(f"[quirk:pm] {schema_refusal.message}", file=sys.stderr)
         return schema_refusal.code
 
-    evals = _reconcile_read_pass(project)
+    evals, parse_error_lines = _reconcile_read_pass(project)
+    # a skipped ledger is could-not-look, not looked-and-found-nothing — surfaced the same way
+    # the read layer already reports it, so this never reads as a second, silently different
+    # kind of "clean"
+    for line in parse_error_lines:
+        print(line)
     if not evals:
-        print("[quirk:pm] reconcile: no delivered entries to evaluate")
+        if parse_error_lines:
+            print(
+                "[quirk:pm] reconcile: no delivered entries evaluated — "
+                f"{len(parse_error_lines)} ledger(s) could not be read, see above"
+            )
+        else:
+            print("[quirk:pm] reconcile: no delivered entries to evaluate")
         return EXIT_OK
 
     promoted = not_yet = cannot_evaluate = skipped = 0
@@ -3126,10 +3211,13 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
             skipped += 1
             print(f"[quirk:pm] {label}: skipped (entry changed since read pass)")
 
-    print(
+    summary = (
         f"[quirk:pm] reconcile: {promoted} closed, {not_yet} awaiting integration, "
         f"{cannot_evaluate} cannot evaluate, {skipped} skipped (of {len(evals)} delivered)"
     )
+    if parse_error_lines:
+        summary += f" — {len(parse_error_lines)} ledger(s) could not be read, see above"
+    print(summary)
     if lock_timeout_seen and promoted == 0:
         return EXIT_LOCK_TIMEOUT
     return EXIT_OK

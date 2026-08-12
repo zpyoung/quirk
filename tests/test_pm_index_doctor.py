@@ -788,6 +788,36 @@ def test_doctor_does_not_flag_a_fenced_status_example_as_duplicate(initialized_p
     assert "DUPLICATE_LIFECYCLE_FIELD" not in out
 
 
+def test_lifecycle_doctor_findings_masks_the_file_once_regardless_of_entry_count(
+    initialized_project: Path, monkeypatch
+) -> None:
+    """Duplicate-lifecycle-field detection used to re-mask the whole file once per (entry,
+    label) — for N entries that's 3N full-file masks, quadratic in ledger size since the file
+    itself grows with N. Whatever the entry count, the file must be masked exactly once."""
+    bugs = initialized_project / "BUGS.md"
+    for i in range(1, 201):
+        append_bug(bugs, i, f"entry {i}", severity="high", observed="2026-08-01")
+
+    fp, skip_reason = pm._read_and_parse(initialized_project, pm.BACKLOG_FILES[0])
+    assert fp is not None, skip_reason
+    assert len(fp.entries) == 200
+
+    full_file_mask_calls = 0
+    real_mask_quoted = pm.mask_quoted
+
+    def spying_mask_quoted(text):
+        nonlocal full_file_mask_calls
+        if text is fp.text:
+            full_file_mask_calls += 1
+        return real_mask_quoted(text)
+
+    monkeypatch.setattr(pm, "mask_quoted", spying_mask_quoted)
+    pm._lifecycle_doctor_findings(fp, "2026-08-01")
+    assert full_file_mask_calls == 1, (
+        f"expected the file to be masked once regardless of entry count, got {full_file_mask_calls}"
+    )
+
+
 def test_doctor_reports_unverified_delivery_for_probe_none(initialized_project: Path) -> None:
     bugs = initialized_project / "BUGS.md"
     _bug_with_fields(

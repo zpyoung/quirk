@@ -202,6 +202,38 @@ def test_migrate_too_new_ledger_outranks_lock_contention_on_another_file(
     assert result.returncode == pm.EXIT_SCHEMA_MISMATCH
 
 
+def test_migrate_recheck_under_lock_blocks_the_whole_run_when_a_ledger_becomes_too_new(
+    legacy_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ledger can become too new in the window between the read-only preflight and the locks
+    actually being held. The recheck that catches this must run before any file is written — not
+    discover it mid-loop, after an earlier ledger in iteration order has already been migrated.
+    """
+    deferred = legacy_project / "DEFERRED.md"
+    bugs_before = (legacy_project / "BUGS.md").read_bytes()
+
+    real_acquire = pm._acquire_ledger_lock
+    mutated = False
+
+    def bumping_acquire(lock_path: Path, deadline: float):
+        nonlocal mutated
+        if not mutated and lock_path.name == "DEFERRED.md.lock":
+            deferred.write_text(deferred.read_text().replace("schema-version: 1", "schema-version: 3"))
+            mutated = True
+        return real_acquire(lock_path, deadline)
+
+    monkeypatch.setattr(pm, "_acquire_ledger_lock", bumping_acquire)
+
+    rc = pm.main(["migrate", "--project-dir", str(legacy_project)])
+
+    assert rc == pm.EXIT_SCHEMA_MISMATCH
+    # BUGS.md sorts before DEFERRED.md in LEDGER_FILES — under the old bug it would already have
+    # been migrated to v2 by the time the loop reached DEFERRED.md and discovered the problem
+    assert (legacy_project / "BUGS.md").read_bytes() == bugs_before
+    assert pm.detect_schema_version(deferred.read_text()) == 3
+    assert not (legacy_project / "ROADMAP.md").exists()
+
+
 # --- TEST_BACKLOG.md gains Logged without touching entries ----------------
 
 

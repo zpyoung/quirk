@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -136,10 +137,14 @@ def test_test_probe_exit_3_internal_error_is_error(
 ) -> None:
     # pytest's own INTERNAL_ERROR (3) isn't reliably reproducible on demand; this pins the
     # "any code absent from the map defaults to error" fallback the real code path also uses
-    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess:
-        return subprocess.CompletedProcess(args=["fake"], returncode=3)
+    class _FakeProc:
+        pid = 999999
+        returncode = 3
 
-    monkeypatch.setattr(pm.subprocess, "run", fake_run)
+        def communicate(self, timeout: float | None = None) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    monkeypatch.setattr(pm.subprocess, "Popen", lambda *args, **kwargs: _FakeProc())
     spec = pm.parse_probe_spec("test:test_x.py::test_ok")
     result = pm.run_probe(spec, tmp_path, timeout=30)
     assert result.outcome == "error"
@@ -150,6 +155,41 @@ def test_test_probe_timeout_is_error(tmp_path: Path) -> None:
     spec = pm.parse_probe_spec("test:test_x.py::test_slow")
     result = pm.run_probe(spec, tmp_path, timeout=1)
     assert result.outcome == "error"
+
+
+def test_test_probe_timeout_kills_children_the_runner_spawned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A timed-out probe must bound the whole tree it started, not just the runner's own pid —
+    a runner that backgrounds a child (a server, a worker pool, ...) and then hangs itself must
+    not leave that child running past the timeout."""
+    pid_file = tmp_path / "child.pid"
+    runner = tmp_path / "spawning_runner.sh"
+    runner.write_text(
+        "#!/bin/sh\n"
+        "sleep 30 &\n"
+        f"echo $! > {pid_file}\n"
+        "sleep 30\n"
+    )
+    runner.chmod(0o755)
+    monkeypatch.setenv("QUIRK_PM_TEST_RUNNER", str(runner))
+    monkeypatch.setenv("QUIRK_PM_TEST_EXIT_MAP", "0:pass,1:fail")
+
+    spec = pm.parse_probe_spec("test:irrelevant")
+    result = pm.run_probe(spec, tmp_path, timeout=1)
+    assert result.outcome == "error"
+
+    child_pid = int(pid_file.read_text().strip())
+    deadline = time.monotonic() + 5
+    child_alive = True
+    while time.monotonic() < deadline:
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            child_alive = False
+            break
+        time.sleep(0.05)
+    assert not child_alive, f"child pid {child_pid} outlived the probe timeout"
 
 
 # --- regression row 9: only a genuinely failing test is an acceptable baseline ----------------
@@ -616,6 +656,16 @@ def test_grep_baseline_files_unsafe_flags_the_field_delimiter() -> None:
 
 def test_grep_baseline_files_unsafe_flags_an_embedded_newline() -> None:
     assert pm._grep_baseline_files_unsafe(["line\nbreak.py"]) == ["line\nbreak.py"]
+
+
+def test_grep_baseline_files_unsafe_flags_an_open_paren() -> None:
+    # "baseline (f1, f2)" is recovered by scanning for the outermost " (" / ")" pair, not by
+    # position — a name containing " (" can be mistaken for that boundary itself
+    assert pm._grep_baseline_files_unsafe(["weird (name).py"]) == ["weird (name).py"]
+
+
+def test_grep_baseline_files_unsafe_flags_a_close_paren() -> None:
+    assert pm._grep_baseline_files_unsafe(["weird).py"]) == ["weird).py"]
 
 
 # --- none: never executed, always passes --------------------------------------

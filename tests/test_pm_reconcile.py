@@ -254,6 +254,42 @@ def test_reconcile_zero_delivered_entries_exits_0(pm_project: Path) -> None:
     assert "no delivered entries" in result.stdout
 
 
+def test_reconcile_reports_a_ledger_too_large_to_read_instead_of_a_false_all_clear(
+    pm_project: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # a ledger reconcile couldn't read is could-not-look, not looked-and-found-nothing — it must
+    # never be reported the same way as a genuinely empty backlog
+    monkeypatch.setenv("QUIRK_PM_MAX_FILE_BYTES", "10")
+
+    result = run_pm("reconcile", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_OK, result.stderr
+    assert "no delivered entries to evaluate" not in result.stdout
+    assert "BUGS.md: exceeds 10 bytes, skipping" in result.stdout
+    assert "could not be read" in result.stdout
+
+
+def test_reconcile_reports_a_too_large_ledger_alongside_entries_it_did_evaluate(
+    pm_git_project: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # a skip on one ledger must not be swallowed just because other ledgers had real work to
+    # report — the summary line must not read as a clean, fully-evaluated run
+    sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+    append_bug(pm_git_project, 1, Status=f"delivered — 2026-08-05 — attempt 1 — commit: {sha}", Probe="none")
+    bugs_size = (pm_git_project / "BUGS.md").stat().st_size
+
+    deferred = pm_git_project / "DEFERRED.md"
+    deferred.write_text(deferred.read_text() + "x" * (bugs_size + 100_000))
+    monkeypatch.setenv("QUIRK_PM_MAX_FILE_BYTES", str(bugs_size + 1000))
+
+    result = run_pm("reconcile", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_OK, result.stderr
+    assert "1 closed" in result.stdout
+    assert "DEFERRED.md" in result.stdout
+    assert "could not be read" in result.stdout
+
+
 def test_reconcile_aggregate_mix_exits_0(pm_git_project: Path) -> None:
     base_branch = current_branch(pm_git_project)
     sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
@@ -348,7 +384,7 @@ def test_fetch_memoized_once_per_repo_across_multiple_delivered_entries(
 
     monkeypatch.setattr(pm, "_run_git", spy)
 
-    evals = pm._reconcile_read_pass(pm_git_project)
+    evals, _parse_error_lines = pm._reconcile_read_pass(pm_git_project)
 
     assert len(fetch_calls) == 1
     assert len(evals) == 3
@@ -362,7 +398,7 @@ def test_write_back_skips_silently_on_cas_mismatch_race(pm_git_project: Path) ->
     sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
     append_bug(pm_git_project, 1, Status=f"delivered — 2026-08-05 — attempt 1 — commit: {sha}", Probe="none")
 
-    evals = pm._reconcile_read_pass(pm_git_project)
+    evals, _parse_error_lines = pm._reconcile_read_pass(pm_git_project)
     assert len(evals) == 1
     ev = evals[0]
     assert ev.outcome == "promote"
@@ -391,7 +427,7 @@ def test_write_back_skips_silently_when_only_commit_hand_edited(pm_git_project: 
     sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
     append_bug(pm_git_project, 1, Status=f"delivered — 2026-08-05 — attempt 1 — commit: {sha}", Probe="none")
 
-    evals = pm._reconcile_read_pass(pm_git_project)
+    evals, _parse_error_lines = pm._reconcile_read_pass(pm_git_project)
     ev = evals[0]
     assert ev.outcome == "promote"
 
@@ -537,6 +573,28 @@ def test_close_requires_delivered_state(pm_git_project: Path) -> None:
     )
 
     assert result.returncode == pm.EXIT_CAS_FAILURE, result.stdout
+
+
+def test_close_refuses_on_a_malformed_probe_field(pm_git_project: Path) -> None:
+    # --close never reads Probe itself, but the same reasoning as park/decide's malformed-field
+    # refusal applies here too: a corrupt sibling field on an entry being declared terminal
+    # deserves a diagnostic, not silence
+    sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+    append_bug(
+        pm_git_project, 1,
+        Status=f"delivered — 2026-08-05 — attempt 1 — commit: {sha}",
+        Probe="not a valid probe at all",
+    )
+    before = bugs_text(pm_git_project)
+
+    result = run_pm(
+        "reconcile", "--close", "BUG-1", "--integrated", sha,
+        "--reason", "already merged", cwd=pm_git_project,
+    )
+
+    assert result.returncode == pm.EXIT_CORRUPT_ENTRY, result.stdout
+    assert "malformed Probe field" in result.stderr
+    assert bugs_text(pm_git_project) == before
 
 
 def test_close_cas_race_two_calls_exactly_one_succeeds_other_gets_exit6(pm_git_project: Path) -> None:
