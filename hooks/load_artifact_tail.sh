@@ -34,8 +34,9 @@ fi
 # project) must never break session start — fall back to one line instead.
 if [[ $status -eq 0 && -n "$output" ]]; then
   echo "$output"
-  # --index is counts only; --next is the one surface that names entries, and
-  # a session that knows "BUGS 4/4 open" and nothing else cannot act on it.
+  # --index now names in_progress/delivered/closed work, but the unplaced count is
+  # still a bare number; --next is the only surface that names which ready entry
+  # to pick up next.
   shortlist="$(python3 "$PM" --next --project-dir "$CLAUDE_PROJECT_DIR" 2>/dev/null)"
   next_status=$?
   if [[ $next_status -eq 0 && -n "$shortlist" ]]; then

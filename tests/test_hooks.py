@@ -31,7 +31,7 @@ def test_load_tail_calls_pm_index_when_artifacts_exist(initialized_project: Path
     r = run_hook("load_artifact_tail.sh", initialized_project)
     assert r.returncode == 0
     assert "[quirk:pm]" in r.stdout
-    assert "BUGS 1/1 open" in r.stdout
+    assert "BUGS 1 open" in r.stdout
 
 
 def test_load_tail_silent_when_project_dir_unset(project_dir: Path) -> None:
@@ -148,7 +148,7 @@ def test_load_tail_names_the_work_not_just_the_count(initialized_project: Path) 
     bugs.write_text(bugs.read_text() + "\n## BUG-1: safari drops the session cookie\n- **Severity**: high\n")
     r = run_hook("load_artifact_tail.sh", initialized_project)
     assert r.returncode == 0
-    assert "BUGS 1/1 open" in r.stdout
+    assert "BUGS 1 open" in r.stdout
     assert "safari drops the session cookie" in r.stdout
 
 
