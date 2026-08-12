@@ -238,8 +238,33 @@ def hash_file(path: Path) -> str | None:
     return hashlib.sha256(data).hexdigest()[:8]
 
 
+class SymlinkedLedgerError(Exception):
+    """Raised by `atomic_write` when `path` is itself a symlink."""
+
+
+def _replacement_mode(path: Path) -> int:
+    """Permission bits the replacement inode should carry: `path`'s own bits when it already
+    exists, otherwise the process umask's ordinary default for a new file.
+
+    `tempfile.mkstemp` always creates its temp file at 0600 regardless of umask, and `os.replace`
+    keeps whichever inode's permissions it started with — left uncorrected, that silently narrows
+    an existing ledger's mode on every write while ignoring the umask on the file's first.
+    """
+    try:
+        return stat.S_IMODE(path.stat().st_mode)
+    except FileNotFoundError:
+        umask = os.umask(0)
+        os.umask(umask)
+        return 0o666 & ~umask
+
+
 def atomic_write(path: Path, text: str) -> None:
     """Replace `path`'s contents with `text` via a same-directory temp file and `os.replace`.
+
+    Refuses (`SymlinkedLedgerError`) rather than writing when `path` is itself a symlink —
+    replacing it would silently diverge the link's target from `path`, and following the link to
+    write outside the project is worse. Callers hold the file lock across this check and the
+    later replace, so an ordinary run can't race a concurrent writer here.
 
     Fsyncs the temp file before the replace and the containing directory after — the first makes
     the new content durable, the second makes the rename itself survive a power cut; neither
@@ -251,11 +276,15 @@ def atomic_write(path: Path, text: str) -> None:
     Writes with `newline=""`: `text`'s line terminators reach the disk exactly as given, so a
     caller preserving a file's original CRLF has that preserved through this call too.
     """
+    if path.is_symlink():
+        raise SymlinkedLedgerError(f"refusing to write through a symlinked ledger: {path}")
+
     directory = path.parent
     fd, tmp_name = tempfile.mkstemp(dir=directory, prefix=f".{path.name}.", suffix=".tmp")
     tmp_path = Path(tmp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            os.fchmod(f.fileno(), _replacement_mode(path))
             f.write(text)
             f.flush()
             os.fsync(f.fileno())

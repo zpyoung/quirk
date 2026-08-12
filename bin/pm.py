@@ -37,6 +37,7 @@ from artifact_lib import (
     Entry,
     MalformedHeading,
     RoadmapParse,
+    SymlinkedLedgerError,
     _preamble_member_findings,
     atomic_write,
     detect_schema_version,
@@ -90,6 +91,7 @@ DEFAULT_LOCK_TIMEOUT = 5.0
 DEFAULT_PROBE_TIMEOUT = 120.0
 DEFAULT_TEST_RUNNER = "python3 -m pytest"
 DEFAULT_TEST_EXIT_MAP: dict[int, str] = {0: "pass", 1: "fail", 4: "missing", 5: "missing"}
+_PROBE_OUTCOMES = frozenset({"pass", "fail", "missing", "error"})
 
 DEFAULT_STALL_DAYS = 7
 DEFAULT_UNDETERMINED_AFTER_DAYS = 14
@@ -664,6 +666,26 @@ def _migrate_one_ledger(project: Path, filename: str) -> tuple[str, str]:
     return "migrated", f"{filename}: migrated to v2"
 
 
+def _migrate_preflight_too_new(project: Path) -> str | None:
+    """Read-only, pre-lock scan of every ledger for a schema version this plugin can't migrate.
+
+    `cmd_migrate` needs this answer before it acquires any lock: discovering a too-new file only
+    after lock contention would let an unrelated timeout (5) mask what tech.md's exit-code
+    precedence (7 -> 3 -> 8 -> 5) says must be an unconditional 8. Not a substitute for the
+    lock-held check `_migrate_one_ledger` still does on every file — a file can change between
+    this scan and that one.
+    """
+    for filename in LEDGER_FILES:
+        path = project / filename
+        if not path.exists():
+            continue
+        with path.open(encoding="utf-8", newline="") as f:
+            version = detect_schema_version(f.read())
+        if version is not None and version > 2:
+            return f"{filename}: schema v{version} file, plugin understands v2. Upgrade quirk."
+    return None
+
+
 def cmd_migrate(args: argparse.Namespace) -> int:
     project = Path(args.project_dir).resolve()
     if not project.exists() or not project.is_dir():
@@ -677,6 +699,11 @@ def cmd_migrate(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return EXIT_NOT_FOUND
+
+    too_new_message = _migrate_preflight_too_new(project)
+    if too_new_message is not None:
+        print(f"[quirk:pm] {too_new_message}", file=sys.stderr)
+        return EXIT_SCHEMA_MISMATCH
 
     lock_dir = ensure_lock_dir(project)
     timeout = _lock_timeout()
@@ -1202,12 +1229,22 @@ def _malformed_lifecycle_finding(key: str, label: str, reason: str) -> tuple[str
 
 def _entry_probe(entry: Entry) -> ProbeField | MalformedField | None:
     raw = entry.fields.get("Probe")
-    return None if raw is None else parse_probe(raw)
+    if raw is None:
+        # mirrors `_entry_status`: a value-less field line never reaches `entry.fields`, so it's
+        # indistinguishable here from the field never having been written at all
+        if field_present_but_empty(entry, "Probe"):
+            return MalformedField(raw="", reason="empty")
+        return None
+    return parse_probe(raw)
 
 
 def _entry_verify(entry: Entry) -> VerifyField | MalformedField | None:
     raw = entry.fields.get("Verify")
-    return None if raw is None else parse_verify(raw)
+    if raw is None:
+        if field_present_but_empty(entry, "Verify"):
+            return MalformedField(raw="", reason="empty")
+        return None
+    return parse_verify(raw)
 
 
 def _duplicate_lifecycle_field_labels(text: str, entry: Entry) -> list[str]:
@@ -1800,7 +1837,10 @@ def _probe_timeout() -> float:
 
 
 def _parse_test_exit_map(raw: str) -> dict[int, str] | None:
-    """Parse `QUIRK_PM_TEST_EXIT_MAP`'s `code:outcome` list; `None` if any entry is malformed."""
+    """Parse `QUIRK_PM_TEST_EXIT_MAP`'s `code:outcome` list; `None` if any entry is malformed or
+    names an outcome outside `_PROBE_OUTCOMES` — everything downstream (`Verify`'s mapping,
+    `UNVERIFIED_DELIVERY`, `probe_accepts_final`) assumes that exact four-token vocabulary.
+    """
     mapping: dict[int, str] = {}
     for item in raw.split(","):
         item = item.strip()
@@ -1812,6 +1852,8 @@ def _parse_test_exit_map(raw: str) -> dict[int, str] | None:
         try:
             code = int(code_text)
         except ValueError:
+            return None
+        if outcome not in _PROBE_OUTCOMES:
             return None
         mapping[code] = outcome
     return mapping if mapping else None
@@ -1900,8 +1942,14 @@ def _run_grep_probe(spec: ProbeSpec, root: Path, timeout: float) -> ProbeResult:
             candidate = candidate if candidate.is_absolute() else root / candidate
             if not candidate.exists():
                 return ProbeResult(outcome="error", detail=f"path not found: {raw}")
+            is_dir = candidate.is_dir()
+            # checked before the open below: a FIFO passes `exists()` but blocks on open until a
+            # writer appears, which would stall before `started` is even set — `is_file`, not
+            # `exists`, for the same reason `grep_baseline_files_missing` uses it
+            if not is_dir and not candidate.is_file():
+                return ProbeResult(outcome="error", detail=f"not a file or directory: {raw}")
             try:
-                if candidate.is_dir():
+                if is_dir:
                     with os.scandir(candidate):
                         pass
                 else:
@@ -2083,6 +2131,11 @@ def _prepare_transition(
     `validate_args` supplies the command-specific "2" checks (probe syntax, `--reason`, `--by`,
     `--repo`) — they run after the not-found check and before the schema/corrupt checks, per
     tech.md's per-command precedence table, so a not-found ID always outranks a bad argument.
+
+    The corrupt-entry (4) step is itself two checks in sequence: heading ambiguity (duplicate ID,
+    missing title), which applies to any file, then a PROPOSAL guard (6) ahead of the `Status`
+    parse — proposals.md has its own `Status` vocabulary, so parsing it as a PM lifecycle field
+    would report a false "malformed" finding instead of the true "not part of the lifecycle" one.
     """
     resolved = _resolve_ledger(project, id_str)
     if isinstance(resolved, _Refusal):
@@ -2111,6 +2164,15 @@ def _prepare_transition(
     if malformed:
         return _refuse(EXIT_CORRUPT_ENTRY, f"{spec.header}-{entry_id}: malformed heading, no title")
     entry = matches[0]
+
+    # ahead of the Status parse below: proposals.md's own `Status` vocabulary (proposed/accepted/
+    # rejected/superseded) is legitimately unparseable as a PM lifecycle Status, and reporting
+    # that as a malformed field would tell the user something false about their file
+    if spec.header == "PROPOSAL":
+        return _refuse(
+            EXIT_CAS_FAILURE, f"{spec.header}-{entry_id}: PROPOSAL entries are not part of the PM lifecycle"
+        )
+
     status = _entry_status(entry)
     if isinstance(status, MalformedField):
         return _refuse(
@@ -2121,10 +2183,6 @@ def _prepare_transition(
     except DuplicateFieldError:
         return _refuse(EXIT_CORRUPT_ENTRY, f"{spec.header}-{entry_id}: duplicated field line, refusing")
 
-    if spec.header == "PROPOSAL":
-        return _refuse(
-            EXIT_CAS_FAILURE, f"{spec.header}-{entry_id}: PROPOSAL entries are not part of the PM lifecycle"
-        )
     if status.state not in allowed_states:
         return _refuse(
             EXIT_CAS_FAILURE,
@@ -2350,7 +2408,7 @@ def _verify_probe_outcome(spec: ProbeSpec, result: ProbeResult, baseline_files_m
     if spec.verb == "none":
         return "pass"
     if spec.verb == "test":
-        return result.outcome if result.outcome in {"pass", "fail", "missing", "error"} else "error"
+        return result.outcome if result.outcome in _PROBE_OUTCOMES else "error"
     if spec.verb == "grep":
         if result.outcome == "error":
             return "error"
@@ -2500,6 +2558,15 @@ def _probe_field_with_final(current: ProbeField, spec: ProbeSpec, result: ProbeR
     )
 
 
+def _grep_baseline_files_unsafe(files: Iterable[str]) -> list[str]:
+    """Matched filenames that would not round-trip through the `Probe` field's `(f1, f2, ...)`
+    grammar: `render_probe` joins them on `", "` and `parse_probe` splits back on the same
+    string, so a name containing it — or the field's own `DELIM` — corrupts the split, and an
+    embedded newline breaks the field's single-line grammar outright.
+    """
+    return [name for name in files if "\r" in name or "\n" in name or ", " in name or DELIM in name]
+
+
 def _config_error_refusal(prepared: _Prepared, result: ProbeResult) -> _Refusal | None:
     if result.outcome != "config_error":
         return None
@@ -2553,6 +2620,17 @@ def cmd_start(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return EXIT_PROBE_REFUSED
+
+    if probe_spec.verb == "grep":
+        unsafe = _grep_baseline_files_unsafe(baseline.files)
+        if unsafe:
+            print(
+                f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: matched filename "
+                f"{unsafe[0]!r} cannot be recorded in the Probe field (contains ', ', ' — ', "
+                "or a newline)",
+                file=sys.stderr,
+            )
+            return EXIT_BAD_ARGUMENT
 
     new_status = StatusField(
         state="in_progress", date=_today(),
@@ -2636,6 +2714,13 @@ def cmd_finish(args: argparse.Namespace) -> int:
         )
         return EXIT_FINISH_PRECONDITION_FAILED
 
+    # captured before the probe runs, so the delivered path below can require it hasn't moved —
+    # a probe that writes tracked files must not let a stale sha describe what was measured
+    head_before = _git_head_sha(project)
+    if head_before is None:
+        print(f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: could not resolve HEAD", file=sys.stderr)
+        return EXIT_FINISH_PRECONDITION_FAILED
+
     result = run_probe(probe_spec, project)
     config_refusal = _config_error_refusal(prepared, result)
     if config_refusal is not None:
@@ -2673,9 +2758,34 @@ def cmd_finish(args: argparse.Namespace) -> int:
         )
         return EXIT_PROBE_REFUSED
 
+    # re-checked after the probe, not just before it: a probe that writes tracked files leaves
+    # the tree dirty (or HEAD moved) at the moment of delivery, and the sha recorded below must
+    # describe what was actually measured
+    dirty_after = _git_dirty_paths(project)
+    if dirty_after is None:
+        print(
+            f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: could not read working tree status",
+            file=sys.stderr,
+        )
+        return EXIT_FINISH_PRECONDITION_FAILED
+    if dirty_after:
+        print(
+            f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: probe left the working tree "
+            "dirty: " + ", ".join(dirty_after),
+            file=sys.stderr,
+        )
+        return EXIT_FINISH_PRECONDITION_FAILED
+
     commit_sha = _git_head_sha(project)
     if commit_sha is None:
         print(f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: could not resolve HEAD", file=sys.stderr)
+        return EXIT_FINISH_PRECONDITION_FAILED
+    if commit_sha != head_before:
+        print(
+            f"[quirk:pm] {prepared.spec.header}-{prepared.entry_id}: HEAD moved during the probe "
+            f"({head_before} -> {commit_sha})",
+            file=sys.stderr,
+        )
         return EXIT_FINISH_PRECONDITION_FAILED
 
     new_status = StatusField(
@@ -3181,6 +3291,12 @@ def _dispatch(argv: list[str] | None) -> int:
 def main(argv: list[str] | None = None) -> int:
     try:
         return _dispatch(argv)
+    except SymlinkedLedgerError as exc:
+        # a deliberate, named refusal must not reach the catch-all below: exit 1 is documented as
+        # the safety net for an uncaught exception, so reporting this there would both blame
+        # pm.py for the user's setup and leave a wrapper unable to tell the two apart
+        print(f"[quirk:pm] {exc} — replace it with a regular file and retry", file=sys.stderr)
+        return EXIT_BAD_ARGUMENT
     except Exception as exc:
         print(f"[quirk:pm] unexpected error: {exc}", file=sys.stderr)
         return EXIT_UNEXPECTED_ERROR

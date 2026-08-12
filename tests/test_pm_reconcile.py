@@ -675,6 +675,27 @@ def test_verify_writes_probe_error_when_probe_field_does_not_reconstruct(pm_git_
     assert "probe: error" in verify_line
 
 
+def test_verify_writes_probe_error_for_a_genuinely_malformed_probe_field(pm_git_project: Path) -> None:
+    # a third failure mode, distinct from the two above: `Probe` is present but fails
+    # `parse_probe` outright (unrecognized verb) rather than being absent or unreconstructable.
+    # `_reconcile_read_pass` must filter the resulting MalformedField the same way it filters an
+    # absent field — never pass it to `_reconstruct_probe_spec`/`run_probe` as if it had parsed
+    sha = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+    append_bug(
+        pm_git_project, 1,
+        Status=f"delivered — 2026-08-05 — attempt 1 — commit: {sha}",
+        Probe="not a valid probe at all",
+    )
+
+    result = run_pm("reconcile", "--verify", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_OK, result.stderr
+    text = bugs_text(pm_git_project)
+    assert "- **Status**: closed" in status_line(text, "## BUG-1:")
+    verify_line = field_line(text, "## BUG-1:", "Verify")
+    assert "probe: error" in verify_line
+
+
 # --- --verify: grep must not treat deleted baseline files as a fix ---------
 
 

@@ -87,6 +87,24 @@ def commit_all(repo: Path, message: str = "commit") -> None:
 # --- transition table: start ------------------------------------------------
 
 
+def test_start_refuses_to_write_through_a_symlinked_ledger(pm_project: Path) -> None:
+    append_bug(pm_project, 1)
+    real_target = pm_project.parent / "elsewhere-BUGS.md"
+    shutil.move(str(pm_project / "BUGS.md"), str(real_target))
+    (pm_project / "BUGS.md").symlink_to(real_target)
+    before = real_target.read_bytes()
+
+    result = run_pm("start", "BUG-1", "--probe", "none", "--here", cwd=pm_project)
+
+    # a named refusal, not the exit-1 catch-all: a wrapper has to be able to tell "your ledger is
+    # a symlink" from "pm.py threw", and stderr must not blame pm.py for the user's setup
+    assert result.returncode == pm.EXIT_BAD_ARGUMENT, result.stdout
+    assert "unexpected error" not in result.stderr
+    assert "symlinked ledger" in result.stderr
+    assert real_target.read_bytes() == before
+    assert (pm_project / "BUGS.md").is_symlink()
+
+
 def test_start_from_never_started_open_writes_in_progress_attempt_1(pm_project: Path) -> None:
     append_bug(pm_project, 1)
 
@@ -148,6 +166,20 @@ def test_start_refuses_a_proposal_id(pm_project: Path) -> None:
     assert (pm_project / "proposals.md").read_bytes() == before
 
 
+def test_start_refuses_a_proposal_with_its_own_status_vocabulary_as_6_not_4(pm_project: Path) -> None:
+    # "proposed" is proposals.md's own Status vocabulary (tech.md), unparseable as a PM
+    # lifecycle Status — that must surface as "not part of the lifecycle" (6), not a false
+    # "malformed Status field" (4)
+    append_proposal(pm_project, 1, context="x", recommendation="y", Status="proposed")
+    before = (pm_project / "proposals.md").read_bytes()
+
+    result = run_pm("start", "PROPOSAL-1", "--probe", "none", "--here", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_CAS_FAILURE, result.stdout
+    assert "not part of the PM lifecycle" in result.stderr
+    assert (pm_project / "proposals.md").read_bytes() == before
+
+
 def test_start_repo_flag_refuses_with_exit_2_in_phase_2(pm_project: Path) -> None:
     append_bug(pm_project, 1)
     before = (pm_project / "BUGS.md").read_bytes()
@@ -172,6 +204,22 @@ def test_start_config_error_exits_2_not_9_and_writes_nothing(
     assert (pm_project / "BUGS.md").read_bytes() == before
 
 
+def test_start_exit_map_with_out_of_vocabulary_outcome_is_a_config_error(
+    pm_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # "bogus" isn't pass/fail/missing/error — must be treated as a configuration error (2),
+    # exactly like a malformed code:outcome shape, rather than persisted into the Probe field
+    monkeypatch.setenv("QUIRK_PM_TEST_EXIT_MAP", "0:bogus,1:fail")
+    append_bug(pm_project, 1)
+    before = (pm_project / "BUGS.md").read_bytes()
+
+    result = run_pm("start", "BUG-1", "--probe", "test:whatever", "--here", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_BAD_ARGUMENT, result.stdout
+    assert "QUIRK_PM_TEST_EXIT_MAP" in result.stderr
+    assert (pm_project / "BUGS.md").read_bytes() == before
+
+
 def test_start_probe_rejects_the_delimiter_before_writing(pm_project: Path) -> None:
     (pm_project / "note.txt").write_text("TODO — AUTH needs work\n")
     append_bug(pm_project, 1)
@@ -180,6 +228,20 @@ def test_start_probe_rejects_the_delimiter_before_writing(pm_project: Path) -> N
     result = run_pm("start", "BUG-1", "--probe", "grep:TODO — AUTH", "--here", cwd=pm_project)
 
     assert result.returncode == pm.EXIT_BAD_ARGUMENT, result.stdout
+    assert (pm_project / "BUGS.md").read_bytes() == before
+
+
+def test_start_refuses_when_a_matched_grep_filename_cannot_round_trip(pm_project: Path) -> None:
+    # render_probe joins matched filenames on ", "; a name containing that same separator would
+    # split back into phantom baseline files on the next read
+    (pm_project / "a, b.py").write_text("MARKER_XYZ present\n")
+    append_bug(pm_project, 1)
+    before = (pm_project / "BUGS.md").read_bytes()
+
+    result = run_pm("start", "BUG-1", "--probe", "grep:MARKER_XYZ", "--here", cwd=pm_project)
+
+    assert result.returncode == pm.EXIT_BAD_ARGUMENT, result.stdout
+    assert "a, b.py" in result.stderr
     assert (pm_project / "BUGS.md").read_bytes() == before
 
 
@@ -336,6 +398,24 @@ def test_finish_with_no_probe_field_is_corrupt_not_implicit_none(pm_git_project:
     assert bugs_text(pm_git_project) == before
 
 
+def test_finish_with_a_genuinely_malformed_probe_field_is_corrupt(pm_git_project: Path) -> None:
+    # distinct from the absent-Probe case above: the field is present but fails `parse_probe`
+    # outright, so `finish` must refuse rather than re-run something it couldn't parse
+    append_bug(
+        pm_git_project, 1,
+        Status="in_progress — 2026-08-05 — attempt 1",
+        Probe="not a valid probe at all",
+    )
+    commit_all(pm_git_project, "add BUG-1 with a malformed Probe field")
+    before = bugs_text(pm_git_project)
+
+    result = run_pm("finish", "BUG-1", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_CORRUPT_ENTRY, result.stdout
+    assert "malformed Probe field" in result.stderr
+    assert bugs_text(pm_git_project) == before
+
+
 def test_finish_refuses_on_dirty_working_tree(pm_git_project: Path) -> None:
     append_bug(pm_git_project, 1)
     commit_all(pm_git_project, "add BUG-1")
@@ -348,6 +428,62 @@ def test_finish_refuses_on_dirty_working_tree(pm_git_project: Path) -> None:
 
     assert result.returncode == pm.EXIT_FINISH_PRECONDITION_FAILED, result.stdout
     assert (pm_git_project / "BUGS.md").read_bytes() == before
+
+
+def test_finish_refuses_when_the_probe_leaves_the_tree_dirty(
+    pm_git_project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # a probe that writes a tracked file must not let a stale HEAD/commit describe what was
+    # measured — the recorded delivery would be evidence about the wrong tree state
+    (pm_git_project / "test_thing.py").write_text("def test_bad():\n    assert False\n")
+    (pm_git_project / "marker.txt").write_text("clean\n")
+    append_bug(pm_git_project, 1)
+    commit_all(pm_git_project, "add BUG-1, a failing test, and marker.txt")
+    run_pm("start", "BUG-1", "--probe", "test:test_thing.py::test_bad", "--here", cwd=pm_git_project)
+    commit_all(pm_git_project, "start BUG-1")
+    before = bugs_text(pm_git_project)
+
+    # kept outside the repo so its own existence never dirties the tree it's about to dirty
+    dirtying_runner = tmp_path / "dirtying_runner.sh"
+    dirtying_runner.write_text("#!/bin/sh\necho dirtied >> marker.txt\nexit 0\n")
+    dirtying_runner.chmod(0o755)
+    monkeypatch.setenv("QUIRK_PM_TEST_RUNNER", str(dirtying_runner))
+    monkeypatch.setenv("QUIRK_PM_TEST_EXIT_MAP", "0:pass")
+
+    result = run_pm("finish", "BUG-1", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_FINISH_PRECONDITION_FAILED, result.stdout
+    assert "dirty" in result.stderr
+    assert bugs_text(pm_git_project) == before
+    assert (pm_git_project / "marker.txt").read_text() == "clean\ndirtied\n"
+
+
+def test_finish_refuses_when_the_probe_moves_head(
+    pm_git_project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # a probe that commits (leaving the tree clean) must be caught too — dirt isn't the only
+    # way the recorded sha can stop describing what was actually measured
+    (pm_git_project / "test_thing.py").write_text("def test_bad():\n    assert False\n")
+    append_bug(pm_git_project, 1)
+    commit_all(pm_git_project, "add BUG-1 and a failing test")
+    run_pm("start", "BUG-1", "--probe", "test:test_thing.py::test_bad", "--here", cwd=pm_git_project)
+    commit_all(pm_git_project, "start BUG-1")
+    before = bugs_text(pm_git_project)
+    head_before_finish = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+
+    committing_runner = tmp_path / "committing_runner.sh"
+    committing_runner.write_text("#!/bin/sh\ngit commit --allow-empty -q -m sneaky\nexit 0\n")
+    committing_runner.chmod(0o755)
+    monkeypatch.setenv("QUIRK_PM_TEST_RUNNER", str(committing_runner))
+    monkeypatch.setenv("QUIRK_PM_TEST_EXIT_MAP", "0:pass")
+
+    result = run_pm("finish", "BUG-1", cwd=pm_git_project)
+
+    assert result.returncode == pm.EXIT_FINISH_PRECONDITION_FAILED, result.stdout
+    assert "HEAD moved" in result.stderr
+    assert bugs_text(pm_git_project) == before
+    head_after = _git(pm_git_project, "rev-parse", "HEAD").stdout.strip()
+    assert head_after != head_before_finish
 
 
 def test_finish_refuses_when_project_dir_is_not_a_git_worktree(pm_project: Path) -> None:

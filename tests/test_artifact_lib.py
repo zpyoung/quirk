@@ -4,6 +4,7 @@ import errno
 import hashlib
 import os
 import re
+import stat
 from pathlib import Path
 
 import pytest
@@ -383,6 +384,53 @@ def test_atomic_write_degrades_quietly_when_directory_fsync_is_unsupported(
     artifact_lib.atomic_write(target, "new\n")
 
     assert target.read_text() == "new\n"
+
+
+def test_atomic_write_preserves_an_existing_files_permission_bits(tmp_path) -> None:
+    target = tmp_path / "BUGS.md"
+    target.write_text("old\n")
+    target.chmod(0o644)
+
+    artifact_lib.atomic_write(target, "new\n")
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644
+
+
+def test_atomic_write_on_a_new_file_uses_the_umask_default_not_mkstemps_0600(tmp_path) -> None:
+    target = tmp_path / "BUGS.md"
+    old_umask = os.umask(0o022)
+    try:
+        artifact_lib.atomic_write(target, "new\n")
+    finally:
+        os.umask(old_umask)
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644
+
+
+def test_atomic_write_refuses_to_write_through_a_symlink(tmp_path) -> None:
+    real_target = tmp_path / "elsewhere.md"
+    real_target.write_text("original\n")
+    link = tmp_path / "BUGS.md"
+    link.symlink_to(real_target)
+
+    with pytest.raises(artifact_lib.SymlinkedLedgerError):
+        artifact_lib.atomic_write(link, "new\n")
+
+    assert link.is_symlink()
+    assert real_target.read_text() == "original\n"
+
+
+def test_atomic_write_refusing_a_symlink_leaves_no_temp_file_behind(tmp_path) -> None:
+    real_target = tmp_path / "elsewhere.md"
+    real_target.write_text("original\n")
+    link = tmp_path / "BUGS.md"
+    link.symlink_to(real_target)
+
+    with pytest.raises(artifact_lib.SymlinkedLedgerError):
+        artifact_lib.atomic_write(link, "new\n")
+
+    leftover = [p.name for p in tmp_path.iterdir() if p.name not in ("BUGS.md", "elsewhere.md")]
+    assert leftover == []
 
 
 # --- field_line ------------------------------------------------------------------
