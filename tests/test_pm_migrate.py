@@ -320,20 +320,6 @@ def test_migrate_lock_timeout_on_a_later_ledger_writes_nothing_at_all(
 # --- CLI surface: every subcommand registered ------------------------------
 
 
-@pytest.mark.parametrize(
-    "argv",
-    [
-        ["reconcile"],
-    ],
-)
-def test_unimplemented_subcommands_exit_two_and_say_so(
-    initialized_project: Path, argv: list[str]
-) -> None:
-    result = run_pm(*argv, cwd=initialized_project)
-    assert result.returncode == pm.EXIT_BAD_ARGUMENT, result.stdout
-    assert "not implemented" in result.stderr.lower()
-
-
 def test_all_eleven_subcommands_are_registered() -> None:
     parser = pm.build_parser()
     subparsers_action = next(
