@@ -63,8 +63,9 @@ and the reason.
 
 `reconcile --close` records the opposite: work that landed but that ancestry can never prove landed,
 because rebase or squash broke commit identity. Confirm the ID, the full SHA being recorded, and
-the reason. Reach for it only on an entry doctor reports as `UNDETERMINED` — and never substitute
-`decide`, whose `wontfix`/`superseded` both mean the work was *not* done.
+the reason. It needs only a `delivered` entry — a squash-merge can be closed the day it lands, and
+waiting for doctor to age it into `UNDETERMINED` is not a precondition. Never substitute `decide`,
+whose `wontfix`/`superseded` both mean the work was *not* done.
 
 The plain `reconcile` sweep is unattended; only `--close` is gated.
 
