@@ -14,10 +14,11 @@ If stdout says "No artifact files found", suggest `/quirk:artifacts:init` and st
 Then:
 1. Relay the index line(s) (open/in_progress/stalled counts, with denominators) and the doctor
    findings verbatim.
-2. If doctor reports `STALLED` entries, name them and point to their `Handoff`/attempt info as the
-   starting point for follow-up.
-3. If it reports `AWAITING_INTEGRATION` or `CANNOT_EVALUATE` entries, mention that
-   `/quirk:pm:reconcile` is what re-checks them.
+2. If doctor reports `STALLED` entries, name them and point to the attempt and refusal counts on
+   their `Status` line as the starting point for follow-up.
+3. If it reports `AWAITING_INTEGRATION` entries, mention that `/quirk:pm:reconcile` is what
+   re-checks them. `cannot evaluate` is not a doctor finding — it appears only in
+   `/quirk:pm:reconcile`'s own output, because doctor never touches git.
 4. If it reports no findings and nothing is stalled, say so plainly — don't pad a clean report.
 5. Do NOT modify any artifact file from this command; it's diagnostic only.
 

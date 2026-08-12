@@ -1994,11 +1994,15 @@ def _evaluate_delivered(repo: Path, sha: str, cache: dict[Path, _RepoState]) -> 
     return "cannot_evaluate", f"git error: {_stderr_excerpt(anc_proc)}"
 
 
-def _verify_probe_outcome(spec: ProbeSpec, result: ProbeResult) -> str:
+def _verify_probe_outcome(spec: ProbeSpec, result: ProbeResult, baseline_files_missing: bool = False) -> str:
     """Map a probe re-run's `ProbeResult` onto the pass/fail/missing/error vocabulary `Verify`
     shares with `Probe`'s `final:` (tech.md's `Verify` schema) — `grep:`'s own outcome vocabulary
     (`ok`/`error` plus a count) has no `missing` case, but `Verify` needs one uniform scale
     regardless of which verb the entry recorded.
+
+    `baseline_files_missing` mirrors `finish`'s `grep_baseline_files_missing` check: a zero-match
+    re-run is not evidence of a fix if the files the baseline matched are gone rather than fixed,
+    so that case is reported as `fail`, the same as a re-run that still matches.
     """
     if spec.verb == "none":
         return "pass"
@@ -2007,11 +2011,76 @@ def _verify_probe_outcome(spec: ProbeSpec, result: ProbeResult) -> str:
     if spec.verb == "grep":
         if result.outcome == "error":
             return "error"
+        if baseline_files_missing:
+            return "fail"
         return "pass" if (result.count or 0) == 0 else "fail"
     raise ValueError(f"unknown probe verb {spec.verb!r}")
 
 
-def _run_verify(repo: Path, integration_ref: str, probe_spec: ProbeSpec) -> VerifyField:
+def _rebase_verify_paths(spec: ProbeSpec, repo: Path, tmpdir: Path) -> ProbeSpec | None:
+    """Rewrite `spec`'s absolute `grep:` paths from `repo` onto `tmpdir`.
+
+    `run_probe` keeps an absolute path as-is rather than resolving it under `root`, so without
+    this a probe recorded with an absolute target would silently re-scan the original checkout
+    instead of the detached `--verify` worktree it's supposed to measure. `None` when a path lies
+    outside `repo` entirely — there is nothing under `tmpdir` for it to correspond to, and the
+    caller reports `error` rather than guessing.
+    """
+    if spec.verb != "grep" or not spec.paths:
+        return spec
+    repo_resolved = repo.resolve()
+    rebased: list[str] = []
+    for raw in spec.paths:
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            rebased.append(raw)
+            continue
+        try:
+            rel = candidate.resolve().relative_to(repo_resolved)
+        except ValueError:
+            return None
+        rebased.append(str(tmpdir / rel))
+    return replace(spec, paths=tuple(rebased))
+
+
+def _worktree_still_registered(repo: Path, tmpdir: Path) -> bool:
+    proc = _run_git(["worktree", "list", "--porcelain"], repo)
+    if proc is None or proc.returncode != 0:
+        return True  # can't confirm cleanup succeeded, so don't report it clean
+    target = tmpdir.resolve()
+    for line in proc.stdout.splitlines():
+        if line.startswith("worktree ") and Path(line[len("worktree "):]).resolve() == target:
+            return True
+    return False
+
+
+def _cleanup_verify_worktree(repo: Path, tmpdir: Path) -> None:
+    """Best-effort removal of a temporary `--verify` worktree.
+
+    A failed `worktree remove` gets one bounded follow-up (`worktree prune`, run after the
+    directory is gone so git can actually recognize the worktree as stale) rather than a retry
+    loop. Any remainder — directory or git's own registration — is only ever reported on stderr;
+    it never un-promotes the entry or changes reconcile's exit code (tech.md: "a failing re-run
+    does not un-promote the entry" applies equally to cleanup, which isn't part of the outcome).
+    """
+    remove_proc = _run_git(["worktree", "remove", str(tmpdir), "--force"], repo)
+    removed = remove_proc is not None and remove_proc.returncode == 0
+    shutil.rmtree(tmpdir, ignore_errors=True)
+    if removed:
+        return
+    # the bounded follow-up: one prune attempt, only on the failure path, never a retry loop
+    _run_git(["worktree", "prune"], repo)
+    if tmpdir.exists() or _worktree_still_registered(repo, tmpdir):
+        print(
+            f"[quirk:pm] could not fully clean up temporary verify worktree {tmpdir} "
+            "— run `git worktree prune` manually",
+            file=sys.stderr,
+        )
+
+
+def _run_verify(
+    repo: Path, integration_ref: str, probe_spec: ProbeSpec, probe_field: ProbeField,
+) -> VerifyField:
     """Re-run `probe_spec` in a detached worktree at `integration_ref`, reporting the outcome as
     a `VerifyField`. The worktree is always removed, even when `worktree add` itself fails or
     the probe re-run raises — a failing or erroring re-run never blocks the promotion this
@@ -2022,14 +2091,18 @@ def _run_verify(repo: Path, integration_ref: str, probe_spec: ProbeSpec) -> Veri
     try:
         add_proc = _run_git(["worktree", "add", "--detach", str(tmpdir), integration_ref], repo)
         if add_proc is not None and add_proc.returncode == 0:
-            try:
-                result = run_probe(probe_spec, tmpdir)
-                outcome = _verify_probe_outcome(probe_spec, result)
-            except Exception:
-                outcome = "error"
+            rebased_spec = _rebase_verify_paths(probe_spec, repo, tmpdir)
+            if rebased_spec is not None:
+                try:
+                    result = run_probe(rebased_spec, tmpdir)
+                    baseline_files_missing = rebased_spec.verb == "grep" and bool(
+                        grep_baseline_files_missing(tmpdir, probe_field.baseline_files)
+                    )
+                    outcome = _verify_probe_outcome(rebased_spec, result, baseline_files_missing)
+                except Exception:
+                    outcome = "error"
     finally:
-        _run_git(["worktree", "remove", str(tmpdir), "--force"], repo)
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        _cleanup_verify_worktree(repo, tmpdir)
     return VerifyField(date=_today(), integration_ref=integration_ref, probe=outcome)
 
 
@@ -2376,6 +2449,27 @@ class _ReconcileEval:
     probe_field: ProbeField | None = None  # set only when outcome == "promote" and Probe parses
 
 
+def _reconcile_schema_refusal(project: Path) -> _Refusal | None:
+    """The same v2 guard `_prepare_transition` applies per-entry (:1761), applied here to every
+    ledger batch `reconcile` reads before its read pass. Without this, an unmigrated (v1) or
+    too-new (v3+) ledger's entries still parse — the schema marker is metadata `parse_entries`
+    never looks at — so the read pass would silently evaluate them (or find none) instead of
+    refusing, exactly the false all-clear `reconcile --close` already avoids via
+    `_prepare_transition`.
+    """
+    for spec in BACKLOG_FILES:
+        path = project / spec.filename
+        if not path.exists():
+            continue
+        with path.open(encoding="utf-8", newline="") as f:
+            text = f.read()
+        if detect_schema_version(text) != 2:
+            return _refuse(
+                EXIT_SCHEMA_MISMATCH, f"{spec.filename} is not on schema v2. Run /quirk:pm:migrate first."
+            )
+    return None
+
+
 def _reconcile_read_pass(project: Path) -> list[_ReconcileEval]:
     """Lock-free evaluation of every `delivered` entry's ancestry (tech.md's read pass): read
     once, strict parse, no lock held. Only the caller's later write-back, per promotable entry,
@@ -2411,12 +2505,20 @@ def _reconcile_write_back(project: Path, ev: _ReconcileEval, verify: bool) -> tu
     (a CAS mismatch — the entry moved since the read pass, silently left for the next run per
     tech.md). `--verify`'s probe re-run happens here, still lock-free, before the lock this
     function's own write takes.
+
+    Ancestry alone is what makes an entry `closed` — an absent, malformed, or unreconstructable
+    `Probe` field never blocks that promotion. But when `--verify` was requested, skipping the
+    re-run silently would leave no `Verify` field at all, which reads as "never verified" — a
+    different, false claim from "verification was attempted and couldn't run." So an unusable
+    probe still records a `Verify` field, just with `probe: error` instead of a real outcome.
     """
     verify_field = None
-    if verify and ev.probe_field is not None:
-        parsed_spec = _reconstruct_probe_spec(ev.probe_field)
+    if verify:
+        parsed_spec = _reconstruct_probe_spec(ev.probe_field) if ev.probe_field is not None else None
         if isinstance(parsed_spec, ProbeSpec):
-            verify_field = _run_verify(ev.repo, ev.integration_ref, parsed_spec)
+            verify_field = _run_verify(ev.repo, ev.integration_ref, parsed_spec, ev.probe_field)
+        else:
+            verify_field = VerifyField(date=_today(), integration_ref=ev.integration_ref, probe="error")
 
     new_status = StatusField(
         state="closed", date=_today(),
@@ -2526,6 +2628,11 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return EXIT_NOT_FOUND
+
+    schema_refusal = _reconcile_schema_refusal(project)
+    if schema_refusal is not None:
+        print(f"[quirk:pm] {schema_refusal.message}", file=sys.stderr)
+        return schema_refusal.code
 
     evals = _reconcile_read_pass(project)
     if not evals:

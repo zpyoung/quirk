@@ -23,16 +23,21 @@ After the script returns:
    - promoted to `closed` — the commit is reachable from the integration branch.
    - still `delivered`, "awaiting integration" — known commit, not yet reachable. Normal; the work
      is done and just hasn't merged.
-   - still `delivered`, "cannot evaluate" — either the commit isn't resolvable from this repo (a
-     cross-project delivery) or the remote fetch failed. This needs a human look, not a retry.
+   - still `delivered`, "cannot evaluate" — reconcile could not determine reachability. Read the
+     parenthesised reason, because they need opposite responses: "fetch failed" is transient, so
+     offer to re-run. "commit not in destination repo" and "integration ref unresolvable" are not
+     transient — re-running gets the same answer, and these need a human to look at the repository
+     or the ref.
    Zero promotions in a run is a normal outcome, not a failure.
 2. On exit 7 (project dir not found): tell the user to check the path they passed.
 3. On exit 3 (ledger missing): direct to `/quirk:artifacts:init`.
-4. On exit 5 (lock timeout): nothing was written; offer to retry.
-5. On exit 1 (unexpected error mid-run): relay stderr. Any per-entry write that already completed
+4. On exit 8 (schema mismatch): direct to `/quirk:pm:migrate`. Nothing was evaluated — do not
+   report this as "nothing to reconcile."
+5. On exit 5 (lock timeout): nothing was written; offer to retry.
+6. On exit 1 (unexpected error mid-run): relay stderr. Any per-entry write that already completed
    stands — each is its own atomic write — so relay which entries, if any, the stdout shows as
    already promoted before the error.
-6. On any other non-zero exit: relay stderr verbatim plus a one-line plain-language summary and a
+7. On any other non-zero exit: relay stderr verbatim plus a one-line plain-language summary and a
    remediation hint.
 
 User input: $ARGUMENTS
