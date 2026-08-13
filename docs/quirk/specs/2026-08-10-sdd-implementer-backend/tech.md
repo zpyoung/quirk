@@ -125,9 +125,12 @@ launcher work and propagate via `claude plugin update quirk` (`skills/pi-dev/SKI
 SCHEMA: run-journal additions (journal lives in scratch, outside the repo — SKILL.md:104-106)
   IMPLEMENTER    : "claude-task" | "pi-codex"          # user choice at preflight
   AUTHOR_FAMILY  : "anthropic" | "openai"              # derived: claude-task → anthropic, pi-codex → openai
-  REVIEWER_ALIAS : "codex" | "gemini" | "terra" | "opus" | "sonnet" | "flash"
-                                                       # adversarial-review's ALIAS_LADDER only
-                                                       # (scripts/adversarial-review:853-860)
+  REVIEWER_ALIAS : "codex" | "gemini" | "terra" | "opus" | "sonnet" | "flash" | "task-fallback"
+                                                       # six aliases from adversarial-review's
+                                                       # ALIAS_LADDER (scripts/adversarial-review:
+                                                       # 853-860); task-fallback recorded when
+                                                       # preflight verified no alias reachable for
+                                                       # either pairing — Step 8 then omits `model`
   TASK_HEAD_<n>  : commit sha                          # each worktree's HEAD at dispatch
 ```
 
@@ -214,16 +217,19 @@ CONTRACT: wave returns → HEAD-check all live trees → scope-audit all live tr
 One new row and one changed row (table at `SKILL.md:248-257`):
 
 ```
-SCHEMA: | `model` | the recorded `REVIEWER_ALIAS` |
+SCHEMA: | `model` | the recorded `REVIEWER_ALIAS` — only when preflight verified it reachable;
+        |         | omitted when the record holds `task-fallback` |
         | `author_family` | the recorded `AUTHOR_FAMILY` |   # was: "the model family that implemented the work"
 ```
 
 Behavior note carried into the prose: an explicit `model` builds a single-candidate list — no
 ladder walk, failure reported as `resolved: false` → `NOT_REVIEWABLE`
 (`scripts/adversarial-review:930-934`, `:963-972`) — which is why preflight's alias check is
-load-bearing. A same-family pick warns once and is expected to stamp
-`manifest.reviewer.independence: reduced` (`scripts/adversarial-review:959`), which Step 9 already
-reads (`SKILL.md:320-322`).
+load-bearing and why `model` is passed only when preflight verified the recorded alias reachable.
+When the record holds `task-fallback` — no alias verified reachable for either pairing — `model`
+is omitted entirely; `adversarial-review`'s own ladder and `Task` backstop govern instead. A
+same-family pick warns once and is expected to stamp `manifest.reviewer.independence: reduced`
+(`scripts/adversarial-review:959`), which Step 9 already reads (`SKILL.md:320-322`).
 
 ### `pi-worker-delta.md` content contract
 
