@@ -112,3 +112,43 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: critical
 - **Proposed fix**: Refuse when the destination is a symlink, matching the mistake-catcher refusal pm.py's atomic_write already implements, or open the destination with O_NOFOLLOW. Whichever is chosen should be applied uniformly across the three paths so a fourth does not drift.
 
+## BUG-12: _grep_baseline_files_unsafe does not reject matched filenames that mask_quoted blanks, so a Probe line can round-trip to something else
+- **Observed**: 2026-08-13
+- **File**: bin/pm.py:2790
+- **Description**: start refuses a --probe/--reason value containing an HTML comment or fenced span, because parse_entries blanks those when reading a field back. The matched grep filenames written into the same Probe line are validated by a separate helper that checks only the ', ' separator, the field delimiter, parentheses, CR and LF. A repository file whose NAME contains an HTML-comment-shaped substring is therefore persisted into the baseline file list and read back blanked, so finish's still-exists check looks for a filename that never existed and can refuse a genuinely finished task, or accept on a wrong file set. Same defect the --probe guard closes, one field-component over.
+- **Introduced by**: the pm-agent Phase 2 branch
+- **Severity**: medium
+- **Proposed fix**: Route matched filenames through the same mask_quoted(value) != value test the free-text validator uses, rather than maintaining a second hand-listed character set.
+
+## BUG-13: reconcile --verify does not rebase relative grep paths containing .. so a probe can escape the verify worktree
+- **Observed**: 2026-08-13
+- **File**: bin/pm.py:2554
+- **Description**: _rebase_verify_paths rewrites absolute grep paths and test nodeids onto the temporary detached worktree, and returns None for targets outside the repo. A relative path containing .. is passed through unchanged, so run_probe resolves it against the temporary worktree and can walk back out of it to a different filesystem target than the one measured at start. The Verify line then records a result attributed to the integration ref that was measured somewhere else, which is the defect the absolute-path rebasing exists to prevent.
+- **Introduced by**: the pm-agent Phase 2 branch
+- **Severity**: medium
+- **Proposed fix**: Normalize each path against the repo root before deciding, so a relative path that resolves outside the repo is treated exactly like an absolute one that does.
+
+## BUG-14: finish does not re-validate sibling lifecycle fields under the held lock on either write branch
+- **Observed**: 2026-08-13
+- **File**: bin/pm.py
+- **Description**: park, decide and reconcile --close re-check malformed and duplicated Probe/Verify fields inside the locked write, closing the window where a concurrent edit lands between the pre-lock check and the write. finish validates only before the lock, on both its refusal and its delivered branch, so a Probe corrupted during probe execution surfaces as a CAS mismatch (exit 6) rather than a corrupt entry (exit 4) and the precedence table puts 4 first. Same fix the other three commands already carry.
+- **Introduced by**: the pm-agent Phase 2 branch
+- **Severity**: medium
+- **Proposed fix**: Pass finish's sibling_fields through the same locked re-validation path _commit_transition already runs for the schema version.
+
+## BUG-15: _blocking_culprits presents an ambiguous duplicate ID as an actionable blocker
+- **Observed**: 2026-08-13
+- **File**: bin/pm.py:1623
+- **Description**: The blocker summary was narrowed to resolvable IDs only, so an id-shaped token naming no entry is excluded. An id claimed by more than one live entry still appears, presented as a single actionable blocker a human can go unblock — but readiness deliberately fails closed on exactly that ambiguity, so acting on the named entry may not unblock anything. DUPLICATE_ID is the finding that describes the real situation.
+- **Introduced by**: the pm-agent Phase 2 branch
+- **Severity**: low
+- **Proposed fix**: Exclude ids in world.ambiguous_ids from the culprit summary, or label them so the user is sent to the duplicate rather than to a blocker they cannot clear.
+
+## BUG-16: _run_git's timeout kills only the git process, leaving helpers such as SSH running
+- **Observed**: 2026-08-13
+- **File**: bin/pm.py:_run_git
+- **Description**: The test-probe runner was moved into its own process group so a timeout tears down the whole tree; git invocations were left on the plain subprocess timeout, which signals only the direct child. A fetch against an unreachable remote can therefore leave an ssh or credential helper running past the timeout that was supposed to bound the operation. Same defect the probe fix closed, in the other subprocess call site.
+- **Introduced by**: the pm-agent Phase 2 branch
+- **Severity**: medium
+- **Proposed fix**: Run git in its own process group and signal the group on timeout, reusing the mechanism _run_test_probe already has.
+
