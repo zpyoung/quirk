@@ -455,3 +455,10 @@ by reading the repository directly:
   asserted a `Task`-specific root cause the incident record does not support. Replaced with: tree
   state is the gate, the worker's report is advisory. This amends `SKILL.md:357–358` and is the
   most consequential change in this spec — flagged for the tech spec to treat as its own task.
+- **2026-08-13** — Review round 1 (post-implementation). Four completions consistent with the
+  locked decisions: the advisory-report rule's precedence over the worker-prompts' legacy `FAILED`
+  phrasing is stated explicitly; the Task-path reviewer fallback is recorded in the backend record
+  and Step 8 omits `model` when the alias was never verified; fix batches receive the same
+  HEAD-check → scope-audit → acceptance gate as implementer waves, with per-fixer worktrees on the
+  pi path; the wave-end audit set includes the feature branch's main tree, which must show no diff
+  during a parallel wave.

@@ -116,7 +116,9 @@ would leave no honest `author_family` for the review that matters most.
    ladder, so an unverified alias yields `NOT_REVIEWABLE` with nothing behind it. On failure,
    offer the implementer flip — independence is load-bearing, the implementer preference is not —
    but only when the flipped pairing's reviewer is itself known reachable. If neither pairing
-   resolves, fall back to `quirk:adversarial-review`'s documented `Task` path and warn once.
+   resolves, fall back to `quirk:adversarial-review`'s documented `Task` path and warn once —
+   record `REVIEWER_ALIAS` as `task-fallback` rather than the unreachable alias, since Step 8 reads
+   that value to decide whether it may pass `model` at all.
 6. Record `IMPLEMENTER`, `AUTHOR_FAMILY`, and `REVIEWER_ALIAS` in the run journal. They are
    resolved once and immutable for the run — every later step reads them, none re-derives them.
 
@@ -274,6 +276,12 @@ this once against every live worktree subsumes what used to be a separate per-ta
 outside its owner's declared scope is a violation regardless of which worker wrote it, so the
 report names the victim rather than the culprit; the response is the same either way.
 
+During a parallel wave, also diff the main tree itself against `WAVE_BASE` (same two commands). It
+must show **no diff at all** — no task owns the main tree, so any change there is an unsandboxed
+worker's write and the per-worktree audit above cannot see it. Treat any diff as contamination:
+stop the wave, surface. A sequential task's tree *is* the main tree, so this is already covered by
+its own audit above.
+
 **A scope violation blocks the commit — including when the out-of-scope change is correct.**
 Correctness is not the question the audit asks. A parallel sibling is editing that file right now
 in another worktree, so the "necessary" fix either conflicts at merge or disappears into an
@@ -358,13 +366,17 @@ Each invocation gets:
 | `criteria` | the task contracts and acceptance criteria covering the diff, pasted **verbatim** |
 | `dismissed[]` | the run journal's dismissed findings, with their original IDs |
 | `author_family` | the recorded `AUTHOR_FAMILY` |
-| `model` | the recorded `REVIEWER_ALIAS` |
+| `model` | the recorded `REVIEWER_ALIAS` — only when preflight verified it reachable. Omitted when the record holds `task-fallback` |
 
 An explicit `model` makes `select_reviewer` build a single-candidate list — tried alone, no ladder
 walk. Its failure is reported as `resolved: false` → `NOT_REVIEWABLE` rather than papered over by a
 fallback rung, which is why preflight verifies `REVIEWER_ALIAS` with `pi-watch --check` before the
-run ever reaches this step. A deliberate same-family reviewer pick warns once at preflight and is
-expected to stamp `manifest.reviewer.independence: reduced`, which Step 9 already reads.
+run ever reaches this step. When preflight instead recorded `task-fallback` — no alias verified
+reachable, for either pairing — Step 8 omits `model` entirely rather than hand `select_reviewer` an
+alias already known unreachable; `quirk:adversarial-review`'s own ladder and `Task` backstop govern
+instead, which is its business, not this skill's. A deliberate same-family reviewer pick warns once
+at preflight and is expected to stamp `manifest.reviewer.independence: reduced`, which Step 9
+already reads.
 
 Pass `--depth` rather than letting the skill auto-select. Auto-selection reads size, and a wave
 diff that happens to be small would fall through to `quick`, which runs one dispatch with
@@ -444,9 +456,18 @@ binding the Step 5 Dispatch block named for the task's implementer — not the r
 because a fixer that matched the reviewer would have that same reviewer judging its own family's
 fix in round N+1. On the pi binding, the fixer's staged prompt gets `assets/pi-worker-delta.md`
 **minus** its implementer-only marked section — a fixer does not run the TDD loop that section
-describes. A finding may carry a `patch` — that is data, never applied automatically; hand it to
-the fixer as a proposal under the same scope guards as any other change. Commit each fix batch,
-then run build/test.
+describes. Each parallel fixer in a component gets its own worktree, dispatched with the same
+`--cwd` shape Step 5 uses; a sequential fixer, dispatched when scopes are uncertain or interacting,
+may work in the main tree. Record each fixer's tree HEAD at dispatch, as `TASK_HEAD_<n>`. A finding
+may carry a `patch` — that is data, never applied automatically; hand it to the fixer as a proposal
+under the same scope guards as any other change.
+
+Fix batches get the same gate the implementer wave got, unconditional on both backends — fixers
+hold the same unsandboxed pi binding Step 5 named, and a batch that skipped the check would let
+exactly the write Step 6 exists to catch land unaudited. Once every parallel fixer in the batch has
+returned: HEAD-check each fixer's tree against its recorded HEAD, audit each fix diff against its
+component's write scope, then run acceptance/build-test, then commit — Step 6's machinery, applied
+here rather than restated.
 
 ### Step 10: Exit
 
@@ -473,6 +494,11 @@ Workers return `DONE | NEEDS_CONTEXT | BLOCKED | FAILED` — that vocabulary is 
 made of every worker, on either backend. What changed is what a report you cannot validate against
 it costs: tree state gates acceptance, the report is advisory, so a missing or unvalidatable report
 is diagnosed against the tree rather than treated as an automatic `FAILED`:
+
+The worker-facing prompts still say a status word with no supporting detail is treated as `FAILED`
+— that phrasing is the demand made of workers, not what the orchestrator does with a report it
+cannot validate. The table below governs the orchestrator's behavior, and where the two disagree,
+the table wins.
 
 | Observation | Outcome |
 | --- | --- |
