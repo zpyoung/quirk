@@ -99,6 +99,8 @@ Pi has no built-in sandbox — `bash`, `edit`, and `write` operate at the caller
 | `--no-tools` | Disable all tools — LLM only (review/analysis mode) |
 | `--check [alias]` | Preflight: validate one alias (or all) against `pi --list-models` without running a prompt. Exit 0 = ready, non-zero = not. Gate dispatches with `--check <alias> && pi-watch …` |
 | `--list-aliases` | Print the static alias table and exit (no `pi` call) |
+| `--cwd <dir>` | Run the session with `<dir>` as the working directory instead of the invoking directory. `<dir>` must exist — an invalid or missing dir is a usage error (exit 2), never a silent fallback to the invoking directory |
+| `--require-trailer <KEY>` | After a successful run, scan the last 3 non-empty assistant output lines (surrounding markdown emphasis/backticks stripped) for a `KEY: <value>` line, scanning from the last line backward — first match wins. The matched value is echoed on the stderr done line. Exit 6 if no line matches |
 | `-h`, `--help` | Print usage and exit |
 
 ## Exit codes
@@ -111,6 +113,7 @@ Pi has no built-in sandbox — `bash`, `edit`, and `write` operate at the caller
 | 3 | Model not in pi-ai registry (run `pnpm update` here) |
 | 4 | Cannot run `pi --list-models` (pi binary missing?) |
 | 5 | Alias won't run — no combo authed/shipping (`pi /login`), or SDK skew: pi lists the model but bundled pi-ai lacks it (`pnpm update` here) |
+| 6 | `--require-trailer` was passed and no well-formed trailer line was found |
 
 `--check` uses the same codes: **0** = all checked aliases ready, **5** = at least one not authed/shipping, **2** = unknown alias, **4** = `pi` not runnable.
 
