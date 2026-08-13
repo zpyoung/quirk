@@ -65,3 +65,8 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Estimated effort**: S
 - **Priority**: P3
 
+## DEFER-7: Cycle detection is still superlinear when the blocker graph is one large cyclic component
+- **Deferred**: 2026-08-13
+- **Why deferred**: The Tarjan pass made the normal case linear (measured 320399 -> 799 edges examined at n=800 on an acyclic chain) by narrowing restarts to nodes that can sit on a cycle. Inside a single large SCC every node is a candidate, so the per-candidate DFS restarts still apply and the cost is superlinear there. This was disclosed when the fix landed rather than discovered afterwards. It needs a genuinely different algorithm — enumerating a covering set of cycles from the SCC structure itself — not another narrowing pass. A blocker graph that is one large strongly-connected component is also a pathological backlog in its own right, which is why this is bounded work rather than urgent.
+- **Priority**: P3
+
