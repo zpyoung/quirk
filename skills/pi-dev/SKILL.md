@@ -67,6 +67,8 @@ pi-watch --alias <alias> "<prompt>"                          # default tools: re
 pi-watch --alias <alias> --tools read "<prompt>"             # restrict tools
 pi-watch --alias <alias> --no-tools "<prompt>"               # LLM only — review/analysis
 pi-watch --alias <alias> --thinking medium "<prompt>"        # override default thinking
+pi-watch --alias <alias> --cwd <dir> "<prompt>"              # run with <dir> as cwd (must exist; else exit 2)
+pi-watch --alias <alias> --require-trailer STATUS "<prompt>" # exit 6 if no STATUS: <value> trailer in last 3 output lines
 pi-watch --check <alias>                                     # preflight one alias (exit 0 = authed model resolves)
 pi-watch --check                                             # preflight all aliases — ✓/✗ report
 ```
