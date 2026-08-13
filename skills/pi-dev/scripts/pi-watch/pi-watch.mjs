@@ -189,6 +189,10 @@ if (opts.cwd !== null) {
         process.exit(2);
     }
 }
+if (opts.requireTrailer !== null && opts.requireTrailer.trim() === "") {
+    console.error(`pi-watch: --require-trailer requires a non-empty KEY`);
+    process.exit(2);
+}
 
 if (opts.listAliases) {
     for (const [name, cfg] of Object.entries(ALIASES)) {
@@ -422,7 +426,7 @@ try {
     session.subscribe((event) => {
         if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
             process.stdout.write(event.assistantMessageEvent.delta);
-            if (opts.requireTrailer) assistantText += event.assistantMessageEvent.delta;
+            if (opts.requireTrailer !== null) assistantText += event.assistantMessageEvent.delta;
         } else if (event.type === "tool_execution_start") {
             const a = event.args ?? {};
             const summary = a.command ?? a.file_path ?? a.path ?? a.pattern ?? "";
@@ -433,7 +437,7 @@ try {
     await session.prompt(opts.prompt);
 
     let doneLine = "  ✔ done\n";
-    if (opts.requireTrailer) {
+    if (opts.requireTrailer !== null) {
         const value = scanTrailer(assistantText, opts.requireTrailer);
         if (value === null) {
             // same flush pattern as below — guards the truncation bug on this exit path too.
