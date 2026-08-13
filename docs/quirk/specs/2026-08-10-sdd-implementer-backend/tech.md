@@ -135,9 +135,11 @@ SCHEMA: run-journal additions (journal lives in scratch, outside the repo — SK
 ```
 
 Invariants: resolved once at preflight, immutable for the run; every later step reads, none
-re-derives. `REVIEWER_ALIAS` is drawn from `adversarial-review`'s 6-alias table, never
-`pi-watch`'s 11 (`pi-watch.mjs:35-124`) — `select_reviewer` raises `UsageError` on anything
-outside its own set (`scripts/adversarial-review:914-916`), which surfaces as exit 2 with no JSON.
+re-derives. Any *alias* recorded in `REVIEWER_ALIAS` is drawn from `adversarial-review`'s 6-alias
+table, never `pi-watch`'s 11 (`pi-watch.mjs:35-124`) — `select_reviewer` raises `UsageError` on
+anything outside its own set (`scripts/adversarial-review:914-916`), which surfaces as exit 2 with
+no JSON. `task-fallback` is the one non-alias state the field can hold, recorded only when
+preflight verified no alias was reachable for either pairing, in which case Step 8 omits `model`.
 
 ### Preflight sequence (Step 1 rewrite)
 
