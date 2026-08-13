@@ -38,13 +38,15 @@ subagent dispatch is unavailable, or when this skill is itself the thing being e
 | Role | Model | Job |
 | --- | --- | --- |
 | Orchestrator | the session model | Decompose, dispatch, audit, commit, adjudicate, route |
-| Implementer | Sonnet subagent via `Task` | Build one task |
-| Reviewer ×3 | `gpt-5.6-sol` high via `pi-watch` | Review a diff through one lens |
-| Fixer | Sonnet subagent via `Task` | Apply an adjudicated finding packet |
+| Implementer | Claude subagent via `Task`, or pi codex via `pi-watch` — chosen once at preflight (`IMPLEMENTER`) | Build one task |
+| Reviewer ×3 | a pi alias resolved by `quirk:adversarial-review`, chosen once at preflight (`REVIEWER_ALIAS`) | Review a diff through one lens |
+| Fixer | the same binding as Implementer — inherits `IMPLEMENTER`, not the reviewer's family | Apply an adjudicated finding packet |
 
 You are the only agent that persists. Every worker is fresh, gets exactly what it needs, and
 returns once. Reviewers are a different model family from implementers on purpose — a model
-reviewing another family's output catches more than one reviewing its own idioms.
+reviewing another family's output catches more than one reviewing its own idioms. A deliberate
+same-family pick is allowed, not forbidden: it degrades independence rather than blocking the run,
+and preflight labels it so the choice is visible rather than accidental.
 
 ## The Process
 
@@ -85,25 +87,44 @@ git rev-parse HEAD                 # record as RUN_BASE
 A dirty tree stops the run. Pre-existing changes contaminate every scope audit that follows —
 you cannot tell a worker's write from what was already there.
 
-Confirm the reviewer path is reachable once:
+Resolve the **backend record** next, in this fixed order — step 4's option set depends on step
+3's result. Both questions are asked via `AskUserQuestion` rather than a skill argument, which was
+rejected because this skill's main entry path (`quirk:brainstorming` handoff) passes none. The
+record is chosen once, for the whole run, not per wave or per task: a mixed-family final diff
+would leave no honest `author_family` for the review that matters most.
 
-```bash
-pi-watch --check codex
-```
+1. Git checks above.
+2. **Implementer question**, via `AskUserQuestion`: Claude subagents (recommended — status quo,
+   no metered spend) or pi codex. Offer `pi-codex` only when `pi-watch --check codex` exits 0 — a
+   dead-end option is worse than none. Record the choice as `IMPLEMENTER`.
+3. Derive `AUTHOR_FAMILY` mechanically: `claude-task → anthropic`, `pi-codex → openai`.
+4. **Reviewer-alias question**, via `AskUserQuestion`, asked explicitly rather than derived
+   silently from `AUTHOR_FAMILY` — a silent derivation would foreclose a deliberate same-family
+   run without ever surfacing the choice. Cross-family options first: author `anthropic` →
+   `codex` (recommended), `gemini`; author `openai` → `opus` (recommended), `gemini`. Same-family
+   picks stay selectable but are labeled as degrading independence.
 
-This is an availability floor, not a pin. It exits 0 if **any** rung of the `codex` ladder
-(`gpt-5.6-sol → 5.5 → 5.4 → 5.3-codex`) resolves to an authed model, so a green check is fully
-compatible with Sol being unavailable.
-
-Pinning happens per dispatch instead: reviewers run `--provider openai-codex --model gpt-5.6-sol
---thinking high`, and those explicit flags are the pin. **`--alias codex` is not sufficient** —
-the ladder silently substitutes a weaker reviewer. If Sol is unavailable, fall back to the alias and
-record which model resolved; if that fails too, use Claude `quirk:code-reviewer` subagents with the
-same three lenses. Warn the user once per degradation.
+   Options are drawn **only** from `quirk:adversarial-review`'s own 6-alias table (`codex,
+   gemini, terra, opus, sonnet, flash`), never from `pi-watch`'s 11. `select_reviewer` raises
+   `UsageError` on anything outside its own set, which surfaces as exit 2 with no JSON on stdout.
+   `haiku`, for example, is a plausible same-family Anthropic pick that `pi-watch --check` would
+   green-light and Step 8 would then crash on deterministically, burning the retry budget on a
+   config mismatch. Record the choice as `REVIEWER_ALIAS`.
+5. Confirm the reviewer resolves: `pi-watch --check "$REVIEWER_ALIAS"`. This check is
+   **load-bearing, not a convenience** — an explicit `model` makes `select_reviewer` build a
+   single-candidate list, tried alone, with its failure reported rather than papered over by the
+   ladder, so an unverified alias yields `NOT_REVIEWABLE` with nothing behind it. On failure,
+   offer the implementer flip — independence is load-bearing, the implementer preference is not —
+   but only when the flipped pairing's reviewer is itself known reachable. If neither pairing
+   resolves, fall back to `quirk:adversarial-review`'s documented `Task` path and warn once.
+6. Record `IMPLEMENTER`, `AUTHOR_FAMILY`, and `REVIEWER_ALIAS` in the run journal. They are
+   resolved once and immutable for the run — every later step reads them, none re-derives them.
 
 Open the **run journal** in scratch, outside the repository (a worker with edit tools could
-otherwise commit or clobber it). It holds `RUN_BASE`, each `WAVE_BASE`, task status and commits,
-reviewer outputs, findings with IDs and rulings, dismissals, and fix commits.
+otherwise commit or clobber it). It holds `RUN_BASE`, each `WAVE_BASE`, the backend record
+(`IMPLEMENTER`, `AUTHOR_FAMILY`, `REVIEWER_ALIAS`), each worktree's `TASK_HEAD_<n>` recorded at
+dispatch, task status and commits, reviewer outputs, findings with IDs and rulings, dismissals, and
+fix commits.
 
 ### Step 2: Tech spec, only when warranted
 
@@ -159,28 +180,99 @@ tip before the wave). Create worktrees serially — concurrent `git worktree add
 **Sequential task:** work in the main tree on the feature branch.
 
 Stage `assets/implementer-prompt.md` with the task, contract, acceptance, `scope.files`, worktree
-path, and any DO-NOT-CHANGE fences, then dispatch one implementer per task.
+path, and any DO-NOT-CHANGE fences. Then, for every worktree, record its HEAD before dispatch:
 
-Run dispatches in the **foreground**. Background dispatch followed by later re-invocation is not
-reliable — that exact stall stranded 3/3 workers in the first dogfood run.
+```bash
+git -C "$WT" rev-parse HEAD   # record as TASK_HEAD_<n> at dispatch
+```
+
+Dispatch one implementer per task through the binding named by `IMPLEMENTER`:
+
+**Claude binding** — `Task` subagent, Sonnet, foreground, one per task in a single message.
+Unchanged from today.
+
+**pi binding** — append `assets/pi-worker-delta.md` (referenced by path, not restated here) to
+the staged prompt, then per task:
+
+```bash
+gtimeout 1800 pi-watch --cwd "$WT" --alias codex \
+  --tools read,bash,edit,write --require-trailer STATUS "$(cat "$PROMPT")"
+```
+
+One Bash call per task, `run_in_background: true` — the 600s foreground ceiling cannot hold an
+implementer-scale task. `gtimeout` is load-bearing for liveness here, not just hygiene: it is what
+guarantees every dispatch terminates and produces an exit code, so a hung worker becomes a
+timed-out one rather than a wave that never completes. `--tools read,bash,edit,write` grants
+`bash` because the delta file's TDD block requires the worker to run its own tests and watch them
+fail before implementing. That block is condensed into the delta rather than pasted verbatim from
+`quirk:test-driven-development` (a pasted copy would diverge from the source silently) or dropped
+(the two backends would then build differently, invisibly). `--require-trailer STATUS` verifies
+the worker's last line is
+a well-formed `STATUS: <word>` trailer — it checks shape only; the four legal values stay this
+skill's vocabulary, not `pi-watch`'s.
+
+One shared prompt core (`assets/implementer-prompt.md`, unchanged) plus one small delta appended
+for pi — not two fully self-contained prompts, which would drift the way this skill's own Red
+Flags table warns about.
+
+**The tree is the source of truth; the worker's report is advisory** — for both bindings. The
+Claude binding still runs in the foreground; the pi binding runs backgrounded, and only tree state
+can safely gate a backgrounded dispatch. The incident record documents failures on *both* paths in
+one sentence: "3/3 captains stalled on background-dispatch re-invocation, one fix-worker report was
+lost to a foreground timeout (commit survived)"
+(`docs/quirk/specs/2026-07-21-sdd-captain-control-plane-design.md:288`). The commit survived
+because the orchestrator, not the worker, audits the diff and runs acceptance — so a missing or
+unparseable report costs a status word, never the work. See Failure routing for how Step 6's
+HEAD-check, scope audit, and acceptance resolve what the report could not.
 
 ### Step 6: Audit, accept, commit, merge
 
-Per task, in this order. The order *is* the gate — each step is what makes the next one safe, so
-none of them moves.
+The order *is* the gate — each step is what makes the next one safe. That still holds, but its
+start now waits for the whole wave rather than one task: a pi worker has no sandbox and full
+filesystem access, so auditing and committing task A while task B is still running risks missing a
+write B makes into A's tree afterward. The two wave-level steps below are **unconditional** — they
+run for Claude-implemented tasks too. Contamination is not backend-specific and the commands are
+cheap, so branching would leave the Claude path with a weaker audit for no reason; a sequential
+task, with only one live tree, runs the same two steps as a single operation. Disjoint-scope
+parallel dispatch (Step 4) is unaffected by any of this — the rule that gates it cares which files
+a task touches, not which model wrote them, so pi and Claude tasks share a wave under the same
+rule.
 
-**1. Audit the scope.** Implementers do not commit, so their work sits uncommitted in the task's
-tree. Diff against the working tree, not between two commits — a two-commit range reports nothing,
-because nothing has been committed yet:
+> wave returns → HEAD-check all trees → scope-audit all trees → **then per task:** acceptance →
+> commit → merge
+
+Once the whole wave has returned:
+
+**1. Verify HEAD.** Each live worktree's HEAD must equal its `TASK_HEAD_<n>` recorded at dispatch:
 
 ```bash
-# run in the task's tree: its worktree, or the main tree for a sequential task
+git -C "$WT" rev-parse HEAD   # compare against TASK_HEAD_<n>
+```
+
+A mismatch means the worker committed and bypassed the audit: stop that task and surface it — no
+soft reset, which would absorb the violation instead of surfacing that a worker ignored an explicit
+instruction. This is a **detection heuristic, not a guarantee**: it catches a plain commit or an
+`--amend`, not a commit followed by `git reset --soft` back to `TASK_HEAD_<n>`, which restores the
+checked value while leaving the tree exactly as committed. The gap does not weaken what follows —
+the scope audit, acceptance, and commit all operate on the true working-tree diff, not on commit
+history — it only loses the signal that a worker ignored an instruction.
+
+**2. Audit the scope**, in every live worktree, each against its **own** task's `scope.files`.
+Implementers do not commit, so their work sits uncommitted in the task's tree. Diff against the
+working tree, not between two commits — a two-commit range reports nothing, because nothing has
+been committed yet:
+
+```bash
+# run in each task's tree: its worktree, or the main tree for a sequential task
 git diff --name-only -z --no-renames "$WAVE_BASE"
 git ls-files --others --exclude-standard -z
 ```
 
 Every changed path must be inside that task's `scope.files`. Rename detection is off so a rename
-reports both paths; untracked files are included so a new out-of-scope file is caught.
+reports both paths; untracked files are included so a new out-of-scope file is caught. Running
+this once against every live worktree subsumes what used to be a separate per-task audit — a path
+outside its owner's declared scope is a violation regardless of which worker wrote it, so the
+report names the victim rather than the culprit; the response is the same either way.
 
 **A scope violation blocks the commit — including when the out-of-scope change is correct.**
 Correctness is not the question the audit asks. A parallel sibling is editing that file right now
@@ -192,14 +284,17 @@ disjointness that made the wave legal.
 
 Never message another worker to coordinate around this. All coordination is orchestrator-mediated.
 
-**2. Run the task's acceptance commands** in that same tree, exactly as written. Acceptance gates the
+Then, per task, in this order — unchanged:
+
+**3. Run the task's acceptance commands** in that same tree, exactly as written. Acceptance gates the
 commit: a failure means nothing is committed and nothing is merged.
 
-**3. Commit** the audited, accepted work on the task's branch. You commit it — the worker never
-does, because a worker that commits its own work has already bypassed steps 1 and 2.
+**4. Commit** the audited, accepted work on the task's branch. You commit it — the worker never
+does, because a worker that commits its own work has already bypassed steps 2 and 3, which is
+exactly what step 1 exists to catch.
 
-**4. Merge** each audited branch into the feature branch, one at a time (parallel waves only — a
-sequential task committed in step 3 is already on the feature branch):
+**5. Merge** each audited branch into the feature branch, one at a time (parallel waves only — a
+sequential task committed in step 4 is already on the feature branch):
 
 ```bash
 git merge --no-ff --no-edit "$BRANCH"
@@ -209,6 +304,14 @@ Disjoint scopes are guaranteed at plan time, so these cannot conflict. **A confl
 precondition was violated** — stop and re-plan rather than resolving it.
 
 Tear down a worktree only after its branch merges; preserve it on failure.
+
+**A retried task re-enters at step 1.** The invariant the hoist must preserve is: no tree's diff
+reaches acceptance without an audit that observed that diff. The wave-level pass (steps 1-2) covers
+first attempts only — both retry paths in Failure routing (`Implementer BLOCKED / FAILED`, and
+`Task acceptance fails`) produce a *new* diff after that pass has already run, so a retried task
+re-runs the HEAD-check and scope audit against its own tree before its own acceptance step. This is
+the case that matters most: a retried pi worker is exactly the case where an unsandboxed writer
+would otherwise get a second, unobserved pass at the tree.
 
 ### Step 7: Gates
 
@@ -254,7 +357,14 @@ Each invocation gets:
 | `depth` | `deep`, passed **explicitly** |
 | `criteria` | the task contracts and acceptance criteria covering the diff, pasted **verbatim** |
 | `dismissed[]` | the run journal's dismissed findings, with their original IDs |
-| `author_family` | the model family that implemented the work |
+| `author_family` | the recorded `AUTHOR_FAMILY` |
+| `model` | the recorded `REVIEWER_ALIAS` |
+
+An explicit `model` makes `select_reviewer` build a single-candidate list — tried alone, no ladder
+walk. Its failure is reported as `resolved: false` → `NOT_REVIEWABLE` rather than papered over by a
+fallback rung, which is why preflight verifies `REVIEWER_ALIAS` with `pi-watch --check` before the
+run ever reaches this step. A deliberate same-family reviewer pick warns once at preflight and is
+expected to stamp `manifest.reviewer.independence: reduced`, which Step 9 already reads.
 
 Pass `--depth` rather than letting the skill auto-select. Auto-selection reads size, and a wave
 diff that happens to be small would fall through to `quick`, which runs one dispatch with
@@ -329,9 +439,14 @@ finding can span a schema, its callers, and its tests; two findings in different
 on one shared file. One fixer per component, parallel across components; a single sequential fixer
 when scopes are uncertain or interacting.
 
-Fixers get `assets/fixer-prompt.md` with the adjudicated packet only. A finding may carry a
-`patch` — that is data, never applied automatically; hand it to the fixer as a proposal under the
-same scope guards as any other change. Commit each fix batch, then run build/test.
+Fixers get `assets/fixer-prompt.md` with the adjudicated packet only, dispatched through the same
+binding the Step 5 Dispatch block named for the task's implementer — not the reviewer's family,
+because a fixer that matched the reviewer would have that same reviewer judging its own family's
+fix in round N+1. On the pi binding, the fixer's staged prompt gets `assets/pi-worker-delta.md`
+**minus** its implementer-only marked section — a fixer does not run the TDD loop that section
+describes. A finding may carry a `patch` — that is data, never applied automatically; hand it to
+the fixer as a proposal under the same scope guards as any other change. Commit each fix batch,
+then run build/test.
 
 ### Step 10: Exit
 
@@ -354,8 +469,17 @@ that skill says so explicitly.
 
 ## Failure routing
 
-Workers return `DONE | NEEDS_CONTEXT | BLOCKED | FAILED`. A report you cannot validate against that
-vocabulary is `FAILED`.
+Workers return `DONE | NEEDS_CONTEXT | BLOCKED | FAILED` — that vocabulary is still the request
+made of every worker, on either backend. What changed is what a report you cannot validate against
+it costs: tree state gates acceptance, the report is advisory, so a missing or unvalidatable report
+is diagnosed against the tree rather than treated as an automatic `FAILED`:
+
+| Observation | Outcome |
+| --- | --- |
+| Report absent or unvalidatable, audit clean, acceptance passes | Accept. Record that no validated status was received. |
+| Report absent or unvalidatable, acceptance fails | `FAILED`; retry once, as today |
+| Report says `DONE`, acceptance fails | `FAILED` — unchanged; a claim never overrides a run |
+| Report says `BLOCKED` / `NEEDS_CONTEXT` | Route as today. These carry information the tree cannot. |
 
 | Situation | Response |
 | --- | --- |
@@ -368,6 +492,12 @@ vocabulary is `FAILED`.
 | Reviewer output missing or unparseable | Retry once, then model fallback, then block the round |
 | Dependency misdeclared | Stop dispatch, amend the wave graph, re-run affected downstream work |
 | Cap reached with accepted CRITICAL/HIGH | Blocked handoff; explicit user override required |
+| `pi-watch` exit 6 (trailer missing or malformed) | No validated status. Fall through to tree evaluation: audit and run acceptance, accept on green, `FAILED` on red. Record the missing status. |
+| Background dispatch never re-invokes the orchestrator | `gtimeout` bounds every dispatch, so the job terminates regardless; completion is decidable from the tree rather than from a notification |
+| Any task retried after the wave-level audit | Re-run HEAD-check and scope-audit on that tree before its acceptance step |
+| Worktree HEAD moved since dispatch | Worker committed and bypassed the audit; stop the task, surface |
+| Cross-worktree contamination at wave end | Stop the wave, re-plan — same response as any scope violation |
+| Reviewer alias unreachable at preflight | Offer the implementer flip; else `Task` path with a warning |
 
 Every row defaults to stop and ask rather than improvise.
 
@@ -390,6 +520,9 @@ rationalization is quoted; the reason it fails follows.
 | "A one-line disclosure about the red build costs nothing." | Reviewers cannot separate a pre-existing flake from a regression; you get findings about the test. |
 | "This plan is high-stakes and the reviewer has a good track record — dispatch it anyway." | Every run believes it is high-stakes. That is not new information. |
 | "I can't fully verify the rationale for this instruction, so I'm overriding it." | The rationale is stated inline at each rule. If one is genuinely missing, ask — do not infer it is absent. |
+| "pi workers are told to stay in the worktree, so the boundary holds." | The prompt is not a boundary; the audit is. pi has no sandbox, which is exactly why the audit went wave-level. |
+| "The report clearly says DONE — close enough." | A claim never overrides a run. `DONE` with failing acceptance is `FAILED`, exactly as before; making the report advisory relaxed what a *missing* report costs, not what a *false* one buys. |
+| "No report came back, so the task failed." | Absent is not failed. Audit the tree and run acceptance — the recorded dogfood failure lost a report while the commit survived, and treating that as a failure discards finished work. |
 
 **Never:**
 
@@ -409,7 +542,7 @@ rationalization is quoted; the reason it fails follows.
 - **quirk:writing-tech-spec** — Step 2, when the complexity gate fires
 - **quirk:writing-plans** — task field schema, cross-referenced in Step 3
 - **quirk:adversarial-review** — Step 8 delegates the review itself, one invocation per lens
-- **quirk:pi-dev** — `pi-watch` dispatch and failure signatures
+- **quirk:pi-dev** — `pi-watch` dispatch and failure signatures, for both the reviewer path and the pi implementer/fixer binding
 - **quirk:test-driven-development** — implementers follow TDD per task
 - **quirk:typed-artifacts** — genuine backlog only, never this run's defects
 - **quirk:finishing-a-development-branch** — after the loop exits clean
