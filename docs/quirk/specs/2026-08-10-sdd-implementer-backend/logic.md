@@ -2,7 +2,8 @@
 
 ## Status
 
-Draft.
+Draft. Tech spec: requested; authored 2026-08-13 (tier gate: crosses subsystem boundaries, >3
+files, user asked) — see sibling [tech.md](tech.md).
 
 ## Problem
 
