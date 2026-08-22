@@ -163,11 +163,24 @@ wave-end barrier that exists anyway.
   no turn until *every* dispatch in that message has returned. A freed slot is therefore not
   observable and backfill is impossible. Overflow instead runs as **lockstep batches within the
   same wave**: dispatch up to the cap, wait for the batch, dispatch the next batch, repeat until
-  the queue is empty, then hit the barrier.
+  every component's chain is exhausted, then hit the barrier.
 
-Both drain inside one wave, so neither adds a checkpoint round. The difference is cost, and the
-wave-shape preview states which mechanism applies and how many batches the Claude binding needs —
-a batched drain costs the sum of per-batch maxima rather than one maximum.
+**What a Claude batch contains is fixed, because the queue holds components while a dispatch
+carries one task.** Each batch is filled to the cap in this order:
+
+1. The next unrun task of every component whose chain is already **in progress**, in component
+   order.
+2. If slots remain, the **first task of queued components** that have not started, in queue order.
+
+In-progress chains take priority because a chain of length *k* needs at least *k* batches no matter
+what else is scheduled, so a batch that starves one adds a full round to the wave; an unstarted
+component only ever adds its own chain length. Without this rule the same plan admits two
+schedules — breadth-first component starts versus depth-first chain advancement — with different
+batch counts, so the preview's cost figure would not be derivable from the plan.
+
+Both bindings drain inside one wave, so neither adds a checkpoint round. The difference is cost,
+and the wave-shape preview states which mechanism applies and how many batches the Claude binding
+needs — a batched drain costs the sum of per-batch maxima rather than one maximum.
 
 ### Step 4 — wave-shape preview
 
@@ -227,18 +240,28 @@ Immediately **before** dispatching task *k*, record `CHAIN_SNAPSHOT_<n>`: a map 
 `(mode, blob)` over every path in the component tree that differs from `WAVE_BASE` or is untracked.
 
 ```bash
-git -C "$WT" diff --raw -z --no-renames "$WAVE_BASE"   # tracked: mode, blob, and status per path
+git -C "$WT" diff --raw -z --no-renames "$WAVE_BASE"   # tracked: path, status, destination mode
 git -C "$WT" ls-files --others --exclude-standard -z   # untracked, .gitignore honoured
-git -C "$WT" hash-object -- "$PATH"                    # untracked paths only
+git -C "$WT" hash-object -- "$PATH"                    # content, for paths that exist on disk
 ```
 
-`--raw` is required rather than `--name-only`. It reports the destination mode and destination blob
-alongside each path, and it reports deletions as status `D` — so a path a predecessor **deleted**
-gets a representable snapshot entry (mode and blob recorded as the deleted sentinel) instead of
-being fed to `git hash-object`, which exits 128 on an absent path and would abort the snapshot on a
-legitimately dirty tree. `hash-object` is used only for untracked paths, which exist by
-construction. Recording the mode alongside the blob is what makes a **mode-only** edit — a `chmod`
-on a path a predecessor already dirtied — visible; a content hash alone is identical across it.
+The two commands supply different halves and **neither is sufficient alone**:
+
+- `--raw` supplies the path set, the status, and the destination **mode**. It is required rather
+  than `--name-only` because mode is what makes a **mode-only** edit visible — a `chmod` on a path
+  a predecessor already dirtied is invisible to content alone — and because status `D` is what
+  makes a predecessor-**deleted** path representable.
+- `--raw` must **not** be used for content. Against a worktree, its destination object ID is all
+  zeros for any unstaged edit, so two different contents of the same dirty path produce the
+  identical entry and the second edit escapes attribution entirely.
+- `hash-object` supplies content, and is called **only on paths that exist on disk** — every path
+  except those `--raw` reported as `D`. It exits 128 on an absent path, which is why deletions take
+  the sentinel instead.
+
+So each entry is `(mode, blob)` where a path with status `D` records the deleted sentinel for both,
+and every other path records its `--raw` destination mode paired with its `hash-object` content
+hash. This distinguishes all five cases the audit must separate: creation, content edit, repeated
+content edit to an already-dirty path, mode-only edit, and deletion.
 
 When task *k* returns, recompute the map the same way. **Task *k*'s changed-path set** is every
 path that is absent from `CHAIN_SNAPSHOT_<n>`, or whose `(mode, blob)` differs from the snapshot's
@@ -341,7 +364,8 @@ and the branch-level review loop remain the backstop, exactly as the core princi
   capped — they reach the wave's component count, since nothing is torn down before the barrier.
 - Overflow queues inside the same wave, never spilling into a new one. The pi binding backfills
   freed slots; the foreground Claude binding drains the queue as lockstep batches, which the
-  wave-shape preview reports.
+  wave-shape preview reports. A Claude batch advances in-progress chains before starting queued
+  components, so the batch count is derivable from the plan.
 - Zero checkpoints on a single-wave run is accepted as the core principle working as designed.
 - `gtimeout 1800` is unchanged.
 
@@ -358,9 +382,9 @@ and the branch-level review loop remain the backstop, exactly as the core princi
 
 - Each task in a chain gets its own acceptance run and scope audit as it completes.
 - Attribution uses `CHAIN_SNAPSHOT_<n>`, a path → `(mode, blob)` map captured before each dispatch
-  via `git diff --raw`; a path-list comparison is insufficient because a predecessor-dirtied path
-  re-edited by the current task appears in both lists, and `--raw` is required so deletions are
-  representable and mode-only edits are visible.
+  by pairing `git diff --raw` (path, status, destination mode) with `git hash-object` (content, for
+  paths that exist). `--raw` alone cannot supply content — its destination object ID is all zeros
+  for an unstaged edit — and `hash-object` alone exits 128 on a predecessor-deleted path.
 - The commit unit remains the component, at the wave-end barrier.
 - Bisect granularity drops to the component; accepted.
 
@@ -473,3 +497,13 @@ in-repo evidence and one requested adversarial review.
   before the barrier, so no slot would ever free and the overflow queue could not drain inside the
   wave — contradicting the locked "never spills into a new wave" decision. The cap now bounds
   concurrent dispatches; retained worktrees are explicitly uncapped.
+- *2026-08-22* — `CHAIN_SNAPSHOT_<n>` corrected again after round-3 closure review (finding R31,
+  reinstated by the caller after the evidence gate suppressed it; verified directly against a
+  scratch repository). Round 2's fix used `git diff --raw` for content, but its destination object
+  ID is all zeros for an unstaged edit, so two different contents of the same dirty path produced
+  identical entries. Content now comes from `git hash-object` on paths that exist, with `--raw`
+  supplying only path, status, and mode.
+- *2026-08-22* — Claude batch composition defined after round-3 closure review (finding R32). The
+  queue holds components while a dispatch carries one task, and the spec did not say which a capped
+  batch should contain. A batch now advances in-progress chains first, then starts queued
+  components, so the preview's batch count is derivable rather than schedule-dependent.
