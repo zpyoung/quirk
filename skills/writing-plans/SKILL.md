@@ -112,7 +112,7 @@ Treat hub-file isolation as a **scored heuristic, not a mandate**. Prefer assign
 
 Every task pays a fixed pipeline tax: dispatch, scope audit, acceptance run, commit, and merge. Price a split rather than treating it as free:
 
-- Split only when the result lands tasks in **different waves** and therefore buys real parallelism. A split whose halves stay in the same sequential run buys nothing and pays the tax twice.
+- Split only when the result lands tasks in **different components** and therefore buys real parallelism. A split whose halves stay in the same serialized component buys nothing and pays the tax twice.
 - Collapse a contiguous run of sequentially-dependent work into one task.
 - Merge a task with a projected diff under roughly 50–100 lines into its neighbor.
 - Preserve review isolation with **commit boundaries inside the task**: commit each sub-step separately instead of paying for separate task pipelines.
@@ -145,7 +145,7 @@ scope:
 
 - Use `dependencies` for genuine semantic ordering — one task needing another's output — never merely for file overlap. File overlap is handled by scope, not by dependencies.
 - `scope.files` is **required on every task**, whether or not it will run in parallel. It is the boundary the orchestrator audits each task's diff against before committing, and the same list it hands the implementer as a hard fence — a task without it has neither. An incomplete list reads as a scope violation and stops the wave.
-- Tasks in the same wave run in parallel **only if their `scope.files` are disjoint**. Any shared path forces the wave to run sequentially — there is no small-overlap exemption: the two branches either conflict at merge, costing the parallelism the overlap was meant to buy, or auto-merge into a file version neither agent tested.
+- Within a wave, tasks connected by `scope.files` intersections form one component and run as a serialized chain; components run concurrently because their union scopes are disjoint. A shared path serializes the component containing those tasks, not the whole wave. There is no small-overlap exemption inside a component: concurrent branches would either conflict at merge, costing the parallelism the overlap was meant to buy, or auto-merge into a file version neither agent tested.
 - List every file the task will touch, including tests and any index/barrel file it must re-export from. Under-declaring is the common failure: the task gets blocked mid-wave for touching a file it always needed.
 
 ## Plan Document Header

@@ -124,9 +124,9 @@ would leave no honest `author_family` for the review that matters most.
 
 Open the **run journal** in scratch, outside the repository (a worker with edit tools could
 otherwise commit or clobber it). It holds `RUN_BASE`, each `WAVE_BASE`, the backend record
-(`IMPLEMENTER`, `AUTHOR_FAMILY`, `REVIEWER_ALIAS`), each worktree's `TASK_HEAD_<n>` recorded at
-dispatch, task status and commits, reviewer outputs, findings with IDs and rulings, dismissals, and
-fix commits.
+(`IMPLEMENTER`, `AUTHOR_FAMILY`, `REVIEWER_ALIAS`), dependency demotions, projected wave shapes,
+each worktree's `TASK_HEAD_<n>` and `CHAIN_SNAPSHOT_<n>` recorded at dispatch, task status and
+component commits, reviewer outputs, findings with IDs and rulings, dismissals, and fix commits.
 
 ### Step 2: Tech spec, only when warranted
 
@@ -139,16 +139,20 @@ the logic spec, load it rather than re-authoring.
 
 ### Step 3: Decompose inline
 
-Break the spec into tasks **in this conversation and into TodoWrite**. Do not write a plan file
-unless the user asks or it must outlive the session.
+Run **quirk:writing-plans** as the in-context planning rubric, then break the spec into tasks **in
+this conversation and into TodoWrite**. Do not write a plan file unless the user asks or it must
+outlive the session. Running the full rubric brings its Granularity Economics, vertical-slice
+partitioning, and hub-file heuristic into this control plane rather than borrowing its field schema
+alone.
 
 Each task carries: a **contract**, **acceptance commands** (literal and copy-runnable, exact flags),
 optional `dependencies`, and `scope.files` — **required on every task**, parallel or not. Step 6
-audits every task's diff against it and the implementer prompt hands it to the worker as a hard
+audits every task's changes against it and the implementer prompt hands it to the worker as a hard
 boundary, so a task without one leaves the audit with nothing to audit against and the worker with
-no scope contract. Cross-reference **quirk:writing-plans** for the field schema.
+no scope contract.
 
-**Do not dispatch the plan-document reviewer.** That prompt describes its own dispatch as "the
+**Do not dispatch the plan-document reviewer, even after invoking `quirk:writing-plans` as the
+rubric.** This carve-out survives rubric invocation. That prompt describes its own dispatch as "the
 standard gate, not optional" — that wording governs plans built *by* `writing-plans` as a
 standalone workflow, not this skill's inline decomposition. The reason it is skipped here: this
 control plane spends its review budget on the branch, where a reviewer reads the code that exists,
@@ -158,43 +162,122 @@ costs more than it returns. Skipping it is a decision already made, not an overs
 correct — and "this plan is unusually high-stakes" is not new information, because every run
 believes that.
 
+Before computing waves, audit every declared `dependencies` edge for semantic motivation: keep it
+in the wave graph only when the target genuinely needs the source's output. An edge motivated only
+by file overlap is **demoted**, not deleted: remove it from the wave graph, but retain it as an
+ordering constraint for the component chain containing both tasks. Demotion is load-bearing because
+connected components guarantee co-location, not order; deleting the edge could run a task before
+the shared-file work it was declared after.
+
+Verify every demotion rather than assuming it preserves order:
+
+1. Demote all overlap-only edges and assign waves from the remaining dependency graph.
+2. For every demoted edge `source → target`, require `wave(source) ≤ wave(target)`.
+   - If `wave(source) < wave(target)`, wave separation preserves the order; keep the demotion.
+   - If `wave(source) = wave(target)`, shared scope puts both tasks in one component whose chain
+     honors the edge; keep the demotion.
+   - If `wave(source) > wave(target)`, the demotion inverted the order; revert that demotion.
+3. Recompute waves and repeat the check until no demoted edge is inverted.
+
+The loop terminates because reverting a demotion only moves its target later, never earlier, so an
+edge cannot be reverted twice. This verification preserves the common wave-count reduction without
+turning a recorded ordering hint into a wrong-order acceptance failure.
+
 ### Step 4: Waves
 
-A **wave** is a set of tasks whose dependencies are satisfied. Sort by `dependencies`.
+A **wave** is a set of tasks whose dependencies are satisfied. Sort by the audited `dependencies`
+graph from Step 3. Within each wave:
 
-Within a wave, tasks run **in parallel if and only if their declared `scope.files` are disjoint**.
-Any overlap means the wave runs sequentially.
+1. Build the **scope-conflict graph**: one node per task, with an edge whenever two tasks'
+   `scope.files` intersect.
+2. Take its connected components. This produces deterministic, maximal groups whose union scopes
+   are disjoint from every other component's union scope.
+3. Run each component as a serialized chain and run different components concurrently. Order each
+   chain so it honors every demoted edge inside that component.
 
-There is no "small overlap" exemption. Two agents editing one file in separate worktrees collide at
-merge, and both outcomes cost more than serializing would have. Overlapping hunks conflict, which
-stops the wave and throws away the parallelism the overlap was meant to buy. Disjoint hunks are
-worse: git combines them cleanly into a version **neither agent wrote or tested** — each one's
-acceptance passed against its own copy of the file, and nothing re-checks the combination until the
-wave's build/test gate, where you meet it as a symptom rather than a cause. Distance within the file
-does not make overlap safe; it only decides which of the two failures you get.
+The invariant remains **no two concurrent tasks share a file**; grouping enforces it without
+serializing unrelated components. There is no "small overlap" exemption. Two agents editing one
+file in separate worktrees collide at merge, and both outcomes cost more than serializing would
+have. Overlapping hunks conflict, which stops the wave and throws away the parallelism the overlap
+was meant to buy. Disjoint hunks are worse: git combines them cleanly into a version **neither
+agent wrote or tested** — each one's acceptance passed against its own copy of the file, and nothing
+re-checks the combination until the wave's build/test gate, where you meet it as a symptom rather
+than a cause. Distance within the file does not make overlap safe; it only decides which of the two
+failures you get. Component union scopes are disjoint by construction, so their branches cannot
+conflict when they merge.
+
+Set and record a soft width cap of roughly 4–6 concurrent **dispatches**. The cap bounds worker
+processes, not retained worktrees: every started component keeps its tree until the wave-end barrier,
+so retained trees necessarily reach the wave's full component count. A cap on trees would never
+release a slot and the overflow queue could not drain; disk checkouts are the uncapped cost, while
+unsandboxed model processes are the bounded one. Record whenever the cap binds so a throttled run
+is not misreported as a naturally narrow one.
+
+Queue overflow components **inside the same wave**; never defer them to a successor wave. Deferral
+would add a checkpoint review and force every component in the first group to finish before any in
+the second starts. Drain the queue according to the selected binding:
+
+- **pi binding:** each task dispatch is backgrounded, so the orchestrator observes an exit and
+  immediately gives the freed dispatch slot to the next queued component. This is true backfill.
+- **Claude binding:** a foreground message does not return until every dispatch in that message
+  returns, so a freed slot is unobservable and backfill is impossible. Drain overflow as lockstep
+  batches inside the same wave: dispatch up to the cap, wait for the whole batch, then dispatch the
+  next batch until every non-stopped chain is exhausted.
+
+A Claude batch carries one task per selected component and fills to the cap in this order:
+
+1. The next **unaccepted** task of components whose chains are already **in progress**.
+2. If slots remain, the first task of components that have not started.
+
+For both selections, order components by descending chain length, breaking ties by the lowest task
+ID in the component. This order makes the batch count derivable and favors the longest makespan;
+in-progress chains come first because starving a chain adds a full round, while an unstarted
+component adds only its own chain length. A retry is not a separate scheduling case: the failed task
+remains its chain's next unaccepted task and occupies an in-progress slot. If that task fails its
+retry, stop the chain and surface it; it consumes no more batch slots.
+
+Before dispatch, report and journal the projected wave shape: component count per wave, tasks in
+each component, whether the width cap binds, and which binding-specific drain applies. For the
+Claude binding, also report the derived batch count and the lockstep cost: each round costs the
+maximum duration of that round's selected links, and the total is the sum of those batch maxima,
+not an optimistic independent-chain maximum. Queueing never creates another wave, so it never
+creates another checkpoint.
+
+If the plan projects as a pure chain with depth N and width 1, surface that shape once and name the
+dependency edges forcing it. Do not auto-re-decompose it; the user may know that the semantic
+ordering is genuine, and guessing otherwise would override the plan's contract.
 
 ### Step 5: Dispatch
 
-**Parallel wave:** one worktree and branch per task, forked from `WAVE_BASE` (the feature branch
-tip before the wave). Create worktrees serially — concurrent `git worktree add` races on
-`.git/config.lock`.
+Create one worktree and branch per component, forked from `WAVE_BASE` (the feature branch tip before
+the wave). Chain every task in that component through the same tree so each task sees its
+predecessors' uncommitted work. Create worktrees serially — concurrent `git worktree add` races on
+`.git/config.lock`. The main tree remains the integration tree and receives no task dispatch.
 
-**Sequential task:** work in the main tree on the feature branch.
-
-Stage `assets/implementer-prompt.md` with the task, contract, acceptance, `scope.files`, worktree
-path, and any DO-NOT-CHANGE fences. Then, for every worktree, record its HEAD before dispatch:
+For each selected task, stage `assets/implementer-prompt.md` with the task, contract, acceptance,
+`scope.files`, component worktree path, and any DO-NOT-CHANGE fences. Immediately before every
+attempt, record the worktree's HEAD and capture the `CHAIN_SNAPSHOT_<n>` that Step 6 defines:
 
 ```bash
 git -C "$WT" rev-parse HEAD   # record as TASK_HEAD_<n> at dispatch
 ```
 
-Dispatch one implementer per task through the binding named by `IMPLEMENTER`:
+Dispatch one implementer per selected task through the binding named by `IMPLEMENTER`.
 
-**Claude binding** — `Task` subagent, Sonnet, foreground, one per task in a single message.
-Unchanged from today.
+**Claude binding** — `Task` subagent, Sonnet, foreground, one per selected task in a single batch
+message. The foreground binding is unchanged; the Step 4 scheduler composes each capped batch. A
+message returns only after all its tasks return, so component chains advance in lockstep rounds
+rather than independently. For components `A=[30,5,5]` and `B=[5,30,5]` minutes, those rounds cost
+65 minutes rather than the 40 an independent-chaining model predicts.
 
-**pi binding** — append `assets/pi-worker-delta.md` (referenced by path, not restated here) to
-the staged prompt, then per task:
+Accept this limit rather than backgrounding the Claude binding. The incident record reports "3/3
+captains stalled on background-dispatch re-invocation"
+(`docs/quirk/specs/2026-07-21-sdd-captain-control-plane-design.md:288`), and the foreground binding
+exists to avoid repeating that failure. The wave-shape preview states the lockstep cost instead of
+overstating the gain; lockstep is still never slower than serializing the entire wave.
+
+**pi binding** — append `assets/pi-worker-delta.md` (referenced by path, not restated here) to the
+staged prompt, then per selected task:
 
 ```bash
 gtimeout 1800 pi-watch --cwd "$WT" --alias codex \
@@ -209,117 +292,183 @@ timed-out one rather than a wave that never completes. `--tools read,bash,edit,w
 fail before implementing. That block is condensed into the delta rather than pasted verbatim from
 `quirk:test-driven-development` (a pasted copy would diverge from the source silently) or dropped
 (the two backends would then build differently, invisibly). `--require-trailer STATUS` verifies
-the worker's last line is
-a well-formed `STATUS: <word>` trailer — it checks shape only; the four legal values stay this
-skill's vocabulary, not `pi-watch`'s.
+the worker's last line is a well-formed `STATUS: <word>` trailer — it checks shape only; the four
+legal values stay this skill's vocabulary, not `pi-watch`'s.
 
-One shared prompt core (`assets/implementer-prompt.md`, unchanged) plus one small delta appended
-for pi — not two fully self-contained prompts, which would drift the way this skill's own Red
-Flags table warns about.
+The pi binding backgrounds one task per component at a time. After a task returns and passes Step
+6's mid-chain gate, its component's next task becomes dispatchable in the same tree. Components
+advance independently, and each exited process releases a width-cap slot for Step 4's true
+backfill.
+
+One shared prompt core (`assets/implementer-prompt.md`, unchanged) plus one small delta appended for
+pi — not two fully self-contained prompts, which would drift the way this skill's own Red Flags
+table warns about.
 
 **The tree is the source of truth; the worker's report is advisory** — for both bindings. The
 Claude binding still runs in the foreground; the pi binding runs backgrounded, and only tree state
 can safely gate a backgrounded dispatch. The incident record documents failures on *both* paths in
 one sentence: "3/3 captains stalled on background-dispatch re-invocation, one fix-worker report was
 lost to a foreground timeout (commit survived)"
-(`docs/quirk/specs/2026-07-21-sdd-captain-control-plane-design.md:288`). The commit survived
-because the orchestrator, not the worker, audits the diff and runs acceptance — so a missing or
-unparseable report costs a status word, never the work. See Failure routing for how Step 6's
-HEAD-check, scope audit, and acceptance resolve what the report could not.
+(`docs/quirk/specs/2026-07-21-sdd-captain-control-plane-design.md:288`). The commit survived because
+the orchestrator, not the worker, audits the diff and runs acceptance — so a missing or unparseable
+report costs a status word, never the work. See Failure routing for how Step 6's HEAD-check, scope
+audit, and acceptance resolve what the report could not.
 
 ### Step 6: Audit, accept, commit, merge
 
-The order *is* the gate — each step is what makes the next one safe. That still holds, but its
-start now waits for the whole wave rather than one task: a pi worker has no sandbox and full
-filesystem access, so auditing and committing task A while task B is still running risks missing a
-write B makes into A's tree afterward. The two wave-level steps below are **unconditional** — they
-run for Claude-implemented tasks too. Contamination is not backend-specific and the commands are
-cheap, so branching would leave the Claude path with a weaker audit for no reason; a sequential
-task, with only one live tree, runs the same two steps as a single operation. Disjoint-scope
-parallel dispatch (Step 4) is unaffected by any of this — the rule that gates it cares which files
-a task touches, not which model wrote them, so pi and Claude tasks share a wave under the same
-rule.
+The order *is* the gate — each step is what makes the next one safe. Each task gets a mid-chain
+audit and acceptance pass that gates its component's next dispatch, but **no commit happens before
+the wave-end barrier**. Once all components return, the authoritative HEAD-check and scope audit
+run once over every live component tree plus the main tree; only then does the orchestrator commit
+and merge each component.
 
-> wave returns → HEAD-check all trees → scope-audit all trees → **then per task:** acceptance →
-> commit → merge
+A pi worker has no sandbox and full filesystem access, so committing component A while component B
+is still running risks missing a write B makes into A's tree afterward. The two wave-level checks
+below are **unconditional** — they run for Claude-implemented tasks too. Contamination is not
+backend-specific and the commands are cheap, so branching would leave the Claude path with a weaker
+audit for no reason. The rule that gates concurrent components cares which files a task touches,
+not which model wrote them, so pi and Claude tasks share a wave under the same rule.
 
-Once the whole wave has returned:
+> each task returns → HEAD-check → task scope audit → task acceptance → advance its chain;
+> whole wave returns → authoritative HEAD-check and component scope audit → commit → merge
 
-**1. Verify HEAD.** Each live worktree's HEAD must equal its `TASK_HEAD_<n>` recorded at dispatch:
+#### Mid-chain gate: attribute and accept one task
 
-```bash
-git -C "$WT" rev-parse HEAD   # compare against TASK_HEAD_<n>
-```
-
-A mismatch means the worker committed and bypassed the audit: stop that task and surface it — no
-soft reset, which would absorb the violation instead of surfacing that a worker ignored an explicit
-instruction. This is a **detection heuristic, not a guarantee**: it catches a plain commit or an
-`--amend`, not a commit followed by `git reset --soft` back to `TASK_HEAD_<n>`, which restores the
-checked value while leaving the tree exactly as committed. The gap does not weaken what follows —
-the scope audit, acceptance, and commit all operate on the true working-tree diff, not on commit
-history — it only loses the signal that a worker ignored an instruction.
-
-**2. Audit the scope**, in every live worktree, each against its **own** task's `scope.files`.
-Implementers do not commit, so their work sits uncommitted in the task's tree. Diff against the
-working tree, not between two commits — a two-commit range reports nothing, because nothing has
-been committed yet:
+Immediately before dispatching the *n*-th task in a component chain, capture
+`CHAIN_SNAPSHOT_<n>`: a map from path to `(mode, blob)` over every path in that component tree that
+differs from `WAVE_BASE` or is untracked. Re-capture it before a retry of the same task because
+every dispatch needs its own before-state.
 
 ```bash
-# run in each task's tree: its worktree, or the main tree for a sequential task
-git diff --name-only -z --no-renames "$WAVE_BASE"
-git ls-files --others --exclude-standard -z
+git -C "$WT" diff --raw -z --no-renames "$WAVE_BASE"   # tracked paths
+git -C "$WT" ls-files --others --exclude-standard -z   # untracked paths
+git -C "$WT" hash-object -- "$PATH"                    # content for an existing path
 ```
 
-Every changed path must be inside that task's `scope.files`. Rename detection is off so a rename
-reports both paths; untracked files are included so a new out-of-scope file is caught. Running
-this once against every live worktree subsumes what used to be a separate per-task audit — a path
-outside its owner's declared scope is a violation regardless of which worker wrote it, so the
-report names the victim rather than the culprit; the response is the same either way.
+Build the map from two disjoint path sets; neither command supplies the whole record by itself:
 
-During a parallel wave, also diff the main tree itself against `WAVE_BASE` (same two commands). It
-must show **no diff at all** — no task owns the main tree, so any change there is an unsandboxed
-worker's write and the per-worktree audit above cannot see it. Treat any diff as contamination:
-stop the wave, surface. A sequential task's tree *is* the main tree, so this is already covered by
-its own audit above.
+- **Tracked paths** are those reported by `git diff --raw` against `WAVE_BASE`. Use its status and
+  destination mode, then run `hash-object` for content on every path except status `D`. Record a
+  deleted path with a deletion sentinel for both mode and blob because `hash-object` exits 128 on
+  an absent path. `--raw` is required because the
+  destination mode exposes a mode-only edit and status `D` represents a predecessor-deleted path.
+  Do not use its destination object ID as content: it is all zeros for an unstaged worktree edit,
+  so repeated edits to an already-dirty path would look identical.
+- **Untracked paths** are those reported by `git ls-files --others --exclude-standard`, with
+  `.gitignore` honored by `--exclude-standard`. `--raw` does not report them, so derive mode from
+  the filesystem by git's rule: `120000` for a symlink,
+  `100755` when the owner-execute bit is set, and `100644` otherwise. Get content with
+  `hash-object`; the path exists because `ls-files` just reported it.
 
-**A scope violation blocks the commit — including when the out-of-scope change is correct.**
-Correctness is not the question the audit asks. A parallel sibling is editing that file right now
-in another worktree, so the "necessary" fix either conflicts at merge or disappears into an
-auto-combined version nobody tested; either way you learn about it much later, from a symptom rather
-than a cause. Stop the wave, surface it, and re-plan. Widening scope is a decision you surface to
-the user, not one you make to keep moving — in a parallel wave, widening retroactively breaks the
-disjointness that made the wave legal.
+The first task in a freshly forked component snapshots an empty map, making its mid-chain audit the
+same as the former per-task audit. Rename detection stays off and untracked files stay included, for
+the same reasons as the wave-end audit.
+
+When the task returns, first verify that the tree's HEAD still equals its `TASK_HEAD_<n>`, then
+recompute the map by the same rules. A mismatch means the worker committed and bypassed the audit:
+stop that task and surface it — no soft reset, which would absorb the violation instead of
+surfacing that a worker ignored an explicit instruction. This is a **detection heuristic, not a
+guarantee**: it catches a plain commit or an `--amend`, not a commit followed by `git reset --soft`
+back to `TASK_HEAD_<n>`, which restores the checked value while leaving the tree exactly as
+committed. The gap does not weaken what follows — the scope audit, acceptance, and commit all
+operate on the true working-tree diff, not on commit history — it only loses the signal that a
+worker ignored an instruction.
+
+Derive the task's changed-path set as the **symmetric difference** of `CHAIN_SNAPSHOT_<n>` and the
+recomputed map:
+
+| Condition | Attribute to this task as |
+| --- | --- |
+| Present only in the new map | Created |
+| Present only in the snapshot | Deleted, including an untracked predecessor-created path |
+| Present in both with a different `(mode, blob)` | Content edit, repeated dirty-path edit, or mode-only edit |
+
+A one-directional scan is insufficient: an untracked path created by a predecessor and deleted by
+this task disappears from both git commands, so only the snapshot-side comparison attributes it.
+Audit exactly this changed-path set against the current task's own `scope.files`. Run the HEAD and
+scope portions for every returned attempt, including one reported as `BLOCKED` or `FAILED`; otherwise
+a retry snapshot would absorb unaudited work into its before-state. A component-union audit cannot
+replace this check because it cannot detect task 1 writing a file owned only by task 3's scope.
+
+**A scope violation blocks the chain and the commit — including when the out-of-scope change is
+correct.** Correctness is not the question the audit asks. A concurrent component may be editing
+that file in another worktree, so the "necessary" fix either conflicts at merge or disappears into
+an auto-combined version nobody tested; either way you learn about it much later, from a symptom
+rather than a cause. Stop the wave, surface it, and re-plan. Widening scope is a decision you surface
+to the user, not one you make to keep moving — widening retroactively breaks the component
+partition that made the wave legal.
 
 Never message another worker to coordinate around this. All coordination is orchestrator-mediated.
 
-Then, per task, in this order — unchanged:
+After the scope audit passes, run that task's acceptance commands in the same tree, exactly as
+written. Acceptance gates chain progress: a failure means nothing is committed, nothing is merged,
+and the next task does not dispatch. Once scope and acceptance pass, mark this task accepted and
+advance the chain without committing; its successor sees the accepted uncommitted work.
 
-**3. Run the task's acceptance commands** in that same tree, exactly as written. Acceptance gates the
-commit: a failure means nothing is committed and nothing is merged.
+A retried task repeats this entire gate with a fresh `TASK_HEAD_<n>` and `CHAIN_SNAPSHOT_<n>`. The
+invariant the hoist must preserve is: no tree's diff reaches acceptance without an audit that
+observed that diff. Both retry paths in Failure routing (`Implementer BLOCKED / FAILED`, and task
+acceptance failure) produce a *new* diff after the prior audit, so a retry must not reuse that pass.
+This is the case that matters most: a retried pi worker is exactly the case where an unsandboxed
+writer would otherwise get a second, unobserved pass at the tree. A second failure stops the chain,
+surfaces it, and leaves its component uncommitted with its worktree preserved.
 
-**4. Commit** the audited, accepted work on the task's branch. You commit it — the worker never
-does, because a worker that commits its own work has already bypassed steps 2 and 3, which is
-exactly what step 1 exists to catch.
+#### Wave-end barrier: audit and commit components
 
-**5. Merge** each audited branch into the feature branch, one at a time (parallel waves only — a
-sequential task committed in step 4 is already on the feature branch):
+Nothing commits until every component has returned. Mid-chain checks gate progress but cannot make
+a tree final: a live pi sibling can contaminate it after an earlier pass, so the wave-end HEAD-check
+and scope audit remain authoritative.
+
+**1. Verify HEAD everywhere.** Each component worktree's HEAD must equal its latest recorded
+`TASK_HEAD_<n>`, and the main tree's HEAD must still equal `WAVE_BASE`:
+
+```bash
+git -C "$WT" rev-parse HEAD
+```
+
+Apply the same stop-without-reset response and detection-heuristic limits as the mid-chain check.
+The main-tree check matters because no task owns that tree; a moved integration branch is a barrier
+violation even when its worktree happens to be clean.
+
+**2. Audit every tree's scope.** In each component worktree, diff the working tree against
+`WAVE_BASE` and require every changed path to be inside the union of that component's task scopes.
+Implementers do not commit, so their accumulated work sits uncommitted in the component tree. Diff
+against the working tree, not between two commits — a two-commit range reports nothing, because
+nothing has been committed yet:
+
+```bash
+git -C "$WT" diff --name-only -z --no-renames "$WAVE_BASE"
+git -C "$WT" ls-files --others --exclude-standard -z
+```
+
+Rename detection is off so a rename reports both paths; untracked files are included so a new
+out-of-scope file is caught. The union-scope pass observes the complete component diff and catches
+late contamination; the per-task snapshot passes remain necessary for attribution. A path outside
+its owner's declared scope is a violation regardless of which worker wrote it, so this pass names
+the victim rather than the culprit — a sibling component's unsandboxed write surfaces in the tree
+it landed in, not the one it came from. The response is the same either way.
+
+Run the same two diff commands in the main tree and require **no diff at all**. No task owns the
+main tree, so any change there is an unsandboxed worker's write that the component-tree audits
+cannot see. Treat any diff as contamination: stop the wave and surface it.
+
+**3. Commit each component as a unit.** After every task is accepted and every tree passes the
+authoritative checks, commit the audited, accepted accumulated work once on each component branch.
+You commit it — the worker
+never does, because a worker that commits its own work has already bypassed the gate the HEAD-check
+exists to protect. The mid-chain passes never commit. Component-level history gives up per-task
+bisect granularity; that trade is accepted to preserve the barrier.
+
+**4. Merge** each audited component branch into the feature branch, one at a time:
 
 ```bash
 git merge --no-ff --no-edit "$BRANCH"
 ```
 
-Disjoint scopes are guaranteed at plan time, so these cannot conflict. **A conflict means the
-precondition was violated** — stop and re-plan rather than resolving it.
+Component union scopes are disjoint by construction, so these cannot conflict. **A conflict means
+the precondition was violated** — stop and re-plan rather than resolving it.
 
 Tear down a worktree only after its branch merges; preserve it on failure.
-
-**A retried task re-enters at step 1.** The invariant the hoist must preserve is: no tree's diff
-reaches acceptance without an audit that observed that diff. The wave-level pass (steps 1-2) covers
-first attempts only — both retry paths in Failure routing (`Implementer BLOCKED / FAILED`, and
-`Task acceptance fails`) produce a *new* diff after that pass has already run, so a retried task
-re-runs the HEAD-check and scope audit against its own tree before its own acceptance step. This is
-the case that matters most: a retried pi worker is exactly the case where an unsandboxed writer
-would otherwise get a second, unobserved pass at the tree.
 
 ### Step 7: Gates
 
@@ -334,7 +483,8 @@ plausible flake diagnosis is a hypothesis; re-running in isolation is a fact, an
 time than the round you would waste.
 
 After every wave **that has a successor**, run a checkpoint review. The final wave gets none — the
-final loop covers it. A single-wave run therefore has no checkpoints at all.
+final loop covers it. A single-wave run therefore has no checkpoints at all; this is the core
+branch-level review principle working as designed, not a missing gate.
 
 You may skip a checkpoint for a genuinely trivial non-final wave; record a reason naming why.
 
@@ -509,18 +659,24 @@ the table wins.
 
 | Situation | Response |
 | --- | --- |
-| Implementer `BLOCKED` / `FAILED` | Retry once with a fresh worker and the failure in its prompt; then stop and ask |
+| Implementer `BLOCKED` / `FAILED` | Retry the same next-unaccepted task once with a fresh worker and the failure in its prompt; on a second failure, stop the chain and ask |
 | `NEEDS_CONTEXT` | Answer from the spec and codebase when derivable; otherwise ask the user |
-| Task acceptance fails | Do not commit; retry once; then stop and ask |
-| Scope audit fails | Do not commit or merge; stop the wave; surface for re-plan |
-| Merge conflict in a parallel wave | Disjointness was violated; stop and re-plan |
+| Mid-chain task acceptance fails | Do not advance or commit; retry that task once as the chain's next unaccepted task; on a second failure, stop the chain and ask |
+| Mid-chain or wave-end scope audit fails | Do not advance, commit, or merge; stop the wave and surface for re-plan |
+| `CHAIN_SNAPSHOT_<n>` cannot be captured or recomputed | Attribution is unavailable; do not run acceptance or advance the chain; stop and surface |
+| Demoted edge has `wave(source) > wave(target)` | Revert that demotion, recompute waves, and repeat until no demoted edge is inverted |
+| Projected shape is a pure chain | Surface it once with the forcing dependency edges; do not auto-re-decompose |
+| pi width cap binds with queued components | Keep them in the same wave and backfill the next queued component whenever a dispatch exits |
+| Claude width cap binds with queued components | Keep them in the same wave and drain lockstep batches using the fixed in-progress-first, longest-chain-first order |
+| A Claude task fails its retry | Stop that chain and remove it from later batches; surface it rather than stalling the remaining components |
+| Merge conflict between component branches | Component-scope disjointness was violated; stop and re-plan |
 | Build/test red | Hard gate; fix or prove flaky before anything else |
 | Reviewer output missing or unparseable | Retry once, then model fallback, then block the round |
 | Dependency misdeclared | Stop dispatch, amend the wave graph, re-run affected downstream work |
-| Cap reached with accepted CRITICAL/HIGH | Blocked handoff; explicit user override required |
+| Five-round review cap reached with accepted CRITICAL/HIGH | Blocked handoff; explicit user override required |
 | `pi-watch` exit 6 (trailer missing or malformed) | No validated status. Fall through to tree evaluation: audit and run acceptance, accept on green, `FAILED` on red. Record the missing status. |
 | Background dispatch never re-invokes the orchestrator | `gtimeout` bounds every dispatch, so the job terminates regardless; completion is decidable from the tree rather than from a notification |
-| Any task retried after the wave-level audit | Re-run HEAD-check and scope-audit on that tree before its acceptance step |
+| Any task retried after its prior mid-chain audit | Capture a fresh HEAD and snapshot, then re-run scope audit before acceptance |
 | Worktree HEAD moved since dispatch | Worker committed and bypassed the audit; stop the task, surface |
 | Cross-worktree contamination at wave end | Stop the wave, re-plan — same response as any scope violation |
 | Reviewer alias unreachable at preflight | Offer the implementer flip; else `Task` path with a warning |
@@ -535,6 +691,19 @@ rationalization is quoted; the reason it fails follows.
 | Rationalization | Why it fails |
 | --- | --- |
 | "Run the overlapping tasks in parallel, then inspect the shared file afterward and fix anything clobbered." | Inspection shows the file's final state, not whether anyone tested that state. A clean auto-merge of two disjoint hunks is exactly the case with nothing to notice. |
+| "One overlapping pair means the whole wave has to run sequentially." | Only that pair's connected component must serialize. Collapsing unrelated components throws away safe parallelism without strengthening the no-shared-file invariant. |
+| "The overlap-only dependency is redundant now; just delete it." | Components guarantee co-location, not order. Demote the edge into the component chain so the shared-file ordering hint survives. |
+| "Demotion can only make the plan faster, so the new waves do not need checking." | A target can move earlier than its source. Verify `wave(source) ≤ wave(target)` and revert inverted demotions before dispatch. |
+| "Cap live worktrees and start overflow when one is torn down." | Nothing tears down before the barrier, so no slot can open. The cap bounds concurrent dispatches; retained trees reach the component count. |
+| "Put overflow into the next wave; it is sequential either way." | A successor wave adds a checkpoint and a broader barrier. Overflow queues inside the existing wave and drains against its existing barrier. |
+| "Backfill the Claude batch whenever one task returns." | Foreground dispatch yields no orchestrator turn until the entire message returns. Claude overflow drains in lockstep batches, not by unobservable backfill. |
+| "Start all short queued components before advancing the long chain." | Starving an in-progress chain adds a full batch. In-progress chains come first, and descending chain length makes the projected batch count reproducible. |
+| "The before-and-after path lists identify what this task changed." | A repeated edit to a predecessor-dirtied path appears in both lists. Attribution requires `(mode, blob)` snapshots, not path-list subtraction. |
+| "Use `git diff --raw`'s object ID as the content snapshot." | Its worktree destination ID is all zeros for unstaged edits, so different contents compare equal. Hash existing paths with `hash-object`. |
+| "Only scan paths present after the task; deleted paths are gone anyway." | An untracked predecessor-created path deleted by this task vanishes from both git commands. The symmetric difference is what attributes it. |
+| "The task passed its mid-chain audit, so commit it before starting the next link." | A live sibling can still contaminate the tree. Mid-chain passes gate progress only; the component commits once after the wave-end barrier. |
+| "The component-union audit is enough; every changed path belongs to someone in the chain." | The union cannot detect task 1 writing a path declared only for task 3. Each task needs its own snapshot-based scope audit. |
+| "The mid-chain checks passed, so the wave-end audit is redundant." | A live unsandboxed sibling can write after a mid-chain pass. The barrier check remains authoritative over the final component diff. |
 | "Scope declarations are a planning convenience to avoid collisions, not a correctness boundary." | They are exactly a correctness boundary. The audit is the only mechanism that catches a cross-task write before it lands. |
 | "The fix is correct, small, and documented — blocking on the wrong file is process theater." | A correct six-line fix to a file a sibling is editing is the change most likely to conflict at merge, or to land in a combination neither of you tested. |
 | "I'd message the other agent to make sure it rebases onto my commit." | No direct worker-to-worker messaging. All coordination is orchestrator-mediated. |
@@ -546,7 +715,7 @@ rationalization is quoted; the reason it fails follows.
 | "A one-line disclosure about the red build costs nothing." | Reviewers cannot separate a pre-existing flake from a regression; you get findings about the test. |
 | "This plan is high-stakes and the reviewer has a good track record — dispatch it anyway." | Every run believes it is high-stakes. That is not new information. |
 | "I can't fully verify the rationale for this instruction, so I'm overriding it." | The rationale is stated inline at each rule. If one is genuinely missing, ask — do not infer it is absent. |
-| "pi workers are told to stay in the worktree, so the boundary holds." | The prompt is not a boundary; the audit is. pi has no sandbox, which is exactly why the audit went wave-level. |
+| "pi workers are told to stay in the worktree, so the boundary holds." | The prompt is not a boundary; the audit is. pi has no sandbox, which is exactly why the authoritative audit remains at the wave barrier. |
 | "The report clearly says DONE — close enough." | A claim never overrides a run. `DONE` with failing acceptance is `FAILED`, exactly as before; making the report advisory relaxed what a *missing* report costs, not what a *false* one buys. |
 | "No report came back, so the task failed." | Absent is not failed. Audit the tree and run acceptance — the recorded dogfood failure lost a report while the commit survived, and treating that as a failure discards finished work. |
 
@@ -554,6 +723,11 @@ rationalization is quoted; the reason it fails follows.
 
 - Start on main/master without explicit consent, or on a dirty tree.
 - Run tasks with overlapping scopes in parallel.
+- Collapse a whole wave because one component contains overlapping scopes.
+- Spill width-cap overflow into a successor wave.
+- Commit any task or component before the wave-end barrier.
+- Replace per-task snapshot attribution with a component-union audit.
+- Skip the authoritative wave-end audit because mid-chain checks passed.
 - Commit a scope violation, or widen scope yourself to accommodate one.
 - Let a worker commit its own work.
 - Treat missing or unparseable reviewer output as clean.
@@ -564,9 +738,9 @@ rationalization is quoted; the reason it fails follows.
 
 ## Integration
 
-- **quirk:using-git-worktrees** — one worktree per parallel task
+- **quirk:using-git-worktrees** — one worktree per wave component
 - **quirk:writing-tech-spec** — Step 2, when the complexity gate fires
-- **quirk:writing-plans** — task field schema, cross-referenced in Step 3
+- **quirk:writing-plans** — the in-context planning rubric run in Step 3
 - **quirk:adversarial-review** — Step 8 delegates the review itself, one invocation per lens
 - **quirk:pi-dev** — `pi-watch` dispatch and failure signatures, for both the reviewer path and the pi implementer/fixer binding
 - **quirk:test-driven-development** — implementers follow TDD per task
