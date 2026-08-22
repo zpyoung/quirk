@@ -168,15 +168,24 @@ wave-end barrier that exists anyway.
 **What a Claude batch contains is fixed, because the queue holds components while a dispatch
 carries one task.** Each batch is filled to the cap in this order:
 
-1. The next unrun task of every component whose chain is already **in progress**, in component
-   order.
-2. If slots remain, the **first task of queued components** that have not started, in queue order.
+1. The next **unaccepted** task of every component whose chain is already **in progress**.
+2. If slots remain, the first task of components that have not started.
+
+Both selections run in **component order: descending chain length, ties broken by the lowest task
+ID in the component.** The order must be stated, not left to plan order, or the batch count is not
+derivable — with a cap of 2 and chain lengths `[4, 1, 1]`, starting the long chain first finishes
+in 4 batches while starting the two short chains first takes 5. Longest-first is also the standard
+makespan heuristic, so the stated order is the good one rather than merely a determinate one.
 
 In-progress chains take priority because a chain of length *k* needs at least *k* batches no matter
 what else is scheduled, so a batch that starves one adds a full round to the wave; an unstarted
-component only ever adds its own chain length. Without this rule the same plan admits two
-schedules — breadth-first component starts versus depth-first chain advancement — with different
-batch counts, so the preview's cost figure would not be derivable from the plan.
+component only ever adds its own chain length.
+
+**A retry is not a special case.** A task is "unaccepted" until its own acceptance passes, so a
+task that failed and is being retried *is* its chain's next unaccepted task and occupies an
+in-progress slot under rule 1 like any other. A chain whose task fails its retry is **stopped**: it
+is surfaced per Failure routing, and it consumes no further slots, so the remaining batches shrink
+rather than stalling on a component that cannot advance.
 
 Both bindings drain inside one wave, so neither adds a checkpoint round. The difference is cost,
 and the wave-shape preview states which mechanism applies and how many batches the Claude binding
@@ -245,29 +254,43 @@ git -C "$WT" ls-files --others --exclude-standard -z   # untracked, .gitignore h
 git -C "$WT" hash-object -- "$PATH"                    # content, for paths that exist on disk
 ```
 
-The two commands supply different halves and **neither is sufficient alone**:
+The commands supply different halves for two **disjoint** path sets, and no single command covers
+either set completely.
 
-- `--raw` supplies the path set, the status, and the destination **mode**. It is required rather
-  than `--name-only` because mode is what makes a **mode-only** edit visible — a `chmod` on a path
-  a predecessor already dirtied is invisible to content alone — and because status `D` is what
-  makes a predecessor-**deleted** path representable.
-- `--raw` must **not** be used for content. Against a worktree, its destination object ID is all
-  zeros for any unstaged edit, so two different contents of the same dirty path produce the
-  identical entry and the second edit escapes attribution entirely.
-- `hash-object` supplies content, and is called **only on paths that exist on disk** — every path
-  except those `--raw` reported as `D`. It exits 128 on an absent path, which is why deletions take
-  the sentinel instead.
+**Tracked paths** — those `git diff --raw` reports against `WAVE_BASE`:
 
-So each entry is `(mode, blob)` where a path with status `D` records the deleted sentinel for both,
-and every other path records its `--raw` destination mode paired with its `hash-object` content
-hash. This distinguishes all five cases the audit must separate: creation, content edit, repeated
-content edit to an already-dirty path, mode-only edit, and deletion.
+- `--raw` supplies the status and the destination **mode**. It is required rather than
+  `--name-only` because mode is what makes a **mode-only** edit visible — a `chmod` on a path a
+  predecessor already dirtied is invisible to content alone — and because status `D` is what makes
+  a predecessor-**deleted** path representable.
+- `--raw` must **not** be used for content. Against a worktree its destination object ID is all
+  zeros for any unstaged edit, so two different contents of the same dirty path yield the identical
+  entry and the second edit escapes attribution.
+- Content comes from `hash-object`, called on every tracked path except those with status `D`;
+  it exits 128 on an absent path, which is why deletions take the sentinel for both fields.
 
-When task *k* returns, recompute the map the same way. **Task *k*'s changed-path set** is every
-path that is absent from `CHAIN_SNAPSHOT_<n>`, or whose `(mode, blob)` differs from the snapshot's
-entry — which covers creation, content edit, mode-only edit, and deletion uniformly. Audit exactly
-that set against task *k*'s `scope.files`; a path outside it is a scope violation attributable to
-task *k*.
+**Untracked paths** — those `git ls-files --others --exclude-standard` reports. `--raw` does not
+report them at all, so neither their mode nor their content can come from it:
+
+- Mode is derived from the filesystem, by git's own rule: `120000` for a symlink, `100755` when the
+  owner-execute bit is set, `100644` otherwise.
+- Content comes from `hash-object`, which is always safe here because an untracked path that
+  `ls-files` reports exists by construction.
+
+**The changed-path set is the symmetric difference of the two maps**, not a one-directional scan.
+Comparing only "present in the new map" misses a whole class: an untracked path a predecessor
+created and task *k* **deleted** disappears from `--raw` (never tracked) and from `ls-files` (no
+longer present), so it vanishes from the new map entirely rather than appearing with a changed
+entry. Against `CHAIN_SNAPSHOT_<n>`, task *k* changed a path when:
+
+| Condition | Meaning |
+| --- | --- |
+| in new map, not in snapshot | created |
+| in snapshot, not in new map | deleted — including an untracked path deleted from the tree |
+| in both, `(mode, blob)` differs | content edit, repeated edit to an already-dirty path, or mode-only edit |
+
+Audit exactly that set against task *k*'s `scope.files`; a path outside it is a scope violation
+attributable to task *k*.
 
 Rename detection stays off and untracked files stay included, for the same reasons the wave-end
 audit gives. The first task in a chain snapshots an empty set when its component tree is freshly
@@ -365,7 +388,8 @@ and the branch-level review loop remain the backstop, exactly as the core princi
 - Overflow queues inside the same wave, never spilling into a new one. The pi binding backfills
   freed slots; the foreground Claude binding drains the queue as lockstep batches, which the
   wave-shape preview reports. A Claude batch advances in-progress chains before starting queued
-  components, so the batch count is derivable from the plan.
+  components, both in descending-chain-length order, so the batch count is derivable from the plan;
+  a retried task is simply its chain's next unaccepted task.
 - Zero checkpoints on a single-wave run is accepted as the core principle working as designed.
 - `gtimeout 1800` is unchanged.
 
@@ -382,9 +406,11 @@ and the branch-level review loop remain the backstop, exactly as the core princi
 
 - Each task in a chain gets its own acceptance run and scope audit as it completes.
 - Attribution uses `CHAIN_SNAPSHOT_<n>`, a path → `(mode, blob)` map captured before each dispatch
-  by pairing `git diff --raw` (path, status, destination mode) with `git hash-object` (content, for
-  paths that exist). `--raw` alone cannot supply content — its destination object ID is all zeros
-  for an unstaged edit — and `hash-object` alone exits 128 on a predecessor-deleted path.
+  by pairing `git diff --raw` (tracked: status and mode) with `git hash-object` (content), and
+  deriving untracked modes from the filesystem, since `--raw` does not report untracked paths at
+  all. The changed-path set is the **symmetric difference** of the snapshot and the recomputed map,
+  so an untracked path deleted by the current task — which vanishes from both commands — is still
+  attributed.
 - The commit unit remains the component, at the wave-end barrier.
 - Bisect granularity drops to the component; accepted.
 
@@ -507,3 +533,12 @@ in-repo evidence and one requested adversarial review.
   queue holds components while a dispatch carries one task, and the spec did not say which a capped
   batch should contain. A batch now advances in-progress chains first, then starts queued
   components, so the preview's batch count is derivable rather than schedule-dependent.
+- *2026-08-22* — Snapshot construction completed after round-4 closure review (findings R41, R43).
+  `--raw` does not report untracked paths, so untracked creations had no mode source; and the
+  changed-path rule scanned in one direction only, so an untracked path deleted by the current task
+  vanished from both commands and escaped attribution. Untracked modes now derive from the
+  filesystem by git's own rule, and the changed-path set is the symmetric difference of the two maps.
+- *2026-08-22* — Batch ordering and retry handling defined after round-4 closure review (findings
+  R42, R44). "Component order" and "queue order" were undefined, leaving the batch count
+  plan-order-dependent; both now use descending chain length with the lowest task ID as tiebreak. A
+  retry is defined as the chain's next unaccepted task rather than a separate scheduling case.
