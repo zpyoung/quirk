@@ -137,9 +137,17 @@ Component ordering honors any demoted edge inside the chain.
 
 ### Step 4 — width cap and overflow
 
-Concurrent live trees are bounded by a soft cap of roughly 4–6, because each pi worker is a real
-unsandboxed process and each component holds a worktree on disk. When the cap binds, it is recorded
-so a throttled run reads as throttled rather than as narrow.
+**The cap bounds concurrent dispatches, not retained worktrees.** Those are different resources and
+only one of them can be reclaimed inside a wave. A component that finishes still holds its worktree
+— nothing commits or tears down before the barrier — so retained worktrees necessarily reach the
+wave's full component count no matter what the cap says. A cap written against live *trees* would
+therefore never free a slot, and the queue could never drain within the wave at all.
+
+What is genuinely reclaimable is the dispatch slot: a worker that exits releases its process. So
+concurrent **dispatches** are bounded by a soft cap of roughly 4–6, because each pi worker is a
+real unsandboxed process. Disk is the cost that is not bounded here, and it is the cheap one — a
+worktree is a checkout, while an unsandboxed model process is not. When the cap binds, it is
+recorded so a throttled run reads as throttled rather than as narrow.
 
 Overflow components **queue inside the same wave**. They are never deferred to a new wave. Deferral
 is not the same serialization renamed: a second wave means the first now "has a successor" and
@@ -215,21 +223,28 @@ commands, which report every path differing from `WAVE_BASE`, cannot say which o
 *k* touched. Comparing path *lists* is not enough either: a path the predecessor already dirtied
 and task *k* edits again appears in both lists and would be attributed to the predecessor alone.
 
-Immediately **before** dispatching task *k*, record `CHAIN_SNAPSHOT_k`: the set of
-`(path, content hash)` pairs over every path in the component tree that differs from `WAVE_BASE`
-or is untracked.
+Immediately **before** dispatching task *k*, record `CHAIN_SNAPSHOT_<n>`: a map from path to
+`(mode, blob)` over every path in the component tree that differs from `WAVE_BASE` or is untracked.
 
 ```bash
-git -C "$WT" diff --name-only -z --no-renames "$WAVE_BASE"   # tracked, changed vs WAVE_BASE
-git -C "$WT" ls-files --others --exclude-standard -z         # untracked, .gitignore honoured
-# for each path from both lists:
-git -C "$WT" hash-object -- "$PATH"
+git -C "$WT" diff --raw -z --no-renames "$WAVE_BASE"   # tracked: mode, blob, and status per path
+git -C "$WT" ls-files --others --exclude-standard -z   # untracked, .gitignore honoured
+git -C "$WT" hash-object -- "$PATH"                    # untracked paths only
 ```
 
-When task *k* returns, recompute that set the same way. **Task *k*'s changed-path set** is every
-path whose pair is absent from `CHAIN_SNAPSHOT_k`, differs from it in hash, or was present in the
-snapshot and has since been deleted. Audit exactly that set against task *k*'s `scope.files`; a
-path outside it is a scope violation attributable to task *k*.
+`--raw` is required rather than `--name-only`. It reports the destination mode and destination blob
+alongside each path, and it reports deletions as status `D` — so a path a predecessor **deleted**
+gets a representable snapshot entry (mode and blob recorded as the deleted sentinel) instead of
+being fed to `git hash-object`, which exits 128 on an absent path and would abort the snapshot on a
+legitimately dirty tree. `hash-object` is used only for untracked paths, which exist by
+construction. Recording the mode alongside the blob is what makes a **mode-only** edit — a `chmod`
+on a path a predecessor already dirtied — visible; a content hash alone is identical across it.
+
+When task *k* returns, recompute the map the same way. **Task *k*'s changed-path set** is every
+path that is absent from `CHAIN_SNAPSHOT_<n>`, or whose `(mode, blob)` differs from the snapshot's
+entry — which covers creation, content edit, mode-only edit, and deletion uniformly. Audit exactly
+that set against task *k*'s `scope.files`; a path outside it is a scope violation attributable to
+task *k*.
 
 Rename detection stays off and untracked files stay included, for the same reasons the wave-end
 audit gives. The first task in a chain snapshots an empty set when its component tree is freshly
@@ -322,7 +337,8 @@ and the branch-level review loop remain the backstop, exactly as the core princi
 
 **wave-barrier-cost**
 
-- Soft cap of ~4–6 concurrent live trees, recorded when it binds.
+- Soft cap of ~4–6 concurrent **dispatches**, recorded when it binds. Retained worktrees are not
+  capped — they reach the wave's component count, since nothing is torn down before the barrier.
 - Overflow queues inside the same wave, never spilling into a new one. The pi binding backfills
   freed slots; the foreground Claude binding drains the queue as lockstep batches, which the
   wave-shape preview reports.
@@ -341,9 +357,10 @@ and the branch-level review loop remain the backstop, exactly as the core princi
 **commit-and-audit granularity**
 
 - Each task in a chain gets its own acceptance run and scope audit as it completes.
-- Attribution uses `CHAIN_SNAPSHOT_k`, a `(path, content hash)` set captured before each dispatch;
-  a path-list comparison is insufficient because a predecessor-dirtied path re-edited by the
-  current task appears in both lists.
+- Attribution uses `CHAIN_SNAPSHOT_<n>`, a path → `(mode, blob)` map captured before each dispatch
+  via `git diff --raw`; a path-list comparison is insufficient because a predecessor-dirtied path
+  re-edited by the current task appears in both lists, and `--raw` is required so deletions are
+  representable and mode-only edits are visible.
 - The commit unit remains the component, at the wave-end barrier.
 - Bisect granularity drops to the component; accepted.
 
@@ -398,7 +415,13 @@ in-repo evidence and one requested adversarial review.
   intersect.
 - **Demoted edge** — a `dependencies` edge found to be motivated only by file overlap. Removed from
   the wave graph, retained as an ordering constraint inside its component.
-- **Width cap** — the soft bound (~4–6) on concurrent live worktrees in a wave.
+- **CHAIN_SNAPSHOT_<n>** — a map from path to `(mode, blob)` over every path in a component tree
+  that differs from `WAVE_BASE` or is untracked, captured immediately before dispatching the *n*-th task
+  in that component's chain. Comparing against it is what attributes a changed path to one task
+  rather than to its predecessors. Named to match the existing `TASK_HEAD_<n>`.
+- **Width cap** — the soft bound (~4–6) on concurrent **dispatches** in a wave. It does not bound
+  retained worktrees, which reach the wave's component count because nothing is torn down before
+  the barrier.
 - **Lockstep round** — on the foreground Claude binding, one synchronized advance of every chained
   component; the round costs the maximum over components of that round's link.
 - **Barrier** — the wave-end synchronization established by PR #35: no **commit** until every
@@ -431,7 +454,7 @@ in-repo evidence and one requested adversarial review.
 - *2026-08-20* — Mid-chain attribution specified after adversarial review (finding F3). The spec
   named a "diff snapshot" without defining its baseline, which permitted an implementation that
   misses a task editing a path its predecessor had already dirtied. Now defined as
-  `CHAIN_SNAPSHOT_k`, a `(path, content hash)` set captured before each dispatch, with the
+  `CHAIN_SNAPSHOT_<n>`, a `(path, content hash)` set captured before each dispatch, with the
   changed-path set derived by hash comparison rather than path-list difference.
 - *2026-08-20* — Overflow drain split by binding after adversarial review (finding F5). "Dispatched
   as slots free" is unimplementable on the foreground Claude binding, which yields no orchestrator
@@ -440,3 +463,13 @@ in-repo evidence and one requested adversarial review.
 - *2026-08-20* — Barrier wording corrected in the Purpose section and the glossary (finding F1).
   Both defined the barrier as permitting no audit before the wave returns, contradicting the locked
   mid-chain audit. The barrier's rule is about commits; mid-chain audits gate progress only.
+- *2026-08-21* — `CHAIN_SNAPSHOT_<n>` algorithm corrected after round-2 closure review (finding
+  R21). The `git hash-object` loop aborted on a predecessor-deleted path (exit 128) and recorded
+  content only, making a mode-only edit invisible. Now built from `git diff --raw`, which carries
+  mode, blob, and deletion status per path; `hash-object` is confined to untracked paths, which
+  exist by construction.
+- *2026-08-21* — Width cap re-scoped after round-2 closure review (finding R22). The cap was
+  written against concurrent live worktrees, but a finished component cannot release its worktree
+  before the barrier, so no slot would ever free and the overflow queue could not drain inside the
+  wave — contradicting the locked "never spills into a new wave" decision. The cap now bounds
+  concurrent dispatches; retained worktrees are explicitly uncapped.
