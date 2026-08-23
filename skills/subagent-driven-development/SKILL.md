@@ -31,14 +31,18 @@ digraph when_to_use {
 ```
 
 `quirk:executing-plans` is the **sequential, same-session, no-subagents** path. Use it when
-subagent dispatch is unavailable, or when this skill is itself the thing being edited.
+subagent dispatch is unavailable, or when this skill is itself the thing being edited. Unavailable
+means a dispatch was attempted and failed, or the platform has no subagents at all (Gemini CLI) —
+not that the dispatch tool goes by a name this document does not use. It is `Agent` in current
+Claude Code, was `Task` in older builds, and is `task` / `spawn_agent` elsewhere; whichever your
+session has is the one to use.
 
 ## Roles
 
 | Role | Model | Job |
 | --- | --- | --- |
 | Orchestrator | the session model | Decompose, dispatch, audit, commit, adjudicate, route |
-| Implementer | Claude subagent via `Task`, or pi codex via `pi-watch` — chosen once at preflight (`IMPLEMENTER`) | Build one task |
+| Implementer | Claude subagent via `Agent`, or pi codex via `pi-watch` — chosen once at preflight (`IMPLEMENTER`) | Build one task |
 | Reviewer ×3 | a pi alias resolved by `quirk:adversarial-review`, chosen once at preflight (`REVIEWER_ALIAS`) | Review a diff through one lens |
 | Fixer | the same binding as Implementer — inherits `IMPLEMENTER`, not the reviewer's family | Apply an adjudicated finding packet |
 
@@ -116,7 +120,7 @@ would leave no honest `author_family` for the review that matters most.
    ladder, so an unverified alias yields `NOT_REVIEWABLE` with nothing behind it. On failure,
    offer the implementer flip — independence is load-bearing, the implementer preference is not —
    but only when the flipped pairing's reviewer is itself known reachable. If neither pairing
-   resolves, fall back to `quirk:adversarial-review`'s documented `Task` path and warn once —
+   resolves, fall back to `quirk:adversarial-review`'s documented `Agent` path and warn once —
    record `REVIEWER_ALIAS` as `task-fallback` rather than the unreachable alias, since Step 8 reads
    that value to decide whether it may pass `model` at all.
 6. Record `IMPLEMENTER`, `AUTHOR_FAMILY`, and `REVIEWER_ALIAS` in the run journal. They are
@@ -272,7 +276,7 @@ git -C "$WT" rev-parse HEAD   # record as TASK_HEAD_<n> at dispatch
 
 Dispatch one implementer per selected task through the binding named by `IMPLEMENTER`.
 
-**Claude binding** — `Task` subagent, Sonnet, foreground, one per selected task in a single batch
+**Claude binding** — `Agent` subagent, Sonnet, foreground, one per selected task in a single batch
 message. The foreground binding is unchanged; the Step 4 scheduler composes each capped batch. A
 message returns only after all its tasks return, so component chains advance in lockstep rounds
 rather than independently. For components `A=[30,5,5]` and `B=[5,30,5]` minutes, those rounds cost
@@ -534,7 +538,7 @@ walk. Its failure is reported as `resolved: false` → `NOT_REVIEWABLE` rather t
 fallback rung, which is why preflight verifies `REVIEWER_ALIAS` with `pi-watch --check` before the
 run ever reaches this step. When preflight instead recorded `task-fallback` — no alias verified
 reachable, for either pairing — Step 8 omits `model` entirely rather than hand `select_reviewer` an
-alias already known unreachable; `quirk:adversarial-review`'s own ladder and `Task` backstop govern
+alias already known unreachable; `quirk:adversarial-review`'s own ladder and `Agent` backstop govern
 instead, which is its business, not this skill's. A deliberate same-family reviewer pick warns once
 at preflight and is expected to stamp `manifest.reviewer.independence: reduced`, which Step 9
 already reads.
@@ -558,7 +562,7 @@ the grant this skill specified when it dispatched reviewers itself. That is deli
 requires a reproduction for every `CRITICAL` and `HIGH` finding, and that standard is unmeetable
 without a shell. `pi` still has no sandbox, so on that path the read-only constraint is prompt-level
 only. The trade is stated in `skills/adversarial-review/assets/composition-contract.md`; a run that
-cannot accept it dispatches via `Task` instead of `pi-watch`.
+cannot accept it dispatches via `Agent` instead of `pi-watch`.
 
 **A verdict you did not receive is never a clean review.** Under delegation that is decidable from
 the exit code rather than inferred from silence:
@@ -690,7 +694,7 @@ the table wins.
 | Any task retried after its prior mid-chain audit | Capture a fresh HEAD and snapshot, then re-run scope audit before acceptance |
 | Worktree HEAD moved since dispatch | Worker committed and bypassed the audit; stop the task, surface |
 | Cross-worktree contamination at wave end | Stop the wave, re-plan — same response as any scope violation |
-| Reviewer alias unreachable at preflight | Offer the implementer flip; else `Task` path with a warning |
+| Reviewer alias unreachable at preflight | Offer the implementer flip; else `Agent` path with a warning |
 
 Every row defaults to stop and ask rather than improvise.
 

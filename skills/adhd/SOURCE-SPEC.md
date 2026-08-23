@@ -71,18 +71,18 @@ Instead, brainstorming includes an **advisory sub-bullet** in step 6 suggesting 
 
 This preserves brainstorming's efficiency while surfacing ADHD when it adds value.
 
-#### Why inline Score/Cluster instead of Task agents?
+#### Why inline Score/Cluster instead of dispatched subagents?
 
-Upstream spec implied score/cluster might use sub-Tasks, but:
+Upstream spec implied score/cluster might use subagents, but:
 - No prompts provided for score/cluster agents
 - Scoring is fast (simple heuristics on novelty/viability/impact)
 - Clustering is pattern matching (group similar ideas)
 
-Both are lightweight operations the main agent can do inline. Using Task agents would add overhead without benefit.
+Both are lightweight operations the main agent can do inline. Dispatching subagents would add overhead without benefit.
 
 #### Why nesting fallback?
 
-ADHD invoked from brainstorming (which may itself use Task agents for research) can hit Task nesting limits. The fallback (run deepen sequentially in-context) ensures ADHD works in nested scenarios.
+ADHD invoked from brainstorming (which may itself dispatch subagents for research) can hit subagent nesting limits. The fallback (run deepen sequentially in-context) ensures ADHD works in nested scenarios.
 
 ## Upstream Source
 

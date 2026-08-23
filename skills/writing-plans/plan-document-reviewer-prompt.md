@@ -13,7 +13,7 @@ spec (`tech.md`) when present — else the logic spec / requirements — text or
 reference. The reviewer does not read a plan file.
 
 ```
-Task tool (general-purpose):
+Agent tool (general-purpose):
   description: "Review plan document"
   prompt: |
     You are a plan document reviewer. Verify this plan is complete and ready for implementation.

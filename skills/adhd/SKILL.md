@@ -37,16 +37,16 @@ digraph adhd {
     "Invoke /adhd or\nbrainstorming delegates" [shape=box];
     "Score raw ideas\n(inline by main agent)" [shape=box];
     "Cluster ideas\n(inline by main agent)" [shape=box];
-    "Diverge (N frames)\nparallel Task agents" [shape=box];
-    "Deepen (K clusters)\nparallel Task agents" [shape=box];
+    "Diverge (N frames)\nparallel Agent calls" [shape=box];
+    "Deepen (K clusters)\nparallel Agent calls" [shape=box];
     "Render output\n(options + critiques)" [shape=box];
     "Release control\nto normal agent loop" [shape=doublecircle];
 
-    "Invoke /adhd or\nbrainstorming delegates" -> "Diverge (N frames)\nparallel Task agents";
-    "Diverge (N frames)\nparallel Task agents" -> "Score raw ideas\n(inline by main agent)";
+    "Invoke /adhd or\nbrainstorming delegates" -> "Diverge (N frames)\nparallel Agent calls";
+    "Diverge (N frames)\nparallel Agent calls" -> "Score raw ideas\n(inline by main agent)";
     "Score raw ideas\n(inline by main agent)" -> "Cluster ideas\n(inline by main agent)";
-    "Cluster ideas\n(inline by main agent)" -> "Deepen (K clusters)\nparallel Task agents";
-    "Deepen (K clusters)\nparallel Task agents" -> "Render output\n(options + critiques)";
+    "Cluster ideas\n(inline by main agent)" -> "Deepen (K clusters)\nparallel Agent calls";
+    "Deepen (K clusters)\nparallel Agent calls" -> "Render output\n(options + critiques)";
     "Render output\n(options + critiques)" -> "Release control\nto normal agent loop";
 }
 ```
@@ -55,9 +55,9 @@ digraph adhd {
 
 ### 1. Diverge (N frames in parallel)
 
-Spawn N parallel Task agents (model: haiku for speed), each using a different thinking frame from `frames.md`. Each agent generates 3-5 raw ideas through their assigned frame's lens.
+Spawn N parallel subagents via the `Agent` tool (model: haiku for speed), each using a different thinking frame from `frames.md`. Each agent generates 3-5 raw ideas through their assigned frame's lens.
 
-**All divergence Tasks MUST be dispatched in a single message** (parallel execution is mandatory).
+**All divergence agents MUST be dispatched in a single message** (parallel execution is mandatory).
 
 Available frames (choose 5-7 based on context):
 1. Constraint inversion
@@ -80,7 +80,7 @@ See `frames.md` for detailed frame descriptions and prompts.
 
 ### 2. Score (inline by main agent)
 
-After all divergence Tasks complete, **summarize their outputs in your next turn** (you cannot intercept tool_result blocks). Review all raw ideas and score each on:
+After all divergence agents complete, **summarize their outputs in your next turn** (you cannot intercept tool_result blocks). Review all raw ideas and score each on:
 - Novelty (1-5): How non-obvious is this?
 - Viability (1-5): Can this actually work?
 - Impact (1-5): Does this meaningfully improve outcomes?
@@ -93,15 +93,15 @@ Group surviving ideas by similarity into K clusters (typically 3-5). Each cluste
 
 ### 4. Deepen (K clusters in parallel)
 
-For each cluster, spawn a parallel Task agent (model: sonnet for depth) to:
+For each cluster, spawn a parallel subagent via the `Agent` tool (model: sonnet for depth) to:
 - Develop the cluster's core approach
 - Identify implementation requirements
 - Surface hidden costs and risks
 - Generate adversarial critique
 
-**All deepen Tasks MUST be dispatched in a single message** (parallel execution is mandatory).
+**All deepen agents MUST be dispatched in a single message** (parallel execution is mandatory).
 
-**Nesting fallback**: If deepen Tasks fail due to nesting depth (e.g., ADHD invoked from brainstorming), run deepen sequentially in-context instead of using Task agents.
+**Nesting fallback**: If deepen agents fail due to nesting depth (e.g., ADHD invoked from brainstorming), run deepen sequentially in-context instead of dispatching subagents. This fallback is for dispatches that were attempted and failed — a dispatch tool named something other than `Agent` is still the dispatch tool, and never triggers it.
 
 ### 5. Render Output
 
@@ -133,9 +133,9 @@ After rendering output for an explicit `/adhd` invocation, release control to th
 
 ## Context Handling
 
-When divergence or deepen Task agents complete, their raw output appears in `tool_result` blocks. You cannot intercept these blocks. Instead:
+When divergence or deepen agents complete, their raw output appears in `tool_result` blocks. You cannot intercept these blocks. Instead:
 
-**In your next turn after Task results arrive**, summarize the key findings before proceeding to the next phase. This keeps the conversation coherent and avoids burying results in tool output.
+**In your next turn after agent results arrive**, summarize the key findings before proceeding to the next phase. This keeps the conversation coherent and avoids burying results in tool output.
 
 Example:
 > "The divergence agents returned 23 raw ideas across 5 frames. After scoring, 12 survived (novelty ≥3, viability ≥3, impact ≥3). These cluster into 3 strategic directions: [A], [B], [C]. Now running deepen agents on each cluster..."
@@ -157,7 +157,7 @@ Either way, treat delegation as an explicit invocation — run the full ADHD pro
 
 - `frames.md` — Full descriptions of all 15 divergent-thinking frames
 - `reference/when-to-use.md` — Expanded guidance on appropriate use cases
-- `reference/divergence-prompts.md` — Quirk-specific prompt templates for Task agents
+- `reference/divergence-prompts.md` — Quirk-specific prompt templates for divergence agents
 - `SOURCE-SPEC.md` — Original design rationale and upstream source
 - `UPSTREAM-LICENSE` — MIT license (required for compliance)
 
@@ -169,8 +169,8 @@ This skill is based on the upstream ADHD divergent-thinking framework. It has be
 
 1. **Standalone exit + context handling**: After rendering output for explicit `/adhd`, the skill releases control to the normal agent loop. Context handling clarified as "summarize in next turn" (cannot intercept tool_result blocks).
 
-2. **Nesting fallback**: If deepen Tasks fail due to nesting depth (e.g., ADHD invoked from brainstorming), run deepen sequentially in-context instead of using Task agents.
+2. **Nesting fallback**: If deepen agents fail due to nesting depth (e.g., ADHD invoked from brainstorming), run deepen sequentially in-context instead of dispatching subagents.
 
-3. **Score/Cluster inline**: Score and Cluster phases run inline by the main agent — only Diverge (N) and Deepen (K) use the Task tool.
+3. **Score/Cluster inline**: Score and Cluster phases run inline by the main agent — only Diverge (N) and Deepen (K) use the `Agent` tool.
 
 See `UPSTREAM-LICENSE` for the original MIT license.

@@ -370,10 +370,11 @@ pi-watch --provider "$PROVIDER" --model "$MODEL" --thinking "$THINKING" \
 
 `pi` has no sandbox. On this path the read-only constraint is enforced by prompt text alone — the
 stage templates say so, and that is the entire mitigation. The risk is accepted deliberately and
-recorded in `assets/composition-contract.md`; a caller that cannot accept it should use the `Task`
+recorded in `assets/composition-contract.md`; a caller that cannot accept it should use the `Agent`
 path, where permission mode bounds the reviewer.
 
-**`Task` path** — when `pi` is unavailable or the risk is unacceptable. Dispatch a subagent with the
+**`Agent` path** — when `pi` is unavailable or the risk is unacceptable. Dispatch a subagent with the
+subagent-dispatch tool (`Agent` in current Claude Code, `Task` in older builds), passing the
 staged prompt as its whole instruction. Same-family review is still a real review; it is stamped
 `independence: "reduced"` and read accordingly.
 

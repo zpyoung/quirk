@@ -126,7 +126,7 @@ This document describes the 15 thinking frames used in the ADHD divergent-ideati
 
 ## Usage in ADHD Process
 
-During the Diverge phase, select 5-7 frames most relevant to your decision context. Spawn parallel Task agents, each applying one frame to generate 3-5 raw ideas.
+During the Diverge phase, select 5-7 frames most relevant to your decision context. Spawn parallel subagents via the `Agent` tool, each applying one frame to generate 3-5 raw ideas.
 
 **Frame selection heuristics**:
 - **Architectural decisions**: Frames 3, 8, 10, 14, 15

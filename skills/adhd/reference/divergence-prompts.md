@@ -1,10 +1,10 @@
 # Divergence Prompts (Quirk-Specific)
 
-This file contains prompt templates for the ADHD divergence phase. These prompts are Quirk-original additions (not from upstream) to provide consistent, effective Task agent prompts.
+This file contains prompt templates for the ADHD divergence phase. These prompts are Quirk-original additions (not from upstream) to provide consistent, effective divergence-agent prompts.
 
 ## General Structure
 
-Each divergence Task agent receives:
+Each divergence agent receives:
 1. The decision context (what problem/choice we're exploring)
 2. The assigned thinking frame
 3. Instructions to generate 3-5 raw ideas
@@ -243,6 +243,6 @@ For each idea:
 
 ## Usage in ADHD Process
 
-The main agent selects 5-7 frames based on decision context, then spawns parallel Task agents using the appropriate frame-specific prompts. All divergence Tasks MUST be dispatched in a single message.
+The main agent selects 5-7 frames based on decision context, then spawns parallel subagents via the `Agent` tool using the appropriate frame-specific prompts. All divergence agents MUST be dispatched in a single message.
 
-After Task results return, the main agent summarizes findings in the next turn before proceeding to Score phase.
+After agent results return, the main agent summarizes findings in the next turn before proceeding to Score phase.
