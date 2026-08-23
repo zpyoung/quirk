@@ -133,7 +133,11 @@ enforced by grouping rather than by collapsing the wave. Component union scopes 
 components by construction, so `skills/subagent-driven-development/SKILL.md:310-311`'s guarantee that merges "cannot conflict" still
 holds.
 
-Component ordering honors any demoted edge inside the chain.
+Component ordering is a topological sort over the demoted edges inside the chain, tie-broken by
+plan task order so the schedule is reproducible. Demotion is also what makes a cycle reachable
+there: it lifts edges out of the wave graph, so a plan declaring circular `dependencies` clears
+wave assignment and surfaces the cycle in a chain that has no valid order. That stops the wave as
+a plan defect rather than being resolved by dropping an edge.
 
 ### Step 4 — width cap and overflow
 
@@ -391,7 +395,7 @@ and the branch-level review loop remain the backstop, exactly as the core princi
   components, both in descending-chain-length order, so the batch count is derivable from the plan;
   a retried task is simply its chain's next unaccepted task.
 - Zero checkpoints on a single-wave run is accepted as the core principle working as designed.
-- `gtimeout 1800` is unchanged.
+- The 1800s dispatch timeout is unchanged.
 
 **dependency-discipline**
 
@@ -399,6 +403,8 @@ and the branch-level review loop remain the backstop, exactly as the core princi
 - An overlap-only edge is **demoted** to an intra-component ordering constraint, not dropped.
 - Demotion is **verified**: a demoted edge whose endpoints land with `wave(source) > wave(target)`
   is reverted and waves recomputed, until no demoted edge is order-inverted.
+- Chain order is a topological sort over a component's demoted edges, tie-broken by plan task
+  order; a cycle among them stops the wave as a plan defect.
 - The projected wave shape is reported and journaled before dispatch.
 - A pure chain is surfaced once for the user, never auto-re-decomposed.
 
@@ -501,6 +507,11 @@ in-repo evidence and one requested adversarial review.
   component can contain both. Demotion is now verified against `wave(source) ≤ wave(target)` and
   reverted where it inverts. Reason: the reviewer reproduced the inversion as
   `waves: [['B', 'X'], ['A']]`.
+- *2026-08-23* — Chain ordering specified after PR review. "Honors every demoted edge" named a
+  constraint but no procedure, leaving the order non-deterministic across runs and the cycle case
+  undefined. Now a topological sort tie-broken by plan task order, with a cycle stopping the wave;
+  demotion is the reason a cycle can reach a chain at all, since edges it lifts out of the wave
+  graph no longer block wave assignment.
 - *2026-08-20* — Mid-chain attribution specified after adversarial review (finding F3). The spec
   named a "diff snapshot" without defining its baseline, which permitted an implementation that
   misses a task editing a path its predecessor had already dirtied. Now defined as
