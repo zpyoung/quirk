@@ -87,3 +87,10 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: low
 - **Proposed fix**: Rewrite the bullet to describe the index-plus-shortlist output and correct the command name.
 
+## BUG-9: pi-watch --check reports a ready alias when the provider auth token is expired
+- **Observed**: 2026-08-23
+- **File**: skills/adversarial-review/scripts/adversarial-review (select-model preflight)
+- **Description**: pi-watch --check codex printed "✓ codex openai-codex/gpt-5.6-sol:medium — 1/1 alias ready" and select-model stamped triple_verified: true, resolved: true. Every actual dispatch to that alias then returned a single newline. A raw `pi -p --provider openai-codex --model gpt-5.6-sol "Say OK"` printed "Provided authentication token is expired." --check validates the alias against the authed model list but never proves a dispatch can produce output, so an expired token reads as a ready reviewer. In adversarial-review this is the dangerous direction: the skill says an empty dispatch is a crash, but a caller who trusts triple_verified and sees repeated empty replies is one step from recording a clean review over a reviewer that never ran. Hit live during the HEAD~1..HEAD review on zpyoung/agent-tool-naming; worked around by walking the ladder to gemini.
+- **Severity**: medium
+- **Proposed fix**: Make the preflight prove liveness, not just alias resolution — have --check issue a trivial dispatch and require non-empty output before reporting the alias ready, or have select-model degrade triple_verified to false when the check cannot demonstrate one.
+
