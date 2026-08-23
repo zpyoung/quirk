@@ -17,6 +17,7 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { statSync } from "node:fs";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import {
     AuthStorage,
@@ -136,6 +137,8 @@ const opts = {
     listAliases: false,
     check: false,
     checkAlias: null,
+    cwd: null,
+    requireTrailer: null,
 };
 function takeValue(flag, i) {
     const v = args[i + 1];
@@ -160,6 +163,8 @@ for (let i = 0; i < args.length; i++) {
         if (args[i + 1] !== undefined && !args[i + 1].startsWith("--")) { opts.checkAlias = args[i + 1]; i++; }
     }
     else if (a === "-h" || a === "--help") { printHelp(); process.exit(0); }
+    else if (a === "--cwd") { opts.cwd = takeValue(a, i); i++; }
+    else if (a === "--require-trailer") { opts.requireTrailer = takeValue(a, i); i++; }
     else if (a.startsWith("--")) { console.error(`pi-watch: unknown flag ${a}`); process.exit(2); }
     else { opts.prompt = (opts.prompt ? opts.prompt + " " : "") + a; }
 }
@@ -174,6 +179,18 @@ if (opts.alias && (opts.provider || opts.model)) {
 }
 if ((opts.provider && !opts.model) || (opts.model && !opts.provider)) {
     console.error(`pi-watch: --provider and --model must be passed together`);
+    process.exit(2);
+}
+if (opts.cwd !== null) {
+    let stat = null;
+    try { stat = statSync(opts.cwd); } catch {}
+    if (!stat || !stat.isDirectory()) {
+        console.error(`pi-watch: --cwd '${opts.cwd}' is not a directory`);
+        process.exit(2);
+    }
+}
+if (opts.requireTrailer !== null && opts.requireTrailer.trim() === "") {
+    console.error(`pi-watch: --require-trailer requires a non-empty KEY`);
     process.exit(2);
 }
 
@@ -201,7 +218,27 @@ function printHelp() {
     console.error('  pi-watch --check [alias]       # preflight: which aliases resolve to an authed model');
     console.error('  pi-watch --list-aliases');
     console.error('');
+    console.error('  --cwd <dir>              run the session in <dir> instead of process.cwd()');
+    console.error('  --require-trailer <KEY>  exit 6 unless the reply ends with a "KEY: value" line');
+    console.error('');
     console.error(`Aliases: ${Object.keys(ALIASES).join(", ")}`);
+}
+
+// Scans the last 3 non-empty lines of assistant output, backward from the
+// end, for a "KEY: value" trailer — tolerant of a trailing sign-off or a
+// bolded status line pushing the trailer off the literal last line. Returns
+// the captured value, or null if none of the 3 lines match.
+function scanTrailer(text, key) {
+    const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+    const tail = lines.slice(-3);
+    const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(`^${escapedKey}: (\\S+)$`);
+    for (let i = tail.length - 1; i >= 0; i--) {
+        const stripped = tail[i].replace(/^[*_`]+/, "").replace(/[*_`]+$/, "");
+        const match = stripped.match(pattern);
+        if (match) return match[1];
+    }
+    return null;
 }
 
 // ---- Resolve provider/model/thinking -------------------------------------
@@ -360,7 +397,7 @@ const resourceLoader = {
     reload: async () => {},
 };
 
-const cwd = process.cwd();
+const cwd = opts.cwd ?? process.cwd();
 const home = process.env.HOME ?? "";
 const authStorage = AuthStorage.create(`${home}/.pi/agent/auth.json`);
 const modelRegistry = ModelRegistry.inMemory(authStorage);
@@ -385,9 +422,11 @@ try {
         settingsManager,
     });
 
+    let assistantText = "";
     session.subscribe((event) => {
         if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
             process.stdout.write(event.assistantMessageEvent.delta);
+            if (opts.requireTrailer !== null) assistantText += event.assistantMessageEvent.delta;
         } else if (event.type === "tool_execution_start") {
             const a = event.args ?? {};
             const summary = a.command ?? a.file_path ?? a.path ?? a.pattern ?? "";
@@ -396,13 +435,27 @@ try {
     });
 
     await session.prompt(opts.prompt);
+
+    let doneLine = "  ✔ done\n";
+    if (opts.requireTrailer !== null) {
+        const value = scanTrailer(assistantText, opts.requireTrailer);
+        if (value === null) {
+            // same flush pattern as below — guards the truncation bug on this exit path too.
+            await Promise.all([
+                new Promise((resolve) => process.stdout.write("\n", resolve)),
+                new Promise((resolve) => process.stderr.write(`  ✖ missing trailer ${opts.requireTrailer}\n`, resolve)),
+            ]);
+            process.exit(6);
+        }
+        doneLine = `  ✔ done  ${opts.requireTrailer}: ${value}\n`;
+    }
     // stdout/stderr to a pipe flush asynchronously, and process.exit() drops
     // queued writes — long responses got truncated when the final burst of
     // deltas outran the reader. Per-stream writes are ordered, so awaiting one
     // last write's callback guarantees everything before it has flushed.
     await Promise.all([
         new Promise((resolve) => process.stdout.write("\n", resolve)),
-        new Promise((resolve) => process.stderr.write("  ✔ done\n", resolve)),
+        new Promise((resolve) => process.stderr.write(doneLine, resolve)),
     ]);
     process.exit(0);
 } catch (err) {
