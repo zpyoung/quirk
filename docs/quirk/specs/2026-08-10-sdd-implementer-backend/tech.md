@@ -2,10 +2,9 @@
 
 ## Status
 
-Draft. Logic spec: [logic.md](logic.md). All paths below are relative to the repo root
-(`/Users/zpyoung/orca/workspaces/quirk/sdd-updates`). Line anchors were verified against the live
-tree on 2026-08-13; where they correct a stale anchor in the logic spec, the correction is noted
-inline rather than silently substituted.
+Draft. Logic spec: [logic.md](logic.md). All paths below are relative to the repository root.
+Line anchors were verified against the live tree on 2026-08-13; where they correct a stale anchor
+in the logic spec, the correction is noted inline rather than silently substituted.
 
 ## Architecture
 

@@ -219,7 +219,7 @@ function printHelp() {
     console.error('  pi-watch --list-aliases');
     console.error('');
     console.error('  --cwd <dir>              run the session in <dir> instead of process.cwd()');
-    console.error('  --require-trailer <KEY>  exit 6 unless the reply ends with a "KEY: value" line');
+    console.error('  --require-trailer <KEY>  exit 6 unless one of the last 3 non-empty reply lines is "KEY: value"');
     console.error('');
     console.error(`Aliases: ${Object.keys(ALIASES).join(", ")}`);
 }
