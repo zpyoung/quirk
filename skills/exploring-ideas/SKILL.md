@@ -152,7 +152,7 @@ Plan → Search → Reflect → Iterate. Reuse the existing agent types (do not 
 4. **Iterate (depth)** — for deep requests, spawn `deep-research-agent` (sonnet, depth=2) on the highest-value gaps; loop **1–3 gap-driven rounds**. Stop when marginal new information drops off (guard against both premature stop AND runaway).
 5. **Provenance + anti-hallucination** — keep a claim→source map; only sourced claims enter the artifact. Mark anything unverifiable explicitly.
 
-**Fallbacks:** if `deep-research-agent` is unavailable, substitute two parallel `web-research-agent` calls. If research is offline entirely, proceed and mark findings "(offline — unverified)", leaning on the ideation engine; record the gap in the artifact.
+**Fallbacks:** if `deep-research-agent` is unavailable, substitute two parallel `web-research-agent` calls. If dispatch was attempted and every agent failed, proceed and mark findings "(offline — unverified)", leaning on the ideation engine; record the gap in the artifact. A dispatch tool under a name other than `Agent` is still the dispatch tool — a name mismatch is not a failed dispatch and does not license the offline path.
 
 ## Divergent Ideation Engine
 

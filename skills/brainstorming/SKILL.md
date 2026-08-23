@@ -76,7 +76,7 @@ digraph brainstorming {
 
 ## Research Agents
 
-Brainstorming uses parallel **research-agent swarms** (via the `Task` tool) to ground design decisions in current external knowledge — best practices, anti-patterns, post-mortems, and real-world experience reports — instead of leaning purely on training data.
+Brainstorming uses parallel **research-agent swarms** (via the `Agent` tool — Claude Code's subagent-dispatch tool, named `Task` in older builds) to ground design decisions in current external knowledge — best practices, anti-patterns, post-mortems, and real-world experience reports — instead of leaning purely on training data.
 
 ### Agent Types
 
@@ -108,7 +108,7 @@ date +%Y
 
 - **Truly trivial work** (config tweak, single-function utility, obvious one-liner): skip the swarm; the design itself can still be a few sentences.
 - **Domain you've already researched in this session**: reuse prior findings; do not re-spawn.
-- **Tool unavailable / offline**: continue in offline mode; add a "(research pending)" note in the spec's Industry Insights section.
+- **No dispatch tool at all / offline**: continue in offline mode; add a "(research pending)" note in the spec's Industry Insights section. A dispatch tool under a different name is not this case — see Fallback Modes.
 
 ### Result Integration
 
@@ -119,7 +119,8 @@ From each agent response, extract: **Key Findings** (distilled bullets that chan
 
 ### Fallback Modes
 
-- **Total failure** (Task tool unavailable): proceed offline; mark spec sections "(offline mode — validation pending)".
+- **A differently-named dispatch tool is still the dispatch tool.** The subagent-dispatch tool is `Agent` in current Claude Code, was `Task` in older builds, and is `task` / `spawn_agent` on other platforms (`skills/using-quirk/references/`). Whatever it is called in your session, use it. A name that does not match this document is never a reason to skip research.
+- **Total failure** (dispatch attempted and it failed — every agent errored out or returned nothing): proceed offline; mark spec sections "(offline mode — validation pending)". Only an attempted-and-failed dispatch qualifies; not finding a tool named `Agent` does not.
 - **Partial failure** (some agents fail): proceed with what returned; note which phase lacks coverage.
 - **Deep-research fails**: substitute with 2 parallel `web-research-agent` calls.
 

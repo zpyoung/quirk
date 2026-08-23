@@ -39,6 +39,8 @@ If CLAUDE.md, GEMINI.md, or AGENTS.md says "don't use TDD" and a skill says "alw
 
 Skills use Claude Code tool names. Non-CC platforms: see `references/copilot-tools.md` (Copilot CLI), `references/codex-tools.md` (Codex) for tool equivalents. Gemini CLI users get the tool mapping loaded automatically via GEMINI.md.
 
+**A differently-named tool is still that tool.** Tool names drift between builds and platforms — subagent dispatch is `Agent` in current Claude Code, was `Task` in older builds, and is `task` / `spawn_agent` elsewhere. When a skill names a tool you cannot find, use the one that does the same job. A name mismatch is never "tool unavailable" and never a reason to take a skill's offline or degraded path; only an attempted operation that actually fails is.
+
 # Using Skills
 
 ## The Rule

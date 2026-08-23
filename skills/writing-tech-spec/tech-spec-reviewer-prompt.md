@@ -15,7 +15,7 @@ are pasted — but it MUST inspect the referenced source files in the working tr
 verify pointers (see Pointer precision below).
 
 ```
-Task tool (general-purpose):
+Agent tool (general-purpose):
   description: "Review tech spec document"
   prompt: |
     You are a tech spec reviewer. Verify this tech spec is code-anchored, faithful to the

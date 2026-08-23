@@ -84,7 +84,7 @@ def test_skill_references_every_profile_and_asset() -> None:
 def test_skill_documents_both_dispatch_paths() -> None:
     body = SKILL_PATH.read_text()
     assert "pi-watch" in body
-    assert "Task" in body
+    assert "`Agent` path" in body
 
 
 # --- profiles ---------------------------------------------------------------------

@@ -279,9 +279,9 @@ anyway. That is intended, not a bug, and it is a decision with a recorded trade:
   enforcement. The artifact under review is untrusted input, and review agents are demonstrably
   susceptible to framing embedded in reviewed material, so a crafted artifact that induces a
   reviewer to run a destructive command is not blocked by any mechanism in this design.
-- **On the Claude `Task` path**, permission mode bounds the reviewer and this exposure is narrower.
+- **On the Claude `Agent` path**, permission mode bounds the reviewer and this exposure is narrower.
 
-A caller that cannot accept the `pi`-path risk should dispatch via `Task`, not via `pi-watch`.
+A caller that cannot accept the `pi`-path risk should dispatch via `Agent`, not via `pi-watch`.
 
 ## What the caller still owns
 
