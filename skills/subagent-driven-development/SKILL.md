@@ -193,7 +193,15 @@ graph from Step 3. Within each wave:
 2. Take its connected components. This produces deterministic, maximal groups whose union scopes
    are disjoint from every other component's union scope.
 3. Run each component as a serialized chain and run different components concurrently. Order each
-   chain so it honors every demoted edge inside that component.
+   chain by topological sort over the demoted edges with both endpoints in that component, with
+   plan task order as the tie-break — a topological order is not unique, and without a fixed
+   tie-break the same plan schedules differently on every run.
+
+A cycle is reachable only through demotion, which lifts edges out of the wave graph: a plan that
+declared circular `dependencies` clears wave assignment anyway and surfaces the cycle inside a
+chain, where no order satisfies it. Stop the wave and report the cycle as a plan defect. Do not
+drop an edge to force an order — which edge goes decides which task's output the other one misses,
+and that choice belongs to the plan author.
 
 The invariant remains **no two concurrent tasks share a file**; grouping enforces it without
 serializing unrelated components. There is no "small overlap" exemption. Two agents editing one
@@ -280,15 +288,17 @@ overstating the gain; lockstep is still never slower than serializing the entire
 staged prompt, then per selected task:
 
 ```bash
-gtimeout 1800 pi-watch --cwd "$WT" --alias codex \
+"$(command -v gtimeout || command -v timeout)" 1800 pi-watch --cwd "$WT" --alias codex \
   --tools read,bash,edit,write --require-trailer STATUS "$(cat "$PROMPT")"
 ```
 
 One Bash call per task, `run_in_background: true` — the 600s foreground ceiling cannot hold an
 implementer-scale task. The timeout wrapper is `gtimeout` (macOS) / `timeout` (Linux), the same
-split `quirk:pi-dev` documents — substitute per host. It is load-bearing for liveness here, not just
-hygiene: it is what guarantees every dispatch terminates and produces an exit code, so a hung worker
-becomes a timed-out one rather than a wave that never completes. `--tools read,bash,edit,write`
+split `quirk:pi-dev` documents; the block resolves it at dispatch so it runs verbatim on either
+host, and exits 127 if neither exists rather than dispatching unwrapped. The wrapper is
+load-bearing for liveness here, not just hygiene: it is what guarantees every dispatch terminates
+and produces an exit code, so a hung worker becomes a timed-out one rather than a wave that never
+completes. `--tools read,bash,edit,write`
 grants `bash` because the delta file's TDD block requires the worker to run its own tests and watch
 them fail before implementing. That block is condensed into the delta rather than pasted verbatim
 from `quirk:test-driven-development` (a pasted copy would diverge from the source silently) or
