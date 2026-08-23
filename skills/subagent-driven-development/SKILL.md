@@ -285,15 +285,16 @@ gtimeout 1800 pi-watch --cwd "$WT" --alias codex \
 ```
 
 One Bash call per task, `run_in_background: true` — the 600s foreground ceiling cannot hold an
-implementer-scale task. `gtimeout` is load-bearing for liveness here, not just hygiene: it is what
-guarantees every dispatch terminates and produces an exit code, so a hung worker becomes a
-timed-out one rather than a wave that never completes. `--tools read,bash,edit,write` grants
-`bash` because the delta file's TDD block requires the worker to run its own tests and watch them
-fail before implementing. That block is condensed into the delta rather than pasted verbatim from
-`quirk:test-driven-development` (a pasted copy would diverge from the source silently) or dropped
-(the two backends would then build differently, invisibly). `--require-trailer STATUS` verifies
-the worker's last line is a well-formed `STATUS: <word>` trailer — it checks shape only; the four
-legal values stay this skill's vocabulary, not `pi-watch`'s.
+implementer-scale task. The timeout wrapper is `gtimeout` (macOS) / `timeout` (Linux), the same
+split `quirk:pi-dev` documents — substitute per host. It is load-bearing for liveness here, not just
+hygiene: it is what guarantees every dispatch terminates and produces an exit code, so a hung worker
+becomes a timed-out one rather than a wave that never completes. `--tools read,bash,edit,write`
+grants `bash` because the delta file's TDD block requires the worker to run its own tests and watch
+them fail before implementing. That block is condensed into the delta rather than pasted verbatim
+from `quirk:test-driven-development` (a pasted copy would diverge from the source silently) or
+dropped (the two backends would then build differently, invisibly). `--require-trailer STATUS`
+verifies the worker's last few lines carry a well-formed `STATUS: <word>` trailer — it checks shape
+only; the four legal values stay this skill's vocabulary, not `pi-watch`'s.
 
 The pi binding backgrounds one task per component at a time. After a task returns and passes Step
 6's mid-chain gate, its component's next task becomes dispatchable in the same tree. Components
@@ -675,7 +676,7 @@ the table wins.
 | Dependency misdeclared | Stop dispatch, amend the wave graph, re-run affected downstream work |
 | Five-round review cap reached with accepted CRITICAL/HIGH | Blocked handoff; explicit user override required |
 | `pi-watch` exit 6 (trailer missing or malformed) | No validated status. Fall through to tree evaluation: audit and run acceptance, accept on green, `FAILED` on red. Record the missing status. |
-| Background dispatch never re-invokes the orchestrator | `gtimeout` bounds every dispatch, so the job terminates regardless; completion is decidable from the tree rather than from a notification |
+| Background dispatch never re-invokes the orchestrator | The `gtimeout`/`timeout` wrapper bounds every dispatch, so the job terminates regardless; completion is decidable from the tree rather than from a notification |
 | Any task retried after its prior mid-chain audit | Capture a fresh HEAD and snapshot, then re-run scope audit before acceptance |
 | Worktree HEAD moved since dispatch | Worker committed and bypassed the audit; stop the task, surface |
 | Cross-worktree contamination at wave end | Stop the wave, re-plan — same response as any scope violation |
