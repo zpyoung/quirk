@@ -17,8 +17,7 @@ the user read and signed off on. It is never silently overridden downstream.
   & non-goals, glossary — precise architecture, components, error handling, and testing belong in
   the tech spec authored later at execution when warranted (see [tech-spec.md](tech-spec.md)); name
   file-level structure here only when it is itself the user-facing decision
-- Include these sections (in addition to the conceptual model, data flow, key decisions & rationale,
-  behavior & scenarios, and scope & non-goals you already cover):
+- Include these sections, in addition to the coverage above:
   - **Decisions Locked** — the gray-area decisions confirmed during drill-in (one bullet per locked decision, grouped by area)
   - **Industry Insights** — distilled key findings from research agents, with source URLs; mark "(offline mode — validation pending)" if research was skipped
   - **Deferred Ideas** — anything captured by the Scope Creep Guard (or "None — discussion stayed within scope")

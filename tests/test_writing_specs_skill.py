@@ -74,9 +74,58 @@ def test_ownership_paragraph_has_one_home() -> None:
 
 
 def test_no_stale_skill_name_references() -> None:
-    stale = [
-        path
-        for path in REPO_ROOT.joinpath("skills").rglob("*.md")
-        if "writing-tech-spec" in path.read_text()
+    """`docs/` is excluded: shipped specs are historical records of the pre-split name."""
+    candidates = [
+        *REPO_ROOT.joinpath("skills").rglob("*.md"),
+        *REPO_ROOT.joinpath("commands").rglob("*.md"),
+        *REPO_ROOT.joinpath(".claude-plugin").glob("*.json"),
+        REPO_ROOT / "README.md",
     ]
+    stale = [path for path in candidates if "writing-tech-spec" in path.read_text()]
     assert not stale, f"stale writing-tech-spec references: {stale}"
+
+
+def test_callers_point_at_the_writing_specs_skill() -> None:
+    """The three callers resolve the hub by name; a rename here strands the whole pipeline."""
+    callers = {
+        "brainstorming": "logic-spec.md",
+        "subagent-driven-development": "tech-spec.md",
+        "executing-plans": "tech-spec.md",
+    }
+    for skill, rubric in callers.items():
+        body = (REPO_ROOT / "skills" / skill / "SKILL.md").read_text()
+        assert "quirk:writing-specs" in body, f"{skill} lost its quirk:writing-specs pointer"
+        assert rubric in body, f"{skill} does not name the {rubric} rubric it needs"
+
+
+def _heading_slugs(body: str) -> set:
+    slugs = set()
+    for heading in re.findall(r"^#{1,6}\s+(.*)$", body, re.MULTILINE):
+        text = heading.replace("`", "").lower()
+        slugs.add(re.sub(r"[^a-z0-9\s-]", "", text).strip().replace(" ", "-"))
+    return slugs
+
+
+def test_cross_file_links_and_anchors_resolve() -> None:
+    """The split turned prose into pointers; a renamed heading breaks them silently."""
+    sources = [
+        *sorted(SKILL_DIR.glob("*.md")),
+        *(
+            REPO_ROOT / "skills" / skill / "SKILL.md"
+            for skill in ("brainstorming", "subagent-driven-development", "executing-plans")
+        ),
+    ]
+    broken = []
+    for source in sources:
+        body = source.read_text()
+        for _, target in re.findall(r"\[([^\]]+)\]\(([^)]+)\)", body):
+            if target.startswith(("http://", "https://", "mailto:")):
+                continue
+            relative, _, anchor = target.partition("#")
+            resolved = (source.parent / relative) if relative else source
+            if not resolved.is_file():
+                broken.append(f"{source.relative_to(REPO_ROOT)} -> {target} (no such file)")
+                continue
+            if anchor and anchor not in _heading_slugs(resolved.read_text()):
+                broken.append(f"{source.relative_to(REPO_ROOT)} -> {target} (no such heading)")
+    assert not broken, f"unresolvable links: {broken}"
