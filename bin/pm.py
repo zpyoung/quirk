@@ -3690,7 +3690,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_project_dir(p_reconcile)
     p_reconcile.set_defaults(func=cmd_reconcile)
 
-    p_roadmap = subparsers.add_parser("roadmap", help="Show or write ROADMAP.md (not yet implemented)")
+    p_roadmap = subparsers.add_parser("roadmap", help="Show ROADMAP.md, or validate and write a new one")
     roadmap_group = p_roadmap.add_mutually_exclusive_group(required=True)
     roadmap_group.add_argument("--show", action="store_true")
     roadmap_group.add_argument("--write", metavar="PATH")
