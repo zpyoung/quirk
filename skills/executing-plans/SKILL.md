@@ -33,10 +33,10 @@ Step 0 is the first half of the stage that authors a tech spec when warranted, t
      `logic.md` (wherever it was saved — by default `docs/quirk/specs/YYYY-MM-DD-<topic>/tech.md`
      next to `docs/quirk/specs/YYYY-MM-DD-<topic>/logic.md`, handed off from another session),
      load it — do not re-author — unless it's absent or your human partner requests a rewrite.
-   - Otherwise, invoke **quirk:writing-tech-spec** to author `tech.md` next to the logic spec, in
+   - Otherwise, invoke **quirk:writing-specs** (its `tech-spec.md` rubric) to author `tech.md` next to the logic spec, in
      the same directory the logic spec was actually saved to (the path above is the default
      example, not a hard-coded location).
-   - On this no-subagent path, perform writing-tech-spec's deep-dive codebase survey in-session,
+   - On this no-subagent path, perform the tech-spec rubric's deep-dive codebase survey in-session,
      directly — parallel `Explore` subagents aren't required here.
    - Dispatch its reviewer and apply fixes inline.
    - Offer your human partner an optional skim (not a gate) surfacing the tech spec's most
@@ -109,6 +109,6 @@ After all tasks complete and verified:
 
 **Required workflow skills:**
 - **quirk:using-git-worktrees** - REQUIRED: Set up isolated workspace before starting
-- **quirk:writing-tech-spec** - Optional pre-plan rubric this skill runs in context as Step 0, when the complexity-tier gate is met
+- **quirk:writing-specs** (`tech-spec.md`) - Optional pre-plan rubric this skill runs in context as Step 0, when the complexity-tier gate is met
 - **quirk:writing-plans** - The planning rubric this skill runs in context as Step 1 (file optional)
 - **quirk:finishing-a-development-branch** - Complete development after all tasks
