@@ -94,14 +94,6 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: medium
 - **Proposed fix**: Make the preflight prove liveness, not just alias resolution — have --check issue a trivial dispatch and require non-empty output before reporting the alias ready, or have select-model degrade triple_verified to false when the check cannot demonstrate one.
 
-## BUG-17: artifact_append.py opens its lock file with mode 'w', truncating through a symlink
-- **Observed**: 2026-08-10
-- **File**: bin/artifact_append.py:145
-- **Description**: The lock is acquired with open(lock_path, 'w'), which truncates the target and follows symlinks. .quirk/locks/ lives inside the project, so a symlink planted at .quirk/locks/BUGS.md.lock is truncated to zero bytes the moment any append runs — before the flock is even attempted. A lock file's contents are never read; only its existence and its flock matter, so the write mode buys nothing. pm.py's own lock acquisition was fixed to os.open(..., O_CREAT|O_RDWR|O_NOFOLLOW, 0o600) during Phase 2; this is the same pattern left in the older script. Not an authorization hole — the design assumes a cooperative worker and states it is not a security boundary — but it destroys a file for no benefit.
-- **Introduced by**: pre-dates this session
-- **Severity**: medium
-- **Proposed fix**: Mirror pm.py's _acquire_ledger_lock: os.open with O_CREAT|O_RDWR|O_NOFOLLOW and no truncation. Ideally hoist the shared acquisition into artifact_lib so the two cannot drift again.
-- **Blocker for**: nothing — but the two scripts now have different lock-safety properties for the same lock files
 
 ## BUG-10: parse_entries reads field values from the fence-masked text, silently blanking any HTML comment or fenced span inside a field value
 - **Observed**: 2026-08-12
@@ -114,7 +106,7 @@ entries' IDs; manual edits to fix typos are fine.
 ## BUG-11: artifact_init --force follows a symlinked ledger and overwrites the external target, destroying data outside the project
 - **Observed**: 2026-08-12
 - **File**: bin/artifact_init.py:40-50
-- **Description**: The --force path calls shutil.copy(src, dst) with dst a plain path, and shutil.copy follows symlinks, so a ledger that is a symlink has its TARGET overwritten with the template. The backup taken first is also copied through the link, so it preserves the target's content under a .bak name inside the project but the original external file is still destroyed in place. Reproduced for both ROADMAP.md and BUGS.md: create proj/BUGS.md as a symlink to ../outside.md containing 'PRECIOUS BUGS CONTENT', run artifact_init --project-dir proj --force, and outside.md now contains the BUGS.md template. This affects every entry in ROOT_TEMPLATES, so it pre-dates the pm-agent branch; that branch added ROADMAP.md to the list, which widens the blast radius by one file but is not the cause. Third member of a family: pm.py's atomic_write now refuses a symlinked ledger, BUG-9 covers artifact_append.py's lock file, and this is the init path.
+- **Description**: The --force path calls shutil.copy(src, dst) with dst a plain path, and shutil.copy follows symlinks, so a ledger that is a symlink has its TARGET overwritten with the template. The backup taken first is also copied through the link, so it preserves the target's content under a .bak name inside the project but the original external file is still destroyed in place. Reproduced for both ROADMAP.md and BUGS.md: create proj/BUGS.md as a symlink to ../outside.md containing 'PRECIOUS BUGS CONTENT', run artifact_init --project-dir proj --force, and outside.md now contains the BUGS.md template. This affects every entry in ROOT_TEMPLATES, so it pre-dates the pm-agent branch; that branch added ROADMAP.md to the list, which widens the blast radius by one file but is not the cause. Third member of a family: pm.py's atomic_write now refuses a symlinked ledger, BUG-17 covers artifact_append.py's lock file, and this is the init path.
 - **Introduced by**: pre-dates the pm-agent Phase 2 branch; ROADMAP.md was added to ROOT_TEMPLATES by fc79a92 on it
 - **Severity**: critical
 - **Proposed fix**: Refuse when the destination is a symlink, matching the mistake-catcher refusal pm.py's atomic_write already implements, or open the destination with O_NOFOLLOW. Whichever is chosen should be applied uniformly across the three paths so a fourth does not drift.
@@ -159,3 +151,11 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: medium
 - **Proposed fix**: Run git in its own process group and signal the group on timeout, reusing the mechanism _run_test_probe already has.
 
+## BUG-17: artifact_append.py opens its lock file with mode 'w', truncating through a symlink
+- **Observed**: 2026-08-10
+- **File**: bin/artifact_append.py:145
+- **Description**: The lock is acquired with open(lock_path, 'w'), which truncates the target and follows symlinks. .quirk/locks/ lives inside the project, so a symlink planted at .quirk/locks/BUGS.md.lock is truncated to zero bytes the moment any append runs — before the flock is even attempted. A lock file's contents are never read; only its existence and its flock matter, so the write mode buys nothing. pm.py's own lock acquisition was fixed to os.open(..., O_CREAT|O_RDWR|O_NOFOLLOW, 0o600) during Phase 2; this is the same pattern left in the older script. Not an authorization hole — the design assumes a cooperative worker and states it is not a security boundary — but it destroys a file for no benefit.
+- **Introduced by**: pre-dates this session
+- **Severity**: medium
+- **Proposed fix**: Mirror pm.py's _acquire_ledger_lock: os.open with O_CREAT|O_RDWR|O_NOFOLLOW and no truncation. Ideally hoist the shared acquisition into artifact_lib so the two cannot drift again.
+- **Blocker for**: nothing — but the two scripts now have different lock-safety properties for the same lock files
