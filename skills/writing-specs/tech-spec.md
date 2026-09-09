@@ -1,25 +1,20 @@
----
-name: writing-tech-spec
-description: The rubric the execution skills run in-context — only when the work warrants it — to author the code-anchored tech spec from the approved logic spec, before planning.
----
-
-# Writing Tech Spec
+# Writing the Tech Spec
 
 ## Overview
 
-> **How this skill is used:** Authoring the tech spec is **not a user-facing stage.** The
+> **How this rubric is used:** Authoring the tech spec is **not a user-facing stage.** The
 > execution skills (`quirk:subagent-driven-development` and `quirk:executing-plans`) invoke
-> this skill in-context as a **pre-planning sub-phase**, gated on the complexity-tier check
-> below — before they hand off to `quirk:writing-plans` to build the task breakdown. This
-> rubric defines *what a good tech spec contains*; the calling skill owns *when* it runs.
+> `quirk:writing-specs` and read this file in-context as a **pre-planning sub-phase**, gated on
+> the complexity-tier check below — before they hand off to `quirk:writing-plans` to build the
+> task breakdown. It runs inside the execution skill's worktree, after the logic spec is
+> approved. This rubric defines *what a good tech spec contains*; the calling skill owns *when*
+> it runs.
 
 A tech spec is a **code-anchored map of exact files, contracts, and boundaries that a fresh implementer can build against — not a rewrite of the logic spec, and not a substitute for the code itself.** It answers WHERE to work and WHAT MUST BE TRUE when the work is done, leaving HOW — the actual code — to the implementer, who has the live repository and will write better code than a pre-written body could capture. **The implementer still writes the code; this document only removes the ambiguity about where and against what.**
 
 Write for an implementer who has **zero context for this conversation** and needs precise, resolvable anchors — not conceptual framing. The logic spec already carries the *why*; this document exists only because *where* and *what must hold* deserve their own, denser, agent-tuned home.
 
-**Announce at start:** "I'm authoring the tech spec (writing-tech-spec rubric)."
-
-**Context:** Runs inside the execution skill's worktree, after the logic spec is approved and before `quirk:writing-plans` builds the task list.
+**Announce at start:** "I'm authoring the tech spec (writing-specs → tech-spec.md rubric)."
 
 ## Complexity-tier gate
 
@@ -34,7 +29,7 @@ These inputs are judged **before** planning, so the calling skill's ruling here 
 
 - **Recorded ruling.** Log the tier decision as one line — which criterion fired, or "skipped — none met" — in the execution run, and in the logic spec's `Status` line when a `tech.md` is authored. No silent skips: a skip with no record is how this tier quietly decays into never firing.
 - **Upgrade path.** After `quirk:writing-plans`' File Structure pass reveals the real scope, **re-check this gate**; if a skipped run now clears the tier, author `tech.md` then and re-plan the affected tasks. The calling execution skill owns this re-check.
-- **User-ask capture.** If the user requests a tech spec at logic-spec approval, `brainstorming` records it in the logic spec's `Status` line ("Tech spec: requested") so a later or headless run can read it without re-asking.
+- **User-ask capture.** If the user requests a tech spec at logic-spec approval, the logic-spec rubric ([logic-spec.md](logic-spec.md)) records it in the logic spec's `Status` line ("Tech spec: requested") so a later or headless run can read it without re-asking.
 
 Below this line, the pipeline is `brainstorm → logic spec → build` — no tech spec, no extra document, no extra review loop.
 
@@ -76,7 +71,7 @@ The reasoning is the same as in a plan: pasted code anchors the implementer to o
 
 ## Ownership, traceability & feasibility escalation
 
-**Ownership.** The logic spec owns *why* and *behavior* (and may name file-level structure when that structure is itself the user-facing decision). `tech.md` owns *where* and *contracts*. Each may summarize the other in one line and link across — never duplicate a paragraph. Every technical section in `tech.md` **back-links** the logic-spec anchor that justifies it, and every one of those links must resolve to a real heading. Any change to a decision the logic spec already locked amends the **logic spec first** — a dated entry in its Amendments log — never a silent edit to `tech.md`.
+**Ownership.** The logic/tech ownership line and the amend-the-logic-spec-first rule live in [SKILL.md](SKILL.md#ownership). What this rubric adds: every technical section in `tech.md` **back-links** the logic-spec anchor that justifies it, and every one of those links must resolve to a real heading.
 
 **Feasibility escalation.** A conflict with a locked decision (or its conceptual model) can surface at three moments: while **authoring** `tech.md`, during **planning**, or **mid-execution** when an implementer hits it. At any of them: **stop**, present the conflict to the user, and record the resolution as a dated entry in the logic spec's Amendments log **before** proceeding. Never resolve it unilaterally in `tech.md`, and never resolve it by silently editing the in-context plan — that is exactly how the logic spec's "the approved human document is never silently overridden" guarantee breaks.
 
@@ -85,14 +80,8 @@ The reasoning is the same as in a plan: pasted code anchors the implementer to o
 
 ## Where `tech.md` lives
 
-`CONTRACT:` `tech.md` is always authored as a **sibling of the actual `logic.md`** — in whatever directory the logic spec was actually saved to, even when a user preference overrode brainstorming's default location. The layout below is the **default example**, not a hard-coded path:
-
-```
-docs/quirk/specs/YYYY-MM-DD-<topic>/logic.md
-docs/quirk/specs/YYYY-MM-DD-<topic>/tech.md
-```
-
-Multi-subsystem work gets N sibling `<topic>` folders, each its own `logic.md` + `tech.md` pair; a later sibling's `tech.md` may reference an earlier one's contracts, but always by full path — a bare `tech.md#…` pointer resolves against the wrong folder the moment it's copied anywhere else (a plan header, a task excerpt).
+See [Where the specs live](SKILL.md#where-the-specs-live) — `tech.md` is always a sibling of the
+actual `logic.md`, in whatever directory the logic spec was really saved to.
 
 ## After authoring: review, optional skim, handoff
 

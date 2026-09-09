@@ -138,7 +138,7 @@ Apply the complexity-tier gate: author one if execution spans more than one sess
 subsystem boundary, touches ≳3 source files, or the user asked. Otherwise skip. Record the ruling
 in one line either way — a silent skip is how this gate decays into never firing.
 
-If the gate fires, use **quirk:writing-tech-spec**. If a reviewed `tech.md` already exists beside
+If the gate fires, use **quirk:writing-specs** (its `tech-spec.md` rubric). If a reviewed `tech.md` already exists beside
 the logic spec, load it rather than re-authoring.
 
 ### Step 3: Decompose inline
@@ -754,7 +754,7 @@ rationalization is quoted; the reason it fails follows.
 ## Integration
 
 - **quirk:using-git-worktrees** — one worktree per wave component
-- **quirk:writing-tech-spec** — Step 2, when the complexity gate fires
+- **quirk:writing-specs** (`tech-spec.md`) — Step 2, when the complexity gate fires
 - **quirk:writing-plans** — the in-context planning rubric run in Step 3
 - **quirk:adversarial-review** — Step 8 delegates the review itself, one invocation per lens
 - **quirk:pi-dev** — `pi-watch` dispatch and failure signatures, for both the reviewer path and the pi implementer/fixer binding

@@ -6,7 +6,7 @@ Use this template when dispatching a tech spec reviewer subagent.
 spec, and buildable by an implementer with zero conversation history — before planning begins.
 
 **Dispatch:** Automatically, by default, immediately after `tech.md` is drafted (the
-`writing-tech-spec` rubric's authoring phase) — this is the standard review step, not optional,
+`writing-specs` tech-spec rubric's authoring phase) — this is the standard review step, not optional,
 and runs before `writing-plans` builds the task breakdown.
 
 **Input:** Paste the `tech.md` text **inline**, and the `logic.md` text **inline** for
