@@ -25,6 +25,7 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Estimated effort**: L
 - **Priority**: P2
 - **Proposed owner**: unassigned
+- **Resolved**: 2026-09-09. Delivered by the pm-agent Phase 2 branch: schema v2 and `migrate`, `Status`/`Probe`/`Blocked by`, `ROADMAP.md`, the `--next` intake step, and the `start`/`finish`/`park`/`decide`/`reconcile` lifecycle. Phase 3 remains open as DEFER-2.
 
 ## DEFER-2: pm-agent Phase 3 - task handoff and dispatch
 - **Deferred**: 2026-08-06
@@ -57,11 +58,18 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Estimated effort**: S
 - **Priority**: P2
 - **Proposed owner**: unassigned
+- **Resolved**: 2026-09-09. The gate is restored now that milestones exist: `eligible` is a separate predicate from `ready`, and `--next` reports both. Verified against this repo's own backlog — 6 eligible of 24 ready, with the 24 unplaced entries named rather than hidden.
 
 ## DEFER-6: pm.py ships only top-level flags, not the subcommands tech.md specifies
 - **Deferred**: 2026-08-07
 - **Session context**: Surfaced by a code review of the Phase 1 branch; no caller depends on the subcommand form today.
 - **Why deferred**: tech.md:617-625 specifies pm.py index / doctor / status / roadmap / migrate as subcommands, with --index and --doctor as equivalent top-level flags checked before subparser dispatch. Phase 1 implemented only the flags, so pm.py index exits 2. Deferred rather than fixed because the subcommand surface is mostly Phase 2 verbs (roadmap, migrate, status) and adding a parser for them now would front-run DEFER-3's rework of those spec sections.
 - **Estimated effort**: S
+- **Priority**: P3
+- **Resolved**: 2026-09-09. `pm.py` now dispatches subcommands (`next`/`start`/`finish`/`park`/`decide`/`reconcile`/`roadmap`/`status`/`index`/`doctor`/`migrate`) with `--index`/`--next`/`--doctor` kept as equivalent top-level flags. Verified: `pm.py index` exits 0.
+
+## DEFER-7: Cycle detection is still superlinear when the blocker graph is one large cyclic component
+- **Deferred**: 2026-08-13
+- **Why deferred**: The Tarjan pass made the normal case linear (measured 320399 -> 799 edges examined at n=800 on an acyclic chain) by narrowing restarts to nodes that can sit on a cycle. Inside a single large SCC every node is a candidate, so the per-candidate DFS restarts still apply and the cost is superlinear there. This was disclosed when the fix landed rather than discovered afterwards. It needs a genuinely different algorithm — enumerating a covering set of cycles from the SCC structure itself — not another narrowing pass. A blocker graph that is one large strongly-connected component is also a pathological backlog in its own right, which is why this is bounded work rather than urgent.
 - **Priority**: P3
 

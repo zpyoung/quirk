@@ -78,6 +78,7 @@ entries' IDs; manual edits to fix typos are fine.
 - **Introduced by**: the Phase 1 pm.py work on this branch
 - **Severity**: low
 - **Proposed fix**: Either ship the slash command the hint names or make the hint carry a runnable absolute path.
+- **Resolved**: 2026-09-09. The hint now names `/quirk:pm:status`, and that command ships in this branch, so the one actionable line the index produces is actionable.
 
 ## BUG-8: README still describes the removed SessionStart tail loading
 - **Observed**: 2026-08-07
@@ -94,3 +95,67 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: medium
 - **Proposed fix**: Make the preflight prove liveness, not just alias resolution — have --check issue a trivial dispatch and require non-empty output before reporting the alias ready, or have select-model degrade triple_verified to false when the check cannot demonstrate one.
 
+## BUG-10: parse_entries reads field values from the fence-masked text, silently blanking any HTML comment or fenced span inside a field value
+- **Observed**: 2026-08-12
+- **File**: bin/artifact_lib.py:140-145
+- **Description**: parse_entries builds each entry's fields dict from masked_block (the fence/comment-masked copy) rather than the original block, so any field VALUE containing an HTML comment or a fenced span is stored with that span replaced by spaces. Reproduced: a Description of 'fails when the tag <!-- keep --> is present' parses as 'fails when the tag               is present', and a Probe of 'grep:<!-- TODO -->' parses as 'grep:' plus 14 spaces. The masking is correct for locating headings and field LABELS (that is what it was added for, commit 264c9fe); applying it to the captured VALUE is the defect. Blast radius is every consumer of Entry.fields, including artifact_append.py and artifact_review.py. The probe-specific consequence is the sharpest: a grep probe whose pattern contains a comment re-runs at finish as a blanked pattern, matches nothing, and delivers the entry while the symptom it tracked is still present.
+- **Introduced by**: 264c9fe, which pre-dates the pm-agent Phase 2 branch
+- **Severity**: high
+- **Proposed fix**: Capture field values by offset from the original block using positions found in the masked block, rather than storing the masked capture. Add a round-trip fixture for a field value containing an HTML comment and one containing a fenced span.
+
+## BUG-11: artifact_init --force follows a symlinked ledger and overwrites the external target, destroying data outside the project
+- **Observed**: 2026-08-12
+- **File**: bin/artifact_init.py:40-50
+- **Description**: The --force path calls shutil.copy(src, dst) with dst a plain path, and shutil.copy follows symlinks, so a ledger that is a symlink has its TARGET overwritten with the template. The backup taken first is also copied through the link, so it preserves the target's content under a .bak name inside the project but the original external file is still destroyed in place. Reproduced for both ROADMAP.md and BUGS.md: create proj/BUGS.md as a symlink to ../outside.md containing 'PRECIOUS BUGS CONTENT', run artifact_init --project-dir proj --force, and outside.md now contains the BUGS.md template. This affects every entry in ROOT_TEMPLATES, so it pre-dates the pm-agent branch; that branch added ROADMAP.md to the list, which widens the blast radius by one file but is not the cause. Third member of a family: pm.py's atomic_write now refuses a symlinked ledger, BUG-17 covers artifact_append.py's lock file, and this is the init path.
+- **Introduced by**: pre-dates the pm-agent Phase 2 branch; ROADMAP.md was added to ROOT_TEMPLATES by fc79a92 on it
+- **Severity**: critical
+- **Proposed fix**: Refuse when the destination is a symlink, matching the mistake-catcher refusal pm.py's atomic_write already implements, or open the destination with O_NOFOLLOW. Whichever is chosen should be applied uniformly across the three paths so a fourth does not drift.
+
+## BUG-12: _grep_baseline_files_unsafe does not reject matched filenames that mask_quoted blanks, so a Probe line can round-trip to something else
+- **Observed**: 2026-08-13
+- **File**: bin/pm.py:2790
+- **Description**: start refuses a --probe/--reason value containing an HTML comment or fenced span, because parse_entries blanks those when reading a field back. The matched grep filenames written into the same Probe line are validated by a separate helper that checks only the ', ' separator, the field delimiter, parentheses, CR and LF. A repository file whose NAME contains an HTML-comment-shaped substring is therefore persisted into the baseline file list and read back blanked, so finish's still-exists check looks for a filename that never existed and can refuse a genuinely finished task, or accept on a wrong file set. Same defect the --probe guard closes, one field-component over.
+- **Introduced by**: the pm-agent Phase 2 branch
+- **Severity**: medium
+- **Proposed fix**: Route matched filenames through the same mask_quoted(value) != value test the free-text validator uses, rather than maintaining a second hand-listed character set.
+
+## BUG-13: reconcile --verify does not rebase relative grep paths containing .. so a probe can escape the verify worktree
+- **Observed**: 2026-08-13
+- **File**: bin/pm.py:2554
+- **Description**: _rebase_verify_paths rewrites absolute grep paths and test nodeids onto the temporary detached worktree, and returns None for targets outside the repo. A relative path containing .. is passed through unchanged, so run_probe resolves it against the temporary worktree and can walk back out of it to a different filesystem target than the one measured at start. The Verify line then records a result attributed to the integration ref that was measured somewhere else, which is the defect the absolute-path rebasing exists to prevent.
+- **Introduced by**: the pm-agent Phase 2 branch
+- **Severity**: medium
+- **Proposed fix**: Normalize each path against the repo root before deciding, so a relative path that resolves outside the repo is treated exactly like an absolute one that does.
+
+## BUG-14: finish does not re-validate sibling lifecycle fields under the held lock on either write branch
+- **Observed**: 2026-08-13
+- **File**: bin/pm.py
+- **Description**: park, decide and reconcile --close re-check malformed and duplicated Probe/Verify fields inside the locked write, closing the window where a concurrent edit lands between the pre-lock check and the write. finish validates only before the lock, on both its refusal and its delivered branch, so a Probe corrupted during probe execution surfaces as a CAS mismatch (exit 6) rather than a corrupt entry (exit 4) and the precedence table puts 4 first. Same fix the other three commands already carry.
+- **Introduced by**: the pm-agent Phase 2 branch
+- **Severity**: medium
+- **Proposed fix**: Pass finish's sibling_fields through the same locked re-validation path _commit_transition already runs for the schema version.
+
+## BUG-15: _blocking_culprits presents an ambiguous duplicate ID as an actionable blocker
+- **Observed**: 2026-08-13
+- **File**: bin/pm.py:1623
+- **Description**: The blocker summary was narrowed to resolvable IDs only, so an id-shaped token naming no entry is excluded. An id claimed by more than one live entry still appears, presented as a single actionable blocker a human can go unblock — but readiness deliberately fails closed on exactly that ambiguity, so acting on the named entry may not unblock anything. DUPLICATE_ID is the finding that describes the real situation.
+- **Introduced by**: the pm-agent Phase 2 branch
+- **Severity**: low
+- **Proposed fix**: Exclude ids in world.ambiguous_ids from the culprit summary, or label them so the user is sent to the duplicate rather than to a blocker they cannot clear.
+
+## BUG-16: _run_git's timeout kills only the git process, leaving helpers such as SSH running
+- **Observed**: 2026-08-13
+- **File**: bin/pm.py:_run_git
+- **Description**: The test-probe runner was moved into its own process group so a timeout tears down the whole tree; git invocations were left on the plain subprocess timeout, which signals only the direct child. A fetch against an unreachable remote can therefore leave an ssh or credential helper running past the timeout that was supposed to bound the operation. Same defect the probe fix closed, in the other subprocess call site.
+- **Introduced by**: the pm-agent Phase 2 branch
+- **Severity**: medium
+- **Proposed fix**: Run git in its own process group and signal the group on timeout, reusing the mechanism _run_test_probe already has.
+
+## BUG-17: artifact_append.py opens its lock file with mode 'w', truncating through a symlink
+- **Observed**: 2026-08-10
+- **File**: bin/artifact_append.py:145
+- **Description**: The lock is acquired with open(lock_path, 'w'), which truncates the target and follows symlinks. .quirk/locks/ lives inside the project, so a symlink planted at .quirk/locks/BUGS.md.lock is truncated to zero bytes the moment any append runs — before the flock is even attempted. A lock file's contents are never read; only its existence and its flock matter, so the write mode buys nothing. pm.py's own lock acquisition was fixed to os.open(..., O_CREAT|O_RDWR|O_NOFOLLOW, 0o600) during Phase 2; this is the same pattern left in the older script. Not an authorization hole — the design assumes a cooperative worker and states it is not a security boundary — but it destroys a file for no benefit.
+- **Introduced by**: pre-dates this session
+- **Severity**: medium
+- **Proposed fix**: Mirror pm.py's _acquire_ledger_lock: os.open with O_CREAT|O_RDWR|O_NOFOLLOW and no truncation. Ideally hoist the shared acquisition into artifact_lib so the two cannot drift again.
+- **Blocker for**: nothing — but the two scripts now have different lock-safety properties for the same lock files
