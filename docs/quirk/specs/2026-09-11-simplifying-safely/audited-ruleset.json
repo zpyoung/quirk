@@ -15,7 +15,7 @@
   {
    "id": "G2",
    "section": "gate",
-   "text": "ID: G2   SECTION: gate\nTEXT: Apply the identical correctness re-check to additions and to deletions alike. Neither direction carries a special burden \u2014 growing the code and shrinking it both stand or fall on the same post-change check, not on a narrative about which one is more suspicious or which one needs more justification.\nSTATUS: judgment",
+   "text": "Apply the identical correctness re-check to additions and to deletions alike. Neither direction carries a special burden \u2014 growing the code and shrinking it both stand or fall on the same post-change check, not on a narrative about which one is more suspicious or which one needs more justification.",
    "status": "judgment",
    "original_status": "precautionary",
    "reviewer_test": "VIOLATES if a rule, review process, or prompt demands justification, extra scrutiny, or a higher bar for a deletion that an equivalent addition would not face (or vice versa). SATISFIES if additions and deletions are held to the same correctness re-check and nothing else.",
@@ -27,7 +27,7 @@
   {
    "id": "G3",
    "section": "gate",
-   "text": "STATUS: precautionary (not grounded).\n\nTEXT: Let only the correctness re-check block, accept, or reject a change. A simplicity signal \u2014 shorter, fewer files, fewer branches, framed as 'more minimal' \u2014 may inform which candidate to prefer among ones that already pass the correctness check, but it must never itself be the thing that decides pass or fail. This is a design default, not a measured result outside automated bug-fix patch-refinement: the evidence is strongest for that narrow setting and is extended here on the strength of that setting's own result, not on a demonstrated transfer.\n\nREVIEWER TEST: unchanged \u2014 VIOLATES if a change is rejected/blocked/sent back on the stated grounds that it isn't simple/minimal enough while the correctness check passes, or accepted on the grounds that it's simpler while the correctness check fails or was never run. SATISFIES if the stated blocking reason is the correctness check's result and nothing else.",
+   "text": "Let only the correctness re-check block, accept, or reject a change. A simplicity signal \u2014 shorter, fewer files, fewer branches, framed as 'more minimal' \u2014 may inform which candidate to prefer among ones that already pass the correctness check, but it must never itself be the thing that decides pass or fail. This is a design default, not a measured result outside automated bug-fix patch-refinement: the evidence is strongest for that narrow setting and is extended here on the strength of that setting's own result, not on a demonstrated transfer.",
    "status": "precautionary",
    "original_status": "grounded",
    "reviewer_test": "VIOLATES if a change is rejected, blocked, or sent back on the stated grounds that it isn't simple/minimal enough while the correctness check passes, or accepted on the grounds that it's simpler while the correctness check fails or was never run. SATISFIES if the stated blocking reason is the correctness check's result and nothing else.",
@@ -97,7 +97,7 @@
    "tier": "code"
   },
   {
-   "id": "S1",
+   "id": "S1(code)",
    "section": "surface-code",
    "text": "Judge these signals at the level of the diff or the change as a whole, never a single function in isolation. A function can look lean and short while the surrounding change adds files, layers, or options that add up to over-production \u2014 function-level simplicity and diff-level simplicity are different measurements, and the corpus that finds AI-written functions simpler than human ones is not the same corpus that finds AI-written systems accumulating duplication and scope creep.",
    "status": "precautionary",
@@ -109,7 +109,7 @@
    "tier": "code"
   },
   {
-   "id": "S5",
+   "id": "S5(code)",
    "section": "surface-code",
    "text": "A new config flag, environment variable, settings option, or dependency introduced without the task calling for configurability or the added package is a signal, not a default good practice.",
    "status": "precautionary",
@@ -121,7 +121,7 @@
    "tier": "code"
   },
   {
-   "id": "D1",
+   "id": "D1(agentdocs)",
    "section": "surface-agentdocs",
    "text": "When editing a CLAUDE.md, skill file, or AGENTS.md, convert descriptive or narrative passages (background, philosophy, repository overviews) into concrete directives, or delete them \u2014 independent of what that does to the resulting length.",
    "status": "precautionary",
@@ -133,19 +133,19 @@
    "tier": "agent-facing docs"
   },
   {
-   "id": "D2",
+   "id": "D2(agentdocs)",
    "section": "surface-agentdocs",
-   "text": "When a diff adds a rule to an agent-facing doc, check the resulting doc for an existing rule that already covers substantially the same ground. Merge or cut the overlap rather than leaving both standing.\n\nREVIEWER TEST: VIOLATES if a diff adds a rule to an agent-facing doc and the result leaves two live rules covering substantially the same ground, with neither merged nor cut. SATISFIES if no such overlap exists in the result, or an overlapping existing rule was merged or cut as part of the same change.",
+   "text": "When a diff adds a rule to an agent-facing doc, check the resulting doc for an existing rule that already covers substantially the same ground. Merge or cut the overlap rather than leaving both standing.",
    "status": "precautionary",
    "original_status": "precautionary",
-   "reviewer_test": "VIOLATES if a change adds a rule to an already-populated agent-facing doc with no corresponding removal, merge, or consolidation considered; SATISFIES if the live rule count held flat or fell, or the addition is paired with a recorded removal/merge decision.",
+   "reviewer_test": "VIOLATES if a diff adds a rule to an agent-facing doc and the result leaves two live rules covering substantially the same ground, with neither merged nor cut. SATISFIES if no such overlap exists in the result, or an overlapping existing rule was merged or cut as part of the same change.",
    "reviewer_test_holds": true,
    "evidence": "B1-agent-docs: FollowBench Hard Satisfaction Rate falls 84.7%\u219261.9% (GPT-4) at 5 vs. 1 constraints; IFScale \u2014 even the best of 20 frontier models hits only 68% accuracy at maximum instruction density; ComplexBench \u2014 GPT-4 collapses to 14.9% under its stricter composition scoring. All three converge on the same shape: compliance falls monotonically as simultaneous constraints accumulate.",
    "audit_note": "Two defects, both fixable by re-anchoring the rule to a post-hoc diagnostic instead of a precondition on adding.\n\n(1) Locked-decision conflict. locked.md states plainly, under Claims: \"Rule admission is ungoverned (the incident-required gate was considered and dropped).\" The parenthetical explains *why* (one candidate gate \u2014 trace-to-incident, exploration direction 8 \u2014 was weighed and rejected as self-implicating in the exploration doc's own tension analysis), but the locked principle itself is unqualified: no precondition gates whether a rule may be added. D2 as authored imposes exactly such a precondition \u2014 its REVIEWER TEST makes VIOLATES turn on whether \"a corresponding removal, merge, or consolidation\" was considered *before* the addition is allowed to stand clean. That is a precondition on admission, structurally the same move as the rejected incident-gate even though its substance (search-for-overlap vs. trace-to-incident) differs. Per the audit brief, a rule conflicting with a locked decision is wrong regardless of merit. The fix is to move the check from before-the-add (a gate) to after-the-diff (a diagnostic on the resulting state) \u2014 symmetric with how the already-shipped co-evolution and pruning tests are applied afterward, not as entry conditions.\n\n(2) The second sentence (\"treat the count of simultaneously live rules as a budget to manage, not a total that only grows\") is pure exhortation \u2014 it adds no independently checkable condition beyond the first sentence and the reviewer test doesn't cite it. Cut for concision; the rule set has a tight line budget and this bought nothing operative.\n\nEvidence and status hold up on their own: the FollowBench/IFScale/ComplexBench quotes are verified verbatim against claims.txt (all [OK], none blocklisted), the rule text carries no magnitude, and `precautionary` is the right tag \u2014 three converging general instruction-following benchmarks extended by inference to a persistent coding-agent doc, exactly the shape the scannable-prose skill's own A4/B1/B3/C4 precedent tags `precautionary`. The author's caveat about D2-1's confound (file size varied, not rule count independently) is honest and doesn't need to move the status \u2014 that study isn't cited as support, only disclosed as an unresolved counter-signal.",
    "tier": "agent-facing docs"
   },
   {
-   "id": "D4",
+   "id": "D4(agentdocs)",
    "section": "surface-agentdocs",
    "text": "Keep tool descriptions short \u2014 every token in a tool description is paid by every candidate-tool comparison. Cut a sentence only if removing it would not change whether the tool gets selected or how the call gets filled in (marketing framing, implementation rationale, restated context are the usual offenders).",
    "status": "judgment",
@@ -157,19 +157,19 @@
    "tier": "agent-facing docs"
   },
   {
-   "id": "D5",
+   "id": "D5(agentdocs)",
    "section": "surface-agentdocs",
-   "text": "ID: D5   SECTION: surface-agentdocs\nTEXT: If a rule in a static agent-facing doc keeps getting missed only deep into a session (not near the start), editing that passage in place \u2014 lengthening it, re-emphasizing it, restating it \u2014 is unlikely to be the fix: the one controlled test of CLAUDE.md structure found that file-shaped variables (length, position, architecture, a conflicting rule) move where compliance starts, not how it decays within a session, and generation volume was the only thing that did. No out-of-band countermeasure \u2014 hooks, re-dispatch, or anything else \u2014 has been run as a controlled intervention on a coding agent, so this is a name for a failure mode, not a validated fix. Treat repeated deep-session misses as a signal to look for a mechanism outside the static file, not as license to assume any particular one (including re-stating the rule at a subagent dispatch) will work.\nAUTHOR'S STATUS: precautionary\nREVIEWER TEST: diagnosis-not-enforcement \u2014 no reviewer test. A reviewer can recognize the pattern (repeated misses land deep into a session, not at the start) but the corpus licenses no specific remedy to check compliance against, so no VIOLATES/SATISFIES verdict is claimed.\nCLAIMED EVIDENCE: D2-1, with its full caveats (single-author preprint, single-turn --print harness with no compaction/re-summarization, grep-detectable marker instruction) intact.",
+   "text": "If a rule in a static agent-facing doc keeps getting missed only deep into a session (not near the start), editing that passage in place \u2014 lengthening it, re-emphasizing it, restating it \u2014 is unlikely to be the fix: the one controlled test of CLAUDE.md structure found that file-shaped variables (length, position, architecture, a conflicting rule) move where compliance starts, not how it decays within a session, and generation volume was the only thing that did. No out-of-band countermeasure \u2014 hooks, re-dispatch, or anything else \u2014 has been run as a controlled intervention on a coding agent, so this is a name for a failure mode, not a validated fix. Treat repeated deep-session misses as a signal to look for a mechanism outside the static file, not as license to assume any particular one (including re-stating the rule at a subagent dispatch) will work.",
    "status": "precautionary",
    "original_status": "precautionary",
-   "reviewer_test": "VIOLATES if a fix for an observed mid-session drift is an edit that only adds length or emphasis to the existing static rule in place; SATISFIES if the fix re-asserts the constraint at a new point in the flow (a dispatch prompt, a re-invocation) rather than editing the static passage alone. Diagnosis-not-enforcement for the general claim itself \u2014 no drift-correction mechanism is evidenced enough to mandate.",
+   "reviewer_test": "diagnosis-not-enforcement \u2014 no reviewer test. A reviewer can recognize the pattern (repeated misses land deep into a session, not at the start) but the corpus licenses no specific remedy to check compliance against, so no VIOLATES/SATISFIES verdict is claimed.",
    "reviewer_test_holds": false,
    "evidence": "D2-1: 'the single largest measured effect on instruction compliance was within-session: each additional function the coding agent generated' predicted non-compliance, while none of the file-structure variables (size, position, architecture, a conflicting rule) did. Matches the locked design claim: guidance shifts the starting point and does not change the degradation rate.",
    "audit_note": "Two distinct overreaches, both in the prescriptive half of the rule (the diagnosis half is defensible):\n\n1. Invented, unevidenced mechanism. D2-1's evidence supports only the diagnosis: text-shaped file variables (length, position, architecture, a conflicting rule) don't move the within-session decay rate; generation volume does. It says nothing about \"dispatch points\" or \"a subagent's prompt\" as a remedy. The source paper's own top recommendation for counteracting drift is hooks (PreToolUse/PostToolUse) \u2014 and the exploration doc is explicit that even *that* recommendation \"has never been run as a controlled intervention on a coding agent\" (explorations doc line 321, \"Hook-based mid-session re-injection is untested\") and that \"No drift mechanism is validated on a coding agent\" (line 339). D5's prescribed fix (subagent-prompt re-assertion) is a different, even-less-evidenced mechanism than the one the source paper itself floats untested. Grep of claims.txt confirms zero claims mention subagent prompts, dispatch points, or re-assertion at dispatch as a tested intervention. This is exactly the overreach pattern the exploration doc's own Challenge note warns against: \"a design must name which drift hypothesis it is betting on rather than presenting re-injection as settled\" (line 176) \u2014 D5 presents its bet as settled (\"Re-assert the constraint at the next dispatch point instead,\" stated as a flat instruction, not a hedge).\n\n2. Self-contradictory reviewer test. The REVIEWER TEST is written as a binary, mandate-style VIOLATES/SATISFIES verdict on real drafts (\"VIOLATES if... SATISFIES if...\") \u2014 full enforcement. But the same field then appends \"Diagnosis-not-enforcement for the general claim itself \u2014 no drift-correction mechanism is evidenced enough to mandate.\" Those two clauses cannot both be true: a test that assigns VIOLATES/SATISFIES to a specific fix choice *is* mandating that fix. The rule wants credit for being both an enforceable check and an honest non-mandate at once.\n\nThe locked design's carve-out (\"explicitly labelled diagnosis-not-enforcement\") is the right shape for what the evidence actually supports here \u2014 but D5 needs to actually take that shape (no binary verdict tied to a specific unevidenced remedy), not gesture at it while keeping the mandate. Separately: locked.md's \"anyone dispatching a subagent must restate the gate in the subagent's prompt\" is a governance rule specific to the Part-2 correctness gate; D5 leans on that precedent to make its invented general drift-remedy sound familiar, but the gate-restatement rule is a locked architectural decision, not evidence that dispatch-point restatement fixes arbitrary rule-drift.",
    "tier": "agent-facing docs"
   },
   {
-   "id": "S1",
+   "id": "S1(specs)",
    "section": "surface-specs",
    "text": "Flag any provision in a spec \u2014 a requirement, field, config knob, or extensibility point the document commits to build or support \u2014 whose only stated justification is an anticipated future need (\"so we can later...\", \"in case...\", \"for extensibility\") and that names no consumer, ticket, or test presently in scope. This does not apply to a Non-goals section or a stated exclusion, which by design names nothing, nor to an ordinary requirement that simply doesn't cite a consumer inline. Spec length is not itself a signal either way: a long spec whose every provision serves a present need or traces to a present consumer satisfies this test, and a short one with a single speculatively-justified, untraceable provision does not.",
    "status": "precautionary",
@@ -181,7 +181,7 @@
    "tier": "specs"
   },
   {
-   "id": "S2",
+   "id": "S2(specs)",
    "section": "surface-specs",
    "text": "A tech spec layered over an approved logic spec earns its place only by committing to at least one choice the logic spec left open \u2014 one a reviewer could name as what the implementer would otherwise have had to decide alone. A tech spec whose every commitment is copied from the logic spec, or is its only possible reading, has earned nothing by existing. Diagnosis, not enforcement: this is not independently checkable at review time \u2014 a tech spec built to the existing template (code-anchored pointers, contracts, DO-NOT-CHANGE fences) already tends to satisfy it, and a spec that doesn't already fails the writing-specs reviewer's Pointer-precision, Completeness, and Buildability checks.",
    "status": "judgment",
@@ -193,7 +193,7 @@
    "tier": "specs"
   },
   {
-   "id": "S3",
+   "id": "S3(specs)",
    "section": "surface-specs",
    "text": "S1 and S2 flag stated content \u2014 a provision naming no consumer, a second document making no decision among named alternatives \u2014 which a code surface cannot offer. They are not gates: no test suite runs before or after cutting what they flag, so a VIOLATES is a content judgment, not a verified pass/fail. Neither sees the opposite failure \u2014 a spec that under-specifies and ships a defect-inducing gap.",
    "status": "precautionary",
@@ -253,13 +253,13 @@
    "tier": "human-facing docs"
   },
   {
-   "id": "P1B-2",
+   "id": "P1B-2(chat)",
    "section": "surface-chat",
-   "text": "TEXT: Cut a redundant unprompted hedge that restates a point the reply already hedges elsewhere; keep only the instance whose removal would visibly change what the reader does next. A caveat about a genuinely separate risk is not a duplicate and is not touched by this cut.\n\nREVIEWER TEST: VIOLATES: the same point is hedged more than once in one reply, or a surviving hedge could be deleted with no change to what the reader does next. SATISFIES: no point is hedged twice, and deleting any surviving hedge would visibly change the reader's next action.",
+   "text": "Cut a redundant unprompted hedge that restates a point the reply already hedges elsewhere; keep only the instance whose removal would visibly change what the reader does next. A caveat about a genuinely separate risk is not a duplicate and is not touched by this cut.",
    "status": "judgment",
    "original_status": "judgment",
-   "reviewer_test": "VIOLATES: two or more unprompted caveats/hedges appear in one reply, or a caveat is present but the reader's next action would be identical without it. SATISFIES: at most one caveat survives, and deleting it would visibly change what the reader does next.",
-   "reviewer_test_holds": false,
+   "reviewer_test": "VIOLATES: the same point is hedged more than once in one reply, or a surviving hedge could be deleted with no change to what the reader does next. SATISFIES: no point is hedged twice, and deleting any surviving hedge would visibly change the reader's next action.",
+   "reviewer_test_holds": true,
    "evidence": "Exploration document, direction 15's machinery (the hedge budget), drawn from the same C1-llm-verbosity mechanism as P1B-1 \u2014 models under brevity pressure still generate compressible padding, and stacked hedging is a known instance of that padding.",
    "audit_note": "Two defects, both fixable without cutting the core idea. (1) Magnitude: \"at most one ... per reply\" is an invented numeric cap the locked design bans (\"NO MAGNITUDES ... direction only, never numbers\"), and the author's own caveat admits it \u2014 \"no experiment in the corpus measures hedge count against reader outcomes to justify that specific threshold over any other.\" (2) The rule is internally inconsistent about scope: sentence one caps the whole reply to one caveat globally (\"at most one ... per reply\"), sentence two frames the cut as per-point (\"a second hedge on the same point\"), and the reviewer test's VIOLATES clause takes the global reading (\"two or more ... in one reply\"). Under that global reading, a reply with two genuinely independent, both individually load-bearing caveats (e.g., one about rate limits, one about timezone assumptions \u2014 each of which would change the reader's next action if deleted) is forced to cut one anyway, directly contradicting the rule's own SATISFIES justification and destroying information the reader needs. That is exactly the check-7 harm: simplicity pressure applied without an anchor to whether the content is actually load-bearing. Separately, the CLAIMED EVIDENCE leans on \"correlating with model uncertainty\" \u2014 but the exploration doc's own challenge note for direction 15 says the cited chat literature \"mostly establishes that length is *rewarded*, which is a different claim from length *signalling the model's own uncertainty*,\" and flags the direction for leaning on the thinner, less-attested story. The corpus entry itself is tagged [--] (unverified), not [OK]. None of this is blocklisted or [!!], so it isn't an automatic cut, and the author already tagged the rule \"judgment\" rather than overclaiming \u2014 that part is honest and should stay.",
    "tier": "conversational output"
@@ -327,17 +327,17 @@
   {
    "id": "M6",
    "section": "meta",
-   "text": "ID: M6   SECTION: meta\nTEXT: A dispatched subagent starts with a fresh context \u2014 it does not inherit this skill's rules. Anyone who hands a subagent the job of applying a fix must restate the correctness gate directly in that subagent's prompt; naming or linking this skill is not enough.\nAUTHOR'S STATUS: judgment\nREVIEWER TEST: Read the subagent's dispatch prompt: does it restate the correctness-gate check inline, or only reference this skill by name? A bare reference VIOLATES; the restated gate SATISFIES.",
+   "text": "A dispatched subagent starts with a fresh context \u2014 it does not inherit this skill's rules. Anyone who hands a subagent the job of applying a fix must restate the correctness gate directly in that subagent's prompt; naming or linking this skill is not enough.",
    "status": "judgment",
    "original_status": "judgment",
-   "reviewer_test": "Read the subagent dispatch prompt: does it restate the gate's two tests inline, or only reference this skill by name? A bare reference VIOLATES; the restated tests SATISFY.",
+   "reviewer_test": "Read the subagent's dispatch prompt: does it restate the correctness-gate check inline, or only reference this skill by name? A bare reference VIOLATES; the restated gate SATISFIES.",
    "reviewer_test_holds": true,
    "evidence": "Locked decision (locked.md Disclosure section, explicit design decision).",
    "audit_note": "M6's core mandate (\"restate the gate in a dispatched subagent's prompt\") is directly supported \u2014 locked.md's Disclosure section says exactly that: \"Anyone dispatching a subagent must restate the gate in the subagent's prompt.\" But the rule as drafted overreads that one-liner into \"restate the gate's two tests,\" and that phrase conflates two separate, deliberately-distinguished pieces of the locked design. Per the Shape section, this skill has TWO SEQUENCED JOBS: Part 1 (spot over-production) uses \"the two tests that survived adversarial scrutiny\" \u2014 the co-evolution question and the executed pruning test (see DETECTION). Part 2 (\"the gate\") is a distinct, later-stage correctness check applied to a fix, described in Content rules as symmetric (\"additions AND deletions both pass a correctness check applied afterward\") \u2014 a single check, not two tests. Locked.md's own \"always-on core\" phrase even lists them separately: \"the gate + the two surviving tests\" (three things, not two). So M6's possessive \"the gate's two tests\" asserts a decomposition of the gate that locked.md never states and structurally contradicts \u2014 it silently merges Part 1's detection tests into Part 2's gate. This is exactly the kind of source-overreading check #1 asks about: the general instruction (restate the gate) is grounded, but the specific elaboration (what the gate consists of) is invented and wrong. A reviewer applying the rule's own test literally \u2014 \"does it restate the gate's two tests inline\" \u2014 would be checking for the wrong artifact: either missing the correctness gate entirely while restating the two detection tests, or vice versa, since a subagent asked to implement an already-identified fix plausibly only needs Part 2 (the correctness gate), not the Part 1 detection tests used to find the fix in the first place. The unqualified claim that \"a dispatched subagent does not inherit this skill's context\" is a reasonable, uncontested operational fact about the harness and doesn't need corpus backing, so it isn't itself the problem \u2014 the problem is confined to the \"two tests\" attribution.",
    "tier": "meta"
   },
   {
-   "id": "S2",
+   "id": "S2(code)",
    "section": "surface-code",
    "text": "A new function, class, interface, or parameter whose only callers anywhere in the codebase \u2014 in the diff or outside it \u2014 are its own tests is a signal of speculative generality.",
    "why": "S2 violates a locked design decision and must be cut on that basis, independent of its evidentiary merit.\n\nLocked decision (Content rules \u2192 DETECTION): \"ship ONLY the two tests that survived adversarial scrutiny \u2014 (a) the co-evolution question for duplication... (b) the pruning test for rules... State plainly that the other surfaces are not checkable at review time.\" This is an explicit closed list of exactly two detection heuristics for the surface-code job of spotting over-production. S2 is a third detection heuristic (an orphan-caller/test-only-user tell for speculative generality) that the locked decisions never enumerate and implicitly exclude by saying \"ONLY.\" It is also a close cousin of the explicitly named exclusion \"dead-code rates\" \u2014 S2's tell (only callers are the symbol's own tests) is a boolean variant of unused/dead-code detection, the exact facet the locked doc says failed verification and should not ship.\n\nTracing the provenance confirms why it was left out rather than merely overlooked: the exploration doc's \"two operational tests survived scrutiny\" line (line 79) names only co-evolution and the pruning test \u2014 matching locked.md's two exactly. The speculative-generality \"one mechanical tell\" claim sits one line below (line 80) in the Findings synthesis, but it was never one of the 15 directions put through the Challenge gauntlet (co-evolution appears as Direction 5, the pruning test as Direction 4; there is no speculative-generality direction in the 15). So the architects who wrote locked.md had this claim in front of them and chose not to promote it into the \"ship\" list \u2014 plausibly because, per the author's own caveat, it carries no adversarial-verification marker (no [OK] in claims.txt for A3-detection lines 54\u201355), unlike the two that made the cut.\n\nOn the merits the rule is otherwise one of the more defensible candidates in this batch: claim 54 (\"(book) ... only users of a function or class are test cases\") is read faithfully, not reversed or overreached; it doesn't touch [!!] or blocklisted items; it carries no magnitude; and the reviewer test is genuinely executable (grep for callers, check if only the test file shows up) rather than requiring judgment. But \"ship ONLY the two tests\" is a hard scope boundary the task instructions say overrides merit \u2014 a third, however clean, is not authorized for this skill draft.",
@@ -347,7 +347,7 @@
    "tier": "code"
   },
   {
-   "id": "S6",
+   "id": "S6(code)",
    "section": "surface-code",
    "text": "Before accepting a new helper, utility, or file, check whether the codebase already has one that does this, or already has a convention for solving this problem, before writing a new one. Reaching for a new file or a new pattern that duplicates or diverges from what's already there is a signal.",
    "why": "Two independent problems, either sufficient alone. (1) Locked-decision conflict: the locked design restricts shippable duplication detection to exactly one operational test, stated once and universally \u2014 Kapser & Godfrey's co-evolution question ('DETECTION: ship ONLY the two tests that survived adversarial scrutiny ... state plainly the other surfaces are not checkable at review time'). The exploration doc's Direction 5 is explicit that this test survived 'as operational rather than aesthetic' \u2014 implying naive existing-equivalent-search checks were the aesthetic alternative that did NOT survive. S6's reviewer test ('an equivalent function, module, or established local pattern already exists and the diff didn't reuse it') is exactly that rejected naive duplication check, reintroduced under a 'surface-code' label instead of the sanctioned co-evolution question. Shipping it would be a second, competing detection instrument for the same underlying problem (duplication) that the locked decisions forbid \u2014 wrong regardless of merit. (2) Evidence overreach independent of that conflict: both C3 findings are tagged [--] (unverified, not [OK]) and each is a single study \u2014 'ignoring existing codebase' (12 of 24 tasks) supports a broad claim about agents not incorporating existing code/context, not specifically 'failed to reuse an existing helper before writing a new one'; the 19%-slower figure is about correcting output mismatches with codebase expectations, not about duplicate-file creation at all. The A3 'abstraction inversion' citation describes a different phenomenon \u2014 a deficient library/abstraction forcing its users to re-implement functionality the abstraction should have exposed \u2014 not an agent failing to search the codebase before adding a new file. The author's own caveat concedes this directly: 'Creating a new file specifically has no direct finding of its own in the corpus \u2014 it is folded in here as the same underlying shape ... not as an independently evidenced claim.' That is an invented shape-match (judgment), not a precautionary extrapolation from evidence that is at least on-topic. The reviewer test is also partly unfalsifiable in practice: its SATISFIES branch ('a search for an existing equivalent was made') cannot be verified from a diff alone and would require trusting the agent's self-report of having searched.",
@@ -357,17 +357,19 @@
    "tier": "code"
   },
   {
-   "id": "P1B-1",
+   "id": "P1B-1(chat)",
    "section": "surface-chat",
    "text": "When your own reply comes out longer or more hedge-dense than the question required, don't just cut it to length \u2014 the excess is a signal about a specific claim inside it, not just noise to prune. Re-check that claim. If you can confirm it, tighten the passage to the confident version. If you can't, keep the uncertainty as an explicit marker (e.g. \"unconfirmed\", \"I haven't verified X\") rather than smoothing it into prose that reads as confident.",
    "why": "Two independent, each-sufficient problems.\n\n(1) Locked-decision violation. locked.md's Surfaces section is explicit: \"The correctness gate has NO evidenced analogue outside code \u2014 say so explicitly, offer no substitute.\" Conversational output is one of the four non-code surfaces this applies to. P1B-1 nonetheless invents exactly such a substitute for the chat surface: it prescribes a verification procedure (\"re-check that claim... confirm it... tighten... or keep the uncertainty marker\") and a matching REVIEWER TEST with VIOLATES/SATISFIES criteria \u2014 the same shape as the universal code gate, transplanted onto a surface locked.md says gets none. Per the audit brief, a rule violating a locked decision is wrong regardless of merit.\n\n(2) Evidence overread, matching the exploration's own challenge note on this exact direction (line 311, \"15 \u00b7 Length as a diagnostic\"): \"the cited chat literature mostly establishes that length is rewarded, which is a different claim from length signalling the model's own uncertainty.\" Of the three cited claims, only C1's verbosity-compensation finding (line 172) actually ties to uncertainty, and only at whole-response granularity \u2014 not to \"a specific claim inside it.\" The RLHF r=0.451 (line 161) and the IFEval U-shaped brevity-failure finding (line 169) are about length being rewarded / brevity-compliance failing in aggregate, not about a reply signaling low confidence in one particular claim. The rule's \"convergent mechanism evidence\" framing folds these three together as if they agreed on the localized-signal claim; they don't. The localization move itself (\"the excess is a signal about a specific claim inside it\") is the exploration doc's own admitted extrapolation (\"nothing in the 471-finding corpus tests preamble redundancy directly,\" line 259), and the direction's own falsification test \u2014 score flagged passages against known-wrong ground truth \u2014 was never run. Every backing claim carries [--] (unverified-quantitative), not [OK]. \"Precautionary\" implies convergence; two of the three citations don't actually converge on what the rule asserts.",
    "reinstated": true,
    "reinstated_because": "Corpus names a concrete signal; adjudicated 2026-09-11 after the tests-vs-tells distinction was drawn.",
    "status": "judgment",
-   "tier": "conversational output"
+   "tier": "conversational output",
+   "reviewer_test": "diagnosis only \u2014 no reviewer test. This routes a flagged passage to verification or an explicit uncertainty marker; it does not yield a verdict on the draft.",
+   "reviewer_test_holds": false
   },
   {
-   "id": "S7",
+   "id": "S7(code)",
    "section": "surface-code",
    "reinstated": true,
    "text": "A comment that restates the line immediately below it is a signal of unreviewed generation, not documentation. Removing it is subject to the same gate as any other deletion, and the user\u2019s CLAUDE.md rules on doc comments outrank this.",
@@ -381,25 +383,25 @@
  ],
  "cut": [
   {
-   "id": "S3",
+   "id": "S3(code)",
    "section": "surface-code",
    "text": "Check whether the diff adds anything \u2014 an endpoint, a flag, a handled edge case, a generalized parameter \u2014 that the request didn't ask for and that isn't needed to fix the bug or satisfy the ask. Each addition should trace to something a reviewer could point to in the request.",
    "why": "Two independent, each-sufficient problems.\n\n(1) LOCKED-DECISION VIOLATION. locked.md's Content rules state: \"DETECTION: ship ONLY the two tests that survived adversarial scrutiny \u2014 (a) the co-evolution question for duplication... (b) the pruning test for rules... State plainly that the other surfaces are not checkable at review time.\" S3 is a third, unauthorized detection heuristic for surface-code (traceability of an added surface to the request). The exploration doc's own \"detection is the weakest link\" theme is explicit that this category has no review-time answer: \"Over-engineering's only clean definition is retrospective... Nothing available at review time decides this\" except the two named tests, and \"Everything else in the smell catalogue requires human judgement.\" S3 resurrects exactly the kind of third mechanical-sounding test the locked scope was drawn to exclude. Per the task framing, this alone makes it wrong regardless of merit.\n\n(2) EVIDENCE MISATTRIBUTION. The claimed-evidence parenthetical \u2014 \"(peer, the Horikawa refactoring-instance study \u2014 D2-4 confirms this traces to a real academic source, distinct from the fragile N=20 preprint)\" \u2014 does not survive a grep. D2-4's actual question list (line 558) covers LinearB's 67.3%, the 43%-vs-54.9% refactoring and 1.1%-vs-13.7% duplication figures, the 83% maintenance figure, the 9.9% deletion figure, assertion-roulette, and the 45%/70% security figures. It never mentions \"scope creep\" at all \u2014 that claim (line 212, C3-agent-failure-modes) was never traced to Horikawa or to any specific study by D2-4; it sits unflagged, uninvestigated. Separately, the Horikawa study D2-4 *did* investigate is tagged (prep) \u2014 an ACM TOSEM preprint, not peer-reviewed (line 562) \u2014 so calling it \"peer\" inverts the corpus's own source-type tag, and the caveat the author borrows (\"D2-4 flags the refactoring study's human-comparator figures as reranked from a different corpus\") is real but belongs to the 43%/54.9% statistic, not to the scope-creep claim it's attached to here. The author's own caveat honestly flags \"none is a controlled study,\" which is right, but the \"peer... confirms this traces to a real academic source\" framing oversells a link the corpus does not establish.\n\nNet: even setting aside the locked-decision violation, the remaining support collapses to three unflagged, non-adjudicated corpus lines (C3 \"scope creep,\" A3 \"gold plating... unexplained extras,\" and the Devin anecdote) \u2014 genuinely convergent in shape, transferring cleanly to coding agents, but never run through the challenge process the other 15 directions went through, and explicitly named by the exploration doc as belonging to the \"requires human judgement\" bucket rather than the two tests licensed for shipping."
   },
   {
-   "id": "S4",
+   "id": "S4(code)",
    "section": "surface-code",
    "text": "A new interface, base class, plugin or strategy layer, or wrapper that has exactly one concrete implementation, and nothing in the task names or implies a second, is a signal worth a second look \u2014 not proof of over-engineering.",
    "why": "Two independent problems, either one sufficient to cut.\n\n(1) Locked-decision violation (decisive on its own). The locked DETECTION rule says \"ship ONLY the two tests that survived adversarial scrutiny\" \u2014 the co-evolution test for duplication and the pruning test for rules \u2014 and explicitly forbids shipping other structural/countable code metrics as over-engineering signals (\"Do NOT ship cyclomatic thresholds, method-size limits, dead-code rates, or cohesion metrics \u2014 these specifically failed verification\"). S4's REVIEWER TEST (\"search for implementers... returns exactly one and no second is named\") is a third mechanical, reviewer-executable check of exactly that rejected shape \u2014 count a structural property, flag on a threshold (here, count=1). It doesn't matter that S4 hedges the verdict as \"worth a second look, not proof\": the locked constraint bars shipping the checkable apparatus itself, not just strong claims built on it. S4 is also the direct descendant of exploration-doc direction 12 (\"trace content to a named consumer\"), which the corpus's own challenge notes found \"oversells the machinery by citing the clone co-evolution test as a validated model when the corpus's own reading of that test is far weaker,\" and which sits in an explicitly \"Irreducible\" block-vs-log tension with direction 3 that \"the corpus does not adjudicate.\" The DETECTION lock reads as the design's resolution of that exact unresolved territory \u2014 by excluding it, not by admitting a softened version of it under a different section label.\n\n(2) Even setting the lock aside, the evidence cited doesn't support the specific mechanical test chosen. The CLAIMED EVIDENCE leans on C3's \"abstraction excess\" and the Devin case study \u2014 both unmarked practitioner anecdotes (one N=1 case study) about abstracting \"for imaginary scale\" / \"non-existent problems\" \u2014 and A3's rule-of-three folk wisdom, which is about deferring DRY-driven abstraction from repeated code, not about counting implementers of an interface. None of these establishes that \"exactly one concrete implementation, no second named in the task\" is itself the tell. The corpus's actual best-supported claim on this exact question \u2014 A3, line 54: \"(book) Speculative generality can be detected when the only users of a function or class are test cases,\" reinforced by the exploration doc's own statement that this is \"the\" one mechanical tell that survives (line 80) \u2014 is narrower and different: it requires the abstraction have no real caller at all, not merely one implementation. S4's chosen test is broader than what even the corpus's strongest source licenses, and on a real (non-cherry-picked) draft \u2014 a dependency-injection interface with a single implementation but many live production callers, no prior similar seam in the codebase \u2014 it would read VIOLATES-leaning for code that isn't speculative generality by the corpus's own definition."
   },
   {
-   "id": "D3",
+   "id": "D3(agentdocs)",
    "section": "surface-agentdocs",
    "text": "When two rules in the same agent-facing doc conflict, delete or merge one of them. Never resolve the conflict by ranking them \u2014 adding precedence language ('rule A overrides rule B'), relying on file order to imply priority, or leaving both live with a disambiguating note.",
    "why": "The cited evidence (claims.txt line 122, B1-agent-docs) says only that Anthropic's docs report contradictory CLAUDE.md/rules content gets resolved *arbitrarily* today, with \"no defined precedence rule,\" and that Anthropic's own recommended remedy is \"periodic manual audit\" \u2014 nothing more specific. That evidence supports \"conflicts should be audited\"; it does not say what the audit's fix should be, and it never mentions precedence language, let alone tests whether adding it (e.g. \"rule A overrides rule B\") fails to resolve the arbitrariness. D3 inverts the gap: it invents delete-or-merge as the *only* legal remedy and explicitly bans precedence annotation \u2014 the one technique that would directly patch the exact defect the source names (absence of a defined precedence rule). That's check #1's overreading failure: an inference that reverses its source.\n\nIt also ignores the corpus's most directly on-point data: D1-4's own controlled factorial study (arXiv 2605.10039) manipulated \"the presence of a directly conflicting instruction\" as a structural variable and found no detectable compliance effect from it. Whatever its caveats (single-author preprint, trivial marker, single-turn harness \u2014 noted honestly in the exploration doc), it is the only empirical test of this exact question in the corpus, and it points toward \"conflicting rules aren't shown to matter much,\" not toward \"conflicts are dangerous enough to mandate deletion.\" The exploration doc's own synthesis states this question was left open \u2014 \"Nothing resolves conflicts when several directions fire on the same draft... no direction supplies precedence\" \u2014 meaning the source material explicitly declined to adjudicate delete/merge vs. precedence-language, yet D3 asserts a confident, mandatory answer the corpus never reached.\n\nEnacting D3 also risks the exact harm the corpus flags elsewhere (\"simplicity pressure without a correctness anchor destroys function\"): forced deletion/merging on any spotted contradiction, with the non-destructive fix (precedence annotation) categorically forbidden, assumes an editor can always correctly judge which of two rules is simply wrong \u2014 but many real \"conflicts\" are actually two rules each correct in different contexts, where precedence or scoping is the safer fix and deletion is the one that loses information."
   },
   {
-   "id": "P1B-3",
+   "id": "P1B-3(chat)",
    "section": "surface-chat",
    "text": "A sentence narrating a tool call must add a fact the visible tool output doesn't already show \u2014 an inference, a decision, or a consequence. If it only restates what the output already displays, cut it.",
    "why": "Locked-decision violation, independent of evidence quality. The \"Content rules \u2192 DETECTION\" bullet in locked.md is explicit and total: \"ship ONLY the two tests that survived adversarial scrutiny \u2014 (a) the co-evolution question for duplication... (b) the pruning test for rules... State plainly that the other surfaces are not checkable at review time.\" P1B-3 is a third, bespoke checkable detection test \u2014 a Part-1 \"spot over-production, then cut\" mechanism (matches the two-job model exactly: detect redundancy, prescribe cutting it) \u2014 invented specifically for the surface-chat surface. That is precisely the move the locked decision forbids: conversational output is one of \"the other surfaces\" the design says must be *disclosed* as not checkable, not given its own replacement heuristic. The rule's good evidentiary hygiene doesn't rescue it \u2014 this is a scope/structure violation, and locked.md says such a rule \"is wrong regardless of merit.\"\n\nOn the merits, for the record: the rule doesn't overclaim. Both the claimed-evidence field and the author's caveat already disclose, correctly, that the narration clause is \"this landscape's own extrapolation\" with \"nothing in the 471-finding corpus test[ing] preamble or recap redundancy directly\" \u2014 confirmed by grepping the exploration doc, where this exact sentence appears three times (lines 259, 344, and in the \"what the landscape does not reach\" list). The direction-15 challenge note's falsification test targets the *other* half of direction 15 (length/hedge-density as a confidence signal), not the narration clause \u2014 so the narration clause was never even falsification-tested, consistent with \"untested\" and with tagging it the weakest of the three status tiers (judgment). No [!!] claims, no blocklisted figures, no magnitude. The reviewer test itself is mechanically workable on a real transcript (e.g. narration restating a git-status file list VIOLATES; narration naming which file it'll act on next and why SATISFIES). None of that matters, though, against the locked cap on how many checkable detection tests this skill may ship, and against the explicit instruction to state chat as non-checkable rather than patch that gap with an untested, author-invented heuristic."
@@ -425,9 +427,12 @@
    {
     "surface": "code",
     "rule_ids": [
+     "D4-blocklist-metrics",
      "S1(code)",
      "S5(code)",
-     "D4-blocklist-metrics"
+     "S2(code)",
+     "S6(code)",
+     "S7(code)"
     ]
    },
    {
@@ -439,7 +444,7 @@
     ]
    },
    {
-    "surface": "agent-facing docs (CLAUDE.md, skills, tool descriptions)",
+    "surface": "agent-facing docs",
     "rule_ids": [
      "D1(agentdocs)",
      "D2(agentdocs)",
@@ -459,11 +464,12 @@
    {
     "surface": "conversational output",
     "rule_ids": [
-     "P1B-2"
+     "P1B-2(chat)",
+     "P1B-1(chat)"
     ]
    },
    {
-    "surface": "meta (cross-cutting - not one of the five locked surfaces; mostly declarative, not per-draft checks)",
+    "surface": "meta",
     "rule_ids": [
      "M1",
      "M2",
@@ -474,7 +480,7 @@
     ]
    }
   ],
-  "budget_note": "Core is 5 active checks (G1 sequencing, G2 symmetry, G3 decision-authority, D1-coevolution, D2-pruning-executed) plus 2 zero-check framing lines stated once each: G4 (no correctness-check analogue outside code) and D3-retrospective-only (no detector beyond D1/D2 anywhere else). Both framing lines belong in core rather than restated per surface, because locked.md line 8 bars restating the gate per surface \u2014 D3 is the Part-1 twin of that instruction and earns the same one-shot placement. Five surface-local copies of \"this isn't a gate\" would itself be the duplication this skill teaches reviewers to catch.\n\nPer-surface adds 1 check (conversational output) to 4 (agent-docs, human-docs); code and specs add 3 each. A task touching exactly one surface faces roughly 5 core checks plus 1\u20134 surface checks, about 6\u20139 simultaneous constraints \u2014 genuinely small, and it satisfies locked.md's \"no single task faces all rules\" bar. Meta (M1\u2013M6) mostly doesn't add to that count: M2/M4/M5 are declarative (precedence, claims scope, harness boundary), not per-draft checks; M1/M3/M6 are conditionally triggered (citing evidence, writing a deletion rationale, dispatching a subagent), not live on every firing.\n\nThe tiering is weaker for the very common case of a task spanning two surfaces at once \u2014 implementing a spec'd change touches code AND the spec that authorized it; editing a workflow governed by a CLAUDE.md touches agent-docs AND code. Nothing in the tiering caps cross-surface stacking: core(5) + code(3) + specs(3) \u2248 11 checks, or core(5) + code(3) + agent-docs(4) \u2248 12. Compliance is reported to degrade as simultaneous constraints accumulate (per this skill's own premise), so the honest verdict is: defensible for genuinely single-surface work, not proven for the multi-surface case that is arguably the modal one, and locked.md sets no cross-surface cap to fall back on. These counts are for this audit only \u2014 locked.md's \"NO MAGNITUDES\" rule bans any of these numbers from appearing in the shipped SKILL.md body; only directional language (\"compliance falls as constraints accumulate\") may ship.",
+  "budget_note": "Core is 5 active checks (G1 sequencing, G2 symmetry, G3 decision-authority, D1-coevolution, D2-pruning-executed) plus 2 zero-check framing lines stated once each: G4 (no correctness-check analogue outside code) and D3-retrospective-only (no detector beyond D1/D2 anywhere else). Both framing lines belong in core rather than restated per surface, because locked.md line 8 bars restating the gate per surface \u2014 D3 is the Part-1 twin of that instruction and earns the same one-shot placement. Five surface-local copies of \"this isn't a gate\" would itself be the duplication this skill teaches reviewers to catch.\n\nPer-surface counts, on the 5-active-core convention: code 6 \u2192 11 \u00b7 specs 3 \u2192 8 \u00b7 agent-facing docs 4 \u2192 9 \u00b7 human-facing docs 4 \u2192 9 \u00b7 conversational output 2 \u2192 7. A task touching exactly one surface therefore faces 7\u201311 simultaneous constraints, worst at code. That still satisfies locked.md's \"no single task faces all rules\" bar, but it is not the \"genuinely small\" number this note claimed before the reinstatement of S2(code), S6(code) and P1B-1(chat) \u2014 and code, the modal surface, is the worst case. Meta (M1\u2013M6) mostly doesn't add to that count: M2/M4/M5 are declarative (precedence, claims scope, harness boundary), not per-draft checks; M1/M3/M6 are conditionally triggered (citing evidence, writing a deletion rationale, dispatching a subagent), not live on every firing.\n\nThe tiering is weaker for the very common case of a task spanning two surfaces at once \u2014 implementing a spec'd change touches code AND the spec that authorized it; editing a workflow governed by a CLAUDE.md touches agent-docs AND code. Nothing in the tiering caps cross-surface stacking: core(5) + code(6) + specs(3) = 14 checks, or core(5) + code(6) + agent-docs(4) = 15. Compliance is reported to degrade as simultaneous constraints accumulate (per this skill's own premise), so the honest verdict is: defensible for genuinely single-surface work, not proven for the multi-surface case that is arguably the modal one, and locked.md sets no cross-surface cap to fall back on. These counts are for this audit only \u2014 locked.md's \"NO MAGNITUDES\" rule bans any of these numbers from appearing in the shipped SKILL.md body; only directional language (\"compliance falls as constraints accumulate\") may ship.",
   "duplication_found": "Applying the skill's own co-evolution test (D1-coevolution: would the two regions need to change together?) to the assembled rule set itself:\n\n1. HD4's reviewer test is a repackaging of HD2 + HD3, not new content. HD4's SATISFIES clause (\"the stated justification is a system-of-record duplicate\") restates HD2's \"default to reducing to a pointer... system of record acceptable grounds to consolidate,\" and HD4's override clause (\"contract/SLA/compliance obligation overrides that ground\") restates HD3's \"judged against that obligation, not traffic.\" Edit HD2's default-to-pointer logic or HD3's override logic, and HD4's VIOLATES/SATISFIES test breaks unless edited in lockstep. Three rules encoding two pieces of substance.\n\n2. M1's blocklist entry for \"McCabe's tiered cyclomatic-complexity risk scale\" (and its dead-code-prevalence entry) duplicates D4-blocklist-metrics' banned list and CLAIMED EVIDENCE text \u2014 both bans rest on the identical underlying verification fact (McCabe's paper offers one number, called a personal judgment call, not a validated scale; the dead-code figure traces to one vendor's own estimate). A later correction to the McCabe or dead-code finding has to be made in both M1 and D4-blocklist-metrics or the two rules go out of sync.\n\n3. Inside the always-on core itself: G3's VIOLATES clause (\"...accepted on the grounds that it's simpler while the correctness check... was never run\") restates G1's re-run-after-simplification requirement as part of G3's own test. A change to G1's re-run condition (e.g., what counts as \"re-run\") forces a matching edit to G3's test \u2014 and this pair sits in the core, where every line is paid on every single firing, so the redundancy is costlier there than elsewhere.\n\nChecked and ruled OUT as duplication (the deliberately-independent case D1-coevolution itself carves out): D2(agentdocs) (\"check for an existing rule covering substantially the same ground\") and D1-coevolution (\"do these two regions require synchronized change?\") look parallel \u2014 both detect overlap \u2014 but they apply to different regions (agent-doc rule text vs. general code/duplication) with no shared requirement forcing synchronized edits between them. Not a duplication finding; flagged instead under gaps as a consistency question, because S6 (a same-shape duplicate-detector for code helpers) was cut for violating locked.md's one-operationalizable-detector restriction and D2(agentdocs) was not.",
   "gaps": [
    "Diagnosis-not-enforcement labeling: locked.md's hard constraint requires every rule that can't yield a VIOLATES/SATISFIES verdict to be either cut or explicitly labeled diagnosis-not-enforcement. D3-retrospective-only, S2(specs), S3(specs), and D5(agentdocs) all carry that label; S1(surface-code) and P1B-2 both have reviewer_test_holds=false with no such label attached in the surviving text \u2014 as drafted they violate the hard constraint and need the label added or need cutting.",
@@ -486,19 +492,46 @@
    "Consistency gap on duplication detectors: D2(agentdocs) survived as an overlap/duplication check for agent-facing docs while S6, a same-shape duplicate-detector for code helpers, was cut for violating locked.md's restriction to exactly one operationalizable duplication test (D1-coevolution). Nothing in the surviving material states why the agent-docs case is exempt from the restriction that killed the code case \u2014 needs either a stated rationale (agent-doc overlap-checking is an application of D1-coevolution's co-evolution question, not a second detector) or D2(agentdocs) should be cut on the same grounds as S6.",
    "ID collisions across sections (S1 used in both surface-code and surface-specs; D1/D2/D3/D4 used in both the 'tests' section and surface-agentdocs) are not resolved anywhere in the surviving-rules material itself \u2014 this assembly disambiguates them as S1(code)/S1(specs) and D1(agentdocs)/D2(agentdocs)/etc., but that renaming needs to actually land in the shipped SKILL.md, not stay implicit.",
    "Locked.md's Activation section also requires 'narrow triggers, not always-on' and an explicit 'supersedes applying-simplicity-principles' statement \u2014 these are SKILL.md frontmatter/description concerns with no corresponding rule ID in the surviving set, so the rule-level audit never covered them and this tiering can't surface them as rule_ids; they need to be handled directly when the file is authored."
+  ],
+  "gap_status": [
+   "gap 1 (diagnosis-not-enforcement labelling): partly resolved \u2014 S1(code) and P1B-2(chat) are settled by this pass (S1(code) is diagnosis-only and logic.md now says so; P1B-2(chat)'s test does hold and is now flagged true). G4's status stays open: its test holds but it is counted as a framing line.",
+   "gap 2 (falsification one-liners inline): OPEN \u2014 13 precautionary rules still carry none; only G1 does. Blocks SKILL.md authoring.",
+   "gap 3 (budget hygiene for D4-blocklist-metrics and M1): OPEN \u2014 split to a one-line ban plus falsification inline when the file is authored.",
+   "gap 4 (plan-time vs code-time activation): OPEN \u2014 the locked decision has no behavior behind it; the tiering is surface-shaped only. Needs a user decision.",
+   "gap 5 (code-surface detection nearly empty): partly resolved \u2014 S2(code) and S6(code) were reinstated, taking code from 2 rules to 6.",
+   "gap 6 (conversational surface thin to the point of tokenism): partly resolved \u2014 P1B-1(chat) was reinstated, taking the surface from 1 rule to 2.",
+   "gap 7 (agent-docs duplication detector exempt from the restriction that cut S6): the asymmetry it complained of is gone \u2014 S6(code) is live again. The question it raised is not answered: nothing yet states why D2(agentdocs) is an overlap check rather than a second duplication detector competing with D1-coevolution. OPEN as a rationale gap.",
+   "gap 8 (id collisions unresolved in the shipped material): resolved \u2014 ids are qualified in rules[] and cut[] on the assembly convention.",
+   "gap 9 (frontmatter-level activation concerns have no rule id): OPEN \u2014 handle when the file is authored."
+  ],
+  "post_audit_corrections": [
+   "Ids qualified with their section (S1(code)/S1(specs), S2(code)/S2(specs), D1..D5(agentdocs), P1B-1/2(chat), and the cut entries) so every id in rules[] and cut[] is unique. The assembly block already used this convention; rules[] and cut[] did not.",
+   "Drafting scaffold ('ID:', 'SECTION:', 'TEXT:', 'STATUS:', \"AUTHOR'S STATUS:\", 'REVIEWER TEST:', 'CLAIMED EVIDENCE:') stripped from the text of G2, G3, D2(agentdocs), D5(agentdocs), M6 and P1B-2(chat), where it had leaked into the shipped payload.",
+   "Where a rule's text carried an embedded REVIEWER TEST that disagreed with its reviewer_test field, the embedded (post-audit) version was promoted and the field discarded as a stale draft \u2014 D2(agentdocs), D5(agentdocs), M6, P1B-2(chat). In every case the field version contradicted the rule's own body: D2's imposed a rule-count cap the body does not ask for; D5's prescribed re-assertion at a dispatch point, the remedy the body explicitly refuses to assume and the audit had already ruled unevidenced; M6's referred to 'the gate's two tests', conflating the gate with the two detection tests; P1B-2's flagged the separate-risk caveat its body carves out. G3's two versions were semantically identical and the field's prose was kept.",
+   "P1B-2(chat) reviewer_test_holds corrected false -> true (it carries a working VIOLATES/SATISFIES pair); P1B-1(chat) given the diagnosis-only reviewer_test and reviewer_test_holds=false it lacked.",
+   "assembly.always_on_core, assembly.per_surface and stats regenerated from rules[]; budget_note arithmetic re-derived. All three were pre-reinstatement snapshots."
   ]
  },
  "stats": {
-  "drafted": 36,
-  "kept": 28,
-  "cut": 8,
+  "final_rule_count": 32,
   "status_tally": {
-   "precautionary": 10,
-   "judgment": 13,
    "grounded": 4,
-   "precautionary (diagnosis-only) \u2014 the \"shifts starting point, not decay rate\" claim earns precautionary given the single-preprint/single-turn caveats already disclosed. The actionable remedy (\"re-assert at the next dispatch point, e.g. a subagent's prompt\") earns no status at all \u2014 it is not evidenced by anything in the corpus and should not be prescribed as a fix.": 1
+   "judgment": 14,
+   "precautionary": 14
   },
-  "reinstated": 4,
-  "final_rule_count": 32
+  "tier_tally": {
+   "agent-facing docs": 4,
+   "always-on core": 7,
+   "code": 6,
+   "conversational output": 2,
+   "human-facing docs": 4,
+   "meta": 6,
+   "specs": 3
+  },
+  "reinstated_after_cut": 4,
+  "cut_and_not_reinstated": 5,
+  "audited": 29,
+  "note": "Every count here is derived from rules[] and cut[]. The previous drafted/kept/cut totals (36/28/8) did not reconcile with those lists \u2014 36 \u2212 8 + 4 reinstated = 32 final leaves 4 cut, but cut[] holds 5 \u2014 and its status_tally was a pre-reinstatement snapshot carrying a malformed key. The drafting history could not be reconstructed from the asset, so it was dropped rather than reconciled by guess. `audited` counts rules carrying a full audit record (reviewer test + evidence); of those, `audit_note_empty` passed the audit without a recorded note. The 3 rules reinstated on rationale alone \u2014 S2(code), S6(code), P1B-1(chat) \u2014 carry `why` and `reinstated_because` instead of an audit record, so the asset does not hold a reviewer test or evidence for them.",
+  "audit_note_empty": 3
  }
 }

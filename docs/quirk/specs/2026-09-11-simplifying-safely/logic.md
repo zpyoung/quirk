@@ -39,8 +39,12 @@ agent-facing document, writing a spec — not on every code task.
 
 Once loaded, an always-on core applies: the gate, the two surviving detection tests, and two framing
 statements. The surface in play then activates its own small rule group, so a task touching one
-surface faces roughly six to nine simultaneous constraints rather than all thirty-two. This tiering
-exists because compliance falls measurably as simultaneous constraints accumulate.
+surface faces seven to eleven simultaneous constraints rather than all thirty-two — counting the
+five core checks that decide, plus that surface's group. Code is the worst case at eleven, and code
+is the modal surface. The tiering does not cap stacking across surfaces, and the common tasks span
+two: implementing a spec'd change touches code and the spec that authorized it. This tiering exists
+because compliance falls measurably as simultaneous constraints accumulate — which is also why the
+single-surface figure should not be read as covering the multi-surface case, where nothing caps it.
 
 Work proceeds in two sequenced jobs. **Part 1** spots over-production: the two tests decide, and
 per-surface tells prompt a closer look without deciding anything. **Part 2** gates the fix: any step
@@ -94,8 +98,11 @@ whether agents follow links, so the architecture is built to not depend on it.
 
 ## Behavior
 
-Thirty-two rules. Full audited text, evidence, and audit notes:
-[audited-ruleset.json](audited-ruleset.json).
+Thirty-two rules, each with its status, tier, and reviewer test:
+[audited-ruleset.json](audited-ruleset.json). Twenty-nine carry a full audit record — reviewer test,
+evidence, and the auditor's note. The three reinstated on rationale alone — the test-only-callers
+tell, the recreates-existing-code tell, and the verbosity-as-signal rule — carry that rationale
+instead, and the asset holds no reviewer test or evidence for them.
 
 **Always-on core (7)** — `G1` sequence simplification after a correctness check and re-validate ·
 `G2` apply that check symmetrically to additions and deletions · `G3` only the correctness check may
@@ -106,10 +113,10 @@ block; a simplicity signal may prefer among passing candidates but never decide 
 diagnosis-only)*.
 
 **Code (6)** — judge signals at the level of the change, never a single function in isolation, since
-AI-written functions measure leaner than human ones while the decay shows at system level ·
-unrequested configurability or dependencies · an element whose only callers are its own tests ·
-code recreating what the codebase already provides · a comment restating the line below it · the
-banned-metrics rule *(grounded)*.
+AI-written functions measure leaner than human ones while the decay shows at system level
+*(diagnosis-only)* · unrequested configurability or dependencies · an element whose only callers are
+its own tests · code recreating what the codebase already provides · a comment restating the line
+below it · the banned-metrics rule *(grounded)*.
 
 **Agent-facing docs (4)** — convert descriptive and overview passages into concrete directives or
 delete them · merge or cut an overlapping rule rather than adding alongside it · keep tool
@@ -127,8 +134,9 @@ grounds that shorter is inherently better.
 
 **Conversational output (2)** — excess length and hedge density are a signal about the model's own
 confidence, so route flagged passages to verification or an explicit marker rather than trimming them
-away *(diagnosis-only)* · cut a redundant unprompted hedge, keeping only the one whose removal would
-change what the reader does next.
+away *(diagnosis-only)* · cut a hedge that restates a point the reply already hedges, keeping the
+instance whose removal would change what the reader does next; a caveat about a genuinely separate
+risk is not a duplicate.
 
 **Meta (6)** — the do-not-cite blocklist *(grounded)* · precedence · deletion rationale goes in the
 commit message or PR description · the honest claim *(diagnosis-only)* · scope boundary and harness
