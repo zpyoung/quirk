@@ -1,6 +1,6 @@
 # Logic spec: `simplifying-safely`
 
-**Status**: Draft — awaiting user review
+**Status**: Draft — reviewed, corrections applied, awaiting user sign-off
 
 A quirk skill that helps an agent notice when it is over-producing, and makes every fix for that
 subordinate to a correctness check. Derived from
@@ -53,6 +53,11 @@ it. Part 2 is stated once and inherited by every surface — never restated per 
 both inflate the constraint count and create the synchronized-co-evolution debt the skill's own
 duplication test is designed to catch.
 
+The surface in play also identifies the moment. Writing a spec is planning time; writing code is
+code time; a document or a reply is whenever that artifact is authored. The core fires at every
+moment, and no rule is gated by time independently of its surface — which is what gives planning
+time and code time different rules without a second axis to carry.
+
 Where the agent dispatches a subagent to apply a fix, it restates the gate in that subagent's prompt,
 because a dispatched agent starts fresh and does not inherit the skill.
 
@@ -101,13 +106,15 @@ whether agents follow links, so the architecture is built to not depend on it.
 Thirty-two rules, each with its status, tier, and reviewer test:
 [audited-ruleset.json](audited-ruleset.json). Twenty-nine carry a full audit record — reviewer test,
 evidence, and the auditor's note. The three reinstated on rationale alone — the test-only-callers
-tell, the recreates-existing-code tell, and the verbosity-as-signal rule — carry that rationale
-instead, and the asset holds no reviewer test or evidence for them.
+tell, the recreates-existing-code tell, and the verbosity-as-signal rule — carry that rationale in
+place of evidence and an auditor's note. Their reviewer tests were written during review, not by the
+audit.
 
 **Always-on core (7)** — `G1` sequence simplification after a correctness check and re-validate ·
 `G2` apply that check symmetrically to additions and deletions · `G3` only the correctness check may
 block; a simplicity signal may prefer among passing candidates but never decide pass/fail ·
-`G4` no evidenced analogue to that check exists outside code *(grounded, diagnosis-only)* ·
+`G4` no evidenced analogue to that check exists outside code, and no substitute may be invented
+*(grounded)* ·
 `D1` the co-evolution question for duplication · `D2` the executed pruning test ·
 `D3` outside those two tests there is no review-time check for over-engineering *(grounded,
 diagnosis-only)*.
@@ -129,8 +136,9 @@ layered on a logic spec earns its place by committing to a choice the logic spec
 
 **Human-facing docs (4)** — check for an existing indexed surface before adding a standing document ·
 reduce a document restating an authoritative copy elsewhere to a pointer · a contract-, SLA- or
-compliance-cited document is judged against that obligation, not traffic · never justify a cut on the
-grounds that shorter is inherently better.
+compliance-cited document is judged against that obligation, not traffic · never justify a cut on
+the grounds that shorter is inherently better, and never on an unmaintained surface that merely
+answers the question.
 
 **Conversational output (2)** — excess length and hedge density are a signal about the model's own
 confidence, so route flagged passages to verification or an explicit marker rather than trimming them
@@ -161,8 +169,21 @@ or deletes it. It does not shorten the file for its own sake — file length mea
 claim is made: the Cursor and Aider limits are unsourceable, and only Anthropic's target is real —
 and cites no study.
 
+**An agent is asked whether a rule in a skill file is still earning its place.** `D2` applies, and
+it is the test most easily faked: the agent cannot decide by imagining what would happen without the
+rule, because unaided model judgement is the move the skill forbids elsewhere. It removes the rule,
+runs the cases the rule exists to govern, and observes. If nothing changes, the rule goes; the
+rationale goes in the commit message. If the harness to do this isn't available, the honest outcome
+is that the rule is unadjudicated — not that it passed.
+
 **An agent dispatches a subagent to apply a refactor.** It restates the gate in the subagent's
 prompt, because the subagent does not inherit the skill.
+
+**An agent proposes deleting a config flag it thinks is unused, and the reviewer pushes back asking
+it to justify the deletion.** The rationale gets written — `M3` requires it, in the commit message.
+What it is not is a gate: `G2` holds the deletion to the same correctness re-check an addition would
+face, not to a higher bar, and `G3` says the verdict rests on that check's result rather than on
+whether "this is simpler" persuaded the reviewer.
 
 ## Scope and non-goals
 
@@ -203,7 +224,8 @@ executed, not predicted · The argument against the skill's own existence is not
 Rule admission is left ungoverned.
 
 **Activation** — Narrow triggers, not always-on · Fires at planning time and code time with different
-rules at each · Supersedes `applying-simplicity-principles`.
+rules at each, satisfied by the surface tiering rather than a separate time axis: the surface in play
+identifies the moment · Supersedes `applying-simplicity-principles`.
 
 **Disclosure cost** — Degrade gracefully: behavior inline, justification in references · Dispatchers
 restate the gate in subagent prompts · Written for Claude Code, stated explicitly · Tiered constraint
@@ -300,6 +322,25 @@ adversarially verified. Full audit in the
 
 ## Status & amendments
 
-**Status**: Draft — awaiting user review.
+**Status**: Draft — reviewed, corrections applied, awaiting user sign-off.
 
-**Amendments**: none yet.
+**Amendments**
+
+1. **Plan-time and code-time activation now has behavior behind it.** The locked decision promised
+   different rules at each moment and the design carried no time axis. Resolved by stating that the
+   surface identifies the moment, rather than by adding one.
+2. **The three duplication failures the audit found in the rule set itself are merged out, not just
+   disclosed.** `HD4` no longer restates `HD2`'s system-of-record ground or `HD3`'s obligation
+   override; `D4`'s evidence points at `M1`'s blocklist instead of repeating the McCabe and
+   dead-code facts; `G3`'s reviewer test no longer restates `G1`'s re-run requirement inside the
+   core. The skill's own co-evolution test, applied to the skill.
+3. **`G4` is no longer labelled diagnosis-only.** Its test holds on authored guidance. It is stated
+   once rather than per surface, which is a statement about cost per firing, not about whether it
+   can yield a verdict.
+4. **Every precautionary rule now carries a falsification line**, drawn from its own evidence. The
+   two reinstated tells carry the honest version: no falsifying test exists in the corpus, and they
+   were reinstated because the corpus names the signal, not because a result measured it.
+5. **`S7`'s trailing precedence clause is gone.** `M2` states precedence once; a surface rule
+   restating it is the shape this spec bars for the gate.
+6. **`D4`'s rule text was the auditor's editing memo**, never a rule. Written out from the memo's
+   instructions and the surviving reviewer test.
