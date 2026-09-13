@@ -49,6 +49,12 @@ EXPECTED_JUDGMENT_COUNT = 14
 EXPECTED_DIAGNOSIS_COUNT = 7
 EXPECTED_FALSIFICATION_COUNT = 15
 
+# The 14 precautionary rules plus C6, whose ban is per-metric and can lapse.
+FALSIFIED_IDS = {
+    "G1", "G3", "D1", "C1", "C2", "C3", "C4", "C5", "C6",
+    "A1", "A2", "A4", "S1", "S3", "M4",
+}
+
 BLOCKLIST_ANCHORS = [
     "Cursor",
     "Aider",
@@ -274,9 +280,24 @@ def test_falsification_lines_present_and_keyed_by_id() -> None:
     "Falsification: ..." sentence verbatim per rule.
     """
     body = _read_skill()
-    falsification_lines = [line for line in body.splitlines() if "Falsification:" in line]
+    # The notes ship as a bulleted list under their own heading, one line per rule keyed by
+    # shipped id -- not as 15 repetitions of the literal word "Falsification:", which is the
+    # source JSON's internal field prefix and would only be noise once the heading says it.
+    section = body.split("## Falsification notes", 1)
+    assert len(section) == 2, "no '## Falsification notes' section"
+    section = section[1].split("\n## ", 1)[0]
+    falsification_lines = [ln for ln in section.splitlines() if ln.strip().startswith("- ")]
     assert len(falsification_lines) == EXPECTED_FALSIFICATION_COUNT, (
         f"expected {EXPECTED_FALSIFICATION_COUNT} falsification lines, found {len(falsification_lines)}"
+    )
+    keyed = {m.group(1) for ln in falsification_lines
+             for m in [re.search(r"\*\*(" + "|".join(ALL_SHIPPED_IDS) + r")\*\*", ln)] if m}
+    assert len(keyed) == EXPECTED_FALSIFICATION_COUNT, (
+        f"each line must be keyed by a distinct shipped id; got {len(keyed)}: {sorted(keyed)}"
+    )
+    assert keyed == FALSIFIED_IDS, (
+        f"falsification notes cover {sorted(keyed)}; expected exactly {sorted(FALSIFIED_IDS)} "
+        "(the 14 precautionary rules plus C6)"
     )
 
     id_pattern = re.compile(r"\b(" + "|".join(ALL_SHIPPED_IDS) + r")\b")
@@ -342,11 +363,23 @@ def test_m6_subagent_gate_restatement_fence_present() -> None:
     """
     body = _read_skill()
     fences = re.findall(r"```.*?```", body, re.DOTALL)
+    # Assert the CONTENT of G1-G3, not their labels. The block is pasted into a subagent that
+    # has never loaded this skill, so a bare "G1" is unresolvable there -- a fence that names
+    # the ids instead of stating the requirements would satisfy a token check and still be
+    # useless at the only moment it is used.
+    requirements = (
+        r"correctness check|test suite",          # G1: the check runs against the result
+        r"addition|deletion",                     # G2: same treatment both directions
+        r"decide|decides|pass or fail",           # G3: only that check decides
+    )
     matching = [
         fence for fence in fences
-        if all(re.search(rf"\b{gate_id}\b", fence) for gate_id in ("G1", "G2", "G3"))
+        if all(re.search(pattern, fence, re.I) for pattern in requirements)
     ]
-    assert matching, "no fenced block restates G1, G2 and G3 for subagent dispatch"
+    assert matching, (
+        "no fenced block states the gate's three requirements (run the check against the "
+        "result; treat additions and deletions alike; let only that check decide)"
+    )
 
 
 def test_links_are_relative_never_at_prefixed() -> None:
