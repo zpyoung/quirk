@@ -345,3 +345,32 @@ adversarially verified. Full audit in the
    restating it is the shape this spec bars for the gate.
 6. **`D4`'s rule text was the auditor's editing memo**, never a rule. Written out from the memo's
    instructions and the surviving reviewer test.
+
+The six entries above were applied before the build. The four below were forced by the build and
+its review rounds, and each changes a decision this document had already stated — recorded here so
+sign-off is on what shipped, not on what was approved.
+
+7. **2026-09-13 — `M6` is a code rule, with a derived branch for everything else.** As approved it
+   told a dispatcher to restate the correctness gate in any dispatched simplifying fix. Off code
+   there is no such gate to restate (`G4`), so as written it mandated a check this document
+   elsewhere says does not exist. The shipped rule scopes the pasted block to code and hands the
+   non-code case to `G4` plus `G3` — no check to paste, no simplicity signal standing in for one,
+   the subagent reports rather than decides. That branch is derived from two rules rather than
+   evidenced by the audit, and the companion says so.
+8. **2026-09-13 — `G3` bounds the fix gate, not detection.** Its "no simplicity signal may block,
+   accept, or reject" read as absolute, which contradicted `M2`'s precedence order and, taken
+   literally, disarmed `D1` and `D2` — the two detection tests this document calls the heart of
+   Part 1. The shipped rule states the boundary: signals do not decide pass or fail; the two tests
+   still yield their verdicts.
+9. **2026-09-13 — `M1` exempts refutation explicitly.** As worded, a rule forbidding any citation
+   of the blocklisted claims forbade the blocklist itself, which names each claim in order to block
+   it. The shipped rule says naming a claim to refute it is not citing it, and blocks a claim under
+   any wording or number rather than only the form first surfaced.
+10. **2026-09-13 — the gate rules were measured, and the measurement did not find what the spec
+    predicted.** Three pressure probes against a baseline with no skill loaded produced no
+    violation. Two of those verdicts bind the rules as shipped; the third was scored against a
+    weaker `M6` and is unknown. On these scenarios, at turn one, a capable model already loaded
+    with the user's standing instructions reached the gate's behavior unaided. The spec's claim —
+    that this skill shifts the starting point rather than the decay rate — is unrefuted but also
+    unsupported here, because turn one is where the baseline looks its best. Full record in
+    [validation-red.md](validation-red.md).

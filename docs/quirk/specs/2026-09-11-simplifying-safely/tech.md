@@ -252,8 +252,9 @@ only: tells never decide, so nothing else needs it.
 
 **Outcome, recorded 2026-09-11:** the user kept it. RED ran before any of the skill was written.
 Round 1 was void on harness defects; round 2, on a harness given a positive control first,
-returned 0 violations of 3. GREEN was not run — with no violation to close there was nothing to
-compare against. Full record in [validation-red.md](validation-red.md); the section above is kept
+returned no violation in any probe — though only two of its three verdicts bind the rules as
+shipped, the third having been scored against a weaker M6. GREEN was not run — with no violation
+to close there was nothing to compare against. Full record in [validation-red.md](validation-red.md); the section above is kept
 as the reasoning that produced the decision, not as an open question.
 
 ## Non-goals

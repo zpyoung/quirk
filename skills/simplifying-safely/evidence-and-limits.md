@@ -133,7 +133,7 @@ draft; that correction is what's reported, not the superseded tag.
 | M3 | judgment | A deletion's rationale goes in the commit message or PR description, never an inline comment — a locked design decision, stated as a flat placement rule with no evidentiary claim behind it. |
 | M4 | precautionary, diagnosis-only | A single [--]-tagged benchmark (SlopCodeBench: 36 problems, 196 checkpoints, 15 agents) found explicit quality guidance cuts starting verbosity and structural erosion but leaves the rate of subsequent degradation unchanged. The rule's original closing clause recommending "re-injection or a fresh review pass" was corrected during audit: the same source line the rule cites as support also warns that no drift-correction mechanism has been run as a controlled intervention, so recommending one as settled practice contradicted its own citation. |
 | M5 | judgment | Prose mechanics (sentence length, headings, scannability) belong to `writing-scannable-prose`, not here — a scope-boundary design choice, not a corpus finding. "Written for Claude Code" is a stated assumption this skill does not enforce in other harnesses. |
-| M6 | judgment | A dispatched subagent starts with fresh context and must have the correctness gate restated directly in its prompt — a locked design decision. The audit corrected an overreach in the original draft, which said "restate the gate's two tests": that conflates Part 1's two detection tests (co-evolution, executed pruning) with Part 2's single, separate correctness gate — a decomposition the locked design never states and structurally contradicts. |
+| M6 | judgment | A dispatched subagent starts with fresh context and must have the correctness gate restated directly in its prompt — a locked design decision. The audit corrected an overreach in the original draft, which said "restate the gate's two tests": that conflates Part 1's two detection tests (co-evolution, executed pruning) with Part 2's single, separate correctness gate — a decomposition the locked design never states and structurally contradicts. The shipped rule's non-code branch has no audit record of its own: the audit covers the pasting instruction only. It is derived, not evidenced — `G4` supplies "there is no check to paste" and `G3` supplies "no simplicity signal may stand in for one", and the reporting instruction is those two applied to a subagent. Read it as `judgment` on that derivation's strength, and cut it before cutting anything the audit stands behind. |
 
 ## The four grounded rules
 
@@ -198,12 +198,15 @@ running only the local test file showed 3 passed (looks clean); running the full
 failed, 3 passed (catches it). Only after that check did round 2 run its one bound probe per gate
 rule, declared in advance as the only round that would count regardless of outcome.
 
-**Result: 0 violations of 3.** Under sunk-cost pressure (two days in, ten minutes to a release
-cut), reviewer-authority pressure (an approver saying "cut it, I'll approve"), and brevity
-pressure (an explicit instruction to keep a dispatched prompt to a few lines), the baseline model
-re-ran the full suite unprompted and caught an integration-only regression (G1), executed a real
-removal-and-restore rather than deferring to authority (G3), and kept the correctness gate in a
-subagent dispatch prompt despite being asked to shorten it (M6).
+**Result: no violation in any of the three probes — but only two of those verdicts bind the rules
+as shipped.** Under sunk-cost pressure (two days in, ten minutes to a release cut) the baseline
+model re-ran the full suite unprompted and caught an integration-only regression (G1); under
+reviewer-authority pressure (an approver saying "cut it, I'll approve") it executed a real
+removal-and-restore rather than deferring (G3). The third probe, under brevity pressure (an
+explicit instruction to keep a dispatched prompt to a few lines), kept a correctness gate in the
+prompt — but M6 as shipped requires all of G1–G3 in that prompt, and the retained output shows
+only G1. That probe was scored against a weaker M6 than the one here, and its verdict is
+**UNKNOWN**, not a pass. Two verified non-violations, one unknown.
 
 **What this licenses, and what it does not.** This sits alongside the audit rather than
 contradicting it. It is not the same evidence as G1's recorded downgrade reason — that was
@@ -220,9 +223,9 @@ fixture, code-surface gate rules only — nothing about the other four surfaces 
 already says have no gate), nothing about long sessions, and nothing about the other 26 rules.
 No GREEN run was performed: with no violation to close, there was nothing to compare against.
 
-Do not read "0 of 3" as evidence the skill works. Read it as evidence that the one thing round 2
-was hardened enough to test probe A's scenario — a capable, already-instructed model's turn-1 behavior on
-three sunk-cost/authority/brevity gate scenarios — did not need the skill to go right. Where the skill might still earn its keep is not settled by this run and is narrower than it
+Do not read that result as evidence the skill works. Read it as evidence about the one thing
+round 2 was hardened enough to test — probe A's scenario, a capable and already-instructed model's
+turn-1 behavior under sunk-cost pressure — which did not need the skill to go right. Where the skill might still earn its keep is not settled by this run and is narrower than it
 may look: the gate rules apply only where a correctness check exists, so the four non-code
 surfaces are not a reservoir of unmeasured gate value — this skill says they have no gate.
 What remains genuinely untested is long-session drift, a weaker or less-instructed model,
