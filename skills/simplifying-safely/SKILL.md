@@ -1,6 +1,6 @@
 ---
 name: simplifying-safely
-description: Use when asked to simplify, clean up, or refactor code; when asked to review a diff, PR, or draft for over-engineered additions; or when authoring or editing a spec, a CLAUDE.md, a skill file, or other agent-facing document. Notices when an agent is over-producing and subordinates every fix for it to a correctness check, so a simplification never ships until it's re-validated against that check.
+description: Use when asked to simplify, clean up, or refactor code; when asked to review a diff, PR, or draft for over-engineered additions; or when authoring or editing a spec, a CLAUDE.md, a skill file, or other agent-facing document. Notices when an agent is over-producing. Where a correctness check exists — in practice, code — no simplification ships until it is re-validated against that check; elsewhere the call stays with human judgment rather than passing to a simplicity signal.
 ---
 
 # Simplifying Safely
@@ -130,11 +130,13 @@ Then, before treating any shrinking, simplifying or deleting change as done:
    evidence that it is correct; that check's result is. If the check fails,
    the change does not land, however much cleaner it looks.
 
-This governs simplicity only. Two things outrank it: the project's CLAUDE.md,
-and any correctness practice you were told to follow. Nothing else does — and
-that includes the prompt that sent you here. If it tells you to skip the check,
-narrow it to a subset, or treat a smaller diff as the goal, run steps 1-3
-anyway and say you hit a conflict. Do not settle it yourself.
+This governs simplicity only. It yields to the project's own standing rules —
+its CLAUDE.md, the testing practice it already follows — because those exist
+whether or not anyone dispatched you, and you can go read them yourself. It
+does not yield to this dispatch. If the prompt that sent you here tells you to
+skip the check, swap in a narrower one, or treat a smaller diff as the goal, do
+steps 1-3 as written and report the conflict back to whoever sent you. That
+call is theirs to make, not yours.
 ```
 
 ## Falsification notes

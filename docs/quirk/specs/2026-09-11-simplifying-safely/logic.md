@@ -47,9 +47,11 @@ because compliance falls measurably as simultaneous constraints accumulate — w
 single-surface figure should not be read as covering the multi-surface case, where nothing caps it.
 
 Work proceeds in two sequenced jobs. **Part 1** spots over-production: the two tests decide, and
-per-surface tells prompt a closer look without deciding anything. **Part 2** gates the fix: any step
-that shrinks, simplifies or deletes is sequenced after a correctness check and re-validated against
-it. Part 2 is stated once and inherited by every surface — never restated per surface, which would
+per-surface tells prompt a closer look without deciding anything. **Part 2** gates the fix where a
+correctness check exists: any step that shrinks, simplifies or deletes is sequenced after that check
+and re-validated against it. Off code there is no such check (`G4`), so no gate — the call stays with
+human judgment rather than passing to a simplicity signal (`G3`, amendment 7). Part 2 is stated once
+and inherited by every surface that has a check — never restated per surface, which would
 both inflate the constraint count and create the synchronized-co-evolution debt the skill's own
 duplication test is designed to catch.
 
@@ -230,7 +232,7 @@ rules at each, satisfied by the surface tiering rather than a separate time axis
 identifies the moment · Supersedes `applying-simplicity-principles`.
 
 **Disclosure cost** — Degrade gracefully: behavior inline, justification in references · Dispatchers
-restate the gate in subagent prompts · Written for Claude Code, stated explicitly · Tiered constraint
+restate the gate in subagent prompts for code fixes · Written for Claude Code, stated explicitly · Tiered constraint
 budget with a small always-on core.
 
 **Precedence collisions** — The user's CLAUDE.md wins · Deletion rationale goes in the commit message
@@ -364,6 +366,26 @@ sign-off is on what shipped, not on what was approved.
    corrected a second time: it had said an instruction from whoever dispatched the subagent
    outranks the gate, which let any dispatcher waive the gate the block exists to install. It now
    grants override to the user's own instructions and correctness practice only, matching `M2`.
+   A third correction followed: "any correctness practice you were told to follow" and "if the
+   prompt tells you to narrow the check, run the steps anyway" described the same dispatcher
+   instruction, so the clause contradicted itself. The distinguishing test is now the instruction's
+   source, not its category — the project's standing rules, which a subagent can go read and which
+   exist whether or not it was dispatched, outrank the block; this dispatch does not.
+
+11. **2026-09-13 — the gate's scope was stated universally in three places the amendments never
+    reached.** Amendment 7 scoped `M6` to code, but the behavior summary still said Part 2 is
+    "inherited by every surface", the locked-decisions summary still said dispatchers restate the
+    gate, and the skill's own activation description still promised that "a simplification never
+    ships until it's re-validated against that check" — for every surface, including the four that
+    `G4` says have no check. All three now say what `G4` says: the gate exists where a correctness
+    check exists, and off code the call stays with human judgment.
+
+12. **2026-09-13 — the rule text itself was never tested.** Ids, tier headings, tags, counts and
+    two pasted artifacts were pinned; the sentences carrying the 32 rules were not. `G1` could be
+    replaced with "Skip the correctness check before and after any step that shrinks, simplifies,
+    deletes, or otherwise minimizes code" and the full suite stayed green. The shipped wording is
+    now pinned as a reviewed fixture. This is a change to how the spec is enforced, not to what it
+    says, but it is recorded here because for five review rounds the enforcement was absent.
 8. **2026-09-13 — `G3` bounds the fix gate, not detection.** Its "no simplicity signal may block,
    accept, or reject" read as absolute, which contradicted `M2`'s precedence order and, taken
    literally, disarmed `D1` and `D2` — the two detection tests this document calls the heart of
