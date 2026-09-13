@@ -115,7 +115,7 @@ draft; that correction is what's reported, not the superseded tag.
 | C4 | precautionary, **no audit record** | Reinstated on rationale alone — see below. |
 | C5 | precautionary | A comment that only restates the line below it is the single most-upvoted practitioner tell for AI-generated comments, recurring independently in a second, unrelated thread. No measured link to a defect or maintenance outcome exists — this is a style tell, not an evidenced-harm finding. |
 | C6 | grounded | Three of the four banned metrics (cyclomatic-complexity bands, dead-code percentages, LCOM/cohesion scores) are misattribution failures — the specific thresholds people cite do not trace to the sources invoked for them — which is sufficient reason to ban citing them regardless of what a "correct" threshold would look like. The fourth ban (line-count caps) rests on different, weaker evidence: a 24-line-method study whose maintenance-effort direction reverses when expressed as defect/change density instead of raw totals. One of the four "cannot do" statements. Carries a falsification line despite being grounded, because the ban is per-metric and lapses for any one metric independently validated later — unlike the other three grounded rules, none of which carry one. |
-| A1 | precautionary | A controlled evaluation of repository-level context files found concrete instructions well followed while descriptive repository overviews were not helpful (arXiv 2602.11988) — direct and on-point, but a single study. |
+| A1 | precautionary | A rigorous evaluation of repository-level context files found concrete instructions well followed while descriptive repository overviews were not helpful (arXiv 2602.11988) — direct and on-point, but a single study. |
 | A2 | precautionary | FollowBench (84.7%→61.9% Hard Satisfaction Rate, GPT-4, 5 vs. 1 constraints), IFScale (68% ceiling for the best of 20 frontier models at maximum density), and ComplexBench (GPT-4 to 14.9% under stricter scoring) converge on compliance falling as simultaneous constraints accumulate — three independent, unflagged benchmarks, extended by inference from general instruction-following to a persistent coding-agent doc. A fourth, uncited study in the same corpus confounds file size with rule count and is disclosed rather than used as support. |
 | A3 | judgment | Tool descriptions carry a measured token tax (~200 tokens each; ~20K tokens across a 100-tool shortlist) and function-calling accuracy degrades as tool catalogs grow — both real, [OK]-verified *volume* claims. Neither measures which *kind* of content within one description matters. The rule's category split (cut rationale/background, keep purpose/parameters/constraints) is machinery invented on top of a coarser finding. Downgraded `grounded`→`judgment` for exactly that gap, though the underlying instruction ("keep tool descriptions short") is retained since the volume evidence does support it. |
 | A4 | precautionary, diagnosis-only | The one controlled factorial test of CLAUDE.md structure (arXiv 2605.10039) found generation volume — not file length, position, architecture, or even a directly conflicting instruction — predicts within-session non-compliance. Single-author preprint, single-turn harness, trivial marker instruction. No drift-correction mechanism (hooks, re-dispatch, subagent re-assertion) has been run as a controlled intervention on a coding agent; this names a failure mode, not a validated fix. |
@@ -205,9 +205,10 @@ re-ran the full suite unprompted and caught an integration-only regression (G1),
 removal-and-restore rather than deferring to authority (G3), and kept the correctness gate in a
 subagent dispatch prompt despite being asked to shorten it (M6).
 
-**What this licenses, and what it does not.** This corroborates the audit rather than
-contradicting it: it is a concrete instance of exactly why G1 was downgraded from `grounded` to
-`precautionary` — the gate codifies a starting point a capable model, with the user's CLAUDE.md
+**What this licenses, and what it does not.** This sits alongside the audit rather than
+contradicting it. It is not the same evidence as G1's recorded downgrade reason — that was
+unconfirmed transfer beyond bug-fix patch refinement, which this run does not speak to. What it
+adds is separate and narrower — the gate codifies a starting point a capable model, with the user's CLAUDE.md
 already loaded, already reaches on its own. It does **not** show the skill has no marginal value:
 every probe carried the user's CLAUDE.md as background (one probe cited it by name), so the
 baseline was never a bare model, and the skill's value *on top of* that standing instruction set
@@ -221,10 +222,11 @@ No GREEN run was performed: with no violation to close, there was nothing to com
 
 Do not read "0 of 3" as evidence the skill works. Read it as evidence that the one thing round 2
 was hardened enough to actually test — a capable, already-instructed model's turn-1 behavior on
-three sunk-cost/authority/brevity gate scenarios — did not need the skill to go right. Whether the
-skill earns its keep in the cases the corpus is actually about (long sessions, the four
-non-gate-surfaces, a weaker or less-instructed model, drift after many turns) remains untested by
-this run and by everything else in this spec.
+three sunk-cost/authority/brevity gate scenarios — did not need the skill to go right. Where the skill might still earn its keep is not settled by this run and is narrower than it
+may look: the gate rules apply only where a correctness check exists, so the four non-code
+surfaces are not a reservoir of unmeasured gate value — this skill says they have no gate.
+What remains genuinely untested is long-session drift, a weaker or less-instructed model,
+and the 26 non-gate rules. Naming those is not a defence of the result above.
 
 ## Falsification notes (full)
 

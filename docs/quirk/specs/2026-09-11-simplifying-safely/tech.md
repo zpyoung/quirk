@@ -147,8 +147,9 @@ counts are for the audit only. logic.md and the companion may carry it; the hub 
 
 ### CONTRACT: the do-not-cite blocklist (`M1`)
 
-Inline in `SKILL.md`, never in the companion — its job is intercepting a citation reflex before
-anyone opens a link ([logic.md § Key decisions](logic.md#key-decisions-and-rationale)). All seven
+Inline in `SKILL.md`, never relocated to the companion — its job is intercepting a citation
+reflex before anyone opens a link, which only works where the agent already is. The companion's
+per-rule evidence entry for `M1` is not a second blocklist and is not barred by this ([logic.md § Key decisions](logic.md#key-decisions-and-rationale)). All seven
 entries from the audit record's `M1`, each phrased as a ban without restating the banned number.
 The test pins these literal anchors:
 

@@ -9,6 +9,7 @@ skill.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -99,6 +100,51 @@ SECTION_ORDER_MARKERS = [
     "## Integration",
     "## Links out",
 ]
+
+
+AUDIT_JSON = (
+    REPO_ROOT / "docs" / "quirk" / "specs" / "2026-09-11-simplifying-safely" / "audited-ruleset.json"
+)
+
+# Shipped ids are a renumber of the audit's ids; the audit reused S1/S2 for two rules each and
+# overloaded D1/D2/D4 across tiers. This map is what lets the tests bind the shipped artifact to
+# its frozen source instead of to another constant in this file.
+AUDIT_TO_SHIPPED = {
+    "G1": "G1", "G2": "G2", "G3": "G3", "G4": "G4",
+    "D1-coevolution": "D1", "D2-pruning-executed": "D2", "D3-retrospective-only": "D3",
+    "S1(code)": "C1", "S5(code)": "C2", "S2(code)": "C3", "S6(code)": "C4",
+    "S7(code)": "C5", "D4-blocklist-metrics": "C6",
+    "D1(agentdocs)": "A1", "D2(agentdocs)": "A2", "D4(agentdocs)": "A3", "D5(agentdocs)": "A4",
+    "S1(specs)": "S1", "S2(specs)": "S2", "S3(specs)": "S3",
+    "HD1": "H1", "HD2": "H2", "HD3": "H3", "HD4": "H4",
+    "P1B-1(chat)": "V1", "P1B-2(chat)": "V2",
+    "M1": "M1", "M2": "M2", "M3": "M3", "M4": "M4", "M5": "M5", "M6": "M6",
+}
+
+
+def _audit_rules():
+    """Shipped id -> (status, reviewer_test_holds), read from the frozen audit record."""
+    data = json.loads(AUDIT_JSON.read_text(encoding="utf-8"))
+    out = {}
+    for rule in data["rules"]:
+        shipped = AUDIT_TO_SHIPPED[rule["id"]]
+        out[shipped] = (rule["status"], rule.get("reviewer_test_holds"))
+    return out
+
+
+def _rows_by_section(body: str):
+    """Section heading -> [(id, rule, tag)] for every rule table, preserving which tier a row is in."""
+    sections = {}
+    current = None
+    for line in body.splitlines():
+        if line.startswith("## "):
+            current = line[3:].strip()
+            sections.setdefault(current, [])
+            continue
+        match = re.match(r"^\|\s*([A-Z]\d)\s*\|\s*(.+?)\s*\|\s*([a-z][a-z ·]*)\s*\|$", line)
+        if match and current is not None:
+            sections[current].append((match.group(1), match.group(2), match.group(3).strip()))
+    return sections
 
 
 def _read_skill() -> str:
@@ -222,16 +268,25 @@ def test_all_32_shipped_ids_present() -> None:
 
 def test_shipped_id_tier_counts() -> None:
     """Test 4b: per-tier counts are 7/6/4/3/4/2/6 = 32, and each tier's table rows match"""
-    assert [len(ids) for ids in SHIPPED_TIERS.values()] == EXPECTED_TIER_COUNTS
-    assert len(ALL_SHIPPED_IDS) == 32, f"expected 32 shipped ids, constant has {len(ALL_SHIPPED_IDS)}"
-
     body = _read_skill()
-    rows = _table_rows(body)
-    row_ids = {row[0] for row in rows}
+    sections = _rows_by_section(body)
+    # Bind ids to the SECTION they appear under. A global id set would pass even if all 32 rows
+    # were dumped under one heading, which is precisely what the surface tiering forbids.
+    seen = {}
+    for heading, rows in sections.items():
+        for id_, _, _ in rows:
+            assert id_ not in seen, f"{id_} appears under both {seen[id_]!r} and {heading!r}"
+            seen[id_] = heading
+    assert set(seen) == set(ALL_SHIPPED_IDS), (
+        f"table rows {sorted(set(seen) ^ set(ALL_SHIPPED_IDS))} differ from the 32 shipped ids"
+    )
     for tier_name, ids in SHIPPED_TIERS.items():
-        present = [id_ for id_ in ids if id_ in row_ids]
-        assert len(present) == len(ids), (
-            f"tier {tier_name!r} expected {len(ids)} table rows, found {len(present)} of {ids}"
+        headings = {seen[id_] for id_ in ids}
+        assert len(headings) == 1, f"tier {tier_name!r} is split across headings {sorted(headings)}"
+        heading = headings.pop()
+        under = {id_ for id_, h in seen.items() if h == heading}
+        assert under == set(ids), (
+            f"tier {tier_name!r} contains {sorted(under)}, expected exactly {sorted(ids)}"
         )
 
 
@@ -277,7 +332,9 @@ def test_falsification_lines_present_and_keyed_by_id() -> None:
     """Test 6: 15 falsification lines (14 precautionary + C6), each keyed by a shipped id.
 
     tech.md's content source copies audited-ruleset.json's trailing
-    "Falsification: ..." sentence verbatim per rule.
+    Condensed to one line per rule and keyed by shipped id -- NOT the JSON's sentence
+    verbatim, which is what the source field holds. This pins count and coverage; the
+    companion holds the full-length notes.
     """
     body = _read_skill()
     # The notes ship as a bulleted list under their own heading, one line per rule keyed by
@@ -311,8 +368,17 @@ def test_falsification_lines_present_and_keyed_by_id() -> None:
 def test_blocklist_anchors_present_verbatim() -> None:
     """Test 7: all seven do-not-cite blocklist anchors appear verbatim in SKILL.md"""
     body = _read_skill()
-    missing = [anchor for anchor in BLOCKLIST_ANCHORS if anchor not in body]
-    assert not missing, f"blocklist anchors missing from SKILL.md: {missing}"
+    section = body.split("## Do-not-cite blocklist", 1)
+    assert len(section) == 2, "no '## Do-not-cite blocklist' section"
+    section = section[1].split("\n## ", 1)[0]
+    entries = [ln for ln in section.splitlines() if ln.strip().startswith("- ")]
+    assert len(entries) == len(BLOCKLIST_ANCHORS), (
+        f"expected {len(BLOCKLIST_ANCHORS)} blocklist entries, found {len(entries)}"
+    )
+    # Anchored to the entries, not the whole file: a bare word-search would pass even with all
+    # seven prohibitions deleted and an unrelated sentence containing those words left behind.
+    missing = [a for a in BLOCKLIST_ANCHORS if not any(a in e for e in entries)]
+    assert not missing, f"blocklist entries missing these claims: {missing}"
 
 
 def test_no_magnitudes_regex_finds_no_match() -> None:
@@ -367,10 +433,15 @@ def test_m6_subagent_gate_restatement_fence_present() -> None:
     # has never loaded this skill, so a bare "G1" is unresolvable there -- a fence that names
     # the ids instead of stating the requirements would satisfy a token check and still be
     # useless at the only moment it is used.
+    # Each pattern must bind the REQUIREMENT, not just a keyword. Loose alternations let a
+    # fence like "A correctness check may decide deletion. Addition." satisfy all three while
+    # requiring nothing -- which is what an earlier version of this test accepted.
     requirements = (
-        r"correctness check|test suite",          # G1: the check runs against the result
-        r"addition|deletion",                     # G2: same treatment both directions
-        r"decide|decides|pass or fail",           # G3: only that check decides
+        r"run\b[^.]*\b(correctness check|test suite)|"
+        r"(correctness check|test suite)[^.]*\bagainst the result",   # G1: run it on the result
+        r"(addition|deletion)s?[^.]*\b(addition|deletion)",           # G2: both named together
+        r"only[^.]*\b(check|result)[^.]*\bdecide|"
+        r"\bdecide[^.]*\bpass or fail",                               # G3: only the check decides
     )
     matching = [
         fence for fence in fences
@@ -387,7 +458,7 @@ def test_links_are_relative_never_at_prefixed() -> None:
     body = _read_skill()
     assert "[evidence-and-limits.md](evidence-and-limits.md)" in body, "missing link to evidence-and-limits.md"
     assert "@evidence-and-limits.md" not in body, "evidence-and-limits.md must not be force-loaded with @-syntax"
-    assert not re.search(r"@[\w-]+\.md\b", body), "no reference file may be force-loaded with @-syntax"
+    assert not re.search(r"@[\w./-]+\.md\b", body), "no reference file may be force-loaded with @-syntax"
 
 
 def test_evidence_and_limits_file_exists_and_nonempty() -> None:
@@ -410,3 +481,29 @@ def test_readme_skill_count_matches_skill_directory() -> None:
     assert int(match.group(1)) == len(skill_dirs), (
         f"README claims {match.group(1)} skills, found {len(skill_dirs)} skills/*/SKILL.md directories"
     )
+
+
+def test_per_rule_status_matches_the_audit_record() -> None:
+    """Per-rule tag fidelity: aggregate counts alone would let two rules swap tags and still pass."""
+    body = _read_skill()
+    audit = _audit_rules()
+    mismatches = []
+    for id_, _, tag in _table_rows(body):
+        base = tag.split("·")[0].strip()
+        expected = audit[id_][0]
+        if base != expected:
+            mismatches.append(f"{id_}: SKILL.md says {base!r}, audit says {expected!r}")
+    assert not mismatches, "tag drift from the frozen audit record: " + "; ".join(mismatches)
+
+
+def test_diagnosis_markers_match_reviewer_test_holds() -> None:
+    """A rule carries the diagnosis marker iff the audit recorded reviewer_test_holds false."""
+    body = _read_skill()
+    audit = _audit_rules()
+    wrong = []
+    for id_, _, tag in _table_rows(body):
+        marked = "diagnosis" in tag
+        holds = audit[id_][1]
+        if marked != (holds is False):
+            wrong.append(f"{id_}: marker={marked}, audit reviewer_test_holds={holds}")
+    assert not wrong, "diagnosis markers disagree with the audit record: " + "; ".join(wrong)
