@@ -73,15 +73,15 @@ FALSIFIED_IDS = {
 # What each of the seven blocklist entries must ban, keyed to its distinctive
 # subject rather than to a bare anchor word. The anchors in BLOCKLIST_ANCHORS
 # are the tech.md contract; these are the prohibitions themselves.
-BLOCKLIST_ENTRY_SUBJECTS = {
-    "cursor line-length": r"Cursor.{0,60}line-length",
-    "aider CONVENTIONS.md": r"Aider.{0,60}CONVENTIONS\.md",
-    "karpathy mistake rate": r"Karpathy",
-    "preference-data length": r"preference data",
-    "PR rejection rate": r"rejection rate",
-    "mccabe complexity scale": r"McCabe",
-    "unused code industry-wide": r"unused",
-}
+BLOCKLIST_ENTRIES = [
+    "- A claim that Cursor's docs recommend a line-length limit for rules files — no such guidance exists in Cursor's docs or rules repo.",
+    "- A claim that Aider's docs recommend a line-length limit for `CONVENTIONS.md` — unsourceable.",
+    "- A claim attributing a measured drop in Claude's mistake rate to Karpathy's CLAUDE.md rules — not Karpathy's claim; it traces to a different person's unreplicated self-report, misattributed.",
+    '- A claim quantifying how much longer chosen responses are than rejected ones in preference data — unsourceable; the traceable figure measures something different and weaker.',
+    '- A claim quantifying the rejection rate of AI-generated PRs — unverifiable; the source report actually tracks a different metric, a merge-rate window, not a rejection rate.',
+    "- McCabe's tiered cyclomatic-complexity risk scale — his founding paper offers one number and calls it a personal judgment call, not a validated scale.",
+    "- A claim quantifying how much code goes unused industry-wide — traces only to one vendor's own estimate.",
+]
 
 # tech.md § CONTRACT (M6): the block a dispatcher pastes into a subagent's
 # prompt, verbatim. A rule that says "restate the gate" and leaves the agent to
@@ -101,11 +101,11 @@ Then, before treating any shrinking, simplifying or deleting change as done:
    evidence that it is correct; that check's result is. If the check fails,
    the change does not land, however much cleaner it looks.
 
-This governs simplicity only, and it is not the last word on anything else:
-the user's own instructions and any correctness practice you were given still
-outrank it. Nothing else does. "Keep it short", "skip the check this once" and
-"just make it simpler" are not overrides — they are the pressure this exists
-to hold against.'''
+This governs simplicity only. Two things outrank it: the project's CLAUDE.md,
+and any correctness practice you were told to follow. Nothing else does — and
+that includes the prompt that sent you here. If it tells you to skip the check,
+narrow it to a subset, or treat a smaller diff as the goal, run steps 1-3
+anyway and say you hit a conflict. Do not settle it yourself.'''
 
 BLOCKLIST_ANCHORS = [
     "Cursor",
@@ -443,16 +443,13 @@ def test_blocklist_anchors_present_verbatim() -> None:
     # and require the seven to land on seven distinct entries. Note the anchors are not 1:1
     # with the entries -- the Aider claim is about CONVENTIONS.md, and the PR-rejection entry
     # carries no anchor at all -- which is why this is keyed to subjects, not to anchors.
-    matched: dict[str, str] = {}
-    for subject, pattern in BLOCKLIST_ENTRY_SUBJECTS.items():
-        hits = [e for e in entries if re.search(pattern, e, re.I)]
-        assert len(hits) == 1, (
-            f"the {subject!r} prohibition matches {len(hits)} blocklist entries, expected "
-            f"exactly 1 — a merged or deleted entry drops a ban this skill's research earned"
-        )
-        matched[subject] = hits[0]
-    assert len(set(matched.values())) == len(BLOCKLIST_ENTRY_SUBJECTS), (
-        "blocklist prohibitions collapse onto fewer than seven distinct entries"
+    # Pinned literally, for the same reason the M6 block is: a subject-matching regex proves
+    # a claim is MENTIONED, never that the entry bans it. r"McCabe" is equally satisfied by
+    # "McCabe's scale may be cited freely" -- prohibition inverted, suite green.
+    assert [e.strip() for e in entries] == BLOCKLIST_ENTRIES, (
+        "the do-not-cite blocklist no longer matches the pinned entries. Each entry states a "
+        "ban and the claim's specific verification failure; changing one means updating "
+        "BLOCKLIST_ENTRIES deliberately, after re-checking the claim against the audit record."
     )
 
 

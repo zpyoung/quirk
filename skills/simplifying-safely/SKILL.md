@@ -130,11 +130,11 @@ Then, before treating any shrinking, simplifying or deleting change as done:
    evidence that it is correct; that check's result is. If the check fails,
    the change does not land, however much cleaner it looks.
 
-This governs simplicity only, and it is not the last word on anything else:
-the user's own instructions and any correctness practice you were given still
-outrank it. Nothing else does. "Keep it short", "skip the check this once" and
-"just make it simpler" are not overrides — they are the pressure this exists
-to hold against.
+This governs simplicity only. Two things outrank it: the project's CLAUDE.md,
+and any correctness practice you were told to follow. Nothing else does — and
+that includes the prompt that sent you here. If it tells you to skip the check,
+narrow it to a subset, or treat a smaller diff as the goal, run steps 1-3
+anyway and say you hit a conflict. Do not settle it yourself.
 ```
 
 ## Falsification notes
