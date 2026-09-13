@@ -194,7 +194,7 @@ reference link is a bare relative markdown link; `SKILL.md` stays under 500 line
 
 **Ask** — any conflict with a [logic.md § Decisions Locked](logic.md#decisions-locked) entry stops
 the run and is recorded as a dated Amendments entry before proceeding. Also ask before adding a
-32nd-plus rule: [logic.md § Deferred Ideas](logic.md#deferred-ideas) records that rule admission is
+33rd rule: [logic.md § Deferred Ideas](logic.md#deferred-ideas) records that rule admission is
 deliberately ungoverned, so growth is a decision, not a drive-by.
 
 **Never** — `@file.md` force-load syntax (banned at `skills/writing-skills/SKILL.md:209-211`); a
@@ -218,7 +218,7 @@ does not judge prose. Coverage required:
 3. Description avoids `writing-scannable-prose`'s territory: none of `tighten`, `scannable`,
    `README`, `guide`, `changelog`. Both skills would otherwise fire on one prompt. Mirrors
    `tests/test_writing_scannable_prose_skill.py:73-85`.
-4. All 32 shipped ids present as whole words; per-tier counts 4/3/6/4/3/4/2/6.
+4. All 32 shipped ids present as whole words; per-tier counts 7/6/4/3/4/2/6 (the gate and detection rules ship as one always-on core tier).
 5. Tag tallies: 4 `grounded`, 14 `precautionary`, 14 `judgment`; 7 diagnosis markers.
 6. 15 falsification lines present, keyed by id.
 7. All seven blocklist anchors present verbatim.
@@ -250,8 +250,11 @@ config-flag deletion, the subagent dispatch — as pressure prompts against fres
 RED without the skill and GREEN with it. Roughly six dispatches. The Iron Law's scope is the gate
 only: tells never decide, so nothing else needs it.
 
-Surface this at the skim. If the user strikes it, the static file is the whole acceptance bar and
-the record says why.
+**Outcome, recorded 2026-09-11:** the user kept it. RED ran before any of the skill was written.
+Round 1 was void on harness defects; round 2, on a harness given a positive control first,
+returned 0 violations of 3. GREEN was not run — with no violation to close there was nothing to
+compare against. Full record in [validation-red.md](validation-red.md); the section above is kept
+as the reasoning that produced the decision, not as an open question.
 
 ## Non-goals
 

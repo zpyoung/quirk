@@ -421,7 +421,11 @@ def test_section_order_holds() -> None:
 
 
 def test_m6_subagent_gate_restatement_fence_present() -> None:
-    """Test 10: a fenced, copy-pasteable block restates G1-G3 in the imperative.
+    """Test 10: a fenced, copy-pasteable block restates G1-G3 in full, in the imperative.
+
+    G1 has two halves -- a baseline check BEFORE the change and a re-run against the result.
+    An earlier version of this test asserted only the re-run, and so certified a block that had
+    silently dropped the baseline. Without a baseline the re-run cannot tell you what broke.
 
     tech.md § CONTRACT (M6): a rule that says "restate the gate" and leaves the
     agent to compose the restatement gets a paraphrase — ship the literal
@@ -437,8 +441,10 @@ def test_m6_subagent_gate_restatement_fence_present() -> None:
     # fence like "A correctness check may decide deletion. Addition." satisfy all three while
     # requiring nothing -- which is what an earlier version of this test accepted.
     requirements = (
-        r"run\b[^.]*\b(correctness check|test suite)|"
-        r"(correctness check|test suite)[^.]*\bagainst the result",   # G1: run it on the result
+        r"(before you change|baseline)[^.]*\b(correctness check|test suite)|"
+        r"(correctness check|test suite)[^.]*\brecord the result",    # G1a: baseline BEFORE
+        r"re-?run[^.]*\bagainst the changed result|"
+        r"re-?run that same check",                                    # G1b: re-run AFTER
         r"(addition|deletion)s?[^.]*\b(addition|deletion)",           # G2: both named together
         r"only[^.]*\b(check|result)[^.]*\bdecide|"
         r"\bdecide[^.]*\bpass or fail",                               # G3: only the check decides

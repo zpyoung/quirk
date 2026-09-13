@@ -35,7 +35,7 @@ Applies every time this skill fires, regardless of which surface is in play. Eac
 |---|---|---|
 | G1 | Sequence any step that shrinks, simplifies, deletes, or otherwise minimizes code strictly after a correctness check, and re-run that check against the result before treating the step as done. A simplification that hasn't been re-validated isn't finished, however small or clean it looks. | precautionary |
 | G2 | Apply the identical correctness re-check to additions and deletions alike. Neither direction carries a special burden — growing the code and shrinking it both stand or fall on the same post-change check. | judgment |
-| G3 | Only the correctness re-check may block, accept, or reject a change. A simplicity signal (shorter, fewer files, fewer branches) may inform which passing candidate to prefer, but it never decides pass or fail by itself. | precautionary |
+| G3 | No simplicity signal may block, accept, or reject a change — only the correctness re-check may do that on this skill's authority. A signal (shorter, fewer files, fewer branches) may inform which passing candidate to prefer, but it never decides pass or fail by itself. This bounds what *simplicity* can decide; it does not displace a user instruction or a correctness skill (`M2`), and off code, where no such check exists, the decision goes to human judgment rather than to a simplicity signal (`G4`, `D3`). | precautionary |
 | G4 | For every surface but code — specs, agent-facing docs, human-facing docs, and conversational output — no evidenced check plays the role a test suite plays for code. State that once, here; don't invent a substitute (a doc linter, a length cap, a self-rated clarity or simplicity score) to stand in for one that doesn't exist. | grounded |
 | D1 | For duplicated code, ask whether the two regions would need to change together to stay correct — not whether the text looks similar. Duplication forced by a shared requirement is worth flagging; duplication between deliberately independent regions is often fine on its own. | precautionary |
 | D2 | Before keeping or cutting a standing rule, don't decide by imagining what would happen without it. Remove it, run the cases it exists to govern, and observe. Keep it only if the mistake it targets reappears; cut it if the task still goes fine. | judgment |
@@ -117,11 +117,15 @@ The `M1`–`M6` group below isn't tied to a surface — it governs this skill's 
 Paste this into a dispatched subagent's prompt when it's the one applying the fix:
 
 ```
-Before treating any shrinking, simplifying, or deleting change as complete:
-1. Run the correctness check (test suite or equivalent) against the result.
-2. Apply that check the same way you would to an addition — no extra burden
-   on a deletion, no exemption for one either.
-3. Let only that check's result decide pass or fail. A change that looks
+Before you change anything:
+1. Run the correctness check (test suite or equivalent) and record the result.
+   Without that baseline you cannot tell what your change broke.
+
+Then, before treating any shrinking, simplifying or deleting change as complete:
+2. Re-run that same check against the changed result.
+3. Apply it the same way you would to an addition — no extra burden on a
+   deletion, and no exemption for one either.
+4. Let only that check decide whether the change stands. A change that looks
    simpler is not evidence that it is correct.
 ```
 

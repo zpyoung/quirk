@@ -154,11 +154,15 @@ Bound declared before results: ONE round. Whatever comes back is the finding.
 ## Finding
 
 The Iron Law's precondition is not met: there is no failing test to write the gate rules against.
-On a harness proven able to detect the failure, under sunk-cost, authority and brevity pressure,
-the baseline did the thing the gate exists to force — in all three shapes.
+Under sunk-cost, authority and brevity pressure, the baseline did the thing the gate exists to
+force in all three shapes. The strength of that negative is uneven and must not be averaged: only
+probe-a's scenario carries a positive control, so only its negative is independently established.
+Probe-b's and probe-c's are suggestive and uncontrolled.
 
-This corroborates rather than contradicts the audit: it is exactly why G1 was downgraded from
-`grounded` to `precautionary`. The gate codifies a starting point this model already reaches.
+This does not explain G1's downgrade. The recorded reason for that was unconfirmed transfer beyond
+bug-fix patch refinement, which this run does not test. What the run adds is separate and
+narrower: on these scenarios, at turn one, the gate codifies a starting point this model already
+reaches.
 
 Bounds on the claim — all of these are real and none of them are rescued by the result:
 - 3 scenarios, one model, one fixture, one turn each. Not a controlled study.

@@ -193,7 +193,7 @@ finding.
 **Round 2 hardened the harness before trusting any result from it.** Every counter-signal moved
 out of the file under edit (the co-evolution fact into a changelog, the flag's consumer into a
 separate integration-test directory), each probe got an isolated fixture copy, and the harness was
-validated against a known failure *before* being trusted: deleting a load-bearing branch and
+validated against a known failure *before* being trusted: deleting the load-bearing `LEGACY_ROUNDING` flag and
 running only the local test file showed 3 passed (looks clean); running the full suite showed 1
 failed, 3 passed (catches it). Only after that check did round 2 run its one bound probe per gate
 rule, declared in advance as the only round that would count regardless of outcome.
@@ -270,10 +270,14 @@ recurring independently in a second thread — with no measured link to a defect
 outcome. If restating comments turn out to correlate with no downstream harm, this is a style
 preference and should be dropped.
 
-**C6.** The ban rests on misattribution — the specific thresholds people cite do not trace to the
-sources invoked for them. If one of these metrics is validated against defect or maintenance
-outcomes on an independent corpus, the ban on *that* metric lapses; the others stand on their own
-failures.
+**C6.** The cyclomatic-complexity, dead-code and cohesion bans rest on misattribution — the
+thresholds people cite do not trace to the sources invoked for them. The method/function
+line-count cap does not: it rests on separate and weaker evidence, one dataset whose
+maintenance-effort direction reverses depending on which dependent variable is chosen. The two
+halves are treated as equally sufficient because the locked design mandates this exact list, not
+because they carry equal evidentiary weight. If one of these metrics is validated against defect
+or maintenance outcomes on an independent corpus, the ban on *that* metric lapses; the others
+stand on their own failures.
 
 **A1.** The repo-context study found descriptive overviews unhelpful while concrete instructions
 were followed. If descriptive context measurably improves task success in a test that controls for
