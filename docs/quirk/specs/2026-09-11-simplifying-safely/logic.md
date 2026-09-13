@@ -360,16 +360,22 @@ sign-off is on what shipped, not on what was approved.
    elsewhere says does not exist. The shipped rule scopes the pasted block to code and hands the
    non-code case to `G4` plus `G3` — no check to paste, no simplicity signal standing in for one,
    the subagent reports rather than decides. That branch is derived from two rules rather than
-   evidenced by the audit, and the companion says so.
+   evidenced by the audit, and the companion says so. The pasted block's precedence clause was
+   corrected a second time: it had said an instruction from whoever dispatched the subagent
+   outranks the gate, which let any dispatcher waive the gate the block exists to install. It now
+   grants override to the user's own instructions and correctness practice only, matching `M2`.
 8. **2026-09-13 — `G3` bounds the fix gate, not detection.** Its "no simplicity signal may block,
    accept, or reject" read as absolute, which contradicted `M2`'s precedence order and, taken
    literally, disarmed `D1` and `D2` — the two detection tests this document calls the heart of
    Part 1. The shipped rule states the boundary: signals do not decide pass or fail; the two tests
    still yield their verdicts.
-9. **2026-09-13 — `M1` exempts refutation explicitly.** As worded, a rule forbidding any citation
-   of the blocklisted claims forbade the blocklist itself, which names each claim in order to block
-   it. The shipped rule says naming a claim to refute it is not citing it, and blocks a claim under
-   any wording or number rather than only the form first surfaced.
+9. **2026-09-13 — `M1` exempts refutation, and only refutation.** As worded, a rule forbidding any
+   citation of the blocklisted claims forbade the blocklist itself, which names each claim in order
+   to block it. The first fix carved that out with "as if it were true", which was too wide — it
+   also permitted hedged repetition ("some sources report X"), while the audit bans any match
+   regardless of paraphrase. The shipped rule carves out refutation by name, blocks a claim under
+   any wording or number rather than only the form first surfaced, and states that a hedge is not
+   an exemption.
 10. **2026-09-13 — the gate rules were measured, and the measurement did not find what the spec
     predicted.** Three pressure probes against a baseline with no skill loaded produced no
     violation. Two of those verdicts bind the rules as shipped; the third was scored against a
