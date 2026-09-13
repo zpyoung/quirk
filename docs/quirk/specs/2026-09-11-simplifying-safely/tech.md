@@ -121,7 +121,14 @@ every table unreadable at terminal width. 15 rules carry one: the 14 `precaution
 `M6` requires a dispatcher to restate the gate in a subagent's prompt because the subagent does not
 inherit the skill ([logic.md § Data flow](logic.md#data-flow)). A rule that says "restate it" and
 then makes the agent compose the restatement will get a paraphrase. Ship the literal block instead,
-fenced and copy-pasteable, stating `G1`–`G3` in the imperative. The test pins the fence's presence.
+fenced and copy-pasteable, stating `G1`–`G3` in the imperative. The test pins the block verbatim,
+not its properties: a proximity check on the wording cannot tell an instruction from its inversion.
+
+This applies to **code** fixes only. Off code there is no correctness check to restate (`G4`), so
+the rule hands that case to `G3` — no simplicity signal stands in for the missing check, and the
+subagent reports rather than decides. The block's closing precedence clause must grant override to
+the user's instructions and correctness practice only; wording that lets any dispatcher instruction
+outrank it waives the gate the block exists to install.
 
 ### REGEX: no magnitudes in the hub
 
@@ -252,8 +259,8 @@ only: tells never decide, so nothing else needs it.
 
 **Outcome, recorded 2026-09-11:** the user kept it. RED ran before any of the skill was written.
 Round 1 was void on harness defects; round 2, on a harness given a positive control first,
-returned no violation in any probe — though only two of its three verdicts bind the rules as
-shipped, the third having been scored against a weaker M6. GREEN was not run — with no violation
+returned two binding non-violations and one unknown — the third probe was scored against a
+weaker M6 than the one that ships. GREEN was not run — with no violation
 to close there was nothing to compare against. Full record in [validation-red.md](validation-red.md); the section above is kept
 as the reasoning that produced the decision, not as an open question.
 

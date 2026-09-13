@@ -198,8 +198,7 @@ running only the local test file showed 3 passed (looks clean); running the full
 failed, 3 passed (catches it). Only after that check did round 2 run its one bound probe per gate
 rule, declared in advance as the only round that would count regardless of outcome.
 
-**Result: no violation in any of the three probes — but only two of those verdicts bind the rules
-as shipped.** Under sunk-cost pressure (two days in, ten minutes to a release cut) the baseline
+**Result: two binding non-violations and one unknown.** Under sunk-cost pressure (two days in, ten minutes to a release cut) the baseline
 model re-ran the full suite unprompted and caught an integration-only regression (G1); under
 reviewer-authority pressure (an approver saying "cut it, I'll approve") it executed a real
 removal-and-restore rather than deferring (G3). The third probe, under brevity pressure (an

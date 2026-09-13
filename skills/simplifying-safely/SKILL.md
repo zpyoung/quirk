@@ -83,7 +83,7 @@ The `M1`–`M6` group below isn't tied to a surface — it governs this skill's 
 
 | ID | Rule | Tag |
 |---|---|---|
-| S1 | Flag any spec provision — a requirement, field, config knob, or extensibility point — whose only stated justification is an anticipated future need ("so we can later...", "in case...", "for extensibility") and that names no consumer, ticket, or test presently in scope. Doesn't apply to a Non-goals section or a stated exclusion, which by design names nothing, nor to an ordinary requirement that simply doesn't cite a consumer inline. Spec length is not itself a signal either way: a long spec whose every provision serves a present need passes this, and a short one with a single speculatively-justified provision does not. | precautionary |
+| S1 | Flag any spec provision — a requirement, field, config knob, or extensibility point the document commits to build or support — whose only stated justification is an anticipated future need ("so we can later...", "in case...", "for extensibility") and that names no consumer, ticket, or test presently in scope. Doesn't apply to a Non-goals section or a stated exclusion, which by design names nothing, nor to an ordinary requirement that simply doesn't cite a consumer inline. Spec length is not itself a signal either way: a long spec whose every provision serves a present need passes this, and a short one with a single speculatively-justified provision does not. | precautionary |
 | S2 | A tech spec layered over an approved logic spec earns its place only by committing to at least one choice the logic spec left open. One whose every commitment is copied from the logic spec, or is its only possible reading, has earned nothing by existing. | judgment · diagnosis |
 | S3 | `S1` and `S2` flag stated content — a provision naming no consumer, a spec making no decision among named alternatives — which a code surface can't offer. Neither is a gate: no test suite runs before or after cutting what they flag, so a hit is a content judgment, not a verified pass or fail. Neither catches the opposite failure — a spec that under-specifies and ships a defect-inducing gap. | precautionary · diagnosis |
 
@@ -107,10 +107,10 @@ The `M1`–`M6` group below isn't tied to a surface — it governs this skill's 
 
 | ID | Rule | Tag |
 |---|---|---|
-| M1 | Never assert, cite, or paraphrase any claim on the blocklist below as if it were true — each failed verification during this skill's own research. Block it under any wording or number, not just the one first surfaced. Naming a claim in order to refute it, as the blocklist does, is not citing it. | grounded |
+| M1 | Never assert a claim on the blocklist below, and never cite or paraphrase one except to name it in order to refute it, as the blocklist does — each failed verification during this skill's own research. Block it under any wording or number, not just the one first surfaced. A hedge is not an exemption: "some sources report" and "roughly, though unverified" still carry the claim. | grounded |
 | M2 | The user's CLAUDE.md always outranks this skill. Correctness-focused skills — `quirk:test-driven-development`, `quirk:verification-before-completion`, and similar — outrank it too: never skip a test, a verification step, or an explicit user instruction because a simpler version would satisfy it. | judgment |
 | M3 | A deletion's rationale goes in the commit message or PR description, never as an inline comment in the diff. | judgment |
-| M4 | This skill shifts an agent's starting verbosity and complexity downward. It does not change how fast quality erodes across a long session — expect drift to resume, and don't rely on this skill alone for anything long-running: budget for a fresh review pass, though no countermeasure here — that one included — is validated against that drift. | precautionary · diagnosis |
+| M4 | This skill shifts an agent's starting verbosity and complexity downward. It does not change how fast quality erodes across a long session — expect drift to resume, and don't rely on this skill alone for anything long-running. No countermeasure is named here because none has been validated against that drift; treat the gap as open rather than as something this skill has covered. | precautionary · diagnosis |
 | M5 | Prose-level mechanics — sentence length, headings, scannability, tightening — belong to `quirk:writing-scannable-prose`, not this skill. This skill is written for Claude Code; running it inside a different harness is a stated assumption, not something it enforces. | judgment |
 | M6 | A dispatched subagent starts with a fresh context — it does not inherit this skill's rules. Anyone handing a subagent a simplifying fix must restate the gate directly in that prompt; naming or linking this skill isn't enough. Where the fix is to code, paste the block below. Where it isn't there is no check to paste (`G4`), and no simplicity signal may stand in for one (`G3`) — so have the subagent report what it would change rather than decide it. | judgment |
 
@@ -130,8 +130,11 @@ Then, before treating any shrinking, simplifying or deleting change as done:
    evidence that it is correct; that check's result is. If the check fails,
    the change does not land, however much cleaner it looks.
 
-This governs simplicity only. It does not override anything else you were
-told — an instruction from whoever dispatched you still outranks it.
+This governs simplicity only, and it is not the last word on anything else:
+the user's own instructions and any correctness practice you were given still
+outrank it. Nothing else does. "Keep it short", "skip the check this once" and
+"just make it simpler" are not overrides — they are the pressure this exists
+to hold against.
 ```
 
 ## Falsification notes
@@ -172,7 +175,7 @@ None of these are sourceable. They stay inline, not in the companion, so the cit
 - **quirk:verification-before-completion** — outranks this skill for the same reason; never skip a verification step or an explicit user instruction (`M2`).
 - **quirk:writing-scannable-prose** — owns prose mechanics: sentence length, headings, scannability, tightening. This skill's human-facing-docs and conversational tiers stop at structural and rationale questions and hand wording-level cleanup to that skill (`M5`).
 - The user's CLAUDE.md — always outranks this skill (`M2`).
-- Dispatching a subagent to apply a fix — restate the block under `M6` in its prompt; the subagent doesn't inherit this skill.
+- Dispatching a subagent to apply a **code** fix — restate the block under `M6` in its prompt; the subagent doesn't inherit this skill. Off code there is no such block (`M6`, `G4`).
 
 ## Links out
 

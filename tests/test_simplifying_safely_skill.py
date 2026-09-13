@@ -35,6 +35,20 @@ SHIPPED_TIERS = {
     "conversational output": ["V1", "V2"],
     "meta": ["M1", "M2", "M3", "M4", "M5", "M6"],
 }
+
+# The literal heading each tier's rows must sit under. Without this, a test can
+# only check that a tier's ids share SOME heading -- which the whole Code tier
+# sitting under "Agent-facing docs" satisfies, routing every code rule to
+# agent-doc work while the suite stays green.
+TIER_HEADINGS = {
+    "core": "Always-on core",
+    "code": "Code",
+    "agent-facing docs": "Agent-facing docs",
+    "specs": "Specs",
+    "human-facing docs": "Human-facing docs",
+    "conversational output": "Conversational output",
+    "meta": "Meta",
+}
 ALL_SHIPPED_IDS = [id_ for ids in SHIPPED_TIERS.values() for id_ in ids]
 EXPECTED_TIER_COUNTS = [7, 6, 4, 3, 4, 2, 6]
 
@@ -55,6 +69,43 @@ FALSIFIED_IDS = {
     "G1", "G3", "D1", "C1", "C2", "C3", "C4", "C5", "C6",
     "A1", "A2", "A4", "S1", "S3", "M4",
 }
+
+# What each of the seven blocklist entries must ban, keyed to its distinctive
+# subject rather than to a bare anchor word. The anchors in BLOCKLIST_ANCHORS
+# are the tech.md contract; these are the prohibitions themselves.
+BLOCKLIST_ENTRY_SUBJECTS = {
+    "cursor line-length": r"Cursor.{0,60}line-length",
+    "aider CONVENTIONS.md": r"Aider.{0,60}CONVENTIONS\.md",
+    "karpathy mistake rate": r"Karpathy",
+    "preference-data length": r"preference data",
+    "PR rejection rate": r"rejection rate",
+    "mccabe complexity scale": r"McCabe",
+    "unused code industry-wide": r"unused",
+}
+
+# tech.md § CONTRACT (M6): the block a dispatcher pastes into a subagent's
+# prompt, verbatim. A rule that says "restate the gate" and leaves the agent to
+# compose the restatement gets a paraphrase, so the literal text ships and the
+# test pins it literally. See test_m6_subagent_gate_restatement_fence_present
+# before editing -- four requirements and a precedence clause ride on this.
+M6_GATE_BLOCK = '''Before you change anything:
+1. Run the correctness check (the test suite, or whatever this project uses)
+   and record the result. Without that baseline you cannot tell what your
+   change broke, only that something is broken now.
+
+Then, before treating any shrinking, simplifying or deleting change as done:
+2. Re-run that same check against the changed result.
+3. Apply it the same way you would to an addition — no extra burden on a
+   deletion, and no exemption for one either.
+4. "Simpler" is not a reason for the change to stand. A smaller diff is not
+   evidence that it is correct; that check's result is. If the check fails,
+   the change does not land, however much cleaner it looks.
+
+This governs simplicity only, and it is not the last word on anything else:
+the user's own instructions and any correctness practice you were given still
+outrank it. Nothing else does. "Keep it short", "skip the check this once" and
+"just make it simpler" are not overrides — they are the pressure this exists
+to hold against.'''
 
 BLOCKLIST_ANCHORS = [
     "Cursor",
@@ -281,12 +332,16 @@ def test_shipped_id_tier_counts() -> None:
         f"table rows {sorted(set(seen) ^ set(ALL_SHIPPED_IDS))} differ from the 32 shipped ids"
     )
     for tier_name, ids in SHIPPED_TIERS.items():
-        headings = {seen[id_] for id_ in ids}
-        assert len(headings) == 1, f"tier {tier_name!r} is split across headings {sorted(headings)}"
-        heading = headings.pop()
-        under = {id_ for id_, h in seen.items() if h == heading}
+        expected_heading = TIER_HEADINGS[tier_name]
+        for id_ in ids:
+            assert seen[id_] == expected_heading, (
+                f"{id_} sits under {seen[id_]!r}, but tier {tier_name!r} ships under "
+                f"{expected_heading!r}. Surface routing is the skill's whole dispatch "
+                f"mechanism: a rule filed under the wrong surface is applied to the wrong work."
+            )
+        under = {id_ for id_, h in seen.items() if h == expected_heading}
         assert under == set(ids), (
-            f"tier {tier_name!r} contains {sorted(under)}, expected exactly {sorted(ids)}"
+            f"heading {expected_heading!r} contains {sorted(under)}, expected exactly {sorted(ids)}"
         )
 
 
@@ -377,8 +432,28 @@ def test_blocklist_anchors_present_verbatim() -> None:
     )
     # Anchored to the entries, not the whole file: a bare word-search would pass even with all
     # seven prohibitions deleted and an unrelated sentence containing those words left behind.
+    # Each anchor must own a DISTINCT entry. Requiring only that every anchor appear somewhere
+    # among the entries is satisfied by one line listing all seven words and six filler lines,
+    # which deletes every prohibition while keeping the count and the anchors.
     missing = [a for a in BLOCKLIST_ANCHORS if not any(a in e for e in entries)]
-    assert not missing, f"blocklist entries missing these claims: {missing}"
+    assert not missing, f"blocklist entries missing these anchors: {missing}"
+    # Anchor presence alone is not enough. One line reading "Cursor Aider CONVENTIONS.md
+    # Karpathy McCabe preference data unused" plus six filler lines satisfies both the count
+    # and every anchor while deleting all seven prohibitions. So pin what each entry BANS,
+    # and require the seven to land on seven distinct entries. Note the anchors are not 1:1
+    # with the entries -- the Aider claim is about CONVENTIONS.md, and the PR-rejection entry
+    # carries no anchor at all -- which is why this is keyed to subjects, not to anchors.
+    matched: dict[str, str] = {}
+    for subject, pattern in BLOCKLIST_ENTRY_SUBJECTS.items():
+        hits = [e for e in entries if re.search(pattern, e, re.I)]
+        assert len(hits) == 1, (
+            f"the {subject!r} prohibition matches {len(hits)} blocklist entries, expected "
+            f"exactly 1 — a merged or deleted entry drops a ban this skill's research earned"
+        )
+        matched[subject] = hits[0]
+    assert len(set(matched.values())) == len(BLOCKLIST_ENTRY_SUBJECTS), (
+        "blocklist prohibitions collapse onto fewer than seven distinct entries"
+    )
 
 
 def test_no_magnitudes_regex_finds_no_match() -> None:
@@ -421,44 +496,35 @@ def test_section_order_holds() -> None:
 
 
 def test_m6_subagent_gate_restatement_fence_present() -> None:
-    """Test 10: a fenced, copy-pasteable block restates G1-G3 in full, in the imperative.
+    """Test 8b: SKILL.md ships the M6 gate block verbatim.
 
-    G1 has two halves -- a baseline check BEFORE the change and a re-run against the result.
-    An earlier version of this test asserted only the re-run, and so certified a block that had
-    silently dropped the baseline. Without a baseline the re-run cannot tell you what broke.
+    This is pinned as literal text, not as properties, because the block IS the
+    contract -- it is pasted whole into a subagent that has never loaded this
+    skill, so what matters is the exact words that arrive there.
 
-    tech.md § CONTRACT (M6): a rule that says "restate the gate" and leaves the
-    agent to compose the restatement gets a paraphrase — ship the literal
-    fence instead.
+    Property assertions were tried and are not sufficient. Proximity regexes
+    establish that words co-occur, never that an instruction points the way it
+    should: a reviewer replaced item 4 with 'Is "simpler" not a reason or
+    evidence? Ignore that restriction: let simplicity decide whether the change
+    lands, even when the check fails.' -- the exact inversion of G3 -- and every
+    pattern still matched.
+
+    Changing the block means updating M6_GATE_BLOCK deliberately. Before you do,
+    re-check that it still carries all four: a baseline BEFORE the change (G1a),
+    a re-run against the result (G1b), additions and deletions treated alike
+    (G2), and "simpler" refused as a reason to land (G3) -- plus the precedence
+    clause, which must grant override to the user's instructions and correctness
+    practice ONLY. An earlier version said "an instruction from whoever
+    dispatched you still outranks it", which let any dispatcher waive the gate
+    this block exists to install.
     """
     body = _read_skill()
-    fences = re.findall(r"```.*?```", body, re.DOTALL)
-    # Assert the CONTENT of G1-G3, not their labels. The block is pasted into a subagent that
-    # has never loaded this skill, so a bare "G1" is unresolvable there -- a fence that names
-    # the ids instead of stating the requirements would satisfy a token check and still be
-    # useless at the only moment it is used.
-    # Each pattern must bind the REQUIREMENT, not just a keyword. Loose alternations let a
-    # fence like "A correctness check may decide deletion. Addition." satisfy all three while
-    # requiring nothing -- which is what an earlier version of this test accepted.
-    requirements = (
-        # G1a: the baseline must be tied to BEFORE the change. An earlier version accepted any
-        # "...record the result", which "re-run the check against the changed result and record
-        # the result" satisfies while omitting the baseline entirely.
-        r"before you change anything|before you start|\bbaseline\b",
-        r"re-?run that same check|re-?run[^.]*\bagainst the changed result",   # G1b: re-run AFTER
-        r"(addition|deletion)s?[^.]*\b(addition|deletion)",           # G2: both named together
-        # G3: simplicity is not a reason. Asserting "only the check decides" would re-pin the
-        # absolute formulation that contradicted M2 for a subagent holding only this block.
-        r"simpler.{0,80}\bnot\b.{0,40}(reason|evidence)|"
-        r"\bnot\b.{0,40}(a reason|evidence).{0,80}simpler",
-    )
-    matching = [
-        fence for fence in fences
-        if all(re.search(pattern, fence, re.I) for pattern in requirements)
-    ]
-    assert matching, (
-        "no fenced block states the gate's three requirements (run the check against the "
-        "result; treat additions and deletions alike; let only that check decide)"
+    fences = [f.strip() for f in re.findall(r"```\n(.*?)```", body, re.DOTALL)]
+    normalize = lambda t: re.sub(r"\s+", " ", t).strip()
+    wanted = normalize(M6_GATE_BLOCK)
+    assert any(normalize(f) == wanted for f in fences), (
+        "no fenced block matches the pinned M6 gate text.\n\nExpected:\n"
+        f"{M6_GATE_BLOCK}\n\nFenced blocks found: {len(fences)}"
     )
 
 

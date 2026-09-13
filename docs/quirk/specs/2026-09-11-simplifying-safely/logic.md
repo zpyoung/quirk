@@ -58,8 +58,9 @@ code time; a document or a reply is whenever that artifact is authored. The core
 moment, and no rule is gated by time independently of its surface — which is what gives planning
 time and code time different rules without a second axis to carry.
 
-Where the agent dispatches a subagent to apply a fix, it restates the gate in that subagent's prompt,
-because a dispatched agent starts fresh and does not inherit the skill.
+Where the agent dispatches a subagent to apply a code fix, it restates the gate in that subagent's
+prompt, because a dispatched agent starts fresh and does not inherit the skill. Off code there is no
+gate to restate, and the subagent reports rather than decides (amendment 7).
 
 ## Key decisions and rationale
 
@@ -111,8 +112,9 @@ place of evidence and an auditor's note. Their reviewer tests were written durin
 audit.
 
 **Always-on core (7)** — `G1` sequence simplification after a correctness check and re-validate ·
-`G2` apply that check symmetrically to additions and deletions · `G3` only the correctness check may
-block; a simplicity signal may prefer among passing candidates but never decide pass/fail ·
+`G2` apply that check symmetrically to additions and deletions · `G3` a simplicity signal may prefer among
+passing candidates but never decide pass/fail; on this skill's authority the correctness re-check is
+what governs the fix gate (amendment 8) ·
 `G4` no evidenced analogue to that check exists outside code, and no substitute may be invented
 *(grounded)* ·
 `D1` the co-evolution question for duplication · `D2` the executed pruning test ·
@@ -302,7 +304,9 @@ adversarially verified. Full audit in the
 ## Glossary
 
 - **Gate** — a correctness check (typically the test suite) applied *after* a simplifying change and
-  re-validated against it. The only thing permitted to block.
+  re-validated against it. The only thing this skill's own authority permits to block a change; it
+  displaces neither a user instruction nor a correctness skill (`M2`), and it does not silence the
+  Part 1 detection tests, which still yield verdicts (amendment 8).
 - **Test** — a check that yields a verdict. Two ship: the co-evolution question and the executed
   pruning test.
 - **Tell** — a signal that prompts a closer look without deciding anything. Tells never block.
