@@ -35,7 +35,7 @@ Applies every time this skill fires, regardless of which surface is in play. Eac
 |---|---|---|
 | G1 | Sequence any step that shrinks, simplifies, deletes, or otherwise minimizes code strictly after a correctness check, and re-run that check against the result before treating the step as done. A simplification that hasn't been re-validated isn't finished, however small or clean it looks. | precautionary |
 | G2 | Apply the identical correctness re-check to additions and deletions alike. Neither direction carries a special burden — growing the code and shrinking it both stand or fall on the same post-change check. | judgment |
-| G3 | No simplicity signal may block, accept, or reject a change — only the correctness re-check may do that on this skill's authority. A signal (shorter, fewer files, fewer branches) may inform which passing candidate to prefer, but it never decides pass or fail by itself. This bounds what *simplicity* can decide; it does not displace a user instruction or a correctness skill (`M2`), and off code, where no such check exists, the decision goes to human judgment rather than to a simplicity signal (`G4`, `D3`). | precautionary |
+| G3 | No simplicity signal may block, accept, or reject a change — only the correctness re-check may do that on this skill's authority. A signal (shorter, fewer files, fewer branches) may inform which passing candidate to prefer, but it never decides pass or fail by itself. This bounds what *simplicity* can decide; it does not displace a user instruction or a correctness skill (`M2`), and off code, where no such check exists, the decision goes to human judgment rather than to a simplicity signal (`G4`, `D3`). This bounds the fix gate, not detection: `D1` and `D2` still yield their verdicts, which is what makes them the two tests. | precautionary |
 | G4 | For every surface but code — specs, agent-facing docs, human-facing docs, and conversational output — no evidenced check plays the role a test suite plays for code. State that once, here; don't invent a substitute (a doc linter, a length cap, a self-rated clarity or simplicity score) to stand in for one that doesn't exist. | grounded |
 | D1 | For duplicated code, ask whether the two regions would need to change together to stay correct — not whether the text looks similar. Duplication forced by a shared requirement is worth flagging; duplication between deliberately independent regions is often fine on its own. | precautionary |
 | D2 | Before keeping or cutting a standing rule, don't decide by imagining what would happen without it. Remove it, run the cases it exists to govern, and observe. Keep it only if the mistake it targets reappears; cut it if the task still goes fine. | judgment |
@@ -112,21 +112,26 @@ The `M1`–`M6` group below isn't tied to a surface — it governs this skill's 
 | M3 | A deletion's rationale goes in the commit message or PR description, never as an inline comment in the diff. | judgment |
 | M4 | This skill shifts an agent's starting verbosity and complexity downward. It does not change how fast quality erodes across a long session — expect drift to resume, and don't rely on this skill alone for anything long-running: budget for a fresh review pass, though no countermeasure here — that one included — is validated against that drift. | precautionary · diagnosis |
 | M5 | Prose-level mechanics — sentence length, headings, scannability, tightening — belong to `quirk:writing-scannable-prose`, not this skill. This skill is written for Claude Code; running it inside a different harness is a stated assumption, not something it enforces. | judgment |
-| M6 | A dispatched subagent starts with a fresh context — it does not inherit this skill's rules. Anyone who hands a subagent the job of applying a fix must restate the correctness gate directly in that subagent's prompt; naming or linking this skill isn't enough. Paste the block below. | judgment |
+| M6 | A dispatched subagent starts with a fresh context — it does not inherit this skill's rules. Anyone handing a subagent a simplifying fix must restate the gate directly in that prompt; naming or linking this skill isn't enough. Where the fix is to code, paste the block below. Where it isn't, there is no check to paste (`G4`): say instead what the change must not alter, and that the subagent should report rather than decide. | judgment |
 
 Paste this into a dispatched subagent's prompt when it's the one applying the fix:
 
 ```
 Before you change anything:
-1. Run the correctness check (test suite or equivalent) and record the result.
-   Without that baseline you cannot tell what your change broke.
+1. Run the correctness check (the test suite, or whatever this project uses)
+   and record the result. Without that baseline you cannot tell what your
+   change broke, only that something is broken now.
 
-Then, before treating any shrinking, simplifying or deleting change as complete:
+Then, before treating any shrinking, simplifying or deleting change as done:
 2. Re-run that same check against the changed result.
 3. Apply it the same way you would to an addition — no extra burden on a
    deletion, and no exemption for one either.
-4. Let only that check decide whether the change stands. A change that looks
-   simpler is not evidence that it is correct.
+4. "Simpler" is not a reason for the change to stand. A smaller diff is not
+   evidence that it is correct; that check's result is. If the check fails,
+   the change does not land, however much cleaner it looks.
+
+This governs simplicity only. It does not override anything else you were
+told — an instruction from whoever dispatched you still outranks it.
 ```
 
 ## Falsification notes

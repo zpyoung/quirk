@@ -441,13 +441,16 @@ def test_m6_subagent_gate_restatement_fence_present() -> None:
     # fence like "A correctness check may decide deletion. Addition." satisfy all three while
     # requiring nothing -- which is what an earlier version of this test accepted.
     requirements = (
-        r"(before you change|baseline)[^.]*\b(correctness check|test suite)|"
-        r"(correctness check|test suite)[^.]*\brecord the result",    # G1a: baseline BEFORE
-        r"re-?run[^.]*\bagainst the changed result|"
-        r"re-?run that same check",                                    # G1b: re-run AFTER
+        # G1a: the baseline must be tied to BEFORE the change. An earlier version accepted any
+        # "...record the result", which "re-run the check against the changed result and record
+        # the result" satisfies while omitting the baseline entirely.
+        r"before you change anything|before you start|\bbaseline\b",
+        r"re-?run that same check|re-?run[^.]*\bagainst the changed result",   # G1b: re-run AFTER
         r"(addition|deletion)s?[^.]*\b(addition|deletion)",           # G2: both named together
-        r"only[^.]*\b(check|result)[^.]*\bdecide|"
-        r"\bdecide[^.]*\bpass or fail",                               # G3: only the check decides
+        # G3: simplicity is not a reason. Asserting "only the check decides" would re-pin the
+        # absolute formulation that contradicted M2 for a subagent holding only this block.
+        r"simpler.{0,80}\bnot\b.{0,40}(reason|evidence)|"
+        r"\bnot\b.{0,40}(a reason|evidence).{0,80}simpler",
     )
     matching = [
         fence for fence in fences

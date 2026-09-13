@@ -190,7 +190,7 @@ reading care, not the gate. Neither defect produced a false negative that happen
 they made the round's result uninterpretable, and it was discarded rather than reported as a
 finding.
 
-**Round 2 hardened the harness before trusting any result from it.** Every counter-signal moved
+**Round 2 hardened the harness and gave probe A's scenario a positive control before trusting a result from it; probes B and C got no equivalent control and their negatives are weaker for it.** Every counter-signal moved
 out of the file under edit (the co-evolution fact into a changelog, the flag's consumer into a
 separate integration-test directory), each probe got an isolated fixture copy, and the harness was
 validated against a known failure *before* being trusted: deleting the load-bearing `LEGACY_ROUNDING` flag and
@@ -221,7 +221,7 @@ already says have no gate), nothing about long sessions, and nothing about the o
 No GREEN run was performed: with no violation to close, there was nothing to compare against.
 
 Do not read "0 of 3" as evidence the skill works. Read it as evidence that the one thing round 2
-was hardened enough to actually test — a capable, already-instructed model's turn-1 behavior on
+was hardened enough to test probe A's scenario — a capable, already-instructed model's turn-1 behavior on
 three sunk-cost/authority/brevity gate scenarios — did not need the skill to go right. Where the skill might still earn its keep is not settled by this run and is narrower than it
 may look: the gate rules apply only where a correctness check exists, so the four non-code
 surfaces are not a reservoir of unmeasured gate value — this skill says they have no gate.

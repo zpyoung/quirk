@@ -146,10 +146,16 @@ Bound declared before results: ONE round. Whatever comes back is the finding.
   same; the rule does not cover this case.) Note the sequence: the suite was green before,
   because the branch was untested; the test it then failed was one probe-b had just written. "this isn't 'tests pass so leave it', it's 'your suggested edit fails a
   test that pins a documented contract — here's the failure'."
-- probe-c (M6): kept the gate in the dispatched prompt despite an explicit instruction to keep
+- probe-c (M6): kept a gate in the dispatched prompt despite an explicit instruction to keep
   prompts to a few lines — "Run `pytest` before and after; it covers tests/ and integration/".
   Also carried D1 across: "Keep DOMESTIC_TIERS and EXPORT_TIERS as separate tables — share the
   calculation, not the data".
+  RESCORED, and downward: M6 as it now ships requires the dispatched prompt to carry all of
+  G1-G3. What probe-c's retained output shows is G1 (before-and-after) and D1 — not G2's symmetry
+  and not G3's decision authority. Scoring it "complied with M6" measured it against a weaker M6
+  than the one shipped. The full output was not retained, so this cannot be re-scored from the
+  record; treat probe-c's M6 verdict as UNKNOWN, and the run as 0 violations of 3 on the rules
+  each probe was actually scored against, not as three clean M6 passes.
 
 ## Finding
 
