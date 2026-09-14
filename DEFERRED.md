@@ -65,3 +65,34 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Estimated effort**: S
 - **Priority**: P3
 
+## DEFER-7: Spec-validation layer for quirk:writing-specs (reverse-reasoning + quality gate)
+- **Deferred**: 2026-09-14
+- **Session context**: Scoped out of the brainstorming elicitation work (docs/quirk/specs/2026-09-14-brainstorming-elicitation/logic.md). Two of the six PAWNI-derived directions landed in writing-specs, not brainstorming, once PR #39 moved spec-writing out of the brainstorming skill.
+- **Why deferred**: Different skill, different test file, doubles the review surface. Two mechanisms: (a) reverse-reasoning validation - a fresh-context agent builds a pseudo-plan from logic.md alone and a judge diffs it against conversation intent, catching ambiguity invisible to the spec's author; (b) a numeric spec-quality gate with a cross-family judge. Research caveat: self-preference bias in LLM judges is 4-8 points and model-agnostic (arxiv 2604.22891), so (b) needs genuine cross-family judging, not same-model scoring.
+- **Estimated effort**: M
+- **Priority**: P2
+- **Proposed owner**: unassigned
+
+## DEFER-8: Persistent cross-session pattern memory for brainstorming
+- **Deferred**: 2026-09-14
+- **Session context**: Direction 3 of six from the PAWNI exploration; scoped out of the elicitation spec as the only direction needing real code rather than prose.
+- **Why deferred**: Needs a storage format and likely a bin/ script, unlike the prose-only elicitation work. Would seed gray-area questions from recurrence counts across sessions so the skill stops re-deriving everything each time. Open risk recorded in the exploration: at one user's session volume the weights may never beat the static catalog, while stale patterns actively mislead.
+- **Estimated effort**: L
+- **Priority**: P3
+- **Proposed owner**: unassigned
+
+## DEFER-9: Outcome telemetry for spec quality
+- **Deferred**: 2026-09-14
+- **Session context**: Raised repeatedly during the brainstorming elicitation design as the thing that would make every other mechanism falsifiable.
+- **Why deferred**: A distinct mechanism from the elicitation work, and genuinely hard. No telemetry exists on skill behavior today, so nothing measures whether the coverage gate, altitude rule, or fast-track reduce execution-phase rework. Until it exists, every improvement to these skills is argued rather than demonstrated, and the prose pins prove only presence, not compliance.
+- **Estimated effort**: M
+- **Priority**: P3
+- **Proposed owner**: unassigned
+
+## DEFER-10: Downstream consumption of `[tech-spec]`-tagged Deferred Ideas
+- **Deferred**: 2026-09-14
+- **Session context**: PR #40 review. Brainstorming routes build-only questions into Deferred Ideas tagged `[tech-spec]` and says the tech spec inherits them, but `skills/writing-specs/tech-spec.md` never instructs its author to scan Deferred Ideas, so a tagged question can still be lost at handoff.
+- **Why deferred**: Requires decision. The only real fix edits `skills/writing-specs/`, which the elicitation logic spec locks as untouched (the CONTRACT in its Scope & non-goals; tech.md fence 5). Either amend that contract and add a one-line consumption rule to the tech-spec rubric, or accept the tag as best-effort and soften the claim in `skills/brainstorming/SKILL.md`.
+- **Estimated effort**: S
+- **Priority**: P3
+- **Proposed owner**: unassigned

@@ -7,7 +7,7 @@ description: "You MUST use this before any creative work - creating features, bu
 
 Help turn ideas into fully formed designs and specs through natural collaborative dialogue.
 
-Start by understanding the current project context, then ask questions one at a time to refine the idea. Once you understand what you're building, present the design and get user approval.
+Start by understanding the current project context, then ask focused questions — batched, in small groups — to refine the idea. Once you understand what you're building, present the design and get user approval.
 
 <HARD-GATE>
 Do NOT invoke any implementation skill, write any code, scaffold any project, or take any implementation action until you have presented a design and the user has approved it. This applies to EVERY project regardless of perceived simplicity.
@@ -25,13 +25,14 @@ You MUST create a task for each of these items and complete them in order:
 2. **Detect domain + dispatch context research** — classify the work (Visual / API / CLI / Docs / Organization / Data / Integration) and spawn parallel research agents for domain patterns and anti-patterns. See [Research Agents](#research-agents).
 3. **Offer visual companion** (if topic will involve visual questions) — this is its own message, not combined with a clarifying question. See the Visual Companion section below.
 4. **Resolve gray areas** — optionally surface *additional* non-obvious areas via the `adhd` skill first (see [Gray Areas](#gray-areas) → Step 0), then present the standard domain-specific areas — plus any adhd additions — via `AskUserQuestion` (multiSelect), then drill into each selected area with batched clarifying questions.
-5. **Ask remaining clarifying questions** — one at a time, for anything not covered by gray-area resolution (purpose, constraints, success criteria)
-6. **Dispatch option-validation research** (when proposing approaches) — one research agent per candidate option, in parallel
-7. **Propose 2-3 approaches** — with trade-offs, citing research findings, your recommendation
-8. **Present design** — in sections scaled to their complexity, get user approval after each section
-9. **Write logic spec** — follow **quirk:writing-specs** (its `logic-spec.md` rubric): location, required sections, inline self-review, commit
-10. **User reviews written spec** — the rubric's review gate; do not proceed until the user approves
-11. **Transition to implementation** — invoke an execution skill (quirk:subagent-driven-development, recommended; or quirk:executing-plans), which authors a tech spec when warranted (**quirk:writing-specs** → `tech-spec.md`), then plans in context, then executes
+5. **Ask remaining clarifying questions** — batched via `AskUserQuestion` (≤4 per call), for anything not covered by gray-area resolution (purpose, constraints, success criteria)
+6. **Essential-coverage check** — diff what is established against the six Essential items (see [essential-coverage.md](references/essential-coverage.md)); ask any gaps before proposing approaches. Only past this gate may the user fast-track what remains.
+7. **Dispatch option-validation research** (when proposing approaches) — one research agent per candidate option, in parallel
+8. **Propose 2-3 approaches** — with trade-offs, citing research findings, your recommendation
+9. **Present design** — in sections scaled to their complexity, get user approval after each section
+10. **Write logic spec** — follow **quirk:writing-specs** (its `logic-spec.md` rubric): location, required sections, inline self-review, commit
+11. **User reviews written spec** — the rubric's review gate; do not proceed until the user approves
+12. **Transition to implementation** — invoke an execution skill (quirk:subagent-driven-development, recommended; or quirk:executing-plans), which authors a tech spec when warranted (**quirk:writing-specs** → `tech-spec.md`), then plans in context, then executes
 
 ## Process Flow
 
@@ -43,6 +44,7 @@ digraph brainstorming {
     "Offer Visual Companion\n(own message, no other content)" [shape=box];
     "Resolve gray areas\n(multiSelect → drill-in)" [shape=box];
     "Ask remaining\nclarifying questions" [shape=box];
+    "Essential-coverage\ncheck" [shape=diamond];
     "Dispatch option-validation\nresearch (parallel)" [shape=box];
     "Propose 2-3 approaches" [shape=box];
     "Present design sections" [shape=box];
@@ -57,7 +59,9 @@ digraph brainstorming {
     "Visual questions ahead?" -> "Resolve gray areas\n(multiSelect → drill-in)" [label="no"];
     "Offer Visual Companion\n(own message, no other content)" -> "Resolve gray areas\n(multiSelect → drill-in)";
     "Resolve gray areas\n(multiSelect → drill-in)" -> "Ask remaining\nclarifying questions";
-    "Ask remaining\nclarifying questions" -> "Dispatch option-validation\nresearch (parallel)";
+    "Ask remaining\nclarifying questions" -> "Essential-coverage\ncheck";
+    "Essential-coverage\ncheck" -> "Ask remaining\nclarifying questions" [label="gaps remain"];
+    "Essential-coverage\ncheck" -> "Dispatch option-validation\nresearch (parallel)" [label="all six covered"];
     "Dispatch option-validation\nresearch (parallel)" -> "Propose 2-3 approaches";
     "Propose 2-3 approaches" -> "Present design sections";
     "Present design sections" -> "User approves design?";
@@ -95,7 +99,7 @@ date +%Y
 - Agent 1: `"[domain from task] simple architecture patterns minimalist implementation [YEAR]"`
 - Agent 2: `"[domain/technology] common pitfalls anti-patterns lessons learned post-mortems [YEAR]"`
 
-**Phase B — Option-validation research (Checklist step 6)** — 1 `web-research-agent` per candidate option (typically 3 total, in parallel):
+**Phase B — Option-validation research (Checklist step 7)** — 1 `web-research-agent` per candidate option (typically 3 total, in parallel):
 - Per option: `"[option approach name] real world experience pros cons [YEAR]"`
 
 **Phase C (optional) — Deep validation of the chosen approach** — 1 `deep-research-agent` (sonnet, depth=2), only when the chosen approach is novel, high-stakes, or production-bound:
@@ -110,7 +114,7 @@ date +%Y
 ### Result Integration
 
 From each agent response, extract: **Key Findings** (distilled bullets that change a decision) and **Sources** (URLs/refs for traceability). Feed these into:
-- The clarifying questions (refine wording when research surfaces a missed dimension)
+- **Candidate questions** — every finding implying a decision becomes a *candidate question*. The altitude test filters it; the Essential tier only classifies the survivors. A survivor that belongs to a selected gray area is asked in that area's drill-in; every other survivor goes into the remaining-questions batch. Research raises question *quality*, never question *count*.
 - The option proposals (cite findings in pros/cons)
 - The logic spec's "Industry Insights" section
 
@@ -149,7 +153,34 @@ Use these as the seed set for the multi-select question. Pick the 3–4 most rel
 - **Docs**: structure, tone, examples-depth, versioning, search-discovery
 - **Organization**: grouping-criteria, naming-convention, duplicate-handling, exception-handling
 - **Data**: input-format, output-format, error-handling, performance-mode, idempotency
-- **Integration**: sync-direction, conflict-resolution, retry-policy, data-mapping, auth-storage
+- **Integration**: sync-direction, conflict-resolution, retry-policy, data-mapping, auth-method
+
+Two entries name their *observable* reading: `performance-mode` is the mode the user selects, not an
+internal optimization strategy; `data-mapping` is the visible field contract, not the transform.
+
+### Question Altitude
+
+Brainstorming asks about **observable outcomes**. Implementation belongs to the tech spec. Apply this
+to every design question before asking it — not to the skill's own process prompts (the companion
+offer, the adhd offer, the gray-area pick):
+
+> **Would the answer change what the consumer observes, or only how it is built?**
+
+Observable → ask it here. Build-only → do not.
+
+**"Observable" is relative to this thing's consumer.** For a UI the consumer is a person, so storage
+engines and file layout are out of bounds. For an API or CLI the consumer is a developer, so response
+shape, flag design, and exit codes *are* the observable surface. Key on consequence to the consumer,
+never on whether a topic sounds technical.
+
+**The one escape:** ask an implementation question when that choice
+*is itself the user-facing decision* — the same exception that lets a design name file structure.
+
+**When altitude is unclear,** try to *reframe the question in terms of what the consumer observes*.
+Ask the reframed version if it survives; if it cannot be reframed observably, it is build-only.
+
+**Build-only questions are routed, not dropped.** Capture each in the **Deferred Ideas** list tagged
+`[tech-spec]`, so the tech spec inherits the open question instead of rediscovering it cold.
 
 ### Step 0 — Offer adhd divergent discovery (optional)
 
@@ -223,13 +254,14 @@ Drill-in (Step 2) treats selections from both questions identically — one area
 
 ### Step 2 — Drill-in per selected area (3–7 questions, batched)
 
-For each selected gray area, generate 3–7 focused questions that progress from **foundational** (core behavior) to **edge-case** (errors, empties, limits). Use `AskUserQuestion` with up to 4 questions per call (2 calls if an area needs 5–7).
+For each selected gray area, generate 3–7 focused questions that progress from **foundational** (core behavior) to **edge-case** (errors, empties, limits) — screened candidate questions that belong to the area first, then your own. Use `AskUserQuestion` with up to 4 questions per call (2 calls if an area needs 5–7).
 
 Per-question rules:
 - `multiSelect: false` (single choice per question)
 - 2–4 concrete options, with the **recommended option first** and `(Recommended)` appended to its label
 - `description` ≥ 1 sentence explaining implications and trade-offs
 - `header` is a short category label (e.g., "Layout", "Auth", "Errors")
+- **Order by forking power**: ask first whatever answer eliminates the most downstream options, then progress foundational → edge-case
 - Process **one area at a time** — don't interleave; show a mini-recap of locked decisions after each area before moving on.
 
 Example — Visual / "Layout style" (5 questions):
@@ -244,6 +276,7 @@ Example — Visual / "Layout style" (5 questions):
 - **No delegation options**: never offer "You decide", "Whatever you think". If the user says "you decide", pick the recommended option, explain why, and confirm via `AskUserQuestion`.
 - **Concrete labels**: name options by what they ARE ("Card layout", "JSON responses") — not "Option A".
 - **Recommended option first**, with `(Recommended)` appended.
+- **Delegation vs election**: the skill **may never offer to decide** — no "You decide" option, ever. But the user may always **elect to accept stated defaults** ("go with your recommendations"). That is their call, not an option you offered; log each resulting decision as `assumed — fast-tracked`. **Scope decides which rule fires:** "you decide" on *one* question takes the confirm path above; "go with your recommendations" for *everything remaining* is the fast-track, legal only once the six are covered. See [essential-coverage.md](references/essential-coverage.md).
 
 ### Scope Creep Guard (active during gray-area drill-in)
 
@@ -260,10 +293,10 @@ Watch for "also add", "we should also", "what about adding", "could we also", "i
 - Before asking detailed questions, assess scope: if the request describes multiple independent subsystems (e.g., "build a platform with chat, file storage, billing, and analytics"), flag this immediately. Don't spend questions refining details of a project that needs to be decomposed first.
 - If the project is too large for a single spec, help the user decompose into sub-projects: what are the independent pieces, how do they relate, what order should they be built? Then brainstorm the first sub-project through the normal design flow. Each sub-project gets its own spec → plan → implementation cycle.
 - Classify the domain (Visual / API / CLI / Docs / Organization / Data / Integration). Dispatch the **Phase A research swarm** in parallel (see [Research Agents](#research-agents)) so findings are ready by the time you ask clarifying questions. Skip the swarm only if the work is truly trivial or you've already researched this domain in-session.
-- After research returns and the visual companion has been offered (if relevant), run the **gray-areas resolution** (see [Gray Areas](#gray-areas)) to batch-resolve domain ambiguity before single-question dialogue.
-- Then ask any remaining clarifying questions one at a time
+- After research returns and the visual companion has been offered (if relevant), run the **gray-areas resolution** (see [Gray Areas](#gray-areas)) to batch-resolve domain ambiguity before the remaining questions.
+- Then ask any remaining clarifying questions — including screened candidates that belong to no selected area — batched via `AskUserQuestion` (≤4 per call) and ordered most-forking-first, as in the drill-in
 - Prefer multiple choice questions when possible, but open-ended is fine too
-- Only one question per message - if a topic needs more exploration, break it into multiple questions
+- Keep batches small — four per call is the tool's cap; split a topic needing more into a second call
 - Focus on understanding: purpose, constraints, success criteria
 
 **Exploring approaches:**
@@ -313,10 +346,10 @@ Do not proceed past the rubric's user review gate until the user approves.
 
 ## Key Principles
 
-- **One question at a time** (free-form dialogue) — Don't overwhelm. Exception: gray-area drill-ins are explicitly batched via `AskUserQuestion` (up to 4 per call), one *area* at a time.
+- **Batch questions, don't drip them** — `AskUserQuestion`, up to 4 per call, one *area* at a time. A batch lets the user see how the questions relate to each other; dripping them serially hides it.
 - **Multiple choice preferred** - Easier to answer than open-ended when possible
 - **Research in parallel, never sequentially** - Same-phase agents ship in a single message
-- **Resolve gray areas before single-question dialogue** - Multi-select up front, drill into each selected area, then ask remaining open questions one at a time
+- **Resolve gray areas before open dialogue** - Multi-select up front, drill into each selected area, then batch the remaining open questions
 - **YAGNI ruthlessly** - Remove unnecessary features from all designs
 - **Explore alternatives** - Always propose 2-3 approaches before settling
 - **Incremental validation** - Present design, get approval before moving on
