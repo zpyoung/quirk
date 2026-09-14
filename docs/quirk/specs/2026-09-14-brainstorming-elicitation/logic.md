@@ -1,6 +1,6 @@
 # Outcome-Altitude Elicitation for `quirk:brainstorming`
 
-**Status:** Approved — ready for implementation
+**Status:** Implemented — tech spec authored (tier gate fired on ≳3 source files)
 
 Applies four PAWNI-derived mechanisms to the brainstorming skill's question layer, plus an
 outcome-altitude rule that keeps brainstorming's dialogue at the same level its output document
@@ -268,9 +268,13 @@ assent cheaper rather than better-considered.
 
 ## Status & amendments
 
-**Status:** Approved — ready for implementation.
+**Status:** Implemented. Complexity-tier gate **fired** on ≳3 source files; `tech.md` authored,
+reviewed, and built from.
 
 **Amendments:**
+- *2026-09-14* — Deferred Ideas filed to `DEFERRED.md` as DEFER-7 (writing-specs validation layer),
+  DEFER-8 (pattern memory), DEFER-9 (outcome telemetry), so the pm-agent can see them; the spec
+  section remains their design home.
 - *2026-09-14* — Outcome-altitude discipline added during design review at user request, after the
   initial three-direction design was presented. Added the altitude screen, the routing tag, and the
   gray-area catalog cleanup; promoted the design from three mechanisms to four. No previously locked

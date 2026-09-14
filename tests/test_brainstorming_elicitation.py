@@ -196,3 +196,31 @@ def test_cross_skill_section_names_preserved() -> None:
     body = skill()
     for section in ("Industry Insights", "Deferred Ideas"):
         assert section in body, f"SKILL.md lost the {section!r} section name"
+
+
+def test_internal_checklist_references_resolve() -> None:
+    """Renumbering the checklist must not strand in-document pointers.
+
+    Structural rather than literal: parses the checklist and checks every
+    "Checklist step N" reference names a step that exists. Caught a real
+    stale pointer when option-validation research moved from 6 to 7.
+    """
+    import re
+
+    body = skill()
+    steps = dict(re.findall(r"^(\d+)\. \*\*(.+?)\*\*", body, re.M))
+    assert steps, "could not parse the checklist"
+
+    for num in re.findall(r"Checklist step (\d+)", body):
+        assert num in steps, f"Checklist step {num} referenced but no such step exists"
+
+    phase_b = re.search(r"Phase B.*?Checklist step (\d+)", body)
+    assert phase_b, "Phase B no longer names its checklist step"
+    assert "option-validation" in steps[phase_b.group(1)].lower(), \
+        f"Phase B points at step {phase_b.group(1)}, which is {steps[phase_b.group(1)]!r}"
+
+
+def test_delegation_scope_is_disambiguated() -> None:
+    """Per-question 'you decide' and wholesale fast-track must not collide."""
+    assert "Scope decides which rule fires" in skill(), \
+        "the two delegation rules do not say which applies to a given input"

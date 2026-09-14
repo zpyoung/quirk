@@ -99,7 +99,7 @@ date +%Y
 - Agent 1: `"[domain from task] simple architecture patterns minimalist implementation [YEAR]"`
 - Agent 2: `"[domain/technology] common pitfalls anti-patterns lessons learned post-mortems [YEAR]"`
 
-**Phase B — Option-validation research (Checklist step 6)** — 1 `web-research-agent` per candidate option (typically 3 total, in parallel):
+**Phase B — Option-validation research (Checklist step 7)** — 1 `web-research-agent` per candidate option (typically 3 total, in parallel):
 - Per option: `"[option approach name] real world experience pros cons [YEAR]"`
 
 **Phase C (optional) — Deep validation of the chosen approach** — 1 `deep-research-agent` (sonnet, depth=2), only when the chosen approach is novel, high-stakes, or production-bound:
@@ -275,7 +275,7 @@ Example — Visual / "Layout style" (5 questions):
 - **No delegation options**: never offer "You decide", "Whatever you think". If the user says "you decide", pick the recommended option, explain why, and confirm via `AskUserQuestion`.
 - **Concrete labels**: name options by what they ARE ("Card layout", "JSON responses") — not "Option A".
 - **Recommended option first**, with `(Recommended)` appended.
-- **Delegation vs election**: the skill **may never offer to decide** — no "You decide" option, ever. But the user may always **elect to accept stated defaults** ("go with your recommendations"). That is their call, not an option you offered; log each resulting decision as `assumed — fast-tracked`. See [essential-coverage.md](references/essential-coverage.md).
+- **Delegation vs election**: the skill **may never offer to decide** — no "You decide" option, ever. But the user may always **elect to accept stated defaults** ("go with your recommendations"). That is their call, not an option you offered; log each resulting decision as `assumed — fast-tracked`. **Scope decides which rule fires:** "you decide" on *one* question takes the confirm path above; "go with your recommendations" for *everything remaining* is the fast-track, legal only once the six are covered. See [essential-coverage.md](references/essential-coverage.md).
 
 ### Scope Creep Guard (active during gray-area drill-in)
 
