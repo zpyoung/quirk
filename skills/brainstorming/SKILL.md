@@ -149,7 +149,33 @@ Use these as the seed set for the multi-select question. Pick the 3–4 most rel
 - **Docs**: structure, tone, examples-depth, versioning, search-discovery
 - **Organization**: grouping-criteria, naming-convention, duplicate-handling, exception-handling
 - **Data**: input-format, output-format, error-handling, performance-mode, idempotency
-- **Integration**: sync-direction, conflict-resolution, retry-policy, data-mapping, auth-storage
+- **Integration**: sync-direction, conflict-resolution, retry-policy, data-mapping, auth-method
+
+Two entries name their *observable* reading: `performance-mode` is the mode the user selects, not an
+internal optimization strategy; `data-mapping` is the visible field contract, not the transform.
+
+### Question Altitude
+
+Brainstorming asks about **observable outcomes**. Implementation belongs to the tech spec. Apply this
+to every question before asking it:
+
+> **Would the answer change what the consumer observes, or only how it is built?**
+
+Observable → ask it here. Build-only → do not.
+
+**"Observable" is relative to this thing's consumer.** For a UI the consumer is a person, so storage
+engines and file layout are out of bounds. For an API or CLI the consumer is a developer, so response
+shape, flag design, and exit codes *are* the observable surface. Key on consequence to the consumer,
+never on whether a topic sounds technical.
+
+**The one escape:** ask an implementation question when that choice
+*is itself the user-facing decision* — the same exception that lets a design name file structure.
+
+**When altitude is unclear,** try to *reframe the question in terms of what the consumer observes*.
+Ask the reframed version if it survives; if it cannot be reframed observably, it is build-only.
+
+**Build-only questions are routed, not dropped.** Capture each in the **Deferred Ideas** list tagged
+`[tech-spec]`, so the tech spec inherits the open question instead of rediscovering it cold.
 
 ### Step 0 — Offer adhd divergent discovery (optional)
 
