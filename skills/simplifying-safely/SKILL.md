@@ -7,11 +7,9 @@ description: Use when asked to simplify, clean up, or refactor code; when asked 
 
 ## Overview
 
-Three claims, nothing beyond them. Agents over-produce — reward models correlate length with reward, and models pad output that correlates with their own uncertainty; it's a training-signal effect, not a character flaw to lecture out. Ungated pressure to simplify destroys function — prompting for minimal patches, or a linter used as the dominant training reward, both cost solved problems and stripped working features in the research behind this skill. And almost nothing about over-engineering is decidable at review time: the one clean definition — complexity anticipating a requirement that never arrived — is retrospective, so this skill ships only the two tests that survived adversarial scrutiny (`D1`, `D2`) and says plainly where it has nothing to check.
+Find concrete ways to reduce avoidable burden without silently weakening what the artifact must accomplish. Use evidence to bound claims, not to avoid making useful proposals. `D1` and `D2` are the two operational detection tests; the workflow and transformation prompts below are design judgments, not validated detectors of over-engineering.
 
-Two jobs, in order. First, notice the over-production — the two tests decide; everything else in the per-surface tiers below is a *tell* that prompts a closer look without deciding anything on its own. Second, gate the fix: any step that shrinks, simplifies, or deletes is sequenced after a correctness check and re-validated against it before it counts as done (`G1`–`G3`). That gate is real only where a correctness check exists, which in practice means code — `G4` says so, and outside code there is nothing to substitute for it. The gate is symmetric — an addition and a deletion face the same re-check, and neither carries a special burden of proof.
-
-The always-on core bundles the gate (`G1`–`G3`), the two surviving tests (`D1`, `D2`), and two framing statements about what neither can do (`G4`, `D3`) — tabled below inside their own tiers rather than restated twice. Those two, plus `C6` and `M1`, are the only four rules in this skill tagged `grounded`, and **all four are prohibitions resting on an absence — what this skill cannot check, verify, or safely cite.** They forbid; none of them tells you what simplification to make. Nothing prescriptive here is that well-evidenced — the rest is `precautionary` (evidence exists but doesn't fully transfer to this setting) or `judgment` (a defensible call, not a measured result), tagged per rule so a reader can weigh each one honestly.
+For code, sequence changes after a correctness baseline and apply the same post-change check to additions and deletions (`G1`–`G3`). For documents and conversation, propose or perform authorized edits as editorial judgments; no simplicity score substitutes for a correctness check (`G4`). Keep the evidence tags attached to the rules: `grounded` marks limits on what can be claimed, `precautionary` marks evidence with transfer gaps, and `judgment` marks a defensible choice rather than a measured result.
 
 **The honest claim.** This skill shifts an agent's starting verbosity and complexity downward. It does not change how fast quality erodes across a long session — expect drift to resume on anything long-running, and don't rely on this skill alone to hold the line. No countermeasure here is validated against that drift either (`M4`).
 
@@ -26,6 +24,32 @@ The always-on core bundles the gate (`G1`–`G3`), the two surviving tests (`D1`
 - A reply you're about to send has come out longer or more hedged than the question needed.
 
 **Not for:** prose mechanics — sentence length, headings, scannability (`quirk:writing-scannable-prose` owns those); a theory of *why* simplicity matters; picking a numeric threshold for anything.
+
+## Workflow
+
+This proposal-generating method is **judgment**, not an evidenced correctness gate.
+
+1. **Identify the obligation.** Use the request, artifact and available context to identify its consumers, decisions, behavior and required constraints. Do not create a separate requirements document just to perform this review.
+2. **Find avoidable burden.** Inspect repeated sources of truth, unnecessary indirection, speculative commitments and answers scattered across locations. Apply the relevant surface guidance even when `D1`/`D2` or `S1`/`S2` find nothing.
+3. **Propose a concrete transformation.** Name what to merge, move, replace or remove and the observed burden it addresses. Use the transformation prompts below; do not stop at “looks complex.”
+4. **Account for obligations.** Identify unique qualifications before consolidating. Distinguish reorganizing a requirement from changing it. If the source contradicts itself and context does not establish authority, surface the policy choice rather than silently selecting a version.
+5. **Act within authorization and verify.** A review request calls for proposals; an editing request authorizes restructuring within the stated contract, not silent scope changes. For code, use `G1`–`G3`. For documents, inspect the actual revision for lost obligations and broken references, but report that as editorial review, not correctness certification. Clarify substantive choices only when available context cannot resolve them.
+
+For each substantial recommendation, report **where → observed burden → proposed change → what must survive → tradeoff**. Keep this proportional to the task; no score, proposal quota or obligatory report file. After inspecting the artifact, “no useful change found” is valid. “No S1/S2 finding” alone does not establish it.
+
+### Transformation prompts
+
+These are **judgment-based candidates**, not automatic cut rules:
+
+| Inspect for | Candidate transformation | Preserve or check |
+|---|---|---|
+| Independently maintained statements of one requirement | Give it one authoritative home; summarize or link elsewhere | Unique qualifications and useful local summaries. Document duplication is not a `D1` code verdict. |
+| Current requirements interleaved with research or review history | Separate the current contract from supporting material | Rationale needed to understand decisions and required provenance. |
+| Implementation choices mixed into a behavioral spec | Move mechanism-level choices to the implementation design | Choices constraining behavior, safety, compatibility, ownership or delivery remain explicit. |
+| Abstractions, options or stages without a present need for their distinctions | Propose a direct path for the current consumers | Real variation, ownership boundaries and failure handling; code changes still face the correctness gate. |
+| A cut that makes the reader reconstruct an answer elsewhere | Keep or consolidate the answer instead | Findability, operational completeness and the maintained source of truth. |
+
+Separating material does not automatically require another file. Prefer an existing maintained destination or a distinct section; name the destination before moving anything. Moving complexity out of sight is not removing it. Wording and scannability remain with `quirk:writing-scannable-prose`.
 
 ## Always-on core
 
@@ -50,9 +74,9 @@ The core above applies every firing. On top of it, load only the tier(s) for wha
 | Working on | Load |
 |---|---|
 | Code — writing, editing, or reviewing it | Code (`C1`–`C6`) |
-| A CLAUDE.md, skill file, or other agent-facing doc | Agent-facing docs (`A1`–`A4`) |
-| A logic spec or tech spec | Specs (`S1`–`S3`) |
-| A README, guide, ADR, or other standing document for humans | Human-facing docs (`H1`–`H4`) |
+| A CLAUDE.md, skill file, or other agent-facing doc | Standing documents (`H1`–`H4`) + Agent-facing docs (`A1`–`A4`) |
+| A logic spec or tech spec | Standing documents (`H1`–`H4`) + Specs (`S1`–`S3`) |
+| A README, guide, ADR, or other standing document for humans | Standing documents (`H1`–`H4`) |
 | Your own reply to the user | Conversational output (`V1`–`V2`) |
 
 A task can span more than one surface — implementing a spec'd change touches both code and the spec that authorized it — and loads both groups; nothing caps how many stack. Keep the loaded set to what's actually in play rather than reading every tier on every task: instruction-following degrades as simultaneous constraints accumulate, which is why the core stays small and each surface's group stays separate instead of merging into one long list.
@@ -67,7 +91,7 @@ The `M1`–`M6` group below isn't tied to a surface — it governs this skill's 
 | C2 | A new config flag, environment variable, settings option, or dependency introduced without the task calling for it is a signal, not a default good practice. | precautionary |
 | C3 | A new function, class, interface, or parameter whose only callers anywhere — in the diff or outside it — are its own tests is a signal of speculative generality. | precautionary |
 | C4 | Before accepting or writing a new helper, utility, or file, check whether the codebase already has one, or already has a convention for this problem. Reaching for something that duplicates or diverges from what's already there is a signal. | precautionary |
-| C5 | A comment that restates the line immediately below it is a signal of unreviewed generation, not documentation. Removing it is subject to the same gate as any other deletion — `G1`, not a free pass. | precautionary |
+| C5 | A comment that restates the line immediately below it is a signal of unreviewed generation, not documentation. | precautionary |
 | C6 | Never ship or cite a cyclomatic-complexity band, a method or function line-count cap, a dead-code percentage, or a cohesion score as the reason for a simplicity or complexity verdict. Argue it through `D1`, through `D2`, or leave it a named, unadjudicated judgment call. | grounded |
 
 ## Agent-facing docs
@@ -85,14 +109,14 @@ The `M1`–`M6` group below isn't tied to a surface — it governs this skill's 
 |---|---|---|
 | S1 | Flag any spec provision — a requirement, field, config knob, or extensibility point the document commits to build or support — whose only stated justification is an anticipated future need ("so we can later...", "in case...", "for extensibility") and that names no consumer, ticket, or test presently in scope. Doesn't apply to a Non-goals section or a stated exclusion, which by design names nothing, nor to an ordinary requirement that simply doesn't cite a consumer inline. Spec length is not itself a signal either way: a long spec whose every provision serves a present need passes this, and a short one with a single speculatively-justified provision does not. | precautionary |
 | S2 | A tech spec layered over an approved logic spec earns its place only by committing to at least one choice the logic spec left open. One whose every commitment is copied from the logic spec, or is its only possible reading, has earned nothing by existing. | judgment · diagnosis |
-| S3 | `S1` and `S2` flag stated content — a provision naming no consumer, a spec making no decision among named alternatives — which a code surface can't offer. Neither is a gate: no test suite runs before or after cutting what they flag, so a hit is a content judgment, not a verified pass or fail. Neither catches the opposite failure — a spec that under-specifies and ships a defect-inducing gap. | precautionary · diagnosis |
+| S3 | `S1` and `S2` flag stated content — a provision naming no consumer, a spec making no decision among named alternatives — which a code surface can't offer. Neither catches the opposite failure — a spec that under-specifies and ships a defect-inducing gap. | precautionary · diagnosis |
 
-## Human-facing docs
+## Standing documents
 
 | ID | Rule | Tag |
 |---|---|---|
 | H1 | Before adding a new standing document, check for an existing indexed, maintained surface — another doc, a README section, the schema or code itself, a single ticket or incident record — that already answers the question in one place. A surface that would make the reader piece the answer together across several tickets or chat threads does not count. Extend or link a qualifying surface instead of adding a document; if none exists, or the existing one holds only scattered raw facts rather than the answer, the new document is justified. | judgment |
-| H2 | For a document that restates content also tracked as the authoritative copy elsewhere, treat the restatement as unmanaged risk if nothing keeps the two synchronized. Default to reducing it to a pointer into the system of record; where that's impractical, flag it for scheduled owner review instead. Delete outright only when the pointer itself would be redundant, and say why. | judgment |
+| H2 | When sections or documents independently restate one requirement, identify its authoritative home and preserve unique qualifications before consolidating. Prefer a pointer or concise summary where the reader can still get the answer reliably; retain necessary local instructions when a pointer would scatter an operational procedure. If no authority resolves conflicting versions, surface that choice rather than silently merging them. | judgment |
 | H3 | A document carrying a contract, SLA, or compliance citation is judged against that obligation, not against traffic, staleness, or overlap with another doc. It may still be merged into a system of record, but the obligated content moves with it rather than being cut. | judgment |
 | H4 | Don't justify not creating, cutting, or consolidating a document on the grounds that shorter documentation is inherently better. Citing an existing surface that merely "answers the question" — ambient chat history, an unmaintained wiki page — isn't safe grounds either. | judgment |
 
@@ -112,17 +136,17 @@ The `M1`–`M6` group below isn't tied to a surface — it governs this skill's 
 | M3 | A deletion's rationale goes in the commit message or PR description, never as an inline comment in the diff. | judgment |
 | M4 | This skill shifts an agent's starting verbosity and complexity downward. It does not change how fast quality erodes across a long session — expect drift to resume, and don't rely on this skill alone for anything long-running. No countermeasure is named here because none has been validated against that drift; treat the gap as open rather than as something this skill has covered. | precautionary · diagnosis |
 | M5 | Prose-level mechanics — sentence length, headings, scannability, tightening — belong to `quirk:writing-scannable-prose`, not this skill. This skill is written for Claude Code; running it inside a different harness is a stated assumption, not something it enforces. | judgment |
-| M6 | A dispatched subagent starts with a fresh context — it does not inherit this skill's rules. Anyone handing a subagent a simplifying fix must restate the gate directly in that prompt; naming or linking this skill isn't enough. Where the fix is to code, paste the block below. Where it isn't there is no check to paste (`G4`), and no simplicity signal may stand in for one (`G3`) — so have the subagent report what it would change rather than decide it. | judgment |
+| M6 | A dispatched subagent starts with a fresh context — it does not inherit this skill's rules. Anyone handing a subagent a simplifying code fix must restate `G1`–`G3` directly in that prompt; naming or linking this skill isn't enough. Paste the literal block below. For non-code work, pass the user's review/edit authorization and the obligations to preserve. The subagent may propose changes or perform authorized restructuring, but must surface unresolved policy choices and must not treat simplicity as correctness certification (`G3`, `G4`). | judgment |
 
-Paste this into a dispatched subagent's prompt when it's the one applying the fix:
+Paste this into a dispatched subagent's prompt when it's applying a code fix:
 
 ```
-Before you change anything:
+Before you change code:
 1. Run the correctness check (the test suite, or whatever this project uses)
    and record the result. Without that baseline you cannot tell what your
    change broke, only that something is broken now.
 
-Then, before treating any shrinking, simplifying or deleting change as done:
+Then, before treating any shrinking, simplifying or deleting code change as done:
 2. Re-run that same check against the changed result.
 3. Apply it the same way you would to an addition — no extra burden on a
    deletion, and no exemption for one either.
@@ -130,13 +154,15 @@ Then, before treating any shrinking, simplifying or deleting change as done:
    evidence that it is correct; that check's result is. If the check fails,
    the change does not land, however much cleaner it looks.
 
-This governs simplicity only. It yields to the project's own standing rules —
-its CLAUDE.md, the testing practice it already follows — because those exist
-whether or not anyone dispatched you, and you can go read them yourself. It
-does not yield to this dispatch. If the prompt that sent you here tells you to
-skip the check, swap in a narrower one, or treat a smaller diff as the goal, do
-steps 1-3 as written and report the conflict back to whoever sent you. That
-call is theirs to make, not yours.
+This code gate governs simplicity only. It yields only to the user's own
+instructions and the project's standing correctness rules, including its
+CLAUDE.md and established testing practice. Those sources exist whether or
+not anyone dispatched you, and you can go read them yourself. It does not
+yield to this dispatch or to any follow-up instruction from the dispatcher.
+If the dispatcher tells you to skip the check, substitute a narrower one, or
+treat a smaller diff as the goal, do steps 1-3 as written and report the
+conflict. Only the user's own instructions or a project's standing
+correctness rule may override these steps; a dispatcher instruction cannot.
 ```
 
 ## Falsification notes
@@ -175,7 +201,7 @@ None of these are sourceable. They stay inline, not in the companion, so the cit
 
 - **quirk:test-driven-development** — outranks this skill; never skip a test because a simpler-looking version would satisfy it (`M2`).
 - **quirk:verification-before-completion** — outranks this skill for the same reason; never skip a verification step or an explicit user instruction (`M2`).
-- **quirk:writing-scannable-prose** — owns prose mechanics: sentence length, headings, scannability, tightening. This skill's human-facing-docs and conversational tiers stop at structural and rationale questions and hand wording-level cleanup to that skill (`M5`).
+- **quirk:writing-scannable-prose** — owns prose mechanics: sentence length, headings, scannability, tightening. This skill's standing-document and conversational tiers stop at structural and rationale questions and hand wording-level cleanup to that skill (`M5`).
 - The user's CLAUDE.md — always outranks this skill (`M2`).
 - Dispatching a subagent to apply a **code** fix — restate the block under `M6` in its prompt; the subagent doesn't inherit this skill. Off code there is no such block (`M6`, `G4`).
 

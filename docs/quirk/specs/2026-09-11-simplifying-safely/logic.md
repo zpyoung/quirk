@@ -1,6 +1,6 @@
 # Logic spec: `simplifying-safely`
 
-**Status**: Draft — reviewed, corrections applied, awaiting user sign-off · Tech spec: authored (gate fired on ≳3 source files)
+**Status**: Implemented — approved behavior and amendments applied · Tech spec: implemented
 
 A quirk skill that helps an agent notice when it is over-producing, and makes every fix for that
 subordinate to a correctness check. Derived from
@@ -328,8 +328,8 @@ adversarially verified. Full audit in the
 
 ## Status & amendments
 
-**Status**: Draft — reviewed, corrections applied, awaiting user sign-off. Tech spec authored
-2026-09-11 ([tech.md](tech.md)); the complexity-tier gate fired on ≳3 source files.
+**Status**: Implemented — approved behavior and amendments applied, 2026-09-14.
+Tech spec: [tech.md](tech.md); behavioral validation remains as recorded in [validation-red.md](validation-red.md).
 
 **Amendments**
 

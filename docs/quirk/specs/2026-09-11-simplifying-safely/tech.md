@@ -1,6 +1,6 @@
 # Tech spec: `simplifying-safely`
 
-**Status**: Draft — authored 2026-09-11, complexity gate fired on ≳3 source files.
+**Status**: Implemented — 2026-09-14; focused contract tests and full pytest suite passed.
 **Logic spec**: [logic.md](logic.md) — owns *why* and *behavior*. This document owns *where* and
 *contracts*. Every section below back-links the logic-spec heading that justifies it.
 
