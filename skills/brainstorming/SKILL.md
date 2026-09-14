@@ -26,12 +26,13 @@ You MUST create a task for each of these items and complete them in order:
 3. **Offer visual companion** (if topic will involve visual questions) — this is its own message, not combined with a clarifying question. See the Visual Companion section below.
 4. **Resolve gray areas** — optionally surface *additional* non-obvious areas via the `adhd` skill first (see [Gray Areas](#gray-areas) → Step 0), then present the standard domain-specific areas — plus any adhd additions — via `AskUserQuestion` (multiSelect), then drill into each selected area with batched clarifying questions.
 5. **Ask remaining clarifying questions** — one at a time, for anything not covered by gray-area resolution (purpose, constraints, success criteria)
-6. **Dispatch option-validation research** (when proposing approaches) — one research agent per candidate option, in parallel
-7. **Propose 2-3 approaches** — with trade-offs, citing research findings, your recommendation
-8. **Present design** — in sections scaled to their complexity, get user approval after each section
-9. **Write logic spec** — follow **quirk:writing-specs** (its `logic-spec.md` rubric): location, required sections, inline self-review, commit
-10. **User reviews written spec** — the rubric's review gate; do not proceed until the user approves
-11. **Transition to implementation** — invoke an execution skill (quirk:subagent-driven-development, recommended; or quirk:executing-plans), which authors a tech spec when warranted (**quirk:writing-specs** → `tech-spec.md`), then plans in context, then executes
+6. **Essential-coverage check** — diff what is established against the six Essential items (see [essential-coverage.md](references/essential-coverage.md)); ask any gaps before proposing approaches. Only past this gate may the user fast-track what remains.
+7. **Dispatch option-validation research** (when proposing approaches) — one research agent per candidate option, in parallel
+8. **Propose 2-3 approaches** — with trade-offs, citing research findings, your recommendation
+9. **Present design** — in sections scaled to their complexity, get user approval after each section
+10. **Write logic spec** — follow **quirk:writing-specs** (its `logic-spec.md` rubric): location, required sections, inline self-review, commit
+11. **User reviews written spec** — the rubric's review gate; do not proceed until the user approves
+12. **Transition to implementation** — invoke an execution skill (quirk:subagent-driven-development, recommended; or quirk:executing-plans), which authors a tech spec when warranted (**quirk:writing-specs** → `tech-spec.md`), then plans in context, then executes
 
 ## Process Flow
 
@@ -43,6 +44,7 @@ digraph brainstorming {
     "Offer Visual Companion\n(own message, no other content)" [shape=box];
     "Resolve gray areas\n(multiSelect → drill-in)" [shape=box];
     "Ask remaining\nclarifying questions" [shape=box];
+    "Essential-coverage\ncheck" [shape=diamond];
     "Dispatch option-validation\nresearch (parallel)" [shape=box];
     "Propose 2-3 approaches" [shape=box];
     "Present design sections" [shape=box];
@@ -57,7 +59,9 @@ digraph brainstorming {
     "Visual questions ahead?" -> "Resolve gray areas\n(multiSelect → drill-in)" [label="no"];
     "Offer Visual Companion\n(own message, no other content)" -> "Resolve gray areas\n(multiSelect → drill-in)";
     "Resolve gray areas\n(multiSelect → drill-in)" -> "Ask remaining\nclarifying questions";
-    "Ask remaining\nclarifying questions" -> "Dispatch option-validation\nresearch (parallel)";
+    "Ask remaining\nclarifying questions" -> "Essential-coverage\ncheck";
+    "Essential-coverage\ncheck" -> "Ask remaining\nclarifying questions" [label="gaps remain"];
+    "Essential-coverage\ncheck" -> "Dispatch option-validation\nresearch (parallel)" [label="all six covered"];
     "Dispatch option-validation\nresearch (parallel)" -> "Propose 2-3 approaches";
     "Propose 2-3 approaches" -> "Present design sections";
     "Present design sections" -> "User approves design?";
