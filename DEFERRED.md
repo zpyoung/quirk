@@ -88,3 +88,11 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Estimated effort**: M
 - **Priority**: P3
 - **Proposed owner**: unassigned
+
+## DEFER-10: Downstream consumption of `[tech-spec]`-tagged Deferred Ideas
+- **Deferred**: 2026-09-14
+- **Session context**: PR #40 review. Brainstorming routes build-only questions into Deferred Ideas tagged `[tech-spec]` and says the tech spec inherits them, but `skills/writing-specs/tech-spec.md` never instructs its author to scan Deferred Ideas, so a tagged question can still be lost at handoff.
+- **Why deferred**: Requires decision. The only real fix edits `skills/writing-specs/`, which the elicitation logic spec locks as untouched (the CONTRACT in its Scope & non-goals; tech.md fence 5). Either amend that contract and add a one-line consumption rule to the tech-spec rubric, or accept the tag as best-effort and soften the claim in `skills/brainstorming/SKILL.md`.
+- **Estimated effort**: S
+- **Priority**: P3
+- **Proposed owner**: unassigned

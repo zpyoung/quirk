@@ -40,7 +40,7 @@ non-vacuously without:
 | **Purpose** — why this is being built | Conceptual model |
 | **Consumers** — who or what uses it | Behavior & scenarios |
 | **Success criteria** — what "working" means | Key decisions |
-| **Hard constraints** — what cannot change | Key decisions, Scope |
+| **Hard constraints** — what must stay true for the consumer | Key decisions, Scope |
 | **Scope boundary** — what is explicitly excluded | Scope & non-goals |
 | **Primary behavior** — the main path through the thing | Behavior & scenarios |
 
@@ -279,3 +279,6 @@ reviewed, and built from.
   initial three-direction design was presented. Added the altitude screen, the routing tag, and the
   gray-area catalog cleanup; promoted the design from three mechanisms to four. No previously locked
   decision was reversed — all six Essential items were already observable-altitude.
+- *2026-09-14* — Review fix: Hard constraints narrowed to the consumer-visible kind, since the
+  altitude screen would otherwise reject the very question the gate needs answered. An imposed
+  build-only constraint routes to `[tech-spec]` and never blocks the coverage gate.

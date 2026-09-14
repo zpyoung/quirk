@@ -20,7 +20,7 @@ an experiment.
 | **Purpose** | Why is this being built — what changes if it exists? | Conceptual model |
 | **Consumers** | Who or what uses it, and in what context? | Behavior & scenarios |
 | **Success criteria** | How do we know it works? | Key decisions |
-| **Hard constraints** | What cannot change — imposed, not chosen? | Key decisions, Scope |
+| **Hard constraints** | What must stay true for the consumer — imposed, not chosen? | Key decisions, Scope |
 | **Scope boundary** | What is deliberately excluded? | Scope & non-goals |
 | **Primary behavior** | What is the main path through it? | Behavior & scenarios |
 
@@ -42,8 +42,11 @@ After clarifying questions, before proposing approaches:
 4. When all six are covered, proceed. Say nothing if the gate passes clean — a silent pass is the
    normal case, and announcing it every run is noise.
 
-Under the altitude rule, every gate question is observable-level by construction: all six items are
-about what the thing does and for whom, never how it is built.
+Every gate question is observable-level because the six are defined that way: each is about what the
+thing does and for whom, never how it is built. Hard constraints means the consumer-visible kind. An
+imposed build-only constraint — "the existing schema must remain", whether volunteered or surfaced —
+is recorded in Deferred Ideas under `[tech-spec]` like any build-only question. It neither counts
+toward coverage nor opens a gap, so it never blocks the gate.
 
 ## The fast-track
 
@@ -66,7 +69,8 @@ exactly what Decisions Locked exists to prevent.
 
 **How it is triggered.** A recognized free-text steer — "enough, design it", "go with your
 recommendations", "stop asking and build it", or a clear paraphrase. Recognize the intent, not a
-literal string.
+literal string. The fast-track skips the remaining questions, never the design presentation or its
+approval — the hard gate against implementation still holds.
 
 **What it is never.** Never an option inside an `AskUserQuestion` call. That would consume one of
 only four slots, and it would put a delegation option in front of the user on every call — which

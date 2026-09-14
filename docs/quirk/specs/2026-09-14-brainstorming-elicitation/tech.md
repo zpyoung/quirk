@@ -209,6 +209,8 @@ Back-link: [Decisions Locked](logic.md#decisions-locked) → Placement.
 | Altitude tie-breaker | Reframe-or-route rule present |
 | Catalog cleanup | `auth-storage` absent; `auth-method` present |
 | Routing tag | `[tech-spec]` documented against the Deferred Ideas list |
+| Candidate survivors | Text routing each survivor into the matching drill-in or the remaining-questions batch |
+| Hard constraints altitude | Text narrowing the item to the consumer-visible kind and stating a build-only constraint never blocks the gate |
 | Fast-track tag | `assumed — fast-tracked` documented against Decisions Locked |
 | Fast-track gate | Text stating it is available only after Essential coverage |
 | Fast-track is not an option | Text stating it is a free-text steer, never an `AskUserQuestion` option |

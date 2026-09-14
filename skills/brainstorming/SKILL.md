@@ -114,7 +114,7 @@ date +%Y
 ### Result Integration
 
 From each agent response, extract: **Key Findings** (distilled bullets that change a decision) and **Sources** (URLs/refs for traceability). Feed these into:
-- **Candidate questions** — every finding implying a decision becomes a *candidate question*, which the altitude test and the Essential tier then filter. Research raises question *quality*, never question *count*.
+- **Candidate questions** — every finding implying a decision becomes a *candidate question*. The altitude test filters it; the Essential tier only classifies the survivors. A survivor that belongs to a selected gray area is asked in that area's drill-in; every other survivor goes into the remaining-questions batch. Research raises question *quality*, never question *count*.
 - The option proposals (cite findings in pros/cons)
 - The logic spec's "Industry Insights" section
 
@@ -161,7 +161,8 @@ internal optimization strategy; `data-mapping` is the visible field contract, no
 ### Question Altitude
 
 Brainstorming asks about **observable outcomes**. Implementation belongs to the tech spec. Apply this
-to every question before asking it:
+to every design question before asking it — not to the skill's own process prompts (the companion
+offer, the adhd offer, the gray-area pick):
 
 > **Would the answer change what the consumer observes, or only how it is built?**
 
@@ -253,7 +254,7 @@ Drill-in (Step 2) treats selections from both questions identically — one area
 
 ### Step 2 — Drill-in per selected area (3–7 questions, batched)
 
-For each selected gray area, generate 3–7 focused questions that progress from **foundational** (core behavior) to **edge-case** (errors, empties, limits). Use `AskUserQuestion` with up to 4 questions per call (2 calls if an area needs 5–7).
+For each selected gray area, generate 3–7 focused questions that progress from **foundational** (core behavior) to **edge-case** (errors, empties, limits) — screened candidate questions that belong to the area first, then your own. Use `AskUserQuestion` with up to 4 questions per call (2 calls if an area needs 5–7).
 
 Per-question rules:
 - `multiSelect: false` (single choice per question)
@@ -293,7 +294,7 @@ Watch for "also add", "we should also", "what about adding", "could we also", "i
 - If the project is too large for a single spec, help the user decompose into sub-projects: what are the independent pieces, how do they relate, what order should they be built? Then brainstorm the first sub-project through the normal design flow. Each sub-project gets its own spec → plan → implementation cycle.
 - Classify the domain (Visual / API / CLI / Docs / Organization / Data / Integration). Dispatch the **Phase A research swarm** in parallel (see [Research Agents](#research-agents)) so findings are ready by the time you ask clarifying questions. Skip the swarm only if the work is truly trivial or you've already researched this domain in-session.
 - After research returns and the visual companion has been offered (if relevant), run the **gray-areas resolution** (see [Gray Areas](#gray-areas)) to batch-resolve domain ambiguity before the remaining questions.
-- Then ask any remaining clarifying questions, batched via `AskUserQuestion` (≤4 per call)
+- Then ask any remaining clarifying questions — including screened candidates that belong to no selected area — batched via `AskUserQuestion` (≤4 per call) and ordered most-forking-first, as in the drill-in
 - Prefer multiple choice questions when possible, but open-ended is fine too
 - Keep batches small — four per call is the tool's cap; split a topic needing more into a second call
 - Focus on understanding: purpose, constraints, success criteria

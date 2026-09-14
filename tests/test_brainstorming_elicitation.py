@@ -143,6 +143,15 @@ def test_research_findings_become_candidate_questions() -> None:
         "Result Integration does not route findings through candidate questions"
 
 
+def test_candidate_survivors_enter_the_question_flow() -> None:
+    """A screened candidate with no stated destination vanishes after screening."""
+    body = skill()
+    assert "asked in that area's drill-in" in body, \
+        "surviving candidates have no route into the gray-area drill-in"
+    assert "remaining-questions batch" in body, \
+        "surviving candidates have no route into the remaining-questions batch"
+
+
 # --- batching -----------------------------------------------------------
 
 
@@ -154,6 +163,15 @@ def test_no_stale_cadence_instruction_survives() -> None:
 
 
 # --- the fast-track -----------------------------------------------------
+
+
+def test_hard_constraints_are_consumer_visible() -> None:
+    """An imposed build-only constraint must route, not block the gate."""
+    body = coverage()
+    assert "for the consumer" in body, \
+        "Hard constraints is not narrowed to the consumer-visible kind"
+    assert "never blocks the gate" in body, \
+        "reference does not say a build-only constraint cannot block the gate"
 
 
 def test_fast_track_gated_on_essential_coverage() -> None:
