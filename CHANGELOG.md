@@ -5,6 +5,48 @@ calendar-based (**CalVer**, `YYYY.M.D` unpadded); the `releasing-quirk` skill
 stamps and prepends each entry (newest on top). Since the version no longer encodes
 compatibility, breaking changes are called out in a `### ⚠️ BREAKING` subsection.
 
+## 2026.9.17
+
+### ⚠️ BREAKING
+- **`quirk:writing-tech-spec` is gone; it's merged into `quirk:writing-specs`.**
+  The logic-spec and tech-spec rubrics are now consolidated under one skill —
+  `writing-specs/SKILL.md` plus `logic-spec.md` and `tech-spec.md` — with
+  brainstorming running the logic-spec half after design approval and the
+  execution skills running the tech-spec half in-context when the complexity
+  gate fires. Anything invoking `quirk:writing-tech-spec` directly breaks;
+  invoke `quirk:writing-specs` instead.
+- **The typed-artifacts SessionStart hook (`load_artifact_tail.sh`) no longer
+  tails raw file content.** It previously printed the last 50 lines of each
+  artifact file; it now shells out to `bin/pm.py --index` / `--next` for a
+  bounded, computed summary (open/placed counts plus a shortlist of next
+  candidates), falling back to `[quirk:pm] index unavailable` if `pm.py`
+  fails. Anything parsing the hook's prior raw-tail output breaks.
+
+### Changes
+- **New: `bin/pm.py`, a read-only view over typed-artifact markdown**
+  (`--index`, `--next`, `--doctor`). Phase 1 has no Status field, no Blocked
+  by, and no ROADMAP.md, so every well-formed entry reads as open and
+  unplaced; lifecycle counts and roadmap-derived findings are Phase 2+. Wired
+  into the SessionStart hook (see BREAKING above).
+- **New skill: `simplifying-safely`** — use when asked to simplify, clean up,
+  or refactor code, review a diff/PR/draft for over-engineered additions, or
+  author/edit a spec, CLAUDE.md, skill file, or other agent-facing document.
+  Where a correctness check exists (in practice, code) no simplification
+  ships until it's re-validated against that check; elsewhere the call stays
+  with human judgment rather than passing to a simplicity signal.
+- `subagent-driven-development` gained a selectable implementer backend
+  (IMPLEMENTER / AUTHOR_FAMILY / REVIEWER_ALIAS resolved at preflight with a
+  single dispatch seam) and waves are now partitioned by connected components
+  of write scope.
+- `quirk:brainstorming` gained outcome-altitude elicitation: a two-tier
+  coverage model (Essential / Default-able) with an outcome-altitude screen
+  and forking-power ordering.
+- Skills that told Claude to dispatch subagents "via the `Task` tool" now say
+  `Agent` (current Claude Code's name for it), with hardened offline
+  fallbacks so a tool-name mismatch is never read as "tool unavailable."
+- Typed artifacts (`BUGS.md`, `DEFERRED.md`, `TEST_BACKLOG.md`, `proposals.md`,
+  `docs/adr/`) are now tracked in the quirk repo itself.
+
 ## 2026.7.31
 
 ### ⚠️ BREAKING
