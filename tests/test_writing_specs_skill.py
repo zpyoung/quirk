@@ -1,8 +1,8 @@
-"""The writing-specs split moved load-bearing literals between files.
+"""Load-bearing literals, packaging, and cross-file navigation for the writing-specs skill.
 
-Other skills read those exact strings — `writing-plans` plans from the paths, the tech-spec
-complexity gate reads `Tech spec: requested` off the logic spec's Status line — so a paraphrase
-during the move breaks the pipeline silently. These assertions pin the strings, not the prose.
+Other skills read exact strings from these rubrics — `writing-plans` plans from the paths, the
+tech-spec complexity gate reads `Tech spec: requested` off the logic spec's Status line — so a
+paraphrase breaks the pipeline silently. The literal assertions pin the strings, not the prose.
 """
 
 import re
@@ -14,10 +14,11 @@ HUB = SKILL_DIR / "SKILL.md"
 LOGIC = SKILL_DIR / "logic-spec.md"
 TECH = SKILL_DIR / "tech-spec.md"
 REVIEWER = SKILL_DIR / "tech-spec-reviewer-prompt.md"
+INTERACTIVE = SKILL_DIR / "interactive-logic-spec.md"
 
 
 def test_skill_files_exist() -> None:
-    for path in (HUB, LOGIC, TECH, REVIEWER):
+    for path in (HUB, LOGIC, TECH, REVIEWER, INTERACTIVE):
         assert path.is_file(), f"missing {path.relative_to(REPO_ROOT)}"
 
 

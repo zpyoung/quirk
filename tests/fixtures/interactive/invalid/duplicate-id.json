@@ -1,0 +1,230 @@
+{
+  "schemaVersion": 1,
+  "title": "Local archive workflow",
+  "status": "Draft",
+  "amendments": [
+    {
+      "date": "2026-09-20",
+      "text": "Clarified that source selection is explicit."
+    }
+  ],
+  "sections": {
+    "purpose": "Describe a small, local-first archive workflow.",
+    "conceptualModel": "An archive groups selected source files with a compact index.",
+    "dataFlow": "The reviewer chooses sources, then the tool writes the archive and index.",
+    "decisionsLocked": [
+      {
+        "area": "Storage",
+        "decision": "The archive is written beside the selected source directory."
+      },
+      {
+        "area": "Review",
+        "decision": "The index remains readable without the application."
+      }
+    ],
+    "industryInsights": [
+      {
+        "finding": "A portable index reduces dependence on one viewer.",
+        "sources": [
+          "https://example.test/portable-index"
+        ]
+      }
+    ],
+    "scopeNonGoals": [
+      "Remote synchronization is not part of this change."
+    ],
+    "deferredIdeas": [
+      {
+        "text": "Add archive signing after the local format stabilizes.",
+        "techSpec": true
+      },
+      {
+        "text": "Offer a graphical progress indicator.",
+        "techSpec": false
+      }
+    ],
+    "glossary": [
+      {
+        "term": "Index",
+        "definition": "A compact listing of archive contents."
+      }
+    ]
+  },
+  "requirements": [
+    {
+      "id": "REQ-01",
+      "area": "Archive",
+      "text": "Write a compressed archive of selected files.",
+      "summary": "Create a portable archive.",
+      "detail": "Preserve relative paths and report files that cannot be read.",
+      "scope": "in",
+      "group": "min",
+      "provenance": "claude",
+      "rationale": "The archive is the central output of the workflow.",
+      "certainty": "assumed",
+      "dependsOn": [
+        "REQ-03"
+      ]
+    },
+    {
+      "id": "REQ-02",
+      "area": "Selection",
+      "text": "Let the user choose the source files before archiving.",
+      "summary": "Select archive inputs.",
+      "detail": "Selection is explicit and can be changed until writing begins.",
+      "scope": "in",
+      "group": "i3",
+      "provenance": "you-chose",
+      "question": "Should the user choose files explicitly?",
+      "certainty": "confirmed",
+      "dependsOn": []
+    },
+    {
+      "id": "REQ-03",
+      "area": "Compression",
+      "text": "Support a lower-compression setting for large inputs.",
+      "summary": "Allow faster compression.",
+      "detail": "The setting trades smaller output for faster completion.",
+      "scope": "in",
+      "condition": "under-30",
+      "group": "i2",
+      "provenance": "you-recommended",
+      "question": "Is a faster compression option useful?",
+      "certainty": "unverified",
+      "dependsOn": []
+    },
+    {
+      "id": "OOS-01",
+      "area": "Sync",
+      "text": "Synchronize archives to a remote service.",
+      "summary": "Upload archives.",
+      "detail": "The service would need accounts and conflict handling.",
+      "scope": "out",
+      "group": "i1",
+      "provenance": "you-chose",
+      "question": "Should remote synchronization be included?",
+      "certainty": "assumed",
+      "dependsOn": []
+    }
+  ],
+  "conflicts": [
+    [
+      "REQ-01",
+      "OOS-01"
+    ]
+  ],
+  "assumptions": [
+    {
+      "id": "REQ-01",
+      "claim": "Selected inputs are readable when writing starts.",
+      "basis": "The workflow selects files before creating the archive.",
+      "certainty": "assumed",
+      "ifWrong": "Unreadable sources need a clear per-file error.",
+      "affects": [
+        "REQ-01"
+      ],
+      "meaning": "The tool can open every selected source file.",
+      "check": "Try a source that becomes unreadable after selection.",
+      "checkCost": "Low"
+    }
+  ],
+  "blindSpots": [
+    {
+      "id": "BS-01",
+      "title": "Filesystem permissions",
+      "detail": "The destination may not be writable even when sources are readable.",
+      "sources": [
+        "REQ-01"
+      ],
+      "resolvedBy": "REQ-03"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "SC-01",
+      "given": "The user has selected readable files.",
+      "when": "They create an archive.",
+      "then": "An archive and compact index are written locally.",
+      "alternatives": [
+        "Write a compact index."
+      ],
+      "explanation": "The index makes the result inspectable without the application.",
+      "refs": [
+        "REQ-01",
+        "REQ-02"
+      ]
+    }
+  ],
+  "research": [
+    {
+      "requestId": "RESEARCH-01",
+      "blindSpotId": "BS-01",
+      "summary": "The destination permission check can be performed before writing.",
+      "detail": "A preflight check catches common read-only destinations, though permissions can still change before the write.",
+      "answeredAt": "2026-09-21T10:30:00Z"
+    }
+  ],
+  "views": {
+    "stateMachine": {
+      "states": [
+        {
+          "id": "ST-READY",
+          "label": "Ready",
+          "detail": "Inputs are selected and the destination is writable.",
+          "focal": true
+        },
+        {
+          "id": "ST-SAVED",
+          "label": "Saved",
+          "detail": "The archive and index were written."
+        }
+      ],
+      "entries": [
+        {
+          "id": "ENTRY-START",
+          "label": "User starts"
+        }
+      ],
+      "transitions": [
+        {
+          "id": "TR-STORE",
+          "from": "ENTRY-START",
+          "to": "ST-READY",
+          "short": "prepare",
+          "event": "The user selects a destination.",
+          "reqs": [
+            "REQ-01",
+            "REQ-02"
+          ],
+          "blindSpot": "BS-01"
+        },
+        {
+          "id": "TR-WRITE",
+          "from": "ST-READY",
+          "to": "ST-SAVED",
+          "short": "write archive",
+          "event": "The application writes the archive and index.",
+          "reqs": [
+            "REQ-01"
+          ]
+        }
+      ]
+    },
+    "storyMap": {
+      "journey": [
+        {
+          "area": "Prepare",
+          "label": "Choose files"
+        },
+        {
+          "area": "Finish",
+          "label": "Review archive"
+        }
+      ],
+      "crossCutting": [
+        "Accessibility",
+        "Error reporting"
+      ]
+    }
+  }
+}

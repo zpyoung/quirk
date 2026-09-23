@@ -30,8 +30,8 @@ You MUST create a task for each of these items and complete them in order:
 7. **Dispatch option-validation research** (when proposing approaches) — one research agent per candidate option, in parallel
 8. **Propose 2-3 approaches** — with trade-offs, citing research findings, your recommendation
 9. **Present design** — in sections scaled to their complexity, get user approval after each section
-10. **Write logic spec** — follow **quirk:writing-specs** (its `logic-spec.md` rubric): location, required sections, inline self-review, commit
-11. **User reviews written spec** — the rubric's review gate; do not proceed until the user approves
+10. **Write logic spec** — follow **quirk:writing-specs**: ask once whether to use markdown (the default) or interactive; use [logic-spec.md](../writing-specs/logic-spec.md) for markdown or [interactive-logic-spec.md](../writing-specs/interactive-logic-spec.md) for interactive.
+11. **User reviews written spec** — the rubric's review gate; for an interactive spec, the page's sign-off is the review gate; do not proceed until the user approves
 12. **Transition to implementation** — invoke an execution skill (quirk:subagent-driven-development, recommended; or quirk:executing-plans), which authors a tech spec when warranted (**quirk:writing-specs** → `tech-spec.md`), then plans in context, then executes
 
 ## Process Flow
@@ -332,10 +332,9 @@ Watch for "also add", "we should also", "what about adding", "could we also", "i
 
 **Documentation, self-review, and the user review gate:**
 
-Follow **quirk:writing-specs** — its `logic-spec.md` rubric owns where `logic.md` is written, the
-sections it must contain (including *Decisions Locked*, *Industry Insights*, and *Deferred Ideas*,
-which you have been accumulating throughout this session), the inline self-review, the user review
-gate, and the `Tech spec: requested` capture. Do not restate those rules here.
+Follow **quirk:writing-specs** — its [logic-spec.md](../writing-specs/logic-spec.md) rubric owns where markdown `logic.md` is written, the sections it must contain (including *Decisions Locked*, *Industry Insights*, and *Deferred Ideas*, which you have been accumulating throughout this session), the inline self-review, the user review gate, and the `Tech spec: requested` capture.
+
+When the user chose interactive, [interactive-logic-spec.md](../writing-specs/interactive-logic-spec.md) owns the `logic.json` and page sign-off workflow. Do not restate those rules here.
 
 Do not proceed past the rubric's user review gate until the user approves.
 

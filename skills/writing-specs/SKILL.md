@@ -5,15 +5,18 @@ description: The two-document spec rubric — what a good logic spec (logic.md) 
 
 # Writing Specs
 
-Two documents, one pipeline. The **logic spec** is human-facing and approved; the **tech spec** is
-agent-facing and gated on complexity. This hub owns what they share — the pipeline, who writes which,
-the ownership line between them, and where they live. The rubrics themselves live one level down.
+Two logic-spec formats, one downstream pipeline. `logic.md` is human-facing and approved; the
+tech spec is agent-facing and gated on complexity. This hub owns what they share — the pipeline,
+who writes which, the ownership line between them, and where they live. The rubrics themselves
+live one level down.
 
 **The pipeline:**
 
 ```
-brainstorming → logic.md → user approves → execution skill → (complexity gate) tech.md
-    → quirk:writing-plans → execute
+markdown (default): brainstorming → logic.md → user approves → execution skill
+    → (complexity gate) tech.md → quirk:writing-plans → execute
+interactive: brainstorming → logic.json → review.html → signed fold → generated logic.md
+    → execution skill → (complexity gate) tech.md → quirk:writing-plans → execute
 ```
 
 ## Which document, which rubric
@@ -21,6 +24,7 @@ brainstorming → logic.md → user approves → execution skill → (complexity
 | Document | Invoked by | When | Rubric |
 |----------|-----------|------|--------|
 | `logic.md` | `quirk:brainstorming` | after the design is approved | [logic-spec.md](logic-spec.md) |
+| `logic.json` + generated `logic.md` | `quirk:brainstorming` | only when the user chooses interactive | [interactive-logic-spec.md](interactive-logic-spec.md) |
 | `tech.md` | `quirk:executing-plans`, `quirk:subagent-driven-development` | only when the complexity-tier gate fires | [tech-spec.md](tech-spec.md) |
 
 Read the one rubric your stage needs — not both.
@@ -31,8 +35,7 @@ The logic spec owns *why* and *behavior* (and may name file-level structure when
 itself the user-facing decision). `tech.md` owns *where* and *contracts*. Each may summarize the
 other in one line and link across — **never duplicate a paragraph.**
 
-Any change to a decision the logic spec already locked amends the **logic spec first** — a dated
-entry in its Amendments log — never a silent edit to `tech.md`.
+Any change to a decision the logic spec already locked amends its source first: `logic.json` for an interactive spec (then regenerate `logic.md`), or `logic.md` otherwise. Add a dated entry to its Amendments log; never silently edit `tech.md`.
 
 ## Where the specs live
 
@@ -42,8 +45,11 @@ location. The layout below is the **default example**, not a hard-coded path:
 
 ```
 docs/quirk/specs/YYYY-MM-DD-<topic>/logic.md
+docs/quirk/specs/YYYY-MM-DD-<topic>/logic.json  # optional interactive source
 docs/quirk/specs/YYYY-MM-DD-<topic>/tech.md
 ```
+
+For interactive specs, the renderer generates read-only `logic.md` from the optional `logic.json`.
 
 Multi-subsystem work gets N sibling `<topic>` folders, each its own `logic.md` + `tech.md` pair; a
 later sibling's `tech.md` may reference an earlier one's contracts, but always by full path — a bare

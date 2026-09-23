@@ -1,0 +1,30 @@
+{
+  "name": "quirk-interactive-logic-spec-review",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --open /review-template.html",
+    "typecheck": "tsc --noEmit",
+    "layout-check": "tsx scripts/check-layout.ts",
+    "check": "pnpm run typecheck && pnpm run layout-check",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@astryxdesign/core": "0.6.2",
+    "@astryxdesign/theme-neutral": "0.6.2",
+    "elkjs": "0.10.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.2",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.7",
+    "@vitejs/plugin-react": "6.1.1",
+    "tsx": "4.20.5",
+    "typescript": "6.0.2",
+    "vite": "8.3.0",
+    "vite-plugin-singlefile": "2.3.3"
+  }
+}

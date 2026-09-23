@@ -1,0 +1,77 @@
+:root {
+  font-family: system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  color-scheme: light dark;
+  accent-color: var(--color-text-orange);
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+button, input, select, textarea { font: inherit; }
+button, select, input[type="checkbox"], input[type="radio"] { cursor: pointer; }
+button { border: 1px solid currentColor; border-radius: 0.5rem; background: transparent; color: inherit; padding: 0.45rem 0.75rem; }
+button:hover:not(:disabled), button[aria-selected="true"] { color: var(--color-text-orange); border-color: var(--color-text-orange); background: var(--color-background-orange); }
+button:disabled { cursor: not-allowed; opacity: 0.55; }
+input:not([type="checkbox"]):not([type="radio"]), select, textarea { display: block; width: 100%; margin-block: 0.35rem 0.75rem; border: 1px solid currentColor; border-radius: 0.4rem; background: transparent; color: inherit; padding: 0.5rem 0.65rem; }
+input[type="checkbox"], input[type="radio"] { margin-inline-end: 0.45rem; }
+textarea { resize: vertical; }
+label { display: block; margin-block: 0.6rem; }
+fieldset { border: 1px solid color-mix(in srgb, currentColor 25%, transparent); border-radius: 0.65rem; margin-block: 1rem; padding: 0.8rem 1rem; }
+fieldset label { display: inline-flex; align-items: center; gap: 0.2rem; margin-inline-end: 1.1rem; }
+main { max-width: 1440px; margin-inline: auto; padding: clamp(1rem, 3vw, 2.5rem); }
+main > header { border-bottom: 1px solid color-mix(in srgb, currentColor 22%, transparent); margin-block-end: 1.5rem; padding-block-end: 1rem; }
+main > header > h1 { margin-block: 0.2rem 0.5rem; }
+main > header > p { margin-block: 0.35rem; }
+[data-kind="eyebrow"] { color: var(--color-text-orange); font-size: 0.875rem; font-weight: 700; letter-spacing: 0.035em; }
+nav[role="tablist"] { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-block-start: 1rem; }
+[role="tabpanel"] { outline: none; }
+section { margin-block: 1.5rem; }
+section > h2 { margin-block: 0.2rem 0.5rem; }
+section > section { margin-block: 1.25rem; }
+article { border: 1px solid color-mix(in srgb, currentColor 22%, transparent); border-radius: 0.75rem; margin-block: 0.75rem; padding: 1rem; }
+article > :first-child { margin-block-start: 0; }
+article > :last-child { margin-block-end: 0; }
+article h3, article h4 { margin-block: 0.35rem 0.7rem; }
+article[data-kind="requirement"][data-out="true"] { opacity: 0.82; }
+article header p { margin-block: 0.2rem; }
+[data-kind="changed"], [data-kind="active"], [data-kind="pending"] { color: var(--color-text-orange); font-weight: 650; }
+[data-kind="changed"] { display: inline-block; border-radius: 1rem; background: var(--color-background-orange); padding: 0.08rem 0.55rem; font-size: 0.8rem; }
+[data-kind="attribution"] { display: block; color: var(--color-text-orange); font-size: 0.78rem; font-weight: 700; }
+[data-kind="warning"], [data-kind="persistent-warning"] { border-inline-start: 0.3rem solid var(--color-text-orange); background: var(--color-background-orange); padding: 0.75rem 1rem; }
+[data-kind="storage-warning"] { color: var(--color-text-orange); font-weight: 700; }
+[data-kind="saved"], [data-kind="signed"] { color: var(--color-text-orange); }
+[data-kind="export-actions"] { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-block: 0.75rem; }
+[data-kind="export-actions"] label { margin: 0; }
+[data-kind="story-map"] { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0.75rem; }
+[data-kind="story-map"] article { margin: 0; }
+dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.25rem 0.75rem; }
+dt { font-weight: 700; }
+dd { margin: 0; }
+table { width: 100%; border-collapse: collapse; }
+th, td { border: 1px solid color-mix(in srgb, currentColor 22%, transparent); padding: 0.6rem; text-align: start; vertical-align: top; }
+th { background: color-mix(in srgb, currentColor 7%, transparent); }
+pre { overflow: auto; border: 1px solid color-mix(in srgb, currentColor 22%, transparent); border-radius: 0.6rem; padding: 1rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+svg { display: block; width: 100%; min-height: 18rem; overflow: visible; border: 1px solid color-mix(in srgb, currentColor 22%, transparent); border-radius: 0.75rem; background: var(--color-background-surface, Canvas); color: var(--color-text-primary, CanvasText); }
+svg path { fill: none; stroke: var(--color-text-secondary, var(--color-text-primary, CanvasText)); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+svg marker path { fill: var(--color-text-secondary, var(--color-text-primary, CanvasText)); stroke: none; }
+svg [data-kind="state-node"] rect { fill: var(--color-background-surface, Canvas); stroke: var(--color-text-secondary, var(--color-text-primary, CanvasText)); stroke-width: 2; }
+svg [data-kind="state-node"][data-focal="true"] rect { fill: var(--color-background-orange, var(--color-background-surface, Canvas)); stroke: var(--color-text-orange, var(--color-text-primary, CanvasText)); }
+svg [data-kind="state-node"] text { fill: var(--color-text-primary, CanvasText); font: 600 14px system-ui, sans-serif; }
+svg [data-kind="state-node"][data-focal="true"] text { fill: var(--color-text-orange, var(--color-text-primary, CanvasText)); }
+svg [data-kind="state-node"] [data-kind="node-detail"] { fill: var(--color-text-secondary, var(--color-text-primary, CanvasText)); font-size: 12px; font-weight: 500; }
+svg [data-kind="state-node"][data-focal="true"] [data-kind="node-detail"] { fill: var(--color-text-orange, var(--color-text-primary, CanvasText)); }
+svg [data-kind="edge-label"] rect { fill: var(--color-background-surface, Canvas); stroke: var(--color-border-emphasized, var(--color-text-secondary, CanvasText)); stroke-width: 1; }
+svg [data-kind="edge-label"] text { fill: var(--color-text-primary, CanvasText); font: 12px system-ui, sans-serif; }
+svg [data-kind="blind-chip"] rect { fill: var(--color-background-orange, var(--color-background-surface, Canvas)); stroke: var(--color-text-orange, var(--color-text-primary, CanvasText)); }
+svg [data-kind="blind-chip"] text { fill: var(--color-text-orange, var(--color-text-primary, CanvasText)); font-weight: 700; }
+svg g[role="button"] { cursor: pointer; }
+dialog[open] { position: fixed; inset: 50% auto auto 50%; z-index: 5; width: min(42rem, calc(100vw - 2rem)); max-height: 85vh; overflow: auto; transform: translate(-50%, -50%); border: 1px solid currentColor; border-radius: 0.75rem; background: Canvas; color: CanvasText; box-shadow: 0 1rem 3rem #0006; padding: 1.25rem; }
+footer { border-top: 1px solid color-mix(in srgb, currentColor 22%, transparent); margin-block-start: 2rem; padding-block-start: 0.75rem; font-size: 0.85rem; }
+@media (max-width: 700px) {
+  main { padding: 1rem; }
+  table { display: block; overflow-x: auto; }
+  dl { grid-template-columns: 1fr; }
+  dd { margin-block-end: 0.4rem; }
+  svg { min-height: 12rem; }
+}

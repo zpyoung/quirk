@@ -27,7 +27,8 @@ Step 0 is the first half of the stage that authors a tech spec when warranted, t
    for one at logic-spec approval. Otherwise skip — plan from the logic spec instead, and
    continue to Step 1.
 2. **Record the ruling.** Log which criterion fired, or "skipped — none met," in this run (and in
-   `logic.md` Status when a tech spec is authored).
+   the logic spec's Status source when a tech spec is authored: `logic.json` for interactive specs
+   (then regenerate `logic.md`), or `logic.md` otherwise).
 3. **If the gate is met:**
    - **Idempotency:** if a reviewed `tech.md` already exists as the sibling of the actual
      `logic.md` (wherever it was saved — by default `docs/quirk/specs/YYYY-MM-DD-<topic>/tech.md`
@@ -43,8 +44,8 @@ Step 0 is the first half of the stage that authors a tech spec when warranted, t
      consequential calls — anchored subsystem/files, major DO-NOT-CHANGE fences, riskiest
      contracts.
    - If a conflict with a `logic.md` Decisions-Locked entry surfaces, **STOP** and escalate
-     (feasibility escalation) — record the resolution as a dated `logic.md` Amendments entry
-     before continuing.
+     (feasibility escalation) — record the resolution as a dated Amendments entry in `logic.json`
+     for interactive specs (then regenerate `logic.md`), or in `logic.md` otherwise, before continuing.
 4. **If the gate is not met:** note "no tech spec — plan from the logic spec" and continue to
    Step 1.
 
@@ -82,8 +83,9 @@ After all tasks complete and verified:
 **STOP executing immediately when:**
 - Hit a blocker (missing dependency, test fails, instruction unclear)
 - Plan has critical gaps preventing starting
-- Plan conflicts with a `logic.md` Decisions-Locked entry — record the resolution as a dated
-  entry in the logic spec's Amendments log before continuing, never a silent plan edit
+- Plan conflicts with a `logic.md` Decisions-Locked entry — stop. Record the resolution as a dated
+  Amendments entry in `logic.json` for interactive specs (then regenerate `logic.md`), or in
+  `logic.md` otherwise, before continuing; never silently edit the in-context plan.
 - You don't understand an instruction
 - Verification fails repeatedly
 

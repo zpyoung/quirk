@@ -1,0 +1,104 @@
+{
+  "kind": "quirk-logic-spec-decisions",
+  "schemaVersion": 1,
+  "slug": "sample",
+  "renderId": "b8503560c913",
+  "exportedAt": "2026-09-23T16:00:00Z",
+  "signed": true,
+  "seen": {
+    "REQ-01": "a1c78a090b7c9718ff39de0efdca589c813e7e2b27a0df37f56d30094c932be5",
+    "REQ-02": "068c2203ddcfc05d02bcc0068427e7223170b15e87d1572dc980dc8c1b357375",
+    "REQ-03": "b5ddcefc6f4db297efbf70f45f9153980f33d3a179a4c383987bd6f046646043",
+    "OOS-01": "2d3a67859d1426457b5bcd3cbcbd20d6fef06ed8f9626423a0e4731ee9299d54",
+    "ASM-01": "4b7aa4e971d8e6e08cd5349c0afdd614d0ac7d70bac9e2a9ff3b8e764b6cc57d",
+    "BS-01": "b9a5497bfd85213dd3ba374a3d4d1c25dd3fed173960bb56c2e8de97df6291f6",
+    "SC-01": "11ceb0106b8cd40191e51b21d07e9ea005a408a385eac3aabe577e3ab88afcdf"
+  },
+  "state": {
+    "placements": {
+      "REQ-01": "conditional",
+      "REQ-02": "out"
+    },
+    "conditions": {
+      "REQ-01": "under-10"
+    },
+    "moveReasons": {
+      "REQ-01": "Keep the archive within the agreed small implementation.",
+      "REQ-02": "Automated source discovery is not wanted."
+    },
+    "notes": {},
+    "assumptions": {
+      "ASM-01": {
+        "ruling": "verify-first",
+        "note": "Check permissions before writing."
+      }
+    },
+    "blindSpots": {
+      "BS-01": {
+        "accepted": true,
+        "note": "I accept the destination permission risk after preflight."
+      }
+    },
+    "scenarioOutcomes": {
+      "SC-01": {
+        "choice": "alt-0",
+        "custom": ""
+      }
+    },
+    "scenarioApproved": {
+      "SC-01": true
+    },
+    "scenarioRequests": [],
+    "researchRequests": [],
+    "verdict": "approve",
+    "verdictNote": "The reviewed scope is acceptable.",
+    "signedAt": "2026-09-23T16:00:00Z",
+    "updatedAt": "2026-09-23T16:00:00Z"
+  },
+  "record": {
+    "verdict": "approve",
+    "verdictNote": "The reviewed scope is acceptable.",
+    "signedAt": "2026-09-23T16:00:00Z",
+    "placements": [
+      {
+        "id": "REQ-01",
+        "from": "in",
+        "to": "conditional",
+        "condition": "under-10",
+        "reason": "Keep the archive within the agreed small implementation."
+      },
+      {
+        "id": "REQ-02",
+        "from": "in",
+        "to": "out",
+        "condition": null,
+        "reason": "Automated source discovery is not wanted."
+      }
+    ],
+    "assumptions": [
+      {
+        "id": "ASM-01",
+        "ruling": "verify-first",
+        "note": "Check permissions before writing."
+      }
+    ],
+    "blindSpots": [
+      {
+        "id": "BS-01",
+        "accepted": true,
+        "note": "I accept the destination permission risk after preflight."
+      }
+    ],
+    "scenarios": [
+      {
+        "id": "SC-01",
+        "approved": true,
+        "then": "Write a compact index.",
+        "changesSpec": true
+      }
+    ],
+    "scenarioRequests": [],
+    "researchRequests": [],
+    "openWarnings": []
+  }
+}

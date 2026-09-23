@@ -6,8 +6,9 @@
 ## Architecture
 
 Three units, one direction of dependency: **rubric → renderer → page template**. The rubric tells
-Claude what to write and which commands to run. The renderer is the only thing that reads or writes
-`logic.json`. The page is a static asset that knows nothing about the filesystem.
+Claude what to write and which commands to run. Claude authors and revises `logic.json` as the source.
+The renderer validates it and is the only program that reads or writes it; the page is a static
+asset with no filesystem access.
 Back-links: [Conceptual model](logic.md#conceptual-model), [Data flow](logic.md#data-flow).
 
 | Unit | Path | Tech | State |
@@ -69,13 +70,10 @@ which still exists.
 
 ### Test anchors
 
-- `tests/test_writing_specs_skill.py:88` `test_callers_point_at_the_writing_specs_skill`: extend
-  the rubric-filename map so `brainstorming/SKILL.md` must also name `interactive-logic-spec.md`.
-- `tests/test_writing_specs_skill.py:109` `test_cross_file_links_and_anchors_resolve`: covers the new
-  rubric automatically when it links with `[text](target)`. Every link it adds must resolve.
-- `tests/conftest.py:47` `load_filing_module` is the precedent for loading a skill-local script by
-  path. The new test file loads `render_spec.py` the same way, and its subprocess cases mirror
-  `run_filing_script` (`conftest.py:57`).
+- `tests/test_writing_specs_skill.py` verifies that the rubric ships and its cross-file links and
+  anchors resolve; it does not pin incidental prose or the spelling of routing instructions.
+- `tests/test_interactive_logic_spec.py` exercises the renderer through subprocess and parsed
+  outputs, including generated payload, export status, and fold behavior.
 
 ## Contracts & interfaces
 
@@ -158,9 +156,12 @@ render_spec.py fold         <spec-dir> <export.json> [--tech-spec-requested]
 
 **`find-export`**
 - *Post:* prints the absolute path of the newest export whose `kind` and `slug` match.
-- *Search:* `<spec-dir>` first, then `--downloads` (default `~/Downloads`).
+- *Search:* `<spec-dir>` and `--downloads` (default `~/Downloads`) together; neither folder wins by
+  location. An export whose `renderId` matches the current render beats any stale one. Among the
+  rest, the newest wins.
 - *Ordering:* "Newest" means greatest `exportedAt` inside the file, not mtime. A file that fails JSON
-  parsing is skipped with a stderr note, never fatal.
+  parsing, or is not a decision export, is skipped silently, never fatal.
+- *Pre:* `logic.json` must be valid (exit 1 otherwise), since the current render ID is needed.
 
 **`check-export`**
 - Exit 0 when the export is valid and current, 3 when stale, 1 when invalid.
@@ -355,7 +356,7 @@ Every plain-language field is Claude-written by definition: `summary`, `detail`,
 { spec: LogicSpec, slug: string, renderId: string,
   itemHashes: { [itemId]: string }, logicMarkdown: string, priorDecisions: Export | null }
 ```
-Every `<` in the serialized payload is written as `<`, so no string content can close the
+Every `<` in the serialized payload is written as `\u003c`, so no string content can close the
 script element.
 
 `CONFIG:` placeholder, exactly once in `review-template.html`:
@@ -417,12 +418,10 @@ These headings keep the `logic.md#…` anchors that writing-plans and tech specs
 
 ## DO-NOT-CHANGE fences
 
-1. **Test-pinned literals in `skills/writing-specs/logic-spec.md`:** `Tech spec: requested`,
-   `## Status & amendments`, `**Amendments:**`, `docs/quirk/specs/YYYY-MM-DD-<topic>/logic.md`,
-   `Decisions Locked`, `Industry Insights`, `Deferred Ideas`, `No need to re-review`. These are
-   asserted by `test_logic_spec_contract_literals` (`tests/test_writing_specs_skill.py:33`). The
-   markdown rubric stays the default path; it gains at most a one-line pointer to the interactive
-   rubric.
+1. **Markdown rubric compatibility in `skills/writing-specs/logic-spec.md`:** Preserve the
+   `Tech spec: requested` status marker, section headings, amendments format, and existing
+   markdown approval path. The markdown rubric remains the default; it gains at most a one-line
+   pointer to the interactive rubric.
 2. **`skills/brainstorming/SKILL.md` stays ≤400 lines.** It is 375 today, and
    `test_body_within_line_budget` (`tests/test_brainstorming_elicitation.py:207`) caps it. Also
    preserve its literals:
@@ -431,9 +430,8 @@ These headings keep the `logic.md#…` anchors that writing-plans and tech specs
    - `Essential-coverage\ncheck`
    - `Industry Insights` and `Deferred Ideas`
    - the whole adhd Step 0 / Step 1 block, which `tests/test_brainstorming_adhd_offer.py` pins
-3. **`owns *where* and *contracts*` appears only in `skills/writing-specs/SKILL.md`.** This is
-   `test_ownership_paragraph_has_one_home` (`:70`). The new rubric must not restate the ownership
-   paragraph.
+3. **Ownership remains in `skills/writing-specs/SKILL.md`.** The new rubric must not restate the
+   hub's ownership paragraph.
 4. **`skills/adversarial-review/scripts/adversarial-review:50` `SPEC_DESIGN_NAMES`**. Do not add
    `logic.json`. The generated `logic.md` sits beside it and already routes to the `spec-design`
    profile, and a JSON source would feed the reviewer the wrong artifact.
@@ -441,8 +439,8 @@ These headings keep the `logic.md#…` anchors that writing-plans and tech specs
    and that repo forbids committing `docs/**`. Never edit anything under
    `/Users/zpyoung/PycharmProjects/orca/`. Never run `pnpm exec` or `npx` there. Never commit its
    `docs/**`. Copy source into `app/`; don't import from it.
-6. **The string `writing-tech-spec`** must not appear in any new file under `skills/`, `commands/`
-   or `.claude-plugin/`. `test_no_stale_skill_name_references` (`:76`) scans for it.
+6. **No stale skill name in new shipped files.** Do not introduce `writing-tech-spec` under
+   `skills/`, `commands/` or `.claude-plugin/`.
 
 ## Always / Ask / Never
 
@@ -510,8 +508,8 @@ It must cover:
   - editing one requirement changes only that item's `itemHashes` entry
   - `logic.md` contains the generated-banner line and every rubric heading
   - `.gitignore` is idempotent
-- `find-export`: prefers the spec dir, orders by `exportedAt` over mtime, and skips unparseable
-  files.
+- `find-export`: searches both folders together, prefers the current render, orders by
+  `exportedAt` over mtime, and skips unparseable files without a stderr note.
 - `check-export`: returns 0 for a current export, 3 for a stale export and for a wrong-slug export,
   and 1 for a malformed export.
 - `fold`:
@@ -519,13 +517,11 @@ It must cover:
   - sets the status with and without `--tech-spec-requested`
   - refuses unsigned exports (4), gate-failing exports (4, naming the gate) and stale exports (3)
   - a second fold of the same export exits 3
-- The template's committed file contains the placeholder exactly once.
+- A successful render demonstrates that the committed template contains one usable payload slot;
+  no separate source-text assertion is needed.
 
-**`tests/test_writing_specs_skill.py`** gains:
-- the rubric file exists
-- the hub table names `interactive-logic-spec.md`
-- `brainstorming/SKILL.md` names it
-- extend `test_callers_point_at_the_writing_specs_skill`
+**`tests/test_writing_specs_skill.py`** verifies the rubric file ships and all new relative links
+and anchors resolve. Routing text is reviewed as documentation, not pinned to literal wording.
 
 **Page checks** are run from `skills/writing-specs/interactive/app/` and are not part of pytest.
 
@@ -533,11 +529,12 @@ It must cover:
 - `check` runs `tsc --noEmit` plus a layout-collision check. The collision check computes the elkjs
   layout for the sample fixture's state machine and fails if any label box intersects another label
   or node box.
-- `tsc` also typechecks `import sample from '../../../../../tests/fixtures/interactive/sample/logic.json'`
-  with `satisfies LogicSpec`. This is the drift guard between the TypeScript types and the Python
-  validator.
-- `build` writes `../review-template.html`. Afterwards,
-  `git diff --exit-code -- skills/writing-specs/interactive/review-template.html` must be clean.
+- The layout-check script reads `tests/fixtures/interactive/sample/logic.json`, emits its literal
+  object into a temporary TypeScript source with `satisfies LogicSpec`, typechecks it, and removes
+  the temporary file. Importing JSON directly widens enum strings and cannot satisfy the literal
+  TypeScript union types. This is the drift guard between the TS types and Python validator.
+- `build` writes `../review-template.html`. Rebuilding without source changes must preserve its
+  checksum; after the file is tracked, `git diff --exit-code` can check it as well.
 
 **Browser smoke** (manual acceptance, `playwright-cli`, which is on PATH):
 1. Run `render` on `sample`.

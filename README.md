@@ -51,7 +51,13 @@ All three gate on artifact-file presence — they are inert no-ops in projects t
 
 ### Logic spec + tech spec
 
-See `docs/specs/2026-05-04-typed-artifacts-design.md` (historical, pre-restructure). Current specs live under a per-topic folder: `docs/quirk/specs/YYYY-MM-DD-<topic>/logic.md` (always) and `docs/quirk/specs/YYYY-MM-DD-<topic>/tech.md` (only when warranted).
+See `docs/specs/2026-05-04-typed-artifacts-design.md` (historical, pre-restructure).
+Current specs live under `docs/quirk/specs/YYYY-MM-DD-<topic>/`: `logic.md` always,
+`tech.md` when warranted. Brainstorming offers an interactive logic-spec format once;
+Markdown remains the default. Interactive specs keep `logic.json` as the source,
+generate `logic.md`, and use a local `review.html` for decisions and sign-off.
+The page and decision exports are not committed. See
+[the interactive rubric](skills/writing-specs/interactive-logic-spec.md).
 
 ## Agent Isles bridge
 
@@ -70,4 +76,8 @@ The experimental local component pack lives in `packs/quirk/` and covers typed a
 python3 -m pytest -q
 ```
 
-Stdlib-only Python 3.9+. No third-party dependencies.
+The renderer runs on Python 3.9+ with only the standard library; producing an
+interactive spec requires no Node install or build. Contributors rebuilding the
+prebuilt review page use the pinned `pnpm` dependencies in
+`skills/writing-specs/interactive/app/` (`pnpm install --frozen-lockfile &&
+pnpm run check && pnpm run build`).
