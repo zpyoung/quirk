@@ -117,7 +117,16 @@ function DisputeControl({ requirement, spec, state, update }: { requirement: Req
     <VStack gap={2}>
       <Heading level={4}>Dispute</Heading>
       {existing ? (
-        <Banner status="warning" title="Dispute recorded" description="Claude re-derives this on the next stage 1 pass." collapsible={false} />
+        <Banner
+          status="warning"
+          title="Dispute recorded"
+          description={
+            existing.kind === 'scenario'
+              ? 'Re-approve the reopened scenario above; Claude then runs `reapprove` and re-derives this requirement.'
+              : "Claude rewrites this requirement's text; stage 1 and its pin are untouched."
+          }
+          collapsible={false}
+        />
       ) : null}
       <RadioList label="What are you disputing?" value={kind} onChange={(value) => setKind(value as DisputeKind)}>
         <RadioListItem value="derivation" label="The derivation" description="This requirement shouldn't exist as derived, or is derived wrong." />

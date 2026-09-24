@@ -107,6 +107,10 @@ export function isReviewState(value: unknown): value is ReviewState {
       typeof outcome.custom === 'string') &&
     isObject(value.scenarioApproved) && Object.values(value.scenarioApproved).every((approved) => typeof approved === 'boolean') &&
     isStringMap(value.scenarioDrops) &&
+    // a scenario cannot be both approved and dropped at once
+    Object.entries(value.scenarioApproved as Record<string, boolean>).every(
+      ([id, approved]) => !approved || !(value.scenarioDrops as Record<string, string>)[id]?.trim(),
+    ) &&
     Array.isArray(value.scenarioRequests) && value.scenarioRequests.every((request) =>
       isObject(request) && typeof request.id === 'string' && typeof request.behavior === 'string' &&
       typeof request.text === 'string' && typeof request.requestedAt === 'string') &&
