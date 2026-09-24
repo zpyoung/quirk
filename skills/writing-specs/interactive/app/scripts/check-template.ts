@@ -26,12 +26,13 @@ try {
     readFile(committedTemplatePath),
   ])
 
-  if (!built.equals(committed)) {
+  if (built.equals(committed)) {
+    console.log('review-template.html matches a fresh build.')
+  } else {
     console.error('review-template.html is stale; run pnpm run build')
-    process.exit(1)
+    // exitCode (not exit()) lets the finally below remove tempOutDir before the process ends
+    process.exitCode = 1
   }
-
-  console.log('review-template.html matches a fresh build.')
 } finally {
   await rm(tempOutDir, { recursive: true, force: true })
 }

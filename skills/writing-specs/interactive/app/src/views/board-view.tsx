@@ -329,6 +329,7 @@ export function BoardView({ spec, state, update, changedIds, openRequirementId, 
               <HStack key={requirement.id} gap={1} align="center" wrap="wrap">
                 <Text type="label">{requirement.id}</Text>
                 <Text type="supporting">{requirement.summary} — from {scenarios.map((scenario) => scenario.id).join(', ')}</Text>
+                <ChangedToken id={requirement.id} changedIds={changedIds} short />
               </HStack>
             ))}
           </VStack>
