@@ -753,6 +753,56 @@ def test_v2_final_fold_moves_reapproved_hash_into_pin(tmp_path: Path) -> None:
     assert folded["stage1Pin"]["itemHashes"]["SC-01"] == current_hash
 
 
+def test_v2_validate_rejects_a_stale_reapproved_hash_even_when_the_pin_still_matches() -> None:
+    logic = load_json(V2_STAGE2 / "logic.json")
+    assert render_spec.validate_logic_v2(logic)[0] == []
+
+    logic["scenarios"][0]["reapprovedHash"] = "not-the-current-hash"
+
+    errors = dict(render_spec.validate_logic_v2(logic)[0])
+    assert errors.get("/scenarios/0/reapprovedHash") == "reapprovedHash does not match the item's current hash"
+
+
+def test_v2_fold_refuses_a_logic_json_with_a_stale_reapproved_hash(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE2, name="stage2")
+    logic = load_json(spec_dir / "logic.json")
+    logic["scenarios"][0]["reapprovedHash"] = "not-the-current-hash"
+    save_json(spec_dir / "logic.json", logic)
+
+    export = load_json(V2_STAGE2_EXPORTS / "signed.json")
+    export_path = tmp_path / "signed.json"
+    save_json(export_path, export)
+
+    result = run_cli("fold", str(spec_dir), str(export_path))
+    assert result.returncode == 1, result.stderr
+    unchanged = load_json(spec_dir / "logic.json")
+    assert unchanged["stage1Pin"]["itemHashes"]["SC-01"] != "not-the-current-hash"
+
+
+def test_v2_final_fold_refuses_to_write_when_post_fold_logic_is_invalid(tmp_path: Path, monkeypatch: Any) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE2, name="stage2")
+    render_result = run_cli("render", str(spec_dir))
+    assert render_result.returncode == 0, render_result.stderr
+
+    export = load_json(V2_STAGE2_EXPORTS / "signed.json")
+    export["renderId"] = render_result.stdout.strip()
+    export_path = tmp_path / "signed.json"
+    save_json(export_path, export)
+
+    before = (spec_dir / "logic.json").read_text(encoding="utf-8")
+    real_final_fold = render_spec.final_fold
+
+    def corrupting_final_fold(logic: dict, export: dict, tech_spec_requested: bool) -> None:
+        real_final_fold(logic, export, tech_spec_requested)
+        logic["scenarios"][0]["behavior"] = "BH-DOES-NOT-EXIST"
+
+    monkeypatch.setattr(render_spec, "final_fold", corrupting_final_fold)
+
+    result = render_spec.command_fold(spec_dir, export_path, False)
+    assert result == 1
+    assert (spec_dir / "logic.json").read_text(encoding="utf-8") == before
+
+
 def test_v2_fold_prepares_template_before_writing_any_artifacts(tmp_path: Path) -> None:
     spec_dir = make_v2_spec(tmp_path, V2_STAGE1, name="stage1")
     tool_dir = tmp_path / "isolated-tool"
@@ -1055,6 +1105,31 @@ def test_v2_fold_refuses_a_scenario_that_is_both_approved_and_dropped(tmp_path: 
     assert "SC-01" in result.stderr
     folded = load_json(spec_dir / "logic.json")
     assert folded["stage"] == 1, "a rejected export must not advance the stage"
+
+
+def test_logic_reference_errors_rejects_a_record_scenario_request_with_an_unknown_behavior() -> None:
+    logic = load_json(V2_STAGE1 / "logic.json")
+    export = load_json(V2_STAGE1_EXPORTS / "signed.json")
+    export["record"]["scenarioRequests"] = [
+        {"id": "REQUEST-X", "behavior": "BH-NOT-THERE", "text": "x", "requestedAt": "2026-09-23T16:00:00Z"}
+    ]
+
+    errors = dict(render_spec.logic_reference_errors(export, logic))
+    assert errors.get("/record/scenarioRequests/0/behavior") == "unknown behavior id: BH-NOT-THERE"
+
+
+def test_v2_check_export_rejects_a_record_scenario_request_with_an_unknown_behavior(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE1, name="stage1")
+    export = load_json(V2_STAGE1_EXPORTS / "signed.json")
+    export["record"]["scenarioRequests"] = [
+        {"id": "REQUEST-X", "behavior": "BH-NOT-THERE", "text": "x", "requestedAt": "2026-09-23T16:00:00Z"}
+    ]
+    export_path = tmp_path / "unknown-behavior-request.json"
+    save_json(export_path, export)
+
+    result = run_cli("check-export", str(spec_dir), str(export_path))
+    assert result.returncode == 1, result.stderr
+    assert "BH-NOT-THERE" in result.stderr
 
 
 def test_validate_export_shape_rejects_a_non_null_target_on_a_derivation_record_dispute() -> None:

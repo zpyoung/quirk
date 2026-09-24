@@ -1217,24 +1217,27 @@ def _validate_stage1_lock(v: Validator, root: dict) -> None:
     if not isinstance(pinned_hashes, dict):
         return
     current_hashes = stage1_item_hashes(root)
-    scenario_by_id = {
-        item["id"]: item
-        for item in root.get("scenarios", [])
-        if isinstance(item, dict) and isinstance(item.get("id"), str)
-    }
+    scenario_by_id: Dict[str, dict] = {}
+    scenario_path_by_id: Dict[str, str] = {}
+    for index, item in enumerate(root.get("scenarios", [])):
+        if isinstance(item, dict) and isinstance(item.get("id"), str):
+            scenario_by_id[item["id"]] = item
+            scenario_path_by_id[item["id"]] = pointer("/scenarios", index)
     pinned_ids = set(pinned_hashes.keys())
     current_ids = set(current_hashes.keys())
     for ident in sorted((pinned_ids - current_ids) | (current_ids - pinned_ids)):
         v.error(pointer("/stage1Pin/itemHashes", ident), "stage-1 item changed after sign-off")
     for ident in sorted(pinned_ids & current_ids):
+        scenario = scenario_by_id.get(ident)
+        # check reapprovedHash against the live hash regardless of the pin, so a stale value can't slip through fold
+        if scenario is not None and "reapprovedHash" in scenario:
+            if scenario["reapprovedHash"] != current_hashes[ident]:
+                v.error(pointer(scenario_path_by_id[ident], "reapprovedHash"), "reapprovedHash does not match the item's current hash")
+            continue
         if current_hashes[ident] == pinned_hashes[ident]:
             continue
-        scenario = scenario_by_id.get(ident)
-        if scenario is not None:
-            if "reopened" in scenario:
-                continue
-            if scenario.get("reapprovedHash") == current_hashes[ident]:
-                continue
+        if scenario is not None and "reopened" in scenario:
+            continue
         v.error(pointer("/stage1Pin/itemHashes", ident), "stage-1 item changed after sign-off")
 
 
@@ -1756,6 +1759,13 @@ def logic_reference_errors(export: dict, logic: dict) -> List[Tuple[str, str]]:
                 )
     for key in ("scenarioRequests", "researchRequests"):
         for index, request in enumerate(record[key]):
+            if key == "scenarioRequests" and request["behavior"] not in behavior_ids:
+                errors.append(
+                    (
+                        pointer(pointer(pointer("/record", key), index), "behavior"),
+                        "unknown behavior id: " + request["behavior"],
+                    )
+                )
             if key == "researchRequests" and request["blindSpotId"] not in blind_ids:
                 errors.append(
                     (
@@ -2655,6 +2665,10 @@ def command_fold(spec_dir: Path, export_path: Path, tech_spec_requested: bool) -
         stage1_fold(logic, export)
     else:
         final_fold(logic, export, tech_spec_requested)
+        post_fold_errors, _ = validate_logic_dispatch(logic)
+        if post_fold_errors:
+            emit_errors(post_fold_errors)
+            return 1
 
     folded_id = _fold_write_outputs(spec_dir, logic)
     if folded_id is None:
