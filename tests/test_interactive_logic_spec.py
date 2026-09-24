@@ -12,6 +12,8 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Dict
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "skills" / "writing-specs" / "interactive" / "render_spec.py"
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "interactive"
@@ -922,21 +924,20 @@ def test_discover_export_skips_candidates_that_fail_shape_validation(tmp_path: P
     assert render_spec.discover_export(spec_dir, downloads, valid["renderId"], required_stage=2) is None
 
 
-def test_find_export_reports_an_unreadable_search_directory(tmp_path: Path, monkeypatch: Any, capsys: Any) -> None:
+def test_find_export_reports_an_unreadable_search_directory(tmp_path: Path, capsys: Any) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("root can read a 0o000 directory")
     spec_dir = make_v2_spec(tmp_path, V2_STAGE2, name="stage2")
     downloads = tmp_path / "downloads"
     downloads.mkdir()
-
-    def broken_glob(self: Path, *args: Any, **kwargs: Any) -> Any:
-        raise PermissionError("downloads unreadable")
-
-    monkeypatch.setattr(Path, "glob", broken_glob)
-
-    result = render_spec.command_find_export(spec_dir, downloads)
+    downloads.chmod(0o000)
+    try:
+        result = render_spec.command_find_export(spec_dir, downloads)
+    finally:
+        downloads.chmod(0o755)
     assert result == 1
     captured = capsys.readouterr()
-    assert str(spec_dir) in captured.err
-    assert "downloads unreadable" in captured.err
+    assert str(downloads) in captured.err
 
 
 def test_stage2_move_reasons_gate_excludes_withdrawn_requirements() -> None:
