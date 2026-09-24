@@ -16,7 +16,14 @@ SCRIPT = REPO_ROOT / "skills" / "writing-specs" / "interactive" / "render_spec.p
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "interactive"
 SAMPLE = FIXTURES / "sample"
 EXPORTS = SAMPLE / "exports"
+V2_STAGE1 = FIXTURES / "v2" / "stage1"
+V2_STAGE2 = FIXTURES / "v2" / "stage2"
+INVALID_V2 = FIXTURES / "invalid-v2"
 PLACEHOLDER = '<script type="application/json" id="quirk-logic-spec-payload">null</script>'
+EXIT6_MESSAGE = (
+    "read-only v1 spec: page review, check-export, reapprove, and fold are refused; "
+    "amend logic.json and re-render"
+)
 
 
 def run_script(
@@ -39,6 +46,13 @@ def make_spec(tmp_path: Path) -> Path:
     spec_dir = tmp_path / "sample"
     spec_dir.mkdir(parents=True)
     shutil.copy(SAMPLE / "logic.json", spec_dir / "logic.json")
+    return spec_dir
+
+
+def make_v2_spec(tmp_path: Path, source_dir: Path, name: str = "stage1") -> Path:
+    spec_dir = tmp_path / name
+    spec_dir.mkdir(parents=True)
+    shutil.copy(source_dir / "logic.json", spec_dir / "logic.json")
     return spec_dir
 
 
@@ -115,24 +129,18 @@ def test_validate_rejects_object_prototype_names_as_ids(tmp_path: Path) -> None:
         assert "reserved JavaScript object property" in result.stderr
 
 
-def test_render_embeds_safe_deterministic_payload_and_generates_markdown(tmp_path: Path) -> None:
+def test_render_writes_only_logic_md_and_gitignore_for_v1(tmp_path: Path) -> None:
     spec_dir = make_spec(tmp_path)
     result = run_cli("render", str(spec_dir))
     assert result.returncode == 0, result.stderr
-    first_html = (spec_dir / "review.html").read_text(encoding="utf-8")
+    assert result.stderr == ""
     first_markdown = (spec_dir / "logic.md").read_text(encoding="utf-8")
     ignored = (spec_dir / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert len(result.stdout.strip()) == 12
     int(result.stdout.strip(), 16)
-    assert first_html.count(PLACEHOLDER) == 0
+    assert not (spec_dir / "review.html").exists()
     assert ignored.count("review.html") == 1
     assert ignored.count("*-decisions-*.json") == 1
-    raw, payload = extract_payload(first_html)
-    assert "<" not in raw
-    assert payload["slug"] == "sample"
-    assert payload["spec"]["title"] == "Local archive workflow"
-    assert payload["renderId"] == result.stdout.strip()
-    assert payload["priorDecisions"] is None
 
     for heading in (
         "## Status & amendments",
@@ -158,259 +166,185 @@ def test_render_embeds_safe_deterministic_payload_and_generates_markdown(tmp_pat
     repeated = run_cli("render", str(spec_dir))
     assert repeated.returncode == 0, repeated.stderr
     assert repeated.stdout == result.stdout
-    assert (spec_dir / "review.html").read_text(encoding="utf-8") == first_html
     assert (spec_dir / "logic.md").read_text(encoding="utf-8") == first_markdown
     assert (spec_dir / ".gitignore").read_text(encoding="utf-8").splitlines() == ignored
+    assert not (spec_dir / "review.html").exists()
+
+
+def test_v1_specs_refuse_every_page_review_path(tmp_path: Path) -> None:
+    spec_dir = make_spec(tmp_path)
+
+    for extra_args in (("--prior", str(export_fixture("signed"))), ("--open",)):
+        refused = run_cli("render", str(spec_dir), *extra_args)
+        assert refused.returncode == 6
+        assert refused.stderr.strip() == EXIT6_MESSAGE
+        assert not (spec_dir / "review.html").exists()
+        assert not (spec_dir / "logic.md").exists()
+        assert not (spec_dir / ".gitignore").exists()
+
+    for args in (
+        ("check-export", str(spec_dir), str(export_fixture("signed"))),
+        ("find-export", str(spec_dir)),
+        ("fold", str(spec_dir), str(export_fixture("signed"))),
+        ("reapprove", str(spec_dir), str(export_fixture("signed"))),
+    ):
+        refused = run_cli(*args)
+        assert refused.returncode == 6, args
+        assert refused.stderr.strip() == EXIT6_MESSAGE, args
+
+    # a plain render still succeeds and writes only the v1 outputs
+    plain = run_cli("render", str(spec_dir))
+    assert plain.returncode == 0, plain.stderr
+    assert (spec_dir / "logic.md").exists()
+    assert not (spec_dir / "review.html").exists()
 
 
 def test_relative_dot_spec_dir_uses_folder_name_as_slug(tmp_path: Path) -> None:
-    spec_dir = make_spec(tmp_path)
-    assert run_cli("render", ".", cwd=spec_dir).returncode == 0
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE1, name="stage1")
+    result = run_cli("render", ".", cwd=spec_dir)
+    assert result.returncode == 0, result.stderr
     payload = extract_payload((spec_dir / "review.html").read_text(encoding="utf-8"))[1]
-    assert payload["slug"] == "sample"
-    # the signed fixture targets the unmodified sample, so a correct slug makes it current
-    check = run_cli("check-export", ".", str(export_fixture("signed")), cwd=spec_dir)
-    assert check.returncode == 0, check.stderr
+    assert payload["slug"] == "stage1"
 
 
-def test_render_escapes_script_content_and_hashes_only_changed_item(tmp_path: Path) -> None:
-    spec_dir = make_spec(tmp_path)
+def test_v2_render_escapes_script_content_and_hashes_only_changed_constraint(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE1)
     assert run_cli("render", str(spec_dir)).returncode == 0
     before = extract_payload((spec_dir / "review.html").read_text(encoding="utf-8"))[1]
 
     logic = load_json(spec_dir / "logic.json")
-    logic["requirements"][0]["detail"] = 'Literal adversarial content </script><script>alert("x")</script>.'
+    for constraint in logic["constraints"]:
+        if constraint["id"] == "CON-01":
+            constraint["text"] = 'Literal adversarial content </script><script>alert("x")</script>.'
     save_json(spec_dir / "logic.json", logic)
     result = run_cli("render", str(spec_dir))
     assert result.returncode == 0, result.stderr
     html = (spec_dir / "review.html").read_text(encoding="utf-8")
     raw, after = extract_payload(html)
     assert "<" not in raw
-    assert after["spec"]["requirements"][0]["detail"] == logic["requirements"][0]["detail"]
+    changed = [c for c in after["spec"]["constraints"] if c["id"] == "CON-01"][0]
+    assert changed["text"] == logic["constraints"][0]["text"]
     assert html.count('<script type="application/json" id="quirk-logic-spec-payload">') == 1
     assert after["renderId"] != before["renderId"]
     for item_id, old_hash in before["itemHashes"].items():
-        if item_id == "REQ-01":
+        if item_id == "CON-01":
             assert after["itemHashes"][item_id] != old_hash
         else:
             assert after["itemHashes"][item_id] == old_hash
 
 
-def test_render_embeds_stale_prior_without_rejecting_it(tmp_path: Path) -> None:
-    spec_dir = make_spec(tmp_path)
-    result = run_cli("render", str(spec_dir), "--prior", str(export_fixture("stale")))
+def test_v2_render_is_deterministic(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE2, name="stage2")
+    first = run_cli("render", str(spec_dir))
+    assert first.returncode == 0, first.stderr
+    first_html = (spec_dir / "review.html").read_text(encoding="utf-8")
+    first_markdown = (spec_dir / "logic.md").read_text(encoding="utf-8")
+    second = run_cli("render", str(spec_dir))
+    assert second.returncode == 0, second.stderr
+    assert second.stdout == first.stdout
+    assert (spec_dir / "review.html").read_text(encoding="utf-8") == first_html
+    assert (spec_dir / "logic.md").read_text(encoding="utf-8") == first_markdown
+
+
+def test_v2_item_hashes_cover_behaviors_and_constraints(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE2, name="stage2")
+    result = run_cli("render", str(spec_dir))
     assert result.returncode == 0, result.stderr
     payload = extract_payload((spec_dir / "review.html").read_text(encoding="utf-8"))[1]
-    assert payload["priorDecisions"]["renderId"] == "000000000000"
-    html_before = (spec_dir / "review.html").read_text(encoding="utf-8")
-    wrong_slug = load_json(export_fixture("stale"))
-    wrong_slug["slug"] = "other-spec"
-    wrong_slug_path = tmp_path / "wrong-slug-prior.json"
-    save_json(wrong_slug_path, wrong_slug)
-    rejected = run_cli("render", str(spec_dir), "--prior", str(wrong_slug_path))
-    assert rejected.returncode == 3
-    assert "different spec" in rejected.stderr
-    assert (spec_dir / "review.html").read_text(encoding="utf-8") == html_before
-
-
-def test_find_export_prefers_current_render_then_newest_across_folders(tmp_path: Path) -> None:
-    spec_dir = make_spec(tmp_path)
-    downloads = tmp_path / "Downloads"
-    downloads.mkdir()
-    old_local = load_json(export_fixture("signed"))
-    old_local["exportedAt"] = "2026-09-20T09:00:00Z"
-    newest_download = load_json(export_fixture("signed"))
-    newest_download["exportedAt"] = "2026-09-22T09:00:00Z"
-    newer_stale = load_json(export_fixture("stale"))
-    newer_stale["exportedAt"] = "2026-09-23T09:00:00Z"
-    save_json(spec_dir / "local-old.json", old_local)
-    save_json(downloads / "download-newest.json", newest_download)
-    save_json(downloads / "stale-newer.json", newer_stale)
-    (spec_dir / "broken.json").write_text("{invalid", encoding="utf-8")
-    # mtime disagrees with exportedAt so ordering by mtime would pick the wrong file
-    os.utime(spec_dir / "local-old.json", (9_999_999_999, 9_999_999_999))
-
-    result = run_cli("find-export", str(spec_dir), "--downloads", str(downloads))
-    assert result.returncode == 0, result.stderr
-    assert Path(result.stdout.strip()) == (downloads / "download-newest.json").resolve()
-    assert "broken.json" not in result.stderr
-
-    stale_only = tmp_path / "stale-only" / "sample"
-    stale_only.mkdir(parents=True)
-    shutil.copy(SAMPLE / "logic.json", stale_only / "logic.json")
-    older_stale = load_json(export_fixture("stale"))
-    older_stale["exportedAt"] = "2026-09-21T09:00:00Z"
-    save_json(stale_only / "stale-older.json", older_stale)
-    fallback = run_cli("find-export", str(stale_only), "--downloads", str(downloads))
-    assert fallback.returncode == 0, fallback.stderr
-    assert Path(fallback.stdout.strip()) == (downloads / "download-newest.json").resolve()
-    no_current = tmp_path / "no-current"
-    no_current.mkdir()
-    only_stale = run_cli("find-export", str(stale_only), "--downloads", str(no_current))
-    assert only_stale.returncode == 0, only_stale.stderr
-    assert Path(only_stale.stdout.strip()) == (stale_only / "stale-older.json").resolve()
-
-    (spec_dir / "local-old.json").unlink()
-    missing = run_cli("find-export", str(spec_dir), "--downloads", str(tmp_path / "empty-downloads"))
-    assert missing.returncode == 5
-    assert "no matching" in missing.stderr
-
-
-def test_check_export_distinguishes_current_stale_wrong_slug_and_invalid(tmp_path: Path) -> None:
-    spec_dir = make_spec(tmp_path)
-    current = run_cli("check-export", str(spec_dir), str(export_fixture("signed")))
-    assert current.returncode == 0
-    assert current.stdout.strip() == "signed"
-
-    for name in ("stale", "wrong-slug"):
-        result = run_cli("check-export", str(spec_dir), str(export_fixture(name)))
-        assert result.returncode == 3
-        assert result.stdout.strip() == "signed"
-
-    malformed = run_cli("check-export", str(spec_dir), str(export_fixture("malformed")))
-    assert malformed.returncode == 1
-    assert "/state:" in malformed.stderr
-    invalid_choice = load_json(export_fixture("signed"))
-    invalid_choice["state"]["scenarioOutcomes"]["SC-01"]["choice"] = "alt-9"
-    invalid_path = tmp_path / "invalid-choice.json"
-    save_json(invalid_path, invalid_choice)
-    bad_choice = run_cli("check-export", str(spec_dir), str(invalid_path))
-    assert bad_choice.returncode == 1
-    assert "alternative index is out of range" in bad_choice.stderr
-    blank_custom = load_json(export_fixture("signed"))
-    blank_custom["state"]["scenarioOutcomes"]["SC-01"] = {"choice": "custom", "custom": "  "}
-    blank_custom_path = tmp_path / "blank-custom.json"
-    save_json(blank_custom_path, blank_custom)
-    rejected_custom = run_cli("check-export", str(spec_dir), str(blank_custom_path))
-    assert rejected_custom.returncode == 1
-    assert "custom scenario outcome must not be blank" in rejected_custom.stderr
-
-
-def test_fold_applies_every_decision_and_is_stale_after_first_fold(tmp_path: Path) -> None:
-    spec_dir = make_spec(tmp_path)
-    result = run_cli("fold", str(spec_dir), str(export_fixture("signed")))
-    assert result.returncode == 0, result.stderr
     logic = load_json(spec_dir / "logic.json")
-    requirements = {item["id"]: item for item in logic["requirements"]}
-    assert requirements["REQ-01"]["scope"] == "in"
-    assert requirements["REQ-01"]["condition"] == "under-10"
-    assert requirements["REQ-01"]["reviewReason"] == "Keep the archive within the agreed small implementation."
-    assert requirements["REQ-02"]["scope"] == "out"
-    assert requirements["REQ-02"]["reviewReason"] == "Automated source discovery is not wanted."
-    assert logic["assumptions"][0]["ruling"] == "verify-first"
-    assert logic["assumptions"][0]["rulingNote"] == "Check permissions before writing."
-    assert logic["blindSpots"][0]["acceptance"] == "I accept the destination permission risk after preflight."
-    assert logic["scenarios"][0]["then"] == "Write a compact index."
-    assert logic["signoff"] == {"signedAt": "2026-09-23T16:00:00Z", "renderId": load_json(export_fixture("signed"))["renderId"]}
-    assert logic["status"] == "Approved"
-    assert (spec_dir / "logic.md").is_file()
-    assert (spec_dir / "review.html").is_file()
-
-    again = run_cli("fold", str(spec_dir), str(export_fixture("signed")))
-    assert again.returncode == 3
+    expected_ids = {item["id"] for kind in ("behaviors", "scenarios", "constraints", "assumptions", "blindSpots", "requirements") for item in logic[kind]}
+    assert set(payload["itemHashes"].keys()) == expected_ids
 
 
-def test_fold_requires_and_persists_reason_for_conditional_limit_changes(tmp_path: Path) -> None:
-    for include_reason in (False, True):
-        case = "with-reason" if include_reason else "without-reason"
-        spec_dir = make_spec(tmp_path / case)
-        export = load_json(export_fixture("signed"))
-        export["state"]["conditions"]["REQ-03"] = "under-10"
-        reason = "Keep the optional compression limit narrow."
-        if include_reason:
-            export["state"]["moveReasons"]["REQ-03"] = reason
-        export_path = tmp_path / (case + ".json")
-        save_json(export_path, export)
-
-        result = run_cli("fold", str(spec_dir), str(export_path))
-        if include_reason:
-            assert result.returncode == 0, result.stderr
-            folded = {item["id"]: item for item in load_json(spec_dir / "logic.json")["requirements"]}
-            assert folded["REQ-03"]["condition"] == "under-10"
-            assert folded["REQ-03"]["reviewReason"] == reason
-        else:
-            assert result.returncode == 4
-            assert "gate move-reasons" in result.stderr
-            assert load_json(spec_dir / "logic.json")["status"] == "Draft"
-
-
-def test_fold_tech_spec_status_unsigned_and_gate_failures(tmp_path: Path) -> None:
-    approved_dir = make_spec(tmp_path / "approved")
-    result = run_cli("fold", str(approved_dir), str(export_fixture("signed")), "--tech-spec-requested")
+def test_v2_stage1_validates_with_exactly_one_scenario_count_warning() -> None:
+    result = run_cli("validate", str(V2_STAGE1))
     assert result.returncode == 0, result.stderr
-    assert load_json(approved_dir / "logic.json")["status"] == "Approved — Tech spec: requested"
-
-    unsigned_dir = make_spec(tmp_path / "unsigned")
-    unsigned = run_cli("fold", str(unsigned_dir), str(export_fixture("unsigned")))
-    assert unsigned.returncode == 4
-    assert "unsigned" in unsigned.stderr
-
-    gate_dir = make_spec(tmp_path / "gate")
-    gate_export = load_json(export_fixture("signed"))
-    gate_export["state"]["assumptions"]["ASM-01"]["ruling"] = "verify-first"
-    gate_export["state"]["assumptions"]["ASM-01"]["note"] = ""
-    gate_path = tmp_path / "gate-fail.json"
-    save_json(gate_path, gate_export)
-    failed = run_cli("fold", str(gate_dir), str(gate_path))
-    assert failed.returncode == 4
-    assert "gate assumptions" in failed.stderr
+    assert result.stdout == ""
+    warnings = [line for line in result.stderr.splitlines() if line.strip()]
+    assert warnings == ["warning: behavior BH-01 has 4 scenarios; extras carry reasons"]
 
 
-def test_fold_rechecks_each_python_authoritative_gate(tmp_path: Path) -> None:
-    cases = (
-        ("queue", lambda export: export["state"]["placements"].pop("REQ-01")),
-        ("assumptions", lambda export: export["state"]["assumptions"]["ASM-01"].update(note="")),
-        ("blind-spots", lambda export: export["state"]["blindSpots"]["BS-01"].update(accepted=False)),
-        ("scenarios", lambda export: export["state"]["scenarioApproved"].update({"SC-01": False})),
-        ("move-reasons", lambda export: export["state"]["moveReasons"].pop("REQ-01")),
-        (
-            "scope-warnings",
-            lambda export: (
-                export["state"]["placements"].update({"OOS-01": "in"}),
-                export["state"]["moveReasons"].update({"OOS-01": "Reviewer includes this item."}),
-            ),
-        ),
-    )
-    for gate, mutate in cases:
-        spec_dir = make_spec(tmp_path / gate)
-        export = load_json(export_fixture("signed"))
-        mutate(export)
-        export_path = tmp_path / (gate + ".json")
-        save_json(export_path, export)
-        result = run_cli("fold", str(spec_dir), str(export_path))
-        assert result.returncode == 4
-        assert "gate " + gate in result.stderr
+def test_v2_stage2_validates() -> None:
+    result = run_cli("validate", str(V2_STAGE2))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
 
 
-def test_fold_refuses_stale_and_wrong_slug_exports(tmp_path: Path) -> None:
-    for name in ("stale", "wrong-slug"):
-        spec_dir = make_spec(tmp_path / name)
-        result = run_cli("fold", str(spec_dir), str(export_fixture(name)))
-        assert result.returncode == 3
-        assert "stale" in result.stderr
-        assert load_json(spec_dir / "logic.json")["status"] == "Draft"
+def test_v2_invalid_fixtures_each_fail_with_a_pointer(tmp_path: Path) -> None:
+    for fixture_path in sorted(INVALID_V2.glob("*.json")):
+        spec_dir = tmp_path / fixture_path.stem
+        spec_dir.mkdir()
+        shutil.copy(fixture_path, spec_dir / "logic.json")
+        result = run_cli("validate", str(spec_dir))
+        assert result.returncode == 1, fixture_path.name
+        assert any(line.startswith("/") for line in result.stderr.splitlines()), (fixture_path.name, result.stderr)
+
+
+def test_v2_logic_md_stage1_and_stage2_sections(tmp_path: Path) -> None:
+    stage1_dir = make_v2_spec(tmp_path, V2_STAGE1, name="stage1")
+    assert run_cli("render", str(stage1_dir)).returncode == 0
+    stage1_markdown = (stage1_dir / "logic.md").read_text(encoding="utf-8")
+    assert "Derived after stage 1 is signed." in stage1_markdown
+    assert "### Archiving writes a portable index." in stage1_markdown
+    assert "## Constraints" in stage1_markdown
+    assert (stage1_dir / "review.html").exists()
+
+    stage2_dir = make_v2_spec(tmp_path, V2_STAGE2, name="stage2")
+    assert run_cli("render", str(stage2_dir)).returncode == 0
+    stage2_markdown = (stage2_dir / "logic.md").read_text(encoding="utf-8")
+    assert "Derived from" in stage2_markdown
+    assert "### Archiving writes a portable index." in stage2_markdown
+    assert "## Constraints" in stage2_markdown
+
+
+def test_v2_reopened_scenario_may_change_while_a_different_locked_scenario_may_not(tmp_path: Path) -> None:
+    logic = load_json(V2_STAGE2 / "logic.json")
+
+    reopened = json.loads(json.dumps(logic))
+    for scenario in reopened["scenarios"]:
+        if scenario["id"] == "SC-01":
+            scenario["then"] = "A revised archive behavior after reopening."
+            scenario["reopened"] = {
+                "requirementId": "REQ-01",
+                "reason": "Wording needs revision.",
+                "raisedAt": "2026-09-25T10:00:00Z",
+            }
+    reopened_dir = tmp_path / "reopened"
+    reopened_dir.mkdir()
+    save_json(reopened_dir / "logic.json", reopened)
+    result = run_cli("validate", str(reopened_dir))
+    assert result.returncode == 0, result.stderr
+
+    locked = json.loads(json.dumps(logic))
+    for scenario in locked["scenarios"]:
+        if scenario["id"] == "SC-02":
+            scenario["then"] = "An edit nobody signed off on."
+    locked_dir = tmp_path / "locked"
+    locked_dir.mkdir()
+    save_json(locked_dir / "logic.json", locked)
+    failed = run_cli("validate", str(locked_dir))
+    assert failed.returncode == 1
+    assert "/stage1Pin/itemHashes/SC-02: stage-1 item changed after sign-off" in failed.stderr
 
 
 def test_fold_prepares_template_before_writing_any_artifacts(tmp_path: Path) -> None:
-    spec_dir = make_spec(tmp_path / "template-failure")
+    spec_dir = make_v2_spec(tmp_path / "template-failure", V2_STAGE1, name="stage1")
     tool_dir = tmp_path / "isolated-tool"
     tool_dir.mkdir()
     script = tool_dir / "render_spec.py"
     shutil.copy(SCRIPT, script)
     (tool_dir / "review-template.html").write_text("missing payload marker", encoding="utf-8")
 
-    result = run_script(script, "fold", str(spec_dir), str(export_fixture("signed")))
+    result = run_script(script, "render", str(spec_dir))
     assert result.returncode == 1
-    assert load_json(spec_dir / "logic.json")["status"] == "Draft"
     assert not (spec_dir / "review.html").exists()
     assert not (spec_dir / "logic.md").exists()
 
 
 def test_fold_preflights_output_paths_before_approving_source(tmp_path: Path) -> None:
-    spec_dir = make_spec(tmp_path / "blocked-output")
+    spec_dir = make_v2_spec(tmp_path / "blocked-output", V2_STAGE1, name="stage1")
     (spec_dir / "logic.md").mkdir()
 
-    result = run_cli("fold", str(spec_dir), str(export_fixture("signed")))
+    result = run_cli("render", str(spec_dir))
     assert result.returncode == 1
-    assert load_json(spec_dir / "logic.json")["status"] == "Draft"
     assert not (spec_dir / "review.html").exists()

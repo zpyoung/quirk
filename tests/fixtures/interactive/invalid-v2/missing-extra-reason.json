@@ -1,0 +1,190 @@
+{
+  "schemaVersion": 2,
+  "stage": 1,
+  "title": "Local archive workflow",
+  "status": "Draft",
+  "amendments": [],
+  "sections": {
+    "purpose": "Describe a small, local-first archive workflow.",
+    "conceptualModel": "An archive groups selected source files with a compact index.",
+    "dataFlow": "The reviewer chooses sources, then the tool writes the archive and index.",
+    "decisionsLocked": [
+      {
+        "area": "Storage",
+        "decision": "The archive is written beside the selected source directory."
+      }
+    ],
+    "industryInsights": [
+      {
+        "finding": "A portable index reduces dependence on one viewer.",
+        "sources": [
+          "https://example.test/portable-index"
+        ]
+      }
+    ],
+    "scopeNonGoals": [
+      "Remote synchronization is not part of this change."
+    ],
+    "deferredIdeas": [
+      {
+        "text": "Add archive signing after the local format stabilizes.",
+        "techSpec": true
+      }
+    ],
+    "glossary": [
+      {
+        "term": "Index",
+        "definition": "A compact listing of archive contents."
+      }
+    ]
+  },
+  "behaviors": [
+    {
+      "id": "BH-01",
+      "rule": "Archiving writes a portable index."
+    },
+    {
+      "id": "BH-02",
+      "rule": "Selecting sources is explicit."
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "SC-01",
+      "behavior": "BH-01",
+      "given": "The user has selected readable files.",
+      "when": "They create an archive.",
+      "then": "An archive and compact index are written locally.",
+      "alternatives": [],
+      "explanation": "The index makes the result inspectable without the application.",
+      "provenance": "you-chose",
+      "question": "Should archiving always write an index?"
+    },
+    {
+      "id": "SC-02",
+      "behavior": "BH-01",
+      "given": "A source file becomes unreadable after selection.",
+      "when": "The archive is written.",
+      "then": "The archive completes and reports the unreadable file by name.",
+      "alternatives": [],
+      "explanation": "Partial failures should not silently drop content.",
+      "provenance": "claude",
+      "rationale": "Unreadable sources are a common failure mode worth covering explicitly."
+    },
+    {
+      "id": "SC-03",
+      "behavior": "BH-01",
+      "given": "The user archives a large selection.",
+      "when": "They choose the default settings.",
+      "then": "An archive and index are written.",
+      "alternatives": [
+        "Skip creating an index file."
+      ],
+      "explanation": "The default keeps the index unless the reviewer says otherwise.",
+      "provenance": "you-chose",
+      "question": "Should the index be skippable?"
+    },
+    {
+      "id": "SC-04",
+      "behavior": "BH-01",
+      "given": "The destination runs out of space mid-write.",
+      "when": "The archive is being written.",
+      "then": "The write stops and the partial archive is removed.",
+      "alternatives": [],
+      "explanation": "A half-written archive is worse than no archive.",
+      "provenance": "you-recommended",
+      "question": "Should a failed write clean up after itself?"
+    },
+    {
+      "id": "SC-05",
+      "behavior": "BH-02",
+      "given": "The user opens the source picker.",
+      "when": "They select files to archive.",
+      "then": "Only explicitly selected files are archived.",
+      "alternatives": [],
+      "explanation": "Selection stays explicit and reviewable before writing begins.",
+      "provenance": "you-chose",
+      "question": "Should selection remain fully explicit?"
+    }
+  ],
+  "constraints": [
+    {
+      "id": "CON-01",
+      "area": "Archive",
+      "kind": "placement",
+      "text": "Archive output goes beside the selected source directory.",
+      "provenance": "you-chose",
+      "question": "Where should the archive be written?"
+    },
+    {
+      "id": "CON-02",
+      "area": "Archive",
+      "kind": "naming",
+      "text": "Index entries use forward slashes for paths.",
+      "provenance": "you-recommended",
+      "question": "Should paths use a single separator style?"
+    },
+    {
+      "id": "CON-03",
+      "area": "Sync",
+      "kind": "non-goal",
+      "text": "Remote synchronization of archives is out of scope.",
+      "provenance": "you-chose",
+      "question": "Should remote sync be included?"
+    },
+    {
+      "id": "CON-04",
+      "area": "Archive",
+      "kind": "verification",
+      "text": "A destination permission check runs before writing begins.",
+      "provenance": "claude",
+      "rationale": "Prevents partial writes when the destination becomes read-only mid-run."
+    }
+  ],
+  "assumptions": [
+    {
+      "id": "ASM-01",
+      "claim": "Selected inputs are readable when writing starts.",
+      "basis": "The workflow selects files before creating the archive.",
+      "certainty": "assumed",
+      "ifWrong": "Unreadable sources need a clear per-file error.",
+      "affects": [
+        "SC-01",
+        "CON-04"
+      ],
+      "meaning": "The tool can open every selected source file.",
+      "check": "Try a source that becomes unreadable after selection.",
+      "checkCost": "Low"
+    }
+  ],
+  "blindSpots": [
+    {
+      "id": "BS-01",
+      "title": "Filesystem permissions",
+      "detail": "The destination may not be writable even when sources are readable.",
+      "sources": [
+        "SC-01"
+      ],
+      "resolvedBy": "CON-04"
+    },
+    {
+      "id": "BS-02",
+      "title": "Partial writes on interruption",
+      "detail": "An interrupted write can leave a corrupt archive behind.",
+      "sources": [
+        "SC-04"
+      ]
+    }
+  ],
+  "research": [
+    {
+      "requestId": "RESEARCH-01",
+      "blindSpotId": "BS-02",
+      "summary": "Writing to a temporary file and renaming into place avoids partial archives.",
+      "detail": "A rename is atomic on the same filesystem, so an interrupted write never leaves a corrupt destination file.",
+      "answeredAt": "2026-09-21T10:30:00Z"
+    }
+  ],
+  "requirements": [],
+  "conflicts": []
+}
