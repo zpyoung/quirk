@@ -331,7 +331,7 @@ type LogicSpecV2 = {
   schemaVersion: 2
   stage: 1 | 2
   title: string
-  status: string                       // "Draft" | "Stage 1 approved" | "Approved" | "Approved — Tech spec: requested"
+  status: string                       // stage 1: "Draft"; stage 2: "Stage 1 approved", or "Approved" plus an optional " — Tech spec: <ruling>" suffix
   amendments: { date: string; text: string }[]   // as v1
   sections: LogicSections                         // as v1
   behaviors: { id: string; rule: string; detail?: string }[]
