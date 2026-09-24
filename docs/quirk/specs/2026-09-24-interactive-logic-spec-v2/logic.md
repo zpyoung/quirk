@@ -4,7 +4,7 @@
 
 ## Status & amendments
 
-**Status:** Approved
+**Status:** Approved — Tech spec: authored
 
 **Amendments:**
 none

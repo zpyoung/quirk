@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "title": "Interactive Logic Spec v2 — scenario-first two-stage review",
-  "status": "Approved",
+  "status": "Approved — Tech spec: authored",
   "amendments": [],
   "sections": {
     "purpose": "v1's review page asks the reviewer to rule on requirements Claude phrased. Polished, abstract requirement text is exactly where rubber-stamping happens, and nothing ties a requirement back to anything the reviewer agreed to. v2 fixes both problems equally: the reviewer first signs what should happen, as concrete scenarios under named behaviors plus a short constraints list, and only then sees requirements, each derived from and traced to something already signed. Human judgment lands on concrete examples, where it is most reliable, and every requirement has an accountable origin.",
