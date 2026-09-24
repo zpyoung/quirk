@@ -79,7 +79,9 @@ export function ImpactCertaintyView({ spec, state, onNavigate }: ViewProps) {
         <Banner status="warning" title="Check before building" collapsible={false}>
           <VStack gap={1}>
             {checkFirst.map(({ requirement }) => {
-              const affects = spec.assumptions.filter((assumption) => assumption.affects.includes(requirement.id)).map((assumption) => assumption.id)
+              const affects = spec.assumptions
+                .filter((assumption) => assumption.affects.some((id) => requirement.derivedFrom.includes(id)))
+                .map((assumption) => assumption.id)
               return (
                 <Text key={requirement.id}>
                   <Link onClick={openOnBoard}>{requirement.id}</Link> — {requirement.summary} ({CERTAINTY_LABEL[requirement.certainty as Certainty]}

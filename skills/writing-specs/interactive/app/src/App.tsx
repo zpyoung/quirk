@@ -83,6 +83,7 @@ function App() {
   const [storageOk, setStorageOk] = useState(initial?.storageOk ?? true)
   const defaultView: ViewId = payload && payload.spec.stage === 1 ? 'scenarios' : 'board'
   const [view, setView] = useState<ViewId>(defaultView)
+  const [openRequirementId, setOpenRequirementId] = useState<string | null>(null)
   const [importStatus, setImportStatus] = useState<string | null>(null)
   const mode = useViewerMode()
 
@@ -255,7 +256,16 @@ function App() {
     )
   }
 
-  const viewProps: ViewProps = { payload, spec: payload.spec, state, update, changedIds, onNavigate: setView }
+  const viewProps: ViewProps = {
+    payload,
+    spec: payload.spec,
+    state,
+    update,
+    changedIds,
+    onNavigate: setView,
+    openRequirementId,
+    onOpenRequirement: setOpenRequirementId,
+  }
 
   return (
     <Shell mode={mode}>

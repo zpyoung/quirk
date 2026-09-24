@@ -1,67 +1,80 @@
 import { Banner } from '@astryxdesign/core/Banner'
 import { Heading } from '@astryxdesign/core/Heading'
 import { Link } from '@astryxdesign/core/Link'
-import { VStack } from '@astryxdesign/core/Layout'
+import { HStack, VStack } from '@astryxdesign/core/Layout'
 import { Table, pixel, proportional, type TableColumn } from '@astryxdesign/core/Table'
 import { Text } from '@astryxdesign/core/Text'
 import { Token } from '@astryxdesign/core/Token'
-import { coverageGaps, type ViewId } from '../review-state'
+import { traceMatrix, type NonGoalRow, type TraceRow } from '../review-state'
 import type { ViewProps } from './view-props'
 
-type Gap = ReturnType<typeof coverageGaps>[number]
+const KIND_LABEL: Record<TraceRow['kind'], string> = { scenario: 'Scenario', constraint: 'Constraint' }
 
-const FIX_LABEL: Partial<Record<ViewId, string>> = { scenarios: 'Scenarios', risks: 'Risks' }
-const GAP_COLOR: Partial<Record<ViewId, 'red' | 'orange'>> = { scenarios: 'red', risks: 'orange' }
-const GAP_KIND: Partial<Record<ViewId, string>> = { scenarios: 'Missing scenario', risks: 'Risk gap' }
+/** `CONTRACT:` the trace matrix — one row per approved stage-1 item, linking each to the non-withdrawn requirements derived from it (see Trace matrix). */
+export function CoverageView({ spec, onNavigate, onOpenRequirement }: ViewProps) {
+  const { rows, nonGoals } = traceMatrix(spec)
+  const gapCount = rows.filter((row) => row.status === 'gap').length
 
-/** The in-scope requirements, assumptions, and blind spots still missing backup, each linking to the tab where the gap closes. */
-export function CoverageView({ spec, state, onNavigate }: ViewProps) {
-  const gaps = coverageGaps(spec, state)
-  const requirementById = new Map(spec.requirements.map((requirement) => [requirement.id, requirement]))
+  const openRequirement = (id: string) => {
+    onOpenRequirement(id)
+    onNavigate('board')
+  }
 
-  const columns: TableColumn<Gap>[] = [
+  const columns: TableColumn<TraceRow>[] = [
+    { key: 'id', header: 'ID', width: pixel(110), renderCell: (row) => <Text type="label">{row.id}</Text> },
+    { key: 'kind', header: 'Kind', width: pixel(110), renderCell: (row) => <Token size="sm" label={KIND_LABEL[row.kind]} /> },
+    { key: 'text', header: 'Text', width: proportional(3), renderCell: (row) => <Text>{row.text}</Text> },
     {
-      key: 'gap',
-      header: 'Gap',
-      width: proportional(3),
-      renderCell: (row) => {
-        const requirement = row.id.startsWith('req-') ? requirementById.get(row.id.slice(4)) : undefined
-        return (
-          <VStack gap={0.5}>
-            <Text>{row.text}</Text>
-            {requirement ? <Text type="supporting">{requirement.area}</Text> : null}
-          </VStack>
-        )
-      },
+      key: 'requirements',
+      header: 'Derived requirements',
+      width: proportional(2),
+      renderCell: (row) =>
+        row.requirementIds.length > 0 ? (
+          <HStack gap={1} wrap="wrap">
+            {row.requirementIds.map((id) => <Link key={id} onClick={() => openRequirement(id)}>{id}</Link>)}
+          </HStack>
+        ) : (
+          <Text type="supporting">None</Text>
+        ),
     },
     {
-      key: 'kind',
-      header: 'Kind',
-      width: pixel(150),
-      renderCell: (row) => <Token size="sm" color={GAP_COLOR[row.view] ?? 'orange'} label={GAP_KIND[row.view] ?? row.view} />,
+      key: 'status',
+      header: 'Status',
+      width: pixel(110),
+      renderCell: (row) => <Token size="sm" color={row.status === 'covered' ? 'green' : 'red'} label={row.status === 'covered' ? 'Covered' : 'Gap'} />,
     },
-    {
-      key: 'fix',
-      header: 'Fix it on',
-      width: pixel(140),
-      renderCell: (row) => <Link onClick={() => onNavigate(row.view)}>{`${FIX_LABEL[row.view] ?? row.view} tab`}</Link>,
-    },
+  ]
+
+  const nonGoalColumns: TableColumn<NonGoalRow>[] = [
+    { key: 'id', header: 'ID', width: pixel(110), renderCell: (row) => <Text type="label">{row.id}</Text> },
+    { key: 'kind', header: 'Kind', width: pixel(110), renderCell: (row) => <Token size="sm" label={KIND_LABEL[row.kind]} /> },
+    { key: 'text', header: 'Text', width: proportional(3), renderCell: (row) => <Text>{row.text}</Text> },
+    { key: 'reason', header: 'Reason', width: proportional(2), renderCell: (row) => <Text type="supporting">{row.reason}</Text> },
   ]
 
   return (
     <VStack gap={4}>
       <VStack gap={1}>
-        <Heading level={2}>Coverage gaps</Heading>
+        <Heading level={2}>Coverage</Heading>
         <Text type="supporting" as="p">
-          In-scope requirements and open risks that are still missing backup. Follow the link to the tab where the gap gets closed.
+          Every approved scenario and constraint, and which requirements derive from it. A gap means nothing on the board traces back to it yet.
         </Text>
       </VStack>
       <Banner
-        status={gaps.length === 0 ? 'success' : 'warning'}
-        title={gaps.length === 0 ? 'No coverage gaps' : `${gaps.length} coverage gap${gaps.length === 1 ? '' : 's'} to close`}
+        status={gapCount === 0 ? 'success' : 'warning'}
+        title={gapCount === 0 ? 'Every approved item is derived' : `${gapCount} approved item${gapCount === 1 ? '' : 's'} not yet derived`}
         collapsible={false}
       />
-      {gaps.length > 0 ? <Table data={gaps} columns={columns} idKey="id" verticalAlign="middle" dividers="rows" hasHover /> : null}
+      <Table data={rows} columns={columns} idKey="id" verticalAlign="middle" dividers="rows" hasHover />
+      <VStack gap={2}>
+        <Heading level={3}>Not derived (non-goals)</Heading>
+        <Text type="supporting" as="p">Dropped scenarios and rejected constraints, with the reason each was left out.</Text>
+        {nonGoals.length > 0 ? (
+          <Table data={nonGoals} columns={nonGoalColumns} idKey="id" verticalAlign="middle" dividers="rows" />
+        ) : (
+          <Text type="supporting">Nothing was dropped or rejected.</Text>
+        )}
+      </VStack>
     </VStack>
   )
 }

@@ -12,7 +12,7 @@ import { TextArea } from '@astryxdesign/core/TextArea'
 import { Token } from '@astryxdesign/core/Token'
 import type { Assumption, AssumptionRuling, BlindSpot, LogicSpec, ResearchRequest } from '../spec-types'
 import { RULINGS, activeBlindSpots, pendingResearchRequests, requestId, type Update } from '../review-state'
-import { CERTAINTY_LABEL, CertaintyToken, ChangedToken, ClaudeField, ClaudeWroteToken, Field, SpecMarkdown } from './shared'
+import { CERTAINTY_LABEL, CertaintyToken, ChangedToken, ClaudeField, ClaudeWroteToken, Field, itemLabel, SpecMarkdown } from './shared'
 import { ListDetailRegister } from './list-detail-register'
 import type { ViewProps } from './view-props'
 
@@ -25,15 +25,6 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
       {children}
     </VStack>
   )
-}
-
-/** A scenario or constraint's short label for referencing it from an assumption or blind spot. */
-function itemLabel(spec: LogicSpec, id: string): string {
-  const scenario = spec.scenarios.find((s) => s.id === id)
-  if (scenario) return scenario.then
-  const constraint = spec.constraints.find((c) => c.id === id)
-  if (constraint) return constraint.text
-  return id
 }
 
 function resolutionHint(spec: LogicSpec, resolvedBy: string): string {

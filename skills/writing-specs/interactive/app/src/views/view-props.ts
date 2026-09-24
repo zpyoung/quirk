@@ -9,4 +9,6 @@ export type ViewProps = {
   update: Update
   changedIds: Set<string>
   onNavigate: (view: ViewId) => void
+  openRequirementId: string | null
+  onOpenRequirement: (id: string | null) => void
 }
