@@ -1095,3 +1095,73 @@ def test_v2_render_reports_errors_instead_of_raising_on_an_item_missing_an_id(tm
     assert result.returncode == 1, result.stderr
     assert "Traceback" not in result.stderr
     assert "/behaviors/0/id" in result.stderr
+
+
+def test_validate_logic_v2_rejects_reopened_scenario_naming_an_unknown_requirement() -> None:
+    logic = load_json(V2_STAGE2 / "logic.json")
+    logic["scenarios"][0]["reopened"] = {
+        "requirementId": "REQ-NOT-THERE",
+        "reason": "review",
+        "raisedAt": "2026-09-24T00:00:00Z",
+    }
+    errors = dict(render_spec.validate_logic_v2(logic)[0])
+    assert errors.get("/scenarios/0/reopened/requirementId") == "unknown requirement id: REQ-NOT-THERE"
+
+
+def test_validate_logic_v2_rejects_reopened_scenario_not_in_the_named_requirements_derived_from() -> None:
+    logic = load_json(V2_STAGE2 / "logic.json")
+    # SC-01 derives REQ-01, not REQ-02: the reopened requirement must actually depend on this scenario.
+    assert logic["scenarios"][0]["id"] == "SC-01"
+    logic["scenarios"][0]["reopened"] = {
+        "requirementId": "REQ-02",
+        "reason": "review",
+        "raisedAt": "2026-09-24T00:00:00Z",
+    }
+    errors = dict(render_spec.validate_logic_v2(logic)[0])
+    assert (
+        errors.get("/scenarios/0/reopened/requirementId")
+        == "requirement REQ-02 does not derive from this scenario"
+    )
+
+
+def test_validate_logic_v2_rejects_transition_blind_spot_naming_an_unknown_id() -> None:
+    logic = load_json(V2_STAGE2 / "logic.json")
+    logic["views"]["stateMachine"]["transitions"][0]["blindSpot"] = "BS-NOT-THERE"
+    errors = dict(render_spec.validate_logic_v2(logic)[0])
+    assert errors.get("/views/stateMachine/transitions/0/blindSpot") == "unknown blind spot id: BS-NOT-THERE"
+
+
+def test_validate_logic_v2_accepts_transition_blind_spot_naming_a_known_id() -> None:
+    logic = load_json(V2_STAGE2 / "logic.json")
+    logic["views"]["stateMachine"]["transitions"][0]["blindSpot"] = "BS-01"
+    errors, _warnings = render_spec.validate_logic_v2(logic)
+    assert errors == []
+
+
+def test_load_json_rejects_nesting_well_short_of_pythons_own_recursion_limit(tmp_path: Path) -> None:
+    # 300 levels parses fine (well under Python's own ~1000-frame recursion limit) but
+    # is deeper than any real spec, and deep enough to blow the stack later during
+    # canonical-JSON serialization once combined with the rest of the call stack.
+    deep_path = tmp_path / "deep.json"
+    deep_path.write_text("[" * 300 + "]" * 300, encoding="utf-8")
+    value, errors = render_spec.load_json(deep_path, str(deep_path))
+    assert value is None
+    too_deep_pointer = "/" + "/".join(["0"] * (render_spec.JSON_MAX_DEPTH + 1))
+    assert dict(errors)[too_deep_pointer] == (
+        "invalid JSON in " + str(deep_path) + ": input is too deeply nested"
+    )
+
+
+def test_v2_validate_exits_1_without_a_traceback_on_a_deeply_nested_unknown_field(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE2, name="stage2")
+    logic = load_json(spec_dir / "logic.json")
+    nested: Any = 0
+    for _ in range(300):
+        nested = [nested]
+    logic["unexpected"] = nested
+    save_json(spec_dir / "logic.json", logic)
+
+    result = run_cli("validate", str(spec_dir))
+    assert result.returncode == 1, result.stderr
+    assert "Traceback" not in result.stderr
+    assert "input is too deeply nested" in result.stderr
