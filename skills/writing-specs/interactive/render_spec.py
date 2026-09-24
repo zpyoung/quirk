@@ -2335,7 +2335,10 @@ def discover_export(
         try:
             if not directory.is_dir():
                 continue
-            paths = sorted(directory.glob("*.json"))
+            # os.scandir raises on an unreadable directory; Path.glob swallows it instead
+            with os.scandir(directory) as entries:
+                names = [entry.name for entry in entries if entry.name.endswith(".json")]
+            paths = sorted(directory / name for name in names)
         except OSError as exc:
             raise OSError(str(directory) + ": " + str(exc)) from exc
         for path in paths:
