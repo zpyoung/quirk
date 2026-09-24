@@ -80,4 +80,4 @@ The renderer runs on Python 3.9+ with only the standard library; producing an
 interactive spec requires no Node install or build. Contributors rebuilding the
 prebuilt review page use the pinned `pnpm` dependencies in
 `skills/writing-specs/interactive/app/` (`pnpm install --frozen-lockfile &&
-pnpm run check && pnpm run build`).
+pnpm run build && pnpm run check`).

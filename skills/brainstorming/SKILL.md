@@ -31,7 +31,7 @@ You MUST create a task for each of these items and complete them in order:
 8. **Propose 2-3 approaches** — with trade-offs, citing research findings, your recommendation
 9. **Present design** — in sections scaled to their complexity, get user approval after each section
 10. **Write logic spec** — follow **quirk:writing-specs**: ask once whether to use markdown (the default) or interactive; use [logic-spec.md](../writing-specs/logic-spec.md) for markdown or [interactive-logic-spec.md](../writing-specs/interactive-logic-spec.md) for interactive.
-11. **User reviews written spec** — the rubric's review gate; for an interactive spec, the page's sign-off is the review gate; do not proceed until the user approves
+11. **User reviews written spec** — the rubric's review gate; for an interactive spec, the gate is the page's final (stage-2) sign-off; do not proceed until the user approves
 12. **Transition to implementation** — invoke an execution skill (quirk:subagent-driven-development, recommended; or quirk:executing-plans), which authors a tech spec when warranted (**quirk:writing-specs** → `tech-spec.md`), then plans in context, then executes
 
 ## Process Flow
