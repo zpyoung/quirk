@@ -101,7 +101,9 @@ function scenarioColumns(props: ViewProps, isStage2: boolean): TableColumn<Scena
       renderCell: (s) => {
         const editable = !isStage2 || Boolean(s.reopened)
         if (!editable) {
-          return <Token size="sm" color={state.scenarioApproved[s.id] ? 'green' : 'default'} label={state.scenarioApproved[s.id] ? 'Approved' : 'Not approved'} />
+          // folded stage-2 scenarios carry their final outcome directly; only a reopened scenario still tracks state
+          const approved = !s.dropReason
+          return <Token size="sm" color={approved ? 'green' : 'default'} label={approved ? 'Approved' : 'Not approved'} />
         }
         const dropped = Boolean(state.scenarioDrops[s.id])
         return (

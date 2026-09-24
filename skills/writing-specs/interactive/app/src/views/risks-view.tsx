@@ -42,7 +42,8 @@ function resolutionHint(spec: LogicSpec, resolvedBy: string): string {
 
 function AssumptionDetail({ assumption, props, readOnly }: { assumption: Assumption; props: ViewProps; readOnly: boolean }) {
   const { spec, state, update, changedIds } = props
-  const entry = state.assumptions[assumption.id] ?? { note: '' }
+  // stage 2 shows the ruling folded into the spec, not the fresh (empty) stage-2 review state
+  const entry = readOnly ? { ruling: assumption.ruling, note: assumption.rulingNote ?? '' } : (state.assumptions[assumption.id] ?? { note: '' })
   const set = (patch: Partial<typeof entry>) =>
     update((s) => ({ ...s, assumptions: { ...s.assumptions, [assumption.id]: { ...entry, ...patch } } }), assumption.id)
   const needsNote = entry.ruling === 'verify-first' || entry.ruling === 'wrong'
@@ -172,7 +173,8 @@ export function BlindSpotDetail({ spot, props }: { spot: BlindSpot; props: ViewP
   const { spec, state, update, changedIds } = props
   const readOnly = spec.stage === 2
   const isActive = activeBlindSpots(state, spec).some((s) => s.id === spot.id)
-  const entry = state.blindSpots[spot.id] ?? { accepted: false, note: '' }
+  // stage 2 shows the acceptance folded into the spec, not the fresh (empty) stage-2 review state
+  const entry = readOnly ? { accepted: Boolean(spot.acceptance), note: spot.acceptance ?? '' } : (state.blindSpots[spot.id] ?? { accepted: false, note: '' })
   const set = (patch: Partial<typeof entry>) => update((s) => ({ ...s, blindSpots: { ...s.blindSpots, [spot.id]: { ...entry, ...patch } } }), spot.id)
   return (
     <VStack gap={3}>
@@ -214,8 +216,10 @@ export function BlindSpotDetail({ spot, props }: { spot: BlindSpot; props: ViewP
 
 function AssumptionRegister({ props, readOnly }: { props: ViewProps; readOnly: boolean }) {
   const { spec, state } = props
+  // stage 2 rules on assumptions are folded into the spec, not tracked in the fresh stage-2 review state
+  const rulingFor = (a: Assumption) => (readOnly ? a.ruling : state.assumptions[a.id]?.ruling)
   const [selectedId, setSelectedId] = useState<string | undefined>(
-    () => spec.assumptions.find((a) => !state.assumptions[a.id]?.ruling)?.id ?? spec.assumptions[0]?.id,
+    () => spec.assumptions.find((a) => !rulingFor(a))?.id ?? spec.assumptions[0]?.id,
   )
   const selected = spec.assumptions.find((a) => a.id === selectedId) ?? spec.assumptions[0]
   if (!selected) return <Text type="supporting">The spec lists no assumptions.</Text>
@@ -226,7 +230,7 @@ function AssumptionRegister({ props, readOnly }: { props: ViewProps; readOnly: b
       listLabel="Assumptions"
       nextLabel="Next to rule"
       entries={spec.assumptions.map((a) => {
-        const ruling = state.assumptions[a.id]?.ruling
+        const ruling = rulingFor(a)
         return {
           id: a.id,
           label: `${a.id} · ${CERTAINTY_LABEL[a.certainty]}`,
@@ -248,8 +252,11 @@ function AssumptionRegister({ props, readOnly }: { props: ViewProps; readOnly: b
 
 function BlindSpotRegister({ props }: { props: ViewProps }) {
   const { spec, state } = props
+  const readOnly = spec.stage === 2
   const activeIds = new Set(activeBlindSpots(state, spec).map((spot) => spot.id))
-  const isAccepted = (id: string) => Boolean(state.blindSpots[id]?.accepted)
+  // stage 2 shows the acceptance folded into the spec, not the fresh (empty) stage-2 review state
+  const isAccepted = (id: string) => (readOnly ? Boolean(spec.blindSpots.find((b) => b.id === id)?.acceptance) : Boolean(state.blindSpots[id]?.accepted))
+  const noteFor = (id: string) => (readOnly ? (spec.blindSpots.find((b) => b.id === id)?.acceptance ?? '') : (state.blindSpots[id]?.note ?? ''))
   const [selectedId, setSelectedId] = useState<string | undefined>(
     () => spec.blindSpots.find((b) => activeIds.has(b.id) && !isAccepted(b.id))?.id ?? spec.blindSpots[0]?.id,
   )
@@ -263,7 +270,7 @@ function BlindSpotRegister({ props }: { props: ViewProps }) {
       nextLabel="Next to accept"
       entries={spec.blindSpots.map((b) => {
         const active = activeIds.has(b.id)
-        const noteWritten = Boolean(state.blindSpots[b.id]?.note.trim())
+        const noteWritten = Boolean(noteFor(b.id).trim())
         return {
           id: b.id,
           label: `${b.id} · caused by ${b.sources.join(', ')}`,

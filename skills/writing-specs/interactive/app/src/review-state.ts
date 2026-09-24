@@ -4,6 +4,8 @@ import type {
   AssumptionRuling,
   BlindSpot,
   ConstraintKind,
+  ConstraintRulingDecision,
+  ConstraintRulingVerb,
   DecisionRecord,
   Export,
   LogicSpec,
@@ -139,6 +141,9 @@ export function isDecisionExport(value: unknown, slug?: string): value is Export
     typeof value.signed === 'boolean' &&
     isStringMap(value.seen) &&
     isReviewState(value.state) &&
+    value.stage === value.state.stage &&
+    // a signature only means something once its state actually records a signed approval
+    (!value.signed || (Boolean(value.state.signedAt) && value.state.verdict === 'approve')) &&
     isObject(value.record)
   )
 }
@@ -442,13 +447,19 @@ export function scopeWarnings(state: ReviewState, spec: LogicSpec): string[] {
   return warnings
 }
 
-/** `CONTRACT:` a blind spot is active unless its resolvedBy is an approved-and-not-dropped scenario, or a constraint ruled approve/rewrite in state. */
+/** `CONTRACT:` a blind spot is active unless its resolvedBy is an approved-and-not-dropped scenario, or a constraint ruled approve/rewrite. Stage 2 reads that ruling from the folded spec fields (reopened scenarios excepted); stage 1 reads it from review state. */
 export function activeBlindSpots(state: ReviewState, spec: LogicSpec): BlindSpot[] {
-  const scenarioIds = new Set(spec.scenarios.map((scenario) => scenario.id))
-  const constraintIds = new Set(spec.constraints.map((constraint) => constraint.id))
+  const scenarios = new Map(spec.scenarios.map((scenario) => [scenario.id, scenario]))
+  const constraints = new Map(spec.constraints.map((constraint) => [constraint.id, constraint]))
   const isResolved = (resolvedBy: string): boolean => {
-    if (scenarioIds.has(resolvedBy)) return Boolean(state.scenarioApproved[resolvedBy]) && !state.scenarioDrops[resolvedBy]
-    if (constraintIds.has(resolvedBy)) {
+    const scenario = scenarios.get(resolvedBy)
+    if (scenario) {
+      if (spec.stage === 2 && !scenario.reopened) return !scenario.dropReason
+      return Boolean(state.scenarioApproved[resolvedBy]) && !state.scenarioDrops[resolvedBy]
+    }
+    const constraint = constraints.get(resolvedBy)
+    if (constraint) {
+      if (spec.stage === 2) return constraint.ruling === 'approved' || constraint.ruling === 'rewritten'
       const ruling = state.constraintRulings[resolvedBy]?.ruling
       return ruling === 'approve' || ruling === 'rewrite'
     }
@@ -472,6 +483,24 @@ export function scenarioThen(state: ReviewState, scenario: Scenario): string {
   if (outcome.choice === 'custom') return outcome.custom.trim() || scenario.then
   const index = Number(outcome.choice.slice(4))
   return scenario.alternatives[index] ?? scenario.then
+}
+
+/** The next stored ruling for a constraint given a UI patch; switching into `rewrite` starts from blank so the gate can't be satisfied with the original constraint text. */
+export function nextConstraintRuling(
+  entry: ConstraintRulingDecision | undefined,
+  constraintText: string,
+  isClaude: boolean,
+  patch: { ruling?: ConstraintRulingVerb; text?: string; reason?: string },
+): ConstraintRulingDecision {
+  const ruling = entry?.ruling ?? (isClaude ? 'approve' : undefined)
+  const text = entry?.text ?? constraintText
+  const reason = entry?.reason ?? ''
+  const switchingToRewrite = patch.ruling === 'rewrite' && ruling !== 'rewrite'
+  return {
+    ruling: patch.ruling ?? ruling ?? 'approve',
+    text: patch.text ?? (switchingToRewrite ? '' : text),
+    reason: patch.reason ?? reason,
+  }
 }
 
 function constraintDecided(state: ReviewState, constraint: { id: string }): boolean {
