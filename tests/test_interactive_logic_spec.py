@@ -796,3 +796,146 @@ def test_derived_requirement_status_and_gate_exclusion_for_withdrawn_requirement
     # REQ-X would otherwise warn about depending on the out-of-scope REQ-OUT, but a
     # withdrawn requirement is excluded from scope warnings entirely.
     assert "scope-warnings" not in failures
+
+
+def test_validate_export_shape_requires_state_and_record_stage_to_match_root() -> None:
+    export = load_json(V2_STAGE2_EXPORTS / "signed.json")
+    export["state"]["stage"] = 1
+    export["record"]["stage"] = 1
+    errors = dict(render_spec.validate_export_shape(export))
+    assert "/state/stage" in errors
+    assert "/record/stage" in errors
+
+
+def test_v2_fold_rejects_export_with_mismatched_state_and_record_stage(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE2, name="stage2")
+    export = load_json(V2_STAGE2_EXPORTS / "signed.json")
+    export["state"]["stage"] = 1
+    export["record"]["stage"] = 1
+    export_path = tmp_path / "mismatched-stage.json"
+    save_json(export_path, export)
+
+    result = run_cli("fold", str(spec_dir), str(export_path))
+    assert result.returncode == 1, result.stderr
+    assert "/state/stage" in result.stderr
+    assert "/record/stage" in result.stderr
+    folded = load_json(spec_dir / "logic.json")
+    assert folded["stage"] == 2, "a shape-invalid export must never be foldable"
+
+
+def test_discover_export_skips_candidates_that_fail_shape_validation(tmp_path: Path) -> None:
+    spec_dir = tmp_path / "stage2"
+    spec_dir.mkdir()
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    valid = load_json(V2_STAGE2_EXPORTS / "signed.json")
+    malformed = dict(valid)
+    del malformed["record"]
+    malformed["exportedAt"] = "2026-09-25T12:00:00Z"
+    save_json(downloads / "malformed.json", malformed)
+    save_json(spec_dir / "valid.json", valid)
+
+    found = render_spec.discover_export(spec_dir, downloads, valid["renderId"], required_stage=2)
+    assert found == (spec_dir / "valid.json").resolve()
+
+    # with only the shape-invalid candidate present, nothing qualifies
+    (spec_dir / "valid.json").unlink()
+    assert render_spec.discover_export(spec_dir, downloads, valid["renderId"], required_stage=2) is None
+
+
+def test_stage2_move_reasons_gate_excludes_withdrawn_requirements() -> None:
+    scenario_by_id = {
+        "SC-A": {"id": "SC-A"},
+        "SC-W": {
+            "id": "SC-W",
+            "reopened": {"requirementId": "REQ-W", "reason": "Wording review.", "raisedAt": "2026-01-01T00:00:00Z"},
+        },
+    }
+    logic = {
+        "scenarios": [scenario_by_id["SC-A"], scenario_by_id["SC-W"]],
+        "constraints": [],
+        "requirements": [
+            {"id": "REQ-W", "scope": "in", "dependsOn": [], "derivedFrom": ["SC-W"]},
+            {"id": "REQ-A", "scope": "in", "dependsOn": [], "derivedFrom": ["SC-A"]},
+        ],
+        "conflicts": [],
+    }
+    # REQ-W is withdrawn (its only deriving scenario is reopened) and moved to "out"
+    # with no recorded reason; the gate must not flag a withdrawn requirement.
+    state = {"placements": {"REQ-W": "out"}, "conditions": {}, "moveReasons": {}, "disputes": {}}
+    failures = dict(render_spec.stage2_gate_failures(logic, state))
+    assert "move-reasons" not in failures
+
+
+def test_logic_reference_errors_rejects_scenario_dispute_target_that_is_not_a_scenario(tmp_path: Path) -> None:
+    logic = load_json(V2_STAGE2 / "logic.json")
+    export = load_json(V2_STAGE2_EXPORTS / "unsigned-scenario-dispute.json")
+    # CON-02 is in REQ-01's derivedFrom but is a constraint, not a scenario
+    export["state"]["disputes"]["REQ-01"]["target"] = "CON-02"
+    export["record"]["disputes"][0]["target"] = "CON-02"
+    errors = dict(render_spec.logic_reference_errors(export, logic))
+    assert "/state/disputes/REQ-01/target" in errors
+    assert "/record/disputes/0/target" in errors
+
+
+def test_v2_check_export_rejects_scenario_dispute_targeting_a_constraint(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE2, name="stage2")
+    export = load_json(V2_STAGE2_EXPORTS / "unsigned-scenario-dispute.json")
+    export["state"]["disputes"]["REQ-01"]["target"] = "CON-02"
+    export["record"]["disputes"][0]["target"] = "CON-02"
+    export_path = tmp_path / "scenario-dispute-targets-constraint.json"
+    save_json(export_path, export)
+
+    result = run_cli("check-export", str(spec_dir), str(export_path))
+    assert result.returncode == 1, result.stderr
+    assert "target" in result.stderr
+
+
+def test_validate_export_shape_rejects_blank_dispute_reason() -> None:
+    export = load_json(V2_STAGE2_EXPORTS / "unsigned-derivation-dispute.json")
+    export["state"]["disputes"]["REQ-05"]["reason"] = ""
+    export["record"]["disputes"][0]["reason"] = ""
+    errors = dict(render_spec.validate_export_shape(export))
+    assert "/state/disputes/REQ-05/reason" in errors
+    assert "/record/disputes/0/reason" in errors
+
+
+def test_v2_check_export_rejects_blank_dispute_reason(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE2, name="stage2")
+    export = load_json(V2_STAGE2_EXPORTS / "unsigned-derivation-dispute.json")
+    export["state"]["disputes"]["REQ-05"]["reason"] = ""
+    export["record"]["disputes"][0]["reason"] = ""
+    export_path = tmp_path / "blank-dispute-reason.json"
+    save_json(export_path, export)
+
+    result = run_cli("check-export", str(spec_dir), str(export_path))
+    assert result.returncode == 1, result.stderr
+    assert "reason" in result.stderr
+
+
+def test_v2_render_accepts_a_shape_valid_prior_for_the_same_slug(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE1, name="stage1")
+    result = run_cli("render", str(spec_dir), "--prior", str(V2_STAGE1_EXPORTS / "signed.json"))
+    assert result.returncode == 0, result.stderr
+    payload = extract_payload((spec_dir / "review.html").read_text(encoding="utf-8"))[1]
+    assert payload["priorDecisions"]["slug"] == "stage1"
+
+
+def test_v2_render_rejects_a_shape_invalid_prior_without_writing(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE1, name="stage1")
+    prior = load_json(V2_STAGE1_EXPORTS / "signed.json")
+    del prior["record"]
+    prior_path = tmp_path / "malformed-prior.json"
+    save_json(prior_path, prior)
+
+    result = run_cli("render", str(spec_dir), "--prior", str(prior_path))
+    assert result.returncode == 1
+    assert "/record" in result.stderr
+    assert not (spec_dir / "review.html").exists()
+
+
+def test_v2_render_rejects_a_prior_export_from_a_different_spec(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE1, name="stage1")
+    result = run_cli("render", str(spec_dir), "--prior", str(V2_STAGE2_EXPORTS / "signed.json"))
+    assert result.returncode == 3
+    assert not (spec_dir / "review.html").exists()
