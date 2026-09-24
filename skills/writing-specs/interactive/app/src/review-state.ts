@@ -88,6 +88,10 @@ export function isStringMap(value: unknown): value is Record<string, string> {
   return isObject(value) && Object.values(value).every((item) => typeof item === 'string')
 }
 
+function isEmptyMap(value: unknown): boolean {
+  return Array.isArray(value) ? value.length === 0 : isObject(value) && Object.keys(value).length === 0
+}
+
 export function isReviewState(value: unknown): value is ReviewState {
   if (!isObject(value)) return false
   const isPlacement = (item: unknown) => item === 'in' || item === 'conditional' || item === 'out'
@@ -124,7 +128,14 @@ export function isReviewState(value: unknown): value is ReviewState {
     typeof value.verdictNote === 'string' &&
     typeof value.updatedAt === 'string' &&
     (value.verdict === undefined || value.verdict === 'approve' || value.verdict === 'send-back') &&
-    (value.signedAt === undefined || typeof value.signedAt === 'string')
+    (value.signedAt === undefined || typeof value.signedAt === 'string') &&
+    // stage 1 has nothing to say about the scope board yet; stage 2 has already folded stage-1 review into the spec
+    (value.stage === 1
+      ? isEmptyMap(value.placements) && isEmptyMap(value.conditions) && isEmptyMap(value.moveReasons) &&
+        isEmptyMap(value.notes) && isEmptyMap(value.disputes)
+      : isEmptyMap(value.scenarioOutcomes) && isEmptyMap(value.scenarioDrops) && isEmptyMap(value.constraintRulings) &&
+        isEmptyMap(value.assumptions) && isEmptyMap(value.blindSpots) &&
+        isEmptyMap(value.scenarioRequests) && isEmptyMap(value.researchRequests))
   )
 }
 
@@ -280,6 +291,8 @@ export function carryOver(
   const assumptionIds = new Set(spec.assumptions.map((item) => item.id))
   const blindSpotIds = new Set(spec.blindSpots.map((item) => item.id))
   const requirementIds = new Set(spec.requirements.map((item) => item.id))
+  const behaviorIds = new Set(spec.behaviors.map((item) => item.id))
+  const reopenedScenarioIds = new Set(spec.scenarios.filter((item) => item.reopened).map((item) => item.id))
   const allItemIds = new Set([...scenarioIds, ...constraintIds, ...assumptionIds, ...blindSpotIds, ...requirementIds])
 
   const changedIds = changedItemIds(spec, hashes, seen)
@@ -318,6 +331,7 @@ export function carryOver(
     Object.keys(s.constraintRulings).length,
     Object.keys(s.disputes).length,
     s.researchRequests.length,
+    s.scenarioRequests.length,
   ]
   const originalCounts = countsOf(next)
   next.placements = retainItemIds(next.placements, requirementIds)
@@ -328,9 +342,13 @@ export function carryOver(
   next.blindSpots = retainItemIds(next.blindSpots, blindSpotIds)
   next.scenarioOutcomes = retainItemIds(next.scenarioOutcomes, scenarioIds)
   next.scenarioApproved = retainItemIds(next.scenarioApproved, scenarioIds)
+  // stage 2 only tracks re-approval of scenarios still reopened; reapprove clears `reopened` and retires the entry
+  if (spec.stage === 2) next.scenarioApproved = retainItemIds(next.scenarioApproved, reopenedScenarioIds)
   next.scenarioDrops = retainItemIds(next.scenarioDrops, scenarioIds)
   next.constraintRulings = retainItemIds(next.constraintRulings, constraintIds)
   next.disputes = retainItemIds(next.disputes, requirementIds)
+  // a request whose behavior was removed can no longer surface in any behavior group, so drop it rather than count it forever
+  next.scenarioRequests = next.scenarioRequests.filter((request) => behaviorIds.has(request.behavior))
   next.researchRequests = next.researchRequests.filter((request) => blindSpotIds.has(request.blindSpotId))
   const retainedCounts = countsOf(next)
   stateChanged ||= originalCounts.some((count, index) => count !== retainedCounts[index])

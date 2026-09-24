@@ -144,7 +144,7 @@ function scenarioColumns(props: ViewProps, isStage2: boolean): TableColumn<Scena
       key: 'then',
       header: 'Then',
       width: proportional(2.6),
-      renderCell: (s) => (!isStage2 || s.reopened ? <OutcomeCell s={s} props={props} /> : <Clause keyword="Then" text={scenarioThen(state, s)} />),
+      renderCell: (s) => (!isStage2 ? <OutcomeCell s={s} props={props} /> : <Clause keyword="Then" text={scenarioThen(state, s)} />),
     },
     {
       key: 'why',
