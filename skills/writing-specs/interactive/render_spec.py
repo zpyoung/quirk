@@ -133,7 +133,7 @@ class Validator:
             return False
         try:
             parse_iso_datetime(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             self.error(path or "/", "expected an ISO 8601 date-time")
             return False
         return True
@@ -2332,9 +2332,13 @@ def discover_export(
     """Return the newest export for this spec across both folders, preferring the current render."""
     candidates: List[Tuple[bool, datetime, Path]] = []
     for directory in (spec_dir, downloads):
-        if not directory.is_dir():
-            continue
-        for path in sorted(directory.glob("*.json")):
+        try:
+            if not directory.is_dir():
+                continue
+            paths = sorted(directory.glob("*.json"))
+        except OSError as exc:
+            raise OSError(str(directory) + ": " + str(exc)) from exc
+        for path in paths:
             value, errors = load_export_file(path)
             # unrelated or broken JSON is common in Downloads, so it is skipped silently
             if errors or not isinstance(value, dict):
@@ -2351,7 +2355,7 @@ def discover_export(
                 continue
             try:
                 stamp = parse_iso_datetime(exported_at)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 print(str(path) + ": skipping export with invalid exportedAt", file=sys.stderr)
                 continue
             candidates.append((value.get("renderId") == current_render_id, stamp, path.resolve()))
@@ -2367,7 +2371,11 @@ def command_find_export(spec_dir: Path, downloads: Path) -> int:
     if logic.get("schemaVersion") == 1:
         print(EXIT6_MESSAGE, file=sys.stderr)
         return 6
-    found = discover_export(spec_dir, downloads, current_id, required_stage=logic["stage"])
+    try:
+        found = discover_export(spec_dir, downloads, current_id, required_stage=logic["stage"])
+    except OSError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     if found is None:
         print("no matching decision export found", file=sys.stderr)
         return 5

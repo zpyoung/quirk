@@ -386,6 +386,22 @@ def test_v2_reopened_scenario_may_change_while_a_different_locked_scenario_may_n
     assert "/stage1Pin/itemHashes/SC-02: stage-1 item changed after sign-off" in failed.stderr
 
 
+def test_v2_validate_rejects_a_raised_at_timestamp_that_overflows_during_parsing(tmp_path: Path) -> None:
+    logic = load_json(V2_STAGE2 / "logic.json")
+    logic["scenarios"][0]["reopened"] = {
+        "requirementId": "REQ-01",
+        "reason": "review",
+        "raisedAt": "0001-01-01T00:00:00+14:00",
+    }
+    spec_dir = tmp_path / "overflow-timestamp"
+    spec_dir.mkdir()
+    save_json(spec_dir / "logic.json", logic)
+
+    result = run_cli("validate", str(spec_dir))
+    assert result.returncode == 1
+    assert "/scenarios/0/reopened/raisedAt: expected an ISO 8601 date-time" in result.stderr
+
+
 def test_fold_prepares_template_before_writing_any_artifacts(tmp_path: Path) -> None:
     spec_dir = make_v2_spec(tmp_path / "template-failure", V2_STAGE1, name="stage1")
     tool_dir = tmp_path / "isolated-tool"
@@ -400,13 +416,24 @@ def test_fold_prepares_template_before_writing_any_artifacts(tmp_path: Path) -> 
     assert not (spec_dir / "logic.md").exists()
 
 
-def test_fold_preflights_output_paths_before_approving_source(tmp_path: Path) -> None:
+def test_render_refuses_to_write_when_output_path_is_blocked(tmp_path: Path) -> None:
     spec_dir = make_v2_spec(tmp_path / "blocked-output", V2_STAGE1, name="stage1")
     (spec_dir / "logic.md").mkdir()
 
     result = run_cli("render", str(spec_dir))
     assert result.returncode == 1
     assert not (spec_dir / "review.html").exists()
+
+
+def test_fold_preflights_output_paths_before_approving_source(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path / "blocked-output-fold", V2_STAGE1, name="stage1")
+    (spec_dir / "logic.md").mkdir()
+    before = (spec_dir / "logic.json").read_bytes()
+
+    result = run_cli("fold", str(spec_dir), str(V2_STAGE1_EXPORTS / "signed.json"))
+    assert result.returncode == 1
+    assert not (spec_dir / "review.html").exists()
+    assert (spec_dir / "logic.json").read_bytes() == before
 
 
 def test_v2_check_export_exits_3_on_stage_mismatch(tmp_path: Path) -> None:
@@ -893,6 +920,23 @@ def test_discover_export_skips_candidates_that_fail_shape_validation(tmp_path: P
     # with only the shape-invalid candidate present, nothing qualifies
     (spec_dir / "valid.json").unlink()
     assert render_spec.discover_export(spec_dir, downloads, valid["renderId"], required_stage=2) is None
+
+
+def test_find_export_reports_an_unreadable_search_directory(tmp_path: Path, monkeypatch: Any, capsys: Any) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE2, name="stage2")
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+
+    def broken_glob(self: Path, *args: Any, **kwargs: Any) -> Any:
+        raise PermissionError("downloads unreadable")
+
+    monkeypatch.setattr(Path, "glob", broken_glob)
+
+    result = render_spec.command_find_export(spec_dir, downloads)
+    assert result == 1
+    captured = capsys.readouterr()
+    assert str(spec_dir) in captured.err
+    assert "downloads unreadable" in captured.err
 
 
 def test_stage2_move_reasons_gate_excludes_withdrawn_requirements() -> None:
