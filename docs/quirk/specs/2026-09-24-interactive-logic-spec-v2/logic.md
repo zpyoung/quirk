@@ -21,7 +21,7 @@ A **v2 interactive logic spec** is still one `logic.json`, now `schemaVersion: 2
 - **Behaviors** — a named one-line rule.
 - **Scenarios** — Given / When / Then with alternatives, each belonging to exactly one behavior; at most three key examples per behavior before each extra needs Claude's reason.
 - **Constraints** — non-behavioral requirements drawn from Decisions Locked and scope: placement, verification, naming, non-goals.
-- Scenarios and constraints carry **provenance**; Claude-added ones form the queue, with nothing preselected.
+- Scenarios and constraints carry **provenance**; Claude-added ones form the queue, with Claude's pick preselected and marked Claude-added.
 - **Assumptions** and **blind spots** reference scenario and constraint ids; a blind spot is resolved by a scenario or constraint, or accepted in the reviewer's words.
 - **Research** findings, as in v1.
 
@@ -48,9 +48,9 @@ The design is approved → Claude writes a stage-1 `logic.json` (no requirements
 2. **SC-02**
    - **Given** A scenario Claude added without asking.
    - **When** The reviewer opens it in Behaviors & scenarios.
-   - **Then** No Then option is selected; Claude's pick is shown as a recommendation; the scenario sits under its behavior.
-   - **Alternatives** Claude's Then is preselected but marked Claude-added.
-   - The no-preselection queue now applies to scenarios.
+   - **Then** Claude's Then is preselected but marked Claude-added.
+   - **Alternatives** No Then option is selected; Claude's pick is shown as a recommendation; the scenario sits under its behavior.
+   - The Claude-added queue now applies to scenarios, preselected but visibly marked.
    - **Requirements** REQ-06, REQ-10
 
 3. **SC-03**
@@ -155,7 +155,7 @@ The design is approved → Claude writes a stage-1 `logic.json` (no requirements
 | REQ-07 | Stage 1 | A behavior may hold more than three scenarios only if each extra carries Claude's reason; the page flags the behavior and validation warns without failing. | Soft limit of three key examples per behavior. | The reason states what the extra scenario covers that the others miss. | i3 | you-recommended |
 | REQ-08 | Stage 1 | Stage 1 includes a constraints list of non-behavioral requirements drawn from Decisions Locked and scope: placement, verification, naming, non-goals. | Constraints sit beside scenarios. | Requirements a scenario cannot express still get signed in stage 1. | min | you-chose |
 | REQ-09 | Stage 1 | Each constraint is approved, rewritten in the reviewer's words, or rejected with a written reason; there is no approve-all. | Constraints ruled one at a time. | A rejected constraint cannot be derived from. | min | you-recommended |
-| REQ-10 | Stage 1 | Scenarios and constraints carry provenance; Claude-added ones start with nothing selected and show Claude's pick only as a recommendation, while items the reviewer decided in brainstorming arrive pre-filled. | The queue moves to stage 1. | Replaces v1's requirement queue. | min | you-recommended |
+| REQ-10 | Stage 1 | Scenarios and constraints carry provenance; a Claude-added one arrives with Claude's pick preselected and marked Claude-added, and counts as decided only once the reviewer approves, rewrites, drops, or rejects it; items the reviewer decided in brainstorming arrive pre-filled. | The queue moves to stage 1, preselected but marked. | Replaces v1's requirement queue, which preselected nothing. | min | you-chose |
 | REQ-11 | Stage 1 | The reviewer may drop a scenario with a written reason; it becomes a recorded non-goal and derives nothing. | Cut a behavior early. | Graded scope placement stays in stage 2. | i3 | you-recommended |
 | REQ-12 | Stage 1 | Assumptions and blind spots reference scenario and constraint ids instead of requirement ids. | Risks point at stage-1 items. | Risks are ruled on before requirements exist. | min | you-chose |
 | REQ-13 | Stage 1 | A blind spot is resolved by a scenario or constraint, or accepted with a sentence in the reviewer's own words. | Blind spots close in stage 1. | Claude can close a blind spot by adding a scenario or constraint the reviewer then approves. | i3 | you-recommended |
@@ -179,6 +179,7 @@ The design is approved → Claude writes a stage-1 `logic.json` (no requirements
 | REQ-31 | Authoring | The interactive rubric and the brainstorming and writing-specs wiring describe v2 authoring: behaviors, key examples, constraints, the stage-1 fold, derivation, and disputes. | Skills teach v2. | Claude cannot produce v2 specs unless the rubric describes them. | min | claude |
 | REQ-32 | Stage 2 | A non-goal constraint derives an out-of-scope requirement, which satisfies the under-derived gate. | Non-goals derive out-of-scope items. | Matches v1, where non-goals were out-of-scope requirements. | i3 | claude |
 | REQ-33 | Rework | A requirement derived from several items, one of which is reopened, stays in stage 2 flagged changed-since-reviewed until Claude re-derives it. | Shared derivations are flagged, not withdrawn. | Only-derived requirements are withdrawn; shared ones stay visible but return to review. | i2 | claude |
+| REQ-34 | Carried from v1 | The page's `pnpm run check` rebuilds the template into a temporary directory and fails when it differs byte-for-byte from the committed `review-template.html`. | Stale templates fail the page check. | Runs where page dependencies are installed, beside typecheck and layout-check; the offline Python suite is unchanged. | i3 | claude |
 
 ### Conditionally in scope
 
@@ -248,6 +249,8 @@ The design is approved → Claude writes a stage-1 `logic.json` (no requirements
 - **BS-04 — Page changes can ship without a rebuilt template**
   - No test checks that the committed `review-template.html` matches the page source, and v2 changes most of the page.
   - Sources: REQ-17, REQ-24
+  - Resolved by: REQ-34
+  - **Research finding (2026-09-24T14:05:26Z)** The template build is deterministic, so a rebuild-and-compare check is exact. — Two `vite build` runs of the current page source produced byte-identical output, and that output matches the on-disk `review-template.html`. A check can rebuild into a temporary directory and compare bytes. It needs installed page dependencies, so it belongs in the page's `pnpm run check` rather than the offline Python suite. REQ-34 proposes it.
 
 ## Decisions Locked
 
@@ -261,7 +264,7 @@ The design is approved → Claude writes a stage-1 `logic.json` (no requirements
 
 - Scenarios are grouped under named behaviors, with a soft limit of three key examples per behavior; each extra carries Claude's reason, the page flags it, and validation warns without failing.
 - Constraints are approved, rewritten in the reviewer's words, or rejected with a reason, one at a time; no approve-all.
-- Provenance and the no-preselection queue live on scenarios and constraints.
+- Provenance and the Claude-added queue live on scenarios and constraints; Claude's pick is preselected and marked Claude-added, and still needs the reviewer's action.
 - A scenario may be dropped in stage 1 with a reason and becomes a recorded non-goal.
 - Assumptions and blind spots reference scenario and constraint ids; a blind spot is resolved by a scenario or constraint, or accepted.
 
@@ -319,7 +322,6 @@ The design is approved → Claude writes a stage-1 `logic.json` (no requirements
 - [tech-spec] The v2 schema shape and how the validator and page branch on `schemaVersion`.
 - [tech-spec] How the stage-1 pin's item hashes are computed and compared after a reopen.
 - [tech-spec] Whether the stage gates are shared between the Python renderer and the page or duplicated as in v1.
-- [tech-spec] A test that the committed `review-template.html` matches the page source; none exists today.
 - [tech-spec] Layout of the generated v2 `logic.md` (behavior grouping, constraints section, derivation links).
 
 ## Glossary
