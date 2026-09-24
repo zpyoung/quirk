@@ -7,7 +7,7 @@ import { Text } from '@astryxdesign/core/Text'
 import { TextArea } from '@astryxdesign/core/TextArea'
 import { Token } from '@astryxdesign/core/Token'
 import type { Constraint, ConstraintRulingVerb, LogicSpec } from '../spec-types'
-import { CONSTRAINT_KIND_LABEL, CONSTRAINT_RULING_LABEL } from '../review-state'
+import { CONSTRAINT_KIND_LABEL, CONSTRAINT_RULING_LABEL, nextConstraintRuling } from '../review-state'
 import { ChangedToken, ClaudeField, PreselectedToken, ProvenanceToken, SpecMarkdown } from './shared'
 import { ListDetailRegister } from './list-detail-register'
 import type { ViewProps } from './view-props'
@@ -37,11 +37,7 @@ function ConstraintDetail({ constraint, props }: { constraint: Constraint; props
       ...s,
       constraintRulings: {
         ...s.constraintRulings,
-        [constraint.id]: {
-          ruling: patch.ruling ?? ruling ?? 'approve',
-          text: patch.text ?? text,
-          reason: patch.reason ?? reason,
-        },
+        [constraint.id]: nextConstraintRuling(entry, constraint.text, isClaude, patch),
       },
     }), constraint.id)
 

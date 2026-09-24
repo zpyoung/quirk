@@ -197,6 +197,10 @@ function App() {
         setImportStatus('Import failed: expected a quirk logic spec decisions export for this spec slug.')
         return
       }
+      if (parsed.state.stage !== payload.spec.stage) {
+        setImportStatus('Import failed: that export is from the other review stage.')
+        return
+      }
       const carried = carryOver(parsed.state, parsed.seen, payload.spec, payload.itemHashes, parsed.renderId, payload.renderId)
       stateRef.current = carried.state
       seenRef.current = carried.seen
