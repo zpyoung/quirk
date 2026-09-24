@@ -181,6 +181,8 @@ def item_hashes(logic: dict) -> Dict[str, str]:
     hashes: Dict[str, str] = {}
     for key in keys:
         for item in logic.get(key, []):
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                continue
             clean = {name: value for name, value in item.items() if name not in fields}
             hashes[item["id"]] = sha256(canonical_json(clean).encode("utf-8")).hexdigest()
     return hashes
@@ -188,7 +190,12 @@ def item_hashes(logic: dict) -> Dict[str, str]:
 
 def stage1_item_hashes(logic: dict) -> Dict[str, str]:
     """The stage-1Pin subset of item_hashes: behaviors, scenarios, constraints, assumptions, blindSpots."""
-    stage1_ids = {item["id"] for kind in STAGE1_ITEM_KINDS for item in logic.get(kind, [])}
+    stage1_ids = {
+        item["id"]
+        for kind in STAGE1_ITEM_KINDS
+        for item in logic.get(kind, [])
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
     return {ident: value for ident, value in item_hashes(logic).items() if ident in stage1_ids}
 
 
@@ -1166,7 +1173,8 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
                 if isinstance(ident, str) and ident not in approved_scenario_ids and ident not in derivable_constraint_ids:
                     v.error(pointer(path, j), "must name an approved scenario or an approved/rewritten constraint")
 
-        _validate_stage1_lock(v, root)
+        if not v.errors:
+            _validate_stage1_lock(v, root)
 
     return v.errors, warnings
 
@@ -1537,8 +1545,13 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
                         if "kind" in item:
                             v.enum(kind_value, DISPUTE_KINDS, pointer(path, "kind"))
                         target = _required(v, item, "target", path)
-                        if "target" in item and target is not None:
-                            v.string(target, pointer(path, "target"), nonempty=True)
+                        if "target" in item:
+                            if target is not None:
+                                v.string(target, pointer(path, "target"), nonempty=True)
+                            if kind_value == "scenario" and target is None:
+                                v.error(pointer(path, "target"), "required when kind is scenario")
+                            if kind_value == "derivation" and target is not None:
+                                v.error(pointer(path, "target"), "must be null when kind is derivation")
                         _string_field(v, item, "reason", path, nonempty=True)
 
         for key, request_kind in (("scenarioRequests", "scenario"), ("researchRequests", "research")):
@@ -1599,6 +1612,14 @@ def logic_reference_errors(export: dict, logic: dict) -> List[Tuple[str, str]]:
         for ident in state[key]:
             if ident not in known:
                 errors.append((pointer(pointer("/state", key), ident), "unknown " + label + " id: " + ident))
+    for ident, approved in state["scenarioApproved"].items():
+        if approved and state["scenarioDrops"].get(ident, "").strip():
+            errors.append(
+                (
+                    pointer(pointer("/state", "scenarioDrops"), ident),
+                    "scenario cannot be both approved and dropped: " + ident,
+                )
+            )
     if state.get("stage") == 2:
         reopened_ids = {item["id"] for item in logic["scenarios"] if "reopened" in item}
         for ident in state["scenarioApproved"]:
