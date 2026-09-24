@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, type ReactNode } from 'react'
 import { AlertDialog } from '@astryxdesign/core/AlertDialog'
 import type { LogicSpec, Requirement, ReviewState } from '../spec-types'
-import { effectivePlacement } from '../review-state'
+import { effectivePlacement, requirementStatus } from '../review-state'
 
 type Dependent = { requirement: Requirement; via?: string }
 type Pending = { requirement: Requirement; dependents: Dependent[]; apply: () => void }
@@ -15,6 +15,7 @@ function inScopeDependents(spec: LogicSpec, state: ReviewState, requirement: Req
     const { id, via } = queue.shift()!
     for (const candidate of spec.requirements) {
       if (candidate.id === requirement.id || found.has(candidate.id) || !candidate.dependsOn.includes(id)) continue
+      if (requirementStatus(candidate, spec) === 'withdrawn') continue
       const placement = effectivePlacement(state, candidate)
       if (placement === undefined || placement === 'out') continue
       const nextVia = id === requirement.id ? undefined : (via ?? id)
