@@ -3,7 +3,7 @@ import { rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import ts from 'typescript'
-import fixture from '../../../../../tests/fixtures/interactive/sample/logic.json'
+import fixture from '../../../../../tests/fixtures/interactive/v2/stage2/logic.json'
 
 const appRoot = fileURLToPath(new URL('../', import.meta.url))
 const configPath = resolve(appRoot, 'tsconfig.json')

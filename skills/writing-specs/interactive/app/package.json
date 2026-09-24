@@ -7,7 +7,8 @@
     "dev": "vite --open /review-template.html",
     "typecheck": "tsc --noEmit",
     "layout-check": "tsx scripts/check-layout.ts",
-    "check": "pnpm run typecheck && pnpm run layout-check",
+    "template-check": "tsx scripts/check-template.ts",
+    "check": "pnpm run typecheck && pnpm run layout-check && pnpm run template-check",
     "build": "vite build"
   },
   "dependencies": {
