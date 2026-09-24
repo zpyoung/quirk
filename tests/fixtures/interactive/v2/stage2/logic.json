@@ -161,7 +161,8 @@
       "meaning": "The tool can open every selected source file.",
       "check": "Try a source that becomes unreadable after selection.",
       "checkCost": "Low",
-      "ruling": "build-on"
+      "ruling": "build-on",
+      "rulingNote": "Confirmed elsewhere; no additional check needed."
     }
   ],
   "blindSpots": [
@@ -293,7 +294,7 @@
   ],
   "stage1Pin": {
     "signedAt": "2026-09-23T16:00:00Z",
-    "renderId": "a1b2c3d4e5f6",
+    "renderId": "bfb33ddde6fe",
     "itemHashes": {
       "ASM-01": "d4e4ab96ffeb2a7b6578d4c104cf5d33d61d68a2e287c1f0624777d814c4dc3d",
       "BS-01": "cd34b0dde67e3b16ab16d85a3f16d8c1cce1330f225dd3ccb2b119cedd1cfc05",

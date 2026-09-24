@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import shutil
@@ -18,7 +19,14 @@ SAMPLE = FIXTURES / "sample"
 EXPORTS = SAMPLE / "exports"
 V2_STAGE1 = FIXTURES / "v2" / "stage1"
 V2_STAGE2 = FIXTURES / "v2" / "stage2"
+V2_STAGE1_EXPORTS = V2_STAGE1 / "exports"
+V2_STAGE2_EXPORTS = V2_STAGE2 / "exports"
 INVALID_V2 = FIXTURES / "invalid-v2"
+
+# Imported directly (rather than only shelling out) so tests can compute exact
+# hashes/renderIds for exports built against mutated logic snapshots.
+sys.path.insert(0, str(SCRIPT.parent))
+import render_spec  # noqa: E402
 PLACEHOLDER = '<script type="application/json" id="quirk-logic-spec-payload">null</script>'
 EXIT6_MESSAGE = (
     "read-only v1 spec: page review, check-export, reapprove, and fold are refused; "
@@ -399,3 +407,392 @@ def test_fold_preflights_output_paths_before_approving_source(tmp_path: Path) ->
     result = run_cli("render", str(spec_dir))
     assert result.returncode == 1
     assert not (spec_dir / "review.html").exists()
+
+
+def test_v2_check_export_exits_3_on_stage_mismatch(tmp_path: Path) -> None:
+    stage2_dir = make_v2_spec(tmp_path, V2_STAGE2, name="stage2")
+    assert run_cli("render", str(stage2_dir)).returncode == 0
+    result = run_cli("check-export", str(stage2_dir), str(V2_STAGE1_EXPORTS / "signed.json"))
+    assert result.stdout.strip() == "signed"
+    assert result.returncode == 3
+
+
+def test_v2_stage1_fold_applies_decisions_and_advances_stage(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE1, name="stage1")
+    result = run_cli("fold", str(spec_dir), str(V2_STAGE1_EXPORTS / "with-drop-and-rewrite.json"))
+    assert result.returncode == 0, result.stderr
+    folded_id = result.stdout.strip()
+    assert len(folded_id) == 12
+
+    folded = load_json(spec_dir / "logic.json")
+    assert folded["stage"] == 2
+    assert folded["status"] == "Stage 1 approved"
+    assert "signoff" not in folded
+
+    dropped = next(s for s in folded["scenarios"] if s["id"] == "SC-04")
+    assert dropped["dropReason"] == "Space-exhaustion cleanup is deferred; tracked separately."
+
+    rewritten = next(c for c in folded["constraints"] if c["id"] == "CON-02")
+    assert rewritten["ruling"] == "rewritten"
+    assert rewritten["originalText"] == "Index entries use forward slashes for paths."
+    assert rewritten["text"] == "Index entries always use forward slashes for paths, even on Windows."
+
+    rejected = next(c for c in folded["constraints"] if c["id"] == "CON-04")
+    assert rejected["ruling"] == "rejected"
+    assert rejected["rejectReason"] == "Permission checks are handled by the OS; skip this."
+
+    approved = next(c for c in folded["constraints"] if c["id"] == "CON-01")
+    assert approved["ruling"] == "approved"
+
+    assumption = next(a for a in folded["assumptions"] if a["id"] == "ASM-01")
+    assert assumption["ruling"] == "verify-first"
+    assert assumption["rulingNote"]
+
+    for spot in folded["blindSpots"]:
+        assert spot["acceptance"]
+
+    assert folded["stage1Pin"]["itemHashes"] == render_spec.stage1_item_hashes(folded)
+    assert (spec_dir / "review.html").exists()
+    assert "logic.md" in [p.name for p in spec_dir.iterdir()]
+
+    # a second fold of the same (now stale) export is refused
+    again = run_cli("fold", str(spec_dir), str(V2_STAGE1_EXPORTS / "with-drop-and-rewrite.json"))
+    assert again.returncode == 3
+
+
+def test_v2_stage1_gate_variants_exit4_naming_gate(tmp_path: Path) -> None:
+    for gate_id, fixture_name in (
+        ("scenarios", "gate-scenarios"),
+        ("constraints", "gate-constraints"),
+        ("assumptions", "gate-assumptions"),
+        ("blind-spots", "gate-blind-spots"),
+    ):
+        spec_dir = make_v2_spec(tmp_path / fixture_name, V2_STAGE1, name="stage1")
+        result = run_cli("fold", str(spec_dir), str(V2_STAGE1_EXPORTS / (fixture_name + ".json")))
+        assert result.returncode == 4, (fixture_name, result.stderr)
+        assert ("gate " + gate_id) in result.stderr, (fixture_name, result.stderr)
+        folded = load_json(spec_dir / "logic.json")
+        assert folded["stage"] == 1, "a failed gate must not advance the stage"
+
+
+def test_v2_stage1_tech_spec_requested_is_a_usage_error(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE1, name="stage1")
+    result = run_cli(
+        "fold", str(spec_dir), str(V2_STAGE1_EXPORTS / "signed.json"), "--tech-spec-requested"
+    )
+    assert result.returncode == 2
+    assert "pass --tech-spec-requested at the final fold" in result.stderr
+    folded = load_json(spec_dir / "logic.json")
+    assert folded["stage"] == 1
+
+
+def test_v2_final_fold_gate_variants_exit4_naming_gate(tmp_path: Path) -> None:
+    for gate_id, fixture_name in (
+        ("move-reasons", "gate-move-reasons"),
+        ("scope-warnings", "gate-scope-warnings"),
+        ("disputes", "gate-disputes"),
+    ):
+        spec_dir = make_v2_spec(tmp_path / fixture_name, V2_STAGE2, name="stage2")
+        result = run_cli("fold", str(spec_dir), str(V2_STAGE2_EXPORTS / (fixture_name + ".json")))
+        assert result.returncode == 4, (fixture_name, result.stderr)
+        assert ("gate " + gate_id) in result.stderr, (fixture_name, result.stderr)
+        folded = load_json(spec_dir / "logic.json")
+        assert folded["status"] == "Stage 1 approved", "a failed gate must not sign off the spec"
+
+
+def test_v2_final_fold_derivation_gate_names_the_underived_scenario(tmp_path: Path) -> None:
+    """SC-03 becomes underived once REQ-01 stops naming it; the out-of-scope,
+    non-goal-derived OOS-01/CON-03 pairing is untouched and keeps passing."""
+    mutated_dir = tmp_path / "stage2"
+    mutated_dir.mkdir()
+    mutated_logic = load_json(V2_STAGE2 / "logic.json")
+    for requirement in mutated_logic["requirements"]:
+        if requirement["id"] == "REQ-01":
+            requirement["derivedFrom"] = ["SC-01"]
+    save_json(mutated_dir / "logic.json", mutated_logic)
+    render_result = run_cli("render", str(mutated_dir))
+    assert render_result.returncode == 0, render_result.stderr
+    mutated_render_id = render_result.stdout.strip()
+
+    export = load_json(V2_STAGE2_EXPORTS / "gate-derivation.json")
+    export["renderId"] = mutated_render_id
+    export_path = tmp_path / "gate-derivation-patched.json"
+    save_json(export_path, export)
+
+    result = run_cli("fold", str(mutated_dir), str(export_path))
+    assert result.returncode == 4, result.stderr
+    assert "gate derivation" in result.stderr
+    assert "SC-03" in result.stderr
+    # OOS-01's derivation from the non-goal constraint CON-03 is unaffected
+    assert "OOS-01" not in result.stderr and "CON-03" not in result.stderr
+
+
+def test_v2_final_fold_out_of_scope_non_goal_derivation_passes(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE2, name="stage2")
+    result = run_cli("fold", str(spec_dir), str(V2_STAGE2_EXPORTS / "signed.json"))
+    assert result.returncode == 0, result.stderr
+    folded = load_json(spec_dir / "logic.json")
+    oos = next(r for r in folded["requirements"] if r["id"] == "OOS-01")
+    assert oos["derivedFrom"] == ["CON-03"]
+    assert oos["scope"] == "out"
+
+
+def test_v2_final_fold_sets_status_with_and_without_tech_spec_flag(tmp_path: Path) -> None:
+    plain_dir = make_v2_spec(tmp_path / "plain", V2_STAGE2, name="stage2")
+    plain_result = run_cli("fold", str(plain_dir), str(V2_STAGE2_EXPORTS / "signed.json"))
+    assert plain_result.returncode == 0, plain_result.stderr
+    plain_logic = load_json(plain_dir / "logic.json")
+    assert plain_logic["status"] == "Approved"
+    assert plain_logic["signoff"]["renderId"] == load_json(V2_STAGE2_EXPORTS / "signed.json")["renderId"]
+    moved = next(r for r in plain_logic["requirements"] if r["id"] == "REQ-05")
+    assert moved["scope"] == "out"
+    assert moved["reviewReason"]
+
+    tech_dir = make_v2_spec(tmp_path / "tech", V2_STAGE2, name="stage2")
+    tech_result = run_cli(
+        "fold", str(tech_dir), str(V2_STAGE2_EXPORTS / "signed.json"), "--tech-spec-requested"
+    )
+    assert tech_result.returncode == 0, tech_result.stderr
+    tech_logic = load_json(tech_dir / "logic.json")
+    assert tech_logic["status"] == "Approved — Tech spec: requested"
+
+
+def test_v2_check_export_accepts_unsigned_dispute_exports(tmp_path: Path) -> None:
+    for fixture_name in ("unsigned-derivation-dispute", "unsigned-scenario-dispute"):
+        spec_dir = make_v2_spec(tmp_path / fixture_name, V2_STAGE2, name="stage2")
+        result = run_cli("check-export", str(spec_dir), str(V2_STAGE2_EXPORTS / (fixture_name + ".json")))
+        assert result.stdout.strip() == "unsigned", (fixture_name, result.stdout)
+        assert result.returncode == 0, (fixture_name, result.stderr)
+
+
+def _reopen_sc01(logic: Dict[str, Any]) -> Dict[str, Any]:
+    reopened = copy.deepcopy(logic)
+    for scenario in reopened["scenarios"]:
+        if scenario["id"] == "SC-01":
+            scenario["then"] = "An archive and compact index are written locally, retrying once on transient I/O errors."
+            scenario["reopened"] = {
+                "requirementId": "REQ-01",
+                "reason": "Wording needs another pass.",
+                "raisedAt": "2026-09-25T10:00:00Z",
+            }
+    return reopened
+
+
+def test_v2_reapprove_moves_reopened_scenario_to_reapproved_hash(tmp_path: Path) -> None:
+    spec_dir = tmp_path / "stage2"
+    spec_dir.mkdir()
+    reopened_logic = _reopen_sc01(load_json(V2_STAGE2 / "logic.json"))
+    save_json(spec_dir / "logic.json", reopened_logic)
+    render_result = run_cli("render", str(spec_dir))
+    assert render_result.returncode == 0, render_result.stderr
+    render_id = render_result.stdout.strip()
+    payload = extract_payload((spec_dir / "review.html").read_text(encoding="utf-8"))[1]
+    current_hash = payload["itemHashes"]["SC-01"]
+
+    export = {
+        "kind": "quirk-logic-spec-decisions",
+        "schemaVersion": 2,
+        "stage": 2,
+        "slug": "stage2",
+        "renderId": render_id,
+        "exportedAt": "2026-09-25T11:00:00Z",
+        "signed": False,
+        "seen": {"SC-01": current_hash},
+        "state": {
+            "stage": 2,
+            "scenarioOutcomes": {},
+            "scenarioApproved": {"SC-01": True},
+            "scenarioDrops": {},
+            "scenarioRequests": [],
+            "constraintRulings": {},
+            "assumptions": {},
+            "blindSpots": {},
+            "researchRequests": [],
+            "placements": {},
+            "conditions": {},
+            "moveReasons": {},
+            "notes": {},
+            "disputes": {},
+            "verdict": "send-back",
+            "verdictNote": "Reopened wording is fine now.",
+            "updatedAt": "2026-09-25T11:00:00Z",
+        },
+        "record": {
+            "stage": 2,
+            "verdict": "send-back",
+            "verdictNote": "Reopened wording is fine now.",
+            "signedAt": None,
+            "scenarios": [],
+            "constraints": [],
+            "assumptions": [],
+            "blindSpots": [],
+            "placements": [],
+            "disputes": [],
+            "scenarioRequests": [],
+            "researchRequests": [],
+            "openWarnings": [],
+        },
+    }
+    export_path = tmp_path / "unsigned-reapproved.json"
+    save_json(export_path, export)
+
+    result = run_cli("reapprove", str(spec_dir), str(export_path))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "SC-01"
+
+    updated = load_json(spec_dir / "logic.json")
+    scenario = next(s for s in updated["scenarios"] if s["id"] == "SC-01")
+    assert "reopened" not in scenario
+    assert scenario["reapprovedHash"] == current_hash
+
+    # the spec still validates: the lock's reapprovedHash exception covers SC-01
+    assert run_cli("validate", str(spec_dir)).returncode == 0
+
+    # the export used above is now stale (the fold changed logic.json's renderId)
+    stale_result = run_cli("reapprove", str(spec_dir), str(export_path))
+    assert stale_result.returncode == 3
+
+    # a fresh, current export has nothing left to re-approve: SC-01 is no longer reopened
+    rerender = run_cli("render", str(spec_dir))
+    assert rerender.returncode == 0, rerender.stderr
+    fresh_export = dict(export)
+    fresh_export["renderId"] = rerender.stdout.strip()
+    fresh_path = tmp_path / "fresh-reapprove.json"
+    save_json(fresh_path, fresh_export)
+    again = run_cli("reapprove", str(spec_dir), str(fresh_path))
+    assert again.returncode == 4
+    assert "nothing to re-approve" in again.stderr
+
+
+def test_v2_reapprove_exits_4_when_nothing_qualifies(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE2, name="stage2")
+    render_result = run_cli("render", str(spec_dir))
+    assert render_result.returncode == 0
+    export = {
+        "kind": "quirk-logic-spec-decisions",
+        "schemaVersion": 2,
+        "stage": 2,
+        "slug": "stage2",
+        "renderId": render_result.stdout.strip(),
+        "exportedAt": "2026-09-25T11:00:00Z",
+        "signed": False,
+        "seen": {},
+        "state": {
+            "stage": 2,
+            "scenarioOutcomes": {},
+            "scenarioApproved": {},
+            "scenarioDrops": {},
+            "scenarioRequests": [],
+            "constraintRulings": {},
+            "assumptions": {},
+            "blindSpots": {},
+            "researchRequests": [],
+            "placements": {},
+            "conditions": {},
+            "moveReasons": {},
+            "notes": {},
+            "disputes": {},
+            "verdict": "send-back",
+            "verdictNote": "n/a",
+            "updatedAt": "2026-09-25T11:00:00Z",
+        },
+        "record": {
+            "stage": 2,
+            "verdict": "send-back",
+            "verdictNote": "n/a",
+            "signedAt": None,
+            "scenarios": [],
+            "constraints": [],
+            "assumptions": [],
+            "blindSpots": [],
+            "placements": [],
+            "disputes": [],
+            "scenarioRequests": [],
+            "researchRequests": [],
+            "openWarnings": [],
+        },
+    }
+    export_path = tmp_path / "no-reapprovals.json"
+    save_json(export_path, export)
+    result = run_cli("reapprove", str(spec_dir), str(export_path))
+    assert result.returncode == 4
+    assert "nothing to re-approve" in result.stderr
+
+
+def test_v2_final_fold_moves_reapproved_hash_into_pin(tmp_path: Path) -> None:
+    spec_dir = tmp_path / "stage2"
+    spec_dir.mkdir()
+    reopened_logic = _reopen_sc01(load_json(V2_STAGE2 / "logic.json"))
+    save_json(spec_dir / "logic.json", reopened_logic)
+    assert run_cli("render", str(spec_dir)).returncode == 0
+    payload = extract_payload((spec_dir / "review.html").read_text(encoding="utf-8"))[1]
+    current_hash = payload["itemHashes"]["SC-01"]
+
+    for scenario in reopened_logic["scenarios"]:
+        if scenario["id"] == "SC-01":
+            scenario.pop("reopened", None)
+            scenario["reapprovedHash"] = current_hash
+    save_json(spec_dir / "logic.json", reopened_logic)
+
+    render_result = run_cli("render", str(spec_dir))
+    assert render_result.returncode == 0, render_result.stderr
+    render_id = render_result.stdout.strip()
+
+    export = load_json(V2_STAGE2_EXPORTS / "signed.json")
+    export["renderId"] = render_id
+    export_path = tmp_path / "final-signed.json"
+    save_json(export_path, export)
+
+    result = run_cli("fold", str(spec_dir), str(export_path))
+    assert result.returncode == 0, result.stderr
+    folded = load_json(spec_dir / "logic.json")
+    scenario = next(s for s in folded["scenarios"] if s["id"] == "SC-01")
+    assert "reapprovedHash" not in scenario
+    assert folded["stage1Pin"]["itemHashes"]["SC-01"] == current_hash
+
+
+def test_v2_fold_prepares_template_before_writing_any_artifacts(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE1, name="stage1")
+    tool_dir = tmp_path / "isolated-tool"
+    tool_dir.mkdir()
+    script = tool_dir / "render_spec.py"
+    shutil.copy(SCRIPT, script)
+    (tool_dir / "review-template.html").write_text("missing payload marker", encoding="utf-8")
+
+    before = load_json(spec_dir / "logic.json")
+    result = run_script(script, "fold", str(spec_dir), str(V2_STAGE1_EXPORTS / "signed.json"))
+    assert result.returncode == 1
+    assert not (spec_dir / "review.html").exists()
+    assert not (spec_dir / "logic.md").exists()
+    assert load_json(spec_dir / "logic.json") == before
+
+
+def test_derived_requirement_status_and_gate_exclusion_for_withdrawn_requirements() -> None:
+    scenario_by_id = {
+        "SC-A": {"id": "SC-A"},
+        "SC-B": {
+            "id": "SC-B",
+            "reopened": {"requirementId": "REQ-X", "reason": "Wording review.", "raisedAt": "2026-01-01T00:00:00Z"},
+        },
+    }
+    assert render_spec.derived_requirement_status({"derivedFrom": ["SC-B"]}, scenario_by_id) == "withdrawn"
+    assert render_spec.derived_requirement_status({"derivedFrom": ["SC-A", "SC-B"]}, scenario_by_id) == "flagged"
+    assert render_spec.derived_requirement_status({"derivedFrom": ["SC-A"]}, scenario_by_id) == "active"
+
+    logic = {
+        "scenarios": [scenario_by_id["SC-A"], scenario_by_id["SC-B"]],
+        "constraints": [],
+        "requirements": [
+            {"id": "REQ-X", "scope": "in", "dependsOn": ["REQ-OUT"], "derivedFrom": ["SC-B"]},
+            {"id": "REQ-OUT", "scope": "out", "dependsOn": [], "derivedFrom": ["SC-A"]},
+        ],
+        "conflicts": [],
+    }
+    state = {"placements": {}, "conditions": {}, "moveReasons": {}, "disputes": {}}
+    failures = dict(render_spec.stage2_gate_failures(logic, state))
+    # SC-B is approved (no dropReason) but its only deriving requirement is withdrawn,
+    # so the withdrawn requirement does not count towards coverage.
+    assert "derivation" in failures and "SC-B" in failures["derivation"]
+    # REQ-X would otherwise warn about depending on the out-of-scope REQ-OUT, but a
+    # withdrawn requirement is excluded from scope warnings entirely.
+    assert "scope-warnings" not in failures

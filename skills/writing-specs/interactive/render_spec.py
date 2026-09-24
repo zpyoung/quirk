@@ -35,12 +35,14 @@ CERTAINTIES = ("confirmed", "assumed", "unverified")
 SCENARIO_CHOICES = ("spec", "custom")
 CONSTRAINT_KINDS = ("placement", "verification", "naming", "non-goal", "other")
 CONSTRAINT_RULINGS = ("approved", "rewritten", "rejected")
+CONSTRAINT_STATE_RULINGS = ("approve", "rewrite", "reject")
+DISPUTE_KINDS = ("derivation", "scenario")
 REQUIREMENT_GROUPS = ("min", "i3", "i2", "i1")
+STAGE1_ITEM_KINDS = ("behaviors", "scenarios", "constraints", "assumptions", "blindSpots")
 EXIT6_MESSAGE = (
     "read-only v1 spec: page review, check-export, reapprove, and fold are refused; "
     "amend logic.json and re-render"
 )
-NOT_IMPLEMENTED_V2_MESSAGE = "not implemented for schemaVersion 2"
 UNSAFE_OBJECT_IDS = frozenset(
     (
         "__proto__",
@@ -182,6 +184,12 @@ def item_hashes(logic: dict) -> Dict[str, str]:
             clean = {name: value for name, value in item.items() if name not in fields}
             hashes[item["id"]] = sha256(canonical_json(clean).encode("utf-8")).hexdigest()
     return hashes
+
+
+def stage1_item_hashes(logic: dict) -> Dict[str, str]:
+    """The stage-1Pin subset of item_hashes: behaviors, scenarios, constraints, assumptions, blindSpots."""
+    stage1_ids = {item["id"] for kind in STAGE1_ITEM_KINDS for item in logic.get(kind, [])}
+    return {ident: value for ident, value in item_hashes(logic).items() if ident in stage1_ids}
 
 
 def _required(v: Validator, obj: dict, key: str, path: str) -> Any:
@@ -1169,16 +1177,7 @@ def _validate_stage1_lock(v: Validator, root: dict) -> None:
     pinned_hashes = pin.get("itemHashes")
     if not isinstance(pinned_hashes, dict):
         return
-    snapshot = {
-        "schemaVersion": 2,
-        "behaviors": root.get("behaviors", []),
-        "scenarios": root.get("scenarios", []),
-        "constraints": root.get("constraints", []),
-        "assumptions": root.get("assumptions", []),
-        "blindSpots": root.get("blindSpots", []),
-        "requirements": [],
-    }
-    current_hashes = item_hashes(snapshot)
+    current_hashes = stage1_item_hashes(root)
     scenario_by_id = {
         item["id"]: item
         for item in root.get("scenarios", [])
@@ -1224,7 +1223,10 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
         v.error("/kind", 'expected "' + EXPORT_KIND + '"')
     version = _required(v, root, "schemaVersion", "")
     if "schemaVersion" in root:
-        v.exact_version(version, "/schemaVersion")
+        v.exact_version(version, "/schemaVersion", (2,))
+    stage = _required(v, root, "stage", "")
+    if "stage" in root and (type(stage) is not int or stage not in (1, 2)):
+        v.error("/stage", "expected 1 or 2")
     for key in ("slug", "renderId"):
         _string_field(v, root, key, "", nonempty=True)
     exported_at = _required(v, root, "exportedAt", "")
@@ -1240,43 +1242,98 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
         if seen_obj is not None:
             for key, value in seen_obj.items():
                 v.string(value, pointer("/seen", key), nonempty=True)
+
     state_raw = _required(v, root, "state", "")
     state = v.object(state_raw, "/state") if "state" in root else None
     if state is not None:
-        map_types = {
-            "placements": "placement",
-            "conditions": "condition",
-            "moveReasons": "string",
-            "notes": "string",
-            "assumptions": "assumption",
-            "blindSpots": "blindSpot",
-            "scenarioOutcomes": "scenarioOutcome",
-            "scenarioApproved": "boolean",
-        }
-        for key, kind_name in map_types.items():
-            raw = _required(v, state, key, "/state")
-            if key not in state:
-                continue
-            mapping = v.object(raw, pointer("/state", key))
-            if mapping is None:
-                continue
-            for ident, value in mapping.items():
-                path = pointer(pointer("/state", key), ident)
-                if kind_name == "placement":
-                    v.enum(value, PLACEMENTS, path)
-                elif kind_name == "condition":
-                    v.enum(value, SCOPE_CONDITIONS, path)
-                elif kind_name == "string":
-                    v.string(value, path)
-                elif kind_name == "boolean":
-                    v.boolean(value, path)
-                elif kind_name == "assumption":
+        if "stage" in state:
+            if type(state["stage"]) is not int or state["stage"] not in (1, 2):
+                v.error("/state/stage", "expected 1 or 2")
+        else:
+            _required(v, state, "stage", "/state")
+
+        outcomes = _required(v, state, "scenarioOutcomes", "/state")
+        if "scenarioOutcomes" in state:
+            mapping = v.object(outcomes, "/state/scenarioOutcomes")
+            if mapping is not None:
+                for ident, value in mapping.items():
+                    path = pointer("/state/scenarioOutcomes", ident)
+                    outcome = v.object(value, path)
+                    if outcome is not None:
+                        choice = _required(v, outcome, "choice", path)
+                        if "choice" in outcome:
+                            if choice in SCENARIO_CHOICES or (
+                                isinstance(choice, str) and re.fullmatch(r"alt-\d+", choice)
+                            ):
+                                pass
+                            else:
+                                v.error(pointer(path, "choice"), 'expected "spec", "custom", or "alt-<n>"')
+                        custom = _string_field(v, outcome, "custom", path)
+                        if choice == "custom" and isinstance(custom, str) and not custom.strip():
+                            v.error(pointer(path, "custom"), "custom scenario outcome must not be blank")
+
+        approved = _required(v, state, "scenarioApproved", "/state")
+        if "scenarioApproved" in state:
+            mapping = v.object(approved, "/state/scenarioApproved")
+            if mapping is not None:
+                for ident, value in mapping.items():
+                    v.boolean(value, pointer("/state/scenarioApproved", ident))
+
+        drops = _required(v, state, "scenarioDrops", "/state")
+        if "scenarioDrops" in state:
+            mapping = v.object(drops, "/state/scenarioDrops")
+            if mapping is not None:
+                for ident, value in mapping.items():
+                    v.string(value, pointer("/state/scenarioDrops", ident))
+
+        requests = _required(v, state, "scenarioRequests", "/state")
+        if "scenarioRequests" in state:
+            rows = v.array(requests, "/state/scenarioRequests")
+            if rows is not None:
+                for index, value in enumerate(rows):
+                    path = pointer("/state/scenarioRequests", index)
+                    request = v.object(value, path)
+                    if request is not None:
+                        _id_field(v, request, "id", path)
+                        _id_field(v, request, "behavior", path)
+                        _string_field(v, request, "text", path)
+                        asked = _required(v, request, "requestedAt", path)
+                        if "requestedAt" in request:
+                            v.iso_datetime(asked, pointer(path, "requestedAt"))
+
+        rulings = _required(v, state, "constraintRulings", "/state")
+        if "constraintRulings" in state:
+            mapping = v.object(rulings, "/state/constraintRulings")
+            if mapping is not None:
+                for ident, value in mapping.items():
+                    path = pointer("/state/constraintRulings", ident)
+                    ruling = v.object(value, path)
+                    if ruling is not None:
+                        if "ruling" in ruling:
+                            v.enum(ruling["ruling"], CONSTRAINT_STATE_RULINGS, pointer(path, "ruling"))
+                        else:
+                            _required(v, ruling, "ruling", path)
+                        _string_field(v, ruling, "text", path)
+                        _string_field(v, ruling, "reason", path)
+
+        assumptions_state = _required(v, state, "assumptions", "/state")
+        if "assumptions" in state:
+            mapping = v.object(assumptions_state, "/state/assumptions")
+            if mapping is not None:
+                for ident, value in mapping.items():
+                    path = pointer("/state/assumptions", ident)
                     decision = v.object(value, path)
                     if decision is not None:
                         if "ruling" in decision:
                             v.enum(decision["ruling"], RULINGS, pointer(path, "ruling"))
                         _string_field(v, decision, "note", path)
-                elif kind_name == "blindSpot":
+
+        blind_state = _required(v, state, "blindSpots", "/state")
+        if "blindSpots" in state:
+            mapping = v.object(blind_state, "/state/blindSpots")
+            if mapping is not None:
+                for ident, value in mapping.items():
+                    path = pointer("/state/blindSpots", ident)
                     decision = v.object(value, path)
                     if decision is not None:
                         if "accepted" in decision:
@@ -1284,41 +1341,65 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
                         else:
                             _required(v, decision, "accepted", path)
                         _string_field(v, decision, "note", path)
-                elif kind_name == "scenarioOutcome":
-                    outcome = v.object(value, path)
-                    if outcome is not None:
-                        choice = _required(v, outcome, "choice", path)
-                        if "choice" in outcome:
-                            if choice in SCENARIO_CHOICES:
-                                pass
-                            elif isinstance(choice, str) and re.fullmatch(r"alt-\d+", choice):
-                                pass
-                            else:
-                                v.error(pointer(path, "choice"), 'expected "spec", "custom", or "alt-<n>"')
-                        custom = _string_field(v, outcome, "custom", path)
-                        if choice == "custom" and isinstance(custom, str) and not custom.strip():
-                            v.error(pointer(path, "custom"), "custom scenario outcome must not be blank")
-        for key, request_kind in (("scenarioRequests", "scenario"), ("researchRequests", "research")):
+
+        research_requests = _required(v, state, "researchRequests", "/state")
+        if "researchRequests" in state:
+            rows = v.array(research_requests, "/state/researchRequests")
+            if rows is not None:
+                for index, value in enumerate(rows):
+                    path = pointer("/state/researchRequests", index)
+                    request = v.object(value, path)
+                    if request is not None:
+                        _id_field(v, request, "id", path)
+                        _id_field(v, request, "blindSpotId", path)
+                        _string_field(v, request, "question", path)
+                        asked = _required(v, request, "requestedAt", path)
+                        if "requestedAt" in request:
+                            v.iso_datetime(asked, pointer(path, "requestedAt"))
+
+        placements = _required(v, state, "placements", "/state")
+        if "placements" in state:
+            mapping = v.object(placements, "/state/placements")
+            if mapping is not None:
+                for ident, value in mapping.items():
+                    v.enum(value, PLACEMENTS, pointer("/state/placements", ident))
+
+        conditions = _required(v, state, "conditions", "/state")
+        if "conditions" in state:
+            mapping = v.object(conditions, "/state/conditions")
+            if mapping is not None:
+                for ident, value in mapping.items():
+                    v.enum(value, SCOPE_CONDITIONS, pointer("/state/conditions", ident))
+
+        for key in ("moveReasons", "notes"):
             raw = _required(v, state, key, "/state")
-            if key not in state:
-                continue
-            rows = v.array(raw, pointer("/state", key))
-            if rows is None:
-                continue
-            for index, value in enumerate(rows):
-                path = pointer(pointer("/state", key), index)
-                request = v.object(value, path)
-                if request is None:
-                    continue
-                _id_field(v, request, "id", path)
-                if request_kind == "scenario":
-                    _string_field(v, request, "text", path)
-                else:
-                    _id_field(v, request, "blindSpotId", path)
-                    _string_field(v, request, "question", path)
-                asked = _required(v, request, "requestedAt", path)
-                if "requestedAt" in request:
-                    v.iso_datetime(asked, pointer(path, "requestedAt"))
+            if key in state:
+                mapping = v.object(raw, pointer("/state", key))
+                if mapping is not None:
+                    for ident, value in mapping.items():
+                        v.string(value, pointer(pointer("/state", key), ident))
+
+        disputes = _required(v, state, "disputes", "/state")
+        if "disputes" in state:
+            mapping = v.object(disputes, "/state/disputes")
+            if mapping is not None:
+                for ident, value in mapping.items():
+                    path = pointer("/state/disputes", ident)
+                    dispute = v.object(value, path)
+                    if dispute is not None:
+                        kind_value = _required(v, dispute, "kind", path)
+                        if "kind" in dispute:
+                            v.enum(kind_value, DISPUTE_KINDS, pointer(path, "kind"))
+                        target = _required(v, dispute, "target", path)
+                        if "target" in dispute:
+                            if target is not None:
+                                v.string(target, pointer(path, "target"), nonempty=True)
+                            if kind_value == "scenario" and target is None:
+                                v.error(pointer(path, "target"), "required when kind is scenario")
+                            if kind_value == "derivation" and target is not None:
+                                v.error(pointer(path, "target"), "must be null when kind is derivation")
+                        _string_field(v, dispute, "reason", path)
+
         if "verdict" in state:
             v.enum(state["verdict"], ("approve", "send-back"), "/state/verdict")
         _string_field(v, state, "verdictNote", "/state")
@@ -1331,6 +1412,11 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
     record_raw = _required(v, root, "record", "")
     record = v.object(record_raw, "/record") if "record" in root else None
     if record is not None:
+        if "stage" in record:
+            if type(record["stage"]) is not int or record["stage"] not in (1, 2):
+                v.error("/record/stage", "expected 1 or 2")
+        else:
+            _required(v, record, "stage", "/record")
         verdict = _required(v, record, "verdict", "/record")
         if "verdict" in record and verdict is not None:
             v.enum(verdict, ("approve", "send-back"), "/record/verdict")
@@ -1338,37 +1424,97 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
         signed_at = _required(v, record, "signedAt", "/record")
         if "signedAt" in record and signed_at is not None:
             v.iso_datetime(signed_at, "/record/signedAt")
-        for key, kind_name in (("placements", "placement"), ("assumptions", "assumption"), ("blindSpots", "blind"), ("scenarios", "scenario")):
-            raw = _required(v, record, key, "/record")
-            if key not in record:
-                continue
-            rows = v.array(raw, pointer("/record", key))
-            if rows is None:
-                continue
-            for index, value in enumerate(rows):
-                path = pointer(pointer("/record", key), index)
-                item = v.object(value, path)
-                if item is None:
-                    continue
-                _id_field(v, item, "id", path)
-                if kind_name == "placement":
-                    v.enum(_required(v, item, "from", path), PLACEMENTS, pointer(path, "from"))
-                    v.enum(_required(v, item, "to", path), PLACEMENTS, pointer(path, "to"))
-                    condition = _required(v, item, "condition", path)
-                    if "condition" in item and condition is not None:
-                        v.enum(condition, SCOPE_CONDITIONS, pointer(path, "condition"))
-                    _string_field(v, item, "reason", path)
-                elif kind_name == "assumption":
-                    if "ruling" in item:
-                        v.enum(item["ruling"], RULINGS, pointer(path, "ruling"))
-                    _string_field(v, item, "note", path)
-                elif kind_name == "blind":
-                    v.boolean(_required(v, item, "accepted", path), pointer(path, "accepted"))
-                    _string_field(v, item, "note", path)
-                else:
-                    v.boolean(_required(v, item, "approved", path), pointer(path, "approved"))
-                    _string_field(v, item, "then", path)
-                    v.boolean(_required(v, item, "changesSpec", path), pointer(path, "changesSpec"))
+
+        scenarios = _required(v, record, "scenarios", "/record")
+        if "scenarios" in record:
+            rows = v.array(scenarios, "/record/scenarios")
+            if rows is not None:
+                for index, value in enumerate(rows):
+                    path = pointer("/record/scenarios", index)
+                    item = v.object(value, path)
+                    if item is not None:
+                        _id_field(v, item, "id", path)
+                        v.boolean(_required(v, item, "approved", path), pointer(path, "approved"))
+                        dropped = _required(v, item, "dropped", path)
+                        if "dropped" in item and dropped is not None:
+                            v.string(dropped, pointer(path, "dropped"))
+                        _string_field(v, item, "then", path)
+                        v.boolean(_required(v, item, "changesSpec", path), pointer(path, "changesSpec"))
+
+        constraints = _required(v, record, "constraints", "/record")
+        if "constraints" in record:
+            rows = v.array(constraints, "/record/constraints")
+            if rows is not None:
+                for index, value in enumerate(rows):
+                    path = pointer("/record/constraints", index)
+                    item = v.object(value, path)
+                    if item is not None:
+                        _id_field(v, item, "id", path)
+                        ruling = _required(v, item, "ruling", path)
+                        if "ruling" in item and ruling is not None:
+                            v.enum(ruling, CONSTRAINT_STATE_RULINGS, pointer(path, "ruling"))
+                        _string_field(v, item, "text", path)
+                        _string_field(v, item, "reason", path)
+
+        assumptions_rec = _required(v, record, "assumptions", "/record")
+        if "assumptions" in record:
+            rows = v.array(assumptions_rec, "/record/assumptions")
+            if rows is not None:
+                for index, value in enumerate(rows):
+                    path = pointer("/record/assumptions", index)
+                    item = v.object(value, path)
+                    if item is not None:
+                        _id_field(v, item, "id", path)
+                        ruling = _required(v, item, "ruling", path)
+                        if "ruling" in item and ruling is not None:
+                            v.enum(ruling, RULINGS, pointer(path, "ruling"))
+                        _string_field(v, item, "note", path)
+
+        blind_rec = _required(v, record, "blindSpots", "/record")
+        if "blindSpots" in record:
+            rows = v.array(blind_rec, "/record/blindSpots")
+            if rows is not None:
+                for index, value in enumerate(rows):
+                    path = pointer("/record/blindSpots", index)
+                    item = v.object(value, path)
+                    if item is not None:
+                        _id_field(v, item, "id", path)
+                        v.boolean(_required(v, item, "accepted", path), pointer(path, "accepted"))
+                        _string_field(v, item, "note", path)
+
+        placements_rec = _required(v, record, "placements", "/record")
+        if "placements" in record:
+            rows = v.array(placements_rec, "/record/placements")
+            if rows is not None:
+                for index, value in enumerate(rows):
+                    path = pointer("/record/placements", index)
+                    item = v.object(value, path)
+                    if item is not None:
+                        _id_field(v, item, "id", path)
+                        v.enum(_required(v, item, "from", path), PLACEMENTS, pointer(path, "from"))
+                        v.enum(_required(v, item, "to", path), PLACEMENTS, pointer(path, "to"))
+                        condition = _required(v, item, "condition", path)
+                        if "condition" in item and condition is not None:
+                            v.enum(condition, SCOPE_CONDITIONS, pointer(path, "condition"))
+                        _string_field(v, item, "reason", path)
+
+        disputes_rec = _required(v, record, "disputes", "/record")
+        if "disputes" in record:
+            rows = v.array(disputes_rec, "/record/disputes")
+            if rows is not None:
+                for index, value in enumerate(rows):
+                    path = pointer("/record/disputes", index)
+                    item = v.object(value, path)
+                    if item is not None:
+                        _id_field(v, item, "requirementId", path)
+                        kind_value = _required(v, item, "kind", path)
+                        if "kind" in item:
+                            v.enum(kind_value, DISPUTE_KINDS, pointer(path, "kind"))
+                        target = _required(v, item, "target", path)
+                        if "target" in item and target is not None:
+                            v.string(target, pointer(path, "target"), nonempty=True)
+                        _string_field(v, item, "reason", path)
+
         for key, request_kind in (("scenarioRequests", "scenario"), ("researchRequests", "research")):
             raw = _required(v, record, key, "/record")
             if key not in record:
@@ -1382,6 +1528,7 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
                 if request is not None:
                     _id_field(v, request, "id", path)
                     if request_kind == "scenario":
+                        _id_field(v, request, "behavior", path)
                         _string_field(v, request, "text", path)
                     else:
                         _id_field(v, request, "blindSpotId", path)
@@ -1389,6 +1536,7 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
                     asked = _required(v, request, "requestedAt", path)
                     if "requestedAt" in request:
                         v.iso_datetime(asked, pointer(path, "requestedAt"))
+
         warnings = _required(v, record, "openWarnings", "/record")
         if "openWarnings" in record:
             v.string_array(warnings, "/record/openWarnings")
@@ -1402,31 +1550,42 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
 
 
 def logic_reference_errors(export: dict, logic: dict) -> List[Tuple[str, str]]:
+    """Cross-reference an export's ids against the v2 logic's item and requirement maps."""
     errors: List[Tuple[str, str]] = []
-    req_ids = {item["id"] for item in logic["requirements"]}
-    assumption_ids = {item["id"] for item in logic["assumptions"]}
-    blind_ids = {item["id"] for item in logic["blindSpots"]}
+    behavior_ids = {item["id"] for item in logic["behaviors"]}
     scenario_ids = {item["id"] for item in logic["scenarios"]}
     scenario_by_id = {item["id"]: item for item in logic["scenarios"]}
-    item_ids = req_ids | assumption_ids | blind_ids | scenario_ids
+    constraint_ids = {item["id"] for item in logic["constraints"]}
+    assumption_ids = {item["id"] for item in logic["assumptions"]}
+    blind_ids = {item["id"] for item in logic["blindSpots"]}
+    requirement_ids = {item["id"] for item in logic["requirements"]}
+    requirement_by_id = {item["id"]: item for item in logic["requirements"]}
+    item_ids = behavior_ids | scenario_ids | constraint_ids | assumption_ids | blind_ids | requirement_ids
+
     state = export["state"]
-    for key in ("placements", "conditions", "moveReasons"):
-        for ident in state[key]:
-            if ident not in req_ids:
-                errors.append((pointer(pointer("/state", key), ident), "unknown requirement id: " + ident))
     for key, known, label in (
-        ("notes", item_ids, "logic item"),
+        ("scenarioApproved", scenario_ids, "scenario"),
+        ("scenarioDrops", scenario_ids, "scenario"),
+        ("constraintRulings", constraint_ids, "constraint"),
         ("assumptions", assumption_ids, "assumption"),
         ("blindSpots", blind_ids, "blind spot"),
-        ("scenarioOutcomes", scenario_ids, "scenario"),
-        ("scenarioApproved", scenario_ids, "scenario"),
     ):
         for ident in state[key]:
             if ident not in known:
                 errors.append((pointer(pointer("/state", key), ident), "unknown " + label + " id: " + ident))
+    for key in ("placements", "conditions", "moveReasons"):
+        for ident in state[key]:
+            if ident not in requirement_ids:
+                errors.append((pointer(pointer("/state", key), ident), "unknown requirement id: " + ident))
+    for ident in state["notes"]:
+        if ident not in item_ids:
+            errors.append((pointer(pointer("/state", "notes"), ident), "unknown logic item id: " + ident))
     for ident, outcome in state["scenarioOutcomes"].items():
+        if ident not in scenario_ids:
+            errors.append((pointer(pointer("/state", "scenarioOutcomes"), ident), "unknown scenario id: " + ident))
+            continue
         choice = outcome["choice"]
-        if choice.startswith("alt-") and ident in scenario_by_id:
+        if choice.startswith("alt-"):
             digits = choice[4:].lstrip("0") or "0"
             max_index = len(scenario_by_id[ident]["alternatives"]) - 1
             max_digits = str(max_index)
@@ -1434,27 +1593,80 @@ def logic_reference_errors(export: dict, logic: dict) -> List[Tuple[str, str]]:
             if not out_of_range and len(digits) == len(max_digits):
                 out_of_range = digits > max_digits
             if out_of_range:
-                errors.append((pointer(pointer(pointer("/state", "scenarioOutcomes"), ident), "choice"), "alternative index is out of range for scenario " + ident))
+                errors.append(
+                    (
+                        pointer(pointer(pointer("/state", "scenarioOutcomes"), ident), "choice"),
+                        "alternative index is out of range for scenario " + ident,
+                    )
+                )
+    for index, request in enumerate(state["scenarioRequests"]):
+        if request["behavior"] not in behavior_ids:
+            errors.append(
+                (
+                    pointer(pointer(pointer("/state", "scenarioRequests"), index), "behavior"),
+                    "unknown behavior id: " + request["behavior"],
+                )
+            )
+    for index, request in enumerate(state["researchRequests"]):
+        if request["blindSpotId"] not in blind_ids:
+            errors.append(
+                (
+                    pointer(pointer(pointer("/state", "researchRequests"), index), "blindSpotId"),
+                    "unknown blind spot id: " + request["blindSpotId"],
+                )
+            )
+    for ident, dispute in state["disputes"].items():
+        if ident not in requirement_ids:
+            errors.append((pointer(pointer("/state", "disputes"), ident), "unknown requirement id: " + ident))
+            continue
+        if dispute["kind"] == "scenario":
+            derived_from = requirement_by_id[ident].get("derivedFrom", [])
+            if dispute.get("target") not in derived_from:
+                errors.append(
+                    (
+                        pointer(pointer(pointer("/state", "disputes"), ident), "target"),
+                        "target must be in the requirement's derivedFrom",
+                    )
+                )
     for ident in export["seen"]:
         if ident not in item_ids:
             errors.append((pointer("/seen", ident), "unknown logic item id: " + ident))
-    for index, request in enumerate(state["researchRequests"]):
-        if request["blindSpotId"] not in blind_ids:
-            errors.append((pointer(pointer(pointer("/state", "researchRequests"), index), "blindSpotId"), "unknown blind spot id: " + request["blindSpotId"]))
+
     record = export["record"]
     for key, known, label in (
-        ("placements", req_ids, "requirement"),
+        ("scenarios", scenario_ids, "scenario"),
+        ("constraints", constraint_ids, "constraint"),
         ("assumptions", assumption_ids, "assumption"),
         ("blindSpots", blind_ids, "blind spot"),
-        ("scenarios", scenario_ids, "scenario"),
     ):
         for index, item in enumerate(record[key]):
             if item["id"] not in known:
-                errors.append((pointer(pointer(pointer("/record", key), index), "id"), "unknown " + label + " id: " + item["id"]))
+                errors.append(
+                    (pointer(pointer(pointer("/record", key), index), "id"), "unknown " + label + " id: " + item["id"])
+                )
+    for index, item in enumerate(record["placements"]):
+        if item["id"] not in requirement_ids:
+            errors.append(
+                (pointer(pointer(pointer("/record", "placements"), index), "id"), "unknown requirement id: " + item["id"])
+            )
+    for index, dispute in enumerate(record["disputes"]):
+        ident = dispute["requirementId"]
+        if ident not in requirement_ids:
+            errors.append(
+                (
+                    pointer(pointer(pointer("/record", "disputes"), index), "requirementId"),
+                    "unknown requirement id: " + ident,
+                )
+            )
     for key in ("scenarioRequests", "researchRequests"):
         for index, request in enumerate(record[key]):
             if key == "researchRequests" and request["blindSpotId"] not in blind_ids:
-                errors.append((pointer(pointer(pointer("/record", key), index), "blindSpotId"), "unknown blind spot id: " + request["blindSpotId"]))
+                errors.append(
+                    (
+                        pointer(pointer(pointer("/record", key), index), "blindSpotId"),
+                        "unknown blind spot id: " + request["blindSpotId"],
+                    )
+                )
     return errors
 
 
@@ -1917,12 +2129,14 @@ def command_render(spec_dir: Path, prior_path: Optional[Path], open_page: bool) 
             return 1
         return 0
 
-    # schemaVersion 2: full round-trip (--prior) support lands with the v2 export work.
+    prior = None
     if prior_path is not None:
-        print(NOT_IMPLEMENTED_V2_MESSAGE, file=sys.stderr)
-        return 1
+        prior, errors = load_json(prior_path, str(prior_path))
+        if errors:
+            emit_errors(errors)
+            return 1
     try:
-        render_files(spec_dir, logic, current_id, None, open_page)
+        render_files(spec_dir, logic, current_id, prior, open_page)
     except (OSError, ValueError) as exc:
         print("/: " + str(exc), file=sys.stderr)
         return 1
@@ -1948,13 +2162,11 @@ def command_check_export(spec_dir: Path, export_path: Path) -> int:
     if logic.get("schemaVersion") == 1:
         print(EXIT6_MESSAGE, file=sys.stderr)
         return 6
-    print(NOT_IMPLEMENTED_V2_MESSAGE, file=sys.stderr)
-    return 1
     export, code = _read_export_and_validate(export_path)
     if code or export is None:
         return code
     print("signed" if export["signed"] else "unsigned")
-    if export_is_stale(export, spec_dir, current_id):
+    if export_is_stale(export, spec_dir, current_id) or export.get("stage") != logic["stage"]:
         return 3
     errors = logic_reference_errors(export, logic)
     if errors:
@@ -1963,7 +2175,9 @@ def command_check_export(spec_dir: Path, export_path: Path) -> int:
     return 0
 
 
-def discover_export(spec_dir: Path, downloads: Path, current_render_id: str) -> Optional[Path]:
+def discover_export(
+    spec_dir: Path, downloads: Path, current_render_id: str, required_stage: Optional[int] = None
+) -> Optional[Path]:
     """Return the newest export for this spec across both folders, preferring the current render."""
     candidates: List[Tuple[bool, datetime, Path]] = []
     for directory in (spec_dir, downloads):
@@ -1975,6 +2189,8 @@ def discover_export(spec_dir: Path, downloads: Path, current_render_id: str) -> 
             if errors or not isinstance(value, dict):
                 continue
             if value.get("kind") != EXPORT_KIND or value.get("slug") != spec_dir.name:
+                continue
+            if required_stage is not None and (value.get("schemaVersion") != 2 or value.get("stage") != required_stage):
                 continue
             exported_at = value.get("exportedAt")
             if not isinstance(exported_at, str):
@@ -1998,9 +2214,7 @@ def command_find_export(spec_dir: Path, downloads: Path) -> int:
     if logic.get("schemaVersion") == 1:
         print(EXIT6_MESSAGE, file=sys.stderr)
         return 6
-    print(NOT_IMPLEMENTED_V2_MESSAGE, file=sys.stderr)
-    return 1
-    found = discover_export(spec_dir, downloads, current_id)
+    found = discover_export(spec_dir, downloads, current_id, required_stage=logic["stage"])
     if found is None:
         print("no matching decision export found", file=sys.stderr)
         return 5
@@ -2008,43 +2222,73 @@ def command_find_export(spec_dir: Path, downloads: Path) -> int:
     return 0
 
 
-def scope_warnings(logic: dict, state: dict) -> List[str]:
-    placements = {item["id"]: effective_placement(state, item) for item in logic["requirements"]}
-    warnings: List[str] = []
-    for requirement in logic["requirements"]:
-        if placements[requirement["id"]] == "out":
-            continue
-        for dependency in requirement["dependsOn"]:
-            if placements[dependency] == "out":
-                warnings.append(requirement["id"] + " depends on " + dependency + ", which is out of scope.")
-    for left, right in logic["conflicts"]:
-        if placements[left] != "out" and placements[right] != "out":
-            warnings.append(left + " and " + right + " contradict each other; only one can be in scope.")
-    return warnings
+def derived_requirement_status(requirement: dict, scenario_by_id: Dict[str, dict]) -> str:
+    """withdrawn / flagged / active, computed from whether derivedFrom scenarios were reopened.
+
+    Never stored; the Python and TS renderers must compute this identically.
+    """
+    derived_from = requirement.get("derivedFrom", [])
+    if not derived_from:
+        return "active"
+    reopened = [ident in scenario_by_id and "reopened" in scenario_by_id[ident] for ident in derived_from]
+    if all(reopened):
+        return "withdrawn"
+    if any(reopened):
+        return "flagged"
+    return "active"
 
 
-def active_blind_spots(logic: dict, state: dict) -> List[dict]:
-    """Blind spots whose sources all stay in scope and no unconditionally-in requirement resolves."""
-    req_by_id = {item["id"]: item for item in logic["requirements"]}
+def stage1_active_blind_spots(logic: dict, state: dict) -> List[dict]:
+    """Active unless resolvedBy names a scenario approved-and-undropped, or a constraint ruled approve/rewrite, in state."""
+    scenario_ids = {item["id"] for item in logic["scenarios"]}
     active = []
     for blind_spot in logic["blindSpots"]:
-        sources_in_scope = all(effective_placement(state, req_by_id[source]) != "out" for source in blind_spot["sources"])
-        resolved_unconditionally_in = (
-            "resolvedBy" in blind_spot
-            and effective_placement(state, req_by_id[blind_spot["resolvedBy"]]) == "in"
-        )
-        if sources_in_scope and not resolved_unconditionally_in:
+        resolved_by = blind_spot.get("resolvedBy")
+        resolved = False
+        if resolved_by in scenario_ids:
+            resolved = bool(state["scenarioApproved"].get(resolved_by)) and not state["scenarioDrops"].get(
+                resolved_by, ""
+            ).strip()
+        elif resolved_by is not None:
+            resolved = state["constraintRulings"].get(resolved_by, {}).get("ruling") in ("approve", "rewrite")
+        if not resolved:
             active.append(blind_spot)
     return active
 
 
-def gate_failures(logic: dict, state: dict) -> List[Tuple[str, str]]:
+def stage1_gate_failures(logic: dict, state: dict) -> List[Tuple[str, str]]:
     failures: List[Tuple[str, str]] = []
-    requirements = logic["requirements"]
-    queue = [item for item in requirements if item["provenance"] == "claude"]
-    missing_queue = [item["id"] for item in queue if item["id"] not in state["placements"]]
-    if missing_queue:
-        failures.append(("queue", "Claude-added requirements without a placement: " + ", ".join(missing_queue)))
+
+    unresolved = []
+    for scenario in logic["scenarios"]:
+        ident = scenario["id"]
+        if state["scenarioApproved"].get(ident, False):
+            continue
+        if state["scenarioDrops"].get(ident, "").strip():
+            continue
+        unresolved.append(ident)
+    scenario_request_ids = {scenario.get("requestId") for scenario in logic["scenarios"] if scenario.get("requestId")}
+    pending_requests = [request for request in state["scenarioRequests"] if request["id"] not in scenario_request_ids]
+    if unresolved or pending_requests:
+        detail = []
+        if unresolved:
+            detail.append("not resolved: " + ", ".join(unresolved))
+        if pending_requests:
+            detail.append("pending scenario requests: " + ", ".join(request["id"] for request in pending_requests))
+        failures.append(("scenarios", "; ".join(detail)))
+
+    missing_constraints = []
+    for constraint in logic["constraints"]:
+        ruling = state["constraintRulings"].get(constraint["id"])
+        if not ruling:
+            missing_constraints.append(constraint["id"])
+            continue
+        if ruling["ruling"] == "rewrite" and not ruling.get("text", "").strip():
+            missing_constraints.append(constraint["id"] + " (rewrite needs text)")
+        if ruling["ruling"] == "reject" and not ruling.get("reason", "").strip():
+            missing_constraints.append(constraint["id"] + " (reject needs a reason)")
+    if missing_constraints:
+        failures.append(("constraints", "constraints need a ruling: " + ", ".join(missing_constraints)))
 
     missing_assumptions = []
     for assumption in logic["assumptions"]:
@@ -2053,44 +2297,132 @@ def gate_failures(logic: dict, state: dict) -> List[Tuple[str, str]]:
         if ruling not in RULINGS or (ruling != "build-on" and not decision.get("note", "").strip()):
             missing_assumptions.append(assumption["id"])
     if missing_assumptions:
-        failures.append(("assumptions", "assumptions need a ruling and a note unless build-on: " + ", ".join(missing_assumptions)))
+        failures.append(
+            ("assumptions", "assumptions need a ruling and a note unless build-on: " + ", ".join(missing_assumptions))
+        )
 
     missing_blind = []
-    for blind_spot in active_blind_spots(logic, state):
+    for blind_spot in stage1_active_blind_spots(logic, state):
         decision = state["blindSpots"].get(blind_spot["id"], {})
         if not decision.get("accepted") or not decision.get("note", "").strip():
             missing_blind.append(blind_spot["id"])
     if missing_blind:
-        failures.append(("blind-spots", "active blind spots need acceptance in the reviewer's words: " + ", ".join(missing_blind)))
+        failures.append(
+            ("blind-spots", "active blind spots need acceptance in the reviewer's words: " + ", ".join(missing_blind))
+        )
 
-    missing_scenarios = [item["id"] for item in logic["scenarios"] if not state["scenarioApproved"].get(item["id"], False)]
-    scenario_request_ids = {scenario.get("requestId") for scenario in logic["scenarios"] if scenario.get("requestId")}
-    pending_requests = [request for request in state["scenarioRequests"] if request["id"] not in scenario_request_ids]
-    if missing_scenarios or pending_requests:
-        detail = []
-        if missing_scenarios:
-            detail.append("not approved: " + ", ".join(missing_scenarios))
-        if pending_requests:
-            detail.append("pending scenario requests: " + ", ".join(request["id"] for request in pending_requests))
-        failures.append(("scenarios", "; ".join(detail)))
+    return failures
+
+
+def stage2_scope_warnings(logic: dict, state: dict, scenario_by_id: Dict[str, dict]) -> List[str]:
+    """Same as v1's scope warnings, but withdrawn requirements neither warn nor are warned about."""
+    non_withdrawn = [
+        item for item in logic["requirements"] if derived_requirement_status(item, scenario_by_id) != "withdrawn"
+    ]
+    placements = {item["id"]: effective_placement(state, item) for item in non_withdrawn}
+    warnings: List[str] = []
+    for requirement in non_withdrawn:
+        if placements[requirement["id"]] == "out":
+            continue
+        for dependency in requirement["dependsOn"]:
+            if dependency in placements and placements[dependency] == "out":
+                warnings.append(requirement["id"] + " depends on " + dependency + ", which is out of scope.")
+    for left, right in logic["conflicts"]:
+        if left in placements and right in placements and placements[left] != "out" and placements[right] != "out":
+            warnings.append(left + " and " + right + " contradict each other; only one can be in scope.")
+    return warnings
+
+
+def stage2_gate_failures(logic: dict, state: dict) -> List[Tuple[str, str]]:
+    failures: List[Tuple[str, str]] = []
+    scenario_by_id = {item["id"]: item for item in logic["scenarios"]}
+
+    approved_scenarios = {item["id"] for item in logic["scenarios"] if "dropReason" not in item}
+    approved_constraints = {
+        item["id"] for item in logic["constraints"] if item.get("ruling") in ("approved", "rewritten")
+    }
+    approved_items = approved_scenarios | approved_constraints
+    derived = set()
+    for requirement in logic["requirements"]:
+        if derived_requirement_status(requirement, scenario_by_id) == "withdrawn":
+            continue
+        derived.update(requirement.get("derivedFrom", []))
+    missing_derivation = sorted(approved_items - derived)
+    if missing_derivation:
+        failures.append(("derivation", "approved items missing a derived requirement: " + ", ".join(missing_derivation)))
 
     missing_reasons = []
-    for requirement in requirements:
+    for requirement in logic["requirements"]:
         final = effective_placement(state, requirement)
         if placement_changed(state, requirement) and not state["moveReasons"].get(requirement["id"], "").strip():
             missing_reasons.append(requirement["id"])
         if final == "conditional" and effective_condition(state, requirement) is None:
             missing_reasons.append(requirement["id"] + " (conditional placement needs a condition)")
     if missing_reasons:
-        failures.append(("move-reasons", "scope changes need a reason; conditional placements need a condition: " + ", ".join(missing_reasons)))
+        failures.append(
+            (
+                "move-reasons",
+                "scope changes need a reason; conditional placements need a condition: " + ", ".join(missing_reasons),
+            )
+        )
 
-    warnings = scope_warnings(logic, state)
+    warnings = stage2_scope_warnings(logic, state, scenario_by_id)
     if warnings:
         failures.append(("scope-warnings", "resolve scope warnings: " + " ".join(warnings)))
+
+    if state["disputes"] or any("reopened" in scenario for scenario in logic["scenarios"]):
+        failures.append(("disputes", "unresolved disputes or reopened scenarios remain"))
+
     return failures
 
 
-def apply_fold(logic: dict, export: dict, tech_spec_requested: bool) -> None:
+def stage1_fold(logic: dict, export: dict) -> None:
+    """Apply stage-1 decisions in place and advance the spec to stage 2. Does not write signoff."""
+    state = export["state"]
+    for scenario in logic["scenarios"]:
+        ident = scenario["id"]
+        outcome = state["scenarioOutcomes"].get(ident)
+        if outcome and outcome["choice"] != "spec":
+            if outcome["choice"] == "custom":
+                scenario["then"] = outcome["custom"]
+            else:
+                scenario["then"] = scenario["alternatives"][int(outcome["choice"][4:])]
+        drop_reason = state["scenarioDrops"].get(ident, "")
+        if drop_reason.strip():
+            scenario["dropReason"] = drop_reason
+
+    for constraint in logic["constraints"]:
+        ruling = state["constraintRulings"].get(constraint["id"])
+        if not ruling:
+            continue
+        if ruling["ruling"] == "approve":
+            constraint["ruling"] = "approved"
+        elif ruling["ruling"] == "rewrite":
+            constraint["ruling"] = "rewritten"
+            constraint["originalText"] = constraint["text"]
+            constraint["text"] = ruling["text"]
+        elif ruling["ruling"] == "reject":
+            constraint["ruling"] = "rejected"
+            constraint["rejectReason"] = ruling["reason"]
+
+    for assumption in logic["assumptions"]:
+        decision = state["assumptions"][assumption["id"]]
+        assumption["ruling"] = decision["ruling"]
+        assumption["rulingNote"] = decision["note"]
+
+    for blind_spot in stage1_active_blind_spots(logic, state):
+        blind_spot["acceptance"] = state["blindSpots"][blind_spot["id"]]["note"]
+
+    logic["stage"] = 2
+    logic["status"] = "Stage 1 approved"
+    logic["stage1Pin"] = {
+        "signedAt": state["signedAt"],
+        "renderId": export["renderId"],
+        "itemHashes": stage1_item_hashes(logic),
+    }
+
+
+def final_fold(logic: dict, export: dict, tech_spec_requested: bool) -> None:
     state = export["state"]
     for requirement in logic["requirements"]:
         ident = requirement["id"]
@@ -2114,57 +2446,18 @@ def apply_fold(logic: dict, export: dict, tech_spec_requested: bool) -> None:
             else:
                 requirement.pop("reviewReason", None)
 
-    for assumption in logic["assumptions"]:
-        decision = state["assumptions"][assumption["id"]]
-        assumption["ruling"] = decision["ruling"]
-        assumption["rulingNote"] = decision["note"]
-
-    for blind_spot in active_blind_spots(logic, state):
-        blind_spot["acceptance"] = state["blindSpots"][blind_spot["id"]]["note"]
-
     for scenario in logic["scenarios"]:
-        outcome = state["scenarioOutcomes"].get(scenario["id"])
-        if not outcome or outcome["choice"] == "spec":
-            continue
-        if outcome["choice"] == "custom":
-            scenario["then"] = outcome["custom"]
-        else:
-            index = int(outcome["choice"][4:])
-            scenario["then"] = scenario["alternatives"][index]
+        reapproved_hash = scenario.get("reapprovedHash")
+        if reapproved_hash:
+            logic["stage1Pin"]["itemHashes"][scenario["id"]] = reapproved_hash
+            del scenario["reapprovedHash"]
 
     logic["signoff"] = {"signedAt": state["signedAt"], "renderId": export["renderId"]}
     logic["status"] = "Approved — Tech spec: requested" if tech_spec_requested else "Approved"
 
 
-def command_fold(spec_dir: Path, export_path: Path, tech_spec_requested: bool) -> int:
-    logic, current_id = load_logic(spec_dir)
-    if logic is None or current_id is None:
-        return 1
-    if logic.get("schemaVersion") == 1:
-        print(EXIT6_MESSAGE, file=sys.stderr)
-        return 6
-    print(NOT_IMPLEMENTED_V2_MESSAGE, file=sys.stderr)
-    return 1
-    export, code = _read_export_and_validate(export_path)
-    if code or export is None:
-        return code
-    if export_is_stale(export, spec_dir, current_id):
-        print("export is stale or belongs to a different spec", file=sys.stderr)
-        return 3
-    errors = logic_reference_errors(export, logic)
-    if errors:
-        emit_errors(errors)
-        return 1
-    if not export["signed"]:
-        print("export is unsigned", file=sys.stderr)
-        return 4
-    failures = gate_failures(logic, export["state"])
-    if failures:
-        for gate, message in failures:
-            print("gate " + gate + ": " + message, file=sys.stderr)
-        return 4
-
-    apply_fold(logic, export, tech_spec_requested)
+def _fold_write_outputs(spec_dir: Path, logic: dict) -> Optional[str]:
+    """Render and write the folded logic.json plus its outputs atomically. Returns the new renderId, or None on write failure (already reported to stderr)."""
     try:
         folded_id = render_id(logic)
         html, markdown = prepare_render_files(spec_dir, logic, folded_id)
@@ -2176,8 +2469,50 @@ def command_fold(spec_dir: Path, export_path: Path, tech_spec_requested: bool) -
         }
         # logic.json is installed last so a failed write never pairs an approved source with stale outputs
         write_files_atomically(outputs)
+        return folded_id
     except (OSError, ValueError) as exc:
         print("/: " + str(exc), file=sys.stderr)
+        return None
+
+
+def command_fold(spec_dir: Path, export_path: Path, tech_spec_requested: bool) -> int:
+    logic, current_id = load_logic(spec_dir)
+    if logic is None or current_id is None:
+        return 1
+    if logic.get("schemaVersion") == 1:
+        print(EXIT6_MESSAGE, file=sys.stderr)
+        return 6
+    stage = logic["stage"]
+    if stage == 1 and tech_spec_requested:
+        print("pass --tech-spec-requested at the final fold", file=sys.stderr)
+        return 2
+
+    export, code = _read_export_and_validate(export_path)
+    if code or export is None:
+        return code
+    if export_is_stale(export, spec_dir, current_id) or export.get("stage") != stage:
+        print("export is stale or belongs to a different spec", file=sys.stderr)
+        return 3
+    errors = logic_reference_errors(export, logic)
+    if errors:
+        emit_errors(errors)
+        return 1
+    if not export["signed"]:
+        print("export is unsigned", file=sys.stderr)
+        return 4
+    failures = stage1_gate_failures(logic, export["state"]) if stage == 1 else stage2_gate_failures(logic, export["state"])
+    if failures:
+        for gate, message in failures:
+            print("gate " + gate + ": " + message, file=sys.stderr)
+        return 4
+
+    if stage == 1:
+        stage1_fold(logic, export)
+    else:
+        final_fold(logic, export, tech_spec_requested)
+
+    folded_id = _fold_write_outputs(spec_dir, logic)
+    if folded_id is None:
         return 1
     print(folded_id)
     return 0
@@ -2190,9 +2525,47 @@ def command_reapprove(spec_dir: Path, export_path: Path) -> int:
     if logic.get("schemaVersion") == 1:
         print(EXIT6_MESSAGE, file=sys.stderr)
         return 6
-    print(NOT_IMPLEMENTED_V2_MESSAGE, file=sys.stderr)
-    return 1
+    if logic["stage"] != 2:
+        print("reapprove is only valid in stage 2", file=sys.stderr)
+        return 2
 
+    export, code = _read_export_and_validate(export_path)
+    if code or export is None:
+        return code
+    if export_is_stale(export, spec_dir, current_id) or export.get("stage") != 2:
+        print("export is stale or belongs to a different spec", file=sys.stderr)
+        return 3
+    errors = logic_reference_errors(export, logic)
+    if errors:
+        emit_errors(errors)
+        return 1
+
+    state = export["state"]
+    current_hashes = item_hashes(logic)
+    reapproved_ids: List[str] = []
+    for scenario in logic["scenarios"]:
+        ident = scenario["id"]
+        if "reopened" not in scenario:
+            continue
+        if not state["scenarioApproved"].get(ident):
+            continue
+        current_hash = current_hashes.get(ident)
+        if export["seen"].get(ident) != current_hash:
+            continue
+        del scenario["reopened"]
+        scenario["reapprovedHash"] = current_hash
+        reapproved_ids.append(ident)
+
+    if not reapproved_ids:
+        print("nothing to re-approve", file=sys.stderr)
+        return 4
+
+    new_id = _fold_write_outputs(spec_dir, logic)
+    if new_id is None:
+        return 1
+    for ident in reapproved_ids:
+        print(ident)
+    return 0
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Validate, render, and fold interactive logic specs.")
