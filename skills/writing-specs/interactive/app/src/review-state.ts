@@ -543,7 +543,7 @@ export function gateList(state: ReviewState, spec: LogicSpec): ReviewGate[] {
   const approvedScenarios = spec.scenarios.filter((scenario) => !scenario.dropReason)
   const approvedConstraints = spec.constraints.filter((constraint) => constraint.ruling === 'approved' || constraint.ruling === 'rewritten')
   const approvedItems = [...approvedScenarios, ...approvedConstraints]
-  const moved = spec.requirements.filter((requirement) => requirementMoved(state, requirement))
+  const moved = nonWithdrawn.filter((requirement) => requirementMoved(state, requirement))
   const warnings = scopeWarnings(state, spec)
   const noDisputes = Object.keys(state.disputes).length === 0
   const noReopened = !spec.scenarios.some((scenario) => scenario.reopened)
