@@ -435,7 +435,7 @@ The first line stays v1's generated banner.
 ## DO-NOT-CHANGE fences
 
 1. **v1 validation and `logic.md` output (`validate_logic` `:204-581`, `render_markdown`
-   `:886-1010`).** Existing v1 specs (the fixture and `docs/quirk/specs/2026-09-23-interactive-logic-spec/`)
+   `:886-1010`).** Existing v1 specs (the `sample` fixture and this spec's own `logic.json`)
    must keep validating and regenerating identically ([REQ-03](logic.md#in-scope)). The v1 render
    tests pin this output.
 2. **Payload marker and escaping (`PAYLOAD_PLACEHOLDER` `:19`, the `<` escape at `:1076-1077`).**
