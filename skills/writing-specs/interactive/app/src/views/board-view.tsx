@@ -18,7 +18,9 @@ import {
   placedRequirements,
   placementInSpec,
   requirementMoved,
+  requirementStatus,
   scopeWarnings,
+  withdrawnRequirements,
 } from '../review-state'
 import type { ViewProps } from './view-props'
 import { ChangedToken, CertaintyToken, GROUP_COLOR } from './shared'
@@ -130,7 +132,8 @@ function HeaderRow({
 }
 
 function boardRows(spec: LogicSpec, state: ReviewState, collapsed: Set<string>): BoardRow[] {
-  const placed = placedRequirements(spec, state)
+  // withdrawn requirements are re-derived, not placed; they show separately under "Withdrawn pending re-derivation"
+  const placed = placedRequirements(spec, state).filter(({ requirement }) => requirementStatus(requirement, spec) !== 'withdrawn')
   const itemRow = (requirement: Requirement): BoardRow => ({ kind: 'item', id: requirement.id, requirement, target: targetOf(state, requirement) })
   const inGroup = (requirement: Requirement, group: Group) =>
     isCondition(group) ? targetOf(state, requirement) === group : requirement.group === group && effectivePlacement(state, requirement) === 'in'
@@ -159,15 +162,17 @@ function dropTarget(row: BoardRow): DropTarget | null {
 }
 
 /** The spec's requirements as a drag-and-drop board, grouped by placement and Claude's impact group. */
-export function BoardView({ spec, state, update, changedIds }: ViewProps) {
+export function BoardView({ spec, state, update, changedIds, openRequirementId, onOpenRequirement }: ViewProps) {
   const [dragging, setDragging] = useState<string | null>(null)
   const [overTarget, setOverTarget] = useState<DropTarget | null>(null)
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
-  const [openId, setOpenId] = useState<string | null>(null)
   const guard = useScopeOutGuard()
   const byId = useMemo(() => new Map(spec.requirements.map((requirement) => [requirement.id, requirement])), [spec.requirements])
   const warnings = scopeWarnings(state, spec)
-  const needReason = spec.requirements.filter((requirement) => requirementMoved(state, requirement) && !state.moveReasons[requirement.id]?.trim())
+  const needReason = spec.requirements.filter(
+    (requirement) => requirementStatus(requirement, spec) !== 'withdrawn' && requirementMoved(state, requirement) && !state.moveReasons[requirement.id]?.trim(),
+  )
+  const withdrawn = withdrawnRequirements(spec)
   const warningCount = (id: string) => warnings.filter((message) => message.includes(id)).length
   const rows = boardRows(spec, state, collapsed)
 
@@ -214,7 +219,7 @@ export function BoardView({ spec, state, update, changedIds }: ViewProps) {
           <Link
             onClick={(e) => {
               e.stopPropagation()
-              setOpenId(requirement.id)
+              onOpenRequirement(requirement.id)
             }}
           >
             {requirement.summary}
@@ -246,7 +251,7 @@ export function BoardView({ spec, state, update, changedIds }: ViewProps) {
                 setDragging(row.id)
               },
               onDragEnd: endDrag,
-              onClick: () => setOpenId(row.id),
+              onClick: () => onOpenRequirement(row.id),
             }
           : {}),
         onDragOver: (e: DragEvent<HTMLTableRowElement>) => {
@@ -298,7 +303,7 @@ export function BoardView({ spec, state, update, changedIds }: ViewProps) {
         >
           <VStack gap={1}>
             {needReason.map((requirement) => (
-              <Link key={requirement.id} onClick={() => setOpenId(requirement.id)}>{`${requirement.id} · ${requirement.summary}`}</Link>
+              <Link key={requirement.id} onClick={() => onOpenRequirement(requirement.id)}>{`${requirement.id} · ${requirement.summary}`}</Link>
             ))}
           </VStack>
         </Banner>
@@ -313,7 +318,30 @@ export function BoardView({ spec, state, update, changedIds }: ViewProps) {
         </Banner>
       ) : null}
       <Table data={rows} columns={columns} plugins={{ drag: dragPlugin }} idKey="id" verticalAlign="middle" dividers="rows" hasHover />
-      <RequirementDialog requirement={openId ? (byId.get(openId) ?? null) : null} spec={spec} state={state} update={update} changedIds={changedIds} onClose={() => setOpenId(null)} />
+      {withdrawn.length > 0 ? (
+        <VStack gap={2}>
+          <Heading level={3}>Withdrawn pending re-derivation</Heading>
+          <Text type="supporting" as="p">
+            These requirements came entirely from scenarios you reopened, so Claude drops them until it re-derives requirements from your next stage 1 pass.
+          </Text>
+          <VStack gap={1}>
+            {withdrawn.map(({ requirement, scenarios }) => (
+              <HStack key={requirement.id} gap={1} align="center" wrap="wrap">
+                <Text type="label">{requirement.id}</Text>
+                <Text type="supporting">{requirement.summary} — from {scenarios.map((scenario) => scenario.id).join(', ')}</Text>
+              </HStack>
+            ))}
+          </VStack>
+        </VStack>
+      ) : null}
+      <RequirementDialog
+        requirement={openRequirementId ? (byId.get(openRequirementId) ?? null) : null}
+        spec={spec}
+        state={state}
+        update={update}
+        changedIds={changedIds}
+        onClose={() => onOpenRequirement(null)}
+      />
     </VStack>
   )
 }

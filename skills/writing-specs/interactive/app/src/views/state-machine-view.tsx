@@ -4,12 +4,12 @@ import { Heading } from '@astryxdesign/core/Heading'
 import { Table, proportional, type TableColumn } from '@astryxdesign/core/Table'
 import { Text } from '@astryxdesign/core/Text'
 import { Token } from '@astryxdesign/core/Token'
-import { activeBlindSpots, CHOICE_LABEL, effectivePlacement } from '../review-state'
+import { activeBlindSpots } from '../review-state'
 import type { BlindSpot, StateMachine, StateMachineTransition } from '../spec-types'
 import { StateMachineDetailDialog } from './state-machine-detail'
 import { StateMachineDiagram, ACCENT, MUTED, OFF } from './state-machine-diagram'
 import { builtColor, builtLabel, nodeLabels, useMachineLayout, type StateMachineSelection, type TableRow } from './state-machine-model'
-import { ClaudeField, ClaudeWroteToken } from './shared'
+import { ClaudeField, ClaudeWroteToken, itemLabel } from './shared'
 import type { ViewProps } from './view-props'
 
 // A stable identity so the layout effect doesn't re-run every render when no state machine is defined.
@@ -106,22 +106,12 @@ export function StateMachineView(props: ViewProps) {
       ),
     },
     {
-      key: 'reqs',
-      header: 'Requirements',
+      key: 'sources',
+      header: 'Derived from',
       width: proportional(2),
       renderCell: (row) => (
         <VStack gap={1}>
-          {row.sources.map((id) => {
-            const requirement = spec.requirements.find((item) => item.id === id)
-            if (!requirement) return null
-            const placement = effectivePlacement(state, requirement)
-            return (
-              <HStack key={id} gap={1} align="center" wrap="wrap">
-                <Text>{id}</Text>
-                {placement ? <Token size="sm" color={placement === 'out' ? 'gray' : 'green'} label={CHOICE_LABEL[placement]} /> : null}
-              </HStack>
-            )
-          })}
+          {row.sources.map((id) => <Text key={id}>{`${id} · ${itemLabel(spec, id)}`}</Text>)}
         </VStack>
       ),
     },

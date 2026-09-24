@@ -7,10 +7,10 @@ import { MetadataList, MetadataListItem } from '@astryxdesign/core/MetadataList'
 import { Text } from '@astryxdesign/core/Text'
 import { Token } from '@astryxdesign/core/Token'
 import { CHOICE_LABEL, effectivePlacement } from '../review-state'
-import type { BlindSpot, StateMachine, StateMachineTransition } from '../spec-types'
+import type { BlindSpot, LogicSpec, StateMachine, StateMachineTransition } from '../spec-types'
 import { BlindSpotDetail } from './risks-view'
 import { builtColor, builtLabel, nodeLabels, transitionForBlindSpot, type StateMachineSelection } from './state-machine-model'
-import { ChangedToken, ClaudeField, ClaudeWroteToken } from './shared'
+import { ChangedToken, ClaudeField, ClaudeWroteToken, itemLabel } from './shared'
 import type { ViewProps } from './view-props'
 
 type Props = {
@@ -76,6 +76,14 @@ function TransitionDetail({ transition, machine, viewProps, onSelect }: { transi
   )
 }
 
+function CausedBySources({ ids, spec }: { ids: string[]; spec: LogicSpec }) {
+  return (
+    <VStack gap={2}>
+      {ids.map((id) => <Text key={id}>{`${id} · ${itemLabel(spec, id)}`}</Text>)}
+    </VStack>
+  )
+}
+
 function BlindSpotDetailSection({ spot, machine, viewProps, onSelect }: { spot: BlindSpot; machine: StateMachine; viewProps: ViewProps; onSelect: (selection: StateMachineSelection | null) => void }) {
   const onTransition = transitionForBlindSpot(machine, spot.id)
   return (
@@ -84,7 +92,7 @@ function BlindSpotDetailSection({ spot, machine, viewProps, onSelect }: { spot: 
       <Divider />
       <VStack gap={2}>
         <Heading level={3}>Caused by</Heading>
-        <RequirementRows ids={spot.sources} viewProps={viewProps} />
+        <CausedBySources ids={spot.sources} spec={viewProps.spec} />
       </VStack>
       {onTransition ? (
         <HStack gap={2} align="center" wrap="wrap">

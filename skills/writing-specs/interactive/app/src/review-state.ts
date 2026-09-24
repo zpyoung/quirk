@@ -622,13 +622,49 @@ export function localStamp(date: Date): string {
   return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}T${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
 }
 
-export function coverageGaps(spec: LogicSpec, state: ReviewState) {
-  const gaps: { id: string; text: string; view: ViewId }[] = []
-  spec.assumptions.filter((assumption) => !state.assumptions[assumption.id]?.ruling).forEach((assumption) => gaps.push({ id: `assumption-${assumption.id}`, text: `${assumption.id} still needs a ruling`, view: 'risks' }))
-  activeBlindSpots(state, spec).filter((spot) => !state.blindSpots[spot.id]?.accepted || !state.blindSpots[spot.id]?.note.trim()).forEach((spot) => gaps.push({ id: `blind-${spot.id}`, text: `${spot.id} still needs written acceptance`, view: 'risks' }))
-  return gaps
-}
-
 export function placedRequirements(spec: LogicSpec, state: ReviewState): { requirement: Requirement; placement: Placement }[] {
   return spec.requirements.map((requirement) => ({ requirement, placement: effectivePlacement(state, requirement) }))
+}
+
+export type TraceRow = { id: string; kind: 'scenario' | 'constraint'; text: string; requirementIds: string[]; status: 'covered' | 'gap' }
+export type NonGoalRow = { id: string; kind: 'scenario' | 'constraint'; text: string; reason: string }
+
+/** `CONTRACT:` one row per approved stage-1 item, linking to the non-withdrawn requirements derived from it (see Trace matrix). */
+export function traceMatrix(spec: LogicSpec): { rows: TraceRow[]; nonGoals: NonGoalRow[] } {
+  const nonWithdrawn = spec.requirements.filter((requirement) => requirementStatus(requirement, spec) !== 'withdrawn')
+  const derivedRequirementIds = (itemId: string) => nonWithdrawn.filter((requirement) => requirement.derivedFrom.includes(itemId)).map((requirement) => requirement.id)
+  const rows: TraceRow[] = []
+  const nonGoals: NonGoalRow[] = []
+  for (const scenario of spec.scenarios) {
+    if (scenario.dropReason) {
+      nonGoals.push({ id: scenario.id, kind: 'scenario', text: scenario.then, reason: scenario.dropReason })
+      continue
+    }
+    const requirementIds = derivedRequirementIds(scenario.id)
+    rows.push({ id: scenario.id, kind: 'scenario', text: scenario.then, requirementIds, status: requirementIds.length > 0 ? 'covered' : 'gap' })
+  }
+  for (const constraint of spec.constraints) {
+    if (constraint.ruling === 'rejected') {
+      nonGoals.push({ id: constraint.id, kind: 'constraint', text: constraint.text, reason: constraint.rejectReason ?? '' })
+      continue
+    }
+    if (constraint.ruling !== 'approved' && constraint.ruling !== 'rewritten') continue
+    const requirementIds = derivedRequirementIds(constraint.id)
+    rows.push({ id: constraint.id, kind: 'constraint', text: constraint.text, requirementIds, status: requirementIds.length > 0 ? 'covered' : 'gap' })
+  }
+  return { rows, nonGoals }
+}
+
+export type WithdrawnRequirement = { requirement: Requirement; scenarios: Scenario[] }
+
+/** `CONTRACT:` withdrawn requirements are excluded from the board; the page lists them here with the reopened scenario(s) they came from. */
+export function withdrawnRequirements(spec: LogicSpec): WithdrawnRequirement[] {
+  return spec.requirements
+    .filter((requirement) => requirementStatus(requirement, spec) === 'withdrawn')
+    .map((requirement) => ({
+      requirement,
+      scenarios: requirement.derivedFrom
+        .map((id) => spec.scenarios.find((scenario) => scenario.id === id))
+        .filter((scenario): scenario is Scenario => Boolean(scenario)),
+    }))
 }

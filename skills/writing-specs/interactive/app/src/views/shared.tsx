@@ -3,7 +3,7 @@ import { HStack, VStack } from '@astryxdesign/core/Layout'
 import { Markdown, type MarkdownComponents } from '@astryxdesign/core/Markdown'
 import { Text } from '@astryxdesign/core/Text'
 import { Token } from '@astryxdesign/core/Token'
-import type { Certainty, Provenance, RequirementGroup } from '../spec-types'
+import type { Certainty, LogicSpec, Provenance, RequirementGroup } from '../spec-types'
 
 export const CERTAINTY_LABEL: Record<Certainty, string> = { confirmed: 'Confirmed', assumed: 'Assumed', unverified: 'Unverified' }
 export const CERTAINTY_COLOR = { confirmed: 'green', assumed: 'yellow', unverified: 'orange' } as const
@@ -72,4 +72,13 @@ export function PreselectedToken() {
 export function CertaintyToken({ certainty }: { certainty: Certainty | null }) {
   if (!certainty) return null
   return <Token size="sm" color={CERTAINTY_COLOR[certainty]} label={CERTAINTY_LABEL[certainty]} />
+}
+
+/** A scenario or constraint's short label for referencing it from an assumption, blind spot, or requirement. */
+export function itemLabel(spec: LogicSpec, id: string): string {
+  const scenario = spec.scenarios.find((s) => s.id === id)
+  if (scenario) return scenario.then
+  const constraint = spec.constraints.find((c) => c.id === id)
+  if (constraint) return constraint.text
+  return id
 }
