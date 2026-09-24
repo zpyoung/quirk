@@ -1,13 +1,14 @@
 export type Markdown = string
 export type IsoDateTime = string
 export type RequirementId = string
+export type BehaviorId = string
+export type ScenarioId = string
+export type ConstraintId = string
 export type AssumptionId = string
 export type BlindSpotId = string
-export type ScenarioId = string
 export type StateId = string
 export type EntryId = string
 
-export type RequirementScope = 'in' | 'out'
 export type Placement = 'in' | 'conditional' | 'out'
 export type ScopeCondition = 'no-code' | 'under-10' | 'under-30'
 export type RequirementGroup = 'min' | 'i3' | 'i2' | 'i1'
@@ -15,27 +16,52 @@ export type Provenance = 'you-chose' | 'you-recommended' | 'claude'
 export type Certainty = 'confirmed' | 'assumed' | 'unverified'
 export type AssumptionRuling = 'build-on' | 'verify-first' | 'wrong'
 export type ScenarioChoice = 'spec' | 'custom' | `alt-${number}`
+export type ConstraintKind = 'placement' | 'verification' | 'naming' | 'non-goal' | 'other'
+export type ConstraintRulingVerb = 'approve' | 'rewrite' | 'reject'
+export type ConstraintRuling = 'approved' | 'rewritten' | 'rejected'
+export type DisputeKind = 'derivation' | 'scenario'
 
 export interface Amendment {
   date: string
   text: string
 }
 
-export interface Requirement {
-  id: RequirementId
-  area: string
-  text: string
-  summary: string
-  detail: Markdown
-  scope: RequirementScope
-  condition?: ScopeCondition
-  group: RequirementGroup
+export interface Behavior {
+  id: BehaviorId
+  rule: string
+  detail?: Markdown
+}
+
+export interface Scenario {
+  id: ScenarioId
+  behavior: BehaviorId
+  given: string
+  when: string
+  then: string
+  alternatives: string[]
+  explanation: Markdown
   provenance: Provenance
   question?: string
   rationale?: Markdown
-  certainty: Certainty | null
-  dependsOn: RequirementId[]
-  reviewReason?: string
+  extraReason?: string
+  requestId?: string
+  dropReason?: string
+  reopened?: { requirementId: RequirementId; reason: string; raisedAt: IsoDateTime }
+  reapprovedHash?: string
+}
+
+export interface Constraint {
+  id: ConstraintId
+  area: string
+  kind: ConstraintKind
+  text: string
+  provenance: Provenance
+  question?: string
+  rationale?: Markdown
+  requestId?: string
+  ruling?: ConstraintRuling
+  originalText?: string
+  rejectReason?: string
 }
 
 export interface Assumption {
@@ -44,7 +70,7 @@ export interface Assumption {
   basis: string
   certainty: Certainty
   ifWrong: string
-  affects: RequirementId[]
+  affects: string[]
   meaning: Markdown
   check: Markdown
   checkCost: string
@@ -56,20 +82,24 @@ export interface BlindSpot {
   id: BlindSpotId
   title: string
   detail: Markdown
-  sources: RequirementId[]
-  resolvedBy?: RequirementId
+  sources: string[]
+  resolvedBy?: string
   acceptance?: string
 }
 
-export interface Scenario {
-  id: ScenarioId
-  given: string
-  when: string
-  then: string
-  alternatives: string[]
-  explanation: Markdown
-  refs: RequirementId[]
-  requestId?: string
+export interface Requirement {
+  id: RequirementId
+  area: string
+  text: string
+  summary: string
+  detail: Markdown
+  scope: 'in' | 'out'
+  condition?: ScopeCondition
+  group: RequirementGroup
+  certainty: Certainty | null
+  dependsOn: RequirementId[]
+  derivedFrom: string[]
+  reviewReason?: string
 }
 
 export interface ResearchFinding {
@@ -125,20 +155,28 @@ export interface LogicSections {
 }
 
 export interface LogicSpec {
-  schemaVersion: 1
+  schemaVersion: 2
+  stage: 1 | 2
   title: string
   status: string
   amendments: Amendment[]
   sections: LogicSections
-  requirements: Requirement[]
-  conflicts: [RequirementId, RequirementId][]
+  behaviors: Behavior[]
+  scenarios: Scenario[]
+  constraints: Constraint[]
   assumptions: Assumption[]
   blindSpots: BlindSpot[]
-  scenarios: Scenario[]
   research: ResearchFinding[]
+  requirements: Requirement[]
+  conflicts: [RequirementId, RequirementId][]
   views?: {
     stateMachine?: StateMachine
     storyMap?: StoryMap
+  }
+  stage1Pin?: {
+    signedAt: IsoDateTime
+    renderId: string
+    itemHashes: Record<string, string>
   }
   signoff?: {
     signedAt: IsoDateTime
@@ -148,6 +186,7 @@ export interface LogicSpec {
 
 export interface ScenarioRequest {
   id: string
+  behavior: BehaviorId
   text: string
   requestedAt: IsoDateTime
 }
@@ -174,17 +213,33 @@ export interface ScenarioOutcome {
   custom: string
 }
 
+export interface ConstraintRulingDecision {
+  ruling: ConstraintRulingVerb
+  text: string
+  reason: string
+}
+
+export interface Dispute {
+  kind: DisputeKind
+  target: RequirementId | null
+  reason: string
+}
+
 export interface ReviewState {
+  stage: 1 | 2
+  scenarioOutcomes: Record<ScenarioId, ScenarioOutcome>
+  scenarioApproved: Record<ScenarioId, boolean>
+  scenarioDrops: Record<ScenarioId, string>
+  scenarioRequests: ScenarioRequest[]
+  constraintRulings: Record<ConstraintId, ConstraintRulingDecision>
+  assumptions: Record<AssumptionId, AssumptionDecision>
+  blindSpots: Record<BlindSpotId, BlindSpotDecision>
+  researchRequests: ResearchRequest[]
   placements: Record<RequirementId, Placement>
   conditions: Record<RequirementId, ScopeCondition>
   moveReasons: Record<RequirementId, string>
   notes: Record<string, string>
-  assumptions: Record<AssumptionId, AssumptionDecision>
-  blindSpots: Record<BlindSpotId, BlindSpotDecision>
-  scenarioOutcomes: Record<ScenarioId, ScenarioOutcome>
-  scenarioApproved: Record<ScenarioId, boolean>
-  scenarioRequests: ScenarioRequest[]
-  researchRequests: ResearchRequest[]
+  disputes: Record<RequirementId, Dispute>
   verdict?: 'approve' | 'send-back'
   verdictNote: string
   signedAt?: IsoDateTime
@@ -192,19 +247,26 @@ export interface ReviewState {
 }
 
 export interface DecisionRecord {
+  stage: 1 | 2
   verdict: 'approve' | 'send-back' | null
   verdictNote: string
   signedAt: IsoDateTime | null
-  placements: {
-    id: RequirementId
-    from: Placement
-    to: Placement
-    condition: ScopeCondition | null
+  scenarios: {
+    id: ScenarioId
+    approved: boolean
+    dropped: string | null
+    then: string
+    changesSpec: boolean
+  }[]
+  constraints: {
+    id: ConstraintId
+    ruling: ConstraintRulingVerb | null
+    text: string
     reason: string
   }[]
   assumptions: {
     id: AssumptionId
-    ruling?: AssumptionRuling
+    ruling: AssumptionRuling | null
     note: string
   }[]
   blindSpots: {
@@ -212,11 +274,18 @@ export interface DecisionRecord {
     accepted: boolean
     note: string
   }[]
-  scenarios: {
-    id: ScenarioId
-    approved: boolean
-    then: string
-    changesSpec: boolean
+  placements: {
+    id: RequirementId
+    from: Placement
+    to: Placement
+    condition: ScopeCondition | null
+    reason: string
+  }[]
+  disputes: {
+    requirementId: RequirementId
+    kind: DisputeKind
+    target: RequirementId | null
+    reason: string
   }[]
   scenarioRequests: ScenarioRequest[]
   researchRequests: ResearchRequest[]
@@ -225,7 +294,8 @@ export interface DecisionRecord {
 
 export interface Export {
   kind: 'quirk-logic-spec-decisions'
-  schemaVersion: 1
+  schemaVersion: 2
+  stage: 1 | 2
   slug: string
   renderId: string
   exportedAt: IsoDateTime

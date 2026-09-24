@@ -3,6 +3,7 @@ import type {
   Assumption,
   AssumptionRuling,
   BlindSpot,
+  ConstraintKind,
   DecisionRecord,
   Export,
   LogicSpec,
@@ -14,12 +15,13 @@ import type {
   ScopeCondition,
 } from './spec-types'
 
-export type ViewId = 'board' | 'risks' | 'scenarios' | 'coverage' | 'heatmap' | 'story-map' | 'states' | 'spec' | 'sign-off'
+export type ViewId = 'board' | 'risks' | 'scenarios' | 'constraints' | 'coverage' | 'heatmap' | 'story-map' | 'states' | 'spec' | 'sign-off'
 export type TabSpec = { id: ViewId; label: string }
 export type Snapshot = { state: ReviewState; seen: Record<string, string>; lastExportUpdatedAt: string | null; renderId: string | null; storageOk: boolean }
 export type PayloadResult = { payload: LogicSpecPayload | null; error: string | null }
 export type ReviewGate = { id: string; label: string; done: number; total: number }
 export type Update = (recipe: (state: ReviewState) => ReviewState, reviewedItemId?: string) => void
+export type RequirementStatus = 'active' | 'withdrawn' | 'flagged'
 
 export const PAYLOAD_ID = 'quirk-logic-spec-payload'
 export const EXPORT_KIND = 'quirk-logic-spec-decisions'
@@ -42,19 +44,35 @@ export const GROUP_LABEL: Record<(typeof GROUPS)[number], string> = {
   i2: 'Impact 2',
   i1: 'Impact 1',
 }
+export const CONSTRAINT_KIND_LABEL: Record<ConstraintKind, string> = {
+  placement: 'Placement',
+  verification: 'Verification',
+  naming: 'Naming',
+  'non-goal': 'Non-goal',
+  other: 'Other',
+}
+export const CONSTRAINT_RULING_LABEL: Record<'approve' | 'rewrite' | 'reject', string> = {
+  approve: 'Approved',
+  rewrite: 'Rewritten',
+  reject: 'Rejected',
+}
 
-export function emptyState(): ReviewState {
+export function emptyState(stage: 1 | 2 = 1): ReviewState {
   return {
+    stage,
+    scenarioOutcomes: {},
+    scenarioApproved: {},
+    scenarioDrops: {},
+    scenarioRequests: [],
+    constraintRulings: {},
+    assumptions: {},
+    blindSpots: {},
+    researchRequests: [],
     placements: {},
     conditions: {},
     moveReasons: {},
     notes: {},
-    assumptions: {},
-    blindSpots: {},
-    scenarioOutcomes: {},
-    scenarioApproved: {},
-    scenarioRequests: [],
-    researchRequests: [],
+    disputes: {},
     verdictNote: '',
     updatedAt: new Date().toISOString(),
   }
@@ -73,25 +91,34 @@ export function isReviewState(value: unknown): value is ReviewState {
   const isPlacement = (item: unknown) => item === 'in' || item === 'conditional' || item === 'out'
   const isCondition = (item: unknown) => item === 'no-code' || item === 'under-10' || item === 'under-30'
   const isRuling = (item: unknown) => item === 'build-on' || item === 'verify-first' || item === 'wrong'
+  const isConstraintVerb = (item: unknown) => item === 'approve' || item === 'rewrite' || item === 'reject'
+  const isDisputeKind = (item: unknown) => item === 'derivation' || item === 'scenario'
   return (
-    isObject(value.placements) && Object.values(value.placements).every(isPlacement) &&
-    isObject(value.conditions) && Object.values(value.conditions).every(isCondition) &&
-    isStringMap(value.moveReasons) &&
-    isStringMap(value.notes) &&
-    isObject(value.assumptions) && Object.values(value.assumptions).every((decision) =>
-      isObject(decision) && typeof decision.note === 'string' && (decision.ruling === undefined || isRuling(decision.ruling))) &&
-    isObject(value.blindSpots) && Object.values(value.blindSpots).every((decision) =>
-      isObject(decision) && typeof decision.accepted === 'boolean' && typeof decision.note === 'string') &&
+    (value.stage === 1 || value.stage === 2) &&
     isObject(value.scenarioOutcomes) && Object.values(value.scenarioOutcomes).every((outcome) =>
       isObject(outcome) && typeof outcome.choice === 'string' &&
       (outcome.choice === 'spec' || outcome.choice === 'custom' || /^alt-\d+$/.test(outcome.choice)) &&
       typeof outcome.custom === 'string') &&
     isObject(value.scenarioApproved) && Object.values(value.scenarioApproved).every((approved) => typeof approved === 'boolean') &&
+    isStringMap(value.scenarioDrops) &&
     Array.isArray(value.scenarioRequests) && value.scenarioRequests.every((request) =>
-      isObject(request) && typeof request.id === 'string' && typeof request.text === 'string' && typeof request.requestedAt === 'string') &&
+      isObject(request) && typeof request.id === 'string' && typeof request.behavior === 'string' &&
+      typeof request.text === 'string' && typeof request.requestedAt === 'string') &&
+    isObject(value.constraintRulings) && Object.values(value.constraintRulings).every((ruling) =>
+      isObject(ruling) && isConstraintVerb(ruling.ruling) && typeof ruling.text === 'string' && typeof ruling.reason === 'string') &&
+    isObject(value.assumptions) && Object.values(value.assumptions).every((decision) =>
+      isObject(decision) && typeof decision.note === 'string' && (decision.ruling === undefined || isRuling(decision.ruling))) &&
+    isObject(value.blindSpots) && Object.values(value.blindSpots).every((decision) =>
+      isObject(decision) && typeof decision.accepted === 'boolean' && typeof decision.note === 'string') &&
     Array.isArray(value.researchRequests) && value.researchRequests.every((request) =>
       isObject(request) && typeof request.id === 'string' && typeof request.blindSpotId === 'string' &&
       typeof request.question === 'string' && typeof request.requestedAt === 'string') &&
+    isObject(value.placements) && Object.values(value.placements).every(isPlacement) &&
+    isObject(value.conditions) && Object.values(value.conditions).every(isCondition) &&
+    isStringMap(value.moveReasons) &&
+    isStringMap(value.notes) &&
+    isObject(value.disputes) && Object.values(value.disputes).every((dispute) =>
+      isObject(dispute) && isDisputeKind(dispute.kind) && (dispute.target === null || typeof dispute.target === 'string') && typeof dispute.reason === 'string') &&
     typeof value.verdictNote === 'string' &&
     typeof value.updatedAt === 'string' &&
     (value.verdict === undefined || value.verdict === 'approve' || value.verdict === 'send-back') &&
@@ -103,7 +130,8 @@ export function isDecisionExport(value: unknown, slug?: string): value is Export
   return (
     isObject(value) &&
     value.kind === EXPORT_KIND &&
-    value.schemaVersion === 1 &&
+    value.schemaVersion === 2 &&
+    (value.stage === 1 || value.stage === 2) &&
     typeof value.slug === 'string' &&
     (slug === undefined || value.slug === slug) &&
     typeof value.renderId === 'string' &&
@@ -116,25 +144,32 @@ export function isDecisionExport(value: unknown, slug?: string): value is Export
 }
 
 export function isLogicSpec(value: unknown): value is LogicSpec {
-  if (!isObject(value) || value.schemaVersion !== 1 || typeof value.title !== 'string' || typeof value.status !== 'string') return false
-  if (!Array.isArray(value.requirements) || !Array.isArray(value.conflicts) || !Array.isArray(value.assumptions) ||
-      !Array.isArray(value.blindSpots) || !Array.isArray(value.scenarios) || !Array.isArray(value.research) ||
+  if (!isObject(value) || value.schemaVersion !== 2 || (value.stage !== 1 && value.stage !== 2) ||
+      typeof value.title !== 'string' || typeof value.status !== 'string') return false
+  if (!Array.isArray(value.behaviors) || !Array.isArray(value.scenarios) || !Array.isArray(value.constraints) ||
+      !Array.isArray(value.assumptions) || !Array.isArray(value.blindSpots) || !Array.isArray(value.research) ||
+      !Array.isArray(value.requirements) || !Array.isArray(value.conflicts) ||
       !Array.isArray(value.amendments) || !isObject(value.sections)) return false
-  if (value.requirements.some((item) => !isObject(item) || typeof item.id !== 'string' || typeof item.area !== 'string' ||
-      typeof item.text !== 'string' || typeof item.summary !== 'string' || typeof item.detail !== 'string' ||
-      (item.scope !== 'in' && item.scope !== 'out') || !Array.isArray(item.dependsOn) ||
-      !item.dependsOn.every((id) => typeof id === 'string') ||
-      !['min', 'i3', 'i2', 'i1'].includes(String(item.group)) ||
-      !['you-chose', 'you-recommended', 'claude'].includes(String(item.provenance)) ||
-      (item.certainty !== null && !['confirmed', 'assumed', 'unverified'].includes(String(item.certainty))))) return false
+  const isProvenance = (item: unknown) => ['you-chose', 'you-recommended', 'claude'].includes(String(item))
+  if (value.behaviors.some((item) => !isObject(item) || typeof item.id !== 'string' || typeof item.rule !== 'string')) return false
+  if (value.scenarios.some((item) => !isObject(item) || typeof item.id !== 'string' || typeof item.behavior !== 'string' ||
+      typeof item.given !== 'string' || typeof item.when !== 'string' || typeof item.then !== 'string' ||
+      !Array.isArray(item.alternatives) || typeof item.explanation !== 'string' || !isProvenance(item.provenance))) return false
+  if (value.constraints.some((item) => !isObject(item) || typeof item.id !== 'string' || typeof item.area !== 'string' ||
+      !['placement', 'verification', 'naming', 'non-goal', 'other'].includes(String(item.kind)) ||
+      typeof item.text !== 'string' || !isProvenance(item.provenance))) return false
   if (value.assumptions.some((item) => !isObject(item) || typeof item.id !== 'string' || typeof item.claim !== 'string' ||
       typeof item.basis !== 'string' || typeof item.ifWrong !== 'string' || !Array.isArray(item.affects) ||
       typeof item.meaning !== 'string' || typeof item.check !== 'string' || typeof item.checkCost !== 'string')) return false
   if (value.blindSpots.some((item) => !isObject(item) || typeof item.id !== 'string' || typeof item.title !== 'string' ||
       typeof item.detail !== 'string' || !Array.isArray(item.sources))) return false
-  if (value.scenarios.some((item) => !isObject(item) || typeof item.id !== 'string' || typeof item.given !== 'string' ||
-      typeof item.when !== 'string' || typeof item.then !== 'string' || !Array.isArray(item.alternatives) ||
-      typeof item.explanation !== 'string' || !Array.isArray(item.refs))) return false
+  if (value.requirements.some((item) => !isObject(item) || typeof item.id !== 'string' || typeof item.area !== 'string' ||
+      typeof item.text !== 'string' || typeof item.summary !== 'string' || typeof item.detail !== 'string' ||
+      (item.scope !== 'in' && item.scope !== 'out') || !Array.isArray(item.dependsOn) ||
+      !item.dependsOn.every((id) => typeof id === 'string') || !Array.isArray(item.derivedFrom) ||
+      !item.derivedFrom.every((id) => typeof id === 'string') ||
+      !['min', 'i3', 'i2', 'i1'].includes(String(item.group)) ||
+      (item.certainty !== null && !['confirmed', 'assumed', 'unverified'].includes(String(item.certainty))))) return false
   if (!isObject(value.sections) || typeof value.sections.purpose !== 'string' ||
       typeof value.sections.conceptualModel !== 'string' || typeof value.sections.dataFlow !== 'string') return false
   if (value.views !== undefined && !isObject(value.views)) return false
@@ -179,25 +214,44 @@ export function nextTimestamp(previous?: string): string {
 export function cloneState(state: ReviewState): ReviewState {
   return {
     ...state,
+    scenarioOutcomes: Object.fromEntries(Object.entries(state.scenarioOutcomes).map(([id, outcome]) => [id, { ...outcome }])),
+    scenarioApproved: { ...state.scenarioApproved },
+    scenarioDrops: { ...state.scenarioDrops },
+    scenarioRequests: state.scenarioRequests.map((request) => ({ ...request })),
+    constraintRulings: Object.fromEntries(Object.entries(state.constraintRulings).map(([id, ruling]) => [id, { ...ruling }])),
+    assumptions: Object.fromEntries(Object.entries(state.assumptions).map(([id, decision]) => [id, { ...decision }])),
+    blindSpots: Object.fromEntries(Object.entries(state.blindSpots).map(([id, decision]) => [id, { ...decision }])),
+    researchRequests: state.researchRequests.map((request) => ({ ...request })),
     placements: { ...state.placements },
     conditions: { ...state.conditions },
     moveReasons: { ...state.moveReasons },
     notes: { ...state.notes },
-    assumptions: Object.fromEntries(Object.entries(state.assumptions).map(([id, decision]) => [id, { ...decision }])),
-    blindSpots: Object.fromEntries(Object.entries(state.blindSpots).map(([id, decision]) => [id, { ...decision }])),
-    scenarioOutcomes: Object.fromEntries(Object.entries(state.scenarioOutcomes).map(([id, outcome]) => [id, { ...outcome }])),
-    scenarioApproved: { ...state.scenarioApproved },
-    scenarioRequests: state.scenarioRequests.map((request) => ({ ...request })),
-    researchRequests: state.researchRequests.map((request) => ({ ...request })),
+    disputes: Object.fromEntries(Object.entries(state.disputes).map(([id, dispute]) => [id, { ...dispute }])),
   }
 }
 
+/** Every reviewable item id in the logic, mirroring the Python `item_hashes` key set. */
 export function itemIds(spec: LogicSpec): string[] {
-  return [...spec.requirements, ...spec.assumptions, ...spec.blindSpots, ...spec.scenarios].map((item) => item.id)
+  return [...spec.behaviors, ...spec.scenarios, ...spec.constraints, ...spec.assumptions, ...spec.blindSpots, ...spec.requirements].map((item) => item.id)
+}
+
+/**
+ * `CONTRACT:` computed, never stored; Python implements this identically (see Derived-requirement status).
+ * withdrawn: every derivedFrom id is a reopened scenario. flagged: some but not all are. active: none are.
+ */
+export function requirementStatus(requirement: Requirement, spec: LogicSpec): RequirementStatus {
+  const reopenedScenarioIds = new Set(spec.scenarios.filter((scenario) => scenario.reopened).map((scenario) => scenario.id))
+  const reopenedCount = requirement.derivedFrom.filter((id) => reopenedScenarioIds.has(id)).length
+  if (reopenedCount === 0) return 'active'
+  return reopenedCount === requirement.derivedFrom.length ? 'withdrawn' : 'flagged'
 }
 
 export function changedItemIds(spec: LogicSpec, hashes: Record<string, string>, seen: Record<string, string>): string[] {
-  return itemIds(spec).filter((id) => seen[id] !== hashes[id])
+  const hashChanged = itemIds(spec).filter((id) => seen[id] !== hashes[id])
+  const derivationChanged = spec.requirements
+    .filter((requirement) => requirementStatus(requirement, spec) !== 'active')
+    .map((requirement) => requirement.id)
+  return [...new Set([...hashChanged, ...derivationChanged])]
 }
 
 export function retainItemIds<T>(values: Record<string, T>, allowed: Set<string>): Record<string, T> {
@@ -216,20 +270,24 @@ export function carryOver(
   priorRenderId: string | null,
   renderId: string,
 ): { state: ReviewState; changedIds: string[]; seen: Record<string, string> } {
-  const requirementIds = new Set(spec.requirements.map((item) => item.id))
+  const scenarioIds = new Set(spec.scenarios.map((item) => item.id))
+  const constraintIds = new Set(spec.constraints.map((item) => item.id))
   const assumptionIds = new Set(spec.assumptions.map((item) => item.id))
   const blindSpotIds = new Set(spec.blindSpots.map((item) => item.id))
-  const scenarioIds = new Set(spec.scenarios.map((item) => item.id))
-  const allItemIds = new Set([...requirementIds, ...assumptionIds, ...blindSpotIds, ...scenarioIds])
+  const requirementIds = new Set(spec.requirements.map((item) => item.id))
+  const allItemIds = new Set([...scenarioIds, ...constraintIds, ...assumptionIds, ...blindSpotIds, ...requirementIds])
+
   const changedIds = changedItemIds(spec, hashes, seen)
-  const currentSeen = retainItemIds(seen, allItemIds)
+  const currentSeen = retainItemIds(seen, new Set(itemIds(spec)))
   const next = cloneState(state)
   let stateChanged = false
   for (const id of changedIds) {
     stateChanged ||= Object.hasOwn(next.placements, id) || Object.hasOwn(next.conditions, id) ||
       Object.hasOwn(next.moveReasons, id) || Object.hasOwn(next.notes, id) ||
       Object.hasOwn(next.assumptions, id) || Object.hasOwn(next.blindSpots, id) ||
-      Object.hasOwn(next.scenarioOutcomes, id) || Object.hasOwn(next.scenarioApproved, id)
+      Object.hasOwn(next.scenarioOutcomes, id) || Object.hasOwn(next.scenarioApproved, id) ||
+      Object.hasOwn(next.scenarioDrops, id) || Object.hasOwn(next.constraintRulings, id) ||
+      Object.hasOwn(next.disputes, id)
     delete next.placements[id]
     delete next.conditions[id]
     delete next.moveReasons[id]
@@ -238,18 +296,25 @@ export function carryOver(
     delete next.blindSpots[id]
     delete next.scenarioOutcomes[id]
     delete next.scenarioApproved[id]
+    delete next.scenarioDrops[id]
+    delete next.constraintRulings[id]
+    delete next.disputes[id]
   }
-  const originalCounts = [
-    Object.keys(next.placements).length,
-    Object.keys(next.conditions).length,
-    Object.keys(next.moveReasons).length,
-    Object.keys(next.notes).length,
-    Object.keys(next.assumptions).length,
-    Object.keys(next.blindSpots).length,
-    Object.keys(next.scenarioOutcomes).length,
-    Object.keys(next.scenarioApproved).length,
-    next.researchRequests.length,
+  const countsOf = (s: ReviewState) => [
+    Object.keys(s.placements).length,
+    Object.keys(s.conditions).length,
+    Object.keys(s.moveReasons).length,
+    Object.keys(s.notes).length,
+    Object.keys(s.assumptions).length,
+    Object.keys(s.blindSpots).length,
+    Object.keys(s.scenarioOutcomes).length,
+    Object.keys(s.scenarioApproved).length,
+    Object.keys(s.scenarioDrops).length,
+    Object.keys(s.constraintRulings).length,
+    Object.keys(s.disputes).length,
+    s.researchRequests.length,
   ]
+  const originalCounts = countsOf(next)
   next.placements = retainItemIds(next.placements, requirementIds)
   next.conditions = retainItemIds(next.conditions, requirementIds)
   next.moveReasons = retainItemIds(next.moveReasons, requirementIds)
@@ -258,18 +323,11 @@ export function carryOver(
   next.blindSpots = retainItemIds(next.blindSpots, blindSpotIds)
   next.scenarioOutcomes = retainItemIds(next.scenarioOutcomes, scenarioIds)
   next.scenarioApproved = retainItemIds(next.scenarioApproved, scenarioIds)
+  next.scenarioDrops = retainItemIds(next.scenarioDrops, scenarioIds)
+  next.constraintRulings = retainItemIds(next.constraintRulings, constraintIds)
+  next.disputes = retainItemIds(next.disputes, requirementIds)
   next.researchRequests = next.researchRequests.filter((request) => blindSpotIds.has(request.blindSpotId))
-  const retainedCounts = [
-    Object.keys(next.placements).length,
-    Object.keys(next.conditions).length,
-    Object.keys(next.moveReasons).length,
-    Object.keys(next.notes).length,
-    Object.keys(next.assumptions).length,
-    Object.keys(next.blindSpots).length,
-    Object.keys(next.scenarioOutcomes).length,
-    Object.keys(next.scenarioApproved).length,
-    next.researchRequests.length,
-  ]
+  const retainedCounts = countsOf(next)
   stateChanged ||= originalCounts.some((count, index) => count !== retainedCounts[index])
   // unseen items share the signed render's hashes, so only a new render or dropped state voids a signature
   if (priorRenderId !== renderId || stateChanged) {
@@ -308,17 +366,20 @@ export function bootstrap(payload: LogicSpecPayload): Snapshot {
   } catch {
     storageOk = false
   }
-  const prior = payload.priorDecisions && isDecisionExport(payload.priorDecisions, payload.slug)
+  // a snapshot from the other stage reflects decisions already folded into (or not yet relevant to) this spec
+  if (local && local.state.stage !== payload.spec.stage) local = null
+  const priorExport = payload.priorDecisions && isDecisionExport(payload.priorDecisions, payload.slug) ? payload.priorDecisions : null
+  const prior = priorExport && priorExport.state.stage === payload.spec.stage
     ? {
-        state: payload.priorDecisions.state,
-        seen: payload.priorDecisions.seen,
-        lastExportUpdatedAt: payload.priorDecisions.state.updatedAt,
-        renderId: payload.priorDecisions.renderId,
+        state: priorExport.state,
+        seen: priorExport.seen,
+        lastExportUpdatedAt: priorExport.state.updatedAt,
+        renderId: priorExport.renderId,
       }
     : null
   let selected = local ?? prior
   if (local && prior && laterThan(prior.state.updatedAt, local.state.updatedAt)) selected = prior
-  if (!selected) selected = { state: emptyState(), seen: {}, lastExportUpdatedAt: null, renderId: null }
+  if (!selected) selected = { state: emptyState(payload.spec.stage), seen: {}, lastExportUpdatedAt: null, renderId: null }
   const carried = carryOver(selected.state, selected.seen, payload.spec, payload.itemHashes, selected.renderId, payload.renderId)
   return { ...carried, lastExportUpdatedAt: selected.lastExportUpdatedAt, renderId: payload.renderId, storageOk }
 }
@@ -328,8 +389,8 @@ export function placementInSpec(requirement: Requirement): Placement {
   return requirement.condition ? 'conditional' : 'in'
 }
 
-export function effectivePlacement(state: ReviewState, requirement: Requirement): Placement | undefined {
-  if (requirement.provenance === 'claude' && !state.placements[requirement.id]) return undefined
+/** A requirement's placement always has a value: derived requirements arrive with Claude's placement pre-filled. */
+export function effectivePlacement(state: ReviewState, requirement: Requirement): Placement {
   return state.placements[requirement.id] ?? placementInSpec(requirement)
 }
 
@@ -339,17 +400,19 @@ export function effectiveCondition(state: ReviewState, requirement: Requirement)
 
 export function requirementMoved(state: ReviewState, requirement: Requirement): boolean {
   const current = effectivePlacement(state, requirement)
-  if (current === undefined) return false
   const original = placementInSpec(requirement)
   return current !== original || (current === 'conditional' && effectiveCondition(state, requirement) !== requirement.condition)
 }
 
 export function scopeWarnings(state: ReviewState, spec: LogicSpec): string[] {
-  const requirements = new Map(spec.requirements.map((requirement) => [requirement.id, requirement]))
+  // withdrawn requirements are excluded from the gates entirely, so their dependency and conflict edges are ignored here too
+  const requirements = new Map(
+    spec.requirements.filter((requirement) => requirementStatus(requirement, spec) !== 'withdrawn').map((requirement) => [requirement.id, requirement]),
+  )
   const warnings: string[] = []
-  for (const requirement of spec.requirements) {
+  for (const requirement of requirements.values()) {
     const placement = effectivePlacement(state, requirement)
-    if (placement === undefined || placement === 'out') continue
+    if (placement === 'out') continue
     const pending = [...requirement.dependsOn]
     const visited = new Set<string>()
     while (pending.length) {
@@ -361,7 +424,7 @@ export function scopeWarnings(state: ReviewState, spec: LogicSpec): string[] {
       const dependencyPlacement = effectivePlacement(state, dependency)
       if (dependencyPlacement === 'out') {
         warnings.push(`${requirement.id} depends on ${dependencyId} through its dependency chain, which is out of scope.`)
-      } else if (dependencyPlacement !== undefined) {
+      } else {
         pending.push(...dependency.dependsOn)
       }
     }
@@ -372,26 +435,26 @@ export function scopeWarnings(state: ReviewState, spec: LogicSpec): string[] {
     if (!first || !second) continue
     const firstPlacement = effectivePlacement(state, first)
     const secondPlacement = effectivePlacement(state, second)
-    if (firstPlacement && firstPlacement !== 'out' && secondPlacement && secondPlacement !== 'out') {
+    if (firstPlacement !== 'out' && secondPlacement !== 'out') {
       warnings.push(`${firstId} and ${secondId} conflict while both are in scope.`)
     }
   }
   return warnings
 }
 
+/** `CONTRACT:` a blind spot is active unless its resolvedBy is an approved-and-not-dropped scenario, or a constraint ruled approve/rewrite in state. */
 export function activeBlindSpots(state: ReviewState, spec: LogicSpec): BlindSpot[] {
-  const requirements = new Map(spec.requirements.map((requirement) => [requirement.id, requirement]))
-  return spec.blindSpots.filter((spot) => {
-    const allSourcesInScope = spot.sources.every((id) => {
-      const requirement = requirements.get(id)
-      const placement = requirement ? effectivePlacement(state, requirement) : undefined
-      return placement !== undefined && placement !== 'out'
-    })
-    if (!allSourcesInScope) return false
-    if (!spot.resolvedBy) return true
-    const resolver = requirements.get(spot.resolvedBy)
-    return !resolver || effectivePlacement(state, resolver) !== 'in'
-  })
+  const scenarioIds = new Set(spec.scenarios.map((scenario) => scenario.id))
+  const constraintIds = new Set(spec.constraints.map((constraint) => constraint.id))
+  const isResolved = (resolvedBy: string): boolean => {
+    if (scenarioIds.has(resolvedBy)) return Boolean(state.scenarioApproved[resolvedBy]) && !state.scenarioDrops[resolvedBy]
+    if (constraintIds.has(resolvedBy)) {
+      const ruling = state.constraintRulings[resolvedBy]?.ruling
+      return ruling === 'approve' || ruling === 'rewrite'
+    }
+    return false
+  }
+  return spec.blindSpots.filter((spot) => !spot.resolvedBy || !isResolved(spot.resolvedBy))
 }
 
 export function pendingScenarioRequests(state: ReviewState, spec: LogicSpec) {
@@ -411,30 +474,67 @@ export function scenarioThen(state: ReviewState, scenario: Scenario): string {
   return scenario.alternatives[index] ?? scenario.then
 }
 
+function constraintDecided(state: ReviewState, constraint: { id: string }): boolean {
+  const ruling = state.constraintRulings[constraint.id]
+  if (!ruling) return false
+  if (ruling.ruling === 'rewrite') return Boolean(ruling.text.trim())
+  if (ruling.ruling === 'reject') return Boolean(ruling.reason.trim())
+  return ruling.ruling === 'approve'
+}
+
+/** `CONTRACT:` the TS gate ids and meanings mirror the Python gates exactly (see Gates); the duplication is deliberate. */
 export function gateList(state: ReviewState, spec: LogicSpec): ReviewGate[] {
-  const queue = spec.requirements.filter((requirement) => requirement.provenance === 'claude')
-  const activeSpots = activeBlindSpots(state, spec)
-  const warnings = scopeWarnings(state, spec)
-  const moved = spec.requirements.filter((requirement) => requirementMoved(state, requirement))
-  const pending = pendingScenarioRequests(state, spec)
-  const ruled = (assumption: Assumption) => {
-    const decision = state.assumptions[assumption.id]
-    return Boolean(decision?.ruling && (decision.ruling === 'build-on' || decision.note.trim()))
+  if (spec.stage === 1) {
+    const pending = pendingScenarioRequests(state, spec)
+    const scenarioDecided = (scenario: Scenario) => Boolean(state.scenarioApproved[scenario.id] || state.scenarioDrops[scenario.id]?.trim())
+    const activeSpots = activeBlindSpots(state, spec)
+    const ruled = (assumption: Assumption) => {
+      const decision = state.assumptions[assumption.id]
+      return Boolean(decision?.ruling && (decision.ruling === 'build-on' || decision.note.trim()))
+    }
+    return [
+      {
+        id: 'scenarios',
+        label: 'Approve or drop every scenario; resolve pending requests',
+        done: spec.scenarios.filter(scenarioDecided).length,
+        total: spec.scenarios.length + pending.length,
+      },
+      { id: 'constraints', label: 'Rule on every constraint', done: spec.constraints.filter((c) => constraintDecided(state, c)).length, total: spec.constraints.length },
+      { id: 'assumptions', label: 'Rule on every assumption; explain rulings other than build on', done: spec.assumptions.filter(ruled).length, total: spec.assumptions.length },
+      {
+        id: 'blind-spots',
+        label: 'Accept every active blind spot in your own words',
+        done: activeSpots.filter((spot) => state.blindSpots[spot.id]?.accepted && state.blindSpots[spot.id]?.note.trim()).length,
+        total: activeSpots.length,
+      },
+    ]
   }
+  const nonWithdrawn = spec.requirements.filter((requirement) => requirementStatus(requirement, spec) !== 'withdrawn')
+  const derivedIds = new Set(nonWithdrawn.flatMap((requirement) => requirement.derivedFrom))
+  const approvedScenarios = spec.scenarios.filter((scenario) => !scenario.dropReason)
+  const approvedConstraints = spec.constraints.filter((constraint) => constraint.ruling === 'approved' || constraint.ruling === 'rewritten')
+  const approvedItems = [...approvedScenarios, ...approvedConstraints]
+  const moved = spec.requirements.filter((requirement) => requirementMoved(state, requirement))
+  const warnings = scopeWarnings(state, spec)
+  const noDisputes = Object.keys(state.disputes).length === 0
+  const noReopened = !spec.scenarios.some((scenario) => scenario.reopened)
   return [
-    { id: 'queue', label: 'Place every item Claude decided on its own', done: queue.filter((item) => Boolean(state.placements[item.id])).length, total: queue.length },
-    { id: 'assumptions', label: 'Rule on every assumption; explain rulings other than build on', done: spec.assumptions.filter(ruled).length, total: spec.assumptions.length },
-    { id: 'blind-spots', label: 'Accept every active blind spot in your own words', done: activeSpots.filter((spot) => state.blindSpots[spot.id]?.accepted && state.blindSpots[spot.id]?.note.trim()).length, total: activeSpots.length },
-    { id: 'scenarios', label: 'Approve every scenario and resolve pending requests', done: spec.scenarios.filter((scenario) => state.scenarioApproved[scenario.id]).length, total: spec.scenarios.length + pending.length },
+    {
+      id: 'derivation',
+      label: 'Derive at least one requirement from every approved scenario and constraint',
+      done: approvedItems.filter((item) => derivedIds.has(item.id)).length,
+      total: approvedItems.length,
+    },
     { id: 'move-reasons', label: 'Give a reason for every changed placement', done: moved.filter((requirement) => state.moveReasons[requirement.id]?.trim()).length, total: moved.length },
     { id: 'scope-warnings', label: 'Resolve scope warnings, conflicts, and orphaned dependencies', done: warnings.length === 0 ? 1 : 0, total: 1 },
+    { id: 'disputes', label: 'Resolve every dispute and re-approve every reopened scenario', done: noDisputes && noReopened ? 1 : 0, total: 1 },
   ]
 }
 
 export function decisionRecord(state: ReviewState, spec: LogicSpec): DecisionRecord {
   const placements = spec.requirements.flatMap((requirement) => {
+    if (!requirementMoved(state, requirement)) return []
     const to = effectivePlacement(state, requirement)
-    if (!to || !requirementMoved(state, requirement)) return []
     return [{
       id: requirement.id,
       from: placementInSpec(requirement),
@@ -445,18 +545,25 @@ export function decisionRecord(state: ReviewState, spec: LogicSpec): DecisionRec
   })
   const warnings = scopeWarnings(state, spec)
   return {
+    stage: spec.stage,
     verdict: state.verdict ?? null,
     verdictNote: state.verdictNote,
     signedAt: state.signedAt ?? null,
-    placements,
-    assumptions: spec.assumptions.map((item) => ({ id: item.id, ...(state.assumptions[item.id] ?? { note: '' }) })),
-    blindSpots: activeBlindSpots(state, spec).map((item) => ({ id: item.id, accepted: Boolean(state.blindSpots[item.id]?.accepted), note: state.blindSpots[item.id]?.note ?? '' })),
     scenarios: spec.scenarios.map((scenario) => ({
       id: scenario.id,
       approved: Boolean(state.scenarioApproved[scenario.id]),
+      dropped: state.scenarioDrops[scenario.id] ?? null,
       then: scenarioThen(state, scenario),
       changesSpec: scenarioThen(state, scenario) !== scenario.then,
     })),
+    constraints: spec.constraints.map((constraint) => {
+      const ruling = state.constraintRulings[constraint.id]
+      return { id: constraint.id, ruling: ruling?.ruling ?? null, text: ruling?.text ?? '', reason: ruling?.reason ?? '' }
+    }),
+    assumptions: spec.assumptions.map((item) => ({ id: item.id, ruling: state.assumptions[item.id]?.ruling ?? null, note: state.assumptions[item.id]?.note ?? '' })),
+    blindSpots: activeBlindSpots(state, spec).map((item) => ({ id: item.id, accepted: Boolean(state.blindSpots[item.id]?.accepted), note: state.blindSpots[item.id]?.note ?? '' })),
+    placements,
+    disputes: Object.entries(state.disputes).map(([requirementId, dispute]) => ({ requirementId, ...dispute })),
     scenarioRequests: pendingScenarioRequests(state, spec),
     researchRequests: pendingResearchRequests(state, spec),
     openWarnings: warnings,
@@ -486,24 +593,13 @@ export function localStamp(date: Date): string {
   return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}T${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
 }
 
-
 export function coverageGaps(spec: LogicSpec, state: ReviewState) {
-  const inScope = spec.requirements.filter((requirement) => {
-    const placement = effectivePlacement(state, requirement)
-    return placement !== undefined && placement !== 'out'
-  })
-  const covered = new Set(spec.scenarios.flatMap((scenario) => scenario.refs))
-  const gaps: { id: string; text: string; view: ViewId }[] = inScope.filter((requirement) => !covered.has(requirement.id)).map((requirement) => ({ id: `req-${requirement.id}`, text: `${requirement.id} has no scenario coverage`, view: 'scenarios' }))
+  const gaps: { id: string; text: string; view: ViewId }[] = []
   spec.assumptions.filter((assumption) => !state.assumptions[assumption.id]?.ruling).forEach((assumption) => gaps.push({ id: `assumption-${assumption.id}`, text: `${assumption.id} still needs a ruling`, view: 'risks' }))
   activeBlindSpots(state, spec).filter((spot) => !state.blindSpots[spot.id]?.accepted || !state.blindSpots[spot.id]?.note.trim()).forEach((spot) => gaps.push({ id: `blind-${spot.id}`, text: `${spot.id} still needs written acceptance`, view: 'risks' }))
   return gaps
 }
 
 export function placedRequirements(spec: LogicSpec, state: ReviewState): { requirement: Requirement; placement: Placement }[] {
-  const placed: { requirement: Requirement; placement: Placement }[] = []
-  for (const requirement of spec.requirements) {
-    const placement = effectivePlacement(state, requirement)
-    if (placement !== undefined) placed.push({ requirement, placement })
-  }
-  return placed
+  return spec.requirements.map((requirement) => ({ requirement, placement: effectivePlacement(state, requirement) }))
 }

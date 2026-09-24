@@ -18,7 +18,6 @@ import {
   carryOver,
   changedItemIds,
   cloneState,
-  coverageGaps,
   decisionRecord,
   emptyState,
   gateList,
@@ -31,6 +30,7 @@ import {
   type ViewId,
 } from './review-state'
 import { BoardView } from './views/board-view'
+import { ConstraintsView } from './views/constraints-view'
 import { CoverageView } from './views/coverage-view'
 import { ImpactCertaintyView } from './views/impact-certainty-view'
 import { RisksView } from './views/risks-view'
@@ -47,7 +47,6 @@ type BadgePart = { id: string; one: string; many: string }
 
 const BADGES: Partial<Record<ViewId, BadgePart[]>> = {
   board: [
-    { id: 'queue', one: 'item awaiting your call', many: 'items awaiting your call' },
     { id: 'move-reasons', one: 'change needs a reason', many: 'changes need a reason' },
     { id: 'scope-warnings', one: 'scope warning to resolve', many: 'scope warnings to resolve' },
   ],
@@ -56,6 +55,12 @@ const BADGES: Partial<Record<ViewId, BadgePart[]>> = {
     { id: 'blind-spots', one: 'blind spot to accept', many: 'blind spots to accept' },
   ],
   scenarios: [{ id: 'scenarios', one: 'scenario to approve', many: 'scenarios to approve' }],
+  constraints: [{ id: 'constraints', one: 'constraint to rule on', many: 'constraints to rule on' }],
+}
+
+const STAGE_INDICATOR: Record<1 | 2, string> = {
+  1: 'Stage 1 of 2 — what should happen',
+  2: 'Stage 2 of 2 — what to build',
 }
 
 function Shell({ mode, children }: { mode: 'light' | 'dark' | 'system'; children: ReactNode }) {
@@ -76,7 +81,8 @@ function App() {
   const lastExportRef = useRef(lastExportUpdatedAt)
   lastExportRef.current = lastExportUpdatedAt
   const [storageOk, setStorageOk] = useState(initial?.storageOk ?? true)
-  const [view, setView] = useState<ViewId>('board')
+  const defaultView: ViewId = payload && payload.spec.stage === 1 ? 'scenarios' : 'board'
+  const [view, setView] = useState<ViewId>(defaultView)
   const [importStatus, setImportStatus] = useState<string | null>(null)
   const mode = useViewerMode()
 
@@ -109,29 +115,42 @@ function App() {
 
   const changedIds = useMemo(() => new Set(payload ? changedItemIds(payload.spec, payload.itemHashes, seen) : []), [payload, seen])
   const gates = useMemo(() => payload ? gateList(state, payload.spec) : [], [payload, state])
-  const gaps = useMemo(() => payload ? coverageGaps(payload.spec, state) : [], [payload, state])
   const tabs: TabSpec[] = useMemo(() => {
     if (!payload) return []
+    const { spec } = payload
+    if (spec.stage === 1) {
+      return [
+        { id: 'scenarios', label: 'Behaviors & scenarios' },
+        { id: 'constraints', label: 'Constraints' },
+        { id: 'risks', label: 'Risks' },
+        { id: 'spec', label: 'Spec text' },
+        { id: 'sign-off', label: 'Sign-off' },
+      ]
+    }
     const result: TabSpec[] = [
       { id: 'board', label: 'Scope board' },
-      { id: 'risks', label: 'Risks' },
-      { id: 'scenarios', label: 'Scenarios' },
+      { id: 'coverage', label: 'Coverage' },
     ]
-    if (payload.spec.views?.stateMachine) result.push({ id: 'states', label: 'State machine' })
-    if (payload.spec.requirements.some((item) => item.certainty !== null)) result.push({ id: 'heatmap', label: 'Impact × certainty' })
-    if (gaps.length > 0) result.push({ id: 'coverage', label: 'Coverage' })
-    if (payload.spec.views?.storyMap) result.push({ id: 'story-map', label: 'Story map' })
-    result.push({ id: 'spec', label: 'Spec text' }, { id: 'sign-off', label: 'Sign-off' })
+    if (spec.requirements.some((item) => item.certainty !== null)) result.push({ id: 'heatmap', label: 'Impact × certainty' })
+    if (spec.views?.storyMap) result.push({ id: 'story-map', label: 'Story map' })
+    if (spec.views?.stateMachine) result.push({ id: 'states', label: 'State machine' })
+    result.push(
+      { id: 'scenarios', label: 'Behaviors & scenarios' },
+      { id: 'constraints', label: 'Constraints' },
+      { id: 'risks', label: 'Risks' },
+      { id: 'spec', label: 'Spec text' },
+      { id: 'sign-off', label: 'Sign-off' },
+    )
     return result
-  }, [payload, gaps.length])
+  }, [payload])
 
   useEffect(() => {
     if (payload && initial) persist(initial.state, initial.seen, initial.lastExportUpdatedAt)
   }, [initial, payload, persist])
 
   useEffect(() => {
-    if (!tabs.some((tab) => tab.id === view)) setView('board')
-  }, [tabs, view])
+    if (!tabs.some((tab) => tab.id === view)) setView(defaultView)
+  }, [tabs, view, defaultView])
 
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
@@ -148,7 +167,8 @@ function App() {
     if (!payload) throw new Error('No rendered review data is loaded.')
     return {
       kind: EXPORT_KIND,
-      schemaVersion: 1,
+      schemaVersion: 2,
+      stage: payload.spec.stage,
       slug: payload.slug,
       renderId: payload.renderId,
       exportedAt: new Date().toISOString(),
@@ -245,6 +265,7 @@ function App() {
                   <VStack gap={0.5}>
                     <Text type="label" color="secondary">Logic spec review · {payload.slug}</Text>
                     <Heading level={1}>{payload.spec.title}</Heading>
+                    <Text type="label" color="secondary">{STAGE_INDICATOR[payload.spec.stage]}</Text>
                   </VStack>
                   <HStack gap={1} align="center">
                     <StatusDot variant={storageOk ? 'neutral' : 'error'} label={storageOk ? 'Saved in this browser only' : 'Browser storage unavailable'} />
@@ -278,6 +299,7 @@ function App() {
                   {view === 'board' ? <BoardView {...viewProps} /> : null}
                   {view === 'risks' ? <RisksView {...viewProps} /> : null}
                   {view === 'scenarios' ? <ScenariosView {...viewProps} /> : null}
+                  {view === 'constraints' ? <ConstraintsView {...viewProps} /> : null}
                   {view === 'coverage' ? <CoverageView {...viewProps} /> : null}
                   {view === 'heatmap' ? <ImpactCertaintyView {...viewProps} /> : null}
                   {view === 'story-map' ? <StoryMapView {...viewProps} /> : null}

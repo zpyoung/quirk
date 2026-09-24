@@ -3,7 +3,7 @@ import { HStack, VStack } from '@astryxdesign/core/Layout'
 import { Markdown, type MarkdownComponents } from '@astryxdesign/core/Markdown'
 import { Text } from '@astryxdesign/core/Text'
 import { Token } from '@astryxdesign/core/Token'
-import type { Certainty, Requirement, RequirementGroup } from '../spec-types'
+import type { Certainty, Provenance, RequirementGroup } from '../spec-types'
 
 export const CERTAINTY_LABEL: Record<Certainty, string> = { confirmed: 'Confirmed', assumed: 'Assumed', unverified: 'Unverified' }
 export const CERTAINTY_COLOR = { confirmed: 'green', assumed: 'yellow', unverified: 'orange' } as const
@@ -56,12 +56,17 @@ export function ChangedToken({ id, changedIds, short }: { id: string; changedIds
   return <Token size="sm" color="orange" label={short ? 'Changed' : 'Changed since you reviewed'} description="This item is new or changed since your last export; earlier decisions on it were cleared." />
 }
 
-export function ProvenanceToken({ requirement }: { requirement: Requirement }) {
-  if (requirement.provenance === 'claude') {
-    return <Token size="sm" color="red" label="Claude added this without asking you" description="Claude wrote this requirement itself; it never came up as a brainstorm question." />
+export function ProvenanceToken({ item }: { item: { provenance: Provenance; question?: string } }) {
+  if (item.provenance === 'claude') {
+    return <Token size="sm" color="red" label="Claude added this without asking you" description="Claude wrote this itself; it never came up as a brainstorm question." />
   }
-  const label = requirement.provenance === 'you-chose' ? 'You chose against the recommendation' : 'You took the recommendation'
-  return <Token size="sm" color="default" label={label} description={requirement.question ? `Brainstorm question: ${requirement.question}` : undefined} />
+  const label = item.provenance === 'you-chose' ? 'You chose against the recommendation' : 'You took the recommendation'
+  return <Token size="sm" color="default" label={label} description={item.question ? `Brainstorm question: ${item.question}` : undefined} />
+}
+
+/** Marks a Claude-added scenario or constraint whose pick is shown selected but not yet confirmed by a state entry. */
+export function PreselectedToken() {
+  return <Token size="sm" color="blue" label="Preselected — confirm" description="Claude's pick is shown selected. Decide it to confirm, even if you keep the same pick." />
 }
 
 export function CertaintyToken({ certainty }: { certainty: Certainty | null }) {
