@@ -10,7 +10,7 @@ import { RadioList, RadioListItem } from '@astryxdesign/core/RadioList'
 import { Text } from '@astryxdesign/core/Text'
 import { TextArea } from '@astryxdesign/core/TextArea'
 import { Token } from '@astryxdesign/core/Token'
-import type { Assumption, AssumptionRuling, BlindSpot, ResearchRequest } from '../spec-types'
+import type { Assumption, AssumptionRuling, BlindSpot, LogicSpec, ResearchRequest } from '../spec-types'
 import { RULINGS, activeBlindSpots, pendingResearchRequests, requestId, type Update } from '../review-state'
 import { CERTAINTY_LABEL, CertaintyToken, ChangedToken, ClaudeField, ClaudeWroteToken, Field, SpecMarkdown } from './shared'
 import { ListDetailRegister } from './list-detail-register'
@@ -27,11 +27,20 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
-function requirementLabel(spec: ViewProps['spec'], id: string): string {
-  return spec.requirements.find((requirement) => requirement.id === id)?.summary ?? id
+/** A scenario or constraint's short label for referencing it from an assumption or blind spot. */
+function itemLabel(spec: LogicSpec, id: string): string {
+  const scenario = spec.scenarios.find((s) => s.id === id)
+  if (scenario) return scenario.then
+  const constraint = spec.constraints.find((c) => c.id === id)
+  if (constraint) return constraint.text
+  return id
 }
 
-function AssumptionDetail({ assumption, props }: { assumption: Assumption; props: ViewProps }) {
+function resolutionHint(spec: LogicSpec, resolvedBy: string): string {
+  return spec.scenarios.some((s) => s.id === resolvedBy) ? 'once approved and not dropped' : 'once approved or rewritten'
+}
+
+function AssumptionDetail({ assumption, props, readOnly }: { assumption: Assumption; props: ViewProps; readOnly: boolean }) {
   const { spec, state, update, changedIds } = props
   const entry = state.assumptions[assumption.id] ?? { note: '' }
   const set = (patch: Partial<typeof entry>) =>
@@ -48,25 +57,35 @@ function AssumptionDetail({ assumption, props }: { assumption: Assumption; props
       <Field label="Why we think so">{assumption.basis}</Field>
       <ClaudeField label="What this means">{assumption.meaning}</ClaudeField>
       <Field label="If this is wrong">{assumption.ifWrong}</Field>
-      <Section title={`Requirements that rest on it (${assumption.affects.length})`}>
+      <Section title={`Scenarios and constraints that rest on it (${assumption.affects.length})`}>
         {assumption.affects.length
-          ? assumption.affects.map((id) => <Text key={id}>{`${id} · ${requirementLabel(spec, id)}`}</Text>)
+          ? assumption.affects.map((id) => <Text key={id}>{`${id} · ${itemLabel(spec, id)}`}</Text>)
           : <Text type="supporting">None.</Text>}
       </Section>
       <ClaudeField label="How to check it">{assumption.check}</ClaudeField>
       <HStack>
         <Token size="sm" color="blue" label={`Cost: ${assumption.checkCost}`} />
       </HStack>
-      <RadioList
-        label="Your ruling"
-        orientation="horizontal"
-        size="sm"
-        value={entry.ruling ?? ''}
-        onChange={(value) => set({ ruling: value as AssumptionRuling })}
-      >
-        {RULINGS.map((ruling) => <RadioListItem key={ruling.value} value={ruling.value} label={ruling.label} />)}
-      </RadioList>
-      {needsNote ? <TextArea label="Why this ruling?" rows={3} value={entry.note} onChange={(note) => set({ note })} isRequired /> : null}
+      {readOnly ? (
+        entry.ruling ? (
+          <Field label="Your ruling">{RULINGS.find((r) => r.value === entry.ruling)?.label ?? entry.ruling}</Field>
+        ) : (
+          <Text type="supporting">Not ruled on.</Text>
+        )
+      ) : (
+        <>
+          <RadioList
+            label="Your ruling"
+            orientation="horizontal"
+            size="sm"
+            value={entry.ruling ?? ''}
+            onChange={(value) => set({ ruling: value as AssumptionRuling })}
+          >
+            {RULINGS.map((ruling) => <RadioListItem key={ruling.value} value={ruling.value} label={ruling.label} />)}
+          </RadioList>
+          {needsNote ? <TextArea label="Why this ruling?" rows={3} value={entry.note} onChange={(note) => set({ note })} isRequired /> : null}
+        </>
+      )}
     </VStack>
   )
 }
@@ -102,11 +121,12 @@ function ResearchDialog({ spot, existing, onClose, update }: { spot: BlindSpot; 
 }
 
 /** Asks Claude to research a blind spot, then shows the pending request or Claude's findings. */
-function BlindSpotResearch({ spot, props }: { spot: BlindSpot; props: ViewProps }) {
+function BlindSpotResearch({ spot, props, readOnly }: { spot: BlindSpot; props: ViewProps; readOnly: boolean }) {
   const { spec, state, update } = props
   const [isAsking, setIsAsking] = useState(false)
   const answered = spec.research.filter((finding) => finding.blindSpotId === spot.id)
   const pending = pendingResearchRequests(state, spec).find((request) => request.blindSpotId === spot.id)
+  if (readOnly && answered.length === 0) return null
   return (
     <Section title="Deeper research">
       {answered.map((finding) => (
@@ -121,7 +141,7 @@ function BlindSpotResearch({ spot, props }: { spot: BlindSpot; props: ViewProps 
           </VStack>
         </Card>
       ))}
-      {pending ? (
+      {readOnly ? null : pending ? (
         <Banner
           status="info"
           title="Waiting for Claude"
@@ -147,9 +167,10 @@ function BlindSpotResearch({ spot, props }: { spot: BlindSpot; props: ViewProps 
   )
 }
 
-/** A blind spot's full detail: what it means, its sources, research, and — while active — the acceptance controls. */
+/** A blind spot's full detail: what it means, its sources, research, and — while active and editable — the acceptance controls. */
 export function BlindSpotDetail({ spot, props }: { spot: BlindSpot; props: ViewProps }) {
   const { spec, state, update, changedIds } = props
+  const readOnly = spec.stage === 2
   const isActive = activeBlindSpots(state, spec).some((s) => s.id === spot.id)
   const entry = state.blindSpots[spot.id] ?? { accepted: false, note: '' }
   const set = (patch: Partial<typeof entry>) => update((s) => ({ ...s, blindSpots: { ...s.blindSpots, [spot.id]: { ...entry, ...patch } } }), spot.id)
@@ -158,20 +179,22 @@ export function BlindSpotDetail({ spot, props }: { spot: BlindSpot; props: ViewP
       <HStack gap={2} align="center" wrap="wrap">
         <Text type="label" color="secondary">{spot.id}</Text>
         <ChangedToken id={spot.id} changedIds={changedIds} />
-        {isActive ? <Token size="sm" color="blue" label="Active" /> : <Token size="sm" color="default" label="Cleared by your scope" />}
+        {isActive ? <Token size="sm" color="blue" label="Active" /> : <Token size="sm" color="default" label="Resolved" />}
       </HStack>
       <Heading level={3}>{spot.title}</Heading>
       <ClaudeField label="What could go wrong">{spot.detail}</ClaudeField>
       <Section title="Caused by">
         {spot.sources.length
-          ? spot.sources.map((id) => <Text key={id}>{`${id} · ${requirementLabel(spec, id)}`}</Text>)
+          ? spot.sources.map((id) => <Text key={id}>{`${id} · ${itemLabel(spec, id)}`}</Text>)
           : <Text type="supporting">Nothing in particular.</Text>}
       </Section>
       {spot.resolvedBy ? (
-        <Field label="Resolved once in scope">{`${spot.resolvedBy} · ${requirementLabel(spec, spot.resolvedBy)}, once placed unconditionally in scope`}</Field>
+        <Field label="Resolved once decided">{`${spot.resolvedBy} · ${itemLabel(spec, spot.resolvedBy)}, ${resolutionHint(spec, spot.resolvedBy)}`}</Field>
       ) : null}
-      <BlindSpotResearch spot={spot} props={props} />
-      {isActive ? (
+      <BlindSpotResearch spot={spot} props={props} readOnly={readOnly} />
+      {readOnly ? (
+        entry.note ? <Field label="Your acceptance">{entry.note}</Field> : null
+      ) : isActive ? (
         <>
           <TextArea label="In your own words" rows={3} value={entry.note} onChange={(note) => set({ note })} placeholder="e.g. rare in practice because…" />
           <CheckboxInput
@@ -183,13 +206,13 @@ export function BlindSpotDetail({ spot, props }: { spot: BlindSpot; props: ViewP
           />
         </>
       ) : (
-        <Text type="supporting">Cleared by your current scope choices; nothing to accept unless the scope changes.</Text>
+        <Text type="supporting">Resolved by an approved decision above; nothing to accept unless that changes.</Text>
       )}
     </VStack>
   )
 }
 
-function AssumptionRegister({ props }: { props: ViewProps }) {
+function AssumptionRegister({ props, readOnly }: { props: ViewProps; readOnly: boolean }) {
   const { spec, state } = props
   const [selectedId, setSelectedId] = useState<string | undefined>(
     () => spec.assumptions.find((a) => !state.assumptions[a.id]?.ruling)?.id ?? spec.assumptions[0]?.id,
@@ -218,7 +241,7 @@ function AssumptionRegister({ props }: { props: ViewProps }) {
       })}
       selectedId={selected.id}
       onSelect={setSelectedId}
-      detail={<AssumptionDetail assumption={selected} props={props} />}
+      detail={<AssumptionDetail assumption={selected} props={props} readOnly={readOnly} />}
     />
   )
 }
@@ -234,7 +257,7 @@ function BlindSpotRegister({ props }: { props: ViewProps }) {
   if (!selected) return <Text type="supporting">The spec lists no blind spots.</Text>
   return (
     <ListDetailRegister
-      intro="Cases where the spec's behavior might surprise someone. Accepting an active blind spot takes a sentence in your own words about why it is tolerable; moving requirements on the Scope board can add or clear them."
+      intro="Cases where the spec's behavior might surprise someone. Accepting an active blind spot takes a sentence in your own words about why it is tolerable; an approved scenario or constraint that resolves it needs no acceptance."
       doneLabel="resolved"
       listLabel="Blind spots"
       nextLabel="Next to accept"
@@ -247,7 +270,7 @@ function BlindSpotRegister({ props }: { props: ViewProps }) {
           description: b.title,
           isDone: active ? isAccepted(b.id) : true,
           status: !active ? (
-            <Token size="sm" color="default" label="Cleared by your scope" />
+            <Token size="sm" color="default" label="Resolved" />
           ) : isAccepted(b.id) ? (
             <Token size="sm" color="green" label="Accepted" />
           ) : noteWritten ? (
@@ -264,13 +287,14 @@ function BlindSpotRegister({ props }: { props: ViewProps }) {
   )
 }
 
-/** Assumptions and blind-spots registers: rule on every assumption, accept every active blind spot. */
+/** Assumptions and blind-spots registers: rule on every assumption, accept every active blind spot; read-only in stage 2. */
 export function RisksView(props: ViewProps) {
+  const readOnly = props.spec.stage === 2
   return (
     <VStack gap={6}>
       <VStack gap={3}>
         <Heading level={2}>Assumptions the spec stands on</Heading>
-        <AssumptionRegister props={props} />
+        <AssumptionRegister props={props} readOnly={readOnly} />
       </VStack>
       <VStack gap={3}>
         <Heading level={2}>Blind spots you would be accepting</Heading>

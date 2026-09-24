@@ -22,6 +22,11 @@ export type SignOffProps = ViewProps & {
   onImport: (file: File) => void
 }
 
+const STAGE_HEADING: Record<1 | 2, string> = {
+  1: 'Sign off stage 1 — what should happen',
+  2: 'Sign off stage 2 — what to build',
+}
+
 /** The approval gate: every review gate must pass and the verdict must be approve before signing; any later edit clears the signature. */
 export function SignOffView({ payload, spec, state, update, gates, createExport, onExport, importStatus, onImport }: SignOffProps) {
   const [copyStatus, setCopyStatus] = useState('')
@@ -59,7 +64,7 @@ export function SignOffView({ payload, spec, state, update, gates, createExport,
   return (
     <VStack gap={4}>
       <VStack gap={2}>
-        <Heading level={2}>Sign-off</Heading>
+        <Heading level={2}>{STAGE_HEADING[spec.stage]}</Heading>
         <Text type="supporting" as="p">
           Signing is the approval gate. Every gate below must pass, and the verdict must be approve. Any later edit clears the signature.
         </Text>

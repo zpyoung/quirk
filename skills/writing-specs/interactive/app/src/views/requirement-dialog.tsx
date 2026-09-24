@@ -21,8 +21,8 @@ import {
   scopeWarnings,
   type Update,
 } from '../review-state'
-import { ChangedToken, CertaintyToken, ClaudeField, ProvenanceToken, SpecMarkdown } from './shared'
-import { CONDITIONS, isAwaitingCall, setPlacement } from './board-model'
+import { ChangedToken, CertaintyToken, ClaudeField, SpecMarkdown } from './shared'
+import { CONDITIONS, setPlacement } from './board-model'
 import { useScopeOutGuard } from './scope-out-guard'
 
 type DialogProps = { requirement: Requirement | null; spec: LogicSpec; state: ReviewState; update: Update; changedIds: Set<string>; onClose: () => void }
@@ -41,9 +41,8 @@ export function RequirementDialog({ requirement, spec, state, update, changedIds
   )
 }
 
-/** Everything about one requirement plus its editable fields; a Claude-authored item shows Claude's call but never preselects it. */
+/** Everything about one requirement plus its editable fields. */
 export function RequirementDetail({ requirement, spec, state, update, changedIds, headingLevel }: DetailProps) {
-  const awaiting = isAwaitingCall(state, requirement)
   const baseline = placementInSpec(requirement)
   const placement = effectivePlacement(state, requirement)
   const moved = requirementMoved(state, requirement)
@@ -62,7 +61,7 @@ export function RequirementDetail({ requirement, spec, state, update, changedIds
     setIsChoosingCondition(value === 'conditional')
     if (value === 'in' || value === 'out') commitScope(value)
   }
-  const scopeValue = isChoosingCondition || placement === 'conditional' ? 'conditional' : placement === undefined ? '' : placement
+  const scopeValue = isChoosingCondition || placement === 'conditional' ? 'conditional' : placement
 
   return (
     <VStack gap={4}>
@@ -82,22 +81,6 @@ export function RequirementDetail({ requirement, spec, state, update, changedIds
         <Text type="label" color="secondary">Spec wording</Text>
         <SpecMarkdown compact>{`> ${requirement.text}`}</SpecMarkdown>
       </VStack>
-
-      {requirement.provenance === 'claude' ? (
-        <Banner
-          status="info"
-          title={`Claude recommends ${CHOICE_LABEL[baseline]} · ${GROUP_LABEL[requirement.group]}`}
-          description={
-            requirement.rationale ? (
-              <VStack gap={1}>
-                <SpecMarkdown compact>{requirement.rationale}</SpecMarkdown>
-                {awaiting ? <Text type="supporting">Nothing is preselected: decide below whether it is in scope.</Text> : null}
-              </VStack>
-            ) : undefined
-          }
-          collapsible={false}
-        />
-      ) : null}
 
       {warnings.length > 0 ? (
         <Banner status="warning" title="Scope problem" collapsible={false}>
@@ -141,8 +124,7 @@ export function RequirementDetail({ requirement, spec, state, update, changedIds
 
       <Divider />
       <MetadataList columns="multi">
-        <MetadataListItem label="Where it came from"><ProvenanceToken requirement={requirement} /></MetadataListItem>
-        {requirement.question ? <MetadataListItem label="Brainstorm question">{requirement.question}</MetadataListItem> : null}
+        <MetadataListItem label="Derived from">{requirement.derivedFrom.join(', ') || 'Nothing'}</MetadataListItem>
         {requirement.certainty ? <MetadataListItem label="How sure we are"><CertaintyToken certainty={requirement.certainty} /></MetadataListItem> : null}
         <MetadataListItem label="Depends on">{requirement.dependsOn.join(', ') || 'Nothing'}</MetadataListItem>
         <MetadataListItem label="Needed by">{dependents.join(', ') || 'Nothing'}</MetadataListItem>

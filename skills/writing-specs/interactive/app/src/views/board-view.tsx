@@ -21,9 +21,8 @@ import {
   scopeWarnings,
 } from '../review-state'
 import type { ViewProps } from './view-props'
-import { ChangedToken, CertaintyToken, GROUP_COLOR, ProvenanceToken } from './shared'
-import { CONDITIONS, isAwaitingCall, setPlacement } from './board-model'
-import { CallQueue } from './call-queue'
+import { ChangedToken, CertaintyToken, GROUP_COLOR } from './shared'
+import { CONDITIONS, setPlacement } from './board-model'
 import { RequirementDialog } from './requirement-dialog'
 import { useScopeOutGuard } from './scope-out-guard'
 
@@ -79,12 +78,10 @@ function Tag({ label, color }: { label: string; color?: TokenColor }) {
 }
 
 function RowTags({ requirement, state, changedIds, warningCount }: { requirement: Requirement; state: ReviewState; changedIds: Set<string>; warningCount: number }) {
-  if (isAwaitingCall(state, requirement)) return null
   const placement = effectivePlacement(state, requirement)
   const needsReason = requirementMoved(state, requirement) && !state.moveReasons[requirement.id]?.trim()
   return (
     <HStack gap={1} wrap="wrap">
-      <ProvenanceToken requirement={requirement} />
       <CertaintyToken certainty={requirement.certainty} />
       {placement === 'conditional' ? <Tag color={GROUP_COLOR[requirement.group]} label={`Claude's group: ${GROUP_LABEL[requirement.group]}`} /> : null}
       {needsReason ? <Tag color="red" label="Needs your reason for the change" /> : null}
@@ -284,7 +281,6 @@ export function BoardView({ spec, state, update, changedIds }: ViewProps) {
 
   return (
     <VStack gap={4}>
-      <CallQueue spec={spec} state={state} update={update} changedIds={changedIds} />
       <VStack gap={1}>
         <Heading level={2}>Scope board</Heading>
         <Text type="supporting" as="p">
