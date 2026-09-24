@@ -652,11 +652,13 @@ def test_v2_reapprove_moves_reopened_scenario_to_reapproved_hash(tmp_path: Path)
     stale_result = run_cli("reapprove", str(spec_dir), str(export_path))
     assert stale_result.returncode == 3
 
-    # a fresh, current export has nothing left to re-approve: SC-01 is no longer reopened
+    # a fresh, current export has nothing left to re-approve: SC-01 is no longer reopened,
+    # so a current export no longer carries an approval for it
     rerender = run_cli("render", str(spec_dir))
     assert rerender.returncode == 0, rerender.stderr
-    fresh_export = dict(export)
+    fresh_export = copy.deepcopy(export)
     fresh_export["renderId"] = rerender.stdout.strip()
+    fresh_export["state"]["scenarioApproved"] = {}
     fresh_path = tmp_path / "fresh-reapprove.json"
     save_json(fresh_path, fresh_export)
     again = run_cli("reapprove", str(spec_dir), str(fresh_path))
@@ -938,4 +940,95 @@ def test_v2_render_rejects_a_prior_export_from_a_different_spec(tmp_path: Path) 
     spec_dir = make_v2_spec(tmp_path, V2_STAGE1, name="stage1")
     result = run_cli("render", str(spec_dir), "--prior", str(V2_STAGE2_EXPORTS / "signed.json"))
     assert result.returncode == 3
+    assert not (spec_dir / "review.html").exists()
+
+
+def test_v2_state_machine_ids_may_reuse_a_scenario_id() -> None:
+    logic = load_json(V2_STAGE2 / "logic.json")
+    logic["views"]["stateMachine"]["states"][0]["id"] = "SC-01"
+    for transition in logic["views"]["stateMachine"]["transitions"]:
+        if transition["from"] == "ST-READY":
+            transition["from"] = "SC-01"
+        if transition["to"] == "ST-READY":
+            transition["to"] = "SC-01"
+    errors, _ = render_spec.validate_logic_v2(logic)
+    assert errors == []
+
+
+def test_v2_state_machine_ids_must_still_be_unique_among_themselves() -> None:
+    logic = load_json(V2_STAGE2 / "logic.json")
+    logic["views"]["stateMachine"]["entries"] = [{"id": "ST-READY", "label": "Start"}]
+    errors = dict(render_spec.validate_logic_v2(logic)[0])
+    assert "/views/stateMachine/entries/0/id" in errors
+
+
+def test_validate_export_shape_rejects_stage2_state_with_stage1_only_maps_populated() -> None:
+    export = load_json(V2_STAGE2_EXPORTS / "signed.json")
+    export["state"]["constraintRulings"] = {"CON-01": {"ruling": "approve", "text": "", "reason": ""}}
+    errors = dict(render_spec.validate_export_shape(export))
+    assert "/state/constraintRulings" in errors
+
+
+def test_validate_export_shape_rejects_stage1_state_with_stage2_only_maps_populated() -> None:
+    export = load_json(V2_STAGE1_EXPORTS / "signed.json")
+    export["state"]["disputes"] = {"REQ-01": {"kind": "derivation", "target": None, "reason": "Needs another look."}}
+    errors = dict(render_spec.validate_export_shape(export))
+    assert "/state/disputes" in errors
+
+
+def test_logic_reference_errors_rejects_scenario_approved_for_a_non_reopened_scenario_in_stage2() -> None:
+    logic = load_json(V2_STAGE2 / "logic.json")
+    export = load_json(V2_STAGE2_EXPORTS / "signed.json")
+    export["state"]["scenarioApproved"] = {"SC-01": True}
+    errors = dict(render_spec.logic_reference_errors(export, logic))
+    assert "/state/scenarioApproved/SC-01" in errors
+
+
+def test_v2_check_export_rejects_stage2_export_with_stage1_maps_populated(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE2, name="stage2")
+    export = load_json(V2_STAGE2_EXPORTS / "signed.json")
+    export["state"]["constraintRulings"] = {"CON-01": {"ruling": "approve", "text": "", "reason": ""}}
+    export_path = tmp_path / "leaked-stage1-maps.json"
+    save_json(export_path, export)
+
+    result = run_cli("check-export", str(spec_dir), str(export_path))
+    assert result.returncode == 1, result.stderr
+    assert "/state/constraintRulings" in result.stderr
+
+
+def test_load_json_reports_deeply_nested_input_instead_of_crashing(tmp_path: Path) -> None:
+    deeply_nested = tmp_path / "deep.json"
+    deeply_nested.write_text("[" * 1100 + "]" * 1100, encoding="utf-8")
+    value, errors = render_spec.load_json(deeply_nested, str(deeply_nested))
+    assert value is None
+    assert dict(errors)["/"] == "invalid JSON in " + str(deeply_nested) + ": input is too deeply nested"
+
+
+def test_v2_check_export_exits_1_without_a_traceback_on_deeply_nested_export(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE2, name="stage2")
+    export_path = tmp_path / "deep.json"
+    export_path.write_text("[" * 1100 + "]" * 1100, encoding="utf-8")
+
+    result = run_cli("check-export", str(spec_dir), str(export_path))
+    assert result.returncode == 1, result.stderr
+    assert "Traceback" not in result.stderr
+    assert "input is too deeply nested" in result.stderr
+
+
+def test_load_json_rejects_python_only_nan_and_infinity_constants(tmp_path: Path) -> None:
+    non_standard = tmp_path / "non-standard.json"
+    non_standard.write_text('{"unexpected": NaN, "other": Infinity, "neg": -Infinity}', encoding="utf-8")
+    value, errors = render_spec.load_json(non_standard, str(non_standard))
+    assert value is None
+    assert "NaN" in dict(errors)["/"]
+
+
+def test_v2_render_rejects_nan_in_an_otherwise_ignored_field_instead_of_emitting_invalid_json(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE1, name="stage1")
+    logic = load_json(spec_dir / "logic.json")
+    logic["behaviors"][0]["unexpected"] = float("nan")
+    save_json(spec_dir / "logic.json", logic)
+
+    result = run_cli("render", str(spec_dir))
+    assert result.returncode == 1, result.stderr
     assert not (spec_dir / "review.html").exists()

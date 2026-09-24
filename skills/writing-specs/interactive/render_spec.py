@@ -1046,9 +1046,10 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
                                 _string_field(v, item, "short", path)
                                 _string_field(v, item, "event", path)
                                 _string_list_field(v, item, "reqs", path)
-                    _record_ids(v, states, "/views/stateMachine/states", ids)
-                    _record_ids(v, entries, "/views/stateMachine/entries", ids)
-                    _record_ids(v, transitions, "/views/stateMachine/transitions", ids)
+                    view_ids: Dict[str, str] = {}
+                    _record_ids(v, states, "/views/stateMachine/states", view_ids)
+                    _record_ids(v, entries, "/views/stateMachine/entries", view_ids)
+                    _record_ids(v, transitions, "/views/stateMachine/transitions", view_ids)
                     state_ids = {item["id"] for item in states if isinstance(item, dict) and isinstance(item.get("id"), str)}
                     entry_ids = {item["id"] for item in entries if isinstance(item, dict) and isinstance(item.get("id"), str)}
                     valid_from = state_ids | entry_ids
@@ -1412,6 +1413,26 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
         if "updatedAt" in state:
             v.iso_datetime(updated, "/state/updatedAt")
 
+        state_stage = state.get("stage") if type(state.get("stage")) is int else None
+        if state_stage == 1:
+            inapplicable = ("placements", "conditions", "moveReasons", "notes", "disputes")
+        elif state_stage == 2:
+            inapplicable = (
+                "scenarioOutcomes",
+                "scenarioDrops",
+                "constraintRulings",
+                "assumptions",
+                "blindSpots",
+                "scenarioRequests",
+                "researchRequests",
+            )
+        else:
+            inapplicable = ()
+        for key in inapplicable:
+            value = state.get(key)
+            if isinstance(value, (dict, list)) and value:
+                v.error(pointer("/state", key), "must be empty in stage " + str(state_stage))
+
     record_raw = _required(v, root, "record", "")
     record = v.object(record_raw, "/record") if "record" in root else None
     if record is not None:
@@ -1578,6 +1599,13 @@ def logic_reference_errors(export: dict, logic: dict) -> List[Tuple[str, str]]:
         for ident in state[key]:
             if ident not in known:
                 errors.append((pointer(pointer("/state", key), ident), "unknown " + label + " id: " + ident))
+    if state.get("stage") == 2:
+        reopened_ids = {item["id"] for item in logic["scenarios"] if "reopened" in item}
+        for ident in state["scenarioApproved"]:
+            if ident in scenario_ids and ident not in reopened_ids:
+                errors.append(
+                    (pointer(pointer("/state", "scenarioApproved"), ident), "scenario is not reopened: " + ident)
+                )
     for key in ("placements", "conditions", "moveReasons"):
         for ident in state[key]:
             if ident not in requirement_ids:
@@ -1687,16 +1715,24 @@ def logic_reference_errors(export: dict, logic: dict) -> List[Tuple[str, str]]:
     return errors
 
 
+def _reject_json_constant(constant: str) -> Any:
+    raise ValueError("non-standard numeric constant: " + constant)
+
+
 def load_json(path: Path, label: str) -> Tuple[Optional[Any], List[Tuple[str, str]]]:
     try:
         with path.open("r", encoding="utf-8") as source:
-            return json.load(source), []
+            return json.load(source, parse_constant=_reject_json_constant), []
     except json.JSONDecodeError as exc:
         return None, [("/", "invalid JSON in " + label + " at line " + str(exc.lineno) + ", column " + str(exc.colno) + ": " + exc.msg)]
     except UnicodeError as exc:
         return None, [("/", "invalid UTF-8 in " + label + ": " + str(exc))]
     except OSError as exc:
         return None, [("/", "cannot read " + label + ": " + str(exc))]
+    except RecursionError:
+        return None, [("/", "invalid JSON in " + label + ": input is too deeply nested")]
+    except ValueError as exc:
+        return None, [("/", "invalid JSON in " + label + ": " + str(exc))]
 
 
 def emit_errors(errors: Iterable[Tuple[str, str]]) -> None:
@@ -2089,7 +2125,7 @@ def prepare_render_files(
         "logicMarkdown": markdown,
         "priorDecisions": prior,
     }
-    serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
     serialized = serialized.replace("<", "\\u003c")
     html = template.replace(PAYLOAD_PLACEHOLDER, PAYLOAD_OPEN + serialized + PAYLOAD_CLOSE)
     return html, markdown
