@@ -167,7 +167,10 @@ def canonical_json(value: Any) -> str:
 
 
 def render_id(logic: dict) -> str:
-    return sha256(canonical_json(logic).encode("utf-8")).hexdigest()[:12]
+    try:
+        return sha256(canonical_json(logic).encode("utf-8")).hexdigest()[:12]
+    except RecursionError:
+        raise ValueError("logic.json is too deeply nested to render")
 
 
 def item_hashes(logic: dict) -> Dict[str, str]:
@@ -926,6 +929,7 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
     scenario_ids = {item["id"] for item in scenario_rows if isinstance(item, dict) and isinstance(item.get("id"), str)}
     constraint_ids = {item["id"] for item in constraint_rows if isinstance(item, dict) and isinstance(item.get("id"), str)}
     requirement_ids = {item["id"] for item in requirement_rows if isinstance(item, dict) and isinstance(item.get("id"), str)}
+    requirement_by_id = {item["id"]: item for item in requirement_rows if isinstance(item, dict) and isinstance(item.get("id"), str)}
     blind_ids = {item["id"] for item in blind_rows if isinstance(item, dict) and isinstance(item.get("id"), str)}
     scenario_or_constraint_ids = scenario_ids | constraint_ids
 
@@ -984,6 +988,23 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
                     pointer(pointer("/blindSpots", index), "resolvedBy"),
                     "unknown scenario or constraint id: " + ident,
                 )
+
+    for index, raw in enumerate(scenario_rows):
+        if not isinstance(raw, dict):
+            continue
+        reopened = raw.get("reopened")
+        if isinstance(reopened, dict):
+            ident = reopened.get("requirementId")
+            if isinstance(ident, str):
+                path = pointer(pointer(pointer("/scenarios", index), "reopened"), "requirementId")
+                requirement = requirement_by_id.get(ident)
+                if requirement is None:
+                    v.error(path, "unknown requirement id: " + ident)
+                else:
+                    derived_from = requirement.get("derivedFrom", [])
+                    scenario_id = raw.get("id")
+                    if not isinstance(derived_from, list) or scenario_id not in derived_from:
+                        v.error(path, "requirement " + ident + " does not derive from this scenario")
 
     for index, raw in enumerate(requirement_rows):
         if not isinstance(raw, dict):
@@ -1053,6 +1074,8 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
                                 _string_field(v, item, "short", path)
                                 _string_field(v, item, "event", path)
                                 _string_list_field(v, item, "reqs", path)
+                                if "blindSpot" in item:
+                                    _id_field(v, item, "blindSpot", path)
                     view_ids: Dict[str, str] = {}
                     _record_ids(v, states, "/views/stateMachine/states", view_ids)
                     _record_ids(v, entries, "/views/stateMachine/entries", view_ids)
@@ -1072,6 +1095,13 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
                                 v.error(
                                     pointer(pointer(pointer("/views/stateMachine/transitions", index), "reqs"), j),
                                     "unknown requirement id: " + ident,
+                                )
+                        if "blindSpot" in raw:
+                            ident = raw.get("blindSpot")
+                            if isinstance(ident, str) and ident not in blind_ids:
+                                v.error(
+                                    pointer(pointer("/views/stateMachine/transitions", index), "blindSpot"),
+                                    "unknown blind spot id: " + ident,
                                 )
             if "storyMap" in view_obj:
                 story = v.object(view_obj["storyMap"], "/views/storyMap")
@@ -1740,10 +1770,30 @@ def _reject_json_constant(constant: str) -> Any:
     raise ValueError("non-standard numeric constant: " + constant)
 
 
+JSON_MAX_DEPTH = 200
+
+
+def _json_depth_exceeded(value: Any, limit: int = JSON_MAX_DEPTH) -> Optional[str]:
+    """Return the pointer where value's nesting exceeds limit, or None. Walks an explicit stack rather than
+    recursing, so the check itself cannot fall over on the same input it is meant to reject."""
+    stack: List[Tuple[Any, str, int]] = [(value, "", 0)]
+    while stack:
+        current, path, depth = stack.pop()
+        if depth > limit:
+            return path or "/"
+        if isinstance(current, dict):
+            for key, item in current.items():
+                stack.append((item, pointer(path, key), depth + 1))
+        elif isinstance(current, list):
+            for index, item in enumerate(current):
+                stack.append((item, pointer(path, index), depth + 1))
+    return None
+
+
 def load_json(path: Path, label: str) -> Tuple[Optional[Any], List[Tuple[str, str]]]:
     try:
         with path.open("r", encoding="utf-8") as source:
-            return json.load(source, parse_constant=_reject_json_constant), []
+            value = json.load(source, parse_constant=_reject_json_constant)
     except json.JSONDecodeError as exc:
         return None, [("/", "invalid JSON in " + label + " at line " + str(exc.lineno) + ", column " + str(exc.colno) + ": " + exc.msg)]
     except UnicodeError as exc:
@@ -1754,6 +1804,10 @@ def load_json(path: Path, label: str) -> Tuple[Optional[Any], List[Tuple[str, st
         return None, [("/", "invalid JSON in " + label + ": input is too deeply nested")]
     except ValueError as exc:
         return None, [("/", "invalid JSON in " + label + ": " + str(exc))]
+    too_deep = _json_depth_exceeded(value)
+    if too_deep is not None:
+        return None, [(too_deep, "invalid JSON in " + label + ": input is too deeply nested")]
+    return value, []
 
 
 def emit_errors(errors: Iterable[Tuple[str, str]]) -> None:
@@ -1777,6 +1831,9 @@ def load_logic(spec_dir: Path) -> Tuple[Optional[dict], Optional[str]]:
         return value, render_id(value)
     except UnicodeError as exc:
         print("/: logic.json contains invalid Unicode: " + str(exc), file=sys.stderr)
+        return None, None
+    except ValueError as exc:
+        print("/: " + str(exc), file=sys.stderr)
         return None, None
 
 
@@ -2138,15 +2195,18 @@ def prepare_render_files(
     if template.count(PAYLOAD_PLACEHOLDER) != 1:
         raise ValueError("review template must contain exactly one payload placeholder")
     markdown = render_markdown_v2(logic) if logic.get("schemaVersion") == 2 else render_markdown(logic)
-    payload = {
-        "spec": logic,
-        "slug": spec_dir.name,
-        "renderId": current_render_id,
-        "itemHashes": item_hashes(logic),
-        "logicMarkdown": markdown,
-        "priorDecisions": prior,
-    }
-    serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    try:
+        payload = {
+            "spec": logic,
+            "slug": spec_dir.name,
+            "renderId": current_render_id,
+            "itemHashes": item_hashes(logic),
+            "logicMarkdown": markdown,
+            "priorDecisions": prior,
+        }
+        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    except RecursionError:
+        raise ValueError("logic.json is too deeply nested to render")
     serialized = serialized.replace("<", "\\u003c")
     html = template.replace(PAYLOAD_PLACEHOLDER, PAYLOAD_OPEN + serialized + PAYLOAD_CLOSE)
     return html, markdown
