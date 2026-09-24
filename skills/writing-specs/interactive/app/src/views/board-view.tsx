@@ -322,7 +322,7 @@ export function BoardView({ spec, state, update, changedIds, openRequirementId, 
         <VStack gap={2}>
           <Heading level={3}>Withdrawn pending re-derivation</Heading>
           <Text type="supporting" as="p">
-            These requirements came entirely from scenarios you reopened, so Claude drops them until it re-derives requirements from your next stage 1 pass.
+            These requirements came entirely from scenarios you reopened. Re-approve the reopened scenario above; Claude then runs `reapprove` and re-derives the requirement.
           </Text>
           <VStack gap={1}>
             {withdrawn.map(({ requirement, scenarios }) => (

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Button } from '@astryxdesign/core/Button'
 import { Heading } from '@astryxdesign/core/Heading'
 import { HStack, VStack } from '@astryxdesign/core/Layout'
 import { List, ListItem } from '@astryxdesign/core/List'
@@ -57,6 +58,10 @@ function ConstraintDetail({ constraint, props }: { constraint: Constraint; props
         <RadioListItem value="rewrite" label="Rewrite" description="Write it in your own words" />
         <RadioListItem value="reject" label="Reject" description="Needs a written reason" />
       </RadioList>
+      {isClaude && !hasEntry ? (
+        // re-clicking the already-selected Approve radio fires no change event, so the preselected pick needs its own confirm action
+        <Button size="sm" variant="secondary" label="Confirm Approve" onClick={() => set({ ruling: 'approve' })} />
+      ) : null}
       {ruling === 'rewrite' ? <TextArea label="Your wording" rows={3} value={text} onChange={(value) => set({ text: value })} isRequired /> : null}
       {ruling === 'reject' ? <TextArea label="Why reject it?" rows={3} value={reason} onChange={(value) => set({ reason: value })} isRequired /> : null}
     </VStack>
@@ -106,7 +111,7 @@ function ConstraintsReadOnly({ spec }: { spec: LogicSpec }) {
           <ListItem
             key={c.id}
             label={`${c.id} · ${CONSTRAINT_KIND_LABEL[c.kind]}`}
-            description={c.originalText ? `Originally: ${c.originalText}` : c.text}
+            description={c.originalText ? `${c.text} (Originally: ${c.originalText})` : c.text}
             startContent={c.ruling ? <Token size="sm" color={FOLDED_RULING_COLOR[c.ruling]} label={FOLDED_RULING_LABEL[c.ruling]} /> : null}
             endContent={c.rejectReason ? <Text type="supporting">{c.rejectReason}</Text> : null}
           />

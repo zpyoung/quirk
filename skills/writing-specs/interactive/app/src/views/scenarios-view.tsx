@@ -113,7 +113,13 @@ function scenarioColumns(props: ViewProps, isStage2: boolean): TableColumn<Scena
             value={Boolean(state.scenarioApproved[s.id])}
             isDisabled={dropped || (state.scenarioOutcomes[s.id]?.choice === 'custom' && !state.scenarioOutcomes[s.id]?.custom.trim())}
             disabledMessage={dropped ? 'Dropped — clear the drop reason first.' : 'Write your outcome first.'}
-            onChange={(approved) => update((st) => ({ ...st, scenarioApproved: { ...st.scenarioApproved, [s.id]: approved } }), s.id)}
+            onChange={(approved) =>
+              update((st) => {
+                const scenarioDrops = { ...st.scenarioDrops }
+                if (approved) delete scenarioDrops[s.id]
+                return { ...st, scenarioApproved: { ...st.scenarioApproved, [s.id]: approved }, scenarioDrops }
+              }, s.id)
+            }
           />
         )
       },
