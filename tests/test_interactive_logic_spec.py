@@ -1032,3 +1032,66 @@ def test_v2_render_rejects_nan_in_an_otherwise_ignored_field_instead_of_emitting
     result = run_cli("render", str(spec_dir))
     assert result.returncode == 1, result.stderr
     assert not (spec_dir / "review.html").exists()
+
+
+def test_logic_reference_errors_rejects_scenario_both_approved_and_dropped() -> None:
+    logic = load_json(V2_STAGE1 / "logic.json")
+    export = load_json(V2_STAGE1_EXPORTS / "signed.json")
+    export["state"]["scenarioDrops"]["SC-01"] = "drop despite approval"
+
+    errors = dict(render_spec.logic_reference_errors(export, logic))
+    assert "/state/scenarioDrops/SC-01" in errors
+
+
+def test_v2_fold_refuses_a_scenario_that_is_both_approved_and_dropped(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE1, name="stage1")
+    export = load_json(V2_STAGE1_EXPORTS / "signed.json")
+    export["state"]["scenarioDrops"]["SC-01"] = "drop despite approval"
+    export_path = tmp_path / "approved-and-dropped.json"
+    save_json(export_path, export)
+
+    result = run_cli("fold", str(spec_dir), str(export_path))
+    assert result.returncode == 1, result.stderr
+    assert "SC-01" in result.stderr
+    folded = load_json(spec_dir / "logic.json")
+    assert folded["stage"] == 1, "a rejected export must not advance the stage"
+
+
+def test_validate_export_shape_rejects_a_non_null_target_on_a_derivation_record_dispute() -> None:
+    export = load_json(V2_STAGE2_EXPORTS / "unsigned-derivation-dispute.json")
+    export["record"]["disputes"][0]["target"] = "SC-01"
+
+    errors = dict(render_spec.validate_export_shape(export))
+    assert "/record/disputes/0/target" in errors
+
+
+def test_v2_check_export_rejects_a_non_null_target_on_a_derivation_record_dispute(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE2, name="stage2")
+    export = load_json(V2_STAGE2_EXPORTS / "unsigned-derivation-dispute.json")
+    export["record"]["disputes"][0]["target"] = "SC-01"
+    export_path = tmp_path / "derivation-dispute-with-target.json"
+    save_json(export_path, export)
+
+    result = run_cli("check-export", str(spec_dir), str(export_path))
+    assert result.returncode == 1, result.stderr
+    assert "target" in result.stderr
+
+
+def test_validate_logic_v2_reports_an_error_instead_of_raising_on_an_item_missing_an_id() -> None:
+    logic = load_json(V2_STAGE2 / "logic.json")
+    logic["behaviors"][0] = {}
+
+    errors, _warnings = render_spec.validate_logic_v2(logic)
+    assert dict(errors).get("/behaviors/0/id") == "required key is missing"
+
+
+def test_v2_render_reports_errors_instead_of_raising_on_an_item_missing_an_id(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE2, name="stage2")
+    logic = load_json(spec_dir / "logic.json")
+    logic["behaviors"][0] = {}
+    save_json(spec_dir / "logic.json", logic)
+
+    result = run_cli("render", str(spec_dir))
+    assert result.returncode == 1, result.stderr
+    assert "Traceback" not in result.stderr
+    assert "/behaviors/0/id" in result.stderr
