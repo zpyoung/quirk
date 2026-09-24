@@ -626,15 +626,21 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
     warnings: List[str] = []
 
     _string_field(v, root, "title", "", nonempty=True)
-    _string_field(v, root, "status", "")
 
     stage: Optional[int] = None
     if "stage" not in root:
         v.error("/stage", "required key is missing")
-    elif root["stage"] not in (1, 2):
+    elif type(root["stage"]) is not int or root["stage"] not in (1, 2):
         v.error("/stage", "expected 1 or 2")
     else:
         stage = root["stage"]
+
+    status = _string_field(v, root, "status", "")
+    if stage is not None and "status" in root and isinstance(status, str):
+        if stage == 1 and status != "Draft":
+            v.error("/status", 'expected "Draft" in stage 1')
+        elif stage == 2 and status != "Stage 1 approved" and not status.startswith("Approved"):
+            v.error("/status", 'expected "Stage 1 approved" or a status starting with "Approved" in stage 2')
 
     amendments = _required(v, root, "amendments", "")
     if "amendments" in root:
@@ -1113,8 +1119,11 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
                 if field in raw:
                     v.error(pointer(pointer("/constraints", index), field), "must be absent in stage 1")
         for index, raw in enumerate(assumption_rows):
-            if isinstance(raw, dict) and "ruling" in raw:
-                v.error(pointer(pointer("/assumptions", index), "ruling"), "must be absent in stage 1")
+            if not isinstance(raw, dict):
+                continue
+            for field in ("ruling", "rulingNote"):
+                if field in raw:
+                    v.error(pointer(pointer("/assumptions", index), field), "must be absent in stage 1")
         for index, raw in enumerate(blind_rows):
             if isinstance(raw, dict) and "acceptance" in raw:
                 v.error(pointer(pointer("/blindSpots", index), "acceptance"), "must be absent in stage 1")

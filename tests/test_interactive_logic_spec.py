@@ -270,6 +270,57 @@ def test_v2_stage2_validates() -> None:
     assert result.stdout == ""
 
 
+def test_v2_stage_rejects_boolean(tmp_path: Path) -> None:
+    logic = load_json(V2_STAGE1 / "logic.json")
+    logic["stage"] = True
+    spec_dir = tmp_path / "stage-boolean"
+    spec_dir.mkdir()
+    save_json(spec_dir / "logic.json", logic)
+    result = run_cli("validate", str(spec_dir))
+    assert result.returncode == 1
+    assert "/stage: expected 1 or 2" in result.stderr
+
+
+def test_v2_status_must_match_stage(tmp_path: Path) -> None:
+    stage1 = load_json(V2_STAGE1 / "logic.json")
+    for status in ("Approved", "nonsense"):
+        stage1["status"] = status
+        spec_dir = tmp_path / ("stage1-status-" + status.replace(" ", "-"))
+        spec_dir.mkdir()
+        save_json(spec_dir / "logic.json", stage1)
+        result = run_cli("validate", str(spec_dir))
+        assert result.returncode == 1, status
+        assert "/status:" in result.stderr, result.stderr
+
+    stage2 = load_json(V2_STAGE2 / "logic.json")
+    for status in ("Draft", "totally invalid"):
+        stage2["status"] = status
+        spec_dir = tmp_path / ("stage2-status-" + status.replace(" ", "-"))
+        spec_dir.mkdir()
+        save_json(spec_dir / "logic.json", stage2)
+        result = run_cli("validate", str(spec_dir))
+        assert result.returncode == 1, status
+        assert "/status:" in result.stderr, result.stderr
+
+    stage2["status"] = "Approved — Tech spec: requested"
+    spec_dir = tmp_path / "stage2-status-approved-suffix"
+    spec_dir.mkdir()
+    save_json(spec_dir / "logic.json", stage2)
+    result = run_cli("validate", str(spec_dir))
+    assert result.returncode == 0, result.stderr
+
+
+def test_v2_stage1_rejects_ruling_note_on_assumptions(tmp_path: Path) -> None:
+    logic = load_json(V2_STAGE1 / "logic.json")
+    logic["assumptions"][0]["rulingNote"] = "unsigned fold output"
+    spec_dir = tmp_path / "stage1-ruling-note"
+    spec_dir.mkdir()
+    save_json(spec_dir / "logic.json", logic)
+    result = run_cli("validate", str(spec_dir))
+    assert result.returncode == 1
+    assert "/assumptions/0/rulingNote: must be absent in stage 1" in result.stderr
+
+
 def test_v2_invalid_fixtures_each_fail_with_a_pointer(tmp_path: Path) -> None:
     for fixture_path in sorted(INVALID_V2.glob("*.json")):
         spec_dir = tmp_path / fixture_path.stem
