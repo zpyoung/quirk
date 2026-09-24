@@ -1227,6 +1227,7 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
     stage = _required(v, root, "stage", "")
     if "stage" in root and (type(stage) is not int or stage not in (1, 2)):
         v.error("/stage", "expected 1 or 2")
+    root_stage = stage if (type(stage) is int and stage in (1, 2)) else None
     for key in ("slug", "renderId"):
         _string_field(v, root, key, "", nonempty=True)
     exported_at = _required(v, root, "exportedAt", "")
@@ -1249,6 +1250,8 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
         if "stage" in state:
             if type(state["stage"]) is not int or state["stage"] not in (1, 2):
                 v.error("/state/stage", "expected 1 or 2")
+            elif root_stage is not None and state["stage"] != root_stage:
+                v.error("/state/stage", "must equal the export's stage")
         else:
             _required(v, state, "stage", "/state")
 
@@ -1398,7 +1401,7 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
                                 v.error(pointer(path, "target"), "required when kind is scenario")
                             if kind_value == "derivation" and target is not None:
                                 v.error(pointer(path, "target"), "must be null when kind is derivation")
-                        _string_field(v, dispute, "reason", path)
+                        _string_field(v, dispute, "reason", path, nonempty=True)
 
         if "verdict" in state:
             v.enum(state["verdict"], ("approve", "send-back"), "/state/verdict")
@@ -1415,6 +1418,8 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
         if "stage" in record:
             if type(record["stage"]) is not int or record["stage"] not in (1, 2):
                 v.error("/record/stage", "expected 1 or 2")
+            elif root_stage is not None and record["stage"] != root_stage:
+                v.error("/record/stage", "must equal the export's stage")
         else:
             _required(v, record, "stage", "/record")
         verdict = _required(v, record, "verdict", "/record")
@@ -1513,7 +1518,7 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
                         target = _required(v, item, "target", path)
                         if "target" in item and target is not None:
                             v.string(target, pointer(path, "target"), nonempty=True)
-                        _string_field(v, item, "reason", path)
+                        _string_field(v, item, "reason", path, nonempty=True)
 
         for key, request_kind in (("scenarioRequests", "scenario"), ("researchRequests", "research")):
             raw = _required(v, record, key, "/record")
@@ -1621,11 +1626,12 @@ def logic_reference_errors(export: dict, logic: dict) -> List[Tuple[str, str]]:
             continue
         if dispute["kind"] == "scenario":
             derived_from = requirement_by_id[ident].get("derivedFrom", [])
-            if dispute.get("target") not in derived_from:
+            target = dispute.get("target")
+            if target not in derived_from or target not in scenario_ids:
                 errors.append(
                     (
                         pointer(pointer(pointer("/state", "disputes"), ident), "target"),
-                        "target must be in the requirement's derivedFrom",
+                        "target must be a scenario id in the requirement's derivedFrom",
                     )
                 )
     for ident in export["seen"]:
@@ -1658,6 +1664,17 @@ def logic_reference_errors(export: dict, logic: dict) -> List[Tuple[str, str]]:
                     "unknown requirement id: " + ident,
                 )
             )
+            continue
+        if dispute["kind"] == "scenario":
+            derived_from = requirement_by_id[ident].get("derivedFrom", [])
+            target = dispute.get("target")
+            if target not in derived_from or target not in scenario_ids:
+                errors.append(
+                    (
+                        pointer(pointer(pointer("/record", "disputes"), index), "target"),
+                        "target must be a scenario id in the requirement's derivedFrom",
+                    )
+                )
     for key in ("scenarioRequests", "researchRequests"):
         for index, request in enumerate(record[key]):
             if key == "researchRequests" and request["blindSpotId"] not in blind_ids:
@@ -2135,6 +2152,13 @@ def command_render(spec_dir: Path, prior_path: Optional[Path], open_page: bool) 
         if errors:
             emit_errors(errors)
             return 1
+        shape_errors = validate_export_shape(prior)
+        if shape_errors:
+            emit_errors(shape_errors)
+            return 1
+        if prior.get("slug") != spec_dir.name:
+            print("prior export belongs to a different spec", file=sys.stderr)
+            return 3
     try:
         render_files(spec_dir, logic, current_id, prior, open_page)
     except (OSError, ValueError) as exc:
@@ -2191,6 +2215,8 @@ def discover_export(
             if value.get("kind") != EXPORT_KIND or value.get("slug") != spec_dir.name:
                 continue
             if required_stage is not None and (value.get("schemaVersion") != 2 or value.get("stage") != required_stage):
+                continue
+            if validate_export_shape(value):
                 continue
             exported_at = value.get("exportedAt")
             if not isinstance(exported_at, str):
@@ -2353,6 +2379,8 @@ def stage2_gate_failures(logic: dict, state: dict) -> List[Tuple[str, str]]:
 
     missing_reasons = []
     for requirement in logic["requirements"]:
+        if derived_requirement_status(requirement, scenario_by_id) == "withdrawn":
+            continue
         final = effective_placement(state, requirement)
         if placement_changed(state, requirement) and not state["moveReasons"].get(requirement["id"], "").strip():
             missing_reasons.append(requirement["id"])
