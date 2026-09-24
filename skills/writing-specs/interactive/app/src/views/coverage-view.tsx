@@ -11,14 +11,9 @@ import type { ViewProps } from './view-props'
 const KIND_LABEL: Record<TraceRow['kind'], string> = { scenario: 'Scenario', constraint: 'Constraint' }
 
 /** `CONTRACT:` the trace matrix — one row per approved stage-1 item, linking each to the non-withdrawn requirements derived from it (see Trace matrix). */
-export function CoverageView({ spec, onNavigate, onOpenRequirement }: ViewProps) {
+export function CoverageView({ spec, onOpenRequirement }: ViewProps) {
   const { rows, nonGoals } = traceMatrix(spec)
   const gapCount = rows.filter((row) => row.status === 'gap').length
-
-  const openRequirement = (id: string) => {
-    onOpenRequirement(id)
-    onNavigate('board')
-  }
 
   const columns: TableColumn<TraceRow>[] = [
     { key: 'id', header: 'ID', width: pixel(110), renderCell: (row) => <Text type="label">{row.id}</Text> },
@@ -31,7 +26,7 @@ export function CoverageView({ spec, onNavigate, onOpenRequirement }: ViewProps)
       renderCell: (row) =>
         row.requirementIds.length > 0 ? (
           <HStack gap={1} wrap="wrap">
-            {row.requirementIds.map((id) => <Link key={id} onClick={() => openRequirement(id)}>{id}</Link>)}
+            {row.requirementIds.map((id) => <Link key={id} onClick={() => onOpenRequirement(id)}>{id}</Link>)}
           </HStack>
         ) : (
           <Text type="supporting">None</Text>

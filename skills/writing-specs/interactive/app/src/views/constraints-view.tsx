@@ -10,7 +10,7 @@ import { Token } from '@astryxdesign/core/Token'
 import type { Constraint, ConstraintRulingVerb, LogicSpec } from '../spec-types'
 import { CONSTRAINT_KIND_LABEL, CONSTRAINT_RULING_LABEL, nextConstraintRuling } from '../review-state'
 import { ChangedToken, ClaudeField, PreselectedToken, ProvenanceToken, SpecMarkdown } from './shared'
-import { ListDetailRegister } from './list-detail-register'
+import { ListDetailRegister, nextOpenEntryId } from './list-detail-register'
 import type { ViewProps } from './view-props'
 
 const RULING_COLOR: Record<ConstraintRulingVerb, 'green' | 'yellow' | 'red'> = { approve: 'green', rewrite: 'yellow', reject: 'red' }
@@ -25,7 +25,7 @@ function constraintDecided(props: ViewProps, constraint: Constraint): boolean {
   return entry.ruling === 'approve'
 }
 
-function ConstraintDetail({ constraint, props }: { constraint: Constraint; props: ViewProps }) {
+function ConstraintDetail({ constraint, props, onApprove }: { constraint: Constraint; props: ViewProps; onApprove: () => void }) {
   const { state, update, changedIds } = props
   const isClaude = constraint.provenance === 'claude'
   const entry = state.constraintRulings[constraint.id]
@@ -33,7 +33,7 @@ function ConstraintDetail({ constraint, props }: { constraint: Constraint; props
   const ruling = entry?.ruling ?? (isClaude ? 'approve' : undefined)
   const text = entry?.text ?? constraint.text
   const reason = entry?.reason ?? ''
-  const set = (patch: { ruling?: ConstraintRulingVerb; text?: string; reason?: string }) =>
+  const set = (patch: { ruling?: ConstraintRulingVerb; text?: string; reason?: string }) => {
     update((s) => ({
       ...s,
       constraintRulings: {
@@ -41,6 +41,8 @@ function ConstraintDetail({ constraint, props }: { constraint: Constraint; props
         [constraint.id]: nextConstraintRuling(entry, constraint.text, isClaude, patch),
       },
     }), constraint.id)
+    if (patch.ruling === 'approve') onApprove()
+  }
 
   return (
     <VStack gap={3}>
@@ -75,28 +77,34 @@ function ConstraintRegister({ props }: { props: ViewProps }) {
   )
   const selected = spec.constraints.find((c) => c.id === selectedId) ?? spec.constraints[0]
   if (!selected) return <Text type="supporting">The spec lists no constraints.</Text>
+  const entries = spec.constraints.map((c) => {
+    const entry = state.constraintRulings[c.id]
+    const isDone = constraintDecided(props, c)
+    return {
+      id: c.id,
+      label: `${c.id} · ${CONSTRAINT_KIND_LABEL[c.kind]}`,
+      description: c.text,
+      isDone,
+      status: isDone && entry
+        ? <Token size="sm" color={RULING_COLOR[entry.ruling]} label={CONSTRAINT_RULING_LABEL[entry.ruling]} />
+        : <Token size="sm" color="blue" label="To rule" />,
+    }
+  })
+  // rewrite and reject count as ruled on their first keystroke, so only approval advances the selection
+  const selectNextAfter = (id: string) => {
+    const nextId = nextOpenEntryId(entries, id)
+    if (nextId) setSelectedId(nextId)
+  }
   return (
     <ListDetailRegister
-      intro="Non-behavioral requirements — placement, verification, naming, non-goals — reviewed one at a time. Approve as written, rewrite in your own words, or reject with a reason. There is no approve-all."
+      intro="Non-behavioral requirements — placement, verification, naming, non-goals — reviewed one at a time; ruled ones move to the end. Approve as written, rewrite in your own words, or reject with a reason. There is no approve-all."
       doneLabel="ruled"
       listLabel="Constraints"
       nextLabel="Next to rule"
-      entries={spec.constraints.map((c) => {
-        const entry = state.constraintRulings[c.id]
-        const isDone = constraintDecided(props, c)
-        return {
-          id: c.id,
-          label: `${c.id} · ${CONSTRAINT_KIND_LABEL[c.kind]}`,
-          description: c.text,
-          isDone,
-          status: isDone && entry
-            ? <Token size="sm" color={RULING_COLOR[entry.ruling]} label={CONSTRAINT_RULING_LABEL[entry.ruling]} />
-            : <Token size="sm" color="blue" label="To rule" />,
-        }
-      })}
+      entries={entries}
       selectedId={selected.id}
       onSelect={setSelectedId}
-      detail={<ConstraintDetail constraint={selected} props={props} />}
+      detail={<ConstraintDetail constraint={selected} props={props} onApprove={() => selectNextAfter(selected.id)} />}
     />
   )
 }

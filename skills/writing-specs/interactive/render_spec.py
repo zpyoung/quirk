@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import stat
 import sys
 import tempfile
@@ -2382,8 +2383,24 @@ def command_find_export(spec_dir: Path, downloads: Path) -> int:
     if found is None:
         print("no matching decision export found", file=sys.stderr)
         return 5
-    print(str(found))
+    print(str(move_beside_review(found, spec_dir)))
     return 0
+
+
+def move_beside_review(export_path: Path, spec_dir: Path) -> Path:
+    """Move an export found elsewhere into the spec folder, next to review.html, and return where it now lives.
+
+    Never overwrites: a name already taken in the spec folder, or a failed move, leaves the export where it was.
+    """
+    destination = spec_dir.resolve() / export_path.name
+    if export_path.parent == destination.parent or destination.exists():
+        return export_path
+    try:
+        shutil.move(str(export_path), str(destination))
+    except OSError as exc:
+        print(str(export_path) + ": could not move beside review.html: " + str(exc), file=sys.stderr)
+        return export_path
+    return destination
 
 
 def derived_requirement_status(requirement: dict, scenario_by_id: Dict[str, dict]) -> str:

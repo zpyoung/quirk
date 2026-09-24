@@ -4,6 +4,7 @@ import { EmptyState } from '@astryxdesign/core/EmptyState'
 import { Heading } from '@astryxdesign/core/Heading'
 import { HStack, Layout, LayoutContent, LayoutHeader, VStack } from '@astryxdesign/core/Layout'
 import { StatusDot } from '@astryxdesign/core/StatusDot'
+import { Step, Stepper } from '@astryxdesign/core/Stepper'
 import { Tab, TabList } from '@astryxdesign/core/TabList'
 import { Text } from '@astryxdesign/core/Text'
 import { Theme } from '@astryxdesign/core/theme'
@@ -16,7 +17,7 @@ import {
   activeBlindSpots,
   bootstrap,
   carryOver,
-  changedItemIds,
+  changedSinceReviewIds,
   cloneState,
   decisionRecord,
   emptyState,
@@ -33,6 +34,9 @@ import { BoardView } from './views/board-view'
 import { ConstraintsView } from './views/constraints-view'
 import { CoverageView } from './views/coverage-view'
 import { ImpactCertaintyView } from './views/impact-certainty-view'
+import { ItemDialog } from './views/item-dialog'
+import { ItemLinksProvider } from './views/item-links'
+import { RequirementDialog } from './views/requirement-dialog'
 import { RisksView } from './views/risks-view'
 import { ScenariosView } from './views/scenarios-view'
 import { ScopeOutGuardProvider } from './views/scope-out-guard'
@@ -58,10 +62,6 @@ const BADGES: Partial<Record<ViewId, BadgePart[]>> = {
   constraints: [{ id: 'constraints', one: 'constraint to rule on', many: 'constraints to rule on' }],
 }
 
-const STAGE_INDICATOR: Record<1 | 2, string> = {
-  1: 'Stage 1 of 2 — what should happen',
-  2: 'Stage 2 of 2 — what to build',
-}
 
 function Shell({ mode, children }: { mode: 'light' | 'dark' | 'system'; children: ReactNode }) {
   return <Theme theme={neutralTheme} mode={mode}>{children}</Theme>
@@ -84,6 +84,11 @@ function App() {
   const defaultView: ViewId = payload && payload.spec.stage === 1 ? 'scenarios' : 'board'
   const [view, setView] = useState<ViewId>(defaultView)
   const [openRequirementId, setOpenRequirementId] = useState<string | null>(null)
+  const [openItemId, setOpenItemId] = useState<string | null>(null)
+  const openItem = useCallback((id: string) => {
+    if (payload?.spec.requirements.some((requirement) => requirement.id === id)) setOpenRequirementId(id)
+    else setOpenItemId(id)
+  }, [payload])
   const [importStatus, setImportStatus] = useState<string | null>(null)
   const mode = useViewerMode()
 
@@ -114,7 +119,10 @@ function App() {
   }, [payload, persist])
 
 
-  const changedIds = useMemo(() => new Set(payload ? changedItemIds(payload.spec, payload.itemHashes, seen) : []), [payload, seen])
+  const changedIds = useMemo(
+    () => new Set(payload ? changedSinceReviewIds(payload.spec, payload.itemHashes, seen, lastExportUpdatedAt !== null) : []),
+    [payload, seen, lastExportUpdatedAt],
+  )
   const gates = useMemo(() => payload ? gateList(state, payload.spec) : [], [payload, state])
   const tabs: TabSpec[] = useMemo(() => {
     if (!payload) return []
@@ -262,75 +270,89 @@ function App() {
     state,
     update,
     changedIds,
-    onNavigate: setView,
-    openRequirementId,
     onOpenRequirement: setOpenRequirementId,
   }
 
   return (
     <Shell mode={mode}>
       <ScopeOutGuardProvider>
-        <Layout
-          height="auto"
-          header={
-            <LayoutHeader hasDivider label="Review header">
-              <VStack gap={2} paddingBlock={3}>
-                <HStack gap={2} justify="between" align="center" wrap="wrap">
-                  <VStack gap={0.5}>
-                    <Text type="label" color="secondary">Logic spec review · {payload.slug}</Text>
-                    <Heading level={1}>{payload.spec.title}</Heading>
-                    <Text type="label" color="secondary">{STAGE_INDICATOR[payload.spec.stage]}</Text>
-                  </VStack>
-                  <HStack gap={1} align="center">
-                    <StatusDot variant={storageOk ? 'neutral' : 'error'} label={storageOk ? 'Saved in this browser only' : 'Browser storage unavailable'} />
-                    <Text type="supporting">{storageOk ? 'Saved in this browser only' : 'Browser storage unavailable'}</Text>
+        <ItemLinksProvider spec={payload.spec} open={openItem}>
+          <Layout
+            height="auto"
+            header={
+              <LayoutHeader hasDivider label="Review header">
+                <VStack gap={2} paddingBlock={3}>
+                  <HStack gap={2} justify="between" align="center" wrap="wrap">
+                    <VStack gap={0.5}>
+                      <Text type="label" color="secondary">Logic spec review · {payload.slug}</Text>
+                      <Heading level={1}>{payload.spec.title}</Heading>
+                    </VStack>
+                    <HStack gap={1} align="center">
+                      <StatusDot variant={storageOk ? 'neutral' : 'error'} label={storageOk ? 'Saved in this browser only' : 'Browser storage unavailable'} />
+                      <Text type="supporting">{storageOk ? 'Saved in this browser only' : 'Browser storage unavailable'}</Text>
+                    </HStack>
                   </HStack>
-                </HStack>
-                <Text type="supporting">
-                  {state.signedAt
-                    ? `Signed ${new Date(state.signedAt).toLocaleString()}`
-                    : openGateCount === 0
-                      ? 'Every gate is met. Record your verdict on the Sign-off tab.'
-                      : `${openGateCount} of ${gates.length} review gates still open`}
-                </Text>
-                <TabList value={view} onChange={(value) => setView(value as ViewId)} role="tablist" hasDivider>
-                  {tabs.map((tab) => <Tab key={tab.id} value={tab.id} label={tab.label} panelId="panel" endContent={badge(BADGES[tab.id])} />)}
-                </TabList>
-              </VStack>
-            </LayoutHeader>
-          }
-          content={
-            <LayoutContent label="Review panel" padding={4} isScrollable={false}>
-              <VStack gap={4} paddingBlockEnd={10}>
-                {!storageOk ? (
-                  <Banner
-                    status="error"
-                    title="Export before closing"
-                    description="Browser storage is unavailable, so your progress may not survive this session. Download or copy your decisions on the Sign-off tab."
-                  />
-                ) : null}
-                <VStack id="panel" role="tabpanel">
-                  {view === 'board' ? <BoardView {...viewProps} /> : null}
-                  {view === 'risks' ? <RisksView {...viewProps} /> : null}
-                  {view === 'scenarios' ? <ScenariosView {...viewProps} /> : null}
-                  {view === 'constraints' ? <ConstraintsView {...viewProps} /> : null}
-                  {view === 'coverage' ? <CoverageView {...viewProps} /> : null}
-                  {view === 'heatmap' ? <ImpactCertaintyView {...viewProps} /> : null}
-                  {view === 'story-map' ? <StoryMapView {...viewProps} /> : null}
-                  {view === 'states' ? <StateMachineView {...viewProps} /> : null}
-                  {view === 'spec' ? <SpecView {...viewProps} /> : null}
-                  {view === 'sign-off' ? (
-                    <SignOffView {...viewProps} gates={gates} createExport={createExport} onExport={onExport} importStatus={importStatus} onImport={importFile} />
-                  ) : null}
+                  <VStack maxWidth={640}>
+                    <Stepper activeStep={payload.spec.stage - 1} label="Review stages" density="compact">
+                      <Step step={0} label="Stage 1 · What should happen" description="Behaviors, constraints, and risks" />
+                      <Step step={1} label="Stage 2 · What to build" description="Scope of the requirements Claude derives after you sign stage 1" />
+                    </Stepper>
+                  </VStack>
+                  <Text type="supporting">
+                    {state.signedAt
+                      ? `Signed ${new Date(state.signedAt).toLocaleString()}`
+                      : openGateCount === 0
+                        ? 'Every gate is met. Record your verdict on the Sign-off tab.'
+                        : `${openGateCount} of ${gates.length} review gates still open`}
+                  </Text>
+                  <TabList value={view} onChange={(value) => setView(value as ViewId)} role="tablist" hasDivider>
+                    {tabs.map((tab) => <Tab key={tab.id} value={tab.id} label={tab.label} panelId="panel" endContent={badge(BADGES[tab.id])} />)}
+                  </TabList>
                 </VStack>
-                <Text type="supporting" color="secondary">
-                  Local review only. No network connection is used. Render ID: {payload.renderId}
-                  {activeSpots.length ? ` · ${activeSpots.length} active blind spot${activeSpots.length === 1 ? '' : 's'}` : ''}
-                </Text>
-              </VStack>
-            </LayoutContent>
-          }
+              </LayoutHeader>
+            }
+            content={
+              <LayoutContent label="Review panel" padding={4} isScrollable={false}>
+                <VStack gap={4} paddingBlockEnd={10}>
+                  {!storageOk ? (
+                    <Banner
+                      status="error"
+                      title="Export before closing"
+                      description="Browser storage is unavailable, so your progress may not survive this session. Download or copy your decisions on the Sign-off tab."
+                    />
+                  ) : null}
+                  <VStack id="panel" role="tabpanel">
+                    {view === 'board' ? <BoardView {...viewProps} /> : null}
+                    {view === 'risks' ? <RisksView {...viewProps} /> : null}
+                    {view === 'scenarios' ? <ScenariosView {...viewProps} /> : null}
+                    {view === 'constraints' ? <ConstraintsView {...viewProps} /> : null}
+                    {view === 'coverage' ? <CoverageView {...viewProps} /> : null}
+                    {view === 'heatmap' ? <ImpactCertaintyView {...viewProps} /> : null}
+                    {view === 'story-map' ? <StoryMapView {...viewProps} /> : null}
+                    {view === 'states' ? <StateMachineView {...viewProps} /> : null}
+                    {view === 'spec' ? <SpecView {...viewProps} /> : null}
+                    {view === 'sign-off' ? (
+                      <SignOffView {...viewProps} gates={gates} createExport={createExport} onExport={onExport} importStatus={importStatus} onImport={importFile} />
+                    ) : null}
+                  </VStack>
+                  <Text type="supporting" color="secondary">
+                    Local review only. No network connection is used. Render ID: {payload.renderId}
+                    {activeSpots.length ? ` · ${activeSpots.length} active blind spot${activeSpots.length === 1 ? '' : 's'}` : ''}
+                  </Text>
+                </VStack>
+              </LayoutContent>
+            }
+          />
+          <RequirementDialog
+          requirement={payload.spec.requirements.find((requirement) => requirement.id === openRequirementId) ?? null}
+          spec={payload.spec}
+          state={state}
+          update={update}
+          changedIds={changedIds}
+          onClose={() => setOpenRequirementId(null)}
         />
+        <ItemDialog id={openItemId} spec={payload.spec} state={state} onClose={() => setOpenItemId(null)} />
+        </ItemLinksProvider>
       </ScopeOutGuardProvider>
     </Shell>
   )

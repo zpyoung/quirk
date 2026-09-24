@@ -9,7 +9,7 @@ import type { BlindSpot, StateMachine, StateMachineTransition } from '../spec-ty
 import { StateMachineDetailDialog } from './state-machine-detail'
 import { StateMachineDiagram, ACCENT, MUTED, OFF } from './state-machine-diagram'
 import { builtColor, builtLabel, nodeLabels, useMachineLayout, type StateMachineSelection, type TableRow } from './state-machine-model'
-import { ClaudeField, ClaudeWroteToken, itemLabel } from './shared'
+import { ClaudeField, ClaudeWroteToken, ItemReference } from './shared'
 import type { ViewProps } from './view-props'
 
 // A stable identity so the layout effect doesn't re-run every render when no state machine is defined.
@@ -111,7 +111,7 @@ export function StateMachineView(props: ViewProps) {
       width: proportional(2),
       renderCell: (row) => (
         <VStack gap={1}>
-          {row.sources.map((id) => <Text key={id}>{`${id} · ${itemLabel(spec, id)}`}</Text>)}
+          {row.sources.map((id) => <ItemReference key={id} spec={spec} id={id} />)}
         </VStack>
       ),
     },

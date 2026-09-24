@@ -36,7 +36,7 @@ function GridRow({ label, children }: { label: ReactNode; children: ReactNode })
   )
 }
 
-function GridCell({ variant, items, onOpen }: { variant: CardVariant; items: Requirement[]; onOpen: () => void }) {
+function GridCell({ variant, items, onOpen }: { variant: CardVariant; items: Requirement[]; onOpen: (id: string) => void }) {
   return (
     <Card variant={variant} padding={2}>
       <VStack gap={1}>
@@ -44,7 +44,7 @@ function GridCell({ variant, items, onOpen }: { variant: CardVariant; items: Req
           {items.length} requirement{items.length === 1 ? '' : 's'}
         </Text>
         {items.map((requirement) => (
-          <Link key={requirement.id} onClick={onOpen}>
+          <Link key={requirement.id} onClick={() => onOpen(requirement.id)}>
             {requirement.id} · {requirement.summary}
           </Link>
         ))}
@@ -54,10 +54,9 @@ function GridCell({ variant, items, onOpen }: { variant: CardVariant; items: Req
 }
 
 /** Requirements grouped by impact and certainty, so the reviewer sees what still needs checking before anything is built. */
-export function ImpactCertaintyView({ spec, state, onNavigate }: ViewProps) {
+export function ImpactCertaintyView({ spec, state, onOpenRequirement }: ViewProps) {
   const placed = placedRequirements(spec, state).filter(({ requirement, placement }) => placement !== 'out' && requirement.certainty !== null)
   const outCount = spec.requirements.length - placed.length
-  const openOnBoard = () => onNavigate('board')
   const checkFirst = placed.filter(
     ({ requirement }) => HIGH_IMPACT.includes(requirement.group) && (requirement.certainty === 'assumed' || requirement.certainty === 'unverified'),
   )
@@ -70,7 +69,7 @@ export function ImpactCertaintyView({ spec, state, onNavigate }: ViewProps) {
         <Heading level={2}>Impact × certainty</Heading>
         <Text type="supporting" as="p">
           What to check before building: in-scope requirements grouped by how much a mistake would cost (rows) and how sure Claude is about them (columns).
-          Risk climbs toward the top right — high-impact requirements nobody has verified. Click any requirement to open it on the Scope board.
+          Risk climbs toward the top right — high-impact requirements nobody has verified. Click any requirement to see its details.
           {outCount > 0 ? ` ${outCount} out-of-scope requirement${outCount === 1 ? ' is' : 's are'} left out of this grid.` : ''}
         </Text>
       </VStack>
@@ -84,7 +83,7 @@ export function ImpactCertaintyView({ spec, state, onNavigate }: ViewProps) {
                 .map((assumption) => assumption.id)
               return (
                 <Text key={requirement.id}>
-                  <Link onClick={openOnBoard}>{requirement.id}</Link> — {requirement.summary} ({CERTAINTY_LABEL[requirement.certainty as Certainty]}
+                  <Link onClick={() => onOpenRequirement(requirement.id)}>{requirement.id}</Link> — {requirement.summary} ({CERTAINTY_LABEL[requirement.certainty as Certainty]}
                   {affects.length > 0 ? `, rests on ${affects.join(', ')}` : ', no tracked assumption'})
                 </Text>
               )
@@ -104,7 +103,7 @@ export function ImpactCertaintyView({ spec, state, onNavigate }: ViewProps) {
         {GROUPS.map((group) => (
           <GridRow key={group} label={<Text type="label">{GROUP_LABEL[group]}</Text>}>
             {CERTAINTIES.map((certainty) => (
-              <GridCell key={certainty} variant={riskVariant(group, certainty)} items={cellItems(group, certainty)} onOpen={openOnBoard} />
+              <GridCell key={certainty} variant={riskVariant(group, certainty)} items={cellItems(group, certainty)} onOpen={onOpenRequirement} />
             ))}
           </GridRow>
         ))}

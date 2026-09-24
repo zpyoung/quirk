@@ -10,7 +10,8 @@ import { CHOICE_LABEL, effectivePlacement } from '../review-state'
 import type { BlindSpot, LogicSpec, StateMachine, StateMachineTransition } from '../spec-types'
 import { BlindSpotDetail } from './risks-view'
 import { builtColor, builtLabel, nodeLabels, transitionForBlindSpot, type StateMachineSelection } from './state-machine-model'
-import { ChangedToken, ClaudeField, ClaudeWroteToken, itemLabel } from './shared'
+import { ChangedToken, ClaudeField, ClaudeWroteToken, ItemReference } from './shared'
+import { ItemRef } from './item-links'
 import type { ViewProps } from './view-props'
 
 type Props = {
@@ -29,7 +30,7 @@ function RequirementRows({ ids, viewProps }: { ids: string[]; viewProps: ViewPro
         const placement = effectivePlacement(viewProps.state, requirement)
         return (
           <HStack key={id} gap={2} align="center" wrap="wrap">
-            <Text>{`${id} · ${requirement.summary}`}</Text>
+            <Text><ItemRef id={id} />{` · ${requirement.summary}`}</Text>
             <ClaudeWroteToken />
             {placement ? <Token size="sm" color={placement === 'out' ? 'gray' : 'green'} label={CHOICE_LABEL[placement]} /> : null}
           </HStack>
@@ -79,7 +80,7 @@ function TransitionDetail({ transition, machine, viewProps, onSelect }: { transi
 function CausedBySources({ ids, spec }: { ids: string[]; spec: LogicSpec }) {
   return (
     <VStack gap={2}>
-      {ids.map((id) => <Text key={id}>{`${id} · ${itemLabel(spec, id)}`}</Text>)}
+      {ids.map((id) => <ItemReference key={id} spec={spec} id={id} />)}
     </VStack>
   )
 }

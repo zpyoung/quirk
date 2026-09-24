@@ -6,17 +6,23 @@ import { Dialog, DialogHeader } from '@astryxdesign/core/Dialog'
 import { Heading } from '@astryxdesign/core/Heading'
 import { Card, HStack, VStack } from '@astryxdesign/core/Layout'
 import { Link } from '@astryxdesign/core/Link'
+import { Table, pixel, proportional, type TableColumn } from '@astryxdesign/core/Table'
 import { RadioList, RadioListItem } from '@astryxdesign/core/RadioList'
 import { Text } from '@astryxdesign/core/Text'
 import { TextArea } from '@astryxdesign/core/TextArea'
 import { Token } from '@astryxdesign/core/Token'
 import type { Assumption, AssumptionRuling, BlindSpot, LogicSpec, ResearchRequest } from '../spec-types'
 import { RULINGS, activeBlindSpots, pendingResearchRequests, requestId, type Update } from '../review-state'
-import { CERTAINTY_LABEL, CertaintyToken, ChangedToken, ClaudeField, ClaudeWroteToken, Field, itemLabel, SpecMarkdown } from './shared'
-import { ListDetailRegister } from './list-detail-register'
+import { CERTAINTY_LABEL, CertaintyToken, ChangedToken, ClaudeField, ClaudeWroteToken, Field, ItemReference, itemLabel, SpecMarkdown } from './shared'
+import { ItemRef, useOpenItem } from './item-links'
+import { ListDetailRegister, nextOpenEntryId } from './list-detail-register'
 import type { ViewProps } from './view-props'
 
 const RULING_COLOR: Record<AssumptionRuling, 'green' | 'yellow' | 'red'> = { 'build-on': 'green', 'verify-first': 'yellow', wrong: 'red' }
+
+// homomorphic copies, plain enough to satisfy Table's `Record<string, unknown>` row constraint
+type AssumptionRow = { [K in keyof Assumption]: Assumption[K] }
+type BlindSpotRow = { [K in keyof BlindSpot]: BlindSpot[K] }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -31,10 +37,9 @@ function resolutionHint(spec: LogicSpec, resolvedBy: string): string {
   return spec.scenarios.some((s) => s.id === resolvedBy) ? 'once approved and not dropped' : 'once approved or rewritten'
 }
 
-function AssumptionDetail({ assumption, props, readOnly }: { assumption: Assumption; props: ViewProps; readOnly: boolean }) {
+function AssumptionDetail({ assumption, props, onRuled }: { assumption: Assumption; props: ViewProps; onRuled: () => void }) {
   const { spec, state, update, changedIds } = props
-  // stage 2 shows the ruling folded into the spec, not the fresh (empty) stage-2 review state
-  const entry = readOnly ? { ruling: assumption.ruling, note: assumption.rulingNote ?? '' } : (state.assumptions[assumption.id] ?? { note: '' })
+  const entry = state.assumptions[assumption.id] ?? { note: '' }
   const set = (patch: Partial<typeof entry>) =>
     update((s) => ({ ...s, assumptions: { ...s.assumptions, [assumption.id]: { ...entry, ...patch } } }), assumption.id)
   const needsNote = entry.ruling === 'verify-first' || entry.ruling === 'wrong'
@@ -51,33 +56,27 @@ function AssumptionDetail({ assumption, props, readOnly }: { assumption: Assumpt
       <Field label="If this is wrong">{assumption.ifWrong}</Field>
       <Section title={`Scenarios and constraints that rest on it (${assumption.affects.length})`}>
         {assumption.affects.length
-          ? assumption.affects.map((id) => <Text key={id}>{`${id} · ${itemLabel(spec, id)}`}</Text>)
+          ? assumption.affects.map((id) => <ItemReference key={id} spec={spec} id={id} />)
           : <Text type="supporting">None.</Text>}
       </Section>
       <ClaudeField label="How to check it">{assumption.check}</ClaudeField>
       <HStack>
         <Token size="sm" color="blue" label={`Cost: ${assumption.checkCost}`} />
       </HStack>
-      {readOnly ? (
-        entry.ruling ? (
-          <Field label="Your ruling">{RULINGS.find((r) => r.value === entry.ruling)?.label ?? entry.ruling}</Field>
-        ) : (
-          <Text type="supporting">Not ruled on.</Text>
-        )
-      ) : (
-        <>
-          <RadioList
-            label="Your ruling"
-            orientation="horizontal"
-            size="sm"
-            value={entry.ruling ?? ''}
-            onChange={(value) => set({ ruling: value as AssumptionRuling })}
-          >
-            {RULINGS.map((ruling) => <RadioListItem key={ruling.value} value={ruling.value} label={ruling.label} />)}
-          </RadioList>
-          {needsNote ? <TextArea label="Why this ruling?" rows={3} value={entry.note} onChange={(note) => set({ note })} isRequired /> : null}
-        </>
-      )}
+      <RadioList
+        label="Your ruling"
+        orientation="horizontal"
+        size="sm"
+        value={entry.ruling ?? ''}
+        onChange={(value) => {
+          set({ ruling: value as AssumptionRuling })
+          // rulings that ask for a note keep the selection so the note can be written
+          if (value === 'build-on') onRuled()
+        }}
+      >
+        {RULINGS.map((ruling) => <RadioListItem key={ruling.value} value={ruling.value} label={ruling.label} />)}
+      </RadioList>
+      {needsNote ? <TextArea label="Why this ruling?" rows={3} value={entry.note} onChange={(note) => set({ note })} isRequired /> : null}
     </VStack>
   )
 }
@@ -160,7 +159,7 @@ function BlindSpotResearch({ spot, props, readOnly }: { spot: BlindSpot; props: 
 }
 
 /** A blind spot's full detail: what it means, its sources, research, and — while active and editable — the acceptance controls. */
-export function BlindSpotDetail({ spot, props }: { spot: BlindSpot; props: ViewProps }) {
+export function BlindSpotDetail({ spot, props, onAccepted }: { spot: BlindSpot; props: ViewProps; onAccepted?: () => void }) {
   const { spec, state, update, changedIds } = props
   const readOnly = spec.stage === 2
   const isActive = activeBlindSpots(state, spec).some((s) => s.id === spot.id)
@@ -178,11 +177,13 @@ export function BlindSpotDetail({ spot, props }: { spot: BlindSpot; props: ViewP
       <ClaudeField label="What could go wrong">{spot.detail}</ClaudeField>
       <Section title="Caused by">
         {spot.sources.length
-          ? spot.sources.map((id) => <Text key={id}>{`${id} · ${itemLabel(spec, id)}`}</Text>)
+          ? spot.sources.map((id) => <ItemReference key={id} spec={spec} id={id} />)
           : <Text type="supporting">Nothing in particular.</Text>}
       </Section>
       {spot.resolvedBy ? (
-        <Field label="Resolved once decided">{`${spot.resolvedBy} · ${itemLabel(spec, spot.resolvedBy)}, ${resolutionHint(spec, spot.resolvedBy)}`}</Field>
+        <Field label="Resolved once decided">
+          <Text><ItemRef id={spot.resolvedBy} />{` · ${itemLabel(spec, spot.resolvedBy)}, ${resolutionHint(spec, spot.resolvedBy)}`}</Text>
+        </Field>
       ) : null}
       <BlindSpotResearch spot={spot} props={props} readOnly={readOnly} />
       {readOnly ? (
@@ -195,7 +196,10 @@ export function BlindSpotDetail({ spot, props }: { spot: BlindSpot; props: ViewP
             value={entry.accepted}
             isDisabled={!entry.note.trim()}
             disabledMessage="Write the reason first."
-            onChange={(accepted) => set({ accepted })}
+            onChange={(accepted) => {
+              set({ accepted })
+              if (accepted) onAccepted?.()
+            }}
           />
         </>
       ) : (
@@ -205,98 +209,154 @@ export function BlindSpotDetail({ spot, props }: { spot: BlindSpot; props: ViewP
   )
 }
 
-function AssumptionRegister({ props, readOnly }: { props: ViewProps; readOnly: boolean }) {
+function AssumptionRegister({ props }: { props: ViewProps }) {
   const { spec, state } = props
-  // stage 2 rules on assumptions are folded into the spec, not tracked in the fresh stage-2 review state
-  const rulingFor = (a: Assumption) => (readOnly ? a.ruling : state.assumptions[a.id]?.ruling)
+  const rulingFor = (a: Assumption) => state.assumptions[a.id]?.ruling
   const [selectedId, setSelectedId] = useState<string | undefined>(
     () => spec.assumptions.find((a) => !rulingFor(a))?.id ?? spec.assumptions[0]?.id,
   )
   const selected = spec.assumptions.find((a) => a.id === selectedId) ?? spec.assumptions[0]
   if (!selected) return <Text type="supporting">The spec lists no assumptions.</Text>
+  const entries = spec.assumptions.map((a) => {
+    const ruling = rulingFor(a)
+    return {
+      id: a.id,
+      label: `${a.id} · ${CERTAINTY_LABEL[a.certainty]}`,
+      description: a.claim,
+      isDone: Boolean(ruling),
+      status: ruling ? (
+        <Token size="sm" color={RULING_COLOR[ruling]} label={RULINGS.find((r) => r.value === ruling)?.label ?? ruling} />
+      ) : (
+        <Token size="sm" color="blue" label="To rule" />
+      ),
+    }
+  })
+  const selectNext = () => {
+    const nextId = nextOpenEntryId(entries, selected.id)
+    if (nextId) setSelectedId(nextId)
+  }
   return (
     <ListDetailRegister
       intro="Each one is something the spec depends on. Confirmed means it was checked on this machine; assumed means it was reasoned from code or transcripts but never seen happening; unverified means nobody has checked yet."
       doneLabel="ruled"
       listLabel="Assumptions"
       nextLabel="Next to rule"
-      entries={spec.assumptions.map((a) => {
-        const ruling = rulingFor(a)
-        return {
-          id: a.id,
-          label: `${a.id} · ${CERTAINTY_LABEL[a.certainty]}`,
-          description: a.claim,
-          isDone: Boolean(ruling),
-          status: ruling ? (
-            <Token size="sm" color={RULING_COLOR[ruling]} label={RULINGS.find((r) => r.value === ruling)?.label ?? ruling} />
-          ) : (
-            <Token size="sm" color="blue" label="To rule" />
-          ),
-        }
-      })}
+      entries={entries}
       selectedId={selected.id}
       onSelect={setSelectedId}
-      detail={<AssumptionDetail assumption={selected} props={props} readOnly={readOnly} />}
+      detail={<AssumptionDetail assumption={selected} props={props} onRuled={selectNext} />}
     />
   )
 }
 
 function BlindSpotRegister({ props }: { props: ViewProps }) {
   const { spec, state } = props
-  const readOnly = spec.stage === 2
   const activeIds = new Set(activeBlindSpots(state, spec).map((spot) => spot.id))
-  // stage 2 shows the acceptance folded into the spec, not the fresh (empty) stage-2 review state
-  const isAccepted = (id: string) => (readOnly ? Boolean(spec.blindSpots.find((b) => b.id === id)?.acceptance) : Boolean(state.blindSpots[id]?.accepted))
-  const noteFor = (id: string) => (readOnly ? (spec.blindSpots.find((b) => b.id === id)?.acceptance ?? '') : (state.blindSpots[id]?.note ?? ''))
+  const isAccepted = (id: string) => Boolean(state.blindSpots[id]?.accepted)
+  const noteFor = (id: string) => state.blindSpots[id]?.note ?? ''
   const [selectedId, setSelectedId] = useState<string | undefined>(
     () => spec.blindSpots.find((b) => activeIds.has(b.id) && !isAccepted(b.id))?.id ?? spec.blindSpots[0]?.id,
   )
   const selected = spec.blindSpots.find((b) => b.id === selectedId) ?? spec.blindSpots[0]
   if (!selected) return <Text type="supporting">The spec lists no blind spots.</Text>
+  const entries = spec.blindSpots.map((b) => {
+    const active = activeIds.has(b.id)
+    const noteWritten = Boolean(noteFor(b.id).trim())
+    return {
+      id: b.id,
+      label: `${b.id} · caused by ${b.sources.join(', ')}`,
+      description: b.title,
+      isDone: active ? isAccepted(b.id) : true,
+      status: !active ? (
+        <Token size="sm" color="default" label="Resolved" />
+      ) : isAccepted(b.id) ? (
+        <Token size="sm" color="green" label="Accepted" />
+      ) : noteWritten ? (
+        <Token size="sm" color="yellow" label="Reason written" />
+      ) : (
+        <Token size="sm" color="blue" label="To accept" />
+      ),
+    }
+  })
+  const selectNext = () => {
+    const nextId = nextOpenEntryId(entries, selected.id)
+    if (nextId) setSelectedId(nextId)
+  }
   return (
     <ListDetailRegister
       intro="Cases where the spec's behavior might surprise someone. Accepting an active blind spot takes a sentence in your own words about why it is tolerable; an approved scenario or constraint that resolves it needs no acceptance."
       doneLabel="resolved"
       listLabel="Blind spots"
       nextLabel="Next to accept"
-      entries={spec.blindSpots.map((b) => {
-        const active = activeIds.has(b.id)
-        const noteWritten = Boolean(noteFor(b.id).trim())
-        return {
-          id: b.id,
-          label: `${b.id} · caused by ${b.sources.join(', ')}`,
-          description: b.title,
-          isDone: active ? isAccepted(b.id) : true,
-          status: !active ? (
-            <Token size="sm" color="default" label="Resolved" />
-          ) : isAccepted(b.id) ? (
-            <Token size="sm" color="green" label="Accepted" />
-          ) : noteWritten ? (
-            <Token size="sm" color="yellow" label="Reason written" />
-          ) : (
-            <Token size="sm" color="blue" label="To accept" />
-          ),
-        }
-      })}
+      entries={entries}
       selectedId={selected.id}
       onSelect={setSelectedId}
-      detail={<BlindSpotDetail spot={selected} props={props} />}
+      detail={<BlindSpotDetail spot={selected} props={props} onAccepted={selectNext} />}
     />
   )
 }
 
-/** Assumptions and blind-spots registers: rule on every assumption, accept every active blind spot; read-only in stage 2. */
+function AssumptionsTable({ spec }: { spec: LogicSpec }) {
+  const openItem = useOpenItem()
+  const columns: TableColumn<AssumptionRow>[] = [
+    { key: 'id', header: 'ID', width: pixel(100), renderCell: (a) => <Text type="label">{a.id}</Text> },
+    { key: 'claim', header: 'Assumption', width: proportional(4), renderCell: (a) => <Link onClick={() => openItem?.(a.id)}>{a.claim}</Link> },
+    { key: 'certainty', header: 'Certainty', width: pixel(130), renderCell: (a) => <CertaintyToken certainty={a.certainty} /> },
+    {
+      key: 'ruling',
+      header: 'Your ruling',
+      width: pixel(170),
+      renderCell: (a) => (a.ruling
+        ? <Token size="sm" color={RULING_COLOR[a.ruling]} label={RULINGS.find((r) => r.value === a.ruling)?.label ?? a.ruling} />
+        : <Text type="supporting">Not ruled on</Text>),
+    },
+    { key: 'note', header: 'Your note', width: proportional(3), renderCell: (a) => <Text type="supporting">{a.rulingNote ?? ''}</Text> },
+  ]
+  if (!spec.assumptions.length) return <Text type="supporting">The spec lists no assumptions.</Text>
+  return <Table data={spec.assumptions} columns={columns} idKey="id" verticalAlign="top" dividers="rows" hasHover />
+}
+
+function BlindSpotsTable({ props }: { props: ViewProps }) {
+  const { spec, state } = props
+  const openItem = useOpenItem()
+  const activeIds = new Set(activeBlindSpots(state, spec).map((spot) => spot.id))
+  const columns: TableColumn<BlindSpotRow>[] = [
+    { key: 'id', header: 'ID', width: pixel(100), renderCell: (b) => <Text type="label">{b.id}</Text> },
+    { key: 'title', header: 'Blind spot', width: proportional(3), renderCell: (b) => <Link onClick={() => openItem?.(b.id)}>{b.title}</Link> },
+    {
+      key: 'sources',
+      header: 'Caused by',
+      width: proportional(2),
+      renderCell: (b) => (b.sources.length
+        ? <HStack gap={1} wrap="wrap">{b.sources.map((id) => <Text key={id}><ItemRef id={id} /></Text>)}</HStack>
+        : <Text type="supporting">Nothing in particular</Text>),
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      width: pixel(130),
+      renderCell: (b) => (!activeIds.has(b.id)
+        ? <Token size="sm" color="default" label="Resolved" />
+        : b.acceptance ? <Token size="sm" color="green" label="Accepted" /> : <Token size="sm" color="blue" label="Not accepted" />),
+    },
+    { key: 'acceptance', header: 'Your acceptance', width: proportional(3), renderCell: (b) => <Text type="supporting">{b.acceptance ?? ''}</Text> },
+  ]
+  if (!spec.blindSpots.length) return <Text type="supporting">The spec lists no blind spots.</Text>
+  return <Table data={spec.blindSpots} columns={columns} idKey="id" verticalAlign="top" dividers="rows" hasHover />
+}
+
+/** Assumptions and blind spots: rule on every assumption and accept every active blind spot in stage 1; stage 2 lists the folded outcomes as tables. */
 export function RisksView(props: ViewProps) {
-  const readOnly = props.spec.stage === 2
+  const isStage2 = props.spec.stage === 2
   return (
     <VStack gap={6}>
       <VStack gap={3}>
         <Heading level={2}>Assumptions the spec stands on</Heading>
-        <AssumptionRegister props={props} readOnly={readOnly} />
+        {isStage2 ? <AssumptionsTable spec={props.spec} /> : <AssumptionRegister props={props} />}
       </VStack>
       <VStack gap={3}>
         <Heading level={2}>Blind spots you would be accepting</Heading>
-        <BlindSpotRegister props={props} />
+        {isStage2 ? <BlindSpotsTable props={props} /> : <BlindSpotRegister props={props} />}
       </VStack>
     </VStack>
   )

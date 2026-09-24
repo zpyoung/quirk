@@ -940,6 +940,35 @@ def test_find_export_reports_an_unreadable_search_directory(tmp_path: Path, caps
     assert str(downloads) in captured.err
 
 
+def test_find_export_moves_a_downloaded_export_next_to_the_review_page(tmp_path: Path, capsys: Any) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE2, name="stage2")
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    export = load_json(V2_STAGE2_EXPORTS / "signed.json")
+    save_json(downloads / "stage2-decisions.json", export)
+
+    assert render_spec.command_find_export(spec_dir, downloads) == 0
+    moved = spec_dir / "stage2-decisions.json"
+    assert capsys.readouterr().out.strip() == str(moved.resolve())
+    assert load_json(moved) == export
+    assert not (downloads / "stage2-decisions.json").exists()
+
+
+def test_find_export_leaves_a_download_whose_name_is_taken_in_the_spec_folder(tmp_path: Path, capsys: Any) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE2, name="stage2")
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    export = load_json(V2_STAGE2_EXPORTS / "signed.json")
+    newer = dict(export, exportedAt="2099-01-01T00:00:00Z")
+    save_json(downloads / "stage2-decisions.json", newer)
+    # an unrelated file already holds the name, so the download must not overwrite it
+    (spec_dir / "stage2-decisions.json").write_text("not an export", encoding="utf-8")
+
+    assert render_spec.command_find_export(spec_dir, downloads) == 0
+    assert capsys.readouterr().out.strip() == str((downloads / "stage2-decisions.json").resolve())
+    assert (spec_dir / "stage2-decisions.json").read_text(encoding="utf-8") == "not an export"
+
+
 def test_stage2_move_reasons_gate_excludes_withdrawn_requirements() -> None:
     scenario_by_id = {
         "SC-A": {"id": "SC-A"},

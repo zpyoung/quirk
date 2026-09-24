@@ -18,11 +18,25 @@ type Props = {
   detail: ReactNode
 }
 
-/** A card with progress on top, every entry listed on the left, and the selected entry's detail on the right. */
+/** Open entries first, done entries after, each group keeping its given order. */
+function openFirst(entries: RegisterEntry[]): RegisterEntry[] {
+  return [...entries.filter((e) => !e.isDone), ...entries.filter((e) => e.isDone)]
+}
+
+/** The open entry to select once `id` is decided: the next one below it in the list, else the first still open. */
+export function nextOpenEntryId(entries: RegisterEntry[], id: string): string | undefined {
+  const ordered = openFirst(entries)
+  const position = ordered.findIndex((e) => e.id === id)
+  const remaining = ordered.filter((e) => e.id !== id && !e.isDone)
+  return (remaining.find((e) => ordered.indexOf(e) > position) ?? remaining[0])?.id
+}
+
+/** A card with progress on top, every entry listed on the left with done ones sunk to the end, and the selected entry's detail on the right. */
 export function ListDetailRegister({ intro, doneLabel, listLabel, nextLabel, entries, selectedId, onSelect, detail }: Props) {
+  const ordered = openFirst(entries)
   const done = entries.filter((e) => e.isDone).length
   const selected = entries.find((e) => e.id === selectedId)
-  const next = entries.find((e) => !e.isDone && e.id !== selectedId)
+  const next = ordered.find((e) => !e.isDone && e.id !== selectedId)
   return (
     <Card padding={0}>
       <VStack gap={0}>
@@ -36,7 +50,7 @@ export function ListDetailRegister({ intro, doneLabel, listLabel, nextLabel, ent
           start={
             <LayoutPanel width={400} hasDivider padding={0} label={listLabel} isScrollable={false}>
               <List hasDividers density="compact">
-                {entries.map((e) => (
+                {ordered.map((e) => (
                   <ListItem
                     key={e.id}
                     label={e.label}

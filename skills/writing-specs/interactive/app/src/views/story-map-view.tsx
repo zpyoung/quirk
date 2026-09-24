@@ -14,9 +14,9 @@ import type { ViewProps } from './view-props'
 type Row = { scope: 'in' | 'out' }
 type Placed = { requirement: Requirement; placement: Placement }
 
-function RequirementChip({ requirement, placement, onOpen }: { requirement: Requirement; placement: Placement; onOpen: () => void }) {
+function RequirementChip({ requirement, placement, onOpen }: { requirement: Requirement; placement: Placement; onOpen: (id: string) => void }) {
   return (
-    <ClickableCard label={`${requirement.id}: ${requirement.summary}`} onClick={onOpen} padding={1} width="100%">
+    <ClickableCard label={`${requirement.id}: ${requirement.summary}`} onClick={() => onOpen(requirement.id)} padding={1} width="100%">
       <VStack gap={0.5}>
         <Text type="label">{requirement.id}</Text>
         <Text type="supporting">{requirement.summary}</Text>
@@ -26,7 +26,7 @@ function RequirementChip({ requirement, placement, onOpen }: { requirement: Requ
   )
 }
 
-function Cell({ area, scope, placed, onOpen }: { area: string; scope: Row['scope']; placed: Placed[]; onOpen: () => void }) {
+function Cell({ area, scope, placed, onOpen }: { area: string; scope: Row['scope']; placed: Placed[]; onOpen: (id: string) => void }) {
   const items = placed.filter(({ requirement, placement }) => requirement.area === area && (scope === 'out' ? placement === 'out' : placement !== 'out'))
   if (items.length === 0) return <Text type="supporting">Nothing here</Text>
   return (
@@ -39,11 +39,10 @@ function Cell({ area, scope, placed, onOpen }: { area: string; scope: Row['scope
 }
 
 /** A Jeff Patton style story map: journey steps as columns, in scope and out of scope as rows, checking whether the spec covers the whole journey. */
-export function StoryMapView({ spec, state, onNavigate }: ViewProps) {
+export function StoryMapView({ spec, state, onOpenRequirement }: ViewProps) {
   const storyMap = spec.views?.storyMap
   if (!storyMap) return null
   const placed = placedRequirements(spec, state)
-  const openOnBoard = () => onNavigate('board')
   const gapAreas = new Set(
     storyMap.journey.filter((step) => !placed.some(({ requirement, placement }) => requirement.area === step.area && placement !== 'out')).map((step) => step.area),
   )
@@ -60,7 +59,7 @@ export function StoryMapView({ spec, state, onNavigate }: ViewProps) {
       </Card>
     ),
     width: pixel(220),
-    renderCell: (row) => <Cell area={area} scope={row.scope} placed={placed} onOpen={openOnBoard} />,
+    renderCell: (row) => <Cell area={area} scope={row.scope} placed={placed} onOpen={onOpenRequirement} />,
   })
 
   const columns: TableColumn<Row>[] = [
@@ -90,7 +89,7 @@ export function StoryMapView({ spec, state, onNavigate }: ViewProps) {
         <Heading level={2}>Story map</Heading>
         <Text type="supporting" as="p">
           Columns follow the journey a user takes, left to right, with cross-cutting concerns after the divider. The top row is in scope, tagged with its
-          group; the bottom row is deliberately out of scope. Click any card to open it on the Scope board.
+          group; the bottom row is deliberately out of scope. Click any card to see its details.
         </Text>
       </VStack>
       <Banner

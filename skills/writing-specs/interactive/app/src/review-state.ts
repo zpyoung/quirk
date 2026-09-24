@@ -268,12 +268,26 @@ export function requirementStatus(requirement: Requirement, spec: LogicSpec): Re
   return reopenedCount === requirement.derivedFrom.length ? 'withdrawn' : 'flagged'
 }
 
-export function changedItemIds(spec: LogicSpec, hashes: Record<string, string>, seen: Record<string, string>): string[] {
-  const hashChanged = itemIds(spec).filter((id) => seen[id] !== hashes[id])
-  const derivationChanged = spec.requirements
+function derivationChangedIds(spec: LogicSpec): string[] {
+  return spec.requirements
     .filter((requirement) => requirementStatus(requirement, spec) !== 'active')
     .map((requirement) => requirement.id)
-  return [...new Set([...hashChanged, ...derivationChanged])]
+}
+
+export function changedItemIds(spec: LogicSpec, hashes: Record<string, string>, seen: Record<string, string>): string[] {
+  const hashChanged = itemIds(spec).filter((id) => seen[id] !== hashes[id])
+  return [...new Set([...hashChanged, ...derivationChangedIds(spec)])]
+}
+
+/** Items to flag as changed for the reviewer: an item whose hash differs from the one they saw, or one new since their last export. */
+export function changedSinceReviewIds(
+  spec: LogicSpec,
+  hashes: Record<string, string>,
+  seen: Record<string, string>,
+  hasExported: boolean,
+): string[] {
+  const hashChanged = itemIds(spec).filter((id) => (hasExported || Object.hasOwn(seen, id)) && seen[id] !== hashes[id])
+  return [...new Set([...hashChanged, ...derivationChangedIds(spec)])]
 }
 
 export function retainItemIds<T>(values: Record<string, T>, allowed: Set<string>): Record<string, T> {
@@ -605,7 +619,7 @@ export function decisionRecord(state: ReviewState, spec: LogicSpec): DecisionRec
     scenarios: spec.scenarios.map((scenario) => ({
       id: scenario.id,
       approved: Boolean(state.scenarioApproved[scenario.id]),
-      dropped: state.scenarioDrops[scenario.id] ?? null,
+      dropped: state.scenarioDrops[scenario.id]?.trim() ? state.scenarioDrops[scenario.id] : null,
       then: scenarioThen(state, scenario),
       changesSpec: scenarioThen(state, scenario) !== scenario.then,
     })),

@@ -46,7 +46,7 @@ render_spec.py find-export  <spec-dir> [--downloads <dir>]
 render_spec.py check-export <spec-dir> <export.json>
 ```
 
-`find-export` searches the spec folder and `~/Downloads` (or `--downloads`) and prints the newest matching export for the current `logic.stage`; a stage-1 export never matches a stage-2 spec, or the reverse. If the reviewer pasted Copy into chat, save it as `<slug>-decisions-<YYYYMMDDTHHMMSS>.json` in the spec folder and check that path. `check-export` prints `signed` or `unsigned`; proceed only on exit 0.
+`find-export` searches the spec folder and `~/Downloads` (or `--downloads`) and prints the newest matching export for the current `logic.stage`; a stage-1 export never matches a stage-2 spec, or the reverse. An export found in Downloads is moved into the spec folder, next to `review.html`, and the new path is printed; it stays put if that name is already taken there. If the reviewer pasted Copy into chat, save it as `<slug>-decisions-<YYYYMMDDTHHMMSS>.json` in the spec folder and check that path. `check-export` prints `signed` or `unsigned`; proceed only on exit 0.
 
 For a current **unsigned** stage-1 export:
 

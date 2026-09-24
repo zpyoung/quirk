@@ -1,5 +1,5 @@
 import type { LogicSpec, LogicSpecPayload, ReviewState } from '../spec-types'
-import type { Update, ViewId } from '../review-state'
+import type { Update } from '../review-state'
 
 /** What every review tab receives: the rendered payload, the reviewer's state, a way to edit it, and which items changed since the reviewer last saw them. */
 export type ViewProps = {
@@ -8,7 +8,5 @@ export type ViewProps = {
   state: ReviewState
   update: Update
   changedIds: Set<string>
-  onNavigate: (view: ViewId) => void
-  openRequirementId: string | null
   onOpenRequirement: (id: string | null) => void
 }

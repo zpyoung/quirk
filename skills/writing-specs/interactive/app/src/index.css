@@ -19,3 +19,7 @@
 body {
   background: var(--color-background-body, var(--page-ground));
 }
+
+tr[data-changed='true'] > td {
+  background-color: color-mix(in srgb, var(--color-background-orange) 25%, transparent);
+}

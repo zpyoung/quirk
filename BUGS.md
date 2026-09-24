@@ -94,3 +94,17 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: medium
 - **Proposed fix**: Make the preflight prove liveness, not just alias resolution — have --check issue a trivial dispatch and require non-empty output before reporting the alias ready, or have select-model degrade triple_verified to false when the check cannot demonstrate one.
 
+## BUG-10: Sign-off tab's visible JSON is the decision record, not the export — copying it fails check-export
+- **Observed**: 2026-09-24
+- **File**: skills/writing-specs/interactive/app/src/views/sign-off-view.tsx:35
+- **Description**: The Sign-off tab renders decisionRecord(...) in a CodeBlock directly above the Download/Copy buttons, while copy() (lines 50-60) writes createExport(). A reviewer who copies the visible JSON pastes only the record, and check-export fails with 9 'required key is missing' errors (kind, schemaVersion, slug, renderId, exportedAt, signed, seen, state, record). Seen 2026-09-24 reviewing the orca spec 2026-09-24-claude-ultracode-effort-level.
+- **Severity**: medium
+- **Proposed fix**: Show the export in the block, or label it 'Decision record — use Copy or Download to export'; and/or have check-export recognise a bare record and say 'this is the record, not the export — use the Copy button'.
+
+## BUG-11: Stage-2 fold silently discards reviewer notes on requirements
+- **Observed**: 2026-09-24
+- **File**: skills/writing-specs/interactive/render_spec.py:1
+- **Description**: A signed stage-2 export carried state.notes {REQ-09: 'This is verified', REQ-11: 'Verified'}, meaning the reviewer wanted those requirements' certainty raised. fold applied placements/conditions/reviewReason and signoff but dropped notes entirely; nothing in logic.json or logic.md records them, and nothing warned. Worked around with a manual dated amendment. Seen 2026-09-24 on the orca spec 2026-09-24-claude-ultracode-effort-level. Related: the stage-2 record also lists every stage-1 scenario as approved:false / dropped:null (SC-04 included), which misreads as unapproved.
+- **Severity**: medium
+- **Proposed fix**: Have fold carry notes into the requirement (e.g. reviewNote) or print them on stderr so Claude must act on them; and either let the page set certainty directly or document that notes are advisory. Omit stage-1 items from the stage-2 record, or mark them as pinned.
+

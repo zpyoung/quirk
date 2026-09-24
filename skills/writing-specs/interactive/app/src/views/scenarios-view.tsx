@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Button } from '@astryxdesign/core/Button'
-import { CheckboxInput } from '@astryxdesign/core/CheckboxInput'
 import { Dialog, DialogHeader } from '@astryxdesign/core/Dialog'
 import { Heading } from '@astryxdesign/core/Heading'
 import { HStack, VStack } from '@astryxdesign/core/Layout'
+import { SegmentedControl, SegmentedControlItem } from '@astryxdesign/core/SegmentedControl'
 import { Selector } from '@astryxdesign/core/Selector'
 import { Table, pixel, proportional, type TableColumn } from '@astryxdesign/core/Table'
 import { Text } from '@astryxdesign/core/Text'
@@ -12,7 +12,7 @@ import { TextInput } from '@astryxdesign/core/TextInput'
 import { Token } from '@astryxdesign/core/Token'
 import type { Behavior, Scenario, ScenarioOutcome, ScenarioRequest, ReviewState } from '../spec-types'
 import { pendingScenarioRequests, requestId, scenarioThen, type Update } from '../review-state'
-import { ChangedToken, ClaudeWroteToken, PreselectedToken, ProvenanceToken, SpecMarkdown } from './shared'
+import { ChangedRowLabel, changedRowsPlugin, ClaudeWroteToken, PreselectedToken, ProvenanceToken, SpecMarkdown } from './shared'
 import type { ViewProps } from './view-props'
 
 // Selector options render as plain text, so strip markdown backticks the spec might use in a `then` clause.
@@ -66,62 +66,63 @@ function OutcomeCell({ s, props }: { s: Scenario; props: ViewProps }) {
   )
 }
 
-function DropCell({ s, update, dropReason }: { s: Scenario; update: Update; dropReason?: string }) {
-  return (
-    <TextArea
-      label={`Reason for dropping ${s.id}`}
-      isLabelHidden
-      rows={2}
-      placeholder="Drop this scenario — why?"
-      value={dropReason ?? ''}
-      onChange={(reason) =>
-        update((st) => {
-          const scenarioDrops = { ...st.scenarioDrops }
-          const scenarioApproved = { ...st.scenarioApproved }
-          if (reason.trim()) {
-            scenarioDrops[s.id] = reason
-            delete scenarioApproved[s.id]
-          } else {
-            delete scenarioDrops[s.id]
-          }
-          return { ...st, scenarioDrops, scenarioApproved }
-        }, s.id)
+type Decision = 'approve' | 'drop'
+
+function DecisionCell({ s, props }: { s: Scenario; props: ViewProps }) {
+  const { state, update } = props
+  // a drop entry exists as soon as Drop is picked, so a blank reason keeps the choice without resolving the scenario
+  const isDropped = Object.hasOwn(state.scenarioDrops, s.id)
+  const value: Decision | '' = isDropped ? 'drop' : state.scenarioApproved[s.id] ? 'approve' : ''
+  const outcome = state.scenarioOutcomes[s.id]
+  const isOutcomeMissing = outcome?.choice === 'custom' && !outcome.custom.trim()
+  const decide = (decision: Decision) =>
+    update((st) => {
+      const scenarioDrops = { ...st.scenarioDrops }
+      const scenarioApproved = { ...st.scenarioApproved }
+      if (decision === 'drop') {
+        scenarioDrops[s.id] = scenarioDrops[s.id] ?? ''
+        delete scenarioApproved[s.id]
+      } else {
+        delete scenarioDrops[s.id]
+        scenarioApproved[s.id] = true
       }
-    />
+      return { ...st, scenarioDrops, scenarioApproved }
+    }, s.id)
+  return (
+    <VStack gap={1.5}>
+      <SegmentedControl size="sm" layout="fill" label={`Decision for ${s.id}`} value={value} onChange={(next) => decide(next as Decision)}>
+        <SegmentedControlItem value="approve" label="Approve" isDisabled={isOutcomeMissing} />
+        <SegmentedControlItem value="drop" label="Drop" />
+      </SegmentedControl>
+      {isOutcomeMissing && !isDropped ? <Text type="supporting">Write your outcome first.</Text> : null}
+      {isDropped ? (
+        <TextArea
+          label={`Reason for dropping ${s.id}`}
+          isLabelHidden
+          rows={2}
+          placeholder="Why drop this scenario?"
+          value={state.scenarioDrops[s.id]}
+          onChange={(reason) => update((st) => ({ ...st, scenarioDrops: { ...st.scenarioDrops, [s.id]: reason } }), s.id)}
+        />
+      ) : null}
+    </VStack>
   )
 }
 
 function scenarioColumns(props: ViewProps, isStage2: boolean): TableColumn<ScenarioRow>[] {
-  const { state, update, changedIds } = props
+  const { state, changedIds } = props
   const columns: TableColumn<ScenarioRow>[] = [
     {
-      key: 'approved',
-      header: 'Approved',
-      width: pixel(104),
+      key: 'decision',
+      header: 'Decision',
+      width: pixel(isStage2 ? 128 : 200),
       renderCell: (s) => {
-        const editable = !isStage2 || Boolean(s.reopened)
-        if (!editable) {
+        if (isStage2 && !s.reopened) {
           // folded stage-2 scenarios carry their final outcome directly; only a reopened scenario still tracks state
           const approved = !s.dropReason
-          return <Token size="sm" color={approved ? 'green' : 'default'} label={approved ? 'Approved' : 'Not approved'} />
+          return <Token size="sm" color={approved ? 'green' : 'default'} label={approved ? 'Approved' : 'Dropped'} description={s.dropReason} />
         }
-        const dropped = Boolean(state.scenarioDrops[s.id])
-        return (
-          <CheckboxInput
-            label={`Approve ${s.id}`}
-            isLabelHidden
-            value={Boolean(state.scenarioApproved[s.id])}
-            isDisabled={dropped || (state.scenarioOutcomes[s.id]?.choice === 'custom' && !state.scenarioOutcomes[s.id]?.custom.trim())}
-            disabledMessage={dropped ? 'Dropped — clear the drop reason first.' : 'Write your outcome first.'}
-            onChange={(approved) =>
-              update((st) => {
-                const scenarioDrops = { ...st.scenarioDrops }
-                if (approved) delete scenarioDrops[s.id]
-                return { ...st, scenarioApproved: { ...st.scenarioApproved, [s.id]: approved }, scenarioDrops }
-              }, s.id)
-            }
-          />
-        )
+        return <DecisionCell s={s} props={props} />
       },
     },
     {
@@ -140,7 +141,7 @@ function scenarioColumns(props: ViewProps, isStage2: boolean): TableColumn<Scena
           ) : null}
           {s.requestId ? <HStack><Token size="sm" label="Requested" description="You asked for this scenario." /></HStack> : null}
           {s.extraReason ? <HStack><Token size="sm" color="yellow" label="Extra example" description={s.extraReason} /></HStack> : null}
-          <HStack><ChangedToken id={s.id} changedIds={changedIds} short /></HStack>
+          <ChangedRowLabel id={s.id} changedIds={changedIds} />
         </VStack>
       ),
     },
@@ -164,14 +165,6 @@ function scenarioColumns(props: ViewProps, isStage2: boolean): TableColumn<Scena
       ),
     },
   ]
-  if (!isStage2) {
-    columns.push({
-      key: 'drop',
-      header: 'Drop',
-      width: pixel(200),
-      renderCell: (s) => <DropCell s={s} update={update} dropReason={state.scenarioDrops[s.id]} />,
-    })
-  }
   return columns
 }
 
@@ -234,8 +227,9 @@ function BehaviorRequests({ behavior, props }: { behavior: Behavior; props: View
 }
 
 function BehaviorGroup({ behavior, props }: { behavior: Behavior; props: ViewProps }) {
-  const { spec } = props
+  const { spec, changedIds } = props
   const scenarios = spec.scenarios.filter((s) => s.behavior === behavior.id)
+  const plugins = useMemo(() => ({ changed: changedRowsPlugin<ScenarioRow>(changedIds) }), [changedIds])
   const isOverLimit = scenarios.length > 3
   const columns = scenarioColumns(props, spec.stage === 2)
   return (
@@ -248,7 +242,7 @@ function BehaviorGroup({ behavior, props }: { behavior: Behavior; props: ViewPro
         </HStack>
         {behavior.detail ? <SpecMarkdown compact>{behavior.detail}</SpecMarkdown> : null}
       </VStack>
-      <Table data={scenarios} columns={columns} idKey="id" verticalAlign="top" dividers="rows" />
+      <Table data={scenarios} columns={columns} plugins={plugins} idKey="id" verticalAlign="top" dividers="rows" />
       {spec.stage === 1 ? <BehaviorRequests behavior={behavior} props={props} /> : null}
     </VStack>
   )
@@ -263,7 +257,7 @@ export function ScenariosView(props: ViewProps) {
         <Heading level={2}>Behaviors & scenarios</Heading>
         <Text type="supporting" as="p">
           {spec.stage === 1
-            ? "What the spec does in specific situations, grouped under the rule each illustrates. Approve each scenario, pick a different outcome, or drop it with a reason."
+            ? "What the spec does in specific situations, grouped under the rule each illustrates. Approve each scenario (optionally with a different outcome), or drop it with a reason."
             : 'Stage 1 is signed and shown here read-only. A reopened scenario needs re-approval; everything else is for reference.'}
         </Text>
       </VStack>

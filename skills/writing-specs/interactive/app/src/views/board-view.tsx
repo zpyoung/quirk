@@ -23,9 +23,8 @@ import {
   withdrawnRequirements,
 } from '../review-state'
 import type { ViewProps } from './view-props'
-import { ChangedToken, CertaintyToken, GROUP_COLOR } from './shared'
+import { ChangedRowLabel, changedRowsPlugin, ChangedToken, CertaintyToken, GROUP_COLOR, SpecMarkdown } from './shared'
 import { CONDITIONS, setPlacement } from './board-model'
-import { RequirementDialog } from './requirement-dialog'
 import { useScopeOutGuard } from './scope-out-guard'
 
 type TokenColor = ComponentProps<typeof Token>['color']
@@ -90,7 +89,7 @@ function RowTags({ requirement, state, changedIds, warningCount }: { requirement
       {warningCount > 0 ? (
         <Tag color="orange" label={warningCount === 1 ? 'Scope conflict: open for details' : `${warningCount} scope conflicts: open for details`} />
       ) : null}
-      <ChangedToken id={requirement.id} changedIds={changedIds} />
+      <ChangedRowLabel id={requirement.id} changedIds={changedIds} />
     </HStack>
   )
 }
@@ -162,7 +161,7 @@ function dropTarget(row: BoardRow): DropTarget | null {
 }
 
 /** The spec's requirements as a drag-and-drop board, grouped by placement and Claude's impact group. */
-export function BoardView({ spec, state, update, changedIds, openRequirementId, onOpenRequirement }: ViewProps) {
+export function BoardView({ spec, state, update, changedIds, onOpenRequirement }: ViewProps) {
   const [dragging, setDragging] = useState<string | null>(null)
   const [overTarget, setOverTarget] = useState<DropTarget | null>(null)
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
@@ -227,6 +226,12 @@ export function BoardView({ spec, state, update, changedIds, openRequirementId, 
           <Text type="supporting">{requirement.area}</Text>
         </VStack>
       )),
+    },
+    {
+      key: 'detail',
+      header: "Claude's detail",
+      width: proportional(3),
+      renderCell: item((requirement) => <SpecMarkdown compact>{requirement.detail}</SpecMarkdown>),
     },
     {
       key: 'tags',
@@ -317,7 +322,7 @@ export function BoardView({ spec, state, update, changedIds, openRequirementId, 
           </VStack>
         </Banner>
       ) : null}
-      <Table data={rows} columns={columns} plugins={{ drag: dragPlugin }} idKey="id" verticalAlign="middle" dividers="rows" hasHover />
+      <Table data={rows} columns={columns} plugins={{ drag: dragPlugin, changed: changedRowsPlugin<BoardRow>(changedIds) }} idKey="id" verticalAlign="middle" dividers="rows" hasHover />
       {withdrawn.length > 0 ? (
         <VStack gap={2}>
           <Heading level={3}>Withdrawn pending re-derivation</Heading>
@@ -335,14 +340,6 @@ export function BoardView({ spec, state, update, changedIds, openRequirementId, 
           </VStack>
         </VStack>
       ) : null}
-      <RequirementDialog
-        requirement={openRequirementId ? (byId.get(openRequirementId) ?? null) : null}
-        spec={spec}
-        state={state}
-        update={update}
-        changedIds={changedIds}
-        onClose={() => onOpenRequirement(null)}
-      />
     </VStack>
   )
 }

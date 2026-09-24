@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { Banner } from '@astryxdesign/core/Banner'
 import { Button } from '@astryxdesign/core/Button'
 import { CodeBlock } from '@astryxdesign/core/CodeBlock'
+import { Collapsible } from '@astryxdesign/core/Collapsible'
 import { Heading } from '@astryxdesign/core/Heading'
 import { Card, HStack, VStack } from '@astryxdesign/core/Layout'
 import { List, ListItem } from '@astryxdesign/core/List'
@@ -45,7 +46,7 @@ export function SignOffView({ payload, spec, state, update, gates, createExport,
     anchor.click()
     window.setTimeout(() => URL.revokeObjectURL(url), 0)
     onExport(data)
-    setCopyStatus('Decision export downloaded.')
+    setCopyStatus('Decision export downloaded. Claude moves it next to review.html when it picks it up.')
   }
   const copy = async () => {
     const data = createExport()
@@ -114,7 +115,9 @@ export function SignOffView({ payload, spec, state, update, gates, createExport,
       </Card>
       <VStack gap={2}>
         <Heading level={3}>Decision record</Heading>
-        <CodeBlock language="json" code={recordJson} maxHeight={480} width="100%" />
+        <Collapsible trigger="Show the record as JSON" defaultIsOpen={false}>
+          <CodeBlock language="json" code={recordJson} maxHeight={480} width="100%" hasCopyButton={false} />
+        </Collapsible>
         <HStack gap={2} wrap="wrap">
           <Button label="Download" onClick={download} />
           <Button label="Copy" onClick={() => void copy()} />
