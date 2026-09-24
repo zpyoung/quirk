@@ -128,7 +128,9 @@ export function isReviewState(value: unknown): value is ReviewState {
     isStringMap(value.moveReasons) &&
     isStringMap(value.notes) &&
     isObject(value.disputes) && Object.values(value.disputes).every((dispute) =>
-      isObject(dispute) && isDisputeKind(dispute.kind) && (dispute.target === null || typeof dispute.target === 'string') && typeof dispute.reason === 'string') &&
+      isObject(dispute) && isDisputeKind(dispute.kind) &&
+      (dispute.kind === 'derivation' ? dispute.target === null : typeof dispute.target === 'string' && dispute.target.trim() !== '') &&
+      typeof dispute.reason === 'string' && dispute.reason.trim() !== '') &&
     typeof value.verdictNote === 'string' &&
     typeof value.updatedAt === 'string' &&
     (value.verdict === undefined || value.verdict === 'approve' || value.verdict === 'send-back') &&
