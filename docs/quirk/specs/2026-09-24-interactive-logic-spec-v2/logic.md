@@ -4,7 +4,7 @@
 
 ## Status & amendments
 
-**Status:** Draft
+**Status:** Approved
 
 **Amendments:**
 none
@@ -208,30 +208,35 @@ The design is approved → Claude writes a stage-1 `logic.json` (no requirements
   - Affects: REQ-05, REQ-18
   - Meaning: Putting examples first is what makes the review better, not just longer.
   - Check: Compare the number of substantive changes the reviewer makes in stage 1 against v1 reviews of similar size. (cost: Medium — needs a few real v2 runs.)
+  - Reviewer ruling: build-on
 - **ASM-02 — Claude derives requirements from signed scenarios and constraints faithfully enough that disputes are the exception.** (assumed)
   - Basis: Requirements are formalizations of already-agreed examples and rules.
   - If wrong: Stage 2 turns into a second full review, and a per-requirement derivation check becomes necessary.
   - Affects: REQ-21, REQ-25
   - Meaning: Stage 2 stays light because most derivations are right.
   - Check: Count disputes per stage-2 review in the end-to-end run. (cost: Low)
+  - Reviewer ruling: build-on
 - **ASM-03 — Approve, rewrite, or reject is enough review for a constraint.** (assumed)
   - Basis: Constraints are single statements with no Given / When / Then to vary.
   - If wrong: Constraints need alternatives or scope conditions of their own.
   - Affects: REQ-08, REQ-09
   - Meaning: Constraints do not need their own scope board.
   - Check: Review the constraints of one real v2 spec. (cost: Low)
+  - Reviewer ruling: build-on
 - **ASM-04 — No v1 spec is mid-review when v2 ships.** (confirmed)
   - Basis: The only v1 `logic.json` in the repository is the test fixture.
   - If wrong: A spec in review is stranded read-only.
   - Affects: REQ-03, REQ-04
   - Meaning: Freezing v1 strands nothing.
   - Check: Search the repository for `logic.json` files. (cost: Low — done.)
+  - Reviewer ruling: build-on
 - **ASM-05 — Three key examples cover most behaviors.** (assumed)
   - Basis: Adzic's sufficient set: rule, edge case, known problem.
   - If wrong: Most behaviors carry justified extras and the limit is noise.
   - Affects: REQ-07
   - Meaning: The limit flags real sprawl, not normal behaviors.
   - Check: Count scenarios per behavior in the first v2 specs. (cost: Low)
+  - Reviewer ruling: build-on
 
 ### Blind spots
 
@@ -246,6 +251,7 @@ The design is approved → Claude writes a stage-1 `logic.json` (no requirements
 - **BS-03 — Two round trips minimum**
   - Every v2 spec needs at least two sign-offs and a derivation pass between them; sequential gates add latency and fatigue, and a small spec pays the same fixed cost.
   - Sources: REQ-15, REQ-05
+  - Reviewer acceptance: We can evaluate once v2 is live
 - **BS-04 — Page changes can ship without a rebuilt template**
   - No test checks that the committed `review-template.html` matches the page source, and v2 changes most of the page.
   - Sources: REQ-17, REQ-24
