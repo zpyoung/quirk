@@ -37,6 +37,12 @@ export interface MachineLayout {
 
 const elk = new ELK()
 const CORNER = 8
+const MAX_WIDTH = 1360
+
+/** Width of a blind-spot chip sized to its id; the diagram draws chips with the same width. */
+export function blindSpotChipWidth(id: string): number {
+  return Math.max(26, Math.ceil(id.length * 6.2 + 10))
+}
 
 function pointPath(section: { startPoint: { x: number; y: number }; bendPoints?: { x: number; y: number }[]; endPoint: { x: number; y: number } }): string {
   const points = [section.startPoint, ...(section.bendPoints ?? []), section.endPoint]
@@ -69,20 +75,26 @@ function pointPath(section: { startPoint: { x: number; y: number }; bendPoints?:
   return path
 }
 
+/** Lays the machine out left to right, switching to top to bottom when a long chain would not fit the page width. */
 export async function layoutStateMachine(machine: StateMachine): Promise<MachineLayout> {
+  const across = await layoutInDirection(machine, 'RIGHT')
+  return across.width <= MAX_WIDTH ? across : layoutInDirection(machine, 'DOWN')
+}
+
+async function layoutInDirection(machine: StateMachine, direction: 'RIGHT' | 'DOWN'): Promise<MachineLayout> {
   const entries = machine.entries ?? []
   const stateNodeIds = new Map(machine.states.map((state) => [state.id, `state:${state.id}`]))
   const entryNodeIds = new Map(entries.map((entry) => [entry.id, `entry:${entry.id}`]))
   const nodes: MachineLayoutNode[] = [
     ...entries.map((entry) => ({ id: `entry:${entry.id}`, label: entry.label, detail: '', focal: false, entry: true, x: 0, y: 0, width: Math.max(148, entry.label.length * 8 + 30), height: 48 })),
-    ...machine.states.map((state) => ({ id: `state:${state.id}`, label: state.label, detail: state.detail, focal: Boolean(state.focal), entry: false, x: 0, y: 0, width: 242, height: 100 })),
+    ...machine.states.map((state) => ({ id: `state:${state.id}`, label: state.label, detail: state.detail, focal: Boolean(state.focal), entry: false, x: 0, y: 0, width: 220, height: 96 })),
   ]
   const byId = new Map(nodes.map((node) => [node.id, node]))
   const graph: ElkNode = {
     id: 'state-machine',
     layoutOptions: {
       'elk.algorithm': 'layered',
-      'elk.direction': 'RIGHT',
+      'elk.direction': direction,
       'elk.edgeRouting': 'ORTHOGONAL',
       'elk.spacing.nodeNode': '44',
       'elk.layered.spacing.nodeNodeBetweenLayers': '88',
@@ -97,13 +109,14 @@ export async function layoutStateMachine(machine: StateMachine): Promise<Machine
       const source = stateNodeIds.get(transition.from) ?? entryNodeIds.get(transition.from)
       const target = stateNodeIds.get(transition.to)
       if (!source || !target) return []
-      const chipWidth = transition.blindSpot ? 34 : 0
-      const labelWidth = Math.max(104, transition.short.length * 7.3 + chipWidth + 22)
+      const chipWidth = transition.blindSpot ? blindSpotChipWidth(transition.blindSpot) + 8 : 0
+      const reqsWidth = transition.reqs.length > 0 ? transition.reqs.join(' · ').length * 5.6 + 16 : 0
+      const labelWidth = Math.max(104, transition.short.length * 7.3 + chipWidth + 22, reqsWidth)
       return [{
         id: transition.id,
         sources: [source],
         targets: [target],
-        labels: [{ id: `label:${transition.id}`, text: transition.short, width: labelWidth, height: 28 }],
+        labels: [{ id: `label:${transition.id}`, text: transition.short, width: labelWidth, height: 32 }],
       }]
     }),
   }
