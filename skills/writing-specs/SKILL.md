@@ -15,8 +15,9 @@ live one level down.
 ```
 markdown (default): brainstorming → logic.md → user approves → execution skill
     → (complexity gate) tech.md → quirk:writing-plans → execute
-interactive: brainstorming → logic.json → review.html → signed fold → generated logic.md
-    → execution skill → (complexity gate) tech.md → quirk:writing-plans → execute
+interactive: brainstorming → logic.json stage 1 → signed stage-1 fold → derivation → stage 2
+    → signed fold → generated logic.md → execution skill → (complexity gate) tech.md
+    → quirk:writing-plans → execute
 ```
 
 ## Which document, which rubric
@@ -24,7 +25,7 @@ interactive: brainstorming → logic.json → review.html → signed fold → ge
 | Document | Invoked by | When | Rubric |
 |----------|-----------|------|--------|
 | `logic.md` | `quirk:brainstorming` | after the design is approved | [logic-spec.md](logic-spec.md) |
-| `logic.json` + generated `logic.md` | `quirk:brainstorming` | only when the user chooses interactive | [interactive-logic-spec.md](interactive-logic-spec.md) |
+| `logic.json` + generated `logic.md` | `quirk:brainstorming` | only when the user chooses interactive, across its stage-1 and stage-2 reviews | [interactive-logic-spec.md](interactive-logic-spec.md) |
 | `tech.md` | `quirk:executing-plans`, `quirk:subagent-driven-development` | only when the complexity-tier gate fires | [tech-spec.md](tech-spec.md) |
 
 Read the one rubric your stage needs — not both.
