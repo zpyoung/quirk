@@ -77,13 +77,15 @@ export function ProvenanceToken({ item }: { item: { provenance: Provenance; ques
   if (item.provenance === 'claude') {
     return <Token size="sm" color="red" label="Claude added this without asking you" description="Claude wrote this itself; it never came up as a brainstorm question." />
   }
-  const label = item.provenance === 'you-chose' ? 'You chose against the recommendation' : 'You took the recommendation'
-  return <Token size="sm" color="default" label={label} description={item.question ? `Brainstorm question: ${item.question}` : undefined} />
-}
-
-/** Marks a Claude-added scenario or constraint whose pick is shown selected but not yet confirmed by a state entry. */
-export function PreselectedToken() {
-  return <Token size="sm" color="blue" label="Preselected — confirm" description="Claude's pick is shown selected. Decide it to confirm, even if you keep the same pick." />
+  if (item.provenance === 'you-recommended') return null
+  return (
+    <Token
+      size="sm"
+      color="default"
+      label="You chose against the recommendation"
+      description={item.question ? `Brainstorm question: ${item.question}` : undefined}
+    />
+  )
 }
 
 export function CertaintyToken({ certainty }: { certainty: Certainty | null }) {

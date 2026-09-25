@@ -1332,6 +1332,13 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
                 for ident, value in mapping.items():
                     v.string(value, pointer("/state/scenarioDrops", ident))
 
+        # optional: exports from pages built before update feedback existed omit it
+        if "scenarioUpdates" in state:
+            mapping = v.object(state["scenarioUpdates"], "/state/scenarioUpdates")
+            if mapping is not None:
+                for ident, value in mapping.items():
+                    v.string(value, pointer("/state/scenarioUpdates", ident))
+
         requests = _required(v, state, "scenarioRequests", "/state")
         if "scenarioRequests" in state:
             rows = v.array(requests, "/state/scenarioRequests")
@@ -1462,6 +1469,7 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
             inapplicable = (
                 "scenarioOutcomes",
                 "scenarioDrops",
+                "scenarioUpdates",
                 "constraintRulings",
                 "assumptions",
                 "blindSpots",
@@ -1506,6 +1514,8 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
                         dropped = _required(v, item, "dropped", path)
                         if "dropped" in item and dropped is not None:
                             v.string(dropped, pointer(path, "dropped"))
+                        if item.get("update") is not None:
+                            v.string(item["update"], pointer(path, "update"))
                         _string_field(v, item, "then", path)
                         v.boolean(_required(v, item, "changesSpec", path), pointer(path, "changesSpec"))
 
@@ -1636,6 +1646,10 @@ def logic_reference_errors(export: dict, logic: dict) -> List[Tuple[str, str]]:
     item_ids = behavior_ids | scenario_ids | constraint_ids | assumption_ids | blind_ids | requirement_ids
 
     state = export["state"]
+    updates = state.get("scenarioUpdates", {})
+    for ident in updates:
+        if ident not in scenario_ids:
+            errors.append((pointer(pointer("/state", "scenarioUpdates"), ident), "unknown scenario id: " + ident))
     for key, known, label in (
         ("scenarioApproved", scenario_ids, "scenario"),
         ("scenarioDrops", scenario_ids, "scenario"),
@@ -1652,6 +1666,13 @@ def logic_reference_errors(export: dict, logic: dict) -> List[Tuple[str, str]]:
                 (
                     pointer(pointer("/state", "scenarioDrops"), ident),
                     "scenario cannot be both approved and dropped: " + ident,
+                )
+            )
+        if approved and updates.get(ident, "").strip():
+            errors.append(
+                (
+                    pointer(pointer("/state", "scenarioUpdates"), ident),
+                    "scenario cannot be both approved and awaiting an update: " + ident,
                 )
             )
     if state.get("stage") == 2:
@@ -2441,19 +2462,25 @@ def stage1_gate_failures(logic: dict, state: dict) -> List[Tuple[str, str]]:
     failures: List[Tuple[str, str]] = []
 
     unresolved = []
+    awaiting_update = []
     for scenario in logic["scenarios"]:
         ident = scenario["id"]
         if state["scenarioApproved"].get(ident, False):
             continue
         if state["scenarioDrops"].get(ident, "").strip():
             continue
-        unresolved.append(ident)
+        if state.get("scenarioUpdates", {}).get(ident, "").strip():
+            awaiting_update.append(ident)
+        else:
+            unresolved.append(ident)
     scenario_request_ids = {scenario.get("requestId") for scenario in logic["scenarios"] if scenario.get("requestId")}
     pending_requests = [request for request in state["scenarioRequests"] if request["id"] not in scenario_request_ids]
-    if unresolved or pending_requests:
+    if unresolved or awaiting_update or pending_requests:
         detail = []
         if unresolved:
             detail.append("not resolved: " + ", ".join(unresolved))
+        if awaiting_update:
+            detail.append("update requested: " + ", ".join(awaiting_update))
         if pending_requests:
             detail.append("pending scenario requests: " + ", ".join(request["id"] for request in pending_requests))
         failures.append(("scenarios", "; ".join(detail)))

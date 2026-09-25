@@ -230,6 +230,7 @@ export interface ReviewState {
   scenarioOutcomes: Record<ScenarioId, ScenarioOutcome>
   scenarioApproved: Record<ScenarioId, boolean>
   scenarioDrops: Record<ScenarioId, string>
+  scenarioUpdates: Record<ScenarioId, string>
   scenarioRequests: ScenarioRequest[]
   constraintRulings: Record<ConstraintId, ConstraintRulingDecision>
   assumptions: Record<AssumptionId, AssumptionDecision>
@@ -255,6 +256,7 @@ export interface DecisionRecord {
     id: ScenarioId
     approved: boolean
     dropped: string | null
+    update: string | null
     then: string
     changesSpec: boolean
   }[]

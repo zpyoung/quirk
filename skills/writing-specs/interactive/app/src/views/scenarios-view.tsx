@@ -4,7 +4,7 @@ import { Dialog, DialogHeader } from '@astryxdesign/core/Dialog'
 import { Heading } from '@astryxdesign/core/Heading'
 import { HStack, VStack } from '@astryxdesign/core/Layout'
 import { SegmentedControl, SegmentedControlItem } from '@astryxdesign/core/SegmentedControl'
-import { Selector } from '@astryxdesign/core/Selector'
+import { Selector, SelectorOption } from '@astryxdesign/core/Selector'
 import { Table, pixel, proportional, type TableColumn } from '@astryxdesign/core/Table'
 import { Text } from '@astryxdesign/core/Text'
 import { TextArea } from '@astryxdesign/core/TextArea'
@@ -12,7 +12,7 @@ import { TextInput } from '@astryxdesign/core/TextInput'
 import { Token } from '@astryxdesign/core/Token'
 import type { Behavior, Scenario, ScenarioOutcome, ScenarioRequest, ReviewState } from '../spec-types'
 import { pendingScenarioRequests, requestId, scenarioThen, type Update } from '../review-state'
-import { ChangedRowLabel, changedRowsPlugin, ClaudeWroteToken, PreselectedToken, ProvenanceToken, SpecMarkdown } from './shared'
+import { ChangedRowLabel, changedRowsPlugin, ProvenanceToken, SpecMarkdown } from './shared'
 import type { ViewProps } from './view-props'
 
 // Selector options render as plain text, so strip markdown backticks the spec might use in a `then` clause.
@@ -22,11 +22,16 @@ const plain = (text: string) => text.replace(/`/g, '')
 type ScenarioRow = { [K in keyof Scenario]: Scenario[K] }
 
 function hasScenarioEntry(state: ReviewState, id: string): boolean {
-  return Object.hasOwn(state.scenarioApproved, id) || Object.hasOwn(state.scenarioDrops, id)
+  return Object.hasOwn(state.scenarioApproved, id) || Object.hasOwn(state.scenarioDrops, id) || Object.hasOwn(state.scenarioUpdates, id)
 }
 
 function Clause({ keyword, text }: { keyword: string; text: string }) {
   return <SpecMarkdown compact>{`**${keyword}** ${text}`}</SpecMarkdown>
+}
+
+function ThenLabel({ label }: { label: string }) {
+  if (!label.startsWith('Then ')) return <>{label}</>
+  return <><strong>Then</strong>{label.slice(4)}</>
 }
 
 function OutcomeCell({ s, props }: { s: Scenario; props: ViewProps }) {
@@ -51,7 +56,10 @@ function OutcomeCell({ s, props }: { s: Scenario; props: ViewProps }) {
         width="100%"
         value={outcome.choice}
         onChange={(value) => set({ choice: value as ScenarioOutcome['choice'] })}
-        renderValue={(option) => <Text>{option.label}</Text>}
+        renderValue={(option) => <Text><ThenLabel label={option.label ?? option.value} /></Text>}
+        renderOption={(option) => (
+          <SelectorOption label={<ThenLabel label={option.label ?? option.value} />} description={option.description} />
+        )}
         options={[
           { value: 'spec', label: `Then ${plain(s.then)}`, description: "The spec's outcome" },
           ...s.alternatives.map((alt, i) => ({ value: `alt-${i}`, label: `Then ${plain(alt)}`, description: 'Suggested by Claude' })),
@@ -66,35 +74,48 @@ function OutcomeCell({ s, props }: { s: Scenario; props: ViewProps }) {
   )
 }
 
-type Decision = 'approve' | 'drop'
+type Decision = 'approve' | 'update' | 'drop'
 
 function DecisionCell({ s, props }: { s: Scenario; props: ViewProps }) {
   const { state, update } = props
-  // a drop entry exists as soon as Drop is picked, so a blank reason keeps the choice without resolving the scenario
+  // drop and update entries exist as soon as they are picked, so blank text keeps the choice without resolving the scenario
   const isDropped = Object.hasOwn(state.scenarioDrops, s.id)
-  const value: Decision | '' = isDropped ? 'drop' : state.scenarioApproved[s.id] ? 'approve' : ''
+  const isUpdating = Object.hasOwn(state.scenarioUpdates, s.id)
+  const value: Decision | '' = isDropped ? 'drop' : isUpdating ? 'update' : state.scenarioApproved[s.id] ? 'approve' : ''
   const outcome = state.scenarioOutcomes[s.id]
   const isOutcomeMissing = outcome?.choice === 'custom' && !outcome.custom.trim()
   const decide = (decision: Decision) =>
     update((st) => {
       const scenarioDrops = { ...st.scenarioDrops }
+      const scenarioUpdates = { ...st.scenarioUpdates }
       const scenarioApproved = { ...st.scenarioApproved }
-      if (decision === 'drop') {
-        scenarioDrops[s.id] = scenarioDrops[s.id] ?? ''
-        delete scenarioApproved[s.id]
-      } else {
-        delete scenarioDrops[s.id]
-        scenarioApproved[s.id] = true
-      }
-      return { ...st, scenarioDrops, scenarioApproved }
+      delete scenarioDrops[s.id]
+      delete scenarioUpdates[s.id]
+      delete scenarioApproved[s.id]
+      if (decision === 'drop') scenarioDrops[s.id] = st.scenarioDrops[s.id] ?? ''
+      else if (decision === 'update') scenarioUpdates[s.id] = st.scenarioUpdates[s.id] ?? ''
+      else scenarioApproved[s.id] = true
+      return { ...st, scenarioDrops, scenarioUpdates, scenarioApproved }
     }, s.id)
   return (
     <VStack gap={1.5}>
       <SegmentedControl size="sm" layout="fill" label={`Decision for ${s.id}`} value={value} onChange={(next) => decide(next as Decision)}>
         <SegmentedControlItem value="approve" label="Approve" isDisabled={isOutcomeMissing} />
+        <SegmentedControlItem value="update" label="Update" />
         <SegmentedControlItem value="drop" label="Drop" />
       </SegmentedControl>
-      {isOutcomeMissing && !isDropped ? <Text type="supporting">Write your outcome first.</Text> : null}
+      {isOutcomeMissing && value === '' ? <Text type="supporting">Write your outcome first.</Text> : null}
+      {isUpdating ? (
+        <TextArea
+          label={`What should change in ${s.id}`}
+          isLabelHidden
+          rows={3}
+          placeholder="What should change in this scenario?"
+          value={state.scenarioUpdates[s.id]}
+          onChange={(feedback) => update((st) => ({ ...st, scenarioUpdates: { ...st.scenarioUpdates, [s.id]: feedback } }), s.id)}
+        />
+      ) : null}
+      {isUpdating && state.scenarioUpdates[s.id].trim() ? <HStack><Token size="sm" color="yellow" label="Waiting for Claude" description="Claude revises this scenario from your note; you decide it again after." /></HStack> : null}
       {isDropped ? (
         <TextArea
           label={`Reason for dropping ${s.id}`}
@@ -115,7 +136,7 @@ function scenarioColumns(props: ViewProps, isStage2: boolean): TableColumn<Scena
     {
       key: 'decision',
       header: 'Decision',
-      width: pixel(isStage2 ? 128 : 200),
+      width: pixel(isStage2 ? 128 : 240),
       renderCell: (s) => {
         if (isStage2 && !s.reopened) {
           // folded stage-2 scenarios carry their final outcome directly; only a reopened scenario still tracks state
@@ -134,9 +155,7 @@ function scenarioColumns(props: ViewProps, isStage2: boolean): TableColumn<Scena
           <Text type="label">{s.id}</Text>
           {s.reopened ? (
             <HStack><Token size="sm" color="orange" label="Reopened" description={s.reopened.reason} /></HStack>
-          ) : s.provenance === 'claude' && !hasScenarioEntry(state, s.id) ? (
-            <HStack gap={1} wrap="wrap"><ProvenanceToken item={s} /><PreselectedToken /></HStack>
-          ) : !isStage2 ? (
+          ) : (s.provenance === 'claude' && !hasScenarioEntry(state, s.id)) || (!isStage2 && s.provenance !== 'you-recommended') ? (
             <HStack><ProvenanceToken item={s} /></HStack>
           ) : null}
           {s.requestId ? <HStack><Token size="sm" label="Requested" description="You asked for this scenario." /></HStack> : null}
@@ -155,14 +174,9 @@ function scenarioColumns(props: ViewProps, isStage2: boolean): TableColumn<Scena
     },
     {
       key: 'why',
-      header: 'Why',
+      header: 'Why (Claude wrote this)',
       width: proportional(2),
-      renderCell: (s) => (
-        <VStack gap={1}>
-          <HStack><ClaudeWroteToken /></HStack>
-          <SpecMarkdown compact>{s.explanation}</SpecMarkdown>
-        </VStack>
-      ),
+      renderCell: (s) => <SpecMarkdown compact>{s.explanation}</SpecMarkdown>,
     },
   ]
   return columns
@@ -230,7 +244,6 @@ function BehaviorGroup({ behavior, props }: { behavior: Behavior; props: ViewPro
   const { spec, changedIds } = props
   const scenarios = spec.scenarios.filter((s) => s.behavior === behavior.id)
   const plugins = useMemo(() => ({ changed: changedRowsPlugin<ScenarioRow>(changedIds) }), [changedIds])
-  const isOverLimit = scenarios.length > 3
   const columns = scenarioColumns(props, spec.stage === 2)
   return (
     <VStack gap={2}>
@@ -238,7 +251,6 @@ function BehaviorGroup({ behavior, props }: { behavior: Behavior; props: ViewPro
         <HStack gap={2} align="center" wrap="wrap">
           <Heading level={3}>{behavior.rule}</Heading>
           <Text type="supporting" hasTabularNumbers>{scenarios.length}</Text>
-          {isOverLimit ? <Token size="sm" color="orange" label="More than 3 key examples" /> : null}
         </HStack>
         {behavior.detail ? <SpecMarkdown compact>{behavior.detail}</SpecMarkdown> : null}
       </VStack>
@@ -257,7 +269,7 @@ export function ScenariosView(props: ViewProps) {
         <Heading level={2}>Behaviors & scenarios</Heading>
         <Text type="supporting" as="p">
           {spec.stage === 1
-            ? "What the spec does in specific situations, grouped under the rule each illustrates. Approve each scenario (optionally with a different outcome), or drop it with a reason."
+            ? "What the spec does in specific situations, grouped under the rule each illustrates. Approve each scenario (optionally with a different outcome), ask Claude to update it, or drop it with a reason."
             : 'Stage 1 is signed and shown here read-only. A reopened scenario needs re-approval; everything else is for reference.'}
         </Text>
       </VStack>

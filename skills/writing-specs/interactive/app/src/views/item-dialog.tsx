@@ -11,6 +11,7 @@ type Details = { kind: string; title: string; body: ReactNode }
 function scenarioDecision(state: ReviewState, id: string, dropReason?: string): string {
   if (dropReason) return `Dropped: ${dropReason}`
   if (state.scenarioDrops[id]?.trim()) return `Dropped: ${state.scenarioDrops[id]}`
+  if (state.scenarioUpdates[id]?.trim()) return `Update requested: ${state.scenarioUpdates[id]}`
   return state.scenarioApproved[id] ? 'Approved' : 'Not decided yet'
 }
 

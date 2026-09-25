@@ -51,7 +51,7 @@ render_spec.py check-export <spec-dir> <export.json>
 For a current **unsigned** stage-1 export:
 
 1. Answer research requests in `research[]` and turn scenario requests into new `scenarios[]`, retaining each request's ID.
-2. Apply the reviewer's requested content changes — new or edited scenario and constraint text — to `logic.json`.
+2. Apply the reviewer's requested content changes — new or edited scenario and constraint text — to `logic.json`. Rewrite each scenario named in `state.scenarioUpdates` (also `record.scenarios[].update`) as its feedback asks; the rewrite changes the scenario's hash, which clears the request and returns the scenario for a fresh decision. A scenario you leave unchanged keeps its update request, and stage 1 cannot sign while one is open.
 3. Do **not** write drops, constraint rulings, or rewritten constraint text into `logic.json`; they live only in the export's state and travel forward until the fold. Re-render with `--prior` so unchanged decisions carry into the next review:
 
    ```text
@@ -62,7 +62,7 @@ Never fold a stale or unsigned export.
 
 ## Stage-1 sign-off and fold
 
-Stage 1 signs when every Claude-added scenario and constraint is decided, every scenario is approved or dropped with a reason and no scenario request is pending, every constraint is approved, rewritten with text, or rejected with a reason, every assumption is ruled, and every active blind spot is accepted with the reviewer's own sentence. Run `check-export` first and fold only a current signed export:
+Stage 1 signs when every Claude-added scenario and constraint is decided, every scenario is approved or dropped with a reason and no scenario request or update is pending, every constraint is approved, rewritten with text, or rejected with a reason, every assumption is ruled, and every active blind spot is accepted with the reviewer's own sentence. Run `check-export` first and fold only a current signed export:
 
 ```text
 render_spec.py fold <spec-dir> <export.json>

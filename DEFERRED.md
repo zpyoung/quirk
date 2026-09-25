@@ -96,3 +96,25 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Estimated effort**: S
 - **Priority**: P3
 - **Proposed owner**: unassigned
+
+## DEFER-11: Post-execution per-requirement disposition for interactive logic specs
+- **Deferred**: 2026-09-24
+- **Session context**: Review of archify, pr-lens, goal-workflow concepts against interactive-logic-spec v2
+- **Why deferred**: Signed REQ-ids and derivedFrom chains end at the final fold; nothing after execution records how each in/conditional requirement was satisfied (test, commit) or deviated. Needs its own design (where it lives in logic.json, which skill writes it). Inspired by smallnest/goal-workflow skills/ship-it/SKILL.md closing comment.
+- **Estimated effort**: M
+- **Priority**: P2
+
+## DEFER-12: Falsifiability self-review rule for derived requirements
+- **Deferred**: 2026-09-24
+- **Session context**: Review of archify, pr-lens, goal-workflow concepts against interactive-logic-spec v2
+- **Why deferred**: Derived requirements are not checked for vagueness before stage-2 review; add a rubric rule to interactive-logic-spec.md Derivation that each requirement names the observation that would show it false and is checkable from its derivedFrom scenario's Then. Out of scope for the current branch. Source: smallnest/goal-workflow skills/prd/SKILL.md:102-106, skills/to-issues/SKILL.md:81.
+- **Estimated effort**: S
+- **Priority**: P3
+
+## DEFER-13: Agent-authored guided walkthrough in the interactive review page
+- **Deferred**: 2026-09-24
+- **Session context**: Review of archify, pr-lens, goal-workflow concepts against interactive-logic-spec v2
+- **Why deferred**: Page has ~9 views and no reading order; an optional walkthrough[] (ordered steps naming a view plus focused item ids, pruned when ids vanish) touches schema, validator, and page, so it needs its own spec round. Source: coldteadotai/pr-lens packages/schema/src/walkthrough.ts.
+- **Estimated effort**: L
+- **Priority**: P3
+

@@ -65,6 +65,7 @@ export function emptyState(stage: 1 | 2 = 1): ReviewState {
     scenarioOutcomes: {},
     scenarioApproved: {},
     scenarioDrops: {},
+    scenarioUpdates: {},
     scenarioRequests: [],
     constraintRulings: {},
     assumptions: {},
@@ -107,9 +108,14 @@ export function isReviewState(value: unknown): value is ReviewState {
       typeof outcome.custom === 'string') &&
     isObject(value.scenarioApproved) && Object.values(value.scenarioApproved).every((approved) => typeof approved === 'boolean') &&
     isStringMap(value.scenarioDrops) &&
-    // a scenario cannot be both approved and dropped at once
+    // reviews saved before update feedback existed have no scenarioUpdates; normalizeState fills it in
+    (value.scenarioUpdates === undefined || isStringMap(value.scenarioUpdates)) &&
+    // a scenario cannot be both approved and dropped, or approved while asking for an update
     Object.entries(value.scenarioApproved as Record<string, boolean>).every(
-      ([id, approved]) => !approved || !(value.scenarioDrops as Record<string, string>)[id]?.trim(),
+      ([id, approved]) => !approved || (
+        !(value.scenarioDrops as Record<string, string>)[id]?.trim() &&
+        !(value.scenarioUpdates as Record<string, string> | undefined)?.[id]?.trim()
+      ),
     ) &&
     Array.isArray(value.scenarioRequests) && value.scenarioRequests.every((request) =>
       isObject(request) && typeof request.id === 'string' && typeof request.behavior === 'string' &&
@@ -140,9 +146,15 @@ export function isReviewState(value: unknown): value is ReviewState {
       ? isEmptyMap(value.placements) && isEmptyMap(value.conditions) && isEmptyMap(value.moveReasons) &&
         isEmptyMap(value.notes) && isEmptyMap(value.disputes)
       : isEmptyMap(value.scenarioOutcomes) && isEmptyMap(value.scenarioDrops) && isEmptyMap(value.constraintRulings) &&
+        (value.scenarioUpdates === undefined || isEmptyMap(value.scenarioUpdates)) &&
         isEmptyMap(value.assumptions) && isEmptyMap(value.blindSpots) &&
         isEmptyMap(value.scenarioRequests) && isEmptyMap(value.researchRequests))
   )
+}
+
+/** Fills fields a review saved by an older page lacks, so every loaded state has the current shape. */
+export function normalizeState(state: ReviewState): ReviewState {
+  return { ...state, scenarioUpdates: state.scenarioUpdates ?? {} }
 }
 
 export function isDecisionExport(value: unknown, slug?: string): value is Export {
@@ -239,6 +251,7 @@ export function cloneState(state: ReviewState): ReviewState {
     scenarioOutcomes: Object.fromEntries(Object.entries(state.scenarioOutcomes).map(([id, outcome]) => [id, { ...outcome }])),
     scenarioApproved: { ...state.scenarioApproved },
     scenarioDrops: { ...state.scenarioDrops },
+    scenarioUpdates: { ...state.scenarioUpdates },
     scenarioRequests: state.scenarioRequests.map((request) => ({ ...request })),
     constraintRulings: Object.fromEntries(Object.entries(state.constraintRulings).map(([id, ruling]) => [id, { ...ruling }])),
     assumptions: Object.fromEntries(Object.entries(state.assumptions).map(([id, decision]) => [id, { ...decision }])),
@@ -324,7 +337,7 @@ export function carryOver(
       Object.hasOwn(next.moveReasons, id) || Object.hasOwn(next.notes, id) ||
       Object.hasOwn(next.assumptions, id) || Object.hasOwn(next.blindSpots, id) ||
       Object.hasOwn(next.scenarioOutcomes, id) || Object.hasOwn(next.scenarioApproved, id) ||
-      Object.hasOwn(next.scenarioDrops, id) || Object.hasOwn(next.constraintRulings, id) ||
+      Object.hasOwn(next.scenarioDrops, id) || Object.hasOwn(next.scenarioUpdates, id) || Object.hasOwn(next.constraintRulings, id) ||
       Object.hasOwn(next.disputes, id)
     delete next.placements[id]
     delete next.conditions[id]
@@ -335,6 +348,7 @@ export function carryOver(
     delete next.scenarioOutcomes[id]
     delete next.scenarioApproved[id]
     delete next.scenarioDrops[id]
+    delete next.scenarioUpdates[id]
     delete next.constraintRulings[id]
     delete next.disputes[id]
   }
@@ -348,6 +362,7 @@ export function carryOver(
     Object.keys(s.scenarioOutcomes).length,
     Object.keys(s.scenarioApproved).length,
     Object.keys(s.scenarioDrops).length,
+    Object.keys(s.scenarioUpdates).length,
     Object.keys(s.constraintRulings).length,
     Object.keys(s.disputes).length,
     s.researchRequests.length,
@@ -365,6 +380,7 @@ export function carryOver(
   // stage 2 only tracks re-approval of scenarios still reopened; reapprove clears `reopened` and retires the entry
   if (spec.stage === 2) next.scenarioApproved = retainItemIds(next.scenarioApproved, reopenedScenarioIds)
   next.scenarioDrops = retainItemIds(next.scenarioDrops, scenarioIds)
+  next.scenarioUpdates = retainItemIds(next.scenarioUpdates, scenarioIds)
   next.constraintRulings = retainItemIds(next.constraintRulings, constraintIds)
   next.disputes = retainItemIds(next.disputes, requirementIds)
   // a request whose behavior was removed can no longer surface in any behavior group, so drop it rather than count it forever
@@ -390,7 +406,7 @@ export function readLocalSnapshot(key: string): Omit<Snapshot, 'storageOk'> | nu
     const parsed: unknown = JSON.parse(raw)
     if (!isObject(parsed) || !isReviewState(parsed.state)) return null
     return {
-      state: parsed.state,
+      state: normalizeState(parsed.state),
       seen: isStringMap(parsed.seen) ? parsed.seen : {},
       lastExportUpdatedAt: typeof parsed.lastExportUpdatedAt === 'string' ? parsed.lastExportUpdatedAt : null,
       renderId: typeof parsed.renderId === 'string' ? parsed.renderId : null,
@@ -414,7 +430,7 @@ export function bootstrap(payload: LogicSpecPayload): Snapshot {
   const priorExport = payload.priorDecisions && isDecisionExport(payload.priorDecisions, payload.slug) ? payload.priorDecisions : null
   const prior = priorExport && priorExport.state.stage === payload.spec.stage
     ? {
-        state: priorExport.state,
+        state: normalizeState(priorExport.state),
         seen: priorExport.seen,
         lastExportUpdatedAt: priorExport.state.updatedAt,
         renderId: priorExport.renderId,
@@ -562,7 +578,7 @@ export function gateList(state: ReviewState, spec: LogicSpec): ReviewGate[] {
     return [
       {
         id: 'scenarios',
-        label: 'Approve or drop every scenario; resolve pending requests',
+        label: 'Approve or drop every scenario; resolve pending requests and updates',
         done: spec.scenarios.filter(scenarioDecided).length,
         total: spec.scenarios.length + pending.length,
       },
@@ -620,6 +636,7 @@ export function decisionRecord(state: ReviewState, spec: LogicSpec): DecisionRec
       id: scenario.id,
       approved: Boolean(state.scenarioApproved[scenario.id]),
       dropped: state.scenarioDrops[scenario.id]?.trim() ? state.scenarioDrops[scenario.id] : null,
+      update: state.scenarioUpdates[scenario.id]?.trim() ? state.scenarioUpdates[scenario.id] : null,
       then: scenarioThen(state, scenario),
       changesSpec: scenarioThen(state, scenario) !== scenario.then,
     })),

@@ -23,6 +23,7 @@ import {
   emptyState,
   gateList,
   isDecisionExport,
+  normalizeState,
   nextTimestamp,
   readPayload,
   useViewerMode,
@@ -210,7 +211,7 @@ function App() {
         setImportStatus('Import failed: that export is from the other review stage.')
         return
       }
-      const carried = carryOver(parsed.state, parsed.seen, payload.spec, payload.itemHashes, parsed.renderId, payload.renderId)
+      const carried = carryOver(normalizeState(parsed.state), parsed.seen, payload.spec, payload.itemHashes, parsed.renderId, payload.renderId)
       stateRef.current = carried.state
       seenRef.current = carried.seen
       lastExportRef.current = parsed.state.updatedAt

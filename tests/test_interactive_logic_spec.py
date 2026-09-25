@@ -1314,3 +1314,46 @@ def test_v2_validate_exits_1_without_a_traceback_on_a_deeply_nested_unknown_fiel
     assert result.returncode == 1, result.stderr
     assert "Traceback" not in result.stderr
     assert "input is too deeply nested" in result.stderr
+
+
+def test_logic_reference_errors_rejects_scenario_both_approved_and_awaiting_update() -> None:
+    logic = load_json(V2_STAGE1 / "logic.json")
+    export = load_json(V2_STAGE1_EXPORTS / "signed.json")
+    export["state"]["scenarioUpdates"] = {"SC-01": "tighten the timeout"}
+
+    errors = dict(render_spec.logic_reference_errors(export, logic))
+    assert "/state/scenarioUpdates/SC-01" in errors
+
+
+def test_logic_reference_errors_rejects_an_update_for_an_unknown_scenario() -> None:
+    logic = load_json(V2_STAGE1 / "logic.json")
+    export = load_json(V2_STAGE1_EXPORTS / "signed.json")
+    export["state"]["scenarioUpdates"] = {"SC-NOT-THERE": "x"}
+
+    errors = dict(render_spec.logic_reference_errors(export, logic))
+    assert errors.get("/state/scenarioUpdates/SC-NOT-THERE") == "unknown scenario id: SC-NOT-THERE"
+
+
+def test_validate_export_shape_rejects_stage2_state_with_scenario_updates() -> None:
+    export = load_json(V2_STAGE2_EXPORTS / "signed.json")
+    export["state"]["scenarioUpdates"] = {"SC-01": "change it"}
+
+    errors = dict(render_spec.validate_export_shape(export))
+    assert "/state/scenarioUpdates" in errors
+
+
+def test_v2_stage1_fold_gate_names_a_scenario_awaiting_an_update(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE1, name="stage1")
+    export = load_json(V2_STAGE1_EXPORTS / "signed.json")
+    # the signed fixture predates update feedback, so it also proves the field stays optional
+    assert "scenarioUpdates" not in export["state"]
+    del export["state"]["scenarioApproved"]["SC-01"]
+    export["state"]["scenarioUpdates"] = {"SC-01": "tighten the timeout"}
+    export_path = tmp_path / "awaiting-update.json"
+    save_json(export_path, export)
+
+    result = run_cli("fold", str(spec_dir), str(export_path))
+    assert result.returncode == 4, result.stderr
+    assert "gate scenarios" in result.stderr
+    assert "update requested: SC-01" in result.stderr
+    assert load_json(spec_dir / "logic.json")["stage"] == 1
