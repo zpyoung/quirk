@@ -1,0 +1,38 @@
+@import '@astryxdesign/core/reset.css';
+@import '@astryxdesign/core/astryx.css';
+@import '@astryxdesign/theme-neutral/theme.css';
+
+:root {
+  --page-ground: #f7f7f5;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --page-ground: #161616;
+    color-scheme: dark;
+  }
+}
+:root[data-theme='dark'] {
+  --page-ground: #161616;
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-background-body, var(--page-ground));
+}
+
+tr[data-changed='true'] > td {
+  background-color: color-mix(in srgb, var(--color-background-orange) 25%, transparent);
+}
+
+[role='radiogroup'][aria-label^='Decision for'] > [data-selected='selected'][data-value='approve'] {
+  background-color: var(--color-background-green);
+  color: var(--color-text-green);
+}
+[role='radiogroup'][aria-label^='Decision for'] > [data-selected='selected'][data-value='update'] {
+  background-color: var(--color-background-blue);
+  color: var(--color-text-blue);
+}
+[role='radiogroup'][aria-label^='Decision for'] > [data-selected='selected'][data-value='drop'] {
+  background-color: var(--color-background-red);
+  color: var(--color-text-red);
+}

@@ -5,6 +5,17 @@ calendar-based (**CalVer**, `YYYY.M.D` unpadded); the `releasing-quirk` skill
 stamps and prepends each entry (newest on top). Since the version no longer encodes
 compatibility, breaking changes are called out in a `### ⚠️ BREAKING` subsection.
 
+## Unreleased
+
+### Changes
+- **Interactive logic specs:** brainstorming can opt into `logic.json` as the source
+  and a local, single-file review page with scope, risk, scenario, and sign-off
+  gates. A Python 3.9 stdlib renderer validates, exports, folds signed decisions,
+  and generates the downstream `logic.md`; Markdown remains the default.
+- Added a data-driven Astryx review page with optional coverage, certainty,
+  story-map, and automatically laid-out state-machine views. The prebuilt page
+  is shipped with quirk; authoring a spec requires no Node build.
+
 ## 2026.9.17
 
 ### ⚠️ BREAKING
