@@ -72,7 +72,16 @@ render_spec.py fold <spec-dir> <export.json>
 
 ## Derivation
 
-After the stage-1 fold, first answer every blind spot that carries a `researchRequest` (a research request still open at sign-off) with a `research[]` finding whose `requestId` is that request's `id`. Then derive `requirements[]` yourself — no page round is needed for this step. Each requirement's `derivedFrom` names one or more approved scenarios (no `dropReason`) or approved/rewritten constraints, never a dropped scenario or a rejected constraint. An approved or rewritten **non-goal** constraint derives one `scope: "out"` requirement, which satisfies the under-derived gate for it. Pre-fill each requirement's `group` and `placement` (in / conditional / out) with your best judgment; the reviewer only needs to move the ones you got wrong, with a reason. Requirements carry no `provenance`, `question`, or `rationale` — `derivedFrom` is their only origin. Re-render so the page shows the stage-2 tabs with stage 1 read-only.
+After the stage-1 fold, first answer every blind spot that carries a `researchRequest` (a research request still open at sign-off) with a `research[]` finding whose `requestId` is that request's `id`. Then derive `requirements[]` yourself, plus any [optional views](#optional-views) the requirements support — no page round is needed for this step. Each requirement's `derivedFrom` names one or more approved scenarios (no `dropReason`) or approved/rewritten constraints, never a dropped scenario or a rejected constraint. An approved or rewritten **non-goal** constraint derives one `scope: "out"` requirement, which satisfies the under-derived gate for it. Pre-fill each requirement's `group` and `placement` (in / conditional / out) with your best judgment; the reviewer only needs to move the ones you got wrong, with a reason. Requirements carry no `provenance`, `question`, or `rationale` — `derivedFrom` is their only origin. Re-render so the page shows the stage-2 tabs with stage 1 read-only.
+
+## Optional views
+
+While deriving, also write every optional view the spec's content supports, under `views` in `logic.json`. Validation rejects `views` in stage 1 because views point at requirement IDs, so derivation is the first point where you can add them; add or revise them in any later stage-2 round too. Each view appears on the page only when its data exists, so a view you skip simply never shows.
+
+- **`stateMachine`**: write one when requirements describe something moving through states: a status, lifecycle, or workflow such as a row's update status or a job's progress. States are the distinct conditions a reviewer can name, `entries` are where things start, and every transition names its event and the `reqs` that govern it (plus `blindSpot` when one applies). Drawing it is a completeness check: a state with no way out, or an event with no transition, is a question for the reviewer.
+- **`storyMap`**: write one when requirements follow a user journey through ordered steps. `journey` lists the requirement `area`s in journey order, each with a label; `crossCutting` lists areas that apply at every step.
+
+Coverage and Impact × certainty need no data of their own: they appear automatically once requirements exist and, for the heatmap, carry a certainty.
 
 ## Stage-2 feedback rounds
 
