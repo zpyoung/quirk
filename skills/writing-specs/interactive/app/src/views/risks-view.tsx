@@ -11,8 +11,8 @@ import { RadioList, RadioListItem } from '@astryxdesign/core/RadioList'
 import { Text } from '@astryxdesign/core/Text'
 import { TextArea } from '@astryxdesign/core/TextArea'
 import { Token } from '@astryxdesign/core/Token'
-import type { Assumption, AssumptionRuling, BlindSpot, LogicSpec, ResearchRequest } from '../spec-types'
-import { RULINGS, activeBlindSpots, pendingResearchRequests, requestId, type Update } from '../review-state'
+import type { Assumption, AssumptionRuling, BlindSpot, LogicSpec, ResearchRequest, ReviewState } from '../spec-types'
+import { RULINGS, activeBlindSpots, pendingResearchRequests, requestId, researchedBlindSpotIds, type Update } from '../review-state'
 import { CERTAINTY_LABEL, CertaintyToken, ChangedToken, ClaudeField, ClaudeWroteToken, Field, ItemReference, itemLabel, SpecMarkdown } from './shared'
 import { ItemRef, useOpenItem } from './item-links'
 import { ListDetailRegister, nextOpenEntryId } from './list-detail-register'
@@ -31,6 +31,30 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
       {children}
     </VStack>
   )
+}
+
+type BlindSpotStatus = 'resolved' | 'accepted' | 'research-requested' | 'researched' | 'reason-written' | 'open'
+
+/** Where a blind spot stands; in stage 2 it reads the outcome folded into the spec rather than review state. */
+function blindSpotStatus(spot: BlindSpot, spec: LogicSpec, state: ReviewState): BlindSpotStatus {
+  if (!activeBlindSpots(state, spec).some((s) => s.id === spot.id)) return 'resolved'
+  const decision = spec.stage === 2 ? { accepted: Boolean(spot.acceptance), note: spot.acceptance ?? '' } : state.blindSpots[spot.id]
+  if (decision?.accepted && decision.note.trim()) return 'accepted'
+  if (researchedBlindSpotIds(state, spec).has(spot.id)) {
+    return spec.research.some((finding) => finding.blindSpotId === spot.id) ? 'researched' : 'research-requested'
+  }
+  return decision?.note.trim() ? 'reason-written' : 'open'
+}
+
+function BlindSpotStatusToken({ status }: { status: BlindSpotStatus }) {
+  switch (status) {
+    case 'resolved': return <Token size="sm" color="default" label="Resolved" />
+    case 'accepted': return <Token size="sm" color="green" label="Accepted" />
+    case 'researched': return <Token size="sm" color="green" label="Researched" />
+    case 'research-requested': return <Token size="sm" color="yellow" label="Research requested" />
+    case 'reason-written': return <Token size="sm" color="yellow" label="Reason written" />
+    case 'open': return <Token size="sm" color="blue" label="To accept" />
+  }
 }
 
 function resolutionHint(spec: LogicSpec, resolvedBy: string): string {
@@ -117,7 +141,9 @@ function BlindSpotResearch({ spot, props, readOnly }: { spot: BlindSpot; props: 
   const [isAsking, setIsAsking] = useState(false)
   const answered = spec.research.filter((finding) => finding.blindSpotId === spot.id)
   const pending = pendingResearchRequests(state, spec).find((request) => request.blindSpotId === spot.id)
-  if (readOnly && answered.length === 0) return null
+  // a request still open at stage-1 sign-off is folded onto the blind spot until Claude answers it
+  const carried = spot.researchRequest && !answered.some((finding) => finding.requestId === spot.researchRequest?.id) ? spot.researchRequest : undefined
+  if (readOnly && answered.length === 0 && !carried) return null
   return (
     <Section title="Deeper research">
       {answered.map((finding) => (
@@ -132,7 +158,9 @@ function BlindSpotResearch({ spot, props, readOnly }: { spot: BlindSpot; props: 
           </VStack>
         </Card>
       ))}
-      {readOnly ? null : pending ? (
+      {readOnly ? (
+        carried ? <Banner status="info" title="Waiting for Claude" description={carried.question ? `You asked: ${carried.question}` : 'You asked for a general deeper look.'} collapsible={false} /> : null
+      ) : pending ? (
         <Banner
           status="info"
           title="Waiting for Claude"
@@ -162,7 +190,8 @@ function BlindSpotResearch({ spot, props, readOnly }: { spot: BlindSpot; props: 
 export function BlindSpotDetail({ spot, props, onAccepted }: { spot: BlindSpot; props: ViewProps; onAccepted?: () => void }) {
   const { spec, state, update, changedIds } = props
   const readOnly = spec.stage === 2
-  const isActive = activeBlindSpots(state, spec).some((s) => s.id === spot.id)
+  const status = blindSpotStatus(spot, spec, state)
+  const isActive = status !== 'resolved'
   // stage 2 shows the acceptance folded into the spec, not the fresh (empty) stage-2 review state
   const entry = readOnly ? { accepted: Boolean(spot.acceptance), note: spot.acceptance ?? '' } : (state.blindSpots[spot.id] ?? { accepted: false, note: '' })
   const set = (patch: Partial<typeof entry>) => update((s) => ({ ...s, blindSpots: { ...s.blindSpots, [spot.id]: { ...entry, ...patch } } }), spot.id)
@@ -171,7 +200,7 @@ export function BlindSpotDetail({ spot, props, onAccepted }: { spot: BlindSpot; 
       <HStack gap={2} align="center" wrap="wrap">
         <Text type="label" color="secondary">{spot.id}</Text>
         <ChangedToken id={spot.id} changedIds={changedIds} />
-        {isActive ? <Token size="sm" color="blue" label="Active" /> : <Token size="sm" color="default" label="Resolved" />}
+        <BlindSpotStatusToken status={status} />
       </HStack>
       <Heading level={3}>{spot.title}</Heading>
       <ClaudeField label="What could go wrong">{spot.detail}</ClaudeField>
@@ -190,6 +219,9 @@ export function BlindSpotDetail({ spot, props, onAccepted }: { spot: BlindSpot; 
         entry.note ? <Field label="Your acceptance">{entry.note}</Field> : null
       ) : isActive ? (
         <>
+          {status === 'research-requested' || status === 'researched' ? (
+            <Text type="supporting">Asking Claude to research this settles it for sign-off. You can still accept it in your own words.</Text>
+          ) : null}
           <TextArea label="In your own words" rows={3} value={entry.note} onChange={(note) => set({ note })} placeholder="e.g. rare in practice because…" />
           <CheckboxInput
             label="I accept this blind spot"
@@ -251,31 +283,20 @@ function AssumptionRegister({ props }: { props: ViewProps }) {
 
 function BlindSpotRegister({ props }: { props: ViewProps }) {
   const { spec, state } = props
-  const activeIds = new Set(activeBlindSpots(state, spec).map((spot) => spot.id))
-  const isAccepted = (id: string) => Boolean(state.blindSpots[id]?.accepted)
-  const noteFor = (id: string) => state.blindSpots[id]?.note ?? ''
+  const isOpen = (b: BlindSpot) => ['open', 'reason-written'].includes(blindSpotStatus(b, spec, state))
   const [selectedId, setSelectedId] = useState<string | undefined>(
-    () => spec.blindSpots.find((b) => activeIds.has(b.id) && !isAccepted(b.id))?.id ?? spec.blindSpots[0]?.id,
+    () => spec.blindSpots.find(isOpen)?.id ?? spec.blindSpots[0]?.id,
   )
   const selected = spec.blindSpots.find((b) => b.id === selectedId) ?? spec.blindSpots[0]
   if (!selected) return <Text type="supporting">The spec lists no blind spots.</Text>
   const entries = spec.blindSpots.map((b) => {
-    const active = activeIds.has(b.id)
-    const noteWritten = Boolean(noteFor(b.id).trim())
+    const status = blindSpotStatus(b, spec, state)
     return {
       id: b.id,
       label: `${b.id} · caused by ${b.sources.join(', ')}`,
       description: b.title,
-      isDone: active ? isAccepted(b.id) : true,
-      status: !active ? (
-        <Token size="sm" color="default" label="Resolved" />
-      ) : isAccepted(b.id) ? (
-        <Token size="sm" color="green" label="Accepted" />
-      ) : noteWritten ? (
-        <Token size="sm" color="yellow" label="Reason written" />
-      ) : (
-        <Token size="sm" color="blue" label="To accept" />
-      ),
+      isDone: !isOpen(b),
+      status: <BlindSpotStatusToken status={status} />,
     }
   })
   const selectNext = () => {
@@ -284,7 +305,7 @@ function BlindSpotRegister({ props }: { props: ViewProps }) {
   }
   return (
     <ListDetailRegister
-      intro="Cases where the spec's behavior might surprise someone. Accepting an active blind spot takes a sentence in your own words about why it is tolerable; an approved scenario or constraint that resolves it needs no acceptance."
+      intro="Cases where the spec's behavior might surprise someone. Settle each active blind spot by accepting it in a sentence of your own about why it is tolerable, or by asking Claude to research it; an approved scenario or constraint that resolves it needs neither."
       doneLabel="resolved"
       listLabel="Blind spots"
       nextLabel="Next to accept"
@@ -319,7 +340,6 @@ function AssumptionsTable({ spec }: { spec: LogicSpec }) {
 function BlindSpotsTable({ props }: { props: ViewProps }) {
   const { spec, state } = props
   const openItem = useOpenItem()
-  const activeIds = new Set(activeBlindSpots(state, spec).map((spot) => spot.id))
   const columns: TableColumn<BlindSpotRow>[] = [
     { key: 'id', header: 'ID', width: pixel(100), renderCell: (b) => <Text type="label">{b.id}</Text> },
     { key: 'title', header: 'Blind spot', width: proportional(3), renderCell: (b) => <Link onClick={() => openItem?.(b.id)}>{b.title}</Link> },
@@ -335,9 +355,7 @@ function BlindSpotsTable({ props }: { props: ViewProps }) {
       key: 'status',
       header: 'Status',
       width: pixel(130),
-      renderCell: (b) => (!activeIds.has(b.id)
-        ? <Token size="sm" color="default" label="Resolved" />
-        : b.acceptance ? <Token size="sm" color="green" label="Accepted" /> : <Token size="sm" color="blue" label="Not accepted" />),
+      renderCell: (b) => <BlindSpotStatusToken status={blindSpotStatus(b, spec, state)} />,
     },
     { key: 'acceptance', header: 'Your acceptance', width: proportional(3), renderCell: (b) => <Text type="supporting">{b.acceptance ?? ''}</Text> },
   ]
@@ -345,7 +363,7 @@ function BlindSpotsTable({ props }: { props: ViewProps }) {
   return <Table data={spec.blindSpots} columns={columns} idKey="id" verticalAlign="top" dividers="rows" hasHover />
 }
 
-/** Assumptions and blind spots: rule on every assumption and accept every active blind spot in stage 1; stage 2 lists the folded outcomes as tables. */
+/** Assumptions and blind spots: rule on every assumption and accept or research every active blind spot in stage 1; stage 2 lists the folded outcomes as tables. */
 export function RisksView(props: ViewProps) {
   const isStage2 = props.spec.stage === 2
   return (

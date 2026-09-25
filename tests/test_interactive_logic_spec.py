@@ -266,12 +266,29 @@ def test_v2_item_hashes_cover_behaviors_and_constraints(tmp_path: Path) -> None:
     assert set(payload["itemHashes"].keys()) == expected_ids
 
 
-def test_v2_stage1_validates_with_exactly_one_scenario_count_warning() -> None:
+def test_v2_stage1_validates_without_warnings() -> None:
     result = run_cli("validate", str(V2_STAGE1))
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
-    warnings = [line for line in result.stderr.splitlines() if line.strip()]
-    assert warnings == ["warning: behavior BH-01 has 4 scenarios; extras carry reasons"]
+    assert result.stderr.strip() == ""
+
+
+def test_v2_behavior_scenario_count_is_unlimited_and_legacy_extra_reason_is_ignored(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE1, name="stage1")
+    logic = load_json(spec_dir / "logic.json")
+    template = next(item for item in logic["scenarios"] if item["behavior"] == "BH-01")
+    for number in range(1, 5):
+        extra = copy.deepcopy(template)
+        extra["id"] = "SC-EXTRA-" + str(number)
+        extra.pop("extraReason", None)
+        logic["scenarios"].append(extra)
+    # a leftover extraReason on an early scenario was an error under the old limit
+    template["extraReason"] = "written under the old three-per-behavior limit"
+    save_json(spec_dir / "logic.json", logic)
+
+    result = run_cli("validate", str(spec_dir))
+    assert result.returncode == 0, result.stderr
+    assert result.stderr.strip() == ""
 
 
 def test_v2_stage2_validates() -> None:
@@ -1357,3 +1374,35 @@ def test_v2_stage1_fold_gate_names_a_scenario_awaiting_an_update(tmp_path: Path)
     assert "gate scenarios" in result.stderr
     assert "update requested: SC-01" in result.stderr
     assert load_json(spec_dir / "logic.json")["stage"] == 1
+
+
+def test_v2_stage1_fold_carries_a_pending_research_request_in_place_of_acceptance(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE1, name="stage1")
+    export = load_json(V2_STAGE1_EXPORTS / "signed.json")
+    # rejecting CON-04 leaves BS-01 active; asking for research must settle it without an acceptance
+    reject = {"ruling": "reject", "text": "", "reason": "Permission checks belong to the tech spec."}
+    export["state"]["constraintRulings"]["CON-04"] = reject
+    for constraint in export["record"]["constraints"]:
+        if constraint["id"] == "CON-04":
+            constraint.update(reject)
+    request = {"id": "research-bs01", "blindSpotId": "BS-01", "question": "Is this real on macOS?", "requestedAt": "2026-09-23T15:00:00Z"}
+    export["state"]["researchRequests"] = [request]
+    export["record"]["researchRequests"] = [request]
+    export_path = tmp_path / "research-instead-of-acceptance.json"
+    save_json(export_path, export)
+
+    result = run_cli("fold", str(spec_dir), str(export_path))
+    assert result.returncode == 0, result.stderr
+    folded = load_json(spec_dir / "logic.json")
+    spot = next(item for item in folded["blindSpots"] if item["id"] == "BS-01")
+    assert "acceptance" not in spot
+    assert spot["researchRequest"] == {"id": "research-bs01", "question": "Is this real on macOS?", "requestedAt": "2026-09-23T15:00:00Z"}
+    assert "Research requested at sign-off: Is this real on macOS?" in (spec_dir / "logic.md").read_text(encoding="utf-8")
+    assert run_cli("validate", str(spec_dir)).returncode == 0
+
+
+def test_v2_stage1_logic_rejects_a_folded_research_request() -> None:
+    logic = load_json(V2_STAGE1 / "logic.json")
+    logic["blindSpots"][0]["researchRequest"] = {"id": "r", "question": "", "requestedAt": "2026-09-23T15:00:00Z"}
+    errors, _ = render_spec.validate_logic_dispatch(logic)
+    assert "/blindSpots/0/researchRequest" in dict(errors)

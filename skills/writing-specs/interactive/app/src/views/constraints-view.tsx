@@ -9,7 +9,7 @@ import { TextArea } from '@astryxdesign/core/TextArea'
 import { Token } from '@astryxdesign/core/Token'
 import type { Constraint, ConstraintRulingVerb, LogicSpec } from '../spec-types'
 import { CONSTRAINT_KIND_LABEL, CONSTRAINT_RULING_LABEL, nextConstraintRuling } from '../review-state'
-import { ChangedToken, ClaudeField, ProvenanceToken, SpecMarkdown } from './shared'
+import { ChangedToken, ClaudeAddedToken, ClaudeField, SpecMarkdown } from './shared'
 import { ListDetailRegister, nextOpenEntryId } from './list-detail-register'
 import type { ViewProps } from './view-props'
 
@@ -50,7 +50,7 @@ function ConstraintDetail({ constraint, props, onApprove }: { constraint: Constr
         <Text type="label" color="secondary">{constraint.id}</Text>
         <ChangedToken id={constraint.id} changedIds={changedIds} />
         <Token size="sm" label={CONSTRAINT_KIND_LABEL[constraint.kind]} />
-        <ProvenanceToken item={constraint} />
+        {isClaude ? <ClaudeAddedToken /> : null}
       </HStack>
       <SpecMarkdown>{constraint.text}</SpecMarkdown>
       {constraint.rationale ? <ClaudeField label="Why this constraint">{constraint.rationale}</ClaudeField> : null}

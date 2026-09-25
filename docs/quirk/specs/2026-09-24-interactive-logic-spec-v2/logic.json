@@ -2,7 +2,12 @@
   "schemaVersion": 1,
   "title": "Interactive Logic Spec v2 — scenario-first two-stage review",
   "status": "Approved — Tech spec: authored",
-  "amendments": [],
+  "amendments": [
+    {
+      "date": "2026-09-25",
+      "text": "REQ-07's soft limit of three key examples per behavior is withdrawn. Authors wrote to the limit and dropped distinct cases to stay under it. A behavior now holds as many scenarios as it has cases a reviewer could rule on differently; `extraReason` is no longer required or validated, and `validate` no longer warns on scenario count. ASM-05 is moot."
+    }
+  ],
   "sections": {
     "purpose": "v1's review page asks the reviewer to rule on requirements Claude phrased. Polished, abstract requirement text is exactly where rubber-stamping happens, and nothing ties a requirement back to anything the reviewer agreed to. v2 fixes both problems equally: the reviewer first signs what should happen, as concrete scenarios under named behaviors plus a short constraints list, and only then sees requirements, each derived from and traced to something already signed. Human judgment lands on concrete examples, where it is most reliable, and every requirement has an accountable origin.",
     "conceptualModel": "A **v2 interactive logic spec** is still one `logic.json`, now `schemaVersion: 2`, reviewed in two stages recorded in the file.\n\n**Stage 1 — what should happen.**\n- **Behaviors** — a named one-line rule.\n- **Scenarios** — Given / When / Then with alternatives, each belonging to exactly one behavior; at most three key examples per behavior before each extra needs Claude's reason.\n- **Constraints** — non-behavioral requirements drawn from Decisions Locked and scope: placement, verification, naming, non-goals.\n- Scenarios and constraints carry **provenance**; Claude-added ones form the queue, with Claude's pick preselected and marked Claude-added.\n- **Assumptions** and **blind spots** reference scenario and constraint ids; a blind spot is resolved by a scenario or constraint, or accepted in the reviewer's words.\n- **Research** findings, as in v1.\n\n**Stage 2 — what to build.** **Requirements** Claude derives after stage 1 is signed: v1's fields without provenance, plus `derivedFrom` — one or more approved scenario or constraint ids. Group, certainty, conflicts, and the optional views work as in v1.\n\n**Stage record.** A stage marker; after stage 1 folds, a **stage-1 pin** (signed-at, render, and the hash of every stage-1 item as signed); the final sign-off after stage 2.\n\n**v1 files** stay valid but read-only: they validate, regenerate `logic.md`, and take amendments; page review, `check-export`, and `fold` refuse them.",

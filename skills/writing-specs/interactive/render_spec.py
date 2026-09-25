@@ -28,6 +28,7 @@ RENDER_OUTPUT_FIELDS_V2 = RENDER_OUTPUT_FIELDS | {
     "reapprovedHash",
     "originalText",
     "rejectReason",
+    "researchRequest",
 }
 SCOPE_CONDITIONS = ("no-code", "under-10", "under-30")
 PLACEMENTS = ("in", "conditional", "out")
@@ -779,8 +780,6 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
                 if "alternatives" in item:
                     v.string_array(alternatives, pointer(path, "alternatives"))
                 _validate_provenance(v, item, path)
-                if "extraReason" in item:
-                    v.string(item["extraReason"], pointer(path, "extraReason"), nonempty=True)
                 if "requestId" in item:
                     _id_field(v, item, "requestId", path)
                 if "dropReason" in item:
@@ -843,6 +842,15 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
                     _id_field(v, item, "resolvedBy", path)
                 if "acceptance" in item:
                     v.string(item["acceptance"], pointer(path, "acceptance"))
+                if "researchRequest" in item:
+                    request_path = pointer(path, "researchRequest")
+                    request = v.object(item["researchRequest"], request_path)
+                    if request is not None:
+                        _id_field(v, request, "id", request_path)
+                        _string_field(v, request, "question", request_path)
+                        asked = _required(v, request, "requestedAt", request_path)
+                        if "requestedAt" in request:
+                            v.iso_datetime(asked, pointer(request_path, "requestedAt"))
 
     research_rows: List[Any] = []
     research = _required(v, root, "research", "")
@@ -951,18 +959,6 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
         rows = scenarios_by_behavior.get(behavior["id"], [])
         if not rows:
             v.error(pointer("/behaviors", behavior_index), "behavior has no scenarios")
-            continue
-        if len(rows) > 3:
-            warnings.append(
-                "warning: behavior " + behavior["id"] + " has " + str(len(rows)) + " scenarios; extras carry reasons"
-            )
-        for position, (scenario_index, scenario) in enumerate(rows):
-            extra_path = pointer(pointer("/scenarios", scenario_index), "extraReason")
-            if position >= 3:
-                if not scenario.get("extraReason"):
-                    v.error(extra_path, "required for the fourth or later scenario of a behavior")
-            elif "extraReason" in scenario:
-                v.error(extra_path, "only allowed for the fourth or later scenario of a behavior")
 
     for index, raw in enumerate(assumption_rows):
         if not isinstance(raw, dict):
@@ -1172,8 +1168,11 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
                 if field in raw:
                     v.error(pointer(pointer("/assumptions", index), field), "must be absent in stage 1")
         for index, raw in enumerate(blind_rows):
-            if isinstance(raw, dict) and "acceptance" in raw:
-                v.error(pointer(pointer("/blindSpots", index), "acceptance"), "must be absent in stage 1")
+            if not isinstance(raw, dict):
+                continue
+            for field in ("acceptance", "researchRequest"):
+                if field in raw:
+                    v.error(pointer(pointer("/blindSpots", index), field), "must be absent in stage 1")
 
     elif stage == 2:
         if not root.get("stage1Pin"):
@@ -2059,8 +2058,6 @@ def render_markdown_v2(logic: dict) -> str:
             if scenario["alternatives"]:
                 lines.append("   - **Alternatives** " + "; ".join(scenario["alternatives"]))
             lines.append("   - " + scenario["explanation"])
-            if scenario.get("extraReason"):
-                lines.append("   - **Extra:** " + scenario["extraReason"])
             if scenario.get("dropReason"):
                 lines.append("   - **Dropped:** " + scenario["dropReason"])
             lines.append("")
@@ -2122,6 +2119,9 @@ def render_markdown_v2(logic: dict) -> str:
             lines.append("  - Resolved by: " + item["resolvedBy"])
         if "acceptance" in item:
             lines.append("  - Reviewer acceptance: " + item["acceptance"])
+        if "researchRequest" in item:
+            question = item["researchRequest"]["question"].strip() or "a general deeper look"
+            lines.append("  - Research requested at sign-off: " + question)
         for finding in research_by_spot.get(item["id"], []):
             lines.append("  - **Research finding (" + finding["answeredAt"] + ")** " + finding["summary"] + " — " + finding["detail"])
     if not logic["blindSpots"]:
@@ -2458,6 +2458,13 @@ def stage1_active_blind_spots(logic: dict, state: dict) -> List[dict]:
     return active
 
 
+def researched_blind_spot_ids(logic: dict, state: dict) -> set:
+    """Blind spots the reviewer asked Claude to research; like a verify-first ruling, asking settles them for sign-off."""
+    return {request["blindSpotId"] for request in state["researchRequests"]} | {
+        finding["blindSpotId"] for finding in logic["research"]
+    }
+
+
 def stage1_gate_failures(logic: dict, state: dict) -> List[Tuple[str, str]]:
     failures: List[Tuple[str, str]] = []
 
@@ -2510,13 +2517,20 @@ def stage1_gate_failures(logic: dict, state: dict) -> List[Tuple[str, str]]:
         )
 
     missing_blind = []
+    researched = researched_blind_spot_ids(logic, state)
     for blind_spot in stage1_active_blind_spots(logic, state):
+        if blind_spot["id"] in researched:
+            continue
         decision = state["blindSpots"].get(blind_spot["id"], {})
         if not decision.get("accepted") or not decision.get("note", "").strip():
             missing_blind.append(blind_spot["id"])
     if missing_blind:
         failures.append(
-            ("blind-spots", "active blind spots need acceptance in the reviewer's words: " + ", ".join(missing_blind))
+            (
+                "blind-spots",
+                "active blind spots need acceptance in the reviewer's words or a research request: "
+                + ", ".join(missing_blind),
+            )
         )
 
     return failures
@@ -2620,8 +2634,23 @@ def stage1_fold(logic: dict, export: dict) -> None:
         assumption["ruling"] = decision["ruling"]
         assumption["rulingNote"] = decision["note"]
 
+    answered_request_ids = {finding["requestId"] for finding in logic["research"]}
     for blind_spot in stage1_active_blind_spots(logic, state):
-        blind_spot["acceptance"] = state["blindSpots"][blind_spot["id"]]["note"]
+        decision = state["blindSpots"].get(blind_spot["id"], {})
+        if decision.get("accepted") and decision.get("note", "").strip():
+            blind_spot["acceptance"] = decision["note"]
+        pending = [
+            request
+            for request in state["researchRequests"]
+            if request["blindSpotId"] == blind_spot["id"] and request["id"] not in answered_request_ids
+        ]
+        if pending:
+            request = pending[-1]
+            blind_spot["researchRequest"] = {
+                "id": request["id"],
+                "question": request["question"],
+                "requestedAt": request["requestedAt"],
+            }
 
     logic["stage"] = 2
     logic["status"] = "Stage 1 approved"

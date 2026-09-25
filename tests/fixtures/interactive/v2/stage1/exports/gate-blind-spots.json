@@ -51,9 +51,9 @@
         "reason": ""
       },
       "CON-04": {
-        "ruling": "approve",
+        "ruling": "reject",
         "text": "",
-        "reason": ""
+        "reason": "Permission checks belong to the tech spec."
       }
     },
     "assumptions": {
@@ -142,9 +142,9 @@
       },
       {
         "id": "CON-04",
-        "ruling": "approve",
+        "ruling": "reject",
         "text": "",
-        "reason": ""
+        "reason": "Permission checks belong to the tech spec."
       }
     ],
     "assumptions": [
@@ -155,6 +155,11 @@
       }
     ],
     "blindSpots": [
+      {
+        "id": "BS-01",
+        "accepted": false,
+        "note": ""
+      },
       {
         "id": "BS-02",
         "accepted": false,

@@ -12,7 +12,7 @@ import { TextInput } from '@astryxdesign/core/TextInput'
 import { Token } from '@astryxdesign/core/Token'
 import type { Behavior, Scenario, ScenarioOutcome, ScenarioRequest, ReviewState } from '../spec-types'
 import { pendingScenarioRequests, requestId, scenarioThen, type Update } from '../review-state'
-import { ChangedRowLabel, changedRowsPlugin, ProvenanceToken, SpecMarkdown } from './shared'
+import { ChangedRowLabel, changedRowsPlugin, ClaudeAddedToken, SpecMarkdown } from './shared'
 import type { ViewProps } from './view-props'
 
 // Selector options render as plain text, so strip markdown backticks the spec might use in a `then` clause.
@@ -155,11 +155,10 @@ function scenarioColumns(props: ViewProps, isStage2: boolean): TableColumn<Scena
           <Text type="label">{s.id}</Text>
           {s.reopened ? (
             <HStack><Token size="sm" color="orange" label="Reopened" description={s.reopened.reason} /></HStack>
-          ) : (s.provenance === 'claude' && !hasScenarioEntry(state, s.id)) || (!isStage2 && s.provenance !== 'you-recommended') ? (
-            <HStack><ProvenanceToken item={s} /></HStack>
+          ) : s.provenance === 'claude' && (!isStage2 || !hasScenarioEntry(state, s.id)) ? (
+            <HStack><ClaudeAddedToken /></HStack>
           ) : null}
           {s.requestId ? <HStack><Token size="sm" label="Requested" description="You asked for this scenario." /></HStack> : null}
-          {s.extraReason ? <HStack><Token size="sm" color="yellow" label="Extra example" description={s.extraReason} /></HStack> : null}
           <ChangedRowLabel id={s.id} changedIds={changedIds} />
         </VStack>
       ),

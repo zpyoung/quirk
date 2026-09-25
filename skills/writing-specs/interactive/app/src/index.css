@@ -23,3 +23,16 @@ body {
 tr[data-changed='true'] > td {
   background-color: color-mix(in srgb, var(--color-background-orange) 25%, transparent);
 }
+
+[role='radiogroup'][aria-label^='Decision for'] > [data-selected='selected'][data-value='approve'] {
+  background-color: var(--color-background-green);
+  color: var(--color-text-green);
+}
+[role='radiogroup'][aria-label^='Decision for'] > [data-selected='selected'][data-value='update'] {
+  background-color: var(--color-background-blue);
+  color: var(--color-text-blue);
+}
+[role='radiogroup'][aria-label^='Decision for'] > [data-selected='selected'][data-value='drop'] {
+  background-color: var(--color-background-red);
+  color: var(--color-text-red);
+}

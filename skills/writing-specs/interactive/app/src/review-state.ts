@@ -522,6 +522,15 @@ export function activeBlindSpots(state: ReviewState, spec: LogicSpec): BlindSpot
   return spec.blindSpots.filter((spot) => !spot.resolvedBy || !isResolved(spot.resolvedBy))
 }
 
+/** `CONTRACT:` blind spots the reviewer asked Claude to research; like a verify-first ruling, asking settles them for sign-off. The Python stage-1 gate applies the same rule. */
+export function researchedBlindSpotIds(state: ReviewState, spec: LogicSpec): Set<string> {
+  return new Set([
+    ...state.researchRequests.map((request) => request.blindSpotId),
+    ...spec.research.map((finding) => finding.blindSpotId),
+    ...spec.blindSpots.filter((spot) => spot.researchRequest).map((spot) => spot.id),
+  ])
+}
+
 export function pendingScenarioRequests(state: ReviewState, spec: LogicSpec) {
   const converted = new Set(spec.scenarios.flatMap((scenario) => scenario.requestId ? [scenario.requestId] : []))
   return state.scenarioRequests.filter((request) => !converted.has(request.id))
@@ -571,6 +580,7 @@ export function gateList(state: ReviewState, spec: LogicSpec): ReviewGate[] {
     const pending = pendingScenarioRequests(state, spec)
     const scenarioDecided = (scenario: Scenario) => Boolean(state.scenarioApproved[scenario.id] || state.scenarioDrops[scenario.id]?.trim())
     const activeSpots = activeBlindSpots(state, spec)
+    const researched = researchedBlindSpotIds(state, spec)
     const ruled = (assumption: Assumption) => {
       const decision = state.assumptions[assumption.id]
       return Boolean(decision?.ruling && (decision.ruling === 'build-on' || decision.note.trim()))
@@ -586,8 +596,8 @@ export function gateList(state: ReviewState, spec: LogicSpec): ReviewGate[] {
       { id: 'assumptions', label: 'Rule on every assumption; explain rulings other than build on', done: spec.assumptions.filter(ruled).length, total: spec.assumptions.length },
       {
         id: 'blind-spots',
-        label: 'Accept every active blind spot in your own words',
-        done: activeSpots.filter((spot) => state.blindSpots[spot.id]?.accepted && state.blindSpots[spot.id]?.note.trim()).length,
+        label: 'Accept every active blind spot in your own words, or ask Claude to research it',
+        done: activeSpots.filter((spot) => researched.has(spot.id) || (state.blindSpots[spot.id]?.accepted && state.blindSpots[spot.id]?.note.trim())).length,
         total: activeSpots.length,
       },
     ]

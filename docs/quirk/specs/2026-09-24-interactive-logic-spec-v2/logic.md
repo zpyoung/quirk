@@ -7,7 +7,7 @@
 **Status:** Approved — Tech spec: authored
 
 **Amendments:**
-none
+- 2026-09-25 — REQ-07's soft limit of three key examples per behavior is withdrawn. Authors wrote to the limit and dropped distinct cases to stay under it. A behavior now holds as many scenarios as it has cases a reviewer could rule on differently; `extraReason` is no longer required or validated, and `validate` no longer warns on scenario count. ASM-05 is moot.
 
 ## Purpose
 

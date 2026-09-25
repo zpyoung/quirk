@@ -5,7 +5,7 @@ import { Text } from '@astryxdesign/core/Text'
 import type { TablePlugin } from '@astryxdesign/core/Table'
 import { Token } from '@astryxdesign/core/Token'
 import { VisuallyHidden } from '@astryxdesign/core/VisuallyHidden'
-import type { Certainty, LogicSpec, Provenance, RequirementGroup } from '../spec-types'
+import type { Certainty, LogicSpec, RequirementGroup } from '../spec-types'
 import { ItemRef, useItemLinkPlugins } from './item-links'
 
 export const CERTAINTY_LABEL: Record<Certainty, string> = { confirmed: 'Confirmed', assumed: 'Assumed', unverified: 'Unverified' }
@@ -73,19 +73,9 @@ export function ChangedRowLabel({ id, changedIds }: { id: string; changedIds: Se
   return changedIds.has(id) ? <VisuallyHidden>Changed since you reviewed</VisuallyHidden> : null
 }
 
-export function ProvenanceToken({ item }: { item: { provenance: Provenance; question?: string } }) {
-  if (item.provenance === 'claude') {
-    return <Token size="sm" color="red" label="Claude added this without asking you" description="Claude wrote this itself; it never came up as a brainstorm question." />
-  }
-  if (item.provenance === 'you-recommended') return null
-  return (
-    <Token
-      size="sm"
-      color="default"
-      label="You chose against the recommendation"
-      description={item.question ? `Brainstorm question: ${item.question}` : undefined}
-    />
-  )
+/** Flags a scenario or constraint that never came up as a brainstorm question, so the reviewer rules on it deliberately. */
+export function ClaudeAddedToken() {
+  return <Token size="sm" color="red" label="Claude added this without asking you" description="Claude wrote this itself; it never came up as a brainstorm question." />
 }
 
 export function CertaintyToken({ certainty }: { certainty: Certainty | null }) {

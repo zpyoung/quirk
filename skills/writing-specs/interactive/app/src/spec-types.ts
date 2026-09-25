@@ -43,6 +43,7 @@ export interface Scenario {
   provenance: Provenance
   question?: string
   rationale?: Markdown
+  /** Ignored; left by specs written under the old three-scenarios-per-behavior limit. */
   extraReason?: string
   requestId?: string
   dropReason?: string
@@ -85,6 +86,7 @@ export interface BlindSpot {
   sources: string[]
   resolvedBy?: string
   acceptance?: string
+  researchRequest?: { id: string; question: string; requestedAt: IsoDateTime }
 }
 
 export interface Requirement {

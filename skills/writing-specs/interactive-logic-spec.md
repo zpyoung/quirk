@@ -11,9 +11,9 @@ The user explicitly chose interactive when brainstorming offered markdown (the d
 Write `<spec-dir>/logic.json` at `schemaVersion: 2`, `stage: 1`, `requirements: []`, using the `LogicSpecV2` shape in [Data models / schemas](../../docs/quirk/specs/2026-09-24-interactive-logic-spec-v2/tech.md#data-models--schemas) and the page's [TypeScript source of truth](interactive/app/src/spec-types.ts). Include every section [logic-spec.md](logic-spec.md) requires; the Requirements section renders as a single placeholder line until stage 1 is signed.
 
 - **Behaviors**: a named one-line rule. Every scenario belongs to exactly one behavior.
-- **Scenarios**: Given/When/Then plus `alternatives`, grouped under their behavior. Three key examples per behavior are free; a fourth or later needs `extraReason` — "fourth" means array order within that behavior. An `extraReason` on one of the first three is an error, same as a missing one on the fourth-plus.
+- **Scenarios**: Given/When/Then plus `alternatives`, grouped under their behavior. Write a scenario for every case a reviewer could rule on differently: each branch of the rule, each edge case, each known failure mode. There is no per-behavior limit, so never merge or cut a scenario to keep a behavior short; skip only one whose outcome another scenario under the same behavior already shows. A case no behavior's rule covers gets a new behavior rather than a stretched one. Specs written under the old three-per-behavior limit may still carry `extraReason`; it is ignored.
 - **Constraints**: non-behavioral requirements of kind `placement`, `verification`, `naming`, or `non-goal`, plus `other` for anything the four don't fit. Draw them from Decisions Locked and scope.
-- **Provenance**: a scenario or constraint Claude adds without asking carries `provenance: "claude"` and a `rationale`; anything decided in brainstorming carries the deciding `question` instead. A Claude-added item is preselected — Claude's `then` or `approve` shows as the value — but stays marked "Claude-added — confirm" until a state entry exists; the preselection is not itself a decision.
+- **Provenance**: a scenario or constraint Claude adds without asking carries `provenance: "claude"` and a `rationale`; anything decided in brainstorming carries the deciding `question` instead. A Claude-added item is preselected — Claude's `then` or `approve` shows as the value — but stays marked as Claude-added until a state entry exists; the preselection is not itself a decision.
 - Point assumption `affects` and blind-spot `sources` / `resolvedBy` at scenario or constraint ids, not requirement ids — requirements do not exist yet.
 
 Keep IDs unique across every kind — behaviors, scenarios, constraints, assumptions, and blind spots all key one `itemHashes` map — and every cross-reference resolvable.
@@ -35,7 +35,7 @@ render_spec.py reapprove    <spec-dir> <export.json>
 
 Exit codes: 0 ok, 1 invalid input, 2 usage error, 3 stale render, wrong slug, or stage mismatch, 4 (fold/reapprove) unsigned export or a failed gate named on stderr, 5 (find-export) no export found, 6 the spec is a read-only v1 file — see [v1 specs are read-only](#v1-specs-are-read-only).
 
-`validate` and `render` print one stderr line per behavior with more than three scenarios and still exit 0: `warning: behavior <id> has <n> scenarios; extras carry reasons`. Never work around an invalid or stale result by applying its decisions directly.
+Never work around an invalid or stale result by applying its decisions directly.
 
 ## Stage-1 feedback rounds
 
@@ -62,17 +62,17 @@ Never fold a stale or unsigned export.
 
 ## Stage-1 sign-off and fold
 
-Stage 1 signs when every Claude-added scenario and constraint is decided, every scenario is approved or dropped with a reason and no scenario request or update is pending, every constraint is approved, rewritten with text, or rejected with a reason, every assumption is ruled, and every active blind spot is accepted with the reviewer's own sentence. Run `check-export` first and fold only a current signed export:
+Stage 1 signs when every Claude-added scenario and constraint is decided, every scenario is approved or dropped with a reason and no scenario request or update is pending, every constraint is approved, rewritten with text, or rejected with a reason, every assumption is ruled, and every active blind spot is either accepted with the reviewer's own sentence or has a research request. Asking for research settles a blind spot the way a verify-first ruling settles an assumption. Run `check-export` first and fold only a current signed export:
 
 ```text
 render_spec.py fold <spec-dir> <export.json>
 ```
 
-`fold` applies each scenario's `then` and `dropReason`, each constraint's `ruling` (with `originalText` on a rewrite), and the assumption and blind-spot rulings, then sets `stage: 2`, `status: "Stage 1 approved"`, and a `stage1Pin` — the signed-at time, `renderId`, and the hash of every stage-1 item as signed. It does not write `signoff`. Passing `--tech-spec-requested` here is a usage error; that flag belongs on the [final fold](#final-sign-off-and-fold).
+`fold` applies each scenario's `then` and `dropReason`, each constraint's `ruling` (with `originalText` on a rewrite), and the assumption and blind-spot rulings (a blind spot settled by a still-unanswered research request gets that request as `researchRequest`), then sets `stage: 2`, `status: "Stage 1 approved"`, and a `stage1Pin` — the signed-at time, `renderId`, and the hash of every stage-1 item as signed. It does not write `signoff`. Passing `--tech-spec-requested` here is a usage error; that flag belongs on the [final fold](#final-sign-off-and-fold).
 
 ## Derivation
 
-After the stage-1 fold, derive `requirements[]` yourself — no page round is needed for this step. Each requirement's `derivedFrom` names one or more approved scenarios (no `dropReason`) or approved/rewritten constraints, never a dropped scenario or a rejected constraint. An approved or rewritten **non-goal** constraint derives one `scope: "out"` requirement, which satisfies the under-derived gate for it. Pre-fill each requirement's `group` and `placement` (in / conditional / out) with your best judgment; the reviewer only needs to move the ones you got wrong, with a reason. Requirements carry no `provenance`, `question`, or `rationale` — `derivedFrom` is their only origin. Re-render so the page shows the stage-2 tabs with stage 1 read-only.
+After the stage-1 fold, first answer every blind spot that carries a `researchRequest` (a research request still open at sign-off) with a `research[]` finding whose `requestId` is that request's `id`. Then derive `requirements[]` yourself — no page round is needed for this step. Each requirement's `derivedFrom` names one or more approved scenarios (no `dropReason`) or approved/rewritten constraints, never a dropped scenario or a rejected constraint. An approved or rewritten **non-goal** constraint derives one `scope: "out"` requirement, which satisfies the under-derived gate for it. Pre-fill each requirement's `group` and `placement` (in / conditional / out) with your best judgment; the reviewer only needs to move the ones you got wrong, with a reason. Requirements carry no `provenance`, `question`, or `rationale` — `derivedFrom` is their only origin. Re-render so the page shows the stage-2 tabs with stage 1 read-only.
 
 ## Stage-2 feedback rounds
 
