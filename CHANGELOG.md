@@ -5,7 +5,7 @@ calendar-based (**CalVer**, `YYYY.M.D` unpadded); the `releasing-quirk` skill
 stamps and prepends each entry (newest on top). Since the version no longer encodes
 compatibility, breaking changes are called out in a `### ⚠️ BREAKING` subsection.
 
-## Unreleased
+## 2026.9.25
 
 ### Changes
 - **Interactive logic specs:** brainstorming can opt into `logic.json` as the source
