@@ -1406,3 +1406,34 @@ def test_v2_stage1_logic_rejects_a_folded_research_request() -> None:
     logic["blindSpots"][0]["researchRequest"] = {"id": "r", "question": "", "requestedAt": "2026-09-23T15:00:00Z"}
     errors, _ = render_spec.validate_logic_dispatch(logic)
     assert "/blindSpots/0/researchRequest" in dict(errors)
+
+
+def test_v2_stage1_fold_applies_the_reviewers_certainty_and_keeps_claudes(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE1, name="stage1")
+    export = load_json(V2_STAGE1_EXPORTS / "signed.json")
+    export["state"]["assumptions"]["ASM-01"]["certainty"] = "confirmed"
+    export_path = tmp_path / "reviewer-certainty.json"
+    save_json(export_path, export)
+
+    result = run_cli("fold", str(spec_dir), str(export_path))
+    assert result.returncode == 0, result.stderr
+    folded = load_json(spec_dir / "logic.json")
+    assumption = next(item for item in folded["assumptions"] if item["id"] == "ASM-01")
+    assert assumption["certainty"] == "confirmed"
+    assert assumption["originalCertainty"] == "assumed"
+    assert "(confirmed, set by the reviewer; Claude said assumed)" in (spec_dir / "logic.md").read_text(encoding="utf-8")
+    assert run_cli("validate", str(spec_dir)).returncode == 0
+
+
+def test_v2_stage1_logic_rejects_original_certainty() -> None:
+    logic = load_json(V2_STAGE1 / "logic.json")
+    logic["assumptions"][0]["originalCertainty"] = "assumed"
+    errors, _ = render_spec.validate_logic_dispatch(logic)
+    assert "/assumptions/0/originalCertainty" in dict(errors)
+
+
+def test_validate_export_shape_rejects_an_unknown_reviewer_certainty() -> None:
+    export = load_json(V2_STAGE1_EXPORTS / "signed.json")
+    export["state"]["assumptions"]["ASM-01"]["certainty"] = "certain"
+    errors = dict(render_spec.validate_export_shape(export))
+    assert "/state/assumptions/ASM-01/certainty" in errors

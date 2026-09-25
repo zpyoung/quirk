@@ -11,8 +11,8 @@ import { RadioList, RadioListItem } from '@astryxdesign/core/RadioList'
 import { Text } from '@astryxdesign/core/Text'
 import { TextArea } from '@astryxdesign/core/TextArea'
 import { Token } from '@astryxdesign/core/Token'
-import type { Assumption, AssumptionRuling, BlindSpot, LogicSpec, ResearchRequest, ReviewState } from '../spec-types'
-import { RULINGS, activeBlindSpots, pendingResearchRequests, requestId, researchedBlindSpotIds, type Update } from '../review-state'
+import type { Assumption, AssumptionRuling, BlindSpot, Certainty, LogicSpec, ResearchRequest, ReviewState } from '../spec-types'
+import { CERTAINTIES, RULINGS, activeBlindSpots, effectiveCertainty, pendingResearchRequests, requestId, researchedBlindSpotIds, type Update } from '../review-state'
 import { CERTAINTY_LABEL, CertaintyToken, ChangedToken, ClaudeField, ClaudeWroteToken, Field, ItemReference, itemLabel, SpecMarkdown } from './shared'
 import { ItemRef, useOpenItem } from './item-links'
 import { ListDetailRegister, nextOpenEntryId } from './list-detail-register'
@@ -67,14 +67,34 @@ function AssumptionDetail({ assumption, props, onRuled }: { assumption: Assumpti
   const set = (patch: Partial<typeof entry>) =>
     update((s) => ({ ...s, assumptions: { ...s.assumptions, [assumption.id]: { ...entry, ...patch } } }), assumption.id)
   const needsNote = entry.ruling === 'verify-first' || entry.ruling === 'wrong'
+  const certainty = effectiveCertainty(state, assumption)
+  const setCertainty = (value: Certainty) =>
+    update((s) => {
+      const current = s.assumptions[assumption.id] ?? { note: '' }
+      const { certainty: _previous, ...rest } = current
+      // matching Claude's value again drops the override, so only real disagreements reach the fold
+      const next = value === assumption.certainty ? rest : { ...rest, certainty: value }
+      return { ...s, assumptions: { ...s.assumptions, [assumption.id]: next } }
+    }, assumption.id)
   return (
     <VStack gap={3}>
       <HStack gap={2} align="center" wrap="wrap">
         <Text type="label" color="secondary">{assumption.id}</Text>
         <ChangedToken id={assumption.id} changedIds={changedIds} />
-        <CertaintyToken certainty={assumption.certainty} />
+        <CertaintyToken certainty={certainty} />
       </HStack>
       <Heading level={3}>{assumption.claim}</Heading>
+      <RadioList
+        label="Certainty"
+        orientation="horizontal"
+        size="sm"
+        value={certainty}
+        onChange={(value) => setCertainty(value as Certainty)}
+      >
+        {CERTAINTIES.map((value) => (
+          <RadioListItem key={value} value={value} label={CERTAINTY_LABEL[value]} description={value === assumption.certainty ? "Claude's assessment" : undefined} />
+        ))}
+      </RadioList>
       <Field label="Why we think so">{assumption.basis}</Field>
       <ClaudeField label="What this means">{assumption.meaning}</ClaudeField>
       <Field label="If this is wrong">{assumption.ifWrong}</Field>
@@ -253,7 +273,7 @@ function AssumptionRegister({ props }: { props: ViewProps }) {
     const ruling = rulingFor(a)
     return {
       id: a.id,
-      label: `${a.id} · ${CERTAINTY_LABEL[a.certainty]}`,
+      label: `${a.id} · ${CERTAINTY_LABEL[effectiveCertainty(state, a)]}`,
       description: a.claim,
       isDone: Boolean(ruling),
       status: ruling ? (
@@ -322,7 +342,17 @@ function AssumptionsTable({ spec }: { spec: LogicSpec }) {
   const columns: TableColumn<AssumptionRow>[] = [
     { key: 'id', header: 'ID', width: pixel(100), renderCell: (a) => <Text type="label">{a.id}</Text> },
     { key: 'claim', header: 'Assumption', width: proportional(4), renderCell: (a) => <Link onClick={() => openItem?.(a.id)}>{a.claim}</Link> },
-    { key: 'certainty', header: 'Certainty', width: pixel(130), renderCell: (a) => <CertaintyToken certainty={a.certainty} /> },
+    {
+      key: 'certainty',
+      header: 'Certainty',
+      width: pixel(150),
+      renderCell: (a) => (
+        <VStack gap={1}>
+          <HStack><CertaintyToken certainty={a.certainty} /></HStack>
+          {a.originalCertainty ? <Text type="supporting">{`You set this; Claude said ${CERTAINTY_LABEL[a.originalCertainty]}`}</Text> : null}
+        </VStack>
+      ),
+    },
     {
       key: 'ruling',
       header: 'Your ruling',

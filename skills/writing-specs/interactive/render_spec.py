@@ -29,6 +29,7 @@ RENDER_OUTPUT_FIELDS_V2 = RENDER_OUTPUT_FIELDS | {
     "originalText",
     "rejectReason",
     "researchRequest",
+    "originalCertainty",
 }
 SCOPE_CONDITIONS = ("no-code", "under-10", "under-30")
 PLACEMENTS = ("in", "conditional", "out")
@@ -822,6 +823,8 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
                     v.enum(item["ruling"], RULINGS, pointer(path, "ruling"))
                 if "rulingNote" in item:
                     v.string(item["rulingNote"], pointer(path, "rulingNote"))
+                if "originalCertainty" in item:
+                    v.enum(item["originalCertainty"], CERTAINTIES, pointer(path, "originalCertainty"))
 
     blind_rows: List[Any] = []
     blind_spots = _required(v, root, "blindSpots", "")
@@ -1164,7 +1167,7 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
         for index, raw in enumerate(assumption_rows):
             if not isinstance(raw, dict):
                 continue
-            for field in ("ruling", "rulingNote"):
+            for field in ("ruling", "rulingNote", "originalCertainty"):
                 if field in raw:
                     v.error(pointer(pointer("/assumptions", index), field), "must be absent in stage 1")
         for index, raw in enumerate(blind_rows):
@@ -1379,6 +1382,8 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
                         if "ruling" in decision:
                             v.enum(decision["ruling"], RULINGS, pointer(path, "ruling"))
                         _string_field(v, decision, "note", path)
+                        if "certainty" in decision:
+                            v.enum(decision["certainty"], CERTAINTIES, pointer(path, "certainty"))
 
         blind_state = _required(v, state, "blindSpots", "/state")
         if "blindSpots" in state:
@@ -1546,6 +1551,8 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
                         if "ruling" in item and ruling is not None:
                             v.enum(ruling, RULINGS, pointer(path, "ruling"))
                         _string_field(v, item, "note", path)
+                        if item.get("certainty") is not None:
+                            v.enum(item["certainty"], CERTAINTIES, pointer(path, "certainty"))
 
         blind_rec = _required(v, record, "blindSpots", "/record")
         if "blindSpots" in record:
@@ -2097,7 +2104,10 @@ def render_markdown_v2(logic: dict) -> str:
 
     lines.extend(["## Assumptions & blind spots", "", "### Assumptions", ""])
     for item in logic["assumptions"]:
-        lines.append("- **" + item["id"] + " — " + item["claim"] + "** (" + item["certainty"] + ")")
+        certainty = item["certainty"]
+        if "originalCertainty" in item:
+            certainty += ", set by the reviewer; Claude said " + item["originalCertainty"]
+        lines.append("- **" + item["id"] + " — " + item["claim"] + "** (" + certainty + ")")
         lines.append("  - Basis: " + item["basis"])
         lines.append("  - If wrong: " + item["ifWrong"])
         lines.append("  - Affects: " + (", ".join(item["affects"]) or "none"))
@@ -2633,6 +2643,10 @@ def stage1_fold(logic: dict, export: dict) -> None:
         decision = state["assumptions"][assumption["id"]]
         assumption["ruling"] = decision["ruling"]
         assumption["rulingNote"] = decision["note"]
+        certainty = decision.get("certainty")
+        if certainty and certainty != assumption["certainty"]:
+            assumption["originalCertainty"] = assumption["certainty"]
+            assumption["certainty"] = certainty
 
     answered_request_ids = {finding["requestId"] for finding in logic["research"]}
     for blind_spot in stage1_active_blind_spots(logic, state):

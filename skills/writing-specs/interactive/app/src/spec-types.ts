@@ -77,6 +77,7 @@ export interface Assumption {
   checkCost: string
   ruling?: AssumptionRuling
   rulingNote?: string
+  originalCertainty?: Certainty
 }
 
 export interface BlindSpot {
@@ -203,6 +204,8 @@ export interface ResearchRequest {
 export interface AssumptionDecision {
   ruling?: AssumptionRuling
   note: string
+  /** The reviewer's certainty, when it differs from Claude's; the stage-1 fold writes it onto the assumption. */
+  certainty?: Certainty
 }
 
 export interface BlindSpotDecision {
@@ -272,6 +275,7 @@ export interface DecisionRecord {
     id: AssumptionId
     ruling: AssumptionRuling | null
     note: string
+    certainty: Certainty | null
   }[]
   blindSpots: {
     id: BlindSpotId

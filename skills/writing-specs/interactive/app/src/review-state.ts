@@ -3,6 +3,7 @@ import type {
   Assumption,
   AssumptionRuling,
   BlindSpot,
+  Certainty,
   ConstraintKind,
   ConstraintRulingDecision,
   ConstraintRulingVerb,
@@ -123,7 +124,8 @@ export function isReviewState(value: unknown): value is ReviewState {
     isObject(value.constraintRulings) && Object.values(value.constraintRulings).every((ruling) =>
       isObject(ruling) && isConstraintVerb(ruling.ruling) && typeof ruling.text === 'string' && typeof ruling.reason === 'string') &&
     isObject(value.assumptions) && Object.values(value.assumptions).every((decision) =>
-      isObject(decision) && typeof decision.note === 'string' && (decision.ruling === undefined || isRuling(decision.ruling))) &&
+      isObject(decision) && typeof decision.note === 'string' && (decision.ruling === undefined || isRuling(decision.ruling)) &&
+      (decision.certainty === undefined || (CERTAINTIES as readonly unknown[]).includes(decision.certainty))) &&
     isObject(value.blindSpots) && Object.values(value.blindSpots).every((decision) =>
       isObject(decision) && typeof decision.accepted === 'boolean' && typeof decision.note === 'string') &&
     Array.isArray(value.researchRequests) && value.researchRequests.every((request) =>
@@ -531,6 +533,11 @@ export function researchedBlindSpotIds(state: ReviewState, spec: LogicSpec): Set
   ])
 }
 
+/** An assumption's certainty as the reviewer sees it: their stage-1 override, else Claude's (or the folded) value. */
+export function effectiveCertainty(state: ReviewState, assumption: Assumption): Certainty {
+  return state.assumptions[assumption.id]?.certainty ?? assumption.certainty
+}
+
 export function pendingScenarioRequests(state: ReviewState, spec: LogicSpec) {
   const converted = new Set(spec.scenarios.flatMap((scenario) => scenario.requestId ? [scenario.requestId] : []))
   return state.scenarioRequests.filter((request) => !converted.has(request.id))
@@ -654,7 +661,12 @@ export function decisionRecord(state: ReviewState, spec: LogicSpec): DecisionRec
       const ruling = state.constraintRulings[constraint.id]
       return { id: constraint.id, ruling: ruling?.ruling ?? null, text: ruling?.text ?? '', reason: ruling?.reason ?? '' }
     }),
-    assumptions: spec.assumptions.map((item) => ({ id: item.id, ruling: state.assumptions[item.id]?.ruling ?? null, note: state.assumptions[item.id]?.note ?? '' })),
+    assumptions: spec.assumptions.map((item) => ({
+      id: item.id,
+      ruling: state.assumptions[item.id]?.ruling ?? null,
+      note: state.assumptions[item.id]?.note ?? '',
+      certainty: state.assumptions[item.id]?.certainty ?? null,
+    })),
     blindSpots: activeBlindSpots(state, spec).map((item) => ({ id: item.id, accepted: Boolean(state.blindSpots[item.id]?.accepted), note: state.blindSpots[item.id]?.note ?? '' })),
     placements,
     disputes: Object.entries(state.disputes).map(([requirementId, dispute]) => ({ requirementId, ...dispute })),

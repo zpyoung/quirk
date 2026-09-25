@@ -68,7 +68,7 @@ Stage 1 signs when every Claude-added scenario and constraint is decided, every 
 render_spec.py fold <spec-dir> <export.json>
 ```
 
-`fold` applies each scenario's `then` and `dropReason`, each constraint's `ruling` (with `originalText` on a rewrite), and the assumption and blind-spot rulings (a blind spot settled by a still-unanswered research request gets that request as `researchRequest`), then sets `stage: 2`, `status: "Stage 1 approved"`, and a `stage1Pin` — the signed-at time, `renderId`, and the hash of every stage-1 item as signed. It does not write `signoff`. Passing `--tech-spec-requested` here is a usage error; that flag belongs on the [final fold](#final-sign-off-and-fold).
+`fold` applies each scenario's `then` and `dropReason`, each constraint's `ruling` (with `originalText` on a rewrite), and the assumption and blind-spot rulings (an assumption whose certainty the reviewer changed gets the new `certainty` and keeps Claude's as `originalCertainty`; a blind spot settled by a still-unanswered research request gets that request as `researchRequest`), then sets `stage: 2`, `status: "Stage 1 approved"`, and a `stage1Pin` — the signed-at time, `renderId`, and the hash of every stage-1 item as signed. It does not write `signoff`. Passing `--tech-spec-requested` here is a usage error; that flag belongs on the [final fold](#final-sign-off-and-fold).
 
 ## Derivation
 

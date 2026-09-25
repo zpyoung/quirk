@@ -3,7 +3,7 @@ import { Dialog, DialogHeader } from '@astryxdesign/core/Dialog'
 import { HStack, VStack } from '@astryxdesign/core/Layout'
 import { Text } from '@astryxdesign/core/Text'
 import type { LogicSpec, ReviewState } from '../spec-types'
-import { CONSTRAINT_KIND_LABEL, CONSTRAINT_RULING_LABEL, RULINGS, scenarioThen } from '../review-state'
+import { CONSTRAINT_KIND_LABEL, CONSTRAINT_RULING_LABEL, RULINGS, effectiveCertainty, scenarioThen } from '../review-state'
 import { CertaintyToken, ClaudeField, Field, ItemReference, SpecMarkdown } from './shared'
 
 type Details = { kind: string; title: string; body: ReactNode }
@@ -73,7 +73,7 @@ function details(spec: LogicSpec, state: ReviewState, id: string): Details | nul
       title: assumption.claim,
       body: (
         <>
-          <HStack><CertaintyToken certainty={assumption.certainty} /></HStack>
+          <HStack><CertaintyToken certainty={effectiveCertainty(state, assumption)} /></HStack>
           <Field label="Why we think so">{assumption.basis}</Field>
           <ClaudeField label="What this means">{assumption.meaning}</ClaudeField>
           <Field label="If this is wrong">{assumption.ifWrong}</Field>
