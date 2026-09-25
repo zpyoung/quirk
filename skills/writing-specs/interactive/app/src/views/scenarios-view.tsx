@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Button } from '@astryxdesign/core/Button'
+import { CheckboxInput } from '@astryxdesign/core/CheckboxInput'
 import { Dialog, DialogHeader } from '@astryxdesign/core/Dialog'
 import { Heading } from '@astryxdesign/core/Heading'
 import { HStack, VStack } from '@astryxdesign/core/Layout'
@@ -130,6 +131,19 @@ function DecisionCell({ s, props }: { s: Scenario; props: ViewProps }) {
   )
 }
 
+/** Stage 2 only re-approves a reopened scenario; drops and update requests are stage-1 decisions a stage-2 export rejects. */
+function ReapproveCell({ s, props }: { s: Scenario; props: ViewProps }) {
+  const { state, update } = props
+  return (
+    <CheckboxInput
+      label={`Re-approve ${s.id}`}
+      isLabelHidden
+      value={Boolean(state.scenarioApproved[s.id])}
+      onChange={(approved) => update((st) => ({ ...st, scenarioApproved: { ...st.scenarioApproved, [s.id]: approved } }), s.id)}
+    />
+  )
+}
+
 function scenarioColumns(props: ViewProps, isStage2: boolean): TableColumn<ScenarioRow>[] {
   const { state, changedIds } = props
   const columns: TableColumn<ScenarioRow>[] = [
@@ -143,7 +157,7 @@ function scenarioColumns(props: ViewProps, isStage2: boolean): TableColumn<Scena
           const approved = !s.dropReason
           return <Token size="sm" color={approved ? 'green' : 'default'} label={approved ? 'Approved' : 'Dropped'} description={s.dropReason} />
         }
-        return <DecisionCell s={s} props={props} />
+        return isStage2 ? <ReapproveCell s={s} props={props} /> : <DecisionCell s={s} props={props} />
       },
     },
     {

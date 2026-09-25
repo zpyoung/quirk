@@ -8,7 +8,7 @@ import { Text } from '@astryxdesign/core/Text'
 import { TextArea } from '@astryxdesign/core/TextArea'
 import { Token } from '@astryxdesign/core/Token'
 import type { Constraint, ConstraintRulingVerb, LogicSpec } from '../spec-types'
-import { CONSTRAINT_KIND_LABEL, CONSTRAINT_RULING_LABEL, nextConstraintRuling } from '../review-state'
+import { CONSTRAINT_KIND_LABEL, CONSTRAINT_RULING_LABEL, constraintDecided, nextConstraintRuling } from '../review-state'
 import { ChangedToken, ClaudeAddedToken, ClaudeField, SpecMarkdown } from './shared'
 import { ListDetailRegister, nextOpenEntryId } from './list-detail-register'
 import type { ViewProps } from './view-props'
@@ -16,14 +16,6 @@ import type { ViewProps } from './view-props'
 const RULING_COLOR: Record<ConstraintRulingVerb, 'green' | 'yellow' | 'red'> = { approve: 'green', rewrite: 'yellow', reject: 'red' }
 const FOLDED_RULING_COLOR: Record<'approved' | 'rewritten' | 'rejected', 'green' | 'yellow' | 'red'> = { approved: 'green', rewritten: 'yellow', rejected: 'red' }
 const FOLDED_RULING_LABEL: Record<'approved' | 'rewritten' | 'rejected', string> = { approved: 'Approved', rewritten: 'Rewritten', rejected: 'Rejected' }
-
-function constraintDecided(props: ViewProps, constraint: Constraint): boolean {
-  const entry = props.state.constraintRulings[constraint.id]
-  if (!entry) return false
-  if (entry.ruling === 'rewrite') return Boolean(entry.text.trim())
-  if (entry.ruling === 'reject') return Boolean(entry.reason.trim())
-  return entry.ruling === 'approve'
-}
 
 function ConstraintDetail({ constraint, props, onApprove }: { constraint: Constraint; props: ViewProps; onApprove: () => void }) {
   const { state, update, changedIds } = props
@@ -72,13 +64,13 @@ function ConstraintDetail({ constraint, props, onApprove }: { constraint: Constr
 function ConstraintRegister({ props }: { props: ViewProps }) {
   const { spec, state } = props
   const [selectedId, setSelectedId] = useState<string | undefined>(
-    () => spec.constraints.find((c) => !constraintDecided(props, c))?.id ?? spec.constraints[0]?.id,
+    () => spec.constraints.find((c) => !constraintDecided(state, c))?.id ?? spec.constraints[0]?.id,
   )
   const selected = spec.constraints.find((c) => c.id === selectedId) ?? spec.constraints[0]
   if (!selected) return <Text type="supporting">The spec lists no constraints.</Text>
   const entries = spec.constraints.map((c) => {
     const entry = state.constraintRulings[c.id]
-    const isDone = constraintDecided(props, c)
+    const isDone = constraintDecided(state, c)
     return {
       id: c.id,
       label: `${c.id} · ${CONSTRAINT_KIND_LABEL[c.kind]}`,

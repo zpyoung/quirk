@@ -2,14 +2,17 @@ import type { ReactNode } from 'react'
 import { Dialog, DialogHeader } from '@astryxdesign/core/Dialog'
 import { HStack, VStack } from '@astryxdesign/core/Layout'
 import { Text } from '@astryxdesign/core/Text'
-import type { LogicSpec, ReviewState } from '../spec-types'
+import type { LogicSpec, ReviewState, Scenario } from '../spec-types'
 import { CONSTRAINT_KIND_LABEL, CONSTRAINT_RULING_LABEL, RULINGS, effectiveCertainty, scenarioThen } from '../review-state'
 import { CertaintyToken, ClaudeField, Field, ItemReference, SpecMarkdown } from './shared'
 
 type Details = { kind: string; title: string; body: ReactNode }
 
-function scenarioDecision(state: ReviewState, id: string, dropReason?: string): string {
+function scenarioDecision(spec: LogicSpec, state: ReviewState, scenario: Scenario): string {
+  const { id, dropReason } = scenario
   if (dropReason) return `Dropped: ${dropReason}`
+  // stage 2 keeps no approval state for folded scenarios; only a reopened one is still undecided
+  if (spec.stage === 2 && !scenario.reopened) return 'Approved'
   if (state.scenarioDrops[id]?.trim()) return `Dropped: ${state.scenarioDrops[id]}`
   if (state.scenarioUpdates[id]?.trim()) return `Update requested: ${state.scenarioUpdates[id]}`
   return state.scenarioApproved[id] ? 'Approved' : 'Not decided yet'
@@ -41,7 +44,7 @@ function details(spec: LogicSpec, state: ReviewState, id: string): Details | nul
         <>
           <SpecMarkdown>{`**Given** ${scenario.given}\n\n**When** ${scenario.when}\n\n**Then** ${scenarioThen(state, scenario)}`}</SpecMarkdown>
           <ClaudeField label="Why">{scenario.explanation}</ClaudeField>
-          <Field label="Your decision">{scenarioDecision(state, id, scenario.dropReason)}</Field>
+          <Field label="Your decision">{scenarioDecision(spec, state, scenario)}</Field>
         </>
       ),
     }

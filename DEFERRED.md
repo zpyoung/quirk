@@ -118,3 +118,10 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Estimated effort**: L
 - **Priority**: P3
 
+## DEFER-14: Deduplicate v1 and v2 logic-spec validators in render_spec.py
+- **Deferred**: 2026-09-25
+- **Session context**: code-review high --fix on zpyoung/interactive-logic-spec
+- **Why deferred**: validate_logic_v2 (render_spec.py ~644) copies ~150 lines of validate_logic (amendments, sections, conflicts, state-machine and story-map views), so shared-section schema fixes must be made twice or v1/v2 drift. Found by /code-review high; too large and risky to refactor as a review fix.
+- **Estimated effort**: M
+- **Priority**: P3
+

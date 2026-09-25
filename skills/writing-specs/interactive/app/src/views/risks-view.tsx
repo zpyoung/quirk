@@ -12,7 +12,7 @@ import { Text } from '@astryxdesign/core/Text'
 import { TextArea } from '@astryxdesign/core/TextArea'
 import { Token } from '@astryxdesign/core/Token'
 import type { Assumption, AssumptionRuling, BlindSpot, Certainty, LogicSpec, ResearchRequest, ReviewState } from '../spec-types'
-import { CERTAINTIES, RULINGS, activeBlindSpots, effectiveCertainty, pendingResearchRequests, requestId, researchedBlindSpotIds, type Update } from '../review-state'
+import { CERTAINTIES, RULINGS, activeBlindSpots, assumptionRuled, effectiveCertainty, pendingResearchRequests, requestId, researchedBlindSpotIds, type Update } from '../review-state'
 import { CERTAINTY_LABEL, CertaintyToken, ChangedToken, ClaudeField, ClaudeWroteToken, Field, ItemReference, itemLabel, SpecMarkdown } from './shared'
 import { ItemRef, useOpenItem } from './item-links'
 import { ListDetailRegister, nextOpenEntryId } from './list-detail-register'
@@ -35,12 +35,18 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 type BlindSpotStatus = 'resolved' | 'accepted' | 'research-requested' | 'researched' | 'reason-written' | 'open'
 
+type BlindSpotSets = { active: Set<string>; researched: Set<string> }
+
+function blindSpotSets(spec: LogicSpec, state: ReviewState): BlindSpotSets {
+  return { active: new Set(activeBlindSpots(state, spec).map((s) => s.id)), researched: researchedBlindSpotIds(state, spec) }
+}
+
 /** Where a blind spot stands; in stage 2 it reads the outcome folded into the spec rather than review state. */
-function blindSpotStatus(spot: BlindSpot, spec: LogicSpec, state: ReviewState): BlindSpotStatus {
-  if (!activeBlindSpots(state, spec).some((s) => s.id === spot.id)) return 'resolved'
+function blindSpotStatus(spot: BlindSpot, spec: LogicSpec, state: ReviewState, sets: BlindSpotSets = blindSpotSets(spec, state)): BlindSpotStatus {
+  if (!sets.active.has(spot.id)) return 'resolved'
   const decision = spec.stage === 2 ? { accepted: Boolean(spot.acceptance), note: spot.acceptance ?? '' } : state.blindSpots[spot.id]
   if (decision?.accepted && decision.note.trim()) return 'accepted'
-  if (researchedBlindSpotIds(state, spec).has(spot.id)) {
+  if (sets.researched.has(spot.id)) {
     return spec.research.some((finding) => finding.blindSpotId === spot.id) ? 'researched' : 'research-requested'
   }
   return decision?.note.trim() ? 'reason-written' : 'open'
@@ -265,7 +271,7 @@ function AssumptionRegister({ props }: { props: ViewProps }) {
   const { spec, state } = props
   const rulingFor = (a: Assumption) => state.assumptions[a.id]?.ruling
   const [selectedId, setSelectedId] = useState<string | undefined>(
-    () => spec.assumptions.find((a) => !rulingFor(a))?.id ?? spec.assumptions[0]?.id,
+    () => spec.assumptions.find((a) => !assumptionRuled(state, a))?.id ?? spec.assumptions[0]?.id,
   )
   const selected = spec.assumptions.find((a) => a.id === selectedId) ?? spec.assumptions[0]
   if (!selected) return <Text type="supporting">The spec lists no assumptions.</Text>
@@ -275,7 +281,7 @@ function AssumptionRegister({ props }: { props: ViewProps }) {
       id: a.id,
       label: `${a.id} · ${CERTAINTY_LABEL[effectiveCertainty(state, a)]}`,
       description: a.claim,
-      isDone: Boolean(ruling),
+      isDone: assumptionRuled(state, a),
       status: ruling ? (
         <Token size="sm" color={RULING_COLOR[ruling]} label={RULINGS.find((r) => r.value === ruling)?.label ?? ruling} />
       ) : (
@@ -303,14 +309,15 @@ function AssumptionRegister({ props }: { props: ViewProps }) {
 
 function BlindSpotRegister({ props }: { props: ViewProps }) {
   const { spec, state } = props
-  const isOpen = (b: BlindSpot) => ['open', 'reason-written'].includes(blindSpotStatus(b, spec, state))
+  const sets = blindSpotSets(spec, state)
+  const isOpen = (b: BlindSpot) => ['open', 'reason-written'].includes(blindSpotStatus(b, spec, state, sets))
   const [selectedId, setSelectedId] = useState<string | undefined>(
     () => spec.blindSpots.find(isOpen)?.id ?? spec.blindSpots[0]?.id,
   )
   const selected = spec.blindSpots.find((b) => b.id === selectedId) ?? spec.blindSpots[0]
   if (!selected) return <Text type="supporting">The spec lists no blind spots.</Text>
   const entries = spec.blindSpots.map((b) => {
-    const status = blindSpotStatus(b, spec, state)
+    const status = blindSpotStatus(b, spec, state, sets)
     return {
       id: b.id,
       label: `${b.id} · caused by ${b.sources.join(', ')}`,
@@ -370,6 +377,7 @@ function AssumptionsTable({ spec }: { spec: LogicSpec }) {
 function BlindSpotsTable({ props }: { props: ViewProps }) {
   const { spec, state } = props
   const openItem = useOpenItem()
+  const sets = blindSpotSets(spec, state)
   const columns: TableColumn<BlindSpotRow>[] = [
     { key: 'id', header: 'ID', width: pixel(100), renderCell: (b) => <Text type="label">{b.id}</Text> },
     { key: 'title', header: 'Blind spot', width: proportional(3), renderCell: (b) => <Link onClick={() => openItem?.(b.id)}>{b.title}</Link> },
@@ -385,7 +393,7 @@ function BlindSpotsTable({ props }: { props: ViewProps }) {
       key: 'status',
       header: 'Status',
       width: pixel(130),
-      renderCell: (b) => <BlindSpotStatusToken status={blindSpotStatus(b, spec, state)} />,
+      renderCell: (b) => <BlindSpotStatusToken status={blindSpotStatus(b, spec, state, sets)} />,
     },
     { key: 'acceptance', header: 'Your acceptance', width: proportional(3), renderCell: (b) => <Text type="supporting">{b.acceptance ?? ''}</Text> },
   ]

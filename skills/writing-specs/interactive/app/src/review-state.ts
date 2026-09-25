@@ -290,8 +290,7 @@ function derivationChangedIds(spec: LogicSpec): string[] {
 }
 
 export function changedItemIds(spec: LogicSpec, hashes: Record<string, string>, seen: Record<string, string>): string[] {
-  const hashChanged = itemIds(spec).filter((id) => seen[id] !== hashes[id])
-  return [...new Set([...hashChanged, ...derivationChangedIds(spec)])]
+  return changedSinceReviewIds(spec, hashes, seen, true)
 }
 
 /** Items to flag as changed for the reviewer: an item whose hash differs from the one they saw, or one new since their last export. */
@@ -511,7 +510,7 @@ export function activeBlindSpots(state: ReviewState, spec: LogicSpec): BlindSpot
     const scenario = scenarios.get(resolvedBy)
     if (scenario) {
       if (spec.stage === 2 && !scenario.reopened) return !scenario.dropReason
-      return Boolean(state.scenarioApproved[resolvedBy]) && !state.scenarioDrops[resolvedBy]
+      return Boolean(state.scenarioApproved[resolvedBy]) && !state.scenarioDrops[resolvedBy]?.trim()
     }
     const constraint = constraints.get(resolvedBy)
     if (constraint) {
@@ -573,12 +572,19 @@ export function nextConstraintRuling(
   }
 }
 
-function constraintDecided(state: ReviewState, constraint: { id: string }): boolean {
+/** A constraint counts as ruled once approved, rewritten with text, or rejected with a reason. */
+export function constraintDecided(state: ReviewState, constraint: { id: string }): boolean {
   const ruling = state.constraintRulings[constraint.id]
   if (!ruling) return false
   if (ruling.ruling === 'rewrite') return Boolean(ruling.text.trim())
   if (ruling.ruling === 'reject') return Boolean(ruling.reason.trim())
   return ruling.ruling === 'approve'
+}
+
+/** An assumption counts as ruled once it has a ruling, and a note for any ruling other than build on. */
+export function assumptionRuled(state: ReviewState, assumption: { id: string }): boolean {
+  const decision = state.assumptions[assumption.id]
+  return Boolean(decision?.ruling && (decision.ruling === 'build-on' || decision.note.trim()))
 }
 
 /** `CONTRACT:` the TS gate ids and meanings mirror the Python gates exactly (see Gates); the duplication is deliberate. */
@@ -588,10 +594,6 @@ export function gateList(state: ReviewState, spec: LogicSpec): ReviewGate[] {
     const scenarioDecided = (scenario: Scenario) => Boolean(state.scenarioApproved[scenario.id] || state.scenarioDrops[scenario.id]?.trim())
     const activeSpots = activeBlindSpots(state, spec)
     const researched = researchedBlindSpotIds(state, spec)
-    const ruled = (assumption: Assumption) => {
-      const decision = state.assumptions[assumption.id]
-      return Boolean(decision?.ruling && (decision.ruling === 'build-on' || decision.note.trim()))
-    }
     return [
       {
         id: 'scenarios',
@@ -600,7 +602,7 @@ export function gateList(state: ReviewState, spec: LogicSpec): ReviewGate[] {
         total: spec.scenarios.length + pending.length,
       },
       { id: 'constraints', label: 'Rule on every constraint', done: spec.constraints.filter((c) => constraintDecided(state, c)).length, total: spec.constraints.length },
-      { id: 'assumptions', label: 'Rule on every assumption; explain rulings other than build on', done: spec.assumptions.filter(ruled).length, total: spec.assumptions.length },
+      { id: 'assumptions', label: 'Rule on every assumption; explain rulings other than build on', done: spec.assumptions.filter((a) => assumptionRuled(state, a)).length, total: spec.assumptions.length },
       {
         id: 'blind-spots',
         label: 'Accept every active blind spot in your own words, or ask Claude to research it',
