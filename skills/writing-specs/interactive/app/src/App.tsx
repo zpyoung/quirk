@@ -44,6 +44,7 @@ import { ScopeOutGuardProvider } from './views/scope-out-guard'
 import { SignOffView } from './views/sign-off-view'
 import { SpecView } from './views/spec-view'
 import { StateMachineView } from './views/state-machine-view'
+import { CustomView } from './views/custom-view'
 import { StoryMapView } from './views/story-map-view'
 import type { ViewProps } from './views/view-props'
 import './index.css'
@@ -144,6 +145,7 @@ function App() {
     if (spec.requirements.some((item) => item.certainty !== null)) result.push({ id: 'heatmap', label: 'Impact × certainty' })
     if (spec.views?.storyMap) result.push({ id: 'story-map', label: 'Story map' })
     if (spec.views?.stateMachine) result.push({ id: 'states', label: 'State machine' })
+    for (const custom of spec.views?.custom ?? []) result.push({ id: `custom:${custom.id}`, label: custom.title })
     result.push(
       { id: 'scenarios', label: 'Behaviors & scenarios' },
       { id: 'constraints', label: 'Constraints' },
@@ -331,6 +333,7 @@ function App() {
                     {view === 'heatmap' ? <ImpactCertaintyView {...viewProps} /> : null}
                     {view === 'story-map' ? <StoryMapView {...viewProps} /> : null}
                     {view === 'states' ? <StateMachineView {...viewProps} /> : null}
+                    {view.startsWith('custom:') ? <CustomView {...viewProps} viewId={view.slice('custom:'.length)} /> : null}
                     {view === 'spec' ? <SpecView {...viewProps} /> : null}
                     {view === 'sign-off' ? (
                       <SignOffView {...viewProps} gates={gates} createExport={createExport} onExport={onExport} importStatus={importStatus} onImport={importFile} />

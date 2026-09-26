@@ -1437,3 +1437,63 @@ def test_validate_export_shape_rejects_an_unknown_reviewer_certainty() -> None:
     export["state"]["assumptions"]["ASM-01"]["certainty"] = "certain"
     errors = dict(render_spec.validate_export_shape(export))
     assert "/state/assumptions/ASM-01/certainty" in errors
+
+
+def _stage2_with_custom(custom: Any) -> Dict[str, Any]:
+    logic = load_json(V2_STAGE2 / "logic.json")
+    logic.setdefault("views", {})["custom"] = custom
+    return logic
+
+
+MESSAGES_VIEW = {
+    "id": "messages",
+    "title": "Messages",
+    "columns": [
+        {"key": "text", "label": "Message", "type": "quote", "checkedAgainst": "usedBy"},
+        {"key": "where", "label": "Where", "type": "status", "statuses": {"Toast": "blue"}},
+        {"key": "usedBy", "label": "Quoted by", "type": "items"},
+    ],
+    "rows": [
+        {"id": "written", "cells": {"text": "An archive and <what> are written", "where": "Toast", "usedBy": ["SC-01"]}},
+        {"id": "drifted", "cells": {"text": "The archive is written", "where": "Toast", "usedBy": ["SC-01", "SC-05"]}},
+    ],
+}
+
+
+def test_v2_custom_view_validates_and_warns_on_quote_drift() -> None:
+    facts = {
+        "id": "facts",
+        "title": "Facts",
+        "columns": [{"key": "fact", "label": "Fact", "type": "markdown"}, {"key": "refs", "label": "Spec", "type": "items"}],
+        "rows": [{"id": "r1", "cells": {"fact": {"text": "Index is a file", "certainty": "assumed"}, "refs": ["REQ-01", "ASM-01"]}}],
+    }
+    errors, warnings = render_spec.validate_logic_dispatch(_stage2_with_custom([facts, MESSAGES_VIEW]))
+    assert errors == []
+    # the placeholder row matches SC-01; the drifted row matches neither item's wording
+    assert warnings == ["warning: custom view messages row drifted: worded differently in SC-01, SC-05"]
+
+
+def test_v2_custom_view_rejects_bad_columns_cells_and_refs() -> None:
+    view = {
+        "id": "bad",
+        "title": "Bad",
+        "columns": [
+            {"key": "q", "label": "Quote", "type": "quote", "checkedAgainst": "note"},
+            {"key": "note", "label": "Note", "type": "text", "checkedAgainst": "q"},
+            {"key": "refs", "label": "Refs", "type": "diagram"},
+        ],
+        "rows": [{"id": "r1", "cells": {"note": {"text": "x", "certainty": "sure"}, "extra": "y", "refs": ["REQ-NOPE"]}}],
+    }
+    errors = dict(render_spec.validate_logic_dispatch(_stage2_with_custom([view]))[0])
+    assert errors["/views/custom/0/columns/0/checkedAgainst"] == "must name an items column in this view"
+    assert errors["/views/custom/0/columns/1/checkedAgainst"] == "only allowed on a quote column"
+    assert "/views/custom/0/columns/2/type" in errors
+    assert "/views/custom/0/rows/0/cells/note/certainty" in errors
+    assert errors["/views/custom/0/rows/0/cells/extra"] == "unknown column key: extra"
+    missing = dict(render_spec.validate_logic_dispatch(_stage2_with_custom([{"id": "empty", "title": "Empty"}]))[0])
+    assert "/views/custom/0/columns" in missing and "/views/custom/0/rows" in missing
+
+
+def test_v2_custom_view_ids_must_be_unique() -> None:
+    errors = dict(render_spec.validate_logic_dispatch(_stage2_with_custom([MESSAGES_VIEW, MESSAGES_VIEW]))[0])
+    assert errors["/views/custom/1/id"] == "duplicate custom view id: messages"

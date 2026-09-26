@@ -641,6 +641,145 @@ def _validate_provenance(v: Validator, item: dict, path: str) -> None:
         v.string(item["question"], pointer(path, "question"))
 
 
+CUSTOM_COLUMN_TYPES = ("text", "markdown", "items", "status", "quote")
+STATUS_COLORS = ("green", "yellow", "orange", "red", "blue", "default")
+
+
+def _required_array(v: Validator, obj: dict, key: str, path: str) -> Optional[list]:
+    raw = _required(v, obj, key, path)
+    return v.array(raw, pointer(path, key)) if key in obj else None
+
+
+def _validate_custom_views(v: Validator, raw: Any, item_ids: set) -> None:
+    """Each custom view is a task-specific table: typed columns, and rows whose cells match their column's type."""
+    views = v.array(raw, "/views/custom")
+    view_ids: set = set()
+    for view_index, view_raw in enumerate(views or []):
+        base = pointer("/views/custom", view_index)
+        view = v.object(view_raw, base)
+        if view is None:
+            continue
+        ident = _id_field(v, view, "id", base)
+        if isinstance(ident, str):
+            if ident in view_ids:
+                v.error(pointer(base, "id"), "duplicate custom view id: " + ident)
+            view_ids.add(ident)
+        _string_field(v, view, "title", base, nonempty=True)
+        if "intro" in view:
+            v.string(view["intro"], pointer(base, "intro"))
+        columns: Dict[str, str] = {}
+        column_rows = _required_array(v, view, "columns", base)
+        for index, column_raw in enumerate(column_rows or []):
+            path = pointer(pointer(base, "columns"), index)
+            column = v.object(column_raw, path)
+            if column is None:
+                continue
+            key = _string_field(v, column, "key", path, nonempty=True)
+            _string_field(v, column, "label", path, nonempty=True)
+            kind = column.get("type")
+            if "type" in column:
+                v.enum(kind, CUSTOM_COLUMN_TYPES, pointer(path, "type"))
+            else:
+                _required(v, column, "type", path)
+            if isinstance(key, str) and key:
+                if key in columns:
+                    v.error(pointer(path, "key"), "duplicate column key: " + key)
+                columns[key] = kind if isinstance(kind, str) else ""
+            if "statuses" in column:
+                statuses = v.object(column["statuses"], pointer(path, "statuses"))
+                for value, color in (statuses or {}).items():
+                    v.enum(color, STATUS_COLORS, pointer(pointer(path, "statuses"), value))
+        for index, column_raw in enumerate(column_rows or []):
+            if not isinstance(column_raw, dict):
+                continue
+            path = pointer(pointer(base, "columns"), index)
+            target = column_raw.get("checkedAgainst")
+            if column_raw.get("type") == "quote":
+                if target is None:
+                    v.error(pointer(path, "checkedAgainst"), "required for a quote column")
+                elif columns.get(target) != "items":
+                    v.error(pointer(path, "checkedAgainst"), "must name an items column in this view")
+            elif target is not None:
+                v.error(pointer(path, "checkedAgainst"), "only allowed on a quote column")
+        row_rows = _required_array(v, view, "rows", base)
+        row_ids: set = set()
+        for index, row_raw in enumerate(row_rows or []):
+            path = pointer(pointer(base, "rows"), index)
+            row = v.object(row_raw, path)
+            if row is None:
+                continue
+            row_id = _string_field(v, row, "id", path, nonempty=True)
+            if isinstance(row_id, str):
+                if row_id in row_ids:
+                    v.error(pointer(path, "id"), "duplicate row id: " + row_id)
+                row_ids.add(row_id)
+            cells_raw = _required(v, row, "cells", path)
+            cells = v.object(cells_raw, pointer(path, "cells")) if "cells" in row else None
+            for key, cell in (cells or {}).items():
+                cell_path = pointer(pointer(path, "cells"), key)
+                if key not in columns:
+                    v.error(cell_path, "unknown column key: " + key)
+                    continue
+                if columns[key] == "items":
+                    ids = v.array(cell, cell_path)
+                    for j, item in enumerate(ids or []):
+                        if v.string(item, pointer(cell_path, j), nonempty=True) and item not in item_ids:
+                            v.error(pointer(cell_path, j), "unknown logic item id: " + item)
+                elif isinstance(cell, dict):
+                    _string_field(v, cell, "text", cell_path)
+                    if "certainty" in cell:
+                        v.enum(cell["certainty"], CERTAINTIES, pointer(cell_path, "certainty"))
+                else:
+                    v.string(cell, cell_path)
+
+
+def _quotable_text(root: dict, ident: str) -> Optional[str]:
+    """Mirrors the page's quotable text for an item id."""
+    fields = {
+        "scenarios": lambda item: [item["given"], item["when"], item["then"], *item["alternatives"]],
+        "requirements": lambda item: [item["text"], item["summary"], item["detail"]],
+        "constraints": lambda item: [item["text"]],
+        "behaviors": lambda item: [item["rule"], item.get("detail", "")],
+        "assumptions": lambda item: [item["claim"], item["basis"], item["meaning"]],
+        "blindSpots": lambda item: [item["title"], item["detail"]],
+    }
+    for kind, pick in fields.items():
+        for item in root.get(kind, []):
+            if item.get("id") == ident:
+                return "\n".join(pick(item))
+    return None
+
+
+def quote_pattern(text: str) -> "re.Pattern[str]":
+    """`CONTRACT:` `<...>` in a quote is a placeholder matching any text; the page applies the same rule."""
+    return re.compile(".+?".join(re.escape(part) for part in re.split(r"<[^>]+>", text)))
+
+
+def custom_view_quote_warnings(root: dict) -> List[str]:
+    """One warning per quote cell whose checked items word it differently; drift is a review finding, not an error."""
+    warnings: List[str] = []
+    for view in root.get("views", {}).get("custom", []):
+        for column in view["columns"]:
+            if column["type"] != "quote":
+                continue
+            for row in view["rows"]:
+                cell = row["cells"].get(column["key"])
+                text = cell["text"] if isinstance(cell, dict) else cell
+                if not text:
+                    continue
+                pattern = quote_pattern(text)
+                drift = [
+                    ident
+                    for ident in row["cells"].get(column["checkedAgainst"], [])
+                    if (source := _quotable_text(root, ident)) is not None and not pattern.search(source)
+                ]
+                if drift:
+                    warnings.append(
+                        "warning: custom view " + view["id"] + " row " + row["id"] + ": worded differently in " + ", ".join(drift)
+                    )
+    return warnings
+
+
 def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
     v = Validator()
     root = logic
@@ -1119,6 +1258,8 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
                     cross = _required(v, story, "crossCutting", "/views/storyMap")
                     if "crossCutting" in story:
                         v.string_array(cross, "/views/storyMap/crossCutting")
+            if "custom" in view_obj:
+                _validate_custom_views(v, view_obj["custom"], set(ids))
 
     if "stage1Pin" in root:
         pin = v.object(root["stage1Pin"], "/stage1Pin")
@@ -1209,6 +1350,8 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
         if not v.errors:
             _validate_stage1_lock(v, root)
 
+    if not v.errors:
+        warnings.extend(custom_view_quote_warnings(root))
     return v.errors, warnings
 
 

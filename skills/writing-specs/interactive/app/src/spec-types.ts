@@ -141,6 +141,27 @@ export interface StateMachine {
   transitions: StateMachineTransition[]
 }
 
+export type CustomColumnType = 'text' | 'markdown' | 'items' | 'status' | 'quote'
+export type StatusColor = 'green' | 'yellow' | 'orange' | 'red' | 'blue' | 'default'
+export interface CustomColumn {
+  key: string
+  label: string
+  type: CustomColumnType
+  /** status columns: the color for each value; values not listed show neutral. */
+  statuses?: Record<string, StatusColor>
+  /** quote columns: the key of an `items` column in the same row whose items must contain this text verbatim. */
+  checkedAgainst?: string
+}
+/** A text-like cell, optionally marked with how sure the spec is of it; an `items` cell is a list of item ids. */
+export type CustomCell = string | { text: string; certainty?: Certainty } | string[]
+/** A task-specific table the spec defines as data: typed columns, one row per subject. */
+export interface CustomView {
+  id: string
+  title: string
+  intro?: Markdown
+  columns: CustomColumn[]
+  rows: { id: string; cells: Record<string, CustomCell> }[]
+}
 export interface StoryMap {
   journey: { area: string; label: string }[]
   crossCutting: string[]
@@ -175,6 +196,7 @@ export interface LogicSpec {
   views?: {
     stateMachine?: StateMachine
     storyMap?: StoryMap
+    custom?: CustomView[]
   }
   stage1Pin?: {
     signedAt: IsoDateTime
