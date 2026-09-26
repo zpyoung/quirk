@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { Banner } from '@astryxdesign/core/Banner'
 import { Heading } from '@astryxdesign/core/Heading'
 import { HStack, VStack } from '@astryxdesign/core/Layout'
@@ -6,7 +7,7 @@ import { Text } from '@astryxdesign/core/Text'
 import { Token } from '@astryxdesign/core/Token'
 import type { Certainty, CustomCell, CustomColumn, CustomView as CustomViewData, LogicSpec, ReviewState } from '../spec-types'
 import { effectivePlacement } from '../review-state'
-import { ItemRef } from './item-links'
+import { escapeRegExp, ItemRef } from './item-links'
 import { CertaintyToken, SpecMarkdown } from './shared'
 import type { ViewProps } from './view-props'
 
@@ -38,9 +39,9 @@ function quotableText(spec: LogicSpec, id: string): string | null {
   return null
 }
 
-/** `CONTRACT:` `<...>` in a quote is a placeholder matching any text; `render_spec.py` applies the same rule when it warns. */
+/** `<...>` in a quote is a placeholder matching any text; `render_spec.py` applies the same rule when it warns. */
 export function quotePattern(text: string): RegExp {
-  const parts = text.split(/<[^>]+>/).map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  const parts = text.split(/<[^>]+>/).map(escapeRegExp)
   return new RegExp(parts.join('.+?'))
 }
 
@@ -73,17 +74,17 @@ function ItemsCell({ ids, spec, state }: { ids: string[]; spec: LogicSpec; state
   )
 }
 
-function renderCell(column: CustomColumn, row: Row, spec: LogicSpec, state: ReviewState) {
+function renderCell(column: CustomColumn, row: Row, spec: LogicSpec, state: ReviewState, drift: string[]) {
   const cell = row.cells[column.key]
   if (column.type === 'items') return <ItemsCell ids={cellItems(cell)} spec={spec} state={state} />
   const value = cellText(cell)
   if (!value) return <Text type="supporting">—</Text>
   const certainty = value.certainty ? <HStack><CertaintyToken certainty={value.certainty} /></HStack> : null
   if (column.type === 'status') {
-    return <VStack gap={1}><HStack><Token size="sm" color={column.statuses?.[value.text] ?? 'default'} label={value.text} /></HStack>{certainty}</VStack>
+    const color = column.statuses && Object.hasOwn(column.statuses, value.text) ? column.statuses[value.text] : 'default'
+    return <VStack gap={1}><HStack><Token size="sm" color={color} label={value.text} /></HStack>{certainty}</VStack>
   }
   if (column.type === 'quote') {
-    const drift = quoteDrift(spec, column, row)
     return (
       <VStack gap={1}>
         <Text weight="semibold">{value.text}</Text>
@@ -108,15 +109,24 @@ function renderCell(column: CustomColumn, row: Row, spec: LogicSpec, state: Revi
 /** One task-specific table defined entirely by the spec's data; every custom view renders through this. */
 export function CustomView({ spec, state, viewId }: ViewProps & { viewId: string }) {
   const view = spec.views?.custom?.find((item) => item.id === viewId)
+  const drift = useMemo(() => {
+    const byCell = new Map<string, string[]>()
+    for (const column of view?.columns ?? []) {
+      if (column.type !== 'quote') continue
+      for (const row of view?.rows ?? []) {
+        const ids = quoteDrift(spec, column, row)
+        if (ids.length) byCell.set(`${column.key}\u0000${row.id}`, ids)
+      }
+    }
+    return byCell
+  }, [spec, view])
   if (!view) return null
-  const driftRows = view.columns
-    .filter((column) => column.type === 'quote')
-    .reduce((count, column) => count + view.rows.filter((row) => quoteDrift(spec, column, row).length > 0).length, 0)
+  const driftRows = drift.size
   const columns: TableColumn<Row>[] = view.columns.map((column) => ({
     key: column.key,
     header: column.label,
     width: proportional(column.type === 'items' || column.type === 'status' ? 1 : 2),
-    renderCell: (row) => renderCell(column, row, spec, state),
+    renderCell: (row) => renderCell(column, row, spec, state, drift.get(`${column.key}\u0000${row.id}`) ?? []),
   }))
   return (
     <VStack gap={4}>

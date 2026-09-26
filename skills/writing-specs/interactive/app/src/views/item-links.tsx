@@ -14,7 +14,7 @@ export function linkableItemIds(spec: LogicSpec): string[] {
   )
 }
 
-const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+export const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /** Makes item IDs clickable for everything below it; `open` receives the clicked ID. */
 export function ItemLinksProvider({ spec, open, children }: { spec: LogicSpec; open: (id: string) => void; children: ReactNode }) {

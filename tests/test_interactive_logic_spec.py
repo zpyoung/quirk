@@ -1496,4 +1496,21 @@ def test_v2_custom_view_rejects_bad_columns_cells_and_refs() -> None:
 
 def test_v2_custom_view_ids_must_be_unique() -> None:
     errors = dict(render_spec.validate_logic_dispatch(_stage2_with_custom([MESSAGES_VIEW, MESSAGES_VIEW]))[0])
-    assert errors["/views/custom/1/id"] == "duplicate custom view id: messages"
+    assert errors["/views/custom/1/id"] == "duplicate id; first used at /views/custom/0/id"
+
+
+def test_v2_custom_view_rejects_unhashable_checked_against_and_reserved_keys() -> None:
+    view = {
+        "id": "odd",
+        "title": "Odd",
+        "columns": [
+            {"key": "q", "label": "Quote", "type": "quote", "checkedAgainst": ["refs"]},
+            {"key": "constructor", "label": "Refs", "type": "items"},
+        ],
+        "rows": [{"id": "r1", "cells": {}}, {"id": "r1", "cells": {}}],
+    }
+    errors = dict(render_spec.validate_logic_dispatch(_stage2_with_custom([view]))[0])
+    assert errors["/views/custom/0/columns/0/checkedAgainst"] == "must name an items column in this view"
+    # a reserved key would make a row missing that cell resolve to an Object.prototype member on the page
+    assert "/views/custom/0/columns/1/key" in errors
+    assert errors["/views/custom/0/rows/1/id"] == "duplicate id; first used at /views/custom/0/rows/0/id"

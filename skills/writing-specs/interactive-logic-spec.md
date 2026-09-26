@@ -83,7 +83,7 @@ While deriving, also write every optional view the spec's content supports, unde
 - **`custom`**: a list of task-specific tables, each its own tab. Add one when the reviewer would otherwise have to hold a set of cross-cutting facts in their head: the same facts about each of several subjects (each supported tool's install method and update path), or every piece of user-facing text the spec commits to. Each view has an `id`, a `title`, an optional `intro`, typed `columns`, and `rows` of `cells` keyed by column. Column types:
   - `text` or `markdown`: a string, or `{text, certainty}` when the fact could be wrong; item IDs in markdown become links.
   - `items`: a list of scenario, requirement, constraint, assumption, or blind-spot IDs; requirements moved out of scope show as such.
-  - `status`: a short label, colored through the column's `statuses` map.
+  - `status`: a short label, colored through the column's `statuses` map from label to `green`, `yellow`, `orange`, `red`, `blue`, or `default`.
   - `quote`: exact user-facing text, with `<...>` for placeholders. `checkedAgainst` names an `items` column in the same row, and `validate`, `render`, and the page all flag any of those items that words it differently.
 
   Keep to two or three custom views per spec. A new column type is added to the page only when a real need cannot be expressed with these; a one-column `markdown` table is the fallback for content that fits nothing else, at the cost of those checks.

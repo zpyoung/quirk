@@ -125,3 +125,10 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Estimated effort**: M
 - **Priority**: P3
 
+## DEFER-15: Compute custom-view quote drift once, in render, instead of in both Python and the page
+- **Deferred**: 2026-09-26
+- **Session context**: code review of typed custom views (db10b48) on zpyoung/interactive-logic-spec-extra-views
+- **Why deferred**: Quote drift is matched twice: TS quotableText/quotePattern (skills/writing-specs/interactive/app/src/views/custom-view.tsx) and Python _quotable_text/quote_pattern (skills/writing-specs/interactive/render_spec.py), kept in sync only by a docstring. Regex semantics already differ (JS `.` excludes \r,  ,  ; Python does not) and no test checks agreement. Fix: render computes drift into the page payload and the page only displays it. Left out of the /code-review high --fix pass on db10b48 because it changes the payload format and the page data flow.
+- **Estimated effort**: M
+- **Priority**: P3
+

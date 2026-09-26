@@ -149,7 +149,7 @@ export interface CustomColumn {
   type: CustomColumnType
   /** status columns: the color for each value; values not listed show neutral. */
   statuses?: Record<string, StatusColor>
-  /** quote columns: the key of an `items` column in the same row whose items must contain this text verbatim. */
+  /** quote columns: the key of an `items` column in the same row whose items must contain this text, with `<...>` matching any text. */
   checkedAgainst?: string
 }
 /** A text-like cell, optionally marked with how sure the spec is of it; an `items` cell is a list of item ids. */

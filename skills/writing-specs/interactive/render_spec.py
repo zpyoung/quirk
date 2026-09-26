@@ -652,18 +652,14 @@ def _required_array(v: Validator, obj: dict, key: str, path: str) -> Optional[li
 
 def _validate_custom_views(v: Validator, raw: Any, item_ids: set) -> None:
     """Each custom view is a task-specific table: typed columns, and rows whose cells match their column's type."""
-    views = v.array(raw, "/views/custom")
-    view_ids: set = set()
-    for view_index, view_raw in enumerate(views or []):
+    views = v.array(raw, "/views/custom") or []
+    _record_ids(v, views, "/views/custom", {})
+    for view_index, view_raw in enumerate(views):
         base = pointer("/views/custom", view_index)
         view = v.object(view_raw, base)
         if view is None:
             continue
-        ident = _id_field(v, view, "id", base)
-        if isinstance(ident, str):
-            if ident in view_ids:
-                v.error(pointer(base, "id"), "duplicate custom view id: " + ident)
-            view_ids.add(ident)
+        _id_field(v, view, "id", base)
         _string_field(v, view, "title", base, nonempty=True)
         if "intro" in view:
             v.string(view["intro"], pointer(base, "intro"))
@@ -674,13 +670,11 @@ def _validate_custom_views(v: Validator, raw: Any, item_ids: set) -> None:
             column = v.object(column_raw, path)
             if column is None:
                 continue
-            key = _string_field(v, column, "key", path, nonempty=True)
+            key = _id_field(v, column, "key", path)
             _string_field(v, column, "label", path, nonempty=True)
-            kind = column.get("type")
+            kind = _required(v, column, "type", path)
             if "type" in column:
                 v.enum(kind, CUSTOM_COLUMN_TYPES, pointer(path, "type"))
-            else:
-                _required(v, column, "type", path)
             if isinstance(key, str) and key:
                 if key in columns:
                     v.error(pointer(path, "key"), "duplicate column key: " + key)
@@ -697,22 +691,18 @@ def _validate_custom_views(v: Validator, raw: Any, item_ids: set) -> None:
             if column_raw.get("type") == "quote":
                 if target is None:
                     v.error(pointer(path, "checkedAgainst"), "required for a quote column")
-                elif columns.get(target) != "items":
+                elif not isinstance(target, str) or columns.get(target) != "items":
                     v.error(pointer(path, "checkedAgainst"), "must name an items column in this view")
             elif target is not None:
                 v.error(pointer(path, "checkedAgainst"), "only allowed on a quote column")
-        row_rows = _required_array(v, view, "rows", base)
-        row_ids: set = set()
-        for index, row_raw in enumerate(row_rows or []):
+        row_rows = _required_array(v, view, "rows", base) or []
+        _record_ids(v, row_rows, pointer(base, "rows"), {})
+        for index, row_raw in enumerate(row_rows):
             path = pointer(pointer(base, "rows"), index)
             row = v.object(row_raw, path)
             if row is None:
                 continue
-            row_id = _string_field(v, row, "id", path, nonempty=True)
-            if isinstance(row_id, str):
-                if row_id in row_ids:
-                    v.error(pointer(path, "id"), "duplicate row id: " + row_id)
-                row_ids.add(row_id)
+            _string_field(v, row, "id", path, nonempty=True)
             cells_raw = _required(v, row, "cells", path)
             cells = v.object(cells_raw, pointer(path, "cells")) if "cells" in row else None
             for key, cell in (cells or {}).items():
@@ -751,7 +741,7 @@ def _quotable_text(root: dict, ident: str) -> Optional[str]:
 
 
 def quote_pattern(text: str) -> "re.Pattern[str]":
-    """`CONTRACT:` `<...>` in a quote is a placeholder matching any text; the page applies the same rule."""
+    """`<...>` in a quote is a placeholder matching any text; the page applies the same rule."""
     return re.compile(".+?".join(re.escape(part) for part in re.split(r"<[^>]+>", text)))
 
 
