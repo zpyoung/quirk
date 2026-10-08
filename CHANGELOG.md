@@ -5,6 +5,12 @@ calendar-based (**CalVer**, `YYYY.M.D` unpadded); the `releasing-quirk` skill
 stamps and prepends each entry (newest on top). Since the version no longer encodes
 compatibility, breaking changes are called out in a `### ⚠️ BREAKING` subsection.
 
+## 2026.10.8
+
+### Changes
+- **Releases are automatic:** every merged PR to `main` gets its own CalVer bump and CHANGELOG entry, written from the PR's `## Changelog` section or its title. Label a PR `breaking` to file it under BREAKING, or `skip-release` to merge without releasing.
+- Add typed custom views to interactive logic spec reviews (#43)
+
 ## 2026.9.25
 
 ### Changes
