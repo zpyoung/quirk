@@ -6,13 +6,16 @@ import { Heading } from '@astryxdesign/core/Heading'
 import { HStack, VStack } from '@astryxdesign/core/Layout'
 import { SegmentedControl, SegmentedControlItem } from '@astryxdesign/core/SegmentedControl'
 import { Selector, SelectorOption } from '@astryxdesign/core/Selector'
+import { Switch } from '@astryxdesign/core/Switch'
 import { Table, pixel, proportional, type TableColumn } from '@astryxdesign/core/Table'
 import { Text } from '@astryxdesign/core/Text'
 import { TextArea } from '@astryxdesign/core/TextArea'
 import { TextInput } from '@astryxdesign/core/TextInput'
 import { Token } from '@astryxdesign/core/Token'
+import { VisuallyHidden } from '@astryxdesign/core/VisuallyHidden'
 import type { Behavior, Scenario, ScenarioOutcome, ScenarioRequest, ReviewState } from '../spec-types'
-import { pendingScenarioRequests, requestId, scenarioThen, type Update } from '../review-state'
+import { isScenarioFlagged, isScenarioUndecided, pendingScenarioRequests, requestId, scenarioThen, type Update } from '../review-state'
+import { ScenarioFocusDialog } from './scenario-focus-dialog'
 import { ChangedRowLabel, changedRowsPlugin, ClaudeAddedToken, SpecMarkdown } from './shared'
 import type { ViewProps } from './view-props'
 
@@ -26,7 +29,7 @@ function hasScenarioEntry(state: ReviewState, id: string): boolean {
   return Object.hasOwn(state.scenarioApproved, id) || Object.hasOwn(state.scenarioDrops, id) || Object.hasOwn(state.scenarioUpdates, id)
 }
 
-function Clause({ keyword, text }: { keyword: string; text: string }) {
+export function Clause({ keyword, text }: { keyword: string; text: string }) {
   return <SpecMarkdown compact>{`**${keyword}** ${text}`}</SpecMarkdown>
 }
 
@@ -35,7 +38,7 @@ function ThenLabel({ label }: { label: string }) {
   return <><strong>Then</strong>{label.slice(4)}</>
 }
 
-function OutcomeCell({ s, props }: { s: Scenario; props: ViewProps }) {
+export function OutcomeCell({ s, props }: { s: Scenario; props: ViewProps }) {
   const { state, update } = props
   const outcome = state.scenarioOutcomes[s.id] ?? { choice: 'spec' as const, custom: '' }
   const set = (patch: Partial<ScenarioOutcome>) =>
@@ -75,9 +78,9 @@ function OutcomeCell({ s, props }: { s: Scenario; props: ViewProps }) {
   )
 }
 
-type Decision = 'approve' | 'update' | 'drop'
+export type Decision = 'approve' | 'update' | 'drop'
 
-function DecisionCell({ s, props }: { s: Scenario; props: ViewProps }) {
+export function DecisionCell({ s, props, onDecided }: { s: Scenario; props: ViewProps; onDecided?: (decision: Decision) => void }) {
   const { state, update } = props
   // drop and update entries exist as soon as they are picked, so blank text keeps the choice without resolving the scenario
   const isDropped = Object.hasOwn(state.scenarioDrops, s.id)
@@ -100,7 +103,16 @@ function DecisionCell({ s, props }: { s: Scenario; props: ViewProps }) {
     }, s.id)
   return (
     <VStack gap={1.5}>
-      <SegmentedControl size="sm" layout="fill" label={`Decision for ${s.id}`} value={value} onChange={(next) => decide(next as Decision)}>
+      <SegmentedControl
+        size="sm"
+        layout="fill"
+        label={`Decision for ${s.id}`}
+        value={value}
+        onChange={(next) => {
+          decide(next as Decision)
+          onDecided?.(next as Decision)
+        }}
+      >
         <SegmentedControlItem value="approve" label="Approve" isDisabled={isOutcomeMissing} />
         <SegmentedControlItem value="update" label="Update" />
         <SegmentedControlItem value="drop" label="Drop" />
@@ -131,6 +143,77 @@ function DecisionCell({ s, props }: { s: Scenario; props: ViewProps }) {
   )
 }
 
+/** A bookmark for deeper review elsewhere; it never touches the decision and survives rewrites and both folds. */
+export function FlagToggle({ s, props }: { s: Scenario; props: ViewProps }) {
+  const { state, update } = props
+  const isFlagged = isScenarioFlagged(state, s)
+  const toggle = () =>
+    update((st) => ({ ...st, scenarioFlags: { ...st.scenarioFlags, [s.id]: !isFlagged } }), s.id, { keepSignature: true })
+  return (
+    <Button
+      size="sm"
+      variant={isFlagged ? 'secondary' : 'ghost'}
+      icon={<span aria-hidden>{isFlagged ? '⚑' : '⚐'}</span>}
+      // aria-pressed carries the state, so the name stays fixed as a toggle's should
+      label={`Flag ${s.id}`}
+      isIconOnly
+      tooltip={isFlagged ? 'Flagged for deeper review. Click to unflag.' : 'Flag for deeper review in a separate pass. Does not change your decision.'}
+      aria-pressed={isFlagged}
+      onClick={toggle}
+    />
+  )
+}
+
+/** A note for Claude that rides along with the export; it is never a decision and never gates sign-off. */
+export function CommentField({ s, props, isInitiallyOpen = false }: { s: Scenario; props: ViewProps; isInitiallyOpen?: boolean }) {
+  const { state, update } = props
+  const comment = state.scenarioComments[s.id] ?? ''
+  const [isOpen, setIsOpen] = useState(isInitiallyOpen)
+  if (!isOpen && !comment) {
+    return <Button size="sm" variant="ghost" icon={<span aria-hidden>+</span>} label="Comment" onClick={() => setIsOpen(true)} />
+  }
+  const write = (text: string) =>
+    update(
+      (st) => {
+        const scenarioComments = { ...st.scenarioComments }
+        if (text.trim()) scenarioComments[s.id] = text
+        else delete scenarioComments[s.id]
+        return { ...st, scenarioComments }
+      },
+      s.id,
+      { keepSignature: true },
+    )
+  return (
+    <TextArea
+      label="Comment for Claude"
+      description="Doesn't change your decision."
+      rows={2}
+      placeholder="A question or note for Claude"
+      value={comment}
+      onChange={write}
+    />
+  )
+}
+
+function ReviewUndecidedButton({ props, behavior }: { props: ViewProps; behavior?: Behavior }) {
+  const { spec, state } = props
+  const [isOpen, setIsOpen] = useState(false)
+  const count = spec.scenarios.filter((s) => (!behavior || s.behavior === behavior.id) && isScenarioUndecided(state, s.id)).length
+  return (
+    <>
+      <Button
+        size="sm"
+        variant="secondary"
+        label={`Review undecided (${count})`}
+        tooltip={behavior ? `One at a time, for ${behavior.rule}` : 'One at a time, across every behavior'}
+        isDisabled={count === 0}
+        onClick={() => setIsOpen(true)}
+      />
+      <ScenarioFocusDialog isOpen={isOpen} onClose={() => setIsOpen(false)} behaviorId={behavior?.id} props={props} />
+    </>
+  )
+}
+
 /** Stage 2 only re-approves a reopened scenario; drops and update requests are stage-1 decisions a stage-2 export rejects. */
 function ReapproveCell({ s, props }: { s: Scenario; props: ViewProps }) {
   const { state, update } = props
@@ -148,6 +231,12 @@ function scenarioColumns(props: ViewProps, isStage2: boolean): TableColumn<Scena
   const { state, changedIds } = props
   const columns: TableColumn<ScenarioRow>[] = [
     {
+      key: 'flag',
+      header: <><span aria-hidden>⚑</span><VisuallyHidden>Flag</VisuallyHidden></>,
+      width: pixel(56),
+      renderCell: (s) => <FlagToggle s={s} props={props} />,
+    },
+    {
       key: 'decision',
       header: 'Decision',
       width: pixel(isStage2 ? 128 : 240),
@@ -157,7 +246,13 @@ function scenarioColumns(props: ViewProps, isStage2: boolean): TableColumn<Scena
           const approved = !s.dropReason
           return <Token size="sm" color={approved ? 'green' : 'default'} label={approved ? 'Approved' : 'Dropped'} description={s.dropReason} />
         }
-        return isStage2 ? <ReapproveCell s={s} props={props} /> : <DecisionCell s={s} props={props} />
+        if (isStage2) return <ReapproveCell s={s} props={props} />
+        return (
+          <VStack gap={1.5}>
+            <DecisionCell s={s} props={props} />
+            <CommentField s={s} props={props} />
+          </VStack>
+        )
       },
     },
     {
@@ -253,17 +348,19 @@ function BehaviorRequests({ behavior, props }: { behavior: Behavior; props: View
   )
 }
 
-function BehaviorGroup({ behavior, props }: { behavior: Behavior; props: ViewProps }) {
-  const { spec, changedIds } = props
-  const scenarios = spec.scenarios.filter((s) => s.behavior === behavior.id)
+function BehaviorGroup({ behavior, props, isFlaggedOnly }: { behavior: Behavior; props: ViewProps; isFlaggedOnly: boolean }) {
+  const { spec, state, changedIds } = props
+  const scenarios = spec.scenarios.filter((s) => s.behavior === behavior.id && (!isFlaggedOnly || isScenarioFlagged(state, s)))
   const plugins = useMemo(() => ({ changed: changedRowsPlugin<ScenarioRow>(changedIds) }), [changedIds])
   const columns = scenarioColumns(props, spec.stage === 2)
+  if (isFlaggedOnly && scenarios.length === 0) return null
   return (
     <VStack gap={2}>
       <VStack gap={0.5}>
         <HStack gap={2} align="center" wrap="wrap">
           <Heading level={3}>{behavior.rule}</Heading>
           <Text type="supporting" hasTabularNumbers>{scenarios.length}</Text>
+          {spec.stage === 1 ? <ReviewUndecidedButton props={props} behavior={behavior} /> : null}
         </HStack>
         {behavior.detail ? <SpecMarkdown compact>{behavior.detail}</SpecMarkdown> : null}
       </VStack>
@@ -275,7 +372,9 @@ function BehaviorGroup({ behavior, props }: { behavior: Behavior; props: ViewPro
 
 /** Scenarios grouped under the behavior rule each illustrates; stage 1 is fully editable, stage 2 is read-only except reopened scenarios. */
 export function ScenariosView(props: ViewProps) {
-  const { spec } = props
+  const { spec, state } = props
+  const [isFlaggedOnly, setIsFlaggedOnly] = useState(false)
+  const flaggedCount = spec.scenarios.filter((s) => isScenarioFlagged(state, s)).length
   return (
     <VStack gap={6}>
       <VStack gap={2}>
@@ -284,9 +383,16 @@ export function ScenariosView(props: ViewProps) {
           {spec.stage === 1
             ? "What the spec does in specific situations, grouped under the rule each illustrates. Approve each scenario (optionally with a different outcome), ask Claude to update it, or drop it with a reason."
             : 'Stage 1 is signed and shown here read-only. A reopened scenario needs re-approval; everything else is for reference.'}
+          {' '}Flag any scenario you want to review more deeply elsewhere; flags stay with the spec.
         </Text>
+        <HStack gap={3} align="center" wrap="wrap">
+          {spec.stage === 1 ? <ReviewUndecidedButton props={props} /> : null}
+          <Text type="supporting" hasTabularNumbers>{`${flaggedCount} flagged`}</Text>
+          <Switch size="sm" label="Show flagged only" value={isFlaggedOnly} onChange={setIsFlaggedOnly} isDisabled={flaggedCount === 0 && !isFlaggedOnly} />
+        </HStack>
       </VStack>
-      {spec.behaviors.map((behavior) => <BehaviorGroup key={behavior.id} behavior={behavior} props={props} />)}
+      {isFlaggedOnly && flaggedCount === 0 ? <Text type="supporting">No flagged scenarios.</Text> : null}
+      {spec.behaviors.map((behavior) => <BehaviorGroup key={behavior.id} behavior={behavior} props={props} isFlaggedOnly={isFlaggedOnly} />)}
     </VStack>
   )
 }

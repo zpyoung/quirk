@@ -51,7 +51,7 @@ render_spec.py check-export <spec-dir> <export.json>
 For a current **unsigned** stage-1 export:
 
 1. Answer research requests in `research[]` and turn scenario requests into new `scenarios[]`, retaining each request's ID.
-2. Apply the reviewer's requested content changes — new or edited scenario and constraint text — to `logic.json`. Rewrite each scenario named in `state.scenarioUpdates` (also `record.scenarios[].update`) as its feedback asks; the rewrite changes the scenario's hash, which clears the request and returns the scenario for a fresh decision. A scenario you leave unchanged keeps its update request, and stage 1 cannot sign while one is open.
+2. Apply the reviewer's requested content changes — new or edited scenario and constraint text — to `logic.json`. Rewrite each scenario named in `state.scenarioUpdates` (also `record.scenarios[].update`) as its feedback asks; the rewrite changes the scenario's hash, which clears the request and returns the scenario for a fresh decision. A scenario you leave unchanged keeps its update request, and stage 1 cannot sign while one is open. Read `state.scenarioComments` (also `record.scenarios[].comment`) as the reviewer's notes: answer a question in chat, and rewrite the scenario only when the comment plainly asks for a change. A comment is never an update request and never gates sign-off. A rewrite clears the comment by itself. For a comment you answered or acted on without rewriting its scenario, set that scenario's `answeredComment` to the comment text exactly, and the page clears it on the next load; `render --prior` warns when the text doesn't match. Leave `answeredComment` out for a comment you haven't handled. The stage-1 fold removes it.
 3. Do **not** write drops, constraint rulings, or rewritten constraint text into `logic.json`; they live only in the export's state and travel forward until the fold. Re-render with `--prior` so unchanged decisions carry into the next review:
 
    ```text
@@ -68,7 +68,9 @@ Stage 1 signs when every Claude-added scenario and constraint is decided, every 
 render_spec.py fold <spec-dir> <export.json>
 ```
 
-`fold` applies each scenario's `then` and `dropReason`, each constraint's `ruling` (with `originalText` on a rewrite), and the assumption and blind-spot rulings (an assumption whose certainty the reviewer changed gets the new `certainty` and keeps Claude's as `originalCertainty`; a blind spot settled by a still-unanswered research request gets that request as `researchRequest`), then sets `stage: 2`, `status: "Stage 1 approved"`, and a `stage1Pin` — the signed-at time, `renderId`, and the hash of every stage-1 item as signed. It does not write `signoff`. Passing `--tech-spec-requested` here is a usage error; that flag belongs on the [final fold](#final-sign-off-and-fold).
+`fold` applies each scenario's `then` and `dropReason`, each constraint's `ruling` (with `originalText` on a rewrite), and the assumption and blind-spot rulings (an assumption whose certainty the reviewer changed gets the new `certainty` and keeps Claude's as `originalCertainty`; a blind spot settled by a still-unanswered research request gets that request as `researchRequest`), writes `flagged: true` on each scenario the reviewer flagged, then sets `stage: 2`, `status: "Stage 1 approved"`, and a `stage1Pin` — the signed-at time, `renderId`, and the hash of every stage-1 item as signed. It does not write `signoff`. Passing `--tech-spec-requested` here is a usage error; that flag belongs on the [final fold](#final-sign-off-and-fold).
+
+A `flagged` scenario is one the reviewer marked for deeper review in a separate pass. Never set, clear, or act on `flagged` yourself; only the folds write it, and it is left out of item hashes, so it never marks a scenario as changed.
 
 ## Derivation
 
@@ -120,7 +122,7 @@ render_spec.py fold <spec-dir> <export.json> [--tech-spec-requested]
 render_spec.py render <spec-dir>
 ```
 
-`fold` applies placement, condition, and `reviewReason` as v1 does, moves any `reapprovedHash` into `stage1Pin.itemHashes` and drops the field, then sets `signoff` and marks the spec `Approved` (or `Approved — Tech spec: requested`). Pass `--tech-spec-requested` here, not at the stage-1 fold, when the user asked for a tech spec. Commit `logic.json` and the regenerated `logic.md`, not `review.html` or exports. Hand off to [subagent-driven-development](../subagent-driven-development/SKILL.md) or [executing-plans](../executing-plans/SKILL.md); execution continues from `logic.md` without asking for another approval.
+`fold` applies placement, condition, and `reviewReason` as v1 does, moves any `reapprovedHash` into `stage1Pin.itemHashes` and drops the field, applies the reviewer's flag changes to `flagged`, then sets `signoff` and marks the spec `Approved` (or `Approved — Tech spec: requested`). Pass `--tech-spec-requested` here, not at the stage-1 fold, when the user asked for a tech spec. Commit `logic.json` and the regenerated `logic.md`, not `review.html` or exports. Hand off to [subagent-driven-development](../subagent-driven-development/SKILL.md) or [executing-plans](../executing-plans/SKILL.md); execution continues from `logic.md` without asking for another approval.
 
 ## UI feedback
 

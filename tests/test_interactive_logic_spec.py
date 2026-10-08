@@ -1514,3 +1514,159 @@ def test_v2_custom_view_rejects_unhashable_checked_against_and_reserved_keys() -
     # a reserved key would make a row missing that cell resolve to an Object.prototype member on the page
     assert "/views/custom/0/columns/1/key" in errors
     assert errors["/views/custom/0/rows/1/id"] == "duplicate id; first used at /views/custom/0/rows/0/id"
+
+
+def test_validate_export_shape_accepts_exports_without_comments_or_flags() -> None:
+    export = load_json(V2_STAGE1_EXPORTS / "signed.json")
+    # the signed fixture predates comments and flags, so this proves both stay optional
+    assert "scenarioComments" not in export["state"]
+    assert "scenarioFlags" not in export["state"]
+    assert render_spec.validate_export_shape(export) == []
+
+
+def test_logic_reference_errors_rejects_comments_and_flags_on_unknown_scenarios() -> None:
+    logic = load_json(V2_STAGE1 / "logic.json")
+    export = load_json(V2_STAGE1_EXPORTS / "signed.json")
+    export["state"]["scenarioComments"] = {"SC-NOT-THERE": "why?"}
+    export["state"]["scenarioFlags"] = {"SC-GONE": True}
+
+    errors = dict(render_spec.logic_reference_errors(export, logic))
+    assert errors.get("/state/scenarioComments/SC-NOT-THERE") == "unknown scenario id: SC-NOT-THERE"
+    assert errors.get("/state/scenarioFlags/SC-GONE") == "unknown scenario id: SC-GONE"
+
+
+def test_validate_export_shape_rejects_malformed_comments_and_flags() -> None:
+    export = load_json(V2_STAGE1_EXPORTS / "signed.json")
+    export["state"]["scenarioComments"] = {"SC-01": 3}
+    export["state"]["scenarioFlags"] = {"SC-01": "yes"}
+    export["record"]["scenarios"][0]["comment"] = 3
+    export["record"]["scenarios"][0]["flagged"] = "yes"
+
+    errors = dict(render_spec.validate_export_shape(export))
+    assert "/state/scenarioComments/SC-01" in errors
+    assert "/state/scenarioFlags/SC-01" in errors
+    assert "/record/scenarios/0/comment" in errors
+    assert "/record/scenarios/0/flagged" in errors
+
+
+def test_validate_export_shape_allows_flags_but_not_comments_in_stage2() -> None:
+    export = load_json(V2_STAGE2_EXPORTS / "signed.json")
+    export["state"]["scenarioFlags"] = {"SC-01": True}
+    assert render_spec.validate_export_shape(export) == []
+
+    export["state"]["scenarioComments"] = {"SC-01": "late note"}
+    assert "/state/scenarioComments" in dict(render_spec.validate_export_shape(export))
+
+
+def test_item_hashes_ignore_a_scenario_flag() -> None:
+    logic = load_json(V2_STAGE2 / "logic.json")
+    flagged = copy.deepcopy(logic)
+    flagged["scenarios"][0]["flagged"] = True
+    assert render_spec.item_hashes(flagged) == render_spec.item_hashes(logic)
+    errors, _ = render_spec.validate_logic_dispatch(flagged)
+    assert errors == []
+
+
+def test_v2_logic_rejects_flags_in_stage1_and_non_true_flags() -> None:
+    stage1 = load_json(V2_STAGE1 / "logic.json")
+    stage1["scenarios"][0]["flagged"] = True
+    errors, _ = render_spec.validate_logic_dispatch(stage1)
+    assert dict(errors).get("/scenarios/0/flagged") == "must be absent in stage 1"
+
+    stage2 = load_json(V2_STAGE2 / "logic.json")
+    stage2["scenarios"][0]["flagged"] = False
+    errors, _ = render_spec.validate_logic_dispatch(stage2)
+    assert dict(errors).get("/scenarios/0/flagged") == "must be true when present"
+
+
+def test_v2_stage1_fold_writes_flags_and_leaves_comments_out(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE1, name="stage1")
+    export = load_json(V2_STAGE1_EXPORTS / "signed.json")
+    export["state"]["scenarioFlags"] = {"SC-01": True, "SC-02": False}
+    export["state"]["scenarioComments"] = {"SC-01": "Is this the right timeout?"}
+    export_path = tmp_path / "flags-and-comments.json"
+    save_json(export_path, export)
+
+    assert run_cli("check-export", str(spec_dir), str(export_path)).returncode == 0
+    result = run_cli("fold", str(spec_dir), str(export_path))
+    assert result.returncode == 0, result.stderr
+    folded = load_json(spec_dir / "logic.json")
+    by_id = {item["id"]: item for item in folded["scenarios"]}
+    assert by_id["SC-01"]["flagged"] is True
+    assert "flagged" not in by_id["SC-02"]
+    assert "Is this the right timeout?" not in json.dumps(folded)
+    assert "**Flagged for deeper review**" in (spec_dir / "logic.md").read_text(encoding="utf-8")
+    assert run_cli("validate", str(spec_dir)).returncode == 0
+
+
+def test_v2_final_fold_applies_flag_changes(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE2, name="stage2")
+    logic = load_json(spec_dir / "logic.json")
+    logic["scenarios"][0]["flagged"] = True
+    save_json(spec_dir / "logic.json", logic)
+    unflag_id = logic["scenarios"][0]["id"]
+    flag_id = logic["scenarios"][1]["id"]
+    export = load_json(V2_STAGE2_EXPORTS / "signed.json")
+    # adding the flag to logic.json is a new render, so the export must name it
+    export["renderId"] = render_spec.render_id(logic)
+    export["state"]["scenarioFlags"] = {unflag_id: False, flag_id: True}
+    export_path = tmp_path / "flag-changes.json"
+    save_json(export_path, export)
+
+    result = run_cli("fold", str(spec_dir), str(export_path))
+    assert result.returncode == 0, result.stderr
+    folded = {item["id"]: item for item in load_json(spec_dir / "logic.json")["scenarios"]}
+    assert "flagged" not in folded[unflag_id]
+    assert folded[flag_id]["flagged"] is True
+    assert run_cli("validate", str(spec_dir)).returncode == 0
+
+
+def test_item_hashes_ignore_an_answered_comment() -> None:
+    logic = load_json(V2_STAGE1 / "logic.json")
+    answered = copy.deepcopy(logic)
+    answered["scenarios"][0]["answeredComment"] = "Why compact?"
+    assert render_spec.item_hashes(answered) == render_spec.item_hashes(logic)
+    errors, _ = render_spec.validate_logic_dispatch(answered)
+    assert errors == []
+
+
+def test_v2_logic_rejects_an_answered_comment_in_stage2() -> None:
+    logic = load_json(V2_STAGE2 / "logic.json")
+    logic["scenarios"][0]["answeredComment"] = "Why compact?"
+    errors, _ = render_spec.validate_logic_dispatch(logic)
+    assert dict(errors).get("/scenarios/0/answeredComment") == "must be absent in stage 2"
+
+
+def test_v2_render_warns_only_on_an_answered_comment_that_does_not_match(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE1, name="stage1")
+    export = load_json(V2_STAGE1_EXPORTS / "unsigned.json")
+    export["state"]["scenarioComments"] = {"SC-01": "Why compact?", "SC-02": "Is this right?"}
+    export_path = tmp_path / "comments.json"
+    save_json(export_path, export)
+    logic = load_json(spec_dir / "logic.json")
+    by_id = {item["id"]: item for item in logic["scenarios"]}
+    by_id["SC-01"]["answeredComment"] = " Why compact? "
+    by_id["SC-02"]["answeredComment"] = "Something else"
+    save_json(spec_dir / "logic.json", logic)
+
+    result = run_cli("render", str(spec_dir), "--prior", str(export_path))
+    assert result.returncode == 0, result.stderr
+    assert "SC-02 answeredComment does not match" in result.stderr
+    assert "SC-01" not in result.stderr
+
+
+def test_v2_stage1_fold_removes_answered_comments(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, V2_STAGE1, name="stage1")
+    logic = load_json(spec_dir / "logic.json")
+    logic["scenarios"][0]["answeredComment"] = "Why compact?"
+    save_json(spec_dir / "logic.json", logic)
+    export = load_json(V2_STAGE1_EXPORTS / "signed.json")
+    export["renderId"] = render_spec.render_id(logic)
+    export_path = tmp_path / "answered.json"
+    save_json(export_path, export)
+
+    result = run_cli("fold", str(spec_dir), str(export_path))
+    assert result.returncode == 0, result.stderr
+    folded = load_json(spec_dir / "logic.json")
+    assert all("answeredComment" not in item for item in folded["scenarios"])
+    assert run_cli("validate", str(spec_dir)).returncode == 0
