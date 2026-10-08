@@ -23,7 +23,8 @@ export type TabSpec = { id: ViewId; label: string }
 export type Snapshot = { state: ReviewState; seen: Record<string, string>; lastExportUpdatedAt: string | null; renderId: string | null; storageOk: boolean }
 export type PayloadResult = { payload: LogicSpecPayload | null; error: string | null }
 export type ReviewGate = { id: string; label: string; done: number; total: number }
-export type Update = (recipe: (state: ReviewState) => ReviewState, reviewedItemId?: string) => void
+export type UpdateOptions = { keepSignature?: boolean }
+export type Update = (recipe: (state: ReviewState) => ReviewState, reviewedItemId?: string, options?: UpdateOptions) => void
 export type RequirementStatus = 'active' | 'withdrawn' | 'flagged'
 
 export const PAYLOAD_ID = 'quirk-logic-spec-payload'
@@ -67,6 +68,8 @@ export function emptyState(stage: 1 | 2 = 1): ReviewState {
     scenarioApproved: {},
     scenarioDrops: {},
     scenarioUpdates: {},
+    scenarioComments: {},
+    scenarioFlags: {},
     scenarioRequests: [],
     constraintRulings: {},
     assumptions: {},
@@ -111,6 +114,9 @@ export function isReviewState(value: unknown): value is ReviewState {
     isStringMap(value.scenarioDrops) &&
     // reviews saved before update feedback existed have no scenarioUpdates; normalizeState fills it in
     (value.scenarioUpdates === undefined || isStringMap(value.scenarioUpdates)) &&
+    (value.scenarioComments === undefined || isStringMap(value.scenarioComments)) &&
+    (value.scenarioFlags === undefined ||
+      (isObject(value.scenarioFlags) && Object.values(value.scenarioFlags).every((flagged) => typeof flagged === 'boolean'))) &&
     // a scenario cannot be both approved and dropped, or approved while asking for an update
     Object.entries(value.scenarioApproved as Record<string, boolean>).every(
       ([id, approved]) => !approved || (
@@ -149,6 +155,7 @@ export function isReviewState(value: unknown): value is ReviewState {
         isEmptyMap(value.notes) && isEmptyMap(value.disputes)
       : isEmptyMap(value.scenarioOutcomes) && isEmptyMap(value.scenarioDrops) && isEmptyMap(value.constraintRulings) &&
         (value.scenarioUpdates === undefined || isEmptyMap(value.scenarioUpdates)) &&
+        (value.scenarioComments === undefined || isEmptyMap(value.scenarioComments)) &&
         isEmptyMap(value.assumptions) && isEmptyMap(value.blindSpots) &&
         isEmptyMap(value.scenarioRequests) && isEmptyMap(value.researchRequests))
   )
@@ -156,7 +163,7 @@ export function isReviewState(value: unknown): value is ReviewState {
 
 /** Fills fields a review saved by an older page lacks, so every loaded state has the current shape. */
 export function normalizeState(state: ReviewState): ReviewState {
-  return { ...state, scenarioUpdates: state.scenarioUpdates ?? {} }
+  return { ...state, scenarioUpdates: state.scenarioUpdates ?? {}, scenarioComments: state.scenarioComments ?? {}, scenarioFlags: state.scenarioFlags ?? {} }
 }
 
 export function isDecisionExport(value: unknown, slug?: string): value is Export {
@@ -254,6 +261,8 @@ export function cloneState(state: ReviewState): ReviewState {
     scenarioApproved: { ...state.scenarioApproved },
     scenarioDrops: { ...state.scenarioDrops },
     scenarioUpdates: { ...state.scenarioUpdates },
+    scenarioComments: { ...state.scenarioComments },
+    scenarioFlags: { ...state.scenarioFlags },
     scenarioRequests: state.scenarioRequests.map((request) => ({ ...request })),
     constraintRulings: Object.fromEntries(Object.entries(state.constraintRulings).map(([id, ruling]) => [id, { ...ruling }])),
     assumptions: Object.fromEntries(Object.entries(state.assumptions).map(([id, decision]) => [id, { ...decision }])),
@@ -338,7 +347,8 @@ export function carryOver(
       Object.hasOwn(next.moveReasons, id) || Object.hasOwn(next.notes, id) ||
       Object.hasOwn(next.assumptions, id) || Object.hasOwn(next.blindSpots, id) ||
       Object.hasOwn(next.scenarioOutcomes, id) || Object.hasOwn(next.scenarioApproved, id) ||
-      Object.hasOwn(next.scenarioDrops, id) || Object.hasOwn(next.scenarioUpdates, id) || Object.hasOwn(next.constraintRulings, id) ||
+      Object.hasOwn(next.scenarioDrops, id) || Object.hasOwn(next.scenarioUpdates, id) || Object.hasOwn(next.scenarioComments, id) ||
+      Object.hasOwn(next.constraintRulings, id) ||
       Object.hasOwn(next.disputes, id)
     delete next.placements[id]
     delete next.conditions[id]
@@ -350,6 +360,7 @@ export function carryOver(
     delete next.scenarioApproved[id]
     delete next.scenarioDrops[id]
     delete next.scenarioUpdates[id]
+    delete next.scenarioComments[id]
     delete next.constraintRulings[id]
     delete next.disputes[id]
   }
@@ -364,6 +375,8 @@ export function carryOver(
     Object.keys(s.scenarioApproved).length,
     Object.keys(s.scenarioDrops).length,
     Object.keys(s.scenarioUpdates).length,
+    Object.keys(s.scenarioComments).length,
+    Object.keys(s.scenarioFlags).length,
     Object.keys(s.constraintRulings).length,
     Object.keys(s.disputes).length,
     s.researchRequests.length,
@@ -382,6 +395,15 @@ export function carryOver(
   if (spec.stage === 2) next.scenarioApproved = retainItemIds(next.scenarioApproved, reopenedScenarioIds)
   next.scenarioDrops = retainItemIds(next.scenarioDrops, scenarioIds)
   next.scenarioUpdates = retainItemIds(next.scenarioUpdates, scenarioIds)
+  next.scenarioComments = retainItemIds(next.scenarioComments, scenarioIds)
+  for (const scenario of spec.scenarios) {
+    // a comment written after Claude's answer has different text, so it stays
+    if (scenario.answeredComment && next.scenarioComments[scenario.id]?.trim() === scenario.answeredComment.trim()) {
+      delete next.scenarioComments[scenario.id]
+    }
+  }
+  // flags outlive a rewrite on purpose, so they are pruned only when the scenario itself is gone
+  next.scenarioFlags = retainItemIds(next.scenarioFlags, scenarioIds)
   next.constraintRulings = retainItemIds(next.constraintRulings, constraintIds)
   next.disputes = retainItemIds(next.disputes, requirementIds)
   // a request whose behavior was removed can no longer surface in any behavior group, so drop it rather than count it forever
@@ -546,6 +568,16 @@ export function pendingResearchRequests(state: ReviewState, spec: LogicSpec) {
   return state.researchRequests.filter((request) => !answered.has(request.id))
 }
 
+/** A stage-1 scenario with no approve, update, or drop picked yet; one waiting on Claude for an update is not undecided. */
+export function isScenarioUndecided(state: ReviewState, id: string): boolean {
+  return !state.scenarioApproved[id] && !Object.hasOwn(state.scenarioDrops, id) && !Object.hasOwn(state.scenarioUpdates, id)
+}
+
+/** The reviewer's flag override if they set one, else the flag already folded into the spec. */
+export function isScenarioFlagged(state: ReviewState, scenario: Scenario): boolean {
+  return state.scenarioFlags[scenario.id] ?? Boolean(scenario.flagged)
+}
+
 export function scenarioThen(state: ReviewState, scenario: Scenario): string {
   const outcome = state.scenarioOutcomes[scenario.id]
   if (!outcome || outcome.choice === 'spec') return scenario.then
@@ -656,6 +688,8 @@ export function decisionRecord(state: ReviewState, spec: LogicSpec): DecisionRec
       approved: Boolean(state.scenarioApproved[scenario.id]),
       dropped: state.scenarioDrops[scenario.id]?.trim() ? state.scenarioDrops[scenario.id] : null,
       update: state.scenarioUpdates[scenario.id]?.trim() ? state.scenarioUpdates[scenario.id] : null,
+      comment: state.scenarioComments[scenario.id]?.trim() ? state.scenarioComments[scenario.id] : null,
+      flagged: isScenarioFlagged(state, scenario),
       then: scenarioThen(state, scenario),
       changesSpec: scenarioThen(state, scenario) !== scenario.then,
     })),

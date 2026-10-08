@@ -30,6 +30,10 @@ RENDER_OUTPUT_FIELDS_V2 = RENDER_OUTPUT_FIELDS | {
     "rejectReason",
     "researchRequest",
     "originalCertainty",
+    # a reviewer's bookmark, not content, so toggling it must never look like a changed item
+    "flagged",
+    # marks a comment as handled without touching the scenario, so it must not reset decisions either
+    "answeredComment",
 }
 SCOPE_CONDITIONS = ("no-code", "under-10", "under-30")
 PLACEMENTS = ("in", "conditional", "out")
@@ -926,6 +930,10 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
                             _required(v, reopened, "raisedAt", reopened_path)
                 if "reapprovedHash" in item:
                     v.string(item["reapprovedHash"], pointer(path, "reapprovedHash"), nonempty=True)
+                if "flagged" in item and item["flagged"] is not True:
+                    v.error(pointer(path, "flagged"), "must be true when present")
+                if "answeredComment" in item:
+                    v.string(item["answeredComment"], pointer(path, "answeredComment"), nonempty=True)
                 if "reopened" in item and "reapprovedHash" in item:
                     v.error(pointer(path, "reapprovedHash"), "reopened and reapprovedHash cannot both be present")
 
@@ -1286,7 +1294,7 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
         for index, raw in enumerate(scenario_rows):
             if not isinstance(raw, dict):
                 continue
-            for field in ("dropReason", "reopened", "reapprovedHash"):
+            for field in ("dropReason", "reopened", "reapprovedHash", "flagged"):
                 if field in raw:
                     v.error(pointer(pointer("/scenarios", index), field), "must be absent in stage 1")
         for index, raw in enumerate(constraint_rows):
@@ -1311,6 +1319,9 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
     elif stage == 2:
         if not root.get("stage1Pin"):
             v.error("/stage1Pin", "required in stage 2")
+        for index, raw in enumerate(scenario_rows):
+            if isinstance(raw, dict) and "answeredComment" in raw:
+                v.error(pointer(pointer("/scenarios", index), "answeredComment"), "must be absent in stage 2")
         for index, raw in enumerate(constraint_rows):
             if isinstance(raw, dict) and "ruling" not in raw:
                 v.error(pointer(pointer("/constraints", index), "ruling"), "required in stage 2")
@@ -1467,12 +1478,18 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
                 for ident, value in mapping.items():
                     v.string(value, pointer("/state/scenarioDrops", ident))
 
-        # optional: exports from pages built before update feedback existed omit it
-        if "scenarioUpdates" in state:
-            mapping = v.object(state["scenarioUpdates"], "/state/scenarioUpdates")
+        # optional: exports from pages built before update feedback, comments, or flags existed omit them
+        for key in ("scenarioUpdates", "scenarioComments"):
+            if key in state:
+                mapping = v.object(state[key], pointer("/state", key))
+                if mapping is not None:
+                    for ident, value in mapping.items():
+                        v.string(value, pointer(pointer("/state", key), ident))
+        if "scenarioFlags" in state:
+            mapping = v.object(state["scenarioFlags"], "/state/scenarioFlags")
             if mapping is not None:
                 for ident, value in mapping.items():
-                    v.string(value, pointer("/state/scenarioUpdates", ident))
+                    v.boolean(value, pointer("/state/scenarioFlags", ident))
 
         requests = _required(v, state, "scenarioRequests", "/state")
         if "scenarioRequests" in state:
@@ -1607,6 +1624,7 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
                 "scenarioOutcomes",
                 "scenarioDrops",
                 "scenarioUpdates",
+                "scenarioComments",
                 "constraintRulings",
                 "assumptions",
                 "blindSpots",
@@ -1653,6 +1671,10 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
                             v.string(dropped, pointer(path, "dropped"))
                         if item.get("update") is not None:
                             v.string(item["update"], pointer(path, "update"))
+                        if item.get("comment") is not None:
+                            v.string(item["comment"], pointer(path, "comment"))
+                        if "flagged" in item:
+                            v.boolean(item["flagged"], pointer(path, "flagged"))
                         _string_field(v, item, "then", path)
                         v.boolean(_required(v, item, "changesSpec", path), pointer(path, "changesSpec"))
 
@@ -1786,9 +1808,10 @@ def logic_reference_errors(export: dict, logic: dict) -> List[Tuple[str, str]]:
 
     state = export["state"]
     updates = state.get("scenarioUpdates", {})
-    for ident in updates:
-        if ident not in scenario_ids:
-            errors.append((pointer(pointer("/state", "scenarioUpdates"), ident), "unknown scenario id: " + ident))
+    for key in ("scenarioUpdates", "scenarioComments", "scenarioFlags"):
+        for ident in state.get(key, {}):
+            if ident not in scenario_ids:
+                errors.append((pointer(pointer("/state", key), ident), "unknown scenario id: " + ident))
     for key, known, label in (
         ("scenarioApproved", scenario_ids, "scenario"),
         ("scenarioDrops", scenario_ids, "scenario"),
@@ -2200,6 +2223,8 @@ def render_markdown_v2(logic: dict) -> str:
             lines.append("   - " + scenario["explanation"])
             if scenario.get("dropReason"):
                 lines.append("   - **Dropped:** " + scenario["dropReason"])
+            if scenario.get("flagged"):
+                lines.append("   - **Flagged for deeper review**")
             lines.append("")
 
     lines.extend(["## Constraints", "", "| ID | Kind | Text | Ruling |", "|---|---|---|---|"])
@@ -2451,12 +2476,29 @@ def command_render(spec_dir: Path, prior_path: Optional[Path], open_page: bool) 
         if prior.get("slug") != spec_dir.name:
             print("prior export belongs to a different spec", file=sys.stderr)
             return 3
+        for warning in unmatched_answered_comments(logic, prior):
+            print(warning, file=sys.stderr)
     try:
         render_files(spec_dir, logic, current_id, prior, open_page)
     except (OSError, ValueError) as exc:
         print("/: " + str(exc), file=sys.stderr)
         return 1
     return 0
+
+
+def unmatched_answered_comments(logic: dict, prior: dict) -> List[str]:
+    """Warn about each answeredComment the page will not match, since that comment then stays on the page as unanswered."""
+    comments = prior.get("state", {}).get("scenarioComments", {})
+    warnings = []
+    for scenario in logic.get("scenarios", []):
+        answered = scenario.get("answeredComment")
+        if answered is None:
+            continue
+        if comments.get(scenario["id"], "").strip() != answered.strip():
+            warnings.append(
+                "warning: " + scenario["id"] + " answeredComment does not match the reviewer's comment in the prior export, so the page keeps that comment"
+            )
+    return warnings
 
 
 def _read_export_and_validate(export_path: Path) -> Tuple[Optional[dict], int]:
@@ -2757,6 +2799,9 @@ def stage1_fold(logic: dict, export: dict) -> None:
         drop_reason = state["scenarioDrops"].get(ident, "")
         if drop_reason.strip():
             scenario["dropReason"] = drop_reason
+        if state.get("scenarioFlags", {}).get(ident):
+            scenario["flagged"] = True
+        scenario.pop("answeredComment", None)
 
     for constraint in logic["constraints"]:
         ruling = state["constraintRulings"].get(constraint["id"])
@@ -2833,6 +2878,11 @@ def final_fold(logic: dict, export: dict, tech_spec_requested: bool) -> None:
                 requirement.pop("reviewReason", None)
 
     for scenario in logic["scenarios"]:
+        flagged = state.get("scenarioFlags", {}).get(scenario["id"])
+        if flagged is True:
+            scenario["flagged"] = True
+        elif flagged is False:
+            scenario.pop("flagged", None)
         reapproved_hash = scenario.get("reapprovedHash")
         if reapproved_hash:
             logic["stage1Pin"]["itemHashes"][scenario["id"]] = reapproved_hash

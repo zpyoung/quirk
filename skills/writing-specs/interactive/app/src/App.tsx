@@ -103,10 +103,10 @@ function App() {
     }
   }, [payload])
 
-  const update = useCallback<Update>((recipe, reviewedItemId) => {
+  const update = useCallback<Update>((recipe, reviewedItemId, options) => {
     const current = stateRef.current
     let next = recipe(current)
-    if (current.signedAt && next !== current) next = { ...next, signedAt: undefined }
+    if (current.signedAt && next !== current && !options?.keepSignature) next = { ...next, signedAt: undefined }
     next = { ...next, updatedAt: nextTimestamp(current.updatedAt) }
     let currentSeen = seenRef.current
     const reviewedHash = reviewedItemId && payload ? payload.itemHashes[reviewedItemId] : undefined
