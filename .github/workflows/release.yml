@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.event.pull_request.merged == true && !contains(github.event.pull_request.labels.*.name, 'skip-release')
+    runs-on: ubuntu-latest
+    env:
+      TZ: America/Chicago
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # recompute from a fresh origin/main on every attempt so back-to-back merges each get their own version
+      - name: Stamp, commit and push
+        run: |
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git reset --hard origin/main
+            version="$(python3 bin/release.py)"
+            git add pyproject.toml .claude-plugin/plugin.json .claude-plugin/marketplace.json CHANGELOG.md
+            git commit -m "chore: bump version to ${version}"
+            if git push origin HEAD:main; then
+              echo "Released ${version}"
+              exit 0
+            fi
+            echo "Push rejected (attempt ${attempt}); retrying"
+            sleep $((attempt * 5))
+          done
+          echo "Could not push the release after 5 attempts" >&2
+          exit 1
