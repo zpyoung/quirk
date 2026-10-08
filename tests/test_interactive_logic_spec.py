@@ -1139,7 +1139,7 @@ def test_v2_check_export_rejects_stage2_export_with_stage1_maps_populated(tmp_pa
 
 def test_load_json_reports_deeply_nested_input_instead_of_crashing(tmp_path: Path) -> None:
     deeply_nested = tmp_path / "deep.json"
-    deeply_nested.write_text("[" * 1100 + "]" * 1100, encoding="utf-8")
+    deeply_nested.write_text("[" * 100_000 + "]" * 100_000, encoding="utf-8")
     value, errors = render_spec.load_json(deeply_nested, str(deeply_nested))
     assert value is None
     assert dict(errors)["/"] == "invalid JSON in " + str(deeply_nested) + ": input is too deeply nested"

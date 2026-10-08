@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  # fork merges only get a write token under pull_request_target; never check out the PR head here
+  pull_request_target:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.event.pull_request.merged == true && !contains(github.event.pull_request.labels.*.name, 'skip-release')
+    runs-on: ubuntu-latest
+    env:
+      TZ: America/Chicago
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # recompute from a fresh origin/main on every attempt so back-to-back merges each get their own version
+      - name: Stamp, commit and push
+        run: |
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git reset --hard origin/main
+            if [ -n "$(git log -E --grep="^Release-PR: #${PR_NUMBER}\$" --format=%H)" ]; then
+              echo "PR #${PR_NUMBER} is already released"
+              exit 0
+            fi
+            version="$(python3 bin/release.py)"
+            git add pyproject.toml .claude-plugin/plugin.json .claude-plugin/marketplace.json CHANGELOG.md
+            git commit -m "chore: bump version to ${version}" -m "Release-PR: #${PR_NUMBER}"
+            if git push origin HEAD:main; then
+              echo "Released ${version}"
+              exit 0
+            fi
+            echo "Push rejected (attempt ${attempt}); retrying"
+            sleep $((attempt * 5))
+          done
+          echo "Could not push the release after 5 attempts" >&2
+          exit 1

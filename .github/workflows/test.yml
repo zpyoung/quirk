@@ -1,0 +1,28 @@
+name: Test
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    # several tests make throwaway git commits, which fail on a runner with no identity
+    env:
+      GIT_AUTHOR_NAME: ci
+      GIT_AUTHOR_EMAIL: ci@example.com
+      GIT_COMMITTER_NAME: ci
+      GIT_COMMITTER_EMAIL: ci@example.com
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install pytest
+
+      - run: pytest -q
