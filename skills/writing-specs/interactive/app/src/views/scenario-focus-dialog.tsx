@@ -17,8 +17,12 @@ function undecidedQueue(props: ViewProps, behaviorId?: string): string[] {
   )
 }
 
-function isTyping(target: EventTarget | null): boolean {
-  return target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+const ARROW_KEY_WIDGETS = '[role="radiogroup"], [role="tablist"], [role="listbox"], [role="menu"], [role="slider"]'
+
+/** True when the key belongs to the focused control: text entry, or a widget that uses arrows for its own navigation. */
+function ownsArrowKeys(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.closest(ARROW_KEY_WIDGETS) !== null
 }
 
 function FocusedScenario({ s, props, onDecided }: { s: Scenario; props: ViewProps; onDecided: (decision: Decision) => void }) {
@@ -56,9 +60,11 @@ function OpenFocusDialog({ onClose, behaviorId, props }: { onClose: () => void; 
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (isTyping(event.target) || event.metaKey || event.ctrlKey || event.altKey) return
+      if (event.defaultPrevented || ownsArrowKeys(event.target) || event.metaKey || event.ctrlKey || event.altKey) return
       if (event.key === 'ArrowLeft') previous()
       else if (event.key === 'ArrowRight') next()
+      else return
+      event.preventDefault()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
