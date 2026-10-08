@@ -1,7 +1,8 @@
 name: Release
 
 on:
-  pull_request:
+  # fork merges only get a write token under pull_request_target; never check out the PR head here
+  pull_request_target:
     types: [closed]
     branches: [main]
 
@@ -14,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TZ: America/Chicago
+      PR_NUMBER: ${{ github.event.pull_request.number }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,9 +37,13 @@ jobs:
           for attempt in 1 2 3 4 5; do
             git fetch origin main
             git reset --hard origin/main
+            if [ -n "$(git log -E --grep="^Release-PR: #${PR_NUMBER}\$" --format=%H)" ]; then
+              echo "PR #${PR_NUMBER} is already released"
+              exit 0
+            fi
             version="$(python3 bin/release.py)"
             git add pyproject.toml .claude-plugin/plugin.json .claude-plugin/marketplace.json CHANGELOG.md
-            git commit -m "chore: bump version to ${version}"
+            git commit -m "chore: bump version to ${version}" -m "Release-PR: #${PR_NUMBER}"
             if git push origin HEAD:main; then
               echo "Released ${version}"
               exit 0
