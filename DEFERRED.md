@@ -132,3 +132,51 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Estimated effort**: M
 - **Priority**: P3
 
+
+## DEFER-16: Per-app memory for using-apps-like-a-user
+- **Deferred**: 2026-10-11
+- **Session context**: brainstorming quirk:using-apps-like-a-user (docs/quirk/specs/2026-10-11-using-apps-like-a-user/logic.md)
+- **Why deferred**: v1 starts every run fresh. Saved routes or "remember this" notes go stale silently because the drivers exit 0 on stale targets, and first-time-user eyes are the point of dogfooding. Revisit once the effect-status guard can re-verify a saved route before reuse.
+- **Estimated effort**: M
+- **Priority**: P3
+- **Proposed owner**: unassigned
+
+## DEFER-17: Replayable test scripts from using-apps-like-a-user runs
+- **Deferred**: 2026-10-11
+- **Session context**: brainstorming quirk:using-apps-like-a-user
+- **Why deferred**: Turning a successful run into a Playwright or native replay script makes the skill a test framework, and a replay built from refs or coordinates would need per-step assertions to avoid false passes. Out of v1 scope.
+- **Estimated effort**: L
+- **Priority**: P4
+- **Proposed owner**: unassigned
+
+## DEFER-18: Checkpointed resume for half-finished using-apps-like-a-user runs
+- **Deferred**: 2026-10-11
+- **Session context**: brainstorming quirk:using-apps-like-a-user
+- **Why deferred**: Resuming from a checkpoint needs persisted state, a format, and invalidation rules. v1 covers the cheap case by inspecting current state and doing only what is missing.
+- **Estimated effort**: M
+- **Priority**: P4
+- **Proposed owner**: unassigned
+
+## DEFER-19: iOS and Android simulator support for using-apps-like-a-user
+- **Deferred**: 2026-10-11
+- **Session context**: brainstorming quirk:using-apps-like-a-user
+- **Why deferred**: v1 covers web, Electron, and native macOS. Orca ships separate emulator guides (orca-emulator, orca-emulator-android) that a later version could route to.
+- **Estimated effort**: M
+- **Priority**: P3
+- **Proposed owner**: unassigned
+
+## DEFER-20: Stop hotkey for foreground using-apps-like-a-user runs
+- **Deferred**: 2026-10-11
+- **Session context**: brainstorming quirk:using-apps-like-a-user
+- **Why deferred**: macOS cannot reliably tell the user's input from synthetic events, so v1 detects takeover with a cursor and frontmost-app drift check. A dedicated stop hotkey needs Input Monitoring and an event tap, which can silently disable itself after re-signing.
+- **Estimated effort**: S
+- **Priority**: P3
+- **Proposed owner**: unassigned
+
+## DEFER-21: OpenAI Decisions API as a cheap screenshot verifier
+- **Deferred**: 2026-10-11
+- **Session context**: brainstorming quirk:using-apps-like-a-user
+- **Why deferred**: The Decisions API accepts images and returns bounded predicate/choice answers, which could answer "is an error banner visible?" cheaply. Its accuracy on UI screenshots is unmeasured, and v1 needs no second model provider.
+- **Estimated effort**: M
+- **Priority**: P4
+- **Proposed owner**: unassigned
