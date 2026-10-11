@@ -1,6 +1,6 @@
 # `quirk:using-apps-like-a-user` — operate apps the way a sighted user does
 
-**Status:** Draft
+**Status:** Approved
 
 A skill that lets an agent work a web, Electron, or native macOS app through its UI: look at the
 screen, act only on what is visible, and prove each action changed something. Its main job is
@@ -278,7 +278,7 @@ planted-bug fixtures, and the native-driver bake-off as the first build task.
 
 ## Status & amendments
 
-**Status:** Draft
+**Status:** Approved
 
 **Amendments:**
 - None.
