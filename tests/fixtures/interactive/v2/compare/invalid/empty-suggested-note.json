@@ -1,0 +1,1092 @@
+{
+  "kind": "quirk-approach-comparison",
+  "schemaVersion": 1,
+  "builtAgainst": {
+    "signoffRenderId": "04a0331ca3ac"
+  },
+  "approaches": [
+    {
+      "id": "A",
+      "title": "Single-pass streaming writer",
+      "overview": "Reads each selected file once and streams it into a temp archive that is renamed into place when the write finishes. The index is built in the same pass.",
+      "revision": "A-r2",
+      "anchors": [
+        {
+          "repo": "core",
+          "commit": "a1b2c3d"
+        },
+        {
+          "repo": "tools",
+          "commit": "c0ffee1"
+        }
+      ],
+      "readAt": "2026-10-01",
+      "specMarkdown": "# Approach A: streaming writer\n\nBuilds on the [spec](../logic.md).\n\n## Steps\n\n- Open the selection as a list of paths\n- Stream each file into a temp archive\n- Rename the temp archive into place\n\n## Touch points\n\n| Area | Change |\n|---|---|\n| writer | new streaming module |\n| index | built during the same pass |\n",
+      "repos": [
+        {
+          "name": "core",
+          "files": 7
+        },
+        {
+          "name": "tools",
+          "files": 3
+        }
+      ],
+      "schemaChange": "Adds a run table, an entry table and an index table with foreign keys between them.",
+      "hotPaths": [
+        "archive write loop",
+        "index append"
+      ],
+      "deploy": {
+        "status": "stated",
+        "steps": [
+          "Ship the writer behind the archive.stream flag",
+          "Enable for internal users",
+          "Enable for everyone"
+        ]
+      },
+      "criticalPath": "Writer module, then the index appender, then the cleanup hook.",
+      "slices": [
+        {
+          "id": "A-1",
+          "name": "Streaming writer",
+          "size": "L",
+          "band": "v1",
+          "area": "core",
+          "risk": "Core write loop is new code.",
+          "riskHeadline": "New write loop",
+          "lines": {
+            "core": [
+              400,
+              900
+            ]
+          }
+        },
+        {
+          "id": "A-2",
+          "name": "Index appender",
+          "size": "M",
+          "band": "v1",
+          "area": "core",
+          "risk": "Index must match archive contents."
+        },
+        {
+          "id": "A-3",
+          "name": "Unreadable-file report",
+          "size": "S-M",
+          "band": "v1",
+          "area": "core",
+          "risk": "Error text must name the file.",
+          "lines": {
+            "core": [
+              80,
+              160
+            ],
+            "tools": [
+              20,
+              40
+            ]
+          }
+        },
+        {
+          "id": "A-4",
+          "name": "Partial-write cleanup",
+          "size": "S",
+          "band": "fast-follow",
+          "area": "core",
+          "risk": "Temp file cleanup on crash."
+        },
+        {
+          "id": "A-5",
+          "name": "Progress output",
+          "size": "M-L",
+          "band": "optional",
+          "area": "tools",
+          "risk": "Terminal differences."
+        }
+      ],
+      "flow": [
+        {
+          "stage": "Select",
+          "lane": "core",
+          "text": "Collect explicit paths",
+          "kind": "reused"
+        },
+        {
+          "stage": "Read",
+          "lane": "core",
+          "text": "Open each file once",
+          "kind": "changed"
+        },
+        {
+          "stage": "Write",
+          "lane": "core",
+          "text": "Stream into temp archive",
+          "kind": "new",
+          "focal": true
+        },
+        {
+          "stage": "Index",
+          "lane": "sync",
+          "text": "Append index entry",
+          "kind": "new"
+        },
+        {
+          "stage": "Report",
+          "lane": "core",
+          "text": "List unreadable files",
+          "kind": "changed"
+        }
+      ],
+      "sequence": {
+        "participants": [
+          "User",
+          "CLI",
+          "Writer",
+          "Index",
+          "Disk"
+        ],
+        "messages": [
+          {
+            "from": "User",
+            "to": "CLI",
+            "label": "archive selection",
+            "kind": "call"
+          },
+          {
+            "from": "CLI",
+            "to": "Writer",
+            "label": "start write",
+            "kind": "call"
+          },
+          {
+            "from": "Writer",
+            "to": "Disk",
+            "label": "stream temp file",
+            "kind": "focal"
+          },
+          {
+            "from": "Writer",
+            "to": "Index",
+            "label": "append entry",
+            "kind": "async"
+          },
+          {
+            "from": "Writer",
+            "to": "Disk",
+            "label": "rename into place",
+            "kind": "call"
+          },
+          {
+            "from": "Writer",
+            "to": "CLI",
+            "label": "done plus unreadable list",
+            "kind": "return"
+          },
+          {
+            "from": "CLI",
+            "to": "User",
+            "label": "summary",
+            "kind": "return"
+          }
+        ]
+      },
+      "schema": {
+        "tables": [
+          {
+            "name": "archive_run",
+            "status": "new",
+            "columns": [
+              {
+                "name": "id",
+                "type": "int",
+                "chip": "PK"
+              },
+              {
+                "name": "target_dir",
+                "type": "text"
+              },
+              {
+                "name": "started_at",
+                "type": "timestamp"
+              }
+            ]
+          },
+          {
+            "name": "archive_entry",
+            "status": "new",
+            "columns": [
+              {
+                "name": "id",
+                "type": "int",
+                "chip": "PK"
+              },
+              {
+                "name": "run_id",
+                "type": "int",
+                "chip": "FK"
+              },
+              {
+                "name": "path",
+                "type": "text"
+              },
+              {
+                "name": "bytes",
+                "type": "int",
+                "highlight": true
+              }
+            ],
+            "moreColumns": "2 more columns"
+          },
+          {
+            "name": "index_entry",
+            "status": "new",
+            "columns": [
+              {
+                "name": "id",
+                "type": "int",
+                "chip": "PK"
+              },
+              {
+                "name": "entry_id",
+                "type": "int",
+                "chip": "FK",
+                "highlight": true
+              },
+              {
+                "name": "offset",
+                "type": "int"
+              }
+            ]
+          }
+        ],
+        "refs": [
+          {
+            "from": [
+              "archive_entry",
+              "run_id"
+            ],
+            "to": [
+              "archive_run",
+              "id"
+            ],
+            "kind": "fk"
+          },
+          {
+            "from": [
+              "index_entry",
+              "entry_id"
+            ],
+            "to": [
+              "archive_entry",
+              "id"
+            ],
+            "kind": "fk"
+          }
+        ]
+      },
+      "exampleTrace": [
+        "Three files selected; one is read-only.",
+        "Two files streamed; the unreadable one is skipped.",
+        "Summary names the unreadable file."
+      ],
+      "restsOn": [
+        "Files stay readable between selection and write",
+        "Rename is atomic on the destination volume"
+      ],
+      "undo": {
+        "flagOff": "Turn off archive.stream to fall back to the old writer.",
+        "hardToReverse": "Index rows already written stay in the new tables.",
+        "cheapestNext": "Add a cleanup job for orphaned temp files."
+      },
+      "rivalClaims": {
+        "B": [
+          "Staging doubles disk use for large selections."
+        ],
+        "C": [
+          "The plugin layer adds a config surface nobody asked for."
+        ]
+      }
+    },
+    {
+      "id": "B",
+      "title": "Two-phase staging copy",
+      "overview": "Copies the selection into a staging directory, checks every file there, then compresses the staged tree. Failures surface after the copy phase.",
+      "revision": "B-r1",
+      "anchors": [
+        {
+          "repo": "core",
+          "commit": "9f8e7d6"
+        },
+        {
+          "repo": "tools",
+          "commit": "c0ffee1"
+        }
+      ],
+      "readAt": "2026-10-02",
+      "specMarkdown": "# Approach B: staging copy\n\nBuilds on the [spec](../logic.md).\n\n## Steps\n\n- Copy the selection into a staging directory\n- Verify the staged tree\n- Compress the staged tree\n\n## Touch points\n\n| Area | Change |\n|---|---|\n| stager | new copy module |\n| manifest | changed table |\n",
+      "repos": [
+        {
+          "name": "core",
+          "files": 5
+        },
+        {
+          "name": "tools",
+          "files": 2
+        }
+      ],
+      "schemaChange": "Adds a staged flag and a checksum to the existing manifest table.",
+      "hotPaths": [
+        "staging copy",
+        "verify pass"
+      ],
+      "deploy": {
+        "status": "implied",
+        "steps": [
+          "Migrate the manifest table",
+          "Ship the stager"
+        ]
+      },
+      "criticalPath": null,
+      "slices": [
+        {
+          "id": "B-1",
+          "name": "Staging copy",
+          "size": "M",
+          "band": "v1",
+          "area": "core",
+          "risk": "Doubles temporary disk use.",
+          "riskHeadline": "Disk spike",
+          "lines": {
+            "core": [
+              250,
+              500
+            ]
+          }
+        },
+        {
+          "id": "B-2",
+          "name": "Verify pass",
+          "size": "M-L",
+          "band": "v1",
+          "area": "core",
+          "risk": "Slow for large trees."
+        },
+        {
+          "id": "B-3",
+          "name": "Manifest migration",
+          "size": "S",
+          "band": "v1",
+          "area": "core",
+          "risk": "Backfill of old rows."
+        },
+        {
+          "id": "B-4",
+          "name": "Staging cleanup",
+          "size": "S-M",
+          "band": "fast-follow",
+          "area": "core",
+          "risk": "Leftover staging dirs.",
+          "lines": {
+            "core": [
+              60,
+              120
+            ]
+          }
+        },
+        {
+          "id": "B-5",
+          "name": "Resume from staging",
+          "size": "XL",
+          "band": "optional",
+          "area": "core",
+          "risk": "Resume semantics are open."
+        },
+        {
+          "id": "B-6",
+          "name": "Checksum report",
+          "size": "L-XL",
+          "band": "optional",
+          "area": "tools",
+          "risk": "Output format unsettled."
+        }
+      ],
+      "flow": [
+        {
+          "stage": "Select",
+          "lane": "core",
+          "text": "Collect explicit paths",
+          "kind": "reused"
+        },
+        {
+          "stage": "Read",
+          "lane": "core",
+          "text": "Copy into staging",
+          "kind": "new",
+          "focal": true
+        },
+        {
+          "stage": "Write",
+          "lane": "core",
+          "text": "Compress staged tree",
+          "kind": "changed"
+        },
+        {
+          "stage": "Index",
+          "lane": "sync",
+          "text": "Write manifest rows",
+          "kind": "changed"
+        },
+        {
+          "stage": "Report",
+          "lane": "core",
+          "text": "Report failed copies",
+          "kind": "new"
+        }
+      ],
+      "sequence": {
+        "participants": [
+          "User",
+          "CLI",
+          "Stager",
+          "Packer",
+          "Manifest"
+        ],
+        "messages": [
+          {
+            "from": "User",
+            "to": "CLI",
+            "label": "archive selection",
+            "kind": "call"
+          },
+          {
+            "from": "CLI",
+            "to": "Stager",
+            "label": "copy to staging",
+            "kind": "focal"
+          },
+          {
+            "from": "Stager",
+            "to": "CLI",
+            "label": "copy report",
+            "kind": "return"
+          },
+          {
+            "from": "CLI",
+            "to": "Packer",
+            "label": "compress staged tree",
+            "kind": "call"
+          },
+          {
+            "from": "Packer",
+            "to": "Manifest",
+            "label": "record entries",
+            "kind": "async"
+          },
+          {
+            "from": "Packer",
+            "to": "CLI",
+            "label": "archive path",
+            "kind": "return"
+          },
+          {
+            "from": "CLI",
+            "to": "User",
+            "label": "summary",
+            "kind": "return"
+          },
+          {
+            "from": "CLI",
+            "to": "Stager",
+            "label": "remove staging",
+            "kind": "call"
+          }
+        ]
+      },
+      "schema": {
+        "tables": [
+          {
+            "name": "manifest",
+            "status": "changed",
+            "columns": [
+              {
+                "name": "id",
+                "type": "int",
+                "chip": "PK"
+              },
+              {
+                "name": "path",
+                "type": "text"
+              },
+              {
+                "name": "staged",
+                "type": "bool",
+                "highlight": true
+              },
+              {
+                "name": "checksum",
+                "type": "text",
+                "highlight": true
+              }
+            ],
+            "moreColumns": "3 more columns"
+          }
+        ],
+        "refs": []
+      },
+      "exampleTrace": [
+        "Three files selected; one is read-only.",
+        "All three are copied; the read-only copy fails at verify.",
+        "Summary names the failed copy after compression is skipped."
+      ],
+      "restsOn": [
+        "Enough free disk for a full copy"
+      ],
+      "undo": {
+        "flagOff": "Turn off archive.stage to skip the staging phase.",
+        "hardToReverse": "The manifest migration cannot be rolled back without a backfill.",
+        "cheapestNext": "Drop the verify pass when the selection is small."
+      },
+      "rivalClaims": {
+        "A": [
+          "Streaming hides read errors until the end of the write."
+        ],
+        "C": [
+          "Plugins make failure handling inconsistent."
+        ]
+      }
+    },
+    {
+      "id": "C",
+      "title": "Pluggable packer pipeline",
+      "overview": "Routes archiving through a packer plugin chosen by a config file. The default plugin wraps the existing writer.",
+      "revision": "C-r1",
+      "anchors": [
+        {
+          "repo": "core",
+          "commit": "a1b2c3d"
+        },
+        {
+          "repo": "tools",
+          "commit": "c0ffee1"
+        }
+      ],
+      "readAt": "2026-10-02",
+      "specMarkdown": "# Approach C: packer plugins\n\nBuilds on the [spec](../logic.md).\n\n## Steps\n\n- Load packer plugins from config\n- Run the chosen plugin\n- Collect its result\n\n## Touch points\n\n| Area | Change |\n|---|---|\n| loader | new plugin loader |\n| config | new options file |\n",
+      "repos": [
+        {
+          "name": "core",
+          "files": 9
+        },
+        {
+          "name": "tools",
+          "files": 4
+        }
+      ],
+      "schemaChange": "Adds a plugin table and a job table whose options column holds JSON.",
+      "hotPaths": [
+        "plugin load",
+        "job dispatch"
+      ],
+      "deploy": {
+        "status": "not-stated",
+        "steps": []
+      },
+      "criticalPath": null,
+      "slices": [
+        {
+          "id": "C-1",
+          "name": "Plugin loader",
+          "size": "L-XL",
+          "band": "v1",
+          "area": "core",
+          "risk": "Loader surface is large.",
+          "riskHeadline": "Large surface",
+          "lines": {
+            "core": [
+              800,
+              1600
+            ],
+            "tools": [
+              100,
+              200
+            ]
+          }
+        },
+        {
+          "id": "C-2",
+          "name": "Default packer plugin",
+          "size": "M",
+          "band": "v1",
+          "area": "core",
+          "risk": "Wraps legacy writer."
+        },
+        {
+          "id": "C-3",
+          "name": "Job table",
+          "size": "S-M",
+          "band": "v1",
+          "area": "core",
+          "risk": "Options JSON is unvalidated."
+        },
+        {
+          "id": "C-4",
+          "name": "Failure reporting hook",
+          "size": "M-L",
+          "band": "fast-follow",
+          "area": "core",
+          "risk": "Each plugin reports differently."
+        },
+        {
+          "id": "C-5",
+          "name": "Second packer plugin",
+          "size": "XL",
+          "band": "optional",
+          "area": "tools",
+          "risk": "No owner yet."
+        }
+      ],
+      "flow": [
+        {
+          "stage": "Select",
+          "lane": "core",
+          "text": "Collect explicit paths",
+          "kind": "reused"
+        },
+        {
+          "stage": "Read",
+          "lane": "core",
+          "text": "Plugin opens files",
+          "kind": "changed"
+        },
+        {
+          "stage": "Write",
+          "lane": "core",
+          "text": "Plugin writes archive",
+          "kind": "changed"
+        },
+        {
+          "stage": "Index",
+          "lane": "sync",
+          "text": "Plugin returns entries",
+          "kind": "new",
+          "focal": true
+        },
+        {
+          "stage": "Report",
+          "lane": "core",
+          "text": "Collect plugin result",
+          "kind": "new"
+        }
+      ],
+      "sequence": {
+        "participants": [
+          "User",
+          "CLI",
+          "Loader"
+        ],
+        "messages": [
+          {
+            "from": "User",
+            "to": "CLI",
+            "label": "archive selection",
+            "kind": "call"
+          },
+          {
+            "from": "CLI",
+            "to": "Loader",
+            "label": "load packer plugin",
+            "kind": "focal"
+          },
+          {
+            "from": "Loader",
+            "to": "CLI",
+            "label": "plugin handle",
+            "kind": "return"
+          },
+          {
+            "from": "CLI",
+            "to": "Loader",
+            "label": "run job",
+            "kind": "async"
+          },
+          {
+            "from": "Loader",
+            "to": "CLI",
+            "label": "job result",
+            "kind": "return"
+          }
+        ]
+      },
+      "schema": {
+        "tables": [
+          {
+            "name": "plugin",
+            "status": "new",
+            "columns": [
+              {
+                "name": "id",
+                "type": "int",
+                "chip": "PK"
+              },
+              {
+                "name": "name",
+                "type": "text",
+                "chip": "UQ"
+              }
+            ]
+          },
+          {
+            "name": "plugin_job",
+            "status": "new",
+            "columns": [
+              {
+                "name": "id",
+                "type": "int",
+                "chip": "PK"
+              },
+              {
+                "name": "options",
+                "type": "json",
+                "highlight": true
+              },
+              {
+                "name": "status",
+                "type": "text"
+              }
+            ]
+          }
+        ],
+        "refs": [
+          {
+            "from": [
+              "plugin_job",
+              "options"
+            ],
+            "to": [
+              "plugin",
+              "id"
+            ],
+            "kind": "json"
+          }
+        ]
+      },
+      "exampleTrace": [
+        "Three files selected; one is read-only.",
+        "The default plugin writes two files; the third is skipped silently.",
+        "Summary depends on the plugin; the default prints a count only."
+      ],
+      "restsOn": [
+        "Plugins honour the reporting hook",
+        "Config file is present"
+      ],
+      "undo": {
+        "flagOff": "Set the packer to legacy in the config file.",
+        "hardToReverse": "Third-party plugins may already depend on the loader contract.",
+        "cheapestNext": "Ship only the default plugin."
+      },
+      "rivalClaims": {
+        "A": [
+          "Streaming is hard to extend later."
+        ],
+        "B": [
+          "Staging is a special case a plugin could cover."
+        ]
+      },
+      "effortGaps": [
+        "No estimate for the reporting hook across plugins.",
+        "Deploy steps are missing from the proponent's spec."
+      ]
+    }
+  ],
+  "scores": {
+    "REQ-01": {
+      "A": {
+        "status": "met",
+        "wording": "Streams into a compressed archive",
+        "note": "One pass writes the compressed archive with relative paths preserved.",
+        "citations": [
+          "core/archive/writer.py:41"
+        ],
+        "requirementHash": "2e7c6fe8ef591ec795102e56ab78bcf592dc69cb224d9d5f2f5eebb0053fad1e",
+        "requirementText": "Write a compressed archive of the selected files."
+      },
+      "B": {
+        "status": "met",
+        "wording": "Compresses the staged tree",
+        "note": "The staged tree keeps relative paths, so the archive is portable.",
+        "citations": [
+          "core/archive/stager.py:88"
+        ],
+        "requirementHash": "2e7c6fe8ef591ec795102e56ab78bcf592dc69cb224d9d5f2f5eebb0053fad1e",
+        "requirementText": "Write a compressed archive of the selected files."
+      },
+      "C": {
+        "status": "met",
+        "wording": "Default plugin writes the archive",
+        "note": "The default plugin wraps the existing writer and keeps relative paths.",
+        "citations": [
+          "core/plugins/default.py:20"
+        ],
+        "requirementHash": "2e7c6fe8ef591ec795102e56ab78bcf592dc69cb224d9d5f2f5eebb0053fad1e",
+        "requirementText": "Write a compressed archive of the selected files.",
+        "history": [
+          {
+            "previous": {
+              "status": "met"
+            },
+            "challenge": "The default plugin may drop relative paths.",
+            "reply": "The wrapper passes the root through unchanged, so paths are kept.",
+            "outcome": "held"
+          }
+        ]
+      }
+    },
+    "REQ-02": {
+      "A": {
+        "status": "met",
+        "wording": "Reports unreadable files at the end",
+        "note": "Unreadable files are collected during the pass and listed by name in the summary.",
+        "citations": [
+          "core/archive/writer.py:112"
+        ],
+        "requirementHash": "36906144ab80ead9ef3015dd65c3a9168ab23c07e0481f27cc5d2ca51954cc5b",
+        "requirementText": "Report unreadable source files by name instead of failing the whole archive."
+      },
+      "B": {
+        "status": "met with workaround",
+        "wording": "Reports failures after the copy",
+        "note": "Failures appear only after the copy phase, so a naïve run looks stuck until then.",
+        "citations": [
+          "core/archive/stager.py:130"
+        ],
+        "requirementHash": "36906144ab80ead9ef3015dd65c3a9168ab23c07e0481f27cc5d2ca51954cc5b",
+        "requirementText": "Report unreadable source files by name instead of failing the whole archive.",
+        "check": "Ran the staging step against an unreadable file; the name was reported after the copy phase, not at selection time."
+      },
+      "C": {
+        "status": "very hard",
+        "wording": "Depends on each plugin",
+        "note": "The loader has no shared reporting contract, so each plugin would have to name unreadable files itself.",
+        "citations": [
+          "core/plugins/loader.py:57"
+        ],
+        "requirementHash": "36906144ab80ead9ef3015dd65c3a9168ab23c07e0481f27cc5d2ca51954cc5b",
+        "requirementText": "Report unreadable source files by name instead of failing the whole archive."
+      }
+    },
+    "REQ-03": {
+      "A": {
+        "status": "met",
+        "qualifier": "v1 scope",
+        "wording": "Removes the temp archive on failure",
+        "note": "The temp file is deleted when the write stops, and rename never runs.",
+        "citations": [
+          "core/archive/writer.py:150"
+        ],
+        "requirementHash": "83321629fe8ee71eb6077339b5557cbb0e60e5e2fccbb370459d3dd71ceb0839",
+        "requirementText": "Remove a partial archive when the destination runs out of space mid-write."
+      },
+      "B": {
+        "status": "met",
+        "wording": "Removes the staging directory",
+        "note": "Staging and the half-built archive are removed together on failure.",
+        "citations": [
+          "core/archive/stager.py:171"
+        ],
+        "requirementHash": "83321629fe8ee71eb6077339b5557cbb0e60e5e2fccbb370459d3dd71ceb0839",
+        "requirementText": "Remove a partial archive when the destination runs out of space mid-write."
+      },
+      "C": {
+        "status": "not met",
+        "wording": "No cleanup in the loader",
+        "note": "The loader leaves cleanup to each plugin and the default plugin does none.",
+        "citations": [
+          "core/plugins/default.py:64"
+        ],
+        "requirementHash": "000000000000",
+        "requirementText": "Remove the partial archive when a write fails for lack of space."
+      }
+    },
+    "REQ-04": {
+      "A": {
+        "status": "met",
+        "wording": "Only the explicit paths are streamed",
+        "note": "The write loop iterates the selected paths and nothing else.",
+        "citations": [
+          "core/archive/select.py:12"
+        ],
+        "requirementHash": "29454520acec320ae9414fab6b2763cae281e9572585467ebd9303587e5b93d4",
+        "requirementText": "Archive only the files the user explicitly selected.",
+        "history": [
+          {
+            "previous": {
+              "status": "met with workaround",
+              "qualifier": "needs a filter"
+            },
+            "challenge": "The loop never expands directories, so no filter is needed.",
+            "reply": "Agreed; the selection list is already flat and explicit.",
+            "outcome": "revised"
+          }
+        ]
+      },
+      "B": {
+        "status": "met",
+        "wording": "Only selected files are staged",
+        "note": "Staging copies the explicit list and rejects anything else.",
+        "citations": [
+          "core/archive/stager.py:30"
+        ],
+        "requirementHash": "29454520acec320ae9414fab6b2763cae281e9572585467ebd9303587e5b93d4",
+        "requirementText": "Archive only the files the user explicitly selected."
+      },
+      "C": {
+        "status": "met",
+        "wording": "Plugin receives the explicit list",
+        "note": "The job options carry the explicit path list.",
+        "citations": [
+          "core/plugins/loader.py:33"
+        ],
+        "requirementHash": "29454520acec320ae9414fab6b2763cae281e9572585467ebd9303587e5b93d4",
+        "requirementText": "Archive only the files the user explicitly selected."
+      }
+    }
+  },
+  "findings": [
+    {
+      "requirementId": "REQ-02",
+      "approaches": [
+        "B"
+      ],
+      "type": "disputes",
+      "text": "B claims the workaround is enough, but its staging copy hides read errors until compression starts.",
+      "citation": "Approach B spec, Read phase"
+    },
+    {
+      "requirementId": "REQ-01",
+      "approaches": "all",
+      "type": "same score, different design",
+      "text": "All three meet the requirement, through a stream, a staged tree and a plugin respectively.",
+      "citation": "core/archive/writer.py:41"
+    }
+  ],
+  "pairings": [
+    {
+      "name": "Temp-file cleanup",
+      "items": {
+        "A": "Deletes the temp archive.",
+        "B": "Deletes the staging directory."
+      },
+      "text": "A and B both clean up on failure, with different artifacts to remove."
+    }
+  ],
+  "choices": [
+    {
+      "question": "Where does a read failure surface?",
+      "answers": {
+        "A": "At the end of the write.",
+        "B": "After the copy phase.",
+        "C": "Wherever the plugin decides."
+      }
+    },
+    {
+      "question": "How much extra disk is needed?",
+      "answers": {
+        "A": "A temp archive.",
+        "B": "A full copy of the selection.",
+        "C": "Depends on the plugin."
+      }
+    },
+    {
+      "question": "Who owns the failure contract?",
+      "answers": {
+        "A": "The writer.",
+        "B": "The stager.",
+        "C": "Each plugin author."
+      }
+    }
+  ],
+  "keyDifferences": [
+    "A reads once; B reads twice.",
+    "B needs room for a full copy.",
+    "C moves failure handling to plugin authors."
+  ],
+  "example": {
+    "scenario": "A user archives three files and one of them is read-only.",
+    "stages": [
+      "Selection",
+      "Write",
+      "Summary"
+    ]
+  },
+  "flowStages": [
+    "Select",
+    "Read",
+    "Write",
+    "Index",
+    "Report"
+  ],
+  "guidance": {
+    "intro": "Start with the overview, then check how each approach handles unreadable files.",
+    "steps": [
+      {
+        "title": "Scan the matrix",
+        "body": "Look for rows where the approaches disagree.",
+        "tab": "overview"
+      },
+      {
+        "title": "Read the approaches",
+        "body": "Compare the flows and the example trace.",
+        "tab": "approaches"
+      },
+      {
+        "title": "Check effort",
+        "body": "Note the band sizes and any effort gaps.",
+        "tab": "effort"
+      },
+      {
+        "title": "Weigh the trade-offs",
+        "body": "Decide what you can reverse cheaply.",
+        "tab": "tradeoffs"
+      }
+    ],
+    "questions": [
+      "Is a full staging copy acceptable for large selections?",
+      "Do you need a plugin surface in v1?",
+      "Is the temp-file cleanup in scope for the first release?"
+    ],
+    "recommendation": {
+      "approachId": "A",
+      "headline": "Approach A fits the requirements with the least surface.",
+      "confidence": "medium",
+      "confidenceReason": "Its estimates are the most concrete, but the cleanup slice is untested.",
+      "why": [
+        "Meets all four requirements",
+        "Smallest touch surface"
+      ],
+      "costs": [
+        "New write loop to review",
+        "Index tables are new"
+      ],
+      "changeMyMind": [
+        "A large selection fails the single pass",
+        "Plugin authors are named for v1"
+      ]
+    },
+    "suggestedChallenges": [
+      {
+        "requirementId": "REQ-02",
+        "approachId": "B",
+        "note": "Does the staging copy report the unreadable file before compression?",
+        "want": "met"
+      },
+      {
+        "requirementId": "REQ-03",
+        "approachId": "C",
+        "note": "  ",
+        "want": "met with workaround"
+      }
+    ],
+    "changeNote": "Scores for REQ-04 on A were revised after the first round."
+  }
+}

@@ -1,0 +1,488 @@
+{
+  "kind": "quirk-approach-comparison",
+  "schemaVersion": 1,
+  "builtAgainst": {
+    "signoffRenderId": "04a0331ca3ac"
+  },
+  "approaches": [
+    {
+      "id": "A",
+      "title": "Single-pass streaming writer",
+      "overview": "Reads each selected file once and streams it into a temp archive that is renamed into place when the write finishes. The index is built in the same pass.",
+      "revision": "A-r2",
+      "anchors": [
+        {
+          "repo": "core",
+          "commit": "a1b2c3d"
+        },
+        {
+          "repo": "tools",
+          "commit": "c0ffee1"
+        }
+      ],
+      "readAt": "2026-10-01",
+      "specMarkdown": "# Approach A: streaming writer\n\nBuilds on the [spec](../logic.md).\n\n## Steps\n\n- Open the selection as a list of paths\n- Stream each file into a temp archive\n- Rename the temp archive into place\n\n## Touch points\n\n| Area | Change |\n|---|---|\n| writer | new streaming module |\n| index | built during the same pass |\n",
+      "repos": [
+        {
+          "name": "core",
+          "files": 7
+        },
+        {
+          "name": "tools",
+          "files": 3
+        }
+      ],
+      "schemaChange": "Adds a run table, an entry table and an index table with foreign keys between them.",
+      "hotPaths": [
+        "archive write loop",
+        "index append"
+      ],
+      "deploy": {
+        "status": "stated",
+        "steps": [
+          "Ship the writer behind the archive.stream flag",
+          "Enable for internal users",
+          "Enable for everyone"
+        ]
+      },
+      "criticalPath": "Writer module, then the index appender, then the cleanup hook.",
+      "slices": [
+        {
+          "id": "A-1",
+          "name": "Streaming writer",
+          "size": "L",
+          "band": "v1",
+          "area": "core",
+          "risk": "Core write loop is new code.",
+          "riskHeadline": "New write loop",
+          "lines": {
+            "core": [
+              400,
+              900
+            ]
+          }
+        },
+        {
+          "id": "A-2",
+          "name": "Index appender",
+          "size": "M",
+          "band": "v1",
+          "area": "core",
+          "risk": "Index must match archive contents."
+        },
+        {
+          "id": "A-3",
+          "name": "Unreadable-file report",
+          "size": "S-M",
+          "band": "v1",
+          "area": "core",
+          "risk": "Error text must name the file.",
+          "lines": {
+            "core": [
+              80,
+              160
+            ],
+            "tools": [
+              20,
+              40
+            ]
+          }
+        },
+        {
+          "id": "A-4",
+          "name": "Partial-write cleanup",
+          "size": "S",
+          "band": "fast-follow",
+          "area": "core",
+          "risk": "Temp file cleanup on crash."
+        },
+        {
+          "id": "A-5",
+          "name": "Progress output",
+          "size": "M-L",
+          "band": "optional",
+          "area": "tools",
+          "risk": "Terminal differences."
+        }
+      ],
+      "flow": [
+        {
+          "stage": "Select",
+          "lane": "core",
+          "text": "Collect explicit paths",
+          "kind": "reused"
+        },
+        {
+          "stage": "Read",
+          "lane": "core",
+          "text": "Open each file once",
+          "kind": "changed"
+        },
+        {
+          "stage": "Write",
+          "lane": "core",
+          "text": "Stream into temp archive",
+          "kind": "new",
+          "focal": true
+        },
+        {
+          "stage": "Index",
+          "lane": "sync",
+          "text": "Append index entry",
+          "kind": "new"
+        },
+        {
+          "stage": "Report",
+          "lane": "core",
+          "text": "List unreadable files",
+          "kind": "changed"
+        }
+      ],
+      "sequence": {
+        "participants": [
+          "User",
+          "CLI",
+          "Writer",
+          "Index",
+          "Disk"
+        ],
+        "messages": [
+          {
+            "from": "User",
+            "to": "CLI",
+            "label": "archive selection",
+            "kind": "call"
+          },
+          {
+            "from": "CLI",
+            "to": "Writer",
+            "label": "start write",
+            "kind": "call"
+          },
+          {
+            "from": "Writer",
+            "to": "Disk",
+            "label": "stream temp file",
+            "kind": "focal"
+          },
+          {
+            "from": "Writer",
+            "to": "Index",
+            "label": "append entry",
+            "kind": "async"
+          },
+          {
+            "from": "Writer",
+            "to": "Disk",
+            "label": "rename into place",
+            "kind": "call"
+          },
+          {
+            "from": "Writer",
+            "to": "CLI",
+            "label": "done plus unreadable list",
+            "kind": "return"
+          },
+          {
+            "from": "CLI",
+            "to": "User",
+            "label": "summary",
+            "kind": "return"
+          }
+        ]
+      },
+      "schema": {
+        "tables": [
+          {
+            "name": "archive_run",
+            "status": "new",
+            "columns": [
+              {
+                "name": "id",
+                "type": "int",
+                "chip": "PK"
+              },
+              {
+                "name": "target_dir",
+                "type": "text"
+              },
+              {
+                "name": "started_at",
+                "type": "timestamp"
+              }
+            ]
+          },
+          {
+            "name": "archive_entry",
+            "status": "new",
+            "columns": [
+              {
+                "name": "id",
+                "type": "int",
+                "chip": "PK"
+              },
+              {
+                "name": "run_id",
+                "type": "int",
+                "chip": "FK"
+              },
+              {
+                "name": "path",
+                "type": "text"
+              },
+              {
+                "name": "bytes",
+                "type": "int",
+                "highlight": true
+              }
+            ],
+            "moreColumns": "2 more columns"
+          },
+          {
+            "name": "index_entry",
+            "status": "new",
+            "columns": [
+              {
+                "name": "id",
+                "type": "int",
+                "chip": "PK"
+              },
+              {
+                "name": "entry_id",
+                "type": "int",
+                "chip": "FK",
+                "highlight": true
+              },
+              {
+                "name": "offset",
+                "type": "int"
+              }
+            ]
+          }
+        ],
+        "refs": [
+          {
+            "from": [
+              "archive_entry",
+              "run_id"
+            ],
+            "to": [
+              "archive_run",
+              "id"
+            ],
+            "kind": "fk"
+          },
+          {
+            "from": [
+              "index_entry",
+              "entry_id"
+            ],
+            "to": [
+              "archive_entry",
+              "id"
+            ],
+            "kind": "fk"
+          }
+        ]
+      },
+      "exampleTrace": [
+        "Three files selected; one is read-only.",
+        "Two files streamed; the unreadable one is skipped.",
+        "Summary names the unreadable file."
+      ],
+      "restsOn": [
+        "Files stay readable between selection and write",
+        "Rename is atomic on the destination volume"
+      ],
+      "undo": {
+        "flagOff": "Turn off archive.stream to fall back to the old writer.",
+        "hardToReverse": "Index rows already written stay in the new tables.",
+        "cheapestNext": "Add a cleanup job for orphaned temp files."
+      },
+      "rivalClaims": {}
+    }
+  ],
+  "scores": {
+    "REQ-01": {
+      "A": {
+        "status": "met",
+        "wording": "Streams into a compressed archive",
+        "note": "One pass writes the compressed archive with relative paths preserved.",
+        "citations": [
+          "core/archive/writer.py:41"
+        ],
+        "requirementHash": "2e7c6fe8ef591ec795102e56ab78bcf592dc69cb224d9d5f2f5eebb0053fad1e",
+        "requirementText": "Write a compressed archive of the selected files."
+      }
+    },
+    "REQ-02": {
+      "A": {
+        "status": "met",
+        "wording": "Reports unreadable files at the end",
+        "note": "Unreadable files are collected during the pass and listed by name in the summary.",
+        "citations": [
+          "core/archive/writer.py:112"
+        ],
+        "requirementHash": "36906144ab80ead9ef3015dd65c3a9168ab23c07e0481f27cc5d2ca51954cc5b",
+        "requirementText": "Report unreadable source files by name instead of failing the whole archive."
+      }
+    },
+    "REQ-03": {
+      "A": {
+        "status": "met",
+        "qualifier": "v1 scope",
+        "wording": "Removes the temp archive on failure",
+        "note": "The temp file is deleted when the write stops, and rename never runs.",
+        "citations": [
+          "core/archive/writer.py:150"
+        ],
+        "requirementHash": "83321629fe8ee71eb6077339b5557cbb0e60e5e2fccbb370459d3dd71ceb0839",
+        "requirementText": "Remove a partial archive when the destination runs out of space mid-write."
+      }
+    },
+    "REQ-04": {
+      "A": {
+        "status": "met",
+        "wording": "Only the explicit paths are streamed",
+        "note": "The write loop iterates the selected paths and nothing else.",
+        "citations": [
+          "core/archive/select.py:12"
+        ],
+        "requirementHash": "29454520acec320ae9414fab6b2763cae281e9572585467ebd9303587e5b93d4",
+        "requirementText": "Archive only the files the user explicitly selected.",
+        "history": [
+          {
+            "previous": {
+              "status": "met with workaround",
+              "qualifier": "needs a filter"
+            },
+            "challenge": "The loop never expands directories, so no filter is needed.",
+            "reply": "Agreed; the selection list is already flat and explicit.",
+            "outcome": "revised"
+          }
+        ]
+      }
+    }
+  },
+  "findings": [
+    {
+      "requirementId": "REQ-01",
+      "approaches": "all",
+      "type": "same score, different design",
+      "text": "All three meet the requirement, through a stream, a staged tree and a plugin respectively.",
+      "citation": "core/archive/writer.py:41"
+    }
+  ],
+  "pairings": [
+    {
+      "name": "Temp-file cleanup",
+      "items": {
+        "A": "Deletes the temp archive."
+      },
+      "text": "A and B both clean up on failure, with different artifacts to remove."
+    }
+  ],
+  "choices": [
+    {
+      "question": "Where does a read failure surface?",
+      "answers": {
+        "A": "At the end of the write."
+      }
+    },
+    {
+      "question": "How much extra disk is needed?",
+      "answers": {
+        "A": "A temp archive."
+      }
+    },
+    {
+      "question": "Who owns the failure contract?",
+      "answers": {
+        "A": "The writer."
+      }
+    }
+  ],
+  "keyDifferences": [
+    "A reads once; B reads twice.",
+    "B needs room for a full copy.",
+    "C moves failure handling to plugin authors."
+  ],
+  "example": {
+    "scenario": "A user archives three files and one of them is read-only.",
+    "stages": [
+      "Selection",
+      "Write",
+      "Summary"
+    ]
+  },
+  "flowStages": [
+    "Select",
+    "Read",
+    "Write",
+    "Index",
+    "Report"
+  ],
+  "guidance": {
+    "intro": "Start with the overview, then check how each approach handles unreadable files.",
+    "steps": [
+      {
+        "title": "Scan the matrix",
+        "body": "Look for rows where the approaches disagree.",
+        "tab": "overview"
+      },
+      {
+        "title": "Read the approaches",
+        "body": "Compare the flows and the example trace.",
+        "tab": "approaches"
+      },
+      {
+        "title": "Check effort",
+        "body": "Note the band sizes and any effort gaps.",
+        "tab": "effort"
+      },
+      {
+        "title": "Weigh the trade-offs",
+        "body": "Decide what you can reverse cheaply.",
+        "tab": "tradeoffs"
+      }
+    ],
+    "questions": [
+      "Is a full staging copy acceptable for large selections?",
+      "Do you need a plugin surface in v1?",
+      "Is the temp-file cleanup in scope for the first release?"
+    ],
+    "recommendation": {
+      "approachId": "A",
+      "headline": "Approach A fits the requirements with the least surface.",
+      "confidence": "medium",
+      "confidenceReason": "Its estimates are the most concrete, but the cleanup slice is untested.",
+      "why": [
+        "Meets all four requirements",
+        "Smallest touch surface"
+      ],
+      "costs": [
+        "New write loop to review",
+        "Index tables are new"
+      ],
+      "changeMyMind": [
+        "A large selection fails the single pass",
+        "Plugin authors are named for v1"
+      ]
+    },
+    "suggestedChallenges": [
+      {
+        "requirementId": "REQ-02",
+        "approachId": "A",
+        "note": "Is the unreadable list complete?",
+        "want": "met"
+      },
+      {
+        "requirementId": "REQ-03",
+        "approachId": "A",
+        "note": "Is cleanup tested?",
+        "want": "met"
+      }
+    ],
+    "changeNote": "Scores for REQ-04 on A were revised after the first round."
+  }
+}

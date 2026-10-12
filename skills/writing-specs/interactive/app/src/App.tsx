@@ -11,6 +11,7 @@ import { Theme } from '@astryxdesign/core/theme'
 import { Token } from '@astryxdesign/core/Token'
 import { Tooltip } from '@astryxdesign/core/Tooltip'
 import { neutralTheme } from '@astryxdesign/theme-neutral/built'
+import { isComparison } from './compare-state'
 import type { Export, ReviewState } from './spec-types'
 import {
   EXPORT_KIND,
@@ -32,6 +33,7 @@ import {
   type ViewId,
 } from './review-state'
 import { BoardView } from './views/board-view'
+import { CompareShell } from './views/compare/compare-shell'
 import { ConstraintsView } from './views/constraints-view'
 import { CoverageView } from './views/coverage-view'
 import { ImpactCertaintyView } from './views/impact-certainty-view'
@@ -72,6 +74,11 @@ function Shell({ mode, children }: { mode: 'light' | 'dark' | 'system'; children
 function App() {
   const [payloadResult] = useState(readPayload)
   const payload = payloadResult.payload
+  const comparisonCheck = useMemo(
+    () => (payload?.comparison && payload.spec.signoff ? isComparison(payload.comparison, payload.spec) : null),
+    [payload],
+  )
+  const comparison = comparisonCheck?.ok ? comparisonCheck.value : null
   const [initial] = useState(() => payload ? bootstrap(payload) : null)
   const [state, setState] = useState<ReviewState>(() => initial?.state ?? emptyState())
   const stateRef = useRef(state)
@@ -83,7 +90,7 @@ function App() {
   const lastExportRef = useRef(lastExportUpdatedAt)
   lastExportRef.current = lastExportUpdatedAt
   const [storageOk, setStorageOk] = useState(initial?.storageOk ?? true)
-  const defaultView: ViewId = payload && payload.spec.stage === 1 ? 'scenarios' : 'board'
+  const defaultView: ViewId = comparison ? (comparison.guidance ? 's3-guidance' : 's3-overview') : payload && payload.spec.stage === 1 ? 'scenarios' : 'board'
   const [view, setView] = useState<ViewId>(defaultView)
   const [openRequirementId, setOpenRequirementId] = useState<string | null>(null)
   const [openItemId, setOpenItemId] = useState<string | null>(null)
@@ -138,10 +145,21 @@ function App() {
         { id: 'sign-off', label: 'Sign-off' },
       ]
     }
-    const result: TabSpec[] = [
+    const result: TabSpec[] = []
+    if (comparison) {
+      if (comparison.guidance) result.push({ id: 's3-guidance', label: 'Guidance' })
+      result.push(
+        { id: 's3-overview', label: 'Overview' },
+        { id: 's3-approaches', label: 'Approaches' },
+        { id: 's3-effort', label: 'Effort' },
+        { id: 's3-blast', label: 'Blast radius' },
+        { id: 's3-tradeoffs', label: 'Trade-offs' },
+      )
+    }
+    result.push(
       { id: 'board', label: 'Scope board' },
       { id: 'coverage', label: 'Coverage' },
-    ]
+    )
     if (spec.requirements.some((item) => item.certainty !== null)) result.push({ id: 'heatmap', label: 'Impact × certainty' })
     if (spec.views?.storyMap) result.push({ id: 'story-map', label: 'Story map' })
     if (spec.views?.stateMachine) result.push({ id: 'states', label: 'State machine' })
@@ -151,10 +169,10 @@ function App() {
       { id: 'constraints', label: 'Constraints' },
       { id: 'risks', label: 'Risks' },
       { id: 'spec', label: 'Spec text' },
-      { id: 'sign-off', label: 'Sign-off' },
     )
+    result.push({ id: 'sign-off', label: 'Sign-off' })
     return result
-  }, [payload])
+  }, [payload, comparison])
 
   useEffect(() => {
     if (payload && initial) persist(initial.state, initial.seen, initial.lastExportUpdatedAt)
@@ -166,14 +184,19 @@ function App() {
 
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (!storageOk && (!lastExportUpdatedAt || lastExportUpdatedAt !== state.updatedAt)) {
+      if (!comparison && !storageOk && (!lastExportUpdatedAt || lastExportUpdatedAt !== state.updatedAt)) {
         event.preventDefault()
         event.returnValue = ''
       }
     }
     window.addEventListener('beforeunload', beforeUnload)
     return () => window.removeEventListener('beforeunload', beforeUnload)
-  }, [lastExportUpdatedAt, state.updatedAt, storageOk])
+  }, [comparison, lastExportUpdatedAt, state.updatedAt, storageOk])
+
+  const ignoreUpdate = useCallback<Update>(() => {}, [])
+  const foldedStage = payload?.spec.stage ?? 1
+  const foldedState = useMemo(() => emptyState(foldedStage), [foldedStage])
+  const readOnlyState = comparison ? foldedState : state
 
   const createExport = useCallback((): Export => {
     if (!payload) throw new Error('No rendered review data is loaded.')
@@ -270,8 +293,8 @@ function App() {
   const viewProps: ViewProps = {
     payload,
     spec: payload.spec,
-    state,
-    update,
+    state: readOnlyState,
+    update: comparison ? ignoreUpdate : update,
     changedIds,
     onOpenRequirement: setOpenRequirementId,
   }
@@ -295,18 +318,21 @@ function App() {
                       <Text type="supporting">{storageOk ? 'Saved in this browser only' : 'Browser storage unavailable'}</Text>
                     </HStack>
                   </HStack>
-                  <VStack maxWidth={640}>
-                    <Stepper activeStep={payload.spec.stage - 1} label="Review stages" density="compact">
+                  <VStack maxWidth={comparison ? 960 : 640}>
+                    <Stepper activeStep={comparison ? 2 : payload.spec.stage - 1} label="Review stages" density="compact">
                       <Step step={0} label="Stage 1 · What should happen" description="Behaviors, constraints, and risks" />
                       <Step step={1} label="Stage 2 · What to build" description="Scope of the requirements Claude derives after you sign stage 1" />
+                      {comparison ? <Step step={2} label="Stage 3 · Compare approaches" description="Weigh the approaches against the requirements you signed" /> : null}
                     </Stepper>
                   </VStack>
                   <Text type="supporting">
-                    {state.signedAt
-                      ? `Signed ${new Date(state.signedAt).toLocaleString()}`
-                      : openGateCount === 0
-                        ? 'Every gate is met. Record your verdict on the Sign-off tab.'
-                        : `${openGateCount} of ${gates.length} review gates still open`}
+                    {comparison && payload.spec.signoff
+                      ? `Signed ${new Date(payload.spec.signoff.signedAt).toLocaleString()}`
+                      : state.signedAt
+                        ? `Signed ${new Date(state.signedAt).toLocaleString()}`
+                        : openGateCount === 0
+                          ? 'Every gate is met. Record your verdict on the Sign-off tab.'
+                          : `${openGateCount} of ${gates.length} review gates still open`}
                   </Text>
                   <TabList value={view} onChange={(value) => setView(value as ViewId)} role="tablist" hasDivider>
                     {tabs.map((tab) => <Tab key={tab.id} value={tab.id} label={tab.label} panelId="panel" endContent={badge(BADGES[tab.id])} />)}
@@ -317,14 +343,25 @@ function App() {
             content={
               <LayoutContent label="Review panel" padding={4} isScrollable={false}>
                 <VStack gap={4} paddingBlockEnd={10}>
-                  {!storageOk ? (
+                  {!storageOk && !comparison ? (
                     <Banner
                       status="error"
                       title="Export before closing"
                       description="Browser storage is unavailable, so your progress may not survive this session. Download or copy your decisions on the Sign-off tab."
                     />
                   ) : null}
+                  {comparisonCheck && !comparisonCheck.ok ? (
+                    <Banner
+                      status="warning"
+                      title="Stage 3 is unavailable"
+                      description={`The comparison data did not validate at ${comparisonCheck.pointer}: ${comparisonCheck.message} Stages 1 and 2 are unaffected.`}
+                    />
+                  ) : null}
+                  {comparison && !view.startsWith('s3-') ? (
+                    <Banner status="info" title="This spec is signed. Stages 1 and 2 are read-only." collapsible={false} />
+                  ) : null}
                   <VStack id="panel" role="tabpanel">
+                    {comparison ? <CompareShell payload={payload} comparison={comparison} view={view} onView={setView} /> : null}
                     {view === 'board' ? <BoardView {...viewProps} /> : null}
                     {view === 'risks' ? <RisksView {...viewProps} /> : null}
                     {view === 'scenarios' ? <ScenariosView {...viewProps} /> : null}
@@ -336,7 +373,7 @@ function App() {
                     {view.startsWith('custom:') ? <CustomView {...viewProps} viewId={view.slice('custom:'.length)} /> : null}
                     {view === 'spec' ? <SpecView {...viewProps} /> : null}
                     {view === 'sign-off' ? (
-                      <SignOffView {...viewProps} gates={gates} createExport={createExport} onExport={onExport} importStatus={importStatus} onImport={importFile} />
+                      <SignOffView {...viewProps} gates={gates} createExport={createExport} onExport={onExport} importStatus={importStatus} onImport={importFile} readOnly={Boolean(comparison)} />
                     ) : null}
                   </VStack>
                   <Text type="supporting" color="secondary">
@@ -350,12 +387,12 @@ function App() {
           <RequirementDialog
           requirement={payload.spec.requirements.find((requirement) => requirement.id === openRequirementId) ?? null}
           spec={payload.spec}
-          state={state}
-          update={update}
+          state={readOnlyState}
+          update={comparison ? ignoreUpdate : update}
           changedIds={changedIds}
           onClose={() => setOpenRequirementId(null)}
         />
-        <ItemDialog id={openItemId} spec={payload.spec} state={state} onClose={() => setOpenItemId(null)} />
+        <ItemDialog id={openItemId} spec={payload.spec} state={readOnlyState} onClose={() => setOpenItemId(null)} />
         </ItemLinksProvider>
       </ScopeOutGuardProvider>
     </Shell>
