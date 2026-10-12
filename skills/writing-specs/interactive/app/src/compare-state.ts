@@ -290,10 +290,13 @@ function checkApproach(value: unknown, pointer: string, flowStages: string[], st
   const readAt = str(required(approach, 'readAt', pointer), `${pointer}/readAt`)
   if (!/^\d{4}-\d{2}-\d{2}$/.test(readAt)) fail(`${pointer}/readAt`, 'must be YYYY-MM-DD')
   optional(approach, 'specMarkdown', str, pointer)
+  const repoNames = new Set<string>()
   arr(required(approach, 'repos', pointer), `${pointer}/repos`).forEach((entry, i) => {
     const at = `${pointer}/repos/${i}`
     const repo = obj(entry, at)
-    str(required(repo, 'name', at), `${at}/name`)
+    const repoName = str(required(repo, 'name', at), `${at}/name`)
+    if (repoNames.has(repoName)) fail(`${at}/name`, `duplicate repo name "${repoName}"`)
+    repoNames.add(repoName)
     int(required(repo, 'files', at), `${at}/files`)
   })
   strings(required(approach, 'hotPaths', pointer), `${pointer}/hotPaths`)

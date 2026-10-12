@@ -73,6 +73,8 @@ function ApproachCard({ approach, props, mismatchedRepos }: { approach: Approach
 
   const checked = visible.filter((requirement) => comparison.scores[requirement.id]?.[approach.id]?.check).length
   const evidence = `${checked} of ${visible.length} scores checked · ${approach.restsOn?.length ?? 0} assumptions unverified`
+  const lastRevision = state.lastExport?.approachRevisions[approach.id]
+  const revisedSinceExport = lastRevision !== undefined && lastRevision !== approach.revision
   const anchors = approach.anchors.map((anchor) => `${anchor.repo}@${anchor.commit.slice(0, 7)}`).join(', ')
 
   return (
@@ -85,6 +87,11 @@ function ApproachCard({ approach, props, mismatchedRepos }: { approach: Approach
           {approach.anchors.some((anchor) => mismatchedRepos.includes(anchor.repo)) ? (
             <HStack>
               <Token size="sm" color="orange" label={`Anchored at a different commit than another approach: ${approach.anchors.filter((anchor) => mismatchedRepos.includes(anchor.repo)).map((anchor) => anchor.repo).join(', ')}`} />
+            </HStack>
+          ) : null}
+          {revisedSinceExport ? (
+            <HStack>
+              <Token size="sm" color="orange" label="Revised since your last export" />
             </HStack>
           ) : null}
         </VStack>

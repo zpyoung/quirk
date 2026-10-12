@@ -7,7 +7,7 @@ import type { Approach, CompareViewProps } from '../../compare-types'
 import { mrsFor } from '../../compare-state'
 
 type Range = [number, number]
-type RepoRow = { name: string; files: number; lines: Range | null; mrs: Range | null }
+type RepoRow = { name: string; files: number | null; lines: Range | null; mrs: Range | null }
 
 const fmt = ([low, high]: Range) => (low === high ? low.toLocaleString('en-US') : `${low.toLocaleString('en-US')}-${high.toLocaleString('en-US')}`)
 const add = (a: Range | null, b: Range): Range => (a ? [a[0] + b[0], a[1] + b[1]] : [b[0], b[1]])
@@ -20,7 +20,7 @@ function repoRows(approach: Approach): RepoRow[] {
     const mrs = mrsFor(slice)
     for (const [repo, lines] of Object.entries(slice.lines ?? {})) {
       if (!rows.has(repo)) {
-        rows.set(repo, { name: repo, files: 0, lines: null, mrs: null })
+        rows.set(repo, { name: repo, files: null, lines: null, mrs: null })
         names.push(repo)
       }
       const row = rows.get(repo)!
@@ -87,7 +87,7 @@ function BlastCard({ approach, maxLines }: { approach: Approach; maxLines: numbe
               <Text type="label">{row.name}</Text>
               <RepoBar row={row} maxLines={maxLines} />
               <Text type="supporting">
-                {`${row.files} ${row.files === 1 ? 'file' : 'files'}`}
+                {row.files === null ? 'files not provided' : `${row.files} ${row.files === 1 ? 'file' : 'files'}`}
                 {row.lines && row.mrs ? ` · ${fmt(row.lines)} lines · ${fmt(row.mrs)} ${row.mrs[1] === 1 && row.mrs[0] === 1 ? 'MR' : 'MRs'}` : ' · lines and MRs not provided'}
               </Text>
             </div>

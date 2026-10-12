@@ -20,5 +20,6 @@
   "bad-readat.json": "/approaches/0/readAt",
   "choices-unknown-approach.json": "/choices/0/answers/Z",
   "pairing-unknown-approach.json": "/pairings/0/items/Z",
-  "rival-unknown-approach.json": "/approaches/0/rivalClaims/Z"
+  "rival-unknown-approach.json": "/approaches/0/rivalClaims/Z",
+  "duplicate-repo.json": "/approaches/0/repos/1/name"
 }

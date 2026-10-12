@@ -2314,12 +2314,18 @@ def _validate_approach(v: Validator, raw: Any, path: str, flow_stages: Optional[
         v.error(pointer(path, "readAt"), "required key is missing")
     _optional_string(v, approach, "specMarkdown", path)
     repos = _required_array(v, approach, "repos", path)
+    seen_repos: set = set()
     for index, repo_raw in enumerate(repos or []):
         base = pointer(pointer(path, "repos"), index)
         repo = v.object(repo_raw, base)
         if repo is None:
             continue
         _string_field(v, repo, "name", base, nonempty=True)
+        repo_name = repo.get("name")
+        if isinstance(repo_name, str):
+            if repo_name in seen_repos:
+                v.error(pointer(base, "name"), f'duplicate repo name "{repo_name}"')
+            seen_repos.add(repo_name)
         files = _required(v, repo, "files", base)
         if "files" in repo and (not _is_int(files) or files < 0):
             v.error(pointer(base, "files"), "expected a non-negative integer")
