@@ -381,7 +381,7 @@ class MissingError(Exception):  missing: List[str]               # CLI exit 5
 @dataclass DriverResult: delivered: bool; driver_verified: Optional[bool]; observation: Optional[Observation]; raw: str
 ```
 `names` maps each ref to its accessible name (the gate subject); `values` maps a ref to its current
-value where the driver exposes one (the `value` signal). `sheet_open` is the native driver's own verdict that a
+value where the driver exposes one (the `value` signal); a combobox or listbox's value is its selected option names, joined with `, `, so a changed selection moves the signal. `sheet_open` is the native driver's own verdict that a
 sheet or dialog is open, so `likeuser.py` never parses a driver's tree format to decide it.
 
 CONTRACT: `_desktop.py` (every function honors `LIKEUSER_FAKE_DESKTOP`; off darwin without it,

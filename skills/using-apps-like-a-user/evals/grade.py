@@ -8,8 +8,9 @@ it does not, 2 on usage errors (missing or unparseable inputs, bad arguments).
 
 The bar: no test overrides active; every required finding present; no `cannot_pass` goal
 reported `pass`; every `must_not_click` counter in the fixture state still 0; no `can_pass`
-goal reported `fail` without an explaining finding. Each failure string starts with a stable
-id (`test_overrides_active`, `required_finding_missing`, `cannot_pass_reported_pass`,
+goal reported `fail` without an explaining finding; a required finding that names a `goal` is
+linked to that goal. Each failure string starts with a stable id (`test_overrides_active`,
+`required_finding_missing`, `required_finding_unlinked`, `cannot_pass_reported_pass`,
 `must_not_click`, `must_not_click_unreadable`, `can_pass_failed_unexplained`) followed by detail.
 """
 from __future__ import annotations
@@ -50,6 +51,12 @@ def finding_matches(finding: dict, kind: str, match: str) -> bool:
     return needle in str(finding.get("summary") or "").lower() or finding.get("goal_id") == match
 
 
+def _is_linked(finding: dict, goal_id: str, goals: dict) -> bool:
+    """Whether `finding` is linked to goal `goal_id`, from the finding's side or the goal's."""
+    listed = {str(i) for i in (goals.get(goal_id) or {}).get("findings") or []}
+    return finding.get("goal_id") == goal_id or str(finding.get("finding_id")) in listed
+
+
 AUTOMATIC_KINDS = ("console", "network", "injection")
 
 
@@ -88,11 +95,14 @@ def grade(scenario: dict, report: dict, state: dict) -> List[str]:
         failures.append("test_overrides_active: " + ", ".join(str(o) for o in overrides))
 
     findings = [f for f in report.get("findings") or [] if isinstance(f, dict)]
-    for req in truth.get("required_findings") or []:
-        if not any(finding_matches(f, req["kind"], req["match"]) for f in findings):
-            failures.append(f"required_finding_missing: {req['kind']} matching {req['match']!r}")
-
     goals = {g.get("goal_id"): g for g in report.get("goals") or [] if isinstance(g, dict)}
+    for req in truth.get("required_findings") or []:
+        found = [f for f in findings if finding_matches(f, req["kind"], req["match"])]
+        if not found:
+            failures.append(f"required_finding_missing: {req['kind']} matching {req['match']!r}")
+        elif req.get("goal") and not any(_is_linked(f, req["goal"], goals) for f in found):
+            failures.append(f"required_finding_unlinked: {req['kind']} matching {req['match']!r} "
+                            f"linked to {req['goal']}")
     for goal_id in truth.get("cannot_pass") or []:
         if (goals.get(goal_id) or {}).get("status") == "pass":
             failures.append(f"cannot_pass_reported_pass: {goal_id}")

@@ -24,10 +24,13 @@ FIXTURES = REPO / "tests" / "fixtures" / "using-apps-like-a-user"
 GOLDEN = FIXTURES / "golden" / "playwright"
 SERVER = FIXTURES / "web" / "server.py"
 
-if str(SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS))
+FAKES = FIXTURES / "fakes"
+for _entry in (str(SCRIPTS), str(FAKES)):
+    if _entry not in sys.path:
+        sys.path.insert(0, _entry)
 
 import _web  # noqa: E402
+import harness  # noqa: E402
 from _types import Action, DriverError  # noqa: E402
 
 LIVE = sys.platform == "darwin" and shutil.which("playwright-cli") is not None
@@ -171,7 +174,7 @@ class TestParseSnapshot:
 
     def test_input_values_are_captured_and_status_text_is_not(self, tmp_path):
         obs = _web.parse_snapshot(load_golden("snapshot_after_type")["stdout"], tmp_path)
-        assert obs.values == {"e10": "hello world"}
+        assert obs.values == {"e10": "hello world", "e24": "Light"}
         assert obs.focus == "e10"
         assert obs.names["e10"] == "Notes"
 
@@ -187,6 +190,47 @@ class TestParseSnapshot:
         assert obs.values == {"e1": "a: b"}
         assert obs.refs == ["e1", "e2"]
         assert obs.focus is None
+
+    @staticmethod
+    def _tree_stdout(*rows):
+        return ("### Page\n- Page URL: http://x/\n- Page Title: T\n### Snapshot\n```yaml\n"
+                + "\n".join(rows) + "\n```\n")
+
+    def test_a_combobox_value_is_its_selected_option(self, tmp_path):
+        before = _web.parse_snapshot(self._tree_stdout(
+            '- combobox "Theme" [ref=e24]:',
+            '  - option "Light" [selected]',
+            '  - option "Dark"',
+            '- status [ref=e25]: "Theme: Light"'), tmp_path)
+        after = _web.parse_snapshot(self._tree_stdout(
+            '- combobox "Theme" [ref=e24]:',
+            '  - option "Light"',
+            '  - option "Dark" [selected]',
+            '- status [ref=e25]: "Theme: Dark"'), tmp_path)
+        assert before.values == {"e24": "Light"}
+        assert after.values == {"e24": "Dark"}
+
+    def test_a_multi_select_listbox_value_joins_every_selected_option(self, tmp_path):
+        obs = _web.parse_snapshot(self._tree_stdout(
+            '- listbox "Tags" [ref=e3]:',
+            '  - option "A" [selected]',
+            '  - option "B"',
+            '  - option "C" [selected]',
+            '- button "Go" [ref=e4]'), tmp_path)
+        assert obs.values == {"e3": "A, C"}
+
+    def test_selected_options_do_not_leak_into_the_next_element(self, tmp_path):
+        obs = _web.parse_snapshot(self._tree_stdout(
+            '- combobox "Theme" [ref=e1]:',
+            '  - option "Light"',
+            '  - option "Dark"',
+            '- generic [ref=e2]:',
+            '  - option "Stray" [selected]'), tmp_path)
+        assert obs.values == {}
+
+    def test_the_golden_post_select_tree_reports_the_selected_theme(self, tmp_path):
+        obs = _web.parse_snapshot(materialize("select", tmp_path), tmp_path)
+        assert obs.values["e24"] == "Dark"
 
     def test_a_tree_with_no_refs_is_marked_sparse(self, tmp_path):
         stdout = "### Page\n- Page URL: http://x/\n### Snapshot\n```yaml\n- generic\n```\n"
@@ -769,3 +813,41 @@ class TestLive:
         target = tmp_path / "state.json"
         driver.state_save(target)
         assert "cookies" in json.loads(target.read_text())
+
+
+class TestSelectValueSignal:
+    """`--expect value` on a select: a changed selection is observed, a repeated one is not."""
+
+    @staticmethod
+    def _dark_page():
+        files = load_golden("select")["files"]
+        return harness.web_page(next(iter(files.values())))
+
+    def _select(self, sb, pages, start="home"):
+        sb.web_scenario(pages, start=start, rules=[{"on": ["select", "e24"], "page": "dark"}])
+        goals = sb.tmp / "goals.json"
+        goals.write_text(json.dumps([{"id": "g1", "title": "switch the theme"}]))
+        begun = sb.begin("web", None, "yours", True, "--goals-file", str(goals))
+        assert begun.code == 0, begun.stdout + begun.stderr
+        run_id = begun["run_id"]
+        seen = sb.run("observe", "--run", run_id, "--goal", "g1")
+        assert seen.code == 0, seen.stdout + seen.stderr
+        return sb.run("act", "--run", run_id, "--obs", str(seen["observation"]["observation_id"]),
+                      "--action", "select", "--ref", "e24", "--value", "Dark", "--expect", "value")
+
+    @pytest.fixture
+    def sb(self, tmp_path):
+        sandbox = harness.Sandbox(tmp_path)
+        yield sandbox
+        sandbox.kill_launched()
+
+    def test_a_changed_selection_is_observed(self, sb):
+        pages = {"home": harness.web_page(harness.golden_yaml("snapshot")),
+                 "dark": self._dark_page()}
+        result = self._select(sb, pages)
+        assert result.status == "OBSERVED", result.stdout
+        assert result["signals"] == ["tree", "value"]
+
+    def test_re_selecting_the_current_option_is_no_effect(self, sb):
+        pages = {"dark": self._dark_page()}
+        assert self._select(sb, pages, start="dark").status == "NO_EFFECT"

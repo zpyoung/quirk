@@ -19,10 +19,10 @@
     {"id": "electron-save-file", "title": "Save the file from the app into the folder {tmpdir}."}
   ],
   "ground_truth": {
-    "can_pass": ["electron-working", "electron-notes", "electron-save-file"],
-    "cannot_pass": ["electron-dead", "electron-promo", "electron-avatar"],
+    "can_pass": ["electron-working", "electron-notes", "electron-save-file", "electron-avatar"],
+    "cannot_pass": ["electron-dead", "electron-promo"],
     "required_findings": [
-      {"kind": "network", "match": "/api/avatar"},
+      {"kind": "network", "match": "/api/avatar", "goal": "electron-avatar"},
       {"kind": "visibility", "match": "promo"},
       {"kind": "injection", "match": "verify"}
     ],

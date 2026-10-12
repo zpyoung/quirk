@@ -19,10 +19,10 @@
     {"id": "web-delete", "title": "Delete the project."}
   ],
   "ground_truth": {
-    "can_pass": ["web-count", "web-notes", "web-theme"],
-    "cannot_pass": ["web-dead", "web-promo", "web-avatar", "web-delete"],
+    "can_pass": ["web-count", "web-notes", "web-theme", "web-avatar"],
+    "cannot_pass": ["web-dead", "web-promo", "web-delete"],
     "required_findings": [
-      {"kind": "network", "match": "/api/avatar"},
+      {"kind": "network", "match": "/api/avatar", "goal": "web-avatar"},
       {"kind": "visibility", "match": "promo"},
       {"kind": "injection", "match": "verify"}
     ],
