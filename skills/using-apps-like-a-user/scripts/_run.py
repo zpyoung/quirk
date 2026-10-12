@@ -369,6 +369,10 @@ class DesktopLock:
     The holder record lives in the lock file and every read or write happens under `flock`, so
     acquisition is atomic across processes. A holder idle for more than 15 minutes is stale and
     may be replaced; `replaced` then names it so the caller can log the takeover.
+
+    A non-empty record that is malformed or lacks `run_id`/`last_act_at` (a short write after
+    truncation) fails closed: it reads as a holder with `run_id` "unknown" and `unreadable` set,
+    and ages by the lock file's mtime so it cannot wedge the desktop for good.
     """
 
     def __init__(self, path: Optional[Path] = None) -> None:
@@ -401,9 +405,13 @@ class DesktopLock:
             if raw.strip():
                 try:
                     parsed = json.loads(raw.decode("utf-8"))
-                    holder = parsed if isinstance(parsed, dict) else None
                 except ValueError:
-                    holder = None
+                    parsed = None
+                if isinstance(parsed, dict) and isinstance(parsed.get("run_id"), str) \
+                        and parsed["run_id"] and _parse_time(parsed.get("last_act_at")):
+                    holder = parsed
+                else:
+                    holder = self._unknown_holder(os.fstat(fd).st_mtime)
             outcome = fn(holder)
             if not write:
                 return outcome
@@ -421,6 +429,12 @@ class DesktopLock:
             os.close(fd)
 
     @staticmethod
+    def _unknown_holder(mtime: float) -> dict:
+        seen = datetime.fromtimestamp(mtime, timezone.utc).strftime(_TIME_FORMAT)
+        return {"run_id": "unknown", "project": "unknown", "acquired_at": seen,
+                "last_act_at": seen, "unreadable": True}
+
+    @staticmethod
     def _is_stale(holder: dict) -> bool:
         seen = _parse_time(holder.get("last_act_at"))
         if seen is None:
@@ -434,7 +448,7 @@ class DesktopLock:
 
         def attempt(holder: Optional[dict]):
             now = _utc_now()
-            if holder and holder.get("run_id") == run_id:
+            if holder and not holder.get("unreadable") and holder.get("run_id") == run_id:
                 updated = dict(holder)
                 updated["last_act_at"] = now
                 return None, updated
@@ -469,7 +483,7 @@ class DesktopLock:
     def refresh(self, run_id: str) -> None:
         """Mark the holder as just active; a no-op unless `run_id` holds the lock."""
         def touch(holder: Optional[dict]):
-            if holder and holder.get("run_id") == run_id:
+            if holder and not holder.get("unreadable") and holder.get("run_id") == run_id:
                 updated = dict(holder)
                 updated["last_act_at"] = _utc_now()
                 return None, updated
@@ -480,7 +494,7 @@ class DesktopLock:
     def release(self, run_id: str) -> None:
         """Free the lock if `run_id` holds it; a no-op for anyone else."""
         def drop(holder: Optional[dict]):
-            if holder and holder.get("run_id") == run_id:
+            if holder and not holder.get("unreadable") and holder.get("run_id") == run_id:
                 return None, _CLEAR
             return None, None
 
@@ -496,22 +510,30 @@ class DesktopLock:
 def load_credentials(prefix: Optional[str], file: Optional[Path]) -> Dict[str, str]:
     """Return `{username, password}` from a 0600 JSON file when given, else from `<PREFIX>_USERNAME`/`_PASSWORD`.
 
-    Raises `MissingError(["credentials_file_mode"])` for a file readable by group or others and
+    The mode check and the read use one opened descriptor, and symlinks and non-regular files are
+    refused. Raises `MissingError(["credentials_file_mode"])` for a file readable by group or others and
     `MissingError(["credentials"])` when either value is absent.
     """
     if file is not None:
         path = Path(file)
         try:
-            mode = stat.S_IMODE(path.stat().st_mode)
+            fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         except OSError:
             raise MissingError(["credentials_file"])
-        if mode & 0o077:
-            raise MissingError(["credentials_file_mode"])
         try:
-            doc = json.loads(path.read_text(encoding="utf-8"))
-            username, password = doc["username"], doc["password"]
-        except (OSError, ValueError, KeyError, TypeError):
-            raise MissingError(["credentials"])
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                raise MissingError(["credentials_file"])
+            if stat.S_IMODE(info.st_mode) & 0o077:
+                raise MissingError(["credentials_file_mode"])
+            try:
+                with os.fdopen(fd, "r", encoding="utf-8", closefd=False) as handle:
+                    doc = json.load(handle)
+                username, password = doc["username"], doc["password"]
+            except (OSError, ValueError, KeyError, TypeError):
+                raise MissingError(["credentials"])
+        finally:
+            os.close(fd)
         if not isinstance(username, str) or not isinstance(password, str) \
                 or not username or not password:
             raise MissingError(["credentials"])

@@ -338,11 +338,33 @@ def test_lock_fresh_holder_is_not_replaced(lock):
     assert lock.try_acquire("r2", "/other") == live
 
 
-def test_lock_corrupt_file_counts_as_free(lock):
+@pytest.mark.parametrize("content", ["{not json", "[1, 2]", '{"project": "/p"}',
+                                     '{"run_id": "r0"}', '{"run_id": "r0", "last_act_at": "x"}'])
+def test_lock_corrupt_record_fails_closed(lock, content):
+    lock.path.parent.mkdir(parents=True)
+    lock.path.write_text(content)
+    held = lock.try_acquire("r1", "/p")
+    assert held is not None and held["unreadable"] is True
+    assert lock.holder()["unreadable"] is True
+    assert lock.path.read_text() == content
+
+
+def test_lock_corrupt_record_goes_stale_by_mtime(lock):
     lock.path.parent.mkdir(parents=True)
     lock.path.write_text("{not json")
-    assert lock.holder() is None
+    old = time.time() - 16 * 60
+    os.utime(lock.path, (old, old))
     assert lock.try_acquire("r1", "/p") is None
+    assert lock.replaced["unreadable"] is True
+    assert lock.holder()["run_id"] == "r1"
+
+
+def test_lock_corrupt_record_ignores_refresh_and_release(lock):
+    lock.path.parent.mkdir(parents=True)
+    lock.path.write_text("{not json")
+    lock.refresh("unknown")
+    lock.release("unknown")
+    assert lock.path.read_text() == "{not json"
 
 
 def test_lock_refresh_moves_last_act(lock):
@@ -452,6 +474,43 @@ def test_credentials_file_with_missing_keys(tmp_path):
     with pytest.raises(MissingError) as exc:
         run.load_credentials(None, f)
     assert exc.value.missing == ["credentials"]
+
+
+def test_credentials_file_symlink_refused(tmp_path):
+    real = tmp_path / "real.json"
+    real.write_text(json.dumps({"username": "u", "password": "p"}))
+    real.chmod(0o600)
+    link = tmp_path / "link.json"
+    link.symlink_to(real)
+    with pytest.raises(MissingError) as exc:
+        run.load_credentials(None, link)
+    assert exc.value.missing == ["credentials_file"]
+
+
+def test_credentials_file_missing_or_not_regular(tmp_path):
+    for target in (tmp_path / "absent.json", tmp_path):
+        with pytest.raises(MissingError) as exc:
+            run.load_credentials(None, target)
+        assert exc.value.missing == ["credentials_file"]
+
+
+def test_credentials_mode_and_content_come_from_the_same_open_file(tmp_path, monkeypatch):
+    """A pathname swap after the open must not change what is validated or read."""
+    f = tmp_path / "creds.json"
+    f.write_text(json.dumps({"username": "good", "password": "good-pw"}))
+    f.chmod(0o600)
+    swap = tmp_path / "swap.json"
+    swap.write_text(json.dumps({"username": "evil", "password": "evil-pw"}))
+    swap.chmod(0o644)
+    real_open = os.open
+
+    def swapping_open(path, *args, **kwargs):
+        fd = real_open(path, *args, **kwargs)
+        os.replace(swap, f)
+        return fd
+
+    monkeypatch.setattr(run.os, "open", swapping_open)
+    assert run.load_credentials(None, f) == {"username": "good", "password": "good-pw"}
 
 
 def test_redact():
