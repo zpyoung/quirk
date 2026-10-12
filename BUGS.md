@@ -108,3 +108,12 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: medium
 - **Proposed fix**: Have fold carry notes into the requirement (e.g. reviewNote) or print them on stderr so Claude must act on them; and either let the page set certainty directly or document that notes are advisory. Omit stage-1 items from the stage-2 record, or mark them as pinned.
 
+## BUG-12: pi-watch fails to start after a fresh install: unpinned pi-coding-agent dropped AuthStorage
+- **Observed**: 2026-10-12
+- **File**: skills/pi-dev/scripts/pi-watch/package.json:9
+- **Description**: package.json pins "@earendil-works/pi-coding-agent": "*". The quirk 2026.10.12.1 plugin install resolved pi-coding-agent 1.1.0, which no longer exports AuthStorage (imported at pi-watch.mjs:23), so every pi-watch call, including --check, dies at import with "SyntaxError: The requested module '@earendil-works/pi-coding-agent' does not provide an export named 'AuthStorage'". pi-watch-latest picks the newest installed version, so all pi dispatch (adversarial-review, pi-dev, the SDD pi binding) breaks machine-wide after the update; the 2026.10.8.1 install still works. Observed 2026-10-12 during the scenario-data-states SDD review loop.
+- **Introduced by**: unknown (unpinned dependency, surfaced by the 2026.10.12.1 install)
+- **Severity**: high
+- **Proposed fix**: Pin pi-ai and pi-coding-agent to the last versions that export AuthStorage (or port to the 1.1.0 auth API) and commit the lockfile resolution.
+- **Blocker for**: Every pi-watch dispatch, including adversarial-review's cross-family reviewer.
+
