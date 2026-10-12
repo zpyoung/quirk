@@ -1,0 +1,33 @@
+{
+  "comparisonId": "8b98ac2c6c74",
+  "targets": {
+    "score|REQ-01|A": "f2e21e8bd9a9",
+    "score|REQ-01|B": "90d237fa7958",
+    "score|REQ-01|C": "9cca67f0f1cb",
+    "score|REQ-02|A": "d2022f6a0a18",
+    "score|REQ-02|B": "fd9016134272",
+    "score|REQ-02|C": "9a153491d62c",
+    "score|REQ-03|A": "f176a2be9598",
+    "score|REQ-03|B": "fd55cb362240",
+    "score|REQ-03|C": "55f2fd28c34f",
+    "score|REQ-04|A": "3f6c826e5c11",
+    "score|REQ-04|B": "a84a642accbf",
+    "score|REQ-04|C": "8f3e43512ba1",
+    "slice|A|A-1": "36270fd64988",
+    "slice|A|A-2": "f009016f0df4",
+    "slice|A|A-3": "e4611dd267a0",
+    "slice|A|A-4": "45642d59bd01",
+    "slice|A|A-5": "33e95dba7a19",
+    "slice|B|B-1": "c733dcd09e70",
+    "slice|B|B-2": "fc70c2f209c8",
+    "slice|B|B-3": "de193a7042df",
+    "slice|B|B-4": "7918fdb79c8b",
+    "slice|B|B-5": "ba56542b8982",
+    "slice|B|B-6": "1f63c9767c23",
+    "slice|C|C-1": "cb659d659737",
+    "slice|C|C-2": "2ec935de099d",
+    "slice|C|C-3": "1e26a95b0106",
+    "slice|C|C-4": "778b6e581ae9",
+    "slice|C|C-5": "0675803ddfa4"
+  }
+}
