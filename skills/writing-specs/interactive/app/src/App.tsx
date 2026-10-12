@@ -11,6 +11,7 @@ import { Theme } from '@astryxdesign/core/theme'
 import { Token } from '@astryxdesign/core/Token'
 import { Tooltip } from '@astryxdesign/core/Tooltip'
 import { neutralTheme } from '@astryxdesign/theme-neutral/built'
+import { isComparison } from './compare-state'
 import type { Export, ReviewState } from './spec-types'
 import {
   EXPORT_KIND,
@@ -32,6 +33,7 @@ import {
   type ViewId,
 } from './review-state'
 import { BoardView } from './views/board-view'
+import { CompareShell } from './views/compare/compare-shell'
 import { ConstraintsView } from './views/constraints-view'
 import { CoverageView } from './views/coverage-view'
 import { ImpactCertaintyView } from './views/impact-certainty-view'
@@ -72,6 +74,11 @@ function Shell({ mode, children }: { mode: 'light' | 'dark' | 'system'; children
 function App() {
   const [payloadResult] = useState(readPayload)
   const payload = payloadResult.payload
+  const comparisonCheck = useMemo(
+    () => (payload?.comparison && payload.spec.signoff ? isComparison(payload.comparison, payload.spec) : null),
+    [payload],
+  )
+  const comparison = comparisonCheck?.ok ? comparisonCheck.value : null
   const [initial] = useState(() => payload ? bootstrap(payload) : null)
   const [state, setState] = useState<ReviewState>(() => initial?.state ?? emptyState())
   const stateRef = useRef(state)
@@ -83,7 +90,7 @@ function App() {
   const lastExportRef = useRef(lastExportUpdatedAt)
   lastExportRef.current = lastExportUpdatedAt
   const [storageOk, setStorageOk] = useState(initial?.storageOk ?? true)
-  const defaultView: ViewId = payload && payload.spec.stage === 1 ? 'scenarios' : 'board'
+  const defaultView: ViewId = comparison ? (comparison.guidance ? 's3-guidance' : 's3-overview') : payload && payload.spec.stage === 1 ? 'scenarios' : 'board'
   const [view, setView] = useState<ViewId>(defaultView)
   const [openRequirementId, setOpenRequirementId] = useState<string | null>(null)
   const [openItemId, setOpenItemId] = useState<string | null>(null)
@@ -138,10 +145,21 @@ function App() {
         { id: 'sign-off', label: 'Sign-off' },
       ]
     }
-    const result: TabSpec[] = [
+    const result: TabSpec[] = []
+    if (comparison) {
+      if (comparison.guidance) result.push({ id: 's3-guidance', label: 'Guidance' })
+      result.push(
+        { id: 's3-overview', label: 'Overview' },
+        { id: 's3-approaches', label: 'Approaches' },
+        { id: 's3-effort', label: 'Effort' },
+        { id: 's3-blast', label: 'Blast radius' },
+        { id: 's3-tradeoffs', label: 'Trade-offs' },
+      )
+    }
+    result.push(
       { id: 'board', label: 'Scope board' },
       { id: 'coverage', label: 'Coverage' },
-    ]
+    )
     if (spec.requirements.some((item) => item.certainty !== null)) result.push({ id: 'heatmap', label: 'Impact × certainty' })
     if (spec.views?.storyMap) result.push({ id: 'story-map', label: 'Story map' })
     if (spec.views?.stateMachine) result.push({ id: 'states', label: 'State machine' })
@@ -154,7 +172,7 @@ function App() {
       { id: 'sign-off', label: 'Sign-off' },
     )
     return result
-  }, [payload])
+  }, [payload, comparison])
 
   useEffect(() => {
     if (payload && initial) persist(initial.state, initial.seen, initial.lastExportUpdatedAt)
@@ -295,10 +313,11 @@ function App() {
                       <Text type="supporting">{storageOk ? 'Saved in this browser only' : 'Browser storage unavailable'}</Text>
                     </HStack>
                   </HStack>
-                  <VStack maxWidth={640}>
-                    <Stepper activeStep={payload.spec.stage - 1} label="Review stages" density="compact">
+                  <VStack maxWidth={comparison ? 960 : 640}>
+                    <Stepper activeStep={comparison ? 2 : payload.spec.stage - 1} label="Review stages" density="compact">
                       <Step step={0} label="Stage 1 · What should happen" description="Behaviors, constraints, and risks" />
                       <Step step={1} label="Stage 2 · What to build" description="Scope of the requirements Claude derives after you sign stage 1" />
+                      {comparison ? <Step step={2} label="Stage 3 · Compare approaches" description="Weigh the approaches against the requirements you signed" /> : null}
                     </Stepper>
                   </VStack>
                   <Text type="supporting">
@@ -324,7 +343,15 @@ function App() {
                       description="Browser storage is unavailable, so your progress may not survive this session. Download or copy your decisions on the Sign-off tab."
                     />
                   ) : null}
+                  {comparisonCheck && !comparisonCheck.ok ? (
+                    <Banner
+                      status="warning"
+                      title="Stage 3 is unavailable"
+                      description={`The comparison data did not validate at ${comparisonCheck.pointer}: ${comparisonCheck.message} Stages 1 and 2 are unaffected.`}
+                    />
+                  ) : null}
                   <VStack id="panel" role="tabpanel">
+                    {comparison ? <CompareShell payload={payload} comparison={comparison} view={view} onView={setView} /> : null}
                     {view === 'board' ? <BoardView {...viewProps} /> : null}
                     {view === 'risks' ? <RisksView {...viewProps} /> : null}
                     {view === 'scenarios' ? <ScenariosView {...viewProps} /> : null}
