@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "playwright-cli",
+    "--version"
+  ],
+  "returncode": 0,
+  "stdout": "0.1.22\n",
+  "stderr": "",
+  "files": {}
+}

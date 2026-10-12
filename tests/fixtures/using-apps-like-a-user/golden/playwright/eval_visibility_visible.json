@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "playwright-cli",
+    "-s=golden",
+    "eval",
+    "el => { const out = (visible, reason) => JSON.stringify({visible: visible, reason: reason}); if (el.getClientRects().length === 0) return out(false, 'display'); for (let n = el; n; n = n.parentElement) {  if (getComputedStyle(n).display === 'none') return out(false, 'display'); } const vis = getComputedStyle(el).visibility; if (vis === 'hidden' || vis === 'collapse') return out(false, 'hidden'); for (let n = el; n; n = n.parentElement) {  if (parseFloat(getComputedStyle(n).opacity) === 0) return out(false, 'opacity'); } const r = el.getBoundingClientRect(); const x0 = Math.max(r.left, 0), y0 = Math.max(r.top, 0); const x1 = Math.min(r.right, innerWidth), y1 = Math.min(r.bottom, innerHeight); if (x1 <= x0 || y1 <= y0) return out(false, 'offscreen'); const root = el.getRootNode(); const probe = root.elementFromPoint ? root : document; const top = probe.elementFromPoint((x0 + x1) / 2, (y0 + y1) / 2); if (!top || !(top === el || el.contains(top))) return out(false, 'occluded'); return out(true, '');}",
+    "e4"
+  ],
+  "returncode": 0,
+  "stdout": "### Result\n\"{\\\"visible\\\":true,\\\"reason\\\":\\\"\\\"}\"\n### Ran Playwright code\n```js\nawait page.getByRole('button', { name: 'Increment counter' }).evaluate('el => { const out = (visible, reason) => JSON.stringify({visible: visible, reason: reason}); if (el.getClientRects().length === 0) return out(false, \\'display\\'); for (let n = el; n; n = n.parentElement) {  if (getComputedStyle(n).display === \\'none\\') return out(false, \\'display\\'); } const vis = getComputedStyle(el).visibility; if (vis === \\'hidden\\' || vis === \\'collapse\\') return out(false, \\'hidden\\'); for (let n = el; n; n = n.parentElement) {  if (parseFloat(getComputedStyle(n).opacity) === 0) return out(false, \\'opacity\\'); } const r = el.getBoundingClientRect(); const x0 = Math.max(r.left, 0), y0 = Math.max(r.top, 0); const x1 = Math.min(r.right, innerWidth), y1 = Math.min(r.bottom, innerHeight); if (x1 <= x0 || y1 <= y0) return out(false, \\'offscreen\\'); const root = el.getRootNode(); const probe = root.elementFromPoint ? root : document; const top = probe.elementFromPoint((x0 + x1) / 2, (y0 + y1) / 2); if (!top || !(top === el || el.contains(top))) return out(false, \\'occluded\\'); return out(true, \\'\\');}');\n```\n",
+  "stderr": "",
+  "files": {}
+}

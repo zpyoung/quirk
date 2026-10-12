@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "playwright-cli",
+    "-s=golden",
+    "press",
+    "Tab"
+  ],
+  "returncode": 0,
+  "stdout": "### Ran Playwright code\n```js\n// Press Tab\nawait page.keyboard.press('Tab');\n```\n",
+  "stderr": "",
+  "files": {}
+}

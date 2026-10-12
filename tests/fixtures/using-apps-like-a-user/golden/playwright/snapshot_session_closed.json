@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "playwright-cli",
+    "-s=golden",
+    "snapshot"
+  ],
+  "returncode": 1,
+  "stdout": "The browser 'golden' is not open, please run open first\n\n  playwright-cli -s=golden open [params]\n",
+  "stderr": "",
+  "files": {}
+}
