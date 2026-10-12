@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "orca",
+    "computer",
+    "list-windows",
+    "--app",
+    "dev.quirk.uala.fixture",
+    "--json"
+  ],
+  "returncode": 0,
+  "stdout": "{\n  \"id\": \"e231d265-e369-4ef4-95b8-871cec028a8e\",\n  \"ok\": true,\n  \"result\": {\n    \"app\": {\n      \"name\": \"UALA Fixture\",\n      \"pid\": 30794,\n      \"useCount\": null,\n      \"isRunning\": true,\n      \"lastUsedAt\": null,\n      \"bundleId\": \"dev.quirk.uala.fixture\"\n    },\n    \"windows\": [\n      {\n        \"app\": {\n          \"bundleId\": \"dev.quirk.uala.fixture\",\n          \"pid\": 30794,\n          \"name\": \"UALA Fixture\"\n        },\n        \"y\": 273,\n        \"id\": 83666,\n        \"index\": 0,\n        \"isMinimized\": false,\n        \"title\": \"UALA Fixture\",\n        \"height\": 450,\n        \"platform\": {\n          \"layer\": 0,\n          \"alpha\": 1\n        },\n        \"x\": 298,\n        \"isOffscreen\": false,\n        \"width\": 900,\n        \"screenIndex\": 0,\n        \"isMain\": null\n      }\n    ]\n  },\n  \"_meta\": {\n    \"runtimeId\": \"c0ea6465-33fd-42b2-8069-764fc8ab98f1\"\n  }\n}\n",
+  "stderr": "",
+  "files": {}
+}

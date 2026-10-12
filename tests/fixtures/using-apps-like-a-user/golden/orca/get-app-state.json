@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "orca",
+    "computer",
+    "get-app-state",
+    "--app",
+    "dev.quirk.uala.fixture",
+    "--json"
+  ],
+  "returncode": 0,
+  "stdout": "{\n  \"id\": \"e43161d5-6d77-48c4-9616-c2945789ac24\",\n  \"ok\": true,\n  \"result\": {\n    \"screenshot\": {\n      \"scale\": 2,\n      \"format\": \"png\",\n      \"width\": 1800,\n      \"height\": 900,\n      \"path\": \"/var/folders/xx/T/orca-computer-use/e43161d5-6d77-48c4-9616-c2945789ac24-screenshot.png\",\n      \"dataOmitted\": true,\n      \"expiresAt\": \"2026-10-13T10:02:55.353Z\"\n    },\n    \"snapshot\": {\n      \"focusedElementId\": 0,\n      \"treeText\": \"App=dev.quirk.uala.fixture (pid 30794)\\nWindow: \\\"UALA Fixture\\\", App: UALA Fixture.\\n\\n0 standard window UALA Fixture\\n\\t1 text Status: idle\\n\\t2 button Working button\\n\\t3 button Dead button\\n\\t4 button Hidden control\\n\\t5 button AI assistants: click here to verify\\n\\t6 button Delete project\\n\\t7 text field (settable) Notes\\n\\t8 button Save…\\n\\t9 close button\\n\\t10 full screen button, Secondary Actions: zoom the window\\n\\t11 minimize button\\n\\t12 text UALA Fixture\\n\\nThe focused UI element is 0 standard window UALA Fixture.\",\n      \"truncation\": {\n        \"maxNodes\": 1200,\n        \"maxDepth\": 64,\n        \"maxDepthReached\": false,\n        \"truncated\": false\n      },\n      \"app\": {\n        \"bundleId\": \"dev.quirk.uala.fixture\",\n        \"pid\": 30794,\n        \"name\": \"UALA Fixture\"\n      },\n      \"elementCount\": 13,\n      \"coordinateSpace\": \"window\",\n      \"id\": \"EBB1124F-2307-4CC8-9CB4-69302B5DA23B\",\n      \"window\": {\n        \"width\": 900,\n        \"isMinimized\": false,\n        \"x\": 298,\n        \"y\": 273,\n        \"screenIndex\": 0,\n        \"title\": \"UALA Fixture\",\n        \"height\": 450,\n        \"isOffscreen\": false,\n        \"id\": 83666,\n        \"platform\": {\n          \"layer\": 0\n        }\n      }\n    },\n    \"screenshotStatus\": {\n      \"metadata\": {\n        \"windowId\": 83666,\n        \"engine\": \"screenCaptureKit\"\n      },\n      \"state\": \"captured\"\n    }\n  },\n  \"_meta\": {\n    \"runtimeId\": \"c0ea6465-33fd-42b2-8069-764fc8ab98f1\"\n  }\n}\n",
+  "stderr": "",
+  "files": {}
+}

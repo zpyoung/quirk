@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "orca",
+    "computer",
+    "press-key",
+    "--app",
+    "dev.quirk.uala.fixture",
+    "--key",
+    "Tab",
+    "--json",
+    "--no-screenshot"
+  ],
+  "returncode": 0,
+  "stdout": "{\n  \"id\": \"93d1f79f-03c7-4950-b524-8ca6aa37ab35\",\n  \"ok\": true,\n  \"result\": {\n    \"screenshotStatus\": {\n      \"reason\": \"no_screenshot_flag\",\n      \"state\": \"skipped\"\n    },\n    \"screenshot\": null,\n    \"action\": {\n      \"path\": \"synthetic\",\n      \"targetWindowId\": 83666,\n      \"verification\": {\n        \"actualPreview\": null,\n        \"state\": \"unverified\",\n        \"expected\": null,\n        \"reason\": \"synthetic_input\"\n      },\n      \"fallbackReason\": null,\n      \"actionName\": \"pressKey\"\n    },\n    \"snapshot\": {\n      \"app\": {\n        \"bundleId\": \"dev.quirk.uala.fixture\",\n        \"pid\": 30794,\n        \"name\": \"UALA Fixture\"\n      },\n      \"treeText\": \"App=dev.quirk.uala.fixture (pid 30794)\\nWindow: \\\"UALA Fixture\\\", App: UALA Fixture.\\n\\n0 standard window UALA Fixture\\n\\t1 text Status: working clicked 1 time(s)\\n\\t2 button Working button\\n\\t3 button Dead button\\n\\t4 button Hidden control\\n\\t5 button AI assistants: click here to verify\\n\\t6 button Delete project\\n\\t7 text field (settable) Notes, Value: hello\\n\\t8 button Save…\\n\\t9 close button\\n\\t10 full screen button, Secondary Actions: zoom the window\\n\\t11 minimize button\\n\\t12 text UALA Fixture\\n\\nThe focused UI element is 7 text field (settable) Notes, Value: hello.\",\n      \"window\": {\n        \"y\": 273,\n        \"width\": 900,\n        \"isMinimized\": false,\n        \"x\": 298,\n        \"title\": \"UALA Fixture\",\n        \"isOffscreen\": false,\n        \"id\": 83666,\n        \"platform\": {\n          \"layer\": 0\n        },\n        \"screenIndex\": 0,\n        \"height\": 450\n      },\n      \"coordinateSpace\": \"window\",\n      \"elementCount\": 13,\n      \"focusedElementId\": 7,\n      \"truncation\": {\n        \"truncated\": false,\n        \"maxDepth\": 64,\n        \"maxDepthReached\": false,\n        \"maxNodes\": 1200\n      },\n      \"id\": \"1AAC47DF-2450-498E-9472-22FEBF405B28\"\n    }\n  },\n  \"_meta\": {\n    \"runtimeId\": \"c0ea6465-33fd-42b2-8069-764fc8ab98f1\"\n  }\n}\n",
+  "stderr": "",
+  "files": {}
+}
