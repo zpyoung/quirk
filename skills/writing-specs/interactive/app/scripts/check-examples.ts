@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
+import React from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import fixture from '../../../../../tests/fixtures/interactive/v2/stage1/logic.json'
 import { approveBlockReason, EXAMPLE_OUTCOME_UPDATE_PREFIX, emptyState, exampleOutcomeUpdate, isPayload } from '../src/review-state'
 import type { LogicSpec, Scenario } from '../src/spec-types'
-import { exampleMarkPlugins } from '../src/views/scenario-example'
+import { exampleMarkPlugins, ScenarioExampleView } from '../src/views/scenario-example'
 
 const [result, rejection, invented, gap] = exampleMarkPlugins.map((plugin) => plugin.pattern)
 
@@ -16,10 +18,16 @@ assert.deepEqual(matches(result, 'The charge is ✓ queued for May 5; next'), ['
 assert.deepEqual(matches(rejection, 'An API client ✗ cannot add a second line; ok'), ['✗ cannot add a second line'])
 assert.deepEqual(matches(gap, 'Date is [ASK: Does a skip move the date?] here'), ['[ASK: Does a skip move the date?]'])
 for (const pattern of [result, rejection, invented, gap]) assert.deepEqual(matches(pattern, '**bold** text'), [])
-assert.deepEqual(matches(invented, '"Winback" took 10%* off'), ['10%*'])
-assert.deepEqual(matches(invented, 'Charge 2 on 4*, then'), ['4*'])
+assert.deepEqual(matches(invented, '"Winback" took 10%\uE000 off'), ['10%\uE000'])
+assert.deepEqual(matches(invented, 'Charge 2 on 4\uE000, then'), ['4\uE000'])
 assert.deepEqual(matches(invented, '**Subscription**'), [])
-assert.deepEqual(matches(invented, 'Coffee line costs $9*.'), ['$9*'])
+assert.deepEqual(matches(invented, 'Coffee line costs $9\uE000.'), ['$9\uE000'])
+
+const rendered = renderToStaticMarkup(React.createElement(ScenarioExampleView, { example: { before: 'Values 10%* and 4*,', steps: ['**Subscription** step'], after: 'done' } }))
+assert.equal((rendered.match(/example-invented/g) ?? []).length, 2)
+assert.ok(rendered.includes('"example-invented">10%*</span>') && rendered.includes('"example-invented">4*</span>'))
+assert.ok(!rendered.includes('<em>'))
+assert.ok(/<strong[^>]*>Subscription<\/strong>/.test(rendered))
 
 const base: Scenario = {
   id: 'S1', behavior: 'B1', given: 'g', when: 'w', then: 'Then the spec outcome', alternatives: ['Then alt'], explanation: 'e', provenance: 'claude',
