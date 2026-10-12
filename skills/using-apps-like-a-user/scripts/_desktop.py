@@ -177,6 +177,28 @@ def frontmost_bundle_id() -> str:
     return "" if value.lower() == "[ null ]" else value
 
 
+def bundle_id_for_pid(pid: int) -> Optional[str]:
+    """Return the bundle id LaunchServices registered for process `pid`, or None when it has none.
+
+    The fake desktop answers from its optional `pid_bundles` table (pid as a string key).
+    """
+    fake = _fake_path()
+    if fake:
+        return _load_fake(fake).get("pid_bundles", {}).get(str(pid))
+    _require_real()
+    try:
+        found = _run(["lsappinfo", "find", f"pid={int(pid)}"]).strip()
+        if not found:
+            return None
+        out = _run(["lsappinfo", "info", "-only", "bundleid", found.split()[0]])
+    except DriverError:
+        return None
+    if "=" not in out:
+        return None
+    value = out.split("=", 1)[1].strip().strip('"')
+    return None if not value or value.lower() == "[ null ]" else value
+
+
 def activate(bundle_id: str) -> None:
     """Bring the application with `bundle_id` to the front."""
     fake = _fake_path()

@@ -264,6 +264,11 @@ class TestSessionAndCwd:
         assert f.argvs[0] == ["-s=sess", "open", "http://127.0.0.1:1/"]
         assert f.argvs[1] == ["-s=sess", "open", "http://127.0.0.1:1/", "--headed"]
 
+    def test_goto_navigates_the_open_session(self, fake):
+        f = fake(["open"])
+        f.driver.goto("http://127.0.0.1:1/next")
+        assert f.argvs == [["-s=sess", "goto", "http://127.0.0.1:1/next"]]
+
     def test_attach_cdp_close_detach_and_state_load_commands(self, fake):
         f = fake(["open", "close", "close", "state_save"])
         f.driver.attach_cdp("http://127.0.0.1:9222")
@@ -568,7 +573,7 @@ class TestConsoleAndRequests:
         assert failed[0]["status"] == 500
         assert failed[0]["url"].endswith("/api/avatar")
 
-    def test_requests_with_no_response_are_failures_with_status_zero(self, fake):
+    def test_requests_with_no_response_are_failures_with_status_none(self, fake):
         out = (
             "### Result\n"
             "1. [GET] http://127.0.0.1:1/ => [200] OK\n"
@@ -578,8 +583,8 @@ class TestConsoleAndRequests:
         )
         f = fake([{"case": "requests", "stdout": out}])
         assert f.driver.failed_requests() == [
-            {"url": "http://127.0.0.1:1/x", "status": 0, "method": "GET"},
-            {"url": "http://127.0.0.1:1/pending", "status": 0, "method": "GET"},
+            {"url": "http://127.0.0.1:1/x", "status": None, "method": "GET"},
+            {"url": "http://127.0.0.1:1/pending", "status": None, "method": "GET"},
             {"url": "http://127.0.0.1:1/gone", "status": 404, "method": "GET"},
         ]
 

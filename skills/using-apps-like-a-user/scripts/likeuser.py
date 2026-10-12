@@ -1,0 +1,1654 @@
+#!/usr/bin/env python3
+"""likeuser: the single entrypoint every UI action goes through for using-apps-like-a-user.
+
+Each subcommand is its own process, prints exactly one JSON object on stdout, and keeps
+diagnostics on stderr. Exit codes: 0 ran (an `act` outcome is in `status`), 1 internal error,
+2 usage or contract violation, 3 run-state error, 4 driver failure outside `act`, 5 missing
+tool, version, permission, extension, or credentials.
+
+Run state lives in `<state root>/runs/<run-id>/`; the modules `_run`, `_effects`, `_desktop`,
+`_web`, and `_native` hold the bookkeeping, the effect classifier, the macOS primitives, and the
+two driver adapters this script composes.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+import os
+import re
+import shlex
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import time
+import traceback
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+
+# loaded both as `python3 .../likeuser.py` (sys.path[0] is already this directory) and via
+# importlib file-path loading in tests (which doesn't set sys.path at all) -- make the sibling
+# imports work either way.
+_SCRIPT_DIR = str(Path(__file__).resolve().parent)
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+
+import _desktop  # noqa: E402
+import _effects  # noqa: E402
+import _run  # noqa: E402
+from _native import NativeDriver, get_native_driver  # noqa: E402
+from _types import (  # noqa: E402
+    Action, DriverError, DriverResult, MissingError, Observation, RunStateError, UsageError,
+)
+from _web import PIN_TEXT, WebDriver  # noqa: E402
+
+SURFACES = ("web", "electron", "native")
+FAULTS = frozenset({
+    "never_observed", "always_observed", "skip_visibility", "drop_network", "skip_gate",
+    "skip_stale", "skip_drift", "allow_unverified_pass",
+})
+LOCK_WAIT_S = _run.LOCK_WAIT_S
+LAUNCH_WAIT_S = 30.0
+WINDOW_WAIT_S = 10.0
+PID_BUNDLE_WAIT_S = 5.0
+DRIFT_TOLERANCE_PT = 3.0
+PASTE_MIN_CHARS = 200
+PASTE_HOTKEY = "CmdOrCtrl+V"
+MIN_REDACT_CHARS = 4
+CDP_PORTS = range(9222, 9300)
+ELECTRON_DEV_BUNDLE = "com.github.Electron"
+GOAL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+SESSION_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+SHEET_RE = re.compile(r"^\t*\d+ (?:sheet|dialog|system dialog)\b", re.MULTILINE)
+NATIVE_PREFIX = "n:"
+
+ACTION_KINDS = (
+    "click", "double-click", "right-click", "fill", "type", "press", "hotkey", "scroll",
+    "drag", "select", "dismiss",
+)
+POINT_KINDS = ("click", "double-click", "right-click")
+EXPECTS = ("url", "title", "tree", "focus", "value", "screen", "any")
+GATES = ("none", "requested", "approved", "created")
+FINDING_KINDS = (
+    "visibility", "accessibility", "console", "network", "injection", "undiscoverable", "other",
+)
+VERDICTS = ("pass", "fail", "blocked", "partial")
+HANDOFF_REASONS = ("login", "2fa", "hint")
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _digest(text: Optional[str]) -> Optional[str]:
+    if text is None:
+        return None
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:20]
+
+
+def _write_text(path: Path, text: str, mode: Optional[int] = None) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    if mode is not None:
+        os.chmod(str(tmp), mode)
+    os.replace(str(tmp), str(path))
+
+
+def _scrub(value: Any, secrets) -> Any:
+    secrets = [s for s in secrets if s]
+    if not secrets:
+        return value
+    if isinstance(value, str):
+        return _run.redact(value, secrets)
+    if isinstance(value, dict):
+        return {_scrub(k, secrets): _scrub(v, secrets) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_scrub(v, secrets) for v in value]
+    return value
+
+
+class _Parser(argparse.ArgumentParser):
+    """Argument parser whose errors surface as `UsageError` instead of exiting with text."""
+
+    def error(self, message: str):
+        raise UsageError("bad_arguments", message)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Return the CLI parser with one subparser per verb."""
+    parser = _Parser(prog="likeuser.py", description=(
+        "Guarded UI actions for web, Electron, and native macOS apps. Every subcommand prints "
+        "one JSON object on stdout."))
+    sub = parser.add_subparsers(dest="command", required=True, parser_class=_Parser)
+
+    p = sub.add_parser("doctor", help="check tools, versions, and macOS permissions")
+    p.add_argument("--surface", choices=SURFACES)
+
+    p = sub.add_parser("begin", help="open a run: folder, baseline, driver session")
+    p.add_argument("--target", required=True)
+    p.add_argument("--surface", required=True, choices=SURFACES)
+    p.add_argument("--owner", required=True, choices=("yours", "third-party"))
+    attend = p.add_mutually_exclusive_group(required=True)
+    attend.add_argument("--attended", action="store_true")
+    attend.add_argument("--unattended", action="store_true")
+    p.add_argument("--launch")
+    p.add_argument("--cdp-port", type=int)
+    p.add_argument("--real-chrome", action="store_true")
+    p.add_argument("--allow-foreground", action="store_true")
+    p.add_argument("--session-key")
+    creds = p.add_mutually_exclusive_group()
+    creds.add_argument("--credentials-env", metavar="PREFIX")
+    creds.add_argument("--credentials-file", metavar="PATH")
+    p.add_argument("--goals-file")
+    p.add_argument("--budget-run", type=int)
+    p.add_argument("--budget-goal", type=int)
+
+    p = sub.add_parser("goal", help="register a goal")
+    p.add_argument("--run", required=True)
+    p.add_argument("--id", required=True)
+    p.add_argument("--title-stdin", action="store_true", required=True)
+
+    p = sub.add_parser("observe", help="capture the current screen and tree for a goal")
+    p.add_argument("--run", required=True)
+    p.add_argument("--goal", required=True)
+    p.add_argument("--no-screenshot", action="store_true")
+
+    p = sub.add_parser("act", help="perform one guarded action and report its effect")
+    p.add_argument("--run", required=True)
+    p.add_argument("--obs", required=True, type=int)
+    p.add_argument("--action", required=True, choices=ACTION_KINDS)
+    p.add_argument("--ref")
+    p.add_argument("--x", type=float)
+    p.add_argument("--y", type=float)
+    p.add_argument("--to-ref")
+    p.add_argument("--to-x", type=float)
+    p.add_argument("--to-y", type=float)
+    p.add_argument("--text-stdin", action="store_true")
+    p.add_argument("--secret", choices=("username", "password"))
+    p.add_argument("--key")
+    p.add_argument("--value")
+    p.add_argument("--direction", choices=("up", "down", "left", "right"))
+    p.add_argument("--amount", type=float)
+    p.add_argument("--expect", choices=EXPECTS, default="any")
+    p.add_argument("--gate", choices=GATES, default="none")
+    p.add_argument("--foreground", action="store_true")
+    p.add_argument("--target-name")
+
+    p = sub.add_parser("note", help="register a finding the model noticed")
+    p.add_argument("--run", required=True)
+    p.add_argument("--finding-kind", required=True, choices=FINDING_KINDS)
+    p.add_argument("--summary-stdin", action="store_true", required=True)
+    p.add_argument("--obs", type=int)
+
+    p = sub.add_parser("verdict", help="set a goal's status")
+    p.add_argument("--run", required=True)
+    p.add_argument("--goal", required=True)
+    p.add_argument("--status", required=True, choices=VERDICTS)
+    p.add_argument("--summary-stdin", action="store_true", required=True)
+
+    p = sub.add_parser("handoff", help="release the desktop and let the user act (attended)")
+    p.add_argument("--run", required=True)
+    p.add_argument("--reason", required=True, choices=HANDOFF_REASONS)
+
+    p = sub.add_parser("resume", help="take the run back after a handoff")
+    p.add_argument("--run", required=True)
+
+    p = sub.add_parser("end", help="restore the desktop, close the run, write the reports")
+    p.add_argument("--run", required=True)
+    p.add_argument("--keep-open", action="store_true")
+    return parser
+
+
+class Snap(NamedTuple):
+    """One observation of the bound surface: a renderer view, a native view, or both."""
+
+    renderer: Optional[Observation]
+    native: Optional[Observation]
+    sheet: bool
+    source: Optional[str]
+    screenshot: Optional[Path]
+    scale: Optional[float]
+    native_error: Optional[str] = None
+
+
+class Ctx:
+    """Per-process state shared by a verb handler and `main`."""
+
+    def __init__(self) -> None:
+        self.run: Optional[_run.Run] = None
+        self.root: Optional[Path] = None
+        self.inputs: Dict[str, Any] = {}
+        self.status = "ok"
+        self.goal_id: Optional[str] = None
+        self.faults: frozenset = frozenset()
+
+    def secrets(self):
+        return self.run.secrets if self.run is not None else set()
+
+
+def _faults() -> frozenset:
+    names = [n.strip() for n in os.environ.get("LIKEUSER_FAULT", "").split(",") if n.strip()]
+    unknown = [n for n in names if n not in FAULTS]
+    if unknown:
+        raise UsageError("unknown_fault", ", ".join(unknown))
+    return frozenset(names)
+
+
+def _project(cwd: Path) -> str:
+    try:
+        out = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True, timeout=10)
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return str(cwd)
+
+
+def _read_stdin() -> str:
+    text = sys.stdin.read()
+    return text[:-1] if text.endswith("\n") else text
+
+
+def _add_secret(run: _run.Run, value: Optional[str], minimum: int = 1) -> None:
+    if value and len(value) >= minimum:
+        run.secrets.add(value)
+
+
+def _prime_credentials(run: _run.Run) -> None:
+    source = run.data.get("credentials")
+    if not source:
+        return
+    try:
+        creds = _run.load_credentials(source.get("prefix"),
+                                      Path(source["file"]) if source.get("file") else None)
+    except MissingError:
+        return
+    for value in creds.values():
+        _add_secret(run, value)
+
+
+def _load(ctx: Ctx, run_id: str, allow_ended: bool = False) -> _run.Run:
+    ctx.root = _run.state_root(Path.cwd())
+    run = _run.Run.load(ctx.root, run_id)
+    ctx.run = run
+    _prime_credentials(run)
+    if run.data.get("ended") and not allow_ended:
+        raise RunStateError("run_ended", run_id)
+    return run
+
+
+def _require_active(run: _run.Run) -> None:
+    if run.data["paused"]:
+        raise RunStateError("run_paused", "resume the run first")
+    if run.data["stopped_reason"]:
+        raise RunStateError("run_stopped", run.data["stopped_reason"],
+                            {"stopped_reason": run.data["stopped_reason"]})
+
+
+class Drivers:
+    """The web and native drivers a run is bound to, constructed on first use."""
+
+    def __init__(self, run: _run.Run) -> None:
+        self.run = run
+        self._web: Optional[WebDriver] = None
+        self._native: Optional[NativeDriver] = None
+
+    @property
+    def web(self) -> WebDriver:
+        if self._web is None:
+            session = self.run.data["window"]["session"] or self.run.data["run_id"]
+            self._web = WebDriver(session, self.run.dir)
+        return self._web
+
+    @property
+    def native(self) -> NativeDriver:
+        if self._native is None:
+            driver = get_native_driver()
+            window = self.run.data["window"]
+            if window["bundle_id"]:
+                driver.bind(window["bundle_id"], window["window_id"])
+            self._native = driver
+        return self._native
+
+    @property
+    def uses_web(self) -> bool:
+        return self.run.data["surface"] in ("web", "electron")
+
+
+def _copy_shot(source: Optional[Path], dest: Path) -> Optional[Path]:
+    if source is None:
+        return None
+    try:
+        shutil.copyfile(str(source), str(dest))
+    except OSError:
+        return None
+    return dest
+
+
+def _observe_native(drivers: Drivers, shot: Optional[Path]) -> Observation:
+    window = drivers.run.data["window"]
+    obs = drivers.native.observe(window["bundle_id"], window["window_id"], shot is not None)
+    if window["window_id"] is None and obs.window_id is not None:
+        window["window_id"] = obs.window_id
+    return obs
+
+
+def _observe(run: _run.Run, drivers: Drivers, shot: Optional[Path]) -> Snap:
+    """Observe the bound surface; with `shot`, also save a screenshot there.
+
+    Electron runs read the renderer and the native tree; the native tree joins the result only
+    while a sheet or dialog is open, and then the screenshot comes from the native side.
+    """
+    surface = run.data["surface"]
+    if surface == "web":
+        obs = drivers.web.observe(shot)
+        return Snap(obs, None, False, "renderer" if shot else None, shot,
+                    obs.scale if shot else None)
+    if surface == "native":
+        obs = _observe_native(drivers, shot)
+        saved = _copy_shot(obs.screenshot_path, shot) if shot else None
+        return Snap(None, obs, False, "native" if saved else None, saved,
+                    obs.scale if saved else None)
+    native: Optional[Observation] = None
+    error: Optional[str] = None
+    try:
+        native = _observe_native(drivers, None)
+    except DriverError as exc:
+        error = exc.code
+    sheet = native is not None and bool(SHEET_RE.search(native.tree_text))
+    if not sheet:
+        renderer = drivers.web.observe(shot)
+        return Snap(renderer, None, False, "renderer" if shot else None, shot,
+                    renderer.scale if shot else None, error)
+    renderer = drivers.web.observe(None)
+    saved = None
+    if shot is not None:
+        try:
+            native = _observe_native(drivers, shot)
+            saved = _copy_shot(native.screenshot_path, shot)
+        except DriverError as exc:
+            error = exc.code
+    return Snap(renderer, native, True, "native" if saved else None, saved,
+                native.scale if saved else None, error)
+
+
+def _merged(run: _run.Run, snap: Snap) -> Tuple[List[str], Dict[str, str], Dict[str, str]]:
+    refs: List[str] = []
+    names: Dict[str, str] = {}
+    values: Dict[str, str] = {}
+    if snap.renderer is not None:
+        refs += snap.renderer.refs
+        names.update(snap.renderer.names)
+        values.update(snap.renderer.values)
+    if snap.native is not None and (run.data["surface"] == "native" or snap.sheet):
+        prefix = NATIVE_PREFIX if run.data["surface"] == "electron" else ""
+        refs += [prefix + r for r in snap.native.refs]
+        names.update({prefix + k: v for k, v in snap.native.names.items()})
+        values.update({prefix + k: v for k, v in snap.native.values.items()})
+    return refs, names, values
+
+
+def _primary(snap: Snap) -> Observation:
+    return snap.renderer if snap.renderer is not None else snap.native
+
+
+def _signals(run: _run.Run, snap: Snap, ref: Optional[str],
+             screen_hash: Optional[int] = None) -> _effects.Signals:
+    primary = _primary(snap)
+    parts = []
+    if snap.renderer is not None:
+        parts.append(_effects.normalize_tree(snap.renderer.tree_text))
+    if snap.native is not None and (snap.renderer is None or snap.sheet):
+        parts.append(_effects.normalize_tree(snap.native.tree_text))
+    focus = _focus_ref(run, snap)
+    _, _, values = _merged(run, snap)
+    return _effects.Signals(
+        url=_digest(primary.url), title=_digest(primary.title),
+        tree=_digest("\n--native--\n".join(parts)), focus=_digest(focus),
+        value=_digest(values.get(ref)) if ref else None, screen_hash=screen_hash)
+
+
+def _screen_hash(path: Optional[Path]) -> Optional[int]:
+    if path is None:
+        return None
+    try:
+        return _effects.average_hash(path)
+    except (ValueError, OSError):
+        return None
+
+
+def _focus_ref(run: _run.Run, snap: Snap) -> Optional[str]:
+    if snap.sheet and snap.native is not None and snap.native.focus is not None:
+        return NATIVE_PREFIX + snap.native.focus
+    primary = _primary(snap)
+    return primary.focus
+
+
+def _record_observation(run: _run.Run, oid: int, goal_id: Optional[str], snap: Snap,
+                        screen_hash: Optional[int]) -> dict:
+    """Persist an observation's trees, sidecar, and run.json entry; return its output block."""
+    refs, names, values = _merged(run, snap)
+    primary = _primary(snap)
+    tree_text = _run.redact(primary.tree_text, run.secrets)
+    tree_path = run.dir / f"obs-{oid}.tree.txt"
+    _write_text(tree_path, tree_text)
+    native_tree_path = None
+    if snap.renderer is not None and snap.sheet and snap.native is not None:
+        native_tree_path = run.dir / f"obs-{oid}.native.tree.txt"
+        _write_text(native_tree_path, _run.redact(snap.native.tree_text, run.secrets))
+    truncated = any(o.tree_truncated for o in (snap.renderer, snap.native) if o is not None)
+    sparse = bool(_primary(snap).tree_sparse)
+    signals = _signals(run, snap, None, screen_hash)
+    sidecar = {
+        "id": oid, "goal_id": goal_id, "sheet": snap.sheet, "surface": run.data["surface"],
+        "focus_ref": _focus_ref(run, snap),
+        "screenshot_source": snap.source, "scale": snap.scale,
+        "refs": refs, "names": _scrub(names, run.secrets),
+        "value_digests": {k: _digest(v) for k, v in values.items()},
+        "signals": {"url": signals.url, "title": signals.title, "tree": signals.tree,
+                    "focus": signals.focus, "screen_hash": screen_hash},
+    }
+    _write_text(run.dir / f"obs-{oid}.json", json.dumps(sidecar, sort_keys=True))
+    shot = str(snap.screenshot) if snap.screenshot else None
+    run.data["observations"][str(oid)] = {
+        "goal_id": goal_id, "screenshot_path": shot, "screenshot_source": snap.source,
+        "scale": snap.scale, "tree_path": str(tree_path), "url": primary.url,
+        "title": primary.title, "focus": primary.focus,
+        "driver": "playwright-cli" if run.data["surface"] == "web" else
+        ("orca" if run.data["surface"] == "native" else "playwright-cli+orca"),
+    }
+    run.data["latest_observation_id"] = oid
+    block = {
+        "observation_id": oid, "goal_id": goal_id, "screenshot_path": shot,
+        "screenshot_source": snap.source, "scale": snap.scale, "tree_path": str(tree_path),
+        "tree_chars": len(primary.tree_text), "tree_truncated": truncated,
+        "tree_sparse": sparse, "url": primary.url, "title": primary.title,
+        "focus": primary.focus, "console_errors_new": [], "network_failures_new": [],
+    }
+    if native_tree_path is not None:
+        block["native_tree_path"] = str(native_tree_path)
+    if snap.native_error:
+        block["native_error"] = snap.native_error
+    return block
+
+
+def _sidecar(run: _run.Run, oid: int) -> Optional[dict]:
+    try:
+        return json.loads((run.dir / f"obs-{oid}.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _add_evidence(run: _run.Run, goal_id: Optional[str], path: Optional[str]) -> None:
+    if not goal_id or not path:
+        return
+    evidence = run.data["goals"][goal_id]["evidence"]
+    if path not in evidence:
+        evidence.append(path)
+
+
+def _auto_findings(run: _run.Run, drivers: Drivers, ctx: Ctx, goal_id: Optional[str],
+                   shot: Optional[str]) -> Tuple[List[str], List[dict], List[str]]:
+    """Register console errors and failed requests not yet seen; return (messages, requests, finding ids)."""
+    if not drivers.uses_web:
+        return [], [], []
+    added: List[str] = []
+    errors = drivers.web.console_errors()
+    if len(errors) < run.data["console_seen"]:
+        run.data["console_seen"] = 0
+    fresh_console = errors[run.data["console_seen"]:]
+    run.data["console_seen"] = len(errors)
+    for message in fresh_console:
+        added.append(run.add_finding("console", f"console error: {message}", goal_id, shot, "script"))
+    fresh_requests: List[dict] = []
+    if "drop_network" not in ctx.faults:
+        failed = drivers.web.failed_requests()
+        if len(failed) < run.data["requests_seen"]:
+            run.data["requests_seen"] = 0
+        fresh_requests = failed[run.data["requests_seen"]:]
+        run.data["requests_seen"] = len(failed)
+        for req in fresh_requests:
+            outcome = "no response" if req["status"] is None else str(req["status"])
+            added.append(run.add_finding(
+                "network", f"failed request: {req['method']} {req['url']} -> {outcome}",
+                goal_id, shot, "script"))
+    if added:
+        _add_evidence(run, goal_id, shot)
+    return fresh_console, fresh_requests, added
+
+
+def _drift_now() -> Optional[dict]:
+    try:
+        x, y = _desktop.cursor()
+        return {"frontmost": _desktop.frontmost_bundle_id(), "cursor": [x, y]}
+    except DriverError:
+        return None
+
+
+def _surface_report(surface: str) -> Tuple[dict, List[str]]:
+    tools: List[dict] = []
+    missing: List[str] = []
+    if surface in ("web", "electron"):
+        override = os.environ.get("LIKEUSER_PLAYWRIGHT_BIN")
+        found = override or shutil.which("playwright-cli")
+        driver = WebDriver("doctor", Path.cwd())
+        gaps = driver.check()
+        version = None
+        if not gaps:
+            version = driver.version()
+        tools.append({"name": "playwright-cli", "path": found, "version": version,
+                      "pin": f">={PIN_TEXT}"})
+        missing += gaps
+    permissions: Dict[str, bool] = {}
+    if surface in ("electron", "native"):
+        try:
+            tool = get_native_driver()
+            tools.append({"name": tool.name, "path": os.environ.get("LIKEUSER_ORCA_BIN")
+                          or shutil.which("orca"), "version": tool.version or None, "pin": None})
+        except MissingError as exc:
+            missing += exc.missing
+        try:
+            permissions = _desktop.permissions()
+        except DriverError as exc:
+            missing.append(f"macos ({exc.code})")
+        else:
+            if not permissions.get("accessibility"):
+                missing.append("macOS permission: Accessibility")
+            if not permissions.get("screen_recording"):
+                missing.append("macOS permission: Screen Recording")
+    return {"ready": not missing, "tools": tools, "permissions": permissions,
+            "missing": missing}, missing
+
+
+def cmd_doctor(args, ctx: Ctx):
+    """Report tools, pins, and macOS permissions per surface; exit 5 naming what is missing."""
+    surfaces = [args.surface] if args.surface else list(SURFACES)
+    report: Dict[str, dict] = {}
+    missing: List[str] = []
+    for surface in surfaces:
+        info, gaps = _surface_report(surface)
+        report[surface] = info
+        missing += [g for g in gaps if g not in missing]
+    out = {"ok": not missing, "surfaces": report, "missing": missing}
+    return out, (5 if missing else 0)
+
+
+def _free_port() -> int:
+    for port in CDP_PORTS:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            try:
+                probe.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+            return port
+    raise DriverError("no_free_port", "no free CDP port in 9222-9299")
+
+
+def _wait_for_cdp(port: int, proc: subprocess.Popen) -> None:
+    url = f"http://127.0.0.1:{port}/json/version"
+    deadline = time.monotonic() + LAUNCH_WAIT_S
+    while True:
+        if proc.poll() is not None:
+            raise DriverError("launch_failed", f"launched app exited with code {proc.returncode}")
+        try:
+            with urllib.request.urlopen(url, timeout=1) as response:
+                if response.status == 200:
+                    return
+        except (OSError, ValueError):
+            pass
+        if time.monotonic() >= deadline:
+            raise DriverError("launch_timeout", f"{url} did not answer within {int(LAUNCH_WAIT_S)}s")
+        time.sleep(0.2)
+
+
+def _bundle_for_pid(pid: int) -> str:
+    deadline = time.monotonic() + PID_BUNDLE_WAIT_S
+    while True:
+        found = _desktop.bundle_id_for_pid(pid)
+        if found:
+            return found
+        if os.environ.get("LIKEUSER_FAKE_DESKTOP") or time.monotonic() >= deadline:
+            return ELECTRON_DEV_BUNDLE
+        time.sleep(0.25)
+
+
+def _find_window(driver: NativeDriver, bundle_id: str, wait_s: float) -> Optional[int]:
+    finder = getattr(driver, "find_window", None)
+    if finder is None:
+        return None
+    deadline = time.monotonic() + wait_s
+    while True:
+        try:
+            found = finder(bundle_id)
+        except DriverError as exc:
+            if exc.code != "app_not_found" or time.monotonic() >= deadline:
+                raise
+            found = None
+        if found is not None or time.monotonic() >= deadline:
+            return found
+        time.sleep(0.5)
+
+
+def _looks_like_bundle_id(target: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", target))
+
+
+def _native_running(driver: NativeDriver, target: str) -> bool:
+    finder = getattr(driver, "find_window", None)
+    if finder is None:
+        return True
+    try:
+        finder(target)
+    except DriverError as exc:
+        if exc.code == "app_not_found":
+            return False
+        raise
+    return True
+
+
+def _launch_native_app(target: str) -> Dict[str, str]:
+    flag = "-b" if _looks_like_bundle_id(target) else "-a"
+    try:
+        proc = subprocess.run(["open", flag, target], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise DriverError("launch_failed", f"open {flag} {target}: {exc}")
+    if proc.returncode != 0:
+        raise DriverError("launch_failed", f"open {flag} {target}: {proc.stderr.strip()}")
+    return {"kind": "app", "id": ("bundle:" if flag == "-b" else "name:") + target}
+
+
+def _read_goals_file(path: Optional[str]) -> List[Tuple[str, str]]:
+    if not path:
+        return []
+    try:
+        doc = json.loads(Path(path).read_text(encoding="utf-8"))
+        goals = [(str(g["id"]), str(g["title"])) for g in doc]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise UsageError("bad_goals_file", f"{path}: {exc}")
+    for goal_id, _ in goals:
+        if not GOAL_ID_RE.match(goal_id):
+            raise UsageError("bad_goal_id", goal_id)
+    if len({g for g, _ in goals}) != len(goals):
+        raise UsageError("duplicate_goal", "goals file repeats an id")
+    return goals
+
+
+def _validate_begin(args) -> List[Tuple[str, str]]:
+    if args.surface == "electron" and not args.launch:
+        raise UsageError("launch_required",
+                         "--surface electron needs --launch; running Electron apps use --surface native")
+    if args.launch and args.surface != "electron":
+        raise UsageError("launch_requires_electron", "--launch is for --surface electron")
+    if args.real_chrome and args.surface != "web":
+        raise UsageError("real_chrome_requires_web", "--real-chrome is for --surface web")
+    if args.cdp_port is not None and args.surface != "electron":
+        raise UsageError("cdp_port_requires_electron", "--cdp-port is for --surface electron")
+    if args.session_key is not None:
+        if args.surface == "native":
+            raise UsageError("session_key_unsupported", "native apps have no storage state")
+        if not SESSION_KEY_RE.match(args.session_key):
+            raise UsageError("bad_session_key", args.session_key)
+    if args.surface == "native" and not args.allow_foreground:
+        raise UsageError("foreground_not_allowed",
+                         "native runs take the foreground for every action; pass --allow-foreground")
+    for name in ("budget_run", "budget_goal"):
+        value = getattr(args, name)
+        if value is not None and value < 1:
+            raise UsageError("bad_budget", f"--{name.replace('_', '-')} must be at least 1")
+    return _read_goals_file(args.goals_file)
+
+
+def cmd_begin(args, ctx: Ctx):
+    """Open a run: check the surface, take the lock if needed, record the baseline, bind a driver."""
+    goals = _validate_begin(args)
+    surface = args.surface
+    gaps = _surface_report(surface)[1]
+    if gaps:
+        raise MissingError(gaps)
+    credentials = None
+    secret_values: List[str] = []
+    if args.credentials_file or args.credentials_env:
+        loaded = _run.load_credentials(
+            args.credentials_env, Path(args.credentials_file) if args.credentials_file else None)
+        secret_values = list(loaded.values())
+        credentials = {"prefix": args.credentials_env,
+                       "file": str(Path(args.credentials_file).resolve())
+                       if args.credentials_file else None}
+
+    cwd = Path.cwd()
+    root = _run.state_root(cwd)
+    ctx.root = root
+    project = _project(cwd)
+    run_id = _run.new_run_id()
+    lock = _run.DesktopLock()
+    holds_lock = False
+    if surface == "native":
+        lock.acquire(run_id, project, wait_s=LOCK_WAIT_S)
+        holds_lock = True
+    takeover = lock.replaced
+
+    overrides = _run.test_overrides(os.environ)
+    fields = {
+        "run_id": run_id, "target": args.target, "surface": surface, "owner": args.owner,
+        "attended": bool(args.attended), "allow_foreground": bool(args.allow_foreground),
+        "holds_lock": holds_lock, "test_overrides": overrides, "credentials": credentials,
+        "session_key": args.session_key, "real_chrome": bool(args.real_chrome),
+        "started": _now(),
+        "budget": {"run_cap": args.budget_run or _run.DEFAULT_RUN_CAP,
+                   "goal_cap": args.budget_goal or _run.DEFAULT_GOAL_CAP},
+        "window": {"bundle_id": None, "window_id": None, "session": None, "cdp_port": None},
+    }
+    try:
+        run = _run.Run.create(root, fields)
+    except BaseException:
+        if holds_lock:
+            lock.release(run_id)
+        raise
+    ctx.run = run
+    for value in secret_values:
+        _add_secret(run, value)
+    if overrides:
+        sys.stderr.write(_run.OVERRIDE_BANNER + "\n")
+    if takeover:
+        run.event("lock_takeover", {"replaced": takeover}, "ok", 0)
+
+    try:
+        _begin_bind(args, run, ctx)
+        for goal_id, title in goals:
+            run.add_goal(goal_id, title)
+    except BaseException:
+        _abort_begin(run, lock)
+        raise
+    run.save()
+    return {
+        "ok": True, "run_id": run_id, "run_dir": str(run.dir), "surface": surface,
+        "owner": args.owner, "attended": bool(args.attended), "driver": run.data["driver"],
+        "driver_version": run.data["driver_version"], "window": run.data["window"],
+        "baseline": run.data["baseline"], "holds_lock": run.data["holds_lock"],
+        "goals": [g for g, _ in goals], "budget": run.data["budget"],
+        "test_overrides": overrides, "session_loaded": bool(run.data.get("session_loaded")),
+    }
+
+
+def _abort_begin(run: _run.Run, lock: _run.DesktopLock) -> None:
+    _terminate_launched(run, [])
+    if run.data["holds_lock"]:
+        lock.release(run.data["run_id"])
+        run.data["holds_lock"] = False
+    run.data["ended"] = _now()
+    run.data["stopped_reason"] = "begin_failed"
+    run.save()
+
+
+def _begin_bind(args, run: _run.Run, ctx: Ctx) -> None:
+    surface = args.surface
+    base = {
+        "frontmost": _desktop.frontmost_bundle_id(),
+        "cursor": list(_desktop.cursor()),
+        "clipboard_change_count": _desktop.clipboard_change_count(),
+        "clipboard_text_only": _desktop.clipboard_is_text_only(),
+    }
+    run.data["baseline"] = base
+    if base["clipboard_text_only"]:
+        clip = run.dir / "clipboard.txt"
+        _write_text(clip, _desktop.clipboard_read_text(), 0o600)
+    window = run.data["window"]
+    drivers = Drivers(run)
+    versions: List[str] = []
+    if surface in ("web", "electron"):
+        window["session"] = run.data["run_id"]
+        run.data["driver"] = "playwright-cli"
+        versions.append(drivers.web.version())
+    if surface == "web":
+        _begin_web(args, run, drivers)
+    elif surface == "electron":
+        _begin_electron(args, run, drivers)
+    if surface in ("electron", "native"):
+        native = _begin_native(args, run, drivers)
+        run.data["driver"] = native.name if surface == "native" else "playwright-cli+orca"
+        versions.append(native.version)
+    run.data["driver_version"] = " + ".join(v for v in versions if v)
+    current = _drift_now()
+    run.data["drift_baseline"] = current or {"frontmost": base["frontmost"], "cursor": base["cursor"]}
+    run.save()
+
+
+def _session_file(run: _run.Run, key: str) -> Path:
+    return run.dir.parents[1] / "sessions" / f"{key}.json"
+
+
+def _begin_web(args, run: _run.Run, drivers: Drivers) -> None:
+    web = drivers.web
+    if args.real_chrome:
+        try:
+            web.attach_extension()
+        except DriverError as exc:
+            if exc.code == "extension_unavailable":
+                raise MissingError(["chrome extension (playwright-cli attach --extension=chrome)"])
+            raise
+        return
+    saved = _session_file(run, args.session_key) if args.session_key else None
+    if saved is not None and saved.is_file():
+        web.open("about:blank")
+        web.state_load(saved)
+        web.goto(args.target)
+        run.data["session_loaded"] = True
+    else:
+        web.open(args.target)
+
+
+def _begin_electron(args, run: _run.Run, drivers: Drivers) -> None:
+    port = args.cdp_port or _free_port()
+    run.data["window"]["cdp_port"] = port
+    command = shlex.split(args.launch) + [f"--remote-debugging-port={port}"]
+    out = open(run.dir / "launch.stdout.log", "wb")
+    err = open(run.dir / "launch.stderr.log", "wb")
+    try:
+        proc = subprocess.Popen(command, stdout=out, stderr=err, stdin=subprocess.DEVNULL,
+                                start_new_session=True)
+    except OSError as exc:
+        raise DriverError("launch_failed", f"{command[0]}: {exc}")
+    finally:
+        out.close()
+        err.close()
+    run.data["launched"].append({"kind": "app", "id": f"pid:{proc.pid}"})
+    run.save()
+    _wait_for_cdp(port, proc)
+    drivers.web.attach_cdp(f"http://127.0.0.1:{port}")
+    saved = _session_file(run, args.session_key) if args.session_key else None
+    if saved is not None and saved.is_file():
+        drivers.web.state_load(saved)
+        run.data["session_loaded"] = True
+    run.data["window"]["bundle_id"] = _bundle_for_pid(proc.pid)
+
+
+def _begin_native(args, run: _run.Run, drivers: Drivers) -> NativeDriver:
+    window = run.data["window"]
+    if args.surface == "native":
+        window["bundle_id"] = args.target
+    driver = drivers.native
+    if args.surface == "native" and not _native_running(driver, args.target):
+        run.data["launched"].append(_launch_native_app(args.target))
+        run.save()
+    bundle = window["bundle_id"]
+    window["window_id"] = _find_window(driver, bundle, WINDOW_WAIT_S)
+    driver.bind(bundle, window["window_id"])
+    return driver
+
+
+def cmd_goal(args, ctx: Ctx):
+    """Register a goal whose title is read from stdin."""
+    run = _load(ctx, args.run)
+    if not GOAL_ID_RE.match(args.id):
+        raise UsageError("bad_goal_id", args.id)
+    title = _read_stdin().strip()
+    if not title:
+        raise UsageError("empty_title", "the goal title on stdin is empty")
+    ctx.inputs = {"id": args.id, "title_chars": len(title)}
+    run.add_goal(args.id, title)
+    return {"ok": True, "goal_id": args.id}
+
+
+def _known_goal(run: _run.Run, goal_id: str) -> None:
+    if goal_id not in run.data["goals"]:
+        raise UsageError("unknown_goal", goal_id)
+
+
+def cmd_observe(args, ctx: Ctx):
+    """Capture the surface's tree and screenshot for a goal and record any new console or network findings."""
+    run = _load(ctx, args.run)
+    _require_active(run)
+    _known_goal(run, args.goal)
+    drivers = Drivers(run)
+    oid = run.data["latest_observation_id"] + 1
+    shot = None if args.no_screenshot else run.dir / f"obs-{oid}.png"
+    snap = _observe(run, drivers, shot)
+    block = _record_observation(run, oid, args.goal, snap, _screen_hash(snap.screenshot))
+    console_new, requests_new, added = _auto_findings(run, drivers, ctx, args.goal,
+                                                      block["screenshot_path"])
+    block["console_errors_new"] = console_new
+    block["network_failures_new"] = requests_new
+    return {"ok": True, "observation": block, "findings_added": added}
+
+
+class ActRequest(NamedTuple):
+    """A validated `act` invocation: the action, its target, and the guard options."""
+
+    kind: str
+    ref: Optional[str]
+    x: Optional[float]
+    y: Optional[float]
+    to_ref: Optional[str]
+    to_x: Optional[float]
+    to_y: Optional[float]
+    text: Optional[str]
+    secret: Optional[str]
+    key: Optional[str]
+    value: Optional[str]
+    direction: Optional[str]
+    amount: Optional[float]
+    expect: str
+    gate: str
+    foreground: bool
+    target_name: Optional[str]
+
+    @property
+    def has_point(self) -> bool:
+        return self.x is not None and self.y is not None
+
+
+
+def _parse_act(args) -> ActRequest:
+    """Validate the action's target and arguments and read typed text from stdin."""
+    kind = args.action
+    if args.secret and args.text_stdin:
+        raise UsageError("text_and_secret", "use --text-stdin or --secret, not both")
+    if (args.x is None) != (args.y is None):
+        raise UsageError("bad_target", "--x and --y go together")
+    if (args.to_x is None) != (args.to_y is None):
+        raise UsageError("bad_target", "--to-x and --to-y go together")
+    if args.ref and args.x is not None:
+        raise UsageError("bad_target", "give --ref or --x/--y, not both")
+    needs_text = kind in ("fill", "type")
+    if needs_text and not (args.text_stdin or args.secret):
+        raise UsageError("text_required", f"{kind} needs --text-stdin or --secret")
+    if not needs_text and (args.text_stdin or args.secret):
+        raise UsageError("text_unexpected", f"{kind} takes no text")
+    has_target = args.ref is not None or args.x is not None
+    if kind in POINT_KINDS and not has_target:
+        raise UsageError("target_required", f"{kind} needs --ref or --x/--y")
+    if kind in ("fill", "select", "dismiss") and not args.ref:
+        raise UsageError("target_required", f"{kind} needs --ref")
+    if kind == "select" and args.value is None:
+        raise UsageError("value_required", "select needs --value")
+    if kind in ("press", "hotkey") and not args.key:
+        raise UsageError("key_required", f"{kind} needs --key")
+    if kind == "scroll" and not args.direction:
+        raise UsageError("direction_required", "scroll needs --direction")
+    if kind == "drag":
+        if not has_target:
+            raise UsageError("target_required", "drag needs --ref or --x/--y")
+        if not (args.to_ref or args.to_x is not None):
+            raise UsageError("target_required", "drag needs --to-ref or --to-x/--to-y")
+    text = _read_stdin() if args.text_stdin else None
+    return ActRequest(
+        kind=kind, ref=args.ref, x=args.x, y=args.y, to_ref=args.to_ref, to_x=args.to_x,
+        to_y=args.to_y, text=text, secret=args.secret, key=args.key, value=args.value,
+        direction=args.direction, amount=args.amount, expect=args.expect, gate=args.gate,
+        foreground=args.foreground, target_name=args.target_name)
+
+
+def _act_result(run: _run.Run, goal_id: Optional[str], status: str, **extra) -> dict:
+    out = {
+        "ok": True, "status": status, "signals": [], "other_changes": [],
+        "driver_verified": None, "driver_error": None, "findings_added": [],
+        "observation": None, "latest_observation_id": run.data["latest_observation_id"],
+    }
+    out.update(extra)
+    if goal_id and goal_id in run.data["goals"]:
+        run.data["goals"][goal_id]["last_act_status"] = status
+    return out
+
+
+def _budget_spent(run: _run.Run, goal_id: Optional[str]) -> bool:
+    budget = run.data["budget"]
+    if budget["run_used"] >= budget["run_cap"]:
+        return True
+    goal = run.data["goals"].get(goal_id) if goal_id else None
+    return bool(goal) and goal["actions_used"] >= budget["goal_cap"]
+
+
+def _route(run: _run.Run, sidecar: dict, req: ActRequest) -> str:
+    surface = run.data["surface"]
+    if req.has_point and sidecar.get("screenshot_source") is None:
+        raise UsageError("coordinates_need_screenshot",
+                         "--x/--y are screenshot pixels; observe with a screenshot first")
+    routes = set()
+    for ref in (req.ref, req.to_ref):
+        if ref is not None:
+            routes.add("native" if surface == "native" or ref.startswith(NATIVE_PREFIX)
+                       else "renderer")
+    if len(routes) > 1:
+        raise UsageError("mixed_routes", "a drag cannot start in the renderer and end in a native dialog")
+    if routes:
+        return routes.pop()
+    if surface == "web":
+        return "renderer"
+    if surface == "native":
+        return "native"
+    if req.has_point:
+        return sidecar["screenshot_source"]
+    return "native" if sidecar.get("sheet") else "renderer"
+
+
+def _bare(ref: Optional[str], run: _run.Run) -> Optional[str]:
+    if ref is not None and run.data["surface"] == "electron" and ref.startswith(NATIVE_PREFIX):
+        return ref[len(NATIVE_PREFIX):]
+    return ref
+
+
+def _build_action(run: _run.Run, req: ActRequest, scale: Optional[float],
+                  text: Optional[str]) -> Action:
+    divisor = scale or 1.0
+
+    def px(value: Optional[float]) -> Optional[float]:
+        return None if value is None else value / divisor
+
+    return Action(
+        kind=req.kind, ref=_bare(req.ref, run), x=px(req.x), y=px(req.y),
+        to_ref=_bare(req.to_ref, run), to_x=px(req.to_x), to_y=px(req.to_y), text=text,
+        key=req.key, value=req.value, direction=req.direction, amount=req.amount)
+
+
+def _perform(run: _run.Run, drivers: Drivers, route: str, req: ActRequest, action: Action,
+             foreground: bool) -> DriverResult:
+    if route == "renderer":
+        return drivers.web.act(action)
+    baseline = run.data["baseline"]
+    long_text = (req.kind == "type" and action.text is not None
+                 and len(action.text) > PASTE_MIN_CHARS and baseline["clipboard_text_only"])
+    if not long_text:
+        return drivers.native.act(action, foreground)
+    if action.ref is not None:
+        drivers.native.act(Action(kind="click", ref=action.ref), foreground)
+    _desktop.clipboard_write_text(action.text)
+    run.data["pasted"] = True
+    run.data["paste_change_count"] = _desktop.clipboard_change_count()
+    run.save()
+    return drivers.native.act(Action(kind="hotkey", key=PASTE_HOTKEY), foreground)
+
+
+def _gate_subject(req: ActRequest, names: Dict[str, str]) -> str:
+    if req.ref:
+        return names.get(req.ref) or req.target_name or ""
+    return req.target_name or ""
+
+
+def cmd_act(args, ctx: Ctx):
+    """Run the seven guard checks, perform one action, settle, observe, and classify its effect.
+
+    A driver failure anywhere in here is the `ERROR` status, never an exit code and never `OBSERVED`.
+    """
+    try:
+        return _act(args, ctx)
+    except DriverError as exc:
+        return _act_result(ctx.run, ctx.goal_id, "ERROR", driver_error=exc.code,
+                           driver_message=exc.message)
+
+
+def _act(args, ctx: Ctx) -> dict:
+    run = _load(ctx, args.run)
+    req = _parse_act(args)
+    if req.text is not None:
+        _add_secret(run, req.text, MIN_REDACT_CHARS)
+    secret_value: Optional[str] = None
+    if req.secret:
+        source = run.data.get("credentials") or {}
+        creds = _run.load_credentials(source.get("prefix"),
+                                      Path(source["file"]) if source.get("file") else None)
+        for value in creds.values():
+            _add_secret(run, value)
+        secret_value = creds[req.secret]
+    ctx.inputs = {
+        "action": req.kind, "obs": args.obs, "ref": req.ref, "x": req.x, "y": req.y,
+        "to_ref": req.to_ref, "to_x": req.to_x, "to_y": req.to_y, "key": req.key,
+        "direction": req.direction, "amount": req.amount, "expect": req.expect,
+        "gate": req.gate, "foreground": req.foreground, "target_name": req.target_name,
+        "secret": req.secret, "text_chars": None if req.text is None else len(req.text),
+    }
+    data = run.data
+    if data["paused"]:
+        raise RunStateError("run_paused", "resume the run first")
+    latest = data["latest_observation_id"]
+    record = data["observations"].get(str(args.obs)) or data["observations"].get(str(latest))
+    goal_id = record["goal_id"] if record else None
+    ctx.goal_id = goal_id
+
+    if data["stopped_reason"]:
+        return _act_result(run, goal_id, "DRIFT", stopped_reason=data["stopped_reason"],
+                           message="the run is stopped; end it and report how far it got")
+    if _budget_spent(run, goal_id):
+        return _act_result(run, goal_id, "BUDGET_EXHAUSTED")
+
+    sidecar = _sidecar(run, latest) if latest else None
+    stale = sidecar is None
+    if not stale and "skip_stale" not in ctx.faults:
+        stale = args.obs != latest or any(
+            r is not None and r not in sidecar["refs"] for r in (req.ref, req.to_ref))
+    if stale:
+        return _act_result(run, goal_id, "STALE",
+                           message="observe again and act on the new observation id")
+
+    surface = data["surface"]
+    route = _route(run, sidecar, req)
+    drivers = Drivers(run)
+    native_fg = route == "native" and not drivers.native.background_capable
+    uses_foreground = route == "native" and (native_fg or req.foreground)
+
+    if uses_foreground and "skip_drift" not in ctx.faults:
+        drift = _check_drift(run)
+        if drift is not None:
+            data["stopped_reason"] = "drift"
+            return _act_result(run, goal_id, "DRIFT", drift=drift, stopped_reason="drift",
+                               message="the cursor or frontmost app changed; the user took over")
+
+    if native_fg and not req.foreground:
+        return _act_result(run, goal_id, "FOREGROUND_REQUIRED",
+                           message="this action needs the foreground; tell the user, then re-issue with --foreground")
+    if req.foreground:
+        if not data["attended"] and not data["allow_foreground"]:
+            raise UsageError("foreground_not_allowed",
+                             "unattended runs need begin --allow-foreground before --foreground")
+        lock = _run.DesktopLock()
+        holder = lock.try_acquire(data["run_id"], _project(Path.cwd()))
+        if holder is not None:
+            return _act_result(run, goal_id, "DESKTOP_BUSY", holder=holder)
+        if lock.replaced:
+            run.event("lock_takeover", {"replaced": lock.replaced}, "ok", 0)
+        data["holds_lock"] = True
+    elif data["holds_lock"]:
+        _run.DesktopLock().refresh(data["run_id"])
+
+    names = sidecar["names"]
+    if route == "renderer" and req.ref and drivers.uses_web and "skip_visibility" not in ctx.faults:
+        visible, reason = drivers.web.visibility(req.ref)
+        if not visible:
+            shot = record["screenshot_path"] if record else None
+            label = names.get(req.ref) or req.ref
+            finding = run.add_finding(
+                "visibility", f"{label} is in the accessibility tree but not visible ({reason})",
+                goal_id, shot, "script")
+            _add_evidence(run, goal_id, shot)
+            return _act_result(run, goal_id, "NOT_VISIBLE", findings_added=[finding],
+                               reason=reason)
+
+    needs_name = (req.has_point or (req.kind in ("press", "hotkey") and data["owner"] == "third-party"))
+    if needs_name and not req.target_name:
+        raise UsageError("target_name_required",
+                         "coordinate, press, and hotkey actions name what they hit with --target-name")
+    subject = _gate_subject(req, names)
+    if subject and "skip_gate" not in ctx.faults and _run.gate_matches(subject, data["owner"]):
+        if req.gate == "none":
+            run.record_gate(args.obs, subject, "stopped")
+            return _act_result(run, goal_id, "GATE_REQUIRED", subject=subject)
+        if req.gate == "approved" and not data["attended"]:
+            raise UsageError("unattended_approval",
+                             "unattended runs cannot take user approval; report the goal blocked")
+        if req.gate == "created" and data["owner"] != "yours":
+            raise UsageError("created_third_party",
+                             "--gate created is only for data this run created in the user's own app")
+        run.record_gate(args.obs, subject, req.gate)
+
+    if req.kind == "dismiss" and not _run.dismiss_allowed(subject):
+        return _act_result(run, goal_id, "NOT_ALLOWLISTED", subject=subject)
+
+    if req.secret and data["login_attempts"] >= 1:
+        return _act_result(run, goal_id, "ERROR", driver_error="login_attempt_limit",
+                           message="a login attempt already failed; hand off or report blocked")
+
+    return _act_perform(args, ctx, run, drivers, req, sidecar, goal_id, route, uses_foreground,
+                        secret_value)
+
+
+def _check_drift(run: _run.Run) -> Optional[dict]:
+    base = run.data["drift_baseline"]
+    x, y = _desktop.cursor()
+    now = {"frontmost": _desktop.frontmost_bundle_id(), "cursor": [x, y]}
+    moved = math.hypot(now["cursor"][0] - base["cursor"][0], now["cursor"][1] - base["cursor"][1])
+    changed = bool(base["frontmost"]) and now["frontmost"] != base["frontmost"]
+    if moved > DRIFT_TOLERANCE_PT or changed:
+        return {"cursor_moved_points": round(moved, 2), "frontmost": now["frontmost"],
+                "expected_frontmost": base["frontmost"]}
+    return None
+
+
+def _act_perform(args, ctx: Ctx, run: _run.Run, drivers: Drivers, req: ActRequest,
+                 sidecar: dict, goal_id: Optional[str], route: str, uses_foreground: bool,
+                 secret_value: Optional[str]) -> dict:
+    data = run.data
+    if goal_id:
+        run.charge_action(goal_id)
+    before = _effects.Signals(
+        url=sidecar["signals"]["url"], title=sidecar["signals"]["title"],
+        tree=sidecar["signals"]["tree"], focus=sidecar["signals"]["focus"],
+        value=sidecar["value_digests"].get(req.ref) if req.ref else None,
+        screen_hash=sidecar["signals"]["screen_hash"])
+    pending_name = None
+    if req.secret == "password":
+        focus_ref = req.ref or sidecar.get("focus_ref")
+        pending_name = sidecar["names"].get(focus_ref) if focus_ref else None
+    action = _build_action(run, req, sidecar.get("scale"),
+                           secret_value if req.secret else req.text)
+    stage = "act"
+    try:
+        try:
+            result = _perform(run, drivers, route, req, action, req.foreground)
+        finally:
+            _refresh_drift(run)
+        stage = "observe"
+
+        def read() -> _effects.Signals:
+            return _signals(run, _observe(run, drivers, None), req.ref)
+
+        settled, _ = _effects.settle(read)
+        oid = data["latest_observation_id"] + 1
+        shot = run.dir / f"obs-{oid}.png"
+        snap = _observe(run, drivers, shot)
+        after = _signals(run, snap, req.ref, _screen_hash(snap.screenshot))
+        block = _record_observation(run, oid, goal_id, snap, after.screen_hash)
+        console_new, requests_new, added = _auto_findings(run, drivers, ctx, goal_id,
+                                                          block["screenshot_path"])
+    except DriverError as exc:
+        return _driver_failure(run, goal_id, exc, stage)
+    block["console_errors_new"] = console_new
+    block["network_failures_new"] = requests_new
+
+    status, signals, other = _effects.classify(before, after, req.expect, settled)
+    if "never_observed" in ctx.faults and status == "OBSERVED":
+        status = "NO_EFFECT"
+    if "always_observed" in ctx.faults and result.delivered:
+        status = "OBSERVED"
+
+    _login_bookkeeping(run, snap, sidecar, pending_name)
+    if status == "OBSERVED":
+        _add_evidence(run, goal_id, block["screenshot_path"])
+    return _act_result(
+        run, goal_id, status, signals=signals, other_changes=other,
+        driver_verified=result.driver_verified, findings_added=added, observation=block)
+
+
+def _refresh_drift(run: _run.Run) -> None:
+    now = _drift_now()
+    if now is not None:
+        run.data["drift_baseline"] = now
+
+
+def _driver_failure(run: _run.Run, goal_id: Optional[str], exc: DriverError,
+                    stage: str) -> dict:
+    if stage == "act" and exc.code == "needs_foreground":
+        return _act_result(run, goal_id, "FOREGROUND_REQUIRED", message=exc.message)
+    if stage == "act" and exc.code == "window_gone":
+        return _act_result(run, goal_id, "STALE", message="the target window is gone; observe again")
+    return _act_result(run, goal_id, "ERROR", driver_error=exc.code, driver_message=exc.message)
+
+
+def _login_bookkeeping(run: _run.Run, snap: Snap, sidecar: dict,
+                       pending_name: Optional[str]) -> None:
+    data = run.data
+    pending = data.get("login_pending")
+    if pending:
+        _, names, _ = _merged(run, snap)
+        if pending in names.values():
+            data["login_attempts"] += 1
+        data["login_pending"] = None
+    if pending_name:
+        data["login_pending"] = pending_name
+
+
+def cmd_note(args, ctx: Ctx):
+    """Register a finding the model noticed, linked to the goal of `--obs` or the latest observation."""
+    run = _load(ctx, args.run)
+    summary = _read_stdin().strip()
+    if not summary:
+        raise UsageError("empty_summary", "the finding summary on stdin is empty")
+    ctx.inputs = {"finding_kind": args.finding_kind, "obs": args.obs,
+                  "summary_chars": len(summary)}
+    data = run.data
+    key = str(args.obs) if args.obs is not None else str(data["latest_observation_id"])
+    record = data["observations"].get(key)
+    if args.obs is not None and record is None:
+        raise UsageError("unknown_observation", str(args.obs))
+    goal_id = record["goal_id"] if record else None
+    shot = record["screenshot_path"] if record else None
+    finding = run.add_finding(args.finding_kind, summary, goal_id, shot, "model")
+    _add_evidence(run, goal_id, shot)
+    return {"ok": True, "finding_id": finding, "goal_id": goal_id}
+
+
+def cmd_verdict(args, ctx: Ctx):
+    """Set a goal's status; `pass` is accepted only when its most recent act returned OBSERVED."""
+    run = _load(ctx, args.run)
+    _known_goal(run, args.goal)
+    summary = _read_stdin().strip()
+    ctx.inputs = {"goal": args.goal, "status": args.status, "summary_chars": len(summary)}
+    goal = run.data["goals"][args.goal]
+    if (args.status == "pass" and goal["last_act_status"] != "OBSERVED"
+            and "allow_unverified_pass" not in ctx.faults):
+        raise UsageError("pass_without_effect",
+                         f"goal {args.goal} has no OBSERVED act as its most recent action")
+    replaced = goal["verdict"]
+    goal["verdict"] = args.status
+    goal["summary"] = summary
+    linked = [{"finding_id": f["finding_id"], "kind": f["kind"], "summary": f["summary"]}
+              for f in run.data["findings"]
+              if f["goal_id"] == args.goal and f["kind"] in ("console", "network")]
+    if replaced is not None:
+        ctx.status = f"replaced:{replaced}->{args.status}"
+    return {"ok": True, "goal_id": args.goal, "status": args.status, "replaced": replaced,
+            "linked_findings": linked}
+
+
+def _reopen_web(run: _run.Run, drivers: Drivers, url: str, headed: bool,
+                state: Optional[Path]) -> None:
+    web = drivers.web
+    if state is not None and state.is_file():
+        web.open("about:blank", headed=headed)
+        web.state_load(state)
+        web.goto(url)
+    else:
+        web.open(url, headed=headed)
+
+
+def cmd_handoff(args, ctx: Ctx):
+    """Release the desktop lock and, on web runs, reopen the page headed so the user can act."""
+    run = _load(ctx, args.run)
+    data = run.data
+    if not data["attended"]:
+        raise UsageError("unattended_handoff", "unattended runs cannot hand control to the user")
+    if data["paused"]:
+        raise RunStateError("run_paused", "the run is already handed off")
+    ctx.inputs = {"reason": args.reason}
+    drivers = Drivers(run)
+    url = None
+    headed = False
+    if data["surface"] == "web" and not data["real_chrome"]:
+        state = run.dir / "storage-state.json"
+        snap = _observe(run, drivers, None)
+        url = snap.renderer.url
+        drivers.web.state_save(state)
+        os.chmod(str(state), 0o600)
+        drivers.web.close()
+        _reopen_web(run, drivers, url or data["target"], True, state)
+        headed = True
+        data["handoff_url"] = url
+    if data["holds_lock"]:
+        _run.DesktopLock().release(data["run_id"])
+        data["holds_lock"] = False
+    data["paused"] = True
+    wants = {"login": "sign in", "2fa": "complete the second factor", "hint": "show what to try next"}
+    return {
+        "ok": True, "reason": args.reason, "headed": headed, "url": url,
+        "instructions": f"Ask the user to {wants[args.reason]} in the open window, then run resume.",
+    }
+
+
+def cmd_resume(args, ctx: Ctx):
+    """Take the run back after a handoff: restore the session, re-lock if needed, observe afresh."""
+    run = _load(ctx, args.run)
+    data = run.data
+    if not data["paused"]:
+        raise RunStateError("not_paused", "the run was not handed off")
+    drivers = Drivers(run)
+    project = _project(Path.cwd())
+    if data["surface"] == "native":
+        _run.DesktopLock().acquire(data["run_id"], project, wait_s=LOCK_WAIT_S)
+        data["holds_lock"] = True
+    if data["surface"] == "web" and data.get("handoff_url") is not None:
+        state = run.dir / "storage-state.json"
+        snap = _observe(run, drivers, None)
+        url = snap.renderer.url or data["handoff_url"]
+        drivers.web.state_save(state)
+        os.chmod(str(state), 0o600)
+        drivers.web.close()
+        _reopen_web(run, drivers, url, False, state)
+        data["handoff_url"] = None
+    data["paused"] = False
+    _refresh_drift(run)
+    goal_id = None
+    record = data["observations"].get(str(data["latest_observation_id"]))
+    if record:
+        goal_id = record["goal_id"]
+    elif data["goals"]:
+        goal_id = next(iter(data["goals"]))
+    oid = data["latest_observation_id"] + 1
+    shot = run.dir / f"obs-{oid}.png"
+    snap = _observe(run, drivers, shot)
+    block = _record_observation(run, oid, goal_id, snap, _screen_hash(snap.screenshot))
+    console_new, requests_new, added = _auto_findings(run, drivers, ctx, goal_id,
+                                                      block["screenshot_path"])
+    block["console_errors_new"] = console_new
+    block["network_failures_new"] = requests_new
+    return {"ok": True, "observation": block, "findings_added": added}
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _terminate_pid(pid: int) -> None:
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        try:
+            done, _ = os.waitpid(pid, os.WNOHANG)
+            if done:
+                return
+        except ChildProcessError:
+            if not _pid_alive(pid):
+                return
+        time.sleep(0.1)
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _quit_app(kind: str, name: str) -> None:
+    target = f'application id "{name}"' if kind == "bundle" else f'application "{name}"'
+    script = f"if {target} is running then tell {target} to quit"
+    proc = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=30)
+    if proc.returncode != 0:
+        raise DriverError("quit_failed", proc.stderr.strip())
+
+
+def _terminate_launched(run: _run.Run, errors: List[str]) -> None:
+    for entry in run.data["launched"]:
+        kind, _, ident = entry["id"].partition(":")
+        try:
+            if kind == "pid":
+                _terminate_pid(int(ident))
+            else:
+                _quit_app(kind, ident)
+        except (DriverError, OSError, subprocess.SubprocessError, ValueError) as exc:
+            errors.append(f"quit {entry['id']}: {exc}")
+
+
+def cmd_end(args, ctx: Ctx):
+    """Restore the user's desktop, close what the run opened, release the lock, and write the reports."""
+    run = _load(ctx, args.run, allow_ended=True)
+    data = run.data
+    ctx.inputs = {"keep_open": args.keep_open}
+    if data.get("ended"):
+        if data.get("end_output") is None:
+            raise RunStateError("run_ended", data["run_id"])
+        return data["end_output"], data.get("end_exit", 0)
+    errors: List[str] = []
+    drivers = Drivers(run)
+    final = run.dir / "final.png"
+    final_path = ""
+    try:
+        snap = _observe(run, drivers, final)
+        final_path = str(snap.screenshot) if snap.screenshot else ""
+    except (DriverError, MissingError) as exc:
+        errors.append(f"final screenshot: {getattr(exc, 'code', exc)}")
+    _save_session(run, drivers, errors)
+    broken = [g for g, v in data["goals"].items() if v["verdict"] in ("fail", "blocked")]
+    keep = bool(args.keep_open or broken)
+    kept: List[str] = []
+    if keep:
+        kept = _kept_windows(run)
+    else:
+        _close_everything(run, drivers, errors)
+    clipboard_restored = _restore_clipboard(run, errors)
+    frontmost_restored = _restore_frontmost(run, errors)
+    if data["holds_lock"]:
+        _run.DesktopLock().release(data["run_id"])
+    data["holds_lock"] = False
+    data["state_left"] = {
+        "final_screenshot": final_path, "clipboard_restored": clipboard_restored,
+        "frontmost_restored": frontmost_restored, "kept_open": kept, "cleanup_errors": errors,
+    }
+    data["ended"] = _now()
+    report = run.write_report()
+    out = {
+        "ok": not errors, "run_id": data["run_id"], "summary": report,
+        "report_json": str(run.dir / "report.json"), "report_md": str(run.dir / "report.md"),
+        "test_overrides": data["test_overrides"],
+    }
+    code = 0
+    if errors:
+        out["error"] = "cleanup_failed"
+        out["driver_error"] = "cleanup_failed"
+        code = 4
+    data["summary"] = report
+    data["end_output"] = out
+    data["end_exit"] = code
+    return out, code
+
+
+def _save_session(run: _run.Run, drivers: Drivers, errors: List[str]) -> None:
+    key = run.data.get("session_key")
+    if not key or not drivers.uses_web:
+        return
+    path = _session_file(run, key)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        drivers.web.state_save(path)
+        os.chmod(str(path), 0o600)
+    except (DriverError, OSError) as exc:
+        errors.append(f"save session: {getattr(exc, 'code', exc)}")
+
+
+def _kept_windows(run: _run.Run) -> List[str]:
+    kept: List[str] = []
+    if run.data["surface"] in ("web", "electron"):
+        kept.append(f"browser session {run.data['window']['session']}")
+    for entry in run.data["launched"]:
+        kept.append(entry["id"])
+    return kept
+
+
+def _close_everything(run: _run.Run, drivers: Drivers, errors: List[str]) -> None:
+    if drivers.uses_web:
+        try:
+            if run.data["surface"] == "electron" or run.data["real_chrome"]:
+                drivers.web.detach()
+            else:
+                drivers.web.close()
+        except DriverError as exc:
+            errors.append(f"close session: {exc.code}")
+    _terminate_launched(run, errors)
+
+
+def _restore_clipboard(run: _run.Run, errors: List[str]) -> bool:
+    data = run.data
+    clip = run.dir / "clipboard.txt"
+    restored = False
+    try:
+        if data["pasted"] and clip.is_file():
+            count = _desktop.clipboard_change_count()
+            if count == data["baseline"]["clipboard_change_count"]:
+                pass
+            elif count != data.get("paste_change_count"):
+                errors.append("clipboard changed after the run pasted; left as it is")
+            else:
+                _desktop.clipboard_write_text(clip.read_text(encoding="utf-8"))
+                restored = True
+    except (DriverError, OSError) as exc:
+        errors.append(f"restore clipboard: {getattr(exc, 'code', exc)}")
+    try:
+        clip.unlink()
+    except OSError:
+        pass
+    return restored
+
+
+def _restore_frontmost(run: _run.Run, errors: List[str]) -> bool:
+    wanted = run.data["baseline"]["frontmost"]
+    if not wanted:
+        return False
+    try:
+        if _desktop.frontmost_bundle_id() != wanted:
+            _desktop.activate(wanted)
+        return _desktop.frontmost_bundle_id() == wanted
+    except DriverError as exc:
+        errors.append(f"restore frontmost: {exc.code}")
+        return False
+
+
+HANDLERS = {
+    "doctor": cmd_doctor, "begin": cmd_begin, "goal": cmd_goal, "observe": cmd_observe,
+    "act": cmd_act, "note": cmd_note, "verdict": cmd_verdict, "handoff": cmd_handoff,
+    "resume": cmd_resume, "end": cmd_end,
+}
+
+
+def _failure(exc: BaseException) -> Tuple[dict, int]:
+    if isinstance(exc, UsageError):
+        return {"ok": False, "error": exc.code, "message": exc.message}, 2
+    if isinstance(exc, RunStateError):
+        out = {"ok": False, "error": exc.code, "message": exc.message}
+        if exc.code == "desktop_busy":
+            out["holder"] = {k: exc.detail.get(k) for k in ("run_id", "project")}
+        else:
+            out.update(exc.detail)
+        return out, 3
+    if isinstance(exc, DriverError):
+        return {"ok": False, "error": "driver_error", "driver_error": exc.code,
+                "message": exc.message}, 4
+    if isinstance(exc, MissingError):
+        return {"ok": False, "error": "missing", "missing": exc.missing}, 5
+    return {"ok": False, "error": "internal_error", "message": str(exc)}, 1
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """Run one verb, print one JSON object, and return the exit code."""
+    started = time.monotonic()
+    ctx = Ctx()
+    command = None
+    try:
+        args = build_parser().parse_args(argv)
+        command = args.command
+        ctx.faults = _faults()
+        result = HANDLERS[command](args, ctx)
+        out, code = result if isinstance(result, tuple) else (result, 0)
+        if isinstance(out, dict) and "status" in out and command == "act":
+            ctx.status = out["status"]
+    except SystemExit:
+        raise
+    except BaseException as exc:
+        out, code = _failure(exc)
+        ctx.status = f"error:{out['error']}"
+        if code == 1:
+            text = _run.redact(traceback.format_exc(), ctx.secrets())
+            sys.stderr.write(text)
+    run = ctx.run
+    if run is not None and run.dir.exists():
+        try:
+            run.save()
+            run.event(command or "unknown", ctx.inputs, ctx.status,
+                      int((time.monotonic() - started) * 1000))
+        except OSError as exc:
+            sys.stderr.write(f"could not write run state: {exc}\n")
+    sys.stdout.write(json.dumps(_scrub(out, ctx.secrets())) + "\n")
+    sys.stdout.flush()
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
