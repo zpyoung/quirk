@@ -12,6 +12,7 @@ import os
 import shlex
 import stat
 import sys
+import threading
 import types
 from pathlib import Path
 
@@ -193,7 +194,7 @@ class TestDoctor:
         assert result.code == 0 and result["ok"] is True
         tool = result["surfaces"]["web"]["tools"][0]
         assert tool["name"] == "playwright-cli" and tool["version"] == "0.1.22"
-        assert tool["pin"] == ">=0.1.22"
+        assert tool["pin"] == "0.1.22"
 
     def test_old_playwright_version_exits_5(self, sb):
         sb.web_scenario(version="0.1.1")
@@ -938,6 +939,97 @@ class TestElectron:
         assert result.code == 0
         assert 9222 <= result["window"]["cdp_port"] <= 9299
 
+    def test_the_launched_app_does_not_inherit_credential_variables(self, sb, tmp_path):
+        dump = tmp_path / "launch-env.json"
+        sb.web_scenario()
+        sb.native_scenario(bundle="com.github.Electron")
+        env = {"SITE_USERNAME": SECRET_USER, "SITE_PASSWORD": SECRET_PASSWORD,
+               "UNRELATED_TOKEN": SECRET_PASSWORD, "KEPT_SETTING": "kept",
+               "FAKE_ELECTRON_ENV_DUMP": str(dump)}
+        result = sb.begin("electron", None, "yours", True, "--launch", electron_command(),
+                          "--cdp-port", str(harness.free_port()), "--allow-foreground",
+                          "--credentials-env", "SITE", **env)
+        assert result.code == 0, result.stdout + result.stderr
+        launched_env = json.loads(dump.read_text())
+        assert launched_env["KEPT_SETTING"] == "kept"
+        for name in ("SITE_USERNAME", "SITE_PASSWORD", "UNRELATED_TOKEN"):
+            assert name not in launched_env
+
+    def test_launch_logs_are_private_under_a_loose_umask(self, sb):
+        previous = os.umask(0o022)
+        try:
+            run_id, _ = electron_run(sb)
+        finally:
+            os.umask(previous)
+        for name in ("launch.stdout.log", "launch.stderr.log"):
+            assert stat.S_IMODE((sb.run_dir(run_id) / name).stat().st_mode) == 0o600
+
+    def test_concurrent_launches_never_share_a_cdp_port(self, sb, monkeypatch):
+        for key, value in sb.env().items():
+            monkeypatch.setenv(key, value)
+        module = load_cli_module()
+        monkeypatch.setattr(module, "_bundle_for_pid", lambda pid: "com.github.Electron")
+        attached = []
+        drivers = types.SimpleNamespace(web=types.SimpleNamespace(
+            attach_cdp=attached.append, state_load=lambda path: None))
+        args = types.SimpleNamespace(launch=electron_command(), cdp_port=None, session_key=None)
+        outcomes = []
+
+        def launch():
+            run = _run.Run.create(sb.state_root, {"surface": "electron", "window": {}})
+            try:
+                module._begin_electron(args, run, drivers)
+                outcomes.append(run.data["window"]["cdp_port"])
+            except Exception as exc:
+                outcomes.append(repr(exc))
+
+        threads = [threading.Thread(target=launch) for _ in range(3)]
+        try:
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        finally:
+            sb.kill_launched()
+        assert len(outcomes) == 3 and all(isinstance(o, int) for o in outcomes), outcomes
+        assert len(set(outcomes)) == 3
+
+    def test_a_port_answered_by_another_process_is_refused(self, sb, monkeypatch):
+        import http.server
+
+        class Foreign(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Foreign)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        port = server.server_address[1]
+        for key, value in sb.env().items():
+            monkeypatch.setenv(key, value)
+        module = load_cli_module()
+        monkeypatch.setattr(module, "_bundle_for_pid", lambda pid: "com.github.Electron")
+        attached = []
+        drivers = types.SimpleNamespace(web=types.SimpleNamespace(
+            attach_cdp=attached.append, state_load=lambda path: None))
+        args = types.SimpleNamespace(
+            launch=f"{shlex.quote(sys.executable)} -c 'import time; time.sleep(60)'",
+            cdp_port=port, session_key=None)
+        run = _run.Run.create(sb.state_root, {"surface": "electron", "window": {}})
+        try:
+            with pytest.raises(module.DriverError) as raised:
+                module._begin_electron(args, run, drivers)
+        finally:
+            server.shutdown()
+            sb.kill_launched()
+        assert raised.value.code == "cdp_port_conflict"
+        assert attached == []
+
     def test_the_bundle_id_comes_from_the_pid_else_the_electron_dev_default(self, sb, monkeypatch):
         sb.set_desktop(pid_bundles={"4242": "com.example.dev"})
         monkeypatch.setenv("LIKEUSER_FAKE_DESKTOP", str(sb.desktop_path))
@@ -1544,6 +1636,61 @@ class TestHandoffResume:
         assert _run.DesktopLock(sb.lock_path).holder() is None
         assert sb.run_json(run_id)["holds_lock"] is False
 
+    def test_handoff_state_file_exists_as_0600_before_the_driver_writes_it(self, sb):
+        run_id, _ = web_run(sb)
+        previous = os.umask(0o022)
+        try:
+            result = sb.run("handoff", "--run", run_id, "--reason", "login")
+        finally:
+            os.umask(previous)
+        assert result.code == 0
+        modes = Path(str(sb.pw_scenario) + ".state_save_modes").read_text().split()
+        assert modes == ["0o600"]
+
+    def test_a_driver_that_replaces_the_state_file_with_a_loose_mode_loses_the_output(self, sb):
+        run_id, _ = web_run(sb, state_save="replace")
+        previous = os.umask(0o022)
+        try:
+            result = sb.run("handoff", "--run", run_id, "--reason", "login")
+        finally:
+            os.umask(previous)
+        assert result.code == 4
+        assert not (sb.run_dir(run_id) / "storage-state.json").exists()
+
+    def test_a_failed_state_save_leaves_no_file_behind(self, sb):
+        run_id, _ = web_run(sb, state_save="write_then_fail")
+        result = sb.run("handoff", "--run", run_id, "--reason", "login")
+        assert result.code == 4
+        assert not (sb.run_dir(run_id) / "storage-state.json").exists()
+        assert sb.run_json(run_id)["paused"] is True
+
+    def test_a_failed_close_during_handoff_releases_the_lock_and_pauses(self, sb):
+        run_id, _ = web_run(sb, errors=[{"on": ["close"], "stdout": "### Error\nclose failed\n"}])
+        lock = _run.DesktopLock(sb.lock_path)
+        lock.acquire(run_id, "project", wait_s=1)
+        state = sb.run_json(run_id)
+        state["holds_lock"] = True
+        sb.write_run_json(run_id, state)
+        result = sb.run("handoff", "--run", run_id, "--reason", "login")
+        assert result.code == 4
+        assert lock.holder() is None
+        after = sb.run_json(run_id)
+        assert after["holds_lock"] is False and after["paused"] is True
+
+    def test_a_failed_reopen_during_handoff_releases_the_lock_and_pauses(self, sb):
+        run_id, _ = web_run(sb, errors=[{"on": ["open", "about:blank", "--headed"],
+                                   "stdout": "### Error\nopen failed\n"}])
+        lock = _run.DesktopLock(sb.lock_path)
+        lock.acquire(run_id, "project", wait_s=1)
+        state = sb.run_json(run_id)
+        state["holds_lock"] = True
+        sb.write_run_json(run_id, state)
+        result = sb.run("handoff", "--run", run_id, "--reason", "login")
+        assert result.code == 4
+        assert lock.holder() is None
+        after = sb.run_json(run_id)
+        assert after["holds_lock"] is False and after["paused"] is True
+
     def test_resume_reopens_headless_retakes_the_lock_and_resets_the_drift_baseline(self, sb):
         run_id, _ = native_run(sb)
         sb.run("handoff", "--run", run_id, "--reason", "login")
@@ -1624,7 +1771,33 @@ class TestEnd:
         sb.run("end", "--run", run_id)
         saved = sb.state_root / "sessions" / "demo.json"
         assert saved.is_file() and stat.S_IMODE(saved.stat().st_mode) == 0o600
-        assert sb.pw_argvs("state-save") == [["state-save", str(saved)]]
+        [call] = sb.pw_argvs("state-save")
+        assert Path(call[1]).parent == saved.parent
+        assert list(saved.parent.iterdir()) == [saved]
+
+    def test_the_session_file_exists_as_0600_before_the_driver_writes_it(self, sb):
+        run_id, _ = web_run(sb, begin_args=("--session-key", "demo"))
+        previous = os.umask(0o022)
+        try:
+            sb.run("end", "--run", run_id)
+        finally:
+            os.umask(previous)
+        assert Path(str(sb.pw_scenario) + ".state_save_modes").read_text().split() == ["0o600"]
+
+    def test_a_failed_session_save_leaves_no_session_file(self, sb):
+        run_id, _ = web_run(sb, begin_args=("--session-key", "demo"), state_save="write_then_fail")
+        ended = sb.run("end", "--run", run_id)
+        assert ended.code == 4
+        assert not (sb.state_root / "sessions" / "demo.json").exists()
+        assert list((sb.state_root / "sessions").glob("*")) == []
+
+    def test_a_failed_session_save_keeps_the_previous_session(self, sb):
+        sessions = sb.state_root / "sessions"
+        sessions.mkdir(parents=True)
+        (sessions / "demo.json").write_text('{"cookies": ["old"]}')
+        run_id, _ = web_run(sb, begin_args=("--session-key", "demo"), state_save="write_then_fail")
+        sb.run("end", "--run", run_id)
+        assert (sessions / "demo.json").read_text() == '{"cookies": ["old"]}'
 
     def test_cleanup_failure_writes_the_report_then_exits_4_and_replays(self, sb):
         run_id, _ = web_run(sb, errors=[{"on": ["close"], "stdout": "### Error\nclose failed\n"}])

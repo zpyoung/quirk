@@ -178,6 +178,11 @@ what is missing. Never opens System Settings and never installs anything.
       unavailable.
     - **Electron:** `--launch` runs with `--remote-debugging-port=<cdp-port>` bound to `127.0.0.1`
       (default: the first free port in 9222-9299), then `playwright-cli attach --cdp=http://127.0.0.1:<port>`.
+      Port choice, launch, and the wait for the endpoint run under a machine-wide lock so concurrent
+      runs cannot pick one port; `begin` exits 4 with `cdp_port_conflict` when the process listening on
+      the port is not the launched app. The app's environment omits the run's credential variables
+      (`<PREFIX>_USERNAME`, `<PREFIX>_PASSWORD`) and any variable holding a known secret, and its
+      `launch.stdout.log` and `launch.stderr.log` are mode 0600.
       The app's bundle id and window id are also bound to the native driver so OS dialogs, sheets,
       and menus stay reachable.
     - **Native:** the native driver bound to the target's bundle id and frontmost window id.
@@ -315,7 +320,9 @@ on timeout return UNSETTLED with the last observation
 - **Attended runs only;** unattended → exit 2 `unattended_handoff`.
 - `handoff` releases the desktop lock and marks the run paused. For web runs it saves storage state
   to the run folder, closes the headless session, and reopens the same URL in a `--headed` session
-  so the user can sign in or act; it returns the reason and what the user should do.
+  so the user can sign in or act; it returns the reason and what the user should do. The lock is
+  released and the run is marked paused even when the save, close, or reopen fails; the failure then
+  exits 4 and `resume` or `end` is still available.
 - `resume` (after the user says they are done) saves the headed session's state, closes it, reopens
   headless with that state at the headed session's last URL, re-acquires the lock if the run needs
   the foreground, resets the drift baseline, and takes a fresh observation.
@@ -339,6 +346,8 @@ on timeout return UNSETTLED with the last observation
   cleanup error.
 - Re-activates the baseline frontmost app.
 - With `--session-key`, saves storage state to the sessions file (mode 0600).
+  Every storage-state write goes to a file created 0600 before the driver touches it, and is
+  removed (the previous file is kept) if the driver fails or leaves group or other access on it.
 - Closes driver sessions, detaches attached browsers, and quits apps the run launched, unless a goal
   is `fail` or `blocked` or `--keep-open` is passed; kept windows are listed in `state_left`.
 - Releases the lock, writes `report.json` and `report.md`, and returns the report summary.
@@ -481,7 +490,7 @@ CONTRACT: `_web.py` (every call runs with cwd set to the run folder; every sessi
 class WebDriver:
     name = "playwright-cli"
     def __init__(self, session: str, run_dir: Path) -> None   # binary from LIKEUSER_PLAYWRIGHT_BIN, else PATH
-    def version(self) -> str; def check(self) -> List[str]   # missing or below the 0.1.22 pin
+    def version(self) -> str; def check(self) -> List[str]   # missing, or not exactly the 0.1.22 pin
     def open(self, url: str, headed: bool = False) -> None; def goto(self, url: str) -> None
     def attach_cdp(self, endpoint: str) -> None; def attach_extension(self) -> None   # DriverError("extension_unavailable")
     def observe(self, screenshot_path: Optional[Path]) -> Observation

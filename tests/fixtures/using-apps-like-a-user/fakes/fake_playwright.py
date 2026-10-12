@@ -10,6 +10,8 @@
     console  [message]         error-level console messages so far
     requests [[method, url, status|null]]
     errors   [{on: [argv prefix], stdout, returncode}]   forced failures, checked first
+    state_save  "replace" writes the file anew (default mode), "write_then_fail" writes then exits 1;
+               the mode an existing target had is appended to `<scenario>.state_save_modes`
     golden_dir, version, stale_exit
 
 State (current page and the growing console and request lists) lives next to the scenario so
@@ -120,7 +122,18 @@ if command in ("open", "attach", "close", "detach", "goto", "state-load"):
 
 if command == "state-save":
     target = Path(os.getcwd()) / argv[1]
-    target.write_text('{"cookies": [], "origins": []}')
+    with open(str(scenario_path) + ".state_save_modes", "a") as handle:
+        prior = oct(target.stat().st_mode & 0o777) if target.exists() else "absent"
+        handle.write(prior + "\n")
+    body = '{"cookies": [], "origins": []}'
+    if scenario.get("state_save") == "replace":
+        fresh = target.with_name(target.name + ".fresh")
+        fresh.write_text(body)
+        os.replace(str(fresh), str(target))
+    else:
+        target.write_text(body)
+    if scenario.get("state_save") == "write_then_fail":
+        finish("### Error\nstate-save failed\n", 1)
     finish(golden_stdout("state_save"))
 
 if command == "snapshot":
