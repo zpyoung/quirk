@@ -1,0 +1,12 @@
+{
+  "hits": {
+    "working": 3,
+    "dead": 2,
+    "hidden": 0,
+    "verify": 1,
+    "delete": 0,
+    "save": 1
+  },
+  "text": "hello world",
+  "saved_path": null
+}

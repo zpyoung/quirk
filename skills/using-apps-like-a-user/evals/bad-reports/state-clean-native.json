@@ -1,0 +1,12 @@
+{
+  "hits": {
+    "working": 1,
+    "dead": 1,
+    "hidden": 0,
+    "verify": 0,
+    "delete": 0,
+    "save": 1
+  },
+  "text": "hello world",
+  "saved_path": "/tmp/likeuser-eval/fixture-export.txt"
+}
