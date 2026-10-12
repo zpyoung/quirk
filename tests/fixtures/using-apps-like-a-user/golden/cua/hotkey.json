@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "cua-driver",
+    "call",
+    "hotkey",
+    "{\"pid\":82986,\"window_id\":84869,\"element_token\":\"s00000011:6\",\"keys\":[\"cmd\",\"a\"],\"session\":\"golden\"}"
+  ],
+  "returncode": 0,
+  "stdout": "{\n  \"delivery\": {\n    \"mode\": \"background\"\n  },\n  \"effect\": \"unverifiable\",\n  \"escalation\": {\n    \"reason\": \"delivery_failed\",\n    \"target\": \"foreground\"\n  },\n  \"route\": \"synthetic_events\",\n  \"summary\": \"Pressed cmd+a on pid 82986.\"\n}\n",
+  "stderr": "",
+  "files": {}
+}

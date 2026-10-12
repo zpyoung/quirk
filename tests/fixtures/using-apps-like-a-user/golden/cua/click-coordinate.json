@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "cua-driver",
+    "call",
+    "click",
+    "{\"pid\":82986,\"window_id\":84869,\"x\":505,\"y\":270,\"capture_id\":\"capture_29e837d8276e4c669ab57dcbdf19441a_0000000000000003\",\"session\":\"golden\"}"
+  ],
+  "returncode": 0,
+  "stdout": "{\n  \"delivery\": {\n    \"mode\": \"background\"\n  },\n  \"effect\": \"unverifiable\",\n  \"route\": \"accessibility\",\n  \"summary\": \"\u2705 PX hit-test pressed the background element via AX.\"\n}\n",
+  "stderr": "",
+  "files": {}
+}
