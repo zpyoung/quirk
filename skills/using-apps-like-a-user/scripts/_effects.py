@@ -170,14 +170,14 @@ def hamming(a: int, b: int) -> int:
 
 _REF_RE = re.compile(r"\s*\[ref=[^\]]*\]")
 _ACTIVE_RE = re.compile(r"\s*\[active\]")
-_INDEX_RE = re.compile(r"^(\s*(?:-\s+)?)(?:\[\d+\]|#\d+)(?:\s+|$)")
+_INDEX_RE = re.compile(r"^(?:(\s*(?:-\s+)?)(?:\[\d+\]|#\d+)|(\s*)\d+(?=\s))(?:\s+|$)")
 _LEAD_RE = re.compile(r"^\s*")
 
 
 def normalize_tree(text: str) -> str:
     """Strip volatile tokens from an accessibility tree so two reads compare by content.
 
-    Removes `[ref=...]`, `[active]`, and a leading element-index token (`[12]` or `#12`),
+    Removes `[ref=...]`, `[active]`, and a leading element-index token (`[12]`, `#12`, or Orca's bare `12`),
     collapses whitespace runs inside each line, and drops blank lines. Indentation, roles,
     labels, and values are kept.
     """
@@ -185,7 +185,7 @@ def normalize_tree(text: str) -> str:
     for line in text.splitlines():
         line = _REF_RE.sub("", line)
         line = _ACTIVE_RE.sub("", line)
-        line = _INDEX_RE.sub(r"\1", line)
+        line = _INDEX_RE.sub(lambda m: m.group(1) or m.group(2) or "", line)
         indent = _LEAD_RE.match(line).group(0).replace("\t", "  ")
         body = " ".join(line.split())
         if body:
