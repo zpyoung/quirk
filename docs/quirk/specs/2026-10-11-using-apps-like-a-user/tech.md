@@ -147,7 +147,7 @@ The value never reaches the model, stdout, or any run file.
 |---|---|
 | 0 | Command ran. For `act`, the outcome is in `status`, including `NO_EFFECT`, `DRIFT`, and `DESKTOP_BUSY`. |
 | 1 | Unexpected internal error (traceback on stderr). |
-| 2 | Usage or contract violation: argparse errors, `pass_without_effect`, `unattended_approval`, `unattended_handoff`, `target_name_required`, `foreground_not_allowed`. |
+| 2 | Usage or contract violation: argparse errors, `pass_without_effect`, `unattended_approval`, `unattended_handoff`, `target_name_required`, `foreground_not_allowed`, `launch_required`, `launch_requires_electron`, `created_third_party`, `coordinates_need_screenshot`, `unknown_fault`. |
 | 3 | Run-state error: unknown run, run already ended, run stopped (`stopped_reason` in JSON), `desktop_busy` at `begin`. |
 | 4 | Driver failure outside `act` (`begin`, `observe`, `handoff`, `resume`, `end`), with `driver_error` in JSON. |
 | 5 | Missing tool, wrong tool version, missing macOS permission, missing extension, or bad credentials file. |
@@ -229,7 +229,8 @@ what is missing. Never opens System Settings and never installs anything.
 
 Runs these checks in order; the first failure returns its status without performing the action:
 
-1. **Budget.** Run or goal action budget exhausted → `BUDGET_EXHAUSTED`.
+1. **Budget.** Run or goal action budget exhausted → `BUDGET_EXHAUSTED`. Only performed actions are
+   charged; an act refused by a later check costs nothing.
 2. **Stale.** `--obs` is not the latest observation, or `--ref` is absent from it → `STALE`.
 3. **Drift** (only when the action will use the foreground). The cursor is more than 3 points from
    where the run last left it, or the frontmost app is not the one the run last made frontmost →
@@ -352,7 +353,9 @@ class NativeDriver:
   guarantee this for an action returns `DriverError("needs_foreground")`, which `act` reports as
   `FOREGROUND_REQUIRED`.
 
-`OrcaDriver.background_capable` is `False`. The bake-off winner's value comes from measurement.
+`OrcaDriver.background_capable` is `False`. The bake-off winner's value comes from measurement:
+Cua Driver 0.34.1 won with zero focus steals and all input landed ([bakeoff.md](bakeoff.md)); under
+Stage Manager only its element actions are reliable against a background window.
 `NATIVE_DRIVER_PREFERENCE` in `_native.py` is set from `bakeoff.md`.
 
 ### Module interfaces
@@ -392,6 +395,7 @@ def clipboard_write_text(text: str) -> None
 def display_scale() -> float                          # primary display backing scale
 def screenshot_window(window_id: int, out: Path) -> Path   # DriverError("screenshot_failed") when no file was written
 def permissions() -> Dict[str, bool]                  # {"accessibility": bool, "screen_recording": bool}
+def bundle_id_for_pid(pid: int) -> Optional[str]      # the fake answers from an optional `pid_bundles` table
 ```
 The fake desktop is a JSON file `{cursor: [x, y], frontmost: str, clipboard_change_count: int,
 clipboard_text_only: bool, clipboard_text: str, scale: float, permissions: {accessibility: bool,
@@ -449,7 +453,7 @@ class WebDriver:
     name = "playwright-cli"
     def __init__(self, session: str, run_dir: Path) -> None   # binary from LIKEUSER_PLAYWRIGHT_BIN, else PATH
     def version(self) -> str; def check(self) -> List[str]   # missing or below the 0.1.22 pin
-    def open(self, url: str, headed: bool = False) -> None
+    def open(self, url: str, headed: bool = False) -> None; def goto(self, url: str) -> None
     def attach_cdp(self, endpoint: str) -> None; def attach_extension(self) -> None   # DriverError("extension_unavailable")
     def observe(self, screenshot_path: Optional[Path]) -> Observation
     def act(self, action: Action) -> DriverResult            # DriverError on a `### Error` block or non-zero exit
