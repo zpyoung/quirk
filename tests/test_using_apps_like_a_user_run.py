@@ -180,6 +180,72 @@ def test_secrets_are_not_persisted_or_reloaded(root):
     assert run.Run.load(root, r.data["run_id"]).secrets == set()
 
 
+def test_typed_text_is_remembered_for_later_verbs_outside_the_run_folder(root):
+    r = make_run(root)
+    run_id = r.data["run_id"]
+    run.remember_typed(root, run_id, "jane@example.com")
+    run.remember_typed(root, run_id, "second value")
+    run.remember_typed(root, run_id, "jane@example.com")
+    assert sorted(run.recall_typed(root, run_id)) == ["jane@example.com", "second value"]
+    path = run.typed_path(root, run_id)
+    assert r.dir not in path.parents
+    assert oct(path.stat().st_mode & 0o777) == "0o600"
+    assert oct(path.parent.stat().st_mode & 0o777) == "0o700"
+
+
+def test_typed_text_is_per_run(root):
+    run.remember_typed(root, "run-a", "alpha value")
+    assert run.recall_typed(root, "run-b") == []
+
+
+def test_forgetting_typed_text_removes_the_file_and_tolerates_absence(root):
+    run.remember_typed(root, "run-a", "alpha value")
+    run.forget_typed(root, "run-a")
+    assert not run.typed_path(root, "run-a").exists()
+    assert run.recall_typed(root, "run-a") == []
+    run.forget_typed(root, "run-a")
+
+
+def test_a_corrupt_typed_file_recalls_nothing(root):
+    run.remember_typed(root, "run-a", "alpha value")
+    run.typed_path(root, "run-a").write_text("{not json")
+    assert run.recall_typed(root, "run-a") == []
+    run.remember_typed(root, "run-a", "beta value")
+    assert run.recall_typed(root, "run-a") == ["beta value"]
+
+
+def test_the_typed_file_is_never_wider_than_0600_even_for_a_loose_umask(root):
+    old = os.umask(0)
+    try:
+        run.remember_typed(root, "run-a", "alpha value")
+    finally:
+        os.umask(old)
+    assert oct(run.typed_path(root, "run-a").stat().st_mode & 0o777) == "0o600"
+
+
+def test_driver_snapshot_files_in_the_run_folder_are_redacted(root):
+    r = make_run(root)
+    folder = r.dir / ".playwright-cli"
+    folder.mkdir()
+    (folder / "page-1.yml").write_text("- textbox [ref=e1]: hunter2 and hunter2\n")
+    (folder / "console-1.log").write_text("typed hunter2\n")
+    (folder / "clean.yml").write_text("- button\n")
+    (folder / "shot.png").write_bytes(b"\x89PNG\xff\xfehunter2")
+    r.secrets.add("hunter2")
+    r.scrub_driver_files()
+    assert (folder / "page-1.yml").read_text() == "- textbox [ref=e1]: [REDACTED] and [REDACTED]\n"
+    assert (folder / "console-1.log").read_text() == "typed [REDACTED]\n"
+    assert (folder / "clean.yml").read_text() == "- button\n"
+    assert b"hunter2" in (folder / "shot.png").read_bytes()
+
+
+def test_scrubbing_driver_files_without_secrets_or_a_folder_is_a_noop(root):
+    r = make_run(root)
+    r.scrub_driver_files()
+    r.secrets.add("hunter2")
+    r.scrub_driver_files()
+
+
 def test_add_goal_registers_and_rejects_duplicates(root):
     r = make_run(root)
     r.add_goal("g1", "Sign in")
@@ -365,6 +431,20 @@ def test_lock_corrupt_record_ignores_refresh_and_release(lock):
     lock.refresh("unknown")
     lock.release("unknown")
     assert lock.path.read_text() == "{not json"
+
+
+def test_lock_owns_is_true_only_while_the_holder_names_the_run(lock):
+    assert lock.owns("r1") is False
+    lock.acquire("r1", "/p", wait_s=1)
+    assert lock.owns("r1") is True and lock.owns("r2") is False
+    lock.release("r1")
+    assert lock.owns("r1") is False
+
+
+def test_lock_owns_is_false_for_an_unreadable_record(lock):
+    lock.path.parent.mkdir(parents=True)
+    lock.path.write_text("{not json")
+    assert lock.owns("unknown") is False
 
 
 def test_lock_refresh_moves_last_act(lock):

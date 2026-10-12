@@ -977,13 +977,58 @@ def test_cua_check_names_a_missing_binary(tmp_path):
     assert CuaDriver().check() == ["cua-driver"]
 
 
-@pytest.mark.parametrize("version,clean", [("0.34.0", False), ("0.33.9", False), ("0.34.1", True), ("0.35.0", True), ("1.0.0", True)])
+@pytest.mark.parametrize("version,clean", [("0.34.0", False), ("0.33.9", False), ("0.34.1", True), ("0.34.2", False), ("0.35.0", False), ("1.0.0", False)])
 def test_cua_check_enforces_the_version_pin(fake_cua, monkeypatch, version, clean):
     monkeypatch.setenv("FAKE_CUA_VERSION", f"cua-driver {version}")
     missing = CuaDriver().check()
     assert (missing == []) is clean
     if not clean:
-        assert "0.34.1" in missing[0]
+        assert version in missing[0] and "0.34.1" in missing[0]
+        assert ["status"] not in fake_cua.calls()
+
+
+def _cache_path(tmp_path):
+    return Path(tempfile.gettempdir()) / f"likeuser-cua-{os.getuid()}"
+
+
+def test_cua_cache_dir_is_created_private(tmp_path):
+    path = CuaDriver()._cache_dir()
+    assert path == _cache_path(tmp_path)
+    assert path.is_dir() and (path.stat().st_mode & 0o777) == 0o700
+
+
+def test_cua_cache_dir_rejects_a_planted_symlink(tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir(mode=0o700)
+    _cache_path(tmp_path).symlink_to(elsewhere)
+    with pytest.raises(DriverError) as caught:
+        CuaDriver()._cache_dir()
+    assert caught.value.code == "cache_unavailable"
+
+
+def test_cua_cache_dir_rejects_a_plain_file(tmp_path):
+    _cache_path(tmp_path).write_text("x")
+    with pytest.raises(DriverError) as caught:
+        CuaDriver()._cache_dir()
+    assert caught.value.code == "cache_unavailable"
+
+
+@pytest.mark.parametrize("mode", [0o755, 0o770, 0o707])
+def test_cua_cache_dir_rejects_group_or_other_access(tmp_path, mode):
+    path = _cache_path(tmp_path)
+    path.mkdir()
+    path.chmod(mode)
+    with pytest.raises(DriverError) as caught:
+        CuaDriver()._cache_dir()
+    assert caught.value.code == "cache_unavailable"
+
+
+def test_cua_cache_dir_rejects_a_directory_owned_by_someone_else(tmp_path, monkeypatch):
+    CuaDriver()._cache_dir()
+    monkeypatch.setattr(os, "geteuid", lambda: os.getuid() + 1)
+    with pytest.raises(DriverError) as caught:
+        CuaDriver()._cache_dir()
+    assert caught.value.code == "cache_unavailable"
 
 
 def test_cua_check_reports_an_unreadable_version(fake_cua, monkeypatch):
@@ -1963,6 +2008,16 @@ def test_live_cua_hotkey_selects_all_in_the_notes_field(original_front, running_
     live_cua.act(Action(kind="type", ref=notes, text="after"), foreground=False)
     state = running_fixture.wait_for(lambda s: s["text"] == "after")
     assert state["text"] == "after"
+
+
+class TestStableRef:
+    def test_a_cua_token_keeps_only_its_element_index(self):
+        assert _native.stable_ref("s0000000a:5") == _native.stable_ref("s0000000f:5")
+        assert _native.stable_ref("s0000000a:5") != _native.stable_ref("s0000000a:6")
+
+    def test_refs_that_do_not_renew_are_returned_unchanged(self):
+        for ref in ("e5", "12", "n:e5", "s0000000a", ""):
+            assert _native.stable_ref(ref) == ref
 
 
 def _poll_observation(driver, window: int, done, timeout: float = 8.0):

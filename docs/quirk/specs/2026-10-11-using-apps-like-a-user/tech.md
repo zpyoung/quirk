@@ -197,7 +197,9 @@ what is missing. Never opens System Settings and never installs anything.
   run before it needs the foreground.
 - **Errors:** missing tool, permission, extension, or bad credentials file → exit 5 with
   `missing[]`. Launch or attach failure → exit 4. Lock not obtained within 30 seconds → exit 3 with
-  `desktop_busy` and the holder's `run_id` and `project`.
+  `desktop_busy` and the holder's `run_id` and `project`. A `begin` that fails after the baseline
+  was taken ends the run and cleans up first: it closes or detaches the browser session, quits
+  what it launched, releases the driver state and the lock, and deletes `clipboard.txt`.
 
 ### Desktop lock
 
@@ -328,7 +330,12 @@ on timeout return UNSETTLED with the last observation
   the foreground, resets the drift baseline, and takes a fresh observation.
 - **Login attempts:** the script counts `fill --secret password` acts followed by a submit per run;
   after one that does not leave the login screen, further `--secret` acts return `ERROR` with
-  `driver_error: login_attempt_limit`, so the skill hands off or blocks instead of retrying.
+  `driver_error: login_attempt_limit`, so the skill hands off or blocks instead of retrying. The
+  submit is the first later act that is an `Enter` or `Return` press or hotkey, or a click or
+  double-click on a control whose accessible name (or `--target-name`) contains `sign in`,
+  `log in`, `submit`, `continue`, or `next`. Any other act leaves the password fill pending, so an
+  unrelated click never spends the attempt. The attempt counts only when the password field is
+  still on screen after the submit.
 
 ### `end`
 
@@ -339,8 +346,9 @@ on timeout return UNSETTLED with the last observation
   restored it, and `false` when it wrote the clipboard and left it as it is.
 - Cancels a native sheet or dialog still open in the final observation, before anything is closed
   or kept: `press Escape`, which the native driver routes to the frontmost sheet window. The key
-  goes to the foreground only while the run holds the desktop lock, and never after `DRIFT` stopped
-  the run (the user has the keyboard). When the sheet cannot be cancelled that way, or is still open
+  goes to the foreground only while the lock's holder record still names this run, and never after
+  `DRIFT` stopped the run (the user has the keyboard). A run whose lock was replaced sends no key,
+  records a cleanup error, and lists the sheet in `state_left.kept_open`. When the sheet cannot be cancelled that way, or is still open
   after a second's wait, `state_left.kept_open` carries `native sheet or dialog still open` (unless
   `end` then quits the app the run launched). A failed Escape other than `needs_foreground` is also a
   cleanup error.
@@ -388,6 +396,12 @@ class NativeDriver:
   on a popup menu still writes the value. Text goes in on stdin only, so `fill --secret` stays out
   of argv. Cua selects with cursor keys because cmd+a reaches only an app that is in front; orca
   double-clicks to focus, since an element click on a text field does not.
+
+`CuaDriver.check()` requires exactly the 0.34.1 pin and reports any other version with the one
+found. Its screenshots and session files live in a per-user directory under the system temp dir,
+created 0700; a symlink, a non-directory, another owner, or group or other access is refused with
+`cache_unavailable`. Apps the run launched are quit through `osascript -l JavaScript` with the
+bundle id or name passed as an argument, never spliced into the script.
 
 `OrcaDriver.background_capable` is `False`. The bake-off winner's value comes from measurement:
 Cua Driver 0.34.1 won with zero focus steals and all input landed ([bakeoff.md](bakeoff.md)); under
@@ -564,7 +578,7 @@ signals: [str]; other_changes: [str]; driver_verified: bool|null; driver_error: 
 findings_added: [finding_id]
 observation: {observation_id: int, goal_id: str, screenshot_path: str|null, screenshot_source: "renderer"|"native"|null,
               scale: float|null, tree_path: str, tree_chars: int, tree_truncated: bool, tree_sparse: bool,
-              url: str|null, title: str|null, focus: str|null,
+              url: str|null, title: str|null, focus: str|null, screenshot_withheld: bool,
               console_errors_new: [str], network_failures_new: [{url: str, status: int|null, method: str}]}
 ```
 
@@ -677,6 +691,18 @@ Back-links: [logic: Decisions Locked](logic.md#decisions-locked)
   from run files. Typed text shorter than 4 characters is exempt: redaction is by substring, so a
   1–3 character value would corrupt unrelated content. Credentials always go through `--secret`, which
   has no exemption.
+- Typed text must stay redactable in every later verb of the run. Each `act` that types text of 4 or
+  more characters appends it to `<state root>/typed/<run-id>.json`, a 0600 file in a 0700 folder
+  outside the run folder; every verb loads it into the in-memory secrets, and `end` deletes it.
+  Credentials are reloaded from their source on every verb. The text files playwright-cli keeps in
+  `<run>/.playwright-cli/` are redacted at the end of every verb.
+- A screenshot cannot be redacted. An `act` with `--secret` saves no post-action screenshot, and any
+  observation (including the `end` screenshot) whose tree shows a credential value deletes its
+  screenshot; both report `screenshot_withheld: true` and the tree and signals are still recorded.
+- Native refs can renew between snapshots (Cua tokens are `s<session>:<index>`). The `focus` signal
+  compares the focused element's index, not its token, and the `value` signal compares the acted-on
+  element found again in the post-action snapshot by ref, then by index and name, then by a name only
+  one element carries. An element that cannot be found is not a value change.
 - Keep scripts 3.9-compatible with `from __future__ import annotations`.
 - Pin `@playwright/cli` 0.1.22 in `doctor` and SKILL.md install instructions.
 
@@ -731,7 +757,8 @@ binaries replaying the golden outputs and `LIKEUSER_FAKE_DESKTOP`. Must cover:
 - `verdict pass` refused without an `OBSERVED` act; automatic console and network findings.
 - Login attempt limit; credentials read from env and from a 0600 file, rejected from a 0644 file.
 - Budget exhaustion per goal and per run.
-- Redaction: stdin text and credentials never appear in `events.jsonl`, `run.json`, or reports.
+- Redaction: stdin text and credentials never appear in `events.jsonl`, `run.json`, or reports, in
+  any later verb of the run; no screenshot is saved while a credential is on screen.
 - Test overrides recorded and bannered.
 
 **Skill structure** (`tests/test_using_apps_like_a_user_skill.py`): `name` equals the directory name;

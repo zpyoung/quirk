@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -390,7 +391,7 @@ def _required(value: Optional[str], what: str) -> str:
     return value
 
 
-CUA_MIN_VERSION = (0, 34, 1)
+CUA_PIN = (0, 34, 1)
 _CUA_TIMEOUT_S = 60.0
 _CUA_GONE_CODES = frozenset(
     ["stale_element_token", "window_not_found", "window_stale", "window_gone", "no_such_window"]
@@ -412,6 +413,17 @@ _ROW_RE = re.compile(r"^\s*- (?:\[\d+\] )?(AX\w+)(.*)$")
 _STATIC_VALUE_RE = re.compile(r'^\s*= "(.*)"')
 _VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 _PID_RE = re.compile(r'"?pid"?\s*=\s*(\d+)')
+_CUA_TOKEN_RE = re.compile(r"^s[0-9A-Za-z]+:(\d+)$")
+
+
+def stable_ref(ref: str) -> str:
+    """Return the part of a native ref that survives re-observation, so one element compares equal across snapshots.
+
+    Cua element tokens are `s<session>:<index>` and the session segment renews with every
+    snapshot, so the identity is the element index. Any other ref is returned unchanged.
+    """
+    match = _CUA_TOKEN_RE.match(ref)
+    return f"cua:{match.group(1)}" if match else ref
 
 
 def _drop_menu_bar(markdown: str) -> str:
@@ -594,7 +606,7 @@ class CuaDriver(NativeDriver):
     """
 
     name = "cua"
-    pin = ".".join(str(part) for part in CUA_MIN_VERSION)
+    pin = ".".join(str(part) for part in CUA_PIN)
     background_capable = True
 
     def __init__(self, session: Optional[str] = None) -> None:
@@ -658,7 +670,7 @@ class CuaDriver(NativeDriver):
         return data, stdout
 
     def check(self) -> List[str]:
-        """Return what is missing: the binary, the 0.34.1 pin, the daemon, or a macOS permission.
+        """Return what is missing: the binary, exactly the 0.34.1 pin, the daemon, or a macOS permission.
 
         Reads permissions with the read-only `permissions status`; it never asks for a grant.
         """
@@ -670,8 +682,8 @@ class CuaDriver(NativeDriver):
             if found is None:
                 return ["cua-driver version unreadable"]
             self.version = ".".join(found.groups())
-            if tuple(int(part) for part in found.groups()) < CUA_MIN_VERSION:
-                return [f"cua-driver {self.version} is below the 0.34.1 pin"]
+            if tuple(int(part) for part in found.groups()) != CUA_PIN:
+                return [f"cua-driver=={self.pin} (found {self.version})"]
             out, err, code = self._exec(["status"])
             text = (out + err).lower()
             if code != 0 or "running" not in text or "not running" in text:
@@ -762,11 +774,26 @@ class CuaDriver(NativeDriver):
         return observation
 
     def _cache_dir(self) -> Path:
+        """Return the per-user capture directory, created 0700 or verified as exactly that.
+
+        Raises `DriverError("cache_unavailable")` for a symlink, a non-directory, a directory owned
+        by another user, or one open to group or others, so captures never land in a planted path.
+        """
         path = Path(tempfile.gettempdir()) / f"likeuser-cua-{os.getuid()}"
         try:
-            path.mkdir(mode=0o700, exist_ok=True)
+            try:
+                path.mkdir(mode=0o700)
+            except FileExistsError:
+                pass
+            fd = os.open(str(path), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                info = os.fstat(fd)
+            finally:
+                os.close(fd)
         except OSError as error:
             raise DriverError("cache_unavailable", str(error))
+        if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) & 0o077:
+            raise DriverError("cache_unavailable", f"{path} is not a private directory owned by this user")
         return path
 
     def _session_file(self, suffix: str) -> Path:

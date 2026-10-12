@@ -32,7 +32,7 @@ user before installing anything or granting a macOS permission.
 
 ```bash
 pnpm add -g @playwright/cli@0.1.22        # web and Electron renderers; the pin is exact
-brew install --cask cuadriver              # native driver, 0.34.1 (cua-driver)
+brew install --cask cuadriver              # native driver; the 0.34.1 pin is exact (cua-driver)
 cua-driver permissions grant               # Accessibility and Screen Recording
 ```
 
@@ -221,8 +221,11 @@ likeuser.py act --run "$RUN" --obs 3 --action fill --ref e4 --secret password --
 likeuser.py act --run "$RUN" --obs 4 --action click --ref e5 --expect url
 ```
 
-- **One attempt.** If the submit does not leave the login screen, further `--secret` acts return
-  `ERROR` with `login_attempt_limit`. Do not guess another password.
+- **One attempt.** If the submit (an `Enter` press, or a click on Sign in, Log in, Submit, Continue,
+  or Next) does not leave the login screen, further `--secret` acts return `ERROR` with
+  `login_attempt_limit`. Do not guess another password.
+- **No screenshot while a credential shows.** A `--secret` act saves no screenshot
+  (`screenshot_withheld: true`); read the tree for the result instead.
 - **No credentials, or a 2FA wall, attended:** `likeuser.py handoff --run "$RUN" --reason login`
   (or `2fa`). It reopens the page headed. Tell the user what to do, wait for them to say they are
   done, then `likeuser.py resume --run "$RUN"` and `observe` again.
