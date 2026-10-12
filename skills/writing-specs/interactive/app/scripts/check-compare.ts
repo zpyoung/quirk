@@ -192,15 +192,21 @@ const staleDraft: Draft = { ...draft, id: 'd2', target: { type: 'score', require
 const goodDraft: Draft = { ...draft, id: 'd3', target: { type: 'slice', approachId: 'A', sliceId: 'A-1' }, want: 'L-XL', targetHash: targets['slice|A|A-1']! }
 check('saveCompareState succeeds', saveCompareState('compare', fresh({ comparisonId: 'old', drafts: [draft, staleDraft, goodDraft], stars: ['REQ-01', 'REQ-05', 'REQ-99'], focus: 'AB' })))
 check('storage key', store.has('quirk-compare:compare'))
-const loaded = loadCompareState('compare', comparison, 'new')
+const loaded = loadCompareState('compare', comparison, 'new', spec)
 check('loadCompareState storageOk', loaded.storageOk)
 equal('carry-over keeps unchanged drafts', loaded.state.drafts.map((d) => d.id), ['d1', 'd3'])
 equal('carry-over moves changed drafts to needsLook', loaded.state.needsLook.map((d) => d.id), ['d2'])
 equal('carry-over drops stars no longer in scope', [loaded.state.stars, loaded.state.droppedStars, loaded.state.comparisonId, loaded.state.focus], [['REQ-01'], ['REQ-05', 'REQ-99'], 'new', 'AB'])
-equal('same comparisonId loads unchanged', loadCompareState('compare', comparison, 'old').state.drafts.length, 3)
+equal('same comparisonId loads unchanged', loadCompareState('compare', comparison, 'old', spec).state.drafts.length, 3)
+const scoredOutOfScope = structuredClone(comparison)
+scoredOutOfScope.scores['REQ-05'] = structuredClone(scoredOutOfScope.scores['REQ-01']!)
+check('fixture spec puts REQ-05 out of scope', spec.requirements.find((r) => r.id === 'REQ-05')?.scope === 'out')
+check('saveCompareState stores a star on an out-of-scope requirement', saveCompareState('compare', fresh({ comparisonId: 'old', stars: ['REQ-01', 'REQ-05'] })))
+const outOfScope = loadCompareState('compare', scoredOutOfScope, 'new', spec).state
+equal('carry-over drops a star the spec marks out of scope even when still scored', [outOfScope.stars, outOfScope.droppedStars], [['REQ-01'], ['REQ-05']])
 store.set('quirk-compare:compare', '{not json')
-check('corrupt storage yields a fresh state', loadCompareState('compare', comparison, 'new').state.drafts.length === 0)
-equal('missing storage yields a fresh state', loadCompareState('other', comparison, 'new').state, fresh({ comparisonId: 'new' }))
+check('corrupt storage yields a fresh state', loadCompareState('compare', comparison, 'new', spec).state.drafts.length === 0)
+equal('missing storage yields a fresh state', loadCompareState('other', comparison, 'new', spec).state, fresh({ comparisonId: 'new' }))
 
 if (failures.length) {
   console.error(`compare-check failed (${failures.length}):\n${failures.map((f) => `- ${f}`).join('\n')}`)

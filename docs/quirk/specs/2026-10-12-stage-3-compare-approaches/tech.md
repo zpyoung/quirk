@@ -97,7 +97,7 @@ S [2,2] · S-M [2,3] · M [3,3] · M-L [3,5] · L [5,5] · L-XL [5,8] · XL [8,8
 
 `CONFIG:` TabKey — `overview`, `approaches`, `effort`, `blast`, `tradeoffs`.
 
-Every enum, required key and type in these SCHEMA blocks is enforced: a violation is a validation error with a JSON pointer, in Python and in the TS guard alike. Slice ids are unique per approach, and repo names are unique per approach. `readAt` is `YYYY-MM-DD`. `refs` counts every reference, `fk` and `json` together, against the limit of 6.
+Every enum, required key and type in these SCHEMA blocks is enforced: a violation is a validation error with a JSON pointer, in Python and in the TS guard alike. Slice ids are unique per approach, and repo names are unique per approach. `readAt` is `YYYY-MM-DD`. `lines` are integers `0 <= lo <= hi <= 2^53-1`, so the page hashes the same numbers Python does. `refs` counts every reference, `fk` and `json` together, against the limit of 6.
 
 **Hashed content.** `targetHash` covers only the content a reviewer argues with, so a coordinator adding a `check` or `history` entry never invalidates drafts:
 - score target: `status`, `qualifier`, `wording`, `note`, `citations`, `requirementHash`

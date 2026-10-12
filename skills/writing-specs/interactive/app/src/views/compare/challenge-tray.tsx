@@ -7,6 +7,7 @@ import { Token } from '@astryxdesign/core/Token'
 import { allHistoryCounts, allScoreHashes, createCompareExport, isCompareExport, targetHash } from '../../compare-state'
 import type { Comparison, CompareExport, CompareState, Draft } from '../../compare-types'
 import { EXPORT_KIND, localStamp } from '../../review-state'
+import { DraftCard, saveDraftEdit } from './score-drawer'
 
 interface ChallengeTrayProps {
   slug: string
@@ -32,15 +33,11 @@ function describeTarget(draft: Draft): string {
   return draft.target.type === 'score' ? `${draft.target.requirementId} on approach ${draft.target.approachId}` : `slice ${draft.target.sliceId} of approach ${draft.target.approachId}`
 }
 
-function DraftRow({ draft, children }: { draft: Draft; children: React.ReactNode }) {
+function DraftRow({ draft, list, update, children }: { draft: Draft; list: 'drafts' | 'needsLook'; update: ChallengeTrayProps['update']; children: React.ReactNode }) {
   return (
-    <HStack gap={2} align="start" justify="between" wrap="wrap">
-      <VStack gap={0.5} style={{ flex: '1 1 260px', minWidth: 0 }}>
-        <Text type="label">{`${describeTarget(draft)} → ${draft.want}`}</Text>
-        <Text type="supporting">{draft.note}</Text>
-      </VStack>
-      <HStack gap={1}>{children}</HStack>
-    </HStack>
+    <DraftCard bare draft={draft} heading={describeTarget(draft)} onSave={(note, want) => saveDraftEdit(update, list, draft.id, note, want)}>
+      {children}
+    </DraftCard>
   )
 }
 
@@ -143,7 +140,7 @@ export function ChallengeTray({ slug, renderId, comparisonId, comparison, state,
           <Collapsible trigger={`Review ${state.needsLook.length} draft${state.needsLook.length === 1 ? '' : 's'} that need another look`} defaultIsOpen>
             <VStack gap={2}>
               {state.needsLook.map((item) => (
-                <DraftRow key={item.id} draft={item}>
+                <DraftRow key={item.id} draft={item} list="needsLook" update={update}>
                   <Button size="sm" label="Aim at the current score" isDisabled={currentHash(comparison, item) === null} onClick={() => reaim(item)} />
                   <Button size="sm" variant="secondary" label="Discard" onClick={() => discardLook(item.id)} />
                 </DraftRow>
@@ -155,7 +152,7 @@ export function ChallengeTray({ slug, renderId, comparisonId, comparison, state,
           <Collapsible trigger={`Show ${state.drafts.length} draft${state.drafts.length === 1 ? '' : 's'}`} defaultIsOpen={false}>
             <VStack gap={2}>
               {state.drafts.map((item) => (
-                <DraftRow key={item.id} draft={item}>
+                <DraftRow key={item.id} draft={item} list="drafts" update={update}>
                   <Button size="sm" variant="secondary" label="Discard" onClick={() => removeDraft(item.id)} />
                 </DraftRow>
               ))}

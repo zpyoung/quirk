@@ -169,8 +169,8 @@ function App() {
       { id: 'constraints', label: 'Constraints' },
       { id: 'risks', label: 'Risks' },
       { id: 'spec', label: 'Spec text' },
-      { id: 'sign-off', label: 'Sign-off' },
     )
+    if (!comparison) result.push({ id: 'sign-off', label: 'Sign-off' })
     return result
   }, [payload, comparison])
 
@@ -184,14 +184,16 @@ function App() {
 
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (!storageOk && (!lastExportUpdatedAt || lastExportUpdatedAt !== state.updatedAt)) {
+      if (!comparison && !storageOk && (!lastExportUpdatedAt || lastExportUpdatedAt !== state.updatedAt)) {
         event.preventDefault()
         event.returnValue = ''
       }
     }
     window.addEventListener('beforeunload', beforeUnload)
     return () => window.removeEventListener('beforeunload', beforeUnload)
-  }, [lastExportUpdatedAt, state.updatedAt, storageOk])
+  }, [comparison, lastExportUpdatedAt, state.updatedAt, storageOk])
+
+  const ignoreUpdate = useCallback<Update>(() => {}, [])
 
   const createExport = useCallback((): Export => {
     if (!payload) throw new Error('No rendered review data is loaded.')
@@ -289,7 +291,7 @@ function App() {
     payload,
     spec: payload.spec,
     state,
-    update,
+    update: comparison ? ignoreUpdate : update,
     changedIds,
     onOpenRequirement: setOpenRequirementId,
   }
@@ -320,13 +322,15 @@ function App() {
                       {comparison ? <Step step={2} label="Stage 3 · Compare approaches" description="Weigh the approaches against the requirements you signed" /> : null}
                     </Stepper>
                   </VStack>
-                  <Text type="supporting">
-                    {state.signedAt
-                      ? `Signed ${new Date(state.signedAt).toLocaleString()}`
-                      : openGateCount === 0
-                        ? 'Every gate is met. Record your verdict on the Sign-off tab.'
-                        : `${openGateCount} of ${gates.length} review gates still open`}
-                  </Text>
+                  {comparison && !state.signedAt ? null : (
+                    <Text type="supporting">
+                      {state.signedAt
+                        ? `Signed ${new Date(state.signedAt).toLocaleString()}`
+                        : openGateCount === 0
+                          ? 'Every gate is met. Record your verdict on the Sign-off tab.'
+                          : `${openGateCount} of ${gates.length} review gates still open`}
+                    </Text>
+                  )}
                   <TabList value={view} onChange={(value) => setView(value as ViewId)} role="tablist" hasDivider>
                     {tabs.map((tab) => <Tab key={tab.id} value={tab.id} label={tab.label} panelId="panel" endContent={badge(BADGES[tab.id])} />)}
                   </TabList>
@@ -336,7 +340,7 @@ function App() {
             content={
               <LayoutContent label="Review panel" padding={4} isScrollable={false}>
                 <VStack gap={4} paddingBlockEnd={10}>
-                  {!storageOk ? (
+                  {!storageOk && !comparison ? (
                     <Banner
                       status="error"
                       title="Export before closing"
@@ -350,6 +354,9 @@ function App() {
                       description={`The comparison data did not validate at ${comparisonCheck.pointer}: ${comparisonCheck.message} Stages 1 and 2 are unaffected.`}
                     />
                   ) : null}
+                  {comparison && !view.startsWith('s3-') ? (
+                    <Banner status="info" title="This spec is signed. Stages 1 and 2 are read-only." collapsible={false} />
+                  ) : null}
                   <VStack id="panel" role="tabpanel">
                     {comparison ? <CompareShell payload={payload} comparison={comparison} view={view} onView={setView} /> : null}
                     {view === 'board' ? <BoardView {...viewProps} /> : null}
@@ -362,7 +369,7 @@ function App() {
                     {view === 'states' ? <StateMachineView {...viewProps} /> : null}
                     {view.startsWith('custom:') ? <CustomView {...viewProps} viewId={view.slice('custom:'.length)} /> : null}
                     {view === 'spec' ? <SpecView {...viewProps} /> : null}
-                    {view === 'sign-off' ? (
+                    {view === 'sign-off' && !comparison ? (
                       <SignOffView {...viewProps} gates={gates} createExport={createExport} onExport={onExport} importStatus={importStatus} onImport={importFile} />
                     ) : null}
                   </VStack>
@@ -378,7 +385,7 @@ function App() {
           requirement={payload.spec.requirements.find((requirement) => requirement.id === openRequirementId) ?? null}
           spec={payload.spec}
           state={state}
-          update={update}
+          update={comparison ? ignoreUpdate : update}
           changedIds={changedIds}
           onClose={() => setOpenRequirementId(null)}
         />

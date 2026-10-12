@@ -25,7 +25,7 @@ interface CompareShellProps {
 /** Stage 3: owns the reviewer's compare state (stored under its own key), the active stage-3 view, the score drawer, the control strip and the challenge tray. Renders nothing on any other view, but stays mounted so state survives tab changes. */
 export function CompareShell({ payload, comparison, view, onView }: CompareShellProps) {
   const comparisonId = payload.comparisonId ?? ''
-  const [loaded] = useState(() => loadCompareState(payload.slug, comparison, comparisonId))
+  const [loaded] = useState(() => loadCompareState(payload.slug, comparison, comparisonId, payload.spec))
   const [state, setState] = useState<CompareState>(loaded.state)
   const stateRef = useRef(state)
   const [storageOk, setStorageOk] = useState(loaded.storageOk)

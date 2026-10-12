@@ -9,8 +9,8 @@ import { Selector } from '@astryxdesign/core/Selector'
 import { Text } from '@astryxdesign/core/Text'
 import { TextArea } from '@astryxdesign/core/TextArea'
 import { Token } from '@astryxdesign/core/Token'
-import { staleScore, targetHash } from '../../compare-state'
-import type { Comparison, CompareViewProps, Draft, Finding, Score, ScoreHistory, ScoreStatus } from '../../compare-types'
+import { POINT_MAP, staleScore, targetHash } from '../../compare-state'
+import type { CompareState, Comparison, CompareViewProps, Draft, Finding, Score, ScoreHistory, ScoreStatus, SizeLabel } from '../../compare-types'
 import { CONDITION_LABEL } from '../../review-state'
 import { STATUS_META, STATUS_ORDER, StatusChip } from './status-chip'
 
@@ -35,9 +35,72 @@ export function firstSentence(note: string): string {
 }
 
 let draftCounter = 0
-const newDraftId = () => `c-${Date.now().toString(36)}-${(draftCounter++).toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+export const newDraftId = () => `c-${Date.now().toString(36)}-${(draftCounter++).toString(36)}-${Math.random().toString(36).slice(2, 6)}`
 
-const WANT_OPTIONS = STATUS_ORDER.map((status) => ({ value: status, label: STATUS_META[status].label }))
+const WANT_OPTIONS: { value: string; label: string }[] = STATUS_ORDER.map((status) => ({ value: status, label: STATUS_META[status].label }))
+export const SIZE_OPTIONS: { value: string; label: string }[] = (Object.keys(POINT_MAP) as SizeLabel[]).map((size) => ({ value: size, label: size }))
+
+/** Replaces a draft's note and wanted value in place, leaving its id, target and targetHash untouched. */
+export function saveDraftEdit(update: CompareViewProps['update'], list: 'drafts' | 'needsLook', id: string, note: string, want: Draft['want']): void {
+  update((s: CompareState) => {
+    s[list] = s[list].map((draft) => (draft.id === id ? { ...draft, note, want } : draft))
+  })
+}
+
+/** One draft with its note and wanted value, editable in place; `children` are the row's extra actions such as Remove. */
+export function DraftCard({ draft, heading, onSave, children, bare = false }: { draft: Draft; heading: string; onSave: (note: string, want: Draft['want']) => void; children?: React.ReactNode; bare?: boolean }) {
+  const [editing, setEditing] = useState(false)
+  const [note, setNote] = useState(draft.note)
+  const [want, setWant] = useState<string>(draft.want)
+  const isScore = draft.target.type === 'score'
+  const wantLabel = isScore ? (STATUS_META[draft.want as ScoreStatus]?.label ?? draft.want) : draft.want
+  const body = editing ? (
+    <VStack gap={2}>
+      <Text type="label" color="secondary">{heading}</Text>
+      <TextArea label="Note" rows={3} value={note} onChange={setNote} isRequired />
+      <Selector
+        label={isScore ? 'Score you think is right' : 'Size you think is right'}
+        value={want}
+        onChange={(value) => setWant(value as string)}
+        options={isScore ? [...WANT_OPTIONS] : [...SIZE_OPTIONS]}
+      />
+      <HStack gap={1}>
+        <Button
+          variant="primary"
+          size="sm"
+          label="Save"
+          isDisabled={note.trim() === ''}
+          onClick={() => {
+            onSave(note.trim(), want as Draft['want'])
+            setEditing(false)
+          }}
+        />
+        <Button
+          variant="secondary"
+          size="sm"
+          label="Cancel"
+          onClick={() => {
+            setNote(draft.note)
+            setWant(draft.want)
+            setEditing(false)
+          }}
+        />
+      </HStack>
+    </VStack>
+  ) : (
+    <HStack gap={2} align="start" justify="between" wrap="wrap">
+      <VStack gap={0.5} style={{ flex: '1 1 220px', minWidth: 0 }}>
+        <Text type="label" color="secondary">{`${heading} · wants ${wantLabel}`}</Text>
+        <Text>{draft.note}</Text>
+      </VStack>
+      <HStack gap={1}>
+        <Button variant="secondary" size="sm" label="Edit" aria-label={`Edit draft: ${heading}`} onClick={() => { setNote(draft.note); setWant(draft.want); setEditing(true) }} />
+        {children}
+      </HStack>
+    </HStack>
+  )
+  return bare ? body : <Card padding={2}>{body}</Card>
+}
 const FINDING_COLOR = { disputes: 'orange', 'same score, different design': 'blue' } as const
 
 function sameScoreTarget(draft: Draft, requirementId: string, approachId: string): boolean {
@@ -72,15 +135,9 @@ function ChallengeForm({ requirementId, approachId, score, state, update }: { re
     <VStack gap={2}>
       <Heading level={5}>Challenge</Heading>
       {existing.map((draft) => (
-        <Card key={draft.id} padding={2}>
-          <HStack gap={2} align="start" justify="between">
-            <VStack gap={0.5}>
-              <Text type="label" color="secondary">{`Draft · wants ${STATUS_META[draft.want as ScoreStatus]?.label ?? draft.want}`}</Text>
-              <Text>{draft.note}</Text>
-            </VStack>
-            <Button variant="secondary" size="sm" label="Remove" aria-label={`Remove draft challenge on ${requirementId} for approach ${approachId}`} onClick={() => remove(draft.id)} />
-          </HStack>
-        </Card>
+        <DraftCard key={draft.id} draft={draft} heading={`Draft on ${requirementId} for approach ${approachId}`} onSave={(text, value) => saveDraftEdit(update, 'drafts', draft.id, text, value)}>
+          <Button variant="secondary" size="sm" label="Remove" aria-label={`Remove draft challenge on ${requirementId} for approach ${approachId}`} onClick={() => remove(draft.id)} />
+        </DraftCard>
       ))}
       <TextArea label="Why this score is wrong" rows={3} value={note} onChange={setNote} isRequired />
       <Selector label="Score you think is right" value={want} onChange={(value) => setWant(value as ScoreStatus)} options={WANT_OPTIONS} />

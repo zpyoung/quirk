@@ -2062,6 +2062,7 @@ def load_logic(spec_dir: Path) -> Tuple[Optional[dict], Optional[str]]:
 
 
 SCORE_TARGET_FIELDS = ("status", "qualifier", "wording", "note", "citations", "requirementHash")
+MAX_SAFE_INTEGER = 9007199254740991
 SLICE_TARGET_FIELDS = ("name", "size", "band", "lines")
 
 
@@ -2152,8 +2153,8 @@ def _validate_slices(v: Validator, raw: Any, path: str) -> None:
             lines = v.object(item["lines"], lines_path)
             for repo, span in (lines or {}).items():
                 span_path = pointer(lines_path, repo)
-                if not isinstance(span, list) or len(span) != 2 or not all(_is_int(n) and n >= 0 for n in span):
-                    v.error(span_path, "expected [lo, hi] with non-negative integers")
+                if not isinstance(span, list) or len(span) != 2 or not all(_is_int(n) and 0 <= n <= MAX_SAFE_INTEGER for n in span):
+                    v.error(span_path, "expected [lo, hi] with integers from 0 to 2^53-1")
                 elif span[0] > span[1]:
                     v.error(span_path, "lo must not exceed hi")
 

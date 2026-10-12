@@ -90,7 +90,7 @@ Guidance { "intro": str,
 - **ScoreStatus** is one of the four `Score.status` values.
 - **TabKey** is one of `overview`, `approaches`, `effort`, `blast`, `tradeoffs`.
 - `requirementHash` is the requirement's current hash in `logic.json`. Copy it when you score.
-- `lines` spans are two non-negative integers with `lo <= hi`.
+- `lines` spans are two integers with `0 <= lo <= hi <= 2^53-1`, the largest integer a browser keeps exactly.
 
 ## Size labels
 

@@ -31,6 +31,7 @@ export const POINT_MAP: Record<SizeLabel, [number, number]> = {
   XL: [8, 8],
 }
 
+const isLineCount = (value: unknown): boolean => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 const isScoreStatus = (value: unknown): value is ScoreStatus => typeof value === 'string' && (SCORE_STATUSES as readonly string[]).includes(value)
 const isSizeLabel = (value: unknown): value is SizeLabel => typeof value === 'string' && Object.prototype.hasOwnProperty.call(POINT_MAP, value)
@@ -165,10 +166,11 @@ function checkSlice(value: unknown, pointer: string): void {
   optional(slice, 'riskHeadline', str, pointer)
   optional(slice, 'lines', (lines, linesPointer) => {
     for (const [repo, range] of Object.entries(obj(lines, linesPointer))) {
-      const pair = arr(range, `${linesPointer}/${repo}`)
-      if (pair.length !== 2) fail(`${linesPointer}/${repo}`, 'must be [lo, hi]')
-      int(pair[0], `${linesPointer}/${repo}/0`)
-      int(pair[1], `${linesPointer}/${repo}/1`)
+      const spanPointer = `${linesPointer}/${repo.replace(/~/g, '~0').replace(/\//g, '~1')}`
+      const pair = arr(range, spanPointer)
+      const [lo, hi] = pair
+      if (pair.length !== 2 || !isLineCount(lo) || !isLineCount(hi)) fail(spanPointer, 'expected [lo, hi] with integers from 0 to 2^53-1')
+      else if ((lo as number) > (hi as number)) fail(spanPointer, 'lo must not exceed hi')
     }
   }, pointer)
 }
@@ -527,7 +529,7 @@ function currentHash(comparison: Comparison, target: Draft['target']): string | 
   return resolved ? targetHash(resolved, target.type) : null
 }
 
-function carryOver(stored: CompareState, comparison: Comparison, comparisonId: string): CompareState {
+function carryOver(stored: CompareState, comparison: Comparison, comparisonId: string, spec: LogicSpec): CompareState {
   const drafts: Draft[] = []
   const needsLook = [...stored.needsLook]
   for (const draft of stored.drafts) {
@@ -536,8 +538,9 @@ function carryOver(stored: CompareState, comparison: Comparison, comparisonId: s
   }
   const stars: string[] = []
   const droppedStars: string[] = []
+  const inScope = new Set(visibleRequirements(spec, { includeConditional: true }).map((requirement) => requirement.id))
   for (const star of stored.stars) {
-    if (comparison.scores[star]) stars.push(star)
+    if (comparison.scores[star] && inScope.has(star)) stars.push(star)
     else droppedStars.push(star)
   }
   const ids = comparison.approaches.map((approach) => approach.id)
@@ -545,8 +548,8 @@ function carryOver(stored: CompareState, comparison: Comparison, comparisonId: s
   return { ...stored, comparisonId, drafts, needsLook, stars, droppedStars, focus: focusKept ? stored.focus : 'all' }
 }
 
-/** Loads the reviewer's stage-3 state. A state saved against a different comparison keeps drafts whose target is unchanged, moves the rest to `needsLook`, and drops stars for requirements the comparison no longer scores. `storageOk` is false when browser storage is unreadable. */
-export function loadCompareState(slug: string, comparison: Comparison, comparisonId: string): { state: CompareState; storageOk: boolean } {
+/** Loads the reviewer's stage-3 state. A state saved against a different comparison keeps drafts whose target is unchanged, moves the rest to `needsLook`, and drops stars for requirements the comparison no longer scores or the spec now puts out of scope. `storageOk` is false when browser storage is unreadable. */
+export function loadCompareState(slug: string, comparison: Comparison, comparisonId: string, spec: LogicSpec): { state: CompareState; storageOk: boolean } {
   let raw: string | null = null
   try {
     raw = localStorage.getItem(stateKey(slug))
@@ -561,7 +564,7 @@ export function loadCompareState(slug: string, comparison: Comparison, compariso
     return { state: freshState(comparisonId), storageOk: true }
   }
   if (!isStoredState(stored)) return { state: freshState(comparisonId), storageOk: true }
-  return { state: stored.comparisonId === comparisonId ? stored : carryOver(stored, comparison, comparisonId), storageOk: true }
+  return { state: stored.comparisonId === comparisonId ? stored : carryOver(stored, comparison, comparisonId, spec), storageOk: true }
 }
 
 /** Persists the state; returns false when browser storage rejects the write. */
@@ -586,7 +589,7 @@ export function focusApproaches(comparison: Comparison, state: CompareState): st
 }
 
 /** In-scope requirements, leaving out conditional ones when the reviewer excluded them. */
-export function visibleRequirements(spec: LogicSpec, state: CompareState): Requirement[] {
+export function visibleRequirements(spec: LogicSpec, state: Pick<CompareState, 'includeConditional'>): Requirement[] {
   return spec.requirements.filter((requirement) => requirement.scope !== 'out' && (state.includeConditional || !requirement.condition))
 }
 
