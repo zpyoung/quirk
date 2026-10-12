@@ -171,6 +171,7 @@ Back-link: [5.2](logic.md#5-an-example-changes-with-its-scenario).
 
 In `OutcomeCell` `set`, only when `s.example` exists, in the same `update` call that clears approval:
 - New choice is not `spec`: set `scenarioUpdates[s.id]` to `exampleOutcomeUpdate(<the chosen outcome's text>)`, unless the existing update text exists and does not start with the prefix (the reviewer wrote their own; leave it).
+- A `custom` choice with blank text counts as `spec` here: it is the moment before the reviewer has typed an outcome, Approve is already blocked by `'outcome-missing'`, and an update quoting an empty outcome would give Claude nothing to act on. The fold gate still treats it as changed, as a backstop.
 - Typing in the custom outcome field re-derives the update text the same way, under the same "unless" rule.
 - New choice is `spec`: delete `scenarioUpdates[s.id]` only if its text starts with the prefix.
 - A scenario without `example` behaves exactly as today.
