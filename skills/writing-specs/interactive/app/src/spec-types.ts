@@ -1,3 +1,5 @@
+import type { Comparison } from './compare-types'
+
 export type Markdown = string
 export type IsoDateTime = string
 export type RequirementId = string
@@ -352,4 +354,6 @@ export interface LogicSpecPayload {
   itemHashes: Record<string, string>
   logicMarkdown: string
   priorDecisions: Export | null
+  comparison?: Comparison
+  comparisonId?: string
 }
