@@ -69,6 +69,75 @@ UNSAFE_OBJECT_IDS = frozenset(
 )
 
 
+OPEN_ASK_RE = re.compile(r"\[ASK: ([^\]\n]+)\]")
+ASK_LOOKALIKE_RE = re.compile(r"\[\s*ask\b", re.IGNORECASE)
+EXAMPLE_KEYS = ("before", "steps", "after")
+MALFORMED_ASK_MESSAGE = "malformed [ASK] marker; write [ASK: <question>]"
+
+
+def _example_parts(example: dict) -> List[str]:
+    return [example["before"], *example["steps"], example["after"]]
+
+
+def scenario_open_asks(scenario: dict) -> List[str]:
+    """Questions of every open [ASK: ...] gap in the scenario's example, in reading order; [] without one."""
+    example = scenario.get("example")
+    if not example:
+        return []
+    return [match.group(1) for part in _example_parts(example) for match in OPEN_ASK_RE.finditer(part)]
+
+
+def _example_part_lines(first_prefix: str, indent: str, text: str) -> List[str]:
+    rows = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    lines = [first_prefix + rows[0]] + [indent + row for row in rows[1:]]
+    return [line + "  " for line in lines[:-1]] + lines[-1:]
+
+
+def _example_markdown_lines(example: dict) -> List[str]:
+    """Sub-bullets for a scenario's data-state example; newlines inside a part become hard breaks."""
+    lines = _example_part_lines("   - **Data before:** ", "     ", example["before"])
+    lines.append("   - **Walkthrough:**")
+    for number, step in enumerate(example["steps"], 1):
+        lines.extend(_example_part_lines("     " + str(number) + ". ", "        ", step))
+    lines.extend(_example_part_lines("   - **Data after:** ", "     ", example["after"]))
+    return lines
+
+
+def _validate_scenario_example(v: "Validator", item: dict, path: str) -> bool:
+    """Validate `example`; True when it is well formed enough for scenario_open_asks."""
+    errors_before = len(v.errors)
+    example_path = pointer(path, "example")
+    example = v.object(item["example"], example_path)
+    if example is None:
+        return False
+    for key in example:
+        if key not in EXAMPLE_KEYS:
+            v.error(pointer(example_path, key), "unexpected key")
+    parts: List[Tuple[str, str]] = []
+    for key in ("before", "after"):
+        if key not in example:
+            _required(v, example, key, example_path)
+        elif v.string(example[key], pointer(example_path, key), nonempty=True):
+            parts.append((pointer(example_path, key), example[key]))
+    if "steps" not in example:
+        _required(v, example, "steps", example_path)
+    else:
+        steps_path = pointer(example_path, "steps")
+        steps = v.array(example["steps"], steps_path)
+        if steps is not None:
+            if not steps:
+                v.error(steps_path, "must not be empty")
+            for index, step in enumerate(steps):
+                if v.string(step, pointer(steps_path, index), nonempty=True):
+                    parts.append((pointer(steps_path, index), step))
+    for part_path, text in parts:
+        for match in ASK_LOOKALIKE_RE.finditer(text):
+            if not OPEN_ASK_RE.match(text, match.start()):
+                v.error(part_path, MALFORMED_ASK_MESSAGE)
+                break
+    return len(v.errors) == errors_before
+
+
 class Validator:
     """Small schema validator that reports every actionable JSON-pointer error."""
 
@@ -896,6 +965,7 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
                     v.string(item["rejectReason"], pointer(path, "rejectReason"))
 
     scenario_rows: List[Any] = []
+    checked_example_rows: set = set()
     scenarios = _required(v, root, "scenarios", "")
     if "scenarios" in root:
         rows = v.array(scenarios, "/scenarios")
@@ -934,6 +1004,9 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
                     v.error(pointer(path, "flagged"), "must be true when present")
                 if "answeredComment" in item:
                     v.string(item["answeredComment"], pointer(path, "answeredComment"), nonempty=True)
+                if "example" in item:
+                    if _validate_scenario_example(v, item, path):
+                        checked_example_rows.add(index)
                 if "reopened" in item and "reapprovedHash" in item:
                     v.error(pointer(path, "reapprovedHash"), "reopened and reapprovedHash cannot both be present")
 
@@ -1325,6 +1398,11 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
         for index, raw in enumerate(constraint_rows):
             if isinstance(raw, dict) and "ruling" not in raw:
                 v.error(pointer(pointer("/constraints", index), "ruling"), "required in stage 2")
+
+        for index in sorted(checked_example_rows):
+            raw = scenario_rows[index]
+            if "dropReason" not in raw and scenario_open_asks(raw):
+                v.error(pointer(pointer("/scenarios", index), "example"), "open [ASK] after stage-1 sign-off")
 
         approved_scenario_ids = {
             item["id"]
@@ -2220,6 +2298,8 @@ def render_markdown_v2(logic: dict) -> str:
             lines.append("   - **Then** " + scenario["then"])
             if scenario["alternatives"]:
                 lines.append("   - **Alternatives** " + "; ".join(scenario["alternatives"]))
+            if "example" in scenario:
+                lines.extend(_example_markdown_lines(scenario["example"]))
             lines.append("   - " + scenario["explanation"])
             if scenario.get("dropReason"):
                 lines.append("   - **Dropped:** " + scenario["dropReason"])
@@ -2384,6 +2464,11 @@ def write_files_atomically(files: Dict[Path, str]) -> None:
                 pass
 
 
+def open_asks_by_scenario(logic: dict) -> Dict[str, List[str]]:
+    asks = {scenario["id"]: scenario_open_asks(scenario) for scenario in logic.get("scenarios", [])}
+    return {ident: questions for ident, questions in asks.items() if questions}
+
+
 def prepare_render_files(
     spec_dir: Path, logic: dict, current_render_id: str, prior: Any = None
 ) -> Tuple[str, str]:
@@ -2402,6 +2487,7 @@ def prepare_render_files(
             "renderId": current_render_id,
             "itemHashes": item_hashes(logic),
             "logicMarkdown": markdown,
+            "openAsks": open_asks_by_scenario(logic),
             "priorDecisions": prior,
         }
         serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
@@ -2676,6 +2762,18 @@ def stage1_gate_failures(logic: dict, state: dict) -> List[Tuple[str, str]]:
         if pending_requests:
             detail.append("pending scenario requests: " + ", ".join(request["id"] for request in pending_requests))
         failures.append(("scenarios", "; ".join(detail)))
+
+    for scenario in logic["scenarios"]:
+        ident = scenario["id"]
+        if not state["scenarioApproved"].get(ident, False):
+            continue
+        if ident not in state["scenarioDrops"] and scenario_open_asks(scenario):
+            failures.append(("examples", "open [ASK] in " + ident))
+        choice = state["scenarioOutcomes"].get(ident, {}).get("choice")
+        if "example" in scenario and choice is not None and choice != "spec":
+            failures.append(
+                ("examples", "outcome changed on " + ident + "; Claude must rewrite its example first")
+            )
 
     missing_constraints = []
     for constraint in logic["constraints"]:

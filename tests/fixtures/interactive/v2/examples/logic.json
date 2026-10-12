@@ -1,0 +1,205 @@
+{
+  "schemaVersion": 2,
+  "stage": 1,
+  "title": "Subscription discount examples",
+  "status": "Draft",
+  "amendments": [],
+  "sections": {
+    "purpose": "Describe a small, local-first archive workflow.",
+    "conceptualModel": "An archive groups selected source files with a compact index.",
+    "dataFlow": "The reviewer chooses sources, then the tool writes the archive and index.",
+    "decisionsLocked": [
+      {
+        "area": "Storage",
+        "decision": "The archive is written beside the selected source directory."
+      }
+    ],
+    "industryInsights": [
+      {
+        "finding": "A portable index reduces dependence on one viewer.",
+        "sources": [
+          "https://example.test/portable-index"
+        ]
+      }
+    ],
+    "scopeNonGoals": [
+      "Remote synchronization is not part of this change."
+    ],
+    "deferredIdeas": [
+      {
+        "text": "Add archive signing after the local format stabilizes.",
+        "techSpec": true
+      }
+    ],
+    "glossary": [
+      {
+        "term": "Index",
+        "definition": "A compact listing of archive contents."
+      }
+    ]
+  },
+  "behaviors": [
+    {
+      "id": "BH-01",
+      "rule": "Archiving writes a portable index."
+    },
+    {
+      "id": "BH-02",
+      "rule": "Selecting sources is explicit."
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "SC-01",
+      "behavior": "BH-01",
+      "given": "A $100 line with a 10% and a 15% line discount.",
+      "when": "The charge is calculated.",
+      "then": "The line nets $76.50.",
+      "alternatives": [
+        "The line nets $75.00."
+      ],
+      "explanation": "Percentage discounts compound instead of adding.",
+      "provenance": "you-chose",
+      "question": "Do percentage discounts compound?",
+      "example": {
+        "before": "**Charge 1**: Coffee line $100.00; \"Loyalty\" 10% off; \"Winback\" 15% off",
+        "steps": [
+          "\"Loyalty\": $100.00 × 0.90 = $90.00",
+          "\"Winback\": $90.00 × 0.85 = $76.50"
+        ],
+        "after": "**Charge 1**: ✓ Coffee line $76.50; \"Loyalty\" took $10.00; \"Winback\" took $13.50"
+      }
+    },
+    {
+      "id": "SC-02",
+      "behavior": "BH-01",
+      "given": "A subscription with a line discount limited to the first 3 charges.",
+      "when": "Three charges have processed and the next one is generated.",
+      "then": "The fourth charge does not include the discount.",
+      "alternatives": [],
+      "explanation": "A used-up discount stops applying.",
+      "provenance": "claude",
+      "rationale": "Limited discounts need an explicit end-of-life case.",
+      "example": {
+        "before": "**Subscription**: \"Welcome\" 10%* off, first 3 charges; uses left 3",
+        "steps": [
+          "Charge 1 processes → uses left 2",
+          "Charge 2 processes → uses left 1",
+          "Charge 3 processes → uses left 0",
+          "Charge 4 is generated"
+        ],
+        "after": "**Charge 4**: Coffee line has no line discounts\n**Subscription**: \"Welcome\" uses left 0\n[ASK: does \"Welcome\" stay on the subscription once its uses run out, or get removed?]"
+      }
+    },
+    {
+      "id": "SC-03",
+      "behavior": "BH-02",
+      "given": "A shared discount definition at 10%.",
+      "when": "The merchant edits it to 15%.",
+      "then": "The edit is ignored once the definition has been used, and allowed while it has not.",
+      "alternatives": [],
+      "explanation": "Used definitions are immutable.",
+      "provenance": "you-recommended",
+      "question": "Can a used definition be edited?",
+      "extraReason": "One rule with two outcomes.",
+      "example": {
+        "before": "**Discount definition** \"Loyalty\": 10% off\n(a) used 4* times\n(b) never used",
+        "steps": [
+          "The merchant changes \"Loyalty\" to 15%\n(a) The request succeeds, but the change is ignored\n(b) The change is saved"
+        ],
+        "after": "(a) ✗ \"Loyalty\" stays 10%\n(b) ✓ \"Loyalty\" is 15%; queued charges pick it up on their next regen"
+      }
+    },
+    {
+      "id": "SC-04",
+      "behavior": "BH-02",
+      "given": "The user opens the discount list.",
+      "when": "They select a discount.",
+      "then": "Only the selected discount is shown.",
+      "alternatives": [],
+      "explanation": "Selection stays explicit.",
+      "provenance": "you-chose",
+      "question": "Should selection stay explicit?"
+    }
+  ],
+  "constraints": [
+    {
+      "id": "CON-01",
+      "area": "Archive",
+      "kind": "placement",
+      "text": "Archive output goes beside the selected source directory.",
+      "provenance": "you-chose",
+      "question": "Where should the archive be written?"
+    },
+    {
+      "id": "CON-02",
+      "area": "Archive",
+      "kind": "naming",
+      "text": "Index entries use forward slashes for paths.",
+      "provenance": "you-recommended",
+      "question": "Should paths use a single separator style?"
+    },
+    {
+      "id": "CON-03",
+      "area": "Sync",
+      "kind": "non-goal",
+      "text": "Remote synchronization of archives is out of scope.",
+      "provenance": "you-chose",
+      "question": "Should remote sync be included?"
+    },
+    {
+      "id": "CON-04",
+      "area": "Archive",
+      "kind": "verification",
+      "text": "A destination permission check runs before writing begins.",
+      "provenance": "claude",
+      "rationale": "Prevents partial writes when the destination becomes read-only mid-run."
+    }
+  ],
+  "assumptions": [
+    {
+      "id": "ASM-01",
+      "claim": "Selected inputs are readable when writing starts.",
+      "basis": "The workflow selects files before creating the archive.",
+      "certainty": "assumed",
+      "ifWrong": "Unreadable sources need a clear per-file error.",
+      "affects": [
+        "SC-01",
+        "CON-04"
+      ],
+      "meaning": "The tool can open every selected source file.",
+      "check": "Try a source that becomes unreadable after selection.",
+      "checkCost": "Low"
+    }
+  ],
+  "blindSpots": [
+    {
+      "id": "BS-01",
+      "title": "Filesystem permissions",
+      "detail": "The destination may not be writable even when sources are readable.",
+      "sources": [
+        "SC-01"
+      ],
+      "resolvedBy": "CON-04"
+    },
+    {
+      "id": "BS-02",
+      "title": "Partial writes on interruption",
+      "detail": "An interrupted write can leave a corrupt archive behind.",
+      "sources": [
+        "SC-04"
+      ]
+    }
+  ],
+  "research": [
+    {
+      "requestId": "RESEARCH-01",
+      "blindSpotId": "BS-02",
+      "summary": "Writing to a temporary file and renaming into place avoids partial archives.",
+      "detail": "A rename is atomic on the same filesystem, so an interrupted write never leaves a corrupt destination file.",
+      "answeredAt": "2026-09-21T10:30:00Z"
+    }
+  ],
+  "requirements": [],
+  "conflicts": []
+}
