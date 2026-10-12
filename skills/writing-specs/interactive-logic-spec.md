@@ -150,8 +150,8 @@ Each round runs in this order:
 
 Stage-3 exit codes differ from the stage-1 and stage-2 meanings above:
 
-- `check-export` and `challenges` exit 1 when the export fails validation, a challenge target no longer resolves, or `comparison.json` fails to load.
-- `check-export` and `challenges` exit 3 with `export belongs to a different spec` when the slug differs, or `comparison changed since this export` when `comparisonId` no longer matches the current comparison. Ask the reviewer to export again from the latest `review.html`.
+- `check-export` and `challenges` exit 1 when the export fails validation, a challenge target no longer resolves, a star names a requirement that is out of scope or unscored, or `comparison.json` fails to load.
+- `check-export` and `challenges` exit 3 with `export belongs to a different spec` when the slug differs, `signed spec changed since this export` when `renderId` no longer matches `logic.json`, or `comparison changed since this export` when `comparisonId` no longer matches the current comparison. Ask the reviewer to export again from the latest `review.html`.
 - `fold` and `reapprove` exit 2 with `stage-3 exports carry challenges, not decisions; use check-export or challenges`. Never fold a stage-3 export.
 - `find-export` does not look for stage-3 exports. Pass the file path to `check-export` yourself.
 

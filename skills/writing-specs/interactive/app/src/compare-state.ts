@@ -157,6 +157,14 @@ const arr = (value: unknown, pointer: string): unknown[] => (Array.isArray(value
 const oneOf = (value: unknown, allowed: readonly string[], pointer: string): string =>
   typeof value === 'string' && allowed.includes(value) ? value : fail(pointer, `must be one of ${allowed.join(', ')}`)
 const strings = (value: unknown, pointer: string, nonEmpty = false): void => arr(value, pointer).forEach((item, i) => str(item, `${pointer}/${i}`, nonEmpty))
+/** Fails at the first repeat of an earlier entry; the diagrams address these entries by name. */
+const rejectRepeats = (items: readonly unknown[], pointer: string, label: string): void => {
+  const seen = new Set<unknown>()
+  items.forEach((item, i) => {
+    if (seen.has(item)) fail(`${pointer}/${i}`, `duplicate ${label}: ${String(item)}`)
+    seen.add(item)
+  })
+}
 const required = (record: Record<string, unknown>, key: string, pointer: string): unknown =>
   key in record ? record[key] : fail(`${pointer}/${key}`, `is required`)
 const optional = (record: Record<string, unknown>, key: string, check: (value: unknown, pointer: string) => void, pointer: string): void => {
@@ -230,6 +238,7 @@ function checkSequence(approach: Record<string, unknown>, pointer: string): void
     const record = obj(sequence, at)
     const participants = arr(required(record, 'participants', at), `${at}/participants`)
     strings(participants, `${at}/participants`, true)
+    rejectRepeats(participants, `${at}/participants`, 'participant')
     if (participants.length > 5) fail(`${at}/participants`, 'at most 5 participants')
     const messages = arr(required(record, 'messages', at), `${at}/messages`)
     if (messages.length > 12) fail(`${at}/messages`, 'at most 12 messages')
@@ -258,10 +267,13 @@ function checkSchema(approach: Record<string, unknown>, pointer: string): void {
       const name = str(required(table, 'name', tableAt), `${tableAt}/name`, true)
       if (columnsByTable.has(name)) fail(`${tableAt}/name`, `duplicate table name: ${name}`)
       oneOf(required(table, 'status', tableAt), ['new', 'changed', 'existing'], `${tableAt}/status`)
+      const columnNames = new Set<string>()
       const columns = arr(required(table, 'columns', tableAt), `${tableAt}/columns`).map((column, j) => {
         const columnAt = `${tableAt}/columns/${j}`
         const record = obj(column, columnAt)
         const columnName = str(required(record, 'name', columnAt), `${columnAt}/name`, true)
+        if (columnNames.has(columnName)) fail(`${columnAt}/name`, `duplicate column name: ${columnName}`)
+        columnNames.add(columnName)
         str(required(record, 'type', columnAt), `${columnAt}/type`)
         if (record.chip !== undefined && record.chip !== null) oneOf(record.chip, ['PK', 'FK', 'UQ'], `${columnAt}/chip`)
         optional(record, 'highlight', bool, columnAt)
@@ -416,6 +428,7 @@ function validateComparison(value: unknown, spec?: LogicSpec): Comparison {
   if (root.flowStages !== undefined) {
     strings(root.flowStages, '/flowStages', true)
     flowStages = root.flowStages as string[]
+    rejectRepeats(flowStages, '/flowStages', 'flow stage')
     if (flowStages.length < 3 || flowStages.length > 8) fail('/flowStages', 'must hold 3 to 8 stages')
   }
 

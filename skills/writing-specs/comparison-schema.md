@@ -151,9 +151,9 @@ The reviewer exports challenges and stars from the page. The file has its own `k
 - A slice `size` outside the size labels; a duplicate slice id.
 - A repo name repeated within one approach's `repos` (repo names are unique per approach).
 - `exampleTrace` length different from `example.stages`.
-- `flowStages` outside 3 to 8 entries; a `flow` stage not in `flowStages`; two boxes in the same lane and stage.
-- A sequence with more than 5 participants or 12 messages, or a message naming an unknown participant.
-- A schema with more than 5 tables or 6 refs (`fk` and `json` count together), or a ref naming an unknown table or column.
+- `flowStages` outside 3 to 8 entries or naming a stage twice; a `flow` stage not in `flowStages`; two boxes in the same lane and stage.
+- A sequence with more than 5 participants or 12 messages, a participant named twice, or a message naming an unknown participant.
+- A schema with more than 5 tables or 6 refs (`fk` and `json` count together), a column name repeated within one table, or a ref naming an unknown table or column.
 - A guidance `tab` outside the TabKey values; a recommendation or suggested challenge naming an unknown approach or requirement.
 
 **Warnings**

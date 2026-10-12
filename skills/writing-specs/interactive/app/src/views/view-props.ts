@@ -9,4 +9,6 @@ export type ViewProps = {
   update: Update
   changedIds: Set<string>
   onOpenRequirement: (id: string | null) => void
+  /** True while stage 3 is open: the spec is signed, so views show it without any control that would edit review state. */
+  readOnly: boolean
 }
