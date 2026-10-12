@@ -2163,7 +2163,7 @@ def _validate_flow(v: Validator, approach: dict, path: str, flow_stages: Optiona
     flow = v.array(approach["flow"], pointer(path, "flow"))
     if flow is None:
         return
-    allowed = set(flow_stages) if isinstance(flow_stages, list) else set()
+    allowed = {stage for stage in flow_stages if isinstance(stage, str)} if isinstance(flow_stages, list) else set()
     cells: Dict[Tuple[str, str], str] = {}
     for index, box_raw in enumerate(flow):
         base = pointer(pointer(path, "flow"), index)
@@ -2416,7 +2416,8 @@ def _validate_scores(v: Validator, root: dict, logic: dict, approach_ids: List[s
             for key in ("wording", "note", "requirementHash", "requirementText"):
                 _string_field(v, score, key, path)
             _required_string_array(v, score, "citations", path)
-            _optional_string(v, score, "check", path)
+            if "check" in score:
+                v.string(score["check"], pointer(path, "check"), nonempty=True)
             if "history" in score:
                 _validate_history(v, score["history"], pointer(path, "history"))
             current = hashes.get(requirement_id)

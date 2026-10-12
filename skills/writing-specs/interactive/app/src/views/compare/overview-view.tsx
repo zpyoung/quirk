@@ -8,7 +8,7 @@ import { Table, proportional, type TableColumn } from '@astryxdesign/core/Table'
 import { Text } from '@astryxdesign/core/Text'
 import { Token } from '@astryxdesign/core/Token'
 import { Tooltip } from '@astryxdesign/core/Tooltip'
-import { anchorMismatch, coverageCounts, defaultRows, pairAgrees, pointsFor, revisedRows, staleScore, visibleRequirements } from '../../compare-state'
+import { anchorMismatch, coverageCounts, defaultRows, isChecked, pairAgrees, pointsFor, revisedRows, staleScore, visibleRequirements } from '../../compare-state'
 import type { Approach, CompareViewProps, Score } from '../../compare-types'
 import type { Requirement } from '../../spec-types'
 import { CONDITION_LABEL } from '../../review-state'
@@ -71,7 +71,7 @@ function ApproachCard({ approach, props, mismatchedRepos }: { approach: Approach
         ? `Misses ${missed.length} of ${starred.length}: ${missed.join(', ')}`
         : `Meets all ${starred.length}`
 
-  const checked = visible.filter((requirement) => comparison.scores[requirement.id]?.[approach.id]?.check).length
+  const checked = visible.filter((requirement) => isChecked(comparison.scores[requirement.id]?.[approach.id])).length
   const evidence = `${checked} of ${visible.length} scores checked · ${approach.restsOn?.length ?? 0} assumptions unverified`
   const lastRevision = state.lastExport?.approachRevisions[approach.id]
   const revisedSinceExport = lastRevision !== undefined && lastRevision !== approach.revision
@@ -156,7 +156,7 @@ function ScoreCell({ requirement, approachId, props, revised }: { requirement: R
           <StatusChip status={score.status} qualifier={score.qualifier} size="sm" />
           {findings.some((finding) => finding.type === 'disputes') ? <Glyph glyph="⚑" label="A finding disputes this score" /> : null}
           {findings.some((finding) => finding.type === 'same score, different design') ? <Glyph glyph="≠" label="Same score, different design" /> : null}
-          {score.check ? <Glyph glyph="·" label="Checked by the coordinator" /> : null}
+          {isChecked(score) ? <Glyph glyph="·" label="Checked by the coordinator" /> : null}
         </HStack>
         {score.qualifier ? <Text type="supporting">{score.qualifier}</Text> : null}
         {stale ? <Token size="sm" color="yellow" label="Scored against older text" /> : null}

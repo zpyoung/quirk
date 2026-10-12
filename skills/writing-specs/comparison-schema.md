@@ -66,7 +66,7 @@ Table   { "name": str, "status": "new" | "changed" | "existing",
 Score   { "status": "met" | "met with workaround" | "very hard" | "not met", "qualifier": str?,
           "wording": str, "note": str, "citations": [str],
           "requirementHash": str, "requirementText": str,   // hash and signed text of the requirement when scored
-          "check": str?,                                    // what you verified; absent means claimed
+          "check": str?,                                    // what you verified; absent means claimed; when present, nonempty
           "history": [ { "previous": { "status": ScoreStatus, "qualifier": str? },
                          "challenge": str, "reply": str,
                          "outcome": "revised" | "held" } ]? }

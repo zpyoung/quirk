@@ -365,3 +365,80 @@ def test_v1_render_ignores_comparison(tmp_path: Path) -> None:
     result = run_cli("render", str(spec_dir))
     assert result.returncode == 0, result.stderr
     assert "comparison" not in result.stderr
+
+
+APP_DIR = SCRIPT.parent / "app"
+TSX = APP_DIR / "node_modules" / ".bin" / "tsx"
+MUTATION_VALUES = (("{}", {}), ("[]", []), ("7", 7), ('""', ""), ("null", None))
+
+
+def _walk_paths(value: Any, path: tuple = ()):
+    yield path
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield from _walk_paths(item, path + (key,))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from _walk_paths(item, path + (index,))
+
+
+def _replace_at(root: Any, path: tuple, replacement: Any) -> Any:
+    if not path:
+        return replacement
+    mutant = json.loads(json.dumps(root))
+    parent = mutant
+    for part in path[:-1]:
+        parent = parent[part]
+    parent[path[-1]] = replacement
+    return mutant
+
+
+def _pointer_of(path: tuple) -> str:
+    return "".join("/" + str(part).replace("~", "~0").replace("/", "~1") for part in path)
+
+
+@pytest.fixture(scope="module")
+def comparison_mutants(tmp_path_factory: pytest.TempPathFactory) -> Dict[str, Any]:
+    """Every single-value replacement of the fixture comparison, each written to disk beside a manifest of Python's verdicts."""
+    directory = tmp_path_factory.mktemp("comparison-mutants")
+    logic = load_fixture_logic()
+    base = load_fixture_comparison()
+    entries = []
+    for path in _walk_paths(base):
+        for label, replacement in MUTATION_VALUES:
+            mutant = _replace_at(base, path, replacement)
+            if mutant == base:
+                continue
+            name = f"m{len(entries):05d}.json"
+            (directory / name).write_text(json.dumps(mutant), encoding="utf-8")
+            entry: Dict[str, Any] = {"file": name, "path": _pointer_of(path) or "/", "replacement": label}
+            try:
+                errors, _warnings = render_spec.validate_comparison(mutant, logic)
+            except Exception as error:  # noqa: BLE001 - the sweep exists to catch any crash
+                entry["crash"] = f"{type(error).__name__}: {error}"
+            else:
+                entry["accepted"] = not errors
+                entry["pointer"] = errors[0][0] if errors else None
+            entries.append(entry)
+    manifest = directory / "manifest.json"
+    manifest.write_text(json.dumps({"mutants": entries}), encoding="utf-8")
+    return {"directory": directory, "manifest": manifest, "entries": entries}
+
+
+def test_validate_comparison_never_raises_on_replaced_values(comparison_mutants: Dict[str, Any]) -> None:
+    entries = comparison_mutants["entries"]
+    assert len(entries) > 1000
+    crashes = [f"{entry['path']} -> {entry['replacement']}: {entry['crash']}" for entry in entries if "crash" in entry]
+    assert crashes == [], crashes[:10]
+
+
+@pytest.mark.skipif(not TSX.exists(), reason="app dependencies are not installed (pnpm install in the interactive app)")
+def test_ts_guard_matches_python_verdict_on_replaced_values(comparison_mutants: Dict[str, Any]) -> None:
+    result = subprocess.run(
+        [str(TSX), "scripts/check-compare.ts", "--mutants", str(comparison_mutants["manifest"])],
+        cwd=APP_DIR,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

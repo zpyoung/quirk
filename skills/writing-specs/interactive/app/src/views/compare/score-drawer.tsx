@@ -9,7 +9,7 @@ import { Selector } from '@astryxdesign/core/Selector'
 import { Text } from '@astryxdesign/core/Text'
 import { TextArea } from '@astryxdesign/core/TextArea'
 import { Token } from '@astryxdesign/core/Token'
-import { POINT_MAP, staleScore, targetHash } from '../../compare-state'
+import { POINT_MAP, isChecked, staleScore, targetHash } from '../../compare-state'
 import type { CompareState, Comparison, CompareViewProps, Draft, Finding, Score, ScoreHistory, ScoreStatus, SizeLabel } from '../../compare-types'
 import { CONDITION_LABEL } from '../../review-state'
 import { STATUS_META, STATUS_ORDER, StatusChip } from './status-chip'
@@ -224,7 +224,7 @@ function ApproachSection({ approachId, requirementId, props }: { approachId: str
           ) : null}
         </VStack>
       </Collapsible>
-      <Text type="supporting">{score.check ? `Checked: ${score.check}` : 'Claimed by the proponent; not checked.'}</Text>
+      <Text type="supporting">{isChecked(score) ? `Checked: ${score.check}` : 'Claimed by the proponent; not checked.'}</Text>
       {findings.map((finding, index) => (
         <Card key={index} padding={2}>
           <VStack gap={1}>

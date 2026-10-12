@@ -140,14 +140,21 @@ const fail = (pointer: string, message: string): never => {
   throw new Invalid(pointer, message)
 }
 
-const str = (value: unknown, pointer: string): string => (typeof value === 'string' ? value : fail(pointer, 'must be a string'))
+/** Characters Python `str.strip` removes, so both validators agree on what blank means. */
+const PYTHON_BLANK = /^[\t\n\v\f\r \x1c-\x1f\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$/
+export const isBlank = (value: string): boolean => PYTHON_BLANK.test(value)
+
+const str = (value: unknown, pointer: string, nonEmpty = false): string => {
+  if (typeof value !== 'string') return fail(pointer, 'must be a string')
+  return nonEmpty && isBlank(value) ? fail(pointer, 'must not be empty') : value
+}
 const int = (value: unknown, pointer: string): number => (typeof value === 'number' && Number.isInteger(value) ? value : fail(pointer, 'must be an integer'))
 const bool = (value: unknown, pointer: string): boolean => (typeof value === 'boolean' ? value : fail(pointer, 'must be a boolean'))
 const obj = (value: unknown, pointer: string): Record<string, unknown> => (isRecord(value) ? value : fail(pointer, 'must be an object'))
 const arr = (value: unknown, pointer: string): unknown[] => (Array.isArray(value) ? value : fail(pointer, 'must be an array'))
 const oneOf = (value: unknown, allowed: readonly string[], pointer: string): string =>
   typeof value === 'string' && allowed.includes(value) ? value : fail(pointer, `must be one of ${allowed.join(', ')}`)
-const strings = (value: unknown, pointer: string): void => arr(value, pointer).forEach((item, i) => str(item, `${pointer}/${i}`))
+const strings = (value: unknown, pointer: string, nonEmpty = false): void => arr(value, pointer).forEach((item, i) => str(item, `${pointer}/${i}`, nonEmpty))
 const required = (record: Record<string, unknown>, key: string, pointer: string): unknown =>
   key in record ? record[key] : fail(`${pointer}/${key}`, `is required`)
 const optional = (record: Record<string, unknown>, key: string, check: (value: unknown, pointer: string) => void, pointer: string): void => {
@@ -156,13 +163,13 @@ const optional = (record: Record<string, unknown>, key: string, check: (value: u
 
 function checkSlice(value: unknown, pointer: string): void {
   const slice = obj(value, pointer)
-  str(required(slice, 'id', pointer), `${pointer}/id`)
-  str(required(slice, 'name', pointer), `${pointer}/name`)
+  str(required(slice, 'id', pointer), `${pointer}/id`, true)
+  str(required(slice, 'name', pointer), `${pointer}/name`, true)
   const size = required(slice, 'size', pointer)
   if (!isSizeLabel(size)) fail(pointer, `size must be one of ${Object.keys(POINT_MAP).join(', ')}`)
   oneOf(required(slice, 'band', pointer), BANDS, `${pointer}/band`)
-  str(required(slice, 'area', pointer), `${pointer}/area`)
-  str(required(slice, 'risk', pointer), `${pointer}/risk`)
+  str(required(slice, 'area', pointer), `${pointer}/area`, true)
+  str(required(slice, 'risk', pointer), `${pointer}/risk`, true)
   optional(slice, 'riskHeadline', str, pointer)
   optional(slice, 'lines', (lines, linesPointer) => {
     for (const [repo, range] of Object.entries(obj(lines, linesPointer))) {
@@ -181,7 +188,7 @@ function checkScore(value: unknown, pointer: string): void {
   optional(score, 'qualifier', str, pointer)
   for (const key of ['wording', 'note', 'requirementHash', 'requirementText']) str(required(score, key, pointer), `${pointer}/${key}`)
   strings(required(score, 'citations', pointer), `${pointer}/citations`)
-  optional(score, 'check', str, pointer)
+  optional(score, 'check', (value, at) => void str(value, at, true), pointer)
   optional(score, 'history', (history, historyPointer) => {
     arr(history, historyPointer).forEach((entry, i) => {
       const at = `${historyPointer}/${i}`
@@ -202,8 +209,8 @@ function checkFlow(approach: Record<string, unknown>, flowStages: string[], poin
     arr(flow, flowPointer).forEach((entry, i) => {
       const at = `${flowPointer}/${i}`
       const box = obj(entry, at)
-      const stage = str(required(box, 'stage', at), `${at}/stage`)
-      const lane = str(required(box, 'lane', at), `${at}/lane`)
+      const stage = str(required(box, 'stage', at), `${at}/stage`, true)
+      const lane = str(required(box, 'lane', at), `${at}/lane`, true)
       str(required(box, 'text', at), `${at}/text`)
       oneOf(required(box, 'kind', at), ['new', 'changed', 'reused'], `${at}/kind`)
       optional(box, 'focal', bool, at)
@@ -219,7 +226,7 @@ function checkSequence(approach: Record<string, unknown>, pointer: string): void
   optional(approach, 'sequence', (sequence, at) => {
     const record = obj(sequence, at)
     const participants = arr(required(record, 'participants', at), `${at}/participants`)
-    strings(participants, `${at}/participants`)
+    strings(participants, `${at}/participants`, true)
     if (participants.length > 5) fail(`${at}/participants`, 'at most 5 participants')
     const messages = arr(required(record, 'messages', at), `${at}/messages`)
     if (messages.length > 12) fail(`${at}/messages`, 'at most 12 messages')
@@ -227,7 +234,7 @@ function checkSequence(approach: Record<string, unknown>, pointer: string): void
       const messageAt = `${at}/messages/${i}`
       const message = obj(entry, messageAt)
       for (const end of ['from', 'to']) {
-        const name = str(required(message, end, messageAt), `${messageAt}/${end}`)
+        const name = str(required(message, end, messageAt), `${messageAt}/${end}`, true)
         if (!participants.includes(name)) fail(messageAt, `${end} "${name}" is not a participant`)
       }
       str(required(message, 'label', messageAt), `${messageAt}/label`)
@@ -245,12 +252,12 @@ function checkSchema(approach: Record<string, unknown>, pointer: string): void {
     tables.forEach((entry, i) => {
       const tableAt = `${at}/tables/${i}`
       const table = obj(entry, tableAt)
-      const name = str(required(table, 'name', tableAt), `${tableAt}/name`)
+      const name = str(required(table, 'name', tableAt), `${tableAt}/name`, true)
       oneOf(required(table, 'status', tableAt), ['new', 'changed', 'existing'], `${tableAt}/status`)
       const columns = arr(required(table, 'columns', tableAt), `${tableAt}/columns`).map((column, j) => {
         const columnAt = `${tableAt}/columns/${j}`
         const record = obj(column, columnAt)
-        const columnName = str(required(record, 'name', columnAt), `${columnAt}/name`)
+        const columnName = str(required(record, 'name', columnAt), `${columnAt}/name`, true)
         str(required(record, 'type', columnAt), `${columnAt}/type`)
         if (record.chip !== undefined && record.chip !== null) oneOf(record.chip, ['PK', 'FK', 'UQ'], `${columnAt}/chip`)
         optional(record, 'highlight', bool, columnAt)
@@ -292,12 +299,12 @@ function checkApproach(value: unknown, pointer: string, flowStages: string[], st
   const approach = obj(value, pointer)
   const id = str(required(approach, 'id', pointer), `${pointer}/id`)
   if (!/^[A-Z]$/.test(id)) fail(`${pointer}/id`, 'must be a single capital letter')
-  for (const key of ['title', 'overview', 'revision', 'schemaChange']) str(required(approach, key, pointer), `${pointer}/${key}`)
+  for (const key of ['title', 'overview', 'revision', 'schemaChange']) str(required(approach, key, pointer), `${pointer}/${key}`, true)
   arr(required(approach, 'anchors', pointer), `${pointer}/anchors`).forEach((entry, i) => {
     const at = `${pointer}/anchors/${i}`
     const anchor = obj(entry, at)
-    str(required(anchor, 'repo', at), `${at}/repo`)
-    str(required(anchor, 'commit', at), `${at}/commit`)
+    str(required(anchor, 'repo', at), `${at}/repo`, true)
+    str(required(anchor, 'commit', at), `${at}/commit`, true)
   })
   const readAt = str(required(approach, 'readAt', pointer), `${pointer}/readAt`)
   if (!isCalendarDate(readAt)) fail(`${pointer}/readAt`, 'must be a real date in YYYY-MM-DD form')
@@ -306,7 +313,7 @@ function checkApproach(value: unknown, pointer: string, flowStages: string[], st
   arr(required(approach, 'repos', pointer), `${pointer}/repos`).forEach((entry, i) => {
     const at = `${pointer}/repos/${i}`
     const repo = obj(entry, at)
-    const repoName = str(required(repo, 'name', at), `${at}/name`)
+    const repoName = str(required(repo, 'name', at), `${at}/name`, true)
     if (repoNames.has(repoName)) fail(`${at}/name`, `duplicate repo name "${repoName}"`)
     repoNames.add(repoName)
     int(required(repo, 'files', at), `${at}/files`)
@@ -357,7 +364,7 @@ function checkGuidance(value: unknown, approachIds: string[], requirementIds: Se
   strings(required(guidance, 'questions', '/guidance'), '/guidance/questions')
   const recommendationAt = '/guidance/recommendation'
   const recommendation = obj(required(guidance, 'recommendation', '/guidance'), recommendationAt)
-  const pick = str(required(recommendation, 'approachId', recommendationAt), `${recommendationAt}/approachId`)
+  const pick = str(required(recommendation, 'approachId', recommendationAt), `${recommendationAt}/approachId`, true)
   if (!approachIds.includes(pick)) fail(recommendationAt, `approachId "${pick}" is not an approach`)
   for (const key of ['headline', 'confidenceReason']) str(required(recommendation, key, recommendationAt), `${recommendationAt}/${key}`)
   oneOf(required(recommendation, 'confidence', recommendationAt), ['low', 'medium', 'high'], `${recommendationAt}/confidence`)
@@ -365,9 +372,9 @@ function checkGuidance(value: unknown, approachIds: string[], requirementIds: Se
   arr(required(guidance, 'suggestedChallenges', '/guidance'), '/guidance/suggestedChallenges').forEach((entry, i) => {
     const at = `/guidance/suggestedChallenges/${i}`
     const challenge = obj(entry, at)
-    const requirementId = str(required(challenge, 'requirementId', at), `${at}/requirementId`)
+    const requirementId = str(required(challenge, 'requirementId', at), `${at}/requirementId`, true)
     if (!requirementIds.has(requirementId)) fail(at, `unknown requirement "${requirementId}"`)
-    const approachId = str(required(challenge, 'approachId', at), `${at}/approachId`)
+    const approachId = str(required(challenge, 'approachId', at), `${at}/approachId`, true)
     if (!approachIds.includes(approachId)) fail(at, `unknown approach "${approachId}"`)
     str(required(challenge, 'note', at), `${at}/note`)
     if (!isScoreStatus(required(challenge, 'want', at))) fail(`${at}/want`, `must be one of ${SCORE_STATUSES.join(', ')}`)
@@ -388,7 +395,7 @@ function validateComparison(value: unknown, spec?: LogicSpec): Comparison {
   if (root.kind !== COMPARISON_KIND) fail('/kind', `must be "${COMPARISON_KIND}"`)
   if (root.schemaVersion !== 1) fail('/schemaVersion', 'must be 1')
   const builtAgainst = obj(required(root, 'builtAgainst', ''), '/builtAgainst')
-  str(required(builtAgainst, 'signoffRenderId', '/builtAgainst'), '/builtAgainst/signoffRenderId')
+  str(required(builtAgainst, 'signoffRenderId', '/builtAgainst'), '/builtAgainst/signoffRenderId', true)
 
   const approachList = arr(required(root, 'approaches', ''), '/approaches')
   if (approachList.length < 2 || approachList.length > 5) fail('/approaches', 'must hold 2 to 5 approaches')
@@ -402,7 +409,7 @@ function validateComparison(value: unknown, spec?: LogicSpec): Comparison {
   const stageCount = example === undefined ? 0 : (obj(example, '/example').stages as unknown[]).length
   let flowStages: string[] = []
   if (root.flowStages !== undefined) {
-    strings(root.flowStages, '/flowStages')
+    strings(root.flowStages, '/flowStages', true)
     flowStages = root.flowStages as string[]
     if (flowStages.length < 3 || flowStages.length > 8) fail('/flowStages', 'must hold 3 to 8 stages')
   }
@@ -448,7 +455,7 @@ function validateComparison(value: unknown, spec?: LogicSpec): Comparison {
     arr(findings, at).forEach((entry, i) => {
       const findingAt = `${at}/${i}`
       const finding = obj(entry, findingAt)
-      const requirementId = str(required(finding, 'requirementId', findingAt), `${findingAt}/requirementId`)
+      const requirementId = str(required(finding, 'requirementId', findingAt), `${findingAt}/requirementId`, true)
       if (!requirementIds.has(requirementId)) fail(findingAt, `unknown requirement "${requirementId}"`)
       const named = required(finding, 'approaches', findingAt)
       if (named !== 'all') {
@@ -458,15 +465,14 @@ function validateComparison(value: unknown, spec?: LogicSpec): Comparison {
       }
       oneOf(required(finding, 'type', findingAt), ['disputes', 'same score, different design'], `${findingAt}/type`)
       str(required(finding, 'text', findingAt), `${findingAt}/text`)
-      const citation = str(required(finding, 'citation', findingAt), `${findingAt}/citation`)
-      if (citation === '') fail(`${findingAt}/citation`, 'must not be empty')
+      str(required(finding, 'citation', findingAt), `${findingAt}/citation`, true)
     })
   }, '')
   optional(root, 'pairings', (pairings, at) => {
     arr(pairings, at).forEach((entry, i) => {
       const pairingAt = `${at}/${i}`
       const pairing = obj(entry, pairingAt)
-      str(required(pairing, 'name', pairingAt), `${pairingAt}/name`)
+      str(required(pairing, 'name', pairingAt), `${pairingAt}/name`, true)
       for (const [key, text] of Object.entries(obj(required(pairing, 'items', pairingAt), `${pairingAt}/items`))) {
         if (!approachIds.includes(key)) fail(`${pairingAt}/items/${key}`, `unknown approach "${key}"`)
         str(text, `${pairingAt}/items/${key}`)
@@ -478,7 +484,7 @@ function validateComparison(value: unknown, spec?: LogicSpec): Comparison {
     arr(choices, at).forEach((entry, i) => {
       const choiceAt = `${at}/${i}`
       const choice = obj(entry, choiceAt)
-      str(required(choice, 'question', choiceAt), `${choiceAt}/question`)
+      str(required(choice, 'question', choiceAt), `${choiceAt}/question`, true)
       for (const [key, text] of Object.entries(obj(required(choice, 'answers', choiceAt), `${choiceAt}/answers`))) {
         if (!approachIds.includes(key)) fail(`${choiceAt}/answers/${key}`, `unknown approach "${key}"`)
         str(text, `${choiceAt}/answers/${key}`)
@@ -622,7 +628,7 @@ export function defaultRows(comparison: Comparison, spec: LogicSpec, state: Comp
     .filter((requirement) => {
       const statuses = focus.map((id) => comparison.scores[requirement.id]?.[id]?.status)
       const qualifiers = focus.map((id) => comparison.scores[requirement.id]?.[id]?.qualifier ?? null)
-      const differs = new Set(statuses).size > 1 || (focus.length === 2 && new Set(qualifiers).size > 1)
+      const differs = new Set(statuses).size > 1 || new Set(qualifiers).size > 1
       const nobodyMeets = !statuses.includes('met')
       const hasFinding = findings.some((finding) => finding.requirementId === requirement.id && (finding.approaches === 'all' || finding.approaches.some((id) => focus.includes(id))))
       return differs || nobodyMeets || hasFinding
@@ -656,6 +662,9 @@ export function coverageCounts(comparison: Comparison, spec: LogicSpec, state: C
   return result
 }
 
+/** True when the coordinator recorded a non-blank `check` on the score; an absent or blank one is only the proponent's claim. */
+export const isChecked = (score: Pick<Score, 'check'> | undefined): boolean => typeof score?.check === 'string' && !isBlank(score.check)
+
 /** How many of the scores on the focused approaches' visible requirements carry a `check`, out of all of them. */
 export function checkedScoreCounts(comparison: Comparison, spec: LogicSpec, state: CompareState): { checked: number; total: number } {
   const focus = focusApproaches(comparison, state)
@@ -666,7 +675,7 @@ export function checkedScoreCounts(comparison: Comparison, spec: LogicSpec, stat
       const score = comparison.scores[requirement.id]?.[id]
       if (!score) continue
       total += 1
-      if (score.check !== undefined) checked += 1
+      if (isChecked(score)) checked += 1
     }
   }
   return { checked, total }

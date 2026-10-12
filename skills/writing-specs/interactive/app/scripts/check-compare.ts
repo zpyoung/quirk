@@ -14,6 +14,7 @@ import {
   defaultRows,
   focusApproaches,
   guidanceNotes,
+  isChecked,
   isCompareExport,
   isComparison,
   loadCompareState,
@@ -48,6 +49,35 @@ if (!accepted.ok) {
   process.exit(1)
 }
 const comparison: Comparison = accepted.value
+
+// mode used by tests/test_compare_stage.py: every mutant must get the accept/reject verdict Python recorded for it
+const mutantsFlag = process.argv.indexOf('--mutants')
+if (mutantsFlag !== -1) {
+  const manifestPath = process.argv[mutantsFlag + 1]
+  if (!manifestPath) {
+    console.error('compare-check --mutants needs a manifest path')
+    process.exit(1)
+  }
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { mutants: Array<{ file: string; path: string; replacement: string; accepted?: boolean; pointer?: string | null }> }
+  const directory = manifestPath.slice(0, manifestPath.lastIndexOf('/') + 1)
+  const mismatches: string[] = []
+  for (const mutant of manifest.mutants) {
+    const label = `${mutant.path} -> ${mutant.replacement}`
+    try {
+      const result = isComparison(JSON.parse(readFileSync(`${directory}${mutant.file}`, 'utf8')), spec)
+      if (result.ok === mutant.accepted) continue
+      mismatches.push(`${label}: python ${mutant.accepted ? 'accepts' : `rejects at ${mutant.pointer}`}, ts ${result.ok ? 'accepts' : `rejects at ${result.pointer} (${result.message})`}`)
+    } catch (error) {
+      mismatches.push(`${label}: ts threw ${String(error)}`)
+    }
+  }
+  if (mismatches.length) {
+    console.error(`compare-check mutants: ${mismatches.length} of ${manifest.mutants.length} differ from Python:\n${mismatches.slice(0, 40).map((m) => `- ${m}`).join('\n')}`)
+    process.exit(1)
+  }
+  console.log(`compare-check mutants: ${manifest.mutants.length} mutants get the same verdict as Python.`)
+  process.exit(0)
+}
 check('isComparison without a spec accepts the fixture', isComparison(comparisonFixture).ok)
 
 // invalid fixtures: each must be rejected at a pointer under its expected prefix
@@ -155,6 +185,28 @@ equal('pairAgrees: same status, qualifier and no finding agrees', pairAgrees(com
 equal('pairAgrees: differing status does not agree', pairAgrees(comparison, 'REQ-02', pairAB), false)
 equal('pair matrix rows under focus A+B', defaultRows(comparison, spec, fresh({ focus: 'AB' })).filter((id) => !pairAgrees(comparison, id, pairAB)), ['REQ-01', 'REQ-02', 'REQ-03'])
 equal('defaultRows pair A,C without conditional', defaultRows(comparison, spec, fresh({ focus: 'AC', includeConditional: false })), ['REQ-01', 'REQ-02'])
+
+const baseScoreForChecks = comparison.scores['REQ-01']!.A!
+const qualifierOnly = structuredClone(comparison)
+qualifierOnly.scores['REQ-04']!.A!.qualifier = 'v1 scope'
+equal('defaultRows all: a qualifier that differs on one of three approaches makes the row a difference', defaultRows(qualifierOnly, spec, fresh()), ['REQ-01', 'REQ-02', 'REQ-03', 'REQ-04'])
+qualifierOnly.scores['REQ-04']!.C!.qualifier = 'other scope'
+equal('defaultRows all: three differing qualifiers with one status', defaultRows(qualifierOnly, spec, fresh()), ['REQ-01', 'REQ-02', 'REQ-03', 'REQ-04'])
+const sameQualifier = structuredClone(comparison)
+for (const id of ['A', 'B', 'C']) sameQualifier.scores['REQ-04']![id]!.qualifier = 'v1 scope'
+equal('defaultRows all: the same qualifier on every approach still agrees', defaultRows(sameQualifier, spec, fresh()), ['REQ-01', 'REQ-02', 'REQ-03'])
+equal('defaultRows pair A,B: a qualifier on A against none on B is a difference', defaultRows(qualifierOnly, spec, fresh({ focus: 'AB' })).includes('REQ-04'), true)
+const qualifierOnC = structuredClone(comparison)
+qualifierOnC.scores['REQ-04']!.C!.qualifier = 'v1 scope'
+equal('defaultRows pair A,B ignores a qualifier only on C', defaultRows(qualifierOnC, spec, fresh({ focus: 'AB' })).includes('REQ-04'), false)
+
+equal('isChecked: absent check', isChecked(baseScoreForChecks), false)
+equal('isChecked: empty check', isChecked({ check: '' }), false)
+equal('isChecked: whitespace-only check', isChecked({ check: ' \t\n' }), false)
+equal('isChecked: real check', isChecked({ check: 'Ran the writer against a fixture.' }), true)
+const blankCheck = structuredClone(comparison)
+blankCheck.scores['REQ-01']!.A!.check = '  '
+equal('checkedScoreCounts treats a blank check as unchecked', checkedScoreCounts(blankCheck, spec, fresh()), { checked: 1, total: 12 })
 
 const itemHashes: Record<string, string> = { 'REQ-01': 'h1' }
 const baseScore = comparison.scores['REQ-01']!.A!

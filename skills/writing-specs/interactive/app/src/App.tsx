@@ -170,7 +170,7 @@ function App() {
       { id: 'risks', label: 'Risks' },
       { id: 'spec', label: 'Spec text' },
     )
-    if (!comparison) result.push({ id: 'sign-off', label: 'Sign-off' })
+    result.push({ id: 'sign-off', label: 'Sign-off' })
     return result
   }, [payload, comparison])
 
@@ -369,8 +369,8 @@ function App() {
                     {view === 'states' ? <StateMachineView {...viewProps} /> : null}
                     {view.startsWith('custom:') ? <CustomView {...viewProps} viewId={view.slice('custom:'.length)} /> : null}
                     {view === 'spec' ? <SpecView {...viewProps} /> : null}
-                    {view === 'sign-off' && !comparison ? (
-                      <SignOffView {...viewProps} gates={gates} createExport={createExport} onExport={onExport} importStatus={importStatus} onImport={importFile} />
+                    {view === 'sign-off' ? (
+                      <SignOffView {...viewProps} gates={gates} createExport={createExport} onExport={onExport} importStatus={importStatus} onImport={importFile} readOnly={Boolean(comparison)} />
                     ) : null}
                   </VStack>
                   <Text type="supporting" color="secondary">

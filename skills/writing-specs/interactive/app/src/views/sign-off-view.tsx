@@ -21,6 +21,8 @@ export type SignOffProps = ViewProps & {
   onExport: (data: Export) => void
   importStatus: string | null
   onImport: (file: File) => void
+  /** Shows the signed record without sign, verdict, export or import controls; used while stage 3 is open. */
+  readOnly?: boolean
 }
 
 const STAGE_HEADING: Record<1 | 2, string> = {
@@ -28,8 +30,10 @@ const STAGE_HEADING: Record<1 | 2, string> = {
   2: 'Sign off stage 2 — what to build',
 }
 
-/** The approval gate: every review gate must pass and the verdict must be approve before signing; any later edit clears the signature. */
-export function SignOffView({ payload, spec, state, update, gates, createExport, onExport, importStatus, onImport }: SignOffProps) {
+const VERDICT_LABEL = { approve: 'Approve', 'send-back': 'Send back' } as const
+
+/** The approval gate: every review gate must pass and the verdict must be approve before signing; any later edit clears the signature. With `readOnly`, only the signed record shows. */
+export function SignOffView({ payload, spec, state, update, gates, createExport, onExport, importStatus, onImport, readOnly = false }: SignOffProps) {
   const [copyStatus, setCopyStatus] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const allPassed = gates.every((gate) => gate.done >= gate.total)
@@ -60,6 +64,9 @@ export function SignOffView({ payload, spec, state, update, gates, createExport,
     }
   }
 
+  const signedAt = spec.signoff?.signedAt ?? state.signedAt
+  const signedRender = spec.signoff?.renderId ?? payload.renderId
+  const verdict = state.verdict ?? (spec.signoff ? 'approve' : null)
   const disabledReason = !allPassed ? 'Signing is disabled until every gate is complete.' : state.verdict !== 'approve' ? 'Choose approve to enable signing.' : null
 
   return (
@@ -67,7 +74,9 @@ export function SignOffView({ payload, spec, state, update, gates, createExport,
       <VStack gap={2}>
         <Heading level={2}>{STAGE_HEADING[spec.stage]}</Heading>
         <Text type="supporting" as="p">
-          Signing is the approval gate. Every gate below must pass, and the verdict must be approve. Any later edit clears the signature.
+          {readOnly
+            ? 'This spec is signed. The record below is read-only while stage 3 is open.'
+            : 'Signing is the approval gate. Every gate below must pass, and the verdict must be approve. Any later edit clears the signature.'}
         </Text>
       </VStack>
       <Card padding={0}>
@@ -86,38 +95,54 @@ export function SignOffView({ payload, spec, state, update, gates, createExport,
           ))}
         </List>
       </Card>
-      <Card>
-        <VStack gap={3}>
-          <RadioList label="Verdict" value={state.verdict ?? ''} onChange={(value) => update((current) => ({ ...current, verdict: value as ReviewState['verdict'] }))}>
-            <RadioListItem value="approve" label="Approve" description="The spec is ready to build as reviewed." />
-            <RadioListItem value="send-back" label="Send back" description="Something needs another brainstorm pass. Say what in the note." />
-          </RadioList>
-          <TextArea
-            label="Note to Claude"
-            value={state.verdictNote}
-            onChange={(verdictNote) => update((current) => ({ ...current, verdictNote }))}
-            isRequired={state.verdict === 'send-back'}
-            rows={3}
-          />
-          <HStack gap={2} wrap="wrap" align="center">
-            <Button
-              variant="primary"
-              label={state.signedAt ? 'Signed' : 'Record sign-off'}
-              isDisabled={!allPassed || state.verdict !== 'approve' || Boolean(state.signedAt)}
-              onClick={() => update((current) => ({ ...current, signedAt: new Date().toISOString() }))}
+      {readOnly ? (
+        <Card>
+          <VStack gap={2}>
+            <Banner
+              status="success"
+              title={signedAt ? `Signed ${new Date(signedAt).toLocaleString()}` : 'Signed'}
+              description={`Render ${signedRender}`}
+              collapsible={false}
             />
-            {disabledReason ? <Text type="supporting">{disabledReason}</Text> : null}
-          </HStack>
-          {state.signedAt ? (
-            <Banner status="success" title={`Signed ${new Date(state.signedAt).toLocaleString()}`} description={`Render ${payload.renderId}`} collapsible={false} />
-          ) : null}
-        </VStack>
-      </Card>
+            <Text type="label">{`Verdict: ${verdict ? VERDICT_LABEL[verdict] : 'not recorded'}`}</Text>
+            {state.verdictNote ? <Text>{state.verdictNote}</Text> : null}
+          </VStack>
+        </Card>
+      ) : (
+        <Card>
+          <VStack gap={3}>
+            <RadioList label="Verdict" value={state.verdict ?? ''} onChange={(value) => update((current) => ({ ...current, verdict: value as ReviewState['verdict'] }))}>
+              <RadioListItem value="approve" label="Approve" description="The spec is ready to build as reviewed." />
+              <RadioListItem value="send-back" label="Send back" description="Something needs another brainstorm pass. Say what in the note." />
+            </RadioList>
+            <TextArea
+              label="Note to Claude"
+              value={state.verdictNote}
+              onChange={(verdictNote) => update((current) => ({ ...current, verdictNote }))}
+              isRequired={state.verdict === 'send-back'}
+              rows={3}
+            />
+            <HStack gap={2} wrap="wrap" align="center">
+              <Button
+                variant="primary"
+                label={state.signedAt ? 'Signed' : 'Record sign-off'}
+                isDisabled={!allPassed || state.verdict !== 'approve' || Boolean(state.signedAt)}
+                onClick={() => update((current) => ({ ...current, signedAt: new Date().toISOString() }))}
+              />
+              {disabledReason ? <Text type="supporting">{disabledReason}</Text> : null}
+            </HStack>
+            {state.signedAt ? (
+              <Banner status="success" title={`Signed ${new Date(state.signedAt).toLocaleString()}`} description={`Render ${payload.renderId}`} collapsible={false} />
+            ) : null}
+          </VStack>
+        </Card>
+      )}
       <VStack gap={2}>
         <Heading level={3}>Decision record</Heading>
         <Collapsible trigger="Show the record as JSON" defaultIsOpen={false}>
           <CodeBlock language="json" code={recordJson} maxHeight={480} width="100%" hasCopyButton={false} />
         </Collapsible>
+        {readOnly ? null : (
         <HStack gap={2} wrap="wrap">
           <Button label="Download" onClick={download} />
           <Button label="Copy" onClick={() => void copy()} />
@@ -134,8 +159,9 @@ export function SignOffView({ payload, spec, state, update, gates, createExport,
             }}
           />
         </HStack>
-        {copyStatus ? <Text type="supporting">{copyStatus}</Text> : null}
-        {importStatus ? <Text type="supporting">{importStatus}</Text> : null}
+        )}
+        {readOnly ? null : copyStatus ? <Text type="supporting">{copyStatus}</Text> : null}
+        {readOnly ? null : importStatus ? <Text type="supporting">{importStatus}</Text> : null}
       </VStack>
     </VStack>
   )

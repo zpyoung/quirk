@@ -10,6 +10,7 @@ type Range = [number, number]
 type RepoRow = { name: string; files: number | null; lines: Range | null; mrs: Range | null }
 
 const fmt = ([low, high]: Range) => (low === high ? low.toLocaleString('en-US') : `${low.toLocaleString('en-US')}-${high.toLocaleString('en-US')}`)
+const plural = (n: number, one: string, many: string) => (n === 1 ? one : many)
 const add = (a: Range | null, b: Range): Range => (a ? [a[0] + b[0], a[1] + b[1]] : [b[0], b[1]])
 
 /** Lines and MRs per repo summed over slices; a repo no slice gives lines for stays null so the page can say "not provided". */
@@ -41,6 +42,18 @@ function totals(rows: RepoRow[]): { lines: Range | null; mrs: Range | null } {
   return { lines, mrs }
 }
 
+/** How many of an approach's slices carry line estimates; totals are partial sums when some do not. */
+function estimateCoverage(approach: Approach): { estimated: number; all: number; partial: boolean } {
+  const all = approach.slices.length
+  const estimated = approach.slices.filter((slice) => slice.lines !== undefined).length
+  return { estimated, all, partial: estimated < all }
+}
+
+/** A lines or MR range; a partial sum is a floor, so it reads as one and says how many slices it rests on. */
+function rangeText(range: Range, unit: string, coverage: { estimated: number; all: number; partial: boolean }): string {
+  return coverage.partial ? `≥ ${fmt(range)} ${unit} · ${coverage.estimated} of ${coverage.all} slices estimated` : fmt(range)
+}
+
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
     <VStack gap={0}>
@@ -53,12 +66,12 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 const DEPLOY_LABEL = { stated: 'Deploy order stated', implied: 'Deploy order implied', 'not-stated': 'Deploy order not stated' } as const
 const DEPLOY_COLOR = { stated: 'green', implied: 'yellow', 'not-stated': 'orange' } as const
 
-function RepoBar({ row, maxLines }: { row: RepoRow; maxLines: number }) {
+function RepoBar({ row, maxLines, partial }: { row: RepoRow; maxLines: number; partial: boolean }) {
   if (!row.lines) return <Text type="supporting">not provided</Text>
   const low = (row.lines[0] / maxLines) * 100
   const high = (row.lines[1] / maxLines) * 100
   return (
-    <div role="img" aria-label={`${fmt(row.lines)} lines`} style={{ position: 'relative', height: 10, width: '100%', background: 'var(--color-background-muted)', borderRadius: 3 }}>
+    <div role="img" aria-label={`${partial ? 'at least ' : ''}${fmt(row.lines)} lines`} style={{ position: 'relative', height: 10, width: '100%', background: 'var(--color-background-muted)', borderRadius: 3 }}>
       <div style={{ position: 'absolute', inset: 0, width: `${high}%`, border: '1px dashed var(--color-border-blue)', borderRadius: 3, boxSizing: 'border-box' }} />
       <div style={{ position: 'absolute', inset: 0, width: `${low}%`, background: 'var(--color-background-blue)', border: '1px solid var(--color-border-blue)', borderRadius: 3, boxSizing: 'border-box' }} />
     </div>
@@ -68,14 +81,15 @@ function RepoBar({ row, maxLines }: { row: RepoRow; maxLines: number }) {
 function BlastCard({ approach, maxLines }: { approach: Approach; maxLines: number }) {
   const rows = repoRows(approach)
   const { lines, mrs } = totals(rows)
+  const coverage = estimateCoverage(approach)
   const { deploy } = approach
   return (
     <Card padding={2}>
       <VStack gap={3}>
         <Heading level={3}>{`Approach ${approach.id} · ${approach.title}`}</Heading>
         <HStack gap={4} wrap="wrap">
-          <Fact label="MRs in total">{mrs ? <Text type="label">{fmt(mrs)}</Text> : <Text type="supporting">not provided</Text>}</Fact>
-          <Fact label="Lines in total">{lines ? <Text type="label">{fmt(lines)}</Text> : <Text type="supporting">not provided</Text>}</Fact>
+          <Fact label={coverage.partial ? 'MRs (partial)' : 'MRs in total'}>{mrs ? <Text type="label">{rangeText(mrs, plural(mrs[1], 'MR', 'MRs'), coverage)}</Text> : <Text type="supporting">not provided</Text>}</Fact>
+          <Fact label={coverage.partial ? 'Lines (partial)' : 'Lines in total'}>{lines ? <Text type="label">{rangeText(lines, 'lines', coverage)}</Text> : <Text type="supporting">not provided</Text>}</Fact>
           <Fact label="Repos"><Text type="label">{String(rows.length)}</Text></Fact>
         </HStack>
 
@@ -85,10 +99,10 @@ function BlastCard({ approach, maxLines }: { approach: Approach; maxLines: numbe
           {rows.map((row) => (
             <div key={row.name} style={{ display: 'grid', gridTemplateColumns: 'minmax(80px, 1fr) minmax(80px, 2fr) minmax(120px, 2fr)', gap: 12, alignItems: 'center' }}>
               <Text type="label">{row.name}</Text>
-              <RepoBar row={row} maxLines={maxLines} />
+              <RepoBar row={row} maxLines={maxLines} partial={coverage.partial} />
               <Text type="supporting">
                 {row.files === null ? 'files not provided' : `${row.files} ${row.files === 1 ? 'file' : 'files'}`}
-                {row.lines && row.mrs ? ` · ${fmt(row.lines)} lines · ${fmt(row.mrs)} ${row.mrs[1] === 1 && row.mrs[0] === 1 ? 'MR' : 'MRs'}` : ' · lines and MRs not provided'}
+                {row.lines && row.mrs ? ` · ${coverage.partial ? '≥ ' : ''}${fmt(row.lines)} lines · ${coverage.partial ? '≥ ' : ''}${fmt(row.mrs)} ${row.mrs[1] === 1 && row.mrs[0] === 1 ? 'MR' : 'MRs'}${coverage.partial ? ` · ${coverage.estimated} of ${coverage.all} slices estimated` : ''}` : ' · lines and MRs not provided'}
               </Text>
             </div>
           ))}
