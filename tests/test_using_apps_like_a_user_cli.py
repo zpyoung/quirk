@@ -216,6 +216,11 @@ class TestDoctor:
         assert result["surfaces"]["native"]["permissions"] == {
             "accessibility": True, "screen_recording": True}
 
+    def test_the_sandbox_pins_the_native_driver_binary_to_a_missing_path(self, sb):
+        pinned = Path(sb.env()["LIKEUSER_NATIVE_BIN"])
+        assert not pinned.exists()
+        assert str(sb.tmp) in str(pinned)
+
     def test_missing_orca_is_reported(self, sb):
         sb.native_scenario()
         result = sb.run("doctor", "--surface", "native", LIKEUSER_ORCA_BIN=str(sb.tmp / "no-orca"))

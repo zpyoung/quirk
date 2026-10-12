@@ -165,6 +165,7 @@ class Sandbox:
             "LIKEUSER_FAKE_DESKTOP": str(self.desktop_path),
             "LIKEUSER_PLAYWRIGHT_BIN": str(self.bin / "playwright-cli"),
             "LIKEUSER_ORCA_BIN": str(self.bin / "orca"),
+            "LIKEUSER_NATIVE_BIN": str(self.tmp / "no-native-driver"),
         })
         env.update(self.extra_env)
         env.update(overrides)
