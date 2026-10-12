@@ -369,7 +369,7 @@ def test_v1_render_ignores_comparison(tmp_path: Path) -> None:
 
 APP_DIR = SCRIPT.parent / "app"
 TSX = APP_DIR / "node_modules" / ".bin" / "tsx"
-MUTATION_VALUES = (("{}", {}), ("[]", []), ("7", 7), ('""', ""), ("null", None))
+MUTATION_VALUES = (("{}", {}), ("[]", []), ("7", 7), ("-1", -1), ("1.5", 1.5), ('""', ""), ("null", None))
 
 
 def _walk_paths(value: Any, path: tuple = ()):

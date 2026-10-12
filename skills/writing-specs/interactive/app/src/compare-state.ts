@@ -148,7 +148,8 @@ const str = (value: unknown, pointer: string, nonEmpty = false): string => {
   if (typeof value !== 'string') return fail(pointer, 'must be a string')
   return nonEmpty && isBlank(value) ? fail(pointer, 'must not be empty') : value
 }
-const int = (value: unknown, pointer: string): number => (typeof value === 'number' && Number.isInteger(value) ? value : fail(pointer, 'must be an integer'))
+const nonNegativeInt = (value: unknown, pointer: string): number =>
+  typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : fail(pointer, 'must be a non-negative integer')
 const bool = (value: unknown, pointer: string): boolean => (typeof value === 'boolean' ? value : fail(pointer, 'must be a boolean'))
 const obj = (value: unknown, pointer: string): Record<string, unknown> => (isRecord(value) ? value : fail(pointer, 'must be an object'))
 const arr = (value: unknown, pointer: string): unknown[] => (Array.isArray(value) ? value : fail(pointer, 'must be an array'))
@@ -166,7 +167,7 @@ function checkSlice(value: unknown, pointer: string): void {
   str(required(slice, 'id', pointer), `${pointer}/id`, true)
   str(required(slice, 'name', pointer), `${pointer}/name`, true)
   const size = required(slice, 'size', pointer)
-  if (!isSizeLabel(size)) fail(pointer, `size must be one of ${Object.keys(POINT_MAP).join(', ')}`)
+  if (!isSizeLabel(size)) fail(`${pointer}/size`, `size must be one of ${Object.keys(POINT_MAP).join(', ')}`)
   oneOf(required(slice, 'band', pointer), BANDS, `${pointer}/band`)
   str(required(slice, 'area', pointer), `${pointer}/area`, true)
   str(required(slice, 'risk', pointer), `${pointer}/risk`, true)
@@ -235,7 +236,7 @@ function checkSequence(approach: Record<string, unknown>, pointer: string): void
       const message = obj(entry, messageAt)
       for (const end of ['from', 'to']) {
         const name = str(required(message, end, messageAt), `${messageAt}/${end}`, true)
-        if (!participants.includes(name)) fail(messageAt, `${end} "${name}" is not a participant`)
+        if (!participants.includes(name)) fail(`${messageAt}/${end}`, `${end} "${name}" is not a participant`)
       }
       str(required(message, 'label', messageAt), `${messageAt}/label`)
       oneOf(required(message, 'kind', messageAt), ['call', 'return', 'async', 'focal'], `${messageAt}/kind`)
@@ -272,13 +273,13 @@ function checkSchema(approach: Record<string, unknown>, pointer: string): void {
       const refAt = `${at}/refs/${i}`
       const ref = obj(entry, refAt)
       for (const end of ['from', 'to']) {
-        const pair = arr(required(ref, end, refAt), `${refAt}/${end}`)
-        if (pair.length !== 2) fail(`${refAt}/${end}`, 'must be [table, column]')
-        const table = str(pair[0], `${refAt}/${end}/0`)
-        const column = str(pair[1], `${refAt}/${end}/1`)
-        const known = columnsByTable.get(table)
-        if (!known) fail(`${refAt}/${end}/0`, `unknown table "${table}"`)
-        else if (!known.includes(column)) fail(`${refAt}/${end}/1`, `unknown column "${column}" on table "${table}"`)
+        const endAt = `${refAt}/${end}`
+        const pair = arr(required(ref, end, refAt), endAt)
+        const [table, column] = pair
+        if (pair.length !== 2 || typeof table !== 'string' || typeof column !== 'string') fail(endAt, 'must be [table, column]')
+        const known = columnsByTable.get(table as string)
+        if (!known) fail(endAt, `unknown table "${table}"`)
+        else if (!known.includes(column as string)) fail(endAt, `unknown column "${column}" on table "${table}"`)
       }
       oneOf(required(ref, 'kind', refAt), ['fk', 'json'], `${refAt}/kind`)
     })
@@ -316,7 +317,7 @@ function checkApproach(value: unknown, pointer: string, flowStages: string[], st
     const repoName = str(required(repo, 'name', at), `${at}/name`, true)
     if (repoNames.has(repoName)) fail(`${at}/name`, `duplicate repo name "${repoName}"`)
     repoNames.add(repoName)
-    int(required(repo, 'files', at), `${at}/files`)
+    nonNegativeInt(required(repo, 'files', at), `${at}/files`)
   })
   strings(required(approach, 'hotPaths', pointer), `${pointer}/hotPaths`)
   const deploy = obj(required(approach, 'deploy', pointer), `${pointer}/deploy`)
@@ -359,7 +360,7 @@ function checkGuidance(value: unknown, approachIds: string[], requirementIds: Se
     str(required(step, 'title', at), `${at}/title`)
     str(required(step, 'body', at), `${at}/body`)
     const tab = required(step, 'tab', at)
-    if (typeof tab !== 'string' || !TAB_KEYS.includes(tab)) fail(at, `tab must be one of ${TAB_KEYS.join(', ')}`)
+    if (typeof tab !== 'string' || !TAB_KEYS.includes(tab)) fail(`${at}/tab`, `tab must be one of ${TAB_KEYS.join(', ')}`)
   })
   strings(required(guidance, 'questions', '/guidance'), '/guidance/questions')
   const recommendationAt = '/guidance/recommendation'

@@ -65,7 +65,7 @@ if (mutantsFlag !== -1) {
     const label = `${mutant.path} -> ${mutant.replacement}`
     try {
       const result = isComparison(JSON.parse(readFileSync(`${directory}${mutant.file}`, 'utf8')), spec)
-      if (result.ok === mutant.accepted) continue
+      if (result.ok === mutant.accepted && (result.ok || result.pointer === mutant.pointer)) continue
       mismatches.push(`${label}: python ${mutant.accepted ? 'accepts' : `rejects at ${mutant.pointer}`}, ts ${result.ok ? 'accepts' : `rejects at ${result.pointer} (${result.message})`}`)
     } catch (error) {
       mismatches.push(`${label}: ts threw ${String(error)}`)
