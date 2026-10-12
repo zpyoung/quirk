@@ -12,6 +12,7 @@ import os
 import shlex
 import stat
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,7 @@ from harness import (  # noqa: E402
 )
 
 import _run  # noqa: E402
+from _types import Observation  # noqa: E402
 
 SECRET_PASSWORD = "s3cret-Pa55w0rd"
 SECRET_USER = "alice-the-tester"
@@ -1001,6 +1003,32 @@ class TestElectron:
         argv = sb.orca_commands("click")[0]["argv"]
         assert argv[argv.index("--x") + 1] == "100" and argv[argv.index("--y") + 1] == "50"
         assert sb.pw_argvs("mousemove") == []
+
+    def test_the_native_driver_alone_decides_that_a_sheet_is_open(self, tmp_path):
+        likeuser = load_cli_module()
+        renderer = Observation(tree_text="- button Go", refs=["e1"], names={"e1": "Go"})
+
+        class Stub:
+            def __init__(self, tree, sheet_open):
+                self.obs = Observation(tree_text=tree, refs=["tok"], names={"tok": "Save"},
+                                       sheet_open=sheet_open)
+
+            def observe(self, bundle_id, window_id, screenshot):
+                return self.obs
+
+        class Web:
+            def observe(self, shot):
+                return renderer
+
+        def snap(native):
+            drivers = types.SimpleNamespace(web=Web(), native=native)
+            drivers.run = types.SimpleNamespace(data={
+                "surface": "electron", "window": {"bundle_id": "x", "window_id": 1}})
+            return likeuser._observe(drivers.run, drivers, None)
+
+        assert snap(Stub('- [3] AXSheet (save file)', True)).sheet is True
+        assert snap(Stub("0 sheet Save", False)).sheet is False
+
 
     def test_electron_runs_do_not_take_the_lock_at_begin(self, sb):
         electron_run(sb)

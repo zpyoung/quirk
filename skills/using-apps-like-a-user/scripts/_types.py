@@ -70,7 +70,8 @@ class Observation:
     """What a driver saw: the tree, its references, and the surface metadata around them.
 
     `names` maps each ref to its accessible name, which is the gate subject. `values` maps a ref
-    to its current value where the driver exposes one.
+    to its current value where the driver exposes one. `sheet_open` is the driver's own verdict
+    that a sheet or dialog is open in the window, so callers never parse a driver's tree format.
     """
 
     tree_text: str
@@ -87,6 +88,7 @@ class Observation:
     window_id: Optional[int] = None
     bundle_id: Optional[str] = None
     raw: str = ""
+    sheet_open: bool = False
 
 
 @dataclass
