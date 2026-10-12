@@ -336,12 +336,13 @@ CONTRACT:
 class NativeDriver:
     name: str; version: str; background_capable: bool
     def check(self) -> List[str]                    # missing tools or permissions; empty when ready
+    def bind(self, bundle_id: str, window_id: Optional[int] = None) -> None   # target for later act calls
     def observe(self, bundle_id: str, window_id: Optional[int], screenshot: bool) -> Observation
     def act(self, action: Action, foreground: bool) -> DriverResult
 ```
 
-- **Preconditions:** `check()` returned empty. `observe` and `act` target only the bound bundle id
-  and window id.
+- **Preconditions:** `check()` returned empty. `observe` binds to its bundle id and window id; `act`
+  targets only the bound pair and raises `DriverError("not_bound")` before any `bind` or `observe`.
 - **Postconditions:** `observe` returns tree text, element ids, window metadata, focus, and a
   screenshot path with its scale. `act` returns `delivered` (bool), `driver_verified`
   (bool or None), the driver's own post-action tree when it provides one, and raw output.
@@ -585,7 +586,7 @@ Back-links: [logic: Scope & non-goals](logic.md#scope--non-goals)
 
 SCHEMA: fixture state (every fixture; the web fixture serves it at `/hits`)
 ```
-hits: {working: int, dead: int, hidden: int, verify: int, delete: int, save: int}
+hits: {working: int, dead: int, hidden: int, verify: int, delete: int, save: int}   # save: "Save avatar" on web and Electron, "Save…" on native
 text: str                # current content of the fixture's text field
 saved_path: str|null     # path chosen in the native save sheet or dialog, after the file was written
 ```
