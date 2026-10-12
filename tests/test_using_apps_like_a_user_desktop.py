@@ -64,6 +64,14 @@ def test_activate_changes_frontmost(fake):
     assert _state(fake)["frontmost"] == "com.example.two"
 
 
+def test_bundle_id_for_pid_reads_the_fake_table(fake):
+    state = _state(fake)
+    state["pid_bundles"] = {"4242": "com.example.dev"}
+    fake.write_text(json.dumps(state))
+    assert _desktop.bundle_id_for_pid(4242) == "com.example.dev"
+    assert _desktop.bundle_id_for_pid(1) is None
+
+
 def test_clipboard_reads_fake(fake):
     assert _desktop.clipboard_change_count() == 7
     assert _desktop.clipboard_is_text_only() is True
@@ -219,3 +227,11 @@ def test_live_screenshot_bogus_window_fails(live, tmp_path):
         _desktop.screenshot_window(2147483000, out)
     assert exc.value.code == "screenshot_failed"
     assert not out.exists() or out.stat().st_size == 0
+
+
+@darwin_only
+def test_live_bundle_id_for_a_plain_process_is_none_or_a_string(live):
+    import os
+
+    found = _desktop.bundle_id_for_pid(os.getpid())
+    assert found is None or isinstance(found, str)

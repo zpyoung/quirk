@@ -269,6 +269,10 @@ class WebDriver:
         """Open a browser session on `url`; headless unless `headed`."""
         self._run(["open", url] + (["--headed"] if headed else []))
 
+    def goto(self, url: str) -> None:
+        """Navigate the open session's page to `url`."""
+        self._run(["goto", url])
+
     def attach_cdp(self, endpoint: str) -> None:
         """Attach the session to an already-running browser at a CDP endpoint."""
         self._run(["attach", "--cdp=%s" % endpoint])
@@ -420,7 +424,7 @@ class WebDriver:
     def failed_requests(self) -> List[dict]:
         """Every {url, status, method} with status >= 400 or no response, oldest first.
 
-        A request with no response (blocked, refused, or still pending) has status 0.
+        A request with no response (blocked, refused, or still pending) has status None.
         """
         failed = []
         for line in self._run(["requests", "--static"]).splitlines():
@@ -428,8 +432,8 @@ class WebDriver:
             if not match:
                 continue
             method, url, status_text = match.groups()
-            status = int(status_text) if status_text and status_text.isdigit() else 0
-            if status == 0 or status >= 400:
+            status = int(status_text) if status_text and status_text.isdigit() else None
+            if status is None or status >= 400:
                 failed.append({"url": url, "status": status, "method": method})
         return failed
 
