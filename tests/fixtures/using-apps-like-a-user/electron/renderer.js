@@ -18,7 +18,10 @@ document.getElementById("hidden").addEventListener("focus", () => {
 });
 
 document.getElementById("avatar").addEventListener("click", async () => {
-  await window.fixture.saveAvatar();
+  window.fixture.hit("save");
+  await fetch(`http://127.0.0.1:${window.fixture.apiPort}/api/avatar`, { method: "POST" }).catch(
+    () => undefined
+  );
   document.getElementById("toast").textContent = "Saved";
 });
 

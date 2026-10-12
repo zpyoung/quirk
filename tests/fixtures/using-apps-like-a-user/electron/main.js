@@ -26,29 +26,19 @@ function writeState() {
 writeState();
 process.stdout.write(`STATE ${statePath}\n`);
 
-// avatar endpoint always fails so the renderer's "Saved" toast is a lie
+// avatar endpoint always fails so the renderer's "Saved" toast is a lie; the renderer issues the
+// request itself so a renderer-side CDP session observes the 500
 const apiServer = http.createServer((req, res) => {
-  res.writeHead(500, { "Content-Type": "text/plain" });
+  res.writeHead(500, {
+    "Content-Type": "text/plain",
+    "Access-Control-Allow-Origin": "*",
+  });
   res.end("avatar store unavailable");
 });
 
 function startApiServer() {
   return new Promise((resolve) => {
     apiServer.listen(0, "127.0.0.1", () => resolve(apiServer.address().port));
-  });
-}
-
-function postAvatar(port) {
-  return new Promise((resolve) => {
-    const req = http.request(
-      { host: "127.0.0.1", port, path: "/api/avatar", method: "POST" },
-      (res) => {
-        res.resume();
-        res.on("end", () => resolve(res.statusCode));
-      }
-    );
-    req.on("error", () => resolve(0));
-    req.end();
   });
 }
 
@@ -65,10 +55,8 @@ function registerIpc(win, apiPort) {
     writeState();
   });
 
-  ipcMain.handle("save-avatar", async () => {
-    state.hits.save += 1;
-    writeState();
-    return postAvatar(apiPort);
+  ipcMain.on("api-port", (event) => {
+    event.returnValue = apiPort;
   });
 
   ipcMain.handle("save-file", async () => {

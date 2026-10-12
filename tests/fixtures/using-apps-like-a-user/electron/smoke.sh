@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Boots the Electron fixture, attaches playwright-cli over CDP, checks every planted control is
-# visible to the accessibility snapshot and that a click reaches the main process.
+# visible to the accessibility snapshot, that a click reaches the main process, and that the failing
+# avatar request is visible to the renderer-side CDP network log.
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -116,6 +117,29 @@ for _ in $(seq 1 20); do
   sleep 0.3
 done
 [ "$WORKING" = "1" ] || fail "hits.working is '${WORKING:-unreadable}' in $STATE, expected 1"
+
+AVATAR_REF="$(printf '%s\n' "$SNAP" | grep 'Save avatar' | head -n1 | sed -n 's/.*\[ref=\([^]]*\)\].*/\1/p')"
+[ -n "$AVATAR_REF" ] || { printf '%s\n' "$SNAP" >&2; fail "no ref for 'Save avatar'"; }
+playwright-cli -s="$SESSION" click "$AVATAR_REF" >"$TMP/avatar.out" 2>&1 \
+  || { cat "$TMP/avatar.out" >&2; fail "playwright-cli click on Save avatar"; }
+grep -q '### Error' "$TMP/avatar.out" && { cat "$TMP/avatar.out" >&2; fail "Save avatar click reported an error"; }
+
+SAVE=""
+for _ in $(seq 1 20); do
+  SAVE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["hits"]["save"])' "$STATE" 2>/dev/null || true)"
+  [ "$SAVE" = "1" ] && break
+  sleep 0.3
+done
+[ "$SAVE" = "1" ] || fail "hits.save is '${SAVE:-unreadable}' in $STATE, expected 1"
+
+AVATAR_REQ=""
+for _ in $(seq 1 20); do
+  playwright-cli -s="$SESSION" requests --static >"$TMP/requests.out" 2>&1
+  AVATAR_REQ="$(grep '/api/avatar' "$TMP/requests.out" | grep -E '\b500\b' | head -n1 || true)"
+  [ -n "$AVATAR_REQ" ] && break
+  sleep 0.3
+done
+[ -n "$AVATAR_REQ" ] || { cat "$TMP/requests.out" >&2; fail "no /api/avatar 500 in 'requests --static'"; }
 
 playwright-cli -s="$SESSION" detach >/dev/null 2>&1 || true
 
