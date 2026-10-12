@@ -1,12 +1,16 @@
 """Tests for skills/using-apps-like-a-user/scripts/_desktop.py.
 
 CI-safe tests run every primitive against the JSON fake desktop. Darwin tests are read-only:
-they never write the real clipboard and never warp the real cursor.
+they never write the real clipboard and never warp the real cursor. They still run only with
+LIKEUSER_FIXTURE_TESTS=1, so a plain pytest run never touches the desktop.
 """
 from __future__ import annotations
 
 import json
+import os
+import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -178,6 +182,10 @@ def test_fake_takes_precedence_off_darwin(name, args, fake, monkeypatch):
 
 
 darwin_only = pytest.mark.skipif(sys.platform != "darwin", reason="needs macOS")
+needs_opt_in = pytest.mark.skipif(
+    os.environ.get("LIKEUSER_FIXTURE_TESTS") != "1",
+    reason="set LIKEUSER_FIXTURE_TESTS=1 to run tests that take over the desktop",
+)
 
 
 @pytest.fixture
@@ -186,6 +194,7 @@ def live(monkeypatch):
 
 
 @darwin_only
+@needs_opt_in
 def test_live_cursor_is_two_floats(live):
     x, y = _desktop.cursor()
     assert isinstance(x, float) and isinstance(y, float)
@@ -193,17 +202,20 @@ def test_live_cursor_is_two_floats(live):
 
 @darwin_only
 @pytest.mark.skipif(shutil.which("lsappinfo") is None, reason="lsappinfo not installed")
+@needs_opt_in
 def test_live_frontmost_is_dotted_id(live):
     bundle = _desktop.frontmost_bundle_id()
     assert bundle and "." in bundle and " " not in bundle
 
 
 @darwin_only
+@needs_opt_in
 def test_live_display_scale(live):
     assert _desktop.display_scale() in (1.0, 2.0)
 
 
 @darwin_only
+@needs_opt_in
 def test_live_permissions_are_bools(live):
     perms = _desktop.permissions()
     assert set(perms) == {"accessibility", "screen_recording"}
@@ -211,16 +223,19 @@ def test_live_permissions_are_bools(live):
 
 
 @darwin_only
+@needs_opt_in
 def test_live_clipboard_change_count_is_int(live):
     assert isinstance(_desktop.clipboard_change_count(), int)
 
 
 @darwin_only
+@needs_opt_in
 def test_live_clipboard_is_text_only_is_bool(live):
     assert isinstance(_desktop.clipboard_is_text_only(), bool)
 
 
 @darwin_only
+@needs_opt_in
 def test_live_screenshot_bogus_window_fails(live, tmp_path):
     out = tmp_path / "bogus.png"
     with pytest.raises(DriverError) as exc:
@@ -230,8 +245,28 @@ def test_live_screenshot_bogus_window_fails(live, tmp_path):
 
 
 @darwin_only
+@needs_opt_in
 def test_live_bundle_id_for_a_plain_process_is_none_or_a_string(live):
     import os
 
     found = _desktop.bundle_id_for_pid(os.getpid())
     assert found is None or isinstance(found, str)
+
+
+def test_without_the_opt_in_every_desktop_test_is_skipped_for_that_reason():
+    """A plain pytest run must never launch an app, move focus, or send input."""
+    source = Path(__file__).read_text()
+    expected = len(re.findall(r"^def test_live_", source, flags=re.M))
+    env = {k: v for k, v in os.environ.items() if k != "LIKEUSER_FIXTURE_TESTS"}
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-rs", "-k", "test_live_",
+         str(Path(__file__))],
+        capture_output=True, text=True, env=env, timeout=120,
+    )
+    report = proc.stdout + proc.stderr
+    assert proc.returncode == 0, report
+    assert expected > 0
+    assert re.search(rf"\b{expected} skipped\b", report), report
+    assert not re.search(r"\b(passed|failed|error)", report), report
+    reasons = re.findall(r"^SKIPPED \[\d+\] \S+: (.*)$", report, flags=re.M)
+    assert reasons and all("LIKEUSER_FIXTURE_TESTS=1" in reason for reason in reasons), report

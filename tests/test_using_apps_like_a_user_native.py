@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -405,10 +406,15 @@ def test_type_sends_text_on_stdin_never_argv(fake_orca):
     assert call["stdin"] == secret
 
 
-def test_type_into_a_ref_clicks_it_first(fake_orca):
+def test_type_into_a_ref_focuses_it_without_leaving_a_selection(fake_orca):
     _bound().act(Action(kind="type", ref="7", text="hello"), foreground=True)
-    commands = [call["argv"][1] for call in fake_orca.calls()]
-    assert commands == ["click", "type-text"]
+    calls = fake_orca.calls()
+    assert [call["argv"][1] for call in calls] == ["click", "press-key", "type-text"]
+    focus, collapse, typing = (call["argv"] for call in calls)
+    assert focus[focus.index("--element-index") + 1] == "7"
+    assert focus[focus.index("--click-count") + 1] == "2"
+    assert collapse[collapse.index("--key") + 1] == "Right"
+    assert "--text-stdin" in typing and calls[-1]["stdin"] == "hello"
 
 
 def test_fill_focuses_selects_all_and_types_so_the_app_hears_it(fake_orca):
@@ -570,6 +576,10 @@ def test_binary_falls_back_to_path_when_the_override_is_unset(tmp_path, monkeypa
 needs_mac = pytest.mark.skipif(sys.platform != "darwin", reason="native fixture runs on macOS only")
 needs_orca = pytest.mark.skipif(shutil.which("orca") is None, reason="orca not installed")
 needs_swiftc = pytest.mark.skipif(shutil.which("swiftc") is None, reason="swiftc not installed")
+needs_opt_in = pytest.mark.skipif(
+    os.environ.get("LIKEUSER_FIXTURE_TESTS") != "1",
+    reason="set LIKEUSER_FIXTURE_TESTS=1 to run tests that take over the desktop",
+)
 
 
 @pytest.fixture(scope="module")
@@ -655,6 +665,7 @@ def _wait_for_window(driver: OrcaDriver, timeout: float = 15.0) -> int:
 @needs_mac
 @needs_orca
 @needs_swiftc
+@needs_opt_in
 def test_live_observe_lists_the_planted_controls(running_fixture):
     driver = OrcaDriver()
     assert driver.check() == []
@@ -676,6 +687,7 @@ def test_live_observe_lists_the_planted_controls(running_fixture):
 @needs_mac
 @needs_orca
 @needs_swiftc
+@needs_opt_in
 def test_live_foreground_click_lands_on_the_working_button(running_fixture):
     driver = OrcaDriver()
     window = _wait_for_window(driver)
@@ -694,6 +706,7 @@ def test_live_foreground_click_lands_on_the_working_button(running_fixture):
 @needs_mac
 @needs_orca
 @needs_swiftc
+@needs_opt_in
 def test_live_background_click_is_refused_and_leaves_the_fixture_untouched(running_fixture):
     driver = OrcaDriver()
     window = _wait_for_window(driver)
@@ -703,6 +716,23 @@ def test_live_background_click_is_refused_and_leaves_the_fixture_untouched(runni
         driver.act(Action(kind="click", ref=working), foreground=False)
     assert raised.value.code == "needs_foreground"
     assert running_fixture.state()["hits"]["working"] == 0
+
+
+@needs_mac
+@needs_orca
+@needs_swiftc
+@needs_opt_in
+def test_live_type_into_a_ref_reaches_the_notes_field(running_fixture):
+    driver = OrcaDriver()
+    window = _wait_for_window(driver)
+    obs = driver.observe(FIXTURE_BUNDLE, window, screenshot=False)
+    notes = next(ref for ref, name in obs.names.items() if name == "Notes")
+    driver.act(Action(kind="type", ref=notes, text="typed-via-ref"), foreground=True)
+    state = running_fixture.wait_for(lambda s: "typed-via-ref" in s["text"])
+    assert state["text"] == "typed-via-ref"
+    driver.act(Action(kind="type", ref=notes, text="-more"), foreground=True)
+    state = running_fixture.wait_for(lambda s: "-more" in s["text"])
+    assert state["text"] == "typed-via-ref-more"
 
 
 FAKE_CUA = r'''
@@ -756,7 +786,7 @@ case = {
     "get_accessibility_tree": "get-accessibility-tree-sheets",
 }.get(tool, "click-coordinate" if "x" in payload else "click-element")
 if tool == "press_key" and payload.get("modifiers"):
-    case = "press-key-modified"
+    case = "press-key-modified-foreground" if payload.get("delivery_mode") == "foreground" else "press-key-modified"
 reply = golden(case)
 out = reply["stdout"]
 if tool == "get_window_state":
@@ -910,7 +940,7 @@ def test_cua_golden_set_follows_the_schema():
     assert {
         "observe-screenshot", "click-element", "click-coordinate", "type-text", "press-key", "hotkey",
         "click-missing-element", "permissions-status", "list-windows", "list-windows-sheets",
-        "get-accessibility-tree-sheets", "press-key-modified",
+        "get-accessibility-tree-sheets", "press-key-modified", "press-key-modified-foreground",
     } <= names
     for path in GOLDEN_CUA.glob("*.json"):
         data = json.loads(path.read_text())
@@ -1271,9 +1301,26 @@ def test_cua_press_and_hotkey_map_keys_and_modifiers(fake_cua):
     assert fake_cua.tool_calls()[-1][1]["key"] == "left" and fake_cua.tool_calls()[-1][1]["modifiers"] == ["cmd"]
     driver.act(Action(kind="hotkey", key="CmdOrCtrl+V"), foreground=False)
     tool, payload = fake_cua.tool_calls()[-1]
-    assert tool == "hotkey" and payload["keys"] == ["cmd", "v"]
+    assert tool == "press_key" and payload["key"] == "v" and payload["modifiers"] == ["cmd"]
+    assert "keys" not in payload
     driver.act(Action(kind="hotkey", key="cmd+shift+4"), foreground=False)
-    assert fake_cua.tool_calls()[-1][1]["keys"] == ["cmd", "shift", "4"]
+    assert fake_cua.tool_calls()[-1][1]["key"] == "4"
+    assert fake_cua.tool_calls()[-1][1]["modifiers"] == ["cmd", "shift"]
+
+
+def test_cua_hotkey_is_delivered_as_press_key_with_modifiers(fake_cua):
+    driver = _bound_cua()
+    driver.act(Action(kind="hotkey", ref="s0000000f:6", key="cmd+shift+g"), foreground=True)
+    tool, payload = fake_cua.tool_calls()[-1]
+    assert tool == "press_key" and payload["delivery_mode"] == "foreground"
+    assert payload["key"] == "g" and payload["modifiers"] == ["cmd", "shift"]
+    assert all(call_tool != "hotkey" for call_tool, _ in fake_cua.tool_calls())
+
+
+def test_cua_foreground_hotkey_reports_delivered_and_unverifiable_from_the_real_reply(fake_cua):
+    result = _bound_cua().act(Action(kind="hotkey", ref="s0000000f:6", key="cmd+shift+a"), foreground=True)
+    assert result.delivered is True and result.driver_verified is None
+    assert json.loads(result.raw)["delivery"]["mode"] == "foreground"
 
 
 def test_cua_hotkey_reports_unverifiable(fake_cua):
@@ -1528,7 +1575,7 @@ def _stacked_windows() -> list:
 SHEET_GO, SHEET_SAVE = 84886, 84879
 UNBOUND_KEY_ACTIONS = [
     pytest.param(Action(kind="press", key="Return"), "press_key", id="press"),
-    pytest.param(Action(kind="hotkey", key="cmd+shift+g"), "hotkey", id="hotkey"),
+    pytest.param(Action(kind="hotkey", key="cmd+shift+g"), "press_key", id="hotkey"),
     pytest.param(Action(kind="type", text="folder"), "type_text", id="type"),
 ]
 
@@ -1791,6 +1838,7 @@ def sentinel_in_front(original_front, running_fixture, sentinel_app, live_cua):
 @needs_mac
 @needs_cua
 @needs_swiftc
+@needs_opt_in
 def test_live_cua_observe_lists_the_planted_controls(original_front, running_fixture, live_cua):
     window = _wait_for_cua_window(live_cua)
     obs = live_cua.observe(FIXTURE_BUNDLE, window, screenshot=True)
@@ -1811,6 +1859,7 @@ def test_live_cua_observe_lists_the_planted_controls(original_front, running_fix
 @needs_mac
 @needs_cua
 @needs_swiftc
+@needs_opt_in
 def test_live_cua_background_click_lands_without_changing_the_frontmost_app(sentinel_in_front, running_fixture, live_cua):
     window = _wait_for_cua_window(live_cua)
     obs = live_cua.observe(FIXTURE_BUNDLE, window, screenshot=False)
@@ -1827,6 +1876,7 @@ def test_live_cua_background_click_lands_without_changing_the_frontmost_app(sent
 @needs_mac
 @needs_cua
 @needs_swiftc
+@needs_opt_in
 def test_live_cua_background_type_text_lands_in_the_notes_field(sentinel_in_front, running_fixture, live_cua):
     window = _wait_for_cua_window(live_cua)
     obs = live_cua.observe(FIXTURE_BUNDLE, window, screenshot=False)
@@ -1841,6 +1891,7 @@ def test_live_cua_background_type_text_lands_in_the_notes_field(sentinel_in_fron
 @needs_mac
 @needs_cua
 @needs_swiftc
+@needs_opt_in
 def test_live_cua_coordinate_click_in_the_background_is_refused(sentinel_in_front, running_fixture, live_cua):
     window = _wait_for_cua_window(live_cua)
     live_cua.observe(FIXTURE_BUNDLE, window, screenshot=True)
@@ -1849,3 +1900,75 @@ def test_live_cua_coordinate_click_in_the_background_is_refused(sentinel_in_fron
     assert raised.value.code == "needs_foreground"
     assert running_fixture.state()["hits"]["working"] == 0
     assert _desktop.frontmost_bundle_id() == sentinel_in_front
+
+
+def test_without_the_opt_in_every_desktop_test_is_skipped_for_that_reason():
+    """A plain pytest run must never launch an app, move focus, or send input."""
+    source = Path(__file__).read_text()
+    expected = len(re.findall(r"^def test_live_", source, flags=re.M))
+    env = {k: v for k, v in os.environ.items() if k != "LIKEUSER_FIXTURE_TESTS"}
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-rs", "-k", "test_live_",
+         str(Path(__file__))],
+        capture_output=True, text=True, env=env, timeout=120,
+    )
+    report = proc.stdout + proc.stderr
+    assert proc.returncode == 0, report
+    assert expected > 0
+    assert re.search(rf"\b{expected} skipped\b", report), report
+    assert not re.search(r"\b(passed|failed|error)", report), report
+    reasons = re.findall(r"^SKIPPED \[\d+\] \S+: (.*)$", report, flags=re.M)
+    assert reasons and all("LIKEUSER_FIXTURE_TESTS=1" in reason for reason in reasons), report
+
+
+def _close_sheets(driver: CuaDriver) -> None:
+    for _ in range(3):
+        try:
+            driver.act(Action(kind="press", key="Escape"), foreground=True)
+        except DriverError:
+            return
+        time.sleep(0.5)
+
+
+@needs_mac
+@needs_cua
+@needs_swiftc
+@needs_opt_in
+def test_live_cua_hotkey_chord_opens_go_to_folder_in_a_save_sheet(original_front, running_fixture, live_cua):
+    window = _wait_for_cua_window(live_cua)
+    obs = live_cua.observe(FIXTURE_BUNDLE, window, screenshot=False)
+    save = next(ref for ref, name in obs.names.items() if name.startswith("Save"))
+    live_cua.act(Action(kind="click", ref=save), foreground=True)
+    try:
+        sheet = _poll_observation(live_cua, window, lambda o: o.sheet_open)
+        assert sheet.sheet_open is True
+        live_cua.act(Action(kind="hotkey", key="cmd+shift+g"), foreground=True)
+        after = _poll_observation(live_cua, window, lambda o: "GoToWindow" in o.tree_text)
+        assert "GoToWindow" in after.tree_text
+    finally:
+        _close_sheets(live_cua)
+
+
+@needs_mac
+@needs_cua
+@needs_swiftc
+@needs_opt_in
+def test_live_cua_hotkey_selects_all_in_the_notes_field(original_front, running_fixture, live_cua):
+    window = _wait_for_cua_window(live_cua)
+    obs = live_cua.observe(FIXTURE_BUNDLE, window, screenshot=False)
+    notes = next(ref for ref, name in obs.names.items() if name == "Notes")
+    live_cua.act(Action(kind="fill", ref=notes, text="before"), foreground=True)
+    live_cua.act(Action(kind="press", ref=notes, key="End"), foreground=True)
+    live_cua.act(Action(kind="hotkey", key="cmd+a"), foreground=True)
+    live_cua.act(Action(kind="type", ref=notes, text="after"), foreground=False)
+    state = running_fixture.wait_for(lambda s: s["text"] == "after")
+    assert state["text"] == "after"
+
+
+def _poll_observation(driver, window: int, done, timeout: float = 8.0):
+    deadline = time.monotonic() + timeout
+    obs = driver.observe(FIXTURE_BUNDLE, window, screenshot=False)
+    while not done(obs) and time.monotonic() < deadline:
+        time.sleep(0.4)
+        obs = driver.observe(FIXTURE_BUNDLE, window, screenshot=False)
+    return obs

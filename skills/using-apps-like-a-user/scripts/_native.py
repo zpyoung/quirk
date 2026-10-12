@@ -333,7 +333,8 @@ class OrcaDriver(NativeDriver):
         if kind == "type":
             steps: List[Tuple[List[str], Optional[str]]] = []
             if action.ref is not None:
-                steps.append((["click", "--element-index", str(action.ref)], None))
+                steps.append((["click", "--element-index", str(action.ref), "--click-count", "2"], None))
+                steps.append((["press-key", "--key", "Right"], None))
             steps.append((["type-text", "--text-stdin"], _required(action.text, "text")))
             return steps
         if kind == "fill":
@@ -914,7 +915,11 @@ class CuaDriver(NativeDriver):
         return {}, (), ()
 
     def _plan(self, action: Action) -> _Plan:
-        """Translate one CLI action into the Cua tool call that delivers it."""
+        """Translate one CLI action into the Cua tool call that delivers it.
+
+        `hotkey` is delivered as `press_key` with modifiers: Cua's own `hotkey` tool posts chords
+        that a save sheet's remote view service ignores, while `press_key` reaches it.
+        """
         kind = action.kind
         if kind in ("click", "dismiss", "double-click", "right-click"):
             tool = {"double-click": "double_click", "right-click": "right_click"}.get(kind, "click")
@@ -950,8 +955,6 @@ class CuaDriver(NativeDriver):
             if not parts:
                 raise DriverError("invalid_action", "missing key")
             target, tokens, points = self._target(action, required=False)
-            if kind == "hotkey":
-                return _Plan("hotkey", dict(target, keys=parts), tokens, points, keyboard=True)
             modifiers = [p for p in parts[:-1] if p in _CUA_MODIFIERS]
             payload = dict(target, key=_CUA_KEY_ALIASES.get(parts[-1], parts[-1]))
             if modifiers:
