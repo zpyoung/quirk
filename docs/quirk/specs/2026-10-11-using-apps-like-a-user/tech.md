@@ -443,7 +443,7 @@ def gate_matches(subject: str, owner: str) -> bool        # owner "yours" | "thi
 def dismiss_allowed(name: str) -> bool
 ```
 
-CONTRACT: `_web.py` (every call runs with cwd set to the run folder and `-s=<session>`)
+CONTRACT: `_web.py` (every call runs with cwd set to the run folder; every session-scoped call adds `-s=<session>`)
 ```
 class WebDriver:
     name = "playwright-cli"
@@ -655,7 +655,9 @@ Back-links: [logic: Decisions Locked](logic.md#decisions-locked) · [logic: Indu
   records it with `note --finding-kind injection`. The Electron debug port binds to `127.0.0.1` and
   exists only for apps the run launched. Saved sessions, `clipboard.txt`, and stored storage state are
   mode 0600 inside the self-ignoring folder; `clipboard.txt` is deleted at `end`. Test overrides are
-  surfaced in every report.
+  surfaced in every report. `playwright-cli` 0.1.22 takes `fill` and `type` text only as an argument,
+  so a typed password is briefly visible to same-user process inspection; native drivers receive text
+  on stdin.
 - **Observability.** Every verb appends one line to `<run-dir>/events.jsonl` with the verb, redacted
   inputs, status, and timing.
 - **Rollback.** The skill is additive. Removing the skill directory, fixtures, tests, and the README
