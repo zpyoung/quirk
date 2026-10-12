@@ -302,6 +302,12 @@ def test_background_delivery_is_refused_before_orca_runs(fake_orca):
     assert fake_orca.calls() == []
 
 
+def test_an_unbound_driver_reports_not_bound_even_without_foreground(fake_orca):
+    with pytest.raises(DriverError) as raised:
+        OrcaDriver().act(Action(kind="click", ref="2"), foreground=False)
+    assert raised.value.code == "not_bound"
+
+
 def test_act_needs_a_bound_target(fake_orca):
     with pytest.raises(DriverError) as raised:
         OrcaDriver().act(Action(kind="click", ref="2"), foreground=True)
