@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "cua-driver",
+    "call",
+    "list_windows",
+    "{\"pid\":82986,\"session\":\"golden\"}"
+  ],
+  "returncode": 0,
+  "stdout": "{\n  \"current_space_id\": 3,\n  \"windows\": [\n    {\n      \"app_name\": \"UALA Fixture\",\n      \"bounds\": {\n        \"height\": 123.0,\n        \"width\": 126.0,\n        \"x\": 15.0,\n        \"y\": 697.0\n      },\n      \"current_space_id\": 3,\n      \"is_on_screen\": true,\n      \"layer\": 0,\n      \"on_current_space\": true,\n      \"pid\": 82986,\n      \"space_ids\": [\n        3\n      ],\n      \"title\": \"UALA Fixture\",\n      \"window_id\": 84869,\n      \"z_index\": 617\n    }\n  ]\n}\n",
+  "stderr": "",
+  "files": {}
+}

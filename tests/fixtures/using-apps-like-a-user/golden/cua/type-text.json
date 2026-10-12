@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "cua-driver",
+    "call",
+    "type_text",
+    "{\"pid\":82986,\"window_id\":84869,\"element_token\":\"s00000011:6\",\"text\":\"hello\",\"session\":\"golden\"}"
+  ],
+  "returncode": 0,
+  "stdout": "{\n  \"delivery\": {\n    \"delivered_count\": 5,\n    \"mode\": \"background\"\n  },\n  \"effect\": \"confirmed\",\n  \"evidence\": [\n    {\n      \"kind\": \"value_readback\"\n    }\n  ],\n  \"route\": \"synthetic_events\",\n  \"summary\": \"\u2705 Inserted 5 char(s) via CGEvent (30ms delay).\"\n}\n",
+  "stderr": "",
+  "files": {}
+}
