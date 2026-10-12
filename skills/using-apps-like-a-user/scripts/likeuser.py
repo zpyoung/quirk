@@ -679,6 +679,17 @@ def _read_goals_file(path: Optional[str]) -> List[Tuple[str, str]]:
     return goals
 
 
+def _native_is_background_capable() -> bool:
+    """Whether the native driver `begin` would bind can act without taking the foreground.
+
+    A missing driver reads as capable so `begin` reports the missing tool, not a flag error.
+    """
+    try:
+        return bool(get_native_driver().background_capable)
+    except MissingError:
+        return True
+
+
 def _validate_begin(args) -> List[Tuple[str, str]]:
     if args.surface == "electron" and not args.launch:
         raise UsageError("launch_required",
@@ -694,9 +705,11 @@ def _validate_begin(args) -> List[Tuple[str, str]]:
             raise UsageError("session_key_unsupported", "native apps have no storage state")
         if not SESSION_KEY_RE.match(args.session_key):
             raise UsageError("bad_session_key", args.session_key)
-    if args.surface == "native" and not args.allow_foreground:
+    if args.surface in ("native", "electron") and not args.allow_foreground \
+            and not _native_is_background_capable():
         raise UsageError("foreground_not_allowed",
-                         "native runs take the foreground for every action; pass --allow-foreground")
+                         "this run's native driver takes the foreground for every native action; "
+                         "pass --allow-foreground")
     for name in ("budget_run", "budget_goal"):
         value = getattr(args, name)
         if value is not None and value < 1:
@@ -942,6 +955,10 @@ class ActRequest(NamedTuple):
     def has_point(self) -> bool:
         return self.x is not None and self.y is not None
 
+    @property
+    def uses_coordinates(self) -> bool:
+        """True when the start or the drag destination is given as screenshot pixels."""
+        return self.has_point or (self.to_x is not None and self.to_y is not None)
 
 
 def _parse_act(args) -> ActRequest:
@@ -1006,9 +1023,9 @@ def _budget_spent(run: _run.Run, goal_id: Optional[str]) -> bool:
 
 def _route(run: _run.Run, sidecar: dict, req: ActRequest) -> str:
     surface = run.data["surface"]
-    if req.has_point and sidecar.get("screenshot_source") is None:
+    if req.uses_coordinates and sidecar.get("screenshot_source") is None:
         raise UsageError("coordinates_need_screenshot",
-                         "--x/--y are screenshot pixels; observe with a screenshot first")
+                         "--x/--y and --to-x/--to-y are screenshot pixels; observe with a screenshot first")
     routes = set()
     for ref in (req.ref, req.to_ref):
         if ref is not None:
@@ -1022,7 +1039,7 @@ def _route(run: _run.Run, sidecar: dict, req: ActRequest) -> str:
         return "renderer"
     if surface == "native":
         return "native"
-    if req.has_point:
+    if req.uses_coordinates:
         return sidecar["screenshot_source"]
     return "native" if sidecar.get("sheet") else "renderer"
 
@@ -1084,6 +1101,8 @@ def cmd_act(args, ctx: Ctx):
 
 def _act(args, ctx: Ctx) -> dict:
     run = _load(ctx, args.run)
+    if run.data["holds_lock"]:
+        _run.DesktopLock().refresh(run.data["run_id"])
     req = _parse_act(args)
     if req.text is not None:
         _add_secret(run, req.text, MIN_REDACT_CHARS)
@@ -1152,8 +1171,6 @@ def _act(args, ctx: Ctx) -> dict:
         if lock.replaced:
             run.event("lock_takeover", {"replaced": lock.replaced}, "ok", 0)
         data["holds_lock"] = True
-    elif data["holds_lock"]:
-        _run.DesktopLock().refresh(data["run_id"])
 
     names = sidecar["names"]
     if route == "renderer" and req.ref and drivers.uses_web and "skip_visibility" not in ctx.faults:
@@ -1168,7 +1185,7 @@ def _act(args, ctx: Ctx) -> dict:
             return _act_result(run, goal_id, "NOT_VISIBLE", findings_added=[finding],
                                reason=reason)
 
-    needs_name = (req.has_point or (req.kind in ("press", "hotkey") and data["owner"] == "third-party"))
+    needs_name = (req.uses_coordinates or (req.kind in ("press", "hotkey") and data["owner"] == "third-party"))
     if needs_name and not req.target_name:
         raise UsageError("target_name_required",
                          "coordinate, press, and hotkey actions name what they hit with --target-name")
@@ -1385,10 +1402,24 @@ def cmd_resume(args, ctx: Ctx):
     if not data["paused"]:
         raise RunStateError("not_paused", "the run was not handed off")
     drivers = Drivers(run)
-    project = _project(Path.cwd())
+    took_lock = False
     if data["surface"] == "native":
-        _run.DesktopLock().acquire(data["run_id"], project, wait_s=LOCK_WAIT_S)
+        _run.DesktopLock().acquire(data["run_id"], _project(Path.cwd()), wait_s=LOCK_WAIT_S)
         data["holds_lock"] = True
+        took_lock = True
+    try:
+        return _resume_observe(run, drivers, ctx)
+    except BaseException:
+        if took_lock:
+            _run.DesktopLock().release(data["run_id"])
+            data["holds_lock"] = False
+        data["paused"] = True
+        raise
+
+
+def _resume_observe(run: _run.Run, drivers: Drivers, ctx: Ctx) -> dict:
+    """Reopen the web session if handed off, clear the pause, and take the fresh observation."""
+    data = run.data
     if data["surface"] == "web" and data.get("handoff_url") is not None:
         state = run.dir / "storage-state.json"
         snap = _observe(run, drivers, None)
