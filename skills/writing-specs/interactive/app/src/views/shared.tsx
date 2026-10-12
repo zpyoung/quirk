@@ -12,8 +12,20 @@ export const CERTAINTY_LABEL: Record<Certainty, string> = { confirmed: 'Confirme
 export const CERTAINTY_COLOR = { confirmed: 'green', assumed: 'yellow', unverified: 'orange' } as const
 export const GROUP_COLOR: Record<RequirementGroup, 'blue' | 'orange' | 'yellow' | 'cyan'> = { min: 'blue', i3: 'orange', i2: 'yellow', i1: 'cyan' }
 
-/** Keeps the page offline: images in Claude-written markdown are named, never fetched. */
+const ALLOWED_LINK_SCHEME = /^(https?:|mailto:|#)/
+
+/** Keeps the page offline and inert: images in Claude-written markdown are named, never fetched, and a link renders as a link only for http(s), mailto or in-page hrefs. */
 export const OFFLINE_MARKDOWN_COMPONENTS: MarkdownComponents = {
+  link: ({ href, children }) => {
+    const target = href.trim().toLowerCase()
+    if (!ALLOWED_LINK_SCHEME.test(target)) return <span>{children}</span>
+    const external = target.startsWith('http')
+    return (
+      <a href={href} className="xjse4m1 x1bvjpef" {...(external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}>
+        {children}
+      </a>
+    )
+  },
   image: ({ alt }) => <span>{alt ? `Image omitted in offline review: ${alt}` : 'Image omitted in offline review.'}</span>,
 }
 

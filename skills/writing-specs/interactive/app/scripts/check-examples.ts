@@ -5,6 +5,7 @@ import fixture from '../../../../../tests/fixtures/interactive/v2/stage1/logic.j
 import { approveBlockReason, EXAMPLE_OUTCOME_UPDATE_PREFIX, emptyState, exampleOutcomeUpdate, isPayload } from '../src/review-state'
 import type { LogicSpec, Scenario } from '../src/spec-types'
 import { EXAMPLE_PHRASE, exampleMarkPlugins, ScenarioExampleView } from '../src/views/scenario-example'
+import { SpecMarkdown } from '../src/views/shared'
 
 const [invented, gap] = exampleMarkPlugins.map((plugin) => plugin.pattern)
 
@@ -52,6 +53,33 @@ assert.ok(lines.includes('<br/>'))
 
 const invent = renderToStaticMarkup(React.createElement(ScenarioExampleView, { example: { before: 'x 10%* y', steps: ['s'], after: 'a' } }))
 assert.ok(invent.includes('"example-invented">10%*</span>'))
+
+const literal = renderToStaticMarkup(React.createElement(ScenarioExampleView, { example: { before: 'Literal value\uE000', steps: ['s \uE000 and 3*'], after: '✓ kept\uE000' } }))
+assert.ok(literal.includes('Literal value\uE000') && literal.includes('s \uE000 and '))
+assert.ok(literal.includes('kept\uE000</span>'))
+assert.equal((literal.match(/example-invented/g) ?? []).length, 1)
+assert.ok(literal.includes('"example-invented">3*</span>'))
+assert.ok(!literal.includes('\uE001'))
+
+const HOSTILE_LINK = '[click](jAvAsCrIp:alert(1))'
+const GOOD_LINK = '[ok](https://x.y)'
+const specLink = renderToStaticMarkup(React.createElement(SpecMarkdown, null, `${HOSTILE_LINK} ${GOOD_LINK}`))
+const exampleLink = renderToStaticMarkup(React.createElement(ScenarioExampleView, { example: { before: HOSTILE_LINK, steps: [GOOD_LINK], after: `✓ ${HOSTILE_LINK}` } }))
+for (const html of [specLink, exampleLink]) {
+  assert.ok(!/href="jAvAsCrIp/i.test(html), 'a javascript: href must never reach the page')
+  assert.ok(html.includes('click'))
+  assert.ok(/<a [^>]*href="https:\/\/x\.y"[^>]*>ok<\/a>/.test(html))
+}
+assert.equal((specLink.match(/<a /g) ?? []).length, 1)
+assert.equal((exampleLink.match(/<a /g) ?? []).length, 1)
+for (const href of ['#frag', 'mailto:a@b.c', ' HTTP://x.y']) {
+  const html = renderToStaticMarkup(React.createElement(SpecMarkdown, null, `[t](${href})`))
+  assert.ok(html.includes('<a '), `${href} must stay a link`)
+}
+for (const href of ['vbscript:x', 'data:text/html,x', '/relative', 'ftp://x.y']) {
+  const html = renderToStaticMarkup(React.createElement(SpecMarkdown, null, `[t](${href})`))
+  assert.ok(!html.includes('<a '), `${href} must render as plain text`)
+}
 
 const long = 'a'.repeat(80_000)
 const startedAt = performance.now()
