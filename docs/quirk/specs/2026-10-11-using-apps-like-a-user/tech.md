@@ -19,7 +19,8 @@ and tests. Nothing outside the new directories changes except the README skill c
 | `skills/using-apps-like-a-user/references/surfaces.md` | Per-surface procedure: web, Electron, native, system dialogs; driver gotchas. |
 | `skills/using-apps-like-a-user/references/safety.md` | Gate classification, injection handling, credentials, login walls, sharing the Mac. |
 | `skills/using-apps-like-a-user/scripts/likeuser.py` | CLI entrypoint: argparse subcommands, JSON on stdout, exit codes. |
-| `skills/using-apps-like-a-user/scripts/_run.py` | Run folder, run state, goals, findings, desktop lock, budget, report rendering. |
+| `skills/using-apps-like-a-user/scripts/_types.py` | Shared value types and exceptions every module exchanges. |
+| `skills/using-apps-like-a-user/scripts/_run.py` | Run folder, run state, goals, findings, desktop lock, budget, credentials, gate patterns, report rendering. |
 | `skills/using-apps-like-a-user/scripts/_desktop.py` | macOS primitives: cursor, frontmost app, clipboard, display scale, window list, screenshots. |
 | `skills/using-apps-like-a-user/scripts/_effects.py` | Observation diffing, PNG decode and average hash, effect classification, settle loop. |
 | `skills/using-apps-like-a-user/scripts/_web.py` | `playwright-cli` adapter for web and Electron renderers. |
@@ -30,7 +31,7 @@ and tests. Nothing outside the new directories changes except the README skill c
 | `tests/fixtures/using-apps-like-a-user/electron/` | Minimal Electron app with planted bugs and a native save dialog. |
 | `tests/fixtures/using-apps-like-a-user/native/` | Single-file SwiftUI app plus a build script producing a `.app` bundle. |
 | `tests/fixtures/using-apps-like-a-user/golden/` | Captured real driver outputs (playwright-cli 0.1.22, orca) used by unit tests. |
-| `tests/test_using_apps_like_a_user.py` | Unit tests for the guard script, CI-safe on Linux. |
+| `tests/test_using_apps_like_a_user_<module>.py` | Unit tests, one file per module (`effects`, `desktop`, `run`, `web`, `native`, `cli`, `bakeoff`, `evals`), CI-safe on Linux. |
 | `tests/test_using_apps_like_a_user_skill.py` | SKILL.md structure tests. |
 | `tests/test_using_apps_like_a_user_fixtures.py` | Darwin-only integration tests driving the guard script against the fixtures. |
 | `docs/quirk/specs/2026-10-11-using-apps-like-a-user/bakeoff.md` | Bake-off results, the chosen native driver, and its version pin. |
@@ -353,6 +354,122 @@ class NativeDriver:
 `OrcaDriver.background_capable` is `False`. The bake-off winner's value comes from measurement.
 `NATIVE_DRIVER_PREFERENCE` in `_native.py` is set from `bakeoff.md`.
 
+### Module interfaces
+
+These are the seams between modules built and tested separately. Names and shapes are contract;
+bodies are the implementer's. `_types.py` is committed before the build starts.
+
+CONTRACT: `_types.py`
+```
+class DriverError(Exception):   code: str; message: str          # stable machine-readable code
+class UsageError(Exception):    code: str; message: str          # CLI exit 2
+class RunStateError(Exception): code: str; message: str          # CLI exit 3
+class MissingError(Exception):  missing: List[str]               # CLI exit 5
+
+@dataclass Action:       kind: str; ref, to_ref, text, key, value, direction: Optional[str]
+                         x, y, to_x, to_y, amount: Optional[float]   # x/y already in driver points
+@dataclass Observation:  tree_text: str; refs: List[str]; names: Dict[str, str]; values: Dict[str, str]
+                         url, title, focus: Optional[str]; screenshot_path: Optional[Path]; scale: Optional[float]
+                         tree_truncated: bool = False; tree_sparse: bool = False
+                         window_id: Optional[int]; bundle_id: Optional[str]; raw: str = ""
+@dataclass DriverResult: delivered: bool; driver_verified: Optional[bool]; observation: Optional[Observation]; raw: str
+```
+`names` maps each ref to its accessible name (the gate subject); `values` maps a ref to its current
+value where the driver exposes one (the `value` signal).
+
+CONTRACT: `_desktop.py` (every function honors `LIKEUSER_FAKE_DESKTOP`; off darwin without it,
+each raises `DriverError("unsupported_platform")`)
+```
+def cursor() -> Tuple[float, float]                   # global points, origin top-left of primary display
+def warp_cursor(x: float, y: float) -> None           # tests only (the drift fixture row)
+def frontmost_bundle_id() -> str
+def activate(bundle_id: str) -> None
+def clipboard_change_count() -> int
+def clipboard_is_text_only() -> bool
+def clipboard_read_text() -> str
+def clipboard_write_text(text: str) -> None
+def display_scale() -> float                          # primary display backing scale
+def screenshot_window(window_id: int, out: Path) -> Path   # DriverError("screenshot_failed") when no file was written
+def permissions() -> Dict[str, bool]                  # {"accessibility": bool, "screen_recording": bool}
+```
+The fake desktop is a JSON file `{cursor: [x, y], frontmost: str, clipboard_change_count: int,
+clipboard_text_only: bool, clipboard_text: str, scale: float, permissions: {accessibility: bool,
+screen_recording: bool}}`. Reads come from it; `activate`, `warp_cursor`, and `clipboard_write_text`
+write it back (a clipboard write increments the change count), so tests observe side effects.
+
+CONTRACT: `_effects.py`
+```
+SCREEN_HASH_THRESHOLD: int; SETTLE_POLL_S = 0.25; SETTLE_CAP_S = 2.0
+SIGNALS = ("url", "title", "tree", "focus", "value", "screen")
+def decode_png(data: bytes) -> Tuple[int, int, List[bytes]]   # width, height, RGB rows; ValueError on interlaced or 16-bit
+def average_hash(path: Path) -> int                           # 8x8 grayscale (64 pixels), bit set when above the mean
+def hamming(a: int, b: int) -> int
+def normalize_tree(text: str) -> str                          # strips [ref=...], [active], and element-index tokens; keeps roles, labels, values
+@dataclass Signals: url, title, tree, focus, value: Optional[str]; screen_hash: Optional[int]
+def diff(before: Signals, after: Signals, threshold: int = SCREEN_HASH_THRESHOLD) -> List[str]   # changed names in SIGNALS order; screen only when both hashes exist
+def classify(before: Signals, after: Signals, expect: str, settled: bool) -> Tuple[str, List[str], List[str]]
+def settle(read: Callable[[], Signals], poll_s: float = SETTLE_POLL_S, cap_s: float = SETTLE_CAP_S,
+           sleep=time.sleep, clock=time.monotonic) -> Tuple[bool, Signals]
+```
+`classify` returns `(status, signals, other_changes)`: `UNSETTLED` when not settled; with `expect`
+`any`, `OBSERVED` when `diff` is non-empty; otherwise `OBSERVED` when `expect` is in `diff`.
+`signals` is the full `diff`; `other_changes` is `diff` minus the expected signal.
+
+CONTRACT: `_run.py`
+```
+def state_root(cwd: Path) -> Path      # LIKEUSER_STATE_ROOT, else <git toplevel or cwd>/.quirk/using-apps-like-a-user; writes .gitignore "*"
+def new_run_id() -> str
+class Run:
+    dir: Path; data: dict                                  # data follows the run.json SCHEMA
+    @classmethod create(cls, root: Path, fields: dict) -> Run
+    @classmethod load(cls, root: Path, run_id: str) -> Run    # RunStateError("unknown_run")
+    def save(self) -> None                                   # atomic replace
+    def event(self, verb: str, inputs: dict, status: str, elapsed_ms: int) -> None   # appends events.jsonl, redacted
+    def add_goal(self, goal_id: str, title: str) -> None     # UsageError("duplicate_goal")
+    def add_finding(self, kind: str, summary: str, goal_id: Optional[str], screenshot_path: Optional[str], source: str) -> str
+    def record_gate(self, observation_id: int, subject: str, gate: str) -> None
+    def charge_action(self, goal_id: str) -> Optional[str]   # "run" or "goal" when that budget is spent (nothing charged), else None
+    def write_report(self) -> dict                           # writes report.json and report.md, returns the summary
+class DesktopLock:
+    def __init__(self, path: Optional[Path] = None)          # LIKEUSER_LOCK_PATH, else the machine-wide path
+    def acquire(self, run_id: str, project: str, wait_s: float = 30.0) -> None   # RunStateError("desktop_busy") carrying holder
+    def try_acquire(self, run_id: str, project: str) -> Optional[dict]          # None on success, else the holder
+    def refresh(self, run_id: str) -> None; def release(self, run_id: str) -> None; def holder(self) -> Optional[dict]
+def load_credentials(prefix: Optional[str], file: Optional[Path]) -> Dict[str, str]   # MissingError(["credentials_file_mode"]) unless 0600
+def redact(text: str, secrets: Iterable[str]) -> str
+def test_overrides(env: Mapping[str, str]) -> List[str]
+def gate_matches(subject: str, owner: str) -> bool        # owner "yours" | "third-party", REGEX tables below
+def dismiss_allowed(name: str) -> bool
+```
+
+CONTRACT: `_web.py` (every call runs with cwd set to the run folder and `-s=<session>`)
+```
+class WebDriver:
+    name = "playwright-cli"
+    def __init__(self, session: str, run_dir: Path) -> None   # binary from LIKEUSER_PLAYWRIGHT_BIN, else PATH
+    def version(self) -> str; def check(self) -> List[str]   # missing or below the 0.1.22 pin
+    def open(self, url: str, headed: bool = False) -> None
+    def attach_cdp(self, endpoint: str) -> None; def attach_extension(self) -> None   # DriverError("extension_unavailable")
+    def observe(self, screenshot_path: Optional[Path]) -> Observation
+    def act(self, action: Action) -> DriverResult            # DriverError on a `### Error` block or non-zero exit
+    def visibility(self, ref: str) -> Tuple[bool, str]       # reason: "" | offscreen | opacity | hidden | display | occluded
+    def console_errors(self) -> List[str]                    # every error-level message so far, oldest first
+    def failed_requests(self) -> List[dict]                  # every {url, status, method} with status >= 400 or no response, oldest first
+    def state_save(self, path: Path) -> None; def state_load(self, path: Path) -> None
+    def close(self) -> None; def detach(self) -> None
+def parse_snapshot(stdout: str, cwd: Path) -> Observation    # inline or linked snapshot
+def parse_error(stdout: str) -> Optional[str]                 # body of a `### Error` block, else None
+```
+
+CONTRACT: `_native.py` adds to the Native driver adapter contract above
+```
+NATIVE_DRIVER_PREFERENCE: List[str]                          # driver names, best first; set from bakeoff.md
+class OrcaDriver(NativeDriver): name = "orca"; background_capable = False
+    def find_window(self, bundle_id: str) -> Optional[int]
+def parse_orca_envelope(stdout: str, returncode: int) -> dict   # the `result`; DriverError(error.code) when ok is false
+def get_native_driver() -> NativeDriver                       # first preferred driver whose check() is empty; MissingError otherwise
+```
+
 ### Test-only overrides
 
 CONFIG:
@@ -383,10 +500,15 @@ window: {bundle_id: str|null, window_id: int|null, session: str|null, cdp_port: 
 baseline: {frontmost: str, cursor: [float, float], clipboard_change_count: int, clipboard_text_only: bool}
 drift_baseline: {frontmost: str, cursor: [float, float]}
 holds_lock: bool; paused: bool; stopped_reason: str|null; pasted: bool
-goals: {goal_id: {title: str, last_act_status: str|null, actions_used: int, verdict: str|null}}
+goals: {goal_id: {title: str, last_act_status: str|null, actions_used: int, verdict: str|null,
+                  summary: str, evidence: [str]}}
 budget: {run_cap: int, goal_cap: int, run_used: int}
 latest_observation_id: int; launched: [{kind: "app"|"browser", id: str}]
-login_attempts: int; test_overrides: [str]
+observations: {"<id>": {goal_id: str, screenshot_path: str|null, screenshot_source: str|null, scale: float|null,
+                        tree_path: str, url: str|null, title: str|null, focus: str|null, driver: str}}
+findings: [<report.json finding>]; gates: [<report.json gate>]
+console_seen: int; requests_seen: int   # counts already turned into findings, so only new ones are added
+login_attempts: int; test_overrides: [str]; started: str; ended: str|null; summary: object|null
 ```
 
 SCHEMA: `act` output
@@ -524,7 +646,7 @@ Back-links: [logic: Decisions Locked](logic.md#decisions-locked) · [logic: Indu
 
 Back-links: [logic: Scope & non-goals](logic.md#scope--non-goals) · [logic: Industry Insights](logic.md#industry-insights)
 
-**Unit tests, CI-safe** (`tests/test_using_apps_like_a_user.py`). Run on Linux and macOS with fake
+**Unit tests, CI-safe** (`tests/test_using_apps_like_a_user_<module>.py`, one per module). Run on Linux and macOS with fake
 binaries replaying the golden outputs and `LIKEUSER_FAKE_DESKTOP`. Must cover:
 - Each exit code, and that each appears in SKILL.md's table.
 - Effect classification for every status, including `--expect` narrowing and `other_changes`.
@@ -575,8 +697,9 @@ counter at 0, and zero goals reported `pass` that the ground truth says cannot p
 self-check: `grade.py` must fail a committed bad report (a pass on the dead button, a missing
 injection finding) before its passes count.
 
-**Bake-off** (`scripts/bakeoff.py`, results in `bakeoff.md`). Candidates: Peekaboo 4.9.0, Cua Driver
-0.34.1 (only if the user agrees to install it), and `orca computer` as installed. Needs the native
+**Bake-off** (`scripts/bakeoff.py`, results in `bakeoff.md`). Candidates: Peekaboo 4.9.1 (Homebrew
+`openclaw/tap/peekaboo`; the tap's stable moved past 4.9.0), Cua Driver 0.34.1 (cask `cuadriver`, CLI
+`cua-driver`; the user agreed to install both), and `orca computer` as installed. Needs the native
 fixture built first. For each candidate: with a sentinel app frontmost, deliver 10 clicks and 10
 typed strings to the native fixture without `--foreground`; poll the frontmost app every 20 ms and
 the cursor position; record focus-steal count and duration, cursor moves, and whether each input
