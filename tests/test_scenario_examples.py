@@ -325,6 +325,13 @@ def test_gate_reports_one_failure_per_offending_scenario_in_scenario_order() -> 
     ]
 
 
+def test_gate_emits_only_the_open_ask_tuple_when_the_outcome_also_changed() -> None:
+    logic = example_logic()
+    state = gate_state(["SC-02"], {}, {"SC-02": {"choice": "custom", "custom": "Other."}})
+    examples = [msg for name, msg in render_spec.stage1_gate_failures(logic, state) if name == "examples"]
+    assert examples == ["open [ASK] in SC-02"]
+
+
 class PayloadParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
