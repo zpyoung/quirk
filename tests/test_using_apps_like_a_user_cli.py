@@ -705,6 +705,22 @@ class TestEffectStatuses:
                      "--text-stdin", "--expect", "value", stdin="hello")
         assert result.status == "OBSERVED" and "value" in result["signals"]
 
+    def test_a_ref_less_type_into_the_focused_field_moves_the_value_signal(self, sb):
+        focused = golden_yaml().replace('textbox "Notes" [ref=e10]', 'textbox "Notes" [active] [ref=e10]')
+        typed = focused.replace('[active] [ref=e10]', '[active] [ref=e10]: hello')
+        pages = {"home": web_page(focused), "typed": web_page(typed)}
+        run_id, obs = web_run(sb, pages=pages, rules=[{"on": ["type"], "page": "typed"}])
+        result = act(sb, run_id, obs["observation_id"], "--action", "type", "--text-stdin",
+                     "--expect", "value", stdin="hello")
+        assert result.status == "OBSERVED" and "value" in result["signals"], result.data
+
+    def test_a_ref_less_type_that_leaves_the_focused_value_alone_is_no_effect(self, sb):
+        focused = golden_yaml().replace('textbox "Notes" [ref=e10]', 'textbox "Notes" [active] [ref=e10]')
+        run_id, obs = web_run(sb, pages={"home": web_page(focused)})
+        result = act(sb, run_id, obs["observation_id"], "--action", "type", "--text-stdin",
+                     "--expect", "value", stdin="hello")
+        assert result.status == "NO_EFFECT" and "value" not in result["signals"], result.data
+
 
 class TestForegroundAndDrift:
     def test_native_actions_need_the_foreground_flag(self, sb):
@@ -1632,6 +1648,23 @@ class TestLoginLimit:
         submit = click(sb, run_id, other["observation"]["observation_id"], "e22")
         assert submit.code == 0 and sb.run_json(run_id)["login_attempts"] == 1
 
+    def test_a_failed_login_counts_when_the_password_field_has_no_name(self, sb):
+        unnamed = golden_yaml().replace('textbox "Password" [ref=e21]', 'textbox [ref=e21]')
+        run_id, obs = web_run(sb, pages={"home": web_page(unnamed)})
+        step = self.fill_secret(sb, run_id, obs["observation_id"], "e21", "password")
+        click(sb, run_id, step["observation"]["observation_id"], "e22")
+        assert sb.run_json(run_id)["login_attempts"] == 1
+
+    def test_a_nameless_password_field_that_leaves_the_screen_costs_no_attempt(self, sb):
+        unnamed = golden_yaml().replace('textbox "Password" [ref=e21]', 'textbox [ref=e21]')
+        welcome = golden_yaml().replace(
+            '      - text: Password\n      - textbox "Password" [ref=e21]\n', "")
+        run_id, obs = web_run(sb, pages={"home": web_page(unnamed), "welcome": web_page(welcome)},
+                              rules=[click_rule("e22", page="welcome")])
+        step = self.fill_secret(sb, run_id, obs["observation_id"], "e21", "password")
+        click(sb, run_id, step["observation"]["observation_id"], "e22")
+        assert sb.run_json(run_id)["login_attempts"] == 0
+
     def test_pressing_enter_after_the_password_is_the_submission(self, sb):
         run_id, obs = web_run(sb, pages=self.login_pages())
         step = self.fill_secret(sb, run_id, obs["observation_id"], "e21", "password")
@@ -1780,6 +1813,49 @@ class TestRedaction:
                      LIKEUSER_PASSWORD=SECRET_PASSWORD)
         assert result.status == "ERROR" and SECRET_PASSWORD not in result.stdout
         assert "[REDACTED]" in result["driver_message"]
+
+
+class TestCredentialSourceLoss:
+    """A run configured with credentials cannot keep going once it cannot reload them to redact."""
+
+    GONE = {"SITE_USERNAME": None, "SITE_PASSWORD": None}
+
+    def env_run(self, sb):
+        sb.extra_env.update(SITE_USERNAME=SECRET_USER, SITE_PASSWORD=SECRET_PASSWORD)
+        return web_run(sb, begin_args=("--credentials-env", "SITE"))
+
+    def test_a_later_verb_exits_5_when_the_env_credentials_are_gone(self, sb):
+        run_id, obs = self.env_run(sb)
+        result = sb.run("observe", "--run", run_id, "--goal", "g1", **self.GONE)
+        assert result.code == 5 and result["missing"] == ["credentials"]
+
+    def test_an_act_exits_5_when_the_env_credentials_are_gone(self, sb):
+        run_id, obs = self.env_run(sb)
+        result = act(sb, run_id, obs["observation_id"], "--action", "click", "--ref", "e4",
+                     **self.GONE)
+        assert result.code == 5 and result["missing"] == ["credentials"]
+        assert sb.pw_argvs("click") == []
+
+    def test_a_later_verb_exits_5_when_the_credentials_file_is_gone(self, sb):
+        creds = sb.tmp / "creds.json"
+        creds.write_text(json.dumps({"username": SECRET_USER, "password": SECRET_PASSWORD}))
+        creds.chmod(0o600)
+        run_id, _ = web_run(sb, begin_args=("--credentials-file", str(creds)))
+        creds.unlink()
+        result = sb.run("observe", "--run", run_id, "--goal", "g1")
+        assert result.code == 5 and result["missing"] == ["credentials_file"]
+
+    def test_a_run_without_credentials_is_unaffected(self, sb):
+        run_id, _ = web_run(sb)
+        assert sb.run("observe", "--run", run_id, "--goal", "g1").code == 0
+
+    def test_end_still_closes_the_run_but_takes_no_final_screenshot(self, sb):
+        run_id, _ = self.env_run(sb)
+        ended = sb.run("end", "--run", run_id, **self.GONE)
+        assert ended.code == 0
+        assert ended["summary"]["state_left"]["final_screenshot"] == ""
+        assert not (sb.run_dir(run_id) / "final.png").exists()
+        assert sb.run_json(run_id)["ended"]
 
 
 class TestTestOverrides:

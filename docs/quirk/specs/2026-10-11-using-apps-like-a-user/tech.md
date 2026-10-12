@@ -296,7 +296,8 @@ routed to the driver whose tree produced it.
 
 Signals: `url`, `title` (page or window title), `tree` (normalized tree text with refs and element
 indexes stripped), `focus` (the `[active]` element or `focusedElementId`), `value` (the target's
-value), `screen` (average-hash Hamming distance above threshold on a 64-pixel thumbnail). An orca
+value; for a `type`, `press`, or `hotkey` with no `--ref`, the value of the element focused in the
+observation acted on), `screen` (average-hash Hamming distance above threshold on a 64-pixel thumbnail). An orca
 `verification.state` of `verified` is recorded as `driver_verified` but never by itself yields
 `OBSERVED`.
 
@@ -335,7 +336,8 @@ on timeout return UNSETTLED with the last observation
   double-click on a control whose accessible name (or `--target-name`) contains `sign in`,
   `log in`, `submit`, `continue`, or `next`. Any other act leaves the password fill pending, so an
   unrelated click never spends the attempt. The attempt counts only when the password field is
-  still on screen after the submit.
+  still on screen after the submit; the field is tracked by its ref and element identity, so a
+  field with no accessible name counts the same as a named one.
 
 ### `end`
 
@@ -694,7 +696,10 @@ Back-links: [logic: Decisions Locked](logic.md#decisions-locked)
 - Typed text must stay redactable in every later verb of the run. Each `act` that types text of 4 or
   more characters appends it to `<state root>/typed/<run-id>.json`, a 0600 file in a 0700 folder
   outside the run folder; every verb loads it into the in-memory secrets, and `end` deletes it.
-  Credentials are reloaded from their source on every verb. The text files playwright-cli keeps in
+  Credentials are reloaded from their source on every verb. A run that began with `--credentials-env`
+  or `--credentials-file` whose source cannot be reloaded fails closed: the verb exits 5 with
+  `missing[]`, as `begin` does. `end` alone still runs, so the desktop is released, but it takes no
+  final screenshot. The text files playwright-cli keeps in
   `<run>/.playwright-cli/` are redacted at the end of every verb.
 - A screenshot cannot be redacted. An `act` with `--secret` saves no post-action screenshot, and any
   observation (including the `end` screenshot) whose tree shows a credential value deletes its
