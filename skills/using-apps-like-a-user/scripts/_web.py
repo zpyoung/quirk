@@ -30,6 +30,8 @@ CALL_TIMEOUT_S = 120
 DEFAULT_VIEWPORT = (1280, 720)
 VALUE_ROLES = frozenset({"textbox", "searchbox", "combobox", "spinbutton", "slider"})
 
+# probes the unclipped box center: a center outside the viewport is offscreen even when part of
+# the box is visible
 VISIBILITY_JS = (
     "el => {"
     " const out = (visible, reason) => JSON.stringify({visible: visible, reason: reason});"
@@ -43,12 +45,13 @@ VISIBILITY_JS = (
     "  if (parseFloat(getComputedStyle(n).opacity) === 0) return out(false, 'opacity');"
     " }"
     " const r = el.getBoundingClientRect();"
-    " const x0 = Math.max(r.left, 0), y0 = Math.max(r.top, 0);"
-    " const x1 = Math.min(r.right, innerWidth), y1 = Math.min(r.bottom, innerHeight);"
-    " if (x1 <= x0 || y1 <= y0) return out(false, 'offscreen');"
+    " if (r.right <= 0 || r.bottom <= 0 || r.left >= innerWidth || r.top >= innerHeight)"
+    "  return out(false, 'offscreen');"
+    " const cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;"
+    " if (cx < 0 || cy < 0 || cx >= innerWidth || cy >= innerHeight) return out(false, 'offscreen');"
     " const root = el.getRootNode();"
     " const probe = root.elementFromPoint ? root : document;"
-    " const top = probe.elementFromPoint((x0 + x1) / 2, (y0 + y1) / 2);"
+    " const top = probe.elementFromPoint(cx, cy);"
     " if (!top || !(top === el || el.contains(top))) return out(false, 'occluded');"
     " return out(true, '');"
     "}"

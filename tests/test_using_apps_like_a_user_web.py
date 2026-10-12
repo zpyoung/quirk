@@ -488,6 +488,56 @@ class TestVisibility:
         with pytest.raises(DriverError):
             f.driver.visibility("e999")
 
+    @staticmethod
+    def _run_visibility_js(rect, hit_is_target, tmp_path):
+        """Evaluate VISIBILITY_JS under node against a stub element and return (decision, probe)."""
+        harness = (
+            "const rect = %s; const hitIsTarget = %s; const probes = [];\n"
+            "globalThis.innerWidth = 1280; globalThis.innerHeight = 720;\n"
+            "globalThis.getComputedStyle = () => ({display: 'block', visibility: 'visible',"
+            " opacity: '1'});\n"
+            "const other = {};\n"
+            "const doc = {elementFromPoint: (x, y) => { probes.push([x, y]);"
+            " return hitIsTarget ? el : other; }};\n"
+            "const el = {getClientRects: () => [rect], getBoundingClientRect: () => rect,"
+            " parentElement: null, getRootNode: () => doc, contains: (n) => n === el};\n"
+            "const fn = eval(%s);\n"
+            "console.log(JSON.stringify({decision: JSON.parse(fn(el)), probes}));\n"
+        ) % (json.dumps(rect), json.dumps(hit_is_target), json.dumps(_web.VISIBILITY_JS))
+        script = tmp_path / "visibility_harness.js"
+        script.write_text(harness)
+        out = subprocess.run(["node", str(script)], capture_output=True, text=True, check=True)
+        data = json.loads(out.stdout)
+        return data["decision"], data["probes"]
+
+    @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+    def test_probe_uses_the_unclipped_box_center(self, tmp_path):
+        rect = {"left": 1180, "right": 1380, "top": 100, "bottom": 140}
+        decision, probes = self._run_visibility_js(rect, True, tmp_path)
+        assert probes == []
+        assert decision == {"visible": False, "reason": "offscreen"}
+
+    @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+    def test_box_with_center_in_viewport_is_probed_at_that_center(self, tmp_path):
+        rect = {"left": 1000, "right": 1400, "top": 100, "bottom": 140}
+        decision, probes = self._run_visibility_js(rect, True, tmp_path)
+        assert probes == [[1200, 120]]
+        assert decision == {"visible": True, "reason": ""}
+
+    @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+    def test_occluded_center_is_reported(self, tmp_path):
+        rect = {"left": 100, "right": 300, "top": 100, "bottom": 140}
+        decision, probes = self._run_visibility_js(rect, False, tmp_path)
+        assert probes == [[200, 120]]
+        assert decision == {"visible": False, "reason": "occluded"}
+
+    @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+    def test_box_entirely_outside_viewport_is_offscreen(self, tmp_path):
+        rect = {"left": 100, "right": 300, "top": 900, "bottom": 940}
+        decision, probes = self._run_visibility_js(rect, True, tmp_path)
+        assert probes == []
+        assert decision == {"visible": False, "reason": "offscreen"}
+
     def test_the_script_is_observation_only(self):
         js = _web.VISIBILITY_JS
         for forbidden in (".click(", ".focus(", ".dispatchEvent(", ".submit(", "fetch(",
