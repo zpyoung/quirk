@@ -84,4 +84,6 @@ that app's frontmost window.
 - `screenshot_path` is the evidence. Cite it in the goal summary.
 - A 64-pixel thumbnail hash backs the `screen` signal. It catches changes the tree cannot name, such
   as a canvas redraw, and it can also move on an animation. That is why `--expect` should name the
-  signal you mean.
+  signal you mean. It misses small changes such as a label or a toast, so `NO_EFFECT` on `--expect
+  screen` is weak evidence: compare the before and after screenshots yourself before reporting a
+  dead control.

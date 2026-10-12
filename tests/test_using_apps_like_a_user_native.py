@@ -237,6 +237,21 @@ def test_observe_fills_the_observation_from_the_snapshot_and_screenshot(fake_orc
     assert "--json" in argv and "--no-screenshot" not in argv
 
 
+@pytest.mark.parametrize(
+    "tree,sheet_open",
+    [
+        ("0 standard window Example\n\t1 sheet Save\n\t\t2 button Save\n", True),
+        ("0 standard window Example\n\t1 dialog Open\n", True),
+        ("0 standard window Example\n\t1 system dialog\n", True),
+        ("0 standard window Example\n\t1 button Sheet music\n", False),
+        ("0 standard window Example\n\t1 group\n\t\t2 button Dialog\n", False),
+    ],
+)
+def test_orca_observe_reports_an_open_sheet_from_its_own_tree_format(fake_orca, tmp_path, monkeypatch, tree, sheet_open):
+    _synthetic_dir(tmp_path, monkeypatch, "sheet", _snapshot("App=x (pid 1)\n\n" + tree))
+    assert _bound().observe("com.example.app", 7, screenshot=False).sheet_open is sheet_open
+
+
 def test_observe_without_a_screenshot_skips_it(fake_orca):
     obs = _bound().observe(FIXTURE_BUNDLE, None, screenshot=False)
     assert obs.screenshot_path is None and obs.scale is None
@@ -1100,6 +1115,25 @@ def test_cua_tree_drops_the_menu_bar_subtree_and_its_elements(fake_cua):
     assert "s0000000a:3" not in obs.refs and "s0000000a:4" not in obs.refs
     assert "secret-recent-document.txt" not in obs.names.values()
     assert obs.refs == ["s0000000a:0", "s0000000a:1", "s0000000a:2"]
+
+
+def test_cua_observe_reports_an_open_sheet(fake_cua):
+    fake_cua.reply(get_window_state=_ok(_window_state(SHEET_ROWS, SHEET_MARKDOWN)))
+    assert _bound_cua(7).observe(FIXTURE_BUNDLE, 7, screenshot=False).sheet_open is True
+
+
+def test_cua_observe_reports_a_dialog_by_subrole(fake_cua):
+    rows = [("AXWindow", "Example", None, None), ("AXButton", "OK", None, 0)]
+    data = _window_state(rows, '- [0] AXWindow "Example"\n  - [1] AXButton "OK"')
+    data["elements"][0]["subrole"] = "AXSystemDialog"
+    fake_cua.reply(get_window_state=_ok(data))
+    assert _bound_cua(7).observe(FIXTURE_BUNDLE, 7, screenshot=False).sheet_open is True
+
+
+def test_cua_observe_reports_no_sheet_for_a_plain_window(fake_cua):
+    fake_cua.reply(get_window_state=_ok(_window_state(MENU_ROWS, MENU_MARKDOWN)))
+    assert _bound_cua(7).observe(FIXTURE_BUNDLE, 7, screenshot=False).sheet_open is False
+    assert _bound_cua().observe(FIXTURE_BUNDLE, GOLDEN_WINDOW, screenshot=False).sheet_open is False
 
 
 def test_cua_tree_lines_carry_their_ref_and_normalize_away(fake_cua):

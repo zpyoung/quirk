@@ -2,7 +2,8 @@
 """Effect detection for the using-apps-like-a-user guard: PNG hashing, tree normalization,
 signal diffing, effect classification, and the settle loop.
 
-Stdlib only. SCREEN_HASH_THRESHOLD is provisional; fixture calibration sets the final value.
+Stdlib only. SCREEN_HASH_THRESHOLD comes from fixture calibration: unchanged screens score 0, and the
+64-pixel hash only moves on large visual changes, so `screen` cannot see a label-sized change.
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ _SCRIPT_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
-SCREEN_HASH_THRESHOLD = 6
+SCREEN_HASH_THRESHOLD = 2
 SETTLE_POLL_S = 0.25
 SETTLE_CAP_S = 2.0
 SIGNALS = ("url", "title", "tree", "focus", "value", "screen")

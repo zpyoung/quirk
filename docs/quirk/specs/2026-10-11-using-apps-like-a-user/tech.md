@@ -377,10 +377,12 @@ class MissingError(Exception):  missing: List[str]               # CLI exit 5
                          url, title, focus: Optional[str]; screenshot_path: Optional[Path]; scale: Optional[float]
                          tree_truncated: bool = False; tree_sparse: bool = False
                          window_id: Optional[int]; bundle_id: Optional[str]; raw: str = ""
+                         sheet_open: bool = False
 @dataclass DriverResult: delivered: bool; driver_verified: Optional[bool]; observation: Optional[Observation]; raw: str
 ```
 `names` maps each ref to its accessible name (the gate subject); `values` maps a ref to its current
-value where the driver exposes one (the `value` signal).
+value where the driver exposes one (the `value` signal). `sheet_open` is the native driver's own verdict that a
+sheet or dialog is open, so `likeuser.py` never parses a driver's tree format to decide it.
 
 CONTRACT: `_desktop.py` (every function honors `LIKEUSER_FAKE_DESKTOP`; off darwin without it,
 each raises `DriverError("unsupported_platform")`)
@@ -565,7 +567,7 @@ CONFIG: defaults
 budget-run 200 actions; budget-goal 40 actions; settle 250 ms poll, 2.0 s cap
 drift cursor tolerance 3.0 points; desktop-lock wait 30 s; lock stale after 15 min without an act
 cdp-port search 9222-9299; screen-hash thumbnail 64 px
-screen-hash threshold: set from fixture calibration, recorded as a constant in _effects.py
+screen-hash threshold: 2, from fixture calibration (unchanged screens 0; label and Electron toast changes 0; web toast 5), recorded in _effects.py
 ```
 
 ## Fixtures

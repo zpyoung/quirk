@@ -64,7 +64,6 @@ CDP_PORTS = range(9222, 9300)
 ELECTRON_DEV_BUNDLE = "com.github.Electron"
 GOAL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SESSION_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-SHEET_RE = re.compile(r"^\t*\d+ (?:sheet|dialog|system dialog)\b", re.MULTILINE)
 NATIVE_PREFIX = "n:"
 
 ACTION_KINDS = (
@@ -388,7 +387,7 @@ def _observe(run: _run.Run, drivers: Drivers, shot: Optional[Path]) -> Snap:
         native = _observe_native(drivers, None)
     except DriverError as exc:
         error = exc.code
-    sheet = native is not None and bool(SHEET_RE.search(native.tree_text))
+    sheet = native is not None and native.sheet_open
     if not sheet:
         renderer = drivers.web.observe(shot)
         return Snap(renderer, None, False, "renderer" if shot else None, shot,

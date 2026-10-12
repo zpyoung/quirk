@@ -197,8 +197,8 @@ def test_flat_image_has_no_bits_above_the_mean(tmp_path):
     assert fx.average_hash(p) == 0
 
 
-def test_threshold_is_provisional_six():
-    assert fx.SCREEN_HASH_THRESHOLD == 6
+def test_threshold_is_the_calibrated_two():
+    assert fx.SCREEN_HASH_THRESHOLD == 2
     assert fx.SETTLE_POLL_S == 0.25
     assert fx.SETTLE_CAP_S == 2.0
     assert fx.SIGNALS == ("url", "title", "tree", "focus", "value", "screen")
@@ -309,7 +309,7 @@ def test_screen_distance_must_exceed_threshold():
     over = (1 << (fx.SCREEN_HASH_THRESHOLD + 1)) - 1
     assert fx.diff(sig(screen_hash=0), sig(screen_hash=at)) == []
     assert fx.diff(sig(screen_hash=0), sig(screen_hash=over)) == ["screen"]
-    assert fx.diff(sig(screen_hash=0), sig(screen_hash=at), threshold=2) == ["screen"]
+    assert fx.diff(sig(screen_hash=0), sig(screen_hash=at), threshold=fx.SCREEN_HASH_THRESHOLD - 1) == ["screen"]
 
 
 def test_classify_unsettled_wins_over_any_change():

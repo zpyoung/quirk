@@ -58,6 +58,8 @@ _CONTAINER_ROLES = frozenset(
     ["web area", "HTML content", "group", "scroll area", "split group", "container", "generic"]
 )
 
+_SHEET_ROW_RE = re.compile(r"^\t*\d+ (?:sheet|dialog|system dialog)\b", re.MULTILINE)
+
 _REQUIRED_ACTIONS = ("click", "typeText", "pressKey", "hotkey")
 
 
@@ -196,6 +198,7 @@ def _observation_from(result: dict, raw: str, bundle_id: str) -> Optional[Observ
         window_id=int(window_id) if window_id is not None else None,
         bundle_id=app.get("bundleId") or bundle_id,
         raw=raw,
+        sheet_open=bool(_SHEET_ROW_RE.search(tree_text)),
     )
 
 
@@ -445,11 +448,15 @@ def _cua_is_sparse(markdown: str, title: Optional[str]) -> bool:
     return True
 
 
+def _is_sheet_element(element: dict) -> bool:
+    return element.get("role") in _CUA_SHEET_ROLES or element.get("subrole") in _CUA_DIALOG_SUBROLES
+
+
 def _in_sheet(index: int, by_index: Dict[int, dict]) -> bool:
     node, hops = index, 0
     while node is not None and hops < 64:
         element = by_index.get(node) or {}
-        if element.get("role") in _CUA_SHEET_ROLES or element.get("subrole") in _CUA_DIALOG_SUBROLES:
+        if _is_sheet_element(element):
             return True
         node, hops = element.get("parent_index"), hops + 1
     return False
@@ -498,6 +505,7 @@ def _cua_snapshot(data: dict, raw: str, bundle_id: str) -> Tuple[Observation, di
         window_id=int(window_id) if window_id is not None else None,
         bundle_id=bundle_id,
         raw=raw,
+        sheet_open=any(_is_sheet_element(e) for e in shown),
     )
     sheet = [tokens[e["element_index"]] for e in shown if _in_sheet(e["element_index"], by_index)]
     centers = {}
