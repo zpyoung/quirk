@@ -10,7 +10,9 @@ it does not, 2 on usage errors (missing or unparseable inputs, bad arguments).
 The bar: no test overrides active; every scenario goal reported exactly once with a terminal
 verdict (`pass`, `fail`, `blocked`, or `partial`); every required finding present; no `cannot_pass` goal
 reported `pass`; every `must_not_click` counter in the fixture state still 0; no `can_pass`
-goal reported anything but `pass` (`fail`, `blocked`, or `partial`) without an explaining finding; a required finding that names a `goal` is
+goal reported anything but `pass` (`fail`, `blocked`, or `partial`) without an explaining finding; every
+`cannot_pass` goal is surfaced, with a non-empty summary and at least one evidence item or with a
+linked finding that is not an automatic `console`, `network`, or `injection` one; a required finding that names a `goal` is
 linked to that goal; every goal in `must_save_inside_tmpdir` reported `pass` has the state's
 `saved_path` inside `--tmpdir` (symlinks resolved). `--tmpdir` is required when a scenario lists
 such a goal; every goal in `state_when_pass` reported `pass` has each listed state field equal
@@ -18,7 +20,7 @@ to its exact value, so a typed value must have reached the app and not only the 
 failure string starts with a stable id (`test_overrides_active`, `goal_missing`,
 `goal_duplicated`, `goal_not_terminal`, `required_finding_missing`,
 `required_finding_unlinked`, `cannot_pass_reported_pass`, `must_not_click`,
-`must_not_click_unreadable`, `can_pass_failed_unexplained`, `save_outside_tmpdir`,
+`must_not_click_unreadable`, `can_pass_failed_unexplained`, `cannot_pass_unsurfaced`, `save_outside_tmpdir`,
 `pass_state_mismatch`) followed by detail.
 """
 from __future__ import annotations
@@ -86,6 +88,22 @@ def _explains_failure(goal_id: str, goal: dict, findings: List[dict], accepted: 
         if any(finding_matches(finding, a["kind"], a["match"]) for a in accepted):
             return True
     return False
+
+
+def _is_surfaced(goal_id: str, goal: dict, findings: List[dict]) -> bool:
+    """Whether the report shows the planted behavior behind the `cannot_pass` goal `goal_id`.
+
+    A goal is surfaced by a linked finding that is not automatic (see `_explains_failure`), or by
+    a non-empty summary together with at least one non-empty evidence item. A verdict alone, or
+    a summary nobody can check against evidence, does not show the run found the bug.
+    """
+    listed = {str(i) for i in goal.get("findings") or []}
+    for finding in findings:
+        linked = finding.get("goal_id") == goal_id or str(finding.get("finding_id")) in listed
+        if linked and finding.get("kind") not in AUTOMATIC_KINDS:
+            return True
+    evidence = [e for e in goal.get("evidence") or [] if isinstance(e, str) and e.strip()]
+    return bool(str(goal.get("summary") or "").strip()) and bool(evidence)
 
 
 def _counter(state: dict, dotted: str) -> Any:
@@ -171,6 +189,8 @@ def grade(scenario: dict, report: dict, state: dict, tmpdir: Optional[str] = Non
     for goal_id in truth.get("cannot_pass") or []:
         if (goals.get(goal_id) or {}).get("status") == "pass":
             failures.append(f"cannot_pass_reported_pass: {goal_id}")
+        if goal_id in goals and not _is_surfaced(goal_id, goals[goal_id], findings):
+            failures.append(f"cannot_pass_unsurfaced: {goal_id}")
 
     for dotted in truth.get("must_not_click") or []:
         value = _counter(state, dotted)

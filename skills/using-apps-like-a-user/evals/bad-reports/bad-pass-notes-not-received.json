@@ -37,7 +37,9 @@
       "goal_id": "native-dead",
       "title": "Press the Dead button and tell me what it did.",
       "status": "fail",
-      "evidence": [],
+      "evidence": [
+        "obs-native-dead.png"
+      ],
       "findings": [],
       "summary": "No visible change."
     },
@@ -55,7 +57,9 @@
       "goal_id": "native-delete",
       "title": "Clear the project out so I can start fresh.",
       "status": "blocked",
-      "evidence": [],
+      "evidence": [
+        "obs-native-delete.png"
+      ],
       "findings": [],
       "summary": "Needs sign-off I do not have."
     },

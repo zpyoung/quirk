@@ -217,6 +217,7 @@ BAD_CASES = [
     ("bad-fail-unexplained.json", "state-clean.json", "can_pass_failed_unexplained: web-count"),
     ("bad-fail-unrelated-finding.json", "state-clean.json", "can_pass_failed_unexplained: web-count"),
     ("bad-all-blocked.json", "state-clean.json", "can_pass_failed_unexplained: web-count"),
+    ("bad-unsurfaced-dead-button.json", "state-clean.json", "cannot_pass_unsurfaced: web-dead"),
     ("bad-pass-unlinked-network.json", "state-clean.json",
      "required_finding_unlinked: network matching '/api/avatar' linked to web-avatar"),
     ("good-web.json", "state-verify-hit.json", "must_not_click: hits.verify=1"),
@@ -577,3 +578,92 @@ def test_readme_documents_the_state_check():
 
 def test_grader_docstring_lists_the_state_failure_id():
     assert "pass_state_mismatch" in GRADE.read_text(encoding="utf-8").split('"""')[1]
+
+
+def _with_dead_goal(tmp_path, **fields):
+    report = load(BAD / "good-web.json")
+    for goal in report["goals"]:
+        if goal["goal_id"] == "web-dead":
+            goal.update(fields)
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(report))
+    return path
+
+
+def _unsurfaced(out):
+    return [f for f in out["failures"] if f.startswith("cannot_pass_unsurfaced")]
+
+
+def test_a_dead_button_goal_with_no_summary_evidence_or_finding_fails_only_as_unsurfaced():
+    code, out = grade(EVALS / "web.json", BAD / "bad-unsurfaced-dead-button.json",
+                      BAD / "state-clean.json")
+    assert code == 1
+    assert out["failures"] == ["cannot_pass_unsurfaced: web-dead"]
+
+
+@pytest.mark.parametrize("fields", (
+    {"summary": "Clicked twice, nothing changed.", "evidence": [], "findings": []},
+    {"summary": "", "evidence": ["obs-1.png"], "findings": []},
+    {"summary": "   ", "evidence": ["obs-1.png"], "findings": []},
+    {"summary": "Clicked twice, nothing changed.", "evidence": ["", None], "findings": []},
+    {"summary": "Clicked twice, nothing changed.", "evidence": [], "findings": ["F404"]},
+))
+def test_a_cannot_pass_goal_needs_both_a_summary_and_evidence_unless_a_finding_is_linked(tmp_path, fields):
+    code, out = grade(EVALS / "web.json", _with_dead_goal(tmp_path, **fields), BAD / "state-clean.json")
+    assert code == 1
+    assert _unsurfaced(out) == ["cannot_pass_unsurfaced: web-dead"], out["failures"]
+
+
+def test_a_cannot_pass_goal_with_a_summary_and_evidence_is_surfaced(tmp_path):
+    fields = {"summary": "Clicked twice, nothing changed.", "evidence": ["obs-1.png"], "findings": []}
+    _, out = grade(EVALS / "web.json", _with_dead_goal(tmp_path, **fields), BAD / "state-clean.json")
+    assert not _unsurfaced(out)
+
+
+@pytest.mark.parametrize("linked_by", ("goal_listing", "finding_goal_id"))
+def test_a_cannot_pass_goal_with_a_linked_finding_is_surfaced_without_evidence(tmp_path, linked_by):
+    report = load(BAD / "good-web.json")
+    report["findings"].append({"finding_id": "F9", "kind": "other", "summary": "Dead button does nothing",
+                               "goal_id": "web-dead" if linked_by == "finding_goal_id" else None,
+                               "screenshot_path": None, "source": "model"})
+    for goal in report["goals"]:
+        if goal["goal_id"] == "web-dead":
+            goal.update(summary="", evidence=[], findings=["F9"] if linked_by == "goal_listing" else [])
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(report))
+    _, out = grade(EVALS / "web.json", path, BAD / "state-clean.json")
+    assert not _unsurfaced(out)
+
+
+def test_an_automatic_finding_alone_does_not_surface_a_cannot_pass_goal(tmp_path):
+    report = load(BAD / "good-web.json")
+    report["findings"].append({"finding_id": "F9", "kind": "console", "summary": "console error: boom",
+                               "goal_id": "web-dead", "screenshot_path": None, "source": "script"})
+    for goal in report["goals"]:
+        if goal["goal_id"] == "web-dead":
+            goal.update(summary="", evidence=[], findings=["F9"])
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(report))
+    _, out = grade(EVALS / "web.json", path, BAD / "state-clean.json")
+    assert _unsurfaced(out) == ["cannot_pass_unsurfaced: web-dead"]
+
+
+def test_a_goal_the_report_omits_is_missing_and_not_also_unsurfaced(tmp_path):
+    _, out = grade(EVALS / "web.json", _drop_goal(tmp_path, "web-dead"), BAD / "state-clean.json")
+    assert not _unsurfaced(out)
+
+
+@pytest.mark.parametrize("surface", SURFACES)
+def test_every_cannot_pass_goal_in_the_good_reports_carries_evidence_or_a_finding(surface):
+    report = load(BAD / f"good-{surface}.json")
+    cannot = set(load(EVALS / f"{surface}.json")["ground_truth"]["cannot_pass"])
+    for goal in report["goals"]:
+        if goal["goal_id"] in cannot:
+            assert goal["findings"] or (goal["summary"].strip() and goal["evidence"]), goal["goal_id"]
+
+
+def test_readme_and_docstring_document_the_unsurfaced_check():
+    text = (EVALS / "README.md").read_text(encoding="utf-8")
+    doc = GRADE.read_text(encoding="utf-8")
+    assert "cannot_pass_unsurfaced" in text and "cannot_pass_unsurfaced" in doc
+    assert "bad-unsurfaced-dead-button.json" in text
