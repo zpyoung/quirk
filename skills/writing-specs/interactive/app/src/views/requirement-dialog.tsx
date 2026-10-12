@@ -28,18 +28,18 @@ import { ChangedToken, CertaintyToken, ClaudeField, SpecMarkdown } from './share
 import { CONDITIONS, setPlacement } from './board-model'
 import { useScopeOutGuard } from './scope-out-guard'
 
-type DialogProps = { requirement: Requirement | null; spec: LogicSpec; state: ReviewState; update: Update; changedIds: Set<string>; onClose: () => void }
-type DetailProps = { requirement: Requirement; spec: LogicSpec; state: ReviewState; update: Update; changedIds: Set<string>; headingLevel?: 2 | 3 }
+type DialogProps = { requirement: Requirement | null; spec: LogicSpec; state: ReviewState; update: Update; changedIds: Set<string>; readOnly?: boolean; onClose: () => void }
+type DetailProps = { requirement: Requirement; spec: LogicSpec; state: ReviewState; update: Update; changedIds: Set<string>; readOnly?: boolean; headingLevel?: 2 | 3 }
 
-/** The full requirement editor in a dialog: opened from a board row. */
-export function RequirementDialog({ requirement, spec, state, update, changedIds, onClose }: DialogProps) {
+/** The full requirement editor in a dialog: opened from a board row. With `readOnly`, it shows the signed scope with no editing controls. */
+export function RequirementDialog({ requirement, spec, state, update, changedIds, readOnly, onClose }: DialogProps) {
   if (!requirement) return null
   return (
     <Dialog isOpen onOpenChange={(open) => !open && onClose()} width={720} maxHeight="90dvh" purpose="form">
       <DialogHeader title={`${requirement.id} · ${requirement.summary}`} subtitle={requirement.area} onOpenChange={(open) => !open && onClose()} />
       <VStack padding={4}>
         {/* keyed by id so switching requirements without closing the dialog resets the dispute draft below */}
-        <RequirementDetail key={requirement.id} requirement={requirement} spec={spec} state={state} update={update} changedIds={changedIds} />
+        <RequirementDetail key={requirement.id} requirement={requirement} spec={spec} state={state} update={update} changedIds={changedIds} readOnly={readOnly} />
       </VStack>
     </Dialog>
   )
@@ -151,8 +151,8 @@ function DisputeControl({ requirement, spec, state, update }: { requirement: Req
   )
 }
 
-/** Everything about one requirement plus its editable fields. */
-export function RequirementDetail({ requirement, spec, state, update, changedIds, headingLevel }: DetailProps) {
+/** Everything about one requirement plus its editable fields; with `readOnly`, its scope shows as signed and nothing is editable. */
+export function RequirementDetail({ requirement, spec, state, update, changedIds, readOnly, headingLevel }: DetailProps) {
   const baseline = placementInSpec(requirement)
   const placement = effectivePlacement(state, requirement)
   const moved = requirementMoved(state, requirement)
@@ -202,37 +202,41 @@ export function RequirementDetail({ requirement, spec, state, update, changedIds
         </Banner>
       ) : null}
 
-      <Divider />
-      <RadioList label="Scope" orientation="horizontal" value={scopeValue} onChange={setScope}>
-        <RadioListItem value="in" label={CHOICE_LABEL.in} description={`Goes in Claude's ${GROUP_LABEL[requirement.group]} group`} />
-        <RadioListItem value="conditional" label={CHOICE_LABEL.conditional} description="Kept only while it stays within its code budget" />
-        <RadioListItem value="out" label={CHOICE_LABEL.out} description="Deliberately not built" />
-      </RadioList>
-      {scopeValue === 'conditional' ? (
-        <Selector
-          label="Condition"
-          placeholder="Choose how much code it may cost"
-          value={effectiveCondition(state, requirement)}
-          onChange={(value) => commitScope('conditional', value as ScopeCondition)}
-          options={CONDITIONS.map((condition) => ({ value: condition, label: CONDITION_LABEL[condition] }))}
-        />
-      ) : null}
-      {moved ? (
-        <TextArea
-          label={`Proposed as ${CHOICE_LABEL[baseline]}${requirement.condition ? ` · ${CONDITION_LABEL[requirement.condition]}` : ''}. Why the change?`}
-          rows={2}
-          value={state.moveReasons[requirement.id] ?? ''}
-          onChange={(reason) => update((s) => ({ ...s, moveReasons: { ...s.moveReasons, [requirement.id]: reason } }), requirement.id)}
-          isRequired
-        />
-      ) : null}
-      <TextArea
-        label="Your note"
-        isOptional
-        rows={2}
-        value={state.notes[requirement.id] ?? ''}
-        onChange={(note) => update((s) => ({ ...s, notes: { ...s.notes, [requirement.id]: note } }), requirement.id)}
-      />
+      {readOnly ? null : (
+        <>
+          <Divider />
+          <RadioList label="Scope" orientation="horizontal" value={scopeValue} onChange={setScope}>
+            <RadioListItem value="in" label={CHOICE_LABEL.in} description={`Goes in Claude's ${GROUP_LABEL[requirement.group]} group`} />
+            <RadioListItem value="conditional" label={CHOICE_LABEL.conditional} description="Kept only while it stays within its code budget" />
+            <RadioListItem value="out" label={CHOICE_LABEL.out} description="Deliberately not built" />
+          </RadioList>
+          {scopeValue === 'conditional' ? (
+            <Selector
+              label="Condition"
+              placeholder="Choose how much code it may cost"
+              value={effectiveCondition(state, requirement)}
+              onChange={(value) => commitScope('conditional', value as ScopeCondition)}
+              options={CONDITIONS.map((condition) => ({ value: condition, label: CONDITION_LABEL[condition] }))}
+            />
+          ) : null}
+          {moved ? (
+            <TextArea
+              label={`Proposed as ${CHOICE_LABEL[baseline]}${requirement.condition ? ` · ${CONDITION_LABEL[requirement.condition]}` : ''}. Why the change?`}
+              rows={2}
+              value={state.moveReasons[requirement.id] ?? ''}
+              onChange={(reason) => update((s) => ({ ...s, moveReasons: { ...s.moveReasons, [requirement.id]: reason } }), requirement.id)}
+              isRequired
+            />
+          ) : null}
+          <TextArea
+            label="Your note"
+            isOptional
+            rows={2}
+            value={state.notes[requirement.id] ?? ''}
+            onChange={(note) => update((s) => ({ ...s, notes: { ...s.notes, [requirement.id]: note } }), requirement.id)}
+          />
+        </>
+      )}
 
       <Divider />
       <VStack gap={2}>
@@ -242,6 +246,11 @@ export function RequirementDetail({ requirement, spec, state, update, changedIds
 
       <Divider />
       <MetadataList columns="multi">
+        {readOnly ? (
+          <MetadataListItem label="Scope">
+            {placement === 'conditional' ? `${CHOICE_LABEL.conditional} · ${CONDITION_LABEL[effectiveCondition(state, requirement)]}` : CHOICE_LABEL[placement]}
+          </MetadataListItem>
+        ) : null}
         {requirement.certainty ? <MetadataListItem label="How sure we are"><CertaintyToken certainty={requirement.certainty} /></MetadataListItem> : null}
         <MetadataListItem label="Depends on">{requirement.dependsOn.join(', ') || 'Nothing'}</MetadataListItem>
         <MetadataListItem label="Needed by">{dependents.join(', ') || 'Nothing'}</MetadataListItem>
@@ -260,8 +269,12 @@ export function RequirementDetail({ requirement, spec, state, update, changedIds
         </VStack>
       ) : null}
 
-      <Divider />
-      <DisputeControl requirement={requirement} spec={spec} state={state} update={update} />
+      {readOnly ? null : (
+        <>
+          <Divider />
+          <DisputeControl requirement={requirement} spec={spec} state={state} update={update} />
+        </>
+      )}
     </VStack>
   )
 }

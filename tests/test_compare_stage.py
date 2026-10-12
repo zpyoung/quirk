@@ -191,6 +191,33 @@ def test_check_export_rejects_non_iso_exported_at(tmp_path: Path) -> None:
     assert any(line.startswith("/exportedAt") for line in result.stderr.splitlines()), result.stderr
 
 
+@pytest.mark.parametrize("command", ["check-export", "challenges"])
+def test_export_is_stale_when_only_the_signed_spec_changes(tmp_path: Path, command: str) -> None:
+    spec_dir = make_compare_dir(tmp_path)
+    logic = load_fixture_logic()
+    logic["title"] += " (amended)"
+    (spec_dir / "logic.json").write_text(json.dumps(logic), encoding="utf-8")
+    result = run_cli(command, str(spec_dir), str(EXPORTS / "valid.json"))
+    assert result.returncode == 3, result.stderr
+    assert "signed spec changed since this export" in result.stderr.splitlines(), result.stderr
+    assert result.stdout == ""
+
+
+# REQ-99 is unknown and REQ-05 is out of scope; REQ-01 stays valid so only the bad indexes are reported
+@pytest.mark.parametrize("command", ["check-export", "challenges"])
+def test_export_rejects_stars_outside_the_scored_scope(tmp_path: Path, command: str) -> None:
+    spec_dir = make_compare_dir(tmp_path)
+    export = json.loads((EXPORTS / "valid.json").read_text(encoding="utf-8"))
+    export["stars"] = ["REQ-01", "REQ-99", "REQ-05"]
+    bad = tmp_path / "bad-stars.json"
+    bad.write_text(json.dumps(export), encoding="utf-8")
+    result = run_cli(command, str(spec_dir), str(bad))
+    assert result.returncode == 1, result.stderr
+    pointers = [line.split(":", 1)[0] for line in result.stderr.splitlines() if line.startswith("/")]
+    assert pointers == ["/stars/1", "/stars/2"], result.stderr
+    assert result.stdout == ""
+
+
 def test_check_export_without_loaded_comparison_is_stale(tmp_path: Path) -> None:
     spec_dir = make_compare_dir(tmp_path, None)
     result = run_cli("check-export", str(spec_dir), str(EXPORTS / "valid.json"))

@@ -297,6 +297,7 @@ function App() {
     update: comparison ? ignoreUpdate : update,
     changedIds,
     onOpenRequirement: setOpenRequirementId,
+    readOnly: Boolean(comparison),
   }
 
   return (
@@ -390,6 +391,7 @@ function App() {
           state={readOnlyState}
           update={comparison ? ignoreUpdate : update}
           changedIds={changedIds}
+          readOnly={Boolean(comparison)}
           onClose={() => setOpenRequirementId(null)}
         />
         <ItemDialog id={openItemId} spec={payload.spec} state={readOnlyState} onClose={() => setOpenItemId(null)} />
