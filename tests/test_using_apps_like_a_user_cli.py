@@ -344,7 +344,7 @@ class TestBegin:
         out = json.loads(capsys.readouterr().out)
         if background_capable:
             assert code == 0, out
-            assert out["holds_lock"] is (surface == "native")
+            assert out["holds_lock"] is False
         else:
             assert code == 2 and out["error"] == "foreground_not_allowed"
         sb.kill_launched()
@@ -708,6 +708,30 @@ class TestVisibility:
         assert result["findings_added"] == [finding["finding_id"]]
         assert sb.pw_argvs("click") == []
 
+    def test_a_drag_onto_a_hidden_destination_is_not_visible_and_not_performed(self, sb):
+        run_id, obs = web_run(sb, visibility={"e7": "opacity"})
+        result = act(sb, run_id, obs["observation_id"], "--action", "drag", "--ref", "e4",
+                     "--to-ref", "e7")
+        assert result.status == "NOT_VISIBLE" and result["reason"] == "opacity"
+        [finding] = sb.run_json(run_id)["findings"]
+        assert finding["kind"] == "visibility" and result["findings_added"] == [finding["finding_id"]]
+        assert sb.pw_argvs("drag") == []
+        assert sb.run_json(run_id)["budget"]["run_used"] == 0
+
+    def test_a_drag_from_a_hidden_source_is_still_not_visible(self, sb):
+        run_id, obs = web_run(sb, visibility={"e4": "offscreen"})
+        result = act(sb, run_id, obs["observation_id"], "--action", "drag", "--ref", "e4",
+                     "--to-ref", "e7")
+        assert result.status == "NOT_VISIBLE" and result["reason"] == "offscreen"
+        assert sb.pw_argvs("drag") == []
+
+    def test_a_drag_between_visible_endpoints_is_performed(self, sb):
+        run_id, obs = web_run(sb, visibility={"e17": "opacity"})
+        result = act(sb, run_id, obs["observation_id"], "--action", "drag", "--ref", "e4",
+                     "--to-ref", "e7")
+        assert result.status != "NOT_VISIBLE"
+        assert sb.pw_argvs("drag") == [["drag", "e4", "e7"]]
+
     def test_an_unreadable_visibility_probe_is_error_not_a_pass(self, sb):
         run_id, obs = web_run(sb, visibility={"e7": "__garbage__"})
         result = click(sb, run_id, obs["observation_id"], "e7")
@@ -903,7 +927,7 @@ class TestElectron:
         assert entry["kind"] == "app" and entry["id"].startswith("pid:")
         assert sb.pw_argvs("attach") == [["attach", f"--cdp=http://127.0.0.1:{port}"]]
         assert "--app" in sb.orca_commands("get-app-state")[-1]["argv"]
-        assert state["holds_lock"] is False
+        assert state["holds_lock"] is True
         assert (sb.run_dir(run_id) / "launch.stdout.log").exists()
 
     def test_the_default_port_comes_from_the_scan_range(self, sb):
@@ -1030,8 +1054,11 @@ class TestElectron:
         assert snap(Stub("0 sheet Save", False)).sheet is False
 
 
-    def test_electron_runs_do_not_take_the_lock_at_begin(self, sb):
-        electron_run(sb)
+    def test_electron_runs_on_a_foreground_only_driver_take_the_lock_at_begin(self, sb):
+        run_id, _ = electron_run(sb)
+        assert _run.DesktopLock(sb.lock_path).holder()["run_id"] == run_id
+        assert sb.run_json(run_id)["holds_lock"] is True
+        assert sb.run("end", "--run", run_id).code == 0
         assert _run.DesktopLock(sb.lock_path).holder() is None
 
 
@@ -1091,6 +1118,77 @@ class TestNativeDriverIdentity:
         cua_run.seen["requests"].clear()
         cua_run("observe", "--run", out["run_id"], "--goal", "g1")
         assert cua_run.seen["requests"] == [("cua", out["run_id"])]
+
+    def test_a_background_capable_native_run_takes_no_lock_at_begin(self, sb, cua_run):
+        code, out = cua_run("begin", "--target", FIXTURE_BUNDLE, "--surface", "native", "--owner", "yours",
+                            "--attended", "--goals-file", write_goals(sb, "g1"))
+        assert code == 0 and out["holds_lock"] is False
+        assert _run.DesktopLock(sb.lock_path).holder() is None
+        assert sb.run_json(out["run_id"])["holds_lock"] is False
+
+    def test_a_background_capable_run_is_not_blocked_by_another_runs_lock(self, sb, cua_run):
+        _run.DesktopLock(sb.lock_path).try_acquire("other-run", "/other/project")
+        code, out = cua_run("begin", "--target", FIXTURE_BUNDLE, "--surface", "native", "--owner", "yours",
+                            "--attended", "--goals-file", write_goals(sb, "g1"))
+        assert code == 0, out
+        assert _run.DesktopLock(sb.lock_path).holder()["run_id"] == "other-run"
+
+    def test_a_background_capable_run_takes_the_lock_on_its_first_foreground_act(self, sb, cua_run):
+        _, out = cua_run("begin", "--target", FIXTURE_BUNDLE, "--surface", "native", "--owner", "yours",
+                         "--attended", "--goals-file", write_goals(sb, "g1"))
+        run_id = out["run_id"]
+        _, seen = cua_run("observe", "--run", run_id, "--goal", "g1")
+        obs_id = str(seen["observation"]["observation_id"])
+        code, result = cua_run("act", "--run", run_id, "--obs", obs_id, "--action", "click",
+                               "--ref", "2", "--foreground")
+        assert code == 0 and result["status"] != "DESKTOP_BUSY", result
+        assert _run.DesktopLock(sb.lock_path).holder()["run_id"] == run_id
+        assert sb.run_json(run_id)["holds_lock"] is True
+
+    def test_resume_of_a_background_capable_run_takes_no_lock(self, sb, cua_run):
+        _, out = cua_run("begin", "--target", FIXTURE_BUNDLE, "--surface", "native", "--owner", "yours",
+                         "--attended", "--goals-file", write_goals(sb, "g1"))
+        run_id = out["run_id"]
+        assert cua_run("handoff", "--run", run_id, "--reason", "hint")[0] == 0
+        code, resumed = cua_run("resume", "--run", run_id)
+        assert code == 0, resumed
+        assert _run.DesktopLock(sb.lock_path).holder() is None
+        assert sb.run_json(run_id)["holds_lock"] is False
+
+    def test_an_act_the_driver_refuses_for_the_foreground_costs_no_budget(self, sb, cua_run):
+        _, out = cua_run("begin", "--target", FIXTURE_BUNDLE, "--surface", "native", "--owner", "yours",
+                         "--attended", "--goals-file", write_goals(sb, "g1"))
+        run_id = out["run_id"]
+        _, seen = cua_run("observe", "--run", run_id, "--goal", "g1")
+        obs_id = str(seen["observation"]["observation_id"])
+        code, refused = cua_run("act", "--run", run_id, "--obs", obs_id, "--action", "click",
+                                "--ref", "2")
+        assert code == 0 and refused["status"] == "FOREGROUND_REQUIRED", refused
+        state = sb.run_json(run_id)
+        assert state["budget"]["run_used"] == 0
+        assert state["goals"]["g1"]["actions_used"] == 0
+
+    def test_a_delivered_act_costs_one_action(self, sb, cua_run):
+        _, out = cua_run("begin", "--target", FIXTURE_BUNDLE, "--surface", "native", "--owner", "yours",
+                         "--attended", "--goals-file", write_goals(sb, "g1"))
+        run_id = out["run_id"]
+        _, seen = cua_run("observe", "--run", run_id, "--goal", "g1")
+        obs_id = str(seen["observation"]["observation_id"])
+        code, done = cua_run("act", "--run", run_id, "--obs", obs_id, "--action", "click",
+                             "--ref", "2", "--foreground")
+        assert code == 0 and done["status"] in ("OBSERVED", "NO_EFFECT"), done
+        assert sb.run_json(run_id)["budget"]["run_used"] == 1
+
+    def test_a_sheet_a_background_run_cannot_cancel_without_the_foreground_is_reported(self, sb, cua_run):
+        sb.native_scenario(TestEnd.SHEET_PAGES, start="sheet", bundle=FIXTURE_BUNDLE,
+                           rules=[TestEnd.ESCAPE_CLOSES_SHEET])
+        _, out = cua_run("begin", "--target", FIXTURE_BUNDLE, "--surface", "native", "--owner", "yours",
+                         "--attended", "--goals-file", write_goals(sb, "g1"))
+        code, ended = cua_run("end", "--run", out["run_id"])
+        assert code == 0, ended
+        assert sb.orca_commands("press-key") == []
+        assert any("sheet" in e for e in ended["summary"]["state_left"]["kept_open"])
+        assert _run.DesktopLock(sb.lock_path).holder() is None
 
     def test_a_recorded_adapter_that_is_gone_exits_5_instead_of_switching(self, sb, cua_run, monkeypatch):
         import _native
@@ -1536,6 +1634,52 @@ class TestEnd:
         assert first["summary"]["state_left"]["cleanup_errors"]
         assert sb.run("end", "--run", run_id).code == 4
 
+    SHEET_PAGES = {
+        "idle": {"tree": NATIVE_TREE, "title": "UALA Fixture"},
+        "sheet": {"tree": NATIVE_SHEET_TREE, "title": "UALA Fixture"},
+    }
+    ESCAPE_CLOSES_SHEET = {"cmd": "press-key", "opts": {"--key": "Escape"}, "page": "idle"}
+
+    def sheet_run(self, sb, rules=(), **kwargs):
+        return native_run(sb, pages=self.SHEET_PAGES, rules=list(rules), start="sheet", **kwargs)
+
+    def test_end_cancels_a_sheet_the_run_left_open(self, sb):
+        run_id, _ = self.sheet_run(sb, rules=[self.ESCAPE_CLOSES_SHEET])
+        ended = sb.run("end", "--run", run_id)
+        assert ended.code == 0
+        [press] = sb.orca_commands("press-key")
+        assert press["argv"][press["argv"].index("--key") + 1] == "Escape"
+        assert ended["summary"]["state_left"]["kept_open"] == []
+
+    def test_end_cancels_the_sheet_even_when_a_failed_goal_keeps_the_app_open(self, sb):
+        run_id, _ = self.sheet_run(sb, rules=[self.ESCAPE_CLOSES_SHEET])
+        sb.run("verdict", "--run", run_id, "--goal", "g1", "--status", "blocked",
+               "--summary-stdin", stdin="stuck")
+        ended = sb.run("end", "--run", run_id)
+        assert len(sb.orca_commands("press-key")) == 1
+        assert ended["summary"]["state_left"]["kept_open"] == []
+
+    def test_end_without_a_sheet_sends_no_key(self, sb):
+        run_id, _ = native_run(sb)
+        assert sb.run("end", "--run", run_id).code == 0
+        assert sb.orca_commands("press-key") == []
+
+    def test_a_sheet_that_survives_the_cancel_is_reported_in_state_left(self, sb):
+        run_id, _ = self.sheet_run(sb)
+        ended = sb.run("end", "--run", run_id)
+        assert len(sb.orca_commands("press-key")) == 1
+        left = ended["summary"]["state_left"]["kept_open"]
+        assert any("sheet" in entry for entry in left)
+
+    def test_end_after_drift_reports_the_sheet_instead_of_taking_the_keyboard(self, sb):
+        run_id, _ = self.sheet_run(sb, rules=[self.ESCAPE_CLOSES_SHEET])
+        state = sb.run_json(run_id)
+        state["stopped_reason"] = "drift"
+        sb.write_run_json(run_id, state)
+        ended = sb.run("end", "--run", run_id)
+        assert sb.orca_commands("press-key") == []
+        assert any("sheet" in entry for entry in ended["summary"]["state_left"]["kept_open"])
+
     def test_frontmost_app_is_restored(self, sb):
         run_id, _ = native_run(sb)
         sb.set_desktop(frontmost=FIXTURE_BUNDLE)
@@ -1549,8 +1693,9 @@ class TestEnd:
         assert (sb.run_dir(run_id) / "clipboard.txt").exists()
         ended = sb.run("end", "--run", run_id)
         assert not (sb.run_dir(run_id) / "clipboard.txt").exists()
-        assert ended["summary"]["state_left"]["clipboard_restored"] is False
+        assert ended["summary"]["state_left"]["clipboard_restored"] is None
         assert sb.desktop()["clipboard_change_count"] == before["clipboard_change_count"]
+        assert "Clipboard: not touched" in (sb.run_dir(run_id) / "report.md").read_text()
 
 
 class TestPasteAndClipboard:

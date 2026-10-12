@@ -59,6 +59,9 @@ PID_BUNDLE_WAIT_S = 5.0
 DRIFT_TOLERANCE_PT = 3.0
 PASTE_MIN_CHARS = 200
 PASTE_HOTKEY = "CmdOrCtrl+V"
+SHEET_CLOSE_WAIT_S = 1.0
+SHEET_LEFT_OPEN = "native sheet or dialog still open"
+REFUSED_BEFORE_DELIVERY = ("needs_foreground", "window_gone")
 MIN_REDACT_CHARS = 4
 CDP_PORTS = range(9222, 9300)
 ELECTRON_DEV_BUNDLE = "com.github.Electron"
@@ -715,6 +718,15 @@ def _native_is_background_capable() -> bool:
         return True
 
 
+def _needs_lock_at_begin(surface: str) -> bool:
+    """Whether a run on `surface` holds the foreground for every native action from its first moment.
+
+    Only a native driver that is not background-capable does; a background-capable run takes the
+    lock on its first `--foreground` act instead.
+    """
+    return surface in ("native", "electron") and not _native_is_background_capable()
+
+
 def _validate_begin(args) -> List[Tuple[str, str]]:
     if args.surface == "electron" and not args.launch:
         raise UsageError("launch_required",
@@ -766,7 +778,7 @@ def cmd_begin(args, ctx: Ctx):
     run_id = _run.new_run_id()
     lock = _run.DesktopLock()
     holds_lock = False
-    if surface == "native":
+    if _needs_lock_at_begin(surface):
         lock.acquire(run_id, project, wait_s=LOCK_WAIT_S)
         holds_lock = True
     takeover = lock.replaced
@@ -1202,17 +1214,20 @@ def _act(args, ctx: Ctx) -> dict:
         data["holds_lock"] = True
 
     names = sidecar["names"]
-    if route == "renderer" and req.ref and drivers.uses_web and "skip_visibility" not in ctx.faults:
-        visible, reason = drivers.web.visibility(req.ref)
-        if not visible:
-            shot = record["screenshot_path"] if record else None
-            label = names.get(req.ref) or req.ref
-            finding = run.add_finding(
-                "visibility", f"{label} is in the accessibility tree but not visible ({reason})",
-                goal_id, shot, "script")
-            _add_evidence(run, goal_id, shot)
-            return _act_result(run, goal_id, "NOT_VISIBLE", findings_added=[finding],
-                               reason=reason)
+    if route == "renderer" and drivers.uses_web and "skip_visibility" not in ctx.faults:
+        for ref in (req.ref, req.to_ref):
+            if ref is None:
+                continue
+            visible, reason = drivers.web.visibility(ref)
+            if not visible:
+                shot = record["screenshot_path"] if record else None
+                label = names.get(ref) or ref
+                finding = run.add_finding(
+                    "visibility", f"{label} is in the accessibility tree but not visible ({reason})",
+                    goal_id, shot, "script")
+                _add_evidence(run, goal_id, shot)
+                return _act_result(run, goal_id, "NOT_VISIBLE", findings_added=[finding],
+                                   reason=reason)
 
     needs_name = (req.uses_coordinates or (req.kind in ("press", "hotkey") and data["owner"] == "third-party"))
     if needs_name and not req.target_name:
@@ -1258,8 +1273,6 @@ def _act_perform(args, ctx: Ctx, run: _run.Run, drivers: Drivers, req: ActReques
                  sidecar: dict, goal_id: Optional[str], route: str, uses_foreground: bool,
                  secret_value: Optional[str]) -> dict:
     data = run.data
-    if goal_id:
-        run.charge_action(goal_id)
     before = _effects.Signals(
         url=sidecar["signals"]["url"], title=sidecar["signals"]["title"],
         tree=sidecar["signals"]["tree"], focus=sidecar["signals"]["focus"],
@@ -1277,6 +1290,7 @@ def _act_perform(args, ctx: Ctx, run: _run.Run, drivers: Drivers, req: ActReques
             result = _perform(run, drivers, route, req, action, req.foreground)
         finally:
             _refresh_drift(run)
+        _charge(run, goal_id)
         stage = "observe"
 
         def read() -> _effects.Signals:
@@ -1291,6 +1305,8 @@ def _act_perform(args, ctx: Ctx, run: _run.Run, drivers: Drivers, req: ActReques
         console_new, requests_new, added = _auto_findings(run, drivers, ctx, goal_id,
                                                           block["screenshot_path"])
     except DriverError as exc:
+        if stage == "act" and exc.code not in REFUSED_BEFORE_DELIVERY:
+            _charge(run, goal_id)
         return _driver_failure(run, goal_id, exc, stage)
     block["console_errors_new"] = console_new
     block["network_failures_new"] = requests_new
@@ -1307,6 +1323,11 @@ def _act_perform(args, ctx: Ctx, run: _run.Run, drivers: Drivers, req: ActReques
     return _act_result(
         run, goal_id, status, signals=signals, other_changes=other,
         driver_verified=result.driver_verified, findings_added=added, observation=block)
+
+
+def _charge(run: _run.Run, goal_id: Optional[str]) -> None:
+    if goal_id:
+        run.charge_action(goal_id)
 
 
 def _refresh_drift(run: _run.Run) -> None:
@@ -1432,7 +1453,7 @@ def cmd_resume(args, ctx: Ctx):
         raise RunStateError("not_paused", "the run was not handed off")
     drivers = Drivers(run)
     took_lock = False
-    if data["surface"] == "native":
+    if data["surface"] in ("native", "electron") and not drivers.native.background_capable:
         _run.DesktopLock().acquire(data["run_id"], _project(Path.cwd()), wait_s=LOCK_WAIT_S)
         data["holds_lock"] = True
         took_lock = True
@@ -1541,12 +1562,15 @@ def cmd_end(args, ctx: Ctx):
     drivers = Drivers(run)
     final = run.dir / "final.png"
     final_path = ""
+    sheet_open = False
     try:
         snap = _observe(run, drivers, final)
         final_path = str(snap.screenshot) if snap.screenshot else ""
+        sheet_open = snap.native is not None and snap.native.sheet_open
     except (DriverError, MissingError) as exc:
         errors.append(f"final screenshot: {getattr(exc, 'code', exc)}")
     _save_session(run, drivers, errors)
+    sheet_note = _cancel_open_sheet(run, drivers, errors) if sheet_open else None
     broken = [g for g, v in data["goals"].items() if v["verdict"] in ("fail", "blocked")]
     keep = bool(args.keep_open or broken)
     kept: List[str] = []
@@ -1554,6 +1578,8 @@ def cmd_end(args, ctx: Ctx):
         kept = _kept_windows(run)
     else:
         _close_everything(run, drivers, errors)
+    if sheet_note and (keep or not data["launched"]):
+        kept.append(sheet_note)
     drivers.close_native(errors)
     clipboard_restored = _restore_clipboard(run, errors)
     frontmost_restored = _restore_frontmost(run, errors)
@@ -1580,6 +1606,29 @@ def cmd_end(args, ctx: Ctx):
     data["end_output"] = out
     data["end_exit"] = code
     return out, code
+
+
+def _cancel_open_sheet(run: _run.Run, drivers: Drivers, errors: List[str]) -> Optional[str]:
+    """Escape out of a sheet or dialog still open at `end`; return a note when it stays open.
+
+    The key goes to the foreground only when the run already holds the desktop lock, and never
+    after the user took over, so `end` cannot steal the keyboard.
+    """
+    data = run.data
+    if data["stopped_reason"]:
+        return SHEET_LEFT_OPEN
+    try:
+        drivers.native.act(Action(kind="press", key="Escape"), data["holds_lock"])
+        deadline = time.monotonic() + SHEET_CLOSE_WAIT_S
+        while _observe_native(drivers, None).sheet_open:
+            if time.monotonic() >= deadline:
+                return SHEET_LEFT_OPEN
+            time.sleep(0.25)
+    except DriverError as exc:
+        if exc.code != "needs_foreground":
+            errors.append(f"cancel sheet: {exc.code}")
+        return SHEET_LEFT_OPEN
+    return None
 
 
 def _save_session(run: _run.Run, drivers: Drivers, errors: List[str]) -> None:
@@ -1616,10 +1665,15 @@ def _close_everything(run: _run.Run, drivers: Drivers, errors: List[str]) -> Non
     _terminate_launched(run, errors)
 
 
-def _restore_clipboard(run: _run.Run, errors: List[str]) -> bool:
+def _restore_clipboard(run: _run.Run, errors: List[str]) -> Optional[bool]:
+    """Put back the clipboard the run pasted over.
+
+    Returns None when the run never wrote the clipboard, True when it restored it, and False when
+    it wrote the clipboard and left it as it is.
+    """
     data = run.data
     clip = run.dir / "clipboard.txt"
-    restored = False
+    restored: Optional[bool] = False if data["pasted"] else None
     try:
         if data["pasted"] and clip.is_file():
             count = _desktop.clipboard_change_count()
