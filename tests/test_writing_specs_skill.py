@@ -15,11 +15,19 @@ LOGIC = SKILL_DIR / "logic-spec.md"
 TECH = SKILL_DIR / "tech-spec.md"
 REVIEWER = SKILL_DIR / "tech-spec-reviewer-prompt.md"
 INTERACTIVE = SKILL_DIR / "interactive-logic-spec.md"
+EXAMPLES = SKILL_DIR / "scenario-examples.md"
 
 
 def test_skill_files_exist() -> None:
-    for path in (HUB, LOGIC, TECH, REVIEWER, INTERACTIVE):
+    for path in (HUB, LOGIC, TECH, REVIEWER, INTERACTIVE, EXAMPLES):
         assert path.is_file(), f"missing {path.relative_to(REPO_ROOT)}"
+
+
+def test_both_rubrics_link_the_scenario_examples_reference() -> None:
+    for rubric in (LOGIC, INTERACTIVE):
+        assert "(scenario-examples.md" in rubric.read_text(), (
+            f"{rubric.name} must link scenario-examples.md"
+        )
 
 
 def test_frontmatter() -> None:
