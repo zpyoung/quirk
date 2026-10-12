@@ -5,6 +5,7 @@ import logicFixture from '../../../../../tests/fixtures/interactive/v2/compare/l
 import expectedHashes from '../../../../../tests/fixtures/interactive/v2/compare/expected-hashes.json'
 import {
   POINT_MAP,
+  allHistoryCounts,
   anchorMismatch,
   canonicalJson,
   coverageCounts,
@@ -148,6 +149,16 @@ changed.scores['REQ-04']!.A!.note = 'A different note.'
 const withExport = fresh({ lastExport: { at: 'x', approachRevisions: {}, scoreHashes: exported } })
 equal('revisedRows detects a changed score', revisedRows(changed, withExport, 'B'), ['REQ-02'])
 equal('revisedRows skips a score that gained history', revisedRows(changed, withExport, 'A'), [])
+const historyExport = fresh({ lastExport: { at: 'x', approachRevisions: {}, scoreHashes: exported, historyCounts: allHistoryCounts(comparison) } })
+const aged = structuredClone(comparison)
+const olderHistory = aged.scores['REQ-04']!.A!.history ?? []
+check('fixture REQ-04|A carries older history', olderHistory.length > 0, 'fixture REQ-04|A has no history')
+aged.scores['REQ-04']!.A!.note = 'An unexplained edit.'
+equal('revisedRows flags a changed score with older history and unchanged length', revisedRows(aged, historyExport, 'A'), ['REQ-04'])
+const answered = structuredClone(aged)
+answered.scores['REQ-04']!.A!.history = [...olderHistory, olderHistory[olderHistory.length - 1]!]
+equal('revisedRows skips a changed score whose history grew', revisedRows(answered, historyExport, 'A'), [])
+equal('revisedRows reads a missing historyCounts entry as 0', revisedRows(aged, withExport, 'A'), [])
 equal('revisedRows without a prior export', revisedRows(changed, fresh(), 'B'), [])
 equal('anchorMismatch', anchorMismatch(comparison), { core: true, tools: false })
 
@@ -168,6 +179,8 @@ const goodExport = JSON.parse(readFileSync(`${invalidDir}../exports/valid.json`,
 check('isCompareExport accepts exports/valid.json', isCompareExport(goodExport))
 check('isCompareExport rejects exports/bad-shape.json', !isCompareExport(JSON.parse(readFileSync(`${invalidDir}../exports/bad-shape.json`, 'utf8'))))
 check('isCompareExport rejects a score want on a slice target', !isCompareExport({ ...out, challenges: [{ ...draft, target: { type: 'slice', approachId: 'A', sliceId: 'A-1' } }] }))
+check('isCompareExport rejects a non-ISO exportedAt', !isCompareExport({ ...out, exportedAt: 'yesterday' }))
+check('isCompareExport accepts an ISO exportedAt with offset', isCompareExport({ ...out, exportedAt: '2026-10-12T09:30:00+02:00' }))
 check('isCompareExport rejects an empty note', !isCompareExport({ ...out, challenges: [{ ...draft, note: '' }] }))
 
 const store = new Map<string, string>()

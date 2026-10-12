@@ -181,6 +181,8 @@ export interface CompareState {
     approachRevisions: Record<string, string>
     /** `"<REQ>|<approach>"` to that score's targetHash at export time. */
     scoreHashes: Record<string, string>
+    /** `"<REQ>|<approach>"` to that score's history length at export time; absent in state saved before it existed, read as 0. */
+    historyCounts?: Record<string, number>
   } | null
 }
 

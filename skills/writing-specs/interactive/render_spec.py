@@ -2594,6 +2594,8 @@ def validate_comparison(comparison: Any, logic: dict) -> Tuple[List[Tuple[str, s
                     for other, items in (claims or {}).items():
                         if other not in approach_ids:
                             v.error(pointer(claims_path, other), "unknown approach id: " + other)
+                        elif other == raw.get("id"):
+                            v.error(pointer(claims_path, other), "an approach cannot rival itself")
                         v.string_array(items, pointer(claims_path, other))
 
     requirement_ids = {

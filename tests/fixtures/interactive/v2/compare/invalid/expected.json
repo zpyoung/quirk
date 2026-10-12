@@ -17,5 +17,8 @@
   "guidance-bad-tab.json": "/guidance/steps/1",
   "recommendation-unknown-approach.json": "/guidance/recommendation",
   "duplicate-slice-id.json": "/approaches/0/slices",
-  "bad-readat.json": "/approaches/0/readAt"
+  "bad-readat.json": "/approaches/0/readAt",
+  "choices-unknown-approach.json": "/choices/0/answers/Z",
+  "pairing-unknown-approach.json": "/pairings/0/items/Z",
+  "rival-unknown-approach.json": "/approaches/0/rivalClaims/Z"
 }

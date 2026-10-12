@@ -390,6 +390,16 @@ function validateComparison(value: unknown, spec?: LogicSpec): Comparison {
     if (approachIds.includes(id)) fail(`/approaches/${i}/id`, `duplicate approach id "${id}"`)
     approachIds.push(id)
   })
+  approachList.forEach((approach, i) => {
+    const claims = (approach as Record<string, unknown>).rivalClaims
+    if (claims === undefined) return
+    const at = `/approaches/${i}/rivalClaims`
+    const ownId = (approach as Record<string, unknown>).id
+    for (const key of Object.keys(claims as Record<string, unknown>)) {
+      if (!approachIds.includes(key)) fail(`${at}/${key}`, `unknown approach "${key}"`)
+      if (key === ownId) fail(`${at}/${key}`, 'an approach cannot rival itself')
+    }
+  })
 
   const scores = obj(required(root, 'scores', ''), '/scores')
   const requirements = spec?.requirements
@@ -434,7 +444,10 @@ function validateComparison(value: unknown, spec?: LogicSpec): Comparison {
       const pairingAt = `${at}/${i}`
       const pairing = obj(entry, pairingAt)
       str(required(pairing, 'name', pairingAt), `${pairingAt}/name`)
-      for (const [key, text] of Object.entries(obj(required(pairing, 'items', pairingAt), `${pairingAt}/items`))) str(text, `${pairingAt}/items/${key}`)
+      for (const [key, text] of Object.entries(obj(required(pairing, 'items', pairingAt), `${pairingAt}/items`))) {
+        if (!approachIds.includes(key)) fail(`${pairingAt}/items/${key}`, `unknown approach "${key}"`)
+        str(text, `${pairingAt}/items/${key}`)
+      }
       str(required(pairing, 'text', pairingAt), `${pairingAt}/text`)
     })
   }, '')
@@ -443,7 +456,10 @@ function validateComparison(value: unknown, spec?: LogicSpec): Comparison {
       const choiceAt = `${at}/${i}`
       const choice = obj(entry, choiceAt)
       str(required(choice, 'question', choiceAt), `${choiceAt}/question`)
-      for (const [key, text] of Object.entries(obj(required(choice, 'answers', choiceAt), `${choiceAt}/answers`))) str(text, `${choiceAt}/answers/${key}`)
+      for (const [key, text] of Object.entries(obj(required(choice, 'answers', choiceAt), `${choiceAt}/answers`))) {
+        if (!approachIds.includes(key)) fail(`${choiceAt}/answers/${key}`, `unknown approach "${key}"`)
+        str(text, `${choiceAt}/answers/${key}`)
+      }
     })
   }, '')
   optional(root, 'keyDifferences', strings, '')
@@ -463,6 +479,8 @@ export function isComparison(value: unknown, spec?: LogicSpec): ComparisonResult
 
 // ---------------------------------------------------------------------------
 // Persistent state
+
+const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})?$/
 
 const stateKey = (slug: string) => `quirk-compare:${slug}`
 
@@ -493,7 +511,7 @@ function isStoredState(value: unknown): value is CompareState {
   if (!isStringArray(value.stars) || !isStringArray(value.droppedStars) || typeof value.focus !== 'string' || typeof value.includeConditional !== 'boolean') return false
   if (value.lastExport === null) return true
   const last = value.lastExport
-  return isRecord(last) && typeof last.at === 'string' && isRecord(last.approachRevisions) && isRecord(last.scoreHashes)
+  return isRecord(last) && typeof last.at === 'string' && isRecord(last.approachRevisions) && isRecord(last.scoreHashes) && (last.historyCounts === undefined || isRecord(last.historyCounts))
 }
 
 function resolveTarget(comparison: Comparison, target: Draft['target']): Score | Slice | undefined {
@@ -629,16 +647,18 @@ export function staleScore(score: Score, spec: LogicSpec, itemHashes: Record<str
   return { stale, oldText: score.requirementText, newText: current?.text ?? score.requirementText }
 }
 
-/** Requirement ids whose score for this approach changed since the last export without a challenge answer (`history`) explaining it. */
+/** Requirement ids whose score for this approach changed since the last export while gaining no `history` entry (a challenge answer) since then. */
 export function revisedRows(comparison: Comparison, state: CompareState, approachId: string): string[] {
   const last = state.lastExport
   if (!last) return []
   const rows: string[] = []
   for (const [requirementId, row] of Object.entries(comparison.scores)) {
     const score = row[approachId]
-    const before = last.scoreHashes[`${requirementId}|${approachId}`]
+    const key = `${requirementId}|${approachId}`
+    const before = last.scoreHashes[key]
     if (!score || before === undefined || before === targetHash(score, 'score')) continue
-    if (!score.history || score.history.length === 0) rows.push(requirementId)
+    const gained = (score.history?.length ?? 0) > (last.historyCounts?.[key] ?? 0)
+    if (!gained) rows.push(requirementId)
   }
   return rows
 }
@@ -674,6 +694,15 @@ export function guidanceNotes(comparison: Comparison, spec: LogicSpec, state: Co
 // ---------------------------------------------------------------------------
 // Export
 
+/** History length for every score, keyed `"<REQ>|<approach>"`; store as `lastExport.historyCounts` when exporting. */
+export function allHistoryCounts(comparison: Comparison): Record<string, number> {
+  const counts: Record<string, number> = {}
+  for (const [requirementId, row] of Object.entries(comparison.scores)) {
+    for (const [approachId, score] of Object.entries(row)) counts[`${requirementId}|${approachId}`] = score.history?.length ?? 0
+  }
+  return counts
+}
+
 /** Targets hash for every score, keyed `"<REQ>|<approach>"`; store as `lastExport.scoreHashes` when exporting. */
 export function allScoreHashes(comparison: Comparison): Record<string, string> {
   const hashes: Record<string, string> = {}
@@ -702,6 +731,7 @@ export function createCompareExport(slug: string, renderId: string, comparisonId
 export function isCompareExport(value: unknown): boolean {
   if (!isRecord(value) || value.kind !== COMPARE_EXPORT_KIND || value.schemaVersion !== 1) return false
   for (const key of ['slug', 'renderId', 'comparisonId', 'exportedAt']) if (typeof value[key] !== 'string') return false
+  if (!ISO_DATE_TIME.test(value.exportedAt as string) || Number.isNaN(Date.parse(value.exportedAt as string))) return false
   if (!isStringArray(value.stars) || !isRecord(value.approachRevisions)) return false
   if (!Object.values(value.approachRevisions).every((revision) => typeof revision === 'string')) return false
   if (!Array.isArray(value.challenges)) return false

@@ -180,6 +180,17 @@ def test_check_export_failures(tmp_path: Path, name: str, code: int) -> None:
         assert any(line.startswith("/challenges/") for line in result.stderr.splitlines())
 
 
+def test_check_export_rejects_non_iso_exported_at(tmp_path: Path) -> None:
+    spec_dir = make_compare_dir(tmp_path)
+    export = json.loads((EXPORTS / "valid.json").read_text(encoding="utf-8"))
+    export["exportedAt"] = "yesterday"
+    bad = tmp_path / "bad-exported-at.json"
+    bad.write_text(json.dumps(export), encoding="utf-8")
+    result = run_cli("check-export", str(spec_dir), str(bad))
+    assert result.returncode == 1, result.stderr
+    assert any(line.startswith("/exportedAt") for line in result.stderr.splitlines()), result.stderr
+
+
 def test_check_export_without_loaded_comparison_is_stale(tmp_path: Path) -> None:
     spec_dir = make_compare_dir(tmp_path, None)
     result = run_cli("check-export", str(spec_dir), str(EXPORTS / "valid.json"))
