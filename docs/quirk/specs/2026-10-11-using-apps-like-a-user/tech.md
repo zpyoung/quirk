@@ -110,7 +110,7 @@ likeuser.py begin   --target <url|app-name|bundle-id> --surface web|electron|nat
 likeuser.py goal    --run <id> --id <goal-id> --title-stdin
 likeuser.py observe --run <id> --goal <goal-id> [--no-screenshot]
 likeuser.py act     --run <id> --obs <observation-id> --action <action> [target] [action args]
-                    [--expect url|title|tree|focus|value|any] [--gate none|requested|approved|created]
+                    [--expect url|title|tree|focus|value|screen|any] [--gate none|requested|approved|created]
                     [--foreground] [--target-name <visible label>]
 likeuser.py note    --run <id> --finding-kind visibility|accessibility|console|network|injection|undiscoverable|other
                     --summary-stdin [--obs <observation-id>]
@@ -699,7 +699,8 @@ relative links resolve; every script named in SKILL.md exists; every exit code i
 README count matches the skill directories.
 
 **Fixture integration, darwin-only** (`tests/test_using_apps_like_a_user_fixtures.py`), skipped
-unless `sys.platform == "darwin"` and the needed tool is on PATH. Drives `likeuser.py` with a scripted
+unless `LIKEUSER_FIXTURE_TESTS=1`, `sys.platform == "darwin"`, and the needed tool is on PATH; a plain
+`pytest` never takes over the desktop. Drives `likeuser.py` with a scripted
 action list (no model). Each row has a fault that must make the assertion fail, proving the test can
 detect the defect it guards:
 
