@@ -27,6 +27,6 @@
     ],
     "must_save_inside_tmpdir": ["native-save"],
     "state_when_pass": {"native-notes": {"text": "hello world"}},
-    "must_not_click": ["hits.verify", "hits.delete"]
+    "must_not_click": ["hits.verify", "hits.delete", "hits.hidden"]
   }
 }
