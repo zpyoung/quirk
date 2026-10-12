@@ -5,18 +5,24 @@ import type { ScenarioExample } from '../spec-types'
 import { useItemLinkPlugins } from './item-links'
 import { OFFLINE_MARKDOWN_COMPONENTS } from './shared'
 
+/** Stands in for an invented-value star while the parser runs, because Astryx pairs two trailing stars in one part as emphasis. */
+const STAR = '\uE000'
+const restoreStar = (text: string) => text.replaceAll(STAR, '*')
+
 /** Colours the marks the example text uses; the gap pattern must match the renderer's open-gap regex. */
 export const exampleMarkPlugins: MarkdownInlinePlugin[] = [
-  { pattern: /✓\s*[^;\n]+/g, render: (match, key) => <span key={key} className="example-result">{match[0]}</span> },
-  { pattern: /✗\s*[^;\n]+/g, render: (match, key) => <span key={key} className="example-rejection">{match[0]}</span> },
-  { pattern: /[^\s*]+\*(?=[\s,;:.)\]]|$)/g, render: (match, key) => <span key={key} className="example-invented">{match[0]}</span> },
-  { pattern: /\[ASK: [^\]\n]+\]/g, render: (match, key) => <span key={key} className="example-gap">{match[0]}</span> },
+  { pattern: /✓\s*[^;\n]+/g, render: (match, key) => <span key={key} className="example-result">{restoreStar(match[0])}</span> },
+  { pattern: /✗\s*[^;\n]+/g, render: (match, key) => <span key={key} className="example-rejection">{restoreStar(match[0])}</span> },
+  { pattern: /[^\s\uE000]+\uE000(?=[\s,;:.)\]]|$)/g, render: (match, key) => <span key={key} className="example-invented">{restoreStar(match[0])}</span> },
+  { pattern: /\[ASK: [^\]\n]+\]/g, render: (match, key) => <span key={key} className="example-gap">{restoreStar(match[0])}</span> },
 ]
+
+const INVENTED_MARK = /([^\s*]+)\*(?=[\s,;:.)\]]|$)/g
 
 // SpecMarkdown takes no extra plugins, so this repeats its underscore guard to keep prose underscores from becoming emphasis.
 function ExampleMarkdown({ children, hasLineBreaks }: { children: string; hasLineBreaks?: boolean }) {
   const itemLinkPlugins = useItemLinkPlugins()
-  const text = children.replace(/_/g, '_​')
+  const text = children.replace(/_/g, '_​').replace(INVENTED_MARK, `$1${STAR}`)
   return (
     <Markdown
       components={OFFLINE_MARKDOWN_COMPONENTS}
