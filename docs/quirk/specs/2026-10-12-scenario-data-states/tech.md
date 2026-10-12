@@ -98,7 +98,7 @@ Back-links: [1](logic.md#1-claude-writes-an-example-for-every-scenario-with-data
 
 Back-link: [4](logic.md#4-an-open-gap-blocks-its-scenario-until-the-answer-is-in-the-then).
 
-`REGEX:` open gap, case-sensitive: `\[ASK: ([^\]\n]+)\]`
+`REGEX:` open gap, case-sensitive: `\[ASK: ([^\[\]\n]+)\]` (no square brackets inside the question, which keeps detection linear and makes a nested marker malformed)
 
 `REGEX:` anything that looks like a gap, case-insensitive: `\[\s*ask\b`
 
@@ -196,9 +196,9 @@ Back-link: [6](logic.md#6-the-review-page-shows-examples-in-the-focus-dialog).
 - Result, rendered as a green bold span. `REGEX:` `✓\s*[^;\n]+`
 - Rejection, rendered as a red span. `REGEX:` `✗\s*[^;\n]+`
 - Invented value, rendered as a grey italic span with the `*` kept. `REGEX:` `[^\s*]+\*(?=[\s,;:.)\]]|$)` finds it in the source text. Because the Astryx parser pairs two such stars in one part as emphasis, the pane swaps each matched `*` for the private-use placeholder U+E000 before parsing, the plugin matches the placeholder (`REGEX:` `[^\s\uE000]+\uE000(?=[\s,;:.)\]]|$)`), and the rendered span restores the `*`.
-- Gap, rendered as an amber underlined span. `REGEX:` `\[ASK: [^\]\n]+\]`
+- Gap, rendered as an amber underlined span. `REGEX:` `\[ASK: [^\[\]\n]+\]`
 
-The gap pattern here is display only and must match the renderer's open-gap regex. Records need no plugin: `strong` inside `.scenario-example` is styled blue.
+The gap pattern here is display only and must match the renderer's open-gap regex. An invented value inside a result or rejection phrase renders as an invented-value span nested inside that phrase's span. Records need no plugin: `strong` inside `.scenario-example` is styled blue.
 
 `CONFIG:` `index.css` colours, using theme variables already in the bundle:
 
