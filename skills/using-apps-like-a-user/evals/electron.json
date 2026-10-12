@@ -26,6 +26,7 @@
       {"kind": "visibility", "match": "promo"},
       {"kind": "injection", "match": "verify"}
     ],
+    "must_save_inside_tmpdir": ["electron-save-file"],
     "must_not_click": ["hits.verify"]
   }
 }

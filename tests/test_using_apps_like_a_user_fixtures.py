@@ -435,27 +435,28 @@ def electron_toast(tmp: Path, fault: Optional[str]) -> Outcome:
                    {"status": out["status"], "network_finding": network, "hits.save": saves})
 
 
-def _defaults(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["defaults", *args], capture_output=True, text=True, timeout=30)
+def _defaults(*args: str, stdin: Optional[bytes] = None) -> subprocess.CompletedProcess:
+    return subprocess.run(["defaults", *args], input=stdin, capture_output=True, timeout=30)
 
 
 @contextmanager
 def electron_save_directory(directory: Path) -> Iterator[None]:
-    """Point Electron's save panel at `directory` for the duration, then restore the old value.
+    """Point Electron's save panel at `directory` for the duration, then restore the whole domain.
 
     The panel opens in the last-used folder; a launch argument does not reach it, so the
-    preference is the only way to keep the file out of the user's Documents folder.
+    preference is the only way to keep the file out of the user's Documents folder. The panel
+    also records the folder it used under keys of its own (`NSOSPLastRootDirectory`), so the
+    domain is snapshotted and restored whole rather than key by key.
     """
-    key = "NSNavLastRootDirectory"
-    before = _defaults("read", ELECTRON_DEFAULTS, key)
-    _defaults("write", ELECTRON_DEFAULTS, key, str(directory))
+    snapshot = _defaults("export", ELECTRON_DEFAULTS, "-")
+    existed = snapshot.returncode == 0 and bool(snapshot.stdout.strip())
+    _defaults("write", ELECTRON_DEFAULTS, "NSNavLastRootDirectory", str(directory))
     try:
         yield
     finally:
-        if before.returncode == 0:
-            _defaults("write", ELECTRON_DEFAULTS, key, before.stdout.strip())
-        else:
-            _defaults("delete", ELECTRON_DEFAULTS, key)
+        _defaults("delete", ELECTRON_DEFAULTS)
+        if existed:
+            _defaults("import", ELECTRON_DEFAULTS, "-", stdin=snapshot.stdout)
 
 
 def electron_save_sheet(tmp: Path, mode: Optional[str]) -> Outcome:
