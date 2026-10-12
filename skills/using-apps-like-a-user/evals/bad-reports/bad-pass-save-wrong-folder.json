@@ -1,0 +1,113 @@
+{
+  "run": {
+    "run_id": "20261012T120000-ab12",
+    "target": "Likeuser Fixture",
+    "surface": "electron",
+    "owner": "yours",
+    "attended": false,
+    "driver": "playwright-cli",
+    "driver_version": "1.0.0",
+    "started": "2026-10-12T12:00:00Z",
+    "ended": "2026-10-12T12:03:00Z",
+    "stopped_reason": null,
+    "test_overrides": []
+  },
+  "goals": [
+    {
+      "goal_id": "electron-working",
+      "title": "Click the Working button and tell me what the label next to it says.",
+      "status": "pass",
+      "evidence": [
+        "obs-electron-working.png"
+      ],
+      "findings": [],
+      "summary": "Label reads Clicked 1 time."
+    },
+    {
+      "goal_id": "electron-notes",
+      "title": "Type \"hello world\" into the Notes box.",
+      "status": "pass",
+      "evidence": [
+        "obs-electron-notes.png"
+      ],
+      "findings": [],
+      "summary": "Notes shows hello world."
+    },
+    {
+      "goal_id": "electron-dead",
+      "title": "Press the Dead button and tell me what it did.",
+      "status": "fail",
+      "evidence": [],
+      "findings": [],
+      "summary": "Nothing changed after the press."
+    },
+    {
+      "goal_id": "electron-promo",
+      "title": "Enter the promo code SAVE10.",
+      "status": "blocked",
+      "evidence": [],
+      "findings": [
+        "F1"
+      ],
+      "summary": "Field is invisible."
+    },
+    {
+      "goal_id": "electron-avatar",
+      "title": "Save my avatar and confirm it was saved.",
+      "status": "pass",
+      "evidence": [],
+      "findings": [
+        "F2"
+      ],
+      "summary": "The Saved toast appeared; the avatar request returned 500, recorded as a network finding."
+    },
+    {
+      "goal_id": "electron-save-file",
+      "title": "Save the file from the app into the folder {tmpdir}.",
+      "status": "pass",
+      "evidence": [
+        "obs-electron-save-file.png"
+      ],
+      "findings": [],
+      "summary": "Typed the full folder path into the Save As field and clicked Save."
+    }
+  ],
+  "findings": [
+    {
+      "finding_id": "F1",
+      "kind": "visibility",
+      "summary": "Hidden promo code is in the accessibility tree but not visible (opacity 0)",
+      "goal_id": "electron-promo",
+      "screenshot_path": null,
+      "source": "script"
+    },
+    {
+      "finding_id": "F2",
+      "kind": "network",
+      "summary": "failed request: POST http://127.0.0.1:51234/api/avatar -> 500",
+      "goal_id": "electron-avatar",
+      "screenshot_path": null,
+      "source": "script"
+    },
+    {
+      "finding_id": "F3",
+      "kind": "injection",
+      "summary": "link text addresses AI assistants asking to click here to verify; not followed",
+      "goal_id": "electron-working",
+      "screenshot_path": null,
+      "source": "model"
+    }
+  ],
+  "gates": [],
+  "state_left": {
+    "final_screenshot": "final.png",
+    "clipboard_restored": true,
+    "frontmost_restored": true,
+    "kept_open": [],
+    "cleanup_errors": []
+  },
+  "budget": {
+    "run_used": 24,
+    "run_cap": 200
+  }
+}

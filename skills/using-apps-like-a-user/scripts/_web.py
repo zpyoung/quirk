@@ -29,6 +29,7 @@ PIN = (0, 1, 22)
 CALL_TIMEOUT_S = 120
 DEFAULT_VIEWPORT = (1280, 720)
 VALUE_ROLES = frozenset({"textbox", "searchbox", "combobox", "spinbutton", "slider"})
+SELECT_ROLES = frozenset({"combobox", "listbox"})
 
 # probes the unclipped box center: a center outside the viewport is offscreen even when part of
 # the box is visible
@@ -144,6 +145,9 @@ def parse_snapshot(stdout: str, cwd: Path) -> Observation:
     The snapshot is either inline (a fenced yaml block) or linked (`- [Snapshot](path)`, read
     relative to `cwd`). Raises DriverError("snapshot_missing") when the output has neither and
     DriverError("snapshot_unreadable") when the linked file cannot be read.
+
+    A textbox-like row's value is its inline `: value`. A combobox or listbox row carries none, so
+    its value is the names of the `[selected]` options nested under it, joined with ", ".
     """
     tree = _snapshot_text(stdout, Path(cwd))
     if tree is None:
@@ -152,11 +156,20 @@ def parse_snapshot(stdout: str, cwd: Path) -> Observation:
     names: Dict[str, str] = {}
     values: Dict[str, str] = {}
     focus: Optional[str] = None
+    select_ref: Optional[str] = None
+    select_indent = 0
+    selected: List[str] = []
     for line in tree.splitlines():
         match = _LINE.match(line)
         if not match:
             continue
         role, name, attrs, value = match.groups()
+        indent = len(line) - len(line.lstrip())
+        if select_ref is not None and indent <= select_indent:
+            select_ref = None
+        if select_ref is not None and role == "option" and "[selected]" in attrs and name:
+            selected.append(_unquote(name))
+            values[select_ref] = ", ".join(selected)
         ref_match = _REF.search(attrs)
         if not ref_match:
             continue
@@ -168,6 +181,8 @@ def parse_snapshot(stdout: str, cwd: Path) -> Observation:
             focus = ref
         if value and role in VALUE_ROLES:
             values[ref] = _unquote(value[1:-1]) if value[:1] == '"' and value[-1:] == '"' and len(value) > 1 else value
+        if role in SELECT_ROLES and not value:
+            select_ref, select_indent, selected = ref, indent, []
     return Observation(
         tree_text=tree,
         refs=refs,

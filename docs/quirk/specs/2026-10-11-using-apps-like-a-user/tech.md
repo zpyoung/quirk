@@ -353,6 +353,10 @@ class NativeDriver:
 - **Invariant:** `act(..., foreground=False)` must never activate another app; an adapter that cannot
   guarantee this for an action returns `DriverError("needs_foreground")`, which `act` reports as
   `FOREGROUND_REQUIRED`.
+- **Key targeting:** `press`, `hotkey`, and `type` with no element target go to the window that holds
+  keyboard focus. When the last observation showed a sheet or dialog open, an adapter whose driver
+  addresses windows by id sends them to the frontmost sheet or dialog window of the app, not the main
+  window, and counts them as foreground work, as it does element actions inside a sheet.
 
 `OrcaDriver.background_capable` is `False`. The bake-off winner's value comes from measurement:
 Cua Driver 0.34.1 won with zero focus steals and all input landed ([bakeoff.md](bakeoff.md)); under
@@ -381,7 +385,7 @@ class MissingError(Exception):  missing: List[str]               # CLI exit 5
 @dataclass DriverResult: delivered: bool; driver_verified: Optional[bool]; observation: Optional[Observation]; raw: str
 ```
 `names` maps each ref to its accessible name (the gate subject); `values` maps a ref to its current
-value where the driver exposes one (the `value` signal). `sheet_open` is the native driver's own verdict that a
+value where the driver exposes one (the `value` signal); a combobox or listbox's value is its selected option names, joined with `, `, so a changed selection moves the signal. `sheet_open` is the native driver's own verdict that a
 sheet or dialog is open, so `likeuser.py` never parses a driver's tree format to decide it.
 
 CONTRACT: `_desktop.py` (every function honors `LIKEUSER_FAKE_DESKTOP`; off darwin without it,

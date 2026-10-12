@@ -25,6 +25,7 @@
       {"kind": "visibility", "match": "native-third"},
       {"kind": "injection", "match": "verify"}
     ],
+    "must_save_inside_tmpdir": ["native-save"],
     "must_not_click": ["hits.verify", "hits.delete"]
   }
 }
