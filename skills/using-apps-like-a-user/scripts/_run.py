@@ -32,6 +32,9 @@ LOCK_WAIT_S = 30.0
 LOCK_STALE_S = 15 * 60
 LOCK_POLL_S = 0.5
 REDACTED = "[REDACTED]"
+TYPED_DIR = "typed"
+DRIVER_FILES_DIR = ".playwright-cli"
+_BINARY_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".webm", ".mp4", ".zip"})
 OVERRIDE_BANNER = "TEST OVERRIDES ACTIVE — results are not valid evidence"
 
 OVERRIDE_VARS = (
@@ -121,6 +124,45 @@ def _redact_deep(value: Any, secrets: Iterable[str]) -> Any:
     return value
 
 
+def typed_path(root: Path, run_id: str) -> Path:
+    """Where a run's remembered typed text lives: beside `runs/`, never inside a run folder."""
+    if not run_id or "/" in run_id or run_id in (".", ".."):
+        raise RunStateError("unknown_run", run_id)
+    return Path(root) / TYPED_DIR / f"{run_id}.json"
+
+
+def recall_typed(root: Path, run_id: str) -> List[str]:
+    """Return the typed text earlier verbs of `run_id` remembered; empty when none or unreadable."""
+    try:
+        values = json.loads(typed_path(root, run_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [v for v in values if isinstance(v, str) and v] if isinstance(values, list) else []
+
+
+def remember_typed(root: Path, run_id: str, value: str) -> None:
+    """Keep `value` so every later verb of `run_id` can redact it.
+
+    The values are plain text by necessity, so they sit in a 0600 file in a 0700 folder outside the
+    run folder and are removed by `forget_typed` when the run ends.
+    """
+    values = recall_typed(root, run_id)
+    if value in values:
+        return
+    path = typed_path(root, run_id)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(str(path.parent), 0o700)
+    _atomic_write(path, json.dumps(values + [value]))
+
+
+def forget_typed(root: Path, run_id: str) -> None:
+    """Delete the remembered typed text of `run_id`; absent is fine."""
+    try:
+        typed_path(root, run_id).unlink()
+    except FileNotFoundError:
+        pass
+
+
 def _default_run_data() -> dict:
     return {
         "run_id": "", "target": "", "surface": "", "owner": "", "attended": False,
@@ -159,13 +201,16 @@ class Run:
     """One guarded session: its folder, its `run.json` state, and its event log.
 
     `data` follows the run.json schema. `secrets` is an in-memory set the CLI fills with
-    credential values; every write redacts against it and it is never persisted.
+    credential values and remembered typed text; every write redacts against it and it is never
+    persisted. `credentials` is the subset that came from the credential source: a screenshot
+    cannot be redacted, so the CLI withholds one that would show a credential.
     """
 
     def __init__(self, directory: Path, data: dict) -> None:
         self.dir = Path(directory)
         self.data = data
         self.secrets: Set[str] = set()
+        self.credentials: Set[str] = set()
 
     @classmethod
     def create(cls, root: Path, fields: dict) -> "Run":
@@ -212,6 +257,27 @@ class Run:
         """Write `run.json` atomically, redacting known secrets from every string."""
         payload = _redact_deep(self.data, self.secrets)
         _atomic_write(self.dir / "run.json", json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+    def scrub_driver_files(self) -> None:
+        """Redact known secrets from the text files the web driver keeps in the run folder.
+
+        playwright-cli writes its snapshots and logs under `.playwright-cli/` in its working
+        directory, which is the run folder; those files are raw page text. Images are left alone.
+        """
+        folder = self.dir / DRIVER_FILES_DIR
+        secrets = [s for s in self.secrets if s]
+        if not secrets or not folder.is_dir():
+            return
+        for path in folder.rglob("*"):
+            if not path.is_file() or path.suffix.lower() in _BINARY_SUFFIXES:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+                clean = redact(text, secrets)
+                if clean != text:
+                    _atomic_write(path, clean)
+            except (OSError, ValueError):
+                continue
 
     def event(self, verb: str, inputs: dict, status: str, elapsed_ms: int) -> None:
         """Append one redacted `{ts, verb, inputs, status, elapsed_ms}` line to `events.jsonl`."""

@@ -6,6 +6,7 @@ here launches a real app or browser, or touches the real desktop, clipboard, or 
 """
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import json
 import os
@@ -119,6 +120,31 @@ def assert_in_order(names, wanted):
     """Assert `wanted` appears in `names` as an ordered subsequence."""
     remaining = iter(names)
     assert all(any(name == item for item in remaining) for name in wanted), (names, wanted)
+
+
+def private_port_block(size):
+    """Return a `range` of `size` consecutive free loopback ports, chosen at random.
+
+    The port lock is per sandbox, so concurrent test processes would otherwise race for the
+    default CDP range and fail each other's fake app launches.
+    """
+    import random
+    import socket
+
+    while True:
+        first = random.randrange(20000, 45000)
+        probes = []
+        try:
+            for port in range(first, first + size):
+                probe = socket.socket()
+                probes.append(probe)
+                probe.bind(("127.0.0.1", port))
+        except OSError:
+            continue
+        finally:
+            for probe in probes:
+                probe.close()
+        return range(first, first + size)
 
 
 def pids_alive(sb):
@@ -969,6 +995,7 @@ class TestElectron:
             monkeypatch.setenv(key, value)
         module = load_cli_module()
         monkeypatch.setattr(module, "_bundle_for_pid", lambda pid: "com.github.Electron")
+        monkeypatch.setattr(module, "CDP_PORTS", private_port_block(8))
         attached = []
         drivers = types.SimpleNamespace(web=types.SimpleNamespace(
             attach_cdp=attached.append, state_load=lambda path: None))
@@ -1551,6 +1578,28 @@ class TestLoginLimit:
                      "--text-stdin", "--secret", "username", stdin="x", **self.creds_env())
         assert result.code == 2
 
+    def test_an_unrelated_act_after_the_password_does_not_use_the_attempt(self, sb):
+        run_id, obs = web_run(sb, pages=self.login_pages())
+        step = self.fill_secret(sb, run_id, obs["observation_id"], "e21", "password")
+        other = click(sb, run_id, step["observation"]["observation_id"], "e7")
+        assert sb.run_json(run_id)["login_attempts"] == 0
+        submit = click(sb, run_id, other["observation"]["observation_id"], "e22")
+        assert submit.code == 0 and sb.run_json(run_id)["login_attempts"] == 1
+
+    def test_pressing_enter_after_the_password_is_the_submission(self, sb):
+        run_id, obs = web_run(sb, pages=self.login_pages())
+        step = self.fill_secret(sb, run_id, obs["observation_id"], "e21", "password")
+        act(sb, run_id, step["observation"]["observation_id"], "--action", "press", "--key", "Enter")
+        assert sb.run_json(run_id)["login_attempts"] == 1
+
+    @pytest.mark.parametrize("name", ["Sign in", "Log in", "Login", "Submit", "Continue", "Next", "sign-in"])
+    def test_submit_like_control_names_are_the_submission(self, name):
+        assert load_cli_module()._names_login_submit(name)
+
+    @pytest.mark.parametrize("name", ["Dead button", "Increment counter", "Save avatar", "Cancel", ""])
+    def test_other_control_names_are_not_the_submission(self, name):
+        assert not load_cli_module()._names_login_submit(name)
+
 
 class TestRedaction:
     def test_typed_text_and_passwords_never_reach_run_files(self, sb):
@@ -1575,6 +1624,99 @@ class TestRedaction:
         for secret in (TYPED_TEXT, SECRET_PASSWORD):
             assert secret not in text
         assert ["fill", "e10", TYPED_TEXT] in sb.pw_argvs("fill")
+
+    def typed_run(self, sb):
+        typed = golden_yaml().replace('textbox "Notes" [ref=e10]',
+                                      f'textbox "Notes" [ref=e10]: {TYPED_TEXT}')
+        pages = {"home": web_page(), "typed": web_page(typed)}
+        return web_run(sb, pages=pages, rules=[{"on": ["fill", "e10"], "page": "typed"}])
+
+    def test_typed_text_stays_redacted_in_later_verbs(self, sb):
+        run_id, obs = self.typed_run(sb)
+        act(sb, run_id, obs["observation_id"], "--action", "fill", "--ref", "e10",
+            "--text-stdin", stdin=TYPED_TEXT)
+        later = sb.run("observe", "--run", run_id, "--goal", "g1")
+        tree = Path(later["observation"]["tree_path"]).read_text()
+        assert TYPED_TEXT not in tree and "[REDACTED]" in tree
+        assert TYPED_TEXT not in later.stdout
+        sidecar = (sb.run_dir(run_id) / f"obs-{later['observation']['observation_id']}.json").read_text()
+        assert TYPED_TEXT not in sidecar
+        sb.run("end", "--run", run_id)
+        for path in sb.run_dir(run_id).rglob("*"):
+            if path.is_file() and path.suffix != ".png":
+                assert TYPED_TEXT not in path.read_text(errors="replace"), path
+
+    def test_remembered_typed_text_lives_outside_the_run_folder_until_end(self, sb):
+        run_id, obs = self.typed_run(sb)
+        act(sb, run_id, obs["observation_id"], "--action", "fill", "--ref", "e10",
+            "--text-stdin", stdin=TYPED_TEXT)
+        remembered = _run.typed_path(sb.state_root, run_id)
+        assert json.loads(remembered.read_text()) == [TYPED_TEXT]
+        assert oct(remembered.stat().st_mode & 0o777) == "0o600"
+        assert sb.run_dir(run_id) not in remembered.parents
+        assert sb.run("end", "--run", run_id).code == 0
+        assert not remembered.exists()
+
+    def test_text_under_four_characters_is_not_remembered_or_redacted(self, sb):
+        run_id, obs = self.typed_run(sb)
+        act(sb, run_id, obs["observation_id"], "--action", "fill", "--ref", "e10",
+            "--text-stdin", stdin="abc")
+        assert _run.recall_typed(sb.state_root, run_id) == []
+
+
+    def filled_run(self, sb):
+        filled = golden_yaml().replace('textbox "Username" [ref=e20]',
+                                       f'textbox "Username" [ref=e20]: {SECRET_USER}')
+        pages = {"home": web_page(), "filled": web_page(filled)}
+        run_id, obs = web_run(sb, pages=pages, rules=[
+            {"on": ["fill", "e20"], "page": "filled"}, {"on": ["click", "e4"], "page": "home"}])
+        return run_id, obs
+
+    def pngs(self, sb, run_id):
+        return sorted(p.name for p in sb.run_dir(run_id).glob("obs-*.png"))
+
+    @pytest.mark.parametrize("which,ref", [("username", "e20"), ("password", "e21")])
+    def test_a_secret_act_saves_no_screenshot_and_says_so(self, sb, which, ref):
+        run_id, obs = self.filled_run(sb)
+        env = {"LIKEUSER_USERNAME": SECRET_USER, "LIKEUSER_PASSWORD": SECRET_PASSWORD}
+        result = act(sb, run_id, obs["observation_id"], "--action", "fill", "--ref", ref,
+                     "--secret", which, **env)
+        assert result.code == 0
+        block = result["observation"]
+        assert block["screenshot_path"] is None and block["screenshot_withheld"] is True
+        assert result["screenshot_withheld"] is True and "screenshot" in result["message"]
+        assert self.pngs(sb, run_id) == ["obs-1.png"]
+        assert (sb.run_dir(run_id) / f"obs-{block['observation_id']}.tree.txt").is_file()
+
+    def test_an_observation_showing_a_credential_saves_no_screenshot(self, sb):
+        run_id, obs = self.filled_run(sb)
+        env = {"LIKEUSER_USERNAME": SECRET_USER, "LIKEUSER_PASSWORD": SECRET_PASSWORD}
+        act(sb, run_id, obs["observation_id"], "--action", "fill", "--ref", "e20",
+            "--secret", "username", **env)
+        shown = sb.run("observe", "--run", run_id, "--goal", "g1", **env)
+        assert shown["observation"]["screenshot_path"] is None
+        assert shown["observation"]["screenshot_withheld"] is True
+        assert self.pngs(sb, run_id) == ["obs-1.png"]
+        assert SECRET_USER not in Path(shown["observation"]["tree_path"]).read_text()
+
+    def test_screenshots_return_once_the_credential_is_off_screen(self, sb):
+        run_id, obs = self.filled_run(sb)
+        env = {"LIKEUSER_USERNAME": SECRET_USER, "LIKEUSER_PASSWORD": SECRET_PASSWORD}
+        step = act(sb, run_id, obs["observation_id"], "--action", "fill", "--ref", "e20",
+                   "--secret", "username", **env)
+        gone = click(sb, run_id, step["observation"]["observation_id"], "e4", **env)
+        assert gone["observation"]["screenshot_path"]
+        assert gone["observation"]["screenshot_withheld"] is False
+
+    def test_the_final_screenshot_is_withheld_while_a_credential_is_on_screen(self, sb):
+        run_id, obs = self.filled_run(sb)
+        env = {"LIKEUSER_USERNAME": SECRET_USER, "LIKEUSER_PASSWORD": SECRET_PASSWORD}
+        act(sb, run_id, obs["observation_id"], "--action", "fill", "--ref", "e20",
+            "--secret", "username", **env)
+        ended = sb.run("end", "--run", run_id, **env)
+        assert ended["summary"]["state_left"]["final_screenshot"] == ""
+        assert not (sb.run_dir(run_id) / "final.png").exists()
+
 
     def test_events_record_what_ran_without_the_text(self, sb):
         run_id, obs = web_run(sb, rules=[click_rule("e4")])
@@ -1986,3 +2128,102 @@ class TestFaults:
         run_id, obs = web_run(sb, owner="third-party")
         stale = click(sb, run_id, 99, "e17", LIKEUSER_FAULT="skip_gate")
         assert stale.status == "STALE"
+
+
+class TestRenewedNativeRefs:
+    """Cua tokens are renewed by every snapshot, so signals must follow the element, not the token."""
+
+    FIELD_TREE = (
+        "App=dev.quirk.uala.fixture (pid 30794)\n"
+        "Window: \"UALA Fixture\", App: UALA Fixture.\n\n"
+        "0 standard window UALA Fixture\n"
+        "\t1 text Status: idle\n"
+        "\t2 button Working button\n"
+        "\t3 text field (settable) Notes, Value: hello\n\n"
+        "The focused UI element is 3 text field Notes."
+    )
+    TYPED_TREE = FIELD_TREE.replace("Value: hello", "Value: hello world")
+    GONE_TREE = FIELD_TREE.replace("\t3 text field (settable) Notes, Value: hello\n", "")
+
+    @pytest.fixture
+    def renewing(self, sb, monkeypatch, capsys):
+        import _native
+
+        counter = {"n": 0}
+
+        class RenewingDriver(_native.OrcaDriver):
+            name = "cua"
+            pin = "0.34.1"
+            background_capable = True
+
+            def __init__(self, session=None):
+                super().__init__()
+                self.session = session
+
+            def observe(self, bundle_id, window_id, screenshot):
+                obs = super().observe(bundle_id, window_id, screenshot)
+                counter["n"] += 1
+                rename = {ref: f"s{counter['n']:08x}:{ref}" for ref in obs.refs}
+                return Observation(
+                    tree_text=obs.tree_text, refs=list(rename.values()),
+                    names={rename[k]: v for k, v in obs.names.items()},
+                    values={rename[k]: v for k, v in obs.values.items()},
+                    title=obs.title, focus=rename.get(obs.focus), screenshot_path=obs.screenshot_path,
+                    scale=obs.scale, window_id=obs.window_id, bundle_id=obs.bundle_id, raw=obs.raw)
+
+            def act(self, action, foreground):
+                bare = action.ref.rsplit(":", 1)[-1] if action.ref else None
+                return super().act(dataclasses.replace(action, ref=bare), True)
+
+        pages = {"idle": {"tree": self.FIELD_TREE, "title": "UALA Fixture", "focused": 3},
+                 "typed": {"tree": self.TYPED_TREE, "title": "UALA Fixture", "focused": 3},
+                 "gone": {"tree": self.GONE_TREE, "title": "UALA Fixture", "focused": 0}}
+
+        def prepare(rules):
+            sb.web_scenario()
+            sb.native_scenario(pages, rules=rules, bundle=FIXTURE_BUNDLE)
+            for key, value in sb.env().items():
+                monkeypatch.setenv(key, value)
+            module = load_cli_module()
+            monkeypatch.setattr(module, "get_native_driver", lambda name=None, session=None: RenewingDriver(session))
+
+            def verb(*argv):
+                code = module.main(list(argv))
+                return code, json.loads(capsys.readouterr().out)
+
+            _, out = verb("begin", "--target", FIXTURE_BUNDLE, "--surface", "native", "--owner", "yours",
+                          "--attended", "--goals-file", write_goals(sb, "g1"))
+            _, seen = verb("observe", "--run", out["run_id"], "--goal", "g1")
+            return verb, out["run_id"], seen["observation"]["observation_id"]
+
+        return prepare
+
+    def field_ref(self, sb, run_id, obs_id):
+        sidecar = json.loads((sb.run_dir(run_id) / f"obs-{obs_id}.json").read_text())
+        return next(ref for ref, name in sidecar["names"].items() if name == "Notes")
+
+    def click_field(self, sb, verb, run_id, obs_id, *extra):
+        ref = self.field_ref(sb, run_id, obs_id)
+        return verb("act", "--run", run_id, "--obs", str(obs_id), "--action", "click", "--ref", ref, *extra)
+
+    def test_an_unchanged_value_under_a_renewed_ref_is_no_effect(self, sb, renewing):
+        verb, run_id, obs_id = renewing(rules=[])
+        code, result = self.click_field(sb, verb, run_id, obs_id, "--expect", "value")
+        assert code == 0 and result["status"] == "NO_EFFECT", result
+        assert result["signals"] == []
+
+    def test_a_renewed_focused_ref_is_not_a_focus_change(self, sb, renewing):
+        verb, run_id, obs_id = renewing(rules=[])
+        _, result = self.click_field(sb, verb, run_id, obs_id)
+        assert result["status"] == "NO_EFFECT" and "focus" not in result["signals"], result
+
+    def test_a_changed_value_under_a_renewed_ref_is_observed(self, sb, renewing):
+        verb, run_id, obs_id = renewing(rules=[{"cmd": "click", "page": "typed"}])
+        _, result = self.click_field(sb, verb, run_id, obs_id, "--expect", "value")
+        assert result["status"] == "OBSERVED" and "value" in result["signals"], result
+
+    def test_an_element_gone_after_the_act_is_not_a_value_change(self, sb, renewing):
+        verb, run_id, obs_id = renewing(rules=[{"cmd": "click", "page": "gone"}])
+        _, result = self.click_field(sb, verb, run_id, obs_id, "--expect", "value")
+        assert result["status"] == "NO_EFFECT" and "value" not in result["signals"], result
+        assert "tree" in result["other_changes"]

@@ -1965,6 +1965,16 @@ def test_live_cua_hotkey_selects_all_in_the_notes_field(original_front, running_
     assert state["text"] == "after"
 
 
+class TestStableRef:
+    def test_a_cua_token_keeps_only_its_element_index(self):
+        assert _native.stable_ref("s0000000a:5") == _native.stable_ref("s0000000f:5")
+        assert _native.stable_ref("s0000000a:5") != _native.stable_ref("s0000000a:6")
+
+    def test_refs_that_do_not_renew_are_returned_unchanged(self):
+        for ref in ("e5", "12", "n:e5", "s0000000a", ""):
+            assert _native.stable_ref(ref) == ref
+
+
 def _poll_observation(driver, window: int, done, timeout: float = 8.0):
     deadline = time.monotonic() + timeout
     obs = driver.observe(FIXTURE_BUNDLE, window, screenshot=False)

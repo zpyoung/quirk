@@ -412,6 +412,17 @@ _ROW_RE = re.compile(r"^\s*- (?:\[\d+\] )?(AX\w+)(.*)$")
 _STATIC_VALUE_RE = re.compile(r'^\s*= "(.*)"')
 _VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 _PID_RE = re.compile(r'"?pid"?\s*=\s*(\d+)')
+_CUA_TOKEN_RE = re.compile(r"^s[0-9A-Za-z]+:(\d+)$")
+
+
+def stable_ref(ref: str) -> str:
+    """Return the part of a native ref that survives re-observation, so one element compares equal across snapshots.
+
+    Cua element tokens are `s<session>:<index>` and the session segment renews with every
+    snapshot, so the identity is the element index. Any other ref is returned unchanged.
+    """
+    match = _CUA_TOKEN_RE.match(ref)
+    return f"cua:{match.group(1)}" if match else ref
 
 
 def _drop_menu_bar(markdown: str) -> str:

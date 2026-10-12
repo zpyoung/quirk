@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import dataclasses
 import fcntl
 import hashlib
 import json
@@ -44,7 +45,7 @@ if _SCRIPT_DIR not in sys.path:
 import _desktop  # noqa: E402
 import _effects  # noqa: E402
 import _run  # noqa: E402
-from _native import NATIVE_DRIVER_PREFERENCE, NativeDriver, get_native_driver  # noqa: E402
+from _native import NATIVE_DRIVER_PREFERENCE, NativeDriver, get_native_driver, stable_ref  # noqa: E402
 from _types import (  # noqa: E402
     Action, DriverError, DriverResult, MissingError, Observation, RunStateError, UsageError,
 )
@@ -64,6 +65,8 @@ PASTE_MIN_CHARS = 200
 PASTE_HOTKEY = "CmdOrCtrl+V"
 SHEET_CLOSE_WAIT_S = 1.0
 SHEET_LEFT_OPEN = "native sheet or dialog still open"
+SCREENSHOT_WITHHELD = (
+    "no screenshot was saved because a credential may be on screen; the tree and signals are recorded")
 REFUSED_BEFORE_DELIVERY = ("needs_foreground", "window_gone")
 MIN_REDACT_CHARS = 4
 CDP_PORTS = range(9222, 9300)
@@ -86,6 +89,8 @@ FINDING_KINDS = (
 )
 VERDICTS = ("pass", "fail", "blocked", "partial")
 HANDOFF_REASONS = ("login", "2fa", "hint")
+LOGIN_SUBMIT_RE = re.compile(r"\b(sign[\s-]?in|log[\s-]?in|submit|continue|next)\b", re.IGNORECASE)
+ENTER_KEYS = ("enter", "return")
 
 
 def _now() -> str:
@@ -221,6 +226,7 @@ class Snap(NamedTuple):
     screenshot: Optional[Path]
     scale: Optional[float]
     native_error: Optional[str] = None
+    screenshot_withheld: bool = False
 
 
 class Ctx:
@@ -267,17 +273,21 @@ def _add_secret(run: _run.Run, value: Optional[str], minimum: int = 1) -> None:
         run.secrets.add(value)
 
 
+def _add_credential(run: _run.Run, value: Optional[str]) -> None:
+    if value:
+        run.credentials.add(value)
+        run.secrets.add(value)
+
+
 def _prime_credentials(run: _run.Run) -> None:
-    source = run.data.get("credentials")
-    if not source:
-        return
+    source = run.data.get("credentials") or {}
     try:
         creds = _run.load_credentials(source.get("prefix"),
                                       Path(source["file"]) if source.get("file") else None)
     except MissingError:
         return
     for value in creds.values():
-        _add_secret(run, value)
+        _add_credential(run, value)
 
 
 def _load(ctx: Ctx, run_id: str, allow_ended: bool = False) -> _run.Run:
@@ -285,6 +295,8 @@ def _load(ctx: Ctx, run_id: str, allow_ended: bool = False) -> _run.Run:
     run = _run.Run.load(ctx.root, run_id)
     ctx.run = run
     _prime_credentials(run)
+    for value in _run.recall_typed(ctx.root, run_id):
+        _add_secret(run, value)
     if run.data.get("ended") and not allow_ended:
         raise RunStateError("run_ended", run_id)
     return run
@@ -373,8 +385,31 @@ def _observe_native(drivers: Drivers, shot: Optional[Path]) -> Observation:
     return obs
 
 
+def _shows_credential(run: _run.Run, snap: Snap) -> bool:
+    texts = []
+    for obs in (snap.renderer, snap.native):
+        if obs is not None:
+            texts.append(obs.tree_text)
+            texts.extend(obs.values.values())
+    return any(c in t for c in run.credentials for t in texts)
+
+
 def _observe(run: _run.Run, drivers: Drivers, shot: Optional[Path]) -> Snap:
     """Observe the bound surface; with `shot`, also save a screenshot there.
+
+    A screenshot cannot be redacted, so one taken while a credential is readable in the tree is
+    deleted and the snapshot is marked `screenshot_withheld`.
+    """
+    snap = _observe_surface(run, drivers, shot)
+    if shot is None or not run.credentials or not _shows_credential(run, snap):
+        return snap
+    with contextlib.suppress(OSError):
+        shot.unlink()
+    return snap._replace(screenshot=None, source=None, scale=None, screenshot_withheld=True)
+
+
+def _observe_surface(run: _run.Run, drivers: Drivers, shot: Optional[Path]) -> Snap:
+    """Observe the surface once.
 
     Electron runs read the renderer and the native tree; the native tree joins the result only
     while a sheet or dialog is open, and then the screenshot comes from the native side.
@@ -432,8 +467,20 @@ def _primary(snap: Snap) -> Observation:
     return snap.renderer if snap.renderer is not None else snap.native
 
 
-def _signals(run: _run.Run, snap: Snap, ref: Optional[str],
+def _stable(ref: str) -> str:
+    """`ref` reduced to what survives re-observation, keeping the Electron native prefix."""
+    if ref.startswith(NATIVE_PREFIX):
+        return NATIVE_PREFIX + stable_ref(ref[len(NATIVE_PREFIX):])
+    return stable_ref(ref)
+
+
+def _signals(run: _run.Run, snap: Snap, value_ref: Optional[str] = None,
              screen_hash: Optional[int] = None) -> _effects.Signals:
+    """Digest the observable signals of `snap`.
+
+    `value_ref` is the ref, in `snap`, of the element whose value is compared; the focus
+    signal follows the focused element's stable identity, so a renewed token is not a change.
+    """
     primary = _primary(snap)
     parts = []
     if snap.renderer is not None:
@@ -444,8 +491,33 @@ def _signals(run: _run.Run, snap: Snap, ref: Optional[str],
     _, _, values = _merged(run, snap)
     return _effects.Signals(
         url=_digest(primary.url), title=_digest(primary.title),
-        tree=_digest("\n--native--\n".join(parts)), focus=_digest(focus),
-        value=_digest(values.get(ref)) if ref else None, screen_hash=screen_hash)
+        tree=_digest("\n--native--\n".join(parts)),
+        focus=_digest(_stable(focus) if focus else focus),
+        value=_digest(values.get(value_ref)) if value_ref else None, screen_hash=screen_hash)
+
+
+def _element_keys(refs: List[str], names: Dict[str, str]) -> Dict[str, List[Optional[str]]]:
+    return {ref: [_stable(ref), _digest(names.get(ref))] for ref in refs}
+
+
+def _correlate(run: _run.Run, snap: Snap, ref: str,
+               element: Optional[List[Optional[str]]]) -> Optional[str]:
+    """Return the ref in `snap` of the element `ref` named before the action, or None when it is gone.
+
+    A ref still present is the same element. A renewed native token is found by its stable
+    identity and name, then by a name only one element carries.
+    """
+    refs, names, _ = _merged(run, snap)
+    if ref in refs:
+        return ref
+    if not element or element[0] == ref:
+        return None
+    key, name = element
+    same = [r for r in refs if _stable(r) == key and _digest(names.get(r)) == name]
+    if same:
+        return same[0]
+    named = [r for r in refs if _stable(r) != r and _digest(names.get(r)) == name]
+    return named[0] if len(named) == 1 else None
 
 
 def _screen_hash(path: Optional[Path]) -> Optional[int]:
@@ -485,6 +557,7 @@ def _record_observation(run: _run.Run, oid: int, goal_id: Optional[str], snap: S
         "screenshot_source": snap.source, "scale": snap.scale,
         "refs": refs, "names": _scrub(names, run.secrets),
         "value_digests": {k: _digest(v) for k, v in values.items()},
+        "elements": _element_keys(refs, names),
         "signals": {"url": signals.url, "title": signals.title, "tree": signals.tree,
                     "focus": signals.focus, "screen_hash": screen_hash},
     }
@@ -503,6 +576,7 @@ def _record_observation(run: _run.Run, oid: int, goal_id: Optional[str], snap: S
         "tree_chars": len(primary.tree_text), "tree_truncated": truncated,
         "tree_sparse": sparse, "url": primary.url, "title": primary.title,
         "focus": primary.focus, "console_errors_new": [], "network_failures_new": [],
+        "screenshot_withheld": snap.screenshot_withheld,
     }
     if native_tree_path is not None:
         block["native_tree_path"] = str(native_tree_path)
@@ -1233,15 +1307,16 @@ def _act(args, ctx: Ctx) -> dict:
     if run.data["holds_lock"]:
         _run.DesktopLock().refresh(run.data["run_id"])
     req = _parse_act(args)
-    if req.text is not None:
-        _add_secret(run, req.text, MIN_REDACT_CHARS)
+    if req.text is not None and len(req.text) >= MIN_REDACT_CHARS:
+        _add_secret(run, req.text)
+        _run.remember_typed(ctx.root, run.data["run_id"], req.text)
     secret_value: Optional[str] = None
     if req.secret:
         source = run.data.get("credentials") or {}
         creds = _run.load_credentials(source.get("prefix"),
                                       Path(source["file"]) if source.get("file") else None)
         for value in creds.values():
-            _add_secret(run, value)
+            _add_credential(run, value)
         secret_value = creds[req.secret]
     ctx.inputs = {
         "action": req.kind, "obs": args.obs, "ref": req.ref, "x": req.x, "y": req.y,
@@ -1382,13 +1457,20 @@ def _act_perform(args, ctx: Ctx, run: _run.Run, drivers: Drivers, req: ActReques
         stage = "observe"
 
         def read() -> _effects.Signals:
-            return _signals(run, _observe(run, drivers, None), req.ref)
+            return _signals(run, _observe(run, drivers, None))
 
         settled, _ = _effects.settle(read)
         oid = data["latest_observation_id"] + 1
-        shot = run.dir / f"obs-{oid}.png"
+        shot = None if req.secret else run.dir / f"obs-{oid}.png"
         snap = _observe(run, drivers, shot)
-        after = _signals(run, snap, req.ref, _screen_hash(snap.screenshot))
+        if req.secret:
+            snap = snap._replace(screenshot_withheld=True)
+        after_ref = None
+        if req.ref:
+            after_ref = _correlate(run, snap, req.ref, sidecar.get("elements", {}).get(req.ref))
+        after = _signals(run, snap, after_ref, _screen_hash(snap.screenshot))
+        if req.ref and after_ref is None:
+            after = dataclasses.replace(after, value=before.value)
         block = _record_observation(run, oid, goal_id, snap, after.screen_hash)
         console_new, requests_new, added = _auto_findings(run, drivers, ctx, goal_id,
                                                           block["screenshot_path"])
@@ -1405,12 +1487,15 @@ def _act_perform(args, ctx: Ctx, run: _run.Run, drivers: Drivers, req: ActReques
     if "always_observed" in ctx.faults and result.delivered:
         status = "OBSERVED"
 
-    _login_bookkeeping(run, snap, sidecar, pending_name)
+    _login_bookkeeping(run, snap, pending_name, _submits_login(req, sidecar["names"]))
     if status == "OBSERVED":
         _add_evidence(run, goal_id, block["screenshot_path"])
+    extra = {}
+    if snap.screenshot_withheld:
+        extra = {"screenshot_withheld": True, "message": SCREENSHOT_WITHHELD}
     return _act_result(
         run, goal_id, status, signals=signals, other_changes=other,
-        driver_verified=result.driver_verified, findings_added=added, observation=block)
+        driver_verified=result.driver_verified, findings_added=added, observation=block, **extra)
 
 
 def _charge(run: _run.Run, goal_id: Optional[str]) -> None:
@@ -1433,11 +1518,29 @@ def _driver_failure(run: _run.Run, goal_id: Optional[str], exc: DriverError,
     return _act_result(run, goal_id, "ERROR", driver_error=exc.code, driver_message=exc.message)
 
 
-def _login_bookkeeping(run: _run.Run, snap: Snap, sidecar: dict,
-                       pending_name: Optional[str]) -> None:
+def _names_login_submit(name: Optional[str]) -> bool:
+    return bool(name and LOGIN_SUBMIT_RE.search(name))
+
+
+def _submits_login(req: ActRequest, names: Dict[str, str]) -> bool:
+    """True when `req` is the form's submission: an Enter press, or a click on a submit-named control."""
+    if req.kind in ("press", "hotkey"):
+        return bool(req.key) and req.key.split("+")[-1].strip().lower() in ENTER_KEYS
+    if req.kind in ("click", "double-click"):
+        return _names_login_submit(names.get(req.ref) if req.ref else req.target_name)
+    return False
+
+
+def _login_bookkeeping(run: _run.Run, snap: Snap, pending_name: Optional[str],
+                       submits: bool) -> None:
+    """Count a login attempt when a submission leaves the password field on screen.
+
+    A password fill stays pending through every act that is not a submission, so the run's one
+    attempt is spent only by the form's own submit.
+    """
     data = run.data
     pending = data.get("login_pending")
-    if pending:
+    if pending and submits:
         _, names, _ = _merged(run, snap)
         if pending in names.values():
             data["login_attempts"] += 1
@@ -1707,6 +1810,7 @@ def cmd_end(args, ctx: Ctx):
     }
     data["ended"] = _now()
     report = run.write_report()
+    _run.forget_typed(ctx.root, data["run_id"])
     out = {
         "ok": not errors, "run_id": data["run_id"], "summary": report,
         "report_json": str(run.dir / "report.json"), "report_md": str(run.dir / "report.md"),
@@ -1868,6 +1972,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     run = ctx.run
     if run is not None and run.dir.exists():
         try:
+            run.scrub_driver_files()
             run.save()
             run.event(command or "unknown", ctx.inputs, ctx.status,
                       int((time.monotonic() - started) * 1000))
