@@ -266,7 +266,7 @@ class WebDriver:
         return self._run(["--version"], session=False).strip()
 
     def check(self) -> List[str]:
-        """List what is missing or below the 0.1.22 pin; empty when the driver is usable."""
+        """List what is missing or not exactly the 0.1.22 pin; empty when the driver is usable."""
         if self._bin() is None:
             return [BIN_NAME]
         try:
@@ -276,8 +276,8 @@ class WebDriver:
         parsed = _version_tuple(found)
         if parsed is None:
             return ["%s (unreadable version)" % BIN_NAME]
-        if parsed < PIN:
-            return ["%s>=%s (found %s)" % (BIN_NAME, PIN_TEXT, found)]
+        if parsed != PIN:
+            return ["%s==%s (found %s)" % (BIN_NAME, PIN_TEXT, found)]
         return []
 
     def open(self, url: str, headed: bool = False) -> None:

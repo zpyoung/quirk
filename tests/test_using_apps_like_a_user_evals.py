@@ -89,6 +89,98 @@ def test_delete_counter_is_guarded_wherever_a_delete_control_exists():
         assert ("hits.delete" in truth["must_not_click"]) is has_delete
 
 
+@pytest.mark.parametrize("surface", SURFACES)
+def test_a_must_not_click_delete_goal_does_not_ask_for_the_deletion(surface):
+    scenario = load(EVALS / f"{surface}.json")
+    if "hits.delete" not in scenario["ground_truth"]["must_not_click"]:
+        pytest.skip("scenario has no delete control")
+    titles = [g["title"].lower() for g in scenario["goals"]]
+    assert not [t for t in titles if "delete" in t or "remove" in t], titles
+
+
+def _drop_goal(tmp_path, goal_id):
+    report = load(BAD / "good-web.json")
+    report["goals"] = [g for g in report["goals"] if g["goal_id"] != goal_id]
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(report))
+    return path
+
+
+def test_a_report_with_no_goals_fails_for_every_scenario_goal(tmp_path):
+    report = load(BAD / "good-web.json")
+    report["goals"] = []
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(report))
+    code, out = grade(EVALS / "web.json", path, BAD / "state-clean.json")
+    expected = {f"goal_missing: {g['id']}" for g in load(EVALS / "web.json")["goals"]}
+    assert code == 1
+    assert expected <= set(out["failures"]), out["failures"]
+
+
+def test_a_report_missing_the_goals_key_fails_for_every_scenario_goal(tmp_path):
+    report = load(BAD / "good-web.json")
+    del report["goals"]
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(report))
+    code, out = grade(EVALS / "web.json", path, BAD / "state-clean.json")
+    assert code == 1
+    assert "goal_missing: web-dead" in out["failures"]
+
+
+def test_a_goal_left_out_of_the_report_fails_naming_that_goal(tmp_path):
+    code, out = grade(EVALS / "web.json", _drop_goal(tmp_path, "web-dead"), BAD / "state-clean.json")
+    assert code == 1
+    assert "goal_missing: web-dead" in out["failures"]
+    assert [f for f in out["failures"] if f.startswith("goal_missing")] == ["goal_missing: web-dead"]
+
+
+@pytest.mark.parametrize("status", ("unset", "", None, "done"))
+def test_a_goal_without_a_terminal_verdict_fails_naming_that_goal(tmp_path, status):
+    report = load(BAD / "good-web.json")
+    for goal in report["goals"]:
+        if goal["goal_id"] == "web-dead":
+            goal["status"] = status
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(report))
+    code, out = grade(EVALS / "web.json", path, BAD / "state-clean.json")
+    assert code == 1
+    assert any(f.startswith("goal_not_terminal: web-dead") for f in out["failures"]), out["failures"]
+
+
+@pytest.mark.parametrize("status", ("pass", "fail", "blocked", "partial"))
+def test_every_terminal_verdict_is_accepted_for_a_cannot_pass_goal(tmp_path, status):
+    report = load(BAD / "good-web.json")
+    for goal in report["goals"]:
+        if goal["goal_id"] == "web-delete":
+            goal["status"] = status
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(report))
+    _, out = grade(EVALS / "web.json", path, BAD / "state-clean.json")
+    assert not [f for f in out["failures"] if f.startswith(("goal_missing", "goal_not_terminal"))]
+
+
+def test_a_goal_reported_twice_fails_naming_that_goal(tmp_path):
+    report = load(BAD / "good-web.json")
+    report["goals"].append(dict(next(g for g in report["goals"] if g["goal_id"] == "web-dead")))
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(report))
+    code, out = grade(EVALS / "web.json", path, BAD / "state-clean.json")
+    assert code == 1
+    assert any(f.startswith("goal_duplicated: web-dead") for f in out["failures"]), out["failures"]
+
+
+def test_a_run_that_never_reports_the_dead_button_does_not_meet_the_bar(tmp_path):
+    code, out = grade(EVALS / "web.json", _drop_goal(tmp_path, "web-dead"), BAD / "state-clean.json")
+    assert (code, out["pass"]) == (1, False)
+
+
+def test_readme_and_docstring_document_the_goal_coverage_check():
+    text = (EVALS / "README.md").read_text(encoding="utf-8")
+    doc = GRADE.read_text(encoding="utf-8")
+    for needle in ("goal_missing", "goal_not_terminal", "goal_duplicated"):
+        assert needle in text and needle in doc
+
+
 def test_web_scenario_requires_the_planted_bugs():
     truth = load(EVALS / "web.json")["ground_truth"]
     found = {(r["kind"], r["match"].lower()) for r in truth["required_findings"]}
