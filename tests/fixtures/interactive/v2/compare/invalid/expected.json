@@ -31,5 +31,8 @@
   "empty-overview.json": "/approaches/1/overview",
   "flow-stages-non-string.json": "/flowStages/1",
   "duplicate-table.json": "/approaches/0/schema/tables/3/name",
-  "empty-suggested-note.json": "/guidance/suggestedChallenges/1/note"
+  "empty-suggested-note.json": "/guidance/suggestedChallenges/1/note",
+  "sequence-duplicate-participant.json": "/approaches/0/sequence/participants/4",
+  "schema-duplicate-column.json": "/approaches/0/schema/tables/0/columns/2/name",
+  "flow-stages-duplicate.json": "/flowStages/5"
 }

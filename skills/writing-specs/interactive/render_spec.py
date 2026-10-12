@@ -2194,6 +2194,16 @@ def _validate_flow(v: Validator, approach: dict, path: str, flow_stages: Optiona
                     cells[(lane, stage)] = base
 
 
+def _reject_repeats(v: Validator, items: list, path: str, label: str) -> None:
+    """Flags every repeat of an earlier nonempty string at its own index; the diagrams address these entries by name."""
+    seen: set = set()
+    for index, item in enumerate(items):
+        if isinstance(item, str) and item:
+            if item in seen:
+                v.error(pointer(path, index), "duplicate " + label + ": " + item)
+            seen.add(item)
+
+
 def _validate_sequence(v: Validator, raw: Any, path: str) -> None:
     sequence = v.object(raw, path)
     if sequence is None:
@@ -2203,6 +2213,7 @@ def _validate_sequence(v: Validator, raw: Any, path: str) -> None:
     if "participants" in sequence:
         listed = v.string_array(participants_raw, pointer(path, "participants"), nonempty_items=True)
         participants = [name for name in (listed or []) if isinstance(name, str)]
+        _reject_repeats(v, listed or [], pointer(path, "participants"), "participant")
         if listed is not None and len(listed) > SEQUENCE_MAX_PARTICIPANTS:
             v.error(pointer(path, "participants"), "at most " + str(SEQUENCE_MAX_PARTICIPANTS) + " participants")
     messages_raw = _required(v, sequence, "messages", path)
@@ -2254,6 +2265,7 @@ def _validate_schema_diagram(v: Validator, raw: Any, path: str) -> None:
             if "status" in table:
                 v.enum(status, TABLE_STATUSES, pointer(base, "status"))
             columns = _required_array(v, table, "columns", base)
+            table_columns: set = set()
             for col_index, column_raw in enumerate(columns or []):
                 col_path = pointer(pointer(base, "columns"), col_index)
                 column = v.object(column_raw, col_path)
@@ -2261,6 +2273,9 @@ def _validate_schema_diagram(v: Validator, raw: Any, path: str) -> None:
                     continue
                 col_name = _string_field(v, column, "name", col_path, nonempty=True)
                 if isinstance(col_name, str):
+                    if col_name and col_name in table_columns:
+                        v.error(pointer(col_path, "name"), "duplicate column name: " + col_name)
+                    table_columns.add(col_name)
                     names.add(col_name)
                 _string_field(v, column, "type", col_path)
                 chip = column.get("chip")
@@ -2580,6 +2595,7 @@ def validate_comparison(comparison: Any, logic: dict) -> Tuple[List[Tuple[str, s
         listed = v.string_array(root["flowStages"], "/flowStages", nonempty_items=True)
         if listed is not None:
             flow_stages = listed
+            _reject_repeats(v, listed, "/flowStages", "flow stage")
             if not 3 <= len(listed) <= 8:
                 v.error("/flowStages", "expected 3 to 8 stages")
     example_stages: Optional[list] = None
@@ -2795,6 +2811,9 @@ def _check_compare_export(spec_dir: Path, export_path: Path) -> Tuple[Optional[d
     if value.get("slug") != spec_dir.name:
         print("export belongs to a different spec", file=sys.stderr)
         return None, None, None, 3
+    if value.get("renderId") != current_id:
+        print("signed spec changed since this export", file=sys.stderr)
+        return None, None, None, 3
     if comparison is None or value.get("comparisonId") != current_comparison_id:
         print("comparison changed since this export", file=sys.stderr)
         return None, None, None, 3
@@ -2803,6 +2822,16 @@ def _check_compare_export(spec_dir: Path, export_path: Path) -> Tuple[Optional[d
         for index, challenge in enumerate(value["challenges"])
         if _resolve_challenge_target(comparison, challenge["target"]) is None
     ]
+    starrable = {
+        item["id"]
+        for item in logic.get("requirements", [])
+        if isinstance(item, dict) and item.get("scope") != "out" and item.get("id") in comparison.get("scores", {})
+    }
+    unresolved.extend(
+        (pointer("/stars", index), "star does not name an in-scope requirement scored in comparison.json")
+        for index, star in enumerate(value["stars"])
+        if star not in starrable
+    )
     if unresolved:
         emit_errors(unresolved)
         return None, None, None, 1

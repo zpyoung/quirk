@@ -160,8 +160,8 @@ function dropTarget(row: BoardRow): DropTarget | null {
   return row.section === 'conditional' ? null : row.section
 }
 
-/** The spec's requirements as a drag-and-drop board, grouped by placement and Claude's impact group. */
-export function BoardView({ spec, state, update, changedIds, onOpenRequirement }: ViewProps) {
+/** The spec's requirements as a drag-and-drop board, grouped by placement and Claude's impact group; with `readOnly`, rows only open for reading. */
+export function BoardView({ spec, state, update, changedIds, onOpenRequirement, readOnly }: ViewProps) {
   const [dragging, setDragging] = useState<string | null>(null)
   const [overTarget, setOverTarget] = useState<DropTarget | null>(null)
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
@@ -248,8 +248,8 @@ export function BoardView({ spec, state, update, changedIds, onOpenRequirement }
         ...props.htmlProps,
         ...(row.kind === 'item'
           ? {
-              draggable: true,
-              'aria-roledescription': 'Draggable requirement',
+              draggable: !readOnly,
+              'aria-roledescription': readOnly ? undefined : 'Draggable requirement',
               onDragStart: (e: DragEvent<HTMLTableRowElement>) => {
                 e.dataTransfer.setData('text/plain', row.id)
                 e.dataTransfer.effectAllowed = 'move'
@@ -295,8 +295,10 @@ export function BoardView({ spec, state, update, changedIds, onOpenRequirement }
         <Heading level={2}>Scope board</Heading>
         <Text type="supporting" as="p">
           The spec is everything In scope, grouped by Claude's assessment: the minimum first, then the rest by impact. Conditionally in scope
-          items are built only if they fit their code budget. You decide only where each one goes: drag a row between sections or condition
-          groups, or click a row to open it and change its scope and other fields. Changes to scope need a reason.
+          items are built only if they fit their code budget.{' '}
+          {readOnly
+            ? 'This scope is signed; click a row to read it.'
+            : 'You decide only where each one goes: drag a row between sections or condition groups, or click a row to open it and change its scope and other fields. Changes to scope need a reason.'}
         </Text>
       </VStack>
       {needReason.length > 0 ? (
