@@ -583,6 +583,24 @@ Back-links: [logic: Scope & non-goals](logic.md#scope--non-goals)
   JSON file whose path it prints, so the bake-off and tests can confirm input landed without
   trusting the driver.
 
+SCHEMA: fixture state (every fixture; the web fixture serves it at `/hits`)
+```
+hits: {working: int, dead: int, hidden: int, verify: int, delete: int, save: int}
+text: str                # current content of the fixture's text field
+saved_path: str|null     # path chosen in the native save sheet or dialog, after the file was written
+```
+The Electron and native apps write this JSON to `$LIKEUSER_FIXTURE_STATE` when set, else to a temp
+file, rewrite it after every change, and print `STATE <absolute path>` as their first stdout line.
+
+SCHEMA: golden driver output, one file per case at `tests/fixtures/using-apps-like-a-user/golden/<driver>/<case>.json`
+```
+argv: [str]              # the command as run, binary first
+returncode: int; stdout: str; stderr: str
+files: {str: str|null}   # files the command wrote under its cwd, by relative path; null for binary files such as PNGs
+```
+Golden files are captured from the real tools on this Mac and committed. Unit tests replay them
+through fake binaries named by the `LIKEUSER_*_BIN` overrides.
+
 ## DO-NOT-CHANGE fences
 
 Back-links: [logic: Scope & non-goals](logic.md#scope--non-goals)
