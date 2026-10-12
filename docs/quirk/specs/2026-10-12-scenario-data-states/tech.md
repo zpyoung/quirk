@@ -128,7 +128,7 @@ A new gate named `examples`, appended after `scenarios` in the returned list, on
 | `scenarioApproved[id]` is true, `id` is not in `scenarioDrops`, and `scenario_open_asks` is non-empty | `open [ASK] in <id>` |
 | `scenarioApproved[id]` is true, the scenario has `example`, and `scenarioOutcomes[id].choice` exists and is not `"spec"` | `outcome changed on <id>; Claude must rewrite its example first` |
 
-Any non-`spec` choice counts as changed, including `custom` with blank text.
+Any non-`spec` choice counts as changed, including `custom` with blank text. When both conditions hold for one scenario, only the open-`[ASK]` tuple is emitted.
 
 `command_fold` prints these as `gate examples: <message>` and exits 4 through its existing loop. A dropped scenario never fails this gate. The page already prevents both states; this gate is the backstop for a hand-edited or stale export.
 
@@ -195,7 +195,7 @@ Back-link: [6](logic.md#6-the-review-page-shows-examples-in-the-focus-dialog).
 
 - Result, rendered as a green bold span. `REGEX:` `✓\s*[^;\n]+`
 - Rejection, rendered as a red span. `REGEX:` `✗\s*[^;\n]+`
-- Invented value, rendered as a grey italic span with the `*` kept. `REGEX:` `[^\s*]+\*(?=[\s,;:.)\]]|$)`
+- Invented value, rendered as a grey italic span with the `*` kept. `REGEX:` `[^\s*]+\*(?=[\s,;:.)\]]|$)` finds it in the source text. Because the Astryx parser pairs two such stars in one part as emphasis, the pane swaps each matched `*` for the private-use placeholder U+E000 before parsing, the plugin matches the placeholder (`REGEX:` `[^\s\uE000]+\uE000(?=[\s,;:.)\]]|$)`), and the rendered span restores the `*`.
 - Gap, rendered as an amber underlined span. `REGEX:` `\[ASK: [^\]\n]+\]`
 
 The gap pattern here is display only and must match the renderer's open-gap regex. Records need no plugin: `strong` inside `.scenario-example` is styled blue.
