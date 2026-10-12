@@ -272,11 +272,14 @@ class OrcaDriver(NativeDriver):
         return observation
 
     def act(self, action: Action, foreground: bool) -> DriverResult:
-        """Deliver `action` to the bound window; refused unless `foreground` is True."""
-        if not foreground:
-            raise DriverError("needs_foreground", "orca element clicks raise the target app")
+        """Deliver `action` to the bound window; refused unless `foreground` is True.
+
+        An unbound driver reports `not_bound` before any foreground check.
+        """
         if self._bundle_id is None:
             raise DriverError("not_bound", "observe or bind a target before acting")
+        if not foreground:
+            raise DriverError("needs_foreground", "orca element clicks raise the target app")
         steps = self._steps(action)
         result: dict = {}
         raw = ""
