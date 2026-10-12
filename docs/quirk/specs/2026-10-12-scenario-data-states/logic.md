@@ -1,6 +1,6 @@
 # Data-state examples for logic-spec scenarios
 
-**Status:** Draft
+**Status:** Approved. Tech spec: requested
 
 Logic-spec scenarios can carry a data-state example: the records before, a step-by-step walkthrough,
 and the records after. It applies to both spec formats and the interactive review page. Source
@@ -430,6 +430,6 @@ Research ran through WebSearch and WebFetch. The Brave search skills were unavai
 
 ## Status & amendments
 
-**Status:** Draft
+**Status:** Approved. Tech spec: requested
 
 **Amendments:** none yet.
