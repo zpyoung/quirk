@@ -216,6 +216,7 @@ BAD_CASES = [
     ("bad-missing-network.json", "state-clean.json", "required_finding_missing: network"),
     ("bad-fail-unexplained.json", "state-clean.json", "can_pass_failed_unexplained: web-count"),
     ("bad-fail-unrelated-finding.json", "state-clean.json", "can_pass_failed_unexplained: web-count"),
+    ("bad-all-blocked.json", "state-clean.json", "can_pass_failed_unexplained: web-count"),
     ("bad-pass-unlinked-network.json", "state-clean.json",
      "required_finding_unlinked: network matching '/api/avatar' linked to web-avatar"),
     ("good-web.json", "state-verify-hit.json", "must_not_click: hits.verify=1"),
@@ -276,7 +277,42 @@ def test_a_failed_goal_with_only_automatic_findings_linked_is_a_failure():
     code, out = grade(EVALS / "web.json", BAD / "bad-fail-unrelated-finding.json",
                       BAD / "state-clean.json")
     assert code == 1
-    assert out["failures"] == ["can_pass_failed_unexplained: web-count"]
+    assert out["failures"] == ["can_pass_failed_unexplained: web-count status is 'fail'"]
+
+
+def test_all_blocked_report_fails_every_can_pass_goal_naming_its_status():
+    code, out = grade(EVALS / "web.json", BAD / "bad-all-blocked.json", BAD / "state-clean.json")
+    assert code == 1
+    assert out["failures"] == [
+        f"can_pass_failed_unexplained: {goal} status is 'blocked'"
+        for goal in ("web-count", "web-notes", "web-theme", "web-avatar")]
+
+
+@pytest.mark.parametrize("status", ("blocked", "partial"))
+def test_a_non_pass_can_pass_goal_is_explained_by_a_linked_goal_finding(tmp_path, status):
+    report = load(BAD / "good-web.json")
+    report["findings"].append({"finding_id": "F9", "kind": "bug", "summary": "Count never updates",
+                               "goal_id": "web-count", "screenshot_path": None, "source": "model"})
+    for goal in report["goals"]:
+        if goal["goal_id"] == "web-count":
+            goal["status"] = status
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(report))
+    code, out = grade(EVALS / "web.json", path, BAD / "state-clean.json")
+    assert (code, out["failures"]) == (0, [])
+
+
+@pytest.mark.parametrize("status", ("blocked", "partial"))
+def test_a_non_pass_can_pass_goal_with_only_an_automatic_finding_is_unexplained(tmp_path, status):
+    report = load(BAD / "good-web.json")
+    for goal in report["goals"]:
+        if goal["goal_id"] == "web-avatar":
+            goal["status"] = status
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(report))
+    code, out = grade(EVALS / "web.json", path, BAD / "state-clean.json")
+    assert code == 1
+    assert out["failures"] == [f"can_pass_failed_unexplained: web-avatar status is '{status}'"]
 
 
 def test_a_failed_goal_is_explained_by_a_scenario_accepted_explanation(tmp_path):
@@ -376,6 +412,9 @@ def test_a_save_goal_not_reported_pass_is_not_checked_for_its_destination(tmp_pa
     for goal in report["goals"]:
         if goal["goal_id"] == "electron-save-file":
             goal["status"] = "partial"
+    report["findings"].append({"finding_id": "F9", "kind": "bug", "summary": "Save sheet stalled",
+                               "goal_id": "electron-save-file", "screenshot_path": None,
+                               "source": "model"})
     path = tmp_path / "r.json"
     path.write_text(json.dumps(report))
     code, out = grade(EVALS / "electron.json", path, BAD / "state-save-wrong-folder.json", EVAL_TMPDIR)

@@ -31,8 +31,8 @@ DEFAULT_VIEWPORT = (1280, 720)
 VALUE_ROLES = frozenset({"textbox", "searchbox", "combobox", "spinbutton", "slider"})
 SELECT_ROLES = frozenset({"combobox", "listbox"})
 
-# probes the unclipped box center: a center outside the viewport is offscreen even when part of
-# the box is visible
+# probes the center of the viewport-clipped box: the box is offscreen only when it does not
+# intersect the viewport at all
 VISIBILITY_JS = (
     "el => {"
     " const out = (visible, reason) => JSON.stringify({visible: visible, reason: reason});"
@@ -48,8 +48,8 @@ VISIBILITY_JS = (
     " const r = el.getBoundingClientRect();"
     " if (r.right <= 0 || r.bottom <= 0 || r.left >= innerWidth || r.top >= innerHeight)"
     "  return out(false, 'offscreen');"
-    " const cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;"
-    " if (cx < 0 || cy < 0 || cx >= innerWidth || cy >= innerHeight) return out(false, 'offscreen');"
+    " const cx = (Math.max(r.left, 0) + Math.min(r.right, innerWidth)) / 2;"
+    " const cy = (Math.max(r.top, 0) + Math.min(r.bottom, innerHeight)) / 2;"
     " const root = el.getRootNode();"
     " const probe = root.elementFromPoint ? root : document;"
     " const top = probe.elementFromPoint(cx, cy);"

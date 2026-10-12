@@ -562,17 +562,31 @@ class TestVisibility:
         return data["decision"], data["probes"]
 
     @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
-    def test_probe_uses_the_unclipped_box_center(self, tmp_path):
+    def test_partially_visible_box_is_probed_at_the_center_of_its_clipped_part(self, tmp_path):
         rect = {"left": 1180, "right": 1380, "top": 100, "bottom": 140}
         decision, probes = self._run_visibility_js(rect, True, tmp_path)
-        assert probes == []
-        assert decision == {"visible": False, "reason": "offscreen"}
+        assert probes == [[1230, 120]]
+        assert decision == {"visible": True, "reason": ""}
 
     @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
-    def test_box_with_center_in_viewport_is_probed_at_that_center(self, tmp_path):
-        rect = {"left": 1000, "right": 1400, "top": 100, "bottom": 140}
+    def test_box_clipped_on_the_top_and_left_is_probed_inside_the_viewport(self, tmp_path):
+        rect = {"left": -100, "right": 60, "top": -50, "bottom": 30}
         decision, probes = self._run_visibility_js(rect, True, tmp_path)
-        assert probes == [[1200, 120]]
+        assert probes == [[30, 15]]
+        assert decision == {"visible": True, "reason": ""}
+
+    @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+    def test_partially_visible_box_covered_in_its_visible_part_is_occluded(self, tmp_path):
+        rect = {"left": 1180, "right": 1380, "top": 100, "bottom": 140}
+        decision, probes = self._run_visibility_js(rect, False, tmp_path)
+        assert probes == [[1230, 120]]
+        assert decision == {"visible": False, "reason": "occluded"}
+
+    @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+    def test_box_inside_the_viewport_is_probed_at_its_center(self, tmp_path):
+        rect = {"left": 1000, "right": 1200, "top": 100, "bottom": 140}
+        decision, probes = self._run_visibility_js(rect, True, tmp_path)
+        assert probes == [[1100, 120]]
         assert decision == {"visible": True, "reason": ""}
 
     @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")

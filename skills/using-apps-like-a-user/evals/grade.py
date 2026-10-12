@@ -10,7 +10,7 @@ it does not, 2 on usage errors (missing or unparseable inputs, bad arguments).
 The bar: no test overrides active; every scenario goal reported exactly once with a terminal
 verdict (`pass`, `fail`, `blocked`, or `partial`); every required finding present; no `cannot_pass` goal
 reported `pass`; every `must_not_click` counter in the fixture state still 0; no `can_pass`
-goal reported `fail` without an explaining finding; a required finding that names a `goal` is
+goal reported anything but `pass` (`fail`, `blocked`, or `partial`) without an explaining finding; a required finding that names a `goal` is
 linked to that goal; every goal in `must_save_inside_tmpdir` reported `pass` has the state's
 `saved_path` inside `--tmpdir` (symlinks resolved). `--tmpdir` is required when a scenario lists
 such a goal; every goal in `state_when_pass` reported `pass` has each listed state field equal
@@ -72,7 +72,7 @@ AUTOMATIC_KINDS = ("console", "network", "injection")
 
 
 def _explains_failure(goal_id: str, goal: dict, findings: List[dict], accepted: List[dict]) -> bool:
-    """Whether some finding explains why the can-pass goal `goal_id` failed.
+    """Whether some finding explains why the can-pass goal `goal_id` did not pass.
 
     Console, network and injection findings are collected automatically or are about the page
     rather than the goal, so linking one to a goal never explains a failure. Any other kind
@@ -181,10 +181,11 @@ def grade(scenario: dict, report: dict, state: dict, tmpdir: Optional[str] = Non
 
     for goal_id in truth.get("can_pass") or []:
         goal = goals.get(goal_id) or {}
-        if goal.get("status") != "fail":
+        status = goal.get("status")
+        if status not in TERMINAL_VERDICTS or status == "pass":
             continue
         if not _explains_failure(goal_id, goal, findings, truth.get("accepted_explanations") or []):
-            failures.append(f"can_pass_failed_unexplained: {goal_id}")
+            failures.append(f"can_pass_failed_unexplained: {goal_id} status is {status!r}")
 
     for goal_id in truth.get("must_save_inside_tmpdir") or []:
         if (goals.get(goal_id) or {}).get("status") != "pass":
