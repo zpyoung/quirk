@@ -1,7 +1,8 @@
 """Native driver adapters for the using-apps-like-a-user guard script.
 
-A native driver observes and acts on one bound macOS app window. The only adapter shipped is
-`orca computer`; `NATIVE_DRIVER_PREFERENCE` names the adapters `get_native_driver` tries, best
+A native driver observes and acts on one bound macOS app window. Two adapters ship: Cua Driver,
+the bake-off winner, which can deliver element actions without taking the foreground, and
+`orca computer`. `NATIVE_DRIVER_PREFERENCE` names the adapters `get_native_driver` tries, best
 first.
 """
 
@@ -14,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -23,7 +25,7 @@ if _SCRIPT_DIR not in sys.path:
 
 from _types import Action, DriverError, DriverResult, MissingError, Observation  # noqa: E402
 
-NATIVE_DRIVER_PREFERENCE: List[str] = ["orca"]
+NATIVE_DRIVER_PREFERENCE: List[str] = ["cua", "orca"]
 
 _ORCA_TIMEOUT_S = 60.0
 _GONE_CODES = ("window_not_found", "window_stale")
@@ -355,7 +357,504 @@ def _required(value: Optional[str], what: str) -> str:
     return value
 
 
-_DRIVERS: Dict[str, type] = {"orca": OrcaDriver}
+CUA_MIN_VERSION = (0, 34, 1)
+_CUA_TIMEOUT_S = 60.0
+_CUA_GONE_CODES = frozenset(
+    ["stale_element_token", "window_not_found", "window_stale", "window_gone", "no_such_window"]
+)
+_CUA_CODE_ALIASES = {"background_unavailable": "needs_foreground"}
+_CUA_SHEET_ROLES = frozenset(["AXSheet", "AXDialog"])
+_CUA_DIALOG_SUBROLES = frozenset(["AXDialog", "AXSystemDialog"])
+_CUA_CONTAINER_ROLES = frozenset(
+    ["AXGroup", "AXScrollArea", "AXSplitGroup", "AXWebArea", "AXUnknown", "AXLayoutArea",
+     "AXTabGroup", "AXSplitter"]
+)
+_CUA_KEY_ALIASES = {"enter": "return", "esc": "escape"}
+_CUA_MODIFIER_ALIASES = {"cmdorctrl": "cmd", "command": "cmd", "control": "ctrl"}
+_CUA_MODIFIERS = frozenset(["cmd", "shift", "option", "alt", "ctrl", "fn"])
+
+_MENU_BAR_RE = re.compile(r"^(\s*)- (?:\[\d+\] )?AXMenuBar\b")
+_INDEXED_ROW_RE = re.compile(r"^(\s*- )\[(\d+)\](.*)$")
+_ROW_RE = re.compile(r"^\s*- (?:\[\d+\] )?(AX\w+)(.*)$")
+_STATIC_VALUE_RE = re.compile(r'^\s*= "(.*)"')
+_VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+_PID_RE = re.compile(r'"?pid"?\s*=\s*(\d+)')
+
+
+def _drop_menu_bar(markdown: str) -> str:
+    """Remove the menu-bar subtree from a tree rendering, keeping the `AXMenuBar` row itself."""
+    kept: List[str] = []
+    skip_below: Optional[int] = None
+    for line in markdown.splitlines():
+        indent = len(line) - len(line.lstrip())
+        if skip_below is not None and indent > skip_below:
+            continue
+        skip_below = None
+        kept.append(line)
+        match = _MENU_BAR_RE.match(line)
+        if match:
+            skip_below = len(match.group(1))
+    return "\n".join(kept)
+
+
+def _menu_bar_members(elements: List[dict]) -> frozenset:
+    """Return the `element_index` of every element under an `AXMenuBar`, excluding the bar itself."""
+    parents = {e.get("element_index"): e.get("parent_index") for e in elements}
+    bars = {e.get("element_index") for e in elements if e.get("role") == "AXMenuBar"}
+    members = set()
+    for index in parents:
+        node, hops = parents[index], 0
+        while node is not None and hops < 64:
+            if node in bars:
+                members.add(index)
+                break
+            node, hops = parents.get(node), hops + 1
+    return frozenset(members)
+
+
+def _cua_is_sparse(markdown: str, title: Optional[str]) -> bool:
+    """True when nothing in the tree beyond window chrome is more than a bare container."""
+    for line in markdown.splitlines():
+        match = _ROW_RE.match(line)
+        if not match:
+            continue
+        role, rest = match.group(1), match.group(2)
+        if role in ("AXWindow", "AXMenuBar") or role in _CUA_CONTAINER_ROLES:
+            continue
+        if role == "AXButton" and not rest.lstrip().startswith('"'):
+            continue
+        if role == "AXStaticText":
+            value = _STATIC_VALUE_RE.match(rest)
+            if value and value.group(1) == (title or None):
+                continue
+        return False
+    return True
+
+
+def _in_sheet(index: int, by_index: Dict[int, dict]) -> bool:
+    node, hops = index, 0
+    while node is not None and hops < 64:
+        element = by_index.get(node) or {}
+        if element.get("role") in _CUA_SHEET_ROLES or element.get("subrole") in _CUA_DIALOG_SUBROLES:
+            return True
+        node, hops = element.get("parent_index"), hops + 1
+    return False
+
+
+def _cua_snapshot(data: dict, raw: str, bundle_id: str) -> Tuple[Observation, dict]:
+    """Build the `Observation` and the memo `act` needs from one `get_window_state` reply.
+
+    Refs are element tokens, shown in the tree as `[ref=<token>]` so an agent can copy them and
+    `normalize_tree` strips them. The memo holds the screenshot scale, which tokens sit in a sheet
+    or dialog, and element centers, because each `likeuser.py` call is a fresh process.
+    """
+    elements = [e for e in (data.get("elements") or []) if isinstance(e, dict)]
+    hidden = _menu_bar_members(elements)
+    shown = [e for e in elements if e.get("element_index") not in hidden and e.get("element_token")]
+    by_index = {e.get("element_index"): e for e in elements}
+    tokens = {e["element_index"]: str(e["element_token"]) for e in shown}
+
+    lines = []
+    for line in _drop_menu_bar(str(data.get("tree_markdown") or "")).splitlines():
+        match = _INDEXED_ROW_RE.match(line)
+        if match and int(match.group(2)) in tokens:
+            line = f"{line} [ref={tokens[int(match.group(2))]}]"
+        lines.append(line)
+    tree_text = "\n".join(lines)
+
+    bounds = data.get("window_bounds") or {}
+    shot = data.get("screenshot_file_path")
+    width, bounds_width = data.get("screenshot_width"), bounds.get("width")
+    scale = float(width) / float(bounds_width) if shot and width and bounds_width else None
+    title = data.get("window_title")
+    window_id = data.get("window_id")
+    focus = next((str(e["element_token"]) for e in shown if e.get("focused")), None)
+
+    observation = Observation(
+        tree_text=tree_text,
+        refs=[str(e["element_token"]) for e in shown],
+        names={str(e["element_token"]): str(e.get("label") or "") for e in shown},
+        values={str(e["element_token"]): str(e["value"]) for e in shown if e.get("value") is not None},
+        title=title,
+        focus=focus,
+        screenshot_path=Path(shot) if shot else None,
+        scale=scale,
+        tree_truncated=bool(data.get("truncated")),
+        tree_sparse=_cua_is_sparse(tree_text, title),
+        window_id=int(window_id) if window_id is not None else None,
+        bundle_id=bundle_id,
+        raw=raw,
+    )
+    sheet = [tokens[e["element_index"]] for e in shown if _in_sheet(e["element_index"], by_index)]
+    centers = {}
+    for element in shown:
+        frame = element.get("screenshot_frame") or {}
+        if all(key in frame for key in ("x", "y", "w", "h")):
+            centers[tokens[element["element_index"]]] = [
+                frame["x"] + frame["w"] / 2.0, frame["y"] + frame["h"] / 2.0,
+            ]
+    memo = {
+        "bundle_id": bundle_id,
+        "window_id": observation.window_id,
+        "scale": scale,
+        "sheet": sheet,
+        "labels": {t: [by_index[i].get("role"), by_index[i].get("label")] for i, t in tokens.items() if t in sheet},
+        "centers": centers,
+    }
+    return observation, memo
+
+
+class _Plan:
+    """One Cua tool call: the tool, its payload, and what delivering it demands.
+
+    `points` names payload keys holding driver points that must become window-local pixels.
+    """
+
+    def __init__(self, tool: str, payload: dict, tokens: Tuple[str, ...] = (), points: Tuple[str, ...] = (),
+                 always_foreground: bool = False, delivery_mode: bool = True) -> None:
+        self.tool = tool
+        self.payload = payload
+        self.tokens = tokens
+        self.points = points
+        self.always_foreground = always_foreground
+        self.delivery_mode = delivery_mode
+
+
+class CuaDriver(NativeDriver):
+    """Adapter for Cua Driver (`cua-driver call <tool> '<json>'`).
+
+    Background-capable: element actions run through accessibility without activating the app.
+    Coordinate actions, targeted `scroll`, `drag`, and anything inside an `AXSheet` or dialog need
+    `foreground=True`; with `foreground=False` they raise `DriverError("needs_foreground")` before
+    any call. Every call carries one `session` label because tokens only stay valid within a
+    session; the label is the same in every process so a token from `observe` still works in the
+    next `likeuser.py` call. The binary comes from `LIKEUSER_NATIVE_BIN`, else PATH. Never grants
+    permissions.
+    """
+
+    name = "cua"
+    background_capable = True
+
+    def __init__(self, session: str = "likeuser") -> None:
+        super().__init__()
+        self.session = session
+        self._bin: Optional[str] = os.environ.get("LIKEUSER_NATIVE_BIN") or shutil.which("cua-driver")
+        self._pids: Dict[str, int] = {}
+        self._memo: Optional[dict] = None
+
+    def bind(self, bundle_id: str, window_id: Optional[int] = None) -> None:
+        """Set the app and window every later `act` targets; a new bundle forgets the last observation."""
+        if bundle_id != self._bundle_id:
+            self._memo = None
+        super().bind(bundle_id, window_id)
+
+    def _exec(self, args: List[str]) -> Tuple[str, str, int]:
+        if not self._bin:
+            raise DriverError("driver_unavailable", "cua-driver binary not found")
+        try:
+            proc = subprocess.run(
+                [self._bin] + args, capture_output=True, text=True, timeout=_CUA_TIMEOUT_S,
+                stdin=subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
+            raise DriverError("driver_unavailable", f"cua-driver binary not found: {self._bin}")
+        except subprocess.TimeoutExpired:
+            raise DriverError("timeout", f"cua-driver did not answer within {int(_CUA_TIMEOUT_S)}s")
+        return proc.stdout, proc.stderr, proc.returncode
+
+    def _call(self, tool: str, payload: dict, tolerate_partial: bool = False,
+              revived: bool = False) -> Tuple[dict, str]:
+        """Run one tool and return its JSON reply plus the raw stdout, or raise `DriverError`.
+
+        A refusal (`effect: refused`) or non-zero exit raises with Cua's `code`; stale tokens and
+        missing windows become `window_gone`. `tolerate_partial` accepts a `status: partial` reply.
+        A session the daemon has ended is started again once, because ordinary calls never revive it.
+        """
+        body = json.dumps(dict(payload, session=self.session), separators=(",", ":"))
+        stdout, stderr, returncode = self._exec(["call", tool, body])
+        if returncode != 0 and not revived and "session has ended" in (stdout + stderr).lower():
+            self._call("start_session", {}, revived=True)
+            return self._call(tool, payload, tolerate_partial, revived=True)
+        text = stdout.strip()
+        try:
+            data = json.loads(text)
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            if returncode == 0:
+                raise DriverError("invalid_output", f"{tool}: {text[:200] or 'no output'}")
+            detail = (text or stderr.strip())[:200]
+            code = "ax_action_failed" if detail.startswith("AX action failed") else f"driver_exit_{returncode}"
+            raise DriverError(code, detail)
+        partial = tolerate_partial and data.get("status") == "partial"
+        if data.get("effect") == "refused" or (returncode != 0 and not partial):
+            code = str(data.get("code") or f"driver_exit_{returncode}")
+            if code in _CUA_GONE_CODES:
+                code = "window_gone"
+            code = _CUA_CODE_ALIASES.get(code, code)
+            raise DriverError(code, str(data.get("reason") or data.get("summary") or ""))
+        return data, stdout
+
+    def check(self) -> List[str]:
+        """Return what is missing: the binary, the 0.34.1 pin, the daemon, or a macOS permission.
+
+        Reads permissions with the read-only `permissions status`; it never asks for a grant.
+        """
+        if not self._bin or not (os.path.isfile(self._bin) and os.access(self._bin, os.X_OK)):
+            return ["cua-driver"]
+        try:
+            out, _, code = self._exec(["--version"])
+            found = _VERSION_RE.search(out) if code == 0 else None
+            if found is None:
+                return ["cua-driver version unreadable"]
+            self.version = ".".join(found.groups())
+            if tuple(int(part) for part in found.groups()) < CUA_MIN_VERSION:
+                return [f"cua-driver {self.version} is below the 0.34.1 pin"]
+            out, err, code = self._exec(["status"])
+            text = (out + err).lower()
+            if code != 0 or "running" not in text or "not running" in text:
+                return ["cua-driver daemon not running"]
+            out, _, code = self._exec(["permissions", "status", "--json"])
+        except DriverError as error:
+            return [f"cua-driver: {error.code}"]
+        try:
+            status = json.loads(out)
+        except ValueError:
+            status = None
+        if code != 0 or not isinstance(status, dict):
+            return ["cua-driver permissions unreadable"]
+        missing = []
+        if status.get("accessibility") is not True:
+            missing.append("cua-driver permission: Accessibility")
+        if status.get("screen_recording") is not True:
+            missing.append("cua-driver permission: Screen Recording")
+        return missing
+
+    def _pid(self, bundle_id: Optional[str] = None) -> int:
+        bundle_id = bundle_id or self._bundle_id or ""
+        if bundle_id in self._pids:
+            return self._pids[bundle_id]
+        try:
+            proc = subprocess.run(
+                ["lsappinfo", "info", "-only", "pid", "-app", bundle_id],
+                capture_output=True, text=True, timeout=10,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            raise DriverError("unsupported_platform", "lsappinfo is unavailable")
+        found = _PID_RE.search(proc.stdout)
+        if not found:
+            raise DriverError("app_not_found", f"{bundle_id} is not running")
+        self._pids[bundle_id] = int(found.group(1))
+        return self._pids[bundle_id]
+
+    def find_window(self, bundle_id: str) -> Optional[int]:
+        """Return the id of the app's first on-screen window, None when it has none.
+
+        Raises `DriverError("app_not_found")` when the app is not running.
+        """
+        data, _ = self._call("list_windows", {"pid": self._pid(bundle_id)})
+        for window in data.get("windows") or []:
+            if window.get("is_on_screen", True) and window.get("on_current_space", True):
+                return int(window["window_id"])
+        return None
+
+    def observe(self, bundle_id: str, window_id: Optional[int], screenshot: bool) -> Observation:
+        """Bind the target and return its tree plus, when asked, a screenshot path and scale.
+
+        `scale` is screenshot pixels per point of the window. The tree omits the menu-bar subtree
+        because it lists the user's recent documents. With no `window_id`, the app's first
+        on-screen window is adopted.
+        """
+        self.bind(bundle_id, window_id)
+        payload = {"pid": self._pid(), "window_id": self._require_window()}
+        if screenshot:
+            payload["screenshot_out_file"] = str(self._cache_dir() / f"{self.session}-shot.png")
+        else:
+            payload["include_screenshot"] = False
+        data, raw = self._call("get_window_state", payload)
+        observation, memo = _cua_snapshot(data, raw, bundle_id)
+        self._remember(memo)
+        return observation
+
+    def _cache_dir(self) -> Path:
+        path = Path(tempfile.gettempdir()) / f"likeuser-cua-{os.getuid()}"
+        try:
+            path.mkdir(mode=0o700, exist_ok=True)
+        except OSError as error:
+            raise DriverError("cache_unavailable", str(error))
+        return path
+
+    def _memo_path(self) -> Path:
+        return self._cache_dir() / f"{self.session}.json"
+
+    def _remember(self, memo: dict) -> None:
+        self._memo = memo
+        try:
+            temp = self._memo_path().with_suffix(".tmp")
+            temp.write_text(json.dumps(memo))
+            os.replace(str(temp), str(self._memo_path()))
+        except (OSError, DriverError):
+            pass
+
+    def _recall(self) -> Optional[dict]:
+        """Return what the last observation of the bound window recorded, here or in an earlier process."""
+        if self._memo is None:
+            try:
+                self._memo = json.loads(self._memo_path().read_text())
+            except (OSError, ValueError, DriverError):
+                return None
+        memo = self._memo
+        if memo.get("bundle_id") != self._bundle_id:
+            return None
+        if self._window_id is not None and memo.get("window_id") not in (None, self._window_id):
+            return None
+        return memo
+
+    def _pixel_scale(self) -> float:
+        memo = self._recall()
+        if memo is not None:
+            return float(memo.get("scale") or 1.0)
+        path = self._cache_dir() / f"{self.session}-probe.png"
+        data, raw = self._call(
+            "get_window_state",
+            {"pid": self._pid(), "window_id": self._require_window(), "include_accessibility_tree": False,
+             "screenshot_out_file": str(path)},
+        )
+        observation, _ = _cua_snapshot(data, raw, self._bundle_id or "")
+        return observation.scale or 1.0
+
+    def _require_window(self) -> int:
+        if self._window_id is None:
+            self._window_id = self.find_window(self._bundle_id or "")
+        if self._window_id is None:
+            raise DriverError("window_gone", f"{self._bundle_id} has no on-screen window")
+        return self._window_id
+
+    def act(self, action: Action, foreground: bool) -> DriverResult:
+        """Deliver `action` to the bound window.
+
+        Element actions run in the background. Coordinate actions (converted from driver points
+        to window-local screenshot pixels with the last observation's scale), targeted `scroll`,
+        `drag`, and elements inside a sheet or dialog raise `needs_foreground` unless `foreground`
+        is True. `driver_verified` is True for `effect: confirmed`, None otherwise. The reply
+        carries no post-action tree, so `observation` is None.
+        """
+        if self._bundle_id is None:
+            raise DriverError("not_bound", "observe or bind a target before acting")
+        plan = self._plan(action)
+        memo = self._recall() or {}
+        in_sheet = any(token in (memo.get("sheet") or ()) for token in plan.tokens)
+        if (plan.points or plan.always_foreground or in_sheet) and not foreground:
+            raise DriverError("needs_foreground", f"{action.kind} needs the target app in front")
+        payload = dict(plan.payload, pid=self._pid(), window_id=self._require_window())
+        if plan.points:
+            scale = self._pixel_scale()
+            for key in plan.points:
+                payload[key] = round(float(payload[key]) * scale, 2)
+        if in_sheet:
+            self._call("bring_to_front", {"pid": payload["pid"], "window_id": payload["window_id"]},
+                       tolerate_partial=True)
+            if "element_token" in payload:
+                payload["element_token"] = self._renewed(payload["element_token"], memo)
+        elif foreground and plan.delivery_mode:
+            payload["delivery_mode"] = "foreground"
+        data, raw = self._call(plan.tool, payload)
+        return DriverResult(
+            delivered=True,
+            driver_verified=True if data.get("effect") == "confirmed" else None,
+            observation=None,
+            raw=raw,
+        )
+
+    def _renewed(self, token: str, memo: dict) -> str:
+        """Return `token`'s successor in a fresh snapshot, which bringing the app forward made necessary."""
+        data, raw = self._call(
+            "get_window_state",
+            {"pid": self._pid(), "window_id": self._require_window(), "include_screenshot": False},
+        )
+        _, fresh = _cua_snapshot(data, raw, self._bundle_id or "")
+        self._remember(fresh)
+        role, label = (memo.get("labels") or {}).get(token) or (None, None)
+        index = token.rsplit(":", 1)[-1]
+        matches = [
+            e for e in data.get("elements") or []
+            if e.get("role") == role and e.get("label") == label and e.get("element_token")
+        ]
+        same_index = [e for e in matches if str(e.get("element_index")) == index]
+        chosen = same_index or (matches if len(matches) == 1 else [])
+        if not chosen:
+            raise DriverError("element_not_found", f"{label or token} is gone after bringing the app forward")
+        return str(chosen[0]["element_token"])
+
+    def _target(self, action: Action, required: bool = True) -> Tuple[dict, Tuple[str, ...], Tuple[str, ...]]:
+        if action.ref is not None:
+            return {"element_token": action.ref}, (action.ref,), ()
+        if action.x is not None and action.y is not None:
+            return {"x": action.x, "y": action.y}, (), ("x", "y")
+        if required:
+            raise DriverError("invalid_action", f"{action.kind} needs a ref or x and y")
+        return {}, (), ()
+
+    def _plan(self, action: Action) -> _Plan:
+        """Translate one CLI action into the Cua tool call that delivers it."""
+        kind = action.kind
+        if kind in ("click", "dismiss", "double-click", "right-click"):
+            tool = {"double-click": "double_click", "right-click": "right_click"}.get(kind, "click")
+            target, tokens, points = self._target(action)
+            return _Plan(tool, target, tokens, points)
+        if kind == "type":
+            target, tokens, points = self._target(action, required=False)
+            return _Plan("type_text", dict(target, text=_required(action.text, "text")), tokens, points)
+        if kind in ("fill", "select"):
+            if action.ref is None:
+                raise DriverError("invalid_action", f"{kind} needs a ref")
+            value = _required(action.text if kind == "fill" else action.value, "value")
+            return _Plan("set_value", {"element_token": action.ref, "value": value}, (action.ref,),
+                         delivery_mode=False)
+        if kind in ("press", "hotkey"):
+            parts = [p for p in _required(action.key, "key").split("+") if p]
+            parts = [_CUA_MODIFIER_ALIASES.get(p.lower(), p.lower()) for p in parts]
+            if not parts:
+                raise DriverError("invalid_action", "missing key")
+            target, tokens, points = self._target(action, required=False)
+            if kind == "hotkey":
+                return _Plan("hotkey", dict(target, keys=parts), tokens, points)
+            modifiers = [p for p in parts[:-1] if p in _CUA_MODIFIERS]
+            payload = dict(target, key=_CUA_KEY_ALIASES.get(parts[-1], parts[-1]))
+            if modifiers:
+                payload["modifiers"] = modifiers
+            return _Plan("press_key", payload, tokens, points)
+        if kind == "scroll":
+            payload = {"direction": _required(action.direction, "direction")}
+            if action.amount is not None:
+                payload["amount"] = max(1, min(50, int(round(action.amount))))
+            target, tokens, points = self._target(action, required=False)
+            return _Plan("scroll", dict(payload, **target), tokens, points, always_foreground=bool(target))
+        if kind == "drag":
+            return self._drag(action)
+        raise DriverError("unsupported_action", kind)
+
+    def _drag(self, action: Action) -> _Plan:
+        keys = ("from_x", "from_y", "to_x", "to_y")
+        if action.ref is not None and action.to_ref is not None:
+            start, end = self._center(action.ref), self._center(action.to_ref)
+            tokens: Tuple[str, ...] = (action.ref, action.to_ref)
+            points: Tuple[str, ...] = ()
+        elif None not in (action.x, action.y, action.to_x, action.to_y):
+            start, end, tokens, points = [action.x, action.y], [action.to_x, action.to_y], (), keys
+        else:
+            raise DriverError("invalid_action", "drag needs refs or both coordinate pairs")
+        payload = {"from_x": start[0], "from_y": start[1], "to_x": end[0], "to_y": end[1]}
+        return _Plan("drag", payload, tokens, points, always_foreground=True)
+
+    def _center(self, token: str) -> List[float]:
+        center = ((self._recall() or {}).get("centers") or {}).get(token)
+        if center is None:
+            raise DriverError("invalid_action", f"no screenshot frame recorded for {token}; observe with a screenshot")
+        return center
+
+
+_DRIVERS: Dict[str, type] = {"cua": CuaDriver, "orca": OrcaDriver}
 
 
 def get_native_driver() -> NativeDriver:
