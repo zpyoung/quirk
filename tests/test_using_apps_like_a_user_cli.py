@@ -389,6 +389,36 @@ class TestBegin:
         state = json.loads(run_json.read_text())
         assert state["ended"] and state["stopped_reason"] == "begin_failed"
 
+    def test_a_begin_that_fails_after_the_session_opened_closes_it_and_removes_the_clipboard_copy(self, sb):
+        sb.web_scenario(errors=[{"on": ["goto"], "stdout": "### Error\nnavigation failed\n"}])
+        saved = sb.state_root / "sessions" / "demo.json"
+        saved.parent.mkdir(parents=True)
+        saved.write_text("{}")
+        result = sb.begin("web", "http://127.0.0.1:64361/", "yours", True, "--session-key", "demo")
+        assert result.code == 4
+        [run_dir] = list(sb.state_root.glob("runs/*"))
+        assert sb.pw_argvs("close") != []
+        assert not (run_dir / "clipboard.txt").exists()
+        state = json.loads((run_dir / "run.json").read_text())
+        assert state["ended"] and state["holds_lock"] is False
+
+    def test_a_native_begin_that_fails_removes_the_clipboard_copy(self, sb, monkeypatch, capsys):
+        sb.native_scenario()
+        for key, value in sb.env().items():
+            monkeypatch.setenv(key, value)
+        module = load_cli_module()
+
+        def fail(*args):
+            raise module.DriverError("window_not_found", "no window")
+
+        monkeypatch.setattr(module, "_begin_native", fail)
+        code = module.main(["begin", "--target", FIXTURE_BUNDLE, "--surface", "native",
+                            "--owner", "yours", "--attended", "--allow-foreground"])
+        capsys.readouterr()
+        assert code == 4
+        [run_dir] = list(sb.state_root.glob("runs/*"))
+        assert not (run_dir / "clipboard.txt").exists()
+
     def test_real_chrome_without_the_extension_exits_5(self, sb):
         sb.web_scenario(errors=[{"on": ["attach"], "stdout": "### Error\nno extension\n"}])
         result = sb.begin("web", None, "yours", True, "--real-chrome")
@@ -1393,7 +1423,23 @@ class TestNativeLaunch:
         assert state["window"]["window_id"] == 83666
         sb.run("end", "--run", result["run_id"])
         [quit_call] = sb.command_calls("osascript")
-        assert FIXTURE_BUNDLE in quit_call["argv"][-1] and "quit" in quit_call["argv"][-1]
+        argv = quit_call["argv"]
+        script = argv[argv.index("-e") + 1]
+        assert "quit" in script and FIXTURE_BUNDLE not in script
+        assert argv[-2:] == ["--", FIXTURE_BUNDLE]
+
+    def test_an_app_name_is_passed_to_osascript_as_data_never_as_script_source(self, sb):
+        run_id, _ = native_run(sb)
+        hostile = 'x" then do shell script "touch pwned" --'
+        state = sb.run_json(run_id)
+        state["launched"] = [{"kind": "app", "id": f"app:{hostile}"}]
+        sb.write_run_json(run_id, state)
+        sb.run("end", "--run", run_id)
+        [quit_call] = sb.command_calls("osascript")
+        argv = quit_call["argv"]
+        script = argv[argv.index("-e") + 1]
+        assert "touch pwned" not in script and "shell script" not in script
+        assert argv[-2:] == ["--", hostile]
 
     def test_an_app_name_is_opened_with_open_a(self, sb):
         sb.native_scenario(running=False)
@@ -1991,6 +2037,24 @@ class TestEnd:
         state = sb.run_json(run_id)
         state["stopped_reason"] = "drift"
         sb.write_run_json(run_id, state)
+        ended = sb.run("end", "--run", run_id)
+        assert sb.orca_commands("press-key") == []
+        assert any("sheet" in entry for entry in ended["summary"]["state_left"]["kept_open"])
+
+    def test_end_sends_no_key_when_another_run_took_over_the_desktop_lock(self, sb):
+        run_id, _ = self.sheet_run(sb, rules=[self.ESCAPE_CLOSES_SHEET])
+        assert sb.run_json(run_id)["holds_lock"] is True
+        lock = _run.DesktopLock(sb.lock_path)
+        lock.release(run_id)
+        lock.acquire("other-run", "project", wait_s=1)
+        ended = sb.run("end", "--run", run_id)
+        assert sb.orca_commands("press-key") == []
+        assert any("sheet" in entry for entry in ended["summary"]["state_left"]["kept_open"])
+        assert lock.holder()["run_id"] == "other-run"
+
+    def test_end_sends_no_key_when_the_lock_file_is_empty(self, sb):
+        run_id, _ = self.sheet_run(sb, rules=[self.ESCAPE_CLOSES_SHEET])
+        _run.DesktopLock(sb.lock_path).release(run_id)
         ended = sb.run("end", "--run", run_id)
         assert sb.orca_commands("press-key") == []
         assert any("sheet" in entry for entry in ended["summary"]["state_left"]["kept_open"])

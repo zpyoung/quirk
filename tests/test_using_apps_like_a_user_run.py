@@ -433,6 +433,20 @@ def test_lock_corrupt_record_ignores_refresh_and_release(lock):
     assert lock.path.read_text() == "{not json"
 
 
+def test_lock_owns_is_true_only_while_the_holder_names_the_run(lock):
+    assert lock.owns("r1") is False
+    lock.acquire("r1", "/p", wait_s=1)
+    assert lock.owns("r1") is True and lock.owns("r2") is False
+    lock.release("r1")
+    assert lock.owns("r1") is False
+
+
+def test_lock_owns_is_false_for_an_unreadable_record(lock):
+    lock.path.parent.mkdir(parents=True)
+    lock.path.write_text("{not json")
+    assert lock.owns("unknown") is False
+
+
 def test_lock_refresh_moves_last_act(lock):
     lock.path.parent.mkdir(parents=True)
     mine = {"run_id": "r1", "project": "/p", "acquired_at": ago(30), "last_act_at": ago(10)}

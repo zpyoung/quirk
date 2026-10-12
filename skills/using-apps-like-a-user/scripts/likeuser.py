@@ -957,9 +957,22 @@ def cmd_begin(args, ctx: Ctx):
 
 
 def _abort_begin(run: _run.Run, lock: _run.DesktopLock) -> None:
+    """Undo what a failed `begin` left behind, then mark the run ended.
+
+    The run is final afterwards, so everything it opened is closed here: the browser session, any
+    launched app, the native driver state, the desktop lock, and the clipboard copy.
+    """
     errors: List[str] = []
-    _terminate_launched(run, errors)
-    Drivers(run).close_native(errors)
+    drivers = Drivers(run)
+    if run.data["window"]["session"] is not None:
+        _close_everything(run, drivers, errors)
+    else:
+        _terminate_launched(run, errors)
+    drivers.close_native(errors)
+    try:
+        (run.dir / "clipboard.txt").unlink()
+    except OSError:
+        pass
     if run.data["holds_lock"]:
         lock.release(run.data["run_id"])
         run.data["holds_lock"] = False
@@ -1747,10 +1760,16 @@ def _terminate_pid(pid: int) -> None:
         pass
 
 
-def _quit_app(kind: str, name: str) -> None:
-    target = f'application id "{name}"' if kind == "bundle" else f'application "{name}"'
-    script = f"if {target} is running then tell {target} to quit"
-    proc = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=30)
+QUIT_APP_SCRIPT = "function run(argv) { const app = Application(argv[0]); if (app.running()) { app.quit(); } }"
+
+
+def _quit_app(name: str) -> None:
+    """Ask the app named by bundle id or display name to quit, if it is running.
+
+    The identifier travels as a script argument, never as script source, so a hostile name stays data.
+    """
+    proc = subprocess.run(["osascript", "-l", "JavaScript", "-e", QUIT_APP_SCRIPT, "--", name],
+                          capture_output=True, text=True, timeout=30)
     if proc.returncode != 0:
         raise DriverError("quit_failed", proc.stderr.strip())
 
@@ -1762,7 +1781,7 @@ def _terminate_launched(run: _run.Run, errors: List[str]) -> None:
             if kind == "pid":
                 _terminate_pid(int(ident))
             else:
-                _quit_app(kind, ident)
+                _quit_app(ident)
         except (DriverError, OSError, subprocess.SubprocessError, ValueError) as exc:
             errors.append(f"quit {entry['id']}: {exc}")
 
@@ -1830,14 +1849,19 @@ def cmd_end(args, ctx: Ctx):
 def _cancel_open_sheet(run: _run.Run, drivers: Drivers, errors: List[str]) -> Optional[str]:
     """Escape out of a sheet or dialog still open at `end`; return a note when it stays open.
 
-    The key goes to the foreground only when the run already holds the desktop lock, and never
-    after the user took over, so `end` cannot steal the keyboard.
+    The key goes to the foreground only while the lock holder record still names this run, and
+    never after the user took over, so `end` cannot steal the keyboard. A run whose lock was
+    replaced sends nothing and reports the sheet as left open.
     """
     data = run.data
     if data["stopped_reason"]:
         return SHEET_LEFT_OPEN
+    foreground = data["holds_lock"] and _run.DesktopLock().owns(data["run_id"])
+    if data["holds_lock"] and not foreground:
+        errors.append("cancel sheet: desktop lock no longer held by this run")
+        return SHEET_LEFT_OPEN
     try:
-        drivers.native.act(Action(kind="press", key="Escape"), data["holds_lock"])
+        drivers.native.act(Action(kind="press", key="Escape"), foreground)
         deadline = time.monotonic() + SHEET_CLOSE_WAIT_S
         while _observe_native(drivers, None).sheet_open:
             if time.monotonic() >= deadline:

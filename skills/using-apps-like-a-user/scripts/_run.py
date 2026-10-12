@@ -569,6 +569,11 @@ class DesktopLock:
 
         self._locked(drop)
 
+    def owns(self, run_id: str) -> bool:
+        """True only while the holder record names `run_id`; a free, replaced, or unreadable lock is False."""
+        record = self.holder()
+        return bool(record) and not record.get("unreadable") and record.get("run_id") == run_id
+
     def holder(self) -> Optional[dict]:
         """Return the current holder record, or None when the lock is free."""
         if not self.path.exists():

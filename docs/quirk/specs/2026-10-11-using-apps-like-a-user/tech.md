@@ -197,7 +197,9 @@ what is missing. Never opens System Settings and never installs anything.
   run before it needs the foreground.
 - **Errors:** missing tool, permission, extension, or bad credentials file → exit 5 with
   `missing[]`. Launch or attach failure → exit 4. Lock not obtained within 30 seconds → exit 3 with
-  `desktop_busy` and the holder's `run_id` and `project`.
+  `desktop_busy` and the holder's `run_id` and `project`. A `begin` that fails after the baseline
+  was taken ends the run and cleans up first: it closes or detaches the browser session, quits
+  what it launched, releases the driver state and the lock, and deletes `clipboard.txt`.
 
 ### Desktop lock
 
@@ -344,8 +346,9 @@ on timeout return UNSETTLED with the last observation
   restored it, and `false` when it wrote the clipboard and left it as it is.
 - Cancels a native sheet or dialog still open in the final observation, before anything is closed
   or kept: `press Escape`, which the native driver routes to the frontmost sheet window. The key
-  goes to the foreground only while the run holds the desktop lock, and never after `DRIFT` stopped
-  the run (the user has the keyboard). When the sheet cannot be cancelled that way, or is still open
+  goes to the foreground only while the lock's holder record still names this run, and never after
+  `DRIFT` stopped the run (the user has the keyboard). A run whose lock was replaced sends no key,
+  records a cleanup error, and lists the sheet in `state_left.kept_open`. When the sheet cannot be cancelled that way, or is still open
   after a second's wait, `state_left.kept_open` carries `native sheet or dialog still open` (unless
   `end` then quits the app the run launched). A failed Escape other than `needs_foreground` is also a
   cleanup error.
@@ -393,6 +396,12 @@ class NativeDriver:
   on a popup menu still writes the value. Text goes in on stdin only, so `fill --secret` stays out
   of argv. Cua selects with cursor keys because cmd+a reaches only an app that is in front; orca
   double-clicks to focus, since an element click on a text field does not.
+
+`CuaDriver.check()` requires exactly the 0.34.1 pin and reports any other version with the one
+found. Its screenshots and session files live in a per-user directory under the system temp dir,
+created 0700; a symlink, a non-directory, another owner, or group or other access is refused with
+`cache_unavailable`. Apps the run launched are quit through `osascript -l JavaScript` with the
+bundle id or name passed as an argument, never spliced into the script.
 
 `OrcaDriver.background_capable` is `False`. The bake-off winner's value comes from measurement:
 Cua Driver 0.34.1 won with zero focus steals and all input landed ([bakeoff.md](bakeoff.md)); under

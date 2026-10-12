@@ -32,7 +32,7 @@ user before installing anything or granting a macOS permission.
 
 ```bash
 pnpm add -g @playwright/cli@0.1.22        # web and Electron renderers; the pin is exact
-brew install --cask cuadriver              # native driver, 0.34.1 (cua-driver)
+brew install --cask cuadriver              # native driver; the 0.34.1 pin is exact (cua-driver)
 cua-driver permissions grant               # Accessibility and Screen Recording
 ```
 
