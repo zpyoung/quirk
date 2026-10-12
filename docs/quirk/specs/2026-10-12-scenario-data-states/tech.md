@@ -198,7 +198,7 @@ Back-link: [6](logic.md#6-the-review-page-shows-examples-in-the-focus-dialog).
 - Invented value, rendered as a grey italic span with the `*` kept. `REGEX:` `[^\s*]+\*(?=[\s,;:.)\]]|$)` finds it in the source text. Because the Astryx parser pairs two such stars in one part as emphasis, the pane swaps each matched `*` for the private-use placeholder U+E000 before parsing, the plugin matches the placeholder (`REGEX:` `[^\s\uE000]+\uE000(?=[\s,;:.)\]]|$)`), and the rendered span restores the `*`.
 - Gap, rendered as an amber underlined span. `REGEX:` `\[ASK: [^\[\]\n]+\]`
 
-The gap pattern here is display only and must match the renderer's open-gap regex. An invented value inside a result or rejection phrase renders as an invented-value span nested inside that phrase's span. Records need no plugin: `strong` inside `.scenario-example` is styled blue.
+The gap pattern here is display only and must match the renderer's open-gap regex. An invented value inside a result or rejection phrase renders as an invented-value span nested inside that phrase's span. Result and rejection phrases are split out of each line before parsing and each is rendered through inline Markdown inside its span, so nested records stay inside the colour. Invented-value matching is anchored to a whitespace boundary (`(?<![^\s])`) so long runs without `*` stay linear. Records need no plugin: `strong` inside `.scenario-example` is styled blue.
 
 `CONFIG:` `index.css` colours, using theme variables already in the bundle:
 
