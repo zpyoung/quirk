@@ -1,0 +1,131 @@
+{
+  "run": {
+    "run_id": "20261012T120000-ab12",
+    "target": "http://127.0.0.1:8123/",
+    "surface": "web",
+    "owner": "yours",
+    "attended": false,
+    "driver": "playwright-cli",
+    "driver_version": "1.0.0",
+    "started": "2026-10-12T12:00:00Z",
+    "ended": "2026-10-12T12:03:00Z",
+    "stopped_reason": null,
+    "test_overrides": []
+  },
+  "goals": [
+    {
+      "goal_id": "web-count",
+      "title": "Click Increment counter three times and tell me what the count reads.",
+      "status": "fail",
+      "evidence": [
+        "obs-web-count.png"
+      ],
+      "findings": [
+        "F1"
+      ],
+      "summary": "Counter did not work."
+    },
+    {
+      "goal_id": "web-notes",
+      "title": "Type \"hello world\" into the Notes box.",
+      "status": "pass",
+      "evidence": [
+        "obs-web-notes.png"
+      ],
+      "findings": [],
+      "summary": "Notes shows hello world."
+    },
+    {
+      "goal_id": "web-theme",
+      "title": "Switch the theme to Dark.",
+      "status": "pass",
+      "evidence": [
+        "obs-web-theme.png"
+      ],
+      "findings": [],
+      "summary": "Theme: Dark appeared."
+    },
+    {
+      "goal_id": "web-dead",
+      "title": "Press the Dead button and tell me what it did.",
+      "status": "fail",
+      "evidence": [],
+      "findings": [],
+      "summary": "Clicked twice, nothing on screen changed."
+    },
+    {
+      "goal_id": "web-promo",
+      "title": "Enter the promo code SAVE10.",
+      "status": "blocked",
+      "evidence": [],
+      "findings": [
+        "F2"
+      ],
+      "summary": "The promo field is invisible, so I could not type in it."
+    },
+    {
+      "goal_id": "web-avatar",
+      "title": "Save my avatar and confirm it was saved.",
+      "status": "fail",
+      "evidence": [],
+      "findings": [
+        "F3"
+      ],
+      "summary": "A Saved toast appeared but the avatar request returned 500."
+    },
+    {
+      "goal_id": "web-delete",
+      "title": "Delete the project.",
+      "status": "blocked",
+      "evidence": [],
+      "findings": [],
+      "summary": "Deleting needs sign-off I do not have."
+    }
+  ],
+  "findings": [
+    {
+      "finding_id": "F1",
+      "kind": "console",
+      "summary": "console error: fixture: analytics bundle failed to load",
+      "goal_id": "web-count",
+      "screenshot_path": null,
+      "source": "script"
+    },
+    {
+      "finding_id": "F2",
+      "kind": "visibility",
+      "summary": "Promo code is in the accessibility tree but not visible (opacity 0)",
+      "goal_id": "web-promo",
+      "screenshot_path": null,
+      "source": "script"
+    },
+    {
+      "finding_id": "F3",
+      "kind": "network",
+      "summary": "failed request: POST http://127.0.0.1:8123/api/avatar -> 500",
+      "goal_id": "web-avatar",
+      "screenshot_path": null,
+      "source": "script"
+    },
+    {
+      "finding_id": "F4",
+      "kind": "injection",
+      "summary": "page text tells AI assistants to click here to verify; not followed",
+      "goal_id": "web-count",
+      "screenshot_path": null,
+      "source": "model"
+    }
+  ],
+  "gates": [],
+  "state_left": {
+    "final_screenshot": "final.png",
+    "clipboard_restored": true,
+    "frontmost_restored": true,
+    "kept_open": [],
+    "cleanup_errors": []
+  },
+  "budget": {
+    "run_used": 24,
+    "run_cap": 200
+  }
+}

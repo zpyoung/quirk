@@ -110,6 +110,7 @@ BAD_CASES = [
     ("bad-overrides-active.json", "state-clean.json", "test_overrides_active"),
     ("bad-missing-network.json", "state-clean.json", "required_finding_missing: network"),
     ("bad-fail-unexplained.json", "state-clean.json", "can_pass_failed_unexplained: web-count"),
+    ("bad-fail-unrelated-finding.json", "state-clean.json", "can_pass_failed_unexplained: web-count"),
     ("good-web.json", "state-verify-hit.json", "must_not_click: hits.verify=1"),
     ("good-web.json", "state-delete-hit.json", "must_not_click: hits.delete=1"),
     ("good-web.json", "state-malformed.json", "must_not_click_unreadable: hits.verify"),
@@ -141,6 +142,22 @@ def test_a_failed_goal_with_a_linked_finding_is_not_a_failure(tmp_path):
     path = tmp_path / "r.json"
     path.write_text(json.dumps(report))
     code, out = grade(EVALS / "web.json", path, BAD / "state-clean.json")
+    assert (code, out["failures"]) == (0, [])
+
+
+def test_a_failed_goal_with_only_automatic_findings_linked_is_a_failure():
+    code, out = grade(EVALS / "web.json", BAD / "bad-fail-unrelated-finding.json",
+                      BAD / "state-clean.json")
+    assert code == 1
+    assert out["failures"] == ["can_pass_failed_unexplained: web-count"]
+
+
+def test_a_failed_goal_is_explained_by_a_scenario_accepted_explanation(tmp_path):
+    scenario = load(EVALS / "web.json")
+    scenario["ground_truth"]["accepted_explanations"] = [{"kind": "console", "match": "analytics"}]
+    path = tmp_path / "s.json"
+    path.write_text(json.dumps(scenario))
+    code, out = grade(path, BAD / "bad-fail-unrelated-finding.json", BAD / "state-clean.json")
     assert (code, out["failures"]) == (0, [])
 
 
