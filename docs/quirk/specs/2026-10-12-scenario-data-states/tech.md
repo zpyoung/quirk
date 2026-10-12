@@ -191,14 +191,14 @@ Back-link: [6](logic.md#6-the-review-page-shows-examples-in-the-focus-dialog).
 - `before` and `after` render through `SpecMarkdown` with every single newline turned into a markdown hard break. `steps` render as an ordered list, one `SpecMarkdown` per step.
 - Mark colouring is via `exampleMarkPlugins`, passed only inside this view, alongside the existing item-link plugins.
 
-`CONTRACT: exampleMarkPlugins: MarkdownInlinePlugin[]`, each `{ pattern, render }` as in `ItemLinksProvider`, all patterns global:
+The pane colours marks in two ways:
 
-- Result, rendered as a green bold span. `REGEX:` `✓\s*[^;\n]+`
-- Rejection, rendered as a red span. `REGEX:` `✗\s*[^;\n]+`
-- Invented value, rendered as a grey italic span with the `*` kept. `REGEX:` `[^\s*]+\*(?=[\s,;:.)\]]|$)` finds it in the source text. Because the Astryx parser pairs two such stars in one part as emphasis, the pane swaps each matched `*` for the private-use placeholder U+E000 before parsing, the plugin matches the placeholder (`REGEX:` `[^\s\uE000]+\uE000(?=[\s,;:.)\]]|$)`), and the rendered span restores the `*`.
-- Gap, rendered as an amber underlined span. `REGEX:` `\[ASK: [^\[\]\n]+\]`
+- `CONTRACT: EXAMPLE_PHRASE`: result and rejection phrases are cut out of each line before parsing. `REGEX:` `([✓✗])([^;\n]+)`. Each phrase is rendered through inline Markdown inside a green bold (`✓`) or red (`✗`) span, so nested records and invented values stay inside the colour.
+- `CONTRACT: exampleMarkPlugins: MarkdownInlinePlugin[]`: two global `{ pattern, render }` plugins, as in `ItemLinksProvider`, for the marks that survive parsing:
+  - Invented value, rendered as a grey italic span with the `*` kept. `REGEX:` `(?<![^\s])[^\s*]+\*(?=[\s,;:.)\]]|$)` finds it in the source text. Because the Astryx parser pairs two such stars in one part as emphasis, the pane first escapes any literal U+E000 in the text, then swaps each matched `*` for the private-use placeholder U+E000; the plugin matches the placeholder and the rendered span restores the `*`.
+  - Gap, rendered as an amber underlined span. `REGEX:` `\[ASK: [^\[\]\n]+\]`
 
-The gap pattern here is display only and must match the renderer's open-gap regex. An invented value inside a result or rejection phrase renders as an invented-value span nested inside that phrase's span. Result and rejection phrases are split out of each line before parsing and each is rendered through inline Markdown inside its span, so nested records stay inside the colour. Invented-value matching is anchored to a whitespace boundary (`(?<![^\s])`) so long runs without `*` stay linear. Records need no plugin: `strong` inside `.scenario-example` is styled blue.
+The gap pattern here is display only and must match the renderer's open-gap regex. An invented value inside a result or rejection phrase renders as an invented-value span nested inside that phrase's span. Invented-value matching is anchored to a whitespace boundary so long runs without `*` stay linear. Links in any page markdown render only for `http:`, `https:`, `mailto:` and `#` targets, via `OFFLINE_MARKDOWN_COMPONENTS`. Records need no plugin: `strong` inside `.scenario-example` is styled blue.
 
 `CONFIG:` `index.css` colours, using theme variables already in the bundle:
 
