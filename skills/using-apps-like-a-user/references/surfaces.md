@@ -69,7 +69,7 @@ that app's frontmost window.
   - A save sheet's name field takes a file name only. A path typed there saves into the sheet's
     current folder under a name with ":" where the "/" were.
   - To save into a chosen folder, `press --key cmd+shift+g --foreground --expect tree` opens Go to
-    Folder (`hotkey` with that chord reported `NO_EFFECT`). `fill` its path field (the
+    Folder (`hotkey` with the same chord works too). `fill` its path field (the
     `PathTextField` row of the native tree) with the folder path, then `press --key Return
     --foreground --expect tree`. Observe again: the sheet's "Where:" row in the native tree must
     name the folder (it shows the folder's name, not the path) before you click Save.
