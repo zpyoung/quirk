@@ -32,6 +32,13 @@ export interface Behavior {
   detail?: Markdown
 }
 
+/** A worked data-state example for a scenario: the records before, the steps that happen, the records after. */
+export interface ScenarioExample {
+  before: Markdown
+  steps: string[]
+  after: Markdown
+}
+
 export interface Scenario {
   id: ScenarioId
   behavior: BehaviorId
@@ -53,6 +60,7 @@ export interface Scenario {
   flagged?: true
   /** The reviewer comment Claude answered or acted on; the page clears that comment when its text still matches. */
   answeredComment?: string
+  example?: ScenarioExample
 }
 
 export interface Constraint {
@@ -352,4 +360,6 @@ export interface LogicSpecPayload {
   itemHashes: Record<string, string>
   logicMarkdown: string
   priorDecisions: Export | null
+  /** Open `[ASK]` questions per scenario, as judged by the renderer; the page never decides this itself. */
+  openAsks: Record<ScenarioId, string[]>
 }
