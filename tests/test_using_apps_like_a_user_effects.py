@@ -216,6 +216,12 @@ NORMALIZE_CASES = [
     ('- checkbox "Remember me" [checked] [ref=e9]', '- checkbox "Remember me" [checked]'),
     ('- button "Item [3]" [ref=e4]', '- button "Item [3]"'),
     ('- text "Order #42 shipped"', '- text "Order #42 shipped"'),
+    ('0 standard window UALA Fixture', 'standard window UALA Fixture'),
+    ('\t2 button Working button', 'button Working button'),
+    ('\t10 full screen button, Secondary Actions: zoom the window',
+     'full screen button, Secondary Actions: zoom the window'),
+    ('\t1 button 2 apples', 'button 2 apples'),
+    ('- 12 items left', '- 12 items left'),
 ]
 
 
@@ -240,6 +246,25 @@ def test_normalize_tree_is_idempotent():
     for raw, _ in NORMALIZE_CASES:
         once = fx.normalize_tree(raw)
         assert fx.normalize_tree(once) == once
+
+
+def test_normalize_tree_ignores_orca_index_renumbering():
+    before = '0 standard window App\n\t1 button Save\n\t2 text Status: idle'
+    after = '0 standard window App\n\t2 button Save\n\t1 text Status: idle'
+    a, b = fx.normalize_tree(before), fx.normalize_tree(after)
+    assert a == b
+    assert fx.classify(Signals(tree=a), Signals(tree=b), "tree", True)[0] == "NO_EFFECT"
+
+
+def test_normalize_tree_strips_indexes_from_golden_orca_tree():
+    import json
+
+    golden = Path(__file__).parent / "fixtures/using-apps-like-a-user/golden/orca/get-app-state.json"
+    tree = json.loads(json.loads(golden.read_text())["stdout"])["result"]["snapshot"]["treeText"]
+    rows = [ln for ln in tree.splitlines() if ln[:1].isdigit() or ln[:1] == "\t"]
+    assert rows
+    for ln in fx.normalize_tree("\n".join(rows)).splitlines():
+        assert not ln.strip()[:1].isdigit(), ln
 
 
 def test_normalize_tree_keeps_changed_values_visible():
