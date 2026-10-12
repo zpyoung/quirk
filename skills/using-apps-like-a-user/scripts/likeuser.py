@@ -13,6 +13,8 @@ two driver adapters this script composes.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import hashlib
 import json
 import math
@@ -22,6 +24,7 @@ import shlex
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -59,8 +62,13 @@ PID_BUNDLE_WAIT_S = 5.0
 DRIFT_TOLERANCE_PT = 3.0
 PASTE_MIN_CHARS = 200
 PASTE_HOTKEY = "CmdOrCtrl+V"
+SHEET_CLOSE_WAIT_S = 1.0
+SHEET_LEFT_OPEN = "native sheet or dialog still open"
+REFUSED_BEFORE_DELIVERY = ("needs_foreground", "window_gone")
 MIN_REDACT_CHARS = 4
 CDP_PORTS = range(9222, 9300)
+CDP_LOCK_NAME = "cdp-ports.lock"
+DEFAULT_CREDENTIALS_PREFIX = "LIKEUSER"
 ELECTRON_DEV_BUNDLE = "com.github.Electron"
 GOAL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SESSION_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -568,7 +576,7 @@ def _surface_report(surface: str) -> Tuple[dict, List[str]]:
         if not gaps:
             version = driver.version()
         tools.append({"name": "playwright-cli", "path": found, "version": version,
-                      "pin": f">={PIN_TEXT}"})
+                      "pin": PIN_TEXT})
         missing += gaps
     permissions: Dict[str, bool] = {}
     if surface in ("electron", "native"):
@@ -613,6 +621,56 @@ def _free_port() -> int:
                 continue
             return port
     raise DriverError("no_free_port", "no free CDP port in 9222-9299")
+
+
+@contextlib.contextmanager
+def _cdp_port_lock():
+    """Serialize CDP port choice and app launch across every likeuser process on this machine.
+
+    The probe in `_free_port` releases its socket before the app binds, so two runs probing
+    concurrently would pick the same port. Holding this lock from the probe until the app
+    answers on its port makes each choice visible to the next run's probe.
+    """
+    path = _run.DesktopLock().path.with_name(CDP_LOCK_NAME)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+def _listener_pids(port: int) -> Optional[set]:
+    """Return the pids listening on loopback `port`, or None when `lsof` cannot say."""
+    lsof = shutil.which("lsof")
+    if lsof is None:
+        return None
+    try:
+        out = subprocess.run([lsof, "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return {int(token) for token in out.stdout.split() if token.isdigit()}
+
+
+def _verify_cdp_owner(port: int, proc: subprocess.Popen) -> None:
+    """Refuse to attach when something other than the launched app (or its children) holds `port`.
+
+    The app starts in its own session, so its process group id is its pid. A port whose
+    listeners cannot be identified is accepted.
+    """
+    listeners = _listener_pids(port)
+    if not listeners:
+        return
+    for pid in listeners:
+        try:
+            if pid == proc.pid or os.getpgid(pid) == proc.pid:
+                return
+        except ProcessLookupError:
+            continue
+    raise DriverError("cdp_port_conflict",
+                      f"port {port} is answered by another process, not the launched app")
 
 
 def _wait_for_cdp(port: int, proc: subprocess.Popen) -> None:
@@ -715,6 +773,15 @@ def _native_is_background_capable() -> bool:
         return True
 
 
+def _needs_lock_at_begin(surface: str) -> bool:
+    """Whether a run on `surface` holds the foreground for every native action from its first moment.
+
+    Only a native driver that is not background-capable does; a background-capable run takes the
+    lock on its first `--foreground` act instead.
+    """
+    return surface in ("native", "electron") and not _native_is_background_capable()
+
+
 def _validate_begin(args) -> List[Tuple[str, str]]:
     if args.surface == "electron" and not args.launch:
         raise UsageError("launch_required",
@@ -766,7 +833,7 @@ def cmd_begin(args, ctx: Ctx):
     run_id = _run.new_run_id()
     lock = _run.DesktopLock()
     holds_lock = False
-    if surface == "native":
+    if _needs_lock_at_begin(surface):
         lock.acquire(run_id, project, wait_s=LOCK_WAIT_S)
         holds_lock = True
     takeover = lock.replaced
@@ -884,29 +951,62 @@ def _begin_web(args, run: _run.Run, drivers: Drivers) -> None:
         web.open(args.target)
 
 
-def _begin_electron(args, run: _run.Run, drivers: Drivers) -> None:
-    port = args.cdp_port or _free_port()
-    run.data["window"]["cdp_port"] = port
-    command = shlex.split(args.launch) + [f"--remote-debugging-port={port}"]
-    out = open(run.dir / "launch.stdout.log", "wb")
-    err = open(run.dir / "launch.stderr.log", "wb")
+def _launch_env(run: _run.Run) -> Dict[str, str]:
+    """The environment a launched app inherits: this process's, minus the run's credentials.
+
+    Drops the credential variables the run was configured with and any variable whose value is
+    a known secret, so the app and its dependencies cannot read or log the test account.
+    """
+    prefix = (run.data.get("credentials") or {}).get("prefix") or DEFAULT_CREDENTIALS_PREFIX
+    named = {f"{name}_{field}" for name in (prefix, DEFAULT_CREDENTIALS_PREFIX)
+             for field in ("USERNAME", "PASSWORD")}
+    secrets = {value for value in run.secrets if value}
+    return {k: v for k, v in os.environ.items() if k not in named and v not in secrets}
+
+
+def _open_private_log(path: Path):
+    """Open `path` for writing as a fresh file readable only by the owner, whatever the umask."""
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     try:
-        proc = subprocess.Popen(command, stdout=out, stderr=err, stdin=subprocess.DEVNULL,
-                                start_new_session=True)
-    except OSError as exc:
-        raise DriverError("launch_failed", f"{command[0]}: {exc}")
-    finally:
-        out.close()
-        err.close()
-    run.data["launched"].append({"kind": "app", "id": f"pid:{proc.pid}"})
-    run.save()
-    _wait_for_cdp(port, proc)
+        os.fchmod(fd, 0o600)
+        return os.fdopen(fd, "wb")
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _begin_electron(args, run: _run.Run, drivers: Drivers) -> None:
+    with _cdp_port_lock():
+        port = args.cdp_port or _free_port()
+        run.data["window"]["cdp_port"] = port
+        proc = _spawn_app(args, run, port)
+        _wait_for_cdp(port, proc)
+        _verify_cdp_owner(port, proc)
     drivers.web.attach_cdp(f"http://127.0.0.1:{port}")
     saved = _session_file(run, args.session_key) if args.session_key else None
     if saved is not None and saved.is_file():
         drivers.web.state_load(saved)
         run.data["session_loaded"] = True
     run.data["window"]["bundle_id"] = _bundle_for_pid(proc.pid)
+
+
+def _spawn_app(args, run: _run.Run, port: int) -> subprocess.Popen:
+    command = shlex.split(args.launch) + [f"--remote-debugging-port={port}"]
+    out = err = None
+    try:
+        out = _open_private_log(run.dir / "launch.stdout.log")
+        err = _open_private_log(run.dir / "launch.stderr.log")
+        proc = subprocess.Popen(command, stdout=out, stderr=err, stdin=subprocess.DEVNULL,
+                                start_new_session=True, env=_launch_env(run))
+    except OSError as exc:
+        raise DriverError("launch_failed", f"{command[0]}: {exc}")
+    finally:
+        for handle in (out, err):
+            if handle is not None:
+                handle.close()
+    run.data["launched"].append({"kind": "app", "id": f"pid:{proc.pid}"})
+    run.save()
+    return proc
 
 
 def _begin_native(args, run: _run.Run, drivers: Drivers) -> NativeDriver:
@@ -1202,17 +1302,20 @@ def _act(args, ctx: Ctx) -> dict:
         data["holds_lock"] = True
 
     names = sidecar["names"]
-    if route == "renderer" and req.ref and drivers.uses_web and "skip_visibility" not in ctx.faults:
-        visible, reason = drivers.web.visibility(req.ref)
-        if not visible:
-            shot = record["screenshot_path"] if record else None
-            label = names.get(req.ref) or req.ref
-            finding = run.add_finding(
-                "visibility", f"{label} is in the accessibility tree but not visible ({reason})",
-                goal_id, shot, "script")
-            _add_evidence(run, goal_id, shot)
-            return _act_result(run, goal_id, "NOT_VISIBLE", findings_added=[finding],
-                               reason=reason)
+    if route == "renderer" and drivers.uses_web and "skip_visibility" not in ctx.faults:
+        for ref in (req.ref, req.to_ref):
+            if ref is None:
+                continue
+            visible, reason = drivers.web.visibility(ref)
+            if not visible:
+                shot = record["screenshot_path"] if record else None
+                label = names.get(ref) or ref
+                finding = run.add_finding(
+                    "visibility", f"{label} is in the accessibility tree but not visible ({reason})",
+                    goal_id, shot, "script")
+                _add_evidence(run, goal_id, shot)
+                return _act_result(run, goal_id, "NOT_VISIBLE", findings_added=[finding],
+                                   reason=reason)
 
     needs_name = (req.uses_coordinates or (req.kind in ("press", "hotkey") and data["owner"] == "third-party"))
     if needs_name and not req.target_name:
@@ -1258,8 +1361,6 @@ def _act_perform(args, ctx: Ctx, run: _run.Run, drivers: Drivers, req: ActReques
                  sidecar: dict, goal_id: Optional[str], route: str, uses_foreground: bool,
                  secret_value: Optional[str]) -> dict:
     data = run.data
-    if goal_id:
-        run.charge_action(goal_id)
     before = _effects.Signals(
         url=sidecar["signals"]["url"], title=sidecar["signals"]["title"],
         tree=sidecar["signals"]["tree"], focus=sidecar["signals"]["focus"],
@@ -1277,6 +1378,7 @@ def _act_perform(args, ctx: Ctx, run: _run.Run, drivers: Drivers, req: ActReques
             result = _perform(run, drivers, route, req, action, req.foreground)
         finally:
             _refresh_drift(run)
+        _charge(run, goal_id)
         stage = "observe"
 
         def read() -> _effects.Signals:
@@ -1291,6 +1393,8 @@ def _act_perform(args, ctx: Ctx, run: _run.Run, drivers: Drivers, req: ActReques
         console_new, requests_new, added = _auto_findings(run, drivers, ctx, goal_id,
                                                           block["screenshot_path"])
     except DriverError as exc:
+        if stage == "act" and exc.code not in REFUSED_BEFORE_DELIVERY:
+            _charge(run, goal_id)
         return _driver_failure(run, goal_id, exc, stage)
     block["console_errors_new"] = console_new
     block["network_failures_new"] = requests_new
@@ -1307,6 +1411,11 @@ def _act_perform(args, ctx: Ctx, run: _run.Run, drivers: Drivers, req: ActReques
     return _act_result(
         run, goal_id, status, signals=signals, other_changes=other,
         driver_verified=result.driver_verified, findings_added=added, observation=block)
+
+
+def _charge(run: _run.Run, goal_id: Optional[str]) -> None:
+    if goal_id:
+        run.charge_action(goal_id)
 
 
 def _refresh_drift(run: _run.Run) -> None:
@@ -1380,6 +1489,31 @@ def cmd_verdict(args, ctx: Ctx):
             "linked_findings": linked}
 
 
+def _save_state_privately(drivers: Drivers, path: Path) -> None:
+    """Have the web driver write its storage state (cookies included) to `path`, readable only by the owner.
+
+    The driver writes into a file created 0600 beforehand, so the cookies are never on disk
+    under a looser mode. If the driver fails or leaves group or other access on the file, the
+    file is removed and `path` is left as it was.
+    """
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    staging = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd = os.open(str(staging), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        os.close(fd)
+        drivers.web.state_save(staging)
+        info = os.lstat(str(staging))
+        if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) & 0o077:
+            raise DriverError("state_file_mode",
+                              "the browser driver did not keep the storage state file private")
+        os.replace(str(staging), str(path))
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(str(staging))
+        raise
+
+
 def _reopen_web(run: _run.Run, drivers: Drivers, url: str, headed: bool,
                 state: Optional[Path]) -> None:
     web = drivers.web
@@ -1403,20 +1537,23 @@ def cmd_handoff(args, ctx: Ctx):
     drivers = Drivers(run)
     url = None
     headed = False
-    if data["surface"] == "web" and not data["real_chrome"]:
-        state = run.dir / "storage-state.json"
-        snap = _observe(run, drivers, None)
-        url = snap.renderer.url
-        drivers.web.state_save(state)
-        os.chmod(str(state), 0o600)
-        drivers.web.close()
-        _reopen_web(run, drivers, url or data["target"], True, state)
-        headed = True
-        data["handoff_url"] = url
-    if data["holds_lock"]:
-        _run.DesktopLock().release(data["run_id"])
-        data["holds_lock"] = False
-    data["paused"] = True
+    try:
+        if data["surface"] == "web" and not data["real_chrome"]:
+            state = run.dir / "storage-state.json"
+            snap = _observe(run, drivers, None)
+            url = snap.renderer.url
+            _save_state_privately(drivers, state)
+            drivers.web.close()
+            _reopen_web(run, drivers, url or data["target"], True, state)
+            headed = True
+            data["handoff_url"] = url
+    finally:
+        try:
+            if data["holds_lock"]:
+                _run.DesktopLock().release(data["run_id"])
+                data["holds_lock"] = False
+        finally:
+            data["paused"] = True
     wants = {"login": "sign in", "2fa": "complete the second factor", "hint": "show what to try next"}
     return {
         "ok": True, "reason": args.reason, "headed": headed, "url": url,
@@ -1432,7 +1569,7 @@ def cmd_resume(args, ctx: Ctx):
         raise RunStateError("not_paused", "the run was not handed off")
     drivers = Drivers(run)
     took_lock = False
-    if data["surface"] == "native":
+    if data["surface"] in ("native", "electron") and not drivers.native.background_capable:
         _run.DesktopLock().acquire(data["run_id"], _project(Path.cwd()), wait_s=LOCK_WAIT_S)
         data["holds_lock"] = True
         took_lock = True
@@ -1453,8 +1590,7 @@ def _resume_observe(run: _run.Run, drivers: Drivers, ctx: Ctx) -> dict:
         state = run.dir / "storage-state.json"
         snap = _observe(run, drivers, None)
         url = snap.renderer.url or data["handoff_url"]
-        drivers.web.state_save(state)
-        os.chmod(str(state), 0o600)
+        _save_state_privately(drivers, state)
         drivers.web.close()
         _reopen_web(run, drivers, url, False, state)
         data["handoff_url"] = None
@@ -1541,12 +1677,15 @@ def cmd_end(args, ctx: Ctx):
     drivers = Drivers(run)
     final = run.dir / "final.png"
     final_path = ""
+    sheet_open = False
     try:
         snap = _observe(run, drivers, final)
         final_path = str(snap.screenshot) if snap.screenshot else ""
+        sheet_open = snap.native is not None and snap.native.sheet_open
     except (DriverError, MissingError) as exc:
         errors.append(f"final screenshot: {getattr(exc, 'code', exc)}")
     _save_session(run, drivers, errors)
+    sheet_note = _cancel_open_sheet(run, drivers, errors) if sheet_open else None
     broken = [g for g, v in data["goals"].items() if v["verdict"] in ("fail", "blocked")]
     keep = bool(args.keep_open or broken)
     kept: List[str] = []
@@ -1554,6 +1693,8 @@ def cmd_end(args, ctx: Ctx):
         kept = _kept_windows(run)
     else:
         _close_everything(run, drivers, errors)
+    if sheet_note and (keep or not data["launched"]):
+        kept.append(sheet_note)
     drivers.close_native(errors)
     clipboard_restored = _restore_clipboard(run, errors)
     frontmost_restored = _restore_frontmost(run, errors)
@@ -1582,15 +1723,36 @@ def cmd_end(args, ctx: Ctx):
     return out, code
 
 
+def _cancel_open_sheet(run: _run.Run, drivers: Drivers, errors: List[str]) -> Optional[str]:
+    """Escape out of a sheet or dialog still open at `end`; return a note when it stays open.
+
+    The key goes to the foreground only when the run already holds the desktop lock, and never
+    after the user took over, so `end` cannot steal the keyboard.
+    """
+    data = run.data
+    if data["stopped_reason"]:
+        return SHEET_LEFT_OPEN
+    try:
+        drivers.native.act(Action(kind="press", key="Escape"), data["holds_lock"])
+        deadline = time.monotonic() + SHEET_CLOSE_WAIT_S
+        while _observe_native(drivers, None).sheet_open:
+            if time.monotonic() >= deadline:
+                return SHEET_LEFT_OPEN
+            time.sleep(0.25)
+    except DriverError as exc:
+        if exc.code != "needs_foreground":
+            errors.append(f"cancel sheet: {exc.code}")
+        return SHEET_LEFT_OPEN
+    return None
+
+
 def _save_session(run: _run.Run, drivers: Drivers, errors: List[str]) -> None:
     key = run.data.get("session_key")
     if not key or not drivers.uses_web:
         return
     path = _session_file(run, key)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        drivers.web.state_save(path)
-        os.chmod(str(path), 0o600)
+        _save_state_privately(drivers, path)
     except (DriverError, OSError) as exc:
         errors.append(f"save session: {getattr(exc, 'code', exc)}")
 
@@ -1616,10 +1778,15 @@ def _close_everything(run: _run.Run, drivers: Drivers, errors: List[str]) -> Non
     _terminate_launched(run, errors)
 
 
-def _restore_clipboard(run: _run.Run, errors: List[str]) -> bool:
+def _restore_clipboard(run: _run.Run, errors: List[str]) -> Optional[bool]:
+    """Put back the clipboard the run pasted over.
+
+    Returns None when the run never wrote the clipboard, True when it restored it, and False when
+    it wrote the clipboard and left it as it is.
+    """
     data = run.data
     clip = run.dir / "clipboard.txt"
-    restored = False
+    restored: Optional[bool] = False if data["pasted"] else None
     try:
         if data["pasted"] and clip.is_file():
             count = _desktop.clipboard_change_count()

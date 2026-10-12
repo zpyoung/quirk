@@ -280,7 +280,7 @@ class Run:
                 "findings": [f["finding_id"] for f in findings if f["goal_id"] == goal_id],
                 "summary": goal["summary"],
             })
-        state_left = {"final_screenshot": "", "clipboard_restored": False,
+        state_left = {"final_screenshot": "", "clipboard_restored": None,
                       "frontmost_restored": False, "kept_open": [], "cleanup_errors": []}
         state_left.update(d.get("state_left") or {})
         return {
@@ -293,6 +293,9 @@ class Run:
             "state_left": state_left,
             "budget": {"run_used": d["budget"]["run_used"], "run_cap": d["budget"]["run_cap"]},
         }
+
+
+_CLIPBOARD_LABELS = {None: "not touched", True: "restored", False: "changed and not restored"}
 
 
 def _render_markdown(report: dict) -> str:
@@ -347,7 +350,7 @@ def _render_markdown(report: dict) -> str:
         lines.append(f"- Final screenshot: [{Path(left['final_screenshot']).name}]"
                      f"({left['final_screenshot']})")
     lines += [
-        f"- Clipboard restored: {'yes' if left['clipboard_restored'] else 'no'}",
+        f"- Clipboard: {_CLIPBOARD_LABELS[left['clipboard_restored']]}",
         f"- Frontmost app restored: {'yes' if left['frontmost_restored'] else 'no'}",
         f"- Kept open: {', '.join(left['kept_open']) or 'nothing'}",
         f"- Cleanup errors: {'; '.join(left['cleanup_errors']) or 'none'}",

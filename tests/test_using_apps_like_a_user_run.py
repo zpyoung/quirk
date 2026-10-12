@@ -570,6 +570,24 @@ def test_report_json_shape(root):
     assert report["budget"] == {"run_used": 1, "run_cap": 200}
 
 
+@pytest.mark.parametrize("restored,line", [
+    (None, "- Clipboard: not touched"),
+    (True, "- Clipboard: restored"),
+    (False, "- Clipboard: changed and not restored"),
+])
+def test_report_md_tells_untouched_from_restored_from_unrestored_clipboards(root, restored, line):
+    r, _ = _populated(root)
+    r.data["state_left"] = {"clipboard_restored": restored}
+    summary = r.write_report()
+    assert summary["state_left"]["clipboard_restored"] is restored
+    assert line in (r.dir / "report.md").read_text(encoding="utf-8").splitlines()
+
+
+def test_a_report_with_no_end_state_reads_the_clipboard_as_not_touched(root):
+    r, _ = _populated(root)
+    assert r.write_report()["state_left"]["clipboard_restored"] is None
+
+
 def test_report_md_links_screenshots_and_has_no_banner_without_overrides(root):
     r, _ = _populated(root)
     r.write_report()

@@ -178,6 +178,11 @@ what is missing. Never opens System Settings and never installs anything.
       unavailable.
     - **Electron:** `--launch` runs with `--remote-debugging-port=<cdp-port>` bound to `127.0.0.1`
       (default: the first free port in 9222-9299), then `playwright-cli attach --cdp=http://127.0.0.1:<port>`.
+      Port choice, launch, and the wait for the endpoint run under a machine-wide lock so concurrent
+      runs cannot pick one port; `begin` exits 4 with `cdp_port_conflict` when the process listening on
+      the port is not the launched app. The app's environment omits the run's credential variables
+      (`<PREFIX>_USERNAME`, `<PREFIX>_PASSWORD`) and any variable holding a known secret, and its
+      `launch.stdout.log` and `launch.stderr.log` are mode 0600.
       The app's bundle id and window id are also bound to the native driver so OS dialogs, sheets,
       and menus stay reachable.
     - **Native:** the native driver bound to the target's bundle id and frontmost window id.
@@ -186,8 +191,10 @@ what is missing. Never opens System Settings and never installs anything.
     an expired session shows as a login screen, and the skill signs in again.
 - **Foreground:** a run whose native driver is not background-capable (always true for `orca
   computer`) needs the foreground for every native action. Such a run requires `--allow-foreground`;
-  without it `begin` exits 2 with `foreground_not_allowed`. The lock is taken at `begin` for these
-  runs and on the first `--foreground` act otherwise.
+  without it `begin` exits 2 with `foreground_not_allowed`. For native and Electron runs the lock is
+  taken at `begin` when the selected driver is not background-capable, and on the first
+  `--foreground` act otherwise, so a background-capable run never blocks an unrelated foreground
+  run before it needs the foreground.
 - **Errors:** missing tool, permission, extension, or bad credentials file → exit 5 with
   `missing[]`. Launch or attach failure → exit 4. Lock not obtained within 30 seconds → exit 3 with
   `desktop_busy` and the holder's `run_id` and `project`.
@@ -201,7 +208,8 @@ what is missing. Never opens System Settings and never installs anything.
 - **Staleness:** a holder whose `last_act_at` is more than 15 minutes old is stale and may be
   replaced; the replacement is recorded in the new run's `events.jsonl`. Every `act` in the holding
   run refreshes `last_act_at`.
-- **Release:** `end`, and `handoff` (the user is about to use the machine).
+- **Release:** `end`, and `handoff` (the user is about to use the machine). `resume` re-acquires the
+  lock only for a run whose driver is not background-capable.
 - **Mid-run acquisition failure** (`act --foreground` while another run holds the lock): `act`
   returns status `DESKTOP_BUSY` with exit 0, and the action is not performed.
 
@@ -230,7 +238,9 @@ what is missing. Never opens System Settings and never installs anything.
 Runs these checks in order; the first failure returns its status without performing the action:
 
 1. **Budget.** Run or goal action budget exhausted → `BUDGET_EXHAUSTED`. Only performed actions are
-   charged; an act refused by a later check costs nothing.
+   charged; an act refused by a later check costs nothing, and so does one the driver refuses before
+   delivery (`needs_foreground`, `window_gone`). The charge lands once the driver has accepted the
+   action.
 2. **Stale.** `--obs` is not the latest observation, or `--ref` is absent from it → `STALE`.
 3. **Drift** (only when the action will use the foreground). The cursor is more than 3 points from
    where the run last left it, or the frontmost app is not the one the run last made frontmost →
@@ -240,7 +250,8 @@ Runs these checks in order; the first failure returns its status without perform
    `--foreground` was not passed → `FOREGROUND_REQUIRED`. `--foreground` in an unattended run that
    was not begun with `--allow-foreground` → exit 2 `foreground_not_allowed`. Lock not available →
    `DESKTOP_BUSY`.
-5. **Visibility** (web and Electron renderer `--ref` targets). The target's box does not intersect
+5. **Visibility** (web and Electron renderer `--ref` targets, and for a drag both `--ref` and
+   `--to-ref`; the first endpoint that fails decides). The target's box does not intersect
    the viewport; computed `opacity` is 0, `visibility` is hidden, or `display` is none; or the element
    at the box center is not the target or its descendant → `NOT_VISIBLE`, and a `visibility`
    finding is registered automatically. This check is observation-only and may evaluate script in
@@ -309,7 +320,9 @@ on timeout return UNSETTLED with the last observation
 - **Attended runs only;** unattended → exit 2 `unattended_handoff`.
 - `handoff` releases the desktop lock and marks the run paused. For web runs it saves storage state
   to the run folder, closes the headless session, and reopens the same URL in a `--headed` session
-  so the user can sign in or act; it returns the reason and what the user should do.
+  so the user can sign in or act; it returns the reason and what the user should do. The lock is
+  released and the run is marked paused even when the save, close, or reopen fails; the failure then
+  exits 4 and `resume` or `end` is still available.
 - `resume` (after the user says they are done) saves the headed session's state, closes it, reopens
   headless with that state at the headed session's last URL, re-acquires the lock if the run needs
   the foreground, resets the drift baseline, and takes a fresh observation.
@@ -322,8 +335,19 @@ on timeout return UNSETTLED with the last observation
 - Takes a final screenshot of the bound window or page (`final.png`) before closing anything.
 - Restores the clipboard from `clipboard.txt` when the run pasted and the change count moved, then
   deletes `clipboard.txt`. Non-text clipboards were never written, so they need no restore.
+  `state_left.clipboard_restored` is `null` when the run never wrote the clipboard, `true` when it
+  restored it, and `false` when it wrote the clipboard and left it as it is.
+- Cancels a native sheet or dialog still open in the final observation, before anything is closed
+  or kept: `press Escape`, which the native driver routes to the frontmost sheet window. The key
+  goes to the foreground only while the run holds the desktop lock, and never after `DRIFT` stopped
+  the run (the user has the keyboard). When the sheet cannot be cancelled that way, or is still open
+  after a second's wait, `state_left.kept_open` carries `native sheet or dialog still open` (unless
+  `end` then quits the app the run launched). A failed Escape other than `needs_foreground` is also a
+  cleanup error.
 - Re-activates the baseline frontmost app.
 - With `--session-key`, saves storage state to the sessions file (mode 0600).
+  Every storage-state write goes to a file created 0600 before the driver touches it, and is
+  removed (the previous file is kept) if the driver fails or leaves group or other access on it.
 - Closes driver sessions, detaches attached browsers, and quits apps the run launched, unless a goal
   is `fail` or `blocked` or `--keep-open` is passed; kept windows are listed in `state_left`.
 - Releases the lock, writes `report.json` and `report.md`, and returns the report summary.
@@ -466,7 +490,7 @@ CONTRACT: `_web.py` (every call runs with cwd set to the run folder; every sessi
 class WebDriver:
     name = "playwright-cli"
     def __init__(self, session: str, run_dir: Path) -> None   # binary from LIKEUSER_PLAYWRIGHT_BIN, else PATH
-    def version(self) -> str; def check(self) -> List[str]   # missing or below the 0.1.22 pin
+    def version(self) -> str; def check(self) -> List[str]   # missing, or not exactly the 0.1.22 pin
     def open(self, url: str, headed: bool = False) -> None; def goto(self, url: str) -> None
     def attach_cdp(self, endpoint: str) -> None; def attach_extension(self) -> None   # DriverError("extension_unavailable")
     def observe(self, screenshot_path: Optional[Path]) -> Observation
@@ -551,7 +575,7 @@ goals: [{goal_id: str, title: str, status: "pass"|"fail"|"blocked"|"partial"|"un
          evidence: [screenshot_path], findings: [finding_id], summary: str}]
 findings: [{finding_id: str, kind: str, summary: str, goal_id: str|null, screenshot_path: str|null, source: "script"|"model"}]
 gates: [{observation_id: int, subject: str, gate: "requested"|"approved"|"created"|"stopped"}]
-state_left: {final_screenshot: str, clipboard_restored: bool, frontmost_restored: bool, kept_open: [str], cleanup_errors: [str]}
+state_left: {final_screenshot: str, clipboard_restored: bool|null, frontmost_restored: bool, kept_open: [str], cleanup_errors: [str]}
 budget: {run_used: int, run_cap: int}
 ```
 

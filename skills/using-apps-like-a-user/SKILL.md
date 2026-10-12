@@ -273,7 +273,8 @@ likeuser.py end --run "$RUN"
 `end` takes a final screenshot, restores the clipboard and frontmost app, closes what the run
 opened, releases the lock, and writes `report.json` and `report.md`. It keeps windows open when any
 goal is `fail` or `blocked` (or with `--keep-open`) so the user can look, and lists them in
-`state_left`. A second `end` returns the same summary. If `test_overrides` is non-empty in the
+`state_left`. It cancels a native save sheet or dialog still open; one it could not cancel is
+listed in `state_left.kept_open`, so tell the user. A second `end` returns the same summary. If `test_overrides` is non-empty in the
 summary, say the results are not valid evidence.
 
 Then post a chat summary, short and from the report, not from memory:
