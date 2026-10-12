@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -70,11 +71,18 @@ class NativeDriver(abc.ABC):
 
     name: str = ""
     version: str = ""
+    pin: Optional[str] = None
     background_capable: bool = False
 
-    def __init__(self) -> None:
+    def __init__(self, session: Optional[str] = None) -> None:
         self._bundle_id: Optional[str] = None
         self._window_id: Optional[int] = None
+        self._bin: Optional[str] = None
+
+    @property
+    def path(self) -> Optional[str]:
+        """The driver binary this adapter runs, or None when none was found."""
+        return self._bin
 
     def bind(self, bundle_id: str, window_id: Optional[int] = None) -> None:
         """Set the app and window every later `act` targets; `observe` rebinds as it runs."""
@@ -92,6 +100,12 @@ class NativeDriver(abc.ABC):
     @abc.abstractmethod
     def act(self, action: Action, foreground: bool) -> DriverResult:
         """Deliver one action and return the driver's own verdict and post-action view."""
+
+    def close(self) -> None:
+        """Release whatever driver-side state this run's observations left behind.
+
+        Raises `DriverError` when cleanup fails. Adapters with no such state keep this no-op.
+        """
 
 
 def parse_orca_envelope(stdout: str, returncode: int) -> dict:
@@ -200,9 +214,9 @@ class OrcaDriver(NativeDriver):
     name = "orca"
     background_capable = False
 
-    def __init__(self) -> None:
-        super().__init__()
-        self._bin: Optional[str] = os.environ.get("LIKEUSER_ORCA_BIN") or shutil.which("orca")
+    def __init__(self, session: Optional[str] = None) -> None:
+        super().__init__(session)
+        self._bin = os.environ.get("LIKEUSER_ORCA_BIN") or shutil.which("orca")
 
     def _exec(self, args: List[str], stdin: Optional[str] = None) -> Tuple[str, int]:
         if not self._bin:
@@ -521,24 +535,27 @@ class _Plan:
 
 
 class CuaDriver(NativeDriver):
-    """Adapter for Cua Driver (`cua-driver call <tool> '<json>'`).
+    """Adapter for Cua Driver (`cua-driver call <tool>`, payload on stdin).
 
     Background-capable: element actions run through accessibility without activating the app.
     Coordinate actions, targeted `scroll`, `drag`, and anything inside an `AXSheet` or dialog need
     `foreground=True`; with `foreground=False` they raise `DriverError("needs_foreground")` before
     any call. Every call carries one `session` label because tokens only stay valid within a
-    session; the label is the same in every process so a token from `observe` still works in the
-    next `likeuser.py` call. The binary comes from `LIKEUSER_NATIVE_BIN`, else PATH. Never grants
-    permissions.
+    session. Callers that span processes pass the same `session` (the run id) to every instance so
+    a token from `observe` still works in the next `likeuser.py` call; without one, each instance
+    gets a label of its own so unrelated runs never share tokens, memos, or screenshots. The
+    payload goes in on stdin so text typed from `--secret` never appears in argv. The binary comes
+    from `LIKEUSER_NATIVE_BIN`, else PATH. Never grants permissions.
     """
 
     name = "cua"
+    pin = ".".join(str(part) for part in CUA_MIN_VERSION)
     background_capable = True
 
-    def __init__(self, session: str = "likeuser") -> None:
-        super().__init__()
-        self.session = session
-        self._bin: Optional[str] = os.environ.get("LIKEUSER_NATIVE_BIN") or shutil.which("cua-driver")
+    def __init__(self, session: Optional[str] = None) -> None:
+        super().__init__(session)
+        self.session = session or f"likeuser-{uuid.uuid4().hex[:12]}"
+        self._bin = os.environ.get("LIKEUSER_NATIVE_BIN") or shutil.which("cua-driver")
         self._pids: Dict[str, int] = {}
         self._memo: Optional[dict] = None
 
@@ -548,13 +565,13 @@ class CuaDriver(NativeDriver):
             self._memo = None
         super().bind(bundle_id, window_id)
 
-    def _exec(self, args: List[str]) -> Tuple[str, str, int]:
+    def _exec(self, args: List[str], stdin: Optional[str] = None) -> Tuple[str, str, int]:
         if not self._bin:
             raise DriverError("driver_unavailable", "cua-driver binary not found")
         try:
             proc = subprocess.run(
                 [self._bin] + args, capture_output=True, text=True, timeout=_CUA_TIMEOUT_S,
-                stdin=subprocess.DEVNULL,
+                input=stdin if stdin is not None else "",
             )
         except FileNotFoundError:
             raise DriverError("driver_unavailable", f"cua-driver binary not found: {self._bin}")
@@ -571,7 +588,7 @@ class CuaDriver(NativeDriver):
         A session the daemon has ended is started again once, because ordinary calls never revive it.
         """
         body = json.dumps(dict(payload, session=self.session), separators=(",", ":"))
-        stdout, stderr, returncode = self._exec(["call", tool, body])
+        stdout, stderr, returncode = self._exec(["call", tool], stdin=body)
         if returncode != 0 and not revived and "session has ended" in (stdout + stderr).lower():
             self._call("start_session", {}, revived=True)
             return self._call(tool, payload, tolerate_partial, revived=True)
@@ -630,6 +647,29 @@ class CuaDriver(NativeDriver):
             missing.append("cua-driver permission: Screen Recording")
         return missing
 
+    def close(self) -> None:
+        """End this run's Cua session and delete its memo and screenshots from the cache.
+
+        Both always run; the first failure is raised afterwards so a daemon that is gone does not
+        leave UI captures behind.
+        """
+        failure: Optional[DriverError] = None
+        try:
+            self._call("end_session", {}, revived=True)
+        except DriverError as error:
+            failure = error
+        self._memo = None
+        try:
+            for suffix in (".json", "-shot.png", "-probe.png"):
+                try:
+                    self._session_file(suffix).unlink()
+                except FileNotFoundError:
+                    pass
+        except (OSError, DriverError) as error:
+            failure = failure or DriverError("cleanup_failed", str(error))
+        if failure is not None:
+            raise failure
+
     def _pid(self, bundle_id: Optional[str] = None) -> int:
         bundle_id = bundle_id or self._bundle_id or ""
         if bundle_id in self._pids:
@@ -668,7 +708,7 @@ class CuaDriver(NativeDriver):
         self.bind(bundle_id, window_id)
         payload = {"pid": self._pid(), "window_id": self._require_window()}
         if screenshot:
-            payload["screenshot_out_file"] = str(self._cache_dir() / f"{self.session}-shot.png")
+            payload["screenshot_out_file"] = str(self._session_file("-shot.png"))
         else:
             payload["include_screenshot"] = False
         data, raw = self._call("get_window_state", payload)
@@ -684,15 +724,28 @@ class CuaDriver(NativeDriver):
             raise DriverError("cache_unavailable", str(error))
         return path
 
+    def _session_file(self, suffix: str) -> Path:
+        stem = re.sub(r"[^A-Za-z0-9_.-]", "_", self.session)
+        return self._cache_dir() / f"{stem}{suffix}"
+
     def _memo_path(self) -> Path:
-        return self._cache_dir() / f"{self.session}.json"
+        return self._session_file(".json")
 
     def _remember(self, memo: dict) -> None:
         self._memo = memo
         try:
-            temp = self._memo_path().with_suffix(".tmp")
-            temp.write_text(json.dumps(memo))
-            os.replace(str(temp), str(self._memo_path()))
+            target = self._memo_path()
+            handle, temp = tempfile.mkstemp(prefix=target.name + ".", suffix=".tmp", dir=str(target.parent))
+            try:
+                with os.fdopen(handle, "w") as stream:
+                    stream.write(json.dumps(memo))
+                os.replace(temp, str(target))
+            except BaseException:
+                try:
+                    os.unlink(temp)
+                except OSError:
+                    pass
+                raise
         except (OSError, DriverError):
             pass
 
@@ -714,7 +767,7 @@ class CuaDriver(NativeDriver):
         memo = self._recall()
         if memo is not None:
             return float(memo.get("scale") or 1.0)
-        path = self._cache_dir() / f"{self.session}-probe.png"
+        path = self._session_file("-probe.png")
         data, raw = self._call(
             "get_window_state",
             {"pid": self._pid(), "window_id": self._require_window(), "include_accessibility_tree": False,
@@ -857,18 +910,30 @@ class CuaDriver(NativeDriver):
 _DRIVERS: Dict[str, type] = {"cua": CuaDriver, "orca": OrcaDriver}
 
 
-def get_native_driver() -> NativeDriver:
-    """Return the first preferred driver whose `check()` is clean.
+def get_native_driver(*, name: Optional[str] = None, session: Optional[str] = None) -> NativeDriver:
+    """Return a ready native driver.
 
-    Raises `MissingError` listing what every tried driver lacked, or `native_driver` when no
-    preferred driver is known.
+    With no `name`, the first preferred driver whose `check()` is clean; raises `MissingError`
+    listing what every tried driver lacked, or `native_driver` when no preferred driver is known.
+    With a `name`, exactly that adapter: a later CLI process restoring the driver a run began with
+    must not switch to another one, so a gap raises `MissingError` instead of falling through.
+    `session` is the label session-based adapters keep their state under.
     """
-    missing: List[str] = []
-    for name in NATIVE_DRIVER_PREFERENCE:
+    if name is not None:
         factory = _DRIVERS.get(name)
         if factory is None:
+            raise MissingError([f"native driver: {name}"])
+        driver = factory(session=session)
+        gaps = driver.check()
+        if gaps:
+            raise MissingError(gaps)
+        return driver
+    missing: List[str] = []
+    for preferred in NATIVE_DRIVER_PREFERENCE:
+        factory = _DRIVERS.get(preferred)
+        if factory is None:
             continue
-        driver = factory()
+        driver = factory(session=session)
         gaps = driver.check()
         if not gaps:
             return driver

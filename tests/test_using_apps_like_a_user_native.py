@@ -676,8 +676,9 @@ argv = sys.argv[1:]
 golden_dir = Path(os.environ["FAKE_CUA_GOLDEN_DIR"])
 log = Path(os.environ["FAKE_CUA_LOG"])
 before = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+stdin_text = "" if sys.stdin.isatty() else sys.stdin.read()
 with log.open("a") as handle:
-    handle.write(json.dumps({"argv": argv}) + "\n")
+    handle.write(json.dumps({"argv": argv, "stdin": stdin_text}) + "\n")
 
 
 def golden(name):
@@ -700,7 +701,9 @@ if argv[:2] == ["permissions", "status"]:
 if argv[:1] != ["call"]:
     emit("unknown command\n", 2)
 
-tool, payload = argv[1], json.loads(argv[2])
+if len(argv) != 2:
+    emit("the payload belongs on stdin\n", 2)
+tool, payload = argv[1], json.loads(stdin_text)
 prior = sum(1 for entry in before if entry["argv"][:2] == ["call", tool])
 replies = json.loads(os.environ.get("FAKE_CUA_REPLIES", "{}")).get(tool)
 if isinstance(replies, list):
@@ -764,14 +767,18 @@ def fake_cua(tmp_path, monkeypatch):
         path = wrapper
 
         @staticmethod
-        def calls():
+        def entries():
             if not log.exists():
                 return []
-            return [json.loads(line)["argv"] for line in log.read_text().splitlines()]
+            return [json.loads(line) for line in log.read_text().splitlines()]
+
+        @staticmethod
+        def calls():
+            return [entry["argv"] for entry in FakeCua.entries()]
 
         @staticmethod
         def tool_calls(tool=None):
-            found = [(argv[1], json.loads(argv[2])) for argv in FakeCua.calls() if argv[:1] == ["call"]]
+            found = [(e["argv"][1], json.loads(e["stdin"])) for e in FakeCua.entries() if e["argv"][:1] == ["call"]]
             return [item for item in found if tool is None or item[0] == tool]
 
         @staticmethod
@@ -786,7 +793,8 @@ def _cua_golden(name: str) -> dict:
 
 
 def _bound_cua(window_id: int = GOLDEN_WINDOW, observed: bool = False) -> CuaDriver:
-    driver = CuaDriver()
+    """A bound driver on the shared test session, so separate instances stand in for later processes."""
+    driver = CuaDriver(session="test-run")
     driver.bind(FIXTURE_BUNDLE, window_id)
     if observed:
         driver.observe(FIXTURE_BUNDLE, window_id, screenshot=True)
@@ -993,11 +1001,93 @@ def test_cua_every_call_carries_one_stable_session_and_the_bound_target(fake_cua
     assert len(calls) == 3
     assert {payload["session"] for _, payload in calls} == {driver.session}
     assert driver.session
-    assert CuaDriver().session == driver.session
     for tool, payload in calls:
         assert payload["pid"] == GOLDEN_PID
         if tool != "list_windows":
             assert payload["window_id"] == GOLDEN_WINDOW
+
+
+def test_cua_instances_get_distinct_sessions_unless_one_is_given():
+    assert CuaDriver().session != CuaDriver().session
+    assert CuaDriver(session="run-a").session == "run-a"
+
+
+def test_cua_sessions_keep_separate_memos_and_screenshots(fake_cua):
+    first, second = CuaDriver(session="run-a"), CuaDriver(session="run-b")
+    for driver in (first, second):
+        driver.bind(FIXTURE_BUNDLE, GOLDEN_WINDOW)
+        driver.observe(FIXTURE_BUNDLE, GOLDEN_WINDOW, screenshot=True)
+    assert first._memo_path() != second._memo_path()
+    assert first._memo_path().is_file() and second._memo_path().is_file()
+    shots = {call[1]["screenshot_out_file"] for call in fake_cua.tool_calls("get_window_state")}
+    assert len(shots) == 2
+
+
+def test_cua_memo_survives_into_a_fresh_instance_with_the_same_session(fake_cua):
+    first = CuaDriver(session="run-a")
+    first.bind(FIXTURE_BUNDLE, GOLDEN_WINDOW)
+    first.observe(FIXTURE_BUNDLE, GOLDEN_WINDOW, screenshot=True)
+    later = CuaDriver(session="run-a")
+    later.bind(FIXTURE_BUNDLE, GOLDEN_WINDOW)
+    assert later._recall() is not None
+    stranger = CuaDriver(session="run-b")
+    stranger.bind(FIXTURE_BUNDLE, GOLDEN_WINDOW)
+    assert stranger._recall() is None
+
+
+def test_cua_payload_goes_on_stdin_and_never_in_argv(fake_cua):
+    secret = "hunter2-do-not-leak"
+    driver = _bound_cua()
+    driver.act(Action(kind="fill", ref="s0000000f:1", text=secret), foreground=False)
+    [entry] = [e for e in fake_cua.entries() if e["argv"][:2] == ["call", "set_value"]]
+    assert entry["argv"] == ["call", "set_value"]
+    assert json.loads(entry["stdin"])["value"] == secret
+    assert not any(secret in part for argv in fake_cua.calls() for part in argv)
+
+
+def test_cua_close_ends_the_session_and_deletes_its_cache_files(fake_cua):
+    driver = _bound_cua(observed=True)
+    driver.act(Action(kind="click", ref="s0000000f:1"), foreground=False)
+    probe = driver._session_file("-probe.png")
+    probe.write_bytes(b"x")
+    assert driver._memo_path().is_file()
+    driver.close()
+    [(_, payload)] = fake_cua.tool_calls("end_session")
+    assert payload == {"session": driver.session}
+    assert not driver._memo_path().exists() and not probe.exists()
+    assert not driver._session_file("-shot.png").exists()
+    assert driver._recall() is None
+
+
+def test_cua_close_still_deletes_files_when_ending_the_session_fails(fake_cua):
+    driver = _bound_cua(observed=True)
+    fake_cua.reply(end_session={"stdout": "boom\n", "returncode": 1})
+    with pytest.raises(DriverError) as raised:
+        driver.close()
+    assert raised.value.code == "driver_exit_1"
+    assert not driver._memo_path().exists()
+
+
+def test_orca_close_is_a_no_op(fake_orca):
+    OrcaDriver().close()
+
+
+def test_driver_path_and_pin_describe_the_adapter(fake_cua, fake_orca, monkeypatch):
+    cua, orca = CuaDriver(), OrcaDriver()
+    assert cua.path == str(fake_cua.path) and cua.pin == "0.34.1"
+    assert orca.path == os.environ["LIKEUSER_ORCA_BIN"] and orca.pin is None
+
+
+def test_get_native_driver_by_name_never_switches_adapters(fake_cua, fake_orca, monkeypatch):
+    assert isinstance(get_native_driver(name="orca", session="run-a"), OrcaDriver)
+    cua = get_native_driver(name="cua", session="run-a")
+    assert isinstance(cua, CuaDriver) and cua.session == "run-a"
+    monkeypatch.setenv("FAKE_CUA_STATUS_RC", "1")
+    with pytest.raises(MissingError) as raised:
+        get_native_driver(name="cua")
+    assert raised.value.missing == ["cua-driver daemon not running"]
+    with pytest.raises(MissingError):
+        get_native_driver(name="no-such-driver")
 
 
 def test_cua_tree_drops_the_menu_bar_subtree_and_its_elements(fake_cua):
@@ -1094,13 +1184,12 @@ def test_cua_confirmed_effect_is_driver_verified(fake_cua):
     assert result.driver_verified is True
 
 
-def test_cua_typed_text_travels_in_the_json_payload(fake_cua):
+def test_cua_typed_text_travels_in_the_json_payload_on_stdin(fake_cua):
     secret = "hunter2 -- not an argv token"
     _bound_cua().act(Action(kind="type", ref="s0000000f:6", text=secret), foreground=False)
-    argv = fake_cua.calls()[-1]
-    assert argv[:2] == ["call", "type_text"] and len(argv) == 3
-    assert secret not in argv[:2]
-    assert json.loads(argv[2])["text"] == secret
+    entry = fake_cua.entries()[-1]
+    assert entry["argv"] == ["call", "type_text"]
+    assert json.loads(entry["stdin"])["text"] == secret
 
 
 def test_cua_type_without_a_target_goes_to_the_focused_element(fake_cua):

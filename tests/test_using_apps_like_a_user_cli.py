@@ -221,6 +221,32 @@ class TestDoctor:
         assert not pinned.exists()
         assert str(sb.tmp) in str(pinned)
 
+    def test_native_reports_the_orca_binary_with_no_pin(self, sb):
+        sb.native_scenario()
+        result = sb.run("doctor", "--surface", "native")
+        tool = result["surfaces"]["native"]["tools"][0]
+        assert tool["name"] == "orca" and tool["path"] == sb.env()["LIKEUSER_ORCA_BIN"]
+        assert tool["pin"] is None
+
+    def test_a_selected_cua_driver_reports_its_own_binary_and_pin(self, sb, monkeypatch):
+        import _native
+
+        class StandInCua(_native.CuaDriver):
+            version = "0.34.1"
+
+            def check(self):
+                return []
+
+        for key, value in sb.env().items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setenv("LIKEUSER_NATIVE_BIN", "/fake/cua-driver")
+        monkeypatch.setenv("LIKEUSER_ORCA_BIN", "/fake/orca")
+        module = load_cli_module()
+        monkeypatch.setattr(module, "get_native_driver", lambda name=None, session=None: StandInCua())
+        for surface in ("native", "electron"):
+            [tool] = module._surface_report(surface)[0]["tools"][-1:]
+            assert tool == {"name": "cua", "path": "/fake/cua-driver", "version": "0.34.1", "pin": "0.34.1"}
+
     def test_missing_orca_is_reported(self, sb):
         sb.native_scenario()
         result = sb.run("doctor", "--surface", "native", LIKEUSER_ORCA_BIN=str(sb.tmp / "no-orca"))
@@ -307,7 +333,7 @@ class TestBegin:
         for key, value in sb.env().items():
             monkeypatch.setenv(key, value)
         module = load_cli_module()
-        monkeypatch.setattr(module, "get_native_driver", FakeDriver)
+        monkeypatch.setattr(module, "get_native_driver", lambda name=None, session=None: FakeDriver())
         target = FIXTURE_BUNDLE if surface == "native" else "app"
         argv = ["begin", "--target", target, "--surface", surface, "--owner", "yours", "--attended"]
         if surface == "electron":
@@ -979,6 +1005,136 @@ class TestElectron:
     def test_electron_runs_do_not_take_the_lock_at_begin(self, sb):
         electron_run(sb)
         assert _run.DesktopLock(sb.lock_path).holder() is None
+
+
+class TestNativeDriverIdentity:
+    """The adapter a run begins with is recorded, restored by name, and released at `end`."""
+
+    @pytest.fixture
+    def cua_run(self, sb, monkeypatch, capsys):
+        import _native
+
+        seen = {"requests": [], "closed": []}
+
+        class StandInCua(_native.OrcaDriver):
+            name = "cua"
+            pin = "0.34.1"
+            background_capable = True
+
+            def __init__(self, session=None):
+                super().__init__()
+                self.session = session
+
+            def close(self):
+                seen["closed"].append(self.session)
+                if seen.get("close_error"):
+                    raise _native.DriverError("driver_exit_1", "daemon gone")
+
+        def get_native_driver(name=None, session=None):
+            seen["requests"].append((name, session))
+            return StandInCua(session)
+
+        sb.web_scenario()
+        sb.native_scenario(bundle=FIXTURE_BUNDLE)
+        for key, value in sb.env().items():
+            monkeypatch.setenv(key, value)
+        module = load_cli_module()
+        monkeypatch.setattr(module, "get_native_driver", get_native_driver)
+
+        def run_verb(*argv):
+            code = module.main(list(argv))
+            return code, json.loads(capsys.readouterr().out)
+
+        run_verb.seen = seen
+        return run_verb
+
+    def test_native_run_records_the_selected_adapter_and_reports_it(self, sb, cua_run):
+        code, out = cua_run("begin", "--target", FIXTURE_BUNDLE, "--surface", "native", "--owner", "yours",
+                            "--attended", "--goals-file", write_goals(sb, "g1"))
+        assert code == 0, out
+        assert out["driver"] == "cua" and out["window"]["native_driver"] == "cua"
+        code, seen = cua_run("observe", "--run", out["run_id"], "--goal", "g1")
+        assert code == 0, seen
+        assert sb.run_json(out["run_id"])["observations"][str(seen["observation"]["observation_id"])]["driver"] == "cua"
+
+    def test_later_verbs_restore_the_recorded_adapter_with_the_run_id_as_session(self, sb, cua_run):
+        _, out = cua_run("begin", "--target", FIXTURE_BUNDLE, "--surface", "native", "--owner", "yours",
+                         "--attended", "--goals-file", write_goals(sb, "g1"))
+        cua_run.seen["requests"].clear()
+        cua_run("observe", "--run", out["run_id"], "--goal", "g1")
+        assert cua_run.seen["requests"] == [("cua", out["run_id"])]
+
+    def test_a_recorded_adapter_that_is_gone_exits_5_instead_of_switching(self, sb, cua_run, monkeypatch):
+        import _native
+        _, out = cua_run("begin", "--target", FIXTURE_BUNDLE, "--surface", "native", "--owner", "yours",
+                         "--attended", "--goals-file", write_goals(sb, "g1"))
+        sb.run("end", "--run", out["run_id"], "--keep-open")
+        run_json = sb.run_json(out["run_id"])
+        assert run_json["window"]["native_driver"] == "cua"
+        module = load_cli_module()
+        monkeypatch.setattr(module, "get_native_driver", _native.get_native_driver)
+        monkeypatch.setenv("LIKEUSER_NATIVE_BIN", str(sb.tmp / "no-native-driver"))
+        drivers = module.Drivers(_FakeRun(run_json))
+        with pytest.raises(module.MissingError) as raised:
+            drivers.native
+        assert raised.value.missing == ["cua-driver"]
+
+    def test_a_run_file_without_the_adapter_field_falls_back_to_the_driver_label(self, monkeypatch):
+        module = load_cli_module()
+        requests = []
+        monkeypatch.setattr(module, "get_native_driver",
+                            lambda name=None, session=None: requests.append((name, session)) or _NullDriver())
+        run = _FakeRun({"run_id": "r1", "driver": "playwright-cli+orca",
+                        "window": {"bundle_id": "dev.example", "window_id": 7}})
+        assert module.Drivers(run).native
+        assert requests == [("orca", "r1")]
+
+    def test_end_releases_the_adapter_even_when_windows_are_kept_open(self, sb, cua_run):
+        _, out = cua_run("begin", "--target", FIXTURE_BUNDLE, "--surface", "native", "--owner", "yours",
+                         "--attended", "--goals-file", write_goals(sb, "g1"))
+        code, ended = cua_run("end", "--run", out["run_id"], "--keep-open")
+        assert code == 0, ended
+        assert cua_run.seen["closed"] == [out["run_id"]]
+
+    def test_end_records_a_failed_release_in_cleanup_errors(self, sb, cua_run):
+        _, out = cua_run("begin", "--target", FIXTURE_BUNDLE, "--surface", "native", "--owner", "yours",
+                         "--attended", "--goals-file", write_goals(sb, "g1"))
+        cua_run.seen["close_error"] = True
+        code, ended = cua_run("end", "--run", out["run_id"])
+        assert code == 4 and ended["error"] == "cleanup_failed"
+        assert "close native driver: driver_exit_1" in sb.run_json(out["run_id"])["state_left"]["cleanup_errors"]
+
+    def test_a_failed_begin_releases_the_adapter_it_chose(self, sb, cua_run):
+        sb.native_scenario(bundle=FIXTURE_BUNDLE, running=False, window_id=None)
+        code, out = cua_run("begin", "--target", FIXTURE_BUNDLE, "--surface", "native", "--owner", "yours",
+                            "--attended", "--goals-file", write_goals(sb, "g1"))
+        assert code != 0
+        assert len(cua_run.seen["closed"]) == 1
+
+    def test_electron_run_label_names_the_selected_adapter(self, sb, cua_run):
+        sb.native_scenario(bundle="com.github.Electron")
+        code, out = cua_run("begin", "--target", "app", "--surface", "electron", "--owner", "yours",
+                            "--attended", "--launch", electron_command(), "--cdp-port",
+                            str(harness.free_port()), "--goals-file", write_goals(sb, "g1"))
+        try:
+            assert code == 0, out
+            assert out["driver"] == "playwright-cli+cua"
+            code, seen = cua_run("observe", "--run", out["run_id"], "--goal", "g1")
+            assert code == 0, seen
+            observation = sb.run_json(out["run_id"])["observations"][str(seen["observation"]["observation_id"])]
+            assert observation["driver"] == "playwright-cli+cua"
+        finally:
+            sb.kill_launched()
+
+
+class _FakeRun:
+    def __init__(self, data):
+        self.data = data
+
+
+class _NullDriver:
+    def bind(self, *args):
+        pass
 
 
 class TestNativeLaunch:

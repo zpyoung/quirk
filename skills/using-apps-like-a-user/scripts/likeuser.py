@@ -41,7 +41,7 @@ if _SCRIPT_DIR not in sys.path:
 import _desktop  # noqa: E402
 import _effects  # noqa: E402
 import _run  # noqa: E402
-from _native import NativeDriver, get_native_driver  # noqa: E402
+from _native import NATIVE_DRIVER_PREFERENCE, NativeDriver, get_native_driver  # noqa: E402
 from _types import (  # noqa: E402
     Action, DriverError, DriverResult, MissingError, Observation, RunStateError, UsageError,
 )
@@ -308,17 +308,44 @@ class Drivers:
 
     @property
     def native(self) -> NativeDriver:
+        """The adapter the run began with, restored by name so a later verb never switches adapters.
+
+        Raises `MissingError` when that adapter is no longer ready.
+        """
         if self._native is None:
-            driver = get_native_driver()
+            driver = get_native_driver(name=_native_name(self.run), session=self.run.data["run_id"])
             window = self.run.data["window"]
             if window["bundle_id"]:
                 driver.bind(window["bundle_id"], window["window_id"])
             self._native = driver
         return self._native
 
+    def close_native(self, errors: List[str]) -> None:
+        """Release the native driver's per-run state; failures are appended to `errors`.
+
+        A run that never chose a native adapter has nothing to release.
+        """
+        if _native_name(self.run) is None:
+            return
+        try:
+            self.native.close()
+        except DriverError as exc:
+            errors.append(f"close native driver: {exc.code}")
+        except MissingError as exc:
+            errors.append(f"close native driver: {', '.join(exc.missing)}")
+
     @property
     def uses_web(self) -> bool:
         return self.run.data["surface"] in ("web", "electron")
+
+
+def _native_name(run: _run.Run) -> Optional[str]:
+    """The native adapter recorded for `run`, or None before one was chosen.
+
+    Runs written before the name had its own field carry it as the tail of the `driver` label.
+    """
+    name = run.data["window"].get("native_driver") or str(run.data.get("driver") or "").rsplit("+", 1)[-1]
+    return name if name in NATIVE_DRIVER_PREFERENCE else None
 
 
 def _copy_shot(source: Optional[Path], dest: Path) -> Optional[Path]:
@@ -460,8 +487,7 @@ def _record_observation(run: _run.Run, oid: int, goal_id: Optional[str], snap: S
         "goal_id": goal_id, "screenshot_path": shot, "screenshot_source": snap.source,
         "scale": snap.scale, "tree_path": str(tree_path), "url": primary.url,
         "title": primary.title, "focus": primary.focus,
-        "driver": "playwright-cli" if run.data["surface"] == "web" else
-        ("orca" if run.data["surface"] == "native" else "playwright-cli+orca"),
+        "driver": run.data["driver"],
     }
     run.data["latest_observation_id"] = oid
     block = {
@@ -549,8 +575,8 @@ def _surface_report(surface: str) -> Tuple[dict, List[str]]:
     if surface in ("electron", "native"):
         try:
             tool = get_native_driver()
-            tools.append({"name": tool.name, "path": os.environ.get("LIKEUSER_ORCA_BIN")
-                          or shutil.which("orca"), "version": tool.version or None, "pin": None})
+            tools.append({"name": tool.name, "path": tool.path, "version": tool.version or None,
+                          "pin": tool.pin})
         except MissingError as exc:
             missing += exc.missing
         try:
@@ -755,7 +781,8 @@ def cmd_begin(args, ctx: Ctx):
         "started": _now(),
         "budget": {"run_cap": args.budget_run or _run.DEFAULT_RUN_CAP,
                    "goal_cap": args.budget_goal or _run.DEFAULT_GOAL_CAP},
-        "window": {"bundle_id": None, "window_id": None, "session": None, "cdp_port": None},
+        "window": {"bundle_id": None, "window_id": None, "session": None, "cdp_port": None,
+                   "native_driver": None},
     }
     try:
         run = _run.Run.create(root, fields)
@@ -790,7 +817,9 @@ def cmd_begin(args, ctx: Ctx):
 
 
 def _abort_begin(run: _run.Run, lock: _run.DesktopLock) -> None:
-    _terminate_launched(run, [])
+    errors: List[str] = []
+    _terminate_launched(run, errors)
+    Drivers(run).close_native(errors)
     if run.data["holds_lock"]:
         lock.release(run.data["run_id"])
         run.data["holds_lock"] = False
@@ -824,7 +853,7 @@ def _begin_bind(args, run: _run.Run, ctx: Ctx) -> None:
         _begin_electron(args, run, drivers)
     if surface in ("electron", "native"):
         native = _begin_native(args, run, drivers)
-        run.data["driver"] = native.name if surface == "native" else "playwright-cli+orca"
+        run.data["driver"] = native.name if surface == "native" else f"playwright-cli+{native.name}"
         versions.append(native.version)
     run.data["driver_version"] = " + ".join(v for v in versions if v)
     current = _drift_now()
@@ -886,6 +915,7 @@ def _begin_native(args, run: _run.Run, drivers: Drivers) -> NativeDriver:
     if args.surface == "native":
         window["bundle_id"] = args.target
     driver = drivers.native
+    window["native_driver"] = driver.name
     if args.surface == "native" and not _native_running(driver, args.target):
         run.data["launched"].append(_launch_native_app(args.target))
         run.save()
@@ -1525,6 +1555,7 @@ def cmd_end(args, ctx: Ctx):
         kept = _kept_windows(run)
     else:
         _close_everything(run, drivers, errors)
+    drivers.close_native(errors)
     clipboard_restored = _restore_clipboard(run, errors)
     frontmost_restored = _restore_frontmost(run, errors)
     if data["holds_lock"]:
