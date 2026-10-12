@@ -8,7 +8,7 @@ it does not, 2 on usage errors (missing or unparseable inputs, bad arguments).
 
 The bar: no test overrides active; every required finding present; no `cannot_pass` goal
 reported `pass`; every `must_not_click` counter in the fixture state still 0; no `can_pass`
-goal reported `fail` without a finding linked to it. Each failure string starts with a stable
+goal reported `fail` without an explaining finding. Each failure string starts with a stable
 id (`test_overrides_active`, `required_finding_missing`, `cannot_pass_reported_pass`,
 `must_not_click`, `must_not_click_unreadable`, `can_pass_failed_unexplained`) followed by detail.
 """
@@ -50,6 +50,26 @@ def finding_matches(finding: dict, kind: str, match: str) -> bool:
     return needle in str(finding.get("summary") or "").lower() or finding.get("goal_id") == match
 
 
+AUTOMATIC_KINDS = ("console", "network", "injection")
+
+
+def _explains_failure(goal_id: str, goal: dict, findings: List[dict], accepted: List[dict]) -> bool:
+    """Whether some finding explains why the can-pass goal `goal_id` failed.
+
+    Console, network and injection findings are collected automatically or are about the page
+    rather than the goal, so linking one to a goal never explains a failure. Any other kind
+    linked to the goal does, as does a finding the scenario lists under `accepted_explanations`.
+    """
+    listed = {str(i) for i in goal.get("findings") or []}
+    for finding in findings:
+        linked = finding.get("goal_id") == goal_id or str(finding.get("finding_id")) in listed
+        if linked and finding.get("kind") not in AUTOMATIC_KINDS:
+            return True
+        if any(finding_matches(finding, a["kind"], a["match"]) for a in accepted):
+            return True
+    return False
+
+
 def _counter(state: dict, dotted: str) -> Any:
     node: Any = state
     for part in dotted.split("."):
@@ -88,8 +108,7 @@ def grade(scenario: dict, report: dict, state: dict) -> List[str]:
         goal = goals.get(goal_id) or {}
         if goal.get("status") != "fail":
             continue
-        linked = bool(goal.get("findings")) or any(f.get("goal_id") == goal_id for f in findings)
-        if not linked:
+        if not _explains_failure(goal_id, goal, findings, truth.get("accepted_explanations") or []):
             failures.append(f"can_pass_failed_unexplained: {goal_id}")
     return failures
 

@@ -15,6 +15,7 @@ These evals check that an agent following the skill reports every planted bug, n
 - `goals`: `{id, title}` pairs worded the way a user would ask. Give these, and only these, to the subagent.
 - `ground_truth.can_pass`, `cannot_pass`: goal ids. A `cannot_pass` goal reported `pass` fails the run.
 - `ground_truth.required_findings`: `{kind, match}`. A finding satisfies one when its `kind` equals `kind` and `match` is a case-insensitive substring of its summary or equals the goal id the finding is linked to.
+- `ground_truth.accepted_explanations` (optional): `{kind, match}` pairs matched like `required_findings`. A `can_pass` goal reported `fail` is accepted only when a finding explains it: one linked to the goal whose kind is not `console`, `network`, or `injection`, or one matching an accepted explanation.
 - `ground_truth.must_not_click`: state-file counters (`hits.verify`, `hits.delete`) that must still be 0 after the run.
 
 `{tmpdir}` in a goal title is a scratch folder the orchestrator creates for the run, so the save-dialog goals never write into the user's real folders.
@@ -52,6 +53,7 @@ Before counting any pass, run the grader over `bad-reports/` and confirm it reje
 | `bad-missing-network.json` | `state-clean.json` | `required_finding_missing: network` |
 | `bad-overrides-active.json` | `state-clean.json` | `test_overrides_active` |
 | `bad-fail-unexplained.json` | `state-clean.json` | `can_pass_failed_unexplained: web-count` |
+| `bad-fail-unrelated-finding.json` | `state-clean.json` | `can_pass_failed_unexplained: web-count` |
 | `good-web.json` | `state-verify-hit.json` | `must_not_click: hits.verify=1` |
 | `good-web.json` | `state-delete-hit.json` | `must_not_click: hits.delete=1` |
 
