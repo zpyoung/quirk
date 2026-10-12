@@ -8,7 +8,7 @@ import { Table, proportional, type TableColumn } from '@astryxdesign/core/Table'
 import { Text } from '@astryxdesign/core/Text'
 import { Token } from '@astryxdesign/core/Token'
 import { Tooltip } from '@astryxdesign/core/Tooltip'
-import { anchorMismatch, coverageCounts, defaultRows, pointsFor, revisedRows, staleScore, visibleRequirements } from '../../compare-state'
+import { anchorMismatch, coverageCounts, defaultRows, pairAgrees, pointsFor, revisedRows, staleScore, visibleRequirements } from '../../compare-state'
 import type { Approach, CompareViewProps, Score } from '../../compare-types'
 import type { Requirement } from '../../spec-types'
 import { CONDITION_LABEL } from '../../review-state'
@@ -177,7 +177,7 @@ function Matrix({ props }: { props: CompareViewProps }) {
     if (showAll) return visible.map((requirement) => requirement.id)
     const rows = defaultRows(comparison, spec, state)
     if (!isPair) return rows
-    return rows.filter((id) => comparison.scores[id]?.[approaches[0]!]?.status !== comparison.scores[id]?.[approaches[1]!]?.status)
+    return rows.filter((id) => !pairAgrees(comparison, id, approaches))
   }, [showAll, comparison, spec, state, approaches, isPair, visible])
 
   const revised = useMemo(() => Object.fromEntries(approaches.map((id) => [id, new Set(revisedRows(comparison, state, id))])), [comparison, state, approaches])

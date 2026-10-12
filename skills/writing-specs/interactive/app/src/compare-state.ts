@@ -278,6 +278,16 @@ function checkSchema(approach: Record<string, unknown>, pointer: string): void {
   }, pointer)
 }
 
+/** True for a YYYY-MM-DD string that names a real calendar date (rejects 2026-02-30). */
+function isCalendarDate(text: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text)
+  if (!match) return false
+  const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])]
+  const parsed = new Date(Date.UTC(year, month - 1, day))
+  parsed.setUTCFullYear(year)
+  return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day
+}
+
 function checkApproach(value: unknown, pointer: string, flowStages: string[], stageCount: number): string {
   const approach = obj(value, pointer)
   const id = str(required(approach, 'id', pointer), `${pointer}/id`)
@@ -290,7 +300,7 @@ function checkApproach(value: unknown, pointer: string, flowStages: string[], st
     str(required(anchor, 'commit', at), `${at}/commit`)
   })
   const readAt = str(required(approach, 'readAt', pointer), `${pointer}/readAt`)
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(readAt)) fail(`${pointer}/readAt`, 'must be YYYY-MM-DD')
+  if (!isCalendarDate(readAt)) fail(`${pointer}/readAt`, 'must be a real date in YYYY-MM-DD form')
   optional(approach, 'specMarkdown', str, pointer)
   const repoNames = new Set<string>()
   arr(required(approach, 'repos', pointer), `${pointer}/repos`).forEach((entry, i) => {
@@ -600,12 +610,21 @@ export function defaultRows(comparison: Comparison, spec: LogicSpec, state: Comp
   return visibleRequirements(spec, state)
     .filter((requirement) => {
       const statuses = focus.map((id) => comparison.scores[requirement.id]?.[id]?.status)
-      const differs = new Set(statuses).size > 1
+      const qualifiers = focus.map((id) => comparison.scores[requirement.id]?.[id]?.qualifier ?? null)
+      const differs = new Set(statuses).size > 1 || (focus.length === 2 && new Set(qualifiers).size > 1)
       const nobodyMeets = !statuses.includes('met')
       const hasFinding = findings.some((finding) => finding.requirementId === requirement.id && (finding.approaches === 'all' || finding.approaches.some((id) => focus.includes(id))))
       return differs || nobodyMeets || hasFinding
     })
     .map((requirement) => requirement.id)
+}
+
+/** True when a focused pair truly agrees on a requirement: same status and qualifier on both scores, and no finding touching either approach. A missing score never counts as agreement. */
+export function pairAgrees(comparison: Comparison, requirementId: string, pair: string[]): boolean {
+  const [first, second] = pair.map((id) => comparison.scores[requirementId]?.[id])
+  if (pair.length !== 2 || !first || !second) return false
+  if (first.status !== second.status || (first.qualifier ?? null) !== (second.qualifier ?? null)) return false
+  return !(comparison.findings ?? []).some((finding) => finding.requirementId === requirementId && (finding.approaches === 'all' || finding.approaches.some((id) => pair.includes(id))))
 }
 
 const emptyCounts = (): Record<ScoreStatus, number> => ({ met: 0, 'met with workaround': 0, 'very hard': 0, 'not met': 0 })

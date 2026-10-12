@@ -17,6 +17,7 @@ import {
   isComparison,
   loadCompareState,
   mrsFor,
+  pairAgrees,
   pointsFor,
   revisedRows,
   saveCompareState,
@@ -61,6 +62,10 @@ for (const name of invalidFiles) {
   const prefix = expectedPointers[name] ?? ''
   check(`invalid/${name} pointer`, result.pointer.startsWith(prefix), `pointer ${result.pointer} does not start with ${prefix} (${result.message})`)
 }
+const badReadAt = structuredClone(comparisonFixture) as unknown as { approaches: Array<{ readAt: string }> }
+badReadAt.approaches[0]!.readAt = '2026-02-30'
+const badReadAtResult = isComparison(badReadAt, spec)
+check('isComparison rejects an impossible readAt date at /approaches/0/readAt', !badReadAtResult.ok && badReadAtResult.pointer === '/approaches/0/readAt', JSON.stringify(badReadAtResult))
 for (const junk of [null, 3, 'x', [], {}]) check(`isComparison rejects ${JSON.stringify(junk)}`, !isComparison(junk, spec).ok)
 
 // hashing: parity with the Python fixtures
@@ -132,7 +137,13 @@ equal('focusApproaches all', focusApproaches(comparison, fresh()), ['A', 'B', 'C
 equal('focusApproaches pair', focusApproaches(comparison, fresh({ focus: 'AC' })), ['A', 'C'])
 equal('focusApproaches unknown pair falls back to all', focusApproaches(comparison, fresh({ focus: 'AZ' })), ['A', 'B', 'C'])
 equal('defaultRows all', defaultRows(comparison, spec, fresh()), ['REQ-01', 'REQ-02', 'REQ-03'])
-equal('defaultRows pair A,B', defaultRows(comparison, spec, fresh({ focus: 'AB' })), ['REQ-01', 'REQ-02'])
+equal('defaultRows pair A,B', defaultRows(comparison, spec, fresh({ focus: 'AB' })), ['REQ-01', 'REQ-02', 'REQ-03'])
+const pairAB = focusApproaches(comparison, fresh({ focus: 'AB' }))
+equal('pairAgrees: an "all" finding keeps REQ-01 from agreeing', pairAgrees(comparison, 'REQ-01', pairAB), false)
+equal('pairAgrees: REQ-03 differs only by qualifier', pairAgrees(comparison, 'REQ-03', pairAB), false)
+equal('pairAgrees: same status, qualifier and no finding agrees', pairAgrees(comparison, 'REQ-04', pairAB), true)
+equal('pairAgrees: differing status does not agree', pairAgrees(comparison, 'REQ-02', pairAB), false)
+equal('pair matrix rows under focus A+B', defaultRows(comparison, spec, fresh({ focus: 'AB' })).filter((id) => !pairAgrees(comparison, id, pairAB)), ['REQ-01', 'REQ-02', 'REQ-03'])
 equal('defaultRows pair A,C without conditional', defaultRows(comparison, spec, fresh({ focus: 'AC', includeConditional: false })), ['REQ-01', 'REQ-02'])
 
 const itemHashes: Record<string, string> = { 'REQ-01': 'h1' }

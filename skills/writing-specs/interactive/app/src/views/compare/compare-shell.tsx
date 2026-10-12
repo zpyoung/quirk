@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Banner } from '@astryxdesign/core/Banner'
 import { VStack } from '@astryxdesign/core/Layout'
 import { focusApproaches, loadCompareState, saveCompareState } from '../../compare-state'
@@ -22,6 +22,9 @@ interface CompareShellProps {
   onView: (view: ViewId) => void
 }
 
+/** Identifies the drafts and stars an export would carry, so later edits show as not yet exported. */
+const exportSignature = (state: CompareState): string => JSON.stringify([state.drafts, state.stars])
+
 /** Stage 3: owns the reviewer's compare state (stored under its own key), the active stage-3 view, the score drawer, the control strip and the challenge tray. Renders nothing on any other view, but stays mounted so state survives tab changes. */
 export function CompareShell({ payload, comparison, view, onView }: CompareShellProps) {
   const comparisonId = payload.comparisonId ?? ''
@@ -29,18 +32,34 @@ export function CompareShell({ payload, comparison, view, onView }: CompareShell
   const [state, setState] = useState<CompareState>(loaded.state)
   const stateRef = useRef(state)
   const [storageOk, setStorageOk] = useState(loaded.storageOk)
+  const [exportedSignature, setExportedSignature] = useState<string | null>(null)
   const [openRequirementId, setOpenRequirementId] = useState<string | null>(null)
 
   const update = useCallback((recipe: (draft: CompareState) => void) => {
-    const next = structuredClone(stateRef.current)
+    const previous = stateRef.current
+    const next = structuredClone(previous)
     recipe(next)
     stateRef.current = next
     setState(next)
+    if (next.lastExport && next.lastExport.at !== previous.lastExport?.at) setExportedSignature(exportSignature(next))
     if (!saveCompareState(payload.slug, next)) setStorageOk(false)
   }, [payload.slug])
 
   const goToTab = useCallback((tab: TabKey) => onView(`s3-${tab}`), [onView])
   const approaches = useMemo(() => focusApproaches(comparison, state), [comparison, state])
+
+  const hasWork = state.drafts.length > 0 || state.stars.length > 0
+  const unprotected = !storageOk && (state.needsLook.length > 0 || (hasWork && exportSignature(state) !== exportedSignature))
+
+  useEffect(() => {
+    if (!unprotected) return undefined
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', beforeUnload)
+    return () => window.removeEventListener('beforeunload', beforeUnload)
+  }, [unprotected])
 
   if (!view.startsWith('s3-')) return null
 
