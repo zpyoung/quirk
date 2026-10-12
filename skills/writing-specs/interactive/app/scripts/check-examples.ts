@@ -4,24 +4,25 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import fixture from '../../../../../tests/fixtures/interactive/v2/stage1/logic.json'
 import { approveBlockReason, EXAMPLE_OUTCOME_UPDATE_PREFIX, emptyState, exampleOutcomeUpdate, isPayload } from '../src/review-state'
 import type { LogicSpec, Scenario } from '../src/spec-types'
-import { exampleMarkPlugins, ScenarioExampleView } from '../src/views/scenario-example'
+import { EXAMPLE_PHRASE, exampleMarkPlugins, ScenarioExampleView } from '../src/views/scenario-example'
 
-const [result, rejection, invented, gap] = exampleMarkPlugins.map((plugin) => plugin.pattern)
+const [invented, gap] = exampleMarkPlugins.map((plugin) => plugin.pattern)
 
 function matches(pattern: RegExp, text: string): string[] {
   assert.ok(pattern.global, `${pattern} must be global`)
   return [...text.matchAll(new RegExp(pattern.source, pattern.flags))].map((m) => m[0])
 }
 
-assert.equal(exampleMarkPlugins.length, 4)
-assert.deepEqual(matches(result, 'The charge is ✓ queued for May 5; next'), ['✓ queued for May 5'])
-assert.deepEqual(matches(rejection, 'An API client ✗ cannot add a second line; ok'), ['✗ cannot add a second line'])
+assert.equal(exampleMarkPlugins.length, 2)
+assert.deepEqual(matches(EXAMPLE_PHRASE, 'The charge is ✓ queued for May 5; next'), ['✓ queued for May 5'])
+assert.deepEqual(matches(EXAMPLE_PHRASE, 'An API client ✗ cannot add a second line; ok'), ['✗ cannot add a second line'])
 assert.deepEqual(matches(gap, 'Date is [ASK: Does a skip move the date?] here'), ['[ASK: Does a skip move the date?]'])
-for (const pattern of [result, rejection, invented, gap]) assert.deepEqual(matches(pattern, '**bold** text'), [])
+for (const pattern of [EXAMPLE_PHRASE, invented, gap]) assert.deepEqual(matches(pattern, '**bold** text'), [])
 assert.deepEqual(matches(invented, '"Winback" took 10%\uE000 off'), ['10%\uE000'])
 assert.deepEqual(matches(invented, 'Charge 2 on 4\uE000, then'), ['4\uE000'])
 assert.deepEqual(matches(invented, '**Subscription**'), [])
 assert.deepEqual(matches(invented, 'Coffee line costs $9\uE000.'), ['$9\uE000'])
+assert.deepEqual(matches(invented, '$100.00\uE000'), ['$100.00\uE000'])
 
 const rendered = renderToStaticMarkup(React.createElement(ScenarioExampleView, { example: { before: 'Values 10%* and 4*,', steps: ['**Subscription** step'], after: 'done' } }))
 assert.equal((rendered.match(/example-invented/g) ?? []).length, 2)
@@ -29,10 +30,33 @@ assert.ok(rendered.includes('"example-invented">10%*</span>') && rendered.includ
 assert.ok(!rendered.includes('<em>'))
 assert.ok(/<strong[^>]*>Subscription<\/strong>/.test(rendered))
 
+const MARKDOWN_WRAPPER = '<span class="astryx-markdown[^"]*"[^>]*>'
+
 const starred = renderToStaticMarkup(React.createElement(ScenarioExampleView, { example: { before: 'b', steps: ['s'], after: '✓ total 4*' } }))
 assert.equal((starred.match(/class="example-result"/g) ?? []).length, 1)
-assert.ok(/<span class="example-result">[^<]*<span class="example-invented">4\*<\/span><\/span>/.test(starred))
+assert.ok(new RegExp(`<span class="example-result">${MARKDOWN_WRAPPER}[^<]*<span class="example-invented">4\\*</span></span></span>`).test(starred))
 assert.equal((starred.match(/example-invented/g) ?? []).length, 1)
+
+const nestedResult = renderToStaticMarkup(React.createElement(ScenarioExampleView, { example: { before: 'b', steps: ['s'], after: '✓ **Subscription** saved' } }))
+assert.equal((nestedResult.match(/class="example-result"/g) ?? []).length, 1)
+assert.ok(new RegExp(`<span class="example-result">${MARKDOWN_WRAPPER}✓ <strong[^>]*>Subscription</strong> saved</span></span>`).test(nestedResult))
+
+const nestedRejection = renderToStaticMarkup(React.createElement(ScenarioExampleView, { example: { before: 'b', steps: ['s'], after: '✗ The change is ignored; **Charge 2** stays' } }))
+assert.equal((nestedRejection.match(/class="example-rejection"/g) ?? []).length, 1)
+assert.ok(new RegExp(`<span class="example-rejection">${MARKDOWN_WRAPPER}✗ The change is ignored</span></span>${MARKDOWN_WRAPPER}; <strong[^>]*>Charge 2</strong> stays</span>`).test(nestedRejection))
+
+const lines = renderToStaticMarkup(React.createElement(ScenarioExampleView, { example: { before: 'Charge 1 ✓ queued\nCharge 2 ✗ skipped', steps: ['s'], after: 'a' } }))
+assert.equal((lines.match(/class="example-result"/g) ?? []).length, 1)
+assert.equal((lines.match(/class="example-rejection"/g) ?? []).length, 1)
+assert.ok(lines.includes('<br/>'))
+
+const invent = renderToStaticMarkup(React.createElement(ScenarioExampleView, { example: { before: 'x 10%* y', steps: ['s'], after: 'a' } }))
+assert.ok(invent.includes('"example-invented">10%*</span>'))
+
+const long = 'a'.repeat(80_000)
+const startedAt = performance.now()
+renderToStaticMarkup(React.createElement(ScenarioExampleView, { example: { before: long, steps: [long], after: `✓ ${long}` } }))
+assert.ok(performance.now() - startedAt < 500, 'a long run without a star must render in linear time')
 
 const base: Scenario = {
   id: 'S1', behavior: 'B1', given: 'g', when: 'w', then: 'Then the spec outcome', alternatives: ['Then alt'], explanation: 'e', provenance: 'claude',
