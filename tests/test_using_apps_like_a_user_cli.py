@@ -101,7 +101,8 @@ def electron_run(sb, orca_pages=None, orca_start="idle", rules=None, pw_rules=No
                        bundle="com.github.Electron", **scenario)
     port = harness.free_port()
     return start(sb, "electron", owner, attended, goals,
-                 begin_args=("--launch", electron_command(), "--cdp-port", str(port)))
+                 begin_args=("--launch", electron_command(), "--cdp-port", str(port),
+                             "--allow-foreground"))
 
 
 def load_cli_module():
@@ -278,6 +279,43 @@ class TestBegin:
                         "--owner", "yours", "--attended")
         assert result.code == 2 and result["error"] == "foreground_not_allowed"
 
+    def test_electron_without_allow_foreground_exits_2_while_the_native_driver_needs_the_foreground(self, sb):
+        sb.web_scenario()
+        sb.native_scenario(bundle="com.github.Electron")
+        result = sb.begin("electron", None, "yours", True, "--launch", electron_command())
+        assert result.code == 2 and result["error"] == "foreground_not_allowed"
+        assert not list(sb.state_root.glob("runs/*"))
+        assert pids_alive(sb) == []
+
+    @pytest.mark.parametrize("surface", ["native", "electron"])
+    @pytest.mark.parametrize("background_capable", [False, True])
+    def test_allow_foreground_is_required_only_for_a_driver_that_is_not_background_capable(
+            self, sb, monkeypatch, capsys, surface, background_capable):
+        import _native
+
+        class FakeDriver(_native.OrcaDriver):
+            pass
+
+        FakeDriver.background_capable = background_capable
+        sb.web_scenario()
+        sb.native_scenario(bundle=FIXTURE_BUNDLE if surface == "native" else "com.github.Electron")
+        for key, value in sb.env().items():
+            monkeypatch.setenv(key, value)
+        module = load_cli_module()
+        monkeypatch.setattr(module, "get_native_driver", FakeDriver)
+        target = FIXTURE_BUNDLE if surface == "native" else "app"
+        argv = ["begin", "--target", target, "--surface", surface, "--owner", "yours", "--attended"]
+        if surface == "electron":
+            argv += ["--launch", electron_command(), "--cdp-port", str(harness.free_port())]
+        code = module.main(argv)
+        out = json.loads(capsys.readouterr().out)
+        if background_capable:
+            assert code == 0, out
+            assert out["holds_lock"] is (surface == "native")
+        else:
+            assert code == 2 and out["error"] == "foreground_not_allowed"
+        sb.kill_launched()
+
     def test_launch_flag_is_for_electron_only(self, sb):
         sb.web_scenario()
         result = sb.begin("web", None, "yours", True, "--launch", "echo")
@@ -375,6 +413,26 @@ class TestDesktopLock:
         run_id = sb.begin("native", FIXTURE_BUNDLE, "yours", True, "--allow-foreground")["run_id"]
         assert lock.holder()["run_id"] == run_id
         assert any(e["verb"] == "lock_takeover" for e in sb.events(run_id))
+
+    @pytest.mark.parametrize("refusal", ["stale", "budget", "stopped"])
+    def test_a_refused_act_still_refreshes_the_held_lock(self, sb, refusal):
+        begin_args = ("--budget-run", "1") if refusal == "budget" else ()
+        run_id, obs = native_run(sb, begin_args=begin_args)
+        if refusal == "budget":
+            click(sb, run_id, obs["observation_id"], "2", "--foreground")
+            obs = {"observation_id": sb.run_json(run_id)["latest_observation_id"]}
+        if refusal == "stopped":
+            state = sb.run_json(run_id)
+            state["stopped_reason"] = "drift"
+            (sb.run_dir(run_id) / "run.json").write_text(json.dumps(state))
+        record = json.loads(sb.lock_path.read_text())
+        record["last_act_at"] = "2020-01-01T00:00:00Z"
+        sb.lock_path.write_text(json.dumps(record))
+        wrong_obs = obs["observation_id"] + (5 if refusal == "stale" else 0)
+        result = click(sb, run_id, wrong_obs, "2", "--foreground")
+        assert result.status == {"stale": "STALE", "budget": "BUDGET_EXHAUSTED", "stopped": "DRIFT"}[refusal]
+        refreshed = json.loads(sb.lock_path.read_text())
+        assert refreshed["run_id"] == run_id and refreshed["last_act_at"] != "2020-01-01T00:00:00Z"
 
     def test_foreground_act_in_a_web_run_is_desktop_busy_while_another_run_holds_it(self, sb):
         run_id, obs = web_run(sb, rules=[click_rule("e4")])
@@ -779,6 +837,28 @@ class TestCoordinates:
                      "--x", "1", "--y", "2", "--target-name", "x")
         assert result.code == 2 and result["error"] == "coordinates_need_screenshot"
 
+    def test_a_drag_to_coordinates_without_a_screenshot_is_a_usage_error(self, sb):
+        run_id, _ = web_run(sb)
+        seen = sb.run("observe", "--run", run_id, "--goal", "g1", "--no-screenshot")
+        result = act(sb, run_id, seen["observation"]["observation_id"], "--action", "drag",
+                     "--ref", "e4", "--to-x", "200", "--to-y", "100", "--target-name", "x")
+        assert result.code == 2 and result["error"] == "coordinates_need_screenshot"
+
+    def test_a_drag_to_coordinates_needs_a_target_name(self, sb):
+        run_id, obs = web_run(sb)
+        result = act(sb, run_id, obs["observation_id"], "--action", "drag", "--ref", "e4",
+                     "--to-x", "200", "--to-y", "100")
+        assert result.code == 2 and result["error"] == "target_name_required"
+
+    def test_a_native_drag_divides_both_endpoints_by_the_scale(self, sb):
+        run_id, obs = native_run(sb)
+        act(sb, run_id, obs["observation_id"], "--action", "drag", "--x", "400", "--y", "200",
+            "--to-x", "200", "--to-y", "100", "--target-name", "Working button", "--foreground")
+        [drag] = sb.orca_commands("drag")
+        assert drag["argv"][drag["argv"].index("--from-x") + 1] == "200"
+        assert drag["argv"][drag["argv"].index("--to-x") + 1] == "100"
+        assert drag["argv"][drag["argv"].index("--to-y") + 1] == "50"
+
 
 class TestElectron:
     def test_begin_launches_with_a_debug_port_attaches_and_binds_the_native_driver(self, sb):
@@ -796,7 +876,8 @@ class TestElectron:
     def test_the_default_port_comes_from_the_scan_range(self, sb):
         sb.web_scenario()
         sb.native_scenario(bundle="com.github.Electron")
-        result = sb.begin("electron", None, "yours", True, "--launch", electron_command())
+        result = sb.begin("electron", None, "yours", True, "--launch", electron_command(),
+                          "--allow-foreground")
         assert result.code == 0
         assert 9222 <= result["window"]["cdp_port"] <= 9299
 
@@ -811,7 +892,7 @@ class TestElectron:
         sb.web_scenario()
         sb.native_scenario()
         result = sb.begin("electron", None, "yours", True, "--launch", f"{shlex.quote(sys.executable)} -c pass",
-                          "--cdp-port", str(harness.free_port()))
+                          "--cdp-port", str(harness.free_port()), "--allow-foreground")
         assert result.code == 4 and result["driver_error"] == "launch_failed"
 
     def test_a_launch_that_never_opens_the_port_times_out_and_is_killed(self, sb, monkeypatch, capsys):
@@ -822,7 +903,8 @@ class TestElectron:
         module = load_cli_module()
         monkeypatch.setattr(module, "LAUNCH_WAIT_S", 1.0)
         code = module.main(["begin", "--target", "app", "--surface", "electron", "--owner", "yours",
-                            "--attended", "--launch", f"{shlex.quote(sys.executable)} -c 'import time; time.sleep(60)'",
+                            "--attended", "--allow-foreground",
+                            "--launch", f"{shlex.quote(sys.executable)} -c 'import time; time.sleep(60)'",
                             "--cdp-port", str(harness.free_port())])
         out = json.loads(capsys.readouterr().out)
         assert code == 4 and out["driver_error"] == "launch_timeout"
@@ -1186,6 +1268,18 @@ class TestHandoffResume:
         assert state["paused"] is False
         assert state["drift_baseline"] == {"frontmost": "com.example.userwork", "cursor": [640.0, 480.0]}
         assert result["observation"]["observation_id"] == 2
+
+    def test_a_failed_native_resume_releases_the_lock_and_stays_paused(self, sb):
+        run_id, _ = native_run(sb)
+        sb.run("handoff", "--run", run_id, "--reason", "hint")
+        scenario = json.loads(sb.orca_scenario.read_text())
+        scenario["running"] = False
+        sb.orca_scenario.write_text(json.dumps(scenario))
+        result = sb.run("resume", "--run", run_id)
+        assert result.code == 4
+        assert _run.DesktopLock(sb.lock_path).holder() is None
+        state = sb.run_json(run_id)
+        assert state["holds_lock"] is False and state["paused"] is True
 
     def test_resume_of_a_web_run_restores_the_session_at_the_last_url(self, sb):
         run_id, _ = web_run(sb)
