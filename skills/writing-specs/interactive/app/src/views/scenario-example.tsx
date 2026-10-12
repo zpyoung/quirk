@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import React, { type ReactNode } from 'react'
 import { Markdown, type MarkdownInlinePlugin } from '@astryxdesign/core/Markdown'
 import { Text } from '@astryxdesign/core/Text'
 import type { ScenarioExample } from '../spec-types'
@@ -9,44 +9,66 @@ import { OFFLINE_MARKDOWN_COMPONENTS } from './shared'
 const STAR = '\uE000'
 const restoreStar = (text: string) => text.replaceAll(STAR, '*')
 
-const INVENTED_SPAN = /[^\s\uE000]+\uE000(?=[\s,;:.)\]]|$)/g
+/** A result or rejection phrase: its mark plus everything up to the next semicolon or line end. */
+export const EXAMPLE_PHRASE = /([✓✗])([^;\n]+)/g
 
-/** Keeps an invented value styled when it sits inside a result or rejection phrase, which the parser would otherwise consume whole. */
-function phrase(text: string, key: string, className: string): ReactNode {
-  const parts: ReactNode[] = []
-  let last = 0
-  for (const m of text.matchAll(INVENTED_SPAN)) {
-    if (m.index > last) parts.push(restoreStar(text.slice(last, m.index)))
-    parts.push(<span key={`${key}-${m.index}`} className="example-invented">{restoreStar(m[0])}</span>)
-    last = m.index + m[0].length
-  }
-  if (last < text.length) parts.push(restoreStar(text.slice(last)))
-  return <span key={key} className={className}>{parts}</span>
-}
+/** Invented-value runs start at a whitespace boundary so each position of a long run without a star fails in constant time. */
+const INVENTED_MARK = /(?<![^\s])([^\s*]+)\*(?=[\s,;:.)\]]|$)/g
 
-/** Colours the marks the example text uses; the gap pattern must match the renderer's open-gap regex. */
+/** Colours the marks that survive Markdown parsing; the gap pattern must match the renderer's open-gap regex. */
 export const exampleMarkPlugins: MarkdownInlinePlugin[] = [
-  { pattern: /✓\s*[^;\n]+/g, render: (match, key) => phrase(match[0], String(key), 'example-result') },
-  { pattern: /✗\s*[^;\n]+/g, render: (match, key) => phrase(match[0], String(key), 'example-rejection') },
-  { pattern: /[^\s\uE000]+\uE000(?=[\s,;:.)\]]|$)/g, render: (match, key) => <span key={key} className="example-invented">{restoreStar(match[0])}</span> },
+  { pattern: /(?<![^\s])[^\s\uE000]+\uE000(?=[\s,;:.)\]]|$)/g, render: (match, key) => <span key={key} className="example-invented">{restoreStar(match[0])}</span> },
   { pattern: /\[ASK: [^\[\]\n]+\]/g, render: (match, key) => <span key={key} className="example-gap">{restoreStar(match[0])}</span> },
 ]
 
-const INVENTED_MARK = /([^\s*]+)\*(?=[\s,;:.)\]]|$)/g
+type Segment = { text: string; className?: string }
+
+/** Cuts one line into plain stretches and ✓/✗ phrases so a phrase can be parsed whole, nested marks included. */
+function segmentLine(line: string): Segment[] {
+  const segments: Segment[] = []
+  let last = 0
+  for (const m of line.matchAll(EXAMPLE_PHRASE)) {
+    if (m.index > last) segments.push({ text: line.slice(last, m.index) })
+    segments.push({ text: m[0], className: m[1] === '✓' ? 'example-result' : 'example-rejection' })
+    last = m.index + m[0].length
+  }
+  if (last < line.length) segments.push({ text: line.slice(last) })
+  return segments
+}
 
 // SpecMarkdown takes no extra plugins, so this repeats its underscore guard to keep prose underscores from becoming emphasis.
 function ExampleMarkdown({ children, hasLineBreaks }: { children: string; hasLineBreaks?: boolean }) {
   const itemLinkPlugins = useItemLinkPlugins()
+  const inlinePlugins = [...(itemLinkPlugins ?? []), ...exampleMarkPlugins]
   const text = children.replace(/_/g, '_​').replace(INVENTED_MARK, `$1${STAR}`)
-  return (
-    <Markdown
-      components={OFFLINE_MARKDOWN_COMPONENTS}
-      inlinePlugins={[...(itemLinkPlugins ?? []), ...exampleMarkPlugins]}
-      contentWidth="100%"
-      density="compact"
-    >
-      {hasLineBreaks ? text.replace(/\n/g, '  \n') : text}
+  if (!new RegExp(EXAMPLE_PHRASE.source).test(text)) {
+    return (
+      <Markdown components={OFFLINE_MARKDOWN_COMPONENTS} inlinePlugins={inlinePlugins} contentWidth="100%" density="compact">
+        {hasLineBreaks ? text.replace(/\n/g, '  \n') : text}
+      </Markdown>
+    )
+  }
+  const inline = (content: string, key: string) => (
+    <Markdown key={key} display="inline" components={OFFLINE_MARKDOWN_COMPONENTS} inlinePlugins={inlinePlugins} density="compact">
+      {content}
     </Markdown>
+  )
+  return (
+    <div>
+      {text.split('\n').map((line, lineIndex) => (
+        <React.Fragment key={lineIndex}>
+          {lineIndex > 0 && (hasLineBreaks ? <br /> : ' ')}
+          {segmentLine(line).map((segment, i) => {
+            const key = `${lineIndex}-${i}`
+            const [, lead, core, trail] = /^(\s*)([\s\S]*?)(\s*)$/.exec(segment.text)!
+            const body = core && (segment.className
+              ? <span key={key} className={segment.className}>{inline(core, key)}</span>
+              : inline(core, key))
+            return <React.Fragment key={key}>{lead}{body}{trail}</React.Fragment>
+          })}
+        </React.Fragment>
+      ))}
+    </div>
   )
 }
 
