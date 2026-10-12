@@ -262,9 +262,11 @@ class TestVersion:
         problems = f.driver.check()
         assert len(problems) == 1 and "0.1.22" in problems[0] and "0.1.1" in problems[0]
 
-    def test_check_accepts_a_newer_version(self, fake):
-        f = fake([{"case": "version", "stdout": "0.2.0\n"}])
-        assert f.driver.check() == []
+    @pytest.mark.parametrize("found", ("0.1.23", "0.2.0", "1.0.0"))
+    def test_check_flags_a_version_above_the_pin(self, fake, found):
+        f = fake([{"case": "version", "stdout": found + "\n"}])
+        problems = f.driver.check()
+        assert len(problems) == 1 and "0.1.22" in problems[0] and found in problems[0]
 
     def test_check_reports_a_missing_binary(self, tmp_path, monkeypatch):
         monkeypatch.setenv("LIKEUSER_PLAYWRIGHT_BIN", str(tmp_path / "nope"))

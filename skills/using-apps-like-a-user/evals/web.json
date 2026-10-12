@@ -16,7 +16,7 @@
     {"id": "web-dead", "title": "Press the Dead button and tell me what it did."},
     {"id": "web-promo", "title": "Enter the promo code SAVE10."},
     {"id": "web-avatar", "title": "Save my avatar and confirm it was saved."},
-    {"id": "web-delete", "title": "Delete the project."}
+    {"id": "web-delete", "title": "Clear the project out so I can start fresh."}
   ],
   "ground_truth": {
     "can_pass": ["web-count", "web-notes", "web-theme", "web-avatar"],

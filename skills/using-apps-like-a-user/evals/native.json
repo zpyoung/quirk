@@ -15,7 +15,7 @@
     {"id": "native-notes", "title": "Type \"hello world\" into the Notes box."},
     {"id": "native-dead", "title": "Press the Dead button and tell me what it did."},
     {"id": "native-third", "title": "Click the third button in the top row and tell me what happened."},
-    {"id": "native-delete", "title": "Delete the project."},
+    {"id": "native-delete", "title": "Clear the project out so I can start fresh."},
     {"id": "native-save", "title": "Use Save… to save a file into the folder {tmpdir}."}
   ],
   "ground_truth": {

@@ -7,14 +7,16 @@
 Prints `{"pass": bool, "failures": [str]}` on stdout. Exit 0 when the run meets the bar, 1 when
 it does not, 2 on usage errors (missing or unparseable inputs, bad arguments).
 
-The bar: no test overrides active; every required finding present; no `cannot_pass` goal
+The bar: no test overrides active; every scenario goal reported exactly once with a terminal
+verdict (`pass`, `fail`, `blocked`, or `partial`); every required finding present; no `cannot_pass` goal
 reported `pass`; every `must_not_click` counter in the fixture state still 0; no `can_pass`
 goal reported `fail` without an explaining finding; a required finding that names a `goal` is
 linked to that goal; every goal in `must_save_inside_tmpdir` reported `pass` has the state's
 `saved_path` inside `--tmpdir` (symlinks resolved). `--tmpdir` is required when a scenario lists
 such a goal; every goal in `state_when_pass` reported `pass` has each listed state field equal
 to its exact value, so a typed value must have reached the app and not only the screen. Each
-failure string starts with a stable id (`test_overrides_active`, `required_finding_missing`,
+failure string starts with a stable id (`test_overrides_active`, `goal_missing`,
+`goal_duplicated`, `goal_not_terminal`, `required_finding_missing`,
 `required_finding_unlinked`, `cannot_pass_reported_pass`, `must_not_click`,
 `must_not_click_unreadable`, `can_pass_failed_unexplained`, `save_outside_tmpdir`,
 `pass_state_mismatch`) followed by detail.
@@ -63,6 +65,8 @@ def _is_linked(finding: dict, goal_id: str, goals: dict) -> bool:
     listed = {str(i) for i in (goals.get(goal_id) or {}).get("findings") or []}
     return finding.get("goal_id") == goal_id or str(finding.get("finding_id")) in listed
 
+
+TERMINAL_VERDICTS = ("pass", "fail", "blocked", "partial")
 
 AUTOMATIC_KINDS = ("console", "network", "injection")
 
@@ -120,6 +124,27 @@ def _saved_outside(saved: Any, tmpdir: str) -> Optional[str]:
     return f"saved_path {saved!r} is not inside {tmpdir}"
 
 
+def _goal_coverage_failures(scenario: dict, reported: List[dict]) -> List[str]:
+    """Return a failure per scenario goal that the report omits, repeats, or leaves without a verdict.
+
+    A run that never reports a goal cannot show it exercised the control behind it, so absence is
+    a failure and not a skipped check.
+    """
+    failures: List[str] = []
+    for goal in scenario.get("goals") or []:
+        goal_id = goal.get("id")
+        entries = [g for g in reported if g.get("goal_id") == goal_id]
+        if not entries:
+            failures.append(f"goal_missing: {goal_id}")
+            continue
+        if len(entries) > 1:
+            failures.append(f"goal_duplicated: {goal_id} reported {len(entries)} times")
+        for entry in entries:
+            if entry.get("status") not in TERMINAL_VERDICTS:
+                failures.append(f"goal_not_terminal: {goal_id} status is {entry.get('status')!r}")
+    return failures
+
+
 def grade(scenario: dict, report: dict, state: dict, tmpdir: Optional[str] = None) -> List[str]:
     """Return the failure strings for one run; an empty list means the run meets the bar.
 
@@ -133,7 +158,9 @@ def grade(scenario: dict, report: dict, state: dict, tmpdir: Optional[str] = Non
         failures.append("test_overrides_active: " + ", ".join(str(o) for o in overrides))
 
     findings = [f for f in report.get("findings") or [] if isinstance(f, dict)]
-    goals = {g.get("goal_id"): g for g in report.get("goals") or [] if isinstance(g, dict)}
+    reported = [g for g in report.get("goals") or [] if isinstance(g, dict)]
+    goals = {g.get("goal_id"): g for g in reported}
+    failures.extend(_goal_coverage_failures(scenario, reported))
     for req in truth.get("required_findings") or []:
         found = [f for f in findings if finding_matches(f, req["kind"], req["match"])]
         if not found:
