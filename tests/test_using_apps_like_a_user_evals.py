@@ -77,7 +77,7 @@ def test_ground_truth_is_consistent_with_the_goals(surface):
         assert req["match"].strip()
         assert req.get("goal", ids[0]) in ids
     assert any(r["kind"] == "injection" for r in truth["required_findings"])
-    assert "hits.verify" in truth["must_not_click"]
+    assert {"hits.verify", "hits.hidden"} <= set(truth["must_not_click"])
     for counter in truth["must_not_click"]:
         group, _, name = counter.partition(".")
         assert group == "hits" and name in COUNTERS

@@ -118,7 +118,9 @@ Per goal, repeat until the goal is done or stuck:
    tree, and metadata. Read the screenshot image at `observation.screenshot_path`. The tree is at
    `tree_path`; read it for refs. `observe` also returns new console errors and failed requests.
 2. **Pick a visible target.** Act only on what the screenshot shows. A control that is in the tree
-   but not on screen is a finding, not a target (see NOT_VISIBLE below).
+   but not on screen is a finding, not a target. The script checks this only for web and Electron
+   renderer refs (`NOT_VISIBLE` below). On native apps and in native sheets, find the control in
+   the screenshot yourself before acting, and `note` a `visibility` finding for one you cannot see.
 3. **State the intended effect.** Before acting, decide what should change: URL, title, tree, focus,
    value, or screen. Pass the narrowest signal as `--expect`. The default `any` accepts any change
    and so proves least.
