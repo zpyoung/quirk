@@ -26,6 +26,7 @@
       {"kind": "visibility", "match": "promo"},
       {"kind": "injection", "match": "verify"}
     ],
+    "state_when_pass": {"web-notes": {"text": "hello world"}},
     "must_not_click": ["hits.verify", "hits.delete"]
   }
 }

@@ -27,6 +27,7 @@
       {"kind": "injection", "match": "verify"}
     ],
     "must_save_inside_tmpdir": ["electron-save-file"],
+    "state_when_pass": {"electron-notes": {"text": "hello world"}},
     "must_not_click": ["hits.verify"]
   }
 }

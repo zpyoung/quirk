@@ -53,6 +53,8 @@ if not case:
         case = "get-app-state-no-screenshot" if "--no-screenshot" in argv else "get-app-state"
     elif sub == "click":
         case = "click-coordinate" if "--x" in argv else "click-element"
+        if "--click-count" in argv:
+            case = "click-count-focuses-field"
     elif sub in ("scroll", "drag", "set-value"):
         case = "click-element"
     else:
@@ -139,7 +141,7 @@ def test_the_golden_set_covers_every_required_case():
     required = {
         "capabilities", "list-apps", "list-windows", "get-app-state", "get-app-state-no-screenshot",
         "click-element", "click-coordinate", "type-text", "press-key", "hotkey",
-        "app-not-found", "element-not-found",
+        "click-count-focuses-field", "app-not-found", "element-not-found",
     }
     assert required <= names
 
@@ -409,12 +411,34 @@ def test_type_into_a_ref_clicks_it_first(fake_orca):
     assert commands == ["click", "type-text"]
 
 
-def test_fill_and_select_set_the_value_through_stdin(fake_orca):
+def test_fill_focuses_selects_all_and_types_so_the_app_hears_it(fake_orca):
     _bound().act(Action(kind="fill", ref="7", text="typed"), foreground=True)
-    call = fake_orca.calls()[-1]
-    assert call["argv"][:2] == ["computer", "set-value"]
-    assert call["argv"][call["argv"].index("--element-index") + 1] == "7"
-    assert "--value-stdin" in call["argv"] and call["stdin"] == "typed"
+    calls = fake_orca.calls()
+    assert [call["argv"][1] for call in calls] == ["click", "hotkey", "type-text"]
+    focus, select_all, typing = (call["argv"] for call in calls)
+    assert focus[focus.index("--element-index") + 1] == "7"
+    assert focus[focus.index("--click-count") + 1] == "2"
+    assert select_all[select_all.index("--key") + 1] == "CmdOrCtrl+A"
+    assert "--text-stdin" in typing and calls[-1]["stdin"] == "typed"
+    assert not any("set-value" in call["argv"] for call in calls)
+
+
+def test_fill_keeps_a_secret_out_of_orca_argv(fake_orca):
+    secret = "hunter2-not-for-argv"
+    _bound().act(Action(kind="fill", ref="7", text=secret), foreground=True)
+    assert not any(secret in part for call in fake_orca.calls() for part in call["argv"])
+    assert fake_orca.calls()[-1]["stdin"] == secret
+
+
+def test_fill_with_nothing_to_type_clears_the_field(fake_orca):
+    _bound().act(Action(kind="fill", ref="7", text=""), foreground=True)
+    commands = [call["argv"][1] for call in fake_orca.calls()]
+    assert commands == ["click", "hotkey", "press-key"]
+    argv = fake_orca.calls()[-1]["argv"]
+    assert argv[argv.index("--key") + 1] == "Delete"
+
+
+def test_select_sets_the_value_through_stdin(fake_orca):
     _bound().act(Action(kind="select", ref="16", value="Documents"), foreground=True)
     call = fake_orca.calls()[-1]
     assert call["argv"][:2] == ["computer", "set-value"] and call["stdin"] == "Documents"
@@ -731,6 +755,8 @@ case = {
     "hotkey": "hotkey", "list_windows": "list-windows",
     "get_accessibility_tree": "get-accessibility-tree-sheets",
 }.get(tool, "click-coordinate" if "x" in payload else "click-element")
+if tool == "press_key" and payload.get("modifiers"):
+    case = "press-key-modified"
 reply = golden(case)
 out = reply["stdout"]
 if tool == "get_window_state":
@@ -884,7 +910,7 @@ def test_cua_golden_set_follows_the_schema():
     assert {
         "observe-screenshot", "click-element", "click-coordinate", "type-text", "press-key", "hotkey",
         "click-missing-element", "permissions-status", "list-windows", "list-windows-sheets",
-        "get-accessibility-tree-sheets",
+        "get-accessibility-tree-sheets", "press-key-modified",
     } <= names
     for path in GOLDEN_CUA.glob("*.json"):
         data = json.loads(path.read_text())
@@ -1056,10 +1082,11 @@ def test_cua_payload_goes_on_stdin_and_never_in_argv(fake_cua):
     secret = "hunter2-do-not-leak"
     driver = _bound_cua()
     driver.act(Action(kind="fill", ref="s0000000f:1", text=secret), foreground=False)
-    [entry] = [e for e in fake_cua.entries() if e["argv"][:2] == ["call", "set_value"]]
-    assert entry["argv"] == ["call", "set_value"]
-    assert json.loads(entry["stdin"])["value"] == secret
+    [entry] = [e for e in fake_cua.entries() if e["argv"][:2] == ["call", "type_text"]]
+    assert entry["argv"] == ["call", "type_text"]
+    assert json.loads(entry["stdin"])["text"] == secret
     assert not any(secret in part for argv in fake_cua.calls() for part in argv)
+    assert not any(secret in entry["stdin"] for entry in fake_cua.entries() if "type_text" not in entry["argv"])
 
 
 def test_cua_close_ends_the_session_and_deletes_its_cache_files(fake_cua):
@@ -1265,8 +1292,79 @@ def test_cua_other_element_actions_run_in_the_background(fake_cua):
     driver.act(Action(kind="select", ref="s0000000f:6", value="Documents"), foreground=False)
     tool, payload = fake_cua.tool_calls()[-1]
     assert tool == "set_value" and payload["value"] == "Documents" and "delivery_mode" not in payload
-    driver.act(Action(kind="fill", ref="s0000000f:6", text="typed"), foreground=False)
-    assert fake_cua.tool_calls()[-1][1]["value"] == "typed"
+
+
+def test_cua_fill_selects_the_existing_text_then_types_the_new_text(fake_cua):
+    result = _bound_cua().act(Action(kind="fill", ref="s0000000f:6", text="hello world"), foreground=False)
+    calls = fake_cua.tool_calls()
+    assert [tool for tool, _ in calls] == ["press_key", "press_key", "type_text"]
+    to_end, to_start, typing = (payload for _, payload in calls)
+    assert to_end["element_token"] == to_start["element_token"] == typing["element_token"] == "s0000000f:6"
+    assert (to_end["key"], to_end["modifiers"]) == ("down", ["cmd"])
+    assert (to_start["key"], to_start["modifiers"]) == ("up", ["cmd", "shift"])
+    assert typing["text"] == "hello world"
+    assert all(p["pid"] == GOLDEN_PID and p["window_id"] == GOLDEN_WINDOW for _, p in calls)
+    assert not any("delivery_mode" in p for _, p in calls)
+    assert fake_cua.tool_calls("set_value") == []
+    assert result.delivered is True and result.driver_verified is True
+
+
+def test_cua_foreground_fill_selects_with_cmd_a_in_the_foreground(fake_cua):
+    _bound_cua().act(Action(kind="fill", ref="s0000000f:6", text="x"), foreground=True)
+    calls = fake_cua.tool_calls()
+    assert [tool for tool, _ in calls] == ["press_key", "type_text"]
+    assert (calls[0][1]["key"], calls[0][1]["modifiers"]) == ("a", ["cmd"])
+    assert {p.get("delivery_mode") for _, p in calls} == {"foreground"}
+
+
+def test_cua_foreground_fill_with_nothing_to_type_clears_the_field(fake_cua):
+    _bound_cua().act(Action(kind="fill", ref="s0000000f:6", text=""), foreground=True)
+    calls = fake_cua.tool_calls()
+    assert [(p["key"], p.get("modifiers")) for _, p in calls] == [("a", ["cmd"]), ("delete", None)]
+
+
+def test_cua_fill_with_nothing_to_type_clears_the_field(fake_cua):
+    _bound_cua().act(Action(kind="fill", ref="s0000000f:6", text=""), foreground=False)
+    calls = fake_cua.tool_calls()
+    assert [tool for tool, _ in calls] == ["press_key", "press_key", "press_key"]
+    assert calls[2][1]["key"] == "delete" and "modifiers" not in calls[2][1]
+
+
+def test_cua_fill_types_nothing_when_selecting_the_old_text_fails(fake_cua):
+    fake_cua.reply(press_key={"stdout": {"effect": "refused", "code": "no_such_window"}, "returncode": 1})
+    with pytest.raises(DriverError) as raised:
+        _bound_cua().act(Action(kind="fill", ref="s0000000f:6", text="x"), foreground=False)
+    assert raised.value.code == "window_gone"
+    assert fake_cua.tool_calls("type_text") == []
+
+
+def test_cua_fill_in_a_sheet_renews_the_token_once_for_both_steps(fake_cua):
+    fake_cua.reply(get_window_state=_ok(_window_state(SHEET_ROWS, SHEET_MARKDOWN)))
+    _bound_cua(7).observe(FIXTURE_BUNDLE, 7, screenshot=False)
+    renewed = json.loads(json.dumps(_window_state(SHEET_ROWS, SHEET_MARKDOWN)))
+    for element in renewed["elements"]:
+        element["element_token"] = element["element_token"].replace("s0000000a", "s0000000b")
+    fake_cua.reply(
+        get_window_state=[_ok(_window_state(SHEET_ROWS, SHEET_MARKDOWN)), _ok(renewed)],
+        bring_to_front={"stdout": {"status": "partial"}, "returncode": 1},
+    )
+    _bound_cua(7).act(Action(kind="fill", ref="s0000000a:3", text="/tmp/x"), foreground=True)
+    sequence = [tool for tool, _ in fake_cua.tool_calls()]
+    assert sequence[-4:] == ["bring_to_front", "get_window_state", "press_key", "type_text"]
+    assert fake_cua.tool_calls("press_key")[-1][1]["modifiers"] == ["cmd"]
+    assert fake_cua.tool_calls("press_key")[-1][1]["element_token"] == "s0000000b:3"
+    assert fake_cua.tool_calls("type_text")[-1][1]["element_token"] == "s0000000b:3"
+
+
+def test_cua_fill_in_a_sheet_needs_the_foreground(fake_cua):
+    fake_cua.reply(get_window_state=_ok(_window_state(SHEET_ROWS, SHEET_MARKDOWN)))
+    driver = _bound_cua(7)
+    driver.observe(FIXTURE_BUNDLE, 7, screenshot=False)
+    before = len(fake_cua.calls())
+    with pytest.raises(DriverError) as raised:
+        driver.act(Action(kind="fill", ref="s0000000a:3", text="x"), foreground=False)
+    assert raised.value.code == "needs_foreground"
+    assert len(fake_cua.calls()) == before
 
 
 def test_cua_scroll_without_a_target_runs_in_the_background(fake_cua):
@@ -1340,7 +1438,7 @@ def test_cua_foreground_delivery_mode_and_targeted_scroll(fake_cua):
     assert payload["element_token"] == "s0000000f:1" and payload["amount"] == 2
     driver.act(Action(kind="click", ref="s0000000f:1"), foreground=True)
     assert fake_cua.tool_calls()[-1][1]["delivery_mode"] == "foreground"
-    driver.act(Action(kind="fill", ref="s0000000f:6", text="x"), foreground=True)
+    driver.act(Action(kind="select", ref="s0000000f:6", value="x"), foreground=True)
     assert "delivery_mode" not in fake_cua.tool_calls()[-1][1]
 
 

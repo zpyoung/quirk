@@ -357,6 +357,13 @@ class NativeDriver:
   keyboard focus. When the last observation showed a sheet or dialog open, an adapter whose driver
   addresses windows by id sends them to the frontmost sheet or dialog window of the app, not the main
   window, and counts them as foreground work, as it does element actions inside a sheet.
+- **Text entry:** `fill` reaches the app the way a user's typing does: the adapter focuses the
+  element, selects its existing text, and types the new text as keystrokes (an empty text deletes the
+  selection). It never writes the element's accessibility value, which changes what the field shows
+  and what the tree reports but not the app's own model (a SwiftUI binding never hears it). `select`
+  on a popup menu still writes the value. Text goes in on stdin only, so `fill --secret` stays out
+  of argv. Cua selects with cursor keys because cmd+a reaches only an app that is in front; orca
+  double-clicks to focus, since an element click on a text field does not.
 
 `OrcaDriver.background_capable` is `False`. The bake-off winner's value comes from measurement:
 Cua Driver 0.34.1 won with zero focus steals and all input landed ([bakeoff.md](bakeoff.md)); under

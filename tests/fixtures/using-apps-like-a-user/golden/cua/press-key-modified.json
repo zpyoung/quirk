@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "cua-driver",
+    "call",
+    "press_key",
+    "{\"pid\":82986,\"window_id\":84869,\"element_token\":\"s00000011:6\",\"key\":\"up\",\"modifiers\":[\"cmd\",\"shift\"],\"session\":\"golden\"}"
+  ],
+  "returncode": 0,
+  "stdout": "{\n  \"delivery\": {\n    \"mode\": \"background\"\n  },\n  \"effect\": \"unverifiable\",\n  \"route\": \"synthetic_events\",\n  \"summary\": \"\u2705 Pressed up on pid 82986.\"\n}\n",
+  "stderr": "",
+  "files": {}
+}
