@@ -273,6 +273,12 @@ check('isCompareExport rejects a whitespace-only challenge id', !isCompareExport
 check('isCompareExport rejects a whitespace-only targetHash', !isCompareExport({ ...out, challenges: [{ ...draft, targetHash: '\t' }] }))
 check('isCompareExport rejects a whitespace-only target id', !isCompareExport({ ...out, challenges: [{ ...draft, target: { ...draft.target, approachId: ' ' } }] }))
 check('isCompareExport accepts a note JS trim strips but Python keeps', isCompareExport({ ...out, challenges: [{ ...draft, note: '\ufeff' }] }))
+for (const key of ['slug', 'renderId', 'comparisonId'] as const) {
+  check(`isCompareExport rejects an empty ${key}`, !isCompareExport({ ...out, [key]: '' }))
+  check(`isCompareExport rejects a whitespace-only ${key}`, !isCompareExport({ ...out, [key]: ' \t' }))
+}
+check('isCompareExport rejects an empty stars item', !isCompareExport({ ...out, stars: ['REQ-01', ''] }))
+check('isCompareExport rejects a whitespace-only stars item', !isCompareExport({ ...out, stars: ['\u00a0'] }))
 
 const store = new Map<string, string>()
 Object.defineProperty(globalThis, 'localStorage', {
@@ -298,6 +304,12 @@ equal('carry-over drops a star the spec marks out of scope even when still score
 equal('partitionStars drops out-of-scope and unscored stars for an imported export', partitionStars(['REQ-01', 'REQ-05', 'REQ-99'], scoredOutOfScope, spec), { kept: ['REQ-01'], dropped: ['REQ-05', 'REQ-99'] })
 store.set('quirk-compare:compare', '{not json')
 check('corrupt storage yields a fresh state', loadCompareState('compare', comparison, 'new', spec).state.drafts.length === 0)
+equal('corrupt storage is reported as recovered', loadCompareState('compare', comparison, 'new', spec).recovered, 'corrupt')
+store.set('quirk-compare:compare', '{"comparisonId":"old"}')
+equal('schema-invalid storage is reported as recovered', loadCompareState('compare', comparison, 'new', spec).recovered, 'corrupt')
+equal('missing storage is not reported as recovered', loadCompareState('other', comparison, 'new', spec).recovered, null)
+check('saveCompareState stores a valid state for the no-recovery check', saveCompareState('compare', fresh({ comparisonId: 'old' })))
+equal('readable storage is not reported as recovered', loadCompareState('compare', comparison, 'old', spec).recovered, null)
 equal('missing storage yields a fresh state', loadCompareState('other', comparison, 'new', spec).state, fresh({ comparisonId: 'new' }))
 
 if (failures.length) {

@@ -29,5 +29,7 @@
   "unsafe-files.json": "/approaches/0/repos/0/files",
   "empty-check.json": "/scores/REQ-02/B/check",
   "empty-overview.json": "/approaches/1/overview",
-  "flow-stages-non-string.json": "/flowStages/1"
+  "flow-stages-non-string.json": "/flowStages/1",
+  "duplicate-table.json": "/approaches/0/schema/tables/3/name",
+  "empty-suggested-note.json": "/guidance/suggestedChallenges/1/note"
 }

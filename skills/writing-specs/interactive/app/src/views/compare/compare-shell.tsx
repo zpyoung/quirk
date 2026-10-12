@@ -77,6 +77,9 @@ export function CompareShell({ payload, comparison, view, onView }: CompareShell
 
   return (
     <VStack gap={3}>
+      {loaded.recovered === 'corrupt' ? (
+        <Banner status="warning" title="Saved stage-3 work was reset" description="Saved stage-3 work in this browser could not be read and was reset." />
+      ) : null}
       {!storageOk ? (
         <Banner status="error" title="Challenges are not being saved" description="Browser storage is unavailable, so drafts and must-haves are lost when this page closes. Export your challenges before leaving." />
       ) : null}

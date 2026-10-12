@@ -2530,7 +2530,7 @@ def _validate_guidance(v: Validator, raw: Any, requirement_ids: set, approach_id
             ident = _required(v, entry, key, base)
             if key in entry and v.string(ident, pointer(base, key), nonempty=True) and ident not in known:
                 v.error(pointer(base, key), "unknown " + ("requirement" if key == "requirementId" else "approach") + " id: " + ident)
-        _string_field(v, entry, "note", base)
+        _string_field(v, entry, "note", base, nonempty=True)
         want = _required(v, entry, "want", base)
         if "want" in entry:
             v.enum(want, SCORE_STATUSES, pointer(base, "want"))

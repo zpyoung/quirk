@@ -194,6 +194,9 @@ function App() {
   }, [comparison, lastExportUpdatedAt, state.updatedAt, storageOk])
 
   const ignoreUpdate = useCallback<Update>(() => {}, [])
+  const foldedStage = payload?.spec.stage ?? 1
+  const foldedState = useMemo(() => emptyState(foldedStage), [foldedStage])
+  const readOnlyState = comparison ? foldedState : state
 
   const createExport = useCallback((): Export => {
     if (!payload) throw new Error('No rendered review data is loaded.')
@@ -290,7 +293,7 @@ function App() {
   const viewProps: ViewProps = {
     payload,
     spec: payload.spec,
-    state,
+    state: readOnlyState,
     update: comparison ? ignoreUpdate : update,
     changedIds,
     onOpenRequirement: setOpenRequirementId,
@@ -384,12 +387,12 @@ function App() {
           <RequirementDialog
           requirement={payload.spec.requirements.find((requirement) => requirement.id === openRequirementId) ?? null}
           spec={payload.spec}
-          state={state}
+          state={readOnlyState}
           update={comparison ? ignoreUpdate : update}
           changedIds={changedIds}
           onClose={() => setOpenRequirementId(null)}
         />
-        <ItemDialog id={openItemId} spec={payload.spec} state={state} onClose={() => setOpenItemId(null)} />
+        <ItemDialog id={openItemId} spec={payload.spec} state={readOnlyState} onClose={() => setOpenItemId(null)} />
         </ItemLinksProvider>
       </ScopeOutGuardProvider>
     </Shell>

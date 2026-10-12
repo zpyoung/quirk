@@ -256,6 +256,7 @@ function checkSchema(approach: Record<string, unknown>, pointer: string): void {
       const tableAt = `${at}/tables/${i}`
       const table = obj(entry, tableAt)
       const name = str(required(table, 'name', tableAt), `${tableAt}/name`, true)
+      if (columnsByTable.has(name)) fail(`${tableAt}/name`, `duplicate table name: ${name}`)
       oneOf(required(table, 'status', tableAt), ['new', 'changed', 'existing'], `${tableAt}/status`)
       const columns = arr(required(table, 'columns', tableAt), `${tableAt}/columns`).map((column, j) => {
         const columnAt = `${tableAt}/columns/${j}`
@@ -380,7 +381,7 @@ function checkGuidance(value: unknown, approachIds: string[], requirementIds: Se
     if (!requirementIds.has(requirementId)) fail(at, `unknown requirement "${requirementId}"`)
     const approachId = str(required(challenge, 'approachId', at), `${at}/approachId`, true)
     if (!approachIds.includes(approachId)) fail(at, `unknown approach "${approachId}"`)
-    str(required(challenge, 'note', at), `${at}/note`)
+    str(required(challenge, 'note', at), `${at}/note`, true)
     if (!isScoreStatus(required(challenge, 'want', at))) fail(`${at}/want`, `must be one of ${SCORE_STATUSES.join(', ')}`)
   })
   optional(guidance, 'changeNote', str, '/guidance')
@@ -579,23 +580,23 @@ function carryOver(stored: CompareState, comparison: Comparison, comparisonId: s
   return { ...stored, comparisonId, drafts, needsLook, stars, droppedStars, focus: focusKept ? stored.focus : 'all' }
 }
 
-/** Loads the reviewer's stage-3 state. A state saved against a different comparison keeps drafts whose target is unchanged, moves the rest to `needsLook`, and drops stars for requirements the comparison no longer scores or the spec now puts out of scope. `storageOk` is false when browser storage is unreadable. */
-export function loadCompareState(slug: string, comparison: Comparison, comparisonId: string, spec: LogicSpec): { state: CompareState; storageOk: boolean } {
+/** Loads the reviewer's stage-3 state. A state saved against a different comparison keeps drafts whose target is unchanged, moves the rest to `needsLook`, and drops stars for requirements the comparison no longer scores or the spec now puts out of scope. `storageOk` is false when browser storage is unreadable; `recovered` is `'corrupt'` when saved state existed but could not be parsed or failed the schema, and was replaced with an empty one. */
+export function loadCompareState(slug: string, comparison: Comparison, comparisonId: string, spec: LogicSpec): { state: CompareState; storageOk: boolean; recovered: 'corrupt' | null } {
   let raw: string | null = null
   try {
     raw = localStorage.getItem(stateKey(slug))
   } catch {
-    return { state: freshState(comparisonId), storageOk: false }
+    return { state: freshState(comparisonId), storageOk: false, recovered: null }
   }
-  if (raw === null) return { state: freshState(comparisonId), storageOk: true }
+  if (raw === null) return { state: freshState(comparisonId), storageOk: true, recovered: null }
   let stored: unknown
   try {
     stored = JSON.parse(raw)
   } catch {
-    return { state: freshState(comparisonId), storageOk: true }
+    return { state: freshState(comparisonId), storageOk: true, recovered: 'corrupt' }
   }
-  if (!isStoredState(stored)) return { state: freshState(comparisonId), storageOk: true }
-  return { state: stored.comparisonId === comparisonId ? stored : carryOver(stored, comparison, comparisonId, spec), storageOk: true }
+  if (!isStoredState(stored)) return { state: freshState(comparisonId), storageOk: true, recovered: 'corrupt' }
+  return { state: stored.comparisonId === comparisonId ? stored : carryOver(stored, comparison, comparisonId, spec), storageOk: true, recovered: null }
 }
 
 /** Persists the state; returns false when browser storage rejects the write. */
@@ -795,9 +796,10 @@ export function createCompareExport(slug: string, renderId: string, comparisonId
 /** Shape check for a stage-3 export; whether its targets still resolve against a comparison is the caller's concern. */
 export function isCompareExport(value: unknown): boolean {
   if (!isRecord(value) || value.kind !== COMPARE_EXPORT_KIND || value.schemaVersion !== 1) return false
-  for (const key of ['slug', 'renderId', 'comparisonId', 'exportedAt']) if (typeof value[key] !== 'string') return false
+  for (const key of ['slug', 'renderId', 'comparisonId']) if (!isFilled(value[key])) return false
+  if (typeof value.exportedAt !== 'string') return false
   if (!ISO_DATE_TIME.test(value.exportedAt as string) || Number.isNaN(Date.parse(value.exportedAt as string))) return false
-  if (!isStringArray(value.stars) || !isRecord(value.approachRevisions)) return false
+  if (!isStringArray(value.stars) || !value.stars.every(isFilled) || !isRecord(value.approachRevisions)) return false
   if (!Object.values(value.approachRevisions).every((revision) => typeof revision === 'string')) return false
   if (!Array.isArray(value.challenges)) return false
   const ids = new Set<string>()

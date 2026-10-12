@@ -4,7 +4,7 @@ import { Card, HStack, VStack } from '@astryxdesign/core/Layout'
 import { Text } from '@astryxdesign/core/Text'
 import { Token } from '@astryxdesign/core/Token'
 import type { CompareViewProps, Draft, TabKey } from '../../compare-types'
-import { checkedScoreCounts, guidanceNotes, targetHash } from '../../compare-state'
+import { checkedScoreCounts, guidanceNotes, isBlank, targetHash } from '../../compare-state'
 
 const TAB_LABEL: Record<TabKey, string> = { overview: 'Overview', approaches: 'Approaches', effort: 'Effort', blast: 'Blast radius', tradeoffs: 'Trade-offs' }
 const CONFIDENCE_COLOR = { low: 'orange', medium: 'yellow', high: 'green' } as const
@@ -41,7 +41,7 @@ export function GuidanceView(props: CompareViewProps) {
   )
   const pending = guidance.suggestedChallenges.filter((item) => {
     const score = comparison.scores[item.requirementId]?.[item.approachId]
-    return Boolean(score) && !draftedKeys.has(`${item.requirementId}|${item.approachId}`)
+    return Boolean(score) && !isBlank(item.note) && !draftedKeys.has(`${item.requirementId}|${item.approachId}`)
   })
 
   const draftThese = () => {
