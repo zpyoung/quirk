@@ -7,6 +7,7 @@ import json
 import shutil
 import subprocess
 import sys
+import time
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Dict, List
@@ -120,6 +121,20 @@ def test_validate_rejects_malformed_ask_markers_in_every_part_in_stage_1(marker:
             example[part] = "Text " + marker
         logic["scenarios"][0]["example"] = example
         assert (pointer, MALFORMED) in errors_for(logic), (marker, part)
+
+
+def test_nested_ask_prefixes_validate_in_linear_time_and_are_malformed() -> None:
+    logic = example_logic()
+    count = 16000
+    logic["scenarios"][0]["example"]["before"] = "[ASK: " * count + "x" + "]" * count
+    started = time.perf_counter()
+    errors = errors_for(logic)
+    assert time.perf_counter() - started < 1
+    assert ("/scenarios/0/example/before", MALFORMED) in errors
+
+
+def test_ask_question_cannot_contain_square_brackets() -> None:
+    assert render_spec.scenario_open_asks({"example": {"before": "[ASK: a [ASK: b]]", "steps": [], "after": ""}}) == ["b"]
 
 
 def test_validate_accepts_a_well_formed_open_ask_in_stage_1() -> None:

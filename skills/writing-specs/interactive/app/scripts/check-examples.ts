@@ -29,6 +29,11 @@ assert.ok(rendered.includes('"example-invented">10%*</span>') && rendered.includ
 assert.ok(!rendered.includes('<em>'))
 assert.ok(/<strong[^>]*>Subscription<\/strong>/.test(rendered))
 
+const starred = renderToStaticMarkup(React.createElement(ScenarioExampleView, { example: { before: 'b', steps: ['s'], after: '✓ total 4*' } }))
+assert.equal((starred.match(/class="example-result"/g) ?? []).length, 1)
+assert.ok(/<span class="example-result">[^<]*<span class="example-invented">4\*<\/span><\/span>/.test(starred))
+assert.equal((starred.match(/example-invented/g) ?? []).length, 1)
+
 const base: Scenario = {
   id: 'S1', behavior: 'B1', given: 'g', when: 'w', then: 'Then the spec outcome', alternatives: ['Then alt'], explanation: 'e', provenance: 'claude',
 }

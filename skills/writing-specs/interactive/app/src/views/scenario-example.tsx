@@ -9,12 +9,27 @@ import { OFFLINE_MARKDOWN_COMPONENTS } from './shared'
 const STAR = '\uE000'
 const restoreStar = (text: string) => text.replaceAll(STAR, '*')
 
+const INVENTED_SPAN = /[^\s\uE000]+\uE000(?=[\s,;:.)\]]|$)/g
+
+/** Keeps an invented value styled when it sits inside a result or rejection phrase, which the parser would otherwise consume whole. */
+function phrase(text: string, key: string, className: string): ReactNode {
+  const parts: ReactNode[] = []
+  let last = 0
+  for (const m of text.matchAll(INVENTED_SPAN)) {
+    if (m.index > last) parts.push(restoreStar(text.slice(last, m.index)))
+    parts.push(<span key={`${key}-${m.index}`} className="example-invented">{restoreStar(m[0])}</span>)
+    last = m.index + m[0].length
+  }
+  if (last < text.length) parts.push(restoreStar(text.slice(last)))
+  return <span key={key} className={className}>{parts}</span>
+}
+
 /** Colours the marks the example text uses; the gap pattern must match the renderer's open-gap regex. */
 export const exampleMarkPlugins: MarkdownInlinePlugin[] = [
-  { pattern: /✓\s*[^;\n]+/g, render: (match, key) => <span key={key} className="example-result">{restoreStar(match[0])}</span> },
-  { pattern: /✗\s*[^;\n]+/g, render: (match, key) => <span key={key} className="example-rejection">{restoreStar(match[0])}</span> },
+  { pattern: /✓\s*[^;\n]+/g, render: (match, key) => phrase(match[0], String(key), 'example-result') },
+  { pattern: /✗\s*[^;\n]+/g, render: (match, key) => phrase(match[0], String(key), 'example-rejection') },
   { pattern: /[^\s\uE000]+\uE000(?=[\s,;:.)\]]|$)/g, render: (match, key) => <span key={key} className="example-invented">{restoreStar(match[0])}</span> },
-  { pattern: /\[ASK: [^\]\n]+\]/g, render: (match, key) => <span key={key} className="example-gap">{restoreStar(match[0])}</span> },
+  { pattern: /\[ASK: [^\[\]\n]+\]/g, render: (match, key) => <span key={key} className="example-gap">{restoreStar(match[0])}</span> },
 ]
 
 const INVENTED_MARK = /([^\s*]+)\*(?=[\s,;:.)\]]|$)/g

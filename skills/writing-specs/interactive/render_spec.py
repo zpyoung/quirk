@@ -69,7 +69,7 @@ UNSAFE_OBJECT_IDS = frozenset(
 )
 
 
-OPEN_ASK_RE = re.compile(r"\[ASK: ([^\]\n]+)\]")
+OPEN_ASK_RE = re.compile(r"\[ASK: ([^\[\]\n]+)\]")
 ASK_LOOKALIKE_RE = re.compile(r"\[\s*ask\b", re.IGNORECASE)
 EXAMPLE_KEYS = ("before", "steps", "after")
 MALFORMED_ASK_MESSAGE = "malformed [ASK] marker; write [ASK: <question>]"

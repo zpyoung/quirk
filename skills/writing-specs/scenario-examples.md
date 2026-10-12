@@ -35,7 +35,7 @@ The marks are plain text in the source. The review page colours them, and `logic
 - `**bold**` marks a record.
 - `✓` marks a result and `✗` marks a rejection. Each mark covers the phrase up to the next `;` or the end of the line.
 - A trailing `*` marks an invented value, picked to make the example concrete and not part of the rule, as in `$100.00*`.
-- `[ASK: <question>]` marks a gap: something the scenario doesn't settle that the example can't show without guessing. Write `ASK` capitalised, with a colon and a space before the question. The page and the renderer reject any other spelling as a malformed marker.
+- `[ASK: <question>]` marks a gap: something the scenario doesn't settle that the example can't show without guessing. Write `ASK` capitalised, with a colon and a space before the question, and the question cannot contain square brackets. The page and the renderer reject any other spelling as a malformed marker.
 - `(a)` and `(b)` label branches when one scenario covers several outcomes.
 
 **Never use single-asterisk emphasis inside an example.** A trailing `*` must never pair with an opener, so use plain words for emphasis.
