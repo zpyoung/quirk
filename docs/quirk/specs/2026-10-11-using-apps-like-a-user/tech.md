@@ -335,11 +335,12 @@ on timeout return UNSETTLED with the last observation
 CONTRACT:
 ```
 class NativeDriver:
-    name: str; version: str; background_capable: bool
+    name: str; version: str; background_capable: bool; path: Optional[str]; pin: Optional[str]
     def check(self) -> List[str]                    # missing tools or permissions; empty when ready
     def bind(self, bundle_id: str, window_id: Optional[int] = None) -> None   # target for later act calls
     def observe(self, bundle_id: str, window_id: Optional[int], screenshot: bool) -> Observation
     def act(self, action: Action, foreground: bool) -> DriverResult
+    def close(self) -> None                         # ends the driver session and deletes its cached files
 ```
 
 - **Preconditions:** `check()` returned empty. `observe` binds to its bundle id and window id; `act`
@@ -472,7 +473,9 @@ NATIVE_DRIVER_PREFERENCE: List[str]                          # driver names, bes
 class OrcaDriver(NativeDriver): name = "orca"; background_capable = False
     def find_window(self, bundle_id: str) -> Optional[int]
 def parse_orca_envelope(stdout: str, returncode: int) -> dict   # the `result`; DriverError(error.code) when ok is false
-def get_native_driver() -> NativeDriver                       # first preferred driver whose check() is empty; MissingError otherwise
+def get_native_driver(*, name: Optional[str] = None, session: Optional[str] = None) -> NativeDriver
+    # name: that adapter or MissingError; else the first preferred driver whose check() is empty.
+    # session: the run id, for adapters that keep per-session state (Cua)
 ```
 
 ### Test-only overrides
@@ -501,7 +504,8 @@ SCHEMA: `run.json` (run folder, written by `begin`, updated by every verb)
 run_id: str            # "<UTC yyyymmddThhmmss>-<4 hex>"
 target: str; surface: "web"|"electron"|"native"; owner: "yours"|"third-party"
 attended: bool; allow_foreground: bool; driver: str; driver_version: str
-window: {bundle_id: str|null, window_id: int|null, session: str|null, cdp_port: int|null}
+window: {bundle_id: str|null, window_id: int|null, session: str|null, cdp_port: int|null,
+         native_driver: str|null}   # chosen at begin; later verbs rebuild exactly this adapter
 baseline: {frontmost: str, cursor: [float, float], clipboard_change_count: int, clipboard_text_only: bool}
 drift_baseline: {frontmost: str, cursor: [float, float]}
 holds_lock: bool; paused: bool; stopped_reason: str|null; pasted: bool
