@@ -38,6 +38,8 @@ The marks are plain text in the source. The review page colours them, and `logic
 - `[ASK: <question>]` marks a gap: something the scenario doesn't settle that the example can't show without guessing. Write `ASK` capitalised, with a colon and a space before the question, and the question cannot contain square brackets. The page and the renderer reject any other spelling as a malformed marker.
 - `(a)` and `(b)` label branches when one scenario covers several outcomes.
 
+The review page colours the marks like this: records are blue and bold, step numbers are purple, `✓` phrases are green and bold, `✗` phrases are red, `*` values are grey italic, and `[ASK]` is amber and underlined. The Data before pane has a grey background and Data after a green one. In `logic.md` the marks stay plain text.
+
 **Never use single-asterisk emphasis inside an example.** A trailing `*` must never pair with an opener, so use plain words for emphasis.
 
 ## Where an example lives

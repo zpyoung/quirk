@@ -7,7 +7,9 @@ import { OFFLINE_MARKDOWN_COMPONENTS } from './shared'
 
 /** Stands in for an invented-value star while the parser runs, because Astryx pairs two trailing stars in one part as emphasis. */
 const STAR = '\uE000'
-const restoreStar = (text: string) => text.replaceAll(STAR, '*')
+/** Takes the place of a literal U+E000 in the text, so only a swapped star ever reads as the placeholder. */
+const LITERAL_STAR_SENTINEL = '\uE001'
+const restoreStar = (text: string) => text.replaceAll(STAR, '*').replaceAll(LITERAL_STAR_SENTINEL, STAR)
 
 /** A result or rejection phrase: its mark plus everything up to the next semicolon or line end. */
 export const EXAMPLE_PHRASE = /([✓✗])([^;\n]+)/g
@@ -20,6 +22,12 @@ export const exampleMarkPlugins: MarkdownInlinePlugin[] = [
   { pattern: /(?<![^\s])[^\s\uE000]+\uE000(?=[\s,;:.)\]]|$)/g, render: (match, key) => <span key={key} className="example-invented">{restoreStar(match[0])}</span> },
   { pattern: /\[ASK: [^\[\]\n]+\]/g, render: (match, key) => <span key={key} className="example-gap">{restoreStar(match[0])}</span> },
 ]
+
+/** Last in the plugin order so it only sees placeholders the marks above left in plain text. */
+const restorePlaceholders: MarkdownInlinePlugin = {
+  pattern: /[\uE000\uE001]/g,
+  render: (match, key) => <React.Fragment key={key}>{restoreStar(match[0])}</React.Fragment>,
+}
 
 type Segment = { text: string; className?: string }
 
@@ -39,8 +47,8 @@ function segmentLine(line: string): Segment[] {
 // SpecMarkdown takes no extra plugins, so this repeats its underscore guard to keep prose underscores from becoming emphasis.
 function ExampleMarkdown({ children, hasLineBreaks }: { children: string; hasLineBreaks?: boolean }) {
   const itemLinkPlugins = useItemLinkPlugins()
-  const inlinePlugins = [...(itemLinkPlugins ?? []), ...exampleMarkPlugins]
-  const text = children.replace(/_/g, '_​').replace(INVENTED_MARK, `$1${STAR}`)
+  const inlinePlugins = [...(itemLinkPlugins ?? []), ...exampleMarkPlugins, restorePlaceholders]
+  const text = children.replace(/_/g, '_​').replaceAll(STAR, LITERAL_STAR_SENTINEL).replace(INVENTED_MARK, `$1${STAR}`)
   if (!new RegExp(EXAMPLE_PHRASE.source).test(text)) {
     return (
       <Markdown components={OFFLINE_MARKDOWN_COMPONENTS} inlinePlugins={inlinePlugins} contentWidth="100%" density="compact">
