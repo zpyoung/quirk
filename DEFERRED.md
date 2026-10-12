@@ -132,3 +132,11 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Estimated effort**: M
 - **Priority**: P3
 
+
+## DEFER-16: Port pi-watch to the pi-coding-agent 1.x ModelRuntime API
+- **Deferred**: 2026-10-12
+- **Session context**: pi-watch failed preflight for subagent-driven-development with "does not provide an export named 'AuthStorage'". skills/pi-dev/scripts/pi-watch/package.json depends on "*", so installs resolve pi-coding-agent 1.x, which stopped exporting AuthStorage in 0.80.8 (replaced by ModelRuntime). The local plugin cache was pinned to 0.80.7 with a fresh lockfile as a workaround.
+- **Why deferred**: Out of scope for the stage-3 branch. Needs a port of pi-watch.mjs (AuthStorage.create, ModelRegistry, createAgentSession options) to ModelRuntime, plus an exact pin or tested range in package.json.
+- **Estimated effort**: M
+- **Priority**: P2
+- **Proposed owner**: unassigned
