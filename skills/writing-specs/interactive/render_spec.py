@@ -2153,7 +2153,9 @@ def _validate_slices(v: Validator, raw: Any, path: str) -> None:
             lines = v.object(item["lines"], lines_path)
             for repo, span in (lines or {}).items():
                 span_path = pointer(lines_path, repo)
-                if not isinstance(span, list) or len(span) != 2 or not all(_is_int(n) and 0 <= n <= MAX_SAFE_INTEGER for n in span):
+                if not repo.isascii():
+                    v.error(span_path, "repo name keys must be ASCII so both validators hash them identically")
+                elif not isinstance(span, list) or len(span) != 2 or not all(_is_int(n) and 0 <= n <= MAX_SAFE_INTEGER for n in span):
                     v.error(span_path, "expected [lo, hi] with integers from 0 to 2^53-1")
                 elif span[0] > span[1]:
                     v.error(span_path, "lo must not exceed hi")
@@ -2324,6 +2326,8 @@ def _validate_approach(v: Validator, raw: Any, path: str, flow_stages: Optional[
         _string_field(v, repo, "name", base, nonempty=True)
         repo_name = repo.get("name")
         if isinstance(repo_name, str):
+            if not repo_name.isascii():
+                v.error(pointer(base, "name"), "repo name must be ASCII so both validators hash it identically")
             if repo_name in seen_repos:
                 v.error(pointer(base, "name"), f'duplicate repo name "{repo_name}"')
             seen_repos.add(repo_name)

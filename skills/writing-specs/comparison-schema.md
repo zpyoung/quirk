@@ -91,6 +91,7 @@ Guidance { "intro": str,
 - **TabKey** is one of `overview`, `approaches`, `effort`, `blast`, `tradeoffs`.
 - `requirementHash` is the requirement's current hash in `logic.json`. Copy it when you score.
 - `lines` spans are two integers with `0 <= lo <= hi <= 2^53-1`, the largest integer a browser keeps exactly.
+- `lines` keys and `repos[].name` are ASCII only. Python and JS sort some non-ASCII keys differently, so the hash would diverge; both validators reject one at a pointer to that key.
 - All integers anywhere in `comparison.json` are safe integers, `|n| <= 2^53-1`, so the page reads the numbers Python hashed.
 
 ## Size labels

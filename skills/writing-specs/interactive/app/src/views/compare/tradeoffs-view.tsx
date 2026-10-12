@@ -25,7 +25,9 @@ function RiskChips({ approach }: { approach: Approach }) {
     <HStack gap={1} wrap="wrap">
       {approach.slices.map((slice) => (
         <Tooltip key={slice.id} content={`${approach.id} wrote: ${slice.risk}`}>
-          <Token size="sm" color="default" label={slice.riskHeadline ?? slice.name} description={slice.riskHeadline ? `Risk in ${slice.name}` : 'No risk headline; showing the slice name'} />
+          {slice.riskHeadline
+            ? <Token size="sm" color="purple" label={slice.riskHeadline} description={`Coordinator headline for ${slice.name}`} />
+            : <Token size="sm" color="default" label={`${slice.name} (headline not provided)`} description={`The coordinator gave no risk headline for ${slice.name}`} />}
         </Tooltip>
       ))}
     </HStack>
@@ -74,7 +76,7 @@ export function TradeoffsView(props: CompareViewProps) {
         </Section>
       ) : null}
 
-      <Section title="Risks by approach" badge={<Token size="sm" color="purple" label="Headlines are coordinator wording" description="Hover a chip for the proponent's own words." />}>
+      <Section title="Risks by approach" badge={<Token size="sm" color="purple" label="Purple chips are coordinator headlines" description="Hover a chip for the proponent's own words." />}>
         <div style={{ display: 'grid', gap: 12, gridTemplateColumns: `repeat(${Math.max(1, approaches.length)}, minmax(220px, 1fr))`, overflowX: 'auto' }}>
           {approaches.map((approach) => (
             <Card key={approach.id} padding={2}>

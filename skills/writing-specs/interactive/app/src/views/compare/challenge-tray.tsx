@@ -4,7 +4,7 @@ import { Collapsible } from '@astryxdesign/core/Collapsible'
 import { Card, HStack, VStack } from '@astryxdesign/core/Layout'
 import { Text } from '@astryxdesign/core/Text'
 import { Token } from '@astryxdesign/core/Token'
-import { allHistoryCounts, allScoreHashes, createCompareExport, isCompareExport, partitionStars, targetHash } from '../../compare-state'
+import { COMPARE_EXPORT_KIND, allHistoryCounts, allScoreHashes, createCompareExport, isCompareExport, partitionStars, targetHash } from '../../compare-state'
 import type { Comparison, CompareExport, CompareState, Draft } from '../../compare-types'
 import { EXPORT_KIND, localStamp, readPayload } from '../../review-state'
 import { DraftCard, saveDraftEdit } from './score-drawer'
@@ -73,6 +73,10 @@ export function ChallengeTray({ slug, renderId, comparisonId, comparison, state,
       const kind = typeof parsed === 'object' && parsed !== null ? (parsed as { kind?: unknown }).kind : undefined
       if (kind === EXPORT_KIND) {
         setStatus(`Import failed: this is a stage 1-2 decisions export (kind "${EXPORT_KIND}"). Import it on the Sign-off tab, not here.`)
+        return
+      }
+      if (kind === COMPARE_EXPORT_KIND && !isCompareExport(parsed)) {
+        setStatus('Import failed: this challenges export is malformed. Check for a blank challenge note, id, or target, a duplicate challenge id, or a wrong field type.')
         return
       }
       if (!isCompareExport(parsed)) {

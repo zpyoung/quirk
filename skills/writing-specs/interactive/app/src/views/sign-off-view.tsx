@@ -11,7 +11,7 @@ import { StatusDot } from '@astryxdesign/core/StatusDot'
 import { Text } from '@astryxdesign/core/Text'
 import { TextArea } from '@astryxdesign/core/TextArea'
 import { decisionRecord, localStamp } from '../review-state'
-import type { Export, ReviewState } from '../spec-types'
+import type { Export, LogicSpec, LogicSpecPayload, ReviewState } from '../spec-types'
 import type { ReviewGate } from '../review-state'
 import type { ViewProps } from './view-props'
 
@@ -21,7 +21,7 @@ export type SignOffProps = ViewProps & {
   onExport: (data: Export) => void
   importStatus: string | null
   onImport: (file: File) => void
-  /** Shows the signed record without sign, verdict, export or import controls; used while stage 3 is open. */
+  /** Renders only the folded signed spec, with no review state, gates, sign, verdict, export or import controls; used while stage 3 is open. */
   readOnly?: boolean
 }
 
@@ -30,10 +30,88 @@ const STAGE_HEADING: Record<1 | 2, string> = {
   2: 'Sign off stage 2 — what to build',
 }
 
-const VERDICT_LABEL = { approve: 'Approve', 'send-back': 'Send back' } as const
 
-/** The approval gate: every review gate must pass and the verdict must be approve before signing; any later edit clears the signature. With `readOnly`, only the signed record shows. */
-export function SignOffView({ payload, spec, state, update, gates, createExport, onExport, importStatus, onImport, readOnly = false }: SignOffProps) {
+/** The approval gate: every review gate must pass and the verdict must be approve before signing; any later edit clears the signature. With `readOnly`, only the folded signed spec shows. */
+export function SignOffView(props: SignOffProps) {
+  return props.readOnly ? <SignedSpecRecord payload={props.payload} spec={props.spec} /> : <ReviewSignOff {...props} />
+}
+
+type SignedRecordProps = { payload: LogicSpecPayload; spec: LogicSpec }
+
+/** The signed record as the folded spec carries it. It never reads browser review state, so a fresh browser shows the same record as the reviewer who signed. */
+function SignedSpecRecord({ payload, spec }: SignedRecordProps) {
+  const signedAt = spec.signoff?.signedAt
+  const signedRender = spec.signoff?.renderId ?? payload.renderId
+  const scenarios = spec.scenarios.map((scenario) => ({
+    id: scenario.id,
+    outcome: scenario.dropReason ? 'dropped' : 'approved',
+    dropReason: scenario.dropReason ?? null,
+  }))
+  const constraints = spec.constraints.map((constraint) => ({
+    id: constraint.id,
+    ruling: constraint.ruling ?? null,
+    rejectReason: constraint.rejectReason ?? null,
+  }))
+  const placements = spec.requirements.map((requirement) => ({
+    id: requirement.id,
+    placement: requirement.scope === 'out' ? 'out' : requirement.condition ? 'conditional' : 'in',
+    condition: requirement.condition ?? null,
+  }))
+  const record = {
+    stage: spec.stage,
+    status: spec.status,
+    signedAt: signedAt ?? null,
+    renderId: signedRender,
+    scenarios,
+    constraints,
+    placements,
+  }
+  const approvedCount = scenarios.filter((item) => item.outcome === 'approved').length
+  const summary = [
+    { id: 'scenarios', label: 'Scenarios approved', value: `${approvedCount} of ${scenarios.length}` },
+    { id: 'dropped', label: 'Scenarios dropped', value: String(scenarios.length - approvedCount) },
+    { id: 'constraints', label: 'Constraints approved or rewritten', value: `${constraints.filter((item) => item.ruling === 'approved' || item.ruling === 'rewritten').length} of ${constraints.length}` },
+    { id: 'placements', label: 'Requirements in scope', value: `${placements.filter((item) => item.placement !== 'out').length} of ${placements.length}` },
+  ]
+  return (
+    <VStack gap={4}>
+      <VStack gap={2}>
+        <Heading level={2}>{STAGE_HEADING[spec.stage]}</Heading>
+        <Text type="supporting" as="p">This spec is signed. The record below is read-only while stage 3 is open.</Text>
+      </VStack>
+      <Card>
+        <VStack gap={2}>
+          <Banner
+            status="success"
+            title={signedAt ? `Signed ${new Date(signedAt).toLocaleString()}` : 'Signed'}
+            description={`Render ${signedRender}`}
+            collapsible={false}
+          />
+          <Text type="label">{`Status: ${spec.status}`}</Text>
+        </VStack>
+      </Card>
+      <Card padding={0}>
+        <List hasDividers>
+          {summary.map((item) => (
+            <ListItem
+              key={item.id}
+              label={item.label}
+              endContent={<Text type="supporting" hasTabularNumbers>{item.value}</Text>}
+            />
+          ))}
+        </List>
+      </Card>
+      <VStack gap={2}>
+        <Heading level={3}>Decision record</Heading>
+        <Collapsible trigger="Show the record as JSON" defaultIsOpen={false}>
+          <CodeBlock language="json" code={JSON.stringify(record, null, 2)} maxHeight={480} width="100%" hasCopyButton={false} />
+        </Collapsible>
+      </VStack>
+    </VStack>
+  )
+}
+
+function ReviewSignOff({ payload, spec, state, update, gates, createExport, onExport, importStatus, onImport }: SignOffProps) {
   const [copyStatus, setCopyStatus] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const allPassed = gates.every((gate) => gate.done >= gate.total)
@@ -64,9 +142,6 @@ export function SignOffView({ payload, spec, state, update, gates, createExport,
     }
   }
 
-  const signedAt = spec.signoff?.signedAt ?? state.signedAt
-  const signedRender = spec.signoff?.renderId ?? payload.renderId
-  const verdict = state.verdict ?? (spec.signoff ? 'approve' : null)
   const disabledReason = !allPassed ? 'Signing is disabled until every gate is complete.' : state.verdict !== 'approve' ? 'Choose approve to enable signing.' : null
 
   return (
@@ -74,9 +149,7 @@ export function SignOffView({ payload, spec, state, update, gates, createExport,
       <VStack gap={2}>
         <Heading level={2}>{STAGE_HEADING[spec.stage]}</Heading>
         <Text type="supporting" as="p">
-          {readOnly
-            ? 'This spec is signed. The record below is read-only while stage 3 is open.'
-            : 'Signing is the approval gate. Every gate below must pass, and the verdict must be approve. Any later edit clears the signature.'}
+          Signing is the approval gate. Every gate below must pass, and the verdict must be approve. Any later edit clears the signature.
         </Text>
       </VStack>
       <Card padding={0}>
@@ -95,21 +168,7 @@ export function SignOffView({ payload, spec, state, update, gates, createExport,
           ))}
         </List>
       </Card>
-      {readOnly ? (
-        <Card>
-          <VStack gap={2}>
-            <Banner
-              status="success"
-              title={signedAt ? `Signed ${new Date(signedAt).toLocaleString()}` : 'Signed'}
-              description={`Render ${signedRender}`}
-              collapsible={false}
-            />
-            <Text type="label">{`Verdict: ${verdict ? VERDICT_LABEL[verdict] : 'not recorded'}`}</Text>
-            {state.verdictNote ? <Text>{state.verdictNote}</Text> : null}
-          </VStack>
-        </Card>
-      ) : (
-        <Card>
+      <Card>
           <VStack gap={3}>
             <RadioList label="Verdict" value={state.verdict ?? ''} onChange={(value) => update((current) => ({ ...current, verdict: value as ReviewState['verdict'] }))}>
               <RadioListItem value="approve" label="Approve" description="The spec is ready to build as reviewed." />
@@ -136,13 +195,11 @@ export function SignOffView({ payload, spec, state, update, gates, createExport,
             ) : null}
           </VStack>
         </Card>
-      )}
       <VStack gap={2}>
         <Heading level={3}>Decision record</Heading>
         <Collapsible trigger="Show the record as JSON" defaultIsOpen={false}>
           <CodeBlock language="json" code={recordJson} maxHeight={480} width="100%" hasCopyButton={false} />
         </Collapsible>
-        {readOnly ? null : (
         <HStack gap={2} wrap="wrap">
           <Button label="Download" onClick={download} />
           <Button label="Copy" onClick={() => void copy()} />
@@ -159,9 +216,8 @@ export function SignOffView({ payload, spec, state, update, gates, createExport,
             }}
           />
         </HStack>
-        )}
-        {readOnly ? null : copyStatus ? <Text type="supporting">{copyStatus}</Text> : null}
-        {readOnly ? null : importStatus ? <Text type="supporting">{importStatus}</Text> : null}
+        {copyStatus ? <Text type="supporting">{copyStatus}</Text> : null}
+        {importStatus ? <Text type="supporting">{importStatus}</Text> : null}
       </VStack>
     </VStack>
   )

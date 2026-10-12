@@ -344,6 +344,13 @@ def test_validate_comparison_reports_required_keys_and_types() -> None:
         assert any(path.startswith(expected) for path in paths), (expected, paths)
 
 
+def test_validate_comparison_rejects_non_ascii_repo_name() -> None:
+    broken = load_fixture_comparison()
+    broken["approaches"][0]["repos"][0]["name"] = "côre"
+    paths = [path for path, _ in render_spec.validate_comparison(broken, load_fixture_logic())[0]]
+    assert "/approaches/0/repos/0/name" in paths
+
+
 def test_validate_comparison_rejects_non_object() -> None:
     errors, _ = render_spec.validate_comparison([], load_fixture_logic())
     assert errors and errors[0][0] == "/"

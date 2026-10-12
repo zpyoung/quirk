@@ -102,6 +102,10 @@ const unsafeFiles = structuredClone(comparisonFixture) as unknown as { approache
 unsafeFiles.approaches[0]!.repos[0]!.files = 2 ** 53
 const unsafeFilesResult = isComparison(unsafeFiles, spec)
 check('isComparison rejects an unsafe integer at /approaches/0/repos/0/files', !unsafeFilesResult.ok && unsafeFilesResult.pointer === '/approaches/0/repos/0/files', JSON.stringify(unsafeFilesResult))
+const nonAsciiRepo = structuredClone(comparisonFixture) as unknown as { approaches: Array<{ repos: Array<{ name: string }> }> }
+nonAsciiRepo.approaches[0]!.repos[0]!.name = 'côre'
+const nonAsciiRepoResult = isComparison(nonAsciiRepo, spec)
+check('isComparison rejects a non-ASCII repo name at /approaches/0/repos/0/name', !nonAsciiRepoResult.ok && nonAsciiRepoResult.pointer === '/approaches/0/repos/0/name', JSON.stringify(nonAsciiRepoResult))
 const unsafeElsewhere = structuredClone(comparisonFixture) as unknown as { extra?: unknown }
 unsafeElsewhere.extra = { 'a/b': [1, -(2 ** 53)] }
 const unsafeElsewhereResult = isComparison(unsafeElsewhere, spec)
@@ -261,6 +265,14 @@ check('isCompareExport rejects an empty note', !isCompareExport({ ...out, challe
 check('isCompareExport rejects an empty challenge id', !isCompareExport({ ...out, challenges: [{ ...draft, id: '' }] }))
 check('isCompareExport rejects an empty targetHash', !isCompareExport({ ...out, challenges: [{ ...draft, targetHash: '' }] }))
 check('isCompareExport rejects an empty target id', !isCompareExport({ ...out, challenges: [{ ...draft, target: { ...draft.target, approachId: '' } }] }))
+check('isCompareExport rejects a whitespace-only note', !isCompareExport({ ...out, challenges: [{ ...draft, note: '   ' }] }))
+check('isCompareExport rejects a note of tabs and newlines', !isCompareExport({ ...out, challenges: [{ ...draft, note: '\t\n \r' }] }))
+check('isCompareExport rejects a note Python strips but JS trim keeps', !isCompareExport({ ...out, challenges: [{ ...draft, note: '\x1c\x85' }] }))
+check('isCompareExport rejects a no-break-space note', !isCompareExport({ ...out, challenges: [{ ...draft, note: '\u00a0\u3000' }] }))
+check('isCompareExport rejects a whitespace-only challenge id', !isCompareExport({ ...out, challenges: [{ ...draft, id: ' ' }] }))
+check('isCompareExport rejects a whitespace-only targetHash', !isCompareExport({ ...out, challenges: [{ ...draft, targetHash: '\t' }] }))
+check('isCompareExport rejects a whitespace-only target id', !isCompareExport({ ...out, challenges: [{ ...draft, target: { ...draft.target, approachId: ' ' } }] }))
+check('isCompareExport accepts a note JS trim strips but Python keeps', isCompareExport({ ...out, challenges: [{ ...draft, note: '\ufeff' }] }))
 
 const store = new Map<string, string>()
 Object.defineProperty(globalThis, 'localStorage', {

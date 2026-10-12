@@ -143,6 +143,7 @@ const fail = (pointer: string, message: string): never => {
 /** Characters Python `str.strip` removes, so both validators agree on what blank means. */
 const PYTHON_BLANK = /^[\t\n\v\f\r \x1c-\x1f\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$/
 export const isBlank = (value: string): boolean => PYTHON_BLANK.test(value)
+const isAscii = (value: string): boolean => /^[\x00-\x7f]*$/.test(value)
 
 const str = (value: unknown, pointer: string, nonEmpty = false): string => {
   if (typeof value !== 'string') return fail(pointer, 'must be a string')
@@ -175,6 +176,7 @@ function checkSlice(value: unknown, pointer: string): void {
   optional(slice, 'lines', (lines, linesPointer) => {
     for (const [repo, range] of Object.entries(obj(lines, linesPointer))) {
       const spanPointer = `${linesPointer}/${repo.replace(/~/g, '~0').replace(/\//g, '~1')}`
+      if (!isAscii(repo)) fail(spanPointer, 'repo name keys must be ASCII so both validators hash them identically')
       const pair = arr(range, spanPointer)
       const [lo, hi] = pair
       if (pair.length !== 2 || !isLineCount(lo) || !isLineCount(hi)) fail(spanPointer, 'expected [lo, hi] with integers from 0 to 2^53-1')
@@ -315,6 +317,7 @@ function checkApproach(value: unknown, pointer: string, flowStages: string[], st
     const at = `${pointer}/repos/${i}`
     const repo = obj(entry, at)
     const repoName = str(required(repo, 'name', at), `${at}/name`, true)
+    if (!isAscii(repoName)) fail(`${at}/name`, 'repo name must be ASCII so both validators hash it identically')
     if (repoNames.has(repoName)) fail(`${at}/name`, `duplicate repo name "${repoName}"`)
     repoNames.add(repoName)
     nonNegativeInt(required(repo, 'files', at), `${at}/files`)
@@ -805,9 +808,9 @@ export function isCompareExport(value: unknown): boolean {
   return true
 }
 
-const isFilled = (value: unknown): value is string => typeof value === 'string' && value.trim() !== ''
+const isFilled = (value: unknown): value is string => typeof value === 'string' && !isBlank(value)
 
-/** A challenge the Python `check-export` accepts: every string it requires is non-blank, on top of the draft shape. */
+/** A challenge the Python `check-export` accepts: every string it requires is non-blank by Python `str.strip` rules, on top of the draft shape. */
 function isExportChallenge(value: unknown): value is Draft {
   if (!isDraft(value) || !isFilled(value.id) || !isFilled(value.note) || !isFilled(value.targetHash)) return false
   const target = value.target

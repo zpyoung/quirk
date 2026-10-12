@@ -25,6 +25,7 @@
   "negative-lines.json": "/approaches/0/slices/0/lines/core",
   "reversed-lines.json": "/approaches/0/slices/0/lines/core",
   "unsafe-lines.json": "/approaches/0/slices/0/lines/core",
+  "non-ascii-line-key.json": "/approaches/0/slices/0/lines/cöre",
   "unsafe-files.json": "/approaches/0/repos/0/files",
   "empty-check.json": "/scores/REQ-02/B/check",
   "empty-overview.json": "/approaches/1/overview",

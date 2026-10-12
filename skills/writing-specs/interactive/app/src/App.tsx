@@ -322,15 +322,15 @@ function App() {
                       {comparison ? <Step step={2} label="Stage 3 · Compare approaches" description="Weigh the approaches against the requirements you signed" /> : null}
                     </Stepper>
                   </VStack>
-                  {comparison && !state.signedAt ? null : (
-                    <Text type="supporting">
-                      {state.signedAt
+                  <Text type="supporting">
+                    {comparison && payload.spec.signoff
+                      ? `Signed ${new Date(payload.spec.signoff.signedAt).toLocaleString()}`
+                      : state.signedAt
                         ? `Signed ${new Date(state.signedAt).toLocaleString()}`
                         : openGateCount === 0
                           ? 'Every gate is met. Record your verdict on the Sign-off tab.'
                           : `${openGateCount} of ${gates.length} review gates still open`}
-                    </Text>
-                  )}
+                  </Text>
                   <TabList value={view} onChange={(value) => setView(value as ViewId)} role="tablist" hasDivider>
                     {tabs.map((tab) => <Tab key={tab.id} value={tab.id} label={tab.label} panelId="panel" endContent={badge(BADGES[tab.id])} />)}
                   </TabList>
