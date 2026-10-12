@@ -61,7 +61,21 @@ that app's frontmost window.
   and scrolls aimed at a target can post without error and not land, so they need the foreground:
   expect `FOREGROUND_REQUIRED`, announce it, and re-issue with `--foreground`.
 - **Dialogs, sheets, and menus** go through the same native loop. Sheets and file pickers are
-  foreground work: the buttons stay disabled until the owning app is frontmost.
+  foreground work: the buttons stay disabled until the owning app is frontmost. While a sheet is
+  open, `press`, `hotkey`, and `type` without `--ref` go to the frontmost sheet instead of the main
+  window, and need `--foreground` like any sheet action.
+  - Check sheet actions with `--expect tree`; the `screen` signal is too coarse to see a sheet
+    change. A `fill` into a sheet's field changes only its value, so use `--expect value` there.
+  - A save sheet's name field takes a file name only. A path typed there saves into the sheet's
+    current folder under a name with ":" where the "/" were.
+  - To save into a chosen folder, `press --key cmd+shift+g --foreground --expect tree` opens Go to
+    Folder (`hotkey` with that chord reported `NO_EFFECT`). `fill` its path field (the
+    `PathTextField` row of the native tree) with the folder path, then `press --key Return
+    --foreground --expect tree`. Observe again: the sheet's "Where:" row in the native tree must
+    name the folder (it shows the folder's name, not the path) before you click Save.
+  - A save goal passes only when the destination folder was shown in the sheet before Save and the
+    Save act was `OBSERVED`. Otherwise the goal is `partial`, and the summary says what is
+    unverified.
 - **macOS prompts are the user's call.** A privacy or consent prompt ("wants to access", "bypass the
   system private window picker") is not part of the app under test. Do not click Allow. Tell the
   user and leave it.

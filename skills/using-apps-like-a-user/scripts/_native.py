@@ -530,16 +530,23 @@ class _Plan:
     """One Cua tool call: the tool, its payload, and what delivering it demands.
 
     `points` names payload keys holding driver points that must become window-local pixels.
+    `keyboard` marks key and text delivery, which goes to a window rather than an element.
     """
 
     def __init__(self, tool: str, payload: dict, tokens: Tuple[str, ...] = (), points: Tuple[str, ...] = (),
-                 always_foreground: bool = False, delivery_mode: bool = True) -> None:
+                 always_foreground: bool = False, delivery_mode: bool = True, keyboard: bool = False) -> None:
         self.tool = tool
         self.payload = payload
         self.tokens = tokens
         self.points = points
         self.always_foreground = always_foreground
         self.delivery_mode = delivery_mode
+        self.keyboard = keyboard
+
+    @property
+    def window_keys(self) -> bool:
+        """True for keyboard input aimed at no element and no point, so at whichever window has focus."""
+        return self.keyboard and not self.tokens and not self.points
 
 
 class CuaDriver(NativeDriver):
@@ -548,8 +555,10 @@ class CuaDriver(NativeDriver):
     Background-capable: element actions run through accessibility without activating the app.
     Coordinate actions, targeted `scroll`, `drag`, and anything inside an `AXSheet` or dialog need
     `foreground=True`; with `foreground=False` they raise `DriverError("needs_foreground")` before
-    any call. Every call carries one `session` label because tokens only stay valid within a
-    session. Callers that span processes pass the same `session` (the run id) to every instance so
+    any call. Keys and text with no element target go to the frontmost sheet or dialog window when
+    the last observation showed one open, because those are windows of their own that the main
+    window's id never reaches. Every call carries one `session` label because tokens only stay
+    valid within a session. Callers that span processes pass the same `session` (the run id) to every instance so
     a token from `observe` still works in the next `likeuser.py` call; without one, each instance
     gets a label of its own so unrelated runs never share tokens, memos, or screenshots. The
     payload goes in on stdin so text typed from `--secret` never appears in argv. The binary comes
@@ -791,13 +800,28 @@ class CuaDriver(NativeDriver):
             raise DriverError("window_gone", f"{self._bundle_id} has no on-screen window")
         return self._window_id
 
+    def _sheet_window(self) -> Optional[int]:
+        """Return the frontmost window of the app other than the bound one, None when there is none.
+
+        Reads `get_accessibility_tree`, which lists on-screen windows front to back. `list_windows`
+        cannot say: its `z_index` can rank a parent sheet above the nested one that is on top.
+        """
+        data, _ = self._call("get_accessibility_tree", {})
+        pid, bound = self._pid(), self._require_window()
+        for window in data.get("windows") or []:
+            if window.get("pid") == pid and window.get("window_id") != bound:
+                return int(window["window_id"])
+        return None
+
     def act(self, action: Action, foreground: bool) -> DriverResult:
         """Deliver `action` to the bound window.
 
         Element actions run in the background. Coordinate actions (converted from driver points
         to window-local screenshot pixels with the last observation's scale), targeted `scroll`,
         `drag`, and elements inside a sheet or dialog raise `needs_foreground` unless `foreground`
-        is True. `driver_verified` is True for `effect: confirmed`, None otherwise. The reply
+        is True. `press`, `hotkey`, and `type` with no element target go to the frontmost sheet or
+        dialog window of the app when the last observation showed one open, and need `foreground`
+        for it too. `driver_verified` is True for `effect: confirmed`, None otherwise. The reply
         carries no post-action tree, so `observation` is None.
         """
         if self._bundle_id is None:
@@ -805,9 +829,12 @@ class CuaDriver(NativeDriver):
         plan = self._plan(action)
         memo = self._recall() or {}
         in_sheet = any(token in (memo.get("sheet") or ()) for token in plan.tokens)
-        if (plan.points or plan.always_foreground or in_sheet) and not foreground:
+        keys_to_sheet = plan.window_keys and bool(memo.get("sheet"))
+        if (plan.points or plan.always_foreground or in_sheet or keys_to_sheet) and not foreground:
             raise DriverError("needs_foreground", f"{action.kind} needs the target app in front")
         payload = dict(plan.payload, pid=self._pid(), window_id=self._require_window())
+        if keys_to_sheet:
+            payload["window_id"] = self._sheet_window() or payload["window_id"]
         if plan.points:
             scale = self._pixel_scale()
             for key in plan.points:
@@ -865,7 +892,8 @@ class CuaDriver(NativeDriver):
             return _Plan(tool, target, tokens, points)
         if kind == "type":
             target, tokens, points = self._target(action, required=False)
-            return _Plan("type_text", dict(target, text=_required(action.text, "text")), tokens, points)
+            return _Plan("type_text", dict(target, text=_required(action.text, "text")), tokens, points,
+                         keyboard=True)
         if kind in ("fill", "select"):
             if action.ref is None:
                 raise DriverError("invalid_action", f"{kind} needs a ref")
@@ -879,12 +907,12 @@ class CuaDriver(NativeDriver):
                 raise DriverError("invalid_action", "missing key")
             target, tokens, points = self._target(action, required=False)
             if kind == "hotkey":
-                return _Plan("hotkey", dict(target, keys=parts), tokens, points)
+                return _Plan("hotkey", dict(target, keys=parts), tokens, points, keyboard=True)
             modifiers = [p for p in parts[:-1] if p in _CUA_MODIFIERS]
             payload = dict(target, key=_CUA_KEY_ALIASES.get(parts[-1], parts[-1]))
             if modifiers:
                 payload["modifiers"] = modifiers
-            return _Plan("press_key", payload, tokens, points)
+            return _Plan("press_key", payload, tokens, points, keyboard=True)
         if kind == "scroll":
             payload = {"direction": _required(action.direction, "direction")}
             if action.amount is not None:

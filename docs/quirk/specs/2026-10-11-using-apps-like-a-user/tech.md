@@ -353,6 +353,10 @@ class NativeDriver:
 - **Invariant:** `act(..., foreground=False)` must never activate another app; an adapter that cannot
   guarantee this for an action returns `DriverError("needs_foreground")`, which `act` reports as
   `FOREGROUND_REQUIRED`.
+- **Key targeting:** `press`, `hotkey`, and `type` with no element target go to the window that holds
+  keyboard focus. When the last observation showed a sheet or dialog open, an adapter whose driver
+  addresses windows by id sends them to the frontmost sheet or dialog window of the app, not the main
+  window, and counts them as foreground work, as it does element actions inside a sheet.
 
 `OrcaDriver.background_capable` is `False`. The bake-off winner's value comes from measurement:
 Cua Driver 0.34.1 won with zero focus steals and all input landed ([bakeoff.md](bakeoff.md)); under

@@ -729,6 +729,7 @@ if replies is not None:
 case = {
     "get_window_state": "observe-screenshot", "type_text": "type-text", "press_key": "press-key",
     "hotkey": "hotkey", "list_windows": "list-windows",
+    "get_accessibility_tree": "get-accessibility-tree-sheets",
 }.get(tool, "click-coordinate" if "x" in payload else "click-element")
 reply = golden(case)
 out = reply["stdout"]
@@ -882,7 +883,8 @@ def test_cua_golden_set_follows_the_schema():
     names = {path.stem for path in GOLDEN_CUA.glob("*.json")}
     assert {
         "observe-screenshot", "click-element", "click-coordinate", "type-text", "press-key", "hotkey",
-        "click-missing-element", "permissions-status", "list-windows",
+        "click-missing-element", "permissions-status", "list-windows", "list-windows-sheets",
+        "get-accessibility-tree-sheets",
     } <= names
     for path in GOLDEN_CUA.glob("*.json"):
         data = json.loads(path.read_text())
@@ -1404,6 +1406,98 @@ def test_cua_sheet_click_fails_when_the_button_is_gone_after_the_refresh(fake_cu
         _bound_cua(7).act(Action(kind="click", ref="s0000000a:4"), foreground=True)
     assert raised.value.code == "element_not_found"
     assert fake_cua.tool_calls("click") == []
+
+
+def _with_a_sheet_open(fake_cua, windows=None) -> CuaDriver:
+    """A driver whose last observation of the main window showed a sheet, with Cua reporting `windows` front to back."""
+    listing = _cua_golden("get-accessibility-tree-sheets")["stdout"]
+    if windows is not None:
+        listing = {"apps": [], "windows": windows}
+    fake_cua.reply(
+        get_window_state=_ok(_window_state(SHEET_ROWS, SHEET_MARKDOWN, window_id=GOLDEN_WINDOW)),
+        get_accessibility_tree=_ok(listing),
+        list_windows=_ok(_cua_golden("list-windows-sheets")["stdout"]),
+    )
+    driver = _bound_cua()
+    driver.observe(FIXTURE_BUNDLE, GOLDEN_WINDOW, screenshot=False)
+    return driver
+
+
+def _stacked_windows() -> list:
+    return json.loads(_cua_golden("get-accessibility-tree-sheets")["stdout"])["windows"]
+
+
+SHEET_GO, SHEET_SAVE = 84886, 84879
+UNBOUND_KEY_ACTIONS = [
+    pytest.param(Action(kind="press", key="Return"), "press_key", id="press"),
+    pytest.param(Action(kind="hotkey", key="cmd+shift+g"), "hotkey", id="hotkey"),
+    pytest.param(Action(kind="type", text="folder"), "type_text", id="type"),
+]
+
+
+@pytest.mark.parametrize("action,tool", UNBOUND_KEY_ACTIONS)
+def test_cua_key_actions_go_to_the_frontmost_sheet_window_in_the_foreground(fake_cua, action, tool):
+    driver = _with_a_sheet_open(fake_cua)
+    driver.act(action, foreground=True)
+    sent_tool, payload = fake_cua.tool_calls()[-1]
+    assert sent_tool == tool
+    assert payload["pid"] == GOLDEN_PID
+    assert payload["window_id"] == SHEET_GO and payload["delivery_mode"] == "foreground"
+    assert "element_token" not in payload
+
+
+@pytest.mark.parametrize("action,tool", UNBOUND_KEY_ACTIONS)
+def test_cua_key_actions_with_a_sheet_open_need_the_foreground(fake_cua, action, tool):
+    driver = _with_a_sheet_open(fake_cua)
+    before = len(fake_cua.calls())
+    with pytest.raises(DriverError) as raised:
+        driver.act(action, foreground=False)
+    assert raised.value.code == "needs_foreground"
+    assert len(fake_cua.calls()) == before
+
+
+def test_cua_key_actions_follow_the_stacking_order_not_list_windows_z_index(fake_cua):
+    listed = {w["window_id"]: w["z_index"] for w in json.loads(_cua_golden("list-windows-sheets")["stdout"])["windows"]}
+    assert max(listed, key=listed.get) == SHEET_SAVE
+    driver = _with_a_sheet_open(fake_cua)
+    driver.act(Action(kind="press", key="Return"), foreground=True)
+    assert fake_cua.tool_calls()[-1][1]["window_id"] == SHEET_GO
+
+
+def test_cua_key_actions_pick_the_only_sheet_when_one_is_open(fake_cua):
+    driver = _with_a_sheet_open(fake_cua, [w for w in _stacked_windows() if w["window_id"] != SHEET_GO])
+    driver.act(Action(kind="press", key="Return"), foreground=True)
+    assert fake_cua.tool_calls()[-1][1]["window_id"] == SHEET_SAVE
+
+
+def test_cua_key_actions_ignore_other_apps_windows(fake_cua):
+    other = {"app_name": "Other", "pid": GOLDEN_PID + 1, "title": "", "window_id": 1}
+    driver = _with_a_sheet_open(fake_cua, [other] + _stacked_windows()[1:])
+    driver.act(Action(kind="press", key="Return"), foreground=True)
+    assert fake_cua.tool_calls()[-1][1]["window_id"] == SHEET_GO
+
+
+def test_cua_key_actions_fall_back_to_the_bound_window_when_no_other_window_is_stacked(fake_cua):
+    driver = _with_a_sheet_open(fake_cua, [w for w in _stacked_windows() if w["window_id"] == GOLDEN_WINDOW])
+    driver.act(Action(kind="press", key="Return"), foreground=True)
+    payload = fake_cua.tool_calls()[-1][1]
+    assert payload["window_id"] == GOLDEN_WINDOW and payload["delivery_mode"] == "foreground"
+
+
+def test_cua_key_actions_with_an_element_target_keep_the_bound_window(fake_cua):
+    driver = _with_a_sheet_open(fake_cua)
+    driver.act(Action(kind="press", ref="s0000000a:1", key="Return"), foreground=False)
+    assert fake_cua.tool_calls("get_accessibility_tree") == []
+    assert fake_cua.tool_calls()[-1][1]["window_id"] == GOLDEN_WINDOW
+
+
+def test_cua_key_actions_without_a_sheet_never_look_for_one(fake_cua):
+    driver = _bound_cua()
+    for action in (Action(kind="press", key="Return"), Action(kind="hotkey", key="cmd+a"),
+                   Action(kind="type", text="hello")):
+        driver.act(action, foreground=False)
+        assert fake_cua.tool_calls()[-1][1]["window_id"] == GOLDEN_WINDOW
+    assert fake_cua.tool_calls("get_accessibility_tree") == []
 
 
 def test_cua_refusal_becomes_a_driver_error_carrying_its_code(fake_cua):
