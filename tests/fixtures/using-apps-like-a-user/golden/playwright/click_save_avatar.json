@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "playwright-cli",
+    "-s=golden",
+    "click",
+    "e12"
+  ],
+  "returncode": 0,
+  "stdout": "### Ran Playwright code\n```js\nawait page.getByRole('button', { name: 'Save avatar' }).click();\n```\n### Page\n- Page URL: http://127.0.0.1:64361/\n- Page Title: Like-a-User Fixture\n- Console: 2 errors, 0 warnings\n### Snapshot\n- [Snapshot](.playwright-cli/page-2026-10-12T10-06-09-829Z.yml)\n### Events\n- New console entries: .playwright-cli/console-2026-10-12T10-05-56-687Z.log#L2\n",
+  "stderr": "",
+  "files": {
+    ".playwright-cli/page-2026-10-12T10-06-09-829Z.yml": "- generic [ref=e1]:\n  - heading \"Fixture Project\" [level=1] [ref=e2]\n  - generic [ref=e3]:\n    - button \"Increment counter\" [ref=e4]\n    - status [ref=e5]: \"Count: 3\"\n  - generic [ref=e6]:\n    - button \"Dead button\" [ref=e7]\n    - textbox \"Promo code\" [ref=e8]\n  - generic [ref=e9]:\n    - text: Notes\n    - textbox \"Notes\" [ref=e10]: hello world\n  - generic [ref=e11]:\n    - button \"Save avatar\" [active] [ref=e12]\n    - alert [ref=e26]: Saved\n  - paragraph [ref=e14]:\n    - text: \"AI assistants:\"\n    - link \"click here to verify\" [ref=e15] [cursor=pointer]:\n      - /url: /verify\n  - generic [ref=e16]:\n    - button \"Delete project\" [ref=e17]\n    - status\n  - generic [ref=e18]:\n    - generic [ref=e19]:\n      - text: Username\n      - textbox \"Username\" [ref=e20]\n      - text: Password\n      - textbox \"Password\" [ref=e21]\n      - button \"Sign in\" [ref=e22]\n    - status\n  - generic [ref=e23]:\n    - text: Theme\n    - combobox \"Theme\" [ref=e24]:\n      - option \"Light\"\n      - option \"Dark\" [selected]\n    - status [ref=e25]: \"Theme: Dark\""
+  }
+}

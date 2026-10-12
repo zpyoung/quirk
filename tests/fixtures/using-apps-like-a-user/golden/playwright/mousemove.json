@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "playwright-cli",
+    "-s=golden",
+    "mousemove",
+    "10",
+    "10"
+  ],
+  "returncode": 0,
+  "stdout": "### Ran Playwright code\n```js\n// Move mouse to (10, 10)\nawait page.mouse.move(10, 10);\n```\n",
+  "stderr": "",
+  "files": {}
+}

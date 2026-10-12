@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "playwright-cli",
+    "-s=golden",
+    "eval",
+    "() => JSON.stringify([innerWidth, innerHeight])"
+  ],
+  "returncode": 0,
+  "stdout": "### Result\n\"[1280,720]\"\n### Ran Playwright code\n```js\nawait page.evaluate('() => JSON.stringify([innerWidth, innerHeight])');\n```\n",
+  "stderr": "",
+  "files": {}
+}

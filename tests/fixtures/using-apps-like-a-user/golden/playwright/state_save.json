@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "playwright-cli",
+    "-s=golden",
+    "state-save",
+    "state.json"
+  ],
+  "returncode": 0,
+  "stdout": "### Result\n- [Storage state](./state.json)\n### Ran Playwright code\n```js\nawait page.context().storageState({ path: './state.json' });\n```\n",
+  "stderr": "",
+  "files": {
+    "state.json": "{\n  \"cookies\": [],\n  \"origins\": []\n}"
+  }
+}

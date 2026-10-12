@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "playwright-cli",
+    "-s=golden",
+    "close"
+  ],
+  "returncode": 0,
+  "stdout": "Browser 'golden' closed\n\n",
+  "stderr": "",
+  "files": {}
+}
