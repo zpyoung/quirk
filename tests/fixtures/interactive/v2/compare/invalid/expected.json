@@ -24,5 +24,6 @@
   "duplicate-repo.json": "/approaches/0/repos/1/name",
   "negative-lines.json": "/approaches/0/slices/0/lines/core",
   "reversed-lines.json": "/approaches/0/slices/0/lines/core",
-  "unsafe-lines.json": "/approaches/0/slices/0/lines/core"
+  "unsafe-lines.json": "/approaches/0/slices/0/lines/core",
+  "unsafe-files.json": "/approaches/0/repos/0/files"
 }

@@ -4,7 +4,7 @@ import { Card, HStack, VStack } from '@astryxdesign/core/Layout'
 import { Text } from '@astryxdesign/core/Text'
 import { Token } from '@astryxdesign/core/Token'
 import type { CompareViewProps, Draft, TabKey } from '../../compare-types'
-import { guidanceNotes, targetHash } from '../../compare-state'
+import { checkedScoreCounts, guidanceNotes, targetHash } from '../../compare-state'
 
 const TAB_LABEL: Record<TabKey, string> = { overview: 'Overview', approaches: 'Approaches', effort: 'Effort', blast: 'Blast radius', tradeoffs: 'Trade-offs' }
 const CONFIDENCE_COLOR = { low: 'orange', medium: 'yellow', high: 'green' } as const
@@ -34,6 +34,7 @@ export function GuidanceView(props: CompareViewProps) {
   const { recommendation } = guidance
   const picked = comparison.approaches.find((approach) => approach.id === recommendation.approachId)
   const notes = guidanceNotes(comparison, spec, state)
+  const { checked, total } = checkedScoreCounts(comparison, spec, state)
 
   const draftedKeys = new Set(
     state.drafts.filter((draft) => draft.target.type === 'score').map((draft) => (draft.target.type === 'score' ? `${draft.target.requirementId}|${draft.target.approachId}` : '')),
@@ -111,6 +112,7 @@ export function GuidanceView(props: CompareViewProps) {
           <HStack gap={2} align="center" wrap="wrap">
             <Token size="sm" color={CONFIDENCE_COLOR[recommendation.confidence]} label={`Confidence: ${recommendation.confidence}`} />
             <Text type="supporting">{recommendation.confidenceReason}</Text>
+            <Text type="supporting">{`${checked} of ${total} scores checked`}</Text>
           </HStack>
           <Bullets label="Why" items={recommendation.why} />
           <Bullets label="What it costs" items={recommendation.costs} />

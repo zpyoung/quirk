@@ -4,9 +4,9 @@ import { Collapsible } from '@astryxdesign/core/Collapsible'
 import { Card, HStack, VStack } from '@astryxdesign/core/Layout'
 import { Text } from '@astryxdesign/core/Text'
 import { Token } from '@astryxdesign/core/Token'
-import { allHistoryCounts, allScoreHashes, createCompareExport, isCompareExport, targetHash } from '../../compare-state'
+import { allHistoryCounts, allScoreHashes, createCompareExport, isCompareExport, partitionStars, targetHash } from '../../compare-state'
 import type { Comparison, CompareExport, CompareState, Draft } from '../../compare-types'
-import { EXPORT_KIND, localStamp } from '../../review-state'
+import { EXPORT_KIND, localStamp, readPayload } from '../../review-state'
 import { DraftCard, saveDraftEdit } from './score-drawer'
 
 interface ChallengeTrayProps {
@@ -87,8 +87,12 @@ export function ChallengeTray({ slug, renderId, comparisonId, comparison, state,
       const kept: Draft[] = []
       const moved: Draft[] = []
       for (const challenge of data.challenges) (currentHash(comparison, challenge) === challenge.targetHash ? kept : moved).push(challenge)
-      const dropped = data.stars.filter((id) => !comparison.scores[id])
-      const starred = data.stars.filter((id) => comparison.scores[id])
+      const spec = readPayload().payload?.spec
+      if (!spec) {
+        setStatus('Import failed: the embedded review data is unavailable, so starred requirements cannot be checked against the spec.')
+        return
+      }
+      const { kept: starred, dropped } = partitionStars(data.stars, comparison, spec)
       update((draft) => {
         const ids = new Set([...kept, ...moved].map((challenge) => challenge.id))
         draft.drafts = [...draft.drafts.filter((existing) => !ids.has(existing.id)), ...kept]

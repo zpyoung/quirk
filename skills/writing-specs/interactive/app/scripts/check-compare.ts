@@ -8,6 +8,7 @@ import {
   allHistoryCounts,
   anchorMismatch,
   canonicalJson,
+  checkedScoreCounts,
   coverageCounts,
   createCompareExport,
   defaultRows,
@@ -17,6 +18,7 @@ import {
   isComparison,
   loadCompareState,
   mrsFor,
+  partitionStars,
   pairAgrees,
   pointsFor,
   revisedRows,
@@ -66,6 +68,14 @@ const badReadAt = structuredClone(comparisonFixture) as unknown as { approaches:
 badReadAt.approaches[0]!.readAt = '2026-02-30'
 const badReadAtResult = isComparison(badReadAt, spec)
 check('isComparison rejects an impossible readAt date at /approaches/0/readAt', !badReadAtResult.ok && badReadAtResult.pointer === '/approaches/0/readAt', JSON.stringify(badReadAtResult))
+const unsafeFiles = structuredClone(comparisonFixture) as unknown as { approaches: Array<{ repos: Array<{ files: number }> }> }
+unsafeFiles.approaches[0]!.repos[0]!.files = 2 ** 53
+const unsafeFilesResult = isComparison(unsafeFiles, spec)
+check('isComparison rejects an unsafe integer at /approaches/0/repos/0/files', !unsafeFilesResult.ok && unsafeFilesResult.pointer === '/approaches/0/repos/0/files', JSON.stringify(unsafeFilesResult))
+const unsafeElsewhere = structuredClone(comparisonFixture) as unknown as { extra?: unknown }
+unsafeElsewhere.extra = { 'a/b': [1, -(2 ** 53)] }
+const unsafeElsewhereResult = isComparison(unsafeElsewhere, spec)
+check('isComparison rejects an unsafe integer anywhere, with an escaped pointer', !unsafeElsewhereResult.ok && unsafeElsewhereResult.pointer === '/extra/a~1b/1', JSON.stringify(unsafeElsewhereResult))
 for (const junk of [null, 3, 'x', [], {}]) check(`isComparison rejects ${JSON.stringify(junk)}`, !isComparison(junk, spec).ok)
 
 // hashing: parity with the Python fixtures
@@ -178,6 +188,9 @@ pickC.guidance!.recommendation.approachId = 'C'
 const guided = guidanceNotes(pickC, spec, fresh({ stars: ['REQ-02'], focus: 'AB', includeConditional: false }))
 check('guidanceNotes covers starred miss, left-out conditional and pair focus', guided.length === 3, JSON.stringify(guided))
 equal('guidanceNotes quiet when the pick meets the stars', guidanceNotes(comparison, spec, fresh({ stars: ['REQ-02'] })), [])
+equal('checkedScoreCounts over every approach', checkedScoreCounts(comparison, spec, fresh()), { checked: 1, total: 12 })
+equal('checkedScoreCounts without conditional requirements', checkedScoreCounts(comparison, spec, fresh({ includeConditional: false })), { checked: 1, total: 9 })
+equal('checkedScoreCounts follows the focused pair', checkedScoreCounts(comparison, spec, fresh({ focus: 'AC' })), { checked: 0, total: 8 })
 equal('guidanceNotes quiet by default', guidanceNotes(comparison, spec, fresh()), [])
 
 // export and state round trip
@@ -193,6 +206,9 @@ check('isCompareExport rejects a score want on a slice target', !isCompareExport
 check('isCompareExport rejects a non-ISO exportedAt', !isCompareExport({ ...out, exportedAt: 'yesterday' }))
 check('isCompareExport accepts an ISO exportedAt with offset', isCompareExport({ ...out, exportedAt: '2026-10-12T09:30:00+02:00' }))
 check('isCompareExport rejects an empty note', !isCompareExport({ ...out, challenges: [{ ...draft, note: '' }] }))
+check('isCompareExport rejects an empty challenge id', !isCompareExport({ ...out, challenges: [{ ...draft, id: '' }] }))
+check('isCompareExport rejects an empty targetHash', !isCompareExport({ ...out, challenges: [{ ...draft, targetHash: '' }] }))
+check('isCompareExport rejects an empty target id', !isCompareExport({ ...out, challenges: [{ ...draft, target: { ...draft.target, approachId: '' } }] }))
 
 const store = new Map<string, string>()
 Object.defineProperty(globalThis, 'localStorage', {
@@ -215,6 +231,7 @@ check('fixture spec puts REQ-05 out of scope', spec.requirements.find((r) => r.i
 check('saveCompareState stores a star on an out-of-scope requirement', saveCompareState('compare', fresh({ comparisonId: 'old', stars: ['REQ-01', 'REQ-05'] })))
 const outOfScope = loadCompareState('compare', scoredOutOfScope, 'new', spec).state
 equal('carry-over drops a star the spec marks out of scope even when still scored', [outOfScope.stars, outOfScope.droppedStars], [['REQ-01'], ['REQ-05']])
+equal('partitionStars drops out-of-scope and unscored stars for an imported export', partitionStars(['REQ-01', 'REQ-05', 'REQ-99'], scoredOutOfScope, spec), { kept: ['REQ-01'], dropped: ['REQ-05', 'REQ-99'] })
 store.set('quirk-compare:compare', '{not json')
 check('corrupt storage yields a fresh state', loadCompareState('compare', comparison, 'new', spec).state.drafts.length === 0)
 equal('missing storage yields a fresh state', loadCompareState('other', comparison, 'new', spec).state, fresh({ comparisonId: 'new' }))

@@ -375,8 +375,16 @@ function checkGuidance(value: unknown, approachIds: string[], requirementIds: Se
   optional(guidance, 'changeNote', str, '/guidance')
 }
 
+/** Fails at the first integer beyond +-(2^53-1); same rule and pointers as the Python validator, so both sides hash the same numbers. */
+function checkSafeIntegers(value: unknown, pointer: string): void {
+  if (Array.isArray(value)) value.forEach((item, i) => checkSafeIntegers(item, `${pointer}/${i}`))
+  else if (isRecord(value)) for (const [key, item] of Object.entries(value)) checkSafeIntegers(item, `${pointer}/${key.replace(/~/g, '~0').replace(/\//g, '~1')}`)
+  else if (typeof value === 'number' && Number.isInteger(value) && !Number.isSafeInteger(value)) fail(pointer, 'integer is outside the safe range of +-2^53-1')
+}
+
 function validateComparison(value: unknown, spec?: LogicSpec): Comparison {
   const root = obj(value, '')
+  checkSafeIntegers(root, '')
   if (root.kind !== COMPARISON_KIND) fail('/kind', `must be "${COMPARISON_KIND}"`)
   if (root.schemaVersion !== 1) fail('/schemaVersion', 'must be 1')
   const builtAgainst = obj(required(root, 'builtAgainst', ''), '/builtAgainst')
@@ -539,6 +547,15 @@ function currentHash(comparison: Comparison, target: Draft['target']): string | 
   return resolved ? targetHash(resolved, target.type) : null
 }
 
+/** Splits starred requirement ids into those still scored by the comparison and in scope in the spec, and those to drop. Used for both stored state and imported exports. */
+export function partitionStars(stars: readonly string[], comparison: Comparison, spec: LogicSpec): { kept: string[]; dropped: string[] } {
+  const inScope = new Set(visibleRequirements(spec, { includeConditional: true }).map((requirement) => requirement.id))
+  const kept: string[] = []
+  const dropped: string[] = []
+  for (const star of stars) (comparison.scores[star] && inScope.has(star) ? kept : dropped).push(star)
+  return { kept, dropped }
+}
+
 function carryOver(stored: CompareState, comparison: Comparison, comparisonId: string, spec: LogicSpec): CompareState {
   const drafts: Draft[] = []
   const needsLook = [...stored.needsLook]
@@ -546,13 +563,7 @@ function carryOver(stored: CompareState, comparison: Comparison, comparisonId: s
     if (currentHash(comparison, draft.target) === draft.targetHash) drafts.push(draft)
     else needsLook.push(draft)
   }
-  const stars: string[] = []
-  const droppedStars: string[] = []
-  const inScope = new Set(visibleRequirements(spec, { includeConditional: true }).map((requirement) => requirement.id))
-  for (const star of stored.stars) {
-    if (comparison.scores[star] && inScope.has(star)) stars.push(star)
-    else droppedStars.push(star)
-  }
+  const { kept: stars, dropped: droppedStars } = partitionStars(stored.stars, comparison, spec)
   const ids = comparison.approaches.map((approach) => approach.id)
   const focusKept = stored.focus === 'all' || (stored.focus.length === 2 && [...stored.focus].every((id) => ids.includes(id)))
   return { ...stored, comparisonId, drafts, needsLook, stars, droppedStars, focus: focusKept ? stored.focus : 'all' }
@@ -643,6 +654,22 @@ export function coverageCounts(comparison: Comparison, spec: LogicSpec, state: C
     if (score.status !== 'met') result.notFullyMet.push(requirement.id)
   }
   return result
+}
+
+/** How many of the scores on the focused approaches' visible requirements carry a `check`, out of all of them. */
+export function checkedScoreCounts(comparison: Comparison, spec: LogicSpec, state: CompareState): { checked: number; total: number } {
+  const focus = focusApproaches(comparison, state)
+  let checked = 0
+  let total = 0
+  for (const requirement of visibleRequirements(spec, state)) {
+    for (const id of focus) {
+      const score = comparison.scores[requirement.id]?.[id]
+      if (!score) continue
+      total += 1
+      if (score.check !== undefined) checked += 1
+    }
+  }
+  return { checked, total }
 }
 
 /** Summed `[low, high]` points of an approach's slices in one band. */
@@ -762,8 +789,17 @@ export function isCompareExport(value: unknown): boolean {
   if (!Array.isArray(value.challenges)) return false
   const ids = new Set<string>()
   for (const challenge of value.challenges) {
-    if (!isDraft(challenge) || challenge.note.trim() === '' || ids.has(challenge.id)) return false
+    if (!isExportChallenge(challenge) || ids.has(challenge.id)) return false
     ids.add(challenge.id)
   }
   return true
+}
+
+const isFilled = (value: unknown): value is string => typeof value === 'string' && value.trim() !== ''
+
+/** A challenge the Python `check-export` accepts: every string it requires is non-blank, on top of the draft shape. */
+function isExportChallenge(value: unknown): value is Draft {
+  if (!isDraft(value) || !isFilled(value.id) || !isFilled(value.note) || !isFilled(value.targetHash)) return false
+  const target = value.target
+  return isFilled(target.approachId) && (target.type === 'score' ? isFilled(target.requirementId) : isFilled(target.sliceId))
 }

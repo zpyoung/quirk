@@ -2532,6 +2532,20 @@ def _validate_guidance(v: Validator, raw: Any, requirement_ids: set, approach_id
     _optional_string(v, guidance, "changeNote", "/guidance")
 
 
+def _check_safe_integers(v: Validator, value: Any, path: str) -> None:
+    """Flags every integer beyond +-(2^53-1) so the page, which parses JSON into doubles, reads the numbers Python hashed."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _check_safe_integers(v, item, pointer(path, key))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _check_safe_integers(v, item, pointer(path, index))
+    elif type(value) is int and abs(value) > MAX_SAFE_INTEGER:
+        v.error(path, "integer is outside the safe range of +-2^53-1")
+    elif type(value) is float and value.is_integer() and abs(value) > MAX_SAFE_INTEGER:
+        v.error(path, "integer is outside the safe range of +-2^53-1")
+
+
 def validate_comparison(comparison: Any, logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
     """Errors and warnings for comparison.json against its signed logic.json; errors block the render."""
     v = Validator()
@@ -2539,6 +2553,7 @@ def validate_comparison(comparison: Any, logic: dict) -> Tuple[List[Tuple[str, s
     root = v.object(comparison, "")
     if root is None:
         return v.errors, warnings
+    _check_safe_integers(v, root, "")
     kind = _required(v, root, "kind", "")
     if "kind" in root and kind != COMPARISON_KIND:
         v.error("/kind", 'expected "' + COMPARISON_KIND + '"')

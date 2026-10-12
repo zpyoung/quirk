@@ -108,8 +108,8 @@ function ApproachCard({ approach, props, mismatchedRepos }: { approach: Approach
             <Text>{formatPoints(pointsFor(approach, 'v1'))}</Text>
           </VStack>
           <VStack gap={0.5}>
-            <Text type="label" color="secondary">v1 slices</Text>
-            <Text>{String(v1Slices)}</Text>
+            <Text type="label" color="secondary">Slices</Text>
+            <Text>{`${approach.slices.length} slice${approach.slices.length === 1 ? '' : 's'} (${v1Slices} in v1)`}</Text>
           </VStack>
           <VStack gap={0.5}>
             <Text type="label" color="secondary">Disputed findings</Text>
