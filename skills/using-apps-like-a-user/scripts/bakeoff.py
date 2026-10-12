@@ -42,6 +42,8 @@ POLL_INTERVAL_S = 0.02
 CURSOR_TOLERANCE_PT = 3.0
 LAND_TIMEOUT_S = 2.0
 COMMAND_TIMEOUT_S = 30.0
+MIN_SAMPLE_INTERVAL_S = 0.1
+BINARIES = {"peekaboo": "peekaboo", "cua": "cua-driver", "orca": "orca"}
 WORKING_LABEL = "Working button"
 NOTES_LABEL = "Notes"
 
@@ -146,9 +148,20 @@ def analyze_samples(
     }
 
 
+def required_samples(action_s: float) -> int:
+    """Fewest polls that cover an action interval at one per `MIN_SAMPLE_INTERVAL_S`, at least one."""
+    return max(1, int(action_s / MIN_SAMPLE_INTERVAL_S))
+
+
 def qualifies(result: Dict[str, Any]) -> bool:
-    """True when a candidate measured zero focus steals and every input landed."""
-    if result.get("error"):
+    """True when a candidate measured zero focus steals, every input landed, and polling held up.
+
+    A candidate with poller errors or too few samples for its action interval has no trustworthy
+    focus measurement, so zero steals proves nothing and it does not qualify.
+    """
+    if result.get("error") or result.get("poller_errors"):
+        return False
+    if int(result.get("samples", 0)) < required_samples(float(result.get("action_s", 0.0))):
         return False
     clicks = int(result.get("clicks", 0))
     strings = int(result.get("strings", 0))
@@ -164,7 +177,7 @@ def qualifies(result: Dict[str, Any]) -> bool:
 def choose_winner(results: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     """Apply the winner rule to per-candidate results.
 
-    Qualifiers (zero steals, everything landed) are ranked by menu plus dialog support, ties
+    Qualifiers (zero steals, everything landed, polling healthy) are ranked by menu plus dialog support, ties
     keeping the listed order. No qualifier means `orca` with `background_capable` false, and so
     does an `orca` win: it has no background path.
     """
@@ -560,12 +573,16 @@ class Poller:
     def __init__(self, interval_s: float = POLL_INTERVAL_S) -> None:
         self.interval_s = interval_s
         self.samples: List[Tuple[float, str, Tuple[float, float]]] = []
+        self.errors: List[str] = []
+        self.duration_s = 0.0
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._t0 = 0.0
+        self._started = False
 
     def start(self) -> None:
         self._t0 = time.monotonic()
+        self._started = True
         self._thread.start()
 
     def _loop(self) -> None:
@@ -575,16 +592,20 @@ class Poller:
                 front = _desktop.frontmost_bundle_id()
                 xy = _desktop.cursor()
                 self.samples.append((began - self._t0, front, xy))
-            except Exception:
-                pass
+            except Exception as exc:
+                self.errors.append(f"{type(exc).__name__}: {exc}")
             rest = self.interval_s - (time.monotonic() - began)
             if rest > 0:
                 self._stop.wait(rest)
 
     def stop(self) -> None:
+        """Stop sampling; the first call fixes `duration_s` as the time since `start`."""
         self._stop.set()
-        if self._thread.is_alive():
-            self._thread.join(timeout=5)
+        if not self._started:
+            return
+        if not self.duration_s:
+            self.duration_s = time.monotonic() - self._t0
+        self._thread.join(timeout=5)
 
 
 def build_sentinel(out_dir: Path) -> Path:
@@ -692,6 +713,10 @@ def run_candidate(
         _stop_process(sentinel)
         _stop_process(fixture)
     result.update(analyze_samples(poller.samples, SENTINEL_BUNDLE_ID))
+    result["action_s"] = poller.duration_s
+    result["poller_errors"] = len(poller.errors)
+    if poller.errors:
+        result["poller_error"] = poller.errors[0]
     result["commands"] = rec.commands
     result["exit_codes"] = rec.exit_codes
     result["failures"] = rec.failures
@@ -784,16 +809,54 @@ def machine_description() -> str:
     return " ".join(p for p in parts if p)
 
 
+def check_readiness(
+    candidates: Sequence[str],
+    which: Callable[[str], Optional[str]] = shutil.which,
+    capture: Callable[[List[str]], str] = _capture,
+) -> List[str]:
+    """Name what each selected candidate still lacks before any app launches; empty when ready.
+
+    Every driver needs its binary on PATH. Cua also needs Accessibility and Screen Recording
+    granted (`cua-driver permissions status --json`), and Peekaboo its required permissions
+    (`peekaboo permissions --json`); without them a run reports driver failures instead of a
+    failed precondition. Orca's permission is not probed because that command opens System Settings.
+    """
+    missing: List[str] = []
+    for name in candidates:
+        binary = BINARIES[name]
+        if which(binary) is None:
+            missing.append(f"{binary} is not on PATH")
+            continue
+        if name == "cua":
+            doc = parse_json_output(capture(["cua-driver", "permissions", "status", "--json"]))
+            if not isinstance(doc, dict):
+                missing.append("cua-driver permissions status --json returned no JSON")
+                continue
+            for key, label in (("accessibility", "Accessibility"), ("screen_recording", "Screen Recording")):
+                if doc.get(key) is not True:
+                    missing.append(f"cua-driver lacks {label} permission")
+        elif name == "peekaboo":
+            doc = parse_json_output(capture(["peekaboo", "permissions", "--json"]))
+            perms = doc.get("data", {}).get("permissions") if isinstance(doc, dict) else None
+            if not isinstance(perms, list):
+                missing.append("peekaboo permissions --json returned no permission list")
+                continue
+            for perm in perms:
+                if isinstance(perm, dict) and perm.get("isRequired") and not perm.get("isGranted"):
+                    missing.append(f"peekaboo lacks {perm.get('name', 'a required')} permission")
+    return missing
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     if sys.platform != "darwin":
         print("bakeoff.py needs macOS", file=sys.stderr)
         return 2
-    for name in args.candidates:
-        binary = {"peekaboo": "peekaboo", "cua": "cua-driver", "orca": "orca"}[name]
-        if shutil.which(binary) is None:
-            print(f"{binary} is not on PATH", file=sys.stderr)
-            return 2
+    missing = check_readiness(args.candidates)
+    if missing:
+        for line in missing:
+            print(line, file=sys.stderr)
+        return 2
 
     original = _desktop.frontmost_bundle_id()
     runs: List[Dict[str, Any]] = []

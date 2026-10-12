@@ -19,7 +19,7 @@ FIXTURE = bakeoff.FIXTURE_BUNDLE_ID
 
 
 def result(name, steals=0, clicks_landed=10, strings_landed=10, menu=False, dialog=False,
-           cursor_moves=0, clicks=10, strings=10):
+           cursor_moves=0, clicks=10, strings=10, samples=500, action_s=10.0, poller_errors=0):
     return {
         "name": name,
         "focus_steals": steals,
@@ -31,6 +31,9 @@ def result(name, steals=0, clicks_landed=10, strings_landed=10, menu=False, dial
         "strings_landed": strings_landed,
         "menu": menu,
         "dialog": dialog,
+        "samples": samples,
+        "action_s": action_s,
+        "poller_errors": poller_errors,
     }
 
 
@@ -104,6 +107,36 @@ def test_failed_candidate_with_error_never_qualifies():
     broken = result("peekaboo")
     broken["error"] = "launch failed"
     assert bakeoff.qualifies(broken) is False
+
+
+def test_zero_samples_never_qualifies():
+    assert bakeoff.qualifies(result("cua", samples=0)) is False
+    assert bakeoff.choose_winner([result("cua", samples=0)])["winner"] == "orca"
+
+
+def test_poller_errors_disqualify_even_with_samples():
+    assert bakeoff.qualifies(result("cua", poller_errors=1)) is False
+
+
+def test_sparse_sampling_disqualifies_by_action_interval():
+    assert bakeoff.required_samples(10.0) == 100
+    assert bakeoff.required_samples(0.0) == 1
+    assert bakeoff.qualifies(result("cua", samples=99, action_s=10.0)) is False
+    assert bakeoff.qualifies(result("cua", samples=100, action_s=10.0)) is True
+
+
+def test_poller_records_errors_instead_of_discarding_them(monkeypatch):
+    def boom():
+        raise RuntimeError("lsappinfo gone")
+
+    monkeypatch.setattr(bakeoff._desktop, "frontmost_bundle_id", boom)
+    poller = bakeoff.Poller(interval_s=0.01)
+    poller.start()
+    bakeoff.wait_for(lambda: len(poller.errors) >= 2, 2.0)
+    poller.stop()
+    assert poller.samples == []
+    assert poller.errors and "lsappinfo gone" in poller.errors[0]
+    assert poller.duration_s > 0
 
 
 def sample(t_ms, front, xy=(100.0, 100.0)):
@@ -279,3 +312,67 @@ def test_sentinel_source_is_a_plain_one_window_app():
     assert SENTINEL == "dev.quirk.uala.sentinel"
     assert "NSApplication" in bakeoff.SENTINEL_SWIFT
     assert "NSWindow" in bakeoff.SENTINEL_SWIFT
+
+
+def fake_capture(outputs):
+    def capture(argv):
+        return outputs.get(" ".join(argv), "")
+    return capture
+
+
+def on_path(*names):
+    return lambda binary: f"/usr/bin/{binary}" if binary in names else None
+
+
+CUA_PERMS = "cua-driver permissions status --json"
+PEEKABOO_PERMS = "peekaboo permissions --json"
+
+
+def test_readiness_passes_when_cua_permissions_granted():
+    capture = fake_capture({CUA_PERMS: json.dumps({"accessibility": True, "screen_recording": True})})
+    assert bakeoff.check_readiness(["cua"], on_path("cua-driver"), capture) == []
+
+
+def test_readiness_names_each_missing_cua_permission():
+    capture = fake_capture({CUA_PERMS: json.dumps({"accessibility": True, "screen_recording": False})})
+    missing = bakeoff.check_readiness(["cua"], on_path("cua-driver"), capture)
+    assert missing == ["cua-driver lacks Screen Recording permission"]
+    capture = fake_capture({CUA_PERMS: json.dumps({"accessibility": False})})
+    assert len(bakeoff.check_readiness(["cua"], on_path("cua-driver"), capture)) == 2
+
+
+def test_readiness_flags_unparseable_cua_permissions():
+    missing = bakeoff.check_readiness(["cua"], on_path("cua-driver"), fake_capture({}))
+    assert missing and "no JSON" in missing[0]
+
+
+def test_readiness_checks_required_peekaboo_permissions_only():
+    doc = {"data": {"permissions": [
+        {"name": "Screen Recording", "isRequired": True, "isGranted": False},
+        {"name": "Accessibility", "isRequired": True, "isGranted": True},
+        {"name": "Event Synthesizing", "isRequired": False, "isGranted": False},
+    ]}}
+    capture = fake_capture({PEEKABOO_PERMS: json.dumps(doc)})
+    assert bakeoff.check_readiness(["peekaboo"], on_path("peekaboo"), capture) == [
+        "peekaboo lacks Screen Recording permission"]
+
+
+def test_readiness_reports_missing_binaries_without_probing_permissions():
+    def capture(argv):
+        raise AssertionError("must not probe a missing binary")
+
+    missing = bakeoff.check_readiness(["peekaboo", "cua", "orca"], on_path("orca"), capture)
+    assert missing == ["peekaboo is not on PATH", "cua-driver is not on PATH"]
+
+
+def test_main_exits_2_before_any_desktop_work_when_cua_lacks_permissions(monkeypatch, capsys):
+    monkeypatch.setattr(bakeoff.sys, "platform", "darwin")
+    monkeypatch.setattr(bakeoff, "check_readiness", lambda names: ["cua-driver lacks Accessibility permission"])
+
+    def forbidden(*a, **k):
+        raise AssertionError("desktop work before readiness")
+
+    monkeypatch.setattr(bakeoff._desktop, "frontmost_bundle_id", forbidden)
+    monkeypatch.setattr(bakeoff, "build_fixture", forbidden)
+    assert bakeoff.main(["--candidates", "cua"]) == 2
+    assert "Accessibility" in capsys.readouterr().err
