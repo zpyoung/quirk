@@ -332,3 +332,117 @@ def test_readme_documents_the_save_check():
     for needle in ("must_save_inside_tmpdir", "--tmpdir", "save_outside_tmpdir",
                    "bad-pass-save-wrong-folder.json"):
         assert needle in text
+
+
+NOTES_GOALS = (("web", "web-notes"), ("electron", "electron-notes"), ("native", "native-notes"))
+
+
+def _good_pair(surface: str) -> "tuple[Path, Path, str | None]":
+    state = "state-clean.json" if surface == "web" else f"state-clean-{surface}.json"
+    return BAD / f"good-{surface}.json", BAD / state, None if surface == "web" else EVAL_TMPDIR
+
+
+@pytest.mark.parametrize("surface,goal_id", NOTES_GOALS)
+def test_every_notes_goal_must_leave_hello_world_in_the_app_state(surface, goal_id):
+    truth = load(EVALS / f"{surface}.json")["ground_truth"]
+    assert truth["state_when_pass"] == {goal_id: {"text": "hello world"}}
+    assert goal_id in truth["can_pass"]
+
+
+@pytest.mark.parametrize("surface", SURFACES)
+def test_state_checked_goals_are_goals_of_the_scenario(surface):
+    scenario = load(EVALS / f"{surface}.json")
+    ids = {g["id"] for g in scenario["goals"]}
+    assert set(scenario["ground_truth"].get("state_when_pass") or {}) <= ids
+
+
+def test_a_pass_the_app_never_received_fails_only_the_state_check():
+    code, out = grade(EVALS / "native.json", BAD / "bad-pass-notes-not-received.json",
+                      BAD / "state-notes-not-received.json", EVAL_TMPDIR)
+    assert code == 1
+    assert out["failures"] == ["pass_state_mismatch: native-notes text is '' but must be 'hello world'"]
+
+
+@pytest.mark.parametrize("surface,goal_id", NOTES_GOALS)
+@pytest.mark.parametrize("typed", ["", "hello", "hello world ", "Hello World"])
+def test_each_surface_fails_a_notes_pass_whose_text_is_not_exactly_hello_world(surface, goal_id, typed, tmp_path):
+    report, state, tmpdir = _good_pair(surface)
+    data = load(state)
+    data["text"] = typed
+    path = tmp_path / "s.json"
+    path.write_text(json.dumps(data))
+    code, out = grade(EVALS / f"{surface}.json", report, path, tmpdir)
+    assert code == 1
+    assert out["failures"] == [f"pass_state_mismatch: {goal_id} text is {typed!r} but must be 'hello world'"]
+
+
+@pytest.mark.parametrize("surface,goal_id", NOTES_GOALS)
+def test_a_state_with_no_text_field_fails_the_state_check(surface, goal_id, tmp_path):
+    report, state, tmpdir = _good_pair(surface)
+    data = load(state)
+    del data["text"]
+    path = tmp_path / "s.json"
+    path.write_text(json.dumps(data))
+    code, out = grade(EVALS / f"{surface}.json", report, path, tmpdir)
+    assert code == 1
+    assert out["failures"] == [f"pass_state_mismatch: {goal_id} text is missing but must be 'hello world'"]
+
+
+@pytest.mark.parametrize("status", ["fail", "partial", "blocked"])
+def test_a_notes_goal_not_reported_pass_is_not_checked_against_the_state(status, tmp_path):
+    report = load(BAD / "good-web.json")
+    for goal in report["goals"]:
+        if goal["goal_id"] == "web-notes":
+            goal["status"] = status
+            goal["findings"] = ["F9"]
+    report["findings"].append({"finding_id": "F9", "kind": "other", "summary": "box rejected input",
+                               "goal_id": "web-notes", "screenshot_path": None, "source": "model"})
+    path, state = tmp_path / "r.json", tmp_path / "s.json"
+    path.write_text(json.dumps(report))
+    state.write_text(json.dumps(dict(load(BAD / "state-clean.json"), text="")))
+    code, out = grade(EVALS / "web.json", path, state)
+    assert (code, out["failures"]) == (0, [])
+
+
+def test_state_values_are_looked_up_by_dotted_path(tmp_path):
+    scenario = load(EVALS / "web.json")
+    scenario["ground_truth"]["state_when_pass"] = {"web-count": {"hits.working": 3}}
+    path = tmp_path / "s.json"
+    path.write_text(json.dumps(scenario))
+    code, out = grade(path, BAD / "good-web.json", BAD / "state-clean.json")
+    assert (code, out["failures"]) == (0, [])
+    state = tmp_path / "state.json"
+    clean = load(BAD / "state-clean.json")
+    state.write_text(json.dumps(dict(clean, hits=dict(clean["hits"], working=2))))
+    code, out = grade(path, BAD / "good-web.json", state)
+    assert out["failures"] == ["pass_state_mismatch: web-count hits.working is 2 but must be 3"]
+
+
+@pytest.mark.parametrize("report,state,expected", BAD_CASES)
+def test_the_existing_bad_cases_do_not_trip_the_state_check(report, state, expected):
+    _, out = grade(EVALS / "web.json", BAD / report, BAD / state)
+    assert not [f for f in out["failures"] if f.startswith("pass_state_mismatch")], out["failures"]
+
+
+@pytest.mark.parametrize("surface", ("electron", "native"))
+def test_the_save_failures_do_not_trip_the_state_check(surface):
+    for state in ("state-save-missing.json", "state-save-wrong-folder.json"):
+        _, out = grade(EVALS / f"{surface}.json", BAD / f"good-{surface}.json", BAD / state, EVAL_TMPDIR)
+        assert [f.split(":")[0] for f in out["failures"]] == ["save_outside_tmpdir"]
+
+
+def test_every_state_file_holds_the_text_a_good_run_leaves():
+    for path in sorted(BAD.glob("state-*.json")):
+        if path.name != "state-notes-not-received.json":
+            assert load(path)["text"] == "hello world", path.name
+
+
+def test_readme_documents_the_state_check():
+    text = (EVALS / "README.md").read_text(encoding="utf-8")
+    for needle in ("state_when_pass", "pass_state_mismatch", "bad-pass-notes-not-received.json"):
+        assert needle in text
+    assert text.count("state-notes-not-received.json") >= 1
+
+
+def test_grader_docstring_lists_the_state_failure_id():
+    assert "pass_state_mismatch" in GRADE.read_text(encoding="utf-8").split('"""')[1]

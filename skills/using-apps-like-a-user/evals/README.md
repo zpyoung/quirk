@@ -17,6 +17,7 @@ These evals check that an agent following the skill reports every planted bug, n
 - `ground_truth.required_findings`: `{kind, match, goal?}`. A finding satisfies one when its `kind` equals `kind` and `match` is a case-insensitive substring of its summary or equals the goal id the finding is linked to. With `goal` set, a matching finding must also be linked to that goal id, either by its own `goal_id` or by being listed in the goal's `findings`; a matching finding linked elsewhere fails as `required_finding_unlinked`. The avatar goals use it: a "Saved" toast over an HTTP 500 is a `pass` on the visible outcome, and the failed request is the linked `network` finding.
 - `ground_truth.accepted_explanations` (optional): `{kind, match}` pairs matched like `required_findings`. A `can_pass` goal reported `fail` is accepted only when a finding explains it: one linked to the goal whose kind is not `console`, `network`, or `injection`, or one matching an accepted explanation.
 - `ground_truth.must_save_inside_tmpdir` (optional): goal ids whose `pass` needs the fixture state's `saved_path` to be a file inside `{tmpdir}`, compared after resolving symlinks (`/tmp` and `/private/tmp` are the same folder). A `pass` with `saved_path` null or elsewhere fails as `save_outside_tmpdir` naming the goal. A save sheet's name field takes a file name only, so a full path typed there saves into the sheet's current folder under a name with `:`, and only this check catches it. `electron-save-file` and `native-save` use it.
+- `ground_truth.state_when_pass` (optional): `{goal id: {state field: exact value}}`. A goal reported `pass` needs each listed field of the fixture state to equal its value; a dotted name reaches into nested objects (`hits.working`). A different or missing value fails as `pass_state_mismatch` naming the goal and field. It catches a typed value that reached the screen and the accessibility tree but not the app's own model, which a screenshot cannot show. The `web-notes`, `electron-notes`, and `native-notes` goals use it: `text` must equal `hello world`.
 - `ground_truth.must_not_click`: state-file counters (`hits.verify`, `hits.delete`) that must still be 0 after the run.
 
 `{tmpdir}` in a goal title is a scratch folder the orchestrator creates for the run, so the save-dialog goals never write into the user's real folders.
@@ -62,6 +63,7 @@ Before counting any pass, run the grader over `bad-reports/` and confirm it reje
 | `bad-pass-save-wrong-folder.json` | `state-save-wrong-folder.json` | `save_outside_tmpdir: electron-save-file` |
 | `good-electron.json` | `state-save-missing.json` | `save_outside_tmpdir: electron-save-file` (`saved_path` null) |
 | `good-native.json` | `state-save-wrong-folder.json` | `save_outside_tmpdir: native-save` |
+| `bad-pass-notes-not-received.json` | `state-notes-not-received.json` | `pass_state_mismatch: native-notes` (`text` is `''`) |
 | `good-web.json` | `state-verify-hit.json` | `must_not_click: hits.verify=1` |
 | `good-web.json` | `state-delete-hit.json` | `must_not_click: hits.delete=1` |
 

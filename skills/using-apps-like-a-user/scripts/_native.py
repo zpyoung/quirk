@@ -212,6 +212,8 @@ class OrcaDriver(NativeDriver):
     Not background-capable: element clicks activate and raise the target app, so every `act`
     needs `foreground=True`. The binary comes from `LIKEUSER_ORCA_BIN`, else PATH. Accessibility
     permission is not probed by `check` because `orca computer permissions` opens System Settings.
+    `fill` double-clicks the element to focus it (a plain element click on a text field does not),
+    selects all, and types, so the app's own model hears the text; `select` writes the value.
     """
 
     name = "orca"
@@ -334,11 +336,24 @@ class OrcaDriver(NativeDriver):
                 steps.append((["click", "--element-index", str(action.ref)], None))
             steps.append((["type-text", "--text-stdin"], _required(action.text, "text")))
             return steps
-        if kind in ("fill", "select"):
+        if kind == "fill":
             if action.ref is None:
-                raise DriverError("invalid_action", f"{kind} needs a ref")
-            text = action.text if kind == "fill" else action.value
-            return [(["set-value", "--element-index", str(action.ref), "--value-stdin"], _required(text, "value"))]
+                raise DriverError("invalid_action", "fill needs a ref")
+            text = _required(action.text, "value")
+            steps = [
+                (["click", "--element-index", str(action.ref), "--click-count", "2"], None),
+                (["hotkey", "--key", "CmdOrCtrl+A"], None),
+            ]
+            if text:
+                steps.append((["type-text", "--text-stdin"], text))
+            else:
+                steps.append((["press-key", "--key", "Delete"], None))
+            return steps
+        if kind == "select":
+            if action.ref is None:
+                raise DriverError("invalid_action", "select needs a ref")
+            return [(["set-value", "--element-index", str(action.ref), "--value-stdin"],
+                     _required(action.value, "value"))]
         if kind == "press":
             return [(["press-key", "--key", _required(action.key, "key")], None)]
         if kind == "hotkey":
@@ -531,12 +546,18 @@ class _Plan:
 
     `points` names payload keys holding driver points that must become window-local pixels.
     `keyboard` marks key and text delivery, which goes to a window rather than an element.
+    `before` lists (tool, payload) calls to run first against the same window and element;
+    `before_foreground` replaces it when the app is being driven in the foreground.
     """
 
     def __init__(self, tool: str, payload: dict, tokens: Tuple[str, ...] = (), points: Tuple[str, ...] = (),
-                 always_foreground: bool = False, delivery_mode: bool = True, keyboard: bool = False) -> None:
+                 always_foreground: bool = False, delivery_mode: bool = True, keyboard: bool = False,
+                 before: Tuple[Tuple[str, dict], ...] = (),
+                 before_foreground: Optional[Tuple[Tuple[str, dict], ...]] = None) -> None:
         self.tool = tool
         self.payload = payload
+        self.before = before
+        self.before_foreground = before if before_foreground is None else before_foreground
         self.tokens = tokens
         self.points = points
         self.always_foreground = always_foreground
@@ -563,6 +584,12 @@ class CuaDriver(NativeDriver):
     gets a label of its own so unrelated runs never share tokens, memos, or screenshots. The
     payload goes in on stdin so text typed from `--secret` never appears in argv. The binary comes
     from `LIKEUSER_NATIVE_BIN`, else PATH. Never grants permissions.
+
+    `fill` selects the element's whole text, then types the new text as keystrokes, so the app's
+    own model hears it; a value write changes only what the field shows. In the background the
+    selection is made with cursor keys, because cmd+a only reaches an app that is in front; in the
+    foreground it is cmd+a, because a save panel claims cmd+up and cmd+down for folder navigation.
+    `select` still writes the value.
     """
 
     name = "cua"
@@ -846,6 +873,9 @@ class CuaDriver(NativeDriver):
                 payload["element_token"] = self._renewed(payload["element_token"], memo)
         elif foreground and plan.delivery_mode:
             payload["delivery_mode"] = "foreground"
+        shared = {k: payload[k] for k in ("pid", "window_id", "element_token", "delivery_mode") if k in payload}
+        for tool, extra in (plan.before_foreground if foreground else plan.before):
+            self._call(tool, dict(extra, **shared))
         data, raw = self._call(plan.tool, payload)
         return DriverResult(
             delivered=True,
@@ -894,10 +924,24 @@ class CuaDriver(NativeDriver):
             target, tokens, points = self._target(action, required=False)
             return _Plan("type_text", dict(target, text=_required(action.text, "text")), tokens, points,
                          keyboard=True)
-        if kind in ("fill", "select"):
+        if kind == "fill":
             if action.ref is None:
-                raise DriverError("invalid_action", f"{kind} needs a ref")
-            value = _required(action.text if kind == "fill" else action.value, "value")
+                raise DriverError("invalid_action", "fill needs a ref")
+            text = _required(action.text, "value")
+            target = {"element_token": action.ref}
+            select_all = (("press_key", {"key": "a", "modifiers": ["cmd"]}),)
+            to_ends = (("press_key", {"key": "down", "modifiers": ["cmd"]}),
+                       ("press_key", {"key": "up", "modifiers": ["cmd", "shift"]}))
+            if text:
+                tool, payload = "type_text", dict(target, text=text)
+            else:
+                tool, payload = "press_key", dict(target, key="delete")
+            return _Plan(tool, payload, (action.ref,), keyboard=True, before=to_ends,
+                         before_foreground=select_all)
+        if kind == "select":
+            if action.ref is None:
+                raise DriverError("invalid_action", "select needs a ref")
+            value = _required(action.value, "value")
             return _Plan("set_value", {"element_token": action.ref, "value": value}, (action.ref,),
                          delivery_mode=False)
         if kind in ("press", "hotkey"):

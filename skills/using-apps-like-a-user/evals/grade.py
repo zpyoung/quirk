@@ -12,10 +12,12 @@ reported `pass`; every `must_not_click` counter in the fixture state still 0; no
 goal reported `fail` without an explaining finding; a required finding that names a `goal` is
 linked to that goal; every goal in `must_save_inside_tmpdir` reported `pass` has the state's
 `saved_path` inside `--tmpdir` (symlinks resolved). `--tmpdir` is required when a scenario lists
-such a goal. Each failure string starts with a stable id (`test_overrides_active`,
-`required_finding_missing`, `required_finding_unlinked`, `cannot_pass_reported_pass`,
-`must_not_click`, `must_not_click_unreadable`, `can_pass_failed_unexplained`,
-`save_outside_tmpdir`) followed by detail.
+such a goal; every goal in `state_when_pass` reported `pass` has each listed state field equal
+to its exact value, so a typed value must have reached the app and not only the screen. Each
+failure string starts with a stable id (`test_overrides_active`, `required_finding_missing`,
+`required_finding_unlinked`, `cannot_pass_reported_pass`, `must_not_click`,
+`must_not_click_unreadable`, `can_pass_failed_unexplained`, `save_outside_tmpdir`,
+`pass_state_mismatch`) followed by detail.
 """
 from __future__ import annotations
 
@@ -91,6 +93,19 @@ def _counter(state: dict, dotted: str) -> Any:
     return node
 
 
+_MISSING = object()
+
+
+def _state_value(state: dict, dotted: str) -> Any:
+    """Return the state field at `dotted`, or `_MISSING` when any part of the path is absent."""
+    node: Any = state
+    for part in dotted.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return _MISSING
+        node = node[part]
+    return node
+
+
 def _saved_outside(saved: Any, tmpdir: str) -> Optional[str]:
     """Return why `saved` is not a path inside `tmpdir`, or None when it is.
 
@@ -150,6 +165,15 @@ def grade(scenario: dict, report: dict, state: dict, tmpdir: Optional[str] = Non
         reason = _saved_outside(state.get("saved_path"), tmpdir or "")
         if reason:
             failures.append(f"save_outside_tmpdir: {goal_id} {reason}")
+
+    for goal_id, expected in (truth.get("state_when_pass") or {}).items():
+        if (goals.get(goal_id) or {}).get("status") != "pass":
+            continue
+        for dotted, wanted in expected.items():
+            actual = _state_value(state, dotted)
+            if actual is _MISSING or actual != wanted or type(actual) is not type(wanted):
+                shown = "missing" if actual is _MISSING else repr(actual)
+                failures.append(f"pass_state_mismatch: {goal_id} {dotted} is {shown} but must be {wanted!r}")
     return failures
 
 
