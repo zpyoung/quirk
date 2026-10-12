@@ -2769,6 +2769,7 @@ def stage1_gate_failures(logic: dict, state: dict) -> List[Tuple[str, str]]:
             continue
         if ident not in state["scenarioDrops"] and scenario_open_asks(scenario):
             failures.append(("examples", "open [ASK] in " + ident))
+            continue
         choice = state["scenarioOutcomes"].get(ident, {}).get("choice")
         if "example" in scenario and choice is not None and choice != "spec":
             failures.append(
