@@ -633,7 +633,9 @@ Back-links: [logic: Decisions Locked](logic.md#decisions-locked)
 - Treat a playwright-cli `### Error` block as failure whatever the exit code; run `playwright-cli`
   with its cwd set to the run folder.
 - Read typed text and summaries from stdin; read credentials only inside the script; redact both
-  from run files.
+  from run files. Typed text shorter than 4 characters is exempt: redaction is by substring, so a
+  1–3 character value would corrupt unrelated content. Credentials always go through `--secret`, which
+  has no exemption.
 - Keep scripts 3.9-compatible with `from __future__ import annotations`.
 - Pin `@playwright/cli` 0.1.22 in `doctor` and SKILL.md install instructions.
 
