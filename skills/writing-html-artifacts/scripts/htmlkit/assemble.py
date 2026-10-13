@@ -5,9 +5,9 @@ resolves the template, inlines the pinned libraries, the tokens, the theme and `
 writes the file atomically and runs the static checks. ``check_artifact`` and ``delivery_note``
 serve the ``check`` and ``note`` CLI commands for any built file.
 
-Problems the author can fix (unknown template, malformed source, missing slot, unknown
-placeholder, a library version that is no longer vendored) raise ``BuildError`` so the CLI can
-report them as usage errors. A build that finishes but fails a static check is not an error here;
+Problems the author can fix (unknown template, malformed source or data, missing slot, unknown
+placeholder, a library version that is no longer vendored, an output that cannot be written)
+raise ``BuildError`` so the CLI can report them as usage errors. A build that finishes but fails a static check is not an error here;
 the result carries ``checks`` and the caller decides the exit code. Nothing in this module
 touches the network.
 """
@@ -43,7 +43,6 @@ SOURCE_MODES = ("offline", "connected")
 _SOURCE_HEADER = re.compile(r"^<!-- quirk-src (\{.*\}) -->[ \t]*$")
 _SLOT_LINE = re.compile(r"^<!-- slot: ([a-z][a-z0-9-]{0,30}) -->$", re.M)
 _PLACEHOLDER = re.compile(r"\{\{[^{}]*\}\}")
-_SIMPLE_PLACEHOLDERS = ("header", "title", "head", "chrome", "data", "body_end")
 
 
 class BuildError(Exception):
@@ -90,7 +89,7 @@ def parse_source(path: Path) -> Source:
         raise SourceError("line 1 must be a header comment: <!-- quirk-src {...} -->")
     try:
         meta = json.loads(match.group(1))
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:
         raise SourceError(f"source header is not valid JSON: {exc}") from exc
     if not isinstance(meta, dict):
         raise SourceError("source header must be a JSON object")
@@ -170,23 +169,43 @@ class _Data:
     embedded: str
 
 
-def _load_data(source: Source) -> Optional[_Data]:
+def _reject_constant(name: str) -> None:
+    raise ValueError(f"the constant {name} is not allowed in JSON")
+
+
+def _load_data(source: Source, project_dir: Path) -> Optional[_Data]:
+    """Read and serialise the source's data file for embedding.
+
+    The file must sit under ``project_dir`` or the source file's directory. Malformed content
+    (invalid JSON, NaN or Infinity, an oversized CSV field, lone surrogates, nesting too deep
+    to parse) raises SourceError naming the file.
+    """
     if source.data is None:
         return None
     path = (source.path.parent / source.data).resolve()
+    allowed = (source.path.resolve().parent, Path(project_dir).resolve())
+    if not any(path == base or base in path.parents for base in allowed):
+        raise SourceError(
+            f"data file {source.data!r} is outside the project directory and the source file's directory"
+        )
     suffix = path.suffix.lower()
     if suffix not in (".json", ".csv"):
         raise SourceError(f"data file {source.data!r} must be .json or .csv")
     text = _read_text_file(path, "data file")
-    if suffix == ".json":
-        try:
-            parsed = json.loads(text)
-        except ValueError as exc:
-            raise SourceError(f"data file {source.data!r} is not valid JSON: {exc}") from exc
-    else:
-        parsed = _csv_rows(text)
-    payload = json.dumps(parsed, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c")
-    return _Data(path, suffix, payload)
+    try:
+        if suffix == ".json":
+            parsed = json.loads(text, parse_constant=_reject_constant)
+        else:
+            parsed = _csv_rows(text)
+        payload = json.dumps(parsed, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        payload.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise SourceError(f"data file {source.data!r} contains a lone surrogate that UTF-8 cannot encode") from exc
+    except RecursionError as exc:
+        raise SourceError(f"data file {source.data!r} is nested too deeply to embed") from exc
+    except (ValueError, csv.Error) as exc:
+        raise SourceError(f"data file {source.data!r} is not valid {suffix[1:].upper()}: {exc}") from exc
+    return _Data(path, suffix, payload.replace("<", "\\u003c"))
 
 
 def _picker(sidecar: str) -> str:
@@ -250,6 +269,15 @@ def _check_slots(template: Template, source: Source) -> None:
         raise SourceError(f"source is missing required slot(s): {', '.join(missing)}")
 
 
+def _is_quirk_output_dir(directory: Path) -> bool:
+    """True when ``directory`` is, or sits under, a ``.quirk/html`` or ``.quirk/brainstorm`` directory."""
+    parts = directory.resolve().parts
+    return any(
+        part == ".quirk" and parts[i + 1] in ("html", "brainstorm")
+        for i, part in enumerate(parts[:-1])
+    )
+
+
 def _skill_store(skill_dir: Path, template_dir: Optional[Path]) -> VendorStore:
     paths = [Path(skill_dir) / "vendor" / "libraries.json"]
     if template_dir is not None:
@@ -268,11 +296,14 @@ def build_tier1(
 ) -> dict:
     """Build ``source_path`` and return a ``BuildResult`` dict (see tech.md section 4.1).
 
-    ``out`` defaults to ``<project_dir>/.quirk/html/<slug>.html``; only that directory gets a
-    self-ignoring ``.gitignore``. An existing output file pins every library to the version in
-    its header unless ``upgrade`` is set. ``sidecar`` in the result is the sidecar file's path.
-    Raises BuildError for anything the author must fix; static-check failures are reported in
-    ``checks`` and still leave the file written.
+    ``out`` defaults to ``<project_dir>/.quirk/html/<slug>.html``. An output directory that is,
+    or sits under, a ``.quirk/html`` or ``.quirk/brainstorm`` directory gets a self-ignoring
+    ``.gitignore``. An existing output file pins every library to the version in its header
+    unless ``upgrade`` is set. Oversized data goes to ``<slug>.data.<ext>`` beside the output
+    and ``sidecar`` in the result is that file's path; a later build that embeds the data
+    removes the stale sidecar. ``out`` may not be the source file or the data file.
+    Raises BuildError for anything the author must fix, including an output that cannot be
+    written; static-check failures are reported in ``checks`` and still leave the file written.
     """
     skill = Path(skill_dir) if skill_dir is not None else SKILL_DIR
     source_path = Path(source_path)
@@ -296,6 +327,10 @@ def build_tier1(
     default_dir = project_dir / ".quirk" / "html"
     slug = _slug(source_path)
     out_path = Path(out) if out is not None else default_dir / f"{slug}.html"
+    data = _load_data(source, project_dir)
+    protected = [source_path.resolve()] + ([data.path] if data is not None else [])
+    if out_path.resolve() in protected:
+        raise BuildError(f"--out {out_path} is the source or data file; choose a different output path")
     frozen = _frozen_versions(out_path)
 
     store = _skill_store(skill, template.dir)
@@ -327,9 +362,13 @@ def build_tier1(
     body_end = "\n".join(js_parts + [chrome_js])
 
     skeleton = _read_text_file(template.dir / str(template.skeleton), "skeleton")
+    if data is not None and "{{data}}" not in skeleton:
+        raise BuildError(
+            f"template {template.name!r} has no {{{{data}}}} placeholder in its skeleton, "
+            "so the source's data field cannot be used"
+        )
     signal = f"judgment: {source.tier_reason}" if source.tier_reason else None
     built_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    data = _load_data(source)
 
     def render(sidecar: Optional[str]) -> str:
         meta = {
@@ -360,24 +399,36 @@ def build_tier1(
 
     sidecar_name: Optional[str] = None
     page = render(None)
-    if data is not None and len(page.encode("utf-8")) > SIZE_FAIL:
-        sidecar_name = f"{out_path.stem}.data{data.suffix}"
-        page = render(sidecar_name)
+    try:
+        page_size = len(page.encode("utf-8"))
+        if data is not None and page_size > SIZE_FAIL:
+            sidecar_name = f"{slug}.data{data.suffix}"
+            page = render(sidecar_name)
+            page_size = len(page.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise BuildError(f"the page contains a character UTF-8 cannot encode (a lone surrogate?): {exc}") from exc
 
-    if out is None or out_path.parent.resolve() == default_dir.resolve():
-        ensure_self_ignoring(out_path.parent)
-    else:
-        out_path.parent.mkdir(parents=True, exist_ok=True)
     sidecar_path: Optional[Path] = None
-    if sidecar_name is not None and data is not None:
-        sidecar_path = out_path.parent / sidecar_name
-        atomic_write(sidecar_path, data.path.read_bytes())
-    atomic_write(out_path, page)
+    try:
+        if _is_quirk_output_dir(out_path.parent):
+            ensure_self_ignoring(out_path.parent)
+        else:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+        if data is not None:
+            stale = out_path.parent / f"{slug}.data{data.suffix}"
+            if sidecar_name is not None:
+                sidecar_path = stale
+                atomic_write(sidecar_path, data.path.read_bytes())
+            elif stale.is_file() and stale.resolve() != data.path:
+                stale.unlink()
+        atomic_write(out_path, page)
+    except OSError as exc:
+        raise BuildError(f"cannot write the build output under {out_path.parent}: {exc}") from exc
 
     result_checks = run_checks(page, mode=source.mode, tier=1, vendor=store, shells=default_shells(skill))
     return {
         "path": str(out_path),
-        "size": len(page.encode("utf-8")),
+        "size": page_size,
         "sidecar": str(sidecar_path) if sidecar_path else None,
         "source_dir": None,
         "template": template.name,
@@ -446,8 +497,7 @@ def check_artifact(
     )
 
 
-def _verify_line(path: Path, stale: bool) -> list[str]:
-    report_path = default_out_dir(path) / "report.json"
+def _verify_line(report_path: Path, stale: bool) -> list[str]:
     try:
         report = json.loads(report_path.read_text())
     except (OSError, ValueError):
@@ -477,16 +527,19 @@ def delivery_note(
     project_dir: Path,
     user_dir: Optional[Path],
     skill_dir: Optional[Path] = None,
+    verify_dir: Optional[Path] = None,
 ) -> dict:
     """The delivery note for a built file: ``{"markdown": str, "verify_stale": bool}``.
 
     ``verify_stale`` is true when no verify report exists for the file's current contents.
+    The report is read from ``verify_dir``, default ``<file stem>.verify/`` beside the file.
     """
     path = Path(path).resolve()
     meta = read_artifact_header(path)
     size = path.stat().st_size
     checked = check_artifact(path, project_dir=project_dir, user_dir=user_dir, skill_dir=skill_dir)
-    stale = report_is_stale(path, default_out_dir(path) / "report.json")
+    report_path = (Path(verify_dir) if verify_dir is not None else default_out_dir(path)) / "report.json"
+    stale = report_is_stale(path, report_path)
     libraries = meta.get("libraries") if isinstance(meta.get("libraries"), dict) else {}
 
     lines = [f"Built `{path}` ({size:,} bytes)."]
@@ -515,7 +568,7 @@ def delivery_note(
     if size > SIZE_WARN:
         why = " Mermaid alone is about 5 MB, so this is expected." if "mermaid" in libraries else ""
         lines.append(f"- Size: over 2 MB, so the file may be slow to open.{why}")
-    lines.extend(f"- {line}" if not line.startswith("  ") else line for line in _verify_line(path, stale))
+    lines.extend(f"- {line}" if not line.startswith("  ") else line for line in _verify_line(report_path, stale))
     lines.append("")
     lines.append("Want me to open it or publish it?")
     return {"markdown": "\n".join(lines), "verify_stale": stale}

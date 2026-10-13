@@ -460,7 +460,8 @@ def test_note_lists_every_delivery_fact_and_is_stale_before_verify(tmp_path, env
     assert "report" in note and "builtin" in note
     assert re.search(r"tier\s*1", note, re.I)
     assert "offline" in note
-    assert "simple-css 2.3.7" in note and "alpine 3.17.4" in note and "chartjs 4.5.1" in note
+    for lib in ("simple-css", "alpine", "chartjs"):
+        assert f"{lib} {REAL_STORE.resolve(lib, None).version}" in note
     assert "not browser-verified" in note
     last = [line for line in note.strip().splitlines() if line.strip()][-1].lower()
     assert "open" in last and "publish" in last
@@ -542,3 +543,132 @@ def test_build_refuses_a_tier_2_template(tmp_path, env, project):
     src = write_src(tmp_path / "a.src.html", {"template": "app2", "title": "T"}, {"main": "x"})
     rc, result = build(src, tmp_path / "a.html", env, project)
     assert rc == 2 and "tier 2" in result["error"]
+
+
+def data_src(tmp_path: Path, data_name: str, **meta: object) -> Path:
+    return write_src(
+        tmp_path / "d.src.html",
+        {"template": "report", "title": "Data", "data": data_name, **meta},
+        {"main": "<p>x</p>"},
+    )
+
+
+def test_oversized_csv_field_is_exit_2_with_json(tmp_path, env, project):
+    (tmp_path / "big.csv").write_text("a\n" + "x" * 200_000 + "\n", encoding="utf-8")
+    rc, result = build(data_src(tmp_path, "big.csv"), tmp_path / "o.html", env, project)
+    assert rc == 2 and "big.csv" in result["error"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    ['{"v": NaN}', '{"v": -Infinity}', '[Infinity]', '{"v": 1e999}', '{"v": "\\ud800"}', "[" * 100_000 + "]" * 100_000],
+    ids=["nan", "neg-inf", "inf", "overflow", "lone-surrogate", "deep"],
+)
+def test_unembeddable_json_data_is_exit_2_naming_the_file(tmp_path, env, project, text):
+    (tmp_path / "bad.json").write_text(text, encoding="utf-8")
+    rc, result = build(data_src(tmp_path, "bad.json"), tmp_path / "o.html", env, project)
+    assert rc == 2 and "bad.json" in result["error"]
+    assert not (tmp_path / "o.html").exists()
+
+
+def test_unwritable_output_is_exit_2_not_a_traceback(tmp_path, env, project):
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a file, not a directory", encoding="utf-8")
+    src = write_src(tmp_path / "p.src.html", {"template": "report", "title": "T"}, {"main": "<p>x</p>"})
+    rc, result = build(src, blocker / "sub" / "p.html", env, project)
+    assert rc == 2 and "error" in result
+
+
+def test_out_equal_to_source_or_data_is_refused_and_leaves_them_intact(tmp_path, env, project):
+    (tmp_path / "d.json").write_text('{"a": 1}', encoding="utf-8")
+    src = data_src(tmp_path, "d.json")
+    before = src.read_text(encoding="utf-8")
+    rc, result = build(src, src, env, project)
+    assert rc == 2 and "error" in result and src.read_text(encoding="utf-8") == before
+    rc, result = build(src, tmp_path / "sub" / ".." / "d.json", env, project)
+    assert rc == 2 and (tmp_path / "d.json").read_text(encoding="utf-8") == '{"a": 1}'
+
+
+def test_data_path_must_stay_inside_the_project_or_source_directory(tmp_path, env, project):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "d.json").write_text('{"a": 1}', encoding="utf-8")
+    srcdir = tmp_path / "src"
+    srcdir.mkdir()
+    for ref in (str(outside / "d.json"), "../outside/d.json"):
+        src = write_src(srcdir / "d.src.html", {"template": "report", "title": "T", "data": ref}, {"main": "<p>x</p>"})
+        rc, result = build(src, tmp_path / "o.html", env, project)
+        assert rc == 2 and "outside" in result["error"], ref
+
+
+def test_data_inside_the_project_directory_is_allowed_from_another_source_directory(tmp_path, env, project):
+    (project / "d.json").write_text('{"a": 1}', encoding="utf-8")
+    srcdir = tmp_path / "src"
+    srcdir.mkdir()
+    src = write_src(srcdir / "d.src.html", {"template": "report", "title": "T", "data": str(project / "d.json")}, {"main": "<p>x</p>"})
+    rc, result = build(src, tmp_path / "o.html", env, project)
+    assert rc == 0, result
+
+
+def test_data_with_a_skeleton_lacking_the_data_placeholder_is_exit_2_naming_the_template(tmp_path, env, project):
+    custom_template(project, skeleton=SKELETON.replace("{{data}}", ""))
+    seal(project / ".quirk" / "html-templates" / "fx")
+    (tmp_path / "d.json").write_text('{"a": 1}', encoding="utf-8")
+    src = write_src(tmp_path / "d.src.html", {"template": "fx", "title": "T", "data": "d.json"}, {"main": "<p>x</p>"})
+    rc, result = build(src, tmp_path / "o.html", env, project)
+    assert rc == 2 and "'fx'" in result["error"] and "{{data}}" in result["error"]
+
+
+@pytest.mark.parametrize("sub", [".quirk/brainstorm", ".quirk/html/nested/deeper"])
+def test_explicit_out_under_a_quirk_output_directory_gets_a_gitignore(tmp_path, env, project, sub):
+    src = write_src(tmp_path / "plain.src.html", {"template": "report", "title": "Plain page"}, {"main": "<p>Body.</p>"})
+    out_dir = tmp_path / "other-project" / sub
+    rc, result = build(src, out_dir / "x.html", env, project)
+    assert rc == 0, result
+    assert (out_dir / ".gitignore").read_text(encoding="utf-8").strip() == "*"
+
+
+def test_sidecar_is_named_from_the_source_slug_and_removed_when_data_is_embedded_later(tmp_path, env, project):
+    data = tmp_path / "d.json"
+    data.write_text(json.dumps({"blob": ["x" * 1000] * 11_000}), encoding="utf-8")
+    src = data_src(tmp_path, "d.json")
+    out = tmp_path / "out" / "other.html"
+    rc, result = build(src, out, env, project)
+    sidecar = out.parent / "d.data.json"
+    assert rc == 0 and result["sidecar"] == str(sidecar) and sidecar.is_file()
+    assert header.read_header(out.read_text(encoding="utf-8"))["sidecar"] == "d.data.json"
+
+    data.write_text('{"a": 1}', encoding="utf-8")
+    rc, result = build(src, out, env, project)
+    assert rc == 0 and result["sidecar"] is None and not sidecar.exists()
+
+
+def test_a_data_file_named_like_the_sidecar_survives_an_embedding_build(tmp_path, env, project):
+    data = tmp_path / "d.data.json"
+    data.write_text('{"a": 1}', encoding="utf-8")
+    src = data_src(tmp_path, "d.data.json")
+    rc, _ = build(src, tmp_path / "o.html", env, project)
+    assert rc == 0 and data.is_file()
+
+
+def test_every_subcommand_failure_keeps_to_one_json_object(tmp_path, env, project):
+    directory = tmp_path / "adir"
+    directory.mkdir()
+    for command in ("check", "note", "verify"):
+        rc, result = run_cli(command, directory, env=env)
+        assert rc == 2 and "error" in result
+
+
+def test_note_reads_a_report_from_verify_dir(tmp_path, env, project):
+    out = built_example(tmp_path, env, project)
+    report_dir = tmp_path / "custom-verify"
+    report_dir.mkdir()
+    report = {"status": "passed", "file_sha256": sha(out.read_text(encoding="utf-8")), "browser": "chrome",
+              "checks": {}, "screenshots": [], "requests": []}
+    (report_dir / "report.json").write_text(json.dumps(report), encoding="utf-8")
+
+    rc, result = run_cli("note", out, env=env)
+    assert result["verify_stale"] is True
+    rc, result = run_cli("note", out, "--verify-dir", report_dir, env=env)
+    assert rc == 0 and result["verify_stale"] is False
+    assert "passed in chrome" in result["markdown"]

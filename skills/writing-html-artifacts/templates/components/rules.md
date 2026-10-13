@@ -11,7 +11,7 @@ Read after the [design reference](../../references/design-reference.md). These r
 
 ## Web Awesome
 
-- Use the `<wa-*>` elements for what plain HTML lacks (tabs, dialog, select, switch, button). Use native elements (`<details>`, `<table>`, `<dialog>` is not needed) for everything else.
+- Use the `<wa-*>` elements for what plain HTML lacks (tabs, dialog, select, switch, button). Use native elements such as `<details>` and `<table>` for everything else, and `wa-dialog` for dialogs.
 - Every control has a visible `label` or an `aria-label`. A `wa-dialog` has a `label` attribute, which is its title.
 - The theme maps Web Awesome's color variables onto the `--q-*` tokens, so components follow light and dark themes. Do not set `--wa-*` colors or hard-coded colors in the page.
 - Web Awesome events: use the native `change` and `input` events for form components, `wa-tab-show` for tabs, `wa-after-hide` for a dialog. Read values from `event.target`.
