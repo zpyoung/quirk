@@ -109,7 +109,7 @@ Rules for using them:
 - Never carry meaning by color alone. Pair it with text, an icon with a `<title>`, a pattern, or position.
 - Do not stack text on an image or gradient. If you must, put it on an opaque surface.
 - Muted text (`--q-color-text-muted`) still needs 4.5:1 on its background. Do not lower its opacity further.
-- The theme follows the OS and has a toggle in the chrome. Do not build a second toggle, and do not read `matchMedia` to restyle in JS; the CSS variables already switch.
+- The theme follows the OS and has a toggle in the chrome. Do not build a second toggle, and do not read `matchMedia` to restyle in JS; the CSS variables already switch. The only JS that needs the theme is canvas-drawn content, which listens for the `quirk-theme` event (section 9).
 
 ## 7. Shape and depth
 
@@ -176,7 +176,7 @@ Notes that apply to all five:
 
 - Put the canvas in a wrapper with a fixed height and set `maintainAspectRatio: false`.
 - The `<canvas>` carries `role="img"` and an `aria-label` that states the finding ("Median build time fell from 14 to 9 minutes between June and September"), not the chart type.
-- Read colors from the page's custom properties with `getComputedStyle` when creating the chart, and rebuild the chart when the theme toggles.
+- Read colors from the page's custom properties with `getComputedStyle` when creating the chart, and rebuild the chart on the `quirk-theme` event. The chrome fires it on `document` whenever the mode or the effective theme changes (the toggle, or the OS scheme in auto mode), with `detail: {mode: 'auto'|'light'|'dark', effective: 'light'|'dark'}`; re-read the custom properties inside the handler. When a chart reads data through `window.quirkData()`, `window.quirkData.onChange(callback)` re-renders it after the viewer picks a different file.
 - Set `animation: false`, or keep it under 400ms, so verify screenshots show the finished chart.
 
 ## 10. Interaction and motion
