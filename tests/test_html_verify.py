@@ -10,6 +10,9 @@ import hashlib
 import json
 import shutil
 import sys
+import threading
+from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -146,9 +149,70 @@ def test_low_contrast_dark_fixture_fails_themes(tmp_path: Path) -> None:
     assert any("dark" in d for d in result["checks"]["themes"]["details"])
 
 
+class _Recorder:
+    def __init__(self, url: str, paths: list[str]) -> None:
+        self.url = url
+        self.paths = paths
+
+
+@pytest.fixture
+def local_server() -> Iterator[_Recorder]:
+    paths: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            paths.append(self.path)
+            body = b'{"ok": true}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield _Recorder(f"http://127.0.0.1:{server.server_address[1]}/data.json", paths)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def _connected_page(tmp_path: Path, target: str) -> Path:
+    page = tmp_path / "connected.html"
+    page.write_text((FIXTURES / "connected.html").read_text().replace("__TARGET__", target))
+    return page
+
+
 @pytest.mark.usefixtures("browser_ready")
-def test_connected_mode_reports_requests_without_failing(tmp_path: Path) -> None:
-    result = _run("fetches.html", tmp_path, mode="connected")
+def test_connected_mode_lets_requests_through_and_reports_them(tmp_path: Path, local_server: _Recorder) -> None:
+    page = _connected_page(tmp_path, local_server.url)
+    result = verify_runner.run_verify(page, tmp_path / "out", mode="connected")
     assert result["checks"]["network"]["passed"] is True
-    assert any("https://example.com/x" in url for url in result["requests"])
+    assert local_server.url in result["requests"]
+    assert "/data.json" in local_server.paths
     assert result["status"] == "passed", result
+
+
+@pytest.mark.usefixtures("browser_ready")
+def test_offline_mode_blocks_the_same_page(tmp_path: Path, local_server: _Recorder) -> None:
+    page = _connected_page(tmp_path, local_server.url)
+    result = verify_runner.run_verify(page, tmp_path / "out", mode="offline")
+    assert result["checks"]["network"]["passed"] is False
+    assert local_server.url in result["requests"]
+    assert local_server.paths == []
+
+
+@pytest.mark.usefixtures("browser_ready")
+def test_connected_mode_counts_console_errors_from_passed_through_requests(tmp_path: Path) -> None:
+    page = tmp_path / "broken.html"
+    page.write_text((FIXTURES / "connected.html").read_text().replace("__TARGET__", "http://127.0.0.1:1/refused"))
+    result = verify_runner.run_verify(page, tmp_path / "out", mode="connected")
+    assert result["checks"]["network"]["passed"] is True
+    assert result["checks"]["console"]["passed"] is False
