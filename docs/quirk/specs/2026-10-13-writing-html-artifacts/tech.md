@@ -222,7 +222,8 @@ Back-link: [Templates](logic.md#templates).
 
 SCHEMA: `{"schema": 1, "verified_at": "<ISO>", "browser": true | false, "hashes": {"<relative path>": "<sha256>"}}`
 covering `template.json`, the skeleton, tokens, rules, every file under `vendor/`, and the example.
-For tier 2 it covers `template.json`, `project/package.json` and `project/pnpm-lock.yaml`. A
+For tier 2 it covers `template.json` and every file under `project/` and `example/` except
+`node_modules` and `dist`; for tier 1 it also covers the example's data file. A
 missing file or a hash mismatch makes the template invalid with reason `unverified`.
 
 ### 3.7 Companion screen spec: `screen.json`
@@ -256,7 +257,7 @@ Back-link: [Companion](logic.md#companion).
 | `screens/NNNN-<slug>.html` | `show` | the built screen; `NNNN` is a zero-padded counter, never reused |
 | `state/current.json` | `show` | `{"screen": "NNNN-<slug>", "nonce": "<token>", "shown_at": <epoch float>}` |
 | `state/server-info` | `start` | the `server-started` JSON |
-| `state/server-stopped` | server on exit | `{"reason": "idle" | "stop" | "signal", "at": <epoch>}` |
+| `state/server-stopped` | server on exit, or a client that finds the recorded pid dead | `{"reason": "idle" | "stop" | "signal" | "stale", "at": <epoch>}`; `stale` is written by a client only when the recorded pid is dead |
 | `state/events` | server | JSONL, one record per accepted event |
 
 Event record SCHEMA:
@@ -335,8 +336,9 @@ Back-link: [Building](logic.md#building), [Modes](logic.md#modes).
      it. The header takes its `title`, `mode` and `tier_signal` from there.
   2. Find `pnpm` on PATH, else `corepack pnpm`. Neither found is exit 3 with reason `no-pnpm`.
      `node` missing is exit 3 with reason `no-node`.
-  3. `pnpm install --frozen-lockfile --ignore-scripts` (so a cloned repo's template can't run install
-     scripts), then `pnpm run build`, each with a 600 s timeout. A failure
+  3. `pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile` (so a cloned repo's template
+     can't run install scripts or a pnpmfile), then `pnpm run build` (the merged token layers are first written to `src/quirk-tokens.css`),
+     each with a 600 s timeout. A failure
      is exit 3 with reason `install-failed` or `build-failed` and the last 40 lines of output.
   4. Read `dist/index.html`, insert the header and one license comment per production dependency
      listed in the template's `package.json` (license read from
@@ -380,6 +382,7 @@ CONTRACT:
 
 ```
 companion.py start SESSION_DIR [--host 127.0.0.1] [--port 0] [--idle-minutes 30] [--foreground]
+                          [--allow-host HOST[:PORT]]...
     → {"type": "server-started", "pid", "port", "host", "url", "screen_dir", "state_dir"}
 companion.py show SESSION_DIR SCREEN.json [--project-dir DIR]
     → {"screen", "nonce", "url", "checks": CheckResult}
@@ -391,7 +394,8 @@ companion.py stop SESSION_DIR                  → {"stopped": bool}
 
 - `start` without `--foreground` re-executes itself detached (`subprocess.Popen` with
   `start_new_session=True`, stdio to `state/server.log`), waits until `state/server-info` appears,
-  and prints it. It is idempotent: a live server for the session is reused and its info printed.
+  and prints it. `--allow-host` (repeatable) adds a `Host` value the server accepts, for remote or
+  forwarded access. It is idempotent: a live server for the session is reused and its info printed.
 - HTTP routes:
   - `GET /` → the current screen's HTML. Before any `show`, a waiting page.
   - `GET /_quirk/state` → `{"screen", "nonce"}`. Screens poll it every 2 s and show the
@@ -407,8 +411,8 @@ companion.py stop SESSION_DIR                  → {"stopped": bool}
   screen whose timestamp is at or after `shown_at`. The events file is append-only and never
   cleared, so re-running `wait` after a timeout loses nothing.
   - Exit `0` returns the payload. Exit `1` means a timeout; stderr says to re-run `wait`. Exit `2`
-    means no live server (missing or unparseable `server-info`, `server-stopped` present, or a
-    dead pid), the same liveness rules as `bin/agent_isles.py:315-332`.
+    means no live server (missing or unparseable `server-info`, `server-stopped` present, a
+    dead pid, or a recorded port that does not answer as a companion), the same liveness rules as `bin/agent_isles.py:315-332`.
   - The default timeout of 110 s stays under a host's 120 s tool limit.
   - On exit 1 stdout is `{"status": "timeout", "screen"}`; on exit 2 it is
     `{"status": "no-server"}`.
@@ -447,6 +451,7 @@ Back-link: [Browser verify](logic.md#browser-verify).
     request, and a `request` listener recording anything not `file:`, `data:`, `blob:` or `about:`.
     Offline mode aborts and fails on any recorded URL. Connected mode lets requests through
     (`route.continue()`) and reports them without failing, so the page's real behavior is verified.
+- A verifier crash or timeout is `status: "failed"`.
 - Output goes to `<file stem>.verify/` beside the file: `report.json` (the `VerifyResult`) and
   `375-light.png`, `375-dark.png`, `1280-light.png`, `1280-dark.png`.
 - `report.json.file_sha256` is the hash of the file verify ran on. `note` compares it with the
@@ -608,3 +613,10 @@ Back-link: [Deferred Ideas](logic.md#deferred-ideas).
 
 - 2026-10-13, after the wave-1 review, decided by the user: tier-2 installs always use
   `--ignore-scripts` (§4.2), and connected-mode verify lets requests through while recording them (§4.5).
+- 2026-10-13, from the final review: tier-2 install also passes `--ignore-pnpmfile` and tier-2 builds
+  write the merged token layers to `src/quirk-tokens.css` (§4.2); `verified.json` covers every file
+  under `project/` and `example/` for tier 2, plus the example's data file for tier 1 (§3.6);
+  `server-stopped` may carry reason `stale`, written by a client only when the recorded pid is dead,
+  and liveness also requires the recorded port to answer as a companion (§3.8, §4.4);
+  `start --allow-host HOST[:PORT]` is repeatable, for remote or forwarded access (§4.4); a verifier
+  crash or timeout is status `failed` (§4.5).
