@@ -166,7 +166,11 @@ For `NO_EFFECT`, `NOT_ALLOWLISTED`, and repeated `ERROR`, in order:
 1. **Retry once.** `observe` first, then repeat the action against the same visible target.
 2. **One alternate route.** A different visible control for the same job, or a standard shortcut
    such as `hotkey --key cmd+s` with its effect verified on screen.
-3. **Ask or block.** Attended: ask the user for a hint in chat, or use
+3. **Note the dead control.** When the ladder ends on a control that does nothing, record it
+   before anything else: `likeuser.py note --run "$RUN" --finding-kind other --summary-stdin`, naming
+   the control and what it failed to do. The finding joins the goal of the latest observation (`--obs`
+   picks another) and its screenshot becomes the goal's evidence.
+4. **Ask or block.** Attended: ask the user for a hint in chat, or use
    `handoff --reason hint` when they need to show you in the window. Unattended: `verdict --status
    blocked` with the evidence.
 

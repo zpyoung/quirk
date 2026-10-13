@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import sys
 import time
@@ -64,13 +65,94 @@ def test_state_root_falls_back_to_cwd_outside_a_repo(tmp_path, monkeypatch):
     assert got.is_dir()
 
 
-def test_state_root_keeps_an_existing_gitignore(tmp_path, monkeypatch):
+def test_state_root_keeps_the_lines_of_an_existing_gitignore_and_adds_the_catch_all(tmp_path, monkeypatch):
     target = tmp_path / "state"
     target.mkdir()
     (target / ".gitignore").write_text("custom\n")
     monkeypatch.setenv("LIKEUSER_STATE_ROOT", str(target))
     run.state_root(tmp_path)
-    assert (target / ".gitignore").read_text() == "custom\n"
+    assert (target / ".gitignore").read_text() == "custom\n*\n"
+
+
+@pytest.mark.parametrize("before, after", [
+    ("custom", "custom\n*\n"),
+    ("*\n", "*\n"),
+    ("# keep\n*\n", "# keep\n*\n"),
+    ("*\n!keep.json\n", "*\n!keep.json\n*\n"),
+    ("\n", "\n*\n"),
+    ("", "*\n"),
+])
+def test_state_root_guarantees_the_gitignore_ends_in_the_catch_all(tmp_path, monkeypatch, before, after):
+    target = tmp_path / "state"
+    target.mkdir()
+    (target / ".gitignore").write_text(before)
+    monkeypatch.setenv("LIKEUSER_STATE_ROOT", str(target))
+    run.state_root(tmp_path)
+    run.state_root(tmp_path)
+    assert (target / ".gitignore").read_text() == after
+
+
+def test_state_root_never_writes_through_a_symlinked_gitignore(tmp_path, monkeypatch):
+    target = tmp_path / "state"
+    target.mkdir()
+    project_ignore = tmp_path / "project.gitignore"
+    project_ignore.write_text("node_modules\n")
+    (target / ".gitignore").symlink_to(project_ignore)
+    monkeypatch.setenv("LIKEUSER_STATE_ROOT", str(target))
+    run.state_root(tmp_path)
+    assert project_ignore.read_text() == "node_modules\n"
+    assert not (target / ".gitignore").is_symlink()
+    assert (target / ".gitignore").read_text() == "*\n"
+
+
+def mode(path):
+    return stat.S_IMODE(Path(path).stat().st_mode)
+
+
+@pytest.fixture
+def loose_umask():
+    previous = os.umask(0o022)
+    yield
+    os.umask(previous)
+
+
+def test_the_state_root_and_runs_folder_are_private_whatever_the_umask(tmp_path, monkeypatch, loose_umask):
+    monkeypatch.setenv("LIKEUSER_STATE_ROOT", str(tmp_path / "state"))
+    state = run.state_root(tmp_path)
+    created = make_run(state)
+    assert mode(state) == 0o700
+    assert mode(state / "runs") == 0o700
+    assert mode(created.dir) == 0o700
+
+
+def test_every_file_a_run_writes_is_private_whatever_the_umask(root, loose_umask):
+    created = make_run(root)
+    created.add_goal("g1", "goal")
+    created.event("act", {"k": "v"}, "ok", 5)
+    created.write_report()
+    for name in ("run.json", "events.jsonl", "report.json", "report.md"):
+        assert mode(created.dir / name) == 0o600, name
+    assert mode(root / ".gitignore") == 0o600
+
+
+def test_harden_makes_files_other_tools_left_in_the_run_folder_private(root, loose_umask, tmp_path):
+    created = make_run(root)
+    folder = created.dir / ".playwright-cli" / "nested"
+    folder.mkdir(parents=True)
+    leaked = folder / "page.yml"
+    leaked.write_text("secret page text")
+    leaked.chmod(0o644)
+    shot = created.dir / "obs-1.png"
+    shot.write_bytes(b"png")
+    shot.chmod(0o666)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("not ours")
+    outside.chmod(0o644)
+    (created.dir / "link").symlink_to(outside)
+    created.harden()
+    assert mode(leaked) == 0o600 and mode(shot) == 0o600
+    assert mode(created.dir / ".playwright-cli") == 0o700 and mode(folder) == 0o700
+    assert mode(outside) == 0o644
 
 
 def test_new_run_id_format():

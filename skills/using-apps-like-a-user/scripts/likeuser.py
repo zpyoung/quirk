@@ -72,7 +72,6 @@ MIN_REDACT_CHARS = 4
 CDP_PORTS = range(9222, 9300)
 CDP_LOCK_NAME = "cdp-ports.lock"
 DEFAULT_CREDENTIALS_PREFIX = "LIKEUSER"
-ELECTRON_DEV_BUNDLE = "com.github.Electron"
 GOAL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SESSION_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 NATIVE_PREFIX = "n:"
@@ -82,6 +81,7 @@ ACTION_KINDS = (
     "drag", "select", "dismiss",
 )
 POINT_KINDS = ("click", "double-click", "right-click")
+FOCUSED_VALUE_KINDS = ("type", "press", "hotkey")
 EXPECTS = ("url", "title", "tree", "focus", "value", "screen", "any")
 GATES = ("none", "requested", "approved", "created")
 FINDING_KINDS = (
@@ -103,11 +103,13 @@ def _digest(text: Optional[str]) -> Optional[str]:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:20]
 
 
-def _write_text(path: Path, text: str, mode: Optional[int] = None) -> None:
+def _write_text(path: Path, text: str, mode: int = _run.PRIVATE_FILE_MODE) -> None:
+    """Replace `path` with `text` through a temp file that is never readable beyond `mode`."""
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    if mode is not None:
-        os.chmod(str(tmp), mode)
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        os.fchmod(handle.fileno(), mode)
+        handle.write(text)
     os.replace(str(tmp), str(path))
 
 
@@ -239,6 +241,7 @@ class Ctx:
         self.status = "ok"
         self.goal_id: Optional[str] = None
         self.faults: frozenset = frozenset()
+        self.credentials_lost = False
 
     def secrets(self):
         return self.run.secrets if self.run is not None else set()
@@ -280,21 +283,40 @@ def _add_credential(run: _run.Run, value: Optional[str]) -> None:
 
 
 def _prime_credentials(run: _run.Run) -> None:
-    source = run.data.get("credentials") or {}
+    """Load the run's credentials into its redaction set.
+
+    A run that began with credentials raises `MissingError` when they cannot be reloaded, because
+    continuing would leave them unredacted. A run that began without any redacts the default
+    `LIKEUSER_*` variables when they are set, and is otherwise unaffected.
+    """
+    source = run.data.get("credentials")
     try:
-        creds = _run.load_credentials(source.get("prefix"),
-                                      Path(source["file"]) if source.get("file") else None)
+        creds = _run.load_credentials((source or {}).get("prefix"),
+                                      Path(source["file"]) if source and source.get("file") else None)
     except MissingError:
+        if source:
+            raise
         return
     for value in creds.values():
         _add_credential(run, value)
 
 
-def _load(ctx: Ctx, run_id: str, allow_ended: bool = False) -> _run.Run:
+def _load(ctx: Ctx, run_id: str, allow_ended: bool = False,
+          tolerate_lost_credentials: bool = False) -> _run.Run:
+    """Load a run and prime its redaction sets.
+
+    With `tolerate_lost_credentials`, a credential source that cannot be reloaded sets
+    `ctx.credentials_lost` instead of raising, for the verb that must still release the desktop.
+    """
     ctx.root = _run.state_root(Path.cwd())
     run = _run.Run.load(ctx.root, run_id)
     ctx.run = run
-    _prime_credentials(run)
+    try:
+        _prime_credentials(run)
+    except MissingError:
+        if not tolerate_lost_credentials:
+            raise
+        ctx.credentials_lost = True
     for value in _run.recall_typed(ctx.root, run_id):
         _add_secret(run, value)
     if run.data.get("ended") and not allow_ended:
@@ -335,7 +357,7 @@ class Drivers:
             driver = get_native_driver(name=_native_name(self.run), session=self.run.data["run_id"])
             window = self.run.data["window"]
             if window["bundle_id"]:
-                driver.bind(window["bundle_id"], window["window_id"])
+                driver.bind(window["bundle_id"], window["window_id"], window.get("pid"))
             self._native = driver
         return self._native
 
@@ -372,6 +394,7 @@ def _copy_shot(source: Optional[Path], dest: Path) -> Optional[Path]:
         return None
     try:
         shutil.copyfile(str(source), str(dest))
+        os.chmod(str(dest), _run.PRIVATE_FILE_MODE)
     except OSError:
         return None
     return dest
@@ -728,19 +751,20 @@ def _listener_pids(port: int) -> Optional[set]:
     return {int(token) for token in out.stdout.split() if token.isdigit()}
 
 
-def _verify_cdp_owner(port: int, proc: subprocess.Popen) -> None:
+def _verify_cdp_owner(port: int, proc: subprocess.Popen) -> Optional[int]:
     """Refuse to attach when something other than the launched app (or its children) holds `port`.
 
-    The app starts in its own session, so its process group id is its pid. A port whose
-    listeners cannot be identified is accepted.
+    The app starts in its own session, so its process group id is its pid. Returns the pid of the
+    listener that belongs to the launched app: `proc` itself, or the Electron child a wrapper
+    command started. Returns None when the port's listeners cannot be identified, which is accepted.
     """
     listeners = _listener_pids(port)
     if not listeners:
-        return
-    for pid in listeners:
+        return None
+    for pid in sorted(listeners):
         try:
             if pid == proc.pid or os.getpgid(pid) == proc.pid:
-                return
+                return pid
         except ProcessLookupError:
             continue
     raise DriverError("cdp_port_conflict",
@@ -764,14 +788,15 @@ def _wait_for_cdp(port: int, proc: subprocess.Popen) -> None:
         time.sleep(0.2)
 
 
-def _bundle_for_pid(pid: int) -> str:
+def _bundle_for_pid(pid: int) -> Optional[str]:
+    """The bundle id LaunchServices registers for `pid`, waiting briefly for a new process; None when it has none."""
     deadline = time.monotonic() + PID_BUNDLE_WAIT_S
     while True:
         found = _desktop.bundle_id_for_pid(pid)
         if found:
             return found
         if os.environ.get("LIKEUSER_FAKE_DESKTOP") or time.monotonic() >= deadline:
-            return ELECTRON_DEV_BUNDLE
+            return None
         time.sleep(0.25)
 
 
@@ -922,7 +947,7 @@ def cmd_begin(args, ctx: Ctx):
         "budget": {"run_cap": args.budget_run or _run.DEFAULT_RUN_CAP,
                    "goal_cap": args.budget_goal or _run.DEFAULT_GOAL_CAP},
         "window": {"bundle_id": None, "window_id": None, "session": None, "cdp_port": None,
-                   "native_driver": None},
+                   "native_driver": None, "pid": None},
     }
     try:
         run = _run.Run.create(root, fields)
@@ -1068,13 +1093,15 @@ def _begin_electron(args, run: _run.Run, drivers: Drivers) -> None:
         run.data["window"]["cdp_port"] = port
         proc = _spawn_app(args, run, port)
         _wait_for_cdp(port, proc)
-        _verify_cdp_owner(port, proc)
+        owner = _verify_cdp_owner(port, proc)
     drivers.web.attach_cdp(f"http://127.0.0.1:{port}")
     saved = _session_file(run, args.session_key) if args.session_key else None
     if saved is not None and saved.is_file():
         drivers.web.state_load(saved)
         run.data["session_loaded"] = True
-    run.data["window"]["bundle_id"] = _bundle_for_pid(proc.pid)
+    pid = owner or proc.pid
+    run.data["window"]["pid"] = pid
+    run.data["window"]["bundle_id"] = _bundle_for_pid(pid) or f"pid:{pid}"
 
 
 def _spawn_app(args, run: _run.Run, port: int) -> subprocess.Popen:
@@ -1106,8 +1133,9 @@ def _begin_native(args, run: _run.Run, drivers: Drivers) -> NativeDriver:
         run.data["launched"].append(_launch_native_app(args.target))
         run.save()
     bundle = window["bundle_id"]
+    driver.bind(bundle, None, window.get("pid"))
     window["window_id"] = _find_window(driver, bundle, WINDOW_WAIT_S)
-    driver.bind(bundle, window["window_id"])
+    driver.bind(bundle, window["window_id"], window.get("pid"))
     return driver
 
 
@@ -1413,6 +1441,7 @@ def _act(args, ctx: Ctx) -> dict:
     if subject and "skip_gate" not in ctx.faults and _run.gate_matches(subject, data["owner"]):
         if req.gate == "none":
             run.record_gate(args.obs, subject, "stopped")
+            _add_evidence(run, goal_id, record["screenshot_path"] if record else None)
             return _act_result(run, goal_id, "GATE_REQUIRED", subject=subject)
         if req.gate == "approved" and not data["attended"]:
             raise UsageError("unattended_approval",
@@ -1449,15 +1478,20 @@ def _act_perform(args, ctx: Ctx, run: _run.Run, drivers: Drivers, req: ActReques
                  sidecar: dict, goal_id: Optional[str], route: str, uses_foreground: bool,
                  secret_value: Optional[str]) -> dict:
     data = run.data
+    elements = sidecar.get("elements", {})
+    value_ref = req.ref
+    if value_ref is None and req.kind in FOCUSED_VALUE_KINDS:
+        value_ref = sidecar.get("focus_ref")
     before = _effects.Signals(
         url=sidecar["signals"]["url"], title=sidecar["signals"]["title"],
         tree=sidecar["signals"]["tree"], focus=sidecar["signals"]["focus"],
-        value=sidecar["value_digests"].get(req.ref) if req.ref else None,
+        value=sidecar["value_digests"].get(value_ref) if value_ref else None,
         screen_hash=sidecar["signals"]["screen_hash"])
-    pending_name = None
+    pending_password = None
     if req.secret == "password":
-        focus_ref = req.ref or sidecar.get("focus_ref")
-        pending_name = sidecar["names"].get(focus_ref) if focus_ref else None
+        password_ref = req.ref or sidecar.get("focus_ref")
+        if password_ref:
+            pending_password = {"ref": password_ref, "element": elements.get(password_ref)}
     action = _build_action(run, req, sidecar.get("scale"),
                            secret_value if req.secret else req.text)
     stage = "act"
@@ -1479,10 +1513,10 @@ def _act_perform(args, ctx: Ctx, run: _run.Run, drivers: Drivers, req: ActReques
         if req.secret:
             snap = snap._replace(screenshot_withheld=True)
         after_ref = None
-        if req.ref:
-            after_ref = _correlate(run, snap, req.ref, sidecar.get("elements", {}).get(req.ref))
+        if value_ref:
+            after_ref = _correlate(run, snap, value_ref, elements.get(value_ref))
         after = _signals(run, snap, after_ref, _screen_hash(snap.screenshot))
-        if req.ref and after_ref is None:
+        if value_ref and after_ref is None:
             after = dataclasses.replace(after, value=before.value)
         block = _record_observation(run, oid, goal_id, snap, after.screen_hash)
         console_new, requests_new, added = _auto_findings(run, drivers, ctx, goal_id,
@@ -1500,8 +1534,8 @@ def _act_perform(args, ctx: Ctx, run: _run.Run, drivers: Drivers, req: ActReques
     if "always_observed" in ctx.faults and result.delivered:
         status = "OBSERVED"
 
-    _login_bookkeeping(run, snap, pending_name, _submits_login(req, sidecar["names"]))
-    if status == "OBSERVED":
+    _login_bookkeeping(run, snap, pending_password, _submits_login(req, sidecar["names"]))
+    if status in ("OBSERVED", "NO_EFFECT"):
         _add_evidence(run, goal_id, block["screenshot_path"])
     extra = {}
     if snap.screenshot_withheld:
@@ -1544,22 +1578,22 @@ def _submits_login(req: ActRequest, names: Dict[str, str]) -> bool:
     return False
 
 
-def _login_bookkeeping(run: _run.Run, snap: Snap, pending_name: Optional[str],
+def _login_bookkeeping(run: _run.Run, snap: Snap, pending_password: Optional[dict],
                        submits: bool) -> None:
     """Count a login attempt when a submission leaves the password field on screen.
 
     A password fill stays pending through every act that is not a submission, so the run's one
-    attempt is spent only by the form's own submit.
+    attempt is spent only by the form's own submit. The field is tracked by its element identity,
+    so a password field with no accessible name counts the same as a named one.
     """
     data = run.data
     pending = data.get("login_pending")
     if pending and submits:
-        _, names, _ = _merged(run, snap)
-        if pending in names.values():
+        if _correlate(run, snap, pending["ref"], pending.get("element")) is not None:
             data["login_attempts"] += 1
         data["login_pending"] = None
-    if pending_name:
-        data["login_pending"] = pending_name
+    if pending_password:
+        data["login_pending"] = pending_password
 
 
 def cmd_note(args, ctx: Ctx):
@@ -1788,7 +1822,7 @@ def _terminate_launched(run: _run.Run, errors: List[str]) -> None:
 
 def cmd_end(args, ctx: Ctx):
     """Restore the user's desktop, close what the run opened, release the lock, and write the reports."""
-    run = _load(ctx, args.run, allow_ended=True)
+    run = _load(ctx, args.run, allow_ended=True, tolerate_lost_credentials=True)
     data = run.data
     ctx.inputs = {"keep_open": args.keep_open}
     if data.get("ended"):
@@ -1801,7 +1835,7 @@ def cmd_end(args, ctx: Ctx):
     final_path = ""
     sheet_open = False
     try:
-        snap = _observe(run, drivers, final)
+        snap = _observe(run, drivers, None if ctx.credentials_lost else final)
         final_path = str(snap.screenshot) if snap.screenshot else ""
         sheet_open = snap.native is not None and snap.native.sheet_open
     except (DriverError, MissingError) as exc:
@@ -1973,7 +2007,19 @@ def _failure(exc: BaseException) -> Tuple[dict, int]:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    """Run one verb, print one JSON object, and return the exit code."""
+    """Run one verb, print one JSON object, and return the exit code.
+
+    The verb runs under umask 077, so the tools it spawns also create private files; the caller's
+    umask is restored afterwards.
+    """
+    previous = os.umask(0o077)
+    try:
+        return _run_verb(argv)
+    finally:
+        os.umask(previous)
+
+
+def _run_verb(argv: Optional[List[str]]) -> int:
     started = time.monotonic()
     ctx = Ctx()
     command = None
@@ -2000,6 +2046,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             run.save()
             run.event(command or "unknown", ctx.inputs, ctx.status,
                       int((time.monotonic() - started) * 1000))
+            run.harden()
         except OSError as exc:
             sys.stderr.write(f"could not write run state: {exc}\n")
     sys.stdout.write(json.dumps(_scrub(out, ctx.secrets())) + "\n")

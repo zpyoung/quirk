@@ -31,6 +31,8 @@ DEFAULT_GOAL_CAP = 40
 LOCK_WAIT_S = 30.0
 LOCK_STALE_S = 15 * 60
 LOCK_POLL_S = 0.5
+PRIVATE_DIR_MODE = 0o700
+PRIVATE_FILE_MODE = 0o600
 REDACTED = "[REDACTED]"
 TYPED_DIR = "typed"
 DRIVER_FILES_DIR = ".playwright-cli"
@@ -69,11 +71,12 @@ def _utc_now() -> str:
 
 
 def state_root(cwd: Path) -> Path:
-    """Return the self-ignoring folder that holds every run and saved session for a project.
+    """Return the private, self-ignoring folder that holds every run and saved session for a project.
 
     `LIKEUSER_STATE_ROOT` wins; otherwise the git toplevel of `cwd` (or `cwd` outside a repo)
-    carries `.quirk/using-apps-like-a-user`. The folder gets its own `.gitignore` of `*` so the
-    project's own ignore file is never edited.
+    carries `.quirk/using-apps-like-a-user`. The folder is mode 0700 and its own `.gitignore` ends
+    in `*`, whatever that file held before, so the project's own ignore file is never edited and
+    nothing in the folder can be committed by accident.
     """
     override = os.environ.get("LIKEUSER_STATE_ROOT")
     if override:
@@ -91,10 +94,26 @@ def state_root(cwd: Path) -> Path:
             pass
         root = base.joinpath(*STATE_DIR_PARTS)
     root.mkdir(parents=True, exist_ok=True)
-    ignore = root / ".gitignore"
-    if not ignore.exists():
-        ignore.write_text("*\n", encoding="utf-8")
+    os.chmod(str(root), PRIVATE_DIR_MODE)
+    _ensure_catch_all_ignore(root / ".gitignore")
     return root
+
+
+def _ensure_catch_all_ignore(ignore: Path) -> None:
+    """Make `ignore` end in a `*` line, keeping what it held and never writing through a symlink."""
+    if ignore.is_symlink():
+        ignore.unlink()
+    try:
+        held = ignore.read_bytes()
+    except FileNotFoundError:
+        held = b""
+    patterns = [line.strip() for line in held.splitlines()
+                if line.strip() and not line.lstrip().startswith(b"#")]
+    if patterns and patterns[-1] == b"*":
+        return
+    if held and not held.endswith(b"\n"):
+        held += b"\n"
+    _atomic_write_bytes(ignore, held + b"*\n")
 
 
 def new_run_id() -> str:
@@ -167,7 +186,8 @@ def _default_run_data() -> dict:
     return {
         "run_id": "", "target": "", "surface": "", "owner": "", "attended": False,
         "allow_foreground": False, "driver": "", "driver_version": "",
-        "window": {"bundle_id": None, "window_id": None, "session": None, "cdp_port": None},
+        "window": {"bundle_id": None, "window_id": None, "session": None, "cdp_port": None,
+                   "pid": None},
         "baseline": {"frontmost": "", "cursor": [0.0, 0.0], "clipboard_change_count": 0,
                      "clipboard_text_only": True},
         "drift_baseline": {"frontmost": "", "cursor": [0.0, 0.0]},
@@ -182,12 +202,18 @@ def _default_run_data() -> dict:
 
 
 def _atomic_write(path: Path, text: str) -> None:
+    _atomic_write_bytes(path, text.encode("utf-8"))
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Replace `path` with `data` through a 0600 temp file, so the file is never readable by others."""
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(text)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
+        os.chmod(tmp, PRIVATE_FILE_MODE)
         os.replace(tmp, path)
     except BaseException:
         try:
@@ -223,11 +249,13 @@ class Run:
                 data[key] = value
         runs = Path(root) / "runs"
         runs.mkdir(parents=True, exist_ok=True)
+        os.chmod(str(runs), PRIVATE_DIR_MODE)
         while True:
             run_id = data["run_id"] or new_run_id()
             directory = runs / run_id
             try:
-                directory.mkdir()
+                directory.mkdir(mode=PRIVATE_DIR_MODE)
+                os.chmod(str(directory), PRIVATE_DIR_MODE)
                 break
             except FileExistsError:
                 if fields.get("run_id"):
@@ -258,6 +286,26 @@ class Run:
         payload = _redact_deep(self.data, self.secrets)
         _atomic_write(self.dir / "run.json", json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
+    def harden(self) -> None:
+        """Make the run folder private: directories 0700 and files 0600, whoever created them.
+
+        Other tools write into the folder under their own umask (playwright-cli keeps its
+        snapshots and logs here), so this runs after every verb. Symlinks are left alone.
+        """
+        for current, folders, files in os.walk(str(self.dir)):
+            for name, mode in [(n, PRIVATE_DIR_MODE) for n in folders] + [
+                    (n, PRIVATE_FILE_MODE) for n in files]:
+                path = os.path.join(current, name)
+                if not os.path.islink(path):
+                    try:
+                        os.chmod(path, mode)
+                    except OSError:
+                        continue
+        try:
+            os.chmod(str(self.dir), PRIVATE_DIR_MODE)
+        except OSError:
+            pass
+
     def scrub_driver_files(self) -> None:
         """Redact known secrets from the text files the web driver keeps in the run folder.
 
@@ -284,7 +332,10 @@ class Run:
         record = {"ts": _utc_now(), "verb": verb, "inputs": inputs, "status": status,
                   "elapsed_ms": elapsed_ms}
         line = json.dumps(_redact_deep(record, self.secrets), sort_keys=True)
-        with open(self.dir / "events.jsonl", "a", encoding="utf-8") as handle:
+        fd = os.open(str(self.dir / "events.jsonl"),
+                     os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, PRIVATE_FILE_MODE)
+        with os.fdopen(fd, "a", encoding="utf-8") as handle:
+            os.fchmod(handle.fileno(), PRIVATE_FILE_MODE)
             handle.write(line + "\n")
 
     def add_goal(self, goal_id: str, title: str) -> None:

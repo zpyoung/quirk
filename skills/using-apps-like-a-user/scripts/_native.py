@@ -9,6 +9,7 @@ first.
 from __future__ import annotations
 
 import abc
+import contextlib
 import json
 import os
 import re
@@ -67,9 +68,12 @@ _REQUIRED_ACTIONS = ("click", "typeText", "pressKey", "hotkey")
 class NativeDriver(abc.ABC):
     """A driver bound to one native app window.
 
-    `observe` and `act` target only the bound bundle id and window id. `act(..., foreground=False)`
-    must never activate another app; an adapter that cannot guarantee that for an action raises
-    `DriverError("needs_foreground")`. A vanished window raises `DriverError("window_gone")`.
+    `observe` and `act` target only the bound app and window id. The app is the bound bundle id,
+    or the bound process when `bind` was given a pid: a bundle id names every running instance of
+    an app (an Electron dev build shares one with every other Electron app), a pid names one.
+    `act(..., foreground=False)` must never activate another app; an adapter that cannot guarantee
+    that for an action raises `DriverError("needs_foreground")`. A vanished window raises
+    `DriverError("window_gone")`.
     """
 
     name: str = ""
@@ -80,6 +84,7 @@ class NativeDriver(abc.ABC):
     def __init__(self, session: Optional[str] = None) -> None:
         self._bundle_id: Optional[str] = None
         self._window_id: Optional[int] = None
+        self._bound_pid: Optional[int] = None
         self._bin: Optional[str] = None
 
     @property
@@ -87,8 +92,16 @@ class NativeDriver(abc.ABC):
         """The driver binary this adapter runs, or None when none was found."""
         return self._bin
 
-    def bind(self, bundle_id: str, window_id: Optional[int] = None) -> None:
-        """Set the app and window every later `act` targets; `observe` rebinds as it runs."""
+    def bind(self, bundle_id: str, window_id: Optional[int] = None, pid: Optional[int] = None) -> None:
+        """Set the app and window every later `act` targets; `observe` rebinds as it runs.
+
+        With `pid`, that process is the app and `bundle_id` is only its label. Binding the same
+        bundle again without a pid keeps the pin; binding another bundle drops it.
+        """
+        if pid is not None:
+            self._bound_pid = int(pid)
+        elif bundle_id != self._bundle_id:
+            self._bound_pid = None
         self._bundle_id = bundle_id
         self._window_id = window_id
 
@@ -266,7 +279,7 @@ class OrcaDriver(NativeDriver):
     def find_window(self, bundle_id: str) -> Optional[int]:
         """Return the id of the app's first on-screen window, or None when it has none."""
         try:
-            result, _ = self._call(["list-windows", "--app", bundle_id])
+            result, _ = self._call(["list-windows", "--app", self._app(bundle_id)])
         except DriverError as error:
             if error.code == "window_gone":
                 return None
@@ -315,8 +328,14 @@ class OrcaDriver(NativeDriver):
             raw=raw,
         )
 
+    def _app(self, bundle_id: str) -> str:
+        """How orca is told which app: `pid:N` for the bound process, else the bundle id given."""
+        if self._bound_pid is not None and bundle_id == self._bundle_id:
+            return f"pid:{self._bound_pid}"
+        return bundle_id
+
     def _target(self) -> List[str]:
-        args = ["--app", self._bundle_id or ""]
+        args = ["--app", self._app(self._bundle_id or "")]
         if self._window_id is not None:
             args += ["--window-id", str(self._window_id)]
         return args
@@ -616,11 +635,11 @@ class CuaDriver(NativeDriver):
         self._pids: Dict[str, int] = {}
         self._memo: Optional[dict] = None
 
-    def bind(self, bundle_id: str, window_id: Optional[int] = None) -> None:
-        """Set the app and window every later `act` targets; a new bundle forgets the last observation."""
-        if bundle_id != self._bundle_id:
+    def bind(self, bundle_id: str, window_id: Optional[int] = None, pid: Optional[int] = None) -> None:
+        """Set the app and window every later `act` targets; a new bundle or process forgets the last observation."""
+        if bundle_id != self._bundle_id or (pid is not None and pid != self._bound_pid):
             self._memo = None
-        super().bind(bundle_id, window_id)
+        super().bind(bundle_id, window_id, pid)
 
     def _exec(self, args: List[str], stdin: Optional[str] = None) -> Tuple[str, str, int]:
         if not self._bin:
@@ -729,6 +748,8 @@ class CuaDriver(NativeDriver):
 
     def _pid(self, bundle_id: Optional[str] = None) -> int:
         bundle_id = bundle_id or self._bundle_id or ""
+        if self._bound_pid is not None and bundle_id == self._bundle_id:
+            return self._bound_pid
         if bundle_id in self._pids:
             return self._pids[bundle_id]
         try:
@@ -804,22 +825,30 @@ class CuaDriver(NativeDriver):
         return self._session_file(".json")
 
     def _remember(self, memo: dict) -> None:
-        self._memo = memo
+        """Keep `memo` for this instance and for later processes of the same session.
+
+        Raises `DriverError("cache_unavailable")` when it cannot be saved. The memo an earlier
+        observation left is dropped first, so a later `act` can never read a view the caller was
+        told failed.
+        """
+        self._memo = None
+        target: Optional[Path] = None
         try:
             target = self._memo_path()
+            with contextlib.suppress(FileNotFoundError):
+                target.unlink()
             handle, temp = tempfile.mkstemp(prefix=target.name + ".", suffix=".tmp", dir=str(target.parent))
             try:
                 with os.fdopen(handle, "w") as stream:
                     stream.write(json.dumps(memo))
                 os.replace(temp, str(target))
             except BaseException:
-                try:
+                with contextlib.suppress(OSError):
                     os.unlink(temp)
-                except OSError:
-                    pass
                 raise
-        except (OSError, DriverError):
-            pass
+        except OSError as error:
+            raise DriverError("cache_unavailable", f"cannot save the observation memo: {error}")
+        self._memo = memo
 
     def _recall(self) -> Optional[dict]:
         """Return what the last observation of the bound window recorded, here or in an earlier process."""
@@ -876,16 +905,20 @@ class CuaDriver(NativeDriver):
         `drag`, and elements inside a sheet or dialog raise `needs_foreground` unless `foreground`
         is True. `press`, `hotkey`, and `type` with no element target go to the frontmost sheet or
         dialog window of the app when the last observation showed one open, and need `foreground`
-        for it too. `driver_verified` is True for `effect: confirmed`, None otherwise. The reply
-        carries no post-action tree, so `observation` is None.
+        for it too. An action that targets an element or the focused window while no observation of
+        the bound window can be recalled is treated the same way: whether it lands in a sheet is
+        unknown, so it needs `foreground`. `driver_verified` is True for `effect: confirmed`, None
+        otherwise. The reply carries no post-action tree, so `observation` is None.
         """
         if self._bundle_id is None:
             raise DriverError("not_bound", "observe or bind a target before acting")
         plan = self._plan(action)
-        memo = self._recall() or {}
+        recalled = self._recall()
+        memo = recalled or {}
         in_sheet = any(token in (memo.get("sheet") or ()) for token in plan.tokens)
         keys_to_sheet = plan.window_keys and bool(memo.get("sheet"))
-        if (plan.points or plan.always_foreground or in_sheet or keys_to_sheet) and not foreground:
+        blind = recalled is None and bool(plan.tokens or plan.window_keys)
+        if (plan.points or plan.always_foreground or in_sheet or keys_to_sheet or blind) and not foreground:
             raise DriverError("needs_foreground", f"{action.kind} needs the target app in front")
         payload = dict(plan.payload, pid=self._pid(), window_id=self._require_window())
         if keys_to_sheet:

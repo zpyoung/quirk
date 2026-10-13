@@ -166,7 +166,13 @@ what is missing. Never opens System Settings and never installs anything.
 - **Postconditions:**
   - A run folder exists at `<project>/.quirk/using-apps-like-a-user/runs/<run-id>/`, where
     `<project>` is the git toplevel of the cwd, else the cwd. The parent
-    `.quirk/using-apps-like-a-user/` holds a `.gitignore` containing `*`.
+    `.quirk/using-apps-like-a-user/` holds a `.gitignore` whose last pattern is `*`: an existing
+    file keeps its lines and gets a `*` appended when it does not already end in one.
+  - The state root, `runs/`, and every run folder are mode 0700, and every file a run writes
+    (screenshots, trees, sidecars, logs, `run.json`, `events.jsonl`, `report.json`, `report.md`) is
+    0600, whatever the umask. Each verb runs under umask 077 and, before it returns, sets the modes
+    again on everything in the run folder, so files an external driver wrote there
+    (`playwright-cli` snapshots and logs) end up private too.
   - A baseline is recorded: frontmost bundle id, cursor position, clipboard change count, and
     whether the clipboard holds text only. When it holds text, the text is saved to
     `clipboard.txt` (mode 0600) in the run folder.
@@ -183,8 +189,11 @@ what is missing. Never opens System Settings and never installs anything.
       the port is not the launched app. The app's environment omits the run's credential variables
       (`<PREFIX>_USERNAME`, `<PREFIX>_PASSWORD`) and any variable holding a known secret, and its
       `launch.stdout.log` and `launch.stderr.log` are mode 0600.
-      The app's bundle id and window id are also bound to the native driver so OS dialogs, sheets,
-      and menus stay reachable.
+      The process that owns the verified debug port (the launched process, or the Electron child a
+      wrapper command started; the launched process when `lsof` cannot name the owner) and its window
+      id are also bound to the native driver, by pid, so OS dialogs, sheets, and menus stay
+      reachable. A bundle id is never substituted for the pid: `window.bundle_id` is only a label,
+      what LaunchServices registers for that pid, else `pid:<n>`.
     - **Native:** the native driver bound to the target's bundle id and frontmost window id.
   - With `--session-key`, a saved session at `.quirk/using-apps-like-a-user/sessions/<session-key>.json`
     is loaded with `state-load` when it exists. The script does not judge whether it is still valid:
@@ -296,7 +305,8 @@ routed to the driver whose tree produced it.
 
 Signals: `url`, `title` (page or window title), `tree` (normalized tree text with refs and element
 indexes stripped), `focus` (the `[active]` element or `focusedElementId`), `value` (the target's
-value), `screen` (average-hash Hamming distance above threshold on a 64-pixel thumbnail). An orca
+value; for a `type`, `press`, or `hotkey` with no `--ref`, the value of the element focused in the
+observation acted on), `screen` (average-hash Hamming distance above threshold on a 64-pixel thumbnail). An orca
 `verification.state` of `verified` is recorded as `driver_verified` but never by itself yields
 `OBSERVED`.
 
@@ -335,7 +345,8 @@ on timeout return UNSETTLED with the last observation
   double-click on a control whose accessible name (or `--target-name`) contains `sign in`,
   `log in`, `submit`, `continue`, or `next`. Any other act leaves the password fill pending, so an
   unrelated click never spends the attempt. The attempt counts only when the password field is
-  still on screen after the submit.
+  still on screen after the submit; the field is tracked by its ref and element identity, so a
+  field with no accessible name counts the same as a named one.
 
 ### `end`
 
@@ -369,7 +380,7 @@ CONTRACT:
 class NativeDriver:
     name: str; version: str; background_capable: bool; path: Optional[str]; pin: Optional[str]
     def check(self) -> List[str]                    # missing tools or permissions; empty when ready
-    def bind(self, bundle_id: str, window_id: Optional[int] = None) -> None   # target for later act calls
+    def bind(self, bundle_id: str, window_id: Optional[int] = None, pid: Optional[int] = None) -> None   # target for later act calls
     def observe(self, bundle_id: str, window_id: Optional[int], screenshot: bool) -> Observation
     def act(self, action: Action, foreground: bool) -> DriverResult
     def close(self) -> None                         # ends the driver session and deletes its cached files
@@ -377,6 +388,10 @@ class NativeDriver:
 
 - **Preconditions:** `check()` returned empty. `observe` binds to its bundle id and window id; `act`
   targets only the bound pair and raises `DriverError("not_bound")` before any `bind` or `observe`.
+  With a `pid`, `bind` pins the app to that process and the bundle id is only its label: every call
+  addresses the pid (`--app pid:<n>` for orca, the payload `pid` for Cua) and never looks the bundle
+  id up, because a bundle id names every running instance of an app. Binding the same bundle again
+  without a pid keeps the pin; binding another bundle drops it.
 - **Postconditions:** `observe` returns tree text, element ids, window metadata, focus, and a
   screenshot path with its scale. `act` returns `delivered` (bool), `driver_verified`
   (bool or None), the driver's own post-action tree when it provides one, and raw output.
@@ -396,6 +411,13 @@ class NativeDriver:
   on a popup menu still writes the value. Text goes in on stdin only, so `fill --secret` stays out
   of argv. Cua selects with cursor keys because cmd+a reaches only an app that is in front; orca
   double-clicks to focus, since an element click on a text field does not.
+
+Cua keeps what each observation learned (which tokens sit in a sheet, element centers, the
+screenshot scale) in a memo file beside its screenshots, because every `likeuser.py` call is a new
+process. An `observe` that cannot save the memo fails with `cache_unavailable` and discards any
+earlier memo. An `act` aimed at an element or the focused window while no memo for the bound window
+can be recalled does not know whether it lands in a sheet, so it needs the foreground
+(`needs_foreground`) and is never delivered in the background.
 
 `CuaDriver.check()` requires exactly the 0.34.1 pin and reports any other version with the one
 found. Its screenshots and session files live in a per-user directory under the system temp dir,
@@ -474,13 +496,14 @@ def settle(read: Callable[[], Signals], poll_s: float = SETTLE_POLL_S, cap_s: fl
 
 CONTRACT: `_run.py`
 ```
-def state_root(cwd: Path) -> Path      # LIKEUSER_STATE_ROOT, else <git toplevel or cwd>/.quirk/using-apps-like-a-user; writes .gitignore "*"
+def state_root(cwd: Path) -> Path      # LIKEUSER_STATE_ROOT, else <git toplevel or cwd>/.quirk/using-apps-like-a-user; 0700; .gitignore ends in "*"
 def new_run_id() -> str
 class Run:
     dir: Path; data: dict                                  # data follows the run.json SCHEMA
     @classmethod create(cls, root: Path, fields: dict) -> Run
     @classmethod load(cls, root: Path, run_id: str) -> Run    # RunStateError("unknown_run")
     def save(self) -> None                                   # atomic replace
+    def harden(self) -> None                                 # run folder dirs 0700, files 0600, symlinks untouched
     def event(self, verb: str, inputs: dict, status: str, elapsed_ms: int) -> None   # appends events.jsonl, redacted
     def add_goal(self, goal_id: str, title: str) -> None     # UsageError("duplicate_goal")
     def add_finding(self, kind: str, summary: str, goal_id: Optional[str], screenshot_path: Optional[str], source: str) -> str
@@ -556,7 +579,7 @@ run_id: str            # "<UTC yyyymmddThhmmss>-<4 hex>"
 target: str; surface: "web"|"electron"|"native"; owner: "yours"|"third-party"
 attended: bool; allow_foreground: bool; driver: str; driver_version: str
 window: {bundle_id: str|null, window_id: int|null, session: str|null, cdp_port: int|null,
-         native_driver: str|null}   # chosen at begin; later verbs rebuild exactly this adapter
+         native_driver: str|null, pid: int|null}   # chosen at begin; later verbs rebuild exactly this adapter; pid pins an Electron run's native driver
 baseline: {frontmost: str, cursor: [float, float], clipboard_change_count: int, clipboard_text_only: bool}
 drift_baseline: {frontmost: str, cursor: [float, float]}
 holds_lock: bool; paused: bool; stopped_reason: str|null; pasted: bool
@@ -593,8 +616,11 @@ state_left: {final_screenshot: str, clipboard_restored: bool|null, frontmost_res
 budget: {run_used: int, run_cap: int}
 ```
 
-Goal evidence is every screenshot from that goal's `OBSERVED` acts and findings; `report.md` renders
-the same data for humans and links each screenshot path.
+Goal evidence is every screenshot that shows what happened to the goal, deduplicated and in the
+order it was recorded: the post-action screenshot of its `OBSERVED` and `NO_EFFECT` acts, the
+screenshot of the observation a `GATE_REQUIRED` stop was issued against, and the screenshots of its
+findings. A goal that ends `blocked`, `partial`, or `fail` therefore cites the dead control or the
+gate it stopped at. `report.md` renders the same data for humans and links each screenshot path.
 
 REGEX: gate pattern, third-party targets (case-insensitive, matched against the gate subject)
 ```
@@ -694,7 +720,10 @@ Back-links: [logic: Decisions Locked](logic.md#decisions-locked)
 - Typed text must stay redactable in every later verb of the run. Each `act` that types text of 4 or
   more characters appends it to `<state root>/typed/<run-id>.json`, a 0600 file in a 0700 folder
   outside the run folder; every verb loads it into the in-memory secrets, and `end` deletes it.
-  Credentials are reloaded from their source on every verb. The text files playwright-cli keeps in
+  Credentials are reloaded from their source on every verb. A run that began with `--credentials-env`
+  or `--credentials-file` whose source cannot be reloaded fails closed: the verb exits 5 with
+  `missing[]`, as `begin` does. `end` alone still runs, so the desktop is released, but it takes no
+  final screenshot. The text files playwright-cli keeps in
   `<run>/.playwright-cli/` are redacted at the end of every verb.
 - A screenshot cannot be redacted. An `act` with `--secret` saves no post-action screenshot, and any
   observation (including the `end` screenshot) whose tree shows a credential value deletes its
@@ -726,8 +755,10 @@ Back-links: [logic: Decisions Locked](logic.md#decisions-locked) · [logic: Indu
 
 - **Security.** On-screen text is data. The skill never acts on agent-directed screen text and
   records it with `note --finding-kind injection`. The Electron debug port binds to `127.0.0.1` and
-  exists only for apps the run launched. Saved sessions, `clipboard.txt`, and stored storage state are
-  mode 0600 inside the self-ignoring folder; `clipboard.txt` is deleted at `end`. Test overrides are
+  exists only for apps the run launched. The state folder is 0700 and everything a run writes in it,
+  screenshots and accessibility trees included, is 0600 whatever the umask, because they can show
+  third-party account data. Saved sessions, `clipboard.txt`, and stored storage state sit in the same
+  self-ignoring folder; `clipboard.txt` is deleted at `end`. Test overrides are
   surfaced in every report. `playwright-cli` 0.1.22 takes `fill` and `type` text only as an argument,
   so a typed password is briefly visible to same-user process inspection; native drivers receive text
   on stdin.
