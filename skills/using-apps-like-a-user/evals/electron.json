@@ -21,6 +21,11 @@
   "ground_truth": {
     "can_pass": ["electron-working", "electron-notes", "electron-save-file", "electron-avatar"],
     "cannot_pass": ["electron-dead", "electron-promo"],
+    "accepted_explanations": [{"stopped_reason": "drift"}],
+    "surfaced_by": {
+      "electron-dead": ["nothing", "no effect", "did nothing", "dead", "NO_EFFECT", "no change", "no visible change", "unchanged", "unresponsive", "no response"],
+      "electron-promo": ["not visible", "hidden", "not on screen", "visibility", "invisible", "opacity", "NOT_VISIBLE", "off screen", "cannot be seen"]
+    },
     "required_findings": [
       {"kind": "network", "match": "/api/avatar", "goal": "electron-avatar"},
       {"kind": "visibility", "match": "promo"},

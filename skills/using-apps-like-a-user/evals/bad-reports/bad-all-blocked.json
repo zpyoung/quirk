@@ -47,7 +47,7 @@
         "obs-web-dead.png"
       ],
       "findings": [],
-      "summary": "Could not operate this control."
+      "summary": "Pressed it twice and nothing happened."
     },
     {
       "goal_id": "web-promo",
@@ -77,7 +77,7 @@
         "obs-web-delete.png"
       ],
       "findings": [],
-      "summary": "Could not operate this control."
+      "summary": "Stopped at the sign-off gate; no approval."
     }
   ],
   "findings": [
