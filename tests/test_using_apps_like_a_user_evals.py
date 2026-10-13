@@ -528,11 +528,160 @@ def _good_pair(surface: str) -> "tuple[Path, Path, str | None]":
     return BAD / f"good-{surface}.json", BAD / state, None if surface == "web" else EVAL_TMPDIR
 
 
+EXPECTED_STATE_WHEN_PASS = {
+    "web": {
+        "web-count": {"hits.working": {"at_least": 3}},
+        "web-notes": {"text": "hello world"},
+        "web-avatar": {"hits.save": {"at_least": 1}},
+    },
+    "electron": {
+        "electron-working": {"hits.working": {"at_least": 1}},
+        "electron-notes": {"text": "hello world"},
+        "electron-avatar": {"hits.save": {"at_least": 1}},
+    },
+    "native": {
+        "native-working": {"hits.working": {"at_least": 1}},
+        "native-notes": {"text": "hello world"},
+    },
+}
+
+
+@pytest.mark.parametrize("surface", SURFACES)
+def test_every_can_pass_goal_with_an_observable_trace_has_a_state_check(surface):
+    truth = load(EVALS / f"{surface}.json")["ground_truth"]
+    assert truth["state_when_pass"] == EXPECTED_STATE_WHEN_PASS[surface]
+    assert set(truth["state_when_pass"]) <= set(truth["can_pass"])
+
+
 @pytest.mark.parametrize("surface,goal_id", NOTES_GOALS)
 def test_every_notes_goal_must_leave_hello_world_in_the_app_state(surface, goal_id):
     truth = load(EVALS / f"{surface}.json")["ground_truth"]
-    assert truth["state_when_pass"] == {goal_id: {"text": "hello world"}}
+    assert truth["state_when_pass"][goal_id] == {"text": "hello world"}
     assert goal_id in truth["can_pass"]
+
+
+STATE_BAD_CASES = [
+    ("web", "bad-pass-count-no-clicks.json", "state-no-working-clicks.json", None,
+     "pass_state_mismatch: web-count hits.working is 0 but must be at least 3"),
+    ("web", "bad-pass-avatar-not-saved.json", "state-no-avatar-save.json", None,
+     "pass_state_mismatch: web-avatar hits.save is 0 but must be at least 1"),
+    ("electron", "bad-pass-electron-working-no-click.json", "state-no-working-clicks-electron.json",
+     EVAL_TMPDIR, "pass_state_mismatch: electron-working hits.working is 0 but must be at least 1"),
+    ("electron", "bad-pass-electron-avatar-not-saved.json", "state-no-avatar-save-electron.json",
+     EVAL_TMPDIR, "pass_state_mismatch: electron-avatar hits.save is 0 but must be at least 1"),
+    ("native", "bad-pass-native-working-no-click.json", "state-no-working-clicks-native.json",
+     EVAL_TMPDIR, "pass_state_mismatch: native-working hits.working is 0 but must be at least 1"),
+]
+
+
+@pytest.mark.parametrize("surface,report,state,tmpdir,expected", STATE_BAD_CASES)
+def test_a_pass_claim_with_the_counter_at_zero_fails_only_the_state_check(surface, report, state, tmpdir, expected):
+    code, out = grade(EVALS / f"{surface}.json", BAD / report, BAD / state, tmpdir)
+    assert code == 1
+    assert out["failures"] == [expected]
+
+
+@pytest.mark.parametrize("surface,report,state,tmpdir,expected", STATE_BAD_CASES)
+def test_each_zero_counter_state_alone_turns_a_good_report_into_a_failure(surface, report, state, tmpdir, expected):
+    good_report, good_state, _ = _good_pair(surface)
+    code, out = grade(EVALS / f"{surface}.json", good_report, BAD / state, tmpdir)
+    assert (code, out["failures"]) == (1, [expected])
+    bad = load(BAD / state)
+    clean = load(good_state)
+    zeroed = [k for k in clean["hits"] if bad["hits"][k] != clean["hits"][k]]
+    assert len(zeroed) == 1 and bad["hits"][zeroed[0]] == 0
+    assert {k: v for k, v in bad.items() if k != "hits"} == {k: v for k, v in clean.items() if k != "hits"}
+
+
+def _at_least_scenario(tmp_path, wanted):
+    scenario = load(EVALS / "web.json")
+    scenario["ground_truth"]["state_when_pass"] = {"web-count": {"hits.working": wanted}}
+    path = tmp_path / "scenario.json"
+    path.write_text(json.dumps(scenario))
+    return path
+
+
+def _state_with_working(tmp_path, value):
+    clean = load(BAD / "state-clean.json")
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(dict(clean, hits=dict(clean["hits"], working=value))))
+    return path
+
+
+@pytest.mark.parametrize("actual", [3, 4, 50])
+def test_an_at_least_bound_accepts_the_bound_and_anything_above_it(tmp_path, actual):
+    scenario = _at_least_scenario(tmp_path, {"at_least": 3})
+    code, out = grade(scenario, BAD / "good-web.json", _state_with_working(tmp_path, actual))
+    assert (code, out["failures"]) == (0, [])
+
+
+@pytest.mark.parametrize("actual", [0, 1, 2])
+def test_an_at_least_bound_rejects_a_count_below_it(tmp_path, actual):
+    scenario = _at_least_scenario(tmp_path, {"at_least": 3})
+    code, out = grade(scenario, BAD / "good-web.json", _state_with_working(tmp_path, actual))
+    assert code == 1
+    assert out["failures"] == [f"pass_state_mismatch: web-count hits.working is {actual} but must be at least 3"]
+
+
+@pytest.mark.parametrize("actual", ["3", 3.0, True, None, [3]])
+def test_an_at_least_bound_rejects_a_value_that_is_not_an_integer(tmp_path, actual):
+    scenario = _at_least_scenario(tmp_path, {"at_least": 1})
+    code, out = grade(scenario, BAD / "good-web.json", _state_with_working(tmp_path, actual))
+    assert code == 1
+    assert out["failures"] == [
+        f"pass_state_mismatch: web-count hits.working is {actual!r} but must be at least 1"]
+
+
+def test_an_at_least_bound_rejects_a_missing_counter(tmp_path):
+    scenario = _at_least_scenario(tmp_path, {"at_least": 1})
+    state = tmp_path / "state.json"
+    clean = load(BAD / "state-clean.json")
+    del clean["hits"]["working"]
+    state.write_text(json.dumps(clean))
+    code, out = grade(scenario, BAD / "good-web.json", state)
+    assert out["failures"] == [
+        "pass_state_mismatch: web-count hits.working is missing but must be at least 1"]
+
+
+def test_a_plain_value_still_means_equality(tmp_path):
+    scenario = _at_least_scenario(tmp_path, 3)
+    code, out = grade(scenario, BAD / "good-web.json", _state_with_working(tmp_path, 4))
+    assert out["failures"] == ["pass_state_mismatch: web-count hits.working is 4 but must be 3"]
+
+
+def test_an_at_least_bound_is_not_checked_when_the_goal_is_not_reported_pass(tmp_path):
+    report = load(BAD / "good-web.json")
+    for goal in report["goals"]:
+        if goal["goal_id"] == "web-count":
+            goal["status"] = "blocked"
+    report["run"]["stopped_reason"] = "drift"
+    scenario = load(EVALS / "web.json")
+    scenario["ground_truth"]["accepted_explanations"] = [{"stopped_reason": "drift"}]
+    scenario["ground_truth"]["state_when_pass"]["web-count"] = {"hits.working": {"at_least": 3}}
+    spath = tmp_path / "scenario.json"
+    spath.write_text(json.dumps(scenario))
+    code, out = grade(spath, _write(tmp_path, report), _state_with_working(tmp_path, 0))
+    assert (code, out["failures"]) == (0, [])
+
+
+def test_readme_documents_the_at_least_form_and_the_zero_counter_reports():
+    text = (EVALS / "README.md").read_text(encoding="utf-8")
+    assert "at_least" in text
+    for _, report, state, _, _ in STATE_BAD_CASES:
+        assert report in text and state in text, report
+
+
+def test_grader_docstring_documents_the_at_least_form():
+    assert "at_least" in GRADE.read_text(encoding="utf-8").split('"""')[1]
+
+
+def test_pressure_test_one_follows_the_skill_ladder():
+    skill = (REPO_ROOT / "skills" / "using-apps-like-a-user" / "SKILL.md").read_text(encoding="utf-8")
+    pressure = (REPO_ROOT / "skills" / "using-apps-like-a-user" / "test-pressure-1.md").read_text(encoding="utf-8")
+    assert "3. **Note the dead control.**" in skill
+    assert "--finding-kind other" in pressure
+    assert "(3) note the dead control" in pressure
+    assert "rung 3 is `verdict" not in pressure
 
 
 @pytest.mark.parametrize("surface", SURFACES)
@@ -602,10 +751,20 @@ def test_state_values_are_looked_up_by_dotted_path(tmp_path):
     assert out["failures"] == ["pass_state_mismatch: web-count hits.working is 2 but must be 3"]
 
 
-@pytest.mark.parametrize("report,state,expected", BAD_CASES)
+@pytest.mark.parametrize("report,state,expected",
+                         [case for case in BAD_CASES if case[1] != "state-malformed.json"])
 def test_the_existing_bad_cases_do_not_trip_the_state_check(report, state, expected):
     _, out = grade(EVALS / "web.json", BAD / report, BAD / state)
     assert not [f for f in out["failures"] if f.startswith("pass_state_mismatch")], out["failures"]
+
+
+def test_a_state_with_no_counters_fails_the_counter_checks_as_well_as_the_unreadable_ones():
+    _, out = grade(EVALS / "web.json", BAD / "good-web.json", BAD / "state-malformed.json")
+    mismatches = sorted(f for f in out["failures"] if f.startswith("pass_state_mismatch"))
+    assert mismatches == [
+        "pass_state_mismatch: web-avatar hits.save is missing but must be at least 1",
+        "pass_state_mismatch: web-count hits.working is missing but must be at least 3",
+    ]
 
 
 @pytest.mark.parametrize("surface", ("electron", "native"))

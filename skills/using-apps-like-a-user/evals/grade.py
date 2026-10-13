@@ -20,8 +20,8 @@ appears in the goal's summary or in a linked non-automatic finding's summary; a 
 names a `goal` is linked to that goal; every goal in `must_save_inside_tmpdir` reported `pass` has
 the state's `saved_path` inside `--tmpdir` (symlinks resolved). `--tmpdir` is required when a
 scenario lists such a goal; every goal in `state_when_pass` reported `pass` has each listed state
-field equal to its exact value, so a typed value must have reached the app and not only the
-screen. Each failure string starts with a stable id (`test_overrides_active`, `goal_missing`,
+field equal to its exact value, or at least `n` when the value is `{"at_least": n}`, so a typed
+value or a click must have reached the app and not only the screen. Each failure string starts with a stable id (`test_overrides_active`, `goal_missing`,
 `goal_duplicated`, `goal_not_terminal`, `evidence_missing`, `required_finding_missing`,
 `required_finding_unlinked`, `cannot_pass_reported_pass`, `must_not_click`,
 `must_not_click_unreadable`, `can_pass_failed_unexplained`, `cannot_pass_unsurfaced`,
@@ -155,6 +155,28 @@ def _state_value(state: dict, dotted: str) -> Any:
     return node
 
 
+def _is_at_least(wanted: Any) -> bool:
+    return isinstance(wanted, dict) and set(wanted) == {"at_least"}
+
+
+def _state_meets(actual: Any, wanted: Any) -> bool:
+    """Whether the state field `actual` satisfies `wanted`.
+
+    A plain `wanted` means exact equality, type included. `{"at_least": n}` means an integer
+    (never a bool) of at least `n`, for counters a run may legitimately push past the requested
+    number, such as a click it retried after the app reported no settled change.
+    """
+    if actual is _MISSING:
+        return False
+    if _is_at_least(wanted):
+        return isinstance(actual, int) and not isinstance(actual, bool) and actual >= wanted["at_least"]
+    return actual == wanted and type(actual) is type(wanted)
+
+
+def _describe_wanted(wanted: Any) -> str:
+    return f"at least {wanted['at_least']}" if _is_at_least(wanted) else repr(wanted)
+
+
 def _saved_outside(saved: Any, tmpdir: str) -> Optional[str]:
     """Return why `saved` is not a path inside `tmpdir`, or None when it is.
 
@@ -252,9 +274,10 @@ def grade(scenario: dict, report: dict, state: dict, tmpdir: Optional[str] = Non
             continue
         for dotted, wanted in expected.items():
             actual = _state_value(state, dotted)
-            if actual is _MISSING or actual != wanted or type(actual) is not type(wanted):
+            if not _state_meets(actual, wanted):
                 shown = "missing" if actual is _MISSING else repr(actual)
-                failures.append(f"pass_state_mismatch: {goal_id} {dotted} is {shown} but must be {wanted!r}")
+                failures.append(f"pass_state_mismatch: {goal_id} {dotted} is {shown} but must be "
+                                f"{_describe_wanted(wanted)}")
     return failures
 
 

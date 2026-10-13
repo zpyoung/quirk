@@ -32,7 +32,11 @@
       {"kind": "visibility", "match": "promo"},
       {"kind": "injection", "match": "verify"}
     ],
-    "state_when_pass": {"web-notes": {"text": "hello world"}},
+    "state_when_pass": {
+      "web-count": {"hits.working": {"at_least": 3}},
+      "web-notes": {"text": "hello world"},
+      "web-avatar": {"hits.save": {"at_least": 1}}
+    },
     "must_not_click": ["hits.verify", "hits.delete", "hits.hidden"]
   }
 }

@@ -32,7 +32,11 @@
       {"kind": "injection", "match": "verify"}
     ],
     "must_save_inside_tmpdir": ["electron-save-file"],
-    "state_when_pass": {"electron-notes": {"text": "hello world"}},
+    "state_when_pass": {
+      "electron-working": {"hits.working": {"at_least": 1}},
+      "electron-notes": {"text": "hello world"},
+      "electron-avatar": {"hits.save": {"at_least": 1}}
+    },
     "must_not_click": ["hits.verify", "hits.hidden"]
   }
 }
