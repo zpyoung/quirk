@@ -11,6 +11,7 @@ import importlib.util
 import json
 import os
 import shlex
+import shutil
 import stat
 import sys
 import threading
@@ -995,9 +996,10 @@ class TestElectron:
         run_id, obs = electron_run(sb)
         state = sb.run_json(run_id)
         port = state["window"]["cdp_port"]
-        assert state["window"]["bundle_id"] == "com.github.Electron"
         [entry] = state["launched"]
         assert entry["kind"] == "app" and entry["id"].startswith("pid:")
+        assert state["window"]["pid"] == int(entry["id"].partition(":")[2])
+        assert state["window"]["bundle_id"] == f"pid:{state['window']['pid']}"
         assert sb.pw_argvs("attach") == [["attach", f"--cdp=http://127.0.0.1:{port}"]]
         assert "--app" in sb.orca_commands("get-app-state")[-1]["argv"]
         assert state["holds_lock"] is True
@@ -1103,12 +1105,68 @@ class TestElectron:
         assert raised.value.code == "cdp_port_conflict"
         assert attached == []
 
-    def test_the_bundle_id_comes_from_the_pid_else_the_electron_dev_default(self, sb, monkeypatch):
+    def test_the_bundle_id_label_comes_from_the_pid_and_is_none_when_unregistered(self, sb, monkeypatch):
         sb.set_desktop(pid_bundles={"4242": "com.example.dev"})
         monkeypatch.setenv("LIKEUSER_FAKE_DESKTOP", str(sb.desktop_path))
         module = load_cli_module()
         assert module._bundle_for_pid(4242) == "com.example.dev"
-        assert module._bundle_for_pid(1) == "com.github.Electron"
+        assert module._bundle_for_pid(1) is None
+
+    def test_the_native_driver_is_bound_to_the_process_whatever_bundle_it_registered(self, sb, monkeypatch):
+        for key, value in sb.env().items():
+            monkeypatch.setenv(key, value)
+        module = load_cli_module()
+        monkeypatch.setattr(module, "_bundle_for_pid", lambda pid: "com.github.Electron")
+        drivers = types.SimpleNamespace(web=types.SimpleNamespace(
+            attach_cdp=lambda endpoint: None, state_load=lambda path: None))
+        args = types.SimpleNamespace(launch=electron_command(), cdp_port=harness.free_port(), session_key=None)
+        run = _run.Run.create(sb.state_root, {"surface": "electron", "window": {}})
+        try:
+            module._begin_electron(args, run, drivers)
+        finally:
+            sb.kill_launched()
+        window = run.data["window"]
+        assert window["bundle_id"] == "com.github.Electron"
+        assert window["pid"] == int(run.data["launched"][0]["id"].partition(":")[2])
+
+    @pytest.mark.skipif(shutil.which("lsof") is None, reason="needs lsof to find the port's owner")
+    def test_a_wrapper_command_binds_the_electron_child_not_the_wrapper_or_the_generic_bundle(self, sb):
+        sb.web_scenario()
+        sb.native_scenario(bundle="com.github.Electron")
+        script = electron_command() + ' "$@" & wait'
+        wrapper = f"sh -c {shlex.quote(script)} sh"
+        result = sb.begin("electron", None, "yours", True, "--launch", wrapper, "--cdp-port",
+                          str(harness.free_port()), "--allow-foreground", "--goals-file",
+                          write_goals(sb, "g1"))
+        try:
+            assert result.code == 0, result.stdout + result.stderr
+            run_id = result["run_id"]
+            state = sb.run_json(run_id)
+            wrapper_pid = int(state["launched"][0]["id"].partition(":")[2])
+            child = state["window"]["pid"]
+            assert child != wrapper_pid and os.getpgid(child) == wrapper_pid
+            assert state["window"]["bundle_id"] == f"pid:{child}"
+            assert sb.run("observe", "--run", run_id, "--goal", "g1").code == 0
+            selectors = [c["argv"][c["argv"].index("--app") + 1]
+                         for c in sb.orca_calls() if "--app" in c["argv"]]
+            assert selectors and set(selectors) == {f"pid:{child}"}
+        finally:
+            sb.kill_launched()
+
+    def test_a_port_owner_that_cannot_be_identified_binds_the_launched_process(self, sb, monkeypatch):
+        for key, value in sb.env().items():
+            monkeypatch.setenv(key, value)
+        module = load_cli_module()
+        monkeypatch.setattr(module, "_listener_pids", lambda port: None)
+        drivers = types.SimpleNamespace(web=types.SimpleNamespace(
+            attach_cdp=lambda endpoint: None, state_load=lambda path: None))
+        args = types.SimpleNamespace(launch=electron_command(), cdp_port=harness.free_port(), session_key=None)
+        run = _run.Run.create(sb.state_root, {"surface": "electron", "window": {}})
+        try:
+            module._begin_electron(args, run, drivers)
+        finally:
+            sb.kill_launched()
+        assert run.data["window"]["pid"] == int(run.data["launched"][0]["id"].partition(":")[2])
 
     def test_a_launch_that_exits_at_once_exits_4(self, sb):
         sb.web_scenario()
@@ -1994,6 +2052,114 @@ class TestHandoffResume:
         run_id, _ = web_run(sb)
         result = sb.run("resume", "--run", run_id)
         assert result.code == 3 and result["error"] == "not_paused"
+
+
+def private_violations(root):
+    """Every path under `root` that is not 0700 (a directory) or 0600 (a file)."""
+    found = []
+    for path in [root, *root.rglob("*")]:
+        if path.is_symlink():
+            continue
+        expected = 0o700 if path.is_dir() else 0o600
+        if stat.S_IMODE(path.stat().st_mode) != expected:
+            found.append((str(path.relative_to(root)), oct(stat.S_IMODE(path.stat().st_mode))))
+    return found
+
+
+class TestGoalEvidence:
+    def evidence(self, sb, run_id, goal="g1"):
+        return sb.run_json(run_id)["goals"][goal]["evidence"]
+
+    def test_a_dead_control_cites_the_screenshot_taken_after_the_action(self, sb):
+        run_id, obs = web_run(sb)
+        result = click(sb, run_id, obs["observation_id"], "e7")
+        assert result.status == "NO_EFFECT"
+        assert self.evidence(sb, run_id) == [result["observation"]["screenshot_path"]]
+
+    def test_a_gate_stop_cites_the_screenshot_of_the_observation_it_stopped_on(self, sb):
+        run_id, obs = web_run(sb, owner="third-party")
+        assert click(sb, run_id, obs["observation_id"], "e17").status == "GATE_REQUIRED"
+        assert self.evidence(sb, run_id) == [obs["screenshot_path"]]
+
+    def test_evidence_is_deduplicated_and_kept_in_order(self, sb):
+        run_id, obs = web_run(sb, owner="third-party", rules=[click_rule("e4")])
+        click(sb, run_id, obs["observation_id"], "e17")
+        click(sb, run_id, obs["observation_id"], "e17")
+        dead = click(sb, run_id, obs["observation_id"], "e7")
+        assert dead.status == "NO_EFFECT"
+        assert self.evidence(sb, run_id) == [obs["screenshot_path"], dead["observation"]["screenshot_path"]]
+
+    def test_the_report_carries_the_evidence_of_a_failed_goal(self, sb):
+        run_id, obs = web_run(sb)
+        dead = click(sb, run_id, obs["observation_id"], "e7")
+        sb.run("verdict", "--run", run_id, "--goal", "g1", "--status", "fail", "--summary-stdin",
+               stdin="the button does nothing")
+        ended = sb.run("end", "--run", run_id)
+        [goal] = json.loads((sb.run_dir(run_id) / "report.json").read_text())["goals"]
+        assert goal["status"] == "fail"
+        assert goal["evidence"] == [dead["observation"]["screenshot_path"]]
+        assert Path(dead["observation"]["screenshot_path"]).name in (sb.run_dir(run_id) / "report.md").read_text()
+        assert ended.code == 0
+
+
+class TestPrivateArtifacts:
+    @pytest.mark.parametrize("surface", ["web", "native"])
+    def test_a_whole_run_leaves_only_private_paths_under_a_loose_umask(self, sb, surface):
+        previous = os.umask(0o022)
+        try:
+            if surface == "web":
+                run_id, obs = web_run(sb, rules=[click_rule("e4")])
+                ref = "e4"
+            else:
+                run_id, obs = native_run(sb, rules=[click_rule("2", "working")])
+                ref = "2"
+            click(sb, run_id, obs["observation_id"], ref, "--foreground")
+            sb.run("note", "--run", run_id, "--finding-kind", "other", "--summary-stdin",
+                   stdin="something odd")
+            sb.run("verdict", "--run", run_id, "--goal", "g1", "--status", "pass",
+                   "--summary-stdin", stdin="fine")
+            assert sb.run("end", "--run", run_id).code == 0
+        finally:
+            os.umask(previous)
+        assert private_violations(sb.state_root) == []
+        names = {p.name for p in sb.run_dir(run_id).iterdir()}
+        assert {"run.json", "events.jsonl", "report.json", "report.md", "final.png"} <= names
+        assert any(n.endswith(".tree.txt") for n in names) and any(n.endswith(".png") for n in names)
+
+    def test_files_another_tool_wrote_into_the_run_folder_end_up_private(self, sb):
+        previous = os.umask(0o022)
+        try:
+            run_id, _ = web_run(sb)
+        finally:
+            os.umask(previous)
+        driver_files = list((sb.run_dir(run_id) / ".playwright-cli").glob("*"))
+        assert driver_files
+        assert all(stat.S_IMODE(f.stat().st_mode) == 0o600 for f in driver_files)
+
+    def test_the_helpers_write_private_files_whatever_the_umask(self, sb, tmp_path):
+        module = load_cli_module()
+        source = tmp_path / "source.png"
+        source.write_bytes(b"png")
+        previous = os.umask(0o022)
+        try:
+            module._write_text(tmp_path / "tree.txt", "text")
+            module._copy_shot(source, tmp_path / "shot.png")
+        finally:
+            os.umask(previous)
+        for name in ("tree.txt", "shot.png"):
+            assert stat.S_IMODE((tmp_path / name).stat().st_mode) == 0o600
+
+    def test_main_does_not_leave_a_stricter_umask_behind(self, sb, monkeypatch, capsys):
+        for key, value in sb.env().items():
+            monkeypatch.setenv(key, value)
+        module = load_cli_module()
+        previous = os.umask(0o022)
+        try:
+            module.main(["doctor"])
+            assert os.umask(0o022) == 0o022
+        finally:
+            os.umask(previous)
+        capsys.readouterr()
 
 
 class TestEnd:

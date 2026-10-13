@@ -72,7 +72,6 @@ MIN_REDACT_CHARS = 4
 CDP_PORTS = range(9222, 9300)
 CDP_LOCK_NAME = "cdp-ports.lock"
 DEFAULT_CREDENTIALS_PREFIX = "LIKEUSER"
-ELECTRON_DEV_BUNDLE = "com.github.Electron"
 GOAL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SESSION_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 NATIVE_PREFIX = "n:"
@@ -104,11 +103,13 @@ def _digest(text: Optional[str]) -> Optional[str]:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:20]
 
 
-def _write_text(path: Path, text: str, mode: Optional[int] = None) -> None:
+def _write_text(path: Path, text: str, mode: int = _run.PRIVATE_FILE_MODE) -> None:
+    """Replace `path` with `text` through a temp file that is never readable beyond `mode`."""
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    if mode is not None:
-        os.chmod(str(tmp), mode)
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        os.fchmod(handle.fileno(), mode)
+        handle.write(text)
     os.replace(str(tmp), str(path))
 
 
@@ -356,7 +357,7 @@ class Drivers:
             driver = get_native_driver(name=_native_name(self.run), session=self.run.data["run_id"])
             window = self.run.data["window"]
             if window["bundle_id"]:
-                driver.bind(window["bundle_id"], window["window_id"])
+                driver.bind(window["bundle_id"], window["window_id"], window.get("pid"))
             self._native = driver
         return self._native
 
@@ -393,6 +394,7 @@ def _copy_shot(source: Optional[Path], dest: Path) -> Optional[Path]:
         return None
     try:
         shutil.copyfile(str(source), str(dest))
+        os.chmod(str(dest), _run.PRIVATE_FILE_MODE)
     except OSError:
         return None
     return dest
@@ -749,19 +751,20 @@ def _listener_pids(port: int) -> Optional[set]:
     return {int(token) for token in out.stdout.split() if token.isdigit()}
 
 
-def _verify_cdp_owner(port: int, proc: subprocess.Popen) -> None:
+def _verify_cdp_owner(port: int, proc: subprocess.Popen) -> Optional[int]:
     """Refuse to attach when something other than the launched app (or its children) holds `port`.
 
-    The app starts in its own session, so its process group id is its pid. A port whose
-    listeners cannot be identified is accepted.
+    The app starts in its own session, so its process group id is its pid. Returns the pid of the
+    listener that belongs to the launched app: `proc` itself, or the Electron child a wrapper
+    command started. Returns None when the port's listeners cannot be identified, which is accepted.
     """
     listeners = _listener_pids(port)
     if not listeners:
-        return
-    for pid in listeners:
+        return None
+    for pid in sorted(listeners):
         try:
             if pid == proc.pid or os.getpgid(pid) == proc.pid:
-                return
+                return pid
         except ProcessLookupError:
             continue
     raise DriverError("cdp_port_conflict",
@@ -785,14 +788,15 @@ def _wait_for_cdp(port: int, proc: subprocess.Popen) -> None:
         time.sleep(0.2)
 
 
-def _bundle_for_pid(pid: int) -> str:
+def _bundle_for_pid(pid: int) -> Optional[str]:
+    """The bundle id LaunchServices registers for `pid`, waiting briefly for a new process; None when it has none."""
     deadline = time.monotonic() + PID_BUNDLE_WAIT_S
     while True:
         found = _desktop.bundle_id_for_pid(pid)
         if found:
             return found
         if os.environ.get("LIKEUSER_FAKE_DESKTOP") or time.monotonic() >= deadline:
-            return ELECTRON_DEV_BUNDLE
+            return None
         time.sleep(0.25)
 
 
@@ -943,7 +947,7 @@ def cmd_begin(args, ctx: Ctx):
         "budget": {"run_cap": args.budget_run or _run.DEFAULT_RUN_CAP,
                    "goal_cap": args.budget_goal or _run.DEFAULT_GOAL_CAP},
         "window": {"bundle_id": None, "window_id": None, "session": None, "cdp_port": None,
-                   "native_driver": None},
+                   "native_driver": None, "pid": None},
     }
     try:
         run = _run.Run.create(root, fields)
@@ -1089,13 +1093,15 @@ def _begin_electron(args, run: _run.Run, drivers: Drivers) -> None:
         run.data["window"]["cdp_port"] = port
         proc = _spawn_app(args, run, port)
         _wait_for_cdp(port, proc)
-        _verify_cdp_owner(port, proc)
+        owner = _verify_cdp_owner(port, proc)
     drivers.web.attach_cdp(f"http://127.0.0.1:{port}")
     saved = _session_file(run, args.session_key) if args.session_key else None
     if saved is not None and saved.is_file():
         drivers.web.state_load(saved)
         run.data["session_loaded"] = True
-    run.data["window"]["bundle_id"] = _bundle_for_pid(proc.pid)
+    pid = owner or proc.pid
+    run.data["window"]["pid"] = pid
+    run.data["window"]["bundle_id"] = _bundle_for_pid(pid) or f"pid:{pid}"
 
 
 def _spawn_app(args, run: _run.Run, port: int) -> subprocess.Popen:
@@ -1127,8 +1133,9 @@ def _begin_native(args, run: _run.Run, drivers: Drivers) -> NativeDriver:
         run.data["launched"].append(_launch_native_app(args.target))
         run.save()
     bundle = window["bundle_id"]
+    driver.bind(bundle, None, window.get("pid"))
     window["window_id"] = _find_window(driver, bundle, WINDOW_WAIT_S)
-    driver.bind(bundle, window["window_id"])
+    driver.bind(bundle, window["window_id"], window.get("pid"))
     return driver
 
 
@@ -1434,6 +1441,7 @@ def _act(args, ctx: Ctx) -> dict:
     if subject and "skip_gate" not in ctx.faults and _run.gate_matches(subject, data["owner"]):
         if req.gate == "none":
             run.record_gate(args.obs, subject, "stopped")
+            _add_evidence(run, goal_id, record["screenshot_path"] if record else None)
             return _act_result(run, goal_id, "GATE_REQUIRED", subject=subject)
         if req.gate == "approved" and not data["attended"]:
             raise UsageError("unattended_approval",
@@ -1527,7 +1535,7 @@ def _act_perform(args, ctx: Ctx, run: _run.Run, drivers: Drivers, req: ActReques
         status = "OBSERVED"
 
     _login_bookkeeping(run, snap, pending_password, _submits_login(req, sidecar["names"]))
-    if status == "OBSERVED":
+    if status in ("OBSERVED", "NO_EFFECT"):
         _add_evidence(run, goal_id, block["screenshot_path"])
     extra = {}
     if snap.screenshot_withheld:
@@ -1999,7 +2007,19 @@ def _failure(exc: BaseException) -> Tuple[dict, int]:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    """Run one verb, print one JSON object, and return the exit code."""
+    """Run one verb, print one JSON object, and return the exit code.
+
+    The verb runs under umask 077, so the tools it spawns also create private files; the caller's
+    umask is restored afterwards.
+    """
+    previous = os.umask(0o077)
+    try:
+        return _run_verb(argv)
+    finally:
+        os.umask(previous)
+
+
+def _run_verb(argv: Optional[List[str]]) -> int:
     started = time.monotonic()
     ctx = Ctx()
     command = None
@@ -2026,6 +2046,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             run.save()
             run.event(command or "unknown", ctx.inputs, ctx.status,
                       int((time.monotonic() - started) * 1000))
+            run.harden()
         except OSError as exc:
             sys.stderr.write(f"could not write run state: {exc}\n")
     sys.stdout.write(json.dumps(_scrub(out, ctx.secrets())) + "\n")

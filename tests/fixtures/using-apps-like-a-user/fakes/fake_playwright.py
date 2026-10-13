@@ -95,6 +95,7 @@ def linked_block(current):
     target = Path(os.getcwd()) / rel
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(current["yaml"])
+    target.chmod(0o644)
     return header(current) + "### Snapshot\n- [Snapshot](%s)\n" % rel
 
 
@@ -129,6 +130,7 @@ if command == "state-save":
     if scenario.get("state_save") == "replace":
         fresh = target.with_name(target.name + ".fresh")
         fresh.write_text(body)
+        fresh.chmod(0o644)
         os.replace(str(fresh), str(target))
     else:
         target.write_text(body)
@@ -148,6 +150,7 @@ if command == "screenshot":
     target = Path(os.getcwd()) / filename
     source = page().get("png")
     target.write_bytes(Path(source).read_bytes() if source else blank_png())
+    target.chmod(0o644)
     finish(golden_stdout("screenshot"))
 
 if command == "console":

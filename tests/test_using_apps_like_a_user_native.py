@@ -864,12 +864,18 @@ def _cua_golden(name: str) -> dict:
     return json.loads((GOLDEN_CUA / f"{name}.json").read_text())
 
 
-def _bound_cua(window_id: int = GOLDEN_WINDOW, observed: bool = False) -> CuaDriver:
-    """A bound driver on the shared test session, so separate instances stand in for later processes."""
+def _bound_cua(window_id: int = GOLDEN_WINDOW, observed: bool = True) -> CuaDriver:
+    """A bound driver on the shared test session, so separate instances stand in for later processes.
+
+    `observed` leaves the memo a real `observe` would, which an `act` needs to decide whether its
+    target sits in a sheet; the memo is shared by every instance of the session, as it is between
+    `likeuser.py` processes. That observation is not part of the call log the test reads.
+    """
     driver = CuaDriver(session="test-run")
     driver.bind(FIXTURE_BUNDLE, window_id)
     if observed:
         driver.observe(FIXTURE_BUNDLE, window_id, screenshot=True)
+        Path(os.environ["FAKE_CUA_LOG"]).write_text("")
     return driver
 
 
@@ -1111,7 +1117,7 @@ def test_cua_observe_adopts_the_first_on_screen_window_when_none_is_bound(fake_c
 
 
 def test_cua_every_call_carries_one_stable_session_and_the_bound_target(fake_cua):
-    driver = _bound_cua()
+    driver = _bound_cua(observed=False)
     driver.observe(FIXTURE_BUNDLE, GOLDEN_WINDOW, screenshot=False)
     driver.act(Action(kind="click", ref="s0000000f:1"), foreground=False)
     driver.find_window(FIXTURE_BUNDLE)
@@ -1151,6 +1157,70 @@ def test_cua_memo_survives_into_a_fresh_instance_with_the_same_session(fake_cua)
     stranger = CuaDriver(session="run-b")
     stranger.bind(FIXTURE_BUNDLE, GOLDEN_WINDOW)
     assert stranger._recall() is None
+
+
+def _memo_cannot_be_saved(monkeypatch):
+    def refuse(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(tempfile, "mkstemp", refuse)
+
+
+def test_cua_observe_fails_when_the_memo_cannot_be_persisted(fake_cua, monkeypatch):
+    driver = _bound_cua(observed=False)
+    _memo_cannot_be_saved(monkeypatch)
+    with pytest.raises(DriverError) as raised:
+        driver.observe(FIXTURE_BUNDLE, GOLDEN_WINDOW, screenshot=True)
+    assert raised.value.code == "cache_unavailable"
+
+
+def test_cua_act_after_a_failed_memo_write_cannot_deliver_in_the_background(fake_cua, monkeypatch):
+    driver = _bound_cua(observed=False)
+    _memo_cannot_be_saved(monkeypatch)
+    with pytest.raises(DriverError):
+        driver.observe(FIXTURE_BUNDLE, GOLDEN_WINDOW, screenshot=True)
+    monkeypatch.undo()
+    for later in (driver, _bound_cua(observed=False)):
+        with pytest.raises(DriverError) as raised:
+            later.act(Action(kind="click", ref="s0000000f:1"), foreground=False)
+        assert raised.value.code == "needs_foreground"
+    assert fake_cua.tool_calls("click") == []
+
+
+def test_cua_a_failed_memo_write_discards_the_memo_an_earlier_observation_left(fake_cua, monkeypatch):
+    _bound_cua(observed=True)
+    driver = _bound_cua(observed=False)
+    assert driver._recall() is not None
+    _memo_cannot_be_saved(monkeypatch)
+    with pytest.raises(DriverError):
+        driver.observe(FIXTURE_BUNDLE, GOLDEN_WINDOW, screenshot=True)
+    monkeypatch.undo()
+    assert _bound_cua(observed=False)._recall() is None
+
+
+@pytest.mark.parametrize("action", [
+    Action(kind="click", ref="s0000000f:1"),
+    Action(kind="fill", ref="s0000000f:1", text="x"),
+    Action(kind="press", key="Enter"),
+    Action(kind="type", text="hello"),
+    Action(kind="press", ref="s0000000f:1", key="Enter"),
+])
+def test_cua_background_act_without_a_recalled_memo_is_refused_before_any_call(fake_cua, action):
+    with pytest.raises(DriverError) as raised:
+        _bound_cua(observed=False).act(action, foreground=False)
+    assert raised.value.code == "needs_foreground"
+    assert fake_cua.calls() == []
+
+
+def test_cua_foreground_act_without_a_recalled_memo_is_delivered(fake_cua):
+    result = _bound_cua(observed=False).act(Action(kind="click", ref="s0000000f:1"), foreground=True)
+    assert result.delivered is True
+    assert fake_cua.tool_calls()[-1][0] == "click"
+
+
+def test_cua_background_scroll_with_no_target_needs_no_memo(fake_cua):
+    result = _bound_cua(observed=False).act(Action(kind="scroll", direction="down"), foreground=False)
+    assert result.delivered is True
 
 
 def test_cua_payload_goes_on_stdin_and_never_in_argv(fake_cua):
@@ -1432,7 +1502,7 @@ def test_cua_fill_types_nothing_when_selecting_the_old_text_fails(fake_cua):
 
 def test_cua_fill_in_a_sheet_renews_the_token_once_for_both_steps(fake_cua):
     fake_cua.reply(get_window_state=_ok(_window_state(SHEET_ROWS, SHEET_MARKDOWN)))
-    _bound_cua(7).observe(FIXTURE_BUNDLE, 7, screenshot=False)
+    _bound_cua(7, observed=False).observe(FIXTURE_BUNDLE, 7, screenshot=False)
     renewed = json.loads(json.dumps(_window_state(SHEET_ROWS, SHEET_MARKDOWN)))
     for element in renewed["elements"]:
         element["element_token"] = element["element_token"].replace("s0000000a", "s0000000b")
@@ -1440,7 +1510,7 @@ def test_cua_fill_in_a_sheet_renews_the_token_once_for_both_steps(fake_cua):
         get_window_state=[_ok(_window_state(SHEET_ROWS, SHEET_MARKDOWN)), _ok(renewed)],
         bring_to_front={"stdout": {"status": "partial"}, "returncode": 1},
     )
-    _bound_cua(7).act(Action(kind="fill", ref="s0000000a:3", text="/tmp/x"), foreground=True)
+    _bound_cua(7, observed=False).act(Action(kind="fill", ref="s0000000a:3", text="/tmp/x"), foreground=True)
     sequence = [tool for tool, _ in fake_cua.tool_calls()]
     assert sequence[-4:] == ["bring_to_front", "get_window_state", "press_key", "type_text"]
     assert fake_cua.tool_calls("press_key")[-1][1]["modifiers"] == ["cmd"]
@@ -1509,7 +1579,7 @@ def test_cua_coordinate_scale_survives_a_new_process(fake_cua):
 
 
 def test_cua_coordinate_scale_is_measured_when_nothing_was_observed(fake_cua):
-    _bound_cua().act(Action(kind="click", x=100.0, y=50.0), foreground=True)
+    _bound_cua(observed=False).act(Action(kind="click", x=100.0, y=50.0), foreground=True)
     probe = fake_cua.tool_calls("get_window_state")[-1][1]
     assert probe["include_accessibility_tree"] is False and probe["screenshot_out_file"].startswith("/")
     assert fake_cua.tool_calls("click")[-1][1]["x"] == pytest.approx(100 * 1568 / 900, abs=0.01)
@@ -1550,7 +1620,7 @@ def test_cua_drag_uses_foreground_delivery_with_pixels(fake_cua):
 
 def test_cua_drag_between_refs_needs_a_recorded_frame(fake_cua):
     with pytest.raises(DriverError) as raised:
-        _bound_cua().act(Action(kind="drag", ref="s0000000f:1", to_ref="s0000000f:2"), foreground=True)
+        _bound_cua(observed=False).act(Action(kind="drag", ref="s0000000f:1", to_ref="s0000000f:2"), foreground=True)
     assert raised.value.code == "invalid_action"
 
 
@@ -1570,7 +1640,7 @@ def test_cua_sheet_elements_need_the_foreground(fake_cua):
 
 def test_cua_sheet_click_brings_the_app_forward_and_renews_the_token(fake_cua):
     fake_cua.reply(get_window_state=_ok(_window_state(SHEET_ROWS, SHEET_MARKDOWN)))
-    _bound_cua(7).observe(FIXTURE_BUNDLE, 7, screenshot=False)
+    _bound_cua(7, observed=False).observe(FIXTURE_BUNDLE, 7, screenshot=False)
     renewed = json.loads(json.dumps(_window_state(SHEET_ROWS, SHEET_MARKDOWN)))
     for element in renewed["elements"]:
         element["element_token"] = element["element_token"].replace("s0000000a", "s0000000b")
@@ -1578,7 +1648,7 @@ def test_cua_sheet_click_brings_the_app_forward_and_renews_the_token(fake_cua):
         get_window_state=[_ok(_window_state(SHEET_ROWS, SHEET_MARKDOWN)), _ok(renewed)],
         bring_to_front={"stdout": {"status": "partial"}, "returncode": 1},
     )
-    fresh = _bound_cua(7)
+    fresh = _bound_cua(7, observed=False)
     result = fresh.act(Action(kind="click", ref="s0000000a:4"), foreground=True)
     assert result.delivered is True
     sequence = [tool for tool, _ in fake_cua.tool_calls()]
@@ -1589,11 +1659,11 @@ def test_cua_sheet_click_brings_the_app_forward_and_renews_the_token(fake_cua):
 
 def test_cua_sheet_click_fails_when_the_button_is_gone_after_the_refresh(fake_cua):
     fake_cua.reply(get_window_state=[_ok(_window_state(SHEET_ROWS, SHEET_MARKDOWN))])
-    _bound_cua(7).observe(FIXTURE_BUNDLE, 7, screenshot=False)
+    _bound_cua(7, observed=False).observe(FIXTURE_BUNDLE, 7, screenshot=False)
     gone = _window_state(SHEET_ROWS[:2], SHEET_MARKDOWN)
     fake_cua.reply(get_window_state=[_ok(gone)], bring_to_front={"stdout": {"status": "partial"}, "returncode": 1})
     with pytest.raises(DriverError) as raised:
-        _bound_cua(7).act(Action(kind="click", ref="s0000000a:4"), foreground=True)
+        _bound_cua(7, observed=False).act(Action(kind="click", ref="s0000000a:4"), foreground=True)
     assert raised.value.code == "element_not_found"
     assert fake_cua.tool_calls("click") == []
 
@@ -1772,6 +1842,59 @@ def test_cua_malformed_actions_are_refused_before_any_call(fake_cua):
             driver.act(action, foreground=True)
         assert raised.value.code == code
     assert fake_cua.calls() == []
+
+
+ELECTRON_BUNDLE = "com.github.Electron"
+
+
+def _orca_app_selectors(fake_orca):
+    return [call["argv"][call["argv"].index("--app") + 1] for call in fake_orca.calls() if "--app" in call["argv"]]
+
+
+def test_orca_bound_to_a_pid_addresses_the_process_not_the_bundle(fake_orca):
+    driver = OrcaDriver()
+    driver.bind(ELECTRON_BUNDLE, 83439, 4242)
+    driver.find_window(ELECTRON_BUNDLE)
+    driver.observe(ELECTRON_BUNDLE, 83439, screenshot=False)
+    driver.act(Action(kind="click", ref="2"), foreground=True)
+    driver.act(Action(kind="type", text="x"), foreground=True)
+    assert _orca_app_selectors(fake_orca) == ["pid:4242"] * 4
+
+
+def test_orca_keeps_its_pid_across_observe_and_drops_it_for_another_bundle(fake_orca):
+    driver = OrcaDriver()
+    driver.bind(ELECTRON_BUNDLE, 83439, 4242)
+    driver.observe(ELECTRON_BUNDLE, 83439, screenshot=False)
+    driver.bind(FIXTURE_BUNDLE, 83439)
+    driver.observe(FIXTURE_BUNDLE, 83439, screenshot=False)
+    assert _orca_app_selectors(fake_orca) == ["pid:4242", FIXTURE_BUNDLE]
+
+
+def test_orca_without_a_pid_addresses_the_bundle(fake_orca):
+    _bound().observe(FIXTURE_BUNDLE, 83439, screenshot=False)
+    assert _orca_app_selectors(fake_orca) == [FIXTURE_BUNDLE]
+
+
+def test_cua_bound_to_a_pid_never_resolves_the_bundle_id(fake_cua, monkeypatch):
+    monkeypatch.setenv("FAKE_LSAPPINFO_BUNDLE", "someone.else")
+    driver = CuaDriver(session="electron-run")
+    driver.bind(ELECTRON_BUNDLE, GOLDEN_WINDOW, 777)
+    assert driver.find_window(ELECTRON_BUNDLE) == GOLDEN_WINDOW
+    driver.observe(ELECTRON_BUNDLE, GOLDEN_WINDOW, screenshot=False)
+    driver.act(Action(kind="click", ref="s0000000f:1"), foreground=False)
+    calls = fake_cua.tool_calls()
+    assert [tool for tool, _ in calls] == ["list_windows", "get_window_state", "click"]
+    assert {payload["pid"] for _, payload in calls} == {777}
+
+
+def test_cua_drops_a_bound_pid_when_another_bundle_is_bound(fake_cua, monkeypatch):
+    monkeypatch.setenv("FAKE_LSAPPINFO_BUNDLE", "someone.else")
+    driver = CuaDriver(session="electron-run")
+    driver.bind(ELECTRON_BUNDLE, GOLDEN_WINDOW, 777)
+    driver.bind(FIXTURE_BUNDLE, GOLDEN_WINDOW)
+    with pytest.raises(DriverError) as raised:
+        driver.find_window(FIXTURE_BUNDLE)
+    assert raised.value.code == "app_not_found"
 
 
 def test_cua_unknown_app_is_app_not_found(fake_cua, monkeypatch):
