@@ -301,7 +301,7 @@ Do not offer to file the bugs; findings stay in the report.
 | 1 | Unexpected internal error. Traceback on stderr. | Do not retry blindly. Report it, then `end` if a run exists. |
 | 2 | Usage or contract violation, with a `code` such as `pass_without_effect`, `target_name_required`, `unattended_approval`, `unattended_handoff`, `foreground_not_allowed`, `launch_required`, `created_third_party`. | Fix the call or the plan. Do not work around the rule it names. |
 | 3 | Run-state error: unknown run, run ended, run stopped (`stopped_reason`), or `desktop_busy` at `begin`. | Stop acting. `desktop_busy` names the holder; wait or report blocked. |
-| 4 | Driver failure outside `act`, with `driver_error`. | `doctor`, retry once, then report the surface blocked. |
+| 4 | Driver failure outside `act`, with `driver_error`. | `doctor`, retry once, then report the surface blocked. If a failed `begin` returns `cleanup_errors` and a `run_id`, run `end --run <run_id>` to retry the cleanup. |
 | 5 | Missing tool, wrong version, missing macOS permission or extension, or a bad credentials file. | Read `missing[]`, tell the user, and ask before installing. |
 
 ## Never

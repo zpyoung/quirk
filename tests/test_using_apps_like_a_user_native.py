@@ -255,6 +255,44 @@ def test_orca_observe_reports_an_open_sheet_from_its_own_tree_format(fake_orca, 
     assert _bound().observe("com.example.app", 7, screenshot=False).sheet_open is sheet_open
 
 
+def _capture_dir(tmp_path, monkeypatch, name="shot.png"):
+    capture = tmp_path / "orca-captures" / name
+    capture.parent.mkdir(exist_ok=True)
+    capture.write_bytes(b"png")
+    result = _snapshot("App=x (pid 1)\n\n0 standard window Example\n")
+    result["screenshot"] = {"path": str(capture), "scale": 2}
+    _synthetic_dir(tmp_path, monkeypatch, "capture", result)
+    return capture
+
+
+def test_orca_close_removes_a_capture_the_caller_never_collected(fake_orca, tmp_path, monkeypatch):
+    capture = _capture_dir(tmp_path, monkeypatch)
+    driver = _bound()
+    obs = driver.observe("com.example.app", 7, screenshot=True)
+    assert obs.screenshot_path == capture and capture.exists()
+    driver.close()
+    assert not capture.exists()
+
+
+def test_orca_close_tolerates_a_capture_that_is_already_gone(fake_orca, tmp_path, monkeypatch):
+    capture = _capture_dir(tmp_path, monkeypatch)
+    driver = _bound()
+    driver.observe("com.example.app", 7, screenshot=True)
+    capture.unlink()
+    driver.close()
+    driver.close()
+
+
+def test_orca_close_removes_every_capture_it_tracked(fake_orca, tmp_path, monkeypatch):
+    first = _capture_dir(tmp_path, monkeypatch, "first.png")
+    driver = _bound()
+    driver.observe("com.example.app", 7, screenshot=True)
+    second = _capture_dir(tmp_path, monkeypatch, "second.png")
+    driver.observe("com.example.app", 7, screenshot=True)
+    driver.close()
+    assert not first.exists() and not second.exists()
+
+
 def test_observe_without_a_screenshot_skips_it(fake_orca):
     obs = _bound().observe(FIXTURE_BUNDLE, None, screenshot=False)
     assert obs.screenshot_path is None and obs.scale is None

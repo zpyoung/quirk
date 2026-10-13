@@ -242,6 +242,7 @@ class Ctx:
         self.goal_id: Optional[str] = None
         self.faults: frozenset = frozenset()
         self.credentials_lost = False
+        self.cleanup_errors: List[str] = []
 
     def secrets(self):
         return self.run.secrets if self.run is not None else set()
@@ -390,6 +391,11 @@ def _native_name(run: _run.Run) -> Optional[str]:
 
 
 def _copy_shot(source: Optional[Path], dest: Path) -> Optional[Path]:
+    """Move a native driver's screenshot into the run folder; return `dest`, or None when it could not be saved.
+
+    The driver's own copy is deleted whether or not the copy worked, so no UI image stays
+    outside the run folder's private mode.
+    """
     if source is None:
         return None
     try:
@@ -397,6 +403,9 @@ def _copy_shot(source: Optional[Path], dest: Path) -> Optional[Path]:
         os.chmod(str(dest), _run.PRIVATE_FILE_MODE)
     except OSError:
         return None
+    finally:
+        with contextlib.suppress(OSError):
+            source.unlink()
     return dest
 
 
@@ -1011,7 +1020,7 @@ def cmd_begin(args, ctx: Ctx):
         for goal_id, title in goals:
             run.add_goal(goal_id, title)
     except BaseException:
-        _abort_begin(run, lock)
+        _abort_begin(run, lock, ctx)
         raise
     run.save()
     return {
@@ -1024,11 +1033,14 @@ def cmd_begin(args, ctx: Ctx):
     }
 
 
-def _abort_begin(run: _run.Run, lock: _run.DesktopLock) -> None:
-    """Undo what a failed `begin` left behind, then mark the run ended.
+def _abort_begin(run: _run.Run, lock: _run.DesktopLock, ctx: Ctx) -> None:
+    """Undo what a failed `begin` left behind, putting the desktop back as `end` would.
 
-    The run is final afterwards, so everything it opened is closed here: the browser session, any
-    launched app, the native driver state, the desktop lock, and the clipboard copy.
+    Closes the browser session and any launched app, releases the native driver state, deletes the
+    clipboard copy, and restores the frontmost app. A clean abort releases the lock and ends the
+    run. When a step fails, the errors go to `ctx.cleanup_errors` and `begin_cleanup_errors`, the
+    lock stays held, and the run stays open (stopped as `begin_failed`) so a cleanup-only `end`
+    can retry the steps that failed.
     """
     errors: List[str] = []
     drivers = Drivers(run)
@@ -1041,11 +1053,16 @@ def _abort_begin(run: _run.Run, lock: _run.DesktopLock) -> None:
         (run.dir / "clipboard.txt").unlink()
     except OSError:
         pass
-    if run.data["holds_lock"]:
-        lock.release(run.data["run_id"])
-        run.data["holds_lock"] = False
-    run.data["ended"] = _now()
+    _restore_frontmost(run, errors)
     run.data["stopped_reason"] = "begin_failed"
+    if errors:
+        run.data["begin_cleanup_errors"] = errors
+        ctx.cleanup_errors = errors
+    else:
+        if run.data["holds_lock"]:
+            lock.release(run.data["run_id"])
+            run.data["holds_lock"] = False
+        run.data["ended"] = _now()
     run.save()
 
 
@@ -1703,7 +1720,7 @@ def _save_state_privately(drivers: Drivers, path: Path) -> None:
     under a looser mode. If the driver fails or leaves group or other access on the file, the
     file is removed and `path` is left as it was.
     """
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _run.ensure_private_dir(path.parent)
     staging = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     fd = os.open(str(staging), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     try:
@@ -1867,18 +1884,25 @@ def _quit_app(name: str) -> None:
 
 def _terminate_launched(run: _run.Run, errors: List[str]) -> None:
     for entry in run.data["launched"]:
+        if entry.get("terminated"):
+            continue
         kind, _, ident = entry["id"].partition(":")
         try:
             if kind == "pid":
                 _terminate_pid(int(ident))
             else:
                 _quit_app(ident)
+            entry["terminated"] = True
         except (DriverError, OSError, subprocess.SubprocessError, ValueError) as exc:
             errors.append(f"quit {entry['id']}: {exc}")
 
 
 def cmd_end(args, ctx: Ctx):
-    """Restore the user's desktop, close what the run opened, release the lock, and write the reports."""
+    """Restore the user's desktop, close what the run opened, release the lock, and write the reports.
+
+    A run whose `begin` failed has nothing to observe, so `end` only retries the cleanup that
+    `begin` could not finish, restores the frontmost app, and reports.
+    """
     run = _load(ctx, args.run, allow_ended=True, tolerate_lost_credentials=True)
     data = run.data
     ctx.inputs = {"keep_open": args.keep_open}
@@ -1891,19 +1915,23 @@ def cmd_end(args, ctx: Ctx):
     final = run.dir / "final.png"
     final_path = ""
     sheet_open = False
-    try:
-        snap = _observe(run, drivers, None if ctx.credentials_lost else final)
-        final_path = str(snap.screenshot) if snap.screenshot else ""
-        sheet_open = snap.native is not None and snap.native.sheet_open
-    except (DriverError, MissingError) as exc:
-        errors.append(f"final screenshot: {getattr(exc, 'code', exc)}")
-    _save_session(run, drivers, errors)
+    cleanup_only = data["stopped_reason"] == "begin_failed"
+    if not cleanup_only:
+        try:
+            snap = _observe(run, drivers, None if ctx.credentials_lost else final)
+            final_path = str(snap.screenshot) if snap.screenshot else ""
+            sheet_open = snap.native is not None and snap.native.sheet_open
+        except (DriverError, MissingError) as exc:
+            errors.append(f"final screenshot: {getattr(exc, 'code', exc)}")
+        _save_session(run, drivers, errors)
     sheet_note = _cancel_open_sheet(run, drivers, errors) if sheet_open else None
     broken = [g for g, v in data["goals"].items() if v["verdict"] in ("fail", "blocked")]
-    keep = bool(args.keep_open or broken)
+    keep = bool(not cleanup_only and (args.keep_open or broken))
     kept: List[str] = []
     if keep:
         kept = _kept_windows(run)
+    elif cleanup_only and data["window"]["session"] is None:
+        _terminate_launched(run, errors)
     else:
         _close_everything(run, drivers, errors)
     if sheet_note and (keep or not data["launched"]):
@@ -1972,7 +2000,7 @@ def _save_session(run: _run.Run, drivers: Drivers, errors: List[str]) -> None:
     path = _session_file(run, key)
     try:
         _save_state_privately(drivers, path)
-    except (DriverError, OSError) as exc:
+    except (DriverError, UsageError, OSError) as exc:
         errors.append(f"save session: {getattr(exc, 'code', exc)}")
 
 
@@ -1986,12 +2014,19 @@ def _kept_windows(run: _run.Run) -> List[str]:
 
 
 def _close_everything(run: _run.Run, drivers: Drivers, errors: List[str]) -> None:
-    if drivers.uses_web:
+    """Close or detach the browser session and quit what the run launched.
+
+    Steps that already succeeded are remembered in the run state, so calling this again after a
+    partial failure retries only what is left.
+    """
+    window = run.data["window"]
+    if drivers.uses_web and not window.get("session_closed"):
         try:
             if run.data["surface"] == "electron" or run.data["real_chrome"]:
                 drivers.web.detach()
             else:
                 drivers.web.close()
+            window["session_closed"] = True
         except DriverError as exc:
             errors.append(f"close session: {exc.code}")
     _terminate_launched(run, errors)
@@ -2093,6 +2128,9 @@ def _run_verb(argv: Optional[List[str]]) -> int:
     except BaseException as exc:
         out, code = _failure(exc)
         ctx.status = f"error:{out['error']}"
+        if ctx.cleanup_errors and ctx.run is not None:
+            out["run_id"] = ctx.run.data["run_id"]
+            out["cleanup_errors"] = list(ctx.cleanup_errors)
         if code == 1:
             text = _run.redact(traceback.format_exc(), ctx.secrets())
             sys.stderr.write(text)
