@@ -290,3 +290,37 @@ def test_a_manifest_name_with_a_trailing_newline_is_invalid(tmp_path: Path) -> N
     meta["name"] = "basic\n"
     (tdir / "template.json").write_text(json.dumps(meta), encoding="utf-8")
     assert any("must match" in e for e in _problems(tdir))
+
+
+def test_a_symlink_under_a_tier_2_project_is_a_validation_error(tmp_path: Path) -> None:
+    tdir = _tier2(tmp_path, {"project/src/App.tsx": "x"})
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "x.ts").write_text("x", encoding="utf-8")
+    (tdir / "project" / "linked").symlink_to(outside, target_is_directory=True)
+    (tdir / "project" / "App.link.tsx").symlink_to(tdir / "project" / "src" / "App.tsx")
+    problems = _problems(tdir)
+    assert any("project/linked is a symlink" in p for p in problems)
+    assert any("project/App.link.tsx is a symlink" in p for p in problems)
+
+
+def test_a_symlink_under_a_tier_2_example_is_a_validation_error(tmp_path: Path) -> None:
+    tdir = _tier2_with_example(tmp_path, {"example/src/App.tsx": "x"})
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (tdir / "example" / "linked").symlink_to(outside, target_is_directory=True)
+    assert any("example/linked is a symlink" in p for p in _problems(tdir))
+
+
+def test_a_symlink_under_tier_1_vendor_is_a_validation_error(tmp_path: Path) -> None:
+    tdir = _template(tmp_path)
+    (tdir / "vendor").mkdir()
+    real = tmp_path / "real.js"
+    real.write_text("x", encoding="utf-8")
+    (tdir / "vendor" / "lib.js").symlink_to(real)
+    assert any("vendor/lib.js is a symlink" in p for p in _problems(tdir))
+
+
+def test_a_template_without_symlinks_has_no_symlink_problems(tmp_path: Path) -> None:
+    tdir = _tier2(tmp_path, {"project/src/App.tsx": "x", "project/node_modules/dep/index.js": "x"})
+    assert not any("symlink" in p for p in _problems(tdir))

@@ -486,6 +486,21 @@ def test_note_reports_a_fresh_verify_with_screenshots_and_flags_a_stale_one(tmp_
     assert result["verify_stale"] is True
 
 
+@pytest.mark.parametrize("reason", ["verify-crashed", "verify-timeout"])
+def test_note_reports_a_verifier_crash_with_its_reason_and_no_browser(tmp_path, env, project, reason):
+    out = built_example(tmp_path, env, project)
+    out_dir = verify_runner.default_out_dir(out)
+    out_dir.mkdir()
+    report = {"status": "failed", "file_sha256": sha(out.read_text(encoding="utf-8")), "browser": None,
+              "checks": {}, "screenshots": [], "requests": [], "reason": reason, "detail": "chrome exited 9"}
+    (out_dir / "report.json").write_text(json.dumps(report), encoding="utf-8")
+    rc, result = run_cli("note", out, env=env)
+    assert rc == 0 and result["verify_stale"] is False
+    note = result["markdown"]
+    assert f"Verify: failed ({reason}): chrome exited 9" in note
+    assert "in a browser" not in note
+
+
 def test_note_mentions_sidecar_and_the_mermaid_size_warning(tmp_path, env, project):
     big = tmp_path / "big.json"
     big.write_text(json.dumps({"blob": ["x" * 1000] * 11_000}), encoding="utf-8")
