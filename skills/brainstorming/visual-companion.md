@@ -2,9 +2,11 @@
 
 Browser-based visual brainstorming companion for showing mockups, diagrams, and options.
 
-It runs on **Agent Isles** (`isles live`): you author **Markdown screens** with small interactive
-islands instead of hand-writing HTML. Agent Isles renders the newest screen, shows it in the
-browser, and captures clicks back to you as JSONL events.
+You describe each screen in a small `screen.json`; `companion.py` builds it into a single offline
+HTML page, serves the newest one from a local Python server, and records the user's clicks as
+JSONL events you read back. You never hand-write HTML, CSS, or JavaScript. Full protocol details
+(routes, exit codes, state files, check results) are in
+`../writing-html-artifacts/references/companion.md`, relative to this file.
 
 ## When to Use
 
@@ -13,16 +15,14 @@ Decide per-question, not per-session. The test: **would the user understand this
 **Use the browser** when the content itself is visual:
 
 - **UI mockups** — wireframes, layouts, navigation structures, component designs
-- **Architecture diagrams** — system components, data flow, relationship maps (Mermaid/D2 supported)
-- **Side-by-side visual comparisons** — comparing two layouts, two color schemes, two design directions
-- **Design polish** — when the question is about look and feel, spacing, visual hierarchy
-- **Spatial relationships** — state machines, flowcharts, entity relationships rendered as diagrams
+- **Architecture diagrams** — system components, data flow, state machines, entity relationships (Mermaid)
+- **Side-by-side visual comparisons** — two layouts, two color schemes, two design directions
+- **Design polish** — look and feel, spacing, visual hierarchy
 
 **Use the terminal** when the content is text or tabular:
 
 - **Requirements and scope questions** — "what does X mean?", "which features are in scope?"
-- **Conceptual A/B/C choices** — picking between approaches described in words
-- **Tradeoff lists** — pros/cons, comparison tables
+- **Conceptual A/B/C choices** and **tradeoff lists** — approaches described in words, pros/cons
 - **Technical decisions** — API design, data modeling, architectural approach selection
 - **Clarifying questions** — anything where the answer is words, not a visual preference
 
@@ -30,243 +30,190 @@ A question *about* a UI topic is not automatically a visual question. "What kind
 
 ## How It Works
 
-`isles live <dir>` watches a directory for **Markdown** files and serves the **newest one** (by
-modification time) to the browser, auto-switching when you write a newer screen. You write `.md`
-screens to the screen directory; the user sees the rendered result and clicks to select options;
-selections are appended to `<dir>/state/events` (JSONL) that you read on your next turn.
+`companion.py` has five subcommands, each printing exactly one JSON object to stdout (diagnostics
+go to stderr): `start` launches a detached local server for a session, `show` builds a screen from
+your spec and makes it current, `wait` blocks until the user clicks Proceed, `events` prints the
+recorded events, and `stop` stops the server.
 
-You author **standard Markdown plus Agent Isles islands**. The renderer adds the page chrome,
-theme, dark mode, a live header/footer, and all interactive infrastructure — you never hand-write
-`<html>`, CSS, or `<script>`. Selection wiring is built into the islands; there is **no
-`onclick`/`data-choice`/`toggleSelect`** to manage.
+Every screen shows your question, 2 to 4 option cards (single or multi select), a note field, and
+a Proceed button. Each option toggle posts a `click` event; Proceed posts a `proceed` event with
+the current selection and note. Events append to `<session>/state/events`.
 
 ## Requirements
 
-The companion is launched through the Quirk bridge, which finds an Agent Isles runner
-automatically (in order):
+Python 3 only: no Node, npm, or network step. If `python3` is unavailable, fall back to
+terminal-only brainstorming and tell the user.
 
-1. repo-local `node_modules/.bin/isles`,
-2. `isles` on `PATH`,
-3. an explicit `npx` fallback (`github:zpyoung/agent-isles`, which currently carries `live`).
+**Finding the script.** This skill's directory is the one holding its `SKILL.md`; the host shows
+it when the skill loads. The companion is:
 
-The npx fallback needs Node + `npx` available and will download Agent Isles on first use. If none
-of these resolve, the bridge prints a clear error instead of launching — fall back to terminal-only
-brainstorming and tell the user Agent Isles isn't available.
+```
+<this skill's directory>/../writing-html-artifacts/scripts/companion.py
+```
 
-Throughout this guide, the bridge is invoked as
-`python3 "$CLAUDE_PLUGIN_ROOT/bin/agent_isles.py"` (the brainstorming skill ships inside the Quirk
-plugin, so the bridge lives at the plugin root).
+Below, `$COMPANION` stands for that path; set it in your shell command and quote it.
 
 ## Starting a Session
 
-Pick a screen directory **inside the user's project** so screens persist and survive restarts.
-Use a unique session subdirectory, e.g. `.quirk/brainstorm/session-1/`:
+Use a session directory **inside the user's project** under `.quirk/brainstorm/`, with a unique
+name such as `session-1`:
 
 ```bash
-SCREEN_DIR=".quirk/brainstorm/session-1"
-python3 "$CLAUDE_PLUGIN_ROOT/bin/agent_isles.py" live "$SCREEN_DIR"
-# Prints one line of JSON, e.g.:
-# {"type":"server-started","pid":92913,"port":53143,"host":"127.0.0.1",
-#  "url":"http://localhost:53143","screen_dir":".../session-1","state_dir":".../session-1/state"}
+SESSION=".quirk/brainstorm/session-1"
+python3 "$COMPANION" start "$SESSION"
+# {"type":"server-started","pid":92913,"port":53143,"host":"127.0.0.1","url":"http://127.0.0.1:53143",
+#  "screen_dir":".../session-1/screens","state_dir":".../session-1/state"}
 ```
 
-The server **self-backgrounds**: the command prints the server-info JSON and returns immediately,
-so you do NOT need `run_in_background`. Save `url`, `screen_dir`, and `state_dir` from the JSON.
-Tell the user to open the `url`.
+The server detaches itself and `start` returns at once, so you do NOT need `run_in_background`.
+`start` is idempotent: a live server for the session is reused. Tell the user to open the `url`.
 
-**Finding connection info later:** the same JSON is written to `<screen_dir>/state/server-info`.
-If the server has shut down, `<screen_dir>/state/server-stopped` exists instead.
+**Later:** the same JSON is in `<session>/state/server-info`; if the server has shut down,
+`<session>/state/server-stopped` exists instead. Screens persist in `.quirk/brainstorm/`, so
+remind the user to add `.quirk/` to `.gitignore` if it isn't already.
 
-**Persistence & git:** screens stay in `.quirk/brainstorm/` for later reference. Remind the user to
-add `.quirk/` to `.gitignore` if it isn't already.
+**Remote or containerized setups:** the server binds `127.0.0.1` by default. If that URL is
+unreachable from the user's browser, add `--host 0.0.0.0`. **This exposes the session on the
+network: anyone who can reach the port can read the screens and send events.** Use it only on a
+trusted network and only when the user agrees.
 
-**Remote/containerized setups:** if the printed URL is unreachable from the user's browser, relaunch
-binding a non-loopback host and control the printed hostname:
-
-```bash
-python3 "$CLAUDE_PLUGIN_ROOT/bin/agent_isles.py" live "$SCREEN_DIR" --host 0.0.0.0 --url-host localhost
-```
-
-The server auto-exits after 30 minutes of inactivity (tune with `--idle-timeout <minutes>`).
+The server exits after 30 minutes without a request or a `show` (tune with `--idle-minutes N`).
 
 ## The Loop
 
-1. **Write a Markdown screen** to a new file in `screen_dir`:
-   - Use semantic filenames: `platform.md`, `visual-style.md`, `layout.md`
-   - **Never reuse filenames** — each screen gets a fresh file. The newest by mtime is served.
-   - Use the Write tool — **never use cat/heredoc** (dumps noise into the terminal).
-   - If the server has stopped (`state/server-stopped` exists, or `state/server-info` is gone),
-     relaunch it before writing.
+1. **Write a `screen.json`** (see Authoring Screens) with the Write tool. Never use cat or a
+   heredoc; it dumps noise into the terminal. Give each spec a semantic name such as
+   `layout.json`.
 
-2. **Tell the user what to expect and end your turn:**
-   - Remind them of the URL (every step, not just the first).
-   - Give a brief text summary of what's on screen (e.g., "Showing 3 layout options for the homepage").
-   - Ask them to respond in the terminal: "Take a look and let me know what you think. Click to select an option if you'd like."
+2. **Show it:**
 
-3. **On your next turn** — after the user responds:
-   - Read `<state_dir>/events` if it exists — JSONL of the user's browser clicks (see format below).
-   - Merge with the user's terminal text. The terminal message is primary; events provide structured
-     interaction data.
-
-4. **Iterate or advance** — if feedback changes the current screen, write a new file (e.g.
-   `layout-v2.md`). Only move to the next question when the current one is validated.
-
-5. **Unload when returning to the terminal** — when the next step doesn't need the browser, push a
-   waiting screen to clear stale content so the user isn't staring at a resolved choice:
-
-   ```markdown
-   <!-- filename: waiting.md (or waiting-2.md, etc.) -->
-   ## Continuing in the terminal…
+   ```bash
+   python3 "$COMPANION" show "$SESSION" "$SESSION/layout.json"
+   # {"screen":"0003-layout","nonce":"...","url":"...","checks":{...}}
    ```
 
-6. Repeat until done.
+   - Exit `1` means a static check failed. The screen is written but NOT made current, and
+     `checks` says why. Fix the spec and show again.
+   - Exit `2` means a malformed `screen.json` or a missing session. If the server stopped, run
+     `start` again first.
+   - **Never reuse a screen.** Each `show` creates a new numbered screen (`NNNN-<slug>.html`);
+     to change one, edit the spec and show it again.
+
+3. **Tell the user what to expect and end your turn:**
+   - Remind them of the URL (every step, not just the first).
+   - Briefly summarize what's on screen ("Showing 3 layout options for the homepage") and ask
+     them to respond in the terminal, clicking an option if they like.
+
+4. **On your next turn**, read the events:
+
+   ```bash
+   python3 "$COMPANION" events "$SESSION" --screen 0003-layout
+   # {"events":[{"type":"click","screen":"0003-layout","choice":"two-col", ...}]}
+   ```
+
+   Merge them with the user's terminal text. **Terminal input outranks clicks**: if the two
+   disagree, the terminal message wins, and the clicks are context about what they explored.
+
+5. **Iterate or advance.** If feedback changes the screen, show a new one; move on only when the
+   current question is validated.
+
+6. **Unload when returning to the terminal.** When the next step doesn't need the browser, show a
+   short "continuing in the terminal" screen (it still needs 2 to 4 options) so the user isn't
+   staring at a resolved choice. Repeat until done.
 
 ## Advancing with a Proceed button (no terminal round-trip)
 
-By default (step 2 above) you end your turn and the user types in the terminal to advance. To let a
-**browser click** advance you instead, add an `<agent-proceed>` button to the screen and block on it
-with the bridge `wait` command. The tighter loop is: **write screen → `wait` → continue**.
+Every screen has a Proceed button, so you can skip the "end your turn and wait for the user to
+type" step. The tighter loop is: **show, `wait`, continue**.
 
-> **Requires the `<agent-proceed>` island.** This is only available when the running Agent Isles build
-> ships that island (Agent Isles with the proceed island merged). If `wait` keeps timing out and the
-> button doesn't render, the build predates it — fall back to the plain click-then-terminal loop above.
+```bash
+python3 "$COMPANION" wait "$SESSION"
+```
 
-1. Author the screen with options plus a Proceed button (the button stays disabled until a choice is
-   selected):
+`wait` blocks until the user clicks Proceed on the current screen, then prints:
 
-   ```markdown
-   <agent-option-set>
-     <agent-choice id="single-column" title="Single column">Focused reading</agent-choice>
-     <agent-choice id="two-column" title="Two column">Sidebar + main</agent-choice>
-   </agent-option-set>
+```json
+{"proceed": {"type":"proceed","screen":"0003-layout","choice":null,"text":"Proceed","selected":["two-col"],"note":"keep the sidebar narrow","timestamp":1781015420.4},
+ "clicks": [{"type":"click","choice":"two-col","selected":["two-col"], "...": "..."}]}
+```
 
-   <agent-proceed></agent-proceed>
-   ```
+Read `proceed.selected` and `proceed.note`, then continue. `clicks` holds the click events for
+this screen in order.
 
-2. Instead of ending your turn, **block on the click**:
+- **Exit codes.** `0` is the payload above. `1` is a timeout (`{"status":"timeout","screen":...}`):
+  **re-run `wait`**, since the events file is append-only and nothing is lost between runs. `2`
+  is no live server (`{"status":"no-server"}`): run `start` again, then `show` the screen again.
+- **Timeout.** The default 110 seconds sits under a host's 120-second tool limit, so a timeout is
+  a clean exit 1 you can re-run. If you raise `--timeout`, raise the tool's own timeout above it.
+- **Stale screens.** `wait` returns only a Proceed for the screen that was current when it
+  started. When you `show` a newer screen, an open older tab gets a "superseded" banner, its
+  controls turn off, and the server rejects its clicks, so a stale click can't advance you.
+- **Terminal outranks clicks** here too. If the user types while you are blocked in `wait`, treat
+  the typed text as the answer.
 
-   ```bash
-   python3 "$CLAUDE_PLUGIN_ROOT/bin/agent_isles.py" wait "$SCREEN_DIR"
-   ```
-
-   It blocks until the user clicks Proceed, then prints the proceed record and exits 0:
-
-   ```json
-   {"type":"proceed","choice":null,"text":"Proceed →","timestamp":1781015420,"selected":["two-column"]}
-   ```
-
-   Read `selected` and continue. `wait` only honors proceeds for the **current screen** — by timestamp
-   (≥ the newest screen's mtime) and by the screen *nonce* the live server stamps on each click — so a
-   stale click left from a previous screen, or from a not-yet-reloaded tab, never false-advances. Both
-   default to the newest screen; pass `--screen <the file you wrote>` (and `--since`) to pin them
-   explicitly. If the server isn't running for `$SCREEN_DIR`, `wait` exits **2** immediately rather than
-   blocking — relaunch `live` first.
-
-   **Timeout & the Bash tool limit:** `wait` defaults to a 110s timeout — deliberately under the Bash
-   tool's 120s default — so on timeout it exits 1 cleanly and you can **re-run `wait`** to keep waiting.
-   The re-run resumes the *same* screen (a click that arrived between turns is not lost); the timeout
-   message prints the exact `--since <epoch>` to pass for an explicit continuation. If you want a single
-   longer block instead, raise *both*: pass `--timeout 590` AND set the Bash tool's own `timeout` to
-   `600000` (ms) on that call — otherwise the tool kills the command at 120s instead of the clean exit-1.
-
-   Always remind the user of the URL and what's on screen before you call `wait`, so they know to click.
-
-This is opt-in: the plain click-then-terminal loop above still applies when you don't add a Proceed
-button, or when Agent Isles is unavailable. (Phase 2 will swap the file poll for a native Claude Code
-channel so the agent truly sleeps until the click — same `proceed` record, no `wait` code change.)
+Remind the user of the URL and what's on screen before you call `wait`.
 
 ## Authoring Screens
 
-Write a normal Markdown document. Reach for islands only where richer UI helps.
+A `screen.json` looks like this:
 
-### Selectable options (the core interaction)
-
-Wrap `<agent-choice>` rows in an `<agent-option-set>`. Each choice needs a stable `id` (used as the
-event `choice`) and a short `title` (used as the event `text`); the body is the visible description.
-
-```markdown
-## Which homepage layout?
-
-Consider readability and visual hierarchy.
-
-<agent-option-set>
-  <agent-choice id="single-column" title="Single column">Focused, linear reading experience</agent-choice>
-  <agent-choice id="two-column" title="Two column">Sidebar nav beside main content</agent-choice>
-</agent-option-set>
+```json
+{
+  "title": "Homepage layout",
+  "question": "Which homepage layout fits a reading-first product?",
+  "select": "single",
+  "options": [
+    {"id": "single-col", "label": "Single column", "description": "Focused, linear reading"},
+    {"id": "two-col", "label": "Two column", "description": "Sidebar nav beside main content",
+     "html": "<div style=\"display:flex;gap:8px\"><nav>Nav</nav><main>Content</main></div>"}
+  ],
+  "content": "<p>Optional notes, a comparison, or a larger mockup.</p>",
+  "diagram": "flowchart LR\n  A[Landing] --> B[Article]"
+}
 ```
 
-**Multi-select:** add `data-multiselect` on the `<agent-option-set>`. Each click toggles a choice;
-the footer shows the count.
+- `title` is short and becomes the page `<title>`. `question` is what the user is deciding.
+- `select` is `"single"` (picking one deselects the others) or `"multi"` (each click toggles).
+- `options` has **2 to 4 entries**. Each `id` is stable and matches `[a-z0-9-]{1,40}`; it comes
+  back as the event `choice`. `label` comes back as `text`. `description` and `html` are optional;
+  `html` is a small mockup shown inside the card.
+- `content` is optional freeform HTML above the options: a mockup, a comparison, notes.
+- `diagram` is optional Mermaid source, rendered with the companion's built-in Mermaid build. It
+  works offline.
+- A screen that only shows something still offers choices about it ("Looks right", "Needs changes").
 
-```markdown
-<agent-option-set data-multiselect>
-  <agent-choice id="risks" title="Risks">Show risk callouts</agent-choice>
-  <agent-choice id="timeline" title="Timeline">Show timeline context</agent-choice>
-</agent-option-set>
-```
-
-Selecting one choice in a single-select set deselects its siblings. Add `selected` to a choice only
-for an initial selection (at most one in single-select sets).
-
-### Other islands
-
-- `<agent-decision verdict="go|approved|rejected|deferred|needs-review|ship-with-guardrails" title="…">` — scannable decision cards.
-- `<agent-risk level="low|medium|high|critical" title="…">` — risk/blocker callouts.
-- `<agent-proceed label="Proceed →">` — a commit/advance button. Disabled until the user selects an
-  option; add `allow-empty` for a standalone Continue button on a screen with no options. Lets a
-  browser click advance you with no terminal round-trip — see "Advancing with a Proceed button" above.
-- More components and exact attributes: Agent Isles `docs/component-vocabulary.md`.
-
-### Mockups and diagrams
-
-- For wireframes/layout mockups, use plain Markdown structure plus Bootstrap markup (cards, grids)
-  inline where you need richer layout.
-- For architecture diagrams, flowcharts, and state machines, use Mermaid or D2 fenced code blocks.
-- Keep mockups simple — focus on layout and structure, not pixel-perfect design. Use real content
-  (e.g. actual images) when it materially affects the design judgment.
+Keep mockups simple: layout and structure, not pixel-perfect design.
 
 ## Browser Events Format
 
-Clicks are recorded to `<state_dir>/events`, one JSON object per line. The file is cleared
-automatically when you push a newer screen.
+Events are recorded to `<session>/state/events`, one JSON object per line. The file is append-only
+and is never cleared, so filter by `screen` (`events --screen ID` does this) rather than assuming
+the last lines belong to the current screen.
 
 ```jsonl
-{"type":"click","choice":"two-column","text":"Two column","timestamp":1780956565,"selected":["two-column"]}
-{"type":"click","choice":"single-column","text":"Single column","timestamp":1780956570,"selected":["single-column"]}
+{"type":"click","screen":"0003-layout","nonce":"...","choice":"two-col","text":"Two column","selected":["two-col"],"note":null,"timestamp":1781015415.2}
+{"type":"proceed","screen":"0003-layout","nonce":"...","choice":null,"text":"Proceed","selected":["two-col"],"note":"keep the sidebar narrow","timestamp":1781015420.4}
 ```
 
-- `choice` / `text` come from the clicked `<agent-choice>`'s `id` / `title`.
-- `selected` is the full set of currently-selected choice ids (most useful in multi-select).
-- The last event is typically the final selection, but the click sequence can reveal hesitation
-  worth asking about.
-
-If `<state_dir>/events` doesn't exist, the user didn't interact with the browser — use only their
-terminal text.
+- `choice` / `text` come from the toggled option's `id` / `label`. On a `proceed`, `choice` is null.
+- `selected` is the full set of currently selected option ids (most useful in multi-select).
+- `note` is whatever the user typed in the note field, or null.
+- The click sequence can reveal hesitation worth asking about. With no events for the screen, use
+  only the user's terminal text.
 
 ## Design Tips
 
-- **Scale fidelity to the question** — wireframes for layout, polish for polish questions.
-- **Explain the question on each screen** — "Which layout feels more professional?" not just "Pick one".
-- **Iterate before advancing** — if feedback changes the current screen, write a new version.
-- **2–4 options max** per screen.
-
-## File Naming
-
-- Semantic names: `platform.md`, `visual-style.md`, `layout.md`.
-- Never reuse filenames — each screen is a new file.
-- For iterations, append a version suffix: `layout-v2.md`, `layout-v3.md`.
-- Newest file by modification time is served.
+- **Scale fidelity to the question.** Wireframes for layout, polish for polish questions.
+- **Explain the question on each screen.** "Which layout feels more professional?" beats "Pick one".
+- **Iterate before advancing.** If feedback changes the screen, show a new version; never reuse one.
+- **2 to 4 options per screen.** More than that belongs in the terminal as a list.
 
 ## Cleaning Up
 
 ```bash
-python3 "$CLAUDE_PLUGIN_ROOT/bin/agent_isles.py" live "$SCREEN_DIR" --stop
+python3 "$COMPANION" stop "$SESSION"
+# {"stopped": true}
 ```
 
-Screens persist in `.quirk/brainstorm/` for later reference. The server also auto-exits after its
-idle timeout.
-
-## Reference
-
-- Component vocabulary and exact island attributes: Agent Isles `docs/component-vocabulary.md`.
-- Bridge options: `python3 "$CLAUDE_PLUGIN_ROOT/bin/agent_isles.py" live --help`.
+`stopped: false` just means no server was running. Screens persist in `.quirk/brainstorm/` for
+later reference, and the server also exits on its own after the idle timeout.
