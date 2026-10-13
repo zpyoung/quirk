@@ -108,3 +108,10 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: medium
 - **Proposed fix**: Have fold carry notes into the requirement (e.g. reviewNote) or print them on stderr so Claude must act on them; and either let the page set certainty directly or document that notes are advisory. Omit stage-1 items from the stage-2 record, or mark them as pinned.
 
+## BUG-12: pi-watch crashes at import: unpinned pi-coding-agent no longer exports AuthStorage
+- **Observed**: 2026-10-13
+- **File**: skills/pi-dev/scripts/pi-watch/pi-watch.mjs:23
+- **Description**: skills/pi-dev/scripts/pi-watch/package.json declares @earendil-works/pi-coding-agent and pi-ai as "*". The installed version (pi 0.87.1) no longer exports AuthStorage, so pi-watch --check codex|gemini|opus exits 1 with: SyntaxError: The requested module '@earendil-works/pi-coding-agent' does not provide an export named 'AuthStorage'. Every pi-backed path (SDD pi implementers, adversarial-review reviewers) is dead; the SDD run on zpyoung/writing-artifacts fell back to Claude Agent reviewers with reduced independence.
+- **Severity**: high
+- **Proposed fix**: Pin both deps to a known-good version with a frozen lockfile install, and adapt to the new export if AuthStorage moved.
+
