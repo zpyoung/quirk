@@ -1,6 +1,6 @@
 # writing-html-artifacts: tech spec
 
-**Status**: Draft, awaiting user skim · Logic spec: [logic.md](logic.md)
+**Status**: Approved by the user, 2026-10-13 · Logic spec: [logic.md](logic.md)
 
 This document says where to work and what must hold. Paths are relative to the repo root. `$SKILL`
 means `skills/writing-html-artifacts/`. Line anchors are against `ac902bd`.
