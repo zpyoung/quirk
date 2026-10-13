@@ -108,3 +108,30 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: medium
 - **Proposed fix**: Have fold carry notes into the requirement (e.g. reviewNote) or print them on stderr so Claude must act on them; and either let the page set certainty directly or document that notes are advisory. Omit stage-1 items from the stage-2 record, or mark them as pinned.
 
+## BUG-12: --launch-env check ignores the default LIKEUSER credentials
+- **Observed**: 2026-10-13
+- **File**: skills/using-apps-like-a-user/scripts/likeuser.py:981
+- **Description**: cmd_begin loads secret_values only when --credentials-env or --credentials-file is given. A begin with neither still redacts the default LIKEUSER_* values, but _refuse_credential_launch_env and _launch_env never see them, so begin --launch-env PUBLIC_COPY passes a variable whose value equals the default password through to the launched Electron app. Reproduced by the targeted review of f41f461..c337402.
+- **Introduced by**: 52dc460
+- **Severity**: high
+- **Proposed fix**: Load the default credential source before the --launch-env check and add both values to secret_values and run.secrets when no explicit source is given.
+- **Blocker for**: Electron runs that pass --launch-env while LIKEUSER_* is exported
+
+## BUG-13: Electron observe swallows a failed native screenshot observation while a sheet is open
+- **Observed**: 2026-10-13
+- **File**: skills/using-apps-like-a-user/scripts/likeuser.py:478
+- **Description**: _observe_surface now raises when the first native observation of an Electron run fails, but the second native observation that captures the sheet screenshot still catches DriverError and returns a successful snapshot with native_error set and no screenshot. The 'a native failure never reads as no sheet' fix is incomplete on this path.
+- **Introduced by**: 52dc460 (partial fix)
+- **Severity**: high
+- **Proposed fix**: Let DriverError from the screenshot-bearing native observation propagate so observe exits 4.
+- **Blocker for**: Electron runs with native sheets open
+
+## BUG-14: A failed delete of a password-bearing screenshot is reported as withheld
+- **Observed**: 2026-10-13
+- **File**: skills/using-apps-like-a-user/scripts/likeuser.py:451
+- **Description**: _observe deletes a screenshot that shows the password under contextlib.suppress(OSError) and then marks the snapshot screenshot_withheld unconditionally, so a failed unlink leaves the file in the run folder while the output says it was withheld.
+- **Introduced by**: pre-dates 52dc460 (text-match withholding)
+- **Severity**: medium
+- **Proposed fix**: Raise when unlink fails and mark screenshot_withheld only after confirming the path is gone.
+- **Blocker for**: credential handling guarantee in references/safety.md
+
