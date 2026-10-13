@@ -69,6 +69,23 @@ def test_no_node_gives_not_browser_verified(tmp_path: Path, monkeypatch: pytest.
     assert result["file_sha256"] == _sha(page)
 
 
+@pytest.mark.parametrize("node", [None, "/usr/bin/node"])
+def test_missing_file_gives_missing_file_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, node: str | None) -> None:
+    monkeypatch.setattr(verify_runner.shutil, "which", lambda name: node)
+    result = verify_runner.run_verify(tmp_path / "gone.html", tmp_path / "out")
+    assert result["status"] == "not-browser-verified"
+    assert result["reason"] == "missing-file"
+    assert result["file_sha256"] is None
+    assert verify_runner.report_is_stale(tmp_path / "gone.html", tmp_path / "out" / "report.json") is True
+
+
+def test_missing_file_with_unwritable_out_dir_still_returns(tmp_path: Path) -> None:
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    result = verify_runner.run_verify(tmp_path / "gone.html", blocker / "out")
+    assert result["reason"] == "missing-file"
+
+
 def test_default_out_dir_is_beside_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     page = tmp_path / "report.html"
     page.write_text("<p>x</p>")

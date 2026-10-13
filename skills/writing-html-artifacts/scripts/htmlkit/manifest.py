@@ -230,7 +230,11 @@ def _tier1_problems(tdir: Path, meta: dict) -> list[str]:
         elif not path.is_file():
             errors.append(f"{key} file {rel!r} does not exist")
         elif key == "skeleton":
-            text = path.read_text(encoding="utf-8")
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                errors.append(f"skeleton file {rel!r} cannot be read: {exc}")
+                continue
             for placeholder in REQUIRED_PLACEHOLDERS:
                 if placeholder not in text:
                     errors.append(f"skeleton is missing {placeholder}")
@@ -319,8 +323,14 @@ def _verified_problems(tdir: Path, meta: Optional[dict]) -> list[str]:
             errors.append(f"unverified: {rel} is not covered by verified.json")
         elif path is None or not path.is_file():
             errors.append(f"unverified: {rel} is missing")
-        elif _sha256_file(path) != hashes[rel]:
-            errors.append(f"unverified: {rel} changed since it was verified")
+        else:
+            try:
+                changed = _sha256_file(path) != hashes[rel]
+            except OSError as exc:
+                errors.append(f"unverified: {rel} cannot be read: {exc}")
+                continue
+            if changed:
+                errors.append(f"unverified: {rel} changed since it was verified")
     return errors
 
 

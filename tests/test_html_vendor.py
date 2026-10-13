@@ -109,6 +109,35 @@ def test_escape_inline_leaves_other_text_untouched() -> None:
     assert pins.escape_inline("</script> q", "css") == "</script> q"
 
 
+def test_escape_inline_ignores_non_ascii_case_folds() -> None:
+    text = "a</\u017fcript>b</\u212astyle>"
+    assert pins.escape_inline(text, "js") == text
+    assert pins.escape_inline(text, "css") == text
+
+
+def test_non_inline_file_needs_no_inline_sha256(vendor_copy: Path) -> None:
+    manifest_path = vendor_copy / "libraries.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    spec = manifest["libraries"]["chartjs"]["versions"]["4.5.1"]["files"][0]
+    spec["inline"] = False
+    del spec["inline_sha256"]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    code, out = run_verify("--vendor-dir", str(vendor_copy))
+    assert (code, out["errors"]) == (0, [])
+
+
+def test_inline_file_still_needs_a_matching_inline_sha256(vendor_copy: Path) -> None:
+    manifest_path = vendor_copy / "libraries.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    spec = manifest["libraries"]["chartjs"]["versions"]["4.5.1"]["files"][0]
+    spec["inline"] = True
+    spec["inline_sha256"] = "0" * 64
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    code, out = run_verify("--vendor-dir", str(vendor_copy))
+    assert code == 1
+    assert any("inline_sha256" in e for e in out["errors"])
+
+
 def test_escape_inline_rejects_unknown_kind() -> None:
     with pytest.raises(ValueError):
         pins.escape_inline("x", "html")

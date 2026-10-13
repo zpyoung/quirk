@@ -25,16 +25,17 @@ REGISTRY_URL = "https://registry.npmjs.org/{package}/latest"
 OSV_URL = "https://api.osv.dev/v1/query"
 
 _CLOSERS = {
-    "js": (re.compile(r"</script", re.IGNORECASE), "<\\/script"),
-    "css": (re.compile(r"</style", re.IGNORECASE), "<\\/style"),
+    "js": (re.compile(r"</script", re.IGNORECASE | re.ASCII), "<\\/script"),
+    "css": (re.compile(r"</style", re.IGNORECASE | re.ASCII), "<\\/style"),
 }
 
 
 def escape_inline(text: str, kind: str) -> str:
     """Return `text` safe to embed in a `<script>` (kind "js") or `<style>` (kind "css") block.
 
-    Every case variant of the matching closing-tag opener becomes its lowercase
-    escaped form; the rest of the text is byte-identical. Raises ValueError for any
+    Every ASCII-case variant of the matching closing-tag opener becomes its lowercase
+    escaped form; the rest of the text is byte-identical. Case folding is ASCII-only to match
+    `vendor-build/build-webawesome.mjs` and `htmlkit.vendor.escape_inline`. Raises ValueError for any
     other kind.
     """
     try:
@@ -55,8 +56,8 @@ def load_manifest(vendor_dir: Path) -> Dict[str, Any]:
 def verify(vendor_dir: Path) -> List[str]:
     """Return one message per integrity problem in `vendor_dir`; empty means healthy.
 
-    Every version of every library must have each listed file with matching raw and
-    inlined hashes, a license file, and `current` must name a listed version whose
+    Every version of every library must have each listed file with matching raw hash (and inlined
+    hash when the file is inlined), a license file, and `current` must name a listed version whose
     directory exists. Messages start with the path relative to `vendor_dir`.
     """
     errors: List[str] = []
@@ -92,9 +93,10 @@ def _verify_file(name: str, version: str, base: Path, spec: Dict[str, Any]) -> L
     problems: List[str] = []
     if _sha256(raw) != spec.get("sha256"):
         problems.append("%s: sha256 does not match the manifest" % label)
-    escaped = escape_inline(raw.decode("utf-8", errors="replace"), spec["kind"])
-    if _sha256(escaped.encode("utf-8")) != spec.get("inline_sha256"):
-        problems.append("%s: inline_sha256 does not match the manifest" % label)
+    if spec.get("inline") is True:
+        escaped = escape_inline(raw.decode("utf-8", errors="replace"), spec["kind"])
+        if _sha256(escaped.encode("utf-8")) != spec.get("inline_sha256"):
+            problems.append("%s: inline_sha256 does not match the manifest" % label)
     return problems
 
 

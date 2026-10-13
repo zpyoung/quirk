@@ -35,8 +35,11 @@ const DARK_CLASS = "wa-dark";
 const DEFAULT_LIBRARY_MARKER = "src/components/icon/library.default.ts";
 const OFFLINE_ICONS = "offline-icons";
 
+const ASCII_CI = (word) => [...word].map((c) => `[${c}${c.toUpperCase()}]`).join("");
+const SCRIPT_CLOSER = new RegExp(`</${ASCII_CI("script")}`, "g");
+const STYLE_CLOSER = new RegExp(`</${ASCII_CI("style")}`, "g");
 const escapeInline = (text, kind) =>
-  kind === "js" ? text.replace(/<\/script/gi, "<\\/script") : text.replace(/<\/style/gi, "<\\/style");
+  kind === "js" ? text.replace(SCRIPT_CLOSER, "<\\/script") : text.replace(STYLE_CLOSER, "<\\/style");
 const sha256 = (text) => createHash("sha256").update(text, "utf8").digest("hex");
 
 function loadIcons() {
