@@ -5,6 +5,9 @@
  *
  * Usage: node verify.mjs FILE OUT_DIR MODE   (MODE is "offline" or "connected")
  *
+ * Offline mode aborts every http(s) request and fails the network check on any; connected mode
+ * lets them through and only reports the URLs.
+ *
  * Writes OUT_DIR/report.json and four full-page screenshots, prints the report to stdout.
  * Exit codes: 0 passed, 1 failed, 2 usage error, 3 no browser could be launched.
  * Never downloads a browser; it only drives one that is already installed.
@@ -166,6 +169,7 @@ async function verify(browser, label, sha) {
       await context.route(/^https?:/, (route) => {
         const target = route.request().url();
         requests.add(target);
+        if (mode === "connected") return route.continue();
         blocked.add(target);
         return route.abort();
       });
@@ -177,7 +181,7 @@ async function verify(browser, label, sha) {
       const page = await context.newPage();
       page.on("console", (msg) => {
         if (msg.type() !== "error") return;
-        // a blocked request logs "Failed to load resource"; the network check owns that failure
+        // offline only: a blocked request logs "Failed to load resource"; the network check owns that failure
         if (blocked.has(msg.location().url)) return;
         consoleDetails.push(`${run}: console.error: ${msg.text()}`);
       });
