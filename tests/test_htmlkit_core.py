@@ -5,6 +5,7 @@ skill's real ``vendor/`` directory, and nothing touches the network.
 """
 from __future__ import annotations
 
+import colorsys
 import hashlib
 import json
 import os
@@ -888,6 +889,16 @@ OFFLINE_FAILS = [
     "<script>var x = new XMLHttpRequest();</script>",
     '<script>new WebSocket("wss://x.example")</script>',
     '<script>new EventSource("/events")</script>',
+    '<svg><image xlink:href="https://x.example/a.png"/></svg>',
+    '<svg><use href="//x.example/s.svg#i"/></svg>',
+    '<table background="https://x.example/a.png"><tr><td>x</td></tr></table>',
+    '<link rel="preload" as="image" imagesrcset="a.png 1x, https://x.example/b.png 2x">',
+    '<iframe srcdoc="&lt;img src=https://x.example/a.png&gt;"></iframe>',
+    '<iframe srcdoc="&lt;script&gt;fetch(\'/x\')&lt;/script&gt;"></iframe>',
+    '<style>a{background:image-set("https://x.example/a.png" 1x)}</style>',
+    "<style>a{background:-webkit-image-set('//x.example/a.png' 1x)}</style>",
+    '<style>a{background:src("https://x.example/a.png")}</style>',
+    '<p style="background-image:image-set(\'https://x.example/a.png\' 1x, url(b.png) 2x)">x</p>',
 ]
 
 OFFLINE_PASSES = [
@@ -902,6 +913,13 @@ OFFLINE_PASSES = [
     "<style>a{background:url(data:image/png;base64,AAAA)}</style>",
     "<style>a{background:url(local.png)}</style>",
     '<script>const s = "a < b"; document.title = s;</script>',
+    '<svg><a xlink:href="https://example.com"><text>x</text></a></svg>',
+    '<svg><image xlink:href="a.png"/><use href="#i"/></svg>',
+    '<table background="a.png"><tr><td>x</td></tr></table>',
+    '<link rel="preload" as="image" imagesrcset="a.png 1x, b.png 2x">',
+    '<iframe srcdoc="&lt;p&gt;see https://x.example&lt;/p&gt;"></iframe>',
+    '<style>a{background:image-set("a.png" 1x, url(b.png) 2x)}</style>',
+    "<style>a{content:'https://x.example'}</style>",
 ]
 
 
@@ -1106,6 +1124,34 @@ def test_tier2_connected(skill: Path, store: vendor.VendorStore) -> None:
     assert run(skill, store, ok, mode="connected", tier=2)["passed"]
 
 
+def test_srcdoc_findings_are_prefixed(skill: Path, store: vendor.VendorStore) -> None:
+    body = '<iframe srcdoc="&lt;img src=https://x.example/a.png&gt;"></iframe>'
+    result = run(skill, store, make_page(skill, store, body=body))
+    assert [f["detail"] for f in result["failures"]] == ["srcdoc: <img src> loads https://x.example/a.png"]
+
+
+def test_srcdoc_is_scanned_with_connected_rules(skill: Path, store: vendor.VendorStore) -> None:
+    def page(inner: str) -> str:
+        return make_page(skill, store, mode="connected", body=f'<iframe srcdoc="{inner}"></iframe>')
+
+    bad = page("&lt;script src=https://x.example/a.js&gt;&lt;/script&gt;")
+    assert failed(run(skill, store, bad, mode="connected")) == ["external-refs"]
+    ok = page("&lt;img src=https://x.example/a.png&gt;")
+    assert run(skill, store, ok, mode="connected")["passed"]
+
+
+def test_connected_checks_svg_script_href_and_allows_images(skill: Path, store: vendor.VendorStore) -> None:
+    bad = make_page(skill, store, mode="connected", body='<svg><script xlink:href="https://x.example/a.js"/></svg>')
+    assert failed(run(skill, store, bad, mode="connected")) == ["external-refs"]
+    ok = make_page(
+        skill,
+        store,
+        mode="connected",
+        body='<svg><image xlink:href="https://x.example/a.png"/></svg><style>a{background:image-set("https://x.example/a.png" 1x)}</style>',
+    )
+    assert run(skill, store, ok, mode="connected")["passed"]
+
+
 def test_tier2_has_no_library_blocks_to_license_check(skill: Path, store: vendor.VendorStore) -> None:
     html = make_page(skill, store, tier=2, libs=(), shells=())
     assert run(skill, store, html, tier=2) == {"passed": True, "failures": [], "warnings": []}
@@ -1201,13 +1247,32 @@ def test_house_accent_pairs(house: dict, scheme: int) -> None:
     assert contrast(c["focus"][scheme], c["bg"][scheme]) >= 3.0
 
 
+def _hue_saturation(value: str) -> tuple[float, float]:
+    h = value.lstrip("#")
+    r, g, b = (int(h[i : i + 2], 16) / 255 for i in (0, 2, 4))
+    hue, light, sat = colorsys.rgb_to_hls(r, g, b)
+    return hue * 360, sat
+
+
+def _is_purple(value: str) -> bool:
+    hue, sat = _hue_saturation(value)
+    return 235 <= hue <= 330 and sat >= 0.25
+
+
+@pytest.mark.parametrize("value", ["#4f46e5", "#6366f1", "#7c3aed", "#8b5cf6", "#a855f7"])
+def test_purple_predicate_flags_indigo_and_violet(value: str) -> None:
+    assert _is_purple(value)
+
+
+@pytest.mark.parametrize("value", ["#111111", "#f5f5f5", "#6b7280", "#1f2937", "#0f766e", "#b45309"])
+def test_purple_predicate_passes_neutrals_and_other_hues(value: str) -> None:
+    assert not _is_purple(value)
+
+
 def test_house_palette_avoids_purple(house: dict) -> None:
     for pair in house["color"].values():
         for value in pair:
-            h = value.lstrip("#")
-            r, g, b = (int(h[i : i + 2], 16) for i in (0, 2, 4))
-            purple = b > g + 40 and r > g + 40
-            assert not purple, value
+            assert not _is_purple(value), value
 
 
 def test_base_css_maps_simple_and_web_awesome_variables() -> None:
