@@ -9,9 +9,12 @@ import http.client
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Optional
 
@@ -21,6 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "skills" / "writing-html-artifacts"
 sys.path.insert(0, str(SKILL / "scripts"))
 
+import companion  # noqa: E402
 from htmlkit import assemble, resolve  # noqa: E402
 
 CLI = SKILL / "scripts" / "companion.py"
@@ -325,7 +329,8 @@ def test_show_rejects_the_wrong_number_of_options(server: Server, count: int) ->
         {"select": "some"},
         {"question": ""},
         {"title": 5},
-        {"diagram": ""},
+        {"diagram": 5},
+        {"content": ["x"]},
         {"extra": 1},
         {"content": "<!-- slot: main -->\nx"},
     ],
@@ -469,3 +474,137 @@ def test_stop_without_a_session_reports_false(tmp_path: Path) -> None:
 def test_usage_errors_are_one_json_object(tmp_path: Path) -> None:
     proc = subprocess.run([sys.executable, str(CLI), "bogus"], capture_output=True, text=True)
     assert proc.returncode == 2 and "error" in json.loads(proc.stdout)
+
+
+def test_session_path_that_cannot_be_created_is_a_json_error(tmp_path: Path) -> None:
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    rc, out, _ = run("start", blocker / "s1")
+    assert rc == 2 and "error" in out
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+def test_show_that_cannot_write_the_screen_is_a_json_error(server: Server) -> None:
+    screens = server.session / "screens"
+    screens.chmod(0o500)
+    try:
+        out = server.show(SCREEN, expect=2)
+    finally:
+        screens.chmod(0o700)
+    assert "error" in out
+
+
+@pytest.mark.parametrize("port", ["70000", "-1", "abc"])
+def test_out_of_range_port_is_a_json_usage_error(tmp_path: Path, port: str) -> None:
+    rc, out, _ = run("start", tmp_path / "s", "--foreground", f"--port={port}")
+    assert rc == 2 and "error" in out
+
+
+def test_empty_optional_strings_are_treated_as_absent(server: Server) -> None:
+    spec = screen_with(
+        content="",
+        diagram="   ",
+        options=[
+            {"id": "a", "label": "A", "description": "", "html": "  "},
+            {"id": "b", "label": "B", "description": "  ", "html": ""},
+        ],
+    )
+    shown = server.show(spec)
+    assert shown["checks"]["passed"] is True
+    page = (server.session / "screens" / f"{shown['screen']}.html").read_text(encoding="utf-8")
+    assert '<span class="q-option-desc"' not in page and '<span class="q-option-mockup"' not in page
+    assert '<pre class="mermaid"' not in page and "/_quirk/lib/mermaid" not in page
+
+
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+class _NotACompanion(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        body = b"hello"
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+
+@pytest.fixture
+def bystander():
+    proc = subprocess.Popen(["sleep", "60"])
+    try:
+        yield proc
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def _record_server(session: Path, pid: int, port: int) -> None:
+    state = session / "state"
+    state.mkdir(parents=True)
+    (session / "screens").mkdir()
+    info = {"type": "server-started", "pid": pid, "port": port, "host": "127.0.0.1"}
+    (state / "server-info").write_text(json.dumps(info))
+
+
+@pytest.mark.parametrize("listener", [False, True])
+def test_a_reused_pid_is_never_signalled(session: Path, bystander: subprocess.Popen, listener: bool) -> None:
+    httpd = None
+    if listener:
+        httpd = HTTPServer(("127.0.0.1", 0), _NotACompanion)
+        port = httpd.server_address[1]
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    else:
+        port = _free_port()
+    try:
+        _record_server(session, bystander.pid, port)
+        rc, out, _ = run("stop", session)
+        assert rc == 0 and out == {"stopped": False}
+        assert bystander.poll() is None
+        assert json.loads((session / "state" / "server-stopped").read_text())["reason"] == "stale"
+        rc, out, _ = run("wait", session, "--timeout", 1)
+        assert rc == 2 and out == {"status": "no-server"}
+    finally:
+        if httpd:
+            httpd.shutdown()
+            httpd.server_close()
+
+
+def test_start_replaces_a_stale_session_whose_pid_was_reused(session: Path, bystander: subprocess.Popen) -> None:
+    _record_server(session, bystander.pid, _free_port())
+    rc, info, _ = run("start", session, "--idle-minutes", "5")
+    try:
+        assert rc == 0 and info["pid"] != bystander.pid
+    finally:
+        run("stop", session)
+    assert bystander.poll() is None
+
+
+def test_wildcard_bind_accepts_only_loopback_and_own_host_values(session: Path) -> None:
+    srv = start_foreground(session, "--host", "0.0.0.0")
+    try:
+        assert srv.info["host"] == "0.0.0.0"
+        port = srv.port
+        assert srv.request("GET", "/_quirk/state")[0] == 200
+        assert srv.request("GET", "/_quirk/state", headers={"Host": f"localhost:{port}"})[0] == 200
+        assert srv.request("GET", "/_quirk/state", headers={"Host": f"127.0.0.1:{port}"})[0] == 200
+        for host in (f"evil.example:{port}", f"127.0.0.1:{port + 1}", "127.0.0.1", f"[::1:{port}", f"8.8.8.8:{port}"):
+            assert srv.request("GET", "/_quirk/state", headers={"Host": host})[0] == 403, host
+        rebound = {"Host": f"evil.example:{port}", "Origin": f"http://evil.example:{port}"}
+        assert srv.request("GET", "/_quirk/state", headers=rebound)[0] == 403
+        assert srv.post({"nonce": "x", "type": "click"}, rebound)[0] == 403
+    finally:
+        stop_server(srv)
+
+
+def test_split_host_header_handles_names_and_bracketed_v6() -> None:
+    assert companion._split_host_header("LocalHost:80") == ("localhost", "80")
+    assert companion._split_host_header("[::1]:80") == ("::1", "80")
+    assert companion._split_host_header("::1:80") == (None, None)
+    assert companion._split_host_header("[::1]") == (None, None)
+    assert companion._split_host_header("nohost") == (None, None)
