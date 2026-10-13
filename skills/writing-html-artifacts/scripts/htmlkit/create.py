@@ -8,8 +8,9 @@ out of ``templates list`` and out of builds until it is verified.
 
 ``verify_template`` builds the template's own example in a scratch project, runs the static checks
 and the browser verification, and only on a pass writes ``verified.json`` with the hashes of the
-exact bytes it built. A missing browser does not fail a template (``browser`` is then false); a
-failed static check, a failed browser check or an example that does not build does. Nothing here
+exact bytes it built. A missing Node, browser or verifier install does not fail a template (``browser`` is then
+false); a failed static check, a failed browser check, a verifier crash or timeout, or an example
+that does not build does. Nothing here
 touches the network apart from what ``build_app`` and the verify runner already do.
 
 Problems the author can fix (existing name, unknown base, unreadable input, no such custom template,
@@ -38,8 +39,9 @@ from .resolve import TemplateNotFound, default_user_dir, find_template, template
 DEFAULT_BASE = "report"
 EXAMPLE_FILE = "example.src.html"
 EXAMPLE_DATA_STEM = "example.data"
-PASSING = ("passed", "not-browser-verified")
-_COPY_SKIP = shutil.ignore_patterns("node_modules", "dist", ".DS_Store", "verified.json")
+ENVIRONMENT_LIMITS = ("no-node", "no-browser", "install-failed")
+NOT_A_BASE = ("companion",)
+_PROJECT_SKIP = ("node_modules", "dist")
 _BODY = re.compile(r"<body\b[^>]*>(.*?)(?:</body\s*>|\Z)", re.IGNORECASE | re.DOTALL)
 _HEAD = re.compile(r"<head\b.*?</head\s*>", re.IGNORECASE | re.DOTALL)
 _DOCUMENT_TAGS = re.compile(r"<!doctype[^>]*>|</?html\b[^>]*>", re.IGNORECASE)
@@ -83,8 +85,37 @@ main :is(p, ul, ol, blockquote) { max-width: 70ch; }
 """
 
 
+def _project_dir_of(src: Path) -> Optional[Path]:
+    """The tier-2 ``project/`` directory of the template at ``src``, or None for any other template."""
+    try:
+        meta = json.loads((src / "template.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(meta, dict) or meta.get("tier") != 2:
+        return None
+    rel = meta.get("project", "project/")
+    return (src / rel).resolve() if isinstance(rel, str) and rel else None
+
+
 def _copy_tree(src: Path, dest: Path) -> None:
-    shutil.copytree(src, dest, ignore=_COPY_SKIP)
+    """Copy a template folder without build output.
+
+    ``node_modules`` and ``dist`` are skipped only under a tier-2 ``project/`` and ``verified.json``
+    only at the template root, so a tier-1 template that vendors a ``dist/`` path copies whole.
+    """
+    root = src.resolve()
+    project = _project_dir_of(src)
+
+    def ignore(directory: str, names: list[str]) -> set[str]:
+        here = Path(directory).resolve()
+        skipped = {".DS_Store"} & set(names)
+        if here == root:
+            skipped |= {"verified.json"} & set(names)
+        if project is not None and (here == project or project in here.parents):
+            skipped |= set(_PROJECT_SKIP) & set(names)
+        return skipped
+
+    shutil.copytree(src, dest, ignore=ignore)
 
 
 def _read_text(path: Path, what: str) -> str:
@@ -94,13 +125,16 @@ def _read_text(path: Path, what: str) -> str:
         raise BuildError(f"cannot read {what} {path}: {exc}") from exc
 
 
-def _retarget_example(example: Path, name: str, data_source: Optional[Path] = None) -> list[str]:
+def _retarget_example(
+    example: Path, name: str, data_source: Optional[Path] = None, data_allowed: bool = True
+) -> list[str]:
     """Point the source header at template ``name``; returns notes for the author.
 
     ``data_source`` is where the example's ``data`` field resolved before the example moved into
     the template folder: the file is copied beside the example as ``example.data.<ext>``, or the
     field is dropped with a note when it is gone. None leaves ``data`` alone, for an example whose
-    data file is already in the folder.
+    data file is already in the folder. With ``data_allowed`` false the file lies outside the
+    directories a build may read data from, so it is never copied and the field is dropped.
     """
     text = _read_text(example, "example").replace("\r\n", "\n")
     first, newline, rest = text.partition("\n")
@@ -116,7 +150,13 @@ def _retarget_example(example: Path, name: str, data_source: Optional[Path] = No
     notes: list[str] = []
     meta["template"] = name
     given = meta.get("data")
-    if isinstance(given, str) and data_source is not None:
+    if isinstance(given, str) and data_source is not None and not data_allowed:
+        del meta["data"]
+        notes.append(
+            f"the example's data file {given!r} is outside the project directory and the source file's directory, "
+            "so it was not copied and the example no longer embeds data"
+        )
+    elif isinstance(given, str) and data_source is not None:
         if data_source.is_file() and data_source.suffix.lower() in (".json", ".csv"):
             target = f"{EXAMPLE_DATA_STEM}{data_source.suffix.lower()}"
             shutil.copyfile(data_source, example.parent / target)
@@ -187,9 +227,14 @@ def _target_dir(name: str, level: str, project_dir: Path, user: Path) -> Path:
 
 def _find(name: str, roots: list[tuple[str, Path]], skill: Path):
     try:
-        return find_template(name, roots, skill_dir=skill)[0]
+        found = find_template(name, roots, skill_dir=skill)[0]
     except TemplateNotFound as exc:
         raise BuildError(str(exc)) from exc
+    if found.level == "builtin" and found.name in NOT_A_BASE:
+        raise BuildError(
+            f"the {found.name} template is not a base for custom page templates: its example is a screen.json, not a page source"
+        )
+    return found
 
 
 def create_template(
@@ -239,7 +284,7 @@ def create_template(
             else:
                 origin = _find(str(meta.get("template", "")), roots, skill)
                 _copy_tree(origin.dir, staging)
-                notes += _adopt_artifact_example(origin, source, name, staging)
+                notes += _adopt_artifact_example(origin, source, name, staging, project_dir)
         if not plain:
             _rename_manifest(staging, name)
         os.rename(staging, dest)
@@ -276,7 +321,14 @@ def _data_name(example_in_staging: Path) -> str:
     return data if isinstance(data, str) else ""
 
 
-def _adopt_artifact_example(origin, artifact: Path, name: str, staging: Path) -> list[str]:
+def _data_within(path: Path, project_dir: Path, source_dir: Path) -> bool:
+    """True when ``path`` resolves under the project directory or the source file's directory."""
+    resolved = path.resolve()
+    allowed = (source_dir.resolve(), Path(project_dir).resolve())
+    return any(resolved == base or base in resolved.parents for base in allowed)
+
+
+def _adopt_artifact_example(origin, artifact: Path, name: str, staging: Path, project_dir: Path) -> list[str]:
     """Use the artifact's sibling ``<slug>.src.html`` as the example of the copied template."""
     if origin.tier != 1:
         return [
@@ -294,7 +346,9 @@ def _adopt_artifact_example(origin, artifact: Path, name: str, staging: Path) ->
         ]
     atomic_write(example, _read_text(src, "source"))
     data_name = _data_name(example)
-    return _retarget_example(example, name, src.parent / data_name if data_name else None)
+    data_source = src.parent / data_name if data_name else None
+    allowed = data_source is None or _data_within(data_source, project_dir, src.parent)
+    return _retarget_example(example, name, data_source, allowed)
 
 
 def _locate_custom(name: str, project_dir: Path, user: Path) -> tuple[str, Path]:
@@ -369,7 +423,10 @@ def verify_template(
 
     status = verdict.get("status")
     checks = built["checks"]
-    passed = bool(checks["passed"]) and status in PASSING
+    ran_or_environment_limited = status == "passed" or (
+        status == "not-browser-verified" and verdict.get("reason") in ENVIRONMENT_LIMITS
+    )
+    passed = bool(checks["passed"]) and ran_or_environment_limited
     browser = status == "passed"
     report = {
         "template": {"name": name, "level": level, "tier": tier, "path": str(tdir)},

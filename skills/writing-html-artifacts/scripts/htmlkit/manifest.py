@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +25,7 @@ REQUIRED_PLACEHOLDERS = ("{{header}}", "{{title}}", "{{head}}", "{{chrome}}", "{
 _SLOT_PLACEHOLDER = re.compile(r"\{\{slot:([^{}]*)\}\}")
 _LIB_KINDS = ("js", "css")
 _LIB_POSITIONS = ("head", "body-end")
+_TIER2_UNHASHED = ("node_modules", "dist")
 
 
 class ManifestError(Exception):
@@ -278,7 +280,9 @@ def verification_paths(tdir: Path, meta: Optional[dict] = None) -> list[str]:
     """Relative paths that ``verified.json`` must hash for this template, sorted.
 
     Tier 1 covers the manifest, skeleton, tokens, rules, example and every file under
-    ``vendor/``. Tier 2 covers the manifest, ``package.json`` and ``pnpm-lock.yaml``.
+    ``vendor/``. Tier 2 covers the manifest and every file under ``project/`` except
+    ``node_modules`` and ``dist``, so a ``.pnpmfile.cjs`` or ``vite.config.ts`` cannot ride along
+    under a stamp.
     """
     tdir = Path(tdir)
     if meta is None:
@@ -288,6 +292,13 @@ def verification_paths(tdir: Path, meta: Optional[dict] = None) -> list[str]:
     if meta.get("tier") == 2:
         base = str(meta.get("project", "project/")).rstrip("/")
         paths.update({f"{base}/package.json", f"{base}/pnpm-lock.yaml"})
+        pdir = _safe_path(tdir, base)
+        if pdir is not None and pdir.is_dir():
+            for dirpath, dirnames, filenames in os.walk(pdir):
+                dirnames[:] = [d for d in dirnames if d not in _TIER2_UNHASHED]
+                for fname in filenames:
+                    if fname != ".DS_Store":
+                        paths.add(f"{base}/{(Path(dirpath) / fname).relative_to(pdir).as_posix()}")
     else:
         for key in ("skeleton", "tokens", "rules", "example"):
             if isinstance(meta.get(key), str):

@@ -6,7 +6,8 @@
  * Usage: node verify.mjs FILE OUT_DIR MODE   (MODE is "offline" or "connected")
  *
  * Offline mode aborts every http(s) request and fails the network check on any; connected mode
- * lets them through and only reports the URLs.
+ * lets them through and only reports the URLs. In connected mode a navigation that fails or times
+ * out is recorded as a network failure and the report is still written.
  *
  * Writes OUT_DIR/report.json and four full-page screenshots, prints the report to stdout.
  * Exit codes: 0 passed, 1 failed, 2 usage error, 3 no browser could be launched.
@@ -23,6 +24,7 @@ const WIDTHS = [375, 1280];
 const SCHEMES = ["light", "dark"];
 const HEIGHT = 800;
 const MAX_DETAILS = 20;
+const NAV_TIMEOUT_MS = Number(process.env.QUIRK_VERIFY_NAV_TIMEOUT_MS) || 30000;
 const LOCAL_SCHEMES = ["file:", "data:", "blob:", "about:"];
 
 const [, , fileArg, outArg, mode] = process.argv;
@@ -153,11 +155,12 @@ async function verify(browser, label, sha) {
   const consoleDetails = [];
   const viewportDetails = [];
   const themeDetails = [];
+  const navigationDetails = [];
   const requests = new Set();
   const screenshots = [];
   let skippedBackgrounds = 0;
 
-  for (const scheme of SCHEMES) {
+  runs: for (const scheme of SCHEMES) {
     for (const width of WIDTHS) {
       const run = `${width}px ${scheme}`;
       const context = await browser.newContext({
@@ -187,7 +190,14 @@ async function verify(browser, label, sha) {
       });
       page.on("pageerror", (err) => consoleDetails.push(`${run}: pageerror: ${err.message}`));
 
-      await page.goto(url, { waitUntil: "load" });
+      try {
+        await page.goto(url, { waitUntil: "load", timeout: NAV_TIMEOUT_MS });
+      } catch (err) {
+        if (mode !== "connected") throw err;
+        navigationDetails.push(`${run}: navigation to ${url} failed: ${String(err.message).split("\n")[0]}`);
+        await context.close();
+        break runs;
+      }
       await page.waitForTimeout(150);
 
       const shot = path.join(outDir, `${width}-${scheme}.png`);
@@ -214,7 +224,10 @@ async function verify(browser, label, sha) {
 
   const requestList = [...requests].sort();
   const networkDetails = requestList.map((r) => `${mode === "offline" ? "blocked" : "reported"} request: ${r}`);
-  const network = mode === "offline" ? check(networkDetails) : { passed: true, details: networkDetails };
+  const network =
+    mode === "offline"
+      ? check(networkDetails)
+      : { passed: navigationDetails.length === 0, details: [...navigationDetails, ...networkDetails] };
   const themes = check(themeDetails);
   if (skippedBackgrounds > 0) {
     themes.details.push(`note: ${skippedBackgrounds} sampled elements sit on a background image and were not judged`);

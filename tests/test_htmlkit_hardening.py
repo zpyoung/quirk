@@ -163,3 +163,49 @@ def test_escape_rule_is_ascii_only() -> None:
 
 def test_vendored_hashes_still_match_the_ascii_rule() -> None:
     assert pins.verify(SKILL / "vendor") == []
+
+
+def _tier2(tmp_path: Path, files: dict[str, str]) -> Path:
+    tdir = tmp_path / "kit"
+    (tdir / "project").mkdir(parents=True)
+    meta = {"schema": 1, "name": "kit", "description": DESCRIPTION, "tier": 2, "project": "project/"}
+    (tdir / "template.json").write_text(json.dumps(meta), encoding="utf-8")
+    for rel, text in {"project/package.json": "{}", "project/pnpm-lock.yaml": "", **files}.items():
+        path = tdir / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    return tdir
+
+
+def test_tier_2_verification_covers_the_whole_project_tree_except_build_output(tmp_path: Path) -> None:
+    tdir = _tier2(
+        tmp_path,
+        {
+            "project/.pnpmfile.cjs": "module.exports = {}",
+            "project/vite.config.ts": "export default {}",
+            "project/src/App.tsx": "x",
+            "project/node_modules/dep/index.js": "x",
+            "project/dist/index.html": "x",
+            "project/.DS_Store": "x",
+        },
+    )
+    assert manifest.verification_paths(tdir) == [
+        "project/.pnpmfile.cjs",
+        "project/package.json",
+        "project/pnpm-lock.yaml",
+        "project/src/App.tsx",
+        "project/vite.config.ts",
+        "template.json",
+    ]
+
+
+def test_editing_a_tier_2_build_script_after_verifying_makes_it_unverified(tmp_path: Path) -> None:
+    tdir = _tier2(tmp_path, {"project/vite.config.ts": "export default {}"})
+    stamp = {"schema": 1, "verified_at": "", "browser": False, "hashes": manifest.compute_hashes(tdir)}
+    (tdir / "verified.json").write_text(json.dumps(stamp), encoding="utf-8")
+    assert _problems(tdir, require_verified=True) == []
+    (tdir / "project" / "vite.config.ts").write_text("export default { evil: 1 }", encoding="utf-8")
+    assert any("vite.config.ts changed" in e for e in _problems(tdir, require_verified=True))
+    (tdir / "project" / "vite.config.ts").write_text("export default {}", encoding="utf-8")
+    (tdir / "project" / ".pnpmfile.cjs").write_text("module.exports = {}", encoding="utf-8")
+    assert any(".pnpmfile.cjs is not covered" in e for e in _problems(tdir, require_verified=True))

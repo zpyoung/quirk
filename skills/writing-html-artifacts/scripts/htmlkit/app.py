@@ -2,10 +2,11 @@
 
 ``build_app`` copies the template's ``project/`` and ``example/`` into
 ``<project>/.quirk/html/<slug>/`` once and never touches that folder again, so edits to the source
-survive every rebuild. Each build installs with ``pnpm install --frozen-lockfile --ignore-scripts``
-and runs ``pnpm run build``. The install never runs package scripts, for built-in and custom
-templates alike, because a cloned repository's template must not execute code at install time.
-The bundle (``dist/index.html``) then gets the artifact header, one license comment per
+survive every rebuild. Each build installs with
+``pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile`` and runs ``pnpm run build``.
+The install never runs package scripts or pnpmfile hooks, for built-in and custom templates alike.
+The build itself runs the template's own build code (``scripts.build`` and ``vite.config.ts``), so
+only a template you trust should be built. The bundle (``dist/index.html``) then gets the artifact header, one license comment per
 production dependency and its ``<title>`` set to the saved title, and is written to ``<project>/.quirk/html/<slug>.html`` and statically checked.
 
 Problems the author can fix (slug, mode, template, missing title) raise ``BuildError`` and are exit 2
@@ -212,7 +213,7 @@ def build_app(
     except OSError as exc:
         raise BuildError(f"cannot write {source / APP_FILE}: {exc}") from exc
 
-    _run([*pnpm, "install", "--frozen-lockfile", "--ignore-scripts"], source, "install-failed")
+    _run([*pnpm, "install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"], source, "install-failed")
     dist = source / "dist" / "index.html"
     dist.unlink(missing_ok=True)
     _run([*pnpm, "run", "build"], source, "build-failed")
