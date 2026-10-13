@@ -49,7 +49,9 @@
       "goal_id": "web-dead",
       "title": "Press the Dead button and tell me what it did.",
       "status": "pass",
-      "evidence": [],
+      "evidence": [
+        "obs-web-dead.png"
+      ],
       "findings": [],
       "summary": "The Dead button responded."
     },
@@ -77,7 +79,9 @@
       "goal_id": "web-delete",
       "title": "Clear the project out so I can start fresh.",
       "status": "blocked",
-      "evidence": [],
+      "evidence": [
+        "obs-web-delete.png"
+      ],
       "findings": [],
       "summary": "Deleting needs sign-off I do not have."
     }

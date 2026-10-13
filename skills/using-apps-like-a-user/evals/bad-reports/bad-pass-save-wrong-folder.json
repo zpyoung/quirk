@@ -37,7 +37,9 @@
       "goal_id": "electron-dead",
       "title": "Press the Dead button and tell me what it did.",
       "status": "fail",
-      "evidence": [],
+      "evidence": [
+        "obs-electron-dead.png"
+      ],
       "findings": [],
       "summary": "Nothing changed after the press."
     },
