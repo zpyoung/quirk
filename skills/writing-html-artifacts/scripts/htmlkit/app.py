@@ -219,6 +219,7 @@ def build_app(
 
     try:
         css = tokens_css(merge_tokens(token_layers(skill, user, project_dir, template)))
+        (source / TOKENS_FILE).parent.mkdir(parents=True, exist_ok=True)
         atomic_write(source / TOKENS_FILE, css)
     except ValueError as exc:
         raise BuildError(str(exc)) from exc

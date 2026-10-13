@@ -409,6 +409,30 @@ def test_custom_tier_2_template_is_copied_without_node_modules_and_installs_with
 
 
 @needs_node
+def test_custom_tier_2_template_without_src_still_builds(project, fake_env):
+    tdir = project / ".quirk" / "html-templates" / "flat"
+    (tdir / "project").mkdir(parents=True)
+    (tdir / "project" / "package.json").write_text(json.dumps({"dependencies": {}}))
+    (tdir / "project" / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n")
+    (tdir / "template.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "name": "flat",
+                "description": "Use when a test needs a tier-2 template with no src folder.",
+                "tier": 2,
+                "project": "project/",
+            }
+        )
+    )
+    seal(tdir)
+    rc, result = build_app(project, fake_env, "demo", "--title", "Demo", "--template", "flat")
+    assert rc == 0, result
+    assert (source_dir(project) / "src" / "quirk-tokens.css").is_file()
+    assert pnpm_calls(fake_env)[0][0] == "install"
+
+
+@needs_node
 def test_tier_1_template_is_refused_by_build_app(project, fake_env):
     rc, result = build_app(project, fake_env, "demo", "--title", "Demo", "--template", "report")
     assert rc == 2 and "tier 1" in result["error"]

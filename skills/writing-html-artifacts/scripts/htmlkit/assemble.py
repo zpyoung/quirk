@@ -508,6 +508,9 @@ def _verify_line(report_path: Path, stale: bool) -> list[str]:
     if status == "not-browser-verified":
         reason = report.get("reason")
         return ["Verify: not browser-verified" + (f" ({reason})." if reason else ".")]
+    if status == "failed" and report.get("reason"):
+        detail = report.get("detail")
+        return [f"Verify: failed ({report['reason']})" + (f": {detail}" if detail else ".")]
     lines = [f"Verify: {status} in {report.get('browser') or 'a browser'}."]
     checks = report.get("checks") or {}
     for name, result in checks.items():

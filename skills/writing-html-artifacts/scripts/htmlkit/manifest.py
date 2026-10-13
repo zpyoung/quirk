@@ -203,8 +203,26 @@ def _manifest_problems(tdir: Path, meta: Any, skill_dir: Path) -> list[str]:
     return errors
 
 
+def _symlink_problems(tdir: Path, rel: str, *, skip: tuple[str, ...] = ()) -> list[str]:
+    """One error per symlink at or under the template-relative directory ``rel``.
+
+    Stamp hashing does not follow links but the app build copies their targets, so a link
+    would let built content change without invalidating ``verified.json``.
+    """
+    root = tdir / rel
+    found = [rel.rstrip("/")] if root.is_symlink() else []
+    if root.is_dir() and not root.is_symlink():
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d not in skip]
+            for name in (*dirnames, *filenames):
+                path = Path(dirpath) / name
+                if path.is_symlink():
+                    found.append(path.relative_to(tdir).as_posix())
+    return [f"{path} is a symlink; templates must not contain symlinks" for path in sorted(found)]
+
+
 def _tier1_problems(tdir: Path, meta: dict) -> list[str]:
-    errors: list[str] = []
+    errors: list[str] = _symlink_problems(tdir, "vendor")
     slots = meta.get("slots")
     declared: list[str] = []
     if not isinstance(slots, dict) or not 1 <= len(slots) <= 3:
@@ -256,6 +274,10 @@ def _tier2_problems(tdir: Path, meta: dict) -> list[str]:
     base = _safe_path(tdir, rel) if isinstance(rel, str) else None
     if base is None:
         return ["project must be a relative directory inside the template"]
+    errors.extend(_symlink_problems(tdir, rel.rstrip("/"), skip=_TIER2_UNHASHED))
+    example = meta.get("example")
+    if isinstance(example, str) and example and _safe_path(tdir, example) is not None:
+        errors.extend(_symlink_problems(tdir, example.rstrip("/"), skip=_TIER2_UNHASHED))
     for fname in ("package.json", "pnpm-lock.yaml"):
         if not (base / fname).is_file():
             errors.append(f"tier 2 needs {rel.rstrip('/')}/{fname}")
