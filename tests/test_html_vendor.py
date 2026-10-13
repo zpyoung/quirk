@@ -160,6 +160,15 @@ def test_webawesome_manifest_entry_positions_and_hashes() -> None:
     assert all(f["inline"] is True for f in files.values())
 
 
+def test_every_file_position_matches_its_kind() -> None:
+    manifest = json.loads((VENDOR / "libraries.json").read_text(encoding="utf-8"))
+    expected = {"js": "body-end", "css": "head"}
+    for name, lib in manifest["libraries"].items():
+        for version, entry in lib["versions"].items():
+            for f in entry["files"]:
+                assert f["position"] == expected[f["kind"]], f"{name} {version} {f['path']}"
+
+
 def test_webawesome_bundle_is_a_single_file_iife() -> None:
     text = (WEBAWESOME_DIR / "webawesome.bundle.js").read_text(encoding="utf-8")
     assert not re.search(r"^\s*(import|export)\s", text, re.MULTILINE)

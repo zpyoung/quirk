@@ -61,7 +61,7 @@ How to apply this:
 
 - Check the finished page against the whole table, not only the rows you were thinking about.
 - A tell is allowed when the user or a project template asks for it. Section 1 precedence applies.
-- Do not swap a banned tell for a neighbor. A beige background with a serif display face is the same default one step over.
+- Do not swap a banned tell for a neighbor. Replacing one listed default with a near variant of it (a different gradient, a slightly rounder card) is the same tell.
 
 ## 4. Tokens
 
@@ -95,7 +95,7 @@ Rules for using them:
 - `--q-size-small` is for captions, table footers, and metadata only. It is not a way to fit more text.
 - Numbers in tables, stat readouts, and anything that updates: `font-variant-numeric: tabular-nums`.
 - Headings are sentence case, weight 600 to 700, and carry the hierarchy. Do not make hierarchy with color alone.
-- System font stacks only. `--q-font-display` is a system stack too; use it for the h1 only if it differs from `--q-font-sans`.
+- System font stacks only. `--q-font-display` is a system stack too; the theme applies it to `h1` through `h4`, so leave heading fonts to the theme and do not set it elsewhere.
 - Code and identifiers use `--q-font-mono`. Do not set whole paragraphs in mono.
 - Left-align prose. Justified text and centered paragraphs both hurt at narrow widths.
 

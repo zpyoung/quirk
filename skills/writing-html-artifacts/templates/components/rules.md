@@ -15,7 +15,7 @@ Read after the [design reference](../../references/design-reference.md). These r
 - Every control has a visible `label` or an `aria-label`. A `wa-dialog` has a `label` attribute, which is its title.
 - The theme maps Web Awesome's color variables onto the `--q-*` tokens, so components follow light and dark themes. Do not set `--wa-*` colors or hard-coded colors in the page.
 - Web Awesome events: use the native `change` and `input` events for form components, `wa-tab-show` for tabs, `wa-after-hide` for a dialog. Read values from `event.target`.
-- Do not use `<wa-icon>` with a named icon: a named icon loads from a library at runtime and fails the offline checks. Use text labels, or inline SVG with a `<title>`.
+- `<wa-icon name="...">` works offline for the vendored set: `check`, `chevron-down`, `chevron-left`, `chevron-right`, `circle-check`, `gear`, `info`, `magnifying-glass`, `minus`, `plus`, `star`, `user`, `warning`, `xmark`, plus the aliases `circle-info` (`info`) and `triangle-exclamation` (`warning`). Any other name renders empty, so use a text label, or inline SVG with a `<title>`, for anything else. Give an icon-only control an `aria-label`.
 - Keep state in Alpine (`x-data`, registered with `alpine:init`), and keep it small. A readout that changes with the controls sits in an `aria-live="polite"` element.
 
 ## Charts
