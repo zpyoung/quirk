@@ -2,7 +2,10 @@
 
 Guarantees a `VerifyResult` dict for every call: when Node, the dependency install or the browser
 is unavailable, or the file does not exist (`missing-file`), the result has
-`status: "not-browser-verified"` and a `reason`, never an exception.
+`status: "not-browser-verified"` and a `reason`, never an exception. When the verifier itself
+crashes or times out on an existing file the result has `status: "failed"` with reason
+`verify-crashed` or `verify-timeout`, so a page that hangs or breaks the verifier is not mistaken
+for a missing browser.
 The report is also written to `<out_dir>/report.json` so `report_is_stale` can later tell whether
 verification ran on the file as it is now. Never downloads a browser and never opens the network
 beyond the one-time `pnpm install` of `playwright-core`.
@@ -31,13 +34,13 @@ def default_out_dir(file: Path) -> Path:
     return file.parent / f"{file.stem}.verify"
 
 
-def _not_verified(file: Path, out_dir: Path, reason: str, detail: str = "") -> dict:
+def _no_report(file: Path, out_dir: Path, reason: str, detail: str = "", status: str = "not-browser-verified") -> dict:
     try:
         file_sha256 = _sha256(file)
     except OSError:
         file_sha256 = None
     result: dict = {
-        "status": "not-browser-verified",
+        "status": status,
         "file_sha256": file_sha256,
         "browser": None,
         "checks": {},
@@ -100,13 +103,13 @@ def run_verify(file: Path, out_dir: Path | None = None, mode: str = "offline") -
     out_dir = Path(out_dir) if out_dir is not None else default_out_dir(file)
 
     if not file.is_file():
-        return _not_verified(file, out_dir, "missing-file")
+        return _no_report(file, out_dir, "missing-file")
     node = shutil.which("node")
     if node is None:
-        return _not_verified(file, out_dir, "no-node")
+        return _no_report(file, out_dir, "no-node")
     error = _ensure_installed()
     if error is not None:
-        return _not_verified(file, out_dir, "install-failed", error)
+        return _no_report(file, out_dir, "install-failed", error)
 
     report = out_dir / "report.json"
     report.unlink(missing_ok=True)
@@ -118,12 +121,12 @@ def run_verify(file: Path, out_dir: Path | None = None, mode: str = "offline") -
             timeout=VERIFY_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired:
-        return _not_verified(file, out_dir, "verify-timeout")
+        return _no_report(file, out_dir, "verify-timeout", status="failed")
 
     try:
         result = json.loads(report.read_text())
     except (OSError, ValueError):
-        return _not_verified(file, out_dir, "verify-crashed", proc.stderr.strip()[-500:])
+        return _no_report(file, out_dir, "verify-crashed", proc.stderr.strip()[-500:], status="failed")
     if result.get("status") == "not-browser-verified":
         result["reason"] = "no-browser"
         report.write_text(json.dumps(result, indent=2) + "\n")

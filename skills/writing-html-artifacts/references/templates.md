@@ -107,6 +107,7 @@ Layers merge in this order, and a later layer wins per key:
 
 - Layers 2 and 3 are how project branding reaches the built-in templates, the companion included. Put brand tokens there when a whole project should be branded, and in a template's own file only when that template differs.
 - A token file only needs the keys it changes.
+- Tier-2 builds apply the same four layers: each build rewrites `src/quirk-tokens.css` in the app's source folder, and the scaffold's `theme.css` imports it. Change tokens in a layer file, not in `quirk-tokens.css`.
 - Output uses `--q-<group>-<key>` names, with light values on `:root` and dark values under the `prefers-color-scheme` media query and under `[data-theme="dark"]`. Slot content references the variables, per [design reference](design-reference.md).
 
 ## `verified.json`
@@ -117,8 +118,8 @@ Custom templates (project and user level) need a `verified.json` beside `templat
 { "schema": 1, "verified_at": "2026-10-13T12:00:00Z", "browser": true, "hashes": { "template.json": "<sha256>", "skeleton.html": "<sha256>" } }
 ```
 
-- `hashes` covers `template.json`, the skeleton, tokens, rules, every file under `vendor/`, and the example.
-- For tier 2 it covers `template.json` and every file under `project/` except `node_modules` and `dist`.
+- For tier 1, `hashes` covers `template.json`, the skeleton, tokens, rules, every file under `vendor/`, the example, and the example's `data` file when its header names one inside the template.
+- For tier 2 it covers `template.json`, every file under `project/` and every file under the `example/` directory, in each case except `node_modules` and `dist`.
 - `browser` is `false` when the example passed static checks but no browser was reachable.
 - Do not write it by hand. `templates verify` writes it, and only when the example passes. Editing any covered file afterwards invalidates it, so re-run verify.
 

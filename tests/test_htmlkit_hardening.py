@@ -209,3 +209,84 @@ def test_editing_a_tier_2_build_script_after_verifying_makes_it_unverified(tmp_p
     (tdir / "project" / "vite.config.ts").write_text("export default {}", encoding="utf-8")
     (tdir / "project" / ".pnpmfile.cjs").write_text("module.exports = {}", encoding="utf-8")
     assert any(".pnpmfile.cjs is not covered" in e for e in _problems(tdir, require_verified=True))
+
+
+def _tier2_with_example(tmp_path: Path, files: dict[str, str]) -> Path:
+    tdir = _tier2(tmp_path, files)
+    meta = json.loads((tdir / "template.json").read_text(encoding="utf-8"))
+    meta["example"] = "example/"
+    (tdir / "template.json").write_text(json.dumps(meta), encoding="utf-8")
+    return tdir
+
+
+def test_tier_2_verification_covers_every_example_file_except_build_output(tmp_path: Path) -> None:
+    tdir = _tier2_with_example(
+        tmp_path,
+        {
+            "example/vite.config.ts": "export default {}",
+            "example/src/routes.tsx": "x",
+            "example/node_modules/dep/index.js": "x",
+            "example/dist/index.html": "x",
+            "example/.DS_Store": "x",
+        },
+    )
+    assert manifest.verification_paths(tdir) == [
+        "example/src/routes.tsx",
+        "example/vite.config.ts",
+        "project/package.json",
+        "project/pnpm-lock.yaml",
+        "template.json",
+    ]
+
+
+def test_editing_a_tier_2_example_after_verifying_makes_it_unverified(tmp_path: Path) -> None:
+    tdir = _tier2_with_example(tmp_path, {"example/vite.config.ts": "export default {}"})
+    stamp = {"schema": 1, "verified_at": "", "browser": False, "hashes": manifest.compute_hashes(tdir)}
+    (tdir / "verified.json").write_text(json.dumps(stamp), encoding="utf-8")
+    assert _problems(tdir, require_verified=True) == []
+    (tdir / "example" / "vite.config.ts").write_text("export default { evil: 1 }", encoding="utf-8")
+    assert any("example/vite.config.ts changed" in e for e in _problems(tdir, require_verified=True))
+
+
+def _tier1_with_data(tmp_path: Path, header: dict) -> Path:
+    tdir = _template(tmp_path)
+    (tdir / "example.src.html").write_text(
+        "<!-- quirk-src " + json.dumps(header) + " -->\n<!-- slot: main -->\n<p>hi</p>\n", encoding="utf-8"
+    )
+    return tdir
+
+
+def test_tier_1_verification_covers_the_example_data_file(tmp_path: Path) -> None:
+    tdir = _tier1_with_data(tmp_path, {"template": "basic", "title": "T", "data": "example.data.json"})
+    (tdir / "example.data.json").write_text('{"a": 1}', encoding="utf-8")
+    assert "example.data.json" in manifest.verification_paths(tdir)
+    stamp = {"schema": 1, "verified_at": "", "browser": False, "hashes": manifest.compute_hashes(tdir)}
+    (tdir / "verified.json").write_text(json.dumps(stamp), encoding="utf-8")
+    assert _problems(tdir, require_verified=True) == []
+    (tdir / "example.data.json").write_text('{"a": 2}', encoding="utf-8")
+    assert any("example.data.json changed" in e for e in _problems(tdir, require_verified=True))
+
+
+def test_tier_1_example_data_outside_the_template_is_not_hashed(tmp_path: Path) -> None:
+    tdir = _tier1_with_data(tmp_path, {"template": "basic", "title": "T", "data": "../outside.json"})
+    (tmp_path / "outside.json").write_text("{}", encoding="utf-8")
+    assert not any("outside" in p for p in manifest.verification_paths(tdir))
+
+
+def test_tier_1_example_without_data_adds_no_data_path(tmp_path: Path) -> None:
+    tdir = _tier1_with_data(tmp_path, {"template": "basic", "title": "T"})
+    assert manifest.verification_paths(tdir) == ["example.src.html", "skeleton.html", "template.json"]
+
+
+@pytest.mark.parametrize("name", ["report\n", "report\n\n", "\nreport"])
+def test_a_template_name_with_a_trailing_newline_is_rejected(name: str) -> None:
+    assert manifest.NAME_RE.match(name) is None
+    assert manifest.NAME_RE.match("report") is not None
+
+
+def test_a_manifest_name_with_a_trailing_newline_is_invalid(tmp_path: Path) -> None:
+    tdir = _template(tmp_path)
+    meta = json.loads((tdir / "template.json").read_text(encoding="utf-8"))
+    meta["name"] = "basic\n"
+    (tdir / "template.json").write_text(json.dumps(meta), encoding="utf-8")
+    assert any("must match" in e for e in _problems(tdir))

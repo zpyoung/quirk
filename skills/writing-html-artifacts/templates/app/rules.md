@@ -15,7 +15,8 @@ Read after the [design reference](../../references/design-reference.md). These r
 |---|---|
 | `src/routes.tsx` | the `views` list: one `{path, label, component}` per view; each becomes a tab and a hash route. Edit this first |
 | `src/App.tsx` | page shell, view tabs, theme toggle and the router; rarely needs edits |
-| `src/theme.css` | the house tokens as `--q-*` variables for light and dark, plus the `q-table-wrap` and `q-grid` classes |
+| `src/theme.css` | imports `src/quirk-tokens.css` and adds the `q-table-wrap` and `q-grid` classes |
+| `src/quirk-tokens.css` | the merged house, user, project and template tokens as `--q-*` variables for light and dark; every build rewrites it, so put brand changes in a tokens file, not here |
 | `src/theme.ts` | `useThemeMode`, `setThemeMode`; the toggle shares the `quirk-theme` storage key with tier-1 pages |
 | `src/main.tsx` | mounts the app inside a `QueryClientProvider` |
 
