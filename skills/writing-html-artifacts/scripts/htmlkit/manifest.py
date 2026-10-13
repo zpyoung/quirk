@@ -19,13 +19,14 @@ from typing import Any, Optional
 from . import SKILL_DIR
 from .tokens import validate_tokens
 
-NAME_RE = re.compile(r"^[a-z0-9-]{1,40}$")
+NAME_RE = re.compile(r"^[a-z0-9-]{1,40}\Z")
 SLOT_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 REQUIRED_PLACEHOLDERS = ("{{header}}", "{{title}}", "{{head}}", "{{chrome}}", "{{body_end}}")
 _SLOT_PLACEHOLDER = re.compile(r"\{\{slot:([^{}]*)\}\}")
 _LIB_KINDS = ("js", "css")
 _LIB_POSITIONS = ("head", "body-end")
 _TIER2_UNHASHED = ("node_modules", "dist")
+_SOURCE_HEADER = re.compile(r"^<!-- quirk-src (\{.*\}) -->[ \t]*$")
 
 
 class ManifestError(Exception):
@@ -276,13 +277,54 @@ def _library_resolution_problems(tdir: Path, skill_dir: Path, names: list[str]) 
     return errors
 
 
+def _tree_paths(tdir: Path, rel: str) -> set[str]:
+    """Every file under the template-relative directory ``rel``, minus ``node_modules`` and ``dist``."""
+    root = _safe_path(tdir, rel)
+    found: set[str] = set()
+    if root is None or not root.is_dir():
+        return found
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _TIER2_UNHASHED]
+        for fname in filenames:
+            if fname != ".DS_Store":
+                found.add(f"{rel}/{(Path(dirpath) / fname).relative_to(root).as_posix()}")
+    return found
+
+
+def _example_data_path(tdir: Path, example: Any) -> Optional[str]:
+    """Template-relative path of the tier-1 example's ``data`` file, or None when it names none."""
+    if not isinstance(example, str):
+        return None
+    path = _safe_path(tdir, example)
+    if path is None or not path.is_file():
+        return None
+    try:
+        first = path.read_text(encoding="utf-8").split("\n", 1)[0]
+    except (OSError, UnicodeDecodeError):
+        return None
+    match = _SOURCE_HEADER.match(first)
+    if not match:
+        return None
+    try:
+        data = json.loads(match.group(1)).get("data")
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(data, str) or not data:
+        return None
+    target = _safe_path(tdir, (Path(example).parent / data).as_posix())
+    if target is None:
+        return None
+    return target.relative_to(tdir.resolve()).as_posix()
+
+
 def verification_paths(tdir: Path, meta: Optional[dict] = None) -> list[str]:
     """Relative paths that ``verified.json`` must hash for this template, sorted.
 
-    Tier 1 covers the manifest, skeleton, tokens, rules, example and every file under
-    ``vendor/``. Tier 2 covers the manifest and every file under ``project/`` except
-    ``node_modules`` and ``dist``, so a ``.pnpmfile.cjs`` or ``vite.config.ts`` cannot ride along
-    under a stamp.
+    Tier 1 covers the manifest, skeleton, tokens, rules, example, the example's ``data`` file
+    when its header names one, and every file under ``vendor/``. Tier 2 covers the manifest,
+    every file under ``project/`` and every file under ``example/`` (``node_modules`` and ``dist``
+    excluded from both), so a ``.pnpmfile.cjs``, ``vite.config.ts`` or an example overlay that
+    replaces either cannot ride along under a stamp.
     """
     tdir = Path(tdir)
     if meta is None:
@@ -292,17 +334,17 @@ def verification_paths(tdir: Path, meta: Optional[dict] = None) -> list[str]:
     if meta.get("tier") == 2:
         base = str(meta.get("project", "project/")).rstrip("/")
         paths.update({f"{base}/package.json", f"{base}/pnpm-lock.yaml"})
-        pdir = _safe_path(tdir, base)
-        if pdir is not None and pdir.is_dir():
-            for dirpath, dirnames, filenames in os.walk(pdir):
-                dirnames[:] = [d for d in dirnames if d not in _TIER2_UNHASHED]
-                for fname in filenames:
-                    if fname != ".DS_Store":
-                        paths.add(f"{base}/{(Path(dirpath) / fname).relative_to(pdir).as_posix()}")
+        paths.update(_tree_paths(tdir, base))
+        example = meta.get("example")
+        if isinstance(example, str) and example:
+            paths.update(_tree_paths(tdir, example.rstrip("/")))
     else:
         for key in ("skeleton", "tokens", "rules", "example"):
             if isinstance(meta.get(key), str):
                 paths.add(meta[key])
+        data = _example_data_path(tdir, meta.get("example"))
+        if data:
+            paths.add(data)
         vdir = tdir / "vendor"
         if vdir.is_dir():
             paths.update(p.relative_to(tdir).as_posix() for p in vdir.rglob("*") if p.is_file())

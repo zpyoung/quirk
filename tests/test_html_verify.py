@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import subprocess
 import sys
 import threading
 from collections.abc import Iterator
@@ -87,6 +88,50 @@ def test_missing_file_with_unwritable_out_dir_still_returns(tmp_path: Path) -> N
     blocker.write_text("not a directory")
     result = verify_runner.run_verify(tmp_path / "gone.html", blocker / "out")
     assert result["reason"] == "missing-file"
+
+
+def _fake_verifier_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(verify_runner.shutil, "which", lambda name: "/usr/bin/node")
+    monkeypatch.setattr(verify_runner, "_ensure_installed", lambda: None)
+
+
+def test_a_verifier_crash_is_a_failed_result_not_a_missing_browser(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_verifier_environment(monkeypatch)
+    page = tmp_path / "a.html"
+    page.write_text("<p>x</p>")
+    done = subprocess.CompletedProcess([], 4, stdout="", stderr="net::ERR_FAILED boom")
+    monkeypatch.setattr(verify_runner.subprocess, "run", lambda *a, **kw: done)
+    result = verify_runner.run_verify(page, tmp_path / "out")
+    assert result["status"] == "failed"
+    assert result["reason"] == "verify-crashed" and "boom" in result["detail"]
+    assert json.loads((tmp_path / "out" / "report.json").read_text())["status"] == "failed"
+
+
+def test_a_verifier_timeout_is_a_failed_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_verifier_environment(monkeypatch)
+    page = tmp_path / "a.html"
+    page.write_text("<p>x</p>")
+
+    def hang(*args: object, **kwargs: object) -> None:
+        raise subprocess.TimeoutExpired("node", 1)
+
+    monkeypatch.setattr(verify_runner.subprocess, "run", hang)
+    result = verify_runner.run_verify(page, tmp_path / "out")
+    assert result["status"] == "failed" and result["reason"] == "verify-timeout"
+
+
+def test_the_cli_exits_1_when_the_verifier_crashes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import quirk_html
+
+    _fake_verifier_environment(monkeypatch)
+    page = tmp_path / "a.html"
+    page.write_text("<p>x</p>")
+    done = subprocess.CompletedProcess([], 4, stdout="", stderr="boom")
+    monkeypatch.setattr(verify_runner.subprocess, "run", lambda *a, **kw: done)
+    assert quirk_html.main(["verify", str(page)]) == 1
+    assert json.loads(capsys.readouterr().out)["reason"] == "verify-crashed"
 
 
 def test_default_out_dir_is_beside_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

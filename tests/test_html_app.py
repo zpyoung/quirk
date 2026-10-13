@@ -50,7 +50,11 @@ elif args[:2] == ["run", "build"]:
         print("ERR_PNPM_FAKE build exploded", file=sys.stderr)
         sys.exit(1)
     Path("dist").mkdir(exist_ok=True)
-    Path("dist/index.html").write_text(os.environ.get("FAKE_PNPM_HTML", {html!r}))
+    page = os.environ.get("FAKE_PNPM_HTML", {html!r})
+    if os.environ.get("FAKE_PNPM_EMBED_TOKENS"):
+        css = Path("src/quirk-tokens.css").read_text()
+        page = page.replace("</head>", "<style>" + css + "</style></head>")
+    Path("dist/index.html").write_text(page)
 else:
     sys.exit(2)
 """
@@ -268,6 +272,50 @@ def test_invalid_slug_and_mode_are_usage_errors(project, fake_env):
     assert rc == 2 and "slug" in result["error"]
     rc, result = build_app(project, fake_env, "demo", "--title", "x", "--mode", "companion")
     assert rc == 2 and "mode" in result["error"]
+
+
+@needs_node
+@pytest.mark.parametrize("slug", ["demo\n", "demo\n\n", "\ndemo"])
+def test_a_slug_with_a_newline_is_a_usage_error(project, fake_env, slug):
+    rc, result = build_app(project, fake_env, slug, "--title", "x")
+    assert rc == 2 and "slug" in result["error"]
+    assert not (project / ".quirk" / "html").exists() or not any(
+        p.name.startswith("demo") for p in (project / ".quirk" / "html").iterdir()
+    )
+
+
+@needs_node
+def test_a_project_tokens_file_reaches_the_tier_2_bundle(project, fake_env):
+    tokens = project / ".quirk" / "html-templates" / "tokens.json"
+    tokens.parent.mkdir(parents=True)
+    tokens.write_text(json.dumps({"schema": 1, "color": {"accent": ["#123456", "#abcdef"]}}))
+    env = {**fake_env, "FAKE_PNPM_EMBED_TOKENS": "1"}
+    rc, result = build_app(project, env, "demo", "--title", "Branded")
+    assert rc == 0, result
+    css = (source_dir(project) / "src" / "quirk-tokens.css").read_text()
+    assert "--q-color-accent: #123456" in css and "--q-color-accent: #abcdef" in css
+    assert "--q-color-bg:" in css
+    html = (project / ".quirk" / "html" / "demo.html").read_text()
+    assert "--q-color-accent: #123456" in html
+
+
+@needs_node
+def test_the_user_tokens_layer_reaches_tier_2_and_a_rebuild_refreshes_the_file(project, fake_env):
+    assert build_app(project, fake_env, "demo", "--title", "T")[0] == 0
+    css_path = source_dir(project) / "src" / "quirk-tokens.css"
+    assert "#123456" not in css_path.read_text()
+    (Path(fake_env["QUIRK_HTML_USER_DIR"]) / "tokens.json").write_text(
+        json.dumps({"schema": 1, "color": {"accent": ["#123456", "#abcdef"]}})
+    )
+    assert build_app(project, fake_env)[0] == 0
+    assert "--q-color-accent: #123456" in css_path.read_text()
+
+
+def test_the_scaffold_theme_imports_the_generated_tokens_instead_of_pasting_them():
+    theme = (APP / "project" / "src" / "theme.css").read_text()
+    assert "@import './quirk-tokens.css';" in theme
+    assert "--q-color-bg:" not in theme and "--q-space-1:" not in theme
+    assert "var(--q-color-bg)" in theme
 
 
 @needs_node

@@ -2,7 +2,9 @@
 
 ``build_app`` copies the template's ``project/`` and ``example/`` into
 ``<project>/.quirk/html/<slug>/`` once and never touches that folder again, so edits to the source
-survive every rebuild. Each build installs with
+survive every rebuild, except ``src/quirk-tokens.css``: every build rewrites it with the merged token
+layers (house, user, project, template) that tier 1 applies, and the scaffold's ``theme.css`` imports it.
+Each build installs with
 ``pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile`` and runs ``pnpm run build``.
 The install never runs package scripts or pnpmfile hooks, for built-in and custom templates alike.
 The build itself runs the template's own build code (``scripts.build`` and ``vite.config.ts``), so
@@ -32,14 +34,16 @@ from .checks import default_shells, run_checks
 from .fsutil import atomic_write, ensure_self_ignoring
 from .header import render_header
 from .resolve import TemplateNotFound, default_user_dir, find_template, template_roots
+from .tokens import merge_tokens, token_layers, tokens_css
 from .vendor import _comment_safe
 
 APP_MODES = ("offline", "connected")
 DEFAULT_TEMPLATE = "app"
 APP_FILE = "quirk-app.json"
+TOKENS_FILE = "src/quirk-tokens.css"
 STEP_TIMEOUT_S = 600
 TAIL_LINES = 40
-_SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,60}$")
+_SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,60}\Z")
 _TITLE = re.compile(r"<title>.*?</title>", re.IGNORECASE | re.DOTALL)
 _COPY_SKIP = shutil.ignore_patterns("node_modules", "dist", ".DS_Store")
 
@@ -212,6 +216,14 @@ def build_app(
         atomic_write(source / APP_FILE, json.dumps(settings, indent=2) + "\n")
     except OSError as exc:
         raise BuildError(f"cannot write {source / APP_FILE}: {exc}") from exc
+
+    try:
+        css = tokens_css(merge_tokens(token_layers(skill, user, project_dir, template)))
+        atomic_write(source / TOKENS_FILE, css)
+    except ValueError as exc:
+        raise BuildError(str(exc)) from exc
+    except OSError as exc:
+        raise BuildError(f"cannot write {source / TOKENS_FILE}: {exc}") from exc
 
     _run([*pnpm, "install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"], source, "install-failed")
     dist = source / "dist" / "index.html"

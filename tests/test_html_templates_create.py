@@ -134,6 +134,12 @@ def test_new_rejects_a_bad_name_and_an_unknown_base(env):
     assert not (env["project"] / ".quirk/html-templates/x").exists()
 
 
+def test_new_rejects_a_name_with_a_trailing_newline(env):
+    code, out = new(env, "mine\n")
+    assert code == 2 and "name" in out["error"]
+    assert not any(p.name.startswith("mine") for p in (env["project"] / ".quirk").glob("**/*") if p.is_dir())
+
+
 def test_new_rejects_base_together_with_from(env):
     page = env["tmp"] / "page.html"
     page.write_text(PLAIN)
@@ -445,10 +451,13 @@ def test_environment_limits_still_pass_without_a_browser(env, monkeypatch, reaso
     assert (env["project"] / ".quirk/html-templates/mine/verified.json").is_file()
 
 
-@pytest.mark.parametrize("reason", ["verify-crashed", "verify-timeout", "missing-file"])
-def test_a_verifier_crash_or_timeout_does_not_pass(env, monkeypatch, reason):
+@pytest.mark.parametrize(
+    ("status", "reason"),
+    [("failed", "verify-crashed"), ("failed", "verify-timeout"), ("not-browser-verified", "missing-file")],
+)
+def test_a_verifier_crash_or_timeout_does_not_pass(env, monkeypatch, status, reason):
     new(env, "mine")
-    stub_browser(monkeypatch, {**NOT_VERIFIED, "reason": reason})
+    stub_browser(monkeypatch, {**NOT_VERIFIED, "status": status, "reason": reason})
     result = verify_in_process(env, "mine")
     assert result["passed"] is False and result["browser"] is False
     assert result["report"]["verify"]["reason"] == reason
