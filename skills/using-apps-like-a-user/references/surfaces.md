@@ -29,7 +29,10 @@ so two web runs proceed in parallel and the user's browser is untouched.
 
 Use `--surface electron --launch "<command>"` for a dev build the run starts. The script appends
 `--remote-debugging-port=<port>` to the command, bound to `127.0.0.1` (the first free port in
-9222-9299, or `--cdp-port`), and attaches `playwright-cli` to it.
+9222-9299, or `--cdp-port`), and attaches `playwright-cli` to it. The app inherits your environment
+minus the run's credentials and any variable whose name looks sensitive (`*_TOKEN`, `*_KEY`,
+`AWS_*`, `GITHUB_*`, and similar). If the app needs one, pass `--launch-env NAME` (repeatable) to
+`begin`; it never passes the run's own credential variables.
 
 - **The launch command must pass the extra argument to Electron.** `pnpm exec electron .` does. A
   wrapper script that swallows its arguments does not, and `begin` exits 4 when the attach fails.

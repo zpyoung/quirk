@@ -72,6 +72,11 @@ MIN_REDACT_CHARS = 4
 CDP_PORTS = range(9222, 9300)
 CDP_LOCK_NAME = "cdp-ports.lock"
 DEFAULT_CREDENTIALS_PREFIX = "LIKEUSER"
+SENSITIVE_ENV_NAME = re.compile(
+    r"(?:(?:^|_)(?:KEYS?|TOKEN|SECRETS?|PASSWORD|PASSWD|PASS|CREDENTIALS?|AUTH|SESSION|COOKIE)|_PWD)$"
+    r"|^(?:AWS_|AZURE_|GCLOUD_|CLOUDSDK_|GH_|GITHUB_|GITLAB_|OP_|VAULT_|NPM_CONFIG__AUTH)"
+    r"|^(?:GOOGLE_APPLICATION_CREDENTIALS|NPM_TOKEN|SSH_AUTH_SOCK|DOCKER_AUTH_CONFIG|KUBECONFIG)$",
+    re.IGNORECASE)
 GOAL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SESSION_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 NATIVE_PREFIX = "n:"
@@ -154,6 +159,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cdp-port", type=int)
     p.add_argument("--real-chrome", action="store_true")
     p.add_argument("--allow-foreground", action="store_true")
+    p.add_argument("--launch-env", action="append", default=[], metavar="NAME")
     p.add_argument("--session-key")
     creds = p.add_mutually_exclusive_group()
     creds.add_argument("--credentials-env", metavar="PREFIX")
@@ -277,10 +283,12 @@ def _add_secret(run: _run.Run, value: Optional[str], minimum: int = 1) -> None:
         run.secrets.add(value)
 
 
-def _add_credential(run: _run.Run, value: Optional[str]) -> None:
+def _add_credential(run: _run.Run, field: str, value: Optional[str]) -> None:
     if value:
         run.credentials.add(value)
         run.secrets.add(value)
+        if field == "password":
+            run.passwords.add(value)
 
 
 def _prime_credentials(run: _run.Run) -> None:
@@ -298,8 +306,8 @@ def _prime_credentials(run: _run.Run) -> None:
         if source:
             raise
         return
-    for value in creds.values():
-        _add_credential(run, value)
+    for field, value in creds.items():
+        _add_credential(run, field, value)
 
 
 def _load(ctx: Ctx, run_id: str, allow_ended: bool = False,
@@ -417,23 +425,28 @@ def _observe_native(drivers: Drivers, shot: Optional[Path]) -> Observation:
     return obs
 
 
-def _shows_credential(run: _run.Run, snap: Snap) -> bool:
+def _shows_password(run: _run.Run, snap: Snap) -> bool:
+    """True when the run's password is readable in the snapshot's tree text or values.
+
+    The username is not checked: apps show the signed-in name after login. The check reads
+    accessibility text, so a password drawn on screen without appearing in the tree is not caught.
+    """
     texts = []
     for obs in (snap.renderer, snap.native):
         if obs is not None:
             texts.append(obs.tree_text)
             texts.extend(obs.values.values())
-    return any(c in t for c in run.credentials for t in texts)
+    return any(c in t for c in run.passwords for t in texts)
 
 
 def _observe(run: _run.Run, drivers: Drivers, shot: Optional[Path]) -> Snap:
     """Observe the bound surface; with `shot`, also save a screenshot there.
 
-    A screenshot cannot be redacted, so one taken while a credential is readable in the tree is
+    A screenshot cannot be redacted, so one taken while the password is readable in the tree is
     deleted and the snapshot is marked `screenshot_withheld`.
     """
     snap = _observe_surface(run, drivers, shot)
-    if shot is None or not run.credentials or not _shows_credential(run, snap):
+    if shot is None or not run.passwords or not _shows_password(run, snap):
         return snap
     with contextlib.suppress(OSError):
         shot.unlink()
@@ -444,7 +457,8 @@ def _observe_surface(run: _run.Run, drivers: Drivers, shot: Optional[Path]) -> S
     """Observe the surface once.
 
     Electron runs read the renderer and the native tree; the native tree joins the result only
-    while a sheet or dialog is open, and then the screenshot comes from the native side.
+    while a sheet or dialog is open, and then the screenshot comes from the native side. A native
+    observation that fails raises, because a failure does not show that no sheet is open.
     """
     surface = run.data["surface"]
     if surface == "web":
@@ -456,19 +470,14 @@ def _observe_surface(run: _run.Run, drivers: Drivers, shot: Optional[Path]) -> S
         saved = _copy_shot(obs.screenshot_path, shot) if shot else None
         return Snap(None, obs, False, "native" if saved else None, saved,
                     obs.scale if saved else None)
-    native: Optional[Observation] = None
-    error: Optional[str] = None
-    try:
-        native = _observe_native(drivers, None)
-    except DriverError as exc:
-        error = exc.code
-    sheet = native is not None and native.sheet_open
-    if not sheet:
+    native = _observe_native(drivers, None)
+    if not native.sheet_open:
         renderer = drivers.web.observe(shot)
         return Snap(renderer, None, False, "renderer" if shot else None, shot,
-                    renderer.scale if shot else None, error)
+                    renderer.scale if shot else None)
     renderer = drivers.web.observe(None)
     saved = None
+    error: Optional[str] = None
     if shot is not None:
         try:
             native = _observe_native(drivers, shot)
@@ -939,6 +948,8 @@ def _validate_begin(args) -> List[Tuple[str, str]]:
                          "--surface electron needs --launch; running Electron apps use --surface native")
     if args.launch and args.surface != "electron":
         raise UsageError("launch_requires_electron", "--launch is for --surface electron")
+    if args.launch_env and args.surface != "electron":
+        raise UsageError("launch_requires_electron", "--launch-env is for --surface electron")
     if args.real_chrome and args.surface != "web":
         raise UsageError("real_chrome_requires_web", "--real-chrome is for --surface web")
     if args.cdp_port is not None and args.surface != "electron":
@@ -976,6 +987,7 @@ def cmd_begin(args, ctx: Ctx):
         credentials = {"prefix": args.credentials_env,
                        "file": str(Path(args.credentials_file).resolve())
                        if args.credentials_file else None}
+    _refuse_credential_launch_env(args.launch_env, args.credentials_env, secret_values)
 
     cwd = Path.cwd()
     root = _run.state_root(cwd)
@@ -995,7 +1007,7 @@ def cmd_begin(args, ctx: Ctx):
         "attended": bool(args.attended), "allow_foreground": bool(args.allow_foreground),
         "holds_lock": holds_lock, "test_overrides": overrides, "credentials": credentials,
         "session_key": args.session_key, "real_chrome": bool(args.real_chrome),
-        "started": _now(),
+        "launch_env": list(dict.fromkeys(args.launch_env)), "started": _now(),
         "budget": {"run_cap": args.budget_run or _run.DEFAULT_RUN_CAP,
                    "goal_cap": args.budget_goal or _run.DEFAULT_GOAL_CAP},
         "window": {"bundle_id": None, "window_id": None, "session": None, "cdp_port": None,
@@ -1123,17 +1135,40 @@ def _begin_web(args, run: _run.Run, drivers: Drivers) -> None:
         web.open(args.target)
 
 
-def _launch_env(run: _run.Run) -> Dict[str, str]:
-    """The environment a launched app inherits: this process's, minus the run's credentials.
+def _sensitive_env_name(name: str) -> bool:
+    """True when an environment variable's name looks like it holds a secret or host credential."""
+    return SENSITIVE_ENV_NAME.search(name) is not None
 
-    Drops the credential variables the run was configured with and any variable whose value is
-    a known secret, so the app and its dependencies cannot read or log the test account.
+
+def _credential_env_names(prefix: Optional[str]) -> set:
+    return {f"{name}_{field}" for name in (prefix or DEFAULT_CREDENTIALS_PREFIX,
+                                           DEFAULT_CREDENTIALS_PREFIX)
+            for field in ("USERNAME", "PASSWORD")}
+
+
+def _refuse_credential_launch_env(names: List[str], prefix: Optional[str],
+                                  secret_values: List[str]) -> None:
+    """Refuse a `--launch-env` name that is a credential variable or holds a known secret."""
+    named = _credential_env_names(prefix)
+    for name in names:
+        if name in named or (os.environ.get(name) or None) in secret_values:
+            raise UsageError("launch_env_credential",
+                             f"--launch-env cannot pass the run's credentials to the app: {name}")
+
+
+def _launch_env(run: _run.Run) -> Dict[str, str]:
+    """The environment a launched app inherits: this process's, minus secrets.
+
+    Drops the run's credential variables, any variable whose value is a known secret, and every
+    variable whose name looks sensitive unless `begin --launch-env` named it. A named variable
+    still never carries a credential.
     """
-    prefix = (run.data.get("credentials") or {}).get("prefix") or DEFAULT_CREDENTIALS_PREFIX
-    named = {f"{name}_{field}" for name in (prefix, DEFAULT_CREDENTIALS_PREFIX)
-             for field in ("USERNAME", "PASSWORD")}
+    named = _credential_env_names((run.data.get("credentials") or {}).get("prefix"))
+    allowed = set(run.data.get("launch_env") or [])
     secrets = {value for value in run.secrets if value}
-    return {k: v for k, v in os.environ.items() if k not in named and v not in secrets}
+    return {k: v for k, v in os.environ.items()
+            if k not in named and v not in secrets
+            and (k in allowed or not _sensitive_env_name(k))}
 
 
 def _open_private_log(path: Path):
@@ -1423,8 +1458,8 @@ def _act(args, ctx: Ctx) -> dict:
         source = run.data.get("credentials") or {}
         creds = _run.load_credentials(source.get("prefix"),
                                       Path(source["file"]) if source.get("file") else None)
-        for value in creds.values():
-            _add_credential(run, value)
+        for field, value in creds.items():
+            _add_credential(run, field, value)
         secret_value = creds[req.secret]
     ctx.inputs = {
         "action": req.kind, "obs": args.obs, "ref": req.ref, "x": req.x, "y": req.y,
@@ -1572,7 +1607,7 @@ def _act_perform(args, ctx: Ctx, run: _run.Run, drivers: Drivers, req: ActReques
             refused = exc.code in REFUSED_BEFORE_DELIVERY
             raise
         finally:
-            if not refused:
+            if uses_foreground and not refused:
                 _refresh_drift(run)
         _charge(run, goal_id)
         stage = "observe"
@@ -1897,19 +1932,13 @@ def _terminate_launched(run: _run.Run, errors: List[str]) -> None:
             errors.append(f"quit {entry['id']}: {exc}")
 
 
-def cmd_end(args, ctx: Ctx):
-    """Restore the user's desktop, close what the run opened, release the lock, and write the reports.
+def _end_cleanup(args, ctx: Ctx, run: _run.Run) -> None:
+    """Take the final screenshot, close what the run opened, restore the desktop, release the lock.
 
-    A run whose `begin` failed has nothing to observe, so `end` only retries the cleanup that
-    `begin` could not finish, restores the frontmost app, and reports.
+    Records the outcome in `state_left` and sets `cleanup_done`, so an `end` retried after a failed
+    report write writes the reports without touching the desktop again.
     """
-    run = _load(ctx, args.run, allow_ended=True, tolerate_lost_credentials=True)
     data = run.data
-    ctx.inputs = {"keep_open": args.keep_open}
-    if data.get("ended"):
-        if data.get("end_output") is None:
-            raise RunStateError("run_ended", data["run_id"])
-        return data["end_output"], data.get("end_exit", 0)
     errors: List[str] = []
     drivers = Drivers(run)
     final = run.dir / "final.png"
@@ -1946,8 +1975,31 @@ def cmd_end(args, ctx: Ctx):
         "final_screenshot": final_path, "clipboard_restored": clipboard_restored,
         "frontmost_restored": frontmost_restored, "kept_open": kept, "cleanup_errors": errors,
     }
+    data["cleanup_done"] = True
+
+
+def cmd_end(args, ctx: Ctx):
+    """Restore the user's desktop, close what the run opened, release the lock, and write the reports.
+
+    A run whose `begin` failed has nothing to observe, so `end` only retries the cleanup that
+    `begin` could not finish, restores the frontmost app, and reports.
+    """
+    run = _load(ctx, args.run, allow_ended=True, tolerate_lost_credentials=True)
+    data = run.data
+    ctx.inputs = {"keep_open": args.keep_open}
+    if data.get("ended"):
+        if data.get("end_output") is None:
+            raise RunStateError("run_ended", data["run_id"])
+        return data["end_output"], data.get("end_exit", 0)
+    if not data.get("cleanup_done"):
+        _end_cleanup(args, ctx, run)
+    errors = data["state_left"]["cleanup_errors"]
     data["ended"] = _now()
-    report = run.write_report()
+    try:
+        report = run.write_report()
+    except BaseException:
+        data["ended"] = None
+        raise
     _run.forget_typed(ctx.root, data["run_id"])
     out = {
         "ok": not errors, "run_id": data["run_id"], "summary": report,

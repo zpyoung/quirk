@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -859,6 +860,57 @@ def test_report_redacts_secrets(root):
     r.write_report()
     assert "signed in" not in (r.dir / "report.json").read_text()
     assert "signed in" not in (r.dir / "report.md").read_text()
+
+
+HOSTILE = "boom\n# Heading\n[x](http://e) ![i](http://e) <img src=x>\r\nnext line"
+
+
+def _finding_lines(md):
+    return [line for line in md.splitlines() if re.match(r"- F\d+ ", line)]
+
+
+def test_script_findings_cannot_make_structure_in_report_md(root):
+    r = make_run(root)
+    r.add_finding("console", f"console error: {HOSTILE}", None, None, "script")
+    r.add_finding("network", "failed request: GET http://e/`x` -> 500", None, None, "script")
+    r.write_report()
+    md = (r.dir / "report.md").read_text(encoding="utf-8")
+    assert "\n# Heading" not in md
+    assert not any(line.startswith(("#", "![", "[", "<")) for line in md.splitlines()
+                   if line and not line.startswith("# Run ") and not line.startswith("## ")
+                   and not line.startswith("### "))
+    [first, second] = _finding_lines(md)
+    assert first == ("- F1 [console, script] ` console error: boom # Heading [x](http://e) "
+                     "![i](http://e) <img src=x> next line `")
+    assert second == "- F2 [network, script] `` failed request: GET http://e/`x` -> 500 ``"
+
+
+def test_a_backtick_run_in_app_text_cannot_close_the_code_span(root):
+    r = make_run(root)
+    r.add_finding("console", "a ``` b `` c ` d\n# Heading", None, None, "script")
+    r.write_report()
+    [line] = _finding_lines((r.dir / "report.md").read_text(encoding="utf-8"))
+    assert line == "- F1 [console, script] ```` a ``` b `` c ` d # Heading ````"
+
+
+def test_agent_written_summaries_keep_their_markdown(root):
+    r = make_run(root)
+    r.add_finding("other", "the **save** button is `dead`", None, None, "model")
+    r.write_report()
+    [line] = _finding_lines((r.dir / "report.md").read_text(encoding="utf-8"))
+    assert line == "- F1 [other, model] the **save** button is `dead`"
+
+
+def test_gate_subjects_and_cleanup_errors_are_literal_in_report_md(root):
+    r = make_run(root)
+    r.record_gate(2, "Delete [x](http://e)\n# Heading", "stopped")
+    r.data["state_left"] = {"cleanup_errors": ["quit pid:1: boom\n# Heading"],
+                            "kept_open": ["pid:1"]}
+    r.write_report()
+    md = (r.dir / "report.md").read_text(encoding="utf-8")
+    assert '- observation 2: stopped on ` Delete [x](http://e) # Heading `' in md
+    assert "- Cleanup errors: ` quit pid:1: boom # Heading `" in md
+    assert "\n# Heading" not in md
 
 
 @pytest.mark.parametrize("subject", [

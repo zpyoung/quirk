@@ -103,7 +103,7 @@ CONTRACT:
 likeuser.py doctor  [--surface web|electron|native]
 likeuser.py begin   --target <url|app-name|bundle-id> --surface web|electron|native
                     --owner yours|third-party (--attended | --unattended)
-                    [--launch <command>] [--cdp-port <n>] [--real-chrome]
+                    [--launch <command>] [--launch-env <NAME>]... [--cdp-port <n>] [--real-chrome]
                     [--allow-foreground] [--session-key <name>]
                     [--credentials-env <PREFIX> | --credentials-file <path>]
                     [--goals-file <path>] [--budget-run <n>] [--budget-goal <n>]
@@ -147,7 +147,7 @@ The value never reaches the model, stdout, or any run file.
 |---|---|
 | 0 | Command ran. For `act`, the outcome is in `status`, including `NO_EFFECT`, `DRIFT`, and `DESKTOP_BUSY`. |
 | 1 | Unexpected internal error (traceback on stderr). |
-| 2 | Usage or contract violation: argparse errors, `pass_without_effect`, `unattended_approval`, `unattended_handoff`, `target_name_required`, `foreground_not_allowed`, `launch_required`, `launch_requires_electron`, `created_third_party`, `coordinates_need_screenshot`, `unknown_fault`, `unsafe_state_path`. |
+| 2 | Usage or contract violation: argparse errors, `pass_without_effect`, `unattended_approval`, `unattended_handoff`, `target_name_required`, `foreground_not_allowed`, `launch_required`, `launch_requires_electron`, `launch_env_credential`, `created_third_party`, `coordinates_need_screenshot`, `unknown_fault`, `unsafe_state_path`. |
 | 3 | Run-state error: unknown run, run already ended, run stopped (`stopped_reason` in JSON), `desktop_busy` at `begin`. |
 | 4 | Driver failure outside `act` (`begin`, `observe`, `handoff`, `resume`, `end`), with `driver_error` in JSON. |
 | 5 | Missing tool, wrong tool version, missing macOS permission, missing extension, or bad credentials file. |
@@ -192,8 +192,15 @@ what is missing. Never opens System Settings and never installs anything.
       Port choice, launch, and the wait for the endpoint run under a machine-wide lock so concurrent
       runs cannot pick one port; `begin` exits 4 with `cdp_port_conflict` when the process listening on
       the port is not the launched app. The app's environment omits the run's credential variables
-      (`<PREFIX>_USERNAME`, `<PREFIX>_PASSWORD`) and any variable holding a known secret, and its
-      `launch.stdout.log` and `launch.stderr.log` are mode 0600.
+      (`<PREFIX>_USERNAME`, `<PREFIX>_PASSWORD`), any variable holding a known secret, and every
+      variable whose name looks sensitive (suffixes such as `_KEY`, `_TOKEN`, `_SECRET`,
+      `_PASSWORD`, `_AUTH`, `_SESSION`, `_COOKIE`; cloud and tool prefixes such as `AWS_`, `GH_`,
+      `GITHUB_`, `OP_`, `VAULT_`; and names like `SSH_AUTH_SOCK` and `KUBECONFIG`; matched without
+      regard to case). A repeatable `--launch-env NAME` passes a named variable through anyway; the
+      run stores only the names. `--launch-env` is valid only with `--surface electron` (else exit 2
+      `launch_requires_electron`) and cannot name a credential variable or one holding a known
+      secret (exit 2 `launch_env_credential`). The app's `launch.stdout.log` and `launch.stderr.log`
+      are mode 0600.
       The process that owns the verified debug port (the launched process, or the Electron child a
       wrapper command started; the launched process when `lsof` cannot name the owner) and its window
       id are also bound to the native driver, by pid, so OS dialogs, sheets, and menus stay
@@ -242,7 +249,8 @@ what is missing. Never opens System Settings and never installs anything.
   `--no-screenshot`), the tree, and surface metadata, writes them into the run folder, and assigns a
   monotonically increasing `observation_id`. Only the latest observation is actionable.
 - For Electron runs, the observation records `screenshot_source` (`renderer` or `native`); it is
-  `native` whenever a native sheet or dialog is open, and then both trees are returned.
+  `native` whenever a native sheet or dialog is open, and then both trees are returned. When the
+  native observation fails, the verb exits 4: a failure does not show that no sheet is open.
 - **Console and network findings are automatic.** On web and Electron targets, every new console
   error and failed request since the previous observation is registered as a finding of kind
   `console` or `network`, linked to the observation's goal, and also returned in
@@ -299,10 +307,11 @@ routed to the driver whose tree produced it.
 
 - **Paste rule:** the script pastes long text only when the baseline clipboard was text; otherwise it
   types. Any paste marks the clipboard for restore at `end`.
-- **Postconditions:** the new observation is recorded and returned. The cursor position and
-  frontmost app after the action become the new drift baseline, except after a refusal before
-  delivery (`FOREGROUND_REQUIRED`, or `STALE` from a gone window): the baseline stays where it was,
-  so the foreground retry still sees a takeover that happened in between.
+- **Postconditions:** the new observation is recorded and returned. After an action that used the
+  foreground, the cursor position and frontmost app become the new drift baseline. A background
+  action (a renderer action, or a native action on a background-capable driver) leaves the baseline
+  alone, and so does a refusal before delivery (`FOREGROUND_REQUIRED`, or `STALE` from a gone
+  window): the next foreground action still sees a takeover that happened in between.
 - **Driver errors:** a driver failure (orca `ok:false`, a playwright-cli `### Error` block whatever
   the exit code, a non-zero exit) returns `ERROR` with `driver_error` and never `OBSERVED`.
 - **Invariant:** a goal's most recent `act` status is stored, so `verdict` can enforce the pass rule.
@@ -384,7 +393,9 @@ on timeout return UNSETTLED with the last observation
   removed (the previous file is kept) if the driver fails or leaves group or other access on it.
 - Closes driver sessions, detaches attached browsers, and quits apps the run launched, unless a goal
   is `fail` or `blocked` or `--keep-open` is passed; kept windows are listed in `state_left`.
-- Releases the lock, writes `report.json` and `report.md`, and returns the report summary.
+- Releases the lock, writes `report.json` and `report.md`, and returns the report summary. The run
+  is marked ended only after both reports are written; when the write fails, the cleanup is already
+  recorded (`cleanup_done`), so a second `end` writes the reports without repeating it.
 - A run stopped as `begin_failed` is not ended; its `end` skips the final screenshot and session
   save and only retries the unfinished cleanup (see `begin` Errors).
 - **Idempotent:** a second `end` returns the same summary. Driver failures during cleanup are
@@ -614,6 +625,8 @@ observations: {"<id>": {goal_id: str, screenshot_path: str|null, screenshot_sour
 findings: [<report.json finding>]; gates: [<report.json gate>]
 console_seen: int; requests_seen: int   # counts already turned into findings, so only new ones are added
 login_attempts: int; test_overrides: [str]; started: str; ended: str|null; summary: object|null
+launch_env: [str]      # names given to --launch-env, never values
+cleanup_done: bool     # set by end once its cleanup ran, so a retried end only rewrites the reports
 ```
 
 SCHEMA: `act` output
@@ -642,7 +655,10 @@ Goal evidence is every screenshot that shows what happened to the goal, deduplic
 order it was recorded: the post-action screenshot of its `OBSERVED` and `NO_EFFECT` acts, the
 screenshot of the observation a `GATE_REQUIRED` stop was issued against, and the screenshots of its
 findings. A goal that ends `blocked`, `partial`, or `fail` therefore cites the dead control or the
-gate it stopped at. `report.md` renders the same data for humans and links each screenshot path.
+gate it stopped at. `report.md` renders the same data for humans and links each screenshot path. Text the app
+controls (script findings from console messages, failed requests, and visibility checks, gate
+subjects, cleanup errors) is rendered as inline code with a fence longer than any backtick run
+in it and line breaks collapsed, so it cannot form headings, links, images, or HTML.
 
 REGEX: gate pattern, third-party targets (case-insensitive, matched against the gate subject)
 ```
@@ -748,8 +764,11 @@ Back-links: [logic: Decisions Locked](logic.md#decisions-locked)
   final screenshot. The text files playwright-cli keeps in
   `<run>/.playwright-cli/` are redacted at the end of every verb.
 - A screenshot cannot be redacted. An `act` with `--secret` saves no post-action screenshot, and any
-  observation (including the `end` screenshot) whose tree shows a credential value deletes its
-  screenshot; both report `screenshot_withheld: true` and the tree and signals are still recorded.
+  observation (including the `end` screenshot) whose tree text or values show the run's password
+  deletes its screenshot; both report `screenshot_withheld: true` and the tree and signals are still
+  recorded. The username does not withhold, because apps show the signed-in name after login. The
+  guard reads accessibility text, so a password drawn on screen without appearing in the tree is not
+  caught; the run folder stays 0700 and git-ignored.
 - Native refs can renew between snapshots (Cua tokens are `s<session>:<index>`). The `focus` signal
   compares the focused element's index, not its token, and the `value` signal compares the acted-on
   element found again in the post-action snapshot by ref, then by index and name, then by a name only
@@ -811,7 +830,7 @@ binaries replaying the golden outputs and `LIKEUSER_FAKE_DESKTOP`. Must cover:
 - Login attempt limit; credentials read from env and from a 0600 file, rejected from a 0644 file.
 - Budget exhaustion per goal and per run.
 - Redaction: stdin text and credentials never appear in `events.jsonl`, `run.json`, or reports, in
-  any later verb of the run; no screenshot is saved while a credential is on screen.
+  any later verb of the run; no screenshot is saved while the password is in the tree.
 - Test overrides recorded and bannered.
 
 **Skill structure** (`tests/test_using_apps_like_a_user_skill.py`): `name` equals the directory name;

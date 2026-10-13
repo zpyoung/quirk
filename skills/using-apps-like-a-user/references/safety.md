@@ -89,6 +89,10 @@ Credentials are the script's, never yours.
 - **Never** ask the user to paste a password in chat. If there are none, see login walls.
 - `playwright-cli` takes the text as an argument, so a password is briefly visible to same-user
   process inspection on web runs. Use a dedicated test account.
+- **Screenshots are guarded by the tree, not the pixels.** A screenshot is withheld while the
+  password appears in the accessibility text or values. The username does not count, since apps show
+  the signed-in name after login. An app that draws a password on screen without exposing it in the
+  tree is not caught. The run folder stays private (0700) and git-ignored.
 
 ## Login walls
 
