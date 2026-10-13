@@ -1,6 +1,6 @@
 # Logic spec: `writing-html-artifacts`
 
-**Status**: Draft, awaiting user review
+**Status**: Approved, 2026-10-13
 
 A quirk skill that has agents in Claude Code, pi and Oh My Pi build HTML files that open anywhere,
 look deliberate, and come with proof that they work. The same machinery gives brainstorming and
@@ -527,7 +527,7 @@ Open for the tech spec:
 
 ## Status & amendments
 
-**Status**: Draft, awaiting user review.
+**Status**: Approved by the user, 2026-10-13. Handed to subagent-driven-development.
 
 **Amendments**
 
