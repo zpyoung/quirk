@@ -443,8 +443,8 @@ Back-link: [Browser verify](logic.md#browser-verify).
   - `themes`: with `colorScheme` light and then dark, sample `body`, headings, `p`, `li`, `td`,
     `th`, `label`, `button` and `a`. Each sampled element with visible text must reach 4.5:1
     against its effective background, or 3:1 at 24px and up.
-  - `network`: a context with `serviceWorkers: "block"`, a route on `/^https?:/` that records and
-    aborts, and a `request` listener recording anything not `file:`, `data:`, `blob:` or `about:`.
+  - `network`: a context with `serviceWorkers: "block"`, a route on `/^https?:/` that records each
+    request, and a `request` listener recording anything not `file:`, `data:`, `blob:` or `about:`.
     Offline mode aborts and fails on any recorded URL. Connected mode lets requests through
     (`route.continue()`) and reports them without failing, so the page's real behavior is verified.
 - Output goes to `<file stem>.verify/` beside the file: `report.json` (the `VerifyResult`) and
