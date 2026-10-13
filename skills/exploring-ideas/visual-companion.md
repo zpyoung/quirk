@@ -2,7 +2,7 @@
 
 Browser-based visual companion for showing idea-landscapes, option/cluster maps, comparison matrices, diagrams, and mockups during an exploration session.
 
-It runs on the shared **Agent Isles** bridge (`isles live`) — the same one the `brainstorming` skill uses. You author **Markdown screens** with small interactive islands instead of hand-writing HTML. Agent Isles renders the newest screen, shows it in the browser, and captures clicks back to you as JSONL events.
+It is the same `companion.py` the `brainstorming` skill uses. You describe each screen in a small `screen.json`; the companion builds it into a single offline HTML page, serves the newest one from a local Python server, and records the user's clicks as JSONL events you read back. You never hand-write HTML, CSS, or JavaScript. Full protocol details (routes, exit codes, state files, check results) are in `../writing-html-artifacts/references/companion.md`, relative to this file.
 
 ## When to Use
 
@@ -13,185 +13,170 @@ Decide per-question, not per-session. The test: **would the user understand this
 - **Idea-landscapes / cluster maps** — directions grouped by theme, the shape of the option space
 - **Comparison matrices** — directions laid out across dimensions (qualitative notes, not scores), with no winner declared
 - **Mind maps** — branching exploration of a topic, tangents preserved
-- **Architecture / concept diagrams** — system components, data flow, relationship maps (Mermaid/D2 supported)
+- **Architecture / concept diagrams** — system components, data flow, relationship maps (Mermaid)
 - **Side-by-side visual comparisons** — two directions rendered next to each other
 
 **Use the terminal** when the content is text or tabular:
 
 - **Scoping questions** — depth, recency, constraints, what the exploration serves
-- **Conceptual A/B/C choices** — picking between approaches described in words
-- **Tradeoff prose** — counter-arguments, challenge notes, open questions
+- **Conceptual A/B/C choices** and **tradeoff prose** — approaches, counter-arguments, challenge notes, open questions
 - **Anything where the answer is words**, not a visual preference
 
 A question *about* a visual topic is not automatically a visual question. "What should we research about layout systems?" is conceptual — use the terminal. "Which of these idea-cluster maps captures the space better?" is visual — use the browser.
 
 ## How It Works
 
-`isles live <dir>` watches a directory for **Markdown** files and serves the **newest one** (by modification time) to the browser, auto-switching when you write a newer screen. You write `.md` screens to the screen directory; the user sees the rendered result and clicks to select options; selections are appended to `<dir>/state/events` (JSONL) that you read on your next turn.
+`companion.py` has five subcommands, each printing exactly one JSON object to stdout (diagnostics go to stderr): `start` launches a detached local server for a session, `show` builds a screen from your spec and makes it current, `wait` blocks until the user clicks Proceed, `events` prints the recorded events, and `stop` stops the server.
 
-You author **standard Markdown plus Agent Isles islands**. The renderer adds the page chrome, theme, dark mode, a live header/footer, and all interactive infrastructure — you never hand-write `<html>`, CSS, or `<script>`. Selection wiring is built into the islands; there is **no `onclick`/`data-choice`/`toggleSelect`** to manage.
+Every screen shows your question, 2 to 4 option cards (single or multi select), a note field, and a Proceed button. Each option toggle posts a `click` event; Proceed posts a `proceed` event with the current selection and note. Events append to `<session>/state/events`.
 
 ## Requirements
 
-The companion is launched through the Quirk bridge, which finds an Agent Isles runner automatically (in order):
+Python 3 only: no Node, npm, or network step. If `python3` is unavailable, fall back to terminal-only exploration and tell the user.
 
-1. repo-local `node_modules/.bin/isles`,
-2. `isles` on `PATH`,
-3. an explicit `npx` fallback (`github:zpyoung/agent-isles`, which currently carries `live`).
+**Finding the script.** This skill's directory is the one holding its `SKILL.md`; the host shows it when the skill loads. The companion is:
 
-The npx fallback needs Node + `npx` available and will download Agent Isles on first use. If none of these resolve, the bridge prints a clear error instead of launching — fall back to terminal-only exploration and tell the user Agent Isles isn't available.
+```
+<this skill's directory>/../writing-html-artifacts/scripts/companion.py
+```
 
-Throughout this guide, the bridge is invoked as `python3 "$CLAUDE_PLUGIN_ROOT/bin/agent_isles.py"` (the exploring-ideas skill ships inside the Quirk plugin, so the bridge lives at the plugin root).
+Below, `$COMPANION` stands for that path; set it in your shell command and quote it.
 
 ## Starting a Session
 
-Pick a screen directory **inside the user's project** so screens persist and survive restarts. Use a unique session subdirectory, e.g. `.quirk/exploring-ideas/session-1/`:
+Use a session directory **inside the user's project** under `.quirk/brainstorm/` (shared with the `brainstorming` skill), named like `explore-1` so exploration sessions stay distinct:
 
 ```bash
-SCREEN_DIR=".quirk/exploring-ideas/session-1"
-python3 "$CLAUDE_PLUGIN_ROOT/bin/agent_isles.py" live "$SCREEN_DIR"
-# Prints one line of JSON, e.g.:
-# {"type":"server-started","pid":92913,"port":53143,"host":"127.0.0.1",
-#  "url":"http://localhost:53143","screen_dir":".../session-1","state_dir":".../session-1/state"}
+SESSION=".quirk/brainstorm/explore-1"
+python3 "$COMPANION" start "$SESSION"
+# {"type":"server-started","pid":92913,"port":53143,"host":"127.0.0.1","url":"http://127.0.0.1:53143",
+#  "screen_dir":".../explore-1/screens","state_dir":".../explore-1/state"}
 ```
 
-The server **self-backgrounds**: the command prints the server-info JSON and returns immediately, so you do NOT need `run_in_background`. Save `url`, `screen_dir`, and `state_dir` from the JSON. Tell the user to open the `url`.
+The server detaches itself and `start` returns at once, so you do NOT need `run_in_background`. `start` is idempotent: a live server for the session is reused. Tell the user to open the `url`.
 
-**Finding connection info later:** the same JSON is written to `<screen_dir>/state/server-info`. If the server has shut down, `<screen_dir>/state/server-stopped` exists instead.
+**Later:** the same JSON is in `<session>/state/server-info`; if the server has shut down, `<session>/state/server-stopped` exists instead. Screens persist in `.quirk/brainstorm/`, so remind the user to add `.quirk/` to `.gitignore` if it isn't already.
 
-**Persistence & git:** screens stay in `.quirk/exploring-ideas/` for later reference. Remind the user to add `.quirk/` to `.gitignore` if it isn't already.
+**Remote or containerized setups:** the server binds `127.0.0.1` by default. If that URL is unreachable from the user's browser, add `--host 0.0.0.0`. **This exposes the session on the network: anyone who can reach the port can read the screens and send events.** Use it only on a trusted network and only when the user agrees.
 
-**Remote/containerized setups:** if the printed URL is unreachable from the user's browser, relaunch binding a non-loopback host and control the printed hostname:
-
-```bash
-python3 "$CLAUDE_PLUGIN_ROOT/bin/agent_isles.py" live "$SCREEN_DIR" --host 0.0.0.0 --url-host localhost
-```
-
-The server auto-exits after 30 minutes of inactivity (tune with `--idle-timeout <minutes>`).
+The server exits after 30 minutes without a request or a `show` (tune with `--idle-minutes N`).
 
 ## The Loop
 
-1. **Write a Markdown screen** to a new file in `screen_dir`:
-   - Use semantic filenames: `idea-landscape.md`, `option-matrix.md`, `clusters.md`.
-   - **Never reuse filenames** — each screen gets a fresh file. The newest by mtime is served.
-   - Use the Write tool — **never use cat/heredoc** (dumps noise into the terminal).
-   - If the server has stopped (`state/server-stopped` exists, or `state/server-info` is gone), relaunch it before writing.
+1. **Write a `screen.json`** (see Authoring Screens) with the Write tool, never cat or a heredoc. Give each spec a semantic name such as `idea-landscape.json`.
 
-2. **Tell the user what to expect and end your turn:**
-   - Remind them of the URL (every step, not just the first).
-   - Give a brief text summary of what's on screen (e.g., "Showing 5 idea clusters for the topic").
-   - Ask them to respond in the terminal: "Take a look and let me know which directions resonate. Click to flag any you'd like to go deeper on."
+2. **Show it:**
 
-3. **On your next turn** — after the user responds:
-   - Read `<state_dir>/events` if it exists — JSONL of the user's browser clicks (see format below).
-   - Merge with the user's terminal text. The terminal message is primary; events provide structured interaction data.
-
-4. **Iterate or advance** — if feedback changes the current screen, write a new file (e.g. `idea-landscape-v2.md`). Only move on when the current screen is understood.
-
-5. **Unload when returning to the terminal** — when the next step doesn't need the browser, push a waiting screen to clear stale content:
-
-   ```markdown
-   <!-- filename: waiting.md (or waiting-2.md, etc.) -->
-   ## Continuing in the terminal…
+   ```bash
+   python3 "$COMPANION" show "$SESSION" "$SESSION/idea-landscape.json"
+   # {"screen":"0002-idea-landscape","nonce":"...","url":"...","checks":{...}}
    ```
 
-6. Repeat until done.
+   - Exit `1` means a static check failed. The screen is written but NOT made current, and `checks` says why. Fix the spec and show again.
+   - Exit `2` means a malformed `screen.json` or a missing session. If the server stopped, run `start` again first.
+   - **Never reuse a screen.** Each `show` creates a new numbered screen (`NNNN-<slug>.html`); to change one, edit the spec and show it again.
+
+3. **Tell the user what to expect and end your turn:**
+   - Remind them of the URL (every step, not just the first).
+   - Briefly summarize what's on screen ("Showing 5 idea clusters for the topic") and ask them to respond in the terminal: "Let me know which directions resonate. Click to flag any you'd like to go deeper on."
+
+4. **On your next turn**, read the events:
+
+   ```bash
+   python3 "$COMPANION" events "$SESSION" --screen 0002-idea-landscape
+   ```
+
+   Merge them with the user's terminal text. **Terminal input outranks clicks**: if the two disagree, the terminal message wins, and the clicks are context about what they explored.
+
+5. **Iterate or advance.** If feedback changes the screen, show a new one; move on only when it is understood. A newer `show` makes an open older tab display a "superseded" banner and rejects its clicks, so stale clicks never reach you.
+
+6. **Unload when returning to the terminal.** Show a short "continuing in the terminal" screen (it still needs 2 to 4 options) so the user isn't staring at a resolved choice. Repeat until done.
+
+**Optional: block on Proceed.** Instead of ending your turn at step 3, run `python3 "$COMPANION" wait "$SESSION"`. It returns `{"proceed": <event>, "clicks": [...]}` when the user clicks Proceed on the current screen. Exit `1` is a timeout (110 s default, under a host's 120 s tool limit): re-run `wait`, since nothing is lost. Exit `2` means no live server: `start` and `show` again. If the user types while you are blocked, the typed text is the answer.
 
 ## Authoring Screens
 
-Write a normal Markdown document. Reach for islands only where richer UI helps.
+A `screen.json` looks like this:
 
-### Selectable options (the core interaction)
-
-Wrap `<agent-choice>` rows in an `<agent-option-set>`. Each choice needs a stable `id` (used as the event `choice`) and a short `title` (used as the event `text`); the body is the visible description.
-
-```markdown
-## Which directions should we go deeper on?
-
-These are exploratory, not ranked — flag the ones that intrigue you.
-
-<agent-option-set data-multiselect>
-  <agent-choice id="behavioral-profile" title="Behavioral auto-profile">Build the profile from usage, no forms</agent-choice>
-  <agent-choice id="docs-as-game" title="Docs as a game">Onboarding as a mystery to solve</agent-choice>
-  <agent-choice id="finish-tool" title="Project-ending tool">Optimize for escape velocity, not retention</agent-choice>
-</agent-option-set>
+```json
+{
+  "title": "Directions to go deeper on",
+  "question": "Which directions should we go deeper on?",
+  "select": "multi",
+  "options": [
+    {"id": "behavioral-profile", "label": "Behavioral auto-profile", "description": "Build the profile from usage, no forms"},
+    {"id": "docs-as-game", "label": "Docs as a game", "description": "Onboarding as a mystery to solve"},
+    {"id": "finish-tool", "label": "Project-ending tool", "description": "Optimize for escape velocity, not retention"}
+  ],
+  "content": "<p>Exploratory, not ranked. Flag the ones that intrigue you.</p>",
+  "diagram": "flowchart LR\n  A[Onboarding] --> B[Profile]"
+}
 ```
 
-**Multi-select** (shown above with `data-multiselect`) suits idea-landscapes well — the user can flag several directions to explore further. The footer shows the count. Selecting one choice in a single-select set deselects its siblings. Add `selected` to a choice only for an initial selection.
+- `title` is short and becomes the page `<title>`. `question` is what the user is deciding.
+- `select` is `"multi"` (each click toggles) or `"single"` (picking one deselects the others). Idea-landscapes are usually `"multi"`: the user can flag several directions to explore further.
+- `options` has **2 to 4 entries**. Each `id` is stable and matches `[a-z0-9-]{1,40}`; it comes back as the event `choice`. `label` comes back as `text`. `description` and `html` (a small mockup inside the card) are optional.
+- `content` is optional freeform HTML above the options: a comparison matrix, notes, a larger visual.
+- `diagram` is optional Mermaid source (idea-cluster maps, mind maps, concept diagrams), rendered offline.
+- A screen that only shows something still offers choices about it ("Looks right", "Needs changes").
+
+For comparison matrices, put a plain HTML table (directions by dimensions) in `content` and keep "no winner declared" intact.
 
 ### Idea-gate co-creation (go-deeper flags)
 
-This is the browser surface for **Checkpoint 2 — the idea-landscape co-creation gate** (`--involve medium+`; see `references/interaction-model.md`). It reuses the same `<agent-option-set>` component — no new model. Render the directions surfaced by the first ideation pass as multi-select cards, one card per direction, each carrying its insight-pairing line:
+This is the browser surface for **Checkpoint 2, the idea-landscape co-creation gate** (`--involve medium+`; see `references/interaction-model.md`). It is an ordinary multi-select screen. Render the directions from the first ideation pass as options, one per direction, each `description` carrying its insight-pairing line:
 
-```markdown
-## Which directions should I go deeper on?
-
-Exploratory, not ranked — flag the ones to expand. Tell me in the terminal what to drop or add; everything else stays.
-
-<agent-option-set data-multiselect>
-  <agent-choice id="behavioral-profile" title="Behavioral auto-profile">Build the profile from usage, no forms · *why it might work:* removes the blank-form drop-off</agent-choice>
-  <agent-choice id="docs-as-game" title="Docs as a game">Onboarding as a mystery to solve · *why it might work:* curiosity beats compliance</agent-choice>
-  <agent-choice id="finish-tool" title="Project-ending tool">Optimize for escape velocity, not retention · *why it might work:* trust compounds into referrals</agent-choice>
-</agent-option-set>
+```json
+{
+  "title": "Go deeper",
+  "question": "Which directions should I go deeper on?",
+  "select": "multi",
+  "content": "<p>Exploratory, not ranked. Flag the ones to expand. Tell me in the terminal what to drop or add; everything else stays.</p>",
+  "options": [
+    {"id": "behavioral-profile", "label": "Behavioral auto-profile", "description": "Build the profile from usage, no forms. Why it might work: removes the blank-form drop-off"},
+    {"id": "docs-as-game", "label": "Docs as a game", "description": "Onboarding as a mystery to solve. Why it might work: curiosity beats compliance"}
+  ]
+}
 ```
 
-- **The browser carries one signal: go-deeper.** A multi-select set yields only a single `selected[]` (see [Browser Events Format](#browser-events-format)), so it maps to exactly one action — the directions to **expand**. Do not overload it with keep/drop semantics.
-- **Unselected ≠ dropped.** Keep is the default: a direction the user simply didn't click stays in the landscape. Never discard directions just because they were left unselected.
-- **Drop and add-your-own come from the terminal.** The browser has no free-text input and no reliable third state, so explicit drops ("kill #2") and new directions arrive as terminal text — which is primary. Merge that text with the go-deeper set.
-- **No ranking, ever** — multi-select flags interest without ordering. Do not add scores, stars, or a "best" affordance; that would breach the no-winner gate in the browser too.
-- After reading the go-deeper set + terminal text, run the **re-ideate loop** (drop / expand / ideate-added / one short refill pass), then push a fresh screen or unload to the terminal for the challenge pass.
+- **The browser carries one signal: go-deeper.** A multi-select screen yields a single `selected[]`, so it maps to exactly one action: the directions to **expand**. Don't overload it with keep/drop semantics.
+- **Unselected is not dropped.** Keep is the default: a direction the user didn't click stays in the landscape. Never discard directions just because they were left unselected.
+- **Drop and add-your-own come from the terminal.** The note field is free text but not a structured drop list, so explicit drops ("kill #2") and new directions arrive as terminal text, which is primary. Merge that text with the go-deeper set.
+- **No ranking, ever.** Multi-select flags interest without ordering. Don't add scores, stars, or a "best" affordance; that would breach the no-winner gate in the browser too.
+- A screen holds at most 4 options. For a larger landscape, show clusters as options, or split the directions across screens and keep the full numbered list in the terminal.
+- After reading the go-deeper set and terminal text, run the **re-ideate loop** (drop / expand / ideate-added / one short refill pass), then show a fresh screen or unload to the terminal for the challenge pass.
 
-### Other islands
+### Status callouts
 
-- `<agent-decision verdict="deferred|needs-review" title="…">` — non-convergent status cards, for challenge-note callouts only. **Never** use the convergent verdicts (`go` / `approved` / `rejected` / `ship-with-guardrails`) — they declare a winner or an approved answer and breach the HARD-GATE.
-- `<agent-risk level="low|medium|high|critical" title="…">` — risk/blocker callouts (handy for challenge notes).
-- More components and exact attributes: Agent Isles `docs/component-vocabulary.md`.
-
-### Maps, matrices, and diagrams
-
-- For comparison matrices, use plain Markdown tables (directions × dimensions) — keep "no winner declared" intact.
-- For idea-cluster maps, mind maps, and concept diagrams, use Mermaid or D2 fenced code blocks.
-- Keep visuals simple — focus on the shape of the option space, not pixel-perfect design.
+Challenge notes and open questions belong in `content` as plain HTML, worded as non-convergent status ("deferred", "needs review"). **Never** write "approved", "recommended", or "winner" on screen: it declares an answer and breaches the HARD-GATE.
 
 ## Browser Events Format
 
-Clicks are recorded to `<state_dir>/events`, one JSON object per line. The file is cleared automatically when you push a newer screen.
+Events are recorded to `<session>/state/events`, one JSON object per line. The file is append-only and never cleared, so filter by `screen` (`events --screen ID` does this).
 
 ```jsonl
-{"type":"click","choice":"docs-as-game","text":"Docs as a game","timestamp":1780956565,"selected":["docs-as-game"]}
-{"type":"click","choice":"finish-tool","text":"Project-ending tool","timestamp":1780956570,"selected":["docs-as-game","finish-tool"]}
+{"type":"click","screen":"0002-idea-landscape","nonce":"...","choice":"docs-as-game","text":"Docs as a game","selected":["docs-as-game"],"note":null,"timestamp":1781015415.2}
+{"type":"click","screen":"0002-idea-landscape","nonce":"...","choice":"finish-tool","text":"Project-ending tool","selected":["docs-as-game","finish-tool"],"note":null,"timestamp":1781015418.9}
+{"type":"proceed","screen":"0002-idea-landscape","nonce":"...","choice":null,"text":"Proceed","selected":["docs-as-game","finish-tool"],"note":null,"timestamp":1781015420.4}
 ```
 
-- `choice` / `text` come from the clicked `<agent-choice>`'s `id` / `title`.
-- `selected` is the full set of currently-selected choice ids (most useful in multi-select).
-- The last event is typically the final selection, but the click sequence can reveal hesitation worth asking about.
-
-If `<state_dir>/events` doesn't exist, the user didn't interact with the browser — use only their terminal text.
+- `choice` / `text` come from the toggled option's `id` / `label`. On a `proceed`, `choice` is null.
+- `selected` is the full set of currently selected option ids (most useful in multi-select).
+- `note` is whatever the user typed in the note field, or null.
+- With no events for the screen, the user didn't interact with the browser. Use only their terminal text.
 
 ## Design Tips
 
-- **Scale fidelity to the question** — a cluster map for shape, a matrix for trade-offs.
-- **Explain the question on each screen** — "Which directions intrigue you?" not just "Pick one".
-- **Iterate before advancing** — if feedback changes the current screen, write a new version.
-- **2–4 options (or a handful of clusters) max** per screen.
-- **Never declare a winner on screen** — the gate applies in the browser too.
-
-## File Naming
-
-- Semantic names: `idea-landscape.md`, `option-matrix.md`, `clusters.md`.
-- Never reuse filenames — each screen is a new file.
-- For iterations, append a version suffix: `idea-landscape-v2.md`.
-- Newest file by modification time is served.
+- **Scale fidelity to the question.** A cluster map for shape, a matrix for trade-offs.
+- **Explain the question on each screen.** "Which directions intrigue you?" beats "Pick one".
+- **Iterate before advancing.** If feedback changes the screen, show a new version; never reuse one.
+- **2 to 4 options per screen.**
+- **Never declare a winner on screen.** The gate applies in the browser too.
 
 ## Cleaning Up
 
 ```bash
-python3 "$CLAUDE_PLUGIN_ROOT/bin/agent_isles.py" live "$SCREEN_DIR" --stop
+python3 "$COMPANION" stop "$SESSION"
 ```
 
-Screens persist in `.quirk/exploring-ideas/` for later reference. The server also auto-exits after its idle timeout.
-
-## Reference
-
-- Component vocabulary and exact island attributes: Agent Isles `docs/component-vocabulary.md`.
-- Bridge options: `python3 "$CLAUDE_PLUGIN_ROOT/bin/agent_isles.py" live --help`.
+`{"stopped": false}` just means no server was running. Screens persist in `.quirk/brainstorm/` for later reference, and the server also exits on its own after the idle timeout.

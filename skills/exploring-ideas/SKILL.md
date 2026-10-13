@@ -175,7 +175,7 @@ For each surviving direction / finding cluster: **steelman** it, then surface th
 
 Synthesize using `exploration-artifact-template.md` and **auto-save** to `docs/quirk/explorations/YYYY-MM-DD-<topic>.md`. It opens with a NOT-a-spec banner and contains: Framing · What was explored · Findings / Idea landscape (each direction insight-paired, NO winner declared) · Tensions & trade-offs · Challenge notes · Open questions & gaps · Sources. It contains NO "Decisions Locked", requirements, or implementation steps — by gate.
 
-Remind the user to add `.quirk/` to `.gitignore` if they used the Visual Companion (its session screens live under `.quirk/exploring-ideas/`).
+Remind the user to add `.quirk/` to `.gitignore` if they used the Visual Companion (its session screens live under `.quirk/brainstorm/`).
 
 ## Close: Optional Handoff
 
@@ -187,13 +187,13 @@ Never automatic. If the user asks for a plan/spec mid-session, honor them (user 
 
 ## Visual Companion
 
-A browser companion for idea-landscapes, option/cluster maps, mind maps, and comparison matrices — useful when the output is genuinely visual. It runs on the shared **Agent Isles** bridge (`bin/agent_isles.py`), the same one the `brainstorming` skill uses; there is nothing to copy.
+A browser companion for idea-landscapes, option/cluster maps, mind maps, and comparison matrices — useful when the output is genuinely visual. It runs on the shared `companion.py` from the `writing-html-artifacts` skill, the same one the `brainstorming` skill uses; it needs Python 3 only.
 
 **Offer it once, in its own message** (no other content), only when you anticipate visual output:
 
 > "Some of what we explore might land better as a picture — an idea map, a cluster view, a comparison matrix. I can render those in a local browser tab as we go. It's still new and a bit token-intensive. Want to try it? (Requires opening a local URL.)"
 
-If they accept, read `visual-companion.md` for the full mechanics. Decide **per question** whether the browser beats the terminal: browser for visual artifacts (maps, matrices, mockups), terminal for text choices and conceptual questions. Screens live under `.quirk/exploring-ideas/<session>/`.
+If they accept, read `visual-companion.md` for the full mechanics. Decide **per question** whether the browser beats the terminal: browser for visual artifacts (maps, matrices, mockups), terminal for text choices and conceptual questions. Screens live under `.quirk/brainstorm/<session>/` (use session names like `explore-1`).
 
 ## Key Principles
 
