@@ -1,0 +1,29 @@
+# Companion template rules
+
+Read after section 12 of the [design reference](../../references/design-reference.md) and the [companion guide](../../references/companion.md). You do not write this template's slots by hand: `scripts/companion.py show` fills them from `screen.json`, so these rules say what to put in that file.
+
+## What the skeleton gives you
+
+- A masthead with the theme toggle and the `title` as a small `<h1>`, then the `question` as the page's `<h2>`.
+- `content`, then the option cards, then a note field and the Proceed button. Do not add your own buttons, links to other screens or a second note field.
+- A "superseded" banner that appears when a newer screen replaces this one. Controls lock themselves.
+- All behavior comes from the inlined `companion.js`. A screen with its own `<script>` that calls `fetch` fails the static check.
+
+## Writing `screen.json`
+
+- `question` is one complete sentence in sentence case. `title` is two or three words.
+- `options` holds 2 to 4 entries. `id` matches `[a-z0-9-]{1,40}` and is unique on the screen; the agent reads it back, so make it meaningful (`two-col`, not `a`).
+- `description` is one line that says the consequence of choosing the option.
+- `select` is `single` for a choice (radio cards) and `multi` for "which of these apply" (toggle cards).
+
+## Mockups
+
+- Option `html` and `content` are static markup, shown as-is. No `<button>`, `<a>`, `<input>` or `<form>` in an option's `html`: it sits inside the option's own button, and nested controls break the card.
+- Style mockups with inline `style` and the `--q-*` custom properties so they follow the light and dark theme. No external images, fonts or stylesheets; offline rules apply, and `show` rejects any `http:`, `https:` or `//` load.
+- Wireframes (boxes and labels in `--q-color-border`) for structure questions; real tokens and copy only for questions about look.
+- Keep a mockup under about 60 lines. An option's `html` is a thumbnail, so give it a fixed height (around 72px); put larger comparisons in `content`.
+
+## Diagrams
+
+- `diagram` is Mermaid source. The screen loads Mermaid from the companion server at `/_quirk/lib/mermaid/<version>/mermaid.min.js`; it is never inlined, so a diagram screen stays small.
+- The diagram renders above the options and follows the light and dark theme. Keep it to what the question needs: one flow or one relationship map.
