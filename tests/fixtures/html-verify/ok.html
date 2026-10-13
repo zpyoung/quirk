@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OK fixture</title>
+<style>
+:root { color-scheme: light dark; --bg: #ffffff; --fg: #1a1a1a; --link: #0b5cad; }
+@media (prefers-color-scheme: dark) { :root { --bg: #14161a; --fg: #ececec; --link: #8ab4f8; } }
+body { background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; margin: 0; padding: 16px; }
+a { color: var(--link); }
+button { background: var(--bg); color: var(--fg); border: 1px solid var(--fg); }
+table { border-collapse: collapse; max-width: 100%; }
+td, th { border: 1px solid var(--fg); padding: 4px 8px; }
+</style>
+</head>
+<body>
+<h1>Quarterly summary</h1>
+<p>Everything here is self-contained and legible in both themes.</p>
+<ul><li>First item</li><li>Second item</li></ul>
+<table><tr><th>Name</th><th>Value</th></tr><tr><td>Alpha</td><td>1</td></tr></table>
+<label for="n">Name</label> <input id="n">
+<button type="button">Save</button>
+<p><a href="#top">A link</a></p>
+</body>
+</html>
