@@ -20,8 +20,8 @@ from typing import Iterable, Optional
 from .manifest import ManifestError, load_libraries
 
 _ESCAPES = {
-    "js": (re.compile(r"</script", re.IGNORECASE), r"<\/script"),
-    "css": (re.compile(r"</style", re.IGNORECASE), r"<\/style"),
+    "js": (re.compile(r"</script", re.IGNORECASE | re.ASCII), r"<\/script"),
+    "css": (re.compile(r"</style", re.IGNORECASE | re.ASCII), r"<\/style"),
 }
 _TAGS = {"js": "script", "css": "style"}
 
@@ -65,9 +65,10 @@ class InlineBlock:
 def escape_inline(text: str, kind: str) -> str:
     """Make ``text`` safe to sit inside a ``<script>`` (kind ``js``) or ``<style>`` (``css``).
 
-    Every ``</script`` (or ``</style``), in any letter case, becomes ``<\\/script`` (or
-    ``<\\/style``) so the element cannot close early. The vendoring task hashes the result
-    as ``inline_sha256``, so this rule must not drift.
+    Every ``</script`` (or ``</style``), in any ASCII letter case, becomes ``<\\/script`` (or
+    ``<\\/style``) so the element cannot close early. Case folding is ASCII-only so the
+    rule matches the JavaScript build script. The vendoring task hashes the result as
+    ``inline_sha256``, and ``pins.escape_inline`` must stay identical to this function.
     """
     try:
         pattern, replacement = _ESCAPES[kind]
@@ -89,6 +90,25 @@ def shell_block(name: str, path: Path) -> InlineBlock:
     """Wrap a shipped shell file (``chrome.js``, ``companion.js``) as a checkable script block."""
     escaped = escape_inline(Path(path).read_text(encoding="utf-8"), "js")
     return InlineBlock("js", "body-end", wrap_block("js", name, "data-quirk-shell", escaped), name)
+
+
+def _contained_path(lv: LibraryVersion, rel: str) -> Path:
+    """Resolve ``rel`` under the version root; raises VendorError when it is absolute or climbs out."""
+    base = lv.root.resolve()
+    path = (lv.root / rel).resolve()
+    try:
+        path.relative_to(base)
+    except ValueError:
+        raise VendorError(f"{lv.name}@{lv.version}: {rel!r} escapes the library directory") from None
+    return path
+
+
+def _comment_safe(text: str) -> str:
+    """Neutralise ``--``, ``<`` and ``>`` so ``text`` cannot close an HTML comment or open markup."""
+    text = text.replace("<", "&lt;").replace(">", "&gt;")
+    while "--" in text:
+        text = text.replace("--", "- -")
+    return text
 
 
 class VendorStore:
@@ -151,13 +171,7 @@ class VendorStore:
         raise VendorError(f"library {name!r} is not in any libraries.json ({', '.join(str(p) for p in self._paths)})")
 
     def _file_path(self, lv: LibraryVersion, rel: str) -> Path:
-        base = lv.root.resolve()
-        path = (lv.root / rel).resolve()
-        try:
-            path.relative_to(base)
-        except ValueError:
-            raise VendorError(f"{lv.name}@{lv.version}: {rel!r} escapes the library directory") from None
-        return path
+        return _contained_path(lv, rel)
 
     def inline_blocks(self, lv: LibraryVersion) -> list[InlineBlock]:
         """Blocks for every ``inline: true`` file, in registry order, verified before use.
@@ -190,17 +204,17 @@ class VendorStore:
 def license_comment(lv: LibraryVersion) -> str:
     """The ``<!-- license: ... -->`` line that must precede an inlined library.
 
-    Reads the first line mentioning "copyright" from the license file; any ``--`` in it is
-    broken up so the comment cannot close early.
+    Reads the first line mentioning "copyright" from the license file, which must sit under
+    the version root. Every interpolated field has ``--``, ``<`` and ``>`` neutralised so the
+    comment cannot close early or smuggle markup into the built artifact.
     """
-    path = lv.root / lv.license_file
+    path = _contained_path(lv, lv.license_file)
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         raise VendorError(f"{lv.name}@{lv.version}: cannot read license file {lv.license_file}: {exc}") from exc
     copyright_line = next((ln.strip() for ln in lines if "copyright" in ln.lower()), "")
     if not copyright_line:
         copyright_line = next((ln.strip() for ln in lines if ln.strip()), "no copyright line")
-    while "--" in copyright_line:
-        copyright_line = copyright_line.replace("--", "- -")
-    return f"<!-- license: {lv.name} {lv.version} {lv.license} | {copyright_line} -->"
+    name, version, license_id, copyright_line = map(_comment_safe, (lv.name, lv.version, lv.license, copyright_line))
+    return f"<!-- license: {name} {version} {license_id} | {copyright_line} -->"

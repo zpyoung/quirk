@@ -1,7 +1,8 @@
 """Runs the Node/Playwright browser verification (`scripts/verify/verify.mjs`) on an HTML file.
 
 Guarantees a `VerifyResult` dict for every call: when Node, the dependency install or the browser
-is unavailable the result has `status: "not-browser-verified"` and a `reason`, never an exception.
+is unavailable, or the file does not exist (`missing-file`), the result has
+`status: "not-browser-verified"` and a `reason`, never an exception.
 The report is also written to `<out_dir>/report.json` so `report_is_stale` can later tell whether
 verification ran on the file as it is now. Never downloads a browser and never opens the network
 beyond the one-time `pnpm install` of `playwright-core`.
@@ -31,9 +32,13 @@ def default_out_dir(file: Path) -> Path:
 
 
 def _not_verified(file: Path, out_dir: Path, reason: str, detail: str = "") -> dict:
+    try:
+        file_sha256 = _sha256(file)
+    except OSError:
+        file_sha256 = None
     result: dict = {
         "status": "not-browser-verified",
-        "file_sha256": _sha256(file),
+        "file_sha256": file_sha256,
         "browser": None,
         "checks": {},
         "screenshots": [],
@@ -42,8 +47,12 @@ def _not_verified(file: Path, out_dir: Path, reason: str, detail: str = "") -> d
     }
     if detail:
         result["detail"] = detail
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "report.json").write_text(json.dumps(result, indent=2) + "\n")
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "report.json").write_text(json.dumps(result, indent=2) + "\n")
+    except OSError:
+        # the report is a convenience for report_is_stale; the result is still returned without it
+        pass
     return result
 
 
@@ -90,6 +99,8 @@ def run_verify(file: Path, out_dir: Path | None = None, mode: str = "offline") -
     file = Path(file).resolve()
     out_dir = Path(out_dir) if out_dir is not None else default_out_dir(file)
 
+    if not file.is_file():
+        return _not_verified(file, out_dir, "missing-file")
     node = shutil.which("node")
     if node is None:
         return _not_verified(file, out_dir, "no-node")
