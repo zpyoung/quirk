@@ -1,0 +1,48 @@
+<!doctype html>
+{{header}}
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+{{head}}
+<style>
+body { margin: 0; }
+.q-wrap { box-sizing: border-box; max-width: 960px; margin-inline: auto; padding-inline: clamp(var(--q-space-4), 4vw, var(--q-space-6)); }
+header.q-masthead { padding: var(--q-space-4) 0 var(--q-space-5); border-bottom: 1px solid var(--q-color-border); }
+header.q-masthead h1 { margin: var(--q-space-3) 0 0; }
+.q-chrome { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--q-space-3); }
+.q-chrome .q-theme-toggle { position: static; }
+.q-chrome .q-data-picker { margin: 0; }
+main { padding-block: var(--q-space-5) var(--q-space-7); }
+main :is(p, ul, ol, blockquote) { max-width: 70ch; }
+main section + section { margin-top: var(--q-space-7); }
+a { color: var(--q-color-accent); }
+:is(wa-tab-group, wa-dialog, wa-select, wa-switch, wa-button, wa-input, wa-details, wa-callout):not(:defined) { visibility: hidden; }
+.q-lede { font-size: var(--q-size-h4); }
+.q-meta { margin-block: 0 var(--q-space-5); color: var(--q-color-text-muted); font-size: var(--q-size-small); }
+.q-stack { display: flex; flex-direction: column; align-items: flex-start; gap: var(--q-space-4); padding-block: var(--q-space-4); }
+.q-chart { position: relative; height: 320px; margin-block: var(--q-space-4); }
+.q-table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; }
+caption { text-align: left; color: var(--q-color-text-muted); font-size: var(--q-size-small); padding-block: var(--q-space-2); }
+th, td { padding: var(--q-space-2) var(--q-space-3); border-bottom: 1px solid var(--q-color-border); text-align: left; }
+th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<header class="q-masthead">
+<div class="q-wrap">
+<div class="q-chrome">{{chrome}}</div>
+<h1>{{title}}</h1>
+</div>
+</header>
+<div class="q-wrap">
+<main id="main">
+{{slot:main}}
+</main>
+</div>
+{{data}}
+{{body_end}}
+</body>
+</html>

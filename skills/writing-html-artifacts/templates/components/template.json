@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "name": "components",
+  "description": "Use when the page needs ready-made interface components such as tabs, dialogs, selects, switches or menus, for a settings panel, a form-heavy tool or a component-driven mini app.",
+  "tier": 1,
+  "libraries": ["webawesome", "alpine"],
+  "optional_libraries": ["chartjs", "mermaid"],
+  "slots": {
+    "main": { "required": true, "description": "The page body, built from Web Awesome components and plain semantic HTML. No h1; the title becomes it." }
+  },
+  "skeleton": "skeleton.html",
+  "rules": "rules.md",
+  "example": "example.src.html"
+}
