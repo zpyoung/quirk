@@ -1,9 +1,15 @@
 """Static checks over a built artifact: header, licenses, checksums, external references, size.
 
-Library blocks (``data-quirk-lib``) and shell blocks (``data-quirk-shell``) are cut out before
-the reference scan and verified by hash instead, so the vendored libraries and the two shipped
-scripts can mention URLs and call ``fetch`` without tripping the scan. The scan also skips HTML
-comments and ``application/json`` script blocks, which are data and never load anything.
+The page is tokenized once with ``html.parser``, following HTML raw-text and comment rules, so
+text that merely looks like markup inside script, style or comments cannot hide or fake a reference.
+
+Library blocks (``data-quirk-lib``) and shell blocks (``data-quirk-shell``) are verified by hash
+instead of scanned, so the vendored libraries and the two shipped scripts can mention URLs and call
+``fetch`` without tripping the scan. A block counts as verified only when its opening tag carries
+exactly that one attribute; any other attribute (``src`` above all) makes it an ordinary element
+that is scanned like the rest of the page. Comments and ``application/json`` script blocks are
+data and never load anything. ``fetch(`` and similar calls are looked for only in inline script
+bodies and ``on*`` handler attributes, never in prose.
 
 ``mode`` is ``offline``, ``connected`` or ``companion``; companion pages follow the offline
 rules (``/_quirk/lib/`` paths are not ``http:``, ``https:`` or ``//`` targets, so they pass).
@@ -12,6 +18,8 @@ from __future__ import annotations
 
 import html as html_lib
 import re
+from dataclasses import dataclass, field
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -23,20 +31,6 @@ MODES = ("offline", "connected", "companion")
 SIZE_FAIL = 10 * 1024 * 1024
 SIZE_WARN = 2 * 1024 * 1024
 
-_LIB_BLOCK = re.compile(
-    r'<(script|style)\b[^>]*?\bdata-quirk-lib="([^"]*)"[^>]*>(.*?)</\1\s*>', re.IGNORECASE | re.DOTALL
-)
-_SHELL_BLOCK = re.compile(
-    r'<script\b[^>]*?\bdata-quirk-shell="([^"]*)"[^>]*>(.*?)</script\s*>', re.IGNORECASE | re.DOTALL
-)
-_JSON_BLOCK = re.compile(
-    r'<script\b[^>]*\btype\s*=\s*["\']?application/(?:ld\+)?json["\']?[^>]*>.*?</script\s*>',
-    re.IGNORECASE | re.DOTALL,
-)
-_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
-_TAG = re.compile(r'<([a-zA-Z][a-zA-Z0-9:-]*)((?:"[^"]*"|\'[^\']*\'|[^\'">])*)>')
-_ATTR = re.compile(r'([^\s"\'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'=<>`]+)))?')
-_STYLE_BLOCK = re.compile(r"<style\b[^>]*>(.*?)</style\s*>", re.IGNORECASE | re.DOTALL)
 _FONT_FACE = re.compile(r"@font-face\s*\{[^}]*\}", re.IGNORECASE)
 _CSS_URL = re.compile(r"url\(\s*(?:\"([^\"]*)\"|'([^']*)'|([^)\"'\s]*))\s*\)", re.IGNORECASE)
 _CSS_IMPORT = re.compile(
@@ -50,6 +44,175 @@ _CALLS = (
 )
 _LOADING_ATTRS = ("src", "href", "srcset", "poster", "action", "data")
 _NARROW_ATTRS = (("script", "src"), ("link", "href"))
+
+
+_RAW_TEXT = frozenset({"script", "style", "textarea", "title", "xmp", "iframe", "noembed", "noframes", "noscript"})
+_FOREIGN = frozenset({"svg", "math"})
+_JSON_TYPES = ("application/json", "application/ld+json")
+_COMMENT_END = re.compile(r"--!?>")
+_SCRIPT_ESCAPES = re.compile(r"<!---?>|<!--|-->|<script(?=[\t\n\r\f />])|</script(?=[\t\n\r\f />])", re.IGNORECASE)
+
+
+def _ends_double_escaped(script_text: str) -> bool:
+    """True when ``script_text`` leaves an HTML script in the double-escaped state.
+
+    There a ``</script>`` does not end the element, so the text after it is still script.
+    """
+    state = 0
+    for m in _SCRIPT_ESCAPES.finditer(script_text):
+        token = m.group(0).lower()
+        if token in ("<!-->", "<!--->") or token == "-->":
+            state = 0
+        elif token == "<!--":
+            state = state or 1
+        elif token == "<script":
+            state = 2 if state == 1 else state
+        elif state == 2:
+            state = 1
+    return state == 2
+
+
+@dataclass
+class _Page:
+    """What the tokenizer found that can load or run something."""
+
+    attrs: list[tuple[str, str, str]] = field(default_factory=list)
+    scripts: list[str] = field(default_factory=list)
+    handlers: list[str] = field(default_factory=list)
+    css: list[str] = field(default_factory=list)
+    libs: list[tuple[str, str, str]] = field(default_factory=list)
+    shells: list[tuple[str, str]] = field(default_factory=list)
+
+
+@dataclass
+class _Capture:
+    tag: str
+    verified: Optional[tuple[str, str]]
+    json_data: bool
+    foreign: bool
+    parts: list[str] = field(default_factory=list)
+
+
+class _Scanner(HTMLParser):
+    """Tokenizer that mirrors how browsers split markup from raw text and comments.
+
+    The stdlib parser diverges from the HTML spec in ways that would let text hide real
+    markup: it enters raw-text mode only for script and style, ends a comment at the next
+    ``-->`` whatever follows ``<!--``, and ignores attributes on end tags. Those hooks are
+    overridden so the scan is never narrower than what a browser would load.
+    """
+
+    CDATA_CONTENT_ELEMENTS = ()
+    RCDATA_CONTENT_ELEMENTS = ()
+
+    def __init__(self, page: _Page) -> None:
+        super().__init__(convert_charrefs=True)
+        self.page = page
+        self._foreign = 0
+        self._capture: Optional[_Capture] = None
+
+    def set_cdata_mode(self, elem, *, escapable=False):
+        self.cdata_elem = elem.lower()
+        self.interesting = re.compile(r"</%s(?=[\t\n\r\f />])" % re.escape(self.cdata_elem), re.IGNORECASE)
+
+    def parse_comment(self, i, report=True):
+        raw = self.rawdata
+        start = i + 4
+        if raw.startswith(">", start):
+            return start + 1
+        if raw.startswith("->", start):
+            return start + 2
+        match = _COMMENT_END.search(raw, start)
+        return match.end() if match else -1
+
+    def parse_marked_section(self, i, report=1):
+        end = self.rawdata.find(">", i)
+        return end + 1 if end >= 0 else -1
+
+    def parse_endtag(self, i):
+        if self.cdata_elem:
+            raw = self.rawdata
+            body = "".join(self._capture.parts) if self._capture else ""
+            if self.cdata_elem == "script" and not self._foreign and _ends_double_escaped(body):
+                self.handle_data(raw[i : i + 8])
+                return i + 8
+            end = raw.find(">", i)
+            if end < 0:
+                return -1
+            self.handle_endtag(self.cdata_elem)
+            self.clear_cdata_mode()
+            return end + 1
+        return super().parse_endtag(i)
+
+    def handle_starttag(self, tag, attrs):
+        self._open(tag, attrs, selfclosing=False)
+
+    def handle_startendtag(self, tag, attrs):
+        self._open(tag, attrs, selfclosing=True)
+
+    def handle_data(self, data):
+        if self._capture is not None:
+            self._capture.parts.append(data)
+
+    def handle_endtag(self, tag):
+        if self._capture is not None and tag == self._capture.tag:
+            self._close_capture()
+        if tag in _FOREIGN and self._foreign:
+            self._foreign -= 1
+
+    def _open(self, tag: str, attrs: list, selfclosing: bool) -> None:
+        values = [(name, value if value is not None else "") for name, value in attrs]
+        lone = attrs[0] if len(attrs) == 1 and attrs[0][1] is not None else None
+        verified = None
+        if lone is not None and not self._foreign:
+            if lone[0] == "data-quirk-lib" and tag in ("script", "style"):
+                verified = ("lib", lone[1])
+            elif lone[0] == "data-quirk-shell" and tag == "script":
+                verified = ("shell", lone[1])
+        if verified is None:
+            for name, value in values:
+                self.page.attrs.append((tag, name, value))
+                if name.startswith("on"):
+                    self.page.handlers.append(value)
+        if tag in _FOREIGN and not selfclosing:
+            self._foreign += 1
+        if tag in _RAW_TEXT and not (selfclosing and self._foreign):
+            declared = next((v.strip().lower() for n, v in values if n == "type"), "")
+            self.set_cdata_mode(tag)
+            self._capture = _Capture(tag, verified, declared in _JSON_TYPES, bool(self._foreign))
+
+    def _close_capture(self, terminated: bool = True) -> None:
+        cap, self._capture = self._capture, None
+        text = "".join(cap.parts)
+        if cap.tag == "noscript" or cap.foreign:
+            nested = _Scanner(self.page)
+            nested.feed(text)
+            nested.finish()
+        if cap.verified and terminated:
+            kind, label = cap.verified
+            if kind == "lib":
+                self.page.libs.append((label, "css" if cap.tag == "style" else "js", text))
+            else:
+                self.page.shells.append((label, text))
+        elif cap.tag == "script" and not cap.json_data:
+            self.page.scripts.append(text)
+        elif cap.tag == "style":
+            self.page.css.append(text)
+
+    def finish(self) -> None:
+        """Flush the input; an element left open at EOF still has its body scanned."""
+        self.close()
+        if self._capture is not None:
+            self._capture.parts.append(self.rawdata)
+            self._close_capture(terminated=False)
+
+
+def _scan_page(html: str) -> _Page:
+    page = _Page()
+    scanner = _Scanner(page)
+    scanner.feed(html)
+    scanner.finish()
+    return page
 
 
 def default_shells(skill_dir: Optional[Path] = None) -> dict[str, Path]:
@@ -111,39 +274,31 @@ def _shell_checksum_failure(name: str, content: str, shells: dict[str, Path]) ->
     return None
 
 
-def _css_contexts(scan: str, style_attrs: list[str]) -> list[str]:
-    return [m.group(1) for m in _STYLE_BLOCK.finditer(scan)] + style_attrs
-
-
-def _reference_failures(scan: str, mode: str, tier: int) -> list[dict]:
+def _reference_failures(page: _Page, mode: str, tier: int) -> list[dict]:
     strict = mode in ("offline", "companion")
     markup_all = strict and tier == 1
     css_any = strict
     found: list[str] = []
     style_attrs: list[str] = []
 
-    for tag_match in _TAG.finditer(scan):
-        tag = tag_match.group(1).lower()
-        for attr in _ATTR.finditer(tag_match.group(2)):
-            attr_name = attr.group(1).lower()
-            value = html_lib.unescape(attr.group(2) or attr.group(3) or attr.group(4) or "")
-            if attr_name == "style":
-                style_attrs.append(value)
+    for tag, attr_name, value in page.attrs:
+        if attr_name == "style":
+            style_attrs.append(value)
+            continue
+        if markup_all:
+            if attr_name not in _LOADING_ATTRS or (tag == "a" and attr_name == "href"):
                 continue
-            if markup_all:
-                if attr_name not in _LOADING_ATTRS or (tag == "a" and attr_name == "href"):
-                    continue
-            elif (tag, attr_name) not in _NARROW_ATTRS:
-                continue
-            if attr_name == "srcset":
-                candidates = [c.strip().split(None, 1)[0] for c in value.split(",") if c.strip()]
-            else:
-                candidates = [value]
-            for candidate in candidates:
-                if _is_external(candidate):
-                    found.append(f"<{tag} {attr_name}> loads {_clip(candidate)}")
+        elif (tag, attr_name) not in _NARROW_ATTRS:
+            continue
+        if attr_name == "srcset":
+            candidates = [c.strip().split(None, 1)[0] for c in value.split(",") if c.strip()]
+        else:
+            candidates = [value]
+        for candidate in candidates:
+            if _is_external(candidate):
+                found.append(f"<{tag} {attr_name}> loads {_clip(candidate)}")
 
-    for css in _css_contexts(scan, style_attrs):
+    for css in page.css + style_attrs:
         for m in _CSS_IMPORT.finditer(css):
             if _is_external(_first(m)):
                 found.append(f"@import of {_clip(_first(m))}")
@@ -156,7 +311,7 @@ def _reference_failures(scan: str, mode: str, tier: int) -> list[dict]:
 
     if markup_all:
         for pattern, label in _CALLS:
-            if pattern.search(scan):
+            if any(pattern.search(code) for code in page.scripts + page.handlers):
                 found.append(f"page code calls {label}")
 
     return [{"check": "external-refs", "detail": detail} for detail in dict.fromkeys(found)]
@@ -188,24 +343,19 @@ def run_checks(
     elif "schema" not in meta:
         failures.append({"check": "header", "detail": "header has no schema field"})
 
+    page = _scan_page(html)
     labels: dict[str, None] = {}
-    for m in _LIB_BLOCK.finditer(html):
-        label, kind = m.group(2), "css" if m.group(1).lower() == "style" else "js"
+    for label, kind, content in page.libs:
         labels[label] = None
-        failure = _lib_checksum_failure(label, kind, m.group(3), vendor)
+        failure = _lib_checksum_failure(label, kind, content, vendor)
         if failure:
             failures.append(failure)
     failures.extend(_license_failures(html, labels))
-    for m in _SHELL_BLOCK.finditer(html):
-        failure = _shell_checksum_failure(m.group(1), m.group(2), shell_map)
+    for name, content in page.shells:
+        failure = _shell_checksum_failure(name, content, shell_map)
         if failure:
             failures.append(failure)
-
-    scan = _LIB_BLOCK.sub(" ", html)
-    scan = _SHELL_BLOCK.sub(" ", scan)
-    scan = _COMMENT.sub(" ", scan)
-    scan = _JSON_BLOCK.sub(" ", scan)
-    failures.extend(_reference_failures(scan, mode, tier))
+    failures.extend(_reference_failures(page, mode, tier))
 
     size = len(html.encode("utf-8"))
     if size > SIZE_FAIL:
