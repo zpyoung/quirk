@@ -7,9 +7,10 @@ the current screen, ``events`` reads what the user did and ``stop`` ends the ser
 subcommand prints exactly one JSON object to stdout and sends diagnostics to stderr.
 
 Exit codes: 0 success; 1 for ``show`` when a static check fails and for the ``wait`` timeout;
-2 for usage errors, a malformed screen, a missing session, no live server (``wait``) or a
-server that never came up (``start``). Anything that is not a failed check or a timeout is
-reported as ``{"error": ...}``, except ``wait``'s ``{"status": "no-server"}``.
+2 for usage errors, a malformed screen, a missing session, no live server (``wait``), a
+server that never came up (``start``) or a filesystem failure. Anything that is not a failed
+check or a timeout is reported as ``{"error": ...}``, except ``wait``'s
+``{"status": "no-server"}``.
 
 The server binds 127.0.0.1 by default and trusts nothing from the page except a per-screen
 nonce. It never touches the network beyond its own socket.
@@ -18,6 +19,8 @@ from __future__ import annotations
 
 import argparse
 import html as html_lib
+import http.client
+import ipaddress
 import json
 import mimetypes
 import os
@@ -51,6 +54,8 @@ START_TIMEOUT = 10.0
 STOP_TIMEOUT = 5.0
 POLL_SECONDS = 0.2
 WILDCARD_HOSTS = ("0.0.0.0", "::", "")
+LOOPBACK_NAMES = ("127.0.0.1", "::1", "localhost")
+PROBE_TIMEOUT = 3.0
 OPTION_ID = re.compile(r"[a-z0-9-]{1,40}")
 SLOT_LINE = re.compile(r"^<!-- slot:", re.M)
 SCREEN_KEYS = {"title", "question", "select", "options", "content", "diagram"}
@@ -139,11 +144,54 @@ def _prepare_session(session: Path) -> None:
     _state_dir(session).mkdir(parents=True, exist_ok=True)
 
 
-def live_server_info(session: Path) -> Optional[dict]:
-    """The session's ``server-info`` when its server is alive, else None.
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
 
-    Dead means: no parseable ``server-info`` with an integer pid, a ``server-stopped`` file, or
-    a pid that no longer exists.
+
+def _probe_target(info: dict) -> Optional[tuple[str, int]]:
+    host = info.get("host")
+    port = info.get("port")
+    if not isinstance(host, str) or not isinstance(port, int) or isinstance(port, bool) or not 0 < port < 65536:
+        return None
+    if host in WILDCARD_HOSTS:
+        host = "::1" if host == "::" else "127.0.0.1"
+    return host, port
+
+
+def _answers_as_companion(info: dict) -> bool:
+    """Whether the recorded host and port answer ``GET /_quirk/state`` the way a companion does.
+
+    A pid can outlive its server and be reused by an unrelated process; only the companion's
+    own socket answers with a JSON object carrying ``screen`` and ``nonce``.
+    """
+    target = _probe_target(info)
+    if target is None:
+        return False
+    host, port = target
+    conn = http.client.HTTPConnection(host, port, timeout=PROBE_TIMEOUT)
+    try:
+        conn.request("GET", "/_quirk/state")
+        resp = conn.getresponse()
+        body = json.loads(resp.read(MAX_BODY))
+        return resp.status == 200 and isinstance(body, dict) and "screen" in body and "nonce" in body
+    except (OSError, http.client.HTTPException, ValueError):
+        return False
+    finally:
+        conn.close()
+
+
+def live_server_info(session: Path) -> Optional[dict]:
+    """The session's ``server-info`` when its companion is alive, else None.
+
+    Dead means: no parseable ``server-info`` with an integer pid, a ``server-stopped`` file, a
+    pid that no longer exists, or a recorded port that does not answer as the companion. A
+    session found dead without a ``server-stopped`` file gets one with reason ``stale``.
     """
     state = _state_dir(session)
     if (state / "server-stopped").exists():
@@ -152,15 +200,14 @@ def live_server_info(session: Path) -> Optional[dict]:
     pid = info.get("pid") if isinstance(info, dict) else None
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return None
+    if _pid_alive(pid) and _answers_as_companion(info):
+        return info
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return None
-    except PermissionError:
-        pass
+        if not (state / "server-stopped").exists():
+            _write_stopped(state, "stale")
     except OSError:
-        return None
-    return info
+        pass
+    return None
 
 
 def _read_events(session: Path) -> list[dict]:
@@ -179,6 +226,43 @@ def _read_events(session: Path) -> list[dict]:
     return records
 
 
+def _normalized_ip(text: str) -> Optional[str]:
+    try:
+        return str(ipaddress.ip_address(text.split("%", 1)[0]))
+    except ValueError:
+        return None
+
+
+def _split_host_header(header: str) -> tuple[Optional[str], Optional[str]]:
+    """Split ``name:port`` or ``[v6]:port`` into lowercase name and port; (None, None) if malformed."""
+    if header.startswith("["):
+        name, sep, rest = header[1:].partition("]")
+        if not sep or not rest.startswith(":"):
+            return None, None
+        port = rest[1:]
+    else:
+        name, sep, port = header.rpartition(":")
+        if not sep or ":" in name:
+            return None, None
+    return name.lower(), port
+
+
+def _own_addresses() -> frozenset:
+    """Loopback addresses plus every address this machine's hostname resolves to."""
+    found = {_normalized_ip(name) for name in LOOPBACK_NAMES}
+    hostname = socket.gethostname()
+    try:
+        found.update(_normalized_ip(addr) for addr in socket.gethostbyname_ex(hostname)[2])
+    except OSError:
+        pass
+    try:
+        found.update(_normalized_ip(info[4][0]) for info in socket.getaddrinfo(hostname, None))
+    except OSError:
+        pass
+    found.discard(None)
+    return frozenset(found)
+
+
 class _Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -189,6 +273,7 @@ class _Server(ThreadingHTTPServer):
         self.bound_host = host
         self.event_lock = threading.Lock()
         self.last_request = time.monotonic()
+        self.own_addresses = _own_addresses() if host in WILDCARD_HOSTS else frozenset()
         super().__init__((host, port), _Handler)
         self.bound_port = self.server_address[1]
 
@@ -197,11 +282,19 @@ class _Server(ThreadingHTTPServer):
         return f"{host}:{self.bound_port}"
 
     def host_allowed(self, header: Optional[str]) -> bool:
+        """Whether a request's Host names this server.
+
+        A wildcard bind accepts only loopback names and this machine's own interface addresses
+        on the bound port, so a rebinding page's hostname never matches.
+        """
         if header is None:
             return False
-        if self.bound_host in WILDCARD_HOSTS:
-            return header.endswith(f":{self.bound_port}")
-        return header == self.expected_host()
+        if self.bound_host not in WILDCARD_HOSTS:
+            return header == self.expected_host()
+        name, port = _split_host_header(header)
+        if name is None or port != str(self.bound_port):
+            return False
+        return name == "localhost" or _normalized_ip(name) in self.own_addresses
 
     def current(self) -> Optional[dict]:
         data = _read_json(_state_dir(self.session) / "current.json")
@@ -244,8 +337,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.server.last_request = time.monotonic()
         origin = self.headers.get("Origin")
         host = self.headers.get("Host")
-        own_origin = f"http://{host}" if host else None
-        if not self.server.host_allowed(host) or (origin is not None and origin != own_origin):
+        if not self.server.host_allowed(host) or (origin is not None and origin != f"http://{host}"):
             self._reply(403, b"forbidden\n")
             return False
         return True
@@ -497,13 +589,20 @@ def _next_screen_number(screens: Path) -> int:
     return max(numbers, default=0) + 1
 
 
+def _given(spec: dict, key: str) -> Optional[str]:
+    """``spec[key]`` when it is a string with visible content, else None."""
+    value = spec.get(key)
+    return value if isinstance(value, str) and value.strip() else None
+
+
 def _text(spec: dict, key: str, required: bool) -> Optional[str]:
+    """A required non-empty string, or an optional one where None, "" and whitespace mean absent."""
     value = spec.get(key)
     if value is None and not required:
         return None
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str) or (required and not value.strip()):
         raise ScreenError(f"{key!r} must be a non-empty string")
-    return value
+    return _given(spec, key)
 
 
 def load_screen(path: Path) -> dict:
@@ -555,9 +654,9 @@ def _option_cards(spec: dict, nonce: str) -> str:
     for i, option in enumerate(spec["options"]):
         state = 'aria-pressed="false"' if multi else f'role="radio" aria-checked="false" tabindex="{0 if i == 0 else -1}"'
         parts = [f'<span class="q-option-label">{attr(option["label"])}</span>']
-        if option.get("description"):
+        if _given(option, "description"):
             parts.append(f'<span class="q-option-desc">{attr(option["description"])}</span>')
-        if option.get("html"):
+        if _given(option, "html"):
             parts.append(f'<span class="q-option-mockup">{option["html"]}</span>')
         cards.append(
             f'<button type="button" class="q-option" {state} '
@@ -583,8 +682,8 @@ def _mermaid_version() -> str:
 
 
 def _source_text(spec: dict, nonce: str) -> str:
-    content = spec.get("content") or ""
-    if spec.get("diagram"):
+    content = _given(spec, "content") or ""
+    if _given(spec, "diagram"):
         figure = f'<figure class="q-diagram"><pre class="mermaid">{html_lib.escape(spec["diagram"])}</pre></figure>'
         content = f"{content}\n{figure}" if content else figure
     header = json.dumps({"template": "companion", "title": spec["title"], "mode": "offline"})
@@ -610,7 +709,7 @@ def _finish_page(page: str, spec: dict) -> str:
         raise ScreenError("the built screen has no header")
     meta["mode"] = "companion"
     extra = [shell_block("companion", SKILL_DIR / "templates" / "companion" / "companion.js").text]
-    if spec.get("diagram"):
+    if _given(spec, "diagram"):
         extra.append(f'<script src="/_quirk/lib/mermaid/{_mermaid_version()}/mermaid.min.js"></script>')
         extra.append(f"<script>\n{MERMAID_INIT}\n</script>")
     page = f"{first}\n{render_header(meta)}\n{rest}"
@@ -716,10 +815,20 @@ def _cmd_stop(args: argparse.Namespace) -> int:
         _emit({"stopped": False})
         return EXIT_OK
     deadline = time.monotonic() + STOP_TIMEOUT
-    while time.monotonic() < deadline and live_server_info(session) is not None:
+    while time.monotonic() < deadline and _pid_alive(info["pid"]):
         time.sleep(0.05)
-    _emit({"stopped": live_server_info(session) is None})
+    _emit({"stopped": not _pid_alive(info["pid"])})
     return EXIT_OK
+
+
+def _port(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid port: {value!r}") from None
+    if not 0 <= number <= 65535:
+        raise argparse.ArgumentTypeError("must be between 0 and 65535")
+    return number
 
 
 def _positive(value: str) -> float:
@@ -736,7 +845,7 @@ def _build_parser() -> argparse.ArgumentParser:
     start = sub.add_parser("start", help="start the session's server, or reuse a live one")
     start.add_argument("session")
     start.add_argument("--host", default="127.0.0.1")
-    start.add_argument("--port", type=int, default=0)
+    start.add_argument("--port", type=_port, default=0)
     start.add_argument("--idle-minutes", type=_positive, default=30.0)
     start.add_argument("--foreground", action="store_true")
     start.set_defaults(func=_cmd_start)
@@ -764,8 +873,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    """Run one subcommand; a filesystem or encoding failure is reported as ``{"error": ...}``, exit 2."""
     args = _build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except (OSError, UnicodeError, OverflowError, ValueError) as exc:
+        return _fail(f"{type(exc).__name__}: {exc}")
 
 
 if __name__ == "__main__":
