@@ -49,7 +49,7 @@ Use a session directory **inside the user's project** under `.quirk/brainstorm/`
 ```bash
 SESSION=".quirk/brainstorm/explore-1"
 python3 "$COMPANION" start "$SESSION"
-# {"type":"server-started","pid":92913,"port":53143,"host":"127.0.0.1","url":"http://127.0.0.1:53143",
+# {"type":"server-started","pid":92913,"port":53143,"host":"127.0.0.1","allowed_hosts":[],"url":"http://127.0.0.1:53143",
 #  "screen_dir":".../explore-1/screens","state_dir":".../explore-1/state"}
 ```
 
@@ -57,7 +57,7 @@ The server detaches itself and `start` returns at once, so you do NOT need `run_
 
 **Later:** the same JSON is in `<session>/state/server-info`; if the server has shut down, `<session>/state/server-stopped` exists instead. Screens persist in `.quirk/brainstorm/`, which is self-ignored by git.
 
-**Remote or containerized setups:** the server binds `127.0.0.1` by default. If that URL is unreachable from the user's browser, add `--host 0.0.0.0`. **This exposes the session on the network: anyone who can reach the port can read the screens and send events.** Use it only on a trusted network and only when the user agrees.
+**Remote or containerized setups:** the server binds `127.0.0.1` by default. If that URL is unreachable from the user's browser, add `--host 0.0.0.0` and `--allow-host <the name and port the browser uses>`, because the server answers 403 to any other `Host` header. For a port mapping such as 8080 to 3000, use `--allow-host localhost:8080`. **This exposes the session on the network: anyone who can reach the port can read the screens and send events.** Use it only on a trusted network and only when the user agrees.
 
 The server exits after 30 minutes without a request or a `show` (tune with `--idle-minutes N`).
 

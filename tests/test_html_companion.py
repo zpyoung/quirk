@@ -443,7 +443,7 @@ def test_detached_start_is_idempotent_and_stop_stops_it(tmp_path: Path) -> None:
     rc, info, _ = run("start", session, "--idle-minutes", "5")
     try:
         assert rc == 0 and info["type"] == "server-started"
-        assert set(info) == {"type", "pid", "port", "host", "url", "screen_dir", "state_dir"}
+        assert set(info) == {"type", "pid", "port", "host", "allowed_hosts", "url", "screen_dir", "state_dir"}
         os.kill(info["pid"], 0)
         assert (session / "state" / "server.log").exists()
         rc2, again, _ = run("start", session)
@@ -566,9 +566,11 @@ def test_a_reused_pid_is_never_signalled(session: Path, bystander: subprocess.Po
         rc, out, _ = run("stop", session)
         assert rc == 0 and out == {"stopped": False}
         assert bystander.poll() is None
-        assert json.loads((session / "state" / "server-stopped").read_text())["reason"] == "stale"
+        assert not (session / "state" / "server-stopped").exists()
         rc, out, _ = run("wait", session, "--timeout", 1)
         assert rc == 2 and out == {"status": "no-server"}
+        assert not (session / "state" / "server-stopped").exists()
+        assert bystander.poll() is None
     finally:
         if httpd:
             httpd.shutdown()
@@ -602,9 +604,100 @@ def test_wildcard_bind_accepts_only_loopback_and_own_host_values(session: Path) 
         stop_server(srv)
 
 
-def test_split_host_header_handles_names_and_bracketed_v6() -> None:
-    assert companion._split_host_header("LocalHost:80") == ("localhost", "80")
-    assert companion._split_host_header("[::1]:80") == ("::1", "80")
-    assert companion._split_host_header("::1:80") == (None, None)
-    assert companion._split_host_header("[::1]") == (None, None)
-    assert companion._split_host_header("nohost") == (None, None)
+def test_a_dead_pid_is_recorded_as_stale(session: Path) -> None:
+    gone = subprocess.Popen(["sleep", "60"])
+    gone.kill()
+    gone.wait()
+    _record_server(session, gone.pid, _free_port())
+    rc, out, _ = run("wait", session, "--timeout", 1)
+    assert rc == 2 and out == {"status": "no-server"}
+    assert json.loads((session / "state" / "server-stopped").read_text())["reason"] == "stale"
+
+
+def test_a_failed_probe_on_a_live_pid_leaves_the_server_unmarked(session: Path, monkeypatch) -> None:
+    _record_server(session, os.getpid(), _free_port())
+    assert companion.live_server_info(session) is None
+    assert not (session / "state" / "server-stopped").exists()
+    monkeypatch.setattr(companion, "_answers_as_companion", lambda info: True)
+    assert companion.live_server_info(session) is not None
+
+
+def test_parse_authority_handles_names_ports_and_bracketed_v6() -> None:
+    assert companion._parse_authority("LocalHost:80") == ("localhost", "80")
+    assert companion._parse_authority("[::1]:80") == ("::1", "80")
+    assert companion._parse_authority("[::1]") == ("::1", None)
+    assert companion._parse_authority("nohost") == ("nohost", None)
+    assert companion._parse_authority("::1") == ("::1", None)
+    for bad in ("", "[::1", "[::1]x", "host:", "host:0", "host:70000", "host:ab", ":80", "a b"):
+        assert companion._parse_authority(bad) is None, bad
+
+
+def test_allow_host_admits_named_hosts_and_ports_on_a_wildcard_bind(session: Path) -> None:
+    srv = start_foreground(session, "--host", "0.0.0.0", "--allow-host", "Devbox.Example.com", "--allow-host", "localhost:8080")
+    try:
+        assert srv.info["allowed_hosts"] == ["devbox.example.com", "localhost:8080"]
+        port = srv.port
+
+        def status(host: str, origin: str | None = None) -> int:
+            headers = {"Host": host, **({"Origin": origin} if origin else {})}
+            return srv.request("GET", "/_quirk/state", headers=headers)[0]
+
+        assert status(f"devbox.example.com:{port}") == 200
+        assert status("devbox.example.com:9999") == 200
+        assert status("DEVBOX.example.com") == 200
+        assert status("localhost:8080") == 200
+        assert status("localhost:8081") == 403
+        assert status("evil.example:8080") == 403
+        assert status("devbox.example.com.evil:80") == 403
+        assert status("devbox.example.com:9999", "http://devbox.example.com:9999") == 200
+        assert status("devbox.example.com:9999", "http://evil.example") == 403
+    finally:
+        stop_server(srv)
+
+
+def test_allow_host_with_a_port_pins_that_pair_on_a_loopback_bind(session: Path) -> None:
+    srv = start_foreground(session, "--allow-host", "localhost:8080")
+    try:
+        assert srv.request("GET", "/_quirk/state", headers={"Host": "localhost:8080"})[0] == 200
+        assert srv.request("GET", "/_quirk/state", headers={"Host": f"localhost:{srv.port}"})[0] == 403
+        assert srv.request("GET", "/_quirk/state")[0] == 200
+    finally:
+        stop_server(srv)
+
+
+def test_detached_start_passes_allow_host_through(tmp_path: Path) -> None:
+    session = tmp_path / "s"
+    rc, info, err = run("start", session, "--allow-host", "box.example:8080", "--idle-minutes", "5")
+    try:
+        assert rc == 0, err
+        assert info["allowed_hosts"] == ["box.example:8080"]
+        conn = http.client.HTTPConnection("127.0.0.1", info["port"], timeout=10)
+        conn.request("GET", "/_quirk/state", headers={"Host": "box.example:8080"})
+        assert conn.getresponse().status == 200
+        conn.close()
+    finally:
+        run("stop", session)
+
+
+@pytest.mark.parametrize("value", ["", "a b", "host:0", "host:99999", "[::1"])
+def test_malformed_allow_host_is_a_json_usage_error(tmp_path: Path, value: str) -> None:
+    rc, out, _ = run("start", tmp_path / "s", "--allow-host", value)
+    assert rc == 2 and "error" in out
+
+
+def test_a_stalled_client_is_disconnected_within_the_handler_timeout(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(companion._Handler, "timeout", 0.5)
+    httpd = companion._Server("127.0.0.1", 0, tmp_path)
+    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    try:
+        with socket.create_connection(("127.0.0.1", httpd.bound_port), timeout=5) as sock:
+            host = f"127.0.0.1:{httpd.bound_port}"
+            sock.sendall(
+                f"POST /_quirk/event HTTP/1.1\r\nHost: {host}\r\nContent-Length: 100\r\n\r\n{{\"a\"".encode()
+            )
+            started = time.monotonic()
+            assert sock.recv(1024) == b""
+            assert time.monotonic() - started < 4
+    finally:
+        httpd.shutdown()
+        httpd.server_close()

@@ -20,7 +20,7 @@ Script paths below are relative to the skill directory, the one holding this ski
 ## Commands
 
 ```
-companion.py start SESSION_DIR [--host 127.0.0.1] [--port 0] [--idle-minutes 30] [--foreground]
+companion.py start SESSION_DIR [--host 127.0.0.1] [--allow-host HOST[:PORT]]... [--port 0] [--idle-minutes 30] [--foreground]
 companion.py show  SESSION_DIR SCREEN.json [--project-dir DIR]
 companion.py wait  SESSION_DIR [--timeout 110]
 companion.py events SESSION_DIR [--screen ID]
@@ -29,7 +29,7 @@ companion.py stop  SESSION_DIR
 
 | Command | Prints | Exit codes |
 |---|---|---|
-| `start` | `{"type": "server-started", "pid", "port", "host", "url", "screen_dir", "state_dir"}` | `0` started or reused; `2` the server wrote no `server-info` within 10 s |
+| `start` | `{"type": "server-started", "pid", "port", "host", "allowed_hosts", "url", "screen_dir", "state_dir"}` | `0` started or reused; `2` the server wrote no `server-info` within 10 s |
 | `show` | `{"screen", "nonce", "url", "checks"}` | `0` shown; `1` a static check failed (the screen is written but not made current); `2` malformed `screen.json` or missing session |
 | `wait` | `{"proceed": <event>, "clicks": [<event>, ...]}` | `0` proceed received; `1` timeout, stdout `{"status": "timeout", "screen"}`, stderr says to re-run; `2` no live server, stdout `{"status": "no-server"}` |
 | `events` | `{"events": [...]}` | `0` |
@@ -37,12 +37,12 @@ companion.py stop  SESSION_DIR
 
 Flags:
 
-- `start --host`: bind address, default `127.0.0.1`. `--port`: `0` picks a free port. `--idle-minutes`: shutdown after this much inactivity, default 30. `--foreground`: run in the current process instead of detaching, mainly for tests.
+- `start --host`: bind address, default `127.0.0.1`. `--allow-host HOST[:PORT]`: also accept this `Host` header; repeatable, recorded in `server-info` as `allowed_hosts`. A bare `HOST` allows any port, `HOST:PORT` that exact pair. `--port`: `0` picks a free port. `--idle-minutes`: shutdown after this much inactivity, default 30. `--foreground`: run in the current process instead of detaching, mainly for tests.
 - `show --project-dir`: where to find project tokens and templates; defaults to the git toplevel of the current directory.
 - `wait --timeout`: seconds to block, default 110.
 - `events --screen ID`: only events for that screen, for example `0003-layout`.
 
-`wait` exit 2 means no live server: `server-info` is missing or unparseable, `server-stopped` exists, or the pid is dead. Run `start` again, then `show` the current question again.
+`wait` exit 2 means no live server: `server-info` is missing or unparseable, `server-stopped` exists, the pid is dead, or the recorded port does not answer as the companion. A dead pid also gets `server-stopped` with reason `stale`; a live pid that fails the probe does not, so one failed probe never marks a healthy server dead. Run `start` again, then `show` the current question again.
 
 ## `screen.json`
 
@@ -98,7 +98,7 @@ Flags:
 | `screens/NNNN-<slug>.html` | each built screen |
 | `state/current.json` | `{"screen", "nonce", "shown_at"}` for the current screen |
 | `state/server-info` | the `server-started` JSON |
-| `state/server-stopped` | `{"reason": "idle" or "stop" or "signal", "at"}`, present once the server has exited |
+| `state/server-stopped` | `{"reason": "idle" or "stop" or "signal" or "stale", "at"}`, present once the server has exited |
 | `state/events` | the event stream |
 | `state/server.log` | server output, for debugging |
 
@@ -106,6 +106,8 @@ Flags:
 
 - The server binds `127.0.0.1` by default. Only the local machine can reach it.
 - **`--host 0.0.0.0` exposes the session to the network.** Use it only for a remote container the user asked for, and tell the user the URL is open to anyone who can reach that address.
+- **Remote or container use needs `--allow-host`.** The server answers 403 to any `Host` header that is not the bound address, loopback or an own interface address on the bound port, or an `--allow-host` entry. Pass `--host 0.0.0.0 --allow-host <the name and port the browser uses>`; for a port mapping such as 8080 to 3000, use `--allow-host localhost:8080`. The expected `Origin` is derived from the accepted `Host`.
+- A request that stalls mid-body is dropped after 10 s.
 - Events need the current screen's nonce, and the server rejects a foreign `Origin` or `Host` with 403, malformed JSON or a body over 64 KB with 400.
 - The server serves only the current screen, its state, and the vendored library files named in `libraries.json`. Nothing else on disk is reachable.
 - Screen HTML is not sanitized. Write it yourself, and do not include secrets: it is visible to anyone with the URL.
