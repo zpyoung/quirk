@@ -3,7 +3,8 @@
 
 Every subcommand prints exactly one JSON object to stdout and sends diagnostics to stderr.
 Exit codes: 0 success; 1 the build finished but a static or verify check failed; 2 usage
-error, unknown or invalid template, or malformed source. Subcommands are registered in
+error, unknown or invalid template, malformed source or data, or an output that cannot be
+written. Any failure that is not a failed check is reported as ``{"error": ...}``. Subcommands are registered in
 ``COMMANDS`` so a new one is a ``configure`` function, a handler and one table entry.
 """
 from __future__ import annotations
@@ -137,7 +138,10 @@ def _cmd_note(args: argparse.Namespace) -> int:
         return _fail(problem)
     try:
         note = assemble.delivery_note(
-            path, project_dir=_project_dir(args), user_dir=resolve.default_user_dir()
+            path,
+            project_dir=_project_dir(args),
+            user_dir=resolve.default_user_dir(),
+            verify_dir=Path(args.verify_dir) if args.verify_dir else None,
         )
     except assemble.BuildError as exc:
         return _fail(str(exc))
@@ -194,6 +198,7 @@ def _configure_verify(sub: argparse._SubParsersAction) -> None:
 def _configure_note(sub: argparse._SubParsersAction) -> None:
     parser = sub.add_parser("note", help="render the delivery note for a built file")
     parser.add_argument("file")
+    parser.add_argument("--verify-dir", help="where verify wrote its report (default: <file stem>.verify/)")
     _project_option(parser)
     parser.set_defaults(func=_cmd_note)
 
@@ -222,7 +227,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except assemble.BuildError as exc:
+        return _fail(str(exc))
+    except RecursionError:
+        return _fail("input is nested too deeply to process")
+    except (OSError, UnicodeError) as exc:
+        return _fail(f"{type(exc).__name__}: {exc}")
 
 
 if __name__ == "__main__":
