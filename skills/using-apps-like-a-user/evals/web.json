@@ -21,6 +21,12 @@
   "ground_truth": {
     "can_pass": ["web-count", "web-notes", "web-theme", "web-avatar"],
     "cannot_pass": ["web-dead", "web-promo", "web-delete"],
+    "accepted_explanations": [],
+    "surfaced_by": {
+      "web-dead": ["nothing", "no effect", "did nothing", "dead", "NO_EFFECT", "no change", "no visible change", "unchanged", "unresponsive", "no response"],
+      "web-promo": ["not visible", "hidden", "not on screen", "visibility", "invisible", "opacity", "NOT_VISIBLE", "off screen", "cannot be seen"],
+      "web-delete": ["gate", "sign-off", "sign off", "stopped", "approval", "GATE_REQUIRED"]
+    },
     "required_findings": [
       {"kind": "network", "match": "/api/avatar", "goal": "web-avatar"},
       {"kind": "visibility", "match": "promo"},

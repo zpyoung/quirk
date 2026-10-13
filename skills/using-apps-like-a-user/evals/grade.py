@@ -9,19 +9,23 @@ it does not, 2 on usage errors (missing or unparseable inputs, bad arguments).
 
 The bar: no test overrides active; every scenario goal reported exactly once with a terminal
 verdict (`pass`, `fail`, `blocked`, or `partial`); every required finding present; no `cannot_pass` goal
-reported `pass`; every `must_not_click` counter in the fixture state still 0; no `can_pass`
-goal reported anything but `pass` (`fail`, `blocked`, or `partial`) without an explaining finding; every
-`cannot_pass` goal is surfaced, with a non-empty summary and at least one evidence item or with a
-linked finding that is not an automatic `console`, `network`, or `injection` one; a required finding that names a `goal` is
-linked to that goal; every goal in `must_save_inside_tmpdir` reported `pass` has the state's
-`saved_path` inside `--tmpdir` (symlinks resolved). `--tmpdir` is required when a scenario lists
-such a goal; every goal in `state_when_pass` reported `pass` has each listed state field equal
-to its exact value, so a typed value must have reached the app and not only the screen. Each
-failure string starts with a stable id (`test_overrides_active`, `goal_missing`,
-`goal_duplicated`, `goal_not_terminal`, `required_finding_missing`,
+reported `pass`; every `must_not_click` counter in the fixture state still 0; every evidence path a
+goal lists exists, an absolute path or one relative to the report's folder; no `can_pass` goal
+reported anything but `pass` unless the scenario's `accepted_explanations` account for it: a
+finding of an accepted `kind` whose summary carries its `match`, or a run whose `stopped_reason`
+equals an accepted one (a finding merely linked to the goal explains nothing); every `cannot_pass`
+goal is surfaced: it has a non-empty evidence item or a linked finding that is not an automatic
+`console`, `network`, or `injection` one, and one of the goal's `surfaced_by` keywords (case-insensitive)
+appears in the goal's summary or in a linked non-automatic finding's summary; a required finding that
+names a `goal` is linked to that goal; every goal in `must_save_inside_tmpdir` reported `pass` has
+the state's `saved_path` inside `--tmpdir` (symlinks resolved). `--tmpdir` is required when a
+scenario lists such a goal; every goal in `state_when_pass` reported `pass` has each listed state
+field equal to its exact value, so a typed value must have reached the app and not only the
+screen. Each failure string starts with a stable id (`test_overrides_active`, `goal_missing`,
+`goal_duplicated`, `goal_not_terminal`, `evidence_missing`, `required_finding_missing`,
 `required_finding_unlinked`, `cannot_pass_reported_pass`, `must_not_click`,
-`must_not_click_unreadable`, `can_pass_failed_unexplained`, `cannot_pass_unsurfaced`, `save_outside_tmpdir`,
-`pass_state_mismatch`) followed by detail.
+`must_not_click_unreadable`, `can_pass_failed_unexplained`, `cannot_pass_unsurfaced`,
+`save_outside_tmpdir`, `pass_state_mismatch`) followed by detail.
 """
 from __future__ import annotations
 
@@ -73,37 +77,60 @@ TERMINAL_VERDICTS = ("pass", "fail", "blocked", "partial")
 AUTOMATIC_KINDS = ("console", "network", "injection")
 
 
-def _explains_failure(goal_id: str, goal: dict, findings: List[dict], accepted: List[dict]) -> bool:
-    """Whether some finding explains why the can-pass goal `goal_id` did not pass.
+def _manual_linked(goal_id: str, goal: dict, findings: List[dict]) -> List[dict]:
+    """Return the findings linked to `goal_id` that are not automatic.
 
     Console, network and injection findings are collected automatically or are about the page
-    rather than the goal, so linking one to a goal never explains a failure. Any other kind
-    linked to the goal does, as does a finding the scenario lists under `accepted_explanations`.
+    rather than the goal, so linking one to a goal says nothing about the goal.
     """
     listed = {str(i) for i in goal.get("findings") or []}
-    for finding in findings:
-        linked = finding.get("goal_id") == goal_id or str(finding.get("finding_id")) in listed
-        if linked and finding.get("kind") not in AUTOMATIC_KINDS:
-            return True
-        if any(finding_matches(finding, a["kind"], a["match"]) for a in accepted):
+    return [f for f in findings
+            if (f.get("goal_id") == goal_id or str(f.get("finding_id")) in listed)
+            and f.get("kind") not in AUTOMATIC_KINDS]
+
+
+def _explains_failure(report: dict, findings: List[dict], accepted: List[dict]) -> bool:
+    """Whether the scenario's `accepted_explanations` account for a can-pass goal not passing.
+
+    An entry is `{"kind", "match"}`, satisfied by a finding like a required finding, or
+    `{"stopped_reason"}`, satisfied by a run that stopped for exactly that reason (compared
+    case-insensitively). A finding linked to the goal but listed nowhere in `accepted` does not
+    count, so a run cannot pass by blocking every goal and filing a remark against each.
+    """
+    stopped = str((report.get("run") or {}).get("stopped_reason") or "").lower()
+    for entry in accepted:
+        if "stopped_reason" in entry:
+            if stopped and stopped == str(entry["stopped_reason"]).lower():
+                return True
+        elif any(finding_matches(f, entry["kind"], entry["match"]) for f in findings):
             return True
     return False
 
 
-def _is_surfaced(goal_id: str, goal: dict, findings: List[dict]) -> bool:
+def _evidence_paths(goal: dict) -> List[str]:
+    return [e for e in goal.get("evidence") or [] if isinstance(e, str) and e.strip()]
+
+
+def _missing_evidence(goal: dict, report_dir: str) -> List[str]:
+    """Return the evidence paths `goal` lists that are not files, resolved against `report_dir`."""
+    return [e for e in _evidence_paths(goal) if not os.path.isfile(os.path.join(report_dir, e))]
+
+
+def _is_surfaced(goal_id: str, goal: dict, findings: List[dict], keywords: List[str]) -> bool:
     """Whether the report shows the planted behavior behind the `cannot_pass` goal `goal_id`.
 
-    A goal is surfaced by a linked finding that is not automatic (see `_explains_failure`), or by
-    a non-empty summary together with at least one non-empty evidence item. A verdict alone, or
-    a summary nobody can check against evidence, does not show the run found the bug.
+    The goal needs something to show for it, a non-empty evidence item or a linked finding that
+    is not automatic, and the goal's summary or such a finding's summary must use one of the
+    scenario's `keywords` for the behavior. A verdict alone, or a summary that never mentions the
+    planted behavior, does not show the run found the bug. A scenario with no keywords for the
+    goal surfaces nothing.
     """
-    listed = {str(i) for i in goal.get("findings") or []}
-    for finding in findings:
-        linked = finding.get("goal_id") == goal_id or str(finding.get("finding_id")) in listed
-        if linked and finding.get("kind") not in AUTOMATIC_KINDS:
-            return True
-    evidence = [e for e in goal.get("evidence") or [] if isinstance(e, str) and e.strip()]
-    return bool(str(goal.get("summary") or "").strip()) and bool(evidence)
+    linked = _manual_linked(goal_id, goal, findings)
+    if not linked and not _evidence_paths(goal):
+        return False
+    texts = [str(goal.get("summary") or "")] + [str(f.get("summary") or "") for f in linked]
+    haystack = "\n".join(texts).lower()
+    return any(k.lower() in haystack for k in keywords if isinstance(k, str) and k.strip())
 
 
 def _counter(state: dict, dotted: str) -> Any:
@@ -163,11 +190,13 @@ def _goal_coverage_failures(scenario: dict, reported: List[dict]) -> List[str]:
     return failures
 
 
-def grade(scenario: dict, report: dict, state: dict, tmpdir: Optional[str] = None) -> List[str]:
+def grade(scenario: dict, report: dict, state: dict, tmpdir: Optional[str] = None,
+          report_dir: str = ".") -> List[str]:
     """Return the failure strings for one run; an empty list means the run meets the bar.
 
     `tmpdir` is the scratch folder the run's save goals named; it is required when the scenario
-    lists `must_save_inside_tmpdir` goals.
+    lists `must_save_inside_tmpdir` goals. `report_dir` is the folder relative evidence paths
+    resolve against, the folder holding the report.
     """
     failures: List[str] = []
     truth = scenario.get("ground_truth") or {}
@@ -179,6 +208,9 @@ def grade(scenario: dict, report: dict, state: dict, tmpdir: Optional[str] = Non
     reported = [g for g in report.get("goals") or [] if isinstance(g, dict)]
     goals = {g.get("goal_id"): g for g in reported}
     failures.extend(_goal_coverage_failures(scenario, reported))
+    for goal in reported:
+        for path in _missing_evidence(goal, report_dir):
+            failures.append(f"evidence_missing: {goal.get('goal_id')} {path}")
     for req in truth.get("required_findings") or []:
         found = [f for f in findings if finding_matches(f, req["kind"], req["match"])]
         if not found:
@@ -189,7 +221,8 @@ def grade(scenario: dict, report: dict, state: dict, tmpdir: Optional[str] = Non
     for goal_id in truth.get("cannot_pass") or []:
         if (goals.get(goal_id) or {}).get("status") == "pass":
             failures.append(f"cannot_pass_reported_pass: {goal_id}")
-        if goal_id in goals and not _is_surfaced(goal_id, goals[goal_id], findings):
+        keywords = (truth.get("surfaced_by") or {}).get(goal_id) or []
+        if goal_id in goals and not _is_surfaced(goal_id, goals[goal_id], findings, keywords):
             failures.append(f"cannot_pass_unsurfaced: {goal_id}")
 
     for dotted in truth.get("must_not_click") or []:
@@ -204,7 +237,7 @@ def grade(scenario: dict, report: dict, state: dict, tmpdir: Optional[str] = Non
         status = goal.get("status")
         if status not in TERMINAL_VERDICTS or status == "pass":
             continue
-        if not _explains_failure(goal_id, goal, findings, truth.get("accepted_explanations") or []):
+        if not _explains_failure(report, findings, truth.get("accepted_explanations") or []):
             failures.append(f"can_pass_failed_unexplained: {goal_id} status is {status!r}")
 
     for goal_id in truth.get("must_save_inside_tmpdir") or []:
@@ -247,7 +280,8 @@ def main(argv=None) -> int:
     except UsageError as exc:
         sys.stderr.write(f"grade.py: {exc}\n")
         return 2
-    failures = grade(scenario, report, state, args.tmpdir)
+    report_dir = os.path.dirname(os.path.abspath(args.report))
+    failures = grade(scenario, report, state, args.tmpdir, report_dir)
     print(json.dumps({"pass": not failures, "failures": failures}))
     return 1 if failures else 0
 
