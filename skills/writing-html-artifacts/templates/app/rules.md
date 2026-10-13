@@ -1,0 +1,47 @@
+# App template rules
+
+Read after the [design reference](../../references/design-reference.md). These rules add to it for pages built from `app`, the tier-2 template: a React project you edit as source and bundle to one HTML file.
+
+## Workflow
+
+- Build with `scripts/quirk_html.py build-app <slug> --title "..." --signal "<why tier 2>"`. The first build copies `project/` and then the `example/` overlay to `.quirk/html/<slug>/`, installs, builds and writes `.quirk/html/<slug>.html`.
+- Edit the files under `.quirk/html/<slug>/src/`, then run `build-app <slug>` again. The source folder is never overwritten, so your edits are safe. Title, mode and signal are saved in `quirk-app.json` there; pass a flag again to change one.
+- Exit 3 means tier 2 is unavailable here (no Node, no pnpm, a failed install or a failed build). Write a tier-1 source instead and list what you cut. Do not retry in a loop.
+- The install runs `pnpm install --frozen-lockfile --ignore-scripts`. Add a dependency only when the app needs it, with an exact version, and regenerate `pnpm-lock.yaml` with `pnpm install` in the source folder first.
+
+## What the scaffold gives you
+
+| File | Role |
+|---|---|
+| `src/routes.tsx` | the `views` list: one `{path, label, component}` per view; each becomes a tab and a hash route. Edit this first |
+| `src/App.tsx` | page shell, view tabs, theme toggle and the router; rarely needs edits |
+| `src/theme.css` | the house tokens as `--q-*` variables for light and dark, plus the `q-table-wrap` and `q-grid` classes |
+| `src/theme.ts` | `useThemeMode`, `setThemeMode`; the toggle shares the `quirk-theme` storage key with tier-1 pages |
+| `src/main.tsx` | mounts the app inside a `QueryClientProvider` |
+
+- The page `<h1>` is the `--title` you gave. Do not render another `<h1>`; start views at `Heading level={2}`.
+- Routing uses hash history so it works from `file://`. Keep views statically imported: no `React.lazy`, no route-level code splitting. The bundle is one chunk by design.
+- Shared state goes in the query cache (see `useFlags` in the example) or a context at the root. Do not keep it in a view that unmounts when the tab changes.
+
+## Components
+
+- Import Astryx per subpath: `import { Button } from '@astryxdesign/core/Button'`. Never import from the package root.
+- Use Astryx for layout, controls and feedback (`VStack`, `HStack`, `Button`, `Switch`, `TextInput`, `NumberInput`, `Banner`, `Badge`). Use plain markup for tables: TanStack Table gives the model, you write the `<table>`.
+- Every control needs a `label`; use `isLabelHidden` when a column header already names it. A control inside a table cell names its row, for example "Enable new-checkout".
+- Style with the `--q-*` variables, never hard-coded colors, so light and dark both work. A `q-table-wrap` around any wide table keeps the page from scrolling sideways at 375px.
+
+## Tables
+
+- Keep `features`, `columns` and fallback data at module scope or in a `useMemo`, as the TanStack Table v9 docs require. A new array each render re-runs the row model.
+- Declare features with `tableFeatures({})` and add only the ones you use. Edits go through the shared state, not through the table's own copy of the data.
+
+## Modes and network
+
+- Offline (the default): the bundle makes no network requests. Do not call `fetch`, `XMLHttpRequest`, `WebSocket` or `EventSource`; verify fails the page if any request leaves the file.
+- Connected: pass `--mode connected` when the app reads live data. The static check then only fails external `<script src>`, `<link href>`, `@import` and font `url()`.
+- Embed data in the source (a `.json` file imported by a view) rather than loading it at run time. `window.quirkData()` is tier 1 only.
+
+## Before you hand it over
+
+- Run `verify` on the built file. The scaffold passes the console, viewport, contrast and network checks; keep it that way when you change views.
+- The file is large (React, Astryx and TanStack together), so expect the over-2 MB size warning. It is not a failure.
