@@ -42,8 +42,10 @@ _CALLS = (
     (re.compile(r"\bWebSocket\s*\("), "WebSocket("),
     (re.compile(r"\bEventSource\s*\("), "EventSource("),
 )
-_LOADING_ATTRS = ("src", "href", "srcset", "poster", "action", "data")
-_NARROW_ATTRS = (("script", "src"), ("link", "href"))
+_CSS_STRING_CALL = re.compile(r"(?<![\w-])((?:-webkit-)?image-set|src)\(", re.IGNORECASE)
+_LOADING_ATTRS = ("src", "href", "srcset", "imagesrcset", "poster", "action", "data", "background")
+_NARROW_ATTRS = (("script", "src"), ("script", "href"), ("link", "href"))
+_SRCSET_ATTRS = ("srcset", "imagesrcset")
 
 
 _RAW_TEXT = frozenset({"script", "style", "textarea", "title", "xmp", "iframe", "noembed", "noframes", "noscript"})
@@ -238,6 +240,30 @@ def _first(match: "re.Match[str]") -> str:
     return next((g for g in match.groups() if g), "")
 
 
+def _css_string_targets(css: str) -> Iterable[tuple[str, str]]:
+    """Yield ``(function, target)`` for quoted strings inside ``image-set()`` and ``src()``.
+
+    Those functions accept a bare string as an image target, which ``url()`` matching misses.
+    A string that is the argument of a nested ``url(`` is left to the ``url()`` scan.
+    """
+    for call in _CSS_STRING_CALL.finditer(css):
+        depth, i, n = 1, call.end(), len(css)
+        while i < n and depth:
+            ch = css[i]
+            if ch in "\"'":
+                end = i + 1
+                while end < n and css[end] != ch:
+                    end += 2 if css[end] == "\\" else 1
+                if not css[:i].rstrip().lower().endswith("url("):
+                    yield call.group(1).lower(), css[i + 1 : end]
+                i = end
+            elif ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+            i += 1
+
+
 def _license_failures(html: str, labels: Iterable[str]) -> list[dict]:
     out = []
     for label in labels:
@@ -285,12 +311,17 @@ def _reference_failures(page: _Page, mode: str, tier: int) -> list[dict]:
         if attr_name == "style":
             style_attrs.append(value)
             continue
-        if markup_all:
-            if attr_name not in _LOADING_ATTRS or (tag == "a" and attr_name == "href"):
-                continue
-        elif (tag, attr_name) not in _NARROW_ATTRS:
+        if attr_name == "srcdoc":
+            nested = _reference_failures(_scan_page(value), mode, tier)
+            found.extend(f"srcdoc: {f['detail']}" for f in nested)
             continue
-        if attr_name == "srcset":
+        local = attr_name.rpartition(":")[2]
+        if markup_all:
+            if (attr_name not in _LOADING_ATTRS and local != "href") or (tag == "a" and local == "href"):
+                continue
+        elif (tag, local if local == "href" else attr_name) not in _NARROW_ATTRS:
+            continue
+        if attr_name in _SRCSET_ATTRS:
             candidates = [c.strip().split(None, 1)[0] for c in value.split(",") if c.strip()]
         else:
             candidates = [value]
@@ -308,6 +339,10 @@ def _reference_failures(page: _Page, mode: str, tier: int) -> list[dict]:
                 if _is_external(_first(m)):
                     kind = "CSS url()" if css_any else "font url()"
                     found.append(f"{kind} loads {_clip(_first(m))}")
+            for func, target in _css_string_targets(region):
+                if _is_external(target):
+                    prefix = "CSS" if css_any else "font"
+                    found.append(f"{prefix} {func}() loads {_clip(target)}")
 
     if markup_all:
         for pattern, label in _CALLS:
