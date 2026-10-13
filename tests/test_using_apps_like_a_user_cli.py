@@ -841,6 +841,25 @@ class TestForegroundAndDrift:
         assert second.status in ("OBSERVED", "NO_EFFECT")
         assert sb.run_json(run_id)["drift_baseline"]["cursor"] == [100.0, 200.0]
 
+    def test_a_delivered_background_act_leaves_the_baseline_so_a_later_foreground_act_sees_the_takeover(
+            self, sb):
+        run_id, _ = electron_run(sb, orca_pages={
+            "idle": {"tree": NATIVE_TREE, "title": "UALA Fixture"},
+            "sheet": {"tree": NATIVE_SHEET_TREE, "title": "UALA Fixture"},
+            "closed": {"tree": NATIVE_TREE, "title": "UALA Fixture"}},
+            orca_start="sheet",
+            rules=[{"cmd": "click", "opts": {"--element-index": "9"}, "page": "closed"}],
+            pw_rules=[click_rule("e4")])
+        seen = sb.run("observe", "--run", run_id, "--goal", "g1")["observation"]
+        before = sb.run_json(run_id)["drift_baseline"]
+        sb.set_desktop(frontmost="com.example.intruder", cursor=[500.0, 600.0])
+        renderer = click(sb, run_id, seen["observation_id"], "e4")
+        assert renderer.status == "OBSERVED", renderer
+        assert sb.run_json(run_id)["drift_baseline"] == before
+        native = click(sb, run_id, renderer["observation"]["observation_id"], "n:9", "--foreground")
+        assert native.status == "DRIFT" and native["stopped_reason"] == "drift", native
+        assert sb.orca_commands("click") == []
+
 
 class TestVisibility:
     def test_a_hidden_control_is_not_visible_with_an_automatic_finding(self, sb):
@@ -1120,6 +1139,71 @@ class TestElectron:
         for name in ("SITE_USERNAME", "SITE_PASSWORD", "UNRELATED_TOKEN"):
             assert name not in launched_env
 
+    SENSITIVE_SAMPLES = (
+        "STRIPE_API_KEY", "SIGNING_KEYS", "GITHUB_TOKEN", "APP_SECRET", "APP_SECRETS", "DB_PASSWORD",
+        "DB_PASSWD", "DB_PASS", "DB_PWD", "SERVICE_CREDENTIAL", "SERVICE_CREDENTIALS", "PROXY_AUTH",
+        "LOGIN_SESSION", "SITE_COOKIE", "anthropic_api_key", "AWS_REGION", "AWS_PROFILE",
+        "AZURE_TENANT_ID", "GOOGLE_APPLICATION_CREDENTIALS", "GCLOUD_PROJECT", "CLOUDSDK_CONFIG",
+        "GH_HOST", "GITHUB_ACTOR", "GITLAB_HOST", "NPM_TOKEN", "NPM_CONFIG__AUTH",
+        "npm_config__authToken", "SSH_AUTH_SOCK", "OP_SERVICE_ACCOUNT", "VAULT_ADDR",
+        "DOCKER_AUTH_CONFIG", "KUBECONFIG")
+    KEPT_SAMPLES = ("PATH", "HOME", "NODE_ENV", "PWD", "OLDPWD", "MY_APP_PORT", "KEYBOARD_LAYOUT",
+                    "SESSIONS_DIR", "LANG", "TMPDIR")
+
+    @pytest.mark.parametrize("name", SENSITIVE_SAMPLES)
+    def test_sensitive_looking_names_are_dropped_from_the_launch_environment(self, name):
+        assert load_cli_module()._sensitive_env_name(name) is True
+
+    @pytest.mark.parametrize("name", KEPT_SAMPLES)
+    def test_ordinary_names_stay_in_the_launch_environment(self, name):
+        assert load_cli_module()._sensitive_env_name(name) is False
+
+    def test_launch_env_returns_a_named_sensitive_variable_but_never_a_credential(self, monkeypatch):
+        likeuser = load_cli_module()
+        monkeypatch.setattr(os, "environ", {
+            "PATH": "/bin", "AWS_PROFILE": "dev", "STRIPE_API_KEY": "sk-1", "SITE_PASSWORD": "pw-1",
+            "COPY_TOKEN": "pw-1", "SITE_USERNAME": "user-1"})
+        run = types.SimpleNamespace(
+            data={"credentials": {"prefix": "SITE", "file": None},
+                  "launch_env": ["STRIPE_API_KEY", "SITE_PASSWORD", "COPY_TOKEN"]},
+            secrets={"pw-1", "user-1"})
+        assert likeuser._launch_env(run) == {"PATH": "/bin", "STRIPE_API_KEY": "sk-1"}
+
+    def test_launch_env_passes_a_named_sensitive_variable_to_the_app(self, sb, tmp_path):
+        dump = tmp_path / "launch-env.json"
+        sb.web_scenario()
+        sb.native_scenario(bundle="com.github.Electron")
+        env = {"STRIPE_API_KEY": "sk-from-host", "OTHER_API_KEY": "sk-other",
+               "FAKE_ELECTRON_ENV_DUMP": str(dump)}
+        result = sb.begin("electron", None, "yours", True, "--launch", electron_command(),
+                          "--cdp-port", str(harness.free_port()), "--allow-foreground",
+                          "--launch-env", "STRIPE_API_KEY", **env)
+        assert result.code == 0, result.stdout + result.stderr
+        launched_env = json.loads(dump.read_text())
+        assert launched_env["STRIPE_API_KEY"] == "sk-from-host"
+        assert "OTHER_API_KEY" not in launched_env
+        state = sb.run_json(result["run_id"])
+        assert state["launch_env"] == ["STRIPE_API_KEY"]
+        assert "sk-from-host" not in json.dumps(state)
+
+    @pytest.mark.parametrize("name", ["SITE_PASSWORD", "SITE_USERNAME", "LIKEUSER_PASSWORD",
+                                      "COPY_TOKEN"])
+    def test_launch_env_refuses_a_credential_variable_or_a_variable_holding_a_secret(self, sb, name):
+        sb.web_scenario()
+        sb.native_scenario(bundle="com.github.Electron")
+        env = {"SITE_USERNAME": SECRET_USER, "SITE_PASSWORD": SECRET_PASSWORD,
+               "COPY_TOKEN": SECRET_PASSWORD}
+        result = sb.begin("electron", None, "yours", True, "--launch", electron_command(),
+                          "--cdp-port", str(harness.free_port()), "--allow-foreground",
+                          "--credentials-env", "SITE", "--launch-env", name, **env)
+        assert result.code == 2 and result["error"] == "launch_env_credential", result.stdout
+        assert pids_alive(sb) == []
+
+    def test_launch_env_needs_the_electron_surface(self, sb):
+        sb.web_scenario()
+        result = sb.begin("web", None, "yours", True, "--launch-env", "STRIPE_API_KEY")
+        assert result.code == 2 and result["error"] == "launch_requires_electron"
+
     def test_launch_logs_are_private_under_a_loose_umask(self, sb):
         previous = os.umask(0o022)
         try:
@@ -1366,6 +1450,36 @@ class TestElectron:
 
         assert snap(Stub('- [3] AXSheet (save file)', True)).sheet is True
         assert snap(Stub("0 sheet Save", False)).sheet is False
+
+    def test_a_native_observe_failure_on_an_electron_run_is_a_driver_error_not_a_renderer_snapshot(
+            self, sb):
+        from _types import DriverError
+
+        likeuser = load_cli_module()
+        renderer = Observation(tree_text="- button Go", refs=["e1"], names={"e1": "Go"})
+
+        class Native:
+            def observe(self, bundle_id, window_id, screenshot):
+                raise DriverError("window_gone", "native window vanished")
+
+        class Web:
+            def observe(self, shot):
+                return renderer
+
+        run = types.SimpleNamespace(
+            data={"surface": "electron", "window": {"bundle_id": "x", "window_id": 1}},
+            credentials=set(), secrets=set())
+        drivers = types.SimpleNamespace(run=run, native=Native(), web=Web())
+        with pytest.raises(DriverError) as raised:
+            likeuser._observe(run, drivers, None)
+        assert raised.value.code == "window_gone"
+
+    def test_observe_exits_4_when_the_native_side_of_an_electron_run_is_gone(self, sb):
+        run_id, _ = electron_run(sb)
+        sb.native_scenario(bundle="com.github.Electron", running=False)
+        result = sb.run("observe", "--run", run_id, "--goal", "g1")
+        assert result.code == 4 and result["error"] == "driver_error", result
+        assert "observation" not in result.out
 
 
     def test_electron_runs_on_a_foreground_only_driver_take_the_lock_at_begin(self, sb):
@@ -1974,9 +2088,9 @@ class TestRedaction:
         assert _run.recall_typed(sb.state_root, run_id) == []
 
 
-    def filled_run(self, sb):
+    def filled_run(self, sb, shown=SECRET_USER):
         filled = golden_yaml().replace('textbox "Username" [ref=e20]',
-                                       f'textbox "Username" [ref=e20]: {SECRET_USER}')
+                                       f'textbox "Username" [ref=e20]: {shown}')
         pages = {"home": web_page(), "filled": web_page(filled)}
         run_id, obs = web_run(sb, pages=pages, rules=[
             {"on": ["fill", "e20"], "page": "filled"}, {"on": ["click", "e4"], "page": "home"}])
@@ -1998,8 +2112,18 @@ class TestRedaction:
         assert self.pngs(sb, run_id) == ["obs-1.png"]
         assert (sb.run_dir(run_id) / f"obs-{block['observation_id']}.tree.txt").is_file()
 
-    def test_an_observation_showing_a_credential_saves_no_screenshot(self, sb):
+    def test_a_username_in_the_tree_does_not_withhold_the_screenshot(self, sb):
         run_id, obs = self.filled_run(sb)
+        env = {"LIKEUSER_USERNAME": SECRET_USER, "LIKEUSER_PASSWORD": SECRET_PASSWORD}
+        act(sb, run_id, obs["observation_id"], "--action", "fill", "--ref", "e20",
+            "--secret", "username", **env)
+        shown = sb.run("observe", "--run", run_id, "--goal", "g1", **env)
+        assert shown["observation"]["screenshot_path"]
+        assert shown["observation"]["screenshot_withheld"] is False
+        assert SECRET_USER not in Path(shown["observation"]["tree_path"]).read_text()
+
+    def test_a_password_in_the_tree_saves_no_screenshot(self, sb):
+        run_id, obs = self.filled_run(sb, shown=SECRET_PASSWORD)
         env = {"LIKEUSER_USERNAME": SECRET_USER, "LIKEUSER_PASSWORD": SECRET_PASSWORD}
         act(sb, run_id, obs["observation_id"], "--action", "fill", "--ref", "e20",
             "--secret", "username", **env)
@@ -2007,10 +2131,10 @@ class TestRedaction:
         assert shown["observation"]["screenshot_path"] is None
         assert shown["observation"]["screenshot_withheld"] is True
         assert self.pngs(sb, run_id) == ["obs-1.png"]
-        assert SECRET_USER not in Path(shown["observation"]["tree_path"]).read_text()
+        assert SECRET_PASSWORD not in Path(shown["observation"]["tree_path"]).read_text()
 
-    def test_screenshots_return_once_the_credential_is_off_screen(self, sb):
-        run_id, obs = self.filled_run(sb)
+    def test_screenshots_return_once_the_password_is_off_screen(self, sb):
+        run_id, obs = self.filled_run(sb, shown=SECRET_PASSWORD)
         env = {"LIKEUSER_USERNAME": SECRET_USER, "LIKEUSER_PASSWORD": SECRET_PASSWORD}
         step = act(sb, run_id, obs["observation_id"], "--action", "fill", "--ref", "e20",
                    "--secret", "username", **env)
@@ -2018,8 +2142,8 @@ class TestRedaction:
         assert gone["observation"]["screenshot_path"]
         assert gone["observation"]["screenshot_withheld"] is False
 
-    def test_the_final_screenshot_is_withheld_while_a_credential_is_on_screen(self, sb):
-        run_id, obs = self.filled_run(sb)
+    def test_the_final_screenshot_is_withheld_while_the_password_is_on_screen(self, sb):
+        run_id, obs = self.filled_run(sb, shown=SECRET_PASSWORD)
         env = {"LIKEUSER_USERNAME": SECRET_USER, "LIKEUSER_PASSWORD": SECRET_PASSWORD}
         act(sb, run_id, obs["observation_id"], "--action", "fill", "--ref", "e20",
             "--secret", "username", **env)
@@ -2349,6 +2473,37 @@ class TestEnd:
         second = sb.run("end", "--run", run_id)
         assert second.out == first.out and second.code == 0
         assert sb.pw_argvs("close") == [["close"]]
+
+    def test_end_after_a_failed_report_write_succeeds_without_repeating_the_cleanup(
+            self, sb, monkeypatch, capsys):
+        run_id, _ = web_run(sb)
+        for key, value in sb.env().items():
+            monkeypatch.setenv(key, value)
+        module = load_cli_module()
+        real = _run.Run.write_report
+        calls = []
+
+        def flaky(self):
+            calls.append(1)
+            if len(calls) == 1:
+                raise OSError("disk full")
+            return real(self)
+
+        monkeypatch.setattr(_run.Run, "write_report", flaky)
+        assert module.main(["end", "--run", run_id]) == 1
+        assert json.loads(capsys.readouterr().out)["error"] == "internal_error"
+        state = sb.run_json(run_id)
+        assert state["ended"] is None
+        assert not (sb.run_dir(run_id) / "report.md").exists()
+        assert module.main(["end", "--run", run_id]) == 0
+        out = json.loads(capsys.readouterr().out)
+        assert out["ok"] is True
+        assert (sb.run_dir(run_id) / "report.json").is_file()
+        assert (sb.run_dir(run_id) / "report.md").is_file()
+        assert sb.run_json(run_id)["ended"]
+        assert sb.pw_argvs("close") == [["close"]]
+        again = module.main(["end", "--run", run_id])
+        assert again == 0 and json.loads(capsys.readouterr().out) == out
 
     def test_end_takes_the_final_screenshot_before_closing_anything(self, sb):
         run_id, _ = web_run(sb)

@@ -261,8 +261,9 @@ class Run:
 
     `data` follows the run.json schema. `secrets` is an in-memory set the CLI fills with
     credential values and remembered typed text; every write redacts against it and it is never
-    persisted. `credentials` is the subset that came from the credential source: a screenshot
-    cannot be redacted, so the CLI withholds one that would show a credential.
+    persisted. `credentials` is the subset that came from the credential source and `passwords`
+    the secret half of it: a screenshot cannot be redacted, so the CLI withholds one taken while
+    a password is readable in the accessibility tree.
     """
 
     def __init__(self, directory: Path, data: dict) -> None:
@@ -270,6 +271,7 @@ class Run:
         self.data = data
         self.secrets: Set[str] = set()
         self.credentials: Set[str] = set()
+        self.passwords: Set[str] = set()
 
     @classmethod
     def create(cls, root: Path, fields: dict) -> "Run":
@@ -448,6 +450,18 @@ class Run:
 _CLIPBOARD_LABELS = {None: "not touched", True: "restored", False: "changed and not restored"}
 
 
+def _literal(text: str) -> str:
+    """Render app-controlled `text` as one inline code span that cannot end early or span lines.
+
+    The fence is longer than any backtick run in the text and line breaks become spaces, so the
+    text cannot open headings, links, images, HTML, or a new block in the report.
+    """
+    flat = re.sub(r"\r\n|[\r\n\v\f\x85\u2028\u2029]", " ", text)
+    longest = max((len(ticks) for ticks in re.findall(r"`+", flat)), default=0)
+    fence = "`" * (longest + 1)
+    return f"{fence} {flat} {fence}"
+
+
 def _render_markdown(report: dict) -> str:
     run = report["run"]
     lines: List[str] = []
@@ -479,7 +493,8 @@ def _render_markdown(report: dict) -> str:
     if not report["findings"]:
         lines += ["None.", ""]
     for f in report["findings"]:
-        entry = f"- {f['finding_id']} [{f['kind']}, {f['source']}] {f['summary']}"
+        summary = _literal(f["summary"]) if f["source"] == "script" else f["summary"]
+        entry = f"- {f['finding_id']} [{f['kind']}, {f['source']}] {summary}"
         if f["goal_id"]:
             entry += f" (goal {f['goal_id']})"
         if f["screenshot_path"]:
@@ -491,7 +506,7 @@ def _render_markdown(report: dict) -> str:
     if not report["gates"]:
         lines += ["None.", ""]
     for g in report["gates"]:
-        lines.append(f"- observation {g['observation_id']}: {g['gate']} on \"{g['subject']}\"")
+        lines.append(f"- observation {g['observation_id']}: {g['gate']} on {_literal(g['subject'])}")
     if report["gates"]:
         lines.append("")
     left = report["state_left"]
@@ -502,8 +517,8 @@ def _render_markdown(report: dict) -> str:
     lines += [
         f"- Clipboard: {_CLIPBOARD_LABELS[left['clipboard_restored']]}",
         f"- Frontmost app restored: {'yes' if left['frontmost_restored'] else 'no'}",
-        f"- Kept open: {', '.join(left['kept_open']) or 'nothing'}",
-        f"- Cleanup errors: {'; '.join(left['cleanup_errors']) or 'none'}",
+        "- Kept open: " + (", ".join(_literal(item) for item in left["kept_open"]) or "nothing"),
+        "- Cleanup errors: " + ("; ".join(_literal(item) for item in left["cleanup_errors"]) or "none"),
         "",
     ]
     return "\n".join(lines)
