@@ -35,7 +35,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import NoReturn, Optional
+from typing import NoReturn, Optional, Sequence
 from urllib.parse import unquote, urlsplit
 
 # the skill directory holds htmlkit and is not on sys.path when this file is run by path
@@ -56,6 +56,7 @@ POLL_SECONDS = 0.2
 WILDCARD_HOSTS = ("0.0.0.0", "::", "")
 LOOPBACK_NAMES = ("127.0.0.1", "::1", "localhost")
 PROBE_TIMEOUT = 3.0
+REQUEST_TIMEOUT = 10.0
 OPTION_ID = re.compile(r"[a-z0-9-]{1,40}")
 SLOT_LINE = re.compile(r"^<!-- slot:", re.M)
 SCREEN_KEYS = {"title", "question", "select", "options", "content", "diagram"}
@@ -189,9 +190,11 @@ def _answers_as_companion(info: dict) -> bool:
 def live_server_info(session: Path) -> Optional[dict]:
     """The session's ``server-info`` when its companion is alive, else None.
 
-    Dead means: no parseable ``server-info`` with an integer pid, a ``server-stopped`` file, a
-    pid that no longer exists, or a recorded port that does not answer as the companion. A
-    session found dead without a ``server-stopped`` file gets one with reason ``stale``.
+    Dead means: no parseable ``server-info`` with an integer pid, a ``server-stopped`` file, or a
+    pid that no longer exists; a session whose pid is gone and has no ``server-stopped`` file
+    gets one with reason ``stale``. A live pid whose recorded port does not answer as the
+    companion yields None for this call only: the pid may be reused or the probe may have been
+    transient, so nothing is recorded and the pid is never signalled.
     """
     state = _state_dir(session)
     if (state / "server-stopped").exists():
@@ -200,8 +203,8 @@ def live_server_info(session: Path) -> Optional[dict]:
     pid = info.get("pid") if isinstance(info, dict) else None
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return None
-    if _pid_alive(pid) and _answers_as_companion(info):
-        return info
+    if _pid_alive(pid):
+        return info if _answers_as_companion(info) else None
     try:
         if not (state / "server-stopped").exists():
             _write_stopped(state, "stale")
@@ -233,18 +236,39 @@ def _normalized_ip(text: str) -> Optional[str]:
         return None
 
 
-def _split_host_header(header: str) -> tuple[Optional[str], Optional[str]]:
-    """Split ``name:port`` or ``[v6]:port`` into lowercase name and port; (None, None) if malformed."""
-    if header.startswith("["):
-        name, sep, rest = header[1:].partition("]")
-        if not sep or not rest.startswith(":"):
-            return None, None
-        port = rest[1:]
+def _parse_authority(text: str) -> Optional[tuple[str, Optional[str]]]:
+    """Split ``HOST``, ``HOST:PORT``, ``[v6]`` or ``[v6]:PORT`` into lowercase name and optional port.
+
+    A bare IPv6 literal such as ``::1`` is a host with no port. Returns None for an empty name,
+    a malformed bracket, or a port that is not 1-65535.
+    """
+    if text.startswith("["):
+        name, sep, rest = text[1:].partition("]")
+        if not sep or (rest and not rest.startswith(":")):
+            return None
+        port: Optional[str] = rest[1:] if rest else None
+    elif text.count(":") == 1:
+        name, _, port = text.partition(":")
     else:
-        name, sep, port = header.rpartition(":")
-        if not sep or ":" in name:
-            return None, None
+        name, port = text, None
+    if not name or not re.fullmatch(r"[A-Za-z0-9._:%-]+", name):
+        return None
+    if port is not None and not (port.isascii() and port.isdigit() and 0 < int(port) < 65536):
+        return None
     return name.lower(), port
+
+
+def _same_host(a: str, b: str) -> bool:
+    ip_a, ip_b = _normalized_ip(a), _normalized_ip(b)
+    return a == b if ip_a is None or ip_b is None else ip_a == ip_b
+
+
+def _allow_host(value: str) -> str:
+    """argparse type for ``--allow-host``: a valid ``HOST`` or ``HOST:PORT``, lowercased."""
+    parsed = _parse_authority(value)
+    if parsed is None:
+        raise argparse.ArgumentTypeError(f"expected HOST or HOST:PORT, got {value!r}")
+    return value.lower()
 
 
 def _own_addresses() -> frozenset:
@@ -267,10 +291,11 @@ class _Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, host: str, port: int, session: Path) -> None:
+    def __init__(self, host: str, port: int, session: Path, allowed_hosts: Sequence[str] = ()) -> None:
         self.address_family = socket.AF_INET6 if ":" in host else socket.AF_INET
         self.session = session
         self.bound_host = host
+        self.allowed_hosts = [parsed for parsed in map(_parse_authority, allowed_hosts) if parsed is not None]
         self.event_lock = threading.Lock()
         self.last_request = time.monotonic()
         self.own_addresses = _own_addresses() if host in WILDCARD_HOSTS else frozenset()
@@ -284,17 +309,25 @@ class _Server(ThreadingHTTPServer):
     def host_allowed(self, header: Optional[str]) -> bool:
         """Whether a request's Host names this server.
 
-        A wildcard bind accepts only loopback names and this machine's own interface addresses
-        on the bound port, so a rebinding page's hostname never matches.
+        Accepted: the bound host and port; on a wildcard bind, loopback or an own interface
+        address on the bound port; or an ``--allow-host`` entry (a bare host allows any port,
+        ``HOST:PORT`` that exact pair). Any other name, including a rebinding page's, is refused.
         """
         if header is None:
             return False
-        if self.bound_host not in WILDCARD_HOSTS:
-            return header == self.expected_host()
-        name, port = _split_host_header(header)
-        if name is None or port != str(self.bound_port):
+        if self.bound_host not in WILDCARD_HOSTS and header == self.expected_host():
+            return True
+        parsed = _parse_authority(header)
+        if parsed is None or (":" in parsed[0] and not header.startswith("[")):
             return False
-        return name == "localhost" or _normalized_ip(name) in self.own_addresses
+        name, port = parsed
+        if self.bound_host in WILDCARD_HOSTS and port == str(self.bound_port):
+            if name == "localhost" or _normalized_ip(name) in self.own_addresses:
+                return True
+        return any(
+            _same_host(name, allowed_name) and (allowed_port is None or allowed_port == port)
+            for allowed_name, allowed_port in self.allowed_hosts
+        )
 
     def current(self) -> Optional[dict]:
         data = _read_json(_state_dir(self.session) / "current.json")
@@ -314,6 +347,7 @@ class _Server(ThreadingHTTPServer):
 class _Handler(BaseHTTPRequestHandler):
     server: _Server
     server_version = "quirk-companion"
+    timeout = REQUEST_TIMEOUT
 
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -396,11 +430,14 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _drain(self, length: int) -> None:
         remaining = min(length, DRAIN_LIMIT)
-        while remaining > 0:
-            chunk = self.rfile.read(min(remaining, 65536))
-            if not chunk:
-                break
-            remaining -= len(chunk)
+        try:
+            while remaining > 0:
+                chunk = self.rfile.read(min(remaining, 65536))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+        except OSError:
+            pass
 
     def _accept_event(self) -> None:
         try:
@@ -418,6 +455,9 @@ class _Handler(BaseHTTPRequestHandler):
             return
         try:
             payload = json.loads(self.rfile.read(length))
+        except OSError:
+            self.close_connection = True
+            return
         except (ValueError, RecursionError):
             self._json(400, {"error": "body is not valid JSON"})
             return
@@ -487,7 +527,7 @@ def _write_stopped(state: Path, reason: str) -> None:
     atomic_write(state / "server-stopped", json.dumps({"reason": reason, "at": time.time()}))
 
 
-def _serve(session: Path, host: str, port: int, idle_minutes: float) -> int:
+def _serve(session: Path, host: str, port: int, idle_minutes: float, allowed_hosts: Sequence[str] = ()) -> int:
     """Run the server in this process until it is stopped, idle or signalled."""
     existing = live_server_info(session)
     if existing is not None:
@@ -498,7 +538,7 @@ def _serve(session: Path, host: str, port: int, idle_minutes: float) -> int:
     for stale in ("server-stopped", "server-info"):
         (state / stale).unlink(missing_ok=True)
     try:
-        httpd = _Server(host, port, session)
+        httpd = _Server(host, port, session, allowed_hosts)
     except OSError as exc:
         return _fail(f"cannot listen on {host}:{port}: {exc}")
     shown_host = "127.0.0.1" if host in WILDCARD_HOSTS else (f"[{host}]" if ":" in host else host)
@@ -507,6 +547,7 @@ def _serve(session: Path, host: str, port: int, idle_minutes: float) -> int:
         "pid": os.getpid(),
         "port": httpd.bound_port,
         "host": host,
+        "allowed_hosts": list(allowed_hosts),
         "url": f"http://{shown_host}:{httpd.bound_port}/",
         "screen_dir": str(session / "screens"),
         "state_dir": str(state),
@@ -537,7 +578,7 @@ def _serve(session: Path, host: str, port: int, idle_minutes: float) -> int:
 def _cmd_start(args: argparse.Namespace) -> int:
     session = Path(args.session)
     if args.foreground:
-        return _serve(session, args.host, args.port, args.idle_minutes)
+        return _serve(session, args.host, args.port, args.idle_minutes, args.allow_host)
     existing = live_server_info(session)
     if existing is not None:
         _emit(existing)
@@ -559,6 +600,8 @@ def _cmd_start(args: argparse.Namespace) -> int:
         "--idle-minutes",
         str(args.idle_minutes),
     ]
+    for entry in args.allow_host:
+        command += ["--allow-host", entry]
     with open(state / "server.log", "ab") as log:
         child = subprocess.Popen(
             command,
@@ -845,6 +888,7 @@ def _build_parser() -> argparse.ArgumentParser:
     start = sub.add_parser("start", help="start the session's server, or reuse a live one")
     start.add_argument("session")
     start.add_argument("--host", default="127.0.0.1")
+    start.add_argument("--allow-host", type=_allow_host, action="append", default=[], metavar="HOST[:PORT]")
     start.add_argument("--port", type=_port, default=0)
     start.add_argument("--idle-minutes", type=_positive, default=30.0)
     start.add_argument("--foreground", action="store_true")

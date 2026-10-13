@@ -21,9 +21,8 @@ main h2 { margin-top: 0; font-size: var(--q-size-h2); }
 .q-banner button { margin-inline-start: var(--q-space-3); }
 .q-content { margin-block: var(--q-space-4); }
 .q-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: var(--q-space-4); margin-block: var(--q-space-4); }
-.q-option { display: flex; flex-direction: column; align-items: stretch; gap: var(--q-space-2); box-sizing: border-box; width: 100%; min-height: 44px; margin: 0; padding: var(--q-space-4); text-align: left; font: inherit; color: var(--q-color-text); background: var(--q-color-surface); border: 2px solid var(--q-color-border); border-radius: var(--q-radius-md); cursor: pointer; }
+.q-option { display: flex; flex-direction: column; align-items: stretch; gap: var(--q-space-2); box-sizing: border-box; width: 100%; min-height: 44px; margin: 0; padding: var(--q-space-4); text-align: left; font: inherit; color: var(--q-color-text); background: var(--q-color-surface); border: 1px solid var(--q-color-border); border-radius: var(--q-radius-md); cursor: pointer; }
 .q-option:enabled:hover { background: var(--q-color-surface); border-color: var(--q-color-accent); }
-.q-option:focus-visible, .q-actions textarea:focus-visible, .q-actions button:focus-visible { outline: 3px solid var(--q-color-focus); outline-offset: 2px; }
 .q-option[aria-pressed="true"], .q-option[aria-checked="true"] { border-color: var(--q-color-accent); background: color-mix(in srgb, var(--q-color-accent) 12%, var(--q-color-bg)); }
 .q-option:disabled { cursor: not-allowed; opacity: 0.6; }
 .q-option-label { font-weight: 600; font-size: var(--q-size-h4); }
