@@ -1,6 +1,6 @@
 # writing-html-artifacts: tech spec
 
-**Status**: Approved by the user, 2026-10-13 · Logic spec: [logic.md](logic.md)
+**Status**: Approved by the user, 2026-10-13; amended 2026-10-13 (see end) · Logic spec: [logic.md](logic.md)
 
 This document says where to work and what must hold. Paths are relative to the repo root. `$SKILL`
 means `skills/writing-html-artifacts/`. Line anchors are against `ac902bd`.
@@ -335,7 +335,8 @@ Back-link: [Building](logic.md#building), [Modes](logic.md#modes).
      it. The header takes its `title`, `mode` and `tier_signal` from there.
   2. Find `pnpm` on PATH, else `corepack pnpm`. Neither found is exit 3 with reason `no-pnpm`.
      `node` missing is exit 3 with reason `no-node`.
-  3. `pnpm install --frozen-lockfile`, then `pnpm run build`, each with a 600 s timeout. A failure
+  3. `pnpm install --frozen-lockfile --ignore-scripts` (so a cloned repo's template can't run install
+     scripts), then `pnpm run build`, each with a 600 s timeout. A failure
      is exit 3 with reason `install-failed` or `build-failed` and the last 40 lines of output.
   4. Read `dist/index.html`, insert the header and one license comment per production dependency
      listed in the template's `package.json` (license read from
@@ -444,7 +445,8 @@ Back-link: [Browser verify](logic.md#browser-verify).
     against its effective background, or 3:1 at 24px and up.
   - `network`: a context with `serviceWorkers: "block"`, a route on `/^https?:/` that records and
     aborts, and a `request` listener recording anything not `file:`, `data:`, `blob:` or `about:`.
-    Offline mode fails on any recorded URL. Connected mode reports them without failing.
+    Offline mode aborts and fails on any recorded URL. Connected mode lets requests through
+    (`route.continue()`) and reports them without failing, so the page's real behavior is verified.
 - Output goes to `<file stem>.verify/` beside the file: `report.json` (the `VerifyResult`) and
   `375-light.png`, `375-dark.png`, `1280-light.png`, `1280-dark.png`.
 - `report.json.file_sha256` is the hash of the file verify ran on. `note` compares it with the
@@ -601,3 +603,8 @@ Back-link: [Deferred Ideas](logic.md#deferred-ideas).
 - No migration of existing Isles Markdown screens; they were transient.
 - No sanitizing of agent-written companion HTML.
 - No Windows-specific detach logic beyond what `subprocess` gives; Windows isn't a v1 host.
+
+## 11. Amendments
+
+- 2026-10-13, after the wave-1 review, decided by the user: tier-2 installs always use
+  `--ignore-scripts` (§4.2), and connected-mode verify lets requests through while recording them (§4.5).
