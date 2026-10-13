@@ -1,0 +1,19 @@
+{
+  "name": "writing-html-artifacts-vendor-build",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Maintainer-only build of the single-file Web Awesome bundle; run when the pin is bumped.",
+  "scripts": {
+    "build": "node build-webawesome.mjs"
+  },
+  "dependencies": {
+    "@awesome.me/webawesome": "3.14.0",
+    "esbuild": "0.28.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}
