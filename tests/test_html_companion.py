@@ -679,6 +679,31 @@ def test_detached_start_passes_allow_host_through(tmp_path: Path) -> None:
         run("stop", session)
 
 
+def test_start_refuses_a_live_server_whose_host_settings_differ(tmp_path: Path) -> None:
+    session = tmp_path / "s"
+    rc, info, err = run("start", session, "--idle-minutes", "5")
+    try:
+        assert rc == 0, err
+        rc, again, _ = run("start", session)
+        assert rc == 0 and again == info
+        rc, again, _ = run("start", session, "--host", "127.0.0.1")
+        assert rc == 0 and again == info
+        for flags in (("--allow-host", "box.example:8080"), ("--host", "0.0.0.0")):
+            rc, out, _ = run("start", session, *flags)
+            assert rc == 2 and "stop" in out["error"] and "different" in out["error"], flags
+        os.kill(info["pid"], 0)
+    finally:
+        run("stop", session)
+    rc, fresh, err = run("start", session, "--host", "0.0.0.0", "--allow-host", "box.example", "--idle-minutes", "5")
+    try:
+        assert rc == 0, err
+        assert fresh["allowed_hosts"] == ["box.example"]
+        rc, again, _ = run("start", session, "--host", "0.0.0.0", "--allow-host", "BOX.example")
+        assert rc == 0 and again == fresh
+    finally:
+        run("stop", session)
+
+
 @pytest.mark.parametrize("value", ["", "a b", "host:0", "host:99999", "[::1"])
 def test_malformed_allow_host_is_a_json_usage_error(tmp_path: Path, value: str) -> None:
     rc, out, _ = run("start", tmp_path / "s", "--allow-host", value)

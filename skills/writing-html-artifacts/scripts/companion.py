@@ -53,6 +53,7 @@ DRAIN_LIMIT = 1024 * 1024
 START_TIMEOUT = 10.0
 STOP_TIMEOUT = 5.0
 POLL_SECONDS = 0.2
+DEFAULT_HOST = "127.0.0.1"
 WILDCARD_HOSTS = ("0.0.0.0", "::", "")
 LOOPBACK_NAMES = ("127.0.0.1", "::1", "localhost")
 PROBE_TIMEOUT = 3.0
@@ -527,12 +528,26 @@ def _write_stopped(state: Path, reason: str) -> None:
     atomic_write(state / "server-stopped", json.dumps({"reason": reason, "at": time.time()}))
 
 
-def _serve(session: Path, host: str, port: int, idle_minutes: float, allowed_hosts: Sequence[str] = ()) -> int:
+def _reuse_live_server(existing: dict, host: Optional[str], allowed_hosts: Sequence[str]) -> int:
+    """Emit a live server's info, or refuse when explicit host flags contradict its settings.
+
+    Flags left at their defaults (no ``--host``, no ``--allow-host``) always reuse.
+    """
+    differs = (host is not None and host != existing.get("host")) or (
+        bool(allowed_hosts) and set(allowed_hosts) != set(existing.get("allowed_hosts") or [])
+    )
+    if differs:
+        return _fail("a companion server is already running for this session with different host settings; run stop first, then start again")
+    _emit(existing)
+    return EXIT_OK
+
+
+def _serve(session: Path, host: Optional[str], port: int, idle_minutes: float, allowed_hosts: Sequence[str] = ()) -> int:
     """Run the server in this process until it is stopped, idle or signalled."""
     existing = live_server_info(session)
     if existing is not None:
-        _emit(existing)
-        return EXIT_OK
+        return _reuse_live_server(existing, host, allowed_hosts)
+    host = DEFAULT_HOST if host is None else host
     _prepare_session(session)
     state = _state_dir(session)
     for stale in ("server-stopped", "server-info"):
@@ -581,8 +596,7 @@ def _cmd_start(args: argparse.Namespace) -> int:
         return _serve(session, args.host, args.port, args.idle_minutes, args.allow_host)
     existing = live_server_info(session)
     if existing is not None:
-        _emit(existing)
-        return EXIT_OK
+        return _reuse_live_server(existing, args.host, args.allow_host)
     _prepare_session(session)
     state = _state_dir(session)
     for stale in ("server-stopped", "server-info"):
@@ -594,7 +608,7 @@ def _cmd_start(args: argparse.Namespace) -> int:
         str(session),
         "--foreground",
         "--host",
-        args.host,
+        DEFAULT_HOST if args.host is None else args.host,
         "--port",
         str(args.port),
         "--idle-minutes",
@@ -887,7 +901,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     start = sub.add_parser("start", help="start the session's server, or reuse a live one")
     start.add_argument("session")
-    start.add_argument("--host", default="127.0.0.1")
+    start.add_argument("--host", default=None)
     start.add_argument("--allow-host", type=_allow_host, action="append", default=[], metavar="HOST[:PORT]")
     start.add_argument("--port", type=_port, default=0)
     start.add_argument("--idle-minutes", type=_positive, default=30.0)
