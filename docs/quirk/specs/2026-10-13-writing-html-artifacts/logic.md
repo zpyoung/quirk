@@ -1,6 +1,6 @@
 # Logic spec: `writing-html-artifacts`
 
-**Status**: Approved, 2026-10-13
+**Status**: Approved, 2026-10-13 · Tech spec: [tech.md](tech.md) (gate fired: multi-session, several subsystems)
 
 A quirk skill that has agents in Claude Code, pi and Oh My Pi build HTML files that open anywhere,
 look deliberate, and come with proof that they work. The same machinery gives brainstorming and
