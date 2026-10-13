@@ -175,8 +175,6 @@ For each surviving direction / finding cluster: **steelman** it, then surface th
 
 Synthesize using `exploration-artifact-template.md` and **auto-save** to `docs/quirk/explorations/YYYY-MM-DD-<topic>.md`. It opens with a NOT-a-spec banner and contains: Framing · What was explored · Findings / Idea landscape (each direction insight-paired, NO winner declared) · Tensions & trade-offs · Challenge notes · Open questions & gaps · Sources. It contains NO "Decisions Locked", requirements, or implementation steps — by gate.
 
-Remind the user to add `.quirk/` to `.gitignore` if they used the Visual Companion (its session screens live under `.quirk/brainstorm/`).
-
 ## Close: Optional Handoff
 
 End with a short recap, then:

@@ -69,8 +69,8 @@ The server detaches itself and `start` returns at once, so you do NOT need `run_
 `start` is idempotent: a live server for the session is reused. Tell the user to open the `url`.
 
 **Later:** the same JSON is in `<session>/state/server-info`; if the server has shut down,
-`<session>/state/server-stopped` exists instead. Screens persist in `.quirk/brainstorm/`, so
-remind the user to add `.quirk/` to `.gitignore` if it isn't already.
+`<session>/state/server-stopped` exists instead. Screens persist in `.quirk/brainstorm/`, which is
+self-ignored by git.
 
 **Remote or containerized setups:** the server binds `127.0.0.1` by default. If that URL is
 unreachable from the user's browser, add `--host 0.0.0.0`. **This exposes the session on the
