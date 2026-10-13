@@ -374,3 +374,113 @@ def test_the_module_matches_what_the_cli_resolves(env):
     _, warnings = resolve.list_templates(roots, skill_dir=SKILL)
     assert [w["name"] for w in warnings] == ["mine"]
     assert assemble.BuildError is create.BuildError
+
+
+def _tier2_skeleton(root: Path, extra: dict[str, str]) -> Path:
+    tdir = root / "kit"
+    (tdir / "project").mkdir(parents=True)
+    (tdir / "template.json").write_text(json.dumps({"tier": 2, "name": "kit", "project": "project/"}))
+    for rel, text in {"project/package.json": "{}", "project/pnpm-lock.yaml": "", **extra}.items():
+        path = tdir / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    return tdir
+
+
+def test_copy_keeps_a_vendored_dist_path_in_a_tier_1_template(tmp_path):
+    tdir = tmp_path / "t1"
+    (tdir / "vendor" / "chart" / "1.0" / "dist").mkdir(parents=True)
+    (tdir / "vendor" / "chart" / "1.0" / "dist" / "chart.js").write_text("lib")
+    (tdir / "vendor" / "chart" / "node_modules").mkdir()
+    (tdir / "vendor" / "chart" / "node_modules" / "x.js").write_text("x")
+    (tdir / "vendor" / "chart" / "verified.json").write_text("{}")
+    (tdir / "template.json").write_text(json.dumps({"tier": 1, "name": "t1"}))
+    (tdir / "verified.json").write_text("{}")
+    dest = tmp_path / "copy"
+    create._copy_tree(tdir, dest)
+    assert (dest / "vendor/chart/1.0/dist/chart.js").read_text() == "lib"
+    assert (dest / "vendor/chart/node_modules/x.js").is_file()
+    assert (dest / "vendor/chart/verified.json").is_file()
+    assert not (dest / "verified.json").exists()
+
+
+def test_copy_skips_build_output_only_under_a_tier_2_project(tmp_path):
+    tdir = _tier2_skeleton(
+        tmp_path,
+        {
+            "project/node_modules/dep/index.js": "x",
+            "project/dist/index.html": "old",
+            "project/src/dist/keep.ts": "x",
+            "example/dist/kept.txt": "kept",
+            "verified.json": "{}",
+        },
+    )
+    dest = tmp_path / "copy"
+    create._copy_tree(tdir, dest)
+    assert (dest / "project/package.json").is_file()
+    assert not (dest / "project/node_modules").exists() and not (dest / "project/dist").exists()
+    assert not (dest / "project/src/dist").exists()
+    assert (dest / "example/dist/kept.txt").is_file()
+    assert not (dest / "verified.json").exists()
+
+
+def test_a_custom_template_with_a_vendored_dist_path_verifies(env, monkeypatch):
+    assert new(env, "mine")[0] == 0
+    dest = env["project"] / ".quirk/html-templates/mine"
+    (dest / "vendor/chart/1.0/dist").mkdir(parents=True)
+    (dest / "vendor/chart/1.0/dist/chart.js").write_text("lib")
+    stub_browser(monkeypatch)
+    assert verify_in_process(env, "mine")["passed"] is True
+    stamp = json.loads((dest / "verified.json").read_text())
+    assert "vendor/chart/1.0/dist/chart.js" in stamp["hashes"]
+    assert manifest.validate_template(dest, require_verified=True) == []
+
+
+@pytest.mark.parametrize("reason", ["no-node", "no-browser", "install-failed"])
+def test_environment_limits_still_pass_without_a_browser(env, monkeypatch, reason):
+    new(env, "mine")
+    stub_browser(monkeypatch, {**NOT_VERIFIED, "reason": reason})
+    result = verify_in_process(env, "mine")
+    assert result["passed"] is True and result["browser"] is False
+    assert (env["project"] / ".quirk/html-templates/mine/verified.json").is_file()
+
+
+@pytest.mark.parametrize("reason", ["verify-crashed", "verify-timeout", "missing-file"])
+def test_a_verifier_crash_or_timeout_does_not_pass(env, monkeypatch, reason):
+    new(env, "mine")
+    stub_browser(monkeypatch, {**NOT_VERIFIED, "reason": reason})
+    result = verify_in_process(env, "mine")
+    assert result["passed"] is False and result["browser"] is False
+    assert result["report"]["verify"]["reason"] == reason
+    assert not (env["project"] / ".quirk/html-templates/mine/verified.json").exists()
+
+
+def test_companion_is_refused_as_a_base(env):
+    code, out = new(env, "screens", "--base", "companion")
+    assert code == 2 and "companion" in out["error"] and "not a base" in out["error"]
+    assert not (env["project"] / ".quirk/html-templates/screens").exists()
+
+
+def test_a_companion_screen_is_refused_as_a_from_source(env):
+    screen = env["tmp"] / "screen.html"
+    screen.write_text('<!doctype html>\n<!-- quirk-html-artifact {"template": "companion", "tier": 1} -->\n<html><body>q</body></html>\n')
+    code, out = new(env, "screens", "--from", str(screen))
+    assert code == 2 and "companion" in out["error"]
+    assert not (env["project"] / ".quirk/html-templates/screens").exists()
+
+
+def test_from_a_source_whose_data_is_outside_the_allowed_directories_copies_nothing(env):
+    secret = env["tmp"] / "secret.json"
+    secret.write_text('{"token": "hunter2"}')
+    elsewhere = env["tmp"] / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "t.src.html").write_text(SRC.replace('"libraries": []', f'"libraries": [], "data": "{secret}"'))
+    artifact = elsewhere / "t.html"
+    artifact.write_text('<!doctype html>\n<!-- quirk-html-artifact {"template": "report", "tier": 1} -->\n<html><body>x</body></html>\n')
+    code, out = new(env, "leak", "--from", str(artifact))
+    dest = env["project"] / ".quirk/html-templates/leak"
+    assert code == 0, out
+    assert not list(dest.glob("example.data.*"))
+    example = (dest / "example.src.html").read_text()
+    assert "hunter2" not in example and '"data"' not in example
+    assert any("outside" in step and "not copied" in step for step in out["next"])

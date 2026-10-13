@@ -118,7 +118,7 @@ Custom templates (project and user level) need a `verified.json` beside `templat
 ```
 
 - `hashes` covers `template.json`, the skeleton, tokens, rules, every file under `vendor/`, and the example.
-- For tier 2 it covers `template.json`, `project/package.json` and `project/pnpm-lock.yaml`.
+- For tier 2 it covers `template.json` and every file under `project/` except `node_modules` and `dist`.
 - `browser` is `false` when the example passed static checks but no browser was reachable.
 - Do not write it by hand. `templates verify` writes it, and only when the example passes. Editing any covered file afterwards invalidates it, so re-run verify.
 
@@ -134,7 +134,7 @@ Creating a template is guided and ends when the example passes.
    ```
 
    It prints `{"path", "next": [...]}`; do what `next` lists.
-   - `--base` copies an existing template as the starting point.
+   - `--base` copies an existing template as the starting point. The built-in `companion` template is refused: its example is a screen, not a page source.
    - `--from` starts from a built artifact. A quirk-built artifact copies its source template and uses its `.src.html` as the example. Any other HTML becomes a one-slot skeleton (`main` wraps the body) with house tokens, which you then refine.
 3. Edit `template.json` (write a real "Use when" description), the skeleton, tokens, rules and the example. Keep the example a real, filled-in page, because verify runs on it.
 4. Optionally check the shape: `scripts/quirk_html.py templates validate PATH` prints `{"valid", "errors"}`.
@@ -152,7 +152,8 @@ The template is usable only once `templates verify` passes. A project template b
 
 A tier-2 template sets `"tier": 2` and `"project": "project/"`, and ships its own `project/package.json` and `project/pnpm-lock.yaml`.
 
-- The lockfile is required, and dependencies are exact-pinned. Builds run `pnpm install --frozen-lockfile`, so a missing or stale lockfile fails the build.
+- The lockfile is required, and dependencies are exact-pinned. Builds run `pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile`, so a missing or stale lockfile fails the build and no package script or pnpmfile hook runs at install.
+- Building a tier-2 template runs its build code (`vite.config.ts` and the build script). Only build project or user tier-2 templates you trust.
 - Build with `scripts/quirk_html.py build-app SLUG --title TITLE`. If Node or pnpm is missing, or install or build fails, it exits 3 and you fall back to a tier-1 build, listing every cut in the delivery note.
 - Never commit `node_modules/`.
 

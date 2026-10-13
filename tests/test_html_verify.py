@@ -216,3 +216,43 @@ def test_connected_mode_counts_console_errors_from_passed_through_requests(tmp_p
     result = verify_runner.run_verify(page, tmp_path / "out", mode="connected")
     assert result["checks"]["network"]["passed"] is True
     assert result["checks"]["console"]["passed"] is False
+
+
+@pytest.fixture
+def hanging_server() -> Iterator[str]:
+    release = threading.Event()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            release.wait(10)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}/hang.js"
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+@pytest.mark.usefixtures("browser_ready")
+def test_connected_navigation_timeout_is_a_network_failure_with_a_report(
+    tmp_path: Path, hanging_server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("QUIRK_VERIFY_NAV_TIMEOUT_MS", "1500")
+    page = tmp_path / "hangs.html"
+    page.write_text(f'<!doctype html><html><head><title>t</title><script src="{hanging_server}"></script></head><body><p>x</p></body></html>')
+    result = verify_runner.run_verify(page, tmp_path / "out", mode="connected")
+    assert result["status"] == "failed", result
+    network = result["checks"]["network"]
+    assert network["passed"] is False
+    assert any("navigation to" in d and page.as_uri() in d for d in network["details"])
+    assert (tmp_path / "out" / "report.json").is_file()
+    assert verify_runner.report_is_stale(page, tmp_path / "out" / "report.json") is False

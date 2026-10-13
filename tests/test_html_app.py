@@ -210,7 +210,7 @@ def test_first_build_scaffolds_installs_frozen_and_writes_the_bundle(project, fa
     assert (src / "src" / "routes.tsx").read_text() != (APP / "project" / "src" / "routes.tsx").read_text()
     assert not (src / "example").exists()
     assert pnpm_calls(fake_env) == [
-        ["install", "--frozen-lockfile", "--ignore-scripts"],
+        ["install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"],
         ["run", "build"],
     ]
 
@@ -356,7 +356,7 @@ def test_custom_tier_2_template_is_copied_without_node_modules_and_installs_with
     assert (src / "src" / "keep.ts").read_text() == "// keep\n"
     assert not (src / "dist" / "old.html").exists()
     assert not (src / "node_modules" / "stale").exists()
-    assert pnpm_calls(fake_env)[0] == ["install", "--frozen-lockfile", "--ignore-scripts"]
+    assert pnpm_calls(fake_env)[0] == ["install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"]
     assert json.loads((src / "quirk-app.json").read_text())["template"] == "mini"
 
 
