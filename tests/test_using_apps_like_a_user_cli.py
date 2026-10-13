@@ -880,6 +880,27 @@ class TestGates:
                     "--target-name", "Increment counter")
         assert named.status == "OBSERVED"
 
+    @pytest.mark.parametrize("kind,key", [("press", "Enter"), ("hotkey", "cmd+s")])
+    def test_a_press_with_a_ref_is_gated_by_its_target_name_too(self, sb, kind, key):
+        run_id, obs = web_run(sb, owner="third-party")
+        result = act(sb, run_id, obs["observation_id"], "--action", kind, "--key", key,
+                     "--ref", "e4", "--target-name", "Delete account")
+        assert result.status == "GATE_REQUIRED" and result["subject"] == "Delete account", result.out
+        assert sb.pw_argvs("press") == []
+
+    def test_a_press_with_a_gated_ref_name_is_still_gated(self, sb):
+        run_id, obs = web_run(sb, owner="third-party")
+        result = act(sb, run_id, obs["observation_id"], "--action", "press", "--key", "Enter",
+                     "--ref", "e17", "--target-name", "Language dropdown")
+        assert result.status == "GATE_REQUIRED" and result["subject"] == "Delete project", result.out
+
+    def test_a_press_with_a_harmless_ref_and_target_name_goes_through(self, sb):
+        run_id, obs = web_run(sb, owner="third-party",
+                              rules=[{"on": ["press", "Enter"], "page": "counted"}])
+        result = act(sb, run_id, obs["observation_id"], "--action", "press", "--key", "Enter",
+                     "--ref", "e7", "--target-name", "Increment counter")
+        assert result.status == "OBSERVED", result.out
+
     def test_press_needs_no_name_in_the_users_own_runs(self, sb):
         run_id, obs = web_run(sb, rules=[{"on": ["press", "Enter"], "page": "counted"}])
         assert act(sb, run_id, obs["observation_id"], "--action", "press", "--key", "Enter").status == "OBSERVED"
@@ -1391,6 +1412,24 @@ class TestNativeDriverIdentity:
         assert state["budget"]["run_used"] == 0
         assert state["goals"]["g1"]["actions_used"] == 0
 
+    def test_a_refused_act_keeps_the_drift_baseline_so_the_foreground_retry_sees_a_takeover(
+            self, sb, cua_run):
+        _, out = cua_run("begin", "--target", FIXTURE_BUNDLE, "--surface", "native", "--owner", "yours",
+                         "--attended", "--goals-file", write_goals(sb, "g1"))
+        run_id = out["run_id"]
+        _, seen = cua_run("observe", "--run", run_id, "--goal", "g1")
+        obs_id = str(seen["observation"]["observation_id"])
+        before = sb.run_json(run_id)["drift_baseline"]
+        sb.set_desktop(frontmost="com.example.intruder", cursor=[500.0, 600.0])
+        code, refused = cua_run("act", "--run", run_id, "--obs", obs_id, "--action", "click",
+                                "--ref", "2")
+        assert code == 0 and refused["status"] == "FOREGROUND_REQUIRED", refused
+        assert sb.run_json(run_id)["drift_baseline"] == before
+        code, retry = cua_run("act", "--run", run_id, "--obs", obs_id, "--action", "click",
+                              "--ref", "2", "--foreground")
+        assert retry["status"] == "DRIFT" and retry["stopped_reason"] == "drift", retry
+        assert sb.orca_commands("click") == []
+
     def test_a_delivered_act_costs_one_action(self, sb, cua_run):
         _, out = cua_run("begin", "--target", FIXTURE_BUNDLE, "--surface", "native", "--owner", "yours",
                          "--attended", "--goals-file", write_goals(sb, "g1"))
@@ -1718,6 +1757,52 @@ class TestLoginLimit:
         welcome = golden_yaml().replace(
             '      - text: Password\n      - textbox "Password" [ref=e21]\n', "")
         run_id, obs = web_run(sb, pages={"home": web_page(unnamed), "welcome": web_page(welcome)},
+                              rules=[click_rule("e22", page="welcome")])
+        step = self.fill_secret(sb, run_id, obs["observation_id"], "e21", "password")
+        click(sb, run_id, step["observation"]["observation_id"], "e22")
+        assert sb.run_json(run_id)["login_attempts"] == 0
+
+    def renewed_form(self, password_line):
+        """The login page as a failed submit rerenders it: same fields, fresh refs."""
+        renewed = golden_yaml()
+        for old, new in (("e20", "e30"), ("e21", "e31"), ("e22", "e32")):
+            renewed = renewed.replace(f"[ref={old}]", f"[ref={new}]")
+        return renewed.replace('textbox "Password" [ref=e31]', password_line)
+
+    def test_a_failed_login_counts_when_the_form_rerenders_with_new_refs(self, sb):
+        again = self.renewed_form('textbox "Password" [ref=e31]')
+        run_id, obs = web_run(sb, pages={"home": web_page(), "again": web_page(again)},
+                              rules=[click_rule("e22", page="again")])
+        step = self.fill_secret(sb, run_id, obs["observation_id"], "e21", "password")
+        click(sb, run_id, step["observation"]["observation_id"], "e22")
+        assert sb.run_json(run_id)["login_attempts"] == 1
+
+    def test_a_nameless_password_field_counts_after_the_form_rerenders_with_new_refs(self, sb):
+        unnamed = golden_yaml().replace('textbox "Password" [ref=e21]', 'textbox [ref=e21]')
+        again = self.renewed_form("textbox [ref=e31]")
+        run_id, obs = web_run(sb, pages={"home": web_page(unnamed), "again": web_page(again)},
+                              rules=[click_rule("e22", page="again")])
+        step = self.fill_secret(sb, run_id, obs["observation_id"], "e21", "password")
+        click(sb, run_id, step["observation"]["observation_id"], "e22")
+        assert sb.run_json(run_id)["login_attempts"] == 1
+
+    def test_a_renewed_form_with_two_nameless_fields_still_counts_the_password_one(self, sb):
+        unnamed = (golden_yaml().replace('textbox "Password" [ref=e21]', 'textbox [ref=e21]')
+                   .replace('textbox "Username" [ref=e20]', 'textbox [ref=e20]'))
+        again = (self.renewed_form("textbox [ref=e31]")
+                 .replace('textbox "Username" [ref=e30]', 'textbox [ref=e30]'))
+        run_id, obs = web_run(sb, pages={"home": web_page(unnamed), "again": web_page(again)},
+                              rules=[click_rule("e22", page="again")])
+        step = self.fill_secret(sb, run_id, obs["observation_id"], "e21", "password")
+        click(sb, run_id, step["observation"]["observation_id"], "e22")
+        assert sb.run_json(run_id)["login_attempts"] == 1
+
+    def test_a_password_field_that_vanishes_after_a_ref_renewal_costs_no_attempt(self, sb):
+        welcome = golden_yaml().replace(
+            '      - text: Password\n      - textbox "Password" [ref=e21]\n', "")
+        for old, new in (("e20", "e30"), ("e22", "e32")):
+            welcome = welcome.replace(f"[ref={old}]", f"[ref={new}]")
+        run_id, obs = web_run(sb, pages={"home": web_page(), "welcome": web_page(welcome)},
                               rules=[click_rule("e22", page="welcome")])
         step = self.fill_secret(sb, run_id, obs["observation_id"], "e21", "password")
         click(sb, run_id, step["observation"]["observation_id"], "e22")

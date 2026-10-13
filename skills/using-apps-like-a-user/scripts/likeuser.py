@@ -519,28 +519,71 @@ def _signals(run: _run.Run, snap: Snap, value_ref: Optional[str] = None,
         value=_digest(values.get(value_ref)) if value_ref else None, screen_hash=screen_hash)
 
 
-def _element_keys(refs: List[str], names: Dict[str, str]) -> Dict[str, List[Optional[str]]]:
-    return {ref: [_stable(ref), _digest(names.get(ref))] for ref in refs}
+_ROLE_REF_RE = re.compile(r'^\s*-\s+([^\s":\[]+)[^\n]*?\[ref=([^\]]+)\]')
 
 
-def _correlate(run: _run.Run, snap: Snap, ref: str,
-               element: Optional[List[Optional[str]]]) -> Optional[str]:
+def _renderer_roles(snap: Snap) -> Dict[str, str]:
+    """The role of each renderer ref in `snap`, read from the accessibility tree text."""
+    if snap.renderer is None:
+        return {}
+    roles: Dict[str, str] = {}
+    for line in snap.renderer.tree_text.splitlines():
+        match = _ROLE_REF_RE.match(line)
+        if match:
+            roles[match.group(2)] = match.group(1)
+    return roles
+
+
+def _role_group(refs: List[str], names: Dict[str, str], roles: Dict[str, str], role: str,
+                name: Optional[str]) -> List[str]:
+    return [r for r in refs if roles.get(r) == role and _digest(names.get(r)) == name]
+
+
+def _element_keys(refs: List[str], names: Dict[str, str],
+                  roles: Optional[Dict[str, str]] = None) -> Dict[str, list]:
+    """Per ref, what identifies its element again after a re-observation.
+
+    Each entry is `[stable ref, name digest]`, plus `[role, ordinal, group size]` for a renderer
+    element, where the group is every element with that role and name, in tree order.
+    """
+    roles = roles or {}
+    keys: Dict[str, list] = {}
+    for ref in refs:
+        key: list = [_stable(ref), _digest(names.get(ref))]
+        role = roles.get(ref)
+        if role:
+            group = _role_group(refs, names, roles, role, key[1])
+            key += [role, group.index(ref), len(group)]
+        keys[ref] = key
+    return keys
+
+
+def _correlate(run: _run.Run, snap: Snap, ref: str, element: Optional[list]) -> Optional[str]:
     """Return the ref in `snap` of the element `ref` named before the action, or None when it is gone.
 
     A ref still present is the same element. A renewed native token is found by its stable
-    identity and name, then by a name only one element carries.
+    identity and name, then by a name only one element carries. A renewed renderer ref is found
+    among the elements with the same role and name: the one that holds the same position when
+    the group is the same size, never a guess when the group changed.
     """
     refs, names, _ = _merged(run, snap)
     if ref in refs:
         return ref
-    if not element or element[0] == ref:
+    if not element:
         return None
-    key, name = element
-    same = [r for r in refs if _stable(r) == key and _digest(names.get(r)) == name]
-    if same:
-        return same[0]
-    named = [r for r in refs if _stable(r) != r and _digest(names.get(r)) == name]
-    return named[0] if len(named) == 1 else None
+    key, name = element[0], element[1]
+    if key != ref:
+        same = [r for r in refs if _stable(r) == key and _digest(names.get(r)) == name]
+        if same:
+            return same[0]
+        named = [r for r in refs if _stable(r) != r and _digest(names.get(r)) == name]
+        if len(named) == 1:
+            return named[0]
+    if len(element) < 5:
+        return None
+    role, ordinal, size = element[2:5]
+    group = _role_group(refs, names, _renderer_roles(snap), role, name)
+    return group[ordinal] if len(group) == size else None
 
 
 def _screen_hash(path: Optional[Path]) -> Optional[int]:
@@ -580,7 +623,7 @@ def _record_observation(run: _run.Run, oid: int, goal_id: Optional[str], snap: S
         "screenshot_source": snap.source, "scale": snap.scale,
         "refs": refs, "names": _scrub(names, run.secrets),
         "value_digests": {k: _digest(v) for k, v in values.items()},
-        "elements": _element_keys(refs, names),
+        "elements": _element_keys(refs, names, _renderer_roles(snap)),
         "signals": {"url": signals.url, "title": signals.title, "tree": signals.tree,
                     "focus": signals.focus, "screen_hash": screen_hash},
     }
@@ -1325,10 +1368,17 @@ def _perform(run: _run.Run, drivers: Drivers, route: str, req: ActRequest, actio
     return drivers.native.act(Action(kind="hotkey", key=PASTE_HOTKEY), foreground)
 
 
-def _gate_subject(req: ActRequest, names: Dict[str, str]) -> str:
-    if req.ref:
-        return names.get(req.ref) or req.target_name or ""
-    return req.target_name or ""
+def _gate_subjects(req: ActRequest, names: Dict[str, str]) -> List[str]:
+    """The names that say what `req` acts on, each of which the gate is checked against.
+
+    A `--ref` target is named by its accessible name, falling back to `--target-name`. A
+    `press` or `hotkey` names its effect only through `--target-name`, so that is always a
+    subject even when a `--ref` is also given.
+    """
+    ref_name = names.get(req.ref) if req.ref else None
+    if req.kind in ("press", "hotkey"):
+        return [s for s in (ref_name, req.target_name) if s]
+    return [s for s in (ref_name or req.target_name,) if s]
 
 
 def cmd_act(args, ctx: Ctx):
@@ -1437,8 +1487,10 @@ def _act(args, ctx: Ctx) -> dict:
     if needs_name and not req.target_name:
         raise UsageError("target_name_required",
                          "coordinate, press, and hotkey actions name what they hit with --target-name")
-    subject = _gate_subject(req, names)
-    if subject and "skip_gate" not in ctx.faults and _run.gate_matches(subject, data["owner"]):
+    subjects = _gate_subjects(req, names)
+    gated = next((s for s in subjects if _run.gate_matches(s, data["owner"])), None)
+    subject = gated or (subjects[0] if subjects else "")
+    if gated and "skip_gate" not in ctx.faults:
         if req.gate == "none":
             run.record_gate(args.obs, subject, "stopped")
             _add_evidence(run, goal_id, record["screenshot_path"] if record else None)
@@ -1496,10 +1548,15 @@ def _act_perform(args, ctx: Ctx, run: _run.Run, drivers: Drivers, req: ActReques
                            secret_value if req.secret else req.text)
     stage = "act"
     try:
+        refused = False
         try:
             result = _perform(run, drivers, route, req, action, req.foreground)
+        except DriverError as exc:
+            refused = exc.code in REFUSED_BEFORE_DELIVERY
+            raise
         finally:
-            _refresh_drift(run)
+            if not refused:
+                _refresh_drift(run)
         _charge(run, goal_id)
         stage = "observe"
 

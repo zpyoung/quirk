@@ -268,7 +268,8 @@ Runs these checks in order; the first failure returns its status without perform
    finding is registered automatically. This check is observation-only and may evaluate script in
    the page.
 6. **Gate.** The gate subject is the target's accessible name for `--ref` targets, else
-   `--target-name`. `--target-name` is required for `--x/--y` targets in every run, and for `press`
+   `--target-name`. For `press` and `hotkey` the gate is checked against `--target-name` as well as
+   a given `--ref`'s name, and either matching gates the action. `--target-name` is required for `--x/--y` targets in every run, and for `press`
    and `hotkey` in third-party runs; missing → exit 2 `target_name_required`. If the subject matches
    the owner's gate pattern:
    - `--gate none` → `GATE_REQUIRED`, recorded in `gates[]` as `stopped`.
@@ -289,7 +290,9 @@ routed to the driver whose tree produced it.
 - **Paste rule:** the script pastes long text only when the baseline clipboard was text; otherwise it
   types. Any paste marks the clipboard for restore at `end`.
 - **Postconditions:** the new observation is recorded and returned. The cursor position and
-  frontmost app after the action become the new drift baseline.
+  frontmost app after the action become the new drift baseline, except after a refusal before
+  delivery (`FOREGROUND_REQUIRED`, or `STALE` from a gone window): the baseline stays where it was,
+  so the foreground retry still sees a takeover that happened in between.
 - **Driver errors:** a driver failure (orca `ok:false`, a playwright-cli `### Error` block whatever
   the exit code, a non-zero exit) returns `ERROR` with `driver_error` and never `OBSERVED`.
 - **Invariant:** a goal's most recent `act` status is stored, so `verdict` can enforce the pass rule.
@@ -346,7 +349,9 @@ on timeout return UNSETTLED with the last observation
   `log in`, `submit`, `continue`, or `next`. Any other act leaves the password fill pending, so an
   unrelated click never spends the attempt. The attempt counts only when the password field is
   still on screen after the submit; the field is tracked by its ref and element identity, so a
-  field with no accessible name counts the same as a named one.
+  field with no accessible name counts the same as a named one. A web form that rerenders with new
+  refs is recognized by the field's role, name, and position among the fields sharing them; if
+  that group changed size the field is treated as gone.
 
 ### `end`
 
