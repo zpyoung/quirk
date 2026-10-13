@@ -70,13 +70,47 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime(_TIME_FORMAT)
 
 
+def ensure_private_dir(path: Path, tighten: bool = True) -> None:
+    """Create `path` (and any missing parents) if absent and prove it is a real directory owned by the current user.
+
+    Raises `UsageError("unsafe_state_path")` when `path` is a symlink, is not a directory, or is
+    owned by someone else, so a checkout cannot aim the script's chmod or file writes at another
+    folder. The check and the mode change act on one open descriptor and never follow a link.
+    With `tighten`, the directory is set to 0700.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.mkdir(str(path), PRIVATE_DIR_MODE)
+    except FileExistsError:
+        pass
+    try:
+        fd = os.open(str(path), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise UsageError("unsafe_state_path",
+                         f"{path} is not a plain directory ({exc.strerror}); remove it and retry")
+    try:
+        if os.fstat(fd).st_uid != os.getuid():
+            raise UsageError("unsafe_state_path", f"{path} is owned by another user")
+        if tighten:
+            os.fchmod(fd, PRIVATE_DIR_MODE)
+    finally:
+        os.close(fd)
+
+
+def check_run_dir(directory: Path) -> None:
+    """Raise `UsageError("unsafe_state_path")` unless `directory` is a real folder owned by the current user."""
+    ensure_private_dir(directory, tighten=False)
+
+
 def state_root(cwd: Path) -> Path:
     """Return the private, self-ignoring folder that holds every run and saved session for a project.
 
     `LIKEUSER_STATE_ROOT` wins; otherwise the git toplevel of `cwd` (or `cwd` outside a repo)
     carries `.quirk/using-apps-like-a-user`. The folder is mode 0700 and its own `.gitignore` ends
     in `*`, whatever that file held before, so the project's own ignore file is never edited and
-    nothing in the folder can be committed by accident.
+    nothing in the folder can be committed by accident. A state folder, or a `.quirk` parent the
+    script creates, that is a symlink or belongs to another user raises `UsageError`
+    (`unsafe_state_path`) before anything is changed.
     """
     override = os.environ.get("LIKEUSER_STATE_ROOT")
     if override:
@@ -93,8 +127,8 @@ def state_root(cwd: Path) -> Path:
         except (OSError, subprocess.SubprocessError):
             pass
         root = base.joinpath(*STATE_DIR_PARTS)
-    root.mkdir(parents=True, exist_ok=True)
-    os.chmod(str(root), PRIVATE_DIR_MODE)
+        ensure_private_dir(root.parent, tighten=False)
+    ensure_private_dir(root)
     _ensure_catch_all_ignore(root / ".gitignore")
     return root
 
@@ -169,8 +203,7 @@ def remember_typed(root: Path, run_id: str, value: str) -> None:
     if value in values:
         return
     path = typed_path(root, run_id)
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(str(path.parent), 0o700)
+    ensure_private_dir(path.parent)
     _atomic_write(path, json.dumps(values + [value]))
 
 
@@ -248,14 +281,13 @@ class Run:
             else:
                 data[key] = value
         runs = Path(root) / "runs"
-        runs.mkdir(parents=True, exist_ok=True)
-        os.chmod(str(runs), PRIVATE_DIR_MODE)
+        ensure_private_dir(runs)
         while True:
             run_id = data["run_id"] or new_run_id()
             directory = runs / run_id
             try:
                 directory.mkdir(mode=PRIVATE_DIR_MODE)
-                os.chmod(str(directory), PRIVATE_DIR_MODE)
+                ensure_private_dir(directory)
                 break
             except FileExistsError:
                 if fields.get("run_id"):
@@ -275,6 +307,7 @@ class Run:
         state = directory / "run.json"
         if not run_id or "/" in run_id or run_id in (".", "..") or not state.is_file():
             raise RunStateError("unknown_run", run_id)
+        check_run_dir(directory)
         try:
             data = json.loads(state.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:

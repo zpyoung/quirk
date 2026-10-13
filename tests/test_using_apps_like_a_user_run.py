@@ -105,6 +105,90 @@ def test_state_root_never_writes_through_a_symlinked_gitignore(tmp_path, monkeyp
     assert (target / ".gitignore").read_text() == "*\n"
 
 
+@pytest.fixture
+def victim(tmp_path):
+    target = tmp_path / "victim"
+    target.mkdir()
+    target.chmod(0o755)
+    return target
+
+
+def assert_untouched(victim):
+    assert mode(victim) == 0o755
+    assert list(victim.iterdir()) == []
+
+
+def test_a_symlinked_dot_quirk_is_refused_and_its_target_left_alone(tmp_path, monkeypatch, victim):
+    monkeypatch.delenv("LIKEUSER_STATE_ROOT", raising=False)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".quirk").symlink_to(victim)
+    with pytest.raises(UsageError) as exc:
+        run.state_root(project)
+    assert exc.value.code == "unsafe_state_path"
+    assert_untouched(victim)
+
+
+def test_a_symlinked_state_folder_is_refused_and_its_target_left_alone(tmp_path, monkeypatch, victim):
+    monkeypatch.delenv("LIKEUSER_STATE_ROOT", raising=False)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+    project = tmp_path / "project"
+    (project / ".quirk").mkdir(parents=True)
+    (project / ".quirk" / "using-apps-like-a-user").symlink_to(victim)
+    with pytest.raises(UsageError) as exc:
+        run.state_root(project)
+    assert exc.value.code == "unsafe_state_path"
+    assert_untouched(victim)
+
+
+def test_a_symlinked_state_root_override_is_refused(tmp_path, monkeypatch, victim):
+    link = tmp_path / "state"
+    link.symlink_to(victim)
+    monkeypatch.setenv("LIKEUSER_STATE_ROOT", str(link))
+    with pytest.raises(UsageError) as exc:
+        run.state_root(tmp_path)
+    assert exc.value.code == "unsafe_state_path"
+    assert_untouched(victim)
+
+
+def test_a_state_folder_owned_by_someone_else_is_refused(tmp_path, monkeypatch):
+    target = tmp_path / "state"
+    target.mkdir()
+    monkeypatch.setenv("LIKEUSER_STATE_ROOT", str(target))
+    monkeypatch.setattr(run.os, "getuid", lambda: target.stat().st_uid + 1)
+    with pytest.raises(UsageError) as exc:
+        run.state_root(tmp_path)
+    assert exc.value.code == "unsafe_state_path"
+
+
+def test_a_symlinked_runs_folder_is_refused_and_its_target_left_alone(root, victim):
+    (root / "runs").symlink_to(victim)
+    with pytest.raises(UsageError) as exc:
+        make_run(root)
+    assert exc.value.code == "unsafe_state_path"
+    assert_untouched(victim)
+
+
+def test_a_symlinked_run_folder_is_refused_at_load(root, victim):
+    (root / "runs").mkdir()
+    (root / "runs" / "20260101T000000-abcd").symlink_to(victim)
+    (victim / "run.json").write_text("{}")
+    victim.chmod(0o755)
+    with pytest.raises(UsageError) as exc:
+        run.Run.load(root, "20260101T000000-abcd")
+    assert exc.value.code == "unsafe_state_path"
+    assert mode(victim) == 0o755
+
+
+def test_a_symlinked_typed_folder_is_refused_and_its_target_left_alone(root, victim):
+    (root / "typed").symlink_to(victim)
+    with pytest.raises(UsageError) as exc:
+        run.remember_typed(root, "r1", "typed-text")
+    assert exc.value.code == "unsafe_state_path"
+    assert_untouched(victim)
+
+
 def mode(path):
     return stat.S_IMODE(Path(path).stat().st_mode)
 

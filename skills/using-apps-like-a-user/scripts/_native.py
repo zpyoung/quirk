@@ -20,7 +20,7 @@ import sys
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 _SCRIPT_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPT_DIR not in sys.path:
@@ -236,6 +236,7 @@ class OrcaDriver(NativeDriver):
     def __init__(self, session: Optional[str] = None) -> None:
         super().__init__(session)
         self._bin = os.environ.get("LIKEUSER_ORCA_BIN") or shutil.which("orca")
+        self._captures: Set[Path] = set()
 
     def _exec(self, args: List[str], stdin: Optional[str] = None) -> Tuple[str, int]:
         if not self._bin:
@@ -302,9 +303,29 @@ class OrcaDriver(NativeDriver):
         observation = _observation_from(result, raw, bundle_id)
         if observation is None:
             raise DriverError("invalid_output", "get-app-state returned no snapshot")
+        if observation.screenshot_path is not None:
+            self._captures.add(observation.screenshot_path)
         if self._window_id is None:
             self._window_id = observation.window_id
         return observation
+
+    def close(self) -> None:
+        """Delete the screenshots orca left in its own temporary folder that no one collected.
+
+        Orca keeps each capture until it expires, so a UI image would outlive the run outside the
+        run folder. Raises `DriverError("cleanup_failed")` after trying every capture.
+        """
+        failure: Optional[OSError] = None
+        for path in sorted(self._captures):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                failure = failure or error
+        self._captures = {p for p in self._captures if p.exists()}
+        if failure is not None:
+            raise DriverError("cleanup_failed", str(failure))
 
     def act(self, action: Action, foreground: bool) -> DriverResult:
         """Deliver `action` to the bound window; refused unless `foreground` is True.

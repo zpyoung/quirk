@@ -382,6 +382,17 @@ class TestBegin:
         result = sb.begin("web", None, "yours", True, "--launch", "echo")
         assert result.code == 2
 
+    def test_a_symlinked_state_root_exits_2_before_changing_its_target(self, sb):
+        victim = sb.tmp / "victim"
+        victim.mkdir()
+        victim.chmod(0o755)
+        sb.state_root.symlink_to(victim)
+        sb.web_scenario()
+        result = sb.begin("web")
+        assert result.code == 2 and result["error"] == "unsafe_state_path"
+        assert list(victim.iterdir()) == []
+        assert stat.S_IMODE(victim.stat().st_mode) == 0o755
+
     def test_failure_to_open_the_session_exits_4_and_ends_the_run(self, sb):
         sb.web_scenario(errors=[{"on": ["open"], "stdout": "### Error\nbrowser failed\n"}])
         result = sb.begin("web")
@@ -402,6 +413,65 @@ class TestBegin:
         assert not (run_dir / "clipboard.txt").exists()
         state = json.loads((run_dir / "run.json").read_text())
         assert state["ended"] and state["holds_lock"] is False
+
+    def _begin_failing_to_close(self, sb):
+        saved = sb.state_root / "sessions" / "demo.json"
+        saved.parent.mkdir(parents=True)
+        saved.write_text("{}")
+        goto = {"on": ["goto"], "stdout": "### Error\nnavigation failed\n"}
+        sb.web_scenario(errors=[goto, {"on": ["close"], "stdout": "### Error\nclose failed\n"}])
+        result = sb.begin("web", "http://127.0.0.1:64361/", "yours", True, "--session-key", "demo")
+        return goto, result
+
+    def test_a_failed_begin_whose_cleanup_fails_reports_the_errors_and_stays_open_to_end(self, sb):
+        _, result = self._begin_failing_to_close(sb)
+        assert result.code == 4 and result["driver_error"] == "playwright_error"
+        assert result["cleanup_errors"] and result["cleanup_errors"][0].startswith("close session")
+        [run_dir] = list(sb.state_root.glob("runs/*"))
+        assert result["run_id"] == run_dir.name
+        state = json.loads((run_dir / "run.json").read_text())
+        assert state["ended"] is None and state["stopped_reason"] == "begin_failed"
+        assert state["begin_cleanup_errors"] == result["cleanup_errors"]
+
+    def test_end_retries_the_cleanup_of_a_failed_begin_and_restores_the_frontmost_app(self, sb):
+        goto, result = self._begin_failing_to_close(sb)
+        run_id = result["run_id"]
+        sb.web_scenario(errors=[goto])
+        sb.set_desktop(frontmost=FIXTURE_BUNDLE)
+        closes = len(sb.pw_argvs("close"))
+        ended = sb.run("end", "--run", run_id)
+        assert ended.code == 0 and ended["ok"] is True, ended.stdout
+        assert len(sb.pw_argvs("close")) == closes + 1
+        assert sb.desktop()["frontmost"] == USER_APP
+        assert ended["summary"]["state_left"]["frontmost_restored"] is True
+        assert (sb.run_dir(run_id) / "report.json").is_file()
+        assert sb.run_json(run_id)["ended"]
+        assert sb.pw_argvs("snapshot") == [] and sb.pw_argvs("screenshot") == []
+        assert sb.run("end", "--run", run_id).code == 0
+
+    def test_a_failed_begin_without_cleanup_errors_is_already_ended(self, sb):
+        sb.web_scenario(errors=[{"on": ["open"], "stdout": "### Error\nbrowser failed\n"}])
+        result = sb.begin("web")
+        assert "cleanup_errors" not in result.out
+        [run_json] = list(sb.state_root.glob("runs/*/run.json"))
+        assert json.loads(run_json.read_text())["ended"]
+
+    def test_a_failed_begin_puts_the_frontmost_app_back(self, sb, monkeypatch, capsys):
+        sb.native_scenario()
+        for key, value in sb.env().items():
+            monkeypatch.setenv(key, value)
+        module = load_cli_module()
+
+        def steal_focus_then_fail(*args):
+            sb.set_desktop(frontmost=FIXTURE_BUNDLE)
+            raise module.DriverError("window_not_found", "no window")
+
+        monkeypatch.setattr(module, "_begin_native", steal_focus_then_fail)
+        code = module.main(["begin", "--target", FIXTURE_BUNDLE, "--surface", "native",
+                            "--owner", "yours", "--attended", "--allow-foreground"])
+        capsys.readouterr()
+        assert code == 4
+        assert sb.desktop()["frontmost"] == USER_APP
 
     def test_a_native_begin_that_fails_removes_the_clipboard_copy(self, sb, monkeypatch, capsys):
         sb.native_scenario()
@@ -879,6 +949,27 @@ class TestGates:
         named = act(sb, run_id, obs["observation_id"], "--action", "press", "--key", "Enter",
                     "--target-name", "Increment counter")
         assert named.status == "OBSERVED"
+
+    @pytest.mark.parametrize("kind,key", [("press", "Enter"), ("hotkey", "cmd+s")])
+    def test_a_press_with_a_ref_is_gated_by_its_target_name_too(self, sb, kind, key):
+        run_id, obs = web_run(sb, owner="third-party")
+        result = act(sb, run_id, obs["observation_id"], "--action", kind, "--key", key,
+                     "--ref", "e4", "--target-name", "Delete account")
+        assert result.status == "GATE_REQUIRED" and result["subject"] == "Delete account", result.out
+        assert sb.pw_argvs("press") == []
+
+    def test_a_press_with_a_gated_ref_name_is_still_gated(self, sb):
+        run_id, obs = web_run(sb, owner="third-party")
+        result = act(sb, run_id, obs["observation_id"], "--action", "press", "--key", "Enter",
+                     "--ref", "e17", "--target-name", "Language dropdown")
+        assert result.status == "GATE_REQUIRED" and result["subject"] == "Delete project", result.out
+
+    def test_a_press_with_a_harmless_ref_and_target_name_goes_through(self, sb):
+        run_id, obs = web_run(sb, owner="third-party",
+                              rules=[{"on": ["press", "Enter"], "page": "counted"}])
+        result = act(sb, run_id, obs["observation_id"], "--action", "press", "--key", "Enter",
+                     "--ref", "e7", "--target-name", "Increment counter")
+        assert result.status == "OBSERVED", result.out
 
     def test_press_needs_no_name_in_the_users_own_runs(self, sb):
         run_id, obs = web_run(sb, rules=[{"on": ["press", "Enter"], "page": "counted"}])
@@ -1391,6 +1482,24 @@ class TestNativeDriverIdentity:
         assert state["budget"]["run_used"] == 0
         assert state["goals"]["g1"]["actions_used"] == 0
 
+    def test_a_refused_act_keeps_the_drift_baseline_so_the_foreground_retry_sees_a_takeover(
+            self, sb, cua_run):
+        _, out = cua_run("begin", "--target", FIXTURE_BUNDLE, "--surface", "native", "--owner", "yours",
+                         "--attended", "--goals-file", write_goals(sb, "g1"))
+        run_id = out["run_id"]
+        _, seen = cua_run("observe", "--run", run_id, "--goal", "g1")
+        obs_id = str(seen["observation"]["observation_id"])
+        before = sb.run_json(run_id)["drift_baseline"]
+        sb.set_desktop(frontmost="com.example.intruder", cursor=[500.0, 600.0])
+        code, refused = cua_run("act", "--run", run_id, "--obs", obs_id, "--action", "click",
+                                "--ref", "2")
+        assert code == 0 and refused["status"] == "FOREGROUND_REQUIRED", refused
+        assert sb.run_json(run_id)["drift_baseline"] == before
+        code, retry = cua_run("act", "--run", run_id, "--obs", obs_id, "--action", "click",
+                              "--ref", "2", "--foreground")
+        assert retry["status"] == "DRIFT" and retry["stopped_reason"] == "drift", retry
+        assert sb.orca_commands("click") == []
+
     def test_a_delivered_act_costs_one_action(self, sb, cua_run):
         _, out = cua_run("begin", "--target", FIXTURE_BUNDLE, "--surface", "native", "--owner", "yours",
                          "--attended", "--goals-file", write_goals(sb, "g1"))
@@ -1484,6 +1593,24 @@ class _FakeRun:
 class _NullDriver:
     def bind(self, *args):
         pass
+
+
+class TestOrcaCaptures:
+    def test_the_original_orca_screenshot_is_deleted_once_copied_into_the_run_folder(self, sb):
+        run_id, obs = native_run(sb)
+        assert Path(obs["screenshot_path"]).is_file()
+        assert list((sb.tmp / "orca-shots").glob("*")) == []
+
+    def test_the_original_is_deleted_when_the_copy_fails(self, tmp_path):
+        module = load_cli_module()
+        source = tmp_path / "orca-capture.png"
+        source.write_bytes(b"png")
+        assert module._copy_shot(source, tmp_path / "missing-folder" / "obs-1.png") is None
+        assert not source.exists()
+
+    def test_a_missing_original_is_not_an_error(self, tmp_path):
+        module = load_cli_module()
+        assert module._copy_shot(tmp_path / "gone.png", tmp_path / "obs-1.png") is None
 
 
 class TestNativeLaunch:
@@ -1718,6 +1845,52 @@ class TestLoginLimit:
         welcome = golden_yaml().replace(
             '      - text: Password\n      - textbox "Password" [ref=e21]\n', "")
         run_id, obs = web_run(sb, pages={"home": web_page(unnamed), "welcome": web_page(welcome)},
+                              rules=[click_rule("e22", page="welcome")])
+        step = self.fill_secret(sb, run_id, obs["observation_id"], "e21", "password")
+        click(sb, run_id, step["observation"]["observation_id"], "e22")
+        assert sb.run_json(run_id)["login_attempts"] == 0
+
+    def renewed_form(self, password_line):
+        """The login page as a failed submit rerenders it: same fields, fresh refs."""
+        renewed = golden_yaml()
+        for old, new in (("e20", "e30"), ("e21", "e31"), ("e22", "e32")):
+            renewed = renewed.replace(f"[ref={old}]", f"[ref={new}]")
+        return renewed.replace('textbox "Password" [ref=e31]', password_line)
+
+    def test_a_failed_login_counts_when_the_form_rerenders_with_new_refs(self, sb):
+        again = self.renewed_form('textbox "Password" [ref=e31]')
+        run_id, obs = web_run(sb, pages={"home": web_page(), "again": web_page(again)},
+                              rules=[click_rule("e22", page="again")])
+        step = self.fill_secret(sb, run_id, obs["observation_id"], "e21", "password")
+        click(sb, run_id, step["observation"]["observation_id"], "e22")
+        assert sb.run_json(run_id)["login_attempts"] == 1
+
+    def test_a_nameless_password_field_counts_after_the_form_rerenders_with_new_refs(self, sb):
+        unnamed = golden_yaml().replace('textbox "Password" [ref=e21]', 'textbox [ref=e21]')
+        again = self.renewed_form("textbox [ref=e31]")
+        run_id, obs = web_run(sb, pages={"home": web_page(unnamed), "again": web_page(again)},
+                              rules=[click_rule("e22", page="again")])
+        step = self.fill_secret(sb, run_id, obs["observation_id"], "e21", "password")
+        click(sb, run_id, step["observation"]["observation_id"], "e22")
+        assert sb.run_json(run_id)["login_attempts"] == 1
+
+    def test_a_renewed_form_with_two_nameless_fields_still_counts_the_password_one(self, sb):
+        unnamed = (golden_yaml().replace('textbox "Password" [ref=e21]', 'textbox [ref=e21]')
+                   .replace('textbox "Username" [ref=e20]', 'textbox [ref=e20]'))
+        again = (self.renewed_form("textbox [ref=e31]")
+                 .replace('textbox "Username" [ref=e30]', 'textbox [ref=e30]'))
+        run_id, obs = web_run(sb, pages={"home": web_page(unnamed), "again": web_page(again)},
+                              rules=[click_rule("e22", page="again")])
+        step = self.fill_secret(sb, run_id, obs["observation_id"], "e21", "password")
+        click(sb, run_id, step["observation"]["observation_id"], "e22")
+        assert sb.run_json(run_id)["login_attempts"] == 1
+
+    def test_a_password_field_that_vanishes_after_a_ref_renewal_costs_no_attempt(self, sb):
+        welcome = golden_yaml().replace(
+            '      - text: Password\n      - textbox "Password" [ref=e21]\n', "")
+        for old, new in (("e20", "e30"), ("e22", "e32")):
+            welcome = welcome.replace(f"[ref={old}]", f"[ref={new}]")
+        run_id, obs = web_run(sb, pages={"home": web_page(), "welcome": web_page(welcome)},
                               rules=[click_rule("e22", page="welcome")])
         step = self.fill_secret(sb, run_id, obs["observation_id"], "e21", "password")
         click(sb, run_id, step["observation"]["observation_id"], "e22")
@@ -2213,6 +2386,19 @@ class TestEnd:
         finally:
             os.umask(previous)
         assert Path(str(sb.pw_scenario) + ".state_save_modes").read_text().split() == ["0o600"]
+
+    def test_a_symlinked_sessions_folder_is_not_written_through(self, sb):
+        victim = sb.tmp / "victim"
+        victim.mkdir()
+        victim.chmod(0o755)
+        run_id, _ = web_run(sb, begin_args=("--session-key", "demo"))
+        (sb.state_root / "sessions").symlink_to(victim)
+        ended = sb.run("end", "--run", run_id)
+        assert ended.code == 4 and ended["error"] == "cleanup_failed"
+        assert list(victim.iterdir()) == []
+        assert stat.S_IMODE(victim.stat().st_mode) == 0o755
+        assert any(e.startswith("save session") for e in
+                   ended["summary"]["state_left"]["cleanup_errors"])
 
     def test_a_failed_session_save_leaves_no_session_file(self, sb):
         run_id, _ = web_run(sb, begin_args=("--session-key", "demo"), state_save="write_then_fail")

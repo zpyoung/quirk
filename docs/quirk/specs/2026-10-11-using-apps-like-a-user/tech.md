@@ -147,7 +147,7 @@ The value never reaches the model, stdout, or any run file.
 |---|---|
 | 0 | Command ran. For `act`, the outcome is in `status`, including `NO_EFFECT`, `DRIFT`, and `DESKTOP_BUSY`. |
 | 1 | Unexpected internal error (traceback on stderr). |
-| 2 | Usage or contract violation: argparse errors, `pass_without_effect`, `unattended_approval`, `unattended_handoff`, `target_name_required`, `foreground_not_allowed`, `launch_required`, `launch_requires_electron`, `created_third_party`, `coordinates_need_screenshot`, `unknown_fault`. |
+| 2 | Usage or contract violation: argparse errors, `pass_without_effect`, `unattended_approval`, `unattended_handoff`, `target_name_required`, `foreground_not_allowed`, `launch_required`, `launch_requires_electron`, `created_third_party`, `coordinates_need_screenshot`, `unknown_fault`, `unsafe_state_path`. |
 | 3 | Run-state error: unknown run, run already ended, run stopped (`stopped_reason` in JSON), `desktop_busy` at `begin`. |
 | 4 | Driver failure outside `act` (`begin`, `observe`, `handoff`, `resume`, `end`), with `driver_error` in JSON. |
 | 5 | Missing tool, wrong tool version, missing macOS permission, missing extension, or bad credentials file. |
@@ -173,6 +173,11 @@ what is missing. Never opens System Settings and never installs anything.
     0600, whatever the umask. Each verb runs under umask 077 and, before it returns, sets the modes
     again on everything in the run folder, so files an external driver wrote there
     (`playwright-cli` snapshots and logs) end up private too.
+  - The script never follows a link in the state path it creates or changes: `.quirk/`, the
+    state root, `runs/`, each run folder, `typed/`, and `sessions/` must be
+    real directories owned by the current user. A symlink, a non-directory, or another owner exits
+    2 `unsafe_state_path` before anything is changed (`end` records it as a cleanup error when it
+    comes up while saving a session). The mode change and the check use one open descriptor.
   - A baseline is recorded: frontmost bundle id, cursor position, clipboard change count, and
     whether the clipboard holds text only. When it holds text, the text is saved to
     `clipboard.txt` (mode 0600) in the run folder.
@@ -207,8 +212,13 @@ what is missing. Never opens System Settings and never installs anything.
 - **Errors:** missing tool, permission, extension, or bad credentials file → exit 5 with
   `missing[]`. Launch or attach failure → exit 4. Lock not obtained within 30 seconds → exit 3 with
   `desktop_busy` and the holder's `run_id` and `project`. A `begin` that fails after the baseline
-  was taken ends the run and cleans up first: it closes or detaches the browser session, quits
-  what it launched, releases the driver state and the lock, and deletes `clipboard.txt`.
+  was taken cleans up first: it closes or detaches the browser session, quits what it launched,
+  releases the driver state, deletes `clipboard.txt`, and re-activates the baseline frontmost app.
+  When every step works, it releases the lock and ends the run. When a step fails, the error JSON
+  carries `run_id` and `cleanup_errors[]` (also stored as `begin_cleanup_errors` in `run.json`),
+  the lock stays held, and the run stays stopped as `begin_failed` but not ended. `end` on such a
+  run is cleanup-only: it takes no observation, retries only the steps that did not finish,
+  re-activates the baseline app, releases the lock, and writes the report.
 
 ### Desktop lock
 
@@ -268,7 +278,8 @@ Runs these checks in order; the first failure returns its status without perform
    finding is registered automatically. This check is observation-only and may evaluate script in
    the page.
 6. **Gate.** The gate subject is the target's accessible name for `--ref` targets, else
-   `--target-name`. `--target-name` is required for `--x/--y` targets in every run, and for `press`
+   `--target-name`. For `press` and `hotkey` the gate is checked against `--target-name` as well as
+   a given `--ref`'s name, and either matching gates the action. `--target-name` is required for `--x/--y` targets in every run, and for `press`
    and `hotkey` in third-party runs; missing → exit 2 `target_name_required`. If the subject matches
    the owner's gate pattern:
    - `--gate none` → `GATE_REQUIRED`, recorded in `gates[]` as `stopped`.
@@ -289,7 +300,9 @@ routed to the driver whose tree produced it.
 - **Paste rule:** the script pastes long text only when the baseline clipboard was text; otherwise it
   types. Any paste marks the clipboard for restore at `end`.
 - **Postconditions:** the new observation is recorded and returned. The cursor position and
-  frontmost app after the action become the new drift baseline.
+  frontmost app after the action become the new drift baseline, except after a refusal before
+  delivery (`FOREGROUND_REQUIRED`, or `STALE` from a gone window): the baseline stays where it was,
+  so the foreground retry still sees a takeover that happened in between.
 - **Driver errors:** a driver failure (orca `ok:false`, a playwright-cli `### Error` block whatever
   the exit code, a non-zero exit) returns `ERROR` with `driver_error` and never `OBSERVED`.
 - **Invariant:** a goal's most recent `act` status is stored, so `verdict` can enforce the pass rule.
@@ -346,7 +359,9 @@ on timeout return UNSETTLED with the last observation
   `log in`, `submit`, `continue`, or `next`. Any other act leaves the password fill pending, so an
   unrelated click never spends the attempt. The attempt counts only when the password field is
   still on screen after the submit; the field is tracked by its ref and element identity, so a
-  field with no accessible name counts the same as a named one.
+  field with no accessible name counts the same as a named one. A web form that rerenders with new
+  refs is recognized by the field's role, name, and position among the fields sharing them; if
+  that group changed size the field is treated as gone.
 
 ### `end`
 
@@ -370,6 +385,8 @@ on timeout return UNSETTLED with the last observation
 - Closes driver sessions, detaches attached browsers, and quits apps the run launched, unless a goal
   is `fail` or `blocked` or `--keep-open` is passed; kept windows are listed in `state_left`.
 - Releases the lock, writes `report.json` and `report.md`, and returns the report summary.
+- A run stopped as `begin_failed` is not ended; its `end` skips the final screenshot and session
+  save and only retries the unfinished cleanup (see `begin` Errors).
 - **Idempotent:** a second `end` returns the same summary. Driver failures during cleanup are
   recorded in `state_left` and exit 4 after the report is written.
 
@@ -424,6 +441,11 @@ found. Its screenshots and session files live in a per-user directory under the 
 created 0700; a symlink, a non-directory, another owner, or group or other access is refused with
 `cache_unavailable`. Apps the run launched are quit through `osascript -l JavaScript` with the
 bundle id or name passed as an argument, never spliced into the script.
+
+`OrcaDriver` returns the path of the screenshot orca wrote to its own temporary folder, where orca
+keeps it until it expires. The CLI deletes that original once it has copied it into the run folder,
+also when the copy fails, and `OrcaDriver.close()` deletes any capture it still tracks, so no UI
+image outlives the run outside the 0700 run folder.
 
 `OrcaDriver.background_capable` is `False`. The bake-off winner's value comes from measurement:
 Cua Driver 0.34.1 won with zero focus steals and all input landed ([bakeoff.md](bakeoff.md)); under
@@ -496,7 +518,7 @@ def settle(read: Callable[[], Signals], poll_s: float = SETTLE_POLL_S, cap_s: fl
 
 CONTRACT: `_run.py`
 ```
-def state_root(cwd: Path) -> Path      # LIKEUSER_STATE_ROOT, else <git toplevel or cwd>/.quirk/using-apps-like-a-user; 0700; .gitignore ends in "*"
+def state_root(cwd: Path) -> Path      # LIKEUSER_STATE_ROOT, else <git toplevel or cwd>/.quirk/using-apps-like-a-user; 0700; .gitignore ends in "*"; UsageError("unsafe_state_path") on a symlink or foreign owner
 def new_run_id() -> str
 class Run:
     dir: Path; data: dict                                  # data follows the run.json SCHEMA
