@@ -57,7 +57,7 @@ The server detaches itself and `start` returns at once, so you do NOT need `run_
 
 **Later:** the same JSON is in `<session>/state/server-info`; if the server has shut down, `<session>/state/server-stopped` exists instead. Screens persist in `.quirk/brainstorm/`, which is self-ignored by git.
 
-**Remote or containerized setups:** the server binds `127.0.0.1` by default. If that URL is unreachable from the user's browser, add `--host 0.0.0.0` and `--allow-host <the name and port the browser uses>`, because the server answers 403 to any other `Host` header. For a port mapping such as 8080 to 3000, use `--allow-host localhost:8080`. **This exposes the session on the network: anyone who can reach the port can read the screens and send events.** Use it only on a trusted network and only when the user agrees.
+**Remote or containerized setups:** the server binds `127.0.0.1` by default. If that URL is unreachable from the user's browser, add `--host 0.0.0.0` and `--allow-host <the name and port the browser uses>`, because the server answers 403 to any other `Host` header. For a port mapping such as 8080 to 3000, use `--allow-host localhost:8080`. A browser omits a default port from the `Host` header, so for a port 80 or 443 mapping use a bare host name with no port. A running server keeps the settings it started with: `start` with different host flags exits 2, so run `stop` first, then `start --host 0.0.0.0 --allow-host ...`. **This exposes the session on the network: anyone who can reach the port can read the screens and send events.** Use it only on a trusted network and only when the user agrees.
 
 The server exits after 30 minutes without a request or a `show` (tune with `--idle-minutes N`).
 

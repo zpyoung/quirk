@@ -106,7 +106,8 @@ Flags:
 
 - The server binds `127.0.0.1` by default. Only the local machine can reach it.
 - **`--host 0.0.0.0` exposes the session to the network.** Use it only for a remote container the user asked for, and tell the user the URL is open to anyone who can reach that address.
-- **Remote or container use needs `--allow-host`.** The server answers 403 to any `Host` header that is not the bound address, loopback or an own interface address on the bound port, or an `--allow-host` entry. Pass `--host 0.0.0.0 --allow-host <the name and port the browser uses>`; for a port mapping such as 8080 to 3000, use `--allow-host localhost:8080`. The expected `Origin` is derived from the accepted `Host`.
+- **Remote or container use needs `--allow-host`.** The server answers 403 to any `Host` header that is not the bound address, loopback or an own interface address on the bound port, or an `--allow-host` entry. Pass `--host 0.0.0.0 --allow-host <the name and port the browser uses>`; for a port mapping such as 8080 to 3000, use `--allow-host localhost:8080`. A browser omits a default port from the `Host` header, so for a port 80 or 443 mapping use a bare `HOST`, because `HOST:80` never matches. The expected `Origin` is derived from the accepted `Host`.
+- **`start` reuses a live server only when the host flags agree.** Plain `start` with no `--host` or `--allow-host` reuses it. A `--host` or `--allow-host` set that differs from the live server's recorded `host` and `allowed_hosts` exits 2 with a JSON error. To switch to remote access, run `stop`, then `start --host 0.0.0.0 --allow-host ...`.
 - A request that stalls mid-body is dropped after 10 s.
 - Events need the current screen's nonce, and the server rejects a foreign `Origin` or `Host` with 403, malformed JSON or a body over 64 KB with 400.
 - The server serves only the current screen, its state, and the vendored library files named in `libraries.json`. Nothing else on disk is reachable.

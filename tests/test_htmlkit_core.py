@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -1413,3 +1414,16 @@ def test_chrome_js_is_valid_script(tmp_path: Path) -> None:
     proc = subprocess.run(["node", "--check", str(CHROME_JS)], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
     assert os.path.getsize(CHROME_JS) < 20_000
+
+
+@pytest.mark.parametrize("css", ["src(" * 16_000, 'src("' * 12_000, "image-set(src(" * 5_000])
+def test_css_string_scan_is_linear_on_unclosed_calls(css: str) -> None:
+    assert len(css) >= 60_000
+    started = time.monotonic()
+    list(checks._css_string_targets(css))
+    assert time.monotonic() - started < 1
+
+
+def test_css_string_scan_still_finds_strings_after_a_nested_call() -> None:
+    css = 'a{background:image-set(src("a.png") 1x, "https://x.example/b.png" 2x)}'
+    assert [t for _, t in checks._css_string_targets(css)] == ["a.png", "https://x.example/b.png"]

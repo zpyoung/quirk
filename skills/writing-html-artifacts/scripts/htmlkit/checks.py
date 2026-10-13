@@ -245,16 +245,21 @@ def _css_string_targets(css: str) -> Iterable[tuple[str, str]]:
 
     Those functions accept a bare string as an image target, which ``url()`` matching misses.
     A string that is the argument of a nested ``url(`` is left to the ``url()`` scan.
+    A call nested in one already scanned is skipped, so the scan stays linear on unclosed calls.
     """
+    n = len(css)
+    scanned_to = 0
     for call in _CSS_STRING_CALL.finditer(css):
-        depth, i, n = 1, call.end(), len(css)
+        if call.start() < scanned_to:
+            continue
+        depth, i = 1, call.end()
         while i < n and depth:
             ch = css[i]
             if ch in "\"'":
                 end = i + 1
                 while end < n and css[end] != ch:
                     end += 2 if css[end] == "\\" else 1
-                if not css[:i].rstrip().lower().endswith("url("):
+                if not css[max(0, i - 8) : i].rstrip().lower().endswith("url("):
                     yield call.group(1).lower(), css[i + 1 : end]
                 i = end
             elif ch == "(":
@@ -262,6 +267,7 @@ def _css_string_targets(css: str) -> Iterable[tuple[str, str]]:
             elif ch == ")":
                 depth -= 1
             i += 1
+        scanned_to = i
 
 
 def _license_failures(html: str, labels: Iterable[str]) -> list[dict]:

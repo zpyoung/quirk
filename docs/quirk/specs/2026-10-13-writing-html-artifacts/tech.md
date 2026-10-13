@@ -383,7 +383,7 @@ CONTRACT:
 ```
 companion.py start SESSION_DIR [--host 127.0.0.1] [--port 0] [--idle-minutes 30] [--foreground]
                           [--allow-host HOST[:PORT]]...
-    → {"type": "server-started", "pid", "port", "host", "url", "screen_dir", "state_dir"}
+    → {"type": "server-started", "pid", "port", "host", "allowed_hosts", "url", "screen_dir", "state_dir"}
 companion.py show SESSION_DIR SCREEN.json [--project-dir DIR]
     → {"screen", "nonce", "url", "checks": CheckResult}
 companion.py wait SESSION_DIR [--timeout 110]
@@ -620,3 +620,6 @@ Back-link: [Deferred Ideas](logic.md#deferred-ideas).
   and liveness also requires the recorded port to answer as a companion (§3.8, §4.4);
   `start --allow-host HOST[:PORT]` is repeatable, for remote or forwarded access (§4.4); a verifier
   crash or timeout is status `failed` (§4.5).
+- 2026-10-13, from the final review: `start` output and `server-info` now carry `allowed_hosts` (§4.4),
+  and `start` refuses to reuse a live server whose recorded host settings differ from the flags given
+  (exit 2, JSON error; run `stop` first).
