@@ -918,6 +918,105 @@ def test_offline_allowed_content_passes(skill: Path, store: vendor.VendorStore, 
     assert result["passed"], result
 
 
+EVIL_IMG = '<img src="https://evil.example/p.png">'
+
+COMMENT_BYPASSES = [
+    f"<!-->{EVIL_IMG}<!-- -->",
+    f"<!--->{EVIL_IMG}<!-- -->",
+    f"<!-- x --!>{EVIL_IMG}",
+    f'<script>var a="<!--";</script>{EVIL_IMG}<script>var b="-->";</script>',
+    f'<style>a::after{{content:"<!--"}}</style>{EVIL_IMG}<style>a::before{{content:"-->"}}</style>',
+    f"<title><!--</title>{EVIL_IMG}<p>-->",
+    f"<![CDATA[ x > {EVIL_IMG} ]]>",
+    f"<script>1</script foo>{EVIL_IMG}",
+    f'<script/>var a="<!--";</script>{EVIL_IMG}<script>"-->"</script>',
+    f"<noscript><!--</noscript>{EVIL_IMG}<p>-->",
+    f"<noscript>{EVIL_IMG}</noscript>",
+]
+
+
+@pytest.mark.parametrize("snippet", COMMENT_BYPASSES)
+def test_comment_like_text_cannot_hide_markup(skill: Path, store: vendor.VendorStore, snippet: str) -> None:
+    result = run(skill, store, make_page(skill, store, body=snippet))
+    assert failed(result) == ["external-refs"], result
+    assert "https://evil.example/p.png" in result["failures"][0]["detail"]
+
+
+def test_real_comment_still_hides_markup(skill: Path, store: vendor.VendorStore) -> None:
+    assert run(skill, store, make_page(skill, store, body=f"<!-- {EVIL_IMG} -->"))["passed"]
+
+
+def test_double_escaped_script_keeps_scanning_past_end_tag(skill: Path, store: vendor.VendorStore) -> None:
+    body = '<script><!--<script>1</script>fetch("/x")</script>'
+    assert failed(run(skill, store, make_page(skill, store, body=body))) == ["external-refs"]
+
+
+def test_unterminated_script_body_is_scanned(skill: Path, store: vendor.VendorStore) -> None:
+    html = make_page(skill, store, body='<script>fetch("/x")')
+    assert failed(run(skill, store, html.replace("</body></html>", ""))) == ["external-refs"]
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        "<p>Call fetch(url) to load data.</p>",
+        "<p>Use <code>fetch(url)</code>, <code>new WebSocket(u)</code> and XMLHttpRequest.</p>",
+        "<pre>new EventSource('/events')</pre>",
+    ],
+)
+def test_call_patterns_in_prose_do_not_fail(skill: Path, store: vendor.VendorStore, snippet: str) -> None:
+    result = run(skill, store, make_page(skill, store, body=snippet))
+    assert result["passed"], result
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        '<button onclick="fetch(\'/api\')">go</button>',
+        '<body onload="new XMLHttpRequest()"></body>',
+        '<div onmouseover=\'new WebSocket("wss://x")\'></div>',
+    ],
+)
+def test_call_patterns_in_event_handlers_fail(skill: Path, store: vendor.VendorStore, snippet: str) -> None:
+    assert failed(run(skill, store, make_page(skill, store, body=snippet))) == ["external-refs"]
+
+
+def test_connected_allows_calls_in_handlers(skill: Path, store: vendor.VendorStore) -> None:
+    html = make_page(skill, store, mode="connected", body='<button onclick="fetch(\'/api\')">go</button>')
+    assert run(skill, store, html, mode="connected")["passed"]
+
+
+def test_library_block_with_src_fails_external_refs(skill: Path, store: vendor.VendorStore) -> None:
+    html = make_page(skill, store).replace(
+        '<script data-quirk-lib="fakejs@1.0.0">',
+        '<script data-quirk-lib="fakejs@1.0.0" src="https://evil.example/x.js">',
+        1,
+    )
+    result = run(skill, store, html)
+    assert "external-refs" in failed(result)
+    assert any("https://evil.example/x.js" in f["detail"] for f in result["failures"])
+
+
+def test_library_style_block_with_href_or_extra_attribute_is_not_verified(skill: Path, store: vendor.VendorStore) -> None:
+    html = make_page(skill, store).replace(
+        '<style data-quirk-lib="fakecss@1.0.0">',
+        '<style data-quirk-lib="fakecss@1.0.0" onload="fetch(1)" id="x">',
+        1,
+    )
+    assert not run(skill, store, html)["passed"]
+
+
+def test_shell_block_with_src_fails_external_refs(skill: Path, store: vendor.VendorStore) -> None:
+    html = make_page(skill, store).replace(
+        '<script data-quirk-shell="chrome">',
+        '<script data-quirk-shell="chrome" src="https://evil.example/s.js">',
+        1,
+    )
+    result = run(skill, store, html)
+    assert "external-refs" in failed(result)
+    assert any("https://evil.example/s.js" in f["detail"] for f in result["failures"])
+
+
 CONNECTED_FAILS = [
     '<script src="https://x.example/y.js"></script>',
     '<script src="//x.example/y.js"></script>',
