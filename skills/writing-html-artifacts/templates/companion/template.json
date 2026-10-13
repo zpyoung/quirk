@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "name": "companion",
+  "description": "Use when a live companion screen should ask the user one question with two to four clickable option cards and send their selection back to the agent.",
+  "tier": 1,
+  "libraries": ["simple-css"],
+  "slots": {
+    "question": { "required": true, "description": "The question as an h2 with id q-question. The companion fills it from screen.json." },
+    "options": { "required": true, "description": "The option cards inside the element that carries data-quirk-nonce. The companion fills it from screen.json." },
+    "content": { "required": false, "description": "Optional freeform HTML shown above the options: a mockup, a comparison, notes or a diagram." }
+  },
+  "skeleton": "skeleton.html",
+  "rules": "rules.md",
+  "example": "example.screen.json"
+}
