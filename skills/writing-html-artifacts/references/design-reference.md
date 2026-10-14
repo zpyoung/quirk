@@ -85,7 +85,7 @@ Rules for using them:
 - Plain elements (`h1`, `p`, `table`, `button`, `input`, `details`) are already styled through Simple.css, mapped to these tokens by the theme. Write semantic HTML and add CSS only for what it lacks.
 - A project or user token file can change any value. Because you reference the variables, the page follows without edits.
 - The font tokens are system stacks. Do not add `@font-face`, a `url()` font, or a font `<link>`; external font references fail the offline static check, and system stacks cover every theme.
-- If you need a color the roles do not cover (a chart series, say), define it once as a local custom property in the page's own `<style>` as a light/dark pair, using the same media-query structure the theme uses. Do not scatter literals.
+- Chart series colors are the `--q-color-chart-1` to `--q-color-chart-8` tokens. If you need another color the roles do not cover, define it once as a local custom property in the page's own `<style>` as a light/dark pair, using the same media-query structure the theme uses. Do not scatter literals.
 
 ## 5. Type
 
@@ -146,7 +146,7 @@ Notes that apply to all five:
 
 - Every table has a `<caption>` that says what it is, `<th scope="col">` or `<th scope="row">` on every header, and a `<thead>`.
 - Right-align numeric columns, left-align text, and use `tabular-nums` on both. Put the unit in the column header, not in each cell.
-- Sortable columns use a `<button>` inside the `<th>` and set `aria-sort` on the `<th>`.
+- Sortable columns use `<q-table>`, which adds the sort button and `aria-sort`; see [components](components.md).
 - Zebra striping is optional. Never use it with row borders as well.
 - Cap a table at 12 visible rows before offering search, a filter, or `<details>` for the rest.
 
@@ -167,17 +167,19 @@ Notes that apply to all five:
 - Bars start at zero. Lines may start elsewhere but the axis must say so.
 - No dual axes. Two measures with different units get two charts stacked on a shared x axis.
 - No 3D, no gradient fills, no drop shadows, no animated entry that delays reading the value.
-- Categorical series: 5 to 8 at most, using the Okabe-Ito palette (`#E69F00`, `#56B4E9`, `#009E73`, `#F0E442`, `#0072B2`, `#D55E00`, `#CC79A7`, plus the theme text color for the eighth). Define them as local light/dark pairs per section 4, and check each against the chart background for 3:1.
+- Categorical series: 5 to 8 at most, using the `--q-color-chart-1` to `--q-color-chart-8` tokens (an Okabe-Ito palette, tuned per theme to pass 3:1 against the chart background).
 - Sequential data (a heatmap, a density): one hue, light to dark, with the scale shown. Diverging data needs a meaningful midpoint.
 - More than 8 series means the chart is wrong. Group the tail into "Other", filter, or use a table.
-- Every chart has a table view: a `<details>` after the chart holding the same data as a real table. This is what makes the chart accessible and the numbers copyable.
 
 ### Chart.js
 
-- Put the canvas in a wrapper with a fixed height and set `maintainAspectRatio: false`.
-- The `<canvas>` carries `role="img"` and an `aria-label` that states the finding ("Median build time fell from 14 to 9 minutes between June and September"), not the chart type.
-- Read colors from the page's custom properties with `getComputedStyle` when creating the chart, and rebuild the chart on the `quirk-theme` event. The chrome fires it on `document` whenever the mode or the effective theme changes (the toggle, or the OS scheme in auto mode), with `detail: {mode: 'auto'|'light'|'dark', effective: 'light'|'dark'}`; re-read the custom properties inside the handler. When a chart reads data through `window.quirkData()`, `window.quirkData.onChange(callback)` re-renders it after the viewer picks a different file.
-- Set `animation: false`, or keep it under 400ms, so verify screenshots show the finished chart.
+Bar, line and area charts use `<q-chart>` and sortable tables use `<q-table>`; the elements supply the accessible label, the table view and the theme rebuild. Attributes and examples are in [components](components.md).
+
+Scatter and histogram charts stay hand-written Chart.js, so they need these by hand:
+
+- A `<canvas>` with `role="img"` and an `aria-label` that states the finding, in a fixed-height wrapper (`maintainAspectRatio: false`, `animation: false`), followed by a table view: a `<details>` holding the same data as a real table.
+- Colors read from the page's custom properties with `getComputedStyle`, and the chart rebuilt on the `quirk-theme` event (fired on `document`, `detail: {mode, effective}`). Re-read the properties inside the handler.
+- When it reads data through `window.quirkData()`, `window.quirkData.onChange(callback)` re-renders it after the viewer picks a different file.
 
 ## 10. Interaction and motion
 

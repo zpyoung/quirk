@@ -66,6 +66,7 @@ Flags:
 - `content` is freeform HTML shown with the question. `diagram` is Mermaid source; the screen loads the server-hosted Mermaid build only when `diagram` is set.
 - A screen that only shows something still offers 2 to 4 options about it.
 - `content` and option `html` are served exactly as written. Do not paste untrusted text into them.
+- Kit `q-*` elements go in `content` or an option's `html` unchanged; only non-interactive ones may go in `html` (see the companion rules and [components](components.md)).
 
 ## Event record
 

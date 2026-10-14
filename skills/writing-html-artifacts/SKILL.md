@@ -38,7 +38,7 @@ Follow the steps in order. Each one leads with its rule.
    ```
 
    The page lands at `<project>/.quirk/html/<slug>.html` unless `--out` says otherwise. That directory ignores itself in git.
-6. **Fix static-check failures.** `build` exits 1 when a check in `checks.failures` fails (`header`, `license`, `checksum`, `external-refs`, `size`). Fix the source and rebuild; do not edit the built file. `quirk_html.py check FILE` re-runs the checks alone. Exit 2 means a usage error, an unknown or invalid template, or a malformed source.
+6. **Fix static-check failures.** `build` exits 1 when a check in `checks.failures` fails (`header`, `license`, `checksum`, `external-refs`, `size`, `kit`). Fix the source and rebuild; do not edit the built file. `quirk_html.py check FILE` re-runs the checks alone. Exit 2 means a usage error, an unknown or invalid template, or a malformed source.
 7. **Verify in a browser.**
 
    ```
@@ -112,7 +112,7 @@ A project or user template gets every guarantee a built-in one has, and the user
 
 ## Charts and the theme
 
-The chrome fires a `quirk-theme` event on `document` when the theme changes. A page that draws a chart listens for it and rebuilds the chart; CSS variables switch everything else on their own. Details are in [design reference](references/design-reference.md) section 9.
+The chrome fires a `quirk-theme` event on `document` when the theme changes. A page that draws a chart listens for it and rebuilds the chart; CSS variables switch everything else on their own. Bar, line and area charts use the `<q-chart>` element, which handles the rebuild itself; scatter and histogram charts are hand-written and rebuild on the event. Details are in [design reference](references/design-reference.md) section 9 and [components](references/components.md).
 
 ## Companion
 
@@ -123,3 +123,4 @@ The companion is a local page that asks the user one question at a time and send
 - [Design reference](references/design-reference.md): the house design standard, direction brief, banned tells, tokens, verify checklist
 - [Templates](references/templates.md): template lookup, `template.json`, source file format, tokens, custom and tier-2 templates
 - [Companion](references/companion.md): the companion loop, commands and screen format
+- [Components](references/components.md): the `q-*` elements (tabs, charts, tables, stats, timelines, code, diffs, boards), their attributes and examples

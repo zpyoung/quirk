@@ -16,18 +16,15 @@ Read after the [design reference](../../references/design-reference.md). These r
 |---|---|
 | `q-lede` | the opening conclusion paragraph |
 | `q-meta` | source and date line, small and muted |
-| `q-chart` | fixed-height wrapper around a chart `<canvas>` or Mermaid diagram |
+| `q-chart` | fixed-height wrapper around a Mermaid diagram (Chart.js charts use the `<q-chart>` element) |
 | `q-table-wrap` | wrapper that scrolls a wide table inside itself, never the page |
 | `num` (on `th`, `td`) | right-aligned tabular numbers |
-| `q-sort` | the `<button>` inside a sortable column header; pair it with `aria-sort` on the `<th>` |
 
-## Charts
+## Charts and tables
 
-- Every chart `<canvas>` has `role="img"` and an `aria-label` that states the finding, not the chart type.
-- Every chart is followed by a table view: a `<details>` with a `<summary>` and a real `<table>` (with `<caption>`, `<thead>`, `<th scope>`) holding the same numbers.
-- Put the canvas in a `q-chart` wrapper and set `maintainAspectRatio: false` and `animation: false`.
-- Read colors with `getComputedStyle(document.documentElement).getPropertyValue('--q-color-accent')` and rebuild the chart in a `quirk-theme` listener on `document`. The event's detail is `{mode, effective}`.
+- Bar, line and area charts use `<q-chart>`, and sortable tables use `<q-table>`. Attributes and examples are in [components](../../references/components.md); the element supplies the accessible label, the table view and the theme rebuild.
 - Mermaid diagrams go in a `q-chart` wrapper with a text description beside them.
+- Scatter and histogram charts stay hand-written Chart.js, under section 9 of the design reference.
 
 ## Scripts and data
 
