@@ -113,6 +113,35 @@
         }
       },
       "current": "3.14.0"
+    },
+    "kit": {
+      "current": "1.0.0",
+      "versions": {
+        "1.0.0": {
+          "package": "quirk-kit",
+          "license": "MIT",
+          "license_file": "LICENSE",
+          "first_party": true,
+          "files": [
+            {
+              "path": "kit.css",
+              "kind": "css",
+              "position": "head",
+              "inline": true,
+              "sha256": "e6586fdbfe5c963294325fc1512131a2f18b1e56df20f4f9aa0887dfe08a96d8",
+              "inline_sha256": "e6586fdbfe5c963294325fc1512131a2f18b1e56df20f4f9aa0887dfe08a96d8"
+            },
+            {
+              "path": "kit.js",
+              "kind": "js",
+              "position": "body-end",
+              "inline": true,
+              "sha256": "6c53106ea5715f4287c3f0ac4b62d681cc722bbcd3fa969687f35d299e16c260",
+              "inline_sha256": "6c53106ea5715f4287c3f0ac4b62d681cc722bbcd3fa969687f35d299e16c260"
+            }
+          ]
+        }
+      }
     }
   }
 }

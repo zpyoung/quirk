@@ -1,0 +1,273 @@
+{
+  "schema": 1,
+  "kit_version": "1.0.0",
+  "global_attributes": [
+    "id",
+    "class",
+    "style",
+    "hidden",
+    "title",
+    "lang",
+    "dir",
+    "slot"
+  ],
+  "elements": [
+    {
+      "tag": "q-tabs",
+      "use_when": "Use when a page has two or more parallel views of the same subject and the reader needs one at a time, such as a summary, the details and the raw data.",
+      "parent": null,
+      "interactive": true,
+      "attributes": [
+        {
+          "name": "label",
+          "required": false,
+          "kind": "text",
+          "description": "The tab list's accessible name, for example \"Report sections\"."
+        }
+      ],
+      "requires": [
+        [
+          "section"
+        ]
+      ],
+      "rules": [
+        "heading-sections"
+      ],
+      "children": "Direct-child <section> elements, each opening with an h2 to h6 heading as its first element child. The heading text becomes the tab label and stays in the panel, visually hidden. Without JavaScript the sections simply stack.",
+      "example": "<q-tabs label=\"Release review\">\n  <section>\n    <h3>Summary</h3>\n    <p>The 2.4 release shipped on schedule. Checkout latency improved, and one rollback was needed for the address form.</p>\n  </section>\n  <section>\n    <h3>Timeline</h3>\n    <p>Rollout started Tuesday at 09:00 UTC and reached every region by Wednesday at noon.</p>\n  </section>\n  <section>\n    <h3>Follow-ups</h3>\n    <ul>\n      <li>Add a canary stage for the address form.</li>\n      <li>Alert on checkout p95 above 800 ms.</li>\n    </ul>\n  </section>\n</q-tabs>"
+    },
+    {
+      "tag": "q-chart",
+      "use_when": "Use when a small table of numbers is easier to read as a bar, line, area or donut chart and the finding can be stated in one sentence.",
+      "parent": null,
+      "interactive": false,
+      "attributes": [
+        {
+          "name": "summary",
+          "required": true,
+          "kind": "text",
+          "description": "One sentence stating the finding; it becomes the chart's accessible label."
+        },
+        {
+          "name": "type",
+          "required": false,
+          "kind": "enum",
+          "values": [
+            "bar",
+            "line",
+            "area",
+            "donut"
+          ],
+          "default": "bar",
+          "description": "Chart type."
+        },
+        {
+          "name": "x",
+          "required": false,
+          "kind": "text",
+          "description": "Header of the column that holds the categories; defaults to the first column."
+        },
+        {
+          "name": "y",
+          "required": false,
+          "kind": "text",
+          "description": "Comma-separated headers of the value columns; defaults to every other column."
+        },
+        {
+          "name": "stacked",
+          "required": false,
+          "kind": "boolean",
+          "description": "Stack the series instead of drawing them side by side."
+        },
+        {
+          "name": "horizontal",
+          "required": false,
+          "kind": "boolean",
+          "description": "Draw bars horizontally; applies to the bar type only."
+        },
+        {
+          "name": "data-from",
+          "required": false,
+          "kind": "ident",
+          "description": "Name of a field in the page's data file to chart instead of an inline table."
+        }
+      ],
+      "requires": [
+        [
+          "table",
+          "@data-from"
+        ]
+      ],
+      "rules": [
+        "max-series"
+      ],
+      "children": "A <table> whose <thead> has one <th> per column: the first column holds the categories and each other column is one series. Alternatively set data-from and omit the table. Optionally add a child <script type=\"application/json\"> holding raw Chart.js options, which the theme guarantees override. At most 8 series are drawn.",
+      "example": "<q-chart type=\"line\" summary=\"Median build time fell from 14 to 9 minutes between June and September.\" y=\"Median minutes\">\n  <table>\n    <thead>\n      <tr><th>Month</th><th>Median minutes</th></tr>\n    </thead>\n    <tbody>\n      <tr><td>June</td><td>14</td></tr>\n      <tr><td>July</td><td>12</td></tr>\n      <tr><td>August</td><td>10</td></tr>\n      <tr><td>September</td><td>9</td></tr>\n    </tbody>\n  </table>\n  <script type=\"application/json\">{\"plugins\": {\"legend\": {\"display\": false}}}</script>\n</q-chart>"
+    },
+    {
+      "tag": "q-stat",
+      "use_when": "Use when a single headline number needs a label, a signed change and a definition of its period and denominator.",
+      "parent": null,
+      "interactive": false,
+      "attributes": [
+        {
+          "name": "direction",
+          "required": false,
+          "kind": "enum",
+          "values": [
+            "up-good",
+            "down-good"
+          ],
+          "default": "up-good",
+          "description": "Whether a rise is good or bad; colors the delta."
+        },
+        {
+          "name": "points",
+          "required": false,
+          "kind": "number-list",
+          "description": "Two or more comma-separated numbers drawn as a decorative sparkline."
+        }
+      ],
+      "requires": [
+        [
+          "[slot=label]"
+        ],
+        [
+          "[slot=value]"
+        ],
+        [
+          "[slot=definition]"
+        ]
+      ],
+      "rules": [],
+      "children": "Child elements marked with the slot attribute: slot=\"label\", slot=\"value\" and slot=\"definition\" are required, and slot=\"delta\" is optional. The delta's sign comes from its leading +, -, minus sign or digit. Adjacent q-stat elements form a responsive row.",
+      "example": "<q-stat direction=\"up-good\" points=\"41,43,42,47,52,58\">\n  <span slot=\"label\">Weekly active users</span>\n  <span slot=\"value\">58,200</span>\n  <span slot=\"delta\">+11.5%</span>\n  <span slot=\"definition\">Distinct signed-in users per ISO week, versus the prior week.</span>\n</q-stat>\n<q-stat direction=\"down-good\" points=\"4.1,3.9,3.6,3.4,3.1\">\n  <span slot=\"label\">Checkout error rate</span>\n  <span slot=\"value\">3.1%</span>\n  <span slot=\"delta\">-0.3 pts</span>\n  <span slot=\"definition\">Failed checkout attempts divided by all attempts, last 7 days.</span>\n</q-stat>\n<q-stat direction=\"down-good\">\n  <span slot=\"label\">Median support wait</span>\n  <span slot=\"value\">4m 20s</span>\n  <span slot=\"delta\">+12s</span>\n  <span slot=\"definition\">Time from first message to first human reply, last 7 days.</span>\n</q-stat>"
+    },
+    {
+      "tag": "q-table",
+      "use_when": "Use when a table has more than a few rows and the reader will want to sort it, filter it or scroll it without the page scrolling sideways.",
+      "parent": null,
+      "interactive": true,
+      "attributes": [
+        {
+          "name": "data-from",
+          "required": false,
+          "kind": "ident",
+          "description": "Name of a field in the page's data file to build the rows from."
+        }
+      ],
+      "requires": [
+        [
+          "table"
+        ]
+      ],
+      "rules": [],
+      "children": "A <table> with a <thead>. Mark numeric columns with class=\"num\" on their <th> so they sort by value. With data-from, each <th> binds to the row field named by its data-key attribute, or else by its trimmed text.",
+      "example": "<q-table>\n  <table>\n    <thead>\n      <tr><th>Service</th><th class=\"num\">Requests</th><th class=\"num\">p95 ms</th><th>Owner</th></tr>\n    </thead>\n    <tbody>\n      <tr><td>checkout</td><td>1,204,000</td><td>310</td><td>Payments</td></tr>\n      <tr><td>catalog</td><td>3,890,500</td><td>120</td><td>Storefront</td></tr>\n      <tr><td>search</td><td>2,410,300</td><td>185</td><td>Discovery</td></tr>\n      <tr><td>accounts</td><td>612,900</td><td>95</td><td>Identity</td></tr>\n    </tbody>\n  </table>\n</q-table>"
+    },
+    {
+      "tag": "q-timeline",
+      "use_when": "Use when events happen in order and the reader needs to see when each one occurred, such as an incident, a rollout or a project history.",
+      "parent": null,
+      "interactive": false,
+      "attributes": [],
+      "requires": [
+        [
+          "ol"
+        ]
+      ],
+      "rules": [
+        "timeline-items"
+      ],
+      "children": "An <ol> whose every <li> holds a <time datetime> element followed by the event text. An <li> may carry data-tone set to neutral, success, warning or danger.",
+      "example": "<q-timeline>\n  <ol>\n    <li data-tone=\"warning\"><time datetime=\"2026-09-14T09:02Z\">09:02</time> Error rate on checkout crosses 2%.</li>\n    <li data-tone=\"danger\"><time datetime=\"2026-09-14T09:10Z\">09:10</time> Pager fires; incident declared.</li>\n    <li data-tone=\"neutral\"><time datetime=\"2026-09-14T09:31Z\">09:31</time> Bad config identified in the 2.4 rollout.</li>\n    <li data-tone=\"success\"><time datetime=\"2026-09-14T09:44Z\">09:44</time> Rollback complete; error rate back to baseline.</li>\n  </ol>\n</q-timeline>"
+    },
+    {
+      "tag": "q-code",
+      "use_when": "Use when the reader should copy a command, config or code snippet exactly as written.",
+      "parent": null,
+      "interactive": true,
+      "attributes": [
+        {
+          "name": "filename",
+          "required": false,
+          "kind": "text",
+          "description": "File name shown in the header bar above the code."
+        }
+      ],
+      "requires": [
+        [
+          "pre"
+        ]
+      ],
+      "rules": [],
+      "children": "A <pre> wrapping a <code> element with the text to copy. There is no syntax highlighting.",
+      "example": "<q-code filename=\"deploy.sh\">\n  <pre><code>#!/usr/bin/env bash\nset -euo pipefail\n./build.sh --release\n./push.sh --env staging</code></pre>\n</q-code>"
+    },
+    {
+      "tag": "q-diff",
+      "use_when": "Use when showing a code change for review, optionally with comments attached to specific new-side lines.",
+      "parent": null,
+      "interactive": false,
+      "attributes": [],
+      "requires": [
+        [
+          "pre"
+        ]
+      ],
+      "rules": [
+        "diff-notes"
+      ],
+      "children": "A <pre> of unified diff text, followed by zero or more q-diff-note children. Each note names a file and a new-side line number that must appear in the diff. Without JavaScript the raw diff shows, then the notes as a list.",
+      "example": "<q-diff>\n  <pre>--- a/src/retry.py\n+++ b/src/retry.py\n@@ -10,6 +10,7 @@ def fetch(url):\n     attempt = 0\n-    while attempt &lt; 3:\n+    while attempt &lt; MAX_ATTEMPTS:\n         try:\n             return get(url)\n         except Timeout:\n+            sleep(backoff(attempt))\n             attempt += 1</pre>\n  <q-diff-note file=\"src/retry.py\" line=\"11\">The limit moves into a named constant so tests can lower it.</q-diff-note>\n  <q-diff-note file=\"src/retry.py\" line=\"15\">Backoff runs before the counter changes, so the first retry waits the base delay.</q-diff-note>\n</q-diff>"
+    },
+    {
+      "tag": "q-diff-note",
+      "use_when": "Use when attaching a review comment to a specific new-side line inside a q-diff.",
+      "parent": "q-diff",
+      "interactive": true,
+      "attributes": [
+        {
+          "name": "file",
+          "required": true,
+          "kind": "text",
+          "description": "Path as in the diff's +++ header, with the b/ prefix removed."
+        },
+        {
+          "name": "line",
+          "required": true,
+          "kind": "integer",
+          "description": "New-side line number the note sits under."
+        }
+      ],
+      "requires": [],
+      "rules": [],
+      "children": "Free text: the comment itself.",
+      "example": "<q-diff>\n  <pre>--- a/README.md\n+++ b/README.md\n@@ -1,2 +1,3 @@\n # Project\n+Run `make test` before opening a pull request.\n Setup notes follow.</pre>\n  <q-diff-note file=\"README.md\" line=\"2\">Name the exact command so contributors do not guess.</q-diff-note>\n</q-diff>"
+    },
+    {
+      "tag": "q-board",
+      "use_when": "Use when the reader should sort cards into columns, such as triage, prioritizing or planning, and hand the result back as Markdown.",
+      "parent": null,
+      "interactive": true,
+      "attributes": [
+        {
+          "name": "id",
+          "required": true,
+          "kind": "ident",
+          "description": "Board identifier; the saved layout is keyed by it."
+        }
+      ],
+      "requires": [
+        [
+          "section"
+        ]
+      ],
+      "rules": [
+        "board-columns"
+      ],
+      "children": "Direct-child <section> elements, each opening with an h2 to h6 heading and then a <ul> of <li> cards. A card's identity is its data-id attribute, or else its trimmed text.",
+      "example": "<q-board id=\"triage\">\n  <section>\n    <h3>Now</h3>\n    <ul>\n      <li data-id=\"login-bug\">Fix login redirect loop</li>\n      <li data-id=\"slow-search\">Profile slow search queries</li>\n    </ul>\n  </section>\n  <section>\n    <h3>Next</h3>\n    <ul>\n      <li data-id=\"csv-export\">Add CSV export to reports</li>\n    </ul>\n  </section>\n  <section>\n    <h3>Later</h3>\n    <ul>\n      <li data-id=\"dark-mode-icons\">Redraw icons for dark mode</li>\n    </ul>\n  </section>\n</q-board>"
+    }
+  ]
+}

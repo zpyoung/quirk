@@ -53,6 +53,7 @@ def test_manifest_lists_v1_libraries_at_pinned_versions() -> None:
         "chartjs": "4.5.1",
         "mermaid": "12.2.0",
         "webawesome": "3.14.0",
+        "kit": "1.0.0",
     }
     alpine_file = manifest["libraries"]["alpine"]["versions"]["3.17.4"]["files"][0]
     assert alpine_file["position"] == "body-end"
