@@ -261,6 +261,8 @@ run_checks(html, *, mode, tier, vendor, shells=None, kit_source: Optional[tuple[
     `timeline-items`)
   - `kit elements are used but the kit is not inlined`, on a built page with q-* tags and no
     `kit@` library block
+  - `could not parse the markup after this line; the kit check stopped here`, when the parser
+    raises. The failures found before that line are kept, so a parse fault never turns into a pass.
 - **`max-series`** counts the `y` list when given, else the header cells minus the `x` column.
 - **`diff-notes`** parses the parent's `<pre>` text, after unescaping HTML entities.
   - Files come from `+++ ` lines, with a leading `b/` stripped.
@@ -322,6 +324,8 @@ Back-link: [Shared behavior](logic.md#shared-behavior), [Key decisions and ratio
   - the `q-chart` source table, which goes into the "Table view" `<details>` inside the same
     element
   - `q-board` cards, which move between that board's lists
+  - `q-table` header cells' children, which move into each cell's sort `<button>` (the button must
+    hold the label for accessibility)
   - Everything else is added alongside, or toggled with an attribute.
 
 **Theme and colors**
@@ -573,7 +577,8 @@ Back-link: [Scenarios](logic.md#scenarios) ("A report with KPIs and a trend").
   - a `q-chart` with `data-from` over the existing `timings.json`
   - a `q-table` with `data-from` over the same data
 - The Alpine `sortBy`, `ariaSort`, `chartLabel` and `drawChart` code (`:77-160`) goes. Alpine stays
-  in the template, so the header's `interactions` keep their wording.
+  in the template, and the header's `interactions` describe the legend toggle and table sorting the
+  page really offers.
 - The header drops `"libraries": ["chartjs"]`, because inclusion is automatic.
 - If `timings.json` isn't an array of row objects, or an object of them, reshape it, and keep it
   small.

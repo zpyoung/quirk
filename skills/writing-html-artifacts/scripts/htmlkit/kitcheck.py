@@ -308,7 +308,7 @@ _CLOSES_P = frozenset(
 class _Node:
     """One element of the tolerant tree: its attributes, source line and children."""
 
-    __slots__ = ("tag", "attrs", "line", "parent", "children", "content", "self_closed")
+    __slots__ = ("tag", "attrs", "line", "parent", "children", "content", "self_closed", "order", "end")
 
     def __init__(self, tag: str, attrs: dict[str, str], line: int, parent: Optional["_Node"]) -> None:
         self.tag = tag
@@ -318,6 +318,9 @@ class _Node:
         self.children: list[_Node] = []
         self.content: list[Any] = []  # text strings and child nodes in source order
         self.self_closed = False
+        # document-order position, and the position just past the last descendant
+        self.order = 0
+        self.end = 0
 
 
 class _TreeBuilder(HTMLParser):
@@ -336,6 +339,19 @@ class _TreeBuilder(HTMLParser):
         self.nodes: list[_Node] = []
         self._open = Counter()
         self._foreign = 0
+        self._p_marks: list[int] = []
+        self._scope_marks: list[int] = []
+
+    def parse_html_declaration(self, i):
+        # the stdlib's marked-section parser raises on `<![foo ]]>`, which would end the check early
+        if self.rawdata.startswith("<![", i):
+            return self.parse_bogus_comment(i)
+        return super().parse_html_declaration(i)
+
+    def finish(self) -> None:
+        """Close what is still open at the end of the input, so every node has its ``end``."""
+        for node in self.stack[1:]:
+            node.end = len(self.nodes)
 
     def handle_starttag(self, tag, attrs):
         self._start(tag, attrs, False)
@@ -356,12 +372,21 @@ class _TreeBuilder(HTMLParser):
     def _push(self, node: _Node) -> None:
         self.stack.append(node)
         self._open[node.tag] += 1
+        if node.tag == "p":
+            self._p_marks.append(len(self.stack) - 1)
+        if node.tag in _BUTTON_SCOPE:
+            self._scope_marks.append(len(self.stack) - 1)
         if node.tag in _FOREIGN:
             self._foreign += 1
 
     def _pop(self) -> None:
         node = self.stack.pop()
+        node.end = len(self.nodes)
         self._open[node.tag] -= 1
+        if node.tag == "p":
+            self._p_marks.pop()
+        if node.tag in _BUTTON_SCOPE:
+            self._scope_marks.pop()
         if node.tag in _FOREIGN:
             self._foreign -= 1
 
@@ -400,8 +425,11 @@ class _TreeBuilder(HTMLParser):
                 self._pop()
         elif tag in _ANY_HEADING and top in _ANY_HEADING:
             self._pop()
-        if tag in _CLOSES_P and self._open["p"]:
-            self._close_nearest(frozenset({"p"}), _BUTTON_SCOPE)
+        if tag in _CLOSES_P and self._p_marks:
+            index = self._p_marks[-1]
+            if not self._scope_marks or self._scope_marks[-1] < index:
+                while len(self.stack) > index:
+                    self._pop()
 
     def _start(self, tag: str, attrs: list, self_closing: bool) -> None:
         self._imply_end(tag)
@@ -410,6 +438,8 @@ class _TreeBuilder(HTMLParser):
             values.setdefault(name, value if value is not None else "")
         parent = self.stack[-1]
         node = _Node(tag, values, self.getpos()[0], parent)
+        node.order = len(self.nodes)
+        node.end = node.order + 1
         parent.children.append(node)
         parent.content.append(node)
         self.nodes.append(node)
@@ -419,13 +449,67 @@ class _TreeBuilder(HTMLParser):
         self._push(node)
 
 
-def _descendants(node: _Node) -> Iterator[_Node]:
-    """Every element below ``node`` in document order, without recursion."""
-    pending = list(reversed(node.children))
-    while pending:
-        current = pending.pop()
-        yield current
-        pending.extend(reversed(current.children))
+_TIME_DATETIME = "time[datetime]"
+
+
+class _Index:
+    """Per-tag lookups over the finished tree, so a rule's subtree queries never walk the subtree.
+
+    A node's descendants are exactly the nodes whose document order falls in ``(order, end)``, so
+    each query is a bisect, however deeply the page nests.
+    """
+
+    def __init__(self, nodes: list[_Node]) -> None:
+        self._nodes: dict[str, list[_Node]] = {}
+        self._orders: dict[str, list[int]] = {}
+        self._reach: dict[str, list[int]] = {}
+        for node in nodes:
+            self._add(node.tag, node)
+            if node.tag == "time" and "datetime" in node.attrs:
+                self._add(_TIME_DATETIME, node)
+
+    def _add(self, key: str, node: _Node) -> None:
+        self._nodes.setdefault(key, []).append(node)
+        self._orders.setdefault(key, []).append(node.order)
+
+    def within(self, node: _Node, key: str, skip: Optional[str] = None) -> Iterator[_Node]:
+        """Descendants of ``node`` under ``key`` in document order, leaving out those below a ``skip`` element."""
+        found, orders = self._nodes.get(key), self._orders.get(key)
+        if not found or orders is None:
+            return
+        skipped, skipped_orders = self._nodes.get(skip or ""), self._orders.get(skip or "")
+        pos = node.order + 1
+        while True:
+            i = bisect.bisect_left(orders, pos)
+            if i >= len(found) or orders[i] >= node.end:
+                return
+            candidate = found[i]
+            if skipped and skipped_orders is not None:
+                j = bisect.bisect_left(skipped_orders, pos)
+                if j < len(skipped) and skipped_orders[j] < candidate.order:
+                    pos = skipped[j].end
+                    continue
+            yield candidate
+            pos = candidate.order + 1
+
+    def first(self, node: _Node, key: str) -> Optional[_Node]:
+        return next(self.within(node, key), None)
+
+    def encloses(self, node: _Node, key: str) -> bool:
+        """Whether some ancestor of ``node`` has the tag ``key``."""
+        orders = self._orders.get(key)
+        if not orders:
+            return False
+        reach = self._reach.get(key)
+        if reach is None:
+            reach = []
+            furthest = 0
+            for candidate in self._nodes[key]:
+                furthest = max(furthest, candidate.end)
+                reach.append(furthest)
+            self._reach[key] = reach
+        i = bisect.bisect_left(orders, node.order)
+        return i > 0 and reach[i - 1] > node.order
 
 
 def _text(node: _Node) -> str:
@@ -438,10 +522,6 @@ def _text(node: _Node) -> str:
         else:
             pending.extend(reversed(item.content))
     return "".join(parts)
-
-
-def _first(node: _Node, tag: str) -> Optional[_Node]:
-    return next((d for d in _descendants(node) if d.tag == tag), None)
 
 
 def _positive_integer(value: str) -> Optional[int]:
@@ -481,16 +561,19 @@ def check_html(text: str, catalog: Catalog, *, label: str) -> list[dict]:
     whatever checks its recoverable structure allows.
     """
     builder = _TreeBuilder()
+    stopped_at: Optional[int] = None
     try:
         builder.feed(text)
         builder.close()
-    except Exception:  # noqa: BLE001 - a parser fault must not hide the failures found so far
-        pass
+    except Exception:  # noqa: BLE001 - kept as a failure below, so a parser fault never reads as a pass
+        stopped_at = builder.getpos()[0]
+    builder.finish()
     found: list[tuple[int, int, str]] = []
 
     def report(line: int, message: str) -> None:
         found.append((line, len(found), message))
 
+    index = _Index(builder.nodes)
     selectors = _below_selectors(catalog)
     below = _below_masks(builder.nodes, selectors) if selectors else {}
     for node in builder.nodes:
@@ -502,12 +585,16 @@ def check_html(text: str, catalog: Catalog, *, label: str) -> list[dict]:
             continue
         if node.self_closed:
             report(node.line, f"<{node.tag}> cannot be self-closed; write <{node.tag} …></{node.tag}>")
-        _check_element(node, element, report, selectors, below.get(id(node), 0))
+        _check_element(node, element, report, selectors, below.get(id(node), 0), index)
+    if stopped_at is not None:
+        report(stopped_at, "could not parse the markup after this line; the kit check stopped here")
     found.sort()
     return [{"check": "kit", "detail": f"{label} line {line}: {message}"} for line, _, message in found]
 
 
-def _check_element(node: _Node, element: Element, report: Report, selectors: list[str], below: int) -> None:
+def _check_element(
+    node: _Node, element: Element, report: Report, selectors: list[str], below: int, index: _Index
+) -> None:
     tag = node.tag
     for attribute in element.attributes:
         if attribute.name not in node.attrs:
@@ -523,14 +610,10 @@ def _check_element(node: _Node, element: Element, report: Report, selectors: lis
             if not any(_selector_matches(selector, node, selectors, below) for selector in group):
                 names = ", ".join(s[1:] if s.startswith("@") else s for s in group)
                 report(node.line, f"<{tag}> needs one of: {names}")
-    if element.parent is not None:
-        ancestor = node.parent
-        while ancestor is not None and ancestor.tag != element.parent:
-            ancestor = ancestor.parent
-        if ancestor is None:
-            report(node.line, f"<{tag}> must be inside <{element.parent}>")
+    if element.parent is not None and not index.encloses(node, element.parent):
+        report(node.line, f"<{tag}> must be inside <{element.parent}>")
     for rule in element.rules:
-        _RULES[rule](node, report)
+        _RULES[rule](node, report, index)
 
 
 def _selector_matches(selector: str, node: _Node, selectors: list[str], below: int) -> bool:
@@ -586,16 +669,24 @@ def _below_masks(nodes: list[_Node], selectors: list[str]) -> dict[int, int]:
     return masks
 
 
-def _rule_max_series(node: _Node, report: Report) -> None:
-    table = _first(node, "table")
+def _header_row(table: _Node, index: _Index) -> Optional[_Node]:
+    """The first row inside a ``thead`` of ``table``, else its first row."""
+    for thead in index.within(table, "thead"):
+        row = index.first(thead, "tr")
+        if row is not None:
+            return row
+    return index.first(table, "tr")
+
+
+def _rule_max_series(node: _Node, report: Report, index: _Index) -> None:
+    table = index.first(node, "table")
     if table is None:
         return
     y = node.attrs.get("y")
     if y is not None:
         series = len([part for part in y.split(",") if part.strip()])
     else:
-        rows = [d for d in _descendants(table) if d.tag == "tr"]
-        header = next((r for r in rows if _inside(r, "thead", table)), rows[0] if rows else None)
+        header = _header_row(table, index)
         if header is None:
             return
         cells = [c for c in header.children if c.tag == "th"]
@@ -604,15 +695,6 @@ def _rule_max_series(node: _Node, report: Report) -> None:
         series = max(len(cells) - 1, 0)
     if series > MAX_SERIES:
         report(node.line, f"<{node.tag}> has {series} series; the limit is {MAX_SERIES}")
-
-
-def _inside(node: _Node, tag: str, stop: _Node) -> bool:
-    ancestor = node.parent
-    while ancestor is not None and ancestor is not stop:
-        if ancestor.tag == tag:
-            return True
-        ancestor = ancestor.parent
-    return False
 
 
 def _diff_path(raw: str) -> Optional[str]:
@@ -672,12 +754,12 @@ def parse_diff(text: str) -> dict[str, set[int]]:
     return files
 
 
-def _rule_diff_notes(node: _Node, report: Report) -> None:
-    pre = _first(node, "pre")
+def _rule_diff_notes(node: _Node, report: Report, index: _Index) -> None:
+    pre = index.first(node, "pre")
     if pre is None:
         return
     files = parse_diff(_text(pre))
-    for note in (d for d in _descendants(node) if d.tag == "q-diff-note"):
+    for note in index.within(node, "q-diff-note", skip=node.tag):
         file = note.attrs.get("file")
         if file is None:
             continue
@@ -692,7 +774,7 @@ def _rule_diff_notes(node: _Node, report: Report) -> None:
             report(note.line, f"<q-diff-note> line {raw.lstrip('0')} is not a new-side line of {file}")
 
 
-def _rule_heading_sections(node: _Node, report: Report) -> None:
+def _rule_heading_sections(node: _Node, report: Report, index: _Index) -> None:
     sections = [c for c in node.children if c.tag == "section"]
     for index, section in enumerate(sections, 1):
         first = section.children[0] if section.children else None
@@ -700,20 +782,20 @@ def _rule_heading_sections(node: _Node, report: Report) -> None:
             report(section.line, f"<{node.tag}> section {index} does not start with a heading")
 
 
-def _rule_timeline_items(node: _Node, report: Report) -> None:
-    ol = _first(node, "ol")
+def _rule_timeline_items(node: _Node, report: Report, index: _Index) -> None:
+    ol = index.first(node, "ol")
     if ol is None:
         return
     items = [c for c in ol.children if c.tag == "li"]
-    for index, item in enumerate(items, 1):
-        if not any(d.tag == "time" and "datetime" in d.attrs for d in _descendants(item)):
-            report(item.line, f"<{node.tag}> item {index} has no <time datetime>")
+    for number, item in enumerate(items, 1):
+        if index.first(item, _TIME_DATETIME) is None:
+            report(item.line, f"<{node.tag}> item {number} has no <time datetime>")
         tone = item.attrs.get("data-tone")
         if tone is not None and tone not in TONES:
-            report(item.line, f'<{node.tag}> item {index} data-tone="{tone}" is not one of {", ".join(TONES)}')
+            report(item.line, f'<{node.tag}> item {number} data-tone="{tone}" is not one of {", ".join(TONES)}')
 
 
-_RULES: dict[str, Callable[[_Node, Report], None]] = {
+_RULES: dict[str, Callable[[_Node, Report, _Index], None]] = {
     "max-series": _rule_max_series,
     "diff-notes": _rule_diff_notes,
     "heading-sections": _rule_heading_sections,
@@ -728,6 +810,13 @@ assert set(_RULES) == KNOWN_RULES
 _JSX_TAG = re.compile(r"<(q-[a-z]+(?:-[a-z]+)*)(?=[\s/>])")
 _JSX_ATTR = re.compile(r"[A-Za-z_$][\w$:.-]*")
 _JSX_LITERAL = re.compile(r"""^(?:"([^"\\\n]*)"|'([^'\\\n]*)')$""")
+# a comment opens at the start of the text or after whitespace or punctuation, never inside `http://` or a string
+_JSX_COMMENT = re.compile(r"(?<![^\s;{}(),])(?:/\*.*?(?:\*/|\Z)|//[^\n]*)", re.DOTALL)
+
+
+def _blank_comments(text: str) -> str:
+    """``text`` with ``//`` and ``/* */`` comments overwritten by spaces, so offsets and lines hold."""
+    return _JSX_COMMENT.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)
 
 
 def _skip_braces(text: str, start: int) -> int:
@@ -789,7 +878,7 @@ def _jsx_attributes(text: str, pos: int) -> tuple[dict[str, Optional[str]], bool
     i = pos
     while i < n:
         c = text[i]
-        if c == ">":
+        if c == ">" or c == "<":
             break
         if c.isspace() or c == "/":
             i += 1
@@ -837,8 +926,9 @@ def check_jsx(files: list[tuple[str, str]], catalog: Catalog) -> list[dict]:
     Children aren't statically known in JSX, so ``requires``, ``rules`` and ``parent`` are skipped.
     """
     failures: list[dict] = []
-    for label, text in files:
-        starts = [0] + [i + 1 for i, ch in enumerate(text) if ch == "\n"]
+    for label, source in files:
+        starts = [0] + [i + 1 for i, ch in enumerate(source) if ch == "\n"]
+        text = _blank_comments(source)
         for match in _JSX_TAG.finditer(text):
             tag = match.group(1)
             line = bisect.bisect_right(starts, match.start())

@@ -747,3 +747,84 @@ def test_a_self_closed_kit_tag_is_reported_and_the_tree_stays_open() -> None:
     # the open q-chart reads the next table as its inline table, as a browser would
     assert any("cannot be self-closed" in m for m in messages('<q-chart summary="s" data-from="rows" />' + table(3)))
     assert not any("cannot be self-closed" in m for m in messages(chart('data-from="rows"')))
+
+
+# -- parser faults and worst-case input -------------------------------------------------------------
+
+
+def test_a_marked_section_does_not_stop_the_check() -> None:
+    got = messages("<![foo ]]>\n<q-stats></q-stats>\n" + chart().replace('summary="s"', ""))
+    assert "unknown element <q-stats>" in got
+    assert "<q-chart> needs attribute summary" in got
+
+
+def test_a_parser_exception_is_a_failure_that_keeps_earlier_ones(monkeypatch: pytest.MonkeyPatch) -> None:
+    def explode(self, data):
+        raise AssertionError("boom")
+
+    monkeypatch.setattr(kitcheck._TreeBuilder, "handle_comment", explode)
+    got = details("<q-stats></q-stats>\n<q-stat></q-stat>\n<!-- x -->\n<q-nope></q-nope>")
+    assert got[0] == "page.html line 1: unknown element <q-stats>"
+    assert got[-1] == "page.html line 3: could not parse the markup after this line; the kit check stopped here"
+    assert not any("q-nope" in d for d in got)
+
+
+def test_nested_diffs_are_checked_in_linear_time() -> None:
+    depth = 8000
+    start = time.perf_counter()
+    got = details("<q-diff><pre>x</pre>" * depth + "</q-diff>" * depth)
+    assert time.perf_counter() - start < 3
+    assert got == []
+
+
+def test_nested_charts_timelines_and_notes_are_checked_in_linear_time() -> None:
+    depth = 8000
+    start = time.perf_counter()
+    charts = details('<q-chart summary="s" data-from="r">' * depth + "</q-chart>" * depth)
+    notes = details("<q-diff-note file='f' line='1'>" * depth + "</q-diff-note>" * depth)
+    items = details("<q-timeline><ol><li>" * depth + "</li></ol></q-timeline>" * depth)
+    assert time.perf_counter() - start < 6
+    with_notes = details("<q-diff><pre>x</pre><q-diff-note file='f' line='1'></q-diff-note>" * depth + "</q-diff>" * depth)
+    assert charts == []
+    assert len(with_notes) == depth
+    assert len(notes) == depth and all(n.endswith("<q-diff-note> must be inside <q-diff>") for n in notes)
+    assert len(items) == depth and all(i.endswith("has no <time datetime>") for i in items)
+
+
+def test_a_note_belongs_to_its_nearest_diff_only() -> None:
+    inner = "<q-diff><pre>--- a/b.py\n+++ b/b.py\n@@ -1 +1 @@\n+x</pre><q-diff-note file='b.py' line='1'></q-diff-note></q-diff>"
+    assert messages("<q-diff><pre>--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n+x</pre>" + inner + "</q-diff>") == []
+
+
+def test_a_paragraph_holding_a_button_does_not_make_block_starts_quadratic() -> None:
+    start = time.perf_counter()
+    got = details("<q-code></q-code><p><button>" + "<div>" * 20000)
+    assert time.perf_counter() - start < 3
+    assert got == ["page.html line 1: <q-code> needs one of: pre"]
+
+
+def test_a_block_start_still_closes_an_open_paragraph_outside_a_scope_marker() -> None:
+    assert messages("<q-tabs><p>x<section><h3>A</h3></section></q-tabs>") == messages(
+        "<q-tabs><p>x</p><section><h3>A</h3></section></q-tabs>"
+    )
+
+
+def test_jsx_ignores_tags_in_line_and_block_comments() -> None:
+    assert jsx("// the <q-chart> element draws it\nconst a = 1;") == []
+    assert jsx("const a = 1; // see <q-chart>\n") == []
+    assert jsx("/* the <q-chart>\n   element */\nconst a = 1;") == []
+    assert jsx("{/* <q-chart> */}") == []
+    assert jsx("/* <q-chart> never closed") == []
+
+
+def test_jsx_comment_masking_keeps_real_tags_and_their_lines() -> None:
+    got = jsx('// <q-chart>\nconst u = "http://x"; const e = <q-chart />;\n')
+    assert got == ["src/f0.tsx line 2: <q-chart> needs attribute summary"]
+    assert jsx('<p>see http://x</p> <q-chart summary="s" src="//cdn.x/y" />') == []
+
+
+def test_jsx_unterminated_tags_are_scanned_in_linear_time() -> None:
+    start = time.perf_counter()
+    got = jsx("<q-chart " * 8000)
+    assert time.perf_counter() - start < 2
+    assert len(got) == 8000
