@@ -174,7 +174,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     except assemble.BuildError:
         meta = None
     mode = "connected" if meta and meta.get("mode") == "connected" else "offline"
-    result = verify_runner.run_verify(path, Path(args.out_dir) if args.out_dir else None, mode)
+    result = verify_runner.run_verify(path, Path(args.out_dir) if args.out_dir else None, mode, no_js=args.no_js)
     _emit(result)
     return EXIT_CHECK_FAILED if result.get("status") == "failed" else EXIT_OK
 
@@ -269,6 +269,9 @@ def _configure_verify(sub: argparse._SubParsersAction) -> None:
     parser = sub.add_parser("verify", help="verify a built file in a real browser")
     parser.add_argument("file")
     parser.add_argument("--out-dir", help="where the report and screenshots go (default: <file stem>.verify/)")
+    parser.add_argument(
+        "--no-js", action="store_true", help="load the page with JavaScript disabled and check the un-upgraded fallback"
+    )
     parser.set_defaults(func=_cmd_verify)
 
 

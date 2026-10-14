@@ -34,7 +34,9 @@ def default_out_dir(file: Path) -> Path:
     return file.parent / f"{file.stem}.verify"
 
 
-def _no_report(file: Path, out_dir: Path, reason: str, detail: str = "", status: str = "not-browser-verified") -> dict:
+def _no_report(
+    file: Path, out_dir: Path, reason: str, detail: str = "", status: str = "not-browser-verified", no_js: bool = False
+) -> dict:
     try:
         file_sha256 = _sha256(file)
     except OSError:
@@ -47,6 +49,7 @@ def _no_report(file: Path, out_dir: Path, reason: str, detail: str = "", status:
         "screenshots": [],
         "requests": [],
         "reason": reason,
+        "no_js": no_js,
     }
     if detail:
         result["detail"] = detail
@@ -91,11 +94,12 @@ def _ensure_installed() -> str | None:
     return None
 
 
-def run_verify(file: Path, out_dir: Path | None = None, mode: str = "offline") -> dict:
+def run_verify(file: Path, out_dir: Path | None = None, mode: str = "offline", no_js: bool = False) -> dict:
     """Verifies `file` in a real browser and returns the `VerifyResult`.
 
     `mode` is "offline" (any non-local request fails the network check) or "connected" (requests
-    are listed but do not fail it).
+    are listed but do not fail it). `no_js` loads the page with JavaScript disabled and adds the
+    `fallback` check; the result's `no_js` key records which mode ran.
     """
     if mode not in ("offline", "connected"):
         raise ValueError(f"mode must be 'offline' or 'connected', got {mode!r}")
@@ -103,30 +107,31 @@ def run_verify(file: Path, out_dir: Path | None = None, mode: str = "offline") -
     out_dir = Path(out_dir) if out_dir is not None else default_out_dir(file)
 
     if not file.is_file():
-        return _no_report(file, out_dir, "missing-file")
+        return _no_report(file, out_dir, "missing-file", no_js=no_js)
     node = shutil.which("node")
     if node is None:
-        return _no_report(file, out_dir, "no-node")
+        return _no_report(file, out_dir, "no-node", no_js=no_js)
     error = _ensure_installed()
     if error is not None:
-        return _no_report(file, out_dir, "install-failed", error)
+        return _no_report(file, out_dir, "install-failed", error, no_js=no_js)
 
     report = out_dir / "report.json"
     report.unlink(missing_ok=True)
     try:
         proc = subprocess.run(
-            [node, str(VERIFY_DIR / "verify.mjs"), str(file), str(out_dir), mode],
+            [node, str(VERIFY_DIR / "verify.mjs"), str(file), str(out_dir), mode, *(["--no-js"] if no_js else [])],
             capture_output=True,
             text=True,
             timeout=VERIFY_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired:
-        return _no_report(file, out_dir, "verify-timeout", status="failed")
+        return _no_report(file, out_dir, "verify-timeout", status="failed", no_js=no_js)
 
     try:
         result = json.loads(report.read_text())
     except (OSError, ValueError):
-        return _no_report(file, out_dir, "verify-crashed", proc.stderr.strip()[-500:], status="failed")
+        return _no_report(file, out_dir, "verify-crashed", proc.stderr.strip()[-500:], status="failed", no_js=no_js)
+    result["no_js"] = no_js
     if result.get("status") == "not-browser-verified":
         result["reason"] = "no-browser"
         report.write_text(json.dumps(result, indent=2) + "\n")
