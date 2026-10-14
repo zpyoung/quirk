@@ -125,6 +125,8 @@ def _library_problems(data: Any) -> list[str]:
             for key in ("package", "license", "license_file"):
                 if not isinstance(vinfo.get(key), str) or not vinfo.get(key):
                     errors.append(f"{tag} needs a string {key}")
+            if "first_party" in vinfo and not isinstance(vinfo["first_party"], bool):
+                errors.append(f"{tag} first_party must be true or false")
             files = vinfo.get("files")
             if not isinstance(files, list) or not files:
                 errors.append(f"{tag} needs a non-empty files list")

@@ -5,6 +5,9 @@ present on disk and byte-identical to the recorded hashes, so a build can trust 
 inlines. `check` is for maintainers: it asks npm and OSV whether the pinned `current`
 versions are outdated or carry advisories, and never runs in tests or CI.
 
+`stamp` is for the first-party kit: after its files change it recomputes the recorded hashes.
+Registry entries marked `first_party` are not on npm, so `check` skips them.
+
 `escape_inline` is the single definition of the escaping applied to inlined blocks;
 `inline_sha256` in the manifest is the hash of its output.
 """
@@ -100,6 +103,34 @@ def _verify_file(name: str, version: str, base: Path, spec: Dict[str, Any]) -> L
     return problems
 
 
+def stamp(vendor_dir: Path, name: str, version: str) -> int:
+    """Recompute `sha256` and `inline_sha256` for every file of `name@version` and rewrite the manifest.
+
+    Key order, the 2-space JSON layout and the trailing newline are preserved, so stamping twice
+    leaves the file byte-identical. Returns the number of files stamped; raises KeyError for an
+    unknown library or version and OSError for a listed file that cannot be read.
+    """
+    manifest = load_manifest(vendor_dir)
+    try:
+        entry = manifest["libraries"][name]
+    except KeyError:
+        raise KeyError("unknown library %r" % (name,)) from None
+    try:
+        files = entry["versions"][version]["files"]
+    except KeyError:
+        raise KeyError("unknown version %r of %s" % (version, name)) from None
+    base = vendor_dir / name / version
+    for spec in files:
+        raw = (base / spec["path"]).read_bytes()
+        spec["sha256"] = _sha256(raw)
+        if spec.get("inline") is True:
+            escaped = escape_inline(raw.decode("utf-8"), spec["kind"])
+            spec["inline_sha256"] = _sha256(escaped.encode("utf-8"))
+    text = json.dumps(manifest, indent=2, ensure_ascii=False) + "\n"
+    (vendor_dir / MANIFEST_NAME).write_text(text, encoding="utf-8")
+    return len(files)
+
+
 def _get_json(url: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     data = json.dumps(body).encode("utf-8") if body is not None else None
     request = urllib.request.Request(
@@ -113,13 +144,19 @@ def check(vendor_dir: Path) -> Dict[str, Any]:
     """Compare each library's `current` pin with npm's latest and OSV's advisories.
 
     Needs network. A library that cannot be queried is reported with an `error` and
-    counts against `ok`.
+    counts against `ok`. A `first_party` version is not looked up and is reported with
+    `status: "first-party"`.
     """
     results: List[Dict[str, Any]] = []
     for name, lib in sorted(load_manifest(vendor_dir)["libraries"].items()):
         current = lib["current"]
-        package = lib["versions"][current]["package"]
+        version_info = lib["versions"][current]
+        package = version_info["package"]
         row: Dict[str, Any] = {"name": name, "current": current}
+        if version_info.get("first_party") is True:
+            row.update(status="first-party", latest=None, outdated=False, advisories=[])
+            results.append(row)
+            continue
         try:
             latest = _get_json(REGISTRY_URL.format(package=package))["version"]
             osv = _get_json(
@@ -145,7 +182,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     for command in ("verify", "check"):
         p = sub.add_parser(command)
         p.add_argument("--vendor-dir", type=Path, default=DEFAULT_VENDOR_DIR)
+    stamp_parser = sub.add_parser("stamp", help="recompute the recorded hashes of one library version")
+    stamp_parser.add_argument("name")
+    stamp_parser.add_argument("version")
+    stamp_parser.add_argument("--vendor-dir", type=Path, default=DEFAULT_VENDOR_DIR)
     args = parser.parse_args(argv)
+
+    if args.command == "stamp":
+        try:
+            count = stamp(args.vendor_dir, args.name, args.version)
+        except KeyError as exc:
+            print(json.dumps({"ok": False, "error": exc.args[0]}))
+            return 2
+        except (OSError, ValueError) as exc:
+            print(json.dumps({"ok": False, "error": "cannot stamp %s@%s: %s" % (args.name, args.version, exc)}))
+            return 2
+        print(json.dumps({"ok": True, "stamped": "%s@%s" % (args.name, args.version), "files": count}))
+        return 0
 
     if args.command == "verify":
         errors = verify(args.vendor_dir)

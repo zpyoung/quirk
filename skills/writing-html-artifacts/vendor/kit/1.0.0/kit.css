@@ -1,0 +1,28 @@
+/*
+ * quirk-kit shared base. Element styles live beside the elements they style.
+ * Selectors use :where() so page and template CSS always win on specificity; the two hiding
+ * rules carry !important because hidden state must hold against any author display value.
+ */
+
+:where(.q-visually-hidden) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media not print {
+  :where([data-q-inactive]) {
+    display: none !important;
+  }
+}
+
+:where([data-q-replaced]) {
+  display: none !important;
+}

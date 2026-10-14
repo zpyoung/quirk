@@ -11,7 +11,15 @@
     "good": ["#1b6a38", "#6fcf8e"],
     "warn": ["#85500a", "#e0a64a"],
     "critical": ["#b3261e", "#f28b82"],
-    "focus": ["#1a5fb4", "#7ab7ff"]
+    "focus": ["#1a5fb4", "#7ab7ff"],
+    "chart-1": ["#c18600", "#e69f00"],
+    "chart-2": ["#4999c6", "#56b4e9"],
+    "chart-3": ["#009e73", "#009e73"],
+    "chart-4": ["#9c942b", "#f0e442"],
+    "chart-5": ["#0072b2", "#0072b2"],
+    "chart-6": ["#d55e00", "#d55e00"],
+    "chart-7": ["#c8779d", "#cc79a0"],
+    "chart-8": ["#1d1c1a", "#ece9e2"]
   },
   "font": {
     "sans": "system-ui, -apple-system, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
