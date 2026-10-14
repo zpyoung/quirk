@@ -3556,6 +3556,60 @@ def test_chart_with_no_numeric_series_shows_the_table_with_a_note(tmp_path: Path
     )
     assert_clean(out)
     views = {v["id"]: v for v in out["results"]["views"]}
-    for chart_id in ("placeholder", "unknown-y", "text-y"):
+    assert views["placeholder"] == {
+        "id": "placeholder",
+        "note": NO_NUMBERS_NOTE + " Not charted (non-numeric values): V.",
+        "open": True,
+        "canvas": False,
+    }
+    for chart_id in ("unknown-y", "text-y"):
         assert views[chart_id] == {"id": chart_id, "note": NO_NUMBERS_NOTE, "open": True, "canvas": False}
     assert views["fine"]["note"] is None and views["fine"]["canvas"] is True and views["fine"]["open"] is False
+
+
+def _two_column_chart(chart_id: str, columns: dict[str, list[str]], attrs: str = "") -> str:
+    labels = list(columns)
+    head = "".join(f"<th>{label}</th>" for label in ["Month", *labels])
+    size = len(next(iter(columns.values())))
+    rows = "".join(
+        f"<tr><td>M{i + 1}</td>" + "".join(f"<td>{columns[label][i]}</td>" for label in labels) + "</tr>"
+        for i in range(size)
+    )
+    return (
+        f'<q-chart id="{chart_id}" type="line" summary="A chart of {chart_id}." {attrs}>'
+        f"<table><thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table></q-chart>\n"
+    )
+
+
+def test_chart_names_the_columns_it_skipped_when_choosing_series(tmp_path: Path) -> None:
+    page = _mini_page(
+        tmp_path,
+        _two_column_chart("partial", {"A": ["1", "2", "3"], "B": ["4", "n/a", "6"]})
+        + _two_column_chart("text", {"A": ["1", "2", "3"], "Owner": ["x", "y", "z"], "Notes": ["p", "q", "r"]})
+        + _two_column_chart("only", {"B": ["4", "n/a", "6"]})
+        + _two_column_chart("clean", {"A": ["1", "2", "3"], "B": ["4", "5", "6"]})
+        + _two_column_chart("named", {"A": ["1", "2", "3"], "B": ["4", "n/a", "6"]}, 'y="A"'),
+    )
+    view = """['partial', 'text', 'only', 'clean', 'named'].map((id) => {
+      const q = document.querySelector('#' + id);
+      const note = q.querySelector(':scope > [data-q-note]');
+      const chart = window.Chart.getChart(q.querySelector('canvas'));
+      return { id, note: note ? note.textContent : null, labels: chart ? chart.data.datasets.map((d) => d.label) : null };
+    })"""
+    out = run(
+        page,
+        {"waitFor": "document.querySelector('#clean canvas') && document.querySelector('#only details')"},
+        ev(view, "views"),
+    )
+    assert_clean(out)
+    views = {v["id"]: v for v in out["results"]["views"]}
+    assert views["partial"] == {"id": "partial", "note": "Not charted (non-numeric values): B.", "labels": ["A"]}
+    assert views["text"]["note"] == "Not charted (non-numeric values): Owner, Notes."
+    assert views["text"]["labels"] == ["A"]
+    assert views["only"] == {
+        "id": "only",
+        "note": NO_NUMBERS_NOTE + " Not charted (non-numeric values): B.",
+        "labels": None,
+    }
+    assert views["clean"] == {"id": "clean", "note": None, "labels": ["A", "B"]}
+    assert views["named"]["note"] is None and views["named"]["labels"] == ["A"]
