@@ -1,7 +1,12 @@
 /*
  * quirk-kit shared base. Element styles live beside the elements they style.
- * Selectors use :where() so page and template CSS always win on specificity; the two hiding
- * rules carry !important because hidden state must hold against any author display value.
+ * Every rule that styles author content or kit-inserted nodes keeps its attribute, class and
+ * state selectors inside :where(), so it stays below one class and a plain page rule wins. The
+ * exceptions are rules that must beat the stylesheets under the kit: the hover rules (Simple.css
+ * restyles button:enabled:hover), the q-tabs panel and q-board section and heading resets (the
+ * report template's "main section + section" divider, Simple.css's "section h2:first-child"),
+ * and the print rules. The two hiding rules carry !important because hidden state must hold
+ * against any author display value.
  */
 
 :where(.q-visually-hidden) {
@@ -35,7 +40,7 @@
 
 /* q-tabs */
 
-:where(q-tabs) > [role="tablist"] {
+q-tabs > :where([role="tablist"]) {
   display: flex;
   flex-wrap: wrap;
   gap: var(--q-space-1);
@@ -43,8 +48,7 @@
   border-bottom: 1px solid var(--q-color-border);
 }
 
-q-tabs > [role="tablist"] > [role="tab"],
-q-tabs > [role="tablist"] > [role="tab"]:enabled:hover {
+q-tabs > :where([role="tablist"]) > :where([role="tab"]) {
   margin: 0 0 -1px;
   min-height: 44px;
   padding: var(--q-space-2) var(--q-space-4);
@@ -60,18 +64,24 @@ q-tabs > [role="tablist"] > [role="tab"]:enabled:hover {
 }
 
 q-tabs > [role="tablist"] > [role="tab"]:enabled:hover {
+  border-color: transparent;
   background: var(--q-color-surface);
   color: var(--q-color-text);
 }
 
-q-tabs > [role="tablist"] > [role="tab"][aria-selected="true"],
+q-tabs > :where([role="tablist"]) > :where([role="tab"][aria-selected="true"]) {
+  background: var(--q-color-surface);
+  border-bottom-color: var(--q-color-accent);
+  color: var(--q-color-text);
+}
+
 q-tabs > [role="tablist"] > [role="tab"][aria-selected="true"]:enabled:hover {
   background: var(--q-color-surface);
   border-bottom-color: var(--q-color-accent);
   color: var(--q-color-text);
 }
 
-/* beats the report template's "main section + section" divider, which would hit panels */
+/* lifted above the report template's "main section + section" divider, which would hit panels */
 q-tabs > section[role="tabpanel"] {
   margin: 0;
   padding: var(--q-space-2) 0;
@@ -109,7 +119,7 @@ q-timeline > ol > li {
   border-left: 2px solid var(--q-color-border);
 }
 
-q-timeline > ol > li:last-child {
+q-timeline > ol > li:where(:last-child) {
   padding-bottom: 0;
 }
 
@@ -126,9 +136,9 @@ q-timeline > ol > li::before {
   background: var(--q-timeline-tone);
 }
 
-q-timeline > ol > li[data-tone="success"] { --q-timeline-tone: var(--q-color-good); }
-q-timeline > ol > li[data-tone="warning"] { --q-timeline-tone: var(--q-color-warn); }
-q-timeline > ol > li[data-tone="danger"] { --q-timeline-tone: var(--q-color-critical); }
+q-timeline > ol > li:where([data-tone="success"]) { --q-timeline-tone: var(--q-color-good); }
+q-timeline > ol > li:where([data-tone="warning"]) { --q-timeline-tone: var(--q-color-warn); }
+q-timeline > ol > li:where([data-tone="danger"]) { --q-timeline-tone: var(--q-color-critical); }
 
 :where(q-timeline) time {
   margin-inline-end: var(--q-space-2);
@@ -138,7 +148,7 @@ q-timeline > ol > li[data-tone="danger"] { --q-timeline-tone: var(--q-color-crit
 
 /* q-code */
 
-q-code > [data-q-bar] {
+q-code > :where([data-q-bar]) {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -153,28 +163,28 @@ q-code > [data-q-bar] {
   font-size: var(--q-size-small);
 }
 
-q-code > [data-q-bar] > [data-q-filename] {
+q-code > :where([data-q-bar]) > :where([data-q-filename]) {
   font-family: var(--q-font-mono);
   color: var(--q-color-text);
   overflow-wrap: anywhere;
 }
 
-q-code > [data-q-bar] > [data-q-status] {
+q-code > :where([data-q-bar]) > :where([data-q-status]) {
   margin-inline-start: auto;
 }
 
-q-code > [data-q-bar] > [data-q-copy] {
+q-code > :where([data-q-bar]) > button:where([data-q-copy]) {
   margin: 0 0 0 auto;
   min-height: 32px;
   padding: var(--q-space-1) var(--q-space-3);
   font: inherit;
 }
 
-q-code > [data-q-bar] > [data-q-status]:not(:empty) + [data-q-copy] {
+q-code > :where([data-q-bar]) > :where([data-q-status]:not(:empty)) + button:where([data-q-copy]) {
   margin-inline-start: 0;
 }
 
-q-code > [data-q-bar] + pre {
+q-code > :where([data-q-bar]) + pre {
   margin-top: 0;
   border-top-left-radius: 0;
   border-top-right-radius: 0;
@@ -202,14 +212,14 @@ q-stat {
   color: var(--q-color-text);
 }
 
-q-stat > [slot="label"] {
+q-stat > :where([slot="label"]) {
   grid-area: label;
   color: var(--q-color-text-muted);
   font-size: var(--q-size-small);
   font-weight: 600;
 }
 
-q-stat > [slot="value"] {
+q-stat > :where([slot="value"]) {
   grid-area: value;
   min-width: 0;
   font-size: var(--q-size-h2);
@@ -219,7 +229,7 @@ q-stat > [slot="value"] {
   overflow-wrap: anywhere;
 }
 
-q-stat > [slot="delta"] {
+q-stat > :where([slot="delta"]) {
   grid-area: delta;
   color: var(--q-color-text-muted);
   font-size: var(--q-size-small);
@@ -228,18 +238,18 @@ q-stat > [slot="delta"] {
   white-space: nowrap;
 }
 
-q-stat > [slot="delta"][data-q-trend="good"] { color: var(--q-color-good); }
-q-stat > [slot="delta"][data-q-trend="bad"] { color: var(--q-color-critical); }
-q-stat > [slot="delta"][data-q-trend="flat"] { color: var(--q-color-text-muted); }
+q-stat > :where([slot="delta"][data-q-trend="good"]) { color: var(--q-color-good); }
+q-stat > :where([slot="delta"][data-q-trend="bad"]) { color: var(--q-color-critical); }
+q-stat > :where([slot="delta"][data-q-trend="flat"]) { color: var(--q-color-text-muted); }
 
-q-stat > [slot="definition"] {
+q-stat > :where([slot="definition"]) {
   grid-area: definition;
   color: var(--q-color-text-muted);
   font-size: var(--q-size-small);
   line-height: var(--q-size-leading-tight);
 }
 
-q-stat > svg[data-q-kit] {
+q-stat > svg:where([data-q-kit]) {
   grid-area: spark;
   display: block;
   width: 100%;
@@ -247,7 +257,7 @@ q-stat > svg[data-q-kit] {
   overflow: visible;
 }
 
-q-stat > svg[data-q-kit] polyline {
+q-stat > svg:where([data-q-kit]) polyline {
   fill: none;
   stroke: var(--q-color-accent);
   stroke-width: 2;
@@ -262,14 +272,14 @@ q-stat > svg[data-q-kit] polyline {
   margin: var(--q-space-4) 0;
 }
 
-q-chart:not(:defined)::before {
+q-chart:where(:not(:defined))::before {
   content: attr(summary);
   display: block;
   margin-bottom: var(--q-space-2);
   font-weight: 600;
 }
 
-q-chart > [data-q-chart-box] {
+q-chart > :where([data-q-chart-box]) {
   position: relative;
   box-sizing: border-box;
   width: 100%;
@@ -277,12 +287,12 @@ q-chart > [data-q-chart-box] {
   height: var(--q-chart-height, 320px);
 }
 
-q-chart > [data-q-chart-box] > canvas {
+q-chart > :where([data-q-chart-box]) > canvas {
   display: block;
   max-width: 100%;
 }
 
-q-chart > [data-q-note] {
+q-chart > :where([data-q-note]) {
   margin: var(--q-space-2) 0;
   color: var(--q-color-text-muted);
   font-size: var(--q-size-small);
@@ -316,7 +326,7 @@ q-chart :is(th, td) {
   vertical-align: top;
 }
 
-q-chart :is(th, td):is(.num, [data-q-num]) {
+q-chart :is(th, td):where(.num, [data-q-num]) {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -338,7 +348,7 @@ q-diff-note {
   list-style: disc outside;
 }
 
-q-diff > [data-q-diff] {
+q-diff > :where([data-q-diff]) {
   container-type: inline-size;
   box-sizing: border-box;
   max-width: 100%;
@@ -349,7 +359,7 @@ q-diff > [data-q-diff] {
   color: var(--q-color-text);
 }
 
-q-diff > [data-q-diff] > table {
+q-diff > :where([data-q-diff]) > table {
   display: table;
   width: 100%;
   min-width: max-content;
@@ -361,7 +371,7 @@ q-diff > [data-q-diff] > table {
   line-height: var(--q-size-leading-tight);
 }
 
-q-diff > [data-q-diff] :is(th, td) {
+q-diff > :where([data-q-diff]) :is(th, td) {
   padding: 0 var(--q-space-2);
   border: 0;
   text-align: left;
@@ -369,7 +379,7 @@ q-diff > [data-q-diff] :is(th, td) {
   font-weight: 400;
 }
 
-q-diff .q-diff-file > th {
+q-diff :where(.q-diff-file) > th {
   padding-block: var(--q-space-2);
   border-top: 1px solid var(--q-color-border);
   border-bottom: 1px solid var(--q-color-border);
@@ -377,28 +387,27 @@ q-diff .q-diff-file > th {
   font-weight: 700;
 }
 
-q-diff tbody:first-child > .q-diff-file:first-child > th {
+q-diff tbody:where(:first-child) > :where(.q-diff-file:first-child) > th {
   border-top: 0;
 }
 
-q-diff :is(.q-diff-file, .q-diff-hunk, .q-diff-meta) > :is(th, td) > span {
+q-diff :where(.q-diff-file, .q-diff-hunk, .q-diff-meta) > :is(th, td) > span {
   position: sticky;
   left: var(--q-space-2);
 }
 
-q-diff .q-diff-hunk > td {
+q-diff :where(.q-diff-hunk) > td {
   padding-block: var(--q-space-1);
   background: var(--q-color-surface);
   color: var(--q-color-text-muted);
 }
 
-q-diff .q-diff-meta > td {
+q-diff :where(.q-diff-meta) > td {
   color: var(--q-color-text-muted);
   white-space: pre;
 }
 
-q-diff [data-q-old],
-q-diff [data-q-new] {
+q-diff td:where([data-q-old], [data-q-new]) {
   min-width: 3.5ch;
   color: var(--q-color-text-muted);
   text-align: right;
@@ -407,32 +416,32 @@ q-diff [data-q-new] {
   user-select: none;
 }
 
-q-diff [data-q-code] {
+q-diff td:where([data-q-code]) {
   width: 100%;
   color: var(--q-color-text);
   white-space: pre;
 }
 
-q-diff .q-diff-marker {
+q-diff :where(.q-diff-marker) {
   display: inline-block;
   width: 2ch;
   font-weight: 700;
 }
 
-q-diff .q-diff-add > td {
+q-diff :where(.q-diff-add) > td {
   background: var(--q-color-surface);
   background: color-mix(in srgb, var(--q-color-good) 16%, var(--q-color-bg));
 }
 
-q-diff .q-diff-del > td {
+q-diff :where(.q-diff-del) > td {
   background: var(--q-color-surface);
   background: color-mix(in srgb, var(--q-color-critical) 16%, var(--q-color-bg));
 }
 
-q-diff .q-diff-add .q-diff-marker { color: var(--q-color-good); }
-q-diff .q-diff-del .q-diff-marker { color: var(--q-color-critical); }
+q-diff :where(.q-diff-add) :where(.q-diff-marker) { color: var(--q-color-good); }
+q-diff :where(.q-diff-del) :where(.q-diff-marker) { color: var(--q-color-critical); }
 
-q-diff .q-diff-note-row > td {
+q-diff :where(.q-diff-note-row) > td {
   padding: var(--q-space-2);
   border-block: 1px solid var(--q-color-border);
   background: var(--q-color-surface);
@@ -440,7 +449,7 @@ q-diff .q-diff-note-row > td {
   white-space: normal;
 }
 
-q-diff [data-q-note] {
+q-diff :where([data-q-note]) {
   position: sticky;
   left: var(--q-space-2);
   box-sizing: border-box;
@@ -462,7 +471,7 @@ q-table {
   overflow: auto;
 }
 
-q-table[data-q-long] {
+q-table:where([data-q-long]) {
   max-height: 32rem;
 }
 
@@ -481,7 +490,7 @@ q-table :is(th, td) {
   vertical-align: top;
 }
 
-q-table :is(th, td):is(.num, [data-q-num]) {
+q-table :is(th, td):where(.num, [data-q-num]) {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -495,8 +504,7 @@ q-table > table > thead > tr > th {
   white-space: nowrap;
 }
 
-q-table th > [data-q-sort],
-q-table th > [data-q-sort]:enabled:hover {
+q-table th > button:where([data-q-sort]) {
   display: inline-flex;
   align-items: center;
   gap: var(--q-space-1);
@@ -514,18 +522,18 @@ q-table th > [data-q-sort]:enabled:hover {
 }
 
 q-table th > [data-q-sort]:enabled:hover {
+  background: none;
   text-decoration: underline;
 }
 
-q-table th[aria-sort="ascending"] > [data-q-sort]::after,
-q-table th[aria-sort="descending"] > [data-q-sort]::after {
+q-table th:where([aria-sort="ascending"], [aria-sort="descending"]) > :where([data-q-sort])::after {
   font-size: var(--q-size-small);
 }
 
-q-table th[aria-sort="ascending"] > [data-q-sort]::after { content: "\25B2"; }
-q-table th[aria-sort="descending"] > [data-q-sort]::after { content: "\25BC"; }
+q-table th:where([aria-sort="ascending"]) > :where([data-q-sort])::after { content: "\25B2"; }
+q-table th:where([aria-sort="descending"]) > :where([data-q-sort])::after { content: "\25BC"; }
 
-q-table > [data-q-filter] {
+q-table > :where([data-q-filter]) {
   position: sticky;
   left: 0;
   display: flex;
@@ -538,7 +546,7 @@ q-table > [data-q-filter] {
   padding: var(--q-space-2) 0;
 }
 
-q-table > [data-q-filter] > input {
+q-table > :where([data-q-filter]) > input {
   flex: 1 1 12rem;
   min-width: 0;
   min-height: 44px;
@@ -546,12 +554,12 @@ q-table > [data-q-filter] > input {
   box-sizing: border-box;
 }
 
-q-table > [data-q-filter] > [data-q-count] {
+q-table > :where([data-q-filter]) > :where([data-q-count]) {
   color: var(--q-color-text-muted);
   font-size: var(--q-size-small);
 }
 
-q-table > [data-q-message] {
+q-table > :where([data-q-message]) {
   position: sticky;
   left: 0;
   margin: var(--q-space-2) 0;
@@ -617,7 +625,7 @@ q-board {
   margin: var(--q-space-4) 0;
 }
 
-/* :not([hidden]) lifts this above the report template's "main section + section" divider */
+/* lifted above the report template's "main section + section" divider; :not([hidden]) does it */
 q-board > section:not([hidden]) {
   box-sizing: border-box;
   min-width: 0;
@@ -628,6 +636,7 @@ q-board > section:not([hidden]) {
   background: var(--q-color-bg);
 }
 
+/* lifted above Simple.css's "section h2:first-child" top margin */
 q-board > section > :is(h2, h3, h4, h5, h6):first-child {
   margin: 0 0 var(--q-space-3);
   font-size: var(--q-size-h4);
@@ -654,22 +663,22 @@ q-board > section > ul > li {
   overflow-wrap: anywhere;
 }
 
-q-board > section > ul > li[data-q-card] {
+q-board > section > ul > li:where([data-q-card]) {
   padding-left: calc(var(--q-space-5) + var(--q-space-3));
   cursor: grab;
 }
 
-q-board > section > ul > li[data-q-dragging] {
+q-board > section > ul > li:where([data-q-dragging]) {
   z-index: 2;
   outline: 2px solid var(--q-color-accent);
   cursor: grabbing;
 }
 
-q-board[data-q-busy] {
+q-board:where([data-q-busy]) {
   user-select: none;
 }
 
-q-board [data-q-handle] {
+q-board :where([data-q-handle]) {
   position: absolute;
   top: 0;
   bottom: 0;
@@ -684,7 +693,7 @@ q-board [data-q-handle] {
   letter-spacing: -0.2em;
 }
 
-q-board [data-q-move] {
+q-board select:where([data-q-move]) {
   display: block;
   max-width: 100%;
   min-height: 32px;
@@ -694,7 +703,7 @@ q-board [data-q-move] {
   cursor: pointer;
 }
 
-q-board > [data-q-bar] {
+q-board > :where([data-q-bar]) {
   grid-column: 1 / -1;
   display: flex;
   flex-wrap: wrap;
@@ -703,22 +712,22 @@ q-board > [data-q-bar] {
   min-width: 0;
 }
 
-q-board > [data-q-bar] > button {
+q-board > :where([data-q-bar]) > button {
   margin: 0;
   min-height: 36px;
   font: inherit;
 }
 
-q-board > [data-q-bar] > [data-q-note] {
+q-board > :where([data-q-bar]) > :where([data-q-note]) {
   color: var(--q-color-text-muted);
   font-size: var(--q-size-small);
 }
 
-q-board > [data-q-bar] > [data-q-status] {
+q-board > :where([data-q-bar]) > :where([data-q-status]) {
   font-size: var(--q-size-small);
 }
 
-q-board > [data-q-export] {
+q-board > textarea:where([data-q-export]) {
   grid-column: 1 / -1;
   box-sizing: border-box;
   width: 100%;
@@ -733,7 +742,7 @@ q-board > [data-q-export] {
   font-size: var(--q-size-small);
 }
 
-q-board > [data-q-drop] {
+q-board > :where([data-q-drop]) {
   position: absolute;
   height: 4px;
   border-radius: var(--q-radius-pill);
