@@ -3303,3 +3303,259 @@ def test_board_reads_without_the_script_in_both_schemes(board_nojs: Path, scheme
     )
     assert_clean(out)
     assert out["results"]["cards"] is True
+
+
+# --- review fixes: page CSS wins, header columns, chart cleanup and the no-numbers note -----------
+
+
+def _mini_page(tmp_path: Path, body: str, name: str = "mini") -> Path:
+    reason = _node_ready()
+    if reason:
+        pytest.skip(reason)
+    src = tmp_path / f"{name}.src.html"
+    src.write_text(HEADER + body, encoding="utf-8")
+    return _build(src, tmp_path / f"{name}.html")
+
+
+def test_page_rules_with_one_class_beat_the_kit_on_slotted_and_inserted_nodes(tmp_path: Path) -> None:
+    page = _mini_page(
+        tmp_path,
+        """<style>
+.big { font-size: 9px; }
+.tight { padding: 3px; }
+.snug { margin-top: 11px; }
+.tab-mine { padding: 0; }
+</style>
+<q-stat id="stat"><span slot="label">Label</span><span slot="value" class="big">42</span>
+<span slot="definition">Distinct events per day.</span></q-stat>
+<q-table id="table"><table><thead><tr><th class="tight">Name</th></tr></thead><tbody><tr><td>a</td></tr></tbody></table></q-table>
+<q-code id="code" filename="a.sh"><pre class="snug"><code>echo hi</code></pre></q-code>
+""",
+    )
+    out = run(
+        page,
+        ev("getComputedStyle(document.querySelector('#stat [slot=value]')).fontSize", "value"),
+        ev("getComputedStyle(document.querySelector('#table th')).paddingTop", "th"),
+        ev("getComputedStyle(document.querySelector('#code pre')).marginTop", "pre"),
+        ev("getComputedStyle(document.querySelector('#stat [slot=label]')).fontSize", "label"),
+    )
+    assert_clean(out)
+    assert out["results"]["value"] == "9px"
+    assert out["results"]["th"] == "3px"
+    assert out["results"]["pre"] == "11px"
+    assert out["results"]["label"] != "9px"
+
+
+def test_kit_css_rules_stay_at_or_below_one_class_except_the_named_lifts() -> None:
+    css = re.sub(r"/\*.*?\*/", "", (KIT_JS.parent / "kit.css").read_text(encoding="utf-8"), flags=re.S)
+
+    def strip_where(selector: str) -> str:
+        while ":where(" in selector:
+            start = selector.index(":where(")
+            depth, end = 1, start + 7
+            while depth:
+                depth += (selector[end] == "(") - (selector[end] == ")")
+                end += 1
+            selector = selector[:start] + selector[end:]
+        return selector
+
+    lifted = {
+        'q-tabs > [role="tablist"] > [role="tab"]:enabled:hover',
+        'q-tabs > [role="tablist"] > [role="tab"][aria-selected="true"]:enabled:hover',
+        'q-tabs > section[role="tabpanel"]',
+        "q-table th > [data-q-sort]:enabled:hover",
+        "q-board > section:not([hidden])",
+        "q-board > section > :is(h2, h3, h4, h5, h6):first-child",
+    }
+    offenders: list[str] = []
+    stack: list[str] = []
+    for match in re.finditer(r"([^{}]*)([{}])", css):
+        text, brace = match.group(1).strip(), match.group(2)
+        if brace == "}":
+            stack.pop()
+        elif text.startswith("@"):
+            stack.append(text)
+        else:
+            stack.append("rule")
+            if any("print" in item for item in stack[:-1]):
+                continue
+            for selector in re.split(r",\s*(?![^(]*\))", text):
+                bare = re.sub(r":is\([^)]*\)", "", strip_where(selector)).replace("::", " ")
+                if re.search(r"[\[.#]|:[a-z]", bare) and " ".join(selector.split()) not in lifted:
+                    offenders.append(" ".join(selector.split()))
+    assert offenders == []
+
+
+def _sortable(table_id: str, head: str, rows: list[str]) -> str:
+    body = "".join("<tr>" + "".join(f"<td>{cell}</td>" for cell in row.split("|")) + "</tr>" for row in rows)
+    return f'<q-table id="{table_id}"><table><thead>{head}</thead><tbody>{body}</tbody></table></q-table>\n'
+
+
+COLUMN_TABLES = _sortable(
+    "corner",
+    '<tr><td></td><th>Q1</th><th class="num">Q2</th></tr>',
+    ["alpha|30|5", "beta|10|50", "gamma|20|7"],
+) + _sortable(
+    "span",
+    '<tr><th colspan="2">Name and id</th><th class="num">Score</th></tr>',
+    ["b|x|3", "a|y|9", "c|z|1"],
+)
+
+
+def _first_cells(table_id: str) -> str:
+    return f"[...document.querySelectorAll('#{table_id} tbody tr')].map((tr) => tr.cells[0].textContent)"
+
+
+def _aria_sorts(table_id: str) -> str:
+    return f"[...document.querySelectorAll('#{table_id} th')].map((th) => th.getAttribute('aria-sort'))"
+
+
+def test_table_sorts_the_right_column_when_the_header_row_has_a_non_th_cell(tmp_path: Path) -> None:
+    page = _mini_page(tmp_path, COLUMN_TABLES)
+    out = run(
+        page,
+        {"click": "#corner th:nth-child(2) button"},
+        ev(_first_cells("corner"), "q1_asc"),
+        ev(_aria_sorts("corner"), "q1_aria"),
+        {"click": "#corner th:nth-child(3) button"},
+        ev(_first_cells("corner"), "q2_asc"),
+        ev(_aria_sorts("corner"), "q2_aria"),
+        {"click": "#corner th:nth-child(3) button"},
+        ev(_first_cells("corner"), "q2_desc"),
+        ev("[...document.querySelectorAll('#corner tbody tr')].map((tr) => [...tr.cells].map((c) => c.hasAttribute('data-q-num')))", "num"),
+    )
+    assert_clean(out)
+    results = out["results"]
+    assert results["q1_asc"] == ["beta", "gamma", "alpha"]
+    assert results["q1_aria"] == ["ascending", None]
+    assert results["q2_asc"] == ["alpha", "gamma", "beta"]
+    assert results["q2_aria"] == [None, "ascending"]
+    assert results["q2_desc"] == ["beta", "gamma", "alpha"]
+    assert results["num"] == [[False, False, True]] * 3
+
+
+def test_table_header_with_a_colspan_sorts_by_its_first_spanned_column(tmp_path: Path) -> None:
+    page = _mini_page(tmp_path, COLUMN_TABLES)
+    out = run(
+        page,
+        {"click": "#span th:nth-child(1) button"},
+        ev(_first_cells("span"), "name_asc"),
+        ev(_aria_sorts("span"), "name_aria"),
+        {"click": "#span th:nth-child(2) button"},
+        ev(_first_cells("span"), "score_asc"),
+        ev(_aria_sorts("span"), "score_aria"),
+        ev("[...document.querySelectorAll('#span tbody tr')].map((tr) => tr.cells[2].hasAttribute('data-q-num'))", "num"),
+    )
+    assert_clean(out)
+    results = out["results"]
+    assert results["name_asc"] == ["a", "b", "c"]
+    assert results["name_aria"] == ["ascending", None]
+    assert results["score_asc"] == ["c", "b", "a"]
+    assert results["score_aria"] == [None, "ascending"]
+    assert results["num"] == [True] * 3
+
+
+def test_table_data_from_rows_line_up_under_a_header_row_with_a_corner_cell(tmp_path: Path) -> None:
+    reason = _node_ready()
+    if reason:
+        pytest.skip(reason)
+    (tmp_path / "rows.json").write_text(json.dumps({"rows": [{"Q1": 30, "Q2": 5}, {"Q1": 10, "Q2": 50}]}), encoding="utf-8")
+    src = tmp_path / "bound.src.html"
+    src.write_text(
+        HEADER.replace('"mode": "offline"', '"mode": "offline", "data": "rows.json"')
+        + '<q-table id="bound" data-from="rows"><table><thead><tr><td></td><th class="num">Q1</th><th class="num">Q2</th></tr></thead><tbody></tbody></table></q-table>\n',
+        encoding="utf-8",
+    )
+    page = _build(src, tmp_path / "bound.html")
+    out = run(
+        page,
+        {"waitFor": "document.querySelectorAll('#bound tbody tr').length === 2"},
+        {"click": "#bound th:nth-child(2) button"},
+        ev("[...document.querySelectorAll('#bound tbody tr')].map((tr) => [...tr.cells].map((c) => c.textContent))", "rows"),
+    )
+    assert_clean(out)
+    assert out["results"]["rows"] == [["", "10", "50"], ["", "30", "5"]]
+
+
+THEME_PROBE = """(() => {
+  window.__themeListeners = new Set();
+  window.__themeObservers = new Set();
+  const add = document.addEventListener.bind(document);
+  const remove = document.removeEventListener.bind(document);
+  document.addEventListener = function (type, fn, options) {
+    if (type === 'quirk-theme') window.__themeListeners.add(fn);
+    return add(type, fn, options);
+  };
+  document.removeEventListener = function (type, fn, options) {
+    if (type === 'quirk-theme') window.__themeListeners.delete(fn);
+    return remove(type, fn, options);
+  };
+  const Native = window.MutationObserver;
+  window.MutationObserver = class extends Native {
+    observe(target, options) {
+      if (target === document.documentElement) window.__themeObservers.add(this);
+      return super.observe(target, options);
+    }
+    disconnect() {
+      window.__themeObservers.delete(this);
+      return super.disconnect();
+    }
+  };
+})();"""
+
+
+def test_chart_removed_from_the_page_stops_watching_the_theme(chart_page: Path) -> None:
+    live = "({ listeners: window.__themeListeners.size, observers: window.__themeObservers.size })"
+    out = run(
+        chart_page,
+        _drawn(),
+        ev(live, "before"),
+        ev("document.querySelectorAll('q-chart').length", "charts"),
+        ev("document.querySelectorAll('q-chart').forEach((chart) => chart.remove())", "removed"),
+        ev(live, "after"),
+        ev("(document.documentElement.setAttribute('data-theme', 'dark'), new Promise((r) => setTimeout(() => r(window.__themeListeners.size), 100)))", "later"),
+        initScripts=[THEME_PROBE],
+    )
+    assert_clean(out)
+    results = out["results"]
+    assert results["before"]["listeners"] >= results["charts"] and results["before"]["observers"] >= results["charts"]
+    assert results["after"]["listeners"] == results["before"]["listeners"] - results["charts"]
+    assert results["after"]["observers"] == results["before"]["observers"] - results["charts"]
+    assert results["later"] == results["after"]["listeners"]
+
+
+NO_NUMBERS_NOTE = "No numeric columns to chart; showing the table."
+
+
+def _no_series_chart(chart_id: str, attrs: str, cells: list[str], label: str = "V") -> str:
+    rows = "".join(f"<tr><td>M{i}</td><td>{cell}</td></tr>" for i, cell in enumerate(cells, 1))
+    return (
+        f'<q-chart id="{chart_id}" type="area" summary="A chart of {chart_id}." {attrs}>'
+        f"<table><thead><tr><th>Month</th><th>{label}</th></tr></thead><tbody>{rows}</tbody></table></q-chart>\n"
+    )
+
+
+def test_chart_with_no_numeric_series_shows_the_table_with_a_note(tmp_path: Path) -> None:
+    page = _mini_page(
+        tmp_path,
+        _no_series_chart("placeholder", "", ["-5", "n/a", "7"])
+        + _no_series_chart("unknown-y", 'y="Nope"', ["1", "2", "3"])
+        + _no_series_chart("text-y", 'y="V"', ["low", "mid", "high"])
+        + _no_series_chart("fine", "", ["1", "2", "3"]),
+    )
+    view = """['placeholder', 'unknown-y', 'text-y', 'fine'].map((id) => {
+      const q = document.querySelector('#' + id);
+      const note = q.querySelector(':scope > [data-q-note]');
+      const details = q.querySelector(':scope > details');
+      return { id, note: note ? note.textContent : null, open: !!details && details.open, canvas: !!q.querySelector('canvas') };
+    })"""
+    out = run(
+        page,
+        {"waitFor": "document.querySelector('#fine canvas') && document.querySelector('#text-y details')"},
+        ev(view, "views"),
+    )
+    assert_clean(out)
+    views = {v["id"]: v for v in out["results"]["views"]}
+    for chart_id in ("placeholder", "unknown-y", "text-y"):
+        assert views[chart_id] == {"id": chart_id, "note": NO_NUMBERS_NOTE, "open": True, "canvas": False}
+    assert views["fine"]["note"] is None and views["fine"]["canvas"] is True and views["fine"]["open"] is False

@@ -747,6 +747,28 @@
     return found ? Number(found[0].replace('−', '-')) : null;
   }
 
+  /** The visual column a header or body cell starts at, counting the colspans before it. */
+  function columnStart(cell) {
+    var start = 0;
+    var cells = cell.parentNode.cells;
+    for (var i = 0; i < cells.length && cells[i] !== cell; i += 1) {
+      start += cells[i].colSpan || 1;
+    }
+    return start;
+  }
+
+  /** The cell of a row that covers a visual column, or null when the row is shorter. */
+  function cellAtColumn(tr, column) {
+    var end = 0;
+    for (var i = 0; i < tr.cells.length; i += 1) {
+      end += tr.cells[i].colSpan || 1;
+      if (column < end) {
+        return tr.cells[i];
+      }
+    }
+    return null;
+  }
+
   function compareRows(a, b, numeric, dir) {
     var result = 0;
     if (numeric) {
@@ -818,6 +840,19 @@
       return row ? Array.prototype.filter.call(row.cells, function (cell) { return cell.tagName === 'TH'; }) : [];
     }
 
+    /** How many visual columns the header row spans. */
+    _width(table) {
+      var head = table.tHead;
+      var row = head && head.rows.length ? head.rows[head.rows.length - 1] : null;
+      var width = 0;
+      if (row) {
+        Array.prototype.forEach.call(row.cells, function (cell) {
+          width += cell.colSpan || 1;
+        });
+      }
+      return width;
+    }
+
     _bodies(table) {
       var all = Array.prototype.slice.call(table.tBodies);
       var generated = all.filter(function (body) { return body.hasAttribute('data-q-kit'); });
@@ -856,10 +891,14 @@
       if (!table || !this.hasAttribute('data-from')) {
         return;
       }
-      var keys = this._headers(table).map(function (th) {
-        return th.getAttribute('data-key') || th.textContent.trim();
+      var columns = {};
+      this._headers(table).forEach(function (th) {
+        columns[columnStart(th)] = {
+          key: th.getAttribute('data-key') || th.textContent.trim(),
+          num: th.classList.contains('num')
+        };
       });
-      var nums = this._headers(table).map(function (th) { return th.classList.contains('num'); });
+      var width = this._width(table);
       Array.prototype.slice.call(table.tBodies).forEach(function (body) {
         if (body.hasAttribute('data-q-kit')) {
           body.remove();
@@ -871,15 +910,18 @@
       var body = kitNode('tbody');
       data.forEach(function (record) {
         var tr = document.createElement('tr');
-        keys.forEach(function (key, i) {
+        for (var at = 0; at < width; at += 1) {
           var td = document.createElement('td');
-          var value = record[key];
-          td.textContent = value === null || value === undefined ? '' : (typeof value === 'object' ? JSON.stringify(value) : String(value));
-          if (nums[i]) {
-            td.setAttribute('data-q-num', '');
+          var column = columns[at];
+          if (column) {
+            var value = record[column.key];
+            td.textContent = value === null || value === undefined ? '' : (typeof value === 'object' ? JSON.stringify(value) : String(value));
+            if (column.num) {
+              td.setAttribute('data-q-num', '');
+            }
           }
           tr.appendChild(td);
-        });
+        }
         body.appendChild(tr);
       });
       table.appendChild(body);
@@ -899,7 +941,7 @@
       }
       th.appendChild(button);
       button.addEventListener('click', function () {
-        var column = self._headers(self._table()).indexOf(th);
+        var column = columnStart(th);
         var sort = self._sort;
         self._sort = sort && sort.column === column ? { column: column, dir: -sort.dir } : { column: column, dir: 1 };
         self._render();
@@ -913,7 +955,8 @@
           rowCount += 1;
           rowOrder.set(tr, rowCount);
         }
-        var text = tr.cells[column] ? cellText(tr.cells[column]) : '';
+        var cell = cellAtColumn(tr, column);
+        var text = cell ? cellText(cell) : '';
         return { tr: tr, text: text, num: numeric ? numberIn(text) : null };
       });
       items.sort(function (a, b) {
@@ -973,9 +1016,10 @@
         self._ensureSortButton(th);
       });
 
-      var sort = this._sort && this._sort.column < heads.length ? this._sort : null;
-      heads.forEach(function (th, i) {
-        if (sort && sort.column === i) {
+      var sortHead = this._sort ? heads.filter(function (th) { return columnStart(th) === self._sort.column; })[0] : null;
+      var sort = sortHead ? this._sort : null;
+      heads.forEach(function (th) {
+        if (th === sortHead) {
           th.setAttribute('aria-sort', sort.dir > 0 ? 'ascending' : 'descending');
         } else {
           th.removeAttribute('aria-sort');
@@ -983,14 +1027,15 @@
       });
       bodies.forEach(function (body) {
         Array.prototype.forEach.call(body.rows, function (tr) {
-          heads.forEach(function (th, i) {
-            if (th.classList.contains('num') && tr.cells[i]) {
-              tr.cells[i].setAttribute('data-q-num', '');
+          heads.forEach(function (th) {
+            var cell = th.classList.contains('num') ? cellAtColumn(tr, columnStart(th)) : null;
+            if (cell) {
+              cell.setAttribute('data-q-num', '');
             }
           });
         });
         if (sort) {
-          self._sortBody(body, sort.column, sort.dir, heads[sort.column].classList.contains('num'));
+          self._sortBody(body, sort.column, sort.dir, sortHead.classList.contains('num'));
         }
       });
 
@@ -1126,7 +1171,7 @@
       this._stop = watchChildren(this, { childList: true, subtree: true, characterData: true }, function () {
         self._render();
       });
-      onTheme(this, function () {
+      this._offTheme = onTheme(this, function () {
         self._render();
       });
       this._beforePrint = function () {
@@ -1152,6 +1197,10 @@
       if (this._stop) {
         this._stop();
         this._stop = null;
+      }
+      if (this._offTheme) {
+        this._offTheme();
+        this._offTheme = null;
       }
       window.removeEventListener('beforeprint', this._beforePrint);
       window.removeEventListener('afterprint', this._afterPrint);
@@ -1263,7 +1312,8 @@
       if (this.hasAttribute('y')) {
         this.getAttribute('y').split(',').forEach(function (name) {
           var index = findColumn(model.columns, name);
-          if (index >= 0 && index !== x && series.indexOf(index) < 0) {
+          var charted = index >= 0 && model.rows.some(function (row) { return toNumber(row[index]) !== null; });
+          if (charted && index !== x && series.indexOf(index) < 0) {
             series.push(index);
           }
         });
@@ -1546,6 +1596,8 @@
       var note = '';
       if (plan.series.length > MAX_SERIES) {
         note = 'Too many series to chart clearly (' + plan.series.length + '); showing the table.';
+      } else if (!plan.series.length && model.rows.length) {
+        note = 'No numeric columns to chart; showing the table.';
       } else if (hasChart && plan.series.length && model.rows.length) {
         mode = 'chart';
       }
