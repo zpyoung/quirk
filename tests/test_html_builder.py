@@ -687,3 +687,208 @@ def test_note_reads_a_report_from_verify_dir(tmp_path, env, project):
     rc, result = run_cli("note", out, "--verify-dir", report_dir, env=env)
     assert rc == 0 and result["verify_stale"] is False
     assert "passed in chrome" in result["markdown"]
+
+
+# -- the component kit: auto-inclusion ---------------------------------------------------------------
+
+KIT_DIR = SKILL / "vendor" / "kit" / "1.0.0"
+STAT = (
+    '<q-stat direction="up-good" points="1,2,3">'
+    '<span slot="label">Users</span><span slot="value">3</span>'
+    '<span slot="definition">Distinct users.</span></q-stat>'
+)
+CHART = (
+    '<q-chart summary="Builds per month." type="line">'
+    "<table><thead><tr><th>Month</th><th>Builds</th></tr></thead>"
+    "<tbody><tr><td>June</td><td>4</td></tr></tbody></table></q-chart>"
+)
+
+
+def fake_kit_registry(root: Path, versions: list[str], current: str) -> None:
+    """Write root/vendor with a first-party kit at each of ``versions``, each a copy of the real one."""
+    entries = {}
+    for version in versions:
+        vdir = root / "vendor" / "kit" / version
+        vdir.mkdir(parents=True, exist_ok=True)
+        (vdir / "LICENSE").write_text((KIT_DIR / "LICENSE").read_text(encoding="utf-8"), encoding="utf-8")
+        css = (KIT_DIR / "kit.css").read_text(encoding="utf-8")
+        js = (KIT_DIR / "kit.js").read_text(encoding="utf-8") + f"\n/* fake kit {version} */\n"
+        (vdir / "kit.css").write_text(css, encoding="utf-8")
+        (vdir / "kit.js").write_text(js, encoding="utf-8")
+        catalog = json.loads((KIT_DIR / "catalog.json").read_text(encoding="utf-8"))
+        catalog["kit_version"] = version
+        (vdir / "catalog.json").write_text(json.dumps(catalog), encoding="utf-8")
+        files = []
+        for name, kind, position, body in (("kit.css", "css", "head", css), ("kit.js", "js", "body-end", js)):
+            files.append(
+                {
+                    "path": name,
+                    "kind": kind,
+                    "sha256": sha(body),
+                    "inline_sha256": sha(vendor.escape_inline(body, kind)),
+                    "position": position,
+                    "inline": True,
+                }
+            )
+        entries[version] = {
+            "package": "quirk-kit",
+            "license": "MIT",
+            "license_file": "LICENSE",
+            "first_party": True,
+            "files": files,
+        }
+    registry = {"schema": 1, "libraries": {"kit": {"current": current, "versions": entries}}}
+    (root / "vendor" / "libraries.json").write_text(json.dumps(registry), encoding="utf-8")
+
+
+def report_build(tmp_path: Path, env: dict, project: Path, main: str, name: str = "k", **meta: object):
+    src = write_src(tmp_path / f"{name}.src.html", {"template": "report", "title": "T", **meta}, {"main": main})
+    out = tmp_path / f"{name}.html"
+    rc, result = build(src, out, env, project)
+    return rc, result, out
+
+
+def test_a_source_without_q_tags_gets_no_kit(tmp_path, env, project):
+    rc, result, out = report_build(tmp_path, env, project, "<p>plain</p>")
+    assert rc == 0 and list(result["libraries"]) == ["simple-css", "alpine"], result
+    html = out.read_text(encoding="utf-8")
+    assert "kit@" not in html and "quirk-kit" not in html and "kit" not in header.read_header(html)["libraries"]
+    assert result["checks"]["passed"] is True
+
+
+def test_q_tags_pull_in_the_kit_before_alpine(tmp_path, env, project):
+    rc, result, out = report_build(tmp_path, env, project, STAT)
+    assert rc == 0 and result["checks"]["passed"] is True, result["checks"]
+    assert list(result["libraries"]) == ["simple-css", "kit", "alpine"]
+    assert result["libraries"]["kit"] == REAL_STORE.resolve("kit", None).version
+    html = out.read_text(encoding="utf-8")
+    assert "chartjs" not in result["libraries"] and 'data-quirk-lib="chartjs@' not in html
+    kit_js = html.index('<script data-quirk-lib="kit@')
+    alpine = html.index('<script data-quirk-lib="alpine@')
+    chrome = html.index('<script data-quirk-shell="chrome">')
+    assert kit_js < alpine < chrome
+    assert header.read_header(html)["libraries"] == result["libraries"]
+    assert "<!-- license: kit " in html
+
+
+def test_q_chart_pulls_in_chartjs_and_then_the_kit(tmp_path, env, project):
+    rc, result, out = report_build(tmp_path, env, project, CHART)
+    assert rc == 0 and result["checks"]["passed"] is True, result["checks"]
+    assert list(result["libraries"]) == ["simple-css", "chartjs", "kit", "alpine"]
+    html = out.read_text(encoding="utf-8")
+    positions = [html.index(f'<script data-quirk-lib="{lib}@') for lib in ("chartjs", "kit", "alpine")]
+    assert positions == sorted(positions)
+
+
+def test_a_chart_in_a_script_string_or_template_still_pulls_the_libraries_in(tmp_path, env, project):
+    main = "<script>const html = '<q-chart summary=\"x\">';</script>"
+    rc, result, _ = report_build(tmp_path, env, project, main)
+    assert rc == 0 and list(result["libraries"]) == ["simple-css", "chartjs", "kit", "alpine"], result
+    assert result["checks"]["passed"] is True, result["checks"]
+
+
+def test_a_chart_already_requested_in_the_header_is_not_duplicated(tmp_path, env, project):
+    rc, result, out = report_build(tmp_path, env, project, CHART, libraries=["chartjs"])
+    assert rc == 0 and list(result["libraries"]) == ["simple-css", "chartjs", "kit", "alpine"], result
+    assert out.read_text(encoding="utf-8").count('data-quirk-lib="chartjs@') == 1
+
+
+def test_auto_included_libraries_need_not_be_optional_libraries_of_the_template(tmp_path, env, project):
+    seal(custom_template(project, libraries=[]))
+    src = write_src(tmp_path / "f.src.html", {"template": "fx", "title": "T"}, {"main": CHART})
+    rc, result = build(src, tmp_path / "f.html", env, project)
+    assert rc == 0 and list(result["libraries"]) == ["chartjs", "kit"], result
+
+
+def test_a_header_declared_kit_is_rejected(tmp_path, env, project):
+    for main in ("<p>plain</p>", STAT):
+        src = write_src(
+            tmp_path / "h.src.html", {"template": "report", "title": "T", "libraries": ["kit"]}, {"main": main}
+        )
+        rc, result = build(src, tmp_path / "h.html", env, project)
+        assert rc == 2 and "kit" in result["error"] and "optional" in result["error"], result
+
+
+def test_kit_css_follows_base_css_in_the_head(tmp_path, env, project):
+    rc, result, out = report_build(tmp_path, env, project, STAT)
+    assert rc == 0, result
+    html = out.read_text(encoding="utf-8")
+    base_css = (SKILL / "theme" / "base.css").read_text(encoding="utf-8")
+    base = html.index(f"<style>\n{base_css}</style>")
+    kit_css = html.index('<style data-quirk-lib="kit@')
+    assert base < kit_css < html.index("</head>")
+    assert html.index('<style data-quirk-lib="simple-css@') < html.index("--q-color-bg") < base
+
+
+def test_a_kit_page_rebuilds_with_the_same_markup_and_stays_checked(tmp_path, env, project):
+    rc, first, out = report_build(tmp_path, env, project, STAT + CHART)
+    assert rc == 0
+    rc, second = build(tmp_path / "k.src.html", out, env, project)
+    assert rc == 0 and second["libraries"] == first["libraries"] and second["checks"]["passed"] is True
+    rc, check = run_cli("check", out, env=env)
+    assert rc == 0 and check["passed"] is True, check
+
+
+def test_frozen_kit_version_holds_until_upgrade(tmp_path, env, project):
+    tdir = custom_template(project, libraries=[])
+    fake_kit_registry(tdir, ["1.0.0"], current="1.0.0")
+    seal(tdir)
+    src = write_src(tmp_path / "v.src.html", {"template": "fx", "title": "T"}, {"main": STAT})
+    out = tmp_path / "v.html"
+    rc, first = build(src, out, env, project)
+    assert rc == 0 and first["libraries"] == {"kit": "1.0.0"}, first
+
+    fake_kit_registry(tdir, ["1.0.0", "2.0.0"], current="2.0.0")
+    seal(tdir)
+    rc, second = build(src, out, env, project)
+    assert rc == 0 and second["libraries"] == {"kit": "1.0.0"} and second["warnings"] == [], second
+    assert second["checks"]["passed"] is True
+
+    rc, third = build(src, out, env, project, "--upgrade")
+    assert rc == 0 and third["libraries"] == {"kit": "2.0.0"}, third
+    assert any("kit" in w and "1.0.0" in w and "2.0.0" in w for w in third["warnings"]), third["warnings"]
+    assert header.read_header(out.read_text(encoding="utf-8"))["libraries"] == {"kit": "2.0.0"}
+
+
+def test_a_page_that_starts_using_the_kit_gets_the_current_version(tmp_path, env, project):
+    tdir = custom_template(project, libraries=[])
+    fake_kit_registry(tdir, ["1.0.0", "2.0.0"], current="2.0.0")
+    seal(tdir)
+    src = write_src(tmp_path / "s.src.html", {"template": "fx", "title": "T"}, {"main": "<p>plain</p>"})
+    out = tmp_path / "s.html"
+    rc, plain = build(src, out, env, project)
+    assert rc == 0 and plain["libraries"] == {}
+    write_src(src, {"template": "fx", "title": "T"}, {"main": STAT})
+    rc, used = build(src, out, env, project)
+    assert rc == 0 and used["libraries"] == {"kit": "2.0.0"}, used
+    write_src(src, {"template": "fx", "title": "T"}, {"main": "<p>plain again</p>"})
+    rc, dropped = build(src, out, env, project)
+    assert rc == 0 and dropped["libraries"] == {}
+    assert "kit" not in header.read_header(out.read_text(encoding="utf-8"))["libraries"]
+
+
+def test_a_bad_q_tag_fails_the_build_with_the_source_line(tmp_path, env, project):
+    main = "<p>fine</p>\n<q-stats>\n  nope\n</q-stats>"
+    rc, result, out = report_build(tmp_path, env, project, main, name="bad")
+    assert rc == 1 and result["checks"]["passed"] is False, result
+    assert out.is_file()
+    kit = [f["detail"] for f in result["checks"]["failures"] if f["check"] == "kit"]
+    # line 1 is the quirk-src header, line 2 the slot marker, so the slot's second line is 4
+    assert kit == ["bad.src.html line 4: unknown element <q-stats>"]
+
+
+def test_a_bad_attribute_in_a_slot_names_its_source_line(tmp_path, env, project):
+    main = "<p>intro</p>\n\n" + CHART.replace('type="line"', 'type="pie"')
+    rc, result, _ = report_build(tmp_path, env, project, main, name="bad")
+    assert rc == 1
+    kit = [f["detail"] for f in result["checks"]["failures"] if f["check"] == "kit"]
+    assert kit == ['bad.src.html line 5: <q-chart> type="pie" is not one of bar, line, area, donut']
+
+
+def test_the_rebuilt_check_of_a_bad_page_cites_the_built_file(tmp_path, env, project):
+    rc, result, out = report_build(tmp_path, env, project, "<q-stats></q-stats>", name="bad")
+    assert rc == 1
+    rc, check = run_cli("check", out, env=env)
+    assert rc == 1
+    details = [f["detail"] for f in check["failures"] if f["check"] == "kit"]
+    assert len(details) == 1 and details[0].startswith("bad.html line ") and details[0].endswith("unknown element <q-stats>")

@@ -23,7 +23,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Iterable, Optional
 
-from . import SKILL_DIR
+from . import SKILL_DIR, kitcheck
 from .header import read_header
 from .vendor import VendorError, VendorStore, escape_inline, sha256_text
 
@@ -358,6 +358,35 @@ def _reference_failures(page: _Page, mode: str, tier: int) -> list[dict]:
     return [{"check": "external-refs", "detail": detail} for detail in dict.fromkeys(found)]
 
 
+def _kit_failures(
+    html: str,
+    meta: Optional[dict],
+    labels: Iterable[str],
+    store: VendorStore,
+    kit_source: Optional[tuple[str, str]],
+) -> list[dict]:
+    label, text = kit_source if kit_source is not None else ("page", html)
+    first = kitcheck.KIT_TAG.search(text)
+    if first is None:
+        return []
+    libraries = meta.get("libraries") if meta else None
+    recorded = libraries.get("kit") if isinstance(libraries, dict) else None
+    failures: list[dict] = []
+    try:
+        catalog = kitcheck.load_catalog(store, recorded if isinstance(recorded, str) else None)
+    except kitcheck.KitError as exc:
+        failures.append({"check": "kit", "detail": f"cannot load the kit catalog: {exc}"})
+    else:
+        failures.extend(kitcheck.check_html(text, catalog, label=label))
+    scans_the_page = kit_source is None or kit_source[1] == html
+    if scans_the_page and not any(name.startswith("kit@") for name in labels):
+        line = text.count("\n", 0, first.start()) + 1
+        failures.append(
+            {"check": "kit", "detail": f"{label} line {line}: kit elements are used but the kit is not inlined"}
+        )
+    return failures
+
+
 def run_checks(
     html: str,
     *,
@@ -365,12 +394,19 @@ def run_checks(
     tier: int,
     vendor: VendorStore,
     shells: Optional[dict[str, Path]] = None,
+    kit_source: Optional[tuple[str, str]] = None,
 ) -> dict:
     """Run every static check and return ``{passed, failures, warnings}``.
 
     Each failure and warning is ``{check, detail}``. ``shells`` maps shell block names to the
     shipped files they must match; it defaults to ``default_shells()``, and a shell is only
     checked when its block is present. Raises ValueError for an unknown ``mode``.
+
+    The ``kit`` check validates q-* markup. It scans ``kit_source`` (``(label, text)``, the raw
+    source a build started from, so failures cite the author's lines) or else the page itself, and
+    loads the kit catalog only when that text has a q-* tag. A catalog that cannot be loaded is one
+    ``kit`` failure rather than an exception. When the scanned text is the built page, q-* markup
+    without an inlined ``kit@`` block is a failure too.
     """
     if mode not in MODES:
         raise ValueError(f"mode must be one of {', '.join(MODES)}, got {mode!r}")
@@ -397,6 +433,7 @@ def run_checks(
         if failure:
             failures.append(failure)
     failures.extend(_reference_failures(page, mode, tier))
+    failures.extend(_kit_failures(html, meta, labels, vendor, kit_source))
 
     size = len(html.encode("utf-8"))
     if size > SIZE_FAIL:

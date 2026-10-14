@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import SKILL_DIR
+from . import SKILL_DIR, kitcheck
 from .checks import MODES, SIZE_FAIL, SIZE_WARN, default_shells, run_checks
 from .fsutil import atomic_write, ensure_self_ignoring
 from .header import read_header, render_header
@@ -257,6 +257,19 @@ def _library_order(template: Template, source: Source) -> list[str]:
     return [n for n in names if n != "alpine"] + [n for n in names if n == "alpine"]
 
 
+def _with_auto_libraries(names: list[str], raw_source: str) -> list[str]:
+    """Add the libraries the source's q-* markup needs: Chart.js, then the kit, Alpine still last.
+
+    The scan is over the raw source text, so a q-* tag a script or template builds at runtime pulls
+    the kit in too. Both libraries are automatic, so neither has to be an optional library of the
+    template.
+    """
+    kit, chartjs = kitcheck.needs(raw_source)
+    wanted = (["chartjs"] if chartjs else []) + (["kit"] if kit else [])
+    names = list(dict.fromkeys(names + wanted))
+    return [n for n in names if n != "alpine"] + [n for n in names if n == "alpine"]
+
+
 def _check_slots(template: Template, source: Source) -> None:
     undeclared = [name for name in source.slots if name not in template.slots]
     if undeclared:
@@ -336,10 +349,12 @@ def build_tier1(
     store = _skill_store(skill, template.dir)
     versions: dict[str, str] = {}
     head_parts: list[str] = []
+    kit_head_parts: list[str] = []
     js_parts: list[str] = []
     licenses: list[str] = []
     try:
-        for name in _library_order(template, source):
+        raw_source = source_path.read_text(encoding="utf-8").replace("\r\n", "\n")
+        for name in _with_auto_libraries(_library_order(template, source), raw_source):
             lv = store.resolve(name, None if upgrade else frozen.get(name))
             if upgrade and name in frozen and frozen[name] != lv.version:
                 warnings.append(f"library {name} upgraded from {frozen[name]} to {lv.version}")
@@ -348,7 +363,10 @@ def build_tier1(
             if blocks:
                 licenses.append(store.license_comment(lv))
             for block in blocks:
-                (head_parts if block.kind == "css" else js_parts).append(block.text)
+                if block.kind == "js":
+                    js_parts.append(block.text)
+                else:
+                    (kit_head_parts if name == "kit" else head_parts).append(block.text)
         chrome_js = shell_block("chrome", skill / "theme" / "chrome.js").text
     except VendorError as exc:
         raise BuildError(str(exc)) from exc
@@ -358,7 +376,9 @@ def build_tier1(
     except ValueError as exc:
         raise BuildError(str(exc)) from exc
     base_css = _read_text_file(skill / "theme" / "base.css", "theme")
-    head = "\n".join(head_parts + [f"<style>\n{token_css}</style>", f"<style>\n{base_css}</style>"])
+    head = "\n".join(
+        head_parts + [f"<style>\n{token_css}</style>", f"<style>\n{base_css}</style>"] + kit_head_parts
+    )
     body_end = "\n".join(js_parts + [chrome_js])
 
     skeleton = _read_text_file(template.dir / str(template.skeleton), "skeleton")
@@ -425,7 +445,14 @@ def build_tier1(
     except OSError as exc:
         raise BuildError(f"cannot write the build output under {out_path.parent}: {exc}") from exc
 
-    result_checks = run_checks(page, mode=source.mode, tier=1, vendor=store, shells=default_shells(skill))
+    result_checks = run_checks(
+        page,
+        mode=source.mode,
+        tier=1,
+        vendor=store,
+        shells=default_shells(skill),
+        kit_source=(source_path.name, raw_source),
+    )
     return {
         "path": str(out_path),
         "size": page_size,
@@ -494,6 +521,7 @@ def check_artifact(
         tier=tier,
         vendor=_skill_store(skill, template_dir),
         shells=default_shells(skill),
+        kit_source=(path.name, html),
     )
 
 
