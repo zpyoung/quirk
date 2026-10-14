@@ -366,6 +366,39 @@ def test_a_failed_static_check_writes_the_screen_but_does_not_make_it_current(se
     assert server.event(bad["nonce"])[0] == 409
 
 
+KIT_STAT = (
+    '<q-stat direction="up-good" points="1,2,3">'
+    '<span slot="label">Users</span><span slot="value">3</span>'
+    '<span slot="definition">Distinct users.</span></q-stat>'
+)
+
+
+def test_a_screen_with_kit_markup_inlines_the_kit_and_passes_the_checks(server: Server) -> None:
+    shown = server.show(screen_with(title="Kit", content=KIT_STAT))
+    assert shown["checks"]["passed"] is True, shown["checks"]
+    page = (server.session / "screens" / f"{shown['screen']}.html").read_text(encoding="utf-8")
+    assert 'data-quirk-lib="kit@1.0.0"' in page and "<q-stat" in page
+    assert '"kit": "1.0.0"' in page.split("\n", 2)[1]
+    assert server.current()["nonce"] == shown["nonce"]
+
+
+def test_a_screen_with_an_unknown_kit_element_fails_the_kit_check_and_is_not_made_current(server: Server) -> None:
+    good = server.show(SCREEN)
+    bad = server.show(screen_with(title="Typo", content="<q-stats>oops</q-stats>"), expect=1)
+    assert bad["checks"]["passed"] is False
+    kit = [f["detail"] for f in bad["checks"]["failures"] if f["check"] == "kit"]
+    assert len(kit) == 1 and kit[0].endswith("unknown element <q-stats>"), kit
+    assert (server.session / "screens" / f"{bad['screen']}.html").is_file()
+    assert server.current()["nonce"] == good["nonce"]
+    assert server.event(bad["nonce"])[0] == 409
+
+
+def test_a_screen_without_kit_markup_does_not_inline_the_kit(server: Server) -> None:
+    shown = server.show(SCREEN)
+    page = (server.session / "screens" / f"{shown['screen']}.html").read_text(encoding="utf-8")
+    assert "kit@" not in page
+
+
 def test_get_root_serves_the_newest_screen(server: Server) -> None:
     status, body = server.request("GET", "/")
     assert status == 200 and b"/_quirk/state" in body and b"Which layout" not in body
