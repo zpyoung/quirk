@@ -128,16 +128,16 @@
               "kind": "css",
               "position": "head",
               "inline": true,
-              "sha256": "e6586fdbfe5c963294325fc1512131a2f18b1e56df20f4f9aa0887dfe08a96d8",
-              "inline_sha256": "e6586fdbfe5c963294325fc1512131a2f18b1e56df20f4f9aa0887dfe08a96d8"
+              "sha256": "98596a8108abe1e70c83db16eec0d60ffd3238985d3e0399b139d9dcf016eb08",
+              "inline_sha256": "98596a8108abe1e70c83db16eec0d60ffd3238985d3e0399b139d9dcf016eb08"
             },
             {
               "path": "kit.js",
               "kind": "js",
               "position": "body-end",
               "inline": true,
-              "sha256": "6c53106ea5715f4287c3f0ac4b62d681cc722bbcd3fa969687f35d299e16c260",
-              "inline_sha256": "6c53106ea5715f4287c3f0ac4b62d681cc722bbcd3fa969687f35d299e16c260"
+              "sha256": "dbdbee2413179155bcbf39bc9630c30ad47d0b12c910af319041bf921387ae87",
+              "inline_sha256": "dbdbee2413179155bcbf39bc9630c30ad47d0b12c910af319041bf921387ae87"
             }
           ]
         }

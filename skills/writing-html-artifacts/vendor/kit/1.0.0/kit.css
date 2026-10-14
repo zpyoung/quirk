@@ -26,3 +26,732 @@
 :where([data-q-replaced]) {
   display: none !important;
 }
+
+:where(q-tabs, q-timeline, q-code, q-chart, q-diff) {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* q-tabs */
+
+:where(q-tabs) > [role="tablist"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--q-space-1);
+  margin: 0 0 var(--q-space-4);
+  border-bottom: 1px solid var(--q-color-border);
+}
+
+q-tabs > [role="tablist"] > [role="tab"],
+q-tabs > [role="tablist"] > [role="tab"]:enabled:hover {
+  margin: 0 0 -1px;
+  min-height: 44px;
+  padding: var(--q-space-2) var(--q-space-4);
+  border: 0;
+  border-bottom: 3px solid transparent;
+  border-radius: var(--q-radius-sm) var(--q-radius-sm) 0 0;
+  background: none;
+  color: var(--q-color-text-muted);
+  font: inherit;
+  font-weight: 600;
+  line-height: var(--q-size-leading-tight);
+  cursor: pointer;
+}
+
+q-tabs > [role="tablist"] > [role="tab"]:enabled:hover {
+  background: var(--q-color-surface);
+  color: var(--q-color-text);
+}
+
+q-tabs > [role="tablist"] > [role="tab"][aria-selected="true"],
+q-tabs > [role="tablist"] > [role="tab"][aria-selected="true"]:enabled:hover {
+  background: var(--q-color-surface);
+  border-bottom-color: var(--q-color-accent);
+  color: var(--q-color-text);
+}
+
+/* beats the report template's "main section + section" divider, which would hit panels */
+q-tabs > section[role="tabpanel"] {
+  margin: 0;
+  padding: var(--q-space-2) 0;
+  border: 0;
+}
+
+@media not print {
+  :where([data-q-tab-heading]) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+}
+
+/* q-timeline */
+
+:where(q-timeline) > ol {
+  margin: var(--q-space-4) 0;
+  padding: 0 0 0 var(--q-space-3);
+  list-style: none;
+}
+
+q-timeline > ol > li {
+  --q-timeline-tone: var(--q-color-text-muted);
+  position: relative;
+  margin: 0;
+  padding: 0 0 var(--q-space-4) var(--q-space-5);
+  border-left: 2px solid var(--q-color-border);
+}
+
+q-timeline > ol > li:last-child {
+  padding-bottom: 0;
+}
+
+q-timeline > ol > li::before {
+  content: "";
+  position: absolute;
+  top: 0.35em;
+  left: -8px;
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--q-color-bg);
+  border-radius: var(--q-radius-pill);
+  background: var(--q-timeline-tone);
+}
+
+q-timeline > ol > li[data-tone="success"] { --q-timeline-tone: var(--q-color-good); }
+q-timeline > ol > li[data-tone="warning"] { --q-timeline-tone: var(--q-color-warn); }
+q-timeline > ol > li[data-tone="danger"] { --q-timeline-tone: var(--q-color-critical); }
+
+:where(q-timeline) time {
+  margin-inline-end: var(--q-space-2);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* q-code */
+
+q-code > [data-q-bar] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--q-space-2);
+  box-sizing: border-box;
+  padding: var(--q-space-1) var(--q-space-2) var(--q-space-1) var(--q-space-3);
+  border: 1px solid var(--q-color-border);
+  border-bottom: 0;
+  border-radius: var(--q-radius-md) var(--q-radius-md) 0 0;
+  background: var(--q-color-surface);
+  color: var(--q-color-text-muted);
+  font-size: var(--q-size-small);
+}
+
+q-code > [data-q-bar] > [data-q-filename] {
+  font-family: var(--q-font-mono);
+  color: var(--q-color-text);
+  overflow-wrap: anywhere;
+}
+
+q-code > [data-q-bar] > [data-q-status] {
+  margin-inline-start: auto;
+}
+
+q-code > [data-q-bar] > [data-q-copy] {
+  margin: 0 0 0 auto;
+  min-height: 32px;
+  padding: var(--q-space-1) var(--q-space-3);
+  font: inherit;
+}
+
+q-code > [data-q-bar] > [data-q-status]:not(:empty) + [data-q-copy] {
+  margin-inline-start: 0;
+}
+
+q-code > [data-q-bar] + pre {
+  margin-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+/* q-stat */
+
+q-stat {
+  display: inline-grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "label label" "value delta" "spark spark" "definition definition";
+  align-items: baseline;
+  column-gap: var(--q-space-3);
+  row-gap: var(--q-space-1);
+  vertical-align: top;
+  box-sizing: border-box;
+  width: 16rem;
+  min-width: min(12rem, 100%);
+  max-width: 100%;
+  margin: 0 var(--q-space-3) var(--q-space-3) 0;
+  padding: var(--q-space-3) var(--q-space-4);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-md);
+  background: var(--q-color-surface);
+  color: var(--q-color-text);
+}
+
+q-stat > [slot="label"] {
+  grid-area: label;
+  color: var(--q-color-text-muted);
+  font-size: var(--q-size-small);
+  font-weight: 600;
+}
+
+q-stat > [slot="value"] {
+  grid-area: value;
+  min-width: 0;
+  font-size: var(--q-size-h2);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: var(--q-size-leading-tight);
+  overflow-wrap: anywhere;
+}
+
+q-stat > [slot="delta"] {
+  grid-area: delta;
+  color: var(--q-color-text-muted);
+  font-size: var(--q-size-small);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+q-stat > [slot="delta"][data-q-trend="good"] { color: var(--q-color-good); }
+q-stat > [slot="delta"][data-q-trend="bad"] { color: var(--q-color-critical); }
+q-stat > [slot="delta"][data-q-trend="flat"] { color: var(--q-color-text-muted); }
+
+q-stat > [slot="definition"] {
+  grid-area: definition;
+  color: var(--q-color-text-muted);
+  font-size: var(--q-size-small);
+  line-height: var(--q-size-leading-tight);
+}
+
+q-stat > svg[data-q-kit] {
+  grid-area: spark;
+  display: block;
+  width: 100%;
+  height: 32px;
+  overflow: visible;
+}
+
+q-stat > svg[data-q-kit] polyline {
+  fill: none;
+  stroke: var(--q-color-accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+/* q-chart */
+
+:where(q-chart) {
+  margin: var(--q-space-4) 0;
+}
+
+q-chart:not(:defined)::before {
+  content: attr(summary);
+  display: block;
+  margin-bottom: var(--q-space-2);
+  font-weight: 600;
+}
+
+q-chart > [data-q-chart-box] {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: var(--q-chart-height, 320px);
+}
+
+q-chart > [data-q-chart-box] > canvas {
+  display: block;
+  max-width: 100%;
+}
+
+q-chart > [data-q-note] {
+  margin: var(--q-space-2) 0;
+  color: var(--q-color-text-muted);
+  font-size: var(--q-size-small);
+}
+
+q-chart > details {
+  max-width: 100%;
+  margin-top: var(--q-space-2);
+  overflow-x: auto;
+}
+
+q-chart > details > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+q-chart table {
+  display: table;
+  width: 100%;
+  margin: var(--q-space-2) 0;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+q-chart :is(th, td) {
+  padding: var(--q-space-2) var(--q-space-3);
+  border-bottom: 1px solid var(--q-color-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+q-chart :is(th, td):is(.num, [data-q-num]) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* q-diff */
+
+:where(q-diff) {
+  margin: var(--q-space-4) 0;
+}
+
+q-diff > pre {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+q-diff-note {
+  display: list-item;
+  margin-inline-start: var(--q-space-5);
+  list-style: disc outside;
+}
+
+q-diff > [data-q-diff] {
+  container-type: inline-size;
+  box-sizing: border-box;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-md);
+  background: var(--q-color-bg);
+  color: var(--q-color-text);
+}
+
+q-diff > [data-q-diff] > table {
+  display: table;
+  width: 100%;
+  min-width: max-content;
+  margin: 0;
+  border-collapse: collapse;
+  border-spacing: 0;
+  font-family: var(--q-font-mono);
+  font-size: var(--q-size-small);
+  line-height: var(--q-size-leading-tight);
+}
+
+q-diff > [data-q-diff] :is(th, td) {
+  padding: 0 var(--q-space-2);
+  border: 0;
+  text-align: left;
+  vertical-align: top;
+  font-weight: 400;
+}
+
+q-diff .q-diff-file > th {
+  padding-block: var(--q-space-2);
+  border-top: 1px solid var(--q-color-border);
+  border-bottom: 1px solid var(--q-color-border);
+  background: var(--q-color-surface);
+  font-weight: 700;
+}
+
+q-diff tbody:first-child > .q-diff-file:first-child > th {
+  border-top: 0;
+}
+
+q-diff :is(.q-diff-file, .q-diff-hunk, .q-diff-meta) > :is(th, td) > span {
+  position: sticky;
+  left: var(--q-space-2);
+}
+
+q-diff .q-diff-hunk > td {
+  padding-block: var(--q-space-1);
+  background: var(--q-color-surface);
+  color: var(--q-color-text-muted);
+}
+
+q-diff .q-diff-meta > td {
+  color: var(--q-color-text-muted);
+  white-space: pre;
+}
+
+q-diff [data-q-old],
+q-diff [data-q-new] {
+  min-width: 3.5ch;
+  color: var(--q-color-text-muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  user-select: none;
+}
+
+q-diff [data-q-code] {
+  width: 100%;
+  color: var(--q-color-text);
+  white-space: pre;
+}
+
+q-diff .q-diff-marker {
+  display: inline-block;
+  width: 2ch;
+  font-weight: 700;
+}
+
+q-diff .q-diff-add > td {
+  background: var(--q-color-surface);
+  background: color-mix(in srgb, var(--q-color-good) 16%, var(--q-color-bg));
+}
+
+q-diff .q-diff-del > td {
+  background: var(--q-color-surface);
+  background: color-mix(in srgb, var(--q-color-critical) 16%, var(--q-color-bg));
+}
+
+q-diff .q-diff-add .q-diff-marker { color: var(--q-color-good); }
+q-diff .q-diff-del .q-diff-marker { color: var(--q-color-critical); }
+
+q-diff .q-diff-note-row > td {
+  padding: var(--q-space-2);
+  border-block: 1px solid var(--q-color-border);
+  background: var(--q-color-surface);
+  font-family: var(--q-font-sans);
+  white-space: normal;
+}
+
+q-diff [data-q-note] {
+  position: sticky;
+  left: var(--q-space-2);
+  box-sizing: border-box;
+  max-width: 44rem;
+  width: min(100cqw - 2 * var(--q-space-2), 44rem);
+  color: var(--q-color-text);
+  font-size: var(--q-size-body);
+  line-height: var(--q-size-leading);
+}
+
+/* q-table */
+
+q-table {
+  display: block;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  margin: var(--q-space-3) 0;
+  overflow: auto;
+}
+
+q-table[data-q-long] {
+  max-height: 32rem;
+}
+
+q-table > table {
+  display: table;
+  width: 100%;
+  margin: 0;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+q-table :is(th, td) {
+  padding: var(--q-space-2) var(--q-space-3);
+  border-bottom: 1px solid var(--q-color-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+q-table :is(th, td):is(.num, [data-q-num]) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+q-table > table > thead > tr > th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--q-color-surface);
+  color: var(--q-color-text);
+  white-space: nowrap;
+}
+
+q-table th > [data-q-sort],
+q-table th > [data-q-sort]:enabled:hover {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--q-space-1);
+  min-height: 44px;
+  margin: 0;
+  padding: var(--q-space-1) 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: inherit;
+  cursor: pointer;
+}
+
+q-table th > [data-q-sort]:enabled:hover {
+  text-decoration: underline;
+}
+
+q-table th[aria-sort="ascending"] > [data-q-sort]::after,
+q-table th[aria-sort="descending"] > [data-q-sort]::after {
+  font-size: var(--q-size-small);
+}
+
+q-table th[aria-sort="ascending"] > [data-q-sort]::after { content: "\25B2"; }
+q-table th[aria-sort="descending"] > [data-q-sort]::after { content: "\25BC"; }
+
+q-table > [data-q-filter] {
+  position: sticky;
+  left: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--q-space-2) var(--q-space-3);
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  padding: var(--q-space-2) 0;
+}
+
+q-table > [data-q-filter] > input {
+  flex: 1 1 12rem;
+  min-width: 0;
+  min-height: 44px;
+  margin: 0;
+  box-sizing: border-box;
+}
+
+q-table > [data-q-filter] > [data-q-count] {
+  color: var(--q-color-text-muted);
+  font-size: var(--q-size-small);
+}
+
+q-table > [data-q-message] {
+  position: sticky;
+  left: 0;
+  margin: var(--q-space-2) 0;
+  color: var(--q-color-text-muted);
+  font-size: var(--q-size-small);
+}
+
+@media print {
+  q-table,
+  q-table[data-q-long] {
+    overflow: visible;
+    max-height: none;
+  }
+
+  q-tabs > [role="tablist"],
+  q-chart > details > summary,
+  q-table > [data-q-filter],
+  q-code > [data-q-bar] > [data-q-copy],
+  q-code > [data-q-bar] > [data-q-status] {
+    display: none;
+  }
+}
+
+@media print {
+  q-diff > [data-q-diff] {
+    overflow: visible;
+  }
+
+  q-diff [data-q-code],
+  q-diff .q-diff-meta > td {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  q-diff > [data-q-diff] > table {
+    min-width: 0;
+  }
+
+  q-diff [data-q-note] {
+    position: static;
+    width: auto;
+  }
+}
+
+@media print {
+  q-chart > details::details-content {
+    content-visibility: visible;
+    display: block;
+  }
+}
+
+/* q-board */
+
+q-board {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));
+  align-items: start;
+  gap: var(--q-space-3);
+  position: relative;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  margin: var(--q-space-4) 0;
+}
+
+/* :not([hidden]) lifts this above the report template's "main section + section" divider */
+q-board > section:not([hidden]) {
+  box-sizing: border-box;
+  min-width: 0;
+  margin: 0;
+  padding: var(--q-space-3);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-md);
+  background: var(--q-color-bg);
+}
+
+q-board > section > :is(h2, h3, h4, h5, h6):first-child {
+  margin: 0 0 var(--q-space-3);
+  font-size: var(--q-size-h4);
+}
+
+q-board > section > ul {
+  min-height: 3.5rem;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+q-board > section > ul > li {
+  position: relative;
+  box-sizing: border-box;
+  max-width: 100%;
+  margin: 0 0 var(--q-space-2);
+  padding: var(--q-space-2) var(--q-space-3);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-md);
+  background: var(--q-color-surface);
+  color: var(--q-color-text);
+  overflow-wrap: anywhere;
+}
+
+q-board > section > ul > li[data-q-card] {
+  padding-left: calc(var(--q-space-5) + var(--q-space-3));
+  cursor: grab;
+}
+
+q-board > section > ul > li[data-q-dragging] {
+  z-index: 2;
+  outline: 2px solid var(--q-color-accent);
+  cursor: grabbing;
+}
+
+q-board[data-q-busy] {
+  user-select: none;
+}
+
+q-board [data-q-handle] {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(var(--q-space-5) + var(--q-space-2));
+  color: var(--q-color-text-muted);
+  touch-action: none;
+  user-select: none;
+  letter-spacing: -0.2em;
+}
+
+q-board [data-q-move] {
+  display: block;
+  max-width: 100%;
+  min-height: 32px;
+  margin: var(--q-space-2) 0 0;
+  font: inherit;
+  font-size: var(--q-size-small);
+  cursor: pointer;
+}
+
+q-board > [data-q-bar] {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--q-space-2) var(--q-space-3);
+  min-width: 0;
+}
+
+q-board > [data-q-bar] > button {
+  margin: 0;
+  min-height: 36px;
+  font: inherit;
+}
+
+q-board > [data-q-bar] > [data-q-note] {
+  color: var(--q-color-text-muted);
+  font-size: var(--q-size-small);
+}
+
+q-board > [data-q-bar] > [data-q-status] {
+  font-size: var(--q-size-small);
+}
+
+q-board > [data-q-export] {
+  grid-column: 1 / -1;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  padding: var(--q-space-2) var(--q-space-3);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-md);
+  background: var(--q-color-bg);
+  color: var(--q-color-text);
+  font-family: var(--q-font-mono);
+  font-size: var(--q-size-small);
+}
+
+q-board > [data-q-drop] {
+  position: absolute;
+  height: 4px;
+  border-radius: var(--q-radius-pill);
+  background: var(--q-color-accent);
+  pointer-events: none;
+  z-index: 3;
+}
+
+@media print {
+  q-board > [data-q-bar],
+  q-board > [data-q-export],
+  q-board [data-q-move],
+  q-board [data-q-handle] {
+    display: none;
+  }
+
+  q-board > section > ul > li[data-q-card] {
+    padding-left: var(--q-space-3);
+    break-inside: avoid;
+  }
+}

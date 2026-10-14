@@ -1,9 +1,25 @@
-<!-- quirk-src {"template": "report", "title": "CI test timings, week 41", "mode": "offline", "libraries": ["chartjs"], "interactions": ["sort the suite table by any column", "switch the chart between median and p95 time"], "data": "timings.json"} -->
+<!-- quirk-src {"template": "report", "title": "CI test timings, week 41", "mode": "offline", "interactions": ["sort the suite table by any column", "switch the chart between median and p95 time"], "data": "timings.json"} -->
 <!-- slot: main -->
 <p class="q-lede">The integration suite now takes 5 min 42 s at the median, down from 8 min 18 s, and accounts for most of the week's improvement. Checkout end-to-end is the flakiest suite at 3.4% of runs.</p>
 <p class="q-meta">Source: CI run export for 5 to 11 Oct 2026 (sample data for this template).</p>
 
-<div x-data="timings()">
+<q-stat direction="down-good" points="498,342">
+<span slot="label">Integration median</span>
+<span slot="value">5 min 42 s</span>
+<span slot="delta">−31%</span>
+<span slot="definition">Median time of the integration suite, week 41 against week 40.</span>
+</q-stat>
+<q-stat>
+<span slot="label">Integration p95</span>
+<span slot="value">10 min 11 s</span>
+<span slot="definition">95th percentile time of the integration suite, the longest tail of any suite.</span>
+</q-stat>
+<q-stat>
+<span slot="label">Flakiest suite</span>
+<span slot="value">3.4%</span>
+<span slot="definition">Share of end-to-end checkout runs that failed and then passed on an automatic retry.</span>
+</q-stat>
+
 <section aria-labelledby="findings-h">
 <h2 id="findings-h">Findings</h2>
 <ul>
@@ -16,153 +32,37 @@
 
 <section aria-labelledby="chart-h">
 <h2 id="chart-h">Time by suite</h2>
-<label>Measure
-<select x-model="metric" @change="$nextTick(function () { drawChart(); })">
-<option value="median_s">Median time</option>
-<option value="p95_s">95th percentile time</option>
-</select>
-</label>
-<div class="q-chart">
-<canvas id="timings-chart" role="img" :aria-label="chartLabel" aria-label="Horizontal bar chart of test time by suite, in minutes. Integration is longest at 5.7 minutes median and 10.2 minutes at the 95th percentile; lint-types is shortest at under 1 minute."></canvas>
-</div>
-<details>
-<summary>Table view of the chart</summary>
-<div class="q-table-wrap">
+<q-chart type="bar" horizontal data-from="suites" summary="Integration is the slowest suite at 342 s median and 611 s at the 95th percentile; lint-types is the fastest at 49 s median.">
 <table>
-<caption>Time by suite for the selected measure</caption>
-<thead><tr><th scope="col">Suite</th><th scope="col" class="num" x-text="metric === 'median_s' ? 'Median (min)' : '95th percentile (min)'">Median (min)</th></tr></thead>
-<tbody>
-<template x-for="row in byMetric" :key="row.suite">
-<tr><th scope="row" x-text="row.suite"></th><td class="num" x-text="minutes(row[metric])"></td></tr>
-</template>
-</tbody>
+<thead><tr><th data-key="suite">Suite</th><th class="num" data-key="median_s">Median (s)</th><th class="num" data-key="p95_s">p95 (s)</th></tr></thead>
+<tbody></tbody>
 </table>
-</div>
-</details>
+</q-chart>
 </section>
 
 <section aria-labelledby="table-h">
 <h2 id="table-h">All suites</h2>
-<div class="q-table-wrap">
+<q-table data-from="suites">
 <table>
 <caption>Test timings by suite, week 41 against week 40</caption>
 <thead>
 <tr>
-<th scope="col" :aria-sort="ariaSort('suite')"><button type="button" class="q-sort" @click="sortBy('suite')">Suite</button></th>
-<th scope="col" class="num" :aria-sort="ariaSort('median_s')"><button type="button" class="q-sort" @click="sortBy('median_s')">Median (s)</button></th>
-<th scope="col" class="num" :aria-sort="ariaSort('p95_s')"><button type="button" class="q-sort" @click="sortBy('p95_s')">p95 (s)</button></th>
-<th scope="col" class="num" :aria-sort="ariaSort('change')"><button type="button" class="q-sort" @click="sortBy('change')">Median change (%)</button></th>
-<th scope="col" class="num" :aria-sort="ariaSort('runs')"><button type="button" class="q-sort" @click="sortBy('runs')">Runs</button></th>
-<th scope="col" class="num" :aria-sort="ariaSort('flaky_pct')"><button type="button" class="q-sort" @click="sortBy('flaky_pct')">Flaky (%)</button></th>
+<th scope="col" data-key="suite">Suite</th>
+<th scope="col" class="num" data-key="median_s">Median (s)</th>
+<th scope="col" class="num" data-key="p95_s">p95 (s)</th>
+<th scope="col" class="num" data-key="previous_median_s">Week 40 median (s)</th>
+<th scope="col" class="num" data-key="runs">Runs</th>
+<th scope="col" class="num" data-key="flaky_pct">Flaky (%)</th>
 </tr>
 </thead>
-<tbody>
-<template x-for="row in sorted" :key="row.suite">
-<tr>
-<th scope="row" x-text="row.suite"></th>
-<td class="num" x-text="row.median_s"></td>
-<td class="num" x-text="row.p95_s"></td>
-<td class="num" x-text="signed(row.change)"></td>
-<td class="num" x-text="row.runs.toLocaleString('en-US')"></td>
-<td class="num" x-text="row.flaky_pct.toFixed(1)"></td>
-</tr>
-</template>
-</tbody>
+<tbody></tbody>
 </table>
-</div>
+</q-table>
 </section>
-</div>
-
-<script>
-document.addEventListener('alpine:init', function () {
-  Alpine.data('timings', function () {
-    return {
-      rows: [],
-      metric: 'median_s',
-      sortKey: 'median_s',
-      sortDir: 'desc',
-      chart: null,
-      init: function () {
-        var self = this;
-        // Alpine starts before chrome.js defines quirkData, so wait for the load event
-        var start = function () {
-          window.quirkData().then(function (data) {
-            self.rows = data.suites.map(function (s) {
-              return Object.assign({}, s, { change: ((s.median_s - s.previous_median_s) / s.previous_median_s) * 100 });
-            });
-            self.$nextTick(function () { self.drawChart(); });
-          });
-        };
-        if (document.readyState === 'complete') { start(); } else { window.addEventListener('load', start, { once: true }); }
-        document.addEventListener('quirk-theme', function () { self.drawChart(); });
-      },
-      get sorted() {
-        var key = this.sortKey;
-        var dir = this.sortDir === 'asc' ? 1 : -1;
-        return this.rows.slice().sort(function (a, b) {
-          return (a[key] < b[key] ? -1 : a[key] > b[key] ? 1 : 0) * dir;
-        });
-      },
-      get byMetric() {
-        var metric = this.metric;
-        return this.rows.slice().sort(function (a, b) { return b[metric] - a[metric]; });
-      },
-      sortBy: function (key) {
-        this.sortDir = this.sortKey === key && this.sortDir === 'desc' ? 'asc' : 'desc';
-        this.sortKey = key;
-      },
-      ariaSort: function (key) {
-        return this.sortKey === key ? (this.sortDir === 'asc' ? 'ascending' : 'descending') : 'none';
-      },
-      get chartLabel() {
-        var rows = this.byMetric;
-        if (!rows.length) { return 'Bar chart of test time by suite'; }
-        var name = this.metric === 'median_s' ? 'median' : '95th percentile';
-        var first = rows[0];
-        var last = rows[rows.length - 1];
-        return 'Horizontal bar chart of ' + name + ' test time by suite, in minutes. ' + first.suite + ' is longest at ' +
-          this.minutes(first[this.metric]) + ' minutes; ' + last.suite + ' is shortest at ' + this.minutes(last[this.metric]) + '.';
-      },
-      minutes: function (seconds) { return (seconds / 60).toFixed(1); },
-      signed: function (n) { return (n > 0 ? '+' : '') + n.toFixed(1); },
-      drawChart: function () {
-        var canvas = document.getElementById('timings-chart');
-        if (!canvas || !this.rows.length || typeof Chart === 'undefined') { return; }
-        if (this.chart) { this.chart.destroy(); }
-        var css = getComputedStyle(document.documentElement);
-        var color = function (name) { return css.getPropertyValue(name).trim(); };
-        var metric = this.metric;
-        var rows = this.byMetric;
-        var text = color('--q-color-text');
-        var muted = color('--q-color-text-muted');
-        var border = color('--q-color-border');
-        this.chart = new Chart(canvas, {
-          type: 'bar',
-          data: {
-            labels: rows.map(function (r) { return r.suite; }),
-            datasets: [{ data: rows.map(function (r) { return r[metric] / 60; }), backgroundColor: color('--q-color-accent') }]
-          },
-          options: {
-            indexAxis: 'y',
-            responsive: true,
-            maintainAspectRatio: false,
-            animation: false,
-            plugins: { legend: { display: false } },
-            scales: {
-              x: { beginAtZero: true, title: { display: true, text: 'Minutes', color: muted }, ticks: { color: muted }, grid: { color: border } },
-              y: { ticks: { color: text }, grid: { display: false } }
-            }
-          }
-        });
-      }
-    };
-  });
-});
-</script>
 <!-- slot: aside -->
 <aside aria-label="About these numbers">
 <h2>About these numbers</h2>
 <p>Medians and 95th percentiles cover every CI run on the main branch during the week.</p>
 <p>Flaky means the suite failed and then passed on an automatic retry.</p>
-<p>Median change compares week 41 with week 40.</p>
+<p>Week 40 median is the baseline the median change is measured against.</p>
 </aside>
