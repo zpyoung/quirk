@@ -210,8 +210,17 @@ kitcheck.CHART_TAG = REGEX (?i)<q-chart[\s/>]
 - Order: template libraries, then header libraries, then `chartjs`, then `kit`, de-duplicated, with
   Alpine last.
 - Kit CSS goes in `{{head}}` **after** `base.css` (`assemble.py:361`), so kit styles beat base
-  element styles while template and page `<style>` still override them. Every selector in `kit.css`
-  uses `:where()` for zero specificity, except where the element tag alone already suffices.
+  element styles while template and page `<style>` still override them. Page and template CSS beat
+  every kit rule of one-class specificity, because `kit.css` keeps its attribute, class and state
+  selectors inside `:where()`. The deliberate exceptions, named in the `kit.css` header, are rules
+  that must beat the stylesheets under the kit:
+  - the tab and sort hover rules, `q-tabs > [role="tablist"] > [role="tab"]:enabled:hover` (and its
+    `[aria-selected="true"]` form) and `q-table th > [data-q-sort]:enabled:hover`, because Simple.css
+    restyles `button:enabled:hover`;
+  - the `q-tabs > section[role="tabpanel"]` panel reset and the `q-board > section:not([hidden])`
+    and `q-board > section > :is(h2, h3, h4, h5, h6):first-child` resets, which beat the report
+    template's `main section + section` divider and Simple.css's `section h2:first-child`;
+  - the print rules.
 - Versions follow the existing frozen rule. A page rebuilt after it starts using q-* tags gets
   `current` for `kit` and `chartjs`. A page that drops every q-* tag drops `kit` from its header.
 - A source with no `<q-` produces output that is byte-identical to today's apart from `built_at`.
@@ -432,6 +441,9 @@ Back-link: [Data flow](logic.md#data-flow) step 5.
     known.
   - Attribute values are read with brace-depth matching, so `style={{…}}` and nested expressions
     don't break the scan.
+  - Comments are ignored only when unambiguous: a `//` or `/* */` that starts its line, a
+    `{/* … */}` container, and `<!-- … -->` in `index.html`. Q-* tag text inside JS strings or
+    mid-line comments is still scanned, so phrase such text without a literal `<q-`.
   - Its failures join the build's `checks.failures`. `passed` is false and the exit is 1. The page
     is still written, as in tier 1.
 - **Inlining**, after the build: the kit (and Chart.js when needed) is inlined into the page. The

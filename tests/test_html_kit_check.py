@@ -809,12 +809,58 @@ def test_a_block_start_still_closes_an_open_paragraph_outside_a_scope_marker() -
     )
 
 
-def test_jsx_ignores_tags_in_line_and_block_comments() -> None:
+def test_jsx_ignores_tags_in_unambiguous_comments() -> None:
     assert jsx("// the <q-chart> element draws it\nconst a = 1;") == []
-    assert jsx("const a = 1; // see <q-chart>\n") == []
+    assert jsx("  // the <q-chart> element draws it\nconst a = 1;") == []
     assert jsx("/* the <q-chart>\n   element */\nconst a = 1;") == []
+    assert jsx("  /* the <q-chart> element */ const a = 1;") == []
     assert jsx("{/* <q-chart> */}") == []
-    assert jsx("/* <q-chart> never closed") == []
+    assert jsx("<p>{ /* the <q-chart>\n element */ }</p>") == []
+
+
+def test_jsx_comment_masking_stops_at_the_closing_terminator() -> None:
+    got = jsx("/* note */ const e = <q-chart />;\n")
+    assert got == ["src/f0.tsx line 1: <q-chart> needs attribute summary"]
+    assert jsx("{/* note */ <q-chart /> }") == ["src/f0.tsx line 1: <q-chart> needs attribute summary"]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        'const hint = "glob like src/ /* here";\nexport const A = () => <q-stats />;\n',
+        'const glob = "all files /* here";\nexport const A = () => <q-stats />;',
+        "const a = <p>see // here</p>; const b = <q-stats />;",
+        "const a = <p>glob /* here</p>; const b = <q-stats />;",
+        "const a = 1; // see\nconst b = <q-stats />;",
+        "/* never closed\nconst b = <q-stats />;",
+        "const a = 1; /* never closed\nconst b = <q-stats />;\n",
+    ],
+)
+def test_jsx_text_that_might_be_a_comment_never_hides_a_later_tag(source: str) -> None:
+    assert [m for m in jsx(source) if m.endswith("unknown element <q-stats>")] != []
+
+
+def test_jsx_mid_line_comment_text_is_still_scanned() -> None:
+    assert jsx("const a = 1; // see <q-chart>\n") == ["src/f0.tsx line 1: <q-chart> needs attribute summary"]
+    assert jsx("/* <q-chart> never closed") == ["src/f0.tsx line 1: <q-chart> needs attribute summary"]
+
+
+def test_jsx_html_comments_are_masked_in_html_files_only() -> None:
+    def labelled(label: str, text: str) -> list[dict]:
+        return kitcheck.check_jsx([(label, text)], CATALOG)
+
+    assert labelled("index.html", "<!-- the <q-chart> element -->\n<div id=root></div>") == []
+    assert labelled("index.html", "<!-- never closed <q-chart>") != []
+    assert labelled("src/a.tsx", "<!-- the <q-chart> element -->") != []
+    assert labelled("index.html", "<!-- a --><q-stats />") == [
+        {"check": "kit", "detail": "index.html line 1: unknown element <q-stats>"}
+    ]
+
+
+def test_jsx_q_tag_text_in_a_string_is_still_checked() -> None:
+    assert jsx('const msg = "use the <q-chart> element";') == [
+        "src/f0.tsx line 1: <q-chart> needs attribute summary"
+    ]
 
 
 def test_jsx_comment_masking_keeps_real_tags_and_their_lines() -> None:
@@ -828,3 +874,67 @@ def test_jsx_unterminated_tags_are_scanned_in_linear_time() -> None:
     got = jsx("<q-chart " * 8000)
     assert time.perf_counter() - start < 2
     assert len(got) == 8000
+
+
+def test_jsx_unterminated_braces_are_scanned_in_linear_time() -> None:
+    for source in ("<q-chart a={" * 8000, "<q-chart {" * 8000, "<q-chart summary={" * 8000):
+        start = time.perf_counter()
+        got = jsx(source)
+        assert time.perf_counter() - start < 3
+        assert len(got) in (0, 8000)
+
+
+def test_jsx_attribute_braces_still_end_where_they_close() -> None:
+    assert jsx('<q-chart summary={"a}"} />') == []
+    assert jsx("<q-chart summary={`x ${a} }`} />") == []
+    assert jsx("<q-chart a={<q-stats />} />") == [
+        "src/f0.tsx line 1: <q-chart> needs attribute summary",
+        "src/f0.tsx line 1: unknown element <q-stats>",
+    ]
+
+
+def test_nested_diffs_over_one_pre_are_checked_in_linear_time() -> None:
+    diff = "--- a/f\n+++ b/f\n@@ -1,40000 +1,40000 @@\n" + "\n".join(f" line {i}" for i in range(40000))
+    start = time.perf_counter()
+    got = details("<q-diff>" * 1000 + "<pre>" + diff + "</pre>" + "</q-diff>" * 1000)
+    assert time.perf_counter() - start < 3
+    assert got == []
+
+
+def test_nested_diffs_parse_their_shared_pre_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    real = kitcheck.parse_diff
+    monkeypatch.setattr(kitcheck, "parse_diff", lambda text: calls.append(text) or real(text))
+    note = "<q-diff-note file='f' line='1'></q-diff-note>"
+    got = details("<q-diff>" * 5 + "<pre>--- a/f\n+++ b/f\n@@ -1 +1 @@\n+x</pre>" + note * 3 + "</q-diff>" * 5)
+    assert len(calls) == 1
+    assert got == []
+
+
+def test_nested_timelines_over_one_list_report_each_item_once() -> None:
+    items = 3000
+    start = time.perf_counter()
+    got = messages("<q-timeline>" * items + "<ol>" + "<li>x</li>" * items + "</ol>" + "</q-timeline>" * items)
+    assert time.perf_counter() - start < 3
+    assert len([m for m in got if m.endswith("has no <time datetime>")]) <= items
+
+
+def test_nested_charts_over_one_table_with_many_theads_are_checked_in_linear_time() -> None:
+    start = time.perf_counter()
+    got = details('<q-chart summary="s">' * 8000 + "<table>" + "<thead></thead>" * 8000 + "</table>" + "</q-chart>" * 8000)
+    assert time.perf_counter() - start < 3
+    assert got == []
+
+
+def test_unclosed_items_under_an_svg_do_not_make_implied_ends_quadratic() -> None:
+    start = time.perf_counter()
+    got = details("<q-code></q-code><li><svg>" + "<b>" * 16000 + "<li/>" * 16000)
+    assert time.perf_counter() - start < 3
+    assert got == ["page.html line 1: <q-code> needs one of: pre"]
+
+
+def test_implied_ends_for_lists_and_tables_match_the_html_rules() -> None:
+    assert messages("<ul><li>a<li>b<ul><li>c</ul><li>d</ul>" + STAT) == []
+    assert messages("<q-code><dl><dt>a<dd>b<dt>c</dl><table><tr><td>1<td>2<tr><td>3</table></q-code>") == [
+        "<q-code> needs one of: pre"
+    ]
