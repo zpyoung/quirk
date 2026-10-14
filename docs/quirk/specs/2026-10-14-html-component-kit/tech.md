@@ -696,4 +696,12 @@ Back-link: [Deferred Ideas](logic.md#deferred-ideas).
 
 ## 11. Amendments
 
-None yet.
+All dated 2026-10-14. They came from review rounds during the build, and each one is already applied in the section it names.
+
+- §4.6: a `--no-js` run defaults to `<stem>.verify-nojs/`, and its report carries `"no_js": true` on disk, so it never overwrites or poses as the JS-enabled report.
+- §4.7: `pins.py stamp` only rewrites versions marked `first_party`; any other version exits 2. The user decided this.
+- §4.2: three messages were added: self-closed q-* tags, markup the parser can't read past, and the kit-not-inlined check. `q-diff-note` is now `interactive: false` (§3.4).
+- §4.1: page CSS beats kit rules of one-class specificity, and the deliberate exceptions are listed.
+- §4.3: `q-table` moves header contents into its sort button.
+- §4.4: JSX comment masking fails closed. Q-* text in strings or mid-line comments is still scanned.
+- §4.10: the report example's `interactions` describe the legend toggle and table sorting.
