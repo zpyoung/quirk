@@ -253,7 +253,7 @@ def _configure_build_app(sub: argparse._SubParsersAction) -> None:
     parser.add_argument("--mode", choices=app.APP_MODES, help="offline or connected (default: the saved value, else offline)")
     parser.add_argument("--signal", help="why this needs tier 2, recorded in the header and quirk-app.json")
     parser.add_argument("--template", help="tier-2 template name (default: the saved value, else app)")
-    parser.add_argument("--upgrade", action="store_true", help="accepted for symmetry with build; tier 2 versions are pinned by the lockfile")
+    parser.add_argument("--upgrade", action="store_true", help="move the kit and Chart.js to the current version, not the recorded one; npm versions stay pinned by the lockfile")
     _project_option(parser)
     parser.set_defaults(func=_cmd_build_app)
 

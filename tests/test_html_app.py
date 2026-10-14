@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -358,9 +359,194 @@ def test_connected_bundle_may_call_the_network_but_not_load_scripts(project, fak
 
 
 @needs_node
-def test_upgrade_is_reported_as_a_no_op_for_tier_2(project, fake_env):
+def test_upgrade_is_reported_as_a_no_op_for_a_kit_free_app(project, fake_env):
     rc, result = build_app(project, fake_env, "demo", "--title", "Demo", "--upgrade")
-    assert rc == 0 and any("--upgrade" in w for w in result["warnings"])
+    assert rc == 0 and any("--upgrade has no effect on tier 2" in w for w in result["warnings"])
+    page = (project / ".quirk" / "html" / "demo.html").read_text()
+    assert "data-quirk-lib" not in page and "kit" not in header.read_header(page)["libraries"]
+
+
+KIT_VIEW = (
+    "export function Chart() {\n"
+    '  return <q-chart summary="Signups rose">\n'
+    "    <table><thead><tr><th>Month</th><th>n</th></tr></thead>\n"
+    "    <tbody><tr><td>Jan</td><td>1</td></tr></tbody></table>\n"
+    "  </q-chart>;\n"
+    "}\n"
+)
+
+
+def add_source(project: Path, name: str, text: str, slug: str = "demo") -> Path:
+    path = source_dir(project, slug) / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def kit_catalog_tags() -> set[str]:
+    catalog = json.loads((SKILL / "vendor" / "kit" / "1.0.0" / "catalog.json").read_text(encoding="utf-8"))
+    return {element["tag"] for element in catalog["elements"]}
+
+
+@needs_node
+def test_a_tsx_with_q_chart_inlines_the_kit_and_chartjs(project, fake_env):
+    assert build_app(project, fake_env, "demo", "--title", "Demo")[0] == 0
+    add_source(project, "src/Chart.tsx", KIT_VIEW)
+    rc, result = build_app(project, fake_env)
+    assert rc == 0 and result["checks"]["passed"] is True, result["checks"]
+    page = (project / ".quirk" / "html" / "demo.html").read_text()
+    libs = header.read_header(page)["libraries"]
+    registry = json.loads((SKILL / "vendor" / "libraries.json").read_text())["libraries"]
+    assert libs["kit"] == registry["kit"]["current"] and libs["chartjs"] == registry["chartjs"]["current"]
+    assert result["libraries"] == libs
+    assert f'<style data-quirk-lib="kit@{libs["kit"]}">' in page
+    assert f'<script data-quirk-lib="chartjs@{libs["chartjs"]}">' in page
+    assert f'<script data-quirk-lib="kit@{libs["kit"]}">' in page
+    assert f"<!-- license: kit {libs['kit']} MIT" in page and f"<!-- license: chartjs {libs['chartjs']} MIT" in page
+    head_end, body_end = page.index("</head>"), page.rindex("</body>")
+    assert page.index('<style data-quirk-lib="kit@') < head_end
+    chart_js, kit_js = page.index('<script data-quirk-lib="chartjs@'), page.index('<script data-quirk-lib="kit@')
+    assert head_end < chart_js < kit_js < body_end
+    assert page.index("<!-- license: kit") < head_end
+
+
+@needs_node
+def test_a_kit_check_failure_in_a_tsx_names_the_src_relative_file_and_line(project, fake_env):
+    assert build_app(project, fake_env, "demo", "--title", "Demo")[0] == 0
+    add_source(project, "src/views/Bad.tsx", "export const Bad = () => (\n  <div>\n    <q-stats>x</q-stats>\n  </div>\n);\n")
+    rc, result = build_app(project, fake_env)
+    assert rc == 1
+    failures = [f for f in result["checks"]["failures"] if f["check"] == "kit"]
+    assert [f["detail"] for f in failures] == ["src/views/Bad.tsx line 3: unknown element <q-stats>"]
+    assert result["checks"]["passed"] is False
+    assert (project / ".quirk" / "html" / "demo.html").is_file()
+
+
+@needs_node
+def test_kit_tags_in_test_files_and_declarations_are_neither_scanned_nor_pull_in_the_kit(project, fake_env):
+    assert build_app(project, fake_env, "demo", "--title", "Demo")[0] == 0
+    add_source(project, "src/Chart.test.tsx", "const x = <q-stats>x</q-stats>;\n")
+    add_source(project, "src/Chart.spec.ts", "const y = '<q-chart summary=\"x\">';\n")
+    add_source(project, "src/extra.d.ts", "// <q-stats>\n")
+    rc, result = build_app(project, fake_env)
+    assert rc == 0 and result["checks"]["passed"] is True
+    assert "kit" not in result["libraries"]
+    assert "data-quirk-lib" not in (project / ".quirk" / "html" / "demo.html").read_text()
+
+
+@needs_node
+def test_a_kit_tag_in_index_html_pulls_in_the_kit(project, fake_env):
+    assert build_app(project, fake_env, "demo", "--title", "Demo")[0] == 0
+    index = source_dir(project) / "index.html"
+    index.write_text(index.read_text().replace("</body>", '<q-code filename="a.txt">hi</q-code></body>', 1))
+    rc, result = build_app(project, fake_env)
+    assert rc == 0 and result["checks"]["passed"] is True, result["checks"]
+    assert "kit" in result["libraries"] and "chartjs" not in result["libraries"]
+
+
+@needs_node
+def test_dropping_every_kit_tag_drops_the_kit_from_the_header(project, fake_env):
+    assert build_app(project, fake_env, "demo", "--title", "Demo")[0] == 0
+    view = add_source(project, "src/Chart.tsx", KIT_VIEW)
+    assert "kit" in build_app(project, fake_env)[1]["libraries"]
+    view.write_text("export const Chart = () => null;\n")
+    rc, result = build_app(project, fake_env)
+    assert rc == 0 and "kit" not in result["libraries"] and "chartjs" not in result["libraries"]
+
+
+@pytest.fixture
+def two_kit_versions_skill(tmp_path: Path) -> Path:
+    """A copy of the skill whose registry holds kit 1.0.0 and 1.0.1, current still 1.0.0."""
+    skill = tmp_path / "skill-copy"
+    shutil.copytree(SKILL, skill, ignore=shutil.ignore_patterns("node_modules", "__pycache__"))
+    kit = skill / "vendor" / "kit"
+    shutil.copytree(kit / "1.0.0", kit / "1.0.1")
+    catalog = json.loads((kit / "1.0.1" / "catalog.json").read_text())
+    catalog["kit_version"] = "1.0.1"
+    (kit / "1.0.1" / "catalog.json").write_text(json.dumps(catalog))
+    registry = json.loads((skill / "vendor" / "libraries.json").read_text())
+    entry = registry["libraries"]["kit"]
+    entry["versions"]["1.0.1"] = entry["versions"]["1.0.0"]
+    (skill / "vendor" / "libraries.json").write_text(json.dumps(registry))
+    return skill
+
+
+def set_kit_current(skill: Path, version: str) -> None:
+    path = skill / "vendor" / "libraries.json"
+    registry = json.loads(path.read_text())
+    registry["libraries"]["kit"]["current"] = version
+    path.write_text(json.dumps(registry))
+
+
+@needs_node
+def test_upgrade_moves_a_frozen_kit_version_to_current(project, fake_env, two_kit_versions_skill, monkeypatch):
+    from htmlkit import app as app_module
+
+    for key, value in fake_env.items():
+        monkeypatch.setenv(key, value)
+
+    def build(upgrade: bool) -> dict:
+        return app_module.build_app(
+            "demo",
+            title="Demo",
+            mode=None,
+            signal=None,
+            template_name=None,
+            upgrade=upgrade,
+            project_dir=project,
+            user_dir=Path(fake_env["QUIRK_HTML_USER_DIR"]),
+            skill_dir=two_kit_versions_skill,
+        )
+
+    build(False)
+    add_source(project, "src/Chart.tsx", KIT_VIEW)
+    assert build(False)["libraries"]["kit"] == "1.0.0"
+    set_kit_current(two_kit_versions_skill, "1.0.1")
+    frozen = build(False)
+    assert frozen["libraries"]["kit"] == "1.0.0"
+    assert frozen["checks"]["passed"] is True
+    assert not any("--upgrade" in w or "upgraded" in w for w in frozen["warnings"])
+    upgraded = build(True)
+    assert upgraded["libraries"]["kit"] == "1.0.1" and upgraded["checks"]["passed"] is True
+    assert "library kit upgraded from 1.0.0 to 1.0.1" in upgraded["warnings"]
+    assert not any("has no effect" in w for w in upgraded["warnings"])
+    page = (project / ".quirk" / "html" / "demo.html").read_text()
+    assert 'data-quirk-lib="kit@1.0.1"' in page and 'data-quirk-lib="kit@1.0.0"' not in page
+
+
+@needs_node
+def test_an_unloadable_kit_catalog_is_a_kit_check_failure_not_a_crash(project, fake_env, two_kit_versions_skill, monkeypatch):
+    from htmlkit import app as app_module
+
+    for key, value in fake_env.items():
+        monkeypatch.setenv(key, value)
+    (two_kit_versions_skill / "vendor" / "kit" / "1.0.0" / "catalog.json").write_text("{not json")
+    kwargs = dict(
+        title="Demo", mode=None, signal=None, template_name=None, upgrade=False,
+        project_dir=project, user_dir=Path(fake_env["QUIRK_HTML_USER_DIR"]), skill_dir=two_kit_versions_skill,
+    )
+    app_module.build_app("demo", **kwargs)
+    add_source(project, "src/Chart.tsx", KIT_VIEW)
+    result = app_module.build_app("demo", **kwargs)
+    assert result["checks"]["passed"] is False
+    assert [f["check"] for f in result["checks"]["failures"]] == ["kit"]
+    assert "cannot load the kit catalog" in result["checks"]["failures"][0]["detail"]
+    assert (project / ".quirk" / "html" / "demo.html").is_file()
+
+
+def test_quirk_kit_d_ts_declares_exactly_the_catalog_tags():
+    dts = (APP / "project" / "src" / "quirk-kit.d.ts").read_text(encoding="utf-8")
+    assert "<q-" not in dts
+    assert re.findall(r"declare module 'react'", dts) and re.findall(r"^export \{\};?$", dts, re.MULTILINE)
+    declared = set(re.findall(r"^\s*'(q-[a-z-]+)'\s*:", dts, re.MULTILINE))
+    assert declared == kit_catalog_tags()
+
+
+def test_app_rules_link_the_component_reference_and_it_resolves():
+    rules = APP / "rules.md"
+    text = rules.read_text(encoding="utf-8")
+    assert "## Kit elements" in text and "../../references/components.md" in text
+    assert (rules.parent / "../../references/components.md").resolve().is_file()
 
 
 def seal(tdir: Path) -> None:
