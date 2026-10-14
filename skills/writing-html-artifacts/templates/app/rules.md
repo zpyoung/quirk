@@ -36,6 +36,13 @@ Read after the [design reference](../../references/design-reference.md). These r
 - Keep `features`, `columns` and fallback data at module scope or in a `useMemo`, as the TanStack Table v9 docs require. A new array each render re-runs the row model.
 - Declare features with `tableFeatures({})` and add only the ones you use. Edits go through the shared state, not through the table's own copy of the data.
 
+## Kit elements
+
+- Write `q-*` elements (`q-chart`, `q-stat`, `q-table`, `q-tabs`, `q-board` and the rest) in a view's JSX and the build inlines the kit, and Chart.js for `q-chart`. The attributes and markup each one takes are in [the component reference](../../references/components.md); the build's `kit` check fails an unknown tag, a missing required attribute or a bad literal value, naming the `src/` file and line.
+- Use `className`, not `class`.
+- Keep a `q-*` element's direct children stable. Change rows or attributes, or give the element a `key` to remount it, because the element builds its own DOM from those children.
+- Never let React re-render `q-board` cards: the board owns card placement and saves it.
+
 ## Modes and network
 
 - Offline (the default): the bundle makes no network requests. Do not call `fetch`, `XMLHttpRequest`, `WebSocket` or `EventSource`; verify fails the page if any request leaves the file.

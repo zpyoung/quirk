@@ -11,6 +11,11 @@ The build itself runs the template's own build code (``scripts.build`` and ``vit
 only a template you trust should be built. The bundle (``dist/index.html``) then gets the artifact header, one license comment per
 production dependency and its ``<title>`` set to the saved title, and is written to ``<project>/.quirk/html/<slug>.html`` and statically checked.
 
+An app that writes q-* elements in its sources (``src/**/*.{ts,tsx,js,jsx}``, minus declaration and
+test files, or ``index.html``) gets the component kit, and Chart.js for ``<q-chart>``, inlined from the
+skill after the Vite build, exactly as tier 1 does it; ``kitcheck.check_jsx`` validates those
+elements and reports failures with the other static checks.
+
 Problems the author can fix (slug, mode, template, missing title) raise ``BuildError`` and are exit 2
 in the CLI. A missing toolchain or a failed install or build raises ``AppUnavailable`` (exit 3),
 the signal to write a tier-1 source instead; this module never falls back on its own.
@@ -28,14 +33,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import SKILL_DIR
-from .assemble import BuildError, _quirk_version, _skill_store
+from . import SKILL_DIR, kitcheck
+from .assemble import BuildError, _frozen_versions, _quirk_version, _skill_store
 from .checks import default_shells, run_checks
 from .fsutil import atomic_write, ensure_self_ignoring
 from .header import render_header
 from .resolve import TemplateNotFound, default_user_dir, find_template, template_roots
 from .tokens import merge_tokens, token_layers, tokens_css
-from .vendor import _comment_safe
+from .vendor import VendorError, _comment_safe
 
 APP_MODES = ("offline", "connected")
 DEFAULT_TEMPLATE = "app"
@@ -46,6 +51,8 @@ TAIL_LINES = 40
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,60}\Z")
 _TITLE = re.compile(r"<title>.*?</title>", re.IGNORECASE | re.DOTALL)
 _COPY_SKIP = shutil.ignore_patterns("node_modules", "dist", ".DS_Store")
+_KIT_SOURCE_SUFFIXES = {".ts", ".tsx", ".js", ".jsx"}
+_NOT_KIT_SOURCE = re.compile(r"\.(d|test|spec)\.[^.]+\Z")
 
 
 class AppUnavailable(Exception):
@@ -147,6 +154,34 @@ def _licenses(source: Path) -> tuple[dict[str, str], list[str]]:
     return versions, comments
 
 
+def _kit_sources(source: Path) -> list[tuple[str, str]]:
+    """``(label, text)`` for each file the kit scan and check read, labels relative to the app folder.
+
+    That is ``index.html`` and every ``.ts``, ``.tsx``, ``.js`` and ``.jsx`` file under ``src/``
+    except declaration files and tests, in a stable order.
+    """
+    paths = [p for p in sorted((source / "src").rglob("*")) if p.suffix in _KIT_SOURCE_SUFFIXES and p.is_file()]
+    paths = [p for p in paths if not _NOT_KIT_SOURCE.search(p.name)]
+    if (source / "index.html").is_file():
+        paths.append(source / "index.html")
+    files = []
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+        except OSError as exc:
+            raise BuildError(f"cannot read {path}: {exc}") from exc
+        files.append((path.relative_to(source).as_posix(), text))
+    return files
+
+
+def _insert_before(page: str, at: int, blocks: list[str]) -> str:
+    """Insert ``blocks`` at index ``at`` of ``page``; a negative ``at`` (marker not found) appends them."""
+    if not blocks:
+        return page
+    at = len(page) if at < 0 else at
+    return page[:at] + "\n".join(blocks) + "\n" + page[at:]
+
+
 def build_app(
     slug: str,
     *,
@@ -163,8 +198,10 @@ def build_app(
 
     ``title``, ``mode``, ``signal`` and ``template_name`` come from ``quirk-app.json`` in the
     source folder when ``None``; a value given overrides the saved one and is saved. The first
-    build needs a title. ``upgrade`` has no effect on tier 2 because ``pnpm-lock.yaml`` pins every
-    version; it adds a warning saying so. The source folder is created only when absent.
+    build needs a title. ``pnpm-lock.yaml`` pins every npm dependency, so ``upgrade`` only moves
+    the kit and Chart.js, which come from the skill and otherwise stay at the version in the existing
+    output's header; an app that uses no kit gets a warning saying ``upgrade`` has no effect. The
+    source folder is created only when absent.
 
     Raises BuildError for an invalid slug, mode or template, or a missing title; AppUnavailable
     when Node or pnpm is missing or an install or build fails; a failed static check is reported
@@ -178,6 +215,7 @@ def build_app(
 
     html_dir = project_dir / ".quirk" / "html"
     source = html_dir / slug
+    out_path = html_dir / f"{slug}.html"
     saved = _read_app_file(source / APP_FILE)
     settings = {
         "template": template_name or saved.get("template") or DEFAULT_TEMPLATE,
@@ -201,8 +239,6 @@ def build_app(
     warnings = [
         f"template {w['name']!r} at {w['level']} level was skipped ({w['path']}): {w['reason']}" for w in skipped
     ]
-    if upgrade:
-        warnings.append("--upgrade has no effect on tier 2: pnpm-lock.yaml pins every dependency version")
 
     pnpm = _pnpm_command()
 
@@ -212,6 +248,13 @@ def build_app(
         raise BuildError(f"cannot write the build output under {html_dir}: {exc}") from exc
     if not source.exists():
         _scaffold(template.dir, template.project or "project/", template.example, source)
+    kit_files = _kit_sources(source)
+    uses_kit, uses_chartjs = False, False
+    for _, text in kit_files:
+        kit, chartjs = kitcheck.needs(text)
+        uses_kit, uses_chartjs = uses_kit or kit, uses_chartjs or chartjs
+    if upgrade and not uses_kit:
+        warnings.append("--upgrade has no effect on tier 2: pnpm-lock.yaml pins every dependency version")
     try:
         atomic_write(source / APP_FILE, json.dumps(settings, indent=2) + "\n")
     except OSError as exc:
@@ -239,6 +282,33 @@ def build_app(
         raise AppUnavailable("build-failed", "dist/index.html must start with a doctype line")
 
     versions, licenses = _licenses(source)
+    head_blocks: list[str] = []
+    body_blocks: list[str] = []
+    kit_failures: list[dict] = []
+    if uses_kit:
+        store = _skill_store(skill, template.dir)
+        frozen = _frozen_versions(out_path)
+        names = (["chartjs"] if uses_chartjs else []) + ["kit"]
+        try:
+            for name in names:
+                lv = store.resolve(name, None if upgrade else frozen.get(name))
+                if upgrade and name in frozen and frozen[name] != lv.version:
+                    warnings.append(f"library {name} upgraded from {frozen[name]} to {lv.version}")
+                versions[name] = lv.version
+                blocks = store.inline_blocks(lv)
+                if blocks:
+                    licenses.append(store.license_comment(lv))
+                for block in blocks:
+                    (body_blocks if block.kind == "js" else head_blocks).append(block.text)
+        except VendorError as exc:
+            kit_failures.append({"check": "kit", "detail": f"cannot inline the kit: {exc}"})
+        else:
+            try:
+                catalog = kitcheck.load_catalog(store, versions["kit"])
+            except kitcheck.KitError as exc:
+                kit_failures.append({"check": "kit", "detail": f"cannot load the kit catalog: {exc}"})
+            else:
+                kit_failures.extend(kitcheck.check_jsx(kit_files, catalog))
     meta = {
         "schema": 1,
         "template": template.name,
@@ -255,8 +325,9 @@ def build_app(
     found = _TITLE.search(rest)
     if found and (first_script < 0 or found.start() < first_script):
         rest = f"{rest[: found.start()]}<title>{html_lib.escape(settings['title'])}</title>{rest[found.end():]}"
+    rest = _insert_before(rest, rest.find("</head>"), head_blocks)
+    rest = _insert_before(rest, rest.rfind("</body>"), body_blocks)
     page = "\n".join([doctype, render_header(meta), *licenses]) + "\n" + rest
-    out_path = html_dir / f"{slug}.html"
     try:
         page_size = len(page.encode("utf-8"))
         atomic_write(out_path, page)
@@ -265,9 +336,19 @@ def build_app(
     except OSError as exc:
         raise BuildError(f"cannot write the build output under {html_dir}: {exc}") from exc
 
+    # an empty kit source: the kit check is done above (index.html and src/ via check_jsx), and
+    # scanning the built page would read the bundle's own strings as markup
     checks = run_checks(
-        page, mode=settings["mode"], tier=2, vendor=_skill_store(skill, template.dir), shells=default_shells(skill)
+        page,
+        mode=settings["mode"],
+        tier=2,
+        vendor=_skill_store(skill, template.dir),
+        shells=default_shells(skill),
+        kit_source=("index.html", ""),
     )
+    if kit_failures:
+        checks["failures"].extend(kit_failures)
+        checks["passed"] = False
     return {
         "path": str(out_path),
         "size": page_size,
