@@ -1,6 +1,6 @@
 # Logic spec: the `writing-html-artifacts` component kit
 
-**Status**: Draft, 2026-10-14
+**Status**: Approved by the user, 2026-10-14 · Tech spec: [tech.md](tech.md) (gate fired: crosses the build, template, companion and tier-2 subsystems)
 
 A kit of eight custom elements (`q-tabs`, `q-chart`, `q-stat`, `q-table`, `q-timeline`, `q-code`,
 `q-diff`, `q-board`) that agents drop into pages built by `writing-html-artifacts`. Today the
@@ -332,7 +332,7 @@ can have tabs without loading Web Awesome.
 
 ## Status & amendments
 
-**Status**: Draft, 2026-10-14. Awaiting user review.
+**Status**: Approved by the user, 2026-10-14.
 
 **Amendments**
 
