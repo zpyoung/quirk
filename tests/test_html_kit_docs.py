@@ -116,8 +116,8 @@ def test_reference_sections_carry_the_catalog_content() -> None:
         assert f"```html\n{element.example}\n```" in text
         for attribute in element.attributes:
             assert f"| `{attribute.name}` |" in text
-    assert text.count("Companion option html: allowed") == 4
-    assert text.count("Companion option html: not allowed (interactive)") == 5
+    assert text.count("Companion option html: allowed") == 5
+    assert text.count("Companion option html: not allowed (interactive)") == 4
 
 
 def test_reference_attribute_table_columns() -> None:
@@ -188,3 +188,17 @@ def test_usage_error_is_one_json_object_on_stdout() -> None:
     result = _run("bogus")
     assert result.returncode == 2
     assert "error" in json.loads(result.stdout)
+
+
+@pytest.mark.parametrize("slots", [[], "main", None, {"main": []}])
+def test_examples_report_a_malformed_template_manifest_as_one_json_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], slots: object
+) -> None:
+    skill = _skill_copy(tmp_path)
+    template = skill / "templates" / "report" / "template.json"
+    data = json.loads(template.read_text())
+    data["slots"] = slots
+    template.write_text(json.dumps(data))
+    rc = kit_docs.main(["examples", str(tmp_path / "out")], skill_dir=skill)
+    assert rc == 2
+    assert "error" in json.loads(capsys.readouterr().out)

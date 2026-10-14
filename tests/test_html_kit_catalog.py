@@ -62,7 +62,7 @@ SECTION_3_4: dict[str, tuple[Any, bool, dict[str, tuple[bool, str, Any, Any]], l
     "q-diff": (None, False, {}, [["pre"]], ["diff-notes"]),
     "q-diff-note": (
         "q-diff",
-        True,
+        False,
         {"file": (True, "text", None, None), "line": (True, "integer", None, None)},
         [],
         [],
@@ -103,6 +103,11 @@ def test_catalog_loads_for_current_and_explicit_version(catalog: Any) -> None:
     assert list(catalog.global_attributes) == GLOBAL_ATTRIBUTES
     assert kitcheck.load_catalog(_store(), "1.0.0").kit_version == "1.0.0"
     assert list(catalog.elements) == list(SECTION_3_4)
+
+
+def test_the_interactive_false_set_is_pinned(catalog: Any) -> None:
+    quiet = {tag for tag, el in catalog.elements.items() if not el.interactive}
+    assert quiet == {"q-stat", "q-chart", "q-timeline", "q-diff", "q-diff-note"}
 
 
 @pytest.mark.parametrize("tag", list(SECTION_3_4))

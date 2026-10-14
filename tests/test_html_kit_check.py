@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -357,9 +358,10 @@ def test_stray_end_tags_are_ignored() -> None:
 
 
 def test_self_closing_syntax_on_a_custom_element_follows_html() -> None:
-    # html ignores the slash on a non-void element, so the element stays open
+    # html ignores the slash on a non-void element, so the element stays open: the section is its
+    # child, and the only failure is the self-closing report
     got = messages('<q-tabs/><section><h3>A</h3></section>')
-    assert got == []
+    assert got == ["<q-tabs> cannot be self-closed; write <q-tabs …></q-tabs>"]
 
 
 def test_line_numbers_point_at_the_source_line() -> None:
@@ -716,3 +718,32 @@ def test_existing_call_signature_still_works(tmp_path: Path) -> None:
     store = _registry_without_kit(tmp_path)
     result = checks.run_checks(page("<p>x</p>"), mode="offline", tier=1, vendor=store)
     assert result["passed"] is True
+
+
+def test_a_long_digit_run_in_a_number_list_is_rejected_in_linear_time() -> None:
+    start = time.perf_counter()
+    got = messages(STAT.replace('points="1,2,3"', 'points="' + "1" * 100_000 + 'x,1"'))
+    assert time.perf_counter() - start < 1
+    assert len(got) == 1 and got[0].endswith("is not a number list")
+
+
+def test_deeply_nested_kit_elements_are_checked_in_linear_time() -> None:
+    depth = 8000
+    start = time.perf_counter()
+    got = details("<q-code>" * depth + "<pre><code>x</code></pre>" + "</q-code>" * depth)
+    assert time.perf_counter() - start < 3
+    assert got == []
+    assert messages("<q-code>" * 3 + "</q-code>" * 3) == ["<q-code> needs one of: pre"] * 3
+
+
+def test_requires_still_looks_below_the_element_only() -> None:
+    assert messages("<q-code></q-code><pre>x</pre>") == ["<q-code> needs one of: pre"]
+    assert messages("<q-code><div><pre>x</pre></div></q-code>") == []
+
+
+def test_a_self_closed_kit_tag_is_reported_and_the_tree_stays_open() -> None:
+    got = messages('<q-chart summary="s" data-from="rows" />')
+    assert got == ["<q-chart> cannot be self-closed; write <q-chart …></q-chart>"]
+    # the open q-chart reads the next table as its inline table, as a browser would
+    assert any("cannot be self-closed" in m for m in messages('<q-chart summary="s" data-from="rows" />' + table(3)))
+    assert not any("cannot be self-closed" in m for m in messages(chart('data-from="rows"')))

@@ -169,8 +169,8 @@ Kinds: `ident` matches REGEX `^[A-Za-z][A-Za-z0-9_-]*$`. `integer` must be a pos
 `boolean` is present or absent; any value is accepted. `number-list` is comma-separated finite
 numbers.
 
-`interactive: false` applies to `q-stat`, `q-chart`, `q-timeline` and `q-diff`. The other elements
-are interactive.
+`interactive: false` applies to `q-stat`, `q-chart`, `q-timeline`, `q-diff` and `q-diff-note` (a
+`q-diff` carries notes only as `q-diff-note` children). The other elements are interactive.
 
 ### 3.5 Board storage
 
@@ -251,6 +251,8 @@ run_checks(html, *, mode, tier, vendor, shells=None, kit_source: Optional[tuple[
   - `<q-stat> points="a,b" is not a number list` (also `integer` and `ident` kinds)
   - `<q-chart> needs one of: table, data-from`
   - `<q-diff-note> must be inside <q-diff>`
+  - `<q-chart> cannot be self-closed; write <q-chart …></q-chart>` (HTML only; browsers read a
+    self-closed q-* tag as an open tag, so the tolerant tree keeps it open and the failure says why)
   - `<q-chart> has 9 series; the limit is 8` (rule `max-series`, inline tables only)
   - `<q-diff-note> file="x" is not in its diff`
   - `<q-diff-note> line 40 is not a new-side line of x` (rule `diff-notes`)

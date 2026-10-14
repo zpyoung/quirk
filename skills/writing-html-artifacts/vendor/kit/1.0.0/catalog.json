@@ -225,7 +225,7 @@
       "tag": "q-diff-note",
       "use_when": "Use when attaching a review comment to a specific new-side line inside a q-diff.",
       "parent": "q-diff",
-      "interactive": true,
+      "interactive": false,
       "attributes": [
         {
           "name": "file",

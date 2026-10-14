@@ -756,6 +756,21 @@ def test_a_source_without_q_tags_gets_no_kit(tmp_path, env, project):
     assert result["checks"]["passed"] is True
 
 
+def test_a_source_without_q_tags_builds_byte_identical_to_a_build_without_the_kit_scan(
+    tmp_path, env, project, monkeypatch
+):
+    src = write_src(tmp_path / "plain.src.html", {"template": "report", "title": "T"}, {"main": "<p>plain</p>"})
+
+    def built(name: str) -> str:
+        out = tmp_path / f"{name}.html"
+        assemble.build_tier1(src, out=out, upgrade=False, project_dir=project, user_dir=Path(env["QUIRK_HTML_USER_DIR"]))
+        return re.sub(r'"built_at": "[^"]*"', '"built_at": "-"', out.read_text(encoding="utf-8"))
+
+    with_scan = built("with")
+    monkeypatch.setattr(assemble.kitcheck, "needs", lambda text: (False, False))
+    assert with_scan == built("without")
+
+
 def test_q_tags_pull_in_the_kit_before_alpine(tmp_path, env, project):
     rc, result, out = report_build(tmp_path, env, project, STAT)
     assert rc == 0 and result["checks"]["passed"] is True, result["checks"]

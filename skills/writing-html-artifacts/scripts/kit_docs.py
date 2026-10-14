@@ -126,7 +126,10 @@ def render_example(tag: str, example: str, required_slots: Sequence[str]) -> str
 
 def _required_slots(skill_dir: Path) -> list[str]:
     manifest = json.loads((Path(skill_dir) / "templates" / EXAMPLE_TEMPLATE / "template.json").read_text(encoding="utf-8"))
-    return [name for name, spec in manifest["slots"].items() if spec.get("required")]
+    slots = manifest.get("slots") if isinstance(manifest, dict) else None
+    if not isinstance(slots, dict) or not all(isinstance(spec, dict) for spec in slots.values()):
+        raise ValueError(f"templates/{EXAMPLE_TEMPLATE}/template.json: slots must be an object of slot objects")
+    return [name for name, spec in slots.items() if spec.get("required")]
 
 
 def _cmd_reference(args: argparse.Namespace, skill_dir: Path) -> int:
@@ -178,7 +181,7 @@ def main(argv: Optional[Sequence[str]] = None, skill_dir: Optional[Path] = None)
     handler = _cmd_reference if args.command == "reference" else _cmd_examples
     try:
         return handler(args, skill)
-    except (kitcheck.KitError, OSError, ValueError, KeyError) as exc:
+    except (kitcheck.KitError, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         print(f"kit_docs.py: {exc}", file=sys.stderr)
         print(json.dumps({"error": str(exc)}))
         return EXIT_USAGE

@@ -290,7 +290,7 @@ Free text: the comment itself.
 </q-diff>
 ```
 
-Companion option html: not allowed (interactive)
+Companion option html: allowed
 
 ## `q-board`
 

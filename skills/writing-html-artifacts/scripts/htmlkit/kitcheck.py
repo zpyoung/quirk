@@ -276,7 +276,7 @@ _HEADINGS = frozenset({"h2", "h3", "h4", "h5", "h6"})
 _ANY_HEADING = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
 _FOREIGN = frozenset({"svg", "math"})
 _KIT_NAME = re.compile(r"q-[a-z]")
-_NUMBER = re.compile(r"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+_NUMBER = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
 _IDENT = re.compile(r"[A-Za-z][A-Za-z0-9_-]*")
 _DIGITS = re.compile(r"[0-9]+")
 _HUNK = re.compile(r"^@@ -[0-9]{1,9}(?:,([0-9]{1,9}))? \+([0-9]{1,9})(?:,([0-9]{1,9}))? @@")
@@ -308,7 +308,7 @@ _CLOSES_P = frozenset(
 class _Node:
     """One element of the tolerant tree: its attributes, source line and children."""
 
-    __slots__ = ("tag", "attrs", "line", "parent", "children", "content")
+    __slots__ = ("tag", "attrs", "line", "parent", "children", "content", "self_closed")
 
     def __init__(self, tag: str, attrs: dict[str, str], line: int, parent: Optional["_Node"]) -> None:
         self.tag = tag
@@ -317,6 +317,7 @@ class _Node:
         self.parent = parent
         self.children: list[_Node] = []
         self.content: list[Any] = []  # text strings and child nodes in source order
+        self.self_closed = False
 
 
 class _TreeBuilder(HTMLParser):
@@ -412,6 +413,7 @@ class _TreeBuilder(HTMLParser):
         parent.children.append(node)
         parent.content.append(node)
         self.nodes.append(node)
+        node.self_closed = self_closing and tag not in _VOID
         if tag in _VOID or (self_closing and self._foreign):
             return
         self._push(node)
@@ -489,6 +491,8 @@ def check_html(text: str, catalog: Catalog, *, label: str) -> list[dict]:
     def report(line: int, message: str) -> None:
         found.append((line, len(found), message))
 
+    selectors = _below_selectors(catalog)
+    below = _below_masks(builder.nodes, selectors) if selectors else {}
     for node in builder.nodes:
         if not _KIT_NAME.match(node.tag):
             continue
@@ -496,12 +500,14 @@ def check_html(text: str, catalog: Catalog, *, label: str) -> list[dict]:
         if element is None:
             report(node.line, f"unknown element <{node.tag}>")
             continue
-        _check_element(node, element, report)
+        if node.self_closed:
+            report(node.line, f"<{node.tag}> cannot be self-closed; write <{node.tag} …></{node.tag}>")
+        _check_element(node, element, report, selectors, below.get(id(node), 0))
     found.sort()
     return [{"check": "kit", "detail": f"{label} line {line}: {message}"} for line, _, message in found]
 
 
-def _check_element(node: _Node, element: Element, report: Report) -> None:
+def _check_element(node: _Node, element: Element, report: Report, selectors: list[str], below: int) -> None:
     tag = node.tag
     for attribute in element.attributes:
         if attribute.name not in node.attrs:
@@ -513,9 +519,8 @@ def _check_element(node: _Node, element: Element, report: Report) -> None:
         if problem:
             report(node.line, f'<{tag}> {attribute.name}="{value}" {problem}')
     if element.requires:
-        below = list(_descendants(node))
         for group in element.requires:
-            if not any(_selector_matches(selector, node, below) for selector in group):
+            if not any(_selector_matches(selector, node, selectors, below) for selector in group):
                 names = ", ".join(s[1:] if s.startswith("@") else s for s in group)
                 report(node.line, f"<{tag}> needs one of: {names}")
     if element.parent is not None:
@@ -528,24 +533,57 @@ def _check_element(node: _Node, element: Element, report: Report) -> None:
         _RULES[rule](node, report)
 
 
-def _selector_matches(selector: str, node: _Node, below: list[_Node]) -> bool:
+def _selector_matches(selector: str, node: _Node, selectors: list[str], below: int) -> bool:
+    """Whether ``node`` (for ``@attr``) or an element below it satisfies ``selector``.
+
+    ``below`` is the bit mask ``_below_masks`` computed for ``node``, indexed by ``selectors``.
+    """
     own = _ATTR_SELECTOR.match(selector)
     if own:
         return own.group(1) in node.attrs
-    parsed = _NODE_SELECTOR.match(selector)
-    if parsed is None:
+    return selector in selectors and bool(below >> selectors.index(selector) & 1)
+
+
+def _below_selectors(catalog: Catalog) -> list[str]:
+    """The distinct descendant selectors the catalog's ``requires`` groups use, in first-use order."""
+    found: dict[str, None] = {}
+    for element in catalog.elements.values():
+        for group in element.requires:
+            for selector in group:
+                if not _ATTR_SELECTOR.match(selector) and _NODE_SELECTOR.match(selector):
+                    found[selector] = None
+    return list(found)
+
+
+def _node_matches(selector: str, node: _Node) -> bool:
+    want_tag, want_attr, want_value = _NODE_SELECTOR.match(selector).groups()
+    if want_tag is not None and node.tag != want_tag:
         return False
-    want_tag, want_attr, want_value = parsed.groups()
-    for descendant in below:
-        if want_tag is not None and descendant.tag != want_tag:
+    if want_attr is not None:
+        if want_attr not in node.attrs:
+            return False
+        if want_value is not None and node.attrs[want_attr] != want_value:
+            return False
+    return True
+
+
+def _below_masks(nodes: list[_Node], selectors: list[str]) -> dict[int, int]:
+    """For each element, a bit mask of the ``selectors`` some element below it satisfies.
+
+    One reverse pass over document order (a child always follows its parent), so the work is
+    linear in the page however deeply q-* elements nest.
+    """
+    masks: dict[int, int] = {}
+    for node in reversed(nodes):
+        parent = node.parent
+        if parent is None:
             continue
-        if want_attr is not None:
-            if want_attr not in descendant.attrs:
-                continue
-            if want_value is not None and descendant.attrs[want_attr] != want_value:
-                continue
-        return True
-    return False
+        own = 0
+        for bit, selector in enumerate(selectors):
+            if _node_matches(selector, node):
+                own |= 1 << bit
+        masks[id(parent)] = masks.get(id(parent), 0) | own | masks.get(id(node), 0)
+    return masks
 
 
 def _rule_max_series(node: _Node, report: Report) -> None:
