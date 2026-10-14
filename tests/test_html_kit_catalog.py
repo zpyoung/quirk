@@ -420,18 +420,22 @@ def test_kit_js_parses_as_a_classic_script_and_exposes_nothing() -> None:
     assert check.returncode == 0, check.stderr
     harness = (
         "const vm = require('vm'); const fs = require('fs');"
-        "const win = {}; const doc = {readyState: 'complete', addEventListener() {}, documentElement: {}};"
-        "const ctx = {window: win, document: doc, customElements: {get() {}, define() { throw new Error('defined'); }},"
+        "const win = {}; const doc = {readyState: 'complete', addEventListener() {}, documentElement: {}}; const defined = [];"
+        "const ctx = {window: win, document: doc, HTMLElement: class {}, customElements: {get() {}, define(tag) { defined.push(tag); }},"
         " getComputedStyle() { return {getPropertyValue() { return ''; }}; }};"
         "ctx.globalThis = ctx; vm.createContext(ctx);"
         "vm.runInContext(fs.readFileSync(process.argv[1], 'utf8'), ctx);"
         "if (Object.keys(win).length) throw new Error('window polluted: ' + Object.keys(win));"
+        "console.log(JSON.stringify(defined));"
     )
     run = subprocess.run(["node", "-e", harness, str(KIT_DIR / "kit.js")], capture_output=True, text=True)
     assert run.returncode == 0, run.stderr
+    defined = json.loads(run.stdout)
+    assert len(defined) == len(set(defined)), f"a tag is defined twice: {defined}"
+    assert set(defined) <= set(SECTION_3_4), f"defined tags missing from the catalog: {set(defined) - set(SECTION_3_4)}"
 
 
-def test_kit_css_has_only_the_shared_base() -> None:
+def test_kit_css_styles_only_catalog_elements() -> None:
     css = (KIT_DIR / "kit.css").read_text(encoding="utf-8")
     assert "[data-q-inactive]" in css and "[data-q-replaced]" in css
     assert re.search(r"@media not print\s*\{\s*:where\(\[data-q-inactive\]\)", css), "inactive panels stay visible in print"
@@ -439,8 +443,8 @@ def test_kit_css_has_only_the_shared_base() -> None:
     assert "q-visually-hidden" in css or "q-sr-only" in css
     assert ":where(" in css
     assert not re.search(r"#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(", css), "no hard-coded colors"
-    for tag in SECTION_3_4:
-        assert not re.search(rf"(?<![\w-]){re.escape(tag)}(?![\w-])", css), f"{tag} has no styles yet"
+    selector_tags = set(re.findall(r"(?<![\w.#\[-])q-[a-z][a-z0-9-]*(?![\w-])", re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)))
+    assert selector_tags <= set(SECTION_3_4), f"css styles tags missing from the catalog: {selector_tags - set(SECTION_3_4)}"
 
 
 def test_manifest_accepts_boolean_first_party_and_rejects_others(tmp_path: Path) -> None:
