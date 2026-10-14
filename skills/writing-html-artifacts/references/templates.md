@@ -79,7 +79,7 @@ Header fields:
 
 - `template` and `title` are required.
 - `mode` is `offline` (the default) or `connected`.
-- `libraries` must be a subset of the template's `optional_libraries`.
+- `libraries` must be a subset of the template's `optional_libraries`. The builder adds `kit` and `chartjs` automatically when `q-*` tags appear, so `kit` may not be listed by hand.
 - `interactions` lists what the page lets the reader do; it may be empty.
 - `data` is an optional JSON or CSV path relative to the source file. Data too large to embed moves to a sidecar file next to the page.
 - `tier_reason` is optional; set it when you overrode the tier signals.
@@ -108,7 +108,7 @@ Layers merge in this order, and a later layer wins per key:
 - Layers 2 and 3 are how project branding reaches the built-in templates, the companion included. Put brand tokens there when a whole project should be branded, and in a template's own file only when that template differs.
 - A token file only needs the keys it changes.
 - Tier-2 builds apply the same four layers: each build rewrites `src/quirk-tokens.css` in the app's source folder, and the scaffold's `theme.css` imports it. Change tokens in a layer file, not in `quirk-tokens.css`.
-- Output uses `--q-<group>-<key>` names, with light values on `:root` and dark values under the `prefers-color-scheme` media query and under `[data-theme="dark"]`. Slot content references the variables, per [design reference](design-reference.md).
+- Output uses `--q-<group>-<key>` names, with light values on `:root` and dark values under the `prefers-color-scheme` media query and under `[data-theme="dark"]`. Slot content references the variables, per [design reference](design-reference.md). The house tokens include the chart series colors `--q-color-chart-1` to `--q-color-chart-8`.
 
 ## `verified.json`
 

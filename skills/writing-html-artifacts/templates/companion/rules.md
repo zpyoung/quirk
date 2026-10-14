@@ -18,7 +18,7 @@ Read after section 12 of the [design reference](../../references/design-referenc
 
 ## Mockups
 
-- Option `html` and `content` are static markup, shown as-is. No `<button>`, `<a>`, `<input>` or `<form>` in an option's `html`: it sits inside the option's own button, and nested controls break the card.
+- Option `html` and `content` are static markup, shown as-is. Kit elements (`q-*`) go in `content` or in an option's `html` exactly as written. No `<button>`, `<a>`, `<input>` or `<form>` in an option's `html`: it sits inside the option's own button, and nested controls break the card. For the same reason, only kit elements whose entry in [components](../../references/components.md) says "Companion option html: allowed" (the non-interactive ones) may appear in an option's `html`; interactive ones go in `content`. This is a rule, not a check.
 - Style mockups with inline `style` and the `--q-*` custom properties so they follow the light and dark theme. No external images, fonts or stylesheets; offline rules apply, and `show` rejects any `http:`, `https:` or `//` load.
 - Wireframes (boxes and labels in `--q-color-border`) for structure questions; real tokens and copy only for questions about look.
 - Keep a mockup under about 60 lines. An option's `html` is a thumbnail, so give it a fixed height (around 72px); put larger comparisons in `content`.

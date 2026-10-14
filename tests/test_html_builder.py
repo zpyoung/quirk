@@ -185,7 +185,12 @@ def test_report_template_declares_its_contract():
     assert tpl.optional_libraries == ["chartjs", "mermaid"]
     assert tpl.slots["main"]["required"] is True and tpl.slots["aside"]["required"] is False
     rules = (SKILL / "templates" / "report" / "rules.md").read_text(encoding="utf-8")
-    assert 'role="img"' in rules and "aria-label" in rules and "table view" in rules
+    assert "q-chart" in rules and "references/components.md" in rules
+
+
+def test_components_rules_point_at_the_kit_reference():
+    rules = (SKILL / "templates" / "components" / "rules.md").read_text(encoding="utf-8")
+    assert "q-chart" in rules and "references/components.md" in rules
 
 
 def test_components_template_declares_its_contract():
