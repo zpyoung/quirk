@@ -5,7 +5,8 @@ present on disk and byte-identical to the recorded hashes, so a build can trust 
 inlines. `check` is for maintainers: it asks npm and OSV whether the pinned `current`
 versions are outdated or carry advisories, and never runs in tests or CI.
 
-`stamp` is for the first-party kit: after its files change it recomputes the recorded hashes.
+`stamp` is for the first-party kit: after its files change it recomputes the recorded hashes. It
+refuses any version not marked `first_party`, so a tampered vendored file cannot be re-blessed.
 Registry entries marked `first_party` are not on npm, so `check` skips them.
 
 `escape_inline` is the single definition of the escaping applied to inlined blocks;
@@ -103,12 +104,18 @@ def _verify_file(name: str, version: str, base: Path, spec: Dict[str, Any]) -> L
     return problems
 
 
+class NotFirstPartyError(ValueError):
+    """Raised when `stamp` is asked to rewrite hashes of a vendored third-party version."""
+
+
 def stamp(vendor_dir: Path, name: str, version: str) -> int:
     """Recompute `sha256` and `inline_sha256` for every file of `name@version` and rewrite the manifest.
 
-    Key order, the 2-space JSON layout and the trailing newline are preserved, so stamping twice
-    leaves the file byte-identical. Returns the number of files stamped; raises KeyError for an
-    unknown library or version and OSError for a listed file that cannot be read.
+    Only versions whose entry has `"first_party": true` can be stamped; a third-party version
+    raises NotFirstPartyError and the manifest is left untouched. Key order, the 2-space JSON
+    layout and the trailing newline are preserved, so stamping twice leaves the file
+    byte-identical. Returns the number of files stamped; raises KeyError for an unknown library or
+    version and OSError for a listed file that cannot be read.
     """
     manifest = load_manifest(vendor_dir)
     try:
@@ -116,9 +123,14 @@ def stamp(vendor_dir: Path, name: str, version: str) -> int:
     except KeyError:
         raise KeyError("unknown library %r" % (name,)) from None
     try:
-        files = entry["versions"][version]["files"]
+        version_entry = entry["versions"][version]
     except KeyError:
         raise KeyError("unknown version %r of %s" % (version, name)) from None
+    if version_entry.get("first_party") is not True:
+        raise NotFirstPartyError(
+            "%s@%s is not first-party; stamp only rewrites first-party hashes" % (name, version)
+        )
+    files = version_entry["files"]
     base = vendor_dir / name / version
     for spec in files:
         raw = (base / spec["path"]).read_bytes()
@@ -191,7 +203,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.command == "stamp":
         try:
             count = stamp(args.vendor_dir, args.name, args.version)
-        except KeyError as exc:
+        except (KeyError, NotFirstPartyError) as exc:
             print(json.dumps({"ok": False, "error": exc.args[0]}))
             return 2
         except (OSError, ValueError) as exc:

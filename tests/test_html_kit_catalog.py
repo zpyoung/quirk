@@ -515,6 +515,26 @@ def test_stamp_unknown_name_or_version_exits_2_with_a_json_error(vendor_copy: Pa
     assert (vendor_copy / "libraries.json").read_bytes() == before
 
 
+@pytest.mark.parametrize("args", [("chartjs", "4.5.1"), ("simple-css", "2.3.7")])
+def test_stamp_refuses_third_party_versions_and_leaves_the_manifest_unchanged(
+    vendor_copy: Path, args: tuple[str, str]
+) -> None:
+    lib, version = args
+    spec_path = json.loads((vendor_copy / "libraries.json").read_text(encoding="utf-8"))["libraries"][lib][
+        "versions"
+    ][version]["files"][0]["path"]
+    (vendor_copy / lib / version / spec_path).write_text("tampered\n", encoding="utf-8")
+    before = (vendor_copy / "libraries.json").read_bytes()
+    code, out = _pins("stamp", lib, version, "--vendor-dir", str(vendor_copy))
+    assert code == 2
+    assert json.loads(out) == {
+        "ok": False,
+        "error": f"{lib}@{version} is not first-party; stamp only rewrites first-party hashes",
+    }
+    assert (vendor_copy / "libraries.json").read_bytes() == before
+    assert _pins("verify", "--vendor-dir", str(vendor_copy))[0] == 1, "tampering is still caught"
+
+
 def test_check_skips_first_party_versions(monkeypatch: pytest.MonkeyPatch) -> None:
     sys.path.insert(0, str(SKILL / "scripts"))
     import pins

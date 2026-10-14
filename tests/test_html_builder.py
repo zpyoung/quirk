@@ -205,11 +205,12 @@ def test_library_order_puts_alpine_last_then_chrome(tmp_path, env, project):
     rc, result = build(example_src("report"), out, env, project)
     assert rc == 0
     html = out.read_text(encoding="utf-8")
-    assert list(result["libraries"]) == ["simple-css", "chartjs", "alpine"]
+    assert list(result["libraries"]) == ["simple-css", "chartjs", "kit", "alpine"]
     chart = html.index('<script data-quirk-lib="chartjs@')
+    kit = html.index('<script data-quirk-lib="kit@')
     alpine = html.index('<script data-quirk-lib="alpine@')
     chrome = html.index('<script data-quirk-shell="chrome">')
-    assert chart < alpine < chrome
+    assert chart < kit < alpine < chrome
     assert html.index('<style data-quirk-lib="simple-css@') < html.index("--q-color-bg")
     assert html.index("<!-- license: simple-css") < html.index("<html")
     assert html.startswith("<!doctype html>\n<!-- quirk-html-artifact ")

@@ -496,7 +496,13 @@ COMMAND: `python3 $SKILL/scripts/pins.py stamp NAME VERSION [--vendor-dir DIR]`
 - `stamp` recomputes `sha256` and `inline_sha256` for every file of that version, using
   `pins.escape_inline`, and rewrites `libraries.json` in place.
   - It keeps the key order and the existing 2-space JSON layout, with a trailing newline.
-  - Exit 0 on success; exit 2 with a JSON error for an unknown name or version.
+  - It accepts only a version whose entry has `"first_party": true`. Stamping a vendored
+    third-party version (for example `chartjs 4.5.1`) would silently re-bless a tampered file, so
+    it is refused.
+  - Exit 0 on success; exit 2 with one JSON error object for an unknown name or version, or for a
+    version that is not first-party (`{"ok": false, "error": "chartjs@4.5.1 is not first-party;
+    stamp only rewrites first-party hashes"}`). `libraries.json` is left byte-identical on every
+    refusal.
 - `check` skips any version with `"first_party": true` and reports it as `first-party`, not as an
   npm error.
 - `verify` treats first-party entries like any other.
