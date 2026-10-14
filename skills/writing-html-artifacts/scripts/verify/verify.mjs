@@ -3,7 +3,11 @@
  * Browser verification for a single HTML file: console cleanliness, responsive layout,
  * light/dark text contrast and network isolation.
  *
- * Usage: node verify.mjs FILE OUT_DIR MODE   (MODE is "offline" or "connected")
+ * Usage: node verify.mjs FILE OUT_DIR MODE [--no-js]   (MODE is "offline" or "connected")
+ *
+ * With --no-js every context runs with JavaScript disabled, screenshots are named
+ * `{width}-{scheme}-nojs.png`, and a fifth check, `fallback`, fails any `q-*` element without
+ * `data-from` whose text is empty or whose box has no height (checked at 375px in both schemes).
  *
  * Offline mode aborts every http(s) request and fails the network check on any; connected mode
  * lets them through and only reports the URLs. In connected mode a navigation that fails or times
@@ -27,11 +31,12 @@ const MAX_DETAILS = 20;
 const NAV_TIMEOUT_MS = Number(process.env.QUIRK_VERIFY_NAV_TIMEOUT_MS) || 30000;
 const LOCAL_SCHEMES = ["file:", "data:", "blob:", "about:"];
 
-const [, , fileArg, outArg, mode] = process.argv;
-if (!fileArg || !outArg || !["offline", "connected"].includes(mode)) {
-  console.error("usage: verify.mjs FILE OUT_DIR offline|connected");
+const [, , fileArg, outArg, mode, flag, ...extra] = process.argv;
+if (!fileArg || !outArg || !["offline", "connected"].includes(mode) || (flag && flag !== "--no-js") || extra.length) {
+  console.error("usage: verify.mjs FILE OUT_DIR offline|connected [--no-js]");
   process.exit(2);
 }
+const noJs = flag === "--no-js";
 
 const file = path.resolve(fileArg);
 const outDir = path.resolve(outArg);
@@ -147,6 +152,22 @@ function sampleContrast() {
   return { findings, unjudged };
 }
 
+/**
+ * Runs inside the page. Returns one finding per `q-*` element that has no `data-from` and renders
+ * nothing: empty text or a zero-height box. Elements with `data-from` are built entirely by script,
+ * so they are exempt.
+ */
+function sampleFallback() {
+  const findings = [];
+  for (const el of document.querySelectorAll("*")) {
+    if (!el.tagName.startsWith("Q-") || el.hasAttribute("data-from")) continue;
+    const tag = el.tagName.toLowerCase();
+    if (el.innerText.trim() === "") findings.push(`<${tag}> has no visible text without JavaScript`);
+    else if (el.getBoundingClientRect().height === 0) findings.push(`<${tag}> has zero height without JavaScript`);
+  }
+  return findings;
+}
+
 function check(details) {
   return { passed: details.length === 0, details };
 }
@@ -156,6 +177,7 @@ async function verify(browser, label, sha) {
   const viewportDetails = [];
   const themeDetails = [];
   const navigationDetails = [];
+  const fallbackDetails = [];
   const requests = new Set();
   const screenshots = [];
   let skippedBackgrounds = 0;
@@ -167,6 +189,7 @@ async function verify(browser, label, sha) {
         viewport: { width, height: HEIGHT },
         colorScheme: scheme,
         serviceWorkers: "block",
+        javaScriptEnabled: !noJs,
       });
       const blocked = new Set();
       await context.route(/^https?:/, (route) => {
@@ -200,7 +223,7 @@ async function verify(browser, label, sha) {
       }
       await page.waitForTimeout(150);
 
-      const shot = path.join(outDir, `${width}-${scheme}.png`);
+      const shot = path.join(outDir, `${width}-${scheme}${noJs ? "-nojs" : ""}.png`);
       await page.screenshot({ path: shot, fullPage: true });
       screenshots.push(shot);
 
@@ -211,6 +234,10 @@ async function verify(browser, label, sha) {
         }));
         if (scrollWidth > clientWidth) {
           viewportDetails.push(`${run}: scrollWidth ${scrollWidth} exceeds clientWidth ${clientWidth}`);
+        }
+        if (noJs) {
+          const findings = await page.evaluate(sampleFallback);
+          findings.forEach((f) => fallbackDetails.push(`${run}: ${f}`));
         }
       }
       if (width === WIDTHS[WIDTHS.length - 1]) {
@@ -239,6 +266,7 @@ async function verify(browser, label, sha) {
     themes: { passed: themes.passed, details: themes.details.slice(0, MAX_DETAILS) },
     network,
   };
+  if (noJs) checks.fallback = check(fallbackDetails.slice(0, MAX_DETAILS));
   const status = Object.values(checks).every((c) => c.passed) ? "passed" : "failed";
   return { status, file_sha256: sha, browser: label, checks, screenshots, requests: requestList };
 }

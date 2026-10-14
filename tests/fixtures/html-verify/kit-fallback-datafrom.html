@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fallback data-from fixture</title>
+<style>
+:root { color-scheme: light dark; --bg: #ffffff; --fg: #1a1a1a; }
+@media (prefers-color-scheme: dark) { :root { --bg: #14161a; --fg: #ececec; } }
+body { background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; margin: 0; padding: 16px; }
+table { border-collapse: collapse; max-width: 100%; }
+td, th { border: 1px solid var(--fg); padding: 4px 8px; }
+</style>
+</head>
+<body>
+<h1>Fallback fixture</h1>
+<q-stat><span>Revenue</span> <strong>$1.2M</strong></q-stat>
+<q-table><table><tr><th>Name</th><th>Value</th></tr><tr><td>Alpha</td><td>1</td></tr></table></q-table>
+<table id="t"><tr><th>Name</th><th>Value</th></tr><tr><td>Beta</td><td>2</td></tr></table>
+<q-chart data-from="#t"></q-chart>
+</body>
+</html>

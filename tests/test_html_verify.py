@@ -301,3 +301,106 @@ def test_connected_navigation_timeout_is_a_network_failure_with_a_report(
     assert any("navigation to" in d and page.as_uri() in d for d in network["details"])
     assert (tmp_path / "out" / "report.json").is_file()
     assert verify_runner.report_is_stale(page, tmp_path / "out" / "report.json") is False
+
+
+NOJS_SCREENSHOTS = ["375-light-nojs.png", "375-dark-nojs.png", "1280-light-nojs.png", "1280-dark-nojs.png"]
+FOUR_CHECKS = {"console", "viewports", "themes", "network"}
+
+
+@pytest.mark.usefixtures("browser_ready")
+def test_no_js_passes_when_kit_elements_hold_plain_html(tmp_path: Path) -> None:
+    result = _run_nojs("kit-fallback-ok.html", tmp_path)
+    assert result["status"] == "passed", result
+    assert result["no_js"] is True
+    assert set(result["checks"]) == FOUR_CHECKS | {"fallback"}
+    assert result["checks"]["fallback"]["passed"] is True
+    assert sorted(Path(p).name for p in result["screenshots"]) == sorted(NOJS_SCREENSHOTS)
+
+
+def _run_nojs(name: str, tmp_path: Path) -> dict:
+    return verify_runner.run_verify(FIXTURES / name, tmp_path / "out", no_js=True)
+
+
+@pytest.mark.usefixtures("browser_ready")
+def test_no_js_fails_when_css_hides_an_unupgraded_element(tmp_path: Path) -> None:
+    result = _run_nojs("kit-fallback-hidden.html", tmp_path)
+    assert result["status"] == "failed"
+    fallback = result["checks"]["fallback"]
+    assert fallback["passed"] is False
+    assert any("q-stat" in d for d in fallback["details"])
+    assert all(result["checks"][k]["passed"] for k in FOUR_CHECKS)
+
+
+@pytest.mark.usefixtures("browser_ready")
+def test_no_js_exempts_empty_elements_with_data_from(tmp_path: Path) -> None:
+    result = _run_nojs("kit-fallback-datafrom.html", tmp_path)
+    assert result["checks"]["fallback"]["passed"] is True, result
+    assert result["status"] == "passed"
+
+
+@pytest.mark.usefixtures("browser_ready")
+def test_no_js_fails_an_empty_element_without_data_from(tmp_path: Path) -> None:
+    page = tmp_path / "empty.html"
+    page.write_text((FIXTURES / "kit-fallback-datafrom.html").read_text().replace(' data-from="#t"', ""))
+    result = verify_runner.run_verify(page, tmp_path / "out", no_js=True)
+    assert result["checks"]["fallback"]["passed"] is False
+    assert any("q-chart" in d for d in result["checks"]["fallback"]["details"])
+
+
+@pytest.mark.usefixtures("browser_ready")
+def test_no_js_disables_page_scripts(tmp_path: Path) -> None:
+    page = tmp_path / "scripted.html"
+    page.write_text(
+        (FIXTURES / "ok.html").read_text().replace("</body>", "<script>throw new Error('ran')</script></body>")
+    )
+    assert verify_runner.run_verify(page, tmp_path / "js")["checks"]["console"]["passed"] is False
+    assert verify_runner.run_verify(page, tmp_path / "nojs", no_js=True)["checks"]["console"]["passed"] is True
+
+
+@pytest.mark.usefixtures("browser_ready")
+def test_a_normal_run_reports_exactly_the_four_original_checks(tmp_path: Path) -> None:
+    result = _run("kit-fallback-ok.html", tmp_path)
+    assert set(result["checks"]) == FOUR_CHECKS
+    assert result["no_js"] is False
+    assert sorted(Path(p).name for p in result["screenshots"]) == sorted(SCREENSHOTS)
+    report = json.loads((tmp_path / "out" / "report.json").read_text())
+    assert set(report) == {"status", "file_sha256", "browser", "checks", "screenshots", "requests"}
+
+
+@pytest.mark.parametrize(("argv_extra", "expected"), [([], False), (["--no-js"], True)])
+def test_the_cli_no_js_flag_reaches_run_verify(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, argv_extra: list[str], expected: bool
+) -> None:
+    import quirk_html
+
+    page = tmp_path / "a.html"
+    page.write_text("<p>x</p>")
+    calls: list[tuple[tuple, dict]] = []
+
+    def fake(*args: object, **kwargs: object) -> dict:
+        calls.append((args, kwargs))
+        return {"status": "passed", "no_js": kwargs.get("no_js", False)}
+
+    monkeypatch.setattr(verify_runner, "run_verify", fake)
+    assert quirk_html.main(["verify", str(page), "--out-dir", str(tmp_path / "o"), *argv_extra]) == 0
+    (args, kwargs), = calls
+    assert kwargs.get("no_js", args[3] if len(args) > 3 else False) is expected
+
+
+def test_run_verify_passes_the_flag_to_node_and_records_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_verifier_environment(monkeypatch)
+    page = tmp_path / "a.html"
+    page.write_text("<p>x</p>")
+    seen: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        seen.append(cmd)
+        (tmp_path / "out").mkdir(exist_ok=True)
+        (tmp_path / "out" / "report.json").write_text(json.dumps({"status": "passed", "checks": {}}))
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(verify_runner.subprocess, "run", fake_run)
+    assert verify_runner.run_verify(page, tmp_path / "out", no_js=True)["no_js"] is True
+    assert seen[-1][-1] == "--no-js"
+    assert verify_runner.run_verify(page, tmp_path / "out")["no_js"] is False
+    assert "--no-js" not in seen[-1]
