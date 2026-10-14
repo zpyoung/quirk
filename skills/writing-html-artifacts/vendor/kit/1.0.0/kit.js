@@ -1309,6 +1309,7 @@
         x = found >= 0 ? found : 0;
       }
       var series = [];
+      var skipped = [];
       if (this.hasAttribute('y')) {
         this.getAttribute('y').split(',').forEach(function (name) {
           var index = findColumn(model.columns, name);
@@ -1323,12 +1324,15 @@
             return;
           }
           var filled = model.rows.filter(function (row) { return !isEmpty(row[index]); });
-          if (filled.length && filled.every(function (row) { return toNumber(row[index]) !== null; })) {
+          var numbers = filled.filter(function (row) { return toNumber(row[index]) !== null; }).length;
+          if (filled.length && numbers === filled.length) {
             series.push(index);
+          } else if (filled.length) {
+            skipped.push({ label: column.label, partial: numbers > 0 });
           }
         });
       }
-      return { x: x, series: series };
+      return { x: x, series: series, skipped: skipped };
     }
 
     _rawOptions() {
@@ -1594,12 +1598,17 @@
 
       var mode = 'table';
       var note = '';
+      var notCharted = plan.skipped.filter(function (column) { return plan.series.length || column.partial; });
+      var skipNote = notCharted.length
+        ? ' Not charted (non-numeric values): ' + notCharted.map(function (column) { return column.label; }).join(', ') + '.'
+        : '';
       if (plan.series.length > MAX_SERIES) {
-        note = 'Too many series to chart clearly (' + plan.series.length + '); showing the table.';
+        note = 'Too many series to chart clearly (' + plan.series.length + '); showing the table.' + skipNote;
       } else if (!plan.series.length && model.rows.length) {
-        note = 'No numeric columns to chart; showing the table.';
+        note = 'No numeric columns to chart; showing the table.' + skipNote;
       } else if (hasChart && plan.series.length && model.rows.length) {
         mode = 'chart';
+        note = skipNote.trim();
       }
       this._setNote(note);
 
