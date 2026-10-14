@@ -505,13 +505,14 @@ def _verify_line(report_path: Path, stale: bool) -> list[str]:
     if stale:
         return ["Verify: not browser-verified (the last report is for an earlier version of this file; run verify again)."]
     status = report.get("status")
+    label = "Verify (no JS)" if report.get("no_js") is True else "Verify"
     if status == "not-browser-verified":
         reason = report.get("reason")
-        return ["Verify: not browser-verified" + (f" ({reason})." if reason else ".")]
+        return [f"{label}: not browser-verified" + (f" ({reason})." if reason else ".")]
     if status == "failed" and report.get("reason"):
         detail = report.get("detail")
-        return [f"Verify: failed ({report['reason']})" + (f": {detail}" if detail else ".")]
-    lines = [f"Verify: {status} in {report.get('browser') or 'a browser'}."]
+        return [f"{label}: failed ({report['reason']})" + (f": {detail}" if detail else ".")]
+    lines = [f"{label}: {status} in {report.get('browser') or 'a browser'}."]
     checks = report.get("checks") or {}
     for name, result in checks.items():
         if isinstance(result, dict) and not result.get("passed", True):

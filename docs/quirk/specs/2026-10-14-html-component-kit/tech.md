@@ -477,7 +477,13 @@ COMMAND: `python3 $SKILL/scripts/quirk_html.py verify FILE [--out-dir DIR] [--no
   - `console`, `viewports`, `themes` and `network` run as before.
 - `run_verify(file, out_dir=None, mode="offline", no_js=False)` passes the flag through, and its
   JSON result carries `"no_js": true|false`.
+- With no `--out-dir`, a `--no-js` run writes to `<file stem>.verify-nojs/` beside the file, so it
+  never overwrites the JS-enabled report in `<file stem>.verify/`.
+- The `report.json` of a `--no-js` run carries `"no_js": true` on disk. A normal report has no
+  `no_js` key on disk.
 - Without the flag, the report has the same four checks and keys as today.
+- The delivery note reads `<file stem>.verify/` by default. If it is pointed at a report with
+  `"no_js": true`, its line reads `Verify (no JS): ...`.
 
 ### 4.7 Pins
 

@@ -87,7 +87,7 @@ def load_catalog(store: VendorStore, version: Optional[str]) -> Catalog:
         data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         raise KitError(f"kit@{lv.version}: catalog.json is missing") from None
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         raise KitError(f"kit@{lv.version}: catalog.json cannot be read: {exc}") from exc
     problems: list[str] = []
     catalog = _build(data, lv.version, lv.root.name, problems)
@@ -124,9 +124,11 @@ def _build(data: Any, version: str, dirname: str, problems: list[str]) -> Option
         element = _element(raw, index, tags, problems)
         if element is not None and element.tag not in elements:
             elements[element.tag] = element
-    seen: set[Any] = set()
+    seen: set[str] = set()
     for tag in tags:
-        if tag in seen and _is_text(tag):
+        if not isinstance(tag, str):
+            continue
+        if tag in seen:
             problems.append(f"duplicate element tag {tag!r}")
         seen.add(tag)
     for tag, element in elements.items():

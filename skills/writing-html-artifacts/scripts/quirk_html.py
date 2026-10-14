@@ -268,7 +268,10 @@ def _configure_check(sub: argparse._SubParsersAction) -> None:
 def _configure_verify(sub: argparse._SubParsersAction) -> None:
     parser = sub.add_parser("verify", help="verify a built file in a real browser")
     parser.add_argument("file")
-    parser.add_argument("--out-dir", help="where the report and screenshots go (default: <file stem>.verify/)")
+    parser.add_argument(
+        "--out-dir",
+        help="where the report and screenshots go (default: <file stem>.verify/, or <file stem>.verify-nojs/ with --no-js)",
+    )
     parser.add_argument(
         "--no-js", action="store_true", help="load the page with JavaScript disabled and check the un-upgraded fallback"
     )

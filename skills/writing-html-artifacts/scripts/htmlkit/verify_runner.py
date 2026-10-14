@@ -29,9 +29,21 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def default_out_dir(file: Path) -> Path:
-    """`<file stem>.verify/` beside the file."""
-    return file.parent / f"{file.stem}.verify"
+def default_out_dir(file: Path, no_js: bool = False) -> Path:
+    """`<file stem>.verify/` beside the file, or `<file stem>.verify-nojs/` for a no-JS run.
+
+    The two modes get separate directories so a no-JS run never replaces the report of a run where
+    the page's scripts executed.
+    """
+    return file.parent / f"{file.stem}.verify{'-nojs' if no_js else ''}"
+
+
+def _on_disk(result: dict) -> dict:
+    """The report as stored: `no_js` appears only for a no-JS run, so a normal report is unchanged."""
+    stored = {k: v for k, v in result.items() if k != "no_js"}
+    if result.get("no_js") is True:
+        stored["no_js"] = True
+    return stored
 
 
 def _no_report(
@@ -55,7 +67,7 @@ def _no_report(
         result["detail"] = detail
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "report.json").write_text(json.dumps(result, indent=2) + "\n")
+        (out_dir / "report.json").write_text(json.dumps(_on_disk(result), indent=2) + "\n")
     except OSError:
         # the report is a convenience for report_is_stale; the result is still returned without it
         pass
@@ -99,12 +111,13 @@ def run_verify(file: Path, out_dir: Path | None = None, mode: str = "offline", n
 
     `mode` is "offline" (any non-local request fails the network check) or "connected" (requests
     are listed but do not fail it). `no_js` loads the page with JavaScript disabled and adds the
-    `fallback` check; the result's `no_js` key records which mode ran.
+    `fallback` check; the result's `no_js` key records which mode ran. With no `out_dir`, a no-JS run
+    writes to `default_out_dir(file, no_js=True)`; its on-disk report carries `"no_js": true`.
     """
     if mode not in ("offline", "connected"):
         raise ValueError(f"mode must be 'offline' or 'connected', got {mode!r}")
     file = Path(file).resolve()
-    out_dir = Path(out_dir) if out_dir is not None else default_out_dir(file)
+    out_dir = Path(out_dir) if out_dir is not None else default_out_dir(file, no_js)
 
     if not file.is_file():
         return _no_report(file, out_dir, "missing-file", no_js=no_js)
@@ -134,7 +147,7 @@ def run_verify(file: Path, out_dir: Path | None = None, mode: str = "offline", n
     result["no_js"] = no_js
     if result.get("status") == "not-browser-verified":
         result["reason"] = "no-browser"
-        report.write_text(json.dumps(result, indent=2) + "\n")
+        report.write_text(json.dumps(_on_disk(result), indent=2) + "\n")
     return result
 
 

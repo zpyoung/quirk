@@ -205,6 +205,40 @@ def test_duplicate_and_malformed_tags_are_rejected(vendor_copy: Path) -> None:
         kitcheck.load_catalog(_store(vendor_copy), None)
 
 
+@pytest.mark.parametrize("tag", [["q-code"], {"q": "code"}, 7, None], ids=["list", "dict", "int", "null"])
+def test_non_string_tag_raises_kit_error_not_type_error(vendor_copy: Path, tag: Any) -> None:
+    _edit_catalog(vendor_copy, lambda d: _element(d, "q-code").update(tag=tag))
+    with pytest.raises(kitcheck.KitError, match="tag"):
+        kitcheck.load_catalog(_store(vendor_copy), None)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(lambda d: d["elements"].append(["q-extra"]), id="element-is-a-list"),
+        pytest.param(lambda d: d["elements"].append(None), id="element-is-null"),
+        pytest.param(lambda d: _element(d, "q-code").update(attributes={"filename": {}}), id="attributes-is-an-object"),
+        pytest.param(lambda d: _element(d, "q-code").update(requires="pre"), id="requires-is-a-string"),
+        pytest.param(lambda d: _element(d, "q-code").update(requires=[[["pre"]]]), id="selector-is-a-list"),
+        pytest.param(lambda d: _element(d, "q-code").update(rules=[["max-series"]]), id="rule-is-a-list"),
+        pytest.param(lambda d: _element(d, "q-code").update(parent=["q-diff"]), id="parent-is-a-list"),
+        pytest.param(lambda d: _element(d, "q-code")["attributes"][0].update(name=["filename"]), id="attribute-name-is-a-list"),
+        pytest.param(lambda d: _element(d, "q-code")["attributes"][0].update(name={"a": 1}), id="attribute-name-is-an-object"),
+        pytest.param(lambda d: _element(d, "q-code")["attributes"][0].update(kind=["text"]), id="kind-is-a-list"),
+        pytest.param(
+            lambda d: _element(d, "q-chart")["attributes"][1].update(values=[["bar"]]), id="enum-value-is-a-list"
+        ),
+        pytest.param(lambda d: _element(d, "q-chart")["attributes"][1].update(default=["bar"]), id="default-is-a-list"),
+        pytest.param(lambda d: d.update(global_attributes=[["id"]]), id="global-attribute-is-a-list"),
+        pytest.param(lambda d: d.update(elements={"q-code": {}}), id="elements-is-an-object"),
+    ],
+)
+def test_every_malformed_shape_raises_kit_error(vendor_copy: Path, mutate: Any) -> None:
+    _edit_catalog(vendor_copy, mutate)
+    with pytest.raises(kitcheck.KitError):
+        kitcheck.load_catalog(_store(vendor_copy), None)
+
+
 @pytest.mark.parametrize("tag", ["x-code", "q-Code", "q-", "q-code-", "q_code", "q-9"])
 def test_malformed_tag_is_rejected(vendor_copy: Path, tag: str) -> None:
     _edit_catalog(vendor_copy, lambda d: _element(d, "q-code").update(tag=tag))
@@ -298,13 +332,6 @@ def test_needs_exposes_the_two_regexes() -> None:
     assert kitcheck.CHART_TAG.pattern == r"<q-chart[\s/>]" and kitcheck.CHART_TAG.flags & re.IGNORECASE
 
 
-def test_check_functions_are_not_part_of_this_module_yet() -> None:
-    assert not hasattr(kitcheck, "check_html") and not hasattr(kitcheck, "check_jsx")
-
-
-# ---- chart tokens ----------------------------------------------------------------------------
-
-
 def _channel(value: float) -> float:
     return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
 
@@ -336,9 +363,6 @@ def test_chart_tokens_exist_as_light_dark_pairs() -> None:
 def test_chart_token_reaches_3_to_1_against_its_background(key: str, scheme: int) -> None:
     color = json.loads(HOUSE_TOKENS.read_text(encoding="utf-8"))["color"]
     assert _contrast(color[key][scheme], color["bg"][scheme]) >= 3.0
-
-
-# ---- registry entry, license, scaffold ------------------------------------------------------
 
 
 def test_kit_registry_entry() -> None:
@@ -414,9 +438,6 @@ def test_kit_css_has_only_the_shared_base() -> None:
         assert not re.search(rf"(?<![\w-]){re.escape(tag)}(?![\w-])", css), f"{tag} has no styles yet"
 
 
-# ---- manifest ------------------------------------------------------------------------------
-
-
 def test_manifest_accepts_boolean_first_party_and_rejects_others(tmp_path: Path) -> None:
     real = json.loads((VENDOR / "libraries.json").read_text(encoding="utf-8"))
     assert manifest._library_problems(real) == []
@@ -432,9 +453,6 @@ def test_manifest_accepts_boolean_first_party_and_rejects_others(tmp_path: Path)
     absent = json.loads(json.dumps(real))
     del absent["libraries"]["kit"]["versions"]["1.0.0"]["first_party"]
     assert manifest._library_problems(absent) == []
-
-
-# ---- pins.py stamp / verify / check -----------------------------------------------------------
 
 
 def _pins(*args: str) -> tuple[int, str]:

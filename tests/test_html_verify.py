@@ -404,3 +404,110 @@ def test_run_verify_passes_the_flag_to_node_and_records_it(tmp_path: Path, monke
     assert seen[-1][-1] == "--no-js"
     assert verify_runner.run_verify(page, tmp_path / "out")["no_js"] is False
     assert "--no-js" not in seen[-1]
+
+
+def test_default_out_dir_for_no_js_is_a_separate_directory(tmp_path: Path) -> None:
+    page = tmp_path / "report.html"
+    assert verify_runner.default_out_dir(page) == tmp_path / "report.verify"
+    assert verify_runner.default_out_dir(page, no_js=True) == tmp_path / "report.verify-nojs"
+
+
+def test_a_no_js_run_without_out_dir_writes_beside_the_file_under_verify_nojs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    page = tmp_path / "report.html"
+    page.write_text("<p>x</p>")
+    monkeypatch.setattr(verify_runner.shutil, "which", lambda name: None)
+    result = verify_runner.run_verify(page, no_js=True)
+    assert result["no_js"] is True
+    assert (tmp_path / "report.verify-nojs" / "report.json").is_file()
+    assert not (tmp_path / "report.verify").exists()
+
+
+def test_the_cli_no_js_run_defaults_to_the_nojs_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import quirk_html
+
+    page = tmp_path / "report.html"
+    page.write_text("<p>x</p>")
+    monkeypatch.setattr(verify_runner.shutil, "which", lambda name: None)
+    assert quirk_html.main(["verify", str(page), "--no-js"]) == 0
+    capsys.readouterr()
+    assert (tmp_path / "report.verify-nojs" / "report.json").is_file()
+    assert not (tmp_path / "report.verify").exists()
+
+
+@pytest.mark.parametrize("no_js", [False, True])
+def test_the_not_browser_verified_report_marks_no_js_on_disk_only_for_a_no_js_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_js: bool
+) -> None:
+    page = tmp_path / "a.html"
+    page.write_text("<p>x</p>")
+    monkeypatch.setattr(verify_runner.shutil, "which", lambda name: None)
+    verify_runner.run_verify(page, tmp_path / "out", no_js=no_js)
+    stored = json.loads((tmp_path / "out" / "report.json").read_text())
+    assert ("no_js" in stored) is no_js
+    assert stored.get("no_js", True) is True
+
+
+@pytest.mark.parametrize("no_js", [False, True])
+def test_the_crash_and_no_browser_reports_follow_the_same_on_disk_rule(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_js: bool
+) -> None:
+    _fake_verifier_environment(monkeypatch)
+    page = tmp_path / "a.html"
+    page.write_text("<p>x</p>")
+    done = subprocess.CompletedProcess([], 4, stdout="", stderr="boom")
+    monkeypatch.setattr(verify_runner.subprocess, "run", lambda *a, **kw: done)
+    verify_runner.run_verify(page, tmp_path / "crash", no_js=no_js)
+    assert ("no_js" in json.loads((tmp_path / "crash" / "report.json").read_text())) is no_js
+
+    def no_browser(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        (tmp_path / "nb").mkdir(exist_ok=True)
+        report = {"status": "not-browser-verified", "file_sha256": _sha(page)}
+        if no_js:
+            report["no_js"] = True
+        (tmp_path / "nb" / "report.json").write_text(json.dumps(report))
+        return subprocess.CompletedProcess(cmd, 3, stdout="", stderr="")
+
+    monkeypatch.setattr(verify_runner.subprocess, "run", no_browser)
+    verify_runner.run_verify(page, tmp_path / "nb", no_js=no_js)
+    assert ("no_js" in json.loads((tmp_path / "nb" / "report.json").read_text())) is no_js
+
+
+@pytest.mark.usefixtures("browser_ready")
+def test_a_no_js_run_leaves_the_normal_report_intact(tmp_path: Path) -> None:
+    page = tmp_path / "page.html"
+    shutil.copy(FIXTURES / "kit-fallback-ok.html", page)
+    normal = verify_runner.run_verify(page)
+    normal_report = tmp_path / "page.verify" / "report.json"
+    before = normal_report.read_text()
+    assert "no_js" not in json.loads(before)
+
+    nojs = verify_runner.run_verify(page, no_js=True)
+    nojs_report = tmp_path / "page.verify-nojs" / "report.json"
+    assert nojs["status"] == "passed", nojs
+    assert json.loads(nojs_report.read_text())["no_js"] is True
+    assert normal_report.read_text() == before
+    assert normal["status"] == "passed"
+    assert "fallback" not in json.loads(before)["checks"]
+
+
+def _verify_line_for(tmp_path: Path, report: dict) -> list[str]:
+    from htmlkit.assemble import _verify_line
+
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(report))
+    return _verify_line(path, stale=False)
+
+
+def test_the_delivery_note_labels_a_no_js_report(tmp_path: Path) -> None:
+    passed = {"status": "passed", "browser": "chrome", "checks": {}, "screenshots": [], "no_js": True}
+    assert _verify_line_for(tmp_path, passed) == ["Verify (no JS): passed in chrome."]
+    assert _verify_line_for(tmp_path, {**passed, "no_js": False}) == ["Verify: passed in chrome."]
+    assert _verify_line_for(tmp_path, {k: v for k, v in passed.items() if k != "no_js"}) == ["Verify: passed in chrome."]
+    missing = {"status": "not-browser-verified", "reason": "no-browser", "no_js": True}
+    assert _verify_line_for(tmp_path, missing) == ["Verify (no JS): not browser-verified (no-browser)."]
+    crashed = {"status": "failed", "reason": "verify-crashed", "no_js": True}
+    assert _verify_line_for(tmp_path, crashed) == ["Verify (no JS): failed (verify-crashed)."]

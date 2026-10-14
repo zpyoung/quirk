@@ -13,6 +13,8 @@
  * lets them through and only reports the URLs. In connected mode a navigation that fails or times
  * out is recorded as a network failure and the report is still written.
  *
+ * A --no-js report carries `no_js: true`; a normal report has no such key.
+ *
  * Writes OUT_DIR/report.json and four full-page screenshots, prints the report to stdout.
  * Exit codes: 0 passed, 1 failed, 2 usage error, 3 no browser could be launched.
  * Never downloads a browser; it only drives one that is already installed.
@@ -268,7 +270,7 @@ async function verify(browser, label, sha) {
   };
   if (noJs) checks.fallback = check(fallbackDetails.slice(0, MAX_DETAILS));
   const status = Object.values(checks).every((c) => c.passed) ? "passed" : "failed";
-  return { status, file_sha256: sha, browser: label, checks, screenshots, requests: requestList };
+  return { status, file_sha256: sha, browser: label, checks, screenshots, requests: requestList, ...(noJs && { no_js: true }) };
 }
 
 async function main() {
@@ -285,6 +287,7 @@ async function main() {
       checks: {},
       screenshots: [],
       requests: [],
+      ...(noJs && { no_js: true }),
     };
   } else {
     try {
