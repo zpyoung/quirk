@@ -295,6 +295,11 @@ _SPECIAL = frozenset(
 )
 _ITEM_STOPPERS = _SPECIAL - {"address", "div", "p"}
 _TABLE_STOPPERS = frozenset({"table", "template", "html", "body"})
+_CELL_STOPPERS = _TABLE_STOPPERS | {"tr"}
+_STOPPER_SETS = (_ITEM_STOPPERS, _CELL_STOPPERS, _TABLE_STOPPERS)
+_IMPLIED_END_TARGETS = frozenset(
+    "li dd dt td th tr thead tbody tfoot caption colgroup".split()
+)
 _BUTTON_SCOPE = frozenset("applet caption html table td th marquee object template button svg math".split())
 _CLOSES_P = frozenset(
     (
@@ -341,6 +346,9 @@ class _TreeBuilder(HTMLParser):
         self._foreign = 0
         self._p_marks: list[int] = []
         self._scope_marks: list[int] = []
+        # stack positions of the open elements an implied end can close, and of each stopper set
+        self._target_marks: dict[str, list[int]] = {tag: [] for tag in _IMPLIED_END_TARGETS}
+        self._stopper_marks: dict[frozenset, list[int]] = {stoppers: [] for stoppers in _STOPPER_SETS}
 
     def parse_html_declaration(self, i):
         # the stdlib's marked-section parser raises on `<![foo ]]>`, which would end the check early
@@ -378,6 +386,11 @@ class _TreeBuilder(HTMLParser):
             self._scope_marks.append(len(self.stack) - 1)
         if node.tag in _FOREIGN:
             self._foreign += 1
+        if node.tag in _IMPLIED_END_TARGETS:
+            self._target_marks[node.tag].append(len(self.stack) - 1)
+        for stoppers, marks in self._stopper_marks.items():
+            if node.tag in stoppers:
+                marks.append(len(self.stack) - 1)
 
     def _pop(self) -> None:
         node = self.stack.pop()
@@ -389,18 +402,25 @@ class _TreeBuilder(HTMLParser):
             self._scope_marks.pop()
         if node.tag in _FOREIGN:
             self._foreign -= 1
+        if node.tag in _IMPLIED_END_TARGETS:
+            self._target_marks[node.tag].pop()
+        for stoppers, marks in self._stopper_marks.items():
+            if node.tag in stoppers:
+                marks.pop()
 
     def _close_nearest(self, targets: frozenset, stoppers: frozenset) -> bool:
-        """Close the nearest open element in ``targets`` unless a stopper comes first."""
-        for index in range(len(self.stack) - 1, 0, -1):
-            tag = self.stack[index].tag
-            if tag in targets:
-                while len(self.stack) > index:
-                    self._pop()
-                return True
-            if tag in stoppers:
-                return False
-        return False
+        """Close the nearest open element in ``targets`` unless a stopper comes first.
+
+        Both positions come from the marks kept on push and pop, so the stack is never rescanned.
+        An element in both sets counts as the target.
+        """
+        nearest = max((marks[-1] for tag in targets if (marks := self._target_marks[tag])), default=0)
+        blocking = self._stopper_marks[stoppers]
+        if nearest == 0 or (blocking and blocking[-1] > nearest):
+            return False
+        while len(self.stack) > nearest:
+            self._pop()
+        return True
 
     def _imply_end(self, tag: str) -> None:
         top = self.stack[-1].tag
@@ -409,7 +429,7 @@ class _TreeBuilder(HTMLParser):
         elif tag in ("dd", "dt") and (self._open["dd"] or self._open["dt"]):
             self._close_nearest(frozenset({"dd", "dt"}), _ITEM_STOPPERS)
         elif tag in ("td", "th") and (self._open["td"] or self._open["th"]):
-            self._close_nearest(frozenset({"td", "th"}), _TABLE_STOPPERS | {"tr"})
+            self._close_nearest(frozenset({"td", "th"}), _CELL_STOPPERS)
         elif tag == "tr":
             while self._close_nearest(frozenset({"tr", "td", "th"}), _TABLE_STOPPERS):
                 pass
@@ -463,6 +483,7 @@ class _Index:
         self._nodes: dict[str, list[_Node]] = {}
         self._orders: dict[str, list[int]] = {}
         self._reach: dict[str, list[int]] = {}
+        self._diffs: dict[int, dict[str, set[int]]] = {}
         for node in nodes:
             self._add(node.tag, node)
             if node.tag == "time" and "datetime" in node.attrs:
@@ -492,8 +513,15 @@ class _Index:
             yield candidate
             pos = candidate.order + 1
 
-    def first(self, node: _Node, key: str) -> Optional[_Node]:
-        return next(self.within(node, key), None)
+    def first(self, node: _Node, key: str, skip: Optional[str] = None) -> Optional[_Node]:
+        return next(self.within(node, key, skip), None)
+
+    def diff_files(self, pre: _Node) -> dict[str, set[int]]:
+        """``parse_diff`` of a ``pre``, computed once however many elements read it."""
+        files = self._diffs.get(id(pre))
+        if files is None:
+            files = self._diffs[id(pre)] = parse_diff(_text(pre))
+        return files
 
     def encloses(self, node: _Node, key: str) -> bool:
         """Whether some ancestor of ``node`` has the tag ``key``."""
@@ -679,7 +707,7 @@ def _header_row(table: _Node, index: _Index) -> Optional[_Node]:
 
 
 def _rule_max_series(node: _Node, report: Report, index: _Index) -> None:
-    table = index.first(node, "table")
+    table = index.first(node, "table", skip=node.tag)
     if table is None:
         return
     y = node.attrs.get("y")
@@ -755,10 +783,10 @@ def parse_diff(text: str) -> dict[str, set[int]]:
 
 
 def _rule_diff_notes(node: _Node, report: Report, index: _Index) -> None:
-    pre = index.first(node, "pre")
+    pre = index.first(node, "pre", skip=node.tag)
     if pre is None:
         return
-    files = parse_diff(_text(pre))
+    files = index.diff_files(pre)
     for note in index.within(node, "q-diff-note", skip=node.tag):
         file = note.attrs.get("file")
         if file is None:
@@ -783,7 +811,7 @@ def _rule_heading_sections(node: _Node, report: Report, index: _Index) -> None:
 
 
 def _rule_timeline_items(node: _Node, report: Report, index: _Index) -> None:
-    ol = index.first(node, "ol")
+    ol = index.first(node, "ol", skip=node.tag)
     if ol is None:
         return
     items = [c for c in ol.children if c.tag == "li"]
@@ -810,67 +838,161 @@ assert set(_RULES) == KNOWN_RULES
 _JSX_TAG = re.compile(r"<(q-[a-z]+(?:-[a-z]+)*)(?=[\s/>])")
 _JSX_ATTR = re.compile(r"[A-Za-z_$][\w$:.-]*")
 _JSX_LITERAL = re.compile(r"""^(?:"([^"\\\n]*)"|'([^'\\\n]*)')$""")
-# a comment opens at the start of the text or after whitespace or punctuation, never inside `http://` or a string
-_JSX_COMMENT = re.compile(r"(?<![^\s;{}(),])(?:/\*.*?(?:\*/|\Z)|//[^\n]*)", re.DOTALL)
+_COMMENT_OPEN = re.compile(r"^[ \t]*(?=//|/\*)|\{\s*(?=/\*)", re.MULTILINE)
+_EXPRESSION_CLOSE = re.compile(r"\s*\}")
 
 
-def _blank_comments(text: str) -> str:
-    """``text`` with ``//`` and ``/* */`` comments overwritten by spaces, so offsets and lines hold."""
-    return _JSX_COMMENT.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)
+def _blank(text: str, spans: list[tuple[int, int]]) -> str:
+    """``text`` with each span overwritten by spaces, newlines kept, so offsets and lines hold."""
+    out: list[str] = []
+    last = 0
+    for start, end in spans:
+        out.append(text[last:start])
+        out.append(re.sub(r"[^\n]", " ", text[start:end]))
+        last = end
+    out.append(text[last:])
+    return "".join(out)
 
 
-def _skip_braces(text: str, start: int) -> int:
-    """Index just past the ``}`` that closes the ``{`` at ``start`` (``len(text)`` if unterminated).
+def _html_comment_spans(text: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    pos = 0
+    while True:
+        start = text.find("<!--", pos)
+        if start < 0:
+            return spans
+        end = text.find("-->", start + 4)
+        if end < 0:
+            return spans
+        spans.append((start, end + 3))
+        pos = end + 3
 
-    Strings, template literals with ``${}`` nesting and comments are skipped, so a brace or ``>``
-    inside one does not end the expression.
+
+def _js_comment_spans(text: str) -> list[tuple[int, int]]:
+    """Spans of the comments that are unambiguously comments, each ending at its own terminator.
+
+    A ``//`` or ``/*`` counts only as the first text on its line, and a ``/* */`` also as the whole
+    content of a ``{ }`` container. Mid-line occurrences may be string or JSX text and are left
+    for the tag scan, as is a ``/*`` that never closes.
     """
+    spans: list[tuple[int, int]] = []
     n = len(text)
-    stack = ["{"]
-    i = start + 1
-    while i < n and stack:
-        c = text[i]
-        if stack[-1] == "`":
-            if c == "\\":
-                i += 2
-                continue
-            if c == "`":
-                stack.pop()
-            elif c == "$" and text.startswith("${", i):
-                stack.append("{")
-                i += 1
-            i += 1
-            continue
-        if c in "'\"":
-            j = i + 1
-            while j < n and text[j] != c and text[j] != "\n":
-                j += 2 if text[j] == "\\" else 1
-            i = j + 1
-        elif c == "`":
-            stack.append("`")
-            i += 1
-        elif c == "{":
-            stack.append("{")
-            i += 1
-        elif c == "}":
-            stack.pop()
-            i += 1
-        elif c == "/" and text.startswith("//", i):
-            end = text.find("\n", i)
-            i = n if end < 0 else end + 1
-        elif c == "/" and text.startswith("/*", i):
-            end = text.find("*/", i + 2)
-            i = n if end < 0 else end + 2
+    pos = 0
+    close = -1  # first "*/" at or after some earlier start; -2 once none is left
+    while True:
+        opened = _COMMENT_OPEN.search(text, pos)
+        if opened is None:
+            return spans
+        start = opened.end()
+        if text.startswith("//", start):
+            end = text.find("\n", start)
+            end = n if end < 0 else end
         else:
-            i += 1
-    return min(i, n)
+            if close == -2:
+                pos = start + 2
+                continue
+            if close < start + 2:
+                close = text.find("*/", start + 2)
+                if close < 0:
+                    close = -2
+                    pos = start + 2
+                    continue
+            end = close + 2
+            if text[opened.start()] == "{" and _EXPRESSION_CLOSE.match(text, end) is None:
+                pos = start + 2
+                continue
+        spans.append((start, end))
+        pos = end
 
 
-def _jsx_attributes(text: str, pos: int) -> tuple[dict[str, Optional[str]], bool]:
+def _blank_comments(text: str, html: bool = False) -> str:
+    """``text`` with its unambiguous comments blanked; ``html`` also blanks ``<!-- -->`` comments."""
+    if html:
+        text = _blank(text, _html_comment_spans(text))
+    return _blank(text, _js_comment_spans(text))
+
+
+class _Braces:
+    """Where each ``{`` of one source closes, found lazily and never scanned twice.
+
+    A scan records every brace it opens in code mode with its end, so a later query for one of
+    those, or for a brace nested in it, is a lookup. Unterminated braces are recorded too, so
+    thousands of unclosed ``{`` cost one pass over the source instead of one each. Strings,
+    template literals with ``${}`` nesting and comments are skipped, so a brace or ``>`` inside one
+    does not end an expression.
+    """
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self._ends: dict[int, int] = {}
+
+    def end(self, start: int) -> Optional[int]:
+        """Index just past the ``}`` that closes the ``{`` at ``start``, or ``None`` if unterminated."""
+        known = self._ends.get(start)
+        if known is None:
+            self._scan(start)
+            known = self._ends[start]
+        return known if known >= 0 else None
+
+    def _scan(self, start: int) -> None:
+        text, ends = self._text, self._ends
+        n = len(text)
+        stack: list[tuple[str, int]] = [("{", start)]
+        i = start + 1
+        while i < n and stack:
+            c = text[i]
+            if stack[-1][0] == "`":
+                if c == "\\":
+                    i += 2
+                    continue
+                if c == "`":
+                    stack.pop()
+                elif c == "$" and text.startswith("${", i):
+                    stack.append(("{", i + 1))
+                    i += 1
+                i += 1
+                continue
+            if c in "'\"":
+                j = i + 1
+                while j < n and text[j] != c and text[j] != "\n":
+                    j += 2 if text[j] == "\\" else 1
+                i = j + 1
+            elif c == "`":
+                stack.append(("`", i))
+                i += 1
+            elif c == "{":
+                known = ends.get(i)
+                if known is None:
+                    stack.append(("{", i))
+                    i += 1
+                elif known < 0:
+                    break
+                else:
+                    i = known
+            elif c == "}":
+                ends[stack.pop()[1]] = i + 1
+                i += 1
+            elif c == "/" and text.startswith("//", i):
+                end = text.find("\n", i)
+                i = n if end < 0 else end + 1
+            elif c == "/" and text.startswith("/*", i):
+                end = text.find("*/", i + 2)
+                i = n if end < 0 else end + 2
+            else:
+                i += 1
+        for kind, opened in stack:
+            if kind == "{":
+                ends[opened] = -1
+
+
+def _jsx_attributes(
+    text: str, pos: int, braces: _Braces, limit: int
+) -> tuple[dict[str, Optional[str]], bool]:
     """Read the attributes of the JSX tag whose name ends at ``pos``.
 
     Returns the attribute names mapped to their literal string value, or ``None`` for an expression
-    or a valueless attribute, and whether a ``{...spread}`` could be supplying more.
+    or a valueless attribute, and whether a ``{...spread}`` could be supplying more. An unterminated
+    ``{`` ends at ``limit`` (the next q-* tag), so the scan never runs on to the end of the source.
     """
     attrs: dict[str, Optional[str]] = {}
     spread = False
@@ -884,7 +1006,8 @@ def _jsx_attributes(text: str, pos: int) -> tuple[dict[str, Optional[str]], bool
             i += 1
         elif c == "{":
             spread = True
-            i = _skip_braces(text, i)
+            end = braces.end(i)
+            i = max(limit, i + 1) if end is None else end
         else:
             m = _JSX_ATTR.match(text, i)
             if m is None:
@@ -908,10 +1031,15 @@ def _jsx_attributes(text: str, pos: int) -> tuple[dict[str, Optional[str]], bool
                     value = text[j + 1 : end]
                     i = end + 1
                 elif j < n and text[j] == "{":
-                    end = _skip_braces(text, j)
-                    literal = _JSX_LITERAL.match(text[j + 1 : end - 1].strip())
-                    value = (literal.group(1) if literal.group(1) is not None else literal.group(2)) if literal else None
-                    i = end
+                    end = braces.end(j)
+                    if end is None:
+                        i = max(limit, j + 1)
+                    else:
+                        literal = _JSX_LITERAL.match(text[j + 1 : end - 1].strip())
+                        value = (
+                            (literal.group(1) if literal.group(1) is not None else literal.group(2)) if literal else None
+                        )
+                        i = end
                 else:
                     i = j
             attrs.setdefault(name, value)
@@ -924,14 +1052,20 @@ def check_jsx(files: list[tuple[str, str]], catalog: Catalog) -> list[dict]:
     Validates tag names, that each required attribute is present in any form (``{expr}`` and spreads
     included) and literal string values against the enum, integer, ident and number-list kinds.
     Children aren't statically known in JSX, so ``requires``, ``rules`` and ``parent`` are skipped.
+
+    Only comments that are unambiguously comments are ignored (see ``_js_comment_spans``, plus
+    ``<!-- -->`` in a ``.html`` file); q-* text inside strings or mid-line comments is still checked.
     """
     failures: list[dict] = []
     for label, source in files:
         starts = [0] + [i + 1 for i, ch in enumerate(source) if ch == "\n"]
-        text = _blank_comments(source)
-        for match in _JSX_TAG.finditer(text):
+        text = _blank_comments(source, html=label.endswith(".html"))
+        braces = _Braces(text)
+        matches = list(_JSX_TAG.finditer(text))
+        for k, match in enumerate(matches):
             tag = match.group(1)
             line = bisect.bisect_right(starts, match.start())
+            limit = matches[k + 1].start() if k + 1 < len(matches) else len(text)
 
             def fail(message: str) -> None:
                 failures.append({"check": "kit", "detail": f"{label} line {line}: {message}"})
@@ -940,7 +1074,7 @@ def check_jsx(files: list[tuple[str, str]], catalog: Catalog) -> list[dict]:
             if element is None:
                 fail(f"unknown element <{tag}>")
                 continue
-            attrs, spread = _jsx_attributes(text, match.end())
+            attrs, spread = _jsx_attributes(text, match.end(), braces, limit)
             for attribute in element.attributes:
                 if attribute.name not in attrs:
                     if attribute.required and not spread:
