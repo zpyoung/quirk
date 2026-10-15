@@ -1,0 +1,26 @@
+{
+  "title": "Tool: fee calculator",
+  "question": "Where should the fee calculator show its result?",
+  "select": "single",
+  "options": [
+    {
+      "id": "beside",
+      "label": "Beside the inputs",
+      "description": "Inputs on the left, live result on the right. Best on wide screens.",
+      "html": "<div style=\"display:grid;gap:6px;height:72px;grid-template-columns:1fr 1fr;\"><div style=\"border:1px solid currentColor;opacity:.5\"></div><div style=\"border:1px solid currentColor\"></div></div>"
+    },
+    {
+      "id": "below",
+      "label": "Below the inputs",
+      "description": "Inputs stacked above a result card. Same order as on a phone.",
+      "html": "<div style=\"display:grid;gap:6px;height:72px;grid-template-rows:1fr 1fr;\"><div style=\"border:1px solid currentColor;opacity:.5\"></div><div style=\"border:1px solid currentColor\"></div></div>"
+    },
+    {
+      "id": "sticky",
+      "label": "Pinned result bar",
+      "description": "A bar fixed to the bottom of the screen that updates as you type."
+    }
+  ],
+  "content": "<p>Merchants enter volume, average order value and plan, and see the monthly fee. They change one input at a time and watch the number move.</p>",
+  "layout": "tool"
+}

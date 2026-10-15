@@ -1,0 +1,25 @@
+{
+  "title": "Explainer: how retries work",
+  "question": "Which explanation fits the retry explainer?",
+  "select": "single",
+  "options": [
+    {
+      "id": "diagram-led",
+      "label": "Diagram first",
+      "description": "A single flow diagram, then a paragraph per step. Best for readers who think visually.",
+      "html": "<div style=\"display:grid;gap:6px;height:72px;grid-template-rows:2fr 1fr;\"><div style=\"border:1px solid currentColor\"></div><div style=\"border:1px solid currentColor;opacity:.5\"></div></div>"
+    },
+    {
+      "id": "walkthrough",
+      "label": "Worked example",
+      "description": "Follow one failed charge through every retry with real timestamps."
+    },
+    {
+      "id": "faq",
+      "label": "Question by question",
+      "description": "Answer the five questions support hears most, in the order they get asked."
+    }
+  ],
+  "content": "<p>New support staff ask how a failed charge is retried. The explainer should leave them able to tell a customer what happens next and when.</p>",
+  "layout": "explainer"
+}

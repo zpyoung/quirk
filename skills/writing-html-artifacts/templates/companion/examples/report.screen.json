@@ -1,0 +1,26 @@
+{
+  "title": "Report: findings first",
+  "question": "How should the churn report open?",
+  "select": "single",
+  "options": [
+    {
+      "id": "verdict-first",
+      "label": "Verdict first",
+      "description": "One-sentence finding and the number behind it, then the evidence. Best for readers who stop after the opening.",
+      "html": "<div style=\"display:grid;gap:6px;height:72px;grid-template-rows:1fr 2fr 2fr;\"><div style=\"border:1px solid currentColor\"></div><div style=\"border:1px solid currentColor;opacity:.5\"></div><div style=\"border:1px solid currentColor;opacity:.5\"></div></div>"
+    },
+    {
+      "id": "timeline",
+      "label": "Timeline first",
+      "description": "Walk the quarter in order and end on the finding. Best when the sequence is the story."
+    },
+    {
+      "id": "with-aside",
+      "label": "Findings plus side notes",
+      "description": "Findings in the main column, caveats and data sources in a narrow aside.",
+      "html": "<div style=\"display:grid;gap:6px;height:72px;grid-template-columns:3fr 1fr;\"><div style=\"border:1px solid currentColor\"></div><div style=\"border:1px solid currentColor;opacity:.5\"></div></div>"
+    }
+  ],
+  "content": "<p>The report goes to the retention lead on Monday. Churn rose 1.2 points in Q3, driven by one cohort of annual plans. Most readers will read the opening and decide whether to continue.</p>",
+  "layout": "report"
+}

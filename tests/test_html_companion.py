@@ -8,6 +8,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -26,9 +27,12 @@ sys.path.insert(0, str(SKILL / "scripts"))
 
 import companion  # noqa: E402
 from htmlkit import assemble, resolve  # noqa: E402
+from htmlkit.header import read_header  # noqa: E402
+from htmlkit.layouts import LAYOUTS  # noqa: E402
 
 CLI = SKILL / "scripts" / "companion.py"
 EXAMPLE = SKILL / "templates" / "companion" / "example.screen.json"
+EXAMPLES = sorted((SKILL / "templates" / "companion" / "examples").glob("*.screen.json"))
 MERMAID_VERSION = json.loads((SKILL / "vendor" / "libraries.json").read_text())["libraries"]["mermaid"]["current"]
 
 SCREEN = {
@@ -333,6 +337,9 @@ def test_show_rejects_the_wrong_number_of_options(server: Server, count: int) ->
         {"content": ["x"]},
         {"extra": 1},
         {"content": "<!-- slot: main -->\nx"},
+        {"layout": "poster"},
+        {"layout": ""},
+        {"layout": 5},
     ],
 )
 def test_show_rejects_malformed_screens(server: Server, changes: dict) -> None:
@@ -438,6 +445,58 @@ def test_the_example_screen_shows_and_passes_checks(server: Server) -> None:
     spec = json.loads(EXAMPLE.read_text(encoding="utf-8"))
     out = server.show(spec)
     assert out["checks"]["passed"] is True
+
+
+def test_one_example_screen_per_shape() -> None:
+    assert [p.name for p in EXAMPLES] == sorted(f"{name}.screen.json" for name in LAYOUTS)
+    for path in EXAMPLES:
+        assert json.loads(path.read_text(encoding="utf-8"))["layout"] == path.name.removesuffix(".screen.json")
+
+
+@pytest.mark.parametrize("path", EXAMPLES, ids=lambda p: p.name)
+def test_each_shape_example_shows_and_passes_checks(server: Server, path: Path) -> None:
+    spec = json.loads(path.read_text(encoding="utf-8"))
+    out = server.show(spec)
+    assert out["checks"]["passed"] is True
+    page = (server.session / "screens" / f"{out['screen']}.html").read_text(encoding="utf-8")
+    assert f'data-layout="{spec["layout"]}"' in page
+
+
+def _main_wrap_layout(page: str) -> str:
+    return re.search(r'<main class="q-wrap"([^>]*)>', page).group(1)
+
+
+@pytest.mark.parametrize("layout", LAYOUTS)
+def test_a_named_layout_is_recorded_in_the_header_and_on_main(server: Server, layout: str) -> None:
+    out = server.show(screen_with(layout=layout))
+    assert out["checks"]["passed"] is True
+    page = (server.session / "screens" / f"{out['screen']}.html").read_text(encoding="utf-8")
+    assert read_header(page)["layout"] == layout
+    assert f'data-layout="{layout}"' in _main_wrap_layout(page)
+
+
+def test_a_screen_without_a_layout_leaves_main_unmarked_and_the_page_otherwise_unchanged(server: Server) -> None:
+    plain = server.show(SCREEN)
+    named = server.show(screen_with(layout="explainer"))
+    plain_page = (server.session / "screens" / f"{plain['screen']}.html").read_text(encoding="utf-8")
+    named_page = (server.session / "screens" / f"{named['screen']}.html").read_text(encoding="utf-8")
+    assert "layout" not in read_header(plain_page)
+    assert 'data-layout=""' in _main_wrap_layout(plain_page)
+
+    def normal(page: str, nonce: str) -> str:
+        lines = page.split("\n")
+        lines[1] = ""
+        return "\n".join(lines).replace(nonce, "NONCE")
+
+    assert normal(named_page, named["nonce"]).replace('data-layout="explainer"', 'data-layout=""') == normal(
+        plain_page, plain["nonce"]
+    )
+
+
+def test_an_unknown_layout_is_rejected_with_every_shape_named(server: Server) -> None:
+    out = server.show(screen_with(layout="poster"), expect=2)
+    assert all(name in out["error"] for name in LAYOUTS)
+    assert not (server.session / "state" / "current.json").exists()
 
 
 def test_built_screens_pass_the_check_command_in_companion_mode(server: Server, tmp_path: Path) -> None:
