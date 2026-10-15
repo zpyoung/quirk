@@ -4,11 +4,11 @@ Read after the [design reference](../../references/design-reference.md). These r
 
 ## Layout
 
-- The skeleton gives you the page: a masthead with the theme toggle and the `<h1>` (from `title`), then `<main>` in a 960px column. Do not write an `<h1>` or a second theme toggle in a slot.
+- The skeleton gives you the page: a masthead with the theme toggle and the `<h1>` (from `title`), then `<main>` in a column up to 1440px wide. Do not write an `<h1>` or a second theme toggle in a slot.
 - `main` holds the body. Open with one paragraph that states the conclusion (`class="q-lede"`), then a line for the data source or date (`class="q-meta"`), then a "Findings" section of 3 to 5 one-sentence facts, then the evidence.
 - Wrap each section in `<section aria-labelledby="...">` with an `<h2>`. Sections are separated by spacing, not boxes.
-- `aside` is optional. When you use it, the slot content is the whole element: `<aside aria-label="About these numbers">`. At 900px and up it sits right of `main`; below that it follows `main`. Use it for definitions and caveats, not for navigation.
-- Prose is capped at 70ch by the skeleton. Tables and charts fill the column.
+- `aside` is optional. When you use it, the slot content is the whole element: `<aside aria-label="About these numbers">`. At 900px and up it sits right of `main` and stays in view as the reader scrolls, so keep it shorter than one screen; below that it follows `main`. Use it for definitions and caveats, not for navigation.
+- Prose is capped at 70ch by the skeleton. Tables, charts, code, diffs and boards fill the column.
 
 ## Helper classes the skeleton defines
 

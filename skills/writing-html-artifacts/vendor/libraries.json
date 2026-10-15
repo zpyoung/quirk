@@ -114,6 +114,27 @@
       },
       "current": "3.14.0"
     },
+    "highlightjs": {
+      "current": "11.12.0",
+      "versions": {
+        "11.12.0": {
+          "package": "@highlightjs/cdn-assets",
+          "license": "BSD-3-Clause",
+          "license_file": "LICENSE",
+          "source": "https://registry.npmjs.org/@highlightjs/cdn-assets/-/cdn-assets-11.12.0.tgz",
+          "files": [
+            {
+              "path": "highlight.min.js",
+              "kind": "js",
+              "sha256": "8ab71eb09c51f501e5e25157d9cff100e46cc29bcbfc744d0b746d451fca7f53",
+              "inline_sha256": "8ab71eb09c51f501e5e25157d9cff100e46cc29bcbfc744d0b746d451fca7f53",
+              "position": "body-end",
+              "inline": true
+            }
+          ]
+        }
+      }
+    },
     "kit": {
       "current": "1.0.0",
       "versions": {
@@ -128,16 +149,16 @@
               "kind": "css",
               "position": "head",
               "inline": true,
-              "sha256": "b7ea66b6e5404608dfc2e973d8ac722951b16963a96d536a350cdef76e7e8a71",
-              "inline_sha256": "b7ea66b6e5404608dfc2e973d8ac722951b16963a96d536a350cdef76e7e8a71"
+              "sha256": "2ad5aabbee4f46804c6a46ddf6d0e62b299228366c63657df7e17c78d453cabc",
+              "inline_sha256": "2ad5aabbee4f46804c6a46ddf6d0e62b299228366c63657df7e17c78d453cabc"
             },
             {
               "path": "kit.js",
               "kind": "js",
               "position": "body-end",
               "inline": true,
-              "sha256": "6834a092ab3b931458de647e56bf340f655fd2b2bd0a7fda2c3e6663c5c4b939",
-              "inline_sha256": "6834a092ab3b931458de647e56bf340f655fd2b2bd0a7fda2c3e6663c5c4b939"
+              "sha256": "991e81dcc817c7cda5985db8be5479689385d858b974e35ac034c4edb5e255dc",
+              "inline_sha256": "991e81dcc817c7cda5985db8be5479689385d858b974e35ac034c4edb5e255dc"
             }
           ]
         }

@@ -258,14 +258,16 @@ def _library_order(template: Template, source: Source) -> list[str]:
 
 
 def _with_auto_libraries(names: list[str], raw_source: str) -> list[str]:
-    """Add the libraries the source's q-* markup needs: Chart.js, then the kit, Alpine still last.
+    """Add the libraries the source's q-* markup needs: Chart.js, highlight.js, then the kit, Alpine
+    still last.
 
     The scan is over the raw source text, so a q-* tag a script or template builds at runtime pulls
-    the kit in too. Both libraries are automatic, so neither has to be an optional library of the
+    the kit in too. These libraries are automatic, so none has to be an optional library of the
     template.
     """
     kit, chartjs = kitcheck.needs(raw_source)
-    wanted = (["chartjs"] if chartjs else []) + (["kit"] if kit else [])
+    highlight = kit and kitcheck.needs_highlight(raw_source)
+    wanted = (["chartjs"] if chartjs else []) + (["highlightjs"] if highlight else []) + (["kit"] if kit else [])
     names = list(dict.fromkeys(names + wanted))
     return [n for n in names if n != "alpine"] + [n for n in names if n == "alpine"]
 

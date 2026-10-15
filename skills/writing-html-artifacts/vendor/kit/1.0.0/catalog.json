@@ -162,7 +162,7 @@
         ]
       ],
       "rules": [],
-      "children": "A <table> with a <thead>. Mark numeric columns with class=\"num\" on their <th> so they sort by value. With data-from, each <th> binds to the row field named by its data-key attribute, or else by its trimmed text.",
+      "children": "A <table> with a <thead>. Mark numeric columns with class=\"num\" on their <th> so they sort by value. Clicking a header sorts ascending, then descending, then back to the authored order. With data-from, each <th> binds to the row field named by its data-key attribute, or else by its trimmed text.",
       "example": "<q-table>\n  <table>\n    <thead>\n      <tr><th>Service</th><th class=\"num\">Requests</th><th class=\"num\">p95 ms</th><th>Owner</th></tr>\n    </thead>\n    <tbody>\n      <tr><td>checkout</td><td>1,204,000</td><td>310</td><td>Payments</td></tr>\n      <tr><td>catalog</td><td>3,890,500</td><td>120</td><td>Storefront</td></tr>\n      <tr><td>search</td><td>2,410,300</td><td>185</td><td>Discovery</td></tr>\n      <tr><td>accounts</td><td>612,900</td><td>95</td><td>Identity</td></tr>\n    </tbody>\n  </table>\n</q-table>"
     },
     {
@@ -192,7 +192,13 @@
           "name": "filename",
           "required": false,
           "kind": "text",
-          "description": "File name shown in the header bar above the code."
+          "description": "File name shown in the header bar above the code; its extension picks the highlighting language when language is not set."
+        },
+        {
+          "name": "language",
+          "required": false,
+          "kind": "ident",
+          "description": "highlight.js language name or alias, such as yaml, json, bash or tsx; an unknown name shows plain text."
         }
       ],
       "requires": [
@@ -201,7 +207,7 @@
         ]
       ],
       "rules": [],
-      "children": "A <pre> wrapping a <code> element with the text to copy. There is no syntax highlighting.",
+      "children": "A <pre> wrapping a <code> element with the text to copy. The code is highlighted by language, or else by the filename extension; with neither, or without JavaScript, it shows as plain text.",
       "example": "<q-code filename=\"deploy.sh\">\n  <pre><code>#!/usr/bin/env bash\nset -euo pipefail\n./build.sh --release\n./push.sh --env staging</code></pre>\n</q-code>"
     },
     {
@@ -218,7 +224,7 @@
       "rules": [
         "diff-notes"
       ],
-      "children": "A <pre> of unified diff text, followed by zero or more q-diff-note children. Each note names a file and a new-side line number that must appear in the diff. Without JavaScript the raw diff shows, then the notes as a list.",
+      "children": "A <pre> of unified diff text, followed by zero or more q-diff-note children. Each note names a file and a new-side line number that must appear in the diff. Code lines are highlighted by each file's extension. Without JavaScript the raw diff shows, then the notes as a list.",
       "example": "<q-diff>\n  <pre>--- a/src/retry.py\n+++ b/src/retry.py\n@@ -10,6 +10,7 @@ def fetch(url):\n     attempt = 0\n-    while attempt &lt; 3:\n+    while attempt &lt; MAX_ATTEMPTS:\n         try:\n             return get(url)\n         except Timeout:\n+            sleep(backoff(attempt))\n             attempt += 1</pre>\n  <q-diff-note file=\"src/retry.py\" line=\"11\">The limit moves into a named constant so tests can lower it.</q-diff-note>\n  <q-diff-note file=\"src/retry.py\" line=\"15\">Backoff runs before the counter changes, so the first retry waits the base delay.</q-diff-note>\n</q-diff>"
     },
     {

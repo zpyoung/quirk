@@ -12,9 +12,10 @@ only a template you trust should be built. The bundle (``dist/index.html``) then
 production dependency and its ``<title>`` set to the saved title, and is written to ``<project>/.quirk/html/<slug>.html`` and statically checked.
 
 An app that writes q-* elements in its sources (``src/**/*.{ts,tsx,js,jsx}``, minus declaration and
-test files, or ``index.html``) gets the component kit, and Chart.js for ``<q-chart>``, inlined from the
-skill after the Vite build, exactly as tier 1 does it; ``kitcheck.check_jsx`` validates those
-elements and reports failures with the other static checks.
+test files, or ``index.html``) gets the component kit, Chart.js for ``<q-chart>`` and highlight.js
+for ``<q-code>`` and ``<q-diff>``, inlined from the skill after the Vite build, exactly as tier 1
+does it; ``kitcheck.check_jsx`` validates those elements and reports failures with the other
+static checks.
 
 Problems the author can fix (slug, mode, template, missing title) raise ``BuildError`` and are exit 2
 in the CLI. A missing toolchain or a failed install or build raises ``AppUnavailable`` (exit 3),
@@ -249,10 +250,11 @@ def build_app(
     if not source.exists():
         _scaffold(template.dir, template.project or "project/", template.example, source)
     kit_files = _kit_sources(source)
-    uses_kit, uses_chartjs = False, False
+    uses_kit, uses_chartjs, uses_highlight = False, False, False
     for _, text in kit_files:
         kit, chartjs = kitcheck.needs(text)
         uses_kit, uses_chartjs = uses_kit or kit, uses_chartjs or chartjs
+        uses_highlight = uses_highlight or kitcheck.needs_highlight(text)
     if upgrade and not uses_kit:
         warnings.append("--upgrade has no effect on tier 2: pnpm-lock.yaml pins every dependency version")
     try:
@@ -288,7 +290,7 @@ def build_app(
     if uses_kit:
         store = _skill_store(skill, template.dir)
         frozen = _frozen_versions(out_path)
-        names = (["chartjs"] if uses_chartjs else []) + ["kit"]
+        names = (["chartjs"] if uses_chartjs else []) + (["highlightjs"] if uses_highlight else []) + ["kit"]
         try:
             for name in names:
                 lv = store.resolve(name, None if upgrade else frozen.get(name))

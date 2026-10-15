@@ -4,7 +4,7 @@ Read after the [design reference](../../references/design-reference.md). These r
 
 ## Layout
 
-- The skeleton gives you the page: a masthead with the theme toggle and the `<h1>` (from `title`), then `<main>` in a 960px column. Do not write an `<h1>` or a second theme toggle in `main`.
+- The skeleton gives you the page: a masthead with the theme toggle and the `<h1>` (from `title`), then `<main>` in a column up to 1440px wide. Do not write an `<h1>` or a second theme toggle in `main`.
 - Open `main` with a one-paragraph lede (`class="q-lede"`) and a source or scope line (`class="q-meta"`), then the components in `<section aria-labelledby="...">` blocks with `<h2>` headings.
 - Helper classes the skeleton defines: `q-lede`, `q-meta`, `q-stack` (a vertical stack with `--q-space-4` gaps), `q-chart` (a wrapper for Mermaid diagrams), `q-table-wrap`, and `num` on `th` and `td` for right-aligned numbers.
 - Prose is capped at 70ch. Tables and charts fill the column.

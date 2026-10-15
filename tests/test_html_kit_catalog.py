@@ -58,7 +58,7 @@ SECTION_3_4: dict[str, tuple[Any, bool, dict[str, tuple[bool, str, Any, Any]], l
     ),
     "q-table": (None, True, {"data-from": (False, "ident", None, None)}, [["table"]], []),
     "q-timeline": (None, False, {}, [["ol"]], ["timeline-items"]),
-    "q-code": (None, True, {"filename": (False, "text", None, None)}, [["pre"]], []),
+    "q-code": (None, True, {"filename": (False, "text", None, None), "language": (False, "ident", None, None)}, [["pre"]], []),
     "q-diff": (None, False, {}, [["pre"]], ["diff-notes"]),
     "q-diff-note": (
         "q-diff",
@@ -330,6 +330,23 @@ def test_all_problems_are_reported_together(vendor_copy: Path) -> None:
 )
 def test_needs_truth_table(text: str, expected: tuple[bool, bool]) -> None:
     assert kitcheck.needs(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("<q-code>", True),
+        ('<q-code filename="a.py">', True),
+        ("<Q-DIFF>", True),
+        ("<q-diff-note>", False),
+        ("<q-codes>", False),
+        ("<q-stat>", False),
+        ("&lt;q-code>", False),
+        ("", False),
+    ],
+)
+def test_needs_highlight_truth_table(text: str, expected: bool) -> None:
+    assert kitcheck.needs_highlight(text) is expected
 
 
 def test_needs_exposes_the_two_regexes() -> None:

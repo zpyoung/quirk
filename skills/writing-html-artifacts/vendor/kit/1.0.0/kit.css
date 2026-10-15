@@ -5,7 +5,7 @@
  * exceptions are rules that must beat the stylesheets under the kit: the hover rules (Simple.css
  * restyles button:enabled:hover), the q-tabs panel and q-board section and heading resets (the
  * report template's "main section + section" divider, Simple.css's "section h2:first-child"),
- * and the print rules. The two hiding rules carry !important because hidden state must hold
+ * the highlight.js token colors (Simple.css's "pre span"), and the print rules. The two hiding rules carry !important because hidden state must hold
  * against any author display value.
  */
 
@@ -184,10 +184,76 @@ q-code > :where([data-q-bar]) > :where([data-q-status]:not(:empty)) + button:whe
   margin-inline-start: 0;
 }
 
+q-code > pre {
+  box-sizing: border-box;
+  max-width: 100%;
+  margin: 0 0 var(--q-space-4);
+  padding: var(--q-space-3) var(--q-space-4);
+  overflow-x: auto;
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-md);
+  background: var(--q-color-surface);
+  color: var(--q-color-text);
+  font-family: var(--q-font-mono);
+  font-size: var(--q-size-small);
+  line-height: var(--q-size-leading);
+}
+
+q-code > pre > code {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+}
+
 q-code > :where([data-q-bar]) + pre {
   margin-top: 0;
   border-top-left-radius: 0;
   border-top-right-radius: 0;
+}
+
+/* highlight.js classes, shared by q-code and q-diff */
+
+:is(q-code, q-diff) :is(pre, td) span:where(.hljs-keyword, .hljs-built_in, .hljs-literal, .hljs-type, .hljs-selector-tag, .hljs-doctag) {
+  color: var(--q-color-syntax-keyword);
+}
+
+:is(q-code, q-diff) :is(pre, td) span:where(.hljs-string, .hljs-regexp, .hljs-symbol, .hljs-template-tag, .hljs-template-variable) {
+  color: var(--q-color-syntax-string);
+}
+
+:is(q-code, q-diff) :is(pre, td) span:where(.hljs-number, .hljs-bullet, .hljs-link) {
+  color: var(--q-color-syntax-number);
+}
+
+:is(q-code, q-diff) :is(pre, td) span:where(.hljs-comment, .hljs-quote) {
+  color: var(--q-color-syntax-comment);
+  font-style: italic;
+}
+
+:is(q-code, q-diff) :is(pre, td) span:where(.hljs-title, .hljs-section, .hljs-name, .hljs-attr, .hljs-attribute, .hljs-property, .hljs-selector-id, .hljs-selector-class) {
+  color: var(--q-color-syntax-name);
+}
+
+:is(q-code, q-diff) :is(pre, td) span:where(.hljs-meta) {
+  color: var(--q-color-text-muted);
+}
+
+:is(q-code, q-diff) :is(pre, td) span:where(.hljs-addition) {
+  color: var(--q-color-good);
+}
+
+:is(q-code, q-diff) :is(pre, td) span:where(.hljs-deletion) {
+  color: var(--q-color-critical);
+}
+
+:is(q-code, q-diff) :is(pre, td) span:where(.hljs-emphasis) {
+  font-style: italic;
+}
+
+:is(q-code, q-diff) :is(pre, td) span:where(.hljs-strong) {
+  font-weight: 700;
 }
 
 /* q-stat */
@@ -408,6 +474,7 @@ q-diff :where(.q-diff-meta) > td {
 }
 
 q-diff td:where([data-q-old], [data-q-new]) {
+  width: 1px;
   min-width: 3.5ch;
   color: var(--q-color-text-muted);
   text-align: right;
@@ -417,7 +484,6 @@ q-diff td:where([data-q-old], [data-q-new]) {
 }
 
 q-diff td:where([data-q-code]) {
-  width: 100%;
   color: var(--q-color-text);
   white-space: pre;
 }
@@ -614,9 +680,9 @@ q-table > :where([data-q-message]) {
 /* q-board */
 
 q-board {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));
-  align-items: start;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
   gap: var(--q-space-3);
   position: relative;
   box-sizing: border-box;
@@ -627,6 +693,7 @@ q-board {
 
 /* lifted above the report template's "main section + section" divider; :not([hidden]) does it */
 q-board > section:not([hidden]) {
+  flex: 1 1 min(14rem, 100%);
   box-sizing: border-box;
   min-width: 0;
   margin: 0;
@@ -693,18 +760,8 @@ q-board :where([data-q-handle]) {
   letter-spacing: -0.2em;
 }
 
-q-board select:where([data-q-move]) {
-  display: block;
-  max-width: 100%;
-  min-height: 32px;
-  margin: var(--q-space-2) 0 0;
-  font: inherit;
-  font-size: var(--q-size-small);
-  cursor: pointer;
-}
-
 q-board > :where([data-q-bar]) {
-  grid-column: 1 / -1;
+  flex: 0 0 100%;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -728,7 +785,7 @@ q-board > :where([data-q-bar]) > :where([data-q-status]) {
 }
 
 q-board > textarea:where([data-q-export]) {
-  grid-column: 1 / -1;
+  flex: 0 0 100%;
   box-sizing: border-box;
   width: 100%;
   max-width: 100%;
@@ -754,7 +811,6 @@ q-board > :where([data-q-drop]) {
 @media print {
   q-board > [data-q-bar],
   q-board > [data-q-export],
-  q-board [data-q-move],
   q-board [data-q-handle] {
     display: none;
   }

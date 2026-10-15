@@ -86,6 +86,7 @@ Rules for using them:
 - A project or user token file can change any value. Because you reference the variables, the page follows without edits.
 - The font tokens are system stacks. Do not add `@font-face`, a `url()` font, or a font `<link>`; external font references fail the offline static check, and system stacks cover every theme.
 - Chart series colors are the `--q-color-chart-1` to `--q-color-chart-8` tokens. If you need another color the roles do not cover, define it once as a local custom property in the page's own `<style>` as a light/dark pair, using the same media-query structure the theme uses. Do not scatter literals.
+- Code highlighting colors are the `--q-color-syntax-keyword`, `-string`, `-number`, `-comment` and `-name` tokens. `q-code` and `q-diff` apply them, so set them in a token file to rebrand code, not in the page.
 
 ## 5. Type
 
@@ -126,19 +127,20 @@ Every layout is a single column on a 375px screen. At desktop widths, put the su
 
 | Artifact | Max width | Grid | Summary sits |
 |---|---|---|---|
-| Explainer | 70ch prose column, up to 960px with figures | one column; figures may span wider; optional sticky table of contents at 1100px and up | a one-paragraph answer directly under the h1, before any section |
-| Report | 960px | one column of sections; tables and charts fill the width; optional two-column key facts block | a "Findings" block under the h1: the 3 to 5 facts a reader acts on, each one sentence |
-| Calculator or tool | 720px for the tool, 960px if it has a results table | inputs first, results beside them at 900px and up, below them on narrow screens | the live result, in an `aria-live` region, next to the inputs it depends on |
-| Comparison | 1100px | a table with the options as columns and criteria as rows; at 375px each option becomes a stacked block | a "Recommendation" line above the table naming the pick and the one reason |
-| Dashboard | 1280px | 12-column grid, at most 4 panels across, each panel with a title and a table view; stack at 700px and below | the one headline metric top-left, with its unit and its comparison period |
+| Explainer | 70ch prose column, up to 1440px with figures, tables and code | one column; figures may span wider; optional sticky table of contents at 1100px and up | a one-paragraph answer directly under the h1, before any section |
+| Report | 1440px | one column of sections; tables, charts, code and boards fill the width; optional sticky aside at 900px and up | a "Findings" block under the h1: the 3 to 5 facts a reader acts on, each one sentence |
+| Calculator or tool | 720px for the tool, 1440px if it has a results table | inputs first, results beside them at 900px and up, below them on narrow screens | the live result, in an `aria-live` region, next to the inputs it depends on |
+| Comparison | 1440px | a table with the options as columns and criteria as rows; at 375px each option becomes a stacked block | a "Recommendation" line above the table naming the pick and the one reason |
+| Dashboard | 1440px | 12-column grid, at most 4 panels across, each panel with a title and a table view; stack at 700px and below | the one headline metric top-left, with its unit and its comparison period |
 
 Notes that apply to all five:
 
 - The h1 names the subject, not the format. "Checkout latency, week 41", not "Report".
 - Put the date or data source under the h1 in `--q-size-small`.
 - Do not center the whole layout. Center the container with `margin-inline: auto` and left-align its contents.
+- Use the width of a large screen. Cap prose at 70ch, and let tables, charts, code, diffs and boards fill the container. A 960px column on a 2000px screen wastes the room those elements need.
 - Tables that are wider than the screen scroll inside their own `overflow-x: auto` wrapper, never the page. The page must not scroll horizontally at 375px.
-- Sticky headers and sidebars only when the page is longer than three screens.
+- Sticky headers only when the page is longer than three screens. A sidebar that sits beside the content, like the report's aside, is sticky at 900px and up and stays shorter than one screen.
 
 ## 9. Tables and data visualization
 

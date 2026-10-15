@@ -19,7 +19,12 @@
     "chart-5": ["#0072b2", "#0072b2"],
     "chart-6": ["#d55e00", "#d55e00"],
     "chart-7": ["#c8779d", "#cc79a0"],
-    "chart-8": ["#1d1c1a", "#ece9e2"]
+    "chart-8": ["#1d1c1a", "#ece9e2"],
+    "syntax-keyword": ["#a3214f", "#f497b4"],
+    "syntax-string": ["#1d6b3a", "#93d3a2"],
+    "syntax-number": ["#9a4a00", "#f2b679"],
+    "syntax-comment": ["#5f5a51", "#a8a398"],
+    "syntax-name": ["#1a56a6", "#8fbcff"]
   },
   "font": {
     "sans": "system-ui, -apple-system, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",

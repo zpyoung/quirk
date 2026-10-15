@@ -8,7 +8,7 @@
 {{head}}
 <style>
 body { display: block; margin: 0; }
-.q-wrap { box-sizing: border-box; max-width: 960px; margin-inline: auto; padding-inline: clamp(var(--q-space-4), 4vw, var(--q-space-6)); }
+.q-wrap { box-sizing: border-box; max-width: 1440px; margin-inline: auto; padding-inline: clamp(var(--q-space-4), 4vw, var(--q-space-6)); }
 body > header.q-masthead { background: none; text-align: left; margin: 0; padding: var(--q-space-4) 0 var(--q-space-5); border-bottom: 1px solid var(--q-color-border); }
 body > header.q-masthead > .q-wrap { margin-block-start: 0; }
 body > header.q-masthead h1 { max-width: none; margin: var(--q-space-3) 0 0; }
@@ -19,7 +19,10 @@ body > header.q-masthead h1 { max-width: none; margin: var(--q-space-3) 0 0; }
 .q-layout > main { min-width: 0; padding-top: var(--q-space-5); }
 .q-layout > aside { float: none; width: auto; align-self: start; margin: var(--q-space-5) 0 0; padding: var(--q-space-3) var(--q-space-4); font-size: var(--q-size-small); }
 .q-layout > aside h2 { margin-top: var(--q-space-2); font-size: var(--q-size-h4); }
-@media (min-width: 900px) { .q-layout:has(> aside) { grid-template-columns: minmax(0, 1fr) 16rem; } }
+@media (min-width: 900px) {
+  .q-layout:has(> aside) { grid-template-columns: minmax(0, 1fr) 18rem; }
+  .q-layout > aside { position: sticky; top: var(--q-space-4); max-height: calc(100vh - 2 * var(--q-space-4)); overflow-y: auto; box-sizing: border-box; }
+}
 main :is(p, ul, ol, blockquote) { max-width: 70ch; }
 main section { margin: 0; padding: 0; border: 0; }
 main section + section { margin-top: var(--q-space-7); padding-top: var(--q-space-6); border-top: 1px solid var(--q-color-border); }

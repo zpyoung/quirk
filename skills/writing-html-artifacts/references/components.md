@@ -149,7 +149,7 @@ Use when a table has more than a few rows and the reader will want to sort it, f
 
 ### Children
 
-A `<table>` with a `<thead>`. Mark numeric columns with class="num" on their `<th>` so they sort by value. With data-from, each `<th>` binds to the row field named by its data-key attribute, or else by its trimmed text.
+A `<table>` with a `<thead>`. Mark numeric columns with class="num" on their `<th>` so they sort by value. Clicking a header sorts ascending, then descending, then back to the authored order. With data-from, each `<th>` binds to the row field named by its data-key attribute, or else by its trimmed text.
 
 ### Example
 
@@ -206,11 +206,12 @@ Use when the reader should copy a command, config or code snippet exactly as wri
 
 | Name | Required | Kind | Values | Default | Description |
 |---|---|---|---|---|---|
-| `filename` | no | text | - | - | File name shown in the header bar above the code. |
+| `filename` | no | text | - | - | File name shown in the header bar above the code; its extension picks the highlighting language when language is not set. |
+| `language` | no | ident | - | - | highlight.js language name or alias, such as yaml, json, bash or tsx; an unknown name shows plain text. |
 
 ### Children
 
-A `<pre>` wrapping a `<code>` element with the text to copy. There is no syntax highlighting.
+A `<pre>` wrapping a `<code>` element with the text to copy. The code is highlighted by language, or else by the filename extension; with neither, or without JavaScript, it shows as plain text.
 
 ### Example
 
@@ -235,7 +236,7 @@ This element takes no attributes of its own.
 
 ### Children
 
-A `<pre>` of unified diff text, followed by zero or more q-diff-note children. Each note names a file and a new-side line number that must appear in the diff. Without JavaScript the raw diff shows, then the notes as a list.
+A `<pre>` of unified diff text, followed by zero or more q-diff-note children. Each note names a file and a new-side line number that must appear in the diff. Code lines are highlighted by each file's extension. Without JavaScript the raw diff shows, then the notes as a list.
 
 ### Example
 

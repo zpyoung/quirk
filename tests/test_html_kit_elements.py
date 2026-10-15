@@ -902,6 +902,25 @@ def test_table_sort_buttons_cycle_asc_desc_with_one_aria_sort(stat_table_page: P
     assert results["kept_focus"] is True
 
 
+def test_table_third_click_restores_the_authored_order(stat_table_page: Path) -> None:
+    out = run(
+        stat_table_page,
+        ev(_col("basic", 0), "authored"),
+        {"click": "#basic thead th:nth-child(1) button"},
+        {"click": "#basic thead th:nth-child(1) button"},
+        {"click": "#basic thead th:nth-child(1) button"},
+        ev(_col("basic", 0), "restored"),
+        ev(_sorts("basic"), "sorts"),
+        {"click": "#basic thead th:nth-child(1) button"},
+        ev(_sorts("basic"), "again"),
+    )
+    assert_clean(out)
+    results = out["results"]
+    assert results["restored"] == results["authored"]
+    assert results["sorts"] == [None, None, None]
+    assert results["again"] == ["ascending", None, None]
+
+
 def test_table_num_column_sorts_by_value_not_text(stat_table_page: Path) -> None:
     out = run(
         stat_table_page,
@@ -2570,7 +2589,6 @@ def test_board_toolbar_and_card_controls_are_inserted(board_page: Path) -> None:
               const bar = board.querySelector(':scope > [data-q-kit]');
               const buttons = bar ? [...bar.querySelectorAll('button')] : [];
               const cards = [...board.querySelectorAll('li[data-id], li:not([data-id])')].filter((li) => !li.hasAttribute('data-q-kit'));
-              const sel = board.querySelector('li[data-id=login-bug] select');
               const lists = [...board.querySelectorAll(':scope > section > ul')];
               const note = board.querySelector('[data-q-note]');
               return {
@@ -2580,11 +2598,8 @@ def test_board_toolbar_and_card_controls_are_inserted(board_page: Path) -> None:
                 noteVisible: !!note && note.getBoundingClientRect().height > 0,
                 cards: cards.length,
                 tabindex: cards.map((c) => c.getAttribute('tabindex')),
-                selects: cards.map((c) => c.querySelectorAll(':scope > select[data-q-kit]').length),
-                options: sel && [...sel.options].map((o) => o.textContent.trim()),
-                selLabel: sel && sel.getAttribute('aria-label'),
-                selValue: sel && sel.value,
-                kitMarked: [...board.querySelectorAll('select, button, [data-q-handle], [data-q-announce]')].every((n) => n.hasAttribute('data-q-kit')),
+                selects: board.querySelectorAll('select').length,
+                kitMarked: [...board.querySelectorAll('button, [data-q-handle], [data-q-announce]')].every((n) => n.hasAttribute('data-q-kit')),
                 liveRegions: [...board.querySelectorAll('[aria-live=polite]')].length,
                 listNames: lists.map((ul) => ul.getAttribute('aria-labelledby') && document.getElementById(ul.getAttribute('aria-labelledby')).textContent.trim()),
                 keys: cards[0].getAttribute('aria-keyshortcuts'),
@@ -2598,9 +2613,7 @@ def test_board_toolbar_and_card_controls_are_inserted(board_page: Path) -> None:
     assert info["barFirst"] is True
     assert info["buttons"] == [["Reset", "button"], ["Copy as Markdown", "button"]]
     assert info["note"] == "Saved in this browser only." and info["noteVisible"] is True
-    assert info["cards"] == 5 and info["tabindex"] == ["0"] * 5 and info["selects"] == [1] * 5
-    assert info["options"] == ["Move to…", "Next", "Later", "Done"]
-    assert "Fix login redirect loop" in info["selLabel"] and info["selValue"] == ""
+    assert info["cards"] == 5 and info["tabindex"] == ["0"] * 5 and info["selects"] == 0
     assert info["kitMarked"] is True and info["liveRegions"] >= 2
     assert info["listNames"] == ["Now", "Next", "Later", "Done"]
     assert "Alt+ArrowRight" in info["keys"]
@@ -2687,44 +2700,28 @@ def test_board_alt_down_and_up_reorder_within_the_column(board_page: Path) -> No
     assert results["say_top"] == f'"{LOGIN_BUG_TEXT}" is already first in Now.'
 
 
-def test_board_plain_arrows_and_alt_arrows_inside_the_select_do_not_move_cards(board_page: Path) -> None:
+def test_board_plain_arrows_and_modified_alt_arrows_do_not_move_cards(board_page: Path) -> None:
     out = run(
         board_page,
         {"focus": CARD},
         {"press": "ArrowRight"},
         {"press": "Shift+Alt+ArrowRight"},
         {"press": "Control+Alt+ArrowRight"},
-        {"focus": f"{CARD} select"},
-        {"press": "Alt+ArrowRight"},
         ev(LAYOUT, "layout"),
     )
     assert_clean(out)
     assert out["results"]["layout"] == AUTHORED_BOARD
 
 
-def test_board_move_to_select_moves_the_card_and_announces(board_page: Path) -> None:
+def test_board_alt_arrows_reach_an_empty_column(board_page: Path) -> None:
     out = run(
         board_page,
-        {"focus": f"{CARD} select"},
-        {"select": {"selector": f"{CARD} select", "label": "Later"}},
+        {"focus": CARD},
+        {"press": "Alt+ArrowRight"},
+        {"press": "Alt+ArrowRight"},
+        {"press": "Alt+ArrowRight"},
         ev(LAYOUT, "layout"),
-        ev("document.activeElement === document.querySelector('#triage li[data-id=login-bug] select')", "select_focused"),
-        ev("document.querySelector('#triage li[data-id=login-bug] select').value", "reset_value"),
-        ev("[...document.querySelector('#triage li[data-id=login-bug] select').options].map((o) => o.textContent.trim())", "options"),
-        ev(ANNOUNCED, "say"),
-        ev(STORED, "stored"),
     )
-    assert_clean(out)
-    results = out["results"]
-    assert results["layout"] == _moved(AUTHORED_BOARD, "login-bug", 2, 2)
-    assert results["select_focused"] is True and results["reset_value"] == ""
-    assert results["options"] == ["Move to…", "Now", "Next", "Done"]
-    assert results["say"] == f'Moved "{LOGIN_BUG_TEXT}" to Later, position 3 of 3.'
-    assert json.loads(results["stored"])["columns"] == [ids for _, ids in results["layout"]]
-
-
-def test_board_move_to_select_reaches_an_empty_column(board_page: Path) -> None:
-    out = run(board_page, {"select": {"selector": f"{CARD} select", "label": "Done"}}, ev(LAYOUT, "layout"))
     assert_clean(out)
     assert out["results"]["layout"] == _moved(AUTHORED_BOARD, "login-bug", 3, 0)
 
@@ -2816,11 +2813,10 @@ def test_board_escape_cancels_a_drag(board_page: Path) -> None:
     assert out["results"]["layout"] == AUTHORED_BOARD and out["results"]["leftover"] == 0
 
 
-def test_board_a_plain_click_or_a_press_on_the_select_does_not_move_or_save(board_page: Path) -> None:
+def test_board_a_plain_click_does_not_move_or_save(board_page: Path) -> None:
     out = run(
         board_page,
         {"click": f"{CARD}"},
-        {"drag": {"from": f"{CARD} select", "to": "#triage li[data-id=csv-export]"}},
         ev(LAYOUT, "layout"),
         ev(STORED, "stored"),
     )
@@ -3059,7 +3055,10 @@ def test_board_blocked_storage_says_so_and_moves_still_work(board_page: Path, sc
         {"press": "Alt+ArrowRight"},
         ev(LAYOUT, "layout"),
         ev(NOTE, "note"),
-        {"select": {"selector": "#triage li[data-id=slow-search] select", "label": "Done"}},
+        {"focus": "#triage li[data-id=slow-search]"},
+        {"press": "Alt+ArrowRight"},
+        {"press": "Alt+ArrowRight"},
+        {"press": "Alt+ArrowRight"},
         ev(LAYOUT, "layout2"),
         {"drag": {"from": "#triage li[data-id=csv-export]", "to": "#triage li[data-id=dark-mode-icons]", "at": "top"}},
         ev(LAYOUT, "layout3"),
@@ -3089,7 +3088,6 @@ def test_board_upgrade_is_idempotent_when_the_element_is_moved(board_page: Path)
               const count = () => ({
                 bars: board.querySelectorAll(':scope > [data-q-kit]').length,
                 buttons: board.querySelectorAll('button').length,
-                selects: board.querySelectorAll('select').length,
                 handles: board.querySelectorAll('[data-q-handle]').length,
                 notes: board.querySelectorAll('[data-q-note]').length,
               });
@@ -3111,7 +3109,7 @@ def test_board_upgrade_is_idempotent_when_the_element_is_moved(board_page: Path)
     assert_clean(out)
     counts = out["results"]["counts"]
     assert counts["before"] == counts["after"]
-    assert counts["after"]["bars"] == 1 and counts["after"]["selects"] == 5 and counts["after"]["notes"] == 1
+    assert counts["after"]["bars"] == 1 and counts["after"]["handles"] == 5 and counts["after"]["notes"] == 1
     assert out["results"]["layout"] == _moved(AUTHORED_BOARD, "login-bug", 1, 0)
     assert out["results"]["layout2"] == _moved(AUTHORED_BOARD, "login-bug", 2, 0)
     assert out["results"]["reset"] == AUTHORED_BOARD
@@ -3120,7 +3118,7 @@ def test_board_upgrade_is_idempotent_when_the_element_is_moved(board_page: Path)
 def test_board_card_text_for_identity_and_markdown_ignores_inserted_controls(board_page: Path) -> None:
     out = run(
         board_page,
-        ev("document.querySelector('#triage li[data-id=login-bug] select').closest('li').childNodes[0].textContent.trim()", "own_text"),
+        ev("document.querySelector('#triage li[data-id=login-bug]').childNodes[0].textContent.trim()", "own_text"),
         {"focus": "#triage > section:nth-of-type(3) > ul > li:nth-of-type(2)"},
         {"press": "Alt+ArrowLeft"},
         ev(LAYOUT, "layout"),
@@ -3205,7 +3203,9 @@ def test_board_page_has_no_errors_or_page_scroll(board_page: Path, scheme: str, 
             })()""",
             "inside",
         ),
-        {"select": {"selector": f"{CARD} select", "label": "Later"}},
+        {"focus": CARD},
+        {"press": "Alt+ArrowRight"},
+        {"press": "Alt+ArrowRight"},
         ev("document.documentElement.scrollWidth <= document.documentElement.clientWidth", "fits_after_move"),
         viewport={"width": width, "height": 800},
         colorScheme=scheme,
@@ -3225,6 +3225,28 @@ def test_board_columns_sit_side_by_side_wide_and_stack_narrow(board_page: Path) 
     assert narrow["results"]["tops"] == sorted(narrow["results"]["tops"]) and len(set(narrow["results"]["tops"])) == 4
 
 
+@pytest.mark.parametrize("width", [1280, 2000])
+def test_board_columns_together_fill_the_board_width(board_page: Path, width: int) -> None:
+    out = run(
+        board_page,
+        ev(
+            """(() => {
+              const board = document.querySelector('#triage').getBoundingClientRect();
+              const cols = [...document.querySelectorAll('#triage > section')].map((s) => s.getBoundingClientRect());
+              return {
+                left: Math.round(cols[0].left - board.left),
+                right: Math.round(board.right - cols[cols.length - 1].right),
+                oneRow: new Set(cols.map((r) => Math.round(r.top))).size === 1,
+              };
+            })()""",
+            "fill",
+        ),
+        viewport={"width": width, "height": 800},
+    )
+    assert_clean(out)
+    assert out["results"]["fill"] == {"left": 0, "right": 0, "oneRow": True}
+
+
 def test_board_empty_column_is_a_usable_drop_target(board_page: Path) -> None:
     out = run(board_page, ev("document.querySelector('#triage > section:nth-of-type(4) > ul').getBoundingClientRect().height", "height"))
     assert_clean(out)
@@ -3239,7 +3261,6 @@ def test_board_print_hides_the_controls_but_keeps_every_card(board_page: Path) -
               const shown = (sel) => [...document.querySelectorAll(sel)].some((n) => getComputedStyle(n).display !== 'none');
               return {
                 bar: shown('#triage > [data-q-kit]:not([data-q-announce])'),
-                selects: shown('#triage select'),
                 handles: shown('#triage [data-q-handle]'),
                 cards: [...document.querySelectorAll('#triage li')].every((li) => li.innerText.trim().length > 0 && li.getBoundingClientRect().height > 0),
                 headings: [...document.querySelectorAll('#triage h3')].every((h) => h.getBoundingClientRect().height > 0),
@@ -3250,7 +3271,7 @@ def test_board_print_hides_the_controls_but_keeps_every_card(board_page: Path) -
         media="print",
     )
     assert_clean(out)
-    assert out["results"]["print"] == {"bar": False, "selects": False, "handles": False, "cards": True, "headings": True}
+    assert out["results"]["print"] == {"bar": False, "handles": False, "cards": True, "headings": True}
 
 
 def test_board_print_hides_the_export_box_too(board_page: Path) -> None:
@@ -3613,3 +3634,186 @@ def test_chart_names_the_columns_it_skipped_when_choosing_series(tmp_path: Path)
     }
     assert views["clean"] == {"id": "clean", "note": None, "labels": ["A", "B"]}
     assert views["named"]["note"] is None and views["named"]["labels"] == ["A"]
+
+
+# --- highlighting -------------------------------------------------------------------------------
+
+HIGHLIGHT_SRC = (
+    HEADER
+    + """<q-code id="by-ext" filename="retry.py">
+  <pre><code>def fetch(url):
+    # three attempts
+    return get(url, retries=3)</code></pre>
+</q-code>
+
+<q-code id="by-attr" filename="notes.txt" language="json">
+  <pre><code>{"max_attempts": 3}</code></pre>
+</q-code>
+
+<q-code id="plain" language="not-a-language">
+  <pre><code>make test</code></pre>
+</q-code>
+
+<q-diff id="hdiff">
+  <pre>--- a/config/payments.yaml
++++ b/config/payments.yaml
+@@ -1,2 +1,2 @@
+ provider: adyen
+-max_attempts: 3
++max_attempts: 0</pre>
+</q-diff>
+"""
+)
+
+HIGHLIGHT_LIB = 'data-quirk-lib="highlightjs@'
+
+
+@pytest.fixture(scope="module")
+def highlight_page(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    reason = _node_ready()
+    if reason:
+        pytest.skip(reason)
+    work = tmp_path_factory.mktemp("kit-highlight")
+    src = work / "highlight.src.html"
+    src.write_text(HIGHLIGHT_SRC, encoding="utf-8")
+    page = _build(src, work / "highlight.html")
+    _run_harness({"file": str(page)})
+    return page
+
+
+def test_highlight_js_is_inlined_only_for_code_and_diff(highlight_page: Path, board_page: Path) -> None:
+    assert HIGHLIGHT_LIB in highlight_page.read_text(encoding="utf-8")
+    assert HIGHLIGHT_LIB not in board_page.read_text(encoding="utf-8")
+
+
+def test_code_highlights_by_extension_or_language_and_keeps_the_authored_text(highlight_page: Path) -> None:
+    out = run(
+        highlight_page,
+        ev(
+            """['by-ext', 'by-attr', 'plain'].map((id) => {
+              const host = document.getElementById(id);
+              const view = host.querySelector(':scope > pre[data-q-kit]');
+              const authored = host.querySelector(':scope > pre:not([data-q-kit])');
+              return {
+                language: view && view.getAttribute('data-q-highlight'),
+                tokens: view ? view.querySelectorAll('[class^="hljs-"]').length > 0 : false,
+                same: view ? view.textContent === authored.textContent : null,
+                authoredShown: getComputedStyle(authored).display !== 'none',
+              };
+            })""",
+            "codes",
+        ),
+    )
+    assert_clean(out)
+    by_ext, by_attr, plain = out["results"]["codes"]
+    assert by_ext == {"language": "py", "tokens": True, "same": True, "authoredShown": False}
+    assert by_attr == {"language": "json", "tokens": True, "same": True, "authoredShown": False}
+    assert plain == {"language": None, "tokens": False, "same": None, "authoredShown": True}
+
+
+def test_code_copy_copies_the_authored_text_when_highlighted(highlight_page: Path) -> None:
+    out = run(
+        highlight_page,
+        {"click": "#by-ext button"},
+        {"waitFor": "document.querySelector('#by-ext button').textContent.trim() === 'Copied'"},
+        ev("window.__copied", "copied"),
+        initScripts=[STUB_CLIPBOARD],
+    )
+    assert_clean(out)
+    assert out["results"]["copied"] == "def fetch(url):\n    # three attempts\n    return get(url, retries=3)"
+
+
+def test_diff_highlights_each_line_by_the_file_extension(highlight_page: Path) -> None:
+    out = run(
+        highlight_page,
+        ev(
+            """[...document.querySelectorAll('#hdiff [data-q-code]')].map((td) => ({
+              text: td.textContent,
+              tokens: td.querySelectorAll('[class^="hljs-"]').length > 0,
+            }))""",
+            "rows",
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["rows"] == [
+        {"text": " provider: adyen", "tokens": True},
+        {"text": "-max_attempts: 3", "tokens": True},
+        {"text": "+max_attempts: 0", "tokens": True},
+    ]
+
+
+@pytest.mark.parametrize("scheme", SCHEMES)
+def test_highlight_token_colours_beat_the_page_stylesheet(highlight_page: Path, scheme: str) -> None:
+    out = run(
+        highlight_page,
+        ev(
+            """(() => {
+              const probe = document.createElement('span');
+              probe.style.color = 'var(--q-color-syntax-name)';
+              document.body.appendChild(probe);
+              const want = getComputedStyle(probe).color;
+              probe.remove();
+              const code = document.querySelector('#by-attr pre[data-q-kit] .hljs-attr');
+              const diff = document.querySelector('#hdiff .hljs-attr');
+              return { code: getComputedStyle(code).color === want, diff: getComputedStyle(diff).color === want };
+            })()""",
+            "colours",
+        ),
+        colorScheme=scheme,
+    )
+    assert_clean(out)
+    assert out["results"]["colours"] == {"code": True, "diff": True}
+
+
+def test_diff_without_long_lines_does_not_scroll_sideways(highlight_page: Path) -> None:
+    out = run(
+        highlight_page,
+        ev(
+            """(() => {
+              const view = document.querySelector('#hdiff > [data-q-diff]');
+              return view.scrollWidth <= view.clientWidth;
+            })()""",
+            "fits",
+        ),
+        viewport={"width": 1600, "height": 800},
+    )
+    assert_clean(out)
+    assert out["results"]["fits"] is True
+
+
+# --- report layout ---------------------------------------------------------------------------------
+
+
+def test_report_uses_wide_screens_and_keeps_the_aside_in_view(tmp_path: Path) -> None:
+    reason = _node_ready()
+    if reason:
+        pytest.skip(reason)
+    filler = "\n".join(f"<p>Paragraph {i} of the report body, long enough to wrap at the prose measure.</p>" for i in range(60))
+    src = tmp_path / "wide.src.html"
+    src.write_text(
+        HEADER + filler + "\n<!-- slot: aside -->\n<aside aria-label=\"About these numbers\"><p>Sample data.</p></aside>\n",
+        encoding="utf-8",
+    )
+    page = _build(src, tmp_path / "wide.html")
+    out = run(
+        page,
+        ev("(window.scrollTo({ top: 2000, behavior: 'instant' }), window.scrollY > 1000)", "scrolled"),
+        ev(
+            """(() => {
+              const main = document.querySelector('main').getBoundingClientRect();
+              const p = document.querySelector('main p').getBoundingClientRect();
+              const aside = document.querySelector('aside').getBoundingClientRect();
+              return {
+                wideMain: main.width > 960,
+                proseCapped: p.width < main.width,
+                asideInView: aside.top >= 0 && aside.top < window.innerHeight,
+                fits: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+              };
+            })()""",
+            "layout",
+        ),
+        viewport={"width": 2000, "height": 900},
+    )
+    assert_clean(out)
+    assert out["results"]["scrolled"] is True
+    assert out["results"]["layout"] == {"wideMain": True, "proseCapped": True, "asideInView": True, "fits": True}

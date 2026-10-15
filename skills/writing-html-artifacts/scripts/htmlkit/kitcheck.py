@@ -27,6 +27,7 @@ from .vendor import VendorError, VendorStore
 
 KIT_TAG = re.compile(r"<q-[a-z]", re.IGNORECASE)
 CHART_TAG = re.compile(r"<q-chart[\s/>]", re.IGNORECASE)
+CODE_TAG = re.compile(r"<q-(?:code|diff)[\s/>]", re.IGNORECASE)
 
 KNOWN_RULES = frozenset({"max-series", "diff-notes", "heading-sections", "board-columns", "timeline-items"})
 ATTRIBUTE_KINDS = ("text", "enum", "boolean", "number-list", "integer", "ident")
@@ -79,6 +80,14 @@ def needs(text: str) -> tuple[bool, bool]:
     kit in, and ``&lt;q-chart`` (escaped, so not markup) does not.
     """
     return bool(KIT_TAG.search(text)), bool(CHART_TAG.search(text))
+
+
+def needs_highlight(text: str) -> bool:
+    """Report whether ``text`` uses ``<q-code>`` or ``<q-diff>``, which highlight with highlight.js.
+
+    The scan is textual, like ``needs``.
+    """
+    return bool(CODE_TAG.search(text))
 
 
 def load_catalog(store: VendorStore, version: Optional[str]) -> Catalog:

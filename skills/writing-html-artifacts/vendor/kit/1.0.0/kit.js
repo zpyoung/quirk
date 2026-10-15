@@ -512,12 +512,43 @@
   var COPY_NOTICE = 'Press Ctrl+C (⌘C on Mac) to copy';
 
   /**
-   * q-code: adds a header bar with the optional filename and a Copy button above the <pre>.
-   * When the clipboard refuses, the code is selected and the reader is told to copy by hand.
+   * The highlight.js language for an explicit language name, else for a file name's extension (or
+   * the whole name, as in Makefile). Null when highlight.js is not on the page or knows neither, so
+   * callers fall back to plain text.
+   */
+  function codeLanguage(language, filename) {
+    var hljs = window.hljs;
+    if (!hljs || typeof hljs.highlight !== 'function' || typeof hljs.getLanguage !== 'function') {
+      return null;
+    }
+    var name = (language || '').trim().toLowerCase();
+    if (!name && filename) {
+      var base = filename.trim().split('/').pop().toLowerCase();
+      var dot = base.lastIndexOf('.');
+      name = dot > 0 ? base.slice(dot + 1) : base;
+    }
+    return name && hljs.getLanguage(name) ? name : null;
+  }
+
+  /** Fills node with text highlighted as language. highlight.js escapes the text it is given. */
+  function highlightInto(node, text, language) {
+    try {
+      node.innerHTML = window.hljs.highlight(text, { language: language, ignoreIllegals: true }).value;
+    } catch (error) {
+      node.textContent = text;
+    }
+  }
+
+  /**
+   * q-code: adds a header bar with the optional filename and a Copy button above the <pre>. When
+   * highlight.js is on the page and the language attribute or the filename's extension names a
+   * language it knows, a highlighted copy, carrying the <pre>'s classes, replaces it on screen; Copy
+   * still copies the authored text. When the clipboard refuses, the code is selected and the reader is told to copy
+   * by hand.
    */
   class QCode extends HTMLElement {
     static get observedAttributes() {
-      return ['filename'];
+      return ['filename', 'language'];
     }
 
     connectedCallback() {
@@ -549,9 +580,11 @@
       var pre = this.querySelector('pre');
       removeKitChildren(this);
       this._bar = null;
+      this._view = null;
       if (!pre) {
         return;
       }
+      pre.removeAttribute('data-q-replaced');
       var self = this;
       var bar = kitNode('div');
       bar.setAttribute('data-q-bar', '');
@@ -573,6 +606,20 @@
       this._bar = bar;
       this._button = button;
       this._status = status;
+      var source = this._source();
+      var language = source ? codeLanguage(this.getAttribute('language'), filename) : null;
+      if (language) {
+        var view = kitNode('pre');
+        view.className = pre.className;
+        view.setAttribute('data-q-highlight', language);
+        var code = document.createElement('code');
+        code.className = 'hljs';
+        highlightInto(code, source.textContent, language);
+        view.appendChild(code);
+        this.insertBefore(view, pre);
+        pre.setAttribute('data-q-replaced', '');
+        this._view = view;
+      }
       this.insertBefore(bar, this.firstChild);
     }
 
@@ -601,7 +648,7 @@
         }, 2000);
       };
       var blocked = function () {
-        self._selectText(source);
+        self._selectText(self._view || source);
         self._say(COPY_NOTICE, 10000);
       };
       var pending;
@@ -792,9 +839,10 @@
   }
 
   /**
-   * q-table: wraps a real table. Each header gets a sort button, numeric columns (th.num) sort by
-   * value, tables past twelve rows get a filter box, and the element itself scrolls sideways.
-   * With data-from it fills a generated tbody from quirkData().
+   * q-table: wraps a real table. Each header gets a sort button that cycles ascending, descending
+   * and back to the authored order. Numeric columns (th.num) sort by value, tables past twelve rows
+   * get a filter box, and the element itself scrolls sideways. With data-from it fills a generated
+   * tbody from quirkData().
    */
   class QTable extends HTMLElement {
     static get observedAttributes() {
@@ -943,8 +991,32 @@
       button.addEventListener('click', function () {
         var column = columnStart(th);
         var sort = self._sort;
-        self._sort = sort && sort.column === column ? { column: column, dir: -sort.dir } : { column: column, dir: 1 };
+        if (sort && sort.column === column && sort.dir < 0) {
+          self._sort = null;
+          self._restoreOrder();
+        } else {
+          self._sort = sort && sort.column === column ? { column: column, dir: -1 } : { column: column, dir: 1 };
+        }
         self._render();
+      });
+    }
+
+    /** Puts every body's rows back in the order they had before the first sort. */
+    _restoreOrder() {
+      var table = this._table();
+      if (!table) {
+        return;
+      }
+      this._bodies(table).forEach(function (body) {
+        var rows = Array.prototype.slice.call(body.rows);
+        var original = rows.slice().sort(function (a, b) {
+          return (rowOrder.get(a) || Number.MAX_SAFE_INTEGER) - (rowOrder.get(b) || Number.MAX_SAFE_INTEGER);
+        });
+        if (!sameOrder(rows, original)) {
+          original.forEach(function (tr) {
+            body.appendChild(tr);
+          });
+        }
       });
     }
 
@@ -1750,7 +1822,7 @@
     return cell;
   }
 
-  function diffLineRow(row) {
+  function diffLineRow(row, language) {
     var tr = document.createElement('tr');
     tr.className = 'q-diff-' + row.kind;
     tr.appendChild(diffCell('td', 'data-q-old', row.oldNo === undefined ? '' : String(row.oldNo)));
@@ -1761,7 +1833,13 @@
     marker.className = 'q-diff-marker';
     marker.textContent = DIFF_MARKERS[row.kind];
     code.appendChild(marker);
-    code.appendChild(document.createTextNode(row.text));
+    if (language) {
+      var text = document.createElement('span');
+      highlightInto(text, row.text, language);
+      code.appendChild(text);
+    } else {
+      code.appendChild(document.createTextNode(row.text));
+    }
     tr.appendChild(code);
     return tr;
   }
@@ -1788,7 +1866,8 @@
 
   /**
    * q-diff: renders the wrapped <pre> of unified diff text as a table with file headers, +/- rows
-   * and old/new line numbers, and puts each q-diff-note under its new-side line. The <pre> and the
+   * and old/new line numbers, and puts each q-diff-note under its new-side line. Code is
+   * highlighted per line by each file's extension when highlight.js is on the page. The <pre> and the
    * placed notes are only marked data-q-replaced, never removed, and only once the view exists. A
    * note that matches no line stays visible in place.
    */
@@ -1831,6 +1910,7 @@
       var body = document.createElement('tbody');
       table.appendChild(body);
       var anchors = {};
+      var languages = {};
       rows.forEach(function (row) {
         var tr;
         if (row.kind === 'file') {
@@ -1838,7 +1918,10 @@
         } else if (row.kind === 'hunk' || row.kind === 'meta') {
           tr = diffRow(row.kind, diffSpanningCell('td', row.text));
         } else {
-          tr = diffLineRow(row);
+          if (!(row.file in languages)) {
+            languages[row.file] = codeLanguage('', row.file);
+          }
+          tr = diffLineRow(row, languages[row.file]);
           var key = row.file + '\n' + row.newNo;
           if (row.newNo !== undefined && row.file !== null && !anchors[key]) {
             anchors[key] = tr;
@@ -1927,9 +2010,9 @@
   }
 
   /**
-   * q-board: direct-child sections are columns of cards. Cards move by pointer drag, by Alt plus
-   * the arrow keys, and by a "Move to..." select on each card. The layout is saved to
-   * localStorage under the page slug and board id, and dropped when the authored cards change.
+   * q-board: direct-child sections are columns of cards. Cards move by pointer drag (mouse and
+   * touch) and by Alt plus the arrow keys. The layout is saved to localStorage under the page slug
+   * and board id, and dropped when the authored cards change.
    */
   class QBoard extends HTMLElement {
     static get observedAttributes() {
@@ -1958,7 +2041,6 @@
     attributeChangedCallback(name, previous, value) {
       if (this._ready && previous !== value && this.isConnected) {
         this._loadSaved();
-        this._syncControls();
         this._syncNote();
       }
     }
@@ -2025,16 +2107,10 @@
         handle.setAttribute('data-q-handle', '');
         handle.setAttribute('aria-hidden', 'true');
         card.appendChild(handle);
-        var select = kitNode('select');
-        select.setAttribute('data-q-move', '');
-        card.appendChild(select);
       });
 
       this.addEventListener('keydown', function (event) {
         self._onKey(event);
-      });
-      this.addEventListener('change', function (event) {
-        self._onSelect(event);
       });
       this.addEventListener('pointerdown', function (event) {
         self._onPointerDown(event);
@@ -2043,7 +2119,6 @@
       this._probeStorage();
       this._buildBar();
       this._loadSaved();
-      this._syncControls();
       this._syncNote();
     }
 
@@ -2097,37 +2172,6 @@
         return;
       }
       this._note.textContent = !this.getAttribute('id') ? BOARD_NO_ID : this._blocked ? BOARD_BLOCKED : BOARD_SAVED;
-    }
-
-    _syncControls() {
-      var self = this;
-      this._byId.forEach(function (card) {
-        var select = card.querySelector(':scope > select[data-q-move]');
-        if (!select) {
-          return;
-        }
-        var here = self._cols.findIndex(function (col) {
-          return col.list === card.parentNode;
-        });
-        var name = boardName(boardCardText(card));
-        select.setAttribute('aria-label', 'Move "' + name + '" to…');
-        while (select.firstChild) {
-          select.removeChild(select.firstChild);
-        }
-        var prompt = document.createElement('option');
-        prompt.value = '';
-        prompt.textContent = 'Move to…';
-        select.appendChild(prompt);
-        self._cols.forEach(function (col, ci) {
-          if (ci !== here) {
-            var option = document.createElement('option');
-            option.value = String(ci);
-            option.textContent = self._columnName(ci);
-            select.appendChild(option);
-          }
-        });
-        select.value = '';
-      });
     }
 
     /* storage */
@@ -2246,7 +2290,6 @@
     _reset() {
       this._place(this._authored);
       this._forget();
-      this._syncControls();
       this._hideExport();
       this._announce('Layout reset to the authored order.');
     }
@@ -2289,7 +2332,6 @@
       if (active && card.contains(active) && document.activeElement !== active) {
         active.focus({ preventScroll: true });
       }
-      this._syncControls();
       this._save();
       var name = boardName(boardCardText(card));
       var position = (at + 1) + ' of ' + (others.length + 1);
@@ -2327,19 +2369,6 @@
           return;
         }
         this._move(card, here.col, to);
-      }
-    }
-
-    _onSelect(event) {
-      var select = event.target;
-      if (!select || !select.matches || !select.matches('select[data-q-move]') || select.value === '') {
-        return;
-      }
-      var card = select.parentNode;
-      var ci = Number(select.value);
-      select.value = '';
-      if (this._ids.has(card) && ci >= 0 && ci < this._cols.length) {
-        this._move(card, ci, boardCards(this._cols[ci].list).length);
       }
     }
 
