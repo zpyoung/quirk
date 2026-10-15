@@ -119,6 +119,7 @@ def _context(value):
         "expected_user_id": expected_user_id, "expected_username": expected_username,
         "expected_head": expected_head, "expected_base": expected_base,
         "expected_start": expected_start,
+        "seat_source": change.get("seat_source", "detected"),
     }
 
 
@@ -127,9 +128,10 @@ def _revalidate(ctx):
     if str(user["id"]) != str(ctx["expected_user_id"]) or user["username"] != ctx["expected_username"]:
         raise ReviewError("authenticated GitLab identity changed since the review was prepared")
     data, refs, author = _mr(ctx["host"], ctx["project"], ctx["number"])
-    author_id = _positive_int(author.get("id"), "MR author id")
-    if str(author_id) == str(user["id"]):
-        raise ReviewError("MR author now matches the authenticated user; reviewer delivery is blocked")
+    author_id = _positive_int(author.get("id"), "change author id")
+    # a reviewer seat the user chose on a co-authored change is allowed on their own change
+    if str(author_id) == str(user["id"]) and ctx.get("seat_source") != "chosen":
+        raise ReviewError("change author now matches the authenticated user; reviewer delivery is blocked")
     return data, refs
 
 
@@ -455,6 +457,7 @@ def stage(args):
         state = {
             "schema": SCHEMA, "host": ctx["host"], "project": ctx["project"], "number": ctx["number"],
             "expected_user_id": ctx["expected_user_id"], "expected_username": ctx["expected_username"],
+            "seat_source": ctx["seat_source"],
             "report_head_sha": ctx["expected_head"], "publish_head_sha": live_refs["head_sha"],
             "diff_refs": live_refs, "report_sha256": _report_digest(raw_report),
             "created": [], "preview": notes, "omitted": omitted,
@@ -543,7 +546,8 @@ def _state_context(state):
             "expected_username": username,
             "expected_head": _valid_sha(state.get("publish_head_sha"), "publish_head_sha"),
             "expected_base": _valid_sha(refs.get("base_sha"), "diff_refs.base_sha"),
-            "expected_start": _valid_sha(refs.get("start_sha"), "diff_refs.start_sha")}
+            "expected_start": _valid_sha(refs.get("start_sha"), "diff_refs.start_sha"),
+            "seat_source": state.get("seat_source", "detected")}
 
 
 _FINDING_KINDS = ("inline", "reply")

@@ -203,6 +203,7 @@ def test_decision_branch_gitlab_first(tmp_path):
             "source_branch": "feature", "target_branch": "main", "sha": "a" * 40,
             "base_sha": "b" * 40, "start_sha": "c" * 40}
         m.current_user = lambda forge: {"id": 10, "username": "me"}
+        m.commit_authors = lambda forge, number: []
         m.git_diff_branch = lambda *a, **k: "SHOULD_NOT_BE_USED"
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -315,6 +316,7 @@ def test_empty_gitlab_diff_recovered_from_git(tmp_path):
             "number": 15, "state": "opened", "open": True, "author_id": 1, "author_username": "author",
             "sha": "a" * 40, "base_sha": "b" * 40, "start_sha": "c" * 40}
         m.current_user = lambda forge: {"id": 1, "username": "author"}
+        m.commit_authors = lambda forge, number: []
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             assert m.main(["--forge", "gitlab", "--change", "15", "--out", str(out)]) == 0
@@ -565,6 +567,7 @@ def test_empty_gitlab_diff_unavailable_is_not_rendered(tmp_path):
             "number": 16, "state": "opened", "open": True, "author_id": 1, "author_username": "author",
             "sha": "a" * 40, "base_sha": "b" * 40, "start_sha": "c" * 40}
         m.current_user = lambda forge: {"id": 1, "username": "author"}
+        m.commit_authors = lambda forge, number: []
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             assert m.main(["--forge", "gitlab", "--change", "16", "--out", str(out)]) == 0
@@ -1148,6 +1151,7 @@ def test_mr_snapshot_race_blocks_seat_and_output(tmp_path):
         m.change_details = lambda *args: {"number": 42, "state": "opened", "open": True, "sha": "d" * 40,
                                                    "author_id": 1, "author_username": "other"}
         m.current_user = lambda forge: {"id": 2, "username": "me"}
+        m.commit_authors = lambda forge, number: []
         buf = io.StringIO()
         with contextlib.redirect_stderr(buf):
             rc = m.main(["--forge", "gitlab", "--change", "42", "--out", str(out)])
@@ -1190,6 +1194,7 @@ def test_mr_target_movement_between_reads_blocks_seat_and_output(tmp_path):
                                            "base_sha": "b" * 40, "start_sha": "e" * 40,
                                            "author_id": 1, "author_username": "other"}
         m.current_user = lambda forge: {"id": 2, "username": "me"}
+        m.commit_authors = lambda forge, number: []
         buf = io.StringIO()
         with contextlib.redirect_stderr(buf):
             rc = m.main(["--forge", "gitlab", "--change", "42", "--out", str(out)])
@@ -1215,6 +1220,7 @@ def test_mr_details_without_base_start_refs_blocks_seat(tmp_path):
         m.change_details = lambda *args: {"number": 42, "state": "opened", "open": True, "sha": "a" * 40,
                                            "author_id": 1, "author_username": "other"}
         m.current_user = lambda forge: {"id": 2, "username": "me"}
+        m.commit_authors = lambda forge, number: []
         buf = io.StringIO()
         with contextlib.redirect_stderr(buf):
             rc = m.main(["--forge", "gitlab", "--change", "42", "--out", str(out)])

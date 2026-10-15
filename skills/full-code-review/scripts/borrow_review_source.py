@@ -152,12 +152,28 @@ def _add_worktree(repo_root, number, expected_head, worktree, shallow=False):
     return review_ref
 
 
+def probe_refusal(context):
+    """Why the mutation probe may not run on this change, or None when it may.
+
+    The probe executes the change's code, so it never runs on a fork or on an author the
+    forge does not mark as trusted.
+    """
+    change = context.get("change") if isinstance(context.get("change"), dict) else {}
+    if change.get("is_fork") is not False:
+        return "the change comes from a fork (or its origin is unknown)"
+    if change.get("author_trusted") is not True:
+        return "the change author is not a trusted member of the repository"
+    return None
+
+
 def acquire(args):
     try:
         context = _load(args.context)
         host, project, number, head = _validate_context(context)
     except Exception as exc:
         return _error(exc)
+    refusal = probe_refusal(context) if args.allow_mutation_probe else None
+    mutation_consent = bool(args.allow_mutation_probe) and refusal is None
 
     if args.diff_only:
         manifest = {
@@ -206,9 +222,11 @@ def acquire(args):
         "number": number,
         "cleanup_root": cleanup_root,
         "cleanup_token": token,
-        "mutation_consent": bool(args.allow_mutation_probe),
+        "mutation_consent": mutation_consent,
         "acquisition": "creating",
     }
+    if refusal:
+        manifest["mutation_refused"] = refusal
     # Persist cleanup coordinates before git owns the worktree path. An interrupted
     # acquisition can still be released safely with this manifest.
     _write(args.out, manifest)

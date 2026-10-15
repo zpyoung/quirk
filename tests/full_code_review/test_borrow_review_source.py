@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "skills", "full-code-review", "scripts"))
 import borrow_review_source as m  # noqa: E402
 
@@ -38,7 +40,8 @@ def fixture(tmp_path):
     project = "group/project"
     context = {
         "seat": "reviewer", "refs": {"base": "b" * 40, "start": "c" * 40, "head": head},
-        "change": {"number": 7, "host": "gitlab.example", "project": project, "sha": head},
+        "change": {"number": 7, "host": "gitlab.example", "project": project, "sha": head,
+                   "is_fork": False, "author_trusted": True},
     }
     ctx_path = tmp_path / "context.json"
     ctx_path.write_text(json.dumps(context))
@@ -150,3 +153,26 @@ def test_temp_clone_command_is_shallow_and_host_pinned(tmp_path):
         assert repo.endswith("/repo")
     finally:
         m._run = old
+
+
+@pytest.mark.parametrize("fields, reason", [
+    ({"is_fork": True, "author_trusted": True}, "fork"),
+    ({"is_fork": False, "author_trusted": None}, "trusted"),
+    ({}, "fork"),
+])
+def test_mutation_probe_is_refused_for_forks_and_untrusted_authors(tmp_path, fields, reason):
+    local, context, _ = fixture(tmp_path)
+    value = json.loads(context.read_text())
+    for key in ("is_fork", "author_trusted"):
+        value["change"].pop(key, None)
+    value["change"].update(fields)
+    context.write_text(json.dumps(value))
+    out = tmp_path / "manifest.json"
+    rc, manifest = invoke(["acquire", "--context", str(context), "--repo", str(local),
+                           "--out", str(out), "--allow-mutation-probe"])
+    try:
+        assert rc == 0
+        assert manifest["mutation_consent"] is False
+        assert reason in manifest["mutation_refused"]
+    finally:
+        invoke(["release", "--manifest", str(out)])

@@ -108,6 +108,9 @@ def mr_details(run, host, project, iid):
         "base_sha": refs.get("base_sha"),
         "start_sha": refs.get("start_sha"),
         "web_url": data.get("web_url"),
+        "is_fork": (data.get("source_project_id") is not None and data.get("target_project_id") is not None
+                    and data.get("source_project_id") != data.get("target_project_id")),
+        "author_trusted": None,
     }
 
 
@@ -120,9 +123,35 @@ def current_user(run, host):
         data = json.loads(r.stdout)
         if not isinstance(data, dict) or not data.get("id") or not data.get("username"):
             return None
-        return {"id": data["id"], "username": data["username"]}
+        emails = [data.get(k) for k in ("email", "commit_email", "public_email") if data.get(k)]
+        return {"id": data["id"], "username": data["username"], "emails": emails}
     except Exception:
         return None
+
+
+def commit_authors(run, host, project, iid):
+    """Return [{username: None, email}] for every commit on the MR, or None on failure.
+
+    GitLab commit records carry author emails, not usernames, so callers match them
+    against the viewer's own emails.
+    """
+    authors = []
+    for page in range(1, 21):
+        endpoint = "projects/%s/merge_requests/%s/commits?per_page=100&page=%d" % (
+            quote(project, safe=""), iid, page)
+        try:
+            r = run(["glab", "api", "--hostname", host, endpoint], timeout=60)
+            if r.returncode != 0:
+                return None
+            data = json.loads(r.stdout or "[]")
+        except Exception:
+            return None
+        if not isinstance(data, list):
+            return None
+        authors.extend({"username": None, "email": c.get("author_email")} for c in data if isinstance(c, dict))
+        if len(data) < 100:
+            return authors
+    return None
 
 
 def find_mr_for_branch(run, branch, project, host=None):
@@ -395,6 +424,9 @@ class GitLabForge:
 
     def current_user(self):
         return current_user(self._run, self.host)
+
+    def commit_authors(self, number):
+        return commit_authors(self._run, self.host, self.project, number)
 
     def find_change_for_branch(self, branch):
         return find_mr_for_branch(self._run, branch, self.project, self.host)

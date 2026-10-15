@@ -964,3 +964,19 @@ def test_plan_omits_findings_below_the_default_floor():
     assert [item["finding_id"] for item in posted] == ["F1"]
     assert omitted == [{"id": "F2", "reason": "below the posting floor (Should fix)",
                         "disposition": "Non-blocking", "fingerprint": None}]
+
+
+@pytest.mark.parametrize("seat_source, staged", [("chosen", True), ("detected", False)])
+def test_reviewer_seat_on_own_change_is_allowed_only_when_chosen(tmp_path, seat_source, staged):
+    fake = FakeGitLab()
+    fake.user = {"id": 1, "username": "author"}
+    paths = files(tmp_path)
+    ctx = context()
+    ctx["change"].update({"current_user_id": 1, "current_username": "author", "seat_source": seat_source})
+    paths["context"].write_text(json.dumps(ctx))
+    with with_fake(fake):
+        rc, state = invoke(m.stage, stage_args(paths))
+    if staged:
+        assert rc == 0 and state["staged"] is True and state["seat_source"] == "chosen"
+    else:
+        assert rc == 2 and "author now matches" in state["error"]

@@ -632,6 +632,33 @@ def current_user(forge):
     return forge.current_user()
 
 
+def commit_authors(forge, number):
+    """Return [{username, email}] for the change's commits, or None when unresolvable."""
+    return forge.commit_authors(number)
+
+
+def _is_viewer(commit, viewer):
+    username = (commit.get("username") or "").casefold()
+    email = (commit.get("email") or "").casefold()
+    if username and username == str(viewer.get("username") or "").casefold():
+        return True
+    return bool(email) and email in {e.casefold() for e in viewer.get("emails") or [] if e}
+
+
+def mixed_authorship(seat, viewer, commits):
+    """Whether someone besides the change author also committed, from the viewer's side.
+
+    True when the viewer authored the change and another identity has commits on it, or
+    the viewer did not author it but has commits on it. None when commits are unknown.
+    """
+    if commits is None:
+        return None
+    mine = sum(1 for commit in commits if _is_viewer(commit, viewer))
+    if seat == "author":
+        return mine < len(commits)
+    return mine > 0
+
+
 def detect_seat(author_username, current_username, author_id=None, current_id=None):
     """Classify a change request as author or reviewer without a user-configurable override."""
     if author_id is not None and current_id is not None:
@@ -762,6 +789,7 @@ def main(argv=None):
     g.add_argument("--local", action="store_true")
     ap.add_argument("--target-branch")
     ap.add_argument("--forge", choices=("github", "gitlab", "none"))
+    ap.add_argument("--seat", choices=("author", "reviewer"))
     ap.add_argument("--host")
     ap.add_argument("-R", "--project")
     ap.add_argument("--context-lines", type=int, default=3)
@@ -867,6 +895,16 @@ def main(argv=None):
             identity_error = "change author identity is incomplete; seat detection is unsafe"
         if identity_error:
             return _fail(args.out, mode, identity_error, seat="unknown")
+        mixed = mixed_authorship(detected, viewer, commit_authors(forge, number))
+        seat_source = "detected"
+        if mixed:
+            if not args.seat:
+                return _fail(args.out, mode,
+                             "%s has commits from both you and another author; rerun with "
+                             "--seat author or --seat reviewer" % label, seat="ambiguous")
+            detected, seat_source = args.seat, "chosen"
+        elif args.seat:
+            return _fail(args.out, mode, "--seat is only accepted when authorship is mixed")
         seat = detected
         change = dict(change or {})
         change.update({
@@ -883,6 +921,11 @@ def main(argv=None):
             "current_user_id": viewer.get("id"),
             "current_username": viewer.get("username"),
             "seat": seat,
+            "seat_source": seat_source,
+            "mixed_authorship": mixed,
+            "is_fork": bool(details.get("is_fork")),
+            "author_trusted": True if details.get("author_id") == viewer.get("id") and details.get("author_id") is not None
+                              else details.get("author_trusted"),
         })
         if details.get("target_branch"):
             target = details["target_branch"]
