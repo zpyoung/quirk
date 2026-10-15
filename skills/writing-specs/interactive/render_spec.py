@@ -71,12 +71,23 @@ UNSAFE_OBJECT_IDS = frozenset(
 
 OPEN_ASK_RE = re.compile(r"\[ASK: ([^\[\]\n]+)\]")
 ASK_LOOKALIKE_RE = re.compile(r"\[\s*ask\b", re.IGNORECASE)
-EXAMPLE_KEYS = ("before", "steps", "after")
+EXAMPLE_KEYS = ("before", "steps", "after", "details")
+DATA_STATE_KEYS = ("before", "steps", "after")
+DATA_STATE_LABELS = ("data before", "walkthrough", "data after")
+DETAILS_TITLE_FORBIDDEN = re.compile(r"[\n\r*_`\[\]<>]")
 MALFORMED_ASK_MESSAGE = "malformed [ASK] marker; write [ASK: <question>]"
 
 
 def _example_parts(example: dict) -> List[str]:
-    return [example["before"], *example["steps"], example["after"]]
+    """Every text part of an example in reading order: before, steps, after, then the details body."""
+    parts: List[str] = []
+    if "before" in example:
+        parts.append(example["before"])
+        parts.extend(example["steps"])
+        parts.append(example["after"])
+    if "details" in example:
+        parts.append(example["details"]["body"])
+    return parts
 
 
 def scenario_open_asks(scenario: dict) -> List[str]:
@@ -87,20 +98,64 @@ def scenario_open_asks(scenario: dict) -> List[str]:
     return [match.group(1) for part in _example_parts(example) for match in OPEN_ASK_RE.finditer(part)]
 
 
+def _normalized_lines(text: str) -> List[str]:
+    return text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+
 def _example_part_lines(first_prefix: str, indent: str, text: str) -> List[str]:
-    rows = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    rows = _normalized_lines(text)
     lines = [first_prefix + rows[0]] + [indent + row for row in rows[1:]]
     return [line + "  " for line in lines[:-1]] + lines[-1:]
 
 
 def _example_markdown_lines(example: dict) -> List[str]:
-    """Sub-bullets for a scenario's data-state example; newlines inside a part become hard breaks."""
-    lines = _example_part_lines("   - **Data before:** ", "     ", example["before"])
-    lines.append("   - **Walkthrough:**")
-    for number, step in enumerate(example["steps"], 1):
-        lines.extend(_example_part_lines("     " + str(number) + ". ", "        ", step))
-    lines.extend(_example_part_lines("   - **Data after:** ", "     ", example["after"]))
+    """Sub-bullets for a scenario's example: data-state parts when present, then the titled details block.
+
+    Newlines inside a data-state part become hard breaks; the details body keeps ordinary Markdown newlines so
+    tables, lists and code blocks survive.
+    """
+    lines: List[str] = []
+    if "before" in example:
+        lines.extend(_example_part_lines("   - **Data before:** ", "     ", example["before"]))
+        lines.append("   - **Walkthrough:**")
+        for number, step in enumerate(example["steps"], 1):
+            lines.extend(_example_part_lines("     " + str(number) + ". ", "        ", step))
+        lines.extend(_example_part_lines("   - **Data after:** ", "     ", example["after"]))
+    if "details" in example:
+        details = example["details"]
+        lines.extend(["   - **" + details["title"] + ":**", ""])
+        lines.extend("     " + row if row else "" for row in _normalized_lines(details["body"]))
+        lines.append("")
     return lines
+
+
+def _validate_example_details(v: "Validator", raw: Any, details_path: str) -> Optional[str]:
+    """Validate `example.details`; returns the body when it is a usable string, for the [ASK] check."""
+    details = v.object(raw, details_path)
+    if details is None:
+        return None
+    for key in details:
+        if key not in ("title", "body"):
+            v.error(pointer(details_path, key), "unexpected key")
+    if "title" not in details:
+        _required(v, details, "title", details_path)
+    else:
+        title_path = pointer(details_path, "title")
+        title = details["title"]
+        if v.string(title, title_path, nonempty=True):
+            if DETAILS_TITLE_FORBIDDEN.search(title):
+                v.error(title_path, "details title must be one line of plain text")
+            else:
+                label = title.strip()
+                if label.endswith(":"):
+                    label = label[:-1].strip()
+                if label.lower() in DATA_STATE_LABELS:
+                    v.error(title_path, "details title reuses a data-state label")
+    if "body" not in details:
+        _required(v, details, "body", details_path)
+        return None
+    body_path = pointer(details_path, "body")
+    return details["body"] if v.string(details["body"], body_path, nonempty=True) else None
 
 
 def _validate_scenario_example(v: "Validator", item: dict, path: str) -> bool:
@@ -113,23 +168,31 @@ def _validate_scenario_example(v: "Validator", item: dict, path: str) -> bool:
     for key in example:
         if key not in EXAMPLE_KEYS:
             v.error(pointer(example_path, key), "unexpected key")
+    if not any(key in example for key in EXAMPLE_KEYS):
+        v.error(example_path, "example needs before, steps and after, or details")
     parts: List[Tuple[str, str]] = []
-    for key in ("before", "after"):
-        if key not in example:
-            _required(v, example, key, example_path)
-        elif v.string(example[key], pointer(example_path, key), nonempty=True):
-            parts.append((pointer(example_path, key), example[key]))
-    if "steps" not in example:
-        _required(v, example, "steps", example_path)
-    else:
-        steps_path = pointer(example_path, "steps")
-        steps = v.array(example["steps"], steps_path)
-        if steps is not None:
-            if not steps:
-                v.error(steps_path, "must not be empty")
-            for index, step in enumerate(steps):
-                if v.string(step, pointer(steps_path, index), nonempty=True):
-                    parts.append((pointer(steps_path, index), step))
+    if any(key in example for key in DATA_STATE_KEYS):
+        for key in ("before", "after"):
+            if key not in example:
+                _required(v, example, key, example_path)
+            elif v.string(example[key], pointer(example_path, key), nonempty=True):
+                parts.append((pointer(example_path, key), example[key]))
+        if "steps" not in example:
+            _required(v, example, "steps", example_path)
+        else:
+            steps_path = pointer(example_path, "steps")
+            steps = v.array(example["steps"], steps_path)
+            if steps is not None:
+                if not steps:
+                    v.error(steps_path, "must not be empty")
+                for index, step in enumerate(steps):
+                    if v.string(step, pointer(steps_path, index), nonempty=True):
+                        parts.append((pointer(steps_path, index), step))
+    if "details" in example:
+        details_path = pointer(example_path, "details")
+        body = _validate_example_details(v, example["details"], details_path)
+        if body is not None:
+            parts.append((pointer(details_path, "body"), body))
     for part_path, text in parts:
         for match in ASK_LOOKALIKE_RE.finditer(text):
             if not OPEN_ASK_RE.match(text, match.start()):
