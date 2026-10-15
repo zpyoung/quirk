@@ -618,7 +618,7 @@ COMPANION_PAGE = """<!doctype html>
 body {{ display: block; margin: 0; }}
 .q-wrap {{ box-sizing: border-box; max-width: 960px; margin-inline: auto; padding-inline: clamp(var(--q-space-4), 4vw, var(--q-space-6)); }}
 </style></head>
-<body><header><div class="q-wrap"><h1>Pick one</h1></div></header>
+<body><header><div class="q-wrap" data-layout="{layout}"><h1>Pick one</h1></div></header>
 <main class="q-wrap" id="main" data-layout="{layout}"><h2>Which layout?</h2><p>Choose.</p></main></body></html>
 """
 
@@ -628,17 +628,17 @@ body {{ display: block; margin: 0; }}
     ("layout", "expected"),
     [("explainer", 1440), ("report", 1440), ("longform", 1440), ("tool", 1440), ("comparison", 1440), ("reference", 1440), ("dashboard", None), ("", 960)],
 )
-def test_companion_screens_widen_only_when_they_name_a_layout(tmp_path: Path, layout: str, expected: int | None) -> None:
+@pytest.mark.parametrize("viewport", [1600, 2000])
+def test_companion_screens_widen_only_when_they_name_a_layout(tmp_path: Path, layout: str, expected: int | None, viewport: int) -> None:
     page = tmp_path / "screen.html"
     css = (SKILL / "theme" / "layout.css").read_text(encoding="utf-8")
     page.write_text(COMPANION_PAGE.format(layout_css=css, layout=layout), encoding="utf-8")
-    width = at(page, 1600, ("main", rect("main.q-wrap")), ("header", rect("header .q-wrap")))["main"]["width"]
-    if expected is None:
-        assert width == 1600
-    else:
-        assert width == expected
-    narrow = at(page, 800, ("main", rect("main.q-wrap")))["main"]["width"]
-    assert narrow == 800
+    boxes = at(page, viewport, ("main", rect("main.q-wrap")), ("header", rect("header .q-wrap")))
+    main, header = boxes["main"], boxes["header"]
+    assert main["width"] == (viewport if expected is None else expected)
+    assert (header["left"], header["right"]) == (main["left"], main["right"])
+    narrow = at(page, 800, ("main", rect("main.q-wrap")), ("header", rect("header .q-wrap")))
+    assert narrow["main"]["width"] == 800 and narrow["header"]["width"] == 800
 
 
 @pytest.mark.usefixtures("browser_ready")

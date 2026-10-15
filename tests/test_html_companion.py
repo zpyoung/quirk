@@ -475,6 +475,15 @@ def test_a_named_layout_is_recorded_in_the_header_and_on_main(server: Server, la
     assert f'data-layout="{layout}"' in _main_wrap_layout(page)
 
 
+@pytest.mark.parametrize("layout", ["", *LAYOUTS])
+def test_the_masthead_wrapper_carries_the_same_layout_as_main(server: Server, layout: str) -> None:
+    out = server.show(screen_with(layout=layout) if layout else SCREEN)
+    page = (server.session / "screens" / f"{out['screen']}.html").read_text(encoding="utf-8")
+    masthead = re.search(r'<header class="q-masthead">\s*<div class="q-wrap"([^>]*)>', page).group(1)
+    assert masthead.strip() == _main_wrap_layout(page).replace(' id="main"', '').strip()
+    assert f'data-layout="{layout}"' in masthead
+
+
 def test_a_screen_without_a_layout_leaves_main_unmarked_and_the_page_otherwise_unchanged(server: Server) -> None:
     plain = server.show(SCREEN)
     named = server.show(screen_with(layout="explainer"))
@@ -488,8 +497,8 @@ def test_a_screen_without_a_layout_leaves_main_unmarked_and_the_page_otherwise_u
         lines[1] = ""
         return "\n".join(lines).replace(nonce, "NONCE")
 
-    # only main's attribute differs; layout.css, inlined in both pages, names every shape in its selectors
-    unnamed = re.sub(r'(<main class="q-wrap"[^>]*?)data-layout="explainer"', r'\1data-layout=""', named_page, count=1)
+    # only the two wrappers' attribute differs; layout.css, inlined in both pages, names every shape in its selectors
+    unnamed = re.sub(r'(<(?:div|main) class="q-wrap"[^>]*?)data-layout="explainer"', r'\1data-layout=""', named_page)
     assert normal(unnamed, named["nonce"]) == normal(plain_page, plain["nonce"])
 
 
