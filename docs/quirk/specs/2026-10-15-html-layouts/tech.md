@@ -110,7 +110,7 @@ SCHEMA: source header (line 1), additions
 ```
 
 - Pre: header passes today's validation. Post: `Source.layout` is a valid name or `None`; `Source.nav` is valid. Error: invalid value → `SourceError` → exit 2 (`quirk_html.py:41`).
-- Layout resolution order at build: `Source.layout`, else the `layout` in the existing output's header, else `DEFAULT_LAYOUT`. `--upgrade` does not affect it; it concerns library versions only. When the default is used, `BuildResult["layout_defaulted"] = True` and the note says "Layout: report (no layout named)".
+- Layout resolution order at build: `Source.layout`, else the `layout` in the existing output's header, else `DEFAULT_LAYOUT`. `--upgrade` does not affect it; it concerns library versions only. When the default is used, `BuildResult["layout_defaulted"] = True`, the header records `"layout_defaulted": true`, and the note says "Layout: report (no layout named)". A rebuild whose source still names no layout and whose existing header carries `layout_defaulted` stays defaulted; naming a layout in the source clears it.
 - `summary` is a reserved slot name accepted by every tier-1 template without appearing in `template.json`. It is required for every template whose skeleton contains `{{regions}}` or `{{slot:main}}` (the legacy path). Missing → `SourceError` naming the shape and where the summary goes (text per shape from the [summary placement table](logic.md#conceptual-model)). Templates may not declare a slot named `summary` themselves (`_tier1_problems` reports it).
 - Invariant: a source with no `layout` field and no prior build builds as `report`; the region structure differs from today only by the added summary region.
 
@@ -260,7 +260,7 @@ Back-link: [scope and non-goals](logic.md#scope-and-non-goals).
 - `S/scripts/htmlkit/tokens.py` `GROUPS` and the token file schema: widths in tokens are a logic-spec non-goal.
 - Kit version `1.0.0` and its directory name: tests hard-code it (`tests/test_html_kit_catalog.py:25`, `tests/test_html_kit_examples.py:~76`) and built pages record it; restamp, do not bump.
 - Existing kit elements' markup contracts and behavior (`q-tabs` … `q-board`, `q-diff-note`): pages already built against them rebuild unchanged.
-- `S/scripts/htmlkit/header.py` format (line 2, one JSON object): readers in `app.py`, `companion.py` and rebuilds depend on it; only add the `layout` key.
+- `S/scripts/htmlkit/header.py` format (line 2, one JSON object): readers in `app.py`, `companion.py` and rebuilds depend on it; only add the `layout`, `layout_defaulted` and `legacy_summary` keys.
 - `app.py` install flags and exit-3 paths (`:59-101`, `:274-284`): the tier-2 safety model.
 - Companion server protocol (`companion.py` events, nonce, `companion.js`): the brainstorm loop depends on it.
 - `REQUIRED_PLACEHOLDERS` (`manifest.py:24`): adding to it would invalidate every existing custom skeleton.
