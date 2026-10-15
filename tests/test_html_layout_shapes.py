@@ -654,3 +654,103 @@ def test_a_page_without_q_page_keeps_uncapped_paragraphs(tmp_path: Path) -> None
     )
     sizes = at(page, 1600, ("sizes", probe))["sizes"]
     assert sizes["width"] > sizes["cap"] + 1
+
+
+def _build_src(work: Path, name: str, layout: str, summary: str, main: str, aside: str = "") -> Path:
+    project = work / "project"
+    project.mkdir(exist_ok=True)
+    user = work / "user"
+    user.mkdir(exist_ok=True)
+    meta = {"template": "report", "title": f"Probe {name}", "mode": "offline", "layout": layout}
+    parts = [f"<!-- quirk-src {json.dumps(meta)} -->", "<!-- slot: summary -->", summary, "<!-- slot: main -->", main]
+    if aside:
+        parts += ["<!-- slot: aside -->", aside]
+    src = work / f"{name}.src.html"
+    src.write_text("\n".join(parts) + "\n", encoding="utf-8")
+    page = work / f"{name}.html"
+    env = {**os.environ, "QUIRK_HTML_USER_DIR": str(user)}
+    code, result = run_cli("build", src, "--out", page, "--project-dir", project, env=env)
+    assert code == 0, result
+    return page
+
+
+def _compare_html(options: int) -> str:
+    names = [f"Option {i}" for i in range(1, options + 1)]
+    head = "<th>Criterion</th>" + "".join(f"<th>{n}</th>" for n in names)
+    rows = "".join(
+        f"<tr><th>{c}</th>" + "".join(f"<td>{c} measured for {n}</td>" for n in names) + "</tr>"
+        for c in ("Monthly cost", "Setup time", "On-call load")
+    )
+    return f'<q-compare recommended="2"><table><thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table></q-compare>'
+
+
+def _sections(count: int) -> str:
+    return "".join(f"<h2>Section {n}</h2>\n<p>Body of section {n}.</p>\n" for n in range(1, count + 1))
+
+
+@pytest.fixture(scope="module")
+def compare_pages(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
+    work = tmp_path_factory.mktemp("compare-pages")
+    summary = "<p>Summary of the comparison.</p>"
+    return {
+        "nav5": _build_src(work, "nav5", "comparison", summary, _sections(5) + _compare_html(5)),
+        "nav8": _build_src(work, "nav8", "comparison", summary, _sections(5) + _compare_html(8)),
+        "aside8": _build_src(
+            work, "aside8", "report", summary, _sections(4) + _compare_html(8), aside='<aside aria-label="Notes"><h2>Aside</h2><p>Related notes.</p></aside>'
+        ),
+        "plain12": _build_src(work, "plain12", "comparison", summary, _sections(3) + _compare_html(12)),
+    }
+
+
+COMPARE_BOXES = """(() => {
+  const r = (s) => { const e = document.querySelector(s); if (!e) return null; const b = e.getBoundingClientRect(); return {left: b.left, right: b.right, width: b.width}; };
+  const host = document.querySelector('q-compare');
+  return {cmp: r('q-compare'), nav: r('.q-page > .q-nav'), aside: r('.q-page > aside'), main: r('.q-page > main'),
+          fits: document.documentElement.scrollWidth <= window.innerWidth, scrolls: host.scrollWidth > host.clientWidth + 1};
+})()"""
+
+
+@pytest.mark.usefixtures("browser_ready")
+@pytest.mark.parametrize("page", ["nav5", "nav8"])
+@pytest.mark.parametrize("width", [1100, 1280, 1440])
+def test_a_wide_compare_beside_the_nav_rail_never_overflows_the_page_or_covers_the_rail(compare_pages: dict, page: str, width: int) -> None:
+    out = at(compare_pages[page], width, ("boxes", COMPARE_BOXES))["boxes"]
+    assert out["nav"] is not None and out["fits"] is True
+    assert out["cmp"]["left"] >= out["nav"]["right"] - 0.5
+    assert out["cmp"]["left"] >= 0 and out["cmp"]["right"] <= width + 0.5
+
+
+@pytest.mark.usefixtures("browser_ready")
+@pytest.mark.parametrize("width", [1100, 1280])
+def test_a_wide_compare_beside_the_report_aside_stays_clear_of_it_and_on_screen(compare_pages: dict, width: int) -> None:
+    out = at(compare_pages["aside8"], width, ("boxes", COMPARE_BOXES))["boxes"]
+    assert out["aside"] is not None and out["fits"] is True
+    assert out["cmp"]["left"] >= 0
+    assert out["cmp"]["right"] <= out["aside"]["left"] + 0.5
+    assert out["scrolls"] is True
+
+
+@pytest.mark.usefixtures("browser_ready")
+def test_a_compare_wider_than_a_centred_column_still_widens_past_it(compare_pages: dict) -> None:
+    out = at(compare_pages["plain12"], 2000, ("boxes", COMPARE_BOXES))["boxes"]
+    assert out["nav"] is None and out["fits"] is True
+    assert out["cmp"]["width"] > out["main"]["width"] + 1
+    assert (out["cmp"]["left"] + out["cmp"]["right"]) / 2 == pytest.approx(1000, abs=2)
+
+
+@pytest.mark.usefixtures("browser_ready")
+@pytest.mark.parametrize("width", [1100, 1280])
+def test_a_longform_sidenote_in_the_summary_stays_on_the_page_and_is_visible(tmp_path: Path, width: int) -> None:
+    summary = '<p>The build got faster<q-sidenote>Measured on main, excluding reruns.</q-sidenote> this quarter.</p>'
+    page = _build_src(tmp_path, "lf", "longform", summary, _sections(5))
+    probe = """(() => {
+      const note = document.querySelector('.q-summary q-sidenote');
+      const toggle = document.querySelector('.q-summary button[data-q-sidenote-toggle]');
+      const shown = (e) => !!e && getComputedStyle(e).display !== 'none' && e.getBoundingClientRect().width > 0;
+      const box = note.getBoundingClientRect();
+      return {fits: document.documentElement.scrollWidth <= innerWidth, float: getComputedStyle(note).float,
+              visible: shown(note) || shown(toggle), right: box.right};
+    })()"""
+    out = at(page, width, ("note", probe))["note"]
+    assert out["fits"] is True and out["float"] == "none" and out["visible"] is True
+    assert out["right"] <= width

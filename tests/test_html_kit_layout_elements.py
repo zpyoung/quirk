@@ -34,10 +34,10 @@ def _compare(element_id: str, options: list[str], recommended: int) -> str:
 
 MANY_OPTIONS = [f"Option {i}" for i in range(1, 11)]
 
-SIDENOTES = """<div data-layout="longform" id="long">
+SIDENOTES = """<div data-layout="longform" id="long"><main>
 <p id="para">The build got faster<q-sidenote id="note1">Measured on main, excluding reruns.</q-sidenote> after the cache moved,
 and the queue shrank<q-sidenote id="note2">Queue depth is sampled every minute.</q-sidenote> as well.</p>
-</div>
+</main></div>
 <div id="plain"><p>A plain page note<q-sidenote id="plain-note">Outside longform.</q-sidenote> stays in the text.</p></div>
 """
 
