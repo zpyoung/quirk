@@ -1,0 +1,41 @@
+<!-- quirk-src {"template": "report", "title": "Why the nightly build moved to the shared runners", "mode": "offline", "layout": "longform"} -->
+<!-- slot: summary -->
+<p class="q-lede">The nightly build used to run on a machine under a desk and now runs on the shared runner pool. It finishes in 9 minutes instead of 14, fails for different reasons than before, and nobody has to remember to restart it.</p>
+<!-- slot: main -->
+<p class="q-meta">By the platform team, 12 Oct 2026. About a ten minute read.</p>
+
+<section aria-labelledby="origin-h">
+<h2 id="origin-h">Where the machine under the desk came from</h2>
+<p>In 2023 the nightly build ran on a tower workstation that one engineer had brought in for a benchmark and never taken home<q-sidenote>It was a 16-core desktop with 64 GB of memory, bought in 2021 for local video encoding.</q-sidenote>. It was fast, it was free, and it was already on the right network. Nobody planned to depend on it. The build simply got slower on every other machine until the workstation was the only place where it finished before people arrived in the morning.</p>
+<p>By the end of that year the machine had a name, a sticker, and a list of things you must not do while the build ran. Someone had to restart it after power cuts, and the person who knew how to do that was on leave twice in a row.</p>
+</section>
+
+<section aria-labelledby="cost-h">
+<h2 id="cost-h">What the workstation cost us</h2>
+<p>The direct cost was small. The indirect cost was that every change to the build had to work on one particular machine, with its particular compiler versions and its particular disk, before it could work anywhere else<q-sidenote>Two releases in 2024 shipped binaries linked against libraries that existed only on that machine.</q-sidenote>. Reproducing a failure meant asking for a turn at the keyboard.</p>
+<p>It also hid a slow decay. The build had grown from 11 minutes to 14 over eighteen months, and because the same machine ran it every night, the growth never looked like a change. It looked like weather.</p>
+</section>
+
+<section aria-labelledby="move-h">
+<h2 id="move-h">How the move went</h2>
+<p>We moved the build in three steps over six weeks. First we ran it on the shared pool alongside the workstation and compared the artifacts byte for byte<q-sidenote>They matched on the fourth night, after we pinned the timestamp that the packaging step had been embedding.</q-sidenote>. Then we made the pool the primary and kept the workstation as a fallback. Last, we turned the workstation off and waited for someone to notice.</p>
+<p>Nobody noticed for nine days. That is the best review a platform migration can get.</p>
+</section>
+
+<section aria-labelledby="speed-h">
+<h2 id="speed-h">Why it got faster</h2>
+<p>The pool's runners have a warm cache of dependencies, which removed about three minutes of downloading. The rest came from splitting the test stage across four runners instead of running it in sequence. We expected the split to help more than the cache, and we were wrong about that.</p>
+<p>The speed-up was not free. A build that uses four runners can fail because one of them is slow to start, and we saw that happen on about 1 night in 40 before we added a fifteen second start-up allowance.</p>
+</section>
+
+<section aria-labelledby="failures-h">
+<h2 id="failures-h">What fails now</h2>
+<p>The old build failed for one reason almost every time, which was the machine itself: a full disk, a stale mount, a reboot in the middle of the night<q-sidenote>Of the 31 failures in the last quarter on the workstation, 24 were environmental.</q-sidenote>. The new build fails because of the code. That is the point, and it is also less comfortable, because a red nightly build now means that somebody should look at it.</p>
+<p>We have kept a short list of the failures that are still environmental, such as the registry being unreachable, and the build retries those automatically. Everything else stays red until a person decides what it means.</p>
+</section>
+
+<section aria-labelledby="next-h">
+<h2 id="next-h">What we would do differently</h2>
+<p>We would have measured the build before moving it. We know the new numbers well and the old ones only roughly, which makes every comparison in this write-up slightly softer than we would like. We would also have asked the person who owned the workstation to write down what they did by hand, before they went on leave.</p>
+<p>The next candidate for the same treatment is the release signing step, which still runs on a laptop. We have already stopped being surprised that it does.</p>
+</section>

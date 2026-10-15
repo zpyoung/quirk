@@ -1,1 +1,330 @@
 /* Page-shape geometry: placement of the summary, nav, main and aside regions for every layout, and print rules. */
+
+/* Width caps and the page wrapper. Low specificity so a custom skeleton's own .q-wrap still wins. */
+
+:where(.q-wrap) {
+  box-sizing: border-box;
+  max-width: 1440px;
+  margin-inline: auto;
+  padding-inline: clamp(var(--q-space-4), 4vw, var(--q-space-6));
+}
+
+:root:has(.q-page[data-layout="dashboard"]) .q-wrap {
+  max-width: none;
+}
+
+main.q-wrap[data-layout="report"],
+main.q-wrap[data-layout="explainer"],
+main.q-wrap[data-layout="longform"],
+main.q-wrap[data-layout="tool"],
+main.q-wrap[data-layout="comparison"],
+main.q-wrap[data-layout="reference"] {
+  max-width: 1440px;
+}
+
+main.q-wrap[data-layout="dashboard"] {
+  max-width: none;
+}
+
+.q-page {
+  padding-block: var(--q-space-5) var(--q-space-7);
+}
+
+:where(.q-page:has(> main)) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  row-gap: var(--q-space-5);
+  column-gap: var(--q-space-6);
+}
+
+:where(.q-page:has(> main) > *) {
+  min-width: 0;
+}
+
+:where(.q-page > :is(main, .q-summary)) > :first-child {
+  margin-top: 0;
+}
+
+:where(.q-page > :is(main, .q-summary)) > :last-child {
+  margin-bottom: 0;
+}
+
+:where(main, .q-summary) :is(p, ul, ol, blockquote) {
+  max-width: 70ch;
+}
+
+.q-page > .q-summary {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+/* Section nav: one list as a collapsed menu, the same list as a rail where there is room. */
+
+.q-page > .q-nav {
+  margin: 0;
+  font-size: var(--q-size-small);
+}
+
+.q-nav ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.q-nav ol ol {
+  padding-inline-start: var(--q-space-4);
+}
+
+.q-nav a {
+  position: relative;
+  display: block;
+  padding: var(--q-space-1) var(--q-space-2);
+  color: var(--q-color-text-muted);
+  text-decoration: none;
+}
+
+.q-nav a:hover {
+  color: var(--q-color-text);
+  text-decoration: underline;
+}
+
+.q-nav a[aria-current] {
+  color: var(--q-color-text);
+  font-weight: 700;
+}
+
+.q-nav a[aria-current]::before {
+  content: "";
+  position: absolute;
+  inset-block: var(--q-space-1);
+  inset-inline-start: 0;
+  width: 3px;
+  border-radius: var(--q-radius-pill);
+  background: var(--q-color-accent);
+}
+
+.q-nav .q-nav-menu {
+  margin: 0;
+  padding: var(--q-space-2) var(--q-space-3);
+}
+
+.q-nav .q-nav-menu > summary {
+  margin: 0;
+  padding: var(--q-space-1) 0;
+  word-break: normal;
+}
+
+.q-nav .q-nav-menu[open] > summary {
+  margin-bottom: var(--q-space-2);
+}
+
+.q-nav .q-nav-rail {
+  display: none;
+}
+
+/* Report aside and the tool's result keep Simple.css's floated aside and section looks out of the grid. */
+
+.q-page > aside {
+  float: none;
+  width: auto;
+  box-sizing: border-box;
+  margin: 0;
+  padding: var(--q-space-3) var(--q-space-4);
+  font-size: var(--q-size-small);
+}
+
+.q-page > aside h2 {
+  margin-top: var(--q-space-2);
+  font-size: var(--q-size-h4);
+}
+
+.q-page[data-layout="tool"] > .q-summary {
+  box-sizing: border-box;
+  padding: var(--q-space-4);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-md);
+  background: var(--q-color-surface);
+}
+
+.q-page[data-layout="reference"] > .q-nav {
+  padding-inline-end: var(--q-space-4);
+  border-inline-end: 1px solid var(--q-color-border);
+}
+
+/* Aside beside main, and the tool's result beside its inputs, from 900px. */
+
+@media (min-width: 900px) {
+  :where(.q-page[data-layout="report"]:has(> main):has(> aside)) {
+    grid-template-columns: minmax(0, 1fr) 18rem;
+    grid-template-areas:
+      "summary summary"
+      "main aside";
+  }
+
+  :where(.q-page[data-layout="report"]:has(> main):has(> aside):has(> .q-nav)) {
+    grid-template-areas:
+      "summary summary"
+      "nav nav"
+      "main aside";
+  }
+
+  :where(.q-page[data-layout="tool"]:has(> main)) {
+    grid-template-columns: minmax(0, 1fr) 22rem;
+    grid-template-areas: "main summary";
+  }
+
+  :where(.q-page[data-layout="tool"]:has(> main):has(> .q-nav)) {
+    grid-template-areas:
+      "nav nav"
+      "main summary";
+  }
+
+  :where(.q-page[data-layout="reference"]:has(> main):has(> .q-nav)) {
+    grid-template-columns: 15rem minmax(0, 1fr);
+    grid-template-areas:
+      "nav summary"
+      "nav main";
+  }
+
+  :where(.q-page:has(> main):is([data-layout="report"]:has(> aside), [data-layout="tool"], [data-layout="reference"]:has(> .q-nav))) > .q-summary {
+    grid-area: summary;
+  }
+
+  :where(.q-page:has(> main):is([data-layout="report"]:has(> aside), [data-layout="tool"], [data-layout="reference"]:has(> .q-nav))) > main {
+    grid-area: main;
+  }
+
+  :where(.q-page:has(> main):is([data-layout="report"]:has(> aside), [data-layout="tool"], [data-layout="reference"]:has(> .q-nav))) > .q-nav {
+    grid-area: nav;
+  }
+
+  :where(.q-page[data-layout="report"]:has(> main) > aside) {
+    grid-area: aside;
+    position: sticky;
+    top: var(--q-space-4);
+    align-self: start;
+    max-height: calc(100vh - 2 * var(--q-space-4));
+    overflow-y: auto;
+  }
+
+  :where(.q-page[data-layout="tool"]:has(> main) > .q-summary) {
+    position: sticky;
+    top: var(--q-space-4);
+    align-self: start;
+    max-height: calc(100vh - 2 * var(--q-space-4));
+    overflow-y: auto;
+  }
+}
+
+/* The reference shape's section list is its left pane from 900px, with its own scroll. */
+
+@media (min-width: 900px) {
+  .q-page[data-layout="reference"]:has(> main) .q-nav-rail {
+    display: block;
+  }
+
+  .q-page[data-layout="reference"]:has(> main) .q-nav-menu {
+    display: none;
+  }
+
+  :where(.q-page[data-layout="reference"]:has(> main) > .q-nav) {
+    position: sticky;
+    top: var(--q-space-4);
+    align-self: start;
+    max-height: calc(100vh - 2 * var(--q-space-4));
+    overflow-y: auto;
+  }
+}
+
+/* Nav rail on the left, sticky with its own scroll, and longform's margin column, from 1100px. */
+
+@media (min-width: 1100px) {
+  .q-page:has(> main) .q-nav-rail {
+    display: block;
+  }
+
+  .q-page:has(> main) .q-nav-menu {
+    display: none;
+  }
+
+  :where(.q-page:has(> main) > .q-nav) {
+    position: sticky;
+    top: var(--q-space-4);
+    align-self: start;
+    max-height: calc(100vh - 2 * var(--q-space-4));
+    overflow-y: auto;
+  }
+
+  :where(.q-page:has(> main):has(> .q-nav):not([data-layout="reference"])) {
+    grid-template-columns: 14rem minmax(0, 1fr);
+    grid-template-areas:
+      "nav summary"
+      "nav main";
+  }
+
+  :where(.q-page:has(> main):has(> .q-nav):not([data-layout="reference"])) > .q-nav {
+    grid-area: nav;
+  }
+
+  :where(.q-page:has(> main):has(> .q-nav):not([data-layout="reference"])) > .q-summary {
+    grid-area: summary;
+  }
+
+  :where(.q-page:has(> main):has(> .q-nav):not([data-layout="reference"])) > main {
+    grid-area: main;
+  }
+
+  :where(.q-page[data-layout="report"]:has(> main):has(> aside):has(> .q-nav)) {
+    grid-template-columns: 14rem minmax(0, 1fr) 18rem;
+    grid-template-areas:
+      "nav summary summary"
+      "nav main aside";
+  }
+
+  :where(.q-page[data-layout="tool"]:has(> main):has(> .q-nav)) {
+    grid-template-columns: 14rem minmax(0, 1fr) 22rem;
+    grid-template-areas: "nav main summary";
+  }
+
+  :where(.q-page[data-layout="longform"]:has(> main) > main) {
+    padding-inline-end: 17rem;
+  }
+}
+
+/* Print: one column in document order, the nav as a plain list, chrome hidden. */
+
+@media print {
+  :root .q-chrome {
+    display: none;
+  }
+
+  :where(.q-page:has(> main)) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: none;
+  }
+
+  .q-page:has(> main) > * {
+    grid-area: auto;
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+
+  :where(.q-page > main) {
+    padding-inline-end: 0;
+  }
+
+  .q-page .q-nav-menu {
+    display: none;
+  }
+
+  .q-page .q-nav-rail {
+    display: block;
+  }
+
+  .q-page > .q-nav {
+    border-inline-end: 0;
+    padding-inline-end: 0;
+  }
+}

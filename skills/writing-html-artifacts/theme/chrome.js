@@ -12,6 +12,9 @@
  * JSON parses as-is; CSV becomes an array of row objects keyed by the header row (values stay
  * strings). Picking a different file re-resolves: quirkData() returns the latest pick, and
  * window.quirkData.onChange(callback) calls callback(data) after every pick.
+ *
+ * Nav: when the page has a .q-nav, the rail link for the section being read gets
+ * aria-current="location" and loses it elsewhere. Without a nav nothing is observed.
  */
 (function () {
   "use strict";
@@ -321,9 +324,59 @@
     }
   };
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initToggle);
-  } else {
+  function initNav() {
+    var nav = document.querySelector(".q-nav");
+    if (!nav || typeof window.IntersectionObserver !== "function") {
+      return;
+    }
+    var links = [];
+    var headings = [];
+    var anchors = nav.querySelectorAll(".q-nav-rail a[href^='#']");
+    for (var i = 0; i < anchors.length; i += 1) {
+      var heading = document.getElementById(anchors[i].getAttribute("href").slice(1));
+      if (heading) {
+        links.push(anchors[i]);
+        headings.push(heading);
+      }
+    }
+    if (headings.length === 0) {
+      return;
+    }
+    var current = -1;
+    var mark = function () {
+      var line = window.innerHeight * 0.3;
+      var next = -1;
+      for (var k = 0; k < headings.length; k += 1) {
+        if (headings[k].getBoundingClientRect().top <= line) {
+          next = k;
+        }
+      }
+      if (next === current) {
+        return;
+      }
+      if (current >= 0) {
+        links[current].removeAttribute("aria-current");
+      }
+      if (next >= 0) {
+        links[next].setAttribute("aria-current", "location");
+      }
+      current = next;
+    };
+    var observer = new window.IntersectionObserver(mark, { rootMargin: "0px 0px -70% 0px" });
+    for (var j = 0; j < headings.length; j += 1) {
+      observer.observe(headings[j]);
+    }
+    mark();
+  }
+
+  function init() {
     initToggle();
+    initNav();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
   }
 })();

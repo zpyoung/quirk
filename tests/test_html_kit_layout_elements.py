@@ -419,7 +419,7 @@ def test_compare_widens_past_the_1440px_column_when_the_options_do_not_fit(layou
             """(() => {
               const host = document.querySelector('#wide');
               const box = host.getBoundingClientRect();
-              const wrap = document.querySelector('.q-wrap.q-layout').getBoundingClientRect();
+              const wrap = document.querySelector('.q-wrap:has(> .q-page)').getBoundingClientRect();
               return {
                 width: box.width,
                 wrapWidth: wrap.width,

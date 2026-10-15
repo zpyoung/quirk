@@ -497,7 +497,7 @@ def test_a_pre_shapes_page_rebuilds_without_a_summary_and_keeps_doing_so(tmp_pat
     assert any(w["check"] == "summary" and "summary" in w["detail"] for w in result["checks"]["warnings"])
     meta = page_header(out)
     assert meta["layout"] == "report" and meta["legacy_summary"] is True
-    assert "q-summary" not in out.read_text(encoding="utf-8")
+    assert 'class="q-summary"' not in out.read_text(encoding="utf-8")
 
     rc, result = build(bare, out, env, project)
     assert rc == 0 and result["legacy_summary"] is True and page_header(out)["legacy_summary"] is True
@@ -593,7 +593,7 @@ def test_a_skeleton_without_region_placeholders_needs_no_summary(tmp_path: Path,
     named = src_file(tmp_path / "n.src.html", {"template": "fx", "title": "T", "layout": "tool"}, {"content": "<p>c</p>"})
     rc, result = build(named, out, env, project)
     assert rc == 0 and result["layout"] == "tool" and 'data-l="tool"' in out.read_text(encoding="utf-8")
-    assert "q-page" not in out.read_text(encoding="utf-8")
+    assert 'class="q-page"' not in out.read_text(encoding="utf-8")
 
 
 def test_summary_is_accepted_by_a_template_that_does_not_declare_it(tmp_path: Path, env: dict, project: Path) -> None:

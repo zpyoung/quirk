@@ -7,7 +7,7 @@
   "optional_libraries": ["chartjs", "mermaid"],
   "slots": {
     "main": { "required": true, "description": "The page body: lede, findings, sections, charts and tables. No h1; the title becomes it." },
-    "aside": { "required": false, "description": "An optional <aside aria-label=...> with supporting notes, shown beside the body at 900px and up." }
+    "aside": { "required": false, "description": "Report layout only: an optional <aside aria-label=...> with supporting notes, shown beside the main content from 900px and below it on narrower screens." }
   },
   "skeleton": "skeleton.html",
   "rules": "rules.md",

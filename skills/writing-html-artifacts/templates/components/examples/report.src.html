@@ -1,0 +1,53 @@
+<!-- quirk-src {"template": "components", "title": "Alert settings audit, October 2026", "mode": "offline", "layout": "report"} -->
+<!-- slot: summary -->
+<p class="q-lede">Of the 42 alert settings the payments team uses, 9 are out of line with the team standard and 3 would page someone for a problem that cannot happen. Fixing those 3 removes about a third of last month's overnight pages.</p>
+<!-- slot: main -->
+<p class="q-meta">Source: settings export of 12 Oct 2026, compared with the team standard of 1 Sep 2026.</p>
+
+<section aria-labelledby="findings-h">
+<h2 id="findings-h">Findings</h2>
+<ul>
+<li>9 of 42 settings differ from the standard, and 6 of the 9 differ by being stricter.</li>
+<li>3 alerts watch a queue that was retired in August and still page at 03:00.</li>
+<li>The digest is sent daily on 4 of 6 channels, where the standard is weekly.</li>
+<li>No channel is without an owner.</li>
+</ul>
+</section>
+
+<section aria-labelledby="owners-h">
+<h2 id="owners-h">Settings by channel</h2>
+<p>The three channels with the most out-of-line settings account for 7 of the 9 differences.</p>
+<q-chart type="bar" summary="Pager has 4 out-of-line settings, the most of any channel; email and chat have 2 and 1." y="Out of line">
+<table>
+<thead><tr><th>Channel</th><th>Out of line</th></tr></thead>
+<tbody>
+<tr><td>Pager</td><td>4</td></tr>
+<tr><td>Email</td><td>2</td></tr>
+<tr><td>Chat</td><td>1</td></tr>
+<tr><td>Dashboard</td><td>1</td></tr>
+<tr><td>SMS</td><td>1</td></tr>
+</tbody>
+</table>
+</q-chart>
+</section>
+
+<section aria-labelledby="table-h">
+<h2 id="table-h">Settings that differ from the standard</h2>
+<q-table>
+<table>
+<caption>Alert settings that differ from the team standard</caption>
+<thead>
+<tr><th scope="col">Setting</th><th scope="col">Channel</th><th scope="col">Standard</th><th scope="col">Current</th><th scope="col" class="num">Pages last month</th></tr>
+</thead>
+<tbody>
+<tr><td>Retry queue depth</td><td>Pager</td><td>Off</td><td>Above 100</td><td class="num">11</td></tr>
+<tr><td>Legacy webhook errors</td><td>Pager</td><td>Off</td><td>Any error</td><td class="num">9</td></tr>
+<tr><td>Disk above 70%</td><td>Pager</td><td>Above 85%</td><td>Above 70%</td><td class="num">6</td></tr>
+<tr><td>Digest frequency</td><td>Email</td><td>Weekly</td><td>Daily</td><td class="num">0</td></tr>
+<tr><td>Deploy failures</td><td>Chat</td><td>Production only</td><td>All environments</td><td class="num">0</td></tr>
+</tbody>
+</table>
+</q-table>
+</section>
+
+<p class="q-meta">Stricter means the setting pages more often than the team standard does. The standard sets one default for each alert setting and names the channel it belongs on.</p>

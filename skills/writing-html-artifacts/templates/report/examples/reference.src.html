@@ -1,0 +1,79 @@
+<!-- quirk-src {"template": "report", "title": "Checkout service runbook", "mode": "offline", "layout": "reference"} -->
+<!-- slot: summary -->
+<p class="q-lede">What to do when the checkout service pages you: where to look first, how to roll back, and who to call.</p>
+<!-- slot: main -->
+<p class="q-meta">Owner: platform team. Last reviewed 13 Oct 2026.</p>
+
+<section aria-labelledby="alerts-h">
+<h2 id="alerts-h">Alerts</h2>
+<p>Every checkout alert lands in the on-call channel. Start with the alert's own dashboard link, then use the table below to find the matching section.</p>
+<q-table>
+<table>
+<caption>Checkout alerts and where to start</caption>
+<thead><tr><th scope="col">Alert</th><th scope="col">Fires when</th><th scope="col">Start at</th></tr></thead>
+<tbody>
+<tr><td>checkout-error-rate</td><td>5xx above 2% for 5 minutes</td><td>Rollback</td></tr>
+<tr><td>checkout-latency</td><td>p95 above 800 ms for 10 minutes</td><td>Latency</td></tr>
+<tr><td>retry-queue-depth</td><td>depth above 500 for 10 minutes</td><td>Queue drain</td></tr>
+<tr><td>provider-unreachable</td><td>payment provider health check fails</td><td>Failover</td></tr>
+</tbody>
+</table>
+</q-table>
+<h3 id="alerts-ack">Acknowledging</h3>
+<p>Acknowledge within 10 minutes. An unacknowledged page escalates to the engineering manager at the 15 minute mark.</p>
+<h3 id="alerts-mute">Muting</h3>
+<p>Mute an alert only during a planned change, and only for the length of the change. Write the reason in the channel when you do.</p>
+</section>
+
+<section aria-labelledby="rollback-h">
+<h2 id="rollback-h">Rollback</h2>
+<p>If errors started within an hour of a deploy, roll back first and investigate afterwards.</p>
+<h3 id="rollback-steps">Steps</h3>
+<ol>
+<li>Open the deploy page and find the last version marked healthy.</li>
+<li>Choose Roll back to this version and confirm.</li>
+<li>Watch the error rate for 5 minutes. It should fall below 1%.</li>
+</ol>
+<h3 id="rollback-cli">From the command line</h3>
+<q-code filename="rollback.sh">
+<pre><code>checkout-deploy rollback --service checkout --to previous
+checkout-deploy status --service checkout --watch</code></pre>
+</q-code>
+</section>
+
+<section aria-labelledby="latency-h">
+<h2 id="latency-h">Latency</h2>
+<p>Check the region panel first. A single slow region points at that region's cache or network, and a slow everywhere points at the payment provider or the database.</p>
+<h3 id="latency-cache">Cache</h3>
+<p>The cache hit rate should be above 90%. Below 80%, flush the stale region from the cache console and watch the rate recover over 10 minutes.</p>
+<h3 id="latency-provider">Payment provider</h3>
+<p>The provider's status page is linked from the dashboard. If it reports a partial outage, move on to Failover.</p>
+</section>
+
+<section aria-labelledby="queue-h">
+<h2 id="queue-h">Queue drain</h2>
+<p>The retry queue is safe to leave alone. Entries are persisted before they are attempted, so a restart loses nothing.</p>
+<h3 id="queue-stuck">Workers stuck</h3>
+<p>If the oldest entry keeps growing while the depth is flat, restart the worker pool from the deploy page.</p>
+<h3 id="queue-backlog">Backlog after an outage</h3>
+<p>Do not raise the worker count above 40. The provider's rate limit starts rejecting calls beyond that, which only lengthens the backlog.</p>
+</section>
+
+<section aria-labelledby="failover-h">
+<h2 id="failover-h">Failover</h2>
+<p>The service can send payments through a second provider. Switch only when the first provider reports an outage or the health check has failed for 10 minutes.</p>
+<q-code filename="failover.sh">
+<pre><code>checkout-config set payment.provider secondary
+checkout-config show payment.provider</code></pre>
+</q-code>
+<p>Switch back once the first provider has been healthy for 30 minutes, not before.</p>
+</section>
+
+<section aria-labelledby="contacts-h">
+<h2 id="contacts-h">Contacts</h2>
+<ul>
+<li>Platform on-call: page through the on-call tool, service name checkout.</li>
+<li>Payments provider support: 24 hour line, in the shared vault under Providers.</li>
+<li>Engineering manager: escalation at the 15 minute mark.</li>
+</ul>
+</section>

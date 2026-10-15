@@ -1,0 +1,135 @@
+<!-- quirk-src {"template": "components", "title": "Alert delivery status", "mode": "offline", "layout": "dashboard"} -->
+<!-- slot: summary -->
+<q-stat direction="up-good" points="97.8,98.4,98.9,99.3,99.6">
+<span slot="label">Alerts delivered on time</span>
+<span slot="value">99.6%</span>
+<span slot="delta">+0.7 pts</span>
+<span slot="definition">Alerts delivered within their severity's delay, last 24 hours, against the previous 24 hours.</span>
+</q-stat>
+<!-- slot: main -->
+<p class="q-meta">Data as of 15 Oct 2026, 09:00 UTC. Sample figures for this template.</p>
+
+<h2>Delivery health</h2>
+<q-grid>
+<q-stat direction="up-good">
+<span slot="label">Alerts routed</span>
+<span slot="value">1,284</span>
+<span slot="delta">-3.2%</span>
+<span slot="definition">Alerts received and routed in the last 24 hours, against the previous 24 hours.</span>
+</q-stat>
+<q-stat direction="down-good">
+<span slot="label">Pages sent</span>
+<span slot="value">9</span>
+<span slot="delta">-4</span>
+<span slot="definition">Critical alerts that reached the pager in the last 24 hours, against the previous 24 hours.</span>
+</q-stat>
+<q-stat direction="down-good">
+<span slot="label">Median delay</span>
+<span slot="value">38 s</span>
+<span slot="delta">+2 s</span>
+<span slot="definition">Time between an alert arriving and its notification being sent, last 24 hours.</span>
+</q-stat>
+<q-stat direction="down-good">
+<span slot="label">Unacknowledged pages</span>
+<span slot="value">0</span>
+<span slot="definition">Pages waiting for an acknowledgement, right now.</span>
+</q-stat>
+</q-grid>
+
+<h2>Panels</h2>
+<q-grid>
+<q-panel>
+<h3>Alerts by hour</h3>
+<q-chart type="bar" summary="Alerts peaked at 07:00 UTC with 112 and stayed under 80 for the rest of the morning." y="Alerts">
+<table>
+<thead><tr><th>Hour (UTC)</th><th>Alerts</th></tr></thead>
+<tbody>
+<tr><td>04:00</td><td>41</td></tr>
+<tr><td>05:00</td><td>57</td></tr>
+<tr><td>06:00</td><td>73</td></tr>
+<tr><td>07:00</td><td>112</td></tr>
+<tr><td>08:00</td><td>78</td></tr>
+<tr><td>09:00</td><td>64</td></tr>
+</tbody>
+</table>
+</q-chart>
+</q-panel>
+<q-panel>
+<h3>Alerts by channel</h3>
+<q-chart type="donut" summary="Team chat received 58% of notifications in the last 24 hours, more than any other channel." y="Notifications">
+<table>
+<thead><tr><th>Channel</th><th>Notifications</th></tr></thead>
+<tbody>
+<tr><td>Team chat</td><td>744</td></tr>
+<tr><td>Email</td><td>312</td></tr>
+<tr><td>Dashboard</td><td>219</td></tr>
+<tr><td>Pager</td><td>9</td></tr>
+</tbody>
+</table>
+</q-chart>
+</q-panel>
+<q-panel>
+<h3>Delay by severity</h3>
+<q-chart type="bar" horizontal summary="Critical alerts waited 52 seconds on average, warnings 5 minutes 10 seconds and info alerts 61 minutes." y="Minutes">
+<table>
+<thead><tr><th>Severity</th><th>Minutes</th></tr></thead>
+<tbody>
+<tr><td>Critical</td><td>0.9</td></tr>
+<tr><td>Warning</td><td>5.2</td></tr>
+<tr><td>Info</td><td>61</td></tr>
+</tbody>
+</table>
+</q-chart>
+</q-panel>
+<q-panel>
+<h3>Catch-all queue</h3>
+<q-stat direction="down-good">
+<span slot="label">Unrouted alerts</span>
+<span slot="value">14</span>
+<span slot="definition">Alerts that matched no rule in the last 24 hours and went to the daily catch-all.</span>
+</q-stat>
+</q-panel>
+<q-panel>
+<h3>Quiet hours</h3>
+<ul>
+<li>Chat is muted 22:00 to 07:00 local time.</li>
+<li>Pages still reach the pager.</li>
+</ul>
+<p>Next change window: 20 Oct 2026.</p>
+</q-panel>
+<q-panel>
+<h3>Rules matching most alerts</h3>
+<q-table>
+<table>
+<caption>Alert rules by matches, last 24 hours</caption>
+<thead><tr><th scope="col">Rule</th><th scope="col" class="num">Matches</th><th scope="col">Channel</th></tr></thead>
+<tbody>
+<tr><td>deploy-warning</td><td class="num">402</td><td>Team chat</td></tr>
+<tr><td>disk-info</td><td class="num">318</td><td>Dashboard</td></tr>
+<tr><td>latency-warning</td><td class="num">177</td><td>Team chat</td></tr>
+</tbody>
+</table>
+</q-table>
+</q-panel>
+<q-panel>
+<h3>Channels without a recent owner check</h3>
+<q-table>
+<table>
+<caption>Channels and the date their owner last confirmed membership</caption>
+<thead><tr><th scope="col">Channel</th><th scope="col">Owner</th><th scope="col">Last checked</th></tr></thead>
+<tbody>
+<tr><td>Dashboard</td><td>Platform</td><td>9 Sep 2026</td></tr>
+<tr><td>SMS</td><td>Support</td><td>30 Jul 2026</td></tr>
+</tbody>
+</table>
+</q-table>
+</q-panel>
+<q-panel>
+<h3>Escalations today</h3>
+<q-stat direction="down-good">
+<span slot="label">Escalated pages</span>
+<span slot="value">1</span>
+<span slot="definition">Pages that moved to the secondary on-call after 10 minutes, last 24 hours.</span>
+</q-stat>
+</q-panel>
+</q-grid>
