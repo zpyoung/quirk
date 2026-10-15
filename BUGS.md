@@ -117,3 +117,11 @@ entries' IDs; manual edits to fix typos are fine.
 - **Proposed fix**: Pin pi-ai and pi-coding-agent to the last versions that export AuthStorage (or port to the 1.1.0 auth API) and commit the lockfile resolution.
 - **Blocker for**: Every pi-watch dispatch, including adversarial-review's cross-family reviewer.
 
+## BUG-13: Review page markdown renders in quadratic time on long runs of unmatched '['
+- **Observed**: 2026-10-15
+- **File**: skills/writing-specs/interactive/app/src/views/scenario-example.tsx:51
+- **Description**: The Astryx 0.6.2 Markdown parser is quadratic on long runs of unmatched '['. It affects every markdown field on the writing-specs review page, examples included, through SpecMarkdown in src/views/shared.tsx too. Timings: 100k '[' 92ms, 200k 334ms, 400k 1301ms, 800k 5172ms. Found by the round-5 security review of scenario-data-states. Triggering it takes a hostile 400k+ character spec field, and spec JSON is Claude-written.
+- **Introduced by**: upstream @astryxdesign/core 0.6.2 Markdown parser (pre-dates scenario-data-states)
+- **Severity**: low
+- **Proposed fix**: Bound example and markdown field length in spec validation, or escape pathological unmatched delimiters before parsing.
+
