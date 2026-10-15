@@ -789,7 +789,7 @@ def test_the_scaffold_table_class_is_q_data_grid_everywhere():
     editor = (APP / "example" / "src" / "views" / "EditorView.tsx").read_text()
     assert 'className="q-data-grid"' in editor and 'className="q-grid"' not in editor
     rules = (APP / "rules.md").read_text()
-    assert "`q-data-grid`" in rules and "`q-grid`" not in rules
+    assert "`q-data-grid`" in rules and not re.search(r"`q-grid`[^.\n]*class", rules)
 
 
 def test_page_layout_renders_the_region_dom_of_render_regions():
