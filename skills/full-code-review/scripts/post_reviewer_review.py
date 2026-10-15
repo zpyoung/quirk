@@ -354,6 +354,13 @@ def _plan(prepared, by_id, context, refs, changed_paths=None, forge=None):
         body, body_warnings = comment_body.finding_body(
             finding, seat="reviewer", lead=disposition, note=note, head_sha=head_sha)
         warnings.extend(body_warnings)
+        if finding["file"] in (context.get("unanchorable_files") or []):
+            omitted.append({"id": finding["id"],
+                            "reason": "the forge collapsed this file's diff, so an inline note would be lost",
+                            "disposition": decision["disposition"], "fingerprint": fingerprint})
+            warnings.append("%s is on a file whose diff the forge collapsed; it is listed in the overview instead."
+                            % finding["id"])
+            continue
         pair = pairs.get(finding["file"], {"old": finding["file"], "new": finding["file"]})
         if forge is None:
             position = _gitlab.inline_position(refs, pair["old"], pair["new"], line)

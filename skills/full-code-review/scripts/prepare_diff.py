@@ -607,6 +607,10 @@ def change_diff(forge, number, cwd=".", metadata=None):
             metadata["error"] = "forge returned a diff without usable refs"
         return None
     if metadata is not None:
+        # inline notes on these files are lost or rejected, so delivery routes them to the overview
+        metadata["unanchorable_files"] = _deduplicate([
+            c.get("new_path") or c.get("old_path") for c in changes
+            if c.get("collapsed") is True or c.get("too_large") is True])
         metadata["changed_files"] = changed_files
         metadata["diff_unavailable"] = unavailable
         metadata["not_text_reviewable"] = not_text
@@ -968,6 +972,7 @@ def main(argv=None):
         "not_text_reviewable": not_text_reviewable,
         "untracked_files": untracked_files,
         "file_list_recovery": forge_metadata.get("file_list_recovery"),
+        "unanchorable_files": forge_metadata.get("unanchorable_files", []),
         "diff": diff_text, "batched": batched,
         "change": change, "has_description": bool(change and change.get("description", "").strip()),
         "scope_intent": scope_intent,

@@ -51,6 +51,9 @@ def post(report, context, bodies, ids, out, overview=False, forge=None):
         if not entry.get("post"):
             warnings.append("%s is not eligible to post (decision, floor, or already posted); skipped" % finding_id)
             continue
+        if finding["file"] in (context.get("unanchorable_files") or []):
+            warnings.append("%s is on a file whose diff the forge collapsed; not posted" % finding_id)
+            continue
         position = forge.inline_target(target_refs, finding["file"], finding["file"], _line(finding["line"]),
                                        context.get("diff"), finding.get("anchor_side") or "new")
         if position is None:

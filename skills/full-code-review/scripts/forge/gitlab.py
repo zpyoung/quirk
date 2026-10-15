@@ -41,7 +41,7 @@ def api(run, host, method, endpoint, payload=None, timeout=120):
     cmd = ["glab", "api", "--hostname", host, "--method", method, endpoint]
     input_text = None
     if payload is not None:
-        cmd += ["--input", "-"]
+        cmd += ["-H", "Content-Type: application/json", "--input", "-"]
         input_text = json.dumps(payload, separators=(",", ":"))
     result = run(cmd, input_text=input_text, timeout=timeout)
     if result.returncode != 0:

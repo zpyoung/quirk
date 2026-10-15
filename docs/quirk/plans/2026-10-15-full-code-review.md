@@ -288,9 +288,9 @@ Expected: `0 failed` everywhere.
 - Smoke corpus: for each case, copy `tests/fixtures/full-code-review/smoke/<case>/repo/` to a temp dir, `git init` and commit it, apply `change.patch`, run the skill with `--local --no-open`, then `python3 skills/full-code-review/scripts/smoke_check.py --report <report.json> --expected tests/fixtures/full-code-review/smoke/<case>/expected.json` → exit 0 for all five.
 - Zero-config: run the skill `--local --no-open` in a repo with no `REVIEW.md` and no pack → a report renders.
 
-- [ ] Step 1: stats; commit.
-- [ ] Step 2: cross-family verification and cross-repo docs; commit.
-- [ ] Step 3: example pack and tests; commit.
-- [ ] Step 4: smoke fixtures, checker, tests; commit.
-- [ ] Step 5: GitLab polish and `test_forge_gitlab.py`; commit.
+- [x] Step 1: stats; commit.
+- [x] Step 2: cross-family verification and cross-repo docs; commit.
+- [x] Step 3: example pack and tests; commit. (landed in Task 4)
+- [x] Step 4: smoke fixtures, checker, tests; commit.
+- [x] Step 5: GitLab polish and `test_forge_gitlab.py`; commit.
 - [ ] Step 6: manual done-when checks.

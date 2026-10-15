@@ -27,7 +27,7 @@ disk, so the roster is fixed and the review is reproducible. See
            "sha":"<head>","base_sha":..,"start_sha":..} | null,
  "has_description":true,
  "scope_intent":{"guess":"<title + branch, or branch alone>","basis":"change.title + source_branch"},
- "diff_unavailable":[],"not_text_reviewable":[],"untracked_files":[],
+ "diff_unavailable":[],"not_text_reviewable":[],"untracked_files":[],"unanchorable_files":[],
  "file_list_recovery":null|{"api_file_count":..,"reported_changes_count":..,"overflow":..,
                             "recovered_file_count":..,"recovered_from":".."},
  "batched":false,"batches":[{"files":[...],"diff":"..."}]}
@@ -72,6 +72,10 @@ A clean report must not imply a file was reviewed when it wasn't.
 - **`not_text_reviewable`** — genuinely binary content. Legitimately unreviewable, which
   is different from missing; report it as such, don't count it as reviewed.
 - **`untracked_files`** — `--local` only: present in the diff but not yet tracked.
+- **`unanchorable_files`** — files whose diff the forge collapsed or truncated (recovered
+  from git for review). They are reviewed normally, but inline comments on them would be
+  lost (GitLab drops such drafts on publish) or rejected, so delivery lists their
+  findings in the overview instead.
 - **`file_list_recovery`** — non-null when the forge truncated the *file list* itself (not
   just per-file diffs) and the full list had to be rebuilt from git. Surface it, since it
   means the forge's own view of the change was incomplete.
