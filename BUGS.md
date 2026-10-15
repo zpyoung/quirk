@@ -115,3 +115,10 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: high
 - **Proposed fix**: Pin both deps to a known-good version with a frozen lockfile install, and adapt to the new export if AuthStorage moved.
 
+## BUG-13: Kit elements render unstyled in tier-2 apps
+- **Observed**: 2026-10-14
+- **File**: skills/writing-html-artifacts/vendor/kit/1.0.0/kit.css:715
+- **Description**: kit.css relies on Simple.css for pre, button, select and summary styling. In a tier-2 build (Astryx reset.css, no Simple.css), q-code's <pre> body has no background, border or padding and sits outside the header bar's box; q-board's Reset / Copy as Markdown buttons and Move to… selects look like plain text; q-chart's Table view summary has no affordance. Tier-1 report pages look correct. Repro: build-app kit-showcase-app, then The change > Rollback tab, and the Follow-ups tab.
+- **Severity**: medium
+- **Proposed fix**: Style the kit's own inserted controls and the q-code pre in kit.css instead of inheriting from the host stylesheet; add a tier-2 verify screenshot of a non-first route so this is caught.
+
