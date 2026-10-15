@@ -24,6 +24,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
+from forge import github as _github
+from forge import note_url as _note_url
 from forge import gitlab as _gitlab
 
 SCHEMA_VERSION = 1
@@ -250,10 +252,13 @@ def _default_api(host: str, method: str, endpoint: str, payload: Any = None):
     return _gitlab.get_json(host, endpoint)
 
 
-def fetch_discussions(host: str, project: str, number: Any, api: Callable | None = None) -> list[dict]:
-    """Fetch every discussion page using GET, rejecting incomplete pagination."""
+def fetch_discussions(host: str, project: str, number: Any, api: Callable | None = None,
+                      forge: str = "gitlab") -> list[dict]:
+    """Fetch every review thread as a discussion dict, rejecting incomplete pagination."""
     if not host or not project or not str(number).isdigit() or int(number) < 1:
         raise ValueError("host, project and positive change number are required")
+    if forge == "github":
+        return _github.GitHubForge(host, _normalize_project(project), api_call=api).list_threads(int(number))
     return _gitlab.fetch_discussions(api or _default_api, host, _normalize_project(project), number)
 
 # ---------------------------------------------------------------------------
@@ -295,7 +300,7 @@ def load_snapshot(context: dict, repo: str = ".", dimensions=(), guidance=(), fr
     if change_ctx.get("number") is not None:
         try:
             discussions = fetch_discussions(change_ctx.get("host") or context.get("host"),
-                                            change_ctx.get("project") or context.get("project"), change_ctx["number"])
+                                            change_ctx.get("project") or context.get("project"), change_ctx["number"], forge=context.get("forge", "gitlab"))
         except Exception as exc:
             available = False
             warnings.append("discussion cross-check unavailable: %s" % exc)
@@ -481,8 +486,8 @@ def _discussion_details(discussions: list[dict], fp: str | None, finding: dict, 
         if explicit:
             return explicit
         if host and project and change_ctx.get("number") and note.get("id") is not None:
-            return "https://%s/%s/-/merge_requests/%s#note_%s" % (
-                _normalize_host(host), _normalize_project(project), change_ctx["number"], note["id"])
+            return _note_url(context.get("forge", "gitlab"), _normalize_host(host),
+                             _normalize_project(project), change_ctx["number"], note["id"])
         return None
     for discussion in discussions or []:
         notes = discussion.get("notes")
@@ -812,7 +817,7 @@ def check_plan(report: dict, context: dict, snapshot: dict) -> dict:
     if change_ctx.get("number") is not None:
         try:
             refreshed["discussions"] = fetch_discussions(change_ctx.get("host") or context.get("host"),
-                                                         change_ctx.get("project") or context.get("project"), change_ctx["number"])
+                                                         change_ctx.get("project") or context.get("project"), change_ctx["number"], forge=context.get("forge", "gitlab"))
         except Exception as exc:
             raise RuntimeError("discussion cross-check unavailable: %s" % exc) from exc
         refreshed["discussions_available"] = True

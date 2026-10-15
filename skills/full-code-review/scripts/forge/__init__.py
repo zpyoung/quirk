@@ -131,6 +131,13 @@ def change_label(forge_name, number):
     return ("PR #%s" if forge_name == "github" else "MR !%s") % number
 
 
+def note_url(forge_name, host, project, number, note_id):
+    """Web URL of one posted note, for when the forge response did not include one."""
+    if forge_name == "github":
+        return "https://%s/%s/pull/%s#discussion_r%s" % (host, project, number, note_id)
+    return "https://%s/%s/-/merge_requests/%s#note_%s" % (host, project, number, note_id)
+
+
 def make_forge(name, host, project, run=None):
     """Return the adapter for `name` bound to host/project, or None for "none"."""
     if name == "none":
@@ -141,7 +148,8 @@ def make_forge(name, host, project, run=None):
         from forge.gitlab import GitLabForge
         return GitLabForge(host, project, run=run)
     if name == "github":
-        raise ForgeError("GitHub support is not available yet", "validation")
+        from forge.github import GitHubForge
+        return GitHubForge(host, project, run=run)
     raise ValueError("unknown forge %r" % name)
 
 

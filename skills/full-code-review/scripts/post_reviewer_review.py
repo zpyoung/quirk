@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage, atomically publish, and conclude reviewer-seat GitLab reviews.
+"""Stage, atomically publish, and conclude reviewer-seat reviews on GitHub or GitLab.
 
 The irreversible bulk publish is a separate, explicitly confirmed command. All note
 bodies are rebuilt from trusted report JSON by comment_body; normalized triage contributes
@@ -22,6 +22,7 @@ import render_report  # noqa: E402
 from forge import ForgeError, positive_int as _positive_int, valid_sha as _valid_sha  # noqa: E402
 from forge import change_label  # noqa: E402
 from forge import gitlab as _gitlab  # noqa: E402
+from forge import github as _github  # noqa: E402
 
 SCHEMA = 1
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -79,16 +80,23 @@ def _api(host, method, endpoint, payload=None, timeout=120):
     return _gitlab.api(_late_run, host, method, endpoint, payload, timeout)
 
 
-def _base(project, number):
-    return _gitlab.mr_path(project, number)
+def _github_api(host, method, endpoint, payload=None, timeout=120):
+    return _github.api(_late_run, host, method, endpoint, payload, timeout)
 
 
-def _identity(host):
-    return _gitlab.identity(_late_api, host)
+def _late_github_api(host, method, endpoint, payload=None, timeout=120):
+    return _github_api(host, method, endpoint, payload, timeout)
 
 
-def _mr(host, project, number):
-    return _gitlab.merge_request(_late_api, host, project, number)
+def _forge(ctx):
+    """The adapter for a review context or staged state; transport stays patchable here."""
+    if ctx.get("forge", "gitlab") == "github":
+        return _github.GitHubForge(ctx["host"], ctx["project"], run=_late_run, api_call=_late_github_api)
+    return _gitlab.GitLabForge(ctx["host"], ctx["project"], run=_late_run, api_call=_late_api)
+
+
+def _thread_api(ctx):
+    return _late_github_api if ctx.get("forge", "gitlab") == "github" else _api
 
 
 def _context(value):
@@ -120,14 +128,16 @@ def _context(value):
         "expected_head": expected_head, "expected_base": expected_base,
         "expected_start": expected_start,
         "seat_source": change.get("seat_source", "detected"),
+        "forge": value.get("forge", "gitlab"),
     }
 
 
 def _revalidate(ctx):
-    user = _identity(ctx["host"])
+    forge = _forge(ctx)
+    user = forge.identity()
     if str(user["id"]) != str(ctx["expected_user_id"]) or user["username"] != ctx["expected_username"]:
-        raise ReviewError("authenticated GitLab identity changed since the review was prepared")
-    data, refs, author = _mr(ctx["host"], ctx["project"], ctx["number"])
+        raise ReviewError("authenticated forge identity changed since the review was prepared")
+    data, refs, author = forge.live_change(ctx["number"])
     author_id = _positive_int(author.get("id"), "change author id")
     # a reviewer seat the user chose on a co-authored change is allowed on their own change
     if str(author_id) == str(user["id"]) and ctx.get("seat_source") != "chosen":
@@ -135,8 +145,8 @@ def _revalidate(ctx):
     return data, refs
 
 
-def _list_drafts(host, project, number):
-    return _gitlab.list_drafts(_late_api, host, project, number)
+def _list_drafts(ctx):
+    return _forge(ctx).pending(ctx["number"], ctx["expected_username"])
 
 
 def _draft_summary(item):
@@ -172,7 +182,7 @@ def _prepare_memory_report(raw_report, context, ctx):
         raise ReviewError("memory snapshot binding failed: %s" % exc)
     try:
         discussions = review_memory.fetch_discussions(
-            ctx["host"], ctx["project"], ctx["number"], api=_api)
+            ctx["host"], ctx["project"], ctx["number"], api=_thread_api(ctx), forge=ctx.get("forge", "gitlab"))
     except Exception as exc:
         raise ReviewError("memory discussion cross-check failed: %s" % exc)
     live_snapshot = copy.deepcopy(snapshot)
@@ -259,8 +269,8 @@ def _path_pairs(diff_text):
     return pairs
 
 
-def _changed_paths(host, project, old_head, new_head):
-    return _gitlab.changed_paths(_late_api, host, project, old_head, new_head)
+def _changed_paths(ctx, old_head, new_head):
+    return _forge(ctx).changed_paths(old_head, new_head)
 
 
 def _reply_target(finding, reply_note_id):
@@ -273,7 +283,7 @@ def _reply_target(finding, reply_note_id):
     return None
 
 
-def _plan(prepared, by_id, context, refs, changed_paths=None):
+def _plan(prepared, by_id, context, refs, changed_paths=None, forge=None):
     """Plan the notes to stage: inline findings first, then support replies, plus what is omitted.
 
     A reply target comes from the trusted report's unresolved `human_context`, never from the
@@ -345,16 +355,24 @@ def _plan(prepared, by_id, context, refs, changed_paths=None):
             finding, seat="reviewer", lead=disposition, note=note, head_sha=head_sha)
         warnings.extend(body_warnings)
         pair = pairs.get(finding["file"], {"old": finding["file"], "new": finding["file"]})
-        entry.update({
-            "kind": "inline", "body": body,
-            "position": _gitlab.inline_position(refs, pair["old"], pair["new"], line),
-        })
+        if forge is None:
+            position = _gitlab.inline_position(refs, pair["old"], pair["new"], line)
+        else:
+            position = forge.inline_target(refs, pair["old"], pair["new"], line, context.get("diff"),
+                                           finding.get("anchor_side") or "new")
+        if position is None:
+            omitted.append({"id": finding["id"], "reason": "line is outside the diff, so the forge cannot anchor it",
+                            "disposition": decision["disposition"], "fingerprint": fingerprint})
+            warnings.append("%s anchors on a line outside the diff; it is listed in the overview instead."
+                            % finding["id"])
+            continue
+        entry.update({"kind": "inline", "body": body, "position": position})
         inline.append(entry)
     return inline + replies, omitted, warnings
 
 
 def _cleanup_commands(state):
-    return _gitlab.cleanup_commands(state)
+    return _forge(state).cleanup_commands(state)
 
 
 def _reconcile_orphans(state, failed_body):
@@ -366,7 +384,7 @@ def _reconcile_orphans(state, failed_body):
     starts from an empty draft set, so any unrecorded live draft is an orphan.
     """
     try:
-        live = _list_drafts(state["host"], state["project"], state["number"])
+        live = _list_drafts(dict(state, expected_username=state["expected_username"]))
     except Exception as exc:
         state["cleanup_warning"] = ("could not re-list drafts after the staging failure; "
                                     "cleanup commands may be incomplete: %s" % exc)
@@ -413,18 +431,18 @@ def stage(args):
         # judged against a diff GitLab no longer serves, so only a rerun is safe
         if (live_refs["base_sha"] != ctx["expected_base"]
                 or live_refs["start_sha"] != ctx["expected_start"]):
-            raise ReviewError("MR base/start diff refs changed since the review was prepared "
+            raise ReviewError("Change base/start diff refs changed since the review was prepared "
                               "(target branch moved or the diff was refreshed); re-run the review")
         moved = live_refs["head_sha"] != ctx["expected_head"]
         changed = set()
         affected = []
         if moved:
-            changed = _changed_paths(ctx["host"], ctx["project"], ctx["expected_head"], live_refs["head_sha"])
+            changed = _changed_paths(ctx, ctx["expected_head"], live_refs["head_sha"])
             affected = [finding["id"] for finding in prepared["findings"] if finding["file"] in changed]
             if not args.allow_unaffected:
                 raise HeadMoved(ctx["expected_head"], live_refs["head_sha"], sorted(changed), affected,
                                 [f["id"] for f in prepared["findings"] if f["id"] not in affected])
-        drafts = _list_drafts(ctx["host"], ctx["project"], ctx["number"])
+        drafts = _list_drafts(ctx)
         if drafts:
             raise ExistingDrafts([_draft_summary(item) for item in drafts])
         memory_save = None
@@ -436,8 +454,10 @@ def stage(args):
             if not isinstance(memory_save, dict):
                 raise ReviewError("memory decision save returned an invalid response")
             prep_warnings += list(memory_save.get("warnings") or [])
+        forge = _forge(ctx)
         posted, omitted, plan_warnings = _plan(prepared, by_id, context, live_refs,
-                                               changed_paths=changed if moved else None)
+                                               changed_paths=changed if moved else None,
+                                               forge=None if ctx["forge"] == "gitlab" else forge)
         head_note = None
         if moved:
             head_note = ("review built at `%s`; only findings in files unchanged at `%s` are included. "
@@ -455,7 +475,8 @@ def stage(args):
             dict(item, label="reply \u2192 @%s" % item["author"]) if item["kind"] == "reply" else item
             for item in posted]
         state = {
-            "schema": SCHEMA, "host": ctx["host"], "project": ctx["project"], "number": ctx["number"],
+            "schema": SCHEMA, "forge": ctx["forge"], "host": ctx["host"], "project": ctx["project"],
+            "number": ctx["number"],
             "expected_user_id": ctx["expected_user_id"], "expected_username": ctx["expected_username"],
             "seat_source": ctx["seat_source"],
             "report_head_sha": ctx["expected_head"], "publish_head_sha": live_refs["head_sha"],
@@ -472,19 +493,20 @@ def stage(args):
                                         else "approve"},
         }
         _write(args.out, state)
-        current_note = None
-        for note in notes:
-            current_note = note
-            data = _gitlab.create_draft(_late_api, ctx["host"], ctx["project"], ctx["number"],
-                                        _gitlab.draft_payload(note))
-            draft_id = _positive_int(data.get("id") if isinstance(data, dict) else None, "created draft id")
-            if any(item["draft_id"] == draft_id for item in state["created"]):
-                raise ReviewError("GitLab returned duplicate created draft id %s" % draft_id)
-            state["created"].append({"draft_id": draft_id, "kind": note["kind"],
+        uncreated = list(notes)
+
+        def record(note, item_id, **extra):
+            if any(item["draft_id"] == item_id for item in state["created"]):
+                raise ReviewError("the forge returned duplicate created id %s" % item_id)
+            state["created"].append({"draft_id": item_id, "kind": note["kind"],
                                      "finding_id": note.get("finding_id"),
                                      "fingerprint": note.get("fingerprint"),
                                      "body_sha256": _body_digest(note["body"])})
+            state.update(extra)
+            uncreated.remove(note)
             _write(args.out, state)
+
+        forge.stage_notes(ctx["number"], notes, live_refs["head_sha"], record, ctx["expected_username"])
         state["staged"] = True
         state["cleanup_commands"] = _cleanup_commands(state)
         _write(args.out, state)
@@ -501,7 +523,8 @@ def stage(args):
         if isinstance(state, dict):
             state["staged"] = False
             state["error"] = str(exc)
-            failed = locals().get("current_note")
+            remaining = locals().get("uncreated") or []
+            failed = remaining[0] if remaining else None
             if isinstance(failed, dict):
                 state["failed_note"] = {"kind": failed.get("kind"),
                                         "finding_id": failed.get("finding_id")}
@@ -516,7 +539,7 @@ def stage(args):
 
 class HeadMoved(Exception):
     def __init__(self, old, new, paths, affected, unaffected):
-        self.payload = {"error": "MR head moved; publishing is blocked", "head_moved": True,
+        self.payload = {"error": "Change head moved; publishing is blocked", "head_moved": True,
                         "old_head": old, "new_head": new, "changed_files": paths,
                         "affected_findings": affected, "unaffected_findings": unaffected,
                         "options": ["re-run the review", "after explicit approval, stage only unaffected findings"]}
@@ -547,7 +570,8 @@ def _state_context(state):
             "expected_head": _valid_sha(state.get("publish_head_sha"), "publish_head_sha"),
             "expected_base": _valid_sha(refs.get("base_sha"), "diff_refs.base_sha"),
             "expected_start": _valid_sha(refs.get("start_sha"), "diff_refs.start_sha"),
-            "seat_source": state.get("seat_source", "detected")}
+            "seat_source": state.get("seat_source", "detected"),
+            "forge": state.get("forge", "gitlab")}
 
 
 _FINDING_KINDS = ("inline", "reply")
@@ -574,7 +598,7 @@ def _discussion_markers(discussions, identity, state=None):
                 note_id = note.get("id")
                 url = note.get("url") or note.get("web_url") or discussion.get("web_url")
                 if not url and note_id and isinstance(state, dict):
-                    url = _gitlab.note_url(state["host"], state["project"], state["number"], note_id)
+                    url = _forge(state).note_url(state["number"], note_id)
                 found.setdefault(fingerprint, {
                     "discussion_id": discussion_id, "note_id": note_id, "url": url})
     return found
@@ -585,7 +609,7 @@ def _memory_publish_crosscheck(state, ctx):
         return None
     try:
         discussions = review_memory.fetch_discussions(
-            ctx["host"], ctx["project"], ctx["number"], api=_api)
+            ctx["host"], ctx["project"], ctx["number"], api=_thread_api(ctx), forge=ctx.get("forge", "gitlab"))
     except Exception as exc:
         raise ReviewError("memory discussion cross-check failed before publication: %s" % exc)
     markers = _discussion_markers(
@@ -647,19 +671,18 @@ def publish(args):
             raise ReviewError("review staging did not complete")
         _, refs = _revalidate(ctx)
         if refs["head_sha"] != ctx["expected_head"]:
-            raise ReviewError("MR head moved after staging; bulk publication is blocked. Run the printed cleanup commands, then re-run or restage unaffected findings.")
+            raise ReviewError("Change head moved after staging; bulk publication is blocked. Run the printed cleanup commands, then re-run or restage unaffected findings.")
         if refs["base_sha"] != ctx["expected_base"] or refs["start_sha"] != ctx["expected_start"]:
-            raise ReviewError("MR base/start diff refs changed after staging; bulk publication is blocked. Run the printed cleanup commands, then re-run the review.")
+            raise ReviewError("Change base/start diff refs changed after staging; bulk publication is blocked. Run the printed cleanup commands, then re-run the review.")
         # Read discussions immediately before the draft listing/equality and
         # bulk call to reduce (but never claim to close) the race.
         _memory_publish_crosscheck(state, ctx)
-        drafts = _list_drafts(ctx["host"], ctx["project"], ctx["number"])
-        current = {_positive_int(item.get("id"), "draft id") for item in drafts}
+        current = _forge(ctx).live_staged_ids(ctx["number"], ctx["expected_username"])
         expected = {_positive_int(item.get("draft_id"), "staged draft id") for item in state.get("created", [])}
         if current != expected:
             raise ReviewError("live drafts do not exactly match this staged review (unexpected: %s; missing: %s)" %
                               (sorted(current - expected), sorted(expected - current)))
-        _gitlab.bulk_publish(_late_api, ctx["host"], ctx["project"], ctx["number"])
+        _forge(ctx).publish(ctx["number"], state)
         # Publication is durable before any best-effort ledger work. Never
         # turn a successful irreversible POST into an "unpublished" result.
         published = True
@@ -673,7 +696,8 @@ def publish(args):
         if state.get("memory_enabled"):
             try:
                 discussions = review_memory.fetch_discussions(
-                    ctx["host"], ctx["project"], ctx["number"], api=_api)
+                    ctx["host"], ctx["project"], ctx["number"], api=_thread_api(ctx),
+                    forge=ctx.get("forge", "gitlab"))
                 receipts, receipt_warnings = _memory_receipts(state, refs, discussions)
                 post_warnings.extend(receipt_warnings)
             except Exception as exc:
@@ -731,8 +755,11 @@ def complete(args):
             raise ReviewError("a completion action has already been recorded for this review")
         _, refs = _revalidate(ctx)
         if refs["head_sha"] != ctx["expected_head"]:
-            raise ReviewError("MR head moved after publication; completion action is blocked")
-        if args.action == "approve":
+            raise ReviewError("Change head moved after publication; completion action is blocked")
+        if ctx["forge"] == "github":
+            result = _forge(ctx).complete(ctx["number"], args.action, ctx["expected_head"],
+                                          "Requesting changes; see the review above.")
+        elif args.action == "approve":
             result = _gitlab.approve(_late_api, ctx["host"], ctx["project"], ctx["number"],
                                      ctx["expected_head"])
         elif args.action == "request-changes":

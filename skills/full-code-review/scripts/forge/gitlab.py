@@ -14,6 +14,7 @@ from urllib.parse import quote, urlencode
 
 from forge import ForgeError, positive_int, valid_sha
 from forge import change_label as _change_label
+from forge import note_url as _note_url
 
 NAME = "gitlab"
 
@@ -332,7 +333,7 @@ def discussion_resolved(discussion):
 
 
 def note_url(host, project, iid, note_id):
-    return "https://%s/%s/-/merge_requests/%s#note_%s" % (host, project, iid, note_id)
+    return _note_url(NAME, host, project, iid, note_id)
 
 
 def fetch_discussions(api_call, host, project, iid):
@@ -377,12 +378,15 @@ class GitLabForge:
 
     name = NAME
 
-    def __init__(self, host, project, run=None):
+    def __init__(self, host, project, run=None, api_call=None):
         self.host = host
         self.project = project
         self._run = run or default_run
+        self._injected_api = api_call
 
     def _api_call(self, host, method, endpoint, payload=None, timeout=120):
+        if self._injected_api is not None:
+            return self._injected_api(host, method, endpoint, payload, timeout)
         return api(self._run, host, method, endpoint, payload, timeout)
 
     def change_label(self, number):
@@ -439,3 +443,55 @@ class GitLabForge:
 
     def list_threads(self, number, api_call=None):
         return fetch_discussions(api_call or self._api_call, self.host, self.project, number)
+
+    # -- author seat -------------------------------------------------------------
+    def inline_target(self, refs, old_path, new_path, line, diff_text, side="new"):
+        position = inline_position(refs, old_path, new_path, line)
+        if side == "old":
+            position.pop("new_line")
+            position["old_line"] = line
+        return position
+
+    def post_inline(self, number, body, position, head_sha):
+        data = self._api_call(self.host, "POST", "%s/discussions" % mr_path(self.project, number),
+                              {"body": body, "position": position})
+        notes = data.get("notes") if isinstance(data, dict) else None
+        note = notes[0] if isinstance(notes, list) and notes else {}
+        if note.get("type") != "DiffNote":
+            # a stale position silently degrades to a plain comment, so a missing DiffNote is a failure
+            raise ForgeError("GitLab created a plain comment instead of a DiffNote; check the position")
+        return {"published": True, "discussion_id": data.get("id"), "note_id": note.get("id"),
+                "url": note_url(self.host, self.project, number, note.get("id")), "head_sha": head_sha}
+
+    def post_overview(self, number, body):
+        data = self._api_call(self.host, "POST", "%s/notes" % mr_path(self.project, number), {"body": body})
+        return {"published": True, "note_id": data.get("id"),
+                "url": note_url(self.host, self.project, number, data.get("id"))}
+
+    # -- reviewer seat -----------------------------------------------------------
+    def identity(self):
+        return identity(self._api_call, self.host)
+
+    def live_change(self, number):
+        return merge_request(self._api_call, self.host, self.project, number)
+
+    def changed_paths(self, old_head, new_head):
+        return changed_paths(self._api_call, self.host, self.project, old_head, new_head)
+
+    def pending(self, number, username):
+        return list_drafts(self._api_call, self.host, self.project, number)
+
+    def stage_notes(self, number, notes, head_sha, record, username):
+        for note in notes:
+            data = create_draft(self._api_call, self.host, self.project, number, draft_payload(note))
+            record(note, positive_int(data.get("id") if isinstance(data, dict) else None, "created draft id"))
+
+    def live_staged_ids(self, number, username):
+        return {positive_int(item.get("id"), "draft id") for item in self.pending(number, username)}
+
+    def publish(self, number, state):
+        bulk_publish(self._api_call, self.host, self.project, number)
+
+    def cleanup_commands(self, state):
+        return cleanup_commands(state)
+

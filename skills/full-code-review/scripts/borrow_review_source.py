@@ -16,8 +16,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from forge import gitlab as _gitlab
-from forge import parse_origin
+from forge import make_forge, parse_origin
 
 SCHEMA = 1
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -112,21 +111,21 @@ def _make_root(prefix):
     return root, token
 
 
-def _clone_project(host, project, root):
+def _clone_project(host, project, root, forge_name="gitlab"):
     repo = os.path.join(root, "repo")
-    cmd, env = _gitlab.clone_command(host, project, repo)
+    cmd, env = make_forge(forge_name, host, project).clone_command(repo)
     result = _run(cmd, timeout=300, env=env)
     if result.returncode != 0:
         raise RuntimeError("temporary clone failed: %s" % (result.stderr.strip() or result.stdout.strip()))
     return os.path.realpath(repo)
 
 
-def _add_worktree(repo_root, number, expected_head, worktree, shallow=False):
+def _add_worktree(repo_root, number, expected_head, worktree, shallow, refspec):
     review_ref = "refs/quirk-review/%s/head" % number
     fetch_cmd = ["git", "-C", repo_root, "fetch", "--no-tags"]
     if shallow:
         fetch_cmd.append("--depth=1")
-    fetch_cmd += ["origin", "+%s:%s" % (_gitlab.head_refspec(number), review_ref)]
+    fetch_cmd += ["origin", "+%s:%s" % (refspec, review_ref)]
     fetch = _run(fetch_cmd, timeout=300)
     if fetch.returncode != 0:
         raise RuntimeError("fetching the change head failed: %s" % (fetch.stderr.strip() or fetch.stdout.strip()))
@@ -172,6 +171,7 @@ def acquire(args):
         host, project, number, head = _validate_context(context)
     except Exception as exc:
         return _error(exc)
+    forge_name = context.get("forge", "gitlab")
     refusal = probe_refusal(context) if args.allow_mutation_probe else None
     mutation_consent = bool(args.allow_mutation_probe) and refusal is None
 
@@ -198,7 +198,7 @@ def acquire(args):
             return _error("no matching local clone; ask before using --allow-temp-clone, or choose --diff-only")
         try:
             temp_root, token = _make_root("quirk-review-clone-")
-            repo_root = _clone_project(host, project, temp_root)
+            repo_root = _clone_project(host, project, temp_root, forge_name=forge_name)
         except Exception as exc:
             if temp_root:
                 shutil.rmtree(temp_root, ignore_errors=True)
@@ -231,7 +231,8 @@ def acquire(args):
     # acquisition can still be released safely with this manifest.
     _write(args.out, manifest)
     try:
-        review_ref = _add_worktree(repo_root, number, head, worktree, shallow=is_temp_clone)
+        review_ref = _add_worktree(repo_root, number, head, worktree, shallow=is_temp_clone,
+                                   refspec=make_forge(forge_name, host, project).head_refspec(number))
     except Exception as exc:
         shutil.rmtree(worktree, ignore_errors=True)
         shutil.rmtree(cleanup_root, ignore_errors=True)

@@ -108,7 +108,7 @@ def test_explicit_temp_clone_path_is_cleaned_completely(tmp_path):
     # from the matching reviewer clone's origin through a fresh local clone in the fake.
     bare = next(tmp_path.glob("origin.git"))
     old_clone = m._clone_project
-    def fake_clone(host, project, root):
+    def fake_clone(host, project, root, forge_name="gitlab"):
         repo = Path(root) / "repo"
         run("git", "clone", "--no-checkout", str(bare), str(repo))
         return str(repo.resolve())
