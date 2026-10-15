@@ -68,6 +68,16 @@ SECTION_3_4: dict[str, tuple[Any, bool, dict[str, tuple[bool, str, Any, Any]], l
         [],
     ),
     "q-board": (None, True, {"id": (True, "ident", None, None)}, [["section"]], ["board-columns"]),
+    "q-grid": (None, False, {}, [], []),
+    "q-panel": (
+        None,
+        False,
+        {"span": (False, "enum", ["1", "2", "3", "4", "full"], "1")},
+        [["h2", "h3", "h4"]],
+        [],
+    ),
+    "q-sidenote": (None, True, {}, [], []),
+    "q-compare": (None, True, {"recommended": (True, "integer", None, None)}, [["table"]], ["compare-recommended"]),
 }
 
 
@@ -107,7 +117,7 @@ def test_catalog_loads_for_current_and_explicit_version(catalog: Any) -> None:
 
 def test_the_interactive_false_set_is_pinned(catalog: Any) -> None:
     quiet = {tag for tag, el in catalog.elements.items() if not el.interactive}
-    assert quiet == {"q-stat", "q-chart", "q-timeline", "q-diff", "q-diff-note"}
+    assert quiet == {"q-stat", "q-chart", "q-timeline", "q-diff", "q-diff-note", "q-grid", "q-panel"}
 
 
 @pytest.mark.parametrize("tag", list(SECTION_3_4))
@@ -192,7 +202,14 @@ def test_every_known_rule_is_accepted(vendor_copy: Path, rule: str) -> None:
 
 
 def test_known_rules_are_exactly_the_spec_set() -> None:
-    assert set(kitcheck.KNOWN_RULES) == {"max-series", "diff-notes", "heading-sections", "board-columns", "timeline-items"}
+    assert set(kitcheck.KNOWN_RULES) == {
+        "max-series",
+        "diff-notes",
+        "heading-sections",
+        "board-columns",
+        "timeline-items",
+        "compare-recommended",
+    }
 
 
 def test_kit_version_must_equal_directory_name(vendor_copy: Path) -> None:

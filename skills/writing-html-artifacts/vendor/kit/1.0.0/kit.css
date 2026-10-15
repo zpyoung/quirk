@@ -32,7 +32,7 @@
   display: none !important;
 }
 
-:where(q-tabs, q-timeline, q-code, q-chart, q-diff) {
+:where(q-tabs, q-timeline, q-code, q-chart, q-diff, q-grid, q-panel, q-compare) {
   display: block;
   min-width: 0;
   max-width: 100%;
@@ -817,6 +817,286 @@ q-board > :where([data-q-drop]) {
 
   q-board > section > ul > li[data-q-card] {
     padding-left: var(--q-space-3);
+    break-inside: avoid;
+  }
+}
+
+/* q-grid */
+
+q-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--q-space-4);
+  box-sizing: border-box;
+  margin: var(--q-space-4) 0;
+}
+
+q-grid > :where(*) {
+  min-width: 0;
+  margin: 0;
+}
+
+q-grid > :where(q-stat) {
+  width: auto;
+}
+
+@media (min-width: 701px) {
+  q-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  q-grid > :where(q-panel[span="2"], q-panel[span="3"], q-panel[span="4"], [data-span="2"], [data-span="3"], [data-span="4"], [data-span="5"], [data-span="6"]) { grid-column: span 2; }
+  q-grid > :where(q-panel[span="full"], [data-span="full"]) { grid-column: 1 / -1; }
+}
+
+@media (min-width: 1100px) {
+  q-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  q-grid > :where(q-panel[span="3"], [data-span="3"]) { grid-column: span 3; }
+  q-grid > :where(q-panel[span="4"], [data-span="4"], [data-span="5"], [data-span="6"]) { grid-column: span 4; }
+}
+
+@media (min-width: 1800px) {
+  q-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  q-grid > :where([data-span="5"]) { grid-column: span 5; }
+  q-grid > :where([data-span="6"]) { grid-column: span 6; }
+}
+
+/* q-panel */
+
+q-panel {
+  display: block;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  padding: var(--q-space-4);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-md);
+  background: var(--q-color-surface);
+  color: var(--q-color-text);
+}
+
+q-panel > h2,
+q-panel > h3,
+q-panel > h4 {
+  margin: 0 0 var(--q-space-3);
+  font-size: var(--q-size-h4);
+  line-height: var(--q-size-leading-tight);
+}
+
+/* q-sidenote */
+
+:where(q-sidenote) {
+  counter-increment: q-sidenote;
+}
+
+q-sidenote {
+  color: var(--q-color-text-muted);
+  font-size: var(--q-size-small);
+  line-height: var(--q-size-leading-tight);
+}
+
+q-sidenote::before { content: " ("; }
+q-sidenote::after { content: ")"; }
+
+q-sidenote:where([data-q-collapsed]) {
+  display: none;
+}
+
+button:where([data-q-sidenote-toggle]) {
+  display: inline-block;
+  min-width: 24px;
+  min-height: 24px;
+  margin: 0 var(--q-space-1);
+  padding: 0 var(--q-space-1);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-pill);
+  background: var(--q-color-surface);
+  color: var(--q-color-accent);
+  font: inherit;
+  font-size: var(--q-size-small);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  vertical-align: baseline;
+  cursor: pointer;
+}
+
+button:where([data-q-sidenote-toggle][aria-expanded="true"]) {
+  background: var(--q-color-accent);
+  color: var(--q-color-bg);
+}
+
+@media (min-width: 1100px) {
+  :where([data-layout="longform"]) q-sidenote {
+    display: block;
+    float: right;
+    clear: right;
+    box-sizing: border-box;
+    width: 16rem;
+    margin: 0 -17rem var(--q-space-3) 0;
+  }
+
+  :where([data-layout="longform"]) q-sidenote::before {
+    content: counter(q-sidenote) ". ";
+    font-weight: 700;
+  }
+
+  :where([data-layout="longform"]) q-sidenote::after {
+    content: none;
+  }
+
+  :where([data-layout="longform"]) button:where([data-q-sidenote-toggle]) {
+    display: none;
+  }
+}
+
+/* q-compare */
+
+q-compare {
+  box-sizing: border-box;
+  margin: var(--q-space-4) 0;
+  overflow-x: auto;
+}
+
+q-compare > table {
+  display: table;
+  width: 100%;
+  margin: 0;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+q-compare > table :is(th, td) {
+  min-width: 9rem;
+  padding: var(--q-space-2) var(--q-space-3);
+  border-bottom: 1px solid var(--q-color-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+q-compare > table :is(th, td):where([data-q-recommended]) {
+  background: var(--q-color-surface);
+}
+
+q-compare > table thead :is(th, td):where([data-q-recommended]) {
+  border-bottom-color: var(--q-color-accent);
+}
+
+q-compare :where([data-q-badge]) {
+  display: block;
+  color: var(--q-color-accent);
+  font-size: var(--q-size-small);
+  font-weight: 600;
+}
+
+q-compare > :where([data-q-stack]) {
+  display: none;
+}
+
+q-compare > :where([data-q-stack]) > :where([data-q-option]) {
+  box-sizing: border-box;
+  margin: 0 0 var(--q-space-3);
+  padding: var(--q-space-3) var(--q-space-4);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-md);
+  background: var(--q-color-surface);
+}
+
+q-compare > :where([data-q-stack]) > :where([data-q-option][data-q-recommended]) {
+  border-color: var(--q-color-accent);
+}
+
+q-compare > :where([data-q-stack]) > :where([data-q-option]) > h3 {
+  margin: 0 0 var(--q-space-2);
+  font-size: var(--q-size-h4);
+  line-height: var(--q-size-leading-tight);
+}
+
+q-compare > :where([data-q-stack]) dl {
+  margin: 0;
+}
+
+q-compare > :where([data-q-stack]) dt {
+  color: var(--q-color-text-muted);
+  font-size: var(--q-size-small);
+  font-weight: 600;
+}
+
+q-compare > :where([data-q-stack]) dd {
+  margin: 0 0 var(--q-space-2);
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 701px) {
+  q-compare {
+    position: relative;
+    left: 50%;
+    width: fit-content;
+    min-width: 100%;
+    max-width: max(100%, calc(100vw - 2 * clamp(var(--q-space-4), 4vw, var(--q-space-6))));
+    transform: translateX(-50%);
+  }
+}
+
+@media (max-width: 700px) {
+  q-compare:where([data-q-ready]) > table {
+    display: none;
+  }
+
+  q-compare > :where([data-q-stack]) {
+    display: block;
+  }
+}
+
+@media print {
+  q-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  q-grid > * {
+    grid-column: auto;
+  }
+
+  q-panel {
+    break-inside: avoid;
+  }
+
+  q-sidenote,
+  :where([data-layout="longform"]) q-sidenote {
+    display: inline;
+    float: none;
+    width: auto;
+    margin: 0;
+  }
+
+  q-sidenote::before,
+  :where([data-layout="longform"]) q-sidenote::before {
+    content: " (";
+    font-weight: inherit;
+  }
+
+  q-sidenote::after,
+  :where([data-layout="longform"]) q-sidenote::after {
+    content: ")";
+  }
+
+  button:where([data-q-sidenote-toggle]) {
+    display: none;
+  }
+
+  q-compare {
+    position: static;
+    width: auto;
+    max-width: 100%;
+    overflow: visible;
+    transform: none;
+  }
+
+  q-compare:where([data-q-ready]) > table {
+    display: none;
+  }
+
+  q-compare > :where([data-q-stack]) {
+    display: block;
+  }
+
+  q-compare > :where([data-q-stack]) > :where([data-q-option]) {
     break-inside: avoid;
   }
 }

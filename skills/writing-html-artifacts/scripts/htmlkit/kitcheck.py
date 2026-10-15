@@ -29,7 +29,7 @@ KIT_TAG = re.compile(r"<q-[a-z]", re.IGNORECASE)
 CHART_TAG = re.compile(r"<q-chart[\s/>]", re.IGNORECASE)
 CODE_TAG = re.compile(r"<q-(?:code|diff)[\s/>]", re.IGNORECASE)
 
-KNOWN_RULES = frozenset({"max-series", "diff-notes", "heading-sections", "board-columns", "timeline-items"})
+KNOWN_RULES = frozenset({"max-series", "diff-notes", "heading-sections", "board-columns", "timeline-items", "compare-recommended"})
 ATTRIBUTE_KINDS = ("text", "enum", "boolean", "number-list", "integer", "ident")
 
 _TAG = re.compile(r"^q-[a-z]+(-[a-z]+)*\Z")
@@ -832,12 +832,27 @@ def _rule_timeline_items(node: _Node, report: Report, index: _Index) -> None:
             report(item.line, f'<{node.tag}> item {number} data-tone="{tone}" is not one of {", ".join(TONES)}')
 
 
+def _rule_compare_recommended(node: _Node, report: Report, index: _Index) -> None:
+    raw = node.attrs.get("recommended")
+    table = index.first(node, "table", skip=node.tag)
+    if raw is None or table is None or not _DIGITS.fullmatch(raw):
+        return
+    header = _header_row(table, index)
+    if header is None:
+        return
+    options = len([c for c in header.children if c.tag in ("th", "td")]) - 1
+    number = _positive_integer(raw)
+    if number is None or number > options:
+        report(node.line, f'<{node.tag}> recommended="{raw}" must be between 1 and {max(options, 1)} (the option columns)')
+
+
 _RULES: dict[str, Callable[[_Node, Report, _Index], None]] = {
     "max-series": _rule_max_series,
     "diff-notes": _rule_diff_notes,
     "heading-sections": _rule_heading_sections,
     "board-columns": _rule_heading_sections,
     "timeline-items": _rule_timeline_items,
+    "compare-recommended": _rule_compare_recommended,
 }
 assert set(_RULES) == KNOWN_RULES
 

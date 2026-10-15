@@ -274,6 +274,84 @@
       ],
       "children": "Direct-child <section> elements, each opening with an h2 to h6 heading and then a <ul> of <li> cards. A card's identity is its data-id attribute, or else its trimmed text.",
       "example": "<q-board id=\"triage\">\n  <section>\n    <h3>Now</h3>\n    <ul>\n      <li data-id=\"login-bug\">Fix login redirect loop</li>\n      <li data-id=\"slow-search\">Profile slow search queries</li>\n    </ul>\n  </section>\n  <section>\n    <h3>Next</h3>\n    <ul>\n      <li data-id=\"csv-export\">Add CSV export to reports</li>\n    </ul>\n  </section>\n  <section>\n    <h3>Later</h3>\n    <ul>\n      <li data-id=\"dark-mode-icons\">Redraw icons for dark mode</li>\n    </ul>\n  </section>\n</q-board>"
+    },
+    {
+      "tag": "q-grid",
+      "use_when": "Use when several panels, stats or figures should sit side by side and stack on narrow screens, as on a dashboard.",
+      "parent": null,
+      "interactive": false,
+      "attributes": [],
+      "requires": [],
+      "rules": [],
+      "children": "Any block children, usually q-panel or q-stat elements. They flow into equal columns: 1 at 700px and below, up to 2 from 701px, up to 4 from 1100px and up to 6 from 1800px (viewport widths). Give a child span=\"2\" (q-panel) or data-span=\"2\" (anything else) to take that many columns; a span never exceeds the columns in the row.",
+      "example": "<q-grid>\n  <q-panel span=\"2\">\n    <h3>Checkout latency</h3>\n    <p>The p95 fell from 410 ms to 310 ms after the cache change.</p>\n  </q-panel>\n  <q-panel>\n    <h3>Error rate</h3>\n    <p>3.1% of attempts failed in the last 7 days.</p>\n  </q-panel>\n  <q-panel>\n    <h3>Open incidents</h3>\n    <p>None.</p>\n  </q-panel>\n</q-grid>"
+    },
+    {
+      "tag": "q-panel",
+      "use_when": "Use when one dashboard item, such as a chart, a table or a few stats, needs a title and a border of its own.",
+      "parent": null,
+      "interactive": false,
+      "attributes": [
+        {
+          "name": "span",
+          "required": false,
+          "kind": "enum",
+          "values": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "full"
+          ],
+          "default": "1",
+          "description": "How many columns of an enclosing q-grid the panel spans; full takes the whole row."
+        }
+      ],
+      "requires": [
+        [
+          "h2",
+          "h3",
+          "h4"
+        ]
+      ],
+      "rules": [],
+      "children": "A heading (h2, h3 or h4) first: it is the panel's title. The body follows: paragraphs, q-chart, q-table, q-stat or any other content.",
+      "example": "<q-panel>\n  <h3>Weekly active users</h3>\n  <p>58,200 distinct signed-in users in the last ISO week, up 11.5%.</p>\n</q-panel>"
+    },
+    {
+      "tag": "q-sidenote",
+      "use_when": "Use when a short aside, source or caveat belongs beside a sentence without interrupting it.",
+      "parent": null,
+      "interactive": true,
+      "attributes": [],
+      "requires": [],
+      "rules": [],
+      "children": "Inline text placed inside a paragraph, right after the words it annotates. On a longform page of 1100px or wider it sits numbered in the right margin. Narrower, a numbered button in the text opens it in place. Without JavaScript, and in print, it reads inline in parentheses.",
+      "example": "<p>Median build time fell to nine minutes<q-sidenote>Measured on the main branch, excluding reruns.</q-sidenote> after the cache moved to the shared runner.</p>"
+    },
+    {
+      "tag": "q-compare",
+      "use_when": "Use when two or more options are judged against the same criteria and one of them is recommended.",
+      "parent": null,
+      "interactive": true,
+      "attributes": [
+        {
+          "name": "recommended",
+          "required": true,
+          "kind": "integer",
+          "description": "The recommended option, counted from 1 across the option columns (the criteria column is not counted)."
+        }
+      ],
+      "requires": [
+        [
+          "table"
+        ]
+      ],
+      "rules": [
+        "compare-recommended"
+      ],
+      "children": "A <table> whose first row is the header: the first cell names the criteria column and each other header cell is one option. Every later row is one criterion, with its name in the first cell. At 700px and below each option becomes its own block, the recommended one first. Wider, the table widens past the page column when the options do not fit. Without JavaScript the table scrolls inside its own box.",
+      "example": "<q-compare recommended=\"2\">\n  <table>\n    <thead>\n      <tr><th>Criterion</th><th>Self-host</th><th>Managed</th><th>Hybrid</th></tr>\n    </thead>\n    <tbody>\n      <tr><th>Monthly cost</th><td>$900</td><td>$2,400</td><td>$1,500</td></tr>\n      <tr><th>Setup time</th><td>3 weeks</td><td>2 days</td><td>1 week</td></tr>\n      <tr><th>On-call load</th><td>High</td><td>Low</td><td>Medium</td></tr>\n    </tbody>\n  </table>\n</q-compare>"
     }
   ]
 }
