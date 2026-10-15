@@ -1,12 +1,10 @@
-import os
 import re
 import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "skills", "full-code-review", "scripts"))
-import md_render as m  # noqa: E402
+import md_render as m
 
 
 def test_empty(tmp_path):

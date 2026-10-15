@@ -1,12 +1,9 @@
 import copy
 import hashlib
 import json
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "skills", "full-code-review", "scripts"))
 import review_memory as m
 FETCH_DISCUSSIONS = m.fetch_discussions
 

@@ -12,10 +12,9 @@ import json
 import os
 import re
 import shlex
-import subprocess
 from urllib.parse import quote
 
-from forge import ForgeError, change_label as _change_label, positive_int
+from forge import ForgeError, change_label as _change_label, default_run, positive_int
 from forge import note_url as _note_url
 
 NAME = "github"
@@ -24,14 +23,6 @@ _MAX_PAGES = 30
 # the pulls/{n}/commits and compare endpoints stop listing at these counts without signalling truncation
 _COMMITS_CAP = 250
 _COMPARE_FILES_CAP = 300
-
-
-def default_run(cmd, input_text=None, timeout=120):
-    try:
-        return subprocess.run(cmd, capture_output=True, text=True, input=input_text,
-                              timeout=timeout, shell=False)
-    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
-        return subprocess.CompletedProcess(cmd, 127, "", str(exc))
 
 
 def _error_code(text):

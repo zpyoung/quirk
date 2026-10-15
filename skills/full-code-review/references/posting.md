@@ -272,8 +272,9 @@ instead of opening a duplicate thread. Only the reviewer seat posts them.
 - **Stage.** After the inline drafts, the stager creates the reply as a draft note with
   `in_reply_to_discussion_id` and no position, with the body built by `comment_body`
   (`**Agree · <disposition>** · quirk full-code-review found this independently`, then the why
-  and fix lines; the reviewer note moves into `Details`). It joins the single atomic
-  batch.
+  and fix lines; the reviewer note moves into `Details`). On GitLab it is one more draft
+  in the batch. On GitHub it is a separate mutation after the single review create, so a
+  reply failure leaves the pending review without it.
 - **Stale target.** If the target is no longer an unresolved `human_context` entry at
   stage time, the finding falls back to an inline draft and the staging warnings say
   so.
@@ -305,7 +306,8 @@ Publish freshly revalidates identity, head, and base/start diff refs, re-lists a
 draft pages, and requires
 exact set equality with the recorded staged IDs. Extra **or missing** IDs abort. Calls
 are adjacent to reduce the unavoidable GET→POST window. One
-`POST …/draft_notes/bulk_publish` publishes the batch.
+`POST …/draft_notes/bulk_publish` publishes the batch on GitLab; on GitHub one submit
+of the pending review does.
 Memory-enabled publication also rechecks published markers before the draft-set
 check. If one of the staged findings appeared since staging, abort and offer user
 cleanup/restaging; do not publish duplicates or selectively delete staged drafts.

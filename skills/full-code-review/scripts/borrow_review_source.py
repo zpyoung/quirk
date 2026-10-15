@@ -17,6 +17,7 @@ import tempfile
 from pathlib import Path
 
 from forge import make_forge, parse_origin
+from jsonio import load_object, write_json
 
 SCHEMA = 1
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -38,19 +39,10 @@ def _error(message, **extra):
 
 
 def _load(path):
-    with open(path, encoding="utf-8") as fh:
-        value = json.load(fh)
-    if not isinstance(value, dict):
-        raise ValueError("context must be a JSON object")
-    return value
+    return load_object(path, "context")
 
 
-def _write(path, value):
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temp = target.with_name(target.name + ".tmp")
-    temp.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(str(temp), str(target))
+_write = write_json
 
 
 def _origin_identity(url):

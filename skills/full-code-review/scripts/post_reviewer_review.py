@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Stage, atomically publish, and conclude reviewer-seat reviews on GitHub or GitLab.
+"""Stage, publish, and conclude reviewer-seat reviews on GitHub or GitLab.
 
-The irreversible bulk publish is a separate, explicitly confirmed command. All note
+Publishing is one forge call (GitLab bulk publish, GitHub review submit). Staging is not
+atomic on GitHub: support replies are separate mutations after the single review create.
+The irreversible publish is a separate, explicitly confirmed command. All note
 bodies are rebuilt from trusted report JSON by comment_body; normalized triage contributes
 only the chosen slot, the reviewer's optional note, and an optional support-reply target
 that is re-resolved against the trusted report before use.
@@ -12,34 +14,28 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import sys
 
 import review_memory  # noqa: E402
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import comment_body  # noqa: E402
+from jsonio import load_object, write_json  # noqa: E402
 import render_report  # noqa: E402
 from forge import ForgeError, positive_int as _positive_int, valid_sha as _valid_sha  # noqa: E402
-from forge import change_label  # noqa: E402
+from forge import change_label, default_run, make_forge  # noqa: E402
 from forge import gitlab as _gitlab  # noqa: E402
 from forge import github as _github  # noqa: E402
 
 SCHEMA = 1
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-POST_SLOTS = {"fix": "Blocking", "later": "Non-blocking", "detail": "Question"}
-ALL_SLOTS = {"fix": "Blocking", "later": "Non-blocking", "detail": "Question",
-             "ignore": "Drop", "none": "Undecided"}
+ALL_SLOTS = dict(render_report.DISPOSITIONS["reviewer"])
+POST_SLOTS = {slot: ALL_SLOTS[slot] for slot in ("fix", "later", "detail")}
 
 
 ReviewError = ForgeError
 
 
-def _run(cmd, input_text=None, timeout=120):
-    try:
-        return subprocess.run(cmd, capture_output=True, text=True, input=input_text,
-                              timeout=timeout, shell=False)
-    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
-        return subprocess.CompletedProcess(cmd, 127, "", str(exc))
+_run = default_run
 
 
 # Late-bound so a test's replacement of the module-level _run/_api is honored.
@@ -55,25 +51,14 @@ def _emit(value):
     print(json.dumps(value, indent=2, sort_keys=True))
 
 
-def _write(path, value):
-    target = os.path.abspath(path)
-    os.makedirs(os.path.dirname(target), exist_ok=True)
-    temp = target + ".tmp"
-    with open(temp, "w", encoding="utf-8") as fh:
-        json.dump(value, fh, indent=2, sort_keys=True)
-        fh.write("\n")
-    os.replace(temp, target)
+_write = write_json
 
 
 def _load(path, label):
     try:
-        with open(path, encoding="utf-8") as fh:
-            value = json.load(fh)
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ReviewError("could not read %s: %s" % (label, exc))
-    if not isinstance(value, dict):
-        raise ReviewError("%s must be a JSON object" % label)
-    return value
+        return load_object(path, label)
+    except ValueError as exc:
+        raise ReviewError(str(exc))
 
 
 def _api(host, method, endpoint, payload=None, timeout=120):
@@ -90,9 +75,9 @@ def _late_github_api(host, method, endpoint, payload=None, timeout=120):
 
 def _forge(ctx):
     """The adapter for a review context or staged state; transport stays patchable here."""
-    if ctx.get("forge", "gitlab") == "github":
-        return _github.GitHubForge(ctx["host"], ctx["project"], run=_late_run, api_call=_late_github_api)
-    return _gitlab.GitLabForge(ctx["host"], ctx["project"], run=_late_run, api_call=_late_api)
+    name = ctx.get("forge", "gitlab")
+    return make_forge(name, ctx["host"], ctx["project"], run=_late_run,
+                      api_call=_late_github_api if name == "github" else _late_api)
 
 
 def _thread_api(ctx):
@@ -264,7 +249,7 @@ def _reply_target(finding, reply_note_id):
     return None
 
 
-def _plan(prepared, by_id, context, refs, changed_paths=None, forge=None):
+def _plan(prepared, by_id, context, refs, forge, changed_paths=None):
     """Plan the notes to stage: inline findings first, then support replies, plus what is omitted.
 
     A reply target comes from the trusted report's unresolved `human_context`, never from the
@@ -343,12 +328,8 @@ def _plan(prepared, by_id, context, refs, changed_paths=None, forge=None):
                             % finding["id"])
             continue
         pair = pairs.get(finding["file"], {"old": finding["file"], "new": finding["file"]})
-        if forge is None:
-            position = _gitlab.inline_position(refs, pair["old"], pair["new"], line,
-                                               finding.get("anchor_side") or "new")
-        else:
-            position = forge.inline_target(refs, pair["old"], pair["new"], line, context.get("diff"),
-                                           finding.get("anchor_side") or "new")
+        position = forge.inline_target(refs, pair["old"], pair["new"], line, context.get("diff"),
+                                       finding.get("anchor_side") or "new")
         if position is None:
             omitted.append({"id": finding["id"], "reason": "line is outside the diff, so the forge cannot anchor it",
                             "disposition": decision["disposition"], "fingerprint": fingerprint})
@@ -454,8 +435,7 @@ def stage(args):
             prep_warnings += list(memory_save.get("warnings") or [])
         forge = _forge(ctx)
         posted, omitted, plan_warnings = _plan(prepared, by_id, context, live_refs,
-                                               changed_paths=changed if moved else None,
-                                               forge=None if ctx["forge"] == "gitlab" else forge)
+                                               forge, changed_paths=changed if moved else None)
         head_note = None
         if moved:
             head_note = ("review built at `%s`; only findings in files unchanged at `%s` are included. "
@@ -753,10 +733,6 @@ def publish(args):
         return 2
 
 
-def _request_changes(host, project, number):
-    return _gitlab.request_changes(_late_run, host, project, number)
-
-
 def complete(args):
     try:
         state = _load(args.staged, "staged review")
@@ -768,16 +744,8 @@ def complete(args):
         _, refs = _revalidate(ctx)
         if refs["head_sha"] != ctx["expected_head"]:
             raise ReviewError("Change head moved after publication; completion action is blocked")
-        if ctx["forge"] == "github":
-            result = _forge(ctx).complete(ctx["number"], args.action, ctx["expected_head"],
-                                          "Requesting changes; see the review above.")
-        elif args.action == "approve":
-            result = _gitlab.approve(_late_api, ctx["host"], ctx["project"], ctx["number"],
-                                     ctx["expected_head"])
-        elif args.action == "request-changes":
-            result = _request_changes(ctx["host"], ctx["project"], ctx["number"])
-        else:
-            result = {"comment_only": True}
+        result = _forge(ctx).complete(ctx["number"], args.action, ctx["expected_head"],
+                                      "Requesting changes; see the review above.")
         state["completion_result"] = {"action": args.action, "ok": True}
         _write(args.staged, state)
         _emit({"review_published": True, "completion": args.action, "result": result})
@@ -789,7 +757,7 @@ def complete(args):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Stage and publish an isolated reviewer-seat GitLab review.")
+    parser = argparse.ArgumentParser(description="Stage and publish an isolated reviewer-seat review on GitHub or GitLab.")
     sub = parser.add_subparsers(dest="command", required=True)
     p_stage = sub.add_parser("stage")
     p_stage.add_argument("--report", required=True)

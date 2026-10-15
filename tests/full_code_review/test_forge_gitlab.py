@@ -54,8 +54,10 @@ def test_plan_moves_findings_on_unanchorable_files_to_the_overview():
         {"id": "F2", "severity": "Must fix", "file": "ok.py", "line": "1", "title": "Fine",
          "impact": "Breaks.", "fix_md": "Fix."}]}
     by_id = {fid: {"id": fid, "slot": "fix", "disposition": "Blocking", "note": ""} for fid in ("F1", "F2")}
-    context = {"diff": "", "unanchorable_files": ["big.json"]}
-    posted, omitted, warnings = reviewer._plan(prepared, by_id, context, REFS)
+    context = {"diff": "diff --git a/ok.py b/ok.py\n--- a/ok.py\n+++ b/ok.py\n@@ -1 +1 @@\n-x\n+y\n",
+               "unanchorable_files": ["big.json"]}
+    posted, omitted, warnings = reviewer._plan(prepared, by_id, context, REFS,
+                                               GitLabForge("gitlab.example", "group/project"))
     assert [item["finding_id"] for item in posted] == ["F2"]
     assert omitted[0]["id"] == "F1" and "collapsed" in omitted[0]["reason"]
     assert any("F1" in w for w in warnings)
@@ -148,6 +150,20 @@ def test_inline_target_anchors_new_and_old_sides_and_rejects_off_diff_lines():
     assert forge.inline_target(REFS, "old.py", "new.py", 40, DIFF) is None
     assert forge.inline_target(REFS, "old.py", "new.py", 40, DIFF, "old") is None
     assert forge.inline_target(REFS, "other.py", "other.py", 4, DIFF) is None
+
+
+def test_complete_approves_with_the_head_sha_and_comment_only_calls_nothing():
+    calls = []
+
+    def api_call(host, method, endpoint, payload=None, timeout=120):
+        calls.append((method, endpoint, payload))
+        return {}
+
+    forge = GitLabForge("gitlab.example", "o/r", api_call=api_call)
+    forge.complete(7, "approve", HEAD, "")
+    assert calls == [("POST", "projects/o%2Fr/merge_requests/7/approve", {"sha": HEAD})]
+    assert forge.complete(7, "comment-only", HEAD, "") == {"comment_only": True}
+    assert len(calls) == 1
 
 
 def _live_mr(**overrides):

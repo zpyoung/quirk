@@ -1,16 +1,13 @@
 import contextlib
 import io
 import json
-import os
 import re
-import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "skills", "full-code-review", "scripts"))
-import render_report  # noqa: E402
-import validate_triage as m  # noqa: E402
+import render_report
+import validate_triage as m
 
 
 def report(seat="reviewer"):

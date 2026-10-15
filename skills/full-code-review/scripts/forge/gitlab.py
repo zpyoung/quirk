@@ -17,21 +17,12 @@ import shlex
 import subprocess
 from urllib.parse import quote, urlencode
 
-from forge import ForgeError, positive_int, valid_sha
+from forge import ForgeError, default_run, positive_int, valid_sha
 from forge import change_label as _change_label
 from forge import note_url as _note_url
 from forge.github import hunk_lines
 
 NAME = "gitlab"
-
-
-def default_run(cmd, input_text=None, timeout=120, env=None):
-    """Run a command, mapping launch failures to a non-zero CompletedProcess."""
-    try:
-        return subprocess.run(cmd, capture_output=True, text=True, input=input_text,
-                              timeout=timeout, shell=False, env=env)
-    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
-        return subprocess.CompletedProcess(cmd, 127, "", str(exc))
 
 
 def change_label(number):
@@ -526,6 +517,14 @@ class GitLabForge:
 
     def publish(self, number, state):
         bulk_publish(self._api_call, self.host, self.project, number)
+
+    def complete(self, number, action, head_sha, body):
+        """Record the reviewer's verdict after publication; `body` is unused on GitLab."""
+        if action == "approve":
+            return approve(self._api_call, self.host, self.project, number, head_sha)
+        if action == "request-changes":
+            return request_changes(self._run, self.host, self.project, number)
+        return {"comment_only": True}
 
     def cleanup_commands(self, state):
         return cleanup_commands(state)

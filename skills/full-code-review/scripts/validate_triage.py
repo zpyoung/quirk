@@ -8,17 +8,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import render_report  # noqa: E402
+from jsonio import write_json  # noqa: E402
 import review_memory  # noqa: E402
-from forge import change_label  # noqa: E402
 
-GROUPS = {
-    "author": [("fix", "Will fix"), ("later", "Fix later"),
-               ("detail", "Needs detail"), ("ignore", "Ignore"),
-               ("none", "Undecided")],
-    "reviewer": [("fix", "Blocking"), ("later", "Non-blocking"),
-                 ("detail", "Question"), ("ignore", "Drop"),
-                 ("none", "Undecided")],
-}
+GROUPS = render_report.DISPOSITIONS
 GROUP_RE = re.compile(r"^## (Will fix|Fix later|Needs detail|Ignore|Blocking|Non-blocking|Question|Drop|Undecided) \((\d+)\)$")
 ITEM_RE = re.compile(r"^- \*\*(F\d+)\*\* — (.+?)\s*$")
 ANCHOR_RE = re.compile(r"^  `(.+)` · (Must fix|Should fix|Nit)$")
@@ -27,12 +20,7 @@ REPLY_RE = re.compile(r"^  reply: ([1-9][0-9]{0,18})$")
 HANDOFF_DELIM = "<!-- quirk-review handoff: not validated, not used for posting -->"
 
 
-def export_label(meta):
-    if meta["target"] == "change":
-        return change_label(meta["forge"], meta["number"])
-    if meta["target"] == "branch":
-        return meta["branch"]
-    return "local changes"
+export_label = render_report.export_label
 
 
 def export_header(meta):
@@ -217,9 +205,7 @@ def main(argv=None):
             result = validate(report, paste)
         encoded = json.dumps(result, indent=2, sort_keys=True) + "\n"
         if args.out:
-            with open(args.out + ".tmp", "w", encoding="utf-8") as fh:
-                fh.write(encoded)
-            os.replace(args.out + ".tmp", args.out)
+            write_json(args.out, result)
         print(encoded, end="")
         return 0
     except Exception as exc:

@@ -9,7 +9,13 @@ With --policy-ref (reviewer seat: the target branch SHA) the project pack and RE
 are read from that ref, never the working tree, so a change cannot weaken its own review.
 Files read from a ref are written under <out-dir>/policy-files/ so lenses can read them.
 
-Exit 0 on success; exit 2 with {"error": ...} naming the file and line on a bad pack.
+With --diff-only (a reviewer run that has no source checkout) the project pack, its lenses
+and guidance, and REVIEW.md are skipped, and `policy.json` records `diff_only: true` and a
+warning. The built-in roster and the user pack still apply, and generated files are
+excluded by `skip_globs` only, because `.gitattributes` cannot be read.
+
+Exit 0 on success; exit 2 with {"error": ...} naming the file and line on a bad pack, and
+for a reviewer-seat context given neither --policy-ref nor --diff-only.
 """
 import argparse
 import fnmatch
@@ -21,6 +27,7 @@ import sys
 from pathlib import Path
 
 import policy_yaml
+from jsonio import write_json
 from prepare_diff import count_changed_lines, split_diff_by_file
 
 FLOORS = ("Must fix", "Should fix", "Nit")
@@ -133,7 +140,8 @@ def _list_of_strings(value, label, key):
 
 
 class Policy:
-    def __init__(self):
+    def __init__(self, diff_only=False):
+        self.diff_only = diff_only
         self.lenses = {}
         self.order = []
         self.settings = {"severity_floor": "Should fix", "escalation": True, "models": {},
@@ -248,6 +256,7 @@ class Policy:
             "critical_paths": self.settings["critical_paths"],
             "skip_globs": self.settings["skip_globs"],
             "cross_repo": self.settings["cross_repo"],
+            "diff_only": self.diff_only,
             "sources": self.sources,
             "guidance_files": self.guidance,
             "warnings": self.warnings,
@@ -270,16 +279,20 @@ def _user_pack_dir(pack_flag):
     return Path(config) / "quirk" / "review"
 
 
-def resolve_policy(context, source_root, lenses_dir, out_dir, policy_ref=None, pack=None):
+def resolve_policy(context, source_root, lenses_dir, out_dir, policy_ref=None, pack=None,
+                   diff_only=False):
     """Return the merged policy dict.
 
     Raises PolicyError on a malformed pack or REVIEW.md, and when the context's seat is
     reviewer but no `policy_ref` was given: a reviewer run must read project policy from the
-    target branch, never from the change under review.
+    target branch, never from the change under review. A `diff_only` run has no source
+    checkout, so it skips the project pack and REVIEW.md instead of reading them.
     """
-    if not policy_ref and context.get("seat") == "reviewer":
-        raise PolicyError("reviewer seat requires --policy-ref (the target branch SHA)")
-    policy = Policy()
+    if diff_only and policy_ref:
+        raise PolicyError("--diff-only has no source to read a --policy-ref from")
+    if not policy_ref and not diff_only and context.get("seat") == "reviewer":
+        raise PolicyError("reviewer seat requires --policy-ref (the target branch SHA) or --diff-only")
+    policy = Policy(diff_only)
     lenses_dir = Path(lenses_dir)
     for path in sorted(lenses_dir.glob("*.md")):
         if path.name.startswith("_"):
@@ -294,6 +307,10 @@ def resolve_policy(context, source_root, lenses_dir, out_dir, policy_ref=None, p
     if user_dir.is_dir():
         policy.load_pack(_FsSource(user_dir), "", "user-pack")
 
+    if diff_only:
+        policy.warnings.append("diff-only: the project pack and REVIEW.md were not read; "
+                               "repo-local review policy was not applied")
+        return policy.finish()
     repo = (_RefSource(source_root, policy_ref, Path(out_dir) / "policy-files") if policy_ref
             else _FsSource(source_root))
     policy.load_pack(repo, PROJECT_PACK, "project-pack")
@@ -348,10 +365,11 @@ def apply_policy(context, policy, source_root, policy_ref=None):
     """Drop generated and skip-glob files from `context` in place; return the excluded list.
 
     Safe to apply twice: files excluded by an earlier pass stay in `excluded_generated`.
+    Without a `source_root` (a diff-only run) only `skip_globs` can exclude files.
     """
     changed = list(context.get("changed_files") or [])
     warnings = policy.setdefault("warnings", [])
-    generated = _generated_paths(source_root, changed, policy_ref, warnings)
+    generated = _generated_paths(source_root, changed, policy_ref, warnings) if source_root else set()
     newly_excluded = [p for p in changed
                       if p in generated or any(_matches(p, g) for g in policy.get("skip_globs") or [])]
     excluded = list(context.get("excluded_generated") or [])
@@ -378,18 +396,13 @@ def apply_policy(context, policy, source_root, policy_ref=None):
     return excluded
 
 
-def _write_json(path, value):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(path.name + ".tmp")
-    temp.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
-    os.replace(str(temp), str(path))
-
-
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Resolve review policy from lenses, packs, and REVIEW.md.")
     ap.add_argument("--context", required=True)
-    ap.add_argument("--source-root", required=True)
+    root = ap.add_mutually_exclusive_group(required=True)
+    root.add_argument("--source-root")
+    root.add_argument("--diff-only", action="store_true",
+                      help="no source checkout: skip the project pack and REVIEW.md")
     ap.add_argument("--policy-ref")
     ap.add_argument("--pack")
     ap.add_argument("--lenses-dir", required=True)
@@ -401,11 +414,11 @@ def main(argv=None):
             context = json.load(fh)
         policy = resolve_policy(context, args.source_root, args.lenses_dir,
                                 os.path.dirname(os.path.abspath(args.out)),
-                                policy_ref=args.policy_ref, pack=args.pack)
+                                policy_ref=args.policy_ref, pack=args.pack, diff_only=args.diff_only)
         if args.apply:
             apply_policy(context, policy, args.source_root, args.policy_ref)
-            _write_json(args.context, context)
-        _write_json(args.out, policy)
+            write_json(args.context, context)
+        write_json(args.out, policy)
     except (PolicyError, OSError, ValueError) as exc:
         print(json.dumps({"error": str(exc)}))
         return 2

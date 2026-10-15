@@ -221,7 +221,8 @@ python3 "$SCRIPTS/resolve_policy.py" --context "$CONTEXT" --source-root "$REVIEW
 
 `--policy-ref` is required in the reviewer seat, with the target branch SHA from the
 context's `refs.base`; `resolve_policy.py` refuses a reviewer context without it. Leave it
-out in the author seat.
+out in the author seat. For a diff-only run there is no checkout to read, so replace
+`--source-root "$REVIEW_SOURCE_ROOT"` with `--diff-only` and pass no `--policy-ref`.
 
 Exit 2 means a malformed pack or `REVIEW.md`; show the named file and line and stop.
 `policy.json` fixes the lenses that run (`lenses`, each with its checklist path and
@@ -251,9 +252,10 @@ path in `repo_skill_reference_indexes` first and only the references they map to
 changed files; with no index, select by path relevance and never read all of them. If
 `repo_skill_references_dropped` is above 0, say coverage was capped.
 
-**Diff-only runs** have no source root: they skip `discover_guidance.py` and the
-project-pack and `REVIEW.md` reads in `resolve_policy.py`, and the Summary says repo-local
-policy and guidance could not be read. `review_memory.py` still needs a repo: wherever a
+**Diff-only runs** have no source root: they skip `discover_guidance.py`, run
+`resolve_policy.py --diff-only` (which skips the project pack and `REVIEW.md` and records
+`diff_only` in `policy.json`), and the Summary says repo-local policy and guidance could
+not be read. `review_memory.py` still needs a repo: wherever a
 command below passes `--repo "$REVIEW_SOURCE_ROOT"`, pass the caller's checkout
 (`git rev-parse --show-toplevel`) instead.
 

@@ -1,12 +1,9 @@
 import html
 import re
-import sys
-from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "skills" / "full-code-review" / "scripts"))
-import highlight as h  # noqa: E402
+import highlight as h
 
 STRIP = re.compile(r"</?span[^>]*>")
 

@@ -17,14 +17,14 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.parse
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
-from forge import github as _github
+from forge import make_forge, parse_origin
+from jsonio import load_object, write_json
 from forge import note_url as _note_url
 from forge import gitlab as _gitlab
 
@@ -58,15 +58,7 @@ def _origin_identity(origin: Any) -> str | None:
     """Normalize HTTPS/SSH/SCP origins to ``host/project``."""
     if not origin or not isinstance(origin, str):
         return None
-    raw = origin.strip()
-    match = re.match(r"^(?:[^@]+@)?([^:/]+):(.+)$", raw)
-    if match and "://" not in raw:
-        host, project = match.groups()
-        return "%s/%s" % (_normalize_host(host), _normalize_project(project))
-    parsed = urllib.parse.urlparse(raw if "://" in raw else "https://" + raw)
-    host = _normalize_host(parsed.netloc or parsed.path.split("/", 1)[0])
-    path = parsed.path if parsed.netloc else parsed.path.split("/", 1)[1] if "/" in parsed.path else ""
-    project = _normalize_project(path)
+    host, project = parse_origin(origin)
     return "%s/%s" % (host, project) if host and project else None
 
 
@@ -114,20 +106,7 @@ def _locked(directory: Path):
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
-def _atomic_write(path: Path, value: Any) -> None:
-    encoded = json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
-    fd, temp = tempfile.mkstemp(prefix=".memory-", dir=str(path.parent), text=True)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(encoded)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(temp, path)
-    finally:
-        try:
-            os.unlink(temp)
-        except FileNotFoundError:
-            pass
+_atomic_write = write_json
 
 
 def _target_identity(context: dict, repo: str) -> tuple[dict, list[str]]:
@@ -252,9 +231,10 @@ def fetch_discussions(host: str, project: str, number: Any, api: Callable | None
     """
     if not host or not project or not str(number).isdigit() or int(number) < 1:
         raise ValueError("host, project and positive change number are required")
-    if forge == "github":
-        return _github.GitHubForge(host, _normalize_project(project), api_call=api).list_threads(int(number))
-    return _gitlab.fetch_discussions(api or _default_api, host, _normalize_project(project), number)
+    adapter = make_forge(forge, host, _normalize_project(project))
+    if adapter is None:
+        raise ValueError("no forge adapter for %r" % forge)
+    return adapter.list_threads(int(number), api_call=api or (_default_api if forge == "gitlab" else None))
 
 
 def load_snapshot(context: dict, repo: str = ".", dimensions=(), guidance=(), fresh: bool = False) -> dict:
@@ -818,11 +798,7 @@ def commit_report(report: dict, decisions: dict | None = None, receipts: dict | 
 
 
 def _load_json(path: str) -> dict:
-    with open(path, encoding="utf-8") as fh:
-        value = json.load(fh)
-    if not isinstance(value, dict):
-        raise ValueError("JSON input must be an object")
-    return value
+    return load_object(path)
 
 
 def check_plan(report: dict, context: dict, snapshot: dict, repo: str = ".") -> dict:

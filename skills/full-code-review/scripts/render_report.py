@@ -30,7 +30,7 @@ DEFAULT_SEVERITY_FLOOR = "Should fix"
 _INCOMPLETE_OK_VERDICTS = {"fix, then merge", "request changes"}
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
-_DISPOSITIONS = {
+DISPOSITIONS = {
     "author": [("fix", "Will fix"), ("later", "Fix later"),
                ("detail", "Needs detail"), ("ignore", "Ignore"),
                ("none", "Undecided")],
@@ -556,7 +556,7 @@ def _md(value):
     return render_markdown(value if isinstance(value, str) else "")
 
 
-def _export_label(meta):
+def export_label(meta):
     if meta["target"] == "change":
         return change_label(meta["forge"], meta["number"])
     if meta["target"] == "branch":
@@ -616,7 +616,7 @@ def _topnav(report, panes):
     verdict = str(meta["verdict"])
     tone = _VERDICT_TONE.get(verdict.strip().lower(), "gray")
     out = ['<header class="topnav" data-storage-key="%s" data-export-label="%s" data-review-seat="%s">' %
-           (_esc(key), _esc(_export_label(meta)), _esc(meta.get("seat", "author"))),
+           (_esc(key), _esc(export_label(meta)), _esc(meta.get("seat", "author"))),
            '<div class="topnav-bar"><div class="identity">',
            _crumbs(meta),
            '<h1 class="astryx-heading" data-level="3" title="%s">%s</h1>' %
@@ -870,7 +870,7 @@ def _risk_section(risk):
 
 def _progress(total, seat):
     """Render the decision tally: one bar plus a legend that doubles as the disposition filter."""
-    labels = {slot: label for slot, label in _DISPOSITIONS[seat]}
+    labels = {slot: label for slot, label in DISPOSITIONS[seat]}
     out = ['<div class="progress" id="progress" role="group" aria-label="Filter by decision">',
            '<div class="astryx-progress-bar" aria-hidden="true">']
     for value in ("fix", "later", "detail", "ignore"):
@@ -1218,7 +1218,7 @@ def _footer(report):
     if isinstance(probe, dict):
         parts.append("%s mutants run, %s survived" % (probe.get("mutants", 0), probe.get("survived", 0)))
     meta = report["meta"]
-    target = _export_label(meta)
+    target = export_label(meta)
     if meta.get("head_sha"):
         target += " · %s" % meta["head_sha"]
     parts.append(target)
@@ -1270,7 +1270,7 @@ def handoff_payload(report, report_path=None):
     convenience context for a human-directed session and never a source for posted text.
     """
     meta = report["meta"]
-    payload = {"label": _export_label(meta), "seat": meta.get("seat", "author"),
+    payload = {"label": export_label(meta), "seat": meta.get("seat", "author"),
                "target": meta["target"]}
     payload.update({key: meta[key] for key in _HANDOFF_META if meta.get(key) not in (None, "")})
     if report_path:

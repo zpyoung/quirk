@@ -5,8 +5,7 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "skills", "full-code-review", "scripts"))
-import comment_body as cb  # noqa: E402
+import comment_body as cb
 
 FP = "ab" * 32
 FP2 = "cd" * 32

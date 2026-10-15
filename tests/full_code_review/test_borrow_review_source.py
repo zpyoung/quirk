@@ -1,15 +1,12 @@
 import contextlib
 import io
 import json
-import os
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "skills", "full-code-review", "scripts"))
-import borrow_review_source as m  # noqa: E402
+import borrow_review_source as m
 
 
 def run(*args, cwd=None):

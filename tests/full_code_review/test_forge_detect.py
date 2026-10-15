@@ -83,3 +83,22 @@ def test_probe_launch_failure_counts_as_unauthenticated():
             raise FileNotFoundError("gh")
         return subprocess.CompletedProcess(cmd, 0, "", "")
     assert forge.detect_forge("git@git.corp.example:t/a.git", run=run).name == "gitlab"
+
+
+@pytest.mark.parametrize("origin, host, project", [
+    ("https://gitlab.example:8443/group/project.git", "gitlab.example:8443", "group/project"),
+    ("http://gitlab.example:8080/group/project", "gitlab.example:8080", "group/project"),
+    ("https://gitlab.example/group/project.git", "gitlab.example", "group/project"),
+    ("ssh://git@gitlab.example:2222/group/project.git", "gitlab.example", "group/project"),
+    ("git@gitlab.example:group/project.git", "gitlab.example", "group/project"),
+])
+def test_parse_origin_keeps_an_http_port_and_drops_an_ssh_port(origin, host, project):
+    assert forge.parse_origin(origin) == (host, project)
+
+
+def test_review_memory_identity_separates_instances_that_differ_only_by_port():
+    import review_memory
+    a = review_memory._origin_identity("https://gitlab.example:8443/group/project.git")
+    b = review_memory._origin_identity("https://gitlab.example:9443/group/project.git")
+    assert a == "gitlab.example:8443/group/project" and a != b
+    assert review_memory._origin_identity("/srv/git/project.git") is None

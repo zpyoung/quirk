@@ -1,13 +1,11 @@
 import contextlib
 import io
 import json
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "skills", "full-code-review", "scripts"))
-import comment_body  # noqa: E402
+import comment_body
+from forge import gitlab as gitlab_forge
 import post_reviewer_review as m  # noqa: E402
 
 HEAD = "a" * 40
@@ -40,9 +38,11 @@ def context():
     return {"seat": "reviewer", "refs": {"base": BASE, "start": START, "head": HEAD},
             "change": {"number": 42, "host": "gitlab.example", "project": "group/project",
                    "sha": HEAD, "current_user_id": 2, "current_username": "reviewer"},
-            "diff": ("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"
-                     "diff --git a/b.py b/b.py\n--- a/b.py\n+++ b/b.py\n"
-                     "diff --git a/c.py b/c.py\n--- a/c.py\n+++ b/c.py\n")}
+            "diff": "".join("diff --git a/%s b/%s\n--- a/%s\n+++ b/%s\n@@ -1,10 +1,10 @@\n%s" %
+                            (name, name, name, name, " x\n" * 10) for name in ("a.py", "b.py", "c.py"))}
+
+
+PLAN_FORGE = m._forge({"forge": "gitlab", "host": "gitlab.example", "project": "group/project"})
 
 
 def decisions():
@@ -248,8 +248,8 @@ def test_completion_is_explicit_and_requires_published_state(tmp_path, monkeypat
     fake = FakeGitLab()
     monkeypatch.setattr(m, "_api", fake)
     requested = []
-    monkeypatch.setattr(m, "_request_changes",
-                    lambda host, project, iid: requested.append((host, project, iid)) or {"iid": str(iid)})
+    monkeypatch.setattr(gitlab_forge, "request_changes",
+                        lambda run, host, project, iid: requested.append((host, project, iid)) or {"iid": str(iid)})
     paths = files(tmp_path)
     assert invoke(m.stage, stage_args(paths))[0] == 0
     before = type("Args", (), {"staged": str(paths["staged"]), "action": "approve"})()
@@ -415,7 +415,7 @@ def _plan_one(finding, slot="later", **row):
     disposition = m.ALL_SLOTS[slot]
     by_id = {"F1": dict({"id": "F1", "slot": slot, "disposition": disposition, "note": ""}, **row)}
     posted, _, warnings = m._plan(prepared, by_id, context(), {
-        "base_sha": BASE, "start_sha": START, "head_sha": HEAD})
+        "base_sha": BASE, "start_sha": START, "head_sha": HEAD}, PLAN_FORGE)
     return posted[0], warnings
 
 
@@ -463,7 +463,7 @@ def test_request_changes_uses_string_graphql_variables(monkeypatch):
         return type("Result", (), {"returncode": 0, "stdout": json.dumps(body), "stderr": ""})()
 
     monkeypatch.setattr(m, "_run", fake_run)
-    result = m._request_changes("gitlab.example", "group/project", 42)
+    result = PLAN_FORGE.complete(42, "request-changes", HEAD, "")
     assert result["mergeRequest"]["iid"] == "42"
     cmd = calls[0]
     assert ["-f", "iid=42"] == cmd[-2:]
@@ -514,7 +514,7 @@ def test_memory_exact_open_thread_suppresses_duplicate_post_and_keeps_decision()
     }]}
     decisions_by_id = {"F1": {"id": "F1", "slot": "fix", "disposition": "Blocking", "note": ""}}
     posted, omitted, _ = m._plan(prepared, decisions_by_id, context(), {
-        "base_sha": BASE, "start_sha": START, "head_sha": HEAD})
+        "base_sha": BASE, "start_sha": START, "head_sha": HEAD}, PLAN_FORGE)
     assert posted == []
     assert omitted[0]["id"] == "F1"
     assert omitted[0]["thread_url"].endswith("/1")
@@ -745,7 +745,7 @@ def test_reply_nit_is_normalized_to_non_blocking():
     by_id = {"F1": {"id": "F1", "slot": "fix", "disposition": "Blocking", "note": "",
                     "reply_note_id": 7}}
     posted, _, warnings = m._plan(prepared, by_id, context(), {
-        "base_sha": BASE, "start_sha": START, "head_sha": HEAD})
+        "base_sha": BASE, "start_sha": START, "head_sha": HEAD}, PLAN_FORGE)
     assert posted[0]["kind"] == "reply" and posted[0]["disposition"] == "Non-blocking"
     assert "**Agree · Non-blocking**" in posted[0]["body"]
     assert any("normalized to Non-blocking" in warning for warning in warnings)
@@ -758,7 +758,7 @@ def test_reply_for_a_suppressed_finding_is_not_posted():
     by_id = {"F1": {"id": "F1", "slot": "fix", "disposition": "Blocking", "note": "",
                     "reply_note_id": 7}}
     posted, omitted, _ = m._plan(prepared, by_id, context(), {
-        "base_sha": BASE, "start_sha": START, "head_sha": HEAD})
+        "base_sha": BASE, "start_sha": START, "head_sha": HEAD}, PLAN_FORGE)
     assert posted == [] and omitted[0]["fingerprint"] == REPLY_FP
 
 
@@ -876,7 +876,7 @@ def test_plan_omits_findings_below_the_default_floor():
     by_id = {fid: {"id": fid, "slot": "later", "disposition": "Non-blocking", "note": ""}
              for fid in ("F1", "F2")}
     posted, omitted, _ = m._plan(prepared, by_id, context(), {
-        "base_sha": BASE, "start_sha": START, "head_sha": HEAD})
+        "base_sha": BASE, "start_sha": START, "head_sha": HEAD}, PLAN_FORGE)
     assert [item["finding_id"] for item in posted] == ["F1"]
     assert omitted == [{"id": "F2", "reason": "below the posting floor (Should fix)",
                         "disposition": "Non-blocking", "fingerprint": None}]

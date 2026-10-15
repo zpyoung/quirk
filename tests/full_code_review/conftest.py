@@ -1,19 +1,20 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "skills" / "full-code-review" / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 
-import pytest  # noqa: E402
-
-
 @pytest.fixture(autouse=True)
-def _restore_prepare_diff_seams():
-    # tests stub prepare_diff module functions in place; restore them so no stub leaks
-    import prepare_diff
-    saved = {name: getattr(prepare_diff, name) for name in ("commit_authors",)}
-    yield
-    for name, value in saved.items():
-        setattr(prepare_diff, name, value)
+def _isolated_git_config(monkeypatch):
+    # the developer's global config (gpgsign, hooksPath, templates) must not reach tests that run git;
+    # identity is pinned through the environment because the empty global config no longer supplies one
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "Test")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "test@example.com")
+    monkeypatch.setenv("GIT_COMMITTER_NAME", "Test")
+    monkeypatch.setenv("GIT_COMMITTER_EMAIL", "test@example.com")

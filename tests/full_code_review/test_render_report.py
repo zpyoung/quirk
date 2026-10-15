@@ -2,16 +2,13 @@ import contextlib
 import copy
 import io
 import json
-import os
 import re
-import sys
 from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "skills", "full-code-review", "scripts"))
-import render_report as m  # noqa: E402
+import render_report as m
 
 SKILL_ROOT = Path(__file__).resolve().parents[2] / "skills" / "full-code-review"
 TEMPLATE = (SKILL_ROOT / "assets" / "report.html").read_text(encoding="utf-8")
@@ -757,7 +754,6 @@ def test_md_backend():
     empty = report(); empty["findings"] = []
     rendered = m.render_md(empty)
     assert "No findings" in rendered and "Queries look bounded." in rendered
-
 
 
 def test_stdout_reports_highlighter_and_warns_on_builtin_fallback(tmp_path, monkeypatch):

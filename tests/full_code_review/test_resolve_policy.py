@@ -57,13 +57,13 @@ def _context(tmp_path, changed, batched=False, seat=None):
 
 
 def _resolve(tmp_path, repo, changed=("src/app.py",), pack=None, ref=None, apply=False,
-             batched=False, user_config=None, monkeypatch=None, seat=None):
+             batched=False, user_config=None, monkeypatch=None, seat=None, diff_only=False):
     if monkeypatch is not None:
         monkeypatch.setenv("XDG_CONFIG_HOME", str(user_config or tmp_path / "no-config"))
     ctx = _context(tmp_path, changed, batched, seat)
     out = tmp_path / "out" / "policy.json"
-    args = ["--context", str(ctx), "--source-root", str(repo), "--lenses-dir", str(LENSES),
-            "--out", str(out)]
+    args = ["--context", str(ctx), "--lenses-dir", str(LENSES), "--out", str(out)]
+    args += ["--diff-only"] if diff_only else ["--source-root", str(repo)]
     if pack:
         args += ["--pack", str(pack)]
     if ref:
@@ -262,6 +262,28 @@ def test_reviewer_seat_requires_a_policy_ref(tmp_path, monkeypatch):
     assert "--policy-ref" in json.loads(out)["error"]
     rc, policy, _, _ = _resolve(tmp_path, repo, seat="reviewer", ref=target, monkeypatch=monkeypatch)
     assert rc == 0 and policy is not None
+
+
+def test_diff_only_reviewer_run_skips_project_policy_and_records_it(tmp_path, monkeypatch):
+    user_pack = tmp_path / "user-pack"
+    _write(user_pack / "pack.yaml", "skip_globs: [\"*.lock\"]\nseverity_floor: Nit\n")
+    rc, policy, ctx, _ = _resolve(tmp_path, None, changed=("src/app.py", "deps.lock"), pack=user_pack,
+                                  apply=True, seat="reviewer", diff_only=True, monkeypatch=monkeypatch)
+    assert rc == 0
+    assert policy["diff_only"] is True
+    assert policy["severity_floor"] == "Nit"
+    assert [src["kind"] for src in policy["sources"]] == ["builtin", "user-pack"]
+    assert any("diff-only" in warning for warning in policy["warnings"])
+    assert ctx["changed_files"] == ["src/app.py"] and ctx["excluded_generated"] == ["deps.lock"]
+
+
+def test_diff_only_cannot_be_combined_with_a_policy_ref_or_a_source_root(tmp_path, monkeypatch):
+    rc, policy, _, out = _resolve(tmp_path, None, ref="a" * 40, seat="reviewer", diff_only=True,
+                                  monkeypatch=monkeypatch)
+    assert rc == 2 and policy is None and "--policy-ref" in json.loads(out)["error"]
+    with pytest.raises(SystemExit):
+        m.main(["--context", "c.json", "--lenses-dir", str(LENSES), "--out", "o.json",
+                "--diff-only", "--source-root", str(tmp_path)])
 
 
 def test_author_seat_reads_the_working_tree_without_a_policy_ref(tmp_path, monkeypatch):

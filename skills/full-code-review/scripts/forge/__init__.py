@@ -1,7 +1,14 @@
 """Forge-neutral types for the review scripts.
 
-Only the adapters in this package know whether a change lives on GitHub or GitLab.
-Everything else works on these shapes and on the `Forge` protocol.
+The adapters in this package own every forge call: reads, posting, staging, publishing and
+the reviewer's completion verdict. Scripts work on these shapes and on the `Forge`
+protocol, and build an adapter with `make_forge`.
+
+Two things stay outside the adapters. `post_reviewer_review` still picks the transport it
+injects by forge name, and it reads draft and thread dicts with `forge.gitlab.draft_summary`
+and `discussion_resolved`; both adapters return those shapes, so the helpers are neutral
+in practice. `review_memory.fetch_discussions` passes a GET-only transport when it builds
+a GitLab adapter.
 """
 from __future__ import annotations
 
@@ -24,6 +31,15 @@ class ForgeError(RuntimeError):
     def __init__(self, message: str, code: str = "unknown"):
         super().__init__(message)
         self.code = code
+
+
+def default_run(cmd, input_text=None, timeout=120, env=None):
+    """Run a command, mapping launch failures and timeouts to a non-zero CompletedProcess."""
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, input=input_text,
+                              timeout=timeout, shell=False, env=env)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        return subprocess.CompletedProcess(cmd, 127, "", str(exc))
 
 
 def positive_int(value, label):
@@ -56,7 +72,9 @@ def parse_origin(url):
     """Return (host, project) for an HTTP(S), SSH, or scp-style git remote.
 
     A filesystem remote has no host. The host is part of the identity because two
-    forge instances can hold the same owner/repository path.
+    forge instances can hold the same owner/repository path. An HTTP(S) port stays in
+    the host (two instances can share a name and differ by port); an SSH port is dropped
+    because it is not the port of the web host.
     """
     value = str(url or "").strip()
     host = None
@@ -64,6 +82,12 @@ def parse_origin(url):
     if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", value):
         parsed = urlsplit(value)
         host = parsed.hostname.lower() if parsed.hostname else None
+        try:
+            port = parsed.port
+        except ValueError:
+            port = None
+        if host and port and parsed.scheme.lower() in ("http", "https"):
+            host = "%s:%d" % (host, port)
         project = parsed.path.lstrip("/")
     else:
         match = re.match(r"^(?:[^@/:]+@)?([^/:]+):(.+)$", value)
@@ -138,18 +162,21 @@ def note_url(forge_name, host, project, number, note_id):
     return "https://%s/%s/-/merge_requests/%s#note_%s" % (host, project, number, note_id)
 
 
-def make_forge(name, host, project, run=None):
-    """Return the adapter for `name` bound to host/project, or None for "none"."""
+def make_forge(name, host, project, run=None, api_call=None):
+    """Return the adapter for `name` bound to host/project, or None for "none".
+
+    `run` replaces the command runner and `api_call` the whole API transport (tests inject both).
+    """
     if name == "none":
         return None
     if not host or not project:
         raise ForgeError("%s needs a host and project; pass --host and -R" % name, "validation")
     if name == "gitlab":
         from forge.gitlab import GitLabForge
-        return GitLabForge(host, project, run=run)
+        return GitLabForge(host, project, run=run, api_call=api_call)
     if name == "github":
         from forge.github import GitHubForge
-        return GitHubForge(host, project, run=run)
+        return GitHubForge(host, project, run=run, api_call=api_call)
     raise ValueError("unknown forge %r" % name)
 
 
@@ -174,6 +201,16 @@ class Forge(Protocol):
     list_threads(number) -> [{"id", "resolved"?, "web_url"?, "position"?,
         "notes": [{"id", "body", "author": {"id", "username"}, "web_url"?, "position"?,
                    "resolved"?}]}]   (raises ForgeError on incomplete pagination)
+
+    The reviewer flow also needs the write side:
+
+    inline_target(refs, old_path, new_path, line, diff_text, side) -> position | None
+        None when the forge could not anchor `line` on the diff.
+    complete(number, action, head_sha, body) -> dict
+        action is "approve", "request-changes" or "comment-only"; `body` is the
+        request-changes message on forges that take one.
+    identity, live_change, changed_paths, pending, stage_notes, live_staged_ids, publish,
+    post_inline, post_overview and cleanup_commands carry the staging and publishing steps.
     """
 
     name: str
@@ -189,3 +226,16 @@ class Forge(Protocol):
     def head_refspec(self, number: int) -> str: ...
     def clone_command(self, dest: str) -> tuple: ...
     def list_threads(self, number: int, api_call=None) -> List[dict]: ...
+    def inline_target(self, refs: dict, old_path: str, new_path: str, line: int,
+                      diff_text: str, side: str = "new") -> Optional[dict]: ...
+    def complete(self, number: int, action: str, head_sha: str, body: str) -> dict: ...
+    def identity(self) -> dict: ...
+    def live_change(self, number: int) -> tuple: ...
+    def changed_paths(self, old_head: str, new_head: str) -> set: ...
+    def pending(self, number: int, username: str) -> List[dict]: ...
+    def stage_notes(self, number: int, notes: list, head_sha: str, record, username: str) -> None: ...
+    def live_staged_ids(self, number: int, username: str) -> set: ...
+    def publish(self, number: int, state: dict) -> None: ...
+    def post_inline(self, number: int, body: str, position: dict, head_sha: str) -> dict: ...
+    def post_overview(self, number: int, body: str) -> dict: ...
+    def cleanup_commands(self, state: dict) -> List[str]: ...

@@ -1,10 +1,7 @@
 import json
-import os
-import sys
 from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "skills", "full-code-review", "scripts"))
-import discover_guidance as m  # noqa: E402
+import discover_guidance as m
 
 
 def test_normalize_scp(tmp_path):
@@ -79,7 +76,6 @@ def test_gather_absent(tmp_path):
     assert target["claude_md"] == []
     assert target["rules"] == []
     assert target["other"] == []
-
 
 
 def _guidance_repo(tmp_path):

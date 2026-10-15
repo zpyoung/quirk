@@ -6,7 +6,7 @@ import post_author_comments as m
 from forge import ForgeError
 from forge.github import GitHubForge
 from forge.gitlab import GitLabForge
-from .test_forge_github import DIFF, HEAD, MERGE_BASE, FakeGitHub
+from .fakes import DIFF, HEAD, MERGE_BASE, FakeGitHub
 
 
 def report(forge="github"):

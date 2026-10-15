@@ -18,6 +18,7 @@ import sys
 
 import comment_body
 import render_report
+from jsonio import write_json
 from forge import ForgeError, make_forge
 
 
@@ -29,17 +30,12 @@ class PostFailed(ForgeError):
         self.finding_id = finding_id
 
 
+_write = write_json
+
+
 def _load(path):
     with open(path, encoding="utf-8") as fh:
         return json.load(fh)
-
-
-def _write(path, value):
-    temp = path + ".tmp"
-    with open(temp, "w", encoding="utf-8") as fh:
-        json.dump(value, fh, indent=2, sort_keys=True)
-        fh.write("\n")
-    os.replace(temp, path)
 
 
 def _line(value):

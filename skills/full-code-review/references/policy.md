@@ -19,8 +19,15 @@ Each layer overrides the one before it:
 **In the reviewer seat, the project pack and `REVIEW.md` are read from the target
 branch** (`--policy-ref <target SHA>`, taken from the context's `refs.base`), so a
 change cannot weaken its own review by editing them. The flag is required in the
-reviewer seat: `resolve_policy.py` refuses a reviewer context without it. Files read from a ref are written under `policy-files/` next to
+reviewer seat: `resolve_policy.py` exits 2 for a reviewer context without it, unless
+the run is diff-only. Files read from a ref are written under `policy-files/` next to
 `policy.json` so lenses can read them from disk.
+
+A reviewer run with no source checkout passes `--diff-only` instead of `--source-root`.
+It skips the project pack and `REVIEW.md`, still applies the built-in roster and the user
+pack, excludes generated files by `skip_globs` only (`.gitattributes` is unreadable), and
+writes `diff_only: true` and a warning into `policy.json`. `--diff-only` cannot be combined
+with `--policy-ref` or `--source-root`.
 
 ## Pack layout
 
