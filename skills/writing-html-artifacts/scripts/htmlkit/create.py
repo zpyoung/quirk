@@ -92,8 +92,11 @@ def _project_dir_of(src: Path) -> Optional[Path]:
     return (src / rel).resolve() if isinstance(rel, str) and rel else None
 
 
-def _copy_tree(src: Path, dest: Path) -> None:
+def _copy_tree(src: Path, dest: Path, *, skip_examples: bool = False) -> None:
     """Copy a template folder without build output.
+
+    ``skip_examples`` also leaves out the root ``examples/`` folder, for a new template that
+    starts from a base: those shape examples are headed with the base's name, not the new one's.
 
     ``node_modules`` and ``dist`` are skipped only under a tier-2 ``project/`` and ``verified.json``
     only at the template root, so a tier-1 template that vendors a ``dist/`` path copies whole.
@@ -106,6 +109,8 @@ def _copy_tree(src: Path, dest: Path) -> None:
         skipped = {".DS_Store"} & set(names)
         if here == root:
             skipped |= {"verified.json"} & set(names)
+            if skip_examples:
+                skipped |= {"examples"} & set(names)
         if project is not None and (here == project or project in here.parents):
             skipped |= set(_PROJECT_SKIP) & set(names)
         return skipped
@@ -236,6 +241,12 @@ def _find(name: str, roots: list[tuple[str, Path]], skill: Path):
     return found
 
 
+def _example_outside_examples(origin) -> bool:
+    """True when the manifest example does not live under ``examples/``, so that folder can be dropped."""
+    parts = Path(str(origin.example)).parts
+    return not parts or parts[0] != "examples"
+
+
 def create_template(
     name: str,
     *,
@@ -271,7 +282,7 @@ def create_template(
         plain = False
         if source is None:
             origin = _find(base or DEFAULT_BASE, roots, skill)
-            _copy_tree(origin.dir, staging)
+            _copy_tree(origin.dir, staging, skip_examples=_example_outside_examples(origin))
             if origin.tier == 1:
                 notes += _retarget_example(staging / str(origin.example), name)
         else:
@@ -282,7 +293,7 @@ def create_template(
                 _skeleton_template(name, source.name.removesuffix(".html"), skill, staging, text)
             else:
                 origin = _find(str(meta.get("template", "")), roots, skill)
-                _copy_tree(origin.dir, staging)
+                _copy_tree(origin.dir, staging, skip_examples=_example_outside_examples(origin))
                 notes += _adopt_artifact_example(origin, source, name, staging, project_dir)
         if not plain:
             _rename_manifest(staging, name)
