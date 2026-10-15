@@ -94,6 +94,7 @@ Extracted verbatim in behavior; each keeps a module-level shim in its original s
 - `SK/scripts/resolve_policy.py`: `resolve_policy`, `apply_policy`, `main`.
 - `SK/scripts/review_memory.py`: `stats` subcommand and `compute_stats`.
 - `SK/scripts/smoke_check.py`: `check`, `main`.
+- `SK/scripts/post_author_comments.py`: `post`, `main` (added in Task 5: author-seat posting through `Forge.inline_target`/`post_inline`/`post_overview`, writing receipts per confirmed create).
 
 ## Contracts & interfaces
 

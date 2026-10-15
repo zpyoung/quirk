@@ -357,9 +357,10 @@ Follow `$REFS/posting.md`. With no supported forge, delivery is the rendered rep
 `report.json` path; nothing posts. Headless runs stop after the report.
 
 **Author seat**: valid dispositions drive the batch; with no paste, every finding at or
-above `policy.severity_floor` is preselected. Findings below the floor never post. Run the live duplicate `check`, build every body with
-`comment_body.py author`, preview, and post only after approval. Save a receipt for
-each confirmed create. Never edit, reply to, or resolve an old note.
+above `policy.severity_floor` is preselected. Findings below the floor never post. Run
+the live duplicate `check`, build every body with `comment_body.py author`, preview, and
+only after approval post with `post_author_comments.py --ids <approved>`, which writes a
+receipt per confirmed create. Never edit, reply to, or resolve an old note.
 
 **Reviewer seat**: stage from the trusted report and normalized decisions:
 

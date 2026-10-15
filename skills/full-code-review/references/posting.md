@@ -25,33 +25,32 @@ authenticated forge identity. The marker is the `fp` field of the note's leading
 `<!-- quirk-review:v1 … -->` block. Markers are copyable text, so one in anybody else's
 note is human context and suppresses nothing. Never edit or delete a previous note.
 
-### GitLab
+### Posting the approved batch
 
-Create each note as a positioned discussion. Write the payload to a file and pass it
-with `--input`; the JSON content type is required, because GitLab answers 415 without it:
+Post with the script, which works for both forges, anchors each finding on the correct
+diff side, skips any line outside the diff with a warning, and writes a receipt for
+every confirmed create as it goes:
 
 ```bash
-glab api --hostname "$HOST" --method POST -H "Content-Type: application/json" \
-  "projects/<url-encoded project>/merge_requests/<number>/discussions" \
-  --input "$REVIEW_RUN_DIR/note-F1.json"
+python3 "$SCRIPTS/post_author_comments.py" --report "$REPORT_JSON" --context "$CONTEXT" \
+  --bodies "$REVIEW_RUN_DIR/bodies.json" --ids F1,F3 \
+  --out "$REVIEW_RUN_DIR/posting-receipts.json" [--overview]
 ```
 
-The payload is `{"body": <body>, "position": {...}}`. Build `position` from the
-context file's `refs` (`base_sha`/`start_sha`/`head_sha` ← `refs.base`/`refs.start`/
-`refs.head`) with `position_type: "text"` and the side-appropriate path and line from
-the finding (see "Anchor on the correct diff side" below).
+`--ids` is exactly the approved batch. A finding not marked `post: true` in
+`bodies.json` is skipped with a warning. On GitHub each finding becomes a pull-request
+review comment (`path`, `line`, `side`, `commit_id`); on GitLab a positioned discussion
+built from `refs`. A failed create stops the batch and exits 2 with the IDs already
+posted; their receipts stay in `--out`.
 
 Two rules that cost the most time when missed:
 
-- **Verify each created note came back as a `DiffNote`.** A wrong or stale `position`
-  does not error — GitLab silently degrades the note to a plain comment detached from
-  the line.
-- **If the finding's line isn't part of the current diff, GitLab rejects the
-  `position`.** Anchor on the nearest changed line and quote the exact code in the
-  body. Never widen the diff to make a line anchorable.
-
-Write bodies containing backticks to a file and pass the file — command substitution
-runs inside double quotes, so an inlined body gets partially executed by the shell.
+- **On GitLab, a created note must come back as a `DiffNote`.** A wrong or stale
+  `position` does not error; GitLab silently degrades the note to a plain comment
+  detached from the line. The script treats a missing `DiffNote` as a failed create.
+- **A line outside the current diff cannot be anchored** on either forge. Anchor on the
+  nearest changed line and quote the exact code in the body. Never widen the diff to
+  make a line anchorable.
 
 Use the finding's `file` and `line` (for a range, anchor on the first line). Build the
 bodies with the shared builder, then post each eligible body verbatim as the note text:
@@ -199,6 +198,23 @@ disposition and add a fixed sentence under the lead. The overview is authored fr
 Summary/verdict, tally, Risk, Assumptions, and any diff-only/head-movement limitation;
 its visible part is the verdict, tally, top blockers, and earlier-finding counts, and
 the rest sits in `Details`.
+
+### GitHub specifics
+
+GitHub stages the whole batch as **one pending review**: a single create carries the
+overview as the review body and every inline finding as a review comment, and support
+replies are added inside that pending review through GraphQL. Consequences:
+
+- GitHub allows one pending review per user per pull request, so any existing pending
+  review blocks staging (exit 4), the same as GitLab drafts.
+- A finding whose line is outside the diff is omitted with a warning before the create,
+  because one unplaceable comment fails the whole create.
+- If the create errors but GitHub committed it anyway, the stager adopts the pending
+  review whose body matches the overview instead of creating a second one.
+- Cleanup is one user-run `gh api … -X DELETE …/reviews/<id>`, which removes the pending
+  review and every comment in it.
+- Publish submits the review with `event: COMMENT`. Completion is a separate review with
+  `APPROVE` or `REQUEST_CHANGES`; GitHub refuses either on your own pull request.
 
 ### Sweep and stage
 

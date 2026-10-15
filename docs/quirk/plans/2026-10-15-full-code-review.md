@@ -251,10 +251,12 @@ grep -rnE "\[\"gh\"|'gh'|\"gh\"" skills/full-code-review/scripts --include='*.py
 ```
 Expected: `0 failed`; grep prints nothing. `test_forge_github.py` patches a `FakeGitHub` onto `github._api` and `github._graphql` and covers every bullet in the `test_forge_github.py` row of `tech.md#testing-strategy`.
 
-- [ ] Step 1: read path (`get_change`, file pagination and missing-patch flag, merge base, `current_user`, `find_change_for_branch`, `commit_authors`, fork/trust, `head_refspec`, `clone`); commit.
-- [ ] Step 2: author seat posting and `list_threads`; commit.
-- [ ] Step 3: Ask gate, then reviewer stage/publish/complete/cleanup with all invariants and support replies; commit.
-- [ ] Step 4: `posting.md` GitHub sections and SKILL.md wording; commit.
+**Execution note (2026-10-15):** done. Both adapters expose the same reviewer interface (`identity`, `live_change`, `changed_paths`, `pending`, `stage_notes`, `live_staged_ids`, `publish`, `cleanup_commands`, `inline_target`); GitHub stages one atomic pending review and adds support replies through GraphQL. Author posting became a script, `post_author_comments.py`, for both forges (GitLab keeps the DiffNote check). `review_memory.fetch_discussions` takes a `forge` argument so the tests' patch point is unchanged. GitLab completion still calls the module-level `_request_changes`/approve helpers, which the existing tests patch.
+
+- [x] Step 1: read path (`get_change`, file pagination and missing-patch flag, merge base, `current_user`, `find_change_for_branch`, `commit_authors`, fork/trust, `head_refspec`, `clone`); commit.
+- [x] Step 2: author seat posting and `list_threads`; commit.
+- [x] Step 3: Ask gate, then reviewer stage/publish/complete/cleanup with all invariants and support replies; commit.
+- [x] Step 4: `posting.md` GitHub sections and SKILL.md wording; commit.
 
 ---
 
