@@ -1,0 +1,40 @@
+{
+  "kind": "quirk-approach-comparison-challenges",
+  "schemaVersion": 1,
+  "slug": "compare",
+  "renderId": "0fe7350eeb9d",
+  "comparisonId": "8b98ac2c6c74",
+  "exportedAt": "2026-10-12T15:00:00Z",
+  "challenges": [
+    {
+      "id": "ch-1",
+      "target": {
+        "type": "score",
+        "requirementId": "REQ-02",
+        "approachId": "B"
+      },
+      "note": "The staging copy should name the unreadable file before compression.",
+      "want": "met",
+      "targetHash": "fd9016134272"
+    },
+    {
+      "id": "ch-2",
+      "target": {
+        "type": "slice",
+        "approachId": "A",
+        "sliceId": "A-1"
+      },
+      "note": "The streaming writer looks bigger than L.",
+      "want": "L-XL",
+      "targetHash": "ffffffffffff"
+    }
+  ],
+  "stars": [
+    "REQ-01"
+  ],
+  "approachRevisions": {
+    "A": "A-r2",
+    "B": "B-r1",
+    "C": "C-r1"
+  }
+}

@@ -99,7 +99,7 @@ function OpenFocusDialog({ onClose, behaviorId, startScenarioId, props }: FocusD
       <DialogHeader
         title={title}
         subtitle={subtitle}
-        startContent={scenario ? <FlagToggle key={scenario.id} s={scenario} props={props} /> : undefined}
+        startContent={scenario && !props.readOnly ? <FlagToggle key={scenario.id} s={scenario} props={props} /> : undefined}
         onOpenChange={(open) => !open && onClose()}
       />
       <VStack gap={4} padding={4}>

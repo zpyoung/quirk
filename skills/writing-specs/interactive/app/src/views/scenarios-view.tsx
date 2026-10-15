@@ -258,9 +258,9 @@ function ReapproveCell({ s, props }: { s: Scenario; props: ViewProps }) {
   )
 }
 
-/** What stage 2 shows for a scenario's decision: the folded outcome, or the re-approve checkbox for a reopened one. */
+/** What stage 2 shows for a scenario's decision: the folded outcome, or the re-approve checkbox for a reopened one unless the page is read-only. */
 export function Stage2Decision({ s, props }: { s: Scenario; props: ViewProps }) {
-  if (s.reopened) return <ReapproveCell s={s} props={props} />
+  if (s.reopened && !props.readOnly) return <ReapproveCell s={s} props={props} />
   // folded stage-2 scenarios carry their final outcome directly; only a reopened scenario still tracks state
   const approved = !s.dropReason
   return <Token size="sm" color={approved ? 'green' : 'default'} label={approved ? 'Approved' : 'Dropped'} description={s.dropReason} />
@@ -273,7 +273,10 @@ function scenarioColumns(props: ViewProps, isStage2: boolean, onBrowse: (id: str
       key: 'flag',
       header: <><span aria-hidden>⚑</span><VisuallyHidden>Flag</VisuallyHidden></>,
       width: pixel(56),
-      renderCell: (s) => <FlagToggle s={s} props={props} />,
+      renderCell: (s) => {
+        if (!props.readOnly) return <FlagToggle s={s} props={props} />
+        return isScenarioFlagged(state, s) ? <Text><span aria-hidden>⚑</span><VisuallyHidden>Flagged</VisuallyHidden></Text> : null
+      },
     },
     {
       key: 'decision',
@@ -435,9 +438,9 @@ function BehaviorGroup({ behavior, props, isFlaggedOnly }: { behavior: Behavior;
   )
 }
 
-/** Scenarios grouped under the behavior rule each illustrates; stage 1 is fully editable, stage 2 is read-only except reopened scenarios. */
+/** Scenarios grouped under the behavior rule each illustrates; stage 1 is fully editable, stage 2 is read-only except reopened scenarios, and `readOnly` allows no edits at all. */
 export function ScenariosView(props: ViewProps) {
-  const { spec, state } = props
+  const { spec, state, readOnly } = props
   const [isFlaggedOnly, setIsFlaggedOnly] = useState(false)
   const flaggedCount = spec.scenarios.filter((s) => isScenarioFlagged(state, s)).length
   return (
@@ -447,8 +450,10 @@ export function ScenariosView(props: ViewProps) {
         <Text type="supporting" as="p">
           {spec.stage === 1
             ? "What the spec does in specific situations, grouped under the rule each illustrates. Approve each scenario (optionally with a different outcome), ask Claude to update it, or drop it with a reason."
-            : 'Stage 1 is signed and shown here read-only. A reopened scenario needs re-approval; everything else is for reference.'}
-          {' '}Flag any scenario you want to review more deeply elsewhere; flags stay with the spec.
+            : readOnly
+              ? 'This spec is signed and shown here for reference; ⚑ marks the scenarios flagged for deeper review.'
+              : 'Stage 1 is signed and shown here read-only. A reopened scenario needs re-approval; everything else is for reference.'}
+          {readOnly ? null : ' Flag any scenario you want to review more deeply elsewhere; flags stay with the spec.'}
         </Text>
         <HStack gap={3} align="center" wrap="wrap">
           {spec.stage === 1 ? <ReviewUndecidedButton props={props} /> : null}

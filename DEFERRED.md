@@ -132,3 +132,28 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Estimated effort**: M
 - **Priority**: P3
 
+
+## DEFER-16: Port pi-watch to the pi-coding-agent 1.x ModelRuntime API
+- **Deferred**: 2026-10-12
+- **Session context**: pi-watch failed preflight for subagent-driven-development with "does not provide an export named 'AuthStorage'". skills/pi-dev/scripts/pi-watch/package.json depends on "*", so installs resolve pi-coding-agent 1.x, which stopped exporting AuthStorage in 0.80.8 (replaced by ModelRuntime). The local plugin cache was pinned to 0.80.7 with a fresh lockfile as a workaround.
+- **Why deferred**: Out of scope for the stage-3 branch. Needs a port of pi-watch.mjs (AuthStorage.create, ModelRegistry, createAgentSession options) to ModelRuntime, plus an exact pin or tested range in package.json.
+- **Estimated effort**: M
+- **Priority**: P2
+- **Proposed owner**: unassigned
+- **Resolved**: 2026-10-15. pi-watch.mjs now builds a ModelRuntime and passes it to createAgentSession. package.json pins ^1.2.0, not ^1.0.0, because pi-coding-agent 1.0.0 and 1.1.0 fail on a fresh install: their caret range on pi-codemode resolves to 1.2.0, which dropped an export they import. The launcher reinstalls deps older than that floor, and a committed pnpm-workspace.yaml declines the two dependency build scripts so pnpm 12's install doesn't exit 1.
+
+## DEFER-17: Refresh pi-watch alias ladders for the pi 1.x model catalog
+- **Deferred**: 2026-10-15
+- **Session context**: pi-watch 1.x SDK port on zpyoung/fix-pi-watch
+- **Why deferred**: pi 1.1.0 --list-models lists anthropic/claude-sonnet-5-5, anthropic/claude-haiku-5-5 and openai/gpt-6.1-sol, which no ladder in skills/pi-dev/scripts/pi-watch/pi-watch.mjs ALIASES includes, so sonnet/haiku/codex resolve to older models. The launcher's --where staleness probe greps for gpt-5.6 and needs the same update. Left out of the 1.x SDK port because a ladder refresh is a separate model-choice decision.
+- **Estimated effort**: S
+- **Priority**: P2
+- **Resolved**: 2026-10-15. The ladders now lead with GPT-6.1/6 Sol, GPT-6 Luna, and Claude 5.5. A new opt-in `fable` alias covers Claude Fable, and grok routes to grok-4.7/4.6 via xai, then Copilot. GPT-6 Astra is excluded as pro-priced, and terra stays on GPT-5.6 Terra because GPT-6 has no Terra tier. Entries the pinned pi-ai 1.2.0 catalog doesn't ship were removed. The --where probe now looks for gpt-6.1-sol, and adversarial-review's ALIAS_LADDER heads match.
+
+## DEFER-18: Replace the per-provider model dumps in pi-dev's models.md
+- **Deferred**: 2026-10-15
+- **Session context**: DEFER-17 alias ladder refresh on zpyoung/fix-pi-watch
+- **Why deferred**: skills/pi-dev/reference/models.md has a hand-copied pi --list-models table for each provider (openai-codex, openai, anthropic, google, github-copilot). It's a pre-1.x snapshot that lacks GPT-6, Claude 5.x and Grok 4.x and still lists grok-code-fast-1. Either regenerate it from the pi-ai catalog or replace it with a pointer to pi --list-models <pattern>. Left out of the DEFER-17 ladder refresh because it's a doc restructure, not a ladder change.
+- **Estimated effort**: S
+- **Priority**: P3
+

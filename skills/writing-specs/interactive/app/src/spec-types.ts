@@ -1,3 +1,5 @@
+import type { Comparison } from './compare-types'
+
 export type Markdown = string
 export type IsoDateTime = string
 export type RequirementId = string
@@ -369,4 +371,6 @@ export interface LogicSpecPayload {
   priorDecisions: Export | null
   /** Open `[ASK]` questions per scenario, as judged by the renderer; the page never decides this itself. */
   openAsks: Record<ScenarioId, string[]>
+  comparison?: Comparison
+  comparisonId?: string
 }

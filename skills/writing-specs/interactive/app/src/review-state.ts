@@ -18,7 +18,7 @@ import type {
   ScopeCondition,
 } from './spec-types'
 
-export type ViewId = 'board' | 'risks' | 'scenarios' | 'constraints' | 'coverage' | 'heatmap' | 'story-map' | 'states' | `custom:${string}` | 'spec' | 'sign-off'
+export type ViewId = 'board' | 'risks' | 'scenarios' | 'constraints' | 'coverage' | 'heatmap' | 'story-map' | 'states' | `custom:${string}` | 'spec' | 'sign-off' | 's3-guidance' | 's3-overview' | 's3-approaches' | 's3-effort' | 's3-blast' | 's3-tradeoffs'
 export type TabSpec = { id: ViewId; label: string }
 export type Snapshot = { state: ReviewState; seen: Record<string, string>; lastExportUpdatedAt: string | null; renderId: string | null; storageOk: boolean }
 export type PayloadResult = { payload: LogicSpecPayload | null; error: string | null }

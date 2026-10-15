@@ -108,6 +108,14 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: medium
 - **Proposed fix**: Have fold carry notes into the requirement (e.g. reviewNote) or print them on stderr so Claude must act on them; and either let the page set certainty directly or document that notes are advisory. Omit stage-1 items from the stage-2 record, or mark them as pinned.
 
+## BUG-12: pi-watch dispatch prints nothing when the provider request fails
+- **Observed**: 2026-10-15
+- **File**: skills/pi-dev/scripts/pi-watch/pi-watch.mjs:442
+- **Description**: With an expired anthropic OAuth token, pi-watch --alias sonnet --tools read --require-trailer STATUS wrote empty stdout and exited 6 (missing trailer). Without --require-trailer it exits 0 with empty output. Raw pi -p --provider anthropic --model claude-sonnet-4-6 prints 'OAuth refresh failed for anthropic: ... invalid_grant'. session.prompt() does not throw on a provider error, so pi-watch's catch never runs; the failure sits on the final assistant message (stopReason/errorMessage), which pi-watch never inspects. Callers such as adversarial-review read the empty reply as a reviewer result. This is the dispatch side of the expired-token case in BUG-9. Seen while verifying the 1.x SDK port on zpyoung/fix-pi-watch; BUG-9 shows the same empty-reply symptom on the pre-port SDK.
+- **Severity**: high
+- **Proposed fix**: After session.prompt(), check the last assistant message's stopReason; on error, write errorMessage to stderr and exit non-zero.
+- **Resolved**: 2026-10-15. After session.prompt(), pi-watch reads the last assistant message the way pi's print mode does: stopReason error or aborted exits 1 with errorMessage on stderr, and length exits 1 as truncated. The check runs before --require-trailer, so a provider failure no longer surfaces as exit 6. BUG-9 (--check passing an expired token) stays open.
+
 ## BUG-13: Review page markdown renders in quadratic time on long runs of unmatched '['
 - **Observed**: 2026-10-15
 - **File**: skills/writing-specs/interactive/app/src/views/scenario-example.tsx:51

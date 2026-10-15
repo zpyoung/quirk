@@ -29,11 +29,12 @@ render_spec.py find-export  <spec-dir> [--downloads <dir>]
 render_spec.py check-export <spec-dir> <export.json>
 render_spec.py fold         <spec-dir> <export.json> [--tech-spec-requested]
 render_spec.py reapprove    <spec-dir> <export.json>
+render_spec.py challenges   <spec-dir> <export.json> [--json]
 ```
 
 `<spec-dir>` contains `logic.json`; its basename is the spec `slug`. Before opening a review, run `validate`, then `render --open`. `render` writes `review.html`, `logic.md`, and `.gitignore`, and prints the current `renderId`; it is deterministic for identical input. Do not install packages, build the page, or use a network path at spec time: the page is a local file and the renderer embeds the data in the prebuilt template.
 
-Exit codes: 0 ok, 1 invalid input, 2 usage error, 3 stale render, wrong slug, or stage mismatch, 4 (fold/reapprove) unsigned export or a failed gate named on stderr, 5 (find-export) no export found, 6 the spec is a read-only v1 file — see [v1 specs are read-only](#v1-specs-are-read-only).
+Exit codes: 0 ok, 1 invalid input, 2 usage error, 3 stale render, wrong slug, or stage mismatch, 4 (fold/reapprove) unsigned export or a failed gate named on stderr, 5 (find-export) no export found, 6 the spec is a read-only v1 file — see [v1 specs are read-only](#v1-specs-are-read-only). Stage-3 exports use some codes differently; see [Stage 3: compare approaches](#stage-3-compare-approaches).
 
 Never work around an invalid or stale result by applying its decisions directly.
 
@@ -123,6 +124,36 @@ render_spec.py render <spec-dir>
 ```
 
 `fold` applies placement, condition, and `reviewReason` as v1 does, moves any `reapprovedHash` into `stage1Pin.itemHashes` and drops the field, applies the reviewer's flag changes to `flagged`, then sets `signoff` and marks the spec `Approved` (or `Approved — Tech spec: requested`). Pass `--tech-spec-requested` here, not at the stage-1 fold, when the user asked for a tech spec. Commit `logic.json` and the regenerated `logic.md`, not `review.html` or exports. Hand off to [subagent-driven-development](../subagent-driven-development/SKILL.md) or [executing-plans](../executing-plans/SKILL.md); execution continues from `logic.md` without asking for another approval.
+
+## Stage 3: compare approaches
+
+Use stage 3 when a signed spec has several approach tech specs and the reviewer needs to compare them on one page. It adds a third review step with the comparison, effort, blast radius and trade-offs. It never edits `logic.json` and has no sign-off or fold. Picking an approach still happens outside the page.
+
+Stage 3 appears automatically on the next `render` when the spec is signed (stage 2 folded, `signoff` present) and `<spec-dir>/comparison.json` is valid. Without that file the page renders as before. The coordinator writes `comparison.json` by hand from the approach tech specs; [comparison-schema.md](comparison-schema.md) is the reference for its shape, the size-label points, the `targetHash` rule and the validation rules. `validate` and `render` both check it, and an invalid file exits 1 with a JSON pointer for each problem.
+
+A `comparison.json` beside an unsigned spec is ignored. The command prints `comparison.json ignored: stage 3 waits for stage-2 sign-off` to stderr and stages 1 and 2 render as normal.
+
+Each round runs in this order:
+
+1. Write or regenerate `comparison.json`, then run `render_spec.py render <spec-dir>`.
+2. The reviewer reads stage 3, stars must-haves, drafts challenges, and exports.
+3. Check the export, then print the challenges:
+
+   ```text
+   render_spec.py check-export <spec-dir> <export.json>
+   render_spec.py challenges   <spec-dir> <export.json> [--json]
+   ```
+
+   `check-export` prints `stage-3: <n> challenges, <m> stars` and exits 0. `challenges` prints them grouped by approach id. Each entry has the requirement id and signed text (or the slice id and name), the current score or size, the reviewer's note, the wanted value, and `target changed` when that score or slice differs from what the reviewer saw. The list ends with the starred requirements. `--json` prints `{"<approach id>": [...], "stars": [...]}` for scripts.
+4. Route each approach's challenges to its proponent. The proponent revises or holds the score in its tech spec and writes a reply.
+5. Regenerate `comparison.json` with the new scores, the replies (as `history` entries) and a rewritten `guidance`, then run `render` again. Drafts aimed at a changed score return to the reviewer as "needs another look".
+
+Stage-3 exit codes differ from the stage-1 and stage-2 meanings above:
+
+- `check-export` and `challenges` exit 1 when the export fails validation, a challenge target no longer resolves, a star names a requirement that is out of scope or unscored, or `comparison.json` fails to load.
+- `check-export` and `challenges` exit 3 with `export belongs to a different spec` when the slug differs, `signed spec changed since this export` when `renderId` no longer matches `logic.json`, or `comparison changed since this export` when `comparisonId` no longer matches the current comparison. Ask the reviewer to export again from the latest `review.html`.
+- `fold` and `reapprove` exit 2 with `stage-3 exports carry challenges, not decisions; use check-export or challenges`. Never fold a stage-3 export.
+- `find-export` does not look for stage-3 exports. Pass the file path to `check-export` yourself.
 
 ## UI feedback
 
