@@ -9,6 +9,8 @@ Bypasses pi's `DefaultResourceLoader` (extensions / skills / prompts / themes / 
 
 ## Setup (one-time)
 
+Needs Node ≥ 22.19 and pnpm. The SDK deps are pinned to pi-coding-agent `^1.2.0`; the launcher reinstalls them when they're missing or older than that.
+
 ```bash
 cd <this-dir>
 pnpm install
@@ -41,26 +43,27 @@ pi-watch --check codex && pi-watch --alias codex "..."   # gate a dispatch on it
 pi-watch --list-aliases
 
 # Explicit override (skip alias resolution)
-pi-watch --provider openai-codex --model gpt-5.6-sol --thinking max "..."
+pi-watch --provider openai-codex --model gpt-6.1-sol --thinking max "..."
 ```
 
 ## Aliases
 
 | Alias | Default thinking | Routes through (newest first) |
 |---|---|---|
-| `codex` | `medium` | gpt-5.6-sol → 5.5 → 5.4 → 5.3-codex (openai-codex / openai / copilot) |
-| `codex-max` | `max` | gpt-5.6-sol → 5.5-codex-max → 5.4-codex-max → 5.1-codex-max |
-| `codex-mini` | `medium` | gpt-5.6-luna → 5.4-mini → 5.1-codex-mini |
-| `codex-spark` | `high` | gpt-5.4-codex-spark → 5.3-codex-spark |
+| `codex` | `medium` | gpt-6.1-sol → 6-sol → 5.6-sol → 5.5 (openai-codex / openai / copilot) |
+| `codex-max` | `max` | gpt-6.1-sol → 6-sol → 5.6-sol |
+| `codex-mini` | `medium` | gpt-6-luna → 5.6-luna |
+| `codex-spark` | `high` | gpt-5.3-codex-spark |
 | `terra` | `high` | gpt-5.6-terra → 5.4 |
-| `sonnet` | `high` | claude-sonnet-4-7 → 4-6 |
-| `opus` | `high` | claude-opus-4-7 → 4-6 |
-| `haiku` | `medium` | claude-haiku-4-6 → 4-5 |
-| `gemini` | `high` | gemini-3.2-pro-preview → 3.1 → 3 |
-| `flash` | `medium` | gemini-flash-latest → 3-flash-preview |
-| `grok` | `medium` | github-copilot/grok-code-fast-1 |
+| `sonnet` | `high` | claude-sonnet-5-5 → 5 → 4-6 |
+| `opus` | `high` | claude-opus-5-5 → 5 → 4-8 → 4-7 |
+| `haiku` | `medium` | claude-haiku-5-5 → 4-5 |
+| `fable` | `high` | claude-fable-5-1 → 5 (opt-in, 2.5× Opus cost) |
+| `gemini` | `high` | gemini-3.1-pro-preview |
+| `flash` | `medium` | gemini-flash-latest → 3.8-flash → 3-flash-preview |
+| `grok` | `medium` | grok-4.7 → 4.6 (xai, then copilot) |
 
-Aliases auto-upgrade as new models ship. **OpenAI pro/deep-research tiers are excluded** (`gpt-5*-pro`, `o1-pro`, `o3-pro`, `o3-deep-research`, `o4-mini-deep-research`) — ~10–30× cost, multi-minute latency. Dispatch only on explicit user request via `--provider`/`--model`. (Google's `gemini-*-pro-preview` is the standard tier, not a pro tier — it's the routing target of the `gemini` alias.)
+Aliases auto-upgrade as new models ship. **OpenAI pro/deep-research tiers are excluded** (`gpt-5*-pro`, `o1-pro`, `o3-pro`, `o3-deep-research`, `o4-mini-deep-research`, and `gpt-6-astra`), because they cost several times more, multi-minute latency. Dispatch only on explicit user request via `--provider`/`--model`. (Google's `gemini-*-pro-preview` is the standard tier, not a pro tier — it's the routing target of the `gemini` alias.)
 
 ## Tools
 
@@ -108,7 +111,7 @@ Pi has no built-in sandbox — `bash`, `edit`, and `write` operate at the caller
 | Code | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | Runtime error during prompt execution |
+| 1 | Runtime error: the SDK threw, the provider returned an error (e.g. expired auth: run `pi /login`), the request was aborted, or the reply hit the output token limit |
 | 2 | Bad CLI args / unknown alias |
 | 3 | Model not in pi-ai registry (run `pnpm update` here) |
 | 4 | Cannot run `pi --list-models` (pi binary missing?) |
