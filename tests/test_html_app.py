@@ -795,6 +795,7 @@ def test_the_scaffold_table_class_is_q_data_grid_everywhere():
 def test_page_layout_renders_the_region_dom_of_render_regions():
     source = (APP / "project" / "src" / "PageLayout.tsx").read_text()
     for needle in (
+        "q-wrap",
         "q-page",
         "data-layout",
         "q-summary",
@@ -927,3 +928,81 @@ def test_real_build_marks_the_rail_link_of_the_section_being_read(project, tmp_p
     assert seen["initial"]["total"] == 5, seen
     for stage, href in (("middle", "#the-retry-schedule"), ("bottom", "#what-the-customer-sees")):
         assert seen[stage]["current"] == [[href, "location"]], (stage, seen[stage])
+
+
+WIDTH_PROBE = """
+import { chromium } from %(playwright)s;
+
+const [, , file] = process.argv;
+const candidates = [{ channel: "chrome" }, { channel: "msedge" }];
+if (process.env.CHROME_PATH) candidates.push({ executablePath: process.env.CHROME_PATH });
+try {
+  candidates.push({ executablePath: chromium.executablePath() });
+} catch {}
+let browser = null;
+for (const options of candidates) {
+  try {
+    browser = await chromium.launch({ headless: true, ...options });
+    break;
+  } catch {}
+}
+if (!browser) process.exit(77);
+const out = {};
+for (const width of [1800, 2400]) {
+  const page = await browser.newPage({ viewport: { width, height: 900 } });
+  await page.goto("file://" + file);
+  await page.waitForSelector(".q-page");
+  out[width] = await page.$eval(".q-page", (el) => {
+    const r = el.getBoundingClientRect();
+    return { left: r.left, right: r.right, width: r.width };
+  });
+  await page.close();
+}
+await browser.close();
+console.log(JSON.stringify(out));
+"""
+
+
+def _page_boxes(project: Path, env: dict, tmp_path: Path, shape: str) -> dict:
+    src = source_dir(project, shape)
+    ignore = shutil.ignore_patterns("node_modules", "dist", ".DS_Store")
+    shutil.copytree(APP / "project", src, ignore=ignore)
+    shutil.copytree(APP / "examples" / shape, src, ignore=ignore, dirs_exist_ok=True)
+    rc, result = build_app(project, env, shape, "--title", f"{shape} example")
+    assert rc == 0, result
+    failure = verify_runner._ensure_installed()
+    if failure:
+        pytest.skip(f"no playwright to drive a browser with: {failure}")
+    playwright = (verify_runner.VERIFY_DIR / "node_modules" / "playwright-core" / "index.mjs").as_uri()
+    probe = tmp_path / f"probe-{shape}" / "width_probe.mjs"
+    probe.parent.mkdir()
+    probe.write_text(WIDTH_PROBE % {"playwright": json.dumps(playwright)})
+    proc = subprocess.run(
+        [NODE, str(probe), str(Path(result["path"]).resolve())], capture_output=True, text=True, env=env, timeout=120
+    )
+    if proc.returncode == 77:
+        pytest.skip("no browser to measure the page with")
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+@pytest.mark.skipif(
+    shutil.which("pnpm") is None or NODE is None or os.environ.get("QUIRK_HTML_NETWORK_TESTS") != "1",
+    reason="needs node, pnpm on PATH and QUIRK_HTML_NETWORK_TESTS=1",
+)
+def test_a_report_app_page_is_capped_at_1440_and_centred_on_wide_screens(project, tmp_path):
+    env = {**os.environ, "QUIRK_HTML_USER_DIR": str(tmp_path / "user")}
+    boxes = _page_boxes(project, env, tmp_path, "report")
+    for viewport, box in boxes.items():
+        assert box["width"] <= 1440, (viewport, box)
+        assert abs(box["left"] - (int(viewport) - box["right"])) <= 1, (viewport, box)
+
+
+@pytest.mark.skipif(
+    shutil.which("pnpm") is None or NODE is None or os.environ.get("QUIRK_HTML_NETWORK_TESTS") != "1",
+    reason="needs node, pnpm on PATH and QUIRK_HTML_NETWORK_TESTS=1",
+)
+def test_a_dashboard_app_page_stays_fluid_past_1440(project, tmp_path):
+    env = {**os.environ, "QUIRK_HTML_USER_DIR": str(tmp_path / "user")}
+    boxes = _page_boxes(project, env, tmp_path, "dashboard")
+    assert boxes["2400"]["width"] > 1440, boxes
