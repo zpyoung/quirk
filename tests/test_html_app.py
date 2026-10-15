@@ -20,7 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "skills" / "writing-html-artifacts"
 sys.path.insert(0, str(SKILL / "scripts"))
 
-from htmlkit import header, layoutcheck, manifest  # noqa: E402
+from htmlkit import header, layoutcheck, manifest, verify_runner  # noqa: E402
 from htmlkit.layouts import LAYOUTS  # noqa: E402
 
 CLI = SKILL / "scripts" / "quirk_html.py"
@@ -859,3 +859,71 @@ def test_real_build_and_verify_of_each_app_example(project, tmp_path, shape):
         pytest.skip(f"no browser to verify with: {report.get('reason')}")
     assert report["status"] == "passed", report
     assert all(check["passed"] for check in report["checks"].values()), report["checks"]
+
+
+NAV_PROBE = """
+import { chromium } from %(playwright)s;
+
+const [, , file] = process.argv;
+const candidates = [{ channel: "chrome" }, { channel: "msedge" }];
+if (process.env.CHROME_PATH) candidates.push({ executablePath: process.env.CHROME_PATH });
+try {
+  candidates.push({ executablePath: chromium.executablePath() });
+} catch {}
+let browser = null;
+for (const options of candidates) {
+  try {
+    browser = await chromium.launch({ headless: true, ...options });
+    break;
+  } catch {}
+}
+if (!browser) process.exit(77);
+const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+await page.goto("file://" + file);
+await page.waitForSelector(".q-nav-rail a");
+const current = () =>
+  page.$$eval(".q-nav-rail a", (links) => ({
+    total: links.length,
+    current: links.filter((a) => a.hasAttribute("aria-current")).map((a) => [a.getAttribute("href"), a.getAttribute("aria-current")]),
+  }));
+const out = { initial: await current() };
+await page.evaluate(() => document.getElementById("the-retry-schedule").scrollIntoView());
+await page.waitForFunction(() => document.querySelector('.q-nav-rail a[href="#the-retry-schedule"]')?.hasAttribute("aria-current"));
+out.middle = await current();
+await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+await page.waitForFunction(() => document.querySelector('.q-nav-rail a[href="#what-the-customer-sees"]')?.hasAttribute("aria-current"));
+out.bottom = await current();
+await browser.close();
+console.log(JSON.stringify(out));
+"""
+
+
+@pytest.mark.skipif(
+    shutil.which("pnpm") is None or NODE is None or os.environ.get("QUIRK_HTML_NETWORK_TESTS") != "1",
+    reason="needs node, pnpm on PATH and QUIRK_HTML_NETWORK_TESTS=1",
+)
+def test_real_build_marks_the_rail_link_of_the_section_being_read(project, tmp_path):
+    env = {**os.environ, "QUIRK_HTML_USER_DIR": str(tmp_path / "user")}
+    src = source_dir(project, "explainer")
+    ignore = shutil.ignore_patterns("node_modules", "dist", ".DS_Store")
+    shutil.copytree(APP / "project", src, ignore=ignore)
+    shutil.copytree(APP / "examples" / "explainer", src, ignore=ignore, dirs_exist_ok=True)
+    rc, result = build_app(project, env, "explainer", "--title", "explainer example")
+    assert rc == 0, result
+    failure = verify_runner._ensure_installed()
+    if failure:
+        pytest.skip(f"no playwright to drive a browser with: {failure}")
+    playwright = (verify_runner.VERIFY_DIR / "node_modules" / "playwright-core" / "index.mjs").as_uri()
+    probe = tmp_path / "probe" / "nav_probe.mjs"
+    probe.parent.mkdir()
+    probe.write_text(NAV_PROBE % {"playwright": json.dumps(playwright)})
+    proc = subprocess.run(
+        [NODE, str(probe), str(Path(result["path"]).resolve())], capture_output=True, text=True, env=env, timeout=120
+    )
+    if proc.returncode == 77:
+        pytest.skip("no browser to read the page with")
+    assert proc.returncode == 0, proc.stderr
+    seen = json.loads(proc.stdout)
+    assert seen["initial"]["total"] == 5, seen
+    for stage, href in (("middle", "#the-retry-schedule"), ("bottom", "#what-the-customer-sees")):
+        assert seen[stage]["current"] == [[href, "location"]], (stage, seen[stage])
