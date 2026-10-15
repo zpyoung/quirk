@@ -429,7 +429,7 @@ Use when two or more options are judged against the same criteria and one of the
 
 ### Children
 
-A `<table>` whose first row is the header: the first cell names the criteria column and each other header cell is one option. Every later row is one criterion, with its name in the first cell. At 700px and below each option becomes its own block, the recommended one first. Wider, the table widens past the page column when the options do not fit. Without JavaScript the table scrolls inside its own box.
+A `<table>` whose first row is the header: the first cell names the criteria column and each other header cell is one option. Every later row is one criterion, with its name in the first cell. At 700px and below each option becomes its own block, the recommended one first. Wider, the table widens past the page column when the options do not fit and nothing sits beside the column; beside a nav rail, aside, pane or margin column it scrolls inside its own box. Without JavaScript the table scrolls inside its own box.
 
 ### Example
 

@@ -350,7 +350,7 @@
       "rules": [
         "compare-recommended"
       ],
-      "children": "A <table> whose first row is the header: the first cell names the criteria column and each other header cell is one option. Every later row is one criterion, with its name in the first cell. At 700px and below each option becomes its own block, the recommended one first. Wider, the table widens past the page column when the options do not fit. Without JavaScript the table scrolls inside its own box.",
+      "children": "A <table> whose first row is the header: the first cell names the criteria column and each other header cell is one option. Every later row is one criterion, with its name in the first cell. At 700px and below each option becomes its own block, the recommended one first. Wider, the table widens past the page column when the options do not fit and nothing sits beside the column; beside a nav rail, aside, pane or margin column it scrolls inside its own box. Without JavaScript the table scrolls inside its own box.",
       "example": "<q-compare recommended=\"2\">\n  <table>\n    <thead>\n      <tr><th>Criterion</th><th>Self-host</th><th>Managed</th><th>Hybrid</th></tr>\n    </thead>\n    <tbody>\n      <tr><th>Monthly cost</th><td>$900</td><td>$2,400</td><td>$1,500</td></tr>\n      <tr><th>Setup time</th><td>3 weeks</td><td>2 days</td><td>1 week</td></tr>\n      <tr><th>On-call load</th><td>High</td><td>Low</td><td>Medium</td></tr>\n    </tbody>\n  </table>\n</q-compare>"
     }
   ]
