@@ -19,6 +19,8 @@ SCRIPT = REPO_ROOT / "skills" / "writing-specs" / "interactive" / "render_spec.p
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "interactive" / "v2"
 EXAMPLES = FIXTURES / "examples"
 EXAMPLES_EXPORTS = EXAMPLES / "exports"
+DETAILS = FIXTURES / "details"
+DETAILS_EXPORTS = DETAILS / "exports"
 STAGE1 = FIXTURES / "stage1"
 
 sys.path.insert(0, str(SCRIPT.parent))
@@ -387,3 +389,204 @@ def test_review_page_payload_has_an_empty_open_asks_object_without_gaps(tmp_path
     parser = PayloadParser()
     parser.feed((spec_dir / "review.html").read_text(encoding="utf-8"))
     assert json.loads("".join(parser.chunks))["openAsks"] == {}
+
+
+def details_logic() -> dict:
+    return load_json(DETAILS / "logic.json")
+
+
+def test_validate_accepts_the_details_fixture() -> None:
+    result = run_cli("validate", str(DETAILS))
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+
+
+def test_a_details_only_example_validates() -> None:
+    logic = example_logic()
+    logic["scenarios"][0]["example"] = {"details": {"title": "Order", "body": "Text."}}
+    assert errors_for(logic) == []
+
+
+def test_data_state_parts_may_come_with_details() -> None:
+    logic = example_logic()
+    logic["scenarios"][0]["example"]["details"] = {"title": "Order", "body": "Text."}
+    assert errors_for(logic) == []
+
+
+def test_an_example_with_neither_form_is_rejected_at_the_example() -> None:
+    logic = example_logic()
+    logic["scenarios"][0]["example"] = {}
+    assert errors_for(logic) == [("/scenarios/0/example", "example needs before, steps and after, or details")]
+
+
+@pytest.mark.parametrize("present", [["before"], ["steps"], ["after"], ["before", "after"], ["steps", "after"]])
+def test_data_state_parts_are_all_or_nothing_beside_details(present: List[str]) -> None:
+    logic = example_logic()
+    full = valid_example()
+    example: Dict[str, Any] = {key: full[key] for key in present}
+    example["details"] = {"title": "Order", "body": "Text."}
+    logic["scenarios"][0]["example"] = example
+    paths = [path for path, _ in errors_for(logic)]
+    for key in ("before", "steps", "after"):
+        assert ("/scenarios/0/example/" + key in paths) == (key not in present)
+
+
+@pytest.mark.parametrize(
+    "details, expected",
+    [
+        ("text", [("/scenarios/0/example/details", "expected an object")]),
+        ({"title": "T"}, [("/scenarios/0/example/details/body", "required key is missing")]),
+        ({"body": "B."}, [("/scenarios/0/example/details/title", "required key is missing")]),
+        ({"title": "T", "body": "B.", "extra": 1}, [("/scenarios/0/example/details/extra", "unexpected key")]),
+        ({"title": "T", "body": ""}, [("/scenarios/0/example/details/body", "must not be empty")]),
+        ({"title": "T", "body": 4}, [("/scenarios/0/example/details/body", "expected a string")]),
+        ({"title": "", "body": "B."}, [("/scenarios/0/example/details/title", "must not be empty")]),
+        ({"title": 4, "body": "B."}, [("/scenarios/0/example/details/title", "expected a string")]),
+    ],
+)
+def test_details_shape_errors_sit_at_the_offending_key(details: Any, expected: List[tuple]) -> None:
+    logic = example_logic()
+    logic["scenarios"][0]["example"] = {"details": details}
+    assert errors_for(logic) == expected
+
+
+@pytest.mark.parametrize(
+    "title", ["Two\nlines", "Two\rlines", "a*b", "a_b", "a`b", "a[b", "a]b", "a<b", "a>b", "**Bold**", "[link](x)"]
+)
+def test_details_title_must_be_one_line_of_plain_text(title: str) -> None:
+    logic = example_logic()
+    logic["scenarios"][0]["example"] = {"details": {"title": title, "body": "B."}}
+    assert errors_for(logic) == [
+        ("/scenarios/0/example/details/title", "details title must be one line of plain text")
+    ]
+
+
+@pytest.mark.parametrize(
+    "title",
+    ["Data before", "data BEFORE", "  Walkthrough  ", "Walkthrough:", "Data after: ", " data after:"],
+)
+def test_details_title_may_not_reuse_a_data_state_label(title: str) -> None:
+    logic = example_logic()
+    logic["scenarios"][0]["example"] = {"details": {"title": title, "body": "B."}}
+    assert errors_for(logic) == [("/scenarios/0/example/details/title", "details title reuses a data-state label")]
+
+
+@pytest.mark.parametrize("title", ["Data before the change", "Walkthrough::", "Data", "Discount order: totals"])
+def test_details_title_near_misses_are_accepted(title: str) -> None:
+    logic = example_logic()
+    logic["scenarios"][0]["example"] = {"details": {"title": title, "body": "B."}}
+    assert errors_for(logic) == []
+
+
+@pytest.mark.parametrize("marker", ["[ask: is this right?]", "[ASK]", "[ASK:x]", "[ Ask: x]", "[ASK: ]"])
+def test_validate_rejects_malformed_ask_markers_in_the_details_body(marker: str) -> None:
+    logic = example_logic()
+    logic["scenarios"][0]["example"] = {"details": {"title": "Order", "body": "Text " + marker}}
+    assert ("/scenarios/0/example/details/body", MALFORMED) in errors_for(logic)
+
+
+def test_scenario_open_asks_reads_the_details_body_after_the_data_state_parts() -> None:
+    sc = {
+        "example": {
+            "before": "[ASK: first?]",
+            "steps": ["[ASK: second?]"],
+            "after": "[ASK: third?]",
+            "details": {"title": "T", "body": "x [ASK: fourth?]\n[ASK: fifth?]"},
+        }
+    }
+    assert render_spec.scenario_open_asks(sc) == ["first?", "second?", "third?", "fourth?", "fifth?"]
+    only = {"example": {"details": {"title": "T", "body": "[ASK: only?]"}}}
+    assert render_spec.scenario_open_asks(only) == ["only?"]
+    assert render_spec.scenario_open_asks({"example": {"details": {"title": "T", "body": "closed"}}}) == []
+
+
+def test_stage_2_open_ask_fires_for_a_details_only_gap(tmp_path: Path) -> None:
+    spec_dir = make_spec(tmp_path)
+    assert run_cli("fold", str(spec_dir), str(EXAMPLES_EXPORTS / "drop-open-ask.json")).returncode == 0
+    folded = load_json(spec_dir / "logic.json")
+    assert folded["stage"] == 2
+    index = next(i for i, item in enumerate(folded["scenarios"]) if item["id"] == "SC-01")
+    folded["scenarios"][index]["example"] = {"details": {"title": "Order", "body": "Open. [ASK: still open?]"}}
+    assert (pointer_of(index), "open [ASK] after stage-1 sign-off") in errors_for(folded)
+    folded["scenarios"][index]["example"]["details"]["body"] = "Closed."
+    assert (pointer_of(index), "open [ASK] after stage-1 sign-off") not in errors_for(folded)
+
+
+def test_fold_refuses_an_export_approving_the_details_only_open_ask(tmp_path: Path) -> None:
+    spec_dir = tmp_path / "details"
+    spec_dir.mkdir()
+    shutil.copy(DETAILS / "logic.json", spec_dir / "logic.json")
+    result = run_cli("fold", str(spec_dir), str(DETAILS_EXPORTS / "approve-open-ask.json"))
+    assert result.returncode == 4, result.stderr
+    assert "gate examples: open [ASK] in SC-01" in result.stderr
+    assert load_json(spec_dir / "logic.json")["stage"] == 1
+
+
+def test_details_exports_are_consistent_with_the_fixture() -> None:
+    logic = details_logic()
+    for path in sorted(DETAILS_EXPORTS.glob("*.json")):
+        export = load_json(path)
+        assert export["renderId"] == render_spec.render_id(logic), path.name
+        hashes = render_spec.item_hashes(logic)
+        assert all(hashes[ident] == value for ident, value in export["seen"].items()), path.name
+
+
+def test_details_markdown_lines_for_a_details_only_example() -> None:
+    lines = render_spec._example_markdown_lines(scenario(details_logic(), "SC-01")["example"])
+    assert lines == [
+        "   - **Discount order:**",
+        "",
+        "     | Order | Discount | Line after |",
+        "     | --- | --- | --- |",
+        '     | 1 | "Loyalty" 10% | $90.00 |',
+        '     | 2 | "Winback" 15% | $76.50 |',
+        "",
+        "     [ASK: does a fixed-amount discount apply before or after the percentage ones?]",
+        "",
+    ]
+
+
+def test_details_markdown_lines_follow_the_data_state_lines_when_both_forms_are_present() -> None:
+    lines = render_spec._example_markdown_lines(scenario(details_logic(), "SC-02")["example"])
+    assert lines[:2] == [
+        '   - **Data before:** **Subscription**: "Welcome" 10%* off, first 3 charges; uses left 3',
+        "   - **Walkthrough:**",
+    ]
+    assert lines[-8:-6] == [
+        '   - **Data after:** **Charge 4**: Coffee line has no line discounts  ',
+        '     **Subscription**: "Welcome" uses left 0',
+    ]
+    assert lines[-6:] == [
+        "   - **Discount lifecycle:**",
+        "",
+        "     - Uses left starts at 3",
+        "     - Each processed charge uses one",
+        "     - At 0 the discount stops applying",
+        "",
+    ]
+
+
+def test_details_body_normalizes_line_endings_and_has_no_trailing_spaces() -> None:
+    lines = render_spec._example_markdown_lines(
+        {"details": {"title": "T", "body": "a\r\nb\r\r  c  \n\nd"}}
+    )
+    assert lines == ["   - **T:**", "", "     a", "     b", "", "       c  ", "", "     d", ""]
+
+
+def test_render_emits_the_details_blocks_in_logic_md() -> None:
+    markdown = render_spec.render_markdown_v2(details_logic())
+    assert "   - **Discount order:**\n\n     | Order | Discount | Line after |\n     | --- | --- |" in markdown
+    assert "     At 0" not in markdown
+    assert markdown.count("   - **Discount order:**") == 1
+
+
+def test_review_page_payload_lists_the_details_only_scenario_in_open_asks(tmp_path: Path) -> None:
+    spec_dir = tmp_path / "details"
+    spec_dir.mkdir()
+    shutil.copy(DETAILS / "logic.json", spec_dir / "logic.json")
+    result = run_cli("render", str(spec_dir))
+    assert result.returncode == 0, result.stderr
+    parser = PayloadParser()
+    parser.feed((spec_dir / "review.html").read_text(encoding="utf-8"))
+    payload = json.loads("".join(parser.chunks))
+    assert payload["openAsks"] == {"SC-01": ["does a fixed-amount discount apply before or after the percentage ones?"]}
