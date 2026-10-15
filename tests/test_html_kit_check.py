@@ -312,6 +312,49 @@ def test_timeline_items() -> None:
     assert messages("<q-timeline><ul><li>x</li></ul></q-timeline>") == ["<q-timeline> needs one of: ol"]
 
 
+def compare(recommended: str, options: int = 3) -> str:
+    heads = "<th>Criterion</th>" + "".join(f"<th>Option {i}</th>" for i in range(1, options + 1))
+    cells = "<th>Cost</th>" + "".join("<td>1</td>" for _ in range(options))
+    return (
+        f'<q-compare recommended="{recommended}"><table><thead><tr>{heads}</tr></thead>'
+        f"<tbody><tr>{cells}</tr></tbody></table></q-compare>"
+    )
+
+
+def test_compare_recommended_passes_across_the_option_range() -> None:
+    for ok in ("1", "2", "3"):
+        assert messages(compare(ok)) == [], ok
+
+
+def test_compare_recommended_counts_option_columns_without_the_criteria_column() -> None:
+    assert messages(compare("3", options=3)) == []
+    got = messages(compare("4", options=3))
+    assert got == ["<q-compare> recommended=\"4\" must be between 1 and 3 (the option columns)"]
+
+
+def test_compare_recommended_fails_at_zero_and_names_the_range() -> None:
+    got = messages(compare("0"))
+    assert any("must be between 1 and 3" in m for m in got), got
+
+
+def test_compare_needs_a_table_and_a_recommended_attribute() -> None:
+    assert messages('<q-compare recommended="1"></q-compare>') == ["<q-compare> needs one of: table"]
+    assert "<q-compare> needs attribute recommended" in messages(compare("1").replace(' recommended="1"', ""))
+
+
+def test_panel_needs_a_heading_from_h2_to_h4() -> None:
+    assert messages("<q-panel><p>body</p></q-panel>") == ["<q-panel> needs one of: h2, h3, h4"]
+    assert messages("<q-panel><h5>too small</h5></q-panel>") == ["<q-panel> needs one of: h2, h3, h4"]
+    for level in ("h2", "h3", "h4"):
+        assert messages(f"<q-panel><{level}>Title</{level}><p>body</p></q-panel>") == [], level
+
+
+def test_panel_span_is_an_enum() -> None:
+    assert messages("<q-panel span=\"7\"><h3>T</h3></q-panel>") == ['<q-panel> span="7" is not one of 1, 2, 3, 4, full']
+    for ok in ("1", "2", "3", "4", "full"):
+        assert messages(f'<q-panel span="{ok}"><h3>T</h3></q-panel>') == [], ok
+
+
 def test_timeline_tone() -> None:
     def item(tone: str) -> str:
         return f'<q-timeline><ol><li data-tone="{tone}"><time datetime="2026-01-01">a</time></li></ol></q-timeline>'

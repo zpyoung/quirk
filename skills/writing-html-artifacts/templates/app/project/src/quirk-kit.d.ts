@@ -17,6 +17,10 @@ declare module 'react' {
       'q-diff': KitElementProps
       'q-diff-note': KitElementProps
       'q-board': KitElementProps
+      'q-grid': KitElementProps
+      'q-panel': KitElementProps
+      'q-sidenote': KitElementProps
+      'q-compare': KitElementProps
     }
   }
 }

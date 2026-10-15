@@ -17,6 +17,10 @@ Write any `q-*` tag in a source and the builder inlines the kit automatically; `
 - [`q-diff`](#q-diff)
 - [`q-diff-note`](#q-diff-note) (inside `q-diff`)
 - [`q-board`](#q-board)
+- [`q-grid`](#q-grid)
+- [`q-panel`](#q-panel)
+- [`q-sidenote`](#q-sidenote)
+- [`q-compare`](#q-compare)
 
 ## `q-tabs`
 
@@ -331,6 +335,117 @@ Direct-child `<section>` elements, each opening with an h2 to h6 heading and the
     </ul>
   </section>
 </q-board>
+```
+
+Companion option html: not allowed (interactive)
+
+## `q-grid`
+
+Use when several panels, stats or figures should sit side by side and stack on narrow screens, as on a dashboard.
+
+### Attributes
+
+This element takes no attributes of its own.
+
+### Children
+
+Any block children, usually q-panel or q-stat elements. They flow into equal columns: 1 at 700px and below, up to 2 from 701px, up to 4 from 1100px and up to 6 from 1800px (viewport widths). Give a child span="2" (q-panel) or data-span="2" (anything else) to take that many columns; a span never exceeds the columns in the row.
+
+### Example
+
+```html
+<q-grid>
+  <q-panel span="2">
+    <h3>Checkout latency</h3>
+    <p>The p95 fell from 410 ms to 310 ms after the cache change.</p>
+  </q-panel>
+  <q-panel>
+    <h3>Error rate</h3>
+    <p>3.1% of attempts failed in the last 7 days.</p>
+  </q-panel>
+  <q-panel>
+    <h3>Open incidents</h3>
+    <p>None.</p>
+  </q-panel>
+</q-grid>
+```
+
+Companion option html: allowed
+
+## `q-panel`
+
+Use when one dashboard item, such as a chart, a table or a few stats, needs a title and a border of its own.
+
+### Attributes
+
+| Name | Required | Kind | Values | Default | Description |
+|---|---|---|---|---|---|
+| `span` | no | enum | `1`, `2`, `3`, `4`, `full` | `1` | How many columns of an enclosing q-grid the panel spans; full takes the whole row. |
+
+### Children
+
+A heading (h2, h3 or h4) first: it is the panel's title. The body follows: paragraphs, q-chart, q-table, q-stat or any other content.
+
+### Example
+
+```html
+<q-panel>
+  <h3>Weekly active users</h3>
+  <p>58,200 distinct signed-in users in the last ISO week, up 11.5%.</p>
+</q-panel>
+```
+
+Companion option html: allowed
+
+## `q-sidenote`
+
+Use when a short aside, source or caveat belongs beside a sentence without interrupting it.
+
+### Attributes
+
+This element takes no attributes of its own.
+
+### Children
+
+Inline text placed inside a paragraph, right after the words it annotates. On a longform page of 1100px or wider it sits numbered in the right margin. Narrower, a numbered button in the text opens it in place. Without JavaScript, and in print, it reads inline in parentheses.
+
+### Example
+
+```html
+<p>Median build time fell to nine minutes<q-sidenote>Measured on the main branch, excluding reruns.</q-sidenote> after the cache moved to the shared runner.</p>
+```
+
+Companion option html: not allowed (interactive)
+
+## `q-compare`
+
+Use when two or more options are judged against the same criteria and one of them is recommended.
+
+### Attributes
+
+| Name | Required | Kind | Values | Default | Description |
+|---|---|---|---|---|---|
+| `recommended` | yes | integer | - | - | The recommended option, counted from 1 across the option columns (the criteria column is not counted). |
+
+### Children
+
+A `<table>` whose first row is the header: the first cell names the criteria column and each other header cell is one option. Every later row is one criterion, with its name in the first cell. At 700px and below each option becomes its own block, the recommended one first. Wider, the table widens past the page column when the options do not fit. Without JavaScript the table scrolls inside its own box.
+
+### Example
+
+```html
+<q-compare recommended="2">
+  <table>
+    <thead>
+      <tr><th>Criterion</th><th>Self-host</th><th>Managed</th><th>Hybrid</th></tr>
+    </thead>
+    <tbody>
+      <tr><th>Monthly cost</th><td>$900</td><td>$2,400</td><td>$1,500</td></tr>
+      <tr><th>Setup time</th><td>3 weeks</td><td>2 days</td><td>1 week</td></tr>
+      <tr><th>On-call load</th><td>High</td><td>Low</td><td>Medium</td></tr>
+    </tbody>
+  </table>
+</q-compare>
 ```
 
 Companion option html: not allowed (interactive)

@@ -4,7 +4,8 @@
  * through define(), which never redefines a tag that is already registered.
  *
  * Helpers every element builds on: define, whenReady, token, onTheme, bindData, readTable.
- * Elements so far: q-tabs, q-timeline, q-code, q-stat, q-table, q-chart, q-diff, q-diff-note, q-board.
+ * Elements so far: q-tabs, q-timeline, q-code, q-stat, q-table, q-chart, q-diff, q-diff-note, q-board,
+ * q-sidenote, q-compare. q-grid and q-panel are CSS only.
  */
 (function () {
   'use strict';
@@ -2582,6 +2583,213 @@
     }
   }
 
+  /** Numbers every sidenote on the page in document order, so each toggle matches its neighbours. */
+  function numberSidenotes() {
+    Array.prototype.forEach.call(document.querySelectorAll('q-sidenote'), function (note, i) {
+      if (note._toggle) {
+        note._toggle.textContent = String(i + 1);
+        note._toggle.setAttribute('aria-label', 'Note ' + (i + 1));
+      }
+    });
+  }
+
+  /**
+   * q-sidenote: inserts a numbered toggle button before the note and collapses the note behind it.
+   * The stylesheet decides where the note shows: in the margin of a wide longform page it is always
+   * visible and the toggle is hidden; elsewhere the toggle opens the note in place. Without this
+   * script the note reads inline in parentheses.
+   */
+  class QSidenote extends HTMLElement {
+    connectedCallback() {
+      var self = this;
+      whenReady(function () {
+        if (self.isConnected) {
+          self._build();
+        }
+      });
+    }
+
+    disconnectedCallback() {
+      if (this._toggle) {
+        this._toggle.remove();
+        this._toggle = null;
+      }
+      this.removeAttribute('data-q-collapsed');
+    }
+
+    _build() {
+      if (this._toggle) {
+        return;
+      }
+      if (!this.id) {
+        this.id = uid('q-sidenote-');
+      }
+      var button = kitNode('button');
+      button.type = 'button';
+      button.setAttribute('data-q-sidenote-toggle', '');
+      button.setAttribute('aria-expanded', 'false');
+      button.setAttribute('aria-controls', this.id);
+      var self = this;
+      button.addEventListener('click', function () {
+        var open = button.getAttribute('aria-expanded') !== 'true';
+        button.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (open) {
+          self.removeAttribute('data-q-collapsed');
+        } else {
+          self.setAttribute('data-q-collapsed', '');
+        }
+      });
+      this.parentNode.insertBefore(button, this);
+      this._toggle = button;
+      this.setAttribute('data-q-collapsed', '');
+      numberSidenotes();
+    }
+  }
+
+  /** The cells of a table row that are real cells, in order. */
+  function rowCells(row) {
+    return Array.prototype.slice.call(row.cells);
+  }
+
+  /** A copy of a cell's content for the stacked view, without ids that would duplicate the table's. */
+  function cellContent(cell) {
+    var box = document.createDocumentFragment();
+    Array.prototype.forEach.call(cell.childNodes, function (node) {
+      var copy = node.cloneNode(true);
+      if (copy.nodeType === 1) {
+        copy.removeAttribute('id');
+        Array.prototype.forEach.call(copy.querySelectorAll('[id]'), function (inner) {
+          inner.removeAttribute('id');
+        });
+      }
+      box.appendChild(copy);
+    });
+    return box;
+  }
+
+  /**
+   * q-compare: marks the recommended option's column and builds one block per option for narrow
+   * screens, the recommended one first, each a heading and a criteria list. The stylesheet shows
+   * the blocks and hides the table at 700px and below and in print. Without this script the table
+   * scrolls inside its own box.
+   */
+  class QCompare extends HTMLElement {
+    static get observedAttributes() {
+      return ['recommended'];
+    }
+
+    connectedCallback() {
+      if (this._stop) {
+        this._stop();
+      }
+      var self = this;
+      this._stop = watchChildren(this, { childList: true, subtree: true, characterData: true }, function () {
+        self._render();
+      });
+    }
+
+    disconnectedCallback() {
+      if (this._stop) {
+        this._stop();
+        this._stop = null;
+      }
+    }
+
+    attributeChangedCallback() {
+      if (this._stop && this.isConnected) {
+        this._render();
+      }
+    }
+
+    _clear(table) {
+      removeKitChildren(this);
+      Array.prototype.forEach.call(table.querySelectorAll('[data-q-badge]'), function (badge) {
+        badge.remove();
+      });
+      Array.prototype.forEach.call(table.querySelectorAll('[data-q-recommended]'), function (cell) {
+        cell.removeAttribute('data-q-recommended');
+      });
+      this.removeAttribute('data-q-ready');
+    }
+
+    _render() {
+      var table = this.querySelector(':scope > table');
+      if (!table) {
+        return;
+      }
+      this._clear(table);
+      var rows = Array.prototype.slice.call(table.rows);
+      if (!rows.length) {
+        return;
+      }
+      var head = rowCells(rows[0]);
+      var options = head.length - 1;
+      if (options < 1) {
+        return;
+      }
+      var wanted = Number(this.getAttribute('recommended'));
+      var recommended = wanted >= 1 && wanted <= options && wanted === Math.floor(wanted) ? wanted : 0;
+
+      var blocks = [];
+      for (var i = 1; i <= options; i += 1) {
+        var block = kitNode('div');
+        block.setAttribute('data-q-option', '');
+        var title = document.createElement('h3');
+        title.textContent = cellText(head[i]);
+        block.appendChild(title);
+        var list = document.createElement('dl');
+        for (var r = 1; r < rows.length; r += 1) {
+          var cells = rowCells(rows[r]);
+          if (!cells.length) {
+            continue;
+          }
+          var term = document.createElement('dt');
+          term.textContent = cellText(cells[0]);
+          var detail = document.createElement('dd');
+          if (cells[i]) {
+            detail.appendChild(cellContent(cells[i]));
+          }
+          list.appendChild(term);
+          list.appendChild(detail);
+        }
+        block.appendChild(list);
+        if (i === recommended) {
+          block.setAttribute('data-q-recommended', '');
+          var inBlock = kitNode('span', ' Recommended');
+          inBlock.setAttribute('data-q-badge', '');
+          title.appendChild(inBlock);
+          this._markColumn(rows, i);
+          blocks.unshift(block);
+        } else {
+          blocks.push(block);
+        }
+      }
+
+      var stack = kitNode('div');
+      stack.setAttribute('data-q-stack', '');
+      blocks.forEach(function (block) {
+        stack.appendChild(block);
+      });
+      this.appendChild(stack);
+      this.setAttribute('data-q-ready', '');
+    }
+
+    _markColumn(rows, column) {
+      rows.forEach(function (row, index) {
+        var cell = row.cells[column];
+        if (!cell) {
+          return;
+        }
+        cell.setAttribute('data-q-recommended', '');
+        if (index === 0) {
+          var badge = kitNode('span', ' Recommended');
+          badge.setAttribute('data-q-badge', '');
+          cell.appendChild(badge);
+        }
+      });
+    }
+  }
+
   define('q-tabs', QTabs);
   define('q-timeline', QTimeline);
   define('q-code', QCode);
@@ -2591,4 +2799,6 @@
   define('q-diff', QDiff);
   define('q-diff-note', QDiffNote);
   define('q-board', QBoard);
+  define('q-sidenote', QSidenote);
+  define('q-compare', QCompare);
 })();
