@@ -1,15 +1,23 @@
-# Dimension: Resilience & change-completeness (`sakura:resilience`)
+---
+id: resilience
+run_when: always
+model: sonnet
+escalate: true
+batched: true
+---
 
-You are the `sakura:resilience` specialist. Review only the diff hunks (+ immediate
+# Resilience & change-completeness lens
+
+You are the `resilience` lens. Review only the diff hunks (+ immediate
 context) in the shared context file for **production-resilience and
 change-completeness** risks that a line-by-line correctness/safety pass
 under-emphasizes. Return findings in the schema from `references/orchestration.md`
-with `dimension: "sakura:resilience"`.
+with `dimension: "resilience"`.
 
 ## Boundary with correctness & safety
 
-`sakura:correctness` owns defects fully inside the diff (null deref, inverted
-condition, wrong operator). `sakura:safety` owns swallowed failures, retries, and
+`correctness` owns defects fully inside the diff (null deref, inverted
+condition, wrong operator). `safety` owns swallowed failures, retries, and
 idempotency. This dimension owns the cases a hunk-local pass consistently misses:
 **blast radius**, **cross-call state**, and **whether the change is complete** beyond
 the edited lines. When in doubt about overlap, still report it — the coordinator
@@ -22,7 +30,7 @@ dedups by `file:line`.
   batch, sync, or loop. Each such operation should be isolated so a single failure
   is skipped/logged without killing the whole run. Log-only, shadow-mode, and
   non-critical side paths must be wrapped so they can never block the hot path. (This
-  is the *opposite* failure from `sakura:safety`'s over-broad `except` — here the scope
+  is the *opposite* failure from `safety`'s over-broad `except` — here the scope
   is too wide, not too silent.)
 - **Shared mutable state / state bleed** — instance, class, or module-level state
   reused across invocations of the same worker without being reset; mutable default
@@ -46,8 +54,8 @@ dedups by `file:line`.
 ## Out of scope
 
 In-diff logic defects with no cross-call/state/completeness dimension
-(`sakura:correctness`); retry/idempotency hazards (`sakura:safety`); log/metric shape
-(`sakura:observability`); naming/style (`sakura:conventions`).
+(`correctness`); retry/idempotency hazards (`safety`); log/metric shape
+(`observability`); naming/style (`conventions`).
 
 ## Verification gate
 

@@ -4,7 +4,7 @@ How the review runs after diff prep. The orchestrator (the skill's main context)
 spawns one specialist sub-agent per dimension **in parallel** via the `Task` tool,
 then merges their results.
 
-Every checklist is bundled under `references/dimensions/` — nothing is discovered off
+Every checklist is bundled under `references/lenses/` — nothing is discovered off
 disk, so the roster is fixed and the review is reproducible. See
 `references/provenance.md` for where each checklist came from.
 
@@ -58,22 +58,23 @@ source at the correct ref. They are always populated for the ref the review is a
 conditions. **Use them rather than pattern-matching paths yourself** — the classifier
 covers Python, JS/TS, Go, Java/Kotlin, and Ruby conventions, and a hand-rolled
 `test_*.py` check silently skips both test specialists on a JS/TS diff while wrongly
-firing `sakura:test-coverage`.
+firing `test-coverage`.
 
 ### Coverage fields — never ignore these
 
 A clean report must not imply a file was reviewed when it wasn't.
 
-- **`diff_unavailable`** — GitLab omits per-file diffs for large files *without* setting
-  its `overflow` flag, so `prepare_diff.py` recovers them from local git. Anything it
+- **`diff_unavailable`** — forges omit per-file diffs for large files (GitLab does so
+  without setting its `overflow` flag; GitHub drops the file's `patch`), so
+  `prepare_diff.py` recovers them from local git. Anything it
   could not recover lands here: the path stays in `changed_files` (it *is* part of the
-  MR) but no hunks reach the specialists. Treat every listed path as **not reviewed**.
+  change request) but no hunks reach the specialists. Treat every listed path as **not reviewed**.
 - **`not_text_reviewable`** — genuinely binary content. Legitimately unreviewable, which
   is different from missing; report it as such, don't count it as reviewed.
 - **`untracked_files`** — `--local` only: present in the diff but not yet tracked.
-- **`file_list_recovery`** — non-null when GitLab truncated the *file list* itself (not
+- **`file_list_recovery`** — non-null when the forge truncated the *file list* itself (not
   just per-file diffs) and the full list had to be rebuilt from git. Surface it, since it
-  means the API's own view of the MR was incomplete.
+  means the forge's own view of the change was incomplete.
 
 All four are empty/null in the normal case. Name any non-empty one in the report Summary
 and under Assumptions.
@@ -97,29 +98,29 @@ snapshot's previous reviewed head. This is only a fact about unchanged full per-
 diff content; it is not a prior judgment or permission to skip verification.
 Never include the snapshot path in the prompt. If there is no prior SHA, omit it.
 
-These specialists receive **not even that annotation**: `sakura:risk`,
-`sakura:correctness`, `sakura:safety`, `sakura:cross-repo`, and all three test
-specialists (`sakura:tests`, `sakura:test-adequacy`, `sakura:test-coverage`).
+These specialists receive **not even that annotation**: `risk`,
+`correctness`, `safety`, `cross-repo`, and all three test
+specialists (`tests`, `test-adequacy`, `test-coverage`).
 
 ### Batching
 
 When `batched` is true, the per-batch diffs are in `batches[]`. Three dimensions are
 **exempt from batching** because they are not per-hunk analyses:
 
-- **`sakura:risk`** runs **once, before fan-out, over the whole diff.** One MR gets one
+- **`risk`** runs **once, before fan-out, over the whole diff.** One change request gets one
   rating. Never run it per batch — a per-batch rating would have to be aggregated, and
   the conservative aggregate (max) is what a whole-diff pass produces directly.
-- **`sakura:adversarial`** runs **once over the whole diff**, because a claim in the MR
+- **`adversarial`** runs **once over the whole diff**, because a claim in the change request
   description can only be judged against every batch at once. A claim marked
   `unverifiable` from one batch's slice would be wrong.
-- **`sakura:scope`** runs **once over the whole diff**, because one separable concern
+- **`scope`** runs **once over the whole diff**, because one separable concern
   can span files in different batches. Never judge a concern from only one batch.
 
 Every other specialist runs once per batch (map), then the coordinator reduces.
 
 ## Specialist roster
 
-**Run `sakura:risk` first, alone; then fan out the other thirteen when applicable in parallel.** Its rating
+**Run `risk` first, alone; then fan out the other thirteen when applicable in parallel.** Its rating
 sets the verification depth every other specialist must apply (see the verification gate
 below), so it cannot run beside the agents it calibrates. It is one cheap pass over the
 diff — the added latency buys a depth setting that would otherwise be guessed.
@@ -129,44 +130,50 @@ below, and the risk level from that first pass.
 
 | Specialist | Model | Checklist source | Runs when |
 |---|---|---|---|
-| `sakura:correctness` | sonnet → opus | `dimensions/correctness.md` | always |
-| `sakura:safety` | sonnet → opus | `dimensions/safety.md` | always |
-| `sakura:risk` | sonnet | `dimensions/risk-assessment.md` | always; returns a risk block, not findings → report Risk section, and its level calibrates verification depth |
-| `sakura:adversarial` | sonnet → opus | `dimensions/adversarial.md` | only when `has_description` is true |
-| `sakura:scope` | sonnet | `dimensions/scope.md` | always except reviewer diff-only; uses resolved `scope_intent` over the whole diff |
-| `sakura:db` | sonnet | `dimensions/db-query.md` | always |
-| `sakura:cross-repo` | sonnet → opus | `dimensions/cross-repo.md` | always |
-| `sakura:conventions` | sonnet | `dimensions/conventions-and-reuse.md` + the guidance bundle | always |
-| `sakura:comments` | sonnet | `dimensions/code-comments.md` | always if `changed_files` includes at least one code file (skip docs/config-only diffs); exits cheaply with `[]` when the diff adds/modifies no comment lines |
-| `sakura:observability` | sonnet | `dimensions/observability.md` | only if `changed_files` includes non-test source or config (skip docs/test-only diffs) |
-| `sakura:resilience` | sonnet → opus | `dimensions/resilience-and-scope.md` | always |
-| `sakura:test-adequacy` | sonnet → opus | `dimensions/tests.md` (Section A) | only if `test_files` is non-empty |
-| `sakura:tests` | sonnet | `dimensions/tests.md` (Section B) | only if `test_files` is non-empty |
-| `sakura:test-coverage` | sonnet | `dimensions/tests.md` (Section C) | only if `source_files` is non-empty **and** `test_files` is empty |
+| `correctness` | sonnet → opus | `lenses/correctness.md` | always |
+| `safety` | sonnet → opus | `lenses/safety.md` | always |
+| `risk` | sonnet | `lenses/risk.md` | always; returns a risk block, not findings → report Risk section, and its level calibrates verification depth |
+| `adversarial` | sonnet → opus | `lenses/adversarial.md` | only when `has_description` is true |
+| `scope` | sonnet | `lenses/scope.md` | always except reviewer diff-only; uses resolved `scope_intent` over the whole diff |
+| `db` | sonnet | `lenses/db.md` | always |
+| `cross-repo` | sonnet → opus | `lenses/cross-repo.md` | always |
+| `conventions` | sonnet | `lenses/conventions.md` + the guidance bundle | always |
+| `comments` | sonnet | `lenses/comments.md` | always if `changed_files` includes at least one code file (skip docs/config-only diffs); exits cheaply with no findings when the diff adds no comment lines |
+| `observability` | sonnet | `lenses/observability.md` | only if `changed_files` includes non-test source or config (skip docs/test-only diffs) |
+| `resilience` | sonnet → opus | `lenses/resilience.md` | always |
+| `test-adequacy` | sonnet → opus | `lenses/test-adequacy.md` | only if `test_files` is non-empty |
+| `tests` | sonnet | `lenses/tests.md` | only if `test_files` is non-empty |
+| `test-coverage` | sonnet | `lenses/test-coverage.md` | only if `source_files` is non-empty **and** `test_files` is empty |
+
+Each lens file's front matter (`id`, `run_when`, `model`, `escalate`, `batched`) carries the
+same facts in machine-readable form; the table is the human summary and the front matter
+wins if they ever disagree.
 
 ### Model routing
 
 The **Model** column is the single source of truth for the `model` passed on each
 `Task`. Every specialist defaults to `sonnet`; none runs on `haiku`, since all of them
 read source at `refs.head` and must pass the verification gate. `sonnet → opus` marks
-a specialist that escalates when `sakura:risk` returns **High** or **Do Not Ship**,
+a specialist that escalates when `risk` returns **High** or **Do Not Ship**,
 or when its block's `Severity` is **Critical** at any level. The matrix rates a
 Critical change Medium when likelihood looks Remote, and likelihood is what these
-specialists exist to test. Otherwise everything stays `sonnet`. `sakura:risk` itself
+specialists exist to test. Otherwise everything stays `sonnet`. `risk` itself
 always runs on `sonnet`, because it runs before the level is known.
 
-Escalation is off when `--no-opus` was passed or `SAKURA_REVIEW_NO_OPUS` is set to a
-non-empty value (set it in an account's environment to make that durable, e.g. a work
-account that must never spawn Opus subagents). If it is off, or a spawn on `opus`
-fails because the model is unavailable, run that specialist on `sonnet` instead and
-state this under Assumptions. Never fail or skip a dimension over model choice. When
-escalation applies, Assumptions also names the specialists that ran on `opus`;
-`report.json` `run` has no per-specialist model field, so this stays in prose.
+Escalation is off when `--no-escalate` was passed or the merged policy sets
+`escalation: false` (an org or account with a model policy sets it once in its pack).
+
+**Model fallback.** If a lens dispatch errors for a model reason (unknown model, quota,
+provider error), retry it once on the lens's built-in default tier from its own front
+matter. Record the model that actually ran in `run.models` and add an Assumptions line
+naming both. Only a lens that still fails after that retry, or fails for a non-model
+reason (timeout, malformed output after one re-ask), goes into `run.dimensions_failed`
+and marks the report incomplete. Never skip a lens over model choice.
 
 The three test specialists divide cleanly: with test files present,
-`sakura:test-adequacy` owns missing assertions and coverage gaps in what the diff
-tests, `sakura:tests` owns whether those tests are well-built, and
-`sakura:test-coverage` stays off. With no test files, only `sakura:test-coverage`
+`test-adequacy` owns missing assertions and coverage gaps in what the diff
+tests, `tests` owns whether those tests are well-built, and
+`test-coverage` stays off. With no test files, only `test-coverage`
 runs — it is the only one that can see the "tests should exist and don't" case.
 
 ## Finding schema
@@ -176,7 +183,7 @@ Every specialist returns a JSON list of findings in this exact shape:
 ```json
 {
   "severity": "Must fix" | "Should fix" | "Nit",
-  "dimension": "sakura:correctness" | "sakura:safety" | "sakura:adversarial" | "sakura:scope" | "sakura:db" | "sakura:cross-repo" | "sakura:conventions" | "sakura:comments" | "sakura:observability" | "sakura:resilience" | "sakura:test-adequacy" | "sakura:tests" | "sakura:test-coverage",
+  "dimension": "correctness" | "safety" | "adversarial" | "scope" | "db" | "cross-repo" | "conventions" | "comments" | "observability" | "resilience" | "test-adequacy" | "tests" | "test-coverage",
   "file": "path/relative/to/repo.py",
   "line": "123" | "120-128",
   "issue": "concise description of the defect/risk",
@@ -190,7 +197,7 @@ Every specialist returns a JSON list of findings in this exact shape:
 gate below. A `Nit` may be `false`. A finding that could not be confirmed against source is
 either downgraded with the basis recorded in `assumptions`, or reported as `false` — never
 labelled `true` on the strength of the diff alone.
-`sakura:scope` is stricter: it emits separable-concern findings only as verified
+`scope` is stricter: it emits separable-concern findings only as verified
 `Should fix`. Drop a concern whose separability cannot be confirmed; never downgrade it
 to a speculative Nit. (Its deficient-description finding is a `Nit` — see severity
 calibration below.)
@@ -198,9 +205,9 @@ calibration below.)
 A specialist that finds nothing returns `[]` plus one sentence on why the change
 looks sound in its dimension (for the Summary).
 
-Two specialists return extra shapes: `sakura:risk` returns the rendered risk block
-from `dimensions/risk-assessment.md` instead of a findings list, and
-`sakura:adversarial` returns a claim verdict table **plus** findings.
+Two specialists return extra shapes: `risk` returns the rendered risk block
+from `lenses/risk.md` instead of a findings list, and
+`adversarial` returns a claim verdict table **plus** findings.
 
 Every `recommendation` that proposes a code change must include the actual corrected
 code, not a description of it. "Use the correct field name" is not actionable;
@@ -209,7 +216,7 @@ against the code at `refs.head` (`--- a/<path>` / `+++ b/<path>`, a real `@@` he
 two or three context lines) so the reader sees what changes, not just the end state;
 the report renders it side by side. Only net-new code with no existing counterpart,
 such as a new file, goes in a plain fence.
-A scope split is not a code change: its recommendation names the **Proposed MR** title,
+A scope split is not a code change: its recommendation names the **Proposed change request** title,
 exact **Files** / hunk ranges, and **Why separate**, without a corrected-code snippet.
 Scope findings in reviewer seat are questions to the author, not triage suggestions.
 
@@ -237,14 +244,14 @@ No `Must fix` or `Should fix` may be emitted from the diff alone. Before flaggin
 the specialist reads the relevant source **at the correct ref** and sets
 `verified: true`:
 
-- Author with `source == "gitlab"`: `glab api --hostname <host> "projects/<enc-project>/repository/files/<enc-path>/raw?ref=<refs.head>"` — `host` and `project` come from the context file; URL-encode both the project path and the file path.
+- Author with a forge source (`source` is `github` or `gitlab`): `git show <refs.head>:<path>`. If that commit is not present locally, fetch it first with `git fetch origin <refs.head>` or the change head refspec (`refs/pull/<n>/head` on GitHub, `refs/merge-requests/<n>/head` on GitLab). Never read the local working tree to verify a remote-ref finding.
 - Author with `source == "git"`: `git show <refs.head or origin/branch>:<path>` (or the working tree for `--local`).
 - Reviewer with borrowed source: read `REVIEW_SOURCE_ROOT/<path>` and verify its
   detached `HEAD` still equals `refs.head` before fan-out.
 - Reviewer diff-only: this is the explicit degradation exception. Every finding is
   `verified: false`; source-dependent dimensions are skipped and named. The limitation
   must appear in both report and posted overview.
-  Skip `sakura:scope` entirely, including its missing-description check, and record
+  Skip `scope` entirely, including its missing-description check, and record
   the verification limitation in `run.dimensions_skipped`.
 
 Never read the local working tree to verify a finding from a remote ref — the local
@@ -260,7 +267,7 @@ findings. Specifically check:
 - **Diff accuracy** — confirm a method or behavior you believe was removed is not
   still present in an adjacent hunk or elsewhere in the file.
 
-`sakura:risk`'s level governs depth: **High / Do Not Ship** → trace every data-flow
+`risk`'s level governs depth: **High / Do Not Ship** → trace every data-flow
 assumption and verify each test claim; **Medium** → verify behavioral / data-flow
 findings; **Low / Very Low** → surface-level is sufficient. A `Nit` need not be
 source-verified.
@@ -270,12 +277,12 @@ tree for `--local`) for the cluster's symbols and files, then inspect the refere
 Confirm that neither the primary change nor its tests depends on the cluster before
 asserting that reverting it would leave the primary change building, running, and
 passing tests. If source coverage or separability is uncertain, drop the candidate.
-The MR-description finding instead verifies the description/intent-source mismatch
-from the prepared MR context and its first-hunk anchor against the reviewed source;
-see `dimensions/scope.md`. A missing anchor must never be fabricated.
+The change-description finding instead verifies the description/intent-source mismatch
+from the prepared change context and its first-hunk anchor against the reviewed source;
+see `lenses/scope.md`. A missing anchor must never be fabricated.
 
 For **test-dimension** findings, the strongest form of this gate is the **mutation
-probe** in `dimensions/tests.md` Section D, used when the reviewed code is locally
+probe** in `lenses/_mutation-probe.md`, used when the reviewed code is locally
 runnable: break the production behavior and re-run the targeted tests — a surviving
 mutant is the `verified: true` proof of a vacuous test / coverage gap; a killed mutant
 retracts the finding. It is bounded, production-only, self-reverting, and never
@@ -304,18 +311,18 @@ drops a dimension is the same failure as a review that quietly drops a file.
 
 1. **Dedup** by `file:line`: collapse duplicates into one finding, keep the
    highest severity, and merge the `dimension` tags (e.g.
-   `[sakura:safety][sakura:db]`).
+   `[safety][db]`).
 2. **Noise control**: drop speculative / low-confidence findings and pure-style
-   nits already enforced by linters/formatters — but keep `sakura:comments` findings
+   nits already enforced by linters/formatters — but keep `comments` findings
    (comment quality is not linter-enforced). Keep the `Must / Should / Nit`
    labels. (Target false-positive discipline: security <3%, style <2%.)
 3. **Calibrate severity**: apply these after dedup, whatever a specialist returned.
-   - **Description-only fixes are `Nit`.** A finding whose remedy is editing the MR
+   - **Description-only fixes are `Nit`.** A finding whose remedy is editing the change request
      title, description, or QA/test-plan text — not code or tests — is a `Nit` from
      any dimension. When the inaccurate claim hides a real code defect or untested
      behavior, that defect is its own finding, anchored at the code with a code
      remedy, at the severity its impact warrants; the wording fix stays a `Nit`.
-   - **Correctness is rarely a `Nit`.** A verified `sakura:correctness` finding means
+   - **Correctness is rarely a `Nit`.** A verified `correctness` finding means
      the code produces a wrong result, so it is `Should fix` at minimum and `Must fix`
      when it corrupts data, money, or auth, or breaks a common path on merge. Keep a
      correctness `Nit` only when the wrong result is unreachable in practice or purely
@@ -329,7 +336,7 @@ drops a dimension is the same failure as a review that quietly drops a file.
    ranking, deduping across batches.
 
 Then author the independent `report.json` per `references/html-report.md`. Set
-`run.dimensions_run` to completed stable `sakura:*` identifiers, not checklist file
+`run.dimensions_run` to completed stable lens identifiers, not checklist file
 names. Preserve the completed/failed distinction so missing coverage cannot produce
 an “appears fixed” claim.
 

@@ -1,16 +1,24 @@
-# Dimension: Code-comment quality (`sakura:comments`)
+---
+id: comments
+run_when: code_changed
+model: sonnet
+escalate: false
+batched: true
+---
 
-You are the `sakura:comments` specialist. Review only the comment lines the diff
-**adds or modifies** against Recharge's comment standard. Return findings in the
-schema from `references/orchestration.md` with `dimension: "sakura:comments"`.
+# Code-comment quality lens
+
+You are the `comments` lens. Review only the comment lines the diff
+**adds or modifies** against the comment standard below. Return findings in the
+schema from `references/orchestration.md` with `dimension: "comments"`.
 
 The standard rests on one idea: **intent is stable; behavior narration rots.** Inline
 comments default to zero because they narrate behavior; doc comments are encouraged
 because they state intent. Applying one rule set to the other is this dimension's
 failure mode — see the doc-comment section.
 
-This file is self-contained: it carries the Recharge comment standard in full and is
-the only source this dimension reads.
+This file is self-contained: it carries the comment standard in full and is the only
+source this lens reads. A pack can replace this file to apply an org's own standard.
 
 ## Scope — only what the diff touches
 
@@ -38,9 +46,9 @@ justifying cases:
 
 Flag an added inline comment that fits none of the four, and specifically:
 
-- **Restatements of the code** — `# loop over charges`, `// return the result`
+- **Restatements of the code** — `# loop over orders`, `// return the result`
 - **Section banners** — `# === helpers ===`, `// --- setup ---`
-- **Ticket / MR / feature-flag references** — `# added for CX-1234`, `// remove once
+- **Ticket / pull-request / feature-flag references** — `# added for CX-1234`, `// remove once
   billing_v2 is cleaned up`. These rot the moment the ticket or flag closes, and a
   stale comment actively misleads both humans and models.
 - **References to local-only files** — a plan doc, scratch notes, a design file that
@@ -102,9 +110,9 @@ Default **`Nit`** — a comment problem is almost never a merge blocker.
   documents the opposite of the code's actual guarantee on a money, auth, or
   data-mutation path.
 
-## Boundary with `sakura:conventions`
+## Boundary with `conventions`
 
-`sakura:conventions` owns naming, reuse, and pattern/layer adherence. This dimension
+`conventions` owns naming, reuse, and pattern/layer adherence. This dimension
 owns **every** comment finding — including the "rename instead of commenting" case,
 which is raised here with the rename as the recommendation. If conventions also
 emits a comment finding, the coordinator dedups by `file:line`.
@@ -113,7 +121,7 @@ emits a comment finding, the coordinator dedups by `file:line`.
 
 Non-comment code (other specialists own it). Docstring **formatting** a linter
 already enforces (`pydocstyle`, `eslint-plugin-jsdoc`) — drop it. Commit messages and
-MR descriptions: rationale belongs in the MR, but the MR text is not this dimension's
+change descriptions: rationale belongs in the change request, but the change request text is not this dimension's
 target.
 
 ## Verification gate

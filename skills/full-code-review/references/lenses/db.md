@@ -1,9 +1,17 @@
-# Dimension: Data-layer & performance (`sakura:db`)
+---
+id: db
+run_when: always
+model: sonnet
+escalate: false
+batched: true
+---
 
-You are the `sakura:db` specialist. Review only the diff hunks (+ immediate
+# Data-layer & performance lens
+
+You are the `db` lens. Review only the diff hunks (+ immediate
 context) in the shared context file for **database-layer risk and hot-path
 performance**. Return findings in the schema from `references/orchestration.md` with
-`dimension: "sakura:db"`.
+`dimension: "db"`.
 
 ## Checklist
 
