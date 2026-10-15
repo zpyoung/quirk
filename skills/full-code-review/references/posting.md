@@ -80,7 +80,7 @@ Never auto-post.
 Before previewing the proposed author batch, run:
 
 ```bash
-python3 "$MEMORY_SCRIPT" check --report "$REPORT_JSON" --context "$CONTEXT" \
+python3 "$MEMORY_SCRIPT" check --repo "$REVIEW_SOURCE_ROOT" --report "$REPORT_JSON" --context "$CONTEXT" \
   --out "$REVIEW_RUN_DIR/posting-memory.json"
 ```
 

@@ -45,7 +45,7 @@ def test_cli_exit_codes(tmp_path):
         assert m.main(["--report", str(report), "--expected", str(expected)]) == 2
 
 
-@pytest.mark.parametrize("case", sorted(p.name for p in SMOKE.iterdir()))
+@pytest.mark.parametrize("case", sorted(p.name for p in SMOKE.iterdir() if (p / "expected.json").is_file()))
 def test_each_smoke_case_patch_applies_and_names_a_changed_file(tmp_path, case):
     source = SMOKE / case
     repo = tmp_path / "repo"

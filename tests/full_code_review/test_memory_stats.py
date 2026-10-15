@@ -60,3 +60,20 @@ def test_empty_ledger_reports_nothing(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "missing"))
     rc, result = _stats(["--all"])
     assert rc == 0 and result == {"lenses": [], "records": 0, "warnings": []}
+
+
+def test_reconcile_and_check_validate_against_the_given_repo(monkeypatch):
+    # identity for branch/local targets comes from the repo's origin, so cwd must not leak in
+    seen = []
+
+    def fake_validate(snapshot, context, repo="."):
+        seen.append(repo)
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(m, "validate_snapshot", fake_validate)
+    for call in (m.reconcile, m.check_plan):
+        try:
+            call({}, {}, {}, repo="/reviewed/repo")
+        except RuntimeError:
+            pass
+    assert seen == ["/reviewed/repo", "/reviewed/repo"]

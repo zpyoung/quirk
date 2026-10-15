@@ -1,12 +1,27 @@
 # Orchestration — fan-out, finding schema, coordination
 
 How the review runs after diff prep. The orchestrator (the skill's main context)
-spawns one specialist sub-agent per dimension **in parallel** via the `Task` tool,
+spawns one specialist sub-agent per dimension **in parallel** via the `Agent` tool,
 then merges their results.
 
 Every checklist is bundled under `references/lenses/` — nothing is discovered off
-disk, so the roster is fixed and the review is reproducible. See
-`references/provenance.md` for where each checklist came from.
+disk, so the roster is fixed and the review is reproducible. Packs and `REVIEW.md` can
+replace, add, or skip lenses; `references/policy.md` covers that.
+
+**Run conditions.** `policy.json` lists every lens the policy allows; run one only when
+its `run_when` holds for the context file:
+
+| `run_when` | Holds when |
+|---|---|
+| `always` | always |
+| `has_description` | `has_description` is true |
+| `code_changed` | `changed_files` includes at least one code file (not docs or config only) |
+| `source_or_config_changed` | `changed_files` includes non-test source or config |
+| `tests_changed` | `test_files` is non-empty |
+| `source_without_tests` | `source_files` is non-empty and `test_files` is empty |
+| `not_diff_only` | the source access is not `diff-only` |
+
+Record every lens whose condition did not hold in `run.dimensions_skipped` with the reason.
 
 ## Shared context file
 
@@ -156,7 +171,7 @@ wins if they ever disagree.
 ### Model routing
 
 The **Model** column is the single source of truth for the `model` passed on each
-`Task`. Every specialist defaults to `sonnet`; none runs on `haiku`, since all of them
+`Agent`. Every specialist defaults to `sonnet`; none runs on `haiku`, since all of them
 read source at `refs.head` and must pass the verification gate. `sonnet → opus` marks
 a specialist that escalates when `risk` returns **High** or **Do Not Ship**,
 or when its block's `Severity` is **Critical** at any level. The matrix rates a

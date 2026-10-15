@@ -572,8 +572,8 @@ def _validate_report_binding(report: dict, snapshot: dict) -> None:
 def _prior_text(prior: dict) -> str:
     return "\n".join(str(prior.get(key) or "") for key in ("title", "body_md"))
 
-def reconcile(report: dict, context: dict, snapshot: dict) -> dict:
-    validate_snapshot(snapshot, context)
+def reconcile(report: dict, context: dict, snapshot: dict, repo: str = ".") -> dict:
+    validate_snapshot(snapshot, context, repo)
     _validate_report_binding(report, snapshot)
     enriched = copy.deepcopy(report)
     warnings = list(snapshot.get("warnings") or [])
@@ -808,9 +808,9 @@ def _load_json(path: str) -> dict:
     if not isinstance(value, dict):
         raise ValueError("JSON input must be an object")
     return value
-def check_plan(report: dict, context: dict, snapshot: dict) -> dict:
+def check_plan(report: dict, context: dict, snapshot: dict, repo: str = ".") -> dict:
     """Build the author-delivery suppression plan without changing any input."""
-    identity_warnings = validate_snapshot(snapshot, context, ".")
+    identity_warnings = validate_snapshot(snapshot, context, repo)
     refreshed = copy.deepcopy(snapshot)
     change_ctx = context.get("change") if isinstance(context.get("change"), dict) else {}
     warnings = list(identity_warnings)
@@ -891,11 +891,13 @@ def main(argv=None) -> int:
     load.add_argument("--out", required=True)
     rec = sub.add_parser("reconcile")
     rec.add_argument("--report", required=True)
+    rec.add_argument("--repo", default=".")
     rec.add_argument("--context", required=True)
     rec.add_argument("--snapshot", required=True)
     rec.add_argument("--out", required=True)
     chk = sub.add_parser("check")
     chk.add_argument("--report", required=True)
+    chk.add_argument("--repo", default=".")
     chk.add_argument("--context", required=True)
     chk.add_argument("--snapshot")
     chk.add_argument("--out", required=True)
@@ -916,7 +918,7 @@ def main(argv=None) -> int:
             result = load_snapshot(_load_json(args.context), args.repo, args.dimension, args.guidance, args.fresh)
             _atomic_write(Path(args.out), result)
         elif args.command == "reconcile":
-            result = reconcile(_load_json(args.report), _load_json(args.context), _load_json(args.snapshot))
+            result = reconcile(_load_json(args.report), _load_json(args.context), _load_json(args.snapshot), args.repo)
             _atomic_write(Path(args.out), result)
         elif args.command == "check":
             report = _load_json(args.report)
@@ -925,7 +927,7 @@ def main(argv=None) -> int:
                         ((report.get("memory") or {}).get("snapshot")))
             if not isinstance(snapshot, dict):
                 raise ValueError("check requires --snapshot or report.memory.snapshot")
-            result = check_plan(report, context, snapshot)
+            result = check_plan(report, context, snapshot, args.repo)
             _atomic_write(Path(args.out), result)
         else:
             if not args.decisions and not args.receipts:

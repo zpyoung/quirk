@@ -34,7 +34,8 @@ the reviewed repository:
 ```bash
 SCRIPTS="${CLAUDE_PLUGIN_ROOT}/skills/full-code-review/scripts"
 REFS="${CLAUDE_PLUGIN_ROOT}/skills/full-code-review/references"
-REVIEW_RUN_DIR="${REVIEW_OUT_DIR:-$(mktemp -d -t quirk-review.XXXXXX)}"
+export REVIEW_OUT_DIR="${REVIEW_OUT_DIR:-$(mktemp -d -t quirk-review.XXXXXX)}"
+REVIEW_RUN_DIR="$REVIEW_OUT_DIR"
 CONTEXT="$REVIEW_RUN_DIR/review-context.json"
 SOURCE_MANIFEST="$REVIEW_RUN_DIR/review-source.json"
 MEMORY_SCRIPT="$SCRIPTS/review_memory.py"
@@ -265,7 +266,9 @@ the prior head SHA for the neutral annotation in `orchestration.md`.
 model; `$REFS/orchestration.md` holds the finding schema, escalation, model fallback, and
 the verification gate. **Run `risk` first, alone**: give it `policy.critical_paths`, and
 its rating sets verification depth for everyone else. Then dispatch every applicable
-lens **in parallel** with the `Agent` tool, giving each the context file path, its
+lens whose `run_when` holds (conditions in `orchestration.md`) **in parallel** with the
+`Agent` tool (if the harness rejects some dispatches for a concurrency limit, re-dispatch
+them as the first ones finish), giving each the context file path, its
 checklist, the finding schema, the risk level, and the source root, and setting `model`
 from the policy (escalated per `orchestration.md` when `policy.escalation` is true and
 `--no-escalate` was not passed). Record the model each lens actually ran on.
@@ -321,10 +324,10 @@ Leave out any value you don't have. `run.dimensions_run` lists lenses that compl
 Reconcile into a separate final report; never hand-author memory fields:
 
 ```bash
-python3 "$MEMORY_SCRIPT" reconcile \
+python3 "$MEMORY_SCRIPT" reconcile --repo "$REVIEW_SOURCE_ROOT" \
   --report "$REVIEW_RUN_DIR/review-<slug>-report.json" --context "$CONTEXT" \
   --snapshot "$REVIEW_RUN_DIR/memory-snapshot.json" \
-  --out "$REVIEW_RUN_DIR/review-<slug>-memory.json"
+  --out "$REVIEW_RUN_DIR/review-<slug>-memory.json" > /dev/null
 REPORT_JSON="$REVIEW_RUN_DIR/review-<slug>-memory.json"
 ```
 
