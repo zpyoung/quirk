@@ -17,6 +17,8 @@ import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from forge import gitlab as _gitlab
+
 SCHEMA = 1
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
@@ -132,11 +134,8 @@ def _make_root(prefix):
 
 def _clone_project(host, project, root):
     repo = os.path.join(root, "repo")
-    env = os.environ.copy()
-    env["GITLAB_HOST"] = host
-    result = _run(["glab", "repo", "clone", project, repo, "--", "--no-checkout",
-                   "--depth=1", "--filter=blob:none"],
-                  timeout=300, env=env)
+    cmd, env = _gitlab.clone_command(host, project, repo)
+    result = _run(cmd, timeout=300, env=env)
     if result.returncode != 0:
         raise RuntimeError("temporary clone failed: %s" % (result.stderr.strip() or result.stdout.strip()))
     return os.path.realpath(repo)
@@ -147,7 +146,7 @@ def _add_worktree(repo_root, iid, expected_head, worktree, shallow=False):
     fetch_cmd = ["git", "-C", repo_root, "fetch", "--no-tags"]
     if shallow:
         fetch_cmd.append("--depth=1")
-    fetch_cmd += ["origin", "+refs/merge-requests/%s/head:%s" % (iid, review_ref)]
+    fetch_cmd += ["origin", "+%s:%s" % (_gitlab.head_refspec(iid), review_ref)]
     fetch = _run(fetch_cmd, timeout=300)
     if fetch.returncode != 0:
         raise RuntimeError("fetching the MR head failed: %s" % (fetch.stderr.strip() or fetch.stdout.strip()))
