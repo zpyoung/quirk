@@ -165,6 +165,16 @@ def test_reference_always_has_a_nav_and_cannot_turn_it_off() -> None:
         nav_of(h2s(6), layout="reference", nav="off")
 
 
+def test_reference_with_nav_auto_and_no_headings_is_an_error() -> None:
+    with pytest.raises(assemble.SourceError, match="reference page needs h2 sections"):
+        nav_of("<p>just prose</p>", layout="reference")
+
+
+def test_reference_with_nav_auto_and_only_h3s_keeps_a_populated_nav() -> None:
+    built, _ = nav_of("<h3>Sub one</h3><p>x</p><h3>Sub two</h3>", layout="reference")
+    assert built is not None and built.count('href="#sub-') == 4
+
+
 def test_nav_on_without_an_h2_is_an_error() -> None:
     with pytest.raises(assemble.SourceError, match="nav needs at least one h2 in main"):
         nav_of("<h3>Only a sub heading</h3>", nav="on")
@@ -314,7 +324,8 @@ def test_a_bad_layout_in_the_header_exits_2_and_lists_the_shapes(tmp_path: Path,
 @pytest.mark.parametrize("name", SEVEN)
 def test_every_shape_builds_on_the_report_template_and_is_recorded(name: str, tmp_path: Path, env: dict, project: Path) -> None:
     out = tmp_path / f"{name}.html"
-    rc, result = build(report_src(tmp_path, {"layout": name}, name=name), out, env, project)
+    slots = {"summary": "<p>The answer.</p>", "main": "<h2>Part</h2>\n<p>Body.</p>"}
+    rc, result = build(report_src(tmp_path, {"layout": name}, slots, name=name), out, env, project)
     assert rc == 0 and result["layout"] == name and result["layout_defaulted"] is False
     assert result["checks"]["passed"]
     assert page_header(out)["layout"] == name
@@ -351,6 +362,22 @@ def test_no_layout_anywhere_builds_as_report_and_the_note_says_so(tmp_path: Path
     lines = note["markdown"].splitlines()
     template_at = next(i for i, line in enumerate(lines) if line.startswith("- Template:"))
     assert lines[template_at + 1] == "- Layout: report (no layout named)"
+
+
+def test_a_rebuild_with_no_layout_stays_defaulted_until_the_source_names_one(tmp_path: Path, env: dict, project: Path) -> None:
+    out = tmp_path / "o.html"
+    for _ in range(2):
+        rc, result = build(report_src(tmp_path), out, env, project)
+        assert rc == 0 and result["layout"] == "report" and result["layout_defaulted"] is True
+        assert page_header(out)["layout_defaulted"] is True
+        _, note = run_cli("note", out, "--project-dir", project, env=env)
+        assert "- Layout: report (no layout named)" in note["markdown"]
+    rc, result = build(report_src(tmp_path, {"layout": "report"}), out, env, project)
+    assert rc == 0 and result["layout_defaulted"] is False and "layout_defaulted" not in page_header(out)
+    rc, result = build(report_src(tmp_path), out, env, project)
+    assert rc == 0 and result["layout_defaulted"] is False and "layout_defaulted" not in page_header(out)
+    _, note = run_cli("note", out, "--project-dir", project, env=env)
+    assert "no layout named" not in note["markdown"]
 
 
 def test_the_note_names_a_chosen_layout(tmp_path: Path, env: dict, project: Path) -> None:
@@ -575,6 +602,18 @@ def test_summary_is_accepted_by_a_template_that_does_not_declare_it(tmp_path: Pa
     assert rc == 0
     rc, result = build(report_src(tmp_path, slots={"summary": "<p>s</p>", "main": "<p>m</p>", "extra": "x"}), out, env, project)
     assert rc == 2 and "extra" in result["error"] and "summary" not in result["error"].split("(declared")[0]
+
+
+def test_a_summary_slot_the_skeleton_has_no_place_for_is_an_error(tmp_path: Path, env: dict, project: Path) -> None:
+    skeleton = "<!doctype html>\n{{header}}\n<html><head><title>{{title}}</title>{{head}}</head><body>{{chrome}}{{slot:content}}{{data}}{{body_end}}</body></html>\n"
+    custom_template(project, skeleton, slots={"content": {"required": True}})
+    out = tmp_path / "o.html"
+    src = src_file(
+        tmp_path / "c.src.html", {"template": "fx", "title": "T"}, {"summary": "<p>LOSTSUMMARY</p>", "content": "<p>c</p>"}
+    )
+    rc, result = build(src, out, env, project)
+    assert rc == 2 and "summary" in result["error"] and "no place" in result["error"]
+    assert not out.exists()
 
 
 # --- manifest --------------------------------------------------------------------------------

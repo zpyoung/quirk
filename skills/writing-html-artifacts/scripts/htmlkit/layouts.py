@@ -147,7 +147,8 @@ def build_nav(main_html: str, *, layout: str, nav: str, reserved_ids: set[str]) 
     without an ``id`` gains one derived from its text and made unique against ``reserved_ids`` and
     the ids already in the page. Headings inside q-panel, q-compare, q-tabs and q-board are not
     counted or listed. The nav appears when ``nav`` is ``on``, or ``auto`` on ``reference`` or at
-    five or more h2s. Raises SourceError for ``off`` on ``reference`` and for ``on`` with no h2.
+    five or more h2s. Raises SourceError for ``off`` on ``reference``, for ``on`` with no h2, and for ``auto`` on
+    ``reference`` with no h2 or h3.
     """
     if nav not in NAV_MODES:
         raise ValueError(f"nav must be one of {', '.join(NAV_MODES)}, got {nav!r}")
@@ -160,6 +161,8 @@ def build_nav(main_html: str, *, layout: str, nav: str, reserved_ids: set[str]) 
     h2_count = sum(1 for h in counted if h.level == 2)
     if nav == "on" and h2_count == 0:
         raise _source_error("nav needs at least one h2 in main (nav is set to 'on')")
+    if nav == "auto" and layout == "reference" and not counted:
+        raise _source_error("a reference page needs h2 sections for its section nav: add h2 headings to main")
     if not (nav == "on" or (nav == "auto" and (layout == "reference" or h2_count >= NAV_MIN_H2))):
         return None, main_html
 
