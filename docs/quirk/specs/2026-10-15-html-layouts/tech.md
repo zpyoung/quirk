@@ -135,7 +135,7 @@ Back-links: [behavior](logic.md#each-shape-at-desktop-width-on-a-phone-and-in-pr
   - Nav rail beside main from 1100px, sticky, with its own scroll (`max-height` of the viewport) when taller than the screen; collapsed menu below 1100px, placed after the summary.
   - Report aside beside main and sticky from 900px.
   - `tool`: summary (result) beside main from 900px; below main narrower.
-  - `longform`: a right margin column for `q-sidenote` from 1100px.
+  - `longform`: a right margin column for `q-sidenote` from 1100px; main's content, figures included, stays within 70ch so notes never overlap it.
   - `reference`: section nav as a left pane from 900px.
   - Prose (`p, ul, ol, blockquote` in main) capped at 70ch in every shape.
   - At 375px no shape scrolls horizontally (verify's existing check).
@@ -195,13 +195,13 @@ q-compare: parent null, interactive true,
 ### Nav highlight — `chrome.js`
 Back-link: [the nav](logic.md#the-nav).
 
-- When a `.q-nav` exists, an `IntersectionObserver` over the linked headings sets `aria-current="location"` on the rail link for the section in view and removes it elsewhere. `layout.css` styles `[aria-current]` with weight and an indicator mark, never color alone. No nav → no observer. No other chrome.js behavior changes.
+- When a `.q-nav` exists, chrome.js sets `aria-current="location"` on exactly one rail link, the section being read, and updates it as the reader scrolls; at the bottom of the page the last link is current, so short final sections still get marked. `layout.css` styles `[aria-current]` with weight and an indicator mark, never color alone. No nav → no listener. No other chrome.js behavior changes. Tier-2 `PageLayout.tsx` applies the same rule.
 
 ### Companion
 Back-link: [scope](logic.md#scope-and-non-goals).
 
 - `SCREEN_KEYS` gains `"layout"`, validated with `validate_layout`. `_source_text` writes it into the generated `quirk-src` header.
-- The companion skeleton keeps its own slots and is not region-bearing; its `question` slot is the summary region, so no `summary` slot is required. The skeleton tags its `main.q-wrap` with `data-layout="{{layout}}"`, which is `""` when the screen names no layout. `layout.css` widens the screen with selectors of the form `main.q-wrap[data-layout="<shape>"]` (specificity above the skeleton's `.q-wrap { max-width: 960px }` at `companion/skeleton.html:12`, which comes later in the cascade): 1440px for every shape except `dashboard` (no cap). `data-layout=""` matches none, so an unnamed screen stays at 960px.
+- The companion skeleton keeps its own slots and is not region-bearing; its `question` slot is the summary region, so no `summary` slot is required. The skeleton tags its `main.q-wrap` and the masthead's `.q-wrap` with `data-layout="{{layout}}"`, which is `""` when the screen names no layout. `layout.css` widens both wrappers with selectors of the form `.q-wrap[data-layout="<shape>"]` scoped to the companion page (specificity above the skeleton's `.q-wrap { max-width: 960px }` at `companion/skeleton.html:12`, which comes later in the cascade): 1440px for every shape except `dashboard` (no cap). `data-layout=""` matches none, so an unnamed screen stays at 960px.
 - The layout check does not run on companion screens: their option html and content draw mockups of layouts, not the screen's own layout.
 
 ### Tier 2
