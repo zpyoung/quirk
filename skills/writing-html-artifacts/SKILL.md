@@ -96,7 +96,7 @@ Every page has exactly one shape, set by the `layout` header field and available
 | `dashboard` | status and metrics | the headline metric, top left |
 | `reference` | runbooks and references read by section | a one-line purpose under the h1 |
 
-- **Every source needs a `layout` field and a `summary` slot.** A source with no `layout` builds as `report` and the note says "Layout: report (no layout named)", so always name one. A missing `summary` fails the build and says where it goes for that shape. Templates do not declare `summary`; every tier-1 template accepts it.
+- **Every source needs a `layout` field and a `summary` slot.** A source with no `layout` builds as `report` and the note says "Layout: report (no layout named)", so always name one. A missing `summary` fails the build and says where it goes for that shape. Templates do not declare `summary`. Region-bearing templates (`report`, `components`, and custom ones with `{{regions}}` or the legacy `{{slot:main}}`) require it; the companion takes its question as the summary and rejects a `summary` slot.
 - **A rebuild keeps the recorded shape.** The source's `layout` wins, then the one in the built page's header, then `report`.
 - **The nav is generated.** It lists the h2 sections with their h3s, appears at 5 or more h2s, and is always on for `reference`. The header field `"nav": "on"` or `"off"` forces it; `off` fails on `reference`. Do not write a table of contents.
 - **Only `report` takes an `aside` slot.**

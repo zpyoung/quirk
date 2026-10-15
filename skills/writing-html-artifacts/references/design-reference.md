@@ -137,7 +137,7 @@ Pick the shape from the direction brief, write it in the source header's `layout
 
 Widths and breakpoints, measured on the viewport:
 
-- **Width cap.** Page content is at most 1440px and centered, in every shape except `dashboard`, which is fluid. A `q-compare` may widen past 1440px when its options do not fit, instead of scrolling sideways.
+- **Width cap.** Page content is at most 1440px and centered, in every shape except `dashboard`, which is fluid. A `q-compare` may widen past 1440px when its options do not fit and nothing sits beside the column; next to a nav rail, aside, pane or margin column it scrolls inside its own box instead.
 - **Prose** (`p`, `ul`, `ol`, `blockquote` in `main`) is capped at 70ch in every shape. Tables, charts, code, diffs and boards fill the column. On `longform`, `main` including figures stays within 70ch so margin notes never overlap it.
 - **Nav rail.** From 1100px the generated section nav is a sticky rail on the left that scrolls on its own when it is taller than the screen. Below 1100px it is a collapsed "On this page" menu ahead of `main`. It appears at 5 or more h2 sections, and always on `reference`, where it is the left pane from 900px and a collapsed "Sections" menu below that. A `"nav"` header field of `on` or `off` overrides the h2 count.
 - **Report aside.** From 900px the aside sits right of `main` and stays in view. Keep it shorter than one screen. Below 900px it follows `main`.
