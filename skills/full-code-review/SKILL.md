@@ -286,6 +286,9 @@ when the current manifest says `mutation_consent: true`; refusal is not an error
 **Incomplete runs.** A lens that still fails after the model-fallback retry goes in
 `run.dimensions_failed`, and the report is incomplete: it is never presented as clean.
 
+**Cross-family verification.** When `policy.cross_family.enabled` is true, follow
+"Cross-family verification" in `orchestration.md` before writing the report.
+
 Per `orchestration.md`: dedup by `file:line` (keep the highest severity, merge lens
 tags), drop speculative and linter-style nits, calibrate severity (description-only
 fixes are always `Nit`; verified correctness findings are `Should fix` or higher unless
