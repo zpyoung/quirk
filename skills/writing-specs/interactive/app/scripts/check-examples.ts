@@ -51,6 +51,19 @@ assert.equal((lines.match(/class="example-result"/g) ?? []).length, 1)
 assert.equal((lines.match(/class="example-rejection"/g) ?? []).length, 1)
 assert.ok(lines.includes('<br/>'))
 
+assert.deepEqual(matches(invented, '4,5 and $1,000,$2,000'), ['4', '5', '$1,000', '$2,000'])
+const adjacent = renderToStaticMarkup(React.createElement(ScenarioExampleView, { example: { before: 'Values 4*,5* and $1,000*,$2,000*', steps: ['s'], after: '✓ totals 4*,5*' } }))
+assert.deepEqual(adjacent.match(/(?<="example-invented">)[^<]*/g), ['4*', '5*', '$1,000*', '$2,000*', '4*', '5*'])
+
+for (const before of ['one\rtwo', 'one\r\ntwo', 'Charge 1 ✓ queued\rCharge 2 ✗ skipped']) {
+  const html = renderToStaticMarkup(React.createElement(ScenarioExampleView, { example: { before, steps: ['s'], after: 'a' } }))
+  assert.ok(/<br\s*\/?>/.test(html), `a line break in ${JSON.stringify(before)} must render as a hard break`)
+  assert.ok(!html.includes('\r'))
+}
+const crPhrases = renderToStaticMarkup(React.createElement(ScenarioExampleView, { example: { before: 'Charge 1 ✓ queued\rCharge 2 ✗ skipped', steps: ['s'], after: 'a' } }))
+assert.equal((crPhrases.match(/class="example-result"/g) ?? []).length, 1)
+assert.equal((crPhrases.match(/class="example-rejection"/g) ?? []).length, 1)
+
 const invent = renderToStaticMarkup(React.createElement(ScenarioExampleView, { example: { before: 'x 10%* y', steps: ['s'], after: 'a' } }))
 assert.ok(invent.includes('"example-invented">10%*</span>'))
 

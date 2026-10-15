@@ -14,12 +14,12 @@ const restoreStar = (text: string) => text.replaceAll(STAR, '*').replaceAll(LITE
 /** A result or rejection phrase: its mark plus everything up to the next semicolon or line end. */
 export const EXAMPLE_PHRASE = /([✓✗])([^;\n]+)/g
 
-/** Invented-value runs start at a whitespace boundary so each position of a long run without a star fails in constant time. */
-const INVENTED_MARK = /(?<![^\s])([^\s*]+)\*(?=[\s,;:.)\]]|$)/g
+/** Invented-value runs start at whitespace or right after a previous value's `*,`, so each position of a long run without a star fails in constant time. */
+const INVENTED_MARK = /(?<=^|\s|\*,)([^\s*]+)\*(?=[\s,;:.)\]]|$)/g
 
 /** Colours the marks that survive Markdown parsing; the gap pattern must match the renderer's open-gap regex. */
 export const exampleMarkPlugins: MarkdownInlinePlugin[] = [
-  { pattern: /(?<![^\s])[^\s\uE000]+\uE000(?=[\s,;:.)\]]|$)/g, render: (match, key) => <span key={key} className="example-invented">{restoreStar(match[0])}</span> },
+  { pattern: /(?<=^|\s|\uE000,)[^\s\uE000]+\uE000(?=[\s,;:.)\]]|$)/g, render: (match, key) => <span key={key} className="example-invented">{restoreStar(match[0])}</span> },
   { pattern: /\[ASK: [^\[\]\n]+\]/g, render: (match, key) => <span key={key} className="example-gap">{restoreStar(match[0])}</span> },
 ]
 
@@ -48,7 +48,7 @@ function segmentLine(line: string): Segment[] {
 function ExampleMarkdown({ children, hasLineBreaks }: { children: string; hasLineBreaks?: boolean }) {
   const itemLinkPlugins = useItemLinkPlugins()
   const inlinePlugins = [...(itemLinkPlugins ?? []), ...exampleMarkPlugins, restorePlaceholders]
-  const text = children.replace(/_/g, '_​').replaceAll(STAR, LITERAL_STAR_SENTINEL).replace(INVENTED_MARK, `$1${STAR}`)
+  const text = children.replace(/\r\n?/g, '\n').replace(/_/g, '_​').replaceAll(STAR, LITERAL_STAR_SENTINEL).replace(INVENTED_MARK, `$1${STAR}`)
   if (!new RegExp(EXAMPLE_PHRASE.source).test(text)) {
     return (
       <Markdown components={OFFLINE_MARKDOWN_COMPONENTS} inlinePlugins={inlinePlugins} contentWidth="100%" density="compact">
