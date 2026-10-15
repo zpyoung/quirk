@@ -1,0 +1,53 @@
+<!-- quirk-src {"template": "components", "title": "How alert routing works", "mode": "offline", "layout": "explainer"} -->
+<!-- slot: summary -->
+<p class="q-lede">An alert goes through four steps before it reaches a person: it is matched to a rule, grouped with similar alerts, held for a short delay, and sent to the channel the rule names. Most routing surprises come from the delay and the grouping.</p>
+<!-- slot: main -->
+<p class="q-meta">Describes the alert router as configured on 14 Oct 2026.</p>
+
+<section aria-labelledby="match-h">
+<h2 id="match-h">Matching an alert to a rule</h2>
+<p>Each alert arrives with a service name, a severity and a few labels. The router checks the rules from the top of the list and uses the first one that matches. Rule order therefore matters more than rule count: a broad rule near the top hides every narrower rule below it.</p>
+<p>An alert that matches no rule goes to the catch-all channel, which is read once a day. If something important arrives late, check this first.</p>
+</section>
+
+<section aria-labelledby="group-h">
+<h2 id="group-h">Grouping similar alerts</h2>
+<p>Alerts with the same service and the same rule are grouped into one notification. The group waits for 30 seconds after the first alert so that a burst becomes one page instead of forty.</p>
+<h3 id="group-key">What makes two alerts similar</h3>
+<p>Service and rule, and nothing else. Two alerts for the same service in different regions are still one group.</p>
+<h3 id="group-update">What happens as more arrive</h3>
+<p>The notification is updated in place with a count. It does not page again unless the severity rises.</p>
+</section>
+
+<section aria-labelledby="delay-h">
+<h2 id="delay-h">The delay before sending</h2>
+<p>Warnings wait 5 minutes and critical alerts wait 1 minute. If the alert resolves during the wait, nothing is sent. This is why a brief spike never pages anyone, and also why a real outage can take a minute to reach you.</p>
+<q-table>
+<table>
+<caption>Delay before sending, by severity</caption>
+<thead><tr><th scope="col">Severity</th><th scope="col" class="num">Delay (minutes)</th><th scope="col">Sent to</th></tr></thead>
+<tbody>
+<tr><td>Critical</td><td class="num">1</td><td>Pager</td></tr>
+<tr><td>Warning</td><td class="num">5</td><td>Chat</td></tr>
+<tr><td>Info</td><td class="num">60</td><td>Daily digest</td></tr>
+</tbody>
+</table>
+</q-table>
+</section>
+
+<section aria-labelledby="channels-h">
+<h2 id="channels-h">Sending to a channel</h2>
+<p>A channel is a place a person is reachable: the pager, the team chat, email. Each channel has an owner who decides who is on it, and the router never sends to a person directly.</p>
+<p>If a channel has nobody on it, the router sends to its owner and writes a line in the audit log.</p>
+</section>
+
+<section aria-labelledby="escalate-h">
+<h2 id="escalate-h">Escalation when nobody answers</h2>
+<p>An acknowledged page stops escalating. An unacknowledged one goes to the secondary on-call after 10 minutes, and to the engineering manager after 15. Acknowledging does not resolve the alert, and an acknowledged alert that stays open for an hour pages again.</p>
+</section>
+
+<section aria-labelledby="debug-h">
+<h2 id="debug-h">Finding out why an alert went where it did</h2>
+<p>Open the alert and choose its routing trace. It lists the rule that matched, the group it joined, the delay it waited and the channel it was sent to, with a timestamp for each step. The trace is kept for 30 days, so a question about last month's page can still be answered.</p>
+<p>If the trace shows a rule you did not expect, move that rule down the list rather than editing it, which keeps the change easy to undo.</p>
+</section>

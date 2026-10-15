@@ -1,0 +1,51 @@
+<!-- quirk-src {"template": "components", "title": "Alert volume estimator", "mode": "offline", "layout": "tool", "interactions": ["change the services, alerts per service, group window or severity share and read the page estimate update"]} -->
+<!-- slot: summary -->
+<p class="q-lede" aria-live="polite" x-data x-text="$store.volume.sentence">With the defaults you can expect about 14 pages a week, which is about 2 a day, and 9 of them would arrive outside working hours.</p>
+<!-- slot: main -->
+<p class="q-meta">Estimates how many pages a team receives from its alert settings. Change any input and the result updates.</p>
+
+<form x-data @submit.prevent>
+<h2>Inputs</h2>
+<p>
+<label for="services">Services the team owns</label>
+<input id="services" type="number" min="1" step="1" x-model.number="$store.volume.services" value="8">
+</p>
+<p>
+<label for="alerts">Alerts per service per week</label>
+<input id="alerts" type="number" min="0" step="1" x-model.number="$store.volume.alerts" value="30">
+</p>
+<p>
+<label for="critical">Critical alerts (%)</label>
+<input id="critical" type="number" min="0" max="100" step="1" x-model.number="$store.volume.critical" value="10">
+</p>
+<p>
+<label for="group">Grouping window</label>
+<select id="group" x-model.number="$store.volume.group">
+<option value="1">None</option>
+<option value="3" selected>30 seconds</option>
+<option value="8">5 minutes</option>
+</select>
+</p>
+</form>
+
+<h2>How the estimate is built</h2>
+<p>Only critical alerts page. The number of critical alerts a week is services times alerts times the critical share. The grouping window divides that by how many alerts it merges into one page.</p>
+<p>About two thirds of pages arrive outside working hours, because services fail more often during deploys and batch jobs, which run overnight.</p>
+<script>
+document.addEventListener('alpine:init', function () {
+  Alpine.store('volume', {
+    services: 8,
+    alerts: 30,
+    critical: 10,
+    group: 3,
+    get weekly() {
+      return Math.round((this.services * this.alerts * (this.critical / 100)) / (this.group / 1.7));
+    },
+    get sentence() {
+      var daily = Math.round((this.weekly / 7) * 10) / 10;
+      var night = Math.round(this.weekly * 0.65);
+      return 'With these inputs you can expect about ' + this.weekly + ' pages a week, which is about ' + daily + ' a day, and ' + night + ' of them would arrive outside working hours.';
+    }
+  });
+});
+</script>

@@ -57,13 +57,10 @@ SKELETON = """<!doctype html>
 {{head}}
 <style>
 body { margin: 0; }
-.q-wrap { box-sizing: border-box; max-width: 1440px; margin-inline: auto; padding-inline: clamp(var(--q-space-4), 4vw, var(--q-space-6)); }
 header.q-masthead { padding: var(--q-space-4) 0 var(--q-space-5); border-bottom: 1px solid var(--q-color-border); }
 header.q-masthead h1 { margin: var(--q-space-3) 0 0; }
 .q-chrome { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--q-space-3); }
 .q-chrome .q-theme-toggle { position: static; }
-main { padding-block: var(--q-space-5) var(--q-space-7); }
-main :is(p, ul, ol, blockquote) { max-width: 70ch; }
 </style>
 </head>
 <body>
@@ -74,9 +71,7 @@ main :is(p, ul, ol, blockquote) { max-width: 70ch; }
 </div>
 </header>
 <div class="q-wrap">
-<main id="main">
-{{slot:main}}
-</main>
+{{regions}}
 </div>
 {{data}}
 {{body_end}}
