@@ -923,7 +923,7 @@ button:where([data-q-sidenote-toggle][aria-expanded="true"]) {
 }
 
 @media (min-width: 1100px) {
-  :where([data-layout="longform"]) q-sidenote {
+  :where([data-layout="longform"]) main q-sidenote {
     display: block;
     float: right;
     clear: right;
@@ -932,16 +932,16 @@ button:where([data-q-sidenote-toggle][aria-expanded="true"]) {
     margin: 0 -17rem var(--q-space-3) 0;
   }
 
-  :where([data-layout="longform"]) q-sidenote::before {
+  :where([data-layout="longform"]) main q-sidenote::before {
     content: counter(q-sidenote) ". ";
     font-weight: 700;
   }
 
-  :where([data-layout="longform"]) q-sidenote::after {
+  :where([data-layout="longform"]) main q-sidenote::after {
     content: none;
   }
 
-  :where([data-layout="longform"]) button:where([data-q-sidenote-toggle]) {
+  :where([data-layout="longform"]) main button:where([data-q-sidenote-toggle]) {
     display: none;
   }
 }
@@ -1068,7 +1068,7 @@ q-compare > :where([data-q-stack]) dd {
   }
 
   q-sidenote,
-  :where([data-layout="longform"]) q-sidenote {
+  :where([data-layout="longform"]) main q-sidenote {
     display: inline;
     float: none;
     width: auto;
@@ -1076,13 +1076,13 @@ q-compare > :where([data-q-stack]) dd {
   }
 
   q-sidenote::before,
-  :where([data-layout="longform"]) q-sidenote::before {
+  :where([data-layout="longform"]) main q-sidenote::before {
     content: " (";
     font-weight: inherit;
   }
 
   q-sidenote::after,
-  :where([data-layout="longform"]) q-sidenote::after {
+  :where([data-layout="longform"]) main q-sidenote::after {
     content: ")";
   }
 
