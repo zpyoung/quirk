@@ -337,6 +337,17 @@ def test_compare_recommended_fails_at_zero_and_names_the_range() -> None:
     assert any("must be between 1 and 3" in m for m in got), got
 
 
+def test_compare_with_no_option_columns_says_so() -> None:
+    got = messages(compare("1", options=0))
+    assert len(got) == 1 and "no option columns" in got[0] and "between 1 and" not in got[0], got
+
+
+def test_compare_fails_a_table_wrapped_in_another_element() -> None:
+    wrapped = compare("1").replace("<table>", "<div><table>").replace("</table>", "</table></div>")
+    got = messages(wrapped)
+    assert len(got) == 1 and "direct child" in got[0], got
+
+
 def test_compare_needs_a_table_and_a_recommended_attribute() -> None:
     assert messages('<q-compare recommended="1"></q-compare>') == ["<q-compare> needs one of: table"]
     assert "<q-compare> needs attribute recommended" in messages(compare("1").replace(' recommended="1"', ""))

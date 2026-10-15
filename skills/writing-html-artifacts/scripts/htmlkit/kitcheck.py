@@ -833,17 +833,24 @@ def _rule_timeline_items(node: _Node, report: Report, index: _Index) -> None:
 
 
 def _rule_compare_recommended(node: _Node, report: Report, index: _Index) -> None:
+    table = next((c for c in node.children if c.tag == "table"), None)
+    if table is None:
+        if index.first(node, "table", skip=node.tag) is not None:
+            report(node.line, f"<{node.tag}> needs its <table> as a direct child, not wrapped in another element")
+        return
     raw = node.attrs.get("recommended")
-    table = index.first(node, "table", skip=node.tag)
-    if raw is None or table is None or not _DIGITS.fullmatch(raw):
+    if raw is None or not _DIGITS.fullmatch(raw):
         return
     header = _header_row(table, index)
     if header is None:
         return
     options = len([c for c in header.children if c.tag in ("th", "td")]) - 1
+    if options < 1:
+        report(node.line, f"<{node.tag}> table has no option columns; the header row needs a cell for each option after the criteria column")
+        return
     number = _positive_integer(raw)
     if number is None or number > options:
-        report(node.line, f'<{node.tag}> recommended="{raw}" must be between 1 and {max(options, 1)} (the option columns)')
+        report(node.line, f'<{node.tag}> recommended="{raw}" must be between 1 and {options} (the option columns)')
 
 
 _RULES: dict[str, Callable[[_Node, Report, _Index], None]] = {

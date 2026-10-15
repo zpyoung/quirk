@@ -149,8 +149,8 @@
               "kind": "css",
               "position": "head",
               "inline": true,
-              "sha256": "eed2d6c7491de962f378dcff7527767f10c3ebc8ca8377da300120e19af5c7df",
-              "inline_sha256": "eed2d6c7491de962f378dcff7527767f10c3ebc8ca8377da300120e19af5c7df"
+              "sha256": "459a3f3989581955630eb7455df9141627ab528507f907a3d2efcb8f9d50c925",
+              "inline_sha256": "459a3f3989581955630eb7455df9141627ab528507f907a3d2efcb8f9d50c925"
             },
             {
               "path": "kit.js",
