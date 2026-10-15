@@ -3,8 +3,8 @@
 
 Gathers the TARGET repo's own conventions (.claude/skills review skills and the
 reference docs they route to, the CLAUDE.md hierarchy, .claude/rules/*.md,
-AGENTS.md/CONVENTIONS.md) plus SAKURA-tracked per-repo guidance (_global.md +
-<repo-key>.md). Prints JSON.
+AGENTS.md/CONVENTIONS.md). Pack guidance is resolved separately by resolve_policy.py.
+Prints JSON.
 Exit 0 on all expected outcomes; missing sources yield empty lists / null.
 """
 import argparse
@@ -89,10 +89,10 @@ def skill_references(git_root):
     return found[:REFERENCE_CAP], max(0, len(found) - REFERENCE_CAP)
 
 
-def gather(git_root, sakura_dir, changed_files, repo_key):
+def gather(git_root, changed_files):
     git_root = Path(git_root)
     references, references_dropped = skill_references(git_root)
-    target = {
+    return {
         "repo_skills": sorted(glob.glob(str(git_root / ".claude" / "skills" / "*" / "SKILL.md"))),
         "repo_skill_references": references,
         "repo_skill_reference_indexes": [f for f in references if Path(f).name.lower() in INDEX_NAMES],
@@ -101,32 +101,21 @@ def gather(git_root, sakura_dir, changed_files, repo_key):
         "rules": sorted(glob.glob(str(git_root / ".claude" / "rules" / "*.md"))),
         "other": [str(git_root / n) for n in ("AGENTS.md", "CONVENTIONS.md") if (git_root / n).is_file()],
     }
-    sakura_dir = Path(sakura_dir)
-    g = sakura_dir / "_global.md"
-    r = sakura_dir / ("%s.md" % repo_key) if repo_key else None
-    sakura = {
-        "global": str(g) if g.is_file() else None,
-        "repo": str(r) if (r and r.is_file()) else None,
-    }
-    return target, sakura
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Discover review guidance sources.")
+    ap = argparse.ArgumentParser(description="Discover the reviewed repo's own convention files.")
     ap.add_argument("--git-root", required=True)
-    ap.add_argument("--sakura-guidance-dir", required=True)
     ap.add_argument("--changed-files", help="newline-delimited list of changed repo-relative paths")
-    ap.add_argument("--repo-key")
     args = ap.parse_args(argv)
 
-    repo_key = args.repo_key or git_origin_key(args.git_root)
     changed = []
     if args.changed_files and os.path.isfile(args.changed_files):
         with open(args.changed_files) as fh:
             changed = [ln.strip() for ln in fh if ln.strip()]
 
-    target, sakura = gather(args.git_root, args.sakura_guidance_dir, changed, repo_key)
-    print(json.dumps({"repo_key": repo_key, "target_repo": target, "sakura": sakura}, indent=2))
+    target = gather(args.git_root, changed)
+    print(json.dumps({"repo_key": git_origin_key(args.git_root), "target_repo": target}, indent=2))
     return 0
 
 
