@@ -138,3 +138,17 @@ def test_cross_file_links_and_anchors_resolve() -> None:
             if anchor and anchor not in _heading_slugs(resolved.read_text()):
                 broken.append(f"{source.relative_to(REPO_ROOT)} -> {target} (no such heading)")
     assert not broken, f"unresolvable links: {broken}"
+
+
+def test_scenario_examples_documents_details_sections() -> None:
+    """The shared conventions file is the one home for the details-section rules."""
+    body = EXAMPLES.read_text()
+    assert "## Details sections" in body
+    for literal in ("`details`", "`title`", "`body`"):
+        assert literal in body, f"scenario-examples.md does not document {literal}"
+    for rubric in (LOGIC, INTERACTIVE):
+        text = rubric.read_text()
+        assert "(scenario-examples.md" in text, f"{rubric.name} must still link scenario-examples.md"
+        assert "(scenario-examples.md#details-sections)" in text, (
+            f"{rubric.name} must link the details-sections section"
+        )
