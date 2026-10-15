@@ -23,7 +23,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Iterable, Optional
 
-from . import SKILL_DIR, kitcheck
+from . import SKILL_DIR, kitcheck, layoutcheck
 from .header import read_header
 from .vendor import VendorError, VendorStore, escape_inline, sha256_text
 
@@ -407,6 +407,9 @@ def run_checks(
     loads the kit catalog only when that text has a q-* tag. A catalog that cannot be loaded is one
     ``kit`` failure rather than an exception. When the scanned text is the built page, q-* markup
     without an inlined ``kit@`` block is a failure too.
+
+    For ``tier == 1`` the ``layout`` check flags page geometry written inside the ``q-page``
+    wrapper; tier 2 apps run ``layoutcheck.check_app_sources`` from their build instead.
     """
     if mode not in MODES:
         raise ValueError(f"mode must be one of {', '.join(MODES)}, got {mode!r}")
@@ -434,6 +437,8 @@ def run_checks(
             failures.append(failure)
     failures.extend(_reference_failures(page, mode, tier))
     failures.extend(_kit_failures(html, meta, labels, vendor, kit_source))
+    if tier == 1:
+        failures.extend(layoutcheck.check_html(html, label="page"))
 
     size = len(html.encode("utf-8"))
     if size > SIZE_FAIL:
