@@ -21,7 +21,7 @@ Build a page when the user asks for HTML, a web page, an interactive tool, a das
 
 Follow the steps in order. Each one leads with its rule.
 
-1. **Pick a template, and say which.** Run `quirk_html.py templates list` and match the request against each `description` (all start "Use when"). Tell the user the template, its level (`project`, `user` or `builtin`) and its tier before building. The user can name a template directly. If `warnings` lists a skipped template, say so in the delivery note; see [templates](references/templates.md) for what to do.
+1. **Pick a template.** Run `quirk_html.py templates list` and match the request against each `description` (all start "Use when"). The user can name a template directly. If `warnings` lists a skipped template, say so in the delivery note; see [templates](references/templates.md) for what to do.
 2. **Pick the tier.** Tier 1 is the default: one source file assembled into one page. Choose tier 2 (a React project bundled to one file, the `app` template) when the request shows one of these signals, or when you state a judgment that it needs one:
    - multiple views or routes
    - an editable data grid
@@ -30,41 +30,42 @@ Follow the steps in order. Each one leads with its rule.
 
    Record the signal; it goes in the header and the delivery note. A page that only filters, sorts or toggles stays tier 1.
 3. **Write the direction brief.** Three lines in your reply, not in the page: subject and audience, one job, one specific detail only this subject has. The format and why are in [design reference](references/design-reference.md) section 2. Read that whole reference before filling a slot.
-4. **Write `<slug>.src.html`.** Line 1 is the header comment, then one `<!-- slot: name -->` line per slot. The exact format, header fields and slot rules are in [templates](references/templates.md). Use the `--q-*` tokens, and declare every interaction in `interactions`.
-5. **Build it.**
+4. **Pick the layout, and name your choices.** Infer the page shape from the brief (see [Page shapes](#page-shapes)). Before building, tell the user the template, its level (`project`, `user` or `builtin`), the tier and the layout in one line, so they can override any of them.
+5. **Write `<slug>.src.html`.** Line 1 is the header comment with the `layout` field, then one `<!-- slot: name -->` line per slot, `summary` and `main` among them. The exact format, header fields and slot rules are in [templates](references/templates.md). Use the `--q-*` tokens, and declare every interaction in `interactions`.
+6. **Build it.**
 
    ```
    python3 "$SKILL_DIR/scripts/quirk_html.py" build SRC.src.html [--out FILE] [--upgrade] [--project-dir DIR]
    ```
 
    The page lands at `<project>/.quirk/html/<slug>.html` unless `--out` says otherwise. That directory ignores itself in git.
-6. **Fix static-check failures.** `build` exits 1 when a check in `checks.failures` fails (`header`, `license`, `checksum`, `external-refs`, `size`, `kit`). Fix the source and rebuild; do not edit the built file. `quirk_html.py check FILE` re-runs the checks alone. Exit 2 means a usage error, an unknown or invalid template, or a malformed source.
-7. **Verify in a browser.**
+7. **Fix static-check failures.** `build` exits 1 when a check in `checks.failures` fails (`header`, `license`, `checksum`, `external-refs`, `size`, `kit`, `layout`). Fix the source and rebuild; do not edit the built file. `quirk_html.py check FILE` re-runs the checks alone. Exit 2 means a usage error, an unknown or invalid template, or a malformed source.
+8. **Verify in a browser.**
 
    ```
    python3 "$SKILL_DIR/scripts/quirk_html.py" verify FILE [--out-dir DIR]
    ```
 
    It writes screenshots and `report.json` to `<file stem>.verify/`. Open the screenshots and judge them against the checklist in [design reference](references/design-reference.md) section 14, because verify proves the page loads and is legible, not that it is good. Never install or download a browser: when none is found, verify exits 0 with `status: "not-browser-verified"`, and you say so in the delivery note.
-8. **Write the note.**
+9. **Write the note.**
 
    ```
    python3 "$SKILL_DIR/scripts/quirk_html.py" note FILE [--verify-dir DIR]
    ```
 
    Pass `--verify-dir` when you gave verify an `--out-dir`. `verify_stale: true` means the file changed after verify; run verify again.
-9. **Deliver.** Send the note's `markdown` with the direction brief's job restated in one sentence and any decision the user may want to change.
+10. **Deliver.** Send the note's `markdown` with the direction brief's job restated in one sentence and any decision the user may want to change.
 
 Any edit after verify means verify again.
 
 ### Tier 2
 
 ```
-python3 "$SKILL_DIR/scripts/quirk_html.py" build-app SLUG --title TITLE [--mode offline|connected] [--signal TEXT] [--template NAME] [--upgrade] [--project-dir DIR]
+python3 "$SKILL_DIR/scripts/quirk_html.py" build-app SLUG --title TITLE [--layout SHAPE] [--mode offline|connected] [--signal TEXT] [--template NAME] [--upgrade] [--project-dir DIR]
 ```
 
-- The first build copies the template's project to `<project>/.quirk/html/<slug>/`, installs, builds, and writes `<project>/.quirk/html/<slug>.html`. Title, mode and signal are saved in `quirk-app.json` there, so later builds need only the slug. Edit the files under `<slug>/src/` and run `build-app SLUG` again; the source folder is never overwritten. The `app` template's `rules.md` lists the scaffold files.
-- Pass `--signal` with the signal you chose in step 2.
+- The first build copies the template's project to `<project>/.quirk/html/<slug>/`, installs, builds, and writes `<project>/.quirk/html/<slug>.html`. Title, layout, mode and signal are saved in `quirk-app.json` there, so later builds need only the slug. Edit the files under `<slug>/src/` and run `build-app SLUG` again; the source folder is never overwritten. The `app` template's `rules.md` lists the scaffold files.
+- Pass `--signal` with the signal you chose in step 2, and `--layout` with the shape you named in step 4. The app takes `summary` and `aside` from `routes.tsx`; see the `app` template's `rules.md`.
 - **Exit 3 means tier 2 is unavailable here:** Node or pnpm is missing, install failed, or the build failed. The JSON carries a `reason`. Do not retry in a loop. Fall back to a tier-1 build of the same idea and list every cut (a view merged, a grid made read-only) in the delivery note.
 - Installs run `pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile`, so no package script or pnpmfile hook runs at install. Building still runs the template's own build code (`vite.config.ts`, the build script), so build only project or user tier-2 templates you trust.
 - Never commit `node_modules/`.
@@ -81,6 +82,29 @@ python3 "$SKILL_DIR/scripts/quirk_html.py" build-app SLUG --title TITLE [--mode 
 - **Offline is the default.** An offline page makes no network requests: the static check rejects external references and verify fails on any request.
 - **Connected** (`"mode": "connected"` in the header, or `--mode connected`) is for pages that fetch live data. Requests go through instead of failing, and verify records every URL in the report's `requests`. Use it only when the user wants live data, and name the hosts the page calls in the note.
 
+## Page shapes
+
+Every page has exactly one shape, set by the `layout` header field and available on every template. Infer it from the direction brief, name it before building (step 4), and let the user override it.
+
+| Shape | For | The `summary` slot holds |
+|---|---|---|
+| `report` | findings and evidence | the answer or findings under the h1 |
+| `explainer` | how-it-works pages and write-ups | the answer or findings under the h1 |
+| `longform` | long prose with margin notes | the answer or findings under the h1 |
+| `tool` | calculators, estimators, converters | the live result beside the inputs |
+| `comparison` | picking between options | the recommendation line above the table |
+| `dashboard` | status and metrics | the headline metric, top left |
+| `reference` | runbooks and references read by section | a one-line purpose under the h1 |
+
+- **Every source needs a `layout` field and a `summary` slot.** A source with no `layout` builds as `report` and the note says "Layout: report (no layout named)", so always name one. A missing `summary` fails the build and says where it goes for that shape. Templates do not declare `summary`; every tier-1 template accepts it.
+- **A rebuild keeps the recorded shape.** The source's `layout` wins, then the one in the built page's header, then `report`.
+- **The nav is generated.** It lists the h2 sections with their h3s, appears at 5 or more h2s, and is always on for `reference`. The header field `"nav": "on"` or `"off"` forces it; `off` fails on `reference`. Do not write a table of contents.
+- **Only `report` takes an `aside` slot.**
+- **Arrange content with four layout elements:** `q-grid` (columns that stack on phones), `q-panel` (a titled box, the title is required), `q-sidenote` (a margin note, `longform`) and `q-compare` (the comparison table, `comparison`). Their attributes are in [components](references/components.md). Hand-written grid or fixed-width CSS in a slot fails the layout check: a grid failure names `q-grid`, a width failure points at the `layout` field.
+- **Examples, one per shape:** `templates/report/examples/<shape>.src.html`, `templates/components/examples/<shape>.src.html`, `templates/companion/examples/<shape>.screen.json` and `templates/app/examples/<shape>/`. Copy the closest one's structure.
+
+Widths, breakpoints and print rules are in [design reference](references/design-reference.md) section 8.
+
 ## Exit codes
 
 | Code | Meaning | Applies to |
@@ -95,7 +119,7 @@ python3 "$SKILL_DIR/scripts/quirk_html.py" build-app SLUG --title TITLE [--mode 
 The note comes from `quirk_html.py note`; do not paraphrase away its facts. It must state:
 
 - the file path, its size, and the sidecar path if there is one
-- the template and its level, the tier, and the signal that chose it
+- the template and its level, the layout (marked "no layout named" when the build defaulted it), the tier, and the signal that chose it
 - the mode, and for connected mode the hosts the page calls (the note says only that data calls use the network, so add the hosts from the verify report)
 - the libraries inlined, with versions
 - the static-check result, and the verify result: `passed`, `failed`, or `not-browser-verified` with the reason
@@ -108,7 +132,7 @@ It ends by asking whether the user wants the page opened or published. Wait for 
 
 ## Custom templates
 
-A project or user template gets every guarantee a built-in one has, and the user can ask for one ("make this a template", "use our branding for these"). Scaffold with `quirk_html.py templates new NAME --level project|user [--base TEMPLATE] [--from ARTIFACT.html]`, edit it, and finish with `quirk_html.py templates verify NAME`, which writes `verified.json` only when the example passes. It passes without a browser only for environment limits (no node, no browser, install failed) and records `browser: false`. The manifest fields, token layers, lookup order and the repair flow are in [templates](references/templates.md). Do not hand-write `verified.json`.
+A project or user template gets every guarantee a built-in one has, and the user can ask for one ("make this a template", "use our branding for these"). Every shape works in a custom template with no change to it; a skeleton written before shapes existed keeps building (see [templates](references/templates.md)). Scaffold with `quirk_html.py templates new NAME --level project|user [--base TEMPLATE] [--from ARTIFACT.html]`, edit it, and finish with `quirk_html.py templates verify NAME`, which writes `verified.json` only when the example passes. It passes without a browser only for environment limits (no node, no browser, install failed) and records `browser: false`. The manifest fields, token layers, lookup order and the repair flow are in [templates](references/templates.md). Do not hand-write `verified.json`.
 
 ## Charts and the theme
 
@@ -116,11 +140,11 @@ The chrome fires a `quirk-theme` event on `document` when the theme changes. A p
 
 ## Companion
 
-The companion is a local page that asks the user one question at a time and sends the click back. Brainstorming and exploring-ideas use it for visual questions, and you can run it when a choice is easier to make by seeing it. Start it with `python3 "$SKILL_DIR/scripts/companion.py" start SESSION_DIR` (a session directory under `.quirk/brainstorm/`), drive it with `show` and `wait`, and end it with `stop`. A timeout on `wait` (exit 1) is normal, so re-run it. Typed input in the terminal outranks a click. The full protocol, `screen.json` format, exit codes and security notes are in [companion](references/companion.md); screen design is section 12 of the [design reference](references/design-reference.md).
+The companion is a local page that asks the user one question at a time and sends the click back. Brainstorming and exploring-ideas use it for visual questions, and you can run it when a choice is easier to make by seeing it. A screen may name a `layout` to get the room its content needs. Start it with `python3 "$SKILL_DIR/scripts/companion.py" start SESSION_DIR` (a session directory under `.quirk/brainstorm/`), drive it with `show` and `wait`, and end it with `stop`. A timeout on `wait` (exit 1) is normal, so re-run it. Typed input in the terminal outranks a click. The full protocol, `screen.json` format, exit codes and security notes are in [companion](references/companion.md); screen design is section 12 of the [design reference](references/design-reference.md).
 
 ## References
 
-- [Design reference](references/design-reference.md): the house design standard, direction brief, banned tells, tokens, verify checklist
-- [Templates](references/templates.md): template lookup, `template.json`, source file format, tokens, custom and tier-2 templates
-- [Companion](references/companion.md): the companion loop, commands and screen format
-- [Components](references/components.md): the `q-*` elements (tabs, charts, tables, stats, timelines, code, diffs, boards), their attributes and examples
+- [Design reference](references/design-reference.md): the house design standard, direction brief, banned tells, tokens, page shapes and widths, verify checklist
+- [Templates](references/templates.md): template lookup, `template.json`, source file format, the `layout` and `nav` fields, region placeholders, tokens, custom and tier-2 templates
+- [Companion](references/companion.md): the companion loop, commands, screen format and per-shape example screens
+- [Components](references/components.md): the `q-*` elements (tabs, charts, tables, stats, timelines, code, diffs, boards, and the layout elements grid, panel, sidenote, compare), their attributes and examples

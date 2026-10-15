@@ -8,6 +8,7 @@ A template is a directory holding a manifest (`template.json`), fixed chrome, on
 
 - **Chrome** is fixed: theme, theme toggle, license notices, header. You do not write it.
 - **Slots** are the freeform regions you fill. Consistency comes from the shared chrome and tokens.
+- **Page shapes** are the same on every template: the build places the slots for the `layout` the source names. See [Page shapes in a source](#page-shapes-in-a-source).
 - Built-ins are `report`, `components`, `companion` and `app` (tier 2). Custom templates live at project or user level and can be either tier.
 
 ## Lookup order and name clashes
@@ -49,7 +50,7 @@ The lookup order is project, then user, then built-in. All paths are relative to
 | `tier` | `1` (assembled single file) or `2` (React project bundled to one file) |
 | `libraries` | tier 1: libraries always inlined, in order; names from the skill's `vendor/libraries.json` or from this template's own `vendor/libraries.json` |
 | `optional_libraries` | tier 1: libraries a source file may add through its header's `libraries` field |
-| `slots` | tier 1: 1 to 3 entries, each `{"required": bool, "description": str}` |
+| `slots` | tier 1: 1 to 3 entries, each `{"required": bool, "description": str}`; never `summary`, which every tier-1 template accepts without declaring it |
 | `skeleton` | tier 1: relative path to the skeleton HTML |
 | `tokens` | optional: relative path to a token file layered last (see below) |
 | `rules` | optional: relative path to a design-rules addendum, read with the design reference |
@@ -58,6 +59,7 @@ The lookup order is project, then user, then built-in. All paths are relative to
 
 - A library name resolves first in the template's `vendor/libraries.json`, then in the skill's. A template-level entry with a built-in's name shadows it for that template only.
 - Skeletons contain literal placeholders, each replaced once: `{{header}}`, `{{title}}`, `{{head}}`, `{{chrome}}`, `{{slot:<name>}}` for each declared slot, `{{data}}` (optional), `{{body_end}}`. A skeleton missing any of them except `{{data}}` is invalid. An unknown `{{...}}` left after substitution is exit 2.
+- Two more placeholders are optional: `{{regions}}` and `{{layout}}`. They are described under [skeleton placeholders for shapes](#skeleton-placeholders-for-shapes). Neither is required, so a skeleton written before shapes existed stays valid.
 - Libraries load in manifest order, with Alpine last.
 
 ## Source file format
@@ -69,15 +71,18 @@ For a tier-1 template you write `<slug>.src.html`, and `scripts/quirk_html.py bu
 - Text before the first slot line, other than the header, is an error.
 
 ```html
-<!-- quirk-src {"template": "report", "title": "Test timings, week 41", "mode": "offline", "libraries": ["chartjs"], "interactions": ["sort the table by column"], "data": "timings.json"} -->
+<!-- quirk-src {"template": "report", "title": "Test timings, week 41", "layout": "report", "mode": "offline", "libraries": ["chartjs"], "interactions": ["sort the table by column"], "data": "timings.json"} -->
+<!-- slot: summary -->
+<p class="q-lede">Median suite time fell from 14 to 9 minutes.</p>
 <!-- slot: main -->
-<h1>Test timings, week 41</h1>
-<p>Median suite time fell from 14 to 9 minutes.</p>
+<p class="q-meta">Source: CI timing logs, week 41.</p>
 ```
 
 Header fields:
 
-- `template` and `title` are required.
+- `template` and `title` are required. Name a `layout` on every source; one without it builds as `report` (see [Page shapes in a source](#page-shapes-in-a-source)).
+- `layout` is one of the seven shapes, in this order: `report`, `explainer`, `longform`, `tool`, `comparison`, `dashboard`, `reference`. Any other value is exit 2 and the error lists all seven.
+- `nav` is `auto` (the default), `on` or `off`. It forces the generated section nav on or off.
 - `mode` is `offline` (the default) or `connected`.
 - `libraries` must be a subset of the template's `optional_libraries`. The builder adds `kit` and `chartjs` automatically when `q-*` tags appear, so `kit` may not be listed by hand.
 - `interactions` lists what the page lets the reader do; it may be empty.
@@ -85,6 +90,29 @@ Header fields:
 - `tier_reason` is optional; set it when you overrode the tier signals.
 
 Slot names match `^<!-- slot: ([a-z][a-z0-9-]{0,30}) -->$`. A rebuild of an existing artifact reuses the library versions recorded in its header; pass `--upgrade` to use the current pins.
+
+## Page shapes in a source
+
+Every tier-1 source names a shape in `layout` and writes a `summary` slot. What each shape is for and its widths are in [design reference](design-reference.md) section 8; this section is how the build treats the field.
+
+- **`summary` is a reserved slot.** Every tier-1 template accepts it and none may declare it. It is required whenever the skeleton holds `{{regions}}` or `{{slot:main}}`. A missing summary is exit 2, and the error names the shape and where its summary goes. A skeleton with neither placeholder, the companion's, has no summary slot and rejects one.
+- **`aside` is for `report` only.** An `aside` slot on any other shape is exit 2.
+- **The nav is generated from `main`.** Headings inside `q-panel`, `q-compare`, `q-tabs` and `q-board` are neither counted nor listed. A heading without an `id` gains one made from its text, kept unique against ids already on the page. `"nav": "off"` on `reference` and `"nav": "on"` with no h2 are exit 2.
+- **Layout resolution at build.** The source's `layout`, else the `layout` in the existing output's header, else `report`. `--upgrade` does not change it; it only moves library versions.
+- **A defaulted layout is recorded as defaulted.** When no source or earlier build named one, the header gets `"layout_defaulted": true` and the delivery note says `Layout: report (no layout named)`. A rebuild whose source still names no layout stays defaulted; naming one in the source clears it.
+- **The header records the result.** Built pages carry `"layout"`, and `"layout_defaulted": true` or `"legacy_summary": true` when they apply. Never edit these by hand: rebuild from the source.
+- **The delivery note has a `Layout:` line**, for example `Layout: dashboard`. Keep it when you restate the note's facts.
+- **Older pages rebuild unchanged.** A page built before shapes existed has no `layout` in its header. If its source has no `summary`, the build still succeeds as `report`, omits the summary region, records `"legacy_summary": true`, and puts a `summary` warning in `checks.warnings`. Add a `summary` slot to clear it.
+
+## Skeleton placeholders for shapes
+
+A skeleton chooses how it receives the regions with one of two placeholders. A skeleton with neither is not region-bearing: it resolves no default layout and requires no `summary`.
+
+- **`{{regions}}`** is replaced by the page wrapper (`<div class="q-page" data-layout="...">`) holding summary, nav, `main` and `aside` in the shape's DOM order. It also satisfies the declared `main` and `aside` slots, so the skeleton must not also contain `{{slot:main}}` or `{{slot:aside}}`. Every other declared slot still needs its own `{{slot:<name>}}`. A skeleton with both `{{regions}}` and `{{slot:main}}` is invalid. All built-in templates and new custom ones use `{{regions}}`.
+- **`{{slot:main}}` alone is the legacy path**, for a custom skeleton written before shapes. The build puts the whole region wrapper, without `aside`, where `{{slot:main}}` stands, and the skeleton keeps its own `<main>`. Its `{{slot:aside}}` and other slots fill as before, outside the wrapper. The layout check does not see that aside.
+- **`{{layout}}`** is replaced by the resolved layout name in a region-bearing skeleton. In any other skeleton it is the source's `layout`, or an empty string when none is named. The companion uses it to size its page; see [companion](companion.md).
+- `layout.css` is inlined into the head of every tier-1 build after the base styles, so a custom skeleton keeps only its masthead and chrome styling. Do not repeat the page width, grid or breakpoints in a skeleton.
+- Editing the layout stylesheet or a placeholder does not invalidate a custom template's `verified.json`: the theme files are not hashed.
 
 ## Tokens and the four-layer merge
 
@@ -134,8 +162,8 @@ Creating a template is guided and ends when the example passes.
    scripts/quirk_html.py templates new NAME --level project|user [--base TEMPLATE] [--from ARTIFACT.html] [--project-dir DIR]
    ```
 
-   It prints `{"path", "next": [...]}`; do what `next` lists.
-   - `--base` copies an existing template as the starting point. The built-in `companion` template is refused: its example is a screen, not a page source.
+   It prints `{"path", "next": [...]}`; do what `next` lists. The new skeleton uses `{{regions}}` and its example has a `summary` slot, so a fresh template builds as is.
+   - `--base` copies an existing template as the starting point, without its `examples/` folder. The built-in `companion` template is refused: its example is a screen, not a page source.
    - `--from` starts from a built artifact. A quirk-built artifact copies its source template and uses its `.src.html` as the example. Any other HTML becomes a one-slot skeleton (`main` wraps the body) with house tokens, which you then refine.
 3. Edit `template.json` (write a real "Use when" description), the skeleton, tokens, rules and the example. Keep the example a real, filled-in page, because verify runs on it.
 4. Optionally check the shape: `scripts/quirk_html.py templates validate PATH` prints `{"valid", "errors"}`.
@@ -163,7 +191,8 @@ A tier-2 template sets `"tier": 2` and `"project": "project/"`, and ships its ow
 A template is skipped, with a warning, when:
 
 - `template.json` is missing, unparseable, or fails the schema table above (this includes `name` not matching the directory)
-- the skeleton is missing or lacks a required placeholder
+- the skeleton is missing or lacks a required placeholder, holds both `{{regions}}` and `{{slot:main}}` (or `{{slot:aside}}`), or leaves a declared slot other than `main` and `aside` without its placeholder
+- `template.json` declares a slot named `summary`
 - a library does not resolve, or a vendored file's checksum does not match
 - the example is missing
 - `verified.json` is missing, or any covered file's hash differs (reason `unverified`)

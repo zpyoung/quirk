@@ -56,7 +56,8 @@ Flags:
     { "id": "stacked", "label": "Stacked", "description": "Filters above results" }
   ],
   "content": "<optional freeform HTML: mockup, comparison, notes>",
-  "diagram": "<optional Mermaid source>"
+  "diagram": "<optional Mermaid source>",
+  "layout": "<optional page shape, for example dashboard>"
 }
 ```
 
@@ -64,9 +65,21 @@ Flags:
 - `select` is `single` or `multi`.
 - `options` has 2 to 4 entries. Each `id` is unique and matches `[a-z0-9-]{1,40}`. `label` is what the user clicks, `description` says the consequence, and `html` is an optional per-option mockup.
 - `content` is freeform HTML shown with the question. `diagram` is Mermaid source; the screen loads the server-hosted Mermaid build only when `diagram` is set.
+- `layout` is optional, one of the seven page shapes: `report`, `explainer`, `longform`, `tool`, `comparison`, `dashboard`, `reference`. Any other value is a malformed `screen.json` (`show` exits 2, and the error lists the seven). See [Screen width and layout](#screen-width-and-layout).
 - A screen that only shows something still offers 2 to 4 options about it.
 - `content` and option `html` are served exactly as written. Do not paste untrusted text into them.
 - Kit `q-*` elements go in `content` or an option's `html` unchanged; only non-interactive ones may go in `html` (see the companion rules and [components](components.md)).
+
+## Screen width and layout
+
+A screen is 960px wide unless it names a `layout`. Name one when the question is about a wide thing: a dashboard's panels, a comparison table, a reference page. The screen then widens to 1440px, and a `dashboard` screen is fluid.
+
+- The `layout` key only sizes the screen. Its question, options and Proceed button stay in the same order, and there is no `summary` slot: the `question` is the summary.
+- The layout check does not run on screens. The `html` and `content` you write draw mockups of other layouts, so inline `display:grid` and fixed widths are fine there.
+- Name the shape the screen is about only when it needs the width. A screen about a form's field order stays unnamed.
+- The same `layout` is written into the screen's generated source header, so a screen is built like any other page of that shape.
+
+The example screens, one per shape, are in `templates/companion/examples/<shape>.screen.json`: `report`, `explainer`, `longform`, `tool`, `comparison`, `dashboard` and `reference`. Copy the closest one.
 
 ## Event record
 

@@ -30,7 +30,7 @@ One job: <the single thing the reader should be able to do or decide after 60 se
 Specific detail: <one thing only this subject has: a real number, a unit, a name, a shape>
 ```
 
-- The one job decides what goes above the fold. Everything that does not serve it moves lower, into `<details>`, or out.
+- The one job decides what goes above the fold. Everything that does not serve it moves lower, into `<details>`, or out. It also decides the page shape; see section 8.
 - The specific detail becomes the page's one distinctive element: a unit-aware axis, a domain term as the heading, a real example in the lede. It replaces decoration.
 - If you cannot fill the third line, you have not read the source material enough. Go back to it.
 
@@ -121,26 +121,40 @@ Rules for using them:
 - Separate sections with spacing first (`--q-space-6` or larger), a 1px rule second, and a background change last.
 - Borders are 1px. A 2px or thicker border is reserved for the focus ring.
 
-## 8. Layout recipes
+## 8. Page shapes
 
-Every layout is a single column on a 375px screen. At desktop widths, put the summary where each recipe says. Use CSS grid or flex with `gap` from `--q-space-*`; use `clamp()` for fluid padding, not breakpoints per element.
+Pick the shape from the direction brief, write it in the source header's `layout` field, and name it to the user before building. The build places the regions and one shared stylesheet (`theme/layout.css`) sets every width and breakpoint, so do not write grid or width CSS in a slot; the layout check fails it. Where the field and the slots go is in [templates](templates.md).
 
-| Artifact | Max width | Grid | Summary sits |
+| Shape | Use when | Summary slot holds | At desktop width |
 |---|---|---|---|
-| Explainer | 70ch prose column, up to 1440px with figures, tables and code | one column; figures may span wider; optional sticky table of contents at 1100px and up | a one-paragraph answer directly under the h1, before any section |
-| Report | 1440px | one column of sections; tables, charts, code and boards fill the width; optional sticky aside at 900px and up | a "Findings" block under the h1: the 3 to 5 facts a reader acts on, each one sentence |
-| Calculator or tool | 720px for the tool, 1440px if it has a results table | inputs first, results beside them at 900px and up, below them on narrow screens | the live result, in an `aria-live` region, next to the inputs it depends on |
-| Comparison | 1440px | a table with the options as columns and criteria as rows; at 375px each option becomes a stacked block | a "Recommendation" line above the table naming the pick and the one reason |
-| Dashboard | 1440px | 12-column grid, at most 4 panels across, each panel with a title and a table view; stack at 700px and below | the one headline metric top-left, with its unit and its comparison period |
+| `report` | findings and evidence | the answer or findings under the h1 | one column; optional sticky aside on the right from 900px |
+| `explainer` | a how-it-works page or write-up | the answer or findings under the h1 | prose with full-width figures, tables and code |
+| `longform` | long prose with margin notes | the answer or findings under the h1 | prose in the left 70ch, `q-sidenote` notes in a right margin from 1100px |
+| `tool` | a calculator, estimator or converter | the live result, in an `aria-live` region | inputs on the left, the result beside them from 900px, sticky |
+| `comparison` | picking between options | the recommendation line: the pick and the one reason | `q-compare` with options as columns and criteria as rows |
+| `dashboard` | status and metrics | the headline metric, top left, with its unit and comparison period | fluid width; a `q-grid` of titled `q-panel` items |
+| `reference` | a runbook or reference read by section | a one-line purpose under the h1 | the section list as a left pane from 900px, content on the right |
 
-Notes that apply to all five:
+Widths and breakpoints, measured on the viewport:
+
+- **Width cap.** Page content is at most 1440px and centered, in every shape except `dashboard`, which is fluid. A `q-compare` may widen past 1440px when its options do not fit, instead of scrolling sideways.
+- **Prose** (`p`, `ul`, `ol`, `blockquote` in `main`) is capped at 70ch in every shape. Tables, charts, code, diffs and boards fill the column. On `longform`, `main` including figures stays within 70ch so margin notes never overlap it.
+- **Nav rail.** From 1100px the generated section nav is a sticky rail on the left that scrolls on its own when it is taller than the screen. Below 1100px it is a collapsed "On this page" menu ahead of `main`. It appears at 5 or more h2 sections, and always on `reference`, where it is the left pane from 900px and a collapsed "Sections" menu below that. A `"nav"` header field of `on` or `off` overrides the h2 count.
+- **Report aside.** From 900px the aside sits right of `main` and stays in view. Keep it shorter than one screen. Below 900px it follows `main`.
+- **Tool.** From 900px the result sits beside the inputs. Below that it sits directly under them.
+- **Longform margin.** From 1100px `q-sidenote` notes sit in the right margin. Below that each is a numbered toggle that opens the note in place.
+- **Dashboard columns.** A `q-grid` is 1 column at 700px and below, 2 columns from 701px, 4 from 1100px and 6 from 1800px.
+- **Comparison on a phone.** `q-compare` becomes one block per option at 700px and below, the recommended one first.
+- **Phone.** At 375px every shape is one column in DOM order and does not scroll horizontally.
+- **Print.** One column in DOM order: the nav as a plain list after the summary, aside and notes inline, masthead controls hidden.
+
+Notes that apply to every shape:
 
 - The h1 names the subject, not the format. "Checkout latency, week 41", not "Report".
 - Put the date or data source under the h1 in `--q-size-small`.
-- Do not center the whole layout. Center the container with `margin-inline: auto` and left-align its contents.
-- Use the width of a large screen. Cap prose at 70ch, and let tables, charts, code, diffs and boards fill the container. A 960px column on a 2000px screen wastes the room those elements need.
-- Tables that are wider than the screen scroll inside their own `overflow-x: auto` wrapper, never the page. The page must not scroll horizontally at 375px.
-- Sticky headers only when the page is longer than three screens. A sidebar that sits beside the content, like the report's aside, is sticky at 900px and up and stays shorter than one screen.
+- Do not center the whole layout. The stylesheet centers the container; left-align its contents.
+- Tables that are wider than the screen scroll inside their own `overflow-x: auto` wrapper, never the page.
+- Sticky headers only when the page is longer than three screens. The sticky rail, aside and result are the exception; each stays shorter than one screen or scrolls on its own.
 
 ## 9. Tables and data visualization
 

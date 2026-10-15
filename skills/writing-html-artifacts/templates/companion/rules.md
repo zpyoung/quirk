@@ -9,6 +9,13 @@ Read after section 12 of the [design reference](../../references/design-referenc
 - A "superseded" banner that appears when a newer screen replaces this one. Controls lock themselves.
 - All behavior comes from the inlined `companion.js`. A screen with its own `<script>` that calls `fetch` fails the static check.
 
+## Page shape
+
+- `layout` is an optional `screen.json` key, one of the seven shapes (`report`, `explainer`, `longform`, `tool`, `comparison`, `dashboard`, `reference`). `show` validates it and exits 2 on any other value.
+- Naming one widens the screen from 960px to 1440px, and `dashboard` to fluid. A screen with no `layout` stays at 960px. Name one only when the question needs the room; most screens do not.
+- Screens have no `summary` slot: the `question` is the summary. The layout check does not run on screens, because `content` and option `html` draw mockups of other layouts.
+- One example screen per shape is in `examples/<shape>.screen.json`. The key's details are in the [companion guide](../../references/companion.md#screen-width-and-layout).
+
 ## Writing `screen.json`
 
 - `question` is one complete sentence in sentence case. `title` is two or three words.

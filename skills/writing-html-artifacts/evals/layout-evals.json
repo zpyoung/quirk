@@ -1,0 +1,75 @@
+{
+  "skill_name": "writing-html-artifacts",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Write up what we found in last week's checkout latency data as an HTML page: the headline number, the three or four findings, and the evidence behind each.",
+      "expected_layout": "report"
+    },
+    {
+      "id": 2,
+      "prompt": "Make a one-page HTML report of the Q3 flaky-test investigation. Lead with the conclusion, list the findings, then show the supporting tables and charts. Add a short note on how the numbers were measured.",
+      "expected_layout": "report"
+    },
+    {
+      "id": 3,
+      "prompt": "Build an HTML page that explains how our checkout retry queue works, for engineers who have never touched it. Walk through why it retries, how the backoff grows, and what stops a double charge.",
+      "expected_layout": "explainer"
+    },
+    {
+      "id": 4,
+      "prompt": "I need a web page that teaches new hires how a request moves from the load balancer to the database in our stack, section by section, with a diagram or two.",
+      "expected_layout": "explainer"
+    },
+    {
+      "id": 5,
+      "prompt": "Turn my 4,000-word essay on why we moved the nightly build to shared runners into an HTML page. I want it to read like an article, with my caveats and sources as margin notes beside the paragraphs they belong to.",
+      "expected_layout": "longform"
+    },
+    {
+      "id": 6,
+      "prompt": "Make a long-read HTML page of our postmortem narrative for the March outage. It is mostly continuous prose, and I want footnote-style asides next to the sentences they annotate instead of a block of notes at the bottom.",
+      "expected_layout": "longform"
+    },
+    {
+      "id": 7,
+      "prompt": "Build me a single-file HTML calculator that estimates how many CI runners we need. I will type in the engineer count, builds per day and minutes per build, and the answer should update as I change them.",
+      "expected_layout": "tool"
+    },
+    {
+      "id": 8,
+      "prompt": "Make an HTML converter where I enter a cron expression on the left and see the next ten run times beside it as I type.",
+      "expected_layout": "tool"
+    },
+    {
+      "id": 9,
+      "prompt": "Compare Kafka, Managed Pub/Sub and RabbitMQ for our order events as an HTML page. Put the options side by side against cost, delivery guarantees and on-call load, and say which one you would pick.",
+      "expected_layout": "comparison"
+    },
+    {
+      "id": 10,
+      "prompt": "I have to choose between three vendors for error tracking. Make a page that lines them up on price, retention and integrations in one table and ends with a recommendation.",
+      "expected_layout": "comparison"
+    },
+    {
+      "id": 11,
+      "prompt": "Make an HTML dashboard for the checkout service status: success rate as the headline number, then latency, error rate, queue depth and open incidents as panels I can scan at a glance on a wall display.",
+      "expected_layout": "dashboard"
+    },
+    {
+      "id": 12,
+      "prompt": "Build a support health dashboard as a web page, with open tickets, first response time, backlog age and satisfaction each in their own panel, and the single most important metric at the top left.",
+      "expected_layout": "dashboard"
+    },
+    {
+      "id": 13,
+      "prompt": "Turn our checkout on-call runbook into an HTML page I can keep open during an incident. It needs a section list always visible on the left so I can jump to rollback, alerts or escalation without scrolling.",
+      "expected_layout": "reference"
+    },
+    {
+      "id": 14,
+      "prompt": "Make an HTML reference page for our internal CLI: one section per command, with flags and examples, and a permanent table of contents beside the content for looking things up.",
+      "expected_layout": "reference"
+    }
+  ]
+}
