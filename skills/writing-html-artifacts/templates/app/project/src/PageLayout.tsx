@@ -183,7 +183,7 @@ export function PageLayout({ summary, children, aside }: { summary: ReactNode; c
   )
 
   return (
-    <div className="q-wrap">
+    <div className="q-wrap" style={{ width: '100%' }}>
       <div className="q-page" data-layout={layout}>
         {layout === 'tool' ? (
           <>
