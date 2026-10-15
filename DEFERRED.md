@@ -148,4 +148,12 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Why deferred**: pi 1.1.0 --list-models lists anthropic/claude-sonnet-5-5, anthropic/claude-haiku-5-5 and openai/gpt-6.1-sol, which no ladder in skills/pi-dev/scripts/pi-watch/pi-watch.mjs ALIASES includes, so sonnet/haiku/codex resolve to older models. The launcher's --where staleness probe greps for gpt-5.6 and needs the same update. Left out of the 1.x SDK port because a ladder refresh is a separate model-choice decision.
 - **Estimated effort**: S
 - **Priority**: P2
+- **Resolved**: 2026-10-15. The ladders now lead with GPT-6.1/6 Sol, GPT-6 Luna, and Claude 5.5. A new opt-in `fable` alias covers Claude Fable, and grok routes to grok-4.7/4.6 via xai, then Copilot. GPT-6 Astra is excluded as pro-priced, and terra stays on GPT-5.6 Terra because GPT-6 has no Terra tier. Entries the pinned pi-ai 1.2.0 catalog doesn't ship were removed. The --where probe now looks for gpt-6.1-sol, and adversarial-review's ALIAS_LADDER heads match.
+
+## DEFER-18: Replace the per-provider model dumps in pi-dev's models.md
+- **Deferred**: 2026-10-15
+- **Session context**: DEFER-17 alias ladder refresh on zpyoung/fix-pi-watch
+- **Why deferred**: skills/pi-dev/reference/models.md has a hand-copied pi --list-models table for each provider (openai-codex, openai, anthropic, google, github-copilot). It's a pre-1.x snapshot that lacks GPT-6, Claude 5.x and Grok 4.x and still lists grok-code-fast-1. Either regenerate it from the pi-ai catalog or replace it with a pointer to pi --list-models <pattern>. Left out of the DEFER-17 ladder refresh because it's a doc restructure, not a ladder change.
+- **Estimated effort**: S
+- **Priority**: P3
 

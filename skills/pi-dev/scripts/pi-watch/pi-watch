@@ -17,7 +17,7 @@
 #   4. own dir                          — last-ditch, if it carries the code
 #
 # `pi-watch --where` prints the resolved source + dir (and whether the resolved
-# copy has the GPT-5.6 alias ladder) and exits — use it to diagnose "which
+# copy has the GPT-6 alias ladder) and exits — use it to diagnose "which
 # version am I actually running".
 set -euo pipefail
 
@@ -80,10 +80,10 @@ fi
 # --- diagnostics: pi-watch --where -------------------------------------------
 for a in "$@"; do
     if [ "$a" = "--where" ]; then
-        if grep -q "gpt-5.6" "$PLUGIN_DIR/pi-watch.mjs" 2>/dev/null; then
-            ladder="has gpt-5.6 alias ladder"
+        if grep -q "gpt-6.1-sol" "$PLUGIN_DIR/pi-watch.mjs" 2>/dev/null; then
+            ladder="has gpt-6 alias ladder"
         else
-            ladder="pre-5.6 alias ladder (stale)"
+            ladder="pre-gpt-6 alias ladder (stale)"
         fi
         echo "source : $SOURCE_KIND"
         echo "dir    : $PLUGIN_DIR"

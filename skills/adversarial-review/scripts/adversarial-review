@@ -851,11 +851,11 @@ def run_prepass(
 # within each family; the ladder is walked in this order once the author's family
 # is filtered out.
 ALIAS_LADDER = (
-    ("codex", "openai", "openai-codex/gpt-5.6-sol", "high"),
-    ("gemini", "google", "google/gemini-3.2-pro-preview", "high"),
+    ("codex", "openai", "openai-codex/gpt-6.1-sol", "high"),
+    ("gemini", "google", "google/gemini-3.1-pro-preview", "high"),
     ("terra", "openai", "openai-codex/gpt-5.6-terra", "high"),
-    ("opus", "anthropic", "anthropic/claude-opus-4-7", "high"),
-    ("sonnet", "anthropic", "anthropic/claude-sonnet-4-7", "high"),
+    ("opus", "anthropic", "anthropic/claude-opus-5-5", "high"),
+    ("sonnet", "anthropic", "anthropic/claude-sonnet-5-5", "high"),
     ("flash", "google", "google/gemini-flash-latest", "medium"),
 )
 
