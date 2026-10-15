@@ -43,7 +43,7 @@ def _flag(prop: str, value: str) -> Optional[str]:
         or prop.startswith(("grid-template", "grid-column", "grid-row"))
     ):
         return GRID_HINT
-    if prop == "float" and value in ("left", "right"):
+    if prop == "float" and value in ("left", "right", "inline-start", "inline-end"):
         return WIDTH_HINT
     if prop in ("columns", "column-count"):
         return WIDTH_HINT

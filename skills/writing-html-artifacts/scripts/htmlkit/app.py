@@ -245,7 +245,8 @@ def build_app(
         raise BuildError(f"mode must be offline or connected, got {settings['mode']!r}")
     if not isinstance(settings["tier_signal"], (str, type(None))):
         raise BuildError(f"{APP_FILE} tier_signal must be a string")
-    settings["layout"] = validate_layout(settings["layout"])
+    layout_origin = "--layout flag" if layout else "quirk-app.json key 'layout'"
+    settings["layout"] = validate_layout(settings["layout"], origin=layout_origin)
 
     try:
         template, skipped = find_template(settings["template"], template_roots(skill, project_dir, user), skill_dir=skill)

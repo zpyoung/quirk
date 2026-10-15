@@ -62,6 +62,8 @@ def test_grid_declarations_fail_and_name_q_grid(decl: str) -> None:
     [
         "float: left",
         "float: right",
+        "float: inline-start",
+        "float: inline-end",
         "columns: 3",
         "column-count: 2",
         "width: 400px",
