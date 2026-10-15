@@ -39,7 +39,7 @@ Technologies: Python 3.11+ stdlib (`html.parser`, `re`, `json`), plain CSS (grid
 - `REQUIRED_PLACEHOLDERS` `:24`, `_SLOT_PLACEHOLDER` `:25`, `_tier1_problems` `:226` (slot/placeholder bidirectional rule `:264-269`). Add `{{regions}}` and `{{layout}}` as optional known placeholders.
 
 ### `S/scripts/htmlkit/checks.py`
-- `run_checks` `:390-444`; hard-coded check sequence. Add `layout` after `kit` (`:436`). Signature gains `layout_source: Optional[tuple[str, str]] = None`, mirroring `kit_source`.
+- `run_checks` `:390-444`; hard-coded check sequence. Add `layout` after `kit` (`:436`). The signature is unchanged; the check reads the built page.
 - `_Scanner` `:165`, `_scan_page` `:212`: reuse for tokenizing; `page.css` holds every non-verified `<style>` body.
 
 ### `S/scripts/htmlkit/kitcheck.py`
@@ -159,7 +159,7 @@ def check_app_sources(paths: list[Path], *, root: Path) -> list[dict]
 
 - Tier 1 input: the built page, the same `html` string `run_checks` already receives. Scope: only `<style>` elements and `style=""` attributes that are descendants of the `.q-page` wrapper (slot content). `<head>` styles (tokens, base, layout, kit, skeleton) are never inspected. A page with no `.q-page` wrapper (the companion) yields no findings. `detail` cites built-page line numbers.
 - Tier 2 input: file paths under the app's `src/`. Scope: `src/**/*.css` except `theme.css`, `quirk-tokens.css`, `quirk-layout.css`; and `style={{…}}` objects in `src/**/*.tsx` for the camel-cased equivalents. `detail` cites `<relative path> line N`.
-- Flags any of: `display: grid | inline-grid`; any `grid-template*`, `grid`, `grid-column*`, `grid-row*`, `grid-area`; `float: left | right`; `columns` / `column-count`; `width`, `min-width`, `max-width` with an absolute length ≥ 400px or ≥ 25rem/em. Declarations inside `@media`/`@container` blocks are scanned like top-level ones. Values using `%`, `calc()`, `var()`, `min()`, `max()`, `clamp()` or viewport units are never flagged.
+- Flags any of: `display: grid | inline-grid`; any `grid-template*`, `grid`, `grid-column*`, `grid-row*`, `grid-area`; `float: left | right`; `columns` / `column-count`; `width`, `min-width`, `max-width` with an absolute length ≥ 400px or ≥ 25rem/em. Declarations inside `@media`/`@container` blocks are scanned like top-level ones. `width`, `min-width` and `max-width` values using `%`, `calc()`, `var()`, `min()`, `max()`, `clamp()` or viewport units are never flagged; the grid, float and column properties are flagged whatever their value.
 - Detail names the property and the element to use: grid properties → "use q-grid (and q-panel for titled panels)"; widths, floats and columns → "page shapes set widths; set \"layout\" in the header".
 - Errors: `check_html` never raises; CSS it cannot tokenize is skipped declaration by declaration. `check_app_sources` reports an unreadable file as a failure `{"check":"layout","detail":"cannot read <path>"}` and continues.
 - Wiring: `run_checks` runs the layout check for `tier == 1` after `kit` with no new parameter; `check_artifact` inherits it. `app.py` calls `check_app_sources` after the Vite build and appends its failures to the build's checks. Failure → exit 1, like every static check.
@@ -223,8 +223,10 @@ SCHEMA: quirk-app.json addition
 Back-links: [data flow](logic.md#data-flow), [success criteria](logic.md#success-criteria).
 
 ```
-SCHEMA: built page header (header.py), addition
+SCHEMA: built page header (header.py), additions
 "layout": one of LAYOUTS
+"layout_defaulted": true    (only when no source or earlier build named a layout)
+"legacy_summary": true      (only under the migration exemption in Cross-cutting)
 ```
 
 ```
