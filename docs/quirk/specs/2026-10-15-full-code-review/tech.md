@@ -71,7 +71,7 @@ Back-links: [Approach](logic.md#approach), [Forge support](logic.md#forge-suppor
 | `…/scripts/` (11 `.py` + 1 `.sh`) | `SK/scripts/` | See per-file notes below; drop `DEFAULT_HOST` (SRC `prepare_diff.py:20`, used at 49) entirely — host comes only from the remote, `--host`, or forge detection |
 | `SRC/shared/mr/review_memory.py` (930) | `SK/scripts/review_memory.py` | Imports become sibling imports |
 | `…/assets/*` | `SK/assets/` | Rename storage keys and handoff delimiter |
-| `…/tests/*.py` (11 files, 334 tests) | `Q/tests/full_code_review/` | Replace each file's `sys.path.insert(…"..","scripts")` with the conftest path; `test_review_memory.py:9` import path changes |
+| `…/tests/*.py` (11 files, 418 collected tests including parametrized cases) | `Q/tests/full_code_review/` | Replace each file's `sys.path.insert(…"..","scripts")` with the conftest path; `test_review_memory.py:9` import path changes |
 
 ### Symbols that move into `forge/gitlab.py`
 
@@ -129,6 +129,25 @@ class Forge(Protocol):
     complete(number: int, action: Literal["approve","request-changes","comment-only"], head_sha: str, body: str) -> None
     cleanup_commands(number: int, staged: StageResult) -> list[str]
 ```
+
+SCHEMA (dataclasses in `forge/__init__.py`; fields derived from the structures the ported scripts already pass around):
+```
+User{id: str, username: str, emails: list[str]}
+ChangedFile{old_path: str, new_path: str, status: "added"|"modified"|"deleted"|"renamed", diff: str | None, too_large: bool, binary: bool}
+Change{number: int, title: str, description: str, web_url: str, state: "open"|"closed"|"merged",
+       author: User, source_branch: str, target_branch: str, refs: {base, start, head},
+       files: list[ChangedFile], file_list_complete: bool, is_fork: bool, author_trusted: bool | None}
+Anchor{path: str, line: int, side: "new"|"old", old_path: str | None, start_line: int | None}
+Note{id: str, author: User, body: str, url: str}
+Thread{id: str, resolved: bool, path: str | None, line: int | None, notes: list[Note]}
+Receipt{thread_id: str, note_id: str, url: str, inline: bool, head_sha: str}
+StagedInline{finding_id: str, fingerprint: str | None, body: str, anchor: Anchor}
+StagedReply{finding_id: str, fingerprint: str | None, body: str, thread_id: str}
+PendingItem{id: str, body: str}
+StageResult{review_id: str | None, created: list[{id, kind, finding_id, fingerprint, body_sha256}],
+            moved_to_overview: list[str], warnings: list[str]}
+```
+`StageResult` is embedded in `staged-review.json` alongside the keys SRC `post_reviewer_review.py:534-549` already writes.
 
 Rules every adapter follows:
 
@@ -484,12 +503,15 @@ Back-links: [Approach](logic.md#approach), [Done when](logic.md#done-when).
 
 Each step is one PR on a stack, merged in order; each leaves `python3 -m pytest -q` green.
 
-1. **Verbatim port.** Copy SRCS (minus `provenance.md`, `repo-guidance/`, `agents/`) and `SRC/shared/mr/review_memory.py` into `SK/`, rewire imports and test paths into `Q/tests/full_code_review/`, make all 334 tests pass on Python 3.9 and 3.12 without Pygments. No behavior or naming changes. Large but mechanical; the PR description says so.
-2. **GitLab extraction.** Create `forge/__init__.py` and `forge/gitlab.py`; move the symbols listed under "Symbols that move into `forge/gitlab.py`" behind module-level shims. Refactor-only: no test edits beyond import paths.
-3. **Neutralize and rename.** Context/report renames (`mr` → `change`, `iid` → `number`, `meta.target` values), lens IDs and `lenses/` front matter, generic risk rubric, marker/storage/ledger names, drop `DEFAULT_HOST`, `detect_forge`, `--forge`, `--no-escalate`, `resolve_policy.py` with packs and `REVIEW.md`, generated-file exclusion, incomplete reports, severity floor, model fallback, mixed-authorship seat, probe trust rule, SKILL.md rewrite to ≤ 500 lines, `test_no_org_names.py`. Tests retargeted at the adapter where useful. May be split into 3a (renames + IDs + markers) and 3b (policy + report contract) if the diff exceeds ~1,500 lines.
-4. **GitHub adapter.** `forge/github.py` and `test_forge_github.py`, posting.md GitHub sections, the `addPullRequestReviewThreadReply` check (Ask item). Highest priority after step 3, because the first user is on GitHub.
-5. **Measurement and extras.** `review_memory.py stats`, `add_guidance.py` targets, cross-family verification, cross-repo sibling scan and search hook, example pack, smoke corpus and `smoke_check.py`.
-6. **GitLab polish.** Content-Type header on writes and the `too_large`/`collapsed` overview fallback. Lowest priority; may ship with step 5.
+1. **Verbatim port.** Copy SRCS (minus `provenance.md`, `repo-guidance/`) and `SRC/shared/mr/review_memory.py` into `SK/`, rewire imports and test paths into `Q/tests/full_code_review/`, make all 418 tests pass on Python 3.9, 3.11, and 3.12. No behavior or naming changes. Large but mechanical; the PR description says so.
+2. **GitLab extraction.** Create `forge/__init__.py` (Protocol and types) and `forge/gitlab.py` with `GitLabForge` implementing the full Protocol; move the symbols listed under "Symbols that move into `forge/gitlab.py`" into it, leaving module-level shims in the original scripts that delegate to `GitLabForge`. Refactor-only: no test edits.
+3. **Neutralize and rename**, as two PRs.
+   - **3a, forge dispatch and vocabulary:** `detect_forge` and `--forge`; scripts obtain a `Forge` from `detect_forge` and call its methods; shims removed and tests retargeted to patch `forge.gitlab._api` / `GitLabForge`; drop `DEFAULT_HOST`; context and report vocabulary (`mr` → `change`, `iid` → `number`, `meta.target`, `meta.forge`, `schema_version`); `change_label`.
+   - **3b, identity and lenses:** lens IDs, `lenses/` front matter and org-text strip, generic risk rubric, marker/storage/ledger/ref names, `--no-escalate` and fallback rule text, `discover_guidance.py` loses `--sakura-guidance-dir` and its `"sakura"` output key, `add_guidance.py` gets its final `--target` interface, SKILL.md rewrite to ≤ 500 lines, `test_no_org_names.py`.
+4. **Policy and report contract.** `resolve_policy.py` with packs and `REVIEW.md`, `policy.guidance_files` populated from every pack's and the project pack's `guidance/*.md` and passed to the conventions lens, generated-file exclusion, incomplete reports, `run.verification` and the other new `run.*` keys, severity floor, mixed-authorship seat, probe trust rule.
+5. **GitHub adapter.** `forge/github.py` and `test_forge_github.py`, posting.md GitHub sections, the `addPullRequestReviewThreadReply` check (Ask item). Highest priority after step 4, because the first user is on GitHub.
+6. **Measurement and extras.** `review_memory.py stats`, cross-family verification, cross-repo sibling scan and search hook, example pack, smoke corpus and `smoke_check.py`.
+7. **GitLab polish.** Content-Type header on writes and the `too_large`/`collapsed` overview fallback. Lowest priority; may ship with step 6.
 
 ## DO-NOT-CHANGE fences
 
@@ -512,7 +534,7 @@ Back-links: [Decisions Locked](logic.md#decisions-locked).
 - Read reviewer-seat policy from the target-branch ref.
 - Mark a report incomplete when any selected lens fails; record actual models in `run.models`.
 - Keep posting human-gated: no code path posts without the explicit approval step SKILL.md describes, and headless runs stop after the report.
-- Keep tests runnable without Pygments, PyYAML, `gh`, or `glab` installed (CI installs only pytest).
+- Keep tests runnable with only pytest installed (which brings Pygments): no PyYAML, `gh`, or `glab`, and no network.
 
 **Ask (stop and escalate)**
 - GitHub support replies cannot attach to a pending review via `addPullRequestReviewThreadReply` → parity decision affected.
@@ -541,7 +563,7 @@ Back-links: [Approach](logic.md#approach), [Done when](logic.md#done-when).
 
 **Extraction phase (refactor-only).** After the verbatim port is green under quirk's pytest, move GitLab code into `forge/gitlab.py` while every ported test passes with no edits beyond import paths. Each original module keeps thin module-level names (`prepare_diff.glab_mr_changes`, `post_reviewer_review._api`, `post_reviewer_review._request_changes`, `review_memory.fetch_discussions`, `borrow_review_source._clone_project`, `_run` signatures) that the scripts look up at call time, because the tests replace those attributes directly (e.g. `test_post_reviewer_review.py:717`, `test_prepare_diff.py` main-level fakes). The rename phase may then retarget tests at the adapter.
 
-**Ported tests.** All 334 tests in `Q/tests/full_code_review/` pass under `python3 -m pytest -q` with Python 3.9 and 3.12, without Pygments. Tests that need Pygments skip when it is absent.
+**Ported tests.** All 418 collected tests in `Q/tests/full_code_review/` pass under `python3 -m pytest -q` on Python 3.9 and 3.12. pytest ≥ 8.4 depends on Pygments, so CI always has it; the built-in-lexer fallback stays covered by the ported `test_highlight.py` tests that monkeypatch the Pygments lexers away.
 
 **New test files.**
 
