@@ -5,6 +5,11 @@ calendar-based (**CalVer**, `YYYY.M.D` unpadded); the `releasing-quirk` skill
 stamps and prepends each entry (newest on top). Since the version no longer encodes
 compatibility, breaking changes are called out in a `### ⚠️ BREAKING` subsection.
 
+## 2026.10.15
+
+### Changes
+- fix(pi-dev): port pi-watch to pi 1.x, fail on provider errors, refresh alias ladders (#48)
+
 ## 2026.10.12.1
 
 ### Changes
