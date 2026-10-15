@@ -1,0 +1,293 @@
+{
+  "meta": {
+    "target": "mr",
+    "iid": 123,
+    "project": "sample/project",
+    "seat": "author",
+    "head_sha": "abc123abc123abc123abc123abc123abc123abcd",
+    "title": "Sample combined review report",
+    "verdict": "Fix, then merge",
+    "mr_state": "Open · review-mr-memory → main",
+    "standfirst_md": "The feature is coherent and its security boundary is genuinely well built — untrusted GitLab note text never drives a posting decision, and the flow fails closed before any mutation. One defect blocks it: `--repo` is never threaded to the `reconcile` and `check` subcommands, so memory breaks outright for every branch and local author-seat review. The suite cannot see it because every test stays in MR mode, which is also the largest of the coverage gaps below.",
+    "ticket": "DEMO-1"
+  },
+  "run": {
+    "dimensions_run": [
+      "sakura:risk",
+      "sakura:correctness",
+      "sakura:safety",
+      "sakura:db",
+      "sakura:cross-repo",
+      "sakura:conventions",
+      "sakura:comments",
+      "sakura:observability",
+      "sakura:resilience",
+      "sakura:test-adequacy",
+      "sakura:tests"
+    ],
+    "dimensions_skipped": [
+      {
+        "name": "sakura:adversarial",
+        "why": "MR !19 has an empty description, so `has_description` is false and there are no claims to verify against the code."
+      },
+      {
+        "name": "sakura:test-coverage",
+        "why": "Run condition requires `test_files` to be empty; this MR adds three test files, so `sakura:test-adequacy` and `sakura:tests` own that ground instead."
+      }
+    ],
+    "diff_size": "13 files, 2386 lines",
+    "coverage": "all 13 changed files reviewed",
+    "guidance": [
+      "repo CLAUDE.md (sakura contributing guide)",
+      "sakura-tracked _global.md"
+    ],
+    "source_access": "author-worktree",
+    "mutation_consent": false,
+    "notes_md": "⚠️ **Large MR** — 13 files, 2386 lines changed. This exceeds the skill's own hard-block threshold of 2000 changed lines; the review proceeded on explicit instruction to review it as a single MR. Depth was held up rather than down to compensate: every specialist ran at the deepest verification tier regardless of the Low risk rating, so no Must/Should finding rests on the diff alone.\n\nAll eleven applicable dimensions returned schema-valid results; none failed or was dropped. Verification reads went against this worktree rather than `glab api ...?ref=<head>`, which is sound here because `git rev-parse HEAD` equals `refs.head` (`24727f69`) and the tree was clean for the whole run.\n\nTwo `sakura:cross-repo` findings land in files **outside this MR's diff** (`addressing-mr-review-comments/scripts/fetch_mr_feedback.py`, `mine-mr-review-feedback/scripts/common.py`). They are real consequences of this change, but GitLab cannot anchor an inline comment to a file the MR does not touch."
+  },
+  "risk": {
+    "level": "Low",
+    "metrics": {
+      "likelihood": {
+        "level": "Occasional",
+        "tone": "warn",
+        "note_md": "A false-positive fingerprint match in the new `suppress_post` branch would drop a legitimate finding with no visible error."
+      },
+      "impact": {
+        "level": "No Incident",
+        "tone": "good",
+        "note_md": "Personal plugin tooling; worst case is a duplicate or missing review comment."
+      },
+      "blast_radius": {
+        "level": "Narrow",
+        "tone": "good",
+        "note_md": "Scoped to the user's own review workflow — no merchant-facing path."
+      },
+      "detection": {
+        "level": "Moderate",
+        "tone": "warn",
+        "note_md": "Suppressions are recorded in the staged state before any mutation, but `stage()` still reports success when the ledger save was refused."
+      },
+      "rollback": {
+        "level": "Clean",
+        "tone": "good",
+        "note_md": "Revert the MR; the ledger is local state under `~/.local/state` and is never read by anything else."
+      }
+    },
+    "mitigations_md": "The design already carries its own best mitigation: `stage` records every suppression's `reason` and `thread_url` in the staged state *before* `publish --confirm` touches GitLab, and `_prepare_memory_report` raises before any draft is created when snapshot validation or the discussion fetch fails. That makes the feature fail closed and every suppression visible pre-mutation, which is why no additional risk-reduction technique is recommended. What would move the rating is narrowing the likelihood term specifically: the fingerprint collision test and the binding-mismatch test below attack exactly the false-suppression path that drives it.",
+    "verbatim_md": "**Risk: Low**\n\n- Severity: No Incident - personal Claude Code plugin (sakura, not kai/org-wide) that mutates GitLab MR review notes on the user's own reviews. `post_reviewer_review.py` does hit the real GitLab API (draft notes, publish, approve/request-changes), but the blast radius is the user's own review workflow - worst case is a duplicate or a missing review comment, never a merchant-facing incident.\n- Likelihood: Occasional - the new `_plan()` `suppress_post` branch silently omits a finding from posting when `review_memory.reconcile()` matches its fingerprint against a live discussion marker; a false-positive match on real GitLab note bodies would drop a legitimate finding with no visible error. The 78 new tests exercise the known edge cases (author-identity check, late-duplicate block before bulk publish, snapshot-binding validation) but only against `FakeGitLab`, not live note bodies.\n- Recommendation: none - the natural mitigation (log-only mode) is already structural: `stage` records `omitted[].reason`/`thread_url` in the staged state before `publish --confirm` touches GitLab, and `_prepare_memory_report` raises `ReviewError` before any draft is created on snapshot-validation or discussion-fetch failure, so the flow fails closed and every suppression is visible pre-mutation. Splitting isn't warranted - one cohesive feature (module + its two call sites + tests) at No Incident severity.\n\nSupporting checks: no revert found on `main`; no high-risk file list in this repo's `CLAUDE.md`; the zero-approvals factor does not apply (MR !19 is `state: opened`, not merged).",
+    "caveats": [
+      {
+        "title": "The fail-closed claim is proven only against a fake",
+        "body_md": "The 78 new tests exercise the known edge cases — author-identity check, late-duplicate block before bulk publish, snapshot binding — but entirely against `FakeGitLab`, never against real note bodies. The identity gate itself is sound on inspection; what is untested is its behaviour on live data."
+      }
+    ]
+  },
+  "findings": [
+    {
+      "severity": "Must fix",
+      "dimensions": [
+        "sakura:correctness"
+      ],
+      "file": "plugins/sakura/shared/mr/review_memory.py",
+      "line": "857",
+      "title": "`--repo` is never threaded to reconcile/check, breaking branch and local memory",
+      "body_md": "`load` is the only subcommand that accepts `--repo`. `reconcile` and `check` do not, so `validate_snapshot`'s `repo` parameter falls back to `\".\"` — the process's cwd. SKILL.md invokes `load` with `--repo \"$REVIEW_SOURCE_ROOT\"` but invokes `reconcile`/`check` through a path relative to the skill's own directory, with no `--repo` and no `cd`.\n\nFor `branch` and `local` targets, `_target_identity` calls `_repo_identity(repo)`, which reads `git config --get remote.origin.url` at that path. The identity computed during `reconcile` is therefore derived from the skill directory rather than the repo under review, so it disagrees with the identity `load` computed, and `validate_snapshot` raises `ValueError(\"memory snapshot identity does not match review context\")`. **The memory feature fails for every branch and local author-seat review.** `check_plan` (line 816) hardcodes `validate_snapshot(snapshot, context, \".\")` and has the same defect, so the author `check` step documented in `posting.md` fails the same way.\n\nMR-target reviews are unaffected because `_target_identity` never touches git when `mr.iid` is present — which is also why the test suite, which exercises only the MR path, cannot see this.",
+      "recommendation_md": "Add `--repo` to both subparsers and thread it through both functions, mirroring `load`:\n\n```diff\n--- a/plugins/sakura/shared/mr/review_memory.py\n+++ b/plugins/sakura/shared/mr/review_memory.py\n@@ -580,3 +580,3 @@\n-def reconcile(report: dict, context: dict, snapshot: dict) -> dict:\n-    validate_snapshot(snapshot, context)\n+def reconcile(report: dict, context: dict, snapshot: dict, repo: str = \".\") -> dict:\n+    validate_snapshot(snapshot, context, repo)\n     _validate_report_binding(report, snapshot)\n@@ -816,3 +816,3 @@\n-def check_plan(report: dict, context: dict, snapshot: dict) -> dict:\n+def check_plan(report: dict, context: dict, snapshot: dict, repo: str = \".\") -> dict:\n     \"\"\"Build the author-delivery suppression plan without changing any input.\"\"\"\n-    identity_warnings = validate_snapshot(snapshot, context, \".\")\n+    identity_warnings = validate_snapshot(snapshot, context, repo)\n@@ -858,2 +858,3 @@\n     rec.add_argument(\"--report\", required=True)\n+    rec.add_argument(\"--repo\", default=\".\")\n     rec.add_argument(\"--context\", required=True)\n@@ -863,1 +864,2 @@\n     chk.add_argument(\"--report\", required=True)\n+    chk.add_argument(\"--repo\", default=\".\")\n```\n\nPass `args.repo` at both `main()` dispatch sites, and update the `reconcile` invocation in SKILL.md and the `check` invocation in `references/posting.md` to pass `--repo \"$REVIEW_SOURCE_ROOT\"`.",
+      "verified": true,
+      "assumptions": [
+        "Reproduced directly: load_snapshot() against a repo whose origin is group/repo-a, then reconcile() invoked with cwd in an unrelated repo with origin group/repo-b, raises ValueError('memory snapshot identity does not match review context').",
+        "Masked whenever the skill happens to run from inside the same repo being reviewed, since both _repo_identity calls then resolve identically."
+      ],
+      "evidence": "reproduced locally",
+      "aside_md": "This and the untested branch/local identity path below are the same blind spot seen from two directions: the bug exists precisely because no test ever leaves MR mode.",
+      "memory": {
+        "fingerprint": "4ccc95eb6dc2f6126ac5cc702e66acd89367d56d11de05c82a43a400d29bc2ee",
+        "anchor_hash": "2eec312be42f9e566db07b6193a84349f75c495b318f1b3f1810a78fa4715e32",
+        "dimension": "sakura:correctness",
+        "state": "carried",
+        "match": "exact",
+        "disposition": "later",
+        "suppress_post": false,
+        "note": "Agreed last round; deferred behind the branch-target work.",
+        "thread": {
+          "discussion_id": "d41d8cd9",
+          "url": "https://example.invalid/mr/123#note_1",
+          "resolved": false,
+          "replies": [
+            {
+              "author": "reviewer",
+              "body": "Still reproduces on my worktree."
+            }
+          ]
+        },
+        "candidates": [],
+        "human_context": [
+          {
+            "title": "Prior review raised the same cwd assumption",
+            "author": "reviewer",
+            "url": "https://example.invalid/mr/120#note_9",
+            "note_id": 9,
+            "discussion_id": "d9a1",
+            "resolved": true
+          }
+        ]
+      },
+      "impact": "Branch and local reviews silently lose their memory, so every prior finding comes back as new and remembered decisions are dropped."
+    },
+    {
+      "severity": "Should fix",
+      "dimensions": [
+        "sakura:db",
+        "sakura:resilience"
+      ],
+      "file": "plugins/sakura/shared/mr/review_memory.py",
+      "line": "94-112",
+      "title": "One global lock plus a full-decode prune on every ledger save",
+      "body_md": "`_state_dir()` returns a single flat directory for every review target, and `_locked()` takes an exclusive `fcntl.flock` on one shared `.lock` file inside it with no timeout. Both `load_snapshot()` (306) and `commit_report()` (761) acquire that same global lock, so two concurrent reviews of unrelated MRs serialize on one critical section despite touching entirely different ledger files.\n\nInside that lock, `commit_report()` calls `_prune(directory, time.time())` (line 800), which globs every ledger file for every target on the machine and has `_read_record()` fully JSON-decode and validate each one — including looping over every finding in every snapshot — just to read one `updated_at` timestamp. That is O(all historical targets) synchronous work re-run on every save, twice per review (stage and publish), and every other review waits behind it.",
+      "recommendation_md": "Two independent changes. Scope the lock per target, and pass `key` from both call sites:\n\n```diff\n--- a/plugins/sakura/shared/mr/review_memory.py\n+++ b/plugins/sakura/shared/mr/review_memory.py\n@@ -104,4 +104,4 @@\n-def _locked(directory: Path):\n+def _locked(directory: Path, key: str):\n     directory.mkdir(parents=True, exist_ok=True)\n-    lock_path = directory / \".lock\"\n+    lock_path = directory / (\"%s.lock\" % key)\n     with open(lock_path, \"a+\", encoding=\"utf-8\") as lock:\n```\n\nThen make pruning cheap — stat the mtime instead of decoding JSON — and throttle it behind a marker file so it runs at most once a day, outside any single target's critical section:\n\n```diff\n--- a/plugins/sakura/shared/mr/review_memory.py\n+++ b/plugins/sakura/shared/mr/review_memory.py\n@@ -225,11 +225,7 @@\n def _prune(directory: Path, now: float) -> None:\n     cutoff = now - _RETENTION_SECONDS\n     for path in directory.glob(\"*.json\"):\n         try:\n-            data, _ = _read_record(path)\n-            if data is None:\n-                continue\n-            touched = float(data.get(\"updated_at\", data[\"snapshot\"][\"started_at\"]))\n-            if touched < cutoff:\n+            if path.stat().st_mtime < cutoff:\n                 path.unlink()\n-        except (OSError, ValueError, TypeError):\n+        except OSError:\n             continue\n```",
+      "verified": true,
+      "assumptions": [
+        "Assumes ledger volume within the rolling 90-day window can reach the low hundreds for an active user; for a very light user this would be a Nit.",
+        "SKILL.md confirms load/reconcile/save/check run once each per coordinator process, so the contention is cross-run rather than intra-run."
+      ],
+      "memory": {
+        "fingerprint": "9962527b9fad9f834a6353779b77ea59984a2133889ea997466ab0f0e48f9033",
+        "anchor_hash": "7a107087068c472bdb2cae844eb7b8f950db8f8156f6cdb78b46ec3448aad311",
+        "dimension": "sakura:db",
+        "state": "new",
+        "match": null,
+        "disposition": "none",
+        "suppress_post": false,
+        "note": "",
+        "thread": null,
+        "candidates": [],
+        "human_context": []
+      },
+      "impact": "Two unrelated reviews running at once block each other on every ledger save, and each save gets slower as the ledger grows."
+    },
+    {
+      "severity": "Nit",
+      "dimensions": [
+        "sakura:comments",
+        "sakura:conventions"
+      ],
+      "file": "plugins/sakura/shared/mr/review_memory.py",
+      "line": "294",
+      "title": "`load_snapshot` has no docstring and two untyped parameters",
+      "body_md": "`load_snapshot` is public with a non-trivial invalidation contract — four distinct staleness reasons, file locking, an optional discussion fetch — and has no docstring. Its `dimensions=()` and `guidance=()` parameters also carry no annotations, though the rest of the module, including this function's other parameters, is fully typed.",
+      "recommendation_md": "```diff\n--- a/plugins/sakura/shared/mr/review_memory.py\n+++ b/plugins/sakura/shared/mr/review_memory.py\n@@ -294,2 +294,6 @@\n-def load_snapshot(context: dict, repo: str = \".\", dimensions=(), guidance=(), fresh: bool = False) -> dict:\n+def load_snapshot(context: dict, repo: str = \".\", dimensions: Sequence[str] = (),\n+                  guidance: Sequence[str] = (), fresh: bool = False) -> dict:\n+    \"\"\"Load this review target's persisted memory as a fresh, unsaved snapshot, invalidating\n+    prior findings when the target, base SHA, dimensions or guidance changed, or when `fresh`\n+    is requested.\"\"\"\n     identity, warnings = _target_identity(context, repo)\n```",
+      "verified": true,
+      "assumptions": [
+        "Kept at Nit rather than Should fix: load_snapshot is reached only via this module's own CLI dispatch and the test suite; post_reviewer_review.py never imports it directly."
+      ],
+      "memory": {
+        "fingerprint": "480caeae236ef7e59160dbab9f5a994b38c211d781a8ba5dcfd15fdbd454d969",
+        "anchor_hash": "fe20ee0eac454b68d12f3d12770194702a56cb22de2af8cae82fbbe19789000f",
+        "dimension": "sakura:comments",
+        "state": "possible-regression",
+        "match": "candidate",
+        "disposition": "none",
+        "suppress_post": false,
+        "note": "",
+        "thread": {
+          "discussion_id": "b6d767d2",
+          "url": "https://example.invalid/mr/123#note_4",
+          "resolved": true,
+          "replies": []
+        },
+        "candidates": [
+          {
+            "title": "Closed last round as a docstring nit",
+            "author": "reviewer",
+            "url": "https://example.invalid/mr/120#note_3"
+          }
+        ],
+        "human_context": []
+      },
+      "impact": "Callers have to read the body to learn when memory is discarded, which is the contract most likely to be broken by a later edit."
+    }
+  ],
+  "assumptions": [
+    "The Step 2 hard block (2386 changed lines > 2000) was overridden on explicit user instruction to review as a single MR; a split into the suggested A/B/C stack would have given each slice a warn-level rather than block-level review.",
+    "Every specialist ran at the deepest verification tier as a conservative floor, because `sakura:risk` ran in parallel with the fan-out rather than strictly before it. The rating came back Low, so the applied depth exceeded what the rating required — it can only have over-verified, never under-verified.",
+    "Findings were verified by reading this worktree at `refs.head` (`24727f694eb15238c6fbcbfb38e34db56c83e92f`) rather than through `glab api` at that ref, justified by `git rev-parse HEAD` matching `refs.head` with a clean tree throughout.",
+    "The mutation probe was offered and declined, so every test-dimension finding rests on static reasoning and reading the suite rather than on a surviving mutant. Baseline was green beforehand (171 passed in 10.8s).",
+    "`sakura:adversarial` did not run because MR !19 has no description; no claim in the MR was checked against the code.",
+    "No per-repo sakura guidance file exists for `zyoung--sakura` yet, and the target repo has no `.claude/skills`, `.claude/rules`, `AGENTS.md` or `CONVENTIONS.md`, so conventions were judged against the repo `CLAUDE.md` and the bundled `_global.md` only.",
+    "The repo configures no linter or formatter (no ruff/black/flake8, no lint CI job), so style-level findings that a formatter would normally own were kept rather than dropped as tool-enforced noise.",
+    "`sakura:cross-repo` reasoned from local code for the two sibling-skill findings; neither sibling skill was run end-to-end against an MR reviewed by this feature."
+  ],
+  "process_notes": [
+    {
+      "title": "Reviewing the skill with an older copy of itself",
+      "body_md": "The review ran from the installed plugin cache at v1.9.2, which predates this branch. That is deliberate: the renderer, poster and checklists under review are not the ones running the review, so a defect in the new code cannot mask itself."
+    },
+    {
+      "title": "Two findings cannot be posted inline",
+      "body_md": "The `fetch_mr_feedback.py` and `mine-mr-review-feedback/common.py` findings sit outside the diff. GitLab rejects a `position` for a file the MR does not touch, so these need either a plain MR comment or a follow-up issue."
+    }
+  ],
+  "mutation_probe": {
+    "mutants": 2,
+    "killed": 1,
+    "survived": 1,
+    "probes": [
+      {
+        "result": "killed",
+        "where": "a.py:1",
+        "mutation_md": "flipped a guard",
+        "test": "pytest -k a",
+        "means_md": "the guard is covered"
+      },
+      {
+        "result": "survived",
+        "where": "b.py:2",
+        "mutation_md": "dropped a branch",
+        "test": "pytest -k b",
+        "means_md": "no test reaches the branch"
+      }
+    ]
+  },
+  "memory": {
+    "warnings": [
+      "One prior fingerprint could not be matched to a current finding."
+    ],
+    "snapshot": {
+      "schemaVersion": 1,
+      "target_key": "mr:123",
+      "seat": "author",
+      "identity": {
+        "project": "sample/project",
+        "iid": 123
+      },
+      "base_sha": "0000000000000000000000000000000000000000",
+      "head_sha": "abc123abc123abc123abc123abc123abc123abcd",
+      "started_at": 1789603200,
+      "dimensions": [
+        "sakura:correctness",
+        "sakura:db",
+        "sakura:comments"
+      ],
+      "findings": [],
+      "discussions": [],
+      "discussions_available": true,
+      "file_hashes": {},
+      "unchanged_files": [],
+      "guidance_hash": null,
+      "invalidation_reason": null,
+      "warnings": []
+    },
+    "appears_fixed": [
+      {
+        "title": "Ledger prune ran on every save",
+        "file": "plugins/sakura/shared/mr/review_memory.py",
+        "line": 94,
+        "body_md": "Raised last round; no finding reproduced it this run.",
+        "thread": {
+          "url": "https://example.invalid/mr/123#note_2"
+        }
+      }
+    ]
+  }
+}

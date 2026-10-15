@@ -28,6 +28,8 @@ export SRCS=/Users/zpyoung/.claude/plugins/cache/sakura/sakura/1.9.7/skills/revi
 export SRCSH=/Users/zpyoung/.claude/plugins/cache/sakura/sakura/1.9.7/shared/mr
 export V39="${V39:-$(mktemp -d)/venv39}"
 [ -x "$V39/bin/python" ] || { python3.9 -m venv "$V39" && "$V39/bin/pip" install -q pytest; }
+export V312="${V312:-$(mktemp -d)/venv312}"
+[ -x "$V312/bin/python" ] || { python3.12 -m venv "$V312" && "$V312/bin/pip" install -q pytest; }
 ```
 
 `SK` = `skills/full-code-review`, `T` = `tests/full_code_review` (prose shorthand only).
@@ -39,7 +41,7 @@ export V39="${V39:-$(mktemp -d)/venv39}"
 `COMMAND:`
 ```bash
 python3 -m pytest -q tests/full_code_review
-python3.12 -m pytest -q tests/full_code_review
+"$V312/bin/python" -m pytest -q tests/full_code_review
 "$V39/bin/python" -m pytest -q tests/full_code_review
 ```
 Expected: each prints `0 failed` (no `failed` or `error` in the summary line).
@@ -51,7 +53,7 @@ Expected: each prints `0 failed` (no `failed` or `error` in the summary line).
 ```yaml
 dependencies: []
 scope:
-  files: [skills/full-code-review/**, tests/full_code_review/**]
+  files: [skills/full-code-review/**, tests/full_code_review/**, README.md]
 ```
 
 **Behavior:** the ported scripts and their 418 collected tests pass from quirk's tree. No renames or logic changes; SKILL.md still describes sakura paths and is rewritten in Task 3b.
@@ -59,6 +61,7 @@ scope:
 **Contract:**
 - Copy `$SRCS/{SKILL.md,references,scripts,assets}` to `SK/`, excluding `references/provenance.md`, `references/repo-guidance/`, `__pycache__`, `.pytest_cache`. Copy `$SRCSH/review_memory.py` to `SK/scripts/review_memory.py`. Never move or edit anything under `$SRCS` or `$SRCSH`.
 - The three scripts that insert `../../../shared/mr` on `sys.path` stop doing so and import `review_memory` as a sibling: `comment_body.py:17`, `post_reviewer_review.py:20`, `validate_triage.py:11`.
+- `README.md` skill count goes from 25 to 26 (two repo tests assert it matches `skills/*/SKILL.md`).
 - Copy `$SRCS/tests/*.py` into `T/`. Add `T/__init__.py` and `T/conftest.py` that put `SK/scripts` on `sys.path`. Each test file's own `sys.path.insert(…"..","scripts")` header and `test_review_memory.py:9` resolve to `SK/scripts`; `test_render_report.py:14-15` resolves `SK/assets/report.html`.
 
 **Acceptance (`COMMAND:`):** the standard suite, plus
