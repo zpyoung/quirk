@@ -469,6 +469,39 @@ def test_compare_that_does_not_fit_even_widened_scrolls_inside_its_own_box(layou
     assert out["results"]["fits"] is True
 
 
+def test_compare_inside_a_panel_in_a_grid_stays_within_the_panel_and_scrolls_itself(tmp_path: Path) -> None:
+    body = (
+        '<q-grid id="g"><q-panel id="p1"><h3>Left</h3>'
+        + _compare("nested", MANY_OPTIONS, 3)
+        + '</q-panel><q-panel id="p2"><h3>Right</h3><p>Neighbour.</p></q-panel></q-grid>\n'
+    )
+    page = _mini_page(tmp_path, body, "nested")
+    out = run(
+        page,
+        ev(
+            """(() => {
+              const c = document.querySelector('#nested').getBoundingClientRect();
+              const p = document.querySelector('#p1').getBoundingClientRect();
+              const n = document.querySelector('#p2').getBoundingClientRect();
+              const host = document.querySelector('#nested');
+              return {
+                cLeft: c.left, cRight: c.right, pLeft: p.left, pRight: p.right, nLeft: n.left,
+                scrolls: host.scrollWidth > host.clientWidth + 1,
+              };
+            })()""",
+            "box",
+        ),
+        ev(NO_SCROLL, "fits"),
+        viewport={"width": 1280, "height": 800},
+    )
+    assert_clean(out)
+    box = out["results"]["box"]
+    assert box["cLeft"] >= box["pLeft"] - 1 and box["cRight"] <= box["pRight"] + 1
+    assert box["cRight"] <= box["nLeft"]
+    assert box["scrolls"] is True
+    assert out["results"]["fits"] is True
+
+
 @pytest.mark.parametrize("width", [375, 1280])
 def test_compare_reads_as_a_scrolling_table_without_the_script(nojs_page: Path, width: int) -> None:
     out = run(

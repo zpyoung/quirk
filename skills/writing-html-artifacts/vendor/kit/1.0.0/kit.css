@@ -1032,6 +1032,16 @@ q-compare > :where([data-q-stack]) dd {
     max-width: max(100%, calc(100vw - 2 * clamp(var(--q-space-4), 4vw, var(--q-space-6))));
     transform: translateX(-50%);
   }
+
+  q-panel q-compare,
+  q-grid q-compare {
+    position: static;
+    left: auto;
+    width: auto;
+    min-width: 0;
+    max-width: 100%;
+    transform: none;
+  }
 }
 
 @media (max-width: 700px) {
