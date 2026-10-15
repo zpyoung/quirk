@@ -882,6 +882,11 @@ q-panel > h4 {
 
 /* q-sidenote */
 
+/* one counter for the page, or each paragraph's first note would restart at 1 */
+:where(body) {
+  counter-reset: q-sidenote;
+}
+
 :where(q-sidenote) {
   counter-increment: q-sidenote;
 }

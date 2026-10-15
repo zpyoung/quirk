@@ -37,6 +37,7 @@ MANY_OPTIONS = [f"Option {i}" for i in range(1, 11)]
 SIDENOTES = """<div data-layout="longform" id="long"><main>
 <p id="para">The build got faster<q-sidenote id="note1">Measured on main, excluding reruns.</q-sidenote> after the cache moved,
 and the queue shrank<q-sidenote id="note2">Queue depth is sampled every minute.</q-sidenote> as well.</p>
+<p id="para2">A later paragraph<q-sidenote id="note3">Its note keeps counting from the first paragraph.</q-sidenote> follows.</p>
 </main></div>
 <div id="plain"><p>A plain page note<q-sidenote id="plain-note">Outside longform.</q-sidenote> stays in the text.</p></div>
 """
@@ -578,3 +579,17 @@ def test_the_stacked_blocks_hold_no_duplicate_ids(tmp_path: Path) -> None:
     out = run(page, ev("document.querySelectorAll('#dup').length", "count"), viewport={"width": 375, "height": 800})
     assert_clean(out)
     assert out["results"]["count"] == 1
+
+
+def test_sidenote_numbers_continue_across_paragraphs(layout_page: Path) -> None:
+    # css counter values are not exposed to scripts, so assert the page-level reset and the toggle numbers
+    out = run(
+        layout_page,
+        ev("getComputedStyle(document.body).counterReset", "reset"),
+        ev("document.querySelector('#para2 button[data-q-sidenote-toggle]').textContent", "third"),
+        viewport={"width": 375, "height": 800},
+    )
+    assert_clean(out)
+    assert "q-sidenote" in out["results"]["reset"]
+    assert out["results"]["third"].strip().startswith("3")
+
