@@ -839,6 +839,46 @@ def check_plan(report: dict, context: dict, snapshot: dict) -> dict:
     return {"findings": planned, "warnings": warnings + list(enriched.get("memory", {}).get("warnings") or [])}
 
 
+_KEPT = ("fix", "later", "detail")
+
+
+def compute_stats(records: list[dict]) -> dict:
+    """Per-lens keep/dismiss counts across ledger records, noisiest lens first.
+
+    Kept is Will fix / Fix later / Needs detail (Blocking / Non-blocking / Question in
+    reviewer seat); dismissed is Ignore (Drop); undecided is none. Both seats share slots.
+    """
+    lenses: dict[str, dict] = {}
+    for record in records:
+        for finding in record["snapshot"]["findings"]:
+            row = lenses.setdefault(finding["dimension"], {"id": finding["dimension"], "kept": 0,
+                                                           "dismissed": 0, "undecided": 0})
+            disposition = finding.get("disposition")
+            row["kept" if disposition in _KEPT else "dismissed" if disposition == "ignore" else "undecided"] += 1
+    for row in lenses.values():
+        decided = row["kept"] + row["dismissed"]
+        row["dismiss_rate"] = round(row["dismissed"] / decided, 3) if decided else 0.0
+    ordered = sorted(lenses.values(), key=lambda r: (-r["dismiss_rate"], r["id"]))
+    return {"lenses": ordered, "records": len(records)}
+
+
+def stats(repo: str | None = None) -> dict:
+    """Read every ledger record (or only `repo`'s) and return compute_stats plus warnings."""
+    directory = _state_dir()
+    wanted = _repo_identity(repo)[0] if repo else None
+    records, warnings = [], []
+    for path in sorted(directory.glob("*.json")) if directory.is_dir() else []:
+        data, record_warnings = _read_record(path)
+        if data is None:
+            warnings.append("%s skipped: %s" % (path.name, "; ".join(record_warnings) or "unreadable"))
+            continue
+        if wanted is None or data["snapshot"]["identity"].get("repo") == wanted:
+            records.append(data)
+    result = compute_stats(records)
+    result["warnings"] = warnings
+    return result
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Load, reconcile and save review memory")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -863,8 +903,15 @@ def main(argv=None) -> int:
     save.add_argument("--report", required=True)
     save.add_argument("--decisions")
     save.add_argument("--receipts")
+    st = sub.add_parser("stats")
+    scope = st.add_mutually_exclusive_group()
+    scope.add_argument("--repo")
+    scope.add_argument("--all", action="store_true")
     args = parser.parse_args(argv)
     try:
+        if args.command == "stats":
+            print(json.dumps(stats(None if args.all else (args.repo or ".")), indent=2, sort_keys=True))
+            return 0
         if args.command == "load":
             result = load_snapshot(_load_json(args.context), args.repo, args.dimension, args.guidance, args.fresh)
             _atomic_write(Path(args.out), result)

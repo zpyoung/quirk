@@ -2,7 +2,7 @@
 name: full-code-review
 description: Use when asked for a full, multi-lens code review of a GitHub pull request, a GitLab merge request, a branch, or local changes ("full review", "full code review", "review this PR", "review this MR"). Runs up to 14 specialist lenses in parallel (correctness, safety, risk, claim verification, scope, data layer, cross-repo impact, conventions, comments, observability, resilience, and three test lenses), merges them into one deduped, severity-ranked report with an HTML triage page, remembers triage decisions across re-reviews, and posts only human-approved findings (author inline comments, or one batched reviewer review). Advisory only; it never approves or merges on its own.
 user-invocable: true
-argument-hint: '[--change <number> | --branch <name> | --local] [-R <project>] [--forge github|gitlab|none] [--pack <dir>] [--seat author|reviewer] [--fresh] [--no-escalate] [--add-guidance "<note>"] [--format html|md|both] [--no-open]'
+argument-hint: '[--stats] [--change <number> | --branch <name> | --local] [-R <project>] [--forge github|gitlab|none] [--pack <dir>] [--seat author|reviewer] [--fresh] [--no-escalate] [--add-guidance "<note>"] [--format html|md|both] [--no-open]'
 allowed-tools: Bash, Read, Grep, Glob, Agent
 ---
 
@@ -61,6 +61,7 @@ A review with no supported forge still runs and delivers locally.
 | `--no-escalate` | Keep every lens on its default model tier. |
 | `--format html\|md\|both`, `--no-open` | Render options. |
 | `--add-guidance "<note>"` | Capture a review lesson, then stop. |
+| `--stats` | Show per-lens keep/dismiss rates from the ledger, then stop. |
 
 ### Preflight: syntax colouring
 
@@ -88,6 +89,15 @@ python3 "$SCRIPTS/add_guidance.py" --note "<note>" \
 ```
 
 Surface `path` and `commit_hint`. Never commit for the user.
+
+## Fast path: `--stats`
+
+Report which lenses' findings get dismissed most, so their checklist or floor can be
+tuned, and stop:
+
+```bash
+python3 "$MEMORY_SCRIPT" stats --repo "$(git rev-parse --show-toplevel)"   # or --all
+```
 
 ## Step 1: prepare the diff and detect the seat
 
