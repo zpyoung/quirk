@@ -3,7 +3,8 @@
 **Status:** Approved. Tech spec: authored (tier gate fired: requested, ≳3 source files)
 
 Logic-spec scenarios can carry a data-state example: the records before, a step-by-step walkthrough,
-and the records after. It applies to both spec formats and the interactive review page. Source
+and the records after. A scenario whose illustration isn't records can carry a titled details section
+instead, or as well. It applies to both spec formats and the interactive review page. Source
 exploration: [2026-10-12-scenario-data-states.md](../../explorations/2026-10-12-scenario-data-states.md).
 
 ## Conceptual model
@@ -29,6 +30,13 @@ the reviewer checked that its example agrees with the Then. When they disagree, 
 the example is fixed. Anything the example would need that the Then doesn't settle becomes a gap for
 the reviewer, so an example never quietly sets policy.
 
+Not everything a scenario needs to show is a record changing. Screen states, message copy, a timeline
+or a decision table have no before and after. For those the example carries a **details section**: one
+Markdown block under a one-line title Claude chooses, such as "Screen states". Tables, code blocks and
+lists all work inside it. A scenario can carry the three data-state parts, a details section, or both.
+The details section is part of the example, so everything above holds for it too: the Then is the
+contract, the reviewer checks it against the Then, and a gap in it is an `[ASK]`.
+
 ### Conventions
 
 These rules come from the hand trial, where a first draft written with IDs (`C1 line A D1 10%`) was
@@ -50,7 +58,8 @@ hard to follow. Both rubrics follow one shared copy of them.
 
 On the review page the marks map to colour. Records are blue bold, step numbers purple, `✓` phrases
 green bold, `✗` phrases red, `*` values grey italic, and `[ASK]` amber underlined. Data before sits
-on a grey background and Data after on a green one. In `logic.md` the marks stay plain text.
+on a grey background and Data after on a green one. A details section uses the same marks and
+colours, except inside code blocks, where text stays plain. In `logic.md` the marks stay plain text.
 
 ### Where an example lives
 
@@ -71,11 +80,29 @@ scenario:
    - **Data after:** **Charge 1**: ✓ Coffee line $76.50; "Loyalty" took $10.00; "Winback" took $13.50
 ```
 
+A details section is a `details` object holding a `title` string and a `body` string of markdown. An
+example needs the three data-state parts, a details section, or both. In `logic.md` the details section
+is one more sub-bullet after Data after, labelled with its bold title, with the body indented under it:
+
+```markdown
+1. **SC-22**
+   - **Given** a customer whose card was declined twice
+   - **When** they open the billing page
+   - **Then** the page shows a retry banner and hides the skip button
+   - **Screen states:**
+
+     | Element | Shown |
+     |---|---|
+     | Retry banner | ✓ "Your last payment failed. Update your card." |
+     | Skip button | ✗ hidden |
+```
+
 ## Data flow
 
 **Markdown specs.**
 
-1. Claude writes `logic.md`, giving each scenario with data to show an example in the same pass.
+1. Claude writes `logic.md`, giving each scenario with something to show an example in the same pass:
+   data-state parts, a details section, or both.
 2. Self-review checks that every example agrees with its Then, and that each open `[ASK]` is a question
    the design didn't already answer.
 3. At the review gate Claude lists every open `[ASK]` with its scenario.
@@ -87,7 +114,8 @@ scenario:
 
 1. Claude writes stage-1 `logic.json` with an example on each scenario that has data to show.
 2. On the page, rows carry an Example token, plus an Open question token while an `[ASK]` is open.
-   Clicking any row opens the focus dialog, which shows the example in three columns.
+   Clicking any row opens the focus dialog, which shows the data-state parts in three columns and any
+   details section full-width below them.
 3. The reviewer decides each scenario. An open `[ASK]` or a wrong example is answered through Update.
    Picking a different outcome on a scenario with an example also becomes an update. Claude rewrites
    the Then and the example together, and the scenario returns for a fresh decision.
@@ -113,9 +141,21 @@ Scenarios that walk through review state changing carry an example in the format
    - **Then** its example keeps the three labels, with the request or command as the walkthrough and
      the response or output as Data after
 3. **1.3**
-   - **Given** a scenario with nothing to show, such as a prose behavior or a visibility rule
+   - **Given** a scenario with nothing to show, neither records nor any other concrete illustration,
+     such as a naming rule or a placement rule
    - **When** Claude writes it
    - **Then** it has no example and no note explaining the absence
+4. **1.4**
+   - **Given** a scenario whose illustration isn't records changing, such as screen states, message
+     copy, a timeline or a decision table
+   - **When** Claude writes it
+   - **Then** its example is a details section: a one-line plain-text title naming the kind of
+     illustration, and a Markdown body
+5. **1.5**
+   - **Given** a scenario that changes records and also has something else to show, such as the
+     message the customer sees
+   - **When** Claude writes it
+   - **Then** its example carries the three data-state parts and a details section
 
 ### 2. Examples follow the shared conventions
 
@@ -186,6 +226,12 @@ Scenarios that walk through review state changing carry an example in the format
    - **Given** a markdown spec with open `[ASK]`s
    - **When** Claude reaches the user review gate
    - **Then** it lists each `[ASK]` with its scenario, and the answers go into the Thens before approval
+6. **4.6**
+   - **Given** a stage-1 scenario whose details section has an open `[ASK]` and whose data-state parts
+     have none
+   - **When** the reviewer opens it in the focus dialog
+   - **Then** it is blocked exactly as in 4.1: Approve is unavailable and the row shows an Open
+     question token
 
 ### 5. An example changes with its scenario
 
@@ -248,6 +294,11 @@ Scenarios that walk through review state changing carry an example in the format
    - **When** it renders
    - **Then** Data before, Walkthrough and Data after appear as three columns in the full palette,
      stacking on narrow screens, and the dialog widens to fit them
+4. **6.4**
+   - **Given** a scenario whose example has a details section
+   - **When** the focus dialog renders it
+   - **Then** the details section appears full-width under its title, below the three columns when
+     the scenario has them, and the row shows the same Example token as any other example
 
 ### 7. `logic.md` shows examples as labelled sub-bullets
 
@@ -256,6 +307,16 @@ Scenarios that walk through review state changing carry an example in the format
    - **When** the spec is read
    - **Then** the example appears after the Then (and any alternatives) as **Data before**,
      **Walkthrough** as a numbered list, and **Data after**, with `✓`, `✗`, `*` and `[ASK]` as plain text
+2. **7.2**
+   - **Given** a scenario whose example has a details section
+   - **When** `logic.md` is read
+   - **Then** the details section is the last sub-bullet, labelled with its bold title, with its body
+     indented under it so tables and code blocks render
+3. **7.3**
+   - **Given** a details title that is blank, runs over one line, or reads Data before, Walkthrough or
+     Data after
+   - **When** the spec is validated
+   - **Then** validation fails and names the title
 
 ### 8. Later stages take their contract from the Then
 
@@ -308,6 +369,10 @@ Scenarios that walk through review state changing carry an example in the format
 - **Three typed parts with markdown values.** This was chosen over one markdown blob, which parses
   fragilely, and over fully structured records, where deep nesting hurts authoring accuracy and markdown
   specs couldn't share the format. See Industry Insights.
+- **A details section is one titled blob, kept inside the example.** Its content has no fixed shape, so
+  typed parts would only constrain it. The title stays a typed field, so the label never has to be
+  parsed out of the body. Keeping it inside the example means every example rule applies to it with no
+  second set of rules.
 
 **Success looks like this.** An interactive fixture spec built from the exploration's three examples
 renders correctly in the focus dialog and in `logic.md`. Its open `[ASK]` blocks approval, and picking a
@@ -376,6 +441,15 @@ Out of scope:
 - Success is a fixture spec plus a no-regression check.
 - The out-of-scope list was approved with the design.
 
+**Details sections** (amendment, 2026-10-15)
+- A scenario can carry data-state parts, a details section, or both.
+- A details section is one Markdown block with a required one-line plain-text title Claude chooses.
+- Every example rule applies to it: the Then is the contract, marks are coloured, an open `[ASK]`
+  blocks, editing it clears the decision, and a different outcome sends it back for a rewrite.
+- Both formats get it. In the dialog it sits full-width below the three columns. Rows keep the one
+  Example token. In `logic.md` it is a sub-bullet labelled with its title, which can't reuse a
+  data-state label.
+
 ## Industry Insights
 
 Research ran through WebSearch and WebFetch. The Brave search skills were unavailable in this session.
@@ -416,20 +490,28 @@ Research ran through WebSearch and WebFetch. The Brave search skills were unavai
 - `[tech-spec]` Validator errors for near-miss `[ASK]` forms, such as `[ASK]` with no colon or `ASK:`.
 - `[tech-spec]` The wording of the automatic update request when a reviewer picks a different outcome.
 - `[tech-spec]` How wide the focus dialog gets for a scenario with an example.
+- `[tech-spec]` How `✓`/`✗` phrases are coloured inside a details body without breaking tables, lists
+  or code blocks.
 
 ## Glossary
 
 | Term | Definition |
 |---|---|
 | Data-state example | A scenario's optional Data before / Walkthrough / Data after. |
+| Details section | An example's optional titled Markdown block, for an illustration that isn't records changing. |
 | Checked restatement | The example's role: data that must agree with the Then and never overrides it. |
 | Invented value | A value marked `*` and picked to make an example concrete. It is not part of the rule. |
 | Gap | An `[ASK: …]`: something the scenario doesn't settle that the example can't show without guessing. |
 | Shared conventions | The single set of example-writing rules that both logic-spec rubrics link to. |
 | Data to show | A scenario that computes or changes records, or has a concrete input and output. |
+| Something to show | Data to show, or any other concrete illustration a details section can carry. |
 
 ## Status & amendments
 
 **Status:** Approved. Tech spec: authored (tier gate fired: requested, ≳3 source files)
 
-**Amendments:** none yet.
+**Amendments:**
+
+- 2026-10-15: An example can carry a titled details section, instead of or as well as the data-state
+  parts, for scenarios whose illustration isn't records changing. Adds 1.4, 1.5, 4.6, 6.4, 7.2 and 7.3,
+  and narrows 1.3.
