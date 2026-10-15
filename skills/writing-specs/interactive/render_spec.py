@@ -99,6 +99,138 @@ SCHEMA_MAX_TABLES = 5
 SCHEMA_MAX_REFS = 6
 
 
+OPEN_ASK_RE = re.compile(r"\[ASK: ([^\[\]\n]+)\]")
+ASK_LOOKALIKE_RE = re.compile(r"\[\s*ask\b", re.IGNORECASE)
+EXAMPLE_KEYS = ("before", "steps", "after", "details")
+DATA_STATE_KEYS = ("before", "steps", "after")
+DATA_STATE_LABELS = ("data before", "walkthrough", "data after")
+DETAILS_TITLE_FORBIDDEN = re.compile(r"[\n\r*_`\[\]<>]")
+MALFORMED_ASK_MESSAGE = "malformed [ASK] marker; write [ASK: <question>]"
+
+
+def _example_parts(example: dict) -> List[str]:
+    """Every text part of an example in reading order: before, steps, after, then the details body."""
+    parts: List[str] = []
+    if "before" in example:
+        parts.append(example["before"])
+        parts.extend(example["steps"])
+        parts.append(example["after"])
+    if "details" in example:
+        parts.append(example["details"]["body"])
+    return parts
+
+
+def scenario_open_asks(scenario: dict) -> List[str]:
+    """Questions of every open [ASK: ...] gap in the scenario's example, in reading order; [] without one."""
+    example = scenario.get("example")
+    if not example:
+        return []
+    return [match.group(1) for part in _example_parts(example) for match in OPEN_ASK_RE.finditer(part)]
+
+
+def _normalized_lines(text: str) -> List[str]:
+    return text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+
+def _example_part_lines(first_prefix: str, indent: str, text: str) -> List[str]:
+    rows = _normalized_lines(text)
+    lines = [first_prefix + rows[0]] + [indent + row for row in rows[1:]]
+    return [line + "  " for line in lines[:-1]] + lines[-1:]
+
+
+def _example_markdown_lines(example: dict) -> List[str]:
+    """Sub-bullets for a scenario's example: data-state parts when present, then the titled details block.
+
+    Newlines inside a data-state part become hard breaks; the details body keeps ordinary Markdown newlines so
+    tables, lists and code blocks survive.
+    """
+    lines: List[str] = []
+    if "before" in example:
+        lines.extend(_example_part_lines("   - **Data before:** ", "     ", example["before"]))
+        lines.append("   - **Walkthrough:**")
+        for number, step in enumerate(example["steps"], 1):
+            lines.extend(_example_part_lines("     " + str(number) + ". ", "        ", step))
+        lines.extend(_example_part_lines("   - **Data after:** ", "     ", example["after"]))
+    if "details" in example:
+        details = example["details"]
+        lines.extend(["   - **" + details["title"] + ":**", ""])
+        lines.extend("     " + row if row else "" for row in _normalized_lines(details["body"]))
+        lines.append("")
+    return lines
+
+
+def _validate_example_details(v: "Validator", raw: Any, details_path: str) -> Optional[str]:
+    """Validate `example.details`; returns the body when it is a usable string, for the [ASK] check."""
+    details = v.object(raw, details_path)
+    if details is None:
+        return None
+    for key in details:
+        if key not in ("title", "body"):
+            v.error(pointer(details_path, key), "unexpected key")
+    if "title" not in details:
+        _required(v, details, "title", details_path)
+    else:
+        title_path = pointer(details_path, "title")
+        title = details["title"]
+        if v.string(title, title_path, nonempty=True):
+            if DETAILS_TITLE_FORBIDDEN.search(title):
+                v.error(title_path, "details title must be one line of plain text")
+            else:
+                label = title.strip()
+                if label.endswith(":"):
+                    label = label[:-1].strip()
+                if label.lower() in DATA_STATE_LABELS:
+                    v.error(title_path, "details title reuses a data-state label")
+    if "body" not in details:
+        _required(v, details, "body", details_path)
+        return None
+    body_path = pointer(details_path, "body")
+    return details["body"] if v.string(details["body"], body_path, nonempty=True) else None
+
+
+def _validate_scenario_example(v: "Validator", item: dict, path: str) -> bool:
+    """Validate `example`; True when it is well formed enough for scenario_open_asks."""
+    errors_before = len(v.errors)
+    example_path = pointer(path, "example")
+    example = v.object(item["example"], example_path)
+    if example is None:
+        return False
+    for key in example:
+        if key not in EXAMPLE_KEYS:
+            v.error(pointer(example_path, key), "unexpected key")
+    if not any(key in example for key in EXAMPLE_KEYS):
+        v.error(example_path, "example needs before, steps and after, or details")
+    parts: List[Tuple[str, str]] = []
+    if any(key in example for key in DATA_STATE_KEYS):
+        for key in ("before", "after"):
+            if key not in example:
+                _required(v, example, key, example_path)
+            elif v.string(example[key], pointer(example_path, key), nonempty=True):
+                parts.append((pointer(example_path, key), example[key]))
+        if "steps" not in example:
+            _required(v, example, "steps", example_path)
+        else:
+            steps_path = pointer(example_path, "steps")
+            steps = v.array(example["steps"], steps_path)
+            if steps is not None:
+                if not steps:
+                    v.error(steps_path, "must not be empty")
+                for index, step in enumerate(steps):
+                    if v.string(step, pointer(steps_path, index), nonempty=True):
+                        parts.append((pointer(steps_path, index), step))
+    if "details" in example:
+        details_path = pointer(example_path, "details")
+        body = _validate_example_details(v, example["details"], details_path)
+        if body is not None:
+            parts.append((pointer(details_path, "body"), body))
+    for part_path, text in parts:
+        for match in ASK_LOOKALIKE_RE.finditer(text):
+            if not OPEN_ASK_RE.match(text, match.start()):
+                v.error(part_path, MALFORMED_ASK_MESSAGE)
+                break
+    return len(v.errors) == errors_before
+
+
 class Validator:
     """Small schema validator that reports every actionable JSON-pointer error."""
 
@@ -926,6 +1058,7 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
                     v.string(item["rejectReason"], pointer(path, "rejectReason"))
 
     scenario_rows: List[Any] = []
+    checked_example_rows: set = set()
     scenarios = _required(v, root, "scenarios", "")
     if "scenarios" in root:
         rows = v.array(scenarios, "/scenarios")
@@ -964,6 +1097,9 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
                     v.error(pointer(path, "flagged"), "must be true when present")
                 if "answeredComment" in item:
                     v.string(item["answeredComment"], pointer(path, "answeredComment"), nonempty=True)
+                if "example" in item:
+                    if _validate_scenario_example(v, item, path):
+                        checked_example_rows.add(index)
                 if "reopened" in item and "reapprovedHash" in item:
                     v.error(pointer(path, "reapprovedHash"), "reopened and reapprovedHash cannot both be present")
 
@@ -1356,6 +1492,11 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
             if isinstance(raw, dict) and "ruling" not in raw:
                 v.error(pointer(pointer("/constraints", index), "ruling"), "required in stage 2")
 
+        for index in sorted(checked_example_rows):
+            raw = scenario_rows[index]
+            if "dropReason" not in raw and scenario_open_asks(raw):
+                v.error(pointer(pointer("/scenarios", index), "example"), "open [ASK] after stage-1 sign-off")
+
         approved_scenario_ids = {
             item["id"]
             for item in scenario_rows
@@ -1418,6 +1559,22 @@ def _validate_stage1_lock(v: Validator, root: dict) -> None:
         v.error(pointer("/stage1Pin/itemHashes", ident), "stage-1 item changed after sign-off")
 
 
+def oversized_text_errors(value: Any, path: str = "") -> List[Tuple[str, str]]:
+    """Report every string longer than MAX_TEXT_CHARS, so no markdown paragraph is long enough to stall the review page's quadratic parser."""
+    if isinstance(value, str):
+        if len(value) <= MAX_TEXT_CHARS:
+            return []
+        message = f"text is {len(value)} characters; the review page renders at most {MAX_TEXT_CHARS} per field, so shorten or split it"
+        return [(path or "/", message)]
+    if isinstance(value, dict):
+        children = value.items()
+    elif isinstance(value, list):
+        children = enumerate(value)
+    else:
+        return []
+    return [error for key, child in children for error in oversized_text_errors(child, pointer(path, key))]
+
+
 def validate_logic_dispatch(logic: Any) -> Tuple[List[Tuple[str, str]], List[str]]:
     """Validate logic.json against the schema for its declared schemaVersion."""
     v = Validator()
@@ -1427,9 +1584,11 @@ def validate_logic_dispatch(logic: Any) -> Tuple[List[Tuple[str, str]], List[str
     version = root.get("schemaVersion")
     if not v.exact_version(version, "/schemaVersion", (1, 2)):
         return v.errors, []
+    oversized = oversized_text_errors(root)
     if version == 1:
-        return validate_logic(logic), []
-    return validate_logic_v2(logic)
+        return validate_logic(logic) + oversized, []
+    errors, warnings = validate_logic_v2(logic)
+    return errors + oversized, warnings
 
 
 def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
@@ -1995,6 +2154,7 @@ def _reject_json_constant(constant: str) -> Any:
 
 
 JSON_MAX_DEPTH = 200
+MAX_TEXT_CHARS = 10_000
 
 
 def _json_depth_exceeded(value: Any, limit: int = JSON_MAX_DEPTH) -> Optional[str]:
@@ -3090,6 +3250,8 @@ def render_markdown_v2(logic: dict) -> str:
             lines.append("   - **Then** " + scenario["then"])
             if scenario["alternatives"]:
                 lines.append("   - **Alternatives** " + "; ".join(scenario["alternatives"]))
+            if "example" in scenario:
+                lines.extend(_example_markdown_lines(scenario["example"]))
             lines.append("   - " + scenario["explanation"])
             if scenario.get("dropReason"):
                 lines.append("   - **Dropped:** " + scenario["dropReason"])
@@ -3254,6 +3416,11 @@ def write_files_atomically(files: Dict[Path, str]) -> None:
                 pass
 
 
+def open_asks_by_scenario(logic: dict) -> Dict[str, List[str]]:
+    asks = {scenario["id"]: scenario_open_asks(scenario) for scenario in logic.get("scenarios", [])}
+    return {ident: questions for ident, questions in asks.items() if questions}
+
+
 def prepare_render_files(
     spec_dir: Path,
     logic: dict,
@@ -3277,6 +3444,7 @@ def prepare_render_files(
             "renderId": current_render_id,
             "itemHashes": item_hashes(logic),
             "logicMarkdown": markdown,
+            "openAsks": open_asks_by_scenario(logic),
             "priorDecisions": prior,
         }
         if comparison is not None and comparison_id is not None:
@@ -3571,6 +3739,19 @@ def stage1_gate_failures(logic: dict, state: dict) -> List[Tuple[str, str]]:
         if pending_requests:
             detail.append("pending scenario requests: " + ", ".join(request["id"] for request in pending_requests))
         failures.append(("scenarios", "; ".join(detail)))
+
+    for scenario in logic["scenarios"]:
+        ident = scenario["id"]
+        if not state["scenarioApproved"].get(ident, False):
+            continue
+        if ident not in state["scenarioDrops"] and scenario_open_asks(scenario):
+            failures.append(("examples", "open [ASK] in " + ident))
+            continue
+        choice = state["scenarioOutcomes"].get(ident, {}).get("choice")
+        if "example" in scenario and choice is not None and choice != "spec":
+            failures.append(
+                ("examples", "outcome changed on " + ident + "; Claude must rewrite its example first")
+            )
 
     missing_constraints = []
     for constraint in logic["constraints"]:

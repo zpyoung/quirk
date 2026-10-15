@@ -227,6 +227,8 @@ export function isPayload(value: unknown): value is LogicSpecPayload {
     typeof value.renderId === 'string' &&
     isStringMap(value.itemHashes) &&
     typeof value.logicMarkdown === 'string' &&
+    isObject(value.openAsks) &&
+    Object.values(value.openAsks).every((asks) => Array.isArray(asks) && asks.every((ask) => typeof ask === 'string')) &&
     (value.priorDecisions === null || isDecisionExport(value.priorDecisions, value.slug))
   )
 }
@@ -584,6 +586,30 @@ export function scenarioThen(state: ReviewState, scenario: Scenario): string {
   if (outcome.choice === 'custom') return outcome.custom.trim() || scenario.then
   const index = Number(outcome.choice.slice(4))
   return scenario.alternatives[index] ?? scenario.then
+}
+
+/**
+ * Why Approve is unavailable for a scenario, or null when it is available. Checked in order, so the first
+ * reason wins: a blank custom outcome, an open question from the renderer, or an outcome change that leaves
+ * the scenario's example stale.
+ */
+export function approveBlockReason(
+  state: ReviewState,
+  scenario: Scenario,
+  openAsks: Record<string, string[]>,
+): 'outcome-missing' | 'open-ask' | 'outcome-changed' | null {
+  const outcome = state.scenarioOutcomes[scenario.id]
+  if (outcome?.choice === 'custom' && !outcome.custom.trim()) return 'outcome-missing'
+  if (openAsks[scenario.id]?.length) return 'open-ask'
+  if (scenario.example && scenarioThen(state, scenario) !== scenario.then) return 'outcome-changed'
+  return null
+}
+
+export const EXAMPLE_OUTCOME_UPDATE_PREFIX = 'Rewrite this scenario for the outcome I picked: '
+
+/** The update note that asks Claude to rewrite a scenario's Then and example together for the outcome the reviewer picked. */
+export function exampleOutcomeUpdate(outcomeText: string): string {
+  return `${EXAMPLE_OUTCOME_UPDATE_PREFIX}"${outcomeText}". Update its Then and example together.`
 }
 
 /** The next stored ruling for a constraint given a UI patch; switching into `rewrite` starts from blank so the gate can't be satisfied with the original constraint text. */

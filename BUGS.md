@@ -116,3 +116,20 @@ entries' IDs; manual edits to fix typos are fine.
 - **Proposed fix**: After session.prompt(), check the last assistant message's stopReason; on error, write errorMessage to stderr and exit non-zero.
 - **Resolved**: 2026-10-15. After session.prompt(), pi-watch reads the last assistant message the way pi's print mode does: stopReason error or aborted exits 1 with errorMessage on stderr, and length exits 1 as truncated. The check runs before --require-trailer, so a provider failure no longer surfaces as exit 6. BUG-9 (--check passing an expired token) stays open.
 
+## BUG-13: Review page markdown renders in quadratic time on long runs of unmatched '['
+- **Observed**: 2026-10-15
+- **File**: skills/writing-specs/interactive/app/src/views/scenario-example.tsx:51
+- **Description**: The Astryx 0.6.2 Markdown parser is quadratic on long runs of unmatched '['. It affects every markdown field on the writing-specs review page, examples included, through SpecMarkdown in src/views/shared.tsx too. Timings: 100k '[' 92ms, 200k 334ms, 400k 1301ms, 800k 5172ms. Found by the round-5 security review of scenario-data-states. Triggering it takes a hostile 400k+ character spec field, and spec JSON is Claude-written.
+- **Introduced by**: upstream @astryxdesign/core 0.6.2 Markdown parser (pre-dates scenario-data-states)
+- **Severity**: low
+- **Proposed fix**: Bound example and markdown field length in spec validation, or escape pathological unmatched delimiters before parsing.
+- **Resolved**: 2026-10-15. render_spec.py validation now rejects any logic.json string over MAX_TEXT_CHARS (10,000), reported at its JSON pointer. The parser cost is per paragraph, so the cap bounds every render site (SpecMarkdown, the example panes, and the generated logic.md in SpecView) to about 24ms per field in the worst case. The parser itself is unchanged.
+
+## BUG-14: Review page links lose their underscores' meaning: SpecMarkdown inserts zero-width spaces into link URLs
+- **Observed**: 2026-10-15
+- **File**: skills/writing-specs/interactive/app/src/views/shared.tsx:37
+- **Description**: SpecMarkdown's page-wide underscore guard (children.replace(/_/g, '_\u200b')) also rewrites Markdown link destinations, so [r](https://x.test/a_b) renders href="https://x.test/a_\u200bb" and the link opens the wrong URL. Affects every SpecMarkdown field on the review page: explanations, details, custom views. Found by the round-1 correctness review of the details sections, which fixed the same defect in scenario-example.tsx; shared.tsx is fenced in that work.
+- **Introduced by**: pre-dates the details-section work (SpecMarkdown underscore guard)
+- **Severity**: medium
+- **Proposed fix**: Skip link destinations and autolinks when applying the underscore guard, as scenario-example.tsx now does.
+

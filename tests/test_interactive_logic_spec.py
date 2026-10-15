@@ -799,6 +799,41 @@ def test_v2_final_fold_moves_reapproved_hash_into_pin(tmp_path: Path) -> None:
     assert folded["stage1Pin"]["itemHashes"]["SC-01"] == current_hash
 
 
+def test_validate_caps_text_fields_at_the_review_page_limit() -> None:
+    logic = load_json(FIXTURES / "v2" / "examples" / "logic.json")
+    cap = render_spec.MAX_TEXT_CHARS
+
+    logic["scenarios"][0]["explanation"] = "x" * cap
+    assert render_spec.validate_logic_dispatch(logic)[0] == []
+
+    logic["scenarios"][0]["explanation"] = "x" * (cap + 1)
+    logic["scenarios"][1]["example"]["before"] = "[a](" * (cap // 4 + 1)
+    errors = dict(render_spec.validate_logic_dispatch(logic)[0])
+    assert set(errors) == {"/scenarios/0/explanation", "/scenarios/1/example/before"}
+    assert errors["/scenarios/0/explanation"].startswith(f"text is {cap + 1} characters;")
+
+
+def test_v1_validate_caps_text_fields_at_the_review_page_limit() -> None:
+    logic = load_json(SAMPLE / "logic.json")
+    logic["scenarios"][0]["then"] = "x" * (render_spec.MAX_TEXT_CHARS + 1)
+
+    errors = dict(render_spec.validate_logic_dispatch(logic)[0])
+    assert "/scenarios/0/then" in errors
+
+
+def test_render_refuses_a_spec_with_an_oversized_field(tmp_path: Path) -> None:
+    spec_dir = make_v2_spec(tmp_path, FIXTURES / "v2" / "examples", "examples")
+    logic = load_json(spec_dir / "logic.json")
+    logic["scenarios"][0]["example"]["before"] = "[a](" * 100_000
+    save_json(spec_dir / "logic.json", logic)
+
+    result = run_cli("render", str(spec_dir))
+
+    assert result.returncode != 0
+    assert "/scenarios/0/example/before: text is 400000 characters" in result.stderr
+    assert not (spec_dir / "review.html").exists()
+
+
 def test_v2_validate_rejects_a_stale_reapproved_hash_even_when_the_pin_still_matches() -> None:
     logic = load_json(V2_STAGE2 / "logic.json")
     assert render_spec.validate_logic_v2(logic)[0] == []

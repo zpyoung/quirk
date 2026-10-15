@@ -7,14 +7,24 @@ import { HStack, VStack } from '@astryxdesign/core/Layout'
 import { SegmentedControl, SegmentedControlItem } from '@astryxdesign/core/SegmentedControl'
 import { Selector, SelectorOption } from '@astryxdesign/core/Selector'
 import { Switch } from '@astryxdesign/core/Switch'
-import { Table, pixel, proportional, type TableColumn } from '@astryxdesign/core/Table'
+import { Table, pixel, proportional, type TableColumn, type TablePlugin } from '@astryxdesign/core/Table'
 import { Text } from '@astryxdesign/core/Text'
 import { TextArea } from '@astryxdesign/core/TextArea'
 import { TextInput } from '@astryxdesign/core/TextInput'
 import { Token } from '@astryxdesign/core/Token'
 import { VisuallyHidden } from '@astryxdesign/core/VisuallyHidden'
 import type { Behavior, Scenario, ScenarioOutcome, ScenarioRequest, ReviewState } from '../spec-types'
-import { isScenarioFlagged, isScenarioUndecided, pendingScenarioRequests, requestId, scenarioThen, type Update } from '../review-state'
+import {
+  approveBlockReason,
+  EXAMPLE_OUTCOME_UPDATE_PREFIX,
+  exampleOutcomeUpdate,
+  isScenarioFlagged,
+  isScenarioUndecided,
+  pendingScenarioRequests,
+  requestId,
+  scenarioThen,
+  type Update,
+} from '../review-state'
 import { ScenarioFocusDialog } from './scenario-focus-dialog'
 import { ChangedRowLabel, changedRowsPlugin, ClaudeAddedToken, SpecMarkdown } from './shared'
 import type { ViewProps } from './view-props'
@@ -38,19 +48,35 @@ function ThenLabel({ label }: { label: string }) {
   return <><strong>Then</strong>{label.slice(4)}</>
 }
 
+/** Keeps the automatic "rewrite for this outcome" note in step with the picked outcome, without touching a note the reviewer wrote or a scenario they dropped. */
+function exampleUpdates(st: ReviewState, s: Scenario, outcomeText: string, outcome: ScenarioOutcome): ReviewState['scenarioUpdates'] {
+  const scenarioUpdates = { ...st.scenarioUpdates }
+  const existing = scenarioUpdates[s.id]?.trim() ? scenarioUpdates[s.id] : undefined
+  if (existing && !existing.startsWith(EXAMPLE_OUTCOME_UPDATE_PREFIX)) return scenarioUpdates
+  const isSpecOutcome = outcome.choice === 'spec' || (outcome.choice === 'custom' && !outcome.custom.trim())
+  if (isSpecOutcome) {
+    if (existing) delete scenarioUpdates[s.id]
+  } else if (!Object.hasOwn(st.scenarioDrops, s.id)) {
+    scenarioUpdates[s.id] = exampleOutcomeUpdate(outcomeText)
+  }
+  return scenarioUpdates
+}
+
 export function OutcomeCell({ s, props }: { s: Scenario; props: ViewProps }) {
   const { state, update } = props
   const outcome = state.scenarioOutcomes[s.id] ?? { choice: 'spec' as const, custom: '' }
   const set = (patch: Partial<ScenarioOutcome>) =>
-    update(
-      (st) => ({
+    update((st) => {
+      const next = { ...outcome, ...patch }
+      const scenarioOutcomes = { ...st.scenarioOutcomes, [s.id]: next }
+      return {
         ...st,
-        scenarioOutcomes: { ...st.scenarioOutcomes, [s.id]: { ...outcome, ...patch } },
+        scenarioOutcomes,
         // a different outcome is a different scenario, so an earlier approval no longer applies
         scenarioApproved: { ...st.scenarioApproved, [s.id]: false },
-      }),
-      s.id,
-    )
+        ...(s.example ? { scenarioUpdates: exampleUpdates(st, s, scenarioThen({ ...st, scenarioOutcomes }, s), next) } : {}),
+      }
+    }, s.id)
   return (
     <VStack gap={1.5}>
       <Selector
@@ -78,6 +104,12 @@ export function OutcomeCell({ s, props }: { s: Scenario; props: ViewProps }) {
   )
 }
 
+const APPROVE_BLOCK_HINT = {
+  'outcome-missing': 'Write your outcome first.',
+  'open-ask': 'Answer the open question in an update first.',
+  'outcome-changed': 'Claude has to rewrite the example for this outcome first.',
+} as const
+
 export type Decision = 'approve' | 'update' | 'drop'
 
 export function DecisionCell({ s, props, onDecided }: { s: Scenario; props: ViewProps; onDecided?: (decision: Decision) => void }) {
@@ -86,8 +118,7 @@ export function DecisionCell({ s, props, onDecided }: { s: Scenario; props: View
   const isDropped = Object.hasOwn(state.scenarioDrops, s.id)
   const isUpdating = Object.hasOwn(state.scenarioUpdates, s.id)
   const value: Decision | '' = isDropped ? 'drop' : isUpdating ? 'update' : state.scenarioApproved[s.id] ? 'approve' : ''
-  const outcome = state.scenarioOutcomes[s.id]
-  const isOutcomeMissing = outcome?.choice === 'custom' && !outcome.custom.trim()
+  const blockReason = approveBlockReason(state, s, props.payload.openAsks)
   const decide = (decision: Decision) =>
     update((st) => {
       const scenarioDrops = { ...st.scenarioDrops }
@@ -113,11 +144,11 @@ export function DecisionCell({ s, props, onDecided }: { s: Scenario; props: View
           onDecided?.(next as Decision)
         }}
       >
-        <SegmentedControlItem value="approve" label="Approve" isDisabled={isOutcomeMissing} />
+        <SegmentedControlItem value="approve" label="Approve" isDisabled={blockReason !== null} />
         <SegmentedControlItem value="update" label="Update" />
         <SegmentedControlItem value="drop" label="Drop" />
       </SegmentedControl>
-      {isOutcomeMissing && value === '' ? <Text type="supporting">Write your outcome first.</Text> : null}
+      {blockReason && (blockReason !== 'outcome-missing' || value === '') ? <Text type="supporting">{APPROVE_BLOCK_HINT[blockReason]}</Text> : null}
       {isUpdating ? (
         <TextArea
           label={`What should change in ${s.id}`}
@@ -227,8 +258,16 @@ function ReapproveCell({ s, props }: { s: Scenario; props: ViewProps }) {
   )
 }
 
-function scenarioColumns(props: ViewProps, isStage2: boolean): TableColumn<ScenarioRow>[] {
-  const { state, changedIds } = props
+/** What stage 2 shows for a scenario's decision: the folded outcome, or the re-approve checkbox for a reopened one unless the page is read-only. */
+export function Stage2Decision({ s, props }: { s: Scenario; props: ViewProps }) {
+  if (s.reopened && !props.readOnly) return <ReapproveCell s={s} props={props} />
+  // folded stage-2 scenarios carry their final outcome directly; only a reopened scenario still tracks state
+  const approved = !s.dropReason
+  return <Token size="sm" color={approved ? 'green' : 'default'} label={approved ? 'Approved' : 'Dropped'} description={s.dropReason} />
+}
+
+function scenarioColumns(props: ViewProps, isStage2: boolean, onBrowse: (id: string) => void): TableColumn<ScenarioRow>[] {
+  const { state, changedIds, payload } = props
   const columns: TableColumn<ScenarioRow>[] = [
     {
       key: 'flag',
@@ -244,12 +283,7 @@ function scenarioColumns(props: ViewProps, isStage2: boolean): TableColumn<Scena
       header: 'Decision',
       width: pixel(isStage2 ? 128 : 240),
       renderCell: (s) => {
-        if (isStage2 && (!s.reopened || props.readOnly)) {
-          // folded stage-2 scenarios carry their final outcome directly; only a reopened scenario still tracks state
-          const approved = !s.dropReason
-          return <Token size="sm" color={approved ? 'green' : 'default'} label={approved ? 'Approved' : 'Dropped'} description={s.dropReason} />
-        }
-        if (isStage2) return <ReapproveCell s={s} props={props} />
+        if (isStage2) return <Stage2Decision s={s} props={props} />
         return (
           <VStack gap={1.5}>
             <DecisionCell s={s} props={props} />
@@ -264,7 +298,11 @@ function scenarioColumns(props: ViewProps, isStage2: boolean): TableColumn<Scena
       width: pixel(160),
       renderCell: (s) => (
         <VStack gap={1}>
-          <Text type="label">{s.id}</Text>
+          <HStack><Button size="sm" variant="ghost" label={s.id} tooltip="Open this scenario's details" onClick={() => onBrowse(s.id)} /></HStack>
+          {s.example ? <HStack><Token size="sm" label="Example" description="This scenario has a worked data example; open it to read it." /></HStack> : null}
+          {payload.openAsks[s.id]?.length ? (
+            <HStack><Token size="sm" color="yellow" label="Open question" description={payload.openAsks[s.id][0]} /></HStack>
+          ) : null}
           {s.reopened ? (
             <HStack><Token size="sm" color="orange" label="Reopened" description={s.reopened.reason} /></HStack>
           ) : s.provenance === 'claude' && (!isStage2 || !hasScenarioEntry(state, s.id)) ? (
@@ -351,11 +389,31 @@ function BehaviorRequests({ behavior, props }: { behavior: Behavior; props: View
   )
 }
 
+const ROW_CLICK_IGNORED = 'button, a, input, textarea, select, label, [role="radiogroup"], [role="switch"], [role="checkbox"]'
+
+/** Opens a scenario from a click anywhere on its row, except on a control inside the row or while the reviewer is selecting text. */
+function browseRowPlugin(open: (id: string) => void): TablePlugin<ScenarioRow> {
+  return {
+    transformBodyRow: (props, row) => ({
+      ...props,
+      htmlProps: {
+        ...props.htmlProps,
+        onClick: (event) => {
+          if (event.target instanceof Element && event.target.closest(ROW_CLICK_IGNORED)) return
+          if (window.getSelection()?.toString()) return
+          open(row.id)
+        },
+      },
+    }),
+  }
+}
+
 function BehaviorGroup({ behavior, props, isFlaggedOnly }: { behavior: Behavior; props: ViewProps; isFlaggedOnly: boolean }) {
   const { spec, state, changedIds } = props
   const scenarios = spec.scenarios.filter((s) => s.behavior === behavior.id && (!isFlaggedOnly || isScenarioFlagged(state, s)))
-  const plugins = useMemo(() => ({ changed: changedRowsPlugin<ScenarioRow>(changedIds) }), [changedIds])
-  const columns = scenarioColumns(props, spec.stage === 2)
+  const [browseId, setBrowseId] = useState<string | null>(null)
+  const plugins = useMemo(() => ({ changed: changedRowsPlugin<ScenarioRow>(changedIds), browse: browseRowPlugin(setBrowseId) }), [changedIds])
+  const columns = scenarioColumns(props, spec.stage === 2, setBrowseId)
   if (isFlaggedOnly && scenarios.length === 0) return null
   return (
     <VStack gap={2}>
@@ -369,6 +427,13 @@ function BehaviorGroup({ behavior, props, isFlaggedOnly }: { behavior: Behavior;
       </VStack>
       <Table data={scenarios} columns={columns} plugins={plugins} idKey="id" verticalAlign="top" dividers="rows" />
       {spec.stage === 1 ? <BehaviorRequests behavior={behavior} props={props} /> : null}
+      <ScenarioFocusDialog
+        isOpen={browseId !== null}
+        onClose={() => setBrowseId(null)}
+        behaviorId={behavior.id}
+        startScenarioId={browseId ?? undefined}
+        props={props}
+      />
     </VStack>
   )
 }
