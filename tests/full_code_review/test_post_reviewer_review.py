@@ -20,8 +20,9 @@ def report():
         "meta": {"target": "change", "forge": "gitlab", "number": 42, "project": "group/project", "head_sha": HEAD,
                  "title": "Review", "standfirst_md": "Summary from report.",
                  "verdict": "Fix first", "seat": "reviewer"},
+        # Nit posting mechanics are exercised here; the default floor has its own test
         "run": {"dimensions_run": ["correctness"],
-                "source_access": "borrowed-worktree"},
+                "source_access": "borrowed-worktree", "severity_floor": "Nit"},
         "risk": {"level": "Medium", "verbatim_md": "Some risk."},
         "findings": [
             {"severity": "Must fix", "dimension": "correctness", "file": "a.py", "line": "2-4",
@@ -821,7 +822,7 @@ def test_reply_is_not_staged_for_a_slot_that_does_not_post(tmp_path):
 
 
 def test_reply_nit_is_normalized_to_non_blocking():
-    prepared = {"meta": {"head_sha": HEAD}, "findings": [{
+    prepared = {"meta": {"head_sha": HEAD}, "run": {"severity_floor": "Nit"}, "findings": [{
         "id": "F1", "severity": "Nit", "file": "a.py", "line": "2", "title": "Tidy",
         "impact": "Reads badly.", "fix_md": "Rename it.",
         "memory": _memory(REPLY_FP, [_human()])}]}
@@ -948,3 +949,18 @@ def test_receipts_helper_warns_when_a_reply_has_no_recoverable_marker():
     receipts, warnings = m._memory_receipts(state, {"head_sha": HEAD}, [])
     assert receipts["F1"] == {"published": True, "head_sha": HEAD}
     assert any("F1" in warning for warning in warnings)
+
+
+def test_plan_omits_findings_below_the_default_floor():
+    prepared = {"meta": {"head_sha": HEAD}, "findings": [
+        {"id": "F1", "severity": "Should fix", "file": "a.py", "line": "2", "title": "Real",
+         "impact": "Breaks.", "fix_md": "Fix."},
+        {"id": "F2", "severity": "Nit", "file": "a.py", "line": "3", "title": "Tidy",
+         "impact": "Reads badly.", "fix_md": "Rename it."}]}
+    by_id = {fid: {"id": fid, "slot": "later", "disposition": "Non-blocking", "note": ""}
+             for fid in ("F1", "F2")}
+    posted, omitted, _ = m._plan(prepared, by_id, context(), {
+        "base_sha": BASE, "start_sha": START, "head_sha": HEAD})
+    assert [item["finding_id"] for item in posted] == ["F1"]
+    assert omitted == [{"id": "F2", "reason": "below the posting floor (Should fix)",
+                        "disposition": "Non-blocking", "fingerprint": None}]

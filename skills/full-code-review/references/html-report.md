@@ -86,6 +86,13 @@ remains `branch`.
 | `source_access` | `author-worktree`, `borrowed-worktree`, `temp-clone`, or `diff-only` |
 | `source_access_reason` | Required non-empty string for `diff-only`; rendered prominently |
 | `mutation_consent` | Per-run boolean. Reviewer runs default false; never reuse a prior run's value. |
+| `incomplete` | Boolean. True when any selected lens failed; forced true when `dimensions_failed` is non-empty. An incomplete report shows a banner and can never carry a clean verdict (an approve-style verdict renders as `Incomplete review`). |
+| `dimensions_failed` | Lens ids that did not finish after the model-fallback retry. |
+| `models` | `{lens id: model that actually ran}`, including fallbacks and escalations. |
+| `verification` | `{enabled, model, checked, refuted, fallback}` for cross-family verification of Must/Should findings. |
+| `excluded_generated` | Paths dropped as generated (`linguist-generated` or `skip_globs`) before review. |
+| `policy_sources` | `policy.sources` from `resolve_policy.py`: `{kind, path, ref}` per layer that applied. |
+| `severity_floor` | `Must fix`, `Should fix` (default), or `Nit`. Findings below it render but never post. |
 
 When `source_access` is `diff-only`, the renderer forces every finding's `verified`
 to false and renders the reason in both HTML and Markdown. The reviewer poster repeats

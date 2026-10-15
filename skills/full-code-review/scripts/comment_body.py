@@ -627,6 +627,7 @@ def _author_bodies(raw, decisions=None):
     if meta["seat"] != "author":
         raise ValueError("author subcommand requires meta.seat to be author, got %r" % meta["seat"])
     head_sha = meta.get("head_sha")
+    floor = render_report.severity_floor(prepared)
     bodies = {}
     posted = []
     omitted = []
@@ -644,6 +645,9 @@ def _author_bodies(raw, decisions=None):
                             "memory_state": memory.get("state"),
                             "thread_url": thread.get("url"),
                             "fingerprint": memory.get("fingerprint")})
+        elif render_report.below_floor(finding, floor):
+            omitted.append({"id": finding["id"], "reason": "below the posting floor (%s)" % floor,
+                            "disposition": "Below floor", "fingerprint": memory.get("fingerprint")})
         elif decisions is None or row.get("slot") in _POSTED_SLOTS:
             warnings.extend(finding_warnings)
             bodies[finding["id"]]["post"] = True

@@ -284,6 +284,7 @@ def _plan(prepared, by_id, context, refs, changed_paths=None):
     warnings = []
     changed_paths = changed_paths or set()
     head_sha = (prepared.get("meta") or {}).get("head_sha")
+    floor = render_report.severity_floor(prepared)
     for finding in prepared["findings"]:
         decision = by_id[finding["id"]]
         memory = finding.get("memory") if isinstance(finding.get("memory"), dict) else {}
@@ -305,6 +306,10 @@ def _plan(prepared, by_id, context, refs, changed_paths=None):
             })
             continue
         slot = decision["slot"]
+        if slot in POST_SLOTS and render_report.below_floor(finding, floor):
+            omitted.append({"id": finding["id"], "reason": "below the posting floor (%s)" % floor,
+                            "disposition": decision["disposition"], "fingerprint": fingerprint})
+            continue
         if slot not in POST_SLOTS:
             omitted.append({"id": finding["id"], "reason": decision["disposition"],
                             "disposition": decision["disposition"], "fingerprint": fingerprint})

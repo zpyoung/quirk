@@ -24,7 +24,10 @@ _TOP_FIELDS = {"schema_version", "meta", "run", "mutation_probe", "risk", "findi
 _META_FIELDS = {"target", "forge", "number", "branch", "project", "ticket", "head_sha", "change_state", "title", "standfirst_md", "verdict", "storage_key", "seat", "repo_root", "source_branch", "web_url"}
 _RUN_FIELDS = {"dimensions_run", "dimensions_skipped", "diff_size", "coverage", "guidance",
                "clean_notes", "notes_md", "source_access", "source_access_reason",
-               "mutation_consent"}
+               "mutation_consent", "incomplete", "dimensions_failed", "models", "verification",
+               "excluded_generated", "policy_sources", "severity_floor"}
+DEFAULT_SEVERITY_FLOOR = "Should fix"
+_CLEAN_VERDICTS = {"approve", "approved", "lgtm", "approve with comments"}
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 _DISPOSITIONS = {
@@ -46,6 +49,17 @@ _SNAPSHOT_FIELDS = {"schemaVersion", "target_key", "identity", "seat", "base_sha
                     "findings", "discussions", "discussions_available", "warnings",
                     "invalidation_reason", "file_hashes", "unchanged_files"}
 _FINDING_FIELDS = {"severity", "dimension", "dimensions", "file", "line", "issue", "recommendation", "verified", "assumptions", "title", "impact", "fix_md", "area", "evidence", "body_md", "aside_md", "recommendation_md", "anchor_side", "memory"}
+
+
+def severity_floor(prepared):
+    """The lowest severity allowed to post for this report (run.severity_floor, default Should fix)."""
+    run = prepared.get("run") if isinstance(prepared.get("run"), dict) else {}
+    return run.get("severity_floor") or DEFAULT_SEVERITY_FLOOR
+
+
+def below_floor(finding, floor):
+    """Whether `finding` is less severe than `floor` and so must never be posted."""
+    return SEVERITY_ORDER[finding["severity"]] > SEVERITY_ORDER[floor]
 
 
 def slugify(name):
@@ -346,6 +360,31 @@ def _warn_unknown(mapping, allowed, label, warnings):
         warnings.append("Unknown %s field ignored: %s" % (label, key))
 
 
+def _validate_contract_run(run, meta, warnings):
+    """Validate the schema_version 1 run keys and enforce the incomplete-report rule."""
+    if "incomplete" in run and not isinstance(run["incomplete"], bool):
+        raise ValueError("run.incomplete must be true or false")
+    for key in ("dimensions_failed", "excluded_generated"):
+        if key in run:
+            _list_of_strings(run[key], "run.%s" % key)
+    if "severity_floor" in run and run["severity_floor"] not in SEVERITY_ORDER:
+        raise ValueError("run.severity_floor must be Must fix, Should fix, or Nit")
+    if "models" in run and (not isinstance(run["models"], dict) or
+                            any(not isinstance(v, str) for v in run["models"].values())):
+        raise ValueError("run.models must map lens ids to model names")
+    if "verification" in run and not isinstance(run["verification"], dict):
+        raise ValueError("run.verification must be an object")
+    if "policy_sources" in run and (not isinstance(run["policy_sources"], list) or
+                                    any(not isinstance(v, dict) for v in run["policy_sources"])):
+        raise ValueError("run.policy_sources must be a list of objects")
+    if run.get("dimensions_failed") and not run.get("incomplete"):
+        warnings.append("run.dimensions_failed is non-empty; marking the report incomplete.")
+        run["incomplete"] = True
+    if run.get("incomplete") and meta["verdict"].strip().lower() in _CLEAN_VERDICTS:
+        warnings.append("Incomplete reports cannot carry a clean verdict; showing \"Incomplete review\".")
+        meta["verdict"] = "Incomplete review"
+
+
 def _prepare_report(report):
     if not isinstance(report, dict):
         raise ValueError("report JSON must be an object")
@@ -485,6 +524,7 @@ def _prepare_report(report):
             if key in run and not isinstance(run[key], list):
                 warnings.append("run.%s is not a list; omitting it." % key)
                 run[key] = []
+        _validate_contract_run(run, meta, warnings)
     for key in ("recommended_order", "assumptions", "process_notes"):
         if key in prepared and not isinstance(prepared[key], list):
             warnings.append("%s is not a list; omitting it." % key)
@@ -640,6 +680,10 @@ def _what_was_run(report):
     if run.get("source_access") == "diff-only":
         out.append(_banner("warning", "Verification limited to the diff.",
                            "Every finding is unverified. %s" % _esc(run.get("source_access_reason"))))
+    if run.get("incomplete"):
+        failed = ", ".join(_string_list(run.get("dimensions_failed"))) or "unknown lenses"
+        out.append(_banner("warning", "Incomplete review.",
+                           "%s did not finish, so a short findings list here is not a clean bill." % _esc(failed)))
     rows = []
     if run.get("diff_size"):
         rows.append(_row("Diff size", _esc(run["diff_size"])))
@@ -654,6 +698,16 @@ def _what_was_run(report):
         rows.append(_row("Dimensions run",
                          '<div class="taglist">%s</div>' %
                          "".join(_token(item, mono=True) for item in dimensions)))
+    models = run.get("models") if isinstance(run.get("models"), dict) else {}
+    if models:
+        rows.append(_row("Models", '<div class="taglist">%s</div>' %
+                         "".join(_token("%s: %s" % (k, v), mono=True) for k, v in sorted(models.items()))))
+    if run.get("severity_floor"):
+        rows.append(_row("Posting floor", _esc(run["severity_floor"])))
+    excluded = _string_list(run.get("excluded_generated"))
+    if excluded:
+        rows.append(_row("Excluded as generated", '<div class="taglist">%s</div>' %
+                         "".join(_token(item, mono=True) for item in excluded)))
     for item in skipped:
         if isinstance(item, dict):
             rows.append(_row("Skipped: %s" % _esc(item.get("name", "unknown")),
@@ -1286,9 +1340,15 @@ def _render_md_prepared(report):
         if run.get("source_access") == "diff-only":
             source_line += " — every finding is unverified. %s" % run.get("source_access_reason", "")
         lines.extend([source_line.rstrip(), ""])
+    if run.get("incomplete"):
+        failed = ", ".join(_string_list(run.get("dimensions_failed"))) or "some lenses"
+        lines.extend(["**Incomplete:** %s did not finish; this report is not a clean bill." % failed, ""])
     dimensions = _string_list(run.get("dimensions_run"))
     if dimensions:
         lines.extend(["**Dimensions run:** %s" % ", ".join(dimensions), ""])
+    models = run.get("models") if isinstance(run.get("models"), dict) else {}
+    if models:
+        lines.extend(["**Models:** %s" % ", ".join("%s: %s" % kv for kv in sorted(models.items())), ""])
     skipped = run.get("dimensions_skipped") if isinstance(run.get("dimensions_skipped"), list) else []
     if skipped:
         labels = []

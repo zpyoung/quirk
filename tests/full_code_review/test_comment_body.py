@@ -606,6 +606,8 @@ def raw_report():
     return {
         "meta": {"target": "change", "forge": "gitlab", "number": 7, "project": "g/p", "head_sha": HEAD, "title": "T",
                  "standfirst_md": "Summary.", "verdict": "Fix first"},
+        # these tests cover Nit body mechanics; the default floor is tested in test_render_contract
+        "run": {"severity_floor": "Nit"},
         "findings": [
             {"severity": "Must fix", "dimension": "correctness", "file": "a.py", "line": "2",
              "title": "Bug", "impact": "It breaks.", "fix_md": "Fix it.",
