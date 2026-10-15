@@ -241,7 +241,7 @@ scope:
 
 **Contract:** `tech.md#github-adapter-specifics` and `#forge-interface` in full. Invariants mapped from the GitLab fence: refuse when the viewer already has a PENDING review; stage is one create with anchors pre-validated (unplaceable → overview + warning); false-422 adoption by overview digest; exact comment-set equality and unchanged head + merge base immediately before submit; `published` recorded before ledger work; cleanup is a printed `gh api … -X DELETE …/reviews/{id}` the agent never runs; author inline via `POST …/pulls/{n}/comments`, overview via `POST …/issues/{n}/comments`; `list_threads` via GraphQL `reviewThreads`; `commit_authors` from `pulls/{n}/commits` `author.login`; `is_fork` from `head.repo.full_name != base.repo.full_name`; `author_trusted` from `author_association`.
 
-**Ask gate:** before Step 3, verify on a real PR the user owns that `addPullRequestReviewThreadReply` with `pullRequestReviewId` attaches a reply to a pending review. Ask the user before creating any PR or review. If it does not attach, stop and escalate (affects `logic.md#forge-support`).
+**Ask gate (passed 2026-10-15 on zpyoung/quirk#50; see tech.md GitHub adapter specifics):** before Step 3, verify on a real PR the user owns that `addPullRequestReviewThreadReply` with `pullRequestReviewId` attaches a reply to a pending review. Ask the user before creating any PR or review. If it does not attach, stop and escalate (affects `logic.md#forge-support`).
 
 **Acceptance (`COMMAND:`):** the standard suite, plus
 
