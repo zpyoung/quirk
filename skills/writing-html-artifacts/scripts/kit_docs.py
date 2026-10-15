@@ -117,7 +117,13 @@ def _placeholder(slot: str) -> str:
 def render_example(tag: str, example: str, required_slots: Sequence[str]) -> str:
     """Render the ``report`` source that shows ``example``, with a placeholder for every other required slot."""
     header = {"template": EXAMPLE_TEMPLATE, "title": f"{tag} example", "mode": "offline", "interactions": []}
-    parts = [f"<!-- quirk-src {json.dumps(header)} -->", "<!-- slot: main -->", example.strip("\n")]
+    parts = [
+        f"<!-- quirk-src {json.dumps(header)} -->",
+        "<!-- slot: summary -->",
+        f"<p>A page that shows the {tag} element.</p>",
+        "<!-- slot: main -->",
+        example.strip("\n"),
+    ]
     for slot in required_slots:
         if slot != "main":
             parts += [f"<!-- slot: {slot} -->", _placeholder(slot)]

@@ -83,10 +83,22 @@ def _declarations(entries: dict, group: str, index: Optional[int]) -> list[str]:
     return lines
 
 
+def _print_light(tokens: dict) -> str:
+    """The ``@media print`` block that puts every color back to its light value, whatever theme is on.
+
+    Each selector is padded to three selectors' worth of specificity so it beats both dark blocks
+    regardless of the page's theme attribute or class.
+    """
+    lines = "\n".join("  " + line for line in _declarations(tokens.get("color", {}), "color", 0))
+    selectors = ':root:root:root,\n  :root[data-theme="dark"]:root,\n  :root.wa-dark:root'
+    return "@media print {\n  " + selectors + " {\n" + lines + "\n  }\n}\n"
+
+
 def tokens_css(tokens: dict) -> str:
     """Render tokens as ``--q-<group>-<key>`` custom properties for light and dark.
 
-    Raises ValueError for an invalid token set. Only colors differ between light and dark.
+    Raises ValueError for an invalid token set. Only colors differ between light and dark; a trailing
+    ``@media print`` block re-declares the light colors so a printed page is light under any theme.
     """
     errors = validate_tokens(tokens)
     if errors:
@@ -110,6 +122,7 @@ def tokens_css(tokens: dict) -> str:
             + "\n  }\n}\n"
         )
         parts.append(block(':root[data-theme="dark"]', dark))
+        parts.append(_print_light(tokens))
     return "".join(parts)
 
 

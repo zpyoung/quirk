@@ -22,6 +22,7 @@ from .tokens import validate_tokens
 NAME_RE = re.compile(r"^[a-z0-9-]{1,40}\Z")
 SLOT_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 REQUIRED_PLACEHOLDERS = ("{{header}}", "{{title}}", "{{head}}", "{{chrome}}", "{{body_end}}")
+REGION_SLOTS = ("main", "aside")
 _SLOT_PLACEHOLDER = re.compile(r"\{\{slot:([^{}]*)\}\}")
 _LIB_KINDS = ("js", "css")
 _LIB_POSITIONS = ("head", "body-end")
@@ -240,6 +241,8 @@ def _tier1_problems(tdir: Path, meta: dict) -> list[str]:
                     errors.append(f"slot {slot!r} required must be true or false")
                 if "description" in info and not isinstance(info["description"], str):
                     errors.append(f"slot {slot!r} description must be a string")
+            if slot == "summary":
+                errors.append("slot 'summary' is reserved: every tier 1 template accepts it without declaring it")
             declared.append(slot)
 
     for key in ("skeleton", "example"):
@@ -261,8 +264,14 @@ def _tier1_problems(tdir: Path, meta: dict) -> list[str]:
             for placeholder in REQUIRED_PLACEHOLDERS:
                 if placeholder not in text:
                     errors.append(f"skeleton is missing {placeholder}")
+            regions = "{{regions}}" in text
+            if regions and "{{slot:main}}" in text:
+                errors.append("skeleton has both {{regions}} and {{slot:main}}; {{regions}} already places main")
             for slot in declared:
-                if "{{slot:%s}}" % slot not in text:
+                if regions and slot in REGION_SLOTS:
+                    if "{{slot:%s}}" % slot in text:
+                        errors.append("skeleton has {{regions}}, so it must not also have {{slot:%s}}" % slot)
+                elif "{{slot:%s}}" % slot not in text:
                     errors.append("skeleton is missing {{slot:%s}}" % slot)
             for used in _SLOT_PLACEHOLDER.findall(text):
                 if used not in declared:
