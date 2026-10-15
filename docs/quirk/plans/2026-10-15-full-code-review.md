@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use quirk:subagent-driven-development (recommended) or quirk:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. "Follow the step exactly" means **satisfy the stated acceptance criteria** — if a contract is ambiguous, ask before guessing.
 
-**Status:** Draft (agent-reviewed; fixes applied)
+**Status:** Complete (all tasks executed 2026-10-15)
 
 **Executor:** quirk:executing-plans, this session and later ones (plan persisted for that reason).
 
@@ -293,4 +293,4 @@ Expected: `0 failed` everywhere.
 - [x] Step 3: example pack and tests; commit. (landed in Task 4)
 - [x] Step 4: smoke fixtures, checker, tests; commit.
 - [x] Step 5: GitLab polish and `test_forge_gitlab.py`; commit.
-- [ ] Step 6: manual done-when checks.
+- [x] Step 6: manual done-when checks. (2026-10-15: all five smoke cases passed `smoke_check.py` in zero-config local runs with lenses dispatched as parallel sonnet subagents; HTML and Markdown rendered each time. Fixes from those runs landed in `ac4d964`.)
