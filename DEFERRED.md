@@ -140,3 +140,12 @@ Reviewed every sprint planning. Use `/quirk:artifacts:defer` to append.
 - **Estimated effort**: M
 - **Priority**: P2
 - **Proposed owner**: unassigned
+- **Resolved**: 2026-10-15. pi-watch.mjs now builds a ModelRuntime and passes it to createAgentSession. package.json pins ^1.2.0, not ^1.0.0, because pi-coding-agent 1.0.0 and 1.1.0 fail on a fresh install: their caret range on pi-codemode resolves to 1.2.0, which dropped an export they import. The launcher reinstalls deps older than that floor, and a committed pnpm-workspace.yaml declines the two dependency build scripts so pnpm 12's install doesn't exit 1.
+
+## DEFER-17: Refresh pi-watch alias ladders for the pi 1.x model catalog
+- **Deferred**: 2026-10-15
+- **Session context**: pi-watch 1.x SDK port on zpyoung/fix-pi-watch
+- **Why deferred**: pi 1.1.0 --list-models lists anthropic/claude-sonnet-5-5, anthropic/claude-haiku-5-5 and openai/gpt-6.1-sol, which no ladder in skills/pi-dev/scripts/pi-watch/pi-watch.mjs ALIASES includes, so sonnet/haiku/codex resolve to older models. The launcher's --where staleness probe greps for gpt-5.6 and needs the same update. Left out of the 1.x SDK port because a ladder refresh is a separate model-choice decision.
+- **Estimated effort**: S
+- **Priority**: P2
+

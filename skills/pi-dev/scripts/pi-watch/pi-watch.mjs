@@ -20,10 +20,9 @@ import { spawnSync } from "node:child_process";
 import { statSync } from "node:fs";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import {
-    AuthStorage,
     createAgentSession,
     createExtensionRuntime,
-    ModelRegistry,
+    ModelRuntime,
     SessionManager,
     SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -243,7 +242,8 @@ function scanTrailer(text, key) {
 
 // ---- Resolve provider/model/thinking -------------------------------------
 function listAvailable() {
-    // pi --list-models writes the table to STDERR. Fast (~0.5s) and does not
+    // pi --list-models writes the table to stderr before 1.0 and to stdout
+    // from 1.0, so both streams are parsed. Fast (~0.5s) and does not
     // trigger pi's slow cwd resource scan, so safe to call from any directory.
     // We rely on `pi` (not the SDK registry) to resolve auth — it handles env
     // vars, ~/.pi/agent/auth.json, OAuth subscription tokens, and models.json
@@ -392,30 +392,35 @@ const resourceLoader = {
     getThemes: () => ({ themes: [], diagnostics: [] }),
     getAgentsFiles: () => ({ agentsFiles: [] }),
     getSystemPrompt: () => "You are a coding assistant. Be concise and direct.",
+    getSystemPromptSource: () => undefined,
     getAppendSystemPrompt: () => [],
+    getAppendSystemPromptSources: () => [],
     extendResources: () => {},
     reload: async () => {},
 };
 
 const cwd = opts.cwd ?? process.cwd();
 const home = process.env.HOME ?? "";
-const authStorage = AuthStorage.create(`${home}/.pi/agent/auth.json`);
-const modelRegistry = ModelRegistry.inMemory(authStorage);
 const settingsManager = SettingsManager.inMemory({
     compaction: { enabled: false },
     retry: { enabled: true, maxRetries: 2 },
+    // warming refreshes the prompt cache with extra paid requests; a one-shot run never reuses it.
+    cacheWarming: "off",
 });
 
 process.stderr.write(`  ▶ resolved ${resolved.provider}/${resolved.model}:${resolved.thinking}${resolved.triedFromAlias ? ` (alias ${opts.alias})` : ""}\n`);
 
 try {
+    const modelRuntime = await ModelRuntime.create({
+        authPath: `${home}/.pi/agent/auth.json`,
+        modelsPath: `${home}/.pi/agent/models.json`,
+    });
     const { session } = await createAgentSession({
         cwd,
         agentDir: `${home}/.pi/agent`,
         model,
         thinkingLevel: resolved.thinking,
-        authStorage,
-        modelRegistry,
+        modelRuntime,
         resourceLoader,
         tools: opts.tools,
         sessionManager: SessionManager.inMemory(cwd),
@@ -435,6 +440,20 @@ try {
     });
 
     await session.prompt(opts.prompt);
+
+    // provider failures (expired auth, aborts, output-limit cutoffs) resolve prompt() instead of throwing.
+    const last = session.state.messages.at(-1);
+    const failure = last?.role !== "assistant" ? null
+        : last.stopReason === "error" || last.stopReason === "aborted" ? (last.errorMessage || `request ${last.stopReason}`)
+        : last.stopReason === "length" ? "response truncated at the model's output token limit"
+        : null;
+    if (failure) {
+        await Promise.all([
+            new Promise((resolve) => process.stdout.write("\n", resolve)),
+            new Promise((resolve) => process.stderr.write(`\n  ✖ error: ${failure}\n`, resolve)),
+        ]);
+        process.exit(1);
+    }
 
     let doneLine = "  ✔ done\n";
     if (opts.requireTrailer !== null) {

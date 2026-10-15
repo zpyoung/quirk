@@ -94,16 +94,32 @@ done
 
 # --- ensure deps for the resolved version ------------------------------------
 # Published versions bundle node_modules, but self-heal if a version dir lacks
-# the SDK (e.g. shipped without deps, or after a manual cache prune).
-if [ ! -d "$PLUGIN_DIR/node_modules/@earendil-works/pi-coding-agent" ]; then
+# the SDK (e.g. shipped without deps, or after a manual cache prune), or holds
+# an SDK older than package.json's "^X.Y.Z" floor (e.g. a pre-1.x pin).
+sdk_stale() {
+    node -e '
+        const fs = require("fs"), path = require("path");
+        const dir = process.argv[1];
+        try {
+            const want = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"))
+                .dependencies["@earendil-works/pi-coding-agent"].replace(/^\^/, "").split(".").map(Number);
+            const have = JSON.parse(fs.readFileSync(path.join(dir,
+                "node_modules/@earendil-works/pi-coding-agent/package.json"), "utf8")).version.split(".").map(Number);
+            const ok = have[0] === want[0] && (have[1] > want[1] || (have[1] === want[1] && have[2] >= want[2]));
+            process.exit(ok ? 1 : 0);
+        } catch { process.exit(0); }
+    ' "$1" 2>/dev/null
+}
+
+if sdk_stale "$PLUGIN_DIR"; then
     if command -v pnpm >/dev/null 2>&1; then
-        echo "pi-watch: installing dependencies in $PLUGIN_DIR (first run for this version)…" >&2
+        echo "pi-watch: installing dependencies in $PLUGIN_DIR (missing or older than package.json requires)…" >&2
         if ! (cd "$PLUGIN_DIR" && pnpm install --silent) >&2; then
             echo "pi-watch: 'pnpm install' failed in $PLUGIN_DIR." >&2
             exit 1
         fi
     else
-        echo "pi-watch: dependencies missing in $PLUGIN_DIR and pnpm is not on PATH." >&2
+        echo "pi-watch: dependencies missing or outdated in $PLUGIN_DIR and pnpm is not on PATH." >&2
         echo "  Install pnpm (https://pnpm.io/installation) or run 'pnpm install' there." >&2
         exit 1
     fi

@@ -120,7 +120,7 @@ QUIRK="$(node -e 'const fs=require("fs"),os=require("os"),p=require("path");cons
 install -m755 "$QUIRK/skills/pi-dev/scripts/pi-watch/pi-watch" ~/.local/bin/pi-watch  # or any PATH dir
 ```
 
-Verify: `pi --version` → expect ≥ 0.65.1. `pi /login` for any subscription provider you want (Claude, ChatGPT, Copilot). Then `pi-watch --check` to confirm which aliases resolve to an authed model — the first run also auto-installs the current version's Node deps if they're missing.
+Verify: `pi --version` → expect ≥ 0.65.1, and `node --version` → expect ≥ 22.19 (the pi SDK's floor). `pi /login` for any subscription provider you want (Claude, ChatGPT, Copilot). Then `pi-watch --check` to confirm which aliases resolve to an authed model — the first run also auto-installs the current version's Node deps if they're missing or outdated.
 
 **Updating:** `claude plugin update quirk` is enough — `pi-watch` auto-follows. Run `pi-watch --where` to see which version/dir it resolves to (and whether that copy has the current alias ladder). Re-run the `install` line above only if the launcher script itself changes (rare); mjs/alias updates are picked up automatically.
 

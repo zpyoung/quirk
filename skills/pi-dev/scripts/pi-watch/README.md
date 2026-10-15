@@ -9,6 +9,8 @@ Bypasses pi's `DefaultResourceLoader` (extensions / skills / prompts / themes / 
 
 ## Setup (one-time)
 
+Needs Node ≥ 22.19 and pnpm. The SDK deps are pinned to pi-coding-agent `^1.2.0`; the launcher reinstalls them when they're missing or older than that.
+
 ```bash
 cd <this-dir>
 pnpm install
@@ -108,7 +110,7 @@ Pi has no built-in sandbox — `bash`, `edit`, and `write` operate at the caller
 | Code | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | Runtime error during prompt execution |
+| 1 | Runtime error: the SDK threw, the provider returned an error (e.g. expired auth: run `pi /login`), the request was aborted, or the reply hit the output token limit |
 | 2 | Bad CLI args / unknown alias |
 | 3 | Model not in pi-ai registry (run `pnpm update` here) |
 | 4 | Cannot run `pi --list-models` (pi binary missing?) |
