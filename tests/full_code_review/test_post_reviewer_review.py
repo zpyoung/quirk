@@ -17,7 +17,7 @@ START = "c" * 40
 
 def report():
     return {
-        "meta": {"target": "mr", "iid": 42, "project": "group/project", "head_sha": HEAD,
+        "meta": {"target": "change", "forge": "gitlab", "number": 42, "project": "group/project", "head_sha": HEAD,
                  "title": "Review", "standfirst_md": "Summary from report.",
                  "verdict": "Fix first", "seat": "reviewer"},
         "run": {"dimensions_run": ["sakura:correctness"],
@@ -37,7 +37,7 @@ def report():
 
 def context():
     return {"seat": "reviewer", "refs": {"base": BASE, "start": START, "head": HEAD},
-            "mr": {"iid": 42, "host": "gitlab.example", "project": "group/project",
+            "change": {"number": 42, "host": "gitlab.example", "project": "group/project",
                    "sha": HEAD, "current_user_id": 2, "current_username": "reviewer"},
             "diff": ("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"
                      "diff --git a/b.py b/b.py\n--- a/b.py\n+++ b/b.py\n"

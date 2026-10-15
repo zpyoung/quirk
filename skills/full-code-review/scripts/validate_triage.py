@@ -9,6 +9,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import render_report  # noqa: E402
 import review_memory  # noqa: E402
+from forge import change_label  # noqa: E402
 
 GROUPS = {
     "author": [("fix", "Will fix"), ("later", "Fix later"),
@@ -27,8 +28,8 @@ HANDOFF_DELIM = "<!-- sakura-review handoff: not validated, not used for posting
 
 
 def export_label(meta):
-    if meta["target"] == "mr":
-        return "MR !%s" % meta["iid"]
+    if meta["target"] == "change":
+        return change_label(meta["forge"], meta["number"])
     if meta["target"] == "branch":
         return meta["branch"]
     return "local changes"

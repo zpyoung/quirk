@@ -421,7 +421,7 @@ def test_support_body_details_present_when_note_even_if_thin():
 
 def make_report(**over):
     report = {
-        "meta": {"target": "mr", "iid": 7, "project": "g/p", "head_sha": HEAD,
+        "meta": {"target": "change", "forge": "gitlab", "number": 7, "project": "g/p", "head_sha": HEAD,
                  "title": "T", "standfirst_md": "The summary.", "verdict": "Request changes",
                  "seat": "reviewer"},
         "run": {"source_access": "borrowed-worktree"},
@@ -604,7 +604,7 @@ def test_overview_rejects_bad_seat():
 
 def raw_report():
     return {
-        "meta": {"target": "mr", "iid": 7, "project": "g/p", "head_sha": HEAD, "title": "T",
+        "meta": {"target": "change", "forge": "gitlab", "number": 7, "project": "g/p", "head_sha": HEAD, "title": "T",
                  "standfirst_md": "Summary.", "verdict": "Fix first"},
         "findings": [
             {"severity": "Must fix", "dimension": "correctness", "file": "a.py", "line": "2",

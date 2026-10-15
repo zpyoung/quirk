@@ -140,7 +140,7 @@ Expected: the grep prints nothing.
 
 - [x] Step 1: `test_forge_detect.py` red; `detect_forge` green; drop `DEFAULT_HOST`; commit.
 - [x] Step 2 (prepare_diff only; see note): give `GitLabForge` full Protocol conformance (dataclass-returning methods, `list_threads` returning the neutral discussion-dict shape documented in `tech.md#symbols-that-move-into-forgegitlabpy`); switch scripts to `Forge` dispatch; delete shims; retarget tests; commit.
-- [ ] Step 3: context/report vocabulary across scripts, assets, references, tests, with the paste round-trip test, in one commit.
+- [x] Step 3: context/report vocabulary across scripts, assets, references, tests, with the paste round-trip test, in one commit.
 
 ---
 

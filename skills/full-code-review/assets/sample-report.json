@@ -1,15 +1,17 @@
 {
+  "schema_version": 1,
   "meta": {
-    "target": "mr",
-    "iid": 123,
+    "target": "change",
     "project": "sample/project",
     "seat": "author",
     "head_sha": "abc123abc123abc123abc123abc123abc123abcd",
     "title": "Sample combined review report",
     "verdict": "Fix, then merge",
-    "mr_state": "Open · review-mr-memory → main",
     "standfirst_md": "The feature is coherent and its security boundary is genuinely well built — untrusted GitLab note text never drives a posting decision, and the flow fails closed before any mutation. One defect blocks it: `--repo` is never threaded to the `reconcile` and `check` subcommands, so memory breaks outright for every branch and local author-seat review. The suite cannot see it because every test stays in MR mode, which is also the largest of the coverage gaps below.",
-    "ticket": "DEMO-1"
+    "ticket": "DEMO-1",
+    "forge": "gitlab",
+    "number": 123,
+    "change_state": "Open · review-mr-memory → main"
   },
   "run": {
     "dimensions_run": [

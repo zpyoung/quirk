@@ -38,9 +38,11 @@ The minimum renderable document is:
 
 ```json
 {
+  "schema_version": 1,
   "meta": {
-    "target": "mr",
-    "iid": 35741,
+    "target": "change",
+    "forge": "github",
+    "number": 35741,
     "title": "Valuing pinned credits at their locked rate",
     "verdict": "Fix, then merge"
   },
@@ -52,22 +54,23 @@ The minimum renderable document is:
 
 | Field | Required | Type and use |
 |---|---:|---|
-| `target` | yes | `"mr"`, `"branch"`, or `"local"` |
-| `iid` | for `mr` | Positive integer or integer-valued string; output slug and `MR !<iid>` label |
+| `target` | yes | `"change"`, `"branch"`, or `"local"` |
+| `forge` | for `change` | `"github"` or `"gitlab"`; picks the `PR #<n>` or `MR !<n>` label |
+| `number` | for `change` | Positive integer or integer-valued string; output slug and change label |
 | `branch` | for `branch` | Non-empty string; export label and slug source. The slug gains a hash suffix so `feat/foo` and `feat-foo` cannot collide. |
 | `title` | yes | Non-empty, single-line string; page heading and tab title |
 | `verdict` | yes | String judgement, normally `Approve`, `Fix, then merge`, or `Request changes` |
 | `standfirst_md` | no | One or two sentences under the title |
 | `project` | reviewer-required | Full `group/project`; eyebrow and delivery identity. |
 | `ticket` | no | Eyebrow segment |
-| `seat` | coordinator-required | `"author"` or `"reviewer"`; defaults to `author` only for backward-compatible old reports. Reviewer is valid only with `target: mr`. |
+| `seat` | coordinator-required | `"author"` or `"reviewer"`; defaults to `author` only for backward-compatible old reports. Reviewer is valid only with `target: change`. |
 | `head_sha` | reviewer-required | Eyebrow/footer segment. Reviewer reports require the full 40-character lowercase SHA used to build the review. |
-| `mr_state` | no | Eyebrow segment, such as `Draft · 0 of 2 approvals` |
+| `change_state` | no | Eyebrow segment, such as `Draft · 0 of 2 approvals` |
 | `storage_key` | no | Explicit localStorage key. Normally omit it. Author keys retain `sakura-review-<target>-<finding-digest>`; reviewer keys include `reviewer`. The digest covers severity, file, line, title, body, recommendation, `impact`, and `fix_md`, so triage state saved for a report rendered without those two fields does not carry over to one that has them. Stored state also carries its seat and is discarded on a seat mismatch. |
 
 Absent eyebrow fields and their separators are omitted individually. A branch name
-is required even if diff preparation discovered an MR, whenever `target` remains
-`branch`.
+is required even if diff preparation discovered a change request, whenever `target`
+remains `branch`.
 
 ### `run` — optional object
 
@@ -248,6 +251,7 @@ storage key follow the rules in the field tables.
 
 | Field | Type and omission rule |
 |---|---|
+| `schema_version` | Integer, currently `1`. Always written by the coordinator. Later versions only add keys; removing or retyping a key requires a new version. |
 | `recommended_order` | List of inline-Markdown action strings, blockers first. **Markdown backend only** — it feeds `## 5. Recommendations` and renders no HTML section, because the page already severity-ranks the findings and each card carries its own recommendation. |
 | `assumptions` | List of inline-Markdown assumptions; absent/empty omits the HTML section |
 | `process_notes` | List of `{"title": "…", "body_md": "…"}`; absent/empty omits the section |
@@ -502,7 +506,7 @@ The page exports exactly five groups, including zero-item groups. Export order i
 ```
 
 Author mode has the same shape with `[mode: author]` and Will fix / Fix later /
-Needs detail / Ignore / Undecided. The target label is `MR !<iid>`, raw branch name,
+Needs detail / Ignore / Undecided. The target label is `PR #<n>` or `MR !<n>`, raw branch name,
 or `local changes`. Notes normalize CRLF, lone CR, U+2028, and U+2029 to LF before
 every line receives `  > `.
 

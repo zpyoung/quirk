@@ -45,8 +45,8 @@ class DOM(HTMLParser):
 def report():
     return {
         "meta": {
-            "target": "mr", "iid": 42, "project": "demo/project", "ticket": "DEMO-1",
-            "head_sha": "abcdef1", "mr_state": "Draft", "title": "Review demo",
+            "target": "change", "forge": "gitlab", "number": 42, "project": "demo/project", "ticket": "DEMO-1",
+            "head_sha": "abcdef1", "change_state": "Draft", "title": "Review demo",
             "standfirst_md": "A **structured** review.", "verdict": "Fix, then merge",
         },
         "run": {
@@ -505,7 +505,7 @@ def test_memory_schema_rejects_malformed_hash_and_thread(tmp_path):
 
 def test_slug_and_naming(tmp_path):
     assert m.slugify(" Feature / Foo ") == "feature-foo"
-    assert m.target_slug({"target": "mr", "iid": 88}) == "88"
+    assert m.target_slug({"target": "change", "forge": "gitlab", "number": 88}) == "88"
     assert m.target_slug({"target": "local"}) == "local"
     one = m.target_slug({"target": "branch", "branch": "feat/foo"})
     two = m.target_slug({"target": "branch", "branch": "feat-foo"})
@@ -665,8 +665,8 @@ def test_validation_errors(tmp_path):
     bad = report(); bad["meta"]["title"] = []; cases.append(bad)
     bad = report(); bad["meta"]["title"] = "   "; cases.append(bad)
     bad = report(); bad["findings"][0]["dimensions"] = ["ok", 3]; cases.append(bad)
-    bad = report(); bad["meta"]["iid"] = "7/x"; cases.append(bad)
-    bad = report(); bad["meta"]["iid"] = 0; cases.append(bad)
+    bad = report(); bad["meta"]["number"] = "7/x"; cases.append(bad)
+    bad = report(); bad["meta"]["number"] = 0; cases.append(bad)
     bad = report(); bad["meta"] = {"target": "branch", "title": "x", "verdict": "Approve"}; cases.append(bad)
     bad = report(); bad["meta"] = {"target": "branch", "branch": "***", "title": "x", "verdict": "Approve"}; cases.append(bad)
     bad = report(); bad["findings"][0]["severity"] = "Blocker"; cases.append(bad)
@@ -898,7 +898,7 @@ def test_reviewer_mode_switches_labels_and_isolates_storage(tmp_path):
     assert reviewer_key == re.search(r'data-storage-key="([^"]+)"', m.render_html(reviewer, TEMPLATE)).group(1)
 
 
-def test_reviewer_report_requires_mr_and_full_head(tmp_path):
+def test_reviewer_report_requires_change_and_full_head(tmp_path):
     value = report()
     value["meta"]["seat"] = "reviewer"
     for bad in (None, "abcdef1", "A" * 40):
@@ -916,7 +916,7 @@ def test_reviewer_report_requires_mr_and_full_head(tmp_path):
         m.render_html(candidate, TEMPLATE)
         assert False
     except ValueError as exc:
-        assert "target an MR" in str(exc)
+        assert "target a change request" in str(exc)
 
 
 def test_diff_only_forces_unverified_and_renders_limitation(tmp_path):

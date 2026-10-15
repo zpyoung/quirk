@@ -38,7 +38,7 @@ def fixture(tmp_path):
     project = "group/project"
     context = {
         "seat": "reviewer", "refs": {"base": "b" * 40, "start": "c" * 40, "head": head},
-        "mr": {"iid": 7, "host": "gitlab.example", "project": project, "sha": head},
+        "change": {"number": 7, "host": "gitlab.example", "project": project, "sha": head},
     }
     ctx_path = tmp_path / "context.json"
     ctx_path.write_text(json.dumps(context))
@@ -78,7 +78,7 @@ def test_stale_head_aborts_without_touching_caller(tmp_path):
     local, context, _ = fixture(tmp_path)
     value = json.loads(context.read_text())
     value["refs"]["head"] = "d" * 40
-    value["mr"]["sha"] = "d" * 40
+    value["change"]["sha"] = "d" * 40
     context.write_text(json.dumps(value))
     before = run("git", "status", "--porcelain=v1", cwd=local).stdout
     rc, result = invoke(["acquire", "--context", str(context), "--repo", str(local),

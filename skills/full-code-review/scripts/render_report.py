@@ -13,14 +13,15 @@ import sys
 import webbrowser
 
 import highlight
+from forge import change_label
 from md_render import render_inline, render_markdown
 
 
 SEVERITY_ORDER = {"Must fix": 0, "Should fix": 1, "Nit": 2}
 SEVERITY_SLUG = {"Must fix": "must", "Should fix": "should", "Nit": "nit"}
 UNSAFE_LINE = re.compile(r"[\r\n\u2028\u2029]")
-_TOP_FIELDS = {"meta", "run", "mutation_probe", "risk", "findings", "recommended_order", "assumptions", "process_notes", "memory"}
-_META_FIELDS = {"target", "iid", "branch", "project", "ticket", "head_sha", "mr_state", "title", "standfirst_md", "verdict", "storage_key", "seat", "repo_root", "source_branch", "web_url"}
+_TOP_FIELDS = {"schema_version", "meta", "run", "mutation_probe", "risk", "findings", "recommended_order", "assumptions", "process_notes", "memory"}
+_META_FIELDS = {"target", "forge", "number", "branch", "project", "ticket", "head_sha", "change_state", "title", "standfirst_md", "verdict", "storage_key", "seat", "repo_root", "source_branch", "web_url"}
 _RUN_FIELDS = {"dimensions_run", "dimensions_skipped", "diff_size", "coverage", "guidance",
                "clean_notes", "notes_md", "source_access", "source_access_reason",
                "mutation_consent"}
@@ -54,10 +55,10 @@ def slugify(name):
 
 
 def target_slug(meta):
-    """Derive the stable output slug for an MR, branch, or local target."""
+    """Derive the stable output slug for a change request, branch, or local target."""
     target = meta.get("target")
-    if target == "mr":
-        return str(meta.get("iid", ""))
+    if target == "change":
+        return str(meta.get("number", ""))
     if target == "branch":
         branch = meta.get("branch", "")
         digest = hashlib.sha256(branch.encode("utf-8")).hexdigest()[:6]
@@ -193,7 +194,7 @@ def _validate_posted_text(raw, label):
             raise ValueError("%s %s exceeds %d characters" % (label, field, cap))
 
 
-def _positive_iid(value):
+def _positive_number(value):
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
@@ -356,25 +357,27 @@ def _prepare_report(report):
         raise ValueError("meta must be an object")
     _warn_unknown(meta, _META_FIELDS, "meta", warnings)
     target = meta.get("target")
-    if target not in ("mr", "branch", "local"):
-        raise ValueError("meta.target must be mr, branch, or local")
+    if target not in ("change", "branch", "local"):
+        raise ValueError("meta.target must be change, branch, or local")
     seat = meta.get("seat", "author")
     if seat not in ("author", "reviewer"):
         raise ValueError("meta.seat must be author or reviewer")
     meta["seat"] = seat
-    if seat == "reviewer" and target != "mr":
-        raise ValueError("reviewer-seat reports must target an MR")
+    if seat == "reviewer" and target != "change":
+        raise ValueError("reviewer-seat reports must target a change request")
     if seat == "reviewer" and (not isinstance(meta.get("project"), str) or
                                not meta["project"].strip()):
         raise ValueError("reviewer-seat reports require meta.project")
     if seat == "reviewer" and (not isinstance(meta.get("head_sha"), str) or
                                not _SHA_RE.match(meta["head_sha"])):
         raise ValueError("reviewer-seat reports require a full lowercase meta.head_sha")
-    if target == "mr":
-        iid = _positive_iid(meta.get("iid"))
-        if iid is None:
-            raise ValueError("meta.iid must be a positive integer for an MR")
-        meta["iid"] = iid
+    if target == "change":
+        number = _positive_number(meta.get("number"))
+        if number is None:
+            raise ValueError("meta.number must be a positive integer for a change request")
+        meta["number"] = number
+        if meta.get("forge") not in ("github", "gitlab"):
+            raise ValueError("meta.forge must be github or gitlab for a change request")
     if target == "branch":
         if not isinstance(meta.get("branch"), str) or not meta["branch"].strip():
             raise ValueError("meta.branch must be a non-empty string for a branch")
@@ -514,8 +517,8 @@ def _md(value):
 
 
 def _export_label(meta):
-    if meta["target"] == "mr":
-        return "MR !%s" % meta["iid"]
+    if meta["target"] == "change":
+        return change_label(meta["forge"], meta["number"])
     if meta["target"] == "branch":
         return meta["branch"]
     return "local changes"
@@ -540,13 +543,13 @@ def _token(text, tone=None, mono=False):
 
 def _crumbs(meta):
     values = []
-    if meta["target"] == "mr" and meta.get("iid") is not None:
-        values.append("MR !%s" % meta["iid"])
+    if meta["target"] == "change" and meta.get("number") is not None:
+        values.append(change_label(meta["forge"], meta["number"]))
     elif meta["target"] == "branch":
         values.append(meta["branch"])
     else:
         values.append("Local changes")
-    for key in ("ticket", "project", "mr_state"):
+    for key in ("ticket", "project", "change_state"):
         if meta.get(key) not in (None, ""):
             values.append(str(meta[key]))
     parts = ['<span>%s</span>' % _esc(value) for value in values]
@@ -1197,7 +1200,7 @@ def _panes(report):
     return panes
 
 
-_HANDOFF_META = ("project", "iid", "branch", "source_branch", "web_url", "mr_state",
+_HANDOFF_META = ("forge", "project", "number", "branch", "source_branch", "web_url", "change_state",
                  "head_sha", "repo_root", "title", "verdict", "ticket")
 _HANDOFF_FINDING = ("id", "severity", "dimensions", "file", "line", "anchor_side", "title",
                     "impact", "fix_md", "evidence", "body_md", "recommendation_md", "aside_md")

@@ -13,6 +13,7 @@ import subprocess
 from urllib.parse import quote, urlencode
 
 from forge import ForgeError, positive_int, valid_sha
+from forge import change_label as _change_label
 
 NAME = "gitlab"
 
@@ -27,7 +28,7 @@ def default_run(cmd, input_text=None, timeout=120, env=None):
 
 
 def change_label(number):
-    return "MR !%s" % number
+    return _change_label(NAME, number)
 
 
 def mr_path(project, iid):
@@ -289,7 +290,7 @@ def cleanup_commands(state):
     """User-run DELETE commands for this run's drafts; never executed by the agent."""
     commands = []
     for item in state.get("created", []) + state.get("reconciled", []):
-        endpoint = "%s/draft_notes/%s" % (mr_path(state["project"], state["iid"]), item["draft_id"])
+        endpoint = "%s/draft_notes/%s" % (mr_path(state["project"], state["number"]), item["draft_id"])
         commands.append("glab api --hostname %s --method DELETE %s" %
                         (shlex.quote(state["host"]), shlex.quote(endpoint)))
     return commands

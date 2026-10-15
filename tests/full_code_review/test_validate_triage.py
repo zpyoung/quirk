@@ -8,7 +8,7 @@ import validate_triage as m  # noqa: E402
 
 def report(seat="reviewer"):
     return {
-        "meta": {"target": "mr", "iid": 42, "project": "g/p",
+        "meta": {"target": "change", "forge": "gitlab", "number": 42, "project": "g/p",
                  "head_sha": "a" * 40, "title": "Review", "verdict": "Review",
                  "seat": seat},
         "run": {"dimensions_run": ["sakura:correctness"]},
@@ -270,3 +270,20 @@ def test_decisions_block_still_rejects_trailing_content_before_the_handoff():
         assert False
     except ValueError as exc:
         assert "TRAILING" in str(exc)
+
+
+def test_page_export_label_matches_the_validator_for_each_forge():
+    # the page's export JS builds its header from data-export-label, so the two must agree
+    import re
+    from pathlib import Path
+    template = (Path(render_report.__file__).resolve().parents[1] / "assets" / "report.html").read_text(encoding="utf-8")
+    for forge_name, label in (("gitlab", "MR !42"), ("github", "PR #42")):
+        value = report()
+        value["meta"]["forge"] = forge_name
+        prepared, _ = render_report._prepare_report(value)
+        html = render_report.render_html(value, template)
+        rendered = re.search(r'data-export-label="([^"]+)"', html).group(1)
+        assert rendered == m.export_label(prepared["meta"]) == label
+        assert m.export_header(prepared["meta"]).startswith("# %s — triage decisions" % label)
+        paste = export(value)
+        assert m.validate(value, paste)["target"] == label

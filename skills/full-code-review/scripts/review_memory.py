@@ -135,14 +135,14 @@ def _atomic_write(path: Path, value: Any) -> None:
 
 def _target_identity(context: dict, repo: str) -> tuple[dict, list[str]]:
     warnings: list[str] = []
-    mr = context.get("mr") if isinstance(context.get("mr"), dict) else {}
+    change_ctx = context.get("change") if isinstance(context.get("change"), dict) else {}
     # A prepared MR is authoritative even when the mode was branch/local.
-    if mr.get("iid") is not None:
-        host = _normalize_host(mr.get("host") or context.get("host"))
-        project = _normalize_project(mr.get("project") or context.get("project"))
-        if not host or not project or not str(mr["iid"]).isdigit() or int(mr["iid"]) < 1:
+    if change_ctx.get("number") is not None:
+        host = _normalize_host(change_ctx.get("host") or context.get("host"))
+        project = _normalize_project(change_ctx.get("project") or context.get("project"))
+        if not host or not project or not str(change_ctx["number"]).isdigit() or int(change_ctx["number"]) < 1:
             raise ValueError("MR memory requires host, project and positive IID")
-        identity = {"repo": "%s/%s" % (host, project), "target": "mr", "iid": str(mr["iid"])}
+        identity = {"repo": "%s/%s" % (host, project), "target": "change", "number": str(change_ctx["number"])}
     else:
         repository, repo_warnings = _repo_identity(repo)
         warnings.extend(repo_warnings)
@@ -251,11 +251,11 @@ def _default_api(host: str, method: str, endpoint: str, payload: Any = None):
     return _gitlab.get_json(host, endpoint)
 
 
-def fetch_discussions(host: str, project: str, iid: Any, api: Callable | None = None) -> list[dict]:
+def fetch_discussions(host: str, project: str, number: Any, api: Callable | None = None) -> list[dict]:
     """Fetch every discussion page using GET, rejecting incomplete pagination."""
-    if not host or not project or not str(iid).isdigit() or int(iid) < 1:
-        raise ValueError("host, project and positive MR iid are required")
-    return _gitlab.fetch_discussions(api or _default_api, host, _normalize_project(project), iid)
+    if not host or not project or not str(number).isdigit() or int(number) < 1:
+        raise ValueError("host, project and positive change number are required")
+    return _gitlab.fetch_discussions(api or _default_api, host, _normalize_project(project), number)
 
 # ---------------------------------------------------------------------------
 
@@ -292,11 +292,11 @@ def load_snapshot(context: dict, repo: str = ".", dimensions=(), guidance=(), fr
     prior = [] if reason else list(old_snapshot.get("findings", [])) if old_snapshot else []
     discussions: list[dict] = []
     available = True
-    mr = context.get("mr") if isinstance(context.get("mr"), dict) else {}
-    if mr.get("iid") is not None:
+    change_ctx = context.get("change") if isinstance(context.get("change"), dict) else {}
+    if change_ctx.get("number") is not None:
         try:
-            discussions = fetch_discussions(mr.get("host") or context.get("host"),
-                                            mr.get("project") or context.get("project"), mr["iid"])
+            discussions = fetch_discussions(change_ctx.get("host") or context.get("host"),
+                                            change_ctx.get("project") or context.get("project"), change_ctx["number"])
         except Exception as exc:
             available = False
             warnings.append("discussion cross-check unavailable: %s" % exc)
@@ -446,8 +446,8 @@ def note_is_from(note: dict, username: Any, user_id: Any) -> bool:
 
 
 def _is_posting_identity(note: dict, context: dict) -> bool:
-    mr = context.get("mr") or {}
-    return note_is_from(note, mr.get("current_username"), mr.get("current_user_id"))
+    change_ctx = context.get("change") or {}
+    return note_is_from(note, change_ctx.get("current_username"), change_ctx.get("current_user_id"))
 
 
 def marker_fingerprints(body: Any) -> list[str]:
@@ -475,17 +475,17 @@ def _discussion_details(discussions: list[dict], fp: str | None, finding: dict, 
     human: list[dict] = []
     file = str(finding.get("file", ""))
     wanted = _line_number(finding.get("line"))
-    mr = context.get("mr") or {}
-    host = mr.get("host") or context.get("host")
-    project = mr.get("project") or context.get("project")
+    change_ctx = context.get("change") or {}
+    host = change_ctx.get("host") or context.get("host")
+    project = change_ctx.get("project") or context.get("project")
 
     def note_url(note, discussion):
         explicit = note.get("web_url") or discussion.get("web_url")
         if explicit:
             return explicit
-        if host and project and mr.get("iid") and note.get("id") is not None:
+        if host and project and change_ctx.get("number") and note.get("id") is not None:
             return "https://%s/%s/-/merge_requests/%s#note_%s" % (
-                _normalize_host(host), _normalize_project(project), mr["iid"], note["id"])
+                _normalize_host(host), _normalize_project(project), change_ctx["number"], note["id"])
         return None
     for discussion in discussions or []:
         notes = discussion.get("notes")
@@ -554,8 +554,8 @@ def _validate_report_binding(report: dict, snapshot: dict) -> None:
     target = identity.get("target")
     if meta.get("target") != target:
         raise ValueError("report target does not match memory snapshot")
-    if target == "mr" and str(meta.get("iid")) != str(identity.get("iid")):
-        raise ValueError("report MR iid does not match memory snapshot")
+    if target == "change" and str(meta.get("number")) != str(identity.get("number")):
+        raise ValueError("report change number does not match memory snapshot")
     if target == "branch" and meta.get("branch") != identity.get("branch"):
         raise ValueError("report branch does not match memory snapshot")
     if meta.get("project") is not None and identity.get("repo", "").split("/", 1)[-1] != _normalize_project(meta["project"]):
@@ -579,8 +579,8 @@ def reconcile(report: dict, context: dict, snapshot: dict) -> dict:
     seat = snapshot["seat"]
     available = snapshot.get("discussions_available", False)
     discussions = snapshot.get("discussions", []) if available else []
-    mr_context = context.get("mr") or {}
-    if discussions and not (mr_context.get("current_username") or mr_context.get("current_user_id") is not None):
+    change_context = context.get("change") or {}
+    if discussions and not (change_context.get("current_username") or change_context.get("current_user_id") is not None):
         warnings.append("Posting identity unknown; MR markers are treated as human context.")
     current_counts, prior_by_fp = {}, {}
     for item in prior:
@@ -810,12 +810,12 @@ def check_plan(report: dict, context: dict, snapshot: dict) -> dict:
     """Build the author-delivery suppression plan without changing any input."""
     identity_warnings = validate_snapshot(snapshot, context, ".")
     refreshed = copy.deepcopy(snapshot)
-    mr = context.get("mr") if isinstance(context.get("mr"), dict) else {}
+    change_ctx = context.get("change") if isinstance(context.get("change"), dict) else {}
     warnings = list(identity_warnings)
-    if mr.get("iid") is not None:
+    if change_ctx.get("number") is not None:
         try:
-            refreshed["discussions"] = fetch_discussions(mr.get("host") or context.get("host"),
-                                                         mr.get("project") or context.get("project"), mr["iid"])
+            refreshed["discussions"] = fetch_discussions(change_ctx.get("host") or context.get("host"),
+                                                         change_ctx.get("project") or context.get("project"), change_ctx["number"])
         except Exception as exc:
             raise RuntimeError("discussion cross-check unavailable: %s" % exc) from exc
         refreshed["discussions_available"] = True

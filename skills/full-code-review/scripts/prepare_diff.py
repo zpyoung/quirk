@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Resolve a diff (forge-first, git-fallback) and write a shared context file.
 
-Sources: --mr <number>, --branch <name>, or --local. The forge (GitHub or GitLab,
+Sources: --change <number>, --branch <name>, or --local. The forge (GitHub or GitLab,
 chosen by forge.detect_forge) is preferred whenever a change request exists because
 it returns the canonical diff against the live target branch plus authoritative
 base/start/head refs, so a stale or rebase-pending local branch still reviews
@@ -383,9 +383,9 @@ def resolve_scope_intent(title=None, branch=None):
     branch = (branch or "").strip()
     if title and branch:
         return {"guess": "%s (%s)" % (title, branch),
-                "basis": "mr.title + source_branch"}
+                "basis": "change.title + source_branch"}
     if title:
-        return {"guess": title, "basis": "mr.title"}
+        return {"guess": title, "basis": "change.title"}
     if branch:
         return {"guess": branch, "basis": "source_branch"}
     return {"guess": "", "basis": "none"}
@@ -611,15 +611,15 @@ def change_diff(forge, number, cwd=".", metadata=None):
         metadata["diff_unavailable"] = unavailable
         metadata["not_text_reviewable"] = not_text
         metadata["file_list_recovery"] = recovery
-    mr = {
-        "iid": data.get("number") or number,
+    change = {
+        "number": data.get("number") or number,
         "title": data.get("title") or "",
         "description": data.get("description") or "",
         "web_url": data.get("web_url") or "",
         "author": data.get("author") or "",
         "source_branch": data.get("source_branch") or "",
     }
-    return diff_text, refs, mr
+    return diff_text, refs, change
 
 
 def change_details(forge, number):
@@ -757,7 +757,7 @@ def _fail(out, mode, message, paths=None, seat=None):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Resolve a diff (forge-first) into a shared context file.")
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--mr")
+    g.add_argument("--change", metavar="NUMBER")
     g.add_argument("--branch")
     g.add_argument("--local", action="store_true")
     ap.add_argument("--target-branch")
@@ -779,7 +779,7 @@ def main(argv=None):
 
     source = mode = None
     refs = {"base": None, "start": None, "head": None}
-    diff_text, fallback_reason, mr = None, None, None
+    diff_text, fallback_reason, change = None, None, None
     source_branch = args.branch if args.branch else None
     number = None
     forge_metadata = {}
@@ -794,24 +794,24 @@ def main(argv=None):
     elif choice.name == "none":
         forge_error = "no supported forge: %s" % choice.reason
 
-    if args.mr:
-        mode = "mr"
-        number = args.mr
+    if args.change:
+        mode = "change"
+        number = args.change
         if forge is None:
             return _fail(args.out, mode, forge_error or "no forge available for a change request")
         res = change_diff(forge, number, args.cwd, forge_metadata)
         if not res:
             return _fail(args.out, mode, forge_metadata.get("error", "forge change diff failed"))
-        diff_text, refs, mr = res
-        source_branch = mr.get("source_branch") or source_branch
+        diff_text, refs, change = res
+        source_branch = change.get("source_branch") or source_branch
         source = forge.name
     elif args.branch:
         mode = "branch"
         number = find_change_for_branch(forge, args.branch) if forge is not None else None
         res = change_diff(forge, number, args.cwd, forge_metadata) if number else None
         if res:
-            diff_text, refs, mr = res
-            source_branch = mr.get("source_branch") or source_branch
+            diff_text, refs, change = res
+            source_branch = change.get("source_branch") or source_branch
             source = forge.name
         else:
             source = "git"
@@ -868,9 +868,10 @@ def main(argv=None):
         if identity_error:
             return _fail(args.out, mode, identity_error, seat="unknown")
         seat = detected
-        mr = dict(mr or {})
-        mr.update({
-            "iid": int(number) if str(number).isdigit() else number,
+        change = dict(change or {})
+        change.update({
+            "number": int(number) if str(number).isdigit() else number,
+            "label": label,
             "host": host, "project": project,
             "state": details.get("state"),
             "author_id": details.get("author_id"),
@@ -909,11 +910,13 @@ def main(argv=None):
     batched = len(diff_text) > args.max_chars
     batches = batch_files(split_diff_by_file(diff_text), args.max_chars) if batched else []
     scope_intent = resolve_scope_intent(
-        title=mr.get("title") if mr else None,
+        title=change.get("title") if change else None,
         branch=source_branch,
     )
 
     context = {
+        "schema": 1,
+        "forge": choice.name,
         "seat": seat,
         "source": source, "mode": mode, "host": host, "project": project,
         "source_branch": source_branch, "refs": refs, "target_branch": target,
@@ -923,7 +926,7 @@ def main(argv=None):
         "untracked_files": untracked_files,
         "file_list_recovery": forge_metadata.get("file_list_recovery"),
         "diff": diff_text, "batched": batched,
-        "mr": mr, "has_description": bool(mr and mr.get("description", "").strip()),
+        "change": change, "has_description": bool(change and change.get("description", "").strip()),
         "scope_intent": scope_intent,
         "size": {"files": len(files), "lines": count_changed_lines(diff_text)},
     }
@@ -933,6 +936,7 @@ def main(argv=None):
         json.dump(context, fh, indent=2)
 
     meta = {
+        "forge": choice.name,
         "seat": seat,
         "source": source, "mode": mode, "host": host, "project": project,
         "source_branch": source_branch, "refs": refs, "changed_files": files,

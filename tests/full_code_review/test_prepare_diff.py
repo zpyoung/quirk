@@ -174,7 +174,7 @@ def test_host_and_project_flags_override_the_detected_remote(tmp_path):
         for extra, expected in (([], ("gitlab", "x", "grp/proj")),
                                 (["--host", "h1", "-R", "p1"], ("gitlab", "h1", "p1"))):
             with contextlib.redirect_stderr(io.StringIO()):
-                m.main(["--forge", "gitlab", "--mr", "1", "--out", str(out)] + extra)
+                m.main(["--forge", "gitlab", "--change", "1", "--out", str(out)] + extra)
             assert seen[-1] == expected
     finally:
         (m.get_origin_url, m.detect_target_branch, m.change_diff,
@@ -196,7 +196,7 @@ def test_decision_branch_gitlab_first(tmp_path):
         m.change_diff = lambda forge, iid, cwd=".", metadata=None: (
             "diff --git a/z b/z\n--- a/z\n+++ b/z\n@@ -1 +1 @@\n-x\n+y\n",
             {"base": "b" * 40, "start": "c" * 40, "head": "a" * 40},
-            {"iid": iid, "title": "Support locked credit rates", "description": "no behavior change",
+            {"number": iid, "title": "Support locked credit rates", "description": "no behavior change",
              "source_branch": "feature"})
         m.change_details = lambda forge, number: {
             "number": 42, "state": "opened", "open": True, "author_id": 9, "author_username": "other",
@@ -212,18 +212,18 @@ def test_decision_branch_gitlab_first(tmp_path):
         assert meta["source"] == "gitlab" and meta["refs"]["head"] == "a" * 40
         assert meta["seat"] == "reviewer"
         ctx = json.loads(out.read_text())
-        assert ctx["seat"] == "reviewer" and ctx["mr"]["iid"] == 42
-        assert ctx["mr"]["current_user_id"] == 10
+        assert ctx["seat"] == "reviewer" and ctx["change"]["number"] == 42
+        assert ctx["change"]["current_user_id"] == 10
         assert "a/z" in ctx["diff"] and "SHOULD_NOT_BE_USED" not in ctx["diff"]
         assert ctx["host"] == "x" and ctx["project"] == "grp/proj"
         assert ctx["source_branch"] == "feature"
         # sakura:adversarial gates on the MR description reaching the context
-        assert ctx["mr"]["description"] == "no behavior change"
+        assert ctx["change"]["description"] == "no behavior change"
         assert ctx["has_description"] is True and meta["has_description"] is True
         assert ctx["size"] == {"files": 1, "lines": 2}
         assert ctx["scope_intent"] == {
             "guess": "Support locked credit rates (feature)",
-            "basis": "mr.title + source_branch",
+            "basis": "change.title + source_branch",
         }
         assert meta["scope_intent"] == ctx["scope_intent"]
     finally:
@@ -259,7 +259,7 @@ def test_decision_branch_git_fallback(tmp_path):
         assert ctx["source_branch"] == "feature"
         assert ctx["refs"] == {"base": "BASE", "start": "BASE", "head": "HEAD"}
         # no MR → no description → sakura:adversarial must skip
-        assert ctx["mr"] is None and ctx["has_description"] is False
+        assert ctx["change"] is None and ctx["has_description"] is False
         assert ctx["scope_intent"] == {"guess": "feature", "basis": "source_branch"}
         assert meta["scope_intent"] == ctx["scope_intent"]
     finally:
@@ -317,7 +317,7 @@ def test_empty_gitlab_diff_recovered_from_git(tmp_path):
         m.current_user = lambda forge: {"id": 1, "username": "author"}
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            assert m.main(["--forge", "gitlab", "--mr", "15", "--out", str(out)]) == 0
+            assert m.main(["--forge", "gitlab", "--change", "15", "--out", str(out)]) == 0
         meta = json.loads(buf.getvalue())
         ctx = json.loads(out.read_text())
         assert recovered.strip() in ctx["diff"]
@@ -327,7 +327,7 @@ def test_empty_gitlab_diff_recovered_from_git(tmp_path):
         assert ctx["size"] == {"files": 1, "lines": 2}
         assert ctx["scope_intent"] == {
             "guess": "Recover empty diff (feature/direct-mr)",
-            "basis": "mr.title + source_branch",
+            "basis": "change.title + source_branch",
         }
         assert meta["scope_intent"] == ctx["scope_intent"]
         assert len(diff_calls) == 2
@@ -567,7 +567,7 @@ def test_empty_gitlab_diff_unavailable_is_not_rendered(tmp_path):
         m.current_user = lambda forge: {"id": 1, "username": "author"}
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            assert m.main(["--forge", "gitlab", "--mr", "16", "--out", str(out)]) == 0
+            assert m.main(["--forge", "gitlab", "--change", "16", "--out", str(out)]) == 0
         meta = json.loads(buf.getvalue())
         ctx = json.loads(out.read_text())
         assert ctx["diff_unavailable"] == ["missing.py"]
@@ -607,7 +607,7 @@ def test_expected_empty_gitlab_changes_are_not_unavailable(tmp_path):
         metadata = {}
         diff_text, refs, mr = m.change_diff(_gitlab("host", "grp/proj"), 17, ".", metadata)
         assert diff_text == ""
-        assert refs["head"] == "HEAD" and mr["iid"] == 17
+        assert refs["head"] == "HEAD" and mr["number"] == 17
         assert metadata["changed_files"] == ["image.png", "new.py"]
         assert metadata["diff_unavailable"] == []
         assert metadata["not_text_reviewable"] == ["image.png"]
@@ -750,7 +750,7 @@ def test_mr_failure_is_nonzero_structured_and_removes_output(tmp_path):
         m.change_diff = failed_mr
         stdout, stderr = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            rc = m.main(["--forge", "gitlab", "--mr", "999999", "--out", str(out)])
+            rc = m.main(["--forge", "gitlab", "--change", "999999", "--out", str(out)])
         assert rc != 0 and not out.exists() and stdout.getvalue() == ""
         error = json.loads(stderr.getvalue())
         assert error["status"] == "error"
@@ -1144,13 +1144,13 @@ def test_mr_snapshot_race_blocks_seat_and_output(tmp_path):
         m.detect_target_branch = lambda cwd=".": "main"
         m.change_diff = lambda *args, **kw: (
             SAMPLE, {"base": "b" * 40, "start": "c" * 40, "head": "a" * 40},
-            {"iid": 42, "title": "t", "description": "d", "source_branch": "feature"})
+            {"number": 42, "title": "t", "description": "d", "source_branch": "feature"})
         m.change_details = lambda *args: {"number": 42, "state": "opened", "open": True, "sha": "d" * 40,
                                                    "author_id": 1, "author_username": "other"}
         m.current_user = lambda forge: {"id": 2, "username": "me"}
         buf = io.StringIO()
         with contextlib.redirect_stderr(buf):
-            rc = m.main(["--forge", "gitlab", "--mr", "42", "--out", str(out)])
+            rc = m.main(["--forge", "gitlab", "--change", "42", "--out", str(out)])
         assert rc == 1 and not out.exists()
         failure = json.loads(buf.getvalue())
         assert failure["seat"] == "unknown"
@@ -1185,14 +1185,14 @@ def test_mr_target_movement_between_reads_blocks_seat_and_output(tmp_path):
         m.detect_target_branch = lambda cwd=".": "main"
         m.change_diff = lambda *args, **kw: (
             SAMPLE, {"base": "b" * 40, "start": "c" * 40, "head": "a" * 40},
-            {"iid": 42, "title": "t", "description": "d", "source_branch": "feature"})
+            {"number": 42, "title": "t", "description": "d", "source_branch": "feature"})
         m.change_details = lambda *args: {"number": 42, "state": "opened", "open": True, "sha": "a" * 40,
                                            "base_sha": "b" * 40, "start_sha": "e" * 40,
                                            "author_id": 1, "author_username": "other"}
         m.current_user = lambda forge: {"id": 2, "username": "me"}
         buf = io.StringIO()
         with contextlib.redirect_stderr(buf):
-            rc = m.main(["--forge", "gitlab", "--mr", "42", "--out", str(out)])
+            rc = m.main(["--forge", "gitlab", "--change", "42", "--out", str(out)])
         assert rc == 1 and not out.exists()
         failure = json.loads(buf.getvalue())
         assert failure["seat"] == "unknown"
@@ -1211,13 +1211,13 @@ def test_mr_details_without_base_start_refs_blocks_seat(tmp_path):
         m.detect_target_branch = lambda cwd=".": "main"
         m.change_diff = lambda *args, **kw: (
             SAMPLE, {"base": "b" * 40, "start": "c" * 40, "head": "a" * 40},
-            {"iid": 42, "title": "t", "description": "d", "source_branch": "feature"})
+            {"number": 42, "title": "t", "description": "d", "source_branch": "feature"})
         m.change_details = lambda *args: {"number": 42, "state": "opened", "open": True, "sha": "a" * 40,
                                            "author_id": 1, "author_username": "other"}
         m.current_user = lambda forge: {"id": 2, "username": "me"}
         buf = io.StringIO()
         with contextlib.redirect_stderr(buf):
-            rc = m.main(["--forge", "gitlab", "--mr", "42", "--out", str(out)])
+            rc = m.main(["--forge", "gitlab", "--change", "42", "--out", str(out)])
         assert rc == 1 and not out.exists()
         failure = json.loads(buf.getvalue())
         assert failure["seat"] == "unknown"

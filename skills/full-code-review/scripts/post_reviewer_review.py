@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import comment_body  # noqa: E402
 import render_report  # noqa: E402
 from forge import ForgeError, positive_int as _positive_int, valid_sha as _valid_sha  # noqa: E402
+from forge import change_label  # noqa: E402
 from forge import gitlab as _gitlab  # noqa: E402
 
 SCHEMA = 1
@@ -78,43 +79,43 @@ def _api(host, method, endpoint, payload=None, timeout=120):
     return _gitlab.api(_late_run, host, method, endpoint, payload, timeout)
 
 
-def _base(project, iid):
-    return _gitlab.mr_path(project, iid)
+def _base(project, number):
+    return _gitlab.mr_path(project, number)
 
 
 def _identity(host):
     return _gitlab.identity(_late_api, host)
 
 
-def _mr(host, project, iid):
-    return _gitlab.merge_request(_late_api, host, project, iid)
+def _mr(host, project, number):
+    return _gitlab.merge_request(_late_api, host, project, number)
 
 
 def _context(value):
     if value.get("seat") != "reviewer":
         raise ReviewError("reviewer delivery requires a detected reviewer seat")
-    mr = value.get("mr")
+    change = value.get("change")
     refs = value.get("refs")
-    if not isinstance(mr, dict) or not isinstance(refs, dict):
-        raise ReviewError("review context is missing mr or refs")
-    host = mr.get("host")
-    project = mr.get("project")
+    if not isinstance(change, dict) or not isinstance(refs, dict):
+        raise ReviewError("review context is missing change or refs")
+    host = change.get("host")
+    project = change.get("project")
     if not isinstance(host, str) or not host:
-        raise ReviewError("review context is missing mr.host")
+        raise ReviewError("review context is missing change.host")
     if not isinstance(project, str) or not project:
-        raise ReviewError("review context is missing mr.project")
-    iid = _positive_int(mr.get("iid"), "mr.iid")
-    expected_user_id = _positive_int(mr.get("current_user_id"), "mr.current_user_id")
-    expected_username = mr.get("current_username")
+        raise ReviewError("review context is missing change.project")
+    number = _positive_int(change.get("number"), "change.number")
+    expected_user_id = _positive_int(change.get("current_user_id"), "change.current_user_id")
+    expected_username = change.get("current_username")
     if not isinstance(expected_username, str) or not expected_username:
-        raise ReviewError("review context is missing mr.current_username")
+        raise ReviewError("review context is missing change.current_username")
     expected_head = _valid_sha(refs.get("head"), "refs.head")
     expected_base = _valid_sha(refs.get("base"), "refs.base")
     expected_start = _valid_sha(refs.get("start"), "refs.start")
-    if mr.get("sha") and mr.get("sha") != expected_head:
-        raise ReviewError("review context MR sha does not match refs.head")
+    if change.get("sha") and change.get("sha") != expected_head:
+        raise ReviewError("review context change sha does not match refs.head")
     return {
-        "host": host, "project": project, "iid": iid,
+        "host": host, "project": project, "number": number,
         "expected_user_id": expected_user_id, "expected_username": expected_username,
         "expected_head": expected_head, "expected_base": expected_base,
         "expected_start": expected_start,
@@ -125,15 +126,15 @@ def _revalidate(ctx):
     user = _identity(ctx["host"])
     if str(user["id"]) != str(ctx["expected_user_id"]) or user["username"] != ctx["expected_username"]:
         raise ReviewError("authenticated GitLab identity changed since the review was prepared")
-    data, refs, author = _mr(ctx["host"], ctx["project"], ctx["iid"])
+    data, refs, author = _mr(ctx["host"], ctx["project"], ctx["number"])
     author_id = _positive_int(author.get("id"), "MR author id")
     if str(author_id) == str(user["id"]):
         raise ReviewError("MR author now matches the authenticated user; reviewer delivery is blocked")
     return data, refs
 
 
-def _list_drafts(host, project, iid):
-    return _gitlab.list_drafts(_late_api, host, project, iid)
+def _list_drafts(host, project, number):
+    return _gitlab.list_drafts(_late_api, host, project, number)
 
 
 def _draft_summary(item):
@@ -169,7 +170,7 @@ def _prepare_memory_report(raw_report, context, ctx):
         raise ReviewError("memory snapshot binding failed: %s" % exc)
     try:
         discussions = review_memory.fetch_discussions(
-            ctx["host"], ctx["project"], ctx["iid"], api=_api)
+            ctx["host"], ctx["project"], ctx["number"], api=_api)
     except Exception as exc:
         raise ReviewError("memory discussion cross-check failed: %s" % exc)
     live_snapshot = copy.deepcopy(snapshot)
@@ -183,18 +184,18 @@ def _prepare_memory_report(raw_report, context, ctx):
 def _trusted_inputs(report, decisions, context):
     prepared, warnings = render_report._prepare_report(report)
     meta = prepared["meta"]
-    if meta.get("seat") != "reviewer" or meta.get("target") != "mr":
-        raise ReviewError("report must be a reviewer-seat MR report")
+    if meta.get("seat") != "reviewer" or meta.get("target") != "change":
+        raise ReviewError("report must be a reviewer-seat change-request report")
     ctx = _context(context)
-    if meta.get("iid") != ctx["iid"]:
-        raise ReviewError("report MR does not match review context")
+    if meta.get("number") != ctx["number"]:
+        raise ReviewError("report change request does not match review context")
     if meta.get("project") != ctx["project"]:
         raise ReviewError("report project does not match review context")
     if meta.get("head_sha") != ctx["expected_head"]:
         raise ReviewError("report head does not match review context")
     if decisions.get("schema") != 1 or decisions.get("seat") != "reviewer":
         raise ReviewError("decisions must be normalized reviewer-seat triage output")
-    if decisions.get("target") != "MR !%s" % ctx["iid"]:
+    if decisions.get("target") != change_label(meta.get("forge"), ctx["number"]):
         raise ReviewError("decision target does not match review context")
     if decisions.get("head_sha") != ctx["expected_head"]:
         raise ReviewError("decision head does not match review context")
@@ -358,7 +359,7 @@ def _reconcile_orphans(state, failed_body):
     starts from an empty draft set, so any unrecorded live draft is an orphan.
     """
     try:
-        live = _list_drafts(state["host"], state["project"], state["iid"])
+        live = _list_drafts(state["host"], state["project"], state["number"])
     except Exception as exc:
         state["cleanup_warning"] = ("could not re-list drafts after the staging failure; "
                                     "cleanup commands may be incomplete: %s" % exc)
@@ -416,7 +417,7 @@ def stage(args):
             if not args.allow_unaffected:
                 raise HeadMoved(ctx["expected_head"], live_refs["head_sha"], sorted(changed), affected,
                                 [f["id"] for f in prepared["findings"] if f["id"] not in affected])
-        drafts = _list_drafts(ctx["host"], ctx["project"], ctx["iid"])
+        drafts = _list_drafts(ctx["host"], ctx["project"], ctx["number"])
         if drafts:
             raise ExistingDrafts([_draft_summary(item) for item in drafts])
         memory_save = None
@@ -447,7 +448,7 @@ def stage(args):
             dict(item, label="reply \u2192 @%s" % item["author"]) if item["kind"] == "reply" else item
             for item in posted]
         state = {
-            "schema": SCHEMA, "host": ctx["host"], "project": ctx["project"], "iid": ctx["iid"],
+            "schema": SCHEMA, "host": ctx["host"], "project": ctx["project"], "number": ctx["number"],
             "expected_user_id": ctx["expected_user_id"], "expected_username": ctx["expected_username"],
             "report_head_sha": ctx["expected_head"], "publish_head_sha": live_refs["head_sha"],
             "diff_refs": live_refs, "report_sha256": _report_digest(raw_report),
@@ -466,7 +467,7 @@ def stage(args):
         current_note = None
         for note in notes:
             current_note = note
-            data = _gitlab.create_draft(_late_api, ctx["host"], ctx["project"], ctx["iid"],
+            data = _gitlab.create_draft(_late_api, ctx["host"], ctx["project"], ctx["number"],
                                         _gitlab.draft_payload(note))
             draft_id = _positive_int(data.get("id") if isinstance(data, dict) else None, "created draft id")
             if any(item["draft_id"] == draft_id for item in state["created"]):
@@ -532,7 +533,7 @@ def _state_context(state):
     if not isinstance(refs, dict):
         raise ReviewError("staged review is missing diff_refs")
     return {"host": host, "project": project,
-            "iid": _positive_int(state.get("iid"), "iid"),
+            "number": _positive_int(state.get("number"), "number"),
             "expected_user_id": _positive_int(state.get("expected_user_id"), "expected_user_id"),
             "expected_username": username,
             "expected_head": _valid_sha(state.get("publish_head_sha"), "publish_head_sha"),
@@ -564,7 +565,7 @@ def _discussion_markers(discussions, identity, state=None):
                 note_id = note.get("id")
                 url = note.get("url") or note.get("web_url") or discussion.get("web_url")
                 if not url and note_id and isinstance(state, dict):
-                    url = _gitlab.note_url(state["host"], state["project"], state["iid"], note_id)
+                    url = _gitlab.note_url(state["host"], state["project"], state["number"], note_id)
                 found.setdefault(fingerprint, {
                     "discussion_id": discussion_id, "note_id": note_id, "url": url})
     return found
@@ -575,7 +576,7 @@ def _memory_publish_crosscheck(state, ctx):
         return None
     try:
         discussions = review_memory.fetch_discussions(
-            ctx["host"], ctx["project"], ctx["iid"], api=_api)
+            ctx["host"], ctx["project"], ctx["number"], api=_api)
     except Exception as exc:
         raise ReviewError("memory discussion cross-check failed before publication: %s" % exc)
     markers = _discussion_markers(
@@ -643,13 +644,13 @@ def publish(args):
         # Read discussions immediately before the draft listing/equality and
         # bulk call to reduce (but never claim to close) the race.
         _memory_publish_crosscheck(state, ctx)
-        drafts = _list_drafts(ctx["host"], ctx["project"], ctx["iid"])
+        drafts = _list_drafts(ctx["host"], ctx["project"], ctx["number"])
         current = {_positive_int(item.get("id"), "draft id") for item in drafts}
         expected = {_positive_int(item.get("draft_id"), "staged draft id") for item in state.get("created", [])}
         if current != expected:
             raise ReviewError("live drafts do not exactly match this staged review (unexpected: %s; missing: %s)" %
                               (sorted(current - expected), sorted(expected - current)))
-        _gitlab.bulk_publish(_late_api, ctx["host"], ctx["project"], ctx["iid"])
+        _gitlab.bulk_publish(_late_api, ctx["host"], ctx["project"], ctx["number"])
         # Publication is durable before any best-effort ledger work. Never
         # turn a successful irreversible POST into an "unpublished" result.
         published = True
@@ -663,7 +664,7 @@ def publish(args):
         if state.get("memory_enabled"):
             try:
                 discussions = review_memory.fetch_discussions(
-                    ctx["host"], ctx["project"], ctx["iid"], api=_api)
+                    ctx["host"], ctx["project"], ctx["number"], api=_api)
                 receipts, receipt_warnings = _memory_receipts(state, refs, discussions)
                 post_warnings.extend(receipt_warnings)
             except Exception as exc:
@@ -707,8 +708,8 @@ def publish(args):
         return 2
 
 
-def _request_changes(host, project, iid):
-    return _gitlab.request_changes(_late_run, host, project, iid)
+def _request_changes(host, project, number):
+    return _gitlab.request_changes(_late_run, host, project, number)
 
 
 def complete(args):
@@ -723,10 +724,10 @@ def complete(args):
         if refs["head_sha"] != ctx["expected_head"]:
             raise ReviewError("MR head moved after publication; completion action is blocked")
         if args.action == "approve":
-            result = _gitlab.approve(_late_api, ctx["host"], ctx["project"], ctx["iid"],
+            result = _gitlab.approve(_late_api, ctx["host"], ctx["project"], ctx["number"],
                                      ctx["expected_head"])
         elif args.action == "request-changes":
-            result = _request_changes(ctx["host"], ctx["project"], ctx["iid"])
+            result = _request_changes(ctx["host"], ctx["project"], ctx["number"])
         else:
             result = {"comment_only": True}
         state["completion_result"] = {"action": args.action, "ok": True}

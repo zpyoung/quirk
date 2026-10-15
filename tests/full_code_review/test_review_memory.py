@@ -23,15 +23,15 @@ def isolated_memory(tmp_path, monkeypatch):
 
 
 def context():
-    return {"mode": "mr", "seat": "author", "refs": {"base": BASE, "start": BASE, "head": HEAD},
+    return {"mode": "change", "seat": "author", "refs": {"base": BASE, "start": BASE, "head": HEAD},
             "diff": "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-old\n+new value\n",
             "changed_files": ["a.py"],
-            "mr": {"host": "gitlab.example", "project": "group/proj", "iid": 7,
+            "change": {"host": "gitlab.example", "project": "group/proj", "number": 7,
                    "current_username": "author"}}
 
 
 def report():
-    return {"meta": {"target": "mr", "iid": 7, "seat": "author", "head_sha": HEAD,
+    return {"meta": {"target": "change", "forge": "gitlab", "number": 7, "seat": "author", "head_sha": HEAD,
                      "title": "Review", "verdict": "Fix first"},
             "run": {"dimensions_run": [DIMENSION]},
             "findings": [{"severity": "Should fix", "dimension": DIMENSION, "file": "a.py", "line": "1",
@@ -137,8 +137,8 @@ def test_marker_copied_by_another_author_is_human_context_not_a_posting():
 @pytest.mark.usefixtures("marker_form")
 def test_marker_matches_posting_identity_by_user_id_when_usernames_differ():
     ctx = context()
-    ctx["mr"]["current_user_id"] = 42
-    ctx["mr"]["current_username"] = "renamed-since-posting"
+    ctx["change"]["current_user_id"] = 42
+    ctx["change"]["current_username"] = "renamed-since-posting"
     fp = enriched(load(ctx), ctx)["findings"][0]["memory"]["fingerprint"]
     snapshot = load(ctx)
     live = thread(fp)
@@ -151,7 +151,7 @@ def test_marker_matches_posting_identity_by_user_id_when_usernames_differ():
 @pytest.mark.usefixtures("marker_form")
 def test_missing_posting_identity_warns_and_refuses_to_trust_markers():
     ctx = context()
-    ctx["mr"].pop("current_username")
+    ctx["change"].pop("current_username")
     fp = enriched(load(ctx), ctx)["findings"][0]["memory"]["fingerprint"]
     snapshot = load(ctx)
     snapshot["discussions"] = [thread(fp)]
@@ -313,7 +313,7 @@ def test_human_thread_context_does_not_suppress_without_anchor():
 
 def test_human_context_marks_the_posting_identitys_own_comments():
     ctx = context()
-    ctx["mr"]["current_user_id"] = 42
+    ctx["change"]["current_user_id"] = 42
     snapshot = load(ctx)
 
     def positioned(note_id, author):

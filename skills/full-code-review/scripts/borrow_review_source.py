@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Acquire and release an isolated source tree for reviewer-seat MR reviews.
+"""Acquire and release an isolated source tree for reviewer-seat change-request reviews.
 
 The current checkout is never switched or reset. Reviewer source is fetched into a
 private ref and exposed through a detached worktree. When no matching local clone
@@ -84,25 +84,25 @@ def _origin_host_project(repo_root):
 def _validate_context(context):
     if context.get("seat") != "reviewer":
         raise ValueError("borrowed source is only valid for a detected reviewer seat")
-    mr = context.get("mr")
+    change = context.get("change")
     refs = context.get("refs")
-    if not isinstance(mr, dict) or not isinstance(refs, dict):
-        raise ValueError("context is missing mr or refs")
-    project = mr.get("project")
-    host = mr.get("host")
-    iid = mr.get("iid")
+    if not isinstance(change, dict) or not isinstance(refs, dict):
+        raise ValueError("context is missing change or refs")
+    project = change.get("project")
+    host = change.get("host")
+    number = change.get("number")
     head = refs.get("head")
     if not isinstance(project, str) or not project.strip():
-        raise ValueError("context mr.project is required")
+        raise ValueError("context change.project is required")
     if not isinstance(host, str) or not host.strip():
-        raise ValueError("context mr.host is required")
-    if not str(iid).isdigit() or int(iid) <= 0:
-        raise ValueError("context mr.iid must be a positive integer")
+        raise ValueError("context change.host is required")
+    if not str(number).isdigit() or int(number) <= 0:
+        raise ValueError("context change.number must be a positive integer")
     if not isinstance(head, str) or not SHA_RE.match(head):
         raise ValueError("context refs.head must be a full lowercase SHA")
-    if mr.get("sha") and mr.get("sha") != head:
-        raise ValueError("MR sha does not match diff_refs.head")
-    return host, project, int(iid), head
+    if change.get("sha") and change.get("sha") != head:
+        raise ValueError("change sha does not match refs.head")
+    return host, project, int(number), head
 
 
 def _make_root(prefix):
@@ -121,19 +121,19 @@ def _clone_project(host, project, root):
     return os.path.realpath(repo)
 
 
-def _add_worktree(repo_root, iid, expected_head, worktree, shallow=False):
-    review_ref = "refs/sakura-review/%s/head" % iid
+def _add_worktree(repo_root, number, expected_head, worktree, shallow=False):
+    review_ref = "refs/sakura-review/%s/head" % number
     fetch_cmd = ["git", "-C", repo_root, "fetch", "--no-tags"]
     if shallow:
         fetch_cmd.append("--depth=1")
-    fetch_cmd += ["origin", "+%s:%s" % (_gitlab.head_refspec(iid), review_ref)]
+    fetch_cmd += ["origin", "+%s:%s" % (_gitlab.head_refspec(number), review_ref)]
     fetch = _run(fetch_cmd, timeout=300)
     if fetch.returncode != 0:
-        raise RuntimeError("fetching the MR head failed: %s" % (fetch.stderr.strip() or fetch.stdout.strip()))
+        raise RuntimeError("fetching the change head failed: %s" % (fetch.stderr.strip() or fetch.stdout.strip()))
     resolved = _run(["git", "-C", repo_root, "rev-parse", review_ref], timeout=20)
     actual = resolved.stdout.strip() if resolved.returncode == 0 else ""
     if actual != expected_head:
-        raise RuntimeError("MR head moved before the worktree was borrowed (expected %s, found %s)" %
+        raise RuntimeError("change head moved before the worktree was borrowed (expected %s, found %s)" %
                            (expected_head, actual or "unknown"))
     os.rmdir(worktree)
     added = _run(["git", "-C", repo_root, "worktree", "add", "--detach", worktree, expected_head],
@@ -144,7 +144,7 @@ def _add_worktree(repo_root, iid, expected_head, worktree, shallow=False):
     checked = _run(["git", "-C", worktree, "rev-parse", "HEAD"], timeout=20)
     if checked.returncode != 0 or checked.stdout.strip() != expected_head:
         _run(["git", "-C", repo_root, "worktree", "remove", "--force", worktree], timeout=60)
-        raise RuntimeError("borrowed worktree did not resolve to the expected MR head")
+        raise RuntimeError("borrowed worktree did not resolve to the expected change head")
     symbolic = _run(["git", "-C", worktree, "symbolic-ref", "-q", "HEAD"], timeout=20)
     if symbolic.returncode == 0:
         _run(["git", "-C", repo_root, "worktree", "remove", "--force", worktree], timeout=60)
@@ -155,14 +155,14 @@ def _add_worktree(repo_root, iid, expected_head, worktree, shallow=False):
 def acquire(args):
     try:
         context = _load(args.context)
-        host, project, iid, head = _validate_context(context)
+        host, project, number, head = _validate_context(context)
     except Exception as exc:
         return _error(exc)
 
     if args.diff_only:
         manifest = {
             "schema": SCHEMA, "kind": "diff-only", "path": None,
-            "head_sha": head, "host": host, "project": project, "iid": iid,
+            "head_sha": head, "host": host, "project": project, "number": number,
             "reason": args.reason or "A matching local source tree was unavailable and the temporary clone was declined.",
             "mutation_consent": False,
         }
@@ -200,10 +200,10 @@ def acquire(args):
         "path": os.path.realpath(worktree),
         "repo_root": repo_root,
         "head_sha": head,
-        "review_ref": "refs/sakura-review/%s/head" % iid,
+        "review_ref": "refs/sakura-review/%s/head" % number,
         "host": host,
         "project": project,
-        "iid": iid,
+        "number": number,
         "cleanup_root": cleanup_root,
         "cleanup_token": token,
         "mutation_consent": bool(args.allow_mutation_probe),
@@ -213,7 +213,7 @@ def acquire(args):
     # acquisition can still be released safely with this manifest.
     _write(args.out, manifest)
     try:
-        review_ref = _add_worktree(repo_root, iid, head, worktree, shallow=is_temp_clone)
+        review_ref = _add_worktree(repo_root, number, head, worktree, shallow=is_temp_clone)
     except Exception as exc:
         shutil.rmtree(worktree, ignore_errors=True)
         shutil.rmtree(cleanup_root, ignore_errors=True)
@@ -279,7 +279,7 @@ def release(args):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Borrow an MR-head source tree without touching the caller checkout.")
+    parser = argparse.ArgumentParser(description="Borrow a change-head source tree without touching the caller checkout.")
     sub = parser.add_subparsers(dest="command", required=True)
     acq = sub.add_parser("acquire")
     acq.add_argument("--context", required=True)

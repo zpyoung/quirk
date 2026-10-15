@@ -13,17 +13,20 @@ disk, so the roster is fixed and the review is reproducible. See
 `prepare_diff.py --out <file>` writes ONE JSON context file:
 
 ```json
-{"seat":"author|reviewer","source":"gitlab|git","mode":"mr|branch|local",
+{"schema":1,"forge":"github|gitlab|none","seat":"author|reviewer","source":"github|gitlab|git",
+ "mode":"change|branch|local",
  "refs":{"base":..,"start":..,"head":..},
- "host":"gitlab.example.net","project":"group/proj","source_branch":"feature-x"|null,
- "mr":{"iid":42,"author_id":1,"author_username":"author","current_user_id":2,
-       "current_username":"reviewer","seat":"reviewer","sha":"<head>"},
+ "host":"forge.example.com","project":"owner/repo","source_branch":"feature-x"|null,
  "target_branch":"main","changed_files":[...],"diff":"<full unified diff>",
  "size":{"files":12,"lines":340},
  "test_files":[...],"source_files":[...],
- "mr":{"iid":..,"title":..,"description":..,"web_url":..,"author":..} | null,
+ "change":{"number":42,"label":"PR #42|MR !42","title":..,"description":..,"web_url":..,
+           "author":..,"source_branch":..,"host":..,"project":..,"state":..,
+           "author_id":1,"author_username":"author","current_user_id":2,
+           "current_username":"reviewer","seat":"reviewer","target_branch":"main",
+           "sha":"<head>","base_sha":..,"start_sha":..} | null,
  "has_description":true,
- "scope_intent":{"guess":"<title + branch, or branch alone>","basis":"mr.title + source_branch"},
+ "scope_intent":{"guess":"<title + branch, or branch alone>","basis":"change.title + source_branch"},
  "diff_unavailable":[],"not_text_reviewable":[],"untracked_files":[],
  "file_list_recovery":null|{"api_file_count":..,"reported_changes_count":..,"overflow":..,
                             "recovered_file_count":..,"recovered_from":".."},
@@ -31,20 +34,21 @@ disk, so the roster is fixed and the review is reproducible. See
 ```
 
 `size` drives the Step 2 gate in SKILL.md; it counts each path once even when a local
-run has the same file both staged and unstaged. `mr` is `null` whenever no MR was
-resolved (a `--local` run, or a git fallback); `has_description` is the single flag
-`sakura:adversarial` gates on — it is true only when an MR was resolved *and* its
-description is non-empty.
+run has the same file both staged and unstaged. `change` is `null` whenever no change
+request was resolved (a `--local` run, or a git fallback); `has_description` is the single
+flag the adversarial lens gates on — it is true only when a change request was resolved
+*and* its description is non-empty.
 
 `scope_intent.guess` and `.basis` are mechanical hints from preparation, not a judgment
 of description adequacy. Before any specialist runs, the orchestrator adds
 `scope_intent.statement` and `.source` (`description`, `user`, or `guess`) using the
 intent-resolution step in SKILL.md. A branch-only guess has basis `source_branch`;
-title-only uses `mr.title`. If neither is available (e.g. detached local HEAD), the
+title-only uses `change.title`. If neither is available (e.g. detached local HEAD), the
 guess is empty with basis `none`: record that limitation rather than inventing intent.
-`sakura:scope` uses this resolved intent and the full description; it is not gated on
-`has_description`. MR-only findings apply whenever `mr` is non-null, including branch
-auto-discovery (the report's `meta.target` is then `mr`), not just when `mode == "mr"`.
+The scope lens uses this resolved intent and the full description; it is not gated on
+`has_description`. Change-request-only findings apply whenever `change` is non-null,
+including branch auto-discovery (the report's `meta.target` is then `change`), not just
+when `mode == "change"`.
 
 `host`, `project`, `source_branch`, and `refs` exist so the **verification gate below is
 executable**: specialists receive only this file, so without them they could not read

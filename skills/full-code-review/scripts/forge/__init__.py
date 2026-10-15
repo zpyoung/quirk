@@ -126,6 +126,11 @@ def detect_forge(origin_url, override=None, run=None):
     return ForgeChoice("none", host, project, reason)
 
 
+def change_label(forge_name, number):
+    """Human label for a change request: "PR #12" on GitHub, "MR !12" on GitLab."""
+    return ("PR #%s" if forge_name == "github" else "MR !%s") % number
+
+
 def make_forge(name, host, project, run=None):
     """Return the adapter for `name` bound to host/project, or None for "none"."""
     if name == "none":
