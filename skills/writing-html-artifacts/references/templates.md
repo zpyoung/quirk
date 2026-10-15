@@ -50,7 +50,7 @@ The lookup order is project, then user, then built-in. All paths are relative to
 | `tier` | `1` (assembled single file) or `2` (React project bundled to one file) |
 | `libraries` | tier 1: libraries always inlined, in order; names from the skill's `vendor/libraries.json` or from this template's own `vendor/libraries.json` |
 | `optional_libraries` | tier 1: libraries a source file may add through its header's `libraries` field |
-| `slots` | tier 1: 1 to 3 entries, each `{"required": bool, "description": str}`; never `summary`, which every tier-1 template accepts without declaring it |
+| `slots` | tier 1: 1 to 3 entries, each `{"required": bool, "description": str}`; never `summary`, which region-bearing templates take without declaring it (the companion rejects one) |
 | `skeleton` | tier 1: relative path to the skeleton HTML |
 | `tokens` | optional: relative path to a token file layered last (see below) |
 | `rules` | optional: relative path to a design-rules addendum, read with the design reference |
@@ -97,7 +97,7 @@ Every tier-1 source names a shape in `layout` and writes a `summary` slot. What 
 
 - **`summary` is a reserved slot.** Every tier-1 template accepts it and none may declare it. It is required whenever the skeleton holds `{{regions}}` or `{{slot:main}}`. A missing summary is exit 2, and the error names the shape and where its summary goes. A skeleton with neither placeholder, the companion's, has no summary slot and rejects one.
 - **`aside` is for `report` only.** An `aside` slot on any other shape is exit 2.
-- **The nav is generated from `main`.** Headings inside `q-panel`, `q-compare`, `q-tabs` and `q-board` are neither counted nor listed. A heading without an `id` gains one made from its text, kept unique against ids already on the page. `"nav": "off"` on `reference` and `"nav": "on"` with no h2 are exit 2.
+- **The nav is generated from `main`.** Headings inside `q-panel`, `q-compare`, `q-tabs` and `q-board` are neither counted nor listed. A heading without an `id` gains one made from its text, kept unique against ids already on the page. `"nav": "off"` on `reference`, `"nav": "on"` with no h2, and a `reference` page whose `main` has no h2 or h3 (its section nav would be empty) are exit 2.
 - **Layout resolution at build.** The source's `layout`, else the `layout` in the existing output's header, else `report`. `--upgrade` does not change it; it only moves library versions.
 - **A defaulted layout is recorded as defaulted.** When no source or earlier build named one, the header gets `"layout_defaulted": true` and the delivery note says `Layout: report (no layout named)`. A rebuild whose source still names no layout stays defaulted; naming one in the source clears it.
 - **The header records the result.** Built pages carry `"layout"`, and `"layout_defaulted": true` or `"legacy_summary": true` when they apply. Never edit these by hand: rebuild from the source.
