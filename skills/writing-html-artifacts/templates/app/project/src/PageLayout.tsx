@@ -117,8 +117,8 @@ function PageNav({ items, currentId }: { items: NavItem[]; currentId: string | n
 }
 
 /**
- * The page-shape wrapper every view renders inside: the same regions, class names and DOM order that
- * the build emits for a tier-1 page of this shape, placed by `quirk-layout.css`.
+ * The page-shape wrapper every view renders inside: the same `q-wrap` width cap, regions, class names
+ * and DOM order that the build emits for a tier-1 page of this shape, placed by `quirk-layout.css`.
  *
  * `summary` is the page's answer or headline (where it sits depends on the shape), `children` is the
  * main content, and `aside` is an `<aside>` element that only the report shape places. The shape comes
@@ -183,21 +183,23 @@ export function PageLayout({ summary, children, aside }: { summary: ReactNode; c
   )
 
   return (
-    <div className="q-page" data-layout={layout}>
-      {layout === 'tool' ? (
-        <>
-          {nav}
-          {main}
-          {summaryRegion}
-        </>
-      ) : (
-        <>
-          {summaryRegion}
-          {nav}
-          {main}
-          {layout === 'report' && hasAside ? aside : null}
-        </>
-      )}
+    <div className="q-wrap">
+      <div className="q-page" data-layout={layout}>
+        {layout === 'tool' ? (
+          <>
+            {nav}
+            {main}
+            {summaryRegion}
+          </>
+        ) : (
+          <>
+            {summaryRegion}
+            {nav}
+            {main}
+            {layout === 'report' && hasAside ? aside : null}
+          </>
+        )}
+      </div>
     </div>
   )
 }
