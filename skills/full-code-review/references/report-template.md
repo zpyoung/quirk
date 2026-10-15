@@ -3,7 +3,7 @@
 Render the review in these six sections, in this order. This is the layout implemented
 by `scripts/render_report.py --format md`. The coordinator authors `report.json` per
 `html-report.md`; it does not hand-render this document. This file also defines the body
-used for each gated inline MR comment.
+used for each gated inline comment.
 
 GitLab CommonMark discipline is binding: put a blank line between consecutive
 bold-label lines, and separate findings with `---`, so labels and findings do not
@@ -21,12 +21,12 @@ Source fields:
 - Dimensions run/skipped, diff size, coverage, guidance, run notes: `run.*`
 - Mutation summary when the probe ran: derived from `mutation_probe`
 
-`run.dimensions_run` and `run.dimensions_skipped` carry the sakura dimension ids and,
-for a skip, the reason: `sakura:test-adequacy, sakura:tests (no test files)`,
-`sakura:comments (no comments added or modified)`, `sakura:adversarial (no MR
+`run.dimensions_run` and `run.dimensions_skipped` carry the lens ids and,
+for a skip, the reason: `test-adequacy, tests (no test files)`,
+`comments (no comments added or modified)`, `adversarial (no change
 description)`. `run.coverage` states `all 12 changed files reviewed` — or the ⚠️ form
 naming what never reached the specialists (`diff unavailable`, `binary (not
-text-reviewable)`), with `untracked` and `GitLab file list was truncated — rebuilt from
+text-reviewable)`), with `untracked` and `forge file list was truncated — rebuilt from
 git` noted separately as provenance for files that *were* reviewed. Repeat any of it
 under Assumptions. A report that omits coverage while files went unreviewed is wrong.
 
@@ -45,9 +45,9 @@ The change is focused, but two correctness findings need resolution.
 
 **Source access:** borrowed-worktree
 
-**Dimensions run:** sakura:correctness, sakura:db
+**Dimensions run:** correctness, db
 
-**Dimensions skipped:** sakura:tests (no tests changed)
+**Dimensions skipped:** tests (no tests changed)
 
 **Diff size:** 12 files, 340 lines
 
@@ -55,7 +55,7 @@ The change is focused, but two correctness findings need resolution.
 
 **Mutation probe:** run — 7 mutants, 6 killed, 1 survived
 
-**Guidance loaded:** repo CLAUDE.md, sakura _global
+**Guidance loaded:** repo CLAUDE.md, pack guidance
 ```
 
 ## 2. Risk Assessment
@@ -78,7 +78,7 @@ is omitted rather than stubbed.
 
 ## 3. Claim Verification
 
-The verdict table from `sakura:adversarial` — every falsifiable claim in the MR
+The verdict table from `adversarial` — every falsifiable claim in the change
 description, checked against the code:
 
 ```
@@ -89,8 +89,8 @@ description, checked against the code:
 | "only touches the poller" | confirmed | diff is limited to `jobs/poller.py` |
 ```
 
-Omit this section entirely when `sakura:adversarial` did not run (no MR description —
-`--local`, or an MR with an empty description). Claims that came back `wrong`,
+Omit this section entirely when `adversarial` did not run (no change description —
+`--local`, or a change request with an empty description). Claims that came back `wrong`,
 `misleading`, or `partial` also appear as findings in section 4.
 
 ## 4. Findings
@@ -110,7 +110,7 @@ kept verbatim.
 
 **Severity:** Should fix
 
-**Dimensions:** sakura:correctness, coordinator verification
+**Dimensions:** correctness, coordinator verification
 
 **Location:** `customcheckout/api/controller.py:211-261`
 
@@ -137,7 +137,7 @@ When memory is present, keep per-finding memory out of the findings themselves; 
 is coordinator context. Add “Appears fixed” and
 “Re-found after resolution / Possible regression” sections as applicable, even when
 the current finding list is empty. “Appears fixed” is a handoff to
-`addressing-mr-review-comments`, never an automatic thread resolution.
+`quirk:receiving-code-review`, never an automatic thread resolution.
 
 ## 5. Assumptions
 
@@ -178,7 +178,7 @@ into GitLab has neither, which is why the section survives here.
 Every comment the skill posts has three parts, built by `scripts/comment_body.py` from
 trusted `report.json` data and used by both seats:
 
-1. a hidden `<!-- sakura-review:v1 … -->` YAML block at the top (`kind`, `fp`, `seat`,
+1. a hidden `<!-- quirk-review:v1 … -->` YAML block at the top (`kind`, `fp`, `seat`,
    `severity`, `disposition`, `dimensions`, `file`, `line`, `head_sha`, `verified`);
 2. a short visible section that reads without expanding anything;
 3. a collapsed `Details` section, omitted when it would add nothing beyond the visible
@@ -206,13 +206,13 @@ The visible section, in order:
 5. **Fix.** `**Fix:** <fix_md>`, one line.
 
 ```markdown
-<!-- sakura-review:v1
+<!-- quirk-review:v1
 kind: finding
 fp: 3f9a1c2e…
 seat: reviewer
 severity: Should fix
 disposition: Non-blocking
-dimensions: [sakura:correctness]
+dimensions: [correctness]
 file: customcheckout/api/controller.py
 line: 211
 head_sha: 6b6e4be0…
@@ -267,7 +267,7 @@ present when non-zero. Its `Details` holds:
   when `--allow-unaffected` was used, and posted and not-posted counts.
 
 ```markdown
-<!-- sakura-review:v1
+<!-- quirk-review:v1
 kind: overview
 seat: reviewer
 head_sha: 6b6e4be0…
@@ -306,14 +306,14 @@ section stays at the lead, the why, and the fix. Staging rules are in `posting.m
 Support replies.
 
 ```markdown
-<!-- sakura-review:v1
+<!-- quirk-review:v1
 kind: support
 fp: 3f9a1c2e…
 supports_discussion: 9f2c…
 supports_note: 481223
 disposition: Blocking
 -->
-**Agree · Blocking** · sakura review found this independently
+**Agree · Blocking** · quirk full-code-review found this independently
 
 Merchants see per-type credit balances that do not add up to the total.
 

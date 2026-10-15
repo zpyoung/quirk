@@ -20,7 +20,7 @@ disk, so the roster is fixed and the review is reproducible. See
  "target_branch":"main","changed_files":[...],"diff":"<full unified diff>",
  "size":{"files":12,"lines":340},
  "test_files":[...],"source_files":[...],
- "change":{"number":42,"label":"PR #42|MR !42","title":..,"description":..,"web_url":..,
+ "change":{"number":42,"label":"PR #42 (GitHub) | MR !42 (GitLab)","title":..,"description":..,"web_url":..,
            "author":..,"source_branch":..,"host":..,"project":..,"state":..,
            "author_id":1,"author_username":"author","current_user_id":2,
            "current_username":"reviewer","seat":"reviewer","target_branch":"main",

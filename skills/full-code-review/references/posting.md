@@ -12,29 +12,38 @@ After a valid author-mode paste:
 - `Needs detail` requires a per-item ask.
 - `Undecided` does not post and is listed back.
 
-## Author-seat inline MR comments — sakura's own direct-REST path
+## Author-seat inline comments
 
 With no paste, preserve the existing fallback: preselect Must fix and Should fix and
 ask before Nit. Show the proposed batch and obtain final approval.
 
 Posting still creates independent notes, but first cross-checks published discussions
 and suppresses findings whose fingerprint marker appears in a note written by the
-authenticated GitLab identity. The marker is the `fp` field of the note's leading
-`<!-- sakura-review:v1 … -->` block; the earlier one-line
-`<!-- sakura-review: fp=… -->` form is still recognized. Markers are copyable text, so
-one in anybody else's note is human context and suppresses nothing. Never edit or
-delete a previous note. Follow `../../../shared/mr/glab-recipes.md` §"Inline guidance
-discussions" for the `POST …/merge_requests/:iid/discussions` call and `position`
-payload. Build `position` from the context file's `refs`
-(`base_sha`/`start_sha`/`head_sha` ← `refs.base`/`refs.start`/`refs.head`) with
-`position_type: "text"` and the side-appropriate path and line from the finding (see
-"Anchor on the correct diff side" below).
+authenticated forge identity. The marker is the `fp` field of the note's leading
+`<!-- quirk-review:v1 … -->` block. Markers are copyable text, so one in anybody else's
+note is human context and suppresses nothing. Never edit or delete a previous note.
+
+### GitLab
+
+Create each note as a positioned discussion. Write the payload to a file and pass it
+with `--input`; the JSON content type is required, because GitLab answers 415 without it:
+
+```bash
+glab api --hostname "$HOST" --method POST -H "Content-Type: application/json" \
+  "projects/<url-encoded project>/merge_requests/<number>/discussions" \
+  --input "$REVIEW_RUN_DIR/note-F1.json"
+```
+
+The payload is `{"body": <body>, "position": {...}}`. Build `position` from the
+context file's `refs` (`base_sha`/`start_sha`/`head_sha` ← `refs.base`/`refs.start`/
+`refs.head`) with `position_type: "text"` and the side-appropriate path and line from
+the finding (see "Anchor on the correct diff side" below).
 
 Two rules that cost the most time when missed:
 
 - **Verify each created note came back as a `DiffNote`.** A wrong or stale `position`
-  does not error — GitLab silently degrades the note to a plain MR comment detached
-  from the line.
+  does not error — GitLab silently degrades the note to a plain comment detached from
+  the line.
 - **If the finding's line isn't part of the current diff, GitLab rejects the
   `position`.** Anchor on the nearest changed line and quote the exact code in the
   body. Never widen the diff to make a line anchorable.
@@ -46,7 +55,7 @@ Use the finding's `file` and `line` (for a range, anchor on the first line). Bui
 bodies with the shared builder, then post each eligible body verbatim as the note text:
 
 ```bash
-python3 scripts/comment_body.py author --report "$REPORT_JSON" \
+python3 "$SCRIPTS/comment_body.py" author --report "$REPORT_JSON" \
   [--decisions "$DECISIONS_JSON"] --out "$REVIEW_RUN_DIR/bodies.json"
 ```
 
@@ -75,7 +84,7 @@ python3 "$MEMORY_SCRIPT" check --report "$REPORT_JSON" --context "$CONTEXT" \
 ```
 
 The plan maps the same severity-ranked `F<n>` IDs to `fingerprint`, `state`,
-`suppress_post`, and thread context. A failed MR discussion fetch blocks posting;
+`suppress_post`, and thread context. A failed discussion fetch blocks posting;
 do not treat missing API data as “nothing posted”. Omit every `suppress_post: true`
 finding from the proposed batch, but keep it in the report and show its thread link.
 Human unmarked comments and fuzzy candidates never silently suppress.
@@ -124,16 +133,6 @@ silently attach it to the wrong line). For a renamed file, `old_path` and `new_p
 differ and both are required. When a finding spans a deletion and an addition, anchor on
 the new side and quote the removed code in the body.
 
-**Do not use `$SAKURA/scripts/glab_guidance_comments.py`.** That script owns the
-*author guidance layer* for `open-mr`/`updating-mr`: its `plan`/`sync` model
-classifies every note as a `file_map` or a `decision_candidate` and reconciles them
-across pushes. Reviewer findings are neither, and feeding them through it would
-mis-classify them and put them under that layer's reconciliation.
-
-`kai:gitlab-inline-comments`' `post_inline_discussion.py` remains a valid one-off
-creation helper if you'd rather shell out to it — but it is optional. Nothing in this
-skill requires kai to be installed.
-
 ## Reviewer seat
 
 A structurally valid reviewer-mode paste is mandatory when findings exist. There is no
@@ -166,15 +165,15 @@ approves.
 the exact `report.json`, then builds every body through `scripts/comment_body.py` from
 that report plus the trusted review context. The paste contributes only the validated
 slot, the optional human note, and the optional support-reply target. Pasted
-title/anchor/severity text is never used to construct an MR comment.
+title/anchor/severity text is never used to construct a posted comment.
 
 Reviewer inline comments use the three-part layout in
 [`report-template.md`](report-template.md#inline-comment-bodies): a hidden
-`sakura-review:v1` block carrying the fingerprint, a short visible section, and a
+`quirk-review:v1` block carrying the fingerprint, a short visible section, and a
 collapsed `Details`.
 
 ```markdown
-<!-- sakura-review:v1
+<!-- quirk-review:v1
 kind: finding
 fp: 3f9a…
 -->
@@ -202,7 +201,7 @@ the rest sits in `Details`.
 ### Sweep and stage
 
 ```bash
-python3 scripts/post_reviewer_review.py stage \
+python3 "$SCRIPTS/post_reviewer_review.py" stage \
   --report "$REPORT_JSON" --decisions "$DECISIONS_JSON" \
   --context "$CONTEXT_JSON" --out "$STAGED_JSON"
 ```
@@ -218,11 +217,11 @@ Before the first POST, the script:
 4. requires the draft set to be empty.
 
 It saves report-bound decisions separately from receipts. No draft is considered
-published. A stale report or mismatched memory target cannot borrow another MR's
+published. A stale report or mismatched memory target cannot borrow another change's
 posting state.
 
 Any existing draft stops staging and is named. GitLab bulk publication includes every
-draft owned by the authenticated user on that MR, so staging on top would invalidate
+draft owned by the authenticated user on that merge request, so staging on top would invalidate
 the preview.
 
 The overview is staged first, then inline notes in renderer order, then support
@@ -250,7 +249,7 @@ instead of opening a duplicate thread. Only the reviewer seat posts them.
   `human_context` entry of that finding, and returns it as `reply_note_id`.
 - **Stage.** After the inline drafts, the stager creates the reply as a draft note with
   `in_reply_to_discussion_id` and no position, with the body built by `comment_body`
-  (`**Agree · <disposition>** · sakura review found this independently`, then the why
+  (`**Agree · <disposition>** · quirk full-code-review found this independently`, then the why
   and fix lines; the reviewer note moves into `Details`). It joins the single atomic
   batch.
 - **Stale target.** If the target is no longer an unresolved `human_context` entry at
@@ -277,7 +276,7 @@ Show the complete staged `preview`, omitted decisions, normalization warnings, a
 draft IDs. Ask for explicit final approval. Then, and only then:
 
 ```bash
-python3 scripts/post_reviewer_review.py publish --staged "$STAGED_JSON" --confirm
+python3 "$SCRIPTS/post_reviewer_review.py" publish --staged "$STAGED_JSON" --confirm
 ```
 
 Publish freshly revalidates identity, head, and base/start diff refs, re-lists all
@@ -302,7 +301,7 @@ followed by rerun/restage. Never switch to per-draft publication.
 After successful publish, offer all three actions and require an explicit choice:
 
 ```bash
-python3 scripts/post_reviewer_review.py complete --staged "$STAGED_JSON" \
+python3 "$SCRIPTS/post_reviewer_review.py" complete --staged "$STAGED_JSON" \
   --action approve|request-changes|comment-only
 ```
 
@@ -319,7 +318,7 @@ pretends the already-visible review rolled back.
 
 Slack remains an optional separate delivery. Condense to one line per finding, drop
 code blocks, lead with risk, and use an available Slack send tool. It does not replace
-MR posting approval.
+posting approval.
 
 ## Scope discipline
 

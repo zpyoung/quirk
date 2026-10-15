@@ -23,6 +23,7 @@ cat <<HEADER
  * theme:  @astryxdesign/theme-neutral@$(version theme-neutral)  dist/theme.css
  * base:   @astryxdesign/core@$(version core)           dist/astryx.css (:root scale tokens only)
  * refresh: scripts/vendor_astryx_tokens.sh <path-to-node_modules>
+ * license: MIT, https://github.com/facebook/astryx
  */
 HEADER
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build every MR comment body the review skill posts, in one three-part shape.
+"""Build every comment body the review skill posts, in one three-part shape.
 
 Each body is a hidden YAML metadata block, a short visible section, and a collapsed
 `<details>` section. Bodies are built only from trusted report data, and the builder
@@ -614,7 +614,7 @@ def _decision_rows(path, raw):
 
 
 def _dropped_label(row):
-    """Name why a decision kept a finding off the MR: the row's own label, else Ignore or Undecided."""
+    """Name why a decision kept a finding off the change: the row's own label, else Ignore or Undecided."""
     label = row.get("disposition")
     if isinstance(label, str) and label.strip():
         return label
@@ -662,7 +662,7 @@ def _author_bodies(raw, decisions=None):
 
 def main(argv=None):
     """Run the author-seat CLI; exit 0 on success, 2 with a JSON error otherwise."""
-    parser = argparse.ArgumentParser(description="Build MR comment bodies from a review report.")
+    parser = argparse.ArgumentParser(description="Build comment bodies from a review report.")
     commands = parser.add_subparsers(dest="command", required=True)
     author = commands.add_parser("author", help="build finding and overview bodies")
     author.add_argument("--report", required=True)

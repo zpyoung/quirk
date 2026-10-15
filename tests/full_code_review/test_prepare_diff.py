@@ -193,10 +193,10 @@ def test_decision_branch_gitlab_first(tmp_path):
         m.get_origin_url = lambda cwd=".": "git@x:grp/proj.git"
         m.detect_target_branch = lambda cwd=".": "main"
         m.find_change_for_branch = lambda forge, b: 42
-        m.change_diff = lambda forge, iid, cwd=".", metadata=None: (
+        m.change_diff = lambda forge, number, cwd=".", metadata=None: (
             "diff --git a/z b/z\n--- a/z\n+++ b/z\n@@ -1 +1 @@\n-x\n+y\n",
             {"base": "b" * 40, "start": "c" * 40, "head": "a" * 40},
-            {"number": iid, "title": "Support locked credit rates", "description": "no behavior change",
+            {"number": number, "title": "Support locked credit rates", "description": "no behavior change",
              "source_branch": "feature"})
         m.change_details = lambda forge, number: {
             "number": 42, "state": "opened", "open": True, "author_id": 9, "author_username": "other",
@@ -217,7 +217,7 @@ def test_decision_branch_gitlab_first(tmp_path):
         assert "a/z" in ctx["diff"] and "SHOULD_NOT_BE_USED" not in ctx["diff"]
         assert ctx["host"] == "x" and ctx["project"] == "grp/proj"
         assert ctx["source_branch"] == "feature"
-        # adversarial gates on the MR description reaching the context
+        # adversarial gates on the change description reaching the context
         assert ctx["change"]["description"] == "no behavior change"
         assert ctx["has_description"] is True and meta["has_description"] is True
         assert ctx["size"] == {"files": 1, "lines": 2}
@@ -258,7 +258,7 @@ def test_decision_branch_git_fallback(tmp_path):
         assert ctx["host"] == "x" and ctx["project"] == "grp/proj"
         assert ctx["source_branch"] == "feature"
         assert ctx["refs"] == {"base": "BASE", "start": "BASE", "head": "HEAD"}
-        # no MR → no description → adversarial must skip
+        # no change request → no description → adversarial must skip
         assert ctx["change"] is None and ctx["has_description"] is False
         assert ctx["scope_intent"] == {"guess": "feature", "basis": "source_branch"}
         assert meta["scope_intent"] == ctx["scope_intent"]
@@ -270,7 +270,7 @@ def test_decision_branch_git_fallback(tmp_path):
 def test_empty_gitlab_diff_recovered_from_git(tmp_path):
     out = Path(tmp_path) / "ctx.json"
     payload = {
-        "iid": 15, "title": "Recover empty diff", "source_branch": "feature/direct-mr", "changes_count": "1",
+        "iid": 15, "title": "Recover empty diff", "source_branch": "feature/direct-change", "changes_count": "1",
         "diff_refs": {"base_sha": "b" * 40, "start_sha": "c" * 40, "head_sha": "a" * 40},
         "changes": [{
             "old_path": "large.py", "new_path": "large.py",
@@ -321,12 +321,12 @@ def test_empty_gitlab_diff_recovered_from_git(tmp_path):
         meta = json.loads(buf.getvalue())
         ctx = json.loads(out.read_text())
         assert recovered.strip() in ctx["diff"]
-        assert ctx["source_branch"] == "feature/direct-mr"
+        assert ctx["source_branch"] == "feature/direct-change"
         assert ctx["diff_unavailable"] == []
         assert meta["diff_unavailable"] == []
         assert ctx["size"] == {"files": 1, "lines": 2}
         assert ctx["scope_intent"] == {
-            "guess": "Recover empty diff (feature/direct-mr)",
+            "guess": "Recover empty diff (feature/direct-change)",
             "basis": "change.title + source_branch",
         }
         assert meta["scope_intent"] == ctx["scope_intent"]
@@ -605,9 +605,9 @@ def test_expected_empty_gitlab_changes_are_not_unavailable(tmp_path):
 
         m._run = fake_run
         metadata = {}
-        diff_text, refs, mr = m.change_diff(_gitlab("host", "grp/proj"), 17, ".", metadata)
+        diff_text, refs, change = m.change_diff(_gitlab("host", "grp/proj"), 17, ".", metadata)
         assert diff_text == ""
-        assert refs["head"] == "HEAD" and mr["number"] == 17
+        assert refs["head"] == "HEAD" and change["number"] == 17
         assert metadata["changed_files"] == ["image.png", "new.py"]
         assert metadata["diff_unavailable"] == []
         assert metadata["not_text_reviewable"] == ["image.png"]
@@ -743,11 +743,11 @@ def test_mr_failure_is_nonzero_structured_and_removes_output(tmp_path):
         m.get_origin_url = lambda cwd=".": "git@x:grp/proj.git"
         m.detect_target_branch = lambda cwd=".": "main"
 
-        def failed_mr(forge, iid, cwd=".", metadata=None):
+        def failed_change(forge, number, cwd=".", metadata=None):
             metadata["error"] = "request failed"
             return None
 
-        m.change_diff = failed_mr
+        m.change_diff = failed_change
         stdout, stderr = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             rc = m.main(["--forge", "gitlab", "--change", "999999", "--out", str(out)])
@@ -1160,7 +1160,7 @@ def test_mr_snapshot_race_blocks_seat_and_output(tmp_path):
          m.change_details, m.current_user) = saved
 
 
-def test_mr_details_retains_all_diff_refs():
+def test_change_details_retains_all_refs():
     old = m._run
     def fake_run(cmd, timeout=90):
         body = {"number": 42, "state": "opened", "open": True, "sha": "a" * 40,

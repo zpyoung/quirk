@@ -8,13 +8,13 @@ import discover_guidance as m  # noqa: E402
 
 def test_normalize_scp(tmp_path):
     assert m.normalize_repo_key(
-        "git@gitlab.rechargeapps.net:engineering/frontend/frontend.git"
+        "git@git.example.com:engineering/frontend/frontend.git"
     ) == "engineering--frontend--frontend"
 
 
 def test_normalize_https(tmp_path):
     assert m.normalize_repo_key(
-        "https://gitlab.rechargeapps.net/engineering/frontend/frontend.git"
+        "https://git.example.com/engineering/frontend/frontend.git"
     ) == "engineering--frontend--frontend"
 
 

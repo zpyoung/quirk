@@ -66,7 +66,7 @@ The minimum renderable document is:
 | `seat` | coordinator-required | `"author"` or `"reviewer"`; defaults to `author` only for backward-compatible old reports. Reviewer is valid only with `target: change`. |
 | `head_sha` | reviewer-required | Eyebrow/footer segment. Reviewer reports require the full 40-character lowercase SHA used to build the review. |
 | `change_state` | no | Eyebrow segment, such as `Draft · 0 of 2 approvals` |
-| `storage_key` | no | Explicit localStorage key. Normally omit it. Author keys retain `sakura-review-<target>-<finding-digest>`; reviewer keys include `reviewer`. The digest covers severity, file, line, title, body, recommendation, `impact`, and `fix_md`, so triage state saved for a report rendered without those two fields does not carry over to one that has them. Stored state also carries its seat and is discarded on a seat mismatch. |
+| `storage_key` | no | Explicit localStorage key. Normally omit it. Author keys retain `quirk-review-<target>-<finding-digest>`; reviewer keys include `reviewer`. The digest covers severity, file, line, title, body, recommendation, `impact`, and `fix_md`, so triage state saved for a report rendered without those two fields does not carry over to one that has them. Stored state also carries its seat and is discarded on a seat mismatch. |
 
 Absent eyebrow fields and their separators are omitted individually. A branch name
 is required even if diff preparation discovered a change request, whenever `target`
@@ -139,7 +139,7 @@ it and put the reason in `assumptions`; the whole section is omitted.
     "rollback": {"level": "Clean", "note_md": "…"}
   },
   "mitigations_md": "Plain prose on what would lower this risk and why.",
-  "verbatim_md": "The full sakura:risk output, unabbreviated.",
+  "verbatim_md": "The full risk lens output, unabbreviated.",
   "caveats": [{"title": "The gate claim is not total", "body_md": "…"}]
 }
 ```
@@ -220,7 +220,7 @@ Each `finding.memory` contains:
 | Field | Meaning |
 |---|---|
 | `fingerprint`, `anchor_hash` | SHA-256 strings, or null when a usable anchor is missing. No plaintext anchor is stored. |
-| `dimension` | Stable `sakura:*` identifier used for identity. |
+| `dimension` | Stable lens identifier (e.g. `correctness`) used for identity. |
 | `state` | `new`, `carried`, `answered`, `restored-decision`, `re-found-after-resolution`, or `possible-regression`. |
 | `match` | `exact`, `candidate`, or null. Only unique exact matches can inherit a decision. |
 | `disposition`, `note` | Initial normalized slot (`fix`, `later`, `detail`, `ignore`, `none`) and remembered note. A seat change does not inherit another seat's decision vocabulary. |
@@ -488,7 +488,7 @@ The page exports exactly five groups, including zero-item groups. Export order i
 `fix`, `later`, `detail`, `ignore`, `none`; the mode is pinned in the header:
 
 ```markdown
-# MR !35741 — triage decisions [mode: reviewer]
+# PR #35741 — triage decisions [mode: reviewer]
 
 ## Blocking (1)
 
@@ -506,7 +506,7 @@ The page exports exactly five groups, including zero-item groups. Export order i
 ```
 
 Author mode has the same shape with `[mode: author]` and Will fix / Fix later /
-Needs detail / Ignore / Undecided. The target label is `PR #<n>` or `MR !<n>`, raw branch name,
+Needs detail / Ignore / Undecided. The target label is `PR #<n>` (GitHub) or `MR !<n>` (GitLab), raw branch name,
 or `local changes`. Notes normalize CRLF, lone CR, U+2028, and U+2029 to LF before
 every line receives `  > `.
 
@@ -548,7 +548,7 @@ session that has neither the report JSON nor the run directory. It starts at thi
 line:
 
 ```text
-<!-- sakura-review handoff: not validated, not used for posting -->
+<!-- quirk-review handoff: not validated, not used for posting -->
 ```
 
 `validate_triage.py` validates only the text before the first line that equals the
@@ -558,7 +558,7 @@ delimiter validates exactly as before. Notes in the decisions block are quoted w
 
 The section holds numbered instructions for a fresh session (apply the `fix` slot, list
 `later` back, ask about `detail`, leave `ignore` and Undecided alone, post nothing), a
-`### Target` list (label, seat, verdict, project, MR URL, branch, MR state, head SHA,
+`### Target` list (label, seat, verdict, project, change URL, branch, change state, head SHA,
 repo checkout, ticket, report JSON path), and one block per finding in every slot, in
 export group order:
 

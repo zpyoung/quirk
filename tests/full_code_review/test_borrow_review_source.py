@@ -27,7 +27,7 @@ def fixture(tmp_path):
     run("git", "commit", "-m", "base", cwd=work)
     run("git", "branch", "-M", "main", cwd=work)
     run("git", "push", "origin", "main", cwd=work)
-    (work / "value.txt").write_text("mr head\n")
+    (work / "value.txt").write_text("change head\n")
     run("git", "commit", "-am", "head", cwd=work)
     head = run("git", "rev-parse", "HEAD", cwd=work).stdout.strip()
     run("git", "push", "origin", "HEAD:refs/merge-requests/7/head", cwd=work)
@@ -62,7 +62,7 @@ def test_acquire_is_detached_at_mr_head_and_release_is_idempotent(tmp_path):
     assert rc == 0 and manifest["kind"] == "worktree"
     assert manifest["mutation_consent"] is True
     borrowed = Path(manifest["path"])
-    assert (borrowed / "value.txt").read_text() == "mr head\n"
+    assert (borrowed / "value.txt").read_text() == "change head\n"
     assert run("git", "rev-parse", "HEAD", cwd=borrowed).stdout.strip() == head
     symbolic = subprocess.run(["git", "symbolic-ref", "-q", "HEAD"], cwd=borrowed)
     assert symbolic.returncode != 0
@@ -116,7 +116,7 @@ def test_explicit_temp_clone_path_is_cleaned_completely(tmp_path):
                                "--out", str(manifest_path), "--allow-temp-clone"])
         assert rc == 0 and manifest["kind"] == "temp-clone"
         cleanup_root = Path(manifest["cleanup_root"])
-        assert cleanup_root.exists() and Path(manifest["path"], "value.txt").read_text() == "mr head\n"
+        assert cleanup_root.exists() and Path(manifest["path"], "value.txt").read_text() == "change head\n"
         assert manifest["head_sha"] == head
         assert run("git", "rev-parse", "--is-shallow-repository", cwd=manifest["repo_root"]).stdout.strip() == "true"
         assert invoke(["release", "--manifest", str(manifest_path)])[0] == 0

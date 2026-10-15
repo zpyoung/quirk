@@ -378,7 +378,7 @@ def _reported_change_count(value):
 
 
 def resolve_scope_intent(title=None, branch=None):
-    """Compose an intent hint without judging the MR description."""
+    """Compose an intent hint without judging the change description."""
     title = (title or "").strip()
     branch = (branch or "").strip()
     if title and branch:
@@ -633,7 +633,7 @@ def current_user(forge):
 
 
 def detect_seat(author_username, current_username, author_id=None, current_id=None):
-    """Classify an MR as author or reviewer without a user-configurable override."""
+    """Classify a change request as author or reviewer without a user-configurable override."""
     if author_id is not None and current_id is not None:
         return "author" if str(author_id) == str(current_id) else "reviewer"
     if not author_username or not current_username:

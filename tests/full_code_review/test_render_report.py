@@ -91,7 +91,7 @@ def report():
 
 def memory_payload():
     snapshot = {
-        "schemaVersion": 1, "target_key": "demo", "identity": {"repo": "demo", "target": "mr:42"},
+        "schemaVersion": 1, "target_key": "demo", "identity": {"repo": "demo", "target": "change:42"},
         "seat": "author", "base_sha": None, "head_sha": "a" * 40, "dimensions": ["db"],
         "guidance_hash": "b" * 64, "started_at": 1.0, "findings": [], "discussions": [],
         "discussions_available": True, "warnings": [], "invalidation_reason": None,

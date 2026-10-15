@@ -135,12 +135,12 @@ def _atomic_write(path: Path, value: Any) -> None:
 def _target_identity(context: dict, repo: str) -> tuple[dict, list[str]]:
     warnings: list[str] = []
     change_ctx = context.get("change") if isinstance(context.get("change"), dict) else {}
-    # A prepared MR is authoritative even when the mode was branch/local.
+    # A prepared change request is authoritative even when the mode was branch/local.
     if change_ctx.get("number") is not None:
         host = _normalize_host(change_ctx.get("host") or context.get("host"))
         project = _normalize_project(change_ctx.get("project") or context.get("project"))
         if not host or not project or not str(change_ctx["number"]).isdigit() or int(change_ctx["number"]) < 1:
-            raise ValueError("MR memory requires host, project and positive IID")
+            raise ValueError("change memory requires host, project and a positive number")
         identity = {"repo": "%s/%s" % (host, project), "target": "change", "number": str(change_ctx["number"])}
     else:
         repository, repo_warnings = _repo_identity(repo)
@@ -578,7 +578,7 @@ def reconcile(report: dict, context: dict, snapshot: dict) -> dict:
     discussions = snapshot.get("discussions", []) if available else []
     change_context = context.get("change") or {}
     if discussions and not (change_context.get("current_username") or change_context.get("current_user_id") is not None):
-        warnings.append("Posting identity unknown; MR markers are treated as human context.")
+        warnings.append("Posting identity unknown; posted markers are treated as human context.")
     current_counts, prior_by_fp = {}, {}
     for item in prior:
         if item.get("fingerprint"):
@@ -638,7 +638,7 @@ def reconcile(report: dict, context: dict, snapshot: dict) -> dict:
             else:
                 memory["state"] = "answered" if thread["replies"] else "carried"
         elif previous and (previous.get("receipt") or {}).get("published") and not available:
-            # The decision is usable offline; MR delivery still requires a live GET.
+            # The decision is usable offline; forge delivery still requires a live GET.
             memory["state"] = "carried"
         elif fp and not previous:
             for candidate in prior:

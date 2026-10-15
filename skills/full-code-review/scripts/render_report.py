@@ -1013,7 +1013,7 @@ def _memory_sections_html(report):
         out.append('<section class="astryx-section" id="appears-fixed">%s<div class="rows">' %
                    _sec_head("Appears fixed",
                              "Prior findings not raised in this run. Follow up with "
-                             "addressing-mr-review-comments; this report does not resolve threads."))
+                             "quirk:receiving-code-review; this report does not resolve threads."))
         out.extend(_memory_record_html(item) for item in appears if isinstance(item, dict))
         out.append("</div></section>")
     for state, section_id, title in (
@@ -1054,7 +1054,7 @@ def _memory_sections_md(report):
     appears = memory.get("appears_fixed") or []
     if appears:
         lines.extend(["## Appears fixed", "",
-                      "Prior findings not raised in this run. Follow up with addressing-mr-review-comments; this report does not resolve threads.", ""])
+                      "Prior findings not raised in this run. Follow up with quirk:receiving-code-review; this report does not resolve threads.", ""])
         for item in appears:
             if isinstance(item, dict):
                 title = item.get("title") or item.get("summary") or "Prior finding"

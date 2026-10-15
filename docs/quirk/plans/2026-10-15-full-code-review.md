@@ -185,10 +185,12 @@ wc -l < skills/full-code-review/SKILL.md
 ```
 Expected: suite `0 failed`; sweep prints nothing; `wc` prints a number ≤ 500.
 
-- [ ] Step 1: lens rename, split, front matter, org-text strip, generic risk rubric; commit.
-- [ ] Step 2: marker/storage/ledger/ref/temp renames, legacy marker removal, `--no-escalate`, fallback rule; commit.
-- [ ] Step 3: `discover_guidance.py` and `add_guidance.py` interfaces with tests; commit.
-- [ ] Step 4: SKILL.md rewrite, references reshuffle, attribution comment, `test_full_code_review_skill.py`, `test_no_org_names.py`; commit.
+**Execution note (2026-10-15):** done. The coherence-sweep allowlist used at acceptance also exempts the whole `scripts/forge/` package, `scripts/post_reviewer_review.py` and the GitLab note-URL fallback in `scripts/review_memory.py` (both neutralized in Task 5 with forge dispatch), and test lines that are GitLab API payload fixtures (`"iid"`, `diff_refs`, `changes_count`, `merge_requests/`, `"MR !42"`). The bundled sample report was rewritten as a neutral GitHub PR. Removing the legacy one-line marker dropped 13 legacy-only test cases.
+
+- [x] Step 1: lens rename, split, front matter, org-text strip, generic risk rubric; commit.
+- [x] Step 2: marker/storage/ledger/ref/temp renames, legacy marker removal, `--no-escalate`, fallback rule; commit.
+- [x] Step 3: `discover_guidance.py` and `add_guidance.py` interfaces with tests; commit.
+- [x] Step 4: SKILL.md rewrite, references reshuffle, attribution comment, `test_full_code_review_skill.py`, `test_no_org_names.py`; commit.
 
 ---
 
