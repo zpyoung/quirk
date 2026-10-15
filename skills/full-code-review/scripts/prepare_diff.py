@@ -17,6 +17,8 @@ import subprocess
 import sys
 from urllib.parse import quote
 
+from forge import gitlab as _gitlab
+
 DEFAULT_HOST = "gitlab.rechargeapps.net"
 DEFAULT_MAX_CHARS = 240000  # ~60k tokens
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -415,6 +417,11 @@ def _run(cmd, timeout=90):
                           errors="surrogateescape", timeout=timeout)
 
 
+def _late_run(cmd, timeout=90, **_ignored):
+    # resolve _run at call time so a test's replacement module attribute is used
+    return _run(cmd, timeout=timeout)
+
+
 def _git_diff_command(cwd):
     return (["git", "-C", cwd] + _GIT_DIFF_GLOBAL_FLAGS + ["diff"] +
             _GIT_DIFF_FLAGS)
@@ -574,17 +581,10 @@ def glab_mr_changes(iid, host, project, cwd=".", metadata=None):
         if metadata is not None:
             metadata["error"] = "MR iid and project are required"
         return None
-    try:
-        r = _run(["glab", "api", "--hostname", host,
-                  "projects/%s/merge_requests/%s/changes" % (quote(project, safe=""), iid)])
-        if r.returncode != 0 or not r.stdout.strip():
-            if metadata is not None:
-                metadata["error"] = "GitLab changes request failed"
-            return None
-        data = json.loads(r.stdout)
-    except Exception:
+    data, error = _gitlab.fetch_changes(_late_run, host, project, iid)
+    if data is None:
         if metadata is not None:
-            metadata["error"] = "GitLab changes response was unavailable or invalid"
+            metadata["error"] = error
         return None
     if not isinstance(data.get("changes"), list):
         if metadata is not None:
@@ -654,44 +654,12 @@ def glab_mr_changes(iid, host, project, cwd=".", metadata=None):
 
 def glab_mr_details(iid, host, project):
     """Return the MR identity needed for seat detection and reviewer delivery."""
-    if not iid or not project:
-        return None
-    try:
-        r = _run(["glab", "api", "--hostname", host,
-                  "projects/%s/merge_requests/%s" % (quote(project, safe=""), iid)])
-        if r.returncode != 0 or not r.stdout.strip():
-            return None
-        data = json.loads(r.stdout)
-    except Exception:
-        return None
-    author = data.get("author") if isinstance(data.get("author"), dict) else {}
-    refs = data.get("diff_refs") if isinstance(data.get("diff_refs"), dict) else {}
-    return {
-        "iid": data.get("iid") or iid,
-        "state": data.get("state"),
-        "author_id": author.get("id"),
-        "author_username": author.get("username"),
-        "source_branch": data.get("source_branch"),
-        "target_branch": data.get("target_branch"),
-        "sha": data.get("sha") or refs.get("head_sha"),
-        "base_sha": refs.get("base_sha"),
-        "start_sha": refs.get("start_sha"),
-        "web_url": data.get("web_url"),
-    }
+    return _gitlab.mr_details(_late_run, host, project, iid)
 
 
 def glab_current_user(host):
     """Return the authenticated GitLab identity, or None when it cannot be read."""
-    try:
-        r = _run(["glab", "api", "--hostname", host, "user"], timeout=30)
-        if r.returncode != 0 or not r.stdout.strip():
-            return None
-        data = json.loads(r.stdout)
-        if not isinstance(data, dict) or not data.get("id") or not data.get("username"):
-            return None
-        return {"id": data["id"], "username": data["username"]}
-    except Exception:
-        return None
+    return _gitlab.current_user(_late_run, host)
 
 
 def glab_current_username(host):
@@ -710,23 +678,7 @@ def detect_seat(author_username, current_username, author_id=None, current_id=No
 
 
 def glab_find_mr_for_branch(branch, project, host=None):
-    cmd = ["glab", "mr", "list"]
-    if host:
-        cmd += ["--hostname", host]
-    cmd += ["--source-branch", branch, "-F", "json"]
-    if project:
-        repository = "https://%s/%s" % (host, project) if host else project
-        cmd += ["-R", repository]  # full URL pins self-managed host outside a checkout
-    try:
-        r = _run(cmd, timeout=60)
-        if r.returncode != 0 or not r.stdout.strip():
-            return None
-        arr = json.loads(r.stdout)
-        if isinstance(arr, list) and arr:
-            return arr[0].get("iid")
-    except Exception:
-        pass
-    return None
+    return _gitlab.find_mr_for_branch(_late_run, branch, project, host)
 
 
 def git_diff_branch(branch, target, context_lines, cwd=".", metadata=None):
