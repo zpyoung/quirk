@@ -250,25 +250,6 @@ def _line_number(value):
     return int(match.group(1))
 
 
-def _path_pairs(diff_text):
-    pairs = {}
-    current = None
-    for line in str(diff_text or "").splitlines():
-        match = re.match(r"^diff --git a/(.*?) b/(.*)$", line)
-        if match:
-            old_path, new_path = match.groups()
-            current = {"old": old_path, "new": new_path}
-            pairs[new_path] = current
-        elif current and line.startswith("rename from "):
-            current["old"] = line[len("rename from "):]
-        elif current and line.startswith("rename to "):
-            old_key = current["new"]
-            current["new"] = line[len("rename to "):]
-            pairs.pop(old_key, None)
-            pairs[current["new"]] = current
-    return pairs
-
-
 def _changed_paths(ctx, old_head, new_head):
     return _forge(ctx).changed_paths(old_head, new_head)
 
@@ -289,7 +270,7 @@ def _plan(prepared, by_id, context, refs, changed_paths=None, forge=None):
     A reply target comes from the trusted report's unresolved `human_context`, never from the
     triage paste; a target that no longer resolves falls back to an inline finding with a warning.
     """
-    pairs = _path_pairs(context.get("diff"))
+    pairs = comment_body.path_pairs(context.get("diff"))
     inline = []
     replies = []
     omitted = []
@@ -363,7 +344,8 @@ def _plan(prepared, by_id, context, refs, changed_paths=None, forge=None):
             continue
         pair = pairs.get(finding["file"], {"old": finding["file"], "new": finding["file"]})
         if forge is None:
-            position = _gitlab.inline_position(refs, pair["old"], pair["new"], line)
+            position = _gitlab.inline_position(refs, pair["old"], pair["new"], line,
+                                               finding.get("anchor_side") or "new")
         else:
             position = forge.inline_target(refs, pair["old"], pair["new"], line, context.get("diff"),
                                            finding.get("anchor_side") or "new")
@@ -417,6 +399,15 @@ def _reconcile_orphans(state, failed_body):
         state["reconciled"] = orphans
     if unrecognized:
         state["unrecognized_drafts"] = unrecognized
+
+
+def _suggested_completion(prepared, by_id):
+    """Pick the completion action to suggest; an incomplete review is never offered as approvable."""
+    if (prepared.get("run") or {}).get("incomplete"):
+        return "comment-only"
+    blocking = any(by_id[finding["id"]]["slot"] == "fix" and finding["severity"] != "Nit"
+                   for finding in prepared["findings"])
+    return "request-changes" if blocking else "approve"
 
 
 def stage(args):
@@ -494,10 +485,7 @@ def stage(args):
             "memory_report": raw_report if memory_enabled else None,
             "memory_decisions": decisions if memory_enabled else None,
             "completion": {"offered": ["approve", "request-changes", "comment-only"],
-                           "suggested": "request-changes" if any(
-                               by_id[finding["id"]]["slot"] == "fix" and finding["severity"] != "Nit"
-                               for finding in prepared["findings"])
-                                        else "approve"},
+                           "suggested": _suggested_completion(prepared, by_id)},
         }
         _write(args.out, state)
         uncreated = list(notes)
@@ -663,6 +651,12 @@ def _memory_receipts(state, refs, discussions=None):
     return receipts, warnings
 
 def publish(args):
+    """Bulk-publish a staged review after revalidating identity, refs and the live draft set.
+
+    Requires --confirm. A failed publish call is checked against the live drafts: when none
+    of the staged drafts remain, the server committed it and the review counts as published.
+    Exit 0 once published (bookkeeping failures become warnings), 2 otherwise.
+    """
     published = False
     already_published = False
     try:
@@ -689,13 +683,24 @@ def publish(args):
         if current != expected:
             raise ReviewError("live drafts do not exactly match this staged review (unexpected: %s; missing: %s)" %
                               (sorted(current - expected), sorted(expected - current)))
-        _forge(ctx).publish(ctx["number"], state)
+        post_warnings = []
+        try:
+            _forge(ctx).publish(ctx["number"], state)
+        except Exception as exc:
+            # a timeout can hide a committed publish; drafts that are gone prove it went through
+            try:
+                still_staged = _forge(ctx).live_staged_ids(ctx["number"], ctx["expected_username"]) & expected
+            except Exception:
+                raise exc
+            if still_staged:
+                raise
+            post_warnings.append("publish response was lost but no staged drafts remain; "
+                                 "treating the review as published: %s" % exc)
         # Publication is durable before any best-effort ledger work. Never
         # turn a successful irreversible POST into an "unpublished" result.
         published = True
         state["published"] = True
         state["published_head_sha"] = refs["head_sha"]
-        post_warnings = []
         try:
             _write(args.staged, state)
         except Exception as exc:

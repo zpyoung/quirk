@@ -966,3 +966,20 @@ def test_short_recommendation_sentence_fallback_is_used():
     del finding["fix_md"]
     body, _ = cb.finding_body(finding, seat="author", lead="Must fix")
     assert "**Fix:** " + "D" * 159 + "." in body
+
+
+def test_neutralize_breaks_mentions_but_not_emails_or_code():
+    text = "ping @all and (@team/backend), mail user@example.com, `@inline` stays\n```\n@fenced\n```"
+    out = cb._neutralize(text)
+    assert "@​all" in out and "(@​team/backend)" in out
+    assert "user@example.com" in out and "`@inline`" in out
+    assert "\n@fenced\n" in out
+
+
+def test_finding_body_mentions_cannot_notify_anyone():
+    finding = {"id": "F1", "severity": "Must fix", "file": "a.py", "line": "2", "title": "Tell @bob",
+               "impact": "@all will see this.", "fix_md": "Ask @team.", "body_md": "Details.",
+               "dimension": "correctness"}
+    body, _ = cb.finding_body(finding, seat="author", lead="Must fix", head_sha="a" * 40)
+    visible = body.split("-->\n", 1)[1]
+    assert "@bob" not in visible and "@all" not in visible and "@team" not in visible

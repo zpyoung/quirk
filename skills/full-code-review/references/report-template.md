@@ -1,9 +1,14 @@
 # Markdown report and inline-comment format
 
-Render the review in these six sections, in this order. This is the layout implemented
+Render the review in these five sections, in this order. This is the layout implemented
 by `scripts/render_report.py --format md`. The coordinator authors `report.json` per
 `html-report.md`; it does not hand-render this document. This file also defines the body
 used for each gated inline comment.
+
+The adversarial lens's claim table has no section of its own. It goes into the report's
+`process_notes`, which the HTML page shows under Assumptions and notes and this
+Markdown backend does not render. Claims that came back `wrong`, `misleading`, or
+`partial` also appear as findings.
 
 GitLab CommonMark discipline is binding: put a blank line between consecutive
 bold-label lines, and separate findings with `---`, so labels and findings do not
@@ -76,24 +81,7 @@ is omitted rather than stubbed.
 <caveat.body_md>
 ```
 
-## 3. Claim Verification
-
-The verdict table from `adversarial` — every falsifiable claim in the change
-description, checked against the code:
-
-```
-| Claim | Verdict | Evidence |
-|---|---|---|
-| "no behavior change" | misleading | `charge.py:88` — retry count 3 → 5 |
-| "added tests for the guard" | wrong | no test file in the diff |
-| "only touches the poller" | confirmed | diff is limited to `jobs/poller.py` |
-```
-
-Omit this section entirely when `adversarial` did not run (no change description —
-`--local`, or a change request with an empty description). Claims that came back `wrong`,
-`misleading`, or `partial` also appear as findings in section 4.
-
-## 4. Findings
+## 3. Findings
 
 The derived tally appears first. Findings use renderer-assigned IDs after stable
 severity ranking. Sources are `severity`, plural `dimensions` (or singular
@@ -139,7 +127,7 @@ is coordinator context. Add “Appears fixed” and
 the current finding list is empty. “Appears fixed” is a handoff to
 `quirk:receiving-code-review`, never an automatic thread resolution.
 
-## 5. Assumptions
+## 4. Assumptions
 
 Source: top-level `assumptions`, after the coordinator consolidates finding-local
 and whole-review assumptions.
@@ -154,7 +142,7 @@ and whole-review assumptions.
 An empty list emits `- None recorded.` in the Markdown fallback. The HTML page omits
 an empty Assumptions section.
 
-## 6. Recommendations
+## 5. Recommendations
 
 Source: `recommended_order`, already prioritized blockers-first by the coordinator.
 

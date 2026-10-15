@@ -43,9 +43,11 @@ def _diff(*paths):
                    for p in paths)
 
 
-def _context(tmp_path, changed, batched=False):
+def _context(tmp_path, changed, batched=False, seat=None):
     ctx = {"schema": 1, "changed_files": list(changed), "diff": _diff(*changed), "batched": batched,
            "size": {"files": len(changed), "lines": 2 * len(changed)}}
+    if seat:
+        ctx["seat"] = seat
     ctx["test_files"], ctx["source_files"] = [], list(changed)
     if batched:
         ctx["batches"] = [{"files": list(changed), "diff": ctx["diff"]}]
@@ -55,10 +57,10 @@ def _context(tmp_path, changed, batched=False):
 
 
 def _resolve(tmp_path, repo, changed=("src/app.py",), pack=None, ref=None, apply=False,
-             batched=False, user_config=None, monkeypatch=None):
+             batched=False, user_config=None, monkeypatch=None, seat=None):
     if monkeypatch is not None:
         monkeypatch.setenv("XDG_CONFIG_HOME", str(user_config or tmp_path / "no-config"))
-    ctx = _context(tmp_path, changed, batched)
+    ctx = _context(tmp_path, changed, batched, seat)
     out = tmp_path / "out" / "policy.json"
     args = ["--context", str(ctx), "--source-root", str(repo), "--lenses-dir", str(LENSES),
             "--out", str(out)]
@@ -235,15 +237,130 @@ def test_apply_excludes_generated_and_skip_glob_files_and_recomputes_size(tmp_pa
     assert ctx["batches"] == [{"files": ["src/app.py"], "diff": ctx["diff"].rstrip("\n")}]
 
 
-def test_reviewer_seat_ignores_gitattributes_added_at_the_pr_head(tmp_path, monkeypatch):
+def test_reviewer_seat_reads_gitattributes_from_the_target_ref_only(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    _write(repo / ".gitattributes", "gen/** linguist-generated\n")
+    target = _commit(repo, "target")
+    _write(repo / ".gitattributes", "gen/** linguist-generated\nsrc/** linguist-generated\n")
+    _commit(repo, "head hides src")
+    if not m._supports_attr_source(repo):
+        pytest.skip("git < 2.40 cannot read attributes from a ref")
+    rc, policy, ctx, _ = _resolve(tmp_path, repo, changed=("src/app.py", "gen/client.py"), ref=target,
+                                  apply=True, monkeypatch=monkeypatch)
+    assert rc == 0
+    # the target's attribute excludes gen/, so check-attr ran; the head's attribute on src/ is ignored
+    assert ctx["changed_files"] == ["src/app.py"]
+    assert ctx["excluded_generated"] == ["gen/client.py"]
+    assert not [w for w in policy["warnings"] if "linguist-generated" in w]
+
+
+def test_reviewer_seat_requires_a_policy_ref(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
     target = _commit(repo, "target")
-    _write(repo / ".gitattributes", "src/** linguist-generated\n")
-    _commit(repo, "head hides src")
-    rc, _, ctx, _ = _resolve(tmp_path, repo, changed=("src/app.py",), ref=target, apply=True,
-                             monkeypatch=monkeypatch)
+    rc, policy, _, out = _resolve(tmp_path, repo, seat="reviewer", monkeypatch=monkeypatch)
+    assert rc == 2 and policy is None
+    assert "--policy-ref" in json.loads(out)["error"]
+    rc, policy, _, _ = _resolve(tmp_path, repo, seat="reviewer", ref=target, monkeypatch=monkeypatch)
+    assert rc == 0 and policy is not None
+
+
+def test_author_seat_reads_the_working_tree_without_a_policy_ref(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    _write(repo / "REVIEW.md", "---\nseverity_floor: Nit\n---\n")
+    rc, policy, _, _ = _resolve(tmp_path, repo, seat="author", monkeypatch=monkeypatch)
+    assert rc == 0 and policy["severity_floor"] == "Nit"
+
+
+def test_unreadable_policy_ref_is_an_error_not_an_absent_policy(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    _commit(repo, "target")
+    rc, policy, _, out = _resolve(tmp_path, repo, ref="deadbeef" * 5, monkeypatch=monkeypatch)
+    assert rc == 2 and policy is None
+    assert "cannot read" in json.loads(out)["error"]
+
+
+def test_a_path_missing_at_the_ref_is_simply_absent(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    target = _commit(repo, "target")
+    source = m._RefSource(repo, target, tmp_path / "stash")
+    assert source.read("REVIEW.md") is None
+    assert source.read(".quirk/review/pack.yaml") is None
+
+
+def test_git_timeout_surfaces_as_a_policy_error(tmp_path, monkeypatch):
+    def hang(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="git", timeout=1)
+
+    monkeypatch.setattr(m.subprocess, "run", hang)
+    with pytest.raises(m.PolicyError, match="timed out"):
+        m._git(tmp_path, "status")
+
+
+def test_applying_the_policy_twice_keeps_the_excluded_list(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    _write(repo / "REVIEW.md", "---\nskip_globs: [\"**/*.lock\"]\n---\n")
+    _commit(repo)
+    rc, policy, ctx, _ = _resolve(tmp_path, repo, changed=("src/app.py", "poetry.lock"), apply=True,
+                                  monkeypatch=monkeypatch)
+    assert rc == 0 and ctx["excluded_generated"] == ["poetry.lock"]
+    second = tmp_path / "second"
+    second.mkdir()
+    out = second / "policy.json"
+    rc = m.main(["--context", str(tmp_path / "context.json"), "--source-root", str(repo),
+                 "--lenses-dir", str(LENSES), "--out", str(out), "--apply"])
     assert rc == 0
-    assert ctx["changed_files"] == ["src/app.py"] and ctx["excluded_generated"] == []
+    again = json.loads((tmp_path / "context.json").read_text())
+    assert again["excluded_generated"] == ["poetry.lock"]
+    assert again["changed_files"] == ["src/app.py"]
+
+
+def test_policy_yaml_matches_the_vendored_copy():
+    scripts = Path(m.__file__).resolve().parent
+    vendored = scripts.parents[1] / "filing-requests" / "scripts" / "_yaml_mini.py"
+    assert (scripts / "policy_yaml.py").read_bytes() == vendored.read_bytes()
+
+
+def test_reviewer_seat_reads_lenses_and_guidance_from_the_target_ref(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    _write(repo / ".quirk" / "review" / "lenses" / "extra.md",
+           "---\nid: extra\nrun_when: always\n---\nTarget checklist.\n")
+    _write(repo / ".quirk" / "review" / "guidance" / "team.md", "Target rule.\n")
+    target = _commit(repo, "target")
+    _write(repo / ".quirk" / "review" / "lenses" / "extra.md",
+           "---\nid: extra\nrun_when: always\n---\nPR checklist.\n")
+    _write(repo / ".quirk" / "review" / "guidance" / "team.md", "PR rule.\n")
+    _commit(repo, "head")
+    rc, policy, _, _ = _resolve(tmp_path, repo, ref=target, monkeypatch=monkeypatch)
+    assert rc == 0
+    assert _lens(policy, "extra")["run_when"] == "always"
+    guidance = [Path(p) for p in policy["guidance_files"]]
+    assert [p.read_text() for p in guidance] == ["Target rule.\n"]
+    assert all("policy-files" in str(p) for p in guidance)
+    assert [s["ref"] for s in policy["sources"] if s["kind"] == "project-pack"] == [target]
+
+
+def test_cross_family_and_cross_repo_settings_come_from_a_pack(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    pack = tmp_path / "pack"
+    _write(pack / "pack.yaml", "cross_family:\n  enabled: true\n  alias: codex\n"
+                               "cross_repo:\n  search_agent: code-search-agent\n")
+    rc, policy, _, _ = _resolve(tmp_path, repo, pack=pack, monkeypatch=monkeypatch)
+    assert rc == 0
+    assert policy["cross_family"] == {"enabled": True, "alias": "codex"}
+    assert policy["cross_repo"] == {"search_agent": "code-search-agent"}
+
+
+def test_skip_globs_union_across_layers_and_exclude_files(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    pack = tmp_path / "pack"
+    _write(pack / "pack.yaml", "skip_globs:\n- \"dist/**\"\n")
+    _write(repo / "REVIEW.md", "---\nskip_globs: [\"**/*.lock\"]\n---\n")
+    _commit(repo)
+    rc, policy, ctx, _ = _resolve(tmp_path, repo, changed=("src/app.py", "dist/a.js", "uv.lock"),
+                                  pack=pack, apply=True, monkeypatch=monkeypatch)
+    assert rc == 0
+    assert policy["skip_globs"] == ["dist/**", "**/*.lock"]
+    assert ctx["changed_files"] == ["src/app.py"]
 
 
 def test_guidance_files_list_pack_guidance_and_review_md(tmp_path, monkeypatch):

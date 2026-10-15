@@ -8,14 +8,11 @@ batched: true
 
 # Missing-test coverage lens
 
-All test lenses obey the skill's verification gate: no Must/Should fix from the diff
-alone — read the source at the correct ref first. The mutation probe in
-`lenses/_mutation-probe.md` is the strongest form of that gate; apply it when its
-conditions hold.
-
-Runs **only** when the diff changes production source files and includes **no**
-test files. This is the blind spot the `test-adequacy` lens cannot see: with no test hunks to
-review, nothing checks whether tests should have been added at all.
+You are the `test-coverage` lens. Return findings in the schema from
+`references/orchestration.md` with `dimension: "test-coverage"`. You run **only** when
+the diff changes production source files and includes **no** test files. This is the
+blind spot the `test-adequacy` lens cannot see: with no test hunks to review, nothing
+checks whether tests should have been added at all.
 
 The context file's `source_files` list is the authoritative set of "production source
 files" — a changed code file that is not a test, docs/markdown, config, or a lockfile.
@@ -36,3 +33,15 @@ step 3 below is what decides whether a finding is warranted.
    blanket "add tests."
    - Severity: Should fix for risky paths; Nit for low-risk. Never Must fix on
      coverage alone.
+
+## Out of scope
+
+The quality of tests the diff adds or edits (`test-adequacy` and `tests` own them), and
+demanding tests for pure formatting, renames, comments, config, or docs.
+
+## Verification gate
+
+All test lenses obey the skill's verification gate: no Must/Should fix from the diff
+alone; read the source at the correct ref first. The mutation probe in
+`lenses/_mutation-probe.md` is the strongest form of that gate; apply it when its
+conditions hold.

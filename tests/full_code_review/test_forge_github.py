@@ -36,6 +36,7 @@ class FakeGitHub:
              "patch": "@@ -1 +1 @@\n-x\n+y", "changes": 2},
         ]
         self.commits = [{"author": {"login": "author"}, "commit": {"author": {"email": "a@x.io"}}}]
+        self.compare_files = [{"filename": "a.py"}]
         self.reviews = []
         self.review_comments = {}
         self.threads = []
@@ -58,7 +59,7 @@ class FakeGitHub:
         if method == "GET" and endpoint == pull:
             return json.loads(json.dumps(self.pr))
         if method == "GET" and endpoint.startswith("repos/o/r/compare/"):
-            return {"merge_base_commit": {"sha": MERGE_BASE}, "files": [{"filename": "a.py"}]}
+            return {"merge_base_commit": {"sha": MERGE_BASE}, "files": self.compare_files}
         if method == "GET" and endpoint.startswith(pull + "/files?"):
             return self._page(self.files, endpoint)
         if method == "GET" and endpoint.startswith(pull + "/commits?"):
@@ -189,6 +190,80 @@ def test_list_threads_normalizes_to_discussion_dicts():
                     "position": {"new_path": "a.py", "new_line": 2}, "resolved": False}
 
 
+def test_file_list_past_the_page_cap_is_flagged_for_git_recovery_instead_of_failing():
+    fake = FakeGitHub()
+    fake.files = [{"filename": "f%d.py" % i, "status": "added", "patch": "@@ -0,0 +1 @@\n+x", "changes": 1}
+                  for i in range(3050)]
+    fake.pr["changed_files"] = 3050
+    data = forge(fake).change_records(NUMBER)
+    assert len(data["records"]) == 3000 and data["overflow"] is True and data["reported_count"] == 3050
+
+
+def test_commit_authors_at_the_listing_cap_are_unknown():
+    fake = FakeGitHub()
+    commit = {"author": {"login": "author"}, "commit": {"author": {"email": "a@x.io"}}}
+    fake.commits = [commit] * 249
+    assert len(forge(fake).commit_authors(NUMBER)) == 249
+    fake.commits = [commit] * 250
+    assert forge(fake).commit_authors(NUMBER) is None
+
+
+def test_changed_paths_returns_old_and_new_names_and_rejects_a_capped_listing():
+    fake = FakeGitHub()
+    fake.compare_files = [{"filename": "new.py", "previous_filename": "old.py"}]
+    assert forge(fake).changed_paths(BASE_TIP, HEAD) == {"new.py", "old.py"}
+    fake.compare_files = [{"filename": "f%d.py" % i} for i in range(300)]
+    with pytest.raises(ForgeError, match="at most 300 files"):
+        forge(fake).changed_paths(BASE_TIP, HEAD)
+
+
+def test_list_threads_rejects_a_thread_with_unread_comments():
+    fake = FakeGitHub()
+    fake.threads = [{"id": "PRRT_1", "isResolved": False, "path": "a.py", "line": 2,
+                     "comments": {"pageInfo": {"hasNextPage": True}, "nodes": []}}]
+    with pytest.raises(ForgeError, match="more than 100 comments"):
+        forge(fake).list_threads(NUMBER)
+
+
+def test_branch_lookup_url_encodes_the_branch_name():
+    fake = FakeGitHub()
+    forge(fake).find_change_for_branch("fix&x#y/z")
+    endpoint = fake.calls[-1][1]
+    assert endpoint == "repos/o/r/pulls?head=o:fix%26x%23y%2Fz&state=open"
+
+
+def test_failed_identity_and_detail_reads_record_the_cause_and_clear_it_on_success():
+    class Failing(FakeGitHub):
+        def __call__(self, host, method, endpoint, payload=None, timeout=120):
+            if self.broken:
+                raise ForgeError("GitHub GET %s failed: HTTP 401" % endpoint, "auth")
+            return super().__call__(host, method, endpoint, payload, timeout)
+
+    fake = Failing()
+    fake.broken = True
+    gh = forge(fake)
+    assert gh.current_user() is None and "HTTP 401" in gh.last_error
+    assert gh.change_details(NUMBER) is None and "HTTP 401" in gh.last_error
+    fake.broken = False
+    assert gh.change_details(NUMBER) is not None and gh.last_error is None
+
+
+def test_hunk_lines_read_header_like_content_inside_a_hunk_as_content():
+    diff = ("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1,3 +1,3 @@\n one\n"
+            "-- removed dashes\n+++ added pluses\n three\n"
+            "diff --git a/b.py b/b.py\n--- a/b.py\n+++ b/b.py\n@@ -1 +1,2 @@\n six\n+seven\n")
+    new, old = hunk_lines(diff, "a.py")
+    assert new == {1, 2, 3} and old == {1, 2, 3}
+    assert hunk_lines(diff, "b.py") == ({1, 2}, {1})
+
+
+def test_hunk_lines_anchor_old_side_lines_of_a_deleted_file():
+    diff = "diff --git a/gone.py b/gone.py\ndeleted file mode 100644\n--- a/gone.py\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-x\n-y\n"
+    assert hunk_lines(diff, "gone.py") == (set(), {1, 2})
+    assert forge(FakeGitHub()).inline_target({}, "gone.py", "gone.py", 2, diff, side="old") == {
+        "path": "gone.py", "line": 2, "side": "LEFT"}
+
+
 def test_hunk_lines_and_inline_target():
     new, old = hunk_lines(DIFF, "a.py")
     assert new == {1, 2, 3, 4} and old == {1, 2, 3}
@@ -209,22 +284,18 @@ def test_author_inline_and_overview_posts():
     assert gh.post_overview(NUMBER, "summary")["url"].startswith("https://github.com/o/r/pull/7#issuecomment")
 
 
-def test_prepare_diff_reviews_a_github_pull_request(tmp_path):
+def test_prepare_diff_reviews_a_github_pull_request(tmp_path, monkeypatch):
     fake = FakeGitHub()
     out = tmp_path / "ctx.json"
-    saved = (prepare_diff.get_origin_url, prepare_diff.detect_target_branch, prepare_diff.make_forge,
-             prepare_diff._git_diff_path)
-    try:
-        prepare_diff.get_origin_url = lambda cwd=".": "git@github.com:o/r.git"
-        prepare_diff.detect_target_branch = lambda cwd=".": "main"
-        prepare_diff.make_forge = lambda name, host, project, run=None: GitHubForge(host, project, api_call=fake)
-        prepare_diff._git_diff_path = lambda *a, **k: ("diff --git a/img.png b/img.png\nnew file mode 100644\n"
-                                                       "Binary files /dev/null and b/img.png differ\n")
-        with contextlib.redirect_stdout(io.StringIO()):
-            assert prepare_diff.main(["--change", "7", "--out", str(out)]) == 0
-    finally:
-        (prepare_diff.get_origin_url, prepare_diff.detect_target_branch, prepare_diff.make_forge,
-         prepare_diff._git_diff_path) = saved
+    monkeypatch.setattr(prepare_diff, "get_origin_url", lambda cwd=".": "git@github.com:o/r.git")
+    monkeypatch.setattr(prepare_diff, "detect_target_branch", lambda cwd=".": "main")
+    monkeypatch.setattr(prepare_diff, "make_forge",
+                        lambda name, host, project, run=None: GitHubForge(host, project, api_call=fake))
+    monkeypatch.setattr(prepare_diff, "_git_diff_path",
+                        lambda *a, **k: ("diff --git a/img.png b/img.png\nnew file mode 100644\n"
+                                         "Binary files /dev/null and b/img.png differ\n"))
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert prepare_diff.main(["--change", "7", "--out", str(out)]) == 0
     ctx = json.loads(out.read_text())
     assert ctx["forge"] == "github" and ctx["seat"] == "reviewer" and ctx["source"] == "github"
     assert ctx["refs"] == {"base": MERGE_BASE, "start": MERGE_BASE, "head": HEAD}

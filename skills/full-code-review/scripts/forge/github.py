@@ -13,6 +13,7 @@ import os
 import re
 import shlex
 import subprocess
+from urllib.parse import quote
 
 from forge import ForgeError, change_label as _change_label, positive_int
 from forge import note_url as _note_url
@@ -20,6 +21,9 @@ from forge import note_url as _note_url
 NAME = "github"
 TRUSTED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 _MAX_PAGES = 30
+# the pulls/{n}/commits and compare endpoints stop listing at these counts without signalling truncation
+_COMMITS_CAP = 250
+_COMPARE_FILES_CAP = 300
 
 
 def default_run(cmd, input_text=None, timeout=120):
@@ -65,8 +69,8 @@ def graphql(api_call, host, query, variables):
     return data.get("data") or {}
 
 
-def get_pages(api_call, host, endpoint):
-    """GET every page of a list endpoint (per_page=100), rejecting runaway pagination."""
+def _get_pages_capped(api_call, host, endpoint):
+    """GET up to _MAX_PAGES pages of a list endpoint (per_page=100); return (items, truncated)."""
     items = []
     separator = "&" if "?" in endpoint else "?"
     for page in range(1, _MAX_PAGES + 1):
@@ -75,61 +79,103 @@ def get_pages(api_call, host, endpoint):
             raise ForgeError("GitHub page %d of %s is not a JSON list" % (page, endpoint.split("?", 1)[0]))
         items.extend(data)
         if len(data) < 100:
-            return items
-    raise ForgeError("GitHub pagination of %s exceeded %d pages" % (endpoint.split("?", 1)[0], _MAX_PAGES))
+            return items, False
+    return items, True
+
+
+def get_pages(api_call, host, endpoint):
+    """GET every page of a list endpoint (per_page=100), rejecting runaway pagination."""
+    items, truncated = _get_pages_capped(api_call, host, endpoint)
+    if truncated:
+        raise ForgeError("GitHub pagination of %s exceeded %d pages" % (endpoint.split("?", 1)[0], _MAX_PAGES))
+    return items
 
 
 def _digest(text):
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
 
 
+_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
+def _header_path(text, prefix):
+    """Return the path in a ---/+++ header line, or None for /dev/null."""
+    text = text.split("\t", 1)[0]
+    if text == "/dev/null":
+        return None
+    return text[len(prefix):] if text.startswith(prefix) else text
+
+
 def hunk_lines(diff_text, path):
-    """Return ({new-side lines}, {old-side lines}) a review comment may anchor on for `path`."""
+    """Return ({new-side lines}, {old-side lines}) a review comment may anchor on for `path`.
+
+    `path` matches a file's new path, or its old path when the file was deleted. Hunk
+    line counts decide where a hunk ends, so added or removed lines that look like
+    `+++ ` or `--- ` headers are still read as content.
+    """
     new_lines, old_lines = set(), set()
-    current, old_no, new_no, in_file = None, 0, 0, False
+    old_path = new_path = None
+    old_no = new_no = old_left = new_left = 0
+    in_file = False
     for line in (diff_text or "").splitlines():
         if line.startswith("diff --git "):
+            old_path = new_path = None
+            old_left = new_left = 0
             in_file = False
-            current = None
             continue
-        if line.startswith("+++ "):
-            current = line[4:][2:] if line[4:].startswith("b/") else line[4:]
-            in_file = current == path
+        if old_left <= 0 and new_left <= 0:
+            if line.startswith("--- "):
+                old_path = _header_path(line[4:], "a/")
+            elif line.startswith("+++ "):
+                new_path = _header_path(line[4:], "b/")
+            else:
+                match = _HUNK_RE.match(line)
+                if match:
+                    old_no, new_no = int(match.group(1)), int(match.group(3))
+                    old_left = int(match.group(2) if match.group(2) is not None else 1)
+                    new_left = int(match.group(4) if match.group(4) is not None else 1)
+                continue
+            in_file = path == new_path or (new_path is None and path == old_path)
             continue
-        if not in_file:
-            continue
-        match = re.match(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
-        if match:
-            old_no, new_no = int(match.group(1)), int(match.group(2))
-            continue
-        if not old_no and not new_no:
+        if line.startswith("\\"):
             continue
         if line.startswith("+"):
-            new_lines.add(new_no)
+            if in_file:
+                new_lines.add(new_no)
             new_no += 1
+            new_left -= 1
         elif line.startswith("-"):
-            old_lines.add(old_no)
+            if in_file:
+                old_lines.add(old_no)
             old_no += 1
-        elif line.startswith(" ") or line == "":
-            new_lines.add(new_no)
-            old_lines.add(old_no)
+            old_left -= 1
+        else:
+            if in_file:
+                new_lines.add(new_no)
+                old_lines.add(old_no)
+            old_no += 1
             new_no += 1
-            old_no += 1
+            old_left -= 1
+            new_left -= 1
     return new_lines, old_lines
 
 
 class GitHubForge:
-    """GitHub bound to one host and owner/repo, with injectable transport."""
+    """GitHub bound to one host and owner/repo, with injectable transport.
+
+    `change_details` and `current_user` return None on failure; `last_error` then holds the
+    cause (None after a success) so callers can report why.
+    """
 
     name = NAME
 
     def __init__(self, host, project, run=None, api_call=None):
         self.host = host
         self.project = project
+        self.last_error = None
         self._run = run or default_run
         self._api_call = api_call or (lambda h, m, e, p=None, timeout=120: api(self._run, h, m, e, p, timeout))
 
-    # -- identity and labels -------------------------------------------------
     def change_label(self, number):
         return _change_label(NAME, number)
 
@@ -143,16 +189,18 @@ class GitHubForge:
         return self._repo("/pulls/%s%s" % (number, suffix))
 
     def current_user(self):
+        self.last_error = None
         try:
             data = self._api_call(self.host, "GET", "user")
-        except ForgeError:
+        except ForgeError as exc:
+            self.last_error = str(exc)
             return None
         if not isinstance(data, dict) or not data.get("id") or not data.get("login"):
+            self.last_error = "GitHub user response is missing an id or login"
             return None
         return {"id": data["id"], "username": data["login"],
                 "emails": [data["email"]] if data.get("email") else []}
 
-    # -- read path -------------------------------------------------------------
     def _merge_base(self, base_sha, head_sha):
         data = self._api_call(self.host, "GET", self._repo("/compare/%s...%s" % (base_sha, head_sha)))
         merge_base = (data.get("merge_base_commit") or {}).get("sha") if isinstance(data, dict) else None
@@ -171,7 +219,8 @@ class GitHubForge:
         head_sha = (data.get("head") or {}).get("sha")
         base_sha = self._merge_base((data.get("base") or {}).get("sha"), head_sha)
         records = []
-        for item in get_pages(self._api_call, self.host, self._pull(number, "/files")):
+        items, truncated = _get_pages_capped(self._api_call, self.host, self._pull(number, "/files"))
+        for item in items:
             status = item.get("status")
             patch = item.get("patch")
             path = item.get("filename")
@@ -194,16 +243,18 @@ class GitHubForge:
             "refs": {"base": base_sha, "start": base_sha, "head": head_sha},
             "records": records,
             "reported_count": data.get("changed_files"),
-            "overflow": None,
+            "overflow": True if truncated else None,
         }
 
     def change_details(self, number):
+        self.last_error = None
         try:
             data = self._pull_data(number)
             head = data.get("head") or {}
             base = data.get("base") or {}
             merge_base = self._merge_base(base.get("sha"), head.get("sha"))
-        except ForgeError:
+        except ForgeError as exc:
+            self.last_error = str(exc)
             return None
         head_repo = (head.get("repo") or {}).get("full_name")
         base_repo = (base.get("repo") or {}).get("full_name")
@@ -220,9 +271,16 @@ class GitHubForge:
         }
 
     def commit_authors(self, number):
+        """Return [{username, email}] per commit, or None when the list may be incomplete.
+
+        GitHub stops listing a pull request's commits at 250 without saying so, so a
+        list that reaches the cap is unknown rather than a complete author set.
+        """
         try:
             commits = get_pages(self._api_call, self.host, self._pull(number, "/commits"))
         except ForgeError:
+            return None
+        if len(commits) >= _COMMITS_CAP:
             return None
         return [{"username": (c.get("author") or {}).get("login"),
                  "email": ((c.get("commit") or {}).get("author") or {}).get("email")}
@@ -230,17 +288,22 @@ class GitHubForge:
 
     def find_change_for_branch(self, branch):
         owner = self.project.split("/", 1)[0]
+        head = "%s:%s" % (quote(owner, safe=""), quote(branch, safe=""))
         try:
-            data = self._api_call(self.host, "GET", self._repo("/pulls?head=%s:%s&state=open" % (owner, branch)))
+            data = self._api_call(self.host, "GET", self._repo("/pulls?head=%s&state=open" % head))
         except ForgeError:
             return None
         return data[0].get("number") if isinstance(data, list) and data else None
 
     def changed_paths(self, old_head, new_head):
+        """Return the paths changed between two heads; raise when GitHub may have truncated them."""
         data = self._api_call(self.host, "GET", self._repo("/compare/%s...%s" % (old_head, new_head)))
         files = data.get("files") if isinstance(data, dict) else None
         if not isinstance(files, list):
             raise ForgeError("GitHub compare response is missing files")
+        if len(files) >= _COMPARE_FILES_CAP:
+            raise ForgeError("GitHub compare lists at most %d files, so the changed-file set may be incomplete"
+                             % _COMPARE_FILES_CAP)
         paths = set()
         for item in files:
             for key in ("filename", "previous_filename"):
@@ -258,14 +321,18 @@ class GitHubForge:
         return ["gh", "repo", "clone", repo, dest, "--", "--no-checkout", "--depth=1",
                 "--filter=blob:none"], env
 
-    # -- threads (normalized to discussion dicts) --------------------------------
     _THREADS_QUERY = (
         "query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name)"
         "{pullRequest(number:$number){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor}"
-        "nodes{id isResolved path line comments(first:100){nodes{databaseId body url "
-        "author{login ... on User{databaseId}}}}}}}}}")
+        "nodes{id isResolved path line comments(first:100){pageInfo{hasNextPage} "
+        "nodes{databaseId body url author{login ... on User{databaseId}}}}}}}}}")
 
     def list_threads(self, number, api_call=None):
+        """Return review threads as GitLab-style discussion dicts.
+
+        Raises when a thread has more than 100 comments, because the remainder would be
+        silently invisible to duplicate-post suppression.
+        """
         call = api_call or self._api_call
         owner, name = self.project.split("/", 1)
         threads, after = [], None
@@ -274,6 +341,8 @@ class GitHubForge:
                            {"owner": owner, "name": name, "number": int(number), "after": after})
             page = (((data.get("repository") or {}).get("pullRequest") or {}).get("reviewThreads") or {})
             for node in page.get("nodes") or []:
+                if ((node.get("comments") or {}).get("pageInfo") or {}).get("hasNextPage"):
+                    raise ForgeError("GitHub review thread %s has more than 100 comments" % node.get("id"))
                 position = {"new_path": node.get("path"), "new_line": node.get("line")}
                 notes = [{"id": c.get("databaseId"), "body": c.get("body") or "",
                           "author": {"id": (c.get("author") or {}).get("databaseId"),
@@ -288,7 +357,6 @@ class GitHubForge:
             after = info.get("endCursor")
         raise ForgeError("GitHub review-thread pagination exceeded %d pages" % _MAX_PAGES)
 
-    # -- author seat -------------------------------------------------------------
     def inline_target(self, refs, old_path, new_path, line, diff_text, side="new"):
         """Return a review-comment position, or None when GitHub would reject the line."""
         new_lines, old_lines = hunk_lines(diff_text, new_path)
@@ -306,7 +374,6 @@ class GitHubForge:
         data = self._api_call(self.host, "POST", self._repo("/issues/%s/comments" % number), {"body": body})
         return {"published": True, "note_id": data.get("id"), "url": data.get("html_url")}
 
-    # -- reviewer seat -----------------------------------------------------------
     def identity(self):
         user = self.current_user()
         if not user:
@@ -341,9 +408,12 @@ class GitHubForge:
     def stage_notes(self, number, notes, head_sha, record, username):
         """Create one pending review holding the overview and inline notes, then add replies.
 
-        GitHub allows one pending review per user and cannot append comments to it over
-        REST, so inline notes go in the single create call. A create that errors may still
-        have committed; the overview digest identifies it so it is adopted, never duplicated.
+        Only the overview and inline notes are created together. Replies are separate
+        GraphQL mutations that need the review's node id, so a reply failure leaves a
+        pending review without them, and `cleanup_commands` removes it. GitHub allows one
+        pending review per user and cannot append comments to it over REST, so inline
+        notes go in the single create call. A create that errors may still have committed;
+        the overview digest identifies it so it is adopted, never duplicated.
         """
         overview = next(n for n in notes if n["kind"] == "overview")
         inline = [n for n in notes if n["kind"] == "inline"]

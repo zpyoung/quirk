@@ -56,3 +56,27 @@ def test_memory_roster_and_orchestration_table_match_the_lens_files():
     orchestration = (SKILL_DIR / "references" / "orchestration.md").read_text(encoding="utf-8")
     table = re.findall(r"^\| `([a-z-]+)` \| (?:sonnet|opus|haiku)", orchestration, re.M)
     assert sorted(table) == _lens_ids()
+
+
+def test_every_lens_opens_with_its_id_and_dimension():
+    for lens_id in _lens_ids():
+        text = (LENSES / (lens_id + ".md")).read_text(encoding="utf-8")
+        assert "You are the `%s` lens" % lens_id in text, lens_id
+        if lens_id != "risk":  # risk returns a rating block, not findings
+            assert '`dimension: "%s"`' % lens_id in text, lens_id
+
+
+def test_report_template_sections_match_the_markdown_renderer():
+    template = (SKILL_DIR / "references" / "report-template.md").read_text(encoding="utf-8")
+    outside_fences = re.sub(r"^```.*?^```", "", template, flags=re.S | re.M)
+    headings = re.findall(r"^## (\d+)\. (.+)$", outside_fences, re.M)
+    assert headings == [("1", "Summary"), ("2", "Risk Assessment"), ("3", "Findings"),
+                        ("4", "Assumptions"), ("5", "Recommendations")]
+
+
+def test_claim_table_is_routed_to_process_notes_not_a_section():
+    for path in (SKILL_MD, SKILL_DIR / "references" / "report-template.md",
+                 LENSES / "adversarial.md"):
+        text = path.read_text(encoding="utf-8")
+        assert "Claim Verification section" not in text, path.name
+        assert "process_notes" in text, path.name

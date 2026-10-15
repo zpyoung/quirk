@@ -23,11 +23,12 @@ consumers in **other** repositories. Return findings in the schema from
 2. **Search other repos** for consumers of that surface: callers of the changed symbol,
    clients of the route, subscribers of the topic, readers of the column. Ask for
    `file:line` evidence. Use every source available:
-   - **Sibling clones on disk.** List the parent directory of the repo root (depth 1,
-     at most 20 entries that are git work trees: `git -C <dir> rev-parse` succeeds,
-     skipping the repo under review). In each, run `git -C <dir> grep -n -w <symbol>`
-     with a 10-second timeout per repo. Treat a hit as evidence only after reading
-     the surrounding code.
+   - **Sibling clones on disk.** List the parent directory of the caller's own checkout
+     (in reviewer seat that is where the review was started, not the borrowed worktree
+     under the temp directory); depth 1, at most 20 entries that are git work trees
+     (`git -C <dir> rev-parse` succeeds, skipping the repo under review). In each, run
+     `git -C <dir> grep -n -w <symbol>` with a 10-second timeout per repo. Treat a hit as
+     evidence only after reading the surrounding code.
    - **A pack search hook.** If `policy.cross_repo.search_agent` names a subagent type
      (an org's code-search agent), dispatch it with the changed symbols and treat its
      `file:line` results as evidence.

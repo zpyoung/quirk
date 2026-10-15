@@ -61,6 +61,9 @@ The minimum renderable document is:
 | `title` | yes | Non-empty, single-line string; page heading and tab title |
 | `verdict` | yes | String judgement, normally `Approve`, `Fix, then merge`, or `Request changes` |
 | `standfirst_md` | no | One or two sentences under the title |
+| `source_branch` | no | Source branch of the change; the triage handoff lists it as the branch to check out. |
+| `web_url` | no | Browser URL of the change request; the triage handoff links to it. |
+| `repo_root` | no | Absolute path of the local checkout, written in author seat so the handoff can point a new session at the code. |
 | `project` | reviewer-required | Full `group/project`; eyebrow and delivery identity. |
 | `ticket` | no | Eyebrow segment |
 | `seat` | coordinator-required | `"author"` or `"reviewer"`; defaults to `author` only for backward-compatible old reports. Reviewer is valid only with `target: change`. |
@@ -86,7 +89,7 @@ remains `branch`.
 | `source_access` | `author-worktree`, `borrowed-worktree`, `temp-clone`, or `diff-only` |
 | `source_access_reason` | Required non-empty string for `diff-only`; rendered prominently |
 | `mutation_consent` | Per-run boolean. Reviewer runs default false; never reuse a prior run's value. |
-| `incomplete` | Boolean. True when any selected lens failed; forced true when `dimensions_failed` is non-empty. An incomplete report shows a banner and can never carry a clean verdict (an approve-style verdict renders as `Incomplete review`). |
+| `incomplete` | Boolean. True when any selected lens failed; forced true when `dimensions_failed` is non-empty. An incomplete report shows a banner and can only carry `Fix, then merge` or `Request changes`; any other verdict renders as `Incomplete review`. |
 | `dimensions_failed` | Lens ids that did not finish after the model-fallback retry. |
 | `models` | `{lens id: model that actually ran}`, including fallbacks and escalations. |
 | `verification` | `{enabled, model, checked, refuted, fallback}` for cross-family verification of Must/Should findings. |
@@ -139,7 +142,7 @@ it and put the reason in `assumptions`; the whole section is omitted.
 {
   "level": "Medium",
   "metrics": {
-    "likelihood": {"level": "Possible", "tone": "warn", "note_md": "One qualifying sentence."},
+    "likelihood": {"level": "Occasional", "tone": "warn", "note_md": "One qualifying sentence."},
     "impact": {"level": "Moderate", "note_md": "…"},
     "blast_radius": {"level": "Narrow", "note_md": "…"},
     "detection": {"level": "Weak", "note_md": "…"},
@@ -160,7 +163,9 @@ things across them** — `Weak` detection is bad, `Minor` impact is good. An aut
 `tone` of `good`, `warn`, or `bad` always wins; otherwise the renderer infers it from
 the first word of `level` against a per-metric vocabulary, falling back to a neutral
 tile when the word is unrecognized. Author `tone` explicitly whenever the level wording
-is not one of the obvious words.
+is not one of the obvious words. The words the risk lens emits are all known: likelihood
+Probable, Occasional, Remote, Improbable; impact Critical, Major, Minor, No Incident; and
+overall level Very Low, Low, Medium, High, Do Not Ship.
 
 `mitigations_md` is prose on how to move the rating: what would lower likelihood or
 impact, narrow the blast radius, strengthen detection, or clean up rollback. Say why
@@ -380,20 +385,17 @@ HTML-escaped.
 
 ## HTML section order
 
-The renderer emits:
+The page has a masthead over five tabs, and a tab is omitted when it has no content:
 
-1. Masthead: available eyebrow fields, title, standfirst, derived severity tiles,
-   verdict.
-2. What was run: dimensions, skips and reasons, diff size, coverage, guidance, run notes.
-3. Risk, only when an object is present.
-4. Findings: triage UI, or clean notes with no triage chrome when empty.
-5. Memory: warnings, appears-fixed history, and re-found-after-resolution / possible
-   regression context, when present (including zero-findings reports).
-6. Mutation probe, only when an object is present. It sits *below* findings so the
-   evidence reads after the findings it supports.
-7. Assumptions, when non-empty.
-8. Process notes, when non-empty.
-9. Footer: derived tally, mutation summary when run, target and optional head SHA.
+1. Masthead: available eyebrow fields, title, derived severity tiles, verdict.
+2. Findings: triage UI, or clean notes with no triage chrome when empty.
+3. Summary and risk: the standfirst, then the risk section when an object is present.
+4. What was run: dimensions, skips and reasons, diff size, coverage, guidance, run
+   notes, then the mutation probe when an object is present.
+5. Review memory: warnings, appears-fixed history, and re-found-after-resolution /
+   possible regression context, when present (including zero-findings reports).
+6. Assumptions and notes: assumptions, then process notes, when non-empty.
+7. Footer: derived tally, mutation summary when run, target and optional head SHA.
 
 The Markdown backend implements the five-section layout in
 `report-template.md`. It preserves blank lines around bold labels and `---` between
@@ -450,7 +452,9 @@ controls, and tab selection. The static script relies on:
   under matching ids; the first tab carries `aria-selected="true"`
 - `article.finding#F<n>` with escaped `data-title`, `data-file="<file>:<line>"`,
   `data-sev="must|should|nit"`, and `data-dims` containing a JSON array; optional
-  `data-area` is inert
+  `data-area` is inert. `data-memory-disposition` (a disposition slot) and
+  `data-memory-note` seed a finding's starting decision and note from review memory;
+  the script reads both on load
 - `#tdetail`, empty `ol#tnav`, `#no-match`, and live region `#saved`
 - the rail pins `#progress` and `.filters` above `#rail-body`, and the export panel
   below it; `#decide-bar` pins under the detail region and holds one `.dopts` set for

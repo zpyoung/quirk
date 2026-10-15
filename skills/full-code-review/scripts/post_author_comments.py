@@ -4,17 +4,29 @@
 Only findings named with --ids whose built body is marked `post: true` are posted, one
 comment each, in the given order. Each confirmed create is written to --out immediately
 as a receipt in the shape `review_memory.py save --receipts` reads, so a mid-batch
-failure never loses what already posted. Never edits, replies to, or resolves notes.
+failure never loses what already posted. Rerunning with the same --out resumes: ids (and
+the overview) that already have a receipt are skipped. Never edits, replies to, or
+resolves notes.
 Exit 0 when every requested finding posted or was skipped with a warning; exit 2 on bad
-input or a failed create (receipts written so far are kept).
+input or a failed create (receipts written so far are kept, and the error names the
+failing id).
 """
 import argparse
 import json
 import os
 import sys
 
+import comment_body
 import render_report
 from forge import ForgeError, make_forge
+
+
+class PostFailed(ForgeError):
+    """A create failed; `finding_id` is the finding (or "overview") that was being posted."""
+
+    def __init__(self, finding_id, cause):
+        super().__init__("%s failed to post: %s" % (finding_id, cause), getattr(cause, "code", "unknown"))
+        self.finding_id = finding_id
 
 
 def _load(path):
@@ -35,34 +47,53 @@ def _line(value):
 
 
 def post(report, context, bodies, ids, out, overview=False, forge=None):
-    """Post the approved findings; return (receipts, warnings). Raises ForgeError on a failed create."""
+    """Post the approved findings; return (receipts, warnings).
+
+    Receipts already in `out` are kept and their ids are not posted again. Every id is
+    validated before the first create. Raises ValueError for an id that is not a postable
+    finding of the report and PostFailed (a ForgeError) on a failed create.
+    """
     prepared, _ = render_report._prepare_report(report)
     findings = {f["id"]: f for f in prepared["findings"]}
     change = context.get("change") or {}
     forge = forge or make_forge(context.get("forge", "gitlab"), change.get("host"), change.get("project"))
     refs = context.get("refs") or {}
     target_refs = {"base_sha": refs.get("base"), "start_sha": refs.get("start"), "head_sha": refs.get("head")}
-    receipts, warnings = {}, []
+    entries = bodies.get("findings") or {}
+    unknown = [i for i in ids if i not in findings or entries.get(i) is None]
+    if unknown:
+        raise ValueError("%s is not a finding in this report" % ", ".join(unknown))
+    receipts = _load(out) if os.path.exists(out) else {}
+    warnings = []
+    pairs = comment_body.path_pairs(context.get("diff"))
     for finding_id in ids:
-        entry = (bodies.get("findings") or {}).get(finding_id)
-        finding = findings.get(finding_id)
-        if entry is None or finding is None:
-            raise ValueError("%s is not a finding in this report" % finding_id)
+        entry = entries[finding_id]
+        finding = findings[finding_id]
+        if finding_id in receipts:
+            warnings.append("%s already has a receipt; skipped" % finding_id)
+            continue
         if not entry.get("post"):
             warnings.append("%s is not eligible to post (decision, floor, or already posted); skipped" % finding_id)
             continue
         if finding["file"] in (context.get("unanchorable_files") or []):
             warnings.append("%s is on a file whose diff the forge collapsed; not posted" % finding_id)
             continue
-        position = forge.inline_target(target_refs, finding["file"], finding["file"], _line(finding["line"]),
+        pair = pairs.get(finding["file"], {"old": finding["file"], "new": finding["file"]})
+        position = forge.inline_target(target_refs, pair["old"], pair["new"], _line(finding["line"]),
                                        context.get("diff"), finding.get("anchor_side") or "new")
         if position is None:
             warnings.append("%s anchors on a line outside the diff; not posted" % finding_id)
             continue
-        receipts[finding_id] = forge.post_inline(change["number"], entry["body"], position, refs.get("head"))
+        try:
+            receipts[finding_id] = forge.post_inline(change["number"], entry["body"], position, refs.get("head"))
+        except ForgeError as exc:
+            raise PostFailed(finding_id, exc) from exc
         _write(out, receipts)
-    if overview and bodies.get("overview"):
-        receipts["overview"] = forge.post_overview(change["number"], bodies["overview"])
+    if overview and bodies.get("overview") and "overview" not in receipts:
+        try:
+            receipts["overview"] = forge.post_overview(change["number"], bodies["overview"])
+        except ForgeError as exc:
+            raise PostFailed("overview", exc) from exc
         _write(out, receipts)
     return receipts, warnings
 
@@ -85,9 +116,14 @@ def main(argv=None):
         receipts, warnings = post(_load(args.report), context, _load(args.bodies), ids,
                                   args.out, overview=args.overview)
     except (ForgeError, ValueError, OSError, KeyError) as exc:
-        if os.path.exists(args.out):
+        try:
             receipts = _load(args.out)
-        print(json.dumps({"error": str(exc), "posted": sorted(k for k in receipts if k != "overview")}, indent=2))
+        except (OSError, ValueError):
+            receipts = {}
+        failure = {"error": str(exc), "posted": sorted(k for k in receipts if k != "overview")}
+        if isinstance(exc, PostFailed):
+            failure["failed_id"] = exc.finding_id
+        print(json.dumps(failure, indent=2))
         return 2
     print(json.dumps({"posted": sorted(k for k in receipts if k != "overview"), "warnings": warnings,
                       "out": os.path.abspath(args.out)}, indent=2))

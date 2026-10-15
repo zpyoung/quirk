@@ -102,30 +102,25 @@ def test_no_matching_clone_requires_explicit_choice_and_diff_only_is_structured(
     assert result["mutation_consent"] is False and result["reason"] == "clone declined"
 
 
-def test_explicit_temp_clone_path_is_cleaned_completely(tmp_path):
+def test_explicit_temp_clone_path_is_cleaned_completely(tmp_path, monkeypatch):
     _, context, head = fixture(tmp_path)
-    # The fixture's project string is the source bare path after normalization; recover it
-    # from the matching reviewer clone's origin through a fresh local clone in the fake.
-    bare = next(tmp_path.glob("origin.git"))
-    old_clone = m._clone_project
+    bare = tmp_path / "origin.git"
+
     def fake_clone(host, project, root, forge_name="gitlab"):
         repo = Path(root) / "repo"
         run("git", "clone", "--no-checkout", str(bare), str(repo))
         return str(repo.resolve())
-    m._clone_project = fake_clone
-    try:
-        manifest_path = tmp_path / "temp-source.json"
-        rc, manifest = invoke(["acquire", "--context", str(context), "--repo", str(tmp_path / "none"),
-                               "--out", str(manifest_path), "--allow-temp-clone"])
-        assert rc == 0 and manifest["kind"] == "temp-clone"
-        cleanup_root = Path(manifest["cleanup_root"])
-        assert cleanup_root.exists() and Path(manifest["path"], "value.txt").read_text() == "change head\n"
-        assert manifest["head_sha"] == head
-        assert run("git", "rev-parse", "--is-shallow-repository", cwd=manifest["repo_root"]).stdout.strip() == "true"
-        assert invoke(["release", "--manifest", str(manifest_path)])[0] == 0
-        assert not cleanup_root.exists()
-    finally:
-        m._clone_project = old_clone
+    monkeypatch.setattr(m, "_clone_project", fake_clone)
+    manifest_path = tmp_path / "temp-source.json"
+    rc, manifest = invoke(["acquire", "--context", str(context), "--repo", str(tmp_path / "none"),
+                           "--out", str(manifest_path), "--allow-temp-clone"])
+    assert rc == 0 and manifest["kind"] == "temp-clone"
+    cleanup_root = Path(manifest["cleanup_root"])
+    assert cleanup_root.exists() and Path(manifest["path"], "value.txt").read_text() == "change head\n"
+    assert manifest["head_sha"] == head
+    assert run("git", "rev-parse", "--is-shallow-repository", cwd=manifest["repo_root"]).stdout.strip() == "true"
+    assert invoke(["release", "--manifest", str(manifest_path)])[0] == 0
+    assert not cleanup_root.exists()
 
 
 def test_same_project_path_on_different_host_is_not_accepted(tmp_path):
@@ -138,21 +133,18 @@ def test_same_project_path_on_different_host_is_not_accepted(tmp_path):
            m._origin_identity("git@gitlab-b.example:group/proj.git")
 
 
-def test_temp_clone_command_is_shallow_and_host_pinned(tmp_path):
+def test_temp_clone_command_is_shallow_and_host_pinned(tmp_path, monkeypatch):
     calls = []
-    old = m._run
+
     def fake_run(cmd, timeout=180, env=None):
         calls.append((cmd, env))
         return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
-    m._run = fake_run
-    try:
-        repo = m._clone_project("gitlab.example", "group/project", str(tmp_path))
-        cmd, env = calls[0]
-        assert "--depth=1" in cmd and "--filter=blob:none" in cmd and "--no-checkout" in cmd
-        assert env["GITLAB_HOST"] == "gitlab.example"
-        assert repo.endswith("/repo")
-    finally:
-        m._run = old
+    monkeypatch.setattr(m, "_run", fake_run)
+    repo = m._clone_project("gitlab.example", "group/project", str(tmp_path))
+    cmd, env = calls[0]
+    assert "--depth=1" in cmd and "--filter=blob:none" in cmd and "--no-checkout" in cmd
+    assert env["GITLAB_HOST"] == "gitlab.example"
+    assert repo.endswith("/repo")
 
 
 @pytest.mark.parametrize("fields, reason", [
@@ -170,9 +162,103 @@ def test_mutation_probe_is_refused_for_forks_and_untrusted_authors(tmp_path, fie
     out = tmp_path / "manifest.json"
     rc, manifest = invoke(["acquire", "--context", str(context), "--repo", str(local),
                            "--out", str(out), "--allow-mutation-probe"])
-    try:
-        assert rc == 0
-        assert manifest["mutation_consent"] is False
-        assert reason in manifest["mutation_refused"]
-    finally:
-        invoke(["release", "--manifest", str(out)])
+    invoke(["release", "--manifest", str(out)])
+    assert rc == 0
+    assert manifest["mutation_consent"] is False
+    assert reason in manifest["mutation_refused"]
+
+
+def acquired(tmp_path):
+    local, context, _ = fixture(tmp_path)
+    out = tmp_path / "source.json"
+    rc, manifest = invoke(["acquire", "--context", str(context), "--repo", str(local),
+                           "--out", str(out)])
+    assert rc == 0
+    return local, out, manifest
+
+
+def rewrite(out, **changes):
+    manifest = json.loads(out.read_text())
+    manifest.update(changes)
+    out.write_text(json.dumps(manifest))
+
+
+def test_release_refuses_a_worktree_path_without_the_owned_prefix(tmp_path):
+    _, out, manifest = acquired(tmp_path)
+    victim = tmp_path / "precious"
+    victim.mkdir()
+    (victim / "keep.txt").write_text("data")
+    rewrite(out, path=str(victim))
+    rc, result = invoke(["release", "--manifest", str(out)])
+    assert rc == 2 and "unrecognized worktree path" in result["error"]
+    assert (victim / "keep.txt").exists() and Path(manifest["path"]).exists()
+
+
+@pytest.mark.parametrize("tamper", ["wrong-token", "missing-marker", "missing-token-field"])
+def test_release_refuses_when_the_cleanup_marker_does_not_prove_ownership(tmp_path, tamper):
+    _, out, manifest = acquired(tmp_path)
+    marker = Path(manifest["cleanup_root"], ".quirk-review-source")
+    if tamper == "wrong-token":
+        rewrite(out, cleanup_token="0" * 32)
+    elif tamper == "missing-marker":
+        marker.unlink()
+    else:
+        value = json.loads(out.read_text())
+        del value["cleanup_token"]
+        out.write_text(json.dumps(value))
+    rc, result = invoke(["release", "--manifest", str(out)])
+    assert rc == 2 and "cleanup marker" in result["error"]
+    assert Path(manifest["path"]).exists() and Path(manifest["cleanup_root"]).exists()
+
+
+@pytest.mark.parametrize("schema", [0, 2, None])
+def test_release_refuses_an_unsupported_manifest_schema(tmp_path, schema):
+    _, out, manifest = acquired(tmp_path)
+    rewrite(out, schema=schema)
+    rc, result = invoke(["release", "--manifest", str(out)])
+    assert rc == 2 and "schema" in result["error"]
+    assert Path(manifest["path"]).exists()
+
+
+def test_release_refuses_a_cleanup_root_that_is_not_the_owned_directory(tmp_path):
+    _, out, manifest = acquired(tmp_path)
+    victim = tmp_path / "precious"
+    victim.mkdir()
+    (victim / "keep.txt").write_text("data")
+    (victim / ".quirk-review-source").write_text("not-the-token\n")
+    rewrite(out, cleanup_root=str(victim))
+    rc, _ = invoke(["release", "--manifest", str(out)])
+    assert rc == 2 and (victim / "keep.txt").exists()
+
+
+def test_release_drops_the_private_review_ref(tmp_path):
+    local, out, manifest = acquired(tmp_path)
+    ref = manifest["review_ref"]
+    assert run("git", "rev-parse", "--verify", ref, cwd=local).returncode == 0
+    rc, _ = invoke(["release", "--manifest", str(out)])
+    assert rc == 0
+    missing = subprocess.run(["git", "rev-parse", "--verify", "-q", ref], cwd=local, capture_output=True)
+    assert missing.returncode != 0
+    assert str(manifest["path"]) not in run("git", "worktree", "list", cwd=local).stdout
+
+
+def test_release_reports_failure_when_the_paths_survive_removal(tmp_path, monkeypatch):
+    _, out, manifest = acquired(tmp_path)
+    monkeypatch.setattr(m.shutil, "rmtree", lambda *args, **kwargs: None)
+    rc, result = invoke(["release", "--manifest", str(out)])
+    assert rc == 2 and "released" not in result
+    assert manifest["cleanup_root"] in result["error"]
+
+
+def test_acquire_reports_an_origin_lookup_timeout_as_json_error(tmp_path, monkeypatch):
+    local, context, _ = fixture(tmp_path)
+    real_run = m._run
+
+    def timing_out_on_config(cmd, timeout=180, env=None):
+        if "config" in cmd:
+            raise subprocess.TimeoutExpired(cmd, timeout)
+        return real_run(cmd, timeout=timeout, env=env)
+    monkeypatch.setattr(m, "_run", timing_out_on_config)
+    rc, result = invoke(["acquire", "--context", str(context), "--repo", str(local),
+                         "--out", str(tmp_path / "source.json")])
+    assert rc == 2 and "origin" in result["error"]

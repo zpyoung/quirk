@@ -27,7 +27,7 @@ _RUN_FIELDS = {"dimensions_run", "dimensions_skipped", "diff_size", "coverage", 
                "mutation_consent", "incomplete", "dimensions_failed", "models", "verification",
                "excluded_generated", "policy_sources", "severity_floor"}
 DEFAULT_SEVERITY_FLOOR = "Should fix"
-_CLEAN_VERDICTS = {"approve", "approved", "lgtm", "approve with comments"}
+_INCOMPLETE_OK_VERDICTS = {"fix, then merge", "request changes"}
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 _DISPOSITIONS = {
@@ -380,8 +380,8 @@ def _validate_contract_run(run, meta, warnings):
     if run.get("dimensions_failed") and not run.get("incomplete"):
         warnings.append("run.dimensions_failed is non-empty; marking the report incomplete.")
         run["incomplete"] = True
-    if run.get("incomplete") and meta["verdict"].strip().lower() in _CLEAN_VERDICTS:
-        warnings.append("Incomplete reports cannot carry a clean verdict; showing \"Incomplete review\".")
+    if run.get("incomplete") and meta["verdict"].strip().lower() not in _INCOMPLETE_OK_VERDICTS:
+        warnings.append("Incomplete reports can only carry a blocking verdict; showing \"Incomplete review\".")
         meta["verdict"] = "Incomplete review"
 
 
@@ -792,9 +792,10 @@ _RISK_METRICS = (("likelihood", "Likelihood"), ("impact", "Impact"),
 # Same word can be good or bad depending on the metric: "weak" detection is bad,
 # "minor" impact is good. Tone is therefore resolved per metric, never globally.
 _RISK_TONES = {
-    "likelihood": {"rare": "good", "unlikely": "good", "possible": "warn",
-                   "occasional": "warn", "likely": "bad", "frequent": "bad", "certain": "bad"},
-    "impact": {"none": "good", "minor": "good", "low": "good", "moderate": "warn",
+    "likelihood": {"rare": "good", "unlikely": "good", "improbable": "good", "remote": "good",
+                   "possible": "warn", "occasional": "warn", "likely": "bad", "probable": "bad",
+                   "frequent": "bad", "certain": "bad"},
+    "impact": {"none": "good", "no": "good", "minor": "good", "low": "good", "moderate": "warn",
                "significant": "bad", "major": "bad", "severe": "bad", "critical": "bad"},
     "blast_radius": {"none": "good", "single": "good", "narrow": "good", "limited": "good",
                      "partial": "warn", "broad": "bad", "wide": "bad", "all": "bad", "global": "bad"},
@@ -804,8 +805,8 @@ _RISK_TONES = {
                  "partial": "warn", "manual": "warn", "hard": "bad", "difficult": "bad",
                  "none": "bad", "irreversible": "bad"},
 }
-_RISK_LEVEL_TONE = {"low": "good", "medium": "warn", "moderate": "warn",
-                    "high": "bad", "critical": "bad"}
+_RISK_LEVEL_TONE = {"very low": "good", "low": "good", "medium": "warn", "moderate": "warn",
+                    "high": "bad", "critical": "bad", "do not ship": "bad"}
 
 # StatusDot variants and Token colours are separate vocabularies; risk tone is
 # resolved in the first and has to be translated before it reaches a Token.
@@ -844,8 +845,8 @@ def _risk_section(risk):
     level = risk.get("level")
     out = ['<section class="astryx-section" id="risk">',
            '<div class="sec-head"><h2 class="astryx-heading" data-level="2">Risk%s</h2></div>' %
-           (" " + _token(level, tone=_TONE_COLOR[
-               _RISK_LEVEL_TONE.get(str(level).strip().lower(), "none")]) if level else "")]
+           (" " + _token(level, tone=_TONE_COLOR[_RISK_LEVEL_TONE.get(
+               " ".join(str(level).lower().split()), "none")]) if level else "")]
     metrics = _risk_metrics(risk)
     if metrics:
         out.append('<div class="metrics">')

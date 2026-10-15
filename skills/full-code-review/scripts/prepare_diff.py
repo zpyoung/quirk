@@ -20,7 +20,8 @@ from urllib.parse import quote
 
 from forge import ForgeError, detect_forge, make_forge
 
-DEFAULT_MAX_CHARS = 240000  # ~60k tokens
+DEFAULT_MAX_CHARS = 240000
+_STDERR_SNIPPET_CHARS = 400
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 # repo diff config can substitute the patch, so pin canonical flags
@@ -33,10 +34,6 @@ _GIT_DIFF_FLAGS = [
 
 # Content lines are prefixed, so metadata must be line-anchored.
 _BINARY_FILES_RE = re.compile(r'Binary files .+ and .+ differ')
-
-# --------------------------------------------------------------------------- #
-# Pure helpers
-# --------------------------------------------------------------------------- #
 
 def _decode_git_path(field):
     """Decode one raw or C-quoted path field emitted by git."""
@@ -176,6 +173,11 @@ def _deduplicate(items):
 
 
 def changed_files_from_diff(text):
+    """Return the deduplicated new-side paths a unified diff touches, in first-seen order.
+
+    This is the fallback file manifest when no forge or git listing supplies one; it never
+    raises on malformed text and returns [] when no file section parses.
+    """
     return _deduplicate(f["file"] for f in parse_unified_diff(text) if f.get("file"))
 
 
@@ -352,8 +354,7 @@ def is_source_file(path):
             ".md", ".markdown", ".mdown", ".mkd", ".rst",
             ".yaml", ".yml", ".json", ".toml", ".ini", ".cfg")):
         return False
-    if (name.endswith(".lock") or name in ("go.sum", "yarn.lock") or
-            re.search(r"(?:^|[-_.])lock(?:[-_.]|$)", name)):
+    if name.endswith(".lock") or name in ("go.sum", "bun.lockb"):
         return False
     return True
 
@@ -390,10 +391,6 @@ def resolve_scope_intent(title=None, branch=None):
         return {"guess": branch, "basis": "source_branch"}
     return {"guess": "", "basis": "none"}
 
-
-# --------------------------------------------------------------------------- #
-# Subprocess wrappers (mock-testable)
-# --------------------------------------------------------------------------- #
 
 def _run(cmd, timeout=90):
     return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
@@ -636,6 +633,12 @@ def current_user(forge):
     return forge.current_user()
 
 
+def _with_cause(message, forge):
+    """Append the adapter's `last_error`, when it recorded one, to a seat-detection failure."""
+    cause = getattr(forge, "last_error", None)
+    return "%s: %s" % (message, str(cause)[:_STDERR_SNIPPET_CHARS]) if cause else message
+
+
 def commit_authors(forge, number):
     """Return [{username, email}] for the change's commits, or None when unresolvable."""
     return forge.commit_authors(number)
@@ -677,7 +680,10 @@ def find_change_for_branch(forge, branch):
 
 
 def git_diff_branch(branch, target, context_lines, cwd=".", metadata=None):
-    """Return a remote-target merge-base diff, empty on success or None."""
+    """Return a remote-target merge-base diff, empty on success or None.
+
+    On failure `metadata["error"]` names the failing git step with a stderr snippet.
+    """
     try:
         source_ref = "refs/remotes/origin/%s" % branch
         target_ref = "refs/remotes/origin/%s" % target
@@ -685,31 +691,45 @@ def git_diff_branch(branch, target, context_lines, cwd=".", metadata=None):
             refspec = "+refs/heads/%s:%s" % (name, remote_ref)
             fetched = _run(["git", "-C", cwd, "fetch", "origin", refspec], timeout=120)
             if fetched.returncode != 0:
-                return None
+                return _git_failed(metadata, "git fetch of %s" % name, fetched)
         head_result = _run(["git", "-C", cwd, "rev-parse", "--verify",
                             "%s^{commit}" % source_ref], timeout=30)
         target_result = _run(["git", "-C", cwd, "rev-parse", "--verify",
                               "%s^{commit}" % target_ref], timeout=30)
-        if (head_result.returncode != 0 or not head_result.stdout.strip() or
-                target_result.returncode != 0 or not target_result.stdout.strip()):
-            return None
+        for name, result in ((branch, head_result), (target, target_result)):
+            if result.returncode != 0 or not result.stdout.strip():
+                return _git_failed(metadata, "resolving origin/%s" % name, result)
         head = head_result.stdout.strip()
         base_result = _run(["git", "-C", cwd, "merge-base",
                             target_ref, head], timeout=30)
         if base_result.returncode != 0 or not base_result.stdout.strip():
-            return None
+            return _git_failed(metadata, "git merge-base", base_result)
         base = base_result.stdout.strip()
-    except Exception:
-        return None
+    except Exception as exc:
+        return _git_failed(metadata, "git branch diff", exc)
     diff_text = _git_diff_range(base, head, cwd, context_lines)
     changed_files = (_git_changed_files_range(base, head, cwd)
                      if diff_text is not None else None)
     if changed_files is None:
-        return None
+        return _git_failed(metadata, "git diff of %s..%s" % (base[:12], head[:12]))
     if metadata is not None:
         metadata["refs"] = {"base": base, "start": base, "head": head}
         metadata["changed_files"] = changed_files
     return diff_text
+
+
+def _git_failed(metadata, step, result=None):
+    """Record why a git step failed on `metadata["error"]` and return None.
+
+    `result` is the failed CompletedProcess or the exception that stopped the step. Keeps
+    a snippet of its stderr so an auth, network or missing-ref failure is distinguishable
+    from the generic "git diff failed" message the caller prints.
+    """
+    if metadata is not None:
+        detail = str(result) if isinstance(result, BaseException) else getattr(result, "stderr", "")
+        detail = (detail or "").strip()[:_STDERR_SNIPPET_CHARS]
+        metadata["error"] = "%s failed: %s" % (step, detail) if detail else "%s failed" % step
+    return None
 
 
 def _untracked_diff(path, cwd):
@@ -722,7 +742,10 @@ def _untracked_diff(path, cwd):
 
 
 def git_diff_local(context_lines, cwd=".", metadata=None, excluded_path=None):
-    """Return staged, unstaged, and untracked diffs, or None on failure."""
+    """Return staged, unstaged, and untracked diffs, or None on failure.
+
+    On failure `metadata["error"]` names the failing git step with a stderr snippet.
+    """
     try:
         diff_cmd = _git_diff_command(cwd) + ["--find-renames=50%"]
         unstaged = _run(diff_cmd + ["-U%d" % context_lines], timeout=60)
@@ -731,11 +754,14 @@ def git_diff_local(context_lines, cwd=".", metadata=None, excluded_path=None):
         staged_names = _run(diff_cmd + ["--staged", "--name-only", "-z"], timeout=60)
         untracked_result = _run(["git", "-C", cwd, "ls-files", "--others",
                                  "--exclude-standard", "-z"], timeout=60)
-        if any(r.returncode != 0 for r in (
-                unstaged, staged, unstaged_names, staged_names, untracked_result)):
-            return None
-    except Exception:
-        return None
+        for step, result in (("git diff", unstaged), ("git diff --staged", staged),
+                             ("git diff --name-only", unstaged_names),
+                             ("git diff --staged --name-only", staged_names),
+                             ("git ls-files", untracked_result)):
+            if result.returncode != 0:
+                return _git_failed(metadata, step, result)
+    except Exception as exc:
+        return _git_failed(metadata, "local git diff", exc)
 
     excluded_real_path = os.path.realpath(excluded_path) if excluded_path else None
     untracked = [
@@ -748,27 +774,23 @@ def git_diff_local(context_lines, cwd=".", metadata=None, excluded_path=None):
     for path in untracked:
         rendered = _untracked_diff(path, cwd)
         if rendered is None:
-            return None
+            return _git_failed(metadata, "git diff of untracked file %s" % path)
         parts.append(rendered)
     try:
         head_result = _run(["git", "-C", cwd, "rev-parse", "--verify", "HEAD^{commit}"],
                            timeout=30)
-    except Exception:
-        return None
+    except Exception as exc:
+        return _git_failed(metadata, "git rev-parse HEAD", exc)
     head = head_result.stdout.strip() if head_result.returncode == 0 else None
     diff_text = "".join(parts)
     if diff_text and not head:
-        return None
+        return _git_failed(metadata, "git rev-parse HEAD", head_result)
     if metadata is not None:
         metadata["untracked_files"] = untracked
         metadata["changed_files"] = changed_files
         metadata["refs"] = {"base": head, "start": head, "head": head}
     return diff_text
 
-
-# --------------------------------------------------------------------------- #
-# Orchestration
-# --------------------------------------------------------------------------- #
 
 def _fail(out, mode, message, paths=None, seat=None):
     try:
@@ -848,12 +870,17 @@ def main(argv=None):
         else:
             source = "git"
             number = None
-            fallback_reason = ("no change request found for branch or the forge diff failed; used git diff"
-                               if forge is not None else "%s; used git diff" % forge_error)
+            if forge is None:
+                forge_reason = forge_error
+            else:
+                forge_reason = forge_metadata.get(
+                    "error", "no change request found for branch or the forge diff failed")
+            fallback_reason = "%s; used git diff" % forge_reason
             diff_text = git_diff_branch(args.branch, target, args.context_lines,
                                         args.cwd, local_metadata)
             if diff_text is None:
-                return _fail(args.out, mode, "forge and branch git diff both failed")
+                return _fail(args.out, mode, "forge and branch git diff both failed (forge: %s; git: %s)"
+                             % (forge_reason, local_metadata.get("error", "unknown")))
             refs = local_metadata.get("refs", refs)
     else:
         mode, source = "local", "git"
@@ -862,7 +889,7 @@ def main(argv=None):
         diff_text = git_diff_local(args.context_lines, args.cwd, local_metadata,
                                    excluded_path=output_path)
         if diff_text is None:
-            return _fail(args.out, mode, "local git diff failed")
+            return _fail(args.out, mode, "local git diff failed: %s" % local_metadata.get("error", "unknown"))
         refs = local_metadata.get("refs", refs)
 
     if diff_text and (not refs.get("base") or not refs.get("head")):
@@ -875,7 +902,7 @@ def main(argv=None):
         viewer = current_user(forge) if details else None
         identity_error = None
         if not details:
-            identity_error = "could not resolve %s metadata for seat detection" % label
+            identity_error = _with_cause("could not resolve %s metadata for seat detection" % label, forge)
         elif any(not isinstance(refs.get(key), str) or not SHA_RE.match(refs[key])
                  for key in ("base", "start", "head")):
             identity_error = "the forge returned incomplete or malformed diff refs"
@@ -890,7 +917,8 @@ def main(argv=None):
         elif details.get("base_sha") != refs.get("base") or details.get("start_sha") != refs.get("start"):
             identity_error = "%s base/start diff refs changed while the review context was being prepared; rerun" % label
         elif not viewer:
-            identity_error = "could not resolve the authenticated forge user for seat detection"
+            identity_error = _with_cause(
+                "could not resolve the authenticated forge user for seat detection", forge)
         detected = None if identity_error else detect_seat(
             details.get("author_username"), viewer.get("username"),
             details.get("author_id"), viewer.get("id"),

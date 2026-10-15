@@ -1,9 +1,11 @@
-"""YAML parsing for filing-requests: PyYAML when importable, a bounded subset otherwise.
+"""YAML parsing: PyYAML when importable, a bounded subset otherwise.
 
 No CLI surface. `parse_yaml(text, path)` is the one entry point every caller uses; the tier
 is resolved once at import time (`YAML_TIER`) so no caller has to know which one served it.
-`parse(text, path)` is the bounded subset itself (Tier 2), exposed directly so it can be
-tested without a PyYAML install on the machine shadowing it.
+`parse(text, path)` is the bounded subset itself, exposed directly so it can be tested
+without a PyYAML install on the machine shadowing it.
+
+This file is vendored byte-for-byte into more than one skill; change every copy together.
 """
 from __future__ import annotations
 
@@ -30,7 +32,7 @@ class TemplateParseError(Exception):
 
 
 def parse_yaml(text: str, path: str = "<string>") -> Any:
-    """Parse `text` as YAML, preferring PyYAML and falling back to `parse` (below)."""
+    """Parse `text` as YAML, preferring PyYAML and falling back to `parse`."""
     if YAML_TIER == "pyyaml":
         try:
             return _yaml.safe_load(text)
@@ -42,34 +44,33 @@ def parse_yaml(text: str, path: str = "<string>") -> Any:
             reason = str(exc).splitlines()[0] if str(exc) else "invalid YAML"
             raise TemplateParseError(reason, path, line) from exc
         except RecursionError as exc:
-            # a deeply nested template is one bad file, not a reason to abort discovery for
-            # the rest of the repo -- both tiers surface it as the same per-file failure
+            # a deeply nested document is one bad file, not a reason to abort the caller's
+            # loop over many files -- both tiers surface it as the same per-file failure
             raise TemplateParseError("nesting is too deep to parse", path, 1) from exc
     return parse(text, path)
 
-
-# ---- Tier 2: the bounded subset -----------------------------------------------------
-#
-# Supported: block mappings (nested via indentation), block sequences (including
-# `- key: value` list items), plain/single/double-quoted scalars, booleans, `|`/`>`
-# block scalars, `#` comments, and flow sequences whose items are all scalars
-# (`[a, "b", c]`, including the empty `[]`). Not supported: flow mappings, flow
-# sequences containing a nested collection, anchors/aliases, multi-document
-# separators, tags, merge keys -- each raises TemplateParseError.
 
 _BLOCK_SCALAR_INDICATORS = ("|", ">", "|-", "|+", ">-", ">+")
 _BOOL_TRUE = ("true", "True", "TRUE")
 _BOOL_FALSE = ("false", "False", "FALSE")
 _NULL = ("null", "Null", "NULL", "~")
 
-# Nesting is bounded so a pathological template fails as this module's own per-file error
-# rather than as a RecursionError escaping into the caller's discovery loop. Real issue
-# templates nest three or four levels; 64 is far past anything legitimate.
+# Nesting is bounded so a pathological document fails as this module's own per-file error
+# rather than as a RecursionError escaping into the caller's loop. Real documents nest three
+# or four levels; 64 is far past anything legitimate.
 _MAX_DEPTH = 64
 
 
 def parse(text: str, path: str = "<string>") -> Any:
-    """Parse `text` against the bounded YAML subset described above.
+    """Parse `text` against a bounded YAML subset.
+
+    Supported: block mappings (nested via indentation), block sequences (including
+    `- key: value` list items and a sequence written at its key's own indent),
+    plain/single/double-quoted scalars, booleans, `|`/`>` block scalars with `-`, `+` or
+    default chomping, `#` comments, and flow sequences whose items are all scalars
+    (`[a, "b", c]`, including the empty `[]`). Not supported: flow mappings, flow sequences
+    containing a nested collection, anchors/aliases, multi-document separators, tags,
+    merge keys.
 
     Raises TemplateParseError naming `path` and the offending line for anything outside
     that subset.
@@ -174,6 +175,10 @@ def _find_colon(content: str) -> Optional[int]:
     return None
 
 
+def _is_dash(content: str) -> bool:
+    return content == "-" or content.startswith("- ")
+
+
 def _reject_doc_markers(content: str, path: str, lineno: int) -> None:
     if content in ("---", "..."):
         raise TemplateParseError("multi-document separators are not supported", path, lineno)
@@ -221,7 +226,7 @@ def _split_key(content: str, path: str, lineno: int) -> Tuple[str, str]:
         raise TemplateParseError(f"expected 'key: value', got {content!r}", path, lineno)
     # A quoted key is the same key: `"name": x` and `name: x` are one mapping under PyYAML, and
     # a tier that keeps the quotes produces a document whose keys nothing matches -- so the
-    # template silently resolves to no fields on exactly the machines this tier serves.
+    # document silently resolves to no fields on exactly the machines this tier serves.
     if len(key) >= 2 and key[0] == key[-1] and key[0] in "\"'":
         key = (
             _parse_double_quoted(key, path, lineno) if key[0] == '"'
@@ -238,7 +243,7 @@ def _consume_value(
     """
     if value_part == "":
         nxt = cur.peek_logical()
-        if nxt is not None and nxt[1] > key_indent:
+        if nxt is not None and (nxt[1] > key_indent or (nxt[1] == key_indent and _is_dash(nxt[2]))):
             return _parse_node(cur, nxt[1], path, depth + 1)
         return None
     if value_part in _BLOCK_SCALAR_INDICATORS:
@@ -338,12 +343,17 @@ def _parse_block_scalar(cur: _Cursor, indicator: str, indent: int, path: str, li
             break
         lines.append(raw[block_indent:])
         cur.i += 1
+    trailing_blanks = 0
     while lines and lines[-1] == "":
         lines.pop()
+        trailing_blanks += 1
+    chomp = indicator[1:]
     if not lines:
-        return ""
+        return "\n" * trailing_blanks if chomp == "+" else ""
     body = "\n".join(lines) if style == "|" else _fold(lines)
-    return body + "\n"
+    if chomp == "-":
+        return body
+    return body + "\n" * (1 + trailing_blanks if chomp == "+" else 1)
 
 
 def _fold(lines: List[str]) -> str:
@@ -457,7 +467,7 @@ def _parse_scalar(raw: str, path: str, lineno: int) -> Any:
 
 # The full YAML double-quoted escape table. A shorter table that silently drops the backslash
 # from anything it doesn't know makes this tier disagree with PyYAML about the *content* of a
-# template ID or field name -- the one thing the two tiers must never do.
+# key or value -- the one thing the two tiers must never do.
 _DOUBLE_ESCAPES = {
     "0": "\0", "a": "\a", "b": "\b", "t": "\t", "\t": "\t", "n": "\n", "v": "\v",
     "f": "\f", "r": "\r", "e": "\x1b", " ": " ", '"': '"', "/": "/", "\\": "\\",

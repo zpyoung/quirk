@@ -18,6 +18,13 @@ Never probe a shared working tree without that consent. In reviewer seat the coo
 asks every run and the current source manifest must say `mutation_consent: true`;
 absence or false means skip. Consent never carries between runs.
 
+The probe runs the change's own code, so it is refused for forks and untrusted authors:
+`borrow_review_source.py` records `mutation_consent: false` unless `change.is_fork` is
+`false` and `change.author_trusted` is `true`. On GitLab `author_trusted` is always null,
+so the probe is never offered there. Run the test command with a minimal environment
+(`env -i PATH="$PATH" HOME="$(mktemp -d)" <runner>`, plus only the variables the suite
+needs) so forge tokens and other credentials in your shell never reach the change's code.
+
 Beyond consent, only when the reviewed code is **locally runnable at `refs.head`** — the
 suite executes and you can restore the tree exactly. It does **not** apply to a diff you
 can only read at a remote ref. Applicability by source:

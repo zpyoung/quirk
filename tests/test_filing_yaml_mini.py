@@ -69,6 +69,36 @@ def test_block_scalar_folded(yaml_mini) -> None:
     }
 
 
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("a: |\n  x\n  y\nb: z\n", "x\ny\n"),
+        ("a: |-\n  x\n  y\nb: z\n", "x\ny"),
+        ("a: |+\n  x\n\n\nb: z\n", "x\n\n\n"),
+        ("a: >\n  x\n  y\nb: z\n", "x y\n"),
+        ("a: >-\n  x\n  y\nb: z\n", "x y"),
+        ("a: >+\n  x\n  y\n\nb: z\n", "x y\n\n"),
+        ("a: |-\n\nb: z\n", ""),
+        ("a: |+\n\nb: z\n", "\n"),
+    ],
+)
+def test_block_scalar_chomping(yaml_mini, text, expected) -> None:
+    assert yaml_mini.parse(text, "chomp.yml")["a"] == expected
+
+
+def test_block_sequence_at_the_key_indent(yaml_mini) -> None:
+    text = "skip_globs:\n- \"*.lock\"\n- dist/**\nseverity_floor: Must fix\n"
+    assert yaml_mini.parse(text, "flush.yml") == {
+        "skip_globs": ["*.lock", "dist/**"],
+        "severity_floor": "Must fix",
+    }
+
+
+def test_block_sequence_at_the_key_indent_inside_a_list_item(yaml_mini) -> None:
+    text = "items:\n- a:\n  - x\n  - y\n  b: two\n- c\n"
+    assert yaml_mini.parse(text, "flush.yml") == {"items": [{"a": ["x", "y"], "b": "two"}, "c"]}
+
+
 def test_single_quoted_scalar_with_escaped_quote(yaml_mini) -> None:
     text = "title: 'It''s broken'\n"
     assert yaml_mini.parse(text, "single.yml") == {"title": "It's broken"}

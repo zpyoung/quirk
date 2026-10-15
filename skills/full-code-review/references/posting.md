@@ -68,8 +68,9 @@ remove one. `--decisions` must be the author-seat export `validate_triage.py` wr
 for this same report: its `report_sha256` has to match the report, or the CLI exits 2.
 It adds the reviewer's triage note to each finding and sets the overview counts. Only
 Will fix, Fix later, and Needs detail count as posted; Ignore and Undecided count as not
-posted. Without `--decisions`, every finding that memory did not suppress counts as
-posted. Bodies follow
+posted. Without `--decisions`, every finding that memory did not suppress and that sits
+at or above `run.severity_floor` counts as posted; the rest, including below-floor
+findings, count as not posted. Bodies follow
 [`report-template.md` → Inline comment bodies](report-template.md#inline-comment-bodies);
 the hidden block already carries the fingerprint, so nothing is appended. Never
 hand-edit a body. The overview note is offered only when the user asks for it.
@@ -118,7 +119,10 @@ python3 "$MEMORY_SCRIPT" save --report "$REPORT_JSON" \
   --decisions "$REVIEW_RUN_DIR/decisions.json" \
   --receipts "$REVIEW_RUN_DIR/posting-receipts.json"
 ```
-Only confirmed creates get receipts, never proposed/failed notes. For the paste-free
+
+`save` exits 1 when its JSON says `saved: false` (the JSON is still printed). Check the
+exit code and, on failure, tell the user their triage decisions or receipts were not
+saved. Only confirmed creates get receipts, never proposed/failed notes. For the paste-free
 author fallback, use the same save command **without** `--decisions`: it records
 receipts only and preserves prior human decisions without inventing new ones.
 A finding with a missing or ambiguous anchor has no `fp`, so its body carries no

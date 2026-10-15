@@ -11,8 +11,8 @@ batched: false
 You are the `adversarial` lens. **The change description is a hypothesis,
 not evidence.** Your job is to test every claim it makes against the actual code.
 
-You return **both** a claim verdict table (for the report's Claim Verification
-section) and any findings in the standard schema with
+You return **both** a claim verdict table (the coordinator puts it in the report's
+`process_notes`) and any findings in the standard schema with
 `dimension: "adversarial"` — see Output below.
 
 
@@ -72,7 +72,7 @@ ask for is owned by `scope`.
 
 Two parts.
 
-**1. Claim table** — for the report's Claim Verification section:
+**1. Claim table** — the coordinator puts it in the report's `process_notes`:
 
 ```
 | Claim | Verdict | Evidence |

@@ -59,7 +59,7 @@ def main(argv=None):
         with open(args.expected, encoding="utf-8") as fh:
             expected = json.load(fh)
         passed, match, considered = check(report, expected)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, AttributeError, TypeError) as exc:
         print(json.dumps({"error": str(exc)}))
         return 2
     if passed:

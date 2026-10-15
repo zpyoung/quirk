@@ -2,6 +2,8 @@ import contextlib
 import io
 import json
 
+import pytest
+
 import review_memory as m
 
 FP = "ab" * 32
@@ -72,8 +74,6 @@ def test_reconcile_and_check_validate_against_the_given_repo(monkeypatch):
 
     monkeypatch.setattr(m, "validate_snapshot", fake_validate)
     for call in (m.reconcile, m.check_plan):
-        try:
+        with pytest.raises(RuntimeError):
             call({}, {}, {}, repo="/reviewed/repo")
-        except RuntimeError:
-            pass
     assert seen == ["/reviewed/repo", "/reviewed/repo"]

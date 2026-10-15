@@ -1,5 +1,12 @@
+import contextlib
+import io
+import json
 import os
+import re
 import sys
+from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "skills", "full-code-review", "scripts"))
 import render_report  # noqa: E402
@@ -60,17 +67,11 @@ def test_author_uses_same_parser_with_author_vocabulary():
 def test_wrong_mode_header_and_groups_are_rejected():
     value = report()
     wrong = export(value).replace("[mode: reviewer]", "[mode: author]", 1)
-    try:
+    with pytest.raises(ValueError, match="header"):
         m.validate(value, wrong)
-        assert False
-    except ValueError as exc:
-        assert "header" in str(exc)
     author_groups = export(report("author"), seat="author").replace("[mode: author]", "[mode: reviewer]", 1)
-    try:
+    with pytest.raises(ValueError, match="Blocking"):
         m.validate(value, author_groups)
-        assert False
-    except ValueError as exc:
-        assert "Blocking" in str(exc)
 
 
 def test_structural_forgery_rejected_before_decisions_return():
@@ -85,11 +86,8 @@ def test_structural_forgery_rejected_before_decisions_return():
         good.replace("## Question (0)\n\n", ""),
     ]
     for forged in variants:
-        try:
+        with pytest.raises(ValueError):
             m.validate(value, forged)
-            assert False, forged[-80:]
-        except ValueError:
-            pass
 
 
 def test_tampered_pasted_title_is_not_trusted():
@@ -103,11 +101,8 @@ def test_tampered_pasted_title_is_not_trusted():
 
 def test_no_paste_and_noncanonical_separator_rejected():
     for paste in ("", "\n", export(report()).replace("first note", "first\u2028note")):
-        try:
+        with pytest.raises(ValueError):
             m.validate(report(), paste)
-            assert False
-        except ValueError:
-            pass
 
 
 def test_zero_findings_has_explicit_empty_reviewer_artifact():
@@ -117,12 +112,8 @@ def test_zero_findings_has_explicit_empty_reviewer_artifact():
     result = m.validate_zero_findings(value)
     assert result["zero_findings"] is True and result["decisions"] == []
     assert result["seat"] == "reviewer" and len(result["report_sha256"]) == 64
-    nonempty = report()
-    try:
-        m.validate_zero_findings(nonempty)
-        assert False
-    except ValueError as exc:
-        assert "no findings" in str(exc)
+    with pytest.raises(ValueError, match="no findings"):
+        m.validate_zero_findings(report())
 
 
 def _memory(human_context):
@@ -180,11 +171,8 @@ def test_reply_line_naming_an_own_comment_is_rejected():
     value = reply_report()
     value["findings"][0]["memory"]["human_context"][0]["own"] = True
     text = export(value)
-    try:
+    with pytest.raises(ValueError, match="reply"):
         m.validate(value, with_reply(text))
-        assert False
-    except ValueError as exc:
-        assert "reply" in str(exc)
     assert all("reply_note_id" not in row for row in m.validate(value, text)["decisions"])
 
 
@@ -206,31 +194,22 @@ def test_reply_line_is_rejected_unless_it_targets_an_unresolved_thread_on_the_fi
         good.replace("  `dir:x.py:9` · Nit\n", "  `dir:x.py:9` · Nit\n  reply: 7\n", 1),
     ]
     for text in forged:
-        try:
+        with pytest.raises(ValueError):
             m.validate(value, text)
-            assert False, text
-        except ValueError:
-            pass
 
 
 def test_reply_line_is_rejected_for_the_author_seat():
     value = reply_report("author")
     text = export(value, seat="author")
-    try:
+    with pytest.raises(ValueError, match="reviewer"):
         m.validate(value, with_reply(text))
-        assert False
-    except ValueError as exc:
-        assert "reviewer" in str(exc)
     assert m.validate(value, text)["decisions"]
 
 
 def test_reply_line_needs_trusted_human_context_not_the_paste():
     value = report()
-    try:
+    with pytest.raises(ValueError):
         m.validate(value, with_reply(export(value)))
-        assert False
-    except ValueError:
-        pass
 
 
 def with_handoff(paste, body="## Handoff\n\nApply **F1**.\n"):
@@ -265,25 +244,114 @@ def test_delimiter_quoted_in_a_note_does_not_split_the_paste():
 
 def test_decisions_block_still_rejects_trailing_content_before_the_handoff():
     value = report()
-    try:
+    with pytest.raises(ValueError, match="TRAILING"):
         m.validate(value, with_handoff(export(value) + "TRAILING"))
-        assert False
-    except ValueError as exc:
-        assert "TRAILING" in str(exc)
 
 
-def test_page_export_label_matches_the_validator_for_each_forge():
-    # the page's export JS builds its header from data-export-label, so the two must agree
-    import re
-    from pathlib import Path
-    template = (Path(render_report.__file__).resolve().parents[1] / "assets" / "report.html").read_text(encoding="utf-8")
-    for forge_name, label in (("gitlab", "MR !42"), ("github", "PR #42")):
-        value = report()
+def target_report(target, forge_name="gitlab"):
+    value = report("reviewer" if target == "change" else "author")
+    value["meta"].pop("number")
+    value["meta"].pop("project")
+    if target == "change":
         value["meta"]["forge"] = forge_name
-        prepared, _ = render_report._prepare_report(value)
-        html = render_report.render_html(value, template)
-        rendered = re.search(r'data-export-label="([^"]+)"', html).group(1)
-        assert rendered == m.export_label(prepared["meta"]) == label
-        assert m.export_header(prepared["meta"]).startswith("# %s — triage decisions" % label)
-        paste = export(value)
-        assert m.validate(value, paste)["target"] == label
+        value["meta"].update({"number": 42, "project": "g/p"})
+    else:
+        value["meta"]["target"] = target
+        value["meta"].pop("forge")
+        if target == "branch":
+            value["meta"]["branch"] = "feature/x"
+    return value
+
+
+@pytest.mark.parametrize("target, forge_name, label", [
+    ("change", "gitlab", "MR !42"),
+    ("change", "github", "PR #42"),
+    ("branch", None, "feature/x"),
+    ("local", None, "local changes"),
+])
+def test_page_export_label_matches_the_validator_for_each_target(target, forge_name, label):
+    # the page's export JS builds its header from data-export-label, so the two must agree
+    template = (Path(render_report.__file__).resolve().parents[1] / "assets" / "report.html").read_text(encoding="utf-8")
+    value = target_report(target, forge_name)
+    prepared, _ = render_report._prepare_report(value)
+    html = render_report.render_html(value, template)
+    rendered = re.search(r'data-export-label="([^"]+)"', html).group(1)
+    assert rendered == m.export_label(prepared["meta"]) == label
+    assert m.export_header(prepared["meta"]).startswith("# %s — triage decisions" % label)
+    assert m.validate(value, export(value))["target"] == label
+
+
+def run_main(tmp_path, report_value, paste=None, extra=()):
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report_value))
+    argv = ["--report", str(report_path)]
+    if paste is not None:
+        paste_path = tmp_path / "paste.md"
+        paste_path.write_bytes(paste.encode("utf-8"))
+        argv += ["--paste", str(paste_path)]
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = m.main(argv + list(extra))
+    return rc, json.loads(out.getvalue())
+
+
+def test_main_validates_a_paste_and_writes_the_out_file(tmp_path):
+    value = report()
+    target = tmp_path / "decisions.json"
+    rc, result = run_main(tmp_path, value, export(value), ["--out", str(target)])
+    assert rc == 0 and [row["slot"] for row in result["decisions"]] == ["fix", "ignore"]
+    assert json.loads(target.read_text()) == result
+    assert not (tmp_path / "decisions.json.tmp").exists()
+
+
+def test_main_rejects_a_crlf_paste_before_returning_decisions(tmp_path):
+    value = report()
+    rc, result = run_main(tmp_path, value, export(value).replace("\n", "\r\n"))
+    assert rc == 2 and "line separator" in result["error"] and "decisions" not in result
+
+
+def test_main_reports_a_forged_paste_as_json_error(tmp_path):
+    value = report()
+    rc, result = run_main(tmp_path, value, export(value).replace("**F1**", "**F9**"))
+    assert rc == 2 and set(result) == {"error"}
+
+
+def test_main_reports_a_missing_paste_file_as_json_error(tmp_path):
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report()))
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = m.main(["--report", str(report_path), "--paste", str(tmp_path / "missing.md")])
+    assert rc == 2 and "error" in json.loads(out.getvalue())
+
+
+def test_main_zero_findings_emits_the_paste_free_artifact(tmp_path):
+    value = report()
+    value["findings"] = []
+    value["run"]["clean_notes"] = [{"dimension": "review", "note_md": "Looks sound."}]
+    rc, result = run_main(tmp_path, value, extra=["--zero-findings"])
+    assert rc == 0 and result["zero_findings"] is True and result["decisions"] == []
+    assert result["seat"] == "reviewer" and result["header"] == "# MR !42 — triage decisions [mode: reviewer]"
+
+
+@pytest.mark.parametrize("findings, seat, message", [
+    (True, "reviewer", "no findings"),
+    (False, "author", "reviewer mode"),
+])
+def test_main_zero_findings_refuses_findings_and_the_author_seat(tmp_path, findings, seat, message):
+    value = report(seat)
+    if not findings:
+        value["findings"] = []
+        value["run"]["clean_notes"] = [{"dimension": "review", "note_md": "Looks sound."}]
+    rc, result = run_main(tmp_path, value, extra=["--zero-findings"])
+    assert rc == 2 and message in result["error"]
+
+
+def test_main_requires_exactly_one_of_paste_and_zero_findings(tmp_path):
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report()))
+    for argv in (["--report", str(report_path)],
+                 ["--report", str(report_path), "--paste", "x", "--zero-findings"]):
+        with contextlib.redirect_stderr(io.StringIO()), pytest.raises(SystemExit) as exc:
+            m.main(argv)
+        assert exc.value.code == 2

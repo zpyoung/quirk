@@ -190,7 +190,10 @@ def acquire(args):
     temp_root = None
     token = None
     if repo_root:
-        origin_host, origin_project = _origin_host_project(repo_root)
+        try:
+            origin_host, origin_project = _origin_host_project(repo_root)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return _error("could not read the origin remote of %s: %s" % (repo_root, exc))
         if origin_host != host.lower() or origin_project != project:
             repo_root = None
     if repo_root is None:
@@ -260,7 +263,24 @@ def _safe_marker(manifest):
         return False
 
 
+def _drop_review_ref(manifest):
+    """Delete the private review ref and prune the worktree record from the borrowed clone."""
+    repo_root = manifest.get("repo_root")
+    review_ref = manifest.get("review_ref")
+    if not isinstance(repo_root, str) or not os.path.isdir(repo_root):
+        return
+    _run(["git", "-C", repo_root, "worktree", "prune"], timeout=60)
+    if isinstance(review_ref, str) and review_ref.startswith("refs/quirk-review/"):
+        _run(["git", "-C", repo_root, "update-ref", "-d", review_ref], timeout=60)
+
+
 def release(args):
+    """Remove a borrowed source tree, its private review ref and its cleanup root.
+
+    Refuses to delete anything the manifest does not prove this script created: the schema,
+    the worktree basename prefix and the cleanup-marker token must all match. Reports
+    `released` only once the paths are actually gone; otherwise exits 2 naming what is left.
+    """
     try:
         manifest = _load(args.manifest)
     except Exception as exc:
@@ -278,6 +298,7 @@ def release(args):
     already_absent = not os.path.exists(path)
     if (already_absent and isinstance(cleanup_root, str) and not os.path.exists(cleanup_root) and
             os.path.basename(cleanup_root).startswith(("quirk-review-cleanup-", "quirk-review-clone-"))):
+        _drop_review_ref(manifest)
         _emit({"released": True, "kind": manifest.get("kind"), "already_absent": True})
         return 0
     if not _safe_marker(manifest):
@@ -287,12 +308,13 @@ def release(args):
         if removed.returncode != 0 and os.path.exists(path):
             return _error("worktree cleanup failed: %s" % (removed.stderr.strip() or removed.stdout.strip()))
     cleanup_root = manifest["cleanup_root"]
-    if manifest.get("kind") == "temp-clone":
-        shutil.rmtree(cleanup_root, ignore_errors=True)
-    else:
-        shutil.rmtree(cleanup_root, ignore_errors=True)
-        if os.path.exists(path):
-            shutil.rmtree(path, ignore_errors=True)
+    shutil.rmtree(cleanup_root, ignore_errors=True)
+    if manifest.get("kind") != "temp-clone" and os.path.exists(path):
+        shutil.rmtree(path, ignore_errors=True)
+    remaining = [item for item in (cleanup_root, path) if os.path.exists(item)]
+    if remaining:
+        return _error("cleanup incomplete; still present: %s" % ", ".join(remaining))
+    _drop_review_ref(manifest)
     _emit({"released": True, "kind": manifest.get("kind"), "already_absent": already_absent})
     return 0
 

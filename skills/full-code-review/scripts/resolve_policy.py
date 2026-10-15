@@ -37,8 +37,11 @@ class PolicyError(Exception):
 
 
 def _git(root, *args, timeout=30):
-    return subprocess.run(["git", "-C", str(root)] + list(args), capture_output=True,
-                          text=True, timeout=timeout)
+    try:
+        return subprocess.run(["git", "-C", str(root)] + list(args), capture_output=True,
+                              text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise PolicyError("git %s timed out after %ds" % (args[0], timeout))
 
 
 class _FsSource:
@@ -72,8 +75,19 @@ class _RefSource:
         self.stash = Path(stash)
 
     def read(self, rel):
+        """Return the file's text at the ref, None only when the path is not a file there.
+
+        An unreadable ref raises, so a bad --policy-ref cannot quietly mean "no project policy".
+        """
+        entry = _git(self.root, "ls-tree", self.ref, "--", rel)
+        if entry.returncode != 0:
+            raise PolicyError("cannot read %s at %s: %s" % (rel, self.ref, entry.stderr.strip()[:200]))
+        if " blob " not in entry.stdout.split("\t", 1)[0]:
+            return None
         result = _git(self.root, "show", "%s:%s" % (self.ref, rel))
-        return result.stdout if result.returncode == 0 else None
+        if result.returncode != 0:
+            raise PolicyError("cannot read %s at %s: %s" % (rel, self.ref, result.stderr.strip()[:200]))
+        return result.stdout
 
     def listdir(self, rel, suffix=".md"):
         result = _git(self.root, "ls-tree", "--name-only", "%s:%s" % (self.ref, rel))
@@ -257,7 +271,14 @@ def _user_pack_dir(pack_flag):
 
 
 def resolve_policy(context, source_root, lenses_dir, out_dir, policy_ref=None, pack=None):
-    """Return the merged policy dict; raises PolicyError on a malformed pack or REVIEW.md."""
+    """Return the merged policy dict.
+
+    Raises PolicyError on a malformed pack or REVIEW.md, and when the context's seat is
+    reviewer but no `policy_ref` was given: a reviewer run must read project policy from the
+    target branch, never from the change under review.
+    """
+    if not policy_ref and context.get("seat") == "reviewer":
+        raise PolicyError("reviewer seat requires --policy-ref (the target branch SHA)")
     policy = Policy()
     lenses_dir = Path(lenses_dir)
     for path in sorted(lenses_dir.glob("*.md")):
@@ -324,13 +345,18 @@ def _generated_paths(root, paths, policy_ref, warnings):
 
 
 def apply_policy(context, policy, source_root, policy_ref=None):
-    """Drop generated and skip-glob files from `context` in place; return the excluded list."""
+    """Drop generated and skip-glob files from `context` in place; return the excluded list.
+
+    Safe to apply twice: files excluded by an earlier pass stay in `excluded_generated`.
+    """
     changed = list(context.get("changed_files") or [])
     warnings = policy.setdefault("warnings", [])
     generated = _generated_paths(source_root, changed, policy_ref, warnings)
-    excluded = [p for p in changed
-                if p in generated or any(_matches(p, g) for g in policy.get("skip_globs") or [])]
-    drop = set(excluded)
+    newly_excluded = [p for p in changed
+                      if p in generated or any(_matches(p, g) for g in policy.get("skip_globs") or [])]
+    excluded = list(context.get("excluded_generated") or [])
+    excluded += [p for p in newly_excluded if p not in excluded]
+    drop = set(newly_excluded)
     for key in ("changed_files", "test_files", "source_files", "diff_unavailable", "not_text_reviewable"):
         if isinstance(context.get(key), list):
             context[key] = [p for p in context[key] if p not in drop]

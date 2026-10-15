@@ -36,10 +36,6 @@ _BLOCK_FP_RE = re.compile(
     r"\A\s*<!--\s*quirk-review:v1[ \t]*\r?\n(?:(?!-->).*\n)*?fp:[ \t]*([0-9a-f]{64})[ \t]*\r?\n")
 
 
-# ---------------------------------------------------------------------------
-# Stable identity and filesystem primitives
-# ---------------------------------------------------------------------------
-
 def _normalize_project(project: Any) -> str:
     value = str(project or "").strip().strip("/")
     if value.endswith(".git"):
@@ -199,14 +195,14 @@ def _read_record(path: Path) -> tuple[dict | None, list[str]]:
     except FileNotFoundError:
         return None, warnings
     except (OSError, ValueError):
-        return None, ["memory ledger unreadable; continuing with a clean snapshot"]
+        return None, ["memory ledger %s unreadable; continuing with a clean snapshot" % path]
     if not isinstance(data, dict):
-        return None, ["memory ledger is not an object; continuing with a clean snapshot"]
+        return None, ["memory ledger %s is not an object; continuing with a clean snapshot" % path]
     version = data.get("schemaVersion", 0)
     if type(version) is not int or version < 0:
-        return None, ["memory ledger has an invalid schema version; refusing overwrite"]
+        return None, ["memory ledger %s has an invalid schema version; refusing overwrite" % path]
     if version > SCHEMA_VERSION:
-        return None, ["memory ledger uses an unsupported future schema; continuing with a clean snapshot"]
+        return None, ["memory ledger %s uses an unsupported future schema; continuing with a clean snapshot" % path]
     if version == 0:
         data["schemaVersion"] = SCHEMA_VERSION
         warnings.append("migrated legacy memory ledger")
@@ -216,7 +212,7 @@ def _read_record(path: Path) -> tuple[dict | None, list[str]]:
             or any(not isinstance(item, dict) for item in snapshot["findings"])
             or type(snapshot.get("started_at")) not in (int, float)
             or not isinstance(snapshot.get("file_hashes"), dict)):
-        return None, ["memory ledger has an invalid snapshot; refusing overwrite"]
+        return None, ["memory ledger %s has an invalid snapshot; refusing overwrite" % path]
     for finding in snapshot["findings"]:
         fp = finding.get("fingerprint")
         if (not isinstance(fp, str) or not _FP_RE.fullmatch(fp)
@@ -224,7 +220,7 @@ def _read_record(path: Path) -> tuple[dict | None, list[str]]:
                 or finding.get("disposition") not in ("fix", "later", "detail", "ignore", "none")
                 or finding.get("seat") not in ("author", "reviewer")
                 or ("receipt" in finding and not isinstance(finding["receipt"], dict))):
-            return None, ["memory ledger has an invalid finding; refusing overwrite"]
+            return None, ["memory ledger %s has an invalid finding; refusing overwrite" % path]
     return data, warnings
 
 
@@ -242,10 +238,6 @@ def _prune(directory: Path, now: float) -> None:
             continue
 
 
-# ---------------------------------------------------------------------------
-# GitLab discussions (GET-only)
-# ---------------------------------------------------------------------------
-
 def _default_api(host: str, method: str, endpoint: str, payload: Any = None):
     if method.upper() != "GET":
         raise ValueError("review memory only permits GET discussion requests")
@@ -254,16 +246,25 @@ def _default_api(host: str, method: str, endpoint: str, payload: Any = None):
 
 def fetch_discussions(host: str, project: str, number: Any, api: Callable | None = None,
                       forge: str = "gitlab") -> list[dict]:
-    """Fetch every review thread as a discussion dict, rejecting incomplete pagination."""
+    """Fetch every review thread as a discussion dict, rejecting incomplete pagination.
+
+    Read-only: GitLab access is restricted to GET requests.
+    """
     if not host or not project or not str(number).isdigit() or int(number) < 1:
         raise ValueError("host, project and positive change number are required")
     if forge == "github":
         return _github.GitHubForge(host, _normalize_project(project), api_call=api).list_threads(int(number))
     return _gitlab.fetch_discussions(api or _default_api, host, _normalize_project(project), number)
 
-# ---------------------------------------------------------------------------
 
 def load_snapshot(context: dict, repo: str = ".", dimensions=(), guidance=(), fresh: bool = False) -> dict:
+    """Load the prior ledger for this review target and start a new run generation.
+
+    Prior decisions carry over only while the target identity, base SHA, review
+    dimensions and guidance are unchanged, or never when `fresh` is set; otherwise the
+    snapshot records why they were discarded. Live discussions are fetched for change
+    requests. An unreadable ledger or failed fetch becomes a warning rather than an error.
+    """
     identity, warnings = _target_identity(context, repo)
     key = _target_key(identity)
     directory = _state_dir()
@@ -318,6 +319,7 @@ def load_snapshot(context: dict, repo: str = ".", dimensions=(), guidance=(), fr
         "file_hashes": hashes, "unchanged_files": unchanged,
     }
     return snapshot
+
 
 def validate_snapshot(snapshot: dict, context: dict, repo: str = ".") -> list[str]:
     """Validate persisted target, generation and current diff binding."""
@@ -572,7 +574,16 @@ def _validate_report_binding(report: dict, snapshot: dict) -> None:
 def _prior_text(prior: dict) -> str:
     return "\n".join(str(prior.get(key) or "") for key in ("title", "body_md"))
 
+
 def reconcile(report: dict, context: dict, snapshot: dict, repo: str = ".") -> dict:
+    """Return a copy of `report` with each finding's `memory` block filled in.
+
+    Matches findings to the snapshot's prior decisions and live threads by diff-anchor
+    fingerprint, and lists previously posted findings that no longer appear. `repo` must be
+    the reviewed repository so branch and local identities resolve against it. Raises
+    ValueError when the snapshot or report does not bind to `context`, or when a
+    finding's `anchor_side` is not "new" or "old". Does not modify its inputs.
+    """
     validate_snapshot(snapshot, context, repo)
     _validate_report_binding(report, snapshot)
     enriched = copy.deepcopy(report)
@@ -589,6 +600,8 @@ def reconcile(report: dict, context: dict, snapshot: dict, repo: str = ".") -> d
         if item.get("fingerprint"):
             prior_by_fp.setdefault(item["fingerprint"], []).append(item)
     for finding in enriched["findings"]:
+        if finding.get("anchor_side", "new") not in ("new", "old"):
+            raise ValueError("finding anchor_side must be new or old")
         dimensions = finding.get("dimensions") or []
         dimension = finding.get("dimension") or (sorted(dimensions)[0] if dimensions else "unknown")
         finding["file"] = str(finding["file"]).strip()
@@ -691,9 +704,6 @@ def reconcile(report: dict, context: dict, snapshot: dict, repo: str = ".") -> d
     return enriched
 
 
-# ---------------------------------------------------------------------------
-# Decisions and receipts
-# ---------------------------------------------------------------------------
 def _report_digest(report: dict) -> str:
     return hashlib.sha256(_canonical_json(report).encode("utf-8")).hexdigest()
 
@@ -706,6 +716,14 @@ def _safe_record(item: dict) -> dict:
 
 
 def commit_report(report: dict, decisions: dict | None = None, receipts: dict | None = None) -> dict:
+    """Persist triage decisions and publication receipts to the durable ledger.
+
+    `decisions` must be bound to this exact report and seat; `receipts` may stand alone and
+    only record confirmed publications. Returns `{"saved": bool, "warnings": [...]}`:
+    `saved` is False, not an exception, when the report carries no memory snapshot, a newer
+    run already wrote the ledger, the existing ledger is unreadable, or the write fails.
+    Raises ValueError for malformed or mismatched decisions, receipts and snapshots.
+    """
     memory = report.get("memory") if isinstance(report, dict) else None
     if not isinstance(memory, dict) or not isinstance(memory.get("snapshot"), dict):
         return {"saved": False, "warnings": ["report has no memory snapshot; nothing saved"]}
@@ -757,7 +775,8 @@ def commit_report(report: dict, decisions: dict | None = None, receipts: dict | 
             record, read_warnings = _read_record(ledger_path)
             warnings.extend(read_warnings)
             if record is None and ledger_path.exists():
-                return {"saved": False, "warnings": warnings + ["refusing destructive ledger overwrite"]}
+                return {"saved": False, "warnings": warnings + [
+                    "refusing destructive ledger overwrite; fix or delete %s to resume saving" % ledger_path]}
             stored = (record or {}).get("snapshot", {})
             if stored.get("started_at", 0) > started:
                 return {"saved": False, "warnings": ["stale review run refused; newer memory exists"]}
@@ -798,16 +817,14 @@ def commit_report(report: dict, decisions: dict | None = None, receipts: dict | 
     return {"saved": True, "warnings": warnings}
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
 def _load_json(path: str) -> dict:
     with open(path, encoding="utf-8") as fh:
         value = json.load(fh)
     if not isinstance(value, dict):
         raise ValueError("JSON input must be an object")
     return value
+
+
 def check_plan(report: dict, context: dict, snapshot: dict, repo: str = ".") -> dict:
     """Build the author-delivery suppression plan without changing any input."""
     identity_warnings = validate_snapshot(snapshot, context, repo)
@@ -821,7 +838,7 @@ def check_plan(report: dict, context: dict, snapshot: dict, repo: str = ".") -> 
         except Exception as exc:
             raise RuntimeError("discussion cross-check unavailable: %s" % exc) from exc
         refreshed["discussions_available"] = True
-    enriched = reconcile(report, context, refreshed)
+    enriched = reconcile(report, context, refreshed, repo)
     findings = enriched.get("findings") if isinstance(enriched.get("findings"), list) else []
     severity_order = {"Must fix": 0, "Should fix": 1, "Nit": 2}
     ranked = sorted(enumerate(findings), key=lambda pair: severity_order.get(pair[1].get("severity"), 99))
@@ -880,6 +897,11 @@ def stats(repo: str | None = None) -> dict:
 
 
 def main(argv=None) -> int:
+    """CLI entry point; every subcommand prints its JSON result to stdout.
+
+    Exit 0 on success, 2 on invalid input or an error. `save` exits 1 when nothing was
+    persisted (`saved` is false), still printing the result so callers can read the reason.
+    """
     parser = argparse.ArgumentParser(description="Load, reconcile and save review memory")
     sub = parser.add_subparsers(dest="command", required=True)
     load = sub.add_parser("load")
@@ -936,7 +958,7 @@ def main(argv=None) -> int:
             receipts = _load_json(args.receipts) if args.receipts else None
             result = commit_report(_load_json(args.report), decisions, receipts)
         print(json.dumps(result, indent=2, sort_keys=True))
-        return 0
+        return 1 if args.command == "save" and not result["saved"] else 0
     except Exception as exc:
         print(json.dumps({"error": str(exc)}, sort_keys=True), file=sys.stderr)
         return 2

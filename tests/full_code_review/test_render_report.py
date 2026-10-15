@@ -8,6 +8,8 @@ import sys
 from html.parser import HTMLParser
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "skills", "full-code-review", "scripts"))
 import render_report as m  # noqa: E402
 
@@ -170,7 +172,7 @@ def assert_dom_contract(value):
         assert dom.find_id(tab["aria-controls"])
 
 
-def test_id_determinism_and_stability(tmp_path):
+def test_id_determinism_and_stability():
     original = report()["findings"]
     shuffled_tiers = [original[1], original[0], original[2]]
     first = m.rank_findings(original)
@@ -195,7 +197,7 @@ def test_derived_numbers_and_order(tmp_path):
     assert meta["tally"] == {"must": 1, "should": 1, "nit": 1}
 
 
-def test_old_schema_degradation(tmp_path):
+def test_old_schema_degradation():
     old = report()
     old["findings"] = [{"severity": "Should fix", "dimension": "db", "file": "old.py",
                         "line": 12, "issue": "First clause. More detail.",
@@ -231,7 +233,7 @@ def test_zero_findings(tmp_path):
     assert "Per-dimension clean notes were not supplied" in output
 
 
-def test_omission_rules(tmp_path):
+def test_omission_rules():
 
 
     value = report()
@@ -244,7 +246,7 @@ def test_omission_rules(tmp_path):
     assert 'id="mutation-probe"' not in rendered and 'id="risk"' not in rendered
     assert 'id="process-notes"' not in rendered
     assert "12 files, 340 lines" not in rendered and "changed files reviewed" not in rendered
-def test_memory_sections_and_seeds_without_per_finding_context(tmp_path):
+def test_memory_sections_and_seeds_without_per_finding_context():
     value = report()
     value["findings"] = value["findings"][:1]
     value["memory"] = memory_payload()
@@ -266,7 +268,7 @@ def test_memory_sections_and_seeds_without_per_finding_context(tmp_path):
     assert 'class="memory-context"' not in html and "**Memory:**" not in markdown
 
 
-def test_impact_line_renders_above_body_and_is_escaped(tmp_path):
+def test_impact_line_renders_above_body_and_is_escaped():
     value = report()
     value["findings"] = value["findings"][:1]
     value["findings"][0]["impact"] = "Merchants  see <b>wrong</b>   `totals`."
@@ -279,7 +281,7 @@ def test_impact_line_renders_above_body_and_is_escaped(tmp_path):
     assert "**Impact:** Merchants see <b>wrong</b> `totals`." in markdown
 
 
-def test_non_text_impact_is_dropped_with_warning(tmp_path):
+def test_non_text_impact_is_dropped_with_warning():
     value = report()
     value["findings"][0]["impact"] = ["not", "text"]
     prepared, warnings = m._prepare_report(value)
@@ -287,7 +289,7 @@ def test_non_text_impact_is_dropped_with_warning(tmp_path):
     assert any("impact" in warning for warning in warnings)
 
 
-def test_fix_md_non_text_is_dropped_and_text_is_collapsed(tmp_path):
+def test_fix_md_non_text_is_dropped_and_text_is_collapsed():
     value = report()
     value["findings"][0]["fix_md"] = ["not", "text"]
     value["findings"][1]["fix_md"] = "Use  `expected`   here"
@@ -325,7 +327,7 @@ def test_impact_and_fix_md_reject_multiline_and_over_cap(tmp_path):
     assert m._prepare_report(value)[0]["findings"][0]["impact"] == "a b"
 
 
-def test_finding_digest_covers_impact_and_fix_md(tmp_path):
+def test_finding_digest_covers_impact_and_fix_md():
     base = m._prepare_report(report())[0]["findings"]
     digest = m.finding_digest(base)
     for field in ("impact", "fix_md"):
@@ -339,7 +341,7 @@ def test_finding_digest_covers_impact_and_fix_md(tmp_path):
     assert m.finding_digest(first) != m.finding_digest(second)
 
 
-def test_human_context_entries_are_type_checked(tmp_path):
+def test_human_context_entries_are_type_checked():
     good = {"note_id": 5, "discussion_id": "d", "resolved": False, "author": "a", "body": "b"}
     bad_fields = [("note_id", True), ("note_id", "5"), ("note_id", None), ("note_id", 5.0),
                   ("discussion_id", ""), ("discussion_id", 7), ("discussion_id", None),
@@ -349,22 +351,18 @@ def test_human_context_entries_are_type_checked(tmp_path):
         value["findings"] = value["findings"][:1]
         value["findings"][0]["memory"] = finding_memory()
         value["findings"][0]["memory"]["human_context"] = [dict(good, **{field: bad})]
-        try:
+        with pytest.raises(ValueError) as exc:
             m._prepare_report(value)
-            assert False, (field, bad)
-        except ValueError as exc:
-            assert field in str(exc) and "human_context" in str(exc)
+        assert field in str(exc.value) and "human_context" in str(exc.value)
     for field in ("note_id", "discussion_id", "resolved"):
         value = report()
         value["findings"] = value["findings"][:1]
         value["findings"][0]["memory"] = finding_memory()
         entry = {key: val for key, val in good.items() if key != field}
         value["findings"][0]["memory"]["human_context"] = [entry]
-        try:
+        with pytest.raises(ValueError) as exc:
             m._prepare_report(value)
-            assert False, field
-        except ValueError as exc:
-            assert field in str(exc)
+        assert field in str(exc.value)
     value = report()
     value["findings"] = value["findings"][:1]
     value["findings"][0]["memory"] = finding_memory()
@@ -388,7 +386,7 @@ def reply_attr(html):
     return json.loads(__import__("html").unescape(match.group(1))) if match else None
 
 
-def test_reply_candidates_reviewer_only_sorted_and_capped(tmp_path):
+def test_reply_candidates_reviewer_only_sorted_and_capped():
     entries = [
         {"note_id": 30, "discussion_id": "d3", "resolved": False, "author": "carol",
          "body": "late", "url": "https://gitlab.example/n30"},
@@ -411,7 +409,7 @@ def test_reply_candidates_reviewer_only_sorted_and_capped(tmp_path):
     assert reply_attr(m.render_html(reply_report("reviewer", []), TEMPLATE)) is None
 
 
-def test_own_comments_are_never_reply_candidates(tmp_path):
+def test_own_comments_are_never_reply_candidates():
     entries = [
         {"note_id": 10, "discussion_id": "d1", "resolved": False, "author": "me",
          "body": "mine", "own": True},
@@ -430,15 +428,13 @@ def test_human_context_own_must_be_a_boolean():
     good = {"note_id": 5, "discussion_id": "d", "resolved": False, "author": "a", "body": "b"}
     for bad in ("yes", 1, None):
         value = reply_report("reviewer", [dict(good, own=bad)])
-        try:
+        with pytest.raises(ValueError) as exc:
             m._prepare_report(value)
-            assert False, bad
-        except ValueError as exc:
-            assert "own" in str(exc) and "human_context" in str(exc)
+        assert "own" in str(exc.value) and "human_context" in str(exc.value)
     m._prepare_report(reply_report("reviewer", [dict(good, own=True)]))
 
 
-def test_reply_candidates_stay_attribute_only(tmp_path):
+def test_reply_candidates_stay_attribute_only():
     entries = [{"note_id": 4, "discussion_id": "d", "resolved": False, "author": "<bot>",
                 "body": "<script>bad</script>"}]
     html = m.render_html(reply_report("reviewer", entries), TEMPLATE)
@@ -449,7 +445,7 @@ def test_reply_candidates_stay_attribute_only(tmp_path):
     assert "<bot>" not in m.render_md(reply_report("reviewer", entries))
 
 
-def test_template_has_reply_toggle_and_export_line(tmp_path):
+def test_template_has_reply_toggle_and_export_line():
     assert "Reply in support" in TEMPLATE and "data-reply-targets" not in TEMPLATE
     assert "replyTargets" in TEMPLATE
     assert "Candidate" not in TEMPLATE
@@ -470,7 +466,33 @@ def test_reply_toggle_is_seeded_on_and_gates_the_export_line():
         assert TEMPLATE.count(line) == 1, line
 
 
-def test_memory_sections_keep_history_for_zero_findings(tmp_path):
+@pytest.mark.parametrize("state,section_id", [("re-found-after-resolution", "re-found-after-resolution"),
+                                              ("possible-regression", "possible-regression")])
+def test_rendered_memory_sections_neutralise_hostile_thread_urls(state, section_id):
+    value = report()
+    value["findings"] = value["findings"][:1]
+    value["findings"][0]["title"] = "Back <again>"
+    value["memory"] = memory_payload()
+    value["findings"][0]["memory"] = finding_memory(state=state)
+    html = m.render_html(value, TEMPLATE)
+    markdown = m.render_md(value)
+    section = html[html.index('id="%s"' % section_id):]
+    section = section[:section.index("</section>")]
+    assert "javascript:" not in section and section.count("<a ") == 1
+    assert "Open discussion</a>" not in section
+    assert "Back &lt;again&gt;" in section and "<again>" not in section
+    md_section = markdown[markdown.rindex("\n## ", 0, markdown.index("Back \\<again\\>")):]
+    assert "javascript:" not in markdown and "[Open discussion]" not in md_section
+    assert "Back \\<again\\>" in md_section
+
+    value["findings"][0]["memory"]["thread"]["url"] = "https://gitlab.example/discussion/9"
+    html = m.render_html(value, TEMPLATE)
+    markdown = m.render_md(value)
+    assert '<a href="https://gitlab.example/discussion/9" rel="noopener noreferrer">Open discussion</a>' in html
+    assert "[Open discussion](https://gitlab.example/discussion/9)" in markdown[markdown.index("Back \\<again\\>"):]
+
+
+def test_memory_sections_keep_history_for_zero_findings():
     value = report()
     value["findings"] = []
     value["memory"] = memory_payload()
@@ -480,27 +502,23 @@ def test_memory_sections_keep_history_for_zero_findings(tmp_path):
     assert "Re-found after resolution" not in html and "Possible regression" not in markdown
 
 
-def test_memory_schema_rejects_malformed_hash_and_thread(tmp_path):
+def test_memory_schema_rejects_malformed_hash_and_thread():
     value = report()
     value["findings"] = value["findings"][:1]
     value["memory"] = memory_payload()
     value["findings"][0]["memory"] = finding_memory()
     value["findings"][0]["memory"]["fingerprint"] = "not-a-hash"
-    try:
+    with pytest.raises(ValueError) as exc:
         m.render_html(value, TEMPLATE)
-        assert False, "malformed memory fingerprint should fail"
-    except ValueError as exc:
-        assert "fingerprint" in str(exc)
+    assert "fingerprint" in str(exc.value)
     value = report()
     value["findings"] = value["findings"][:1]
     value["memory"] = memory_payload()
     value["findings"][0]["memory"] = finding_memory()
     value["findings"][0]["memory"]["thread"]["replies"] = "bad"
-    try:
+    with pytest.raises(ValueError) as exc:
         m.render_md(value)
-        assert False, "malformed memory replies should fail"
-    except ValueError as exc:
-        assert "replies" in str(exc)
+    assert "replies" in str(exc.value)
 
 
 def test_slug_and_naming(tmp_path):
@@ -517,23 +535,17 @@ def test_slug_and_naming(tmp_path):
     assert rc == 0 and Path(meta["html"]).name == "review-local-findings.html"
 
 
-def test_review_out_dir_and_out_override(tmp_path):
+def test_review_out_dir_and_out_override(tmp_path, monkeypatch):
     value = report()
     source = Path(tmp_path) / "source.json"
     source.write_text(json.dumps(value), encoding="utf-8")
     env_dir = Path(tmp_path) / "from-env"
-    old = os.environ.get("REVIEW_OUT_DIR")
-    os.environ["REVIEW_OUT_DIR"] = str(env_dir)
-    try:
-        stdout = io.StringIO()
-        with contextlib.redirect_stdout(stdout):
-            rc = m.main(["--in", str(source), "--no-open"])
-        payload = json.loads(stdout.getvalue())
-    finally:
-        if old is None:
-            os.environ.pop("REVIEW_OUT_DIR", None)
-        else:
-            os.environ["REVIEW_OUT_DIR"] = old
+    monkeypatch.setenv("REVIEW_OUT_DIR", str(env_dir))
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        rc = m.main(["--in", str(source), "--no-open"])
+    payload = json.loads(stdout.getvalue())
+    monkeypatch.delenv("REVIEW_OUT_DIR")
     assert rc == 0 and Path(payload["html"]).parent == env_dir
 
     custom = Path(tmp_path) / "custom-name.md"
@@ -543,7 +555,7 @@ def test_review_out_dir_and_out_override(tmp_path):
     assert rc == 2 and "error" in payload
 
 
-def test_storage_key(tmp_path):
+def test_storage_key():
     value = report()
     first = m.storage_key(value["meta"], m.rank_findings(value["findings"]))
     second = m.storage_key(value["meta"], m.rank_findings(value["findings"]))
@@ -565,32 +577,28 @@ def test_storage_key(tmp_path):
     assert m.storage_key(value["meta"], value["findings"]) == "authored-key"
 
 
-def test_format_and_browser_matrix(tmp_path):
+def test_format_and_browser_matrix(tmp_path, monkeypatch):
     value = report()
     opened = []
-    saved = m.webbrowser.open
-    try:
-        m.webbrowser.open = lambda url: opened.append(url) or True
-        rc, payload, _, _ = invoke(tmp_path, value, ["--format", "md"], "md.json")
-        assert rc == 0 and payload["html"] is None and not opened
-        rc, payload, _, _ = invoke(tmp_path, value, ["--format", "both"], "both.json")
-        assert rc == 0 and Path(payload["html"]).exists() and Path(payload["md"]).exists() and not opened
-        source = Path(tmp_path) / "open.json"
-        source.write_text(json.dumps(value), encoding="utf-8")
-        target = Path(tmp_path) / "review #1.html"
-        stdout = io.StringIO()
-        with contextlib.redirect_stdout(stdout):
-            rc = m.main(["--in", str(source), "--out", str(target)])
-        payload = json.loads(stdout.getvalue())
-        assert rc == 0 and payload["opened"] is True and len(opened) == 1
-        assert "%20%231.html" in opened[0]
-        m.webbrowser.open = lambda url: (_ for _ in ()).throw(RuntimeError("no browser"))
-        stdout = io.StringIO()
-        with contextlib.redirect_stdout(stdout):
-            rc = m.main(["--in", str(source), "--out", str(target)])
-        assert rc == 0 and json.loads(stdout.getvalue())["opened"] is False
-    finally:
-        m.webbrowser.open = saved
+    monkeypatch.setattr(m.webbrowser, "open", lambda url: opened.append(url) or True)
+    rc, payload, _, _ = invoke(tmp_path, value, ["--format", "md"], "md.json")
+    assert rc == 0 and payload["html"] is None and not opened
+    rc, payload, _, _ = invoke(tmp_path, value, ["--format", "both"], "both.json")
+    assert rc == 0 and Path(payload["html"]).exists() and Path(payload["md"]).exists() and not opened
+    source = Path(tmp_path) / "open.json"
+    source.write_text(json.dumps(value), encoding="utf-8")
+    target = Path(tmp_path) / "review #1.html"
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        rc = m.main(["--in", str(source), "--out", str(target)])
+    payload = json.loads(stdout.getvalue())
+    assert rc == 0 and payload["opened"] is True and len(opened) == 1
+    assert "%20%231.html" in opened[0]
+    monkeypatch.setattr(m.webbrowser, "open", lambda url: (_ for _ in ()).throw(RuntimeError("no browser")))
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        rc = m.main(["--in", str(source), "--out", str(target)])
+    assert rc == 0 and json.loads(stdout.getvalue())["opened"] is False
 
 
 def test_utf8_round_trip(tmp_path):
@@ -603,35 +611,28 @@ def test_utf8_round_trip(tmp_path):
     assert "Unicode → survives" in Path(payload["md"]).read_text(encoding="utf-8")
 
 
-def test_slot_mechanics_and_script_identity(tmp_path):
+def test_slot_mechanics_and_script_identity():
     synthetic = "<html><!-- slot:title --><title>x</title><!-- /slot:title --><body><!-- slot:main -->x<!-- /slot:main --><script>{x}</script></body></html>"
     rendered = m.render_html(report(), synthetic)
     assert "<!-- slot:" not in rendered and rendered.count("<script>") == 1
     assert re.findall(r"<script>(.*?)</script>", rendered, re.S) == re.findall(r"<script>(.*?)</script>", synthetic, re.S)
     for broken in (synthetic.replace("<!-- slot:title -->", ""), synthetic + "<!-- slot:main --><!-- /slot:main -->"):
-        try:
+        with pytest.raises(ValueError):
             m.render_html(report(), broken)
-            assert False, "missing/duplicate slot should fail"
-        except ValueError:
-            pass
     full = m.render_html(report(), TEMPLATE)
     assert re.findall(r"<script>(.*?)</script>", full, re.S) == re.findall(r"<script>(.*?)</script>", TEMPLATE, re.S)
 
 
-def test_template_error_reaches_json_contract(tmp_path):
+def test_template_error_reaches_json_contract(tmp_path, monkeypatch):
     value = report()
     broken = Path(tmp_path) / "broken.html"
     broken.write_text("<html><!-- slot:title -->x<!-- /slot:title --></html>", encoding="utf-8")
-    saved = m._template_path
-    try:
-        m._template_path = lambda: str(broken)
-        rc, payload, stderr, _ = invoke(tmp_path, value, filename="template-error.json")
-    finally:
-        m._template_path = saved
+    monkeypatch.setattr(m, "_template_path", lambda: str(broken))
+    rc, payload, stderr, _ = invoke(tmp_path, value, filename="template-error.json")
     assert rc == 2 and "error" in payload and stderr == ""
 
 
-def test_escaping_end_to_end(tmp_path):
+def test_escaping_end_to_end():
     value = report()
     value["findings"][1]["title"] = 'Bad <"> title'
     value["findings"][1]["body_md"] = "<img src=x onerror=boom>"
@@ -641,7 +642,7 @@ def test_escaping_end_to_end(tmp_path):
     assert "<img src=x" not in rendered and "&lt;img" in rendered
 
 
-def test_dom_contract_and_dimension_round_trip(tmp_path):
+def test_dom_contract_and_dimension_round_trip():
     rendered = m.render_html(report(), TEMPLATE)
     assert_dom_contract(rendered)
     assert_dom_contract(TEMPLATE)
@@ -650,41 +651,55 @@ def test_dom_contract_and_dimension_round_trip(tmp_path):
     assert json.loads(target["data-dims"]) == ["db", "coordinator verification"]
     broken = re.sub(r'<button class="btn" type="button" id="btn-export">.*?</button>', "", rendered, count=1)
     assert parse(broken).find_id("btn-export") is None
-    try:
+    with pytest.raises(AssertionError):
         assert_dom_contract(broken)
-        assert False, "parsed DOM pin must detect the missing element"
-    except AssertionError:
-        pass
 
 
-def test_validation_errors(tmp_path):
-    cases = [[], {"meta": [], "findings": []}]
-    bad = report(); bad["meta"]["target"] = "tag"; cases.append(bad)
-    bad = report(); bad["findings"] = "oops"; cases.append(bad)
-    bad = report(); bad["findings"] = ["oops"]; cases.append(bad)
-    bad = report(); bad["meta"]["title"] = []; cases.append(bad)
-    bad = report(); bad["meta"]["title"] = "   "; cases.append(bad)
-    bad = report(); bad["findings"][0]["dimensions"] = ["ok", 3]; cases.append(bad)
-    bad = report(); bad["meta"]["number"] = "7/x"; cases.append(bad)
-    bad = report(); bad["meta"]["number"] = 0; cases.append(bad)
-    bad = report(); bad["meta"] = {"target": "branch", "title": "x", "verdict": "Approve"}; cases.append(bad)
-    bad = report(); bad["meta"] = {"target": "branch", "branch": "***", "title": "x", "verdict": "Approve"}; cases.append(bad)
-    bad = report(); bad["findings"][0]["severity"] = "Blocker"; cases.append(bad)
-    bad = report(); bad["meta"].pop("verdict"); cases.append(bad)
-    bad = report(); bad["findings"][0].pop("file"); cases.append(bad)
-    bad = report(); bad["findings"][0]["line"] = ""; cases.append(bad)
-    bad = report(); bad["findings"][1]["file"] = bad["findings"][0]["file"]; bad["findings"][1]["line"] = bad["findings"][0]["line"]; cases.append(bad)
-    bad = report(); bad["findings"][0]["title"] = "bad\nline"; cases.append(bad)
-    bad = report(); bad["meta"]["title"] = "bad\rline"; cases.append(bad)
-    bad = report(); bad["meta"]["title"] = "bad trailing\n"; cases.append(bad)
-    bad = report(); bad["findings"][0]["file"] = "bad\u2028file"; cases.append(bad)
-    bad = report(); bad["findings"][0]["line"] = "9\r"; cases.append(bad)
-    bad = report(); bad["findings"][0].pop("issue"); cases.append(bad)
-    for index, value in enumerate(cases):
-        rc, payload, stderr, _ = invoke(tmp_path, value, filename="bad-%d.json" % index)
-        assert rc == 2 and set(payload) == {"error"}, (index, payload)
-        assert stderr == ""
+def _bad(mutate):
+    value = report()
+    mutate(value)
+    return value
 
+
+_INVALID_REPORTS = [
+    ([], "report JSON must be an object"),
+    ({"meta": [], "findings": []}, "meta must be an object"),
+    (_bad(lambda v: v["meta"].update(target="tag")), "meta.target must be change, branch, or local"),
+    (_bad(lambda v: v.update(findings="oops")), "findings must be a list"),
+    (_bad(lambda v: v.update(findings=["oops"])), "finding 1 must be an object"),
+    (_bad(lambda v: v["meta"].update(title=[])), "meta.title must be a non-empty string"),
+    (_bad(lambda v: v["meta"].update(title="   ")), "meta.title must be a non-empty string"),
+    (_bad(lambda v: v["findings"][0].update(dimensions=["ok", 3])), "finding 1 dimensions must be a list of strings"),
+    (_bad(lambda v: v["meta"].update(number="7/x")), "meta.number must be a positive integer"),
+    (_bad(lambda v: v["meta"].update(number=0)), "meta.number must be a positive integer"),
+    (_bad(lambda v: v.update(meta={"target": "branch", "title": "x", "verdict": "Approve"})),
+     "meta.branch must be a non-empty string"),
+    (_bad(lambda v: v.update(meta={"target": "branch", "branch": "***", "title": "x", "verdict": "Approve"})),
+     "target slug is empty"),
+    (_bad(lambda v: v["findings"][0].update(severity="Blocker")), "finding 1 has an unknown severity"),
+    (_bad(lambda v: v["meta"].pop("verdict")), "meta.verdict must be a string"),
+    (_bad(lambda v: v["findings"][0].pop("file")), "finding 1 is missing file"),
+    (_bad(lambda v: v["findings"][0].update(line="")), "finding 1 line must not be empty"),
+    (_bad(lambda v: v["findings"][1].update(file=v["findings"][0]["file"], line=v["findings"][0]["line"])),
+     "duplicate finding identity"),
+    (_bad(lambda v: v["findings"][0].update(title="bad\nline")), "finding 1 title contains a line-breaking character"),
+    (_bad(lambda v: v["meta"].update(title="bad\rline")), "meta.title contains a line-breaking character"),
+    (_bad(lambda v: v["meta"].update(title="bad trailing\n")), "meta.title contains a line-breaking character"),
+    (_bad(lambda v: v["findings"][0].update(file="bad\u2028file")), "finding 1 file contains a line-breaking character"),
+    (_bad(lambda v: v["findings"][0].update(line="9\r")), "finding 1 line contains a line-breaking character"),
+    (_bad(lambda v: v["findings"][0].pop("issue")), "finding 1 needs issue or body_md"),
+]
+
+
+@pytest.mark.parametrize("value,message", _INVALID_REPORTS)
+def test_validation_errors(tmp_path, value, message):
+    rc, payload, stderr, _ = invoke(tmp_path, value)
+    assert rc == 2 and set(payload) == {"error"}
+    assert message in payload["error"]
+    assert stderr == ""
+
+
+def test_unreadable_input_files_exit_2(tmp_path):
     invalid = Path(tmp_path) / "invalid.json"
     invalid.write_text("{not json", encoding="utf-8")
     stdout = io.StringIO()
@@ -717,7 +732,7 @@ def test_export_forgery_rejected(tmp_path):
     assert rc == 2 and "line-breaking" in payload["error"]
 
 
-def test_md_omitted_risk_keeps_fixed_ordinals(tmp_path):
+def test_md_omitted_risk_keeps_fixed_ordinals():
     value = report()
     value.pop("risk")
     rendered = m.render_md(value)
@@ -731,7 +746,7 @@ def test_md_omitted_risk_keeps_fixed_ordinals(tmp_path):
     assert remaining == sorted(remaining)
 
 
-def test_md_backend(tmp_path):
+def test_md_backend():
     rendered = m.render_md(report())
     headings = [rendered.index("## %d." % number) for number in range(1, 6)]
     assert headings == sorted(headings)
@@ -758,27 +773,7 @@ def test_stdout_reports_highlighter_and_warns_on_builtin_fallback(tmp_path, monk
     assert not any("Pygments" in warning for warning in payload.get("warnings", []))
 
 
-if __name__ == "__main__":
-    import tempfile
-    import traceback
-    fails = 0
-    for name in sorted(n for n in dict(globals()) if n.startswith("test_")):
-        fn = globals()[name]
-        if not callable(fn):
-            continue
-        with tempfile.TemporaryDirectory() as td:
-            try:
-                fn(Path(td))
-                print("PASS", name)
-            except Exception:
-                fails += 1
-                print("FAIL", name)
-                traceback.print_exc()
-    print("DONE fails=%d" % fails)
-    sys.exit(1 if fails else 0)
-
-
-def test_risk_kpis_tone_per_metric(tmp_path):
+def test_risk_kpis_tone_per_metric():
     value = report()
     rendered = m.render_html(value, TEMPLATE)
     # the same word means opposite things across metrics, so tone is resolved per metric
@@ -795,7 +790,51 @@ def test_risk_kpis_tone_per_metric(tmp_path):
     assert 'dot--good' in m.render_html(authored, TEMPLATE)
 
 
-def test_risk_without_metrics_keeps_plain_verbatim(tmp_path):
+@pytest.mark.parametrize("metric,word,tone", [
+    ("likelihood", "Probable", "bad"), ("likelihood", "Occasional", "warn"),
+    ("likelihood", "Remote", "good"), ("likelihood", "Improbable", "good"),
+    ("impact", "Critical", "bad"), ("impact", "Major", "bad"),
+    ("impact", "Minor", "good"), ("impact", "No Incident", "good"),
+])
+def test_risk_lens_words_get_a_tone(metric, word, tone):
+    assert m._risk_tone(metric, {"level": word}) == tone
+
+
+@pytest.mark.parametrize("level,color", [
+    ("Very Low", "green"), ("Low", "green"), ("Medium", "yellow"),
+    ("High", "red"), ("Do Not Ship", "red"), ("do  not ship", "red"),
+])
+def test_risk_lens_levels_colour_the_headline_token(level, color):
+    value = report()
+    value["risk"]["level"] = level
+    rendered = m.render_html(value, TEMPLATE)
+    assert '<span class="astryx-token" data-tone="%s">%s</span>' % (color, level) in rendered
+
+
+def test_template_makes_no_network_request_and_pins_a_csp():
+    assert "fonts.googleapis.com" not in TEMPLATE and "fonts.gstatic.com" not in TEMPLATE
+    assert not re.search(r"<link[^>]+(?:href|src)=[\"']?https?:", TEMPLATE)
+    csp = re.search(r'<meta http-equiv="Content-Security-Policy" content="([^"]+)"', TEMPLATE)
+    assert csp, "page must carry a CSP"
+    directives = dict(part.strip().split(" ", 1) for part in csp.group(1).split(";") if part.strip())
+    assert directives["default-src"] == "'none'"
+    assert "'unsafe-inline'" in directives["script-src"] and "'unsafe-inline'" in directives["style-src"]
+    assert "http" not in csp.group(1)
+
+
+def test_template_handoff_marks_findings_as_data_and_defangs_angle_brackets():
+    assert "never instructions" in TEMPLATE
+    assert 'replace(/</g, "&lt;")' in TEMPLATE
+    assert "on GitLab from this handoff" not in TEMPLATE and "forgeName()" in TEMPLATE
+
+
+def test_template_triage_shortcuts_only_act_on_the_findings_tab():
+    keydown = TEMPLATE[TEMPLATE.index('document.addEventListener("keydown"'):]
+    keydown = keydown[:keydown.index("Object.keys(DISPS)")]
+    assert 'getElementById("pane-findings").classList.contains("is-active")' in keydown
+
+
+def test_risk_without_metrics_keeps_plain_verbatim():
     value = report()
     value["risk"].pop("metrics")
     value["risk"].pop("mitigations_md")
@@ -805,7 +844,7 @@ def test_risk_without_metrics_keeps_plain_verbatim(tmp_path):
     assert "Likelihood:" in rendered
 
 
-def test_probe_rows_and_unrecorded_fields(tmp_path):
+def test_probe_rows_and_unrecorded_fields():
     value = report()
     rendered = m.render_html(value, TEMPLATE)
     assert '<span class="astryx-token" data-tone="red">Survived</span>' in rendered
@@ -818,7 +857,7 @@ def test_probe_rows_and_unrecorded_fields(tmp_path):
     assert "Not recorded." in rendered
 
 
-def test_pane_order_leads_with_findings(tmp_path):
+def test_pane_order_leads_with_findings():
     rendered = m.render_html(report(), TEMPLATE)
     # findings are the work surface, so they lead; context panes follow in the tab strip
     order = [rendered.index('id="pane-%s"' % name)
@@ -829,7 +868,7 @@ def test_pane_order_leads_with_findings(tmp_path):
             < rendered.index('id="pane-notes"'))
 
 
-def test_controls_strip_and_export_panel(tmp_path):
+def test_controls_strip_and_export_panel():
     rendered = m.render_html(report(), TEMPLATE)
     # progress and filters pin above the rail list; export pins below it
     assert rendered.index('id="progress"') < rendered.index('class="filters"')
@@ -839,7 +878,7 @@ def test_controls_strip_and_export_panel(tmp_path):
     assert "paste it back" in rendered
 
 
-def test_rail_is_drag_resizable(tmp_path):
+def test_rail_is_drag_resizable():
     rendered = m.render_html(report(), TEMPLATE)
     # the handle ships inside the rail, after the export panel, so it spans the
     # whole column rather than any one of the three stacked regions
@@ -856,14 +895,14 @@ def test_rail_is_drag_resizable(tmp_path):
     assert key != "quirk-review:rail-width"
 
 
-def test_findings_fill_the_detail_pane(tmp_path):
+def test_findings_fill_the_detail_pane():
     rendered = m.render_html(report(), TEMPLATE)
     assert ".finding { min-width: 0; }" in rendered
     assert "max-width: 96ch" not in rendered
     assert "max-width: 74ch" not in rendered
 
 
-def test_type_ramp_override_outranks_the_vendored_theme(tmp_path):
+def test_type_ramp_override_outranks_the_vendored_theme():
     rendered = m.render_html(report(), TEMPLATE)
     # the theme declares the ramp inside @layer astryx-theme; an unlayered
     # :root block is what beats it, so the override must stay after the tokens
@@ -871,7 +910,7 @@ def test_type_ramp_override_outranks_the_vendored_theme(tmp_path):
     assert rendered.index("--font-size-base: 1rem;") < rendered.index("@media (max-width: 64rem)")
 
 
-def test_recommended_order_is_markdown_only(tmp_path):
+def test_recommended_order_is_markdown_only():
     value = report()
     rendered = m.render_html(value, TEMPLATE)
     assert 'id="recommended-order"' not in rendered
@@ -879,7 +918,7 @@ def test_recommended_order_is_markdown_only(tmp_path):
     assert "Bound the query" in m.render_md(value)
 
 
-def test_reviewer_mode_switches_labels_and_isolates_storage(tmp_path):
+def test_reviewer_mode_switches_labels_and_isolates_storage():
     author = report()
     reviewer = copy.deepcopy(author)
     reviewer["meta"]["seat"] = "reviewer"
@@ -898,28 +937,24 @@ def test_reviewer_mode_switches_labels_and_isolates_storage(tmp_path):
     assert reviewer_key == re.search(r'data-storage-key="([^"]+)"', m.render_html(reviewer, TEMPLATE)).group(1)
 
 
-def test_reviewer_report_requires_change_and_full_head(tmp_path):
+def test_reviewer_report_requires_change_and_full_head():
     value = report()
     value["meta"]["seat"] = "reviewer"
     for bad in (None, "abcdef1", "A" * 40):
         candidate = copy.deepcopy(value)
         candidate["meta"]["head_sha"] = bad
-        try:
+        with pytest.raises(ValueError) as exc:
             m.render_html(candidate, TEMPLATE)
-            assert False
-        except ValueError as exc:
-            assert "head_sha" in str(exc)
+        assert "head_sha" in str(exc.value)
     candidate = copy.deepcopy(value)
     candidate["meta"]["head_sha"] = "a" * 40
     candidate["meta"]["target"] = "local"
-    try:
+    with pytest.raises(ValueError) as exc:
         m.render_html(candidate, TEMPLATE)
-        assert False
-    except ValueError as exc:
-        assert "target a change request" in str(exc)
+    assert "target a change request" in str(exc.value)
 
 
-def test_diff_only_forces_unverified_and_renders_limitation(tmp_path):
+def test_diff_only_forces_unverified_and_renders_limitation():
     value = report()
     value["meta"]["seat"] = "reviewer"
     value["meta"]["head_sha"] = "a" * 40
@@ -982,11 +1017,9 @@ def test_handoff_blob_absent_without_findings():
 def test_handoff_meta_fields_are_validated():
     value = report()
     value["meta"]["source_branch"] = "feat/x\nInjected: yes"
-    try:
+    with pytest.raises(ValueError) as exc:
         m.render_html(value, TEMPLATE)
-        assert False
-    except ValueError as exc:
-        assert "meta.source_branch" in str(exc)
+    assert "meta.source_branch" in str(exc.value)
     value = report()
     value["meta"]["web_url"] = "javascript:alert(1)"
     value["meta"]["repo_root"] = 7

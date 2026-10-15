@@ -4,6 +4,10 @@
 Gathers the TARGET repo's own conventions (.claude/skills review skills and the
 reference docs they route to, the CLAUDE.md hierarchy, .claude/rules/*.md,
 AGENTS.md/CONVENTIONS.md). Pack guidance is resolved separately by resolve_policy.py.
+Paths whose real location is outside the git root (symlink escapes) are never returned.
+With --exclude-changed, guidance files that the change itself touches are withheld and
+listed under target_repo.changed_guidance, so a reviewer-seat run does not take its
+conventions from the code under review.
 Prints JSON.
 Exit 0 on all expected outcomes; missing sources yield empty lists / null.
 """
@@ -18,14 +22,22 @@ from pathlib import Path
 
 REFERENCE_CAP = 200
 INDEX_NAMES = ("index.md", "readme.md")
+GUIDANCE_LISTS = ("repo_skills", "repo_skill_references", "repo_skill_reference_indexes",
+                  "claude_md", "rules", "other")
 
 
 def normalize_repo_key(origin_url):
+    """Turn a git remote URL into a filesystem-safe repo key.
+
+    The host is dropped and the remaining path segments are joined with `--`, so the
+    https, ssh and scp forms of one remote all produce the same key
+    (`git@host:group/sub/repo.git` -> `group--sub--repo`).
+    """
     s = origin_url.strip()
     s = re.sub(r'\.git$', '', s)
-    s = re.sub(r'^\w+://', '', s)        # strip https:// or ssh://
-    s = re.sub(r'^[^@/]+@', '', s)       # strip user@
-    s = re.sub(r'^[^/:]+[:/]', '', s)    # strip host and first separator
+    s = re.sub(r'^\w+://', '', s)
+    s = re.sub(r'^[^@/]+@', '', s)
+    s = re.sub(r'^[^/:]+[:/]', '', s)
     parts = [p for p in re.split(r'/', s) if p]
     return '--'.join(parts)
 
@@ -56,7 +68,7 @@ def ancestor_claude_mds(git_root, changed_files):
         try:
             p.relative_to(git_root)
         except ValueError:
-            continue  # changed path escapes the repo root; skip
+            continue
         d = p.parent
         while True:
             md = d / "CLAUDE.md"
@@ -89,10 +101,24 @@ def skill_references(git_root):
     return found[:REFERENCE_CAP], max(0, len(found) - REFERENCE_CAP)
 
 
-def gather(git_root, changed_files):
-    git_root = Path(git_root)
+def _inside(root_real, path):
+    return Path(path).resolve().is_relative_to(root_real)
+
+
+def _repo_relative(root, path):
+    return Path(path).relative_to(root).as_posix()
+
+
+def gather(git_root, changed_files, exclude_changed=False):
+    """Collect the repo's own guidance files, all confined to `git_root`.
+
+    Any path that resolves outside the root is dropped. With `exclude_changed`, files whose
+    repo-relative path is in `changed_files` are removed from every list and returned under
+    `changed_guidance` instead.
+    """
+    git_root = Path(git_root).resolve()
     references, references_dropped = skill_references(git_root)
-    return {
+    found = {
         "repo_skills": sorted(glob.glob(str(git_root / ".claude" / "skills" / "*" / "SKILL.md"))),
         "repo_skill_references": references,
         "repo_skill_reference_indexes": [f for f in references if Path(f).name.lower() in INDEX_NAMES],
@@ -101,12 +127,28 @@ def gather(git_root, changed_files):
         "rules": sorted(glob.glob(str(git_root / ".claude" / "rules" / "*.md"))),
         "other": [str(git_root / n) for n in ("AGENTS.md", "CONVENTIONS.md") if (git_root / n).is_file()],
     }
+    changed = {Path(f).as_posix() for f in changed_files}
+    changed_guidance = set()
+    for key in GUIDANCE_LISTS:
+        kept = []
+        for path in found[key]:
+            if not _inside(git_root, path):
+                continue
+            if exclude_changed and _repo_relative(git_root, path) in changed:
+                changed_guidance.add(_repo_relative(git_root, path))
+                continue
+            kept.append(path)
+        found[key] = kept
+    found["changed_guidance"] = sorted(changed_guidance)
+    return found
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Discover the reviewed repo's own convention files.")
     ap.add_argument("--git-root", required=True)
     ap.add_argument("--changed-files", help="newline-delimited list of changed repo-relative paths")
+    ap.add_argument("--exclude-changed", action="store_true",
+                    help="withhold guidance files listed in --changed-files (reviewer seat)")
     args = ap.parse_args(argv)
 
     changed = []
@@ -114,7 +156,7 @@ def main(argv=None):
         with open(args.changed_files) as fh:
             changed = [ln.strip() for ln in fh if ln.strip()]
 
-    target = gather(args.git_root, changed)
+    target = gather(args.git_root, changed, exclude_changed=args.exclude_changed)
     print(json.dumps({"repo_key": git_origin_key(args.git_root), "target_repo": target}, indent=2))
     return 0
 

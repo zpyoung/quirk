@@ -7,7 +7,7 @@
     "head_sha": "abc123abc123abc123abc123abc123abc123abcd",
     "title": "Sample full code review report",
     "verdict": "Fix, then merge",
-    "standfirst_md": "The feature is coherent and its security boundary is genuinely well built — untrusted the forge note text never drives a posting decision, and the flow fails closed before any mutation. One defect blocks it: `--repo` is never threaded to the `reconcile` and `check` subcommands, so memory breaks outright for every branch and local author-seat review. The suite cannot see it because every test stays in PR mode, which is also the largest of the coverage gaps below.",
+    "standfirst_md": "The feature is coherent and its security boundary is genuinely well built — untrusted forge note text never drives a posting decision, and the flow fails closed before any mutation. One defect blocks it: `--repo` is never threaded to the `reconcile` and `check` subcommands, so memory breaks outright for every branch and local author-seat review. The suite cannot see it because every test stays in PR mode, which is also the largest of the coverage gaps below.",
     "ticket": "DEMO-1",
     "forge": "github",
     "number": 123,
@@ -45,7 +45,7 @@
     ],
     "source_access": "author-worktree",
     "mutation_consent": false,
-    "notes_md": "⚠️ **Large PR** — 13 files, 2386 lines changed. This exceeds the skill's own hard-block threshold of 2000 changed lines; the review proceeded on explicit instruction to review it as a single PR. Depth was held up rather than down to compensate: every specialist ran at the deepest verification tier regardless of the Low risk rating, so no Must/Should finding rests on the diff alone.\n\nAll eleven applicable dimensions returned schema-valid results; none failed or was dropped. Verification reads went against this worktree rather than `the forge API ...?ref=<head>`, which is sound here because `git rev-parse HEAD` equals `refs.head` (`24727f69`) and the tree was clean for the whole run.\n\nTwo `cross-repo` findings land in files **outside this PR's diff** (`services/orders/sync.py`, `services/reports/common.py`). They are real consequences of this change, but the forge cannot anchor an inline comment to a file the PR does not touch."
+    "notes_md": "⚠️ **Large PR** — 13 files, 2386 lines changed. This exceeds the skill's own hard-block threshold of 2000 changed lines; the review proceeded on explicit instruction to review it as a single PR. Depth was held up rather than down to compensate: every specialist ran at the deepest verification tier regardless of the Low risk rating, so no Must/Should finding rests on the diff alone.\n\nAll eleven applicable dimensions returned schema-valid results; none failed or was dropped. Verification reads went against this worktree rather than the forge's file-contents API at `?ref=<head>`, which is sound here because `git rev-parse HEAD` equals `refs.head` (`24727f69`) and the tree was clean for the whole run.\n\nTwo `cross-repo` findings land in files **outside this PR's diff** (`services/orders/sync.py`, `services/reports/common.py`). They are real consequences of this change, but the forge cannot anchor an inline comment to a file the PR does not touch."
   },
   "risk": {
     "level": "Low",
@@ -77,11 +77,11 @@
       }
     },
     "mitigations_md": "The design already carries its own best mitigation: `stage` records every suppression's `reason` and `thread_url` in the staged state *before* `publish --confirm` touches the forge, and `_prepare_memory_report` raises before any draft is created when snapshot validation or the discussion fetch fails. That makes the feature fail closed and every suppression visible pre-mutation, which is why no additional risk-reduction technique is recommended. What would move the rating is narrowing the likelihood term specifically: the fingerprint collision test and the binding-mismatch test below attack exactly the false-suppression path that drives it.",
-    "verbatim_md": "**Risk: Low**\n\n- Severity: No Incident - internal inventory tooling whose ledger only records review state. The posting path does call the real forge API, but the blast radius is the team's own review workflow - worst case is a duplicate or a missing review comment, never a user-facing incident.\n- Likelihood: Occasional - the new `_plan()` `suppress_post` branch silently omits a finding from posting when `review_memory.reconcile()` matches its fingerprint against a live discussion marker; a false-positive match on real the forge note bodies would drop a legitimate finding with no visible error. The 78 new tests exercise the known edge cases (author-identity check, late-duplicate block before bulk publish, snapshot-binding validation) but only against `Fakethe forge`, not live note bodies.\n- Recommendation: none - the natural mitigation (log-only mode) is already structural: `stage` records `omitted[].reason`/`thread_url` in the staged state before `publish --confirm` touches the forge, and `_prepare_memory_report` raises `ReviewError` before any draft is created on snapshot-validation or discussion-fetch failure, so the flow fails closed and every suppression is visible pre-mutation. Splitting isn't warranted - one cohesive feature (module + its two call sites + tests) at No Incident severity.\n\nSupporting checks: no revert found on `main`; no high-risk file list in this repo's `CLAUDE.md`; the zero-approvals factor does not apply (PR #123 is `state: opened`, not merged).",
+    "verbatim_md": "**Risk: Low**\n\n- Severity: No Incident - internal inventory tooling whose ledger only records review state. The posting path does call the real forge API, but the blast radius is the team's own review workflow - worst case is a duplicate or a missing review comment, never a user-facing incident.\n- Likelihood: Occasional - the new `_plan()` `suppress_post` branch silently omits a finding from posting when `review_memory.reconcile()` matches its fingerprint against a live discussion marker; a false-positive match on real the forge note bodies would drop a legitimate finding with no visible error. The 78 new tests exercise the known edge cases (author-identity check, late-duplicate block before bulk publish, snapshot-binding validation) but only against `FakeForge`, not live note bodies.\n- Recommendation: none - the natural mitigation (log-only mode) is already structural: `stage` records `omitted[].reason`/`thread_url` in the staged state before `publish --confirm` touches the forge, and `_prepare_memory_report` raises `ReviewError` before any draft is created on snapshot-validation or discussion-fetch failure, so the flow fails closed and every suppression is visible pre-mutation. Splitting isn't warranted - one cohesive feature (module + its two call sites + tests) at No Incident severity.\n\nSupporting checks: no revert found on `main`; no high-risk file list in this repo's `CLAUDE.md`; the zero-approvals factor does not apply (PR #123 is `state: opened`, not merged).",
     "caveats": [
       {
         "title": "The fail-closed claim is proven only against a fake",
-        "body_md": "The 78 new tests exercise the known edge cases — author-identity check, late-duplicate block before bulk publish, snapshot binding — but entirely against `Fakethe forge`, never against real note bodies. The identity gate itself is sound on inspection; what is untested is its behaviour on live data."
+        "body_md": "The 78 new tests exercise the known edge cases — author-identity check, late-duplicate block before bulk publish, snapshot binding — but entirely against `FakeForge`, never against real note bodies. The identity gate itself is sound on inspection; what is untested is its behaviour on live data."
       }
     ]
   },
@@ -135,7 +135,8 @@
           }
         ]
       },
-      "impact": "Branch and local reviews silently lose their memory, so every prior finding comes back as new and remembered decisions are dropped."
+      "impact": "Branch and local reviews silently lose their memory, so every prior finding comes back as new and remembered decisions are dropped.",
+      "fix_md": "Add `--repo` to the `reconcile` and `check` subcommands and pass it through to `validate_snapshot`."
     },
     {
       "severity": "Should fix",
@@ -166,7 +167,8 @@
         "candidates": [],
         "human_context": []
       },
-      "impact": "Two unrelated reviews running at once block each other on every ledger save, and each save gets slower as the ledger grows."
+      "impact": "Two unrelated reviews running at once block each other on every ledger save, and each save gets slower as the ledger grows.",
+      "fix_md": "Scope the lock per target and make `_prune` stat the file mtime instead of decoding every ledger."
     },
     {
       "severity": "Nit",
@@ -207,13 +209,14 @@
         ],
         "human_context": []
       },
-      "impact": "Callers have to read the body to learn when memory is discarded, which is the contract most likely to be broken by a later edit."
+      "impact": "Callers have to read the body to learn when memory is discarded, which is the contract most likely to be broken by a later edit.",
+      "fix_md": "Add a docstring and `Sequence[str]` annotations to `load_snapshot`."
     }
   ],
   "assumptions": [
     "The Step 2 hard block (2386 changed lines > 2000) was overridden on explicit user instruction to review as a single PR; a split into the suggested A/B/C stack would have given each slice a warn-level rather than block-level review.",
     "Every specialist ran at the deepest verification tier as a conservative floor, because `risk` ran in parallel with the fan-out rather than strictly before it. The rating came back Low, so the applied depth exceeded what the rating required — it can only have over-verified, never under-verified.",
-    "Findings were verified by reading this worktree at `refs.head` (`24727f694eb15238c6fbcbfb38e34db56c83e92f`) rather than through `the forge API` at that ref, justified by `git rev-parse HEAD` matching `refs.head` with a clean tree throughout.",
+    "Findings were verified by reading this worktree at `refs.head` (`24727f694eb15238c6fbcbfb38e34db56c83e92f`) rather than through the forge API at that ref, justified by `git rev-parse HEAD` matching `refs.head` with a clean tree throughout.",
     "The mutation probe was offered and declined, so every test-dimension finding rests on static reasoning and reading the suite rather than on a surviving mutant. Baseline was green beforehand (171 passed in 10.8s).",
     "`adversarial` did not run because PR #123 has no description; no claim in the PR was checked against the code.",
     "No pack guidance applies to this repo, and the target repo has no `.claude/skills`, `.claude/rules`, `AGENTS.md` or `CONVENTIONS.md`, so conventions were judged against the repo `CLAUDE.md` only.",
@@ -227,7 +230,7 @@
     },
     {
       "title": "Two findings cannot be posted inline",
-      "body_md": "The `sync.py` and `services/reports/common.py` findings sit outside the diff. the forge rejects a `position` for a file the PR does not touch, so these need either a plain PR comment or a follow-up issue."
+      "body_md": "The `sync.py` and `services/reports/common.py` findings sit outside the diff. The forge rejects a `position` for a file the PR does not touch, so these need either a plain PR comment or a follow-up issue."
     }
   ],
   "mutation_probe": {

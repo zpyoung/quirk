@@ -17,8 +17,9 @@ Each layer overrides the one before it:
    changed file. A deeper file overrides a shallower one key by key.
 
 **In the reviewer seat, the project pack and `REVIEW.md` are read from the target
-branch** (`--policy-ref <target SHA>`), so a change cannot weaken its own review by
-editing them. Files read from a ref are written under `policy-files/` next to
+branch** (`--policy-ref <target SHA>`, taken from the context's `refs.base`), so a
+change cannot weaken its own review by editing them. The flag is required in the
+reviewer seat: `resolve_policy.py` refuses a reviewer context without it. Files read from a ref are written under `policy-files/` next to
 `policy.json` so lenses can read them from disk.
 
 ## Pack layout

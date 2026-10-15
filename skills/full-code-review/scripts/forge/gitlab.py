@@ -3,6 +3,11 @@
 Functions take the caller's command runner (`run`) or JSON API callable (`api_call`)
 as their first argument, so a script can pass a late-bound reference to its own
 module-level runner and tests that replace that runner keep intercepting every call.
+
+The reviewer-delivery functions (identity through bulk_publish) raise ForgeError on any
+failure. fetch_changes, commit_authors and find_mr_for_branch never raise: they return an
+error message or None. mr_details and current_user raise, and the GitLabForge wrappers map
+that to None for prepare_diff.
 """
 from __future__ import annotations
 
@@ -15,6 +20,7 @@ from urllib.parse import quote, urlencode
 from forge import ForgeError, positive_int, valid_sha
 from forge import change_label as _change_label
 from forge import note_url as _note_url
+from forge.github import hunk_lines
 
 NAME = "gitlab"
 
@@ -68,34 +74,46 @@ def get_json(host, endpoint):
         raise ForgeError("GitLab discussion response was not JSON") from exc
 
 
-# --------------------------------------------------------------------------- #
-# Change reads used by prepare_diff (return None on failure, never raise)
-# --------------------------------------------------------------------------- #
+def _failure_detail(result):
+    return (result.stderr or result.stdout or "").strip()[:400]
+
 
 def fetch_changes(run, host, project, iid):
-    """Return (changes_payload, None) or (None, error_message)."""
+    """Return (changes_payload, None) or (None, error_message); never raises.
+
+    The message ends with a stderr snippet so an auth, host or 404 failure is distinguishable.
+    """
     try:
         r = run(["glab", "api", "--hostname", host,
                  "projects/%s/merge_requests/%s/changes" % (quote(project, safe=""), iid)])
         if r.returncode != 0 or not r.stdout.strip():
-            return None, "GitLab changes request failed"
+            return None, "GitLab changes request failed: %s" % (_failure_detail(r) or "empty response")
         return json.loads(r.stdout), None
-    except Exception:
-        return None, "GitLab changes response was unavailable or invalid"
+    except Exception as exc:
+        return None, "GitLab changes response was unavailable or invalid: %s" % str(exc)[:400]
 
 
 def mr_details(run, host, project, iid):
-    """Return the MR identity needed for seat detection and reviewer delivery."""
+    """Return the MR identity needed for seat detection and reviewer delivery.
+
+    Returns None when `iid` or `project` is missing. Raises ForgeError, carrying a stderr
+    snippet, when the request fails or the response is not JSON.
+    """
     if not iid or not project:
         return None
     try:
         r = run(["glab", "api", "--hostname", host,
                  "projects/%s/merge_requests/%s" % (quote(project, safe=""), iid)])
-        if r.returncode != 0 or not r.stdout.strip():
-            return None
+    except Exception as exc:
+        raise ForgeError("GitLab MR request failed: %s" % str(exc)[:400])
+    if r.returncode != 0 or not r.stdout.strip():
+        raise ForgeError("GitLab MR request failed: %s" % (_failure_detail(r) or "empty response"))
+    try:
         data = json.loads(r.stdout)
-    except Exception:
-        return None
+    except ValueError:
+        raise ForgeError("GitLab MR response was not JSON")
+    if not isinstance(data, dict):
+        raise ForgeError("GitLab MR response had an unexpected shape")
     author = data.get("author") if isinstance(data.get("author"), dict) else {}
     refs = data.get("diff_refs") if isinstance(data.get("diff_refs"), dict) else {}
     return {
@@ -109,25 +127,32 @@ def mr_details(run, host, project, iid):
         "base_sha": refs.get("base_sha"),
         "start_sha": refs.get("start_sha"),
         "web_url": data.get("web_url"),
-        "is_fork": (data.get("source_project_id") is not None and data.get("target_project_id") is not None
-                    and data.get("source_project_id") != data.get("target_project_id")),
+        "is_fork": (data.get("source_project_id") is None or data.get("target_project_id") is None
+                    or data.get("source_project_id") != data.get("target_project_id")),
         "author_trusted": None,
     }
 
 
 def current_user(run, host):
-    """Return the authenticated identity as {id, username}, or None."""
+    """Return the authenticated identity as {id, username, emails}.
+
+    Raises ForgeError, carrying a stderr snippet, when the request fails or the response
+    lacks an id or username.
+    """
     try:
         r = run(["glab", "api", "--hostname", host, "user"], timeout=30)
-        if r.returncode != 0 or not r.stdout.strip():
-            return None
+    except Exception as exc:
+        raise ForgeError("GitLab user request failed: %s" % str(exc)[:400])
+    if r.returncode != 0 or not r.stdout.strip():
+        raise ForgeError("GitLab user request failed: %s" % (_failure_detail(r) or "empty response"))
+    try:
         data = json.loads(r.stdout)
-        if not isinstance(data, dict) or not data.get("id") or not data.get("username"):
-            return None
-        emails = [data.get(k) for k in ("email", "commit_email", "public_email") if data.get(k)]
-        return {"id": data["id"], "username": data["username"], "emails": emails}
-    except Exception:
-        return None
+    except ValueError:
+        raise ForgeError("GitLab user response was not JSON")
+    if not isinstance(data, dict) or not data.get("id") or not data.get("username"):
+        raise ForgeError("GitLab user response is missing an id or username")
+    emails = [data.get(k) for k in ("email", "commit_email", "public_email") if data.get(k)]
+    return {"id": data["id"], "username": data["username"], "emails": emails}
 
 
 def commit_authors(run, host, project, iid):
@@ -156,13 +181,14 @@ def commit_authors(run, host, project, iid):
 
 
 def find_mr_for_branch(run, branch, project, host=None):
-    cmd = ["glab", "mr", "list"]
-    if host:
-        cmd += ["--hostname", host]
-    cmd += ["--source-branch", branch, "-F", "json"]
+    """Return the iid of the MR whose source branch is `branch`, or None; never raises.
+
+    `glab mr list` has no --hostname flag, so a full-URL -R is what pins a self-managed host.
+    """
+    cmd = ["glab", "mr", "list", "--source-branch", branch, "-F", "json"]
     if project:
         repository = "https://%s/%s" % (host, project) if host else project
-        cmd += ["-R", repository]  # full URL pins self-managed host outside a checkout
+        cmd += ["-R", repository]
     try:
         r = run(cmd, timeout=60)
         if r.returncode != 0 or not r.stdout.strip():
@@ -174,10 +200,6 @@ def find_mr_for_branch(run, branch, project, host=None):
         pass
     return None
 
-
-# --------------------------------------------------------------------------- #
-# Source borrowing
-# --------------------------------------------------------------------------- #
 
 def clone_command(host, project, repo):
     """Return (argv, env) for a shallow, blob-less, no-checkout clone of `project`."""
@@ -191,10 +213,6 @@ def clone_command(host, project, repo):
 def head_refspec(iid):
     return "refs/merge-requests/%s/head" % iid
 
-
-# --------------------------------------------------------------------------- #
-# Reviewer delivery (raise ForgeError on any failure)
-# --------------------------------------------------------------------------- #
 
 def identity(api_call, host):
     data = api_call(host, "GET", "user")
@@ -269,10 +287,13 @@ def changed_paths(api_call, host, project, old_head, new_head):
     return paths
 
 
-def inline_position(refs, old_path, new_path, line):
-    return {"position_type": "text", "base_sha": refs["base_sha"],
-            "start_sha": refs["start_sha"], "head_sha": refs["head_sha"],
-            "old_path": old_path, "new_path": new_path, "new_line": line}
+def inline_position(refs, old_path, new_path, line, side="new"):
+    """Build a diff position; side "old" anchors on the removed line via old_line."""
+    position = {"position_type": "text", "base_sha": refs["base_sha"],
+                "start_sha": refs["start_sha"], "head_sha": refs["head_sha"],
+                "old_path": old_path, "new_path": new_path}
+    position["old_line" if side == "old" else "new_line"] = line
+    return position
 
 
 def draft_payload(note):
@@ -374,7 +395,11 @@ def fetch_discussions(api_call, host, project, iid):
 
 
 class GitLabForge:
-    """GitLab bound to one host/project, with an injectable command runner."""
+    """GitLab bound to one host/project, with an injectable command runner.
+
+    `change_details` and `current_user` return None on failure; `last_error` then holds the
+    cause, and is None after a successful call.
+    """
 
     name = NAME
 
@@ -383,6 +408,7 @@ class GitLabForge:
         self.project = project
         self._run = run or default_run
         self._injected_api = api_call
+        self.last_error = None
 
     def _api_call(self, host, method, endpoint, payload=None, timeout=120):
         if self._injected_api is not None:
@@ -419,15 +445,26 @@ class GitLabForge:
         }
 
     def change_details(self, number):
-        details = mr_details(self._run, self.host, self.project, number)
+        self.last_error = None
+        try:
+            details = mr_details(self._run, self.host, self.project, number)
+        except ForgeError as exc:
+            self.last_error = str(exc)
+            return None
         if details is None:
+            self.last_error = "GitLab MR iid and project are required"
             return None
         details["number"] = details.pop("iid")
         details["open"] = details.get("state") == "opened"
         return details
 
     def current_user(self):
-        return current_user(self._run, self.host)
+        self.last_error = None
+        try:
+            return current_user(self._run, self.host)
+        except ForgeError as exc:
+            self.last_error = str(exc)
+            return None
 
     def commit_authors(self, number):
         return commit_authors(self._run, self.host, self.project, number)
@@ -444,13 +481,12 @@ class GitLabForge:
     def list_threads(self, number, api_call=None):
         return fetch_discussions(api_call or self._api_call, self.host, self.project, number)
 
-    # -- author seat -------------------------------------------------------------
     def inline_target(self, refs, old_path, new_path, line, diff_text, side="new"):
-        position = inline_position(refs, old_path, new_path, line)
-        if side == "old":
-            position.pop("new_line")
-            position["old_line"] = line
-        return position
+        """Return a diff position, or None when `line` is not on a diff line of `new_path`."""
+        new_lines, old_lines = hunk_lines(diff_text, new_path)
+        if line not in (old_lines if side == "old" else new_lines):
+            return None
+        return inline_position(refs, old_path, new_path, line, side)
 
     def post_inline(self, number, body, position, head_sha):
         data = self._api_call(self.host, "POST", "%s/discussions" % mr_path(self.project, number),
@@ -468,7 +504,6 @@ class GitLabForge:
         return {"published": True, "note_id": data.get("id"),
                 "url": note_url(self.host, self.project, number, data.get("id"))}
 
-    # -- reviewer seat -----------------------------------------------------------
     def identity(self):
         return identity(self._api_call, self.host)
 

@@ -299,6 +299,36 @@ def test_corrupt_or_future_ledger_is_never_overwritten(content):
     assert ledger.read_text() == content
 
 
+def anchored_report(side):
+    value = report()
+    value["findings"][0]["anchor_side"] = side
+    return value
+
+
+def test_old_side_finding_is_fingerprinted_from_the_removed_line():
+    old = enriched(value=anchored_report("old"))["findings"][0]["memory"]
+    new = enriched(value=anchored_report("new"))["findings"][0]["memory"]
+    assert old["fingerprint"] == m._fingerprint(DIMENSION, "a.py", "old")[0]
+    assert new["fingerprint"] == m._fingerprint(DIMENSION, "a.py", "new value")[0]
+    assert old["fingerprint"] != new["fingerprint"]
+    default = enriched()["findings"][0]["memory"]
+    assert default["fingerprint"] == new["fingerprint"]
+
+
+def test_old_side_anchor_on_an_added_line_has_no_fingerprint():
+    value = anchored_report("old")
+    value["findings"][0]["line"] = "2"
+    result = enriched(value=value)
+    assert result["findings"][0]["memory"]["fingerprint"] is None
+    assert any("No unique nonblank diff anchor" in w for w in result["memory"]["warnings"])
+
+
+@pytest.mark.parametrize("side", ["both", "", None, 1])
+def test_invalid_anchor_side_is_rejected(side):
+    with pytest.raises(ValueError, match="anchor_side"):
+        enriched(value=anchored_report(side))
+
+
 def test_human_thread_context_does_not_suppress_without_anchor():
     snapshot, value = load(), report()
     value["findings"][0]["line"] = "99"
@@ -422,3 +452,149 @@ def test_marker_fingerprints_new_form_hex_must_be_lowercase():
 @pytest.mark.parametrize("value", [None, 5, b"x", ["a"], {"fp": FP}])
 def test_marker_fingerprints_non_str_returns_empty(value):
     assert m.marker_fingerprints(value) == []
+
+
+def live_discussions(monkeypatch, discussions):
+    monkeypatch.setattr(m, "fetch_discussions", lambda *args, **kwargs: discussions)
+
+
+def plan_for(snapshot, value=None, ctx=None):
+    return m.check_plan(value or report(), ctx or context(), snapshot)["findings"]
+
+
+def test_check_plan_suppresses_a_finding_already_posted_by_this_identity(monkeypatch):
+    fp = enriched()["findings"][0]["memory"]["fingerprint"]
+    live_discussions(monkeypatch, [thread(fp)])
+    [row] = plan_for(load())
+    assert (row["id"], row["fingerprint"], row["suppress_post"], row["state"]) == ("F1", fp, True, "carried")
+    assert row["thread"]["note_id"] == 9
+
+
+def test_check_plan_suppresses_a_resolved_thread_and_labels_it(monkeypatch):
+    fp = enriched()["findings"][0]["memory"]["fingerprint"]
+    live_discussions(monkeypatch, [thread(fp, resolved=True)])
+    [row] = plan_for(load())
+    assert (row["suppress_post"], row["state"]) == (True, "re-found-after-resolution")
+
+
+def test_check_plan_does_not_suppress_on_a_human_comment_or_a_forged_marker(monkeypatch):
+    fp = enriched()["findings"][0]["memory"]["fingerprint"]
+    human = {"id": "h1", "notes": [{"id": 3, "body": "Check this", "author": {"username": "human"},
+                                    "position": {"new_path": "a.py", "new_line": 1}}]}
+    live_discussions(monkeypatch, [human, thread(fp, author="someone-else", note_id=4)])
+    [row] = plan_for(load())
+    assert (row["suppress_post"], row["state"], row["thread"]) == (False, "new", None)
+
+
+def test_check_plan_treats_a_finding_with_no_thread_as_fresh(monkeypatch):
+    live_discussions(monkeypatch, [])
+    [row] = plan_for(load())
+    assert (row["suppress_post"], row["state"], row["thread"]) == (False, "new", None)
+    assert row["fingerprint"]
+
+
+def test_check_plan_ids_follow_severity_rank_not_report_order(monkeypatch):
+    live_discussions(monkeypatch, [])
+    value = report()
+    value["findings"].append({"severity": "Must fix", "dimension": DIMENSION, "file": "b.py", "line": "1",
+                              "title": "Worse", "body_md": "Worse defect"})
+    rows = plan_for(load(), value)
+    assert [row["id"] for row in rows] == ["F2", "F1"]
+
+
+def test_check_plan_refuses_when_the_live_cross_check_fails_and_leaves_inputs_alone(monkeypatch):
+    def broken(*args, **kwargs):
+        raise OSError("offline")
+    monkeypatch.setattr(m, "fetch_discussions", broken)
+    value, ctx, snapshot = report(), context(), load()
+    before = copy.deepcopy((value, ctx, snapshot))
+    with pytest.raises(RuntimeError, match="cross-check unavailable"):
+        m.check_plan(value, ctx, snapshot)
+    assert (value, ctx, snapshot) == before
+
+
+def test_check_plan_resolves_branch_identity_against_the_given_repo(monkeypatch):
+    def origin(*args, repo=".", **kwargs):
+        if args[0] == "config":
+            return "git@gitlab.example:group/%s.git" % ("reviewed" if repo == "/reviewed" else "cwd")
+        return "feature/x"
+    monkeypatch.setattr(m, "_git", origin)
+    ctx = {"mode": "branch", "seat": "author", "source_branch": "feature/x",
+           "refs": {"base": BASE, "start": BASE, "head": HEAD}, "diff": context()["diff"]}
+    value = report()
+    value["meta"] = {"target": "branch", "branch": "feature/x", "seat": "author", "head_sha": HEAD,
+                     "title": "Review", "verdict": "Fix first"}
+    snapshot = m.load_snapshot(ctx, repo="/reviewed", dimensions=[DIMENSION])
+    [row] = m.check_plan(value, ctx, snapshot, repo="/reviewed")["findings"]
+    assert row["fingerprint"]
+    with pytest.raises(ValueError, match="identity"):
+        m.check_plan(value, ctx, snapshot, repo="/elsewhere")
+
+
+def cli(tmp_path, capsys, *argv):
+    rc = m.main(list(argv))
+    captured = capsys.readouterr()
+    return rc, captured.out, captured.err
+
+
+def write_json(tmp_path, name, value):
+    path = tmp_path / name
+    path.write_text(json.dumps(value))
+    return str(path)
+
+
+def test_cli_load_reconcile_check_save_round_trip(tmp_path, capsys):
+    ctx = write_json(tmp_path, "context.json", context())
+    snap_path = str(tmp_path / "snapshot.json")
+    assert cli(tmp_path, capsys, "load", "--context", ctx, "--dimension", DIMENSION,
+               "--out", snap_path)[0] == 0
+    assert json.loads(open(snap_path).read())["identity"]["number"] == "7"
+
+    enriched_path = str(tmp_path / "enriched.json")
+    rc, _, _ = cli(tmp_path, capsys, "reconcile", "--report", write_json(tmp_path, "report.json", report()),
+                   "--context", ctx, "--snapshot", snap_path, "--out", enriched_path)
+    assert rc == 0
+    value = json.loads(open(enriched_path).read())
+    assert value["findings"][0]["memory"]["state"] == "new"
+
+    plan_path = str(tmp_path / "plan.json")
+    rc, _, _ = cli(tmp_path, capsys, "check", "--report", enriched_path, "--context", ctx, "--out", plan_path)
+    assert rc == 0 and json.loads(open(plan_path).read())["findings"][0]["id"] == "F1"
+
+    rc, out, _ = cli(tmp_path, capsys, "save", "--report", enriched_path,
+                     "--decisions", write_json(tmp_path, "decisions.json", decisions(value, "later")))
+    assert rc == 0 and json.loads(out)["saved"] is True
+    assert load()["findings"][0]["disposition"] == "later"
+
+
+def test_cli_check_without_any_snapshot_is_an_input_error(tmp_path, capsys):
+    rc, _, err = cli(tmp_path, capsys, "check", "--report", write_json(tmp_path, "report.json", report()),
+                     "--context", write_json(tmp_path, "context.json", context()),
+                     "--out", str(tmp_path / "plan.json"))
+    assert rc == 2 and "--snapshot" in json.loads(err)["error"]
+
+
+def test_cli_save_requires_decisions_or_receipts(tmp_path, capsys):
+    rc, _, err = cli(tmp_path, capsys, "save", "--report", write_json(tmp_path, "report.json", enriched()))
+    assert rc == 2 and "--decisions or --receipts" in json.loads(err)["error"]
+
+
+def test_cli_save_exits_1_with_json_on_stdout_when_nothing_was_persisted(tmp_path, capsys):
+    old, newer = enriched(), enriched()
+    newer["memory"]["snapshot"]["started_at"] = old["memory"]["snapshot"]["started_at"] + 1
+    assert m.commit_report(newer, decisions(newer, "later"))["saved"]
+    rc, out, _ = cli(tmp_path, capsys, "save", "--report", write_json(tmp_path, "old.json", old),
+                     "--decisions", write_json(tmp_path, "decisions.json", decisions(old, "ignore")))
+    result = json.loads(out)
+    assert rc == 1 and result["saved"] is False and "stale review run" in result["warnings"][0]
+
+
+def test_unreadable_ledger_warnings_name_the_file_to_fix():
+    snapshot = load()
+    ledger = m._state_dir() / (snapshot["target_key"] + ".json")
+    ledger.write_text("not json")
+    value = enriched(load())
+    assert any(str(ledger) in warning for warning in value["memory"]["warnings"])
+    refused = m.commit_report(value, decisions(value))
+    assert not refused["saved"]
+    assert any(str(ledger) in warning for warning in refused["warnings"])

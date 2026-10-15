@@ -13,7 +13,6 @@ context) in the shared context file for **realistic production failure modes,
 security holes, and data-integrity risks**. Return findings in the schema from
 `references/orchestration.md` with `dimension: "safety"`.
 
-
 ## Scope
 
 Review only the diff hunks and their immediate context. Find realistic failure

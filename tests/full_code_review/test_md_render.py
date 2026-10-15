@@ -3,6 +3,8 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "skills", "full-code-review", "scripts"))
 import md_render as m  # noqa: E402
 
@@ -183,10 +185,7 @@ def test_diff_fence_escapes_content_and_falls_back_without_changes(tmp_path):
 
 
 def test_diff_fence_colours_each_side_as_one_source(tmp_path):
-    try:
-        import pygments  # noqa: F401
-    except ImportError:
-        return
+    pytest.importorskip("pygments")
     rendered = m.render_markdown(
         "```diff\n--- a/web/Price.tsx\n+++ b/web/Price.tsx\n@@ -1,3 +1,3 @@\n"
         " /* keeps the\n-   old note */\n+   new note */\n const a = <Text size=\"body2\" />;\n```")

@@ -8,12 +8,9 @@ batched: true
 
 # Test quality lens
 
-All test lenses obey the skill's verification gate: no Must/Should fix from the diff
-alone — read the source at the correct ref first. The mutation probe in
-`lenses/_mutation-probe.md` is the strongest form of that gate; apply it when its
-conditions hold.
-
-Runs when the diff includes test files. Review **only** added/updated test hunks.
+You are the `tests` lens. Runs when the diff includes test files: review **only**
+added/updated test hunks. Return findings in the schema from
+`references/orchestration.md` with `dimension: "tests"`.
 The `test-adequacy` lens owns missing assertions, coverage gaps, flakiness, and
 implementation-detail assertions — **do not restate those here.** This section is
 about whether the tests that exist are *good*.
@@ -51,3 +48,16 @@ about whether the tests that exist are *good*.
    `parametrize` values or a shared fixture change, check whether other tests still
    need the removed values — and whether a schema, enum, `OneOf`, or DB constraint at
    another layer just lost its only coverage.
+
+## Out of scope
+
+Missing assertions, coverage gaps, flakiness, and implementation-detail assertions
+(`test-adequacy` owns them). Production code with no test changes (`test-coverage` owns
+it).
+
+## Verification gate
+
+All test lenses obey the skill's verification gate: no Must/Should fix from the diff
+alone; read the source at the correct ref first. The mutation probe in
+`lenses/_mutation-probe.md` is the strongest form of that gate; apply it when its
+conditions hold.

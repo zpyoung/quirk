@@ -33,6 +33,7 @@ _DETAILS_TAG_RE = re.compile(r"<(/?)details", re.IGNORECASE)
 _QUICK_ACTION_RE = re.compile(r"^((?:[ \t]*>)*[ \t]*)/")
 _HTML_BLOCK_OPEN_RE = re.compile(
     r"^((?:[ \t]*>)*[ \t]*)<(?=!--|!\[CDATA\[|![A-Za-z]|\?|(?i:pre|script|style|textarea)(?:[ \t>]|$))")
+_CODE_SPAN_OR_MENTION_RE = re.compile(r"(?P<code>(?P<ticks>`+).+?(?P=ticks))|(?P<mention>(?<!\w)@(?=[A-Za-z0-9_]))")
 _LINE_BREAK_RE = re.compile(r"\r\n|[\r\u2028\u2029]")
 _POSTED_SLOTS = ("fix", "later", "detail")
 _DIGITS_RE = re.compile(r"[0-9]+")
@@ -184,6 +185,11 @@ def first_sentence(md):
     return flat or None
 
 
+def _defuse_mentions(line):
+    return _CODE_SPAN_OR_MENTION_RE.sub(
+        lambda match: match.group("code") or "@\u200b", line)
+
+
 def _neutralize(text):
     """Make untrusted markdown safe to post inside the comment skeleton.
 
@@ -193,7 +199,8 @@ def _neutralize(text):
     that runs to a terminator (comment, `<pre`, `<script`, `<style`, `<textarea`, `<?`,
     `<!LETTER`, CDATA) is escaped so it cannot swallow the visible note. Any dangling fence is
     closed. Every line ending GitLab honors is normalized to a newline first so none can hide a
-    line start.
+    line start. An `@` that starts a word outside code is followed by a zero-width space so it
+    cannot notify a user or group; emails and code spans are left alone.
     """
     out = []
     fence = None
@@ -206,6 +213,7 @@ def _neutralize(text):
                 out.append(line)
             else:
                 line = _QUICK_ACTION_RE.sub(r"\1\\/", line, count=1)
+                line = _defuse_mentions(line)
                 out.append(_HTML_BLOCK_OPEN_RE.sub(r"\1&lt;", line, count=1))
             continue
         out.append(_QUICK_ACTION_RE.sub(r"\1\\/", line, count=1))
@@ -215,6 +223,26 @@ def _neutralize(text):
     if fence is not None:
         out.append(fence)
     return "\n".join(out)
+
+
+def path_pairs(diff_text):
+    """Map each new path in a unified diff to its {"old", "new"} paths, following renames."""
+    pairs = {}
+    current = None
+    for line in str(diff_text or "").splitlines():
+        match = re.match(r"^diff --git a/(.*?) b/(.*)$", line)
+        if match:
+            old_path, new_path = match.groups()
+            current = {"old": old_path, "new": new_path}
+            pairs[new_path] = current
+        elif current and line.startswith("rename from "):
+            current["old"] = line[len("rename from "):]
+        elif current and line.startswith("rename to "):
+            old_key = current["new"]
+            current["new"] = line[len("rename to "):]
+            pairs.pop(old_key, None)
+            pairs[current["new"]] = current
+    return pairs
 
 
 def _md(value):

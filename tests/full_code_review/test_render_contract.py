@@ -50,6 +50,21 @@ def test_incomplete_report_keeps_a_non_clean_verdict():
     assert prepared["meta"]["verdict"] == "Request changes"
 
 
+@pytest.mark.parametrize("verdict", ["Looks good", "Ship it", "Approve with comments", "approved"])
+def test_incomplete_report_rejects_any_verdict_outside_the_blocking_vocabulary(verdict):
+    value = report(incomplete=True, dimensions_failed=["db"])
+    value["meta"]["verdict"] = verdict
+    prepared, _ = m._prepare_report(value)
+    assert prepared["meta"]["verdict"] == "Incomplete review"
+
+
+def test_complete_report_keeps_a_free_text_verdict():
+    value = report()
+    value["meta"]["verdict"] = "Looks good"
+    prepared, _ = m._prepare_report(value)
+    assert prepared["meta"]["verdict"] == "Looks good"
+
+
 def test_incomplete_banner_names_the_failed_lenses():
     html = m.render_html(report(incomplete=True, dimensions_failed=["db", "safety"]), TEMPLATE)
     assert "Incomplete review." in html

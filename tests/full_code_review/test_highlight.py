@@ -3,6 +3,8 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "skills" / "full-code-review" / "scripts"))
 import highlight as h  # noqa: E402
 
@@ -42,7 +44,14 @@ def test_aliases_resolve_to_one_canonical_name():
     assert h.supported("patch") == h.supported("diff") == "diff"
 
 
-def test_comments_and_strings_swallow_keywords():
+@pytest.fixture(params=["installed", "builtin"])
+def each_backend(request, monkeypatch):
+    if request.param == "builtin":
+        monkeypatch.setattr(h, "_pygments_lexers", None)
+        monkeypatch.setattr(h, "_LEXERS", {})
+
+
+def test_comments_and_strings_swallow_keywords(each_backend):
     # ordering bug guard: a keyword inside a comment or string must not be coloured
     out = h.highlight("# def class return\n", "python")
     assert out.count("<span") == 1 and 'tok--comment' in out
@@ -50,7 +59,7 @@ def test_comments_and_strings_swallow_keywords():
     assert 'tok--keyword' not in out
 
 
-def test_python_tokens_are_classified():
+def test_python_tokens_are_classified(each_backend):
     out = h.highlight('def go(n=1):\n    return None  # done\n', "python")
     for kind in ("keyword", "function", "number", "constant", "comment"):
         assert 'tok--%s' % kind in out, kind
@@ -67,8 +76,6 @@ def test_json_property_keys_differ_from_string_values():
     out = h.highlight('{"k": "v"}', "json")
     assert 'tok--property' in out and 'tok--string' in out
 
-
-import pytest  # noqa: E402
 
 PYGMENTS_SOURCES = [
     ("tsx", "const a = <Foo bar={1}>x &amp; y</Foo>; // c\n"),
@@ -133,16 +140,24 @@ def test_language_for_path_uses_file_names():
     assert h.language_for_path("README") is None and h.language_for_path(None) is None
 
 
-def test_highlight_lines_carries_a_token_across_line_breaks():
-    for language in ("python", "typescript"):
-        if language == "typescript":
-            pytest.importorskip("pygments")
-        lines = ['"""open', 'still inside"""', "x = 1"] if language == "python" else \
-            ["/* open", "still inside */", "x = 1"]
-        out = h.highlight_lines(lines, language)
-        assert len(out) == 3
-        assert all("tok--" in line for line in out)
-        assert out[1].startswith('<span class="tok tok--') and "inside" in out[1]
-        assert [STRIP.sub("", line) for line in out] == [html.escape(line, quote=True) for line in lines]
+MULTILINE_LINES = {
+    "python": ['"""open', 'still inside"""', "x = 1"],
+    "typescript": ["/* open", "still inside */", "x = 1"],
+}
+
+
+@pytest.mark.parametrize("language", sorted(MULTILINE_LINES))
+def test_highlight_lines_carries_a_token_across_line_breaks(language):
+    if language == "typescript":
+        pytest.importorskip("pygments")
+    lines = MULTILINE_LINES[language]
+    out = h.highlight_lines(lines, language)
+    assert len(out) == 3
+    assert all("tok--" in line for line in out)
+    assert out[1].startswith('<span class="tok tok--') and "inside" in out[1]
+    assert [STRIP.sub("", line) for line in out] == [html.escape(line, quote=True) for line in lines]
+
+
+def test_highlight_lines_passes_through_empty_and_unknown_input():
     assert h.highlight_lines([], "python") == []
     assert h.highlight_lines(["<a>"], None) == ["&lt;a&gt;"]
