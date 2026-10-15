@@ -4,10 +4,14 @@ Read after the [design reference](../../references/design-reference.md). These r
 
 ## Layout
 
-- The skeleton gives you the page: a masthead with the theme toggle and the `<h1>` (from `title`), then `<main>` in a column up to 1440px wide. Do not write an `<h1>` or a second theme toggle in a slot.
-- `main` holds the body. Open with one paragraph that states the conclusion (`class="q-lede"`), then a line for the data source or date (`class="q-meta"`), then a "Findings" section of 3 to 5 one-sentence facts, then the evidence.
+- The skeleton gives you the page: a masthead with the theme toggle and the `<h1>` (from `title`), then the page shape you named. Do not write an `<h1>` or a second theme toggle in a slot.
+- Name the shape in the header's `layout` field. All seven work in this template; the one-per-shape examples are in `examples/<shape>.src.html`, and widths and breakpoints are in section 8 of the design reference.
+- **`summary` is required.** Write a `<!-- slot: summary -->` slot that holds what the shape's summary is (the table in the [design reference](../../references/design-reference.md) section 8). For `report` that is the conclusion paragraph (`class="q-lede"`). It is the first thing after the `<h1>`; do not repeat it as the first paragraph of `main`.
+- `main` holds the body. Open with a line for the data source or date (`class="q-meta"`), then a "Findings" section of 3 to 5 one-sentence facts, then the evidence. Other shapes follow their own examples.
+- Do not write grid or fixed-width CSS in a slot. Use `q-grid`, `q-panel`, `q-sidenote` or `q-compare` from [components](../../references/components.md); the layout check fails hand-written layout CSS.
+- The section nav is generated. Do not write a table of contents.
 - Wrap each section in `<section aria-labelledby="...">` with an `<h2>`. Sections are separated by spacing, not boxes.
-- `aside` is optional. When you use it, the slot content is the whole element: `<aside aria-label="About these numbers">`. At 900px and up it sits right of `main` and stays in view as the reader scrolls, so keep it shorter than one screen; below that it follows `main`. Use it for definitions and caveats, not for navigation.
+- `aside` is optional and for the `report` shape only; any other shape with an `aside` slot fails the build. When you use it, the slot content is the whole element: `<aside aria-label="About these numbers">`. At 900px and up it sits right of `main` and stays in view as the reader scrolls, so keep it shorter than one screen; below that it follows `main`. Use it for definitions and caveats, not for navigation.
 - Prose is capped at 70ch by the skeleton. Tables, charts, code, diffs and boards fill the column.
 
 ## Helper classes the skeleton defines

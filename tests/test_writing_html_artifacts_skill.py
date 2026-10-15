@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL_DIR = REPO_ROOT / "skills" / "writing-html-artifacts"
 SKILL_PATH = SKILL_DIR / "SKILL.md"
 EVALS_PATH = SKILL_DIR / "evals" / "trigger-evals.json"
+LAYOUT_EVALS_PATH = SKILL_DIR / "evals" / "layout-evals.json"
+
+sys.path.insert(0, str(SKILL_DIR / "scripts"))
+
+from htmlkit.layouts import LAYOUTS  # noqa: E402
 
 LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 SCRIPT_REF = re.compile(r"scripts/([A-Za-z0-9_./-]+\.(?:py|js|mjs))")
@@ -29,7 +35,11 @@ def _frontmatter() -> dict[str, str]:
 
 
 def _markdown_files() -> list[Path]:
-    return [SKILL_PATH, *sorted((SKILL_DIR / "references").glob("*.md"))]
+    return [
+        SKILL_PATH,
+        *sorted((SKILL_DIR / "references").glob("*.md")),
+        *sorted((SKILL_DIR / "templates").glob("*/rules.md")),
+    ]
 
 
 def test_frontmatter_has_only_name_and_description() -> None:
@@ -87,3 +97,37 @@ def test_trigger_evals_are_balanced() -> None:
     assert sum(q["should_trigger"] is True for q in queries) >= 10
     assert sum(q["should_trigger"] is False for q in queries) >= 10
     assert len({q["query"] for q in queries}) == len(queries)
+
+
+def _layout_evals() -> list[dict]:
+    data = json.loads(LAYOUT_EVALS_PATH.read_text())
+    assert data["skill_name"] == "writing-html-artifacts"
+    return data["evals"]
+
+
+def test_layout_evals_have_the_documented_fields() -> None:
+    evals = _layout_evals()
+    assert all(set(e) == {"id", "prompt", "expected_layout"} for e in evals)
+    assert all(isinstance(e["id"], int) and not isinstance(e["id"], bool) for e in evals)
+    assert all(isinstance(e["prompt"], str) and e["prompt"].strip() for e in evals)
+    assert all(e["expected_layout"] in LAYOUTS for e in evals)
+
+
+def test_layout_evals_cover_every_shape_at_least_twice() -> None:
+    evals = _layout_evals()
+    for layout in LAYOUTS:
+        assert sum(e["expected_layout"] == layout for e in evals) >= 2, layout
+    assert len(evals) >= 2 * len(LAYOUTS)
+
+
+def test_layout_evals_prompts_and_ids_are_unique() -> None:
+    evals = _layout_evals()
+    assert len({e["prompt"] for e in evals}) == len(evals)
+    assert len({e["id"] for e in evals}) == len(evals)
+
+
+def test_skill_names_every_shape_in_documented_order() -> None:
+    body = SKILL_PATH.read_text()
+    positions = [body.find(f"`{layout}`") for layout in LAYOUTS]
+    assert all(p >= 0 for p in positions), positions
+    assert positions == sorted(positions)
