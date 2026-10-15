@@ -1,0 +1,27 @@
+{
+  "title": "Dashboard: support health",
+  "question": "How should the support dashboard arrange its panels?",
+  "select": "single",
+  "options": [
+    {
+      "id": "kpi-row",
+      "label": "KPI row, then charts",
+      "description": "Four headline numbers across the top, charts in a grid below.",
+      "html": "<div style=\"display:grid;gap:6px;height:72px;grid-template-rows:1fr 2fr;\"><div style=\"border:1px solid currentColor\"></div><div style=\"border:1px solid currentColor;opacity:.5\"></div></div>"
+    },
+    {
+      "id": "hero",
+      "label": "One hero chart",
+      "description": "A large trend chart with the numbers in a column beside it.",
+      "html": "<div style=\"display:grid;gap:6px;height:72px;grid-template-columns:3fr 1fr;\"><div style=\"border:1px solid currentColor\"></div><div style=\"border:1px solid currentColor;opacity:.5\"></div></div>"
+    },
+    {
+      "id": "grid",
+      "label": "Even grid",
+      "description": "Six equal panels with no hierarchy. Simple, but nothing says what matters most.",
+      "html": "<div style=\"display:grid;gap:6px;height:72px;grid-template-columns:1fr 1fr 1fr;grid-template-rows:1fr 1fr;\"><div style=\"border:1px solid currentColor;opacity:.5\"></div><div style=\"border:1px solid currentColor;opacity:.5\"></div><div style=\"border:1px solid currentColor;opacity:.5\"></div><div style=\"border:1px solid currentColor;opacity:.5\"></div><div style=\"border:1px solid currentColor;opacity:.5\"></div><div style=\"border:1px solid currentColor;opacity:.5\"></div></div>"
+    }
+  ],
+  "content": "<p>The dashboard stays open on a wall display and on laptops. It tracks open tickets, first response time, backlog age and satisfaction.</p>",
+  "layout": "dashboard"
+}

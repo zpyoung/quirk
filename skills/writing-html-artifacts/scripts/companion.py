@@ -44,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from htmlkit import SKILL_DIR, assemble, resolve  # noqa: E402
 from htmlkit.fsutil import atomic_write, ensure_self_ignoring  # noqa: E402
 from htmlkit.header import read_header, render_header  # noqa: E402
+from htmlkit.layouts import validate_layout  # noqa: E402
 from htmlkit.vendor import VendorError, VendorStore, shell_block  # noqa: E402
 
 EXIT_OK, EXIT_NOT_OK, EXIT_USAGE = 0, 1, 2
@@ -60,7 +61,7 @@ PROBE_TIMEOUT = 3.0
 REQUEST_TIMEOUT = 10.0
 OPTION_ID = re.compile(r"[a-z0-9-]{1,40}")
 SLOT_LINE = re.compile(r"^<!-- slot:", re.M)
-SCREEN_KEYS = {"title", "question", "select", "options", "content", "diagram"}
+SCREEN_KEYS = {"title", "question", "select", "options", "content", "diagram", "layout"}
 EVENT_TYPES = ("click", "proceed")
 
 WAITING_PAGE = (
@@ -679,6 +680,11 @@ def load_screen(path: Path) -> dict:
     _text(spec, "question", True)
     _text(spec, "content", False)
     _text(spec, "diagram", False)
+    if spec.get("layout") is not None:
+        try:
+            validate_layout(spec["layout"])
+        except assemble.SourceError as exc:
+            raise ScreenError(str(exc)) from exc
     if spec.get("select", "single") not in ("single", "multi"):
         raise ScreenError("'select' must be single or multi")
     items = spec.get("options")
@@ -743,7 +749,10 @@ def _source_text(spec: dict, nonce: str) -> str:
     if _given(spec, "diagram"):
         figure = f'<figure class="q-diagram"><pre class="mermaid">{html_lib.escape(spec["diagram"])}</pre></figure>'
         content = f"{content}\n{figure}" if content else figure
-    header = json.dumps({"template": "companion", "title": spec["title"], "mode": "offline"})
+    meta = {"template": "companion", "title": spec["title"], "mode": "offline"}
+    if spec.get("layout") is not None:
+        meta["layout"] = spec["layout"]
+    header = json.dumps(meta)
     slots = {
         "question": f'<h2 id="q-question">{html_lib.escape(spec["question"])}</h2>',
         "options": _option_cards(spec, nonce),
