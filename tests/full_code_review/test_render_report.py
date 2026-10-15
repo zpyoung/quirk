@@ -50,11 +50,11 @@ def report():
             "standfirst_md": "A **structured** review.", "verdict": "Fix, then merge",
         },
         "run": {
-            "dimensions_run": ["sakura:correctness", "coordinator verification", "sakura:db"],
-            "dimensions_skipped": [{"name": "sakura:tests", "why": "no tests changed"}],
+            "dimensions_run": ["correctness", "coordinator verification", "db"],
+            "dimensions_skipped": [{"name": "tests", "why": "no tests changed"}],
             "diff_size": "12 files, 340 lines", "coverage": "all 12 changed files reviewed",
             "guidance": ["CLAUDE.md"], "notes_md": "Run complete.",
-            "clean_notes": [{"dimension": "sakura:db", "note_md": "Queries look bounded."}],
+            "clean_notes": [{"dimension": "db", "note_md": "Queries look bounded."}],
         },
         "mutation_probe": {"mutants": 2, "killed": 1, "survived": 1,
                            "narrative_md": "One **survived**.", "aside_md": "Local only.",
@@ -75,11 +75,11 @@ def report():
         "findings": [
             {"severity": "Nit", "dimension": "coordinator verification", "file": "z.py", "line": 9,
              "issue": "Name is vague: More detail follows.", "recommendation": "Rename `x`."},
-            {"severity": "Must fix", "dimensions": ["sakura:correctness"], "file": "a.py", "line": "2-4",
+            {"severity": "Must fix", "dimensions": ["correctness"], "file": "a.py", "line": "2-4",
              "title": "Incorrect result", "area": "prod", "evidence": "source verified",
              "body_md": "Returns **the wrong value**.", "aside_md": "Only when enabled.",
              "recommendation_md": "Return `expected`."},
-            {"severity": "Should fix", "dimensions": ["sakura:db", "coordinator verification"],
+            {"severity": "Should fix", "dimensions": ["db", "coordinator verification"],
              "file": "b.py", "line": "7", "title": "Query can grow",
              "body_md": "The query is not bounded.", "recommendation_md": "Add a bound."},
         ],
@@ -92,7 +92,7 @@ def report():
 def memory_payload():
     snapshot = {
         "schemaVersion": 1, "target_key": "demo", "identity": {"repo": "demo", "target": "mr:42"},
-        "seat": "author", "base_sha": None, "head_sha": "a" * 40, "dimensions": ["sakura:db"],
+        "seat": "author", "base_sha": None, "head_sha": "a" * 40, "dimensions": ["db"],
         "guidance_hash": "b" * 64, "started_at": 1.0, "findings": [], "discussions": [],
         "discussions_available": True, "warnings": [], "invalidation_reason": None,
         "file_hashes": {}, "unchanged_files": [],
@@ -107,7 +107,7 @@ def memory_payload():
 
 def finding_memory(state="carried", disposition="fix"):
     return {
-        "fingerprint": "c" * 64, "dimension": "sakura:db", "anchor_hash": "d" * 64,
+        "fingerprint": "c" * 64, "dimension": "db", "anchor_hash": "d" * 64,
         "state": state, "match": "exact", "disposition": disposition, "note": "Remember <this>",
         "suppress_post": True, "thread": {"discussion_id": 1, "note_id": 2,
                                           "url": "javascript:alert(1)", "resolved": False,
@@ -197,12 +197,12 @@ def test_derived_numbers_and_order(tmp_path):
 
 def test_old_schema_degradation(tmp_path):
     old = report()
-    old["findings"] = [{"severity": "Should fix", "dimension": "sakura:db", "file": "old.py",
+    old["findings"] = [{"severity": "Should fix", "dimension": "db", "file": "old.py",
                         "line": 12, "issue": "First clause. More detail.",
                         "recommendation": "Use a cap.", "verified": True, "assumptions": []}]
     value = m.render_html(old, TEMPLATE)
     assert 'data-title="First clause"' in value
-    assert 'data-dims="[&quot;sakura:db&quot;]"' in value
+    assert 'data-dims="[&quot;db&quot;]"' in value
     assert "source verified" not in value
     assert "First clause. More detail." in value and "Use a cap." in value
     assert m.derive_title("First; second") == "First"
@@ -647,7 +647,7 @@ def test_dom_contract_and_dimension_round_trip(tmp_path):
     assert_dom_contract(TEMPLATE)
     cards = parse(rendered).find("article", "finding")
     target = next(card for card in cards if card["id"] == "F2")
-    assert json.loads(target["data-dims"]) == ["sakura:db", "coordinator verification"]
+    assert json.loads(target["data-dims"]) == ["db", "coordinator verification"]
     broken = re.sub(r'<button class="btn" type="button" id="btn-export">.*?</button>', "", rendered, count=1)
     assert parse(broken).find_id("btn-export") is None
     try:
@@ -851,9 +851,9 @@ def test_rail_is_drag_resizable(tmp_path):
     # report opened before anything is dragged renders a zero-width rail
     assert "grid-template-columns: var(--rail-w, 340px) minmax(0, 1fr)" in rendered
     # width is a global preference; the triage blob is per-report and exported
-    assert '"sakura-review:rail-width"' in rendered
+    assert '"quirk-review:rail-width"' in rendered
     key = re.search(r'data-storage-key="([^"]+)"', rendered).group(1)
-    assert key != "sakura-review:rail-width"
+    assert key != "quirk-review:rail-width"
 
 
 def test_findings_fill_the_detail_pane(tmp_path):

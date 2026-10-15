@@ -156,8 +156,8 @@ def storage_key(meta, findings):
     if isinstance(meta.get("storage_key"), str) and meta["storage_key"]:
         return meta["storage_key"]
     if meta.get("seat", "author") == "reviewer":
-        return "sakura-review-%s-reviewer-%s" % (target_slug(meta), finding_digest(findings))
-    return "sakura-review-%s-%s" % (target_slug(meta), finding_digest(findings))
+        return "quirk-review-%s-reviewer-%s" % (target_slug(meta), finding_digest(findings))
+    return "quirk-review-%s-%s" % (target_slug(meta), finding_digest(findings))
 
 
 def replace_slot(template, name, replacement):

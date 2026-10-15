@@ -11,12 +11,12 @@ def report(seat="reviewer"):
         "meta": {"target": "change", "forge": "gitlab", "number": 42, "project": "g/p",
                  "head_sha": "a" * 40, "title": "Review", "verdict": "Review",
                  "seat": seat},
-        "run": {"dimensions_run": ["sakura:correctness"]},
+        "run": {"dimensions_run": ["correctness"]},
         "findings": [
-            {"severity": "Must fix", "dimension": "sakura:correctness", "file": "a.py",
+            {"severity": "Must fix", "dimension": "correctness", "file": "a.py",
              "line": "2-4", "title": "Trusted title", "body_md": "Trusted body",
              "recommendation_md": "Trusted fix"},
-            {"severity": "Nit", "dimension": "sakura:comments", "file": "dir:x.py",
+            {"severity": "Nit", "dimension": "comments", "file": "dir:x.py",
              "line": "9", "title": "Nit title", "body_md": "Nit body"},
         ],
         "assumptions": [],
@@ -127,7 +127,7 @@ def test_zero_findings_has_explicit_empty_reviewer_artifact():
 
 def _memory(human_context):
     return {
-        "fingerprint": "c" * 64, "dimension": "sakura:correctness", "anchor_hash": "d" * 64,
+        "fingerprint": "c" * 64, "dimension": "correctness", "anchor_hash": "d" * 64,
         "state": "new", "match": None, "disposition": "none", "note": "",
         "suppress_post": False, "thread": None, "candidates": [],
         "human_context": human_context,

@@ -108,7 +108,7 @@ def _validate_context(context):
 def _make_root(prefix):
     root = tempfile.mkdtemp(prefix=prefix)
     token = secrets.token_hex(16)
-    Path(root, ".sakura-review-source").write_text(token + "\n", encoding="utf-8")
+    Path(root, ".quirk-review-source").write_text(token + "\n", encoding="utf-8")
     return root, token
 
 
@@ -122,7 +122,7 @@ def _clone_project(host, project, root):
 
 
 def _add_worktree(repo_root, number, expected_head, worktree, shallow=False):
-    review_ref = "refs/sakura-review/%s/head" % number
+    review_ref = "refs/quirk-review/%s/head" % number
     fetch_cmd = ["git", "-C", repo_root, "fetch", "--no-tags"]
     if shallow:
         fetch_cmd.append("--depth=1")
@@ -181,7 +181,7 @@ def acquire(args):
         if not args.allow_temp_clone:
             return _error("no matching local clone; ask before using --allow-temp-clone, or choose --diff-only")
         try:
-            temp_root, token = _make_root("sakura-review-clone-")
+            temp_root, token = _make_root("quirk-review-clone-")
             repo_root = _clone_project(host, project, temp_root)
         except Exception as exc:
             if temp_root:
@@ -189,9 +189,9 @@ def acquire(args):
             return _error(exc)
 
     is_temp_clone = temp_root is not None
-    worktree = tempfile.mkdtemp(prefix="sakura-review-worktree-", dir=temp_root)
+    worktree = tempfile.mkdtemp(prefix="quirk-review-worktree-", dir=temp_root)
     if temp_root is None:
-        cleanup_root, token = _make_root("sakura-review-cleanup-")
+        cleanup_root, token = _make_root("quirk-review-cleanup-")
     else:
         cleanup_root = temp_root
     manifest = {
@@ -200,7 +200,7 @@ def acquire(args):
         "path": os.path.realpath(worktree),
         "repo_root": repo_root,
         "head_sha": head,
-        "review_ref": "refs/sakura-review/%s/head" % number,
+        "review_ref": "refs/quirk-review/%s/head" % number,
         "host": host,
         "project": project,
         "number": number,
@@ -234,7 +234,7 @@ def _safe_marker(manifest):
     token = manifest.get("cleanup_token")
     if not isinstance(root, str) or not isinstance(token, str):
         return False
-    marker = Path(root, ".sakura-review-source")
+    marker = Path(root, ".quirk-review-source")
     try:
         return marker.read_text(encoding="utf-8").strip() == token
     except OSError:
@@ -253,12 +253,12 @@ def release(args):
         return 0
     path = manifest.get("path")
     repo_root = manifest.get("repo_root")
-    if not isinstance(path, str) or not os.path.basename(path).startswith("sakura-review-worktree-"):
+    if not isinstance(path, str) or not os.path.basename(path).startswith("quirk-review-worktree-"):
         return _error("refusing to remove an unrecognized worktree path")
     cleanup_root = manifest.get("cleanup_root")
     already_absent = not os.path.exists(path)
     if (already_absent and isinstance(cleanup_root, str) and not os.path.exists(cleanup_root) and
-            os.path.basename(cleanup_root).startswith(("sakura-review-cleanup-", "sakura-review-clone-"))):
+            os.path.basename(cleanup_root).startswith(("quirk-review-cleanup-", "quirk-review-clone-"))):
         _emit({"released": True, "kind": manifest.get("kind"), "already_absent": True})
         return 0
     if not _safe_marker(manifest):

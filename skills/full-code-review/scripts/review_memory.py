@@ -29,10 +29,9 @@ from forge import gitlab as _gitlab
 SCHEMA_VERSION = 1
 _RETENTION_SECONDS = 90 * 24 * 60 * 60
 _FP_RE = re.compile(r"^[0-9a-f]{64}$")
-_MARKER_RE = re.compile(r"<!--\s*sakura-review:\s*fp=([0-9a-f]{64})\s*-->", re.I)
-_BLOCK_START_RE = re.compile(r"\A\s*<!--\s*sakura-review:v1\b")
+_BLOCK_START_RE = re.compile(r"\A\s*<!--\s*quirk-review:v1\b")
 _BLOCK_FP_RE = re.compile(
-    r"\A\s*<!--\s*sakura-review:v1[ \t]*\r?\n(?:(?!-->).*\n)*?fp:[ \t]*([0-9a-f]{64})[ \t]*\r?\n")
+    r"\A\s*<!--\s*quirk-review:v1[ \t]*\r?\n(?:(?!-->).*\n)*?fp:[ \t]*([0-9a-f]{64})[ \t]*\r?\n")
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +97,7 @@ def _repo_identity(repo: str) -> tuple[str, list[str]]:
 
 def _state_dir() -> Path:
     root = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
-    return Path(root) / "sakura" / "review-memory"
+    return Path(root) / "quirk" / "review-memory"
 
 
 def _canonical_json(value: Any) -> str:
@@ -453,12 +452,10 @@ def _is_posting_identity(note: dict, context: dict) -> bool:
 def marker_fingerprints(body: Any) -> list[str]:
     """Return the lowercase finding fingerprints a posted note body carries.
 
-    A body that begins with a `sakura-review:v1` block carries only that block's `fp:` line
-    (none for overview blocks, whose list values are not fingerprints); legacy markers anywhere
-    else in such a body are ignored because the rest of it embeds untrusted report text. A body
-    without a leading v1 block carries the legacy one-line markers found anywhere in it, and a
-    v1 block quoted later does not count. Line endings may be LF or CRLF. Result is deduplicated
-    in first-seen order. Never raises: non-str input yields [].
+    Only a body that begins with a `quirk-review:v1` block carries a fingerprint: that block's
+    `fp:` line (none for overview blocks, whose list values are not fingerprints). A block quoted
+    later in a body does not count, because the rest of a body embeds untrusted report text.
+    Line endings may be LF or CRLF. Never raises: non-str input yields [].
 
     Callers must still check the note's author; markers are copyable text.
     """
@@ -467,7 +464,7 @@ def marker_fingerprints(body: Any) -> list[str]:
     if _BLOCK_START_RE.match(body):
         block = _BLOCK_FP_RE.match(body)
         return [block.group(1)] if block else []
-    return list(dict.fromkeys(match.group(1).lower() for match in _MARKER_RE.finditer(body)))
+    return []
 
 
 def _discussion_details(discussions: list[dict], fp: str | None, finding: dict, context: dict) -> tuple[dict | None, list[dict]]:

@@ -24,7 +24,7 @@ ITEM_RE = re.compile(r"^- \*\*(F\d+)\*\* — (.+?)\s*$")
 ANCHOR_RE = re.compile(r"^  `(.+)` · (Must fix|Should fix|Nit)$")
 NOTE_RE = re.compile(r"^  > (.*)$")
 REPLY_RE = re.compile(r"^  reply: ([1-9][0-9]{0,18})$")
-HANDOFF_DELIM = "<!-- sakura-review handoff: not validated, not used for posting -->"
+HANDOFF_DELIM = "<!-- quirk-review handoff: not validated, not used for posting -->"
 
 
 def export_label(meta):

@@ -217,7 +217,7 @@ def test_decision_branch_gitlab_first(tmp_path):
         assert "a/z" in ctx["diff"] and "SHOULD_NOT_BE_USED" not in ctx["diff"]
         assert ctx["host"] == "x" and ctx["project"] == "grp/proj"
         assert ctx["source_branch"] == "feature"
-        # sakura:adversarial gates on the MR description reaching the context
+        # adversarial gates on the MR description reaching the context
         assert ctx["change"]["description"] == "no behavior change"
         assert ctx["has_description"] is True and meta["has_description"] is True
         assert ctx["size"] == {"files": 1, "lines": 2}
@@ -258,7 +258,7 @@ def test_decision_branch_git_fallback(tmp_path):
         assert ctx["host"] == "x" and ctx["project"] == "grp/proj"
         assert ctx["source_branch"] == "feature"
         assert ctx["refs"] == {"base": "BASE", "start": "BASE", "head": "HEAD"}
-        # no MR → no description → sakura:adversarial must skip
+        # no MR → no description → adversarial must skip
         assert ctx["change"] is None and ctx["has_description"] is False
         assert ctx["scope_intent"] == {"guess": "feature", "basis": "source_branch"}
         assert meta["scope_intent"] == ctx["scope_intent"]

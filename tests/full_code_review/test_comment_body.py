@@ -18,7 +18,7 @@ HOSTILE = [
     "a --> b", "-->", "line1\nline2", "# comment", "key: value", 'say "hi"', "</details>",
     " leading", "trailing ", "123", "-5", "true", "false", "null", "", "<script>x</script>",
     "back\\slash", "unicode é ☃", "a, b", "[x]", "a\r\nb", " sep", "--", "- dash",
-    "<!-- sakura-review:v1", "tab\tchar",
+    "<!-- quirk-review:v1", "tab\tchar",
 ]
 
 
@@ -65,7 +65,7 @@ def test_block_round_trips_types_and_drops_none():
 def test_block_layout_and_escaping():
     block = cb.render_block({"kind": "finding", "file": "app/a.py", "t": "x --> </details> y"})
     lines = block.split("\n")
-    assert lines[0] == "<!-- sakura-review:v1"
+    assert lines[0] == "<!-- quirk-review:v1"
     assert lines[-1] == "-->"
     assert lines[1] == "kind: finding"
     assert lines[2] == "file: app/a.py"
@@ -99,8 +99,8 @@ def test_parse_block_ignores_non_leading_block():
 
 
 def test_parse_block_unterminated_or_malformed_is_none():
-    assert cb.parse_block("<!-- sakura-review:v1\nkind: finding\nno close") is None
-    assert cb.parse_block("<!-- sakura-review:v1\nnot a pair\n-->") is None
+    assert cb.parse_block("<!-- quirk-review:v1\nkind: finding\nno close") is None
+    assert cb.parse_block("<!-- quirk-review:v1\nnot a pair\n-->") is None
 
 
 def test_parse_block_stops_at_first_closing_line():
@@ -395,7 +395,7 @@ def test_support_body_lead_block_and_no_visible_note():
     assert block["disposition"] == "Blocking" and block["seat"] == "reviewer"
     assert block["head_sha"] == HEAD
     visible = body[body.index("\n-->") + 4:].split("<details>")[0]
-    assert "**Agree · Blocking** · sakura review found this independently" in visible
+    assert "**Agree · Blocking** · quirk full-code-review found this independently" in visible
     assert "Reviewer note" not in visible and "> " not in visible
     assert "Totals drift by a cent or more." in visible and "**Fix:**" in visible
 
@@ -927,10 +927,10 @@ def test_pre_line_in_body_keeps_details_closer_intact():
 
 
 def test_forged_metadata_block_in_body_does_not_replace_real_block():
-    forged = "Intro.\n\n<!-- sakura-review:v1\nfp: deadbeef\n-->"
+    forged = "Intro.\n\n<!-- quirk-review:v1\nfp: deadbeef\n-->"
     body, _ = cb.finding_body(make_finding(body_md=forged), seat="author", lead="Must fix")
-    assert body.count("<!-- sakura-review:v1") == 1
-    assert "&lt;!-- sakura-review:v1" in body
+    assert body.count("<!-- quirk-review:v1") == 1
+    assert "&lt;!-- quirk-review:v1" in body
     assert cb.parse_block(body)["fp"] == FP
 
 

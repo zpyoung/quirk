@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import render_report  # noqa: E402
 import review_memory  # noqa: E402
 
-OPEN_LINE = "<!-- sakura-review:v1"
+OPEN_LINE = "<!-- quirk-review:v1"
 CLOSE_LINE = "-->"
 NON_BLOCKING_SENTENCE = "*Optional feedback — this does not block the merge.*"
 QUESTION_SENTENCE = "Could you clarify how this behavior is intended to work?"
@@ -379,7 +379,7 @@ def support_body(finding, *, disposition, discussion_id, note_id, note="", head_
     block = _finding_block(
         "support", finding, "reviewer", disposition, head_sha,
         {"supports_discussion": str(discussion_id), "supports_note": note_id})
-    parts = ["**Agree · %s** · sakura review found this independently" % disposition]
+    parts = ["**Agree · %s** · quirk full-code-review found this independently" % disposition]
     if why:
         parts.append(_line(why))
     if fix:

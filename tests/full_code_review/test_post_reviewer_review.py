@@ -20,15 +20,15 @@ def report():
         "meta": {"target": "change", "forge": "gitlab", "number": 42, "project": "group/project", "head_sha": HEAD,
                  "title": "Review", "standfirst_md": "Summary from report.",
                  "verdict": "Fix first", "seat": "reviewer"},
-        "run": {"dimensions_run": ["sakura:correctness"],
+        "run": {"dimensions_run": ["correctness"],
                 "source_access": "borrowed-worktree"},
         "risk": {"level": "Medium", "verbatim_md": "Some risk."},
         "findings": [
-            {"severity": "Must fix", "dimension": "sakura:correctness", "file": "a.py", "line": "2-4",
+            {"severity": "Must fix", "dimension": "correctness", "file": "a.py", "line": "2-4",
              "title": "Trusted bug", "body_md": "Trusted body.", "recommendation_md": "Trusted fix."},
-            {"severity": "Should fix", "dimension": "sakura:db", "file": "b.py", "line": "7",
+            {"severity": "Should fix", "dimension": "db", "file": "b.py", "line": "7",
              "title": "Drop me", "body_md": "Not posted."},
-            {"severity": "Nit", "dimension": "sakura:comments", "file": "c.py", "line": "9",
+            {"severity": "Nit", "dimension": "comments", "file": "c.py", "line": "9",
              "title": "Small issue", "body_md": "Nit body.", "recommendation_md": "Tidy it."},
         ],
         "assumptions": ["Feature is enabled"],
@@ -157,9 +157,8 @@ def test_stage_builds_trusted_overview_and_inline_drafts_then_publish_is_separat
         lead = first["note"].split("-->\n", 1)[1]
         assert lead.startswith("**Blocking** · Trusted bug")
         assert "Trusted body." in first["note"] and "**Fix:** Trusted fix." in first["note"]
-        assert "Human note" in lead and "F1" not in lead and "sakura:correctness" not in lead
+        assert "Human note" in lead and "F1" not in lead and "correctness" not in lead
         assert first["position"]["head_sha"] == HEAD and first["position"]["new_line"] == 2
-        assert "sakura-review: fp=" not in first["note"]
         nit = create_calls[2][2]["note"].split("-->\n", 1)[1]
         assert nit.startswith("**Non-blocking** · Small issue")
         assert any("normalized to Non-blocking" in warning for warning in state["warnings"])
@@ -547,13 +546,13 @@ def test_memory_enabled_stage_reconciles_live_discussions_before_drafts(tmp_path
         "@@ -1,3 +1,3 @@\n old\n-old\n+new\n")
     try:
         snapshot = m.review_memory.load_snapshot(
-            ctx, repo=str(tmp_path), dimensions=("sakura:correctness",), fresh=True)
+            ctx, repo=str(tmp_path), dimensions=("correctness",), fresh=True)
         enriched = m.review_memory.reconcile(report(), ctx, snapshot)
         fingerprint = enriched["findings"][0]["memory"]["fingerprint"]
         live[:] = [{"id": "discussion-1", "notes": [{
             "id": 7, "web_url": "https://gitlab.example/group/project/-/merge_requests/42#note_7",
             "author": {"id": 2, "username": "reviewer"},
-            "body": "<!-- sakura-review: fp=%s -->" % fingerprint}]}]
+            "body": "<!-- quirk-review:v1\nkind: finding\nfp: %s\n-->\nposted" % fingerprint}]}]
         choice = decisions()
         choice["report_sha256"] = m._report_digest(enriched)
         paths = files(tmp_path)
@@ -600,7 +599,7 @@ def test_memory_late_duplicate_blocks_publish_before_bulk(tmp_path):
     m.review_memory.fetch_discussions = lambda *args, **kwargs: [{
         "id": "discussion-1",
         "notes": [{"id": 7, "author": {"id": 2, "username": "reviewer"},
-                   "body": "<!-- sakura-review: fp=%s -->" % fingerprint}],
+                   "body": "<!-- quirk-review:v1\nkind: finding\nfp: %s\n-->\nposted" % fingerprint}],
     }]
     try:
         paths = files(tmp_path)
@@ -628,7 +627,7 @@ def test_memory_marker_from_another_author_does_not_block_publish(tmp_path):
     m.review_memory.fetch_discussions = lambda *args, **kwargs: [{
         "id": "discussion-1",
         "notes": [{"id": 7, "author": {"id": 99, "username": "unrelated-human"},
-                   "body": "<!-- sakura-review: fp=%s -->" % fingerprint}],
+                   "body": "<!-- quirk-review:v1\nkind: finding\nfp: %s\n-->\nposted" % fingerprint}],
     }]
     try:
         paths = files(tmp_path)
@@ -679,7 +678,7 @@ CARRIED_FP = "c3" * 32
 
 
 def _memory(fingerprint, human_context=(), suppress=False, state="new"):
-    return {"fingerprint": fingerprint, "dimension": "sakura:correctness", "anchor_hash": None,
+    return {"fingerprint": fingerprint, "dimension": "correctness", "anchor_hash": None,
             "state": state, "match": None, "disposition": "none", "note": "",
             "suppress_post": suppress, "thread": None, "candidates": [],
             "human_context": list(human_context)}
@@ -891,15 +890,11 @@ def _publish_reply(tmp_path, monkeypatch, fake, discussions):
         return invoke(m.publish, _publish_args(paths))
 
 
-@pytest.mark.parametrize("marker", ["v1", "legacy"])
 def test_publish_aborts_when_a_reply_fingerprint_already_appears_in_a_live_discussion(
-        tmp_path, monkeypatch, marker):
+        tmp_path, monkeypatch):
     fake = FakeGitLab()
-    if marker == "v1":
-        body = comment_body.finding_body(
-            reply_report()["findings"][0], seat="reviewer", lead="Blocking")[0]
-    else:
-        body = "<!-- sakura-review: fp=%s -->" % REPLY_FP
+    body = comment_body.finding_body(
+        reply_report()["findings"][0], seat="reviewer", lead="Blocking")[0]
     rc, result = _publish_reply(tmp_path, monkeypatch, fake, lambda *a, **k: [
         _reply_thread(), {"id": "late", "notes": [_our_note(body)]}])
     assert rc == 2 and result["published"] is False and "restage" in result["error"]

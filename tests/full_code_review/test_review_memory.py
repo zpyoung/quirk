@@ -11,7 +11,7 @@ import review_memory as m
 FETCH_DISCUSSIONS = m.fetch_discussions
 
 HEAD, BASE = "a" * 40, "b" * 40
-DIMENSION = "sakura:correctness"
+DIMENSION = "correctness"
 
 
 @pytest.fixture(autouse=True)
@@ -55,20 +55,18 @@ def decisions(value, slot="ignore", note="Intentional decision"):
                           for i, _ in enumerate(value["findings"], 1)]}
 
 
-MARKER_FORM = {"value": "old"}
+MARKER_FORM = {"value": "new"}
 
 
-@pytest.fixture(params=["old", "new"])
+@pytest.fixture(params=["new"])
 def marker_form(request):
     MARKER_FORM["value"] = request.param
     yield request.param
-    MARKER_FORM["value"] = "old"
+    MARKER_FORM["value"] = "new"
 
 
 def marker_body(fp, form):
-    if form == "old":
-        return "Finding\n<!-- sakura-review: fp=%s -->" % fp
-    return ("<!-- sakura-review:v1\nkind: finding\nfp: %s\nseat: reviewer\nfile: a.py\nline: 1\n-->\n"
+    return ("<!-- quirk-review:v1\nkind: finding\nfp: %s\nseat: reviewer\nfile: a.py\nline: 1\n-->\n"
             "**Blocking** \u00b7 Finding" % fp)
 
 
@@ -236,7 +234,7 @@ def test_invalidation_discards_decisions_not_live_posting_identity(trigger, tmp_
         guide = tmp_path / "guide.txt"
         guide.write_text("New guidance")
         kwargs["guidance"] = [guide]
-    snapshot = (m.load_snapshot(ctx, dimensions=[DIMENSION, "sakura:db"]) if trigger == "dimensions"
+    snapshot = (m.load_snapshot(ctx, dimensions=[DIMENSION, "db"]) if trigger == "dimensions"
                 else load(ctx, **kwargs))
     assert snapshot["invalidation_reason"] and snapshot["findings"] == []
     snapshot["discussions"] = [thread(fp)]
@@ -358,31 +356,27 @@ FP = "3f9a" * 16
 OTHER = "0123456789abcdef" * 4
 
 
-def test_marker_fingerprints_old_form():
-    assert m.marker_fingerprints("Finding\n<!-- sakura-review: fp=%s -->" % FP) == [FP]
-    assert m.marker_fingerprints("x <!--sakura-review:fp=%s--> y" % FP.upper()) == [FP]
+def test_marker_fingerprints_ignore_one_line_markers_from_other_tools():
+    # another tool's one-line marker is not ours; only a leading quirk-review block counts
+    assert m.marker_fingerprints("<!-- other-review: fp=%s -->" % FP) == []
+    assert m.marker_fingerprints("x <!--quirk-review:fp=%s--> y" % FP) == []
 
 
 def test_marker_fingerprints_new_leading_block():
     body = marker_body(FP, "new")
     assert m.marker_fingerprints(body) == [FP]
     assert m.marker_fingerprints("\n  \n" + body) == [FP]
-    support = "<!-- sakura-review:v1\nkind: support\nfp: %s\nseat: reviewer\n-->\ntext" % FP
+    support = "<!-- quirk-review:v1\nkind: support\nfp: %s\nseat: reviewer\n-->\ntext" % FP
     assert m.marker_fingerprints(support) == [FP]
 
 
-def test_marker_fingerprints_legacy_markers_dedupe_and_preserve_order():
-    body = "<!-- sakura-review: fp=%s -->\n<!-- sakura-review: fp=%s -->\n<!-- sakura-review: fp=%s -->" % (FP, OTHER, FP)
-    assert m.marker_fingerprints(body) == [FP, OTHER]
-
-
-def test_marker_fingerprints_leading_block_ignores_planted_legacy_markers():
-    body = marker_body(FP, "new") + "\n<!-- sakura-review: fp=%s -->\n<!-- sakura-review: fp=%s -->" % (OTHER, FP)
+def test_marker_fingerprints_leading_block_ignores_planted_later_blocks():
+    body = marker_body(FP, "new") + "\n<!-- quirk-review:v1\nfp: %s\n-->\n<!-- quirk-review:v1\nfp: %s\n-->" % (OTHER, FP)
     assert m.marker_fingerprints(body) == [FP]
 
 
-def test_marker_fingerprints_leading_block_without_fp_ignores_planted_legacy_markers():
-    body = "<!-- sakura-review:v1\nkind: overview\nseat: reviewer\n-->\n<!-- sakura-review: fp=%s -->" % OTHER
+def test_marker_fingerprints_leading_block_without_fp_ignores_planted_later_blocks():
+    body = "<!-- quirk-review:v1\nkind: overview\nseat: reviewer\n-->\n<!-- quirk-review:v1\nfp: %s\n-->" % OTHER
     assert m.marker_fingerprints(body) == []
 
 
@@ -392,13 +386,9 @@ def test_marker_fingerprints_crlf_leading_block():
     assert m.marker_fingerprints(body) == [FP]
 
 
-def test_marker_fingerprints_crlf_leading_block_ignores_planted_legacy_markers():
-    body = (marker_body(FP, "new") + "\n<!-- sakura-review: fp=%s -->" % OTHER).replace("\n", "\r\n")
+def test_marker_fingerprints_crlf_leading_block_ignores_planted_later_blocks():
+    body = (marker_body(FP, "new") + "\n<!-- quirk-review:v1\nfp: %s\n-->" % OTHER).replace("\n", "\r\n")
     assert m.marker_fingerprints(body) == [FP]
-
-
-def test_marker_fingerprints_crlf_legacy_marker():
-    assert m.marker_fingerprints("Finding\r\n<!-- sakura-review: fp=%s -->\r\n" % FP) == [FP]
 
 
 def test_marker_fingerprints_ignores_block_that_is_not_leading():
@@ -407,25 +397,25 @@ def test_marker_fingerprints_ignores_block_that_is_not_leading():
 
 
 def test_marker_fingerprints_ignores_fp_outside_leading_block():
-    body = "<!-- sakura-review:v1\nkind: finding\n-->\nfp: %s\n" % FP
+    body = "<!-- quirk-review:v1\nkind: finding\n-->\nfp: %s\n" % FP
     assert m.marker_fingerprints(body) == []
 
 
 def test_marker_fingerprints_overview_block_list_values_are_not_fingerprints():
-    body = ("<!-- sakura-review:v1\nkind: overview\nposted: [%s, %s]\nseat: reviewer\n-->\nSummary"
+    body = ("<!-- quirk-review:v1\nkind: overview\nposted: [%s, %s]\nseat: reviewer\n-->\nSummary"
             % (FP, OTHER))
     assert m.marker_fingerprints(body) == []
 
 
 @pytest.mark.parametrize("fp", [FP[:63], FP + "0", "g" * 64, ""])
 def test_marker_fingerprints_ignores_garbage_and_wrong_length_hex(fp):
-    assert m.marker_fingerprints("<!-- sakura-review: fp=%s -->" % fp) == []
-    block = "<!-- sakura-review:v1\nkind: finding\nfp: %s\n-->\nx" % fp
+    assert m.marker_fingerprints("<!-- quirk-review:v1\nfp: %s\n-->" % fp) == []
+    block = "<!-- quirk-review:v1\nkind: finding\nfp: %s\n-->\nx" % fp
     assert m.marker_fingerprints(block) == []
 
 
 def test_marker_fingerprints_new_form_hex_must_be_lowercase():
-    block = "<!-- sakura-review:v1\nkind: finding\nfp: %s\n-->\nx" % FP.upper()
+    block = "<!-- quirk-review:v1\nkind: finding\nfp: %s\n-->\nx" % FP.upper()
     assert m.marker_fingerprints(block) == []
 
 
