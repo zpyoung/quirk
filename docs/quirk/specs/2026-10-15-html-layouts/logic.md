@@ -1,6 +1,6 @@
 # Logic spec: page shapes for `writing-html-artifacts`
 
-**Status**: Draft, awaiting user review
+**Status**: Approved by the user, 2026-10-15 · Tech spec: requested
 
 Pages built by `writing-html-artifacts` get one of seven named shapes, chosen by a `layout` field
 that works on every template. Today every tier-1 page is a single column with an optional right
