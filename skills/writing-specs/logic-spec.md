@@ -17,7 +17,7 @@ the user read and signed off on. It is never silently overridden downstream.
   & non-goals, glossary — precise architecture, components, error handling, and testing belong in
   the tech spec authored later at execution when warranted (see [tech-spec.md](tech-spec.md)); name
   file-level structure here only when it is itself the user-facing decision
-- Give each scenario with data to show an example (Data before, Walkthrough, Data after) per [scenario-examples.md](scenario-examples.md), written in the same pass as the scenario
+- Give each scenario with something to show an example per [scenario-examples.md](scenario-examples.md): Data before, Walkthrough and Data after, a [details section](scenario-examples.md#details-sections), or both, written in the same pass as the scenario
 - Include these sections, in addition to the coverage above:
   - **Decisions Locked** — the gray-area decisions confirmed during drill-in (one bullet per locked decision, grouped by area)
   - **Industry Insights** — distilled key findings from research agents, with source URLs; mark "(offline mode — validation pending)" if research was skipped
