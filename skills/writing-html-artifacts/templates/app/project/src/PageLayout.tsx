@@ -55,7 +55,25 @@ function readNav(main: HTMLElement): NavItem[] | null {
   return items
 }
 
-function NavLinks({ items, className }: { items: NavItem[]; className?: string }) {
+/**
+ * The id of the last nav heading whose top has passed 30% of the viewport height, or the last
+ * heading once the page is scrolled to the bottom; null before the first heading is reached.
+ */
+function readCurrentId(items: NavItem[]): string | null {
+  const ids = items.flatMap(({ heading, children }) => [heading.id, ...children.map((child) => child.id)])
+  const headings = ids.map((id) => ({ id, el: document.getElementById(id) })).filter((h) => h.el)
+  if (headings.length === 0) return null
+  const scrollable = document.documentElement.scrollHeight - window.innerHeight
+  if (scrollable > 0 && window.scrollY >= scrollable - 2) return headings[headings.length - 1].id
+  const line = window.innerHeight * 0.3
+  let current: string | null = null
+  for (const { id, el } of headings) {
+    if (el!.getBoundingClientRect().top <= line) current = id
+  }
+  return current
+}
+
+function NavLinks({ items, className, currentId }: { items: NavItem[]; className?: string; currentId?: string | null }) {
   // hash history owns location.hash, so a plain #id link would navigate the router instead of scrolling
   const jump = (event: MouseEvent<HTMLAnchorElement>, id: string) => {
     event.preventDefault()
@@ -63,7 +81,7 @@ function NavLinks({ items, className }: { items: NavItem[]; className?: string }
     document.getElementById(id)?.scrollIntoView()
   }
   const link = ({ id, label }: NavHeading) => (
-    <a href={`#${id}`} onClick={(event) => jump(event, id)}>
+    <a href={`#${id}`} onClick={(event) => jump(event, id)} aria-current={id === currentId ? 'location' : undefined}>
       {label}
     </a>
   )
@@ -85,7 +103,7 @@ function NavLinks({ items, className }: { items: NavItem[]; className?: string }
   )
 }
 
-function PageNav({ items }: { items: NavItem[] }) {
+function PageNav({ items, currentId }: { items: NavItem[]; currentId: string | null }) {
   const label = layout === 'reference' ? 'Sections' : 'On this page'
   return (
     <nav className="q-nav" aria-label={label}>
@@ -93,7 +111,7 @@ function PageNav({ items }: { items: NavItem[] }) {
         <summary>{label}</summary>
         <NavLinks items={items} />
       </details>
-      <NavLinks items={items} className="q-nav-rail" />
+      <NavLinks items={items} className="q-nav-rail" currentId={currentId} />
     </nav>
   )
 }
@@ -109,6 +127,7 @@ function PageNav({ items }: { items: NavItem[] }) {
 export function PageLayout({ summary, children, aside }: { summary: ReactNode; children: ReactNode; aside?: ReactNode }) {
   const mainRef = useRef<HTMLElement>(null)
   const [items, setItems] = useState<NavItem[] | null>(null)
+  const [currentId, setCurrentId] = useState<string | null>(null)
   const hasAside = aside !== undefined && aside !== null && aside !== false
 
   useEffect(() => {
@@ -128,12 +147,35 @@ export function PageLayout({ summary, children, aside }: { summary: ReactNode; c
     return () => observer.disconnect()
   }, [])
 
+  useEffect(() => {
+    if (!items) {
+      setCurrentId(null)
+      return
+    }
+    let frame = 0
+    const mark = () => {
+      frame = 0
+      setCurrentId(readCurrentId(items))
+    }
+    const schedule = () => {
+      if (!frame) frame = window.requestAnimationFrame(mark)
+    }
+    window.addEventListener('scroll', schedule, { passive: true })
+    window.addEventListener('resize', schedule)
+    mark()
+    return () => {
+      window.removeEventListener('scroll', schedule)
+      window.removeEventListener('resize', schedule)
+      if (frame) window.cancelAnimationFrame(frame)
+    }
+  }, [items])
+
   const summaryRegion = summary ? (
     <section className="q-summary" aria-label="Summary">
       {summary}
     </section>
   ) : null
-  const nav = items ? <PageNav items={items} /> : null
+  const nav = items ? <PageNav items={items} currentId={currentId} /> : null
   const main = (
     <main id="main" ref={mainRef}>
       {children}
