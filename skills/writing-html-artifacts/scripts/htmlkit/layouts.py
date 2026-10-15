@@ -39,11 +39,15 @@ def _source_error(message: str) -> Exception:
     return SourceError(message)
 
 
-def validate_layout(value: object) -> str:
-    """Return ``value`` when it names a shape; raises SourceError listing all seven names otherwise."""
+def validate_layout(value: object, *, origin: str = "header field 'layout'") -> str:
+    """Return ``value`` when it names a shape; raises SourceError listing all seven names otherwise.
+
+    ``origin`` names where the value came from (the source header, ``screen.json``, ``quirk-app.json``
+    or the ``--layout`` flag) so the error points the author at the place to fix.
+    """
     if isinstance(value, str) and value in LAYOUTS:
         return value
-    raise _source_error(f"header field 'layout' must be one of {', '.join(LAYOUTS)}, got {value!r}")
+    raise _source_error(f"{origin} must be one of {', '.join(LAYOUTS)}, got {value!r}")
 
 
 def summary_hint(layout: str) -> str:

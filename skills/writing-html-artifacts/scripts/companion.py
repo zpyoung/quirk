@@ -682,7 +682,7 @@ def load_screen(path: Path) -> dict:
     _text(spec, "diagram", False)
     if spec.get("layout") is not None:
         try:
-            validate_layout(spec["layout"])
+            validate_layout(spec["layout"], origin="screen.json key 'layout'")
         except assemble.SourceError as exc:
             raise ScreenError(str(exc)) from exc
     if spec.get("select", "single") not in ("single", "multi"):

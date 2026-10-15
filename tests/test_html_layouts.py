@@ -138,6 +138,13 @@ def test_validate_layout_rejects_anything_else_and_lists_all_seven(bad: object) 
     assert ", ".join(SEVEN) in str(info.value)
 
 
+def test_validate_layout_names_the_origin_it_is_given() -> None:
+    with pytest.raises(assemble.SourceError) as info:
+        layouts.validate_layout("slides", origin="--layout flag")
+    message = str(info.value)
+    assert message.startswith("--layout flag must be one of") and "header field" not in message
+
+
 # --- build_nav -------------------------------------------------------------------------------
 
 
@@ -315,7 +322,25 @@ def test_parse_source_rejects_bad_layout_and_nav(tmp_path: Path, meta: dict, fra
 def test_a_bad_layout_in_the_header_exits_2_and_lists_the_shapes(tmp_path: Path, env: dict, project: Path) -> None:
     rc, result = build(report_src(tmp_path, {"layout": "slides"}), tmp_path / "o.html", env, project)
     assert rc == 2 and ", ".join(SEVEN) in result["error"]
+    assert result["error"].startswith("header field 'layout' must be one of")
     assert not (tmp_path / "o.html").exists()
+
+
+def test_a_bad_layout_in_quirk_app_json_is_reported_as_that_key(tmp_path: Path, env: dict, project: Path) -> None:
+    source = project / ".quirk" / "html" / "demo"
+    source.mkdir(parents=True)
+    (source / "quirk-app.json").write_text(json.dumps({"layout": "poster"}))
+    rc, result = run_cli("build-app", "demo", "--project-dir", project, "--title", "T", env=env)
+    assert rc == 2 and ", ".join(SEVEN) in result["error"]
+    assert result["error"].startswith("quirk-app.json key 'layout' must be one of")
+    assert "header field" not in result["error"]
+
+
+def test_a_bad_layout_flag_is_reported_as_the_flag_not_a_header_field(tmp_path: Path, env: dict, project: Path) -> None:
+    rc, result = run_cli("build-app", "demo", "--project-dir", project, "--title", "T", "--layout", "poster", env=env)
+    assert rc == 2 and ", ".join(SEVEN) in result["error"]
+    assert result["error"].startswith("--layout flag must be one of")
+    assert "header field" not in result["error"]
 
 
 # --- build: layout record and rebuild --------------------------------------------------------

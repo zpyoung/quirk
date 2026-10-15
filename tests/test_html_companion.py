@@ -347,6 +347,13 @@ def test_show_rejects_malformed_screens(server: Server, changes: dict) -> None:
     assert "error" in out
 
 
+@pytest.mark.parametrize("bad", ["poster", "", 5])
+def test_a_bad_screen_layout_is_reported_as_the_screen_json_key(server: Server, bad: object) -> None:
+    out = server.show(screen_with(layout=bad), expect=2)
+    assert "screen.json key 'layout' must be one of" in out["error"]
+    assert ", ".join(LAYOUTS) in out["error"] and "header field" not in out["error"]
+
+
 def test_show_rejects_unreadable_or_non_object_json_and_missing_session(server: Server, tmp_path: Path) -> None:
     bad = tmp_path / "bad.json"
     bad.write_text("{nope")
