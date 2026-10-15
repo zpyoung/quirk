@@ -49,7 +49,7 @@ main.q-wrap[data-layout="dashboard"] {
   margin-bottom: 0;
 }
 
-:where(main, .q-summary) :is(p, ul, ol, blockquote) {
+:where(.q-page > :is(main, .q-summary)) :is(p, ul, ol, blockquote) {
   max-width: 70ch;
 }
 
@@ -147,11 +147,6 @@ main.q-wrap[data-layout="dashboard"] {
   background: var(--q-color-surface);
 }
 
-.q-page[data-layout="reference"] > .q-nav {
-  padding-inline-end: var(--q-space-4);
-  border-inline-end: 1px solid var(--q-color-border);
-}
-
 /* Aside beside main, and the tool's result beside its inputs, from 900px. */
 
 @media (min-width: 900px) {
@@ -220,6 +215,11 @@ main.q-wrap[data-layout="dashboard"] {
 /* The reference shape's section list is its left pane from 900px, with its own scroll. */
 
 @media (min-width: 900px) {
+  .q-page[data-layout="reference"] > .q-nav {
+    padding-inline-end: var(--q-space-4);
+    border-inline-end: 1px solid var(--q-color-border);
+  }
+
   .q-page[data-layout="reference"]:has(> main) .q-nav-rail {
     display: block;
   }
@@ -288,6 +288,8 @@ main.q-wrap[data-layout="dashboard"] {
   }
 
   :where(.q-page[data-layout="longform"]:has(> main) > main) {
+    box-sizing: content-box;
+    max-width: 70ch;
     padding-inline-end: 17rem;
   }
 }
@@ -312,6 +314,7 @@ main.q-wrap[data-layout="dashboard"] {
   }
 
   :where(.q-page > main) {
+    max-width: none;
     padding-inline-end: 0;
   }
 

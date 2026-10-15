@@ -64,12 +64,15 @@ def pages(tmp_path_factory: pytest.TempPathFactory) -> dict[tuple[str, str], tup
     work = tmp_path_factory.mktemp("shape-examples")
     project = work / "project"
     project.mkdir()
+    user = work / "user"
+    user.mkdir()
+    env = {**os.environ, "QUIRK_HTML_USER_DIR": str(user)}
     built: dict[tuple[str, str], tuple[Path, dict]] = {}
     for template, shape in EXAMPLES:
         src = _example(template, shape)
         assert src.is_file(), f"missing example {src}"
         page = work / f"{template}-{shape}.html"
-        code, result = run_cli("build", src, "--out", page, "--project-dir", project)
+        code, result = run_cli("build", src, "--out", page, "--project-dir", project, env=env)
         assert code == 0, f"{template}/{shape}: {result}"
         built[(template, shape)] = (page, result)
     return built
@@ -158,9 +161,6 @@ def test_shape_examples_use_the_kit_elements_that_show_the_shape(pages: dict, te
     assert "<q-compare" in html["comparison"]
     assert "<q-sidenote" in html["longform"]
     assert html["explainer"].count("<h2") >= 5
-
-
-# --- browser ----------------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="module")
@@ -342,6 +342,9 @@ def test_reference_nav_is_the_left_pane_beside_main_from_900(pages: dict, templa
     narrow = at(page, 375, ("nav", rect(NAV)), ("main", rect(MAIN)), ("summary", rect(SUMMARY)))
     assert narrow["nav"]["top"] >= narrow["summary"]["bottom"] - 1
     assert narrow["main"]["top"] >= narrow["nav"]["bottom"] - 1
+    pane = "(() => { const s = getComputedStyle(document.querySelector('.q-nav')); return [s.borderInlineEndWidth, s.paddingInlineEnd]; })()"
+    assert at(page, 375, ("pane", pane))["pane"] == ["0px", "0px"]
+    assert at(page, 900, ("pane", pane))["pane"] == ["1px", "16px"]
 
 
 @pytest.mark.usefixtures("browser_ready")
@@ -369,6 +372,38 @@ def test_aria_current_moves_to_the_section_scrolled_into_view(pages: dict, templ
             height=600,
         )["now"]
         assert results == {"count": 1, "values": ["location"], "inRail": True, "inTarget": True}
+
+
+@pytest.mark.usefixtures("browser_ready")
+@pytest.mark.parametrize("template", TEMPLATES)
+def test_the_last_nav_link_is_current_at_the_bottom_and_the_highlight_follows_back_up(pages: dict, template: str) -> None:
+    page = _page(pages, template, "explainer")
+    marked = (
+        "(() => { const links = [...document.querySelectorAll('.q-nav-rail a')]; const on = links.filter((a) => a.hasAttribute('aria-current'));"
+        " return {count: on.length, index: links.indexOf(on[0]), last: links.length - 1}; })()"
+    )
+    last_is_current = "(() => { const links = [...document.querySelectorAll('.q-nav-rail a')]; return links[links.length - 1].hasAttribute('aria-current'); })()"
+    to_bottom = (
+        {"eval": "window.scrollTo(0, document.documentElement.scrollHeight)", "as": "down"},
+        {"waitFor": last_is_current, "timeout": 3000},
+    )
+    at_bottom = at(page, 1280, ("marked", marked), ("bottom", "scrollY + innerHeight >= document.documentElement.scrollHeight - 2"), steps=to_bottom)
+    assert at_bottom["bottom"] is True
+    assert at_bottom["marked"]["count"] == 1
+    assert at_bottom["marked"]["index"] == at_bottom["marked"]["last"]
+
+    back_up = at(
+        page,
+        1280,
+        ("marked", marked),
+        steps=(
+            *to_bottom,
+            {"eval": "document.getElementById(document.querySelectorAll('.q-nav-rail a')[1].getAttribute('href').slice(1)).scrollIntoView({block: 'start'})", "as": "up"},
+            {"waitFor": f"!{last_is_current}", "timeout": 3000},
+        ),
+    )["marked"]
+    assert back_up["count"] == 1
+    assert back_up["index"] < back_up["last"]
 
 
 @pytest.mark.usefixtures("browser_ready")
@@ -438,6 +473,43 @@ def test_longform_sidenotes_sit_in_the_margin_without_overlapping_the_text(pages
         assert info["beyondOwn"] is True
 
 
+FULL_WIDTH_AFTER_NOTE = """(() => {
+  const own = document.querySelector('.q-page > main q-sidenote').closest('p');
+  const figure = document.createElement('figure');
+  figure.style.cssText = 'margin:0;width:100%;height:120px;background:#ccc';
+  own.after(figure);
+  const chart = document.createElement('div');
+  chart.setAttribute('data-probe', 'full');
+  chart.style.cssText = 'width:100%;height:80px;background:#999';
+  figure.after(chart);
+  return true;
+})()"""
+
+CONTENT_EDGE = """(() => {
+  const main = document.querySelector('.q-page > main');
+  const style = getComputedStyle(main);
+  const content = main.getBoundingClientRect().right - parseFloat(style.paddingRight) - parseFloat(style.borderRightWidth);
+  return [...main.querySelectorAll('q-sidenote')].map((n) => n.getBoundingClientRect().left - content);
+})()"""
+
+
+@pytest.mark.usefixtures("browser_ready")
+@pytest.mark.parametrize("template", TEMPLATES)
+@pytest.mark.parametrize("width", [1100, 1280, 1440, 1920])
+def test_longform_sidenotes_stay_outside_mains_content_box_beside_full_width_elements(pages: dict, template: str, width: int) -> None:
+    out = at(
+        _page(pages, template, "longform"),
+        width,
+        ("notes", OVERLAP),
+        ("gaps", CONTENT_EDGE),
+        steps=({"eval": FULL_WIDTH_AFTER_NOTE, "as": "inject"},),
+        height=900,
+    )
+    assert out["notes"]["overlaps"] == []
+    assert out["notes"]["fits"] is True
+    assert out["gaps"] and all(gap >= -0.5 for gap in out["gaps"]), out["gaps"]
+
+
 @pytest.mark.usefixtures("browser_ready")
 @pytest.mark.parametrize("template", TEMPLATES)
 def test_longform_sidenotes_are_inline_toggles_at_375(pages: dict, template: str) -> None:
@@ -481,9 +553,6 @@ def test_print_is_one_column_in_dom_order_with_the_nav_as_a_plain_list(pages: di
         assert (result["rail"], result["menu"]) == ((True, False) if expect_nav else (False, False)), shape
         tops = out["results"]["tops"]
         assert tops == sorted(tops), shape
-
-
-# --- skeletons from `create.py` and the companion widening -----------------------------------
 
 
 def test_create_py_skeleton_is_region_bearing() -> None:
@@ -570,3 +639,18 @@ def test_companion_screens_widen_only_when_they_name_a_layout(tmp_path: Path, la
         assert width == expected
     narrow = at(page, 800, ("main", rect("main.q-wrap")))["main"]["width"]
     assert narrow == 800
+
+
+@pytest.mark.usefixtures("browser_ready")
+def test_a_page_without_q_page_keeps_uncapped_paragraphs(tmp_path: Path) -> None:
+    page = tmp_path / "screen.html"
+    css = (SKILL / "theme" / "layout.css").read_text(encoding="utf-8")
+    page.write_text(COMPANION_PAGE.format(layout_css=css, layout=""), encoding="utf-8")
+    probe = (
+        "(() => { const p = document.querySelector('main p'); const probe = document.createElement('div');"
+        " probe.style.cssText = 'position:absolute;visibility:hidden;width:70ch'; p.appendChild(probe);"
+        " const cap = probe.getBoundingClientRect().width; probe.remove();"
+        " return {width: p.getBoundingClientRect().width, cap}; })()"
+    )
+    sizes = at(page, 1600, ("sizes", probe))["sizes"]
+    assert sizes["width"] > sizes["cap"] + 1
