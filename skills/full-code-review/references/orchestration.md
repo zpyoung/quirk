@@ -384,3 +384,18 @@ which catches errors one family makes consistently.
 
 Record `run.verification` as `{enabled, model, checked, refuted, fallback}`, where
 `model` is the model that actually answered.
+
+## Running the smoke corpus
+
+`tests/fixtures/full-code-review/smoke/<case>/` holds five planted bugs, one per lens:
+`correctness`, `safety`, `test-adequacy`, `db`, `scope`. Run it by hand after changing a
+checklist, a prompt, or the default model map; it needs live models, so CI only checks
+that each patch applies. For each case:
+
+1. Copy `repo/` to a temporary directory, `git init`, and commit it.
+2. `git apply` the case's `change.patch` and leave it uncommitted.
+3. Run the skill with `--local --no-open` in that directory (for `scope`, confirm the
+   intent from `expected.json`'s `intent` when asked).
+4. `python3 "$SCRIPTS/smoke_check.py" --report <report.json> --expected <case>/expected.json`
+
+Every case must exit 0. A miss prints the findings the review produced instead.
