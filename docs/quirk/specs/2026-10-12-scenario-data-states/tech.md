@@ -104,7 +104,7 @@ Back-link: [4](logic.md#4-an-open-gap-blocks-its-scenario-until-the-answer-is-in
 
 `CONTRACT: scenario_open_asks(scenario: dict) -> List[str]`
 - Pre: `scenario` passed `validate_logic_v2`'s scenario checks (or has no `example`).
-- Post: the captured question text of every open-gap match across `before`, each of `steps` in order, then `after`. `[]` when there is no `example`.
+- Post: the captured question text of every open-gap match across `before`, each of `steps` in order, `after`, then `details.body`, skipping parts the example doesn't have. `[]` when there is no `example`.
 - Invariant: pure; no I/O; the only function in the repo that decides whether a gap is open. The page reads its result from the payload.
 
 ### Validation (`validate_logic_v2`)
@@ -112,8 +112,12 @@ Back-link: [4](logic.md#4-an-open-gap-blocks-its-scenario-until-the-answer-is-in
 Back-links: [Where an example lives](logic.md#where-an-example-lives), [9](logic.md#9-specs-without-examples-are-unchanged).
 
 - `example` absent: no change in behavior.
-- `example` present: must be an object with exactly the keys `before`, `steps`, `after`. `before` and `after` are non-empty strings; `steps` is a non-empty array of non-empty strings. Each violation is one `Validator.error` at the JSON pointer of the offending key (`/scenarios/<i>/example`, `/scenarios/<i>/example/steps/<j>`, ...). Unknown keys inside `example` are errors.
-- Malformed marker: every match of the look-alike regex in any part must start a match of the open-gap regex at the same offset. Otherwise `Validator.error` at that part's pointer with the message `malformed [ASK] marker; write [ASK: <question>]`. Applies in both stages.
+- `example` present: must be an object whose keys are drawn from `before`, `steps`, `after`, `details`. Unknown keys inside `example` are errors.
+  - The data-state parts are all or nothing: when any of `before`, `steps`, `after` is present, all three are required. `before` and `after` are non-empty strings; `steps` is a non-empty array of non-empty strings.
+  - An example with none of the three and no `details` gets one error at `/scenarios/<i>/example`: `example needs before, steps and after, or details`.
+  - `details` ([1.4](logic.md#1-claude-writes-an-example-for-every-scenario-with-data-to-show), [7.3](logic.md#7-logicmd-shows-examples-as-labelled-sub-bullets)) is an object with exactly `title` and `body`. `body` is a non-empty string. `title` is a non-empty string of one line of plain text: no `\n` or `\r`, none of `` * _ ` [ ] < > ``, and, after trimming and dropping one trailing `:`, not equal ignoring case to `Data before`, `Walkthrough` or `Data after`. Errors: `details title must be one line of plain text` and `details title reuses a data-state label`, at `/scenarios/<i>/example/details/title`.
+  - Each violation is one `Validator.error` at the JSON pointer of the offending key (`/scenarios/<i>/example`, `/scenarios/<i>/example/steps/<j>`, `/scenarios/<i>/example/details/body`, ...).
+- Malformed marker: every match of the look-alike regex in any part, `details.body` included, must start a match of the open-gap regex at the same offset. Otherwise `Validator.error` at that part's pointer with the message `malformed [ASK] marker; write [ASK: <question>]`. Applies in both stages.
 - Stage 2 only: a scenario without `dropReason` whose `scenario_open_asks` is non-empty gets `Validator.error` at `/scenarios/<i>/example` with the message `open [ASK] after stage-1 sign-off`.
 - Errors never raise; they surface through the existing `emit_errors` path with exit 1.
 
@@ -138,8 +142,8 @@ Back-links: [7](logic.md#7-logicmd-shows-examples-as-labelled-sub-bullets), [9](
 
 `CONTRACT: _example_markdown_lines(example: dict) -> List[str]`
 - Called once per scenario that has `example`, between the alternatives line and the explanation line. A scenario without `example` emits exactly the lines it emits today.
-- Output, in order: `   - **Data before:** <before>`, `   - **Walkthrough:**`, one `     <n>. <step>` per step (1-based), `   - **Data after:** <after>`.
-- A newline inside a part renders as a hard break: the line before it ends with two spaces, and the continuation line is indented to that item's content column (5 spaces for Data before/after, 8 for a step, so continuation under `     1. ` aligns). CRLF and CR normalize to LF first, as `markdown_cell` does.
+- Output, in order: `   - **Data before:** <before>`, `   - **Walkthrough:**`, one `     <n>. <step>` per step (1-based), `   - **Data after:** <after>`, each only when the example has the data-state parts. Then, when it has `details` ([7.2](logic.md#7-logicmd-shows-examples-as-labelled-sub-bullets)): `   - **<title>:**`, an empty line, the body with every non-empty line indented 5 spaces (empty lines stay empty, with no trailing spaces), then an empty line. The empty lines keep tables and code blocks as block content of the sub-bullet and end them before the next sub-bullet.
+- A newline inside a data-state part renders as a hard break (never inside `details.body`, whose newlines are ordinary Markdown): the line before it ends with two spaces, and the continuation line is indented to that item's content column (5 spaces for Data before/after, 8 for a step, so continuation under `     1. ` aligns). CRLF and CR normalize to LF first, as `markdown_cell` does.
 - Mark characters (`✓`, `✗`, `*`, `[ASK: …]`, `**`) pass through unchanged. No escaping.
 - Deterministic: same input, same bytes.
 
@@ -187,7 +191,8 @@ Back-link: [6](logic.md#6-the-review-page-shows-examples-in-the-focus-dialog).
 - Body order: Given, When, Then, the example pane (when present), Why, decision, comment. In stage 2 the Then is the read-only `Clause` of `scenarioThen`, and the decision area shows what the table's stage-2 decision column shows (Approved/Dropped token, or the re-approve checkbox for a reopened scenario). There is no comment field in stage 2.
 
 `CONTRACT: ScenarioExampleView({ example }: { example: ScenarioExample })`
-- Three labelled panes, `Data before`, `Walkthrough`, `Data after`, in a CSS grid of three columns (`1fr 1.2fr 1fr`) that stacks to one column below 720px.
+- Three labelled panes, `Data before`, `Walkthrough`, `Data after`, in a CSS grid of three columns (`1fr 1.2fr 1fr`) that stacks to one column below 720px. Rendered only when the example has the data-state parts.
+- When the example has `details` ([6.4](logic.md#6-the-review-page-shows-examples-in-the-focus-dialog)): one full-width pane below the grid, `aria-label` and visible label set to `details.title`, class `example-pane example-details`. The body renders as one block `Markdown` (so tables, lists and code blocks keep their structure) with the item-link plugins, `exampleMarkPlugins`, and `EXAMPLE_PHRASE_PLUGIN`. Text inside code spans and code blocks renders exactly as written: no placeholder swap, no underscore guard, no colouring. The body takes the same CRLF/CR normalization and underscore guard as the other parts, outside code.
 - `before` and `after` render through `SpecMarkdown` with every single newline turned into a markdown hard break, after CRLF and CR normalize to LF as on the markdown side. `steps` render as an ordered list, one `SpecMarkdown` per step.
 - Mark colouring is via `exampleMarkPlugins`, passed only inside this view, alongside the existing item-link plugins.
 
@@ -197,6 +202,8 @@ The pane colours marks in two ways:
 - `CONTRACT: exampleMarkPlugins: MarkdownInlinePlugin[]`: two global `{ pattern, render }` plugins, as in `ItemLinksProvider`, for the marks that survive parsing:
   - Invented value, rendered as a grey italic span with the `*` kept. `REGEX:` `(?<=^|\s|\*,)[^\s*]+\*(?=[\s,;:.)\]]|$)` finds it in the source text. Because the Astryx parser pairs two such stars in one part as emphasis, the pane first escapes any literal U+E000 in the text, then swaps each matched `*` for the private-use placeholder U+E000; the plugin matches the placeholder and the rendered span restores the `*`.
   - Gap, rendered as an amber underlined span. `REGEX:` `\[ASK: [^\[\]\n]+\]`
+
+- `CONTRACT: EXAMPLE_PHRASE_PLUGIN: MarkdownInlinePlugin`, details body only: colours a `✓`/`✗` phrase within one text node, `REGEX:` `[✓✗][^;\n]+`. A phrase is coloured up to the next `;`, line end, or inline formatting, because block Markdown can't be cut into per-line phrases without breaking tables and lists.
 
 The gap pattern here is display only and must match the renderer's open-gap regex. An invented value inside a result or rejection phrase renders as an invented-value span nested inside that phrase's span. Invented-value matching starts only at whitespace or right after a previous value's `*,` (so `4*,5*` marks both), which keeps long runs without `*` linear. Links in any page markdown render only for `http:`, `https:`, `mailto:` and `#` targets, via `OFFLINE_MARKDOWN_COMPONENTS`. Records need no plugin: `strong` inside `.scenario-example` is styled blue.
 
@@ -230,16 +237,20 @@ Back-link: [Where an example lives](logic.md#where-an-example-lives).
 
 | Key | Type | Rule |
 |---|---|---|
-| `example` | object, optional | Exactly `before`, `steps`, `after`. Hashed with the scenario. |
+| `example` | object, optional | `before`, `steps`, `after` (all or none), plus optional `details`; at least one form. Hashed with the scenario. |
 | `example.before` | string, non-empty | Markdown with marks. |
 | `example.steps` | string[], length ≥ 1, each non-empty | One step per entry; the renderer numbers them. |
 | `example.after` | string, non-empty | Markdown with marks. |
+| `example.details` | object, optional | Exactly `title`, `body`. |
+| `example.details.title` | string | One line of plain text; not a data-state label. |
+| `example.details.body` | string, non-empty | Block Markdown with marks: tables, lists, code blocks. |
 
 `SCHEMA:` `spec-types.ts`:
 
 | Type | Shape |
 |---|---|
-| `ScenarioExample` | `{ before: Markdown; steps: string[]; after: Markdown }` |
+| `ScenarioExample` | `{ before?: Markdown; steps?: string[]; after?: Markdown; details?: ScenarioDetails }` |
+| `ScenarioDetails` | `{ title: string; body: Markdown }` |
 | `Scenario` | adds `example?: ScenarioExample` |
 | `LogicSpecPayload` | adds `openAsks: Record<ScenarioId, string[]>` |
 
@@ -258,6 +269,7 @@ Back-links: [Conventions](logic.md#conventions), [What an example is](logic.md#w
 - The sync rule: rewrite the example in the same edit as its scenario, amendments included.
 - The self-review example check: every example agrees with its Then, and each open `[ASK]` is a question the design didn't already answer.
 - The downstream rule: requirements derive from the scenario, and a `*` value is never an expected value. Nothing about turning examples into tests.
+- Details sections ([1.3-1.5](logic.md#1-claude-writes-an-example-for-every-scenario-with-data-to-show)): when to write one instead of or beside the data-state parts, the title rules, that the body may hold tables, lists and code blocks, that the same marks apply except inside code, and the `logic.md` layout.
 
 ## DO-NOT-CHANGE fences
 
@@ -326,6 +338,8 @@ Back-links: [Key decisions](logic.md#key-decisions--rationale) (success criteria
 
 **Doc tests** (`tests/test_writing_specs_skill.py`): add `scenario-examples.md` to `test_skill_files_exist`; assert both rubrics link it. The existing cross-file link and anchor test covers the new file automatically.
 
+**Details sections** (amendment 2026-10-15): a fixture `tests/fixtures/interactive/v2/details/logic.json`, stage 1, with one details-only scenario holding a table and an `[ASK]`, one scenario with both forms, and one with neither. Python tests cover every new validation error, the all-or-nothing rule, `scenario_open_asks` reading the body, the fold gate on a details-only `[ASK]`, and the exact `logic.md` lines including a table body. `check-examples.ts` asserts the details pane renders under its title, a table survives as a `<table>`, marks are coloured outside code and plain inside it, and no column grid renders for a details-only example. The existing goldens stay byte-identical.
+
 **Acceptance bar:** `pytest -q` green from the repo root, and `pnpm run check` green in `skills/writing-specs/interactive/app/`.
 
 ## Non-goals
@@ -334,4 +348,4 @@ Everything in the logic spec's [Scope & non-goals](logic.md#scope--non-goals), p
 - No change to `ReviewState`, exports, or the export record.
 - No JS unit-test framework; `tsx` check scripts only.
 - No change to the brainstorming skill; it already defers to the rubrics.
-- The `[tech-spec]` Deferred Ideas are resolved here as follows: the `*` escape rule is "no single-asterisk emphasis in examples, no escaping"; the mark patterns are the table above; near-miss `[ASK]` forms are validation errors; the automatic update wording is `EXAMPLE_OUTCOME_UPDATE_PREFIX`; the dialog width is 1040.
+- The `[tech-spec]` Deferred Ideas are resolved here as follows: the `*` escape rule is "no single-asterisk emphasis in examples, no escaping"; the mark patterns are the table above; near-miss `[ASK]` forms are validation errors; the automatic update wording is `EXAMPLE_OUTCOME_UPDATE_PREFIX`; the dialog width is 1040; phrase colouring in a details body is `EXAMPLE_PHRASE_PLUGIN`, per text node.
