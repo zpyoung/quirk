@@ -73,7 +73,7 @@ function segmentLine(line: string): Segment[] {
 function ExampleMarkdown({ children, hasLineBreaks }: { children: string; hasLineBreaks?: boolean }) {
   const itemLinkPlugins = useItemLinkPlugins()
   const inlinePlugins = [...(itemLinkPlugins ?? []), ...exampleMarkPlugins, restorePlaceholders]
-  const text = children.replace(/\r\n?/g, '\n').replace(/_/g, '_​').replaceAll(STAR, LITERAL_STAR_SENTINEL).replace(INVENTED_MARK, `$1${STAR}`)
+  const text = guardProse(children.replace(/\r\n?/g, '\n'))
   if (!new RegExp(EXAMPLE_PHRASE.source).test(text)) {
     return (
       <Markdown components={OFFLINE_MARKDOWN_COMPONENTS} inlinePlugins={inlinePlugins} contentWidth="100%" density="compact">
@@ -105,41 +105,80 @@ function ExampleMarkdown({ children, hasLineBreaks }: { children: string; hasLin
   )
 }
 
-/** Underscore guard plus the invented-value star swap, for text that is not inside code. */
-function guardProse(text: string): string {
+/** Underscore guard plus the invented-value star swap, for plain prose with no link destinations or code in it. */
+function guardPlain(text: string): string {
   return text.replace(/_/g, '_\u200b').replaceAll(STAR, LITERAL_STAR_SENTINEL).replace(INVENTED_MARK, `$1${STAR}`)
 }
 
-/** Guards one stretch of prose that sits beside code, padding the edges the code touches so the star pattern's start and end anchors don't treat the code as the text's boundary. */
-function guardProseBesideCode(text: string, afterCode: boolean, beforeCode: boolean): string {
-  const guarded = guardProse(`${afterCode ? '\u0001' : ''}${text}${beforeCode ? '\u0001' : ''}`)
-  return guarded.slice(afterCode ? 1 : 0, beforeCode ? -1 : undefined)
+/** Inline link destinations (`](...)`) and autolinks, whose text is a URL that the guards would corrupt. Every branch starts at a distinct character and the destination body always matches, so it cannot backtrack. */
+const LINK_TARGET = /\]\((?:<[^<>\n]*>|(?:[^\s()]|\([^\s()]*\))*)\)?|<[a-zA-Z][a-zA-Z0-9+.-]{1,31}:[^\s<>]*>/g
+
+/** Guards text that is not inside code, leaving link destinations and autolinks exactly as written. */
+function guardProse(text: string): string {
+  let out = ''
+  let last = 0
+  for (const m of text.matchAll(LINK_TARGET)) {
+    out += guardBesideVerbatim(text.slice(last, m.index), last > 0, true, guardPlain) + m[0]
+    last = m.index + m[0].length
+  }
+  return out + guardBesideVerbatim(text.slice(last), last > 0, false, guardPlain)
 }
 
-/** Guards one paragraph, leaving its inline code spans exactly as written. A run of N backticks opens a span that the next run of exactly N closes; an unmatched run is literal. */
+/** Guards one stretch of prose that sits beside verbatim text (code or a link target), padding the edges that text touches so the star pattern's start and end anchors don't treat it as the stretch's boundary. */
+function guardBesideVerbatim(text: string, afterVerbatim: boolean, beforeVerbatim: boolean, guard: (text: string) => string): string {
+  const guarded = guard(`${afterVerbatim ? '\u0001' : ''}${text}${beforeVerbatim ? '\u0001' : ''}`)
+  return guarded.slice(afterVerbatim ? 1 : 0, beforeVerbatim ? -1 : undefined)
+}
+
+/** Whether the character at `index` is escaped by an odd number of backslashes right before it. */
+function isBackslashEscaped(text: string, index: number): boolean {
+  let count = 0
+  while (index - count > 0 && text[index - count - 1] === '\\') count++
+  return count % 2 === 1
+}
+
+/**
+ * Guards one paragraph, leaving its inline code spans exactly as written. A run of N backticks opens a span
+ * that the next run of exactly N closes; an unmatched run is literal. A backtick outside code that follows an
+ * odd number of backslashes is a literal character, so it neither opens a span nor shortens a run it closes;
+ * inside a span backslashes are literal.
+ */
 function guardParagraph(paragraph: string): string {
-  const runs = [...paragraph.matchAll(/`+/g)]
-  const nextSameLength = new Array<number>(runs.length).fill(-1)
-  const latestByLength = new Map<number, number>()
-  for (let i = runs.length - 1; i >= 0; i--) {
-    nextSameLength[i] = latestByLength.get(runs[i][0].length) ?? -1
-    latestByLength.set(runs[i][0].length, i)
+  const runs = [...paragraph.matchAll(/`+/g)].map((m) => ({ start: m.index, length: m[0].length }))
+  const runsByLength = new Map<number, number[]>()
+  runs.forEach((run, i) => {
+    const indexes = runsByLength.get(run.length)
+    if (indexes) indexes.push(i)
+    else runsByLength.set(run.length, [i])
+  })
+  const scanned = new Map<number, number>()
+  // opener positions only grow, so each length's list is walked once overall
+  const nextRunOfLength = (length: number, after: number): number => {
+    const indexes = runsByLength.get(length)
+    if (!indexes) return -1
+    let at = scanned.get(length) ?? 0
+    while (at < indexes.length && indexes[at] <= after) at++
+    scanned.set(length, at)
+    return at < indexes.length ? indexes[at] : -1
   }
   let out = ''
   let cursor = 0
   let i = 0
   while (i < runs.length) {
-    const closer = nextSameLength[i]
+    const escaped = isBackslashEscaped(paragraph, runs[i].start) ? 1 : 0
+    const openStart = runs[i].start + escaped
+    const openLength = runs[i].length - escaped
+    const closer = openLength > 0 ? nextRunOfLength(openLength, i) : -1
     if (closer === -1) {
       i++
       continue
     }
-    const spanEnd = runs[closer].index + runs[closer][0].length
-    out += guardProseBesideCode(paragraph.slice(cursor, runs[i].index), cursor > 0, true) + paragraph.slice(runs[i].index, spanEnd)
+    const spanEnd = runs[closer].start + runs[closer].length
+    out += guardBesideVerbatim(paragraph.slice(cursor, openStart), cursor > 0, true, guardProse) + paragraph.slice(openStart, spanEnd)
     cursor = spanEnd
     i = closer + 1
   }
-  return out + guardProseBesideCode(paragraph.slice(cursor), cursor > 0, false)
+  return out + guardBesideVerbatim(paragraph.slice(cursor), cursor > 0, false, guardProse)
 }
 
 /** Guards prose outside code; a code span never reaches across a blank line. */
@@ -150,7 +189,8 @@ function guardProseOutsideCode(text: string): string {
     .join('')
 }
 
-const FENCE_LINE = /^[ \t]*(?:>[ \t]*)*(`{3,}|~{3,})(.*)$/
+/** A fence line, including one that opens or closes inside blockquote and list-item markers (`> `, `- `, `1. `, nested or mixed). */
+const FENCE_LINE = /^[ \t]*(?:>[ \t]*|(?:[-*+]|\d{1,9}[.)])[ \t]+)*(`{3,}|~{3,})(.*)$/
 
 /** Normalizes line endings, then applies the guards to everything except fenced code blocks and inline code spans, which pass through as written. */
 function prepareDetailsBody(body: string): string {

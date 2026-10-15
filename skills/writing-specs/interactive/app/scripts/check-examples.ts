@@ -176,6 +176,63 @@ const bodyStartedAt = performance.now()
 render({ details: { title: 'Long', body: `${longBody} \`${longBody}\`\n\n${'`a '.repeat(20_000)}\n\n${'x*'.repeat(20_000)} ✓ ${longBody}` } })
 assert.ok(performance.now() - bodyStartedAt < 1500, 'a long details body must render in linear time')
 
+const ZWSP = '\u200b'
+const PLACEHOLDER = /[\uE000\uE001]/
+const codeText = (html: string) => [...html.matchAll(/<code[^>]*>([\s\S]*?)<\/code>/g)].map((m) => m[1].replace(/<[^>]+>/g, ''))
+const MARKED_LINE = 'a_b 4* ✓ ok'
+for (const [name, body] of [
+  ['bullet', `- \`\`\`\n  ${MARKED_LINE}\n  \`\`\``],
+  ['ordered', `1. \`\`\`\n   ${MARKED_LINE}\n   \`\`\``],
+  ['paren ordered', `1) \`\`\`\n   ${MARKED_LINE}\n   \`\`\``],
+  ['nested list in a quote', `> - \`\`\`\n>   ${MARKED_LINE}\n>   \`\`\``],
+  ['nested lists', `- outer\n  1. \`\`\`\n     ${MARKED_LINE}\n     \`\`\`\n\nAfter 5*`],
+  ['tilde in a list', `* ~~~\n  ${MARKED_LINE}\n  ~~~`],
+] as const) {
+  const html = render({ details: { title: 'Listed fence', body } })
+  const blocks = codeText(html)
+  assert.equal(blocks.length, 1, `${name}: the fence must render as one code block`)
+  assert.ok(blocks[0].includes(MARKED_LINE), `${name}: code contents must render as written`)
+  assert.ok(!html.includes(ZWSP) && !PLACEHOLDER.test(html), `${name}: no guard characters may reach the page`)
+  assert.ok(!/example-(result|rejection|invented|gap)/.test(html.replace(/<span class="example-invented">5\*<\/span>/g, '')), `${name}: no mark spans inside the code`)
+}
+const afterListFence = render({ details: { title: 'Listed fence', body: `- \`\`\`\n  keep_me 1*\n  \`\`\`\n\nout_side 2*` } })
+assert.ok(afterListFence.includes('out_' + ZWSP + 'side'), 'prose after the closed list fence is guarded again')
+assert.equal(countOf(afterListFence, /example-invented/g), 1)
+
+const escapedTicks = render({ details: { title: 'Escaped', body: 'Escaped \\` 4* \\` and 5*' } })
+assert.equal(countOf(escapedTicks, /class="example-invented"/g), 2, 'a backslash-escaped backtick opens no code span')
+assert.ok(escapedTicks.includes('"example-invented">4*</span>') && escapedTicks.includes('"example-invented">5*</span>'))
+const escapedThenReal = render({ details: { title: 'Escaped', body: 'Lead \\`a_b `x_y 3*` and \\\\`c_d 6*` end 7*' } })
+assert.deepEqual(codeText(escapedThenReal), ['x_y 3*', 'c_d 6*'])
+assert.equal(countOf(escapedThenReal, /class="example-invented"/g), 1, 'only the value outside both spans is marked')
+const backslashInSpan = render({ details: { title: 'Backslash', body: 'A `x_y\\` then 2*' } })
+assert.deepEqual(codeText(backslashInSpan), ['x_y\\'], 'a backslash before a closing backtick is literal inside a span')
+assert.ok(backslashInSpan.includes('"example-invented">2*</span>'))
+
+const LINK_URL = 'https://example.test/a_b?q=c_d'
+const hrefsOf = (html: string) => [...html.matchAll(/href="([^"]*)"/g)].map((m) => m[1])
+const linkBody = render({ details: { title: 'Links', body: `See [the_report](${LINK_URL}) and <${LINK_URL}> but plain_name stays guarded` } })
+assert.deepEqual(hrefsOf(linkBody), [LINK_URL])
+assert.ok(linkBody.includes(`&lt;${LINK_URL}&gt;`), 'an autolink keeps its underscores verbatim')
+assert.ok(linkBody.includes('the_' + ZWSP + 'report') || linkBody.includes('the_report'), 'the link text still renders')
+assert.ok(linkBody.includes('plain_' + ZWSP + 'name'), 'prose underscores outside the links keep the guard')
+const linkState = render({ before: `[report_one](${LINK_URL}) 4*`, steps: [`[report_two](${LINK_URL})`], after: `✓ [report_three](${LINK_URL}) 5*` })
+assert.equal(hrefsOf(linkState).length, 3)
+assert.ok(hrefsOf(linkState).every((href) => href === LINK_URL), 'a data-state link destination keeps its underscores')
+for (const text of ['report_one', 'report_two', 'report_three']) assert.ok(linkState.includes(text.replace('_', '_' + ZWSP)) || linkState.includes(text), `${text} link text renders`)
+assert.equal(countOf(linkState, /class="example-invented"/g), 2)
+const parenLink = render({ details: { title: 'Links', body: '[w](https://example.test/a_(b_c)) a_b' } })
+assert.deepEqual(hrefsOf(parenLink), ['https://example.test/a_(b_c)'])
+const linkThenValue = render({ details: { title: 'Links', body: '[w_x](https://example.test/x_y) then 4* and b_c' } })
+assert.deepEqual(hrefsOf(linkThenValue), ['https://example.test/x_y'])
+assert.equal(countOf(linkThenValue, /class="example-invented"/g), 1)
+assert.ok(linkThenValue.includes('b_' + ZWSP + 'c'))
+
+const spacedLinks = '](' .repeat(20_000)
+const linkStartedAt = performance.now()
+render({ details: { title: 'Long', body: `${spacedLinks}\n\n${'<a:'.repeat(20_000)}\n\n${'\\`'.repeat(20_000)}\n\n${'`a``b```'.repeat(5_000)}` } })
+assert.ok(performance.now() - linkStartedAt < 1500, 'link targets and escaped backticks must stay linear-time')
+
 const base: Scenario = {
   id: 'S1', behavior: 'B1', given: 'g', when: 'w', then: 'Then the spec outcome', alternatives: ['Then alt'], explanation: 'e', provenance: 'claude',
 }
