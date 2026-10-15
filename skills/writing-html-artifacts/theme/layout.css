@@ -13,16 +13,16 @@
   max-width: none;
 }
 
-main.q-wrap[data-layout="report"],
-main.q-wrap[data-layout="explainer"],
-main.q-wrap[data-layout="longform"],
-main.q-wrap[data-layout="tool"],
-main.q-wrap[data-layout="comparison"],
-main.q-wrap[data-layout="reference"] {
+.q-wrap[data-layout="report"],
+.q-wrap[data-layout="explainer"],
+.q-wrap[data-layout="longform"],
+.q-wrap[data-layout="tool"],
+.q-wrap[data-layout="comparison"],
+.q-wrap[data-layout="reference"] {
   max-width: 1440px;
 }
 
-main.q-wrap[data-layout="dashboard"] {
+.q-wrap[data-layout="dashboard"] {
   max-width: none;
 }
 
