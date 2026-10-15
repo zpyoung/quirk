@@ -141,7 +141,7 @@ def make_template(
         )
         (tdir / "skeleton.html").write_text(SKELETON, encoding="utf-8")
         (tdir / "example.src.html").write_text(
-            '<!-- quirk-src {"template": "%s", "title": "T"} -->\n<!-- slot: main -->\n<p>hi</p>\n' % name,
+            '<!-- quirk-src {"template": "%s", "title": "T"} -->\n<!-- slot: summary -->\n<p>s</p>\n<!-- slot: main -->\n<p>hi</p>\n' % name,
             encoding="utf-8",
         )
     else:

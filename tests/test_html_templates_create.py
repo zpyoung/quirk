@@ -22,8 +22,10 @@ from htmlkit import assemble, create, manifest, resolve  # noqa: E402
 CLI = SKILL / "scripts" / "quirk_html.py"
 
 SRC = """<!-- quirk-src {"template": "report", "title": "Weekly notes", "mode": "offline", "libraries": []} -->
-<!-- slot: main -->
+<!-- slot: summary -->
 <p class="q-lede">Nothing broke this week.</p>
+<!-- slot: main -->
+<p>Details follow.</p>
 """
 
 PLAIN = """<!doctype html>

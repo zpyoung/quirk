@@ -251,7 +251,7 @@ def test_editing_a_tier_2_example_after_verifying_makes_it_unverified(tmp_path: 
 def _tier1_with_data(tmp_path: Path, header: dict) -> Path:
     tdir = _template(tmp_path)
     (tdir / "example.src.html").write_text(
-        "<!-- quirk-src " + json.dumps(header) + " -->\n<!-- slot: main -->\n<p>hi</p>\n", encoding="utf-8"
+        "<!-- quirk-src " + json.dumps(header) + " -->\n<!-- slot: summary -->\n<p>s</p>\n<!-- slot: main -->\n<p>hi</p>\n", encoding="utf-8"
     )
     return tdir
 

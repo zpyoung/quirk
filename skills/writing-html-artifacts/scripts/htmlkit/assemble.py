@@ -27,6 +27,7 @@ from . import SKILL_DIR, kitcheck
 from .checks import MODES, SIZE_FAIL, SIZE_WARN, default_shells, run_checks
 from .fsutil import atomic_write, ensure_self_ignoring
 from .header import read_header, render_header
+from .layouts import DEFAULT_LAYOUT, LAYOUTS, NAV_MODES, build_nav, collect_ids, render_regions, summary_hint, validate_layout
 from .manifest import Template
 from .resolve import (
     TemplateNotFound,
@@ -40,6 +41,7 @@ from .vendor import VendorError, VendorStore, shell_block
 from .verify_runner import default_out_dir, report_is_stale
 
 SOURCE_MODES = ("offline", "connected")
+RESERVED_SLOTS = ("summary",)
 _SOURCE_HEADER = re.compile(r"^<!-- quirk-src (\{.*\}) -->[ \t]*$")
 _SLOT_LINE = re.compile(r"^<!-- slot: ([a-z][a-z0-9-]{0,30}) -->$", re.M)
 _PLACEHOLDER = re.compile(r"\{\{[^{}]*\}\}")
@@ -66,6 +68,8 @@ class Source:
     data: Optional[str] = None
     tier_reason: Optional[str] = None
     slots: dict[str, str] = field(default_factory=dict)
+    layout: Optional[str] = None
+    nav: str = "auto"
 
 
 def _string_list(meta: dict, key: str) -> list[str]:
@@ -100,6 +104,10 @@ def parse_source(path: Path) -> Source:
     mode = meta.get("mode", "offline")
     if mode not in SOURCE_MODES:
         raise SourceError(f"header field 'mode' must be offline or connected, got {mode!r}")
+    layout = validate_layout(meta["layout"]) if "layout" in meta else None
+    nav = meta.get("nav", "auto")
+    if nav not in NAV_MODES:
+        raise SourceError(f"header field 'nav' must be one of {', '.join(NAV_MODES)}, got {nav!r}")
     data = meta.get("data")
     if data is not None and not isinstance(data, str):
         raise SourceError("header field 'data' must be a path string")
@@ -130,6 +138,8 @@ def parse_source(path: Path) -> Source:
         data=data,
         tier_reason=reason or None,
         slots=slots,
+        layout=layout,
+        nav=nav,
     )
 
 
@@ -234,11 +244,15 @@ def _substitute(skeleton: str, values: dict[str, str]) -> str:
     return _PLACEHOLDER.sub(replace, skeleton)
 
 
-def _frozen_versions(out: Path) -> dict[str, str]:
+def _existing_header(out: Path) -> Optional[dict]:
     try:
-        meta = read_header(out.read_text(encoding="utf-8"))
+        return read_header(out.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError):
-        return {}
+        return None
+
+
+def _frozen_versions(out: Path) -> dict[str, str]:
+    meta = _existing_header(out)
     libs = meta.get("libraries") if meta else None
     if not isinstance(libs, dict):
         return {}
@@ -272,8 +286,79 @@ def _with_auto_libraries(names: list[str], raw_source: str) -> list[str]:
     return [n for n in names if n != "alpine"] + [n for n in names if n == "alpine"]
 
 
+@dataclass
+class _RegionPlan:
+    """How a build places the page's regions: the resolved shape and the rendered region markup.
+
+    ``layout`` is empty for a skeleton with no region placeholder (the companion) whose source names
+    no shape. ``defaulted`` means no source or earlier build named one. ``legacy_summary`` marks a page
+    built before shapes existed that still has no summary, kept buildable (see ``_plan_regions``).
+    """
+
+    region_bearing: bool
+    legacy_skeleton: bool
+    layout: str
+    defaulted: bool
+    legacy_summary: bool
+    html: str
+
+
+_SUMMARY_WARNING = (
+    "this page has no summary slot; add <!-- slot: summary --> so it gets the summary region"
+)
+
+
+def _plan_regions(source: Source, skeleton: str, existing: Optional[dict]) -> _RegionPlan:
+    """Resolve the shape and render the regions for ``skeleton``; raises SourceError on a bad combination.
+
+    Shape: the source's ``layout``, else the one in ``existing`` (the output's current header), else
+    ``report``. Only a skeleton with ``{{regions}}`` or ``{{slot:main}}`` resolves a default and
+    requires ``summary``. A missing summary is allowed once for a page whose header predates shapes
+    (no ``layout`` key) and stays allowed while the header carries ``legacy_summary``.
+    """
+    has_regions = "{{regions}}" in skeleton
+    legacy_skeleton = not has_regions and "{{slot:main}}" in skeleton
+    region_bearing = has_regions or legacy_skeleton
+    recorded = existing.get("layout") if existing else None
+    layout = source.layout
+    defaulted = False
+    if layout is None and region_bearing:
+        layout = recorded if recorded in LAYOUTS else DEFAULT_LAYOUT
+        defaulted = recorded not in LAYOUTS
+    if layout is not None and layout != "report" and source.slots.get("aside", "").strip():
+        raise SourceError("the source has an aside slot, but only the report shape places an aside")
+    if not region_bearing:
+        return _RegionPlan(False, False, layout or "", False, False, "")
+
+    assert layout is not None
+    summary = source.slots.get("summary", "")
+    legacy_summary = False
+    if not summary.strip():
+        pre_shapes = existing is not None and ("layout" not in existing or existing.get("legacy_summary") is True)
+        if not pre_shapes:
+            raise SourceError(
+                f"the {layout} shape needs a summary slot: add <!-- slot: summary --> with "
+                f"{summary_hint(layout)}"
+            )
+        legacy_summary = True
+        summary = ""
+    reserved = collect_ids(summary, source.slots.get("aside", ""), skeleton, _chrome("x")) | {"main", "quirk-data"}
+    nav_html, main_html = build_nav(
+        source.slots.get("main", ""), layout=layout, nav=source.nav, reserved_ids=reserved
+    )
+    html = render_regions(
+        layout,
+        summary=summary,
+        main=main_html,
+        aside="" if legacy_skeleton else source.slots.get("aside", ""),
+        nav=nav_html,
+        legacy=legacy_skeleton,
+    )
+    return _RegionPlan(True, legacy_skeleton, layout, defaulted, legacy_summary, html)
+
+
 def _check_slots(template: Template, source: Source) -> None:
-    undeclared = [name for name in source.slots if name not in template.slots]
+    undeclared = [name for name in source.slots if name not in template.slots and name not in RESERVED_SLOTS]
     if undeclared:
         raise SourceError(
             f"source has slots the template does not declare: {', '.join(undeclared)} "
@@ -378,8 +463,11 @@ def build_tier1(
     except ValueError as exc:
         raise BuildError(str(exc)) from exc
     base_css = _read_text_file(skill / "theme" / "base.css", "theme")
+    layout_css = _read_text_file(skill / "theme" / "layout.css", "theme")
     head = "\n".join(
-        head_parts + [f"<style>\n{token_css}</style>", f"<style>\n{base_css}</style>"] + kit_head_parts
+        head_parts
+        + [f"<style>\n{token_css}</style>", f"<style>\n{base_css}</style>", f"<style>\n{layout_css}</style>"]
+        + kit_head_parts
     )
     body_end = "\n".join(js_parts + [chrome_js])
 
@@ -389,6 +477,7 @@ def build_tier1(
             f"template {template.name!r} has no {{{{data}}}} placeholder in its skeleton, "
             "so the source's data field cannot be used"
         )
+    plan = _plan_regions(source, skeleton, _existing_header(out_path))
     signal = f"judgment: {source.tier_reason}" if source.tier_reason else None
     built_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -405,6 +494,12 @@ def build_tier1(
             "built_at": built_at,
             "quirk_version": _quirk_version(skill),
         }
+        if plan.layout:
+            meta["layout"] = plan.layout
+        if plan.defaulted:
+            meta["layout_defaulted"] = True
+        if plan.legacy_summary:
+            meta["legacy_summary"] = True
         embedded = ""
         if data is not None and sidecar is None:
             embedded = f'<script type="application/json" id="quirk-data">{data.embedded}</script>'
@@ -417,6 +512,10 @@ def build_tier1(
             "body_end": body_end,
         }
         values.update({f"slot:{name}": source.slots.get(name, "") for name in template.slots})
+        values["layout"] = plan.layout
+        values["regions"] = ""
+        if plan.region_bearing:
+            values["slot:main" if plan.legacy_skeleton else "regions"] = plan.html
         return _substitute(skeleton, values)
 
     sidecar_name: Optional[str] = None
@@ -455,6 +554,8 @@ def build_tier1(
         shells=default_shells(skill),
         kit_source=(source_path.name, raw_source),
     )
+    if plan.legacy_summary:
+        result_checks["warnings"].append({"check": "summary", "detail": _SUMMARY_WARNING})
     return {
         "path": str(out_path),
         "size": page_size,
@@ -469,6 +570,9 @@ def build_tier1(
         "warnings": warnings,
         "checks": result_checks,
         "cut": [],
+        "layout": plan.layout,
+        "layout_defaulted": plan.defaulted,
+        **({"legacy_summary": True} if plan.legacy_summary else {}),
     }
 
 
@@ -586,6 +690,9 @@ def delivery_note(
     if source_dir.is_dir():
         lines.append(f"- Source folder: `{source_dir}`")
     lines.append(f"- Template: {meta.get('template')} ({meta.get('template_level')})")
+    layout = meta.get("layout")
+    if isinstance(layout, str) and layout:
+        lines.append(f"- Layout: {layout}" + (" (no layout named)" if meta.get("layout_defaulted") is True else ""))
     signal = meta.get("tier_signal")
     lines.append(f"- Tier {meta.get('tier')}" + (f", chosen by: {signal}" if signal else " (no tier signal recorded)"))
     mode = meta.get("mode")

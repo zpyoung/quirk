@@ -23,7 +23,7 @@ KIT_JS = SKILL / "vendor" / "kit" / "1.0.0" / "kit.js"
 HARNESS = Path(__file__).resolve().parent / "fixtures" / "html-kit" / "harness.mjs"
 
 SCHEMES = ["light", "dark"]
-HEADER = '<!-- quirk-src {"template": "report", "title": "Kit elements", "mode": "offline"} -->\n<!-- slot: main -->\n'
+HEADER = '<!-- quirk-src {"template": "report", "title": "Kit elements", "mode": "offline"} -->\n<!-- slot: summary -->\n<p>Kit elements.</p>\n<!-- slot: main -->\n'
 
 LONG_UNBROKEN = "x" * 220
 

@@ -211,7 +211,11 @@ def _skeleton_template(name: str, stem: str, skill: Path, dest: Path, text: str)
     atomic_write(dest / "skeleton.html", SKELETON)
     shutil.copyfile(skill / "theme" / "house.tokens.json", dest / "tokens.json")
     header = {"template": name, "title": title, "mode": "offline", "libraries": []}
-    source = "<!-- quirk-src " + json.dumps(header, ensure_ascii=False).replace("--", "-\\u002d") + " -->\n<!-- slot: main -->\n" + content + "\n"
+    summary = f"<p>{html_lib.escape(title)}: replace this line with the page's one-sentence answer.</p>"
+    source = (
+        "<!-- quirk-src " + json.dumps(header, ensure_ascii=False).replace("--", "-\\u002d") + " -->\n"
+        f"<!-- slot: summary -->\n{summary}\n<!-- slot: main -->\n{content}\n"
+    )
     atomic_write(dest / EXAMPLE_FILE, source)
 
 

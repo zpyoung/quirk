@@ -67,6 +67,8 @@ def build(src: Path, out: Path, env: dict, project: Path, *extra: str) -> tuple[
 
 
 def write_src(path: Path, meta: dict, slots: dict[str, str]) -> Path:
+    if "main" in slots and "summary" not in slots:
+        slots = {**slots, "summary": "<p>Summary.</p>"}
     parts = [f"<!-- quirk-src {json.dumps(meta)} -->"]
     for name, body in slots.items():
         parts.append(f"<!-- slot: {name} -->")
@@ -442,12 +444,12 @@ def test_parse_source_reads_slots_and_fields(tmp_path):
     path = write_src(
         tmp_path / "ok.src.html",
         {"template": "report", "title": "T", "libraries": ["chartjs"], "interactions": ["sort"], "data": "d.json"},
-        {"main": "<p>one</p>\n<p>two</p>", "aside": "<aside>side</aside>"},
+        {"main": "<p>one</p>\n<p>two</p>", "aside": "<aside>side</aside>", "summary": "<p>sum</p>"},
     )
     src = assemble.parse_source(path)
     assert (src.template, src.title, src.mode) == ("report", "T", "offline")
     assert src.libraries == ["chartjs"] and src.interactions == ["sort"] and src.data == "d.json"
-    assert src.slots == {"main": "<p>one</p>\n<p>two</p>", "aside": "<aside>side</aside>"}
+    assert src.slots == {"main": "<p>one</p>\n<p>two</p>", "aside": "<aside>side</aside>", "summary": "<p>sum</p>"}
 
 
 def built_example(tmp_path: Path, env: dict, project: Path, name: str = "report") -> Path:
