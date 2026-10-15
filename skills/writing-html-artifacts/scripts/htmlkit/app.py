@@ -2,8 +2,10 @@
 
 ``build_app`` copies the template's ``project/`` and ``example/`` into
 ``<project>/.quirk/html/<slug>/`` once and never touches that folder again, so edits to the source
-survive every rebuild, except ``src/quirk-tokens.css``: every build rewrites it with the merged token
-layers (house, user, project, template) that tier 1 applies, and the scaffold's ``theme.css`` imports it.
+survive every rebuild, except three generated files every build rewrites: ``src/quirk-tokens.css``
+(the merged token layers, house, user, project and template, that tier 1 applies), ``src/quirk-layout.css``
+(a copy of the skill's shared page-shape stylesheet) and ``src/quirk-page.ts`` (the app's layout name,
+read by ``PageLayout.tsx``). The scaffold's ``theme.css`` imports the two stylesheets.
 Each build installs with
 ``pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile`` and runs ``pnpm run build``.
 The install never runs package scripts or pnpmfile hooks, for built-in and custom templates alike.
@@ -17,10 +19,12 @@ for ``<q-code>`` and ``<q-diff>``, inlined from the skill after the Vite build, 
 does it; ``kitcheck.check_jsx`` validates those elements and reports failures with the other
 static checks.
 
-Problems the author can fix (slug, mode, template, missing title) raise ``BuildError`` and are exit 2
+Problems the author can fix (slug, mode, layout, template, missing title) raise ``BuildError`` and are exit 2
 in the CLI. A missing toolchain or a failed install or build raises ``AppUnavailable`` (exit 3),
 the signal to write a tier-1 source instead; this module never falls back on its own.
 Package installation is the only network access, and it happens inside pnpm.
+``layoutcheck.check_app_sources`` also runs on the app's ``src/`` stylesheets and ``.tsx`` files after
+the Vite build, so hand-written page geometry fails the build like any other static check.
 """
 from __future__ import annotations
 
@@ -34,11 +38,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import SKILL_DIR, kitcheck
+from . import SKILL_DIR, kitcheck, layoutcheck
 from .assemble import BuildError, _frozen_versions, _quirk_version, _skill_store
 from .checks import default_shells, run_checks
 from .fsutil import atomic_write, ensure_self_ignoring
 from .header import render_header
+from .layouts import DEFAULT_LAYOUT, validate_layout
 from .resolve import TemplateNotFound, default_user_dir, find_template, template_roots
 from .tokens import merge_tokens, token_layers, tokens_css
 from .vendor import VendorError, _comment_safe
@@ -47,6 +52,9 @@ APP_MODES = ("offline", "connected")
 DEFAULT_TEMPLATE = "app"
 APP_FILE = "quirk-app.json"
 TOKENS_FILE = "src/quirk-tokens.css"
+LAYOUT_CSS_FILE = "src/quirk-layout.css"
+PAGE_MODULE_FILE = "src/quirk-page.ts"
+_LAYOUT_SOURCE_SUFFIXES = {".css", ".tsx"}
 STEP_TIMEOUT_S = 600
 TAIL_LINES = 40
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,60}\Z")
@@ -175,6 +183,11 @@ def _kit_sources(source: Path) -> list[tuple[str, str]]:
     return files
 
 
+def _layout_sources(source: Path) -> list[Path]:
+    """The ``.css`` and ``.tsx`` files under ``source/src``, in a stable order, for the layout check."""
+    return [p for p in sorted((source / "src").rglob("*")) if p.suffix in _LAYOUT_SOURCE_SUFFIXES and p.is_file()]
+
+
 def _insert_before(page: str, at: int, blocks: list[str]) -> str:
     """Insert ``blocks`` at index ``at`` of ``page``; a negative ``at`` (marker not found) appends them."""
     if not blocks:
@@ -194,17 +207,18 @@ def build_app(
     project_dir: Path,
     user_dir: Optional[Path],
     skill_dir: Optional[Path] = None,
+    layout: Optional[str] = None,
 ) -> dict:
     """Build the tier-2 app ``slug`` and return a ``BuildResult`` dict (see tech.md section 4.1).
 
-    ``title``, ``mode``, ``signal`` and ``template_name`` come from ``quirk-app.json`` in the
-    source folder when ``None``; a value given overrides the saved one and is saved. The first
+    ``title``, ``mode``, ``signal``, ``template_name`` and ``layout`` come from ``quirk-app.json`` in the
+    source folder when ``None`` (``layout`` then defaults to ``report``); a value given overrides the saved one and is saved. The first
     build needs a title. ``pnpm-lock.yaml`` pins every npm dependency, so ``upgrade`` only moves
     the kit and Chart.js, which come from the skill and otherwise stay at the version in the existing
     output's header; an app that uses no kit gets a warning saying ``upgrade`` has no effect. The
     source folder is created only when absent.
 
-    Raises BuildError for an invalid slug, mode or template, or a missing title; AppUnavailable
+    Raises BuildError for an invalid slug, mode, layout or template, or a missing title; AppUnavailable
     when Node or pnpm is missing or an install or build fails; a failed static check is reported
     in ``checks`` and still leaves the bundle written.
     """
@@ -223,6 +237,7 @@ def build_app(
         "title": title if title is not None else saved.get("title"),
         "mode": mode or saved.get("mode") or "offline",
         "tier_signal": signal if signal is not None else saved.get("tier_signal"),
+        "layout": layout or saved.get("layout") or DEFAULT_LAYOUT,
     }
     if not isinstance(settings["title"], str) or not settings["title"].strip():
         raise BuildError("--title is required on the first build of an app")
@@ -230,6 +245,7 @@ def build_app(
         raise BuildError(f"mode must be offline or connected, got {settings['mode']!r}")
     if not isinstance(settings["tier_signal"], (str, type(None))):
         raise BuildError(f"{APP_FILE} tier_signal must be a string")
+    settings["layout"] = validate_layout(settings["layout"])
 
     try:
         template, skipped = find_template(settings["template"], template_roots(skill, project_dir, user), skill_dir=skill)
@@ -270,6 +286,12 @@ def build_app(
         raise BuildError(str(exc)) from exc
     except OSError as exc:
         raise BuildError(f"cannot write {source / TOKENS_FILE}: {exc}") from exc
+
+    try:
+        atomic_write(source / LAYOUT_CSS_FILE, (skill / "theme" / "layout.css").read_text(encoding="utf-8"))
+        atomic_write(source / PAGE_MODULE_FILE, f"export const layout: string = {json.dumps(settings['layout'])}\n")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise BuildError(f"cannot write the page layout files under {source / 'src'}: {exc}") from exc
 
     _run([*pnpm, "install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"], source, "install-failed")
     dist = source / "dist" / "index.html"
@@ -318,6 +340,7 @@ def build_app(
         "tier": 2,
         "tier_signal": settings["tier_signal"],
         "mode": settings["mode"],
+        "layout": settings["layout"],
         "libraries": versions,
         "sidecar": None,
         "built_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -348,9 +371,11 @@ def build_app(
         shells=default_shells(skill),
         kit_source=("index.html", ""),
     )
-    if kit_failures:
-        checks["failures"].extend(kit_failures)
-        checks["passed"] = False
+    layout_failures = layoutcheck.check_app_sources(_layout_sources(source), root=source)
+    for failures in (kit_failures, layout_failures):
+        if failures:
+            checks["failures"].extend(failures)
+            checks["passed"] = False
     return {
         "path": str(out_path),
         "size": page_size,
@@ -361,6 +386,7 @@ def build_app(
         "tier": 2,
         "tier_signal": settings["tier_signal"],
         "mode": settings["mode"],
+        "layout": settings["layout"],
         "libraries": versions,
         "warnings": warnings,
         "checks": checks,

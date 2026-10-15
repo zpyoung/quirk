@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { createHashHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider, useNavigate, useRouterState } from '@tanstack/react-router'
 import { Button } from '@astryxdesign/core/Button'
 import { Heading } from '@astryxdesign/core/Heading'
@@ -5,14 +6,20 @@ import { HStack, Layout, LayoutContent, LayoutHeader, VStack } from '@astryxdesi
 import { Tab, TabList } from '@astryxdesign/core/TabList'
 import { Theme } from '@astryxdesign/core/theme'
 import { neutralTheme } from '@astryxdesign/theme-neutral/built'
+import { PageLayout } from './PageLayout'
 import { views } from './routes'
+import type { ViewDef } from './routes'
 import { nextThemeMode, setThemeMode, useThemeMode } from './theme'
+
+/** Page regions a view may supply next to its component: `summary` for every shape, `aside` on the report shape only. */
+type PageRegions = { summary?: ReactNode; aside?: ReactNode }
 
 function Shell() {
   const navigate = useNavigate()
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   const mode = useThemeMode()
   const active = views.find((view) => view.path === pathname) ?? views[0]
+  const { summary, aside } = active as ViewDef & PageRegions
 
   return (
     <Layout
@@ -37,7 +44,9 @@ function Shell() {
       content={
         <LayoutContent label={active.label} padding={4} isScrollable={false}>
           <VStack id="panel" role="tabpanel" gap={4} paddingBlockEnd={8}>
-            <Outlet />
+            <PageLayout summary={summary} aside={aside}>
+              <Outlet />
+            </PageLayout>
           </VStack>
         </LayoutContent>
       }
