@@ -312,7 +312,8 @@ def _plan_regions(source: Source, skeleton: str, existing: Optional[dict]) -> _R
     """Resolve the shape and render the regions for ``skeleton``; raises SourceError on a bad combination.
 
     Shape: the source's ``layout``, else the one in ``existing`` (the output's current header), else
-    ``report``. Only a skeleton with ``{{regions}}`` or ``{{slot:main}}`` resolves a default and
+    ``report``. A header carrying ``layout_defaulted`` keeps the page defaulted until a source names a
+    shape. Only a skeleton with ``{{regions}}`` or ``{{slot:main}}`` resolves a default and
     requires ``summary``. A missing summary is allowed once for a page whose header predates shapes
     (no ``layout`` key) and stays allowed while the header carries ``legacy_summary``.
     """
@@ -324,10 +325,15 @@ def _plan_regions(source: Source, skeleton: str, existing: Optional[dict]) -> _R
     defaulted = False
     if layout is None and region_bearing:
         layout = recorded if recorded in LAYOUTS else DEFAULT_LAYOUT
-        defaulted = recorded not in LAYOUTS
+        defaulted = recorded not in LAYOUTS or existing.get("layout_defaulted") is True
     if layout is not None and layout != "report" and source.slots.get("aside", "").strip():
         raise SourceError("the source has an aside slot, but only the report shape places an aside")
     if not region_bearing:
+        if source.slots.get("summary", "").strip():
+            raise SourceError(
+                "the source has a summary slot, but the template's skeleton has no place for it: "
+                "add {{regions}} (or {{slot:main}}) to the skeleton, or remove the summary slot"
+            )
         return _RegionPlan(False, False, layout or "", False, False, "")
 
     assert layout is not None
