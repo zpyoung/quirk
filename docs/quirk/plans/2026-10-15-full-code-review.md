@@ -73,9 +73,9 @@ git rev-parse HEAD
 ```
 Expected: the first prints `418 passed` (skips allowed only if the total passed+skipped is 418); the whole-repo suite shows `0 failed`; record the printed SHA as `T1_SHA` in the Task 2 notes.
 
-- [ ] Step 1 (`COMMAND:`): `mkdir -p skills/full-code-review tests/full_code_review && rsync -a --exclude tests --exclude references/provenance.md --exclude references/repo-guidance --exclude __pycache__ --exclude .pytest_cache "$SRCS"/ skills/full-code-review/ && cp "$SRCSH"/review_memory.py skills/full-code-review/scripts/ && cp "$SRCS"/tests/*.py tests/full_code_review/`
-- [ ] Step 2: rewire imports and test paths per the Contract; run the acceptance; fix only path issues.
-- [ ] Step 3: commit `feat(full-code-review): port review-mr-combined verbatim`.
+- [x] Step 1 (`COMMAND:`): `mkdir -p skills/full-code-review tests/full_code_review && rsync -a --exclude tests --exclude references/provenance.md --exclude references/repo-guidance --exclude __pycache__ --exclude .pytest_cache "$SRCS"/ skills/full-code-review/ && cp "$SRCSH"/review_memory.py skills/full-code-review/scripts/ && cp "$SRCS"/tests/*.py tests/full_code_review/`
+- [x] Step 2: rewire imports and test paths per the Contract; run the acceptance; fix only path issues.
+- [x] Step 3: commit `feat(full-code-review): port review-mr-combined verbatim`.
 
 ---
 
@@ -103,10 +103,12 @@ grep -rnE "\[\"glab\"|'glab'|\"glab\"" skills/full-code-review/scripts --include
 ```
 Expected: the diff stat prints nothing; the grep prints nothing.
 
-- [ ] Step 1: `forge/__init__.py` types and Protocol; commit.
-- [ ] Step 2: `GitLabForge` read path (change, details, user, branch lookup, file-list recovery inputs) with `prepare_diff.py` shims; acceptance; commit.
-- [ ] Step 3: clone and head refspec with `borrow_review_source.py` shims; commit.
-- [ ] Step 4: threads, drafts, publish, approve, request-changes with `post_reviewer_review.py` and `review_memory.py` shims; commit.
+**Execution note (2026-10-15):** done. `GitLabForge` currently exposes only `change_label` and `head_refspec`; the scripts call the functional API in `forge/gitlab.py` with late-bound runners. Full Protocol conformance (dataclass-returning methods) moved to Task 3a Step 2, where the scripts switch to dispatching through a `Forge`. `ReviewError` is now an alias of `forge.ForgeError` (a `RuntimeError` subclass).
+
+- [x] Step 1: `forge/__init__.py` types and Protocol; commit.
+- [x] Step 2: `GitLabForge` read path (change, details, user, branch lookup, file-list recovery inputs) with `prepare_diff.py` shims; acceptance; commit.
+- [x] Step 3: clone and head refspec with `borrow_review_source.py` shims; commit.
+- [x] Step 4: threads, drafts, publish, approve, request-changes with `post_reviewer_review.py` and `review_memory.py` shims; commit.
 
 ---
 
@@ -135,7 +137,7 @@ grep -rnE '\bDEFAULT_HOST\b|"mr"|\bmeta\.iid\b|\["iid"\]' skills/full-code-revie
 Expected: the grep prints nothing.
 
 - [ ] Step 1: `test_forge_detect.py` red; `detect_forge` green; drop `DEFAULT_HOST`; commit.
-- [ ] Step 2: switch scripts to `Forge` dispatch, delete shims, retarget tests; commit.
+- [ ] Step 2: give `GitLabForge` full Protocol conformance (dataclass-returning methods, `list_threads` returning the neutral discussion-dict shape documented in `tech.md#symbols-that-move-into-forgegitlabpy`); switch scripts to `Forge` dispatch; delete shims; retarget tests; commit.
 - [ ] Step 3: context/report vocabulary across scripts, assets, references, tests, with the paste round-trip test, in one commit.
 
 ---

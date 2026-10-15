@@ -24,6 +24,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
+from forge import gitlab as _gitlab
+
 SCHEMA_VERSION = 1
 _RETENTION_SECONDS = 90 * 24 * 60 * 60
 _FP_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -246,52 +248,15 @@ def _prune(directory: Path, now: float) -> None:
 def _default_api(host: str, method: str, endpoint: str, payload: Any = None):
     if method.upper() != "GET":
         raise ValueError("review memory only permits GET discussion requests")
-    command = ["glab", "api", "--hostname", host, endpoint]
-    result = subprocess.run(command, text=True, capture_output=True, check=False, timeout=120)
-    if result.returncode:
-        raise RuntimeError(result.stderr.strip() or "GitLab discussion request failed")
-    try:
-        return json.loads(result.stdout)
-    except ValueError as exc:
-        raise RuntimeError("GitLab discussion response was not JSON") from exc
-
-
+    return _gitlab.get_json(host, endpoint)
 
 
 def fetch_discussions(host: str, project: str, iid: Any, api: Callable | None = None) -> list[dict]:
     """Fetch every discussion page using GET, rejecting incomplete pagination."""
     if not host or not project or not str(iid).isdigit() or int(iid) < 1:
         raise ValueError("host, project and positive MR iid are required")
-    api = api or _default_api
-    encoded = urllib.parse.quote(_normalize_project(project), safe="")
-    page, discussions, seen_ids = 1, [], set()
-    while page <= 100:
-        endpoint = "projects/%s/merge_requests/%s/discussions?per_page=100&page=%d" % (encoded, iid, page)
-        body = api(host, "GET", endpoint, None)
-        if not isinstance(body, list):
-            raise RuntimeError("discussion page %d was not a JSON list" % page)
-        for item in body:
-            if not isinstance(item, dict):
-                raise RuntimeError("discussion page %d contained a non-object" % page)
-            identifier = item.get("id")
-            if not isinstance(identifier, (str, int)) or isinstance(identifier, bool):
-                raise RuntimeError("discussion page %d contained an invalid id" % page)
-            if (not isinstance(item.get("notes"), list)
-                    or any(not isinstance(note, dict) or not isinstance(note.get("body"), str)
-                           for note in item["notes"])):
-                raise RuntimeError("discussion page %d contained invalid notes" % page)
-            if identifier in seen_ids:
-                raise RuntimeError("duplicate discussion id while fetching discussions")
-            seen_ids.add(identifier)
-        discussions.extend(body)
-        # A full page may have a successor; only a short page proves completion.
-        if len(body) == 100:
-            page += 1
-            continue
-        break
-    if page > 100:
-        raise RuntimeError("discussion pagination exceeded 100 pages")
-    return discussions
+    return _gitlab.fetch_discussions(api or _default_api, host, _normalize_project(project), iid)
+
 # ---------------------------------------------------------------------------
 
 def load_snapshot(context: dict, repo: str = ".", dimensions=(), guidance=(), fresh: bool = False) -> dict:
