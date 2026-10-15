@@ -157,40 +157,56 @@ def test_batch_oversized_single(tmp_path):
     assert any(set(x["files"]) == {"big"} for x in b)
 
 
-def test_host_project_precedence(tmp_path):
-    host, proj = m.resolve_host_project("h1", "p1",
-                                        {"GITLAB_HOST": "he", "GITLAB_PROJECT": "pe"},
-                                        "git@x:grp/proj.git")
-    assert host == "h1" and proj == "p1"
-    host, proj = m.resolve_host_project(None, None, {}, "git@x:grp/proj.git")
-    assert host == m.DEFAULT_HOST and proj == "grp/proj"
-    host, proj = m.resolve_host_project(None, None,
-                                        {"GITLAB_HOST": "he", "GITLAB_PROJECT": "pe"}, "")
-    assert host == "he" and proj == "pe"
+def test_host_and_project_flags_override_the_detected_remote(tmp_path):
+    out = Path(tmp_path) / "ctx.json"
+    seen = []
+    saved = (m.get_origin_url, m.detect_target_branch, m.change_diff,
+             m.change_details, m.current_user)
+    try:
+        m.get_origin_url = lambda cwd=".": "git@x:grp/proj.git"
+        m.detect_target_branch = lambda cwd=".": "main"
+
+        def fake_change_diff(forge, number, cwd=".", metadata=None):
+            seen.append((forge.name, forge.host, forge.project))
+            return None
+
+        m.change_diff = fake_change_diff
+        for extra, expected in (([], ("gitlab", "x", "grp/proj")),
+                                (["--host", "h1", "-R", "p1"], ("gitlab", "h1", "p1"))):
+            with contextlib.redirect_stderr(io.StringIO()):
+                m.main(["--forge", "gitlab", "--mr", "1", "--out", str(out)] + extra)
+            assert seen[-1] == expected
+    finally:
+        (m.get_origin_url, m.detect_target_branch, m.change_diff,
+         m.change_details, m.current_user) = saved
+
+
+def _gitlab(host, project):
+    return m.make_forge("gitlab", host, project, run=m._late_run)
 
 
 def test_decision_branch_gitlab_first(tmp_path):
     out = Path(tmp_path) / "ctx.json"
-    saved = (m.get_origin_url, m.detect_target_branch, m.glab_find_mr_for_branch,
-             m.glab_mr_changes, m.glab_mr_details, m.glab_current_user, m.git_diff_branch)
+    saved = (m.get_origin_url, m.detect_target_branch, m.find_change_for_branch,
+             m.change_diff, m.change_details, m.current_user, m.git_diff_branch)
     try:
         m.get_origin_url = lambda cwd=".": "git@x:grp/proj.git"
         m.detect_target_branch = lambda cwd=".": "main"
-        m.glab_find_mr_for_branch = lambda b, p, h=None: 42
-        m.glab_mr_changes = lambda iid, host, project, cwd=".", metadata=None: (
+        m.find_change_for_branch = lambda forge, b: 42
+        m.change_diff = lambda forge, iid, cwd=".", metadata=None: (
             "diff --git a/z b/z\n--- a/z\n+++ b/z\n@@ -1 +1 @@\n-x\n+y\n",
             {"base": "b" * 40, "start": "c" * 40, "head": "a" * 40},
             {"iid": iid, "title": "Support locked credit rates", "description": "no behavior change",
              "source_branch": "feature"})
-        m.glab_mr_details = lambda iid, host, project: {
-            "iid": 42, "state": "opened", "author_id": 9, "author_username": "other",
+        m.change_details = lambda forge, number: {
+            "number": 42, "state": "opened", "open": True, "author_id": 9, "author_username": "other",
             "source_branch": "feature", "target_branch": "main", "sha": "a" * 40,
             "base_sha": "b" * 40, "start_sha": "c" * 40}
-        m.glab_current_user = lambda host: {"id": 10, "username": "me"}
+        m.current_user = lambda forge: {"id": 10, "username": "me"}
         m.git_diff_branch = lambda *a, **k: "SHOULD_NOT_BE_USED"
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            rc = m.main(["--branch", "feature", "--out", str(out)])
+            rc = m.main(["--forge", "gitlab", "--branch", "feature", "--out", str(out)])
         assert rc == 0
         meta = json.loads(buf.getvalue())
         assert meta["source"] == "gitlab" and meta["refs"]["head"] == "a" * 40
@@ -199,7 +215,7 @@ def test_decision_branch_gitlab_first(tmp_path):
         assert ctx["seat"] == "reviewer" and ctx["mr"]["iid"] == 42
         assert ctx["mr"]["current_user_id"] == 10
         assert "a/z" in ctx["diff"] and "SHOULD_NOT_BE_USED" not in ctx["diff"]
-        assert ctx["host"] == m.DEFAULT_HOST and ctx["project"] == "grp/proj"
+        assert ctx["host"] == "x" and ctx["project"] == "grp/proj"
         assert ctx["source_branch"] == "feature"
         # sakura:adversarial gates on the MR description reaching the context
         assert ctx["mr"]["description"] == "no behavior change"
@@ -211,19 +227,19 @@ def test_decision_branch_gitlab_first(tmp_path):
         }
         assert meta["scope_intent"] == ctx["scope_intent"]
     finally:
-        (m.get_origin_url, m.detect_target_branch, m.glab_find_mr_for_branch,
-         m.glab_mr_changes, m.glab_mr_details, m.glab_current_user, m.git_diff_branch) = saved
+        (m.get_origin_url, m.detect_target_branch, m.find_change_for_branch,
+         m.change_diff, m.change_details, m.current_user, m.git_diff_branch) = saved
 
 
 def test_decision_branch_git_fallback(tmp_path):
     out = Path(tmp_path) / "ctx.json"
-    saved = (m.get_origin_url, m.detect_target_branch, m.glab_find_mr_for_branch,
-             m.glab_mr_changes, m.glab_mr_details, m.glab_current_user, m.git_diff_branch)
+    saved = (m.get_origin_url, m.detect_target_branch, m.find_change_for_branch,
+             m.change_diff, m.change_details, m.current_user, m.git_diff_branch)
     try:
         m.get_origin_url = lambda cwd=".": "git@x:grp/proj.git"
         m.detect_target_branch = lambda cwd=".": "main"
-        m.glab_find_mr_for_branch = lambda b, p, h=None: None
-        m.glab_mr_changes = lambda *a, **k: None
+        m.find_change_for_branch = lambda forge, b: None
+        m.change_diff = lambda *a, **k: None
 
         def branch_diff(branch, target, cl, cwd=".", metadata=None):
             metadata["refs"] = {"base": "BASE", "start": "BASE", "head": "HEAD"}
@@ -232,14 +248,14 @@ def test_decision_branch_git_fallback(tmp_path):
         m.git_diff_branch = branch_diff
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            rc = m.main(["--branch", "feature", "--out", str(out)])
+            rc = m.main(["--forge", "gitlab", "--branch", "feature", "--out", str(out)])
         assert rc == 0
         meta = json.loads(buf.getvalue())
         assert rc == 0
         assert meta["source"] == "git" and "fallback_reason" in meta
         ctx = json.loads(out.read_text())
         assert "a/q" in ctx["diff"]
-        assert ctx["host"] == m.DEFAULT_HOST and ctx["project"] == "grp/proj"
+        assert ctx["host"] == "x" and ctx["project"] == "grp/proj"
         assert ctx["source_branch"] == "feature"
         assert ctx["refs"] == {"base": "BASE", "start": "BASE", "head": "HEAD"}
         # no MR → no description → sakura:adversarial must skip
@@ -247,8 +263,8 @@ def test_decision_branch_git_fallback(tmp_path):
         assert ctx["scope_intent"] == {"guess": "feature", "basis": "source_branch"}
         assert meta["scope_intent"] == ctx["scope_intent"]
     finally:
-        (m.get_origin_url, m.detect_target_branch, m.glab_find_mr_for_branch,
-         m.glab_mr_changes, m.glab_mr_details, m.glab_current_user, m.git_diff_branch) = saved
+        (m.get_origin_url, m.detect_target_branch, m.find_change_for_branch,
+         m.change_diff, m.change_details, m.current_user, m.git_diff_branch) = saved
 
 
 def test_empty_gitlab_diff_recovered_from_git(tmp_path):
@@ -270,7 +286,7 @@ def test_empty_gitlab_diff_recovered_from_git(tmp_path):
         "+one\n+two\n"
     )
     saved = (m._run, m.get_origin_url, m.detect_target_branch,
-             m.glab_mr_details, m.glab_current_user)
+             m.change_details, m.current_user)
     try:
         diff_calls = []
 
@@ -295,13 +311,13 @@ def test_empty_gitlab_diff_recovered_from_git(tmp_path):
         m.detect_target_branch = lambda cwd=".": "main"
         # the shared fake_run answers every glab call with the MR payload, so seat
         # detection is stubbed rather than fed a second fixture
-        m.glab_mr_details = lambda *a, **k: {
-            "iid": 15, "state": "opened", "author_id": 1, "author_username": "author",
+        m.change_details = lambda *a, **k: {
+            "number": 15, "state": "opened", "open": True, "author_id": 1, "author_username": "author",
             "sha": "a" * 40, "base_sha": "b" * 40, "start_sha": "c" * 40}
-        m.glab_current_user = lambda host: {"id": 1, "username": "author"}
+        m.current_user = lambda forge: {"id": 1, "username": "author"}
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            assert m.main(["--mr", "15", "--out", str(out)]) == 0
+            assert m.main(["--forge", "gitlab", "--mr", "15", "--out", str(out)]) == 0
         meta = json.loads(buf.getvalue())
         ctx = json.loads(out.read_text())
         assert recovered.strip() in ctx["diff"]
@@ -317,7 +333,7 @@ def test_empty_gitlab_diff_recovered_from_git(tmp_path):
         assert len(diff_calls) == 2
     finally:
         (m._run, m.get_origin_url, m.detect_target_branch,
-         m.glab_mr_details, m.glab_current_user) = saved
+         m.change_details, m.current_user) = saved
 
 
 def test_collapsed_nonempty_gitlab_diff_is_recovered(tmp_path):
@@ -529,7 +545,7 @@ def test_empty_gitlab_diff_unavailable_is_not_rendered(tmp_path):
         ],
     }
     saved = (m._run, m.get_origin_url, m.detect_target_branch,
-             m.glab_mr_details, m.glab_current_user)
+             m.change_details, m.current_user)
     try:
         def fake_run(cmd, timeout=90):
             if cmd[0] == "glab":
@@ -545,13 +561,13 @@ def test_empty_gitlab_diff_unavailable_is_not_rendered(tmp_path):
         m.detect_target_branch = lambda cwd=".": "main"
         # the shared fake_run answers every glab call with the MR payload, so seat
         # detection is stubbed rather than fed a second fixture
-        m.glab_mr_details = lambda *a, **k: {
-            "iid": 16, "state": "opened", "author_id": 1, "author_username": "author",
+        m.change_details = lambda *a, **k: {
+            "number": 16, "state": "opened", "open": True, "author_id": 1, "author_username": "author",
             "sha": "a" * 40, "base_sha": "b" * 40, "start_sha": "c" * 40}
-        m.glab_current_user = lambda host: {"id": 1, "username": "author"}
+        m.current_user = lambda forge: {"id": 1, "username": "author"}
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            assert m.main(["--mr", "16", "--out", str(out)]) == 0
+            assert m.main(["--forge", "gitlab", "--mr", "16", "--out", str(out)]) == 0
         meta = json.loads(buf.getvalue())
         ctx = json.loads(out.read_text())
         assert ctx["diff_unavailable"] == ["missing.py"]
@@ -561,7 +577,7 @@ def test_empty_gitlab_diff_unavailable_is_not_rendered(tmp_path):
         assert "diff --git a/missing.py b/missing.py" not in ctx["diff"]
     finally:
         (m._run, m.get_origin_url, m.detect_target_branch,
-         m.glab_mr_details, m.glab_current_user) = saved
+         m.change_details, m.current_user) = saved
 
 
 def test_expected_empty_gitlab_changes_are_not_unavailable(tmp_path):
@@ -589,7 +605,7 @@ def test_expected_empty_gitlab_changes_are_not_unavailable(tmp_path):
 
         m._run = fake_run
         metadata = {}
-        diff_text, refs, mr = m.glab_mr_changes(17, "host", "grp/proj", ".", metadata)
+        diff_text, refs, mr = m.change_diff(_gitlab("host", "grp/proj"), 17, ".", metadata)
         assert diff_text == ""
         assert refs["head"] == "HEAD" and mr["iid"] == 17
         assert metadata["changed_files"] == ["image.png", "new.py"]
@@ -663,7 +679,7 @@ def test_gitlab_overflow_recovers_full_diff(tmp_path):
 
         m._run = fake_run
         metadata = {}
-        diff_text, refs, _ = m.glab_mr_changes(18, "host", "grp/proj", ".", metadata)
+        diff_text, refs, _ = m.change_diff(_gitlab("host", "grp/proj"), 18, ".", metadata)
         assert diff_text == full_diff and refs["head"] == "HEAD"
         assert metadata["changed_files"] == ["a.py", "b.py"]
         assert metadata["file_list_recovery"] == {
@@ -689,7 +705,7 @@ def test_gitlab_count_mismatch_fails_when_full_diff_cannot_be_recovered(tmp_path
 
         m._run = fake_run
         metadata = {}
-        assert m.glab_mr_changes(19, "host", "grp/proj", ".", metadata) is None
+        assert m.change_diff(_gitlab("host", "grp/proj"), 19, ".", metadata) is None
         assert "truncated" in metadata["error"]
     finally:
         m._run = saved
@@ -713,7 +729,7 @@ def test_gitlab_malformed_change_count_fails_without_full_recovery(tmp_path):
 
         m._run = fake_run
         metadata = {}
-        assert m.glab_mr_changes(20, "host", "grp/proj", ".", metadata) is None
+        assert m.change_diff(_gitlab("host", "grp/proj"), 20, ".", metadata) is None
         assert "truncated" in metadata["error"]
     finally:
         m._run = saved
@@ -722,43 +738,43 @@ def test_gitlab_malformed_change_count_fails_without_full_recovery(tmp_path):
 def test_mr_failure_is_nonzero_structured_and_removes_output(tmp_path):
     out = Path(tmp_path) / "ctx.json"
     out.write_text("stale")
-    saved = (m.get_origin_url, m.detect_target_branch, m.glab_mr_changes)
+    saved = (m.get_origin_url, m.detect_target_branch, m.change_diff)
     try:
         m.get_origin_url = lambda cwd=".": "git@x:grp/proj.git"
         m.detect_target_branch = lambda cwd=".": "main"
 
-        def failed_mr(iid, host, project, cwd=".", metadata=None):
+        def failed_mr(forge, iid, cwd=".", metadata=None):
             metadata["error"] = "request failed"
             return None
 
-        m.glab_mr_changes = failed_mr
+        m.change_diff = failed_mr
         stdout, stderr = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            rc = m.main(["--mr", "999999", "--out", str(out)])
+            rc = m.main(["--forge", "gitlab", "--mr", "999999", "--out", str(out)])
         assert rc != 0 and not out.exists() and stdout.getvalue() == ""
         error = json.loads(stderr.getvalue())
         assert error["status"] == "error"
         assert error["error"]["code"] == "diff_source_failed"
     finally:
-        m.get_origin_url, m.detect_target_branch, m.glab_mr_changes = saved
+        m.get_origin_url, m.detect_target_branch, m.change_diff = saved
 
 
 def test_branch_and_local_git_failures_are_nonzero(tmp_path):
-    saved = (m.get_origin_url, m.detect_target_branch, m.glab_find_mr_for_branch,
+    saved = (m.get_origin_url, m.detect_target_branch, m.find_change_for_branch,
              m.git_diff_branch, m.git_diff_local)
     try:
         m.get_origin_url = lambda cwd=".": "git@x:grp/proj.git"
         m.detect_target_branch = lambda cwd=".": "main"
-        m.glab_find_mr_for_branch = lambda branch, project, host=None: None
+        m.find_change_for_branch = lambda forge, branch: None
         m.git_diff_branch = lambda *args, **kwargs: None
         m.git_diff_local = lambda *args, **kwargs: None
-        for selector in (["--branch", "bad"], ["--local"]):
+        for selector in (["--forge", "gitlab", "--branch", "bad"], ["--local"]):
             out = Path(tmp_path) / (selector[0][2:] + ".json")
             with contextlib.redirect_stderr(io.StringIO()):
                 assert m.main(selector + ["--out", str(out)]) != 0
             assert not out.exists()
     finally:
-        (m.get_origin_url, m.detect_target_branch, m.glab_find_mr_for_branch,
+        (m.get_origin_url, m.detect_target_branch, m.find_change_for_branch,
          m.git_diff_branch, m.git_diff_local) = saved
 
 
@@ -771,8 +787,8 @@ def test_glab_branch_lookup_uses_resolved_host(tmp_path):
             return SimpleNamespace(returncode=0, stdout="[]")
 
         m._run = fake_run
-        assert m.glab_find_mr_for_branch(
-            "feature", "group/project", "other.gitlab.example") is None
+        assert m.find_change_for_branch(
+            _gitlab("other.gitlab.example", "group/project"), "feature") is None
     finally:
         m._run = saved
 
@@ -1121,40 +1137,40 @@ def test_detect_seat_prefers_numeric_identity():
 
 def test_mr_snapshot_race_blocks_seat_and_output(tmp_path):
     out = Path(tmp_path) / "ctx.json"
-    saved = (m.get_origin_url, m.detect_target_branch, m.glab_mr_changes,
-             m.glab_mr_details, m.glab_current_user)
+    saved = (m.get_origin_url, m.detect_target_branch, m.change_diff,
+             m.change_details, m.current_user)
     try:
         m.get_origin_url = lambda cwd=".": "git@x:grp/proj.git"
         m.detect_target_branch = lambda cwd=".": "main"
-        m.glab_mr_changes = lambda *args, **kw: (
+        m.change_diff = lambda *args, **kw: (
             SAMPLE, {"base": "b" * 40, "start": "c" * 40, "head": "a" * 40},
             {"iid": 42, "title": "t", "description": "d", "source_branch": "feature"})
-        m.glab_mr_details = lambda *args: {"iid": 42, "state": "opened", "sha": "d" * 40,
+        m.change_details = lambda *args: {"number": 42, "state": "opened", "open": True, "sha": "d" * 40,
                                                    "author_id": 1, "author_username": "other"}
-        m.glab_current_user = lambda host: {"id": 2, "username": "me"}
+        m.current_user = lambda forge: {"id": 2, "username": "me"}
         buf = io.StringIO()
         with contextlib.redirect_stderr(buf):
-            rc = m.main(["--mr", "42", "--out", str(out)])
+            rc = m.main(["--forge", "gitlab", "--mr", "42", "--out", str(out)])
         assert rc == 1 and not out.exists()
         failure = json.loads(buf.getvalue())
         assert failure["seat"] == "unknown"
         assert "head moved" in failure["error"]["message"]
     finally:
-        (m.get_origin_url, m.detect_target_branch, m.glab_mr_changes,
-         m.glab_mr_details, m.glab_current_user) = saved
+        (m.get_origin_url, m.detect_target_branch, m.change_diff,
+         m.change_details, m.current_user) = saved
 
 
 def test_mr_details_retains_all_diff_refs():
     old = m._run
     def fake_run(cmd, timeout=90):
-        body = {"iid": 42, "state": "opened", "sha": "a" * 40,
+        body = {"number": 42, "state": "opened", "open": True, "sha": "a" * 40,
                 "diff_refs": {"base_sha": "b" * 40, "start_sha": "c" * 40, "head_sha": "a" * 40},
                 "author": {"id": 1, "username": "other"},
                 "source_branch": "feature", "target_branch": "main"}
         return type("Result", (), {"returncode": 0, "stdout": json.dumps(body), "stderr": ""})()
     m._run = fake_run
     try:
-        details = m.glab_mr_details(42, "gitlab.example", "grp/proj")
+        details = m.change_details(_gitlab("gitlab.example", "grp/proj"), 42)
         assert details["base_sha"] == "b" * 40 and details["start_sha"] == "c" * 40
     finally:
         m._run = old
@@ -1162,53 +1178,53 @@ def test_mr_details_retains_all_diff_refs():
 
 def test_mr_target_movement_between_reads_blocks_seat_and_output(tmp_path):
     out = Path(tmp_path) / "ctx.json"
-    saved = (m.get_origin_url, m.detect_target_branch, m.glab_mr_changes,
-             m.glab_mr_details, m.glab_current_user)
+    saved = (m.get_origin_url, m.detect_target_branch, m.change_diff,
+             m.change_details, m.current_user)
     try:
         m.get_origin_url = lambda cwd=".": "git@x:grp/proj.git"
         m.detect_target_branch = lambda cwd=".": "main"
-        m.glab_mr_changes = lambda *args, **kw: (
+        m.change_diff = lambda *args, **kw: (
             SAMPLE, {"base": "b" * 40, "start": "c" * 40, "head": "a" * 40},
             {"iid": 42, "title": "t", "description": "d", "source_branch": "feature"})
-        m.glab_mr_details = lambda *args: {"iid": 42, "state": "opened", "sha": "a" * 40,
+        m.change_details = lambda *args: {"number": 42, "state": "opened", "open": True, "sha": "a" * 40,
                                            "base_sha": "b" * 40, "start_sha": "e" * 40,
                                            "author_id": 1, "author_username": "other"}
-        m.glab_current_user = lambda host: {"id": 2, "username": "me"}
+        m.current_user = lambda forge: {"id": 2, "username": "me"}
         buf = io.StringIO()
         with contextlib.redirect_stderr(buf):
-            rc = m.main(["--mr", "42", "--out", str(out)])
+            rc = m.main(["--forge", "gitlab", "--mr", "42", "--out", str(out)])
         assert rc == 1 and not out.exists()
         failure = json.loads(buf.getvalue())
         assert failure["seat"] == "unknown"
         assert "diff refs changed" in failure["error"]["message"]
     finally:
-        (m.get_origin_url, m.detect_target_branch, m.glab_mr_changes,
-         m.glab_mr_details, m.glab_current_user) = saved
+        (m.get_origin_url, m.detect_target_branch, m.change_diff,
+         m.change_details, m.current_user) = saved
 
 
 def test_mr_details_without_base_start_refs_blocks_seat(tmp_path):
     out = Path(tmp_path) / "ctx.json"
-    saved = (m.get_origin_url, m.detect_target_branch, m.glab_mr_changes,
-             m.glab_mr_details, m.glab_current_user)
+    saved = (m.get_origin_url, m.detect_target_branch, m.change_diff,
+             m.change_details, m.current_user)
     try:
         m.get_origin_url = lambda cwd=".": "git@x:grp/proj.git"
         m.detect_target_branch = lambda cwd=".": "main"
-        m.glab_mr_changes = lambda *args, **kw: (
+        m.change_diff = lambda *args, **kw: (
             SAMPLE, {"base": "b" * 40, "start": "c" * 40, "head": "a" * 40},
             {"iid": 42, "title": "t", "description": "d", "source_branch": "feature"})
-        m.glab_mr_details = lambda *args: {"iid": 42, "state": "opened", "sha": "a" * 40,
+        m.change_details = lambda *args: {"number": 42, "state": "opened", "open": True, "sha": "a" * 40,
                                            "author_id": 1, "author_username": "other"}
-        m.glab_current_user = lambda host: {"id": 2, "username": "me"}
+        m.current_user = lambda forge: {"id": 2, "username": "me"}
         buf = io.StringIO()
         with contextlib.redirect_stderr(buf):
-            rc = m.main(["--mr", "42", "--out", str(out)])
+            rc = m.main(["--forge", "gitlab", "--mr", "42", "--out", str(out)])
         assert rc == 1 and not out.exists()
         failure = json.loads(buf.getvalue())
         assert failure["seat"] == "unknown"
         assert "diff refs changed" in failure["error"]["message"]
     finally:
-        (m.get_origin_url, m.detect_target_branch, m.glab_mr_changes,
-         m.glab_mr_details, m.glab_current_user) = saved
+        (m.get_origin_url, m.detect_target_branch, m.change_diff,
+         m.change_details, m.current_user) = saved
 
 
 def test_branch_discovery_pins_requested_host_in_repo_url():
@@ -1219,7 +1235,7 @@ def test_branch_discovery_pins_requested_host_in_repo_url():
         return type("Result", (), {"returncode": 0, "stdout": '[{"iid": 42}]', "stderr": ""})()
     m._run = fake_run
     try:
-        assert m.glab_find_mr_for_branch("feature", "group/project", "gitlab.example") == 42
+        assert m.find_change_for_branch(_gitlab("gitlab.example", "group/project"), "feature") == 42
         assert calls[0][calls[0].index("-R") + 1] == "https://gitlab.example/group/project"
     finally:
         m._run = old

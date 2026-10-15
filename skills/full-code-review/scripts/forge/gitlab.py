@@ -343,22 +343,66 @@ def fetch_discussions(api_call, host, project, iid):
 
 
 class GitLabForge:
-    """GitLab bound to one host/project, with injectable runners.
-
-    The functional API above is what the scripts call during the extraction phase;
-    this object is the handle later phases dispatch through.
-    """
+    """GitLab bound to one host/project, with an injectable command runner."""
 
     name = NAME
 
-    def __init__(self, host, project, run=None, api_call=None):
+    def __init__(self, host, project, run=None):
         self.host = host
         self.project = project
         self._run = run or default_run
-        self._api_call = api_call or (lambda h, m, e, p=None, timeout=120: api(self._run, h, m, e, p, timeout))
+
+    def _api_call(self, host, method, endpoint, payload=None, timeout=120):
+        return api(self._run, host, method, endpoint, payload, timeout)
 
     def change_label(self, number):
         return change_label(number)
 
+    def note_url(self, number, note_id):
+        return note_url(self.host, self.project, number, note_id)
+
+    def change_records(self, number):
+        if not number or not self.project:
+            raise ForgeError("MR iid and project are required", "validation")
+        data, error = fetch_changes(self._run, self.host, self.project, number)
+        if data is None:
+            raise ForgeError(error, "unknown")
+        if not isinstance(data.get("changes"), list):
+            raise ForgeError("GitLab changes response omitted the changes list", "unknown")
+        raw_refs = data.get("diff_refs") or {}
+        return {
+            "number": data.get("iid") or number,
+            "title": data.get("title") or "",
+            "description": data.get("description") or "",
+            "web_url": data.get("web_url") or "",
+            "author": (data.get("author") or {}).get("username") or "",
+            "source_branch": data.get("source_branch") or "",
+            "refs": {"base": raw_refs.get("base_sha"), "start": raw_refs.get("start_sha"),
+                     "head": raw_refs.get("head_sha")},
+            "records": data["changes"],
+            "reported_count": data.get("changes_count"),
+            "overflow": data.get("overflow"),
+        }
+
+    def change_details(self, number):
+        details = mr_details(self._run, self.host, self.project, number)
+        if details is None:
+            return None
+        details["number"] = details.pop("iid")
+        details["open"] = details.get("state") == "opened"
+        return details
+
+    def current_user(self):
+        return current_user(self._run, self.host)
+
+    def find_change_for_branch(self, branch):
+        return find_mr_for_branch(self._run, branch, self.project, self.host)
+
     def head_refspec(self, number):
         return head_refspec(number)
+
+    def clone_command(self, dest):
+        return clone_command(self.host, self.project, dest)
+
+    def list_threads(self, number, api_call=None):
+        return fetch_discussions(api_call or self._api_call, self.host, self.project, number)

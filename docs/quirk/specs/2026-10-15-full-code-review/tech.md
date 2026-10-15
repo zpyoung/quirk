@@ -158,6 +158,8 @@ Rules every adapter follows:
 - `post_inline` and `stage` require each anchor to be inside a parsed hunk on its side; an adapter receiving an out-of-hunk anchor raises `ForgeError("validation")` before any network call (callers move such items to the overview first). Every write method requires `head_sha` to equal the live change head and raises `ForgeError("conflict")` otherwise.
 - `Change.is_fork` is true when source and target projects differ. `Change.author_trusted` is `True`/`False`/`None`: GitHub uses `author_association in {OWNER, MEMBER, COLLABORATOR}`; GitLab returns `None` unless the author is the viewer.
 
+**Amendment (2026-10-15, during Task 3a):** the implemented `Forge` protocol is dict-shaped rather than dataclass-shaped: `change_label`, `note_url`, `change_records`, `change_details`, `current_user`, `find_change_for_branch`, `head_refspec`, `clone_command`, `list_threads`, with the exact shapes documented on `Forge` in `scripts/forge/__init__.py`. Reviewer-seat methods (stage, publish, complete, pending items, cleanup) are added to the protocol in Task 5 alongside `GitHubForge`. The dataclass SCHEMA above is superseded except for `ForgeChoice`.
+
 ### GitHub adapter specifics
 
 Back-links: [Forge support](logic.md#forge-support), [Industry Insights](logic.md#industry-insights).

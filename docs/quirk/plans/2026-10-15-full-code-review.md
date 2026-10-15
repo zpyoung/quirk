@@ -136,8 +136,10 @@ grep -rnE '\bDEFAULT_HOST\b|"mr"|\bmeta\.iid\b|\["iid"\]' skills/full-code-revie
 ```
 Expected: the grep prints nothing.
 
-- [ ] Step 1: `test_forge_detect.py` red; `detect_forge` green; drop `DEFAULT_HOST`; commit.
-- [ ] Step 2: give `GitLabForge` full Protocol conformance (dataclass-returning methods, `list_threads` returning the neutral discussion-dict shape documented in `tech.md#symbols-that-move-into-forgegitlabpy`); switch scripts to `Forge` dispatch; delete shims; retarget tests; commit.
+**Execution note (2026-10-15):** Steps 1-2 done for `prepare_diff.py`. The `Forge` Protocol was narrowed to the dict shapes the scripts already consume (documented in `forge/__init__.py`); the speculative dataclasses were removed. `borrow_review_source.py`, `review_memory.py`, and `post_reviewer_review.py` keep calling `forge.gitlab` functions until Task 5, where the GitHub adapter supplies the second implementation and those three switch to `Forge` dispatch together (designing the reviewer abstraction from GitLab alone would guess its shape). `make_forge("github", …)` raises until Task 5.
+
+- [x] Step 1: `test_forge_detect.py` red; `detect_forge` green; drop `DEFAULT_HOST`; commit.
+- [x] Step 2 (prepare_diff only; see note): give `GitLabForge` full Protocol conformance (dataclass-returning methods, `list_threads` returning the neutral discussion-dict shape documented in `tech.md#symbols-that-move-into-forgegitlabpy`); switch scripts to `Forge` dispatch; delete shims; retarget tests; commit.
 - [ ] Step 3: context/report vocabulary across scripts, assets, references, tests, with the paste round-trip test, in one commit.
 
 ---

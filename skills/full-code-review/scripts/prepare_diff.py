@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Resolve a diff (GitLab-first, git-fallback) and write a shared context file.
+"""Resolve a diff (forge-first, git-fallback) and write a shared context file.
 
-Sources: --mr <iid>, --branch <name>, or --local. GitLab is preferred whenever
-an MR exists because its 'changes' endpoint returns the canonical diff against
-the live target branch plus authoritative diff_refs (base/start/head SHA) — so a
-stale or rebase-pending local branch still reviews cleanly. git is the fallback.
+Sources: --mr <number>, --branch <name>, or --local. The forge (GitHub or GitLab,
+chosen by forge.detect_forge) is preferred whenever a change request exists because
+it returns the canonical diff against the live target branch plus authoritative
+base/start/head refs, so a stale or rebase-pending local branch still reviews
+cleanly. git is the fallback.
 
 Pure helpers (parsing, batching, host/project resolution) are unit-testable; the
 subprocess wrappers are mock-testable.
@@ -17,9 +18,8 @@ import subprocess
 import sys
 from urllib.parse import quote
 
-from forge import gitlab as _gitlab
+from forge import ForgeError, detect_forge, make_forge
 
-DEFAULT_HOST = "gitlab.rechargeapps.net"
 DEFAULT_MAX_CHARS = 240000  # ~60k tokens
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
@@ -37,23 +37,6 @@ _BINARY_FILES_RE = re.compile(r'Binary files .+ and .+ differ')
 # --------------------------------------------------------------------------- #
 # Pure helpers
 # --------------------------------------------------------------------------- #
-
-def normalize_project_from_origin(origin_url):
-    s = origin_url.strip()
-    s = re.sub(r'\.git$', '', s)
-    s = re.sub(r'^\w+://', '', s)
-    s = re.sub(r'^[^@/]+@', '', s)
-    s = re.sub(r'^[^/:]+[:/]', '', s)
-    return s
-
-
-def resolve_host_project(args_host, args_project, env, origin_url):
-    host = args_host or env.get("GITLAB_HOST") or DEFAULT_HOST
-    project = args_project or env.get("GITLAB_PROJECT")
-    if not project and origin_url:
-        project = normalize_project_from_origin(origin_url)
-    return host, project
-
 
 def _decode_git_path(field):
     """Decode one raw or C-quoted path field emitted by git."""
@@ -571,34 +554,21 @@ def detect_current_branch(cwd="."):
         pass
     return None
 
-def glab_mr_changes(iid, host, project, cwd=".", metadata=None):
-    """Return (diff_text, refs, mr) from GitLab, or None on any failure.
+def change_diff(forge, number, cwd=".", metadata=None):
+    """Return (diff_text, refs, change) from the forge, or None on any failure.
 
     `metadata`, when supplied, receives complete file-availability information
     and details of any full-list recovery.
     """
-    if not iid or not project:
+    try:
+        data = forge.change_records(number)
+    except ForgeError as exc:
         if metadata is not None:
-            metadata["error"] = "MR iid and project are required"
+            metadata["error"] = str(exc)
         return None
-    data, error = _gitlab.fetch_changes(_late_run, host, project, iid)
-    if data is None:
-        if metadata is not None:
-            metadata["error"] = error
-        return None
-    if not isinstance(data.get("changes"), list):
-        if metadata is not None:
-            metadata["error"] = "GitLab changes response omitted the changes list"
-        return None
-
-    raw_refs = data.get("diff_refs") or {}
-    refs = {
-        "base": raw_refs.get("base_sha"),
-        "start": raw_refs.get("start_sha"),
-        "head": raw_refs.get("head_sha"),
-    }
-    changes = data["changes"]
-    reported_count, count_is_lower_bound = _reported_change_count(data.get("changes_count"))
+    refs = dict(data["refs"])
+    changes = data["records"]
+    reported_count, count_is_lower_bound = _reported_change_count(data.get("reported_count"))
     # Compare counts because GitLab's overflow flag is not reliable for every truncation.
     count_mismatch = (reported_count is None or count_is_lower_bound or
                       reported_count != len(changes))
@@ -614,7 +584,7 @@ def glab_mr_changes(iid, host, project, cwd=".", metadata=None):
                  len(recovered_files) != reported_count) or
                 (count_is_lower_bound and len(recovered_files) < reported_count)):
             if metadata is not None:
-                metadata["error"] = "GitLab file list was truncated and git recovery failed"
+                metadata["error"] = "forge file list was truncated and git recovery failed"
             return None
         diff_text = recovered
         changed_files = recovered_files
@@ -622,7 +592,7 @@ def glab_mr_changes(iid, host, project, cwd=".", metadata=None):
         not_text = not_text_reviewable_from_diff(diff_text)
         recovery = {
             "api_file_count": len(changes),
-            "reported_changes_count": data.get("changes_count"),
+            "reported_changes_count": data.get("reported_count"),
             "overflow": data.get("overflow"),
             "recovered_file_count": len(changed_files),
             "recovered_from": "git",
@@ -634,7 +604,7 @@ def glab_mr_changes(iid, host, project, cwd=".", metadata=None):
 
     if diff_text and (not refs.get("base") or not refs.get("head")):
         if metadata is not None:
-            metadata["error"] = "GitLab returned a diff without usable refs"
+            metadata["error"] = "forge returned a diff without usable refs"
         return None
     if metadata is not None:
         metadata["changed_files"] = changed_files
@@ -642,30 +612,24 @@ def glab_mr_changes(iid, host, project, cwd=".", metadata=None):
         metadata["not_text_reviewable"] = not_text
         metadata["file_list_recovery"] = recovery
     mr = {
-        "iid": data.get("iid") or iid,
+        "iid": data.get("number") or number,
         "title": data.get("title") or "",
         "description": data.get("description") or "",
         "web_url": data.get("web_url") or "",
-        "author": (data.get("author") or {}).get("username") or "",
+        "author": data.get("author") or "",
         "source_branch": data.get("source_branch") or "",
     }
     return diff_text, refs, mr
 
 
-def glab_mr_details(iid, host, project):
-    """Return the MR identity needed for seat detection and reviewer delivery."""
-    return _gitlab.mr_details(_late_run, host, project, iid)
+def change_details(forge, number):
+    """Return the change identity needed for seat detection and reviewer delivery."""
+    return forge.change_details(number)
 
 
-def glab_current_user(host):
-    """Return the authenticated GitLab identity, or None when it cannot be read."""
-    return _gitlab.current_user(_late_run, host)
-
-
-def glab_current_username(host):
-    """Backward-compatible username-only wrapper."""
-    user = glab_current_user(host)
-    return user.get("username") if user else None
+def current_user(forge):
+    """Return the authenticated forge identity, or None when it cannot be read."""
+    return forge.current_user()
 
 
 def detect_seat(author_username, current_username, author_id=None, current_id=None):
@@ -677,8 +641,8 @@ def detect_seat(author_username, current_username, author_id=None, current_id=No
     return "author" if author_username.casefold() == current_username.casefold() else "reviewer"
 
 
-def glab_find_mr_for_branch(branch, project, host=None):
-    return _gitlab.find_mr_for_branch(_late_run, branch, project, host)
+def find_change_for_branch(forge, branch):
+    return forge.find_change_for_branch(branch)
 
 
 def git_diff_branch(branch, target, context_lines, cwd=".", metadata=None):
@@ -791,12 +755,13 @@ def _fail(out, mode, message, paths=None, seat=None):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Resolve a diff (GitLab-first) into a shared context file.")
+    ap = argparse.ArgumentParser(description="Resolve a diff (forge-first) into a shared context file.")
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--mr")
     g.add_argument("--branch")
     g.add_argument("--local", action="store_true")
     ap.add_argument("--target-branch")
+    ap.add_argument("--forge", choices=("github", "gitlab", "none"))
     ap.add_argument("--host")
     ap.add_argument("-R", "--project")
     ap.add_argument("--context-lines", type=int, default=3)
@@ -806,41 +771,57 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     origin = get_origin_url(args.cwd)
-    host, project = resolve_host_project(args.host, args.project, os.environ, origin)
+    # local review never needs the forge, so skip probing CLIs for it
+    choice = detect_forge(origin, "none" if args.local else args.forge)
+    host = args.host or choice.host
+    project = args.project or choice.project
     target = args.target_branch or detect_target_branch(args.cwd)
 
     source = mode = None
     refs = {"base": None, "start": None, "head": None}
     diff_text, fallback_reason, mr = None, None, None
     source_branch = args.branch if args.branch else None
-    iid = None
-    gitlab_metadata = {}
+    number = None
+    forge_metadata = {}
     local_metadata = {}
+    forge = None
+    forge_error = None
+    if choice.name != "none" and not args.local:
+        try:
+            forge = make_forge(choice.name, host, project, run=_late_run)
+        except ForgeError as exc:
+            forge_error = str(exc)
+    elif choice.name == "none":
+        forge_error = "no supported forge: %s" % choice.reason
 
     if args.mr:
         mode = "mr"
-        iid = args.mr
-        res = glab_mr_changes(iid, host, project, args.cwd, gitlab_metadata)
+        number = args.mr
+        if forge is None:
+            return _fail(args.out, mode, forge_error or "no forge available for a change request")
+        res = change_diff(forge, number, args.cwd, forge_metadata)
         if not res:
-            return _fail(args.out, mode, gitlab_metadata.get("error", "GitLab MR diff failed"))
+            return _fail(args.out, mode, forge_metadata.get("error", "forge change diff failed"))
         diff_text, refs, mr = res
         source_branch = mr.get("source_branch") or source_branch
-        source = "gitlab"
+        source = forge.name
     elif args.branch:
         mode = "branch"
-        iid = glab_find_mr_for_branch(args.branch, project, host)
-        res = glab_mr_changes(iid, host, project, args.cwd, gitlab_metadata) if iid else None
+        number = find_change_for_branch(forge, args.branch) if forge is not None else None
+        res = change_diff(forge, number, args.cwd, forge_metadata) if number else None
         if res:
             diff_text, refs, mr = res
             source_branch = mr.get("source_branch") or source_branch
-            source = "gitlab"
+            source = forge.name
         else:
             source = "git"
-            fallback_reason = "no MR found for branch or GitLab diff failed; used git diff"
+            number = None
+            fallback_reason = ("no change request found for branch or the forge diff failed; used git diff"
+                               if forge is not None else "%s; used git diff" % forge_error)
             diff_text = git_diff_branch(args.branch, target, args.context_lines,
                                         args.cwd, local_metadata)
             if diff_text is None:
-                return _fail(args.out, mode, "GitLab and branch git diff both failed")
+                return _fail(args.out, mode, "forge and branch git diff both failed")
             refs = local_metadata.get("refs", refs)
     else:
         mode, source = "local", "git"
@@ -856,39 +837,40 @@ def main(argv=None):
         return _fail(args.out, mode, "diff source did not provide usable refs")
 
     seat = "author"
-    if source == "gitlab" and iid:
-        details = glab_mr_details(iid, host, project)
-        current_user = glab_current_user(host) if details else None
+    if source != "git" and number:
+        label = forge.change_label(number)
+        details = change_details(forge, number)
+        viewer = current_user(forge) if details else None
         identity_error = None
         if not details:
-            identity_error = "could not resolve MR metadata for seat detection"
+            identity_error = "could not resolve %s metadata for seat detection" % label
         elif any(not isinstance(refs.get(key), str) or not SHA_RE.match(refs[key])
                  for key in ("base", "start", "head")):
-            identity_error = "GitLab changes returned incomplete or malformed diff_refs"
-        elif details.get("state") != "opened":
-            identity_error = "MR !%s is not open" % iid
-        elif str(details.get("iid")) != str(iid):
-            identity_error = "MR metadata came back for a different iid"
+            identity_error = "the forge returned incomplete or malformed diff refs"
+        elif details.get("open") is not True:
+            identity_error = "%s is not open" % label
+        elif str(details.get("number")) != str(number):
+            identity_error = "%s metadata came back for a different change" % label
         elif mode == "branch" and details.get("source_branch") != args.branch:
-            identity_error = "discovered MR source branch does not match the requested branch"
+            identity_error = "discovered change source branch does not match the requested branch"
         elif details.get("sha") != refs.get("head"):
-            identity_error = "MR head moved while the review context was being prepared; rerun"
+            identity_error = "%s head moved while the review context was being prepared; rerun" % label
         elif details.get("base_sha") != refs.get("base") or details.get("start_sha") != refs.get("start"):
-            identity_error = "MR base/start diff refs changed while the review context was being prepared; rerun"
-        elif not current_user:
-            identity_error = "could not resolve the authenticated GitLab user for seat detection"
+            identity_error = "%s base/start diff refs changed while the review context was being prepared; rerun" % label
+        elif not viewer:
+            identity_error = "could not resolve the authenticated forge user for seat detection"
         detected = None if identity_error else detect_seat(
-            details.get("author_username"), current_user.get("username"),
-            details.get("author_id"), current_user.get("id"),
+            details.get("author_username"), viewer.get("username"),
+            details.get("author_id"), viewer.get("id"),
         )
         if not detected and not identity_error:
-            identity_error = "MR author identity is incomplete; seat detection is unsafe"
+            identity_error = "change author identity is incomplete; seat detection is unsafe"
         if identity_error:
             return _fail(args.out, mode, identity_error, seat="unknown")
         seat = detected
         mr = dict(mr or {})
         mr.update({
-            "iid": int(iid) if str(iid).isdigit() else iid,
+            "iid": int(number) if str(number).isdigit() else number,
             "host": host, "project": project,
             "state": details.get("state"),
             "author_id": details.get("author_id"),
@@ -897,23 +879,23 @@ def main(argv=None):
             "sha": details.get("sha"),
             "base_sha": details.get("base_sha"),
             "start_sha": details.get("start_sha"),
-            "current_user_id": current_user.get("id"),
-            "current_username": current_user.get("username"),
+            "current_user_id": viewer.get("id"),
+            "current_username": viewer.get("username"),
             "seat": seat,
         })
         if details.get("target_branch"):
             target = details["target_branch"]
 
-    if "changed_files" in gitlab_metadata:
-        files = gitlab_metadata["changed_files"]
+    if "changed_files" in forge_metadata:
+        files = forge_metadata["changed_files"]
     elif "changed_files" in local_metadata:
         files = local_metadata["changed_files"]
     else:
         files = changed_files_from_diff(diff_text)
     files = _deduplicate(files + local_metadata.get("untracked_files", []))
-    diff_unavailable = gitlab_metadata.get("diff_unavailable", [])
+    diff_unavailable = forge_metadata.get("diff_unavailable", [])
     not_text_reviewable = _deduplicate(
-        gitlab_metadata.get("not_text_reviewable", []) +
+        forge_metadata.get("not_text_reviewable", []) +
         not_text_reviewable_from_diff(diff_text))
     parsed_paths = set(split_diff_by_file(diff_text))
     accounted_paths = parsed_paths | set(diff_unavailable) | set(not_text_reviewable)
@@ -939,7 +921,7 @@ def main(argv=None):
         "diff_unavailable": diff_unavailable,
         "not_text_reviewable": not_text_reviewable,
         "untracked_files": untracked_files,
-        "file_list_recovery": gitlab_metadata.get("file_list_recovery"),
+        "file_list_recovery": forge_metadata.get("file_list_recovery"),
         "diff": diff_text, "batched": batched,
         "mr": mr, "has_description": bool(mr and mr.get("description", "").strip()),
         "scope_intent": scope_intent,

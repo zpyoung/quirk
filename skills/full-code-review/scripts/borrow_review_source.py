@@ -15,9 +15,9 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from forge import gitlab as _gitlab
+from forge import parse_origin
 
 SCHEMA = 1
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -55,28 +55,8 @@ def _write(path, value):
 
 
 def _origin_identity(url):
-    """Return (host, project) for HTTP/SSH/scp GitLab remotes.
-
-    A filesystem remote deliberately has no host and can never satisfy a GitLab
-    context. Project path alone is not enough: two GitLab instances can contain the
-    same namespace/repository.
-    """
-    value = str(url or "").strip()
-    host = None
-    project = ""
-    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", value):
-        parsed = urlsplit(value)
-        host = parsed.hostname.lower() if parsed.hostname else None
-        project = parsed.path.lstrip("/")
-    else:
-        match = re.match(r"^(?:[^@/:]+@)?([^/:]+):(.+)$", value)
-        if match:
-            host = match.group(1).lower()
-            project = match.group(2)
-        else:
-            project = value
-    project = re.sub(r"\.git$", "", project).strip("/")
-    return host, project
+    """Return (host, project) for HTTP/SSH/scp remotes; a filesystem remote has no host."""
+    return parse_origin(url)
 
 
 def _project_from_origin(url):
