@@ -488,9 +488,9 @@ def test_a_screen_without_a_layout_leaves_main_unmarked_and_the_page_otherwise_u
         lines[1] = ""
         return "\n".join(lines).replace(nonce, "NONCE")
 
-    assert normal(named_page, named["nonce"]).replace('data-layout="explainer"', 'data-layout=""') == normal(
-        plain_page, plain["nonce"]
-    )
+    # only main's attribute differs; layout.css, inlined in both pages, names every shape in its selectors
+    unnamed = re.sub(r'(<main class="q-wrap"[^>]*?)data-layout="explainer"', r'\1data-layout=""', named_page, count=1)
+    assert normal(unnamed, named["nonce"]) == normal(plain_page, plain["nonce"])
 
 
 def test_an_unknown_layout_is_rejected_with_every_shape_named(server: Server) -> None:
