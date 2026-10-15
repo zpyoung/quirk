@@ -49,7 +49,7 @@ styled by CSS attribute selectors, so their geometry never waits on a script:
   is inline.
 - **`q-compare`** is the comparison table: options as columns, criteria as rows. On phones it becomes
   one stacked block per option with the recommended one first, and it widens past 1440px when its
-  options do not fit.
+  options do not fit and nothing sits beside the content (see Amendments).
 
 The existing kit elements (`q-chart`, `q-table`, `q-stat` and the rest) go inside these unchanged.
 
@@ -136,7 +136,8 @@ light, whatever theme the reader has on, with the theme toggle and data picker h
   names `q-grid`.
 - **An explainer with 4 h2 sections:** no nav unless the header forces it.
 - **A comparison with more options than fit at 1440px:** the table widens past 1440px instead of
-  scrolling sideways.
+  scrolling sideways. When a nav rail, aside, pane or margin sits beside the content, it scrolls
+  inside its own box instead; the page itself never scrolls sideways.
 - **A dashboard on a 2560px screen:** 5 or 6 panels across.
 - **A source with no `layout` field and no built page:** the agent was expected to name one; the build
   uses `report` and the delivery note says so.
@@ -179,7 +180,8 @@ Not in scope:
 **Width and density**
 - 1440px for every shape except the dashboard, which is fluid.
 - The dashboard shows at most 4 panels across up to about 1800px, then 5 or 6.
-- The comparison widens past 1440px only when its options do not fit.
+- The comparison widens past 1440px only when its options do not fit and nothing sits beside the
+  content.
 - One spacing rhythm for every shape.
 
 **Responsive behavior**
@@ -283,4 +285,9 @@ Open for the tech spec:
 
 ## Status & amendments
 
-**Amendments:** none.
+**Amendments:**
+
+- 2026-10-15: a `q-compare` widens past 1440px only when nothing sits beside the content. Beside a
+  nav rail, aside, reference pane or longform margin it stays in its column and scrolls inside its
+  own box, because widening there slid the table under the rail or off-screen. Approved by the
+  user.
