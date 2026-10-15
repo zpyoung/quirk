@@ -1466,6 +1466,22 @@ def _validate_stage1_lock(v: Validator, root: dict) -> None:
         v.error(pointer("/stage1Pin/itemHashes", ident), "stage-1 item changed after sign-off")
 
 
+def oversized_text_errors(value: Any, path: str = "") -> List[Tuple[str, str]]:
+    """Report every string longer than MAX_TEXT_CHARS, so no markdown paragraph is long enough to stall the review page's quadratic parser."""
+    if isinstance(value, str):
+        if len(value) <= MAX_TEXT_CHARS:
+            return []
+        message = f"text is {len(value)} characters; the review page renders at most {MAX_TEXT_CHARS} per field, so shorten or split it"
+        return [(path or "/", message)]
+    if isinstance(value, dict):
+        children = value.items()
+    elif isinstance(value, list):
+        children = enumerate(value)
+    else:
+        return []
+    return [error for key, child in children for error in oversized_text_errors(child, pointer(path, key))]
+
+
 def validate_logic_dispatch(logic: Any) -> Tuple[List[Tuple[str, str]], List[str]]:
     """Validate logic.json against the schema for its declared schemaVersion."""
     v = Validator()
@@ -1475,9 +1491,11 @@ def validate_logic_dispatch(logic: Any) -> Tuple[List[Tuple[str, str]], List[str
     version = root.get("schemaVersion")
     if not v.exact_version(version, "/schemaVersion", (1, 2)):
         return v.errors, []
+    oversized = oversized_text_errors(root)
     if version == 1:
-        return validate_logic(logic), []
-    return validate_logic_v2(logic)
+        return validate_logic(logic) + oversized, []
+    errors, warnings = validate_logic_v2(logic)
+    return errors + oversized, warnings
 
 
 def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
@@ -2043,6 +2061,7 @@ def _reject_json_constant(constant: str) -> Any:
 
 
 JSON_MAX_DEPTH = 200
+MAX_TEXT_CHARS = 10_000
 
 
 def _json_depth_exceeded(value: Any, limit: int = JSON_MAX_DEPTH) -> Optional[str]:

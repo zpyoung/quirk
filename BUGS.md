@@ -115,4 +115,5 @@ entries' IDs; manual edits to fix typos are fine.
 - **Introduced by**: upstream @astryxdesign/core 0.6.2 Markdown parser (pre-dates scenario-data-states)
 - **Severity**: low
 - **Proposed fix**: Bound example and markdown field length in spec validation, or escape pathological unmatched delimiters before parsing.
+- **Resolved**: 2026-10-15. render_spec.py validation now rejects any logic.json string over MAX_TEXT_CHARS (10,000), reported at its JSON pointer. The parser cost is per paragraph, so the cap bounds every render site (SpecMarkdown, the example panes, and the generated logic.md in SpecView) to about 24ms per field in the worst case. The parser itself is unchanged.
 
