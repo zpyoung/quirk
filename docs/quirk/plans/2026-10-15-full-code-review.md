@@ -220,10 +220,12 @@ cmp skills/full-code-review/scripts/policy_yaml.py skills/filing-requests/script
 ```
 Expected: `0 failed`; `cmp` prints nothing. `test_resolve_policy.py` asserts: four-layer precedence; reviewer-seat reads from a target ref that differs from the working tree (real temp git repo); nearest `REVIEW.md` overrides the root key by key; lens replace vs add; `skip` union; `models` merge; a flow mapping exits 2 naming file and line; `--apply` drops a `linguist-generated` file and a `skip_globs` match and recomputes `size`; a `.gitattributes` change present only at the PR head excludes nothing in reviewer seat; `guidance_files` lists pack guidance files.
 
-- [ ] Step 1: `policy_yaml.py` copy and `resolve_policy.py`, one red/green cycle per assertion group above; commit.
-- [ ] Step 2: report contract keys, renderer banner, floor handling in both posting paths; commit.
-- [ ] Step 3: commit authors, mixed authorship, `--seat`, fork/trust fields, probe rule; commit.
-- [ ] Step 4: `references/policy.md`, SKILL.md policy step, guidance wiring, flags; commit.
+**Execution note (2026-10-15):** done. Lists `critical_paths` and `skip_globs` accumulate across layers like `skip`. A reviewer seat chosen with `--seat` on your own co-authored change is recorded as `change.seat_source: "chosen"`, and reviewer delivery allows it. `borrow_review_source.py` also enforces the probe trust rule (`mutation_refused`). Existing staging and body tests that exercise Nit mechanics set `severity_floor: "Nit"` in their fixtures; the default floor has dedicated tests.
+
+- [x] Step 1: `policy_yaml.py` copy and `resolve_policy.py`, one red/green cycle per assertion group above; commit.
+- [x] Step 2: report contract keys, renderer banner, floor handling in both posting paths; commit.
+- [x] Step 3: commit authors, mixed authorship, `--seat`, fork/trust fields, probe rule; commit.
+- [x] Step 4: `references/policy.md`, SKILL.md policy step, guidance wiring, flags; commit.
 
 ---
 

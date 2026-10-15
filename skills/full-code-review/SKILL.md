@@ -2,7 +2,7 @@
 name: full-code-review
 description: Use when asked for a full, multi-lens code review of a GitHub pull request, a GitLab merge request, a branch, or local changes ("full review", "full code review", "review this PR", "review this MR"). Runs up to 14 specialist lenses in parallel (correctness, safety, risk, claim verification, scope, data layer, cross-repo impact, conventions, comments, observability, resilience, and three test lenses), merges them into one deduped, severity-ranked report with an HTML triage page, remembers triage decisions across re-reviews, and posts only human-approved findings (author inline comments, or one batched reviewer review). Advisory only; it never approves or merges on its own.
 user-invocable: true
-argument-hint: '[--change <number> | --branch <name> | --local] [-R <project>] [--forge github|gitlab|none] [--fresh] [--no-escalate] [--add-guidance "<note>"] [--format html|md|both] [--no-open]'
+argument-hint: '[--change <number> | --branch <name> | --local] [-R <project>] [--forge github|gitlab|none] [--pack <dir>] [--seat author|reviewer] [--fresh] [--no-escalate] [--add-guidance "<note>"] [--format html|md|both] [--no-open]'
 allowed-tools: Bash, Read, Grep, Glob, Agent
 ---
 
@@ -55,6 +55,8 @@ A review with no supported forge still runs and delivers locally.
 | `--change <number>` / `--branch <name>` / `--local` | What to review. A branch auto-discovers its open change request. |
 | `-R <project>` | Project path when running outside its checkout. |
 | `--forge github\|gitlab\|none` | Override forge detection. |
+| `--pack <dir>` | Use this org pack instead of the user pack for this run. |
+| `--seat author\|reviewer` | Only when both you and another author committed to the change. |
 | `--fresh` | Discard remembered triage decisions for this target. |
 | `--no-escalate` | Keep every lens on its default model tier. |
 | `--format html\|md\|both`, `--no-open` | Render options. |
@@ -104,8 +106,12 @@ context. **State its result immediately:**
 > Detected **<author|reviewer> seat**: <PR #n on GitHub | MR !n on GitLab> is authored by @<author>;
 > authenticated as @<user>.
 
-If identity is incomplete, the seat is `unknown`, or the script reports a head race,
-stop. Never guess: the seat controls what gets posted. Local and non-forge reviews are
+If the script stops with seat `ambiguous`, both you and another author committed to the
+change: ask once which seat the user wants and rerun with `--seat author` or
+`--seat reviewer` (non-interactive runs stop and name the flag). If
+`change.mixed_authorship` is `null`, commit authors could not be read; record that as an
+Assumption. If identity is incomplete, the seat is `unknown`, or the script reports a
+head race, stop. Never guess: the seat controls what gets posted. Local and non-forge reviews are
 author seat. **The script exits non-zero and writes no context file when no diff source
 succeeded**; stop and report the printed error. Never fan out on a partial or missing
 diff.
@@ -146,9 +152,10 @@ Note the size and any notice in the Summary either way.
 
 **Author seat**: use the current repository root.
 
-**Reviewer seat**: ask every run whether the mutation probe may run the other author's
-targeted tests (consent never persists), then borrow a detached worktree at the exact
-change head:
+**Reviewer seat**: the mutation probe executes the change's code, so offer it only when
+`change.is_fork` is `false` and `change.author_trusted` is `true`; otherwise don't ask,
+and record why. When it may be offered, ask every run (consent never persists). Then
+borrow a detached worktree at the exact change head:
 
 ```bash
 python3 "$SCRIPTS/borrow_review_source.py" acquire \
@@ -160,7 +167,8 @@ checks the full SHA, and creates a detached worktree without touching the caller
 branch, index, or working tree. If no matching clone exists, ask before either choice:
 `--allow-temp-clone` (a shallow temporary clone), or `--diff-only --reason "<why>"`.
 
-Read `path`, `kind`, and `mutation_consent` from the manifest. For `worktree` or
+Read `path`, `kind`, `mutation_consent`, and any `mutation_refused` reason from the
+manifest; the script refuses consent on its own for forks and untrusted authors. For `worktree` or
 `temp-clone`, set `REVIEW_SOURCE_ROOT=path` and run all source reads, guidance
 discovery, and lenses there. For `diff-only`, never read the reviewer's own checkout as
 a substitute: every finding is `verified: false`, source-dependent lenses are skipped
@@ -172,7 +180,22 @@ and named, and the reason goes in `run.source_access_reason`.
 python3 "$SCRIPTS/borrow_review_source.py" release --manifest "$SOURCE_MANIFEST"
 ```
 
-## Step 4: guidance, scope intent, and memory
+## Step 4: policy, guidance, scope intent, and memory
+
+**Policy.** Resolve the layers in `$REFS/policy.md` and drop generated files before
+anything else reads the diff:
+
+```bash
+python3 "$SCRIPTS/resolve_policy.py" --context "$CONTEXT" --source-root "$REVIEW_SOURCE_ROOT" \
+  --lenses-dir "$REFS/lenses" --out "$REVIEW_RUN_DIR/policy.json" --apply \
+  [--pack <dir>] [--policy-ref <target branch SHA, reviewer seat only>]
+```
+
+Exit 2 means a malformed pack or `REVIEW.md`; show the named file and line and stop.
+`policy.json` fixes the lenses that run (`lenses`, each with its checklist path and
+model), `skipped`, `severity_floor`, `escalation`, `critical_paths`, `cross_family`,
+`cross_repo`, and `guidance_files`. Re-check the Step 2 size gate against the filtered
+`size`, and list `excluded_generated` in the Summary.
 
 **Repo conventions.** Against `REVIEW_SOURCE_ROOT`:
 
@@ -184,7 +207,8 @@ python3 "$SCRIPTS/discover_guidance.py" --git-root "$REVIEW_SOURCE_ROOT" \
 ```
 
 This returns the repo's own conventions (`.claude/skills`, the `CLAUDE.md` hierarchy,
-`.claude/rules`, `AGENTS.md`/`CONVENTIONS.md`), which the `conventions` lens consumes.
+`.claude/rules`, `AGENTS.md`/`CONVENTIONS.md`). The `conventions` lens consumes these
+together with `policy.guidance_files` (pack guidance and `REVIEW.md` prose).
 A repo may keep review knowledge in `references/` beside each `SKILL.md`: read every
 path in `repo_skill_reference_indexes` first and only the references they map to the
 changed files; with no index, select by path relevance and never read all of them. If
@@ -227,13 +251,14 @@ the prior head SHA for the neutral annotation in `orchestration.md`.
 
 ## Step 5: fan out the lenses
 
-`$REFS/orchestration.md` holds the roster, run conditions, finding schema, model tiers,
-escalation, fallback, and the verification gate; each lens file's front matter
-(`$REFS/lenses/<id>.md`) is the machine-readable version. **Run `risk` first, alone**:
+`policy.json` lists the lenses to run, each with its checklist path, run condition, and
+model; `$REFS/orchestration.md` holds the finding schema, escalation, model fallback, and
+the verification gate. **Run `risk` first, alone**: give it `policy.critical_paths`, and
 its rating sets verification depth for everyone else. Then dispatch every applicable
-lens **in parallel** with the `Agent` tool, giving each the context file path, its lens
-file, the finding schema, the risk level, and the source root, and setting `model` from
-the lens's tier (escalated per `orchestration.md` unless `--no-escalate`).
+lens **in parallel** with the `Agent` tool, giving each the context file path, its
+checklist, the finding schema, the risk level, and the source root, and setting `model`
+from the policy (escalated per `orchestration.md` when `policy.escalation` is true and
+`--no-escalate` was not passed). Record the model each lens actually ran on.
 
 If `batched`, `risk`, `adversarial`, and `scope` each run once over the whole diff; every
 other lens runs per batch. Every lens applies the **verification gate**: no Must or
@@ -247,6 +272,9 @@ production-only, bounded, self-reverting, never committed. In reviewer seat it r
 when the current manifest says `mutation_consent: true`; refusal is not an error.
 
 ## Step 6: coordinate
+
+**Incomplete runs.** A lens that still fails after the model-fallback retry goes in
+`run.dimensions_failed`, and the report is incomplete: it is never presented as clean.
 
 Per `orchestration.md`: dedup by `file:line` (keep the highest severity, merge lens
 tags), drop speculative and linter-style nits, calibrate severity (description-only
@@ -264,6 +292,10 @@ Verification, Findings, Assumptions, Recommendations) and write
 `schema_version: 1`. Give every finding a one-sentence `impact` (at most 200 characters)
 and a one-line `fix_md` (at most 160); an over-cap or multi-line value fails render, so
 rewrite it, never truncate. Write code-change recommendations as ` ```diff ` fences.
+
+`run` also carries `incomplete`, `dimensions_failed`, `models`, `verification`,
+`excluded_generated`, `policy_sources` (from `policy.sources`), and `severity_floor`
+(from `policy.severity_floor`); findings below the floor render but never post.
 
 `meta` carries `target` (`change`, `branch`, or `local`), and for a change request
 `forge`, `number`, and `project`; reviewer reports also carry `seat: "reviewer"` and the
@@ -324,8 +356,8 @@ Keep the report unchanged after validation; the decisions artifact is bound to i
 Follow `$REFS/posting.md`. With no supported forge, delivery is the rendered report and
 `report.json` path; nothing posts. Headless runs stop after the report.
 
-**Author seat**: valid dispositions drive the batch; with no paste, preselect Must and
-Should fix and ask before Nits. Run the live duplicate `check`, build every body with
+**Author seat**: valid dispositions drive the batch; with no paste, every finding at or
+above `policy.severity_floor` is preselected. Findings below the floor never post. Run the live duplicate `check`, build every body with
 `comment_body.py author`, preview, and post only after approval. Save a receipt for
 each confirmed create. Never edit, reply to, or resolve an old note.
 

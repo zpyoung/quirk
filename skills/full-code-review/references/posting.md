@@ -14,8 +14,10 @@ After a valid author-mode paste:
 
 ## Author-seat inline comments
 
-With no paste, preserve the existing fallback: preselect Must fix and Should fix and
-ask before Nit. Show the proposed batch and obtain final approval.
+With no paste, preselect every finding at or above the report's `run.severity_floor`
+(default Should fix). Findings below the floor never post from either seat;
+`comment_body.py` marks them `post: false` and the reviewer stager omits them. Show the
+proposed batch and obtain final approval.
 
 Posting still creates independent notes, but first cross-checks published discussions
 and suppresses findings whose fingerprint marker appears in a note written by the
