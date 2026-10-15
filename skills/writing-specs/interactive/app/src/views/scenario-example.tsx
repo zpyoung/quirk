@@ -1,7 +1,7 @@
 import React, { type ReactNode } from 'react'
 import { Markdown, type MarkdownInlinePlugin } from '@astryxdesign/core/Markdown'
 import { Text } from '@astryxdesign/core/Text'
-import type { ScenarioExample } from '../spec-types'
+import type { ScenarioDetails, ScenarioExample } from '../spec-types'
 import { useItemLinkPlugins } from './item-links'
 import { OFFLINE_MARKDOWN_COMPONENTS } from './shared'
 
@@ -27,6 +27,31 @@ export const exampleMarkPlugins: MarkdownInlinePlugin[] = [
 const restorePlaceholders: MarkdownInlinePlugin = {
   pattern: /[\uE000\uE001]/g,
   render: (match, key) => <React.Fragment key={key}>{restoreStar(match[0])}</React.Fragment>,
+}
+
+/** Colours a result or rejection phrase inside one text node of the details body; nested values and gaps keep their own marks. */
+export const EXAMPLE_PHRASE_PLUGIN: MarkdownInlinePlugin = {
+  pattern: /[✓✗][^;\n]+/g,
+  render: (match, key) => (
+    <span key={key} className={match[0][0] === '✓' ? 'example-result' : 'example-rejection'}>
+      {renderNestedMarks(match[0])}
+    </span>
+  ),
+}
+
+/** Splits phrase text on the same patterns exampleMarkPlugins use, so a value or gap inside a phrase gets its own span. */
+function renderNestedMarks(text: string): ReactNode[] {
+  const [invented, gap] = exampleMarkPlugins.map((plugin) => plugin.pattern)
+  const nested = new RegExp(`${invented.source}|${gap.source}`, 'g')
+  const nodes: ReactNode[] = []
+  let last = 0
+  for (const m of text.matchAll(nested)) {
+    if (m.index > last) nodes.push(restoreStar(text.slice(last, m.index)))
+    nodes.push(<span key={m.index} className={m[0].startsWith('[ASK: ') ? 'example-gap' : 'example-invented'}>{restoreStar(m[0])}</span>)
+    last = m.index + m[0].length
+  }
+  if (last < text.length) nodes.push(restoreStar(text.slice(last)))
+  return nodes
 }
 
 type Segment = { text: string; className?: string }
@@ -80,6 +105,89 @@ function ExampleMarkdown({ children, hasLineBreaks }: { children: string; hasLin
   )
 }
 
+/** Underscore guard plus the invented-value star swap, for text that is not inside code. */
+function guardProse(text: string): string {
+  return text.replace(/_/g, '_\u200b').replaceAll(STAR, LITERAL_STAR_SENTINEL).replace(INVENTED_MARK, `$1${STAR}`)
+}
+
+/** Guards one stretch of prose that sits beside code, padding the edges the code touches so the star pattern's start and end anchors don't treat the code as the text's boundary. */
+function guardProseBesideCode(text: string, afterCode: boolean, beforeCode: boolean): string {
+  const guarded = guardProse(`${afterCode ? '\u0001' : ''}${text}${beforeCode ? '\u0001' : ''}`)
+  return guarded.slice(afterCode ? 1 : 0, beforeCode ? -1 : undefined)
+}
+
+/** Guards one paragraph, leaving its inline code spans exactly as written. A run of N backticks opens a span that the next run of exactly N closes; an unmatched run is literal. */
+function guardParagraph(paragraph: string): string {
+  const runs = [...paragraph.matchAll(/`+/g)]
+  const nextSameLength = new Array<number>(runs.length).fill(-1)
+  const latestByLength = new Map<number, number>()
+  for (let i = runs.length - 1; i >= 0; i--) {
+    nextSameLength[i] = latestByLength.get(runs[i][0].length) ?? -1
+    latestByLength.set(runs[i][0].length, i)
+  }
+  let out = ''
+  let cursor = 0
+  let i = 0
+  while (i < runs.length) {
+    const closer = nextSameLength[i]
+    if (closer === -1) {
+      i++
+      continue
+    }
+    const spanEnd = runs[closer].index + runs[closer][0].length
+    out += guardProseBesideCode(paragraph.slice(cursor, runs[i].index), cursor > 0, true) + paragraph.slice(runs[i].index, spanEnd)
+    cursor = spanEnd
+    i = closer + 1
+  }
+  return out + guardProseBesideCode(paragraph.slice(cursor), cursor > 0, false)
+}
+
+/** Guards prose outside code; a code span never reaches across a blank line. */
+function guardProseOutsideCode(text: string): string {
+  return text
+    .split(/(\n[ \t]*\n)/)
+    .map((part, i) => (i % 2 === 1 ? part : guardParagraph(part)))
+    .join('')
+}
+
+const FENCE_LINE = /^[ \t]*(?:>[ \t]*)*(`{3,}|~{3,})(.*)$/
+
+/** Normalizes line endings, then applies the guards to everything except fenced code blocks and inline code spans, which pass through as written. */
+function prepareDetailsBody(body: string): string {
+  const lines = body.replace(/\r\n?/g, '\n').match(/[^\n]*\n|[^\n]+/g) ?? []
+  let out = ''
+  let prose = ''
+  let fence: { char: string; length: number } | null = null
+  for (const line of lines) {
+    const content = line.replace(/\n$/, '')
+    const marker = FENCE_LINE.exec(content)
+    if (fence) {
+      out += line
+      if (marker && marker[1][0] === fence.char && marker[1].length >= fence.length && marker[2].trim() === '') fence = null
+      continue
+    }
+    if (marker && !(marker[1][0] === '`' && marker[2].includes('`'))) {
+      out += guardProseOutsideCode(prose) + line
+      prose = ''
+      fence = { char: marker[1][0], length: marker[1].length }
+      continue
+    }
+    prose += line
+  }
+  return out + guardProseOutsideCode(prose)
+}
+
+/** The details body as one block of Markdown, so tables, lists and code blocks keep their structure. */
+function ExampleDetailsBody({ children }: { children: string }) {
+  const itemLinkPlugins = useItemLinkPlugins()
+  const inlinePlugins = [...(itemLinkPlugins ?? []), EXAMPLE_PHRASE_PLUGIN, ...exampleMarkPlugins, restorePlaceholders]
+  return (
+    <Markdown components={OFFLINE_MARKDOWN_COMPONENTS} inlinePlugins={inlinePlugins} contentWidth="100%" density="compact">
+      {prepareDetailsBody(children)}
+    </Markdown>
+  )
+}
+
 function ExamplePane({ label, className, children }: { label: string; className?: string; children: ReactNode }) {
   return (
     <section className={`example-pane${className ? ` ${className}` : ''}`} aria-label={label}>
@@ -89,23 +197,37 @@ function ExamplePane({ label, className, children }: { label: string; className?
   )
 }
 
-/** A scenario's worked example as three panes: the records before, the steps that happen, the records after. */
+/** A scenario's worked example: the data-state panes (records before, steps, records after) when it has them, then its titled details pane. */
 export function ScenarioExampleView({ example }: { example: ScenarioExample }) {
+  const { before, steps, after, details } = example
   return (
     <div className="scenario-example">
-      <ExamplePane label="Data before" className="example-before">
-        <ExampleMarkdown hasLineBreaks>{example.before}</ExampleMarkdown>
-      </ExamplePane>
-      <ExamplePane label="Walkthrough">
-        <ol>
-          {example.steps.map((step, i) => (
-            <li key={i}><ExampleMarkdown>{step}</ExampleMarkdown></li>
-          ))}
-        </ol>
-      </ExamplePane>
-      <ExamplePane label="Data after" className="example-after">
-        <ExampleMarkdown hasLineBreaks>{example.after}</ExampleMarkdown>
-      </ExamplePane>
+      {before !== undefined && steps !== undefined && after !== undefined && (
+        <div className="example-grid">
+          <ExamplePane label="Data before" className="example-before">
+            <ExampleMarkdown hasLineBreaks>{before}</ExampleMarkdown>
+          </ExamplePane>
+          <ExamplePane label="Walkthrough">
+            <ol>
+              {steps.map((step, i) => (
+                <li key={i}><ExampleMarkdown>{step}</ExampleMarkdown></li>
+              ))}
+            </ol>
+          </ExamplePane>
+          <ExamplePane label="Data after" className="example-after">
+            <ExampleMarkdown hasLineBreaks>{after}</ExampleMarkdown>
+          </ExamplePane>
+        </div>
+      )}
+      {details && <ExampleDetails details={details} />}
     </div>
+  )
+}
+
+function ExampleDetails({ details }: { details: ScenarioDetails }) {
+  return (
+    <ExamplePane label={details.title} className="example-details">
+      <ExampleDetailsBody>{details.body}</ExampleDetailsBody>
+    </ExamplePane>
   )
 }

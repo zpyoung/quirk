@@ -32,11 +32,18 @@ export interface Behavior {
   detail?: Markdown
 }
 
-/** A worked data-state example for a scenario: the records before, the steps that happen, the records after. */
+/** A titled block of Markdown beside or instead of the data-state parts: a table, a list, a code sample. */
+export interface ScenarioDetails {
+  title: string
+  body: Markdown
+}
+
+/** A worked example for a scenario: data-state parts (records before, steps, records after), a titled details section, or both. */
 export interface ScenarioExample {
-  before: Markdown
-  steps: string[]
-  after: Markdown
+  before?: Markdown
+  steps?: string[]
+  after?: Markdown
+  details?: ScenarioDetails
 }
 
 export interface Scenario {

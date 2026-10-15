@@ -3,8 +3,8 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import fixture from '../../../../../tests/fixtures/interactive/v2/stage1/logic.json'
 import { approveBlockReason, EXAMPLE_OUTCOME_UPDATE_PREFIX, emptyState, exampleOutcomeUpdate, isPayload } from '../src/review-state'
-import type { LogicSpec, Scenario } from '../src/spec-types'
-import { EXAMPLE_PHRASE, exampleMarkPlugins, ScenarioExampleView } from '../src/views/scenario-example'
+import type { LogicSpec, Scenario, ScenarioExample } from '../src/spec-types'
+import { EXAMPLE_PHRASE, EXAMPLE_PHRASE_PLUGIN, exampleMarkPlugins, ScenarioExampleView } from '../src/views/scenario-example'
 import { SpecMarkdown } from '../src/views/shared'
 
 const [invented, gap] = exampleMarkPlugins.map((plugin) => plugin.pattern)
@@ -98,6 +98,83 @@ const long = 'a'.repeat(80_000)
 const startedAt = performance.now()
 renderToStaticMarkup(React.createElement(ScenarioExampleView, { example: { before: long, steps: [long], after: `✓ ${long}` } }))
 assert.ok(performance.now() - startedAt < 500, 'a long run without a star must render in linear time')
+
+const render = (example: ScenarioExample) => renderToStaticMarkup(React.createElement(ScenarioExampleView, { example }))
+const countOf = (html: string, pattern: RegExp) => (html.match(pattern) ?? []).length
+
+assert.equal(EXAMPLE_PHRASE_PLUGIN.pattern.source, '[✓✗][^;\\n]+')
+assert.ok(EXAMPLE_PHRASE_PLUGIN.pattern.global)
+assert.deepEqual(matches(EXAMPLE_PHRASE_PLUGIN.pattern, 'a ✓ queued; b ✗ skipped\nc'), ['✓ queued', '✗ skipped'])
+
+const detailsOnly = render({ details: { title: 'Pricing rules', body: 'Plain **bold** body' } })
+assert.ok(detailsOnly.includes('aria-label="Pricing rules"'))
+assert.ok(/class="example-pane example-details"/.test(detailsOnly))
+assert.ok(/<span[^>]*>Pricing rules<\/span>/.test(detailsOnly), 'the title must show as the visible label')
+assert.ok(/<strong[^>]*>bold<\/strong>/.test(detailsOnly))
+for (const gone of ['Data before', 'Walkthrough', 'Data after', 'example-grid', 'example-before', 'example-after']) assert.ok(!detailsOnly.includes(gone), `${gone} must not render for a details-only example`)
+
+const both = render({ before: 'b', steps: ['s'], after: 'a', details: { title: 'Edge cases', body: 'body' } })
+const order = ['Data before', 'Walkthrough', 'Data after', 'aria-label="Edge cases"'].map((part) => both.indexOf(part))
+assert.ok(order.every((at) => at >= 0) && order.every((at, i) => i === 0 || at > order[i - 1]), 'the grid must render before the details pane')
+assert.equal(countOf(both, /example-details/g), 1)
+
+const dataOnly = render({ before: 'b', steps: ['s'], after: 'a' })
+assert.ok(!dataOnly.includes('example-details'))
+
+const table = render({ details: { title: 'Rates', body: '| Plan | Rate |\n| --- | --- |\n| Basic | 10%* |\n| Pro | ✓ saved |' } })
+assert.ok(/<table[\s>]/.test(table) && /<\/table>/.test(table), 'a Markdown table in the body must render as a table')
+assert.equal(countOf(table, /<tr[\s>]/g), 3)
+assert.ok(table.includes('"example-invented">10%*</span>'))
+assert.equal(countOf(table, /class="example-result"/g), 1)
+
+const bodyMarks = render({ details: { title: 'Marks', body: 'Total 4* and ✓ charge queued for 3*; then ✗ nothing changes\n\nDate [ASK: Does a skip move the date?] here\n\n- ✓ in a list\n- plain_name stays plain' } })
+assert.equal(countOf(bodyMarks, /class="example-result"/g), 2)
+assert.equal(countOf(bodyMarks, /class="example-rejection"/g), 1)
+assert.equal(countOf(bodyMarks, /class="example-gap"/g), 1)
+assert.ok(bodyMarks.includes('"example-invented">4*</span>'))
+assert.ok(new RegExp(`class="example-result">✓ charge queued for <span class="example-invented">3\\*</span></span>`).test(bodyMarks), 'a value inside a phrase nests inside the phrase colour')
+assert.ok(bodyMarks.includes('Does a skip move the date?'))
+assert.ok(!bodyMarks.includes('') && !bodyMarks.includes(''))
+
+const FORBIDDEN = /[​]/
+const codeSpan = render({ details: { title: 'Code', body: 'Use `✓ queued; 4* [ASK: why?] a_b` here' } })
+const codeSpanText = codeSpan.match(/<code[^>]*>([\s\S]*?)<\/code>/)
+assert.ok(codeSpanText, 'an inline code span must render as code')
+assert.equal(codeSpanText[1], '✓ queued; 4* [ASK: why?] a_b')
+assert.ok(!/example-(result|rejection|invented|gap)/.test(codeSpan), 'marks inside a code span must stay plain')
+assert.ok(!FORBIDDEN.test(codeSpan))
+
+const fenced = render({ details: { title: 'Fence', body: 'Before 2* here\n\n```json\n{"a_b": "✓ ok; ✗ no", "n": 4*, "g": "[ASK: why?]"}\n```\n\n~~~\n✗ tilde 3* a_b\n~~~\n\nAfter 5*' } })
+const codeBlocks = [...fenced.matchAll(/<code[^>]*>([\s\S]*?)<\/code>/g)].map((m) => m[1].replace(/<[^>]+>/g, ''))
+assert.equal(codeBlocks.length, 2)
+assert.ok(codeBlocks[0].includes('{&quot;a_b&quot;: &quot;✓ ok; ✗ no&quot;, &quot;n&quot;: 4*, &quot;g&quot;: &quot;[ASK: why?]&quot;}'))
+assert.ok(codeBlocks[1].includes('✗ tilde 3* a_b'))
+assert.equal(countOf(fenced, /class="example-invented"/g), 2, 'only the two values outside the fence are marked')
+assert.ok(!/example-(result|rejection|gap)/.test(fenced))
+assert.ok(!FORBIDDEN.test(fenced))
+
+const literalInCode = render({ details: { title: 'Literal', body: 'Out  and a_b and 6*\n\n```\nin  code\n```\n\n`span `' } })
+assert.ok(literalInCode.includes('in  code') && literalInCode.includes('span '))
+assert.ok(literalInCode.includes('Out  and a_'))
+assert.ok(!literalInCode.includes(''))
+assert.equal(countOf(literalInCode, /example-invented/g), 1)
+
+const crlfBody = render({ details: { title: 'Newlines', body: 'one 1*\r\n\r\ntwo ✓ ok\r\n\r\n```\r\nkeep_this 2*\r\n```' } })
+assert.ok(!crlfBody.includes('\r'))
+assert.equal(countOf(crlfBody, /role="paragraph"/g), 2)
+assert.equal(countOf(crlfBody, /class="example-result"/g), 1)
+assert.ok(crlfBody.includes('keep_this 2*</span>'))
+assert.ok(render({ details: { title: 'CR', body: 'one 1*\r\rtwo ✓ ok' } }).includes('example-result'))
+
+const detailsLink = render({ details: { title: 'Links', body: `${HOSTILE_LINK} ${GOOD_LINK}\n\n| a |\n| - |\n| ${HOSTILE_LINK} |` } })
+assert.ok(!/href="jAvAsCrIp/i.test(detailsLink) && !/javascript:/i.test(detailsLink.replace(/>[^<]*</g, '><')))
+assert.equal(countOf(detailsLink, /<a /g), 1)
+assert.ok(detailsLink.includes('click'))
+
+const longBody = 'a'.repeat(80_000)
+const bodyStartedAt = performance.now()
+render({ details: { title: 'Long', body: `${longBody} \`${longBody}\`\n\n${'`a '.repeat(20_000)}\n\n${'x*'.repeat(20_000)} ✓ ${longBody}` } })
+assert.ok(performance.now() - bodyStartedAt < 1500, 'a long details body must render in linear time')
 
 const base: Scenario = {
   id: 'S1', behavior: 'B1', given: 'g', when: 'w', then: 'Then the spec outcome', alternatives: ['Then alt'], explanation: 'e', provenance: 'claude',
