@@ -242,7 +242,7 @@ def _tier1_problems(tdir: Path, meta: dict) -> list[str]:
                 if "description" in info and not isinstance(info["description"], str):
                     errors.append(f"slot {slot!r} description must be a string")
             if slot == "summary":
-                errors.append("slot 'summary' is reserved: every tier 1 template accepts it without declaring it")
+                errors.append("slot 'summary' is reserved: region-bearing templates take it without declaring it")
             declared.append(slot)
 
     for key in ("skeleton", "example"):

@@ -948,13 +948,18 @@ for (const options of candidates) {
 }
 if (!browser) process.exit(77);
 const out = {};
-for (const width of [1800, 2400]) {
+for (const width of [1280, 1800, 2400]) {
   const page = await browser.newPage({ viewport: { width, height: 900 } });
   await page.goto("file://" + file);
   await page.waitForSelector(".q-page");
   out[width] = await page.$eval(".q-page", (el) => {
-    const r = el.getBoundingClientRect();
-    return { left: r.left, right: r.right, width: r.width };
+    const box = (node) => {
+      const r = node.getBoundingClientRect();
+      return { left: r.left, right: r.right, width: r.width };
+    };
+    const wrap = el.closest(".q-wrap");
+    const gutter = parseFloat(getComputedStyle(wrap).paddingLeft);
+    return { page: box(el), wrap: box(wrap), parent: box(wrap.parentElement), gutter };
   });
   await page.close();
 }
@@ -986,16 +991,27 @@ def _page_boxes(project: Path, env: dict, tmp_path: Path, shape: str) -> dict:
     return json.loads(proc.stdout)
 
 
+def _assert_fills_up_to_the_cap(boxes: dict, shape: str) -> None:
+    for viewport, seen in boxes.items():
+        wrap, page, parent, gutter = seen["wrap"], seen["page"], seen["parent"], seen["gutter"]
+        expected = min(1440, parent["width"])
+        assert abs(wrap["width"] - expected) <= 1, (shape, viewport, seen)
+        assert abs(page["width"] - (wrap["width"] - 2 * gutter)) <= 1, (shape, viewport, seen)
+        assert abs(wrap["left"] - (int(viewport) - wrap["right"])) <= 1, (shape, viewport, seen)
+        if int(viewport) >= 1800:
+            assert abs(wrap["width"] - 1440) <= 1, (shape, viewport, seen)
+        else:
+            assert wrap["width"] > 1200, (shape, viewport, seen)
+
+
 @pytest.mark.skipif(
     shutil.which("pnpm") is None or NODE is None or os.environ.get("QUIRK_HTML_NETWORK_TESTS") != "1",
     reason="needs node, pnpm on PATH and QUIRK_HTML_NETWORK_TESTS=1",
 )
-def test_a_report_app_page_is_capped_at_1440_and_centred_on_wide_screens(project, tmp_path):
+@pytest.mark.parametrize("shape", ["report", "reference"])
+def test_an_app_page_fills_the_viewport_up_to_1440_and_is_centred(project, tmp_path, shape):
     env = {**os.environ, "QUIRK_HTML_USER_DIR": str(tmp_path / "user")}
-    boxes = _page_boxes(project, env, tmp_path, "report")
-    for viewport, box in boxes.items():
-        assert box["width"] <= 1440, (viewport, box)
-        assert abs(box["left"] - (int(viewport) - box["right"])) <= 1, (viewport, box)
+    _assert_fills_up_to_the_cap(_page_boxes(project, env, tmp_path, shape), shape)
 
 
 @pytest.mark.skipif(
@@ -1005,4 +1021,5 @@ def test_a_report_app_page_is_capped_at_1440_and_centred_on_wide_screens(project
 def test_a_dashboard_app_page_stays_fluid_past_1440(project, tmp_path):
     env = {**os.environ, "QUIRK_HTML_USER_DIR": str(tmp_path / "user")}
     boxes = _page_boxes(project, env, tmp_path, "dashboard")
-    assert boxes["2400"]["width"] > 1440, boxes
+    assert boxes["2400"]["wrap"]["width"] > 1440, boxes
+    assert boxes["2400"]["page"]["width"] > 1440, boxes

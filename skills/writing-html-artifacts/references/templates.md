@@ -95,7 +95,7 @@ Slot names match `^<!-- slot: ([a-z][a-z0-9-]{0,30}) -->$`. A rebuild of an exis
 
 Every tier-1 source names a shape in `layout` and writes a `summary` slot. What each shape is for and its widths are in [design reference](design-reference.md) section 8; this section is how the build treats the field.
 
-- **`summary` is a reserved slot.** Every tier-1 template accepts it and none may declare it. It is required whenever the skeleton holds `{{regions}}` or `{{slot:main}}`. A missing summary is exit 2, and the error names the shape and where its summary goes. A skeleton with neither placeholder, the companion's, has no summary slot and rejects one.
+- **`summary` is a reserved slot.** Region-bearing templates take it without declaring it, and none may declare it. It is required whenever the skeleton holds `{{regions}}` or `{{slot:main}}`. A missing summary is exit 2, and the error names the shape and where its summary goes. A skeleton with neither placeholder, the companion's, has no summary slot and rejects one.
 - **`aside` is for `report` only.** An `aside` slot on any other shape is exit 2.
 - **The nav is generated from `main`.** Headings inside `q-panel`, `q-compare`, `q-tabs` and `q-board` are neither counted nor listed. A heading without an `id` gains one made from its text, kept unique against ids already on the page. `"nav": "off"` on `reference`, `"nav": "on"` with no h2, and a `reference` page whose `main` has no h2 or h3 (its section nav would be empty) are exit 2.
 - **Layout resolution at build.** The source's `layout`, else the `layout` in the existing output's header, else `report`. `--upgrade` does not change it; it only moves library versions.
