@@ -120,6 +120,27 @@ def test_new_from_a_named_base(env):
     assert code == 0 and meta["libraries"] == ["webawesome", "alpine"]
 
 
+@pytest.mark.parametrize("base", ["report", "components"])
+def test_new_from_a_base_leaves_the_base_shape_examples_behind(env, base):
+    assert (SKILL / "templates" / base / "examples").is_dir()
+    code, out = new(env, "mine", "--base", base)
+    dest = env["project"] / ".quirk/html-templates/mine"
+    assert code == 0, out
+    assert not (dest / "examples").exists()
+    example = (dest / "example.src.html").read_text()
+    assert example.startswith('<!-- quirk-src {"template": "mine"')
+    code, verified = verify(env, "mine")
+    assert code == 0, verified
+
+
+def test_new_from_a_report_built_artifact_leaves_the_shape_examples_behind(env):
+    artifact = build_artifact(env)
+    code, out = new(env, "notes-kit", "--from", str(artifact))
+    dest = env["project"] / ".quirk/html-templates/notes-kit"
+    assert code == 0, out
+    assert not (dest / "examples").exists()
+
+
 def test_new_refuses_an_existing_name(env):
     assert new(env, "mine")[0] == 0
     marker = env["project"] / ".quirk/html-templates/mine/marker.txt"
