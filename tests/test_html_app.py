@@ -20,7 +20,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "skills" / "writing-html-artifacts"
 sys.path.insert(0, str(SKILL / "scripts"))
 
-from htmlkit import header, manifest  # noqa: E402
+from htmlkit import header, layoutcheck, manifest  # noqa: E402
+from htmlkit.layouts import LAYOUTS  # noqa: E402
 
 CLI = SKILL / "scripts" / "quirk_html.py"
 APP = SKILL / "templates" / "app"
@@ -242,6 +243,7 @@ def test_quirk_app_json_round_trips_and_flags_override(project, fake_env):
         "title": "First",
         "mode": "connected",
         "tier_signal": "multi view",
+        "layout": "report",
     }
 
     rc, result = build_app(project, fake_env)
@@ -257,6 +259,7 @@ def test_quirk_app_json_round_trips_and_flags_override(project, fake_env):
         "title": "Second",
         "mode": "offline",
         "tier_signal": "multi view",
+        "layout": "report",
     }
 
 
@@ -625,6 +628,199 @@ def test_tier_1_template_is_refused_by_build_app(project, fake_env):
     assert not source_dir(project).exists()
 
 
+def _built_header(project: Path, slug: str = "demo") -> dict:
+    return header.read_header((project / ".quirk" / "html" / f"{slug}.html").read_text())
+
+
+@needs_node
+def test_layout_round_trips_through_quirk_app_json_and_the_header(project, fake_env):
+    rc, result = build_app(project, fake_env, "demo", "--title", "Ops", "--layout", "dashboard")
+    assert rc == 0, result
+    saved = source_dir(project) / "quirk-app.json"
+    assert json.loads(saved.read_text())["layout"] == "dashboard"
+    assert result["layout"] == "dashboard" and _built_header(project)["layout"] == "dashboard"
+
+    rc, result = build_app(project, fake_env)
+    assert rc == 0 and result["layout"] == "dashboard"
+    assert _built_header(project)["layout"] == "dashboard"
+    assert "dashboard" in (source_dir(project) / "src" / "quirk-page.ts").read_text()
+
+
+@needs_node
+def test_a_build_with_no_layout_is_a_report(project, fake_env):
+    rc, result = build_app(project, fake_env, "demo", "--title", "Plain")
+    assert rc == 0 and result["layout"] == "report"
+    assert json.loads((source_dir(project) / "quirk-app.json").read_text())["layout"] == "report"
+    assert _built_header(project)["layout"] == "report"
+
+
+@needs_node
+def test_the_layout_flag_overrides_the_saved_value_and_is_saved(project, fake_env):
+    assert build_app(project, fake_env, "demo", "--title", "T", "--layout", "tool")[0] == 0
+    rc, result = build_app(project, fake_env, "demo", "--layout", "reference")
+    assert rc == 0 and result["layout"] == "reference"
+    saved = source_dir(project) / "quirk-app.json"
+    assert json.loads(saved.read_text())["layout"] == "reference"
+    assert _built_header(project)["layout"] == "reference"
+    assert "reference" in (source_dir(project) / "src" / "quirk-page.ts").read_text()
+
+
+@needs_node
+def test_a_saved_layout_is_used_when_the_source_folder_already_holds_one(project, fake_env):
+    src = source_dir(project)
+    shutil.copytree(APP / "project", src)
+    (src / "quirk-app.json").write_text(json.dumps({"layout": "comparison"}))
+    rc, result = build_app(project, fake_env, "demo", "--title", "Pick one")
+    assert rc == 0 and result["layout"] == "comparison"
+    assert json.loads((src / "quirk-app.json").read_text())["layout"] == "comparison"
+
+
+@needs_node
+def test_a_bad_layout_flag_is_a_usage_error_that_lists_the_shapes(project, fake_env):
+    rc, result = build_app(project, fake_env, "demo", "--title", "x", "--layout", "poster")
+    assert rc == 2
+    assert all(name in result["error"] for name in LAYOUTS)
+    assert not source_dir(project).exists() and pnpm_calls(fake_env) == []
+
+
+@needs_node
+def test_a_bad_saved_layout_is_a_usage_error(project, fake_env):
+    assert build_app(project, fake_env, "demo", "--title", "T")[0] == 0
+    saved = source_dir(project) / "quirk-app.json"
+    saved.write_text(json.dumps({**json.loads(saved.read_text()), "layout": "poster"}))
+    rc, result = build_app(project, fake_env)
+    assert rc == 2 and "layout" in result["error"] and "poster" in result["error"]
+    saved.write_text(json.dumps({**json.loads(saved.read_text()), "layout": 3}))
+    assert build_app(project, fake_env)[0] == 2
+
+
+@needs_node
+def test_the_layout_stylesheet_and_page_module_are_written_every_build(project, fake_env):
+    assert build_app(project, fake_env, "demo", "--title", "T", "--layout", "longform")[0] == 0
+    src = source_dir(project) / "src"
+    css, module = src / "quirk-layout.css", src / "quirk-page.ts"
+    assert css.read_text() == (SKILL / "theme" / "layout.css").read_text()
+    assert "export const layout" in module.read_text() and '"longform"' in module.read_text()
+
+    css.write_text("/* edited by hand */")
+    module.write_text("export const layout: string = 'tool'\n")
+    assert build_app(project, fake_env)[0] == 0
+    assert css.read_text() == (SKILL / "theme" / "layout.css").read_text()
+    assert '"longform"' in module.read_text() and "tool" not in module.read_text()
+
+    css.unlink()
+    module.unlink()
+    assert build_app(project, fake_env, "demo", "--layout", "explainer")[0] == 0
+    assert css.is_file() and '"explainer"' in module.read_text()
+
+
+@needs_node
+def test_a_template_without_a_src_folder_still_gets_the_layout_files(project, fake_env):
+    tdir = project / ".quirk" / "html-templates" / "flat"
+    (tdir / "project").mkdir(parents=True)
+    (tdir / "project" / "package.json").write_text(json.dumps({"dependencies": {}}))
+    (tdir / "project" / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n")
+    (tdir / "template.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "name": "flat",
+                "description": "Use when a test needs a tier-2 template with no src folder.",
+                "tier": 2,
+                "project": "project/",
+            }
+        )
+    )
+    seal(tdir)
+    rc, result = build_app(project, fake_env, "demo", "--title", "Demo", "--template", "flat", "--layout", "tool")
+    assert rc == 0, result
+    assert (source_dir(project) / "src" / "quirk-layout.css").is_file()
+    assert '"tool"' in (source_dir(project) / "src" / "quirk-page.ts").read_text()
+
+
+@needs_node
+def test_hand_written_page_geometry_in_the_app_sources_fails_the_build(project, fake_env):
+    assert build_app(project, fake_env, "demo", "--title", "T")[0] == 0
+    src = source_dir(project) / "src"
+    (src / "views").mkdir(exist_ok=True)
+    (src / "views" / "cards.css").write_text(".cards {\n  color: red;\n  display: grid;\n}\n")
+    (src / "views" / "Wide.tsx").write_text("export const Wide = () => <div style={{ maxWidth: '900px' }} />\n")
+    rc, result = build_app(project, fake_env)
+    assert rc == 1 and result["checks"]["passed"] is False
+    layout = [f for f in result["checks"]["failures"] if f["check"] == "layout"]
+    details = " | ".join(f["detail"] for f in layout)
+    assert "src/views/cards.css line 3" in details and "q-grid" in details
+    assert "src/views/Wide.tsx line 1" in details and "max-width" in details
+    assert Path(result["path"]).is_file()
+
+    (src / "views" / "cards.css").unlink()
+    (src / "views" / "Wide.tsx").unlink()
+    rc, result = build_app(project, fake_env)
+    assert rc == 0 and result["checks"]["passed"] is True
+
+
+@needs_node
+def test_the_shipped_layout_and_token_stylesheets_are_not_flagged(project, fake_env):
+    rc, result = build_app(project, fake_env, "demo", "--title", "T", "--layout", "dashboard")
+    assert rc == 0, result
+    assert [f for f in result["checks"]["failures"] if f["check"] == "layout"] == []
+
+
+def _scaffold_sources() -> list[Path]:
+    roots = [APP / "project" / "src", APP / "example" / "src", *sorted((APP / "examples").glob("*/src"))]
+    return sorted(p for root in roots for p in root.rglob("*") if p.suffix in (".css", ".tsx"))
+
+
+def test_every_scaffold_and_example_source_is_clean_under_the_layout_check():
+    paths = _scaffold_sources()
+    assert any(p.name == "PageLayout.tsx" for p in paths) and len(paths) > 7
+    findings = []
+    for path in paths:
+        root = next(r for r in [APP / "project" / "src", APP / "example" / "src", *(APP / "examples").glob("*/src")] if r in path.parents)
+        findings += layoutcheck.check_app_sources([path], root=root)
+    assert findings == []
+
+
+def test_the_scaffold_table_class_is_q_data_grid_everywhere():
+    theme = (APP / "project" / "src" / "theme.css").read_text()
+    assert ".q-data-grid {" in theme and ".q-data-grid th" in theme
+    assert not re.search(r"\.q-grid\b", theme)
+    assert "@import './quirk-layout.css';" in theme
+    editor = (APP / "example" / "src" / "views" / "EditorView.tsx").read_text()
+    assert 'className="q-data-grid"' in editor and 'className="q-grid"' not in editor
+    rules = (APP / "rules.md").read_text()
+    assert "`q-data-grid`" in rules and "`q-grid`" not in rules
+
+
+def test_page_layout_renders_the_region_dom_of_render_regions():
+    source = (APP / "project" / "src" / "PageLayout.tsx").read_text()
+    for needle in (
+        "q-page",
+        "data-layout",
+        "q-summary",
+        'aria-label="Summary"',
+        'id="main"',
+        "q-nav",
+        "q-nav-menu",
+        "q-nav-rail",
+        "On this page",
+        "Sections",
+        "q-panel, q-compare, q-tabs, q-board",
+    ):
+        assert needle in source, needle
+    app = (APP / "project" / "src" / "App.tsx").read_text()
+    assert "<PageLayout" in app and "quirk-page" in source + app
+
+
+def test_every_shape_has_an_app_example_overlay():
+    names = sorted(p.name for p in (APP / "examples").iterdir() if p.is_dir())
+    assert names == sorted(LAYOUTS)
+    for name in LAYOUTS:
+        overlay = APP / "examples" / name
+        assert json.loads((overlay / "quirk-app.json").read_text()) == {"layout": name}
+        assert (overlay / "src" / "routes.tsx").is_file()
+
+
 @pytest.mark.skipif(
     shutil.which("pnpm") is None or os.environ.get("QUIRK_HTML_NETWORK_TESTS") != "1",
     reason="needs pnpm on PATH and QUIRK_HTML_NETWORK_TESTS=1",
@@ -636,3 +832,30 @@ def test_real_build_of_the_app_template(project, tmp_path):
     assert result["checks"]["passed"] is True
     html = Path(result["path"]).read_text()
     assert "flag" in html.lower() and header.read_header(html)["tier"] == 2
+
+
+@pytest.mark.skipif(
+    shutil.which("pnpm") is None or os.environ.get("QUIRK_HTML_NETWORK_TESTS") != "1",
+    reason="needs pnpm on PATH and QUIRK_HTML_NETWORK_TESTS=1",
+)
+@pytest.mark.parametrize("shape", LAYOUTS)
+def test_real_build_and_verify_of_each_app_example(project, tmp_path, shape):
+    env = {**os.environ, "QUIRK_HTML_USER_DIR": str(tmp_path / "user")}
+    src = source_dir(project, shape)
+    ignore = shutil.ignore_patterns("node_modules", "dist", ".DS_Store")
+    shutil.copytree(APP / "project", src, ignore=ignore)
+    shutil.copytree(APP / "examples" / shape, src, ignore=ignore, dirs_exist_ok=True)
+    rc, result = build_app(project, env, shape, "--title", f"{shape} example")
+    assert rc == 0, result
+    assert result["layout"] == shape and result["checks"]["passed"] is True
+    html = Path(result["path"]).read_text()
+    assert header.read_header(html)["layout"] == shape
+    assert "data-layout" in html and "q-page" in html
+    proc = subprocess.run(
+        [sys.executable, str(CLI), "verify", result["path"]], capture_output=True, text=True, env=env, timeout=600
+    )
+    report = json.loads(proc.stdout)
+    if report["status"] == "not-browser-verified":
+        pytest.skip(f"no browser to verify with: {report.get('reason')}")
+    assert report["status"] == "passed", report
+    assert all(check["passed"] for check in report["checks"].values()), report["checks"]

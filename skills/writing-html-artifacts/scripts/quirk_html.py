@@ -21,6 +21,7 @@ from typing import Callable, NoReturn, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from htmlkit import SKILL_DIR, app, assemble, create, manifest, resolve, verify_runner  # noqa: E402
+from htmlkit.layouts import DEFAULT_LAYOUT, LAYOUTS  # noqa: E402
 
 EXIT_OK, EXIT_CHECK_FAILED, EXIT_USAGE, EXIT_TIER2_UNAVAILABLE = 0, 1, 2, 3
 
@@ -136,6 +137,7 @@ def _cmd_build_app(args: argparse.Namespace) -> int:
             title=args.title,
             mode=args.mode,
             signal=args.signal,
+            layout=args.layout,
             template_name=args.template,
             upgrade=args.upgrade,
             project_dir=_project_dir(args),
@@ -252,6 +254,10 @@ def _configure_build_app(sub: argparse._SubParsersAction) -> None:
     parser.add_argument("--title", help="page title (required on the first build, then saved in quirk-app.json)")
     parser.add_argument("--mode", choices=app.APP_MODES, help="offline or connected (default: the saved value, else offline)")
     parser.add_argument("--signal", help="why this needs tier 2, recorded in the header and quirk-app.json")
+    parser.add_argument(
+        "--layout",
+        help=f"page shape, one of {', '.join(LAYOUTS)} (default: the saved value, else {DEFAULT_LAYOUT})",
+    )
     parser.add_argument("--template", help="tier-2 template name (default: the saved value, else app)")
     parser.add_argument("--upgrade", action="store_true", help="move the kit and Chart.js to the current version, not the recorded one; npm versions stay pinned by the lockfile")
     _project_option(parser)

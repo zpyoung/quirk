@@ -75,7 +75,7 @@ export function EditorView() {
         <Button label="Reset to defaults" variant="secondary" size="sm" onClick={reset} />
       </HStack>
       <div className="q-table-wrap">
-        <table className="q-grid" aria-label="Feature flags">
+        <table className="q-data-grid" aria-label="Feature flags">
           <thead>
             {table.getHeaderGroups().map((group) => (
               <tr key={group.id}>
