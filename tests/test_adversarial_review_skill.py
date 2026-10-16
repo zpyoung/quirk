@@ -881,3 +881,231 @@ def test_the_slash_command_adds_no_target_semantics_of_its_own() -> None:
         "the command reintroduced a default target the script does not implement"
     )
     assert "WORKTREE" in command
+
+
+def _section(text: str, heading: str, next_heading: str) -> str:
+    """Keep protocol assertions local to the section that governs the decision."""
+    return text[text.index(heading):text.index(next_heading, text.index(heading) + len(heading))]
+
+
+@pytest.mark.parametrize("path", [
+    PROFILES_DIR / "code-diff.md",
+    ASSETS_DIR / "promote-prompt.md",
+    ASSETS_DIR / "refute-prompt.md",
+], ids=lambda p: p.name)
+def test_passing_prepass_forbids_full_suite_reproductions(path: Path) -> None:
+    body = path.read_text().lower()
+    assert re.search(r"(?:pre-?pass|prepass).{0,160}(?:status.{0,12})?[`\" ]pass", body, re.DOTALL)
+    assert re.search(r"(?:must not|never|do not) run the full test suite", body)
+    assert re.search(r"(?:narrowest|narrow|single).{0,100}(?:test|reproduction)", body, re.DOTALL)
+    assert "targeted" in body
+
+
+@pytest.mark.parametrize("asset,source,field", [
+    ("refute-prompt.md", "claims.json", "diff_excerpts"),
+    ("tiebreak-prompt.md", "gate.json", "contested_excerpts"),
+])
+def test_later_stages_stage_evidence_excerpts(asset: str, source: str, field: str) -> None:
+    body = (ASSETS_DIR / asset).read_text()
+    instructions = body[:body.index("---")]
+    artifact = _section(body, "## The artifact", "## The ")
+    for section in (instructions, artifact):
+        assert source in section and field in section
+        assert "{{ARTIFACT}}" in section
+    assert "±15" in artifact
+    assert "excluded_paths" in artifact
+    assert "full files" in artifact.lower() and "`read`" in artifact
+    if field == "contested_excerpts":
+        assert "counter_evidence" in artifact
+
+
+def test_composition_contract_exposes_shared_inputs_and_scope_outputs() -> None:
+    body = (ASSETS_DIR / "composition-contract.md").read_text()
+    inputs = _section(body, "## Input", "## Output")
+    for field in ("id_prefix?", "resolve_file?", "prepass_file?", "reuse_check?", "include_all?"):
+        assert field in _fenced_block_after(inputs, "## Input")
+    assert "### Closure Round Verification" in inputs and "id_prefix" in inputs
+    outputs = _section(body, "## Output", "## Depth")
+    for field in ("excluded_paths[]", "contested_excerpts?", "prepass.tree_hash",
+                  "prepass.checks[].reused", "duration_ms"):
+        assert field in outputs
+    table = _fenced_block_after(body, DECISION_BLOCK)
+    assert re.search(r"^any exit\s+\+ excluded_paths nonempty\s+->", table, re.MULTILINE)
+
+
+def test_review_data_flow_documents_hygiene_verified_reuse_and_shared_round_inputs() -> None:
+    body = " ".join(_section(SKILL_PATH.read_text(), "## Data flow", "## Verdict contract").split())
+    for path in ("vendor/", "node_modules/", "dist/", "build/", ".venv/", "__pycache__/",
+                 "*.min.js", "*.min.css", "*.bundle.js", "*.lock", "pnpm-lock.yaml",
+                 "package-lock.json", "yarn.lock", "Cargo.lock", "poetry.lock", "uv.lock"):
+        assert path in body
+    for field in ("--include-all", "excluded_paths", "full_worktree_hash", "--reuse-check",
+                  "HEAD^{tree}", "clean_tree", "exit_code", "observed_artifact_hash",
+                  '"reused": true', "duration_ms", "manifest.prepass"):
+        assert field in body
+    assert "command coverage" in body and "once" in body
+    assert "C" in body and "S" in body and "X" in body and "--id-prefix" in body
+    assert "diff_excerpts" in body and "contested_excerpts" in body
+
+
+def test_review_dispatch_caps_stage_effort_without_rewriting_model_identity() -> None:
+    dispatch = _section(SKILL_PATH.read_text(), "## Dispatch", "## Composing this skill")
+    for token in ("promote", "refute", "tiebreak", "high", "medium", "low < medium < high",
+                  "--thinking", "ceiling", "manifest.reviewer.thinking", "model.json"):
+        assert token in dispatch
+    assert "lower" in dispatch and "`Agent`" in dispatch
+
+
+def test_closure_protocol_keeps_accepted_findings_out_of_dismissals() -> None:
+    rounds = _section(SKILL_PATH.read_text(), "## Running rounds", "## Red Flags")
+    for token in ("LAST_ROUND_HEAD..HEAD", "id_prefix", "### Closure Round Verification",
+                  "dismissed[]", "original", '"id": null'):
+        assert token in rounds
+    assert re.search(r"never.{0,30}dismissed", rounds, re.IGNORECASE | re.DOTALL)
+    for prefix in ("C1", "S1", "X1"):
+        assert prefix in rounds
+    profile = (PROFILES_DIR / "code-diff.md").read_text().split("## Attack surface")[0]
+    for token in ("LAST_ROUND_HEAD..HEAD", "### Closure Round Verification", "original",
+                  '"id": null'):
+        assert token in profile
+    output = " ".join((ASSETS_DIR / "promote-prompt.md").read_text().split("## Output")[1].split())
+    assert "### Closure Round Verification" in output
+    assert "original" in output and "fixed" in output and "lens prefix" in output
+
+
+def test_sdd_preflight_probes_before_one_consolidated_card() -> None:
+    preflight = " ".join(sdd_step(1).split())
+    for token in ("git rev-parse --abbrev-ref HEAD", "git status --porcelain", "pi-watch --check",
+                  "codex", "gemini", "terra", "opus", "sonnet", "flash", "scratch",
+                  "single consolidated Tier 1", "orca ask", "AskUserQuestion",
+                  "backend_pairing", "dirty_tree_action", "env_readiness", "task-fallback",
+                  "stash_untracked", "commit_existing", "abort",
+                  "git stash push --include-untracked", "reduced independence"):
+        assert token in preflight
+    assert preflight.index("pi-watch --check") < preflight.index("backend_pairing")
+    assert preflight.index("git status --porcelain") < preflight.index("backend_pairing")
+    for pair in ("claude-task + codex (Recommended)", "claude-task + gemini",
+                 "claude-task + terra", "pi-codex + opus", "pi-codex + gemini"):
+        assert pair in preflight
+    assert "tree_test_cache" in preflight and "ROUND_<r>_HEAD" in preflight
+    assert "LAST_ROUND_HEAD" in preflight
+
+
+def test_sdd_cache_requires_verified_tree_identity_and_command() -> None:
+    body = SDD_SKILL.read_text()
+    audit = " ".join(_section(body, "### Step 6:", "### Step 7:").split())
+    for token in ("worktree_tree_identity", "WAVE_BASE", "HEAD^{tree}",
+                  "sha256(canonical_json(CHAIN_SNAPSHOT_AFTER))", "acceptance_cmd",
+                  "tree_test_cache", "orchestrator", "prepass", "a claim never overrides a run"):
+        assert token in audit
+    assert "worker's text claim alone" in audit and "once" in audit
+    gates = sdd_step(7)
+    for token in ('((HEAD^{tree}, "clean"), full_suite_cmd)', "tree_test_cache",
+                  "$WORK/gate-check.json", "ReusedCheckInput", "tree_hash",
+                  "clean_tree: true", "duration_ms"):
+        assert token in gates
+
+
+def test_sdd_wave_gate_automatically_fixes_only_replaced_test_contracts() -> None:
+    gates = " ".join(sdd_step(7).split())
+    for token in ("unowned test file", "scope.files", "pre-wave behavior", "intentionally replaced",
+                  "automatically dispatch", "wave-gate fixer", 'effort: "high"', "Step 6",
+                  "Tier 2", "--timeout-ms 600000", "contract conflict"):
+        assert token in gates
+
+
+def test_sdd_logs_slow_wave_gate_and_prepass_advisory_without_config_edits() -> None:
+    gates, review = sdd_step(7), sdd_step(8)
+    for section in (gates, review):
+        for token in ("300", "run journal", "final summary", "pytest-xdist", "-n auto",
+                      "BrowserContext"):
+            assert token in section
+    assert "checks[].duration_ms > 300000" in review
+    assert "without mutating" in gates
+
+
+def test_sdd_review_uses_stage_sized_depth_and_one_shared_prepass() -> None:
+    review = sdd_step(8)
+    checkpoint = _section(review, "**Checkpoint**", "**Final loop**")
+    assert "--depth standard" in checkpoint
+    final = review[review.index("**Final loop**"):]
+    assert "Final Round 1" in final and "--depth deep" in final and "RUN_BASE..HEAD" in final
+    for token in ("resolve.json", "prepass.json", "once per round", '--check-cmd "$FULL_SUITE_CMD"',
+                  '--reuse-check "$WORK/gate-check.json"', "exits 2", "without `--reuse-check`"):
+        assert token in review
+    assert re.search(r"all three.{0,100}share", review, re.IGNORECASE | re.DOTALL)
+    assert re.search(r"\| any exit \+ `excluded_paths` non-empty \|", review)
+
+
+def test_sdd_closure_rounds_filter_each_lens_and_bound_discovery_fallback() -> None:
+    review = sdd_step(8)
+    for token in ("Final Rounds 2–5", "ROUND_<r>_HEAD", "ROUND_<r-1>_HEAD", "LAST_ROUND_HEAD..HEAD",
+                  "closure mode", "### Closure Round Verification", "id_prefix", "C*", "S*", "X*",
+                  "scope.files", "dismissed[]", "full discovery", "outside"):
+        assert token in review
+    assert re.search(r"Never.{0,60}prior accepted findings.{0,30}dismissed", review, re.DOTALL)
+
+
+def test_sdd_adjudication_is_nonblocking_and_escalates_repeated_failed_fixes() -> None:
+    adjudication = sdd_step(9)
+    for token in ("Tier 3", "GateResult", "run journal", "ID | Lens | Effective Severity | Ruling",
+                  "One-line Reason", "without asking a blocking question", 'effort: "high"',
+                  "veto", "next batch", "in-flight", "r >= 3", "r-2", "r-1", "category",
+                  "contract seam", "root-cause design task", "Tier 2", "--timeout-ms 600000"):
+        assert token in adjudication
+    exit_step = sdd_step(10)
+    assert "Tier 1" in exit_step and "blocked handoff" in exit_step
+    assert "CRITICAL" in exit_step and "HIGH" in exit_step and "five rounds" in exit_step
+
+
+def test_sdd_three_tier_human_gates_handle_statuses_and_pending_cards() -> None:
+    failure = _section(SDD_SKILL.read_text(), "## Failure routing", "## Red Flags")
+    for token in ("Three-tier human gate", "ORCA_PANE_KEY", "ORCA_WORKSPACE_ID", "orca ask",
+                  "AskUserQuestion", "unavailable", "Tier 1", "Tier 2", "Tier 3",
+                  "--timeout-ms 600000", "default", "declined", "partial", "timed_out",
+                  "assumed, timed_out", "orca ask wait", "0 wait"):
+        assert token in failure
+    assert "never end a turn" in failure.lower()
+    never = SDD_SKILL.read_text().split("**Never:**")[1]
+    assert "start wave dispatch on a dirty tree" in never
+    assert "orca ask" in never and "pending" in never
+    assert "worker's text claim alone" in never
+
+
+def test_sdd_role_effort_pins_and_task_dispatch_are_explicit() -> None:
+    roles = _section(SDD_SKILL.read_text(), "## Roles", "## The Process")
+    for role, effort in (("Implementer", "high"), ("Promote", "high"), ("Refute", "high"),
+                         ("Fixer", "high"), ("Tiebreak", "medium"), ("Explore", "low")):
+        assert re.search(rf"\| {role}[^\n]*\b{effort}\b", roles)
+    assert "model.json" in roles and "ceiling" in roles
+    assert 'effort: "high"' in sdd_step(5)
+    assert "--thinking high" in sdd_step(5)
+
+
+@pytest.mark.parametrize("asset", ["implementer-prompt.md", "fixer-prompt.md"])
+def test_workers_run_only_owned_acceptance_not_the_full_repository_suite(asset: str) -> None:
+    body = (SDD_DIR / "assets" / asset).read_text()
+    acceptance = " ".join(_section(body, "## Acceptance", "## Method").split())
+    for token in ("{{ACCEPTANCE}}", "owned test files", "exactly as written",
+                  "never run the full repository test suite", "Step 7"):
+        assert token in acceptance
+
+
+def test_writing_plans_assigns_single_owner_tests_and_task_scoped_acceptance() -> None:
+    body = (REPO_ROOT / "skills/writing-plans/SKILL.md").read_text()
+    for heading, end in (("## File Structure", "## Bite-Sized Task Granularity"),
+                         ("## Task Independence", "## Plan Document Header")):
+        section = _section(body, heading, end)
+        assert "single-owner" in section and "test file" in section
+        assert "scope.files" in section and "serialized component chain" in section
+    structure = _section(body, "## Task Structure", "## No Vagueness")
+    assert "owned test files" in structure and "full-suite" in structure and "Step 7" in structure
+    review = _section(body, "## Self-Review", "## After the plan")
+    for item, end in (("**6.", "**7."), ("**8.", "If you find issues")):
+        section = " ".join(_section(review, item, end).split())
+        assert "owned test files" in section or "single owner" in section
+    after = body[body.index("## After the plan"):]
+    for token in ("standalone", "quirk:executing-plans", "plan-document-reviewer-prompt.md",
+                  "quirk:subagent-driven-development", "inline decomposition",
+                  "skips plan-document review", "quirk:adversarial-review"):
+        assert token in after
