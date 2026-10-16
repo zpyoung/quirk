@@ -2,7 +2,7 @@
 
 ## Status & amendments
 
-Status: Approved — Tech spec: requested
+Status: Approved — Tech spec: authored
 
 Amendments: none yet.
 
@@ -254,7 +254,7 @@ The following items were considered and excluded from this spec:
 The terms below carry specific meanings throughout this spec:
 
 - `tree_identity`: the content address of a repository state, computed as `git rev-parse <ref>^{tree}` with a clean working tree for committed states, or `(HEAD^{tree}, snapshot_digest)` when uncommitted work is present in a component worktree.
-- `tree_test_cache`: the run-journal map from `(tree_identity, exact_command)` to `{exit_code, duration_s, output_tail, recorded_at}` used to avoid re-running identical test commands on unchanged bytes.
+- `tree_test_cache`: the run-journal map from `(tree_identity, exact_command)` to `{tree_hash, snapshot_digest, clean_tree, command, exit_code, status, duration_ms, output}` used to avoid re-running identical test commands on unchanged bytes.
 - Closure round: any final-loop review round after Round 1. Instead of re-running open-ended discovery over `RUN_BASE..HEAD`, a closure round verifies whether prior accepted findings are closed and checks `LAST_ROUND_HEAD..HEAD` plus touched contract seams for regressions.
 - Three-tier human gate: the classification of user interactions into Tier 1 (blocking preflight and blocked final handoff), Tier 2 (10-minute `orca ask` deadline with recommended default for recoverable mid-run questions), and Tier 3 (non-blocking logged round digest with async user veto for review-finding adjudications).
 - Recurring defect class: a finding raised in round N+1 that matches an accepted finding from round N in both defect `category` and target file or contract seam after a fixer attempt.
