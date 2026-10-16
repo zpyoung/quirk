@@ -6,8 +6,11 @@ comment each, in the given order. Each confirmed create is written to --out imme
 as a receipt in the shape `review_memory.py save --receipts` reads, so a mid-batch
 failure never loses what already posted. The overview receipt has no finding id, so it
 goes to a sibling file (`overview_receipt_path`). Rerunning with the same --out resumes:
-ids (and the overview) that already have a receipt are skipped. Never edits, replies to,
-or resolves notes.
+ids (and the overview) that already have a receipt are skipped. A create that came back
+as a plain comment instead of an inline one is recorded in a third sibling file
+(`stray_receipt_path`) and that id is not retried until the user deletes the comment and
+the entry. The overview's posted and not-posted lists are rebuilt from the receipts, so
+they match what actually posted. Never edits, replies to, or resolves notes.
 Exit 0 when every requested finding posted or was skipped with a warning; exit 2 on bad
 input or a failed create (receipts written so far are kept, and the error names the
 failing id).
@@ -15,12 +18,13 @@ failing id).
 import argparse
 import json
 import os
+import re
 import sys
 
 import comment_body
 import render_report
 from jsonio import load_object, write_json
-from forge import ForgeError, make_forge
+from forge import ForgeError, StrayComment, make_forge
 
 
 class PostFailed(ForgeError):
@@ -44,23 +48,70 @@ def overview_receipt_path(out):
     return os.path.splitext(str(out))[0] + ".overview.json"
 
 
-def _line(value):
-    return int(str(value).split("-", 1)[0])
+def stray_receipt_path(out):
+    """Where plain comments created in place of inline ones are recorded, beside `out`."""
+    return os.path.splitext(str(out))[0] + ".stray.json"
+
+
+_LINE_RE = re.compile(r"(\d+)(?:-\d+)?")
+
+
+def _line(value, finding_id="finding"):
+    """Return the first line of a `N` or `N-M` anchor; ValueError names `finding_id` otherwise."""
+    match = _LINE_RE.fullmatch(str(value).strip())
+    if not match:
+        raise ValueError("%s has a line that is not a number or a range: %r" % (finding_id, value))
+    return int(match.group(1))
+
+
+def _same(left, right):
+    return left is not None and str(left) == str(right)
+
+
+def _check_binding(meta, change, refs):
+    """Require the report to describe the change and head the context will write to."""
+    if meta.get("target") != "change":
+        raise ValueError("author posting requires a change-request report")
+    if not _same(meta.get("number"), change.get("number")):
+        raise ValueError("report change request does not match the context")
+    if meta.get("project") != change.get("project"):
+        raise ValueError("report project does not match the context")
+    if meta.get("head_sha") != refs.get("head"):
+        raise ValueError("report head does not match the context")
+
+
+def _posted_overview(prepared, bodies, receipts):
+    """The overview with its posted and not-posted lists rebuilt from `receipts`."""
+    plan = bodies.get("overview_plan")
+    if not isinstance(plan, dict):
+        return bodies["overview"]
+    posted = [item for item in plan.get("posted") or [] if item.get("finding_id") in receipts]
+    dropped = [{"id": item["finding_id"], "reason": "not posted", "disposition": "Not posted",
+                "fingerprint": item.get("fingerprint")}
+               for item in plan.get("posted") or [] if item.get("finding_id") not in receipts]
+    body, _ = comment_body.overview_body(
+        prepared, seat="author", posted=posted, omitted=list(plan.get("omitted") or []) + dropped,
+        report_sha256=bodies.get("report_sha256"))
+    return body
 
 
 def post(report, context, bodies, ids, out, overview=False, forge=None):
     """Post the approved findings; return (receipts, warnings).
 
     Receipts already in `out` are kept and their ids are not posted again. Every id is
-    validated before the first create, and `bodies` must have been built from this exact
-    report. Raises ValueError for a stale bodies file or an id that is not a postable
-    finding of the report, and PostFailed (a ForgeError) on a failed create.
+    validated before the first create (it must name a finding of the report, with a numeric
+    line), `bodies` must have been built from this exact report, and the report must be for
+    the context's change and head. Raises ValueError for any of those or a context with no
+    forge, and PostFailed (a ForgeError) on a failed create.
     """
     prepared, _ = render_report._prepare_report(report)
     findings = {f["id"]: f for f in prepared["findings"]}
     change = context.get("change") or {}
-    forge = forge or make_forge(context.get("forge", "gitlab"), change.get("host"), change.get("project"))
     refs = context.get("refs") or {}
+    _check_binding(prepared["meta"], change, refs)
+    forge = forge or make_forge(context.get("forge", "gitlab"), change.get("host"), change.get("project"))
+    if forge is None:
+        raise ValueError("author posting requires a forge")
     target_refs = {"base_sha": refs.get("base"), "start_sha": refs.get("start"), "head_sha": refs.get("head")}
     entries = bodies.get("findings") or {}
     if bodies.get("report_sha256") != comment_body._report_digest(report):
@@ -68,7 +119,10 @@ def post(report, context, bodies, ids, out, overview=False, forge=None):
     unknown = [i for i in ids if i not in findings or entries.get(i) is None]
     if unknown:
         raise ValueError("%s is not a finding in this report" % ", ".join(unknown))
+    lines = {i: _line(findings[i]["line"], i) for i in ids}
     receipts = _load(out) if os.path.exists(out) else {}
+    strays_out = stray_receipt_path(out)
+    strays = _load(strays_out) if os.path.exists(strays_out) else {}
     warnings = []
     pairs = comment_body.path_pairs(context.get("diff"))
     for finding_id in ids:
@@ -76,6 +130,10 @@ def post(report, context, bodies, ids, out, overview=False, forge=None):
         finding = findings[finding_id]
         if finding_id in receipts:
             warnings.append("%s already has a receipt; skipped" % finding_id)
+            continue
+        if finding_id in strays:
+            warnings.append("%s left a plain comment (%s); delete it and its entry in %s to retry; skipped"
+                            % (finding_id, strays[finding_id].get("url"), os.path.basename(strays_out)))
             continue
         if finding.get("verification_status") == "plausible":
             warnings.append("%s is a plausible finding and cannot be posted; skipped" % finding_id)
@@ -87,20 +145,24 @@ def post(report, context, bodies, ids, out, overview=False, forge=None):
             warnings.append("%s is on a file whose diff the forge collapsed; not posted" % finding_id)
             continue
         pair = pairs.get(finding["file"], {"old": finding["file"], "new": finding["file"]})
-        position = forge.inline_target(target_refs, pair["old"], pair["new"], _line(finding["line"]),
+        position = forge.inline_target(target_refs, pair["old"], pair["new"], lines[finding_id],
                                        context.get("diff"), finding.get("anchor_side") or "new")
         if position is None:
             warnings.append("%s anchors on a line outside the diff; not posted" % finding_id)
             continue
         try:
             receipts[finding_id] = forge.post_inline(change["number"], entry["body"], position, refs.get("head"))
+        except StrayComment as exc:
+            strays[finding_id] = {"discussion_id": exc.discussion_id, "note_id": exc.note_id, "url": exc.url}
+            _write(strays_out, strays)
+            raise PostFailed(finding_id, exc, warnings) from exc
         except ForgeError as exc:
             raise PostFailed(finding_id, exc, warnings) from exc
         _write(out, receipts)
     overview_out = overview_receipt_path(out)
     if overview and bodies.get("overview") and not os.path.exists(overview_out):
         try:
-            overview_receipt = forge.post_overview(change["number"], bodies["overview"])
+            overview_receipt = forge.post_overview(change["number"], _posted_overview(prepared, bodies, receipts))
         except ForgeError as exc:
             raise PostFailed("overview", exc, warnings) from exc
         _write(overview_out, overview_receipt)

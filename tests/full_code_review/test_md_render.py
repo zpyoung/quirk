@@ -190,3 +190,9 @@ def test_diff_fence_colours_each_side_as_one_source():
     assert rows[1].count("tok--comment") == 2
     assert "tok--tag" in rows[2] and "tok--attribute" in rows[2]
 
+
+
+@pytest.mark.parametrize("separator", ["\x0c", "\x0b", "\x1c", "\x85", "\u2028", "\u2029"])
+def test_fenced_code_keeps_unicode_line_separators_inside_one_line(separator):
+    rendered = m.render_markdown("```\na%sb\nnext\n```" % separator)
+    assert rendered == '<pre class="snippet"><code>a%sb\nnext</code></pre>' % separator

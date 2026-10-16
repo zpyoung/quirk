@@ -69,7 +69,7 @@ def parse(text: str, path: str = "<string>") -> Any:
     plain/single/double-quoted scalars, booleans, `|`/`>` block scalars with `-`, `+` or
     default chomping, `#` comments, and flow sequences whose items are all scalars
     (`[a, "b", c]`, including the empty `[]`). Not supported: flow mappings, flow sequences
-    containing a nested collection, anchors/aliases, multi-document separators, tags,
+    containing a nested collection, nested block sequences (`- - x`), anchors/aliases, multi-document separators, tags,
     merge keys.
 
     Raises TemplateParseError naming `path` and the offending line for anything outside
@@ -112,8 +112,19 @@ class _Cursor:
 
 
 def _opens_quote(text: str, i: int) -> bool:
-    """A quote starts a quoted scalar only at a token start, never inside a plain scalar (`don't`)."""
-    return i == 0 or text[i - 1] in " \t[,"
+    """A quote starts a quoted scalar only at a scalar start, never inside a plain scalar (`don't`).
+
+    A scalar starts at the line start, after `[` or `,`, after a `key:` indicator, or after
+    a `-` sequence indicator.
+    """
+    if i == 0 or text[i - 1] in "[,":
+        return True
+    if text[i - 1] not in " \t":
+        return False
+    before = text[:i].rstrip(" \t")
+    if before == "" or before[-1] in "[,:":
+        return True
+    return before[-1] == "-" and before[:-1].strip(" -") == ""
 
 
 def _strip_comment(line: str) -> str:
@@ -304,6 +315,8 @@ def _parse_sequence(cur: _Cursor, indent: int, path: str, depth: int) -> list:
         if rest[0] == "[":
             items.append(_parse_flow_sequence(rest, path, j + 1))
             continue
+        if _is_dash(rest):
+            raise TemplateParseError(f"nested sequences are not supported: {rest!r}", path, j + 1)
         if _find_colon(rest) is None:
             items.append(_parse_scalar(rest, path, j + 1))
             continue

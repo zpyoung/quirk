@@ -7,12 +7,14 @@ import json
 import os
 import re
 import secrets
+import selectors
 import shutil
 import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import NoReturn
 
@@ -85,25 +87,124 @@ def _git_environment() -> dict:
     return env
 
 
-def _run(command: list[str], timeout: int, **kwargs) -> subprocess.CompletedProcess:
+_HEAD_BYTES = 256 * 1024
+_TAIL_BYTES = 256 * 1024
+_RUNAWAY_BYTES = 64 * 1024 * 1024
+
+
+class _Stream:
+    """Keep a bounded head and tail of one pipe and count the bytes dropped between them."""
+
+    def __init__(self, bounded: bool) -> None:
+        self.bounded = bounded
+        self.head = bytearray()
+        self.tail = bytearray()
+        self.total = 0
+
+    def add(self, chunk: bytes) -> None:
+        self.total += len(chunk)
+        if not self.bounded:
+            self.head += chunk
+            return
+        room = _HEAD_BYTES - len(self.head)
+        if room > 0:
+            self.head += chunk[:room]
+            chunk = chunk[room:]
+        self.tail += chunk
+        if len(self.tail) > _TAIL_BYTES:
+            del self.tail[:len(self.tail) - _TAIL_BYTES]
+
+    @property
+    def dropped(self) -> int:
+        return self.total - len(self.head) - len(self.tail)
+
+    def text(self) -> str:
+        decode = lambda data: bytes(data).decode("utf-8", errors="backslashreplace")
+        if not self.dropped:
+            return decode(self.head + self.tail)
+        return "%s\n[... %d bytes omitted ...]\n%s" % (
+            decode(self.head), self.dropped, decode(self.tail))
+
+
+def _drain(process: subprocess.Popen, streams: dict, deadline: float, bounded: bool) -> bool:
+    """Read both pipes until EOF, the deadline, or a runaway stream; return False if cut short."""
+    selector = selectors.DefaultSelector()
+    for name, pipe in (("stdout", process.stdout), ("stderr", process.stderr)):
+        os.set_blocking(pipe.fileno(), False)
+        selector.register(pipe, selectors.EVENT_READ, name)
+    try:
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            for key, _ in selector.select(remaining):
+                try:
+                    chunk = os.read(key.fd, 65536)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                stream = streams[key.data]
+                stream.add(chunk)
+                if bounded and stream.total > _RUNAWAY_BYTES:
+                    return False
+        return True
+    finally:
+        selector.close()
+
+
+def _run(command: list[str], timeout: int, output_limit: bool = False,
+         **kwargs) -> subprocess.CompletedProcess:
+    """Run a command in its own process group and kill the whole group on exit.
+
+    With output_limit, each stream keeps only a bounded head and tail, and a stream that
+    exceeds the runaway cap kills the group; the result's bytes_dropped reports the loss.
+    """
     process = subprocess.Popen(command, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               text=True, encoding="utf-8", errors="backslashreplace",
                                start_new_session=True, **kwargs)
+    streams = {"stdout": _Stream(output_limit), "stderr": _Stream(output_limit)}
+    deadline = time.monotonic() + timeout
     try:
-        stdout, stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        _kill_group(process.pid)
+        finished = _drain(process, streams, deadline, output_limit)
+        timed_out = not finished and time.monotonic() >= deadline
+        if not finished:
+            _kill_group(process.pid)
+            _drain(process, streams, time.monotonic() + 2, output_limit)
         try:
-            stdout, stderr = process.communicate(timeout=2)
-        except subprocess.TimeoutExpired as exc:
-            process.stdout.close()
-            process.stderr.close()
-            raise subprocess.TimeoutExpired(command, timeout, exc.output, exc.stderr)
-        raise subprocess.TimeoutExpired(command, timeout, stdout, stderr)
+            process.wait(timeout=2 + (max(deadline - time.monotonic(), 0) if finished else 0))
+        except subprocess.TimeoutExpired:
+            _kill_group(process.pid)
+            process.wait()
     finally:
         _kill_group(process.pid)
-    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+        process.stdout.close()
+        process.stderr.close()
+    stdout, stderr = streams["stdout"].text(), streams["stderr"].text()
+    dropped = streams["stdout"].dropped + streams["stderr"].dropped
+    if timed_out:
+        error = subprocess.TimeoutExpired(command, timeout, stdout, stderr)
+        error.bytes_dropped = dropped
+        raise error
+    result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+    result.bytes_dropped = dropped
+    return result
+
+
+def _remove_tree(path: Path) -> None:
+    """Delete a tree even when tools under it left read-only or unreadable directories."""
+    pending = [str(path)]
+    while pending:
+        directory = pending.pop()
+        try:
+            os.chmod(directory, 0o700)
+            with os.scandir(directory) as entries:
+                pending.extend(entry.path for entry in entries
+                               if entry.is_dir(follow_symlinks=False))
+        except OSError:
+            continue
+    shutil.rmtree(path)
 
 
 def _kill_group(pid: int) -> None:
@@ -240,14 +341,43 @@ def _snapshot(root: Path, destination: Path) -> str:
     return "clonefile" if cloned else "copy"
 
 
+_CREDENTIAL_SUFFIXES = (
+    ".ssh", ".aws", ".azure", ".config", ".docker", ".kube", ".gnupg", ".netrc", ".gitconfig",
+    ".git-credentials", ".npmrc", ".pypirc", ".yarnrc", ".yarnrc.yml", ".claude", ".claude.json",
+    ".cargo/credentials", ".cargo/credentials.toml", ".gem/credentials", ".terraform.d",
+    ".m2/settings.xml", ".gradle/gradle.properties", ".local/share/keyrings",
+    "Library/Keychains", "Library/Application Support/gh", "Library/Application Support/glab")
+_TOOLCHAIN_SUFFIXES = (
+    ".pyenv", ".nvm", ".cargo", ".rustup", ".asdf", ".rbenv", ".volta", ".bun", ".deno",
+    ".sdkman", "go", ".local/bin", ".local/share/uv", ".local/share/pipx", ".local/share/mise")
+
+
+def _home_dirs() -> list[str]:
+    """Real home directories of the caller; a bare filesystem root is never treated as a home."""
+    homes = {os.path.realpath(path) for path in
+             (os.path.expanduser("~"), os.environ.get("HOME", "")) if path}
+    return sorted(home for home in homes if home != os.sep)
+
+
+def _toolchain_paths(homes: list[str], argv0: str | None = None) -> list[str]:
+    """Home-resident locations an interpreter or build tool needs to start, kept readable."""
+    candidates = [os.path.join(home, suffix) for home in homes for suffix in _TOOLCHAIN_SUFFIXES]
+    candidates.extend(entry for entry in os.environ.get("PATH", "").split(os.pathsep)
+                      if os.path.isabs(entry))
+    candidates.extend((sys.prefix, sys.base_prefix, os.path.dirname(os.path.realpath(sys.executable))))
+    if argv0:
+        resolved = shutil.which(argv0)
+        if resolved:
+            candidates.append(os.path.dirname(os.path.realpath(resolved)))
+    inside = {os.path.realpath(path) for path in candidates}
+    return sorted(path for path in inside if os.path.exists(path) and any(
+        path.startswith(home + os.sep) for home in homes))
+
+
 def _protected_paths() -> tuple[list[str], list[str]]:
-    homes = {os.path.expanduser("~"), os.environ.get("HOME", "")}
     credentials = set()
-    for home in homes - {""}:
-        for suffix in (".ssh", ".aws", ".azure", ".config", ".docker", ".kube", ".gnupg",
-                       ".netrc", ".gitconfig", ".git-credentials", ".npmrc", ".pypirc",
-                       ".local/share/keyrings", "Library/Keychains",
-                       "Library/Application Support/gh", "Library/Application Support/glab"):
+    for home in _home_dirs():
+        for suffix in _CREDENTIAL_SUFFIXES:
             credentials.add(os.path.realpath(os.path.join(home, suffix)))
     for name in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "AWS_SHARED_CREDENTIALS_FILE",
                  "AWS_CONFIG_FILE", "GOOGLE_APPLICATION_CREDENTIALS", "AZURE_CONFIG_DIR",
@@ -296,8 +426,7 @@ def acquire_copy(source_root: str, head_sha: str, out_manifest: str,
             _checked_git("-C", str(copy), "update-ref", "--no-deref", "HEAD", head_sha)
             _checked_git("-C", str(copy), "read-tree", head_sha)
         changed = staged_changes or bool(_checked_git(
-            "-C", str(copy), "status", "--porcelain", "--untracked-files=normal",
-            "--ignored=matching").stdout.strip())
+            "-C", str(copy), "status", "--porcelain", "--untracked-files=normal").stdout.strip())
         for suffix in (*_ENV_DIRS.values(), "bin"):
             (environment / suffix).mkdir(mode=0o700)
         for name in ("gh", "glab"):
@@ -311,6 +440,7 @@ def acquire_copy(source_root: str, head_sha: str, out_manifest: str,
                     "source_state": {"kind": "worktree-snapshot", "local_changes": changed,
                                      "index": "rebuilt-from-head"},
                     "credential_paths": credentials, "blocked_executables": executables,
+                    "home_dirs": _home_dirs(),
                     "sandbox_kind": kind, "os_enforced": kind != "worktree",
                     "isolation_warning": _FALLBACK_WARNING if kind == "worktree" else None,
                     "released": False}
@@ -318,7 +448,7 @@ def acquire_copy(source_root: str, head_sha: str, out_manifest: str,
         write_json(out_manifest, manifest)
         return manifest
     except BaseException:
-        shutil.rmtree(lease)
+        _remove_tree(lease)
         raise
 
 
@@ -347,21 +477,37 @@ def _manifest(manifest_path: str, require_active: bool = True) -> dict:
 
 
 def _seatbelt_profile(copy_dir: str, env_dir: str,
-                      credential_paths: list[str], blocked_executables: list[str]) -> str:
+                      credential_paths: list[str], blocked_executables: list[str],
+                      home_dirs: list[str] = (), toolchain_paths: list[str] = ()) -> str:
+    """Build a deny-write profile that hides the caller's home and credential sockets.
+
+    Home content stays unreadable except the copy, the environment and toolchain
+    locations; credential paths are denied last so they win over those allowances.
+    """
     def quoted(path: str) -> str:
         return json.dumps(path, ensure_ascii=False)
 
-    writable = " ".join("(subpath %s)" % quoted(path) for path in (copy_dir, env_dir))
-    protected = " ".join("(subpath %s)" % quoted(path) for path in credential_paths)
+    def subpaths(paths) -> str:
+        return " ".join("(subpath %s)" % quoted(path) for path in paths)
+
+    writable = subpaths((copy_dir, env_dir))
     blocked = " ".join("(literal %s)" % quoted(path) for path in blocked_executables)
-    return ("(version 1)(allow default)(deny file-write*)"
-            "(allow file-write* %s (literal \"/dev/null\") (literal \"/dev/zero\") "
-            "(literal \"/dev/random\") (literal \"/dev/urandom\") (literal \"/dev/tty\"))"
-            "(deny file-read* %s %s)(deny process-exec %s "
-            "(require-all (regex #\"/(gh|glab)$\") (require-not (subpath %s))))"
-            "(deny mach-lookup (global-name \"com.apple.securityd\") "
-            "(global-name \"com.apple.secd\"))") % (
-                writable, protected, blocked, blocked, quoted(env_dir))
+    rules = ["(version 1)(allow default)(deny file-write*)",
+             "(allow file-write* %s (literal \"/dev/null\") (literal \"/dev/zero\") "
+             "(literal \"/dev/random\") (literal \"/dev/urandom\") (literal \"/dev/tty\"))" % writable]
+    if home_dirs:
+        rules.append("(deny file-read-data %s)" % subpaths(home_dirs))
+        rules.append("(allow file-read-data %s)" % subpaths((copy_dir, env_dir, *toolchain_paths)))
+    rules.append("(deny file-read* %s %s)" % (subpaths(credential_paths), blocked))
+    rules.extend("(deny network-outbound (remote unix-socket (subpath %s)))" % quoted(path)
+                 for path in (*home_dirs, *credential_paths))
+    rules.append("(deny network-outbound (remote unix-socket "
+                 "(regex #\"^/(private/)?(tmp|var/run)/com\\.apple\\.launchd\\.[^/]+/\")))")
+    rules.append("(deny process-exec %s (require-all (regex #\"/(gh|glab)$\") "
+                 "(require-not (subpath %s))))" % (blocked, quoted(env_dir)))
+    rules.append("(deny mach-lookup (global-name \"com.apple.securityd\") "
+                 "(global-name \"com.apple.secd\"))")
+    return "".join(rules)
 
 
 def _text(value: str | bytes | None) -> str:
@@ -375,9 +521,14 @@ def _bwrap_command(manifest: dict, cwd: str, argv: list[str]) -> list[str]:
     if not binary:
         raise ValueError("bwrap is no longer available")
     command = [binary, "--unshare-pid", "--die-with-parent", "--ro-bind", "/", "/",
-               "--dev", "/dev", "--proc", "/proc",
-               "--bind", manifest["copy_dir"], manifest["copy_dir"],
-               "--bind", manifest["env_dir"], manifest["env_dir"]]
+               "--dev", "/dev", "--proc", "/proc"]
+    homes = [home for home in manifest.get("home_dirs", []) if os.path.isdir(home)]
+    for home in homes:
+        command.extend(("--tmpfs", home))
+    for path in _toolchain_paths(homes, argv[0]):
+        command.extend(("--ro-bind-try", path, path))
+    command.extend(("--bind", manifest["copy_dir"], manifest["copy_dir"],
+                    "--bind", manifest["env_dir"], manifest["env_dir"]))
     masked = []
     for path in sorted(set(manifest["credential_paths"] + manifest["blocked_executables"]),
                        key=lambda item: (len(Path(item).parts), item)):
@@ -393,9 +544,26 @@ def _bwrap_command(manifest: dict, cwd: str, argv: list[str]) -> list[str]:
     return command
 
 
+def _module_absent_from_copy(stderr: str, copy_dir: str, cwd: str) -> bool:
+    """True when a Python traceback ends on a missing top-level module the copy does not provide."""
+    names = re.findall(r"^ModuleNotFoundError: No module named '([^']+)'", stderr, re.MULTILINE)
+    if not names:
+        return False
+    top = names[-1].split(".")[0]
+    bases = (cwd, copy_dir, os.path.join(copy_dir, "src"))
+    return not any(os.path.exists(os.path.join(base, top)) or
+                   os.path.exists(os.path.join(base, top + ".py")) for base in bases)
+
+
 def exec_in_copy(manifest_path: str, command: list[str], timeout: int = 120,
                  cwd_rel: str = ".") -> dict:
-    """Run one bounded argv command in the copy; report unavailable dependencies without aborting."""
+    """Run one bounded argv command in the copy; report unavailable dependencies without aborting.
+
+    Captured output keeps a bounded head and tail per stream; output_truncated and
+    bytes_dropped report what was cut, and a runaway stream is killed with the process group.
+    environment_unavailable is true only for sandbox or spawn failures and for a Python
+    module the copy does not provide, never for failures raised by the reviewed code.
+    """
     manifest = _manifest(manifest_path)
     if not isinstance(command, list):
         raise ValueError("command must be a nonempty argv list")
@@ -419,34 +587,38 @@ def exec_in_copy(manifest_path: str, command: list[str], timeout: int = 120,
     if direct_forge:
         argv = [str(Path(env_dir, "bin", "gh"))]
     kind = manifest["sandbox_kind"]
+    homes = manifest.get("home_dirs", [])
     if kind == "sandbox-exec":
         run_command = ["/usr/bin/sandbox-exec", "-p",
                        _seatbelt_profile(root, env_dir, manifest["credential_paths"],
-                                         manifest["blocked_executables"]), *argv]
+                                         manifest["blocked_executables"], homes,
+                                         _toolchain_paths(homes, argv[0])), *argv]
     elif kind == "bwrap":
         run_command = _bwrap_command(manifest, cwd, argv)
     else:
         run_command = argv
-    timed_out = False
+    timed_out = spawn_missing = False
+    dropped = 0
     try:
-        process = _run(run_command, timeout=timeout, cwd=cwd, env=env)
+        process = _run(run_command, timeout=timeout, output_limit=True, cwd=cwd, env=env)
         exit_code = process.returncode
         stdout, stderr = process.stdout, process.stderr
+        dropped = process.bytes_dropped
     except subprocess.TimeoutExpired as exc:
         exit_code, timed_out = 124, True
         stdout, stderr = _text(exc.stdout), _text(exc.stderr)
+        dropped = getattr(exc, "bytes_dropped", 0)
     except FileNotFoundError as exc:
-        exit_code, stdout, stderr = 127, "", str(exc)
+        exit_code, stdout, stderr, spawn_missing = 127, "", str(exc), True
     except PermissionError as exc:
         exit_code, stdout, stderr = 126, "", str(exc)
-    blocked = "blocked in deep-mode throwaway copy" in stderr
     infrastructure_failure = (kind != "worktree" and exit_code != 0
                               and stderr.startswith(("sandbox-exec:", "bwrap:")))
-    missing = (infrastructure_failure or "ModuleNotFoundError" in stderr or
-               "ImportError" in stderr or "command not found" in stderr.lower() or
-               (exit_code == 127 and not blocked)) and not timed_out
+    missing = ((infrastructure_failure or spawn_missing
+                or _module_absent_from_copy(stderr, root, cwd)) and not timed_out)
     return {"exit_code": exit_code, "stdout": stdout, "stderr": stderr,
-            "timed_out": timed_out, "sandbox_kind": kind,
+            "timed_out": timed_out, "output_truncated": dropped > 0,
+            "bytes_dropped": dropped, "sandbox_kind": kind,
             "os_enforced": manifest["os_enforced"],
             "isolation_warning": manifest["isolation_warning"],
             "environment_unavailable": missing,
@@ -459,7 +631,7 @@ def release_copy(manifest_path: str) -> dict:
     copy_dir = manifest["copy_dir"]
     if not manifest.get("released"):
         lease = _registry_root() / manifest["lease_id"]
-        shutil.rmtree(lease)
+        _remove_tree(lease)
         manifest["released"] = True
         write_json(manifest_path, manifest)
     return {"released": True, "copy_dir": copy_dir}

@@ -210,3 +210,40 @@ def test_cli_rejects_invalid_context(tmp_path, context):
                             capture_output=True, text=True, check=False)
     assert result.returncode == 2
     assert "error" in json.loads(result.stdout)
+
+
+def test_changed_symlinked_directory_falls_back_to_the_diff_section(tmp_path):
+    (tmp_path / "real_dir").mkdir()
+    (tmp_path / "linkdir").symlink_to("real_dir", target_is_directory=True)
+    files = [put(tmp_path, "ok.py", "x = 1\n"), "linkdir"]
+    diff = "diff --git a/linkdir b/linkdir\n--- a/linkdir\n+++ b/linkdir\n@@ -1 +1 @@\n-a\n+b\n"
+    result = area_map_module().build_area_map({"changed_files": files, "diff": diff}, str(tmp_path))
+    assert sorted(f for area in result["areas"] for f in area["files"]) == sorted(files)
+
+
+def test_changed_symlink_to_a_file_outside_the_root_is_not_read(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    outside = tmp_path / "secret.py"
+    outside.write_text("import os\n" * 50)
+    (root / "link.py").symlink_to(outside)
+    module = area_map_module()
+    texts, weights = module._contents(["link.py"], str(root), "")
+    assert texts["link.py"] == "" and weights["link.py"] == 1
+
+
+def test_questions_do_not_seed_filename_specific_prompts(tmp_path):
+    files = [put(tmp_path, "assets/report.html", "<h1>quirk-review handoff</h1>\n"),
+             put(tmp_path, "scripts/validate_triage.py", "HEADER = 'quirk-review handoff'\n")]
+    result = area_map_module().build_area_map({"changed_files": files, "diff": ""}, str(tmp_path))
+    questions = " ".join(q for area in result["areas"] for q in area["questions"])
+    assert "delimiters" not in questions and "export headers" not in questions
+
+
+def test_risk_question_states_the_level_once(tmp_path):
+    file = put(tmp_path, "scripts/parse.py", "def parse(data): return data\n")
+    result = area_map_module().build_area_map(
+        {"changed_files": [file], "diff": ""}, str(tmp_path),
+        risk={"level": "Medium", "verbatim_md": "Thin coverage"})
+    question = next(q for q in result["areas"][0]["questions"] if "Thin coverage" in q)
+    assert question.count("Medium") == 1

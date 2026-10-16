@@ -327,7 +327,7 @@ def test_collapsed_nonempty_gitlab_diff_is_recovered(monkeypatch):
         return recovered
 
     monkeypatch.setattr(m, "_git_diff_path", recover)
-    diff_text, changed_files, unavailable, not_text = m._prepare_gitlab_changes(
+    diff_text, changed_files, unavailable, not_text = m._prepare_change_records(
         [change], {"base": "BASE", "head": "HEAD"})
     assert calls == [("BASE", "HEAD", "large.py", ".")]
     assert diff_text == recovered
@@ -349,7 +349,7 @@ def test_truncated_new_file_without_recovery_is_unavailable(monkeypatch):
         return None
 
     monkeypatch.setattr(m, "_git_diff_path", no_recovery)
-    diff_text, changed_files, unavailable, not_text = m._prepare_gitlab_changes(
+    diff_text, changed_files, unavailable, not_text = m._prepare_change_records(
         [change], {"base": "BASE", "head": "HEAD"})
     assert calls == [("BASE", "HEAD", "large.py", ".")]
     assert diff_text == ""
@@ -370,7 +370,7 @@ def test_truncated_deleted_file_attempts_recovery(monkeypatch):
         return None
 
     monkeypatch.setattr(m, "_git_diff_path", no_recovery)
-    _, changed_files, unavailable, _ = m._prepare_gitlab_changes(
+    _, changed_files, unavailable, _ = m._prepare_change_records(
         [change], {"base": "BASE", "head": "HEAD"})
     assert calls == ["removed.py"]
     assert changed_files == ["removed.py"]
@@ -397,7 +397,7 @@ def test_truncated_rename_content_is_recovered(tmp_path):
         "renamed_file": True, "diff": "",
     }
 
-    diff_text, changed_files, unavailable, not_text = m._prepare_gitlab_changes(
+    diff_text, changed_files, unavailable, not_text = m._prepare_change_records(
         [change], {"base": base, "head": head}, str(repo))
 
     assert "diff --git a/old.py b/new.py" in diff_text
@@ -422,7 +422,7 @@ def test_pure_rename_is_expected_empty_after_recovery(monkeypatch):
         return ""
 
     monkeypatch.setattr(m, "_git_diff_path", no_content_delta)
-    diff_text, changed_files, unavailable, not_text = m._prepare_gitlab_changes(
+    diff_text, changed_files, unavailable, not_text = m._prepare_change_records(
         [change], {"base": "BASE", "head": "HEAD"})
     assert calls == [("old.py", "new.py")]
     assert diff_text == ""
@@ -438,7 +438,7 @@ def test_failed_rename_and_mode_recovery_is_unavailable(monkeypatch):
          "b_mode": "100755", "diff": ""},
     ]
     monkeypatch.setattr(m, "_git_diff_path", lambda *args, **kwargs: None)
-    _, changed_files, unavailable, _ = m._prepare_gitlab_changes(
+    _, changed_files, unavailable, _ = m._prepare_change_records(
         changes, {"base": "BASE", "head": "HEAD"})
     assert changed_files == ["new.py", "run.sh"]
     assert unavailable == ["new.py", "run.sh"]
@@ -450,7 +450,7 @@ def test_identical_blobs_prove_metadata_only_change(monkeypatch):
         "a_blob_id": "SAME", "b_blob_id": "SAME", "diff": "",
     }
     monkeypatch.setattr(m, "_git_diff_path", lambda *args, **kwargs: None)
-    _, _, unavailable, _ = m._prepare_gitlab_changes(
+    _, _, unavailable, _ = m._prepare_change_records(
         [change], {"base": "BASE", "head": "HEAD"})
     assert unavailable == []
 
@@ -464,7 +464,7 @@ def test_binary_change_skips_recovery(monkeypatch):
         raise AssertionError("binary recovery attempted")
 
     monkeypatch.setattr(m, "_git_diff_path", fail_recovery)
-    diff_text, changed_files, unavailable, not_text = m._prepare_gitlab_changes(
+    diff_text, changed_files, unavailable, not_text = m._prepare_change_records(
         [change], {"base": "BASE", "head": "HEAD"})
     assert diff_text == ""
     assert changed_files == ["image.png"]
@@ -822,11 +822,30 @@ def test_test_file_classifier():
         "web/__tests__/foo.tsx", "go/widget_test.go", "src/main/WidgetTest.java",
         "module/src/test/kotlin/Foo.kt",
         "lib/widget_spec.rb", "spec/widget.rb",
+        "test/foo.js", "test/models/user_test.rb", "Billing/InvoiceTests.cs",
     ]
     sources = ["src/widget.py", "web/widget.ts", "go/widget.go", "src/main/Widget.java"]
     test_files, source_files = m.classify_files(tests + sources + [tests[0]])
     assert test_files == tests
     assert source_files == sources
+
+
+def test_local_diff_of_a_non_utf8_file_is_written_and_round_trips(tmp_path):
+    repo = Path(tmp_path) / "latin1"
+    repo.mkdir()
+    _repo_git(repo, "init", "-q")
+    _repo_git(repo, "config", "user.email", "test@example.com")
+    _repo_git(repo, "config", "user.name", "Test")
+    (repo / "menu.txt").write_bytes(b"base\n")
+    _repo_git(repo, "add", ".")
+    _repo_git(repo, "commit", "-qm", "base")
+    (repo / "menu.txt").write_bytes(b"caf\xe9\n")
+    out = Path(tmp_path) / "latin1.json"
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert m.main(["--local", "--cwd", str(repo), "--out", str(out)]) == 0
+    ctx = json.loads(out.read_text(encoding="utf-8"))
+    assert ctx["changed_files"] == ["menu.txt"]
+    assert b"caf\xe9" in ctx["diff"].encode("utf-8", "surrogateescape")
 
 
 def test_c_quoted_paths_round_trip_through_diff_helpers():
@@ -905,7 +924,7 @@ def test_literal_pathspec_failure_is_reported_unavailable(monkeypatch):
         raise AssertionError(cmd)
 
     monkeypatch.setattr(m, "_run", fake_run)
-    _, changed, unavailable, _ = m._prepare_gitlab_changes(
+    _, changed, unavailable, _ = m._prepare_change_records(
         [change], {"base": "BASE", "head": "HEAD"})
     assert changed == [":(exclude)secret.py"]
     assert unavailable == [":(exclude)secret.py"]

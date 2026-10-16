@@ -283,7 +283,7 @@ def test_head_movement_blocks_before_staging_and_explicit_unaffected_uses_curren
     assert all(item["position"]["head_sha"] == "d" * 40 for item in inline)
 
 
-def test_head_or_concurrent_draft_after_staging_blocks_bulk(tmp_path, monkeypatch):
+def test_head_movement_after_staging_blocks_bulk(tmp_path, monkeypatch):
     fake = FakeGitLab()
     monkeypatch.setattr(m, "_api", fake)
     paths = files(tmp_path)
@@ -1011,6 +1011,22 @@ def test_incomplete_review_is_never_suggested_as_approvable(tmp_path, monkeypatc
 def test_complete_review_with_a_blocking_finding_still_suggests_request_changes(tmp_path, monkeypatch):
     state = _stage_with_run(tmp_path, monkeypatch, incomplete=False)
     assert state["completion"]["suggested"] == "request-changes"
+
+
+def test_plausible_finding_triaged_blocking_does_not_suggest_request_changes(tmp_path, monkeypatch):
+    fake = FakeGitLab()
+    monkeypatch.setattr(m, "_api", fake)
+    value = report()
+    value["findings"][0].update(verification_status="plausible", what_would_confirm="Run the path.")
+    paths = files(tmp_path)
+    choice = decisions()
+    choice["report_sha256"] = m._report_digest(value)
+    paths["report"].write_text(json.dumps(value))
+    paths["decisions"].write_text(json.dumps(choice))
+    rc, state = invoke(m.stage, stage_args(paths))
+    assert rc == 0
+    assert "F1" not in [item.get("finding_id") for item in state["preview"]]
+    assert state["completion"]["suggested"] == "approve"
 
 
 def _publish_after_staging(tmp_path, monkeypatch, fake):

@@ -34,6 +34,17 @@ def test_missing_patch_on_a_changed_file_is_flagged_for_git_recovery():
     assert record["diff"] == "" and record["too_large"] is True
 
 
+def test_removed_files_map_to_deleted_and_never_ask_for_git_recovery():
+    fake = FakeGitHub()
+    fake.files = [{"filename": "gone.bin", "status": "removed", "changes": 5},
+                  {"filename": "gone.py", "status": "removed", "patch": "@@ -1 +0,0 @@\n-x", "changes": 1},
+                  {"filename": "kept.py", "status": "modified", "patch": "@@ -1 +1 @@\n-x\n+y", "changes": 2}]
+    gone_bin, gone_py, kept = forge(fake).change_records(NUMBER)["records"]
+    assert gone_bin["deleted_file"] is True and gone_bin["too_large"] is False and gone_bin["diff"] == ""
+    assert gone_py["deleted_file"] is True and gone_py["diff"].startswith("@@")
+    assert kept["deleted_file"] is False
+
+
 def test_file_list_paginates_past_one_hundred():
     fake = FakeGitHub()
     fake.files = [{"filename": "f%d.py" % i, "status": "added", "patch": "@@ -0,0 +1 @@\n+x", "changes": 1}
@@ -70,6 +81,14 @@ def test_identity_commit_authors_and_branch_lookup():
     assert gh.find_change_for_branch("other") is None
     assert gh.change_label(NUMBER) == "PR #7"
     assert gh.head_refspec(NUMBER) == "refs/pull/7/head"
+
+
+def test_cleanup_commands_shell_quote_the_host_and_endpoint():
+    state = {"review_id": 1, "host": "gh.example.com; touch x", "project": "o/r", "number": 7}
+    [command] = GitHubForge(HOST, PROJECT).cleanup_commands(state)
+    assert command == "gh api --hostname 'gh.example.com; touch x' -X DELETE repos/o/r/pulls/7/reviews/1"
+    spaced = dict(state, host=HOST, project="o/r name")
+    assert "'repos/o/r name/pulls/7/reviews/1'" in GitHubForge(HOST, PROJECT).cleanup_commands(spaced)[0]
 
 
 def test_clone_command_targets_the_host():
@@ -252,6 +271,14 @@ def test_hunk_lines_read_header_like_content_inside_a_hunk_as_content():
     assert hunk_lines(diff, "b.py") == ({1, 2}, {1})
 
 
+@pytest.mark.parametrize("path", ["my file.py", "caf\u00e9.py"])
+def test_hunk_lines_match_c_quoted_header_paths(path):
+    diff = prepare_diff.reconstruct_diff_from_changes(
+        [{"old_path": path, "new_path": path, "diff": "@@ -1,2 +1,3 @@\n a\n+b\n c\n"}])
+    assert diff.splitlines()[0].count('"') == 4
+    assert hunk_lines(diff, path) == ({1, 2, 3}, {1, 2})
+
+
 def test_hunk_lines_count_only_newlines_as_line_breaks():
     diff = ("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1,2 +1,3 @@\n one\n"
             "+split\u2028here\x0cnow\x85\n two\n")
@@ -384,6 +411,14 @@ def test_stage_is_one_pending_review_and_off_diff_findings_are_omitted(tmp_path,
     review_id = state["review_id"]
     assert [item["draft_id"] for item in state["created"]] == [review_id, fake.review_comments[review_id][0]["id"]]
     assert state["cleanup_commands"] == ["gh api --hostname github.com -X DELETE repos/o/r/pulls/7/reviews/%d" % review_id]
+
+
+def test_stage_and_pending_ignore_submitted_reviews_and_other_users_pending_reviews(tmp_path, fake):
+    fake.reviews.append({"id": 1, "body": "old", "state": "COMMENTED", "user": {"login": "reviewer"}})
+    fake.reviews.append({"id": 2, "body": "x", "state": "PENDING", "user": {"login": "someone-else"}})
+    assert forge(fake).pending(NUMBER, "reviewer") == []
+    rc, _ = _stage(_paths(tmp_path))
+    assert rc == 0
 
 
 def test_stage_refuses_when_the_viewer_already_has_a_pending_review(tmp_path, fake):

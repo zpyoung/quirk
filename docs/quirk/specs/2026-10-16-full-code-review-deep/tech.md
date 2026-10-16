@@ -24,7 +24,7 @@ The three underscore-prefixed prompts in `references/lenses/` are not registered
 
 Back-links: [Data flow](logic.md#data-flow), [Decisions Locked](logic.md#decisions-locked).
 
-Paths are relative to `/Users/zpyoung/orca/workspaces/quirk/code-review`. Symbols, rather than pre-implementation line numbers, identify the integration points:
+Paths are relative to the repository root. Symbols, rather than pre-implementation line numbers, identify the integration points:
 
 - `skills/full-code-review/scripts/deep_sandbox.py`: `evaluate_trust`, `probe_capabilities`, `acquire_copy`, `exec_in_copy`, `release_copy`, `main`.
 - `skills/full-code-review/scripts/build_area_map.py`: `build_coupling_graph`, `partition_areas`, `build_area_map`, `main`.

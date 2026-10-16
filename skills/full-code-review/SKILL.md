@@ -246,7 +246,7 @@ model), `skipped`, `severity_floor`, `escalation`, `critical_paths`, `cross_fami
 **Repo conventions.** Against `REVIEW_SOURCE_ROOT`:
 
 ```bash
-python3 -c "import json,sys;print('\n'.join(json.load(open(sys.argv[1]))['changed_files']))" \
+python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print('\n'.join(dict.fromkeys(d['changed_files']+d.get('excluded_generated',[]))))" \
   "$CONTEXT" > "$REVIEW_RUN_DIR/changed.txt"
 python3 "$SCRIPTS/discover_guidance.py" --git-root "$REVIEW_SOURCE_ROOT" \
   --changed-files "$REVIEW_RUN_DIR/changed.txt" [--exclude-changed]

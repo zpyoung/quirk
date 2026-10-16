@@ -573,7 +573,7 @@ expressions are:
 ^- \*\*(F\d+)\*\* — (.+?)\s*$
 ^  `(.+)` · (Must fix|Should fix|Nit)$
 ^  reply: ([1-9][0-9]{0,18})$     (optional)
-^  > (.*)$
+^  >(?: (.*))?$
 ```
 
 The optional `  reply: <note_id>` line sits directly after the anchor line, before any

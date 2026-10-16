@@ -14,6 +14,15 @@ def test_write_json_creates_parents_sorts_keys_and_ends_with_a_newline(tmp_path)
     assert os.listdir(target.parent) == ["out.json"]
 
 
+def test_write_json_round_trips_surrogateescape_strings_as_valid_utf8(tmp_path):
+    target = tmp_path / "out.json"
+    value = {"diff": b"caf\xe9 \xc3\xa9\n".decode("utf-8", "surrogateescape")}
+    jsonio.write_json(target, value)
+    text = target.read_bytes().decode("utf-8")
+    assert "\\udce9" in text and "é" in text
+    assert json.loads(text) == value
+
+
 def test_write_json_replaces_an_existing_file_without_leaving_a_temp(tmp_path):
     target = tmp_path / "out.json"
     target.write_text("{}")

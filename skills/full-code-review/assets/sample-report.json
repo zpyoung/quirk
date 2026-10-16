@@ -25,7 +25,8 @@
       "observability",
       "resilience",
       "test-adequacy",
-      "tests"
+      "tests",
+      "scope"
     ],
     "dimensions_skipped": [
       {
@@ -44,8 +45,8 @@
       "pack guidance"
     ],
     "source_access": "author-worktree",
-    "mutation_consent": false,
-    "notes_md": "⚠️ **Large PR** — 13 files, 2386 lines changed. This exceeds the skill's own hard-block threshold of 2000 changed lines; the review proceeded on explicit instruction to review it as a single PR. Depth was held up rather than down to compensate: every specialist ran at the deepest verification tier regardless of the Low risk rating, so no Must/Should finding rests on the diff alone.\n\nAll eleven applicable dimensions returned schema-valid results; none failed or was dropped. Verification reads went against this worktree rather than the forge's file-contents API at `?ref=<head>`, which is sound here because `git rev-parse HEAD` equals `refs.head` (`24727f69`) and the tree was clean for the whole run.\n\nTwo `cross-repo` findings land in files **outside this PR's diff** (`services/orders/sync.py`, `services/reports/common.py`). They are real consequences of this change, but the forge cannot anchor an inline comment to a file the PR does not touch."
+    "mutation_consent": true,
+    "notes_md": "⚠️ **Large PR** — 13 files, 2386 lines changed. This exceeds the skill's own hard-block threshold of 2000 changed lines; the review proceeded on explicit instruction to review it as a single PR. Depth was held up rather than down to compensate: every specialist ran at the deepest verification tier regardless of the Low risk rating, so no Must/Should finding rests on the diff alone.\n\nAll twelve applicable dimensions returned schema-valid results; none failed or was dropped. Verification reads went against this worktree rather than the forge's file-contents API at `?ref=<head>`, which is sound here because `git rev-parse HEAD` equals `refs.head` (`abc123ab`) and the tree was clean for the whole run.\n\nTwo `cross-repo` findings land in files **outside this PR's diff** (`services/a/sync.py`, `services/b/common.py`). They are real consequences of this change, but the forge cannot anchor an inline comment to a file the PR does not touch."
   },
   "risk": {
     "level": "Low",
@@ -216,8 +217,8 @@
   "assumptions": [
     "The Step 2 hard block (2386 changed lines > 2000) was overridden on explicit user instruction to review as a single PR; a split into the suggested A/B/C stack would have given each slice a warn-level rather than block-level review.",
     "Every specialist ran at the deepest verification tier as a conservative floor, because `risk` ran in parallel with the fan-out rather than strictly before it. The rating came back Low, so the applied depth exceeded what the rating required — it can only have over-verified, never under-verified.",
-    "Findings were verified by reading this worktree at `refs.head` (`24727f694eb15238c6fbcbfb38e34db56c83e92f`) rather than through the forge API at that ref, justified by `git rev-parse HEAD` matching `refs.head` with a clean tree throughout.",
-    "The mutation probe was offered and declined, so every test-dimension finding rests on static reasoning and reading the suite rather than on a surviving mutant. Baseline was green beforehand (171 passed in 10.8s).",
+    "Findings were verified by reading this worktree at `refs.head` (`abc123abc123abc123abc123abc123abc123abcd`) rather than through the forge API at that ref, justified by `git rev-parse HEAD` matching `refs.head` with a clean tree throughout.",
+    "The mutation probe ran with the author's consent against two mutants, so test-dimension findings rest on that probe plus static reading of the suite; one mutant survived. Baseline was green beforehand (171 passed in 10.8s).",
     "`adversarial` did not run because PR #123 has no description; no claim in the PR was checked against the code.",
     "No pack guidance applies to this repo, and the target repo has no `.claude/skills`, `.claude/rules`, `AGENTS.md` or `CONVENTIONS.md`, so conventions were judged against the repo `CLAUDE.md` only.",
     "The repo configures no linter or formatter (no ruff/black/flake8, no lint CI job), so style-level findings that a formatter would normally own were kept rather than dropped as tool-enforced noise.",
@@ -226,11 +227,11 @@
   "process_notes": [
     {
       "title": "Reviewing the skill with an older copy of itself",
-      "body_md": "The review ran from the installed plugin cache at v1.9.2, which predates this branch. That is deliberate: the renderer, poster and checklists under review are not the ones running the review, so a defect in the new code cannot mask itself."
+      "body_md": "The review ran from an installed copy of the skill that predates this branch. That is deliberate: the renderer, poster and checklists under review are not the ones running the review, so a defect in the new code cannot mask itself."
     },
     {
       "title": "Two findings cannot be posted inline",
-      "body_md": "The `sync.py` and `services/reports/common.py` findings sit outside the diff. The forge rejects a `position` for a file the PR does not touch, so these need either a plain PR comment or a follow-up issue."
+      "body_md": "The `services/a/sync.py` and `services/b/common.py` findings sit outside the diff. The forge rejects a `position` for a file the PR does not touch, so these need either a plain PR comment or a follow-up issue."
     }
   ],
   "mutation_probe": {

@@ -332,7 +332,7 @@ def is_test_file(path):
     name = parts[-1] if parts else ""
     lower = name.lower()
 
-    if any(part in ("tests", "__tests__") for part in lower_parts[:-1]):
+    if any(part in ("test", "tests", "__tests__") for part in lower_parts[:-1]):
         return True
     if any(lower_parts[i:i + 2] == ["src", "test"]
            for i in range(max(0, len(lower_parts) - 1))):
@@ -345,9 +345,9 @@ def is_test_file(path):
         return True
     if re.search(r'\.(test|spec)\..+$', lower):
         return True
-    if lower.endswith("_test.go") or lower.endswith("_spec.rb"):
+    if lower.endswith(("_test.go", "_spec.rb", "_test.rb")):
         return True
-    if re.search(r'Test\.[^.]+$', name):
+    if re.search(r'Tests?\.[^.]+$', name):
         return True
     return False
 
@@ -511,8 +511,8 @@ def _git_changed_files_range(base, head, cwd=".", metadata=None):
         return _git_failed(metadata, step, exc)
 
 
-def _prepare_gitlab_changes(changes, refs, cwd="."):
-    """Return reconstructed text, changed, unavailable, and non-text paths."""
+def _prepare_change_records(changes, refs, cwd="."):
+    """Return reconstructed text, changed, unavailable, and non-text paths for forge change records."""
     parts, changed_files, unavailable, not_text = [], [], [], []
     for change in changes:
         path = change.get("new_path") or change.get("old_path")
@@ -621,7 +621,7 @@ def change_diff(forge, number, cwd=".", metadata=None):
             "recovered_from": "git",
         }
     else:
-        diff_text, changed_files, unavailable, not_text = _prepare_gitlab_changes(
+        diff_text, changed_files, unavailable, not_text = _prepare_change_records(
             changes, refs, cwd)
         recovery = None
 

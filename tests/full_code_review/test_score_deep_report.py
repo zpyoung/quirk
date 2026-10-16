@@ -70,19 +70,17 @@ def test_answer_key_covers_every_candidate_once_with_unique_defect_ids():
     assert type(key["target"]["number"]) is int
     assert len(key["target"]["head_sha"]) in (7, 40)
     assert len({item["id"] for item in key["defects"]}) == len(key["defects"])
-    assert all(item["severity"] == "Should fix" and item["anchors"] and item["keywords"]
+    assert all(item["severity"] in ("Must fix", "Should fix") and item["anchors"] and item["keywords"]
                and item["source_ids"] for item in key["defects"])
     assert all(all(anchor["line_min"] <= anchor["line_max"] for anchor in item["anchors"])
                for item in key["defects"])
     assert all(set(("source_id", "file", "line", "disposition", "reason")) <= set(item)
                for item in key["examined_non_defects"])
-    expected = {"B%d" % i for i in range(1, 62)} | {"F%d" % i for i in range(1, 7)}
-    covered = [source for defect in key["defects"] for source in defect["source_ids"]
-               if source in expected]
-    covered += [item["source_id"] for item in key["examined_non_defects"]
-                if item["source_id"] in expected]
-    assert set(covered) == expected
-    assert len(covered) == len(expected)
+    expected = ({"B%d" % i for i in range(1, 62)} | {"F%d" % i for i in range(1, 9)} | {"F20"})
+    covered = [source for defect in key["defects"] for source in defect["source_ids"]]
+    covered += [item["source_id"] for item in key["examined_non_defects"]]
+    assert expected <= set(covered)
+    assert len(covered) == len(set(covered))
 
 
 @pytest.mark.parametrize("fragment", ["title", "issue", "body_md", "impact", "fix_md",
@@ -193,6 +191,18 @@ def test_invalid_cli_arguments_return_json_error(args):
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         code = scorer.main(args)
+    assert code == 2
+    assert isinstance(json.loads(output.getvalue())["error"], str)
+
+
+def test_deeply_nested_report_returns_json_error(tmp_path):
+    report_path = tmp_path / "report.json"
+    key_path = tmp_path / "key.json"
+    report_path.write_text("[" * 100000, encoding="utf-8")
+    key_path.write_text(json.dumps(_key(_defect())), encoding="utf-8")
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        code = scorer.main(["--report", str(report_path), "--answer-key", str(key_path)])
     assert code == 2
     assert isinstance(json.loads(output.getvalue())["error"], str)
 

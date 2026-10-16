@@ -21,6 +21,7 @@ import argparse
 import fnmatch
 import json
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -37,6 +38,7 @@ RUN_WHEN = ("always", "has_description", "code_changed", "source_or_config_chang
 KNOWN_KEYS = ("severity_floor", "escalation", "models", "skip", "cross_family",
               "critical_paths", "skip_globs", "cross_repo")
 PROJECT_PACK = ".quirk/review"
+MAX_SYMLINK_DEPTH = 8
 
 
 class PolicyError(Exception):
@@ -81,20 +83,32 @@ class _RefSource:
         self.ref = ref
         self.stash = Path(stash)
 
-    def read(self, rel):
+    def read(self, rel, _depth=0):
         """Return the file's text at the ref, None only when the path is not a file there.
 
         An unreadable ref raises, so a bad --policy-ref cannot quietly mean "no project policy".
+        A symlink resolves to its in-repo target blob, as the working tree does; a link that
+        leaves the repo or does not end at a file raises instead of returning the link text.
         """
         entry = _git(self.root, "ls-tree", self.ref, "--", rel)
         if entry.returncode != 0:
             raise PolicyError("cannot read %s at %s: %s" % (rel, self.ref, entry.stderr.strip()[:200]))
-        if " blob " not in entry.stdout.split("\t", 1)[0]:
+        info = entry.stdout.split("\t", 1)[0].split()
+        if len(info) < 2 or info[1] != "blob":
             return None
         result = _git(self.root, "show", "%s:%s" % (self.ref, rel))
         if result.returncode != 0:
             raise PolicyError("cannot read %s at %s: %s" % (rel, self.ref, result.stderr.strip()[:200]))
-        return result.stdout
+        if info[0] != "120000":
+            return result.stdout
+        target = posixpath.normpath(posixpath.join(posixpath.dirname(rel), result.stdout.strip()))
+        if _depth >= MAX_SYMLINK_DEPTH or target.startswith("..") or posixpath.isabs(target):
+            raise PolicyError("%s at %s is a symlink that leaves the repo or loops" % (rel, self.ref))
+        text = self.read(target, _depth + 1)
+        if text is None:
+            raise PolicyError("%s at %s is a symlink to %s, which is not a file there"
+                              % (rel, self.ref, target))
+        return text
 
     def listdir(self, rel, suffix=".md"):
         result = _git(self.root, "ls-tree", "-z", "%s:%s" % (self.ref, rel))
@@ -116,7 +130,7 @@ class _RefSource:
 
 def _parse_yaml(text, label, line_offset=0):
     try:
-        value = policy_yaml.parse(text, label)
+        value = policy_yaml.parse(text.removeprefix("\ufeff"), label)
     except policy_yaml.TemplateParseError as exc:
         raise PolicyError("%s:%d: %s" % (label, exc.line + line_offset, exc.message))
     if value is None:
@@ -127,7 +141,11 @@ def _parse_yaml(text, label, line_offset=0):
 
 
 def split_front_matter(text, label):
-    """Return (settings, body) for a Markdown file with optional `---` front matter."""
+    """Return (settings, body) for a Markdown file with optional `---` front matter.
+
+    A leading byte-order mark is ignored so an editor-saved file keeps its settings.
+    """
+    text = text.removeprefix("\ufeff")
     if not text.startswith("---\n"):
         return {}, text
     end = text.find("\n---", 3)
@@ -200,6 +218,8 @@ class Policy:
 
     def add_lens(self, meta, checklist, source, label, builtin=False):
         lens_id = meta.get("id") or Path(label).stem
+        if not isinstance(lens_id, str):
+            raise PolicyError("%s: lens id must be a string" % label)
         if lens_id in self.lenses:
             lens = self.lenses[lens_id]
             lens.update({"checklist": checklist, "source": source})
@@ -222,7 +242,10 @@ class Policy:
                 raise PolicyError("%s: %s must be true or false" % (label, key))
 
     def load_pack(self, source, base, kind):
-        """Apply one pack (pack.yaml, lenses/*.md, guidance/*.md) rooted at `base`."""
+        """Apply one pack (pack.yaml, lenses/*.md, guidance/*.md) rooted at `base`.
+
+        Returns whether the pack contributed anything.
+        """
         prefix = "%s/" % base if base else ""
         found = False
         text = source.read(prefix + "pack.yaml")
@@ -241,6 +264,7 @@ class Policy:
             self.guidance.append(source.readable_path(rel, source.read(rel)))
         if found:
             self.sources.append({"kind": kind, "path": label_root, "ref": source.ref})
+        return found
 
     def finish(self):
         for lens_id, model in self.settings["models"].items():
@@ -309,8 +333,12 @@ def resolve_policy(context, source_root, lenses_dir, out_dir, policy_ref=None, p
     policy.sources.append({"kind": "builtin", "path": str(lenses_dir), "ref": None})
 
     user_dir = _user_pack_dir(pack)
+    if pack and not user_dir.is_dir():
+        raise PolicyError("--pack %s is not a directory" % pack)
     if user_dir.is_dir():
-        policy.load_pack(_FsSource(user_dir), "", "user-pack")
+        if not policy.load_pack(_FsSource(user_dir), "", "user-pack") and pack:
+            policy.warnings.append("--pack %s has no pack.yaml, lenses/ or guidance/; "
+                                   "no pack policy was applied" % pack)
 
     if diff_only:
         policy.warnings.append("diff-only: the project pack and REVIEW.md were not read; "
@@ -333,9 +361,17 @@ def resolve_policy(context, source_root, lenses_dir, out_dir, policy_ref=None, p
 
 
 def _matches(path, pattern):
+    """Glob match where `*` crosses `/` and a `**/` segment may match zero directories."""
     if fnmatch.fnmatchcase(path, pattern):
         return True
-    return pattern.startswith("**/") and fnmatch.fnmatchcase(path, pattern[3:])
+    if pattern.startswith("**/") and _matches(path, pattern[3:]):
+        return True
+    start = pattern.find("/**/")
+    while start != -1:
+        if _matches(path, pattern[:start] + "/" + pattern[start + 4:]):
+            return True
+        start = pattern.find("/**/", start + 1)
+    return False
 
 
 def _supports_attr_source(root):

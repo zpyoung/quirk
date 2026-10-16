@@ -34,10 +34,10 @@ def ancestor_claude_mds(git_root, changed_files):
     if root_md.is_file():
         found.append(str(root_md))
     for rel in changed_files:
-        p = (git_root / rel).resolve()
         try:
+            p = (git_root / rel).resolve()
             p.relative_to(git_root)
-        except ValueError:
+        except (ValueError, RuntimeError, OSError):
             continue
         d = p.parent
         while True:
@@ -72,7 +72,10 @@ def skill_references(git_root):
 
 
 def _inside(root_real, path):
-    return Path(path).resolve().is_relative_to(root_real)
+    try:
+        return Path(path).resolve().is_relative_to(root_real)
+    except (RuntimeError, OSError):
+        return False
 
 
 def _repo_relative(root, path):
@@ -83,8 +86,8 @@ def gather(git_root, changed_files, exclude_changed=False):
     """Collect the repo's own guidance files, all confined to `git_root`.
 
     Any path that resolves outside the root is dropped. With `exclude_changed`, files whose
-    repo-relative path is in `changed_files` are removed from every list and returned under
-    `changed_guidance` instead.
+    repo-relative path, or the repo-relative path of a symlink's target, is in `changed_files`
+    are removed from every list and returned under `changed_guidance` instead.
     """
     git_root = Path(git_root).resolve()
     references, references_dropped = skill_references(git_root)
@@ -104,8 +107,10 @@ def gather(git_root, changed_files, exclude_changed=False):
         for path in found[key]:
             if not _inside(git_root, path):
                 continue
-            if exclude_changed and _repo_relative(git_root, path) in changed:
-                changed_guidance.add(_repo_relative(git_root, path))
+            rel = _repo_relative(git_root, path)
+            real_rel = Path(path).resolve().relative_to(git_root).as_posix()
+            if exclude_changed and (rel in changed or real_rel in changed):
+                changed_guidance.add(rel)
                 continue
             kept.append(path)
         found[key] = kept

@@ -10,6 +10,7 @@ import os
 import pathlib
 import re
 import sys
+import tempfile
 import webbrowser
 
 import highlight
@@ -27,7 +28,7 @@ _RUN_FIELDS = {"dimensions_run", "dimensions_skipped", "diff_size", "coverage", 
                "mutation_consent", "incomplete", "dimensions_failed", "models", "verification",
                "excluded_generated", "policy_sources", "severity_floor", "deep"}
 DEFAULT_SEVERITY_FLOOR = "Should fix"
-_INCOMPLETE_OK_VERDICTS = {"fix, then merge", "request changes"}
+_INCOMPLETE_OK_VERDICTS = {"fix, then merge", "request changes", "incomplete review"}
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 DISPOSITIONS = {
@@ -76,7 +77,7 @@ def target_slug(meta):
     if target == "branch":
         branch = meta.get("branch", "")
         digest = hashlib.sha256(branch.encode("utf-8")).hexdigest()[:6]
-        return "%s-%s" % (slugify(branch), digest)
+        return "%s-%s" % (slugify(branch) or "branch", digest)
     if target == "local":
         return "local"
     return ""
@@ -186,6 +187,16 @@ def replace_slot(template, name, replacement):
         raise ValueError("template slot %s markers are out of order" % name)
     end += len(closing)
     return template[:start] + replacement + template[end:]
+
+
+_HANDOFF_UNSAFE = re.compile(r"[\r\u2028\u2029]")
+_LINE_RE = re.compile(r"[0-9]+(?:-[0-9]+)?")
+
+
+def _handoff_safe(value, label):
+    """Reject characters that a triage paste cannot carry, since the page copies this text into it."""
+    if _HANDOFF_UNSAFE.search(value):
+        raise ValueError("%s contains a carriage return or Unicode line separator" % label)
 
 
 def _line_safe(value, label):
@@ -470,6 +481,9 @@ def _prepare_report(report):
     meta["title"] = meta["title"].strip()
     if not isinstance(meta.get("verdict"), str):
         raise ValueError("meta.verdict must be a string")
+    for key in ("verdict", "ticket", "project", "change_state"):
+        if isinstance(meta.get(key), str):
+            _handoff_safe(meta[key], "meta.%s" % key)
     for key in ("repo_root", "source_branch"):
         if key in meta:
             if not isinstance(meta[key], str) or not meta[key].strip():
@@ -551,6 +565,13 @@ def _prepare_report(report):
         value = normalize_finding(raw, warnings)
         for field in ("title", "file", "line"):
             _line_safe(value[field], "finding %d %s" % (index + 1, field))
+        if not _LINE_RE.fullmatch(value["line"]):
+            raise ValueError("finding %d line must be a number or a start-end range" % (index + 1))
+        if isinstance(value.get("evidence"), str):
+            _handoff_safe(value["evidence"], "finding %d evidence" % (index + 1))
+        for dimension in value["dimensions"]:
+            if isinstance(dimension, str):
+                _handoff_safe(dimension, "finding %d dimensions" % (index + 1))
         identity = "%s:%s" % (value["file"], value["line"])
         if identity in identities:
             raise ValueError("duplicate finding identity %s" % identity)
@@ -562,8 +583,6 @@ def _prepare_report(report):
 
     slug = target_slug(meta)
     if not slug:
-        raise ValueError("target slug is empty after slugification")
-    if target == "branch" and not slugify(meta["branch"]):
         raise ValueError("target slug is empty after slugification")
     run = prepared.get("run")
     if run is not None and not isinstance(run, dict):
@@ -1184,7 +1203,7 @@ def _memory_sections_html(report):
         for finding in rows:
             memory_finding = finding.get("memory") or {}
             thread = memory_finding.get("thread") if isinstance(memory_finding, dict) else None
-            links = '<a href="#%s">%s</a>' % (_esc(finding["id"]), _esc(finding["id"]))
+            links = _esc(finding["id"])
             if isinstance(thread, dict) and thread.get("url"):
                 links += " " + _memory_link_html("Open discussion", thread.get("url"))
             out.append(_row(links, _esc(finding["title"])))
@@ -1216,8 +1235,8 @@ def _memory_sections_md(report):
                 detail = item.get("body") or item.get("body_md")
                 line = "- %s" % _memory_md_text(title)
                 if item.get("file") is not None:
-                    line += " (`%s%s`)" % (_memory_md_text(item.get("file")),
-                                           ":" + _memory_md_text(item.get("line")) if item.get("line") is not None else "")
+                    location = "%s%s" % (item["file"], ":%s" % item["line"] if item.get("line") is not None else "")
+                    line += " (`%s`)" % re.sub(r"[`\r\n\u2028\u2029]", "'", location)
                 thread = item.get("thread")
                 if isinstance(thread, dict) and thread.get("url"):
                     line += " — %s" % _memory_link_md("Open discussion", thread.get("url"))
@@ -1543,8 +1562,10 @@ def _render_md_prepared(report):
                               finding["what_would_confirm"], ""])
             repro = finding.get("repro")
             if isinstance(repro, dict) and repro.get("command") and repro.get("output"):
-                lines.extend(["**Reproduction:**", "", "```",
-                              "$ %s" % repro["command"], repro["output"], "```", ""])
+                command = "$ %s" % repro["command"]
+                longest = max((len(run) for run in re.findall(r"`+", command + repro["output"])), default=0)
+                fence = "`" * max(3, longest + 1)
+                lines.extend(["**Reproduction:**", "", fence, command, repro["output"], fence, ""])
             if finding.get("impact"):
                 lines.extend(["**Impact:** %s" % finding["impact"], ""])
             if _raw_md(finding.get("body_md")):
@@ -1601,6 +1622,22 @@ def _template_path():
     return os.path.normpath(os.path.join(here, "..", "assets", "report.html"))
 
 
+def _write_text(path, text):
+    """Replace `path` with `text` atomically, so a failed write never truncates the previous file."""
+    directory = os.path.dirname(path) or "."
+    fd, temp = tempfile.mkstemp(prefix=".%s." % os.path.basename(path), suffix=".tmp", dir=directory,
+                                text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(temp, path)
+    finally:
+        try:
+            os.unlink(temp)
+        except FileNotFoundError:
+            pass
+
+
 def _error(message):
     print(json.dumps({"error": str(message)}, indent=2))
     return 2
@@ -1639,12 +1676,10 @@ def main(argv=None):
             md_path = os.path.abspath(args.out) if args.out else os.path.join(out_dir, "review-%s-findings.md" % slug)
         if html_path:
             os.makedirs(os.path.dirname(html_path) or ".", exist_ok=True)
-            with open(html_path, "w", encoding="utf-8") as handle:
-                handle.write(html_text)
+            _write_text(html_path, html_text)
         if md_path:
             os.makedirs(os.path.dirname(md_path) or ".", exist_ok=True)
-            with open(md_path, "w", encoding="utf-8") as handle:
-                handle.write(md_text)
+            _write_text(md_path, md_text)
 
         opened = False
         if html_path and not args.no_open:

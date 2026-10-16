@@ -385,16 +385,26 @@ def _reconcile_orphans(state, failed_body):
         state["unrecognized_drafts"] = unrecognized
 
 
-def _suggested_completion(prepared, by_id):
-    """Pick the completion action to suggest; an incomplete review is never offered as approvable."""
+def _suggested_completion(prepared, posted, omitted):
+    """Pick the completion action to suggest; an incomplete review is never offered as approvable.
+
+    Only findings that are staged as Blocking, or already stand as a Blocking thread from an
+    earlier run, count toward request-changes; a plausible or unplaced finding never does.
+    """
     if (prepared.get("run") or {}).get("incomplete"):
         return "comment-only"
-    blocking = any(by_id[finding["id"]]["slot"] == "fix" and finding["severity"] != "Nit"
-                   for finding in prepared["findings"])
+    severity = {finding["id"]: finding["severity"] for finding in prepared["findings"]}
+    blocking = any(item["disposition"] == "Blocking" and item["severity"] != "Nit" for item in posted)
+    blocking = blocking or any(
+        str(item.get("reason", "")).startswith("already posted")
+        and (item.get("decision") or {}).get("slot") == "fix"
+        and severity.get(item["id"]) not in (None, "Nit")
+        for item in omitted)
     return "request-changes" if blocking else "approve"
 
 
 def stage(args):
+    """Stage the reviewer's notes as drafts; exit 0 staged, 2 failed, 3 head moved, 4 pre-existing drafts."""
     try:
         raw_report = _load(args.report, "report")
         decisions = _load(args.decisions, "decisions")
@@ -468,7 +478,7 @@ def stage(args):
             "memory_report": raw_report if memory_enabled else None,
             "memory_decisions": decisions if memory_enabled else None,
             "completion": {"offered": ["approve", "request-changes", "comment-only"],
-                           "suggested": _suggested_completion(prepared, by_id)},
+                           "suggested": _suggested_completion(prepared, posted, omitted)},
         }
         _write(args.out, state)
         uncreated = list(notes)

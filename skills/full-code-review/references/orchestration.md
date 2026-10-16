@@ -241,7 +241,7 @@ from `lenses/risk.md` instead of a findings list, and
 
 Every `recommendation` that proposes a code change must include the actual corrected
 code, not a description of it. "Use the correct field name" is not actionable;
-`purchase_item_dto.get("charge_interval_frequency")` is. Show it as a ` ```diff ` fence
+`invoice_dto.get("billing_interval")` is. Show it as a ` ```diff ` fence
 against the code at `refs.head` (`--- a/<path>` / `+++ b/<path>`, a real `@@` header,
 two or three context lines) so the reader sees what changes, not just the end state;
 the report renders it side by side. Only net-new code with no existing counterpart,

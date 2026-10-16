@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -302,3 +303,78 @@ def test_plausible_finding_cannot_post_even_if_body_marks_it_eligible(tmp_path):
     assert forge.posted == ["two"]
     assert forge.targets == [("a.py", "a.py", 3, "new")]
     assert any("F1 is a plausible finding and cannot be posted; skipped" == w for w in warnings)
+
+
+def test_overview_counts_only_what_posted(tmp_path):
+    value = two_finding_report()
+    bodies = comment_body._author_bodies(value)
+    assert "Posted: 2" in bodies["overview"]
+    forge = RecordingForge()
+    m.post(value, context("gitlab"), bodies, ["F1"], str(tmp_path / "r.json"), overview=True, forge=forge)
+    overview = forge.posted[-1]
+    assert "Posted: 1 · Not posted: 1" in overview
+
+
+@pytest.mark.parametrize("line", ["n/a", "L2", "2,3", "2–3"])
+def test_malformed_line_is_rejected_before_the_first_create(tmp_path, line):
+    value = two_finding_report()
+    value["findings"][1]["line"] = line
+    forge = RecordingForge()
+    with pytest.raises(ValueError, match="line"):
+        m.post(value, context("gitlab"), signed(TWO, value), ["F1", "F2"], str(tmp_path / "r.json"), forge=forge)
+    assert forge.posted == [] and not (tmp_path / "r.json").exists()
+
+
+def test_line_helper_names_the_finding_and_accepts_ranges():
+    assert m._line("2-4", "F1") == 2 and m._line(" 7 ", "F1") == 7
+    with pytest.raises(ValueError, match="F2"):
+        m._line("L2", "F2")
+
+
+@pytest.mark.parametrize("change", [{"number": 999}, {"project": "other/repo"}])
+def test_report_for_another_change_is_refused_before_posting(tmp_path, change):
+    ctx = context("gitlab")
+    ctx["change"] = dict(ctx["change"], **change)
+    forge = RecordingForge()
+    with pytest.raises(ValueError, match="does not match"):
+        m.post(two_finding_report(), ctx, signed(TWO, two_finding_report()), ["F1"],
+               str(tmp_path / "r.json"), forge=forge)
+    assert forge.posted == []
+
+
+def test_report_for_another_head_is_refused_before_posting(tmp_path):
+    ctx = context("gitlab")
+    ctx["refs"] = dict(ctx["refs"], head="e" * 40)
+    forge = RecordingForge()
+    with pytest.raises(ValueError, match="head does not match"):
+        m.post(two_finding_report(), ctx, signed(TWO, two_finding_report()), ["F1"],
+               str(tmp_path / "r.json"), forge=forge)
+    assert forge.posted == []
+
+
+def test_a_context_without_a_forge_exits_2_not_with_a_traceback(tmp_path, capsys):
+    paths = write_inputs(tmp_path, dict(context("gitlab"), forge="none"))
+    assert m.main(cli_args(paths)) == 2
+    assert "requires a forge" in json.loads(capsys.readouterr().out)["error"]
+
+
+def test_stray_plain_comment_is_recorded_named_and_not_retried(tmp_path):
+    calls = []
+
+    def api(host, method, endpoint, payload=None, timeout=120):
+        calls.append(endpoint)
+        return {"id": "d9", "notes": [{"id": 31, "type": "DiscussionNote"}]}
+
+    out = str(tmp_path / "r.json")
+    forge = GitLabForge("gitlab.example", "o/r", api_call=api)
+    with pytest.raises(m.PostFailed) as caught:
+        m.post(two_finding_report(), context("gitlab"), signed(TWO, two_finding_report()), ["F1"], out, forge=forge)
+    assert caught.value.finding_id == "F1" and "d9" in str(caught.value) and "31" in str(caught.value)
+    stray = json.loads(open(m.stray_receipt_path(out)).read())
+    assert stray["F1"]["discussion_id"] == "d9" and stray["F1"]["note_id"] == 31
+    assert not os.path.exists(out)
+
+    receipts, warnings = m.post(two_finding_report(), context("gitlab"),
+                                signed(TWO, two_finding_report()), ["F1"], out, forge=forge)
+    assert receipts == {} and len(calls) == 1
+    assert any("F1 left a plain comment" in w for w in warnings)

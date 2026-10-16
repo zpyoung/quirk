@@ -78,11 +78,7 @@ def _contents(changed_files: list[str], source_root: str | None,
     texts, weights = {}, {}
     for name in changed_files:
         path = root / name if root else None
-        if path and path.exists():
-            if not path.resolve().is_relative_to(root):
-                raise ValueError("changed file escapes source root: %s" % name)
-            if not path.is_file():
-                raise ValueError("changed file is not readable: %s" % name)
+        if path and path.is_file() and path.resolve().is_relative_to(root):
             try:
                 text = path.read_text(encoding="utf-8", errors="replace")
             except OSError as exc:
@@ -315,8 +311,6 @@ def _boundary_question(first: str, second: str) -> str:
     if _is_test(first) or _is_test(second):
         return "Does %s exercise the changed behavior of %s, including failure cases?" % (
             first if _is_test(first) else second, second if _is_test(first) else first)
-    if {a, b} == {"report.html", "validate_triage.py"}:
-        return "Do %s and %s agree on triage export headers, delimiters, and path escaping?" % (first, second)
     if a == "__init__.py" or b == "__init__.py":
         return "Do %s and %s agree on imported names and return values across their package boundary?" % (first, second)
     if a.endswith(".md") or b.endswith(".md"):
@@ -338,8 +332,8 @@ def _questions(area: dict, risk: dict | None) -> list[str]:
         level = risk.get("level")
         note = risk.get("verbatim_md")
         if isinstance(level, str) and level.strip() and isinstance(note, str) and note.strip():
-            questions.append("For %s, does %s address %s risk: %s?" % (
-                representative, level.strip(), level.strip(), note.strip()))
+            questions.append("For %s, is the %s risk real: %s?" % (
+                representative, level.strip(), note.strip()))
         caveats = risk.get("caveats")
         if isinstance(caveats, str):
             caveats = [caveats]
@@ -351,10 +345,10 @@ def _questions(area: dict, risk: dict | None) -> list[str]:
     path = PurePosixPath(representative)
     if path.suffix == ".py":
         fallback = ["Does %s handle malformed or untrusted input without changing expected exit codes?" % representative,
-                    "Does %s preserve its JSON schema and correctly quote git paths or command arguments?" % representative]
+                    "Does %s preserve its output schema and handle paths and command arguments safely?" % representative]
     elif path.suffix == ".html":
-        fallback = ["Does %s escape untrusted report values before inserting them into HTML?" % representative,
-                    "Does %s preserve export headers and delimiters consumed by other files?" % representative]
+        fallback = ["Does %s escape untrusted values before inserting them into HTML?" % representative,
+                    "Does %s keep the fields and markup that other files depend on intact?" % representative]
     else:
         fallback = ["Are paths and command examples in %s valid for the changed files?" % representative,
                     "Does %s describe the actual inputs, outputs, and failure modes?" % representative]

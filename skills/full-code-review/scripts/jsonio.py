@@ -1,19 +1,25 @@
 """JSON file helpers shared by the review scripts."""
 import json
 import os
+import re
 import tempfile
+
+_LONE_SURROGATE_RE = re.compile("[\ud800-\udfff]")
 
 
 def write_json(path, value):
     """Write `value` as sorted, indented JSON to `path`, replacing it atomically.
 
     Creates missing parent directories. The data is fsynced before the rename, and the
-    temp file is unique per call so concurrent writers never share one.
+    temp file is unique per call so concurrent writers never share one. Lone surrogates, which
+    `surrogateescape`-decoded bytes become, are written as `\\udXXX` escapes so the file stays
+    valid UTF-8 and reads back to the same strings.
     """
     target = os.path.abspath(str(path))
     directory = os.path.dirname(target)
     os.makedirs(directory, exist_ok=True)
     encoded = json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    encoded = _LONE_SURROGATE_RE.sub(lambda match: "\\u%04x" % ord(match.group()), encoded)
     fd, temp = tempfile.mkstemp(prefix=".%s." % os.path.basename(target), suffix=".tmp",
                                 dir=directory, text=True)
     try:

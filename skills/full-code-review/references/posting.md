@@ -59,14 +59,20 @@ else: read the warnings and tell the user which approved ids did not post. On Gi
 each finding becomes a pull-request review comment (`path`, `line`, `side`,
 `commit_id`); on GitLab a positioned discussion built from `refs`. A failed create stops the batch and exits 2 with the IDs already
 posted and any warnings collected so far; their receipts stay in `--out`. The
-`--overview` receipt goes to a sibling file (`<out>.overview.json`), so `--out` holds
-only finding receipts and `review_memory.py save --receipts` accepts it unchanged.
+`--overview` receipt goes to a sibling file named from the `--out` stem
+(`receipts.json` becomes `receipts.overview.json`), so `--out` holds only finding
+receipts and `review_memory.py save --receipts` accepts it unchanged. The posted
+overview lists what actually posted, rebuilt from the receipts. The report must match
+the context's change, project and head, and every requested finding needs a numeric
+line, or the script exits 2 before the first create.
 
 Two rules that cost the most time when missed:
 
 - **On GitLab, a created note must come back as a `DiffNote`.** A wrong or stale
   `position` does not error; GitLab silently degrades the note to a plain comment
-  detached from the line. The script treats a missing `DiffNote` as a failed create.
+  detached from the line. The script treats a missing `DiffNote` as a failed create,
+  names the stray comment's URL in the error, and records it in `<out stem>.stray.json`;
+  that finding is skipped on rerun until you delete the comment and its entry.
 - **A line outside the current diff cannot be anchored** on either forge. Anchor on the
   nearest changed line and quote the exact code in the body. Never widen the diff to
   make a line anchorable.
@@ -76,12 +82,13 @@ bodies with the shared builder, then post each eligible body verbatim as the not
 
 ```bash
 python3 "$SCRIPTS/comment_body.py" author --report "$REPORT_JSON" \
-  [--decisions "$DECISIONS_JSON"] --out "$REVIEW_RUN_DIR/bodies.json"
+  [--decisions "$REVIEW_RUN_DIR/decisions.json"] --out "$REVIEW_RUN_DIR/bodies.json"
 ```
 
 `bodies.json` maps each report finding ID to `{body, fingerprint, post}`, and carries
-`overview` (the optional overview note), `report_sha256` (the digest the posting script
-checks) and `warnings` (each `impact`/`fix_md` fallback taken on a finding that will
+`overview` (the optional overview note), `overview_plan` (the posted and not-posted
+lists the posting script rebuilds the overview from), `report_sha256` (the digest the
+posting script checks) and `warnings` (each `impact`/`fix_md` fallback taken on a finding that will
 post; the CLI also prints them). Only entries
 with `post: true` are candidates for the batch, and the live `check` below can still
 remove one. `--decisions` must be the author-seat export `validate_triage.py` wrote
@@ -251,8 +258,8 @@ replies are added inside that pending review through GraphQL. Consequences:
 
 ```bash
 python3 "$SCRIPTS/post_reviewer_review.py" stage \
-  --report "$REPORT_JSON" --decisions "$DECISIONS_JSON" \
-  --context "$CONTEXT_JSON" --out "$STAGED_JSON"
+  --report "$REPORT_JSON" --decisions "$REVIEW_RUN_DIR/decisions.json" \
+  --context "$CONTEXT" --out "$REVIEW_RUN_DIR/staged-review.json"
 ```
 
 Before the first POST, the script:
@@ -326,7 +333,7 @@ Show the complete staged `preview`, omitted decisions, normalization warnings, a
 draft IDs. Ask for explicit final approval. Then, and only then:
 
 ```bash
-python3 "$SCRIPTS/post_reviewer_review.py" publish --staged "$STAGED_JSON" --confirm
+python3 "$SCRIPTS/post_reviewer_review.py" publish --staged "$REVIEW_RUN_DIR/staged-review.json" --confirm
 ```
 
 Publish freshly revalidates identity, head, and base/start diff refs, re-lists all
@@ -352,7 +359,7 @@ followed by rerun/restage. Never switch to per-draft publication.
 After successful publish, offer all three actions and require an explicit choice:
 
 ```bash
-python3 "$SCRIPTS/post_reviewer_review.py" complete --staged "$STAGED_JSON" \
+python3 "$SCRIPTS/post_reviewer_review.py" complete --staged "$REVIEW_RUN_DIR/staged-review.json" \
   --action approve|request-changes|comment-only
 ```
 
@@ -373,6 +380,7 @@ posting approval.
 
 ## Scope discipline
 
-Only anchor on changed new-side lines. Reviewer inline finding drafts carry a GitLab
+Anchor on changed lines, using the old side for removed code (see "Anchor on the
+correct diff side"). Reviewer inline finding drafts carry a GitLab
 text position and are resolvable. Support-reply drafts have no position; they sit inside
 an existing discussion. The overview is the sole non-resolvable note.

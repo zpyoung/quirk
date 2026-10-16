@@ -646,7 +646,7 @@ def test_cli_output_shape(tmp_path, capsys):
     code = cb.main(["author", "--report", report, "--out", str(out)])
     assert code == 0
     data = json.loads(out.read_text(encoding="utf-8"))
-    assert set(data) == {"findings", "overview", "warnings", "report_sha256"}
+    assert set(data) == {"findings", "overview", "overview_plan", "warnings", "report_sha256"}
     assert data["report_sha256"] == cb._report_digest(raw_report())
     assert set(data["findings"]) == {"F1", "F2"}
     first = data["findings"]["F1"]
@@ -950,6 +950,24 @@ def test_mention_beside_backslash_escaped_backticks_is_defused():
     assert "`@real`" in cb._neutralize("x `@real` y")
 
 
+@pytest.mark.parametrize("text", ["`@all``", "``@all`", "x `@all`` y"])
+def test_mention_beside_unequal_backtick_runs_is_defused(text):
+    assert "@all" not in cb._neutralize(text)
+
+
+def test_unplaced_path_cannot_carry_a_mention_outside_its_code_span():
+    omitted = [{"id": "F3", "reason": "line is outside the diff", "disposition": "Blocking",
+                "unplaced": True}]
+    report = {"findings": [make_finding(id="F3", file="a` @victim `b.py", line="3")]}
+    section = cb._unplaced_section(omitted, {"F3": report["findings"][0]})
+    assert "@victim" not in section and "`" in section
+
+
+def test_scalar_finding_assumptions_raise_value_error():
+    with pytest.raises(ValueError, match="assumptions"):
+        cb.finding_body(make_finding(assumptions=5), seat="author", lead="Must fix")
+
+
 def test_pre_line_in_body_keeps_details_closer_intact():
     finding = make_finding(body_md="Intro.\n\n<pre>\nswallow everything\n")
     body, _ = cb.finding_body(finding, seat="author", lead="Must fix")
@@ -1001,7 +1019,7 @@ def test_short_recommendation_sentence_fallback_is_used():
 def test_neutralize_breaks_mentions_but_not_emails_or_code():
     text = "ping @all and (@team/backend), mail user@example.com, `@inline` stays\n```\n@fenced\n```"
     out = cb._neutralize(text)
-    assert "@​all" in out and "(@​team/backend)" in out
+    assert "@\u200ball" in out and "(@\u200bteam/backend)" in out
     assert "user@example.com" in out and "`@inline`" in out
     assert "\n@fenced\n" in out
 

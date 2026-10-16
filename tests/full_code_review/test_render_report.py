@@ -5,6 +5,7 @@ import json
 import re
 import shutil
 import subprocess
+from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -121,7 +122,8 @@ def finding_memory(state="carried", disposition="fix"):
     }
 
 
-def invoke(tmp_path, value, extra=None, filename="report.json"):
+def invoke(tmp_path, value, extra=None, filename="report.json", keep_highlighter_warning=False):
+    """Run main() on `value`; the Pygments-missing notice depends on the machine, so it is dropped unless asked for."""
     path = Path(tmp_path) / filename
     path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
     stdout = io.StringIO()
@@ -130,6 +132,10 @@ def invoke(tmp_path, value, extra=None, filename="report.json"):
     with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
         rc = m.main(argv)
     payload = json.loads(stdout.getvalue())
+    if not keep_highlighter_warning and "warnings" in payload:
+        payload["warnings"] = [w for w in payload["warnings"] if "Pygments" not in w]
+        if not payload["warnings"]:
+            del payload["warnings"]
     return rc, payload, stderr.getvalue(), path
 
 
@@ -234,8 +240,6 @@ def test_zero_findings(tmp_path):
 
 
 def test_omission_rules():
-
-
     value = report()
     value["mutation_probe"] = None
     value["run"].pop("diff_size")
@@ -246,6 +250,8 @@ def test_omission_rules():
     assert 'id="mutation-probe"' not in rendered and 'id="risk"' not in rendered
     assert 'id="process-notes"' not in rendered
     assert "12 files, 340 lines" not in rendered and "changed files reviewed" not in rendered
+
+
 def test_memory_sections_and_seeds_without_per_finding_context():
     value = report()
     value["findings"] = value["findings"][:1]
@@ -383,7 +389,7 @@ def reply_report(seat, human_context):
 
 def reply_attr(html):
     match = re.search(r'data-reply-targets="([^"]*)"', html)
-    return json.loads(__import__("html").unescape(match.group(1))) if match else None
+    return json.loads(unescape(match.group(1))) if match else None
 
 
 def test_reply_candidates_reviewer_only_sorted_and_capped():
@@ -478,7 +484,7 @@ def test_rendered_memory_sections_neutralise_hostile_thread_urls(state, section_
     markdown = m.render_md(value)
     section = html[html.index('id="%s"' % section_id):]
     section = section[:section.index("</section>")]
-    assert "javascript:" not in section and section.count("<a ") == 1
+    assert "javascript:" not in section and "<a " not in section
     assert "Open discussion</a>" not in section
     assert "Back &lt;again&gt;" in section and "<again>" not in section
     md_section = markdown[markdown.rindex("\n## ", 0, markdown.index("Back \\<again\\>")):]
@@ -674,8 +680,6 @@ _INVALID_REPORTS = [
     (_bad(lambda v: v["meta"].update(number=0)), "meta.number must be a positive integer"),
     (_bad(lambda v: v.update(meta={"target": "branch", "title": "x", "verdict": "Approve"})),
      "meta.branch must be a non-empty string"),
-    (_bad(lambda v: v.update(meta={"target": "branch", "branch": "***", "title": "x", "verdict": "Approve"})),
-     "target slug is empty"),
     (_bad(lambda v: v["findings"][0].update(severity="Blocker")), "finding 1 has an unknown severity"),
     (_bad(lambda v: v["meta"].pop("verdict")), "meta.verdict must be a string"),
     (_bad(lambda v: v["findings"][0].pop("file")), "finding 1 is missing file"),
@@ -688,6 +692,15 @@ _INVALID_REPORTS = [
     (_bad(lambda v: v["findings"][0].update(file="bad\u2028file")), "finding 1 file contains a line-breaking character"),
     (_bad(lambda v: v["findings"][0].update(line="9\r")), "finding 1 line contains a line-breaking character"),
     (_bad(lambda v: v["findings"][0].pop("issue")), "finding 1 needs issue or body_md"),
+    (_bad(lambda v: v["findings"][0].update(line="n/a")), "finding 1 line must be a number"),
+    (_bad(lambda v: v["findings"][0].update(line="L2")), "finding 1 line must be a number"),
+    (_bad(lambda v: v["findings"][0].update(line="2,3")), "finding 1 line must be a number"),
+    (_bad(lambda v: v["findings"][0].update(line="2\u20133")), "finding 1 line must be a number"),
+    (_bad(lambda v: v["findings"][0].update(evidence="a\u2028b")), "finding 1 evidence contains"),
+    (_bad(lambda v: v["findings"][0].update(evidence="a\rb")), "finding 1 evidence contains"),
+    (_bad(lambda v: v["findings"][0].update(dimensions=["x\u2029y"])), "finding 1 dimensions contains"),
+    (_bad(lambda v: v["meta"].update(verdict="Approve\u2028now")), "meta.verdict contains"),
+    (_bad(lambda v: v["meta"].update(ticket="T-1\r")), "meta.ticket contains"),
 ]
 
 
@@ -765,7 +778,8 @@ def test_stdout_reports_highlighter_and_warns_on_builtin_fallback(tmp_path, monk
     assert rc == 0 and payload["highlighter"] == highlight.backend()
     monkeypatch.setattr(highlight, "_pygments_lexers", None)
     monkeypatch.setattr(highlight, "_LEXERS", {})
-    rc, payload, _, _ = invoke(tmp_path, report(), ["--format", "html"], "hl2.json")
+    rc, payload, _, _ = invoke(tmp_path, report(), ["--format", "html"], "hl2.json",
+                               keep_highlighter_warning=True)
     assert rc == 0 and payload["highlighter"] == "builtin"
     assert any(highlight.INSTALL_HINT in warning for warning in payload["warnings"])
     rc, payload, _, _ = invoke(tmp_path, report(), ["--format", "md"], "hl3.json")
@@ -887,7 +901,7 @@ def test_rail_is_drag_resizable():
     assert 'tabindex="0"' in rendered
     # the grid column it drives has to stay a variable with a fallback, or a
     # report opened before anything is dragged renders a zero-width rail
-    assert "grid-template-columns: var(--rail-w, 340px) minmax(0, 1fr)" in rendered
+    assert re.search(r"grid-template-columns:\s*var\(--rail-w,\s*\d+px\)", rendered)
     # width is a global preference; the triage blob is per-report and exported
     assert '"quirk-review:rail-width"' in rendered
     key = re.search(r'data-storage-key="([^"]+)"', rendered).group(1)
@@ -896,7 +910,7 @@ def test_rail_is_drag_resizable():
 
 def test_findings_fill_the_detail_pane():
     rendered = m.render_html(report(), TEMPLATE)
-    assert ".finding { min-width: 0; }" in rendered
+    assert re.search(r"\.finding\s*\{[^}]*min-width:\s*0", rendered)
     assert "max-width: 96ch" not in rendered
     assert "max-width: 74ch" not in rendered
 
@@ -905,8 +919,8 @@ def test_type_ramp_override_outranks_the_vendored_theme():
     rendered = m.render_html(report(), TEMPLATE)
     # the theme declares the ramp inside @layer astryx-theme; an unlayered
     # :root block is what beats it, so the override must stay after the tokens
-    assert rendered.index("/* END astryx-tokens */") < rendered.index("--font-size-base: 1rem;")
-    assert rendered.index("--font-size-base: 1rem;") < rendered.index("@media (max-width: 64rem)")
+    override = re.search(r"--font-size-base:\s*1rem;", rendered).start()
+    assert rendered.index("/* END astryx-tokens */") < override < rendered.index("@media (max-width: 64rem)")
 
 
 def test_recommended_order_is_markdown_only():
@@ -1159,6 +1173,35 @@ def test_page_export_is_accepted_by_the_triage_validator(seat):
     assert parsed["handoff_present"] is True
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed to execute the page script")
+@pytest.mark.parametrize("reply_on", [True, False])
+def test_page_export_emits_reply_line_only_when_the_toggle_is_on(reply_on):
+    value = reply_report("reviewer", [{"note_id": 4, "discussion_id": "d", "resolved": False,
+                                       "author": "bob", "body": "hi"}])
+    rendered = m.render_html(value, TEMPLATE)
+    prepared, _ = m._prepare_report(value)
+    first = prepared["findings"][0]["id"]
+    storage = {"__seat": "reviewer", first: {"disp": "fix", "note": "", "reply": reply_on}}
+    paste = run_page_export(rendered, storage)
+    decisions_block = paste.split(validate_triage.HANDOFF_DELIM)[0]
+    assert ("reply: 4" in decisions_block) is reply_on
+    decision = validate_triage.validate(value, paste)["decisions"][0]
+    assert decision.get("reply_note_id") == (4 if reply_on else None)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed to execute the page script")
+def test_page_export_anchor_is_validated_for_a_path_containing_angle_bracket():
+    value = report()
+    value["findings"] = value["findings"][:1]
+    value["findings"][0]["file"] = "src/<gen>/a.py"
+    rendered = m.render_html(value, TEMPLATE)
+    prepared, _ = m._prepare_report(value)
+    first = prepared["findings"][0]["id"]
+    paste = run_page_export(rendered, {"__seat": "author", first: {"disp": "fix", "note": ""}})
+    assert "`src/<gen>/a.py:" in paste.split(validate_triage.HANDOFF_DELIM)[0]
+    assert validate_triage.validate(value, paste)["decisions"][0]["slot"] == "fix"
+
+
 def test_template_script_has_no_raw_line_separators():
     # js treats raw U+2028/U+2029 as line terminators, so one inside a regex literal is a syntax error
     for script in re.findall(r"<script>(.*?)</script>", TEMPLATE, re.S):
@@ -1234,3 +1277,57 @@ def test_plausible_callout_and_reproduction_escape_html_and_reach_handoff():
     assert "**Evidence:** reproduced" in md
     assert "**Status:** Plausible — what would confirm: Run <with> input & inspect" in md
     assert "**Reproduction:**\n\n```\n$ echo '<payload>'\n<script>&oops</script>\n```" in md
+
+
+def test_branch_names_without_ascii_still_render_with_a_hashed_slug(tmp_path):
+    value = report()
+    value["meta"] = {"target": "branch", "branch": "\u6a5f\u80fd\u8ffd\u52a0", "title": "x", "verdict": "Approve"}
+    rc, payload, _, _ = invoke(tmp_path, value, ["--format", "html"])
+    assert rc == 0 and re.fullmatch(r"branch-[0-9a-f]{6}", payload["slug"])
+    assert Path(payload["html"]).name == "review-%s-findings.html" % payload["slug"]
+
+
+def test_repro_output_cannot_close_the_markdown_fence():
+    value = report()
+    value["run"]["deep"] = {"enabled": True}
+    value["findings"][1].update(verification_status="confirmed", evidence="reproduced",
+                                repro={"command": "run", "output": "x\n```\n[link](http://evil.example)\n```"})
+    md = m.render_md(value)
+    block = md[md.index("**Reproduction:**"):]
+    assert "\n````\n$ run\nx\n```\n[link](http://evil.example)\n```\n````\n" in block
+
+
+def test_markdown_memory_location_has_no_backslash_escapes_inside_the_code_span():
+    value = report()
+    value["findings"] = value["findings"][:1]
+    value["memory"] = memory_payload()
+    value["findings"][0]["memory"] = finding_memory()
+    value["memory"]["appears_fixed"] = [{"title": "Old issue", "file": "src/a_b.py", "line": 3}]
+    assert "(`src/a_b.py:3`)" in m.render_md(value)
+
+
+def test_report_files_are_written_atomically(tmp_path, monkeypatch):
+    target = tmp_path / "out.html"
+    target.write_text("previous", encoding="utf-8")
+
+    def broken_replace(source, destination):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(m.os, "replace", broken_replace)
+    with pytest.raises(OSError):
+        m._write_text(str(target), "new")
+    assert target.read_text(encoding="utf-8") == "previous"
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["out.html"]
+    monkeypatch.undo()
+    m._write_text(str(target), "new")
+    assert target.read_text(encoding="utf-8") == "new"
+
+
+def test_memory_pane_finding_ids_are_plain_text_not_dead_links():
+    value = report()
+    value["findings"] = value["findings"][:1]
+    value["memory"] = memory_payload()
+    value["findings"][0]["memory"] = finding_memory(state="possible-regression")
+    html = m.render_html(value, TEMPLATE)
+    section = html[html.index('id="possible-regression"'):]
+    assert 'href="#F' not in section[:section.index("</section>")]

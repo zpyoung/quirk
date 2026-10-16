@@ -221,7 +221,10 @@ def _tokens(source, name):
         return
     if _pygments_lexers is not None:
         emitted = 0
-        for ttype, text in _pygments_lexer(name).get_tokens(source):
+        if source.startswith("\ufeff"):
+            yield None, "\ufeff"
+            emitted = 1
+        for ttype, text in _pygments_lexer(name).get_tokens(source[emitted:]):
             text = text[:max(0, len(source) - emitted)]
             emitted += len(text)
             kind = _pygments_kind(ttype)

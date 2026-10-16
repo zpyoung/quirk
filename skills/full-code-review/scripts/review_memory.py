@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Durable, read-only cross-run memory for combined merge-request reviews.
+"""Durable, read-only cross-run memory for full code reviews of changes and branches.
 
 The module deliberately contains no renderer or posting dependencies.  It stores
-reviewer's own decisions locally and uses GitLab discussions only as a read-only
-source of live publication state.
+the reviewer's own decisions locally and uses GitHub or GitLab discussions only as a
+read-only source of live publication state.
 """
 from __future__ import annotations
 
@@ -28,6 +28,8 @@ from forge import make_forge, note_url as _note_url, parse_origin
 from jsonio import load_object, write_json
 
 SCHEMA_VERSION = 1
+# bumped when the fingerprint inputs change; older ledgers are rekeyed on read
+FINGERPRINT_SCHEME = 2
 _RETENTION_SECONDS = 90 * 24 * 60 * 60
 _FP_RE = re.compile(r"^[0-9a-f]{64}$")
 _BLOCK_START_RE = re.compile(r"\A\s*<!--\s*quirk-review:v1\b")
@@ -143,13 +145,105 @@ def _guidance_hash(paths: Any) -> str:
     return hashlib.sha256(_canonical_json(sorted(digests)).encode()).hexdigest()
 
 
+def _diff_lines(diff: str) -> list[str]:
+    """Split on newlines only; str.splitlines also breaks on form feed, NEL and U+2028."""
+    lines = (diff or "").split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
+def _decode_git_path(field: str) -> str | None:
+    """Decode one raw or C-quoted path field as git emits it; None when malformed."""
+    if not field.startswith('"'):
+        return field
+    if len(field) < 2 or not field.endswith('"'):
+        return None
+    data = bytearray()
+    escapes = {"\\": 0x5c, '"': 0x22, "t": 0x09, "n": 0x0a, "r": 0x0d}
+    i, end = 1, len(field) - 1
+    while i < end:
+        char = field[i]
+        i += 1
+        if char != "\\":
+            data.extend(char.encode("utf-8", "surrogateescape"))
+            continue
+        if i >= end:
+            return None
+        char = field[i]
+        if char in escapes:
+            data.append(escapes[char])
+            i += 1
+        elif char in "01234567":
+            octal = re.match(r"[0-7]{1,3}", field[i:end]).group(0)
+            data.append(int(octal, 8) & 0xff)
+            i += len(octal)
+        else:
+            data.extend(char.encode("utf-8", "surrogateescape"))
+            i += 1
+    return data.decode("utf-8", "surrogateescape")
+
+
+def _quoted_field_end(text: str) -> int | None:
+    i = 1
+    while i < len(text):
+        if text[i] == "\\":
+            i += 2
+        elif text[i] == '"':
+            return i + 1
+        else:
+            i += 1
+    return None
+
+
+def _strip_prefix(path: str | None, prefix: str) -> str | None:
+    return path[2:] if path and path.startswith(prefix) else path
+
+
+def _header_path(text: str, prefix: str) -> str | None:
+    """Decode a ---/+++ path field, dropping git's a/ or b/ prefix and any timestamp."""
+    text = text.strip()
+    if text.startswith('"'):
+        end = _quoted_field_end(text)
+        decoded = _decode_git_path(text[:end]) if end is not None else None
+    else:
+        decoded = text.split("\t", 1)[0].rstrip()
+    return _strip_prefix(decoded, prefix)
+
+
+def _diff_git_paths(line: str) -> tuple[str, str] | None:
+    """The (old, new) paths of a `diff --git` line with prefixes removed, or None."""
+    payload = line[len("diff --git "):]
+    if payload.startswith('"'):
+        end = _quoted_field_end(payload)
+        if end is None or end >= len(payload) or not payload[end].isspace():
+            return None
+        first, second = payload[:end], payload[end:].lstrip()
+        if second.startswith('"') and _quoted_field_end(second) != len(second):
+            return None
+        pairs = [(first, second)]
+    else:
+        pairs = []
+        for marker in (" b/", ' "b/'):
+            pos = payload.find(marker)
+            while pos >= 0:
+                pairs.append((payload[:pos], payload[pos + 1:]))
+                pos = payload.find(marker, pos + 1)
+    decoded = [(_decode_git_path(a), _decode_git_path(b)) for a, b in pairs]
+    decoded = [(a, b) for a, b in decoded if a and b and a.startswith("a/") and b.startswith("b/")]
+    if not decoded:
+        return None
+    old, new = next(((a, b) for a, b in decoded if a[2:] == b[2:]), decoded[0])
+    return old[2:], new[2:]
+
+
 def _diff_sections(diff: str) -> dict[str, str]:
     sections: dict[str, list[str]] = {}
     current = None
-    for line in (diff or "").splitlines():
+    for line in _diff_lines(diff):
         if line.startswith("diff --git "):
-            match = re.match(r"diff --git a/(.+?) b/(.+)$", line)
-            current = match.group(2) if match else None
+            paths = _diff_git_paths(line)
+            current = paths[1] if paths else None
             if current:
                 sections.setdefault(current, []).append(line)
         elif current:
@@ -196,7 +290,30 @@ def _read_record(path: Path) -> tuple[dict | None, list[str]]:
                 or finding.get("seat") not in ("author", "reviewer")
                 or ("receipt" in finding and not isinstance(finding["receipt"], dict))):
             return None, ["memory ledger %s has an invalid finding; refusing overwrite" % path]
+    if data.get("fingerprintScheme", 1) != FINGERPRINT_SCHEME:
+        data["fingerprintScheme"] = FINGERPRINT_SCHEME
+        warnings.append("migrated memory ledger to fingerprint scheme %d" % FINGERPRINT_SCHEME)
+        warnings.extend(_rekey_findings(snapshot))
     return data, warnings
+
+
+def _rekey_findings(snapshot: dict) -> list[str]:
+    """Recompute stored fingerprints under the current scheme from each entry's anchor hash.
+
+    Entries without a usable anchor hash keep their old fingerprint, which no longer matches
+    any current finding. Entries that collapse onto one fingerprint are dropped because the
+    ledger cannot tell them apart. Threads posted under the old fingerprints stay unmatched,
+    so findings already published may be offered for posting again once.
+    """
+    groups: dict[str, list[dict]] = {}
+    for finding in snapshot["findings"]:
+        anchor_hash = finding.get("anchor_hash")
+        if isinstance(anchor_hash, str) and _FP_RE.fullmatch(anchor_hash):
+            finding["fingerprint"] = _fingerprint_of(finding["file"], anchor_hash)
+        groups.setdefault(finding["fingerprint"], []).append(finding)
+    snapshot["findings"] = [group[0] for group in groups.values() if len(group) == 1]
+    dropped = sum(len(group) for group in groups.values() if len(group) > 1)
+    return ["dropped %d prior finding(s) whose fingerprints became ambiguous" % dropped] if dropped else []
 
 
 def _prune(directory: Path, now: float) -> None:
@@ -337,16 +454,21 @@ def _line_number(value: Any) -> int | None:
 
 
 def _paths_from_header(lines: list[str]) -> tuple[str | None, str | None]:
+    """The (old, new) paths a diff section names, decoded; ---/+++ and renames win over the git line."""
     old = new = None
-    for line in lines:
-        if line.startswith("--- "):
-            old = line[4:].split("\t", 1)[0].strip()
-            old = old[2:] if old.startswith("a/") else old
-        elif line.startswith("+++ "):
-            new = line[4:].split("\t", 1)[0].strip()
-            new = new[2:] if new.startswith("b/") else new
-        if old and new:
+    if lines and lines[0].startswith("diff --git "):
+        old, new = _diff_git_paths(lines[0]) or (None, None)
+    for line in lines[1:]:
+        if line.startswith("@@"):
             break
+        if line.startswith("--- "):
+            old = _header_path(line[4:], "a/") or old
+        elif line.startswith("+++ "):
+            new = _header_path(line[4:], "b/") or new
+        elif line.startswith("rename from "):
+            old = _decode_git_path(line[len("rename from "):]) or old
+        elif line.startswith("rename to "):
+            new = _decode_git_path(line[len("rename to "):]) or new
     return old, new
 
 
@@ -368,7 +490,7 @@ def _anchor(diff: str, file: str, line: Any, side: str = "new") -> str | None:
     if span is None:
         return None
     first, last = span
-    lines = (diff or "").splitlines()
+    lines = _diff_lines(diff)
     section: list[str] = []
     sections: list[list[str]] = []
     for text in lines:
@@ -413,10 +535,14 @@ def _norm_anchor(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _fingerprint(dimension: str, file: str, text: str) -> tuple[str, str]:
+def _fingerprint_of(file: str, anchor_hash: str) -> str:
+    return hashlib.sha256((file + "\0" + anchor_hash).encode("utf-8")).hexdigest()
+
+
+def _fingerprint(file: str, text: str) -> tuple[str, str]:
+    """Identity of a finding's diff anchor: stable across lens tags, which vary per run."""
     anchor_hash = hashlib.sha256(_norm_anchor(text).encode("utf-8")).hexdigest()
-    fingerprint = hashlib.sha256((dimension + "\0" + file + "\0" + anchor_hash).encode("utf-8")).hexdigest()
-    return fingerprint, anchor_hash
+    return _fingerprint_of(file, anchor_hash), anchor_hash
 
 
 def _note_author(note: dict) -> tuple[str, str]:
@@ -566,6 +692,18 @@ def _prior_text(prior: dict) -> str:
     return "\n".join(str(prior.get(key) or "") for key in ("title", "body_md"))
 
 
+_SAME_FINDING_THRESHOLD = 0.55
+
+
+def _same_finding(prior: dict, finding: dict) -> bool:
+    """Whether an exact fingerprint match is plausibly the same finding, not another one on a repeated line."""
+    prior_text = _prior_text(prior).strip()
+    if not prior_text:
+        return True
+    return difflib.SequenceMatcher(None, prior_text.lower(),
+                                   _prior_text(finding).strip().lower()).ratio() >= _SAME_FINDING_THRESHOLD
+
+
 def reconcile(report: dict, context: dict, snapshot: dict, repo: str = ".") -> dict:
     """Return a copy of `report` with each finding's `memory` block filled in.
 
@@ -605,7 +743,7 @@ def reconcile(report: dict, context: dict, snapshot: dict, repo: str = ".") -> d
             finding["recommendation_md"] = str(finding["recommendation"])
         text = _anchor(context.get("diff", ""), finding["file"], finding["line"],
                        finding.get("anchor_side", "new"))
-        fp, anchor_hash = _fingerprint(dimension, finding["file"], text) if text and _norm_anchor(text) else (None, None)
+        fp, anchor_hash = _fingerprint(finding["file"], text) if text and _norm_anchor(text) else (None, None)
         if fp:
             current_counts[fp] = current_counts.get(fp, 0) + 1
         else:
@@ -628,9 +766,14 @@ def reconcile(report: dict, context: dict, snapshot: dict, repo: str = ".") -> d
                             (finding["file"], finding["line"]))
             matched_prior.add(fp)
             memory["fingerprint"] = fp = None
-        thread, human = _discussion_details(discussions, fp, finding, context)
-        memory["thread"], memory["human_context"] = thread, human
         previous = matches[0] if fp and len(matches) == 1 else None
+        diverged = previous is not None and not _same_finding(previous, finding)
+        if diverged:
+            warnings.append("Fingerprint at %s:%s matches a prior finding with different text; treating as new." %
+                            (finding["file"], finding["line"]))
+            previous = None
+        thread, human = _discussion_details(discussions, None if diverged else fp, finding, context)
+        memory["thread"], memory["human_context"] = thread, human
         if previous:
             matched_prior.add(fp)
             memory["match"] = "exact"
@@ -651,13 +794,11 @@ def reconcile(report: dict, context: dict, snapshot: dict, repo: str = ".") -> d
             memory["state"] = "carried"
         elif fp and not previous:
             for candidate in prior:
-                if (candidate.get("file") != finding["file"]
-                        or candidate.get("dimension") != memory["dimension"]
-                        or not candidate.get("fingerprint")):
+                if candidate.get("file") != finding["file"] or not candidate.get("fingerprint"):
                     continue
                 score = difflib.SequenceMatcher(None, _prior_text(candidate).lower(),
                                                _prior_text(finding).lower()).ratio()
-                if score < 0.55:
+                if score < _SAME_FINDING_THRESHOLD:
                     continue
                 candidate_thread, _ = _discussion_details(
                     discussions, candidate["fingerprint"], candidate, context)
@@ -800,7 +941,7 @@ def commit_report(report: dict, decisions: dict | None = None, receipts: dict | 
             # The ledger does not need a second copy of live discussion history.
             new_snapshot["discussions"] = []
             new_record = {**(record or {}), "schemaVersion": SCHEMA_VERSION,
-                          "snapshot": new_snapshot, "updated_at": time.time()}
+                          "fingerprintScheme": FINGERPRINT_SCHEME, "snapshot": new_snapshot, "updated_at": time.time()}
             write_json(ledger_path, new_record)
             _prune(directory, time.time())
     except OSError as exc:

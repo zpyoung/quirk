@@ -36,7 +36,7 @@ _QUICK_ACTION_RE = re.compile(r"^((?:[ \t]*>)*[ \t]*)/")
 _HTML_BLOCK_OPEN_RE = re.compile(
     r"^((?:[ \t]*>)*[ \t]*)<(?=!--|!\[CDATA\[|![A-Za-z]|\?|/?[A-Za-z])")
 _CODE_SPAN_OR_MENTION_RE = re.compile(
-    r"(?P<code>(?<!\\)(?P<ticks>`+).+?(?P=ticks))|(?P<mention>(?<!\w)@(?=[A-Za-z0-9_]))")
+    r"(?P<code>(?<![\\`])(?P<ticks>`+)(?!`).+?(?<!`)(?P=ticks)(?!`))|(?P<mention>(?<!\w)@(?=[A-Za-z0-9_]))")
 _LINE_BREAK_RE = re.compile(r"\r\n|[\r\u2028\u2029]")
 _POSTED_SLOTS = ("fix", "later", "detail")
 _DIGITS_RE = re.compile(r"[0-9]+")
@@ -341,6 +341,8 @@ def _details_parts(finding, why, reviewer_note):
     assumptions = finding.get("assumptions")
     if isinstance(assumptions, str):
         assumptions = [assumptions]
+    if assumptions is not None and not isinstance(assumptions, (list, tuple)):
+        raise ValueError("finding assumptions must be a list of strings")
     assumptions = [" ".join(str(item).split()) for item in (assumptions or []) if str(item).strip()]
     if not (body or aside or evidence or assumptions or reviewer_note):
         return []
@@ -519,7 +521,7 @@ def _unplaced_section(omitted, by_id):
         title = _title_of(item, by_id, "id") or str(item.get("id") or "finding")
         row = "- **%s:** %s" % (_line(item.get("disposition") or "Finding"), _line(title))
         if found.get("file"):
-            row += " (`%s:%s`)" % (_line(found["file"]), _line(found.get("line", "")))
+            row += " (`%s`)" % _line(("%s:%s" % (found["file"], found.get("line", ""))).replace("`", ""))
         if _text(found.get("impact")):
             row += " — %s" % _line(found["impact"])
         rows.append(row)
@@ -722,6 +724,7 @@ def _author_bodies(raw, decisions=None):
         report_sha256=_report_digest(raw))
     warnings.extend(overview_warnings)
     return {"findings": bodies, "overview": overview, "warnings": warnings,
+            "overview_plan": {"posted": posted, "omitted": omitted},
             "report_sha256": _report_digest(raw)}
 
 

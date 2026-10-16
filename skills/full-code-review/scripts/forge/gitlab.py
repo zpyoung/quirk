@@ -17,7 +17,7 @@ import shlex
 import subprocess
 from urllib.parse import quote, urlencode
 
-from forge import ForgeError, context_lines, default_run, hunk_lines, positive_int, valid_sha
+from forge import ForgeError, StrayComment, context_lines, default_run, hunk_lines, positive_int, valid_sha
 from forge import change_label as _change_label
 from forge import note_url as _note_url
 
@@ -334,8 +334,8 @@ def request_changes(run, host, project, iid):
         raise ForgeError("request-changes mutation failed: %s" % (result.stderr or result.stdout).strip()[:400])
     try:
         data = json.loads(result.stdout)
-        payload = data["data"]["mergeRequestRequestChanges"]
-    except (json.JSONDecodeError, KeyError, TypeError):
+        payload = (data.get("data") or {}).get("mergeRequestRequestChanges")
+    except (json.JSONDecodeError, AttributeError):
         raise ForgeError("request-changes mutation returned an invalid response")
     if not isinstance(payload, dict):
         reasons = [str(e.get("message", e)) if isinstance(e, dict) else str(e) for e in data.get("errors") or []]
@@ -514,7 +514,8 @@ class GitLabForge:
         note = notes[0] if isinstance(notes, list) and notes else {}
         if note.get("type") != "DiffNote":
             # a stale position silently degrades to a plain comment, so a missing DiffNote is a failure
-            raise ForgeError("GitLab created a plain comment instead of a DiffNote; check the position")
+            raise StrayComment(data.get("id") if isinstance(data, dict) else None, note.get("id"),
+                               note_url(self.host, self.project, number, note.get("id")))
         return {"published": True, "discussion_id": data.get("id"), "note_id": note.get("id"),
                 "url": note_url(self.host, self.project, number, note.get("id")), "head_sha": head_sha}
 

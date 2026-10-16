@@ -5,9 +5,9 @@
 
 Paths below use these roots:
 
-- `SRC` = `/Users/zpyoung/.claude/plugins/cache/sakura/sakura/1.9.7` (read-only port source)
+- `SRC` = the sakura plugin 1.9.7 copy in the Claude plugin cache (read-only port source)
 - `SRCS` = `SRC/skills/review-mr-combined`; a bare citation like "SRC `prepare_diff.py:567`" means `SRCS/scripts/prepare_diff.py`, and `glab-recipes.md` / `review_memory.py` citations mean `SRC/shared/mr/`
-- `Q` = `/Users/zpyoung/orca/workspaces/quirk/code-review` (this repo)
+- `Q` = the repository root
 - `SK` = `Q/skills/full-code-review`
 
 ## Architecture
@@ -318,7 +318,7 @@ Back-links: [Behavior & scenarios](logic.md#behavior--scenarios).
 
 | Flag | Meaning | Defined in |
 |---|---|---|
-| `<number>` / `--branch <name>` / `--local` | target | prepare_diff.py |
+| `--change <number>` / `--branch <name>` / `--local` | target | prepare_diff.py |
 | `-R <project>` | project when outside its checkout | prepare_diff.py |
 | `--forge github\|gitlab\|none` | override detection | detect_forge |
 | `--seat author\|reviewer` | only for mixed authorship | Seat detection |
@@ -328,6 +328,7 @@ Back-links: [Behavior & scenarios](logic.md#behavior--scenarios).
 | `--format html\|md\|both`, `--no-open` | render options | render_report.py |
 | `--add-guidance "<note>"` | capture a lesson, then stop | add_guidance.py |
 | `--stats` | per-lens keep/dismiss rates, then stop | review_memory.py stats |
+| `--deep [minutes]` | opt-in deep defect hunt | the [deep spec](../2026-10-16-full-code-review-deep/tech.md) |
 
 ## Data models / schemas
 

@@ -23,9 +23,16 @@ every other lens verifies.
 
 ## Likelihood
 
-Use the matrix and likelihood scale from the built-in rubric: Probable, Occasional,
-Remote, Improbable. Thin coverage on amount math or a missing idempotency key raises
+Pick Probable, Occasional, Remote, or Improbable, then read the risk level from the matrix
+below. Thin coverage on amount math or a missing idempotency key raises
 likelihood; a feature flag or shadow mode lowers it.
+
+| Likelihood \ Severity | Critical | Major | Minor | No Incident |
+|---|---|---|---|---|
+| Probable | Do Not Ship | High | Medium | Low |
+| Occasional | High | Medium | Low | Low |
+| Remote | Medium | Low | Low | Low |
+| Improbable | Low | Low | Low | Very Low |
 
 ## Output
 

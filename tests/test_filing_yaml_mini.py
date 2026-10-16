@@ -335,6 +335,11 @@ PARITY_FIXTURES = [
     "skip_globs:\n- \"*.lock\"\n- dist/**\nseverity_floor: Must fix\n",
     "a: don't touch # note\nb: it's 'q' # c\n",
     "a: [don't, 'x, y', \"q\"]\n",
+    "k: don't ' #c\n",
+    'k: a "b #c\n',
+    "k: a ' b #c\n",
+    "k: 'q #c' # real\n",
+    "- 'x # y' # real\n",
 ]
 
 
@@ -427,7 +432,17 @@ def test_quoted_mapping_keys_parse_to_the_same_key_as_unquoted(yaml_mini, text) 
     # document whose keys nothing matches, so a valid template resolves to no fields at all --
     # on exactly the machines this tier exists to serve.
     parsed = yaml_mini.parse(text, "quoted.yml")
-    assert all("'" not in key and '"' not in key for key in parsed)
+
+    def keys(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                yield key
+                yield from keys(value)
+        elif isinstance(node, list):
+            for item in node:
+                yield from keys(item)
+
+    assert all("'" not in key and '"' not in key for key in keys(parsed))
 
 
 def test_quoted_key_template_survives_discovery_on_the_mini_tier(yaml_mini) -> None:
@@ -452,3 +467,22 @@ def test_quoted_key_parsing_matches_pyyaml(yaml_mini, text) -> None:
     import yaml
 
     assert yaml_mini.parse(text, "quoted.yml") == yaml.safe_load(text)
+
+
+@pytest.mark.parametrize("text", ["- - x\n", "- - - z\n", "k:\n  - - x\n", "- - k: v\n"])
+def test_nested_block_sequence_is_rejected_not_kept_as_text(yaml_mini, text) -> None:
+    with pytest.raises(yaml_mini.TemplateParseError, match="nested sequences"):
+        yaml_mini.parse(text, "nested.yml")
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("k: don't ' #c\n", {"k": "don't '"}),
+        ('k: a "b #c\n', {"k": 'a "b'}),
+        ("k: a ' b #c\n", {"k": "a ' b"}),
+        ("k: 'q #c' # real\n", {"k": "q #c"}),
+    ],
+)
+def test_quote_inside_a_plain_scalar_does_not_hide_a_trailing_comment(yaml_mini, text, expected) -> None:
+    assert yaml_mini.parse(text, "plain.yml") == expected

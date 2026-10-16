@@ -125,7 +125,7 @@ def test_dedup_merges_lens_contract_and_area_by_severity_status_evidence_and_dim
     )
     assert len(result["findings"]) == 1
     found = result["findings"][0]
-    assert found["severity"] == "Must fix"
+    assert found["severity"] == "Should fix"
     assert found["verification_status"] == "confirmed"
     assert found["verified"] is True
     assert found["what_would_confirm"] is None
@@ -133,6 +133,31 @@ def test_dedup_merges_lens_contract_and_area_by_severity_status_evidence_and_dim
     assert found["repro"] == {"command": "python3 repro.py", "output": "failure"}
     assert found["dimensions"] == ["contract", "correctness", "db"]
     assert found["dimension"] == "contract"
+
+
+def test_dedup_representative_comes_from_verified_members_when_any_exist():
+    result = merge(
+        lens=[lens("L1", "Must fix", title="Plausible-only wording")],
+        candidates=[candidate("A1.1", line="12", summary="Checked defect")],
+        verdicts=[verdict("L1", severity="Must fix", verdict="plausible", what_would_confirm="Inspect config."),
+                  verdict("A1.1")],
+    )
+    [found] = result["findings"]
+    assert (found["severity"], found["title"], found["verified"]) == ("Should fix", "Checked defect", True)
+    assert found["what_would_confirm"] is None
+
+
+def test_dedup_of_only_plausible_members_keeps_strongest_severity_and_condition():
+    result = merge(
+        lens=[lens("L1", "Must fix")],
+        candidates=[candidate("A1.1", line="12")],
+        verdicts=[verdict("L1", severity="Must fix", verdict="plausible", what_would_confirm="Inspect config."),
+                  verdict("A1.1", verdict="plausible", what_would_confirm="Run it.")],
+    )
+    [found] = result["findings"]
+    assert found["severity"] == "Must fix"
+    assert found["verified"] is False
+    assert found["what_would_confirm"]
 
 
 def test_same_file_overlapping_ranges_merge_only_when_title_or_key_matches():
@@ -181,6 +206,17 @@ def test_unknown_checker_id_cannot_supply_evidence():
         merge(verdicts=[verdict("not-dispatched")])
 
 
+def test_failed_checker_withholds_flagged_lens_nit_instead_of_publishing_it_as_verified():
+    result = merge(
+        lens=[lens("L1", "Nit")],
+        budget={"budget_minutes": 60, "elapsed_minutes": 1, "cutoff_reached": False,
+                "checker_failures": {"L1": "checker timed out"}},
+    )
+    assert result["findings"] == []
+    assert result["incomplete"] is True
+    assert "⚠ Unchecked claims withheld: L1" in result["coverage_notes"]
+
+
 def test_failed_checker_withholds_only_its_claim_and_marks_review_incomplete():
     result = merge(
         candidates=[candidate("A1.1"), candidate("A1.2", line="20")],
@@ -214,6 +250,44 @@ def test_overlong_refinements_require_rewriting_instead_of_truncation(field, lim
         merge(candidates=[candidate()], verdicts=[verdict(**{field: "x" * (limit + 1)})])
 
 
+def test_overlong_finder_text_is_shortened_instead_of_aborting_the_merge():
+    long_summary = "Bad result " * 20
+    long_scenario = "The wrong result reaches users. " * 10
+    result = merge(
+        candidates=[candidate("A1.1", summary=long_summary, failure_scenario=long_scenario),
+                    candidate("A1.2", line="20", summary=long_summary)],
+        verdicts=[verdict("A1.1"), verdict("A1.2", verdict="refuted", reason="Guarded by caller.")],
+    )
+    [found] = result["findings"]
+    assert len(found["title"]) <= 80 and found["title"].endswith("…")
+    assert len(found["impact"]) <= 200
+    [dropped] = result["deep"]["checked_and_dropped"]
+    assert len(dropped["title"]) <= 80
+
+
+def test_overlong_refinement_error_names_the_candidate():
+    with pytest.raises(ValueError, match="A1.1"):
+        merge(candidates=[candidate()], verdicts=[verdict(refined_title="x" * 81)])
+
+
+def test_lens_finding_without_title_gets_one_from_the_first_clause_of_its_issue():
+    item = lens(severity="Nit", issue="Result is wrong. A second sentence follows.")
+    del item["title"]
+    [found] = merge(lens=[item])["findings"]
+    assert found["title"] == "Result is wrong."
+    refuted = lens("L2", "Should fix", issue="Other defect: details follow.")
+    del refuted["title"]
+    result = merge(lens=[refuted], verdicts=[verdict("L2", verdict="refuted", reason="Guarded.")])
+    assert result["deep"]["checked_and_dropped"][0]["title"] == "Other defect:"
+
+
+def test_titleless_candidate_without_issue_text_is_rejected_with_its_id():
+    item = lens(severity="Nit")
+    del item["title"], item["issue"]
+    with pytest.raises(ValueError, match="title for L1"):
+        merge(lens=[item])
+
+
 def test_area_coverage_trust_and_budget_are_attached_without_mutating_inputs():
     areas = {"areas": [{"id": "A1", "status": "completed"},
                        {"id": "A2", "status": "read_only_degraded", "degraded_reason": "sandbox unavailable"},
@@ -237,11 +311,27 @@ def test_area_coverage_trust_and_budget_are_attached_without_mutating_inputs():
 @pytest.mark.parametrize("budget", [
     {"elapsed_minutes": 2, "cutoff_reached": False},
     {"budget_minutes": 60, "elapsed_minutes": -1, "cutoff_reached": False},
+    {"budget_minutes": 60, "elapsed_minutes": -0.5, "cutoff_reached": False},
+    {"budget_minutes": 0, "elapsed_minutes": 1, "cutoff_reached": False},
+    {"budget_minutes": 10 ** 400, "elapsed_minutes": float("nan"), "cutoff_reached": False},
     {"budget_minutes": 60, "elapsed_minutes": 1, "cutoff_reached": "no"},
 ])
 def test_bad_budget_fields_are_rejected(budget):
     with pytest.raises(ValueError, match="budget"):
         merge(budget=budget)
+
+
+def test_zero_elapsed_and_out_of_float_range_integers_are_accepted_and_compared_exactly():
+    result = merge(budget={"budget_minutes": 10 ** 400, "elapsed_minutes": 10 ** 400 + 1, "cutoff_reached": False})
+    assert result["incomplete"] is True
+    assert merge(budget={"budget_minutes": 60, "elapsed_minutes": 0, "cutoff_reached": False})["incomplete"] is False
+
+
+@pytest.mark.parametrize("area", [{"id": "A1"}, {"id": "A1", "status": "running"}, {"id": "A1", "status": "bogus"}])
+def test_area_without_a_completed_status_is_unreached(area):
+    result = merge(areas={"areas": [area]})
+    assert result["deep"]["unreached_areas"] == ["A1"]
+    assert result["incomplete"] is True
 
 
 @pytest.mark.parametrize("trust,note", [
@@ -255,6 +345,57 @@ def test_disabled_execution_is_reported(trust, note):
     assert result["assumptions"] == []
     assert result["incomplete"] is False
     assert result["verdict_override"] is None
+
+
+def test_isolation_warning_is_reported_only_when_execution_is_enabled():
+    enabled = merge(trust={"allowed": True, "consent": True, "sandbox_kind": "worktree",
+                           "copy_kind": "worktree", "isolation_warning": "not enforced"})
+    assert "⚠ Deep execution isolation: not enforced" in enabled["coverage_notes"]
+    assert "not enforced" in enabled["assumptions"]
+    disabled = merge(trust={"allowed": True, "consent": False, "isolation_warning": "not enforced"})
+    assert not any("isolation" in note for note in disabled["coverage_notes"])
+    assert disabled["assumptions"] == []
+
+
+def test_over_budget_run_is_incomplete_with_override_and_note():
+    result = merge(budget={"budget_minutes": 60, "elapsed_minutes": 61, "cutoff_reached": False})
+    assert result["incomplete"] is True
+    assert result["verdict_override"] == "Incomplete review"
+    assert "⚠ Deep review exceeded its time budget" in result["coverage_notes"]
+
+
+def test_checker_verdict_and_failure_inputs_must_be_unambiguous():
+    with pytest.raises(ValueError, match="duplicate checker verdict"):
+        merge(candidates=[candidate()], verdicts=[verdict(), verdict()])
+    base = {"budget_minutes": 60, "elapsed_minutes": 1, "cutoff_reached": False}
+    with pytest.raises(ValueError, match="unchecked candidate"):
+        merge(candidates=[candidate()], verdicts=[verdict()],
+              budget=dict(base, checker_failures={"nope": "timed out"}))
+    with pytest.raises(ValueError, match="unchecked candidate"):
+        merge(candidates=[candidate()], verdicts=[verdict()],
+              budget=dict(base, checker_failures={"A1.1": "timed out"}))
+
+
+@pytest.mark.parametrize("trust", [
+    {"allowed": "yes", "consent": True},
+    {"allowed": True, "consent": "no"},
+    {"allowed": True},
+])
+def test_non_boolean_trust_fields_are_rejected(trust):
+    with pytest.raises(ValueError, match="booleans"):
+        merge(trust=trust)
+
+
+def test_disabled_trust_without_reason_is_rejected():
+    with pytest.raises(ValueError, match="trust reason"):
+        merge(trust={"allowed": False, "consent": False})
+
+
+def test_trust_that_disallows_execution_needs_no_consent_field():
+    result = merge(trust={"allowed": False, "reason": "fork author"})
+    assert result["deep"]["execution_consent"] is False
+    assert result["deep"]["execution_enabled"] is False
+    assert result["coverage_notes"] == ["⚠ Deep repros disabled: fork author"]
 
 
 def test_cli_writes_json_via_report_helper(tmp_path):
@@ -271,6 +412,22 @@ def test_cli_writes_json_via_report_helper(tmp_path):
     result = subprocess.run([sys.executable, str(SCRIPT), *argv, "--out", str(target)], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
     assert json.loads(target.read_text(encoding="utf-8"))["findings"][0]["id"] == "A1.1"
+
+
+def test_cli_deeply_nested_json_exits_two_with_json_error(tmp_path):
+    inputs = {"lens-findings": [], "deep-candidates": [candidate()],
+              "checker-verdicts": [verdict()], "area-map": {"areas": []},
+              "trust": {"allowed": True, "consent": True},
+              "budget": {"budget_minutes": 60, "elapsed_minutes": 0, "cutoff_reached": False}}
+    argv = []
+    for flag, content in inputs.items():
+        path = tmp_path / (flag + ".json")
+        path.write_text("[" * 100000 if flag == "deep-candidates" else json.dumps(content), encoding="utf-8")
+        argv.extend(["--" + flag, str(path)])
+    result = subprocess.run([sys.executable, str(SCRIPT), *argv, "--out", str(tmp_path / "out.json")],
+                            capture_output=True, text=True)
+    assert result.returncode == 2
+    assert isinstance(json.loads(result.stdout)["error"], str)
 
 
 @pytest.mark.parametrize("invalid_input", ["missing", "invalid-json", "wrong-type", "missing-verdict"])

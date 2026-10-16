@@ -492,3 +492,68 @@ def test_pack_files_with_spaces_and_directories_named_like_files_at_a_ref(tmp_pa
     rc, policy, _, _ = _resolve(tmp_path, repo, ref=target, monkeypatch=monkeypatch)
     assert rc == 0
     assert _lens(policy, "spaced")["run_when"] == "always"
+
+
+def test_explicit_pack_that_is_not_a_directory_exits_2(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    rc, policy, _, out = _resolve(tmp_path, repo, pack=tmp_path / "no-such-org-pack",
+                                  monkeypatch=monkeypatch)
+    assert rc == 2 and policy is None
+    assert "no-such-org-pack" in json.loads(out)["error"]
+
+
+def test_explicit_empty_pack_warns_that_nothing_was_applied(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    empty = tmp_path / "empty-pack"
+    empty.mkdir()
+    rc, policy, _, _ = _resolve(tmp_path, repo, pack=empty, monkeypatch=monkeypatch)
+    assert rc == 0
+    assert any("empty-pack" in w and "no pack policy" in w for w in policy["warnings"])
+
+
+def test_reviewer_seat_follows_a_symlinked_review_md_to_its_in_repo_target(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    _write(repo / "docs" / "policy.md", "---\nseverity_floor: Must fix\n---\n")
+    (repo / "REVIEW.md").symlink_to("docs/policy.md")
+    target = _commit(repo, "target")
+    rc, policy, _, _ = _resolve(tmp_path, repo, ref=target, monkeypatch=monkeypatch)
+    assert rc == 0
+    assert policy["severity_floor"] == "Must fix"
+    assert all("docs/policy.md" not in Path(p).read_text() for p in policy["guidance_files"])
+
+
+def test_reviewer_seat_rejects_a_symlink_that_leaves_the_repo(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    (repo / "REVIEW.md").symlink_to("../outside.md")
+    target = _commit(repo, "target")
+    rc, policy, _, out = _resolve(tmp_path, repo, ref=target, monkeypatch=monkeypatch)
+    assert rc == 2 and policy is None
+    assert "REVIEW.md" in json.loads(out)["error"]
+
+
+def test_front_matter_after_a_byte_order_mark_still_applies(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    _write(repo / "REVIEW.md", "﻿---\nseverity_floor: Must fix\n---\nBody.\n")
+    rc, policy, _, _ = _resolve(tmp_path, repo, monkeypatch=monkeypatch)
+    assert rc == 0 and policy["severity_floor"] == "Must fix"
+
+
+def test_non_string_lens_id_exits_2_naming_the_file(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    _write(repo / ".quirk" / "review" / "lenses" / "bad.md",
+           "---\nid:\n- a\n- b\nrun_when: always\n---\nChecklist.\n")
+    rc, policy, _, out = _resolve(tmp_path, repo, monkeypatch=monkeypatch)
+    assert rc == 2 and policy is None
+    assert "bad.md" in json.loads(out)["error"]
+
+
+@pytest.mark.parametrize("path,pattern,expected", [
+    ("src/a.py", "src/**/*.py", True),
+    ("src/x/y/a.py", "src/**/*.py", True),
+    ("a.lock", "**/*.lock", True),
+    ("src/a/b/c.py", "src/**/b/**/c.py", True),
+    ("src/b/c.py", "src/**/b/**/c.py", True),
+    ("other/a.py", "src/**/*.py", False),
+])
+def test_matches_lets_double_star_segments_span_zero_directories(path, pattern, expected):
+    assert m._matches(path, pattern) is expected

@@ -5,7 +5,7 @@ import pytest
 
 import post_reviewer_review as reviewer
 import prepare_diff
-from forge import ForgeError, gitlab
+from forge import ForgeError, StrayComment, gitlab
 from forge.gitlab import GitLabForge
 
 HEAD = "a" * 40
@@ -210,6 +210,25 @@ def test_request_changes_reports_graphql_errors_when_the_mutation_result_is_null
     empty = json.dumps({"data": {"mergeRequestRequestChanges": None}})
     with pytest.raises(ForgeError, match="empty mutation result"):
         gitlab.request_changes(_runner(empty), "gitlab.example", "o/r", 7)
+
+
+def test_request_changes_reports_graphql_errors_when_data_is_null():
+    body = json.dumps({"data": None, "errors": [{"message": "You are not allowed to request changes"}]})
+    with pytest.raises(ForgeError, match="not allowed to request changes"):
+        gitlab.request_changes(_runner(body), "gitlab.example", "o/r", 7)
+    with pytest.raises(ForgeError, match="invalid response"):
+        gitlab.request_changes(_runner("[]"), "gitlab.example", "o/r", 7)
+
+
+def test_a_plain_comment_instead_of_a_diffnote_names_the_stray_discussion():
+    def api_call(host, method, endpoint, payload=None, timeout=120):
+        return {"id": "d9", "notes": [{"id": 31, "type": "DiscussionNote"}]}
+
+    forge = GitLabForge("gitlab.example", "o/r", api_call=api_call)
+    with pytest.raises(StrayComment) as caught:
+        forge.post_inline(7, "body", {"position_type": "text"}, HEAD)
+    assert (caught.value.discussion_id, caught.value.note_id) == ("d9", 31)
+    assert "31" in caught.value.url and "d9" in str(caught.value)
 
 
 def test_complete_approves_with_the_head_sha_and_comment_only_calls_nothing():

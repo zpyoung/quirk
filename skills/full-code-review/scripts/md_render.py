@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small, safe Markdown renderer for the combined-review report."""
+"""Small, safe Markdown renderer for the full-code-review report."""
 
 import html
 import itertools
@@ -463,7 +463,9 @@ def split_blocks(text):
     """Split Markdown into block tokens without allowing paragraphs to swallow blocks."""
     if text is None or text == "":
         return []
-    lines = str(text).splitlines()
+    lines = str(text).replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if lines[-1] == "":
+        lines.pop()
     blocks = []
     pos = 0
     while pos < len(lines):

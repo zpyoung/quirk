@@ -328,7 +328,7 @@ def main(argv: list[str] | None = None) -> int:
             write_json(args.out, result)
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0 if result["passed"] else 1
-    except (OSError, ValueError, TypeError) as exc:
+    except (OSError, ValueError, TypeError, RecursionError) as exc:
         print(json.dumps({"error": str(exc)}))
         return 2
 

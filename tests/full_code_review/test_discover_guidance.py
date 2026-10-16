@@ -147,3 +147,26 @@ def test_unreadable_changed_files_is_tolerated_without_exclude_changed(tmp_path,
     missing = Path(tmp_path) / "nope.txt"
     assert m.main(["--git-root", str(root), "--changed-files", str(missing)]) == 0
     assert json.loads(capsys.readouterr().out)["target_repo"]["changed_guidance"] == []
+
+
+def test_exclude_changed_withholds_a_symlink_whose_target_the_change_edits(tmp_path):
+    root = _guidance_repo(tmp_path)
+    (root / "CLAUDE.md").unlink()
+    (root / "CLAUDE.md").symlink_to("AGENTS.md")
+
+    target = m.gather(str(root), ["AGENTS.md"], exclude_changed=True)
+
+    assert target["changed_guidance"] == ["AGENTS.md", "CLAUDE.md"]
+    assert target["claude_md"] == []
+    assert target["other"] == []
+
+
+def test_gather_drops_symlink_loops(tmp_path):
+    root = _guidance_repo(tmp_path)
+    (root / ".claude" / "rules" / "loop.md").symlink_to("loop.md")
+    (root / "pkg" / "loop.py").symlink_to("loop.py")
+
+    target = m.gather(str(root), ["pkg/loop.py"])
+
+    assert [Path(p).name for p in target["rules"]] == ["a.md"]
+    assert [Path(p).relative_to(root.resolve()).as_posix() for p in target["claude_md"]] == ["CLAUDE.md"]

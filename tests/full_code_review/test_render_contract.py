@@ -147,6 +147,7 @@ def test_unreached_deep_areas_always_force_incomplete_verdict(verdict):
     assert prepared["run"]["incomplete"] is True
     assert prepared["meta"]["verdict"] == "Incomplete review"
     assert not [warning for warning in warnings if "Unknown run field" in warning]
+    assert not [warning for warning in warnings if "Incomplete reports can only" in warning]
     html = m.render_html(value, TEMPLATE)
     assert "Unreached areas: A7, A8" in html
     assert "unknown lenses" not in html

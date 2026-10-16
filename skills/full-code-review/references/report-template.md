@@ -112,7 +112,7 @@ in the report for triage but never posts, even if marked Blocking or Will fix.
 
 **Dimensions:** correctness, coordinator verification
 
-**Location:** `customcheckout/api/controller.py:211-261`
+**Location:** `billing/api/controller.py:211-261`
 
 **Impact:** Merchants see per-type credit balances that do not add up to the total.
 
@@ -226,7 +226,7 @@ seat: reviewer
 severity: Should fix
 disposition: Non-blocking
 dimensions: [correctness]
-file: customcheckout/api/controller.py
+file: billing/api/controller.py
 line: 211
 head_sha: 6b6e4be0…
 verified: true
@@ -347,10 +347,11 @@ All report text is neutralized before it enters a body:
   it as a quick action under the posting user's account. GitLab's quick-action extractor
   may not skip the same fences the builder tracks, so a fenced `/command` shows a
   visible backslash.
-- Outside a code fence, a line-leading raw HTML block opener has its `<` escaped as
-  `&lt;`, so it cannot swallow the rest of the note. The openers are `<!--`, `<pre`,
-  `<script`, `<style`, `<textarea`, `<?`, `<!` followed by a letter, and `<![CDATA[`.
-  Other tags are left alone.
+- Outside a code fence, a line-leading `<` that starts any tag, comment, declaration,
+  processing instruction, or CDATA section has its `<` escaped as `&lt;`, so it cannot
+  swallow the rest of the note.
+- Outside code fences and code spans, an `@` mention gets a zero-width space after the
+  `@`, so it does not notify anyone.
 - A dangling code fence is closed.
 - The block carries review mechanics only (IDs, dimensions, flags), never secrets: it is
   hidden, not private.

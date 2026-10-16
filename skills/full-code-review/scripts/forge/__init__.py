@@ -30,6 +30,22 @@ class ForgeError(RuntimeError):
         self.code = code
 
 
+class StrayComment(ForgeError):
+    """An inline create succeeded but the forge made a plain comment, not a positioned one.
+
+    The note exists on the change, so its ids are kept for the caller to record and for
+    the user to delete.
+    """
+
+    def __init__(self, discussion_id, note_id, url):
+        super().__init__("the forge created a plain comment instead of an inline one "
+                         "(discussion %s, note %s, %s); delete it and check the position"
+                         % (discussion_id, note_id, url), "validation")
+        self.discussion_id = discussion_id
+        self.note_id = note_id
+        self.url = url
+
+
 def default_run(cmd, input_text=None, timeout=120, env=None):
     """Run a command, mapping launch failures and timeouts to a non-zero CompletedProcess."""
     try:
@@ -67,6 +83,10 @@ def _header_path(text, prefix):
     text = text.split("\t", 1)[0]
     if text == "/dev/null":
         return None
+    if text.startswith('"'):
+        # imported lazily because prepare_diff imports this package
+        from prepare_diff import _decode_git_path
+        text = _decode_git_path(text) or text
     return text[len(prefix):] if text.startswith(prefix) else text
 
 
@@ -157,7 +177,10 @@ def parse_origin(url):
     host = None
     project = ""
     if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", value):
-        parsed = urlsplit(value)
+        try:
+            parsed = urlsplit(value)
+        except ValueError:
+            return None, ""
         host = parsed.hostname.lower() if parsed.hostname else None
         try:
             port = parsed.port
@@ -173,7 +196,7 @@ def parse_origin(url):
             project = match.group(2)
         else:
             project = value
-    project = re.sub(r"\.git$", "", project).strip("/")
+    project = re.sub(r"\.git$", "", project.strip("/")).strip("/")
     return host, project
 
 
