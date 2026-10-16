@@ -3679,7 +3679,23 @@ def test_verify_reused_checks_supports_four_argument_api(
         checks = verify(reuse_file, repo, [command], resolved)
     assert checks[0]["reused"] is True
     assert not (repo / "check-marker").exists()
-    assert verify(reuse_file, repo, [command], None)[0]["reused"] is True
+
+
+@pytest.mark.parametrize("resolved", [
+    None, {}, {"target_kind": None}, {"target_kind": "path"},
+    {"target_kind": "unknown"}, "worktree", ["worktree"],
+])
+@pytest.mark.parametrize("clean_tree", [False, True])
+def test_verify_reused_checks_requires_resolved_git_scope(tmp_path, ar_api, resolved, clean_tree):
+    repo, work = _optimization_repo(tmp_path)
+    captured, _ = _optimization_resolve(repo, work)
+    command, _, reuse_file = _optimization_reuse(repo, work, captured, clean_tree=clean_tree)
+    _touch(repo / "src/main.py", "changed after capture\n")
+    with pytest.raises(
+        ar_api["UsageError"],
+        match="^reuse-check requires a resolved git-range or worktree target$",
+    ):
+        ar_api["verify_reused_checks"](reuse_file, repo, [command], resolved)
 
 
 def test_verify_reused_checks_explicit_scope_overrides_resolved(tmp_path, ar_api):
@@ -3815,17 +3831,72 @@ def test_path_excerpts_are_restricted_to_the_reviewed_file(tmp_path, ar_api, inc
     assert "unreviewed-secret" not in excerpt
 
 
+@pytest.mark.parametrize("outside", [False, True])
+@pytest.mark.parametrize("absolute_target", [False, True])
+@pytest.mark.parametrize("absolute_citation", [False, True])
+def test_path_excerpts_accept_exact_target_outside_repo_or_absolute_citations(
+    tmp_path, ar_api, outside, absolute_target, absolute_citation,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    relative = "../review.py" if outside else "vendor/review.py"
+    target = _touch(repo / relative, "reviewed\n" * 250).resolve()
+    other = _touch(tmp_path / "other.py", "unreviewed-secret\n")
+    (repo / "escape.py").symlink_to(other)
+    resolved = {
+        "target_kind": "path",
+        "target_ref": str(target) if absolute_target else relative,
+        "size_metric": 250,
+    }
+    citation = str(target) if absolute_citation else relative
+    excerpt = ar_api["extract_diff_excerpts"]([_finding(evidence=[
+        {"kind": "file-line", "ref": f"{citation}:1", "quote": "reviewed"},
+        {"kind": "file-line", "ref": f"{other}:1", "quote": "unreviewed-secret"},
+        {"kind": "file-line", "ref": "../other.py:1", "quote": "unreviewed-secret"},
+        {"kind": "file-line", "ref": "escape.py:1", "quote": "unreviewed-secret"},
+    ])], resolved, repo)
+    assert "1: reviewed" in excerpt
+    assert "250: reviewed" not in excerpt
+    assert "unreviewed-secret" not in excerpt
+    assert "# escape.py\n" not in excerpt
+
+
 @pytest.mark.parametrize("include_all", [False, True])
-def test_diff_excerpts_respect_include_all_for_cited_context(tmp_path, ar_api, include_all):
-    patch = _touch(tmp_path / "d.patch", _diff_with_added_lines(250))
-    _touch(tmp_path / "vendor/private.py", "excluded-secret\n")
+@pytest.mark.parametrize("explicit_diff", [False, True])
+def test_diff_excerpts_respect_include_all_for_cited_context(
+    tmp_path, ar_api, include_all, explicit_diff,
+):
+    repo, work = _optimization_repo(tmp_path)
+    _touch(repo / "src/large.py", "reviewed\n" * 250)
+    _touch(repo / "vendor/private.py", "excluded-secret\n")
+    extra = ("--diff-file", str(_touch(work / "d.patch", _diff_with_added_lines(250)))) \
+        if explicit_diff else ()
+    if include_all:
+        extra += ("--include-all",)
+    resolved, _ = _optimization_resolve(repo, work, "WORKTREE", *extra)
     excerpt = ar_api["extract_diff_excerpts"]([_finding(evidence=[
         {"kind": "file-line", "ref": "vendor/private.py:1", "quote": "excluded-secret"},
+    ])], resolved, repo)
+    assert ("1: excluded-secret" in excerpt) is (include_all or explicit_diff)
+
+
+@pytest.mark.parametrize("path", ["vendor/review.py", "Cargo.lock"])
+@pytest.mark.parametrize("target_kind,target_ref", [
+    ("git-range", "main..HEAD"), ("worktree", "WORKTREE"),
+])
+def test_explicit_diff_excerpts_preserve_cited_default_exclusions(
+    tmp_path, ar_api, path, target_kind, target_ref,
+):
+    patch = _touch(tmp_path / "d.patch", _diff_with_added_lines(250).replace("x.py", path))
+    excerpt = ar_api["extract_diff_excerpts"]([_finding(evidence=[
+        {"kind": "file-line", "ref": f"{path}:100", "quote": "line 99"},
     ])], {
-        "target_kind": "git-range", "target_ref": "main..HEAD", "diff_file": str(patch),
-        "size_metric": 250, "include_all": include_all,
+        "target_kind": target_kind, "target_ref": target_ref, "diff_file": str(patch),
+        "size_metric": 250, "include_all": False,
     }, tmp_path)
-    assert ("1: excluded-secret" in excerpt) is include_all
+    assert not (tmp_path / path).exists()
+    assert f"+++ b/{path}\n" in excerpt
+    assert "+line 99\n" in excerpt
 
 
 @pytest.mark.parametrize("counter_evidence", [

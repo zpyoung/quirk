@@ -524,7 +524,8 @@ def verify_reused_checks(
     target: str = "", diff_file: str | None = None,
 ) -> list[dict[str, Any]]:
     """Accept check results only when their tree, worktree and command identities match."""
-    resolved = resolved or {}
+    if not isinstance(resolved, dict) or resolved.get("target_kind") not in ("git-range", "worktree"):
+        raise UsageError("reuse-check requires a resolved git-range or worktree target")
     target = target or resolved.get("target_ref", "")
     if diff_file is None:
         diff_file = resolved.get("diff_file")
@@ -2022,9 +2023,9 @@ def extract_diff_excerpts(
     parts: list[str] = []
     root = repo_root.resolve()
     target_kind = resolved.get("target_kind")
-    include_all = bool(resolved.get("include_all", False))
+    include_all = bool(resolved.get("include_all", False)) or bool(resolved.get("diff_file"))
     target_path = None
-    if target_kind == "path":
+    if target_kind == "path" and resolved.get("target_ref"):
         target = Path(resolved.get("target_ref", ""))
         target_path = (target if target.is_absolute() else repo_root / target).resolve()
     excluded = resolved.get("excluded_paths", [])
@@ -2032,20 +2033,24 @@ def extract_diff_excerpts(
         parts.append("# Excluded by default diff hygiene: " + ", ".join(excluded) + "\n")
     for path in file_order:
         relative_path = PurePosixPath(path)
-        if relative_path.is_absolute() or ".." in relative_path.parts:
+        if target_kind != "path" and (
+            relative_path.is_absolute() or ".." in relative_path.parts
+        ):
             continue
         try:
-            source = (repo_root / path).resolve()
+            source = Path(path)
+            source = (source if source.is_absolute() else repo_root / source).resolve()
         except (OSError, RuntimeError):
             continue
-        if source == root or not source.is_relative_to(root):
-            continue
         if target_kind == "path":
-            if source != target_path:
+            if source != target_path or not source.is_file():
                 continue
-        elif is_excluded_path(path, include_all) \
-                or is_excluded_path(source.relative_to(root).as_posix(), include_all):
-            continue
+        else:
+            if source == root or not source.is_relative_to(root):
+                continue
+            if is_excluded_path(path, include_all) \
+                    or is_excluded_path(source.relative_to(root).as_posix(), include_all):
+                continue
         if path in selected:
             parts.append(file_headers[path] + "".join(selected[path]))
         if not source.is_file():
