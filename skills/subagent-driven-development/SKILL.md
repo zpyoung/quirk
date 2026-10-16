@@ -532,15 +532,15 @@ and the final loop re-examines everything anyway.
 lenses. Record `ROUND_<r>_HEAD` at the start of every final round; for `r >= 2`, set
 `LAST_ROUND_HEAD = ROUND_<r-1>_HEAD`.
 
-**Final Rounds 2–5** use closure mode when every fixer in round `r-1` stayed within its declared
-component `scope.files`. Set `target` to `"$LAST_ROUND_HEAD..HEAD"` and keep `--depth deep`.
+**Final Rounds 2–5** use closure mode only when every fixer in round `r-1` stayed within its declared
+component `scope.files` and required no wave re-plan. Set `target` to `"$LAST_ROUND_HEAD..HEAD"` and keep `--depth deep`.
 Append a `### Closure Round Verification` section to each lens's `criteria`, carrying only that
 lens's prior accepted findings filtered by `id_prefix`: `C` gets `C*`, `S` gets `S*`, `X` gets `X*`.
 Include the fix delta and touched contract seams (`scope.files` of the fix batch); omit fixer
 narratives and adjudication reasoning. Never put prior accepted findings in `dismissed[]`.
 The reviewer omits fixed findings, retains original IDs for still-open ones, and uses `"id": null`
-for new regressions. Fall back to full discovery over `RUN_BASE..HEAD` only if a fixer modified
-files outside its declared component scope; this does not waive Step 6's scope-violation gate.
+for new regressions. Fall back to full discovery over `RUN_BASE..HEAD` if any fixer in round `r-1`
+modified files outside its declared component scope or required a wave re-plan; this does not waive Step 6's scope-violation gate.
 
 The review itself is delegated to **quirk:adversarial-review**. Invoke it once per lens, all three
 concurrently:
