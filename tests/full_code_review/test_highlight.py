@@ -105,6 +105,22 @@ def test_builtin_backend_keeps_the_invariant_and_its_language_set(builtin):
     assert h.language_for_path("a/b.py") == "python" and h.language_for_path("a/b.tsx") is None
 
 
+def test_builtin_yaml_colours_every_key_not_only_the_first(builtin):
+    out = h.highlight("a: 1\nb: 2\n  c: 3\n", "yaml")
+    assert out.count("tok--property") == 3
+
+
+@pytest.mark.parametrize("language", ["python", "yaml", "diff"])
+def test_crlf_input_is_read_as_lf_on_both_backends(language, monkeypatch):
+    source = "x = 1\r\ny = 2\r\n"
+    expected = html.escape(source.replace("\r\n", "\n"), quote=True)
+    assert STRIP.sub("", h.highlight(source, language)) == expected
+    assert [STRIP.sub("", line) for line in h.highlight_lines(source.split("\n"), language)] == expected.split("\n")
+    monkeypatch.setattr(h, "_pygments_lexers", None)
+    monkeypatch.setattr(h, "_LEXERS", {})
+    assert STRIP.sub("", h.highlight(source, language)) == expected
+
+
 def test_builtin_json_property_keys_differ_from_string_values(builtin):
     out = h.highlight('{"k": "v"}', "json")
     assert 'tok--property' in out and 'tok--string' in out

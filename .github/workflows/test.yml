@@ -23,6 +23,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - run: pip install pytest
+      - run: pip install pytest pygments
 
       - run: pytest -q

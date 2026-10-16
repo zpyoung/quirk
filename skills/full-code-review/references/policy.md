@@ -16,9 +16,10 @@ Each layer overrides the one before it:
 4. **`REVIEW.md`**: the repo-root file plus any `REVIEW.md` in an ancestor directory of a
    changed file. A deeper file overrides a shallower one key by key.
 
-**In the reviewer seat, the project pack and `REVIEW.md` are read from the target
-branch** (`--policy-ref <target SHA>`, taken from the context's `refs.base`), so a
-change cannot weaken its own review by editing them. The flag is required in the
+**In the reviewer seat, the project pack and `REVIEW.md` are read at the merge base**
+(`--policy-ref <merge-base SHA>`, taken from the context's `refs.base`: the commit the
+change branched from), so a change cannot weaken its own review by editing them. Policy
+that landed on the target branch after that point does not apply. The flag is required in the
 reviewer seat: `resolve_policy.py` exits 2 for a reviewer context without it, unless
 the run is diff-only. Files read from a ref are written under `policy-files/` next to
 `policy.json` so lenses can read them from disk.

@@ -15,7 +15,7 @@ GROUPS = render_report.DISPOSITIONS
 GROUP_RE = re.compile(r"^## (Will fix|Fix later|Needs detail|Ignore|Blocking|Non-blocking|Question|Drop|Undecided) \((\d+)\)$")
 ITEM_RE = re.compile(r"^- \*\*(F\d+)\*\* — (.+?)\s*$")
 ANCHOR_RE = re.compile(r"^  `(.+)` · (Must fix|Should fix|Nit)$")
-NOTE_RE = re.compile(r"^  > (.*)$")
+NOTE_RE = re.compile(r"^  >(?: (.*))?$")
 REPLY_RE = re.compile(r"^  reply: ([1-9][0-9]{0,18})$")
 HANDOFF_DELIM = "<!-- quirk-review handoff: not validated, not used for posting -->"
 
@@ -103,11 +103,11 @@ def parse_export(text, prepared):
                 reply_note_id = int(reply_match.group(1))
                 index += 1
             notes = []
-            while index < len(lines) and lines[index].startswith("  > "):
+            while index < len(lines) and lines[index].startswith("  >"):
                 note_match = NOTE_RE.match(lines[index])
                 if not note_match:
                     raise ValueError("finding %s has an invalid note line" % finding_id)
-                notes.append(note_match.group(1))
+                notes.append(note_match.group(1) or "")
                 index += 1
             seen[finding_id] = {
                 "id": finding_id, "slot": slot, "disposition": label,
@@ -158,6 +158,12 @@ _report_sha256 = review_memory._report_digest
 
 
 def validate(report, paste):
+    """Validate a triage paste against the report and return its decisions.
+
+    The decisions come from the report's own findings; the paste only chooses groups and
+    notes. The result carries the report's sha256 so later steps can tell it is for this
+    report. Raises ValueError when the paste is malformed, incomplete, or does not match.
+    """
     prepared, warnings = render_report._prepare_report(report)
     result = parse_export(paste, prepared)
     result["report_sha256"] = _report_sha256(report)

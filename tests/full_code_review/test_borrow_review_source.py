@@ -85,6 +85,7 @@ def test_stale_head_aborts_without_touching_caller(tmp_path):
                          "--out", str(tmp_path / "source.json")])
     assert rc == 2 and "head moved" in result["error"]
     assert run("git", "status", "--porcelain=v1", cwd=local).stdout == before
+    assert run("git", "for-each-ref", "refs/quirk-review", cwd=local).stdout == ""
 
 
 def test_no_matching_clone_requires_explicit_choice_and_diff_only_is_structured(tmp_path):
@@ -259,3 +260,29 @@ def test_acquire_reports_an_origin_lookup_timeout_as_json_error(tmp_path, monkey
     rc, result = invoke(["acquire", "--context", str(context), "--repo", str(local),
                          "--out", str(tmp_path / "source.json")])
     assert rc == 2 and "origin" in result["error"]
+
+
+def test_release_cleans_up_an_interrupted_acquire_git_never_registered(tmp_path):
+    local, out, manifest = acquired(tmp_path)
+    worktree = Path(manifest["path"])
+    run("git", "worktree", "remove", "--force", str(worktree), cwd=local)
+    worktree.mkdir()
+    rewrite(out, acquisition="creating")
+    rc, result = invoke(["release", "--manifest", str(out)])
+    assert rc == 0 and result["released"] is True
+    assert not worktree.exists() and not Path(manifest["cleanup_root"]).exists()
+    assert run("git", "for-each-ref", "refs/quirk-review", cwd=local).stdout == ""
+
+
+def test_release_names_a_review_ref_it_could_not_delete(tmp_path, monkeypatch):
+    _, out, manifest = acquired(tmp_path)
+    real_run = m._run
+
+    def failing_update_ref(cmd, timeout=180, env=None):
+        if "update-ref" in cmd:
+            return type("Result", (), {"returncode": 1, "stdout": "", "stderr": "cannot lock ref"})()
+        return real_run(cmd, timeout=timeout, env=env)
+    monkeypatch.setattr(m, "_run", failing_update_ref)
+    rc, result = invoke(["release", "--manifest", str(out)])
+    assert rc == 0 and result["released"] is True
+    assert manifest["review_ref"] in result["ref_left"] and "cannot lock ref" in result["ref_left"]

@@ -111,6 +111,11 @@ class _Cursor:
         self.i = j + 1
 
 
+def _opens_quote(text: str, i: int) -> bool:
+    """A quote starts a quoted scalar only at a token start, never inside a plain scalar (`don't`)."""
+    return i == 0 or text[i - 1] in " \t[,"
+
+
 def _strip_comment(line: str) -> str:
     """Cut `line` at the first unquoted `#` preceded by whitespace or the line start."""
     in_single = in_double = False
@@ -133,9 +138,9 @@ def _strip_comment(line: str) -> str:
                 in_double = False
             i += 1
             continue
-        if ch == "'":
+        if ch == "'" and _opens_quote(line, i):
             in_single = True
-        elif ch == '"':
+        elif ch == '"' and _opens_quote(line, i):
             in_double = True
         elif ch == "#" and (i == 0 or line[i - 1] in " \t"):
             return line[:i]
@@ -165,9 +170,9 @@ def _find_colon(content: str) -> Optional[int]:
                 in_double = False
             i += 1
             continue
-        if ch == "'":
+        if ch == "'" and _opens_quote(content, i):
             in_single = True
-        elif ch == '"':
+        elif ch == '"' and _opens_quote(content, i):
             in_double = True
         elif ch == ":" and (i + 1 == n or content[i + 1] == " "):
             return i
@@ -423,9 +428,9 @@ def _split_flow_items(inner: str) -> List[str]:
                 in_double = False
             i += 1
             continue
-        if ch == "'":
+        if ch == "'" and _opens_quote(inner, i):
             in_single = True
-        elif ch == '"':
+        elif ch == '"' and _opens_quote(inner, i):
             in_double = True
         elif ch in "[{":
             depth += 1

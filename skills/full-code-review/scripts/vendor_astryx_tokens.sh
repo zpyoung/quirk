@@ -8,7 +8,7 @@
 #   scripts/vendor_astryx_tokens.sh ~/path/to/node_modules > /tmp/tokens.css
 set -euo pipefail
 
-MODULES="${1:?usage: vendor_astryx_tokens.sh <path-to-node_modules>}"
+MODULES="$(cd "${1:?usage: vendor_astryx_tokens.sh <path-to-node_modules>}" && pwd)"
 THEME="$MODULES/@astryxdesign/theme-neutral/dist/theme.css"
 CORE="$MODULES/@astryxdesign/core/dist/astryx.css"
 

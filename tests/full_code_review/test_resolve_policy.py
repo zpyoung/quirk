@@ -212,6 +212,26 @@ def test_invalid_values_exit_2(tmp_path, monkeypatch, text, fragment):
     assert rc == 2 and fragment in json.loads(out)["error"]
 
 
+@pytest.mark.parametrize("path, text, fragment", [
+    ("REVIEW.md", "---\nseverity_floor: Must fix\n", "front matter is not closed"),
+    (".quirk/review/lenses/bad.md", "---\nid: bad\nrun_when: sometimes\n---\n", "run_when must be one of"),
+])
+def test_malformed_policy_files_exit_2(tmp_path, monkeypatch, path, text, fragment):
+    repo = _repo(tmp_path)
+    _write(repo / path, text)
+    rc, policy, _, out = _resolve(tmp_path, repo, monkeypatch=monkeypatch)
+    assert rc == 2 and policy is None and fragment in json.loads(out)["error"]
+
+
+def test_skip_and_models_naming_an_unknown_lens_warn(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    _write(repo / ".quirk" / "review" / "pack.yaml", "skip: [secutiry]\nmodels:\n  dbb: haiku\n")
+    rc, policy, _, _ = _resolve(tmp_path, repo, monkeypatch=monkeypatch)
+    assert rc == 0
+    assert any("skip: unknown lens secutiry" in w for w in policy["warnings"])
+    assert any("models: unknown lens dbb" in w for w in policy["warnings"])
+
+
 def test_unknown_keys_warn(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
     _write(repo / "REVIEW.md", "---\nfuture_toggle: on\n---\n")
@@ -397,7 +417,7 @@ def test_guidance_files_list_pack_guidance_and_review_md(tmp_path, monkeypatch):
     assert names == ["REVIEW.md", "org.md", "team.md"]
 
 
-def test_critical_paths_and_skip_globs_union_across_layers(tmp_path, monkeypatch):
+def test_critical_paths_union_across_layers(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
     pack = tmp_path / "pack"
     _write(pack / "pack.yaml", "critical_paths: [\"src/billing/**\"]\n")
@@ -414,3 +434,61 @@ def test_example_pack_overrides_risk_and_adds_a_lens(tmp_path, monkeypatch):
     assert _lens(policy, "risk")["checklist"] == str(EXAMPLE_PACK / "lenses" / "risk.md")
     assert _lens(policy, "license-headers")["source"] == "user-pack"
     assert policy["critical_paths"]
+
+
+def test_old_git_skips_ref_attributes_with_a_warning(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    _write(repo / ".gitattributes", "gen/** linguist-generated\n")
+    target = _commit(repo, "target")
+    monkeypatch.setattr(m, "_supports_attr_source", lambda root: False)
+    rc, policy, ctx, _ = _resolve(tmp_path, repo, changed=("gen/client.py",), ref=target, apply=True,
+                                  monkeypatch=monkeypatch)
+    assert rc == 0
+    assert any("git < 2.40" in w for w in policy["warnings"])
+    assert ctx["changed_files"] == ["gen/client.py"]
+
+
+def test_failed_attribute_lookup_warns_and_keeps_the_files(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    real_git = m._git
+
+    def failing_check_attr(root, *args, **kwargs):
+        if args and args[0] == "check-attr":
+            return subprocess.CompletedProcess(args, 128, stdout="", stderr="fatal: boom")
+        return real_git(root, *args, **kwargs)
+
+    monkeypatch.setattr(m, "_git", failing_check_attr)
+    rc, policy, ctx, _ = _resolve(tmp_path, repo, changed=("gen/client.py",), apply=True,
+                                  monkeypatch=monkeypatch)
+    assert rc == 0
+    assert any("could not read linguist-generated attributes: fatal: boom" in w for w in policy["warnings"])
+    assert ctx["changed_files"] == ["gen/client.py"]
+
+
+def test_generated_files_with_non_ascii_names_are_excluded(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    _write(repo / ".gitattributes", "*.gen linguist-generated\n")
+    _commit(repo)
+    rc, _, ctx, _ = _resolve(tmp_path, repo, changed=("src/app.py", "\u00e9.gen", "a b.gen"), apply=True,
+                             monkeypatch=monkeypatch)
+    assert rc == 0
+    assert ctx["changed_files"] == ["src/app.py"]
+    assert sorted(ctx["excluded_generated"]) == ["a b.gen", "\u00e9.gen"]
+
+
+def test_attribute_lookup_does_not_depend_on_argv_size(tmp_path):
+    repo = _repo(tmp_path)
+    _write(repo / ".gitattributes", "*.gen linguist-generated\n")
+    paths = ["dir/%s/file-%d.gen" % ("x" * 80, i) for i in range(20000)]
+    assert m._generated_paths(repo, paths, None, []) == set(paths)
+
+
+def test_pack_files_with_spaces_and_directories_named_like_files_at_a_ref(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    _write(repo / ".quirk" / "review" / "lenses" / "my lens.md",
+           "---\nid: spaced\nrun_when: always\n---\nChecklist.\n")
+    _write(repo / ".quirk" / "review" / "lenses" / "dir.md" / "inner.txt", "not a lens\n")
+    target = _commit(repo, "target")
+    rc, policy, _, _ = _resolve(tmp_path, repo, ref=target, monkeypatch=monkeypatch)
+    assert rc == 0
+    assert _lens(policy, "spaced")["run_when"] == "always"

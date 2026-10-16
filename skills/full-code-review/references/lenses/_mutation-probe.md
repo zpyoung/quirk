@@ -12,9 +12,11 @@ it** by breaking the production behavior and watching whether a test fails.
   candidate finding. This kills false positives as much as it confirms real ones.
 
 ### When it applies
-The probe mutates files, so it is **opt-in: ask the user before the first mutant and
-skip it unless they agree.** State what you intend to mutate and where you will run it.
-Never probe a shared working tree without that consent. In reviewer seat the coordinator
+The probe mutates files, so it is **opt-in: run it only when the dispatch says
+`mutation probe: enabled`, which the coordinator sets after the user agrees.** Without
+that line, never run the tests, a build, or a mutant, even on a scratch copy. State what
+you intend to mutate and where you will run it. Never probe a shared working tree
+without that consent. In reviewer seat the coordinator
 asks every run and the current source manifest must say `mutation_consent: true`;
 absence or false means skip. Consent never carries between runs.
 
@@ -50,13 +52,16 @@ can only read at a remote ref. Applicability by source:
    and cap at ~8 mutants. Record in your returned notes which risky candidates you
    did **not** probe (no silent truncation).
 3. **One minimal mutant at a time.** Break exactly the behavior a test claims to
-   protect, then re-run **only the targeted test(s)** (not the whole suite):
+   protect, then re-run **only the targeted test(s)** (not the whole suite) under a hard
+   timeout (for example `timeout 120`); a timeout counts as a killed mutant, and the file
+   is reverted before anything else runs:
    flip a comparison (`<= 0` → `== 0`), negate/remove a guard, no-op a branch or an
    early `return`, change a metric name or a low-cardinality dimension value, or
    weaken a composite key (drop a field / its normalization), swap an argument.
 4. **Interpret + revert.** Record survive/kill, then **immediately** revert
    (`git checkout -- <file>` or discard the disposable checkout). Mutate **only
-   production files, never tests**. Never commit. Leave the tree byte-identical.
+   production files, never tests**. Never commit. Before ending, including when the probe aborts, confirm
+   `git status --porcelain` is empty in the tree you probed.
 
 ### Reporting
 A mutation-confirmed finding carries the surviving mutant in `issue` (e.g. "key

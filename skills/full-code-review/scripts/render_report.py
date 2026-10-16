@@ -675,7 +675,7 @@ def _what_was_run(report):
     coverage = run.get("coverage")
     out = ['<section class="astryx-section" id="what-was-run">',
            _sec_head("What was run", "The conditions every finding was produced under.")]
-    if coverage and "⚠" in coverage:
+    if isinstance(coverage, str) and "⚠" in coverage:
         out.append(_banner("warning", "Incomplete coverage.", _esc(coverage)))
     if run.get("source_access") == "diff-only":
         out.append(_banner("warning", "Verification limited to the diff.",

@@ -9,14 +9,13 @@ With --exclude-changed, guidance files that the change itself touches are withhe
 listed under target_repo.changed_guidance, so a reviewer-seat run does not take its
 conventions from the code under review.
 Prints JSON.
-Exit 0 on all expected outcomes; missing sources yield empty lists / null.
+Exit 0 on all expected outcomes; missing sources yield empty lists / null. Exit 2 when
+--exclude-changed is set but the changed-files list is missing or unreadable, because
+withholding nothing would let the change under review supply its own guidance.
 """
 import argparse
 import glob
 import json
-import os
-import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -24,35 +23,6 @@ REFERENCE_CAP = 200
 INDEX_NAMES = ("index.md", "readme.md")
 GUIDANCE_LISTS = ("repo_skills", "repo_skill_references", "repo_skill_reference_indexes",
                   "claude_md", "rules", "other")
-
-
-def normalize_repo_key(origin_url):
-    """Turn a git remote URL into a filesystem-safe repo key.
-
-    The host is dropped and the remaining path segments are joined with `--`, so the
-    https, ssh and scp forms of one remote all produce the same key
-    (`git@host:group/sub/repo.git` -> `group--sub--repo`).
-    """
-    s = origin_url.strip()
-    s = re.sub(r'\.git$', '', s)
-    s = re.sub(r'^\w+://', '', s)
-    s = re.sub(r'^[^@/]+@', '', s)
-    s = re.sub(r'^[^/:]+[:/]', '', s)
-    parts = [p for p in re.split(r'/', s) if p]
-    return '--'.join(parts)
-
-
-def git_origin_key(git_root):
-    try:
-        out = subprocess.run(
-            ["git", "-C", str(git_root), "remote", "get-url", "origin"],
-            capture_output=True, text=True, timeout=10,
-        )
-        if out.returncode == 0 and out.stdout.strip():
-            return normalize_repo_key(out.stdout.strip())
-    except Exception:
-        pass
-    return None
 
 
 def ancestor_claude_mds(git_root, changed_files):
@@ -152,12 +122,20 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     changed = []
-    if args.changed_files and os.path.isfile(args.changed_files):
-        with open(args.changed_files) as fh:
-            changed = [ln.strip() for ln in fh if ln.strip()]
+    if args.changed_files:
+        try:
+            with open(args.changed_files, encoding="utf-8") as fh:
+                changed = [ln.strip() for ln in fh if ln.strip()]
+        except OSError as exc:
+            if args.exclude_changed:
+                print(json.dumps({"error": "cannot read --changed-files: %s" % exc}))
+                return 2
+    elif args.exclude_changed:
+        print(json.dumps({"error": "--exclude-changed requires --changed-files"}))
+        return 2
 
     target = gather(args.git_root, changed, exclude_changed=args.exclude_changed)
-    print(json.dumps({"repo_key": git_origin_key(args.git_root), "target_repo": target}, indent=2))
+    print(json.dumps({"target_repo": target}, indent=2))
     return 0
 
 

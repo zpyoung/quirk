@@ -514,6 +514,22 @@ def test_overview_blocker_bullets_capped_at_three_and_title_lookup():
     assert "Blocker one" in visible and "Blocker two" in visible
 
 
+def test_overview_lists_unplaced_findings_visibly():
+    omitted = [{"id": "F3", "reason": "line is outside the diff", "disposition": "Blocking",
+                "fingerprint": FP3, "unplaced": True},
+               {"id": "F4", "reason": "Ignore", "disposition": "Ignore"}]
+    body, _ = overview(omitted=omitted)
+    visible = body.split("<details>")[0]
+    assert "**Not anchored inline**" in visible
+    assert "- **Blocking:** Should one (`app/refunds.py:88`) — Totals drift by a cent or more." in visible
+    assert "Old open" not in visible
+
+
+def test_overview_has_no_unplaced_section_when_everything_anchored():
+    body, _ = overview(omitted=make_omitted())
+    assert "Not anchored inline" not in body
+
+
 def test_overview_count_line_plural_and_halves():
     omitted = [{"id": "F4", "memory_state": "carried"}, {"id": "F5", "memory_state": "answered"}]
     body, _ = overview(omitted=omitted)
@@ -630,7 +646,8 @@ def test_cli_output_shape(tmp_path, capsys):
     code = cb.main(["author", "--report", report, "--out", str(out)])
     assert code == 0
     data = json.loads(out.read_text(encoding="utf-8"))
-    assert set(data) == {"findings", "overview", "warnings"}
+    assert set(data) == {"findings", "overview", "warnings", "report_sha256"}
+    assert data["report_sha256"] == cb._report_digest(raw_report())
     assert set(data["findings"]) == {"F1", "F2"}
     first = data["findings"]["F1"]
     assert first["fingerprint"] is None
@@ -912,11 +929,25 @@ def test_html_opener_inside_fence_stays_literal():
     assert cb._neutralize("```\n<pre>\n<script>\n```") == "```\n<pre>\n<script>\n```"
 
 
-@pytest.mark.parametrize("line", [
-    "<br>", "<div>", "<kbd>x</kbd>", "<prefix>", "<scripts>", "<! not letter", "text <pre>",
-])
-def test_other_line_leading_tags_are_unchanged(line):
+@pytest.mark.parametrize("line", ["<br>", "<div>", "<kbd>x</kbd>", "<prefix>", "<scripts>", "</div>"])
+def test_any_line_leading_tag_is_escaped_so_no_html_block_can_hide_a_fence(line):
+    assert cb._neutralize(line) == "&lt;" + line[1:]
+
+
+@pytest.mark.parametrize("line", ["<! not letter", "text <pre>", "a < b", "<3"])
+def test_non_tag_text_is_unchanged(line):
     assert cb._neutralize(line) == line
+
+
+def test_html_block_opener_cannot_turn_a_fence_into_literal_text():
+    # with <div> escaped the renderer sees a real fence, so the mention inside it is inert code
+    assert cb._neutralize("<div>\n```\n@everyone\n```") == "&lt;div>\n```\n@everyone\n```"
+
+
+def test_mention_beside_backslash_escaped_backticks_is_defused():
+    out = cb._neutralize("x \\`@octocat\\` y")
+    assert "@octocat" not in out
+    assert "`@real`" in cb._neutralize("x `@real` y")
 
 
 def test_pre_line_in_body_keeps_details_closer_intact():
@@ -982,3 +1013,19 @@ def test_finding_body_mentions_cannot_notify_anyone():
     body, _ = cb.finding_body(finding, seat="author", lead="Must fix", head_sha="a" * 40)
     visible = body.split("-->\n", 1)[1]
     assert "@bob" not in visible and "@all" not in visible and "@team" not in visible
+
+
+def test_path_pairs_decodes_git_quoted_rename_paths():
+    diff = ('diff --git "a/old name\\303\\251.py" "b/new\\tname.py"\nsimilarity index 80%\n'
+            'rename from "old name\\303\\251.py"\nrename to "new\\tname.py"\n'
+            '--- "a/old name\\303\\251.py"\n+++ "b/new\\tname.py"\n@@ -1 +1 @@\n-a\n+b\n')
+    assert cb.path_pairs(diff) == {"new\tname.py": {"old": "old nameé.py", "new": "new\tname.py"}}
+
+
+def test_path_pairs_splits_diff_text_on_newlines_only():
+    # a form feed or U+2028 inside a hunk line must not start a phantom "rename" line
+    diff = ("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n"
+            "-x\n+y\x0crename to evil.py rename to other.py\n"
+            "diff --git a/b.py b/b.py\n")
+    assert cb.path_pairs(diff) == {"a.py": {"old": "a.py", "new": "a.py"},
+                                   "b.py": {"old": "b.py", "new": "b.py"}}

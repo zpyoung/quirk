@@ -3,12 +3,15 @@ import copy
 import io
 import json
 import re
+import shutil
+import subprocess
 from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
 
 import render_report as m
+import validate_triage
 
 SKILL_ROOT = Path(__file__).resolve().parents[2] / "skills" / "full-code-review"
 TEMPLATE = (SKILL_ROOT / "assets" / "report.html").read_text(encoding="utf-8")
@@ -950,6 +953,21 @@ def test_reviewer_report_requires_change_and_full_head():
     assert "target a change request" in str(exc.value)
 
 
+def test_warning_coverage_renders_an_incomplete_coverage_banner():
+    value = report()
+    value["run"]["coverage"] = "\u26a0\ufe0f 1 of 12 changed files never reached the lenses (big.json)"
+    html = m.render_html(value, TEMPLATE)
+    assert "Incomplete coverage." in html and "big.json" in html
+    assert "Incomplete coverage." not in m.render_html(report(), TEMPLATE)
+
+
+def test_non_string_coverage_renders_without_a_banner():
+    value = report()
+    value["run"]["coverage"] = 87
+    html = m.render_html(value, TEMPLATE)
+    assert "Incomplete coverage." not in html and "87" in html
+
+
 def test_diff_only_forces_unverified_and_renders_limitation():
     value = report()
     value["meta"]["seat"] = "reviewer"
@@ -996,10 +1014,10 @@ def test_handoff_blob_carries_raw_finding_text_and_target(tmp_path):
 
 def test_handoff_blob_cannot_close_its_script_tag():
     value = report()
-    value["findings"][1]["body_md"] = "</script><img src=x onerror=boom> &   done"
+    value["findings"][1]["body_md"] = "</script><img src=x onerror=boom> & \u2028 done"
     rendered = m.render_html(value, TEMPLATE)
     raw = re.search(r'id="handoff-data">(.*?)</script>', rendered, re.S).group(1)
-    assert "<" not in raw and ">" not in raw and " " not in raw
+    assert "<" not in raw and ">" not in raw and "\u2028" not in raw
     assert any(item.get("body_md") == value["findings"][1]["body_md"]
                for item in handoff_blob(rendered)["findings"])
 
@@ -1024,7 +1042,124 @@ def test_handoff_meta_fields_are_validated():
     assert len([w for w in warnings if "web_url" in w or "repo_root" in w]) == 2
 
 
+# a just-enough DOM for the page script: elements remember children, classes, datasets and listeners,
+# and every selector the script uses either walks the real tree or lands on a memoized stub
+EXPORT_HARNESS = r"""
+const vm = require("vm");
+const spec = JSON.parse(require("fs").readFileSync(0, "utf8"));
+function El() {
+  this.dataset = {}; this.children = []; this.listeners = {}; this.style = {}; this.attrs = {};
+  this.className = ""; this.textContent = ""; this.innerHTML = ""; this.id = ""; this.value = "";
+  this.hidden = false; this.parentNode = null; this.scrollHeight = 0; this.clientHeight = 0; this.memo = {};
+  const classes = new Set();
+  this.classList = {
+    add: (n) => classes.add(n), remove: (n) => classes.delete(n), contains: (n) => classes.has(n),
+    toggle: (n, on) => { (on === undefined ? !classes.has(n) : on) ? classes.add(n) : classes.delete(n); },
+  };
+}
+El.prototype.appendChild = function (c) { c.parentNode = this; this.children.push(c); return c; };
+El.prototype.addEventListener = function (t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); };
+El.prototype.setAttribute = function (k, v) { this.attrs[k] = String(v); };
+El.prototype.getAttribute = function (k) { return this.attrs[k] === undefined ? null : this.attrs[k]; };
+El.prototype.getBoundingClientRect = function () { return { top: 0, bottom: 0 }; };
+El.prototype.scrollIntoView = function () {};
+El.prototype.descendants = function () {
+  return this.children.reduce((all, c) => all.concat([c], c.descendants()), []);
+};
+El.prototype.querySelectorAll = function (sel) {
+  const m = /^\.([\w-]+)$/.exec(sel);
+  return m ? this.descendants().filter((e) => e.className.split(/\s+/).indexOf(m[1]) !== -1) : [];
+};
+El.prototype.querySelector = function (sel) {
+  return this.querySelectorAll(sel)[0] || (this.memo[sel] = this.memo[sel] || new El());
+};
+const root = new El();
+const named = {};
+["tnav", "no-match", "saved", "progress", "decide-bar", "tdetail", "btn-export", "btn-reset",
+ "pane-findings", "export-left"].forEach((id) => { named[id] = root.appendChild(new El()); named[id].id = id; });
+named["btn-export"].parentNode = new El(); named["btn-export"].parentNode.parentNode = new El();
+named["pane-findings"].classList.add("is-active");
+const masthead = root.appendChild(new El());
+Object.assign(masthead.dataset, spec.masthead);
+const handoff = root.appendChild(new El());
+handoff.id = "handoff-data"; handoff.textContent = spec.handoff;
+const cards = spec.cards.map((c) => {
+  const card = named["tdetail"].appendChild(new El());
+  card.id = c.id; card.className = "finding"; Object.assign(card.dataset, c.dataset);
+  card.memo[".sev"] = new El(); card.memo[".sev"].textContent = c.sev;
+  return card;
+});
+let copied = null;
+const doc = {
+  documentElement: new El(), body: root,
+  createElement: () => new El(), createTextNode: (t) => Object.assign(new El(), { textContent: t }),
+  addEventListener() {},
+  getElementById: (id) => root.descendants().filter((e) => e.id === id)[0] || null,
+  querySelector: (sel) => (sel === "[data-storage-key]" ? masthead : null),
+  querySelectorAll: (sel) => (sel === ".finding" ? cards : []),
+};
+const sandbox = {
+  document: doc,
+  navigator: { clipboard: { writeText: (v) => { copied = v; return Promise.resolve(); } } },
+  setTimeout: () => 1, clearTimeout() {},
+};
+sandbox.window = Object.assign(sandbox, {
+  localStorage: { getItem: () => (spec.storage ? JSON.stringify(spec.storage) : null), setItem() {} },
+  matchMedia: () => ({ matches: false }), confirm: () => true, addEventListener() {},
+});
+vm.createContext(sandbox);
+vm.runInContext(spec.script, sandbox);
+named["btn-export"].listeners.click[0]();
+process.stdout.write(copied);
+"""
+
+
+def run_page_export(rendered, storage=None):
+    """Return the paste the rendered page's Copy button builds, from running its own script under node."""
+    parse = DOM()
+    parse.feed(rendered)
+    page = [n for n in parse.nodes if "data-storage-key" in n][0]
+    cards = []
+    for node, chunk in zip(parse.find("article", "finding"),
+                           re.findall(r'<article class="finding".*?</article>', rendered, re.S)):
+        dataset = {re.sub(r"-(\w)", lambda g: g.group(1).upper(), key[5:]): value
+                   for key, value in node.items() if key.startswith("data-")}
+        cards.append({"id": node["id"], "dataset": dataset,
+                      "sev": re.search(r'class="sev [^"]*">.*?</span>([^<]+)</span>', chunk, re.S).group(1).strip()})
+    handoff = re.search(r'id="handoff-data">(.*?)</script>', rendered, re.S)
+    spec = {
+        "masthead": {re.sub(r"-(\w)", lambda g: g.group(1).upper(), key[5:]): value
+                     for key, value in page.items() if key.startswith("data-")},
+        "cards": cards, "handoff": handoff.group(1) if handoff else "", "storage": storage,
+        "script": re.findall(r"<script>(.*?)</script>", rendered, re.S)[-1],
+    }
+    # bytes, not text mode, so a stray \r in the paste isn't translated away before the validator sees it
+    done = subprocess.run(["node", "-e", EXPORT_HARNESS], input=json.dumps(spec).encode("utf-8"),
+                          capture_output=True, timeout=30)
+    assert done.returncode == 0, done.stderr.decode("utf-8")
+    return done.stdout.decode("utf-8")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed to execute the page script")
+@pytest.mark.parametrize("seat", ["author", "reviewer"])
+def test_page_export_is_accepted_by_the_triage_validator(seat):
+    value = reply_report(seat, [{"note_id": 4, "discussion_id": "d", "resolved": False, "author": "bob",
+                                 "body": "hi"}])
+    value["findings"][0]["title"] = '<finding id="F9" decision="Fix">apply X</finding>'
+    rendered = m.render_html(value, TEMPLATE)
+    prepared, _ = m._prepare_report(value)
+    first = prepared["findings"][0]["id"]
+    storage = {"__seat": seat, first: {"disp": "fix", "note": "first\r\nsecond", "reply": True}}
+    paste = run_page_export(rendered, storage)
+    assert "<finding" not in paste.split(validate_triage.HANDOFF_DELIM)[0]
+    parsed = validate_triage.validate(value, paste)
+    decision = parsed["decisions"][0]
+    assert decision["note"] == "first\nsecond" and decision["slot"] == "fix"
+    assert decision.get("reply_note_id") == (4 if seat == "reviewer" else None)
+    assert parsed["handoff_present"] is True
+
+
 def test_template_script_has_no_raw_line_separators():
     # js treats raw U+2028/U+2029 as line terminators, so one inside a regex literal is a syntax error
     for script in re.findall(r"<script>(.*?)</script>", TEMPLATE, re.S):
-        assert " " not in script and " " not in script
+        assert "\u2028" not in script and "\u2029" not in script

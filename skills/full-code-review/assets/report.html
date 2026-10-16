@@ -1577,7 +1577,6 @@ html:not(.js) .dnote, html:not(.js) .dreply { display: none; }
     });
   })();
 
-  /* Triage: rail, decisions, filters, export. */
   (function () {
     var detail = document.getElementById("tdetail");
     var cards = detail ? Array.prototype.slice.call(detail.querySelectorAll(".finding")) : [];
@@ -1920,7 +1919,7 @@ html:not(.js) .dnote, html:not(.js) .dreply { display: none; }
         lines.push("## " + group[1] + " (" + rows.length + ")", "");
         rows.forEach(function (card) {
           var record = entry(card.id);
-          lines.push("- **" + card.id + "** — " + card.dataset.title + "  \n  `" + card.dataset.file + "` · " + card.querySelector(".sev").textContent.trim());
+          lines.push("- **" + card.id + "** — " + defang(card.dataset.title) + "  \n  `" + defang(card.dataset.file) + "` · " + card.querySelector(".sev").textContent.trim());
           if (replyTarget[card.id] && record.reply) lines.push("  reply: " + replyTarget[card.id].note_id);
           if (record.note && record.note.trim()) {
             record.note.trim().replace(/\r\n|\r|\u2028|\u2029/g, "\n").split("\n").forEach(function (line) { lines.push("  > " + line); });

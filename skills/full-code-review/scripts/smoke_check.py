@@ -7,8 +7,13 @@ file, and has a line range overlapping [line_min, line_max]. Exit 0 pass, 1 miss
 """
 import argparse
 import json
+import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from jsonio import load_object  # noqa: E402
 
 POSTABLE = ("Must fix", "Should fix")
 
@@ -54,12 +59,10 @@ def main(argv=None):
     ap.add_argument("--expected", required=True)
     args = ap.parse_args(argv)
     try:
-        with open(args.report, encoding="utf-8") as fh:
-            report = json.load(fh)
-        with open(args.expected, encoding="utf-8") as fh:
-            expected = json.load(fh)
+        report = load_object(args.report, "report")
+        expected = load_object(args.expected, "expected")
         passed, match, considered = check(report, expected)
-    except (OSError, ValueError, AttributeError, TypeError) as exc:
+    except (ValueError, AttributeError, TypeError) as exc:
         print(json.dumps({"error": str(exc)}))
         return 2
     if passed:

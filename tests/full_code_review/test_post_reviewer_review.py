@@ -145,6 +145,14 @@ def stage_args(paths, allow=False):
                               "allow_unaffected": allow})()
 
 
+def _publish_args(paths, confirm=True):
+    return type("Args", (), {"staged": str(paths["staged"]), "confirm": confirm})()
+
+
+def _complete_args(paths, action):
+    return type("Args", (), {"staged": str(paths["staged"]), "action": action})()
+
+
 def test_stage_builds_trusted_overview_and_inline_drafts_then_publish_is_separate(tmp_path, monkeypatch):
     fake = FakeGitLab()
     monkeypatch.setattr(m, "_api", fake)
@@ -169,11 +177,43 @@ def test_stage_builds_trusted_overview_and_inline_drafts_then_publish_is_separat
     assert any("normalized to Non-blocking" in warning for warning in state["warnings"])
     assert not any(call[1].endswith("bulk_publish") for call in fake.calls)
 
-    args = type("Args", (), {"staged": str(paths["staged"]), "confirm": True})()
+    args = _publish_args(paths)
     rc, published = invoke(m.publish, args)
     assert rc == 0 and published["published"] is True
     assert sum(call[1].endswith("bulk_publish") for call in fake.calls) == 1
     assert json.loads(paths["staged"].read_text())["published"] is True
+
+
+def _stage_with_unanchorable_blocker(tmp_path, monkeypatch, **context_updates):
+    fake = FakeGitLab()
+    monkeypatch.setattr(m, "_api", fake)
+    paths = files(tmp_path)
+    changed = report()
+    changed["findings"][0]["line"] = "50"
+    choice = decisions()
+    choice["report_sha256"] = m._report_digest(changed)
+    paths["report"].write_text(json.dumps(changed))
+    paths["decisions"].write_text(json.dumps(choice))
+    paths["context"].write_text(json.dumps(dict(context(), **context_updates)))
+    rc, state = invoke(m.stage, stage_args(paths))
+    assert rc == 0
+    return state, fake
+
+
+def test_blocking_finding_outside_the_diff_is_listed_in_the_staged_overview(tmp_path, monkeypatch):
+    state, fake = _stage_with_unanchorable_blocker(tmp_path, monkeypatch)
+    assert [item["kind"] for item in state["created"]] == ["overview", "inline"]
+    overview = state["preview"][0]["body"]
+    visible = overview.split("<details>")[0]
+    assert "**Not anchored inline**" in visible
+    assert "- **Blocking:** Trusted bug (`a.py:50`)" in visible
+    assert any("F1 anchors on a line outside the diff" in warning for warning in state["warnings"])
+
+
+def test_blocking_finding_on_a_collapsed_file_is_listed_in_the_staged_overview(tmp_path, monkeypatch):
+    state, _ = _stage_with_unanchorable_blocker(tmp_path, monkeypatch, unanchorable_files=["a.py"])
+    visible = state["preview"][0]["body"].split("<details>")[0]
+    assert "- **Blocking:** Trusted bug (`a.py:50`)" in visible
 
 
 def test_preexisting_draft_blocks_all_creation(tmp_path, monkeypatch):
@@ -201,15 +241,26 @@ def test_partial_stage_failure_records_only_created_ids_and_never_deletes_or_pub
     assert json.loads(paths["staged"].read_text())["created"] == state["created"]
 
 
+def test_publish_refuses_a_staging_that_did_not_complete(tmp_path, monkeypatch):
+    fake = FakeGitLab()
+    fake.fail_create_number = 3
+    monkeypatch.setattr(m, "_api", fake)
+    paths = files(tmp_path)
+    assert invoke(m.stage, stage_args(paths))[0] == 2
+    rc, result = invoke(m.publish, _publish_args(paths))
+    assert rc == 2 and result["published"] is False and "staging did not complete" in result["error"]
+    assert not any(call[1].endswith("bulk_publish") for call in fake.calls)
+
+
 def test_publish_requires_confirmation_and_exact_live_draft_set(tmp_path, monkeypatch):
     fake = FakeGitLab()
     monkeypatch.setattr(m, "_api", fake)
     paths = files(tmp_path)
     assert invoke(m.stage, stage_args(paths))[0] == 0
-    no = type("Args", (), {"staged": str(paths["staged"]), "confirm": False})()
+    no = _publish_args(paths, confirm=False)
     assert invoke(m.publish, no)[0] == 2
     fake.drafts.append({"id": 999, "note": "created in UI"})
-    yes = type("Args", (), {"staged": str(paths["staged"]), "confirm": True})()
+    yes = _publish_args(paths)
     rc, result = invoke(m.publish, yes)
     assert rc == 2 and "unexpected: [999]" in result["error"]
     assert not any(call[1].endswith("bulk_publish") for call in fake.calls)
@@ -238,7 +289,7 @@ def test_head_or_concurrent_draft_after_staging_blocks_bulk(tmp_path, monkeypatc
     paths = files(tmp_path)
     assert invoke(m.stage, stage_args(paths))[0] == 0
     fake.head = "e" * 40
-    yes = type("Args", (), {"staged": str(paths["staged"]), "confirm": True})()
+    yes = _publish_args(paths)
     rc, result = invoke(m.publish, yes)
     assert rc == 2 and "head moved" in result["error"]
     assert not any(call[1].endswith("bulk_publish") for call in fake.calls)
@@ -252,22 +303,22 @@ def test_completion_is_explicit_and_requires_published_state(tmp_path, monkeypat
                         lambda run, host, project, iid: requested.append((host, project, iid)) or {"iid": str(iid)})
     paths = files(tmp_path)
     assert invoke(m.stage, stage_args(paths))[0] == 0
-    before = type("Args", (), {"staged": str(paths["staged"]), "action": "approve"})()
+    before = _complete_args(paths, "approve")
     assert invoke(m.complete, before)[0] == 2
-    assert invoke(m.publish, type("Args", (), {"staged": str(paths["staged"]), "confirm": True})())[0] == 0
+    assert invoke(m.publish, _publish_args(paths))[0] == 0
     published_state = paths["staged"].read_text()
-    approve = type("Args", (), {"staged": str(paths["staged"]), "action": "approve"})()
+    approve = _complete_args(paths, "approve")
     rc, result = invoke(m.complete, approve)
     assert rc == 0 and result["completion"] == "approve"
     assert any(call[1].endswith("/approve") and call[2]["sha"] == HEAD for call in fake.calls)
     assert invoke(m.complete, approve)[0] == 2
 
     paths["staged"].write_text(published_state)
-    request = type("Args", (), {"staged": str(paths["staged"]), "action": "request-changes"})()
+    request = _complete_args(paths, "request-changes")
     assert invoke(m.complete, request)[0] == 0 and requested
 
     paths["staged"].write_text(published_state)
-    comment = type("Args", (), {"staged": str(paths["staged"]), "action": "comment-only"})()
+    comment = _complete_args(paths, "comment-only")
     before_posts = len([call for call in fake.calls if call[0] == "POST"])
     assert invoke(m.complete, comment)[0] == 0
     assert len([call for call in fake.calls if call[0] == "POST"]) == before_posts
@@ -309,7 +360,7 @@ def test_missing_staged_draft_blocks_bulk_and_reports_cleanup(tmp_path, monkeypa
     paths = files(tmp_path)
     assert invoke(m.stage, stage_args(paths))[0] == 0
     fake.drafts.pop()
-    yes = type("Args", (), {"staged": str(paths["staged"]), "confirm": True})()
+    yes = _publish_args(paths)
     rc, result = invoke(m.publish, yes)
     assert rc == 2 and "missing:" in result["error"]
     assert result["cleanup_commands"]
@@ -338,6 +389,27 @@ def test_stale_decision_file_is_rejected_before_gitlab_calls(tmp_path, monkeypat
     assert fake.calls == []
 
 
+@pytest.mark.parametrize("tamper, message", [
+    (lambda c: c.update(head_sha="d" * 40), "decision head"),
+    (lambda c: c.update(target="MR !43"), "decision target"),
+    (lambda c: c["decisions"].append(dict(c["decisions"][0])), "duplicate id"),
+    (lambda c: c["decisions"][0].update(disposition="Drop"), "invalid slot/disposition"),
+    (lambda c: c["decisions"][0].update(reply_note_id=True), "reply_note_id must be an integer"),
+    (lambda c: c["decisions"].pop(), "finding IDs do not match"),
+    (lambda c: c.update(zero_findings=True), "zero_findings cannot be set"),
+])
+def test_forged_decisions_are_rejected_before_any_forge_call(tmp_path, monkeypatch, tamper, message):
+    fake = FakeGitLab()
+    monkeypatch.setattr(m, "_api", fake)
+    paths = files(tmp_path)
+    choice = json.loads(paths["decisions"].read_text())
+    tamper(choice)
+    paths["decisions"].write_text(json.dumps(choice))
+    rc, result = invoke(m.stage, stage_args(paths))
+    assert rc == 2 and message in result["error"]
+    assert fake.calls == []
+
+
 def test_target_movement_with_unchanged_head_blocks_staging_even_with_allow(tmp_path, monkeypatch):
     fake = FakeGitLab()
     fake.refs["start_sha"] = "f" * 40
@@ -357,7 +429,7 @@ def test_target_movement_after_staging_blocks_bulk(tmp_path, monkeypatch):
     paths = files(tmp_path)
     assert invoke(m.stage, stage_args(paths))[0] == 0
     fake.refs["base_sha"] = "f" * 40
-    yes = type("Args", (), {"staged": str(paths["staged"]), "confirm": True})()
+    yes = _publish_args(paths)
     rc, result = invoke(m.publish, yes)
     assert rc == 2 and "diff refs changed" in result["error"]
     assert result["cleanup_commands"]
@@ -470,11 +542,8 @@ def test_request_changes_uses_string_graphql_variables(monkeypatch):
     assert "mergeRequestRequestChanges" in cmd[cmd.index("-f") + 1]
 
 
-def test_memory_enabled_stage_reconciles_live_discussions_before_drafts(tmp_path, monkeypatch):
-    fake = FakeGitLab()
-    monkeypatch.setattr(m, "_api", fake)
-    live = []
-    monkeypatch.setattr(m.review_memory, "fetch_discussions", lambda *args, **kwargs: list(live))
+def _memory_stage_files(tmp_path, monkeypatch):
+    """Write stage inputs for a memory-enabled report; return (paths, fingerprint of F1)."""
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     ctx = context()
     ctx["diff"] = (
@@ -483,17 +552,24 @@ def test_memory_enabled_stage_reconciles_live_discussions_before_drafts(tmp_path
     snapshot = m.review_memory.load_snapshot(
         ctx, repo=str(tmp_path), dimensions=("correctness",), fresh=True)
     enriched = m.review_memory.reconcile(report(), ctx, snapshot)
-    fingerprint = enriched["findings"][0]["memory"]["fingerprint"]
-    live[:] = [{"id": "discussion-1", "notes": [{
-        "id": 7, "web_url": "https://gitlab.example/group/project/-/merge_requests/42#note_7",
-        "author": {"id": 2, "username": "reviewer"},
-        "body": "<!-- quirk-review:v1\nkind: finding\nfp: %s\n-->\nposted" % fingerprint}]}]
     choice = decisions()
     choice["report_sha256"] = m._report_digest(enriched)
     paths = files(tmp_path)
     paths["report"].write_text(json.dumps(enriched))
     paths["decisions"].write_text(json.dumps(choice))
     paths["context"].write_text(json.dumps(ctx))
+    return paths, enriched["findings"][0]["memory"]["fingerprint"]
+
+
+def test_memory_enabled_stage_reconciles_live_discussions_before_drafts(tmp_path, monkeypatch):
+    fake = FakeGitLab()
+    monkeypatch.setattr(m, "_api", fake)
+    paths, fingerprint = _memory_stage_files(tmp_path, monkeypatch)
+    live = [{"id": "discussion-1", "notes": [{
+        "id": 7, "web_url": "https://gitlab.example/group/project/-/merge_requests/42#note_7",
+        "author": {"id": 2, "username": "reviewer"},
+        "body": "<!-- quirk-review:v1\nkind: finding\nfp: %s\n-->\nposted" % fingerprint}]}]
+    monkeypatch.setattr(m.review_memory, "fetch_discussions", lambda *args, **kwargs: list(live))
     rc, state = invoke(m.stage, stage_args(paths))
     assert rc == 0 and state["memory_enabled"] is True
     omitted = next(item for item in state["omitted"] if item["id"] == "F1")
@@ -501,6 +577,34 @@ def test_memory_enabled_stage_reconciles_live_discussions_before_drafts(tmp_path
     assert all(item.get("finding_id") != "F1" for item in state["created"])
     assert state["completion"]["suggested"] == "request-changes"
     assert not any("bulk_publish" in call[1] for call in fake.calls)
+
+
+def test_failed_memory_cross_check_blocks_stage_before_any_draft(tmp_path, monkeypatch):
+    fake = FakeGitLab()
+    monkeypatch.setattr(m, "_api", fake)
+    paths, _ = _memory_stage_files(tmp_path, monkeypatch)
+
+    def unavailable(*args, **kwargs):
+        raise m.ReviewError("discussions unavailable")
+
+    monkeypatch.setattr(m.review_memory, "fetch_discussions", unavailable)
+    rc, result = invoke(m.stage, stage_args(paths))
+    assert rc == 2 and "memory discussion cross-check failed" in result["error"]
+    assert not any(call[0] == "POST" for call in fake.calls)
+
+
+def test_failed_memory_snapshot_binding_blocks_stage_before_any_draft(tmp_path, monkeypatch):
+    fake = FakeGitLab()
+    monkeypatch.setattr(m, "_api", fake)
+    paths, _ = _memory_stage_files(tmp_path, monkeypatch)
+
+    def mismatched(*args, **kwargs):
+        raise ValueError("snapshot belongs to another change")
+
+    monkeypatch.setattr(m.review_memory, "validate_snapshot", mismatched)
+    rc, result = invoke(m.stage, stage_args(paths))
+    assert rc == 2 and "memory snapshot binding failed" in result["error"]
+    assert not any(call[0] == "POST" for call in fake.calls)
 
 
 def test_memory_exact_open_thread_suppresses_duplicate_post_and_keeps_decision():
@@ -521,56 +625,45 @@ def test_memory_exact_open_thread_suppresses_duplicate_post_and_keeps_decision()
     assert omitted[0]["decision"]["disposition"] == "Blocking"
 
 
-def test_memory_late_duplicate_blocks_publish_before_bulk(tmp_path, monkeypatch):
-    fake = FakeGitLab()
-    monkeypatch.setattr(m, "_api", fake)
-    fingerprint = "e" * 64
-    monkeypatch.setattr(m.review_memory, "fetch_discussions", lambda *args, **kwargs: [{
-        "id": "discussion-1",
-        "notes": [{"id": 7, "author": {"id": 2, "username": "reviewer"},
-                   "body": "<!-- quirk-review:v1\nkind: finding\nfp: %s\n-->\nposted" % fingerprint}],
-    }])
-    paths = files(tmp_path)
+def _stage_with_fingerprint(paths, fingerprint, **state_updates):
+    """Stage the default review, then tag its first inline draft as a memory finding."""
     assert invoke(m.stage, stage_args(paths))[0] == 0
     state = json.loads(paths["staged"].read_text())
     inline = next(item for item in state["created"] if item["kind"] == "inline")
     inline["fingerprint"] = fingerprint
     state["memory_enabled"] = True
+    state.update(state_updates)
     paths["staged"].write_text(json.dumps(state))
-    rc, result = invoke(m.publish, type("Args", (), {
-        "staged": str(paths["staged"]), "confirm": True})())
-    assert rc == 2 and result["published"] is False
-    assert "restage" in result["error"]
-    assert not any(call[1].endswith("bulk_publish") for call in fake.calls)
 
 
-def test_memory_marker_from_another_author_does_not_block_publish(tmp_path, monkeypatch):
+@pytest.mark.parametrize("marker_author, blocks", [
+    ({"id": 2, "username": "reviewer"}, True),
+    # a marker copied by someone else must not stall our publication
+    ({"id": 99, "username": "unrelated-human"}, False),
+])
+def test_memory_marker_blocks_publish_only_when_it_is_ours(tmp_path, monkeypatch, marker_author, blocks):
     fake = FakeGitLab()
     monkeypatch.setattr(m, "_api", fake)
     fingerprint = "e" * 64
-    # a copied marker from someone else must not stall our publication
     monkeypatch.setattr(m.review_memory, "fetch_discussions", lambda *args, **kwargs: [{
         "id": "discussion-1",
-        "notes": [{"id": 7, "author": {"id": 99, "username": "unrelated-human"},
+        "notes": [{"id": 7, "author": marker_author,
                    "body": "<!-- quirk-review:v1\nkind: finding\nfp: %s\n-->\nposted" % fingerprint}],
     }])
     paths = files(tmp_path)
-    assert invoke(m.stage, stage_args(paths))[0] == 0
-    state = json.loads(paths["staged"].read_text())
-    inline = next(item for item in state["created"] if item["kind"] == "inline")
-    inline["fingerprint"] = fingerprint
-    state["memory_enabled"] = True
-    paths["staged"].write_text(json.dumps(state))
-    rc, result = invoke(m.publish, type("Args", (), {
-        "staged": str(paths["staged"]), "confirm": True})())
-    assert rc == 0 and result["published"] is True
-    assert any(call[1].endswith("bulk_publish") for call in fake.calls)
+    _stage_with_fingerprint(paths, fingerprint)
+    rc, result = invoke(m.publish, _publish_args(paths))
+    published = any(call[1].endswith("bulk_publish") for call in fake.calls)
+    if blocks:
+        assert rc == 2 and result["published"] is False and "restage" in result["error"]
+        assert not published
+    else:
+        assert rc == 0 and result["published"] is True and published
 
 
 def test_memory_receipt_failure_after_bulk_reports_published(tmp_path, monkeypatch):
     fake = FakeGitLab()
     monkeypatch.setattr(m, "_api", fake)
-    fingerprint = "d" * 64
     monkeypatch.setattr(m.review_memory, "fetch_discussions", lambda *args, **kwargs: [])
 
     def fail_commit(*args, **kwargs):
@@ -578,16 +671,8 @@ def test_memory_receipt_failure_after_bulk_reports_published(tmp_path, monkeypat
 
     monkeypatch.setattr(m.review_memory, "commit_report", fail_commit)
     paths = files(tmp_path)
-    assert invoke(m.stage, stage_args(paths))[0] == 0
-    state = json.loads(paths["staged"].read_text())
-    inline = next(item for item in state["created"] if item["kind"] == "inline")
-    inline["fingerprint"] = fingerprint
-    state["memory_enabled"] = True
-    state["memory_report"] = report()
-    state["memory_decisions"] = decisions()
-    paths["staged"].write_text(json.dumps(state))
-    rc, result = invoke(m.publish, type("Args", (), {
-        "staged": str(paths["staged"]), "confirm": True})())
+    _stage_with_fingerprint(paths, "d" * 64, memory_report=report(), memory_decisions=decisions())
+    rc, result = invoke(m.publish, _publish_args(paths))
     assert rc == 0 and result["published"] is True
     assert any("ledger" in warning for warning in result["warnings"])
     assert json.loads(paths["staged"].read_text())["published"] is True
@@ -776,10 +861,6 @@ def test_reply_is_omitted_when_its_file_changed_with_the_head(tmp_path, monkeypa
     assert all("in_reply_to_discussion_id" not in payload for payload in draft_posts(fake))
 
 
-def _publish_args(paths):
-    return type("Args", (), {"staged": str(paths["staged"]), "confirm": True})()
-
-
 def _memory_enabled_state(paths):
     state = json.loads(paths["staged"].read_text())
     state["memory_enabled"] = True
@@ -902,7 +983,7 @@ def test_old_side_finding_is_staged_on_the_removed_line():
     old_side, _ = _plan_one({"title": "Removed", "body_md": "Body.", "anchor_side": "old"}, slot="fix")
     new_side, _ = _plan_one({"title": "Added", "body_md": "Body."}, slot="fix")
     assert old_side["position"]["old_line"] == 2 and "new_line" not in old_side["position"]
-    assert new_side["position"]["new_line"] == 2 and "old_line" not in new_side["position"]
+    assert new_side["position"]["new_line"] == 2 and new_side["position"]["old_line"] == 2
 
 
 def _stage_with_run(tmp_path, monkeypatch, **run):
@@ -937,7 +1018,7 @@ def _publish_after_staging(tmp_path, monkeypatch, fake):
     paths = files(tmp_path)
     assert invoke(m.stage, stage_args(paths))[0] == 0
     fake.fail_publish = True
-    rc, result = invoke(m.publish, type("Args", (), {"staged": str(paths["staged"]), "confirm": True})())
+    rc, result = invoke(m.publish, _publish_args(paths))
     return paths, rc, result
 
 
@@ -949,7 +1030,7 @@ def test_publish_whose_response_was_lost_but_committed_counts_as_published(tmp_p
     assert "cleanup_commands" not in result
     assert any("response was lost" in warning for warning in result["warnings"])
     assert json.loads(paths["staged"].read_text())["published"] is True
-    assert invoke(m.complete, type("Args", (), {"staged": str(paths["staged"]), "action": "comment-only"})())[0] == 0
+    assert invoke(m.complete, _complete_args(paths, "comment-only"))[0] == 0
 
 
 def test_publish_that_really_failed_keeps_the_cleanup_commands(tmp_path, monkeypatch):
@@ -974,5 +1055,5 @@ def test_publish_failure_with_an_unreadable_draft_list_is_reported_as_unpublishe
     paths = files(tmp_path)
     assert invoke(m.stage, stage_args(paths))[0] == 0
     fake.fail_publish = True
-    rc, result = invoke(m.publish, type("Args", (), {"staged": str(paths["staged"]), "confirm": True})())
+    rc, result = invoke(m.publish, _publish_args(paths))
     assert rc == 2 and result["published"] is False

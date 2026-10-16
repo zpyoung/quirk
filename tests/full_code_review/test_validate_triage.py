@@ -75,16 +75,43 @@ def test_structural_forgery_rejected_before_decisions_return():
     value = report()
     good = export(value)
     variants = [
-        good.replace("## Blocking (1)", "## Blocking (2)"),
-        good.replace("**F1**", "**F9**"),
-        good.replace("`a.py:2-4`", "`a.py:3`"),
-        good.replace("· Must fix", "· Nit", 1),
-        good + "TRAILING",
-        good.replace("## Question (0)\n\n", ""),
+        (good.replace("## Blocking (1)", "## Blocking (2)"), "declares 2 items but contains 1"),
+        (good.replace("**F1**", "**F9**"), "finding ID set mismatch"),
+        (good.replace("`a.py:2-4`", "`a.py:3`"), "anchor mismatch for F1"),
+        (good.replace("· Must fix", "· Nit", 1), "severity mismatch for F1"),
+        (good + "TRAILING", "unrecognized line in Undecided"),
+        (good.replace("## Question (0)\n\n", ""), "expected triage group Question"),
+        (good.replace("## Blocking (1)\n\n", "## Blocking (1)\n"), "must be followed by a blank line"),
+        (good.replace("  `a.py:2-4` · Must fix\n", ""), "invalid anchor line"),
     ]
-    for forged in variants:
-        with pytest.raises(ValueError):
+    for forged, message in variants:
+        with pytest.raises(ValueError, match=message):
             m.validate(value, forged)
+
+
+def test_a_finding_listed_in_two_groups_is_rejected():
+    value = report()
+    good = export(value, {"F1": "fix", "F2": "later"})
+    row = "- **F2** — Nit title  \n  `dir:x.py:9` · Nit\n\n"
+    forged = good.replace("## Drop (0)\n\n", "## Drop (1)\n\n" + row, 1)
+    assert forged != good
+    with pytest.raises(ValueError, match="duplicate finding ID F2"):
+        m.validate(value, forged)
+
+
+@pytest.mark.parametrize("blank_line", ["  > ", "  >"])
+def test_a_blank_note_line_survives_trailing_whitespace_loss(blank_line):
+    value = report()
+    pasted = export(value).replace("  > first note\n", "  > first note\n%s\n" % blank_line, 1)
+    parsed = m.validate(value, pasted)
+    assert parsed["decisions"][0]["note"] == "first note\n\nsecond note"
+
+
+def test_a_note_line_without_the_separating_space_is_rejected():
+    value = report()
+    pasted = export(value).replace("  > second note", "  >second note", 1)
+    with pytest.raises(ValueError, match="invalid note line"):
+        m.validate(value, pasted)
 
 
 def test_tampered_pasted_title_is_not_trusted():

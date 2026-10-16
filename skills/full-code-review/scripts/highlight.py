@@ -13,8 +13,9 @@ An unknown or absent info string is returned unhighlighted rather than guessed a
 mislabelled colour is worse than none.
 
 The contract every caller depends on: stripping the emitted ``<span>`` tags
-reproduces ``html.escape(source, quote=True)`` exactly. Tokens are matched against
-the raw source and escaped individually, never the reverse.
+reproduces ``html.escape(source, quote=True)`` exactly, once CRLF and CR line endings
+are read as LF. Tokens are matched against the raw source and escaped individually,
+never the reverse.
 """
 import html
 import os
@@ -197,7 +198,7 @@ def language_for_path(path):
 
 def _regex(name):
     if name not in _COMPILED:
-        _COMPILED[name] = re.compile(_LANGUAGES[name], re.VERBOSE | re.DOTALL)
+        _COMPILED[name] = re.compile(_LANGUAGES[name], re.VERBOSE | re.DOTALL | re.MULTILINE)
     return _COMPILED[name]
 
 
@@ -211,6 +212,7 @@ def _pygments_kind(ttype):
 
 def _tokens(source, name):
     """Yield ``(kind, text)`` pairs whose texts concatenate back to ``source``."""
+    source = source.replace("\r\n", "\n").replace("\r", "\n")
     if name == "diff":
         for index, line in enumerate(source.split("\n")):
             if index:
@@ -246,7 +248,8 @@ def highlight(source, language):
     """Return ``source`` as HTML with token spans, or escaped plain text.
 
     Falls back to plain escaped output for an unknown or missing language, so the
-    caller never has to decide whether colouring applied.
+    caller never has to decide whether colouring applied. CRLF and CR line endings in
+    highlighted output are normalised to LF.
     """
     name = supported(language)
     if name is None:

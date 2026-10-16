@@ -19,6 +19,7 @@ import sys
 from urllib.parse import quote
 
 from forge import ForgeError, detect_forge, make_forge
+from jsonio import write_json
 
 DEFAULT_MAX_CHARS = 240000
 _STDERR_SNIPPET_CHARS = 400
@@ -147,10 +148,18 @@ def _quote_git_path(path):
     return '"%s"' % "".join(escaped)
 
 
+def _diff_lines(text):
+    """Split diff text on newlines only; str.splitlines also breaks on form feed, NEL and U+2028."""
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 def parse_unified_diff(text):
     """Split a unified diff into per-file entries with hunk header lines."""
     files, cur, in_hunk = [], None, False
-    for line in text.splitlines():
+    for line in _diff_lines(text):
         if line.startswith("diff --git "):
             if cur:
                 files.append(cur)
@@ -184,7 +193,7 @@ def changed_files_from_diff(text):
 def count_changed_lines(text):
     """Count additions and deletions within unified-diff hunks."""
     n, in_hunk = 0, False
-    for line in (text or "").splitlines():
+    for line in _diff_lines(text or ""):
         if line.startswith("diff --git "):
             in_hunk = False
         elif line.startswith("@@"):
@@ -207,7 +216,7 @@ def split_diff_by_file(text):
             else:
                 out[cur_file] = section
 
-    for line in text.splitlines():
+    for line in _diff_lines(text):
         if line.startswith("diff --git "):
             flush()
             buf = [line]
@@ -262,8 +271,8 @@ def reconstruct_diff_from_changes(changes):
             parts.append("old mode %s" % old_mode)
             parts.append("new mode %s" % new_mode)
         if c.get("renamed_file"):
-            parts.append("rename from %s" % old)
-            parts.append("rename to %s" % new)
+            parts.append("rename from %s" % _quote_git_path(old))
+            parts.append("rename to %s" % _quote_git_path(new))
         old_marker = "/dev/null" if c.get("new_file") else _quote_git_path("a/%s" % old)
         new_marker = "/dev/null" if c.get("deleted_file") else _quote_git_path("b/%s" % new)
         parts.append("--- %s" % old_marker)
@@ -298,7 +307,7 @@ def _can_be_metadata_only(change):
 
 def _section_has_binary_metadata(section):
     in_hunk = False
-    for line in section.splitlines():
+    for line in _diff_lines(section):
         if line.startswith("diff --git "):
             in_hunk = False
         elif line.startswith("@@"):
@@ -399,7 +408,10 @@ def _run(cmd, timeout=90):
 
 def _late_run(cmd, timeout=90, **_ignored):
     # resolve _run at call time so a test's replacement module attribute is used
-    return _run(cmd, timeout=timeout)
+    try:
+        return _run(cmd, timeout=timeout)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        return subprocess.CompletedProcess(cmd, 127, "", str(exc))
 
 
 def _git_diff_command(cwd):
@@ -446,45 +458,57 @@ def _git_diff_path(base, head, path, cwd=".", old_path=None):
         return None
 
 
-def _git_diff_range(base, head, cwd=".", context_lines=None):
-    """Return a complete range diff, including empty success, or None."""
+def _git_diff_range(base, head, cwd=".", context_lines=None, metadata=None):
+    """Return a complete range diff, including empty success, or None.
+
+    On failure `metadata["error"]` names the failing git step with a stderr snippet.
+    """
     if not base or not head:
         return None
     option = [] if context_lines is None else ["-U%d" % context_lines]
     cmd = (_git_diff_command(cwd) + ["--find-renames=50%"] + option +
            ["%s..%s" % (base, head)])
+    step = "git diff of %s..%s" % (base[:12], head[:12])
     try:
         r = _run(cmd, timeout=120)
         if r.returncode == 0:
             return r.stdout
-    except Exception:
-        return None
+    except Exception as exc:
+        return _git_failed(metadata, step, exc)
 
     for sha in (base, head):
         try:
             r = _run(["git", "-C", cwd, "fetch", "origin", sha], timeout=120)
             if r.returncode != 0:
-                return None
-        except Exception:
-            return None
+                return _git_failed(metadata, "git fetch of %s" % sha[:12], r)
+        except Exception as exc:
+            return _git_failed(metadata, "git fetch of %s" % sha[:12], exc)
     try:
         r = _run(cmd, timeout=120)
-        return r.stdout if r.returncode == 0 else None
-    except Exception:
-        return None
+        if r.returncode == 0:
+            return r.stdout
+        return _git_failed(metadata, step, r)
+    except Exception as exc:
+        return _git_failed(metadata, step, exc)
 
 
-def _git_changed_files_range(base, head, cwd="."):
-    """Return the exact NUL-delimited range file list, or None on failure."""
+def _git_changed_files_range(base, head, cwd=".", metadata=None):
+    """Return the exact NUL-delimited range file list, or None on failure.
+
+    On failure `metadata["error"]` names the failing git step with a stderr snippet.
+    """
     if not base or not head:
         return None
+    step = "git diff --name-only of %s..%s" % (base[:12], head[:12])
     try:
         cmd = (_git_diff_command(cwd) + ["--find-renames=50%", "--name-only", "-z",
                "%s..%s" % (base, head)])
         r = _run(cmd, timeout=120)
-        return _deduplicate(r.stdout.split("\0")) if r.returncode == 0 else None
-    except Exception:
-        return None
+        if r.returncode != 0:
+            return _git_failed(metadata, step, r)
+        return _deduplicate(r.stdout.split("\0"))
+    except Exception as exc:
+        return _git_failed(metadata, step, exc)
 
 
 def _prepare_gitlab_changes(changes, refs, cwd="."):
@@ -535,7 +559,9 @@ def detect_target_branch(cwd="."):
     try:
         r = _run(["git", "-C", cwd, "symbolic-ref", "refs/remotes/origin/HEAD"], timeout=10)
         if r.returncode == 0 and r.stdout.strip():
-            return r.stdout.strip().rsplit("/", 1)[-1]
+            ref = r.stdout.strip()
+            prefix = "refs/remotes/origin/"
+            return ref[len(prefix):] if ref.startswith(prefix) else ref.rsplit("/", 1)[-1]
     except Exception:
         pass
     return "main"
@@ -707,11 +733,11 @@ def git_diff_branch(branch, target, context_lines, cwd=".", metadata=None):
         base = base_result.stdout.strip()
     except Exception as exc:
         return _git_failed(metadata, "git branch diff", exc)
-    diff_text = _git_diff_range(base, head, cwd, context_lines)
-    changed_files = (_git_changed_files_range(base, head, cwd)
+    diff_text = _git_diff_range(base, head, cwd, context_lines, metadata)
+    changed_files = (_git_changed_files_range(base, head, cwd, metadata)
                      if diff_text is not None else None)
     if changed_files is None:
-        return _git_failed(metadata, "git diff of %s..%s" % (base[:12], head[:12]))
+        return None
     if metadata is not None:
         metadata["refs"] = {"base": base, "start": base, "head": head}
         metadata["changed_files"] = changed_files
@@ -873,8 +899,8 @@ def main(argv=None):
             if forge is None:
                 forge_reason = forge_error
             else:
-                forge_reason = forge_metadata.get(
-                    "error", "no change request found for branch or the forge diff failed")
+                forge_reason = forge_metadata.get("error") or _with_cause(
+                    "no change request found for branch or the forge diff failed", forge)
             fallback_reason = "%s; used git diff" % forge_reason
             diff_text = git_diff_branch(args.branch, target, args.context_lines,
                                         args.cwd, local_metadata)
@@ -927,7 +953,8 @@ def main(argv=None):
             identity_error = "change author identity is incomplete; seat detection is unsafe"
         if identity_error:
             return _fail(args.out, mode, identity_error, seat="unknown")
-        mixed = mixed_authorship(detected, viewer, commit_authors(forge, number))
+        authors = commit_authors(forge, number)
+        mixed = mixed_authorship(detected, viewer, authors)
         seat_source = "detected"
         if mixed:
             if not args.seat:
@@ -959,6 +986,9 @@ def main(argv=None):
             "author_trusted": True if details.get("author_id") == viewer.get("id") and details.get("author_id") is not None
                               else details.get("author_trusted"),
         })
+        if authors is None:
+            change["mixed_authorship_note"] = _with_cause(
+                "commit authors unavailable; mixed-authorship check skipped", forge)
         if details.get("target_branch"):
             target = details["target_branch"]
 
@@ -1008,8 +1038,7 @@ def main(argv=None):
     }
     if batched:
         context["batches"] = batches
-    with open(args.out, "w") as fh:
-        json.dump(context, fh, indent=2)
+    write_json(args.out, context)
 
     meta = {
         "forge": choice.name,

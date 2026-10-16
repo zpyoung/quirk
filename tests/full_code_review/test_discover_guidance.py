@@ -4,18 +4,6 @@ from pathlib import Path
 import discover_guidance as m
 
 
-def test_normalize_scp(tmp_path):
-    assert m.normalize_repo_key(
-        "git@git.example.com:engineering/frontend/frontend.git"
-    ) == "engineering--frontend--frontend"
-
-
-def test_normalize_https(tmp_path):
-    assert m.normalize_repo_key(
-        "https://git.example.com/engineering/frontend/frontend.git"
-    ) == "engineering--frontend--frontend"
-
-
 def test_gather_sources(tmp_path):
     root = Path(tmp_path) / "repo"
     (root / ".claude" / "skills" / "review-x").mkdir(parents=True)
@@ -139,3 +127,23 @@ def test_exclude_changed_flag_reads_the_changed_files_list(tmp_path, capsys):
     target = json.loads(capsys.readouterr().out)["target_repo"]
     assert target["changed_guidance"] == ["AGENTS.md"]
     assert target["other"] == []
+
+
+def test_exclude_changed_fails_when_the_changed_files_list_is_unreadable(tmp_path, capsys):
+    root = _guidance_repo(tmp_path)
+    missing = Path(tmp_path) / "nope.txt"
+    assert m.main(["--git-root", str(root), "--changed-files", str(missing), "--exclude-changed"]) == 2
+    assert "cannot read --changed-files" in json.loads(capsys.readouterr().out)["error"]
+
+
+def test_exclude_changed_requires_a_changed_files_list(tmp_path, capsys):
+    root = _guidance_repo(tmp_path)
+    assert m.main(["--git-root", str(root), "--exclude-changed"]) == 2
+    assert "requires --changed-files" in json.loads(capsys.readouterr().out)["error"]
+
+
+def test_unreadable_changed_files_is_tolerated_without_exclude_changed(tmp_path, capsys):
+    root = _guidance_repo(tmp_path)
+    missing = Path(tmp_path) / "nope.txt"
+    assert m.main(["--git-root", str(root), "--changed-files", str(missing)]) == 0
+    assert json.loads(capsys.readouterr().out)["target_repo"]["changed_guidance"] == []

@@ -37,5 +37,6 @@ bloat (`tests` owns them). Production changes with no test changes at all
 
 All test lenses obey the skill's verification gate: no Must/Should fix from the diff
 alone; read the source at the correct ref first. The mutation probe in
-`lenses/_mutation-probe.md` is the strongest form of that gate; apply it when its
-conditions hold.
+`lenses/_mutation-probe.md` is the strongest form of that gate; apply it only when the
+dispatch says `mutation probe: enabled`. Without that line, do not run tests, builds, or
+any mutant, even on a scratch copy; argue from the source you read.

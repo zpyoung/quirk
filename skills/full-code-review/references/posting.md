@@ -38,10 +38,16 @@ python3 "$SCRIPTS/post_author_comments.py" --report "$REPORT_JSON" --context "$C
 ```
 
 `--ids` is exactly the approved batch. A finding not marked `post: true` in
-`bodies.json` is skipped with a warning. On GitHub each finding becomes a pull-request
-review comment (`path`, `line`, `side`, `commit_id`); on GitLab a positioned discussion
-built from `refs`. A failed create stops the batch and exits 2 with the IDs already
-posted; their receipts stay in `--out`.
+`bodies.json` is skipped with a warning, and the script refuses a `bodies.json` that
+`comment_body.py author` did not build from this same report (its `report_sha256` must
+match), so a stale file can't post old text on a new finding's line. A skipped
+finding (outside the diff, or on a file the forge collapsed) is not posted anywhere
+else: read the warnings and tell the user which approved ids did not post. On GitHub
+each finding becomes a pull-request review comment (`path`, `line`, `side`,
+`commit_id`); on GitLab a positioned discussion built from `refs`. A failed create stops the batch and exits 2 with the IDs already
+posted and any warnings collected so far; their receipts stay in `--out`. The
+`--overview` receipt goes to a sibling file (`<out>.overview.json`), so `--out` holds
+only finding receipts and `review_memory.py save --receipts` accepts it unchanged.
 
 Two rules that cost the most time when missed:
 
@@ -61,8 +67,9 @@ python3 "$SCRIPTS/comment_body.py" author --report "$REPORT_JSON" \
 ```
 
 `bodies.json` maps each report finding ID to `{body, fingerprint, post}`, and carries
-`overview` (the optional overview note) and `warnings` (each `impact`/`fix_md`
-fallback taken on a finding that will post; the CLI also prints them). Only entries
+`overview` (the optional overview note), `report_sha256` (the digest the posting script
+checks) and `warnings` (each `impact`/`fix_md` fallback taken on a finding that will
+post; the CLI also prints them). Only entries
 with `post: true` are candidates for the batch, and the live `check` below can still
 remove one. `--decisions` must be the author-seat export `validate_triage.py` wrote
 for this same report: its `report_sha256` has to match the report, or the CLI exits 2.
@@ -211,8 +218,10 @@ replies are added inside that pending review through GraphQL. Consequences:
 
 - GitHub allows one pending review per user per pull request, so any existing pending
   review blocks staging (exit 4), the same as GitLab drafts.
-- A finding whose line is outside the diff is omitted with a warning before the create,
-  because one unplaceable comment fails the whole create.
+- A finding whose line is outside the diff (or on a file the forge collapsed) can't be a
+  review comment, because one unplaceable comment fails the whole create. It is omitted
+  with a warning and listed under "Not anchored inline" in the overview, so the approved
+  finding still reaches the change's author. GitLab stages the same way.
 - If the create errors but GitHub committed it anyway, the stager adopts the pending
   review whose body matches the overview instead of creating a second one.
 - Cleanup is one user-run `gh api … -X DELETE …/reviews/<id>`, which removes the pending

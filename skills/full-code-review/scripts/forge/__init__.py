@@ -4,11 +4,8 @@ The adapters in this package own every forge call: reads, posting, staging, publ
 the reviewer's completion verdict. Scripts work on these shapes and on the `Forge`
 protocol, and build an adapter with `make_forge`.
 
-Two things stay outside the adapters. `post_reviewer_review` still picks the transport it
-injects by forge name, and it reads draft and thread dicts with `forge.gitlab.draft_summary`
-and `discussion_resolved`; both adapters return those shapes, so the helpers are neutral
-in practice. `review_memory.fetch_discussions` passes a GET-only transport when it builds
-a GitLab adapter.
+Helpers such as `forge.gitlab.draft_summary` and `discussion_resolved` read the draft and
+thread dicts that both adapters return.
 """
 from __future__ import annotations
 
@@ -25,7 +22,7 @@ class ForgeError(RuntimeError):
     """A forge call or a forge response failed.
 
     `code` is one of: auth, not_found, conflict, validation, transient, unknown.
-    It subclasses RuntimeError so callers that historically caught RuntimeError keep working.
+    It subclasses RuntimeError, so callers that catch RuntimeError also catch it.
     """
 
     def __init__(self, message: str, code: str = "unknown"):
@@ -60,6 +57,86 @@ def valid_sha(value, label):
     if not isinstance(value, str) or not SHA_RE.match(value):
         raise ForgeError("%s must be a full lowercase SHA" % label, "validation")
     return value
+
+
+_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
+def _header_path(text, prefix):
+    """Return the path in a ---/+++ header line, or None for /dev/null."""
+    text = text.split("\t", 1)[0]
+    if text == "/dev/null":
+        return None
+    return text[len(prefix):] if text.startswith(prefix) else text
+
+
+def _scan_hunks(diff_text, path):
+    new_lines, old_lines, context = set(), set(), {}
+    old_path = new_path = None
+    old_no = new_no = old_left = new_left = 0
+    in_file = False
+    # splitlines() would also break on \x0b, \x0c, \x85 and U+2028 inside file content
+    lines = (diff_text or "").split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    for line in lines:
+        if line.startswith("diff --git "):
+            old_path = new_path = None
+            old_left = new_left = 0
+            in_file = False
+            continue
+        if old_left <= 0 and new_left <= 0:
+            if line.startswith("--- "):
+                old_path = _header_path(line[4:], "a/")
+            elif line.startswith("+++ "):
+                new_path = _header_path(line[4:], "b/")
+            else:
+                match = _HUNK_RE.match(line)
+                if match:
+                    old_no, new_no = int(match.group(1)), int(match.group(3))
+                    old_left = int(match.group(2) if match.group(2) is not None else 1)
+                    new_left = int(match.group(4) if match.group(4) is not None else 1)
+                continue
+            in_file = path == new_path or (new_path is None and path == old_path)
+            continue
+        if line.startswith("\\"):
+            continue
+        if line.startswith("+"):
+            if in_file:
+                new_lines.add(new_no)
+            new_no += 1
+            new_left -= 1
+        elif line.startswith("-"):
+            if in_file:
+                old_lines.add(old_no)
+            old_no += 1
+            old_left -= 1
+        else:
+            if in_file:
+                new_lines.add(new_no)
+                old_lines.add(old_no)
+                context[new_no] = old_no
+            old_no += 1
+            new_no += 1
+            old_left -= 1
+            new_left -= 1
+    return new_lines, old_lines, context
+
+
+def hunk_lines(diff_text, path):
+    """Return ({new-side lines}, {old-side lines}) a review comment may anchor on for `path`.
+
+    `path` matches a file's new path, or its old path when the file was deleted. Hunk
+    line counts decide where a hunk ends, so added or removed lines that look like
+    `+++ ` or `--- ` headers are still read as content.
+    """
+    new_lines, old_lines, _ = _scan_hunks(diff_text, path)
+    return new_lines, old_lines
+
+
+def context_lines(diff_text, path):
+    """Return {new line: old line} for the unchanged lines inside `path`'s hunks."""
+    return _scan_hunks(diff_text, path)[2]
 
 
 FORGE_NAMES = ("github", "gitlab", "none")
@@ -198,6 +275,10 @@ class Forge(Protocol):
         "source_branch", "target_branch", "sha", "base_sha", "start_sha", "web_url"} | None
     current_user() -> {"id", "username"} | None
     find_change_for_branch(branch) -> int | None
+    commit_authors(number) -> [{"username", "email"}] | None
+        The reads that return None on failure (change_details, current_user, commit_authors,
+        find_change_for_branch) leave the cause in `last_error`; it stays None when the
+        answer is simply "no such change".
     list_threads(number) -> [{"id", "resolved"?, "web_url"?, "position"?,
         "notes": [{"id", "body", "author": {"id", "username"}, "web_url"?, "position"?,
                    "resolved"?}]}]   (raises ForgeError on incomplete pagination)

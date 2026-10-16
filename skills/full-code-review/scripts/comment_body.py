@@ -13,8 +13,10 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import prepare_diff  # noqa: E402
 import render_report  # noqa: E402
 import review_memory  # noqa: E402
+from jsonio import write_json  # noqa: E402
 
 OPEN_LINE = "<!-- quirk-review:v1"
 CLOSE_LINE = "-->"
@@ -32,8 +34,9 @@ _FENCE_CLOSE_RE = re.compile(r" {0,3}(`{3,}|~{3,})[ \t]*")
 _DETAILS_TAG_RE = re.compile(r"<(/?)details", re.IGNORECASE)
 _QUICK_ACTION_RE = re.compile(r"^((?:[ \t]*>)*[ \t]*)/")
 _HTML_BLOCK_OPEN_RE = re.compile(
-    r"^((?:[ \t]*>)*[ \t]*)<(?=!--|!\[CDATA\[|![A-Za-z]|\?|(?i:pre|script|style|textarea)(?:[ \t>]|$))")
-_CODE_SPAN_OR_MENTION_RE = re.compile(r"(?P<code>(?P<ticks>`+).+?(?P=ticks))|(?P<mention>(?<!\w)@(?=[A-Za-z0-9_]))")
+    r"^((?:[ \t]*>)*[ \t]*)<(?=!--|!\[CDATA\[|![A-Za-z]|\?|/?[A-Za-z])")
+_CODE_SPAN_OR_MENTION_RE = re.compile(
+    r"(?P<code>(?<!\\)(?P<ticks>`+).+?(?P=ticks))|(?P<mention>(?<!\w)@(?=[A-Za-z0-9_]))")
 _LINE_BREAK_RE = re.compile(r"\r\n|[\r\u2028\u2029]")
 _POSTED_SLOTS = ("fix", "later", "detail")
 _DIGITS_RE = re.compile(r"[0-9]+")
@@ -191,16 +194,12 @@ def _defuse_mentions(line):
 
 
 def _neutralize(text):
-    """Make untrusted markdown safe to post inside the comment skeleton.
+    """Make untrusted markdown inert inside the comment skeleton.
 
-    Details tags and a line-leading slash are escaped everywhere, fenced or not, because GitLab's
-    renderer and quick-action extractor can disagree with our fence rules; the slash escape keeps
-    GitLab from running a quick action as the posting user. A line-leading raw HTML block opener
-    that runs to a terminator (comment, `<pre`, `<script`, `<style`, `<textarea`, `<?`,
-    `<!LETTER`, CDATA) is escaped so it cannot swallow the visible note. Any dangling fence is
-    closed. Every line ending GitLab honors is normalized to a newline first so none can hide a
-    line start. An `@` that starts a word outside code is followed by a zero-width space so it
-    cannot notify a user or group; emails and code spans are left alone.
+    It cannot close our `<details>` or metadata block, run a GitLab quick action as the poster,
+    open a raw HTML block that hides a fence or swallows the note, leave a fence open, or notify
+    a user. The escapes apply fenced or not because GitLab's renderer and quick-action extractor
+    can disagree with our fence parsing.
     """
     out = []
     fence = None
@@ -225,23 +224,32 @@ def _neutralize(text):
     return "\n".join(out)
 
 
+def _without_prefix(path, prefix):
+    return path[len(prefix):] if path.startswith(prefix) else path
+
+
 def path_pairs(diff_text):
-    """Map each new path in a unified diff to its {"old", "new"} paths, following renames."""
+    """Map each new path in a unified diff to its {"old", "new"} paths, following renames.
+
+    Quoted paths are decoded the way git quotes them, and lines split on newlines only.
+    """
     pairs = {}
     current = None
-    for line in str(diff_text or "").splitlines():
-        match = re.match(r"^diff --git a/(.*?) b/(.*)$", line)
-        if match:
-            old_path, new_path = match.groups()
+    for line in prepare_diff._diff_lines(str(diff_text or "")):
+        fields = prepare_diff._diff_git_fields(line)
+        if fields and all(fields):
+            old_path, new_path = _without_prefix(fields[0], "a/"), _without_prefix(fields[1], "b/")
             current = {"old": old_path, "new": new_path}
             pairs[new_path] = current
         elif current and line.startswith("rename from "):
-            current["old"] = line[len("rename from "):]
+            current["old"] = prepare_diff._decode_git_path(line[len("rename from "):]) or current["old"]
         elif current and line.startswith("rename to "):
-            old_key = current["new"]
-            current["new"] = line[len("rename to "):]
-            pairs.pop(old_key, None)
-            pairs[current["new"]] = current
+            renamed = prepare_diff._decode_git_path(line[len("rename to "):])
+            if renamed:
+                old_key = current["new"]
+                current["new"] = renamed
+                pairs.pop(old_key, None)
+                pairs[renamed] = current
     return pairs
 
 
@@ -501,6 +509,23 @@ def _earlier_section(heading, omitted, by_id):
     return "**%s**\n\n%s" % (heading, "\n".join(rows)) if rows else None
 
 
+def _unplaced_section(omitted, by_id):
+    """List approved findings the forge could not anchor inline, so they still reach the author."""
+    rows = []
+    for item in omitted:
+        if not item.get("unplaced"):
+            continue
+        found = by_id.get(item.get("id")) or {}
+        title = _title_of(item, by_id, "id") or str(item.get("id") or "finding")
+        row = "- **%s:** %s" % (_line(item.get("disposition") or "Finding"), _line(title))
+        if found.get("file"):
+            row += " (`%s:%s`)" % (_line(found["file"]), _line(found.get("line", "")))
+        if _text(found.get("impact")):
+            row += " — %s" % _line(found["impact"])
+        rows.append(row)
+    return "**Not anchored inline**\n\n%s" % "\n".join(rows) if rows else None
+
+
 def _appears_fixed_section(report):
     memory = report.get("memory") if isinstance(report.get("memory"), dict) else {}
     rows = []
@@ -596,6 +621,9 @@ def overview_body(report, *, seat, posted, omitted, report_sha256, head_note=Non
     count_line = _count_line(len(still_open), len(resolved))
     if count_line:
         parts.append(count_line)
+    unplaced = _unplaced_section(omitted, by_id)
+    if unplaced:
+        parts.append(unplaced)
 
     sections = [
         "**Summary**\n\n%s" % _md(meta["standfirst_md"]) if _text(meta.get("standfirst_md")) else None,
@@ -689,7 +717,8 @@ def _author_bodies(raw, decisions=None):
         prepared, seat="author", posted=posted, omitted=omitted,
         report_sha256=_report_digest(raw))
     warnings.extend(overview_warnings)
-    return {"findings": bodies, "overview": overview, "warnings": warnings}
+    return {"findings": bodies, "overview": overview, "warnings": warnings,
+            "report_sha256": _report_digest(raw)}
 
 
 def main(argv=None):
@@ -706,10 +735,7 @@ def main(argv=None):
             raw = json.load(handle)
         result = _author_bodies(raw, _decision_rows(args.decisions, raw))
         target = os.path.abspath(args.out)
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        with open(target, "w", encoding="utf-8") as handle:
-            json.dump(result, handle, indent=2, ensure_ascii=False)
-            handle.write("\n")
+        write_json(target, result)
     except (ValueError, OSError) as exc:
         print(json.dumps({"error": str(exc)}))
         return 2

@@ -99,6 +99,11 @@ def test_block_sequence_at_the_key_indent_inside_a_list_item(yaml_mini) -> None:
     assert yaml_mini.parse(text, "flush.yml") == {"items": [{"a": ["x", "y"], "b": "two"}, "c"]}
 
 
+def test_apostrophe_inside_a_plain_scalar_does_not_open_a_quote(yaml_mini) -> None:
+    text = "a: don't touch # note\nb: 1\n"
+    assert yaml_mini.parse(text, "plain.yml") == {"a": "don't touch", "b": "1"}
+
+
 def test_single_quoted_scalar_with_escaped_quote(yaml_mini) -> None:
     text = "title: 'It''s broken'\n"
     assert yaml_mini.parse(text, "single.yml") == {"title": "It's broken"}
@@ -325,6 +330,11 @@ PARITY_FIXTURES = [
     'labels: ["bug", "needs-triage"]\n',
     "labels: []\n",
     "labels: [bug, needs-triage,]\n",
+    "a: |-\n  x\n  y\nb: z\n",
+    "a: >+\n  x\n  y\n\nb: z\n",
+    "skip_globs:\n- \"*.lock\"\n- dist/**\nseverity_floor: Must fix\n",
+    "a: don't touch # note\nb: it's 'q' # c\n",
+    "a: [don't, 'x, y', \"q\"]\n",
 ]
 
 

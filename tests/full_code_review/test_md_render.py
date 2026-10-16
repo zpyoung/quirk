@@ -1,19 +1,17 @@
 import re
-import sys
-from pathlib import Path
 
 import pytest
 
 import md_render as m
 
 
-def test_empty(tmp_path):
+def test_empty():
     assert m.render_markdown(None) == ""
     assert m.render_markdown("") == ""
     assert m.render_inline(None) == ""
 
 
-def test_escaping_boundary(tmp_path):
+def test_escaping_boundary():
     rendered = m.render_markdown("<script>alert(1)</script>")
     assert "&lt;script&gt;" in rendered and "<script" not in rendered
     rendered = m.render_markdown("- <img src=x onerror=boom>\n\n| H |\n| --- |\n| <img onerror=x> |")
@@ -21,7 +19,7 @@ def test_escaping_boundary(tmp_path):
     assert "<img" not in rendered
 
 
-def test_allowed_links(tmp_path):
+def test_allowed_links():
     for dest in ("https://x", "HTTPS://x", "mailto:a@b", "./rel/path", "#anchor", ""):
         rendered = m.render_inline("[x](%s)" % dest)
         assert '<a href="' in rendered, (dest, rendered)
@@ -30,7 +28,7 @@ def test_allowed_links(tmp_path):
     assert 'href="https://e/?a=1&amp;b=&quot;"' in rendered
 
 
-def test_rejected_links(tmp_path):
+def test_rejected_links():
     destinations = ("javascript:alert(1)", "\x01javascript:void0", "//evil.com",
                     "data:text/html,x", "https://x/\npath", "https://x/\u2028path",
                     "https://x\n", "\u2028https://x", "https:\\evil.com", "\\\\evil.com")
@@ -40,7 +38,7 @@ def test_rejected_links(tmp_path):
         assert "[x]" in rendered
 
 
-def test_inline_nesting(tmp_path):
+def test_inline_nesting():
     assert m.render_inline("***x***") == "<strong><em>x</em></strong>"
     assert m.render_inline("**[see `x`](https://e)**") == (
         '<strong><a href="https://e" rel="noopener noreferrer">see <code>x</code></a></strong>')
@@ -51,7 +49,7 @@ def test_inline_nesting(tmp_path):
         '<a href="https://e" rel="noopener noreferrer"><strong>urgent</strong></a>')
 
 
-def test_code_protection(tmp_path):
+def test_code_protection():
     assert m.render_inline("`**x**`") == "<code>**x**</code>"
     assert m.render_inline('`"`') == "<code>&quot;</code>"
     assert m.render_inline("`[x](https://e)`") == "<code>[x](https://e)</code>"
@@ -69,19 +67,19 @@ def test_code_protection(tmp_path):
     assert "first\nsecond" in unclosed and unclosed.endswith("</code></pre>")
 
 
-def test_backslash_escapes(tmp_path):
+def test_backslash_escapes():
     assert m.render_inline(r"\*not bold\*") == "*not bold*"
     assert m.render_inline(r"\`not code\`") == "`not code`"
     assert m.render_inline(r"\[not a link]") == "[not a link]"
     assert m.render_inline(r"\\") == "\\"
 
 
-def test_unbalanced_markers(tmp_path):
+def test_unbalanced_markers():
     for value in ("**x", "*x", "[x](", "`unterminated"):
         assert m.render_inline(value) == value
 
 
-def test_paragraphs_and_lists(tmp_path):
+def test_paragraphs_and_lists():
     rendered = m.render_markdown("first\nsecond\n\n- one\n  continued\n- two\n\n1. alpha\n2. beta")
     assert "<p>first second</p>" in rendered
     assert "<ul><li>one continued</li><li>two</li></ul>" in rendered
@@ -90,13 +88,13 @@ def test_paragraphs_and_lists(tmp_path):
     assert nested == "<ul><li>parent - child</li></ul>"
 
 
-def test_blockquotes(tmp_path):
+def test_blockquotes():
     rendered = m.render_markdown("> quoted\n> ```\n> <x>\n> ```")
     assert rendered.startswith("<blockquote>")
     assert '<pre class="snippet"><code>&lt;x&gt;</code></pre>' in rendered
 
 
-def test_block_boundary_flushing(tmp_path):
+def test_block_boundary_flushing():
     cases = (
         ("text\n```\ncode\n```", "<p>text</p>\n<pre"),
         ("text\n- item", "<p>text</p>\n<ul>"),
@@ -107,7 +105,7 @@ def test_block_boundary_flushing(tmp_path):
         assert boundary in m.render_markdown(source)
 
 
-def test_tables(tmp_path):
+def test_tables():
     source = "| Left | Center | Right |\n| --- | :---: | ---: |\n| a\\|b | c | d |\n| short |\n| 1 | 2 | 3 | extra |"
     rendered = m.render_markdown(source)
     assert rendered.startswith('<div class="table-wrap"><table>')
@@ -118,37 +116,37 @@ def test_tables(tmp_path):
     assert "extra" not in rendered
 
 
-def test_one_column_table(tmp_path):
+def test_one_column_table():
     rendered = m.render_markdown("| H |\n| --- |")
     assert "<table>" in rendered and "<th>H</th>" in rendered
 
 
-def test_non_table_pipe_and_list_precedence(tmp_path):
+def test_non_table_pipe_and_list_precedence():
     rendered = m.render_markdown("a | b\nplain")
     assert "<table>" not in rendered and "a | b plain" in rendered
     rendered = m.render_markdown("- a | b\n  | --- |")
     assert rendered.startswith("<ul>") and "<table>" not in rendered
 
 
-def test_unsupported_constructs_literal(tmp_path):
+def test_unsupported_constructs_literal():
     rendered = m.render_markdown("# h\n![i](u)\n---")
     assert "<h1" not in rendered and "<a " not in rendered and "<hr" not in rendered
     assert "# h ![i](u) ---" in rendered
 
 
-def test_nul_is_not_a_sentinel(tmp_path):
+def test_nul_is_not_a_sentinel():
     rendered = m.render_inline("*\x00*x*\x00*")
     assert "\x00" in rendered
     assert "<strong>" not in rendered
 
 
-def test_pathological_depth_fails_safe(tmp_path):
+def test_pathological_depth_fails_safe():
     source = ">" * 2000 + " <script>"
     rendered = m.render_markdown(source)
     assert "<script>" not in rendered and "&lt;script&gt;" in rendered
 
 
-def test_diff_fence_renders_side_by_side_with_line_numbers(tmp_path):
+def test_diff_fence_renders_side_by_side_with_line_numbers():
     rendered = m.render_markdown(
         "```diff\n--- a/app/rates.py\n+++ b/app/rates.py\n@@ -10,3 +10,4 @@\n"
         "     total = 0\n-    total += round(p)\n+    total += p\n+    log(total)\n"
@@ -165,7 +163,7 @@ def test_diff_fence_renders_side_by_side_with_line_numbers(tmp_path):
     assert "@@ -10,3 +10,4 @@" in rendered
 
 
-def test_diff_fence_pairs_removed_runs_and_keeps_dash_content(tmp_path):
+def test_diff_fence_pairs_removed_runs_and_keeps_dash_content():
     rendered = m.render_markdown("```diff\n--- old sql comment\n-x\n+y\n```")
     rows = re.findall(r"<tr>(.*?)</tr>", rendered.split("<tbody>")[1])
     # a lone "---" line with no "+++" partner is a removed line, not a file header
@@ -175,14 +173,14 @@ def test_diff_fence_pairs_removed_runs_and_keeps_dash_content(tmp_path):
     assert re.findall(r'<td class="sbs-ln">(\d*)</td>', "".join(rows)) == ["", "", "", ""]
 
 
-def test_diff_fence_escapes_content_and_falls_back_without_changes(tmp_path):
+def test_diff_fence_escapes_content_and_falls_back_without_changes():
     rendered = m.render_markdown("```diff\n-<script>x</script>\n+ok\n```")
     assert "<script>" not in rendered and "&lt;script&gt;" in rendered
     plain = m.render_markdown("```diff\n context only\n```")
     assert "sbs" not in plain and '<pre class="snippet"><code class="lang-diff">' in plain
 
 
-def test_diff_fence_colours_each_side_as_one_source(tmp_path):
+def test_diff_fence_colours_each_side_as_one_source():
     pytest.importorskip("pygments")
     rendered = m.render_markdown(
         "```diff\n--- a/web/Price.tsx\n+++ b/web/Price.tsx\n@@ -1,3 +1,3 @@\n"
@@ -192,22 +190,3 @@ def test_diff_fence_colours_each_side_as_one_source(tmp_path):
     assert rows[1].count("tok--comment") == 2
     assert "tok--tag" in rows[2] and "tok--attribute" in rows[2]
 
-
-if __name__ == "__main__":
-    import tempfile
-    import traceback
-    fails = 0
-    for name in sorted(n for n in dict(globals()) if n.startswith("test_")):
-        fn = globals()[name]
-        if not callable(fn):
-            continue
-        with tempfile.TemporaryDirectory() as td:
-            try:
-                fn(Path(td))
-                print("PASS", name)
-            except Exception:
-                fails += 1
-                print("FAIL", name)
-                traceback.print_exc()
-    print("DONE fails=%d" % fails)
-    sys.exit(1 if fails else 0)

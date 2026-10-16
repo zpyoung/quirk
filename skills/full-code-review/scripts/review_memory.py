@@ -23,10 +23,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
-from forge import make_forge, parse_origin
-from jsonio import load_object, write_json
-from forge import note_url as _note_url
 from forge import gitlab as _gitlab
+from forge import make_forge, note_url as _note_url, parse_origin
+from jsonio import load_object, write_json
 
 SCHEMA_VERSION = 1
 _RETENTION_SECONDS = 90 * 24 * 60 * 60
@@ -104,9 +103,6 @@ def _locked(directory: Path):
             yield
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
-
-
-_atomic_write = write_json
 
 
 def _target_identity(context: dict, repo: str) -> tuple[dict, list[str]]:
@@ -209,8 +205,9 @@ def _prune(directory: Path, now: float) -> None:
         try:
             data, _ = _read_record(path)
             if data is None:
-                continue
-            touched = float(data.get("updated_at", data["snapshot"]["started_at"]))
+                touched = path.stat().st_mtime
+            else:
+                touched = float(data.get("updated_at", data["snapshot"]["started_at"]))
             if touched < cutoff:
                 path.unlink()
         except (OSError, ValueError, TypeError):
@@ -353,10 +350,24 @@ def _paths_from_header(lines: list[str]) -> tuple[str | None, str | None]:
     return old, new
 
 
-def _anchor(diff: str, file: str, line: Any, side: str = "new") -> str | None:
-    wanted = _line_number(line)
-    if wanted is None:
+def _line_span(value: Any) -> tuple[int, int] | None:
+    numbers = [int(item) for item in re.findall(r"\d+", str(value or ""))]
+    if not numbers:
         return None
+    last = numbers[1] if len(numbers) > 1 and numbers[1] >= numbers[0] else numbers[0]
+    return numbers[0], last
+
+
+def _anchor(diff: str, file: str, line: Any, side: str = "new") -> str | None:
+    """Text of the first nonblank diff line inside the finding's line range, or None.
+
+    A range that opens on blank lines anchors on its first nonblank line. None means that
+    line is ambiguous in the diff or the range has no nonblank line the diff shows.
+    """
+    span = _line_span(line)
+    if span is None:
+        return None
+    first, last = span
     lines = (diff or "").splitlines()
     section: list[str] = []
     sections: list[list[str]] = []
@@ -369,7 +380,7 @@ def _anchor(diff: str, file: str, line: Any, side: str = "new") -> str | None:
             section.append(text)
     if section:
         sections.append(section)
-    found = None
+    candidates: dict[int, list[str]] = {}
     for section in sections:
         old_path, new_path = _paths_from_header(section)
         if file not in (old_path, new_path):
@@ -385,17 +396,17 @@ def _anchor(diff: str, file: str, line: Any, side: str = "new") -> str | None:
             prefix, content = text[0], text[1:]
             if prefix == "\\":
                 continue
-            matched = ((side == "old" and old_no == wanted and prefix in (" ", "-")) or
-                       (side != "old" and new_no == wanted and prefix in (" ", "+")))
-            if matched:
-                if found is not None:
-                    return None
-                found = content
+            number = old_no if side == "old" else new_no
+            if first <= number <= last and prefix in ((" ", "-") if side == "old" else (" ", "+")):
+                candidates.setdefault(number, []).append(content)
             if prefix in (" ", "-"):
                 old_no += 1
             if prefix in (" ", "+"):
                 new_no += 1
-    return found
+    for number in sorted(candidates):
+        if any(_norm_anchor(content) for content in candidates[number]):
+            return candidates[number][0] if len(candidates[number]) == 1 else None
+    return None
 
 
 def _norm_anchor(text: str) -> str:
@@ -790,15 +801,15 @@ def commit_report(report: dict, decisions: dict | None = None, receipts: dict | 
             new_snapshot["discussions"] = []
             new_record = {**(record or {}), "schemaVersion": SCHEMA_VERSION,
                           "snapshot": new_snapshot, "updated_at": time.time()}
-            _atomic_write(ledger_path, new_record)
+            write_json(ledger_path, new_record)
             _prune(directory, time.time())
     except OSError as exc:
         return {"saved": False, "warnings": warnings + ["could not persist review memory: %s" % exc]}
     return {"saved": True, "warnings": warnings}
 
 
-def _load_json(path: str) -> dict:
-    return load_object(path)
+def _load_json(path: str, label: str = "JSON input") -> dict:
+    return load_object(path, label)
 
 
 def check_plan(report: dict, context: dict, snapshot: dict, repo: str = ".") -> dict:
@@ -913,26 +924,27 @@ def main(argv=None) -> int:
             print(json.dumps(stats(None if args.all else (args.repo or ".")), indent=2, sort_keys=True))
             return 0
         if args.command == "load":
-            result = load_snapshot(_load_json(args.context), args.repo, args.dimension, args.guidance, args.fresh)
-            _atomic_write(Path(args.out), result)
+            result = load_snapshot(_load_json(args.context, "--context"), args.repo, args.dimension, args.guidance, args.fresh)
+            write_json(Path(args.out), result)
         elif args.command == "reconcile":
-            result = reconcile(_load_json(args.report), _load_json(args.context), _load_json(args.snapshot), args.repo)
-            _atomic_write(Path(args.out), result)
+            result = reconcile(_load_json(args.report, "--report"), _load_json(args.context, "--context"),
+                         _load_json(args.snapshot, "--snapshot"), args.repo)
+            write_json(Path(args.out), result)
         elif args.command == "check":
-            report = _load_json(args.report)
-            context = _load_json(args.context)
-            snapshot = (_load_json(args.snapshot) if args.snapshot else
+            report = _load_json(args.report, "--report")
+            context = _load_json(args.context, "--context")
+            snapshot = (_load_json(args.snapshot, "--snapshot") if args.snapshot else
                         ((report.get("memory") or {}).get("snapshot")))
             if not isinstance(snapshot, dict):
                 raise ValueError("check requires --snapshot or report.memory.snapshot")
             result = check_plan(report, context, snapshot, args.repo)
-            _atomic_write(Path(args.out), result)
+            write_json(Path(args.out), result)
         else:
             if not args.decisions and not args.receipts:
                 raise ValueError("save requires --decisions or --receipts")
-            decisions = _load_json(args.decisions) if args.decisions else None
-            receipts = _load_json(args.receipts) if args.receipts else None
-            result = commit_report(_load_json(args.report), decisions, receipts)
+            decisions = _load_json(args.decisions, "--decisions") if args.decisions else None
+            receipts = _load_json(args.receipts, "--receipts") if args.receipts else None
+            result = commit_report(_load_json(args.report, "--report"), decisions, receipts)
         print(json.dumps(result, indent=2, sort_keys=True))
         return 1 if args.command == "save" and not result["saved"] else 0
     except Exception as exc:

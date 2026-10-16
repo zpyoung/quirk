@@ -1173,6 +1173,21 @@ def test_branch_fallback_reason_names_the_forge_error(monkeypatch, tmp_path, git
     assert "HTTP 404 for the merge request" in json.loads(stdout.getvalue())["fallback_reason"]
 
 
+def test_branch_fallback_reason_carries_the_branch_lookup_cause(monkeypatch, tmp_path, gitlab_origin, capsys):
+    def failing_lookup(forge, branch):
+        forge.last_error = "glab: 401 Unauthorized"
+
+    def branch_diff(branch, target, context_lines, cwd=".", metadata=None):
+        metadata["refs"] = {"base": "BASE", "start": "BASE", "head": "HEAD"}
+        return SAMPLE
+
+    monkeypatch.setattr(m, "find_change_for_branch", failing_lookup)
+    monkeypatch.setattr(m, "git_diff_branch", branch_diff)
+    assert m.main(["--forge", "gitlab", "--branch", "feature", "--out", str(tmp_path / "ctx.json")]) == 0
+    reason = json.loads(capsys.readouterr().out)["fallback_reason"]
+    assert "no change request found" in reason and "glab: 401 Unauthorized" in reason
+
+
 def test_branch_and_local_failure_messages_carry_the_underlying_causes(monkeypatch, tmp_path, gitlab_origin):
     def branch_diff(branch, target, context_lines, cwd=".", metadata=None):
         metadata["error"] = "git fetch of feature failed: fatal: Authentication failed"
@@ -1202,7 +1217,7 @@ GOOD_VIEWER = {"id": 2, "username": "me"}
 
 @pytest.fixture
 def seat_gate(monkeypatch, tmp_path, gitlab_origin):
-    """Run main against a stubbed GitLab change; returns (rc, stdout, stderr JSON, context path)."""
+    """Factory that runs main against a stubbed GitLab change; the callable returns (rc, context path, stderr JSON or None, stdout text)."""
     def run(details=GOOD_DETAILS, viewer=GOOD_VIEWER, refs=GOOD_REFS, selector=("--change", "42"), metadata=None):
         out = tmp_path / "ctx.json"
         monkeypatch.setattr(m, "find_change_for_branch", lambda forge, branch: 42)
@@ -1275,3 +1290,118 @@ def test_seat_failures_report_the_adapter_cause(monkeypatch, tmp_path, gitlab_or
     with contextlib.redirect_stderr(stderr):
         assert m.main(["--forge", "gitlab", "--change", "42", "--out", str(tmp_path / "ctx.json")]) == 1
     assert json.loads(stderr.getvalue())["error"]["message"] == message
+
+
+LINE_BREAKERS = ["\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029", "\r"]
+
+
+@pytest.mark.parametrize("char", LINE_BREAKERS)
+def test_diff_helpers_only_break_lines_on_newline(char):
+    text = ("diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n"
+            "@@ -1,2 +1,2 @@\n-a\n+b%sc\n ctx\n" % char)
+
+    assert m.split_diff_by_file(text) == {"f.txt": text.rstrip("\n")}
+    assert m.count_changed_lines(text) == 2
+    assert m.parse_unified_diff(text)[0]["hunks"] == ["@@ -1,2 +1,2 @@"]
+
+
+def test_binary_metadata_check_ignores_content_split_on_exotic_breaks():
+    section = "diff --git a/f b/f\n@@ -1 +1 @@\n+x\u2028GIT binary patch\n"
+    assert m._section_has_binary_metadata(section) is False
+
+
+def test_late_run_maps_launch_failures_and_timeouts_to_a_failed_result(monkeypatch):
+    def missing(cmd, timeout=90):
+        raise FileNotFoundError("gh not found")
+
+    def hung(cmd, timeout=90):
+        raise m.subprocess.TimeoutExpired(cmd, timeout)
+
+    monkeypatch.setattr(m, "_run", missing)
+    result = m._late_run(["gh", "api", "x"])
+    assert result.returncode == 127 and "gh not found" in result.stderr
+
+    monkeypatch.setattr(m, "_run", hung)
+    assert m._late_run(["gh", "api", "x"]).returncode == 127
+
+
+def test_context_file_is_written_atomically_into_missing_parent_dirs(tmp_path, monkeypatch, gitlab_origin, capsys):
+    out = tmp_path / "nested" / "dir" / "ctx.json"
+    monkeypatch.setattr(m, "change_diff", lambda forge, number, cwd=".", metadata=None: (
+        SAMPLE, dict(GOOD_REFS), {"number": 42, "title": "t", "description": "d", "source_branch": "feature"}))
+    monkeypatch.setattr(m, "change_details", lambda forge, number: GOOD_DETAILS)
+    monkeypatch.setattr(m, "current_user", lambda forge: GOOD_VIEWER)
+    monkeypatch.setattr(m, "commit_authors", lambda forge, number: [])
+
+    assert m.main(["--forge", "gitlab", "--change", "42", "--out", str(out)]) == 0
+    capsys.readouterr()
+    assert json.loads(out.read_text())["changed_files"] == ["foo.py", "bar/baz.txt"]
+    assert [p.name for p in out.parent.iterdir()] == ["ctx.json"]
+
+
+def test_reconstructed_rename_lines_quote_hostile_paths():
+    change = {"old_path": "evil\ndiff --git a/innocent.py b/innocent.py", "new_path": "new.py",
+              "renamed_file": True, "diff": "@@ -1 +1 @@\n-a\n+b\n"}
+    diff_text = m.reconstruct_diff_from_changes([change])
+
+    assert list(m.split_diff_by_file(diff_text)) == ["new.py"]
+    assert 'rename from "evil\\ndiff --git a/innocent.py b/innocent.py"\nrename to new.py' in diff_text
+
+
+@pytest.mark.parametrize("ref, expected", [
+    ("refs/remotes/origin/main\n", "main"),
+    ("refs/remotes/origin/release/2.0\n", "release/2.0"),
+])
+def test_detect_target_branch_keeps_slashes_in_the_branch_name(monkeypatch, ref, expected):
+    monkeypatch.setattr(m, "_run", lambda cmd, timeout=90: SimpleNamespace(returncode=0, stdout=ref, stderr=""))
+    assert m.detect_target_branch(".") == expected
+
+
+def test_range_diff_failure_carries_git_stderr(monkeypatch):
+    base, head = "a" * 40, "b" * 40
+
+    def fake_run(cmd, timeout=90):
+        if "diff" in cmd:
+            return SimpleNamespace(returncode=128, stdout="", stderr="fatal: bad object " + head)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(m, "_run", fake_run)
+    metadata = {}
+    assert m._git_diff_range(base, head, ".", None, metadata) is None
+    assert metadata["error"] == "git diff of %s..%s failed: fatal: bad object %s" % (base[:12], head[:12], head)
+
+
+def test_range_fetch_failure_carries_git_stderr(monkeypatch):
+    def fake_run(cmd, timeout=90):
+        if "fetch" in cmd:
+            return SimpleNamespace(returncode=128, stdout="", stderr="fatal: could not read from remote")
+        return SimpleNamespace(returncode=1, stdout="", stderr="unknown revision")
+
+    monkeypatch.setattr(m, "_run", fake_run)
+    metadata = {}
+    assert m._git_diff_range("a" * 40, "b" * 40, ".", None, metadata) is None
+    assert metadata["error"] == "git fetch of %s failed: fatal: could not read from remote" % ("a" * 12)
+
+
+def test_name_only_failure_carries_git_stderr(monkeypatch):
+    monkeypatch.setattr(m, "_run", lambda cmd, timeout=90: SimpleNamespace(
+        returncode=128, stdout="", stderr="fatal: ambiguous argument"))
+    metadata = {}
+    assert m._git_changed_files_range("a" * 40, "b" * 40, ".", metadata) is None
+    assert "failed: fatal: ambiguous argument" in metadata["error"]
+
+
+def test_branch_diff_failure_keeps_the_range_stderr(monkeypatch):
+    def fake_run(cmd, timeout=90):
+        if "rev-parse" in cmd:
+            return SimpleNamespace(returncode=0, stdout=("c" if "origin/main^{commit}" in cmd[-1] else "d") * 40 + "\n", stderr="")
+        if "merge-base" in cmd:
+            return SimpleNamespace(returncode=0, stdout="a" * 40 + "\n", stderr="")
+        if "diff" in cmd:
+            return SimpleNamespace(returncode=128, stdout="", stderr="fatal: bad revision")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(m, "_run", fake_run)
+    metadata = {}
+    assert m.git_diff_branch("feature", "main", 3, ".", metadata) is None
+    assert metadata["error"].endswith("failed: fatal: bad revision")

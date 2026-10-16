@@ -50,11 +50,6 @@ def _origin_identity(url):
     return parse_origin(url)
 
 
-def _project_from_origin(url):
-    """Compatibility helper used by older tests/callers."""
-    return _origin_identity(url)[1]
-
-
 def _git_root(path):
     try:
         result = _run(["git", "-C", str(path), "rev-parse", "--show-toplevel"], timeout=20)
@@ -158,6 +153,12 @@ def probe_refusal(context):
 
 
 def acquire(args):
+    """Borrow an isolated detached worktree of the change head, or record a diff-only manifest.
+
+    Writes the manifest to args.out and returns 0, or returns 2 with a JSON error. Never
+    switches the current checkout; a temp clone needs --allow-temp-clone, and the manifest is
+    written before git owns the worktree path so an interrupted run can still be released.
+    """
     try:
         context = _load(args.context)
         host, project, number, head = _validate_context(context)
@@ -230,6 +231,7 @@ def acquire(args):
                                    refspec=make_forge(forge_name, host, project).head_refspec(number))
     except Exception as exc:
         shutil.rmtree(worktree, ignore_errors=True)
+        _drop_review_ref(manifest)
         shutil.rmtree(cleanup_root, ignore_errors=True)
         manifest["acquisition"] = "failed"
         manifest["error"] = str(exc)
@@ -256,14 +258,31 @@ def _safe_marker(manifest):
 
 
 def _drop_review_ref(manifest):
-    """Delete the private review ref and prune the worktree record from the borrowed clone."""
+    """Delete the private review ref and prune the worktree record from the borrowed clone.
+
+    Returns a message naming what git refused to clean up, or None when nothing is left.
+    """
     repo_root = manifest.get("repo_root")
     review_ref = manifest.get("review_ref")
     if not isinstance(repo_root, str) or not os.path.isdir(repo_root):
-        return
-    _run(["git", "-C", repo_root, "worktree", "prune"], timeout=60)
+        return None
+    pruned = _run(["git", "-C", repo_root, "worktree", "prune"], timeout=60)
+    left = None
+    if pruned.returncode != 0:
+        left = "worktree prune failed: %s" % (pruned.stderr.strip() or pruned.stdout.strip())
     if isinstance(review_ref, str) and review_ref.startswith("refs/quirk-review/"):
-        _run(["git", "-C", repo_root, "update-ref", "-d", review_ref], timeout=60)
+        deleted = _run(["git", "-C", repo_root, "update-ref", "-d", review_ref], timeout=60)
+        if deleted.returncode != 0:
+            left = "%s not deleted: %s" % (review_ref, deleted.stderr.strip() or deleted.stdout.strip())
+    return left
+
+
+def _emit_released(manifest, already_absent, ref_left):
+    value = {"released": True, "kind": manifest.get("kind"), "already_absent": already_absent}
+    if ref_left:
+        value["ref_left"] = ref_left
+    _emit(value)
+    return 0
 
 
 def release(args):
@@ -272,6 +291,7 @@ def release(args):
     Refuses to delete anything the manifest does not prove this script created: the schema,
     the worktree basename prefix and the cleanup-marker token must all match. Reports
     `released` only once the paths are actually gone; otherwise exits 2 naming what is left.
+    A private ref or worktree record git would not remove is named in `ref_left`.
     """
     try:
         manifest = _load(args.manifest)
@@ -290,15 +310,12 @@ def release(args):
     already_absent = not os.path.exists(path)
     if (already_absent and isinstance(cleanup_root, str) and not os.path.exists(cleanup_root) and
             os.path.basename(cleanup_root).startswith(("quirk-review-cleanup-", "quirk-review-clone-"))):
-        _drop_review_ref(manifest)
-        _emit({"released": True, "kind": manifest.get("kind"), "already_absent": True})
-        return 0
+        return _emit_released(manifest, True, _drop_review_ref(manifest))
     if not _safe_marker(manifest):
         return _error("cleanup marker is missing or does not match the manifest")
     if not already_absent and isinstance(repo_root, str):
-        removed = _run(["git", "-C", repo_root, "worktree", "remove", "--force", path], timeout=120)
-        if removed.returncode != 0 and os.path.exists(path):
-            return _error("worktree cleanup failed: %s" % (removed.stderr.strip() or removed.stdout.strip()))
+        # an interrupted acquire leaves a directory git never registered, so a failed remove is not fatal
+        _run(["git", "-C", repo_root, "worktree", "remove", "--force", path], timeout=120)
     cleanup_root = manifest["cleanup_root"]
     shutil.rmtree(cleanup_root, ignore_errors=True)
     if manifest.get("kind") != "temp-clone" and os.path.exists(path):
@@ -306,9 +323,7 @@ def release(args):
     remaining = [item for item in (cleanup_root, path) if os.path.exists(item)]
     if remaining:
         return _error("cleanup incomplete; still present: %s" % ", ".join(remaining))
-    _drop_review_ref(manifest)
-    _emit({"released": True, "kind": manifest.get("kind"), "already_absent": already_absent})
-    return 0
+    return _emit_released(manifest, already_absent, _drop_review_ref(manifest))
 
 
 def main(argv=None):

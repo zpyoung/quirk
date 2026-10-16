@@ -60,6 +60,21 @@ def test_malformed_input_exits_2_not_as_a_smoke_miss(tmp_path, report, expected)
     assert "error" in json.loads(out.getvalue())
 
 
+@pytest.mark.parametrize("name, content, message", [
+    ("report", "[]", "report must be a JSON object"),
+    ("expected", "not json", "could not read expected"),
+])
+def test_bad_input_error_names_which_file_was_wrong(tmp_path, name, content, message):
+    paths = {"report": tmp_path / "report.json", "expected": tmp_path / "expected.json"}
+    paths["report"].write_text(json.dumps({"findings": []}))
+    paths["expected"].write_text(json.dumps(EXPECTED))
+    paths[name].write_text(content)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        assert m.main(["--report", str(paths["report"]), "--expected", str(paths["expected"])]) == 2
+    assert message in json.loads(out.getvalue())["error"]
+
+
 @pytest.mark.parametrize("case", sorted(p.name for p in SMOKE.iterdir() if (p / "expected.json").is_file()))
 def test_each_smoke_case_patch_applies_and_names_a_changed_file(tmp_path, case):
     source = SMOKE / case

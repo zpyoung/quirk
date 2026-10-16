@@ -14,7 +14,7 @@ import re
 import shlex
 from urllib.parse import quote
 
-from forge import ForgeError, change_label as _change_label, default_run, positive_int
+from forge import ForgeError, change_label as _change_label, default_run, hunk_lines, positive_int
 from forge import note_url as _note_url
 
 NAME = "github"
@@ -86,76 +86,12 @@ def _digest(text):
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
 
 
-_HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
-
-
-def _header_path(text, prefix):
-    """Return the path in a ---/+++ header line, or None for /dev/null."""
-    text = text.split("\t", 1)[0]
-    if text == "/dev/null":
-        return None
-    return text[len(prefix):] if text.startswith(prefix) else text
-
-
-def hunk_lines(diff_text, path):
-    """Return ({new-side lines}, {old-side lines}) a review comment may anchor on for `path`.
-
-    `path` matches a file's new path, or its old path when the file was deleted. Hunk
-    line counts decide where a hunk ends, so added or removed lines that look like
-    `+++ ` or `--- ` headers are still read as content.
-    """
-    new_lines, old_lines = set(), set()
-    old_path = new_path = None
-    old_no = new_no = old_left = new_left = 0
-    in_file = False
-    for line in (diff_text or "").splitlines():
-        if line.startswith("diff --git "):
-            old_path = new_path = None
-            old_left = new_left = 0
-            in_file = False
-            continue
-        if old_left <= 0 and new_left <= 0:
-            if line.startswith("--- "):
-                old_path = _header_path(line[4:], "a/")
-            elif line.startswith("+++ "):
-                new_path = _header_path(line[4:], "b/")
-            else:
-                match = _HUNK_RE.match(line)
-                if match:
-                    old_no, new_no = int(match.group(1)), int(match.group(3))
-                    old_left = int(match.group(2) if match.group(2) is not None else 1)
-                    new_left = int(match.group(4) if match.group(4) is not None else 1)
-                continue
-            in_file = path == new_path or (new_path is None and path == old_path)
-            continue
-        if line.startswith("\\"):
-            continue
-        if line.startswith("+"):
-            if in_file:
-                new_lines.add(new_no)
-            new_no += 1
-            new_left -= 1
-        elif line.startswith("-"):
-            if in_file:
-                old_lines.add(old_no)
-            old_no += 1
-            old_left -= 1
-        else:
-            if in_file:
-                new_lines.add(new_no)
-                old_lines.add(old_no)
-            old_no += 1
-            new_no += 1
-            old_left -= 1
-            new_left -= 1
-    return new_lines, old_lines
-
-
 class GitHubForge:
     """GitHub bound to one host and owner/repo, with injectable transport.
 
-    `change_details` and `current_user` return None on failure; `last_error` then holds the
-    cause (None after a success) so callers can report why.
+    `change_details`, `current_user`, `commit_authors` and `find_change_for_branch` return
+    None on failure; `last_error` then holds the cause (None after a success) so callers can
+    report why.
     """
 
     name = NAME
@@ -267,28 +203,32 @@ class GitHubForge:
         GitHub stops listing a pull request's commits at 250 without saying so, so a
         list that reaches the cap is unknown rather than a complete author set.
         """
+        self.last_error = None
         try:
             commits = get_pages(self._api_call, self.host, self._pull(number, "/commits"))
-        except ForgeError:
+        except ForgeError as exc:
+            self.last_error = str(exc)
             return None
         if len(commits) >= _COMMITS_CAP:
+            self.last_error = "GitHub lists at most %d commits, so the author set may be incomplete" % _COMMITS_CAP
             return None
         return [{"username": (c.get("author") or {}).get("login"),
                  "email": ((c.get("commit") or {}).get("author") or {}).get("email")}
                 for c in commits if isinstance(c, dict)]
 
     def find_change_for_branch(self, branch):
+        self.last_error = None
         owner = self.project.split("/", 1)[0]
         head = "%s:%s" % (quote(owner, safe=""), quote(branch, safe=""))
         try:
             data = self._api_call(self.host, "GET", self._repo("/pulls?head=%s&state=open" % head))
-        except ForgeError:
+        except ForgeError as exc:
+            self.last_error = str(exc)
             return None
         return data[0].get("number") if isinstance(data, list) and data else None
 
-    def changed_paths(self, old_head, new_head):
-        """Return the paths changed between two heads; raise when GitHub may have truncated them."""
-        data = self._api_call(self.host, "GET", self._repo("/compare/%s...%s" % (old_head, new_head)))
+    def _compare_paths(self, base, head):
+        data = self._api_call(self.host, "GET", self._repo("/compare/%s...%s" % (base, head)))
         files = data.get("files") if isinstance(data, dict) else None
         if not isinstance(files, list):
             raise ForgeError("GitHub compare response is missing files")
@@ -300,6 +240,17 @@ class GitHubForge:
             for key in ("filename", "previous_filename"):
                 if isinstance(item.get(key), str) and item[key]:
                     paths.add(item[key])
+        return data.get("status"), paths
+
+    def changed_paths(self, old_head, new_head):
+        """Return the paths that differ between two heads; raise when GitHub may have truncated them.
+
+        GitHub only compares from the merge base, so when `new_head` is behind or diverged
+        from `old_head` the files the dropped commits touched come from the reverse comparison.
+        """
+        status, paths = self._compare_paths(old_head, new_head)
+        if status in ("behind", "diverged"):
+            paths |= self._compare_paths(new_head, old_head)[1]
         return paths
 
     def head_refspec(self, number):

@@ -5,9 +5,9 @@ as their first argument, so a script can pass a late-bound reference to its own
 module-level runner and tests that replace that runner keep intercepting every call.
 
 The reviewer-delivery functions (identity through bulk_publish) raise ForgeError on any
-failure. fetch_changes, commit_authors and find_mr_for_branch never raise: they return an
-error message or None. mr_details and current_user raise, and the GitLabForge wrappers map
-that to None for prepare_diff.
+failure. fetch_changes never raises: it returns an error message. mr_details, current_user,
+commit_authors and find_mr_for_branch raise, and the GitLabForge wrappers map that to None
+with the cause in `last_error` for prepare_diff.
 """
 from __future__ import annotations
 
@@ -17,10 +17,9 @@ import shlex
 import subprocess
 from urllib.parse import quote, urlencode
 
-from forge import ForgeError, default_run, positive_int, valid_sha
+from forge import ForgeError, context_lines, default_run, hunk_lines, positive_int, valid_sha
 from forge import change_label as _change_label
 from forge import note_url as _note_url
-from forge.github import hunk_lines
 
 NAME = "gitlab"
 
@@ -147,10 +146,11 @@ def current_user(run, host):
 
 
 def commit_authors(run, host, project, iid):
-    """Return [{username: None, email}] for every commit on the MR, or None on failure.
+    """Return [{username: None, email}] for every commit on the MR.
 
     GitLab commit records carry author emails, not usernames, so callers match them
-    against the viewer's own emails.
+    against the viewer's own emails. Raises ForgeError when a page cannot be read or the
+    list is longer than 20 pages.
     """
     authors = []
     for page in range(1, 21):
@@ -158,22 +158,26 @@ def commit_authors(run, host, project, iid):
             quote(project, safe=""), iid, page)
         try:
             r = run(["glab", "api", "--hostname", host, endpoint], timeout=60)
-            if r.returncode != 0:
-                return None
+        except Exception as exc:
+            raise ForgeError("GitLab commit list request failed: %s" % str(exc)[:400])
+        if r.returncode != 0:
+            raise ForgeError("GitLab commit list request failed: %s" % (_failure_detail(r) or "no output"))
+        try:
             data = json.loads(r.stdout or "[]")
-        except Exception:
-            return None
+        except ValueError:
+            raise ForgeError("GitLab commit list response was not JSON")
         if not isinstance(data, list):
-            return None
+            raise ForgeError("GitLab commit list response had an unexpected shape")
         authors.extend({"username": None, "email": c.get("author_email")} for c in data if isinstance(c, dict))
         if len(data) < 100:
             return authors
-    return None
+    raise ForgeError("GitLab commit list exceeded 20 pages, so the author set may be incomplete")
 
 
 def find_mr_for_branch(run, branch, project, host=None):
-    """Return the iid of the MR whose source branch is `branch`, or None; never raises.
+    """Return the iid of the MR whose source branch is `branch`, or None when there is none.
 
+    Raises ForgeError when the lookup itself fails, so a failure is not read as "no MR".
     `glab mr list` has no --hostname flag, so a full-URL -R is what pins a self-managed host.
     """
     cmd = ["glab", "mr", "list", "--source-branch", branch, "-F", "json"]
@@ -182,14 +186,17 @@ def find_mr_for_branch(run, branch, project, host=None):
         cmd += ["-R", repository]
     try:
         r = run(cmd, timeout=60)
-        if r.returncode != 0 or not r.stdout.strip():
-            return None
+    except Exception as exc:
+        raise ForgeError("GitLab MR lookup failed: %s" % str(exc)[:400])
+    if r.returncode != 0:
+        raise ForgeError("GitLab MR lookup failed: %s" % (_failure_detail(r) or "no output"))
+    if not r.stdout.strip():
+        return None
+    try:
         arr = json.loads(r.stdout)
-        if isinstance(arr, list) and arr:
-            return arr[0].get("iid")
-    except Exception:
-        pass
-    return None
+    except ValueError:
+        raise ForgeError("GitLab MR lookup response was not JSON")
+    return arr[0].get("iid") if isinstance(arr, list) and arr and isinstance(arr[0], dict) else None
 
 
 def clone_command(host, project, repo):
@@ -268,6 +275,8 @@ def changed_paths(api_call, host, project, old_head, new_head):
     diffs = data.get("diffs") if isinstance(data, dict) else None
     if not isinstance(diffs, list):
         raise ForgeError("GitLab compare response is missing diffs")
+    if data.get("compare_timeout"):
+        raise ForgeError("GitLab compare timed out, so the changed-file set may be incomplete")
     paths = set()
     for item in diffs:
         if not isinstance(item, dict):
@@ -278,12 +287,17 @@ def changed_paths(api_call, host, project, old_head, new_head):
     return paths
 
 
-def inline_position(refs, old_path, new_path, line, side="new"):
-    """Build a diff position; side "old" anchors on the removed line via old_line."""
+def inline_position(refs, old_path, new_path, line, side="new", old_line=None):
+    """Build a diff position; side "old" anchors on the removed line via old_line.
+
+    An unchanged line needs both numbers, so pass its `old_line` alongside the new-side `line`.
+    """
     position = {"position_type": "text", "base_sha": refs["base_sha"],
                 "start_sha": refs["start_sha"], "head_sha": refs["head_sha"],
                 "old_path": old_path, "new_path": new_path}
     position["old_line" if side == "old" else "new_line"] = line
+    if side != "old" and old_line is not None:
+        position["old_line"] = old_line
     return position
 
 
@@ -323,6 +337,9 @@ def request_changes(run, host, project, iid):
         payload = data["data"]["mergeRequestRequestChanges"]
     except (json.JSONDecodeError, KeyError, TypeError):
         raise ForgeError("request-changes mutation returned an invalid response")
+    if not isinstance(payload, dict):
+        reasons = [str(e.get("message", e)) if isinstance(e, dict) else str(e) for e in data.get("errors") or []]
+        raise ForgeError("request-changes mutation failed: %s" % ("; ".join(reasons) or "empty mutation result"))
     if payload.get("errors"):
         raise ForgeError("request-changes mutation failed: %s" % "; ".join(payload["errors"]))
     return payload
@@ -388,8 +405,8 @@ def fetch_discussions(api_call, host, project, iid):
 class GitLabForge:
     """GitLab bound to one host/project, with an injectable command runner.
 
-    `change_details` and `current_user` return None on failure; `last_error` then holds the
-    cause, and is None after a successful call.
+    `change_details`, `current_user`, `commit_authors` and `find_change_for_branch` return
+    None on failure; `last_error` then holds the cause, and is None after a successful call.
     """
 
     name = NAME
@@ -458,10 +475,20 @@ class GitLabForge:
             return None
 
     def commit_authors(self, number):
-        return commit_authors(self._run, self.host, self.project, number)
+        self.last_error = None
+        try:
+            return commit_authors(self._run, self.host, self.project, number)
+        except ForgeError as exc:
+            self.last_error = str(exc)
+            return None
 
     def find_change_for_branch(self, branch):
-        return find_mr_for_branch(self._run, branch, self.project, self.host)
+        self.last_error = None
+        try:
+            return find_mr_for_branch(self._run, branch, self.project, self.host)
+        except ForgeError as exc:
+            self.last_error = str(exc)
+            return None
 
     def head_refspec(self, number):
         return head_refspec(number)
@@ -477,7 +504,8 @@ class GitLabForge:
         new_lines, old_lines = hunk_lines(diff_text, new_path)
         if line not in (old_lines if side == "old" else new_lines):
             return None
-        return inline_position(refs, old_path, new_path, line, side)
+        old_line = context_lines(diff_text, new_path).get(line) if side != "old" else None
+        return inline_position(refs, old_path, new_path, line, side, old_line)
 
     def post_inline(self, number, body, position, head_sha):
         data = self._api_call(self.host, "POST", "%s/discussions" % mr_path(self.project, number),

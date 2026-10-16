@@ -43,10 +43,10 @@ class PolicyError(Exception):
     pass
 
 
-def _git(root, *args, timeout=30):
+def _git(root, *args, timeout=30, stdin=None):
     try:
         return subprocess.run(["git", "-C", str(root)] + list(args), capture_output=True,
-                              text=True, timeout=timeout)
+                              encoding="utf-8", errors="replace", input=stdin, timeout=timeout)
     except subprocess.TimeoutExpired:
         raise PolicyError("git %s timed out after %ds" % (args[0], timeout))
 
@@ -97,10 +97,15 @@ class _RefSource:
         return result.stdout
 
     def listdir(self, rel, suffix=".md"):
-        result = _git(self.root, "ls-tree", "--name-only", "%s:%s" % (self.ref, rel))
+        result = _git(self.root, "ls-tree", "-z", "%s:%s" % (self.ref, rel))
         if result.returncode != 0:
             return []
-        return sorted("%s/%s" % (rel, name) for name in result.stdout.split() if name.endswith(suffix))
+        names = []
+        for entry in result.stdout.split("\0"):
+            info, _, name = entry.partition("\t")
+            if info.split(" ")[1:2] == ["blob"] and name.endswith(suffix):
+                names.append("%s/%s" % (rel, name))
+        return sorted(names)
 
     def readable_path(self, rel, text):
         target = self.stash / rel
@@ -342,21 +347,22 @@ def _supports_attr_source(root):
 def _generated_paths(root, paths, policy_ref, warnings):
     if not paths:
         return set()
-    args = ["check-attr"]
+    args = ["check-attr", "--stdin", "-z"]
     if policy_ref:
         if not _supports_attr_source(root):
             warnings.append("git < 2.40 cannot read .gitattributes from the target ref; "
                             "linguist-generated exclusion skipped, skip_globs still applied")
             return set()
         args += ["--source", policy_ref]
-    result = _git(root, *(args + ["linguist-generated", "--"] + list(paths)))
+    result = _git(root, *(args + ["linguist-generated"]), stdin="".join(p + "\0" for p in paths))
     if result.returncode != 0:
         warnings.append("could not read linguist-generated attributes: %s" % result.stderr.strip()[:200])
         return set()
     generated = set()
-    for line in result.stdout.splitlines():
-        path, _, rest = line.rpartition(": linguist-generated: ")
-        if path and rest.strip() in ("set", "true"):
+    fields = result.stdout.split("\0")
+    for i in range(0, len(fields) - 2, 3):
+        path, _attr, value = fields[i:i + 3]
+        if value in ("set", "true"):
             generated.add(path)
     return generated
 

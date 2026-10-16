@@ -105,6 +105,27 @@ def test_find_mr_for_branch_pins_the_host_through_the_repository_url_not_a_flag(
     assert cmd[cmd.index("-R") + 1] == "https://gitlab.example/o/r"
 
 
+def test_failed_commit_and_branch_lookups_record_the_cause_and_clear_it_on_success():
+    forge = GitLabForge("gitlab.example", "o/r", run=_runner(stderr="429 Too Many Requests", returncode=1))
+    assert forge.commit_authors(7) is None and "429 Too Many Requests" in forge.last_error
+    assert forge.find_change_for_branch("feature") is None and "429 Too Many Requests" in forge.last_error
+    forge._run = _runner(json.dumps([{"iid": 9}]))
+    assert forge.find_change_for_branch("feature") == 9 and forge.last_error is None
+    forge._run = _runner("[]")
+    assert forge.find_change_for_branch("feature") is None and forge.last_error is None
+    assert forge.commit_authors(7) == [] and forge.last_error is None
+
+
+def test_commit_authors_raise_on_bad_pages_and_on_a_list_past_the_page_cap():
+    with pytest.raises(ForgeError, match="not JSON"):
+        gitlab.commit_authors(_runner("nope"), "gitlab.example", "o/r", 7)
+    with pytest.raises(ForgeError, match="unexpected shape"):
+        gitlab.commit_authors(_runner('{"a": 1}'), "gitlab.example", "o/r", 7)
+    full = json.dumps([{"author_email": "a@x.io"}] * 100)
+    with pytest.raises(ForgeError, match="exceeded 20 pages"):
+        gitlab.commit_authors(_runner(full), "gitlab.example", "o/r", 7)
+
+
 def test_read_failures_keep_a_stderr_snippet():
     noisy = "x" * 600
     run = _runner(stderr="401 Unauthorized " + noisy, returncode=1)
@@ -150,6 +171,45 @@ def test_inline_target_anchors_new_and_old_sides_and_rejects_off_diff_lines():
     assert forge.inline_target(REFS, "old.py", "new.py", 40, DIFF) is None
     assert forge.inline_target(REFS, "old.py", "new.py", 40, DIFF, "old") is None
     assert forge.inline_target(REFS, "other.py", "other.py", 4, DIFF) is None
+
+
+def test_inline_target_sends_both_line_numbers_for_an_unchanged_line():
+    forge = GitLabForge("gitlab.example", "o/r")
+    # shifting the old side makes the context line differ between old and new numbering
+    shifted = DIFF.replace("@@ -3,3 +3,3 @@", "@@ -2,3 +3,3 @@")
+    context = forge.inline_target(REFS, "old.py", "new.py", 3, shifted)
+    assert context["new_line"] == 3 and context["old_line"] == 2
+    added = forge.inline_target(REFS, "old.py", "new.py", 4, shifted)
+    assert added["new_line"] == 4 and "old_line" not in added
+    removed = forge.inline_target(REFS, "old.py", "new.py", 3, shifted, "old")
+    assert removed["old_line"] == 3 and "new_line" not in removed
+
+
+def _compare_api(payload):
+    return lambda host, method, endpoint, body=None, timeout=120: payload
+
+
+def test_changed_paths_collects_old_and_new_names():
+    payload = {"diffs": [{"old_path": "old.py", "new_path": "new.py"}]}
+    assert gitlab.changed_paths(_compare_api(payload), "gitlab.example", "o/r", "a" * 40, "b" * 40) == {
+        "old.py", "new.py"}
+
+
+def test_a_timed_out_compare_is_an_incomplete_file_set_not_an_empty_one():
+    # GitLab answers 200 with no diffs when the comparison could not finish
+    timed_out = {"diffs": [], "compare_timeout": True}
+    with pytest.raises(ForgeError, match="timed out"):
+        gitlab.changed_paths(_compare_api(timed_out), "gitlab.example", "o/r", "a" * 40, "b" * 40)
+
+
+def test_request_changes_reports_graphql_errors_when_the_mutation_result_is_null():
+    body = json.dumps({"data": {"mergeRequestRequestChanges": None},
+                       "errors": [{"message": "You are not allowed to request changes"}]})
+    with pytest.raises(ForgeError, match="not allowed to request changes"):
+        gitlab.request_changes(_runner(body), "gitlab.example", "o/r", 7)
+    empty = json.dumps({"data": {"mergeRequestRequestChanges": None}})
+    with pytest.raises(ForgeError, match="empty mutation result"):
+        gitlab.request_changes(_runner(empty), "gitlab.example", "o/r", 7)
 
 
 def test_complete_approves_with_the_head_sha_and_comment_only_calls_nothing():

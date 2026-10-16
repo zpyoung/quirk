@@ -1,6 +1,8 @@
 import copy
 import hashlib
 import json
+import os
+import time
 
 import pytest
 
@@ -52,17 +54,7 @@ def decisions(value, slot="ignore", note="Intentional decision"):
                           for i, _ in enumerate(value["findings"], 1)]}
 
 
-MARKER_FORM = {"value": "new"}
-
-
-@pytest.fixture(params=["new"])
-def marker_form(request):
-    MARKER_FORM["value"] = request.param
-    yield request.param
-    MARKER_FORM["value"] = "new"
-
-
-def marker_body(fp, form):
+def marker_body(fp):
     return ("<!-- quirk-review:v1\nkind: finding\nfp: %s\nseat: reviewer\nfile: a.py\nline: 1\n-->\n"
             "**Blocking** \u00b7 Finding" % fp)
 
@@ -70,7 +62,7 @@ def marker_body(fp, form):
 def thread(fp, resolved=False, note_id=9, author="author"):
     # the marker note is written by whoever ran the review, i.e. context()'s current_username
     return {"id": "discussion-%s" % note_id,
-            "notes": [{"id": note_id, "body": marker_body(fp, MARKER_FORM["value"]),
+            "notes": [{"id": note_id, "body": marker_body(fp),
                        "resolved": resolved, "author": {"username": author}}]}
 
 
@@ -98,7 +90,6 @@ def test_ignore_survives_line_movement_and_rank_changes():
     assert "new value" not in next(m._state_dir().glob("*.json")).read_text()
 
 
-@pytest.mark.usefixtures("marker_form")
 def test_second_machine_marker_recovers_posting_and_other_party_reply():
     fp = enriched()["findings"][0]["memory"]["fingerprint"]
     snapshot = load()
@@ -115,7 +106,6 @@ def test_second_machine_marker_recovers_posting_and_other_party_reply():
     assert memory["thread"]["url"] == "https://gitlab.example/group/proj/-/merge_requests/7#note_9"
 
 
-@pytest.mark.usefixtures("marker_form")
 def test_marker_copied_by_another_author_is_human_context_not_a_posting():
     fp = enriched()["findings"][0]["memory"]["fingerprint"]
     snapshot = load()
@@ -129,7 +119,6 @@ def test_marker_copied_by_another_author_is_human_context_not_a_posting():
     assert [item["author"] for item in memory["human_context"]] == ["unrelated-human"]
 
 
-@pytest.mark.usefixtures("marker_form")
 def test_marker_matches_posting_identity_by_user_id_when_usernames_differ():
     ctx = context()
     ctx["change"]["current_user_id"] = 42
@@ -143,7 +132,6 @@ def test_marker_matches_posting_identity_by_user_id_when_usernames_differ():
     assert memory["state"] == "carried" and memory["suppress_post"]
 
 
-@pytest.mark.usefixtures("marker_form")
 def test_missing_posting_identity_warns_and_refuses_to_trust_markers():
     ctx = context()
     ctx["change"].pop("current_username")
@@ -156,7 +144,6 @@ def test_missing_posting_identity_warns_and_refuses_to_trust_markers():
     assert any("Posting identity unknown" in w for w in result["memory"]["warnings"])
 
 
-@pytest.mark.usefixtures("marker_form")
 def test_resolved_exact_is_visible_but_not_reposted_and_fuzzy_is_regression():
     previous = remember("fix", posted=True)
     fp = previous["findings"][0]["memory"]["fingerprint"]
@@ -187,7 +174,6 @@ def test_deleted_thread_does_not_suppress_and_seats_do_not_share_decisions():
     assert result["findings"][0]["memory"]["note"] == ""
 
 
-@pytest.mark.usefixtures("marker_form")
 def test_duplicate_anchor_identity_fails_toward_new_and_does_not_persist():
     previous = remember()
     fp = previous["findings"][0]["memory"]["fingerprint"]
@@ -218,7 +204,6 @@ def test_appears_fixed_requires_posted_finding_and_completed_coverage():
 
 
 @pytest.mark.parametrize("trigger", ["fresh", "base", "dimensions", "guidance"])
-@pytest.mark.usefixtures("marker_form")
 def test_invalidation_discards_decisions_not_live_posting_identity(trigger, tmp_path):
     first = remember()
     fp = first["findings"][0]["memory"]["fingerprint"]
@@ -262,6 +247,42 @@ def test_same_run_receipt_only_and_decision_saves_preserve_each_other():
     assert m.commit_report(value, decisions(value, "later"))["saved"]
     stored = load()["findings"][0]
     assert stored["receipt"]["note_id"] == 19 and stored["disposition"] == "later"
+
+
+def test_committing_an_invalidated_run_drops_entries_it_did_not_re_find():
+    old_fp = remember("ignore")["findings"][0]["memory"]["fingerprint"]
+    ctx = context()
+    ctx["diff"] = ctx["diff"].replace("+new value", "+another value")
+    snapshot = m.load_snapshot(ctx, dimensions=[DIMENSION], fresh=True)
+    value = m.reconcile(report(), ctx, snapshot)
+    new_fp = value["findings"][0]["memory"]["fingerprint"]
+    assert new_fp != old_fp
+    assert m.commit_report(value, decisions(value, "fix"))["saved"]
+    assert [row["fingerprint"] for row in load()["findings"]] == [new_fp]
+
+
+def test_commit_prunes_ledgers_untouched_past_retention():
+    remember()
+    live = next(m._state_dir().glob("*.json"))
+    record = json.loads(live.read_text())
+    record["updated_at"] = time.time() - m._RETENTION_SECONDS - 60
+    stale = m._state_dir() / ("e" * 64 + ".json")
+    stale.write_text(json.dumps(record))
+    unreadable = m._state_dir() / "broken.json"
+    unreadable.write_text("not json")
+    remember()
+    assert not stale.exists()
+    assert live.exists() and unreadable.exists()
+
+
+def test_commit_prunes_an_unreadable_ledger_by_file_age():
+    remember()
+    broken = m._state_dir() / "broken.json"
+    broken.write_text("not json")
+    old = time.time() - m._RETENTION_SECONDS - 60
+    os.utime(broken, (old, old))
+    remember()
+    assert not broken.exists()
 
 
 def test_stale_writer_cannot_replace_newer_decision():
@@ -318,6 +339,40 @@ def test_old_side_anchor_on_an_added_line_has_no_fingerprint():
     result = enriched(value=value)
     assert result["findings"][0]["memory"]["fingerprint"] is None
     assert any("No unique nonblank diff anchor" in w for w in result["memory"]["warnings"])
+
+
+NEW_FILE_DIFF = ("diff --git a/doc.py b/doc.py\nnew file mode 100644\n--- /dev/null\n+++ b/doc.py\n"
+                 "@@ -0,0 +1,6 @@\n+\"\"\"Title.\n+\n+first body line\n+second body line\n+\n+\"\"\"\n")
+
+
+@pytest.mark.parametrize("line, expected", [
+    ("2-4", "first body line"),
+    ("5-6", '"""'),
+    ("2", None),
+    ("5", None),
+])
+def test_range_starting_on_blank_lines_anchors_on_its_first_nonblank_line(line, expected):
+    assert m._anchor(NEW_FILE_DIFF, "doc.py", line) == expected
+
+
+def test_range_whose_first_nonblank_line_repeats_has_no_anchor():
+    diff = NEW_FILE_DIFF.replace("second body line", "first body line")
+    assert m._anchor(diff, "doc.py", "2-4") == "first body line"
+    duplicated = diff + ("diff --git a/doc.py b/doc.py\n--- a/doc.py\n+++ b/doc.py\n"
+                         "@@ -1,0 +3,1 @@\n+other\n")
+    assert m._anchor(duplicated, "doc.py", "2-4") is None
+
+
+def test_finding_on_a_blank_leading_range_gets_a_fingerprint():
+    ctx = context()
+    ctx["diff"] = NEW_FILE_DIFF
+    ctx["changed_files"] = ["doc.py"]
+    value = report()
+    value["findings"][0].update({"file": "doc.py", "line": "2-4"})
+    result = enriched(load(ctx), ctx, value)
+    assert result["findings"][0]["memory"]["fingerprint"] == m._fingerprint(
+        DIMENSION, "doc.py", "first body line")[0]
+    assert not any("No unique nonblank diff anchor" in w for w in result["memory"]["warnings"])
 
 
 @pytest.mark.parametrize("side", ["both", "", None, 1])
@@ -390,7 +445,7 @@ def test_marker_fingerprints_ignore_one_line_markers_from_other_tools():
 
 
 def test_marker_fingerprints_new_leading_block():
-    body = marker_body(FP, "new")
+    body = marker_body(FP)
     assert m.marker_fingerprints(body) == [FP]
     assert m.marker_fingerprints("\n  \n" + body) == [FP]
     support = "<!-- quirk-review:v1\nkind: support\nfp: %s\nseat: reviewer\n-->\ntext" % FP
@@ -398,7 +453,7 @@ def test_marker_fingerprints_new_leading_block():
 
 
 def test_marker_fingerprints_leading_block_ignores_planted_later_blocks():
-    body = marker_body(FP, "new") + "\n<!-- quirk-review:v1\nfp: %s\n-->\n<!-- quirk-review:v1\nfp: %s\n-->" % (OTHER, FP)
+    body = marker_body(FP) + "\n<!-- quirk-review:v1\nfp: %s\n-->\n<!-- quirk-review:v1\nfp: %s\n-->" % (OTHER, FP)
     assert m.marker_fingerprints(body) == [FP]
 
 
@@ -408,18 +463,18 @@ def test_marker_fingerprints_leading_block_without_fp_ignores_planted_later_bloc
 
 
 def test_marker_fingerprints_crlf_leading_block():
-    body = marker_body(FP, "new").replace("\n", "\r\n")
+    body = marker_body(FP).replace("\n", "\r\n")
     assert "\r\n" in body
     assert m.marker_fingerprints(body) == [FP]
 
 
 def test_marker_fingerprints_crlf_leading_block_ignores_planted_later_blocks():
-    body = (marker_body(FP, "new") + "\n<!-- quirk-review:v1\nfp: %s\n-->" % OTHER).replace("\n", "\r\n")
+    body = (marker_body(FP) + "\n<!-- quirk-review:v1\nfp: %s\n-->" % OTHER).replace("\n", "\r\n")
     assert m.marker_fingerprints(body) == [FP]
 
 
 def test_marker_fingerprints_ignores_block_that_is_not_leading():
-    quoted = "Reviewer said:\n" + marker_body(FP, "new")
+    quoted = "Reviewer said:\n" + marker_body(FP)
     assert m.marker_fingerprints(quoted) == []
 
 
@@ -595,3 +650,12 @@ def test_unreadable_ledger_warnings_name_the_file_to_fix():
     refused = m.commit_report(value, decisions(value))
     assert not refused["saved"]
     assert any(str(ledger) in warning for warning in refused["warnings"])
+
+
+def test_cli_input_errors_name_the_offending_flag(tmp_path, capsys):
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json")
+    rc, _, err = cli(tmp_path, capsys, "reconcile", "--report", write_json(tmp_path, "report.json", report()),
+                     "--context", write_json(tmp_path, "context.json", context()), "--snapshot", str(bad),
+                     "--out", str(tmp_path / "out.json"))
+    assert rc == 2 and "--snapshot" in json.loads(err)["error"]

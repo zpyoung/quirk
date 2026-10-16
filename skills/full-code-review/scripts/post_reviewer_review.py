@@ -12,22 +12,19 @@ import argparse
 import copy
 import hashlib
 import json
-import os
 import re
 import sys
 
-import review_memory  # noqa: E402
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import comment_body  # noqa: E402
-from jsonio import load_object, write_json  # noqa: E402
-import render_report  # noqa: E402
-from forge import ForgeError, positive_int as _positive_int, valid_sha as _valid_sha  # noqa: E402
-from forge import change_label, default_run, make_forge  # noqa: E402
-from forge import gitlab as _gitlab  # noqa: E402
-from forge import github as _github  # noqa: E402
+import comment_body
+import render_report
+import review_memory
+from jsonio import load_object, write_json
+from forge import ForgeError, positive_int as _positive_int, valid_sha as _valid_sha
+from forge import change_label, default_run, make_forge
+from forge import gitlab as _gitlab
+from forge import github as _github
 
 SCHEMA = 1
-SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 ALL_SLOTS = dict(render_report.DISPOSITIONS["reviewer"])
 POST_SLOTS = {slot: ALL_SLOTS[slot] for slot in ("fix", "later", "detail")}
 
@@ -323,7 +320,8 @@ def _plan(prepared, by_id, context, refs, forge, changed_paths=None):
         if finding["file"] in (context.get("unanchorable_files") or []):
             omitted.append({"id": finding["id"],
                             "reason": "the forge collapsed this file's diff, so an inline note would be lost",
-                            "disposition": decision["disposition"], "fingerprint": fingerprint})
+                            "disposition": decision["disposition"], "fingerprint": fingerprint,
+                            "unplaced": True})
             warnings.append("%s is on a file whose diff the forge collapsed; it is listed in the overview instead."
                             % finding["id"])
             continue
@@ -332,7 +330,8 @@ def _plan(prepared, by_id, context, refs, forge, changed_paths=None):
                                        finding.get("anchor_side") or "new")
         if position is None:
             omitted.append({"id": finding["id"], "reason": "line is outside the diff, so the forge cannot anchor it",
-                            "disposition": decision["disposition"], "fingerprint": fingerprint})
+                            "disposition": decision["disposition"], "fingerprint": fingerprint,
+                            "unplaced": True})
             warnings.append("%s anchors on a line outside the diff; it is listed in the overview instead."
                             % finding["id"])
             continue
@@ -705,7 +704,6 @@ def publish(args):
             if post_warnings:
                 state.setdefault("warnings", []).extend(post_warnings)
             state["memory_receipts"] = receipts
-            state["memory_receipt_recovery"] = bool(post_warnings)
             try:
                 _write(args.staged, state)
             except Exception as exc:

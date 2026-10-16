@@ -41,7 +41,8 @@ def _run_main(tmp_path, monkeypatch, commits, extra=(), author="other"):
         "sha": "a" * 40, "base_sha": "b" * 40, "start_sha": "c" * 40,
         "is_fork": False, "author_trusted": None})
     monkeypatch.setattr(m, "current_user", lambda forge: dict(ME))
-    monkeypatch.setattr(m, "commit_authors", lambda forge, number: commits)
+    monkeypatch.setattr(m, "commit_authors", lambda forge, number: (
+        commits(forge, number) if callable(commits) else commits))
     stdout, stderr = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
         rc = m.main(["--forge", "gitlab", "--change", "42", "--out", str(out)] + list(extra))
@@ -83,5 +84,15 @@ def test_seat_flag_is_rejected_when_authorship_is_not_mixed(tmp_path, monkeypatc
 
 
 def test_unresolvable_commit_authors_skip_the_check(tmp_path, monkeypatch):
-    rc, ctx, _ = _run_main(tmp_path, monkeypatch, None)
+    def failing_authors(forge, number):
+        forge.last_error = "HTTP 403"
+
+    rc, ctx, _ = _run_main(tmp_path, monkeypatch, failing_authors)
     assert rc == 0 and ctx["change"]["mixed_authorship"] is None
+    note = ctx["change"]["mixed_authorship_note"]
+    assert "commit authors unavailable" in note and "HTTP 403" in note
+
+
+def test_resolved_commit_authors_leave_no_note(tmp_path, monkeypatch):
+    rc, ctx, _ = _run_main(tmp_path, monkeypatch, [OTHER])
+    assert rc == 0 and "mixed_authorship_note" not in ctx["change"]

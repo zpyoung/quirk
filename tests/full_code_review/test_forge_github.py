@@ -1,19 +1,19 @@
 import contextlib
 import io
 import json
+import subprocess
 
 import pytest
 
 import post_reviewer_review as reviewer
 import prepare_diff
-from forge import ForgeError
-from forge.github import GitHubForge, hunk_lines
+from forge import ForgeError, hunk_lines
+from forge import github
+from forge.github import GitHubForge
 
 from .fakes import (BASE_TIP, DIFF, HEAD, HOST, MERGE_BASE, NUMBER, PROJECT, FakeGitHub,
                     forge)
 
-
-# ---- read path --------------------------------------------------------------
 
 def test_change_records_map_pull_files_onto_change_records_with_merge_base_refs():
     data = forge(FakeGitHub()).change_records(NUMBER)
@@ -103,9 +103,30 @@ def test_commit_authors_at_the_listing_cap_are_unknown():
     fake = FakeGitHub()
     commit = {"author": {"login": "author"}, "commit": {"author": {"email": "a@x.io"}}}
     fake.commits = [commit] * 249
-    assert len(forge(fake).commit_authors(NUMBER)) == 249
+    gh = forge(fake)
+    assert len(gh.commit_authors(NUMBER)) == 249 and gh.last_error is None
     fake.commits = [commit] * 250
-    assert forge(fake).commit_authors(NUMBER) is None
+    assert gh.commit_authors(NUMBER) is None and "at most 250 commits" in gh.last_error
+
+
+class Failing(FakeGitHub):
+    broken = False
+
+    def __call__(self, host, method, endpoint, payload=None, timeout=120):
+        if self.broken:
+            raise ForgeError("GitHub GET %s failed: HTTP 403" % endpoint, "auth")
+        return super().__call__(host, method, endpoint, payload, timeout)
+
+
+def test_failed_commit_and_branch_lookups_record_the_cause_and_clear_it_on_success():
+    fake = Failing()
+    fake.broken = True
+    gh = forge(fake)
+    assert gh.commit_authors(NUMBER) is None and "HTTP 403" in gh.last_error
+    assert gh.find_change_for_branch("feature") is None and "HTTP 403" in gh.last_error
+    fake.broken = False
+    assert gh.find_change_for_branch("other") is None and gh.last_error is None
+    assert gh.commit_authors(NUMBER) and gh.last_error is None
 
 
 def test_changed_paths_returns_old_and_new_names_and_rejects_a_capped_listing():
@@ -117,12 +138,92 @@ def test_changed_paths_returns_old_and_new_names_and_rejects_a_capped_listing():
         forge(fake).changed_paths(BASE_TIP, HEAD)
 
 
+@pytest.mark.parametrize("status, expected_paths", [
+    ("ahead", {"new.py"}),
+    ("behind", {"new.py", "dropped.py"}),
+    ("diverged", {"new.py", "dropped.py"}),
+])
+def test_changed_paths_adds_the_reverse_comparison_when_the_new_head_is_not_ahead(status, expected_paths):
+    seen = []
+
+    def api(host, method, endpoint, payload=None, timeout=120):
+        seen.append(endpoint)
+        forward = endpoint.endswith("/compare/%s...%s" % (BASE_TIP, HEAD))
+        return {"status": status if forward else "ahead",
+                "files": [{"filename": "new.py" if forward else "dropped.py"}]}
+
+    assert GitHubForge(HOST, PROJECT, api_call=api).changed_paths(BASE_TIP, HEAD) == expected_paths
+    assert len(seen) == (1 if status == "ahead" else 2)
+
+
 def test_list_threads_rejects_a_thread_with_unread_comments():
     fake = FakeGitHub()
     fake.threads = [{"id": "PRRT_1", "isResolved": False, "path": "a.py", "line": 2,
                      "comments": {"pageInfo": {"hasNextPage": True}, "nodes": []}}]
     with pytest.raises(ForgeError, match="more than 100 comments"):
         forge(fake).list_threads(NUMBER)
+
+
+def _thread_pages(*pages):
+    seen = []
+
+    def api(host, method, endpoint, payload=None, timeout=120):
+        seen.append(payload["variables"]["after"])
+        page = pages[min(len(seen), len(pages)) - 1]
+        return {"data": {"repository": {"pullRequest": {"reviewThreads": page}}}}
+    return api, seen
+
+
+def test_list_threads_follows_the_cursor_across_pages():
+    node = {"isResolved": False, "path": "a.py", "line": 1, "comments": {"nodes": []}}
+    api, seen = _thread_pages(
+        {"pageInfo": {"hasNextPage": True, "endCursor": "c1"}, "nodes": [dict(node, id="T1")]},
+        {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [dict(node, id="T2")]})
+    threads = forge(FakeGitHub()).list_threads(NUMBER, api_call=api)
+    assert [thread["id"] for thread in threads] == ["T1", "T2"]
+    assert seen == [None, "c1"]
+
+
+def test_list_threads_rejects_runaway_pagination():
+    api, seen = _thread_pages({"pageInfo": {"hasNextPage": True, "endCursor": "c"}, "nodes": []})
+    with pytest.raises(ForgeError, match="exceeded"):
+        forge(FakeGitHub()).list_threads(NUMBER, api_call=api)
+    assert len(seen) == 30
+
+
+def _runner(stdout="", stderr="", returncode=0, seen=None):
+    def run(cmd, input_text=None, timeout=120):
+        if seen is not None:
+            seen.append((cmd, input_text))
+        return subprocess.CompletedProcess(cmd, returncode, stdout, stderr)
+    return run
+
+
+def test_default_transport_builds_the_gh_api_argv_and_sends_payloads_on_stdin():
+    seen = []
+    run = _runner('{"ok": true}', seen=seen)
+    assert github.api(run, "ghe.example.com", "GET", "user") == {"ok": True}
+    assert github.api(run, "ghe.example.com", "POST", "graphql", {"query": "q"}) == {"ok": True}
+    (get_cmd, get_input), (post_cmd, post_input) = seen
+    assert get_cmd == ["gh", "api", "--hostname", "ghe.example.com", "-X", "GET", "user"] and get_input is None
+    assert post_cmd[-2:] == ["--input", "-"] and post_input == '{"query":"q"}'
+
+
+def test_default_transport_maps_failures_to_forge_errors_with_a_code():
+    with pytest.raises(ForgeError, match="HTTP 404") as missing:
+        github.api(_runner(stderr="gh: Not Found (HTTP 404)", returncode=1), "github.com", "GET", "x")
+    assert missing.value.code == "not_found"
+    with pytest.raises(ForgeError, match="invalid JSON"):
+        github.api(_runner("not json"), "github.com", "GET", "x")
+    assert github.api(_runner(""), "github.com", "GET", "x") == {}
+
+
+def test_graphql_errors_raise_with_their_messages():
+    def api(host, method, endpoint, payload=None, timeout=120):
+        return {"errors": [{"message": "Resource not accessible"}], "data": None}
+
+    with pytest.raises(ForgeError, match="Resource not accessible"):
+        github.graphql(api, "github.com", "query", {})
 
 
 def test_branch_lookup_url_encodes_the_branch_name():
@@ -133,17 +234,11 @@ def test_branch_lookup_url_encodes_the_branch_name():
 
 
 def test_failed_identity_and_detail_reads_record_the_cause_and_clear_it_on_success():
-    class Failing(FakeGitHub):
-        def __call__(self, host, method, endpoint, payload=None, timeout=120):
-            if self.broken:
-                raise ForgeError("GitHub GET %s failed: HTTP 401" % endpoint, "auth")
-            return super().__call__(host, method, endpoint, payload, timeout)
-
     fake = Failing()
     fake.broken = True
     gh = forge(fake)
-    assert gh.current_user() is None and "HTTP 401" in gh.last_error
-    assert gh.change_details(NUMBER) is None and "HTTP 401" in gh.last_error
+    assert gh.current_user() is None and "HTTP 403" in gh.last_error
+    assert gh.change_details(NUMBER) is None and "HTTP 403" in gh.last_error
     fake.broken = False
     assert gh.change_details(NUMBER) is not None and gh.last_error is None
 
@@ -155,6 +250,13 @@ def test_hunk_lines_read_header_like_content_inside_a_hunk_as_content():
     new, old = hunk_lines(diff, "a.py")
     assert new == {1, 2, 3} and old == {1, 2, 3}
     assert hunk_lines(diff, "b.py") == ({1, 2}, {1})
+
+
+def test_hunk_lines_count_only_newlines_as_line_breaks():
+    diff = ("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1,2 +1,3 @@\n one\n"
+            "+split\u2028here\x0cnow\x85\n two\n")
+    new, old = hunk_lines(diff, "a.py")
+    assert new == {1, 2, 3} and old == {1, 2}
 
 
 def test_hunk_lines_anchor_old_side_lines_of_a_deleted_file():
@@ -203,8 +305,6 @@ def test_prepare_diff_reviews_a_github_pull_request(tmp_path, monkeypatch):
     assert ctx["change"]["mixed_authorship"] is False
     assert "img.png" in ctx["not_text_reviewable"]
 
-
-# ---- reviewer seat ------------------------------------------------------------
 
 def report():
     return {
@@ -299,6 +399,70 @@ def test_false_422_on_create_adopts_the_committed_review(tmp_path, fake):
     assert rc == 0 and state["staged"] is True
     assert len([r for r in fake.reviews if r["state"] == "PENDING"]) == 1
     assert state["review_id"] == fake.reviews[0]["id"]
+
+
+def _stage_notes(fake, notes=None, record=None):
+    notes = notes or [{"kind": "overview", "body": "summary"}]
+    return forge(fake).stage_notes(NUMBER, notes, HEAD, record or (lambda *args, **kwargs: None), "reviewer")
+
+
+class RejectingCreate(FakeGitHub):
+    def __call__(self, host, method, endpoint, payload=None, timeout=120):
+        if method == "POST" and endpoint == "repos/o/r/pulls/7/reviews":
+            raise ForgeError("GitHub POST failed: HTTP 422", "validation")
+        return super().__call__(host, method, endpoint, payload, timeout)
+
+
+def test_a_rejected_create_that_committed_nothing_is_raised_not_adopted():
+    fake = RejectingCreate()
+    with pytest.raises(ForgeError, match="422"):
+        _stage_notes(fake)
+    assert fake.reviews == []
+
+
+def test_a_rejected_create_is_not_adopted_when_two_pending_reviews_match():
+    fake = RejectingCreate()
+    for review_id in (1, 2):
+        fake.reviews.append({"id": review_id, "body": "summary", "state": "PENDING", "user": {"login": "reviewer"}})
+    with pytest.raises(ForgeError, match="422"):
+        _stage_notes(fake)
+
+
+def test_a_staged_inline_comment_that_comes_back_missing_is_an_error():
+    class DropsComments(FakeGitHub):
+        def __call__(self, host, method, endpoint, payload=None, timeout=120):
+            result = super().__call__(host, method, endpoint, payload, timeout)
+            if method == "POST" and endpoint == "repos/o/r/pulls/7/reviews":
+                self.review_comments[result["id"]] = []
+            return result
+
+    notes = [{"kind": "overview", "body": "summary"},
+             {"kind": "inline", "body": "b", "finding_id": "F1",
+              "position": {"path": "a.py", "line": 2, "side": "RIGHT"}}]
+    with pytest.raises(ForgeError, match="did not return the staged comment for F1"):
+        _stage_notes(DropsComments(), notes)
+
+
+def test_a_reply_that_lands_outside_the_pending_review_is_an_error():
+    class RepliesElsewhere(FakeGitHub):
+        def _graphql(self, payload):
+            if "addPullRequestReviewThreadReply" in payload["query"]:
+                return {"data": {"addPullRequestReviewThreadReply": {"comment": {
+                    "databaseId": 9, "pullRequestReview": {"databaseId": 1, "state": "COMMENTED"}}}}}
+            return super()._graphql(payload)
+
+    notes = [{"kind": "overview", "body": "summary"},
+             {"kind": "reply", "body": "r", "discussion_id": "PRRT_1"}]
+    with pytest.raises(ForgeError, match="did not attach the support reply"):
+        _stage_notes(RepliesElsewhere(), notes)
+
+
+@pytest.mark.parametrize("change", [{"state": "closed"}, {"state": "closed", "merged": True}])
+def test_live_change_refuses_a_pull_request_that_is_not_open(change):
+    fake = FakeGitHub()
+    fake.pr.update(change)
+    with pytest.raises(ForgeError, match="PR #7 is not open"):
+        forge(fake).live_change(NUMBER)
 
 
 def test_support_reply_is_added_inside_the_pending_review(tmp_path, fake):
