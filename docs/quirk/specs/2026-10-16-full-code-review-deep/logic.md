@@ -2,7 +2,7 @@
 
 ## Status & amendments
 
-**Status:** Draft
+**Status:** Approved — Tech spec: authored (gate: >3 files; crosses subsystems; multi-session)
 
 **Amendments:** none yet.
 
