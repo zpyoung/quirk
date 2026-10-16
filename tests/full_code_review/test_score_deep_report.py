@@ -183,6 +183,19 @@ def test_cli_passes_with_refuted_share_exactly_on_threshold(tmp_path):
     assert score["passed"] is True
 
 
+@pytest.mark.parametrize("refuted_ids", [("F1",), ("F1", "F2")])
+def test_cli_fails_when_refuted_share_is_above_threshold(tmp_path, refuted_ids):
+    findings = [_finding(line=str(25 + offset), id="F%d" % (offset + 1))
+                for offset in range(5 if len(refuted_ids) == 2 else 4)]
+    check = {finding["id"]: "confirmed" for finding in findings}
+    check.update({identifier: "refuted" for identifier in refuted_ids})
+    code, score = _score_cli(tmp_path, _report(findings), _key(_defect()), check=check)
+    assert code == 1
+    assert score["refuted_share"] > 0.2
+    assert score["recall"] == 1.0
+    assert score["passed"] is False
+
+
 @pytest.mark.parametrize("args", [
     [],
     ["--report", "report.json", "--answer-key", "key.json", "--budget-minutes", "not-a-number"],
@@ -315,6 +328,21 @@ def test_partial_or_disabled_run_cannot_pass(location, field, value):
     assert score["complete_deep_run"] is score["passed"] is False
 
 
+def test_empty_area_map_is_not_a_complete_deep_run():
+    report = _report()
+    report["run"]["deep"]["areas"] = []
+    score = scorer.score_report(report, _key(_defect()), {"F1": "confirmed"})
+    assert score["complete_deep_run"] is score["passed"] is False
+
+
+def test_read_only_degraded_area_counts_as_complete():
+    report = _report()
+    report["run"]["deep"]["areas"] = [
+        {"id": "A1", "status": "read_only_degraded", "degraded_reason": "sandbox unavailable"}]
+    score = scorer.score_report(report, _key(_defect()), {"F1": "confirmed"})
+    assert score["complete_deep_run"] is score["passed"] is True
+
+
 def test_absent_completeness_flag_cannot_pass():
     report = _report()
     del report["run"]["incomplete"]
@@ -398,6 +426,8 @@ def test_authored_ids_are_not_spot_check_aliases():
     lambda report, key: report["run"]["deep"].update(checker_failures={"C1": None}),
     lambda report, key: report["run"]["deep"].update(checker_failures={"C1": ""}),
     lambda report, key: report["run"]["deep"].update(checker_failures={"": "timeout"}),
+    lambda report, key: report["run"]["deep"].update(areas=[{"id": "A1"}, {"id": "A1"}]),
+    lambda report, key: report["run"]["deep"].update(cutoff_reached="no"),
 ])
 def test_malformed_scoring_shapes_are_rejected(mutate):
     report, key = _report(), _key(_defect())

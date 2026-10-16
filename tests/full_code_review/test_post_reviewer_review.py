@@ -184,12 +184,12 @@ def test_stage_builds_trusted_overview_and_inline_drafts_then_publish_is_separat
     assert json.loads(paths["staged"].read_text())["published"] is True
 
 
-def _stage_with_unanchorable_blocker(tmp_path, monkeypatch, **context_updates):
+def _stage_with_unanchorable_blocker(tmp_path, monkeypatch, line="50", **context_updates):
     fake = FakeGitLab()
     monkeypatch.setattr(m, "_api", fake)
     paths = files(tmp_path)
     changed = report()
-    changed["findings"][0]["line"] = "50"
+    changed["findings"][0]["line"] = line
     choice = decisions()
     choice["report_sha256"] = m._report_digest(changed)
     paths["report"].write_text(json.dumps(changed))
@@ -211,9 +211,12 @@ def test_blocking_finding_outside_the_diff_is_listed_in_the_staged_overview(tmp_
 
 
 def test_blocking_finding_on_a_collapsed_file_is_listed_in_the_staged_overview(tmp_path, monkeypatch):
-    state, _ = _stage_with_unanchorable_blocker(tmp_path, monkeypatch, unanchorable_files=["a.py"])
+    state, _ = _stage_with_unanchorable_blocker(tmp_path, monkeypatch, line="2", unanchorable_files=["a.py"])
     visible = state["preview"][0]["body"].split("<details>")[0]
-    assert "- **Blocking:** Trusted bug (`a.py:50`)" in visible
+    assert "- **Blocking:** Trusted bug (`a.py:2`)" in visible
+    assert [item["kind"] for item in state["created"]] == ["overview", "inline"]
+    assert not any(item.get("finding_id") == "F1" for item in state["created"])
+    assert any("diff the forge collapsed" in warning for warning in state["warnings"])
 
 
 def test_preexisting_draft_blocks_all_creation(tmp_path, monkeypatch):
@@ -324,6 +327,19 @@ def test_completion_is_explicit_and_requires_published_state(tmp_path, monkeypat
     assert len([call for call in fake.calls if call[0] == "POST"]) == before_posts
 
 
+def test_head_movement_after_publication_blocks_completion(tmp_path, monkeypatch):
+    fake = FakeGitLab()
+    monkeypatch.setattr(m, "_api", fake)
+    paths = files(tmp_path)
+    assert invoke(m.stage, stage_args(paths))[0] == 0
+    assert invoke(m.publish, _publish_args(paths))[0] == 0
+    fake.head = "e" * 40
+    rc, result = invoke(m.complete, _complete_args(paths, "approve"))
+    assert rc == 2 and "head moved" in result["error"]
+    assert not any(call[1].endswith("/approve") for call in fake.calls)
+    assert "completion_result" not in json.loads(paths["staged"].read_text())
+
+
 def test_sweep_paginates_beyond_one_hundred_drafts(tmp_path, monkeypatch):
     fake = FakeGitLab()
     fake.drafts = [{"id": i, "note": "draft %d" % i} for i in range(1, 102)]
@@ -352,6 +368,22 @@ def test_zero_findings_still_stages_one_overview(tmp_path, monkeypatch):
     rc, state = invoke(m.stage, stage_args(paths))
     assert rc == 0 and [item["kind"] for item in state["created"]] == ["overview"]
     assert state["completion"]["suggested"] == "approve"
+
+
+def test_empty_report_without_the_validator_flag_is_rejected_before_any_forge_call(tmp_path, monkeypatch):
+    fake = FakeGitLab()
+    monkeypatch.setattr(m, "_api", fake)
+    paths = files(tmp_path)
+    value = report()
+    value["findings"] = []
+    paths["report"].write_text(json.dumps(value))
+    choice = decisions()
+    choice["decisions"] = []
+    choice["report_sha256"] = m._report_digest(value)
+    paths["decisions"].write_text(json.dumps(choice))
+    rc, result = invoke(m.stage, stage_args(paths))
+    assert rc == 2 and "explicit validator artifact" in result["error"]
+    assert fake.calls == []
 
 
 def test_missing_staged_draft_blocks_bulk_and_reports_cleanup(tmp_path, monkeypatch):
@@ -404,6 +436,27 @@ def test_forged_decisions_are_rejected_before_any_forge_call(tmp_path, monkeypat
     paths = files(tmp_path)
     choice = json.loads(paths["decisions"].read_text())
     tamper(choice)
+    paths["decisions"].write_text(json.dumps(choice))
+    rc, result = invoke(m.stage, stage_args(paths))
+    assert rc == 2 and message in result["error"]
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize("field, value, message", [
+    ("number", 43, "report change request"),
+    ("project", "group/other", "report project"),
+    ("head_sha", "d" * 40, "report head"),
+])
+def test_report_bound_to_another_change_is_rejected_before_any_forge_call(
+        tmp_path, monkeypatch, field, value, message):
+    fake = FakeGitLab()
+    monkeypatch.setattr(m, "_api", fake)
+    paths = files(tmp_path)
+    changed = report()
+    changed["meta"][field] = value
+    choice = decisions()
+    choice["report_sha256"] = m._report_digest(changed)
+    paths["report"].write_text(json.dumps(changed))
     paths["decisions"].write_text(json.dumps(choice))
     rc, result = invoke(m.stage, stage_args(paths))
     assert rc == 2 and message in result["error"]

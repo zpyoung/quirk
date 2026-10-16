@@ -378,3 +378,39 @@ def test_stray_plain_comment_is_recorded_named_and_not_retried(tmp_path):
                                 signed(TWO, two_finding_report()), ["F1"], out, forge=forge)
     assert receipts == {} and len(calls) == 1
     assert any("F1 left a plain comment" in w for w in warnings)
+
+
+def test_author_report_without_a_head_sha_binds_on_change_and_posts(tmp_path):
+    value = two_finding_report()
+    del value["meta"]["head_sha"]
+    forge = RecordingForge()
+    receipts, _ = m.post(value, context("gitlab"), signed(TWO, value), ["F1"], str(tmp_path / "r.json"),
+                         forge=forge)
+    assert sorted(receipts) == ["F1"] and forge.posted == ["one"]
+
+
+def test_report_for_another_source_branch_is_refused_before_posting(tmp_path):
+    value = two_finding_report()
+    del value["meta"]["head_sha"]
+    value["meta"]["source_branch"] = "feature/other"
+    ctx = dict(context("gitlab"), source_branch="feature/this")
+    forge = RecordingForge()
+    with pytest.raises(ValueError, match="source branch does not match"):
+        m.post(value, ctx, signed(TWO, value), ["F1"], str(tmp_path / "r.json"), forge=forge)
+    assert forge.posted == []
+
+
+def test_receipt_write_failure_after_a_create_names_the_comment_as_posted(tmp_path, monkeypatch, capsys):
+    paths = write_inputs(tmp_path)
+    forge = RecordingForge()
+    monkeypatch.setattr(m, "make_forge", lambda *a, **k: forge)
+
+    def failing_write(path, value):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(m, "_write", failing_write)
+    assert m.main(cli_args(paths, "F1,F2")) == 2
+    failure = json.loads(capsys.readouterr().out)
+    assert failure["failed_id"] == "F1" and "created on the forge" in failure["error"]
+    assert failure["unsaved_receipt"] == {"F1": {"published": True, "note_id": 1}}
+    assert forge.posted == ["one"]

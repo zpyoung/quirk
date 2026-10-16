@@ -4,6 +4,10 @@ from pathlib import Path
 import discover_guidance as m
 
 
+def _rel(root, paths):
+    return [Path(p).relative_to(root.resolve()).as_posix() for p in paths]
+
+
 def test_gather_sources(tmp_path):
     root = Path(tmp_path) / "repo"
     (root / ".claude" / "skills" / "review-x").mkdir(parents=True)
@@ -18,11 +22,10 @@ def test_gather_sources(tmp_path):
     (sub / "f.py").write_text("code")
 
     target = m.gather(str(root), ["pkg/deep/f.py"])
-    assert any("review-x" in s for s in target["repo_skills"])
-    assert any(p.endswith("/CLAUDE.md") and "/pkg/" not in p for p in target["claude_md"])
-    assert any(p.endswith("pkg/CLAUDE.md") for p in target["claude_md"])
-    assert any(p.endswith("rules/a.md") for p in target["rules"])
-    assert any(p.endswith("AGENTS.md") for p in target["other"])
+    assert _rel(root, target["repo_skills"]) == [".claude/skills/review-x/SKILL.md"]
+    assert _rel(root, target["claude_md"]) == ["CLAUDE.md", "pkg/CLAUDE.md"]
+    assert _rel(root, target["rules"]) == [".claude/rules/a.md"]
+    assert _rel(root, target["other"]) == ["AGENTS.md"]
 
 
 def test_gather_skill_references(tmp_path):
@@ -34,8 +37,9 @@ def test_gather_skill_references(tmp_path):
     (refs / "high-risk-files" / "extending.md").write_text("the actual rule")
 
     target = m.gather(str(root), [])
-    assert any(p.endswith("high-risk-files/extending.md") for p in target["repo_skill_references"])
-    assert any(p.endswith("references/index.md") for p in target["repo_skill_reference_indexes"])
+    base = ".claude/skills/review-x/references/"
+    assert _rel(root, target["repo_skill_references"]) == [base + "high-risk-files/extending.md", base + "index.md"]
+    assert _rel(root, target["repo_skill_reference_indexes"]) == [base + "index.md"]
     assert target["repo_skill_references_dropped"] == 0
 
 
@@ -170,3 +174,53 @@ def test_gather_drops_symlink_loops(tmp_path):
 
     assert [Path(p).name for p in target["rules"]] == ["a.md"]
     assert [Path(p).relative_to(root.resolve()).as_posix() for p in target["claude_md"]] == ["CLAUDE.md"]
+
+
+def test_gather_finds_guidance_under_a_root_with_glob_metacharacters(tmp_path):
+    root = Path(tmp_path) / "proj[1]"
+    refs = root / ".claude" / "skills" / "review-x" / "references"
+    refs.mkdir(parents=True)
+    (root / ".claude" / "skills" / "review-x" / "SKILL.md").write_text("x")
+    (refs / "index.md").write_text("i")
+    (root / ".claude" / "rules").mkdir()
+    (root / ".claude" / "rules" / "a.md").write_text("a")
+
+    target = m.gather(str(root), [])
+
+    assert _rel(root, target["repo_skills"]) == [".claude/skills/review-x/SKILL.md"]
+    assert _rel(root, target["repo_skill_references"]) == [".claude/skills/review-x/references/index.md"]
+    assert _rel(root, target["rules"]) == [".claude/rules/a.md"]
+
+
+def test_gather_skill_references_does_not_follow_directory_symlink_cycles(tmp_path):
+    root = Path(tmp_path) / "repo"
+    refs = root / ".claude" / "skills" / "review-x" / "references"
+    (refs / "sub").mkdir(parents=True)
+    (refs / "index.md").write_text("i")
+    (refs / "sub" / "a.md").write_text("a")
+    (refs / "sub" / "back").symlink_to(refs)
+    (refs / "self").symlink_to(refs)
+
+    target = m.gather(str(root), [])
+
+    assert _rel(root, target["repo_skill_references"]) == [
+        ".claude/skills/review-x/references/index.md", ".claude/skills/review-x/references/sub/a.md"]
+    assert target["repo_skill_references_dropped"] == 0
+
+
+def test_exclude_changed_fails_when_the_changed_files_list_is_empty(tmp_path, capsys):
+    root = _guidance_repo(tmp_path)
+    empty = Path(tmp_path) / "changed.txt"
+    empty.write_text("")
+    assert m.main(["--git-root", str(root), "--changed-files", str(empty), "--exclude-changed"]) == 2
+    assert "empty" in json.loads(capsys.readouterr().out)["error"]
+
+
+def test_changed_files_list_with_non_utf8_names_is_read_and_withholds_guidance(tmp_path, capsys):
+    root = _guidance_repo(tmp_path)
+    changed = Path(tmp_path) / "changed.txt"
+    changed.write_bytes(b"caf\xe9.py\nAGENTS.md\n")
+    assert m.main(["--git-root", str(root), "--changed-files", str(changed), "--exclude-changed"]) == 0
+    target = json.loads(capsys.readouterr().out)["target_repo"]
+    assert target["changed_guidance"] == ["AGENTS.md"]
+    assert target["other"] == []

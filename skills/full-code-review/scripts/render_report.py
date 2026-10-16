@@ -190,7 +190,7 @@ def replace_slot(template, name, replacement):
 
 
 _HANDOFF_UNSAFE = re.compile(r"[\r\u2028\u2029]")
-_LINE_RE = re.compile(r"[0-9]+(?:-[0-9]+)?")
+_LINE_RE = re.compile(r"[1-9][0-9]*(?:-[0-9]+)?")
 
 
 def _handoff_safe(value, label):
@@ -748,6 +748,15 @@ def _banner(status, title, body):
             % (status, title, body))
 
 
+def _checker_failure_text(deep):
+    """One sentence naming each claim the deep checker failed on, or empty."""
+    failures = deep.get("checker_failures") if isinstance(deep, dict) else None
+    if not failures:
+        return ""
+    return "Unchecked claims withheld: %s" % ", ".join(
+        "%s (%s)" % (key, reason.strip()) for key, reason in sorted(failures.items()))
+
+
 def _what_was_run(report):
     """Render the run conditions as records in one Section: rows, not a grid of panels."""
     run = report.get("run") or {}
@@ -767,9 +776,16 @@ def _what_was_run(report):
         failed = ", ".join(_string_list(run.get("dimensions_failed")))
         if not failed and deep.get("unreached_areas"):
             failed = "Unreached areas: %s" % ", ".join(deep["unreached_areas"])
-        failed = failed or "unknown lenses"
-        out.append(_banner("warning", "Incomplete review.",
-                           "%s did not finish, so a short findings list here is not a clean bill." % _esc(failed)))
+        checker = _checker_failure_text(deep)
+        if failed:
+            body = "%s did not finish, so a short findings list here is not a clean bill." % _esc(failed)
+            if checker:
+                body += " %s." % _esc(checker)
+        elif checker:
+            body = "%s. A short findings list here is not a clean bill." % _esc(checker)
+        else:
+            body = "unknown lenses did not finish, so a short findings list here is not a clean bill."
+        out.append(_banner("warning", "Incomplete review.", body))
     rows = []
     if run.get("diff_size"):
         rows.append(_row("Diff size", _esc(run["diff_size"])))
@@ -806,6 +822,10 @@ def _what_was_run(report):
                            ("sandbox_kind", "Deep sandbox")):
             if deep.get(key) is not None:
                 rows.append(_row(label, _esc(deep[key])))
+    if deep.get("checker_failures"):
+        rows.append(_row("Checker failures", "".join(
+            "<div><span class=\"mono\">%s</span> %s</div>" % (_esc(key), _esc(reason))
+            for key, reason in sorted(deep["checker_failures"].items()))))
     if rows:
         out.append('<div class="rows">%s</div>' % "".join(rows))
     if "areas" in deep:
@@ -1096,7 +1116,7 @@ def _finding_card(finding, seat="author"):
     if finding.get("evidence") not in (None, ""):
         out.append(_token(finding["evidence"], tone="blue"))
     if finding.get("verification_status") == "plausible":
-        out.append(_token("plausible", tone="amber"))
+        out.append(_token("plausible", tone="yellow"))
     out.append('</div><h2 class="f-title">%s</h2>' % _esc(finding["title"]))
     out.append('<span class="anchor">%s<span class="ln">:%s</span></span>' %
                (_esc(finding["file"]), _esc(finding["line"])))
@@ -1435,7 +1455,11 @@ def _content(report, report_path=None):
     deep = run.get("deep") or {}
     if deep and run.get("incomplete"):
         unreached = ", ".join(deep.get("unreached_areas") or [])
-        body = ("Unreached areas: %s." % unreached) if unreached else "Some deep checks did not finish."
+        checker = _checker_failure_text(deep)
+        body = " ".join(part for part in (
+            ("Unreached areas: %s." % unreached) if unreached else "",
+            ("%s." % checker) if checker else "") if part)
+        body = body or "Some deep checks did not finish."
         out.append(_banner("warning", "Incomplete review.", _esc(body)))
     out.append('<div class="panes">')
     for index, (pane_id, label, _, html) in enumerate(panes):
@@ -1490,8 +1514,16 @@ def _render_md_prepared(report):
         failed = ", ".join(_string_list(run.get("dimensions_failed")))
         if not failed and deep.get("unreached_areas"):
             failed = "unreached areas (%s)" % ", ".join(deep["unreached_areas"])
-        failed = failed or "some lenses"
-        lines.extend(["**Incomplete:** %s did not finish; this report is not a clean bill." % failed, ""])
+        checker = _checker_failure_text(deep)
+        if failed:
+            text = "%s did not finish; this report is not a clean bill." % failed
+            if checker:
+                text += " %s." % checker
+        elif checker:
+            text = "%s; this report is not a clean bill." % checker
+        else:
+            text = "some lenses did not finish; this report is not a clean bill."
+        lines.extend(["**Incomplete:** %s" % text, ""])
     dimensions = _string_list(run.get("dimensions_run"))
     if dimensions:
         lines.extend(["**Dimensions run:** %s" % ", ".join(dimensions), ""])

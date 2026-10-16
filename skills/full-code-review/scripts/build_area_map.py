@@ -23,7 +23,7 @@ def _validate_files(changed_files: list[str]) -> list[str]:
         raise ValueError("changed_files must be a list of repo-relative paths")
     for name in changed_files:
         if (not isinstance(name, str) or not name or "\x00" in name
-                or PurePosixPath(name).is_absolute() or "\\" in name
+                or PurePosixPath(name).is_absolute()
                 or any(part in (".", "..") for part in name.split("/"))):
             raise ValueError("changed_files must contain only repo-relative paths")
     return list(dict.fromkeys(changed_files))
@@ -123,7 +123,9 @@ def _module_targets(importer: str, dots: int, module: str,
     parts = module.split(".") if module else []
     for base in bases:
         prefix = base.joinpath(*parts) if parts else base
-        candidates = [str(prefix.with_suffix(".py")), str(prefix / "__init__.py")]
+        candidates = [str(prefix / "__init__.py")]
+        if prefix.name:
+            candidates.append(str(prefix.with_suffix(".py")))
         for symbol in imported_names:
             if symbol and symbol != "*":
                 child = prefix / symbol
@@ -159,7 +161,8 @@ def _mentions(text: str, target: str, names: list[str]) -> bool:
         if folder in path.parts:
             variants.add("/".join(path.parts[path.parts.index(folder):]))
     basename = path.stem
-    if len(basename) >= 6 and ("_" in basename or "-" in basename):
+    if (len(basename) >= 6 and not basename.startswith("__")
+            and ("_" in basename or "-" in basename)):
         variants.add(basename)
     if sum(PurePosixPath(name).name == path.name for name in names) > 1:
         variants.discard(path.name)

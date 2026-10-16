@@ -48,7 +48,9 @@ def _disable_pygments(monkeypatch):
 
 @pytest.fixture(params=["installed", "builtin"])
 def each_backend(request, monkeypatch):
-    if request.param == "builtin":
+    if request.param == "installed":
+        pytest.importorskip("pygments")
+    else:
         _disable_pygments(monkeypatch)
 
 
@@ -137,6 +139,13 @@ def test_leading_bom_survives_pygments_highlighting(language, source):
     pytest.importorskip("pygments")
     out = h.highlight(source, language)
     assert STRIP.sub("", out) == html.escape(source, quote=True)
+
+
+@pytest.mark.parametrize("language", ["c", "python", "json"])
+def test_every_leading_bom_survives_pygments_highlighting(language):
+    pytest.importorskip("pygments")
+    source = "\ufeff\ufeffx = 1;\n"
+    assert STRIP.sub("", h.highlight(source, language)) == html.escape(source, quote=True)
 
 
 def test_pygments_maps_markup_and_data_keys_onto_template_kinds():

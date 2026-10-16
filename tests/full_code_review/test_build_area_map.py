@@ -46,6 +46,33 @@ def test_relative_package_imports_reach_changed_siblings(tmp_path):
     assert graph[names[0]] == {names[1]}
     assert graph[names[1]] == {names[0], names[2]}
 
+def test_empty_module_relative_imports_at_the_repo_root_do_not_crash():
+    files = ["a.py", "d/b.py", "x.py"]
+    diff = ("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"
+            "@@ -0,0 +1 @@\n+from . import x\n"
+            "diff --git a/d/b.py b/d/b.py\n--- a/d/b.py\n+++ b/d/b.py\n"
+            "@@ -0,0 +1 @@\n+from .. import x\n")
+    graph = area_map_module().build_coupling_graph(files, None, diff)
+    assert graph["a.py"] == {"x.py"}
+    assert graph["d/b.py"] == {"x.py"}
+
+
+def test_backslash_in_a_changed_filename_is_accepted(tmp_path):
+    names = [put(tmp_path, "we\\ird.py", "pass\n"), put(tmp_path, "other.py", "pass\n")]
+    graph = area_map_module().build_coupling_graph(names, str(tmp_path), "")
+    assert set(graph) == set(names)
+
+
+def test_dunder_module_stems_do_not_couple_every_constructor(tmp_path):
+    names = [
+        put(tmp_path, "pkg/__init__.py", "pass\n"),
+        put(tmp_path, "pkg/widget.py", "class Widget:\n    def __init__(self): pass\n"),
+    ]
+    graph = area_map_module().build_coupling_graph(names, str(tmp_path), "")
+    assert graph[names[0]] == set()
+    assert graph[names[1]] == set()
+
+
 def test_imports_are_taken_from_added_and_context_diff_lines_without_source():
     files = ["scripts/runner.py", "scripts/forge/__init__.py", "scripts/forge/github.py"]
     diff = ("diff --git a/scripts/runner.py b/scripts/runner.py\n"

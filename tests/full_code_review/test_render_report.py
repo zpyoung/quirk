@@ -694,6 +694,8 @@ _INVALID_REPORTS = [
     (_bad(lambda v: v["findings"][0].pop("issue")), "finding 1 needs issue or body_md"),
     (_bad(lambda v: v["findings"][0].update(line="n/a")), "finding 1 line must be a number"),
     (_bad(lambda v: v["findings"][0].update(line="L2")), "finding 1 line must be a number"),
+    (_bad(lambda v: v["findings"][0].update(line="0")), "finding 1 line must be a number"),
+    (_bad(lambda v: v["findings"][0].update(line="00")), "finding 1 line must be a number"),
     (_bad(lambda v: v["findings"][0].update(line="2,3")), "finding 1 line must be a number"),
     (_bad(lambda v: v["findings"][0].update(line="2\u20133")), "finding 1 line must be a number"),
     (_bad(lambda v: v["findings"][0].update(evidence="a\u2028b")), "finding 1 evidence contains"),
@@ -786,13 +788,22 @@ def test_stdout_reports_highlighter_and_warns_on_builtin_fallback(tmp_path, monk
     assert not any("Pygments" in warning for warning in payload.get("warnings", []))
 
 
+def _risk_metric_dots(rendered):
+    section = rendered[rendered.index('id="risk"'):]
+    section = section[:section.index("</section>")]
+    return dict(re.findall(
+        r'<span class="metric-k">([^<]+)</span><span class="metric-v">'
+        r'<span class="astryx-status-dot (dot--\w+)"', section))
+
+
 def test_risk_kpis_tone_per_metric():
     value = report()
     rendered = m.render_html(value, TEMPLATE)
     # the same word means opposite things across metrics, so tone is resolved per metric
-    assert 'dot--warn' in rendered   # likelihood Possible
-    assert 'dot--good' in rendered   # impact Minor, rollback Clean
-    assert 'dot--bad' in rendered    # detection Weak
+    dots = _risk_metric_dots(rendered)
+    assert dots["Likelihood"] == "dot--warn"
+    assert dots["Impact"] == dots["Blast radius"] == dots["Rollback"] == "dot--good"
+    assert dots["Detection"] == "dot--bad"
     # the metric dot speaks good/warn/bad; the level Token speaks palette colours
     assert '<span class="astryx-token" data-tone="yellow">Medium</span>' in rendered
     assert "Lowering this risk" in rendered
@@ -800,7 +811,9 @@ def test_risk_kpis_tone_per_metric():
     assert '<details class="verbatim">' in rendered and "Likelihood:" in rendered
     authored = report()
     authored["risk"]["metrics"]["detection"]["tone"] = "good"
-    assert 'dot--good' in m.render_html(authored, TEMPLATE)
+    overridden = _risk_metric_dots(m.render_html(authored, TEMPLATE))
+    assert overridden["Detection"] == "dot--good"
+    assert overridden["Likelihood"] == "dot--warn"
 
 
 @pytest.mark.parametrize("metric,word,tone", [
@@ -1174,6 +1187,14 @@ def test_page_export_is_accepted_by_the_triage_validator(seat):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is needed to execute the page script")
+def test_page_export_seeds_the_reply_line_on_with_empty_storage():
+    value = reply_report("reviewer", [{"note_id": 4, "discussion_id": "d", "resolved": False,
+                                       "author": "bob", "body": "hi"}])
+    paste = run_page_export(m.render_html(value, TEMPLATE), {"__seat": "reviewer"})
+    assert "reply: 4" in paste.split(validate_triage.HANDOFF_DELIM)[0]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed to execute the page script")
 @pytest.mark.parametrize("reply_on", [True, False])
 def test_page_export_emits_reply_line_only_when_the_toggle_is_on(reply_on):
     value = reply_report("reviewer", [{"note_id": 4, "discussion_id": "d", "resolved": False,
@@ -1248,6 +1269,18 @@ def test_checked_dropped_still_renders_when_no_findings():
     assert not parse(rendered).find("article", "finding")
 
 
+def test_deep_checker_failures_are_named_in_both_formats():
+    value = report()
+    value["run"]["deep"] = {"enabled": True, "checker_failures": {"A1.1": "checker <timed out>"}}
+    rendered = m.render_html(value, TEMPLATE)
+    assert "Unchecked claims withheld: A1.1 (checker &lt;timed out&gt;)" in rendered
+    assert "unknown lenses" not in rendered
+    assert 'Checker failures</div><div class="row-v"><div><span class="mono">A1.1</span>' in rendered
+    md = m.render_md(value)
+    assert "Unchecked claims withheld: A1.1 (checker <timed out>)" in md
+    assert "some lenses" not in md
+
+
 def test_empty_deep_area_map_still_shows_the_area_map_subsection():
     value = report()
     value["run"]["deep"] = {"areas": []}
@@ -1268,7 +1301,8 @@ def test_plausible_callout_and_reproduction_escape_html_and_reach_handoff():
     assert handoff["what_would_confirm"] == finding["what_would_confirm"]
     assert handoff["repro"] == finding["repro"]
     rendered = m.render_html(value, TEMPLATE)
-    assert 'data-tone="amber">plausible</span>' in rendered
+    assert 'data-tone="yellow">plausible</span>' in rendered
+    assert '.astryx-token[data-tone="yellow"]' in TEMPLATE
     assert "What would confirm this:</strong> Run &lt;with&gt; input &amp; inspect" in rendered
     assert '<div class="repro"><span class="rec-k">Reproduction</span>' in rendered
     assert "$ echo &#x27;&lt;payload&gt;&#x27;\n&lt;script&gt;&amp;oops&lt;/script&gt;" in rendered

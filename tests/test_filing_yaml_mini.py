@@ -104,6 +104,20 @@ def test_apostrophe_inside_a_plain_scalar_does_not_open_a_quote(yaml_mini) -> No
     assert yaml_mini.parse(text, "plain.yml") == {"a": "don't touch", "b": "1"}
 
 
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("desc: yes, 'cause # c\n", {"desc": "yes, 'cause"}),
+        ("desc: yes, 'cause: x # c\n", {"desc": "yes, 'cause: x"}),
+        ("labels: ['a # b', c] # c\n", {"labels": ["a # b", "c"]}),
+    ],
+)
+def test_comma_before_an_apostrophe_in_a_block_scalar_does_not_open_a_quote(
+    yaml_mini, text, expected
+) -> None:
+    assert yaml_mini.parse(text, "plain.yml") == expected
+
+
 def test_single_quoted_scalar_with_escaped_quote(yaml_mini) -> None:
     text = "title: 'It''s broken'\n"
     assert yaml_mini.parse(text, "single.yml") == {"title": "It's broken"}
@@ -340,6 +354,8 @@ PARITY_FIXTURES = [
     "k: a ' b #c\n",
     "k: 'q #c' # real\n",
     "- 'x # y' # real\n",
+    "desc: yes, 'cause # c\n",
+    "labels: ['a, b', c] # c\n",
 ]
 
 

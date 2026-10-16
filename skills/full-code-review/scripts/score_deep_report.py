@@ -264,7 +264,7 @@ def score_report(report: dict, answer_key: dict, spot_check: dict | None = None,
     complete = (deep.get("enabled") is True and run.get("incomplete") is False
                 and not run.get("dimensions_failed") and not deep.get("unreached_areas")
                 and not deep.get("checker_failures")
-                and areas is not None
+                and bool(areas)
                 and all(area.get("status") in _COMPLETED_AREAS for area in areas))
     evidence_errors = []
     if not target_matches:

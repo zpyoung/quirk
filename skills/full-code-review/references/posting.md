@@ -58,13 +58,20 @@ finding (outside the diff, or on a file the forge collapsed) is not posted anywh
 else: read the warnings and tell the user which approved ids did not post. On GitHub
 each finding becomes a pull-request review comment (`path`, `line`, `side`,
 `commit_id`); on GitLab a positioned discussion built from `refs`. A failed create stops the batch and exits 2 with the IDs already
-posted and any warnings collected so far; their receipts stay in `--out`. The
+posted and any warnings collected so far; their receipts stay in `--out`. A create that
+times out or returns garbage may still have committed, and the script does not look for
+it on resume: before rerunning after a failed create, rerun the live duplicate check so
+the same finding is not posted twice. When a comment was created but its receipt could
+not be written, the failure names it as posted and carries the receipt under
+`unsaved_receipt`; record that by hand instead of reposting. The
 `--overview` receipt goes to a sibling file named from the `--out` stem
 (`receipts.json` becomes `receipts.overview.json`), so `--out` holds only finding
 receipts and `review_memory.py save --receipts` accepts it unchanged. The posted
 overview lists what actually posted, rebuilt from the receipts. The report must match
-the context's change, project and head, and every requested finding needs a numeric
-line, or the script exits 2 before the first create.
+the context's change and project, and its head too when `meta.head_sha` is present
+(author reports usually omit it; `meta.source_branch` is compared when both sides name
+one). Every requested finding needs a numeric line, or the script exits 2 before the
+first create.
 
 Two rules that cost the most time when missed:
 
@@ -366,7 +373,7 @@ python3 "$SCRIPTS/post_reviewer_review.py" complete --staged "$REVIEW_RUN_DIR/st
 - any Blocking finding suggests request-changes;
 - otherwise approve may be suggested;
 - approve is bound to the reviewed SHA;
-- request-changes uses GitLab's merge-request reviewer-state mutation;
+- request-changes uses GitLab's merge-request reviewer-state mutation, or a `REQUEST_CHANGES` pull-request review on GitHub;
 - comment-only performs no completion mutation.
 
 A completion failure is reported as “review published, completion failed”; it never

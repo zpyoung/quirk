@@ -349,10 +349,10 @@ def _cleanup_commands(state):
 
 
 def _reconcile_orphans(state, failed_body):
-    """Fold drafts GitLab committed without a usable response into the cleanup set.
+    """Fold drafts or pending reviews the forge committed without a usable response into the cleanup set.
 
     A create POST can commit server-side even when its response is lost or
-    malformed; such a draft never reaches state["created"], so cleanup built
+    malformed; such an item never reaches state["created"], so cleanup built
     from recorded IDs alone would strand it to block the next run. Staging only
     starts from an empty draft set, so any unrecorded live draft is an orphan.
     """
@@ -746,6 +746,11 @@ def publish(args):
 
 
 def complete(args):
+    """Apply the explicit completion action to a published review at the reviewed head.
+
+    Exit 0 once the action (approve, request-changes or comment-only) is recorded, 2 when
+    the review is unpublished, already completed, or the head moved since staging.
+    """
     try:
         state = _load(args.staged, "staged review")
         ctx = _state_context(state)

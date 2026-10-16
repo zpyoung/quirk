@@ -222,6 +222,8 @@ Every specialist returns a JSON list of findings in this exact shape:
 }
 ```
 
+A pack-added lens uses its own id as `dimension`.
+
 `verified` must be `true` for every `Must fix` and `Should fix` — that is the verification
 gate below. A `Nit` may be `false`. A finding that could not be confirmed against source is
 either downgraded with the basis recorded in `assumptions`, or reported as `false` — never
@@ -318,7 +320,8 @@ mutant is the `verified: true` proof of a vacuous test / coverage gap; a killed 
 retracts the finding. It is bounded, production-only, self-reverting, and never
 committed. Reviewer seat additionally requires fresh, per-run human consent recorded as
 `mutation_consent: true` in the current source manifest — consent from another run is
-invalid — and the probe runs only inside the borrowed source. Without consent or
+invalid — and the probe runs only inside a private disposable copy of the borrowed source,
+never the shared source root other lenses read. Without consent or
 runnability, the specialists fall back to static reasoning and record the limitation.
 
 ## Coordinator (merge step)

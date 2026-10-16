@@ -49,7 +49,7 @@ def enriched(snapshot=None, ctx=None, value=None):
 def decisions(value, slot="ignore", note="Intentional decision"):
     raw = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return {"schema": 1, "seat": value["meta"]["seat"],
-            "report_sha256": hashlib.sha256(raw.encode()).hexdigest(),
+            "report_sha256": hashlib.sha256(raw.encode("utf-8", "surrogateescape")).hexdigest(),
             "decisions": [{"id": "F%d" % i, "slot": slot, "note": note}
                           for i, _ in enumerate(value["findings"], 1)]}
 
@@ -244,6 +244,9 @@ def test_same_run_receipt_only_and_decision_saves_preserve_each_other():
     value = remember(fresh=True)
     receipt = {"F1": {"published": True, "note_id": 19}}
     assert m.commit_report(value, receipts=receipt)["saved"]
+    stored = load()["findings"][0]
+    assert stored["disposition"] == "ignore" and stored["note"] == "Intentional decision"
+    assert stored["receipt"]["note_id"] == 19
     assert m.commit_report(value, decisions(value, "later"))["saved"]
     stored = load()["findings"][0]
     assert stored["receipt"]["note_id"] == 19 and stored["disposition"] == "later"
@@ -355,9 +358,13 @@ def test_range_starting_on_blank_lines_anchors_on_its_first_nonblank_line(line, 
     assert m._anchor(NEW_FILE_DIFF, "doc.py", line) == expected
 
 
-def test_range_whose_first_nonblank_line_repeats_has_no_anchor():
+def test_range_whose_first_nonblank_text_repeats_on_other_lines_still_anchors():
     diff = NEW_FILE_DIFF.replace("second body line", "first body line")
     assert m._anchor(diff, "doc.py", "2-4") == "first body line"
+
+
+def test_anchor_is_none_when_one_line_number_is_claimed_by_two_diff_sections():
+    diff = NEW_FILE_DIFF.replace("second body line", "first body line")
     duplicated = diff + ("diff --git a/doc.py b/doc.py\n--- a/doc.py\n+++ b/doc.py\n"
                          "@@ -1,0 +3,1 @@\n+other\n")
     assert m._anchor(duplicated, "doc.py", "2-4") is None
@@ -785,3 +792,345 @@ def test_migration_drops_entries_whose_fingerprints_collapse_together():
     snapshot = load()
     assert snapshot["findings"] == []
     assert any("became ambiguous" in w for w in snapshot["warnings"])
+
+
+def test_non_utf8_anchor_line_is_fingerprinted_and_hashed():
+    ctx = context()
+    ctx["diff"] = ctx["diff"].replace("+new value", "+caf\udce9 line")
+    result = enriched(load(ctx), ctx)
+    memory = result["findings"][0]["memory"]
+    assert memory["fingerprint"] == m._fingerprint("a.py", "caf\udce9 line")[0]
+    assert load(ctx)["file_hashes"]["a.py"]
+
+
+def test_report_digest_accepts_surrogate_escaped_text():
+    value = report()
+    value["findings"][0]["body_md"] = "quotes caf\udce9"
+    raw = m._canonical_json(value).encode("utf-8", "surrogateescape")
+    assert m._report_digest(value) == hashlib.sha256(raw).hexdigest()
+
+
+def test_decisions_bound_to_a_report_with_non_utf8_text_are_saved():
+    value = report()
+    value["findings"][0]["body_md"] = "quotes caf\udce9"
+    result = enriched(value=value)
+    assert m.commit_report(result, decisions(result))["saved"]
+    assert load()["findings"][0]["disposition"] == "ignore"
+
+
+def branch_setup():
+    ctx = {"mode": "branch", "seat": "author", "source_branch": "feature/x",
+           "refs": {"base": BASE, "start": BASE, "head": HEAD}, "diff": context()["diff"]}
+    value = report()
+    value["meta"] = {"target": "branch", "branch": "feature/x", "seat": "author", "head_sha": HEAD,
+                     "title": "Review", "verdict": "Fix first"}
+    return ctx, value
+
+
+def mutate_meta(field, replacement):
+    def apply(value):
+        value["meta"][field] = replacement
+    return apply
+
+
+@pytest.mark.parametrize("field, replacement, message", [
+    ("target", "branch", "target"),
+    ("number", 8, "change number"),
+    ("project", "other/proj", "project"),
+    ("head_sha", "c" * 40, "head"),
+    ("seat", "reviewer", "seat"),
+])
+def test_report_meta_must_bind_to_the_snapshot(field, replacement, message):
+    value = report()
+    snapshot = load()
+    value["meta"][field] = replacement
+    with pytest.raises(ValueError, match=message):
+        m.reconcile(value, context(), snapshot)
+    committed = enriched(snapshot)
+    committed["meta"][field] = replacement
+    with pytest.raises(ValueError, match=message):
+        m.commit_report(committed, receipts={"F1": {"published": True}})
+
+
+def test_branch_report_must_name_the_snapshot_branch():
+    ctx, value = branch_setup()
+    snapshot = m.load_snapshot(ctx, dimensions=[DIMENSION])
+    value["meta"]["branch"] = "feature/other"
+    with pytest.raises(ValueError, match="branch"):
+        m.reconcile(value, ctx, snapshot)
+    enriched_branch = m.reconcile(branch_setup()[1], ctx, snapshot)
+    enriched_branch["meta"]["branch"] = "feature/other"
+    with pytest.raises(ValueError, match="branch"):
+        m.commit_report(enriched_branch, receipts={"F1": {"published": True}})
+
+
+@pytest.mark.parametrize("field, replacement, message", [
+    ("seat", "reviewer", "seat"),
+    ("base_sha", "c" * 40, "diff refs"),
+    ("head_sha", "c" * 40, "diff refs"),
+    ("schemaVersion", 2, "schema"),
+    ("schemaVersion", True, "schema"),
+    ("identity", None, "identity"),
+    ("target_key", "f" * 64, "identity"),
+])
+def test_reconcile_rejects_a_snapshot_that_does_not_bind_to_the_context(field, replacement, message):
+    snapshot = load()
+    snapshot[field] = replacement
+    with pytest.raises(ValueError, match=message):
+        m.reconcile(report(), context(), snapshot)
+
+
+@pytest.mark.parametrize("field, replacement", [
+    ("schemaVersion", 2), ("schemaVersion", True), ("target_key", "f" * 64), ("target_key", None),
+    ("head_sha", "c" * 40), ("seat", "reviewer"),
+])
+def test_commit_rejects_a_snapshot_with_a_bad_binding(field, replacement):
+    value = enriched()
+    value["memory"]["snapshot"][field] = replacement
+    with pytest.raises(ValueError):
+        m.commit_report(value, receipts={"F1": {"published": True}})
+    assert not list(m._state_dir().glob("*.json"))
+
+
+def ledger_files():
+    return {p.name: p.read_text() for p in m._state_dir().glob("*.json")}
+
+
+def set_snapshot(field, replacement):
+    def apply(value, choice):
+        value["memory"]["snapshot"][field] = replacement
+    return apply
+
+
+def set_fingerprint(value, choice):
+    value["findings"][0]["memory"]["fingerprint"] = "xyz"
+
+
+def set_choice(field, replacement):
+    def apply(value, choice):
+        choice[field] = replacement
+    return apply
+
+
+def set_row(field, replacement):
+    def apply(value, choice):
+        choice["decisions"][0][field] = replacement
+    return apply
+
+
+def duplicate_row(value, choice):
+    choice["decisions"].append(dict(choice["decisions"][0]))
+
+
+@pytest.mark.parametrize("mutate", [
+    set_choice("schema", 2), set_choice("seat", "reviewer"), duplicate_row,
+    set_row("slot", "bogus"), set_row("note", 5), set_row("id", "F9"),
+    set_fingerprint,
+    set_snapshot("started_at", 0), set_snapshot("started_at", -1),
+    set_snapshot("started_at", float("inf")), set_snapshot("started_at", float("nan")),
+    set_snapshot("started_at", "now"), set_snapshot("target_key", "f" * 64),
+], ids=lambda fn: getattr(fn, "__name__", "case"))
+def test_commit_rejects_malformed_decisions_and_snapshots(mutate):
+    value = enriched()
+    choice = decisions(value)
+    mutate(value, choice)
+    choice["report_sha256"] = m._report_digest(value)
+    before = ledger_files()
+    with pytest.raises(ValueError):
+        m.commit_report(value, choice)
+    assert ledger_files() == before == {}
+
+
+@pytest.mark.parametrize("receipts", [
+    {"F9": {"published": True}}, {"F1": {"published": False}}, {"F1": {}}, {"F1": "yes"}, [],
+])
+def test_commit_rejects_receipts_that_are_not_confirmed_publications(receipts):
+    value = remember("fix")
+    before = ledger_files()
+    with pytest.raises(ValueError):
+        m.commit_report(value, receipts=receipts)
+    assert ledger_files() == before
+
+
+def test_commit_rejects_a_malformed_finding_fingerprint_and_receipt_only_without_receipts():
+    value = enriched()
+    value["findings"][0]["memory"]["fingerprint"] = "xyz"
+    with pytest.raises(ValueError, match="fingerprint"):
+        m.commit_report(value, receipts={"F1": {"published": True}})
+    with pytest.raises(ValueError, match="receipts"):
+        m.commit_report(enriched())
+    assert ledger_files() == {}
+
+
+def other_account_thread(fp, author):
+    live = thread(fp)
+    live["notes"][0]["author"] = author
+    return live
+
+
+def test_same_username_with_a_different_user_id_is_not_the_posting_identity():
+    ctx = context()
+    ctx["change"]["current_user_id"] = 42
+    fp = enriched(load(ctx), ctx)["findings"][0]["memory"]["fingerprint"]
+    snapshot = load(ctx)
+    snapshot["discussions"] = [other_account_thread(fp, {"username": "author", "id": 99})]
+    memory = enriched(snapshot, ctx)["findings"][0]["memory"]
+    assert memory["state"] == "new" and memory["suppress_post"] is False
+
+
+def test_username_only_identity_match_ignores_case():
+    fp = enriched()["findings"][0]["memory"]["fingerprint"]
+    snapshot = load()
+    snapshot["discussions"] = [other_account_thread(fp, {"username": "AUTHOR"})]
+    memory = enriched(snapshot)["findings"][0]["memory"]
+    assert memory["state"] == "carried" and memory["suppress_post"] is True
+
+
+def live_fp():
+    return enriched()["findings"][0]["memory"]["fingerprint"]
+
+
+def test_open_thread_is_preferred_over_an_earlier_resolved_one():
+    fp = live_fp()
+    snapshot = load()
+    snapshot["discussions"] = [thread(fp, resolved=True, note_id=9), thread(fp, note_id=10)]
+    memory = enriched(snapshot)["findings"][0]["memory"]
+    assert memory["thread"]["note_id"] == 10 and memory["state"] == "carried"
+    snapshot["discussions"][1]["notes"].append({"body": "Will do", "author": {"username": "reviewer"}})
+    memory = enriched(snapshot)["findings"][0]["memory"]
+    assert memory["thread"]["note_id"] == 10 and memory["state"] == "answered"
+
+
+def test_a_thread_carrying_our_marker_for_another_finding_is_not_human_context():
+    snapshot = load()
+    ours = thread(OTHER)
+    ours["position"] = {"new_path": "a.py", "new_line": 1}
+    snapshot["discussions"] = [ours]
+    memory = enriched(snapshot)["findings"][0]["memory"]
+    assert memory["human_context"] == [] and memory["state"] == "new"
+
+
+def test_system_notes_after_our_marker_are_not_replies():
+    snapshot = load()
+    live = thread(live_fp())
+    live["notes"].append({"body": "assigned to someone", "system": True, "author": {"username": "reviewer"}})
+    snapshot["discussions"] = [live]
+    memory = enriched(snapshot)["findings"][0]["memory"]
+    assert memory["thread"]["replies"] == [] and memory["state"] == "carried"
+
+
+def test_a_similar_prior_in_another_file_is_not_a_candidate():
+    remember("fix")
+    ctx, value = context(), report()
+    ctx["diff"] = ctx["diff"].replace("a.py", "b.py")
+    value["findings"][0]["file"] = "b.py"
+    memory = enriched(load(ctx), ctx, value)["findings"][0]["memory"]
+    assert memory["candidates"] == [] and memory["match"] is None and memory["state"] == "new"
+
+
+def test_a_regressed_candidate_with_an_open_thread_is_not_a_possible_regression():
+    fp = remember("fix", posted=True)["findings"][0]["memory"]["fingerprint"]
+    snapshot = load()
+    snapshot["discussions"] = [thread(fp)]
+    ctx = context()
+    ctx["diff"] = ctx["diff"].replace("+new value", "+regressed value")
+    memory = enriched(snapshot, ctx)["findings"][0]["memory"]
+    assert memory["match"] == "candidate" and memory["state"] == "new"
+    assert memory["candidates"][0]["thread"]["resolved"] is False
+    assert memory["thread"] is None
+
+
+def test_a_published_prior_stays_carried_when_discussions_are_unavailable(monkeypatch):
+    remember("fix", posted=True)
+
+    def broken(*args, **kwargs):
+        raise OSError("offline")
+    monkeypatch.setattr(m, "fetch_discussions", broken)
+    snapshot = load()
+    assert snapshot["discussions_available"] is False
+    memory = enriched(snapshot)["findings"][0]["memory"]
+    assert (memory["state"], memory["disposition"], memory["suppress_post"]) == ("carried", "fix", False)
+
+
+@pytest.mark.parametrize("key", ["diff_unavailable", "not_text_reviewable"])
+def test_files_without_a_usable_diff_are_never_unchanged(key):
+    remember()
+    assert load()["unchanged_files"] == ["a.py"]
+    ctx = context()
+    ctx[key] = ["a.py"]
+    assert load(ctx)["unchanged_files"] == []
+
+
+def test_stale_discussions_are_not_trusted_after_a_failed_fetch():
+    fp = live_fp()
+    snapshot = load()
+    snapshot["discussions"] = [thread(fp)]
+    snapshot["discussions_available"] = False
+    assert enriched(snapshot)["findings"][0]["memory"]["suppress_post"] is False
+    remember("fix", posted=True)
+    snapshot = load()
+    snapshot["discussions"] = [thread(fp)]
+    snapshot["discussions_available"] = False
+    memory = enriched(snapshot)["findings"][0]["memory"]
+    assert (memory["state"], memory["suppress_post"]) == ("carried", False)
+    assert memory["thread"] is None
+
+
+def test_only_known_receipt_fields_and_no_discussions_reach_the_ledger():
+    snapshot = load()
+    snapshot["discussions"] = [thread(live_fp())]
+    value = enriched(snapshot)
+    receipt = {"published": True, "discussion_id": "d", "note_id": 9, "url": "u", "head_sha": HEAD,
+               "token": "secret"}
+    assert m.commit_report(value, decisions(value, "fix"), {"F1": receipt})["saved"]
+    record = json.loads(next(m._state_dir().glob("*.json")).read_text())
+    assert record["snapshot"]["discussions"] == []
+    assert record["snapshot"]["findings"][0]["receipt"] == {k: v for k, v in receipt.items() if k != "token"}
+
+
+def snapshot_mutation(field, replacement):
+    def apply(record):
+        record["snapshot"][field] = replacement
+    return apply
+
+
+def finding_mutation(field, replacement):
+    def apply(record):
+        record["snapshot"]["findings"][0][field] = replacement
+    return apply
+
+
+def future_schema(record):
+    record["schemaVersion"] = 99
+
+
+@pytest.mark.parametrize("mutate", [
+    future_schema,
+    snapshot_mutation("started_at", "yesterday"), snapshot_mutation("file_hashes", []),
+    snapshot_mutation("identity", []), snapshot_mutation("findings", {}),
+    finding_mutation("seat", "owner"), finding_mutation("disposition", "maybe"),
+    finding_mutation("fingerprint", "xyz"), finding_mutation("receipt", "published"),
+    finding_mutation("dimension", 5), finding_mutation("note", None),
+], ids=lambda fn: getattr(fn, "__name__", "case"))
+def test_ledger_with_a_damaged_field_is_never_overwritten(mutate):
+    remember()
+    ledger = next(m._state_dir().glob("*.json"))
+    record = json.loads(ledger.read_text())
+    mutate(record)
+    ledger.write_text(json.dumps(record))
+    damaged = ledger.read_text()
+    value = enriched(load())
+    assert value["memory"]["warnings"]
+    assert not m.commit_report(value, decisions(value, "later"))["saved"]
+    assert ledger.read_text() == damaged
+
+
+def test_non_utf8_file_path_is_fingerprinted():
+    assert m._fingerprint("caf\udce9.py", "value")[0] != m._fingerprint("a.py", "value")[0]
+
+
+def test_validate_snapshot_rejects_a_seat_that_differs_from_the_context():
+    snapshot = load()
+    snapshot["seat"] = "reviewer"
+    with pytest.raises(ValueError, match="seat"):
+        m.validate_snapshot(snapshot, context())

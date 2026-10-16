@@ -29,19 +29,18 @@ needs) so forge tokens and other credentials in your shell never reach the chang
 
 Beyond consent, only when the reviewed code is **locally runnable at `refs.head`** — the
 suite executes and you can restore the tree exactly. It does **not** apply to a diff you
-can only read at a remote ref. Applicability by source:
+can only read at a remote ref.
 
-- **Isolated checkout (required in reviewer seat).** Use the borrowed reviewer
-  source at the exact `refs.head`; do not create or mutate the reviewer's checkout.
-  Run probes serially inside it and restore each production file before another
-  specialist relies on it. The coordinator tears the source down at the end.
-- **Shared working tree (only if no isolated checkout).** Probe only when the tree
-  is already at `refs.head` **and** `git status` is clean; run probes **serially**
-  (never two mutation probes, and not while a `--local` specialist reads the tree);
-  restore after every mutant.
-- **Not runnable** (deps missing, suite red at baseline, or a remote change that is
-  not checked out) → **skip the probe**, fall back to static reasoning, and record
-  "mutation probe not run (code not locally runnable)" as an assumption.
+Lenses run in parallel against one source root, so **never mutate the shared source root
+or the reviewer's checkout.** Each probing lens creates its own disposable copy at the exact
+`refs.head` (`git -C <source root> worktree add --detach <temp dir> <refs.head>`, or a plain
+copy of the tree), runs every mutant and test command inside that copy, and removes it
+before returning. In `--local` mode use a plain copy of the working tree so the
+uncommitted changes under review are included.
+
+- **Not runnable** (deps missing, suite red at baseline, no copy can be made, or a remote
+  change that is not checked out) → **skip the probe**, fall back to static reasoning, and
+  record "mutation probe not run (code not locally runnable)" as an assumption.
 
 ### Protocol
 1. **Green baseline.** Run the changed test file(s) once with the repo's runner. If
@@ -59,9 +58,9 @@ can only read at a remote ref. Applicability by source:
    early `return`, change a metric name or a low-cardinality dimension value, or
    weaken a composite key (drop a field / its normalization), swap an argument.
 4. **Interpret + revert.** Record survive/kill, then **immediately** revert
-   (`git checkout -- <file>` or discard the disposable checkout). Mutate **only
-   production files, never tests**. Never commit. Before ending, including when the probe aborts, confirm
-   `git status --porcelain` is empty in the tree you probed.
+   (`git checkout -- <file>` inside the copy). Mutate **only production files, never
+   tests**. Never commit. Before ending, including when the probe aborts, remove the
+   copy and confirm `git status --porcelain` is empty in the source root.
 
 ### Reporting
 A mutation-confirmed finding carries the surviving mutant in `issue` (e.g. "key
@@ -69,7 +68,7 @@ mutated to variant-only → all N tests still pass") and is `verified: true`. En
 specialist's notes with a **Surviving mutants** line listing every production
 mutation no test caught, plus any risky candidate you could not probe.
 
-**Hard rules:** opt-in; isolated checkout preferred; production-only; targeted
+**Hard rules:** opt-in; private disposable copy only; production-only; targeted
 tests only; bounded count; reverted after every mutant; never committed; tree clean
 at exit. (This is the *only* place the review touches code, and only transiently —
 see the Boundaries section of SKILL.md.)

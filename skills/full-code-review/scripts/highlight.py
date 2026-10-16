@@ -220,19 +220,20 @@ def _tokens(source, name):
             yield next((k for prefix, k in _DIFF_PREFIXES if line.startswith(prefix)), None), line
         return
     if _pygments_lexers is not None:
+        bom = len(source) - len(source.lstrip("\ufeff"))
+        if bom:
+            yield None, source[:bom]
+        body = source[bom:]
         emitted = 0
-        if source.startswith("\ufeff"):
-            yield None, "\ufeff"
-            emitted = 1
-        for ttype, text in _pygments_lexer(name).get_tokens(source[emitted:]):
-            text = text[:max(0, len(source) - emitted)]
+        for ttype, text in _pygments_lexer(name).get_tokens(body):
+            text = text[:max(0, len(body) - emitted)]
             emitted += len(text)
             kind = _pygments_kind(ttype)
             if name in _DATA_LANGUAGES and kind in ("tag", "attribute"):
                 kind = "property"
             yield kind, text
-        if emitted < len(source):
-            yield None, source[emitted:]
+        if emitted < len(body):
+            yield None, body[emitted:]
         return
     cursor = 0
     for match in _regex(name).finditer(source):

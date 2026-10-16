@@ -21,6 +21,7 @@ def finding(**over):
 @pytest.mark.parametrize("value, passed", [
     (finding(), True),
     (finding(line="1-3"), True),
+    (finding(line="1-2"), False),
     (finding(line="5-9"), False),
     (finding(line="3", dimension=None, dimensions=["resilience", "db"]), True),
     (finding(dimension="resilience"), False),

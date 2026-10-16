@@ -8,8 +8,8 @@ filenames. Never put rendered HTML in a JSON field.
 ## Render command and outputs
 
 ```bash
-python3 scripts/render_report.py \
-  --in "$REVIEW_OUT_DIR/review-<slug>-report.json" \
+python3 "$SCRIPTS/render_report.py" \
+  --in "$REPORT_JSON" \
   --format html
 ```
 

@@ -239,6 +239,7 @@ def merge_request(api_call, host, project, iid):
 
 
 def list_drafts(api_call, host, project, iid):
+    """Return every draft note of the authenticated user on the MR; raise ForgeError on malformed or incomplete pagination."""
     drafts = []
     seen = set()
     for page in range(1, 101):
@@ -269,6 +270,7 @@ def draft_summary(item):
 
 
 def changed_paths(api_call, host, project, old_head, new_head):
+    """Return the paths that differ between two heads; raise ForgeError when GitLab's compare may be truncated."""
     endpoint = "projects/%s/repository/compare?%s" % (
         quote(project, safe=""), urlencode({"from": old_head, "to": new_head, "straight": "true"}))
     data = api_call(host, "GET", endpoint)

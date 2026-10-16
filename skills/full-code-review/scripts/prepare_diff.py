@@ -363,6 +363,10 @@ def is_source_file(path):
             ".md", ".markdown", ".mdown", ".mkd", ".rst",
             ".yaml", ".yml", ".json", ".toml", ".ini", ".cfg")):
         return False
+    if name in ("license", "licence", "notice", "copying", ".gitignore", ".gitattributes"):
+        return False
+    if name.endswith((".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".txt")):
+        return False
     if name.endswith(".lock") or name in ("go.sum", "bun.lockb"):
         return False
     return True
@@ -419,19 +423,23 @@ def _git_diff_command(cwd):
             _GIT_DIFF_FLAGS)
 
 
-def _git_diff_path(base, head, path, cwd=".", old_path=None):
-    """Return a file diff, empty text on proven no delta, or None on failure."""
+def _git_diff_path(base, head, path, cwd=".", old_path=None, metadata=None):
+    """Return a file diff, empty text on proven no delta, or None on failure.
+
+    On failure `metadata["error"]` names the failing git step with a stderr snippet.
+    """
     if not base or not head or not path:
         return None
     paths = _deduplicate([old_path, path])
     cmd = (_git_diff_command(cwd) + ["--find-renames=50%",
            "%s..%s" % (base, head), "--"] + paths)
+    step = "git diff of %s" % path
     try:
-        r = _run(cmd, timeout=120)
-        if r.returncode == 0:
-            return r.stdout
-    except Exception:
-        return None
+        first = _run(cmd, timeout=120)
+        if first.returncode == 0:
+            return first.stdout
+    except Exception as exc:
+        return _git_failed(metadata, step, exc)
 
     missing = []
     for sha in (base, head):
@@ -442,20 +450,20 @@ def _git_diff_path(base, head, path, cwd=".", old_path=None):
         except Exception:
             missing.append(sha)
     if not missing:
-        return None
+        return _git_failed(metadata, step, first)
 
     for sha in missing:
         try:
             r = _run(["git", "-C", cwd, "fetch", "origin", sha], timeout=120)
             if r.returncode != 0:
-                return None
-        except Exception:
-            return None
+                return _git_failed(metadata, "git fetch of %s" % sha[:12], r)
+        except Exception as exc:
+            return _git_failed(metadata, "git fetch of %s" % sha[:12], exc)
     try:
         r = _run(cmd, timeout=120)
-        return r.stdout if r.returncode == 0 else None
-    except Exception:
-        return None
+        return r.stdout if r.returncode == 0 else _git_failed(metadata, step, r)
+    except Exception as exc:
+        return _git_failed(metadata, step, exc)
 
 
 def _git_diff_range(base, head, cwd=".", context_lines=None, metadata=None):
@@ -511,8 +519,11 @@ def _git_changed_files_range(base, head, cwd=".", metadata=None):
         return _git_failed(metadata, step, exc)
 
 
-def _prepare_change_records(changes, refs, cwd="."):
-    """Return reconstructed text, changed, unavailable, and non-text paths for forge change records."""
+def _prepare_change_records(changes, refs, cwd=".", metadata=None):
+    """Return reconstructed text, changed, unavailable, and non-text paths for forge change records.
+
+    The first per-file git recovery failure is kept on `metadata["diff_unavailable_cause"]`.
+    """
     parts, changed_files, unavailable, not_text = [], [], [], []
     for change in changes:
         path = change.get("new_path") or change.get("old_path")
@@ -528,16 +539,20 @@ def _prepare_change_records(changes, refs, cwd="."):
             rendered = reconstruct_diff_from_changes([change])
         else:
             old_path = change.get("old_path") if change.get("renamed_file") else None
+            failure = {}
             if old_path:
                 recovered = _git_diff_path(refs.get("base"), refs.get("head"), path, cwd,
-                                           old_path=old_path)
+                                           old_path=old_path, metadata=failure)
             else:
-                recovered = _git_diff_path(refs.get("base"), refs.get("head"), path, cwd)
+                recovered = _git_diff_path(refs.get("base"), refs.get("head"), path, cwd,
+                                           metadata=failure)
             rendered = recovered or ""
             if (recovered is None or
                     (recovered == "" and not _can_be_metadata_only(change))):
                 if path and not _same_blob(change):
                     unavailable.append(path)
+                    if metadata is not None and failure.get("error"):
+                        metadata.setdefault("diff_unavailable_cause", failure["error"])
         if rendered:
             parts.append(rendered.rstrip("\n"))
     diff_text = "\n".join(parts)
@@ -546,6 +561,7 @@ def _prepare_change_records(changes, refs, cwd="."):
 
 
 def get_origin_url(cwd="."):
+    """Return origin's fetch URL, or "" when origin is missing or git fails."""
     try:
         r = _run(["git", "-C", cwd, "remote", "get-url", "origin"], timeout=10)
         if r.returncode == 0:
@@ -556,6 +572,7 @@ def get_origin_url(cwd="."):
 
 
 def detect_target_branch(cwd="."):
+    """Return origin's default branch name, or "main" when origin/HEAD is unset or git fails."""
     try:
         r = _run(["git", "-C", cwd, "symbolic-ref", "refs/remotes/origin/HEAD"], timeout=10)
         if r.returncode == 0 and r.stdout.strip():
@@ -622,7 +639,7 @@ def change_diff(forge, number, cwd=".", metadata=None):
         }
     else:
         diff_text, changed_files, unavailable, not_text = _prepare_change_records(
-            changes, refs, cwd)
+            changes, refs, cwd, metadata)
         recovery = None
 
     if diff_text and (not refs.get("base") or not refs.get("head")):
@@ -770,7 +787,10 @@ def _untracked_diff(path, cwd):
 def git_diff_local(context_lines, cwd=".", metadata=None, excluded_path=None):
     """Return staged, unstaged, and untracked diffs, or None on failure.
 
-    On failure `metadata["error"]` names the failing git step with a stderr snippet.
+    Paths are repository-root relative whatever `cwd` is inside the work tree. Untracked
+    directories (nested git repos) have no diff and are reported on
+    `metadata["diff_unavailable"]` instead of `changed_files`. On failure
+    `metadata["error"]` names the failing git step with a stderr snippet.
     """
     try:
         diff_cmd = _git_diff_command(cwd) + ["--find-renames=50%"]
@@ -778,27 +798,34 @@ def git_diff_local(context_lines, cwd=".", metadata=None, excluded_path=None):
         staged = _run(diff_cmd + ["--staged", "-U%d" % context_lines], timeout=60)
         unstaged_names = _run(diff_cmd + ["--name-only", "-z"], timeout=60)
         staged_names = _run(diff_cmd + ["--staged", "--name-only", "-z"], timeout=60)
-        untracked_result = _run(["git", "-C", cwd, "ls-files", "--others",
-                                 "--exclude-standard", "-z"], timeout=60)
         for step, result in (("git diff", unstaged), ("git diff --staged", staged),
                              ("git diff --name-only", unstaged_names),
-                             ("git diff --staged --name-only", staged_names),
-                             ("git ls-files", untracked_result)):
+                             ("git diff --staged --name-only", staged_names)):
             if result.returncode != 0:
                 return _git_failed(metadata, step, result)
+        root_result = _run(["git", "-C", cwd, "rev-parse", "--show-toplevel"], timeout=30)
+        if root_result.returncode != 0 or not root_result.stdout.strip():
+            return _git_failed(metadata, "git rev-parse --show-toplevel", root_result)
+        root = root_result.stdout.strip()
+        untracked_result = _run(["git", "-C", root, "ls-files", "--others",
+                                 "--exclude-standard", "-z"], timeout=60)
+        if untracked_result.returncode != 0:
+            return _git_failed(metadata, "git ls-files", untracked_result)
     except Exception as exc:
         return _git_failed(metadata, "local git diff", exc)
 
     excluded_real_path = os.path.realpath(excluded_path) if excluded_path else None
-    untracked = [
+    untracked_entries = [
         path for path in untracked_result.stdout.split("\0")
-        if path and os.path.realpath(os.path.join(cwd, path)) != excluded_real_path
+        if path and os.path.realpath(os.path.join(root, path)) != excluded_real_path
     ]
+    directories = [path for path in untracked_entries if path.endswith("/")]
+    untracked = [path for path in untracked_entries if not path.endswith("/")]
     changed_files = _deduplicate(
         unstaged_names.stdout.split("\0") + staged_names.stdout.split("\0") + untracked)
     parts = [unstaged.stdout or "", staged.stdout or ""]
     for path in untracked:
-        rendered = _untracked_diff(path, cwd)
+        rendered = _untracked_diff(path, root)
         if rendered is None:
             return _git_failed(metadata, "git diff of untracked file %s" % path)
         parts.append(rendered)
@@ -813,6 +840,7 @@ def git_diff_local(context_lines, cwd=".", metadata=None, excluded_path=None):
         return _git_failed(metadata, "git rev-parse HEAD", head_result)
     if metadata is not None:
         metadata["untracked_files"] = untracked
+        metadata["diff_unavailable"] = directories
         metadata["changed_files"] = changed_files
         metadata["refs"] = {"base": head, "start": head, "head": head}
     return diff_text
@@ -999,7 +1027,8 @@ def main(argv=None):
     else:
         files = changed_files_from_diff(diff_text)
     files = _deduplicate(files + local_metadata.get("untracked_files", []))
-    diff_unavailable = forge_metadata.get("diff_unavailable", [])
+    diff_unavailable = _deduplicate(forge_metadata.get("diff_unavailable", []) +
+                                    local_metadata.get("diff_unavailable", []))
     not_text_reviewable = _deduplicate(
         forge_metadata.get("not_text_reviewable", []) +
         not_text_reviewable_from_diff(diff_text))
@@ -1027,6 +1056,7 @@ def main(argv=None):
         "source_branch": source_branch, "refs": refs, "target_branch": target,
         "changed_files": files, "test_files": test_files, "source_files": source_files,
         "diff_unavailable": diff_unavailable,
+        "diff_unavailable_cause": forge_metadata.get("diff_unavailable_cause"),
         "not_text_reviewable": not_text_reviewable,
         "untracked_files": untracked_files,
         "file_list_recovery": forge_metadata.get("file_list_recovery"),

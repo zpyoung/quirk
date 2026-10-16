@@ -15,6 +15,7 @@ import jsonio
 
 _SEVERITY_RANK = {"Nit": 0, "Should fix": 1, "Must fix": 2}
 _LINE_RANGE = re.compile(r"^\s*(\d+)\s*(?:-\s*(\d+))?\s*$")
+_REPORT_LINE = re.compile(r"[1-9][0-9]*(?:-[0-9]+)?")
 
 
 def _object(value: object, label: str) -> dict:
@@ -69,9 +70,19 @@ def _title(source: dict) -> str:
 
 
 def _line(value: object, label: str) -> str:
-    if isinstance(value, bool) or not isinstance(value, (str, int)) or not str(value).strip():
-        raise ValueError("%s must be a line or line range" % label)
-    return str(value).strip()
+    """Normalize a line anchor to the `N` or `N-M` form the report renderer accepts."""
+    if not isinstance(value, bool) and isinstance(value, (str, int)):
+        text = re.sub(r"\s*-\s*", "-", str(value).strip())
+        if _REPORT_LINE.fullmatch(text):
+            return text
+    raise ValueError("%s must be a line number or start-end range" % label)
+
+
+def _assumptions(source: dict, identifier: str) -> list[str]:
+    raw = source.get("assumptions", [])
+    if not isinstance(raw, list) or any(not isinstance(item, str) for item in raw):
+        raise ValueError("assumptions for %s must be an array of strings" % identifier)
+    return [item.strip() for item in raw if item.strip()]
 
 
 def _dimensions(source: dict, *, is_lens: bool) -> list[str]:
@@ -100,7 +111,10 @@ def _budget(value: dict) -> dict:
 
 def _finding(source: dict, checker: dict | None, *, is_lens: bool) -> dict:
     identifier = _required_text(source.get("id"), "candidate id")
-    verdict = checker.get("verdict", "confirmed") if checker is not None else "confirmed"
+    assumptions = _assumptions(source, identifier)
+    unverified_lens_claim = checker is None and source.get("verified") is False
+    verdict = (checker.get("verdict", "confirmed") if checker is not None
+               else "plausible" if unverified_lens_claim else "confirmed")
     severity = checker.get("severity") if checker is not None else source.get("severity")
     if severity not in _SEVERITY_RANK:
         raise ValueError("checker severity for %s must be Must fix, Should fix, or Nit" % identifier)
@@ -145,15 +159,25 @@ def _finding(source: dict, checker: dict | None, *, is_lens: bool) -> dict:
         "verified": verdict == "confirmed",
         "evidence": evidence,
         "what_would_confirm": None,
+        "_checked": checker is not None,
     }
     if "area" in source:
         finding["area"] = source["area"]
+    if assumptions:
+        finding["assumptions"] = assumptions
+    if "anchor_side" in source:
+        if source["anchor_side"] not in ("new", "old"):
+            raise ValueError("anchor_side for %s must be new or old" % identifier)
+        finding["anchor_side"] = source["anchor_side"]
     if source.get("dedup_key"):
         finding["dedup_key"] = source["dedup_key"]
     if verdict == "plausible":
-        assert checker is not None
-        finding["what_would_confirm"] = _required_text(
-            checker.get("what_would_confirm"), "what_would_confirm for %s" % identifier)
+        if checker is None:
+            finding["what_would_confirm"] = (
+                "; ".join(assumptions) or "Confirm the claim against the source; the lens could not verify it.")
+        else:
+            finding["what_would_confirm"] = _required_text(
+                checker.get("what_would_confirm"), "what_would_confirm for %s" % identifier)
     if evidence == "reproduced":
         assert checker is not None
         finding["repro"] = {
@@ -203,17 +227,26 @@ def _deduplicate(findings: list[dict]) -> list[dict]:
 
     merged = []
     for group in groups.values():
-        pool = [found for found in group if found["verified"]] or group
+        judged = [found for found in group if found["_checked"]] or group
+        pool = [found for found in judged if found["verified"]] or judged
         best = max(pool, key=lambda item: (_SEVERITY_RANK[item["severity"]],
                                            item["evidence"] == "reproduced"))
         item = dict(best)
         dimensions = sorted({dimension for found in group for dimension in found["dimensions"]})
         item["dimensions"] = dimensions
         item["dimension"] = dimensions[0]
-        item["verification_status"] = "confirmed" if any(found["verified"] for found in group) else "plausible"
+        item["verification_status"] = "confirmed" if any(found["verified"] for found in judged) else "plausible"
         item["verified"] = item["verification_status"] == "confirmed"
         item["what_would_confirm"] = None if item["verified"] else next(
-            found["what_would_confirm"] for found in group if found["what_would_confirm"])
+            found["what_would_confirm"] for found in judged if found["what_would_confirm"])
+        assumptions = list(dict.fromkeys(text for found in group for text in found.get("assumptions", [])))
+        if assumptions:
+            item["assumptions"] = assumptions
+        if "anchor_side" not in item:
+            sides = [found["anchor_side"] for found in group if "anchor_side" in found]
+            if sides:
+                item["anchor_side"] = sides[0]
+        item.pop("_checked")
         reproduced = next((found for found in group if found["evidence"] == "reproduced"), None)
         item["evidence"] = "reproduced" if reproduced else "read from code"
         if reproduced:

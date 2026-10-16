@@ -111,25 +111,26 @@ class _Cursor:
         self.i = j + 1
 
 
-def _opens_quote(text: str, i: int) -> bool:
+def _opens_quote(text: str, i: int, flow: bool = False) -> bool:
     """A quote starts a quoted scalar only at a scalar start, never inside a plain scalar (`don't`).
 
-    A scalar starts at the line start, after `[` or `,`, after a `key:` indicator, or after
-    a `-` sequence indicator.
+    A scalar starts at the line start, after a `key:` indicator, or after a `-` sequence
+    indicator. Inside a flow sequence (`flow=True`) it also starts after `[` or `,`; in block
+    context those characters belong to a plain scalar (`yes, 'cause`).
     """
-    if i == 0 or text[i - 1] in "[,":
+    if i == 0 or (flow and text[i - 1] in "[,"):
         return True
     if text[i - 1] not in " \t":
         return False
     before = text[:i].rstrip(" \t")
-    if before == "" or before[-1] in "[,:":
+    if before == "" or before[-1] == ":" or (flow and before[-1] in "[,"):
         return True
     return before[-1] == "-" and before[:-1].strip(" -") == ""
 
 
 def _strip_comment(line: str) -> str:
     """Cut `line` at the first unquoted `#` preceded by whitespace or the line start."""
-    in_single = in_double = False
+    in_single = in_double = flow = False
     i, n = 0, len(line)
     while i < n:
         ch = line[i]
@@ -149,10 +150,12 @@ def _strip_comment(line: str) -> str:
                 in_double = False
             i += 1
             continue
-        if ch == "'" and _opens_quote(line, i):
+        if ch == "'" and _opens_quote(line, i, flow):
             in_single = True
-        elif ch == '"' and _opens_quote(line, i):
+        elif ch == '"' and _opens_quote(line, i, flow):
             in_double = True
+        elif ch == "[" and not flow and _opens_quote(line, i):
+            flow = True
         elif ch == "#" and (i == 0 or line[i - 1] in " \t"):
             return line[:i]
         i += 1
@@ -161,7 +164,7 @@ def _strip_comment(line: str) -> str:
 
 def _find_colon(content: str) -> Optional[int]:
     """Find the first unquoted `:` that separates a mapping key from its value."""
-    in_single = in_double = False
+    in_single = in_double = flow = False
     i, n = 0, len(content)
     while i < n:
         ch = content[i]
@@ -181,10 +184,12 @@ def _find_colon(content: str) -> Optional[int]:
                 in_double = False
             i += 1
             continue
-        if ch == "'" and _opens_quote(content, i):
+        if ch == "'" and _opens_quote(content, i, flow):
             in_single = True
-        elif ch == '"' and _opens_quote(content, i):
+        elif ch == '"' and _opens_quote(content, i, flow):
             in_double = True
+        elif ch == "[" and not flow and _opens_quote(content, i):
+            flow = True
         elif ch == ":" and (i + 1 == n or content[i + 1] == " "):
             return i
         i += 1
@@ -192,6 +197,7 @@ def _find_colon(content: str) -> Optional[int]:
 
 
 def _is_dash(content: str) -> bool:
+    """True for a block-sequence entry: a bare `-` or `- ` followed by content."""
     return content == "-" or content.startswith("- ")
 
 
@@ -223,7 +229,7 @@ def _parse_node(cur: _Cursor, min_indent: int, path: str, depth: int) -> Any:
     if content[0] == "[":
         cur.advance_to(j)
         return _parse_flow_sequence(content, path, j + 1)
-    if content == "-" or content.startswith("- "):
+    if _is_dash(content):
         return _parse_sequence(cur, indent, path, depth)
     if _find_colon(content) is not None:
         return _parse_mapping(cur, indent, path, depth)
@@ -276,7 +282,7 @@ def _parse_mapping(cur: _Cursor, indent: int, path: str, depth: int) -> dict:
         j, cur_indent, content = peek
         if cur_indent != indent:
             break
-        if content == "-" or content.startswith("- "):
+        if _is_dash(content):
             raise TemplateParseError("expected a mapping key, found a sequence item", path, j + 1)
         _reject_doc_markers(content, path, j + 1)
         key, value_part = _split_key(content, path, j + 1)
@@ -294,7 +300,7 @@ def _parse_sequence(cur: _Cursor, indent: int, path: str, depth: int) -> list:
         j, cur_indent, content = peek
         if cur_indent != indent:
             break
-        if not (content == "-" or content.startswith("- ")):
+        if not _is_dash(content):
             break
         cur.advance_to(j)
         after_dash = content[1:]
@@ -330,7 +336,7 @@ def _parse_sequence(cur: _Cursor, indent: int, path: str, depth: int) -> list:
             j2, indent2, content2 = sibling
             if indent2 != item_col:
                 break
-            if content2 == "-" or content2.startswith("- "):
+            if _is_dash(content2):
                 raise TemplateParseError(
                     "expected a mapping key, found a sequence item", path, j2 + 1
                 )
@@ -441,9 +447,9 @@ def _split_flow_items(inner: str) -> List[str]:
                 in_double = False
             i += 1
             continue
-        if ch == "'" and _opens_quote(inner, i):
+        if ch == "'" and _opens_quote(inner, i, True):
             in_single = True
-        elif ch == '"' and _opens_quote(inner, i):
+        elif ch == '"' and _opens_quote(inner, i, True):
             in_double = True
         elif ch in "[{":
             depth += 1

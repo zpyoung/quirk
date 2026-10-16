@@ -1061,3 +1061,11 @@ def test_plausible_author_finding_never_becomes_post_eligible(slot):
     assert data["findings"]["F2"]["post"] is (decisions is None)
     assert "Posted: %d · Not posted: %d" % (
         1 if decisions is None else 0, 1 if decisions is None else 2) in data["overview"]
+
+
+@pytest.mark.parametrize("marker", ["~~~", "```"])
+def test_fence_marker_after_an_inline_prefix_does_not_add_a_stray_fence(marker):
+    finding = make_finding(fix_md="%s bar" % marker)
+    body, _ = cb.finding_body(finding, seat="author", lead="Must fix")
+    assert "**Fix:** %s bar\n" % marker in body
+    assert body.count(marker) == 1

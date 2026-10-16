@@ -533,9 +533,42 @@ def test_reviewer_seat_rejects_a_symlink_that_leaves_the_repo(tmp_path, monkeypa
 
 def test_front_matter_after_a_byte_order_mark_still_applies(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
-    _write(repo / "REVIEW.md", "﻿---\nseverity_floor: Must fix\n---\nBody.\n")
+    _write(repo / "REVIEW.md", "\ufeff---\nseverity_floor: Must fix\n---\nBody.\n")
     rc, policy, _, _ = _resolve(tmp_path, repo, monkeypatch=monkeypatch)
     assert rc == 0 and policy["severity_floor"] == "Must fix"
+
+
+def test_a_higher_layer_lens_model_beats_a_lower_layer_models_entry(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    user = tmp_path / "config" / "quirk" / "review"
+    _write(user / "pack.yaml", "models:\n  correctness: haiku\n")
+    _write(repo / ".quirk" / "review" / "lenses" / "correctness.md",
+           "---\nid: correctness\nmodel: opus\n---\n\n# Org correctness\n")
+    rc, policy, _, _ = _resolve(tmp_path, repo, user_config=tmp_path / "config", monkeypatch=monkeypatch)
+    assert rc == 0
+    assert _lens(policy, "correctness")["model"] == "opus"
+
+
+def test_a_higher_layer_models_entry_beats_a_lower_layer_lens_model(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    user = tmp_path / "config" / "quirk" / "review"
+    _write(user / "lenses" / "correctness.md",
+           "---\nid: correctness\nmodel: opus\n---\n\n# User correctness\n")
+    _write(repo / ".quirk" / "review" / "pack.yaml", "models:\n  correctness: haiku\n")
+    rc, policy, _, _ = _resolve(tmp_path, repo, user_config=tmp_path / "config", monkeypatch=monkeypatch)
+    assert rc == 0
+    assert _lens(policy, "correctness")["model"] == "haiku"
+
+
+def test_a_models_entry_applies_to_a_lens_the_same_pack_adds_later(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    pack = repo / ".quirk" / "review"
+    _write(pack / "pack.yaml", "models:\n  extra: opus\n")
+    _write(pack / "lenses" / "extra.md", "---\nid: extra\nrun_when: always\n---\n\n# Extra\n")
+    rc, policy, _, _ = _resolve(tmp_path, repo, monkeypatch=monkeypatch)
+    assert rc == 0
+    assert _lens(policy, "extra")["model"] == "opus"
+    assert not any("unknown lens extra" in w for w in policy["warnings"])
 
 
 def test_non_string_lens_id_exits_2_naming_the_file(tmp_path, monkeypatch):

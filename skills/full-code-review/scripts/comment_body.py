@@ -193,8 +193,10 @@ def _defuse_mentions(line):
         lambda match: match.group("code") or "@\u200b", line)
 
 
-def _neutralize(text):
+def _neutralize(text, inline=False):
     """Make untrusted markdown inert inside the comment skeleton.
+
+    With `inline`, the text's first line is embedded after a prefix, so it cannot open a fence.
 
     It cannot close our `<details>` or metadata block, run a GitLab quick action as the poster,
     open a raw HTML block that hides a fence or swallows the note, leave a fence open, or notify
@@ -203,10 +205,10 @@ def _neutralize(text):
     """
     out = []
     fence = None
-    for line in _LINE_BREAK_RE.sub("\n", str(text)).split("\n"):
+    for index, line in enumerate(_LINE_BREAK_RE.sub("\n", str(text)).split("\n")):
         line = _DETAILS_TAG_RE.sub(r"&lt;\1details", line)
         if fence is None:
-            opened = _FENCE_OPEN_RE.match(line)
+            opened = None if inline and index == 0 else _FENCE_OPEN_RE.match(line)
             if opened and not (opened.group(1)[0] == "`" and "`" in line[opened.end():]):
                 fence = opened.group(1)
                 out.append(line)
@@ -253,12 +255,12 @@ def path_pairs(diff_text):
     return pairs
 
 
-def _md(value):
-    return _neutralize(str(value).strip())
+def _md(value, inline=False):
+    return _neutralize(str(value).strip(), inline)
 
 
 def _line(value):
-    return _neutralize(" ".join(str(value).split()))
+    return _neutralize(" ".join(str(value).split()), inline=True)
 
 
 def _quote(text):
@@ -397,7 +399,7 @@ def finding_body(finding, *, seat, lead, note="", head_sha=None):
     elif lead == "Question":
         parts.append(QUESTION_SENTENCE)
     if _text(note):
-        parts.append("> **Reviewer note:** " + _quote(_md(note))[2:])
+        parts.append("> **Reviewer note:** " + _quote(_md(note, inline=True))[2:])
     if why:
         parts.append(_line(why))
     if fix:
@@ -468,7 +470,7 @@ def _clean_section(notes):
         if isinstance(item, dict):
             if _text(item.get("note_md")):
                 parts.append("**%s:** %s" % (_line(item.get("dimension") or "Review"),
-                                             _md(item["note_md"])))
+                                             _md(item["note_md"], inline=True)))
         elif _text(item):
             parts.append(_md(item))
     return "**Clean dimensions**\n\n" + "\n\n".join(parts) if parts else None

@@ -25,4 +25,12 @@ jobs:
 
       - run: pip install pytest pygments pyyaml
 
+      # the kernel-sandbox tests skip when no sandbox works, so fail here rather than skip silently
+      - name: Install bubblewrap and verify it can isolate
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --unshare-pid --die-with-parent --ro-bind / / --dev /dev --proc /proc /bin/true
+
       - run: pytest -q

@@ -28,12 +28,17 @@ from forge import ForgeError, StrayComment, make_forge
 
 
 class PostFailed(ForgeError):
-    """A create failed; `finding_id` is the finding (or "overview") that was being posted."""
+    """A create failed; `finding_id` is the finding (or "overview") that was being posted.
 
-    def __init__(self, finding_id, cause, warnings=()):
+    `receipt` is set when the comment was created on the forge but could not be recorded
+    locally, so the operator can save it by hand instead of reposting.
+    """
+
+    def __init__(self, finding_id, cause, warnings=(), receipt=None):
         super().__init__("%s failed to post: %s" % (finding_id, cause), getattr(cause, "code", "unknown"))
         self.finding_id = finding_id
         self.warnings = list(warnings)
+        self.receipt = receipt
 
 
 _write = write_json
@@ -68,16 +73,32 @@ def _same(left, right):
     return left is not None and str(left) == str(right)
 
 
-def _check_binding(meta, change, refs):
-    """Require the report to describe the change and head the context will write to."""
+def _check_binding(meta, change, refs, source_branch=None):
+    """Require the report to describe the change the context will write to.
+
+    Author reports carry no `head_sha`, so the head is checked only when present and the
+    source branch only when both sides name one.
+    """
     if meta.get("target") != "change":
         raise ValueError("author posting requires a change-request report")
     if not _same(meta.get("number"), change.get("number")):
         raise ValueError("report change request does not match the context")
     if meta.get("project") != change.get("project"):
         raise ValueError("report project does not match the context")
-    if meta.get("head_sha") != refs.get("head"):
+    if meta.get("head_sha") is not None and meta["head_sha"] != refs.get("head"):
         raise ValueError("report head does not match the context")
+    if meta.get("source_branch") and source_branch and meta["source_branch"] != source_branch:
+        raise ValueError("report source branch does not match the context")
+
+
+def _save(path, value, finding_id, created, warnings):
+    """Write a receipt; an OSError after a confirmed create becomes a PostFailed carrying it."""
+    try:
+        _write(path, value)
+    except OSError as exc:
+        raise PostFailed(
+            finding_id, "created on the forge but its receipt was not saved (%s): %s" % (exc, created),
+            warnings, receipt=created) from exc
 
 
 def _posted_overview(prepared, bodies, receipts):
@@ -101,14 +122,15 @@ def post(report, context, bodies, ids, out, overview=False, forge=None):
     Receipts already in `out` are kept and their ids are not posted again. Every id is
     validated before the first create (it must name a finding of the report, with a numeric
     line), `bodies` must have been built from this exact report, and the report must be for
-    the context's change and head. Raises ValueError for any of those or a context with no
-    forge, and PostFailed (a ForgeError) on a failed create.
+    the context's change (and head, when the report names one). Raises ValueError for any of
+    those or a context with no forge, and PostFailed (a ForgeError) on a failed create or when
+    a created comment's receipt cannot be written.
     """
     prepared, _ = render_report._prepare_report(report)
     findings = {f["id"]: f for f in prepared["findings"]}
     change = context.get("change") or {}
     refs = context.get("refs") or {}
-    _check_binding(prepared["meta"], change, refs)
+    _check_binding(prepared["meta"], change, refs, context.get("source_branch"))
     forge = forge or make_forge(context.get("forge", "gitlab"), change.get("host"), change.get("project"))
     if forge is None:
         raise ValueError("author posting requires a forge")
@@ -154,18 +176,18 @@ def post(report, context, bodies, ids, out, overview=False, forge=None):
             receipts[finding_id] = forge.post_inline(change["number"], entry["body"], position, refs.get("head"))
         except StrayComment as exc:
             strays[finding_id] = {"discussion_id": exc.discussion_id, "note_id": exc.note_id, "url": exc.url}
-            _write(strays_out, strays)
+            _save(strays_out, strays, finding_id, {finding_id: strays[finding_id]}, warnings)
             raise PostFailed(finding_id, exc, warnings) from exc
         except ForgeError as exc:
             raise PostFailed(finding_id, exc, warnings) from exc
-        _write(out, receipts)
+        _save(out, receipts, finding_id, {finding_id: receipts[finding_id]}, warnings)
     overview_out = overview_receipt_path(out)
     if overview and bodies.get("overview") and not os.path.exists(overview_out):
         try:
             overview_receipt = forge.post_overview(change["number"], _posted_overview(prepared, bodies, receipts))
         except ForgeError as exc:
             raise PostFailed("overview", exc, warnings) from exc
-        _write(overview_out, overview_receipt)
+        _save(overview_out, overview_receipt, "overview", {"overview": overview_receipt}, warnings)
     return receipts, warnings
 
 
@@ -195,6 +217,8 @@ def main(argv=None):
         if isinstance(exc, PostFailed):
             failure["failed_id"] = exc.finding_id
             failure["warnings"] = exc.warnings
+            if exc.receipt:
+                failure["unsaved_receipt"] = exc.receipt
         print(json.dumps(failure, indent=2))
         return 2
     print(json.dumps({"posted": sorted(receipts), "warnings": warnings,

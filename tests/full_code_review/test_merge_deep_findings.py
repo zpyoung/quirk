@@ -13,7 +13,7 @@ SCRIPT = Path(__file__).resolve().parents[2] / "skills" / "full-code-review" / "
 
 
 def merge(lens=None, candidates=None, verdicts=None, areas=None, trust=None, budget=None):
-    assert SCRIPT.is_file(), "merge_deep_findings.py must be implemented"
+    assert SCRIPT.is_file(), SCRIPT
     module = importlib.import_module("merge_deep_findings")
     return module.merge_deep_run(
         lens if lens is not None else [], candidates if candidates is not None else [],
@@ -90,8 +90,12 @@ def test_checker_refutes_deep_and_high_severity_lens_findings_with_reasons():
 
 @pytest.mark.parametrize("kind", ["deep", "Must fix", "Should fix"])
 def test_unchecked_required_candidate_is_rejected_even_when_other_items_have_verdicts(kind):
-    kwargs = {"candidates": [candidate()]} if kind == "deep" else {"lens": [lens(severity=kind)]}
-    with pytest.raises(ValueError, match="verdict"):
+    if kind == "deep":
+        kwargs = {"candidates": [candidate("A1.1"), candidate("A1.2", line="20")],
+                  "verdicts": [verdict("A1.2")]}
+    else:
+        kwargs = {"lens": [lens("L1", kind), lens("L2", kind, line=20)], "verdicts": [verdict("L2")]}
+    with pytest.raises(ValueError, match="missing checker verdict for (A1.1|L1)"):
         merge(**kwargs)
 
 
@@ -455,3 +459,70 @@ def test_cli_invalid_input_exits_two_with_json_error(tmp_path, invalid_input):
     assert result.returncode == 2
     assert isinstance(json.loads(result.stdout)["error"], str)
     assert not target.exists()
+
+
+def test_unchecked_nit_does_not_displace_a_plausible_must_fix_at_the_same_line():
+    result = merge(
+        lens=[lens("L1", "Must fix"), lens("L2", "Nit", dimension="style")],
+        verdicts=[verdict("L1", severity="Must fix", verdict="plausible", what_would_confirm="Inspect config.")],
+    )
+    [found] = result["findings"]
+    assert (found["id"], found["severity"]) == ("L1", "Must fix")
+    assert found["verification_status"] == "plausible"
+    assert found["verified"] is False
+    assert found["what_would_confirm"] == "Inspect config."
+    assert found["dimensions"] == ["contract", "style"]
+    assert "_checked" not in found
+
+
+def test_unchecked_lens_nit_marked_unverified_stays_plausible_and_keeps_its_context():
+    nit = lens("L1", "Nit", verified=False, assumptions=["Caller passes a list."], anchor_side="old")
+    [found] = merge(lens=[nit])["findings"]
+    assert found["verification_status"] == "plausible"
+    assert found["verified"] is False
+    assert found["what_would_confirm"] == "Caller passes a list."
+    assert found["assumptions"] == ["Caller passes a list."]
+    assert found["anchor_side"] == "old"
+    assert found["evidence"] == "read from code"
+
+
+def test_unverified_lens_nit_without_assumptions_still_names_a_confirmation_condition():
+    [found] = merge(lens=[lens("L1", "Nit", verified=False)])["findings"]
+    assert found["verification_status"] == "plausible"
+    assert found["what_would_confirm"]
+
+
+def test_dedup_preserves_assumptions_and_anchor_side_from_the_merged_members():
+    result = merge(
+        lens=[lens("L1", "Nit", assumptions=["Lens assumption."], anchor_side="old")],
+        candidates=[candidate("A1.1", assumptions=["Deep assumption."])],
+        verdicts=[verdict("A1.1")],
+    )
+    [found] = result["findings"]
+    assert found["assumptions"] == ["Deep assumption.", "Lens assumption."]
+    assert found["anchor_side"] == "old"
+
+
+@pytest.mark.parametrize("overrides", [{"anchor_side": "left"}, {"assumptions": "text"}, {"assumptions": [1]}])
+def test_malformed_anchor_side_or_assumptions_are_rejected_with_the_id(overrides):
+    with pytest.raises(ValueError, match="L1"):
+        merge(lens=[lens("L1", "Nit", **overrides)])
+
+
+@pytest.mark.parametrize("value,expected", [
+    (12, "12"), (" 12 ", "12"), ("12-14", "12-14"), ("12 - 14", "12-14"), ("12 -14", "12-14"),
+])
+def test_line_anchors_are_normalized_to_the_renderer_form(value, expected):
+    [found] = merge(candidates=[candidate(line=value)], verdicts=[verdict()])["findings"]
+    assert found["line"] == expected
+
+
+@pytest.mark.parametrize("value", ["L12, L14", "L12", "12,14", "0", "12-", "-3", "a-b", True, 1.5, ""])
+def test_non_numeric_line_anchors_are_rejected_naming_the_candidate(value):
+    with pytest.raises(ValueError, match="line for A1.1 must be a line number or start-end range"):
+        merge(candidates=[candidate(line=value)], verdicts=[verdict()])
+
+
+def test_non_numeric_checker_refined_line_is_rejected_naming_the_candidate():
+    with pytest.raises(ValueError, match="line for A1.1"):
+        merge(candidates=[candidate()], verdicts=[verdict(refined_line="L12, L14")])

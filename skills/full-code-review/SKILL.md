@@ -39,6 +39,7 @@ REVIEW_RUN_DIR="$REVIEW_OUT_DIR"
 CONTEXT="$REVIEW_RUN_DIR/review-context.json"
 SOURCE_MANIFEST="$REVIEW_RUN_DIR/review-source.json"
 MEMORY_SCRIPT="$SCRIPTS/review_memory.py"
+echo "REVIEW_OUT_DIR=$REVIEW_OUT_DIR"
 ```
 
 Shell state does not persist between Bash calls. Run this block once, note the printed
@@ -246,8 +247,8 @@ model), `skipped`, `severity_floor`, `escalation`, `critical_paths`, `cross_fami
 **Repo conventions.** Against `REVIEW_SOURCE_ROOT`:
 
 ```bash
-python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print('\n'.join(dict.fromkeys(d['changed_files']+d.get('excluded_generated',[]))))" \
-  "$CONTEXT" > "$REVIEW_RUN_DIR/changed.txt"
+python3 -c "import json,sys;d=json.load(open(sys.argv[1]));sys.stdout.buffer.write('\n'.join(dict.fromkeys(d['changed_files']+d.get('excluded_generated',[]))).encode('utf-8','surrogateescape'))" \
+  "$CONTEXT" > "$REVIEW_RUN_DIR/changed.txt" && \
 python3 "$SCRIPTS/discover_guidance.py" --git-root "$REVIEW_SOURCE_ROOT" \
   --changed-files "$REVIEW_RUN_DIR/changed.txt" [--exclude-changed]
 ```

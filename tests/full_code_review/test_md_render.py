@@ -79,6 +79,23 @@ def test_unbalanced_markers():
         assert m.render_inline(value) == value
 
 
+@pytest.mark.parametrize("value", [
+    "a * b * c", "n * 2 + m * 3", "src/*.py and tests/*.py", "a ** b ** c", "x *", "x **",
+])
+def test_spaced_asterisks_stay_literal(value):
+    assert m.render_inline(value) == value
+
+
+def test_flanking_asterisks_still_emphasise():
+    assert m.render_inline("*a b* and **c d**") == "<em>a b</em> and <strong>c d</strong>"
+
+
+def test_closing_fence_cannot_carry_an_info_string():
+    rendered = m.render_markdown("```sql\nselect 1\n```js\nstill code\n```\n\nafter")
+    assert rendered.count("<pre") == 1
+    assert "still code" in rendered and "<p>after</p>" in rendered
+
+
 def test_paragraphs_and_lists():
     rendered = m.render_markdown("first\nsecond\n\n- one\n  continued\n- two\n\n1. alpha\n2. beta")
     assert "<p>first second</p>" in rendered
@@ -171,6 +188,15 @@ def test_diff_fence_pairs_removed_runs_and_keeps_dash_content():
     assert "<del>-- old sql comment</del>" in rows[0] and "<ins>y</ins>" in rows[0]
     assert "<del>x</del>" in rows[1] and "sbs-empty" in rows[1]
     assert re.findall(r'<td class="sbs-ln">(\d*)</td>', "".join(rows)) == ["", "", "", ""]
+
+
+def test_diff_fence_hunk_lines_that_look_like_a_file_header_stay_rows():
+    rendered = m.render_markdown(
+        "```diff\n--- a/app/x.py\n+++ b/app/x.py\n@@ -1,3 +1,3 @@\n keep\n--- gone\n+++ added\n keep\n```")
+    rows = re.findall(r"<tr>(.*?)</tr>", rendered.split("<tbody>")[1])
+    assert '<div class="sbs-path">app/x.py</div>' in rendered
+    assert len(rows) == 3
+    assert "sbs-del" in rows[1] and "gone" in rows[1] and "sbs-ins" in rows[1] and "added" in rows[1]
 
 
 def test_diff_fence_escapes_content_and_falls_back_without_changes():

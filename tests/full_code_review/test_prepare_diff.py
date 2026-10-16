@@ -267,20 +267,23 @@ def test_empty_gitlab_diff_recovered_from_git(tmp_path, monkeypatch, gitlab_orig
         "+one\n+two\n"
     )
     diff_calls = []
+    fetched = []
 
     def fake_run(cmd, timeout=90):
         if cmd[0] == "glab":
             return SimpleNamespace(returncode=0, stdout=json.dumps(payload))
         if cmd[:3] == ["git", "-C", "."] and "diff" in cmd:
             diff_calls.append(cmd)
-            return SimpleNamespace(
-                returncode=0 if len(diff_calls) == 2 else 1,
-                stdout=recovered if len(diff_calls) == 2 else "")
+            assert "large.py" in cmd
+            if fetched:
+                return SimpleNamespace(returncode=0, stdout=recovered)
+            return SimpleNamespace(returncode=1, stdout="")
         if "cat-file" in cmd:
             return SimpleNamespace(
                 returncode=1 if ("b" * 40 + "^{commit}") in cmd else 0, stdout="")
         if "fetch" in cmd:
             assert cmd[-1] == "b" * 40
+            fetched.append(cmd)
             return SimpleNamespace(returncode=0, stdout="")
         raise AssertionError(cmd)
 
@@ -307,7 +310,7 @@ def test_empty_gitlab_diff_recovered_from_git(tmp_path, monkeypatch, gitlab_orig
         "basis": "change.title + source_branch",
     }
     assert meta["scope_intent"] == ctx["scope_intent"]
-    assert len(diff_calls) == 2
+    assert fetched and diff_calls
 
 
 def test_collapsed_nonempty_gitlab_diff_is_recovered(monkeypatch):
@@ -322,7 +325,7 @@ def test_collapsed_nonempty_gitlab_diff_is_recovered(monkeypatch):
     )
     calls = []
 
-    def recover(base, head, path, cwd="."):
+    def recover(base, head, path, cwd=".", metadata=None):
         calls.append((base, head, path, cwd))
         return recovered
 
@@ -344,7 +347,7 @@ def test_truncated_new_file_without_recovery_is_unavailable(monkeypatch):
     }
     calls = []
 
-    def no_recovery(base, head, path, cwd="."):
+    def no_recovery(base, head, path, cwd=".", metadata=None):
         calls.append((base, head, path, cwd))
         return None
 
@@ -365,7 +368,7 @@ def test_truncated_deleted_file_attempts_recovery(monkeypatch):
     }
     calls = []
 
-    def no_recovery(base, head, path, cwd="."):
+    def no_recovery(base, head, path, cwd=".", metadata=None):
         calls.append(path)
         return None
 
@@ -381,8 +384,6 @@ def test_truncated_rename_content_is_recovered(tmp_path):
     repo = Path(tmp_path) / "rename"
     repo.mkdir()
     _repo_git(repo, "init", "-q")
-    _repo_git(repo, "config", "user.email", "test@example.com")
-    _repo_git(repo, "config", "user.name", "Test")
     (repo / "old.py").write_text("one\ntwo\nthree\nfour\n")
     _repo_git(repo, "add", "old.py")
     _repo_git(repo, "commit", "-qm", "base")
@@ -417,7 +418,7 @@ def test_pure_rename_is_expected_empty_after_recovery(monkeypatch):
     }
     calls = []
 
-    def no_content_delta(base, head, path, cwd=".", old_path=None):
+    def no_content_delta(base, head, path, cwd=".", old_path=None, metadata=None):
         calls.append((old_path, path))
         return ""
 
@@ -688,15 +689,20 @@ def test_branch_and_local_git_failures_are_nonzero(tmp_path, monkeypatch, gitlab
 
 
 def test_glab_branch_lookup_uses_resolved_host(monkeypatch):
+    calls = []
+
     def fake_run(cmd, timeout=90):
-        assert cmd[:3] == ["glab", "mr", "list"]
-        assert "--hostname" not in cmd
-        assert cmd[cmd.index("-R") + 1] == "https://other.gitlab.example/group/project"
+        calls.append(cmd)
         return SimpleNamespace(returncode=0, stdout="[]")
 
     monkeypatch.setattr(m, "_run", fake_run)
     assert m.find_change_for_branch(
         _gitlab("other.gitlab.example", "group/project"), "feature") is None
+    assert len(calls) == 1
+    cmd = calls[0]
+    assert cmd[:3] == ["glab", "mr", "list"]
+    assert "--hostname" not in cmd
+    assert cmd[cmd.index("-R") + 1] == "https://other.gitlab.example/group/project"
 
 
 def test_manifest_without_diff_section_fails_closed(tmp_path, monkeypatch):
@@ -725,8 +731,6 @@ def test_local_diff_ignores_hostile_repo_config(tmp_path):
     repo.mkdir()
     _repo_git(repo, "init", "-q")
     _repo_git(repo, "checkout", "-b", "feature/local-review")
-    _repo_git(repo, "config", "user.email", "test@example.com")
-    _repo_git(repo, "config", "user.name", "Test")
     (repo / ".gitattributes").write_text("*.txt diff=hostile\n")
     (repo / "review.txt").write_text("old\n")
     _repo_git(repo, "add", ".")
@@ -759,8 +763,6 @@ def test_local_output_inside_repo_is_excluded_from_untracked_manifest(tmp_path):
     repo = Path(tmp_path) / "repo-with-output"
     repo.mkdir()
     _repo_git(repo, "init", "-q")
-    _repo_git(repo, "config", "user.email", "test@example.com")
-    _repo_git(repo, "config", "user.name", "Test")
     reviewed = repo / "review.py"
     reviewed.write_text("old\n")
     _repo_git(repo, "add", "review.py")
@@ -785,12 +787,9 @@ def test_local_staged_unstaged_and_untracked_are_preserved_when_batched(tmp_path
     repo.mkdir()
 
     def git(*args):
-        result = m._run(["git", "-C", str(repo)] + list(args), timeout=30)
-        assert result.returncode == 0, result.stderr
+        return _repo_git(repo, *args)
 
     git("init", "-q")
-    git("config", "user.email", "test@example.com")
-    git("config", "user.name", "Test")
     collision = repo / "COLLIDE_TEST.txt"
     collision.write_text("one\ntwo\nthree\n")
     git("add", "COLLIDE_TEST.txt")
@@ -834,8 +833,6 @@ def test_local_diff_of_a_non_utf8_file_is_written_and_round_trips(tmp_path):
     repo = Path(tmp_path) / "latin1"
     repo.mkdir()
     _repo_git(repo, "init", "-q")
-    _repo_git(repo, "config", "user.email", "test@example.com")
-    _repo_git(repo, "config", "user.name", "Test")
     (repo / "menu.txt").write_bytes(b"base\n")
     _repo_git(repo, "add", ".")
     _repo_git(repo, "commit", "-qm", "base")
@@ -882,12 +879,9 @@ def test_quoted_paths_survive_local_manifest_batching_and_classification(tmp_pat
     repo.mkdir()
 
     def git(*args):
-        result = m._run(["git", "-C", str(repo)] + list(args), timeout=30)
-        assert result.returncode == 0, result.stderr
+        return _repo_git(repo, *args)
 
     git("init", "-q")
-    git("config", "user.email", "test@example.com")
-    git("config", "user.name", "Test")
     source = repo / "src" / "a\tb.py"
     binary_test = repo / "tests" / "café.py"
     source.parent.mkdir()
@@ -956,6 +950,8 @@ def test_docs_only_diff_has_no_source_files():
     ("web/package-lock.json", False),
     ("src/distributed_lock.py", True), ("file-lock.ts", True), ("src/lock.go", True),
     ("pkg/lockfile.py", True), ("app/unlock.rb", True),
+    ("LICENSE", False), ("NOTICE", False), (".gitignore", False), ("web/logo.png", False),
+    ("assets/icon.svg", False), ("notes.txt", False), ("src/licensing.py", True),
 ])
 def test_is_source_file_separates_lockfiles_from_source_with_lock_in_the_name(path, expected):
     assert m.is_source_file(path) is expected
@@ -978,8 +974,6 @@ def _branch_repo(tmp_path, divergent=False):
     review = Path(tmp_path) / "review"
     assert m._run(["git", "init", "--bare", "-q", str(origin)], timeout=30).returncode == 0
     assert m._run(["git", "clone", "-q", str(origin), str(seed)], timeout=30).returncode == 0
-    _repo_git(seed, "config", "user.email", "test@example.com")
-    _repo_git(seed, "config", "user.name", "Test")
     (seed / "base.txt").write_text("base\n")
     _repo_git(seed, "add", ".")
     _repo_git(seed, "commit", "-qm", "base")
@@ -1130,8 +1124,6 @@ def test_local_scope_intent_detached_head(tmp_path):
     repo = Path(tmp_path) / "detached"
     repo.mkdir()
     _repo_git(repo, "init", "-q")
-    _repo_git(repo, "config", "user.email", "test@example.com")
-    _repo_git(repo, "config", "user.name", "Test")
     (repo / "file.txt").write_text("old\n")
     _repo_git(repo, "add", ".")
     _repo_git(repo, "commit", "-qm", "base")
@@ -1424,3 +1416,56 @@ def test_branch_diff_failure_keeps_the_range_stderr(monkeypatch):
     metadata = {}
     assert m.git_diff_branch("feature", "main", 3, ".", metadata) is None
     assert metadata["error"].endswith("failed: fatal: bad revision")
+
+
+@pytest.fixture
+def repo(tmp_path):
+    root = Path(tmp_path) / "work"
+    root.mkdir()
+    _repo_git(root, "init", "-q")
+    (root / "base.py").write_text("base\n")
+    _repo_git(root, "add", ".")
+    _repo_git(root, "commit", "-qm", "base")
+    return root
+
+
+def test_local_diff_from_a_subdirectory_reports_root_relative_untracked_files(repo):
+    (repo / "sub").mkdir()
+    (repo / "rootnew.py").write_text("one\n")
+    (repo / "sub" / "subnew.py").write_text("two\n")
+    metadata = {}
+    diff_text = m.git_diff_local(3, str(repo / "sub"), metadata)
+    assert diff_text is not None
+    assert sorted(metadata["untracked_files"]) == ["rootnew.py", "sub/subnew.py"]
+    assert "diff --git a/sub/subnew.py b/sub/subnew.py" in diff_text
+    assert "diff --git a/rootnew.py b/rootnew.py" in diff_text
+
+
+def test_local_diff_reports_an_untracked_nested_repo_as_unavailable(repo, tmp_path):
+    nested = repo / "vendored"
+    nested.mkdir()
+    _repo_git(nested, "init", "-q")
+    (nested / "x.py").write_text("x\n")
+    (repo / "new.py").write_text("new\n")
+    out = Path(tmp_path) / "ctx.json"
+    assert m.main(["--local", "--cwd", str(repo), "--out", str(out)]) == 0
+    ctx = json.loads(out.read_text())
+    assert ctx["diff_unavailable"] == ["vendored/"]
+    assert ctx["changed_files"] == ["new.py"]
+    assert ctx["untracked_files"] == ["new.py"]
+
+
+def test_per_file_recovery_failure_cause_is_recorded(monkeypatch):
+    change = {"old_path": "big.py", "new_path": "big.py", "collapsed": True, "diff": ""}
+
+    def fake_run(cmd, timeout=90):
+        if "diff" in cmd:
+            return SimpleNamespace(returncode=128, stdout="", stderr="fatal: bad object")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(m, "_run", fake_run)
+    metadata = {}
+    _, _, unavailable, _ = m._prepare_change_records(
+        [change], {"base": "BASE", "head": "HEAD"}, metadata=metadata)
+    assert unavailable == ["big.py"]
+    assert metadata["diff_unavailable_cause"] == "git diff of big.py failed: fatal: bad object"

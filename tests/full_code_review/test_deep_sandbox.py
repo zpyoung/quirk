@@ -368,6 +368,48 @@ def test_timeout_kills_descendants_instead_of_only_the_parent(tmp_path, monkeypa
         m.release_copy(str(out))
 
 
+def test_background_child_holding_pipes_does_not_mask_a_clean_exit(tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    repo, sha = repository(tmp_path)
+    out = tmp_path / "copy.json"
+    m.acquire_copy(str(repo), sha, str(out))
+    try:
+        result = m.exec_in_copy(
+            str(out), ["sh", "-c", "sleep 30 & echo done; exit 0"], timeout=1)
+        assert result["timed_out"] is False and result["exit_code"] == 0
+        assert "done" in result["stdout"]
+    finally:
+        m.release_copy(str(out))
+
+
+def test_process_that_closes_its_pipes_and_hangs_is_reported_as_timed_out(
+        tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    repo, sha = repository(tmp_path)
+    out = tmp_path / "copy.json"
+    m.acquire_copy(str(repo), sha, str(out))
+    try:
+        result = m.exec_in_copy(
+            str(out), ["sh", "-c", "exec >&- 2>&-; sleep 30"], timeout=1)
+        assert result["timed_out"] is True and result["exit_code"] == 124
+    finally:
+        m.release_copy(str(out))
+
+
+def test_protected_paths_treat_sandbox_denied_stat_as_absent(tmp_path, monkeypatch):
+    forge_dir = tmp_path / "bin"
+    forge_dir.mkdir()
+    (forge_dir / "gh").write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setenv("PATH", str(forge_dir))
+
+    def denied(self, *args, **kwargs):
+        raise PermissionError(1, "Operation not permitted", str(self))
+
+    monkeypatch.setattr(Path, "exists", denied)
+    _, executables = m._protected_paths()
+    assert str(forge_dir / "gh") in executables
+
+
 def test_exec_bounds_captured_output_and_reports_what_was_dropped(tmp_path, monkeypatch):
     fallback(monkeypatch)
     repo, sha = repository(tmp_path)

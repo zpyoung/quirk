@@ -168,13 +168,16 @@ def _run(command: list[str], timeout: int, output_limit: bool = False,
     deadline = time.monotonic() + timeout
     try:
         finished = _drain(process, streams, deadline, output_limit)
-        timed_out = not finished and time.monotonic() >= deadline
+        timed_out = False
         if not finished:
+            exited = process.poll() is not None
+            timed_out = not exited and time.monotonic() >= deadline
             _kill_group(process.pid)
             _drain(process, streams, time.monotonic() + 2, output_limit)
         try:
             process.wait(timeout=2 + (max(deadline - time.monotonic(), 0) if finished else 0))
         except subprocess.TimeoutExpired:
+            timed_out = True
             _kill_group(process.pid)
             process.wait()
     finally:
@@ -313,7 +316,7 @@ def _snapshot(root: Path, destination: Path) -> str:
             continue
         target = destination / entry.name
         copied = False
-        if entry.is_dir() and not entry.is_symlink() and any(
+        if cloned and entry.is_dir() and not entry.is_symlink() and any(
                 ".git" in dirs or ".git" in files
                 for _, dirs, files in os.walk(entry, followlinks=False)):
             cloned = False
@@ -391,9 +394,9 @@ def _protected_paths() -> tuple[list[str], list[str]]:
     for directory in search:
         if os.path.isabs(directory):
             for name in ("gh", "glab"):
-                path = Path(directory, name)
-                if path.exists():
-                    executables.update((str(path), os.path.realpath(path)))
+                path = os.path.join(directory, name)
+                if os.path.exists(path):
+                    executables.update((path, os.path.realpath(path)))
     return sorted(credentials), sorted(executables)
 
 

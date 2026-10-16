@@ -536,12 +536,12 @@ def _norm_anchor(text: str) -> str:
 
 
 def _fingerprint_of(file: str, anchor_hash: str) -> str:
-    return hashlib.sha256((file + "\0" + anchor_hash).encode("utf-8")).hexdigest()
+    return hashlib.sha256((file + "\0" + anchor_hash).encode("utf-8", "surrogateescape")).hexdigest()
 
 
 def _fingerprint(file: str, text: str) -> tuple[str, str]:
     """Identity of a finding's diff anchor: stable across lens tags, which vary per run."""
-    anchor_hash = hashlib.sha256(_norm_anchor(text).encode("utf-8")).hexdigest()
+    anchor_hash = hashlib.sha256(_norm_anchor(text).encode("utf-8", "surrogateescape")).hexdigest()
     return _fingerprint_of(file, anchor_hash), anchor_hash
 
 
@@ -837,7 +837,7 @@ def reconcile(report: dict, context: dict, snapshot: dict, repo: str = ".") -> d
 
 
 def _report_digest(report: dict) -> str:
-    return hashlib.sha256(_canonical_json(report).encode("utf-8")).hexdigest()
+    return hashlib.sha256(_canonical_json(report).encode("utf-8", "surrogateescape")).hexdigest()
 
 
 def _safe_record(item: dict) -> dict:

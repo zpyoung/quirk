@@ -175,6 +175,19 @@ class Policy:
         self.sources = []
         self.guidance = []
         self.warnings = []
+        self.layer = 0
+        self.model_pins = {}
+        self.model_stamp = {}
+
+    def _set_model(self, lens_id, model, stamp):
+        """Give `lens_id` the model unless a higher layer already chose one.
+
+        A stamp is (layer, rank): a later layer wins, and within one layer a `models`
+        mapping outranks the lens file's own front matter.
+        """
+        if stamp >= self.model_stamp.get(lens_id, (-1, -1)):
+            self.model_stamp[lens_id] = stamp
+            self.lenses[lens_id]["model"] = model
 
     def apply_settings(self, values, label):
         for key in values:
@@ -196,6 +209,10 @@ class Policy:
                 if model not in MODELS:
                     raise PolicyError("%s: models.%s must be one of %s" % (label, lens_id, ", ".join(MODELS)))
                 self.settings["models"][lens_id] = model
+                stamp = (self.layer, 1)
+                self.model_pins[lens_id] = (stamp, model)
+                if lens_id in self.lenses:
+                    self._set_model(lens_id, model, stamp)
         if "skip" in values:
             for lens_id in _list_of_strings(values["skip"], label, "skip"):
                 self.skipped.setdefault(lens_id, label)
@@ -220,6 +237,8 @@ class Policy:
         lens_id = meta.get("id") or Path(label).stem
         if not isinstance(lens_id, str):
             raise PolicyError("%s: lens id must be a string" % label)
+        if meta.get("model", "sonnet") not in MODELS:
+            raise PolicyError("%s: model must be one of %s" % (label, ", ".join(MODELS)))
         if lens_id in self.lenses:
             lens = self.lenses[lens_id]
             lens.update({"checklist": checklist, "source": source})
@@ -230,13 +249,16 @@ class Policy:
                     "run_when": None, "batched": True, "source": source}
             self.lenses[lens_id] = lens
             self.order.append(lens_id)
-        for key in ("model", "escalate", "run_when", "batched"):
+            if lens_id in self.model_pins:
+                stamp, pinned = self.model_pins[lens_id]
+                self._set_model(lens_id, pinned, stamp)
+        if "model" in meta:
+            self._set_model(lens_id, meta["model"], (self.layer, 0))
+        for key in ("escalate", "run_when", "batched"):
             if key in meta:
                 lens[key] = meta[key]
         if lens["run_when"] not in RUN_WHEN:
             raise PolicyError("%s: run_when must be one of %s" % (label, ", ".join(RUN_WHEN)))
-        if lens["model"] not in MODELS:
-            raise PolicyError("%s: model must be one of %s" % (label, ", ".join(MODELS)))
         for key in ("escalate", "batched"):
             if not isinstance(lens[key], bool):
                 raise PolicyError("%s: %s must be true or false" % (label, key))
@@ -246,6 +268,7 @@ class Policy:
 
         Returns whether the pack contributed anything.
         """
+        self.layer += 1
         prefix = "%s/" % base if base else ""
         found = False
         text = source.read(prefix + "pack.yaml")
@@ -267,10 +290,8 @@ class Policy:
         return found
 
     def finish(self):
-        for lens_id, model in self.settings["models"].items():
-            if lens_id in self.lenses:
-                self.lenses[lens_id]["model"] = model
-            else:
+        for lens_id in self.settings["models"]:
+            if lens_id not in self.lenses:
                 self.warnings.append("models: unknown lens %s ignored" % lens_id)
         for lens_id in self.skipped:
             if lens_id not in self.lenses:
@@ -354,6 +375,7 @@ def resolve_policy(context, source_root, lenses_dir, out_dir, policy_ref=None, p
             continue
         label = str(Path(source_root) / rel)
         settings, _ = split_front_matter(text, label)
+        policy.layer += 1
         policy.apply_settings(settings, label)
         policy.sources.append({"kind": "review-md", "path": label, "ref": policy_ref})
         policy.guidance.append(repo.readable_path(rel, text))
