@@ -1163,3 +1163,74 @@ def test_template_script_has_no_raw_line_separators():
     # js treats raw U+2028/U+2029 as line terminators, so one inside a regex literal is a syntax error
     for script in re.findall(r"<script>(.*?)</script>", TEMPLATE, re.S):
         assert "\u2028" not in script and "\u2029" not in script
+
+
+def test_deep_area_map_and_checked_dropped_render_in_both_formats():
+    value = report()
+    value["run"]["deep"] = {
+        "enabled": True,
+        "areas": [{"id": "A1", "title": "Producer <one>", "files": ["a.py", "b.py"],
+                   "questions": ["Does <this> hold?", "What about output?"],
+                   "status": "read_only_degraded", "degraded_reason": "No <execution>"}],
+        "checked_and_dropped": [
+            {"file": "drop<.py", "line": "12", "title": "Not <a> bug", "reason": "Covered <elsewhere>"},
+            {"file": "other.py", "line": "9", "title": "Expected", "reason": "Documented"}],
+    }
+    rendered = m.render_html(value, TEMPLATE)
+    assert 'class="checked-dropped"' in rendered
+    assert '<summary>Checked and dropped (2)</summary>' in rendered
+    assert "drop&lt;.py:12" in rendered
+    assert "Not &lt;a&gt; bug" in rendered and "Covered &lt;elsewhere&gt;" in rendered
+    assert 'id="tnav"' in rendered and 'id="handoff-data"' in rendered
+    assert "Producer &lt;one&gt;" in rendered and "Does &lt;this&gt; hold?" in rendered
+    assert "read_only_degraded" in rendered and "No &lt;execution&gt;" in rendered
+    md = m.render_md(value)
+    assert "**Area map:**" in md
+    assert "A1" in md and "a.py" in md and "Does <this> hold?" in md
+    assert "<details><summary>Checked and dropped (2)</summary>" in md
+    assert "- `drop<.py:12` — **Not <a> bug**: Covered <elsewhere>" in md
+    assert md.index("Checked and dropped (2)") < md.index("## 4. Assumptions")
+    assert re.findall(r"^## \d\. .*$", md, flags=re.M) == [
+        "## 1. Summary", "## 2. Risk Assessment", "## 3. Findings",
+        "## 4. Assumptions", "## 5. Recommendations"]
+
+
+def test_checked_dropped_still_renders_when_no_findings():
+    value = report()
+    value["findings"] = []
+    value["run"]["deep"] = {"checked_and_dropped": [
+        {"file": "a.py", "line": "1", "title": "Not a bug", "reason": "Expected"}]}
+    rendered = m.render_html(value, TEMPLATE)
+    assert "Checked and dropped (1)" in rendered
+    assert not parse(rendered).find("article", "finding")
+
+
+def test_empty_deep_area_map_still_shows_the_area_map_subsection():
+    value = report()
+    value["run"]["deep"] = {"areas": []}
+    assert 'data-level="3">Area map</h3>' in m.render_html(value, TEMPLATE)
+
+
+def test_plausible_callout_and_reproduction_escape_html_and_reach_handoff():
+    value = report()
+    value["run"]["deep"] = {"enabled": True}
+    finding = value["findings"][1]
+    finding.update(verification_status="plausible", verified=True,
+                   what_would_confirm="Run <with> input & inspect", evidence="reproduced",
+                   repro={"command": "echo '<payload>'", "output": "<script>&oops</script>"})
+    prepared, _ = m._prepare_report(value)
+    assert prepared["findings"][0]["verified"] is False
+    handoff = m.handoff_payload(prepared)["findings"][0]
+    assert handoff["verification_status"] == "plausible"
+    assert handoff["what_would_confirm"] == finding["what_would_confirm"]
+    assert handoff["repro"] == finding["repro"]
+    rendered = m.render_html(value, TEMPLATE)
+    assert 'data-tone="amber">plausible</span>' in rendered
+    assert "What would confirm this:</strong> Run &lt;with&gt; input &amp; inspect" in rendered
+    assert '<div class="repro"><span class="rec-k">Reproduction</span>' in rendered
+    assert "$ echo &#x27;&lt;payload&gt;&#x27;\n&lt;script&gt;&amp;oops&lt;/script&gt;" in rendered
+    assert "<script>&oops</script>" not in rendered
+    md = m.render_md(value)
+    assert "**Evidence:** reproduced" in md
+    assert "**Status:** Plausible — what would confirm: Run <with> input & inspect" in md
+    assert "**Reproduction:**\n\n```\n$ echo '<payload>'\n<script>&oops</script>\n```" in md

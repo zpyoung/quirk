@@ -77,6 +77,9 @@ def post(report, context, bodies, ids, out, overview=False, forge=None):
         if finding_id in receipts:
             warnings.append("%s already has a receipt; skipped" % finding_id)
             continue
+        if finding.get("verification_status") == "plausible":
+            warnings.append("%s is a plausible finding and cannot be posted; skipped" % finding_id)
+            continue
         if not entry.get("post"):
             warnings.append("%s is not eligible to post (decision, floor, or already posted); skipped" % finding_id)
             continue

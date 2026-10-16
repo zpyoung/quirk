@@ -25,7 +25,7 @@ _META_FIELDS = {"target", "forge", "number", "branch", "project", "ticket", "hea
 _RUN_FIELDS = {"dimensions_run", "dimensions_skipped", "diff_size", "coverage", "guidance",
                "clean_notes", "notes_md", "source_access", "source_access_reason",
                "mutation_consent", "incomplete", "dimensions_failed", "models", "verification",
-               "excluded_generated", "policy_sources", "severity_floor"}
+               "excluded_generated", "policy_sources", "severity_floor", "deep"}
 DEFAULT_SEVERITY_FLOOR = "Should fix"
 _INCOMPLETE_OK_VERDICTS = {"fix, then merge", "request changes"}
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -48,7 +48,7 @@ _SNAPSHOT_FIELDS = {"schemaVersion", "target_key", "identity", "seat", "base_sha
                     "head_sha", "dimensions", "guidance_hash", "started_at",
                     "findings", "discussions", "discussions_available", "warnings",
                     "invalidation_reason", "file_hashes", "unchanged_files"}
-_FINDING_FIELDS = {"severity", "dimension", "dimensions", "file", "line", "issue", "recommendation", "verified", "assumptions", "title", "impact", "fix_md", "area", "evidence", "body_md", "aside_md", "recommendation_md", "anchor_side", "memory"}
+_FINDING_FIELDS = {"severity", "dimension", "dimensions", "file", "line", "issue", "recommendation", "verified", "assumptions", "title", "impact", "fix_md", "area", "evidence", "body_md", "aside_md", "recommendation_md", "anchor_side", "memory", "verification_status", "repro", "what_would_confirm"}
 
 
 def severity_floor(prepared):
@@ -377,6 +377,27 @@ def _validate_contract_run(run, meta, warnings):
     if "policy_sources" in run and (not isinstance(run["policy_sources"], list) or
                                     any(not isinstance(v, dict) for v in run["policy_sources"])):
         raise ValueError("run.policy_sources must be a list of objects")
+    if "deep" in run:
+        deep = run["deep"]
+        if not isinstance(deep, dict):
+            raise ValueError("run.deep must be an object")
+        if "areas" in deep and (not isinstance(deep["areas"], list) or
+                                any(not isinstance(area, dict) for area in deep["areas"])):
+            raise ValueError("run.deep.areas must be a list of objects")
+        if "unreached_areas" in deep:
+            _list_of_strings(deep["unreached_areas"], "run.deep.unreached_areas")
+        if "checked_and_dropped" in deep:
+            dropped = deep["checked_and_dropped"]
+            if not isinstance(dropped, list) or any(
+                    not isinstance(item, dict) or
+                    any(not isinstance(item.get(key), str)
+                        for key in ("file", "line", "title", "reason"))
+                    for item in dropped):
+                raise ValueError("run.deep.checked_and_dropped must contain objects with "
+                                 "string file, line, title, and reason")
+        if deep.get("unreached_areas"):
+            run["incomplete"] = True
+            meta["verdict"] = "Incomplete review"
     if run.get("dimensions_failed") and not run.get("incomplete"):
         warnings.append("run.dimensions_failed is non-empty; marking the report incomplete.")
         run["incomplete"] = True
@@ -466,6 +487,24 @@ def _prepare_report(report):
             _validate_memory_finding(raw["memory"], "finding %d memory" % (index + 1))
         if "verified" in raw and not isinstance(raw.get("verified"), bool):
             raise ValueError("finding %d verified must be a boolean" % (index + 1))
+        status = raw.get("verification_status")
+        if "verification_status" in raw and status not in ("confirmed", "plausible"):
+            raise ValueError("finding %d verification_status must be confirmed or plausible" %
+                             (index + 1))
+        if status == "plausible":
+            if not isinstance(raw.get("what_would_confirm"), str) or not raw["what_would_confirm"].strip():
+                raise ValueError("finding %d what_would_confirm must be a non-empty string" %
+                                 (index + 1))
+            raw["verified"] = False
+        repro = raw.get("repro")
+        if repro is not None and (not isinstance(repro, dict) or
+                                  any(not isinstance(repro.get(key), str) or not repro[key].strip()
+                                      for key in ("command", "output"))):
+            raise ValueError("finding %d repro must have non-empty command and output" % (index + 1))
+        deep = (prepared.get("run") or {}).get("deep")
+        if isinstance(deep, dict) and deep.get("enabled") is True and raw.get("evidence") == "reproduced":
+            if repro is None:
+                raise ValueError("finding %d repro is required for reproduced evidence" % (index + 1))
         if seat == "reviewer" and "verified" not in raw:
             raw["verified"] = False
             warnings.append("Reviewer finding %d omitted verified; treating it as unverified." % (index + 1))
@@ -673,6 +712,7 @@ def _what_was_run(report):
     skipped = run.get("dimensions_skipped") if isinstance(run.get("dimensions_skipped"), list) else []
     guidance = _string_list(run.get("guidance"))
     coverage = run.get("coverage")
+    deep = run.get("deep") if isinstance(run.get("deep"), dict) else {}
     out = ['<section class="astryx-section" id="what-was-run">',
            _sec_head("What was run", "The conditions every finding was produced under.")]
     if isinstance(coverage, str) and "⚠" in coverage:
@@ -681,7 +721,10 @@ def _what_was_run(report):
         out.append(_banner("warning", "Verification limited to the diff.",
                            "Every finding is unverified. %s" % _esc(run.get("source_access_reason"))))
     if run.get("incomplete"):
-        failed = ", ".join(_string_list(run.get("dimensions_failed"))) or "unknown lenses"
+        failed = ", ".join(_string_list(run.get("dimensions_failed")))
+        if not failed and deep.get("unreached_areas"):
+            failed = "Unreached areas: %s" % ", ".join(deep["unreached_areas"])
+        failed = failed or "unknown lenses"
         out.append(_banner("warning", "Incomplete review.",
                            "%s did not finish, so a short findings list here is not a clean bill." % _esc(failed)))
     rows = []
@@ -714,8 +757,31 @@ def _what_was_run(report):
                              _esc(item.get("why", "not applicable"))))
         else:
             rows.append(_row("Skipped", _esc(item)))
+    if deep.get("enabled"):
+        for key, label in (("budget_minutes", "Deep budget (minutes)"),
+                           ("elapsed_minutes", "Deep elapsed (minutes)"),
+                           ("sandbox_kind", "Deep sandbox")):
+            if deep.get(key) is not None:
+                rows.append(_row(label, _esc(deep[key])))
     if rows:
         out.append('<div class="rows">%s</div>' % "".join(rows))
+    if "areas" in deep:
+        out.append('<h3 class="astryx-heading" data-level="3">Area map</h3>')
+        area_rows = []
+        for area in deep["areas"]:
+            title = _esc(area.get("title") or ", ".join(_string_list(area.get("files"))))
+            files = ", ".join(_string_list(area.get("files")))
+            questions = _string_list(area.get("questions"))
+            detail = "<strong>%s</strong>" % title
+            if files:
+                detail += '<div class="mono">%s</div>' % _esc(files)
+            if questions:
+                detail += "<ul>%s</ul>" % "".join("<li>%s</li>" % _esc(q) for q in questions)
+            status = _esc(area.get("status", "pending"))
+            if area.get("status") == "read_only_degraded" and area.get("degraded_reason"):
+                status += " — %s" % _esc(area["degraded_reason"])
+            area_rows.append(_row(_esc(area.get("id", "")), detail, status))
+        out.append('<div class="rows">%s</div>' % "".join(area_rows))
     notes = _md(run.get("notes_md"))
     if notes:
         out.append('<div class="section-note">%s</div>' % notes)
@@ -986,6 +1052,8 @@ def _finding_card(finding, seat="author"):
         out.append(_token(dimension, mono=True))
     if finding.get("evidence") not in (None, ""):
         out.append(_token(finding["evidence"], tone="blue"))
+    if finding.get("verification_status") == "plausible":
+        out.append(_token("plausible", tone="amber"))
     out.append('</div><h2 class="f-title">%s</h2>' % _esc(finding["title"]))
     out.append('<span class="anchor">%s<span class="ln">:%s</span></span>' %
                (_esc(finding["file"]), _esc(finding["line"])))
@@ -997,6 +1065,14 @@ def _finding_card(finding, seat="author"):
     aside = _md(finding.get("aside_md"))
     if aside:
         out.append('<div class="aside-note">%s</div>' % aside)
+    if finding.get("verification_status") == "plausible":
+        out.append('<div class="aside-note"><strong>What would confirm this:</strong> %s</div>' %
+                   _esc(finding["what_would_confirm"]))
+    repro = finding.get("repro")
+    if isinstance(repro, dict) and repro.get("command") and repro.get("output"):
+        out.append('<div class="repro"><span class="rec-k">Reproduction</span>'
+                   '<pre><code>$ %s\n%s</code></pre></div>' %
+                   (_esc(repro["command"]), _esc(repro["output"])))
     recommendation = _md(finding.get("recommendation_md"))
     if recommendation:
         out.append('<div class="rec"><span class="rec-k">Recommendation</span>%s</div>' % recommendation)
@@ -1144,6 +1220,19 @@ def _memory_sections_md(report):
 
 
 
+def _checked_dropped_section(report):
+    run = report.get("run") or {}
+    deep = run.get("deep") if isinstance(run.get("deep"), dict) else {}
+    dropped = deep.get("checked_and_dropped") or []
+    if not dropped:
+        return ""
+    rows = [_row('<span class="mono">%s:%s</span>' % (_esc(item["file"]), _esc(item["line"])),
+                 '<strong>%s</strong> — %s' % (_esc(item["title"]), _esc(item["reason"])))
+            for item in dropped]
+    return ('<details class="checked-dropped"><summary>Checked and dropped (%d)</summary>'
+            '<div class="rows">%s</div></details>' % (len(dropped), "".join(rows)))
+
+
 def _findings_section(report):
     """Render the findings pane: a master-detail Layout with the rail in the start slot."""
     findings = report["findings"]
@@ -1154,6 +1243,9 @@ def _findings_section(report):
                 for item in notes if isinstance(item, dict)]
         out.append('<div class="rows">%s</div>' % "".join(rows) if rows else
                    '<p>No findings were reported. Per-dimension clean notes were not supplied.</p>')
+        dropped = _checked_dropped_section(report)
+        if dropped:
+            out.append(dropped)
         out.append("</div>")
         return "\n".join(out)
 
@@ -1175,6 +1267,7 @@ def _findings_section(report):
         '<div class="detail">',
         '<div class="detail-body" id="tdetail">',
         "\n".join(_finding_card(finding, seat) for finding in findings),
+        _checked_dropped_section(report),
         '</div>',
         '<div class="detail-foot" id="decide-bar">',
         '<span class="decide-k">Decision</span><div class="dopts"></div>',
@@ -1258,7 +1351,8 @@ def _panes(report):
 _HANDOFF_META = ("forge", "project", "number", "branch", "source_branch", "web_url", "change_state",
                  "head_sha", "repo_root", "title", "verdict", "ticket")
 _HANDOFF_FINDING = ("id", "severity", "dimensions", "file", "line", "anchor_side", "title",
-                    "impact", "fix_md", "evidence", "body_md", "recommendation_md", "aside_md")
+                    "impact", "fix_md", "evidence", "body_md", "recommendation_md", "aside_md",
+                    "verification_status", "repro", "what_would_confirm")
 _SCRIPT_JSON_ESCAPES = {"<": "\\u003c", ">": "\\u003e", "&": "\\u0026",
                         "\u2028": "\\u2028", "\u2029": "\\u2029"}
 
@@ -1329,6 +1423,7 @@ def _render_md_prepared(report):
     findings = report["findings"]
     tally = _tally(findings)
     run = report.get("run") or {}
+    deep = run.get("deep") if isinstance(run.get("deep"), dict) else {}
     lines = ["# %s" % meta["title"], "", "## 1. Summary", ""]
     if _raw_md(meta.get("standfirst_md")):
         lines.extend([_raw_md(meta["standfirst_md"]), ""])
@@ -1342,7 +1437,10 @@ def _render_md_prepared(report):
             source_line += " — every finding is unverified. %s" % run.get("source_access_reason", "")
         lines.extend([source_line.rstrip(), ""])
     if run.get("incomplete"):
-        failed = ", ".join(_string_list(run.get("dimensions_failed"))) or "some lenses"
+        failed = ", ".join(_string_list(run.get("dimensions_failed")))
+        if not failed and deep.get("unreached_areas"):
+            failed = "unreached areas (%s)" % ", ".join(deep["unreached_areas"])
+        failed = failed or "some lenses"
         lines.extend(["**Incomplete:** %s did not finish; this report is not a clean bill." % failed, ""])
     dimensions = _string_list(run.get("dimensions_run"))
     if dimensions:
@@ -1372,6 +1470,19 @@ def _render_md_prepared(report):
         lines.extend(["**Guidance loaded:** %s" % ", ".join(guidance), ""])
     if _raw_md(run.get("notes_md")):
         lines.extend([_raw_md(run["notes_md"]), ""])
+    if deep.get("areas"):
+        lines.extend(["**Area map:**", ""])
+        for area in deep["areas"]:
+            title = area.get("title") or ", ".join(_string_list(area.get("files")))
+            files = ", ".join(_string_list(area.get("files")))
+            questions = "; ".join(_string_list(area.get("questions")))
+            status = str(area.get("status", "pending"))
+            if area.get("status") == "read_only_degraded" and area.get("degraded_reason"):
+                status += " (%s)" % area["degraded_reason"]
+            lines.append("- **%s** — %s%s; %s%s" %
+                         (area.get("id", ""), title, " (`%s`)" % files if files else "",
+                          status, "; %s" % questions if questions else ""))
+        lines.append("")
 
     risk = report.get("risk")
     if isinstance(risk, dict):
@@ -1394,6 +1505,15 @@ def _render_md_prepared(report):
                           "**Severity:** %s" % finding["severity"], "",
                           "**Dimensions:** %s" % ", ".join(finding["dimensions"]), "",
                           "**Location:** `%s:%s`" % (finding["file"], finding["line"]), ""])
+            if finding.get("evidence"):
+                lines.extend(["**Evidence:** %s" % finding["evidence"], ""])
+            if finding.get("verification_status") == "plausible":
+                lines.extend(["**Status:** Plausible — what would confirm: %s" %
+                              finding["what_would_confirm"], ""])
+            repro = finding.get("repro")
+            if isinstance(repro, dict) and repro.get("command") and repro.get("output"):
+                lines.extend(["**Reproduction:**", "", "```",
+                              "$ %s" % repro["command"], repro["output"], "```", ""])
             if finding.get("impact"):
                 lines.extend(["**Impact:** %s" % finding["impact"], ""])
             if _raw_md(finding.get("body_md")):
@@ -1413,6 +1533,13 @@ def _render_md_prepared(report):
         else:
             lines.extend(["No per-dimension clean notes were supplied.", ""])
 
+    dropped = deep.get("checked_and_dropped") or []
+    if dropped:
+        lines.extend(["<details><summary>Checked and dropped (%d)</summary>" % len(dropped), ""])
+        for item in dropped:
+            lines.append("- `%s:%s` — **%s**: %s" %
+                         (item["file"], item["line"], item["title"], item["reason"]))
+        lines.extend(["", "</details>", ""])
     memory_lines = _memory_sections_md(report)
     if memory_lines:
         lines.extend(memory_lines)
