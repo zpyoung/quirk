@@ -1044,6 +1044,8 @@ def test_sdd_closure_rounds_filter_each_lens_and_bound_discovery_fallback() -> N
                   "scope.files", "dismissed[]", "full discovery", "outside"):
         assert token in review
     assert re.search(r"Never.{0,60}prior accepted findings.{0,30}dismissed", review, re.DOTALL)
+    fallback_condition = review.split("Fall back to full discovery", 1)[1].split(";", 1)[0]
+    assert "re-plan" in fallback_condition
 
 
 def test_sdd_adjudication_is_nonblocking_and_escalates_repeated_failed_fixes() -> None:
