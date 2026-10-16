@@ -1,0 +1,252 @@
+{
+  "schema_version": 1,
+  "target": {
+    "project": "zpyoung/quirk",
+    "number": 50,
+    "head_sha": "3605fd8",
+    "base_ref": "main"
+  },
+  "defects": [
+    {
+      "id": "AK-01",
+      "title": "Inline anchoring fails for git C-quoted paths",
+      "source_ids": ["F1", "A1.2", "A2.1", "A3.3"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/forge/__init__.py", "line_min": 55, "line_max": 120}],
+      "keywords": ["_header_path", "quote", "hunk_lines", "inline_target"]
+    },
+    {
+      "id": "AK-02",
+      "title": "Review memory drops anchors and fingerprints for C-quoted diff paths",
+      "source_ids": ["F2", "A5.3"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/review_memory.py", "line_min": 145, "line_max": 165},
+        {"file": "skills/full-code-review/scripts/review_memory.py", "line_min": 335, "line_max": 365}
+      ],
+      "keywords": ["_paths_from_header", "_diff_sections", "quote", "fingerprint", "_anchor"]
+    },
+    {
+      "id": "AK-03",
+      "title": "JSON writing fails for non-UTF-8 diff bytes decoded with surrogateescape",
+      "source_ids": ["F3", "A1.1", "A5.1"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/jsonio.py", "line_min": 1, "line_max": 28},
+        {"file": "skills/full-code-review/scripts/prepare_diff.py", "line_min": 395, "line_max": 420},
+        {"file": "skills/full-code-review/scripts/prepare_diff.py", "line_min": 1020, "line_max": 1055}
+      ],
+      "keywords": ["surrogate", "utf-8", "ensure_ascii", "write_json", "UnicodeEncodeError"]
+    },
+    {
+      "id": "AK-04",
+      "title": "Guidance discovery follows directory symlink loops in the reviewed worktree",
+      "source_ids": ["F4", "A4.3"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/discover_guidance.py", "line_min": 30, "line_max": 90}],
+      "keywords": ["symlink", "glob", "recursive", "resolve", "loop"]
+    },
+    {
+      "id": "AK-05",
+      "title": "Stale GitLab position posts a plain comment without a recorded receipt",
+      "source_ids": ["F5", "A2.5"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/forge/gitlab.py", "line_min": 495, "line_max": 530},
+        {"file": "skills/full-code-review/scripts/post_author_comments.py", "line_min": 80, "line_max": 105}
+      ],
+      "keywords": ["DiffNote", "plain", "receipt", "post_inline", "stale", "DiscussionNote"]
+    },
+    {
+      "id": "AK-06",
+      "title": "Risk tone test passes when only the embedded CSS stylesheet has the expected tone",
+      "source_ids": ["F6"],
+      "severity": "Should fix",
+      "anchors": [{"file": "tests/full_code_review/test_render_report.py", "line_min": 770, "line_max": 790}],
+      "keywords": ["test_risk_kpis_tone_per_metric", "dot--warn", "stylesheet", "css", "tone"]
+    },
+    {
+      "id": "AK-07",
+      "title": "Triage export escapes an anchor path but validation compares the raw file and line",
+      "source_ids": ["B1", "A7.4", "A8.1", "A9b.3"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/assets/report.html", "line_min": 1915, "line_max": 1945},
+        {"file": "skills/full-code-review/scripts/validate_triage.py", "line_min": 125, "line_max": 142}
+      ],
+      "keywords": ["defang", "&lt;", "anchor", "dataset.file", "validate_triage"]
+    },
+    {
+      "id": "AK-08",
+      "title": "Changing the set of lens tags changes a finding fingerprint and reposts duplicates",
+      "source_ids": ["B2", "A5.2", "A9b.1"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/review_memory.py", "line_min": 410, "line_max": 425},
+        {"file": "skills/full-code-review/scripts/review_memory.py", "line_min": 590, "line_max": 615}
+      ],
+      "keywords": ["fingerprint", "dimension", "sorted", "duplicate", "subset"]
+    },
+    {
+      "id": "AK-09",
+      "title": "An invalid explicit policy pack silently bypasses the default user pack",
+      "source_ids": ["B3", "A6.4", "A9a.2"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/resolve_policy.py", "line_min": 295, "line_max": 325}],
+      "keywords": ["pack", "is_dir", "user_dir", "silent", "load_pack"]
+    },
+    {
+      "id": "AK-10",
+      "title": "A non-numeric report line crashes author posting midway through a batch",
+      "source_ids": ["B4", "A2.3", "A9b.2"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/post_author_comments.py", "line_min": 40, "line_max": 95},
+        {"file": "skills/full-code-review/scripts/render_report.py", "line_min": 470, "line_max": 490}
+      ],
+      "keywords": ["int(", "_line", "ValueError", "line", "range"]
+    },
+    {
+      "id": "AK-11",
+      "title": "Complete can approve an unreviewed published head after allow-unaffected",
+      "source_ids": ["B5", "A3.2"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/post_reviewer_review.py", "line_min": 450, "line_max": 470},
+        {"file": "skills/full-code-review/scripts/post_reviewer_review.py", "line_min": 535, "line_max": 555},
+        {"file": "skills/full-code-review/scripts/post_reviewer_review.py", "line_min": 735, "line_max": 755}
+      ],
+      "keywords": ["publish_head_sha", "report_head_sha", "expected_head", "approve", "allow-unaffected", "complete"]
+    },
+    {
+      "id": "AK-12",
+      "title": "Posting instructions use undefined JSON shell variables",
+      "source_ids": ["B6", "A9a.5"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/references/posting.md", "line_min": 55, "line_max": 80},
+        {"file": "skills/full-code-review/references/posting.md", "line_min": 230, "line_max": 345}
+      ],
+      "keywords": ["DECISIONS_JSON", "CONTEXT_JSON", "STAGED_JSON", "decisions", "empty"]
+    },
+    {
+      "id": "AK-13",
+      "title": "Bare fnmatch skip globs miss a direct child and directory patterns",
+      "source_ids": ["B7", "A6.6"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/resolve_policy.py", "line_min": 330, "line_max": 355}],
+      "keywords": ["skip_globs", "fnmatch", "_matches", "**"]
+    },
+    {
+      "id": "AK-14",
+      "title": "Raw diff size hard-blocks before policy filters generated files",
+      "source_ids": ["B8", "A9a.3"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/SKILL.md", "line_min": 145, "line_max": 167},
+        {"file": "skills/full-code-review/SKILL.md", "line_min": 224, "line_max": 244}
+      ],
+      "keywords": ["hard block", "size gate", "generated", "skip_globs", "filtered"]
+    },
+    {
+      "id": "AK-15",
+      "title": "Test file detection omits common test directory and filename patterns",
+      "source_ids": ["B9", "A1.5"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/prepare_diff.py", "line_min": 325, "line_max": 360}],
+      "keywords": ["is_test_file", "test/", "_test.rb", "Tests.", "tests.py", "test_files"]
+    },
+    {
+      "id": "AK-16",
+      "title": "Reconcile rejects an allowed branch target when the change number is discovered",
+      "source_ids": ["B10", "A5.8", "A9a.6"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/review_memory.py", "line_min": 105, "line_max": 125},
+        {"file": "skills/full-code-review/scripts/review_memory.py", "line_min": 545, "line_max": 560},
+        {"file": "skills/full-code-review/references/html-report.md", "line_min": 50, "line_max": 80}
+      ],
+      "keywords": ["target", "branch", "change", "reconcile", "_target_identity", "_validate_report_binding"]
+    },
+    {
+      "id": "AK-17",
+      "title": "Author posting does not check report binding or the live head",
+      "source_ids": ["B12", "A2.4"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/post_author_comments.py", "line_min": 50, "line_max": 80}],
+      "keywords": ["head_sha", "binding", "number", "project", "report_sha256", "post_author_comments"]
+    },
+    {
+      "id": "AK-18",
+      "title": "Author overview counts skipped unanchorable findings as posted",
+      "source_ids": ["B13", "A2.8"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/post_author_comments.py", "line_min": 80, "line_max": 105},
+        {"file": "skills/full-code-review/scripts/comment_body.py", "line_min": 700, "line_max": 725}
+      ],
+      "keywords": ["overview", "post_overview", "Posted:", "unanchorable", "skipped"]
+    },
+    {
+      "id": "AK-19",
+      "title": "Discussion fetch failure allows duplicate posting of carried published findings",
+      "source_ids": ["B16", "A5.6"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/review_memory.py", "line_min": 640, "line_max": 660},
+        {"file": "skills/full-code-review/scripts/post_author_comments.py", "line_min": 65, "line_max": 85}
+      ],
+      "keywords": ["discussions_available", "suppress_post", "carried", "receipt", "published"]
+    }
+  ],
+  "examined_non_defects": [
+    {"source_id": "B11", "file": "skills/full-code-review/scripts/forge/github.py", "line": 289, "disposition": "plausible", "reason": "Depends on live GitHub GraphQL reviewThreads returning the viewer's own pending comments."},
+    {"source_id": "B24", "file": "skills/full-code-review/scripts/resolve_policy.py", "line": 322, "disposition": "refuted", "reason": "Documented behavior in resolve_policy.py:5-6 and policy.md:16."},
+    {"source_id": "B14", "file": "skills/full-code-review/scripts/comment_body.py", "line": 522, "disposition": "confirmed_nit", "reason": "Backtick in file path in unplaced section is an exotic POSIX edge case."},
+    {"source_id": "B15", "file": "skills/full-code-review/scripts/comment_body.py", "line": 39, "disposition": "confirmed_nit", "reason": "Mention defusal regex edge case requiring crafted backtick mismatches or title code blocks."},
+    {"source_id": "B17", "file": "tests/full_code_review/test_post_reviewer_review.py", "line": 180, "disposition": "confirmed_nit", "reason": "Untested mutation survivors on reviewer posting guards; test hygiene."},
+    {"source_id": "B18", "file": "skills/full-code-review/scripts/borrow_review_source.py", "line": 269, "disposition": "confirmed_nit", "reason": "Repo-wide git worktree prune cleanup is overly broad."},
+    {"source_id": "B19", "file": "skills/full-code-review/scripts/prepare_diff.py", "line": 877, "disposition": "confirmed_nit", "reason": "Empty string --change/--branch falls back to local mode via truthiness check."},
+    {"source_id": "B20", "file": "skills/full-code-review/scripts/prepare_diff.py", "line": 781, "disposition": "confirmed_nit", "reason": "ls-files --others is cwd-relative when running outside repo root."},
+    {"source_id": "B21", "file": "skills/full-code-review/SKILL.md", "line": 132, "disposition": "confirmed_nit", "reason": "Empty diff exits 0 without an explicit stop."},
+    {"source_id": "B22", "file": ".github/workflows/test.yml", "line": 24, "disposition": "confirmed_nit", "reason": "CI runs Python 3.12 without optional PyYAML dependency."},
+    {"source_id": "B23", "file": "skills/full-code-review/scripts/resolve_policy.py", "line": 89, "disposition": "confirmed_nit", "reason": "ls-tree pathspec fails on directories literally named :(glob)x."},
+    {"source_id": "B25", "file": "skills/full-code-review/scripts/prepare_diff.py", "line": 32, "disposition": "confirmed_nit", "reason": "--ignore-submodules=all omits submodule pointer changes from git diff."},
+    {"source_id": "B26", "file": "skills/full-code-review/scripts/prepare_diff.py", "line": 965, "disposition": "confirmed_nit", "reason": "--seat rejected when mixed authorship is unknown."},
+    {"source_id": "B27", "file": "skills/full-code-review/scripts/post_reviewer_review.py", "line": 743, "disposition": "confirmed_nit", "reason": "complete() head-moved guard has surviving test mutant."},
+    {"source_id": "B28", "file": "skills/full-code-review/scripts/forge/gitlab.py", "line": 58, "disposition": "confirmed_nit", "reason": "get_json uses subprocess.run directly instead of injectable runner."},
+    {"source_id": "B29", "file": "skills/full-code-review/scripts/forge/github.py", "line": 375, "disposition": "confirmed_nit", "reason": "Trailing newline handling in body SHA digest during review adoption."},
+    {"source_id": "B30", "file": "skills/full-code-review/scripts/post_reviewer_review.py", "line": 487, "disposition": "confirmed_nit", "reason": "stage prints full staged JSON including memory_report to stdout."},
+    {"source_id": "B31", "file": "skills/full-code-review/scripts/post_reviewer_review.py", "line": 662, "disposition": "confirmed_nit", "reason": "publish verifies pending comment IDs without re-hashing comment bodies."},
+    {"source_id": "B32", "file": "skills/full-code-review/scripts/post_reviewer_review.py", "line": 752, "disposition": "confirmed_nit", "reason": "Unreadable staged file reports published:false in error output."},
+    {"source_id": "B33", "file": "skills/full-code-review/scripts/post_reviewer_review.py", "line": 399, "disposition": "confirmed_nit", "reason": "Report without memory snapshot skips duplicate cross-check."},
+    {"source_id": "B34", "file": "skills/full-code-review/scripts/discover_guidance.py", "line": 107, "disposition": "confirmed_nit", "reason": "--exclude-changed misses symlinked or differently-cased guidance paths."},
+    {"source_id": "B35", "file": "skills/full-code-review/scripts/borrow_review_source.py", "line": 125, "disposition": "confirmed_nit", "reason": "git worktree add runs user's post-checkout hooks."},
+    {"source_id": "B36", "file": "skills/full-code-review/scripts/borrow_review_source.py", "line": 241, "disposition": "confirmed_nit", "reason": "Borrowed worktree may contain outward symlinks."},
+    {"source_id": "B37", "file": "skills/full-code-review/scripts/review_memory.py", "line": 418, "disposition": "confirmed_nit", "reason": "Fingerprint has no positional context so identical anchor lines share fingerprint."},
+    {"source_id": "B38", "file": "skills/full-code-review/scripts/resolve_policy.py", "line": 131, "disposition": "confirmed_nit", "reason": "Leading BOM or whitespace on fence drops REVIEW.md front matter."},
+    {"source_id": "B39", "file": "skills/full-code-review/references/policy.md", "line": 15, "disposition": "confirmed_nit", "reason": "gitignore re-include advice under an ignored parent directory."},
+    {"source_id": "B40", "file": "skills/full-code-review/scripts/resolve_policy.py", "line": 192, "disposition": "confirmed_nit", "reason": "cross_family.alias accepts arbitrary string."},
+    {"source_id": "B41", "file": "skills/filing-requests/scripts/_yaml_mini.py", "line": 116, "disposition": "confirmed_nit", "reason": "_opens_quote opens quoted scalar after whitespace."},
+    {"source_id": "B42", "file": "skills/full-code-review/scripts/render_report.py", "line": 503, "disposition": "confirmed_nit", "reason": "Branch name with no ASCII alphanumeric characters fails slug check."},
+    {"source_id": "B43", "file": "skills/full-code-review/scripts/md_render.py", "line": 311, "disposition": "confirmed_nit", "reason": "Indented or multi-word-info code fences not recognized."},
+    {"source_id": "B44", "file": "skills/full-code-review/scripts/highlight.py", "line": 231, "disposition": "confirmed_nit", "reason": "Leading U+FEFF BOM shifts tail repair in Pygments highlighting."},
+    {"source_id": "B45", "file": "skills/full-code-review/scripts/render_report.py", "line": 683, "disposition": "confirmed_nit", "reason": "Incomplete-review banner rendered inside What-was-run pane."},
+    {"source_id": "B46", "file": "skills/full-code-review/scripts/render_report.py", "line": 388, "disposition": "confirmed_nit", "reason": "schema_version is whitelisted without strict equality check."},
+    {"source_id": "B47", "file": "skills/full-code-review/scripts/render_report.py", "line": 1484, "disposition": "confirmed_nit", "reason": "Report artifacts written directly without atomic rename."},
+    {"source_id": "B48", "file": "skills/full-code-review/scripts/render_report.py", "line": 1119, "disposition": "confirmed_nit", "reason": "Markdown backend escapes paths inside code spans and links #F anchors."},
+    {"source_id": "B49", "file": "skills/full-code-review/assets/report.html", "line": 1940, "disposition": "confirmed_nit", "reason": "Handoff section rewrites < to &lt; in prose and code blocks."},
+    {"source_id": "B50", "file": "skills/full-code-review/scripts/render_report.py", "line": 1087, "disposition": "confirmed_nit", "reason": "Re-found and regression #F links do not switch tabs in HTML."},
+    {"source_id": "B51", "file": "skills/full-code-review/assets/report.html", "line": 1984, "disposition": "confirmed_nit", "reason": "Evidence and Dimensions lines are not newline-normalized in handoff."},
+    {"source_id": "B52", "file": "skills/full-code-review/scripts/render_report.py", "line": 109, "disposition": "confirmed_nit", "reason": "Blank finding title produces trailing whitespace in export line."},
+    {"source_id": "B53", "file": "skills/full-code-review/SKILL.md", "line": 63, "disposition": "confirmed_nit", "reason": "-R flag table note omits --host when running outside checkout."},
+    {"source_id": "B54", "file": "skills/full-code-review/SKILL.md", "line": 44, "disposition": "confirmed_nit", "reason": "Setup block does not echo REVIEW_OUT_DIR."},
+    {"source_id": "B55", "file": "skills/full-code-review/references/orchestration.md", "line": 412, "disposition": "confirmed_nit", "reason": "Cross-family verification fallback is not surfaced in rendered report."},
+    {"source_id": "B56", "file": "skills/full-code-review/references/lenses/risk.md", "line": 30, "disposition": "confirmed_nit", "reason": "Revert-commit downgrade rule targets closed changes."},
+    {"source_id": "B57", "file": "skills/full-code-review/references/orchestration.md", "line": 183, "disposition": "confirmed_nit", "reason": "Model column wording vs front-matter-wins precedence."},
+    {"source_id": "B58", "file": "skills/full-code-review/references/orchestration.md", "line": 155, "disposition": "confirmed_nit", "reason": "Conventions lens untrusted-data note vs applying REVIEW.md prose."},
+    {"source_id": "B59", "file": "tests/full_code_review/test_review_memory.py", "line": 243, "disposition": "confirmed_nit", "reason": "Receipt-only save test has surviving mutant on decision preservation."},
+    {"source_id": "B60", "file": "skills/full-code-review/scripts/prepare_diff.py", "line": 636, "disposition": "confirmed_nit", "reason": "GitLab collapsed routing and N+ truncation lack dedicated unit tests."},
+    {"source_id": "B61", "file": "tests/full_code_review/test_post_reviewer_review.py", "line": 552, "disposition": "confirmed_nit", "reason": "Three tests invoke real glab binary when installed on PATH."}
+  ]
+}
