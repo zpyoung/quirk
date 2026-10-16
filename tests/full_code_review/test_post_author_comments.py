@@ -289,3 +289,16 @@ def test_failure_payload_keeps_warnings_collected_before_the_failure(tmp_path, m
     failure = json.loads(capsys.readouterr().out)
     assert failure["failed_id"] == "F2"
     assert any("F1 is not eligible" in w for w in failure["warnings"])
+
+
+def test_plausible_finding_cannot_post_even_if_body_marks_it_eligible(tmp_path):
+    value = two_finding_report()
+    value["findings"][0].update(verification_status="plausible",
+                                what_would_confirm="Re-run the input.")
+    forge = RecordingForge()
+    receipts, warnings = m.post(value, context("gitlab"), signed(TWO, value),
+                                ["F1", "F2"], str(tmp_path / "receipts.json"), forge=forge)
+    assert sorted(receipts) == ["F2"]
+    assert forge.posted == ["two"]
+    assert forge.targets == [("a.py", "a.py", 3, "new")]
+    assert any("F1 is a plausible finding and cannot be posted; skipped" == w for w in warnings)

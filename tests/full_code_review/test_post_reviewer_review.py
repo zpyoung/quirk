@@ -1057,3 +1057,23 @@ def test_publish_failure_with_an_unreadable_draft_list_is_reported_as_unpublishe
     fake.fail_publish = True
     rc, result = invoke(m.publish, _publish_args(paths))
     assert rc == 2 and result["published"] is False
+
+
+@pytest.mark.parametrize("slot", ["fix", "later", "detail"])
+def test_plausible_reviewer_finding_is_never_staged_or_counted_as_blocking(slot):
+    prepared = {"meta": {"head_sha": HEAD}, "findings": [
+        {"id": "F1", "severity": "Must fix", "file": "a.py", "line": "2",
+         "title": "Maybe", "body_md": "Needs more evidence.", "verification_status": "plausible",
+         "what_would_confirm": "Run the failing input."},
+        {"id": "F2", "severity": "Should fix", "file": "b.py", "line": "7",
+         "title": "Confirmed", "body_md": "Fails.", "impact": "Breaks.", "fix_md": "Fix it.",
+         "verification_status": "confirmed"}]}
+    decisions_by_id = {
+        "F1": {"id": "F1", "slot": slot, "disposition": "Blocking", "note": ""},
+        "F2": {"id": "F2", "slot": "fix", "disposition": "Blocking", "note": ""}}
+    staged, omitted, warnings = m._plan(prepared, decisions_by_id, context(), {
+        "base_sha": BASE, "start_sha": START, "head_sha": HEAD}, PLAN_FORGE)
+    assert [item["finding_id"] for item in staged] == ["F2"]
+    assert omitted == [{"id": "F1", "file": "a.py", "line": "2", "severity": "Must fix",
+                        "reason": "plausible finding (never posted)"}]
+    assert warnings == []

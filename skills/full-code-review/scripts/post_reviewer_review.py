@@ -280,6 +280,10 @@ def _plan(prepared, by_id, context, refs, forge, changed_paths=None):
                 "fingerprint": fingerprint,
             })
             continue
+        if finding.get("verification_status") == "plausible":
+            omitted.append({"id": finding["id"], "file": finding["file"], "line": finding["line"],
+                            "severity": finding["severity"], "reason": "plausible finding (never posted)"})
+            continue
         slot = decision["slot"]
         if slot in POST_SLOTS and render_report.below_floor(finding, floor):
             omitted.append({"id": finding["id"], "reason": "below the posting floor (%s)" % floor,

@@ -704,6 +704,10 @@ def _author_bodies(raw, decisions=None):
         elif render_report.below_floor(finding, floor):
             omitted.append({"id": finding["id"], "reason": "below the posting floor (%s)" % floor,
                             "disposition": "Below floor", "fingerprint": memory.get("fingerprint")})
+        elif finding.get("verification_status") == "plausible":
+            omitted.append({"id": finding["id"], "reason": "plausible finding (never posted)",
+                            "file": finding["file"], "line": finding["line"],
+                            "severity": finding["severity"]})
         elif decisions is None or row.get("slot") in _POSTED_SLOTS:
             warnings.extend(finding_warnings)
             bodies[finding["id"]]["post"] = True

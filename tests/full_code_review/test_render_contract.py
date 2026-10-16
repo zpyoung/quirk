@@ -114,3 +114,79 @@ def test_below_floor_helper():
     assert not m.below_floor(should, "Should fix")
     assert m.below_floor(nit, "Should fix")
     assert m.below_floor(copy.deepcopy(should), "Must fix")
+
+
+@pytest.mark.parametrize("deep, path", [
+    ([], "run.deep"),
+    ({"areas": [None]}, "run.deep.areas"),
+    ({"unreached_areas": ["A1", 4]}, "run.deep.unreached_areas"),
+    ({"checked_and_dropped": ["bad"]}, "run.deep.checked_and_dropped"),
+    ({"checked_and_dropped": [{"file": "a.py", "line": "2", "title": "Bad"}]},
+     "run.deep.checked_and_dropped"),
+    ({"checked_and_dropped": [{"file": "a.py", "line": 2, "title": "Bad", "reason": "No"}]},
+     "run.deep.checked_and_dropped"),
+])
+def test_deep_contract_rejects_malformed_structures(deep, path):
+    with pytest.raises(ValueError, match=path):
+        m._prepare_report(report(deep=deep))
+
+
+@pytest.mark.parametrize("verdict", ["Approve", "Fix, then merge", "Request changes"])
+def test_unreached_deep_areas_always_force_incomplete_verdict(verdict):
+    value = report(deep={"enabled": True, "unreached_areas": ["A7", "A8"]})
+    value["meta"]["verdict"] = verdict
+    prepared, warnings = m._prepare_report(value)
+    assert prepared["run"]["incomplete"] is True
+    assert prepared["meta"]["verdict"] == "Incomplete review"
+    assert not [warning for warning in warnings if "Unknown run field" in warning]
+    html = m.render_html(value, TEMPLATE)
+    assert "Unreached areas: A7, A8" in html
+    assert "unknown lenses" not in html
+    md = m.render_md(value)
+    assert "**Incomplete:** unreached areas (A7, A8) did not finish" in md
+
+
+@pytest.mark.parametrize("status", ["unconfirmed", None, 3])
+def test_finding_rejects_unknown_verification_status(status):
+    value = report()
+    value["findings"][0]["verification_status"] = status
+    with pytest.raises(ValueError, match="verification_status"):
+        m._prepare_report(value)
+
+
+@pytest.mark.parametrize("confirm", [None, "", "  ", 1])
+def test_plausible_finding_requires_text_to_confirm(confirm):
+    value = report()
+    value["findings"][0].update(verification_status="plausible", what_would_confirm=confirm)
+    with pytest.raises(ValueError, match="what_would_confirm"):
+        m._prepare_report(value)
+
+
+def test_plausible_finding_is_unverified_even_if_input_says_verified():
+    value = report()
+    value["findings"][0].update(verification_status="plausible",
+                                what_would_confirm="Run the changed path.", verified=True)
+    prepared, warnings = m._prepare_report(value)
+    assert prepared["findings"][0]["verified"] is False
+    assert not [warning for warning in warnings if "Unknown finding" in warning]
+    assert value["findings"][0]["verified"] is True
+
+
+@pytest.mark.parametrize("repro", [False, [], {}, {"command": "run", "output": ""},
+                                     {"command": "  ", "output": "failed"},
+                                     {"command": "run", "output": 4}])
+def test_finding_rejects_invalid_reproduction(repro):
+    value = report()
+    value["findings"][0]["repro"] = repro
+    with pytest.raises(ValueError, match="repro"):
+        m._prepare_report(value)
+
+
+def test_deep_reproduced_evidence_requires_reproduction():
+    value = report(deep={"enabled": True})
+    value["findings"][0]["evidence"] = "reproduced"
+    with pytest.raises(ValueError, match="repro"):
+        m._prepare_report(value)
+    value["findings"][0]["repro"] = {"command": "python3 test.py", "output": "failed"}
+    prepared, _ = m._prepare_report(value)
+    assert prepared["findings"][0]["repro"] == value["findings"][0]["repro"]

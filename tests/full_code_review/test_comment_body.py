@@ -1029,3 +1029,17 @@ def test_path_pairs_splits_diff_text_on_newlines_only():
             "diff --git a/b.py b/b.py\n")
     assert cb.path_pairs(diff) == {"a.py": {"old": "a.py", "new": "a.py"},
                                    "b.py": {"old": "b.py", "new": "b.py"}}
+
+
+@pytest.mark.parametrize("slot", [None, "fix", "later"])
+def test_plausible_author_finding_never_becomes_post_eligible(slot):
+    raw = raw_report()
+    raw["findings"][0].update(verification_status="plausible",
+                              what_would_confirm="Run the input.", verified=True)
+    decisions = None if slot is None else {
+        "F1": {"id": "F1", "slot": slot, "disposition": "Will fix", "note": ""}}
+    data = cb._author_bodies(raw, decisions)
+    assert data["findings"]["F1"]["post"] is False
+    assert data["findings"]["F2"]["post"] is (decisions is None)
+    assert "Posted: %d · Not posted: %d" % (
+        1 if decisions is None else 0, 1 if decisions is None else 2) in data["overview"]
