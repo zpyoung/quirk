@@ -25,6 +25,49 @@ def test_skill_md_stays_within_the_line_budget():
     assert len(SKILL_MD.read_text(encoding="utf-8").splitlines()) <= 500
 
 
+def test_deep_flag_routes_to_its_runbook_without_expanding_the_skill():
+    text = SKILL_MD.read_text(encoding="utf-8")
+    assert "[--deep [minutes]]" in _front_matter(text)["argument-hint"]
+    assert "| `--deep [minutes]` |" in text
+    assert "$REFS/deep.md" in text
+    for script in ("deep_sandbox.py", "build_area_map.py", "merge_deep_findings.py",
+                   "score_deep_report.py"):
+        assert "$SCRIPTS/" + script not in text
+    for lens_id in ("_area-finder", "_contract", "_checker"):
+        assert "$REFS/lenses/" + lens_id + ".md" not in text
+
+
+def test_deep_prompts_are_separate_from_the_standard_lens_roster():
+    assert len(_lens_ids()) == 14
+    for lens_id, escalation in (("_area-finder", "false"), ("_contract", "false"),
+                                ("_checker", "true")):
+        path = LENSES / (lens_id + ".md")
+        assert path.is_file(), path
+        meta = _front_matter(path.read_text(encoding="utf-8"))
+        assert meta["id"] == lens_id
+        assert meta["model"] == "sonnet"
+        assert meta["escalate"] == escalation
+
+
+def test_deep_runbook_and_report_guidance_cover_verification_and_delivery():
+    refs = SKILL_DIR / "references"
+    runbook = (refs / "deep.md").read_text(encoding="utf-8")
+    for path in ("deep_sandbox.py", "build_area_map.py", "merge_deep_findings.py",
+                 "score_deep_report.py"):
+        assert "$SCRIPTS/" + path in runbook
+    for lens_id in ("_area-finder", "_contract", "_checker"):
+        assert "$REFS/lenses/" + lens_id + ".md" in runbook
+    for term in ("check-trust", "acquire", "release", "80%", "unreached",
+                 "checked_and_dropped", "plausible"):
+        assert term in runbook
+    for filename in ("html-report.md", "report-template.md", "posting.md",
+                     "degradation.md"):
+        text = (refs / filename).read_text(encoding="utf-8")
+        assert "verification_status" in text, filename
+        assert "plausible" in text, filename
+        assert "checked_and_dropped" in text, filename
+
+
 def test_skill_name_matches_its_directory():
     assert _front_matter(SKILL_MD.read_text(encoding="utf-8"))["name"] == SKILL_DIR.name
 
