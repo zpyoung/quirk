@@ -39,12 +39,15 @@ session has is the one to use.
 
 ## Roles
 
-| Role | Model | Job |
-| --- | --- | --- |
-| Orchestrator | the session model | Decompose, dispatch, audit, commit, adjudicate, route |
-| Implementer | Claude subagent via `Agent`, or pi codex via `pi-watch` — chosen once at preflight (`IMPLEMENTER`) | Build one task |
-| Reviewer ×3 | a pi alias resolved by `quirk:adversarial-review`, chosen once at preflight (`REVIEWER_ALIAS`) | Review a diff through one lens |
-| Fixer | the same binding as Implementer — inherits `IMPLEMENTER`, not the reviewer's family | Apply an adjudicated finding packet |
+| Role | Model | Effort | Job |
+| --- | --- | --- | --- |
+| Orchestrator | the session model | session setting | Decompose, dispatch, audit, commit, adjudicate, route |
+| Implementer | Claude subagent via `Agent`, or pi codex via `pi-watch` — chosen once at preflight (`IMPLEMENTER`) | `high` | Build one task |
+| Promote reviewer (stage 1) | the recorded `REVIEWER_ALIAS` via `quirk:adversarial-review` | `high`, capped by `model.json` thinking ceiling on `pi-watch` | Review through one lens |
+| Refute reviewer (stage 2) | fresh context via `quirk:adversarial-review` | `high`, capped by `model.json` thinking ceiling on `pi-watch` | Attack the promoted claims |
+| Fixer | the same binding as Implementer — inherits `IMPLEMENTER`, not the reviewer's family | `high` | Apply an adjudicated finding packet |
+| Tiebreak arbiter (stage 3) | a third family via `quirk:adversarial-review` | `medium` | Settle contested claims |
+| Explore / codebase survey | a survey subagent | `low` or `medium` | Locate implementation context |
 
 You are the only agent that persists. Every worker is fresh, gets exactly what it needs, and
 returns once. Reviewers are a different model family from implementers on purpose — a model
@@ -82,55 +85,49 @@ digraph process {
 
 ### Step 1: Preflight
 
+Run git checks and backend/environment probes **before prompting the user**:
+
 ```bash
-git rev-parse --abbrev-ref HEAD    # must not be main/master without explicit consent
-git status --porcelain             # must be empty
-git rev-parse HEAD                 # record as RUN_BASE
+git rev-parse --abbrev-ref HEAD
+git status --porcelain
 ```
 
-A dirty tree stops the run. Pre-existing changes contaminate every scope audit that follows —
-you cannot tell a worker's write from what was already there.
+In a temporary scratch directory outside the repository, run `pi-watch --check <alias>` across
+all six aliases (`codex, gemini, terra, opus, sonnet, flash`). Probe test-runner availability
+(not the full suite), and record the exact build and `FULL_SUITE_CMD` commands. Never offer an
+unverified backend pair; no probe should dirty the repository.
 
-Resolve the **backend record** next, in this fixed order — step 4's option set depends on step
-3's result. Both questions are asked via `AskUserQuestion` rather than a skill argument, which was
-rejected because this skill's main entry path (`quirk:brainstorming` handoff) passes none. The
-record is chosen once, for the whole run, not per wave or per task: a mixed-family final diff
-would leave no honest `author_family` for the review that matters most.
+Present a **single consolidated Tier 1 preflight card** via `orca ask`, using `AskUserQuestion`
+when `orca ask` returns `status: "unavailable"` or is not installed (see Failure routing).
+The card contains these questions, with the conditional ones included in that same card:
 
-1. Git checks above.
-2. **Implementer question**, via `AskUserQuestion`: Claude subagents (recommended — status quo,
-   no metered spend) or pi codex. Offer `pi-codex` only when `pi-watch --check codex` exits 0 — a
-   dead-end option is worse than none. Record the choice as `IMPLEMENTER`.
-3. Derive `AUTHOR_FAMILY` mechanically: `claude-task → anthropic`, `pi-codex → openai`.
-4. **Reviewer-alias question**, via `AskUserQuestion`, asked explicitly rather than derived
-   silently from `AUTHOR_FAMILY` — a silent derivation would foreclose a deliberate same-family
-   run without ever surfacing the choice. Cross-family options first: author `anthropic` →
-   `codex` (recommended), `gemini`; author `openai` → `opus` (recommended), `gemini`. Same-family
-   picks stay selectable but are labeled as degrading independence.
+- `backend_pairing`: single select over pre-verified `(IMPLEMENTER, REVIEWER_ALIAS)` pairs.
+  List cross-family full-independence pairs first: `claude-task + codex (Recommended)`,
+  `claude-task + gemini`, `claude-task + terra`, `pi-codex + opus`, `pi-codex + gemini`.
+  Offer only reachable pairs; `pi-codex` additionally requires the successful `codex` probe.
+  Follow with reachable same-family pairs, such as `claude-task + opus`, `claude-task + sonnet`,
+  or `pi-codex + codex`, each labeled `(reduced independence)`. Warn once for that degradation.
+  If no reviewer alias resolves, preserve the `Agent` path: warn once and record
+  `REVIEWER_ALIAS = "task-fallback"` instead of an unreachable alias.
+- `dirty_tree_action`: include when `git status --porcelain` is non-empty. Choose
+  `stash_untracked` (`git stash push --include-untracked`), `commit_existing` (commit the existing
+  work), or `abort` (stop the run). Perform the chosen action and verify `git status --porcelain`
+  is empty **before** recording `RUN_BASE`; never begin dispatch with inherited dirt.
+- `env_readiness`: include when no test runner is discovered or a preflight probe fails. Ask how
+  to run checks, or abort; resolve and verify the supplied command before dispatch.
 
-   Options are drawn **only** from `quirk:adversarial-review`'s own 6-alias table (`codex,
-   gemini, terra, opus, sonnet, flash`), never from `pi-watch`'s 11. `select_reviewer` raises
-   `UsageError` on anything outside its own set, which surfaces as exit 2 with no JSON on stdout.
-   `haiku`, for example, is a plausible same-family Anthropic pick that `pi-watch --check` would
-   green-light and Step 8 would then crash on deterministically, burning the retry budget on a
-   config mismatch. Record the choice as `REVIEWER_ALIAS`.
-5. Confirm the reviewer resolves: `pi-watch --check "$REVIEWER_ALIAS"`. This check is
-   **load-bearing, not a convenience** — an explicit `model` makes `select_reviewer` build a
-   single-candidate list, tried alone, with its failure reported rather than papered over by the
-   ladder, so an unverified alias yields `NOT_REVIEWABLE` with nothing behind it. On failure,
-   offer the implementer flip — independence is load-bearing, the implementer preference is not —
-   but only when the flipped pairing's reviewer is itself known reachable. If neither pairing
-   resolves, fall back to `quirk:adversarial-review`'s documented `Agent` path and warn once —
-   record `REVIEWER_ALIAS` as `task-fallback` rather than the unreachable alias, since Step 8 reads
-   that value to decide whether it may pass `model` at all.
-6. Record `IMPLEMENTER`, `AUTHOR_FAMILY`, and `REVIEWER_ALIAS` in the run journal. They are
-   resolved once and immutable for the run — every later step reads them, none re-derives them.
+Starting on main/master still requires explicit consent; include that required decision in the
+card when applicable. Derive `AUTHOR_FAMILY` mechanically from the selected implementer:
+`claude-task → anthropic`, `pi-codex → openai`. Record `IMPLEMENTER`, `AUTHOR_FAMILY`, and
+`REVIEWER_ALIAS` once; they are immutable for the run. Then record `git rev-parse HEAD` as
+`RUN_BASE`, after the clean-tree check. Never silently swap a backend later.
 
 Open the **run journal** in scratch, outside the repository (a worker with edit tools could
 otherwise commit or clobber it). It holds `RUN_BASE`, each `WAVE_BASE`, the backend record
 (`IMPLEMENTER`, `AUTHOR_FAMILY`, `REVIEWER_ALIAS`), dependency demotions, projected wave shapes,
 each worktree's `TASK_HEAD_<n>` and `CHAIN_SNAPSHOT_<n>` recorded at dispatch, task status and
-component commits, reviewer outputs, findings with IDs and rulings, dismissals, and fix commits.
+component commits, reviewer outputs, findings with IDs and rulings, dismissals, fix commits,
+`tree_test_cache`, and `ROUND_<r>_HEAD` / `LAST_ROUND_HEAD`.
 
 ### Step 2: Tech spec, only when warranted
 
@@ -274,7 +271,8 @@ attempt, record the worktree's HEAD and capture the `CHAIN_SNAPSHOT_<n>` that St
 git -C "$WT" rev-parse HEAD   # record as TASK_HEAD_<n> at dispatch
 ```
 
-Dispatch one implementer per selected task through the binding named by `IMPLEMENTER`.
+Dispatch one implementer per selected task through the binding named by `IMPLEMENTER`, explicitly
+pinning `effort: "high"`. Any Explore / codebase survey dispatch uses `low` or `medium` effort.
 
 **Claude binding** — `Agent` subagent, Sonnet, foreground, one per selected task in a single batch
 message. The foreground binding is unchanged; the Step 4 scheduler composes each capped batch. A
@@ -293,7 +291,7 @@ staged prompt, then per selected task:
 
 ```bash
 "$(command -v gtimeout || command -v timeout)" 1800 pi-watch --cwd "$WT" --alias codex \
-  --tools read,bash,edit,write --require-trailer STATUS "$(cat "$PROMPT")"
+  --thinking high --tools read,bash,edit,write --require-trailer STATUS "$(cat "$PROMPT")"
 ```
 
 One Bash call per task, `run_in_background: true` — the 600s foreground ceiling cannot hold an
@@ -415,10 +413,18 @@ partition that made the wave legal.
 
 Never message another worker to coordinate around this. All coordination is orchestrator-mediated.
 
-After the scope audit passes, run that task's acceptance commands in the same tree, exactly as
-written. Acceptance gates chain progress: a failure means nothing is committed, nothing is merged,
-and the next task does not dispatch. Once scope and acceptance pass, mark this task accepted and
-advance the chain without committing; its successor sees the accepted uncommitted work.
+After the scope audit passes, define
+`worktree_tree_identity(WT, WAVE_BASE) = (git -C "$WT" rev-parse HEAD^{tree}, sha256(canonical_json(CHAIN_SNAPSHOT_AFTER)))`,
+where `CHAIN_SNAPSHOT_AFTER` is the recomputed `(mode, blob)` map from the audit above.
+For each exact `acceptance_cmd`, look up `(worktree_tree_identity, acceptance_cmd)` in the run
+journal's `tree_test_cache`. Reuse an existing passing orchestrator-verified entry; otherwise run
+the task's narrow acceptance command once in that tree, exactly as written, and record the result.
+Populate this cache only from orchestrator or `prepass` executions, never from a worker's text
+claim alone: a claim never overrides a run.
+
+Acceptance gates chain progress: a failure means nothing is committed, nothing is merged, and the
+next task does not dispatch. Once scope and acceptance pass, mark this task accepted and advance
+the chain without committing; its successor sees the accepted uncommitted work.
 
 A retried task repeats this entire gate with a fresh `TASK_HEAD_<n>` and `CHAIN_SNAPSHOT_<n>`. The
 invariant the hoist must preserve is: no tree's diff reaches acceptance without an audit that
@@ -487,15 +493,26 @@ Tear down a worktree only after its branch merges; preserve it on failure.
 
 ### Step 7: Gates
 
-After every wave, run the project's build and test commands.
+After every wave, check `tree_test_cache` for `((HEAD^{tree}, "clean"), full_suite_cmd)`.
+On a miss, run the project's build and full test suite once, record the result in the run journal's
+`tree_test_cache`, and write `$WORK/gate-check.json` in `ReusedCheckInput` format: `tree_hash`,
+`clean_tree: true`, and `checks[]` containing each check's `name`, exact `command`, `status`,
+`exit_code`, `output`, and `duration_ms`. Reuse only a passing entry for the same clean committed tree and exact commands;
+retain its check record for Step 8. A changed tree invalidates that entry.
 
-**A red gate is a hard stop.** Fix it — or prove it flaky by re-running in isolation — before
-anything else proceeds. Do not dispatch reviewers over a red build, and do not dispatch them "in
-parallel while investigating." Telling reviewers about the failure does not help: they cannot
-distinguish a pre-existing flake from a defect the diff introduced, so you get findings about the
-failing test instead of the code you asked them to review, and you pay a full round for it. A
-plausible flake diagnosis is a hypothesis; re-running in isolation is a fact, and it takes less
-time than the round you would waste.
+**A red gate is a hard stop for the affected component.** Do not dispatch reviewers over a red
+build. If failure is solely an unowned test file outside the wave's `scope.files` asserting
+pre-wave behavior the wave's contract intentionally replaced, automatically dispatch a scoped
+wave-gate fixer (`effort: "high"`) owning that test file in `scope.files`. Apply Step 6's
+audit/accept/commit gate to the fixer and re-run Step 7 without a blocking human question.
+If failure instead exposes a contract conflict, ask via Tier 2 `orca ask --timeout-ms 600000`
+with the recommended default: halt the conflicting component and open a fix task. Continue only
+unblocked components. For other failures, fix the defect or establish a flake with an isolated
+reproduction before proceeding; a plausible diagnosis alone does not clear the gate.
+
+Whenever the full-suite run exceeds 300 seconds (5 minutes, `>300s` / `300000ms`), log a slow-suite
+optimization advisory in the run journal and final summary recommending `pytest-xdist` (`-n auto`)
+and Playwright `BrowserContext` reuse per worker, without mutating target-repo config mid-run.
 
 After every wave **that has a successor**, run a checkpoint review. The final wave gets none — the
 final loop covers it. A single-wave run therefore has no checkpoints at all; this is the core
@@ -506,11 +523,24 @@ You may skip a checkpoint for a genuinely trivial non-final wave; record a reaso
 ### Step 8: Review
 
 **Checkpoint** — three reviewers over `git diff --no-renames "$WAVE_BASE" HEAD`, **one round**.
+Pass `--depth standard` explicitly to all three lenses at non-final wave checkpoints.
 Adjudicate, dispatch fixers, commit the fix batch, re-run build/test, continue. One round is
 deliberate: a checkpoint reduces the chance of building on a defect; it does not certify the wave,
 and the final loop re-examines everything anyway.
 
-**Final loop** — three reviewers over `git diff --no-renames "$RUN_BASE" HEAD`, repeating.
+**Final loop** — Final Round 1 reviews `RUN_BASE..HEAD` with `--depth deep` explicitly on all three
+lenses. Record `ROUND_<r>_HEAD` at the start of every final round; for `r >= 2`, set
+`LAST_ROUND_HEAD = ROUND_<r-1>_HEAD`.
+
+**Final Rounds 2–5** use closure mode when every fixer in round `r-1` stayed within its declared
+component `scope.files`. Set `target` to `"$LAST_ROUND_HEAD..HEAD"` and keep `--depth deep`.
+Append a `### Closure Round Verification` section to each lens's `criteria`, carrying only that
+lens's prior accepted findings filtered by `id_prefix`: `C` gets `C*`, `S` gets `S*`, `X` gets `X*`.
+Include the fix delta and touched contract seams (`scope.files` of the fix batch); omit fixer
+narratives and adjudication reasoning. Never put prior accepted findings in `dismissed[]`.
+The reviewer omits fixed findings, retains original IDs for still-open ones, and uses `"id": null`
+for new regressions. Fall back to full discovery over `RUN_BASE..HEAD` only if a fixer modified
+files outside its declared component scope; this does not waive Step 6's scope-violation gate.
 
 The review itself is delegated to **quirk:adversarial-review**. Invoke it once per lens, all three
 concurrently:
@@ -519,19 +549,31 @@ concurrently:
 - spec compliance — did it build what was asked
 - security and failure modes
 
+Run `adversarial-review resolve` once per round to produce `resolve.json`, then
+`adversarial-review prepass` once per round with `--check-cmd "$FULL_SUITE_CMD"
+--reuse-check "$WORK/gate-check.json"` to produce `prepass.json`. If `prepass --reuse-check`
+exits 2, log the reuse miss and immediately run prepass live without `--reuse-check`.
+All three concurrent lenses (`C`, `S`, `X`) share that `resolve.json` and `prepass.json`; each uses
+its distinct `--id-prefix` at `claims` and `gate`.
+
+When `prepass` reports `checks[].duration_ms > 300000` (300 seconds / 5 minutes), log the slow-suite
+advisory in the run journal and final summary recommending `pytest-xdist` (`-n auto`) and Playwright
+`BrowserContext` reuse per worker, without changing target-repo config mid-run.
+
 Each invocation gets:
 
 | Input | Value |
 | --- | --- |
-| `target` | `"$WAVE_BASE..HEAD"` at a checkpoint, `"$RUN_BASE..HEAD"` in the final loop |
+| `target` | `"$WAVE_BASE..HEAD"` at a checkpoint, `"$RUN_BASE..HEAD"` in Final Round 1, `"$LAST_ROUND_HEAD..HEAD"` in closure rounds |
 | `profile` | `code-diff` |
 | `lens` | this reviewer's lens, from the three above |
 | `id_prefix` | a distinct prefix per lens — `C` correctness, `S` spec, `X` security. Each gate numbers from 1 on its own, so without this all three lenses return an `F1` and Step 9's merge cannot tell them apart |
-| `depth` | `deep`, passed **explicitly** |
-| `criteria` | the task contracts and acceptance criteria covering the diff, pasted **verbatim** |
+| `depth` | `standard` at checkpoints, `deep` in the final loop, passed **explicitly** |
+| `criteria` | the task contracts and acceptance criteria covering the diff, pasted **verbatim**, plus per-lens closure verification when applicable |
 | `dismissed[]` | the run journal's dismissed findings, with their original IDs |
 | `author_family` | the recorded `AUTHOR_FAMILY` |
 | `model` | the recorded `REVIEWER_ALIAS` — only when preflight verified it reachable. Omitted when the record holds `task-fallback` |
+| `resolve_file` / `prepass_file` | the shared `resolve.json` / `prepass.json` for this round |
 
 An explicit `model` makes `select_reviewer` build a single-candidate list — tried alone, no ladder
 walk. Its failure is reported as `resolved: false` → `NOT_REVIEWABLE` rather than papered over by a
@@ -546,8 +588,7 @@ already reads.
 Pass `--depth` rather than letting the skill auto-select. Auto-selection reads size, and a wave
 diff that happens to be small would fall through to `quick`, which runs one dispatch with
 self-refutation instead of two with independent refutation and is stamped `independence: reduced`
-for exactly that reason. (Whether checkpoints should run cheaper than the final loop is an open
-question, deliberately unanswered until there are real round-latency numbers to answer it with.)
+for exactly that reason. Checkpoints deliberately use `standard`; final rounds use `deep`.
 
 **`criteria` is pasted, never referenced by path, and it is the only author-supplied context the
 reviewer receives.** Do not stage the implementer's reports, your own adjudication notes, or the
@@ -573,8 +614,9 @@ the exit code rather than inferred from silence:
 | exit 4 + valid JSON | `NOT_REVIEWABLE` — no reviewer resolved at any ladder rung, or nothing checkable. **Never a pass.** Treat the lens as blocked. |
 | any exit + `contested_count` above zero | The lens returned mid-flight state: it dispatched `deep` and never ran the tiebreak that settles a dispute. The findings it withheld are missing from `findings[]`. Treat the lens as blocked, not as a fix round. |
 | any exit + `unreviewed_paths` non-empty | The verdict does not cover those files — they appeared after the artifact was captured, so no stage saw them. Should stay empty here, since these lenses target a git range rather than the worktree; if it is ever non-empty, the review is narrower than the round assumes and the gap is yours to close. |
+| any exit + `excluded_paths` non-empty | Default diff hygiene omitted vendored, generated, or lockfile paths. Report the bounded scope; use `--include-all` if those paths must be reviewed. |
 | any exit + `advisory_count` above zero | Real findings no stage beyond promote stood behind. They do not buy a fix round, but `PASS` does not mean they were dismissed — carry them into the round journal. |
-| any exit + `limitations` or `questions` non-empty | The lens could not evaluate something, or found a decision that needs its owner. Neither is a defect and neither reaches the verdict, so a clean exit code says nothing about them. Route questions to the user rather than answering them on their behalf. |
+| any exit + `limitations` or `questions` non-empty | The lens could not evaluate something, or found a decision that needs its owner. Neither is a defect and neither reaches the verdict. Log limitations; route reviewer `kind: "question"` items through Tier 2 with a recommended default. |
 | exit 2, non-JSON stdout, or no stdout | The run failed. Retry once, then fall back per the ladder, then block the round. |
 
 That last row holds no matter how many times that lens has failed before and no matter how clean
@@ -586,10 +628,18 @@ not evidence the branch is clean.
 Merge the three lenses' `findings[]` into one list. Each finding arrives with an ID — **keep it**,
 and reuse it across rounds; assign one yourself only where a finding arrives without one. The
 per-lens `id_prefix` from Step 8 is what makes those IDs unique across the three, so merging cannot
-silently collapse two findings into one. Accept or
-reject each against the contract and the code. You may reject any severity — record a one-line
-reason. Assign an **effective severity** where the reviewer's label is miscalibrated; the exit gate
-reads yours, not theirs.
+silently collapse two findings into one. Under **Tier 3**, adjudicate findings immediately against
+the contract, code, and `GateResult`, without asking a blocking question. Accept or reject any
+severity; record each ruling and one-line reason in the run journal. Assign an **effective severity**
+where the reviewer's label is miscalibrated; the exit gate reads yours, not theirs.
+
+Print a compact per-round adjudication digest table:
+
+| ID | Lens | Effective Severity | Ruling | One-line Reason |
+| --- | --- | --- | --- | --- |
+
+Dispatch fixers immediately after adjudication. Any asynchronous user veto arriving mid-run or
+later is queued as a follow-up fix task in the next batch, without aborting in-flight workers.
 
 Carry dismissed findings forward into later rounds as the `dismissed[]` input to Step 8, so a
 re-report is matched to its prior ruling instead of re-adjudicated from scratch.
@@ -616,8 +666,15 @@ finding can span a schema, its callers, and its tests; two findings in different
 on one shared file. One fixer per component, parallel across components; a single sequential fixer
 when scopes are uncertain or interacting.
 
-Fixers get `assets/fixer-prompt.md` with the adjudicated packet only, dispatched through the same
-binding the Step 5 Dispatch block named for the task's implementer — not the reviewer's family,
+**Recurring-defect escalation:** if a standing finding in round `r >= 3` matches an accepted finding
+from both rounds `r-2` and `r-1` in `category` and target file/contract seam, two consecutive fixer
+attempts have failed to close it. Stop dispatching narrow fixers for that finding; escalate through
+a root-cause design task or Tier 2 `orca ask --timeout-ms 600000` with an explicit recommended
+default. Continue unblocked components rather than repeating the same failed patch strategy.
+
+Fixers get `assets/fixer-prompt.md` with the adjudicated packet only and `effort: "high"`,
+dispatched through the same binding the Step 5 Dispatch block named for the task's implementer —
+not the reviewer's family,
 because a fixer that matched the reviewer would have that same reviewer judging its own family's
 fix in round N+1. On the pi binding, the fixer's staged prompt gets `assets/pi-worker-delta.md`
 **minus** its implementer-only marked section — a fixer does not run the TDD loop that section
@@ -645,15 +702,33 @@ caught an incomplete fix has not looked yet. Noting in the summary that the fixe
 unverified does not substitute for verifying them — an unverified fix is unverified whether or not
 you say so, and disclosure changes only what the user knows, not what shipped.
 
-A capped exit with an accepted CRITICAL or HIGH still open is a **blocked handoff**: report it, do
-not proceed to `quirk:finishing-a-development-branch` without explicit user override, and lead the
-summary with what is open.
+A capped exit with an accepted CRITICAL or HIGH still open is a **Tier 1 blocked handoff**: report
+it, ask without a timeout, and do not proceed to `quirk:finishing-a-development-branch` without
+explicit user override. Lead the summary with what is open.
 
 Route genuine project backlog — pre-existing issues the reviewers surfaced incidentally, deliberate
 scope deferrals — to **quirk:typed-artifacts**. Defects this run introduced are fixed, not filed;
 that skill says so explicitly.
 
 ## Failure routing
+
+**Three-tier human gate:** use `orca ask` when `ORCA_PANE_KEY` or `ORCA_WORKSPACE_ID` is set.
+Outside an Orca session, use synchronous `AskUserQuestion`; also fall back to it when `orca ask`
+returns `status: "unavailable"` or is not installed. Do not substitute worker-to-orchestrator
+messaging for a human decision.
+
+- **Tier 1 (blocking, no `--timeout-ms`):** the consolidated preflight card, Step 10's five-round
+  cap blocked handoff, or a twice-failed chain with no safe default. On `declined`, stop cleanly;
+  on `partial`, re-ask the skipped required question once. Do not proceed without required answers.
+- **Tier 2 (`orca ask --timeout-ms 600000`):** `NEEDS_CONTEXT` not answerable from the repository,
+  mid-wave scope-conflict splits, wave-gate contract conflicts, reviewer `kind: "question"` items,
+  and recurring-defect escalations. Supply an explicit recommended `default`. Continue unblocked
+  components while polling `orca ask wait` across chunks; never end a turn while an `orca ask`
+  card is open. On `timed_out`, `partial` (skipped), or `declined`, apply `default` and record
+  `<question_id>: <default_value> (assumed, <status>)` in the run journal; for example,
+  `scope_conflict: halt component and open fix task (assumed, timed_out)`.
+- **Tier 3 (logged digest, 0 wait):** Step 9 review-finding adjudications. Record the ruling, print
+  the per-round digest, and dispatch fixers immediately; queue any later user veto for the next batch.
 
 Workers return `DONE | NEEDS_CONTEXT | BLOCKED | FAILED` — that vocabulary is still the request
 made of every worker, on either backend. What changed is what a report you cannot validate against
@@ -674,10 +749,10 @@ the table wins.
 
 | Situation | Response |
 | --- | --- |
-| Implementer `BLOCKED` / `FAILED` | Retry the same next-unaccepted task once with a fresh worker and the failure in its prompt; on a second failure, stop the chain and ask |
-| `NEEDS_CONTEXT` | Answer from the spec and codebase when derivable; otherwise ask the user |
-| Mid-chain task acceptance fails | Do not advance or commit; retry that task once as the chain's next unaccepted task; on a second failure, stop the chain and ask |
-| Mid-chain or wave-end scope audit fails | Do not advance, commit, or merge; stop the wave and surface for re-plan |
+| Implementer `BLOCKED` / `FAILED` | Retry once with a fresh worker and the failure in its prompt; on a second failure, stop the chain; Tier 1 if no safe default |
+| `NEEDS_CONTEXT` | Answer from the spec/codebase when derivable; otherwise Tier 2 with a recommended default |
+| Mid-chain task acceptance fails | Do not advance or commit; retry once; on a second failure stop the chain; Tier 1 if no safe default |
+| Mid-chain or wave-end scope audit fails | Do not advance, commit, or merge the affected component; surface for re-plan via Tier 2 scope-conflict split; do not widen scope silently |
 | `CHAIN_SNAPSHOT_<n>` cannot be captured or recomputed | Attribution is unavailable; do not run acceptance or advance the chain; stop and surface |
 | Demoted edge has `wave(source) > wave(target)` | Revert that demotion, recompute waves, and repeat until no demoted edge is inverted |
 | Projected shape is a pure chain | Surface it once with the forcing dependency edges; do not auto-re-decompose |
@@ -685,18 +760,19 @@ the table wins.
 | Claude width cap binds with queued components | Keep them in the same wave and drain lockstep batches using the fixed in-progress-first, longest-chain-first order |
 | A Claude task fails its retry | Stop that chain and remove it from later batches; surface it rather than stalling the remaining components |
 | Merge conflict between component branches | Component-scope disjointness was violated; stop and re-plan |
-| Build/test red | Hard gate; fix or prove flaky before anything else |
+| Build/test red | Step 7's hard gate; auto-dispatch only the scoped wave-gate test fixer case, otherwise fix or establish a flake; contract conflicts use Tier 2 |
 | Reviewer output missing or unparseable | Retry once, then model fallback, then block the round |
 | Dependency misdeclared | Stop dispatch, amend the wave graph, re-run affected downstream work |
-| Five-round review cap reached with accepted CRITICAL/HIGH | Blocked handoff; explicit user override required |
+| Five-round review cap reached with accepted CRITICAL/HIGH | Tier 1 blocked handoff; explicit user override required |
 | `pi-watch` exit 6 (trailer missing or malformed) | No validated status. Fall through to tree evaluation: audit and run acceptance, accept on green, `FAILED` on red. Record the missing status. |
 | Background dispatch never re-invokes the orchestrator | The `gtimeout`/`timeout` wrapper bounds every dispatch, so the job terminates regardless; completion is decidable from the tree rather than from a notification |
 | Any task retried after its prior mid-chain audit | Capture a fresh HEAD and snapshot, then re-run scope audit before acceptance |
 | Worktree HEAD moved since dispatch | Worker committed and bypassed the audit; stop the task, surface |
 | Cross-worktree contamination at wave end | Stop the wave, re-plan — same response as any scope violation |
-| Reviewer alias unreachable at preflight | Offer the implementer flip; else `Agent` path with a warning |
+| Reviewer alias unreachable at preflight | Offer only verified pairs in the consolidated card; no reachable alias means `task-fallback` with one warning |
 
-Every row defaults to stop and ask rather than improvise.
+Apply the tier and default above rather than improvising. Stop only the affected component when
+others remain unblocked; never end an orchestrator turn while a human card is pending.
 
 ## Red Flags
 
@@ -736,7 +812,7 @@ rationalization is quoted; the reason it fails follows.
 
 **Never:**
 
-- Start on main/master without explicit consent, or on a dirty tree.
+- Start on main/master without explicit consent, or start wave dispatch on a dirty tree (resolve dirty state at preflight before recording `RUN_BASE`).
 - Run tasks with overlapping scopes in parallel.
 - Collapse a whole wave because one component contains overlapping scopes.
 - Spill width-cap overflow into a successor wave.
@@ -750,6 +826,8 @@ rationalization is quoted; the reason it fails follows.
 - Exit the loop on a fix report rather than a review round.
 - Proceed to finishing with an accepted CRITICAL or HIGH open.
 - File this run's own defects as typed artifacts.
+- End an orchestrator turn while an `orca ask` card is still pending.
+- Populate `tree_test_cache` from a worker's text claim alone.
 
 ## Integration
 
