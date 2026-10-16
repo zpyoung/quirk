@@ -48,3 +48,7 @@ not whether a reproduction was easy. Reassess severity independently; confirmati
 does not preserve a finder's proposed severity automatically. For `reproduced`,
 include your own command and observed output. For `plausible`, provide the missing
 observation in `what_would_confirm`. Preserve the input `id` exactly.
+
+Record the executor's exit status and relevant stdout/stderr in `repro_output`.
+When a repro is silent, say which status or observed state proves the failure;
+do not substitute an empty string for the execution record.

@@ -323,6 +323,23 @@ def test_timeout_kills_descendants_instead_of_only_the_parent(tmp_path, monkeypa
         m.release_copy(str(out))
 
 
+def test_exec_retains_binary_output_as_printable_evidence(tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    repo, sha = repository(tmp_path)
+    manifest = tmp_path / "copy.json"
+    m.acquire_copy(str(repo), sha, str(manifest))
+    try:
+        result = m.exec_in_copy(str(manifest), [
+            sys.executable, "-c", "import os;os.write(1, bytes([255]));os.write(2, bytes([254]))",
+        ])
+        assert result["exit_code"] == 0
+        assert result["stdout"] == "\\xff"
+        assert result["stderr"] == "\\xfe"
+        assert result["environment_unavailable"] is False
+    finally:
+        m.release_copy(str(manifest))
+
+
 def test_cleanup_rejects_forged_manifest_paths_even_with_expected_basenames(
         tmp_path, monkeypatch):
     fallback(monkeypatch)

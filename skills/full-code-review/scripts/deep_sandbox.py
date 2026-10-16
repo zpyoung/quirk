@@ -88,7 +88,8 @@ def _git_environment() -> dict:
 def _run(command: list[str], timeout: int, **kwargs) -> subprocess.CompletedProcess:
     process = subprocess.Popen(command, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               text=True, start_new_session=True, **kwargs)
+                               text=True, encoding="utf-8", errors="backslashreplace",
+                               start_new_session=True, **kwargs)
     try:
         stdout, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -366,7 +367,7 @@ def _seatbelt_profile(copy_dir: str, env_dir: str,
 def _text(value: str | bytes | None) -> str:
     if value is None:
         return ""
-    return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
+    return value.decode("utf-8", errors="backslashreplace") if isinstance(value, bytes) else value
 
 
 def _bwrap_command(manifest: dict, cwd: str, argv: list[str]) -> list[str]:
