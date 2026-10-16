@@ -2,7 +2,7 @@
 
 ## Status & amendments
 
-Status: Draft, approved in brainstorming, pending user review.
+Status: Approved — Tech spec: requested
 
 Amendments: none yet.
 
