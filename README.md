@@ -13,6 +13,14 @@ Version: **2026.7.9**
 
 Install via the quirk-dev marketplace (`.claude-plugin/marketplace.json`).
 
+## Deep code review
+
+`/quirk:full-code-review --deep [minutes]` adds bounded area finders, cross-file
+contract checking, and fresh candidate verification to the standard review.
+The default budget is 60 minutes. Eligible runs ask before executing repros in
+throwaway copies; plausible findings stay visible but cannot be posted.
+See the [deep-mode runbook](skills/full-code-review/references/deep.md).
+
 ## Typed artifacts
 
 A discipline for routing deferred observations into structured markdown files instead of burying them in prose ("pre-existing", "out of scope", "skipped for brevity").

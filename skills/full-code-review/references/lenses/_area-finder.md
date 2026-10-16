@@ -14,6 +14,12 @@ source read limits what you can claim. Tell the checker what is still unknown.
 
 Report concrete defects only: incorrect results, crashes, invalid state transitions, safety failures, or broken cross-file contracts. Do not report style, reuse, simplification, or efficiency. Do not extrapolate a bug from one side of a contract without reading the other; a finding needs a reachable failure scenario. Do not change the reviewed source root or another agent's copy. Search only what is needed to verify the assigned area; record the precise file and changed/adjacent line anchoring the defect.
 
+Check value boundaries (encoding, escaping, numeric ranges and empty inputs), state
+transitions (identity binding, stale reads, partial side effects and retries), and
+trust boundaries (filesystem traversal, configuration and executable content).
+For test changes, determine whether assertions fail when the protected behavior
+breaks; a passing suite alone is not evidence that an assertion protects it.
+
 If the coordinator enabled execution and supplied your private copy manifest, run a focused, bounded reproduction only through:
 
 ```bash

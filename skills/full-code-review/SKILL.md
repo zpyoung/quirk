@@ -66,7 +66,7 @@ A review with no supported forge still runs and delivers locally.
 | `--seat author\|reviewer` | Only when both you and another author committed to the change. |
 | `--fresh` | Discard remembered triage decisions for this target. |
 | `--no-escalate` | Keep every lens on its default model tier. |
-| `--deep [minutes]` | Run the opt-in deep defect hunt (area finders, contract lens, fresh checker; default 60m budget) per `$REFS/deep.md`. |
+| `--deep [minutes]` | Opt-in deep defect hunt; default 60m. Start its clock at invocation, before Step 1; follow `$REFS/deep.md`. |
 | `--format html\|md\|both`, `--no-open` | Render options. |
 | `--add-guidance "<note>"` | Capture a review lesson, then stop. |
 | `--stats` | Show per-lens keep/dismiss rates from the ledger, then stop. |

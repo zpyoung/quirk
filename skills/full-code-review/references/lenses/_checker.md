@@ -43,4 +43,8 @@ Return only this JSON object, with `null` where a refinement or repro is unavail
 }
 ```
 
-Use `Must fix`, `Should fix`, or `Nit` severity for surviving claims. When `evidence_tag` is `reproduced`, include both your `repro_command` and observed `repro_output`. For `plausible`, use `evidence_tag: "read from code"`, leave repro absent unless you actually observed relevant behavior, and supply `what_would_confirm`. For `refuted`, put the quoted refutation in `reason`; do not invent replacement issues. Preserve the input `id` exactly so the coordinator can match every claim before merge.
+Use the severity rubric in `orchestration.md`: consequence determines severity,
+not whether a reproduction was easy. Reassess severity independently; confirmation
+does not preserve a finder's proposed severity automatically. For `reproduced`,
+include your own command and observed output. For `plausible`, provide the missing
+observation in `what_would_confirm`. Preserve the input `id` exactly.

@@ -110,9 +110,13 @@ remains `branch`.
   "execution_consent": true,
   "execution_disabled_reason": null,
   "sandbox_kind": "sandbox-exec",
-  "copy_kind": "clonefile",
+  "copy_kind": "independent-copy",
+  "snapshot_kind": "clonefile",
+  "os_enforced": true,
+  "isolation_warning": null,
   "areas": [{"id": "A1", "files": ["src/parser.py"], "questions": ["Does the caller accept an empty result?"], "status": "completed", "degraded_reason": null}],
   "unreached_areas": [],
+  "checker_failures": {},
   "checked_and_dropped": [{"id": "A1.2", "area": "A1", "file": "src/parser.py", "line": "42", "title": "An empty result crashes", "reason": "The caller guards empty results at src/caller.py:18."}]
 }
 ```
@@ -120,10 +124,13 @@ remains `branch`.
 `areas` preserves the map's IDs, files, hotspot questions, and `pending`,
 `completed`, `read_only_degraded`, or `unreached` status. Show the budget and
 execution/sandbox status in What was run; show a collapsed **Checked and dropped**
-list with the checker's reason, not as live findings. An unreached area must appear
-in `unreached_areas` and ⚠️ `run.coverage`, with `run.incomplete: true` and
-`meta.verdict: "Incomplete review"`. Refusal, untrusted source, and read-only
-degradation are named in coverage and Assumptions; do not silently imply repros ran.
+list with the checker's reason, not as live findings. Pending or unreached areas
+must appear in `unreached_areas` and warning coverage. `checker_failures` maps
+withheld claim IDs to failure reasons; it is not a list of refuted defects.
+Either coverage gap forces `run.incomplete: true` and
+`meta.verdict: "Incomplete review"`, visible above the tab contents. Execution
+refusal, isolation limitations and read-only degradation belong in coverage and
+Assumptions; consent alone is not evidence that a command ran.
 
 When `source_access` is `diff-only`, the renderer forces every finding's `verified`
 to false and renders the reason in both HTML and Markdown. The reviewer poster repeats

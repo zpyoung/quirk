@@ -48,7 +48,7 @@ _SNAPSHOT_FIELDS = {"schemaVersion", "target_key", "identity", "seat", "base_sha
                     "head_sha", "dimensions", "guidance_hash", "started_at",
                     "findings", "discussions", "discussions_available", "warnings",
                     "invalidation_reason", "file_hashes", "unchanged_files"}
-_FINDING_FIELDS = {"severity", "dimension", "dimensions", "file", "line", "issue", "recommendation", "verified", "assumptions", "title", "impact", "fix_md", "area", "evidence", "body_md", "aside_md", "recommendation_md", "anchor_side", "memory", "verification_status", "repro", "what_would_confirm"}
+_FINDING_FIELDS = {"id", "dedup_key", "severity", "dimension", "dimensions", "file", "line", "issue", "recommendation", "verified", "assumptions", "title", "impact", "fix_md", "area", "evidence", "body_md", "aside_md", "recommendation_md", "anchor_side", "memory", "verification_status", "repro", "what_would_confirm"}
 
 
 def severity_floor(prepared):
@@ -386,6 +386,27 @@ def _validate_contract_run(run, meta, warnings):
             raise ValueError("run.deep.areas must be a list of objects")
         if "unreached_areas" in deep:
             _list_of_strings(deep["unreached_areas"], "run.deep.unreached_areas")
+        unreached = list(deep.get("unreached_areas") or [])
+        for area in deep.get("areas") or []:
+            status = area.get("status")
+            if status not in (None, "pending", "unreached", "completed", "read_only_degraded"):
+                raise ValueError("run.deep area status has an unknown value")
+            if status in ("pending", "unreached"):
+                identifier = area.get("id")
+                if not isinstance(identifier, str) or not identifier.strip():
+                    raise ValueError("unfinished deep areas require an id")
+                if identifier not in unreached:
+                    unreached.append(identifier)
+        if unreached:
+            deep["unreached_areas"] = unreached
+        failures = deep.get("checker_failures") or {}
+        if not isinstance(failures, dict) or any(
+                not isinstance(key, str) or not isinstance(reason, str) or not reason.strip()
+                for key, reason in failures.items()):
+            raise ValueError("run.deep.checker_failures must map ids to failure reasons")
+        if failures:
+            run["incomplete"] = True
+            meta["verdict"] = "Incomplete review"
         if "checked_and_dropped" in deep:
             dropped = deep["checked_and_dropped"]
             if not isinstance(dropped, list) or any(
@@ -472,6 +493,9 @@ def _prepare_report(report):
         raise ValueError("findings must be a list")
     normalized = []
     identities = set()
+    run = prepared.get("run")
+    if run is not None and not isinstance(run, dict):
+        raise ValueError("run must be an object when present")
     memory_enabled = "memory" in prepared
     for index, raw in enumerate(findings):
         if not isinstance(raw, dict):
@@ -1387,7 +1411,14 @@ def _handoff_script(report, report_path=None):
 
 def _content(report, report_path=None):
     panes = _panes(report)
-    out = ['<div class="app">', _topnav(report, panes), '<div class="panes">']
+    out = ['<div class="app">', _topnav(report, panes)]
+    run = report.get("run") or {}
+    deep = run.get("deep") or {}
+    if deep and run.get("incomplete"):
+        unreached = ", ".join(deep.get("unreached_areas") or [])
+        body = ("Unreached areas: %s." % unreached) if unreached else "Some deep checks did not finish."
+        out.append(_banner("warning", "Incomplete review.", _esc(body)))
+    out.append('<div class="panes">')
     for index, (pane_id, label, _, html) in enumerate(panes):
         out.append('<section class="pane%s" id="pane-%s" role="tabpanel" aria-labelledby="tab-%s">' %
                    (" is-active" if index == 0 else "", pane_id, pane_id))

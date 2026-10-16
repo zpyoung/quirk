@@ -14,7 +14,7 @@ import deep_sandbox as m
 
 def git(repo, *args):
     return subprocess.run(["git", "-C", str(repo), *args], capture_output=True,
-                          text=True, check=True).stdout.strip()
+                          text=True, check=True, env=m._git_environment()).stdout.strip()
 
 
 def repository(tmp_path):
@@ -67,183 +67,312 @@ def test_check_trust_cli_writes_decision(tmp_path):
     assert json.loads(out.read_text(encoding="utf-8")) == decision
 
 
-def test_probe_capabilities_runs_exact_platform_probes(tmp_path, monkeypatch):
-    calls = []
-    real_run = subprocess.run
-
-    def fake_run(args, **kwargs):
-        calls.append(args)
-        return subprocess.CompletedProcess(args, 0)
-
-    monkeypatch.setattr(m.subprocess, "run", fake_run)
-    monkeypatch.setattr(m.sys, "platform", "darwin")
-    assert m.probe_capabilities(str(tmp_path))["sandbox_kind"] == "sandbox-exec"
-    assert calls == [["/usr/bin/sandbox-exec", "-p", "(version 1)(allow default)",
-                      "/usr/bin/true"]]
-    calls.clear()
-    monkeypatch.setattr(m.sys, "platform", "linux")
-    monkeypatch.setattr(m.shutil, "which", lambda name: "/usr/bin/bwrap" if name == "bwrap" else None)
-    assert m.probe_capabilities(str(tmp_path))["sandbox_kind"] == "bwrap"
-    assert calls == [["/usr/bin/bwrap", "--ro-bind", "/", "/", "--dev", "/dev",
-                      "--proc", "/proc", "/bin/true"]]
-    monkeypatch.setattr(m.subprocess, "run", real_run)
-
-
-def test_failed_probe_falls_back_to_worktree(tmp_path, monkeypatch):
-    monkeypatch.setattr(m.sys, "platform", "linux")
-    monkeypatch.setattr(m.shutil, "which", lambda name: "/usr/bin/bwrap")
-    monkeypatch.setattr(m.subprocess, "run", lambda *args, **kwargs:
-                        subprocess.CompletedProcess(args[0], 1))
-    assert m.probe_capabilities(str(tmp_path))["sandbox_kind"] == "worktree"
-
-
-def test_worktree_lifecycle_isolates_hooks_environment_and_credentials(tmp_path, monkeypatch):
-    monkeypatch.setattr(m.sys, "platform", "linux")
-    repo, sha = repository(tmp_path)
-    hook_marker = tmp_path / "hook-ran"
-    hook = repo / ".git" / "hooks" / "post-checkout"
-    hook.write_text("#!/bin/sh\nprintf ran > '" + str(hook_marker) + "'\n", encoding="utf-8")
-    hook.chmod(0o755)
-    before_config = (repo / ".git" / "config").read_bytes()
-    before_status = git(repo, "status", "--porcelain")
+def fallback(monkeypatch):
     monkeypatch.setattr(m, "probe_capabilities", lambda root: {"sandbox_kind": "worktree"})
-    monkeypatch.setenv("GH_TOKEN", "secret")
-    monkeypatch.setenv("GIT_ASKPASS", "/private/askpass")
-    manifest_path = tmp_path / "copy.json"
+
+
+def test_failed_probe_reports_environment_only_limitation(tmp_path, monkeypatch):
+    monkeypatch.setattr(m.sys, "platform", "unsupported")
+    capability = m.probe_capabilities(str(tmp_path))
+    assert capability["sandbox_kind"] == "worktree"
+    assert capability["os_enforced"] is False
+    assert "not enforced" in capability["isolation_warning"]
+
+
+def test_copy_has_private_git_metadata_and_sanitized_environment(tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    repo, sha = repository(tmp_path)
+    original_config = (repo / ".git" / "config").read_bytes()
+    for name in ("GH_TOKEN", "AWS_SECRET_ACCESS_KEY", "DATABASE_URL", "CUSTOM_SECRET",
+                 "SSH_AUTH_SOCK", "PYTHONPATH", "LD_PRELOAD", "GIT_CONFIG_PARAMETERS"):
+        monkeypatch.setenv(name, "caller-secret")
+    out = tmp_path / "copy.json"
     code, manifest = invoke("acquire", "--source-root", str(repo), "--head-sha", sha,
-                            "--out", str(manifest_path))
-    assert code == 0 and json.loads(manifest_path.read_text()) == manifest
-    assert manifest["copy_kind"] == "git-worktree"
-    copy_dir, env_dir = Path(manifest["copy_dir"]), Path(manifest["env_dir"])
+                            "--out", str(out))
+    assert code == 0
+    copy = Path(manifest["copy_dir"])
+    env_dir = Path(manifest["env_dir"])
     try:
-        assert str(copy_dir) == os.path.realpath(copy_dir)
-        assert str(env_dir) == os.path.realpath(env_dir)
-        assert copy_dir != repo and (copy_dir / "data.txt").read_text() == "head\n"
-        assert git(copy_dir, "rev-parse", "HEAD") == sha
-        assert not hook_marker.exists()
-        cmd = [sys.executable, "-c", "import json,os; print(json.dumps({k:os.environ.get(k) "
-               "for k in ('HOME','XDG_CONFIG_HOME','XDG_STATE_HOME','XDG_CACHE_HOME',"
-               "'TMPDIR','GIT_CONFIG_GLOBAL','GIT_CONFIG_NOSYSTEM','GIT_TERMINAL_PROMPT',"
-               "'GH_TOKEN','GIT_ASKPASS','PATH')}))"]
-        code, result = invoke("exec", "--manifest", str(manifest_path), "--cwd", "nested",
-                              "--", *cmd)
-        assert code == 0 and result["exit_code"] == 0
+        assert manifest["copy_kind"] == "independent-copy"
+        assert manifest["source_state"]["local_changes"] is False
+        assert (copy / ".git").is_dir()
+        assert not (copy / ".git" / "objects" / "info" / "alternates").exists()
+        assert git(copy, "rev-parse", "HEAD") == sha
+        assert git(copy, "rev-parse", "--git-common-dir") == ".git"
+        result = m.exec_in_copy(str(out), [sys.executable, "-c",
+                                "import json,os;print(json.dumps(dict(os.environ)))"],
+                                cwd_rel="nested")
         values = json.loads(result["stdout"])
-        for name, path in (("HOME", "home"), ("XDG_CONFIG_HOME", "xdg_config"),
-                           ("XDG_STATE_HOME", "xdg_state"), ("XDG_CACHE_HOME", "xdg_cache"),
-                           ("TMPDIR", "tmp")):
-            assert values[name] == str(env_dir / path)
-            assert (env_dir / path).is_dir()
-        assert values["GH_TOKEN"] is None and values["GIT_ASKPASS"] is None
+        assert result["exit_code"] == 0
+        for name in ("GH_TOKEN", "AWS_SECRET_ACCESS_KEY", "DATABASE_URL", "CUSTOM_SECRET",
+                     "SSH_AUTH_SOCK", "PYTHONPATH", "LD_PRELOAD", "GIT_CONFIG_PARAMETERS"):
+            assert name not in values
+        for name, suffix in m._ENV_DIRS.items():
+            assert values[name] == str(env_dir / suffix)
         assert values["GIT_CONFIG_GLOBAL"] == "/dev/null"
         assert values["GIT_CONFIG_NOSYSTEM"] == "1"
-        assert values["GIT_TERMINAL_PROMPT"] == "0"
         assert values["PATH"].split(os.pathsep)[0] == str(env_dir / "bin")
-        code, hooks = invoke("exec", "--manifest", str(manifest_path), "--",
-                             "git", "config", "--get", "core.hooksPath")
-        assert code == 0 and hooks["stdout"].strip() == "/dev/null"
-        code, checkout = invoke("exec", "--manifest", str(manifest_path), "--",
-                                "git", "switch", "--detach", "HEAD")
-        assert code == 0 and checkout["exit_code"] == 0 and not hook_marker.exists()
-        for executable in ("gh", "glab"):
-            code, blocked = invoke("exec", "--manifest", str(manifest_path), "--", executable)
-            assert code == 0 and blocked["exit_code"] == 127
-            assert "blocked in deep-mode throwaway copy" in blocked["stderr"]
+        assert result["os_enforced"] is False and result["isolation_warning"]
+        git(copy, "config", "caller.proof", "isolated")
+        git(copy, "update-ref", "refs/heads/private-copy", sha)
+        assert (repo / ".git" / "config").read_bytes() == original_config
+        assert not (repo / ".git" / "refs" / "heads" / "private-copy").exists()
+        for command in (["gh"], ["glab"], ["/some/absolute/gh"]):
+            blocked = m.exec_in_copy(str(out), command)
+            assert blocked["exit_code"] == 127
             assert blocked["environment_unavailable"] is False
-        code, missing = invoke("exec", "--manifest", str(manifest_path), "--",
-                               sys.executable, "-c", "import nonexistent_deep_dependency")
-        assert code == 0 and missing["environment_unavailable"] is True
-        assert "ModuleNotFoundError" in missing["unavailable_reason"]
-        code, not_found = invoke("exec", "--manifest", str(manifest_path), "--",
-                                 "nonexistent-deep-executable")
-        assert code == 0 and not_found["exit_code"] == 127
-        assert not_found["environment_unavailable"] is True
-        assert not_found["unavailable_reason"]
-        assert (repo / ".git" / "config").read_bytes() == before_config
-        assert git(repo, "status", "--porcelain") == before_status
-        assert not hook_marker.exists()
+            assert "blocked in deep-mode" in blocked["stderr"]
     finally:
-        code, released = invoke("release", "--manifest", str(manifest_path))
-        assert code == 0 and released == {"released": True, "copy_dir": str(copy_dir)}
-        assert not copy_dir.exists() and not env_dir.exists()
+        released = m.release_copy(str(out))
+        assert released == {"released": True, "copy_dir": str(copy)}
+        assert not copy.exists() and not env_dir.exists()
+        assert m.release_copy(str(out)) == released
 
+
+def test_acquire_never_runs_source_fsmonitor_filters_hooks_or_config_includes(
+        tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    repo, sha = repository(tmp_path)
+    marker = tmp_path / "executed"
+    program = tmp_path / "unsafe"
+    program.write_text("#!/bin/sh\nprintf ran >> '%s'\ncat\n" % marker, encoding="utf-8")
+    program.chmod(0o755)
+    included = tmp_path / "included.config"
+    included.write_text("[core]\n\tfsmonitor = %s\n[filter \"unsafe\"]\n"
+                        "\tclean = %s\n\tsmudge = %s\n\trequired = true\n"
+                        % (program, program, program), encoding="utf-8")
+    git(repo, "config", "include.path", str(included))
+    git(repo, "config", "core.hooksPath", str(tmp_path / "hooks"))
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    (hooks / "post-checkout").write_text(program.read_text(), encoding="utf-8")
+    (hooks / "post-checkout").chmod(0o755)
+    (repo / ".gitattributes").write_text("*.txt filter=unsafe\n", encoding="utf-8")
+    (repo / "data.txt").write_text("local\n", encoding="utf-8")
+    out = tmp_path / "copy.json"
+    manifest = m.acquire_copy(str(repo), sha, str(out))
+    try:
+        copy = Path(manifest["copy_dir"])
+        assert not marker.exists()
+        assert (copy / "data.txt").read_text() == "local\n"
+        assert str(included) not in (copy / ".git" / "config").read_text()
+        assert str(program) not in (copy / ".git" / "config").read_text()
+        result = m.exec_in_copy(str(out), ["git", "status", "--porcelain"])
+        assert result["exit_code"] == 0 and not marker.exists()
+        result = m.exec_in_copy(str(out), ["git", "switch", "--detach", "HEAD"])
+        assert result["exit_code"] == 0 and not marker.exists()
+    finally:
+        m.release_copy(str(out))
+
+
+def test_snapshot_reports_local_changes_without_claiming_exact_head_tree(tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    repo, sha = repository(tmp_path)
+    (repo / "data.txt").write_text("staged\n", encoding="utf-8")
+    git(repo, "add", "data.txt")
+    (repo / "data.txt").write_text("unstaged\n", encoding="utf-8")
+    (repo / "new.txt").write_text("untracked\n", encoding="utf-8")
+    (repo / "nested" / "value.txt").unlink()
+    out = tmp_path / "copy.json"
+    manifest = m.acquire_copy(str(repo), sha, str(out))
+    try:
+        copy = Path(manifest["copy_dir"])
+        assert git(copy, "rev-parse", "HEAD") == sha
+        assert git(copy, "show", "HEAD:data.txt") == "head"
+        assert (copy / "data.txt").read_text() == "unstaged\n"
+        assert (copy / "new.txt").read_text() == "untracked\n"
+        assert not (copy / "nested" / "value.txt").exists()
+        assert manifest["source_state"] == {
+            "kind": "worktree-snapshot", "local_changes": True,
+            "index": "rebuilt-from-head"}
+    finally:
+        m.release_copy(str(out))
+
+
+def test_staged_changes_are_reported_even_when_worktree_matches_head(tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    repo, sha = repository(tmp_path)
+    (repo / "data.txt").write_text("staged\n", encoding="utf-8")
+    git(repo, "add", "data.txt")
+    (repo / "data.txt").write_text("head\n", encoding="utf-8")
+    out = tmp_path / "copy.json"
+    manifest = m.acquire_copy(str(repo), sha, str(out))
+    try:
+        assert manifest["source_state"]["local_changes"] is True
+        assert manifest["source_state"]["index"] == "rebuilt-from-head"
+        assert Path(manifest["copy_dir"], "data.txt").read_text() == "head\n"
+    finally:
+        m.release_copy(str(out))
+
+
+def test_linked_source_worktree_does_not_keep_caller_git_pointers(tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    repo, sha = repository(tmp_path)
+    linked = tmp_path / "linked"
+    git(repo, "worktree", "add", "--detach", str(linked), sha)
+    (linked / "data.txt").write_text("linked local\n", encoding="utf-8")
+    out = tmp_path / "copy.json"
+    manifest = m.acquire_copy(str(linked), sha, str(out))
+    try:
+        copy = Path(manifest["copy_dir"])
+        assert (copy / ".git").is_dir()
+        assert not (copy / ".git" / "commondir").exists()
+        assert not (copy / ".git" / "objects" / "info" / "alternates").exists()
+        assert (copy / "data.txt").read_text() == "linked local\n"
+        assert git(copy, "rev-parse", "HEAD") == sha
+    finally:
+        m.release_copy(str(out))
 
 
 @pytest.mark.parametrize("clone_supported", [True, False])
-def test_mac_clone_attempt_and_fallback_leave_source_git_config_untouched(
+def test_clonefile_snapshot_or_fallback_excludes_source_git_metadata(
         tmp_path, monkeypatch, clone_supported):
+    fallback(monkeypatch)
     repo, sha = repository(tmp_path)
-    hook = repo / ".git" / "hooks" / "post-checkout"
-    hook.write_text("#!/bin/sh\nexit 44\n", encoding="utf-8")
-    hook.chmod(0o755)
     original_config = (repo / ".git" / "config").read_bytes()
     monkeypatch.setattr(m.sys, "platform", "darwin")
-    monkeypatch.setattr(m, "probe_capabilities", lambda root: {"sandbox_kind": "worktree"})
-    real_run = subprocess.run
-    cp_calls = []
+    real_run = m._run
+    clone_attempts = []
 
-    def clone_or_fail(args, **kwargs):
-        if args[0] == "cp":
-            cp_calls.append(args)
+    def copy_or_fail(command, timeout, **kwargs):
+        if command[0] == "/bin/cp":
+            source, destination = Path(command[2]), Path(command[3])
+            clone_attempts.append(source.name)
             if not clone_supported:
-                return subprocess.CompletedProcess(args, 1, stdout="", stderr="clone not supported")
-            shutil.copytree(args[2], args[3], dirs_exist_ok=True, symlinks=True)
-            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
-        return real_run(args, **kwargs)
+                return subprocess.CompletedProcess(command, 1, "", "clone unavailable")
+            if source.is_dir():
+                shutil.copytree(source, destination, symlinks=True)
+            else:
+                shutil.copy2(source, destination)
+            return subprocess.CompletedProcess(command, 0, "", "")
+        return real_run(command, timeout, **kwargs)
 
-    monkeypatch.setattr(m.subprocess, "run", clone_or_fail)
+    monkeypatch.setattr(m, "_run", copy_or_fail)
     out = tmp_path / "copy.json"
     manifest = m.acquire_copy(str(repo), sha, str(out))
-    copy = Path(manifest["copy_dir"])
     try:
-        assert cp_calls == [["cp", "-cR", os.path.join(str(repo), "."), str(copy)]]
-        assert manifest["copy_kind"] == ("clonefile" if clone_supported else "git-worktree")
-        assert (copy / "data.txt").read_text() == "head\n"
-        if clone_supported:
-            assert not (copy / ".git" / "hooks").exists()
-            assert git(copy, "config", "--file", str(copy / ".git" / "config"),
-                       "--get", "core.hooksPath") == "/dev/null"
-            assert git(copy, "config", "--file", str(copy / ".git" / "config"),
-                       "--get", "core.fsmonitor") == "false"
+        assert clone_attempts and ".git" not in clone_attempts
+        assert manifest["snapshot_kind"] == ("clonefile" if clone_supported else "copy")
+        assert Path(manifest["copy_dir"], "data.txt").read_text() == "head\n"
         assert (repo / ".git" / "config").read_bytes() == original_config
-        assert hook.exists()
+        assert not Path(manifest["copy_dir"], ".git", "objects", "info", "alternates").exists()
     finally:
         m.release_copy(str(out))
-        assert not copy.exists() and not Path(manifest["env_dir"]).exists()
 
 
-def test_kernel_sandbox_denies_outside_writes_when_available(tmp_path):
+def test_kernel_sandbox_denies_outside_writes_credentials_and_absolute_forge_exec(
+        tmp_path, monkeypatch):
     kind = m.probe_capabilities(str(tmp_path))["sandbox_kind"]
     if kind == "worktree":
-        pytest.skip("no functioning OS write sandbox on this machine")
+        pytest.skip("no functioning OS sandbox on this machine")
     repo, sha = repository(tmp_path)
-    outside = tmp_path / "outside.txt"
+    credentials = tmp_path / "caller-home" / ".aws" / "credentials"
+    credentials.parent.mkdir(parents=True)
+    credentials.write_text("caller-secret", encoding="utf-8")
+    forge_dir = tmp_path / "forge-bin"
+    forge_dir.mkdir()
+    forge = forge_dir / "gh"
+    forge.write_text("#!/bin/sh\nprintf 'should not execute'\n", encoding="utf-8")
+    forge.chmod(0o755)
+    monkeypatch.setenv("HOME", str(credentials.parent.parent))
+    monkeypatch.setenv("PATH", str(forge_dir) + os.pathsep + os.environ["PATH"])
     out = tmp_path / "copy.json"
     manifest = m.acquire_copy(str(repo), sha, str(out))
     try:
         assert manifest["sandbox_kind"] == kind
-        for target, expected in ((outside, 1), (Path(manifest["copy_dir"]) / "inside.txt", 0),
-                                 (Path(manifest["env_dir"]) / "inside.txt", 0)):
-            result = m.exec_in_copy(str(out), [sys.executable, "-c",
-                                    "from pathlib import Path; Path(%r).write_text('check')"
-                                    % str(target)])
-            assert (result["exit_code"] == 0) == (expected == 0)
-            assert target.exists() == (expected == 0)
+        outside = tmp_path / "outside"
+        result = m.exec_in_copy(str(out), [sys.executable, "-c",
+                                "from pathlib import Path;Path(%r).write_text('bad')" % str(outside)])
+        assert result["exit_code"] != 0 and not outside.exists()
+        result = m.exec_in_copy(str(out), [sys.executable, "-c",
+                                "from pathlib import Path;print(Path(%r).read_text())"
+                                % str(credentials)])
+        assert result["exit_code"] != 0 and "caller-secret" not in result["stdout"]
+        result = m.exec_in_copy(str(out), ["/bin/sh", "-c", str(forge)])
+        assert result["exit_code"] != 0
+        assert "should not execute" not in result["stdout"]
+        inside = Path(manifest["copy_dir"]) / "inside"
+        result = m.exec_in_copy(str(out), [sys.executable, "-c",
+                                "from pathlib import Path;Path(%r).write_text('ok')" % str(inside)])
+        assert result["exit_code"] == 0 and inside.read_text() == "ok"
     finally:
         m.release_copy(str(out))
 
-def test_exec_rejects_symlink_and_parent_directory_traversal(tmp_path, monkeypatch):
+
+def test_timeout_kills_descendants_instead_of_only_the_parent(tmp_path, monkeypatch):
+    import time
+
+    fallback(monkeypatch)
     repo, sha = repository(tmp_path)
-    monkeypatch.setattr(m, "probe_capabilities", lambda root: {"sandbox_kind": "worktree"})
     out = tmp_path / "copy.json"
     manifest = m.acquire_copy(str(repo), sha, str(out))
-    copy = Path(manifest["copy_dir"])
-    (copy / "outside").symlink_to(tmp_path, target_is_directory=True)
+    marker = Path(manifest["copy_dir"]) / "child-survived"
+    child = "import time,pathlib;time.sleep(2);pathlib.Path(%r).write_text('bad')" % str(marker)
+    parent = ("import subprocess,sys,time;subprocess.Popen([sys.executable,'-c',%r]);"
+              "print('started',flush=True);time.sleep(10)" % child)
+    try:
+        started = time.monotonic()
+        result = m.exec_in_copy(str(out), [sys.executable, "-c", parent], timeout=1)
+        assert time.monotonic() - started < 4
+        assert result["timed_out"] is True and result["exit_code"] == 124
+        assert "started" in result["stdout"]
+        assert result["environment_unavailable"] is False
+        time.sleep(1.5)
+        assert not marker.exists()
+    finally:
+        m.release_copy(str(out))
+
+
+def test_cleanup_rejects_forged_manifest_paths_even_with_expected_basenames(
+        tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    repo, sha = repository(tmp_path)
+    out = tmp_path / "copy.json"
+    manifest = m.acquire_copy(str(repo), sha, str(out))
+    arbitrary = tmp_path / "deep-copy-user-data"
+    arbitrary.mkdir()
+    protected = arbitrary / "important"
+    protected.write_text("keep", encoding="utf-8")
+    try:
+        forged = dict(manifest, copy_dir=str(arbitrary))
+        forged_path = tmp_path / "forged.json"
+        forged_path.write_text(json.dumps(forged), encoding="utf-8")
+        code, error = invoke("release", "--manifest", str(forged_path))
+        assert code == 2 and "error" in error
+        assert protected.read_text() == "keep"
+        code, error = invoke("exec", "--manifest", str(forged_path), "--", "/usr/bin/true")
+        assert code == 2 and "error" in error
+    finally:
+        m.release_copy(str(out))
+
+
+def test_release_cleans_remaining_environment_when_copy_was_removed(tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    repo, sha = repository(tmp_path)
+    out = tmp_path / "copy.json"
+    manifest = m.acquire_copy(str(repo), sha, str(out))
+    shutil.rmtree(manifest["copy_dir"])
+    shutil.rmtree(repo)
+    assert m.release_copy(str(out))["released"] is True
+    assert not Path(manifest["env_dir"]).exists()
+
+
+def test_exec_rejects_symlink_and_parent_directory_traversal(tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    repo, sha = repository(tmp_path)
+    out = tmp_path / "copy.json"
+    manifest = m.acquire_copy(str(repo), sha, str(out))
+    (Path(manifest["copy_dir"]) / "outside").symlink_to(tmp_path, target_is_directory=True)
     try:
         for cwd in ("..", "nested/../", "outside", str(tmp_path)):
             code, error = invoke("exec", "--manifest", str(out), "--cwd", cwd,
                                  "--", sys.executable, "-c", "print('bad')")
             assert code == 2 and "error" in error
+        result = m.exec_in_copy(str(out), [sys.executable, "-c",
+                                "import nonexistent_deep_dependency"])
+        assert result["environment_unavailable"] is True
+        assert "ModuleNotFoundError" in result["unavailable_reason"]
+        assert m.exec_in_copy(str(out), ["nonexistent-deep-executable"])["exit_code"] == 127
     finally:
         m.release_copy(str(out))
 
@@ -261,73 +390,3 @@ def test_invalid_head_and_missing_manifest_are_json_errors(tmp_path):
                  ("acquire", "--source-root", str(repo))):
         code, result = invoke(*args)
         assert code == 2 and "error" in result
-
-
-def test_exec_timeout_returns_structured_result(tmp_path, monkeypatch):
-    repo, sha = repository(tmp_path)
-    monkeypatch.setattr(m, "probe_capabilities", lambda root: {"sandbox_kind": "worktree"})
-    manifest_path = tmp_path / "copy.json"
-    manifest = m.acquire_copy(str(repo), sha, str(manifest_path))
-    try:
-        result = m.exec_in_copy(str(manifest_path),
-                                [sys.executable, "-c", "import time; time.sleep(3)"], timeout=1)
-        assert result["timed_out"] is True and result["exit_code"] != 0
-        assert result["environment_unavailable"] is False
-    finally:
-        m.release_copy(str(manifest_path))
-
-
-def test_sandbox_exec_profile_limits_writes_to_copy_and_env(tmp_path, monkeypatch):
-    repo, sha = repository(tmp_path)
-    monkeypatch.setattr(m, "probe_capabilities", lambda root: {"sandbox_kind": "worktree"})
-    out = tmp_path / "copy.json"
-    manifest = m.acquire_copy(str(repo), sha, str(out))
-    manifest["sandbox_kind"] = "sandbox-exec"
-    out.write_text(json.dumps(manifest), encoding="utf-8")
-    observed = []
-
-    def fake_run(args, **kwargs):
-        observed.append(args)
-        return subprocess.CompletedProcess(args, 0, stdout="ok", stderr="")
-
-    monkeypatch.setattr(m.subprocess, "run", fake_run)
-    try:
-        result = m.exec_in_copy(str(out), ["/bin/echo", "ok"])
-        assert result["stdout"] == "ok"
-        cmd = observed[0]
-        assert cmd[:2] == ["/usr/bin/sandbox-exec", "-p"]
-        profile = cmd[2]
-        assert "(deny file-write*)" in profile
-        for path in (manifest["copy_dir"], manifest["env_dir"]):
-            assert '(subpath "' + path + '")' in profile
-        assert '(literal "/dev/null")' in profile
-        assert cmd[3:] == ["/bin/echo", "ok"]
-    finally:
-        monkeypatch.undo()
-        m.release_copy(str(out))
-
-
-def test_bwrap_mounts_only_copy_and_env_writable(tmp_path, monkeypatch):
-    repo, sha = repository(tmp_path)
-    monkeypatch.setattr(m, "probe_capabilities", lambda root: {"sandbox_kind": "worktree"})
-    monkeypatch.setattr(m.shutil, "which", lambda name: "/usr/bin/bwrap")
-    out = tmp_path / "copy.json"
-    manifest = m.acquire_copy(str(repo), sha, str(out))
-    manifest["sandbox_kind"] = "bwrap"
-    out.write_text(json.dumps(manifest), encoding="utf-8")
-    observed = []
-
-    def fake_run(args, **kwargs):
-        observed.append(args)
-        return subprocess.CompletedProcess(args, 0, stdout="ok", stderr="")
-
-    monkeypatch.setattr(m.subprocess, "run", fake_run)
-    try:
-        assert m.exec_in_copy(str(out), ["/bin/echo", "ok"])["exit_code"] == 0
-        cmd = observed[0]
-        assert "--ro-bind" in cmd and "--dev" in cmd and "--proc" in cmd
-        for path in (manifest["copy_dir"], manifest["env_dir"]):
-            assert ["--bind", path, path] == cmd[cmd.index(path) - 1:cmd.index(path) + 2]
-    finally:
-        monkeypatch.undo()
-        m.release_copy(str(out))

@@ -15,7 +15,6 @@ import jsonio
 
 _SEVERITY_RANK = {"Nit": 0, "Should fix": 1, "Must fix": 2}
 _LINE_RANGE = re.compile(r"^\s*(\d+)\s*(?:-\s*(\d+))?\s*$")
-_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
 
 def _object(value: object, label: str) -> dict:
@@ -43,11 +42,11 @@ def _first_text(*values: object) -> str:
     return ""
 
 
-def _one_line(value: str, limit: int, *, sentence: bool = False) -> str:
+def _one_line(value: str, limit: int) -> str:
     text = " ".join(value.split())
-    if sentence:
-        text = _SENTENCE_END.split(text, maxsplit=1)[0]
-    return text[:limit].rstrip()
+    if len(text) > limit:
+        raise ValueError("report text exceeds %d characters; rewrite it before merging" % limit)
+    return text
 
 
 def _line(value: object, label: str) -> str:
@@ -115,7 +114,7 @@ def _finding(source: dict, checker: dict | None, *, is_lens: bool) -> dict:
         "file": file,
         "line": line,
         "title": _one_line(title, 80),
-        "impact": _one_line(impact, 200, sentence=True),
+        "impact": _one_line(impact, 200),
         "fix_md": _one_line(fix, 160),
         "issue": issue,
         "body_md": issue,
@@ -161,9 +160,7 @@ def _same_defect(first: dict, second: dict) -> bool:
         return False
     if first["line"] == second["line"]:
         return True
-    return ("-" in first["line"] or "-" in second["line"]) and _overlaps(
-        first["line"], second["line"]) and first["title"].casefold() == second["title"].casefold()
-
+    return _overlaps(first["line"], second["line"]) and first["title"].casefold() == second["title"].casefold()
 
 def _deduplicate(findings: list[dict]) -> list[dict]:
     parents = list(range(len(findings)))
@@ -220,14 +217,25 @@ def merge_deep_run(
     areas = _items(_object(area_map, "area map").get("areas"), "area map areas")
     trust_info = _object(trust_info, "trust")
     budget_info = _budget(_object(budget_info, "budget"))
+    source_ids = [_required_text(source.get("id"), "candidate id")
+                  for source in deep_candidates + lens_findings]
+    if len(source_ids) != len(set(source_ids)):
+        raise ValueError("duplicate candidate id")
     verdicts = {}
     for checker in checker_verdicts:
         identifier = _required_text(checker.get("id"), "checker id")
+        if identifier not in source_ids:
+            raise ValueError("unknown checker id: %s" % identifier)
         if identifier in verdicts:
             raise ValueError("duplicate checker verdict for %s" % identifier)
         if checker.get("verdict") not in ("confirmed", "plausible", "refuted"):
             raise ValueError("invalid checker verdict for %s" % identifier)
         verdicts[identifier] = checker
+    checker_failures = _object(budget_info.get("checker_failures", {}), "checker failures")
+    for identifier, reason in checker_failures.items():
+        if identifier not in source_ids or identifier in verdicts:
+            raise ValueError("checker failure must name an unchecked candidate id")
+        _required_text(reason, "checker failure reason")
 
     findings = []
     dropped = []
@@ -237,6 +245,8 @@ def merge_deep_run(
         identifier = _required_text(source.get("id"), "candidate id")
         checker = verdicts.get(identifier)
         if checker is None and (not is_lens or source.get("severity") != "Nit"):
+            if identifier in checker_failures:
+                continue
             raise ValueError("missing checker verdict for %s" % identifier)
         if checker is not None and checker["verdict"] == "refuted":
             dimensions = _dimensions(source, is_lens=is_lens)
@@ -263,8 +273,8 @@ def merge_deep_run(
     disabled_reason = None
     if execution_enabled:
         assumptions.append(
-            "Deep mode execution consent granted: code ran in isolated throwaway copies "
-            "(%s, %s, budget %sm, no gh/glab)." % (
+            "Deep mode execution consent granted for isolated throwaway copies "
+            "(%s, %s, budget %sm; forge commands disabled)." % (
                 trust_info.get("sandbox_kind"), trust_info.get("copy_kind"), budget_info.get("budget_minutes")))
     elif not allowed:
         disabled_reason = _required_text(trust_info.get("reason"), "trust reason")
@@ -272,6 +282,11 @@ def merge_deep_run(
     else:
         disabled_reason = "execution consent was declined"
         coverage_notes.append("⚠ Deep repros disabled: %s" % disabled_reason)
+    isolation_warning = trust_info.get("isolation_warning")
+    if execution_enabled and isolation_warning:
+        coverage_notes.append("⚠ Deep execution isolation: " + _required_text(
+            isolation_warning, "isolation warning"))
+        assumptions.append(isolation_warning)
 
     unreached = []
     for area in areas:
@@ -279,10 +294,16 @@ def merge_deep_run(
         if area.get("status") == "read_only_degraded":
             reason = _required_text(area.get("degraded_reason"), "degraded reason for %s" % identifier)
             coverage_notes.append("⚠ Area %s ran read-only: %s" % (identifier, reason))
-        elif area.get("status") == "unreached":
+        elif area.get("status") in ("pending", "unreached"):
             unreached.append(identifier)
     if unreached:
         coverage_notes.append("⚠ Incomplete deep review: budget expired before reaching " + ", ".join(unreached))
+    if checker_failures:
+        coverage_notes.append("⚠ Unchecked claims withheld: " + ", ".join(checker_failures))
+    over_budget = budget_info["elapsed_minutes"] > budget_info["budget_minutes"]
+    if over_budget:
+        coverage_notes.append("⚠ Deep review exceeded its time budget")
+    incomplete = bool(unreached or checker_failures or over_budget)
 
     deep = {
         "enabled": True,
@@ -295,12 +316,16 @@ def merge_deep_run(
         "execution_disabled_reason": disabled_reason,
         "sandbox_kind": trust_info.get("sandbox_kind"),
         "copy_kind": trust_info.get("copy_kind"),
+        "snapshot_kind": trust_info.get("snapshot_kind"),
+        "os_enforced": trust_info.get("os_enforced"),
+        "isolation_warning": isolation_warning,
         "areas": areas,
         "unreached_areas": unreached,
         "checked_and_dropped": dropped,
+        "checker_failures": dict(checker_failures),
     }
-    return {"findings": _deduplicate(findings), "deep": deep, "incomplete": bool(unreached),
-            "verdict_override": "Incomplete review" if unreached else None,
+    return {"findings": _deduplicate(findings), "deep": deep, "incomplete": incomplete,
+            "verdict_override": "Incomplete review" if incomplete else None,
             "coverage_notes": coverage_notes, "assumptions": assumptions}
 
 

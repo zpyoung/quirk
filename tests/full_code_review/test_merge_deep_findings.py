@@ -149,6 +149,51 @@ def test_no_finding_cap_applies_to_checked_candidates():
     assert len(merge(candidates=candidates, verdicts=[verdict(item["id"]) for item in candidates])["findings"]) == 70
 
 
+def test_adjacent_distinct_failures_are_not_merged_by_shared_title_words():
+    candidates = [
+        candidate("A1.1", line="10", summary="Invoice update drops customer identity"),
+        candidate("A1.2", line="14", summary="Invoice update drops payment currency"),
+    ]
+    findings = merge(candidates=candidates, verdicts=[verdict(c["id"]) for c in candidates])["findings"]
+    assert {f["line"] for f in findings} == {"10", "14"}
+
+
+def test_checker_can_downgrade_a_confirmed_lens_claim():
+    findings = merge(lens=[lens("L1", "Must fix")],
+                     verdicts=[verdict("L1", severity="Nit")])["findings"]
+    assert findings[0]["severity"] == "Nit"
+
+
+def test_pending_area_never_becomes_complete_coverage():
+    result = merge(areas={"areas": [{"id": "A1", "status": "pending"}]})
+    assert result["incomplete"] is True
+    assert result["deep"]["unreached_areas"] == ["A1"]
+
+
+def test_candidate_ids_cannot_alias_a_different_lens_claim():
+    with pytest.raises(ValueError, match="duplicate.*id"):
+        merge(lens=[lens("A1.1")], candidates=[candidate()],
+              verdicts=[verdict()])
+
+
+def test_unknown_checker_id_cannot_supply_evidence():
+    with pytest.raises(ValueError, match="unknown.*id"):
+        merge(verdicts=[verdict("not-dispatched")])
+
+
+def test_failed_checker_withholds_only_its_claim_and_marks_review_incomplete():
+    result = merge(
+        candidates=[candidate("A1.1"), candidate("A1.2", line="20")],
+        verdicts=[verdict("A1.1")],
+        budget={"budget_minutes": 60, "elapsed_minutes": 60, "cutoff_reached": True,
+                "checker_failures": {"A1.2": "checker timed out"}},
+    )
+    assert [f["id"] for f in result["findings"]] == ["A1.1"]
+    assert result["incomplete"] is True
+    assert result["deep"]["checker_failures"] == {"A1.2": "checker timed out"}
+    assert result["verdict_override"] == "Incomplete review"
+
+
 @pytest.mark.parametrize("bad", [
     {"verdict": "unknown"}, {"severity": "critical"}, {"evidence_tag": "guess"},
     {"verdict": "refuted", "reason": "   "},
@@ -161,16 +206,12 @@ def test_invalid_checker_verdict_is_rejected(bad):
         merge(candidates=[candidate()], verdicts=[verdict(**bad)])
 
 
-def test_refinements_normalize_whitespace_and_length_limits():
-    found = merge(candidates=[candidate()], verdicts=[verdict(
-        refined_title="  First\n title  " + "x" * 100,
-        refined_impact="  A  bad\n result.  This is a second sentence.",
-        refined_fix_md="  Fix \n it  " + "y" * 170,
-    )])["findings"][0]
-    assert "\n" not in found["title"] + found["impact"] + found["fix_md"]
-    assert len(found["title"]) <= 80
-    assert found["impact"] == "A bad result."
-    assert len(found["fix_md"]) <= 160
+@pytest.mark.parametrize("field,limit", [
+    ("refined_title", 80), ("refined_impact", 200), ("refined_fix_md", 160),
+])
+def test_overlong_refinements_require_rewriting_instead_of_truncation(field, limit):
+    with pytest.raises(ValueError, match="rewrite"):
+        merge(candidates=[candidate()], verdicts=[verdict(**{field: "x" * (limit + 1)})])
 
 
 def test_area_coverage_trust_and_budget_are_attached_without_mutating_inputs():
@@ -190,7 +231,6 @@ def test_area_coverage_trust_and_budget_are_attached_without_mutating_inputs():
     assert result["verdict_override"] == "Incomplete review"
     assert "⚠ Area A2 ran read-only: sandbox unavailable" in result["coverage_notes"]
     assert "⚠ Incomplete deep review: budget expired before reaching A3" in result["coverage_notes"]
-    assert result["assumptions"] == ["Deep mode execution consent granted: code ran in isolated throwaway copies (sandbox-exec, clonefile, budget 60m, no gh/glab)."]
     assert areas["areas"][2] == {"id": "A3", "status": "unreached"}
 
 

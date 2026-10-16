@@ -5,6 +5,11 @@ calendar-based (**CalVer**, `YYYY.M.D` unpadded); the `releasing-quirk` skill
 stamps and prepends each entry (newest on top). Since the version no longer encodes
 compatibility, breaking changes are called out in a `### ⚠️ BREAKING` subsection.
 
+## Unreleased
+
+### Changes
+- Add opt-in `full-code-review --deep [minutes]`: bounded defect finders, contract checking, fresh verification, isolated repros, evidence-aware reports, and answer-key scoring.
+
 ## 2026.10.12.1
 
 ### Changes

@@ -195,15 +195,21 @@ def _graph_from_texts(files: list[str], texts: dict[str, str]) -> dict[str, set[
             for dots, module, imported in _imports(texts[name]):
                 for target in _module_targets(name, dots, module, imported, changed):
                     connect(name, target)
+        is_doc_hub = name == "README.md" or name.startswith("docs/")
         for target in files:
-            if target == name or _is_test(name) or _is_test(target):
+            target_is_doc_hub = target == "README.md" or target.startswith("docs/")
+            if target == name or _is_test(name) or _is_test(target) or is_doc_hub != target_is_doc_hub:
                 continue
             if _mentions(texts[name], target, files):
                 connect(name, target)
     for first, second in _test_pairs(files):
         connect(first, second)
     for index, name in enumerate(files):
+        if not name.endswith((".py", ".html")) or _is_test(name):
+            continue
         for other in files[index + 1:]:
+            if not other.endswith((".py", ".html")) or _is_test(other):
+                continue
             if any(marker in texts[name].lower() and marker in texts[other].lower()
                    for marker in _SHARED_MARKERS):
                 connect(name, other)
@@ -226,8 +232,18 @@ def partition_areas(changed_files: list[str], coupling: dict[str, set[str]],
     for first in files:
         for second in edges[first]:
             edges[second].add(first)
-    pairs = [(first, second) for first in files if not _is_test(first)
-             for second in files[order[first] + 1:] if not _is_test(second) and second in edges[first]]
+    pairs = sorted(
+        [(first, second) for first in files if not _is_test(first)
+         for second in files[order[first] + 1:] if not _is_test(second) and second in edges[first]],
+        key=lambda pair: (
+            not ({pair[0].endswith(".html"), pair[1].endswith(".html")} == {True, False}
+                 and (pair[0].endswith(".py") or pair[1].endswith(".py"))),
+            not (pair[0].endswith(".py") and pair[1].endswith(".py")),
+            len([p for p in edges[pair[0]] if not _is_test(p)]) + len([p for p in edges[pair[1]] if not _is_test(p)]),
+            order[pair[0]],
+            order[pair[1]],
+        ),
+    )
     remaining = set(files)
     groups = []
     while remaining:
@@ -243,17 +259,43 @@ def partition_areas(changed_files: list[str], coupling: dict[str, set[str]],
                               and weight + file_lines[name] <= max_lines]
                 adjacent = [name for name in candidates if edges[name] & group]
                 if adjacent:
-                    chosen = min(adjacent, key=lambda name: (_is_test(name),
-                                                             -len(edges[name] & group), order[name]))
+                    chosen = min(adjacent, key=lambda name: (
+                        _is_test(name),
+                        not name.endswith((".py", ".html")),
+                        -len(edges[name] & group),
+                        order[name],
+                    ))
                 else:
                     siblings = [name for name in candidates if any(
                         PurePosixPath(name).parent == PurePosixPath(peer).parent for peer in group)]
+                    if not siblings:
+                        siblings = [name for name in candidates if any(
+                            len(PurePosixPath(name).parts) > 1 and len(PurePosixPath(peer).parts) > 1
+                            and PurePosixPath(name).parts[:2] == PurePosixPath(peer).parts[:2]
+                            and not (edges[name] - group)
+                            for peer in group)]
                     if not siblings:
                         break
                     chosen = siblings[0]
                 group.add(chosen)
                 remaining.remove(chosen)
                 weight += file_lines[chosen]
+        groups.append(group)
+    merged: list[set[str]] = []
+    for group in groups:
+        w = sum(file_lines[name] for name in group)
+        top = {PurePosixPath(name).parts[0] for name in group}
+        target_grp = next((prev for prev in merged
+                           if len(prev) + len(group) <= max_files
+                           and sum(file_lines[n] for n in prev) + w <= max_lines
+                           and (len(group) <= 4 and w <= 400)
+                           and {PurePosixPath(n).parts[0] for n in prev} == top), None)
+        if target_grp is not None:
+            target_grp.update(group)
+        else:
+            merged.append(group)
+    result = []
+    for idx, group in enumerate(merged, 1):
         group_files = [name for name in files if name in group]
         coupled = [[first, second] for first in group_files for second in group_files
                    if order[first] < order[second] and second in edges[first]]
@@ -261,11 +303,11 @@ def partition_areas(changed_files: list[str], coupling: dict[str, set[str]],
         title = " + ".join((str(PurePosixPath(name).parent / "__init__.py")
                              if name.endswith("/__init__.py") else PurePosixPath(name).name)
                             for name in core[:2])
-        groups.append({"id": "A%d" % (len(groups) + 1), "title": title,
+        result.append({"id": "A%d" % idx, "title": title,
                        "files": group_files, "test_files": [name for name in group_files if _is_test(name)],
-                       "coupled_edges": coupled, "lines": weight, "questions": [],
+                       "coupled_edges": coupled, "lines": sum(file_lines[n] for n in group), "questions": [],
                        "status": "pending", "degraded_reason": None})
-    return groups
+    return result
 
 
 def _boundary_question(first: str, second: str) -> str:

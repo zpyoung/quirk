@@ -58,6 +58,14 @@ def test_incomplete_report_rejects_any_verdict_outside_the_blocking_vocabulary(v
     assert prepared["meta"]["verdict"] == "Incomplete review"
 
 
+def test_deep_pending_area_cannot_render_as_a_complete_review():
+    value = report(deep={"enabled": True, "areas": [{"id": "A2", "status": "pending"}]})
+    prepared, _ = m._prepare_report(value)
+    assert prepared["run"]["incomplete"] is True
+    assert prepared["run"]["deep"]["unreached_areas"] == ["A2"]
+    assert prepared["meta"]["verdict"] == "Incomplete review"
+
+
 def test_complete_report_keeps_a_free_text_verdict():
     value = report()
     value["meta"]["verdict"] = "Looks good"

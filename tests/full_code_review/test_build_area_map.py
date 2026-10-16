@@ -153,6 +153,17 @@ def test_risk_level_and_caveats_produce_targeted_questions(tmp_path):
     assert any("C-quoted" in q and "parse.py" in q for q in questions)
 
 
+def test_html_styles_count_toward_review_size_limit(tmp_path):
+    html = "<style>\n" + "p { color: red; }\n" * 100 + "</style>\n"
+    files = [put(tmp_path, "page.html", html),
+             put(tmp_path, "reader.py", "TEMPLATE = 'page.html'\n")]
+    result = area_map_module().build_area_map(
+        {"changed_files": files, "diff": ""}, str(tmp_path), max_lines=50)
+    page = next(area for area in result["areas"] if "page.html" in area["files"])
+    assert page["files"] == ["page.html"]
+    assert page["lines"] == 102
+
+
 def test_area_map_is_deterministic_and_covers_every_file_once():
     files = ["scripts/b.py", "scripts/a.py", "tests/test_a.py", "docs/unrelated.md"]
     context = {"changed_files": files, "diff": ""}
