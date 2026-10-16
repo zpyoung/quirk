@@ -1,6 +1,6 @@
 # quirk:full-code-review deep mode — tech spec
 
-**Status:** Bounded implementation review in progress. Recall acceptance blocked on Sonnet authentication.
+**Status:** Implementation verified and reviewed. Recall acceptance remains blocked on Sonnet authentication.
 **Logic spec:** [logic.md](logic.md). Behavior and acceptance remain owned there.
 
 Reader: implementers and reviewers deciding whether the deep-mode implementation meets the approved behavior.
