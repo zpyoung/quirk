@@ -413,7 +413,7 @@ Allowed `status` values: `"pending"`, `"completed"`, `"read_only_degraded"`, `"u
 }
 ```
 
-The complete verified PR #50 at `3605fd8` answer key contains 19 confirmed `Should fix` defects (`AK-01` through `AK-19`: standard-run `F1`–`F6` from `pr50-r3/review-pr50-report.json`, built-in confirmed `B1`–`B10`, plus `B12` at `post_author_comments.py:53-75`, `B13` at `post_author_comments.py:85-102` / `comment_body.py:706-723`, and `B16` at `review_memory.py:649-652`), plus `examined_non_defects` recording `B11` (`plausible`), `B24` (`refuted`), and the remaining 43 `confirmed_nit` candidates (`B14`–`B15`, `B17`–`B23`, `B25`–`B61`).
+The complete verified PR #50 at `3605fd8` answer key contains 19 confirmed `Should fix` defects (`AK-01` through `AK-19`: standard-run `F1`–`F6` from `pr50-r3/review-pr50-report.json`, built-in confirmed `B1`–`B10`, plus `B12` at `post_author_comments.py:53-75`, `B13` at `post_author_comments.py:85-102` / `comment_body.py:706-723`, and `B16` at `review_memory.py:649-652`), plus `examined_non_defects` recording `B11` (`plausible`), `B24` (`refuted`), and the remaining 46 `confirmed_nit` candidates (`B14`–`B15`, `B17`–`B23`, `B25`–`B61`).
 
 ## DO-NOT-CHANGE fences
 
