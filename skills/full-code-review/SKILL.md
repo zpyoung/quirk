@@ -2,7 +2,7 @@
 name: full-code-review
 description: Use when asked for a full, multi-lens code review of a GitHub pull request, a GitLab merge request, a branch, or local changes ("full review", "full code review", "review this PR", "review this MR"). Runs up to 14 specialist lenses in parallel (correctness, safety, risk, claim verification, scope, data layer, cross-repo impact, conventions, comments, observability, resilience, and three test lenses), merges them into one deduped, severity-ranked report with an HTML triage page, remembers triage decisions across re-reviews, and posts only human-approved findings (author inline comments, or one batched reviewer review). Advisory only; it never approves or merges on its own.
 user-invocable: true
-argument-hint: '[--stats] [--change <number> | --branch <name> | --local] [-R <project>] [--forge github|gitlab|none] [--pack <dir>] [--seat author|reviewer] [--fresh] [--no-escalate] [--add-guidance "<note>"] [--format html|md|both] [--no-open]'
+argument-hint: '[--stats] [--change <number> | --branch <name> | --local] [-R <project>] [--forge github|gitlab|none] [--pack <dir>] [--seat author|reviewer] [--fresh] [--no-escalate] [--deep [minutes]] [--add-guidance "<note>"] [--format html|md|both] [--no-open]'
 allowed-tools: Bash, Read, Grep, Glob, Agent
 ---
 
@@ -66,6 +66,7 @@ A review with no supported forge still runs and delivers locally.
 | `--seat author\|reviewer` | Only when both you and another author committed to the change. |
 | `--fresh` | Discard remembered triage decisions for this target. |
 | `--no-escalate` | Keep every lens on its default model tier. |
+| `--deep [minutes]` | Run the opt-in deep defect hunt (area finders, contract lens, fresh checker; default 60m budget) per `$REFS/deep.md`. |
 | `--format html\|md\|both`, `--no-open` | Render options. |
 | `--add-guidance "<note>"` | Capture a review lesson, then stop. |
 | `--stats` | Show per-lens keep/dismiss rates from the ledger, then stop. |
@@ -192,8 +193,9 @@ check.
 **Reviewer seat**: the mutation probe executes the change's code, so offer it only when
 `change.is_fork` is `false` and `change.author_trusted` is `true`; otherwise don't ask,
 and record why. On GitLab `author_trusted` is always `null`, so the probe is never offered
-there. When it may be offered, ask every run (consent never persists). Then
-borrow a detached worktree at the exact change head:
+there. Ask on each standard run when eligible (consent never persists). In deep mode,
+skip the mutation probe and defer execution consent to `$REFS/deep.md`. Then borrow a
+detached worktree at the exact change head:
 
 ```bash
 python3 "$SCRIPTS/borrow_review_source.py" acquire \
@@ -305,6 +307,11 @@ the prior head SHA for the neutral annotation in `orchestration.md`.
 
 ## Step 5: fan out the lenses
 
+With `--deep [minutes]`, follow `$REFS/deep.md` after Step 4: check execution trust,
+ask once for consent only when allowed, run `risk`, then build the area map. Run standard
+lenses without executing code, plus area finders and the contract lens within its
+80% finder-start cutoff.
+
 `policy.json` lists the lenses to run, each with its checklist path, run condition, and
 model; `$REFS/orchestration.md` holds the finding schema, escalation, model fallback, and
 the verification gate. **Run `risk` first, alone**: give it `policy.critical_paths`, and
@@ -337,6 +344,9 @@ the dispatch: in reviewer seat only when the current manifest says
 error.
 
 ## Step 6: coordinate
+
+In deep mode, send every deep candidate and standard-lens Must/Should finding to a fresh
+checker, merge checked results, then reconcile memory in Step 7.
 
 **Incomplete runs.** A lens that still fails after the model-fallback retry goes in
 `run.dimensions_failed`, and the report is incomplete: it is never presented as clean.

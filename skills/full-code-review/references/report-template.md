@@ -35,6 +35,12 @@ text-reviewable)`), with `untracked` and `forge file list was truncated — rebu
 git` noted separately as provenance for files that *were* reviewed. Repeat any of it
 under Assumptions. A report that omits coverage while files went unreviewed is wrong.
 
+For deep mode, `run.deep` adds the budget, elapsed time, execution consent and
+sandbox status, and each area's ID, files, hotspot questions, status, and any
+read-only degradation to the Summary. Name `unreached_areas` explicitly and set
+`run.incomplete` and `meta.verdict` to `Incomplete review` rather than implying
+those files were checked.
+
 ```markdown
 # Valuing pinned credits at their locked rate
 
@@ -89,6 +95,12 @@ severity ranking. Sources are `severity`, plural `dimensions` (or singular
 `recommendation_md`/`recommendation`. A ` ```diff ` fence in the recommendation is
 kept verbatim.
 
+Deep-mode findings also show `evidence` (`reproduced` or `read from code`) and
+`verification_status` (`confirmed` or `plausible`). For `repro`, print the
+checker's command and observed output as a Reproduction block; for `plausible`,
+show `what_would_confirm` beside a clear warning. A plausible finding remains
+in the report for triage but never posts, even if marked Blocking or Will fix.
+
 ```markdown
 ## 3. Findings
 
@@ -117,6 +129,11 @@ Accumulate at full precision and quantize each emitted final amount once.
 ...
 ```
 
+In deep mode, append a collapsed `<details><summary>Checked and dropped
+(N)</summary>...</details>` at the end of this section from
+`run.deep.checked_and_dropped`. Each entry includes its anchor and the
+checker's specific refutation. Dropped claims are not counted as findings.
+
 When empty, emit `No findings — see per-dimension notes below.` followed by one
 bold-labeled line per `run.clean_notes` entry. Missing clean notes produce a generic
 line and a renderer warning.
@@ -130,7 +147,8 @@ the current finding list is empty. “Appears fixed” is a handoff to
 ## 4. Assumptions
 
 Source: top-level `assumptions`, after the coordinator consolidates finding-local
-and whole-review assumptions.
+and whole-review assumptions. Include execution refusal, sandbox/dependency
+degradation, and incomplete area coverage when deep mode is enabled.
 
 ```markdown
 ## 4. Assumptions
@@ -178,6 +196,13 @@ paste contributes only the decision slot, the reviewer's note, and a support-rep
 target. Author delivery runs `comment_body.py author` (see `posting.md`); reviewer
 delivery builds the same bodies inside the stager. Before posting, run the live
 cross-check and omit already-posted findings per `posting.md`.
+
+Deep-mode delivery is restricted to `verification_status: "confirmed"`.
+The builder, author poster, and reviewer stager must all exclude
+`verification_status: "plausible"` before constructing or posting any
+finding body, regardless of triage disposition or severity floor. Keep
+plausible findings visible in the rendered report and list them as omitted
+in the posting preview; do not recast them as confirmed.
 
 ### Finding comment
 

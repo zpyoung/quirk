@@ -96,6 +96,34 @@ remains `branch`.
 | `excluded_generated` | Paths dropped as generated (`linguist-generated` or `skip_globs`) before review. |
 | `policy_sources` | `policy.sources` from `resolve_policy.py`: `{kind, path, ref}` per layer that applied. |
 | `severity_floor` | `Must fix`, `Should fix` (default), or `Nit`. Findings below it render but never post. |
+| `deep` | Optional deep-mode object; see below. Omit in standard runs. |
+
+`run.deep` records the bounded hunt, not another lens in `dimensions_run`:
+
+```json
+{
+  "enabled": true,
+  "budget_minutes": 60,
+  "elapsed_minutes": 28.4,
+  "cutoff_reached": false,
+  "execution_allowed": true,
+  "execution_consent": true,
+  "execution_disabled_reason": null,
+  "sandbox_kind": "sandbox-exec",
+  "copy_kind": "clonefile",
+  "areas": [{"id": "A1", "files": ["src/parser.py"], "questions": ["Does the caller accept an empty result?"], "status": "completed", "degraded_reason": null}],
+  "unreached_areas": [],
+  "checked_and_dropped": [{"id": "A1.2", "area": "A1", "file": "src/parser.py", "line": "42", "title": "An empty result crashes", "reason": "The caller guards empty results at src/caller.py:18."}]
+}
+```
+
+`areas` preserves the map's IDs, files, hotspot questions, and `pending`,
+`completed`, `read_only_degraded`, or `unreached` status. Show the budget and
+execution/sandbox status in What was run; show a collapsed **Checked and dropped**
+list with the checker's reason, not as live findings. An unreached area must appear
+in `unreached_areas` and ⚠️ `run.coverage`, with `run.incomplete: true` and
+`meta.verdict: "Incomplete review"`. Refusal, untrusted source, and read-only
+degradation are named in coverage and Assumptions; do not silently imply repros ran.
 
 When `source_access` is `diff-only`, the renderer forces every finding's `verified`
 to false and renders the reason in both HTML and Markdown. The reviewer poster repeats
@@ -207,6 +235,14 @@ must never be required to:
 | `recommendation_md` | Actionable correction. Falls back to `recommendation`; the recommendation panel is omitted if both are absent. A ` ```diff ` fence renders side by side (Current / Suggested) — see below. |
 | `anchor_side` | `"new"` (default) or `"old"` for a finding on removed code; memory hashes that side of the canonical diff. |
 | `memory` | Coordinator-generated reconciliation state described below; never specialist-authored. |
+| `verification_status` | Deep-mode checker's `"confirmed"` or `"plausible"`; never label an unchecked claim confirmed. `plausible` stays visible for triage but cannot post. |
+| `repro` | `{"command": string, "output": string}` from the checker's own run, required when deep `evidence` is `"reproduced"`; omit when not reproduced. |
+| `what_would_confirm` | Non-empty condition needed to validate a `"plausible"` claim; show beside its warning badge. |
+
+In deep reports, `evidence` is `"reproduced"` or `"read from code"`. Render
+`verification_status` visibly; show the repro command and observed output in a
+Reproduction block, or a What would confirm this callout for plausible findings.
+Refuted candidates go only into `run.deep.checked_and_dropped`.
 
 `file:line` is the finding identity. Duplicate normalized identities are a hard
 error because paste-back validation cannot safely distinguish them. The renderer
@@ -388,10 +424,11 @@ HTML-escaped.
 The page has a masthead over five tabs, and a tab is omitted when it has no content:
 
 1. Masthead: available eyebrow fields, title, derived severity tiles, verdict.
-2. Findings: triage UI, or clean notes with no triage chrome when empty.
+2. Findings: triage UI, or clean notes with no triage chrome when empty; deep-mode
+   evidence/repros, plausible warnings, and collapsed checked-and-dropped checks.
 3. Summary and risk: the standfirst, then the risk section when an object is present.
 4. What was run: dimensions, skips and reasons, diff size, coverage, guidance, run
-   notes, then the mutation probe when an object is present.
+   notes, deep area map and budget when enabled, then the mutation probe when present.
 5. Review memory: warnings, appears-fixed history, and re-found-after-resolution /
    possible regression context, when present (including zero-findings reports).
 6. Assumptions and notes: assumptions, then process notes, when non-empty.

@@ -3,6 +3,14 @@
 Delivery is always human-gated. The detected seat selects vocabulary and transport;
 it never removes the final approval step.
 
+Deep-mode `run.deep.checked_and_dropped` entries are audit context, not findings
+to deliver. Findings with `verification_status: "plausible"` stay in the report
+for human triage but **never post**, even if severity, a pasted decision, or
+explicit `--ids` selects them. List each excluded ID and reason in the preview.
+The body builder marks these `post: false`, the author posting script skips
+them again, and the reviewer stager omits them before drafts or blocking
+counts. Only `verification_status: "confirmed"` deep findings can be posted.
+
 ## Author seat
 
 After a valid author-mode paste:
@@ -18,6 +26,11 @@ With no paste, preselect every finding at or above the report's `run.severity_fl
 (default Should fix). Findings below the floor never post from either seat;
 `comment_body.py` marks them `post: false` and the reviewer stager omits them. Show the
 proposed batch and obtain final approval.
+
+For a deep report, filter out plausible findings before proposing the batch;
+the poster independently blocks them if passed in `--ids`. The report's
+`repro` and `what_would_confirm` are review evidence, not permission to bypass
+the posting gate.
 
 Posting still creates independent notes, but first cross-checks published discussions
 and suppresses findings whose fingerprint marker appears in a note written by the
@@ -170,6 +183,11 @@ staging preview plus final publish approval.
 A Nit selected for any posting slot is normalized to **Non-blocking** and surfaced in
 the staging warnings. Drop remains Drop. The staged preview is the final truth the user
 approves.
+
+Even a Blocking (`fix`) triage decision cannot stage a plausible finding.
+Show it as omitted with reason `plausible finding (never posted)`; do not
+count it toward a blocking review. Keep the finding in `report.json` and
+its rendered card.
 
 ### Trusted bodies
 
