@@ -6,6 +6,7 @@ harness survived the SDD rewrite, so this module defines its own.
 from __future__ import annotations
 
 import json
+import runpy
 import shutil
 import subprocess
 import sys
@@ -3620,3 +3621,261 @@ def test_gate_contested_excerpts_include_counter_evidence(tmp_path):
     assert "1: counter evidence" in gated["contested_excerpts"]
     assert "addition 249" not in gated["contested_excerpts"]
     assert gated["contested_excerpts"].index("src/main.py") < gated["contested_excerpts"].index("src/z.py")
+
+
+@pytest.fixture(scope="module")
+def ar_api():
+    return runpy.run_path(str(SCRIPT))
+
+
+@pytest.mark.parametrize("quoted,expected", [
+    ('"b/café name.py"', "café name.py"),
+    (r'"b/caf\303\251 name.py"', "café name.py"),
+    (r'"b/café\tname\\\".py"', 'café\tname\\".py'),
+    (r'"b/café\nname.py"', "café\nname.py"),
+])
+def test_diff_hunks_decodes_git_quoted_utf8_paths(ar_api, quoted, expected):
+    patch = f"--- a/old.py\n+++ {quoted}\n@@ -1 +1 @@\n-old\n+new\n"
+    assert ar_api["diff_hunks"](patch)[0][0] == expected
+
+
+@pytest.mark.parametrize("quote_path", ["true", "false"])
+def test_claims_excerpt_accepts_git_quoted_utf8_paths(tmp_path, quote_path):
+    repo, work = _optimization_repo(tmp_path)
+    _git(repo, "config", "core.quotePath", quote_path)
+    name = 'src/café "name".py'
+    _touch(repo / name, "".join(f"addition {i}\n" for i in range(250)))
+    _, resolve_file = _optimization_resolve(repo, work)
+    result = run_ar(
+        "claims", "--findings", _write(work, "promoted.json", [
+            _finding(id=None, stage="promote", evidence=[
+                {"kind": "file-line", "ref": f"{name}:100", "quote": "addition 99"},
+            ]),
+        ]), "--resolve", resolve_file, "--repo-root", str(repo),
+    )
+    assert result.returncode == 0, result.stderr
+    excerpt = json.loads(result.stdout)["diff_excerpts"]
+    assert "+addition 99" in excerpt
+    assert "100: addition 99" in excerpt
+
+
+@pytest.mark.parametrize("keywords", [False, True])
+@pytest.mark.parametrize("captured_diff", [False, True])
+def test_verify_reused_checks_supports_four_argument_api(
+    tmp_path, ar_api, keywords, captured_diff,
+):
+    repo, work = _optimization_repo(tmp_path)
+    extra = ("--diff-file", str(_touch(work / "d.patch", _diff_with_added_lines(3)))) \
+        if captured_diff else ()
+    resolved, _ = _optimization_resolve(repo, work, "WORKTREE", *extra)
+    command, _, reuse_file = _optimization_reuse(repo, work, resolved)
+    verify = ar_api["verify_reused_checks"]
+    if keywords:
+        checks = verify(
+            reuse_path=reuse_file, repo_root=repo, expected_commands=[command],
+            resolved=resolved,
+        )
+    else:
+        checks = verify(reuse_file, repo, [command], resolved)
+    assert checks[0]["reused"] is True
+    assert not (repo / "check-marker").exists()
+    assert verify(reuse_file, repo, [command], None)[0]["reused"] is True
+
+
+def test_verify_reused_checks_explicit_scope_overrides_resolved(tmp_path, ar_api):
+    repo, work = _optimization_repo(tmp_path)
+    patch = _touch(work / "d.patch", _diff_with_added_lines(3))
+    resolved, _ = _optimization_resolve(repo, work, "WORKTREE", "--diff-file", str(patch))
+    command, _, reuse_file = _optimization_reuse(repo, work, resolved)
+    overridden = {**resolved, "target_ref": "not-a-real-range", "diff_file": "missing.patch"}
+    checks = ar_api["verify_reused_checks"](
+        reuse_file, repo, [command], overridden, "WORKTREE", str(patch),
+    )
+    assert checks[0]["reused"] is True
+
+
+@pytest.mark.parametrize("keywords", [False, True])
+def test_run_prepass_supports_specified_python_api(tmp_path, ar_api, keywords):
+    repo, work = _optimization_repo(tmp_path)
+    _touch(repo / "Cargo.lock", "excluded unless requested\n")
+    resolved, _ = _optimization_resolve(repo, work, "WORKTREE", "--include-all")
+    command, _, reuse_file = _optimization_reuse(repo, work, resolved)
+    prepass = ar_api["run_prepass"]
+    if keywords:
+        status, payload = prepass(
+            profile="code-diff", target="WORKTREE", repo_root=repo, check_cmds=[command],
+            diff_file=None, untracked_only=resolved["untracked_paths"], include_all=True,
+            reuse_check_path=reuse_file, resolved=resolved,
+        )
+    else:
+        status, payload = prepass(
+            "code-diff", "WORKTREE", repo, [command], None,
+            resolved["untracked_paths"], True, reuse_file, resolved,
+        )
+    assert status == 0
+    assert payload["observed_artifact_hash"] == resolved["artifact_hash"]
+    assert payload["checks"][0]["reused"] is True
+    assert not (repo / "check-marker").exists()
+
+
+@pytest.mark.parametrize("include_all,resolved_include_all", [
+    (True, None), (True, False), (False, True),
+])
+def test_run_prepass_include_all_defaults_and_resolved_override(
+    tmp_path, ar_api, include_all, resolved_include_all,
+):
+    repo, work = _optimization_repo(tmp_path)
+    _touch(repo / "Cargo.lock", "excluded unless requested\n")
+    effective = include_all if resolved_include_all is None else resolved_include_all
+    expected, _ = _optimization_resolve(
+        repo, work, "WORKTREE", *(("--include-all",) if effective else ()),
+    )
+    resolved = None if resolved_include_all is None else {"include_all": resolved_include_all}
+    status, payload = ar_api["run_prepass"](
+        "code-diff", "WORKTREE", repo, ["true"], include_all=include_all,
+        resolved=resolved,
+    )
+    assert status == 0
+    assert payload["observed_artifact_hash"] == expected["artifact_hash"]
+
+
+@pytest.mark.parametrize("target", ["WORKTREE", "HEAD~1..HEAD"])
+def test_claims_and_contested_excerpts_reject_out_of_scope_citations(tmp_path, target):
+    repo, work = _optimization_repo(tmp_path)
+    _touch(repo / "src/large.py", "".join(f"addition {i}\n" for i in range(250)))
+    outside = _touch(tmp_path / "outside.py", "outside-secret\n")
+    sibling = _touch(tmp_path / "repo-sibling/private.py", "sibling-secret\n")
+    _touch(repo / "vendor/private.py", "excluded-secret\n")
+    (repo / "escape.py").symlink_to(outside)
+    (repo / "escape-dir").symlink_to(sibling.parent, target_is_directory=True)
+    if target != "WORKTREE":
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-qm", "changes")
+    resolved, resolve_file = _optimization_resolve(repo, work, target)
+    references = [
+        "/etc/passwd:1", f"{outside}:1", "../outside.py:1", "src/../../outside.py:1",
+        "escape.py:1", "escape-dir/private.py:1", "vendor/private.py:1",
+    ]
+    promoted = _finding(
+        id=None, severity="LOW", stage="promote",
+        evidence=[{"kind": "file-line", "ref": "src/main.py:1", "quote": "after"}],
+        counter_evidence=[{"kind": "quote", "ref": ref, "quote": "private"}
+                          for ref in references],
+    )
+    claims = run_ar(
+        "claims", "--findings", _write(work, "promoted.json", [promoted]),
+        "--resolve", resolve_file, "--repo-root", str(repo),
+    )
+    assert claims.returncode == 0, claims.stderr
+    prepass = _optimization_prepass(repo, resolve_file, "true", target=target)
+    assert prepass.returncode == 0, prepass.stderr
+    contested = {
+        **promoted, "id": "F1", "stage": "refute", "disposition": "contested",
+    }
+    findings = _merged([contested], chain={
+        **resolved["chain"], "step": "merge", "stage": "refute",
+    })
+    gated = run_ar(
+        "gate", "--findings", _write(work, "merged.json", findings),
+        "--resolve", resolve_file,
+        "--prepass", _write(work, "p.json", json.loads(prepass.stdout)),
+        "--model", _write(work, "m.json", _model_doc(chain={
+            **resolved["chain"], "step": "select-model",
+        })), "--repo-root", str(repo), "--depth", "deep",
+    )
+    assert gated.returncode == 1, gated.stderr
+    excerpts = [
+        json.loads(claims.stdout)["diff_excerpts"],
+        json.loads(gated.stdout)["contested_excerpts"],
+    ]
+    for excerpt in excerpts:
+        assert "1: after" in excerpt
+        assert "outside-secret" not in excerpt
+        assert "sibling-secret" not in excerpt
+        assert "excluded-secret" not in excerpt
+        assert "# /etc/passwd\n" not in excerpt
+        assert "# escape.py\n" not in excerpt
+        assert "# escape-dir/private.py\n" not in excerpt
+
+
+@pytest.mark.parametrize("include_all", [False, True])
+def test_path_excerpts_are_restricted_to_the_reviewed_file(tmp_path, ar_api, include_all):
+    target = _touch(tmp_path / "vendor/review.py", "reviewed\n" * 250)
+    _touch(tmp_path / "other.py", "unreviewed-secret\n")
+    resolved = {
+        "target_kind": "path", "target_ref": "vendor/review.py",
+        "size_metric": 250, "include_all": include_all,
+    }
+    excerpt = ar_api["extract_diff_excerpts"]([_finding(evidence=[
+        {"kind": "file-line", "ref": "vendor/review.py:1", "quote": "reviewed"},
+        {"kind": "file-line", "ref": "other.py:1", "quote": "unreviewed-secret"},
+    ])], resolved, tmp_path)
+    assert target.is_file()
+    assert "1: reviewed" in excerpt
+    assert "unreviewed-secret" not in excerpt
+
+
+@pytest.mark.parametrize("include_all", [False, True])
+def test_diff_excerpts_respect_include_all_for_cited_context(tmp_path, ar_api, include_all):
+    patch = _touch(tmp_path / "d.patch", _diff_with_added_lines(250))
+    _touch(tmp_path / "vendor/private.py", "excluded-secret\n")
+    excerpt = ar_api["extract_diff_excerpts"]([_finding(evidence=[
+        {"kind": "file-line", "ref": "vendor/private.py:1", "quote": "excluded-secret"},
+    ])], {
+        "target_kind": "git-range", "target_ref": "main..HEAD", "diff_file": str(patch),
+        "size_metric": 250, "include_all": include_all,
+    }, tmp_path)
+    assert ("1: excluded-secret" in excerpt) is include_all
+
+
+@pytest.mark.parametrize("counter_evidence", [
+    "bad", ["bad"], [{}], [{"kind": "unknown"}], [{"kind": []}],
+    [{"kind": "quote", "ref": "src/main.py:1"}],
+    [{"kind": "quote", "ref": ["src/main.py:1"], "quote": "after"}],
+    [{"kind": "quote", "ref": "src/main.py:1", "quote": ""}],
+])
+@pytest.mark.parametrize("stage", ["refute", "tiebreak"])
+def test_merge_rejects_malformed_counter_evidence(tmp_path, counter_evidence, stage):
+    findings = [_finding(id="F1", stage="promote" if stage == "refute" else "refute",
+                         disposition="standing" if stage == "refute" else "contested")]
+    source = _claims_output(findings) if stage == "refute" else _merged(findings)
+    result = run_ar(
+        "merge", "--findings", _write(tmp_path, "f.json", source),
+        "--judgments", _write(tmp_path, "j.json", [{
+            "id": "F1", "disposition": "contested" if stage == "refute" else "standing",
+            "reason": "checked", "counter_evidence": counter_evidence,
+        }]), "--stage", stage,
+    )
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "counter_evidence" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+@pytest.mark.parametrize("counter_evidence", [
+    "bad", ["bad"], [{"kind": "quote", "ref": "src/main.py:1"}],
+    [{"kind": "quote", "ref": 1, "quote": "after"}],
+])
+def test_claims_rejects_findings_with_malformed_counter_evidence(tmp_path, counter_evidence):
+    result = run_ar(
+        "claims", "--findings", _write(tmp_path, "f.json", [
+            _finding(id=None, stage="promote", counter_evidence=counter_evidence),
+        ]), "--resolve", _write(tmp_path, "r.json", _resolved()),
+    )
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "counter_evidence" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_extract_diff_excerpts_ignores_malformed_evidence_items(tmp_path, ar_api):
+    patch = _touch(tmp_path / "d.patch", _diff_with_added_lines(250))
+    _touch(tmp_path / "x.py", "visible\n")
+    excerpt = ar_api["extract_diff_excerpts"]([_finding(
+        evidence=[{"kind": "file-line", "ref": "x.py:1", "quote": "visible"}],
+        counter_evidence=["bad", {"kind": "quote", "ref": []}, {"kind": "quote"}],
+    )], {
+        "target_kind": "git-range", "target_ref": "main..HEAD",
+        "diff_file": str(patch), "size_metric": 250,
+    }, tmp_path)
+    assert "1: visible" in excerpt

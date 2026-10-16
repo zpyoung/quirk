@@ -520,9 +520,14 @@ def current_tree_hash(repo_root: Path) -> str | None:
 
 def verify_reused_checks(
     reuse_path: str, repo_root: Path, expected_commands: list[str],
-    resolved: dict[str, Any], *, target: str, diff_file: str | None,
+    resolved: dict[str, Any] | None,
+    target: str = "", diff_file: str | None = None,
 ) -> list[dict[str, Any]]:
     """Accept check results only when their tree, worktree and command identities match."""
+    resolved = resolved or {}
+    target = target or resolved.get("target_ref", "")
+    if diff_file is None:
+        diff_file = resolved.get("diff_file")
     record = load_json(reuse_path, "reuse-check")
     if not isinstance(record, dict):
         raise UsageError("reuse-check input must be a JSON object")
@@ -928,13 +933,15 @@ def check_sections(text: str, profile: str) -> dict[str, Any]:
 def run_prepass(
     profile: str, target: str, repo_root: Path, check_cmds: list[str],
     diff_file: str | None = None, untracked_only: list[str] | None = None,
-    resolved: dict[str, Any] | None = None, reuse_check_path: str | None = None,
+    include_all: bool = False, reuse_check_path: str | None = None,
+    resolved: dict[str, Any] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     if profile not in PROFILES:
         raise UsageError(f"unknown profile: {profile} (expected one of {', '.join(PROFILES)})")
     if reuse_check_path is not None and profile != "code-diff":
         raise UsageError("--reuse-check is only supported for profile code-diff")
-    include_all = bool((resolved or {}).get("include_all", False))
+    include_all = bool(resolved.get("include_all", include_all)) \
+        if isinstance(resolved, dict) else include_all
     tree_hash = current_tree_hash(repo_root)
 
     # Hashed before the checks run, never after: a test suite writes `.pytest_cache/`
@@ -1261,6 +1268,29 @@ def load_json(path_arg: str, label: str) -> Any:
         raise UsageError(f"cannot read {label} input {path}: {exc}") from exc
 
 
+def validate_evidence_item(item: Any, label: str) -> None:
+    """Require a typed evidence object with usable fields for its declared kind."""
+    if not isinstance(item, dict):
+        raise UsageError(f"{label} has a non-object evidence item")
+    kind = item.get("kind")
+    if not isinstance(kind, str) or kind not in EVIDENCE_REQUIRED_FIELDS:
+        raise UsageError(f"{label} has an evidence item with invalid kind: {kind}")
+    for field in EVIDENCE_REQUIRED_FIELDS[kind]:
+        if field not in item:
+            raise UsageError(f"{label} evidence of kind {kind} is missing field: {field}")
+        value = item[field]
+        if not isinstance(value, str):
+            raise UsageError(f"{label} evidence of kind {kind} has a non-string {field}")
+        if not value.strip() and not (kind == "absence" and field == "output"):
+            hint = (
+                ". A search that proves nothing was found is `kind: \"absence\"` "
+                "(command, ref, output) — `command` means a run whose output shows "
+                "the failure, so it cannot be empty"
+                if kind == "command" and field == "output" else ""
+            )
+            raise UsageError(f"{label} evidence of kind {kind} has an empty {field}{hint}")
+
+
 def validate_finding(finding: Any, index: int, id_prefix: str = "F") -> None:
     if not isinstance(finding, dict):
         raise UsageError(f"finding {index} is not an object")
@@ -1330,39 +1360,12 @@ def validate_finding(finding: Any, index: int, id_prefix: str = "F") -> None:
     if not isinstance(evidence, list) or not evidence:
         raise UsageError(f"finding {index} must carry at least one evidence item")
     for item in evidence:
-        kind = item.get("kind") if isinstance(item, dict) else None
-        if kind not in EVIDENCE_REQUIRED_FIELDS:
-            raise UsageError(f"finding {index} has an evidence item with invalid kind: {kind}")
-        for field in EVIDENCE_REQUIRED_FIELDS[kind]:
-            if field not in item:
-                raise UsageError(
-                    f"finding {index} evidence of kind {kind} is missing field: {field}"
-                )
-            # Presence is not content. An empty `command`/`output` pair would
-            # otherwise satisfy the schema and buy reproduction credit, holding a
-            # finding at HIGH confidence on evidence of nothing.
-            # An absence claim is the one case where empty output *is* the content:
-            # it asserts the cited search came back with nothing. The field must be
-            # present — omitting it asserts nothing at all — but it may be empty.
-            value = item[field]
-            if not isinstance(value, str):
-                raise UsageError(
-                    f"finding {index} evidence of kind {kind} has a non-string {field}"
-                )
-            if not value.strip() and not (kind == "absence" and field == "output"):
-                # Real reviewers reach for `command` to prove an absence and leave the
-                # output empty, which used to fail with no hint that a kind exists for
-                # exactly that. The reply is refused whole, so the message has to say
-                # what to change or a whole promote round is discarded over wording.
-                hint = (
-                    ". A search that proves nothing was found is `kind: \"absence\"` "
-                    "(command, ref, output) — `command` means a run whose output shows "
-                    "the failure, so it cannot be empty"
-                    if kind == "command" and field == "output" else ""
-                )
-                raise UsageError(
-                    f"finding {index} evidence of kind {kind} has an empty {field}{hint}"
-                )
+        validate_evidence_item(item, f"finding {index}")
+    if "counter_evidence" in finding:
+        if not isinstance(finding["counter_evidence"], list):
+            raise UsageError(f"finding {index} has non-array counter_evidence")
+        for item in finding["counter_evidence"]:
+            validate_evidence_item(item, f"finding {index} counter_evidence")
 
 
 def evidence_resolves(item: dict[str, Any], repo_root: Path) -> bool:
@@ -1971,7 +1974,11 @@ def diff_hunks(diff: str) -> list[tuple[str, int, int, str, str]]:
         elif line.startswith("+++ "):
             raw_path = line[4:].rstrip("\n").split("\t", 1)[0]
             if raw_path.startswith('"'):
-                raw_path = ast.literal_eval("b" + raw_path).decode("utf-8", errors="replace")
+                ascii_path = "".join(
+                    chr(byte) if byte < 128 else f"\\{byte:03o}"
+                    for byte in raw_path.encode("utf-8")
+                )
+                raw_path = ast.literal_eval("b" + ascii_path).decode("utf-8", errors="replace")
             path = raw_path[2:] if raw_path.startswith("b/") else raw_path
             headers = old_header + line
         index += 1
@@ -1988,9 +1995,11 @@ def extract_diff_excerpts(
     references: dict[str, list[tuple[int, int]]] = {}
     for finding in findings:
         for item in [*finding.get("evidence", []), *finding.get("counter_evidence", [])]:
-            if item.get("kind") not in ("file-line", "quote", "absence"):
+            if not isinstance(item, dict) \
+                    or item.get("kind") not in ("file-line", "quote", "absence") \
+                    or not isinstance(item.get("ref"), str):
                 continue
-            match = re.fullmatch(r"(.+):([1-9]\d*)(?:-([1-9]\d*))?", item.get("ref", ""))
+            match = re.fullmatch(r"(.+):([1-9]\d*)(?:-([1-9]\d*))?", item["ref"])
             if match:
                 path, first, last = match.groups()
                 start, end = int(first), int(last or first)
@@ -2011,13 +2020,34 @@ def extract_diff_excerpts(
             file_headers[path] = headers
 
     parts: list[str] = []
+    root = repo_root.resolve()
+    target_kind = resolved.get("target_kind")
+    include_all = bool(resolved.get("include_all", False))
+    target_path = None
+    if target_kind == "path":
+        target = Path(resolved.get("target_ref", ""))
+        target_path = (target if target.is_absolute() else repo_root / target).resolve()
     excluded = resolved.get("excluded_paths", [])
     if excluded:
         parts.append("# Excluded by default diff hygiene: " + ", ".join(excluded) + "\n")
     for path in file_order:
+        relative_path = PurePosixPath(path)
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            continue
+        try:
+            source = (repo_root / path).resolve()
+        except (OSError, RuntimeError):
+            continue
+        if source == root or not source.is_relative_to(root):
+            continue
+        if target_kind == "path":
+            if source != target_path:
+                continue
+        elif is_excluded_path(path, include_all) \
+                or is_excluded_path(source.relative_to(root).as_posix(), include_all):
+            continue
         if path in selected:
             parts.append(file_headers[path] + "".join(selected[path]))
-        source = repo_root / path
         if not source.is_file():
             continue
         lines = source.read_text(errors="replace").splitlines()
@@ -2192,6 +2222,8 @@ def merge_judgments(
                 raise UsageError(
                     f"judgment for {judgment_id} has non-array counter_evidence"
                 )
+            for item in judgment["counter_evidence"]:
+                validate_evidence_item(item, f"judgment for {judgment_id} counter_evidence")
             finding["counter_evidence"] = judgment["counter_evidence"]
 
     # Tiebreak rules on the contested set and nothing else. Without this it could
