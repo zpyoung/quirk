@@ -1,6 +1,6 @@
 # Tech spec: stepping through a value in `q-flow`
 
-**Status**: Draft · Logic spec: [logic.md](logic.md) · Builds on [the q-flow tech spec](/docs/quirk/specs/2026-10-16-q-flow/tech.md) and [the q-flow shapes tech spec](/docs/quirk/specs/2026-10-17-q-flow-shapes/tech.md)
+**Status**: Reviewed (one checkpoint and three final review rounds; findings fixed or logged as BUG-17) · Logic spec: [logic.md](logic.md) · Builds on [the q-flow tech spec](/docs/quirk/specs/2026-10-16-q-flow/tech.md) and [the q-flow shapes tech spec](/docs/quirk/specs/2026-10-17-q-flow-shapes/tech.md)
 
 All paths are relative to the repository root. `S` = `skills/writing-html-artifacts`, `K` = `skills/writing-html-artifacts/vendor/kit/1.0.0`, `H` = `skills/writing-html-artifacts/scripts/htmlkit`. Line numbers are from commit `39ea301`.
 
