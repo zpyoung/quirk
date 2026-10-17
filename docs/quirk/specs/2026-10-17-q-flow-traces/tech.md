@@ -95,7 +95,7 @@ Failures (all at the `<q-flow>` start line, through `report_fail`; the graph ret
 | `via` names an edge that isn't a candidate | `<q-flow> trace "<t>" step N: edge "<via>" doesn't run from "<prev node>" to "<node>"` |
 | no candidate edge | `<q-flow> trace "<t>" step N: no edge from "<prev node>" to "<node>"` |
 | 2+ candidates and no `via` | `<q-flow> trace "<t>" step N: <count> edges run from "<prev node>" to "<node>"; name one with via` |
-| value holds NaN or ±Infinity (Python's `json.loads` accepts them) | `<q-flow> trace "<t>" step N has a value that isn't JSON` |
+| value holds NaN or ±Infinity (Python's `json.loads` accepts them; in JS an overflowing literal such as `1e9999` parses to Infinity), or a string or key with an unpaired UTF-16 surrogate such as `"\ud800"` (it can't be written as UTF-8) | `<q-flow> trace "<t>" step N has a value that isn't JSON` |
 | value over 400 pretty-printed lines | `<q-flow> trace "<t>" step N value is <L> lines; at most 400` |
 
 - Edge checks for a step run only when both its node and the previous step's node are known.
