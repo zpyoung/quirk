@@ -1121,6 +1121,38 @@ def test_q_flow_trace_list_names_loop_and_edge_id_when_unlabelled(tmp_path, env,
     assert '<li data-q-flow-list-step="3">A, around the loop<pre><code>null</code></pre></li>' in html
 
 
+def test_q_flow_trace_list_omits_the_note_part_for_an_empty_note(tmp_path, env, project):
+    graph = {
+        "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+        "edges": [{"from": "a", "to": "b"}],
+        "traces": [
+            {
+                "id": "t",
+                "label": "T",
+                "steps": [{"node": "a", "value": 1, "note": ""}, {"node": "b", "value": 2, "note": "kept"}],
+            }
+        ],
+    }
+    page = trace_flow_markup(graph, "emptynote")
+    rc, result, out = report_build(tmp_path, env, project, page, name="flowtraceemptynote")
+    assert rc == 0 and result["checks"]["passed"] is True, result["checks"]
+    html = out.read_text(encoding="utf-8")
+    assert '<li data-q-flow-list-step="1">A<pre><code>1</code></pre></li>' in html
+    assert '<li data-q-flow-list-step="2">B: kept<pre><code>2</code></pre></li>' in html
+
+
+def test_q_flow_trace_with_a_question_mark_id_stays_in_the_list(tmp_path, env, project):
+    graph = {
+        "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+        "edges": [{"from": "a", "to": "b"}],
+        "traces": [{"id": "?", "label": "Odd id", "steps": [{"node": "a", "value": 1}, {"node": "b", "value": 2}]}],
+    }
+    page = trace_flow_markup(graph, "qmarkid")
+    rc, result, out = report_build(tmp_path, env, project, page, name="flowtracequestion")
+    assert rc == 0 and result["checks"]["passed"] is True, result["checks"]
+    assert '<div data-q-flow-list-trace="?">' in out.read_text(encoding="utf-8")
+
+
 def test_q_flow_without_traces_has_no_trace_block(tmp_path, env, project):
     rc, result, out = report_build(tmp_path, env, project, FLOW, name="flownotraces")
     assert rc == 0, result
