@@ -1360,6 +1360,31 @@ def test_q_schema_warnings_are_reported_in_build_checks(tmp_path, env, project):
     assert any('FK field "line_item.charge_id" has no relationship' in w for w in kit_warns), kit_warns
 
 
+def test_q_schema_with_deeply_nested_groups_builds_with_its_fallback(tmp_path, env, project):
+    depth = 1100
+    payload = {
+        "groups": [{"id": f"g{i}", "label": f"G{i}", **({"parent": f"g{i - 1}"} if i else {})} for i in range(depth)],
+        "entities": [{"id": "e", "label": "E", "group": f"g{depth - 1}", "fields": _er("id")}],
+    }
+    rc, result, out = report_build(tmp_path, env, project, _schema_page(payload), name="deepgroups")
+    assert rc == 0, result["checks"]
+    html = out.read_text(encoding="utf-8")
+    assert html.count("data-q-flow-list-group=") == depth
+    assert 'data-q-schema-list-entity="e"' in html
+
+
+def test_q_schema_note_that_mentions_the_list_marker_still_gets_the_fallback(tmp_path, env, project):
+    payload = {
+        "entities": [
+            {"id": "a", "label": "A", "fields": [{"name": "x", "type": "int", "note": "search for data-q-flow-list in the code"}]}
+        ],
+    }
+    rc, result, out = report_build(tmp_path, env, project, _schema_page(payload), name="markernote")
+    assert rc == 0, result["checks"]
+    html = out.read_text(encoding="utf-8")
+    assert "<details class=\"q-flow-list\"" in html and 'data-q-schema-list-entity="a"' in html
+
+
 def test_a_bad_q_schema_fails_the_build_and_gets_no_fallback(tmp_path, env, project):
     bad = json.loads(json.dumps(BILLING))
     bad["relationships"][0]["to"] = "customers.id"

@@ -1745,7 +1745,7 @@ def _validate_schema_node(node: _Node, report_fail: Report, report_warn: Report)
         methods: list[dict[str, Any]] = []
         member_count = 0
         duplicate_member = False
-        if raw_fields is None and is_class:
+        if "fields" not in e and is_class:
             raw_fields = []
         if not isinstance(raw_fields, list) or (not is_class and not raw_fields):
             fail(f'{noun} "{eid}" needs a non-empty fields list' if not is_class else f'"{eid}" fields must be a list')
@@ -1765,9 +1765,7 @@ def _validate_schema_node(node: _Node, report_fail: Report, report_warn: Report)
                 seen_names.add(cleaned["name"])
                 fields.append(cleaned)
         if is_class:
-            raw_methods = e.get("methods")
-            if raw_methods is None:
-                raw_methods = []
+            raw_methods = e.get("methods", [])
             if not isinstance(raw_methods, list):
                 fail(f'"{eid}" methods must be a list')
             else:
@@ -1812,7 +1810,10 @@ def _validate_schema_node(node: _Node, report_fail: Report, report_warn: Report)
         if not isinstance(label, str):
             fail("relationship label must be a string")
             return None
-        return label.strip() or None
+        if not label.strip():
+            fail("relationship label must not be blank")
+            return None
+        return label.strip()
 
     def er_end(r: dict[str, Any], side: str) -> Optional[tuple[str, str]]:
         raw = r.get(side)
@@ -2232,16 +2233,34 @@ def _render_schema_fallback_html(parsed: dict[str, Any]) -> str:
         label = html_lib.escape(entity["label"])
         return f'<li data-q-schema-list-entity="{eid}"><strong>{label}</strong>{meta_str}{detail_str}{rows}</li>'
 
-    def render_group(g: dict[str, Any]) -> str:
-        gid = html_lib.escape(g["id"], quote=True)
-        glabel = html_lib.escape(g["label"])
-        children = [render_group(cg) for cg in groups if cg["parent"] == g["id"]]
-        children.extend(render_entity(e) for e in entities if e["group"] == g["id"])
-        sub = f"<ul>{''.join(children)}</ul>" if children else ""
-        return f'<li data-q-flow-list-group="{gid}"><strong>{glabel}</strong>{sub}</li>'
+    subgroups: dict[Optional[str], list[dict[str, Any]]] = {}
+    for g in groups:
+        subgroups.setdefault(g["parent"], []).append(g)
+    members: dict[Optional[str], list[dict[str, Any]]] = {}
+    for e in entities:
+        members.setdefault(e["group"], []).append(e)
 
-    top_items = [render_group(g) for g in groups if g["parent"] is None]
-    top_items.extend(render_entity(e) for e in entities if e["group"] is None)
+    def render_top_level_groups() -> list[str]:
+        """The group ``<li>`` items, walked with an explicit stack so nesting depth is not bounded by recursion."""
+        top: list[str] = []
+        stack: list[tuple[Optional[dict[str, Any]], Any, list[str]]] = [(None, iter(subgroups.get(None, [])), top)]
+        while True:
+            group, pending, items = stack[-1]
+            child = next(pending, None)
+            if child is not None:
+                stack.append((child, iter(subgroups.get(child["id"], [])), []))
+                continue
+            if group is None:
+                return top
+            stack.pop()
+            items.extend(render_entity(e) for e in members.get(group["id"], []))
+            gid = html_lib.escape(group["id"], quote=True)
+            glabel = html_lib.escape(group["label"])
+            sub = f"<ul>{''.join(items)}</ul>" if items else ""
+            stack[-1][2].append(f'<li data-q-flow-list-group="{gid}"><strong>{glabel}</strong>{sub}</li>')
+
+    top_items = render_top_level_groups()
+    top_items.extend(render_entity(e) for e in members.get(None, []))
     body = f"<ul>{''.join(top_items)}</ul>"
     if parsed["relationships"]:
         sentences = "".join(
@@ -2271,8 +2290,6 @@ def inject_schema_fallbacks(html: str) -> str:
 
     def replace_block(match: "re.Match[str]") -> str:
         block = match.group(1)
-        if "data-q-flow-list" in block:
-            return block
         builder = _TreeBuilder()
         try:
             builder.feed(block)
@@ -2280,6 +2297,8 @@ def inject_schema_fallbacks(html: str) -> str:
         except Exception:  # noqa: BLE001
             return block
         builder.finish()
+        if any("data-q-flow-list" in n.attrs for n in builder.nodes):
+            return block
         qschema = next((n for n in builder.nodes if n.tag == "q-schema"), None)
         if qschema is None or qschema.self_closed or "summary" not in qschema.attrs:
             return block

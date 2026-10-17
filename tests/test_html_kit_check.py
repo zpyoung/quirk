@@ -2244,6 +2244,134 @@ def test_schema_fallback_skips_blocks_that_already_hold_a_list_or_have_no_summar
     assert kitcheck.inject_schema_fallbacks("<p>none</p>") == "<p>none</p>"
 
 
+def test_schema_fallback_renders_groups_nested_past_the_recursion_limit() -> None:
+    depth = 1100
+    groups = [{"id": f"g{i}", "label": f"G{i}", **({"parent": f"g{i - 1}"} if i else {})} for i in range(depth)]
+    payload = {
+        "groups": groups,
+        "entities": [{"id": "e", "label": "E", "group": f"g{depth - 1}", "fields": _er_fields("id")}],
+    }
+    markup = schema_markup(payload)
+    assert schema_failures(payload) == []
+    out = kitcheck.inject_schema_fallbacks(markup)
+    assert out.count("data-q-flow-list-group=") == depth
+    assert 'data-q-schema-list-entity="e"' in out
+    assert out.index('data-q-flow-list-group="g0"') < out.index(f'data-q-flow-list-group="g{depth - 1}"')
+
+
+def test_schema_fallback_keeps_group_children_in_order_and_entities_after_subgroups() -> None:
+    payload = {
+        "groups": [
+            {"id": "a", "label": "A"},
+            {"id": "b", "label": "B", "parent": "a"},
+            {"id": "c", "label": "C", "parent": "a"},
+            {"id": "d", "label": "D"},
+        ],
+        "entities": [
+            {"id": "e1", "label": "E1", "group": "a", "fields": _er_fields("id")},
+            {"id": "e2", "label": "E2", "group": "b", "fields": _er_fields("id")},
+            {"id": "e3", "label": "E3", "fields": _er_fields("id")},
+        ],
+    }
+    out = kitcheck.inject_schema_fallbacks(schema_markup(payload))
+    body = out.split("data-q-flow-list-body>", 1)[1].split("</div></details>", 1)[0]
+    assert body == (
+        "<ul>"
+        '<li data-q-flow-list-group="a"><strong>A</strong><ul>'
+        '<li data-q-flow-list-group="b"><strong>B</strong><ul>'
+        '<li data-q-schema-list-entity="e2"><strong>E2</strong><ul><li>id: text</li></ul></li></ul></li>'
+        '<li data-q-flow-list-group="c"><strong>C</strong></li>'
+        '<li data-q-schema-list-entity="e1"><strong>E1</strong><ul><li>id: text</li></ul></li>'
+        "</ul></li>"
+        '<li data-q-flow-list-group="d"><strong>D</strong></li>'
+        '<li data-q-schema-list-entity="e3"><strong>E3</strong><ul><li>id: text</li></ul></li>'
+        "</ul>"
+    )
+
+
+def test_schema_fallback_skip_guard_ignores_the_marker_text_inside_the_data() -> None:
+    def noted(m):
+        m["entities"][0]["fields"][0]["note"] = "search for data-q-flow-list in the code"
+
+    markup = schema_markup(er_with(noted))
+    out = kitcheck.inject_schema_fallbacks(markup)
+    assert out != markup
+    assert "data-q-schema-list-rels" in out
+    assert kitcheck.inject_schema_fallbacks(out) == out
+
+    real = markup.replace("</q-schema>", "<details open data-q-flow-list><summary>x</summary></details></q-schema>")
+    assert kitcheck.inject_schema_fallbacks(real) == real
+
+
+def test_schema_relationship_label_that_is_present_must_not_be_blank() -> None:
+    expected = ["<q-schema> relationship label must not be blank"]
+    for blank in ("", "   ", "\n\t"):
+
+        def er_label(m, blank=blank):
+            m["relationships"][0]["label"] = blank
+
+        def class_label(m, blank=blank):
+            m["relationships"][0]["label"] = blank
+
+        assert schema_failures(er_with(er_label)) == expected, repr(blank)
+        assert schema_failures(class_with(class_label), CLASS_ATTRS) == expected, repr(blank)
+
+    def absent(m):
+        m["relationships"][0].pop("label", None)
+
+    def padded(m):
+        m["relationships"][0]["label"] = " owns "
+
+    assert schema_failures(er_with(absent)) == []
+    assert schema_failures(er_with(padded)) == []
+
+
+def test_schema_present_optional_strings_must_be_non_blank() -> None:
+    def field_note(m):
+        m["entities"][0]["fields"][0]["note"] = "  "
+
+    def attribute_note(m):
+        m["entities"][2]["fields"][0]["note"] = " "
+
+    def method_note(m):
+        m["entities"][0]["methods"][0]["note"] = ""
+
+    assert schema_failures(er_with(field_note)) == ['<q-schema> note of "customer.id" must be non-blank text']
+    assert schema_failures(class_with(attribute_note), CLASS_ATTRS) == [
+        '<q-schema> note of "lexer.src" must be non-blank text'
+    ]
+    assert schema_failures(class_with(method_note), CLASS_ATTRS) == [
+        '<q-schema> note of "parser.parse(src: str) -> Ast" must be non-blank text'
+    ]
+
+
+def test_schema_class_fields_and_methods_default_only_when_absent() -> None:
+    def no_keys(m):
+        m["entities"].append({"id": "bare", "label": "Bare"})
+
+    assert schema_failures(class_with(no_keys), CLASS_ATTRS) == []
+
+    def null_fields(m):
+        m["entities"][0]["fields"] = None
+
+    def null_methods(m):
+        m["entities"][0]["methods"] = None
+
+    assert schema_failures(class_with(null_fields), CLASS_ATTRS) == ['<q-schema> "parser" fields must be a list']
+    assert schema_failures(class_with(null_methods), CLASS_ATTRS) == ['<q-schema> "parser" methods must be a list']
+
+    for bad in ("x", 3, {}):
+
+        def odd_fields(m, bad=bad):
+            m["entities"][0]["fields"] = bad
+
+        def odd_methods(m, bad=bad):
+            m["entities"][0]["methods"] = bad
+
+        assert schema_failures(class_with(odd_fields), CLASS_ATTRS) == ['<q-schema> "parser" fields must be a list']
+        assert schema_failures(class_with(odd_methods), CLASS_ATTRS) == ['<q-schema> "parser" methods must be a list']
+
+
 def test_needs_flow_matches_both_tags() -> None:
     assert kitcheck.needs_flow('<q-schema summary="s"></q-schema>')
     assert kitcheck.needs_flow("<q-flow>")
