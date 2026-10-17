@@ -1121,6 +1121,17 @@ def test_q_flow_trace_list_names_loop_and_edge_id_when_unlabelled(tmp_path, env,
     assert '<li data-q-flow-list-step="3">A, around the loop<pre><code>null</code></pre></li>' in html
 
 
+def test_q_flow_trace_with_a_lone_surrogate_value_fails_the_build_instead_of_crashing(tmp_path, env, project):
+    graph = json.loads(json.dumps(RENEWAL_GRAPH))
+    graph["traces"][0]["steps"][1]["value"] = {"k": "\ud800"}
+    page = trace_flow_markup(graph, "surrogate")
+    rc, result, out = report_build(tmp_path, env, project, page, name="flowsurrogate")
+    assert rc == 1 and result["checks"]["passed"] is False, result
+    kit = [f["detail"] for f in result["checks"]["failures"] if f["check"] == "kit"]
+    assert len(kit) == 1 and kit[0].endswith('<q-flow> trace "succeeds" step 2 has a value that isn\'t JSON'), kit
+    out.read_bytes().decode("utf-8")
+
+
 def test_q_flow_trace_list_omits_the_note_part_for_an_empty_note(tmp_path, env, project):
     graph = {
         "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
