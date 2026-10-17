@@ -1596,7 +1596,16 @@ def _since_error(rc, out, stderr):
 def test_branch_since_unknown_ref_fails_naming_the_ref(tmp_path):
     review, *_ = _branch_repo(tmp_path)
     rc, out, _, stderr = _run_main(_branch_args(review, "--since", "no-such-ref"), tmp_path)
-    assert "no-such-ref" in _since_error(rc, out, stderr)
+    message = _since_error(rc, out, stderr)
+    assert "no-such-ref" in message and "run without --since for a full review" in message
+
+
+@pytest.mark.parametrize("value", ["", "   "])
+def test_branch_since_empty_value_is_rejected_not_ignored(tmp_path, value):
+    review, *_ = _branch_repo(tmp_path)
+    rc, out, _, stderr = _run_main(_branch_args(review, "--since", value), tmp_path)
+    message = _since_error(rc, out, stderr)
+    assert "empty" in message and "run without --since for a full review" in message
 
 
 def test_branch_since_not_an_ancestor_of_head_fails(tmp_path):

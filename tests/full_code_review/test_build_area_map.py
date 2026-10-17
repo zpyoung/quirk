@@ -494,6 +494,14 @@ def test_estimate_capacity_fit_count_is_capped_at_area_count_and_floored_at_zero
     assert exhausted["fit_count"] == 0 and exhausted["fits"] is False
 
 
+def test_estimate_capacity_survives_a_quotient_that_overflows_to_infinity():
+    module = area_map_module()
+    result = module.estimate_capacity(1, 1e308, 1, finder_minutes=5e-324)
+    assert result["fit_count"] == 1 and result["fits"] is True
+    exhausted = module.estimate_capacity(3, 10, 2, finder_minutes=5e-324, elapsed_minutes=1e308)
+    assert exhausted["fit_count"] == 0 and exhausted["fits"] is False
+
+
 def test_estimate_capacity_with_no_areas_fits():
     result = area_map_module().estimate_capacity(0, 10, 2)
     assert result["waves"] == 0 and result["estimated_minutes"] == 0 and result["fits"] is True

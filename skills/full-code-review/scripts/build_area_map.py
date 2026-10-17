@@ -469,7 +469,11 @@ def estimate_capacity(area_count: int, budget_minutes: float, concurrency: int,
     waves = math.ceil(area_count / concurrency)
     estimated = waves * finder_minutes
     available = 0.8 * budget_minutes - elapsed_minutes
-    fit_count = min(area_count, max(0, math.floor(available / finder_minutes)) * concurrency)
+    finder_slots = available / finder_minutes
+    if math.isfinite(finder_slots):
+        fit_count = min(area_count, max(0, math.floor(finder_slots)) * concurrency)
+    else:
+        fit_count = area_count if finder_slots > 0 else 0
     return {"areas": area_count, "waves": waves, "estimated_minutes": estimated,
             "available_minutes": available, "fits": estimated <= available, "fit_count": fit_count,
             "finder_minutes": finder_minutes, "concurrency": concurrency}

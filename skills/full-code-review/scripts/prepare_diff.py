@@ -895,14 +895,22 @@ def resolve_since(ref, mode, refs, cwd=".", metadata=None):
     """
     advice = "run without --since for a full review"
     head, base = refs.get("head"), refs.get("base")
+    if not ref.strip():
+        metadata["error"] = "--since ref is empty; %s" % advice
+        return None
+    step = "git rev-parse of --since ref %r" % ref
     try:
         resolved = _run(["git", "-C", cwd, "rev-parse", "--verify", "%s^{commit}" % ref],
                         timeout=30)
     except Exception as exc:
-        return _git_failed(metadata, "git rev-parse of --since ref %r" % ref, exc)
+        _git_failed(metadata, step, exc)
+        metadata["error"] += "; %s" % advice
+        return None
     sha = resolved.stdout.strip()
     if resolved.returncode != 0 or not sha:
-        return _git_failed(metadata, "git rev-parse of --since ref %r" % ref, resolved)
+        _git_failed(metadata, step, resolved)
+        metadata["error"] += "; %s" % advice
+        return None
     if not head:
         metadata["error"] = "--since %s has no review head to compare against; %s" % (ref, advice)
         return None
@@ -1114,7 +1122,7 @@ def main(argv=None):
             target = details["target_branch"]
 
     since = None
-    if args.since:
+    if args.since is not None:
         # after the identity check so refs.base/start are validated against the forge for the full change
         since_error = {}
         since = resolve_since(args.since, mode, refs, args.cwd, since_error)
