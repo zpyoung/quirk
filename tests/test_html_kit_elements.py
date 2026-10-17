@@ -3387,6 +3387,9 @@ def test_kit_css_rules_stay_at_or_below_one_class_except_the_named_lifts() -> No
         "q-table th > [data-q-sort]:enabled:hover",
         "q-board > section:not([hidden])",
         "q-board > section > :is(h2, h3, h4, h5, h6):first-child",
+        "q-flow aside button:enabled:hover",
+        'q-flow aside button[aria-current="step"]:enabled:hover',
+        "q-flow aside [data-q-flow-tree] details[open] > summary",
     }
     offenders: list[str] = []
     stack: list[str] = []
@@ -4505,6 +4508,130 @@ FLOW_SHAPES = """
 """
 
 
+_TRACE_V1 = {"order": "R-1042", "status": "queued", "lines": [{"item": "Coffee beans", "qty": 2, "price": 18}]}
+_TRACE_V2 = {**_TRACE_V1, "subtotal": 36, "discount": {"code": "LOYALTY10", "amount": 3.6}, "total": 32.4}
+_TRACE_V3 = {**_TRACE_V2, "tax": 2.67, "total": 35.07}
+_TRACE_V4 = {**_TRACE_V3, "status": "declined", "attempt": 1, "decline": "insufficient_funds"}
+_TRACE_V6 = {**_TRACE_V4, "status": "retry_scheduled", "retry_at": "2026-10-18T09:00Z"}
+_TRACE_V7 = {
+    **{k: v for k, v in _TRACE_V6.items() if k not in ("decline", "retry_at")},
+    "status": "paid",
+    "attempt": 2,
+    "charge": "ch_88",
+}
+_TRACE_V9 = {**_TRACE_V7, "status": "settled", "settled_at": "2026-10-18T09:02Z"}
+_TRACE_PAID = {**_TRACE_V3, "status": "paid", "attempt": 1, "charge": "ch_88"}
+_TRACE_SETTLED = {**_TRACE_PAID, "status": "settled", "settled_at": "2026-10-18T09:02Z"}
+_TRACE_DEEP1 = {
+    "customer": {
+        "name": "Ada",
+        "tags": ["vip"],
+        "contact": "ada@example.com",
+        "address": {"city": "Austin", "geo": {"zone": "S", "coordinates": {"lat": 30.27, "lng": -97.74}}},
+    }
+}
+_TRACE_DEEP2 = {"customer": {**_TRACE_DEEP1["customer"], "tags": ["vip", "beta"]}}
+_TRACE_DEEP3 = {
+    "customer": {
+        **_TRACE_DEEP2["customer"],
+        "contact": {"email": "ada@example.com", "phone": "555-0100"},
+        "address": {"city": "Austin", "geo": {"zone": "S", "coordinates": {"lat": 30.28, "lng": -97.74}}},
+    }
+}
+
+RENEWAL_GRAPH = {
+    "nodes": [
+        {"id": "scheduler", "label": "Renewal scheduler"},
+        {"id": "pricing", "label": "Pricing"},
+        {"id": "tax", "label": "Tax"},
+        {"id": "charge", "label": "Charge worker"},
+        {"id": "paid", "label": "Paid?", "shape": "decision"},
+        {"id": "retry", "label": "Retry queue"},
+        {"id": "settle", "label": "Settlement"},
+    ],
+    "edges": [
+        {"from": "scheduler", "to": "pricing"},
+        {"id": "tax-domestic", "from": "pricing", "to": "tax", "label": "domestic quote"},
+        {"id": "tax-intl", "from": "pricing", "to": "tax", "label": "cross-border quote"},
+        {"from": "tax", "to": "charge"},
+        {"from": "charge", "to": "paid"},
+        {"from": "paid", "to": "settle", "label": "Yes"},
+        {"from": "paid", "to": "retry", "label": "No"},
+        {"id": "retry", "from": "retry", "to": "charge", "label": "retry up to 3x", "loop": True},
+    ],
+    "traces": [
+        {
+            "id": "succeeds",
+            "label": "Card succeeds",
+            "steps": [
+                {"node": "scheduler", "value": _TRACE_V1},
+                {"node": "pricing", "value": _TRACE_V2, "note": "Pricing applies the loyalty discount"},
+                {"node": "tax", "via": "tax-domestic", "value": _TRACE_V3, "note": "Tax adds 8.25% sales tax"},
+                {"node": "charge", "value": _TRACE_PAID, "note": "The card is accepted"},
+                {"node": "paid", "value": _TRACE_PAID, "note": "Paid? answers Yes"},
+                {"node": "settle", "value": _TRACE_SETTLED, "note": "The order settles"},
+            ],
+        },
+        {
+            "id": "declined",
+            "label": "Card declined, retried",
+            "steps": [
+                {"node": "scheduler", "value": _TRACE_V1},
+                {"node": "pricing", "value": _TRACE_V2, "note": "Pricing applies the loyalty discount"},
+                {"node": "tax", "via": "tax-domestic", "value": _TRACE_V3, "note": "Tax adds 8.25% sales tax"},
+                {"node": "charge", "value": _TRACE_V4, "note": "The card is declined"},
+                {"node": "paid", "value": _TRACE_V4, "note": "Paid? answers No"},
+                {"node": "retry", "value": _TRACE_V6, "note": "The retry is booked for tomorrow"},
+                {"node": "charge", "value": _TRACE_V7, "note": "The second attempt succeeds"},
+                {"node": "paid", "value": _TRACE_V7, "note": "Paid? answers Yes"},
+                {"node": "settle", "value": _TRACE_V9, "note": "The order settles"},
+            ],
+        },
+        {
+            "id": "deep",
+            "label": "Nested customer",
+            "steps": [
+                {"node": "scheduler", "value": _TRACE_DEEP1},
+                {"node": "pricing", "value": _TRACE_DEEP2},
+                {"node": "tax", "via": "tax-domestic", "value": _TRACE_DEEP3},
+            ],
+        },
+    ],
+}
+
+BADVIA_GRAPH = {
+    "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+    "edges": [{"id": "ab", "from": "a", "to": "b"}],
+    "traces": [
+        {
+            "id": "t",
+            "label": "T",
+            "steps": [{"node": "a", "value": 1}, {"node": "b", "value": 2, "via": "ab"}],
+        }
+    ],
+}
+
+FLOW_TRACES = f"""
+<q-flow id="renewal" summary="How a renewal order is priced, taxed and charged.">
+  <script type="application/json">
+  {json.dumps(RENEWAL_GRAPH, indent=2)}
+  </script>
+</q-flow>
+
+<q-flow id="plain" summary="A graph with no traces.">
+  <script type="application/json">
+  {{"nodes": [{{"id": "a", "label": "A"}}, {{"id": "b", "label": "B"}}], "edges": [{{"from": "a", "to": "b"}}]}}
+  </script>
+</q-flow>
+
+<q-flow id="badvia" summary="A graph whose trace names an edge that is not there.">
+  <script type="application/json">
+  {json.dumps(BADVIA_GRAPH, indent=2)}
+  </script>
+</q-flow>
+"""
+
+
 @pytest.fixture(scope="module")
 def flow_shapes_page(tmp_path_factory: pytest.TempPathFactory) -> Path:
     reason = _node_ready()
@@ -4529,6 +4656,23 @@ def flow_shapes_page(tmp_path_factory: pytest.TempPathFactory) -> Path:
         assert wired in html
         html = html.replace(wired, wired.replace("refund-flow", escape))
     built.write_text(html, encoding="utf-8")
+    return built
+
+
+@pytest.fixture(scope="module")
+def flow_traces_page(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    reason = _node_ready()
+    if reason:
+        pytest.skip(reason)
+    work = tmp_path_factory.mktemp("kit-flow-traces")
+    src = work / "traces.src.html"
+    src.write_text(HEADER + FLOW_TRACES, encoding="utf-8")
+    built = _build(src, work / "traces.html")
+    # the unknown via is edited in after the build so the build-time check never sees it
+    html = built.read_text(encoding="utf-8")
+    good = '"via": "ab"'
+    assert html.count(good) == 1
+    built.write_text(html.replace(good, '"via": "tax-eu"'), encoding="utf-8")
     return built
 
 
@@ -5103,3 +5247,1078 @@ def test_flow_subprocess_without_a_flow_has_no_flow_section(flow_shapes_page: Pa
     )
     assert_clean(out)
     assert out["results"]["d"] == {"sections": 0, "drawerOpen": True}
+
+
+# --- q-flow traces ----------------------------------------------------------------------------
+
+FLOW_TRACE_HELPERS = """(() => {
+  const f = document.querySelector('#renewal');
+  const keyOf = (li) => {
+    const k = li.querySelector(':scope > [data-q-flow-key], :scope > details > summary > [data-q-flow-key]');
+    return k ? k.textContent.replace(/: $/, '') : null;
+  };
+  const tops = () => [...f.querySelectorAll('[data-q-flow-trace-value] > ul > li[data-q-flow-field]')];
+  window.__tr = {
+    f,
+    node: (id) => f.querySelector('[data-q-flow-node="' + id + '"]'),
+    edge: (from, to, label) => [...f.querySelectorAll('[data-q-flow-edge][data-q-flow-from="' + from + '"][data-q-flow-to="' + to + '"]')]
+      .find((g) => label === undefined || (g.querySelector('[data-q-flow-edge-label] text') || { textContent: '' }).textContent.endsWith(label)),
+    has: (el, attr) => el.hasAttribute(attr),
+    keyOf,
+    tops,
+    top: (key) => tops().find((li) => keyOf(li) === key) || null,
+    change: (key) => { const li = window.__tr.top(key); return li ? li.getAttribute('data-q-flow-change') : null; },
+    changed: () => tops().filter((li) => li.getAttribute('data-q-flow-change') !== 'same').map(keyOf),
+    counter: () => f.querySelector('[data-q-flow-trace-counter]').textContent,
+    selected: () => [...f.querySelectorAll('[data-q-flow-node][data-q-flow-selected]')].map((n) => n.getAttribute('data-q-flow-node')),
+    panelOpen: () => !f.querySelector('[data-q-flow-trace-panel]').hasAttribute('data-q-inactive'),
+    drawerOpen: () => !f.querySelector('[data-q-flow-drawer]').hasAttribute('data-q-inactive'),
+  };
+  return true;
+})()"""
+
+TRACE_BTN = '#renewal [data-q-flow-action="trace"]'
+TRACE_NEXT = "#renewal [data-q-flow-trace-next]"
+TRACE_PICKER = "#renewal [data-q-flow-trace-picker]"
+
+
+def _trace_dot(n: int) -> str:
+    return f'#renewal [data-q-flow-trace-dot="{n}"]'
+
+
+def _pick_trace(label: str) -> dict:
+    return {"select": {"selector": TRACE_PICKER, "label": label}}
+
+
+def test_flow_trace_button_shows_only_with_traces_and_a_bad_via_fails_to_the_notice(flow_traces_page: Path) -> None:
+    out = run(
+        flow_traces_page,
+        ev(
+            """(() => {
+              const plain = document.querySelector('#plain');
+              const renewal = document.querySelector('#renewal');
+              const btn = renewal.querySelector('[data-q-flow-action="trace"]');
+              const bad = document.querySelector('#badvia');
+              return {
+                plainButton: plain.querySelector('[data-q-flow-action="trace"]') !== null,
+                plainPanel: plain.querySelector('[data-q-flow-trace-panel]') !== null,
+                plainReady: plain.getAttribute('data-q-flow-ready'),
+                text: btn && btn.textContent,
+                label: btn && btn.getAttribute('aria-label'),
+                pressed: btn && btn.getAttribute('aria-pressed'),
+                actions: [...renewal.querySelectorAll('[data-q-flow-controls] [data-q-flow-action]')].map((b) => b.getAttribute('data-q-flow-action')),
+                panelClosed: renewal.querySelector('[data-q-flow-trace-panel]').hasAttribute('data-q-inactive'),
+                tracing: renewal.hasAttribute('data-q-flow-tracing'),
+                badNotice: bad.querySelector('[data-q-flow-notice]') !== null,
+                badReady: bad.getAttribute('data-q-flow-ready'),
+                badButton: bad.querySelector('[data-q-flow-action="trace"]') !== null,
+              };
+            })()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["d"] == {
+        "plainButton": False,
+        "plainPanel": False,
+        "plainReady": "true",
+        "text": "Step through",
+        "label": "Step through a trace",
+        "pressed": "false",
+        "actions": ["zoom-in", "zoom-out", "fit", "trace", "expand"],
+        "panelClosed": True,
+        "tracing": False,
+        "badNotice": True,
+        "badReady": "error",
+        "badButton": False,
+    }
+
+
+def test_flow_trace_opens_on_step_one_clearing_focus_and_dimming_off_the_path(flow_traces_page: Path) -> None:
+    out = run(
+        flow_traces_page,
+        ev(FLOW_TRACE_HELPERS, "h"),
+        {"click": '#renewal [data-q-flow-node="pricing"]'},
+        ev("window.__tr.drawerOpen()", "drawerBefore"),
+        {"click": TRACE_BTN},
+        ev(
+            """(() => {
+              const t = window.__tr;
+              const f = t.f;
+              const panel = f.querySelector('[data-q-flow-trace-panel]');
+              const tree = f.querySelector('[data-q-flow-trace-value] [data-q-flow-tree]');
+              const fields = [...f.querySelectorAll('[data-q-flow-trace-value] [data-q-flow-field]')];
+              return {
+                drawerOpen: t.drawerOpen(),
+                panelOpen: t.panelOpen(),
+                panelWidth: panel.getBoundingClientRect().width,
+                picker: f.querySelector('[data-q-flow-trace-picker]').value,
+                options: [...f.querySelectorAll('[data-q-flow-trace-picker] option')].map((o) => [o.value, o.textContent]),
+                counter: t.counter(),
+                selected: t.selected(),
+                dimNodes: [...f.querySelectorAll('[data-q-flow-node][data-q-flow-dim]')].map((n) => n.getAttribute('data-q-flow-node')),
+                dimmedEdges: [t.edge('paid', 'retry'), t.edge('retry', 'charge'), t.edge('pricing', 'tax', 'cross-border quote')].map((g) => g.hasAttribute('data-q-flow-dim')),
+                litEdges: f.querySelectorAll('[data-q-flow-edge][data-q-flow-lit]').length,
+                pulsing: f.hasAttribute('data-q-flow-pulsing'),
+                changes: [...new Set(fields.map((li) => li.getAttribute('data-q-flow-change')))],
+                treeBranches: tree !== null,
+                tracing: f.hasAttribute('data-q-flow-tracing'),
+                pressed: f.querySelector('[data-q-flow-action="trace"]').getAttribute('aria-pressed'),
+                activeIsNext: document.activeElement === f.querySelector('[data-q-flow-trace-next]'),
+                backDisabled: f.querySelector('[data-q-flow-trace-back]').disabled,
+                nextDisabled: f.querySelector('[data-q-flow-trace-next]').disabled,
+                dots: f.querySelectorAll('[data-q-flow-trace-dot]').length,
+                current: [...f.querySelectorAll('[data-q-flow-trace-dot][aria-current="step"]')].map((b) => b.getAttribute('data-q-flow-trace-dot')),
+                playText: f.querySelector('[data-q-flow-trace-play]').textContent,
+                live: f.querySelector('[data-q-flow-trace-counter]').getAttribute('aria-live'),
+              };
+            })()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["drawerBefore"] is True
+    d = out["results"]["d"]
+    assert d["drawerOpen"] is False
+    assert d["panelOpen"] is True and d["panelWidth"] > 100
+    assert d["picker"] == "succeeds"
+    assert d["options"] == [["succeeds", "Card succeeds"], ["declined", "Card declined, retried"], ["deep", "Nested customer"]]
+    assert d["counter"].startswith("Step 1 of 6")
+    assert d["selected"] == ["scheduler"]
+    assert d["dimNodes"] == ["retry"]
+    assert d["dimmedEdges"] == [True, True, True]
+    assert d["litEdges"] == 0
+    assert d["pulsing"] is False
+    assert d["changes"] == ["same"] and d["treeBranches"] is True
+    assert d["tracing"] is True and d["pressed"] == "true"
+    assert d["activeIsNext"] is True
+    assert d["backDisabled"] is True and d["nextDisabled"] is False
+    assert d["dots"] == 6 and d["current"] == ["1"]
+    assert d["playText"] == "Play" and d["live"] == "polite"
+
+
+def test_flow_trace_counter_announces_the_node_and_note_in_a_hidden_span(flow_traces_page: Path) -> None:
+    out = run(
+        flow_traces_page,
+        ev(FLOW_TRACE_HELPERS, "h"),
+        {"click": TRACE_BTN},
+        {"click": TRACE_NEXT},
+        ev(
+            """(() => {
+              const c = window.__tr.f.querySelector('[data-q-flow-trace-counter]');
+              const hidden = c.querySelector('.q-visually-hidden');
+              const note = window.__tr.f.querySelector('[data-q-flow-trace-note]');
+              const dot = window.__tr.f.querySelector('[data-q-flow-trace-dot="2"]');
+              return {
+                text: c.textContent,
+                hidden: hidden && hidden.textContent,
+                note: note.textContent,
+                noteHidden: note.hasAttribute('data-q-inactive'),
+                dotLabel: dot.getAttribute('aria-label'),
+              };
+            })()""",
+            "d",
+        ),
+        {"click": _trace_dot(1)},
+        ev(
+            """(() => {
+              const note = window.__tr.f.querySelector('[data-q-flow-trace-note]');
+              return { note: note.textContent, noteHidden: note.hasAttribute('data-q-inactive'), counter: window.__tr.counter() };
+            })()""",
+            "first",
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["d"] == {
+        "text": "Step 2 of 6, Pricing: Pricing applies the loyalty discount",
+        "hidden": ", Pricing: Pricing applies the loyalty discount",
+        "note": "Pricing applies the loyalty discount",
+        "noteHidden": False,
+        "dotLabel": "Step 2: Pricing",
+    }
+    assert out["results"]["first"] == {"note": "", "noteHidden": True, "counter": "Step 1 of 6, Renewal scheduler"}
+
+
+def test_flow_trace_next_lights_the_edge_the_step_names_and_marks_added_and_changed_fields(
+    flow_traces_page: Path,
+) -> None:
+    out = run(
+        flow_traces_page,
+        ev(FLOW_TRACE_HELPERS, "h"),
+        {"click": TRACE_BTN},
+        {"click": TRACE_NEXT},
+        {"click": TRACE_NEXT},
+        ev(
+            """(() => {
+              const t = window.__tr;
+              const total = t.top('total');
+              return {
+                selected: t.selected(),
+                domestic: [t.has(t.edge('pricing', 'tax', 'domestic quote'), 'data-q-flow-lit'), t.has(t.edge('pricing', 'tax', 'domestic quote'), 'data-q-flow-dim')],
+                intl: [t.has(t.edge('pricing', 'tax', 'cross-border quote'), 'data-q-flow-lit'), t.has(t.edge('pricing', 'tax', 'cross-border quote'), 'data-q-flow-dim')],
+                litEdges: [...t.f.querySelectorAll('[data-q-flow-edge][data-q-flow-lit]')].length,
+                pricingNode: ['data-q-flow-lit', 'data-q-flow-dim', 'data-q-flow-selected'].map((a) => t.node('pricing').hasAttribute(a)),
+                tax: t.change('tax'),
+                total: t.change('total'),
+                old: total.querySelector('[data-q-flow-old]').textContent,
+                neu: total.querySelector('[data-q-flow-new]').textContent,
+                subtotal: t.change('subtotal'),
+                pulsing: t.f.hasAttribute('data-q-flow-pulsing'),
+                counter: t.counter(),
+              };
+            })()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["selected"] == ["tax"]
+    assert d["domestic"] == [True, False]
+    assert d["intl"] == [False, True]
+    assert d["litEdges"] == 1
+    assert d["pricingNode"] == [False, False, False]
+    assert d["tax"] == "added" and d["total"] == "changed"
+    assert d["old"] == "32.4" and d["neu"] == "35.07"
+    assert d["subtotal"] == "same"
+    assert d["pulsing"] is True
+    assert d["counter"].startswith("Step 3 of 6")
+
+
+def test_flow_trace_loop_edge_is_the_current_edge_and_pulses_while_removed_fields_show_for_one_step(
+    flow_traces_page: Path,
+) -> None:
+    out = run(
+        flow_traces_page,
+        ev(FLOW_FAKE_CLOCK, "clock"),
+        ev(FLOW_TRACE_HELPERS, "h"),
+        {"click": TRACE_BTN},
+        _pick_trace("Card declined, retried"),
+        {"click": _trace_dot(5)},
+        ev("window.__tr.changed()", "step5"),
+        {"click": _trace_dot(7)},
+        ev(
+            """(() => {
+              const t = window.__tr;
+              const loop = t.edge('retry', 'charge');
+              window.__tick(1300);
+              const arcs = window.__arcs(t.f, 'retry', 'charge');
+              const line = loop.querySelector('[data-q-flow-edge-line]');
+              return {
+                loopLit: loop.hasAttribute('data-q-flow-lit'),
+                loopDim: loop.hasAttribute('data-q-flow-dim'),
+                dots: arcs.arcs.length,
+                width: line.getAttribute('stroke-width'),
+                markerStart: line.getAttribute('marker-start'),
+                pulsing: t.f.hasAttribute('data-q-flow-pulsing'),
+                pulseVisible: !loop.querySelector('[data-q-flow-edge-pulse]').hasAttribute('data-q-inactive'),
+                otherPulses: [...t.f.querySelectorAll('[data-q-flow-edge]')].filter((g) => g !== loop && !g.querySelector('[data-q-flow-edge-pulse]').hasAttribute('data-q-inactive')).length,
+                decline: t.change('decline'),
+                retryAt: t.change('retry_at'),
+                strike: getComputedStyle(t.top('decline').querySelector('[data-q-flow-key]')).textDecorationLine,
+                counter: t.counter(),
+              };
+            })()""",
+            "step7",
+        ),
+        {"click": TRACE_NEXT},
+        ev(
+            """(() => {
+              const t = window.__tr;
+              return { keys: t.tops().map(t.keyOf), lit: [...t.f.querySelectorAll('[data-q-flow-edge][data-q-flow-lit]')].length };
+            })()""",
+            "step8",
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["step5"] == []
+    s7 = out["results"]["step7"]
+    assert s7["loopLit"] is True and s7["loopDim"] is False
+    assert s7["dots"] >= 1, s7
+    assert s7["width"] == "2"
+    assert s7["markerStart"].startswith("url(#q-flow-return-lit-")
+    assert s7["pulsing"] is True and s7["pulseVisible"] is True
+    assert s7["otherPulses"] == 0
+    assert s7["decline"] == "removed" and s7["retryAt"] == "removed"
+    assert s7["strike"] == "line-through"
+    assert s7["counter"].startswith("Step 7 of 9")
+    s8 = out["results"]["step8"]
+    assert "decline" not in s8["keys"] and "retry_at" not in s8["keys"]
+    assert s8["lit"] == 1
+
+
+def test_flow_trace_changes_only_hides_same_fields_and_persists_across_steps_and_traces(
+    flow_traces_page: Path,
+) -> None:
+    visible = """(() => {
+      const t = window.__tr;
+      return t.tops().filter((li) => getComputedStyle(li).display !== 'none').map(t.keyOf);
+    })()"""
+    out = run(
+        flow_traces_page,
+        ev(FLOW_TRACE_HELPERS, "h"),
+        {"click": TRACE_BTN},
+        _pick_trace("Card declined, retried"),
+        {"click": _trace_dot(7)},
+        ev("window.__tr.f.querySelector('[data-q-flow-trace-changes]').checked", "before"),
+        {"click": "#renewal [data-q-flow-trace-changes]"},
+        ev(visible, "step7"),
+        {"click": TRACE_NEXT},
+        ev(
+            """(() => {
+              const t = window.__tr;
+              const empty = t.f.querySelector('[data-q-flow-trace-empty]');
+              return {
+                checked: t.f.querySelector('[data-q-flow-trace-changes]').checked,
+                empty: empty && empty.textContent,
+                fields: t.tops().length,
+              };
+            })()""",
+            "step8",
+        ),
+        {"click": _trace_dot(9)},
+        ev(
+            """(() => {
+              const t = window.__tr;
+              const tree = t.f.querySelector('[data-q-flow-tree]');
+              return {
+                attr: tree.hasAttribute('data-q-flow-changes-only'),
+                visible: t.tops().filter((li) => getComputedStyle(li).display !== 'none').map(t.keyOf),
+                empty: t.f.querySelector('[data-q-flow-trace-empty]') !== null,
+              };
+            })()""",
+            "step9",
+        ),
+        _pick_trace("Card succeeds"),
+        ev("window.__tr.f.querySelector('[data-q-flow-trace-changes]').checked", "afterSwitch"),
+        {"click": _trace_dot(3)},
+        ev(visible, "succeedsStep3"),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["before"] is False
+    assert sorted(r["step7"]) == ["attempt", "charge", "decline", "retry_at", "status"]
+    assert r["step8"] == {"checked": True, "empty": "No changes at this step", "fields": 0}
+    assert r["step9"]["attr"] is True and r["step9"]["empty"] is False
+    assert sorted(r["step9"]["visible"]) == ["settled_at", "status"]
+    assert r["afterSwitch"] is True
+    assert sorted(r["succeedsStep3"]) == ["tax", "total"]
+
+
+def test_flow_trace_branches_below_the_third_level_start_closed_unless_they_hold_a_change(
+    flow_traces_page: Path,
+) -> None:
+    geo = """(() => {
+      const t = window.__tr;
+      const branches = [...t.f.querySelectorAll('details[data-q-flow-branch]')];
+      const by = (key) => branches.find((d) => d.querySelector(':scope > summary [data-q-flow-key]').textContent === key + ': ');
+      const g = by('geo');
+      return {
+        geoOpen: g.open,
+        geoDepth: g.closest('li').getAttribute('data-q-flow-depth'),
+        geoCount: g.querySelector(':scope > summary').textContent,
+        geoHasChange: g.closest('li').hasAttribute('data-q-flow-has-change'),
+        customerOpen: by('customer').open,
+        addressOpen: by('address').open,
+        coordinatesOpen: by('coordinates').open,
+      };
+    })()"""
+    out = run(
+        flow_traces_page,
+        ev(FLOW_TRACE_HELPERS, "h"),
+        {"click": TRACE_BTN},
+        _pick_trace("Nested customer"),
+        ev(geo, "step1"),
+        {"click": TRACE_NEXT},
+        ev(geo, "step2"),
+        {"click": TRACE_NEXT},
+        ev(geo, "step3"),
+    )
+    assert_clean(out)
+    r = out["results"]
+    for key in ("step1", "step2"):
+        assert r[key]["geoOpen"] is False and r[key]["geoDepth"] == "3" and r[key]["geoHasChange"] is False
+        assert r[key]["customerOpen"] is True and r[key]["addressOpen"] is True
+        assert r[key]["geoCount"].replace(" ", " ").endswith("{2}")
+    assert r["step3"]["geoOpen"] is True and r["step3"]["geoHasChange"] is True
+    assert r["step3"]["coordinatesOpen"] is True
+
+
+def test_flow_trace_diff_marks_array_growth_by_index_and_a_type_change_as_changed(flow_traces_page: Path) -> None:
+    out = run(
+        flow_traces_page,
+        ev(FLOW_TRACE_HELPERS, "h"),
+        {"click": TRACE_BTN},
+        _pick_trace("Nested customer"),
+        {"click": TRACE_NEXT},
+        ev(
+            """(() => {
+              const t = window.__tr;
+              const tags = [...t.f.querySelectorAll('li[data-q-flow-field]')].find((li) => t.keyOf(li) === 'tags');
+              const items = [...tags.querySelectorAll(':scope > details > ul > li[data-q-flow-field]')]
+                .map((li) => [t.keyOf(li), li.getAttribute('data-q-flow-change'), li.querySelector('[data-q-flow-val]').textContent]);
+              return { tags: tags.getAttribute('data-q-flow-change'), hasChange: tags.hasAttribute('data-q-flow-has-change'), items };
+            })()""",
+            "growth",
+        ),
+        {"click": TRACE_NEXT},
+        ev(
+            """(() => {
+              const t = window.__tr;
+              const contact = [...t.f.querySelectorAll('li[data-q-flow-field]')].find((li) => t.keyOf(li) === 'contact');
+              return {
+                change: contact.getAttribute('data-q-flow-change'),
+                branch: contact.querySelector('details') !== null,
+                old: contact.querySelector('[data-q-flow-old]').textContent,
+                neu: contact.querySelector('[data-q-flow-new]').textContent,
+              };
+            })()""",
+            "retyped",
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["growth"] == {
+        "tags": "same",
+        "hasChange": True,
+        "items": [["0", "same", '"vip"'], ["1", "added", '"beta"']],
+    }
+    assert out["results"]["retyped"] == {
+        "change": "changed",
+        "branch": False,
+        "old": '"ada@example.com"',
+        "neu": '{"email":"ada@example.com","phone":"555-0100"}',
+    }
+
+
+def test_flow_trace_node_click_jumps_to_its_next_visit_and_dots_jump_to_a_step(flow_traces_page: Path) -> None:
+    out = run(
+        flow_traces_page,
+        ev(FLOW_TRACE_HELPERS, "h"),
+        {"click": TRACE_BTN},
+        _pick_trace("Card declined, retried"),
+        {"click": TRACE_NEXT},
+        ev("window.__tr.counter().slice(0, 9)", "start"),
+        {"click": '#renewal [data-q-flow-node="charge"]'},
+        ev("window.__tr.counter().slice(0, 9)", "first"),
+        {"click": '#renewal [data-q-flow-node="charge"]'},
+        ev("window.__tr.counter().slice(0, 9)", "second"),
+        {"click": '#renewal [data-q-flow-node="charge"]'},
+        ev("window.__tr.counter().slice(0, 9)", "wrap"),
+        {"click": _trace_dot(1)},
+        ev(
+            """(() => ({
+              counter: window.__tr.counter().slice(0, 9),
+              tracing: window.__tr.f.hasAttribute('data-q-flow-tracing'),
+              selected: window.__tr.selected(),
+            }))()""",
+            "dot",
+        ),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["start"] == "Step 2 of"
+    assert r["first"] == "Step 4 of"
+    assert r["second"] == "Step 7 of"
+    assert r["wrap"] == "Step 4 of"
+    assert r["dot"] == {"counter": "Step 1 of", "tracing": True, "selected": ["scheduler"]}
+
+
+def test_flow_trace_picker_resets_to_step_one_on_the_new_traces_path(flow_traces_page: Path) -> None:
+    out = run(
+        flow_traces_page,
+        ev(FLOW_TRACE_HELPERS, "h"),
+        {"click": TRACE_BTN},
+        _pick_trace("Card declined, retried"),
+        {"click": _trace_dot(4)},
+        ev("window.__tr.counter().slice(0, 11)", "before"),
+        ev("window.__tr.node('retry').hasAttribute('data-q-flow-dim')", "retryBefore"),
+        {"focus": TRACE_PICKER},
+        _pick_trace("Card succeeds"),
+        ev(
+            """(() => ({
+              counter: window.__tr.counter().slice(0, 11),
+              retryDim: window.__tr.node('retry').hasAttribute('data-q-flow-dim'),
+              loopDim: window.__tr.edge('retry', 'charge').hasAttribute('data-q-flow-dim'),
+              dots: window.__tr.f.querySelectorAll('[data-q-flow-trace-dot]').length,
+              picker: document.activeElement === window.__tr.f.querySelector('[data-q-flow-trace-picker]'),
+              selected: window.__tr.selected(),
+            }))()""",
+            "after",
+        ),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["before"] == "Step 4 of 9"
+    assert r["retryBefore"] is False
+    assert r["after"] == {
+        "counter": "Step 1 of 6",
+        "retryDim": True,
+        "loopDim": True,
+        "dots": 6,
+        "picker": True,
+        "selected": ["scheduler"],
+    }
+
+
+def test_flow_trace_off_path_click_leaves_empty_canvas_stays_and_the_button_toggles(flow_traces_page: Path) -> None:
+    out = run(
+        flow_traces_page,
+        ev(FLOW_TRACE_HELPERS, "h"),
+        {"click": TRACE_BTN},
+        {"click": '#renewal [data-q-flow-node="retry"]'},
+        ev(
+            """(() => {
+              const t = window.__tr;
+              return {
+                tracing: t.f.hasAttribute('data-q-flow-tracing'),
+                panelOpen: t.panelOpen(),
+                drawerOpen: t.drawerOpen(),
+                drawerTitle: t.f.querySelector('[data-q-flow-drawer] h3').textContent,
+                selected: t.selected(),
+                pressed: t.f.querySelector('[data-q-flow-action="trace"]').getAttribute('aria-pressed'),
+              };
+            })()""",
+            "left",
+        ),
+        {"click": TRACE_BTN},
+        ev(
+            """(() => {
+              const t = window.__tr;
+              const svg = t.f.querySelector('[data-q-flow-svg]');
+              svg.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+              return {
+                tracing: t.f.hasAttribute('data-q-flow-tracing'),
+                panelOpen: t.panelOpen(),
+                selected: t.selected(),
+                counter: t.counter().slice(0, 9),
+              };
+            })()""",
+            "empty",
+        ),
+        {"click": TRACE_BTN},
+        ev(
+            """(() => {
+              const t = window.__tr;
+              return {
+                tracing: t.f.hasAttribute('data-q-flow-tracing'),
+                panelOpen: t.panelOpen(),
+                pressed: t.f.querySelector('[data-q-flow-action="trace"]').getAttribute('aria-pressed'),
+                active: document.activeElement === t.f.querySelector('[data-q-flow-action="trace"]'),
+                dimmed: t.f.querySelectorAll('[data-q-flow-dim]').length,
+                lit: t.f.querySelectorAll('[data-q-flow-lit]').length,
+                pulsing: t.f.hasAttribute('data-q-flow-pulsing'),
+              };
+            })()""",
+            "closed",
+        ),
+        {"click": '#renewal [data-q-flow-node="pricing"]'},
+        ev("window.__tr.drawerOpen() && window.__tr.selected().join()", "focusAfter"),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["left"] == {
+        "tracing": False,
+        "panelOpen": False,
+        "drawerOpen": True,
+        "drawerTitle": "Retry queue",
+        "selected": ["retry"],
+        "pressed": "false",
+    }
+    assert r["empty"] == {"tracing": True, "panelOpen": True, "selected": ["scheduler"], "counter": "Step 1 of"}
+    assert r["closed"] == {
+        "tracing": False,
+        "panelOpen": False,
+        "pressed": "false",
+        "active": True,
+        "dimmed": 0,
+        "lit": 0,
+        "pulsing": False,
+    }
+    assert r["focusAfter"] == "pricing"
+
+
+def test_flow_trace_list_carries_each_trace_with_the_same_text_as_the_builder(flow_traces_page: Path) -> None:
+    out = run(
+        flow_traces_page,
+        ev(
+            """(() => {
+              const f = document.querySelector('#renewal');
+              const body = f.querySelector('[data-q-flow-list-body]');
+              const step = (trace, n) => {
+                const li = f.querySelector('[data-q-flow-list-trace="' + trace + '"] [data-q-flow-list-step="' + n + '"]');
+                return { text: li.firstChild.textContent, code: li.querySelector(':scope > pre > code').textContent, full: li.textContent };
+              };
+              const blocks = [...body.querySelectorAll(':scope > [data-q-flow-list-trace]')];
+              return {
+                order: [...body.children].map((c) => c.tagName.toLowerCase() + ':' + (c.getAttribute('data-q-flow-list-trace') || '')),
+                titles: blocks.map((b) => b.querySelector(':scope > p > strong').textContent),
+                counts: blocks.map((b) => b.querySelectorAll(':scope > ol > li').length),
+                declined3: step('declined', 3),
+                declined7: step('declined', 7),
+                succeeds5: step('succeeds', 5),
+                succeeds1: step('succeeds', 1),
+                plain: document.querySelectorAll('#plain [data-q-flow-list-trace]').length,
+              };
+            })()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    pretty = lambda value: json.dumps(value, indent=2, ensure_ascii=False)  # noqa: E731
+    assert d["order"] == ["ul:", "div:succeeds", "div:declined", "div:deep"]
+    assert d["titles"] == ["Trace: Card succeeds", "Trace: Card declined, retried", "Trace: Nested customer"]
+    assert d["counts"] == [6, 9, 3]
+    assert d["declined3"]["text"] == 'Tax, via "domestic quote": Tax adds 8.25% sales tax'
+    assert d["declined3"]["code"] == pretty(_TRACE_V3)
+    assert d["declined3"]["full"] == d["declined3"]["text"] + pretty(_TRACE_V3)
+    assert d["declined7"]["text"] == 'Charge worker, via "retry up to 3x": The second attempt succeeds'
+    assert d["declined7"]["code"] == pretty(_TRACE_V7)
+    assert d["succeeds5"]["text"] == "Paid?: Paid? answers Yes"
+    assert d["succeeds1"]["text"] == "Renewal scheduler"
+    assert d["succeeds1"]["code"] == pretty(_TRACE_V1)
+    assert d["plain"] == 0
+
+
+TRACE_PLAY = "#renewal [data-q-flow-trace-play]"
+
+FLOW_TRACE_PLAY_STATE = """(() => {
+  const f = window.__tr.f;
+  const play = f.querySelector('[data-q-flow-trace-play]');
+  return {
+    step: window.__tr.counter().match(/^Step \\d+ of \\d+/)[0],
+    play: play.textContent,
+    pressed: play.getAttribute('aria-pressed'),
+    nextDisabled: f.querySelector('[data-q-flow-trace-next]').disabled,
+  };
+})()"""
+
+
+def _trace_tick(t: int, name: str) -> dict:
+    return ev(f"(() => {{ window.__tick({t}); return {FLOW_TRACE_PLAY_STATE}; }})()", name)
+
+
+def test_flow_trace_play_advances_every_1500ms_stops_on_the_last_step_and_restarts_from_one(
+    flow_traces_page: Path,
+) -> None:
+    out = run(
+        flow_traces_page,
+        ev(FLOW_FAKE_CLOCK, "clock"),
+        ev(FLOW_TRACE_HELPERS, "h"),
+        ev("window.__tr.counter()", "idle"),
+        {"click": TRACE_BTN},
+        ev("(() => { window.__tick(1000); return window.__tr.counter().slice(0, 11); })()", "noAutoStart"),
+        {"click": TRACE_PLAY},
+        ev(FLOW_TRACE_PLAY_STATE, "started"),
+        _trace_tick(2499, "t1499"),
+        _trace_tick(2501, "t1501"),
+        _trace_tick(4000, "t4000"),
+        _trace_tick(4001, "t4001"),
+        _trace_tick(5600, "t5600"),
+        _trace_tick(7200, "t7200"),
+        _trace_tick(8800, "t8800"),
+        _trace_tick(20000, "later"),
+        {"click": TRACE_PLAY},
+        ev(FLOW_TRACE_PLAY_STATE, "restarted"),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["noAutoStart"] == "Step 1 of 6"
+    playing = {"play": "Pause", "pressed": "true", "nextDisabled": False}
+    assert r["started"] == {"step": "Step 1 of 6", **playing}
+    assert r["t1499"] == {"step": "Step 1 of 6", **playing}
+    assert r["t1501"] == {"step": "Step 2 of 6", **playing}
+    assert r["t4000"]["step"] == "Step 2 of 6"
+    assert r["t4001"]["step"] == "Step 3 of 6"
+    assert r["t5600"]["step"] == "Step 4 of 6"
+    assert r["t7200"]["step"] == "Step 5 of 6"
+    stopped = {"step": "Step 6 of 6", "play": "Play", "pressed": "false", "nextDisabled": True}
+    assert r["t8800"] == stopped
+    assert r["later"] == stopped
+    assert r["restarted"] == {"step": "Step 1 of 6", **playing}
+
+
+def test_flow_trace_play_stops_on_any_manual_step_dot_picker_node_click_close_and_relayout(
+    flow_traces_page: Path,
+) -> None:
+    def started(name: str) -> list[dict]:
+        return [
+            {"click": TRACE_PLAY},
+            ev("window.__tr.f.querySelector('[data-q-flow-trace-play]').textContent", name),
+        ]
+
+    def after(t: int, name: str) -> dict:
+        return ev(
+            f"""(() => {{
+              window.__tick({t});
+              const f = window.__tr.f;
+              return {{
+                step: window.__tr.counter().match(/^Step \\d+ of \\d+/)[0],
+                play: f.querySelector('[data-q-flow-trace-play]').textContent,
+                pressed: f.querySelector('[data-q-flow-trace-play]').getAttribute('aria-pressed'),
+              }};
+            }})()""",
+            name,
+        )
+
+    out = run(
+        flow_traces_page,
+        ev(FLOW_FAKE_CLOCK, "clock"),
+        ev(FLOW_TRACE_HELPERS, "h"),
+        {"click": TRACE_BTN},
+        *started("p1"),
+        {"click": TRACE_NEXT},
+        after(10000, "next"),
+        *started("p2"),
+        {"click": '#renewal [data-q-flow-trace-back]'},
+        after(20000, "back"),
+        *started("p3"),
+        {"click": _trace_dot(5)},
+        after(30000, "dot"),
+        *started("p4"),
+        {"click": '#renewal [data-q-flow-node="tax"]'},
+        after(40000, "node"),
+        *started("p5"),
+        _pick_trace("Card declined, retried"),
+        after(50000, "picker"),
+        *started("p6"),
+        {"click": TRACE_BTN},
+        after(60000, "closed"),
+        {"click": TRACE_BTN},
+        after(70000, "reopened"),
+        *started("p7"),
+        ev("window.__tr.f._setup()", "relayout"),
+        {"wait": 300},
+        ev(
+            """(() => {
+              const f = document.querySelector('#renewal');
+              const play = f.querySelector('[data-q-flow-trace-play]');
+              return { tracing: f.hasAttribute('data-q-flow-tracing'), play: play.textContent, pressed: play.getAttribute('aria-pressed') };
+            })()""",
+            "afterSetup",
+        ),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert [r[f"p{n}"] for n in range(1, 8)] == ["Pause"] * 7
+    assert r["next"] == {"step": "Step 2 of 6", "play": "Play", "pressed": "false"}
+    assert r["back"] == {"step": "Step 1 of 6", "play": "Play", "pressed": "false"}
+    assert r["dot"] == {"step": "Step 5 of 6", "play": "Play", "pressed": "false"}
+    assert r["node"] == {"step": "Step 3 of 6", "play": "Play", "pressed": "false"}
+    assert r["picker"] == {"step": "Step 1 of 9", "play": "Play", "pressed": "false"}
+    assert r["closed"]["play"] == "Play" and r["reopened"]["play"] == "Play"
+    assert r["reopened"]["step"] == "Step 1 of 9"
+    assert r["afterSetup"] == {"tracing": False, "play": "Play", "pressed": "false"}
+
+
+def test_flow_trace_play_stops_when_the_element_leaves_the_page(flow_traces_page: Path) -> None:
+    out = run(
+        flow_traces_page,
+        ev(FLOW_FAKE_CLOCK, "clock"),
+        ev(FLOW_TRACE_HELPERS, "h"),
+        {"click": TRACE_BTN},
+        {"click": TRACE_PLAY},
+        ev(
+            """(() => {
+              const f = window.__tr.f;
+              const counter = f.querySelector('[data-q-flow-trace-counter]');
+              const host = f.parentNode;
+              const next = f.nextSibling;
+              f.remove();
+              window.__tick(5000);
+              window.__tick(9000);
+              const frozen = counter.textContent.slice(0, 9);
+              const play = f.querySelector('[data-q-flow-trace-play]').textContent;
+              host.insertBefore(f, next);
+              return { frozen, play };
+            })()""",
+            "gone",
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["gone"] == {"frozen": "Step 1 of", "play": "Play"}
+
+
+def test_flow_trace_arrow_keys_step_from_the_panel_but_not_from_the_picker(flow_traces_page: Path) -> None:
+    out = run(
+        flow_traces_page,
+        ev(FLOW_TRACE_HELPERS, "h"),
+        {"click": TRACE_BTN},
+        {"press": "ArrowRight"},
+        ev("window.__tr.counter().slice(0, 9)", "right"),
+        {"press": "ArrowDown"},
+        ev("window.__tr.counter().slice(0, 9)", "down"),
+        {"press": "ArrowLeft"},
+        ev("window.__tr.counter().slice(0, 9)", "left"),
+        {"press": "ArrowUp"},
+        ev("window.__tr.counter().slice(0, 9)", "up"),
+        {"press": "ArrowUp"},
+        ev("window.__tr.counter().slice(0, 9)", "floor"),
+        _pick_trace("Card declined, retried"),
+        {"click": TRACE_NEXT},
+        ev("window.__tr.counter()", "declined2"),
+        {"focus": TRACE_PICKER},
+        {"press": "ArrowDown"},
+        ev(
+            """(() => ({
+              counter: window.__tr.counter().slice(0, 9),
+              picker: document.querySelector('#renewal [data-q-flow-trace-picker]').value,
+            }))()""",
+            "picker",
+        ),
+        {"focus": '#renewal [data-q-flow-node="charge"]'},
+        {"press": "Enter"},
+        ev("window.__tr.counter().slice(0, 9)", "enterOnNode"),
+        {"press": "ArrowRight"},
+        ev("document.activeElement.getAttribute('data-q-flow-node')", "nodeArrowKeepsFocusOnNodes"),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["right"] == "Step 2 of"
+    assert r["down"] == "Step 3 of"
+    assert r["left"] == "Step 2 of"
+    assert r["up"] == "Step 1 of"
+    assert r["floor"] == "Step 1 of"
+    assert r["declined2"].startswith("Step 2 of 9")
+    assert r["declined2"].endswith(", Pricing: Pricing applies the loyalty discount")
+    assert r["picker"]["counter"] != "Step 3 of"
+    assert r["enterOnNode"] == "Step 4 of"
+    assert r["nodeArrowKeepsFocusOnNodes"] is not None
+
+
+def test_flow_trace_escape_closes_trace_mode_first_and_returns_focus_to_the_button(flow_traces_page: Path) -> None:
+    out = run(
+        flow_traces_page,
+        ev(FLOW_TRACE_HELPERS, "h"),
+        {"click": TRACE_BTN},
+        {"press": "Escape"},
+        ev(
+            """(() => {
+              const t = window.__tr;
+              return {
+                tracing: t.f.hasAttribute('data-q-flow-tracing'),
+                panelOpen: t.panelOpen(),
+                pressed: t.f.querySelector('[data-q-flow-action="trace"]').getAttribute('aria-pressed'),
+                active: document.activeElement === t.f.querySelector('[data-q-flow-action="trace"]'),
+                dim: t.f.querySelectorAll('[data-q-flow-dim]').length,
+              };
+            })()""",
+            "closed",
+        ),
+        {"focus": '#renewal [data-q-flow-node="charge"]'},
+        {"press": "Enter"},
+        ev("({ drawerOpen: window.__tr.drawerOpen(), selected: window.__tr.selected() })", "focused"),
+        {"press": "Escape"},
+        ev("({ drawerOpen: window.__tr.drawerOpen(), selected: window.__tr.selected() })", "cleared"),
+        {"click": '#renewal [data-q-flow-action="expand"]'},
+        {"click": TRACE_BTN},
+        {"press": "Escape"},
+        ev(
+            """(() => ({
+              expanded: window.__tr.f.hasAttribute('data-q-flow-expanded'),
+              tracing: window.__tr.f.hasAttribute('data-q-flow-tracing'),
+            }))()""",
+            "expandedTracing",
+        ),
+        {"press": "Escape"},
+        ev("window.__tr.f.hasAttribute('data-q-flow-expanded')", "expandedAfter"),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["closed"] == {"tracing": False, "panelOpen": False, "pressed": "false", "active": True, "dim": 0}
+    assert r["focused"] == {"drawerOpen": True, "selected": ["charge"]}
+    assert r["cleared"] == {"drawerOpen": False, "selected": []}
+    assert r["expandedTracing"] == {"expanded": True, "tracing": False}
+    assert r["expandedAfter"] is False
+
+
+def test_flow_trace_reduced_motion_steps_and_plays_without_pulse_dots_and_with_a_thick_current_edge(
+    flow_traces_page: Path,
+) -> None:
+    out = run(
+        flow_traces_page,
+        {"emulate": {"reducedMotion": "reduce"}},
+        ev(FLOW_FAKE_CLOCK, "clock"),
+        ev(FLOW_TRACE_HELPERS, "h"),
+        {"click": TRACE_BTN},
+        {"click": _trace_dot(4)},
+        ev(
+            """(() => {
+              const t = window.__tr;
+              window.__tick(1500);
+              window.__tick(3000);
+              const edge = t.edge('tax', 'charge');
+              const line = edge.querySelector('[data-q-flow-edge-line]');
+              const visibleDots = [...t.f.querySelectorAll('mask circle')].filter((c) => !c.hasAttribute('data-q-inactive')).length;
+              return {
+                lit: edge.hasAttribute('data-q-flow-lit'),
+                width: line.getAttribute('stroke-width'),
+                marker: line.getAttribute('marker-end').includes('arrow-lit'),
+                pulsing: t.f.hasAttribute('data-q-flow-pulsing'),
+                pulseHidden: edge.querySelector('[data-q-flow-edge-pulse]').hasAttribute('data-q-inactive'),
+                visibleDots,
+                counter: t.counter().slice(0, 9),
+              };
+            })()""",
+            "step4",
+        ),
+        {"click": TRACE_NEXT},
+        ev("window.__tr.counter().slice(0, 9)", "next"),
+        {"click": TRACE_PLAY},
+        ev("(() => { window.__tick(10000); window.__tick(11600); return window.__tr.counter().slice(0, 9); })()", "played"),
+        ev("[...window.__tr.f.querySelectorAll('mask circle')].filter((c) => !c.hasAttribute('data-q-inactive')).length", "dotsAfterPlay"),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["step4"] == {
+        "lit": True,
+        "width": "3.5",
+        "marker": True,
+        "pulsing": False,
+        "pulseHidden": True,
+        "visibleDots": 0,
+        "counter": "Step 4 of",
+    }
+    assert r["next"] == "Step 5 of"
+    assert r["played"] == "Step 6 of"
+    assert r["dotsAfterPlay"] == 0
+
+
+def test_flow_trace_pans_an_off_screen_current_node_into_view_at_the_same_zoom(flow_traces_page: Path) -> None:
+    probe = """(() => {
+      const f = document.querySelector('#renewal');
+      const stage = f.querySelector('[data-q-flow-stage]').getBoundingClientRect();
+      const n = f.querySelector('[data-q-flow-node="settle"]').getBoundingClientRect();
+      const m = f.querySelector('[data-q-flow-viewport]').getAttribute('transform').match(/scale\\(([-\\d.e]+)\\)/);
+      return {
+        k: Number(m[1]),
+        inside: n.left >= stage.left - 1 && n.right <= stage.right + 1 && n.top >= stage.top - 1 && n.bottom <= stage.bottom + 1,
+      };
+    })()"""
+    zoom_in = '#renewal [data-q-flow-action="zoom-in"]'
+    out = run(
+        flow_traces_page,
+        {"click": TRACE_BTN},
+        {"click": zoom_in},
+        {"click": zoom_in},
+        {"click": zoom_in},
+        {"click": zoom_in},
+        {"click": zoom_in},
+        {"click": zoom_in},
+        {"click": _trace_dot(1)},
+        ev(probe, "before"),
+        {"click": _trace_dot(6)},
+        ev(probe, "after"),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["before"]["inside"] is False
+    assert r["before"]["k"] > 1.5
+    assert r["after"]["inside"] is True
+    assert r["after"]["k"] == r["before"]["k"]
+
+
+def test_flow_trace_leaves_focus_mode_exactly_as_it_was_before_tracing(flow_traces_page: Path) -> None:
+    lit = """(() => {
+      const f = document.querySelector('#renewal');
+      const names = (sel, attr) => [...f.querySelectorAll(sel)].filter((n) => n.hasAttribute(attr)).map((n) => n.getAttribute('data-q-flow-node') || n.getAttribute('data-q-flow-from') + '>' + n.getAttribute('data-q-flow-to'));
+      return {
+        litNodes: names('[data-q-flow-node]', 'data-q-flow-lit'),
+        dimNodes: names('[data-q-flow-node]', 'data-q-flow-dim'),
+        litEdges: names('[data-q-flow-edge]', 'data-q-flow-lit'),
+        dimEdges: names('[data-q-flow-edge]', 'data-q-flow-dim'),
+        pulsing: f.hasAttribute('data-q-flow-pulsing'),
+        drawer: !f.querySelector('[data-q-flow-drawer]').hasAttribute('data-q-inactive'),
+      };
+    })()"""
+    charge = '#renewal [data-q-flow-node="charge"]'
+    out = run(
+        flow_traces_page,
+        {"click": charge},
+        ev(lit, "before"),
+        {"click": TRACE_BTN},
+        {"click": TRACE_NEXT},
+        {"click": TRACE_BTN},
+        {"click": charge},
+        ev(lit, "after"),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["before"]["litNodes"] and r["before"]["drawer"] is True
+    assert r["after"] == r["before"]
+
+
+def test_flow_trace_panel_sits_below_the_stage_on_a_phone_and_beside_it_on_a_desktop(flow_traces_page: Path) -> None:
+    geometry = """(() => {
+      const f = document.querySelector('#renewal');
+      const stage = f.querySelector('[data-q-flow-stage]').getBoundingClientRect();
+      const panel = f.querySelector('[data-q-flow-trace-panel]').getBoundingClientRect();
+      const style = getComputedStyle(f);
+      return {
+        tracing: f.hasAttribute('data-q-flow-tracing'),
+        panelHeight: panel.height,
+        belowStage: panel.top >= stage.bottom - 1,
+        besideStage: panel.left >= stage.right - 1,
+        widthRatio: panel.width / stage.width,
+        sameTop: Math.abs(panel.top - stage.top) < 2,
+        display: style.display,
+        rows: style.gridTemplateRows,
+        columns: style.gridTemplateColumns.split(' ').length,
+        expanded: f.hasAttribute('data-q-flow-expanded'),
+        innerHeight: window.innerHeight,
+        panelVisible: panel.width > 0 && panel.height > 0,
+        scrolls: getComputedStyle(f.querySelector('[data-q-flow-trace-panel]')).overflowY,
+        maxHeight: getComputedStyle(f.querySelector('[data-q-flow-trace-panel]')).maxHeight,
+      };
+    })()"""
+    expand = '#renewal [data-q-flow-action="expand"]'
+    out = run(
+        flow_traces_page,
+        {"viewport": {"width": 375, "height": 800}},
+        {"click": TRACE_BTN},
+        ev(geometry, "phone"),
+        {"click": expand},
+        ev(geometry, "phoneExpanded"),
+        {"click": expand},
+        {"viewport": {"width": 1280, "height": 800}},
+        ev(geometry, "desktop"),
+        {"click": expand},
+        ev(geometry, "desktopExpanded"),
+        {"click": expand},
+        ev(geometry, "desktopCollapsed"),
+    )
+    assert_clean(out)
+    r = out["results"]
+    phone = r["phone"]
+    assert phone["tracing"] and phone["belowStage"] and 0.95 < phone["widthRatio"] < 1.05
+    assert phone["display"] == "block"
+    desk = r["desktop"]
+    assert desk["tracing"] and desk["besideStage"] and desk["sameTop"] and desk["display"] == "grid"
+    assert 0.2 < desk["widthRatio"] < 0.5
+    for key in ("phoneExpanded", "desktopExpanded", "desktopCollapsed"):
+        assert r[key]["tracing"] and r[key]["panelVisible"], key
+    pe = r["phoneExpanded"]
+    assert pe["expanded"] and pe["display"] == "grid" and pe["belowStage"]
+    assert pe["panelHeight"] <= pe["innerHeight"] * 0.45 + 1
+    assert pe["scrolls"] in ("auto", "scroll")
+    de = r["desktopExpanded"]
+    assert de["expanded"] and de["display"] == "grid" and de["besideStage"] and de["columns"] == 2
+    assert len(de["rows"].split(" ")) >= 2
+    assert r["desktopCollapsed"]["expanded"] is False and r["desktopCollapsed"]["besideStage"]
+
+
+def test_flow_trace_panel_is_hidden_with_the_controls_when_printing(flow_traces_page: Path) -> None:
+    out = run(
+        flow_traces_page,
+        {"click": TRACE_BTN},
+        {"emulate": {"media": "print"}},
+        ev(
+            """(() => {
+              const f = document.querySelector('#renewal');
+              return ['[data-q-flow-trace-panel]', '[data-q-flow-controls]', '[data-q-flow-drawer]']
+                .map((s) => getComputedStyle(f.querySelector(s)).display);
+            })()""",
+            "display",
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["display"] == ["none", "none", "none"]
