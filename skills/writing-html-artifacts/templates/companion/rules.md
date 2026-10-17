@@ -33,4 +33,4 @@ Read after section 12 of the [design reference](../../references/design-referenc
 ## Diagrams
 
 - `diagram` is Mermaid source for a static diagram. The screen loads Mermaid from the companion server at `/_quirk/lib/mermaid/<version>/mermaid.min.js`; it is never inlined, so a diagram screen stays small.
-- The diagram renders above the options and follows the light and dark theme. Keep it to what the question needs: one flow or one relationship map. When the user needs to pan, zoom or click through a graph on the screen, put `<q-flow>` or `<q-schema>` in `content` instead (never in an option's `html`, because both are interactive).
+- The diagram renders above the options and follows the light and dark theme. Keep it to what the question needs: one flow or one relationship map. When the user needs to pan, zoom or click through a graph on the screen, put `<q-flow>` or `<q-schema>` in `content` instead, and `<q-sequence>` for a sequence diagram (never in an option's `html`, because all three are interactive).
