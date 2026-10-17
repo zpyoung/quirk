@@ -1137,6 +1137,39 @@ def _validate_flow_traces(
     return clean_traces
 
 
+_LONE_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
+def _flow_has_unwritable_text(data: dict[str, Any]) -> bool:
+    """True when a string or object key in the graph data holds an unpaired surrogate.
+
+    Trace step values are skipped: they have their own "isn't JSON" rule. The walk is iterative so
+    deeply nested data can't raise RecursionError.
+    """
+    stack: list[tuple[Any, str]] = [(data, "root")]
+    while stack:
+        obj, where = stack.pop()
+        if isinstance(obj, str):
+            if _LONE_SURROGATE.search(obj):
+                return True
+        elif isinstance(obj, dict):
+            for key, val in obj.items():
+                if _LONE_SURROGATE.search(key):
+                    return True
+                if where == "step" and key == "value":
+                    continue
+                child = "other"
+                if where == "root" and key == "traces":
+                    child = "traces"
+                elif where == "trace" and key == "steps":
+                    child = "steps"
+                stack.append((val, child))
+        elif isinstance(obj, list):
+            child = {"traces": "trace", "steps": "step"}.get(where, "other")
+            stack.extend((item, child) for item in obj)
+    return False
+
+
 def _validate_flow_node(
     node: _Node,
     report_fail: Report,
@@ -1172,6 +1205,9 @@ def _validate_flow_node(
     def fail(line: int, msg: str) -> None:
         before_fails.append(1)
         report_fail(line, msg)
+
+    if _flow_has_unwritable_text(data):
+        fail(node.line, "<q-flow> graph data holds text that can't be written as UTF-8")
 
     if _FLOW_COORD_KEYS & set(data):
         fail(node.line, "<q-flow> positions are laid out automatically; remove coordinates")

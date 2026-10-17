@@ -1521,6 +1521,59 @@ def test_flow_trace_value_with_a_lone_surrogate_is_not_json() -> None:
     assert messages(renewal(pair({"value": "\U0001f600"}))) == []
 
 
+GRAPH_UTF8_MESSAGE = "<q-flow> graph data holds text that can't be written as UTF-8"
+
+
+def _renewal_with(patch) -> str:
+    payload = json.loads(json.dumps(RENEWAL_GRAPH))
+    patch(payload)
+    return flow_markup(payload)
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        lambda p: p["nodes"][0].update(label="A \ud800"),
+        lambda p: p.update(kinds={"k\udc00": 1}),
+        lambda p: p["edges"][1].update(label="x\ud800"),
+        lambda p: p["traces"][0]["steps"][1].update(note="n\ud800"),
+        lambda p: (
+            p["edges"][1].update(id="tax-\ud800"),
+            p["traces"][0]["steps"][2].update(via="tax-\ud800"),
+            p["traces"].pop(),
+        ),
+        lambda p: p["traces"][0].update(id="t\ud800"),
+        lambda p: p["traces"][0].update(label="L\ud800"),
+        lambda p: p.update(groups=[{"id": "g", "label": "G\ud800"}]),
+        lambda p: p["nodes"][0].update({"k\ud800": "v"}),
+    ],
+    ids=["node-label", "node-kind", "edge-label", "trace-note", "trace-via", "trace-id", "trace-label", "group-label", "object-key"],
+)
+def test_flow_graph_text_with_a_lone_surrogate_fails_once(patch) -> None:
+    assert messages(_renewal_with(patch)) == [GRAPH_UTF8_MESSAGE]
+
+
+def test_flow_graph_text_fails_once_even_with_several_bad_strings() -> None:
+    def patch(p: dict) -> None:
+        p["nodes"][0]["label"] = "\ud800"
+        p["nodes"][1]["label"] = "\udc00"
+        p["traces"][0]["steps"][1]["note"] = "\ud800"
+
+    assert messages(_renewal_with(patch)) == [GRAPH_UTF8_MESSAGE]
+
+
+def test_flow_graph_text_with_a_valid_surrogate_pair_passes() -> None:
+    def patch(p: dict) -> None:
+        p["nodes"][0]["label"] = "Renew \U0001f600"
+        p["traces"][0]["steps"][1]["note"] = "ok \U0001f600"
+
+    assert messages(_renewal_with(patch)) == []
+
+
+def test_flow_trace_value_surrogate_gets_only_the_value_message() -> None:
+    assert messages(renewal(pair({"value": "\ud800"}))) == ['<q-flow> trace "t" step 2 has a value that isn\'t JSON']
+
+
 def test_flow_trace_value_over_400_lines_fails() -> None:
     got = messages(renewal(pair({"value": list(range(399))})))
     assert got == ['<q-flow> trace "t" step 2 value is 401 lines; at most 400']

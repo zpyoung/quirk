@@ -1132,6 +1132,17 @@ def test_q_flow_trace_with_a_lone_surrogate_value_fails_the_build_instead_of_cra
     out.read_bytes().decode("utf-8")
 
 
+def test_q_flow_label_with_a_lone_surrogate_fails_the_build_instead_of_crashing(tmp_path, env, project):
+    graph = json.loads(json.dumps(RENEWAL_GRAPH))
+    graph["nodes"][0]["label"] = "A \ud800"
+    page = trace_flow_markup(graph, "labelsurrogate")
+    rc, result, out = report_build(tmp_path, env, project, page, name="flowlabelsurrogate")
+    assert rc == 1 and result["checks"]["passed"] is False, result
+    kit = [f["detail"] for f in result["checks"]["failures"] if f["check"] == "kit"]
+    assert len(kit) == 1 and kit[0].endswith("<q-flow> graph data holds text that can't be written as UTF-8"), kit
+    out.read_bytes().decode("utf-8")
+
+
 def test_q_flow_trace_list_omits_the_note_part_for_an_empty_note(tmp_path, env, project):
     graph = {
         "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
