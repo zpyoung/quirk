@@ -72,7 +72,7 @@ The body of `REVIEW.md` (everything after the front matter) is prose guidance fo
 ## Generated files
 
 With `--apply`, files whose `linguist-generated` attribute is set (from `.gitattributes`)
-or that match a `skip_globs` pattern are removed from the review context before the size
-gate, and listed in `excluded_generated` and the report Summary. In the reviewer seat the
+or that match a `skip_globs` pattern are removed from the review context before any lens
+reads the diff, and listed in `excluded_generated` and the report Summary. In the reviewer seat the
 attributes come from the target ref (`git check-attr --source`, git 2.40 or newer); on
 older git that half is skipped with a warning and `skip_globs` still apply.
