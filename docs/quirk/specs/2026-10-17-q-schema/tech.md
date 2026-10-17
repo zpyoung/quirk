@@ -117,7 +117,7 @@ R = "inherits" | "implements" | "composition" | "aggregation" | "association" | 
 REGEX (M): ^(\*|\d+|\d+\.\.(\d+|\*))$  and for n..m, n <= m
 ```
 
-- `notation` absent means `er`. ER `fields` is required and non-empty per entity; class `fields` and `methods` are optional.
+- `notation` absent means `er`. ER `fields` is required and non-empty per entity; class `fields` and `methods` are optional, and when present must be lists (an explicit `null` fails). An optional string that is present must be non-blank (a whitespace-only `label` fails; it is not treated as absent).
 - An ER end splits on the first `.`: entity id before it, field name after. Entity ids containing `.` fail ("entity ids may not contain '.'").
 - Ids, labels, names, types, signatures and notes are non-blank strings (`isBlankFlowId` semantics). `directed` is only valid on `association`.
 - Both parsers return the same cleaned shape; JS: `{notation, kinds, groups, groupMap, entities, entityMap, relationships}`; Python: the same keys in snake_case, or `None` on any failure.
@@ -178,13 +178,13 @@ Back-links: [SC-12](logic.md#focusing), [SC-20](logic.md#text-list-and-fallbacks
 - **Drawer relationship button**: ER `{label|has}: {Other} ({from field name} → {to field name})` with names as written, e.g. `has: Customer (customer_id → id)` and `generates: Charge (subscription_id → id)`; class, from the `from` side `{label|verb}: {Other}` with verbs `inherits from`, `implements`, `composed of`, `aggregates`, `associated with`, `depends on`; from the `to` side `{reverse verb}: {Other}` with `inherited by`, `implemented by`, `part of`, `aggregated by`, `associated with`, `used by`.
 - **Announce**: `{Label}[, {kind}][, {stereotype}], {n} {field|fields}, {m} {relationship|relationships}` in ER notation and `members` in class notation; `n` counts every field or member (not only shown ones) and `1` takes the singular, e.g. `Subscription, billing, 6 fields, 2 relationships`.
 - **Notice and title**: notice `JavaScript is off, so this data model is shown as a list below.` (class: `class diagram`); summary `Data model as a list` or `Class diagram as a list`; layout failure notice `This data model could not be drawn.` (class: `class diagram`).
-- **List markup**: wrapper identical to q-flow's fallback (`div.q-flow-stage[data-q-flow-stage]` holding the JavaScript-off notice, then `details.q-flow-list[data-q-flow-list][open]`), body `ul` of groups (`li[data-q-flow-list-group]`, nesting as q-flow) and entities (`li[data-q-schema-list-entity=ID]` with a nested `ul` of field/member lines and an optional `div[data-q-flow-list-detail]`), then `p` "Relationships" and `ul[data-q-schema-list-rels]` with one `li` per sentence.
+- **List markup**: wrapper identical to q-flow's fallback (`div.q-flow-stage[data-q-flow-stage]` holding the JavaScript-off notice, then `details.q-flow-list[data-q-flow-list][open]`), body `ul` of groups (`li[data-q-flow-list-group]`, nesting as q-flow) and entities (`li[data-q-schema-list-entity=ID]` with a nested `ul` of field/member lines and an optional `div[data-q-flow-list-detail]`), then `p` "Relationships" and `ul[data-q-schema-list-rels]` with one `li` per sentence; both are omitted when the model has no relationships.
 
 ### 6. Build, checks and waits
 Back-links: [Data flow](logic.md#data-flow), [SC-2](logic.md#authoring-and-building), [SC-24 and SC-25](logic.md#other-surfaces).
 
 - `needs_flow(text)` is true for `q-flow` or `q-schema`; the flow library is inlined once per page either way.
-- `inject_schema_fallbacks` follows `inject_flow_fallbacks`' skip rules: a block already holding `data-q-flow-list`, a self-closed tag, no `summary`, or data that fails validation is left alone.
+- `inject_schema_fallbacks` follows `inject_flow_fallbacks`' skip rules: a block already holding a `data-q-flow-list` element (an attribute on a tag outside the JSON script; the same text inside the data does not count), a self-closed tag, no `summary`, or data that fails validation is left alone.
 - `checks.py` fails a page with `q-schema` and no `flow@` label.
 - verify and the harness wait until every `q-flow` and `q-schema` has `data-q-flow-ready`.
 
