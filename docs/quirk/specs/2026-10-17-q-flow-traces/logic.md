@@ -1,6 +1,6 @@
 # Logic spec: stepping through a value in `q-flow`
 
-**Status**: Draft
+**Status**: Approved
 
 A `q-flow` graph shows what connects to what, but not what happens to the data on the way. A reader
 can see that a renewal order goes from Pricing to Tax to Charge worker. They can't see that Pricing
@@ -535,6 +535,6 @@ Build-only questions for the tech spec:
 
 ## Status & amendments
 
-**Status**: Draft
+**Status**: Approved
 
 **Amendments:** none yet.
