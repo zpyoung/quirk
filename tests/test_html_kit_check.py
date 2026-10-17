@@ -1418,6 +1418,28 @@ def test_flow_bad_trace_id_still_checks_its_steps_under_a_question_mark() -> Non
     ]
 
 
+def test_flow_trace_with_a_question_mark_id_is_valid_and_kept() -> None:
+    node_map = {"a": {"id": "a", "label": "A"}, "b": {"id": "b", "label": "B"}}
+    edges = [{"from": "a", "to": "b", "ref": "a>b", "label": "", "loop": False}]
+    failures: list[str] = []
+    traces = kitcheck._validate_flow_traces(
+        {"traces": one_trace({"node": "a", "value": 1}, {"node": "b", "value": 2}, id="?", label="Odd id")},
+        1,
+        node_map,
+        edges,
+        lambda _line, msg: failures.append(msg),
+        lambda _line, _msg: None,
+    )
+    assert failures == []
+    assert [t["id"] for t in traces] == ["?"]
+    assert messages(renewal(one_trace({"node": "scheduler", "value": 1}, {"node": "pricing", "value": 2}, id="?"))) == []
+
+
+def test_flow_trace_empty_note_is_valid() -> None:
+    assert messages(renewal(pair({"note": ""}))) == []
+    assert warn_messages(renewal(pair({"note": ""}))) == []
+
+
 def test_flow_duplicate_trace_id_is_reported_once_per_id() -> None:
     steps = [{"node": "scheduler", "value": 1}, {"node": "pricing", "value": 2}]
     trace = {"id": "t", "label": "T", "steps": steps}

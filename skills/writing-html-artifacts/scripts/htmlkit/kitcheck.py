@@ -1028,7 +1028,8 @@ def _validate_flow_traces(
             continue
         tid = trace.get("id")
         tlabel = trace.get("label")
-        if not _is_text(tid) or not _is_text(tlabel):
+        header_ok = _is_text(tid) and _is_text(tlabel)
+        if not header_ok:
             fail(line, "<q-flow> each trace needs an id and a label")
             t = "?"
         else:
@@ -1126,7 +1127,7 @@ def _validate_flow_traces(
             )
             prev_node = snode if known else None
 
-        if t != "?":
+        if header_ok:
             clean_traces.append({"id": t, "label": tlabel, "steps": clean_steps})
     return clean_traces
 
@@ -1507,7 +1508,7 @@ def _render_flow_fallback_html(parsed: dict[str, Any]) -> str:
                     via_part = f", via &quot;{html_lib.escape(step['via'])}&quot;"
                 else:
                     via_part = ", around the loop"
-            note_part = f": {html_lib.escape(step['note'])}" if step["note"] is not None else ""
+            note_part = f": {html_lib.escape(step['note'])}" if step["note"] else ""
             pretty = json.dumps(step["value"], indent=2, ensure_ascii=False, allow_nan=False)
             items.append(
                 f'<li data-q-flow-list-step="{n}">{html_lib.escape(node_map[step["node"]]["label"])}'
