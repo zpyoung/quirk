@@ -1,12 +1,16 @@
-# Logic spec: `q-schema`, an explorable data model element for `writing-html-artifacts`
+# Logic spec: `q-schema`, an explorable data model and class diagram element for `writing-html-artifacts`
 
-**Status**: Draft
+**Status**: Approved
 
 `q-schema` is a kit element that draws a read-only data model: tables (entities) as cards with their
 fields, and the relationships between them as lines with crow's-foot marks. The reader can pan,
 zoom, click a table to light it and its neighbours, and open a drawer with every field. Agents today
 have no documented way to draw a data model; the routing evals quietly expect Mermaid's static
 `erDiagram`, whose cardinality syntax is easy to get wrong and whose picture can't be explored.
+
+With `notation="class"` the same element draws a UML class diagram instead: classes with their
+attributes and methods, joined by inheritance, implementation, composition, aggregation, association
+and dependency lines. That replaces Mermaid's `classDiagram` on HTML pages too.
 
 It is the fourth of four specs. It reuses the canvas of the element specified in
 [the q-flow logic spec](../2026-10-16-q-flow/logic.md) (layout, zoom, toolbar, group panels, drawer,
@@ -56,17 +60,59 @@ Every model also renders as a **text list**, a "Data model as a list" disclosure
 lists every entity with all its fields, then every relationship as a sentence. It is the
 screen-reader and no-script view, so it always carries everything the canvas does and more.
 
+### Class notation
+
+A `q-schema` with `notation="class"` is a **class diagram**. Everything above about kinds, groups,
+focus, the drawer, the canvas and the text list holds, with these changes:
+
+| Thing | In a class diagram | What the agent gives it |
+|---|---|---|
+| class | an entity drawn as a UML class | an id and a label; optionally a kind, a group, a stereotype, a detail, attributes and methods |
+| attribute | a field of a class | a name; optionally a type, a visibility, whether it is static, and a note |
+| method | an operation of a class | a free-text signature such as `parse(src: str) -> Ast`; optionally a visibility, whether it is static or abstract, and a note |
+| relationship | a line from one class to another | the two classes and a type; optionally a multiplicity at each end and a label |
+
+- **Stereotype** marks a class as `interface`, `abstract` or `enum`, shown as «interface» above the
+  label. It is separate from kind, which stays a free color category. An enum's values are written
+  as attributes with no type.
+- **Visibility** is `public`, `private`, `protected` or `package`, shown before the member as `+`,
+  `-`, `#` or `~`. Static members are underlined and abstract methods italic on the card; the drawer
+  and the text list say "static" and "abstract" in words.
+- **Relationships join classes, not members**, and read from `from` to `to`:
+
+  | Type | Reads as | Drawn as |
+  |---|---|---|
+  | `inherits` | from inherits from to | solid line, hollow triangle at to |
+  | `implements` | from implements to | dashed line, hollow triangle at to |
+  | `composition` | from is composed of to | solid line, filled diamond at from |
+  | `aggregation` | from aggregates to | solid line, hollow diamond at from |
+  | `association` | from is associated with to | solid line, an open arrow at to only when marked `directed` |
+  | `dependency` | from depends on to | dashed line, open arrow at to |
+
+- **Multiplicity** at an end is UML's short form: `1`, `0..1`, `*`, `0..*`, `1..*` or `n..m` with
+  whole numbers, drawn as text beside that end.
+- **Cards** have three compartments: the header (stereotype, label and kind accent), the attributes
+  and the methods.
+- **Layout** runs top to bottom with parents above children: the target of `inherits` and
+  `implements`, and the whole in `composition` and `aggregation`, sits above the other end.
+- **Fold:** a card shows up to 8 member rows, attributes first, then methods. When both overflow,
+  each gets 4 rows; when one needs fewer, the other takes the spare rows. One "+N more" row counts
+  the rest.
+- The text list is titled "Class diagram as a list".
+
 ## Data flow
 
-1. **Choosing.** The agent reaches for `q-schema` for every data model or entity-relationship
-   diagram on an HTML page. It keeps Mermaid for diagrams inside Markdown and for class diagrams.
+1. **Choosing.** The agent reaches for `q-schema` for every data model, entity-relationship or class
+   diagram on an HTML page, adding `notation="class"` for a class diagram. It keeps Mermaid for
+   diagrams inside Markdown.
 2. **Authoring.** The agent writes a `<q-schema>` tag with a one-sentence `summary` and the model as
    JSON inside it: `kinds`, `groups`, `entities` with their `fields`, and `relationships` that name
-   fields as `entity.field`.
+   fields as `entity.field`. A class diagram's entities carry attributes in `fields` and `methods`,
+   and its relationships name classes and a type.
 3. **Building.** The build sees the tag and inlines the graph library that `q-flow` uses (the layout
    engine, the zoom library and the kit's renderer, with their licenses), once per page however many
-   `q-flow` and `q-schema` elements it holds. The kit check runs the rules in SC-3 and SC-4 over the
-   model. The no-JS fallback carries the text list.
+   `q-flow` and `q-schema` elements it holds. The kit check runs the rules in SC-3 and SC-4 over a
+   data model and those in SC-29 and SC-30 over a class diagram. The no-JS fallback carries the text list.
 4. **Loading.** The element measures each card's rows, lays the model out with a port on each shown
    field row, fits it to the view and only then shows it. It writes the text list from the same data.
 5. **Reading.** The reader pans, zooms, focuses entities and groups, and opens drawers. The theme
@@ -94,9 +140,14 @@ screen-reader and no-script view, so it always carries everything the canvas doe
 - **Badges carry text.** PK, FK and UK are written on the row, so meaning never rests on color.
 - **Focus lights direct neighbours only.** A data model is usually connected end to end, so following
   relationships transitively, as `q-flow` does with paths, would light the whole model.
-- **Class diagrams stay Mermaid.** A class diagram carries methods, visibility, inheritance and
-  interfaces, which have no home in entities, fields and cardinality. Covering them would either
-  drop that meaning or grow the contract into a second element.
+- **Class diagrams are a notation of `q-schema`, chosen by an attribute.** They share the card,
+  canvas, focus, drawer and text list, so a second element would repeat all of it. One notation per
+  model lets the check apply one rule set: keys and cardinality can't leak into a class diagram, and
+  methods and UML line types can't leak into a data model.
+- **Methods are free-text signatures.** Parameter and return types vary by language; a structured
+  form would be much more for agents to write and get wrong, for no gain on the canvas.
+- **Class relationships join classes.** UML draws them between class boxes, not members, and most
+  class diagrams have no member to point at.
 
 ## Behavior and scenarios
 
@@ -347,14 +398,16 @@ four relationships:
     - **Given** the billing model
     - **When** the reader opens "Data model as a list"
     - **Then** it lists each group with its entities, each entity with all its fields as name, type,
-      keys and whether it can be empty, then each relationship as a sentence
+      keys and whether it can be empty, then each relationship as a sentence; a "many" end uses the
+      entity's label made plural by English spelling rules (Subscription to Subscriptions, Category
+      to Categories, Address to Addresses), so an odd plural such as Person reads as Persons
     - **Data before:** **Relationship**: Subscription's customer id to Customer's id, "has", zero or
       many at the Subscription end, one at the Customer end
     - **Walkthrough:**
       1. The element starts the sentence at the referenced entity, with its label as written: "Each
          Customer"
-      2. It adds the label and the cardinality at the Subscription end: "has zero or many
-         Subscriptions" [ASK: How does the sentence get an entity's plural, such as Subscriptions or Line items?]
+      2. It adds the label and the cardinality at the Subscription end, with the label made plural by
+         English spelling rules: "has zero or many Subscriptions"
       3. It adds the cardinality at the Customer end, read the other way: "each Subscription has one
          Customer"
       4. It closes with the fields: "(subscription.customer_id → customer.id)"
@@ -395,15 +448,158 @@ four relationships:
     - **Then** it waits until every model has finished laying out, so no screenshot shows a blank canvas
       or cards piled in one corner
 
-### Choosing
+### Class diagrams
+
+These scenarios share one parser class diagram. It has kinds "api" (color 1) and "internals"
+(color 3), and these classes:
+
+- **Parser** (api, interface): method `+ parse(src: str) -> Ast`
+- **RecursiveDescentParser** (internals): 6 attributes, `+ max_depth: int` (static),
+  `- lexer: Lexer`, `- pos: int`, `- depth: int`, `- errors: list`, `- options: dict`; 7 methods,
+  `+ parse(src: str) -> Ast`, `- expr() -> Ast`, `- term() -> Ast`, `- factor() -> Ast`,
+  `- expect(kind: TokenKind) -> Token`, `- peek() -> Token`, `- error(msg: str)`
+- **Lexer** (internals): attributes `- src: str`, `- pos: int`; methods `+ next() -> Token`,
+  `+ peek() -> Token`
+- **Token** (internals): attributes `+ kind: TokenKind`, `+ text: str`, `+ line: int`
+- **TokenKind** (internals, enum): NUMBER, IDENT, PLUS, LPAREN, RPAREN, EOF
+- **Ast** (api, abstract): method `+ accept(v: Visitor)` (abstract)
+- **BinaryExpr** (api): attributes `+ left: Ast`, `+ op: TokenKind`, `+ right: Ast`
+
+Class ids are the labels in lower case (`parser`, `recursivedescentparser`, `lexer` and so on). The
+relationships are:
+
+- RecursiveDescentParser `implements` Parser
+- RecursiveDescentParser `composition` Lexer, multiplicity `1` at Lexer
+- Lexer `dependency` Token, label "produces"
+- Token `association` TokenKind, `directed`
+- BinaryExpr `inherits` Ast
+- BinaryExpr `aggregation` Ast, multiplicity `2` at Ast, label "operands"
+- Parser `dependency` Ast, label "returns"
 
 26. **SC-26**
+    - **Given** an agent writing an HTML technical overview of the parser
+    - **When** it writes a `q-schema` with `notation="class"` and the parser diagram, and builds the page
+    - **Then** the kit check passes, and the page shows seven class cards with header, attribute and
+      method compartments, Parser and Ast above the classes that implement or inherit them, and each
+      line carrying its UML marker
+    - **Data before:** **Source**: `<q-schema notation="class" summary="The parser's public interface, its recursive descent implementation and the AST it returns.">`
+      holding the parser diagram as JSON
+    - **Walkthrough:**
+      1. The kit check applies the class rules: class ids unique, members unique per class, every
+         relationship names a real class, every type, stereotype, visibility and multiplicity known
+      2. In the browser, the element lays the diagram out top to bottom with parents above
+    - **Data after:** **Diagram on screen**: ✓ Parser's header reads «interface» above "Parser"; ✓ Ast's
+      header reads «abstract» and its `accept` method is italic; ✓ TokenKind's header reads «enum» and
+      lists its six values; ✓ Parser above RecursiveDescentParser; ✓ Ast above BinaryExpr; ✓
+      `max_depth` underlined
+    - **UML markers:**
+
+      | Relationship | Drawn as |
+      |---|---|
+      | RecursiveDescentParser implements Parser | ✓ dashed line, hollow triangle at Parser |
+      | BinaryExpr inherits Ast | ✓ solid line, hollow triangle at Ast |
+      | RecursiveDescentParser composition Lexer | ✓ filled diamond at RecursiveDescentParser; "1" beside Lexer |
+      | BinaryExpr aggregation Ast | ✓ hollow diamond at BinaryExpr; "2" beside Ast; "operands" on the line |
+      | Token association TokenKind, directed | ✓ solid line, open arrow at TokenKind |
+      | Lexer dependency Token | ✓ dashed line, open arrow at Token; "produces" on the line |
+
+27. **SC-27**
+    - **Given** the parser diagram
+    - **When** the page loads
+    - **Then** RecursiveDescentParser's card shows 4 attributes, 4 methods and a "+5 more" row, and
+      Lexer's card shows both attributes and both methods with no "+N more" row
+    - **Data before:** **RecursiveDescentParser**: 6 attributes, 7 methods; **Lexer**: 2 attributes,
+      2 methods
+    - **Walkthrough:**
+      1. RecursiveDescentParser has 13 members, more than 8, and both compartments need more than 4
+         rows, so each gets 4
+      2. It shows `max_depth`, `lexer`, `pos`, `depth`, then `parse`, `expr`, `term`, `factor`
+      3. It counts the rest: 2 attributes and 3 methods
+    - **Data after:** **RecursiveDescentParser card**: ✓ 4 attribute rows; ✓ 4 method rows; ✓ "+5 more"
+      row last; **Lexer card**: ✓ 2 attribute rows; ✓ 2 method rows; ✓ no "+N more" row
+    - **Fold examples:**
+
+      | Attributes, methods | Shown | "+N more" |
+      |---|---|---|
+      | 6, 7 | ✓ 4 attributes, 4 methods | ✓ "+5 more" |
+      | 2, 9 | ✓ 2 attributes, 6 methods | ✓ "+3 more" |
+      | 11, 1 | ✓ 7 attributes, 1 method | ✓ "+4 more" |
+      | 3, 4 | ✓ all 7 | ✓ none |
+
+28. **SC-28**
+    - **Given** the parser diagram, nothing focused
+    - **When** the reader clicks Lexer
+    - **Then** Lexer, RecursiveDescentParser and Token stay lit with the two lines between them, the rest
+      dims, and the drawer lists every attribute and method with its visibility in words, "static" and
+      "abstract" where they apply, and buttons for the two relationships
+    - **Drawer contents:**
+
+      | Part | Shown |
+      |---|---|
+      | attributes | ✓ "private src: str"; ✓ "private pos: int" |
+      | methods | ✓ "public next() -> Token"; ✓ "public peek() -> Token" |
+      | relationship buttons | ✓ "part of: RecursiveDescentParser"; ✓ "produces: Token" |
+
+29. **SC-29**
+    - **Given** a class diagram whose data breaks the contract
+    - **When** the page is built
+    - **Then** the build fails the kit check and names the element and the problem, for each case in
+      the table, as well as for the coordinates, kinds, groups, detail, size and summary cases in SC-3
+    - **Kit check failures:**
+
+      | Class diagram data | Result |
+      |---|---|
+      | `notation="uml"` | ✗ fails: unknown notation "uml"; use class, or leave it out for a data model |
+      | two classes with the id "lexer" | ✗ fails: duplicate class id "lexer" |
+      | Lexer lists the attribute "pos" twice, or the method `peek() -> Token` twice | ✗ fails: duplicate member in "lexer" |
+      | a relationship to "tokenizer", which no class has | ✗ fails: relationship names unknown class "tokenizer" |
+      | a relationship end written "lexer.next" | ✗ fails: class relationships join classes, not members |
+      | a relationship type of "extends" | ✗ fails: unknown relationship type "extends"; use inherits, implements, composition, aggregation, association or dependency |
+      | a visibility of "internal" | ✗ fails: unknown visibility "internal"; use public, private, protected or package |
+      | a stereotype of "mixin" | ✗ fails: unknown stereotype "mixin"; use interface, abstract or enum |
+      | a multiplicity of "many" | ✗ fails: unknown multiplicity "many"; use 1, 0..1, *, 0..*, 1..* or n..m |
+      | Ast inherits BinaryExpr while BinaryExpr inherits Ast | ✗ fails: inheritance loops |
+      | a field with a key, or a relationship with a cardinality | ✗ fails: keys and cardinality belong to data models; this is a class diagram |
+      | in a data model, an entity with methods or a stereotype, or a relationship with a type | ✗ fails: methods, stereotypes and relationship types belong to class diagrams; add notation="class" |
+
+30. **SC-30**
+    - **Given** a class diagram that is valid but likely to read poorly or hide a mistake
+    - **When** the page is built
+    - **Then** the kit check passes with a warning for each case in the table
+    - **Kit check warnings:**
+
+      | Class diagram data | Result |
+      |---|---|
+      | 34 classes | ✓ passes with a warning: large diagrams read poorly, split them into groups or several diagrams |
+      | a class with 45 members | ✓ passes with a warning: "recursivedescentparser" has more than 40 members |
+      | a class implements Lexer, which isn't marked interface | ✓ passes with a warning: "lexer" is implemented but isn't an interface |
+      | a class inherits Parser, which is marked interface | ✓ passes with a warning: "parser" is an interface; use implements |
+
+31. **SC-31**
+    - **Given** the parser diagram
+    - **When** the reader opens "Class diagram as a list"
+    - **Then** it lists every class with its stereotype, every attribute and method with visibility,
+      static and abstract in words, then each relationship as a sentence, as in the table
+    - **Relationship sentences:**
+
+      | Relationship | Sentence |
+      |---|---|
+      | implements | ✓ "RecursiveDescentParser implements Parser" |
+      | inherits | ✓ "BinaryExpr inherits from Ast" |
+      | composition, 1 at Lexer | ✓ "RecursiveDescentParser is composed of 1 Lexer" |
+      | aggregation, 2 at Ast, "operands" | ✓ "BinaryExpr aggregates 2 Ast (operands)" |
+      | association, directed | ✓ "Token is associated with TokenKind" |
+      | dependency, "produces" | ✓ "Lexer depends on Token (produces)" |
+
+### Choosing
+
+32. **SC-32**
     - **Given** an agent asked to "add an entity-relationship diagram of the users, subscriptions, and
       charges tables to the HTML design write-up"
     - **When** it writes the page
-    - **Then** it writes a `q-schema`, not a Mermaid `erDiagram`; asked for the same diagram inside a
-      README it writes Mermaid; asked for a class diagram of parser interfaces on an HTML page it writes
-      Mermaid
+    - **Then** it writes a `q-schema`, not a Mermaid `erDiagram`; asked for a class diagram of parser
+      interfaces in an HTML technical overview it writes a `q-schema` with `notation="class"`, not a
+      Mermaid `classDiagram`; asked for either diagram inside a README it writes Mermaid
 
 ## Scope and non-goals
 
@@ -412,22 +608,24 @@ In scope:
 - the `q-schema` element: authoring contract, layout with a port per field row, entity cards with
   folded fields, key badges, crow's-foot marks, relationship labels, self-relationships, group panels,
   kinds, focus and dim, the drawer, zoom and pan, expand, keyboard, the text list
+- the class notation: classes with stereotypes, attributes and methods, the six UML relationship
+  types with multiplicities, top-to-bottom layout, and its own check rules in SC-29 and SC-30
 - sharing `q-flow`'s canvas pieces by factoring them out, with no change to how `q-flow` behaves
-- the kit check rules and warnings in SC-3 and SC-4
+- the kit check rules and warnings in SC-3, SC-4, SC-29 and SC-30
 - inlining the graph library once per page for `q-flow` and `q-schema` together
 - tier-1 pages, tier-2 apps and companion screen `content`
 - verify waiting for layout
 - the skill's text: the `q-schema` versus Mermaid rule in SKILL.md, the design reference and the
   report and components template rules; the generated `q-schema` entry in the components reference;
   the element list in SKILL.md; the routing evals for ER and class diagrams
-- one example page with the billing model
+- one example page with the billing model and the parser class diagram
 
 Not in scope:
 
 - stepping through records or showing sample rows per table
 - editing the model
 - generating the model from SQL DDL or ORM models
-- class diagrams
+- generics, notes attached to classes, and relationships that point at a single member
 - many-to-many relationships drawn without a join table
 - relationships across several fields at once (composite foreign keys)
 - lanes, a `direction` attribute and the pulse, which `q-flow` has and a data model doesn't need
@@ -435,11 +633,13 @@ Not in scope:
 
 ## Success criteria
 
-- The routing evals show the agent choosing `q-schema` for an ER or data model diagram on an HTML
-  page, and Mermaid for the same diagram inside Markdown and for a class diagram on an HTML page.
+- The routing evals show the agent choosing `q-schema` for an ER, data model or class diagram on an
+  HTML page (with `notation="class"` for the class diagram), and Mermaid for the same diagrams inside
+  Markdown.
 - Verify screenshots of the billing example at 375px and 1280px in both themes show four cards in a
   Billing panel layout, lines that end at field rows, a crow's-foot mark at every line end, and a
-  "+7 more" row on Charge.
+  "+7 more" row on Charge; screenshots of the parser example show compartmented class cards with a
+  stereotype header, a UML marker at each line end, and parents above children.
 
 ## Decisions Locked
 
@@ -493,6 +693,25 @@ Kit check:
 Choosing and scope:
 
 - Data model and ER diagrams on HTML pages use `q-schema`; Mermaid keeps diagrams inside Markdown.
+- Class diagrams on HTML pages also use `q-schema` (chosen at review over keeping them on Mermaid);
+  evals 14 and 16 both move to `q-schema`.
+
+Class notation (chosen at review):
+
+- A `notation="class"` attribute makes a model a class diagram; one model is one notation.
+- Methods are `{signature, visibility?, static?, abstract?, note?}` with a free-text signature;
+  attributes reuse the field shape as `{name, type?, visibility?, static?, note?}`.
+- Relationship types are `inherits`, `implements`, `composition`, `aggregation`, `association` and
+  `dependency`, joining class to class, with optional multiplicity at each end.
+- A `stereotype` field marks `interface`, `abstract` or `enum`, separate from `kind`; enum values are
+  attributes with no type.
+- Parents sit above children, and a card folds at 8 rows across attributes and methods with a
+  "+N more" row.
+
+Text list (chosen at review):
+
+- A "many" end in a relationship sentence uses the entity label made plural by English spelling
+  rules, with no `plural` field.
 - The work stays out of step-through, sample rows, editing, generation from DDL or ORM models, and
   many-to-many without a join table.
 - `q-schema` lives in its own class and shares `q-flow`'s canvas pieces by factoring them, without
@@ -501,8 +720,6 @@ Choosing and scope:
 
 Decided in this spec (assumed defaults, open to review):
 
-- Class diagrams stay Mermaid, for the reason under Key decisions. Eval 16 keeps expecting Mermaid
-  and eval 14 moves to `q-schema`.
 - The exact fold threshold is 8 shown fields; a card with more than 8 key or related fields shows
   them all and no other fields.
 - Shown fields keep the agent's order rather than moving keys to the top.
@@ -514,7 +731,16 @@ Decided in this spec (assumed defaults, open to review):
 - Unknown and malformed group, kind and detail data fail as they do in `q-flow` (SC-3).
 - `q-schema` has no lanes, no `direction` attribute and no pulse.
 - `q-schema` works wherever `q-flow` works: tier-1 pages, tier-2 apps and companion screen content.
-- The disclosure is titled "Data model as a list".
+- The disclosure is titled "Data model as a list", or "Class diagram as a list" in class notation.
+- Visibility is one of four words shown as `+ - # ~`; static is underlined and abstract italic on the
+  card, and both are written out in the drawer and the text list.
+- Composition and aggregation put the diamond at `from`, the whole; an association draws an arrow
+  only when marked `directed`.
+- Multiplicity uses UML's short form and is checked.
+- When both compartments overflow they get 4 rows each; otherwise one gives its spare rows to the
+  other.
+- The class check rules in SC-29 and SC-30 mirror the data model rules, plus inheritance cycles and
+  the interface warnings.
 
 ## Industry Insights
 
@@ -575,9 +801,12 @@ Build-only questions for the tech spec:
   they stay in step.
 - `[tech-spec]` How the build and the library check detect `q-schema` alongside `q-flow` to inline
   the graph library once.
+- `[tech-spec]` UML marker geometry (triangles, diamonds, arrows) and how class notation sets the
+  layout direction and reverses `inherits` and `implements` lines so parents land above.
 
 Product ideas left out of this version: stepping through records or sample rows, editing,
-generating from SQL DDL or ORM models, class diagrams, many-to-many without a join table, composite
+generating from SQL DDL or ORM models, generics, notes attached to classes, relationships to a
+single class member, many-to-many without a join table, composite
 foreign keys, and following relationships beyond direct neighbours on focus.
 
 ## Glossary
@@ -596,9 +825,20 @@ foreign keys, and following relationships beyond direct neighbours on focus.
   dimmed.
 - **drawer**: the panel inside the canvas that shows a focused entity's fields and relationships.
 - **text list**: the "Data model as a list" disclosure that carries the whole model as text.
+- **notation**: whether a `q-schema` is a data model (the default) or a class diagram.
+- **class**: an entity in class notation, drawn as a card with attribute and method compartments.
+- **attribute**: a field of a class.
+- **method**: an operation of a class, written as a free-text signature.
+- **stereotype**: the «interface», «abstract» or «enum» mark on a class.
+- **visibility**: public, private, protected or package, shown as `+ - # ~`.
+- **multiplicity**: UML's count at a class relationship end, such as `1` or `0..*`.
 
 ## Status & amendments
 
-**Status**: Draft
+**Status**: Approved
 
-**Amendments:** none yet.
+**Amendments:**
+
+- 2026-10-17: class diagrams move from Mermaid into `q-schema` as `notation="class"`, and the
+  relationship sentence makes labels plural by English spelling rules (both chosen at review,
+  before implementation).
