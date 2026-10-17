@@ -1,6 +1,6 @@
 # Logic spec: `q-schema`, an explorable data model and class diagram element for `writing-html-artifacts`
 
-**Status**: Approved
+**Status**: Approved · Tech spec: authored (`tech.md`; tier gate fired: crosses subsystem boundaries and touches >3 source files)
 
 `q-schema` is a kit element that draws a read-only data model: tables (entities) as cards with their
 fields, and the relationships between them as lines with crow's-foot marks. The reader can pan,
@@ -94,7 +94,8 @@ focus, the drawer, the canvas and the text list holds, with these changes:
 - **Cards** have three compartments: the header (stereotype, label and kind accent), the attributes
   and the methods.
 - **Layout** runs top to bottom with parents above children: the target of `inherits` and
-  `implements`, and the whole in `composition` and `aggregation`, sits above the other end.
+  `implements`, and the whole in `composition` and `aggregation`, sits above the other end. When the
+  two disagree, as when a class aggregates its own parent, inheritance wins.
 - **Fold:** a card shows up to 8 member rows, attributes first, then methods. When both overflow,
   each gets 4 rows; when one needs fewer, the other takes the spare rows. One "+N more" row counts
   the rest.
@@ -549,7 +550,7 @@ relationships are:
 
       | Class diagram data | Result |
       |---|---|
-      | `notation="uml"` | ✗ fails: unknown notation "uml"; use class, or leave it out for a data model |
+      | `notation="uml"` | ✗ fails: notation="uml" is not one of er, class |
       | two classes with the id "lexer" | ✗ fails: duplicate class id "lexer" |
       | Lexer lists the attribute "pos" twice, or the method `peek() -> Token` twice | ✗ fails: duplicate member in "lexer" |
       | a relationship to "tokenizer", which no class has | ✗ fails: relationship names unknown class "tokenizer" |
@@ -835,10 +836,13 @@ foreign keys, and following relationships beyond direct neighbours on focus.
 
 ## Status & amendments
 
-**Status**: Approved
+**Status**: Approved · Tech spec: authored (`tech.md`; tier gate fired: crosses subsystem boundaries and touches >3 source files)
 
 **Amendments:**
 
 - 2026-10-17: class diagrams move from Mermaid into `q-schema` as `notation="class"`, and the
   relationship sentence makes labels plural by English spelling rules (both chosen at review,
   before implementation).
+- 2026-10-17: when a class layout's rules disagree, inheritance wins (as SC-26 already shows with
+  BinaryExpr and Ast), and an unknown `notation` fails with the kit's standard enum message (found
+  while writing the tech spec).
