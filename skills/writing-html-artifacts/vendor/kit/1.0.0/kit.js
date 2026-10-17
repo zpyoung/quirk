@@ -6295,8 +6295,20 @@
       });
     }
 
+    /** First direct script child whose type is application/json, trimmed and case-folded like the build check. */
+    _jsonScript() {
+      var kids = this.children;
+      for (var i = 0; i < kids.length; i += 1) {
+        var kid = kids[i];
+        if (kid.localName === 'script' && schemaStrip(kid.getAttribute('type') || '').toLowerCase() === 'application/json') {
+          return kid;
+        }
+      }
+      return null;
+    }
+
     _signature() {
-      var script = this.querySelector(':scope > script[type="application/json"]');
+      var script = this._jsonScript();
       return [
         script ? (script.textContent || '') : '',
         this.getAttribute('summary') || '',
@@ -6330,8 +6342,12 @@
       if (notation !== 'er' && notation !== 'class') {
         return null;
       }
-      var script = this.querySelector(':scope > script[type="application/json"]');
+      var script = this._jsonScript();
       if (!script) {
+        return null;
+      }
+      var summary = this.getAttribute('summary');
+      if (summary === null || isBlankFlowId(summary)) {
         return null;
       }
       var raw;
@@ -6403,21 +6419,21 @@
       }
       noCoords(raw);
 
-      var kinds = {};
+      var kinds = schemaMap();
       if (schemaHas(raw, 'kinds')) {
         if (!isRow(raw.kinds)) {
           bad();
         }
-        kinds = raw.kinds;
-        var kindKeys = Object.keys(kinds);
+        var kindKeys = Object.keys(raw.kinds);
         if (kindKeys.length > 8) {
           bad();
         }
         kindKeys.forEach(function (name) {
-          var c = kinds[name];
+          var c = raw.kinds[name];
           if (!schemaText(name) || typeof c !== 'number' || c < 1 || c > 8 || Math.floor(c) !== c) {
             bad();
           }
+          kinds[name] = c;
         });
       }
 
@@ -6740,6 +6756,11 @@
       }
       if (data) {
         this._populateList(details, data);
+      } else {
+        var staleBody = details.querySelector(':scope > [data-q-flow-list-body]');
+        if (staleBody) {
+          details.removeChild(staleBody);
+        }
       }
       var live = this.querySelector(':scope > [data-q-flow-live]');
       if (!live) {
@@ -6875,6 +6896,7 @@
       var self = this;
       this._initialized = true;
       this._lastSig = this._signature();
+      var seq = ++this._layoutSeq;
       this.removeAttribute('data-q-flow-ready');
       var data = this._parseData();
       this._ensureScaffold(data);
@@ -6891,7 +6913,6 @@
         return;
       }
       this._data = data;
-      var seq = ++this._layoutSeq;
       var fontsReady = (document.fonts && document.fonts.ready && typeof document.fonts.ready.then === 'function')
         ? document.fonts.ready.catch(function () {})
         : Promise.resolve();
@@ -6909,14 +6930,14 @@
       var self = this;
       var measure = this._measureTextFactory();
 
-      var used = {};
+      var used = schemaMap();
       data.relationships.forEach(function (r) {
         used[r.fromEntity + '\u0000' + r.fromField] = true;
         used[r.toEntity + '\u0000' + r.toField] = true;
       });
 
-      var cards = {};
-      var selfRels = {};
+      var cards = schemaMap();
+      var selfRels = schemaMap();
       data.relationships.forEach(function (r) {
         if (r.fromEntity === r.toEntity) {
           (selfRels[r.fromEntity] = selfRels[r.fromEntity] || []).push(r);
@@ -6970,7 +6991,7 @@
         return null;
       }
 
-      var ports = {};
+      var ports = schemaMap();
       function portId(entityId, fieldName, side) {
         return 'port:' + entityId + ':' + fieldName + ':' + side;
       }
@@ -7108,8 +7129,8 @@
     _renderGraph(data, laidOut) {
       var self = this;
       var cards = this._cards;
-      var groupBoxes = {};
-      var nodeBoxes = {};
+      var groupBoxes = schemaMap();
+      var nodeBoxes = schemaMap();
       var groupOrder = [];
 
       function collectShapes(items, depth) {
@@ -7148,7 +7169,7 @@
         return nodeBoxes[entityId].y;
       }
 
-      var laidOutEdges = {};
+      var laidOutEdges = schemaMap();
       (laidOut.edges || []).forEach(function (le) {
         laidOutEdges[le.id] = le;
       });
@@ -7172,7 +7193,7 @@
         expandBounds(b.x, b.y, b.width, b.height);
       });
 
-      var selfCount = {};
+      var selfCount = schemaMap();
       var relShapes = data.relationships.map(function (r) {
         var fromBox = nodeBoxes[r.fromEntity];
         var toBox = nodeBoxes[r.toEntity];
@@ -7274,7 +7295,7 @@
       });
 
       var defs = svgNode('defs');
-      this._markerIds = {};
+      this._markerIds = schemaMap();
       SCHEMA_CARDS.forEach(function (kind) {
         [['', 'var(--q-color-text-muted)'], ['lit-', 'var(--q-color-accent)']].forEach(function (variant) {
           var id = 'q-schema-mark-' + variant[0] + kind + '-' + uidValue;
@@ -7438,7 +7459,7 @@
       this._focusedNode = null;
       this._focusedGroup = null;
       this._rovingId = data.entities[0].id;
-      this._nodeElements = {};
+      this._nodeElements = schemaMap();
       data.entities.forEach(function (entity, idx) {
         var box = nodeBoxes[entity.id];
         var card = cards[entity.id];
@@ -7599,7 +7620,8 @@
       });
 
       svg.addEventListener('click', function (ev) {
-        if (ev.target === svg || ev.target === viewport) {
+        var onPanel = ev.target && ev.target.hasAttribute && ev.target.hasAttribute('data-q-flow-group-box');
+        if (ev.target === svg || ev.target === viewport || onPanel) {
           self._clearFocus();
         }
       });
@@ -7708,9 +7730,9 @@
       this._focusedNode = entityId;
       this._focusedGroup = null;
 
-      var litNodes = {};
+      var litNodes = schemaMap();
       litNodes[entityId] = true;
-      var litRels = {};
+      var litRels = schemaMap();
       data.relationships.forEach(function (r) {
         if (r.fromEntity === entityId || r.toEntity === entityId) {
           litRels[r.index] = true;
@@ -7718,7 +7740,7 @@
           litNodes[r.toEntity] = true;
         }
       });
-      var litGroups = {};
+      var litGroups = schemaMap();
       Object.keys(litNodes).forEach(function (nid) {
         var gId = data.entityMap[nid].group;
         while (gId && data.groupMap[gId]) {
@@ -7858,7 +7880,7 @@
         this._drawer.setAttribute('data-q-inactive', '');
       }
 
-      var inGroup = {};
+      var inGroup = schemaMap();
       inGroup[groupId] = true;
       var changed = true;
       while (changed) {
@@ -7870,7 +7892,7 @@
           }
         });
       }
-      var members = {};
+      var members = schemaMap();
       data.entities.forEach(function (e) {
         if (e.group && inGroup[e.group]) {
           members[e.id] = true;

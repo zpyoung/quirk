@@ -157,8 +157,8 @@
               "kind": "js",
               "position": "body-end",
               "inline": true,
-              "sha256": "8a73d4c53419cadd92057819db3f07f235ef500cd7ec865d6a323110f2886f0c",
-              "inline_sha256": "8a73d4c53419cadd92057819db3f07f235ef500cd7ec865d6a323110f2886f0c"
+              "sha256": "f880c55957bdce74c3b94a64bdb3e04e5e0cb5a3b3c20bbcc162b5ed815c56fd",
+              "inline_sha256": "f880c55957bdce74c3b94a64bdb3e04e5e0cb5a3b3c20bbcc162b5ed815c56fd"
             }
           ]
         }

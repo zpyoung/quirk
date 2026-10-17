@@ -7473,7 +7473,7 @@ def test_schema_failing_models_show_the_notice_and_the_open_list_while_others_re
     )
     assert_clean(out)
     d = out["results"]["d"]
-    assert d["broken"] == {"ready": "error", "notice": "This data model could not be drawn.", "open": True, "svg": False, "entities": 2}
+    assert d["broken"] == {"ready": "error", "notice": "This data model could not be drawn.", "open": True, "svg": False, "entities": 0}
     assert d["uml"]["ready"] == "error" and d["uml"]["notice"] == "This data model could not be drawn."
     assert d["cls"] == {"ready": "error", "notice": "This class diagram could not be drawn.", "open": True, "svg": False, "entities": 2}
     assert d["billing"]["ready"] == "true" and d["billing"]["svg"] is True
@@ -7640,3 +7640,222 @@ def test_schema_runtime_rejects_the_same_data_the_kit_check_fails(schema_page: P
     ready = out["results"]["ready"]
     assert {name: ready[name] for name in SCHEMA_BAD_MODELS} == {name: "error" for name in SCHEMA_BAD_MODELS}
     assert {name: ready[name] for name in SCHEMA_GOOD_MODELS} == {name: "true" for name in SCHEMA_GOOD_MODELS}
+
+
+SCHEMA_MOUNT_JS = """
+  const mountSchema = (data, opts = {}) => {
+    const el = document.createElement('q-schema');
+    if (opts.summary !== null) el.setAttribute('summary', opts.summary === undefined ? 'A model' : opts.summary);
+    if (opts.notation) el.setAttribute('notation', opts.notation);
+    const s = document.createElement('script');
+    s.setAttribute('type', opts.type || 'application/json');
+    s.textContent = JSON.stringify(data);
+    el.appendChild(s);
+    document.body.appendChild(el);
+    return el;
+  };
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const settle = (el) => new Promise((resolve) => {
+    const t0 = Date.now();
+    const poll = () => (el.hasAttribute('data-q-flow-ready') || Date.now() - t0 > 8000 ? resolve(el.getAttribute('data-q-flow-ready')) : setTimeout(poll, 20));
+    poll();
+  });
+  const failureState = (el) => {
+    const notice = el.querySelector('[data-q-flow-notice]');
+    const list = el.querySelector('[data-q-flow-list]');
+    return {
+      ready: el.getAttribute('data-q-flow-ready'),
+      notice: notice && notice.textContent,
+      svg: !!el.querySelector('[data-q-flow-svg]'),
+      open: !!list && list.open,
+      title: list && list.querySelector('summary') && list.querySelector('summary').textContent,
+      entities: el.querySelectorAll('[data-q-schema-list-entity]').length,
+    };
+  };
+"""
+
+SCHEMA_ODD_IDS = ["constructor", "__proto__", "toString"]
+
+
+def _schema_odd_id_model() -> dict:
+    fields = [_schema_field("id", "int", "PK"), _schema_field("self_id", "int", "FK"), _schema_field("next_id", "int", "FK")]
+    entities = [{"id": eid, "label": eid, "fields": fields} for eid in SCHEMA_ODD_IDS]
+    relationships = []
+    for i, eid in enumerate(SCHEMA_ODD_IDS):
+        relationships.append(_schema_rel(f"{eid}.self_id", f"{eid}.id", "zero-or-many", "one", "self"))
+        relationships.append(_schema_rel(f"{eid}.next_id", f"{SCHEMA_ODD_IDS[(i + 1) % 3]}.id", "zero-or-many", "one", "next"))
+    return {"entities": entities, "relationships": relationships}
+
+
+def test_schema_entity_ids_named_like_object_properties_still_draw_and_focus(schema_page: Path) -> None:
+    out = run(
+        schema_page,
+        ev(
+            f"""(async () => {{
+              {SCHEMA_MOUNT_JS}
+              const el = mountSchema({json.dumps(_schema_odd_id_model())});
+              el.id = 'schema-odd';
+              const ready = await settle(el);
+              const focusOn = async (id) => {{
+                el.querySelector('[data-q-schema-entity="' + id + '"]').dispatchEvent(new MouseEvent('click', {{ bubbles: true }}));
+                await sleep(50);
+                const d = el.querySelector('[data-q-flow-drawer]');
+                return {{
+                  selected: [...el.querySelectorAll('[data-q-schema-entity][data-q-flow-selected]')].map((e) => e.getAttribute('data-q-schema-entity')),
+                  heading: d.querySelector('h3') && d.querySelector('h3').textContent,
+                  open: !d.hasAttribute('data-q-inactive'),
+                }};
+              }};
+              return {{
+                ready,
+                cards: [...el.querySelectorAll('[data-q-schema-entity]')].map((e) => e.getAttribute('data-q-schema-entity')),
+                rels: el.querySelectorAll('[data-q-schema-rel]').length,
+                focusConstructor: await focusOn('constructor'),
+                focusProto: await focusOn('__proto__'),
+              }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["ready"] == "true"
+    assert sorted(d["cards"]) == sorted(SCHEMA_ODD_IDS)
+    assert d["rels"] == 6
+    assert d["focusConstructor"] == {"selected": ["constructor"], "heading": "constructor", "open": True}
+    assert d["focusProto"] == {"selected": ["__proto__"], "heading": "__proto__", "open": True}
+
+
+def test_schema_a_pending_layout_never_replaces_a_later_failure(schema_page: Path) -> None:
+    out = run(
+        schema_page,
+        ev(
+            f"""(async () => {{
+              {SCHEMA_MOUNT_JS}
+              const valid = {json.dumps(SCHEMA_SMALL_DATA)};
+              const invalid = mountSchema(valid);
+              invalid.querySelector('script').textContent = '{{ not json';
+              const toClass = mountSchema(valid);
+              const script = toClass.querySelector('script');
+              script.textContent = JSON.stringify({json.dumps(SCHEMA_CLASS_DATA)});
+              toClass.setAttribute('notation', 'class');
+              await sleep(1500);
+              return {{ invalid: failureState(invalid), toClass: failureState(toClass) }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["invalid"]["ready"] == "error" and d["invalid"]["svg"] is False
+    assert d["invalid"]["notice"] == "This data model could not be drawn."
+    assert d["toClass"]["ready"] == "error" and d["toClass"]["svg"] is False
+    assert d["toClass"]["notice"] == "This class diagram could not be drawn."
+
+
+def test_schema_missing_or_blank_summary_is_a_parse_failure(schema_page: Path) -> None:
+    html = schema_page.read_text(encoding="utf-8")
+    attr = '<q-schema id="schema-small" summary="Authors and their books.">'
+    assert html.count(attr) == 1
+    page = schema_page.with_name("schema-nosummary.html")
+    page.write_text(html.replace(attr, '<q-schema id="schema-small">'), encoding="utf-8")
+    out = run(
+        page,
+        ev(
+            f"""(async () => {{
+              {SCHEMA_MOUNT_JS}
+              const blank = mountSchema({json.dumps(SCHEMA_SMALL_DATA)}, {{ summary: '  ' }});
+              const missing = mountSchema({json.dumps(SCHEMA_SMALL_DATA)}, {{ summary: null }});
+              await Promise.all([settle(blank), settle(missing)]);
+              return {{
+                built: failureState(document.querySelector('#schema-small')),
+                blank: failureState(blank),
+                missing: failureState(missing),
+                billing: document.querySelector('#schema-billing').getAttribute('data-q-flow-ready'),
+              }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    for key in ("built", "blank", "missing"):
+        assert d[key]["ready"] == "error" and d[key]["svg"] is False and d[key]["entities"] == 0, key
+    assert d["billing"] == "true"
+
+
+def test_schema_json_script_type_is_trimmed_and_case_folded_like_the_kit_check(schema_page: Path) -> None:
+    out = run(
+        schema_page,
+        ev(
+            f"""(async () => {{
+              {SCHEMA_MOUNT_JS}
+              const el = mountSchema({json.dumps(SCHEMA_SMALL_DATA)}, {{ type: ' Application/JSON ' }});
+              const first = await settle(el);
+              el.querySelector('script').textContent = '{{ not json';
+              await sleep(200);
+              return {{ first, afterEdit: failureState(el) }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["first"] == "true"
+    assert d["afterEdit"]["ready"] == "error" and d["afterEdit"]["svg"] is False
+
+
+def test_schema_a_model_that_stops_parsing_empties_the_list_but_keeps_it_open(schema_page: Path) -> None:
+    out = run(
+        schema_page,
+        ev(
+            f"""(async () => {{
+              {SCHEMA_MOUNT_JS}
+              const el = mountSchema({json.dumps(SCHEMA_SMALL_DATA)});
+              await settle(el);
+              const before = failureState(el);
+              el.querySelector('script').textContent = '{{ not json';
+              await sleep(200);
+              return {{ before, after: failureState(el) }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["before"]["ready"] == "true" and d["before"]["entities"] == 2
+    after = d["after"]
+    assert after["ready"] == "error" and after["entities"] == 0 and after["open"] is True
+    assert after["title"] == "Data model as a list"
+    assert after["notice"] == "This data model could not be drawn."
+
+
+def test_schema_click_on_blank_panel_space_clears_entity_focus_and_closes_the_drawer(schema_page: Path) -> None:
+    out = run(
+        schema_page,
+        {"click": '#schema-billing [data-q-schema-entity="charge"]'},
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-billing');
+              const focused = {{ selected: entityIds(m, 'data-q-flow-selected'), drawerOpen: drawerState(m).open }};
+              m.scrollIntoView();
+              const box = m.querySelector('[data-q-flow-group="billing"] [data-q-flow-group-box]');
+              const r = box.getBoundingClientRect();
+              let hit = null;
+              for (let y = r.top + 6; y < r.bottom - 4 && !hit; y += 6) {{
+                for (let x = r.left + 6; x < r.right - 4 && !hit; x += 6) {{
+                  if (document.elementFromPoint(x, y) === box) hit = box;
+                }}
+              }}
+              if (hit) hit.dispatchEvent(new MouseEvent('click', {{ bubbles: true }}));
+              return {{ found: !!hit, focused, after: {{ selected: entityIds(m, 'data-q-flow-selected'), lit: entityIds(m, 'data-q-flow-lit'), drawerOpen: drawerState(m).open }} }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["found"] is True
+    assert d["focused"] == {"selected": ["charge"], "drawerOpen": True}
+    assert d["after"] == {"selected": [], "lit": [], "drawerOpen": False}
