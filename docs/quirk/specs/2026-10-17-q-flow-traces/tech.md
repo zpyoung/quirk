@@ -95,8 +95,9 @@ Failures (all at the `<q-flow>` start line, through `report_fail`; the graph ret
 | `via` names an edge that isn't a candidate | `<q-flow> trace "<t>" step N: edge "<via>" doesn't run from "<prev node>" to "<node>"` |
 | no candidate edge | `<q-flow> trace "<t>" step N: no edge from "<prev node>" to "<node>"` |
 | 2+ candidates and no `via` | `<q-flow> trace "<t>" step N: <count> edges run from "<prev node>" to "<node>"; name one with via` |
-| value holds NaN or ±Infinity (Python's `json.loads` accepts them; in JS an overflowing literal such as `1e9999` parses to Infinity), or a string or key with an unpaired UTF-16 surrogate such as `"\ud800"` (it can't be written as UTF-8) | `<q-flow> trace "<t>" step N has a value that isn't JSON` |
+| value holds NaN or ±Infinity (Python's `json.loads` accepts them; in JS an overflowing literal such as `1e9999` parses to Infinity), or a string or key with an unpaired UTF-16 surrogate such as `"\ud800"` (it can't be written as UTF-8), or nests too deeply to walk (Python's `RecursionError`, JS's `RangeError`) | `<q-flow> trace "<t>" step N has a value that isn't JSON` |
 | value over 400 pretty-printed lines | `<q-flow> trace "<t>" step N value is <L> lines; at most 400` |
+| any other string anywhere in the graph data (ids, labels, kinds, details, notes, `via`, object keys) holds an unpaired UTF-16 surrogate | `<q-flow> graph data holds text that can't be written as UTF-8` (once per graph; trace values are covered by the row above instead) |
 
 - Edge checks for a step run only when both its node and the previous step's node are known.
 - A trace with a bad id or label still has its steps checked, with `<t>` read as `?`.
@@ -128,7 +129,7 @@ After the root `ul` inside `div[data-q-flow-list-body]`, one block per trace, in
 - **Via part** appears only when the step names `via` or its incoming edge is a loop: `, via "<edge label>"` when the edge has a label; otherwise `, via "<edge id>"` for a named `via`, or `, around the loop` for an unlabelled loop edge.
 - **Note part:** `: <note>` when the step has a non-empty note; an empty note reads as no note.
 - **Pretty JSON:** the 2-space pretty print from contract 1, unescaped in JS (`textContent`), `html_lib.escape`d in Python.
-- **Numbers** print in each runtime's own JSON form, the one place the two lists may differ: Python writes an integral float such as `18.0` with its `.0`, JS writes `18`. Tests compare the two lists only on values without integral floats.
+- **Two allowed differences** between the lists, both from how each runtime holds JSON: Python writes an integral float such as `18.0` with its `.0` where JS writes `18`, and JS lists integer-like object keys (`"2"`, `"10"`) in ascending numeric order before other keys where Python keeps the authored order. Tests compare the two lists only on values without integral floats or integer-like keys.
 - Python escapes every label, id and note with `html_lib.escape` (`quote=True` in attributes). JS uses `textContent` and `setAttribute`.
 - Builder whitespace: Python writes the block with no whitespace between tags, so a test can assert `<li data-q-flow-list-step="3">Tax, via &quot;domestic quote&quot;: Tax adds 8.25% sales tax<pre><code>`.
 
