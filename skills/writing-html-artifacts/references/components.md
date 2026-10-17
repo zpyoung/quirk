@@ -465,7 +465,7 @@ Use when a system, pipeline or architecture has paths, groups or node details th
 
 ### Children
 
-A `<script type="application/json">` child holding the graph data: optional kinds (mapping each kind name to a chart color 1 to 8), optional groups (id, label, optional parent), required nodes (id, label, optional kind, group and short HTML detail, optional shape of box, decision or subprocess, and for a subprocess an optional flow naming the id of another q-flow on the page), and optional edges (from, to, optional label, async boolean and loop boolean for a return edge). A decision labels every exit with its answer. Never write coordinates; the element lays the graph out and builds a "Graph as a list" disclosure below the canvas.
+A `<script type="application/json">` child holding the graph data: optional kinds (mapping each kind name to a chart color 1 to 8), optional groups (id, label, optional parent), required nodes (id, label, optional kind, group and short HTML detail, optional shape of box, decision or subprocess, and for a subprocess an optional flow naming the id of another q-flow on the page), and optional edges (from, to, optional label, async boolean and loop boolean for a return edge, and an optional id used only by a trace step's via). Optional traces let the reader step through what happens to one value as it moves through the flow: each trace has an id, a label and steps (at least 2), and each step has a node, a value (the whole value as it leaves that node, trimmed to the fields the reader needs), an optional note, and an optional via naming an edge id when several edges join the two steps. Consecutive steps must be joined by an edge. A decision labels every exit with its answer. Never write coordinates; the element lays the graph out and builds a "Graph as a list" disclosure below the canvas.
 
 ### Example
 
@@ -490,6 +490,14 @@ A `<script type="application/json">` child holding the graph data: optional kind
       {"from": "paid", "to": "ledger", "label": "Yes"},
       {"from": "paid", "to": "retries", "label": "No", "async": true},
       {"from": "retries", "to": "charge", "label": "wait doubles", "loop": true}
+    ],
+    "traces": [
+      {"id": "settles", "label": "Charge settles", "steps": [
+        {"node": "checkout", "value": {"order": "A-17", "total": 42}, "note": "The order is placed."},
+        {"node": "charge", "value": {"order": "A-17", "attempt": 1}, "note": "The worker calls the provider."},
+        {"node": "paid", "value": {"order": "A-17", "settled": true}, "note": "The provider says yes."},
+        {"node": "ledger", "value": {"order": "A-17", "status": "paid"}, "note": "The ledger records the payment."}
+      ]}
     ]
   }
   </script>

@@ -200,6 +200,7 @@ Scatter and histogram charts stay hand-written Chart.js, so they need these by h
 - `<q-flow>` is the tool for every flowchart on an HTML page: a graph the reader explores (follow a path through a system, open a node to read its detail, focus one subsystem group) and a flowchart with decisions (`shape: "decision"`), retries (`loop: true`) or steps that are their own process (`shape: "subprocess"`, optional `flow`). Mermaid stays for diagrams inside Markdown, state charts, and sequence and ER diagrams.
 - Label every exit of a decision with its answer, and keep the question under about 24 characters so it fits the diamond. Mark the return edge of a retry with `loop: true` so the layout keeps the main flow running one way. Give a subprocess a `flow` naming the id of another `<q-flow>` on the page when that process has its own graph.
 - Never write coordinates in `<q-flow>`; pass `kinds`, `groups`, `nodes` and `edges` as JSON data and let the element lay the graph out and build its "Graph as a list" disclosure.
+- Add a trace when the reader needs to see what happens to a value as it moves through the flow. Put it in the same JSON as `traces`, one trace per scenario worth walking, each step naming a node and the whole value as it leaves that node. Trim the value to the fields the reader needs, so the reader can compare one step with the next. Give an edge an `id` only when a step must pick between parallel edges with `via`.
 - Reuse the same `kinds` names and `--q-color-chart-*` numbers (1 to 8) across artifacts (for example `ui`: 1, `worker`: 2, `database`: 3, `queue`: 4) so node categories keep the same color from page to page.
 ## 10. Interaction and motion
 
@@ -213,9 +214,9 @@ Scatter and histogram charts stay hand-written Chart.js, so they need these by h
   - Its script and styles are inline in the source, like everything else on an offline page.
   - It meets section 11, and anything it lets the reader do goes in the `interactions` list.
 - A readout that changes because of an input updates in place and is announced; see section 11.
-- At most one orchestrated moment per page: a single entrance for the summary, or one transition when a view changes. No scroll-jacking, parallax, staggered card reveals, or ambient looping animation. The one exception is `<q-flow>`'s traveling pulse along a focused node's path, which loops only while a node is focused and stops as soon as focus clears.
+- At most one orchestrated moment per page: a single entrance for the summary, or one transition when a view changes. No scroll-jacking, parallax, staggered card reveals, or ambient looping animation. The one exception is `<q-flow>`'s traveling pulse along a focused node's path, which loops only while a node is focused and stops as soon as focus clears. The exception also covers trace mode: the pulse on the current edge and Play, which only the reader starts and can pause.
 - Motion lasts 150 to 250ms, uses `ease-out`, and animates only `opacity` and `transform` (plus `<q-flow>`'s SVG pulse mask while a node is focused).
-- Wrap all motion in `@media (prefers-reduced-motion: no-preference)`, so the default is none. Do not animate on reduced motion; `<q-flow>` shows a thicker static line with arrowheads instead.
+- Wrap all motion in `@media (prefers-reduced-motion: no-preference)`, so the default is none. Do not animate on reduced motion; `<q-flow>` shows a thicker static line with arrowheads instead. Trace mode steps without animating on reduced motion.
 - Hover is never the only way to reach something. Touch and keyboard users get the same content.
 - Controls show a state for hover, focus, active, and disabled. A disabled control says why nearby.
 - State that matters (a filter, a selected tab) is reflected in the URL hash only if the user will share the page; otherwise keep it in memory.

@@ -1,0 +1,50 @@
+{
+  "skill_name": "writing-html-artifacts",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Walk me through how an order changes as it moves through checkout, payment and fulfillment, so I can see its status and totals at each step.",
+      "expected": "trace"
+    },
+    {
+      "id": 2,
+      "prompt": "Make an HTML page that follows one webhook payload from the provider through our signature check, parser and router, showing what the payload looks like after each stage.",
+      "expected": "trace"
+    },
+    {
+      "id": 3,
+      "prompt": "Show how a user record changes as it moves through signup: the form, email verification, profile creation and the welcome sequence. I want to see the record at every stage.",
+      "expected": "trace"
+    },
+    {
+      "id": 4,
+      "prompt": "Build an explainer that traces one event through our enrichment pipeline and shows the event's fields growing at each hop, from the raw click to the warehouse row.",
+      "expected": "trace"
+    },
+    {
+      "id": 5,
+      "prompt": "Explain our refund flow by following a single refund request through review, approval and payout, showing the request's data after each step.",
+      "expected": "trace"
+    },
+    {
+      "id": 6,
+      "prompt": "Make an explorable architecture page of our billing services, with groups for ingest, processing and storage, where I can click a service to read its runbook notes.",
+      "expected": "no-trace"
+    },
+    {
+      "id": 7,
+      "prompt": "Draw a flowchart of our deploy approval process with decisions, a rollback loop and a subprocess for the security review. I only need the structure.",
+      "expected": "no-trace"
+    },
+    {
+      "id": 8,
+      "prompt": "Build an HTML map of the 30 services behind the webhook router so I can pan, zoom and see which services call which.",
+      "expected": "no-trace"
+    },
+    {
+      "id": 9,
+      "prompt": "Create a pipeline overview page with stage lanes from intake to delivery, showing the jobs in each lane and how they connect. No example data is needed.",
+      "expected": "no-trace"
+    }
+  ]
+}
