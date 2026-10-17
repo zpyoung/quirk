@@ -38,10 +38,48 @@
       {"from": "paid", "to": "left", "label": "No"},
       {"from": "left", "to": "queue", "label": "Yes, wait doubles", "loop": true},
       {"from": "left", "to": "another", "label": "No"}
+    ],
+    "traces": [
+      {"id": "succeeds", "label": "Retry succeeds", "steps": [
+        {"node": "checkout", "value": {"order_id": "ord_4172", "status": "retry_queued", "idempotency_key": "idem_9c3e"}, "note": "The first call failed with a retryable error. The key was made when the order was placed."},
+        {"node": "queue", "value": {"order_id": "ord_4172", "status": "waiting", "attempt": 1, "wait_s": 2, "idempotency_key": "idem_9c3e"}, "note": "Attempt 1 waits 2 seconds."},
+        {"node": "worker", "value": {"order_id": "ord_4172", "status": "calling_provider", "attempt": 1, "idempotency_key": "idem_9c3e"}, "note": "The wait is over, so the worker calls the provider with the stored key."},
+        {"node": "paid", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 1, "idempotency_key": "idem_9c3e"}, "note": "The provider times out, so the answer is No."},
+        {"node": "left", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 1, "idempotency_key": "idem_9c3e"}, "note": "Attempt 1 of 5, so attempts are left."},
+        {"node": "queue", "value": {"order_id": "ord_4172", "status": "waiting", "attempt": 2, "wait_s": 4, "idempotency_key": "idem_9c3e"}, "note": "Back on the queue, and the wait doubles to 4 seconds."},
+        {"node": "worker", "value": {"order_id": "ord_4172", "status": "calling_provider", "attempt": 2, "idempotency_key": "idem_9c3e"}, "note": "Same key as before, so a lost answer cannot charge the shopper twice."},
+        {"node": "paid", "value": {"order_id": "ord_4172", "status": "paid", "attempt": 2, "idempotency_key": "idem_9c3e"}, "note": "This time the provider says Yes."},
+        {"node": "ledger", "value": {"order_id": "ord_4172", "status": "paid", "attempt": 2, "idempotency_key": "idem_9c3e"}, "note": "The order is marked paid and the queue entry is deleted."}
+      ]},
+      {"id": "gives-up", "label": "Gives up after five", "steps": [
+        {"node": "checkout", "value": {"order_id": "ord_4172", "status": "retry_queued", "idempotency_key": "idem_9c3e"}, "note": "The first call failed with a retryable error."},
+        {"node": "queue", "value": {"order_id": "ord_4172", "status": "waiting", "attempt": 1, "wait_s": 2, "idempotency_key": "idem_9c3e"}, "note": "Attempt 1 waits 2 seconds."},
+        {"node": "worker", "value": {"order_id": "ord_4172", "status": "calling_provider", "attempt": 1, "idempotency_key": "idem_9c3e"}, "note": "The worker calls the provider with the same key."},
+        {"node": "paid", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 1, "idempotency_key": "idem_9c3e"}, "note": "The provider answers No."},
+        {"node": "left", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 1, "idempotency_key": "idem_9c3e"}, "note": "Attempt 1 of 5, so attempts are left."},
+        {"node": "queue", "value": {"order_id": "ord_4172", "status": "waiting", "attempt": 2, "wait_s": 4, "idempotency_key": "idem_9c3e"}, "note": "The wait doubles to 4 seconds."},
+        {"node": "worker", "value": {"order_id": "ord_4172", "status": "calling_provider", "attempt": 2, "idempotency_key": "idem_9c3e"}, "note": "Attempt 2 of 5, with the same key."},
+        {"node": "paid", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 2, "idempotency_key": "idem_9c3e"}, "note": "The provider answers No."},
+        {"node": "left", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 2, "idempotency_key": "idem_9c3e"}, "note": "Attempt 2 of 5, so attempts are left."},
+        {"node": "queue", "value": {"order_id": "ord_4172", "status": "waiting", "attempt": 3, "wait_s": 8, "idempotency_key": "idem_9c3e"}, "note": "The wait doubles to 8 seconds."},
+        {"node": "worker", "value": {"order_id": "ord_4172", "status": "calling_provider", "attempt": 3, "idempotency_key": "idem_9c3e"}, "note": "Attempt 3 of 5, with the same key."},
+        {"node": "paid", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 3, "idempotency_key": "idem_9c3e"}, "note": "The provider answers No."},
+        {"node": "left", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 3, "idempotency_key": "idem_9c3e"}, "note": "Attempt 3 of 5, so attempts are left."},
+        {"node": "queue", "value": {"order_id": "ord_4172", "status": "waiting", "attempt": 4, "wait_s": 16, "idempotency_key": "idem_9c3e"}, "note": "The wait doubles to 16 seconds."},
+        {"node": "worker", "value": {"order_id": "ord_4172", "status": "calling_provider", "attempt": 4, "idempotency_key": "idem_9c3e"}, "note": "Attempt 4 of 5, with the same key."},
+        {"node": "paid", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 4, "idempotency_key": "idem_9c3e"}, "note": "The provider answers No."},
+        {"node": "left", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 4, "idempotency_key": "idem_9c3e"}, "note": "Attempt 4 of 5, so attempts are left."},
+        {"node": "queue", "value": {"order_id": "ord_4172", "status": "waiting", "attempt": 5, "wait_s": 32, "idempotency_key": "idem_9c3e"}, "note": "The last wait is 32 seconds."},
+        {"node": "worker", "value": {"order_id": "ord_4172", "status": "calling_provider", "attempt": 5, "idempotency_key": "idem_9c3e"}, "note": "Attempt 5 of 5, with the same key."},
+        {"node": "paid", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 5, "idempotency_key": "idem_9c3e"}, "note": "The fifth answer is still No."},
+        {"node": "left", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 5, "idempotency_key": "idem_9c3e"}, "note": "That was attempt 5, so none are left."},
+        {"node": "another", "value": {"order_id": "ord_4172", "status": "payment_failed", "attempt": 5, "idempotency_key": "idem_9c3e"}, "note": "The order is marked payment failed and the shopper gets an email."}
+      ]}
     ]
   }
   </script>
 </q-flow>
+<p>Press "Step through" on the graph to follow one call from checkout to its end, either a retry that succeeds or one that gives up.</p>
 <h3 id="path-success">If the retry succeeds</h3>
 <p>The order moves to paid, the shopper's page updates, and the queue entry is deleted.</p>
 <h3 id="path-fail">If it fails again</h3>
