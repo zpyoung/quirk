@@ -1567,6 +1567,7 @@ _SEQ_FRAGMENTS = ("alt", "opt", "loop", "par")
 _SEQ_BRANCHED = ("alt", "par")
 _SEQ_STEP_KEYS = ("fragment", "note", "end", "from")
 _SEQ_DETAIL_RULE = "<q-sequence> detail may hold only paragraphs, lists, code and links"
+_SEQ_DETAIL_MAX_DEPTH = 32
 
 
 def _shown(value: Any) -> str:
@@ -1677,11 +1678,26 @@ def _validate_sequence_node(
         seen_ids.add(ident)
         return True
 
+    def nests_too_deep(detail: str) -> bool:
+        """True when the parsed detail holds more than ``_SEQ_DETAIL_MAX_DEPTH`` open elements at once."""
+        builder = _TreeBuilder()
+        try:
+            builder.feed(detail)
+            builder.close()
+        except Exception:  # noqa: BLE001
+            return False
+        depth: dict[int, int] = {id(builder.root): 0}
+        for n in builder.nodes:
+            depth[id(n)] = depth[id(n.parent)] + 1
+            if depth[id(n)] > _SEQ_DETAIL_MAX_DEPTH:
+                return True
+        return False
+
     def clean_detail(raw: Any) -> Optional[str]:
         if raw is None:
             return None
         try:
-            cleaned = _check_and_sanitize_flow_detail(raw) if isinstance(raw, str) else None
+            cleaned = _check_and_sanitize_flow_detail(raw) if isinstance(raw, str) and not nests_too_deep(raw) else None
         except RecursionError:
             cleaned = None
         if cleaned is None:

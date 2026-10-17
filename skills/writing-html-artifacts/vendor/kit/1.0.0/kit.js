@@ -8626,12 +8626,34 @@
     return typeof value === 'string' && !isBlankFlowId(value);
   }
 
-  /** A detail string as written, null when there is none, or false when it breaks the whitelist. */
+  var SEQ_DETAIL_MAX_DEPTH = 32;
+
+  /** True when the parsed detail never holds more than SEQ_DETAIL_MAX_DEPTH open elements at once; counted without recursion. */
+  function seqDetailDepthOk(html) {
+    var tpl = document.createElement('template');
+    tpl.innerHTML = html;
+    var stack = [{ node: tpl.content, depth: 0 }];
+    while (stack.length) {
+      var top = stack.pop();
+      var kids = top.node.childNodes;
+      for (var i = 0; i < kids.length; i += 1) {
+        if (kids[i].nodeType === 1) {
+          if (top.depth + 1 > SEQ_DETAIL_MAX_DEPTH) {
+            return false;
+          }
+          stack.push({ node: kids[i], depth: top.depth + 1 });
+        }
+      }
+    }
+    return true;
+  }
+
+  /** A detail string as written, null when there is none, or false when it breaks the whitelist or nests too deep. */
   function seqDetail(raw) {
     if (raw === undefined || raw === null) {
       return null;
     }
-    return typeof raw === 'string' && isValidFlowDetail(raw) ? raw : false;
+    return typeof raw === 'string' && seqDetailDepthOk(raw) && isValidFlowDetail(raw) ? raw : false;
   }
 
   /**
@@ -8921,12 +8943,43 @@
     };
   }
 
-  /** Splits text on spaces into lines no wider than max; a word wider than max keeps a line of its own. */
+  /** Cuts one word into the longest pieces that each measure no wider than max (a piece holds at least one character). */
+  function seqBreakWord(word, measure, max, size, weight) {
+    var chars = Array.from(word);
+    var pieces = [];
+    var start = 0;
+    while (start < chars.length) {
+      var lo = start + 1;
+      var hi = chars.length;
+      while (lo < hi) {
+        var mid = Math.ceil((lo + hi) / 2);
+        if (measure(chars.slice(start, mid).join(''), size, weight) <= max) {
+          lo = mid;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      pieces.push(chars.slice(start, lo).join(''));
+      start = lo;
+    }
+    return pieces;
+  }
+
+  /** Splits text on spaces into lines no wider than max; a word wider than max is broken across lines. */
   function seqWrap(text, measure, max, size, weight) {
     var lines = [];
     var current = '';
     text.split(/\s+/).forEach(function (word) {
       if (!word) {
+        return;
+      }
+      if (measure(word, size, weight) > max) {
+        if (current) {
+          lines.push(current);
+        }
+        var pieces = seqBreakWord(word, measure, max, size, weight);
+        current = pieces.pop();
+        pieces.forEach(function (piece) { lines.push(piece); });
         return;
       }
       var candidate = current ? current + ' ' + word : word;
@@ -9170,7 +9223,7 @@
             var inBranch = function (after) { return after.indexOf(c) >= 0; };
             return step.type === 'par' ? afters.every(inBranch) : afters.some(inBranch);
           });
-          var closeRow = addRow('close', 10, result, result, { fragment: frag });
+          var closeRow = addRow('close', 10, afters[afters.length - 1], result, { fragment: frag });
           frag.bottom = closeRow.y + 4;
           state = result;
         }
@@ -9237,7 +9290,7 @@
           run = { call: c, top: inBefore ? row.y : opens };
           open[c.number] = run;
         }
-        run.bottom = inAfter ? row.y + row.h : row.arrowY;
+        run.bottom = inAfter ? row.y + row.h : (row.kind === 'close' ? row.fragment.bottom : row.arrowY);
         if (!inAfter) {
           bars.push(run);
           delete open[c.number];
@@ -9549,6 +9602,7 @@
       this._initialized = true;
       this._lastSig = this._signature();
       this.removeAttribute('data-q-sequence-ready');
+      var seq = (this._layoutSeq = (this._layoutSeq || 0) + 1);
       var data = this._parseData();
       this._ensureScaffold(data);
       if (!data) {
@@ -9560,7 +9614,6 @@
       while (this._stage.firstChild) {
         this._stage.removeChild(this._stage.firstChild);
       }
-      var seq = (this._layoutSeq = (this._layoutSeq || 0) + 1);
       var fontsReady = (document.fonts && document.fonts.ready && typeof document.fonts.ready.then === 'function')
         ? document.fonts.ready.catch(function () {})
         : Promise.resolve();

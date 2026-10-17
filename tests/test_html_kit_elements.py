@@ -9672,6 +9672,11 @@ def _seq_base(*steps: dict, **extra: object) -> dict:
     }
 
 
+def _seq_nested_detail(depth: int) -> str:
+    pairs, odd = divmod(depth, 2)
+    return "<ul><li>" * pairs + ("<b>x</b>" if odd else "x") + "</li></ul>" * pairs
+
+
 def _seq_nested(depth: int) -> dict:
     inner: dict = _seq_msg("a", "b", "deep", "async")
     for _ in range(depth):
@@ -9722,6 +9727,10 @@ def _seq_cases() -> dict[str, dict]:
             {"fragment": "par", "label": "both", "branches": [{"label": "x", "steps": [m("a", "b", "r", "async")]}, {"label": "y", "steps": [m("a", "c", "s", "async")]}]},
         ),
         "depth 100": _seq_nested(100),
+        "participant detail 32 deep": patched(lambda d: d["participants"][0].update(detail=_seq_nested_detail(32))),
+        "participant detail 33 deep": patched(lambda d: d["participants"][0].update(detail=_seq_nested_detail(33))),
+        "message detail 32 deep": patched(lambda d: d["steps"][0].update(detail=_seq_nested_detail(32))),
+        "message detail 33 deep": patched(lambda d: d["steps"][0].update(detail=_seq_nested_detail(33))),
         "valid details": patched(lambda d: (d["participants"][0].update(detail="<p>ok <a href='#x'>link</a></p>"), d["steps"][0].update(detail="<ul><li>one</li></ul>"))),
         "empty detail": patched(lambda d: d["steps"][0].update(detail="")),
         "null kind and detail": patched(lambda d: (d["participants"][0].update(kind=None, detail=None), d["steps"][0].update(detail=None))),
@@ -9888,3 +9897,158 @@ def test_seq_runtime_accepts_and_rejects_exactly_what_the_python_check_does(seq_
     assert len(got) == len(names)
     mismatches = [(n, e, g) for n, e, g in zip(names, expected, got) if e != g]
     assert mismatches == []
+
+
+SEQ_MAKE = """
+const make = (data, id) => {
+  const el = document.createElement('q-sequence');
+  el.id = id;
+  el.setAttribute('summary', 's');
+  const script = document.createElement('script');
+  script.type = 'application/json';
+  script.textContent = JSON.stringify(data);
+  el.appendChild(script);
+  document.body.appendChild(el);
+  return el;
+};
+const settle = async (el) => {
+  for (let i = 0; i < 100 && !el.hasAttribute('data-q-sequence-ready'); i += 1) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return el.getAttribute('data-q-sequence-ready');
+};
+"""
+
+
+def test_seq_invalid_data_during_a_pending_font_wait_leaves_only_the_error_notice(seq_page: Path) -> None:
+    out = run(
+        seq_page,
+        _seq_eval(
+            SEQ_MAKE
+            + """
+            Object.defineProperty(document.fonts, 'ready', { configurable: true, value: new Promise((r) => { window.finishFonts = r; }) });
+            const el = make(%s, 'stale');
+            await new Promise((r) => setTimeout(r, 100));
+            el.querySelector('script').textContent = '{ not json';
+            await new Promise((r) => setTimeout(r, 200));
+            window.finishFonts();
+            await new Promise((r) => setTimeout(r, 400));
+            delete document.fonts.ready;
+            return {
+              ready: el.getAttribute('data-q-sequence-ready'),
+              notice: el.querySelectorAll('[data-q-sequence-notice]').length,
+              svg: el.querySelectorAll('[data-q-sequence-svg]').length,
+            };
+            """
+            % json.dumps(SEQ_BAD_DATA | {"steps": [_seq_msg("a", "b-ok", "ping", "async")]})
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["d"] == {"ready": "error", "notice": 1, "svg": 0}
+
+
+def test_seq_a_label_note_or_header_with_one_long_word_stays_inside_the_svg(seq_page: Path) -> None:
+    word = "W" * 130
+    data = {
+        "participants": [{"id": "a", "label": "A"}, {"id": "b", "label": word}, {"id": "c", "label": "C"}],
+        "steps": [
+            _seq_msg("a", "c", word, "async"),
+            {"note": word, "over": ["b"]},
+            _seq_msg("b", "b", word, "async"),
+        ],
+    }
+    out = run(
+        seq_page,
+        _seq_eval(
+            SEQ_MAKE
+            + """
+            const el = make(%s, 'longword');
+            const ready = await settle(el);
+            const svg = el.querySelector('[data-q-sequence-svg]');
+            const width = num(svg, 'width');
+            const boxes = [...svg.querySelectorAll('text, [data-q-sequence-note] rect')].map((n) => {
+              const b = n.getBBox();
+              return { tag: n.tagName, left: b.x, right: b.x + b.width };
+            });
+            const note = el.querySelector('[data-q-sequence-note] rect');
+            return {
+              ready, width, count: boxes.length,
+              outside: boxes.filter((b) => b.left < -0.5 || b.right > width + 0.5),
+              noteLeft: num(note, 'x'), noteRight: num(note, 'x') + num(note, 'width'),
+              labelLines: el.querySelector('[data-q-sequence-label]').querySelectorAll('tspan').length,
+            };
+            """
+            % json.dumps(data)
+        ),
+    )
+    assert_clean(out)
+    got = out["results"]["d"]
+    assert got["ready"] == "true"
+    assert got["outside"] == []
+    assert got["noteLeft"] >= 0 and got["noteRight"] <= got["width"]
+    assert got["labelLines"] > 1
+
+
+def test_seq_an_unanswered_call_in_a_fragment_closes_at_the_fragment_edge(seq_page: Path) -> None:
+    m = _seq_msg
+    cases = {
+        "opt": _seq_base({"fragment": "opt", "steps": [m("a", "b", "call", "call")]}, m("a", "b", "later", "async")),
+        "loop": _seq_base({"fragment": "loop", "steps": [m("a", "b", "call", "call")]}, m("a", "b", "later", "async")),
+    }
+    out = run(
+        seq_page,
+        _seq_eval(
+            SEQ_MAKE
+            + """
+            const result = {};
+            const cases = %s;
+            for (const name of Object.keys(cases)) {
+              const el = make(cases[name], 'frag-' + name);
+              await settle(el);
+              const box = el.querySelector('[data-q-sequence-fragment-box]');
+              result[name] = { boxEnd: num(box, 'y') + num(box, 'height'), bars: barsOf(el, 'b') };
+            }
+            return result;
+            """
+            % json.dumps(cases)
+        ),
+    )
+    assert_clean(out)
+    for name, got in out["results"]["d"].items():
+        assert len(got["bars"]) == 1, name
+        assert _close(got["bars"][0]["bottom"], got["boxEnd"], 0.01), (name, got)
+
+
+def test_seq_detail_nesting_passes_at_32_deep_and_fails_hard_at_33(seq_page: Path) -> None:
+    def on_part(depth: int) -> dict:
+        data = _seq_base()
+        data["participants"][0]["detail"] = _seq_nested_detail(depth)
+        return data
+
+    def on_msg(depth: int) -> dict:
+        data = _seq_base()
+        data["steps"][0]["detail"] = _seq_nested_detail(depth)
+        return data
+
+    cases = {"part32": on_part(32), "part33": on_part(33), "msg32": on_msg(32), "msg33": on_msg(33)}
+    out = run(
+        seq_page,
+        _seq_eval(
+            SEQ_MAKE
+            + """
+            const result = {};
+            const cases = %s;
+            for (const name of Object.keys(cases)) {
+              const el = make(cases[name], 'depth-' + name);
+              const ready = await settle(el);
+              result[name] = { ready, notice: el.querySelectorAll('[data-q-sequence-notice]').length, svg: el.querySelectorAll('[data-q-sequence-svg]').length };
+            }
+            return result;
+            """
+            % json.dumps(cases)
+        ),
+    )
+    assert_clean(out)
+    ok = {"ready": "true", "notice": 0, "svg": 1}
+    bad = {"ready": "error", "notice": 1, "svg": 0}
+    assert out["results"]["d"] == {"part32": ok, "part33": bad, "msg32": ok, "msg33": bad}

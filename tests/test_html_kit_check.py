@@ -2758,6 +2758,32 @@ def test_sequence_a_detail_nested_too_deeply_fails_with_the_detail_rule() -> Non
         assert kitcheck.inject_sequence_fallbacks(page) == page
 
 
+def _seq_nested_detail(depth: int) -> str:
+    pairs, odd = divmod(depth, 2)
+    return "<ul><li>" * pairs + ("<b>x</b>" if odd else "x") + "</li></ul>" * pairs
+
+
+def test_sequence_detail_nesting_passes_at_32_deep_and_fails_at_33() -> None:
+    detail_rule = ["<q-sequence> detail may hold only paragraphs, lists, code and links"]
+
+    def on_participant(depth: int):
+        def patch(p: dict) -> None:
+            p["participants"][4]["detail"] = _seq_nested_detail(depth)
+
+        return patch
+
+    def on_message(depth: int):
+        def patch(p: dict) -> None:
+            p["steps"][0]["detail"] = _seq_nested_detail(depth)
+
+        return patch
+
+    for make in (on_participant, on_message):
+        assert seq_messages(checkout(make(32))) == []
+        assert seq_messages(checkout(make(33))) == detail_rule
+    assert seq_messages(checkout(on_message(1))) == []
+
+
 def test_sequence_message_detail_is_sanitized_into_the_cleaned_message() -> None:
     cleaned = parsed_sequence(small(msg("a", "b", detail="<p>Hello <b>there</b></p>")))
     assert cleaned is not None
