@@ -267,13 +267,15 @@ class GitHubForge:
         "query($owner:String!,$name:String!,$number:Int!,$after:String){repository(owner:$owner,name:$name)"
         "{pullRequest(number:$number){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor}"
         "nodes{id isResolved path line comments(first:100){pageInfo{hasNextPage} "
-        "nodes{databaseId body url author{login ... on User{databaseId}}}}}}}}}")
+        "nodes{databaseId state body url author{login ... on User{databaseId}}}}}}}}}")
 
     def list_threads(self, number, api_call=None):
         """Return review threads as GitLab-style discussion dicts.
 
         Raises when a thread has more than 100 comments, because the remainder would be
-        silently invisible to duplicate-post suppression.
+        silently invisible to duplicate-post suppression. Comments still in a pending
+        review are not published, so they are left out and a thread with only such
+        comments is dropped.
         """
         call = api_call or self._api_call
         owner, name = self.project.split("/", 1)
@@ -290,7 +292,10 @@ class GitHubForge:
                           "author": {"id": (c.get("author") or {}).get("databaseId"),
                                      "username": (c.get("author") or {}).get("login")},
                           "web_url": c.get("url"), "position": position, "resolved": node.get("isResolved")}
-                         for c in ((node.get("comments") or {}).get("nodes") or [])]
+                         for c in ((node.get("comments") or {}).get("nodes") or [])
+                         if c.get("state") != "PENDING"]
+                if not notes and (node.get("comments") or {}).get("nodes"):
+                    continue
                 threads.append({"id": node.get("id"), "resolved": bool(node.get("isResolved")),
                                 "position": position, "notes": notes})
             info = page.get("pageInfo") or {}
@@ -341,9 +346,10 @@ class GitHubForge:
         """This user's unsubmitted review content, as draft-like items."""
         items = []
         for review in self._pending_reviews(number, username):
-            items.append({"id": review["id"], "note": review.get("body") or "", "position": None})
+            items.append({"id": review["id"], "kind": "review", "note": review.get("body") or "",
+                          "position": None})
             for comment in get_pages(self._api_call, self.host, self._pull(number, "/reviews/%s/comments" % review["id"])):
-                items.append({"id": comment["id"], "note": comment.get("body") or "",
+                items.append({"id": comment["id"], "kind": "comment", "note": comment.get("body") or "",
                               "position": {"new_path": comment.get("path"), "new_line": comment.get("line")}})
         return items
 
@@ -417,8 +423,14 @@ class GitHubForge:
         return {"review_id": data.get("id"), "state": data.get("state")}
 
     def cleanup_commands(self, state):
-        review_id = state.get("review_id")
-        if not review_id:
-            return []
-        endpoint = "repos/%s/pulls/%s/reviews/%s" % (state["project"], state["number"], review_id)
-        return ["gh api --hostname %s -X DELETE %s" % (shlex.quote(state["host"]), shlex.quote(endpoint))]
+        """Return one DELETE per pending review the staging recorded or adopted as an orphan.
+
+        Deleting a pending review removes its comments, so reconciled comment items add nothing.
+        """
+        review_ids = [state.get("review_id")] + [
+            item.get("draft_id") for item in state.get("reconciled") or [] if item.get("kind") == "review"]
+        commands = []
+        for review_id in dict.fromkeys(i for i in review_ids if i):
+            endpoint = "repos/%s/pulls/%s/reviews/%s" % (state["project"], state["number"], review_id)
+            commands.append("gh api --hostname %s -X DELETE %s" % (shlex.quote(state["host"]), shlex.quote(endpoint)))
+        return commands

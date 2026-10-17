@@ -34,7 +34,7 @@ This division ensures one owner and no duplicate findings across reviews.
 - `scope` **always runs** over the **whole diff** once (it is exempt from
   batching alongside `risk` and `adversarial`, because concern
   boundaries span batches).
-- **Diff-only mode exception:** In reviewer seat with no borrowed source, all findings
+- **Diff-only mode exception:** With no readable source in either seat, all findings
   are forced to `verified: false`. Because the verification gate requires
   `verified: true` for every `Should fix`, and every separable-concern finding is a
   `Should fix`, this dimension cannot legitimately produce findings. It is **skipped**
@@ -267,5 +267,5 @@ Source access by seat and mode (per `orchestration.md`):
   (the working tree is the authoritative source for local changes).
 - **Reviewer with borrowed source:** Read `REVIEW_SOURCE_ROOT/<path>` (verifying detached
   HEAD equals `refs.head`).
-- **Reviewer diff-only:** As noted above, `scope` is skipped entirely in diff-only
+- **Diff-only:** As noted above, `scope` is skipped entirely in diff-only
   mode because verification without source is impossible.

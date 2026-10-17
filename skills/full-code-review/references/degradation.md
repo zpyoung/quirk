@@ -6,7 +6,8 @@ Name each degradation that applied in the Summary and under Assumptions.
 | Situation | Behavior |
 |---|---|
 | No supported forge (unknown host with neither or both CLIs authenticated, Bitbucket, plain local changes) | The review runs fully. Delivery is the local report plus `report.json`; nothing posts. The Summary names `fallback_reason` or the detection reason. |
-| Forge call fails, or no change request exists for a branch | `prepare_diff.py` falls back to a git diff and reports `fallback_reason`. `adversarial` skips because `has_description` is false. |
+| For `--branch`: forge call fails, or no change request exists | `prepare_diff.py` falls back to a git diff and reports `fallback_reason`. `adversarial` skips because `has_description` is false. |
+| For `--change`: forge call fails | The run stops with `diff_source_failed`; there is no git fallback. |
 | `--local`, or a change request with an empty description | `has_description` is false, so `adversarial` skips; record it in the Summary. |
 | Missing or thin description | Resolve intent once before fan-out. A declined prompt or non-interactive run uses the guess with an Assumption. `scope` still runs unless diff-only, and flags the description only for a change-request target. |
 | Diff adds or modifies no comment lines | `comments` returns no findings after its first pass, without reading source. |

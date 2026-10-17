@@ -22,7 +22,7 @@ Running code is what found the extra bugs, so it is also the risk. Code only eve
 
 ## Data flow
 
-1. Steps 1 to 4 run as today: prepare the diff, size gate, source root, policy, guidance and memory.
+1. Steps 1 to 3 run as today: prepare the diff, source root, policy, guidance and memory.
 2. If the seat may run code, one consent prompt says what will run and where. A fork, an untrusted author, or any GitLab reviewer run gets no prompt and no repros.
 3. The risk lens runs first, as today.
 4. The coordinator builds the area map. It splits the change into size-bounded areas, keeps files that feed each other in the same area, and writes a few questions for each area from the risk result and the diff. The map is shown in the report.
@@ -91,12 +91,7 @@ The time budget covers the whole run. At about 80% of it, no new finders start, 
    - **When** the checker returns plausible
    - **Then** ✓ it shows with what would confirm it; ✗ it can't be posted, even if you mark it Will fix
 
-8. **A PR past the size gate**
-   - **Given** a PR over the hard block
-   - **When** you run the skill with `--deep`
-   - **Then** the size gate applies exactly as it does without `--deep`
-
-9. **Scoring a report against the answer key**
+8. **Scoring a report against the answer key**
    - **Given** the PR #50 answer key at `3605fd8` and a deep-mode report of that commit
    - **When** you run the scoring script on the report
    - **Then** ✓ it lists each answer-key defect as caught or missed; ✓ it reports recall and the share of shown findings that were refuted on spot check
@@ -116,7 +111,6 @@ Not in scope:
 - cleanup angles in deep mode (reuse, simplification, efficiency)
 - turning deep mode on automatically by risk, or through a policy or pack key
 - repros for forks, untrusted authors, or GitLab reviewer runs
-- lifting the size gate
 - posting plausible findings, or any other change to posting
 
 ## Decisions Locked

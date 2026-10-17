@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small, safe Markdown renderer for the combined-review report."""
+"""Small, safe Markdown renderer for the full-code-review report."""
 
 import html
 import itertools
@@ -13,9 +13,10 @@ _ABSOLUTE_DEST = re.compile(r"^(?:https?|mailto):[^\s]*$", re.IGNORECASE)
 _RELATIVE_DEST = re.compile(r"^(?!//)(?!\\)[^\s:]*(?:[/?#][^\s]*)?$")
 _CONTROL_DEST = re.compile(r"[\x00-\x1f\x7f\u2028\u2029]")
 _FENCE = re.compile(r"^```\s*(?P<info>[^\s`]+)?\s*$")
+_FENCE_CLOSE = re.compile(r"^```\s*$")
 _UL_ITEM = re.compile(r"^[-*] (.*)$")
 _OL_ITEM = re.compile(r"^\d+\. (.*)$")
-_HUNK = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+_HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 
 def _text(tokens, value):
@@ -105,7 +106,29 @@ def _link_parts(text, pos):
     return None
 
 
+def _can_open(text, pos, width):
+    """True when the delimiter run at ``pos`` may open emphasis.
+
+    The next character must be non-whitespace, and punctuation there (as in
+    ``src/*.py``) only opens when the delimiter itself starts a word.
+    """
+    after = pos + width
+    if after >= len(text) or text[after].isspace():
+        return False
+    if text[after].isalnum():
+        return True
+    return pos == 0 or text[pos - 1].isspace() or text[pos - 1] in "([{\"'"
+
+
 def _at_close(text, pos, closing):
+    """True when the delimiter at ``pos`` may close emphasis opened with ``closing``."""
+    if pos > 0:
+        before = text[pos - 1]
+        if before.isspace():
+            return False
+        after = pos + len(closing)
+        if not before.isalnum() and after < len(text) and text[after].isalnum():
+            return False
     if closing == "**":
         return text.startswith("**", pos)
     if closing == "*":
@@ -113,7 +136,17 @@ def _at_close(text, pos, closing):
     return False
 
 
-def _tokenize(text, pos=0, closing=None):
+def _tokenize(text, pos=0, closing=None, memo=None):
+    """Tokenize from ``pos`` until ``closing``; each (pos, closing) is scanned once per text."""
+    if memo is None:
+        memo = {}
+    key = (pos, closing)
+    if key not in memo:
+        memo[key] = _scan(text, pos, closing, memo)
+    return memo[key]
+
+
+def _scan(text, pos, closing, memo):
     tokens = []
     while pos < len(text):
         if closing and _at_close(text, pos, closing):
@@ -156,7 +189,7 @@ def _tokenize(text, pos=0, closing=None):
                 continue
 
         if text.startswith("**", pos):
-            children, end, closed = _tokenize(text, pos + 2, "**")
+            children, end, closed = _tokenize(text, pos + 2, "**", memo) if _can_open(text, pos, 2) else (None, pos, False)
             if closed:
                 tokens.append(("STRONG", children))
                 pos = end
@@ -166,7 +199,7 @@ def _tokenize(text, pos=0, closing=None):
             continue
 
         if ch == "*" and not text.startswith("**", pos):
-            children, end, closed = _tokenize(text, pos + 1, "*")
+            children, end, closed = _tokenize(text, pos + 1, "*", memo) if _can_open(text, pos, 1) else (None, pos, False)
             if closed:
                 tokens.append(("EM", children))
                 pos = end
@@ -359,6 +392,7 @@ def _diff_rows(source):
     rows = []
     changed = False
     old_no = new_no = None
+    old_left = new_left = 0
     dels, inss = [], []
 
     def flush():
@@ -369,8 +403,11 @@ def _diff_rows(source):
     pos = 0
     while pos < len(lines):
         line = lines[pos]
-        # a removed line can itself start with "--", so only a ---/+++ pair is a file header
-        if line.startswith("--- ") and pos + 1 < len(lines) and lines[pos + 1].startswith("+++ "):
+        # a removed line can itself start with "--", so only a ---/+++ pair outside an open hunk,
+        # or one followed by a hunk header, is a file header
+        if (line.startswith("--- ") and pos + 1 < len(lines) and lines[pos + 1].startswith("+++ ") and
+                (old_left <= 0 and new_left <= 0 or
+                 (pos + 2 < len(lines) and lines[pos + 2].startswith("@@")))):
             flush()
             target = lines[pos + 1][4:].strip()
             path = target[2:] if target.startswith("b/") else target
@@ -382,22 +419,28 @@ def _diff_rows(source):
         if line.startswith("@@"):
             flush()
             match = _HUNK.match(line)
-            old_no, new_no = (int(match.group(1)), int(match.group(2))) if match else (None, None)
+            old_no, new_no = (int(match.group(1)), int(match.group(3))) if match else (None, None)
+            old_left, new_left = ((int(match.group(2) or 1), int(match.group(4) or 1))
+                                  if match else (0, 0))
             rows.append(("hunk", line))
         elif line.startswith("-"):
             if inss:
                 flush()
             dels.append((old_no, "del", line[1:]))
+            old_left -= 1
             old_no = old_no + 1 if old_no is not None else None
             changed = True
         elif line.startswith("+"):
             inss.append((new_no, "ins", line[1:]))
+            new_left -= 1
             new_no = new_no + 1 if new_no is not None else None
             changed = True
         else:
             flush()
             text = line[1:] if line.startswith(" ") else line
             rows.append(("line", (old_no, "ctx", text), (new_no, "ctx", text)))
+            old_left -= 1
+            new_left -= 1
             old_no = old_no + 1 if old_no is not None else None
             new_no = new_no + 1 if new_no is not None else None
         pos += 1
@@ -463,7 +506,9 @@ def split_blocks(text):
     """Split Markdown into block tokens without allowing paragraphs to swallow blocks."""
     if text is None or text == "":
         return []
-    lines = str(text).splitlines()
+    lines = str(text).replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if lines[-1] == "":
+        lines.pop()
     blocks = []
     pos = 0
     while pos < len(lines):
@@ -475,7 +520,7 @@ def split_blocks(text):
             language = _FENCE.match(lines[pos]).group("info")
             pos += 1
             content = []
-            while pos < len(lines) and not _FENCE.match(lines[pos]):
+            while pos < len(lines) and not _FENCE_CLOSE.match(lines[pos]):
                 content.append(lines[pos])
                 pos += 1
             if pos < len(lines):

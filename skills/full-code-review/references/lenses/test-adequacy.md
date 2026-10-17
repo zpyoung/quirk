@@ -24,8 +24,9 @@ production code warrants them.
 5. **Assertions on implementation details** — mock call counts, internal state —
    rather than on behavior.
 
-Severity: `Must fix` when an untested path carries real correctness risk (money,
-auth, data mutation); otherwise `Should fix`.
+Severity: `Should fix` by default; never `Must fix` for missing coverage alone, matching
+`test-coverage`. A test that passes without asserting a money, auth, or data-mutation
+outcome may be `Must fix`.
 
 ## Out of scope
 

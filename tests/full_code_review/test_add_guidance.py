@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import shlex
 import subprocess
 
 import pytest
@@ -55,6 +56,14 @@ def test_project_pack_target_writes_lessons_file(tmp_path):
     assert out["path"] == str(path)
     assert "pack lesson" in path.read_text()
     assert out["commit_hint"]
+
+
+def test_commit_hint_shell_quotes_paths_with_metacharacters(tmp_path):
+    repo = _git_repo(tmp_path / "re$po `x`")
+    rc, out = _run(["--note", "lesson", "--target", "review-md", "--git-root", str(repo)])
+    assert rc == 0
+    assert shlex.split(out["commit_hint"])[:5] == [
+        "git", "-C", str(repo.resolve()), "add", str(repo.resolve() / "REVIEW.md")]
 
 
 def test_user_pack_target_uses_xdg_config_home(tmp_path, monkeypatch):

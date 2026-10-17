@@ -147,6 +147,7 @@ def test_unreached_deep_areas_always_force_incomplete_verdict(verdict):
     assert prepared["run"]["incomplete"] is True
     assert prepared["meta"]["verdict"] == "Incomplete review"
     assert not [warning for warning in warnings if "Unknown run field" in warning]
+    assert not [warning for warning in warnings if "Incomplete reports can only" in warning]
     html = m.render_html(value, TEMPLATE)
     assert "Unreached areas: A7, A8" in html
     assert "unknown lenses" not in html
@@ -198,3 +199,9 @@ def test_deep_reproduced_evidence_requires_reproduction():
     value["findings"][0]["repro"] = {"command": "python3 test.py", "output": "failed"}
     prepared, _ = m._prepare_report(value)
     assert prepared["findings"][0]["repro"] == value["findings"][0]["repro"]
+
+
+def test_committed_sample_asset_matches_the_renderer():
+    import build_sample_report
+
+    assert build_sample_report.render_sample() == TEMPLATE

@@ -69,13 +69,13 @@ def parse(text: str, path: str = "<string>") -> Any:
     plain/single/double-quoted scalars, booleans, `|`/`>` block scalars with `-`, `+` or
     default chomping, `#` comments, and flow sequences whose items are all scalars
     (`[a, "b", c]`, including the empty `[]`). Not supported: flow mappings, flow sequences
-    containing a nested collection, anchors/aliases, multi-document separators, tags,
-    merge keys.
+    containing a nested collection, nested block sequences (`- - x`), anchors/aliases,
+    multi-document separators, tags, merge keys, tab indentation.
 
     Raises TemplateParseError naming `path` and the offending line for anything outside
     that subset.
     """
-    cur = _Cursor(text.splitlines())
+    cur = _Cursor(text.splitlines(), path)
     try:
         node = _parse_node(cur, 0, path, 0)
     except RecursionError as exc:  # pragma: no cover - _MAX_DEPTH fires first
@@ -90,8 +90,9 @@ def parse(text: str, path: str = "<string>") -> Any:
 class _Cursor:
     """A one-directional walk over `raw` lines that skips blank and comment-only ones."""
 
-    def __init__(self, raw: List[str]):
+    def __init__(self, raw: List[str], path: str = "<string>"):
         self.raw = raw
+        self.path = path
         self.n = len(raw)
         self.i = 0
 
@@ -103,22 +104,36 @@ class _Cursor:
             if stripped.strip() == "":
                 j += 1
                 continue
-            indent = len(stripped) - len(stripped.lstrip(" "))
-            return (j, indent, stripped.strip())
+            leading = stripped[: len(stripped) - len(stripped.lstrip(" \t"))]
+            if "\t" in leading:
+                raise TemplateParseError("tabs are not allowed for indentation", self.path, j + 1)
+            return (j, len(leading), stripped.strip())
         return None
 
     def advance_to(self, j: int) -> None:
         self.i = j + 1
 
 
-def _opens_quote(text: str, i: int) -> bool:
-    """A quote starts a quoted scalar only at a token start, never inside a plain scalar (`don't`)."""
-    return i == 0 or text[i - 1] in " \t[,"
+def _opens_quote(text: str, i: int, flow: bool = False) -> bool:
+    """A quote starts a quoted scalar only at a scalar start, never inside a plain scalar (`don't`).
+
+    A scalar starts at the line start, after a `key:` indicator, or after a `-` sequence
+    indicator. Inside a flow sequence (`flow=True`) it also starts after `[` or `,`; in block
+    context those characters belong to a plain scalar (`yes, 'cause`).
+    """
+    if i == 0 or (flow and text[i - 1] in "[,"):
+        return True
+    if text[i - 1] not in " \t":
+        return False
+    before = text[:i].rstrip(" \t")
+    if before == "" or before[-1] == ":" or (flow and before[-1] in "[,"):
+        return True
+    return before[-1] == "-" and before[:-1].strip(" -") == ""
 
 
 def _strip_comment(line: str) -> str:
     """Cut `line` at the first unquoted `#` preceded by whitespace or the line start."""
-    in_single = in_double = False
+    in_single = in_double = flow = False
     i, n = 0, len(line)
     while i < n:
         ch = line[i]
@@ -138,10 +153,12 @@ def _strip_comment(line: str) -> str:
                 in_double = False
             i += 1
             continue
-        if ch == "'" and _opens_quote(line, i):
+        if ch == "'" and _opens_quote(line, i, flow):
             in_single = True
-        elif ch == '"' and _opens_quote(line, i):
+        elif ch == '"' and _opens_quote(line, i, flow):
             in_double = True
+        elif ch == "[" and not flow and _opens_quote(line, i):
+            flow = True
         elif ch == "#" and (i == 0 or line[i - 1] in " \t"):
             return line[:i]
         i += 1
@@ -150,7 +167,7 @@ def _strip_comment(line: str) -> str:
 
 def _find_colon(content: str) -> Optional[int]:
     """Find the first unquoted `:` that separates a mapping key from its value."""
-    in_single = in_double = False
+    in_single = in_double = flow = False
     i, n = 0, len(content)
     while i < n:
         ch = content[i]
@@ -170,10 +187,12 @@ def _find_colon(content: str) -> Optional[int]:
                 in_double = False
             i += 1
             continue
-        if ch == "'" and _opens_quote(content, i):
+        if ch == "'" and _opens_quote(content, i, flow):
             in_single = True
-        elif ch == '"' and _opens_quote(content, i):
+        elif ch == '"' and _opens_quote(content, i, flow):
             in_double = True
+        elif ch == "[" and not flow and _opens_quote(content, i):
+            flow = True
         elif ch == ":" and (i + 1 == n or content[i + 1] == " "):
             return i
         i += 1
@@ -181,6 +200,7 @@ def _find_colon(content: str) -> Optional[int]:
 
 
 def _is_dash(content: str) -> bool:
+    """True for a block-sequence entry: a bare `-` or `- ` followed by content."""
     return content == "-" or content.startswith("- ")
 
 
@@ -212,7 +232,7 @@ def _parse_node(cur: _Cursor, min_indent: int, path: str, depth: int) -> Any:
     if content[0] == "[":
         cur.advance_to(j)
         return _parse_flow_sequence(content, path, j + 1)
-    if content == "-" or content.startswith("- "):
+    if _is_dash(content):
         return _parse_sequence(cur, indent, path, depth)
     if _find_colon(content) is not None:
         return _parse_mapping(cur, indent, path, depth)
@@ -265,7 +285,7 @@ def _parse_mapping(cur: _Cursor, indent: int, path: str, depth: int) -> dict:
         j, cur_indent, content = peek
         if cur_indent != indent:
             break
-        if content == "-" or content.startswith("- "):
+        if _is_dash(content):
             raise TemplateParseError("expected a mapping key, found a sequence item", path, j + 1)
         _reject_doc_markers(content, path, j + 1)
         key, value_part = _split_key(content, path, j + 1)
@@ -283,7 +303,7 @@ def _parse_sequence(cur: _Cursor, indent: int, path: str, depth: int) -> list:
         j, cur_indent, content = peek
         if cur_indent != indent:
             break
-        if not (content == "-" or content.startswith("- ")):
+        if not _is_dash(content):
             break
         cur.advance_to(j)
         after_dash = content[1:]
@@ -304,6 +324,8 @@ def _parse_sequence(cur: _Cursor, indent: int, path: str, depth: int) -> list:
         if rest[0] == "[":
             items.append(_parse_flow_sequence(rest, path, j + 1))
             continue
+        if _is_dash(rest):
+            raise TemplateParseError(f"nested sequences are not supported: {rest!r}", path, j + 1)
         if _find_colon(rest) is None:
             items.append(_parse_scalar(rest, path, j + 1))
             continue
@@ -317,7 +339,7 @@ def _parse_sequence(cur: _Cursor, indent: int, path: str, depth: int) -> list:
             j2, indent2, content2 = sibling
             if indent2 != item_col:
                 break
-            if content2 == "-" or content2.startswith("- "):
+            if _is_dash(content2):
                 raise TemplateParseError(
                     "expected a mapping key, found a sequence item", path, j2 + 1
                 )
@@ -365,14 +387,20 @@ def _fold(lines: List[str]) -> str:
     out: List[str] = []
     blank_run = 0
     started = False
+    previous = ""
     for line in lines:
         if line == "":
             blank_run += 1
             continue
         if started:
-            out.append("\n" * blank_run if blank_run else " ")
+            more_indented = line[0] in " \t" or previous[0] in " \t"
+            if blank_run:
+                out.append("\n" * (blank_run + 1 if more_indented else blank_run))
+            else:
+                out.append("\n" if more_indented else " ")
         out.append(line)
         started = True
+        previous = line
         blank_run = 0
     return "".join(out)
 
@@ -428,9 +456,9 @@ def _split_flow_items(inner: str) -> List[str]:
                 in_double = False
             i += 1
             continue
-        if ch == "'" and _opens_quote(inner, i):
+        if ch == "'" and _opens_quote(inner, i, True):
             in_single = True
-        elif ch == '"' and _opens_quote(inner, i):
+        elif ch == '"' and _opens_quote(inner, i, True):
             in_double = True
         elif ch in "[{":
             depth += 1
@@ -506,7 +534,12 @@ def _parse_double_quoted(raw: str, path: str, lineno: int) -> str:
                 raise TemplateParseError(
                     rf"expected {width} hex digits after \{esc} in {raw!r}", path, lineno
                 )
-            out.append(chr(int(digits, 16)))
+            codepoint = int(digits, 16)
+            if codepoint > 0x10FFFF:
+                raise TemplateParseError(
+                    rf"\{esc}{digits} is not a valid code point in {raw!r}", path, lineno
+                )
+            out.append(chr(codepoint))
             i += 2 + width
             continue
         if esc not in _DOUBLE_ESCAPES:

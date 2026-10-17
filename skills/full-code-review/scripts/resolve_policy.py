@@ -5,7 +5,7 @@ Layers, lowest to highest: the built-in lens roster, the user pack (or --pack), 
 project pack at <source-root>/.quirk/review/, then REVIEW.md files (the root one plus any
 in an ancestor directory of a changed file; deeper overrides shallower key by key).
 
-With --policy-ref (reviewer seat: the target branch SHA) the project pack and REVIEW.md
+With --policy-ref (reviewer seat: the merge-base SHA, refs.base) the project pack and REVIEW.md
 are read from that ref, never the working tree, so a change cannot weaken its own review.
 Files read from a ref are written under <out-dir>/policy-files/ so lenses can read them.
 
@@ -21,6 +21,7 @@ import argparse
 import fnmatch
 import json
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -37,6 +38,7 @@ RUN_WHEN = ("always", "has_description", "code_changed", "source_or_config_chang
 KNOWN_KEYS = ("severity_floor", "escalation", "models", "skip", "cross_family",
               "critical_paths", "skip_globs", "cross_repo")
 PROJECT_PACK = ".quirk/review"
+MAX_SYMLINK_DEPTH = 8
 
 
 class PolicyError(Exception):
@@ -81,20 +83,32 @@ class _RefSource:
         self.ref = ref
         self.stash = Path(stash)
 
-    def read(self, rel):
+    def read(self, rel, _depth=0):
         """Return the file's text at the ref, None only when the path is not a file there.
 
         An unreadable ref raises, so a bad --policy-ref cannot quietly mean "no project policy".
+        A symlink resolves to its in-repo target blob, as the working tree does; a link that
+        leaves the repo or does not end at a file raises instead of returning the link text.
         """
         entry = _git(self.root, "ls-tree", self.ref, "--", rel)
         if entry.returncode != 0:
             raise PolicyError("cannot read %s at %s: %s" % (rel, self.ref, entry.stderr.strip()[:200]))
-        if " blob " not in entry.stdout.split("\t", 1)[0]:
+        info = entry.stdout.split("\t", 1)[0].split()
+        if len(info) < 2 or info[1] != "blob":
             return None
         result = _git(self.root, "show", "%s:%s" % (self.ref, rel))
         if result.returncode != 0:
             raise PolicyError("cannot read %s at %s: %s" % (rel, self.ref, result.stderr.strip()[:200]))
-        return result.stdout
+        if info[0] != "120000":
+            return result.stdout
+        target = posixpath.normpath(posixpath.join(posixpath.dirname(rel), result.stdout.strip()))
+        if _depth >= MAX_SYMLINK_DEPTH or target.startswith("..") or posixpath.isabs(target):
+            raise PolicyError("%s at %s is a symlink that leaves the repo or loops" % (rel, self.ref))
+        text = self.read(target, _depth + 1)
+        if text is None:
+            raise PolicyError("%s at %s is a symlink to %s, which is not a file there"
+                              % (rel, self.ref, target))
+        return text
 
     def listdir(self, rel, suffix=".md"):
         result = _git(self.root, "ls-tree", "-z", "%s:%s" % (self.ref, rel))
@@ -116,7 +130,7 @@ class _RefSource:
 
 def _parse_yaml(text, label, line_offset=0):
     try:
-        value = policy_yaml.parse(text, label)
+        value = policy_yaml.parse(text.removeprefix("\ufeff"), label)
     except policy_yaml.TemplateParseError as exc:
         raise PolicyError("%s:%d: %s" % (label, exc.line + line_offset, exc.message))
     if value is None:
@@ -127,7 +141,11 @@ def _parse_yaml(text, label, line_offset=0):
 
 
 def split_front_matter(text, label):
-    """Return (settings, body) for a Markdown file with optional `---` front matter."""
+    """Return (settings, body) for a Markdown file with optional `---` front matter.
+
+    A leading byte-order mark is ignored so an editor-saved file keeps its settings.
+    """
+    text = text.removeprefix("\ufeff")
     if not text.startswith("---\n"):
         return {}, text
     end = text.find("\n---", 3)
@@ -145,6 +163,12 @@ def _list_of_strings(value, label, key):
 
 
 class Policy:
+    """Accumulates the lens roster and settings across policy layers.
+
+    Layers apply lowest to highest; a later layer wins per key, while `skip`,
+    `critical_paths` and `skip_globs` accumulate. Raises PolicyError on invalid settings.
+    """
+
     def __init__(self, diff_only=False):
         self.diff_only = diff_only
         self.lenses = {}
@@ -157,6 +181,19 @@ class Policy:
         self.sources = []
         self.guidance = []
         self.warnings = []
+        self.layer = 0
+        self.model_pins = {}
+        self.model_stamp = {}
+
+    def _set_model(self, lens_id, model, stamp):
+        """Give `lens_id` the model unless a higher layer already chose one.
+
+        A stamp is (layer, rank): a later layer wins, and within one layer a `models`
+        mapping outranks the lens file's own front matter.
+        """
+        if stamp >= self.model_stamp.get(lens_id, (-1, -1)):
+            self.model_stamp[lens_id] = stamp
+            self.lenses[lens_id]["model"] = model
 
     def apply_settings(self, values, label):
         for key in values:
@@ -178,6 +215,10 @@ class Policy:
                 if model not in MODELS:
                     raise PolicyError("%s: models.%s must be one of %s" % (label, lens_id, ", ".join(MODELS)))
                 self.settings["models"][lens_id] = model
+                stamp = (self.layer, 1)
+                self.model_pins[lens_id] = (stamp, model)
+                if lens_id in self.lenses:
+                    self._set_model(lens_id, model, stamp)
         if "skip" in values:
             for lens_id in _list_of_strings(values["skip"], label, "skip"):
                 self.skipped.setdefault(lens_id, label)
@@ -191,6 +232,9 @@ class Policy:
             if (not isinstance(value, dict) or not isinstance(value.get("enabled", False), bool)
                     or not isinstance(value.get("alias"), (str, type(None)))):
                 raise PolicyError("%s: cross_family needs enabled (true/false) and an alias string" % label)
+            effective = {**self.settings["cross_family"], **value}
+            if effective["enabled"] and not effective.get("alias"):
+                raise PolicyError("%s: cross_family.enabled requires an alias string" % label)
             self.settings["cross_family"].update({k: value[k] for k in ("enabled", "alias") if k in value})
         if "cross_repo" in values:
             value = values["cross_repo"]
@@ -200,6 +244,10 @@ class Policy:
 
     def add_lens(self, meta, checklist, source, label, builtin=False):
         lens_id = meta.get("id") or Path(label).stem
+        if not isinstance(lens_id, str):
+            raise PolicyError("%s: lens id must be a string" % label)
+        if meta.get("model", "sonnet") not in MODELS:
+            raise PolicyError("%s: model must be one of %s" % (label, ", ".join(MODELS)))
         if lens_id in self.lenses:
             lens = self.lenses[lens_id]
             lens.update({"checklist": checklist, "source": source})
@@ -210,19 +258,26 @@ class Policy:
                     "run_when": None, "batched": True, "source": source}
             self.lenses[lens_id] = lens
             self.order.append(lens_id)
-        for key in ("model", "escalate", "run_when", "batched"):
+            if lens_id in self.model_pins:
+                stamp, pinned = self.model_pins[lens_id]
+                self._set_model(lens_id, pinned, stamp)
+        if "model" in meta:
+            self._set_model(lens_id, meta["model"], (self.layer, 0))
+        for key in ("escalate", "run_when", "batched"):
             if key in meta:
                 lens[key] = meta[key]
         if lens["run_when"] not in RUN_WHEN:
             raise PolicyError("%s: run_when must be one of %s" % (label, ", ".join(RUN_WHEN)))
-        if lens["model"] not in MODELS:
-            raise PolicyError("%s: model must be one of %s" % (label, ", ".join(MODELS)))
         for key in ("escalate", "batched"):
             if not isinstance(lens[key], bool):
                 raise PolicyError("%s: %s must be true or false" % (label, key))
 
     def load_pack(self, source, base, kind):
-        """Apply one pack (pack.yaml, lenses/*.md, guidance/*.md) rooted at `base`."""
+        """Apply one pack (pack.yaml, lenses/*.md, guidance/*.md) rooted at `base`.
+
+        Returns whether the pack contributed anything.
+        """
+        self.layer += 1
         prefix = "%s/" % base if base else ""
         found = False
         text = source.read(prefix + "pack.yaml")
@@ -241,12 +296,11 @@ class Policy:
             self.guidance.append(source.readable_path(rel, source.read(rel)))
         if found:
             self.sources.append({"kind": kind, "path": label_root, "ref": source.ref})
+        return found
 
     def finish(self):
-        for lens_id, model in self.settings["models"].items():
-            if lens_id in self.lenses:
-                self.lenses[lens_id]["model"] = model
-            else:
+        for lens_id in self.settings["models"]:
+            if lens_id not in self.lenses:
                 self.warnings.append("models: unknown lens %s ignored" % lens_id)
         for lens_id in self.skipped:
             if lens_id not in self.lenses:
@@ -290,13 +344,13 @@ def resolve_policy(context, source_root, lenses_dir, out_dir, policy_ref=None, p
 
     Raises PolicyError on a malformed pack or REVIEW.md, and when the context's seat is
     reviewer but no `policy_ref` was given: a reviewer run must read project policy from the
-    target branch, never from the change under review. A `diff_only` run has no source
+    merge-base commit, never from the change under review. A `diff_only` run has no source
     checkout, so it skips the project pack and REVIEW.md instead of reading them.
     """
     if diff_only and policy_ref:
         raise PolicyError("--diff-only has no source to read a --policy-ref from")
     if not policy_ref and not diff_only and context.get("seat") == "reviewer":
-        raise PolicyError("reviewer seat requires --policy-ref (the target branch SHA) or --diff-only")
+        raise PolicyError("reviewer seat requires --policy-ref (the merge-base SHA, refs.base) or --diff-only")
     policy = Policy(diff_only)
     lenses_dir = Path(lenses_dir)
     for path in sorted(lenses_dir.glob("*.md")):
@@ -309,8 +363,12 @@ def resolve_policy(context, source_root, lenses_dir, out_dir, policy_ref=None, p
     policy.sources.append({"kind": "builtin", "path": str(lenses_dir), "ref": None})
 
     user_dir = _user_pack_dir(pack)
+    if pack and not user_dir.is_dir():
+        raise PolicyError("--pack %s is not a directory" % pack)
     if user_dir.is_dir():
-        policy.load_pack(_FsSource(user_dir), "", "user-pack")
+        if not policy.load_pack(_FsSource(user_dir), "", "user-pack") and pack:
+            policy.warnings.append("--pack %s has no pack.yaml, lenses/ or guidance/; "
+                                   "no pack policy was applied" % pack)
 
     if diff_only:
         policy.warnings.append("diff-only: the project pack and REVIEW.md were not read; "
@@ -326,6 +384,7 @@ def resolve_policy(context, source_root, lenses_dir, out_dir, policy_ref=None, p
             continue
         label = str(Path(source_root) / rel)
         settings, _ = split_front_matter(text, label)
+        policy.layer += 1
         policy.apply_settings(settings, label)
         policy.sources.append({"kind": "review-md", "path": label, "ref": policy_ref})
         policy.guidance.append(repo.readable_path(rel, text))
@@ -333,9 +392,17 @@ def resolve_policy(context, source_root, lenses_dir, out_dir, policy_ref=None, p
 
 
 def _matches(path, pattern):
+    """Glob match where `*` crosses `/` and a `**/` segment may match zero directories."""
     if fnmatch.fnmatchcase(path, pattern):
         return True
-    return pattern.startswith("**/") and fnmatch.fnmatchcase(path, pattern[3:])
+    if pattern.startswith("**/") and _matches(path, pattern[3:]):
+        return True
+    start = pattern.find("/**/")
+    while start != -1:
+        if _matches(path, pattern[:start] + "/" + pattern[start + 4:]):
+            return True
+        start = pattern.find("/**/", start + 1)
+    return False
 
 
 def _supports_attr_source(root):

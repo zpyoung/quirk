@@ -117,6 +117,10 @@ def test_first_sentence_cases():
     assert cb.first_sentence("Really?  Yes.") == "Really?"
     assert cb.first_sentence("Stop! Now.") == "Stop!"
     assert cb.first_sentence("First line no stop\nSecond. Third") == "First line no stop Second."
+    assert cb.first_sentence("Refunds use a stale rate, e.g. in EU stores. Next.") == (
+        "Refunds use a stale rate, e.g. in EU stores.")
+    assert cb.first_sentence("Pick one, i.e. the newest. Next.") == "Pick one, i.e. the newest."
+    assert cb.first_sentence("Fast vs. slow paths differ. Next.") == "Fast vs. slow paths differ."
     assert cb.first_sentence("v1.5 is  bad. ok") == "v1.5 is bad."
     assert cb.first_sentence("ends at eof.") == "ends at eof."
     assert cb.first_sentence("no punctuation   here") == "no punctuation here"
@@ -164,15 +168,10 @@ def test_finding_body_author_seat_has_no_disposition_and_no_fp_when_missing():
     assert "fp" not in cb.parse_block(cb.finding_body(uppercase, seat="author", lead="Nit")[0])
 
 
-@pytest.mark.parametrize("line", ["\u00b2", "\u0663\u0664", "1\u00b2"])
+@pytest.mark.parametrize("line", ["\u00b2", "\u0663\u0664", "1\u00b2", "2-4"])
 def test_finding_body_non_ascii_digit_line_stays_text(line):
     body, _ = cb.finding_body(make_finding(line=line), seat="author", lead="Nit")
     assert cb.parse_block(body)["line"] == line
-
-
-def test_finding_body_non_numeric_line_stays_text():
-    body, _ = cb.finding_body(make_finding(line="2-4"), seat="author", lead="Nit")
-    assert cb.parse_block(body)["line"] == "2-4"
 
 
 def test_finding_body_fixed_sentences():
@@ -646,7 +645,7 @@ def test_cli_output_shape(tmp_path, capsys):
     code = cb.main(["author", "--report", report, "--out", str(out)])
     assert code == 0
     data = json.loads(out.read_text(encoding="utf-8"))
-    assert set(data) == {"findings", "overview", "warnings", "report_sha256"}
+    assert set(data) == {"findings", "overview", "overview_plan", "warnings", "report_sha256"}
     assert data["report_sha256"] == cb._report_digest(raw_report())
     assert set(data["findings"]) == {"F1", "F2"}
     first = data["findings"]["F1"]
@@ -950,6 +949,24 @@ def test_mention_beside_backslash_escaped_backticks_is_defused():
     assert "`@real`" in cb._neutralize("x `@real` y")
 
 
+@pytest.mark.parametrize("text", ["`@all``", "``@all`", "x `@all`` y"])
+def test_mention_beside_unequal_backtick_runs_is_defused(text):
+    assert "@all" not in cb._neutralize(text)
+
+
+def test_unplaced_path_cannot_carry_a_mention_outside_its_code_span():
+    omitted = [{"id": "F3", "reason": "line is outside the diff", "disposition": "Blocking",
+                "unplaced": True}]
+    report = {"findings": [make_finding(id="F3", file="a` @victim `b.py", line="3")]}
+    section = cb._unplaced_section(omitted, {"F3": report["findings"][0]})
+    assert "@victim" not in section and "`" in section
+
+
+def test_scalar_finding_assumptions_raise_value_error():
+    with pytest.raises(ValueError, match="assumptions"):
+        cb.finding_body(make_finding(assumptions=5), seat="author", lead="Must fix")
+
+
 def test_pre_line_in_body_keeps_details_closer_intact():
     finding = make_finding(body_md="Intro.\n\n<pre>\nswallow everything\n")
     body, _ = cb.finding_body(finding, seat="author", lead="Must fix")
@@ -1001,7 +1018,7 @@ def test_short_recommendation_sentence_fallback_is_used():
 def test_neutralize_breaks_mentions_but_not_emails_or_code():
     text = "ping @all and (@team/backend), mail user@example.com, `@inline` stays\n```\n@fenced\n```"
     out = cb._neutralize(text)
-    assert "@​all" in out and "(@​team/backend)" in out
+    assert "@\u200ball" in out and "(@\u200bteam/backend)" in out
     assert "user@example.com" in out and "`@inline`" in out
     assert "\n@fenced\n" in out
 
@@ -1043,3 +1060,24 @@ def test_plausible_author_finding_never_becomes_post_eligible(slot):
     assert data["findings"]["F2"]["post"] is (decisions is None)
     assert "Posted: %d · Not posted: %d" % (
         1 if decisions is None else 0, 1 if decisions is None else 2) in data["overview"]
+
+
+@pytest.mark.parametrize("marker", ["~~~", "```"])
+def test_fence_marker_after_an_inline_prefix_does_not_add_a_stray_fence(marker):
+    finding = make_finding(fix_md="%s bar" % marker)
+    body, _ = cb.finding_body(finding, seat="author", lead="Must fix")
+    assert "**Fix:** %s bar\n" % marker in body
+    assert body.count(marker) == 1
+
+
+@pytest.mark.parametrize("marker", ["``` oops", "~~~", "```py"])
+@pytest.mark.parametrize("build", ["finding", "support"])
+def test_a_leading_fence_in_the_why_line_leaves_no_unbalanced_fence(marker, build):
+    finding = make_finding(impact=marker)
+    if build == "finding":
+        body, _ = cb.finding_body(finding, seat="author", lead="Must fix")
+    else:
+        body, _ = cb.support_body(finding, disposition="Blocking", discussion_id="d1", note_id=5)
+    visible = body.split("<details>")[0]
+    fences = [line for line in visible.split("\n") if line.lstrip().startswith(("```", "~~~"))]
+    assert len(fences) % 2 == 0

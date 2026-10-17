@@ -41,11 +41,17 @@ def test_aliases_resolve_to_one_canonical_name():
     assert h.supported("patch") == h.supported("diff") == "diff"
 
 
+def _disable_pygments(monkeypatch):
+    monkeypatch.setattr(h, "_pygments_lexers", None)
+    monkeypatch.setattr(h, "_LEXERS", {})
+
+
 @pytest.fixture(params=["installed", "builtin"])
 def each_backend(request, monkeypatch):
-    if request.param == "builtin":
-        monkeypatch.setattr(h, "_pygments_lexers", None)
-        monkeypatch.setattr(h, "_LEXERS", {})
+    if request.param == "installed":
+        pytest.importorskip("pygments")
+    else:
+        _disable_pygments(monkeypatch)
 
 
 def test_comments_and_strings_swallow_keywords(each_backend):
@@ -69,7 +75,7 @@ def test_diff_is_line_oriented():
     assert STRIP.sub("", out).endswith(" context\n")
 
 
-def test_json_property_keys_differ_from_string_values():
+def test_json_property_keys_differ_from_string_values(each_backend):
     out = h.highlight('{"k": "v"}', "json")
     assert 'tok--property' in out and 'tok--string' in out
 
@@ -93,8 +99,7 @@ PYGMENTS_SOURCES = [
 @pytest.fixture
 def builtin(monkeypatch):
     """Run against the stdlib grammars, as on a machine without Pygments."""
-    monkeypatch.setattr(h, "_pygments_lexers", None)
-    monkeypatch.setattr(h, "_LEXERS", {})
+    _disable_pygments(monkeypatch)
 
 
 def test_builtin_backend_keeps_the_invariant_and_its_language_set(builtin):
@@ -116,14 +121,8 @@ def test_crlf_input_is_read_as_lf_on_both_backends(language, monkeypatch):
     expected = html.escape(source.replace("\r\n", "\n"), quote=True)
     assert STRIP.sub("", h.highlight(source, language)) == expected
     assert [STRIP.sub("", line) for line in h.highlight_lines(source.split("\n"), language)] == expected.split("\n")
-    monkeypatch.setattr(h, "_pygments_lexers", None)
-    monkeypatch.setattr(h, "_LEXERS", {})
+    _disable_pygments(monkeypatch)
     assert STRIP.sub("", h.highlight(source, language)) == expected
-
-
-def test_builtin_json_property_keys_differ_from_string_values(builtin):
-    out = h.highlight('{"k": "v"}', "json")
-    assert 'tok--property' in out and 'tok--string' in out
 
 
 def test_pygments_languages_keep_the_invariant():
@@ -133,6 +132,20 @@ def test_pygments_languages_keep_the_invariant():
         out = h.highlight(source, language)
         assert STRIP.sub("", out) == html.escape(source, quote=True), language
         assert "tok--" in out, language
+
+
+@pytest.mark.parametrize("language,source", [("json", '\ufeff{"a": 1}'), ("python", "\ufeffx = 1\n")])
+def test_leading_bom_survives_pygments_highlighting(language, source):
+    pytest.importorskip("pygments")
+    out = h.highlight(source, language)
+    assert STRIP.sub("", out) == html.escape(source, quote=True)
+
+
+@pytest.mark.parametrize("language", ["c", "python", "json"])
+def test_every_leading_bom_survives_pygments_highlighting(language):
+    pytest.importorskip("pygments")
+    source = "\ufeff\ufeffx = 1;\n"
+    assert STRIP.sub("", h.highlight(source, language)) == html.escape(source, quote=True)
 
 
 def test_pygments_maps_markup_and_data_keys_onto_template_kinds():
@@ -174,3 +187,11 @@ def test_highlight_lines_carries_a_token_across_line_breaks(language):
 def test_highlight_lines_passes_through_empty_and_unknown_input():
     assert h.highlight_lines([], "python") == []
     assert h.highlight_lines(["<a>"], None) == ["&lt;a&gt;"]
+
+
+def test_lexer_that_rewrites_text_falls_back_to_plain_source():
+    pytest.importorskip("pygments")
+    source = "*** Test Cases ***\nCase\n\tLog    x\n"
+    out = h.highlight(source, "robotframework")
+    assert STRIP.sub("", out) == html.escape(source, quote=True)
+    assert "<span" not in out

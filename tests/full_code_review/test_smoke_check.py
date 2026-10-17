@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -21,6 +22,7 @@ def finding(**over):
 @pytest.mark.parametrize("value, passed", [
     (finding(), True),
     (finding(line="1-3"), True),
+    (finding(line="1-2"), False),
     (finding(line="5-9"), False),
     (finding(line="3", dimension=None, dimensions=["resilience", "db"]), True),
     (finding(dimension="resilience"), False),
@@ -75,6 +77,18 @@ def test_bad_input_error_names_which_file_was_wrong(tmp_path, name, content, mes
     assert message in json.loads(out.getvalue())["error"]
 
 
+def patch_hunk_ranges(patch, file):
+    """New-side (start, end) line ranges of every hunk the patch applies to `file`."""
+    ranges, current = [], False
+    for row in patch.splitlines():
+        if row.startswith("+++ "):
+            current = row == "+++ b/%s" % file
+        elif current and (hunk := re.match(r"@@ -\S+ \+(\d+)(?:,(\d+))? @@", row)):
+            start, count = int(hunk[1]), int(hunk[2] if hunk[2] is not None else 1)
+            ranges.append((start, start + max(count, 1) - 1))
+    return ranges
+
+
 @pytest.mark.parametrize("case", sorted(p.name for p in SMOKE.iterdir() if (p / "expected.json").is_file()))
 def test_each_smoke_case_patch_applies_and_names_a_changed_file(tmp_path, case):
     source = SMOKE / case
@@ -85,3 +99,5 @@ def test_each_smoke_case_patch_applies_and_names_a_changed_file(tmp_path, case):
     expected = json.loads((source / "expected.json").read_text())
     assert expected["lens"] == case
     assert "+++ b/%s" % expected["file"] in (source / "change.patch").read_text()
+    ranges = patch_hunk_ranges((source / "change.patch").read_text(), expected["file"])
+    assert any(start <= expected["line_max"] and expected["line_min"] <= end for start, end in ranges)

@@ -257,19 +257,45 @@ def _safe_marker(manifest):
         return False
 
 
-def _drop_review_ref(manifest):
-    """Delete the private review ref and prune the worktree record from the borrowed clone.
+def _forget_worktree_record(repo_root, path):
+    """Delete the git admin record registered for the missing worktree `path`, and no other.
 
-    Returns a message naming what git refused to clean up, or None when nothing is left.
+    Returns a message when the record could not be removed, else None.
+    """
+    result = _run(["git", "-C", repo_root, "rev-parse", "--git-common-dir"], timeout=20)
+    if result.returncode != 0 or not result.stdout.strip():
+        return "worktree record lookup failed: %s" % (result.stderr.strip() or result.stdout.strip())
+    records = Path(repo_root, result.stdout.strip(), "worktrees")
+    if not records.is_dir():
+        return None
+    gitfile = os.path.realpath(os.path.join(path, ".git"))
+    try:
+        for record in records.iterdir():
+            try:
+                pointer = (record / "gitdir").read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+            if os.path.realpath(pointer) == gitfile:
+                shutil.rmtree(record)
+    except OSError as exc:
+        return "worktree record not removed: %s" % exc
+    return None
+
+
+def _drop_review_ref(manifest):
+    """Delete the private review ref and the borrowed worktree's record from the borrowed clone.
+
+    Other worktrees registered in the clone are left alone. Returns a message naming what
+    git refused to clean up, or None when nothing is left.
     """
     repo_root = manifest.get("repo_root")
     review_ref = manifest.get("review_ref")
+    path = manifest.get("path")
     if not isinstance(repo_root, str) or not os.path.isdir(repo_root):
         return None
-    pruned = _run(["git", "-C", repo_root, "worktree", "prune"], timeout=60)
     left = None
-    if pruned.returncode != 0:
-        left = "worktree prune failed: %s" % (pruned.stderr.strip() or pruned.stdout.strip())
+    if isinstance(path, str) and not os.path.exists(path):
+        left = _forget_worktree_record(repo_root, path)
     if isinstance(review_ref, str) and review_ref.startswith("refs/quirk-review/"):
         deleted = _run(["git", "-C", repo_root, "update-ref", "-d", review_ref], timeout=60)
         if deleted.returncode != 0:

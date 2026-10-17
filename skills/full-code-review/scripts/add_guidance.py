@@ -11,6 +11,7 @@ Prints {"path", "commit_hint"} and never commits; exit 2 with {"error"} on bad i
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 from datetime import datetime
@@ -77,8 +78,8 @@ def main(argv=None):
     scaffold = "---\n---\n" if args.target == "review-md" else LESSONS_HEADER
     add_note(path, args.note, scaffold)
     enclosing = _git_toplevel(os.path.dirname(path))
-    commit_hint = ('git -C "%s" add "%s" && git commit -m "review: add guidance"' % (enclosing, path)
-                   if enclosing else None)
+    commit_hint = ('git -C %s add %s && git commit -m "review: add guidance"' %
+                   (shlex.quote(enclosing), shlex.quote(path)) if enclosing else None)
     print(json.dumps({"path": path, "commit_hint": commit_hint}, indent=2))
     return 0
 

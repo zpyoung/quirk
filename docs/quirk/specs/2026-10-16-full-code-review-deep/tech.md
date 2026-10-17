@@ -24,7 +24,7 @@ The three underscore-prefixed prompts in `references/lenses/` are not registered
 
 Back-links: [Data flow](logic.md#data-flow), [Decisions Locked](logic.md#decisions-locked).
 
-Paths are relative to `/Users/zpyoung/orca/workspaces/quirk/code-review`. Symbols, rather than pre-implementation line numbers, identify the integration points:
+Paths are relative to the repository root. Symbols, rather than pre-implementation line numbers, identify the integration points:
 
 - `skills/full-code-review/scripts/deep_sandbox.py`: `evaluate_trust`, `probe_capabilities`, `acquire_copy`, `exec_in_copy`, `release_copy`, `main`.
 - `skills/full-code-review/scripts/build_area_map.py`: `build_coupling_graph`, `partition_areas`, `build_area_map`, `main`.
@@ -94,7 +94,6 @@ The pinned answer key is `tests/fixtures/full-code-review/answer-keys/pr50-3605f
 Back-link: [Scope & non-goals](logic.md#scope--non-goals).
 
 - Preserve the 14 standard lens checklists and their discovery/policy behavior; deep mode is opt-in and supplies no new policy key.
-- Preserve size-gate behavior; `--deep` is not a size override.
 - Preserve the forge adapters and triage grammar. Refutations never enter triage; plausible findings are blocked at body construction and both posting paths.
 - Preserve renderer escaping, highlighting and the five numbered Markdown sections.
 - Keep the skill entrypoint within its existing line budget; procedural detail belongs in its reference.
@@ -129,4 +128,4 @@ Acceptance still requires two fresh Sonnet deep runs of pinned PR #50 within 60 
 
 Back-link: [Scope & non-goals](logic.md#scope--non-goals).
 
-No automatic deep enablement, cleanup angles, relaxed size gate, untrusted reviewer execution, standard-lens execution in deep mode, or changed forge publishing protocol.
+No automatic deep enablement, cleanup angles, untrusted reviewer execution, standard-lens execution in deep mode, or changed forge publishing protocol.

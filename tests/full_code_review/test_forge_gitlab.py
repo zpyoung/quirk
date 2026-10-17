@@ -5,7 +5,7 @@ import pytest
 
 import post_reviewer_review as reviewer
 import prepare_diff
-from forge import ForgeError, gitlab
+from forge import ForgeError, StrayComment, gitlab
 from forge.gitlab import GitLabForge
 
 HEAD = "a" * 40
@@ -137,12 +137,6 @@ def test_read_failures_keep_a_stderr_snippet():
         gitlab.current_user(run, "gitlab.example")
 
 
-def test_forge_wrappers_still_return_none_when_the_read_fails():
-    forge = GitLabForge("gitlab.example", "o/r", run=_runner(stderr="boom", returncode=1))
-    assert forge.change_details(7) is None
-    assert forge.current_user() is None
-
-
 def test_last_error_records_the_failure_cause_and_clears_on_success():
     forge = GitLabForge("gitlab.example", "o/r", run=_runner(stderr="401 Unauthorized", returncode=1))
     assert forge.change_details(7) is None and "401 Unauthorized" in forge.last_error
@@ -212,6 +206,25 @@ def test_request_changes_reports_graphql_errors_when_the_mutation_result_is_null
         gitlab.request_changes(_runner(empty), "gitlab.example", "o/r", 7)
 
 
+def test_request_changes_reports_graphql_errors_when_data_is_null():
+    body = json.dumps({"data": None, "errors": [{"message": "You are not allowed to request changes"}]})
+    with pytest.raises(ForgeError, match="not allowed to request changes"):
+        gitlab.request_changes(_runner(body), "gitlab.example", "o/r", 7)
+    with pytest.raises(ForgeError, match="invalid response"):
+        gitlab.request_changes(_runner("[]"), "gitlab.example", "o/r", 7)
+
+
+def test_a_plain_comment_instead_of_a_diffnote_names_the_stray_discussion():
+    def api_call(host, method, endpoint, payload=None, timeout=120):
+        return {"id": "d9", "notes": [{"id": 31, "type": "DiscussionNote"}]}
+
+    forge = GitLabForge("gitlab.example", "o/r", api_call=api_call)
+    with pytest.raises(StrayComment) as caught:
+        forge.post_inline(7, "body", {"position_type": "text"}, HEAD)
+    assert (caught.value.discussion_id, caught.value.note_id) == ("d9", 31)
+    assert "31" in caught.value.url and "d9" in str(caught.value)
+
+
 def test_complete_approves_with_the_head_sha_and_comment_only_calls_nothing():
     calls = []
 
@@ -254,3 +267,17 @@ def test_list_drafts_rejects_malformed_and_duplicate_pages():
     full = [{"id": i} for i in range(1, 101)]
     with pytest.raises(ForgeError, match="duplicate id 1"):
         gitlab.list_drafts(pages(full, [{"id": 1}]), "gitlab.example", "o/r", 7)
+    ids = iter(range(1, 10001))
+    endless = lambda host, method, endpoint, payload=None: [{"id": next(ids)} for _ in range(100)]
+    with pytest.raises(ForgeError, match="exceeded 100 pages"):
+        gitlab.list_drafts(endless, "gitlab.example", "o/r", 7)
+
+
+@pytest.mark.parametrize("failure", [FileNotFoundError("glab"), subprocess.TimeoutExpired("glab", 120)])
+def test_get_json_wraps_launch_failures_and_timeouts_as_forge_errors(monkeypatch, failure):
+    def boom(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(gitlab.subprocess, "run", boom)
+    with pytest.raises(ForgeError, match="discussion request failed"):
+        gitlab.get_json("gitlab.example", "projects/1/merge_requests/7/discussions")

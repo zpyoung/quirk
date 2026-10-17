@@ -91,9 +91,15 @@ def test_probe_launch_failure_counts_as_unauthenticated():
     ("https://gitlab.example/group/project.git", "gitlab.example", "group/project"),
     ("ssh://git@gitlab.example:2222/group/project.git", "gitlab.example", "group/project"),
     ("git@gitlab.example:group/project.git", "gitlab.example", "group/project"),
+    ("https://gitlab.example/group/project.git/", "gitlab.example", "group/project"),
+    ("git@gitlab.example:group/project.git/", "gitlab.example", "group/project"),
 ])
 def test_parse_origin_keeps_an_http_port_and_drops_an_ssh_port(origin, host, project):
     assert forge.parse_origin(origin) == (host, project)
+
+
+def test_parse_origin_treats_a_malformed_bracketed_host_as_no_host():
+    assert forge.parse_origin("https://[::1/x/y.git") == (None, "")
 
 
 def test_review_memory_identity_separates_instances_that_differ_only_by_port():

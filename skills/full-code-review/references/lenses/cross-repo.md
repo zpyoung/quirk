@@ -27,8 +27,10 @@ consumers in **other** repositories. Return findings in the schema from
      (in reviewer seat that is where the review was started, not the borrowed worktree
      under the temp directory); depth 1, at most 20 entries that are git work trees
      (`git -C <dir> rev-parse` succeeds, skipping the repo under review). In each, run
-     `git -C <dir> grep -n -w <symbol>` with a 10-second timeout per repo. Treat a hit as
-     evidence only after reading the surrounding code.
+     `git -C <dir> grep -n -w -F -e <symbol> --` with a 10-second timeout per repo; pass the
+     symbol as one quoted argv element, never through a shell, so route-like symbols
+     (`/orders/[id]`) match literally and a leading `-` is not read as an option. Treat a
+     hit as evidence only after reading the surrounding code.
    - **A pack search hook.** If `policy.cross_repo.search_agent` names a subagent type
      (an org's code-search agent), dispatch it with the changed symbols and treat its
      `file:line` results as evidence.

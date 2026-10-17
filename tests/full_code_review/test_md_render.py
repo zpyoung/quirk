@@ -79,6 +79,23 @@ def test_unbalanced_markers():
         assert m.render_inline(value) == value
 
 
+@pytest.mark.parametrize("value", [
+    "a * b * c", "n * 2 + m * 3", "src/*.py and tests/*.py", "a ** b ** c", "x *", "x **",
+])
+def test_spaced_asterisks_stay_literal(value):
+    assert m.render_inline(value) == value
+
+
+def test_flanking_asterisks_still_emphasise():
+    assert m.render_inline("*a b* and **c d**") == "<em>a b</em> and <strong>c d</strong>"
+
+
+def test_closing_fence_cannot_carry_an_info_string():
+    rendered = m.render_markdown("```sql\nselect 1\n```js\nstill code\n```\n\nafter")
+    assert rendered.count("<pre") == 1
+    assert "still code" in rendered and "<p>after</p>" in rendered
+
+
 def test_paragraphs_and_lists():
     rendered = m.render_markdown("first\nsecond\n\n- one\n  continued\n- two\n\n1. alpha\n2. beta")
     assert "<p>first second</p>" in rendered
@@ -173,6 +190,15 @@ def test_diff_fence_pairs_removed_runs_and_keeps_dash_content():
     assert re.findall(r'<td class="sbs-ln">(\d*)</td>', "".join(rows)) == ["", "", "", ""]
 
 
+def test_diff_fence_hunk_lines_that_look_like_a_file_header_stay_rows():
+    rendered = m.render_markdown(
+        "```diff\n--- a/app/x.py\n+++ b/app/x.py\n@@ -1,3 +1,3 @@\n keep\n--- gone\n+++ added\n keep\n```")
+    rows = re.findall(r"<tr>(.*?)</tr>", rendered.split("<tbody>")[1])
+    assert '<div class="sbs-path">app/x.py</div>' in rendered
+    assert len(rows) == 3
+    assert "sbs-del" in rows[1] and "gone" in rows[1] and "sbs-ins" in rows[1] and "added" in rows[1]
+
+
 def test_diff_fence_escapes_content_and_falls_back_without_changes():
     rendered = m.render_markdown("```diff\n-<script>x</script>\n+ok\n```")
     assert "<script>" not in rendered and "&lt;script&gt;" in rendered
@@ -190,3 +216,24 @@ def test_diff_fence_colours_each_side_as_one_source():
     assert rows[1].count("tok--comment") == 2
     assert "tok--tag" in rows[2] and "tok--attribute" in rows[2]
 
+
+
+@pytest.mark.parametrize("separator", ["\x0c", "\x0b", "\x1c", "\x85", "\u2028", "\u2029"])
+def test_fenced_code_keeps_unicode_line_separators_inside_one_line(separator):
+    rendered = m.render_markdown("```\na%sb\nnext\n```" % separator)
+    assert rendered == '<pre class="snippet"><code>a%sb\nnext</code></pre>' % separator
+
+
+def test_unclosed_emphasis_openers_tokenize_in_polynomial_time():
+    import time
+
+    text = "*a " * 40 + "**b " * 40
+    started = time.monotonic()
+    rendered = m.render_inline(text)
+    assert time.monotonic() - started < 2
+    assert rendered.count("*") == 120 and "<em>" not in rendered
+
+
+def test_memoized_tokenizer_still_pairs_nested_emphasis():
+    assert m.render_inline("*a **b** c* and **d *e* f**") == (
+        "<em>a <strong>b</strong> c</em> and <strong>d <em>e</em> f</strong>")

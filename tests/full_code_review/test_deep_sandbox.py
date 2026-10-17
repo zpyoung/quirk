@@ -299,6 +299,51 @@ def test_kernel_sandbox_denies_outside_writes_credentials_and_absolute_forge_exe
         m.release_copy(str(out))
 
 
+def test_kernel_sandbox_hides_unlisted_home_files_and_credential_sockets(
+        tmp_path, monkeypatch):
+    import socket
+    import tempfile
+
+    kind = m.probe_capabilities(str(tmp_path))["sandbox_kind"]
+    if kind == "worktree":
+        pytest.skip("no functioning OS sandbox on this machine")
+    repo, sha = repository(tmp_path)
+    home = tmp_path / "caller-home"
+    home.mkdir()
+    for name in (".zshrc", ".claude.json", ".zsh_history"):
+        (home / name).write_text("caller-secret", encoding="utf-8")
+    socket_dir = Path(tempfile.mkdtemp(prefix="agent"))
+    agent, other = str(socket_dir / "agent.sock"), str(socket_dir / "other.sock")
+    servers = []
+    for path in (agent, other):
+        server = socket.socket(socket.AF_UNIX)
+        server.bind(path)
+        server.listen(4)
+        servers.append(server)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SSH_AUTH_SOCK", agent)
+    out = tmp_path / "copy.json"
+    manifest = m.acquire_copy(str(repo), sha, str(out))
+    connect = ("import socket;s=socket.socket(socket.AF_UNIX)\n"
+               "try:\n s.connect(%r);print('connected')\nexcept OSError:\n print('denied')")
+    try:
+        for name in (".zshrc", ".claude.json", ".zsh_history"):
+            result = m.exec_in_copy(str(out), [sys.executable, "-c",
+                                    "from pathlib import Path;print(Path(%r).read_text())"
+                                    % str(home / name)])
+            assert result["exit_code"] != 0 and "caller-secret" not in result["stdout"]
+        denied = m.exec_in_copy(str(out), [sys.executable, "-c", connect % agent])
+        assert denied["stdout"].strip() == "denied"
+        reachable = m.exec_in_copy(str(out), [sys.executable, "-c", connect % other])
+        assert reachable["stdout"].strip() == "connected"
+        assert manifest["home_dirs"] == [str(home.resolve())]
+    finally:
+        for server in servers:
+            server.close()
+        shutil.rmtree(socket_dir, ignore_errors=True)
+        m.release_copy(str(out))
+
+
 def test_timeout_kills_descendants_instead_of_only_the_parent(tmp_path, monkeypatch):
     import time
 
@@ -307,7 +352,7 @@ def test_timeout_kills_descendants_instead_of_only_the_parent(tmp_path, monkeypa
     out = tmp_path / "copy.json"
     manifest = m.acquire_copy(str(repo), sha, str(out))
     marker = Path(manifest["copy_dir"]) / "child-survived"
-    child = "import time,pathlib;time.sleep(2);pathlib.Path(%r).write_text('bad')" % str(marker)
+    child = "import time,pathlib;time.sleep(1.2);pathlib.Path(%r).write_text('bad')" % str(marker)
     parent = ("import subprocess,sys,time;subprocess.Popen([sys.executable,'-c',%r]);"
               "print('started',flush=True);time.sleep(10)" % child)
     try:
@@ -317,8 +362,99 @@ def test_timeout_kills_descendants_instead_of_only_the_parent(tmp_path, monkeypa
         assert result["timed_out"] is True and result["exit_code"] == 124
         assert "started" in result["stdout"]
         assert result["environment_unavailable"] is False
-        time.sleep(1.5)
+        time.sleep(3)
         assert not marker.exists()
+    finally:
+        m.release_copy(str(out))
+
+
+def test_background_child_holding_pipes_does_not_mask_a_clean_exit(tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    repo, sha = repository(tmp_path)
+    out = tmp_path / "copy.json"
+    m.acquire_copy(str(repo), sha, str(out))
+    try:
+        result = m.exec_in_copy(
+            str(out), ["sh", "-c", "sleep 30 & echo done; exit 0"], timeout=1)
+        assert result["timed_out"] is False and result["exit_code"] == 0
+        assert "done" in result["stdout"]
+    finally:
+        m.release_copy(str(out))
+
+
+def test_process_that_closes_its_pipes_and_hangs_is_reported_as_timed_out(
+        tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    repo, sha = repository(tmp_path)
+    out = tmp_path / "copy.json"
+    m.acquire_copy(str(repo), sha, str(out))
+    try:
+        result = m.exec_in_copy(
+            str(out), ["sh", "-c", "exec >&- 2>&-; sleep 30"], timeout=1)
+        assert result["timed_out"] is True and result["exit_code"] == 124
+    finally:
+        m.release_copy(str(out))
+
+
+def test_protected_paths_treat_sandbox_denied_stat_as_absent(tmp_path, monkeypatch):
+    forge_dir = tmp_path / "bin"
+    forge_dir.mkdir()
+    (forge_dir / "gh").write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setenv("PATH", str(forge_dir))
+    _, visible = m._protected_paths()
+    assert str(forge_dir / "gh") in visible
+
+    real_stat = os.stat
+
+    def denied(path, *args, **kwargs):
+        if os.fspath(path) == str(forge_dir / "gh"):
+            raise PermissionError(1, "Operation not permitted", str(path))
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", denied)
+    _, executables = m._protected_paths()
+    assert str(forge_dir / "gh") not in executables
+
+
+def test_exec_bounds_captured_output_and_reports_what_was_dropped(tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    repo, sha = repository(tmp_path)
+    out = tmp_path / "copy.json"
+    m.acquire_copy(str(repo), sha, str(out))
+    try:
+        result = m.exec_in_copy(str(out), [
+            sys.executable, "-c",
+            "import sys;sys.stdout.write('a'*3000000);sys.stderr.write('tail-marker')"])
+        assert result["exit_code"] == 0
+        assert result["output_truncated"] is True
+        assert result["bytes_dropped"] > 2000000
+        assert len(result["stdout"]) < m._HEAD_BYTES + m._TAIL_BYTES + 100
+        assert result["stdout"].startswith("aaa") and result["stdout"].endswith("aaa")
+        assert "bytes omitted" in result["stdout"]
+        assert result["stderr"] == "tail-marker"
+        small = m.exec_in_copy(str(out), [sys.executable, "-c", "print('ok')"])
+        assert small["output_truncated"] is False and small["bytes_dropped"] == 0
+    finally:
+        m.release_copy(str(out))
+
+
+def test_runaway_output_kills_the_process_before_the_timeout(tmp_path, monkeypatch):
+    import time
+
+    fallback(monkeypatch)
+    monkeypatch.setattr(m, "_RUNAWAY_BYTES", 2 * 1024 * 1024)
+    repo, sha = repository(tmp_path)
+    out = tmp_path / "copy.json"
+    m.acquire_copy(str(repo), sha, str(out))
+    try:
+        started = time.monotonic()
+        result = m.exec_in_copy(str(out), [
+            sys.executable, "-c", "import sys\nwhile True: sys.stdout.write('y'*65536)"],
+            timeout=60)
+        assert time.monotonic() - started < 20
+        assert result["timed_out"] is False and result["output_truncated"] is True
+        assert result["exit_code"] != 0
+        assert len(result["stdout"]) < m._HEAD_BYTES + m._TAIL_BYTES + 100
     finally:
         m.release_copy(str(out))
 
@@ -394,6 +530,67 @@ def test_exec_rejects_symlink_and_parent_directory_traversal(tmp_path, monkeypat
         m.release_copy(str(out))
 
 
+def test_reviewed_code_failures_are_not_reported_as_missing_environment(tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    repo, sha = repository(tmp_path)
+    (repo / "pkg").mkdir()
+    (repo / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (repo / "a.py").write_text("import b\n", encoding="utf-8")
+    (repo / "b.py").write_text("import a\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "modules")
+    sha = git(repo, "rev-parse", "HEAD")
+    out = tmp_path / "copy.json"
+    m.acquire_copy(str(repo), sha, str(out))
+    try:
+        for argv in ([sys.executable, "-c", "from a import missing_name"],
+                     [sys.executable, "-c", "import pkg.not_there"],
+                     [sys.executable, "-c", "import sys;sys.stderr.write('ImportError\\n')"],
+                     ["/bin/sh", "-c", "echo 'x: command not found' >&2; exit 127"]):
+            result = m.exec_in_copy(str(out), argv)
+            assert result["stderr"]
+            assert result["environment_unavailable"] is False, argv
+            assert result["unavailable_reason"] is None
+    finally:
+        m.release_copy(str(out))
+
+
+def test_gitignored_artifacts_do_not_mark_snapshot_as_local_changes(tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    repo, sha = repository(tmp_path)
+    (repo / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
+    git(repo, "add", ".gitignore")
+    git(repo, "commit", "-m", "ignore")
+    sha = git(repo, "rev-parse", "HEAD")
+    (repo / "__pycache__").mkdir()
+    (repo / "__pycache__" / "a.pyc").write_bytes(b"\x00")
+    out = tmp_path / "copy.json"
+    manifest = m.acquire_copy(str(repo), sha, str(out))
+    try:
+        assert manifest["source_state"]["local_changes"] is False
+    finally:
+        m.release_copy(str(out))
+
+
+def test_release_removes_read_only_and_unreadable_directories(tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    repo, sha = repository(tmp_path)
+    out = tmp_path / "copy.json"
+    manifest = m.acquire_copy(str(repo), sha, str(out))
+    script = ("import os;os.makedirs('../environment/home/mod/sub');"
+              "open('../environment/home/mod/sub/f','w').write('x');"
+              "os.makedirs('../environment/home/closed/inner');"
+              "os.chmod('../environment/home/mod/sub',0o555);"
+              "os.chmod('../environment/home/mod',0o555);"
+              "os.chmod('../environment/home/closed/inner',0);"
+              "os.chmod('../environment/home/closed',0)")
+    result = m.exec_in_copy(str(out), [sys.executable, "-c", script])
+    assert result["exit_code"] == 0, result["stderr"]
+    released = m.release_copy(str(out))
+    assert released["released"] is True
+    assert not Path(manifest["env_dir"]).exists()
+
+
 def test_invalid_head_and_missing_manifest_are_json_errors(tmp_path):
     repo, sha = repository(tmp_path)
     output = tmp_path / "copy.json"
@@ -407,3 +604,89 @@ def test_invalid_head_and_missing_manifest_are_json_errors(tmp_path):
                  ("acquire", "--source-root", str(repo))):
         code, result = invoke(*args)
         assert code == 2 and "error" in result
+
+
+def test_acquire_works_for_shallow_source_clone_and_linked_worktree(tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    origin, _ = repository(tmp_path)
+    (origin / "data.txt").write_text("second\n", encoding="utf-8")
+    git(origin, "commit", "-am", "second")
+    shallow = tmp_path / "shallow"
+    subprocess.run(["git", "clone", "-q", "--depth=1", "file://" + str(origin), str(shallow)],
+                   check=True, env=m._git_environment())
+    linked = tmp_path / "linked"
+    git(shallow, "worktree", "add", "-q", "--detach", str(linked))
+    for index, source in enumerate((shallow, linked)):
+        sha = git(source, "rev-parse", "HEAD")
+        out = tmp_path / ("shallow-%d.json" % index)
+        manifest = m.acquire_copy(str(source), sha, str(out))
+        try:
+            copy = Path(manifest["copy_dir"])
+            assert git(copy, "rev-parse", "HEAD") == sha
+            assert (copy / ".git" / "shallow").is_file()
+            assert (copy / "data.txt").read_text(encoding="utf-8") == "second\n"
+            assert manifest["source_state"]["local_changes"] is False
+        finally:
+            m.release_copy(str(out))
+
+
+def test_exec_and_release_do_not_depend_on_the_current_tmpdir(tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    repo, sha = repository(tmp_path)
+    out = tmp_path / "copy.json"
+    manifest = m.acquire_copy(str(repo), sha, str(out))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.setenv("TMPDIR", str(elsewhere))
+    monkeypatch.setattr(m.tempfile, "tempdir", None)
+    result = m.exec_in_copy(str(out), ["true"])
+    assert result["exit_code"] == 0
+    assert m.release_copy(str(out))["released"] is True
+    assert not Path(manifest["copy_dir"]).exists()
+    assert list(elsewhere.iterdir()) == []
+
+
+def test_manifest_with_foreign_registry_root_is_rejected(tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    repo, sha = repository(tmp_path)
+    out = tmp_path / "copy.json"
+    manifest = m.acquire_copy(str(repo), sha, str(out))
+    decoy = tmp_path / "decoy" / m._registry_name()
+    lease = decoy / manifest["lease_id"]
+    (lease / "copy").mkdir(parents=True)
+    (lease / "environment").mkdir()
+    decoy.chmod(0o755)
+    forged = dict(manifest, registry_root=str(decoy), copy_dir=str(lease / "copy"),
+                  env_dir=str(lease / "environment"))
+    (lease / "record.json").write_text(json.dumps(forged), encoding="utf-8")
+    forged_path = tmp_path / "forged.json"
+    forged_path.write_text(json.dumps(forged), encoding="utf-8")
+    try:
+        code, error = invoke("release", "--manifest", str(forged_path))
+        assert code == 2 and "error" in error and lease.is_dir()
+    finally:
+        m.release_copy(str(out))
+
+
+def test_acquire_prunes_only_abandoned_leases(tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    repo, sha = repository(tmp_path)
+    registry = m._registry_root()
+    stale = registry / ("lease-" + "a" * 32)
+    fresh = registry / ("lease-" + "b" * 32)
+    unrelated = registry / "keep-me"
+    for entry in (stale, fresh, unrelated):
+        entry.mkdir()
+        (entry / "record.json").write_text("{}", encoding="utf-8")
+    old = stale.stat().st_mtime - 2 * 24 * 60 * 60
+    for entry in (stale, stale / "record.json", unrelated, unrelated / "record.json"):
+        os.utime(entry, (old, old))
+    out = tmp_path / "copy.json"
+    try:
+        m.acquire_copy(str(repo), sha, str(out))
+        assert not stale.exists()
+        assert fresh.is_dir() and unrelated.is_dir()
+    finally:
+        m.release_copy(str(out))
+        shutil.rmtree(fresh)
+        shutil.rmtree(unrelated)

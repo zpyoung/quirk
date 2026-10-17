@@ -27,7 +27,7 @@ python3 "$SCRIPTS/deep_sandbox.py" exec --manifest "<copy-manifest>" \
   --timeout 120 -- <repro-argv...>
 ```
 
-The copy is throwaway; do not execute repros in the original checkout, use a raw shell to run target code, invoke forge CLIs, or install dependencies in the source root. Decide whether each repro command is safe before running it. If execution was disallowed, refused, or fails because of an unavailable tool, missing dependency, or sandbox capability, continue from source reads only. Set `execution_degraded_reason` to the concrete limitation; a failed environment setup is not evidence that the defect is absent. Do not claim `reproduced: true` without a successful repro demonstrating the wrong outcome. The coordinator releases your copy after you return.
+The copy is throwaway; do not execute repros in the original checkout, use a raw shell to run target code, invoke forge CLIs, or install dependencies in the source root. Decide whether each repro command is safe before running it. If execution was disallowed, refused, or fails because of an unavailable tool, missing dependency, or sandbox capability, continue from source reads only. Set `execution_degraded_reason` to the concrete limitation; a failed environment setup is not evidence that the defect is absent. Do not claim `reproduced: true` without a successful repro demonstrating the wrong outcome. `$SCRIPTS` is the absolute scripts directory in your dispatch input; it is not set in your shell. The coordinator releases your copy after you return.
 
 Return only this JSON object, even when there are no candidates; use `null` for a missing repro or degraded reason:
 

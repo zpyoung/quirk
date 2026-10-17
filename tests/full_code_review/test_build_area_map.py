@@ -46,6 +46,33 @@ def test_relative_package_imports_reach_changed_siblings(tmp_path):
     assert graph[names[0]] == {names[1]}
     assert graph[names[1]] == {names[0], names[2]}
 
+def test_empty_module_relative_imports_at_the_repo_root_do_not_crash():
+    files = ["a.py", "d/b.py", "x.py"]
+    diff = ("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n"
+            "@@ -0,0 +1 @@\n+from . import x\n"
+            "diff --git a/d/b.py b/d/b.py\n--- a/d/b.py\n+++ b/d/b.py\n"
+            "@@ -0,0 +1 @@\n+from .. import x\n")
+    graph = area_map_module().build_coupling_graph(files, None, diff)
+    assert graph["a.py"] == {"x.py"}
+    assert graph["d/b.py"] == {"x.py"}
+
+
+def test_backslash_in_a_changed_filename_is_accepted(tmp_path):
+    names = [put(tmp_path, "we\\ird.py", "pass\n"), put(tmp_path, "other.py", "pass\n")]
+    graph = area_map_module().build_coupling_graph(names, str(tmp_path), "")
+    assert set(graph) == set(names)
+
+
+def test_dunder_module_stems_do_not_couple_every_constructor(tmp_path):
+    names = [
+        put(tmp_path, "pkg/__init__.py", "pass\n"),
+        put(tmp_path, "pkg/widget.py", "class Widget:\n    def __init__(self): pass\n"),
+    ]
+    graph = area_map_module().build_coupling_graph(names, str(tmp_path), "")
+    assert graph[names[0]] == set()
+    assert graph[names[1]] == set()
+
+
 def test_imports_are_taken_from_added_and_context_diff_lines_without_source():
     files = ["scripts/runner.py", "scripts/forge/__init__.py", "scripts/forge/github.py"]
     diff = ("diff --git a/scripts/runner.py b/scripts/runner.py\n"
@@ -88,6 +115,21 @@ def test_tests_pair_with_subject_not_other_same_name(tmp_path):
     graph = area_map_module().build_coupling_graph(files, str(tmp_path), "")
     assert graph[files[0]] == {files[1]}
     assert graph[files[3]] == {files[2]}
+
+
+@pytest.mark.parametrize("subject, test", [
+    ("web/foo.ts", "web/foo.test.ts"),
+    ("web/foo.ts", "web/foo.spec.ts"),
+    ("pkg/baz.py", "pkg/baz_test.py"),
+    ("cmd/a.go", "cmd/a_test.go"),
+    ("src/Foo.java", "src/FooTest.java"),
+])
+def test_non_python_and_suffix_style_tests_pair_with_their_subject(tmp_path, subject, test):
+    module = area_map_module()
+    graph = module.build_coupling_graph([subject, test], str(tmp_path), "")
+    assert graph[subject] == {test}
+    area = module.build_area_map({"changed_files": [subject, test], "diff": ""}, str(tmp_path))["areas"][0]
+    assert area["test_files"] == [test]
 
 
 def test_partition_prioritizes_non_test_boundaries_before_tests():
@@ -153,6 +195,14 @@ def test_risk_level_and_caveats_produce_targeted_questions(tmp_path):
     assert any("C-quoted" in q and "parse.py" in q for q in questions)
 
 
+def test_report_shaped_caveats_seed_a_question(tmp_path):
+    file = put(tmp_path, "scripts/parse.py", "def parse(data): return data\n")
+    result = area_map_module().build_area_map(
+        {"changed_files": [file], "diff": ""}, str(tmp_path),
+        risk={"caveats": [{"title": "Quoting", "body_md": "The path may be C-quoted"}]})
+    assert any("C-quoted" in q and "parse.py" in q for q in result["areas"][0]["questions"])
+
+
 def test_html_styles_count_toward_review_size_limit(tmp_path):
     html = "<style>\n" + "p { color: red; }\n" * 100 + "</style>\n"
     files = [put(tmp_path, "page.html", html),
@@ -210,3 +260,40 @@ def test_cli_rejects_invalid_context(tmp_path, context):
                             capture_output=True, text=True, check=False)
     assert result.returncode == 2
     assert "error" in json.loads(result.stdout)
+
+
+def test_changed_symlinked_directory_falls_back_to_the_diff_section(tmp_path):
+    (tmp_path / "real_dir").mkdir()
+    (tmp_path / "linkdir").symlink_to("real_dir", target_is_directory=True)
+    files = [put(tmp_path, "ok.py", "x = 1\n"), "linkdir"]
+    diff = "diff --git a/linkdir b/linkdir\n--- a/linkdir\n+++ b/linkdir\n@@ -1 +1 @@\n-a\n+b\n"
+    result = area_map_module().build_area_map({"changed_files": files, "diff": diff}, str(tmp_path))
+    assert sorted(f for area in result["areas"] for f in area["files"]) == sorted(files)
+
+
+def test_changed_symlink_to_a_file_outside_the_root_is_not_read(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    outside = tmp_path / "secret.py"
+    outside.write_text("import os\n" * 50)
+    (root / "link.py").symlink_to(outside)
+    module = area_map_module()
+    texts, weights = module._contents(["link.py"], str(root), "")
+    assert texts["link.py"] == "" and weights["link.py"] == 1
+
+
+def test_questions_do_not_seed_filename_specific_prompts(tmp_path):
+    files = [put(tmp_path, "assets/report.html", "<h1>quirk-review handoff</h1>\n"),
+             put(tmp_path, "scripts/validate_triage.py", "HEADER = 'quirk-review handoff'\n")]
+    result = area_map_module().build_area_map({"changed_files": files, "diff": ""}, str(tmp_path))
+    questions = " ".join(q for area in result["areas"] for q in area["questions"])
+    assert "delimiters" not in questions and "export headers" not in questions
+
+
+def test_risk_question_states_the_level_once(tmp_path):
+    file = put(tmp_path, "scripts/parse.py", "def parse(data): return data\n")
+    result = area_map_module().build_area_map(
+        {"changed_files": [file], "diff": ""}, str(tmp_path),
+        risk={"level": "Medium", "verbatim_md": "Thin coverage"})
+    question = next(q for q in result["areas"][0]["questions"] if "Thin coverage" in q)
+    assert question.count("Medium") == 1

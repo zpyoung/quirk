@@ -15,6 +15,7 @@ import jsonio
 
 _SEVERITY_RANK = {"Nit": 0, "Should fix": 1, "Must fix": 2}
 _LINE_RANGE = re.compile(r"^\s*(\d+)\s*(?:-\s*(\d+))?\s*$")
+_REPORT_LINE = re.compile(r"[1-9][0-9]*(?:-[0-9]+)?")
 
 
 def _object(value: object, label: str) -> dict:
@@ -42,17 +43,57 @@ def _first_text(*values: object) -> str:
     return ""
 
 
-def _one_line(value: str, limit: int) -> str:
+def _one_line(value: str, limit: int, label: str = "report text") -> str:
     text = " ".join(value.split())
     if len(text) > limit:
-        raise ValueError("report text exceeds %d characters; rewrite it before merging" % limit)
+        raise ValueError("%s exceeds %d characters; rewrite it before merging" % (label, limit))
     return text
 
 
+def _elided(value: str, limit: int) -> str:
+    text = " ".join(value.split())
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
+def _bounded(refined: str, fallback: str, limit: int, label: str) -> str:
+    """Checker-refined text must fit the cap as written; finder text is shortened instead."""
+    return _one_line(refined, limit, label) if refined else _elided(fallback, limit)
+
+
+def _title(source: dict) -> str:
+    """Finder title, else the first clause of its issue text."""
+    explicit = _first_text(source.get("title"), source.get("summary"))
+    if explicit:
+        return explicit
+    issue = _first_text(source.get("failure_scenario"), source.get("issue"), source.get("body_md"))
+    return re.split(r"(?<=[.!?:;])\s", " ".join(issue.split()))[0]
+
+
 def _line(value: object, label: str) -> str:
-    if isinstance(value, bool) or not isinstance(value, (str, int)) or not str(value).strip():
-        raise ValueError("%s must be a line or line range" % label)
-    return str(value).strip()
+    """Normalize a line anchor to the `N` or `N-M` form the report renderer accepts."""
+    if not isinstance(value, bool) and isinstance(value, (str, int)):
+        text = re.sub(r"\s*-\s*", "-", str(value).strip())
+        if _REPORT_LINE.fullmatch(text):
+            start, _, end = text.partition("-")
+            if not end or int(end) >= int(start):
+                return text
+    raise ValueError("%s must be a line number or start-end range" % label)
+
+
+def _audit_line(value: object) -> str:
+    """Best-effort anchor for a dropped entry, which is audit-only and must never abort the merge."""
+    try:
+        return _line(value, "line")
+    except ValueError:
+        found = re.search(r"[1-9][0-9]*", str(value)) if not isinstance(value, bool) else None
+        return found[0] if found else "1"
+
+
+def _assumptions(source: dict, identifier: str) -> list[str]:
+    raw = source.get("assumptions", [])
+    if not isinstance(raw, list) or any(not isinstance(item, str) for item in raw):
+        raise ValueError("assumptions for %s must be an array of strings" % identifier)
+    return [item.strip() for item in raw if item.strip()]
 
 
 def _dimensions(source: dict, *, is_lens: bool) -> list[str]:
@@ -67,10 +108,11 @@ def _dimensions(source: dict, *, is_lens: bool) -> list[str]:
 
 
 def _budget(value: dict) -> dict:
-    for name, minimum in (("budget_minutes", 0), ("elapsed_minutes", -1)):
+    for name, valid in (("budget_minutes", lambda number: number > 0),
+                        ("elapsed_minutes", lambda number: number >= 0)):
         number = value.get(name)
         if (isinstance(number, bool) or not isinstance(number, (int, float))
-                or not math.isfinite(number) or number <= minimum):
+                or (isinstance(number, float) and not math.isfinite(number)) or not valid(number)):
             raise ValueError("budget %s must be %s" % (
                 name, "positive" if name == "budget_minutes" else "non-negative"))
     if not isinstance(value.get("cutoff_reached"), bool):
@@ -80,7 +122,10 @@ def _budget(value: dict) -> dict:
 
 def _finding(source: dict, checker: dict | None, *, is_lens: bool) -> dict:
     identifier = _required_text(source.get("id"), "candidate id")
-    verdict = checker.get("verdict", "confirmed") if checker is not None else "confirmed"
+    assumptions = _assumptions(source, identifier)
+    unverified_lens_claim = checker is None and source.get("verified") is False
+    verdict = (checker.get("verdict", "confirmed") if checker is not None
+               else "plausible" if unverified_lens_claim else "confirmed")
     severity = checker.get("severity") if checker is not None else source.get("severity")
     if severity not in _SEVERITY_RANK:
         raise ValueError("checker severity for %s must be Must fix, Should fix, or Nit" % identifier)
@@ -95,16 +140,17 @@ def _finding(source: dict, checker: dict | None, *, is_lens: bool) -> dict:
     refined_line = checker.get("refined_line") if checker else None
     line = _line(refined_line if refined_line is not None else source.get("line"),
                  "line for %s" % identifier)
-    title = _required_text(_first_text(checker.get("refined_title") if checker else None,
-                                       source.get("title"), source.get("summary")), "title for %s" % identifier)
+    refined_title = _first_text(checker.get("refined_title") if checker else None)
+    title = _required_text(_first_text(refined_title, _title(source)), "title for %s" % identifier)
     issue = _first_text(checker.get("refined_issue") if checker else None,
                         source.get("failure_scenario"), source.get("issue"), source.get("body_md"))
     recommendation = _first_text(checker.get("refined_recommendation") if checker else None,
                                  source.get("recommendation"), source.get("recommendation_md"))
-    impact = _first_text(checker.get("refined_impact") if checker else None,
-                         source.get("impact"), source.get("failure_scenario"), source.get("issue"),
+    refined_impact = _first_text(checker.get("refined_impact") if checker else None)
+    impact = _first_text(source.get("impact"), source.get("failure_scenario"), source.get("issue"),
                          source.get("body_md"))
-    fix = _first_text(checker.get("refined_fix_md") if checker else None, source.get("fix_md"))
+    refined_fix = _first_text(checker.get("refined_fix_md") if checker else None)
+    fix = _first_text(source.get("fix_md"))
     dimensions = _dimensions(source, is_lens=is_lens)
     finding = {
         "id": identifier,
@@ -113,9 +159,9 @@ def _finding(source: dict, checker: dict | None, *, is_lens: bool) -> dict:
         "dimensions": dimensions,
         "file": file,
         "line": line,
-        "title": _one_line(title, 80),
-        "impact": _one_line(impact, 200),
-        "fix_md": _one_line(fix, 160),
+        "title": _bounded(refined_title, title, 80, "title for %s" % identifier),
+        "impact": _bounded(refined_impact, impact, 200, "impact for %s" % identifier),
+        "fix_md": _bounded(refined_fix, fix, 160, "fix_md for %s" % identifier),
         "issue": issue,
         "body_md": issue,
         "recommendation": recommendation,
@@ -124,15 +170,25 @@ def _finding(source: dict, checker: dict | None, *, is_lens: bool) -> dict:
         "verified": verdict == "confirmed",
         "evidence": evidence,
         "what_would_confirm": None,
+        "_checked": checker is not None,
     }
     if "area" in source:
         finding["area"] = source["area"]
+    if assumptions:
+        finding["assumptions"] = assumptions
+    if "anchor_side" in source:
+        if source["anchor_side"] not in ("new", "old"):
+            raise ValueError("anchor_side for %s must be new or old" % identifier)
+        finding["anchor_side"] = source["anchor_side"]
     if source.get("dedup_key"):
         finding["dedup_key"] = source["dedup_key"]
     if verdict == "plausible":
-        assert checker is not None
-        finding["what_would_confirm"] = _required_text(
-            checker.get("what_would_confirm"), "what_would_confirm for %s" % identifier)
+        if checker is None:
+            finding["what_would_confirm"] = (
+                "; ".join(assumptions) or "Confirm the claim against the source; the lens could not verify it.")
+        else:
+            finding["what_would_confirm"] = _required_text(
+                checker.get("what_would_confirm"), "what_would_confirm for %s" % identifier)
     if evidence == "reproduced":
         assert checker is not None
         finding["repro"] = {
@@ -154,8 +210,9 @@ def _overlaps(first: str, second: str) -> bool:
 
 def _same_defect(first: dict, second: dict) -> bool:
     key = first.get("dedup_key")
-    if key and key == second.get("dedup_key"):
-        return True
+    other_key = second.get("dedup_key")
+    if key and other_key:
+        return key == other_key
     if first["file"] != second["file"]:
         return False
     if first["line"] == second["line"]:
@@ -182,16 +239,26 @@ def _deduplicate(findings: list[dict]) -> list[dict]:
 
     merged = []
     for group in groups.values():
-        best = max(group, key=lambda item: (_SEVERITY_RANK[item["severity"]],
-                                            item["verified"], item["evidence"] == "reproduced"))
+        judged = [found for found in group if found["_checked"]] or group
+        pool = [found for found in judged if found["verified"]] or judged
+        best = max(pool, key=lambda item: (_SEVERITY_RANK[item["severity"]],
+                                           item["evidence"] == "reproduced"))
         item = dict(best)
         dimensions = sorted({dimension for found in group for dimension in found["dimensions"]})
         item["dimensions"] = dimensions
         item["dimension"] = dimensions[0]
-        item["verification_status"] = "confirmed" if any(found["verified"] for found in group) else "plausible"
+        item["verification_status"] = "confirmed" if any(found["verified"] for found in judged) else "plausible"
         item["verified"] = item["verification_status"] == "confirmed"
         item["what_would_confirm"] = None if item["verified"] else next(
-            found["what_would_confirm"] for found in group if found["what_would_confirm"])
+            found["what_would_confirm"] for found in judged if found["what_would_confirm"])
+        assumptions = list(dict.fromkeys(text for found in group for text in found.get("assumptions", [])))
+        if assumptions:
+            item["assumptions"] = assumptions
+        if "anchor_side" not in item:
+            sides = [found["anchor_side"] for found in group if "anchor_side" in found]
+            if sides:
+                item["anchor_side"] = sides[0]
+        item.pop("_checked")
         reproduced = next((found for found in group if found["evidence"] == "reproduced"), None)
         item["evidence"] = "reproduced" if reproduced else "read from code"
         if reproduced:
@@ -244,9 +311,9 @@ def merge_deep_run(
     ]:
         identifier = _required_text(source.get("id"), "candidate id")
         checker = verdicts.get(identifier)
+        if checker is None and identifier in checker_failures:
+            continue
         if checker is None and (not is_lens or source.get("severity") != "Nit"):
-            if identifier in checker_failures:
-                continue
             raise ValueError("missing checker verdict for %s" % identifier)
         if checker is not None and checker["verdict"] == "refuted":
             dimensions = _dimensions(source, is_lens=is_lens)
@@ -255,16 +322,15 @@ def merge_deep_run(
                 "area": "lens:%s" % _first_text(source.get("dimension"), dimensions[0]) if is_lens
                         else _first_text(source.get("area"), "unknown"),
                 "file": _required_text(source.get("file"), "file for %s" % identifier),
-                "line": _line(source.get("line"), "line for %s" % identifier),
-                "title": _one_line(_required_text(_first_text(source.get("title"), source.get("summary")),
-                                                 "title for %s" % identifier), 80),
+                "line": _audit_line(source.get("line")),
+                "title": _elided(_required_text(_title(source), "title for %s" % identifier), 80),
                 "reason": _required_text(checker.get("reason"), "reason for %s" % identifier),
             })
             continue
         findings.append(_finding(source, checker, is_lens=is_lens))
 
     allowed = trust_info.get("allowed")
-    consent = trust_info.get("consent")
+    consent = trust_info.get("consent", False) if allowed is False else trust_info.get("consent")
     if not isinstance(allowed, bool) or not isinstance(consent, bool):
         raise ValueError("trust allowed and consent must be booleans")
     execution_enabled = allowed and consent
@@ -294,7 +360,7 @@ def merge_deep_run(
         if area.get("status") == "read_only_degraded":
             reason = _required_text(area.get("degraded_reason"), "degraded reason for %s" % identifier)
             coverage_notes.append("⚠ Area %s ran read-only: %s" % (identifier, reason))
-        elif area.get("status") in ("pending", "unreached"):
+        elif area.get("status") != "completed":
             unreached.append(identifier)
     if unreached:
         coverage_notes.append("⚠ Incomplete deep review: budget expired before reaching " + ", ".join(unreached))
@@ -346,7 +412,7 @@ def _load(path: str, label: str, *, array: bool) -> list[dict] | dict:
     try:
         with Path(path).open(encoding="utf-8") as stream:
             value = json.load(stream)
-    except (OSError, UnicodeError, ValueError) as exc:
+    except (OSError, UnicodeError, ValueError, RecursionError) as exc:
         raise ValueError("could not read %s: %s" % (label, exc)) from exc
     return _items(value, label) if array else _object(value, label)
 

@@ -71,22 +71,30 @@ def test_wrong_mode_header_and_groups_are_rejected():
         m.validate(value, author_groups)
 
 
-def test_structural_forgery_rejected_before_decisions_return():
+@pytest.mark.parametrize("old,new,message", [
+    ("## Blocking (1)", "## Blocking (2)", "declares 2 items but contains 1"),
+    ("**F1**", "**F9**", "finding ID set mismatch"),
+    ("`a.py:2-4`", "`a.py:3`", "anchor mismatch for F1"),
+    ("· Must fix", "· Nit", "severity mismatch for F1"),
+    ("## Question (0)\n\n", "", "expected triage group Question"),
+    ("## Blocking (1)\n\n", "## Blocking (1)\n", "must be followed by a blank line"),
+    ("  `a.py:2-4` · Must fix\n", "", "invalid anchor line"),
+], ids=["count", "unknown-id", "anchor", "severity", "missing-group", "missing-blank", "missing-anchor"])
+def test_structural_forgery_rejected_before_decisions_return(old, new, message):
     value = report()
-    good = export(value)
-    variants = [
-        (good.replace("## Blocking (1)", "## Blocking (2)"), "declares 2 items but contains 1"),
-        (good.replace("**F1**", "**F9**"), "finding ID set mismatch"),
-        (good.replace("`a.py:2-4`", "`a.py:3`"), "anchor mismatch for F1"),
-        (good.replace("· Must fix", "· Nit", 1), "severity mismatch for F1"),
-        (good + "TRAILING", "unrecognized line in Undecided"),
-        (good.replace("## Question (0)\n\n", ""), "expected triage group Question"),
-        (good.replace("## Blocking (1)\n\n", "## Blocking (1)\n"), "must be followed by a blank line"),
-        (good.replace("  `a.py:2-4` · Must fix\n", ""), "invalid anchor line"),
-    ]
-    for forged, message in variants:
-        with pytest.raises(ValueError, match=message):
-            m.validate(value, forged)
+    forged = export(value).replace(old, new, 1)
+    with pytest.raises(ValueError, match=message):
+        m.validate(value, forged)
+
+
+@pytest.mark.parametrize("suffix,message", [
+    ("TRAILING", "unrecognized line in Undecided"),
+    ("## Injected (1)\n", "unrecognized trailing content"),
+], ids=["in-group-line", "extra-group"])
+def test_trailing_text_after_the_last_group_is_rejected(suffix, message):
+    value = report()
+    with pytest.raises(ValueError, match=message):
+        m.validate(value, export(value) + suffix)
 
 
 def test_a_finding_listed_in_two_groups_is_rejected():
@@ -118,15 +126,18 @@ def test_tampered_pasted_title_is_not_trusted():
     value = report()
     pasted = export(value).replace("Trusted title", "ATTACKER TITLE")
     parsed = m.validate(value, pasted)
-    assert parsed["decisions"][0]["pasted_title"] == "ATTACKER TITLE"
+    assert "pasted_title" not in parsed["decisions"][0]
+    assert "ATTACKER TITLE" not in json.dumps(parsed)
     prepared, _ = render_report._prepare_report(value)
     assert prepared["findings"][0]["title"] == "Trusted title"
 
 
-def test_no_paste_and_noncanonical_separator_rejected():
-    for paste in ("", "\n", export(report()).replace("first note", "first\u2028note")):
-        with pytest.raises(ValueError):
-            m.validate(report(), paste)
+@pytest.mark.parametrize("paste", ["", "\n", "first\u2028note"], ids=["empty", "blank", "line-separator"])
+def test_no_paste_and_noncanonical_separator_rejected(paste):
+    if paste == "first\u2028note":
+        paste = export(report()).replace("first note", paste)
+    with pytest.raises(ValueError):
+        m.validate(report(), paste)
 
 
 def test_zero_findings_has_explicit_empty_reviewer_artifact():
@@ -200,26 +211,46 @@ def test_reply_line_naming_an_own_comment_is_rejected():
     assert all("reply_note_id" not in row for row in m.validate(value, text)["decisions"])
 
 
-def test_reply_line_is_rejected_unless_it_targets_an_unresolved_thread_on_the_finding():
+NOT_A_THREAD = "not an unresolved thread on this finding"
+INVALID_REPLY = "invalid reply line"
+STRAY_LINE = "unrecognized line in Blocking"
+
+
+def _reply_on_second_finding(good):
+    return good.replace("  `dir:x.py:9` · Nit\n", "  `dir:x.py:9` · Nit\n  reply: 7\n", 1)
+
+
+def _reply_after_note(good):
+    return good.replace("  > second note\n", "  > second note\n  reply: 7\n", 1)
+
+
+@pytest.mark.parametrize("line,message", [
+    ("  reply: 99", NOT_A_THREAD),
+    ("  reply: 8", NOT_A_THREAD),
+    ("  reply: 07", INVALID_REPLY),
+    ("  reply: 0", INVALID_REPLY),
+    ("  reply: -7", INVALID_REPLY),
+    ("  reply: 7 ", INVALID_REPLY),
+    ("   reply: 7", STRAY_LINE),
+    ("  reply:7", INVALID_REPLY),
+    ("  reply: 7\n  reply: 7", STRAY_LINE),
+    ("  reply: 12345678901234567890", INVALID_REPLY),
+], ids=["unknown-note", "resolved-note", "leading-zero", "zero", "negative", "trailing-space",
+        "extra-indent", "no-space", "duplicate", "overflow"])
+def test_reply_line_is_rejected_unless_it_targets_an_unresolved_thread_on_the_finding(line, message):
     value = reply_report()
-    good = export(value)
-    forged = [
-        with_reply(good, "  reply: 99"),
-        with_reply(good, "  reply: 8"),
-        with_reply(good, "  reply: 07"),
-        with_reply(good, "  reply: 0"),
-        with_reply(good, "  reply: -7"),
-        with_reply(good, "  reply: 7 "),
-        with_reply(good, "   reply: 7"),
-        with_reply(good, "  reply:7"),
-        with_reply(good, "  reply: 7\n  reply: 7"),
-        with_reply(good, "  reply: 12345678901234567890"),
-        good.replace("  > second note\n", "  > second note\n  reply: 7\n", 1),
-        good.replace("  `dir:x.py:9` · Nit\n", "  `dir:x.py:9` · Nit\n  reply: 7\n", 1),
-    ]
-    for text in forged:
-        with pytest.raises(ValueError):
-            m.validate(value, text)
+    with pytest.raises(ValueError, match=message):
+        m.validate(value, with_reply(export(value), line))
+
+
+@pytest.mark.parametrize("forge,message", [
+    (_reply_after_note, STRAY_LINE),
+    (_reply_on_second_finding, NOT_A_THREAD),
+], ids=["after-note", "on-finding-without-thread"])
+def test_reply_line_in_the_wrong_place_is_rejected(forge, message):
+    value = reply_report()
+    with pytest.raises(ValueError, match=message):
+        m.validate(value, forge(export(value)))
 
 
 def test_reply_line_is_rejected_for_the_author_seat():
@@ -325,7 +356,7 @@ def test_main_validates_a_paste_and_writes_the_out_file(tmp_path):
     rc, result = run_main(tmp_path, value, export(value), ["--out", str(target)])
     assert rc == 0 and [row["slot"] for row in result["decisions"]] == ["fix", "ignore"]
     assert json.loads(target.read_text()) == result
-    assert not (tmp_path / "decisions.json.tmp").exists()
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["decisions.json", "paste.md", "report.json"]
 
 
 def test_main_rejects_a_crlf_paste_before_returning_decisions(tmp_path):

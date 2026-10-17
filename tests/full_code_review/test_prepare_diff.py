@@ -267,20 +267,23 @@ def test_empty_gitlab_diff_recovered_from_git(tmp_path, monkeypatch, gitlab_orig
         "+one\n+two\n"
     )
     diff_calls = []
+    fetched = []
 
     def fake_run(cmd, timeout=90):
         if cmd[0] == "glab":
             return SimpleNamespace(returncode=0, stdout=json.dumps(payload))
         if cmd[:3] == ["git", "-C", "."] and "diff" in cmd:
             diff_calls.append(cmd)
-            return SimpleNamespace(
-                returncode=0 if len(diff_calls) == 2 else 1,
-                stdout=recovered if len(diff_calls) == 2 else "")
+            assert "large.py" in cmd
+            if fetched:
+                return SimpleNamespace(returncode=0, stdout=recovered)
+            return SimpleNamespace(returncode=1, stdout="")
         if "cat-file" in cmd:
             return SimpleNamespace(
                 returncode=1 if ("b" * 40 + "^{commit}") in cmd else 0, stdout="")
         if "fetch" in cmd:
             assert cmd[-1] == "b" * 40
+            fetched.append(cmd)
             return SimpleNamespace(returncode=0, stdout="")
         raise AssertionError(cmd)
 
@@ -307,7 +310,7 @@ def test_empty_gitlab_diff_recovered_from_git(tmp_path, monkeypatch, gitlab_orig
         "basis": "change.title + source_branch",
     }
     assert meta["scope_intent"] == ctx["scope_intent"]
-    assert len(diff_calls) == 2
+    assert fetched and diff_calls
 
 
 def test_collapsed_nonempty_gitlab_diff_is_recovered(monkeypatch):
@@ -322,12 +325,12 @@ def test_collapsed_nonempty_gitlab_diff_is_recovered(monkeypatch):
     )
     calls = []
 
-    def recover(base, head, path, cwd="."):
+    def recover(base, head, path, cwd=".", metadata=None):
         calls.append((base, head, path, cwd))
         return recovered
 
     monkeypatch.setattr(m, "_git_diff_path", recover)
-    diff_text, changed_files, unavailable, not_text = m._prepare_gitlab_changes(
+    diff_text, changed_files, unavailable, not_text = m._prepare_change_records(
         [change], {"base": "BASE", "head": "HEAD"})
     assert calls == [("BASE", "HEAD", "large.py", ".")]
     assert diff_text == recovered
@@ -344,12 +347,12 @@ def test_truncated_new_file_without_recovery_is_unavailable(monkeypatch):
     }
     calls = []
 
-    def no_recovery(base, head, path, cwd="."):
+    def no_recovery(base, head, path, cwd=".", metadata=None):
         calls.append((base, head, path, cwd))
         return None
 
     monkeypatch.setattr(m, "_git_diff_path", no_recovery)
-    diff_text, changed_files, unavailable, not_text = m._prepare_gitlab_changes(
+    diff_text, changed_files, unavailable, not_text = m._prepare_change_records(
         [change], {"base": "BASE", "head": "HEAD"})
     assert calls == [("BASE", "HEAD", "large.py", ".")]
     assert diff_text == ""
@@ -365,12 +368,12 @@ def test_truncated_deleted_file_attempts_recovery(monkeypatch):
     }
     calls = []
 
-    def no_recovery(base, head, path, cwd="."):
+    def no_recovery(base, head, path, cwd=".", metadata=None):
         calls.append(path)
         return None
 
     monkeypatch.setattr(m, "_git_diff_path", no_recovery)
-    _, changed_files, unavailable, _ = m._prepare_gitlab_changes(
+    _, changed_files, unavailable, _ = m._prepare_change_records(
         [change], {"base": "BASE", "head": "HEAD"})
     assert calls == ["removed.py"]
     assert changed_files == ["removed.py"]
@@ -381,8 +384,6 @@ def test_truncated_rename_content_is_recovered(tmp_path):
     repo = Path(tmp_path) / "rename"
     repo.mkdir()
     _repo_git(repo, "init", "-q")
-    _repo_git(repo, "config", "user.email", "test@example.com")
-    _repo_git(repo, "config", "user.name", "Test")
     (repo / "old.py").write_text("one\ntwo\nthree\nfour\n")
     _repo_git(repo, "add", "old.py")
     _repo_git(repo, "commit", "-qm", "base")
@@ -397,7 +398,7 @@ def test_truncated_rename_content_is_recovered(tmp_path):
         "renamed_file": True, "diff": "",
     }
 
-    diff_text, changed_files, unavailable, not_text = m._prepare_gitlab_changes(
+    diff_text, changed_files, unavailable, not_text = m._prepare_change_records(
         [change], {"base": base, "head": head}, str(repo))
 
     assert "diff --git a/old.py b/new.py" in diff_text
@@ -417,12 +418,12 @@ def test_pure_rename_is_expected_empty_after_recovery(monkeypatch):
     }
     calls = []
 
-    def no_content_delta(base, head, path, cwd=".", old_path=None):
+    def no_content_delta(base, head, path, cwd=".", old_path=None, metadata=None):
         calls.append((old_path, path))
         return ""
 
     monkeypatch.setattr(m, "_git_diff_path", no_content_delta)
-    diff_text, changed_files, unavailable, not_text = m._prepare_gitlab_changes(
+    diff_text, changed_files, unavailable, not_text = m._prepare_change_records(
         [change], {"base": "BASE", "head": "HEAD"})
     assert calls == [("old.py", "new.py")]
     assert diff_text == ""
@@ -438,7 +439,7 @@ def test_failed_rename_and_mode_recovery_is_unavailable(monkeypatch):
          "b_mode": "100755", "diff": ""},
     ]
     monkeypatch.setattr(m, "_git_diff_path", lambda *args, **kwargs: None)
-    _, changed_files, unavailable, _ = m._prepare_gitlab_changes(
+    _, changed_files, unavailable, _ = m._prepare_change_records(
         changes, {"base": "BASE", "head": "HEAD"})
     assert changed_files == ["new.py", "run.sh"]
     assert unavailable == ["new.py", "run.sh"]
@@ -450,7 +451,7 @@ def test_identical_blobs_prove_metadata_only_change(monkeypatch):
         "a_blob_id": "SAME", "b_blob_id": "SAME", "diff": "",
     }
     monkeypatch.setattr(m, "_git_diff_path", lambda *args, **kwargs: None)
-    _, _, unavailable, _ = m._prepare_gitlab_changes(
+    _, _, unavailable, _ = m._prepare_change_records(
         [change], {"base": "BASE", "head": "HEAD"})
     assert unavailable == []
 
@@ -464,7 +465,7 @@ def test_binary_change_skips_recovery(monkeypatch):
         raise AssertionError("binary recovery attempted")
 
     monkeypatch.setattr(m, "_git_diff_path", fail_recovery)
-    diff_text, changed_files, unavailable, not_text = m._prepare_gitlab_changes(
+    diff_text, changed_files, unavailable, not_text = m._prepare_change_records(
         [change], {"base": "BASE", "head": "HEAD"})
     assert diff_text == ""
     assert changed_files == ["image.png"]
@@ -688,15 +689,20 @@ def test_branch_and_local_git_failures_are_nonzero(tmp_path, monkeypatch, gitlab
 
 
 def test_glab_branch_lookup_uses_resolved_host(monkeypatch):
+    calls = []
+
     def fake_run(cmd, timeout=90):
-        assert cmd[:3] == ["glab", "mr", "list"]
-        assert "--hostname" not in cmd
-        assert cmd[cmd.index("-R") + 1] == "https://other.gitlab.example/group/project"
+        calls.append(cmd)
         return SimpleNamespace(returncode=0, stdout="[]")
 
     monkeypatch.setattr(m, "_run", fake_run)
     assert m.find_change_for_branch(
         _gitlab("other.gitlab.example", "group/project"), "feature") is None
+    assert len(calls) == 1
+    cmd = calls[0]
+    assert cmd[:3] == ["glab", "mr", "list"]
+    assert "--hostname" not in cmd
+    assert cmd[cmd.index("-R") + 1] == "https://other.gitlab.example/group/project"
 
 
 def test_manifest_without_diff_section_fails_closed(tmp_path, monkeypatch):
@@ -725,8 +731,6 @@ def test_local_diff_ignores_hostile_repo_config(tmp_path):
     repo.mkdir()
     _repo_git(repo, "init", "-q")
     _repo_git(repo, "checkout", "-b", "feature/local-review")
-    _repo_git(repo, "config", "user.email", "test@example.com")
-    _repo_git(repo, "config", "user.name", "Test")
     (repo / ".gitattributes").write_text("*.txt diff=hostile\n")
     (repo / "review.txt").write_text("old\n")
     _repo_git(repo, "add", ".")
@@ -759,8 +763,6 @@ def test_local_output_inside_repo_is_excluded_from_untracked_manifest(tmp_path):
     repo = Path(tmp_path) / "repo-with-output"
     repo.mkdir()
     _repo_git(repo, "init", "-q")
-    _repo_git(repo, "config", "user.email", "test@example.com")
-    _repo_git(repo, "config", "user.name", "Test")
     reviewed = repo / "review.py"
     reviewed.write_text("old\n")
     _repo_git(repo, "add", "review.py")
@@ -785,12 +787,9 @@ def test_local_staged_unstaged_and_untracked_are_preserved_when_batched(tmp_path
     repo.mkdir()
 
     def git(*args):
-        result = m._run(["git", "-C", str(repo)] + list(args), timeout=30)
-        assert result.returncode == 0, result.stderr
+        return _repo_git(repo, *args)
 
     git("init", "-q")
-    git("config", "user.email", "test@example.com")
-    git("config", "user.name", "Test")
     collision = repo / "COLLIDE_TEST.txt"
     collision.write_text("one\ntwo\nthree\n")
     git("add", "COLLIDE_TEST.txt")
@@ -822,11 +821,28 @@ def test_test_file_classifier():
         "web/__tests__/foo.tsx", "go/widget_test.go", "src/main/WidgetTest.java",
         "module/src/test/kotlin/Foo.kt",
         "lib/widget_spec.rb", "spec/widget.rb",
+        "test/foo.js", "test/models/user_test.rb", "Billing/InvoiceTests.cs",
     ]
     sources = ["src/widget.py", "web/widget.ts", "go/widget.go", "src/main/Widget.java"]
     test_files, source_files = m.classify_files(tests + sources + [tests[0]])
     assert test_files == tests
     assert source_files == sources
+
+
+def test_local_diff_of_a_non_utf8_file_is_written_and_round_trips(tmp_path):
+    repo = Path(tmp_path) / "latin1"
+    repo.mkdir()
+    _repo_git(repo, "init", "-q")
+    (repo / "menu.txt").write_bytes(b"base\n")
+    _repo_git(repo, "add", ".")
+    _repo_git(repo, "commit", "-qm", "base")
+    (repo / "menu.txt").write_bytes(b"caf\xe9\n")
+    out = Path(tmp_path) / "latin1.json"
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert m.main(["--local", "--cwd", str(repo), "--out", str(out)]) == 0
+    ctx = json.loads(out.read_text(encoding="utf-8"))
+    assert ctx["changed_files"] == ["menu.txt"]
+    assert b"caf\xe9" in ctx["diff"].encode("utf-8", "surrogateescape")
 
 
 def test_c_quoted_paths_round_trip_through_diff_helpers():
@@ -846,6 +862,55 @@ def test_c_quoted_paths_round_trip_through_diff_helpers():
     assert m.batch_files(m.split_diff_by_file(diff), 1)[0]["files"] == ["a\tb.py"]
 
 
+def test_c_quoted_control_character_escapes_decode_to_their_bytes():
+    path = "a\x0bb\x0cc\x07d\x08e.py"
+    quoted = m._quote_git_path(path)
+    assert quoted == '"a\\vb\\fc\\ad\\be.py"'
+    assert m._decode_git_path(quoted) == path
+
+
+def test_octal_escape_above_a_byte_degrades_instead_of_raising():
+    diff = 'diff --git "a/x\\777" "b/x\\777"\n@@ -1 +1 @@\n-a\n+b\n'
+    assert m.changed_files_from_diff(diff) == ["x\udcff"]
+
+
+def test_local_diff_keeps_paths_with_control_characters_in_the_manifest(tmp_path):
+    repo = Path(tmp_path) / "ctl"
+    repo.mkdir()
+    _repo_git(repo, "init", "-q")
+    odd = repo / "a\x0bb\x0cc\x07d.py"
+    odd.write_text("old\n")
+    _repo_git(repo, "add", ".")
+    _repo_git(repo, "commit", "-qm", "init")
+    odd.write_text("new\n")
+    out = Path(tmp_path) / "ctl.json"
+    assert m.main(["--local", "--cwd", str(repo), "--out", str(out)]) == 0
+    assert json.loads(out.read_text())["changed_files"] == ["a\x0bb\x0cc\x07d.py"]
+
+
+def test_git_output_keeps_carriage_returns(repo):
+    (repo / "win.txt").write_bytes(b"one\r\ntwo\rzz\n")
+    _repo_git(repo, "add", ".")
+    diff_text = m.git_diff_local(3, str(repo))
+    assert "+one\r\n" in diff_text
+    assert "+two\rzz\n" in diff_text
+    assert list(m.split_diff_by_file(diff_text)) == ["win.txt"]
+
+
+def test_local_diff_keeps_reviewing_when_one_untracked_file_cannot_be_diffed(repo, monkeypatch):
+    (repo / "bad.py").write_text("bad\n")
+    (repo / "good.py").write_text("good\n")
+    real = m._untracked_diff
+    monkeypatch.setattr(m, "_untracked_diff",
+                        lambda path, cwd: None if path == "bad.py" else real(path, cwd))
+    metadata = {}
+    diff_text = m.git_diff_local(3, str(repo), metadata)
+    assert diff_text is not None and "diff --git a/good.py b/good.py" in diff_text
+    assert metadata["untracked_files"] == ["good.py"]
+    assert metadata["diff_unavailable"] == ["bad.py"]
+    assert sorted(metadata["changed_files"]) == ["bad.py", "good.py"]
+
+
 def test_unescaped_spaces_in_diff_git_paths_are_parsed():
     diff = (
         "diff --git a/a b.py b/a b.py\n"
@@ -863,12 +928,9 @@ def test_quoted_paths_survive_local_manifest_batching_and_classification(tmp_pat
     repo.mkdir()
 
     def git(*args):
-        result = m._run(["git", "-C", str(repo)] + list(args), timeout=30)
-        assert result.returncode == 0, result.stderr
+        return _repo_git(repo, *args)
 
     git("init", "-q")
-    git("config", "user.email", "test@example.com")
-    git("config", "user.name", "Test")
     source = repo / "src" / "a\tb.py"
     binary_test = repo / "tests" / "café.py"
     source.parent.mkdir()
@@ -905,7 +967,7 @@ def test_literal_pathspec_failure_is_reported_unavailable(monkeypatch):
         raise AssertionError(cmd)
 
     monkeypatch.setattr(m, "_run", fake_run)
-    _, changed, unavailable, _ = m._prepare_gitlab_changes(
+    _, changed, unavailable, _ = m._prepare_change_records(
         [change], {"base": "BASE", "head": "HEAD"})
     assert changed == [":(exclude)secret.py"]
     assert unavailable == [":(exclude)secret.py"]
@@ -937,6 +999,8 @@ def test_docs_only_diff_has_no_source_files():
     ("web/package-lock.json", False),
     ("src/distributed_lock.py", True), ("file-lock.ts", True), ("src/lock.go", True),
     ("pkg/lockfile.py", True), ("app/unlock.rb", True),
+    ("LICENSE", False), ("NOTICE", False), (".gitignore", False), ("web/logo.png", False),
+    ("assets/icon.svg", False), ("notes.txt", False), ("src/licensing.py", True),
 ])
 def test_is_source_file_separates_lockfiles_from_source_with_lock_in_the_name(path, expected):
     assert m.is_source_file(path) is expected
@@ -959,8 +1023,6 @@ def _branch_repo(tmp_path, divergent=False):
     review = Path(tmp_path) / "review"
     assert m._run(["git", "init", "--bare", "-q", str(origin)], timeout=30).returncode == 0
     assert m._run(["git", "clone", "-q", str(origin), str(seed)], timeout=30).returncode == 0
-    _repo_git(seed, "config", "user.email", "test@example.com")
-    _repo_git(seed, "config", "user.name", "Test")
     (seed / "base.txt").write_text("base\n")
     _repo_git(seed, "add", ".")
     _repo_git(seed, "commit", "-qm", "base")
@@ -1111,8 +1173,6 @@ def test_local_scope_intent_detached_head(tmp_path):
     repo = Path(tmp_path) / "detached"
     repo.mkdir()
     _repo_git(repo, "init", "-q")
-    _repo_git(repo, "config", "user.email", "test@example.com")
-    _repo_git(repo, "config", "user.name", "Test")
     (repo / "file.txt").write_text("old\n")
     _repo_git(repo, "add", ".")
     _repo_git(repo, "commit", "-qm", "base")
@@ -1298,7 +1358,7 @@ LINE_BREAKERS = ["\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u20
 @pytest.mark.parametrize("char", LINE_BREAKERS)
 def test_diff_helpers_only_break_lines_on_newline(char):
     text = ("diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n"
-            "@@ -1,2 +1,2 @@\n-a\n+b%sc\n ctx\n" % char)
+            "@@ -1,2 +1,2 @@\n-a\n+b%s-c\n ctx\n" % char)
 
     assert m.split_diff_by_file(text) == {"f.txt": text.rstrip("\n")}
     assert m.count_changed_lines(text) == 2
@@ -1306,7 +1366,8 @@ def test_diff_helpers_only_break_lines_on_newline(char):
 
 
 def test_binary_metadata_check_ignores_content_split_on_exotic_breaks():
-    section = "diff --git a/f b/f\n@@ -1 +1 @@\n+x\u2028GIT binary patch\n"
+    section = ("diff --git a/f b/f\n@@ -1 +1 @@\n+x\u2028diff --git a/y b/y\n"
+               "+z\u2028GIT binary patch\n")
     assert m._section_has_binary_metadata(section) is False
 
 
@@ -1405,3 +1466,56 @@ def test_branch_diff_failure_keeps_the_range_stderr(monkeypatch):
     metadata = {}
     assert m.git_diff_branch("feature", "main", 3, ".", metadata) is None
     assert metadata["error"].endswith("failed: fatal: bad revision")
+
+
+@pytest.fixture
+def repo(tmp_path):
+    root = Path(tmp_path) / "work"
+    root.mkdir()
+    _repo_git(root, "init", "-q")
+    (root / "base.py").write_text("base\n")
+    _repo_git(root, "add", ".")
+    _repo_git(root, "commit", "-qm", "base")
+    return root
+
+
+def test_local_diff_from_a_subdirectory_reports_root_relative_untracked_files(repo):
+    (repo / "sub").mkdir()
+    (repo / "rootnew.py").write_text("one\n")
+    (repo / "sub" / "subnew.py").write_text("two\n")
+    metadata = {}
+    diff_text = m.git_diff_local(3, str(repo / "sub"), metadata)
+    assert diff_text is not None
+    assert sorted(metadata["untracked_files"]) == ["rootnew.py", "sub/subnew.py"]
+    assert "diff --git a/sub/subnew.py b/sub/subnew.py" in diff_text
+    assert "diff --git a/rootnew.py b/rootnew.py" in diff_text
+
+
+def test_local_diff_reports_an_untracked_nested_repo_as_unavailable(repo, tmp_path):
+    nested = repo / "vendored"
+    nested.mkdir()
+    _repo_git(nested, "init", "-q")
+    (nested / "x.py").write_text("x\n")
+    (repo / "new.py").write_text("new\n")
+    out = Path(tmp_path) / "ctx.json"
+    assert m.main(["--local", "--cwd", str(repo), "--out", str(out)]) == 0
+    ctx = json.loads(out.read_text())
+    assert ctx["diff_unavailable"] == ["vendored/"]
+    assert ctx["changed_files"] == ["new.py"]
+    assert ctx["untracked_files"] == ["new.py"]
+
+
+def test_per_file_recovery_failure_cause_is_recorded(monkeypatch):
+    change = {"old_path": "big.py", "new_path": "big.py", "collapsed": True, "diff": ""}
+
+    def fake_run(cmd, timeout=90):
+        if "diff" in cmd:
+            return SimpleNamespace(returncode=128, stdout="", stderr="fatal: bad object")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(m, "_run", fake_run)
+    metadata = {}
+    _, _, unavailable, _ = m._prepare_change_records(
+        [change], {"base": "BASE", "head": "HEAD"}, metadata=metadata)
+    assert unavailable == ["big.py"]
+    assert metadata["diff_unavailable_cause"] == "git diff of big.py failed: fatal: bad object"

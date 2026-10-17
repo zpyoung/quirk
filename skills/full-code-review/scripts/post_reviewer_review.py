@@ -20,7 +20,7 @@ import render_report
 import review_memory
 from jsonio import load_object, write_json
 from forge import ForgeError, positive_int as _positive_int, valid_sha as _valid_sha
-from forge import change_label, default_run, make_forge
+from forge import change_label, default_run, discussion_resolved, draft_summary, make_forge
 from forge import gitlab as _gitlab
 from forge import github as _github
 
@@ -132,7 +132,7 @@ def _list_drafts(ctx):
 
 
 def _draft_summary(item):
-    return _gitlab.draft_summary(item)
+    return draft_summary(item)
 
 
 _report_digest = review_memory._report_digest
@@ -349,10 +349,10 @@ def _cleanup_commands(state):
 
 
 def _reconcile_orphans(state, failed_body):
-    """Fold drafts GitLab committed without a usable response into the cleanup set.
+    """Fold drafts or pending reviews the forge committed without a usable response into the cleanup set.
 
     A create POST can commit server-side even when its response is lost or
-    malformed; such a draft never reaches state["created"], so cleanup built
+    malformed; such an item never reaches state["created"], so cleanup built
     from recorded IDs alone would strand it to block the next run. Staging only
     starts from an empty draft set, so any unrecorded live draft is an orphan.
     """
@@ -375,8 +375,10 @@ def _reconcile_orphans(state, failed_body):
         # only the failed POST can have committed without an ack, so only a
         # body match proves ownership; anything else may be the user's own draft
         if digest == failed_digest:
-            orphans.append({"draft_id": draft_id, "body_sha256": digest,
-                            "matches_failed_note": True})
+            orphan = {"draft_id": draft_id, "body_sha256": digest, "matches_failed_note": True}
+            if item.get("kind"):
+                orphan["kind"] = item["kind"]
+            orphans.append(orphan)
         else:
             unrecognized.append(_draft_summary(item))
     if orphans:
@@ -385,16 +387,31 @@ def _reconcile_orphans(state, failed_body):
         state["unrecognized_drafts"] = unrecognized
 
 
-def _suggested_completion(prepared, by_id):
-    """Pick the completion action to suggest; an incomplete review is never offered as approvable."""
+def _suggested_completion(prepared, posted, omitted):
+    """Pick the completion action to suggest; an incomplete review is never offered as approvable.
+
+    Findings that are staged as Blocking, already stand as a Blocking thread from an earlier
+    run, or are Blocking but could not be anchored inline count toward request-changes; a
+    plausible finding or a Nit never does.
+    """
     if (prepared.get("run") or {}).get("incomplete"):
         return "comment-only"
-    blocking = any(by_id[finding["id"]]["slot"] == "fix" and finding["severity"] != "Nit"
-                   for finding in prepared["findings"])
+    severity = {finding["id"]: finding["severity"] for finding in prepared["findings"]}
+    blocking = any(item["disposition"] == "Blocking" and item["severity"] != "Nit" for item in posted)
+    blocking = blocking or any(
+        str(item.get("reason", "")).startswith("already posted")
+        and (item.get("decision") or {}).get("slot") == "fix"
+        and severity.get(item["id"]) not in (None, "Nit")
+        for item in omitted)
+    blocking = blocking or any(
+        item.get("unplaced") and item["disposition"] == "Blocking"
+        and severity.get(item["id"]) not in (None, "Nit")
+        for item in omitted)
     return "request-changes" if blocking else "approve"
 
 
 def stage(args):
+    """Stage the reviewer's notes as drafts; exit 0 staged, 2 failed, 3 head moved, 4 pre-existing drafts."""
     try:
         raw_report = _load(args.report, "report")
         decisions = _load(args.decisions, "decisions")
@@ -410,7 +427,7 @@ def stage(args):
             by_id = {row["id"]: row for row in decisions["decisions"]}
         _, live_refs = _revalidate(ctx)
         # head partitioning can't salvage a moved diff basis: the findings were
-        # judged against a diff GitLab no longer serves, so only a rerun is safe
+        # judged against a diff the forge no longer serves, so only a rerun is safe
         if (live_refs["base_sha"] != ctx["expected_base"]
                 or live_refs["start_sha"] != ctx["expected_start"]):
             raise ReviewError("Change base/start diff refs changed since the review was prepared "
@@ -468,7 +485,7 @@ def stage(args):
             "memory_report": raw_report if memory_enabled else None,
             "memory_decisions": decisions if memory_enabled else None,
             "completion": {"offered": ["approve", "request-changes", "comment-only"],
-                           "suggested": _suggested_completion(prepared, by_id)},
+                           "suggested": _suggested_completion(prepared, posted, omitted)},
         }
         _write(args.out, state)
         uncreated = list(notes)
@@ -609,7 +626,7 @@ def _memory_publish_crosscheck(state, ctx):
 
 
 def _discussion_resolved(discussion):
-    return _gitlab.discussion_resolved(discussion)
+    return discussion_resolved(discussion)
 
 
 def _memory_receipts(state, refs, discussions=None):
@@ -736,6 +753,11 @@ def publish(args):
 
 
 def complete(args):
+    """Apply the explicit completion action to a published review at the reviewed head.
+
+    Exit 0 once the action (approve, request-changes or comment-only) is recorded, 2 when
+    the review is unpublished, already completed, or the head moved since staging.
+    """
     try:
         state = _load(args.staged, "staged review")
         ctx = _state_context(state)

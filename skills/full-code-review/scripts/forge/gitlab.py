@@ -17,7 +17,7 @@ import shlex
 import subprocess
 from urllib.parse import quote, urlencode
 
-from forge import ForgeError, context_lines, default_run, hunk_lines, positive_int, valid_sha
+from forge import ForgeError, StrayComment, context_lines, default_run, hunk_lines, positive_int, valid_sha
 from forge import change_label as _change_label
 from forge import note_url as _note_url
 
@@ -55,7 +55,10 @@ def api(run, host, method, endpoint, payload=None, timeout=120):
 def get_json(host, endpoint):
     """GET-only JSON read used by review memory; raises RuntimeError-compatible ForgeError."""
     command = ["glab", "api", "--hostname", host, endpoint]
-    result = subprocess.run(command, text=True, capture_output=True, check=False, timeout=120)
+    try:
+        result = subprocess.run(command, text=True, capture_output=True, check=False, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ForgeError("GitLab discussion request failed: %s" % str(exc)[:400]) from exc
     if result.returncode:
         raise ForgeError(result.stderr.strip() or "GitLab discussion request failed")
     try:
@@ -239,6 +242,7 @@ def merge_request(api_call, host, project, iid):
 
 
 def list_drafts(api_call, host, project, iid):
+    """Return every draft note of the authenticated user on the MR; raise ForgeError on malformed or incomplete pagination."""
     drafts = []
     seen = set()
     for page in range(1, 101):
@@ -259,16 +263,8 @@ def list_drafts(api_call, host, project, iid):
     raise ForgeError("draft-note pagination exceeded 100 pages")
 
 
-def draft_summary(item):
-    position = item.get("position") if isinstance(item.get("position"), dict) else {}
-    path = position.get("new_path") or position.get("old_path")
-    line = position.get("new_line") or position.get("old_line")
-    note = item.get("note") if isinstance(item.get("note"), str) else ""
-    return {"id": item.get("id"), "anchor": "%s:%s" % (path, line) if path else None,
-            "note": note.replace("\n", " ")[:120]}
-
-
 def changed_paths(api_call, host, project, old_head, new_head):
+    """Return the paths that differ between two heads; raise ForgeError when GitLab's compare may be truncated."""
     endpoint = "projects/%s/repository/compare?%s" % (
         quote(project, safe=""), urlencode({"from": old_head, "to": new_head, "straight": "true"}))
     data = api_call(host, "GET", endpoint)
@@ -334,8 +330,8 @@ def request_changes(run, host, project, iid):
         raise ForgeError("request-changes mutation failed: %s" % (result.stderr or result.stdout).strip()[:400])
     try:
         data = json.loads(result.stdout)
-        payload = data["data"]["mergeRequestRequestChanges"]
-    except (json.JSONDecodeError, KeyError, TypeError):
+        payload = (data.get("data") or {}).get("mergeRequestRequestChanges")
+    except (json.JSONDecodeError, AttributeError):
         raise ForgeError("request-changes mutation returned an invalid response")
     if not isinstance(payload, dict):
         reasons = [str(e.get("message", e)) if isinstance(e, dict) else str(e) for e in data.get("errors") or []]
@@ -353,12 +349,6 @@ def cleanup_commands(state):
         commands.append("glab api --hostname %s --method DELETE %s" %
                         (shlex.quote(state["host"]), shlex.quote(endpoint)))
     return commands
-
-
-def discussion_resolved(discussion):
-    notes = discussion.get("notes") if isinstance(discussion.get("notes"), list) else []
-    root = notes[0] if notes and isinstance(notes[0], dict) else {}
-    return bool(discussion.get("resolved") or root.get("resolved"))
 
 
 def note_url(host, project, iid, note_id):
@@ -514,7 +504,8 @@ class GitLabForge:
         note = notes[0] if isinstance(notes, list) and notes else {}
         if note.get("type") != "DiffNote":
             # a stale position silently degrades to a plain comment, so a missing DiffNote is a failure
-            raise ForgeError("GitLab created a plain comment instead of a DiffNote; check the position")
+            raise StrayComment(data.get("id") if isinstance(data, dict) else None, note.get("id"),
+                               note_url(self.host, self.project, number, note.get("id")))
         return {"published": True, "discussion_id": data.get("id"), "note_id": note.get("id"),
                 "url": note_url(self.host, self.project, number, note.get("id")), "head_sha": head_sha}
 

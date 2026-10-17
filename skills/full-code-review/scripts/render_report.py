@@ -10,6 +10,7 @@ import os
 import pathlib
 import re
 import sys
+import tempfile
 import webbrowser
 
 import highlight
@@ -27,7 +28,7 @@ _RUN_FIELDS = {"dimensions_run", "dimensions_skipped", "diff_size", "coverage", 
                "mutation_consent", "incomplete", "dimensions_failed", "models", "verification",
                "excluded_generated", "policy_sources", "severity_floor", "deep"}
 DEFAULT_SEVERITY_FLOOR = "Should fix"
-_INCOMPLETE_OK_VERDICTS = {"fix, then merge", "request changes"}
+_INCOMPLETE_OK_VERDICTS = {"fix, then merge", "request changes", "incomplete review"}
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 DISPOSITIONS = {
@@ -75,8 +76,8 @@ def target_slug(meta):
         return str(meta.get("number", ""))
     if target == "branch":
         branch = meta.get("branch", "")
-        digest = hashlib.sha256(branch.encode("utf-8")).hexdigest()[:6]
-        return "%s-%s" % (slugify(branch), digest)
+        digest = hashlib.sha256(branch.encode("utf-8", "backslashreplace")).hexdigest()[:6]
+        return "%s-%s" % (slugify(branch) or "branch", digest)
     if target == "local":
         return "local"
     return ""
@@ -162,7 +163,7 @@ def finding_digest(findings):
                         item.get("recommendation_md") or "",
                         item.get("impact") or "", item.get("fix_md") or "")
                        for item in rank_findings(findings))
-    return hashlib.sha256(source.encode("utf-8")).hexdigest()[:10]
+    return hashlib.sha256(source.encode("utf-8", "backslashreplace")).hexdigest()[:10]
 
 
 def storage_key(meta, findings):
@@ -186,6 +187,16 @@ def replace_slot(template, name, replacement):
         raise ValueError("template slot %s markers are out of order" % name)
     end += len(closing)
     return template[:start] + replacement + template[end:]
+
+
+_HANDOFF_UNSAFE = re.compile(r"[\r\u2028\u2029]")
+_LINE_RE = re.compile(r"[1-9][0-9]*(?:-[0-9]+)?")
+
+
+def _handoff_safe(value, label):
+    """Reject characters that a triage paste cannot carry, since the page copies this text into it."""
+    if _HANDOFF_UNSAFE.search(value):
+        raise ValueError("%s contains a carriage return or Unicode line separator" % label)
 
 
 def _line_safe(value, label):
@@ -470,6 +481,9 @@ def _prepare_report(report):
     meta["title"] = meta["title"].strip()
     if not isinstance(meta.get("verdict"), str):
         raise ValueError("meta.verdict must be a string")
+    for key in ("verdict", "ticket", "project", "change_state"):
+        if isinstance(meta.get(key), str):
+            _handoff_safe(meta[key], "meta.%s" % key)
     for key in ("repo_root", "source_branch"):
         if key in meta:
             if not isinstance(meta[key], str) or not meta[key].strip():
@@ -551,6 +565,13 @@ def _prepare_report(report):
         value = normalize_finding(raw, warnings)
         for field in ("title", "file", "line"):
             _line_safe(value[field], "finding %d %s" % (index + 1, field))
+        if not _LINE_RE.fullmatch(value["line"]):
+            raise ValueError("finding %d line must be a number or a start-end range" % (index + 1))
+        if isinstance(value.get("evidence"), str):
+            _handoff_safe(value["evidence"], "finding %d evidence" % (index + 1))
+        for dimension in value["dimensions"]:
+            if isinstance(dimension, str):
+                _handoff_safe(dimension, "finding %d dimensions" % (index + 1))
         identity = "%s:%s" % (value["file"], value["line"])
         if identity in identities:
             raise ValueError("duplicate finding identity %s" % identity)
@@ -562,8 +583,6 @@ def _prepare_report(report):
 
     slug = target_slug(meta)
     if not slug:
-        raise ValueError("target slug is empty after slugification")
-    if target == "branch" and not slugify(meta["branch"]):
         raise ValueError("target slug is empty after slugification")
     run = prepared.get("run")
     if run is not None and not isinstance(run, dict):
@@ -729,6 +748,27 @@ def _banner(status, title, body):
             % (status, title, body))
 
 
+def _checker_failure_text(deep):
+    """One sentence naming each claim the deep checker failed on, or empty."""
+    failures = deep.get("checker_failures") if isinstance(deep, dict) else None
+    if not failures:
+        return ""
+    return "Unchecked claims withheld: %s" % ", ".join(
+        "%s (%s)" % (key, reason.strip()) for key, reason in sorted(failures.items()))
+
+
+def _budget_overrun_text(deep):
+    """One sentence stating the deep time budget was exceeded, or empty."""
+    if not isinstance(deep, dict):
+        return ""
+    budget, elapsed = deep.get("budget_minutes"), deep.get("elapsed_minutes")
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in (budget, elapsed)):
+        return ""
+    if elapsed <= budget:
+        return ""
+    return "The deep review exceeded its time budget (%gm of %gm)" % (elapsed, budget)
+
+
 def _what_was_run(report):
     """Render the run conditions as records in one Section: rows, not a grid of panels."""
     run = report.get("run") or {}
@@ -748,9 +788,22 @@ def _what_was_run(report):
         failed = ", ".join(_string_list(run.get("dimensions_failed")))
         if not failed and deep.get("unreached_areas"):
             failed = "Unreached areas: %s" % ", ".join(deep["unreached_areas"])
-        failed = failed or "unknown lenses"
-        out.append(_banner("warning", "Incomplete review.",
-                           "%s did not finish, so a short findings list here is not a clean bill." % _esc(failed)))
+        checker = _checker_failure_text(deep)
+        overrun = _budget_overrun_text(deep)
+        if failed:
+            body = "%s did not finish, so a short findings list here is not a clean bill." % _esc(failed)
+            if checker:
+                body += " %s." % _esc(checker)
+            if overrun:
+                body += " %s." % _esc(overrun)
+        elif checker or overrun:
+            body = "%s. A short findings list here is not a clean bill." % _esc(
+                ". ".join(part for part in (checker, overrun) if part))
+        elif deep:
+            body = "Some deep checks did not finish, so a short findings list here is not a clean bill."
+        else:
+            body = "unknown lenses did not finish, so a short findings list here is not a clean bill."
+        out.append(_banner("warning", "Incomplete review.", body))
     rows = []
     if run.get("diff_size"):
         rows.append(_row("Diff size", _esc(run["diff_size"])))
@@ -787,6 +840,10 @@ def _what_was_run(report):
                            ("sandbox_kind", "Deep sandbox")):
             if deep.get(key) is not None:
                 rows.append(_row(label, _esc(deep[key])))
+    if deep.get("checker_failures"):
+        rows.append(_row("Checker failures", "".join(
+            "<div><span class=\"mono\">%s</span> %s</div>" % (_esc(key), _esc(reason))
+            for key, reason in sorted(deep["checker_failures"].items()))))
     if rows:
         out.append('<div class="rows">%s</div>' % "".join(rows))
     if "areas" in deep:
@@ -1077,7 +1134,7 @@ def _finding_card(finding, seat="author"):
     if finding.get("evidence") not in (None, ""):
         out.append(_token(finding["evidence"], tone="blue"))
     if finding.get("verification_status") == "plausible":
-        out.append(_token("plausible", tone="amber"))
+        out.append(_token("plausible", tone="yellow"))
     out.append('</div><h2 class="f-title">%s</h2>' % _esc(finding["title"]))
     out.append('<span class="anchor">%s<span class="ln">:%s</span></span>' %
                (_esc(finding["file"]), _esc(finding["line"])))
@@ -1184,7 +1241,7 @@ def _memory_sections_html(report):
         for finding in rows:
             memory_finding = finding.get("memory") or {}
             thread = memory_finding.get("thread") if isinstance(memory_finding, dict) else None
-            links = '<a href="#%s">%s</a>' % (_esc(finding["id"]), _esc(finding["id"]))
+            links = _esc(finding["id"])
             if isinstance(thread, dict) and thread.get("url"):
                 links += " " + _memory_link_html("Open discussion", thread.get("url"))
             out.append(_row(links, _esc(finding["title"])))
@@ -1216,8 +1273,8 @@ def _memory_sections_md(report):
                 detail = item.get("body") or item.get("body_md")
                 line = "- %s" % _memory_md_text(title)
                 if item.get("file") is not None:
-                    line += " (`%s%s`)" % (_memory_md_text(item.get("file")),
-                                           ":" + _memory_md_text(item.get("line")) if item.get("line") is not None else "")
+                    location = "%s%s" % (item["file"], ":%s" % item["line"] if item.get("line") is not None else "")
+                    line += " (`%s`)" % re.sub(r"[`\r\n\u2028\u2029]", "'", location)
                 thread = item.get("thread")
                 if isinstance(thread, dict) and thread.get("url"):
                     line += " — %s" % _memory_link_md("Open discussion", thread.get("url"))
@@ -1416,7 +1473,13 @@ def _content(report, report_path=None):
     deep = run.get("deep") or {}
     if deep and run.get("incomplete"):
         unreached = ", ".join(deep.get("unreached_areas") or [])
-        body = ("Unreached areas: %s." % unreached) if unreached else "Some deep checks did not finish."
+        checker = _checker_failure_text(deep)
+        overrun = _budget_overrun_text(deep)
+        body = " ".join(part for part in (
+            ("Unreached areas: %s." % unreached) if unreached else "",
+            ("%s." % checker) if checker else "",
+            ("%s." % overrun) if overrun else "") if part)
+        body = body or "Some deep checks did not finish."
         out.append(_banner("warning", "Incomplete review.", _esc(body)))
     out.append('<div class="panes">')
     for index, (pane_id, label, _, html) in enumerate(panes):
@@ -1471,8 +1534,22 @@ def _render_md_prepared(report):
         failed = ", ".join(_string_list(run.get("dimensions_failed")))
         if not failed and deep.get("unreached_areas"):
             failed = "unreached areas (%s)" % ", ".join(deep["unreached_areas"])
-        failed = failed or "some lenses"
-        lines.extend(["**Incomplete:** %s did not finish; this report is not a clean bill." % failed, ""])
+        checker = _checker_failure_text(deep)
+        overrun = _budget_overrun_text(deep)
+        if failed:
+            text = "%s did not finish; this report is not a clean bill." % failed
+            if checker:
+                text += " %s." % checker
+            if overrun:
+                text += " %s." % overrun
+        elif checker or overrun:
+            text = "%s; this report is not a clean bill." % ". ".join(
+                part for part in (checker, overrun) if part)
+        elif deep:
+            text = "some deep checks did not finish; this report is not a clean bill."
+        else:
+            text = "some lenses did not finish; this report is not a clean bill."
+        lines.extend(["**Incomplete:** %s" % text, ""])
     dimensions = _string_list(run.get("dimensions_run"))
     if dimensions:
         lines.extend(["**Dimensions run:** %s" % ", ".join(dimensions), ""])
@@ -1543,8 +1620,10 @@ def _render_md_prepared(report):
                               finding["what_would_confirm"], ""])
             repro = finding.get("repro")
             if isinstance(repro, dict) and repro.get("command") and repro.get("output"):
-                lines.extend(["**Reproduction:**", "", "```",
-                              "$ %s" % repro["command"], repro["output"], "```", ""])
+                command = "$ %s" % repro["command"]
+                longest = max((len(run) for run in re.findall(r"`+", command + repro["output"])), default=0)
+                fence = "`" * max(3, longest + 1)
+                lines.extend(["**Reproduction:**", "", fence, command, repro["output"], fence, ""])
             if finding.get("impact"):
                 lines.extend(["**Impact:** %s" % finding["impact"], ""])
             if _raw_md(finding.get("body_md")):
@@ -1601,6 +1680,22 @@ def _template_path():
     return os.path.normpath(os.path.join(here, "..", "assets", "report.html"))
 
 
+def _write_text(path, text):
+    """Replace `path` with `text` atomically, so a failed write never truncates the previous file."""
+    directory = os.path.dirname(path) or "."
+    fd, temp = tempfile.mkstemp(prefix=".%s." % os.path.basename(path), suffix=".tmp", dir=directory,
+                                text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", errors="backslashreplace") as handle:
+            handle.write(text)
+        os.replace(temp, path)
+    finally:
+        try:
+            os.unlink(temp)
+        except FileNotFoundError:
+            pass
+
+
 def _error(message):
     print(json.dumps({"error": str(message)}, indent=2))
     return 2
@@ -1639,12 +1734,10 @@ def main(argv=None):
             md_path = os.path.abspath(args.out) if args.out else os.path.join(out_dir, "review-%s-findings.md" % slug)
         if html_path:
             os.makedirs(os.path.dirname(html_path) or ".", exist_ok=True)
-            with open(html_path, "w", encoding="utf-8") as handle:
-                handle.write(html_text)
+            _write_text(html_path, html_text)
         if md_path:
             os.makedirs(os.path.dirname(md_path) or ".", exist_ok=True)
-            with open(md_path, "w", encoding="utf-8") as handle:
-                handle.write(md_text)
+            _write_text(md_path, md_text)
 
         opened = False
         if html_path and not args.no_open:

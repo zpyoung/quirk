@@ -34,6 +34,17 @@ def test_missing_patch_on_a_changed_file_is_flagged_for_git_recovery():
     assert record["diff"] == "" and record["too_large"] is True
 
 
+def test_removed_files_map_to_deleted_and_never_ask_for_git_recovery():
+    fake = FakeGitHub()
+    fake.files = [{"filename": "gone.bin", "status": "removed", "changes": 5},
+                  {"filename": "gone.py", "status": "removed", "patch": "@@ -1 +0,0 @@\n-x", "changes": 1},
+                  {"filename": "kept.py", "status": "modified", "patch": "@@ -1 +1 @@\n-x\n+y", "changes": 2}]
+    gone_bin, gone_py, kept = forge(fake).change_records(NUMBER)["records"]
+    assert gone_bin["deleted_file"] is True and gone_bin["too_large"] is False and gone_bin["diff"] == ""
+    assert gone_py["deleted_file"] is True and gone_py["diff"].startswith("@@")
+    assert kept["deleted_file"] is False
+
+
 def test_file_list_paginates_past_one_hundred():
     fake = FakeGitHub()
     fake.files = [{"filename": "f%d.py" % i, "status": "added", "patch": "@@ -0,0 +1 @@\n+x", "changes": 1}
@@ -72,6 +83,25 @@ def test_identity_commit_authors_and_branch_lookup():
     assert gh.head_refspec(NUMBER) == "refs/pull/7/head"
 
 
+def test_cleanup_commands_shell_quote_the_host_and_endpoint():
+    state = {"review_id": 1, "host": "gh.example.com; touch x", "project": "o/r", "number": 7}
+    [command] = GitHubForge(HOST, PROJECT).cleanup_commands(state)
+    assert command == "gh api --hostname 'gh.example.com; touch x' -X DELETE repos/o/r/pulls/7/reviews/1"
+    spaced = dict(state, host=HOST, project="o/r name")
+    assert "'repos/o/r name/pulls/7/reviews/1'" in GitHubForge(HOST, PROJECT).cleanup_commands(spaced)[0]
+
+
+def test_cleanup_commands_cover_the_recorded_and_reconciled_reviews_once_each():
+    state = {"review_id": 5, "host": HOST, "project": "o/r", "number": 7,
+             "reconciled": [{"draft_id": 5, "kind": "review"}, {"draft_id": 9, "kind": "review"},
+                            {"draft_id": 11, "kind": "comment"}]}
+    commands = GitHubForge(HOST, PROJECT).cleanup_commands(state)
+    assert [c.rsplit("/", 1)[1] for c in commands] == ["5", "9"]
+    orphan_only = dict(state, review_id=None, reconciled=[{"draft_id": 9, "kind": "review"}])
+    assert [c.rsplit("/", 1)[1] for c in GitHubForge(HOST, PROJECT).cleanup_commands(orphan_only)] == ["9"]
+    assert GitHubForge(HOST, PROJECT).cleanup_commands(dict(state, review_id=None, reconciled=[])) == []
+
+
 def test_clone_command_targets_the_host():
     cmd, env = GitHubForge("ghe.example.com", PROJECT).clone_command("/tmp/x")
     assert cmd[:4] == ["gh", "repo", "clone", "ghe.example.com/o/r"]
@@ -88,6 +118,23 @@ def test_list_threads_normalizes_to_discussion_dicts():
     note = thread["notes"][0]
     assert note == {"id": 41, "body": "hm", "author": {"id": 9, "username": "bob"}, "web_url": "https://u",
                     "position": {"new_path": "a.py", "new_line": 2}, "resolved": False}
+
+
+def test_list_threads_leaves_out_pending_comments_and_threads_holding_only_them():
+    def comment(database_id, state):
+        return {"databaseId": database_id, "state": state, "body": "b%d" % database_id, "url": "https://u",
+                "author": {"login": "reviewer", "databaseId": 2}}
+
+    fake = FakeGitHub()
+    fake.threads = [
+        {"id": "PRRT_1", "isResolved": False, "path": "a.py", "line": 2,
+         "comments": {"nodes": [comment(1, "SUBMITTED"), comment(2, "PENDING")]}},
+        {"id": "PRRT_2", "isResolved": False, "path": "a.py", "line": 3,
+         "comments": {"nodes": [comment(3, "PENDING")]}}]
+    threads = forge(fake).list_threads(NUMBER)
+    assert [t["id"] for t in threads] == ["PRRT_1"]
+    assert [n["id"] for n in threads[0]["notes"]] == [1]
+    assert "state" in github.GitHubForge._THREADS_QUERY
 
 
 def test_file_list_past_the_page_cap_is_flagged_for_git_recovery_instead_of_failing():
@@ -243,29 +290,6 @@ def test_failed_identity_and_detail_reads_record_the_cause_and_clear_it_on_succe
     assert gh.change_details(NUMBER) is not None and gh.last_error is None
 
 
-def test_hunk_lines_read_header_like_content_inside_a_hunk_as_content():
-    diff = ("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1,3 +1,3 @@\n one\n"
-            "-- removed dashes\n+++ added pluses\n three\n"
-            "diff --git a/b.py b/b.py\n--- a/b.py\n+++ b/b.py\n@@ -1 +1,2 @@\n six\n+seven\n")
-    new, old = hunk_lines(diff, "a.py")
-    assert new == {1, 2, 3} and old == {1, 2, 3}
-    assert hunk_lines(diff, "b.py") == ({1, 2}, {1})
-
-
-def test_hunk_lines_count_only_newlines_as_line_breaks():
-    diff = ("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1,2 +1,3 @@\n one\n"
-            "+split\u2028here\x0cnow\x85\n two\n")
-    new, old = hunk_lines(diff, "a.py")
-    assert new == {1, 2, 3} and old == {1, 2}
-
-
-def test_hunk_lines_anchor_old_side_lines_of_a_deleted_file():
-    diff = "diff --git a/gone.py b/gone.py\ndeleted file mode 100644\n--- a/gone.py\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-x\n-y\n"
-    assert hunk_lines(diff, "gone.py") == (set(), {1, 2})
-    assert forge(FakeGitHub()).inline_target({}, "gone.py", "gone.py", 2, diff, side="old") == {
-        "path": "gone.py", "line": 2, "side": "LEFT"}
-
-
 def test_hunk_lines_and_inline_target():
     new, old = hunk_lines(DIFF, "a.py")
     assert new == {1, 2, 3, 4} and old == {1, 2, 3}
@@ -384,6 +408,21 @@ def test_stage_is_one_pending_review_and_off_diff_findings_are_omitted(tmp_path,
     review_id = state["review_id"]
     assert [item["draft_id"] for item in state["created"]] == [review_id, fake.review_comments[review_id][0]["id"]]
     assert state["cleanup_commands"] == ["gh api --hostname github.com -X DELETE repos/o/r/pulls/7/reviews/%d" % review_id]
+
+
+def test_pending_tags_each_item_as_a_review_or_a_comment(fake):
+    fake.reviews.append({"id": 3, "body": "mine", "state": "PENDING", "user": {"login": "reviewer"}})
+    fake.review_comments[3] = [{"id": 4, "path": "a.py", "line": 2, "body": "inline"}]
+    assert [(item["id"], item["kind"]) for item in forge(fake).pending(NUMBER, "reviewer")] == [
+        (3, "review"), (4, "comment")]
+
+
+def test_stage_and_pending_ignore_submitted_reviews_and_other_users_pending_reviews(tmp_path, fake):
+    fake.reviews.append({"id": 1, "body": "old", "state": "COMMENTED", "user": {"login": "reviewer"}})
+    fake.reviews.append({"id": 2, "body": "x", "state": "PENDING", "user": {"login": "someone-else"}})
+    assert forge(fake).pending(NUMBER, "reviewer") == []
+    rc, _ = _stage(_paths(tmp_path))
+    assert rc == 0
 
 
 def test_stage_refuses_when_the_viewer_already_has_a_pending_review(tmp_path, fake):
@@ -521,3 +560,20 @@ def test_memory_threads_come_from_graphql_for_github(fake):
     fake.threads = [{"id": "PRRT_1", "isResolved": True, "path": "a.py", "line": 2, "comments": {"nodes": []}}]
     threads = reviewer.review_memory.fetch_discussions(HOST, PROJECT, NUMBER, api=fake, forge="github")
     assert threads[0]["id"] == "PRRT_1" and threads[0]["resolved"] is True
+
+
+def test_publish_ignores_the_viewers_own_pending_comments_in_the_memory_cross_check(tmp_path, fake):
+    paths = _paths(tmp_path)
+    rc, state = _stage(paths)
+    assert rc == 0
+    fingerprint = "e" * 64
+    inline = next(item for item in state["created"] if item["kind"] == "inline")
+    inline["fingerprint"] = fingerprint
+    state["memory_enabled"] = True
+    paths["staged"].write_text(json.dumps(state))
+    fake.threads = [{"id": "PRRT_9", "isResolved": False, "path": "a.py", "line": 2, "comments": {"nodes": [
+        {"databaseId": inline["draft_id"], "state": "PENDING", "url": "https://u",
+         "body": "<!-- quirk-review:v1\nkind: finding\nfp: %s\n-->\nstaged" % fingerprint,
+         "author": {"login": "reviewer", "databaseId": 2}}]}}]
+    rc, result = _publish(paths)
+    assert rc == 0 and result["published"] is True

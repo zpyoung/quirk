@@ -10,7 +10,7 @@ import sys
 from pathlib import Path, PurePosixPath
 
 from jsonio import load_object, write_json
-from prepare_diff import _path_from_diff_git, _strip_ab
+from prepare_diff import _path_from_diff_git, _strip_ab, is_test_file
 
 
 _IMPORT = re.compile(r"^\s*import\s+([\w.]+(?:\s*,\s*[\w.]+)*)\b")
@@ -23,7 +23,7 @@ def _validate_files(changed_files: list[str]) -> list[str]:
         raise ValueError("changed_files must be a list of repo-relative paths")
     for name in changed_files:
         if (not isinstance(name, str) or not name or "\x00" in name
-                or PurePosixPath(name).is_absolute() or "\\" in name
+                or PurePosixPath(name).is_absolute()
                 or any(part in (".", "..") for part in name.split("/"))):
             raise ValueError("changed_files must contain only repo-relative paths")
     return list(dict.fromkeys(changed_files))
@@ -78,11 +78,7 @@ def _contents(changed_files: list[str], source_root: str | None,
     texts, weights = {}, {}
     for name in changed_files:
         path = root / name if root else None
-        if path and path.exists():
-            if not path.resolve().is_relative_to(root):
-                raise ValueError("changed file escapes source root: %s" % name)
-            if not path.is_file():
-                raise ValueError("changed file is not readable: %s" % name)
+        if path and path.is_file() and path.resolve().is_relative_to(root):
             try:
                 text = path.read_text(encoding="utf-8", errors="replace")
             except OSError as exc:
@@ -127,7 +123,9 @@ def _module_targets(importer: str, dots: int, module: str,
     parts = module.split(".") if module else []
     for base in bases:
         prefix = base.joinpath(*parts) if parts else base
-        candidates = [str(prefix.with_suffix(".py")), str(prefix / "__init__.py")]
+        candidates = [str(prefix / "__init__.py")]
+        if prefix.name:
+            candidates.append(str(prefix.with_suffix(".py")))
         for symbol in imported_names:
             if symbol and symbol != "*":
                 child = prefix / symbol
@@ -139,15 +137,29 @@ def _module_targets(importer: str, dots: int, module: str,
 
 
 def _is_test(name: str) -> bool:
-    return PurePosixPath(name).name.startswith("test_") and name.endswith(".py")
+    return is_test_file(name)
+
+
+_SUBJECT_NAME_PATTERNS = (
+    (re.compile(r"^test_(.+)$"), r"\1"),
+    (re.compile(r"^(.+)_(?:test|spec)(\.[^.]+)$"), r"\1\2"),
+    (re.compile(r"^(.+)\.(?:test|spec)(\.[^.]+)$"), r"\1\2"),
+    (re.compile(r"^(.+?)Tests?(\.[^.]+)$"), r"\1\2"),
+)
+
+
+def _subject_names(test_name: str) -> list[str]:
+    """Basenames a test file named `test_name` conventionally exercises."""
+    return [pattern.sub(replacement, test_name) for pattern, replacement in _SUBJECT_NAME_PATTERNS
+            if pattern.match(test_name)]
 
 
 def _test_pairs(changed_files: list[str]) -> list[tuple[str, str]]:
-    subjects = [name for name in changed_files if name.endswith(".py") and not _is_test(name)]
+    subjects = [name for name in changed_files if not _is_test(name)]
     pairs = []
     for test in (name for name in changed_files if _is_test(name)):
-        stem = PurePosixPath(test).name[5:]
-        matches = [name for name in subjects if PurePosixPath(name).name == stem]
+        stems = _subject_names(PurePosixPath(test).name)
+        matches = [name for name in subjects if PurePosixPath(name).name in stems]
         if matches:
             directory = set(PurePosixPath(test).parts[:-1]) - {"tests", "test"}
             best = max(matches, key=lambda name: (len(directory & set(PurePosixPath(name).parts[:-1])),
@@ -163,7 +175,8 @@ def _mentions(text: str, target: str, names: list[str]) -> bool:
         if folder in path.parts:
             variants.add("/".join(path.parts[path.parts.index(folder):]))
     basename = path.stem
-    if len(basename) >= 6 and ("_" in basename or "-" in basename):
+    if (len(basename) >= 6 and not basename.startswith("__")
+            and ("_" in basename or "-" in basename)):
         variants.add(basename)
     if sum(PurePosixPath(name).name == path.name for name in names) > 1:
         variants.discard(path.name)
@@ -315,8 +328,6 @@ def _boundary_question(first: str, second: str) -> str:
     if _is_test(first) or _is_test(second):
         return "Does %s exercise the changed behavior of %s, including failure cases?" % (
             first if _is_test(first) else second, second if _is_test(first) else first)
-    if {a, b} == {"report.html", "validate_triage.py"}:
-        return "Do %s and %s agree on triage export headers, delimiters, and path escaping?" % (first, second)
     if a == "__init__.py" or b == "__init__.py":
         return "Do %s and %s agree on imported names and return values across their package boundary?" % (first, second)
     if a.endswith(".md") or b.endswith(".md"):
@@ -338,23 +349,24 @@ def _questions(area: dict, risk: dict | None) -> list[str]:
         level = risk.get("level")
         note = risk.get("verbatim_md")
         if isinstance(level, str) and level.strip() and isinstance(note, str) and note.strip():
-            questions.append("For %s, does %s address %s risk: %s?" % (
-                representative, level.strip(), level.strip(), note.strip()))
+            questions.append("For %s, is the %s risk real: %s?" % (
+                representative, level.strip(), note.strip()))
         caveats = risk.get("caveats")
-        if isinstance(caveats, str):
+        if isinstance(caveats, (str, dict)):
             caveats = [caveats]
         if isinstance(caveats, list):
             for caveat in caveats:
-                if isinstance(caveat, str) and caveat.strip():
-                    questions.append("For %s, does this caveat hold: %s?" % (representative, caveat.strip()))
+                text = caveat.get("body_md") if isinstance(caveat, dict) else caveat
+                if isinstance(text, str) and text.strip():
+                    questions.append("For %s, does this caveat hold: %s?" % (representative, text.strip()))
                     break
     path = PurePosixPath(representative)
     if path.suffix == ".py":
         fallback = ["Does %s handle malformed or untrusted input without changing expected exit codes?" % representative,
-                    "Does %s preserve its JSON schema and correctly quote git paths or command arguments?" % representative]
+                    "Does %s preserve its output schema and handle paths and command arguments safely?" % representative]
     elif path.suffix == ".html":
-        fallback = ["Does %s escape untrusted report values before inserting them into HTML?" % representative,
-                    "Does %s preserve export headers and delimiters consumed by other files?" % representative]
+        fallback = ["Does %s escape untrusted values before inserting them into HTML?" % representative,
+                    "Does %s keep the fields and markup that other files depend on intact?" % representative]
     else:
         fallback = ["Are paths and command examples in %s valid for the changed files?" % representative,
                     "Does %s describe the actual inputs, outputs, and failure modes?" % representative]

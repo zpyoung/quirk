@@ -36,11 +36,11 @@ _QUICK_ACTION_RE = re.compile(r"^((?:[ \t]*>)*[ \t]*)/")
 _HTML_BLOCK_OPEN_RE = re.compile(
     r"^((?:[ \t]*>)*[ \t]*)<(?=!--|!\[CDATA\[|![A-Za-z]|\?|/?[A-Za-z])")
 _CODE_SPAN_OR_MENTION_RE = re.compile(
-    r"(?P<code>(?<!\\)(?P<ticks>`+).+?(?P=ticks))|(?P<mention>(?<!\w)@(?=[A-Za-z0-9_]))")
+    r"(?P<code>(?<![\\`])(?P<ticks>`+)(?!`).+?(?<!`)(?P=ticks)(?!`))|(?P<mention>(?<!\w)@(?=[A-Za-z0-9_]))")
 _LINE_BREAK_RE = re.compile(r"\r\n|[\r\u2028\u2029]")
 _POSTED_SLOTS = ("fix", "later", "detail")
 _DIGITS_RE = re.compile(r"[0-9]+")
-_SENTENCE_END_RE = re.compile(r"[.?!](?=\s|$)")
+_SENTENCE_END_RE = re.compile(r"(?<!\be\.g)(?<!\bi\.e)(?<!\bvs)(?<!\betc)[.?!](?=\s|$)", re.IGNORECASE)
 _SEATS = ("author", "reviewer")
 _RISK_METRICS = (("likelihood", "Likelihood"), ("impact", "Impact"),
                  ("blast_radius", "Blast radius"), ("detection", "Detection"),
@@ -193,8 +193,10 @@ def _defuse_mentions(line):
         lambda match: match.group("code") or "@\u200b", line)
 
 
-def _neutralize(text):
+def _neutralize(text, inline=False):
     """Make untrusted markdown inert inside the comment skeleton.
+
+    With `inline`, the text's first line is embedded after a prefix, so it cannot open a fence.
 
     It cannot close our `<details>` or metadata block, run a GitLab quick action as the poster,
     open a raw HTML block that hides a fence or swallows the note, leave a fence open, or notify
@@ -203,10 +205,10 @@ def _neutralize(text):
     """
     out = []
     fence = None
-    for line in _LINE_BREAK_RE.sub("\n", str(text)).split("\n"):
+    for index, line in enumerate(_LINE_BREAK_RE.sub("\n", str(text)).split("\n")):
         line = _DETAILS_TAG_RE.sub(r"&lt;\1details", line)
         if fence is None:
-            opened = _FENCE_OPEN_RE.match(line)
+            opened = None if inline and index == 0 else _FENCE_OPEN_RE.match(line)
             if opened and not (opened.group(1)[0] == "`" and "`" in line[opened.end():]):
                 fence = opened.group(1)
                 out.append(line)
@@ -253,11 +255,16 @@ def path_pairs(diff_text):
     return pairs
 
 
-def _md(value):
-    return _neutralize(str(value).strip())
+def _md(value, inline=False):
+    return _neutralize(str(value).strip(), inline)
 
 
 def _line(value):
+    return _neutralize(" ".join(str(value).split()), inline=True)
+
+
+def _paragraph(value):
+    """A collapsed one-line `value` as its own paragraph, so a leading fence is balanced."""
     return _neutralize(" ".join(str(value).split()))
 
 
@@ -341,6 +348,8 @@ def _details_parts(finding, why, reviewer_note):
     assumptions = finding.get("assumptions")
     if isinstance(assumptions, str):
         assumptions = [assumptions]
+    if assumptions is not None and not isinstance(assumptions, (list, tuple)):
+        raise ValueError("finding assumptions must be a list of strings")
     assumptions = [" ".join(str(item).split()) for item in (assumptions or []) if str(item).strip()]
     if not (body or aside or evidence or assumptions or reviewer_note):
         return []
@@ -395,9 +404,9 @@ def finding_body(finding, *, seat, lead, note="", head_sha=None):
     elif lead == "Question":
         parts.append(QUESTION_SENTENCE)
     if _text(note):
-        parts.append("> **Reviewer note:** " + _quote(_md(note))[2:])
+        parts.append("> **Reviewer note:** " + _quote(_md(note, inline=True))[2:])
     if why:
-        parts.append(_line(why))
+        parts.append(_paragraph(why))
     if fix:
         parts.append("**Fix:** %s" % _line(fix))
     parts.extend(_details_parts(finding, why, None))
@@ -417,7 +426,7 @@ def support_body(finding, *, disposition, discussion_id, note_id, note="", head_
         {"supports_discussion": str(discussion_id), "supports_note": note_id})
     parts = ["**Agree · %s** · quirk full-code-review found this independently" % disposition]
     if why:
-        parts.append(_line(why))
+        parts.append(_paragraph(why))
     if fix:
         parts.append("**Fix:** %s" % _line(fix))
     parts.extend(_details_parts(finding, why, _text(note)))
@@ -466,7 +475,7 @@ def _clean_section(notes):
         if isinstance(item, dict):
             if _text(item.get("note_md")):
                 parts.append("**%s:** %s" % (_line(item.get("dimension") or "Review"),
-                                             _md(item["note_md"])))
+                                             _md(item["note_md"], inline=True)))
         elif _text(item):
             parts.append(_md(item))
     return "**Clean dimensions**\n\n" + "\n\n".join(parts) if parts else None
@@ -519,7 +528,7 @@ def _unplaced_section(omitted, by_id):
         title = _title_of(item, by_id, "id") or str(item.get("id") or "finding")
         row = "- **%s:** %s" % (_line(item.get("disposition") or "Finding"), _line(title))
         if found.get("file"):
-            row += " (`%s:%s`)" % (_line(found["file"]), _line(found.get("line", "")))
+            row += " (`%s`)" % _line(("%s:%s" % (found["file"], found.get("line", ""))).replace("`", ""))
         if _text(found.get("impact")):
             row += " — %s" % _line(found["impact"])
         rows.append(row)
@@ -722,6 +731,7 @@ def _author_bodies(raw, decisions=None):
         report_sha256=_report_digest(raw))
     warnings.extend(overview_warnings)
     return {"findings": bodies, "overview": overview, "warnings": warnings,
+            "overview_plan": {"posted": posted, "omitted": omitted},
             "report_sha256": _report_digest(raw)}
 
 

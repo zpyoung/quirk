@@ -1,12 +1,19 @@
 import contextlib
 import io
 import json
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
 
 import borrow_review_source as m
+
+
+@pytest.fixture(autouse=True)
+def _owned_temp_root(tmp_path_factory, monkeypatch):
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path_factory.mktemp("tempdir")))
 
 
 def run(*args, cwd=None):
@@ -286,3 +293,23 @@ def test_release_names_a_review_ref_it_could_not_delete(tmp_path, monkeypatch):
     rc, result = invoke(["release", "--manifest", str(out)])
     assert rc == 0 and result["released"] is True
     assert manifest["review_ref"] in result["ref_left"] and "cannot lock ref" in result["ref_left"]
+
+
+def test_release_leaves_unrelated_prunable_worktrees_registered(tmp_path):
+    local, out, manifest = acquired(tmp_path)
+    unrelated = tmp_path / "unmounted"
+    run("git", "worktree", "add", "--detach", str(unrelated), "HEAD", cwd=local)
+    shutil.rmtree(unrelated)
+    rc, _ = invoke(["release", "--manifest", str(out)])
+    listing = run("git", "worktree", "list", "--porcelain", cwd=local).stdout
+    assert rc == 0
+    assert str(unrelated.resolve()) in listing or str(unrelated) in listing
+    assert manifest["path"] not in listing
+
+
+def test_release_forgets_the_borrowed_worktree_record_after_its_directory_vanished(tmp_path):
+    local, out, manifest = acquired(tmp_path)
+    shutil.rmtree(manifest["path"])
+    rc, result = invoke(["release", "--manifest", str(out)])
+    assert rc == 0 and result["released"] is True
+    assert manifest["path"] not in run("git", "worktree", "list", "--porcelain", cwd=local).stdout

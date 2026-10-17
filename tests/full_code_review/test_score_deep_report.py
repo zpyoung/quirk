@@ -70,19 +70,17 @@ def test_answer_key_covers_every_candidate_once_with_unique_defect_ids():
     assert type(key["target"]["number"]) is int
     assert len(key["target"]["head_sha"]) in (7, 40)
     assert len({item["id"] for item in key["defects"]}) == len(key["defects"])
-    assert all(item["severity"] == "Should fix" and item["anchors"] and item["keywords"]
+    assert all(item["severity"] in ("Must fix", "Should fix") and item["anchors"] and item["keywords"]
                and item["source_ids"] for item in key["defects"])
     assert all(all(anchor["line_min"] <= anchor["line_max"] for anchor in item["anchors"])
                for item in key["defects"])
     assert all(set(("source_id", "file", "line", "disposition", "reason")) <= set(item)
                for item in key["examined_non_defects"])
-    expected = {"B%d" % i for i in range(1, 62)} | {"F%d" % i for i in range(1, 7)}
-    covered = [source for defect in key["defects"] for source in defect["source_ids"]
-               if source in expected]
-    covered += [item["source_id"] for item in key["examined_non_defects"]
-                if item["source_id"] in expected]
-    assert set(covered) == expected
-    assert len(covered) == len(expected)
+    expected = ({"B%d" % i for i in range(1, 62)} | {"F%d" % i for i in range(1, 9)} | {"F20"})
+    covered = [source for defect in key["defects"] for source in defect["source_ids"]]
+    covered += [item["source_id"] for item in key["examined_non_defects"]]
+    assert expected <= set(covered)
+    assert len(covered) == len(set(covered))
 
 
 @pytest.mark.parametrize("fragment", ["title", "issue", "body_md", "impact", "fix_md",
@@ -185,6 +183,19 @@ def test_cli_passes_with_refuted_share_exactly_on_threshold(tmp_path):
     assert score["passed"] is True
 
 
+@pytest.mark.parametrize("refuted_ids", [("F1",), ("F1", "F2")])
+def test_cli_fails_when_refuted_share_is_above_threshold(tmp_path, refuted_ids):
+    findings = [_finding(line=str(25 + offset), id="F%d" % (offset + 1))
+                for offset in range(5 if len(refuted_ids) == 2 else 4)]
+    check = {finding["id"]: "confirmed" for finding in findings}
+    check.update({identifier: "refuted" for identifier in refuted_ids})
+    code, score = _score_cli(tmp_path, _report(findings), _key(_defect()), check=check)
+    assert code == 1
+    assert score["refuted_share"] > 0.2
+    assert score["recall"] == 1.0
+    assert score["passed"] is False
+
+
 @pytest.mark.parametrize("args", [
     [],
     ["--report", "report.json", "--answer-key", "key.json", "--budget-minutes", "not-a-number"],
@@ -193,6 +204,18 @@ def test_invalid_cli_arguments_return_json_error(args):
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         code = scorer.main(args)
+    assert code == 2
+    assert isinstance(json.loads(output.getvalue())["error"], str)
+
+
+def test_deeply_nested_report_returns_json_error(tmp_path):
+    report_path = tmp_path / "report.json"
+    key_path = tmp_path / "key.json"
+    report_path.write_text("[" * 100000, encoding="utf-8")
+    key_path.write_text(json.dumps(_key(_defect())), encoding="utf-8")
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        code = scorer.main(["--report", str(report_path), "--answer-key", str(key_path)])
     assert code == 2
     assert isinstance(json.loads(output.getvalue())["error"], str)
 
@@ -305,6 +328,21 @@ def test_partial_or_disabled_run_cannot_pass(location, field, value):
     assert score["complete_deep_run"] is score["passed"] is False
 
 
+def test_empty_area_map_is_not_a_complete_deep_run():
+    report = _report()
+    report["run"]["deep"]["areas"] = []
+    score = scorer.score_report(report, _key(_defect()), {"F1": "confirmed"})
+    assert score["complete_deep_run"] is score["passed"] is False
+
+
+def test_read_only_degraded_area_counts_as_complete():
+    report = _report()
+    report["run"]["deep"]["areas"] = [
+        {"id": "A1", "status": "read_only_degraded", "degraded_reason": "sandbox unavailable"}]
+    score = scorer.score_report(report, _key(_defect()), {"F1": "confirmed"})
+    assert score["complete_deep_run"] is score["passed"] is True
+
+
 def test_absent_completeness_flag_cannot_pass():
     report = _report()
     del report["run"]["incomplete"]
@@ -388,6 +426,8 @@ def test_authored_ids_are_not_spot_check_aliases():
     lambda report, key: report["run"]["deep"].update(checker_failures={"C1": None}),
     lambda report, key: report["run"]["deep"].update(checker_failures={"C1": ""}),
     lambda report, key: report["run"]["deep"].update(checker_failures={"": "timeout"}),
+    lambda report, key: report["run"]["deep"].update(areas=[{"id": "A1"}, {"id": "A1"}]),
+    lambda report, key: report["run"]["deep"].update(cutoff_reached="no"),
 ])
 def test_malformed_scoring_shapes_are_rejected(mutate):
     report, key = _report(), _key(_defect())
