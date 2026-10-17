@@ -790,21 +790,29 @@ def _untracked_diff(path, cwd):
         return None
 
 
-def git_diff_local(context_lines, cwd=".", metadata=None, excluded_path=None):
+def git_diff_local(context_lines, cwd=".", metadata=None, excluded_path=None, since=None):
     """Return staged, unstaged, and untracked diffs, or None on failure.
 
     Paths are repository-root relative whatever `cwd` is inside the work tree. Untracked
     directories (nested git repos) have no diff and are reported on
     `metadata["diff_unavailable"]` instead of `changed_files`; an untracked file git cannot
-    diff is reported there too while the remaining files are still reviewed. On failure
-    `metadata["error"]` names the failing git step with a stderr snippet.
+    diff is reported there too while the remaining files are still reviewed. With `since`
+    (a resolved commit), the staged and unstaged diffs become one diff of the work tree
+    against that commit; `refs` still point at HEAD. On failure `metadata["error"]` names
+    the failing git step with a stderr snippet.
     """
     try:
         diff_cmd = _git_diff_command(cwd) + ["--find-renames=50%"]
-        unstaged = _run(diff_cmd + ["-U%d" % context_lines], timeout=60)
-        staged = _run(diff_cmd + ["--staged", "-U%d" % context_lines], timeout=60)
-        unstaged_names = _run(diff_cmd + ["--name-only", "-z"], timeout=60)
-        staged_names = _run(diff_cmd + ["--staged", "--name-only", "-z"], timeout=60)
+        if since:
+            unstaged = _run(diff_cmd + ["-U%d" % context_lines, since], timeout=60)
+            staged = subprocess.CompletedProcess([], 0, "", "")
+            unstaged_names = _run(diff_cmd + ["--name-only", "-z", since], timeout=60)
+            staged_names = subprocess.CompletedProcess([], 0, "", "")
+        else:
+            unstaged = _run(diff_cmd + ["-U%d" % context_lines], timeout=60)
+            staged = _run(diff_cmd + ["--staged", "-U%d" % context_lines], timeout=60)
+            unstaged_names = _run(diff_cmd + ["--name-only", "-z"], timeout=60)
+            staged_names = _run(diff_cmd + ["--staged", "--name-only", "-z"], timeout=60)
         for step, result in (("git diff", unstaged), ("git diff --staged", staged),
                              ("git diff --name-only", unstaged_names),
                              ("git diff --staged --name-only", staged_names)):
@@ -855,6 +863,81 @@ def git_diff_local(context_lines, cwd=".", metadata=None, excluded_path=None):
     return diff_text
 
 
+def _is_ancestor(ancestor, descendant, cwd, metadata, refetch=()):
+    """Return True/False for `git merge-base --is-ancestor`, or None when git itself fails.
+
+    A failure other than "not an ancestor" is retried once after fetching each commit in
+    `refetch` from origin, since forge-reported shas may not be local yet.
+    """
+    cmd = ["git", "-C", cwd, "merge-base", "--is-ancestor", ancestor, descendant]
+    step = "git merge-base --is-ancestor of %s and %s" % (ancestor[:12], descendant[:12])
+    try:
+        result = _run(cmd, timeout=30)
+        if result.returncode not in (0, 1) and refetch:
+            for sha in refetch:
+                _run(["git", "-C", cwd, "fetch", "origin", sha], timeout=120)
+            result = _run(cmd, timeout=30)
+    except Exception as exc:
+        return _git_failed(metadata, step, exc)
+    if result.returncode in (0, 1):
+        return result.returncode == 0
+    return _git_failed(metadata, step, result)
+
+
+def resolve_since(ref, mode, refs, cwd=".", metadata=None):
+    """Resolve and validate a delta-review `--since` ref, returning the `since` record or None.
+
+    The ref must name a commit that is an ancestor of `refs["head"]` and, outside local
+    mode, a descendant of `refs["base"]`, so the delta cannot include target-branch history.
+    Outside local mode a ref equal to head is refused because nothing would be reviewed.
+    The record is `{"ref", "sha", "merge_commits"}`. On failure `metadata["error"]` says why,
+    advising a full review when the ref cannot bound a delta.
+    """
+    advice = "run without --since for a full review"
+    head, base = refs.get("head"), refs.get("base")
+    try:
+        resolved = _run(["git", "-C", cwd, "rev-parse", "--verify", "%s^{commit}" % ref],
+                        timeout=30)
+    except Exception as exc:
+        return _git_failed(metadata, "git rev-parse of --since ref %r" % ref, exc)
+    sha = resolved.stdout.strip()
+    if resolved.returncode != 0 or not sha:
+        return _git_failed(metadata, "git rev-parse of --since ref %r" % ref, resolved)
+    if not head:
+        metadata["error"] = "--since %s has no review head to compare against; %s" % (ref, advice)
+        return None
+    on_head = _is_ancestor(sha, head, cwd, metadata, refetch=(head,))
+    if on_head is None:
+        return None
+    if not on_head:
+        metadata["error"] = "--since %s is not an ancestor of the review head; %s" % (ref, advice)
+        return None
+    if mode != "local":
+        after_base = _is_ancestor(base, sha, cwd, metadata, refetch=(base,))
+        if after_base is None:
+            return None
+        if not after_base:
+            metadata["error"] = ("--since %s is older than the merge base of the change; %s"
+                                 % (ref, advice))
+            return None
+        if sha == head:
+            metadata["error"] = ("--since %s is the review head, so there is nothing to review; %s"
+                                 % (ref, advice))
+            return None
+    try:
+        merges = _run(["git", "-C", cwd, "rev-list", "--merges", "%s..%s" % (sha, head)],
+                      timeout=30)
+    except Exception as exc:
+        return _git_failed(metadata, "git rev-list --merges", exc)
+    if merges.returncode != 0:
+        return _git_failed(metadata, "git rev-list --merges", merges)
+    count = len([line for line in merges.stdout.splitlines() if line.strip()])
+    if count:
+        print("warning: %d merge commit(s) between --since %s and the review head; they can "
+              "bring target-branch changes into the delta" % (count, ref), file=sys.stderr)
+    return {"ref": ref, "sha": sha, "merge_commits": count}
+
+
 def _fail(out, mode, message, paths=None, seat=None):
     try:
         os.unlink(out)
@@ -883,6 +966,7 @@ def main(argv=None):
     ap.add_argument("-R", "--project")
     ap.add_argument("--context-lines", type=int, default=3)
     ap.add_argument("--max-chars", type=int, default=DEFAULT_MAX_CHARS)
+    ap.add_argument("--since", metavar="REF")
     ap.add_argument("--cwd", default=".")
     ap.add_argument("--out", required=True)
     args = ap.parse_args(argv)
@@ -1029,6 +1113,41 @@ def main(argv=None):
         if details.get("target_branch"):
             target = details["target_branch"]
 
+    since = None
+    if args.since:
+        # after the identity check so refs.base/start are validated against the forge for the full change
+        since_error = {}
+        since = resolve_since(args.since, mode, refs, args.cwd, since_error)
+        if since is None:
+            return _fail(args.out, mode, since_error.get("error", "--since could not be resolved"))
+        if mode == "local":
+            delta_metadata = {}
+            diff_text = git_diff_local(args.context_lines, args.cwd, delta_metadata,
+                                       excluded_path=os.path.realpath(args.out),
+                                       since=since["sha"])
+            if diff_text is None:
+                return _fail(args.out, mode, "local git diff failed: %s"
+                             % delta_metadata.get("error", "unknown"))
+            if since["sha"] == refs["head"] and not diff_text:
+                return _fail(args.out, mode, "--since %s is HEAD and the work tree is clean, so "
+                             "there is nothing to review; run without --since for a full review"
+                             % args.since)
+            local_metadata = delta_metadata
+        else:
+            delta_metadata = {}
+            diff_text = _git_diff_range(since["sha"], refs["head"], args.cwd,
+                                        args.context_lines, delta_metadata)
+            delta_files = (_git_changed_files_range(since["sha"], refs["head"], args.cwd,
+                                                    delta_metadata)
+                           if diff_text is not None else None)
+            if delta_files is None:
+                return _fail(args.out, mode, "delta git diff failed: %s"
+                             % delta_metadata.get("error", "unknown"))
+            for key in ("diff_unavailable", "diff_unavailable_cause", "not_text_reviewable",
+                        "unanchorable_files", "file_list_recovery"):
+                forge_metadata.pop(key, None)
+            forge_metadata["changed_files"] = delta_files
+
     if "changed_files" in forge_metadata:
         files = forge_metadata["changed_files"]
     elif "changed_files" in local_metadata:
@@ -1077,6 +1196,8 @@ def main(argv=None):
     }
     if batched:
         context["batches"] = batches
+    if since:
+        context["since"] = since
     write_json(args.out, context)
 
     meta = {
@@ -1095,6 +1216,8 @@ def main(argv=None):
         "num_batches": len(batches) if batched else (1 if diff_text else 0),
         "out": os.path.abspath(args.out),
     }
+    if since:
+        meta["since"] = since
     if fallback_reason:
         meta["fallback_reason"] = fallback_reason
     print(json.dumps(meta, indent=2))

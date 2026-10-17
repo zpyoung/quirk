@@ -352,6 +352,15 @@ def fetch_discussions(host: str, project: str, number: Any, api: Callable | None
     return adapter.list_threads(int(number), api_call=api or (_default_api if forge == "gitlab" else None))
 
 
+DELTA_REFUSAL = "delta review (--since) is report-only; review memory is only used for full reviews"
+
+
+def _refuse_delta_context(context: Any) -> None:
+    """Raise ValueError when `context` belongs to a delta review (it carries a `since` key)."""
+    if isinstance(context, dict) and "since" in context:
+        raise ValueError(DELTA_REFUSAL)
+
+
 def load_snapshot(context: dict, repo: str = ".", dimensions=(), guidance=(), fresh: bool = False) -> dict:
     """Load the prior ledger for this review target and start a new run generation.
 
@@ -359,7 +368,9 @@ def load_snapshot(context: dict, repo: str = ".", dimensions=(), guidance=(), fr
     dimensions and guidance are unchanged, or never when `fresh` is set; otherwise the
     snapshot records why they were discarded. Live discussions are fetched for change
     requests. An unreadable ledger or failed fetch becomes a warning rather than an error.
+    Raises ValueError for a delta-review context, which never reads or writes memory.
     """
+    _refuse_delta_context(context)
     identity, warnings = _target_identity(context, repo)
     key = _target_key(identity)
     directory = _state_dir()
@@ -711,9 +722,11 @@ def reconcile(report: dict, context: dict, snapshot: dict, repo: str = ".") -> d
     Matches findings to the snapshot's prior decisions and live threads by diff-anchor
     fingerprint, and lists previously posted findings that no longer appear. `repo` must be
     the reviewed repository so branch and local identities resolve against it. Raises
-    ValueError when the snapshot or report does not bind to `context`, or when a
-    finding's `anchor_side` is not "new" or "old". Does not modify its inputs.
+    ValueError when the snapshot or report does not bind to `context`, when a
+    finding's `anchor_side` is not "new" or "old", or when `context` is a delta review.
+    Does not modify its inputs.
     """
+    _refuse_delta_context(context)
     validate_snapshot(snapshot, context, repo)
     _validate_report_binding(report, snapshot)
     enriched = copy.deepcopy(report)
@@ -854,9 +867,13 @@ def commit_report(report: dict, decisions: dict | None = None, receipts: dict | 
     `decisions` must be bound to this exact report and seat; `receipts` may stand alone and
     only record confirmed publications. Returns `{"saved": bool, "warnings": [...]}`:
     `saved` is False, not an exception, when the report carries no memory snapshot, a newer
-    run already wrote the ledger, the existing ledger is unreadable, or the write fails.
+    run already wrote the ledger, the existing ledger is unreadable, the write fails, or the
+    report comes from a delta review (its `run` has a `since` key).
     Raises ValueError for malformed or mismatched decisions, receipts and snapshots.
     """
+    run = report.get("run") if isinstance(report, dict) else None
+    if isinstance(run, dict) and "since" in run:
+        return {"saved": False, "warnings": [DELTA_REFUSAL + "; nothing saved"]}
     memory = report.get("memory") if isinstance(report, dict) else None
     if not isinstance(memory, dict) or not isinstance(memory.get("snapshot"), dict):
         return {"saved": False, "warnings": ["report has no memory snapshot; nothing saved"]}
@@ -957,7 +974,11 @@ def _load_json(path: str, label: str = "JSON input") -> dict:
 
 
 def check_plan(report: dict, context: dict, snapshot: dict, repo: str = ".") -> dict:
-    """Build the author-delivery suppression plan without changing any input."""
+    """Build the author-delivery suppression plan without changing any input.
+
+    Raises ValueError for a delta-review context.
+    """
+    _refuse_delta_context(context)
     identity_warnings = validate_snapshot(snapshot, context, repo)
     refreshed = copy.deepcopy(snapshot)
     change_ctx = context.get("change") if isinstance(context.get("change"), dict) else {}

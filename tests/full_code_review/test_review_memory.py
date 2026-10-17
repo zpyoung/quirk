@@ -1256,3 +1256,68 @@ def test_a_reworded_finding_on_a_repeated_anchor_does_not_inherit_the_prior_rece
     [stored] = [row for row in load(ctx)["findings"] if row["fingerprint"] == fp]
     assert stored["title"] == "Race in cache eviction"
     assert "receipt" not in stored and stored["disposition"] == "later"
+
+
+DELTA_SINCE = {"ref": "abc", "sha": "d" * 40, "merge_commits": 0}
+
+
+def delta_context():
+    return dict(context(), since=DELTA_SINCE)
+
+
+def delta_report():
+    value = report()
+    value["run"]["since"] = DELTA_SINCE
+    return value
+
+
+def test_load_snapshot_refuses_a_delta_context():
+    with pytest.raises(ValueError, match=r"delta review \(--since\) is report-only"):
+        m.load_snapshot(delta_context(), dimensions=[DIMENSION])
+
+
+def test_reconcile_refuses_a_delta_context():
+    snapshot = load()
+    with pytest.raises(ValueError, match=r"delta review \(--since\) is report-only"):
+        m.reconcile(report(), delta_context(), snapshot)
+
+
+def test_check_plan_refuses_a_delta_context():
+    snapshot = load()
+    with pytest.raises(ValueError, match=r"delta review \(--since\) is report-only"):
+        m.check_plan(report(), delta_context(), snapshot)
+
+
+def test_commit_report_refuses_a_delta_report_and_writes_nothing(tmp_path):
+    value = enriched()
+    value["run"]["since"] = DELTA_SINCE
+    result = m.commit_report(value, decisions(value))
+    assert result["saved"] is False
+    assert "delta review (--since) is report-only" in result["warnings"][0]
+    assert not (tmp_path / "state").exists() or not list((tmp_path / "state").rglob("*.json"))
+
+
+def test_cli_load_reports_a_delta_context_as_an_error(tmp_path, capsys):
+    path = tmp_path / "ctx.json"
+    path.write_text(json.dumps(delta_context()))
+    assert m.main(["load", "--context", str(path), "--out", str(tmp_path / "snap.json")]) == 2
+    assert "delta review (--since) is report-only" in json.loads(capsys.readouterr().err)["error"]
+
+
+def test_cli_save_refuses_a_delta_report_with_saved_false(tmp_path, capsys):
+    value = enriched()
+    value["run"]["since"] = DELTA_SINCE
+    report_path, decisions_path = tmp_path / "report.json", tmp_path / "decisions.json"
+    report_path.write_text(json.dumps(value))
+    decisions_path.write_text(json.dumps(decisions(value)))
+    rc = m.main(["save", "--report", str(report_path), "--decisions", str(decisions_path)])
+    result = json.loads(capsys.readouterr().out)
+    assert rc == 1 and result["saved"] is False
+    assert "delta review (--since) is report-only" in result["warnings"][0]
+
+
+def test_full_review_context_and_report_are_unaffected_by_the_delta_guards():
+    snapshot = load()
+    assert m.reconcile(report(), context(), snapshot)["findings"]
+    value = enriched(snapshot)
+    assert m.commit_report(value, decisions(value))["saved"]

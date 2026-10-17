@@ -81,7 +81,12 @@ def _thread_api(ctx):
     return _late_github_api if ctx.get("forge", "gitlab") == "github" else _api
 
 
+DELTA_REFUSAL = "delta review (--since) is report-only; it cannot be staged on the forge"
+
+
 def _context(value):
+    if "since" in value:
+        raise ReviewError(DELTA_REFUSAL)
     if value.get("seat") != "reviewer":
         raise ReviewError("reviewer delivery requires a detected reviewer seat")
     change = value.get("change")
@@ -176,6 +181,9 @@ def _prepare_memory_report(raw_report, context, ctx):
 
 
 def _trusted_inputs(report, decisions, context):
+    run = report.get("run") if isinstance(report, dict) else None
+    if isinstance(run, dict) and "since" in run:
+        raise ReviewError(DELTA_REFUSAL)
     prepared, warnings = render_report._prepare_report(report)
     meta = prepared["meta"]
     if meta.get("seat") != "reviewer" or meta.get("target") != "change":
