@@ -1,6 +1,6 @@
 # Tech spec: `q-sequence`, an interactive sequence diagram element
 
-**Status**: Reviewed (tech-spec reviewer, fixes applied) · Logic spec: [logic.md](logic.md) · Builds on [the q-flow tech spec](/docs/quirk/specs/2026-10-16-q-flow/tech.md) and [the q-flow traces tech spec](/docs/quirk/specs/2026-10-17-q-flow-traces/tech.md)
+**Status**: Reviewed (tech-spec reviewer; two checkpoint rounds, one final round and a closure check, findings fixed or logged as BUG-25 to BUG-27) · Logic spec: [logic.md](logic.md) · Builds on [the q-flow tech spec](/docs/quirk/specs/2026-10-16-q-flow/tech.md) and [the q-flow traces tech spec](/docs/quirk/specs/2026-10-17-q-flow-traces/tech.md)
 
 All paths are relative to the repository root. `S` = `skills/writing-html-artifacts`, `K` = `skills/writing-html-artifacts/vendor/kit/1.0.0`, `H` = `skills/writing-html-artifacts/scripts/htmlkit`. Line numbers are from commit `c4e34ff`, before the rebase onto q-schema; task prompts carry re-resolved anchors.
 

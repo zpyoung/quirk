@@ -211,3 +211,24 @@ entries' IDs; manual edits to fix typos are fine.
 - **Proposed fix**: Compare the parts separately, or encode them unambiguously.
 - **Blocker for**: live edits of a q-schema whose summary or data contains NUL
 
+## BUG-25: q-flow and q-schema pass the kit check with JSON their browser elements reject
+- **Observed**: 2026-10-17
+- **File**: skills/writing-html-artifacts/scripts/htmlkit/kitcheck.py:1197
+- **Description**: The Python kit check accepts two payloads the browser elements reject. One is NaN or Infinity anywhere in the data, which json.loads accepts and JSON.parse does not. The other is a JSON script child whose type has surrounding whitespace or other case: Python strips and lowercases it, while QFlow and QSchema select script[type="application/json"] exactly (kit.js:3790, :3821 and the QSchema equivalents). The build passes and injects a no-JS list, while the element shows the fail-hard notice. Reproduced for q-flow with "extra": NaN and with type=" Application/JSON ". q-sequence fixed both on its own path: strict_constants in _json_child, and QSequence._jsonScript. Found 2026-10-17 in the q-sequence final review.
+- **Severity**: low
+- **Proposed fix**: Pass strict_constants=True from the q-flow and q-schema callers of _json_child, and select the JSON child by trimmed, lowercased type in QFlow and QSchema, as q-sequence does.
+
+## BUG-26: q-sequence phone pinned-header test can race the page's smooth scroll
+- **Observed**: 2026-10-17
+- **File**: tests/test_html_kit_elements.py:9413
+- **Description**: test_seq_phone_scrolls_sideways_at_full_size_with_headers_pinned_and_in_step failed once during the q-sequence build and passed on every run after it, including four full-file runs. The report template sets scroll-behavior: smooth on html, so a page scroll the test starts can still be animating when the test reads the pinned strip's position. Found 2026-10-17 by the q-sequence trace-mode implementer.
+- **Severity**: low
+- **Proposed fix**: Scroll with behavior 'instant' in the test (or set scroll-behavior: auto on the test page), and wait for the stuck attribute before measuring.
+
+## BUG-27: A q-sequence payload with NaN and markup text in a string reports the detail rule
+- **Observed**: 2026-10-17
+- **File**: skills/writing-html-artifacts/scripts/htmlkit/kitcheck.py:1223
+- **Description**: _json_child's parse-failure branch searches the whole raw payload for forbidden markup before choosing its message. A q-sequence payload that holds NaN (rejected by strict_constants) and also a string such as "<img" elsewhere therefore fails with '<q-sequence> detail may hold only paragraphs, lists, code and links' instead of the JSON-child message. The page still fails the check, so only the diagnostic is wrong. Found 2026-10-17 by the q-sequence closure review (CL1).
+- **Severity**: low
+- **Proposed fix**: Raise a distinct error from the constant hook and report the JSON-child message for it before the forbidden-markup search.
+
