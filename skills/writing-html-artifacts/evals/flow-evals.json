@@ -80,6 +80,36 @@
       "id": 16,
       "prompt": "Include a class diagram of the parser interfaces in our HTML technical overview.",
       "expected": "mermaid"
+    },
+    {
+      "id": 17,
+      "prompt": "Build an HTML page that walks support agents through our refund approval as a flowchart: a decision for amounts over $500, a retry if the bank rejects the payout, and each branch clickable for the policy notes.",
+      "expected": "q-flow"
+    },
+    {
+      "id": 18,
+      "prompt": "Make a single-file HTML explainer of our webhook delivery flowchart where a failed delivery loops back through exponential backoff, and the 'escalate to a human' step opens its own separate flowchart.",
+      "expected": "q-flow"
+    },
+    {
+      "id": 19,
+      "prompt": "Add a flowchart to this HTML onboarding guide that asks 'Is the account verified?' and 'Is the plan paid?', with labelled yes and no exits, and a node for the KYC sub-process that readers can open.",
+      "expected": "q-flow"
+    },
+    {
+      "id": 20,
+      "prompt": "Add a flowchart of the retry-then-give-up logic to the README for the payments package.",
+      "expected": "mermaid"
+    },
+    {
+      "id": 21,
+      "prompt": "Draw the deploy approval process as a flowchart with yes/no decisions inside this Markdown design doc.",
+      "expected": "mermaid"
+    },
+    {
+      "id": 22,
+      "prompt": "Put a flowchart with a decision and a retry loop for the nightly import job in our docs/runbook.md.",
+      "expected": "mermaid"
     }
   ]
 }

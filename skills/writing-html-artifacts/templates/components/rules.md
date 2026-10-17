@@ -23,7 +23,7 @@ Read after the [design reference](../../references/design-reference.md). These r
 
 ## Charts and tables
 
-- Bar, line and area charts use `<q-chart>`, sortable tables use `<q-table>`, and explorable service or data-flow graphs use `<q-flow>` (reusing `kinds` names and chart colors across artifacts; keep Mermaid for static pictures, sequence diagrams and state charts). Attributes and examples are in [components](../../references/components.md).
+- Bar, line and area charts use `<q-chart>`, sortable tables use `<q-table>`, and every flowchart and explorable service or data-flow graph uses `<q-flow>`, including decisions (`shape: "decision"`), retries (`loop: true`) and steps that are their own process (`shape: "subprocess"`, optional `flow`); reuse `kinds` names and chart colors across artifacts, and keep Mermaid for state charts and sequence and ER diagrams. Attributes and examples are in [components](../../references/components.md).
 - Scatter and histogram charts stay hand-written Chart.js, under section 9 of the design reference. The theme toggle also sets the `wa-dark` class on `<html>`, so components and charts switch together.
 
 ## Scripts and data
