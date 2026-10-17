@@ -536,6 +536,10 @@ class _Index:
     def first(self, node: _Node, key: str, skip: Optional[str] = None) -> Optional[_Node]:
         return next(self.within(node, key, skip), None)
 
+    def nodes_of(self, key: str) -> list[_Node]:
+        """Every element indexed under ``key`` in document order; the empty list when there is none."""
+        return list(self._nodes.get(key, ()))
+
     def diff_files(self, pre: _Node) -> dict[str, set[int]]:
         """``parse_diff`` of a ``pre``, computed once however many elements read it."""
         files = self._diffs.get(id(pre))
@@ -868,6 +872,8 @@ _FLOW_MAX_KINDS = 8
 _FLOW_WARN_NODES = 60
 _FLOW_MAX_NODES = 200
 _FLOW_WARN_EDGE_LABEL = 30
+_FLOW_WARN_DECISION_LABEL = 24
+_FLOW_SHAPES = ("box", "decision", "subprocess")
 _FLOW_COORD_KEYS = frozenset({"x", "y", "position", "positions"})
 _FLOW_DETAIL_TAGS = frozenset(
     "p ul ol li code pre a em strong b i br span kbd samp sub sup dl dt dd".split()
@@ -931,8 +937,67 @@ def _check_and_sanitize_flow_detail(detail: str) -> Optional[str]:
     return render_clean(builder.root)
 
 
+def _flow_forward_cycles(node_ids: list[str], edges: list[dict[str, Any]]) -> list[list[str]]:
+    """Strongly connected components of 2+ nodes over the forward edges.
+
+    Nodes in each component follow ``node_ids`` order, and components are ordered by their first node.
+    """
+    successors: dict[str, list[str]] = {nid: [] for nid in node_ids}
+    for e in edges:
+        if not e["loop"]:
+            successors[e["from"]].append(e["to"])
+    position = {nid: i for i, nid in enumerate(node_ids)}
+    number: dict[str, int] = {}
+    lowlink: dict[str, int] = {}
+    on_stack: set[str] = set()
+    stack: list[str] = []
+    components: list[list[str]] = []
+    for root in node_ids:
+        if root in number:
+            continue
+        number[root] = lowlink[root] = len(number)
+        stack.append(root)
+        on_stack.add(root)
+        work = [(root, iter(successors[root]))]
+        while work:
+            current, targets = work[-1]
+            advanced = False
+            for target in targets:
+                if target not in number:
+                    number[target] = lowlink[target] = len(number)
+                    stack.append(target)
+                    on_stack.add(target)
+                    work.append((target, iter(successors[target])))
+                    advanced = True
+                    break
+                if target in on_stack:
+                    lowlink[current] = min(lowlink[current], number[target])
+            if advanced:
+                continue
+            work.pop()
+            if work:
+                parent = work[-1][0]
+                lowlink[parent] = min(lowlink[parent], lowlink[current])
+            if lowlink[current] == number[current]:
+                members: list[str] = []
+                while True:
+                    member = stack.pop()
+                    on_stack.discard(member)
+                    members.append(member)
+                    if member == current:
+                        break
+                if len(members) > 1:
+                    components.append(sorted(members, key=position.__getitem__))
+    components.sort(key=lambda c: position[c[0]])
+    return components
+
+
 def _validate_flow_node(
-    node: _Node, report_fail: Report, report_warn: Report
+    node: _Node,
+    report_fail: Report,
+    report_warn: Report,
+    *,
+    page_flow_ids: Optional[frozenset[str]] = None,
 ) -> Optional[dict[str, Any]]:
     scripts = [c for c in node.children if c.tag == "script"]
     if not scripts:
@@ -1085,12 +1150,25 @@ def _validate_flow_node(
                 clean_detail = _check_and_sanitize_flow_detail(ndetail)
                 if clean_detail is None:
                     fail(node.line, f'<q-flow> node "{nid}" detail may hold only paragraphs, lists, code and links')
+        nshape = n.get("shape")
+        if nshape is not None and nshape not in _FLOW_SHAPES:
+            fail(node.line, f'<q-flow> node "{nid}" has unknown shape "{nshape}"; use box, decision or subprocess')
+        nflow = n.get("flow")
+        if nflow is not None:
+            if nshape != "subprocess":
+                fail(node.line, f'<q-flow> node "{nid}" names a flow, but only a subprocess can name a flow')
+            elif not _is_text(nflow):
+                fail(node.line, f'<q-flow> node "{nid}" flow must be the id of another q-flow')
+            elif page_flow_ids is not None and nflow not in page_flow_ids:
+                fail(node.line, f'<q-flow> flow "{nflow}" names no q-flow on this page')
         entry = {
             "id": nid,
             "label": nlabel,
             "kind": nkind if isinstance(nkind, str) else None,
             "group": ngroup if isinstance(ngroup, str) else None,
             "detail_html": clean_detail,
+            "shape": nshape if nshape in _FLOW_SHAPES else "box",
+            "flow": nflow if nshape == "subprocess" and _is_text(nflow) else None,
         }
         node_map[nid] = entry
         clean_nodes.append(entry)
@@ -1125,6 +1203,9 @@ def _validate_flow_node(
         easync = e.get("async")
         if easync is not None and not isinstance(easync, bool):
             fail(node.line, "<q-flow> edge async must be true or false")
+        eloop = e.get("loop")
+        if eloop is not None and not isinstance(eloop, bool):
+            fail(node.line, "<q-flow> edge loop must be true or false")
         if isinstance(efrom, str) and isinstance(eto, str) and efrom in node_map and eto in node_map:
             clean_edges.append(
                 {
@@ -1132,8 +1213,31 @@ def _validate_flow_node(
                     "to": eto,
                     "label": elabel.strip() if isinstance(elabel, str) and elabel.strip() else None,
                     "async": easync is True,
+                    "loop": eloop is True or efrom == eto,
                 }
             )
+
+    for decision in (n for n in clean_nodes if n["shape"] == "decision"):
+        did = decision["id"]
+        exits = [e for e in clean_edges if e["from"] == did]
+        if len(exits) < 2:
+            fail(node.line, f'<q-flow> decision "{did}" needs at least 2 exits')
+        if any(e["label"] is None for e in exits):
+            fail(node.line, f'<q-flow> every exit of decision "{did}" needs a label')
+        if len(decision["label"]) > _FLOW_WARN_DECISION_LABEL:
+            report_warn(
+                node.line,
+                f'<q-flow> decision "{did}" label is {len(decision["label"])} characters: '
+                "decision labels over 24 characters overflow the diamond",
+            )
+        labels = [e["label"] for e in exits if e["label"] is not None]
+        for label in dict.fromkeys(labels):
+            if labels.count(label) > 1:
+                report_warn(node.line, f'<q-flow> decision "{did}" has two exits labelled "{label}"')
+
+    for cycle in _flow_forward_cycles(list(node_map), clean_edges):
+        through = ", ".join(f'"{nid}"' for nid in cycle)
+        report_warn(node.line, f"<q-flow> has a cycle with no loop edge through {through}: mark the return edge with loop: true")
 
     if before_fails:
         return None
@@ -1147,7 +1251,11 @@ def _validate_flow_node(
 
 
 def _rule_flow_data(node: _Node, report: Report, index: _Index) -> None:
-    _validate_flow_node(node, report, lambda _line, _msg: None)
+    own_id = node.attrs.get("id")
+    page_flow_ids = frozenset(
+        flow_id for other in index.nodes_of("q-flow") if (flow_id := other.attrs.get("id")) and flow_id != own_id
+    )
+    _validate_flow_node(node, report, lambda _line, _msg: None, page_flow_ids=page_flow_ids)
 
 
 def check_html_warnings(text: str, catalog: Catalog, *, label: str) -> list[dict]:
@@ -1186,23 +1294,48 @@ def _render_flow_fallback_html(parsed: dict[str, Any]) -> str:
     def render_node(n: dict[str, Any]) -> str:
         nid = html_lib.escape(n["id"], quote=True)
         label = html_lib.escape(n["label"])
-        kind_str = f" ({html_lib.escape(n['kind'])})" if n["kind"] else ""
+        shape = n.get("shape", "box")
+        title_meta = [html_lib.escape(m) for m in (shape if shape != "box" else None, n["kind"]) if m]
+        kind_str = f" ({', '.join(title_meta)})" if title_meta else ""
+        lead = ""
+        if shape == "subprocess" and n.get("flow"):
+            flow = n["flow"]
+            lead = (
+                f': <a href="#{html_lib.escape(flow, quote=True)}">'
+                f"opens the &quot;{html_lib.escape(flow)}&quot; graph</a>"
+            )
         detail_str = f'<div data-q-flow-list-detail>{n["detail_html"]}</div>' if n["detail_html"] else ""
         outs = out_by_node.get(n["id"], [])
         edge_str = ""
-        if outs:
-            items = []
+        if shape == "decision":
+            exits = []
             for e in outs:
                 tlabel = html_lib.escape(node_map[e["to"]]["label"])
-                meta = []
-                if e["label"]:
-                    meta.append(html_lib.escape(e["label"]))
-                if e["async"]:
-                    meta.append("async")
-                suffix = f" ({', '.join(meta)})" if meta else ""
-                items.append(f"<li>\u2192 {tlabel}{suffix}</li>")
+                arrow = "\u21a9" if e.get("loop") else "\u2192"
+                exits.append(f"{html_lib.escape(e['label'] or '')} {arrow} {tlabel}{' (async)' if e['async'] else ''}")
+            lead = f": {', '.join(exits)}"
+        elif outs:
+            items = []
+            for e in outs:
+                if e.get("loop"):
+                    target = "itself" if e["from"] == e["to"] else html_lib.escape(node_map[e["to"]]["label"])
+                    text = f"\u21a9 returns to {target}"
+                    if e["label"]:
+                        text += f": {html_lib.escape(e['label'])}"
+                    if e["async"]:
+                        text += " (async)"
+                    items.append(f"<li>{text}</li>")
+                else:
+                    tlabel = html_lib.escape(node_map[e["to"]]["label"])
+                    meta = []
+                    if e["label"]:
+                        meta.append(html_lib.escape(e["label"]))
+                    if e["async"]:
+                        meta.append("async")
+                    suffix = f" ({', '.join(meta)})" if meta else ""
+                    items.append(f"<li>\u2192 {tlabel}{suffix}</li>")
             edge_str = f"<ul>{''.join(items)}</ul>"
-        return f'<li data-q-flow-list-node="{nid}"><strong>{label}</strong>{kind_str}{detail_str}{edge_str}</li>'
+        return f'<li data-q-flow-list-node="{nid}"><strong>{label}</strong>{kind_str}{lead}{detail_str}{edge_str}</li>'
 
     def render_group(g: dict[str, Any]) -> str:
         gid = html_lib.escape(g["id"], quote=True)

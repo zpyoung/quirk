@@ -943,6 +943,56 @@ def test_q_flow_pulls_in_flow_and_kit_and_injects_the_text_list_fallback(tmp_pat
     assert "\u2192 Ledger (order.created, async)" in html
 
 
+CHECKOUT_FLOW = (
+    '<q-flow id="checkout-flow" summary="Checkout charges, ships or retries, and refunds on return.">'
+    '<script type="application/json">'
+    '{"kinds":{"ui":1,"worker":2,"queue":3},'
+    '"nodes":[{"id":"checkout","label":"Checkout","kind":"ui"},'
+    '{"id":"charge","label":"Charge worker","kind":"worker"},'
+    '{"id":"paid","label":"Paid?","kind":"worker","shape":"decision"},'
+    '{"id":"ship","label":"Ship","kind":"worker"},'
+    '{"id":"retry","label":"Retry queue","kind":"queue"},'
+    '{"id":"refund","label":"Issue refund","shape":"subprocess","flow":"refund-flow"}],'
+    '"edges":[{"from":"checkout","to":"charge","label":"order.created","async":true},'
+    '{"from":"charge","to":"paid"},'
+    '{"from":"paid","to":"ship","label":"Yes"},'
+    '{"from":"paid","to":"retry","label":"No"},'
+    '{"from":"retry","to":"charge","label":"retry up to 3x","loop":true},'
+    '{"from":"ship","to":"refund","label":"on return"}]}'
+    "</script></q-flow>"
+)
+REFUND_FLOW = (
+    '<q-flow id="refund-flow" summary="Refunds are issued and confirmed.">'
+    '<script type="application/json">'
+    '{"nodes":[{"id":"issue","label":"Issue"},{"id":"confirm","label":"Confirm"}],'
+    '"edges":[{"from":"issue","to":"confirm"}]}'
+    "</script></q-flow>"
+)
+POLLER_FLOW = (
+    '<q-flow summary="A poller checks status on a timer.">'
+    '<script type="application/json">'
+    '{"nodes":[{"id":"poll","label":"Status poller"}],'
+    '"edges":[{"from":"poll","to":"poll","label":"every 30s"}]}'
+    "</script></q-flow>"
+)
+
+
+def test_q_flow_text_list_covers_decisions_loops_and_subprocess_links(tmp_path, env, project):
+    page = CHECKOUT_FLOW + REFUND_FLOW + POLLER_FLOW
+    rc, result, out = report_build(tmp_path, env, project, page, name="flowshapes")
+    assert rc == 0 and result["checks"]["passed"] is True, result["checks"]
+    html = out.read_text(encoding="utf-8")
+    assert "Paid?</strong> (decision, worker): Yes \u2192 Ship, No \u2192 Retry queue" in html
+    assert "Issue refund</strong> (subprocess): <a href=\"#refund-flow\">opens the &quot;refund-flow&quot; graph</a>" in html
+    assert "<li>\u21a9 returns to Charge worker: retry up to 3x</li>" in html
+    assert "<li>\u21a9 returns to itself: every 30s</li>" in html
+    assert "\u2192 Charge worker (order.created, async)" in html
+    assert "Ship</strong> (worker)<ul><li>\u2192 Issue refund (on return)</li></ul>" in html
+    assert "Status poller</strong><ul>" in html
+    paid_entry = html.split('data-q-flow-list-node="paid"', 1)[1].split("</li>", 1)[0]
+    assert "<ul>" not in paid_entry
+
+
 def test_q_flow_warnings_are_reported_in_build_checks(tmp_path, env, project):
     long_edge = FLOW.replace('"order.created"', '"' + ("e" * 45) + '"')
     rc, result, _ = report_build(tmp_path, env, project, long_edge, name="flowwarn")
