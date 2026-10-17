@@ -5,7 +5,7 @@
  *
  * Helpers every element builds on: define, whenReady, token, onTheme, bindData, readTable.
  * Elements so far: q-tabs, q-timeline, q-code, q-stat, q-table, q-chart, q-diff, q-diff-note, q-board,
- * q-sidenote, q-compare, q-flow. q-grid and q-panel are CSS only.
+ * q-sidenote, q-compare, q-flow, q-schema, q-sequence. q-grid and q-panel are CSS only.
  */
 (function () {
   'use strict';
@@ -3471,7 +3471,7 @@
     return li;
   }
 
-  /** Canvas helpers shared by q-flow and q-schema; `host` carries _stage, _svg, _viewport, _drawer, _transform, _bounds, _nodeBoxes, _nodeElements, _expandBtn, _d3Zoom, _d3Selection, _rovingId and _focusedAfterExpand. */
+  /** Canvas helpers shared by q-flow and q-schema (q-sequence uses canvasMeasureFactory only); `host` carries _stage, _svg, _viewport, _drawer, _transform, _bounds, _nodeBoxes, _nodeElements, _expandBtn, _d3Zoom, _d3Selection, _rovingId and _focusedAfterExpand. */
   function canvasMeasureFactory(host) {
     var canvas = document.createElement('canvas');
     var ctx = canvas.getContext && canvas.getContext('2d');
@@ -8606,6 +8606,1317 @@
     }
   }
 
+  var SEQ_MAX_PARTICIPANTS = 16;
+  var SEQ_TYPES = ['call', 'reply', 'async'];
+  var SEQ_FRAGMENTS = ['alt', 'opt', 'loop', 'par'];
+  var SEQ_STEP_KEYS = ['fragment', 'note', 'end', 'from'];
+  var SEQ_FONT = 14;
+  var SEQ_NOTE_FONT = 13;
+  var SEQ_LINE = 18;
+  var SEQ_WRAP = 224;
+  var SEQ_BAR_WIDTH = 8;
+  var SEQ_BAR_STEP = 6;
+  var SEQ_SELF_WIDTH = 28;
+  var SEQ_SELF_HEIGHT = 26;
+  var SEQ_TOP = 12;
+  var SEQ_HEAD_PAD = 20;
+  var SEQ_NOTE_PAD = 14;
+
+  function seqText(value) {
+    return typeof value === 'string' && !isBlankFlowId(value);
+  }
+
+  /** A detail string as written, null when there is none, or false when it breaks the whitelist. */
+  function seqDetail(raw) {
+    if (raw === undefined || raw === null) {
+      return null;
+    }
+    return typeof raw === 'string' && isValidFlowDetail(raw) ? raw : false;
+  }
+
+  /**
+   * Checks the JSON of a q-sequence against the data contract the Python kit check enforces and
+   * returns the parsed sequence, or null on any failure. Messages are numbered in drawn order.
+   */
+  function parseSequence(raw) {
+    if (!isRow(raw) || !flowGraphTextOk(raw)) {
+      return null;
+    }
+    var has = Object.prototype.hasOwnProperty;
+    var kinds = {};
+    if (has.call(raw, 'kinds')) {
+      if (!isRow(raw.kinds)) {
+        return null;
+      }
+      kinds = raw.kinds;
+    }
+    var kindKeys = Object.keys(kinds);
+    if (kindKeys.length > 8) {
+      return null;
+    }
+    for (var k = 0; k < kindKeys.length; k += 1) {
+      var color = kinds[kindKeys[k]];
+      if (isBlankFlowId(kindKeys[k]) || typeof color !== 'number' || color < 1 || color > 8 || Math.floor(color) !== color) {
+        return null;
+      }
+    }
+
+    if (!Array.isArray(raw.participants) || raw.participants.length === 0 || raw.participants.length > SEQ_MAX_PARTICIPANTS) {
+      return null;
+    }
+    var ids = Object.create(null);
+    var partMap = Object.create(null);
+    var participants = [];
+    for (var pi = 0; pi < raw.participants.length; pi += 1) {
+      var p = raw.participants[pi];
+      if (!isRow(p) || !seqText(p.id) || !seqText(p.label)) {
+        return null;
+      }
+      if (p.kind !== undefined && p.kind !== null && (typeof p.kind !== 'string' || !has.call(kinds, p.kind))) {
+        return null;
+      }
+      var partDetail = seqDetail(p.detail);
+      if (partDetail === false || ids[p.id]) {
+        return null;
+      }
+      ids[p.id] = true;
+      var part = {
+        id: p.id,
+        label: p.label,
+        kind: typeof p.kind === 'string' ? p.kind : null,
+        color: typeof p.kind === 'string' ? kinds[p.kind] : null,
+        detail: partDetail,
+        index: pi
+      };
+      participants.push(part);
+      partMap[p.id] = part;
+    }
+
+    var messages = [];
+    var messageIds = Object.create(null);
+    var creates = Object.create(null);
+    var ends = Object.create(null);
+    var createdAt = Object.create(null);
+    var endedAt = Object.create(null);
+    var touches = [];
+    var position = 0;
+
+    function touch(id, isEnd) {
+      touches.push({ position: position, id: id, end: isEnd });
+    }
+
+    function walkMessage(step, frags) {
+      position += 1;
+      var number = messages.length + 1;
+      if (!seqText(step.from) || !seqText(step.to) || !seqText(step.label)) {
+        return null;
+      }
+      if (has.call(step, 'id') && !seqText(step.id)) {
+        return null;
+      }
+      if (!partMap[step.from] || !partMap[step.to]) {
+        return null;
+      }
+      if (typeof step.type !== 'string' || SEQ_TYPES.indexOf(step.type) < 0) {
+        return null;
+      }
+      var create = false;
+      if (has.call(step, 'create')) {
+        if (step.create !== true || step.from === step.to || createdAt[step.to] !== undefined) {
+          return null;
+        }
+        create = true;
+        createdAt[step.to] = position;
+        creates[step.to] = number;
+      }
+      if (has.call(step, 'id')) {
+        if (ids[step.id]) {
+          return null;
+        }
+        ids[step.id] = true;
+        messageIds[step.id] = number;
+      }
+      var detail = seqDetail(step.detail);
+      if (detail === false) {
+        return null;
+      }
+      touch(step.from, false);
+      if (step.to !== step.from) {
+        touch(step.to, false);
+      }
+      var message = {
+        number: number,
+        id: has.call(step, 'id') ? step.id : null,
+        from: step.from,
+        to: step.to,
+        label: step.label,
+        type: step.type,
+        detail: detail,
+        create: create,
+        self: step.from === step.to,
+        frags: frags
+      };
+      messages.push(message);
+      return { kind: 'message', message: message };
+    }
+
+    function walkNote(step) {
+      position += 1;
+      if (!seqText(step.note) || !Array.isArray(step.over) || step.over.length === 0) {
+        return null;
+      }
+      var seen = Object.create(null);
+      for (var oi = 0; oi < step.over.length; oi += 1) {
+        var over = step.over[oi];
+        if (typeof over !== 'string' || !partMap[over]) {
+          return null;
+        }
+        if (!seen[over]) {
+          seen[over] = true;
+          touch(over, false);
+        }
+      }
+      return { kind: 'note', text: step.note, over: step.over.slice() };
+    }
+
+    function walkEnd(step) {
+      position += 1;
+      if (typeof step.end !== 'string' || !partMap[step.end] || endedAt[step.end] !== undefined) {
+        return null;
+      }
+      endedAt[step.end] = position;
+      ends[step.end] = -1;
+      touch(step.end, true);
+      return { kind: 'end', id: step.end };
+    }
+
+    function walkFragment(step, frags) {
+      var type = step.fragment;
+      if (typeof type !== 'string' || SEQ_FRAGMENTS.indexOf(type) < 0) {
+        return null;
+      }
+      var label = null;
+      if (has.call(step, 'label')) {
+        if (!seqText(step.label)) {
+          return null;
+        }
+        label = step.label;
+      }
+      var node = { kind: 'fragment', type: type, label: label, branches: [] };
+      var sources;
+      if (type === 'alt' || type === 'par') {
+        if (!Array.isArray(step.branches) || step.branches.length < 2) {
+          return null;
+        }
+        sources = step.branches;
+      } else {
+        sources = [{ label: null, steps: step.steps }];
+      }
+      for (var bi = 0; bi < sources.length; bi += 1) {
+        var source = sources[bi];
+        if (!isRow(source) || (sources.length > 1 && !seqText(source.label))) {
+          return null;
+        }
+        if (!Array.isArray(source.steps) || source.steps.length === 0) {
+          return null;
+        }
+        var inner = walkSteps(source.steps, frags.concat([{ fragment: node, branch: bi }]));
+        if (!inner) {
+          return null;
+        }
+        node.branches.push({ label: sources.length > 1 ? source.label : null, steps: inner });
+      }
+      return node;
+    }
+
+    function walkSteps(items, frags) {
+      var out = [];
+      for (var si = 0; si < items.length; si += 1) {
+        var step = items[si];
+        var present = 0;
+        var key = null;
+        if (isRow(step)) {
+          for (var ki = 0; ki < SEQ_STEP_KEYS.length; ki += 1) {
+            if (has.call(step, SEQ_STEP_KEYS[ki])) {
+              present += 1;
+              key = SEQ_STEP_KEYS[ki];
+            }
+          }
+        }
+        if (present !== 1) {
+          return null;
+        }
+        var node = key === 'fragment' ? walkFragment(step, frags)
+          : key === 'note' ? walkNote(step)
+            : key === 'end' ? walkEnd(step)
+              : walkMessage(step, frags);
+        if (!node) {
+          return null;
+        }
+        out.push(node);
+      }
+      return out;
+    }
+
+    var steps = null;
+    try {
+      if (Array.isArray(raw.steps) && raw.steps.length) {
+        steps = walkSteps(raw.steps, []);
+      }
+    } catch (_e) {
+      return null;
+    }
+    if (!steps || messages.length === 0) {
+      return null;
+    }
+    for (var ti = 0; ti < touches.length; ti += 1) {
+      var t = touches[ti];
+      if (t.position < (createdAt[t.id] || 0) || (!t.end && endedAt[t.id] !== undefined && t.position > endedAt[t.id])) {
+        return null;
+      }
+    }
+
+    var traces = [];
+    if (has.call(raw, 'traces')) {
+      if (!Array.isArray(raw.traces)) {
+        return null;
+      }
+      var seenTraces = Object.create(null);
+      for (var tri = 0; tri < raw.traces.length; tri += 1) {
+        var trace = raw.traces[tri];
+        if (!isRow(trace) || !seqText(trace.id) || !seqText(trace.label) || seenTraces[trace.id]) {
+          return null;
+        }
+        seenTraces[trace.id] = true;
+        if (!Array.isArray(trace.steps) || trace.steps.length < 2) {
+          return null;
+        }
+        var traceSteps = [];
+        for (var tsi = 0; tsi < trace.steps.length; tsi += 1) {
+          var ts = trace.steps[tsi];
+          if (!isRow(ts) || typeof ts.message !== 'string' || !has.call(ts, 'value') || messageIds[ts.message] === undefined) {
+            return null;
+          }
+          if ((has.call(ts, 'note') && typeof ts.note !== 'string') || !traceValueOk(ts.value)) {
+            return null;
+          }
+          traceSteps.push({
+            message: messageIds[ts.message] - 1,
+            value: ts.value,
+            note: typeof ts.note === 'string' ? ts.note : null
+          });
+        }
+        traces.push({ id: trace.id, label: trace.label, steps: traceSteps });
+      }
+    }
+
+    return {
+      participants: participants,
+      partMap: partMap,
+      messages: messages,
+      steps: steps,
+      traces: traces,
+      ends: ends,
+      creates: creates
+    };
+  }
+
+  /** Splits text on spaces into lines no wider than max; a word wider than max keeps a line of its own. */
+  function seqWrap(text, measure, max, size, weight) {
+    var lines = [];
+    var current = '';
+    text.split(/\s+/).forEach(function (word) {
+      if (!word) {
+        return;
+      }
+      var candidate = current ? current + ' ' + word : word;
+      if (current && measure(candidate, size, weight) > max) {
+        lines.push(current);
+        current = word;
+      } else {
+        current = candidate;
+      }
+    });
+    if (current) {
+      lines.push(current);
+    }
+    return lines.length ? lines : [text];
+  }
+
+  function seqWidest(lines, measure, size, weight) {
+    return Math.max.apply(null, lines.map(function (line) { return measure(line, size, weight); }));
+  }
+
+  /**
+   * Lays a parsed sequence out as columns and rows: widths from measured labels, one row per
+   * message, note, end and fragment edge, and the activation bars worked out from the call and
+   * reply walk. Pure arithmetic over `data` and `measure(text, size, weight)`; draws nothing.
+   */
+  function seqLayout(data, measure) {
+    var parts = data.participants;
+    var count = parts.length;
+    var info = new WeakMap();
+
+    var anyKind = parts.some(function (p) { return p.kind; });
+    var headWidest = Math.max.apply(null, parts.map(function (p) {
+      return Math.max(measure(p.label, 13, '600'), p.kind ? measure(p.kind, 11, '600') : 0);
+    }));
+    var headW = Math.min(176, Math.max(112, Math.ceil(headWidest) + SEQ_HEAD_PAD));
+    var headLines = Math.max.apply(null, parts.map(function (p) {
+      return seqWrap(p.label, measure, headW - SEQ_HEAD_PAD, 13, '600').length;
+    }));
+    var headH = Math.max(44, 4 + 8 + (anyKind ? 15 : 0) + headLines * 16 + 8);
+    var minGap = headW + 12;
+    var maxMargin = Math.floor(headW / 2) + 2;
+
+    var gapNeeds = [];
+    var leftExtent = parts.map(function () { return headW / 2; });
+    var rightExtent = parts.map(function () { return headW / 2; });
+
+    function need(a, b, width) {
+      if (a > b) {
+        var swap = a;
+        a = b;
+        b = swap;
+      }
+      if (a < b) {
+        gapNeeds.push({ a: a, b: b, width: width });
+      }
+    }
+
+    function collect(steps) {
+      var lo = count;
+      var hi = -1;
+      var depth = 0;
+      function span(a, b) {
+        lo = Math.min(lo, a);
+        hi = Math.max(hi, b);
+      }
+      steps.forEach(function (step) {
+        if (step.kind === 'message') {
+          var m = step.message;
+          var a = data.partMap[m.from].index;
+          var b = data.partMap[m.to].index;
+          var lines = seqWrap(m.number + '. ' + m.label, measure, SEQ_WRAP, SEQ_FONT, '400');
+          var labelW = Math.ceil(seqWidest(lines, measure, SEQ_FONT, '400'));
+          info.set(m, { lines: lines, labelW: labelW });
+          span(Math.min(a, b), Math.max(a, b));
+          if (m.self) {
+            var room = SEQ_SELF_WIDTH + 8 + labelW;
+            if (a + 1 < count) {
+              need(a, a + 1, room + 20);
+            } else {
+              rightExtent[a] = Math.max(rightExtent[a], room + 8);
+            }
+          } else {
+            need(a, b, labelW + 40 + (m.create ? headW / 2 : 0));
+          }
+        } else if (step.kind === 'note') {
+          var noteLines = seqWrap(step.text, measure, SEQ_WRAP, SEQ_NOTE_FONT, '400');
+          var textW = Math.ceil(seqWidest(noteLines, measure, SEQ_NOTE_FONT, '400'));
+          var idx = step.over.map(function (id) { return data.partMap[id].index; });
+          var nlo = Math.min.apply(null, idx);
+          var nhi = Math.max.apply(null, idx);
+          info.set(step, { lines: noteLines, textW: textW, lo: nlo, hi: nhi });
+          span(nlo, nhi);
+          if (nlo < nhi) {
+            need(nlo, nhi, textW + 16 - 2 * SEQ_NOTE_PAD);
+          } else {
+            leftExtent[nlo] = Math.max(leftExtent[nlo], (textW + 16) / 2);
+            rightExtent[nlo] = Math.max(rightExtent[nlo], (textW + 16) / 2);
+          }
+        } else if (step.kind === 'end') {
+          var e = data.partMap[step.id].index;
+          span(e, e);
+        } else {
+          var inner = { lo: count, hi: -1, depth: 0 };
+          step.branches.forEach(function (branch) {
+            var r = collect(branch.steps);
+            inner.lo = Math.min(inner.lo, r.lo);
+            inner.hi = Math.max(inner.hi, r.hi);
+            inner.depth = Math.max(inner.depth, r.depth);
+          });
+          var level = inner.depth;
+          var margin = Math.min(14 + 8 * level, maxMargin);
+          var tabW = Math.ceil(measure(step.type, 12, '700')) + 16;
+          var labels = step.type === 'alt' || step.type === 'par'
+            ? step.branches.map(function (branch) { return branch.label; })
+            : [step.label];
+          var firstW = labels[0] ? Math.ceil(measure(labels[0], 12, '400')) + 10 : 0;
+          var restW = labels.slice(1).reduce(function (w, text) {
+            return Math.max(w, Math.ceil(measure(text, 12, '400')) + 16);
+          }, 0);
+          var needW = Math.max(tabW + 8 + firstW + 12, restW);
+          info.set(step, { lo: inner.lo, hi: inner.hi, level: level, margin: margin, tabW: tabW, needW: needW });
+          if (inner.lo < inner.hi) {
+            need(inner.lo, inner.hi, needW - 2 * margin);
+          } else if (inner.hi + 1 < count) {
+            need(inner.hi, inner.hi + 1, needW - margin + 4);
+          } else {
+            rightExtent[inner.hi] = Math.max(rightExtent[inner.hi], needW - margin + 4);
+          }
+          leftExtent[inner.lo] = Math.max(leftExtent[inner.lo], margin);
+          span(inner.lo, inner.hi);
+          depth = Math.max(depth, level + 1);
+        }
+      });
+      return { lo: lo, hi: hi, depth: depth };
+    }
+    collect(data.steps);
+
+    var gaps = [];
+    for (var gi = 0; gi + 1 < count; gi += 1) {
+      gaps.push(minGap);
+    }
+    gapNeeds.sort(function (x, y) { return (x.b - x.a) - (y.b - y.a); });
+    gapNeeds.forEach(function (c) {
+      var have = 0;
+      for (var i = c.a; i < c.b; i += 1) {
+        have += gaps[i];
+      }
+      if (have < c.width) {
+        var extra = Math.ceil((c.width - have) / (c.b - c.a));
+        for (var j = c.a; j < c.b; j += 1) {
+          gaps[j] += extra;
+        }
+      }
+    });
+    var cx = [Math.ceil(leftExtent[0]) + 8];
+    for (var ci = 0; ci + 1 < count; ci += 1) {
+      cx.push(cx[ci] + gaps[ci]);
+    }
+    var width = Math.ceil(cx[count - 1] + rightExtent[count - 1]) + 8;
+
+    var rows = [];
+    var fragments = [];
+    var created = Object.create(null);
+    var endY = Object.create(null);
+    var y = SEQ_TOP;
+
+    function addRow(kind, height, before, after, extra) {
+      var row = extra || {};
+      row.kind = kind;
+      row.y = y;
+      row.h = height;
+      row.before = before;
+      row.after = after;
+      y += height;
+      rows.push(row);
+      return row;
+    }
+
+    function place(steps, entry) {
+      var state = entry;
+      steps.forEach(function (step) {
+        if (step.kind === 'message') {
+          var m = step.message;
+          var meta = info.get(m);
+          var after = state;
+          if (!m.self && m.type === 'call') {
+            var level = state.filter(function (c) { return c.callee === m.to; }).length;
+            after = state.concat([{ caller: m.from, callee: m.to, number: m.number, level: level }]);
+          } else if (!m.self && m.type === 'reply') {
+            for (var i = state.length - 1; i >= 0; i -= 1) {
+              if (state[i].caller === m.to && state[i].callee === m.from) {
+                after = state.slice(0, i).concat(state.slice(i + 1));
+                break;
+              }
+            }
+          }
+          var lines = meta.lines.length;
+          var height;
+          var arrowY;
+          if (m.self) {
+            height = Math.max(14 + SEQ_SELF_HEIGHT + 14, SEQ_LINE * lines + 20);
+            arrowY = y + 14 + SEQ_SELF_HEIGHT / 2;
+          } else {
+            var arrowOff = 12 + SEQ_LINE * lines;
+            height = arrowOff + 14;
+            if (m.create) {
+              height = Math.max(height, arrowOff + headH / 2 + 4);
+            }
+            arrowY = y + arrowOff;
+          }
+          addRow('message', height, state, after, { message: m, arrowY: arrowY, lines: meta.lines, labelW: meta.labelW });
+          if (m.create) {
+            created[m.to] = { y: arrowY, row: rows.length - 1 };
+          }
+          state = after;
+        } else if (step.kind === 'note') {
+          var nmeta = info.get(step);
+          var boxH = SEQ_LINE * nmeta.lines.length + 12;
+          addRow('note', boxH + 12, state, state, { note: step, lines: nmeta.lines, textW: nmeta.textW, lo: nmeta.lo, hi: nmeta.hi, boxH: boxH });
+        } else if (step.kind === 'end') {
+          var kept = state.filter(function (c) { return c.callee !== step.id; });
+          var endRow = addRow('end', 34, state, kept, { end: step, arrowY: y + 17 });
+          endY[step.id] = endRow.arrowY;
+          data.ends[step.id] = rows.length - 1;
+          state = kept;
+        } else {
+          var meta2 = info.get(step);
+          var frag = { node: step, lo: meta2.lo, hi: meta2.hi, level: meta2.level, margin: meta2.margin, tabW: meta2.tabW, needW: meta2.needW, dividers: [] };
+          fragments.push(frag);
+          var tabRow = addRow('tab', 30, state, state, { fragment: frag });
+          frag.top = tabRow.y + 6;
+          var afters = [];
+          step.branches.forEach(function (branch, bi) {
+            if (bi > 0) {
+              frag.dividers.push(addRow('divider', 28, state, state, { fragment: frag, branch: bi }));
+            }
+            afters.push(place(branch.steps, state));
+          });
+          var entryState = state;
+          var result = entryState.filter(function (c) {
+            var inBranch = function (after) { return after.indexOf(c) >= 0; };
+            return step.type === 'par' ? afters.every(inBranch) : afters.some(inBranch);
+          });
+          var closeRow = addRow('close', 10, result, result, { fragment: frag });
+          frag.bottom = closeRow.y + 4;
+          state = result;
+        }
+      });
+      return state;
+    }
+    place(data.steps, []);
+    var height = y + 12;
+
+    function busy(row) {
+      var levels = Object.create(null);
+      row.before.concat(row.after).forEach(function (c) {
+        levels[c.callee] = Math.max(levels[c.callee] || 0, c.level + 1);
+      });
+      return levels;
+    }
+
+    rows.forEach(function (row) {
+      if (row.kind !== 'message') {
+        return;
+      }
+      var m = row.message;
+      var levels = busy(row);
+      var a = data.partMap[m.from].index;
+      var b = data.partMap[m.to].index;
+      function left(id, i) { return cx[i] - (levels[id] ? SEQ_BAR_WIDTH / 2 : 0); }
+      function right(id, i) { return cx[i] + (levels[id] ? SEQ_BAR_WIDTH / 2 + SEQ_BAR_STEP * (levels[id] - 1) : 0); }
+      if (m.self) {
+        row.dir = -1;
+        row.x1 = right(m.from, a);
+        row.x2 = row.x1;
+        row.y1 = row.y + 14;
+        row.y2 = row.y1 + SEQ_SELF_HEIGHT;
+        return;
+      }
+      row.dir = cx[b] > cx[a] ? 1 : -1;
+      row.x1 = row.dir > 0 ? right(m.from, a) : left(m.from, a);
+      row.x2 = m.create ? cx[b] - row.dir * headW / 2 : (row.dir > 0 ? left(m.to, b) : right(m.to, b));
+    });
+
+    var bars = [];
+    var open = Object.create(null);
+    rows.forEach(function (row) {
+      var covered = Object.create(null);
+      var list = [];
+      row.before.concat(row.after).forEach(function (c) {
+        if (!covered[c.number]) {
+          covered[c.number] = c;
+          list.push(c);
+        }
+      });
+      Object.keys(open).forEach(function (key) {
+        if (!covered[key]) {
+          bars.push(open[key]);
+          delete open[key];
+        }
+      });
+      list.forEach(function (c) {
+        var inBefore = row.before.indexOf(c) >= 0;
+        var inAfter = row.after.indexOf(c) >= 0;
+        var run = open[c.number];
+        if (!run) {
+          var opens = row.arrowY === undefined ? row.y : row.arrowY + (row.message && row.message.create ? headH / 2 : 0);
+          run = { call: c, top: inBefore ? row.y : opens };
+          open[c.number] = run;
+        }
+        run.bottom = inAfter ? row.y + row.h : row.arrowY;
+        if (!inAfter) {
+          bars.push(run);
+          delete open[c.number];
+        }
+      });
+    });
+    Object.keys(open).forEach(function (key) {
+      bars.push(open[key]);
+    });
+
+    return {
+      cx: cx,
+      width: width,
+      height: height,
+      headW: headW,
+      headH: headH,
+      headLines: headLines,
+      wrapW: headW - SEQ_HEAD_PAD,
+      rows: rows,
+      bars: bars,
+      fragments: fragments,
+      created: created,
+      endY: endY
+    };
+  }
+
+  /**
+   * q-sequence: a sequence diagram drawn as plain SVG from JSON. Participants are columns,
+   * messages and fragment edges are rows, and activation bars come from the call and reply walk.
+   * The diagram scrolls with the page and sideways in its own box, under a strip of participant
+   * headers that stays pinned while the page scrolls past it.
+   */
+  class QSequence extends HTMLElement {
+    static get observedAttributes() {
+      return ['summary'];
+    }
+
+    connectedCallback() {
+      var self = this;
+      this._uid = this._uid || uid('q-sequence-');
+      this._lastSig = null;
+      this._onViewportChange = this._onViewportChange || function () {
+        self._updateStuck();
+      };
+      this._onStageScroll = this._onStageScroll || function () {
+        self._syncStrip();
+      };
+      window.addEventListener('scroll', this._onViewportChange, { passive: true });
+      window.addEventListener('resize', this._onViewportChange);
+      onTheme(this, function () {
+        self._applyTheme();
+      });
+      watchChildren(this, { childList: true, characterData: true, subtree: true }, function () {
+        if (self.isConnected && self._signature() !== self._lastSig) {
+          self._setup();
+        }
+      });
+    }
+
+    _signature() {
+      var script = this.querySelector(':scope > script[type="application/json"]');
+      return [script ? (script.textContent || '') : '', this.getAttribute('summary') || ''].join('\u0000');
+    }
+
+    disconnectedCallback() {
+      window.removeEventListener('scroll', this._onViewportChange);
+      window.removeEventListener('resize', this._onViewportChange);
+      if (this._boundStage) {
+        this._boundStage.removeEventListener('scroll', this._onStageScroll);
+        this._boundStage = null;
+      }
+      var stopTheme = themeWatchers.get(this);
+      if (stopTheme) {
+        stopTheme();
+      }
+    }
+
+    attributeChangedCallback() {
+      if (this.isConnected && this._initialized && this._signature() !== this._lastSig) {
+        this._setup();
+      }
+    }
+
+    /** The parsed sequence from the JSON child, or null when it is missing, unreadable or breaks the contract. */
+    _parseData() {
+      var script = this.querySelector(':scope > script[type="application/json"]');
+      if (!script) {
+        return null;
+      }
+      var raw;
+      try {
+        raw = JSON.parse(script.textContent || '');
+      } catch (_e) {
+        return null;
+      }
+      return parseSequence(raw);
+    }
+
+    /**
+     * Finds or creates the parts around the diagram and puts them in order: toolbar, pinned strip,
+     * scroll box, live region, list. A stage or list the build injected for the no-JS page is reused.
+     */
+    _ensureScaffold(data) {
+      var stage = this.querySelector(':scope > [data-q-sequence-stage]');
+      if (!stage) {
+        stage = kitNode('div');
+        stage.className = 'q-sequence-stage';
+        stage.setAttribute('data-q-sequence-stage', '');
+      }
+      var details = this.querySelector(':scope > details[data-q-sequence-list]');
+      if (!details) {
+        details = kitNode('details');
+        details.className = 'q-sequence-list';
+        details.setAttribute('data-q-sequence-list', '');
+        details.open = true;
+      }
+      var live = this.querySelector(':scope > [data-q-sequence-live]');
+      if (!live) {
+        live = kitNode('div');
+        live.className = 'q-visually-hidden';
+        live.setAttribute('aria-live', 'polite');
+        live.setAttribute('data-q-sequence-live', '');
+      }
+      var controls = this.querySelector(':scope > [data-q-sequence-controls]');
+      var strip = this.querySelector(':scope > [data-q-sequence-pinned]');
+      if (data) {
+        if (!controls) {
+          controls = kitNode('div');
+          controls.className = 'q-sequence-controls';
+          controls.setAttribute('data-q-sequence-controls', '');
+          controls.setAttribute('role', 'toolbar');
+          controls.setAttribute('aria-label', 'Diagram controls');
+        }
+        if (!strip) {
+          strip = kitNode('div');
+          strip.className = 'q-sequence-pinned';
+          strip.setAttribute('data-q-sequence-pinned', '');
+        }
+        this._populateList(details, data);
+      } else {
+        [controls, strip].forEach(function (node) {
+          if (node) {
+            node.remove();
+          }
+        });
+        controls = null;
+        strip = null;
+        if (!details.firstChild) {
+          var summary = document.createElement('summary');
+          summary.textContent = 'Diagram as a list';
+          details.appendChild(summary);
+        }
+      }
+      var host = this;
+      [controls, strip, stage, live, details].forEach(function (node) {
+        if (node) {
+          host.appendChild(node);
+        }
+      });
+      this._controls = controls;
+      this._strip = strip;
+      this._stage = stage;
+      this._live = live;
+      this._details = details;
+    }
+
+    /** Writes the text list: participants, the steps as nested lists, then each trace. */
+    _populateList(details, data) {
+      while (details.firstChild) {
+        details.removeChild(details.firstChild);
+      }
+      var summary = document.createElement('summary');
+      summary.textContent = 'Diagram as a list';
+      details.appendChild(summary);
+
+      var body = document.createElement('div');
+      body.setAttribute('data-q-sequence-list-body', '');
+
+      function name(id) {
+        return data.partMap[id].label;
+      }
+
+      function describe(m) {
+        return name(m.from) + ' → ' + name(m.to);
+      }
+
+      function detailNode(html) {
+        var frag = sanitizeFlowDetail(html);
+        return frag.childNodes.length ? frag : null;
+      }
+
+      var participants = document.createElement('ul');
+      participants.setAttribute('data-q-sequence-list-participants', '');
+      data.participants.forEach(function (p) {
+        var li = document.createElement('li');
+        var text = p.label + (p.kind ? ' (' + p.kind + ')' : '');
+        var detail = p.detail ? detailNode(p.detail) : null;
+        li.appendChild(document.createTextNode(detail ? text + ': ' : text));
+        if (detail) {
+          li.appendChild(detail);
+        }
+        participants.appendChild(li);
+      });
+      body.appendChild(participants);
+
+      function renderSteps(steps, list) {
+        steps.forEach(function (step) {
+          var li = document.createElement('li');
+          if (step.kind === 'message') {
+            var m = step.message;
+            var meta = m.create ? m.type + ', creates ' + name(m.to) : m.type;
+            li.setAttribute('data-q-sequence-list-message', String(m.number));
+            li.appendChild(document.createTextNode(m.number + '. ' + describe(m) + ': ' + m.label + ' (' + meta + ')'));
+            var detail = m.detail ? detailNode(m.detail) : null;
+            if (detail) {
+              var box = document.createElement('div');
+              box.setAttribute('data-q-sequence-list-detail', '');
+              box.appendChild(detail);
+              li.appendChild(box);
+            }
+          } else if (step.kind === 'note') {
+            li.setAttribute('data-q-sequence-list-note', '');
+            li.textContent = 'Note over ' + step.over.map(name).join(', ') + ': ' + step.text;
+          } else if (step.kind === 'end') {
+            li.setAttribute('data-q-sequence-list-end', '');
+            li.textContent = name(step.id) + ' ends';
+          } else {
+            li.setAttribute('data-q-sequence-list-fragment', step.type);
+            var branched = step.type === 'alt' || step.type === 'par';
+            var title = branched
+              ? step.type + ': ' + step.branches.map(function (b) { return b.label; }).join(' / ')
+              : (step.label ? step.type + ': ' + step.label : step.type);
+            li.appendChild(document.createTextNode(title));
+            var inner = document.createElement('ol');
+            if (branched) {
+              step.branches.forEach(function (branch) {
+                var bli = document.createElement('li');
+                bli.appendChild(document.createTextNode(branch.label));
+                var bol = document.createElement('ol');
+                renderSteps(branch.steps, bol);
+                bli.appendChild(bol);
+                inner.appendChild(bli);
+              });
+            } else {
+              renderSteps(step.branches[0].steps, inner);
+            }
+            li.appendChild(inner);
+          }
+          list.appendChild(li);
+        });
+      }
+      var steps = document.createElement('ol');
+      steps.setAttribute('data-q-sequence-list-steps', '');
+      renderSteps(data.steps, steps);
+      body.appendChild(steps);
+
+      data.traces.forEach(function (trace) {
+        var block = document.createElement('div');
+        block.setAttribute('data-q-sequence-list-trace', trace.id);
+        var heading = document.createElement('p');
+        var headingText = document.createElement('strong');
+        headingText.textContent = 'Trace: ' + trace.label;
+        heading.appendChild(headingText);
+        block.appendChild(heading);
+        var ol = document.createElement('ol');
+        trace.steps.forEach(function (step, i) {
+          var m = data.messages[step.message];
+          var li = document.createElement('li');
+          li.setAttribute('data-q-sequence-list-step', String(i + 1));
+          li.appendChild(document.createTextNode(
+            (i + 1) + '. message ' + m.number + ', ' + describe(m) + ', ' + m.label + (step.note ? ': ' + step.note : '')
+          ));
+          var pre = document.createElement('pre');
+          var code = document.createElement('code');
+          code.textContent = tracePretty(step.value);
+          pre.appendChild(code);
+          li.appendChild(pre);
+          ol.appendChild(li);
+        });
+        block.appendChild(ol);
+        body.appendChild(block);
+      });
+      details.appendChild(body);
+    }
+
+    /** Replaces the diagram with a notice and opens the list, which then carries the whole sequence. */
+    _failLayout(msg) {
+      this._data = null;
+      this._layout = null;
+      if (this._stage) {
+        while (this._stage.firstChild) {
+          this._stage.removeChild(this._stage.firstChild);
+        }
+        var p = document.createElement('p');
+        p.className = 'q-sequence-notice';
+        p.setAttribute('data-q-sequence-notice', '');
+        p.textContent = msg;
+        this._stage.appendChild(p);
+      }
+      if (this._details) {
+        this._details.open = true;
+      }
+      this.setAttribute('data-q-sequence-ready', 'error');
+    }
+
+    /** Re-reads the data, rebuilds the scaffold and list, then draws once fonts are ready. */
+    _setup() {
+      var self = this;
+      this._initialized = true;
+      this._lastSig = this._signature();
+      this.removeAttribute('data-q-sequence-ready');
+      var data = this._parseData();
+      this._ensureScaffold(data);
+      if (!data) {
+        this._failLayout('This diagram could not be drawn. The full diagram is listed below.');
+        return;
+      }
+      this._data = data;
+      this._layout = null;
+      while (this._stage.firstChild) {
+        this._stage.removeChild(this._stage.firstChild);
+      }
+      var seq = (this._layoutSeq = (this._layoutSeq || 0) + 1);
+      var fontsReady = (document.fonts && document.fonts.ready && typeof document.fonts.ready.then === 'function')
+        ? document.fonts.ready.catch(function () {})
+        : Promise.resolve();
+      fontsReady.then(function () {
+        if (!self.isConnected || seq !== self._layoutSeq) {
+          return;
+        }
+        self._draw(data);
+      });
+    }
+
+    /** Measures, lays out and draws the diagram and its pinned strip, then marks the element ready. */
+    _draw(data) {
+      var layout = seqLayout(data, canvasMeasureFactory(this));
+      this._layout = layout;
+      while (this._stage.firstChild) {
+        this._stage.removeChild(this._stage.firstChild);
+      }
+      this._stage.appendChild(this._buildSvg(data, layout));
+      this._buildStrip(data, layout);
+      if (this._boundStage !== this._stage) {
+        if (this._boundStage) {
+          this._boundStage.removeEventListener('scroll', this._onStageScroll);
+        }
+        this._stage.addEventListener('scroll', this._onStageScroll);
+        this._boundStage = this._stage;
+      }
+      this._syncStrip();
+      this._updateStuck();
+      this._details.open = false;
+      this.setAttribute('data-q-sequence-ready', 'true');
+    }
+
+    _buildSvg(data, L) {
+      var total = data.messages.length;
+      var measure = canvasMeasureFactory(this);
+      var summary = this.getAttribute('summary') || 'Sequence diagram';
+      var svg = svgNode('svg', {
+        width: L.width,
+        height: L.height,
+        viewBox: '0 0 ' + L.width + ' ' + L.height,
+        role: 'img',
+        'aria-label': summary,
+        'data-q-sequence-svg': ''
+      });
+      function layer(name) {
+        var g = svgNode('g', { 'data-q-sequence-layer': name });
+        svg.appendChild(g);
+        return g;
+      }
+      function textLines(texts, attrs, x, firstY, step) {
+        var text = svgNode('text', attrs);
+        texts.forEach(function (line, i) {
+          var tspan = svgNode('tspan', { x: x, y: firstY + i * step });
+          tspan.textContent = line;
+          text.appendChild(tspan);
+        });
+        return text;
+      }
+      function name(id) {
+        return data.partMap[id].label;
+      }
+
+      var lifelines = layer('lifelines');
+      var bars = layer('bars');
+      var fragments = layer('fragments');
+      L.fragments.forEach(function (f) {
+        var left = L.cx[f.lo] - f.margin;
+        var right = Math.max(L.cx[f.hi] + f.margin, left + f.needW);
+        var branched = f.node.type === 'alt' || f.node.type === 'par';
+        var g = svgNode('g', { 'data-q-sequence-fragment': f.node.type });
+        g.appendChild(svgNode('rect', {
+          'data-q-sequence-fragment-box': '',
+          x: left,
+          y: f.top,
+          width: right - left,
+          height: f.bottom - f.top,
+          fill: 'none',
+          stroke: 'var(--q-color-text-muted)',
+          'stroke-width': '1'
+        }));
+        var tab = svgNode('g', { 'data-q-sequence-fragment-tab': '' });
+        tab.appendChild(svgNode('polygon', {
+          points: [left, f.top, left + f.tabW, f.top, left + f.tabW, f.top + 14, left + f.tabW - 8, f.top + 22, left, f.top + 22].join(' '),
+          fill: 'var(--q-color-surface)',
+          stroke: 'var(--q-color-text-muted)',
+          'stroke-width': '1'
+        }));
+        var tabText = svgNode('text', { x: left + 8, y: f.top + 16, fill: 'var(--q-color-text)', 'font-size': '12', 'font-weight': '700' });
+        tabText.textContent = f.node.type;
+        tab.appendChild(tabText);
+        g.appendChild(tab);
+        function sectionLabel(text, attr, x, y) {
+          var label = svgNode('text', { x: x, y: y, fill: 'var(--q-color-text)', 'font-size': '12', 'font-style': 'italic' });
+          label.setAttribute(attr, '');
+          label.textContent = text;
+          g.appendChild(label);
+        }
+        if (branched) {
+          sectionLabel(f.node.branches[0].label, 'data-q-sequence-section-label', left + f.tabW + 10, f.top + 16);
+          f.dividers.forEach(function (row, i) {
+            g.appendChild(svgNode('line', {
+              'data-q-sequence-divider': '',
+              x1: left,
+              y1: row.y,
+              x2: right,
+              y2: row.y,
+              stroke: 'var(--q-color-text-muted)',
+              'stroke-width': '1',
+              'stroke-dasharray': '6 4'
+            }));
+            sectionLabel(f.node.branches[i + 1].label, 'data-q-sequence-section-label', left + f.tabW + 10, row.y + 18);
+          });
+        } else if (f.node.label) {
+          sectionLabel(f.node.label, 'data-q-sequence-fragment-label', left + f.tabW + 10, f.top + 16);
+        }
+        fragments.appendChild(g);
+      });
+
+      data.participants.forEach(function (p, i) {
+        var from = L.created[p.id] ? L.created[p.id].y + L.headH / 2 : 0;
+        var to = L.endY[p.id] !== undefined ? L.endY[p.id] : L.height;
+        lifelines.appendChild(svgNode('line', {
+          'data-q-sequence-lifeline': p.id,
+          x1: L.cx[i],
+          y1: from,
+          x2: L.cx[i],
+          y2: to,
+          stroke: 'var(--q-color-border)',
+          'stroke-width': '1.5',
+          'stroke-dasharray': '4 4'
+        }));
+      });
+
+      L.bars.forEach(function (bar) {
+        var c = bar.call;
+        bars.appendChild(svgNode('rect', {
+          'data-q-sequence-bar': c.callee,
+          'data-q-sequence-call': c.number,
+          x: L.cx[data.partMap[c.callee].index] - SEQ_BAR_WIDTH / 2 + SEQ_BAR_STEP * c.level,
+          y: bar.top,
+          width: SEQ_BAR_WIDTH,
+          height: bar.bottom - bar.top,
+          fill: 'var(--q-color-surface)',
+          stroke: 'var(--q-color-text-muted)',
+          'stroke-width': '1'
+        }));
+      });
+
+      var notes = layer('notes');
+      var messages = layer('messages');
+      var marks = layer('marks');
+      L.rows.forEach(function (row) {
+        if (row.kind === 'note') {
+          var single = row.lo === row.hi;
+          var w = single ? row.textW + 16 : L.cx[row.hi] - L.cx[row.lo] + 2 * SEQ_NOTE_PAD;
+          var x = single ? L.cx[row.lo] - w / 2 : L.cx[row.lo] - SEQ_NOTE_PAD;
+          var g = svgNode('g', { 'data-q-sequence-note': '' });
+          g.appendChild(svgNode('rect', {
+            x: x,
+            y: row.y + 6,
+            width: w,
+            height: row.boxH,
+            rx: '3',
+            fill: 'var(--q-color-surface)',
+            stroke: 'var(--q-color-border)',
+            'stroke-width': '1'
+          }));
+          g.appendChild(textLines(row.lines, { fill: 'var(--q-color-text)', 'font-size': String(SEQ_NOTE_FONT), 'text-anchor': 'middle' }, x + w / 2, row.y + 6 + 6 + 13, SEQ_LINE));
+          notes.appendChild(g);
+        } else if (row.kind === 'end') {
+          var ex = L.cx[data.partMap[row.end.id].index];
+          var eg = svgNode('g', { 'data-q-sequence-end': row.end.id });
+          [[-7, -7, 7, 7], [-7, 7, 7, -7]].forEach(function (d) {
+            eg.appendChild(svgNode('line', {
+              x1: ex + d[0],
+              y1: row.arrowY + d[1],
+              x2: ex + d[2],
+              y2: row.arrowY + d[3],
+              stroke: 'var(--q-color-text)',
+              'stroke-width': '2'
+            }));
+          });
+          marks.appendChild(eg);
+        } else if (row.kind === 'message') {
+          messages.appendChild(this._buildMessage(data, L, row, total));
+        }
+      }, this);
+
+      data.participants.forEach(function (p, i) {
+        var made = L.created[p.id];
+        if (!made) {
+          return;
+        }
+        var x = L.cx[i] - L.headW / 2;
+        var y = made.y - L.headH / 2;
+        var accent = p.color ? 'var(--q-color-chart-' + p.color + ')' : 'var(--q-color-border)';
+        var g = svgNode('g', {
+          'data-q-sequence-created': p.id,
+          role: 'button',
+          tabindex: '-1',
+          'aria-label': p.label + (p.kind ? ', ' + p.kind : '')
+        });
+        g.appendChild(svgNode('rect', { x: x, y: y, width: L.headW, height: L.headH, rx: '4', fill: 'var(--q-color-surface)', stroke: 'var(--q-color-border)', 'stroke-width': '1' }));
+        g.appendChild(svgNode('rect', { x: x, y: y, width: L.headW, height: 4, rx: '2', fill: accent }));
+        var textY = y + 4 + 8;
+        if (p.kind) {
+          var tag = svgNode('text', { 'data-q-sequence-kind-tag': '', x: L.cx[i], y: textY + 10, fill: 'var(--q-color-text-muted)', 'font-size': '11', 'font-weight': '600', 'text-anchor': 'middle' });
+          tag.textContent = p.kind;
+          g.appendChild(tag);
+          textY += 15;
+        }
+        g.appendChild(textLines(seqWrap(p.label, measure, L.wrapW, 13, '600'), { 'data-q-sequence-header-label': '', fill: 'var(--q-color-text)', 'font-size': '13', 'font-weight': '600', 'text-anchor': 'middle' }, L.cx[i], textY + 12, 16));
+        marks.appendChild(g);
+      }, this);
+      return svg;
+    }
+
+    _buildMessage(data, L, row, total) {
+      var m = row.message;
+      var filled = m.type === 'call';
+      var g = svgNode('g', {
+        'data-q-sequence-message': m.number,
+        'data-q-sequence-type': m.type,
+        role: 'button',
+        tabindex: '-1',
+        'aria-label': 'Message ' + m.number + ' of ' + total + ', ' + data.partMap[m.from].label + ' to ' + data.partMap[m.to].label + ', ' + m.label + ', ' + m.type
+      });
+      var d;
+      var tip;
+      var span;
+      var labelAt;
+      if (m.self) {
+        d = 'M' + row.x1 + ' ' + row.y1 + ' L' + (row.x1 + SEQ_SELF_WIDTH) + ' ' + row.y1 + ' L' + (row.x1 + SEQ_SELF_WIDTH) + ' ' + row.y2 + ' L' + row.x1 + ' ' + row.y2;
+        tip = { x: row.x1, y: row.y2 };
+        span = { left: row.x1 - 6, right: row.x1 + SEQ_SELF_WIDTH + 8 + row.labelW + 8 };
+        var top = (row.y1 + row.y2) / 2 - SEQ_LINE * row.lines.length / 2;
+        labelAt = { x: row.x1 + SEQ_SELF_WIDTH + 8, y: top + 14, anchor: 'start' };
+      } else {
+        d = 'M' + row.x1 + ' ' + row.arrowY + ' L' + row.x2 + ' ' + row.arrowY;
+        tip = { x: row.x2, y: row.arrowY };
+        span = { left: Math.min(row.x1, row.x2) - 6, right: Math.max(row.x1, row.x2) + 6 };
+        labelAt = { x: (row.x1 + row.x2) / 2, y: row.y + 20, anchor: 'middle' };
+      }
+      g.appendChild(svgNode('rect', {
+        'data-q-sequence-hit': '',
+        x: span.left,
+        y: row.y,
+        width: span.right - span.left,
+        height: row.h,
+        fill: 'transparent'
+      }));
+      g.appendChild(svgNode('path', {
+        'data-q-sequence-line': '',
+        d: d,
+        fill: 'none',
+        stroke: 'var(--q-color-text)',
+        'stroke-width': '1.5',
+        'stroke-dasharray': m.type === 'reply' ? '6 4' : null
+      }));
+      var back = tip.x - row.dir * 9;
+      g.appendChild(svgNode('path', {
+        'data-q-sequence-head': filled ? 'filled' : 'open',
+        d: filled
+          ? 'M' + tip.x + ' ' + tip.y + ' L' + back + ' ' + (tip.y - 4.5) + ' L' + back + ' ' + (tip.y + 4.5) + ' Z'
+          : 'M' + back + ' ' + (tip.y - 4.5) + ' L' + tip.x + ' ' + tip.y + ' L' + back + ' ' + (tip.y + 4.5),
+        fill: filled ? 'var(--q-color-text)' : 'none',
+        stroke: 'var(--q-color-text)',
+        'stroke-width': '1.5',
+        'stroke-linejoin': 'round'
+      }));
+      var text = svgNode('text', {
+        'data-q-sequence-label': '',
+        fill: 'var(--q-color-text)',
+        'font-size': String(SEQ_FONT),
+        'text-anchor': labelAt.anchor
+      });
+      row.lines.forEach(function (line, i) {
+        var tspan = svgNode('tspan', { x: labelAt.x, y: labelAt.y + i * SEQ_LINE });
+        tspan.textContent = line;
+        text.appendChild(tspan);
+      });
+      g.appendChild(text);
+      return g;
+    }
+
+    /** Builds the pinned strip: one header button per participant, positioned over its column. */
+    _buildStrip(data, L) {
+      var strip = this._strip;
+      while (strip.firstChild) {
+        strip.removeChild(strip.firstChild);
+      }
+      strip.style.height = (L.headH + 1) + 'px';
+      var inner = document.createElement('div');
+      inner.setAttribute('data-q-sequence-pinned-row', '');
+      inner.style.width = L.width + 'px';
+      inner.style.height = L.headH + 'px';
+      data.participants.forEach(function (p, i) {
+        var button = document.createElement('button');
+        button.type = 'button';
+        button.setAttribute('data-q-sequence-header', p.id);
+        button.setAttribute('tabindex', i === 0 ? '0' : '-1');
+        if (L.created[p.id]) {
+          button.setAttribute('data-q-sequence-late', '');
+        }
+        button.style.left = (L.cx[i] - L.headW / 2) + 'px';
+        button.style.width = L.headW + 'px';
+        button.style.height = L.headH + 'px';
+        button.style.setProperty('--q-sequence-accent', p.color ? 'var(--q-color-chart-' + p.color + ')' : 'var(--q-color-border)');
+        var accent = document.createElement('span');
+        accent.setAttribute('data-q-sequence-accent', '');
+        button.appendChild(accent);
+        if (p.kind) {
+          var tag = document.createElement('span');
+          tag.setAttribute('data-q-sequence-kind-tag', '');
+          tag.textContent = p.kind;
+          button.appendChild(tag);
+        }
+        var label = document.createElement('span');
+        label.setAttribute('data-q-sequence-header-label', '');
+        label.textContent = p.label;
+        button.appendChild(label);
+        inner.appendChild(button);
+      });
+      strip.appendChild(inner);
+      this._stripRow = inner;
+    }
+
+    /** Slides the strip's headers sideways by the scroll box's offset so each stays over its lifeline. */
+    _syncStrip() {
+      if (this._stripRow && this._stage) {
+        this._stripRow.style.transform = 'translateX(' + (-this._stage.scrollLeft) + 'px)';
+      }
+    }
+
+    /** Marks the strip stuck while the page has scrolled past the diagram's top but not past its end. */
+    _updateStuck() {
+      if (!this._strip || !this._stage || !this._layout) {
+        return;
+      }
+      var stuck = this.getBoundingClientRect().top < 0
+        && this._stage.getBoundingClientRect().bottom > this._layout.headH + 1;
+      if (stuck !== this._strip.hasAttribute('data-q-sequence-stuck')) {
+        if (stuck) {
+          this._strip.setAttribute('data-q-sequence-stuck', '');
+        } else {
+          this._strip.removeAttribute('data-q-sequence-stuck');
+        }
+      }
+    }
+
+    _applyTheme() {
+      /* every colour is a var(--q-*) token, so the diagram follows the theme without a redraw */
+    }
+  }
+
   define('q-tabs', QTabs);
   define('q-timeline', QTimeline);
   define('q-code', QCode);
@@ -8619,4 +9930,5 @@
   define('q-compare', QCompare);
   define('q-flow', QFlow);
   define('q-schema', QSchema);
+  define('q-sequence', QSequence);
 })();

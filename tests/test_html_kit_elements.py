@@ -8878,3 +8878,1012 @@ def test_schema_reference_example_builds_clean_and_draws_both_models(tmp_path: P
         {"notation": None, "ready": "true", "cards": 4, "lines": 4, "summary": 1},
         {"notation": "class", "ready": "true", "cards": 7, "lines": 7, "summary": 1},
     ]
+
+
+# --- q-sequence -------------------------------------------------------------------------------
+
+SEQ_KINDS = {"person": 1, "ui": 2, "service": 3, "external": 4, "store": 5}
+
+
+def _seq_part(pid: str, label: str, kind: str | None = None, detail: str | None = None) -> dict:
+    part: dict = {"id": pid, "label": label}
+    if kind:
+        part["kind"] = kind
+    if detail:
+        part["detail"] = detail
+    return part
+
+
+def _seq_msg(frm: str, to: str, label: str, mtype: str, mid: str | None = None, **extra: object) -> dict:
+    step: dict = {"from": frm, "to": to, "label": label, "type": mtype}
+    if mid:
+        step["id"] = mid
+    step.update(extra)
+    return step
+
+
+SEQ_CHECKOUT_DATA = {
+    "kinds": SEQ_KINDS,
+    "participants": [
+        _seq_part("shopper", "Shopper", "person"),
+        _seq_part("checkout", "Checkout", "ui", "<p>The page the shopper pays on.</p>"),
+        _seq_part("billing", "Billing", "service"),
+        _seq_part("stripe", "Stripe", "external", "<p>Card processor. Charges are <strong>idempotent</strong>.</p>"),
+        _seq_part("ledger", "Ledger", "store"),
+    ],
+    "steps": [
+        _seq_msg("shopper", "checkout", "place order", "call", "place-order", detail="<p>The cart and the shipping address.</p>"),
+        _seq_msg("checkout", "billing", "charge order", "call", "charge-order"),
+        {
+            "fragment": "loop",
+            "label": "up to 3 attempts",
+            "steps": [
+                _seq_msg("billing", "stripe", "create charge", "call", "create-charge", detail="<p>Sends the amount and a <code>payment_method</code>.</p>"),
+                {
+                    "fragment": "alt",
+                    "branches": [
+                        {"label": "card valid", "steps": [_seq_msg("stripe", "billing", "charge succeeded", "reply", "charge-ok")]},
+                        {
+                            "label": "card declined",
+                            "steps": [
+                                _seq_msg("stripe", "billing", "card declined", "reply", "charge-declined"),
+                                {"note": "waits 2 seconds before retrying", "over": ["billing"]},
+                            ],
+                        },
+                    ],
+                },
+            ],
+        },
+        {"fragment": "opt", "label": "charge succeeded", "steps": [_seq_msg("billing", "ledger", "record payment", "async", "record")]},
+        _seq_msg("billing", "checkout", "order paid", "reply", "paid"),
+        _seq_msg("checkout", "shopper", "show receipt", "reply", "show-receipt"),
+    ],
+    "traces": [
+        {
+            "id": "succeeds",
+            "label": "Card succeeds",
+            "steps": [
+                {"message": "place-order", "value": {"order": "C-2207", "items": 2, "total": 48}},
+                {"message": "charge-order", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd"}},
+                {"message": "create-charge", "value": {"order": "C-2207", "amount": 48, "currency": "usd", "attempt": 1, "card": "•••• 4242"}},
+                {"message": "charge-ok", "value": {"order": "C-2207", "attempt": 1, "charge": "ch_91", "status": "succeeded"}},
+                {"message": "record", "value": {"order": "C-2207", "charge": "ch_91", "status": "succeeded"}, "note": "async, nothing waits for it"},
+                {"message": "paid", "value": {"order": "C-2207", "charge": "ch_91", "status": "paid"}},
+            ],
+        },
+        {
+            "id": "declined",
+            "label": "Declined, then retried",
+            "steps": [
+                {"message": "place-order", "value": {"order": "C-2207", "items": 2, "total": 48}},
+                {"message": "charge-order", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd"}},
+                {"message": "create-charge", "value": {"order": "C-2207", "amount": 48, "currency": "usd", "attempt": 1, "card": "•••• 4242"}},
+                {"message": "charge-declined", "value": {"order": "C-2207", "attempt": 1, "decline": "insufficient_funds"}},
+                {"message": "create-charge", "value": {"order": "C-2207", "attempt": 2, "card": "•••• 4242"}},
+                {"message": "charge-ok", "value": {"order": "C-2207", "attempt": 2, "charge": "ch_91", "status": "succeeded"}},
+                {"message": "record", "value": {"order": "C-2207", "charge": "ch_91", "status": "succeeded"}},
+                {"message": "paid", "value": {"order": "C-2207", "charge": "ch_91", "status": "paid"}},
+            ],
+        },
+    ],
+}
+
+SEQ_SELF_DATA = {
+    "participants": [_seq_part("client", "Client"), _seq_part("billing", "Billing")],
+    "steps": [
+        _seq_msg("client", "billing", "request", "async"),
+        _seq_msg("billing", "billing", "validate cart", "call"),
+        _seq_msg("billing", "client", "response", "async"),
+    ],
+}
+
+SEQ_SESSION_DATA = {
+    "kinds": {"service": 3},
+    "participants": [_seq_part("billing", "Billing", "service"), _seq_part("receipt-worker", "Receipt worker", "service")],
+    "steps": [
+        _seq_msg("billing", "receipt-worker", "start session", "call", create=True),
+        _seq_msg("receipt-worker", "billing", "session ready", "reply"),
+        _seq_msg("billing", "receipt-worker", "send receipt", "async"),
+        {"end": "receipt-worker"},
+    ],
+}
+
+SEQ_STACK_DATA = {
+    "participants": [_seq_part("a", "A"), _seq_part("b", "B"), _seq_part("c", "C")],
+    "steps": [
+        _seq_msg("a", "b", "outer", "call"),
+        _seq_msg("b", "c", "ask", "call"),
+        _seq_msg("c", "b", "call back", "call"),
+        _seq_msg("b", "c", "back", "reply"),
+        _seq_msg("c", "b", "answer", "reply"),
+        _seq_msg("b", "a", "done", "reply"),
+    ],
+}
+
+SEQ_BAD_DATA = {
+    "participants": [_seq_part("a", "A"), _seq_part("b-ok", "B")],
+    "steps": [_seq_msg("a", "b-ok", "ping", "async")],
+}
+
+
+def _seq_element(sid: str, summary: str, data: dict) -> str:
+    return f'<q-sequence id="{sid}" summary="{summary}">\n  <script type="application/json">\n  {json.dumps(data, indent=2)}\n  </script>\n</q-sequence>\n'
+
+
+SEQ_CHECKOUT = (
+    _seq_element("checkout", "Checkout charges the card through Billing and Stripe, retrying a declined card.", SEQ_CHECKOUT_DATA)
+    + _seq_element("selfmsg", "Billing validates a cart it was sent.", SEQ_SELF_DATA)
+    + _seq_element("session", "Billing starts a receipt worker and later ends it.", SEQ_SESSION_DATA)
+    + _seq_element("stack", "A call back into a busy participant.", SEQ_STACK_DATA)
+    + _seq_element("bad", "A sequence whose data is edited after the build.", SEQ_BAD_DATA)
+    + '<div style="height: 1200px"></div>\n'
+)
+
+SEQ_DATA_BY_ID = {"checkout": SEQ_CHECKOUT_DATA, "selfmsg": SEQ_SELF_DATA, "session": SEQ_SESSION_DATA, "stack": SEQ_STACK_DATA}
+
+
+@pytest.fixture(scope="module")
+def seq_page(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    reason = _node_ready()
+    if reason:
+        pytest.skip(reason)
+    work = tmp_path_factory.mktemp("kit-sequence")
+    src = work / "sequence.src.html"
+    src.write_text(HEADER + SEQ_CHECKOUT, encoding="utf-8")
+    built = _build(src, work / "sequence.html")
+    # the unknown participant is edited in after the build so the build-time check never sees it
+    html = built.read_text(encoding="utf-8")
+    good = '"to": "b-ok"'
+    assert html.count(good) == 1
+    built.write_text(html.replace(good, '"to": "b-gone"'), encoding="utf-8")
+    return built
+
+
+SEQ_HELPERS = """
+const q = (id) => document.querySelector('#' + id);
+const num = (el, name) => parseFloat(el.getAttribute(name));
+const nums = (el) => (el.getAttribute('d').match(/-?\\d+(?:\\.\\d+)?/g) || []).map(Number);
+const lifeX = (root, id) => num(root.querySelector('[data-q-sequence-lifeline="' + id + '"]'), 'x1');
+const msg = (root, n) => root.querySelector('[data-q-sequence-message="' + n + '"]');
+const lineOf = (root, n) => msg(root, n).querySelector('[data-q-sequence-line]');
+const lineY = (root, n) => nums(lineOf(root, n))[1];
+const hitOf = (root, n) => msg(root, n).querySelector('[data-q-sequence-hit]');
+const dashes = (el) => { const v = getComputedStyle(el).strokeDasharray; return v === 'none' ? [] : v.match(/\\d+(?:\\.\\d+)?/g).map(Number); };
+const barsOf = (root, id) => [...root.querySelectorAll('[data-q-sequence-bar="' + id + '"]')]
+  .map((b) => ({ x: num(b, 'x'), width: num(b, 'width'), top: num(b, 'y'), bottom: num(b, 'y') + num(b, 'height') }))
+  .sort((a, b) => a.top - b.top);
+"""
+
+
+def _seq_eval(body: str, name: str = "d") -> dict:
+    return ev(f"(async () => {{ {SEQ_HELPERS} {body} }})()", name)
+
+
+def _close(a: float, b: float, tol: float = 0.6) -> bool:
+    return abs(a - b) <= tol
+
+
+def test_seq_draws_one_shell_in_order_with_the_summary_as_the_svg_label(seq_page: Path) -> None:
+    out = run(
+        seq_page,
+        _seq_eval(
+            """
+            const root = q('checkout');
+            const svg = root.querySelector('[data-q-sequence-svg]');
+            const controls = root.querySelector(':scope > [data-q-sequence-controls]');
+            return {
+              ready: root.getAttribute('data-q-sequence-ready'),
+              children: [...root.children].map((c) => c.tagName.toLowerCase() + (c.getAttribute('data-q-sequence-controls') !== null ? ':controls' : c.hasAttribute('data-q-sequence-pinned') ? ':pinned' : c.hasAttribute('data-q-sequence-stage') ? ':stage' : c.hasAttribute('data-q-sequence-live') ? ':live' : c.hasAttribute('data-q-sequence-list') ? ':list' : '')),
+              controlsRole: controls.getAttribute('role'),
+              controlsLabel: controls.getAttribute('aria-label'),
+              buttons: controls.querySelectorAll('button').length,
+              svgParent: svg.parentElement.hasAttribute('data-q-sequence-stage'),
+              svgRole: svg.getAttribute('role'),
+              svgLabel: svg.getAttribute('aria-label'),
+              live: root.querySelector(':scope > [data-q-sequence-live]').getAttribute('aria-live'),
+              liveHidden: root.querySelector(':scope > [data-q-sequence-live]').classList.contains('q-visually-hidden'),
+              listOpen: root.querySelector(':scope > details[data-q-sequence-list]').open,
+              notice: root.querySelectorAll('[data-q-sequence-notice]').length,
+              strips: root.querySelectorAll('[data-q-sequence-pinned] button[data-q-sequence-header]').length,
+              columns: root.querySelectorAll('[data-q-sequence-lifeline]').length,
+              messages: root.querySelectorAll('[data-q-sequence-message]').length,
+              display: getComputedStyle(root).display,
+              overflowX: getComputedStyle(root.querySelector('[data-q-sequence-stage]')).overflowX,
+              pinnedPosition: getComputedStyle(root.querySelector('[data-q-sequence-pinned]')).position,
+            };
+            """
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["ready"] == "true"
+    assert d["children"] == ["script", "div:controls", "div:pinned", "div:stage", "div:live", "details:list"]
+    assert (d["controlsRole"], d["controlsLabel"], d["buttons"]) == ("toolbar", "Diagram controls", 0)
+    assert d["svgParent"] and d["svgRole"] == "img"
+    assert d["svgLabel"] == "Checkout charges the card through Billing and Stripe, retrying a declined card."
+    assert d["live"] == "polite" and d["liveHidden"]
+    assert d["listOpen"] is False and d["notice"] == 0
+    assert (d["strips"], d["columns"], d["messages"]) == (5, 5, 8)
+    assert d["display"] == "block" and d["overflowX"] == "auto" and d["pinnedPosition"] == "sticky"
+
+
+def test_seq_numbers_messages_in_row_order_and_styles_each_type(seq_page: Path) -> None:
+    out = run(
+        seq_page,
+        _seq_eval(
+            """
+            const root = q('checkout');
+            const rows = [...root.querySelectorAll('[data-q-sequence-message]')].map((g) => {
+              const n = g.getAttribute('data-q-sequence-message');
+              const [x1, y, x2] = (() => { const p = nums(g.querySelector('[data-q-sequence-line]')); return [p[0], p[1], p[p.length - 2]]; })();
+              const head = g.querySelector('[data-q-sequence-head]');
+              return {
+                n: Number(n),
+                label: g.querySelector('[data-q-sequence-label]').textContent,
+                y: y,
+                dash: dashes(g.querySelector('[data-q-sequence-line]')),
+                headFill: getComputedStyle(head).fill === 'none' ? 'open' : 'filled',
+                dir: Math.sign(x2 - x1),
+                endX: x2,
+                aria: g.getAttribute('aria-label'),
+                role: g.getAttribute('role'),
+                hitY: num(g.querySelector('[data-q-sequence-hit]'), 'y'),
+              };
+            });
+            return { rows: rows, lifelines: ['shopper', 'checkout', 'billing', 'stripe', 'ledger'].map((id) => lifeX(root, id)) };
+            """
+        ),
+    )
+    assert_clean(out)
+    rows = out["results"]["d"]["rows"]
+    lifelines = out["results"]["d"]["lifelines"]
+    assert [r["n"] for r in rows] == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert [r["label"] for r in rows] == [
+        "1. place order",
+        "2. charge order",
+        "3. create charge",
+        "4. charge succeeded",
+        "5. card declined",
+        "6. record payment",
+        "7. order paid",
+        "8. show receipt",
+    ]
+    ys = [r["y"] for r in rows]
+    assert ys == sorted(ys) and len(set(ys)) == 8
+    assert [r["dash"] for r in rows] == [[], [], [], [6, 4], [6, 4], [], [6, 4], [6, 4]]
+    assert [r["headFill"] for r in rows] == ["filled", "filled", "filled", "open", "open", "open", "open", "open"]
+    assert [r["dir"] for r in rows] == [1, 1, 1, -1, -1, 1, -1, -1]
+    targets = [1, 2, 3, 2, 2, 4, 1, 0]
+    for r, t in zip(rows, targets):
+        assert abs(r["endX"] - lifelines[t]) <= 12, (r["n"], r["endX"], lifelines[t])
+    assert rows[2]["aria"] == "Message 3 of 8, Billing to Stripe, create charge, call"
+    assert rows[5]["aria"] == "Message 6 of 8, Billing to Ledger, record payment, async"
+    assert all(r["role"] == "button" for r in rows)
+    assert lifelines == sorted(lifelines)
+
+
+def test_seq_self_message_row_is_taller_and_opens_no_bar(seq_page: Path) -> None:
+    out = run(
+        seq_page,
+        _seq_eval(
+            """
+            const root = q('selfmsg');
+            const self = nums(lineOf(root, 2));
+            const hits = [1, 2, 3].map((n) => num(hitOf(root, n), 'height'));
+            return {
+              hits: hits,
+              startX: self[0], endX: self[self.length - 2], maxX: Math.max(...self.filter((v, i) => i % 2 === 0)),
+              life: lifeX(root, 'billing'),
+              bars: root.querySelectorAll('[data-q-sequence-bar]').length,
+              headFill: getComputedStyle(msg(root, 2).querySelector('[data-q-sequence-head]')).fill === 'none' ? 'open' : 'filled',
+              label: msg(root, 2).querySelector('[data-q-sequence-label]').textContent,
+            };
+            """
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["hits"][1] > d["hits"][0] and d["hits"][1] > d["hits"][2]
+    assert d["hits"][0] == d["hits"][2]
+    assert _close(d["startX"], d["life"]) and _close(d["endX"], d["life"]) and d["maxX"] > d["life"] + 20
+    assert d["bars"] == 0
+    assert d["headFill"] == "filled" and d["label"] == "2. validate cart"
+
+
+def test_seq_fragments_box_exactly_their_rows_and_span_their_columns(seq_page: Path) -> None:
+    out = run(
+        seq_page,
+        _seq_eval(
+            """
+            const root = q('checkout');
+            const box = (type) => {
+              const g = root.querySelector('[data-q-sequence-fragment="' + type + '"]');
+              const r = g.querySelector('[data-q-sequence-fragment-box]');
+              return {
+                left: num(r, 'x'), right: num(r, 'x') + num(r, 'width'), top: num(r, 'y'), bottom: num(r, 'y') + num(r, 'height'),
+                tab: g.querySelector('[data-q-sequence-fragment-tab]').textContent,
+                label: [...g.querySelectorAll('[data-q-sequence-fragment-label]')].map((t) => t.textContent),
+                sections: [...g.querySelectorAll('[data-q-sequence-section-label]')].map((t) => t.textContent),
+                dividers: g.querySelectorAll('[data-q-sequence-divider]').length,
+                dash: g.querySelector('[data-q-sequence-divider]') ? dashes(g.querySelector('[data-q-sequence-divider]')) : null,
+              };
+            };
+            const rowTop = (n) => num(hitOf(root, n), 'y');
+            const rowBottom = (n) => num(hitOf(root, n), 'y') + num(hitOf(root, n), 'height');
+            const note = root.querySelector('[data-q-sequence-note] rect');
+            return {
+              loop: box('loop'), alt: box('alt'), opt: box('opt'),
+              fragments: [...root.querySelectorAll('[data-q-sequence-fragment]')].map((g) => g.getAttribute('data-q-sequence-fragment')),
+              rows: [1, 2, 3, 4, 5, 6, 7].map((n) => [rowTop(n), rowBottom(n)]),
+              noteTop: num(note, 'y'), noteBottom: num(note, 'y') + num(note, 'height'),
+              noteText: root.querySelector('[data-q-sequence-note]').textContent,
+              noteCenter: num(note, 'x') + num(note, 'width') / 2,
+              life: ['checkout', 'billing', 'stripe', 'ledger'].map((id) => lifeX(root, id)),
+              dividerY: num(root.querySelector('[data-q-sequence-divider]'), 'y1'),
+            };
+            """
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["fragments"] == ["loop", "alt", "opt"]
+    checkout, billing, stripe, ledger = d["life"]
+    rows = d["rows"]
+    loop, alt, opt = d["loop"], d["alt"], d["opt"]
+    assert (loop["tab"], loop["label"], loop["sections"], loop["dividers"]) == ("loop", ["up to 3 attempts"], [], 0)
+    assert loop["top"] >= rows[1][1] - 0.5 and loop["top"] <= rows[2][0]
+    assert loop["bottom"] >= d["noteBottom"] and loop["bottom"] <= opt["top"]
+    assert checkout < loop["left"] < billing and stripe < loop["right"] < ledger
+    assert (alt["tab"], alt["sections"], alt["dividers"], alt["dash"]) == ("alt", ["card valid", "card declined"], 1, [6, 4])
+    assert alt["top"] >= rows[2][1] - 0.5 and alt["top"] <= rows[3][0]
+    assert alt["bottom"] >= d["noteBottom"] and alt["bottom"] <= loop["bottom"]
+    assert loop["left"] < alt["left"] < billing and stripe < alt["right"] < loop["right"]
+    assert alt["top"] < d["dividerY"] < rows[4][0]
+    assert (opt["tab"], opt["label"], opt["sections"]) == ("opt", ["charge succeeded"], [])
+    assert opt["top"] >= loop["bottom"] and opt["top"] <= rows[5][0] and opt["bottom"] >= rows[5][1]
+    assert opt["bottom"] <= rows[6][0]
+    assert checkout < opt["left"] < billing and ledger < opt["right"]
+    assert d["noteText"] == "waits 2 seconds before retrying"
+    assert _close(d["noteCenter"], billing, 1.5)
+    assert d["noteTop"] >= rows[4][1] - 0.5
+
+
+def test_seq_activation_bars_follow_the_call_and_reply_walk(seq_page: Path) -> None:
+    out = run(
+        seq_page,
+        _seq_eval(
+            """
+            const root = q('checkout');
+            const ys = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => lineY(root, n));
+            return {
+              ys: ys,
+              bars: Object.fromEntries(['shopper', 'checkout', 'billing', 'stripe', 'ledger'].map((id) => [id, barsOf(root, id)])),
+              life: Object.fromEntries(['checkout', 'billing', 'stripe'].map((id) => [id, lifeX(root, id)])),
+              dividerY: num(root.querySelector('[data-q-sequence-divider]'), 'y1'),
+            };
+            """
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    ys, bars = d["ys"], d["bars"]
+    assert bars["shopper"] == [] and bars["ledger"] == []
+    assert len(bars["checkout"]) == 1 and len(bars["billing"]) == 1 and len(bars["stripe"]) == 2
+    assert _close(bars["checkout"][0]["top"], ys[0]) and _close(bars["checkout"][0]["bottom"], ys[7])
+    assert _close(bars["billing"][0]["top"], ys[1]) and _close(bars["billing"][0]["bottom"], ys[6])
+    first, second = bars["stripe"]
+    assert _close(first["top"], ys[2]) and _close(first["bottom"], ys[3])
+    assert _close(second["top"], d["dividerY"]) and _close(second["bottom"], ys[4])
+    for pid, bar in (("checkout", bars["checkout"][0]), ("billing", bars["billing"][0]), ("stripe", first)):
+        assert _close(bar["x"] + bar["width"] / 2, d["life"][pid], 0.6)
+
+
+def test_seq_a_call_into_a_busy_participant_stacks_an_offset_bar(seq_page: Path) -> None:
+    out = run(
+        seq_page,
+        _seq_eval(
+            """
+            const root = q('stack');
+            return { bars: barsOf(root, 'b'), ys: [1, 2, 3, 4, 5, 6].map((n) => lineY(root, n)), a: barsOf(root, 'a'), c: barsOf(root, 'c') };
+            """
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    ys = d["ys"]
+    assert d["a"] == [] and len(d["c"]) == 1
+    assert _close(d["c"][0]["top"], ys[1]) and _close(d["c"][0]["bottom"], ys[4])
+    outer, inner = d["bars"]
+    assert _close(outer["top"], ys[0]) and _close(outer["bottom"], ys[5])
+    assert _close(inner["top"], ys[2]) and _close(inner["bottom"], ys[3])
+    assert inner["x"] > outer["x"] and inner["x"] < outer["x"] + outer["width"]
+
+
+def test_seq_headers_carry_the_kind_tag_and_accent_from_the_chart_number(seq_page: Path) -> None:
+    out = run(
+        seq_page,
+        _seq_eval(
+            """
+            const probe = (value) => { const p = document.createElement('span'); p.style.background = value; document.body.appendChild(p); const c = getComputedStyle(p).backgroundColor; p.remove(); return c; };
+            const strip = (root) => [...root.querySelectorAll('[data-q-sequence-pinned] button[data-q-sequence-header]')].map((b) => {
+              const tag = b.querySelector('[data-q-sequence-kind-tag]');
+              return {
+                id: b.getAttribute('data-q-sequence-header'),
+                label: b.querySelector('[data-q-sequence-header-label]').textContent,
+                tag: tag ? tag.textContent : null,
+                accent: getComputedStyle(b.querySelector('[data-q-sequence-accent]')).backgroundColor,
+                center: b.getBoundingClientRect().left + b.getBoundingClientRect().width / 2,
+                type: b.getAttribute('type'),
+              };
+            });
+            const root = q('checkout');
+            const life = (id) => root.querySelector('[data-q-sequence-lifeline="' + id + '"]');
+            return {
+              headers: strip(root),
+              plain: strip(q('selfmsg')),
+              charts: [1, 2, 3, 4, 5].map((n) => probe('var(--q-color-chart-' + n + ')')),
+              border: probe('var(--q-color-border)'),
+              lifeDash: dashes(life('billing')),
+              lifeLeft: ['shopper', 'checkout', 'billing', 'stripe', 'ledger'].map((id) => life(id).getBoundingClientRect().left),
+            };
+            """
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert [h["label"] for h in d["headers"]] == ["Shopper", "Checkout", "Billing", "Stripe", "Ledger"]
+    assert [h["tag"] for h in d["headers"]] == ["person", "ui", "service", "external", "store"]
+    assert [h["accent"] for h in d["headers"]] == d["charts"]
+    assert all(h["type"] == "button" for h in d["headers"])
+    assert len(set(d["charts"])) == 5
+    assert [h["tag"] for h in d["plain"]] == [None, None]
+    assert [h["accent"] for h in d["plain"]] == [d["border"], d["border"]]
+    assert d["lifeDash"] and sum(d["lifeDash"]) > 0
+    for header, left in zip(d["headers"], d["lifeLeft"]):
+        assert abs(header["center"] - left) <= 1, (header["id"], header["center"], left)
+
+
+def test_seq_a_created_participant_starts_at_its_creating_row_and_ends_in_an_x(seq_page: Path) -> None:
+    out = run(
+        seq_page,
+        _seq_eval(
+            """
+            const root = q('session');
+            const created = root.querySelector('[data-q-sequence-created="receipt-worker"]');
+            const box = created.querySelector('rect');
+            const life = root.querySelector('[data-q-sequence-lifeline="receipt-worker"]');
+            const end = root.querySelector('[data-q-sequence-end="receipt-worker"]');
+            const endBox = end.getBBox();
+            const first = nums(lineOf(root, 1));
+            const strip = (id) => getComputedStyle(root.querySelector('[data-q-sequence-pinned] [data-q-sequence-header="' + id + '"]')).opacity;
+            return {
+              boxTop: num(box, 'y'), boxBottom: num(box, 'y') + num(box, 'height'), boxLeft: num(box, 'x'),
+              boxLabel: created.textContent,
+              y1: lineY(root, 1), y2: lineY(root, 2), y3: lineY(root, 3),
+              lifeTop: num(life, 'y1'), lifeBottom: num(life, 'y2'),
+              billingTop: num(root.querySelector('[data-q-sequence-lifeline="billing"]'), 'y1'),
+              billingBottom: num(root.querySelector('[data-q-sequence-lifeline="billing"]'), 'y2'),
+              endCenterY: endBox.y + endBox.height / 2, endCenterX: endBox.x + endBox.width / 2,
+              lifeX: num(life, 'x1'),
+              firstEndX: first[first.length - 2],
+              bars: barsOf(root, 'receipt-worker'),
+              stripWorker: strip('receipt-worker'), stripBilling: strip('billing'),
+              createdCount: root.querySelectorAll('[data-q-sequence-created]').length,
+              endCount: root.querySelectorAll('[data-q-sequence-end]').length,
+            };
+            """
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["createdCount"] == 1 and d["endCount"] == 1
+    assert d["boxTop"] < d["y1"] < d["boxBottom"] and _close(d["y1"], (d["boxTop"] + d["boxBottom"]) / 2, 1)
+    assert d["boxLabel"].find("Receipt worker") >= 0
+    assert d["lifeTop"] >= d["boxBottom"] - 0.5 and d["lifeTop"] < d["y2"]
+    assert d["billingTop"] == 0 and d["billingBottom"] > d["lifeBottom"] - 0.5
+    assert d["y3"] < d["endCenterY"] and _close(d["lifeBottom"], d["endCenterY"], 1.5)
+    assert _close(d["endCenterX"], d["lifeX"], 1)
+    assert _close(d["firstEndX"], d["boxLeft"], 1.5)
+    assert len(d["bars"]) == 1 and d["bars"][0]["top"] >= d["boxBottom"] - 0.5 and _close(d["bars"][0]["bottom"], d["y2"])
+    assert d["stripWorker"] == "0" and d["stripBilling"] == "1"
+
+
+PHONE_PIN = """
+const root = q('checkout');
+const stage = root.querySelector('[data-q-sequence-stage]');
+const strip = root.querySelector('[data-q-sequence-pinned]');
+const svg = root.querySelector('[data-q-sequence-svg]');
+const label = msg(root, 3).querySelector('[data-q-sequence-label]');
+const lined = () => ['shopper', 'checkout', 'billing', 'stripe', 'ledger'].map((id) => {
+  const b = strip.querySelector('[data-q-sequence-header="' + id + '"]').getBoundingClientRect();
+  const l = root.querySelector('[data-q-sequence-lifeline="' + id + '"]').getBoundingClientRect();
+  return Math.abs(b.left + b.width / 2 - l.left);
+});
+const pinState = () => ({ stuck: strip.hasAttribute('data-q-sequence-stuck'), top: strip.getBoundingClientRect().top, off: lined(), left: stage.scrollLeft });
+"""
+
+
+def test_seq_phone_scrolls_sideways_at_full_size_with_headers_pinned_and_in_step(seq_page: Path) -> None:
+    out = run(
+        seq_page,
+        {"viewport": {"width": 375, "height": 400}},
+        _seq_eval(
+            PHONE_PIN
+            + """
+            const rect = label.getBoundingClientRect();
+            return {
+              scrolls: stage.scrollWidth > stage.clientWidth + 100,
+              svgScaled: Math.abs(svg.getBoundingClientRect().width - num(svg, 'width')) > 0.5,
+              labelHeight: rect.height, fontSize: getComputedStyle(label).fontSize,
+              stuckAtRest: strip.hasAttribute('data-q-sequence-stuck'),
+              pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+            };
+            """,
+            "rest",
+        ),
+        _seq_eval("window.scrollTo(0, q('checkout').getBoundingClientRect().top + window.scrollY + 220)", "down"),
+        {"wait": 300},
+        _seq_eval(PHONE_PIN + "return pinState();", "first"),
+        _seq_eval("(() => { const s = q('checkout').querySelector('[data-q-sequence-stage]'); s.scrollLeft = s.scrollWidth; })()", "sideways"),
+        {"wait": 300},
+        _seq_eval(PHONE_PIN + "return pinState();", "second"),
+        _seq_eval("window.scrollTo(0, q('checkout').getBoundingClientRect().bottom + window.scrollY + 300)", "past"),
+        {"wait": 300},
+        _seq_eval(PHONE_PIN + "return pinState();", "third"),
+        _seq_eval("window.scrollTo(0, 0)", "up"),
+        {"wait": 300},
+        _seq_eval(PHONE_PIN + "return pinState();", "back"),
+        {"viewport": {"width": 1280, "height": 800}},
+        _seq_eval(PHONE_PIN + "return { labelHeight: label.getBoundingClientRect().height, fontSize: getComputedStyle(label).fontSize };", "wide"),
+    )
+    assert_clean(out)
+    rest, wide = out["results"]["rest"], out["results"]["wide"]
+    assert rest["scrolls"] and not rest["svgScaled"] and not rest["pageOverflow"] and not rest["stuckAtRest"]
+    assert rest["fontSize"] == "14px" == wide["fontSize"]
+    assert abs(rest["labelHeight"] - wide["labelHeight"]) <= 0.5
+    first, second, third, back = (out["results"][k] for k in ("first", "second", "third", "back"))
+    assert first["stuck"] is True and first["top"] == 0 and max(first["off"]) <= 1
+    assert second["left"] > 100 and second["stuck"] is True and second["top"] == 0 and max(second["off"]) <= 1
+    assert third["stuck"] is False and third["top"] < 0
+    assert back["stuck"] is False and back["top"] > 0
+
+
+SEQ_CANON = """
+const canon = (n) => n.nodeType === 3
+  ? JSON.stringify(n.nodeValue)
+  : n.tagName.toLowerCase() + '[' + [...n.attributes].map((a) => a.name + '=' + a.value).sort().join(',') + '](' + [...n.childNodes].map(canon).join('') + ')';
+const listOf = (id) => {
+  const details = document.querySelector('#' + id + ' > details[data-q-sequence-list]');
+  const copy = details.cloneNode(true);
+  copy.normalize();
+  copy.removeAttribute('open');
+  return canon(copy);
+};
+"""
+
+
+def test_seq_runtime_list_matches_the_builders_list_and_follows_edits(seq_page: Path) -> None:
+    ids = ["checkout", "selfmsg", "session", "stack"]
+    lists = "return { " + ", ".join(f"{i}: listOf('{i}')" for i in ids) + " };"
+    runtime = run(seq_page, ev(f"(() => {{ {SEQ_CANON} {lists} }})()", "lists"))
+    builder = run(seq_page, ev(f"(() => {{ {SEQ_CANON} {lists} }})()", "lists"), javaScript=False)
+    assert_clean(runtime)
+    assert_clean(builder)
+    for sid in ids:
+        assert runtime["results"]["lists"][sid] == builder["results"]["lists"][sid], sid
+        assert "data-q-sequence-list-body" in runtime["results"]["lists"][sid]
+    shape = run(
+        seq_page,
+        _seq_eval(
+            """
+            const root = q('checkout');
+            const body = root.querySelector('[data-q-sequence-list-body]');
+            const msgs = [...body.querySelectorAll('[data-q-sequence-list-message]')];
+            const loop = body.querySelector('[data-q-sequence-list-fragment="loop"]');
+            const alt = body.querySelector('[data-q-sequence-list-fragment="alt"]');
+            const step = body.querySelector('[data-q-sequence-list-trace="declined"] [data-q-sequence-list-step="4"]');
+            return {
+              summary: root.querySelector('details[data-q-sequence-list] > summary').textContent,
+              participants: [...body.querySelectorAll('[data-q-sequence-list-participants] > li')].map((li) => li.textContent),
+              numbers: msgs.map((li) => li.getAttribute('data-q-sequence-list-message')),
+              m3: msgs[2].firstChild.textContent,
+              m3Detail: msgs[2].querySelector('[data-q-sequence-list-detail]').textContent,
+              m6: msgs[5].firstChild.textContent,
+              loopText: loop.firstChild.textContent,
+              altText: alt.firstChild.textContent,
+              branches: [...alt.querySelectorAll(':scope > ol > li')].map((li) => li.firstChild.textContent),
+              note: body.querySelector('[data-q-sequence-list-note]').textContent,
+              step4: step.firstChild.textContent,
+              step4Code: step.querySelector(':scope > pre > code').textContent,
+              traces: [...body.querySelectorAll('[data-q-sequence-list-trace] > p > strong')].map((s) => s.textContent),
+            };
+            """
+        ),
+    )
+    assert_clean(shape)
+    s = shape["results"]["d"]
+    assert s["summary"] == "Diagram as a list"
+    assert s["participants"][0] == "Shopper (person)"
+    assert s["participants"][3] == "Stripe (external): Card processor. Charges are idempotent."
+    assert s["numbers"] == [str(n) for n in range(1, 9)]
+    assert s["m3"] == "3. Billing → Stripe: create charge (call)"
+    assert s["m3Detail"] == "Sends the amount and a payment_method."
+    assert s["m6"] == "6. Billing → Ledger: record payment (async)"
+    assert s["loopText"] == "loop: up to 3 attempts"
+    assert s["altText"] == "alt: card valid / card declined"
+    assert s["branches"] == ["card valid", "card declined"]
+    assert s["note"] == "Note over Billing: waits 2 seconds before retrying"
+    assert s["step4"] == "4. message 5, Stripe → Billing, card declined"
+    assert s["step4Code"] == json.dumps(SEQ_CHECKOUT_DATA["traces"][1]["steps"][3]["value"], indent=2, ensure_ascii=False)
+    assert s["traces"] == ["Trace: Card succeeds", "Trace: Declined, then retried"]
+    edited = run(
+        seq_page,
+        _seq_eval(
+            """
+            const root = q('checkout');
+            const script = root.querySelector(':scope > script');
+            const svg = root.querySelector('[data-q-sequence-svg]');
+            script.textContent = script.textContent.replace('"Shopper"', '"Buyer"');
+            await new Promise((r) => setTimeout(r, 300));
+            return {
+              first: root.querySelector('[data-q-sequence-list-participants] > li').textContent,
+              header: root.querySelector('[data-q-sequence-header="shopper"] [data-q-sequence-header-label]').textContent,
+              redrawn: root.querySelector('[data-q-sequence-svg]') !== svg,
+              ready: root.getAttribute('data-q-sequence-ready'),
+              svgs: root.querySelectorAll('[data-q-sequence-svg]').length,
+            };
+            """
+        ),
+    )
+    assert_clean(edited)
+    assert edited["results"]["d"] == {"first": "Buyer (person)", "header": "Buyer", "redrawn": True, "ready": "true", "svgs": 1}
+
+
+def test_seq_theme_toggle_recolors_lifelines_and_arrows_without_a_redraw(seq_page: Path) -> None:
+    colors = """
+      const root = q('checkout');
+      const cs = (el, prop) => getComputedStyle(el)[prop];
+      const snap = () => ({
+        life: cs(root.querySelector('[data-q-sequence-lifeline="billing"]'), 'stroke'),
+        arrow: cs(lineOf(root, 1), 'stroke'),
+        bar: cs(root.querySelector('[data-q-sequence-bar]'), 'fill'),
+        box: cs(root.querySelector('[data-q-sequence-fragment-box]'), 'stroke'),
+        header: cs(root.querySelector('[data-q-sequence-header="billing"]'), 'backgroundColor'),
+      });
+    """
+    out = run(
+        seq_page,
+        _seq_eval(colors + "window.__svg = root.querySelector('[data-q-sequence-svg]'); window.__lines = root.querySelectorAll('[data-q-sequence-line]').length; return snap();", "light"),
+        ev("document.documentElement.setAttribute('data-theme', 'dark')", "toggle"),
+        {"wait": 150},
+        _seq_eval(
+            colors
+            + """
+            return { colors: snap(), same: window.__svg === root.querySelector('[data-q-sequence-svg]') && window.__svg.isConnected,
+                     lines: root.querySelectorAll('[data-q-sequence-line]').length === window.__lines, ready: root.getAttribute('data-q-sequence-ready') };
+            """,
+            "dark",
+        ),
+        colorScheme="light",
+    )
+    assert_clean(out)
+    light, dark = out["results"]["light"], out["results"]["dark"]
+    assert dark["same"] and dark["lines"] and dark["ready"] == "true"
+    for key in ("life", "arrow", "bar", "box", "header"):
+        assert light[key] != dark["colors"][key], key
+
+
+def test_seq_a_bad_payload_shows_the_notice_opens_the_list_and_flags_an_error(seq_page: Path) -> None:
+    out = run(
+        seq_page,
+        _seq_eval(
+            """
+            const root = q('bad');
+            const notice = root.querySelector('[data-q-sequence-stage] [data-q-sequence-notice]');
+            return {
+              ready: root.getAttribute('data-q-sequence-ready'),
+              notice: notice && notice.textContent,
+              noticeTag: notice && notice.tagName,
+              listOpen: root.querySelector(':scope > details[data-q-sequence-list]').open,
+              listText: root.querySelector('[data-q-sequence-list-message]').textContent,
+              svg: root.querySelector('[data-q-sequence-svg]') !== null,
+              strip: root.querySelector('[data-q-sequence-header]') !== null,
+              button: root.querySelector('[data-q-sequence-action]') !== null,
+              good: q('checkout').getAttribute('data-q-sequence-ready'),
+            };
+            """
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["d"] == {
+        "ready": "error",
+        "notice": "This diagram could not be drawn. The full diagram is listed below.",
+        "noticeTag": "P",
+        "listOpen": True,
+        "listText": "1. A → B: ping (async)",
+        "svg": False,
+        "strip": False,
+        "button": False,
+        "good": "true",
+    }
+
+
+def test_seq_without_scripts_shows_the_injected_list_with_unnumbered_steps(seq_page: Path) -> None:
+    out = run(
+        seq_page,
+        _seq_eval(
+            """
+            const root = q('checkout');
+            const style = (sel) => getComputedStyle(root.querySelector(sel)).listStyleType;
+            const details = root.querySelector(':scope > details[data-q-sequence-list]');
+            return {
+              open: details.open,
+              visible: details.getBoundingClientRect().height > 0,
+              notice: root.querySelector('[data-q-sequence-stage] > [data-q-sequence-notice]').textContent,
+              svg: root.querySelector('svg') !== null,
+              steps: style('[data-q-sequence-list-steps]'),
+              nested: style('[data-q-sequence-list-fragment="loop"] > ol'),
+              deep: style('[data-q-sequence-list-fragment="alt"] > ol > li > ol'),
+              trace: style('[data-q-sequence-list-trace="succeeds"] > ol'),
+              messages: root.querySelectorAll('[data-q-sequence-list-message]').length,
+              ready: root.hasAttribute('data-q-sequence-ready'),
+            };
+            """
+        ),
+        javaScript=False,
+    )
+    assert_clean(out)
+    assert out["results"]["d"] == {
+        "open": True,
+        "visible": True,
+        "notice": "JavaScript is off, so the diagram is shown as a list below.",
+        "svg": False,
+        "steps": "none",
+        "nested": "none",
+        "deep": "none",
+        "trace": "none",
+        "messages": 8,
+        "ready": False,
+    }
+
+
+def test_seq_the_runtime_list_also_has_unnumbered_steps(seq_page: Path) -> None:
+    out = run(
+        seq_page,
+        _seq_eval(
+            """
+            const root = q('checkout');
+            root.querySelector('details[data-q-sequence-list]').open = true;
+            const style = (sel) => getComputedStyle(root.querySelector(sel)).listStyleType;
+            return [style('[data-q-sequence-list-steps]'), style('[data-q-sequence-list-fragment="alt"] > ol > li > ol'), style('[data-q-sequence-list-trace="declined"] > ol')];
+            """
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["d"] == ["none", "none", "none"]
+
+
+def _seq_base(*steps: dict, **extra: object) -> dict:
+    return {
+        "participants": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}, {"id": "c", "label": "C"}],
+        "steps": list(steps) if steps else [_seq_msg("a", "b", "x", "call")],
+        **extra,
+    }
+
+
+def _seq_nested(depth: int) -> dict:
+    inner: dict = _seq_msg("a", "b", "deep", "async")
+    for _ in range(depth):
+        inner = {"fragment": "loop", "steps": [inner]}
+    return _seq_base(inner)
+
+
+def _seq_bad_text_cases() -> dict[str, str]:
+    return {
+        "root array": "[]",
+        "root null": "null",
+        "truncated": '{"participants": [',
+        "lone surrogate in a label": json.dumps(_seq_base(_seq_msg("a", "b", "bad \ud800", "call"))),
+    }
+
+
+def _seq_cases() -> dict[str, dict]:
+    m = _seq_msg
+
+    def worker(*steps: dict) -> dict:
+        data = _seq_base(*steps)
+        data["participants"].append({"id": "w", "label": "Worker"})
+        return data
+
+    def patched(fn) -> dict:
+        data = _seq_base()
+        fn(data)
+        return data
+
+    def traced(*steps: dict, **trace: object) -> dict:
+        return _seq_base(m("a", "b", "x", "call", "m1"), m("b", "a", "y", "reply", "m2"), traces=[{"id": "t", "label": "T", "steps": list(steps), **trace}])
+
+    ok_steps = [{"message": "m1", "value": 1}, {"message": "m2", "value": {"k": [1, 2]}}]
+    cases: dict[str, dict] = {
+        "base": _seq_base(),
+        "constructor and __proto__ ids": {
+            "participants": [{"id": "constructor", "label": "C"}, {"id": "__proto__", "label": "P"}],
+            "steps": [m("constructor", "__proto__", "x", "call", "toString"), m("__proto__", "constructor", "y", "reply", "valueOf")],
+            "traces": [{"id": "hasOwnProperty", "label": "T", "steps": [{"message": "toString", "value": 1}, {"message": "valueOf", "value": 2}]}],
+        },
+        "create then end": worker(m("a", "w", "go", "call", create=True), m("w", "a", "ok", "reply"), {"end": "w"}),
+        "end without create": worker(m("a", "w", "go", "async"), {"end": "w"}),
+        "note over repeated ids": _seq_base(m("a", "b", "x", "call"), {"note": "n", "over": ["a", "a", "c"]}),
+        "all four fragments": _seq_base(
+            {"fragment": "opt", "steps": [m("a", "b", "o", "async")]},
+            {"fragment": "loop", "label": "l", "steps": [m("a", "b", "l", "async")]},
+            {"fragment": "alt", "branches": [{"label": "x", "steps": [m("a", "b", "p", "async")]}, {"label": "y", "steps": [m("a", "c", "q", "async")]}]},
+            {"fragment": "par", "label": "both", "branches": [{"label": "x", "steps": [m("a", "b", "r", "async")]}, {"label": "y", "steps": [m("a", "c", "s", "async")]}]},
+        ),
+        "depth 100": _seq_nested(100),
+        "valid details": patched(lambda d: (d["participants"][0].update(detail="<p>ok <a href='#x'>link</a></p>"), d["steps"][0].update(detail="<ul><li>one</li></ul>"))),
+        "empty detail": patched(lambda d: d["steps"][0].update(detail="")),
+        "null kind and detail": patched(lambda d: (d["participants"][0].update(kind=None, detail=None), d["steps"][0].update(detail=None))),
+        "kinds declared and unused": patched(lambda d: d.update(kinds={"x": 1, "y": 8})),
+        "valid traces": traced(*ok_steps),
+        "participants not a list": patched(lambda d: d.update(participants={"id": "a"})),
+        "participants empty": patched(lambda d: d.update(participants=[])),
+        "participants missing": patched(lambda d: d.pop("participants")),
+        "participant not an object": patched(lambda d: d["participants"].append("d")),
+        "participant without id": patched(lambda d: d["participants"].append({"label": "D"})),
+        "participant blank id": patched(lambda d: d["participants"].append({"id": " ", "label": "D"})),
+        "participant blank label": patched(lambda d: d["participants"].append({"id": "d", "label": " "})),
+        "participant label number": patched(lambda d: d["participants"].append({"id": "d", "label": 3})),
+        "17 participants": patched(lambda d: d["participants"].extend({"id": f"p{i}", "label": f"P{i}"} for i in range(14))),
+        "16 participants": patched(lambda d: d["participants"].extend({"id": f"p{i}", "label": f"P{i}"} for i in range(13))),
+        "undeclared kind": patched(lambda d: d["participants"][0].update(kind="x")),
+        "kind not a string": patched(lambda d: (d.update(kinds={"1": 1}), d["participants"][0].update(kind=1))),
+        "kind a prototype name": patched(lambda d: d["participants"][0].update(kind="constructor")),
+        "participant detail forbidden": patched(lambda d: d["participants"][0].update(detail="<script>x</script>")),
+        "participant detail unknown tag": patched(lambda d: d["participants"][0].update(detail="<table></table>")),
+        "participant detail number": patched(lambda d: d["participants"][0].update(detail=3)),
+        "message detail onclick": patched(lambda d: d["steps"][0].update(detail="<p onclick='x'>y</p>")),
+        "message detail javascript href": patched(lambda d: d["steps"][0].update(detail="<a href='javascript:x'>y</a>")),
+        "kinds not an object": patched(lambda d: d.update(kinds=[1])),
+        "kinds null": patched(lambda d: d.update(kinds=None)),
+        "nine kinds": patched(lambda d: d.update(kinds={f"k{i}": 1 for i in range(9)})),
+        "kind color true": patched(lambda d: d.update(kinds={"k": True})),
+        "kind color 0": patched(lambda d: d.update(kinds={"k": 0})),
+        "kind color 9": patched(lambda d: d.update(kinds={"k": 9})),
+        "kind color 1.5": patched(lambda d: d.update(kinds={"k": 1.5})),
+        "kind color string": patched(lambda d: d.update(kinds={"k": "1"})),
+        "kind blank name": patched(lambda d: d.update(kinds={" ": 1})),
+        "duplicate participant ids": patched(lambda d: d["participants"].append({"id": "a", "label": "Again"})),
+        "message id equals participant id": patched(lambda d: d["steps"][0].update(id="a")),
+        "duplicate message ids": _seq_base(m("a", "b", "x", "call", "same"), m("b", "a", "y", "reply", "same")),
+        "message id blank": patched(lambda d: d["steps"][0].update(id=" ")),
+        "message id null": patched(lambda d: d["steps"][0].update(id=None)),
+        "message id number": patched(lambda d: d["steps"][0].update(id=3)),
+        "steps missing": patched(lambda d: d.pop("steps")),
+        "steps empty": patched(lambda d: d.update(steps=[])),
+        "steps not a list": patched(lambda d: d.update(steps={"from": "a"})),
+        "no message only a note": _seq_base({"note": "n", "over": ["a"]}),
+        "step empty object": _seq_base(m("a", "b", "x", "call"), {}),
+        "step a string": _seq_base(m("a", "b", "x", "call"), "oops"),
+        "step note and from": _seq_base({"note": "n", "over": ["a"], **m("a", "b", "x", "call")}),
+        "step end and note": _seq_base(m("a", "b", "x", "call"), {"end": "a", "note": "n", "over": ["a"]}),
+        "step fragment and end": _seq_base(m("a", "b", "x", "call"), {"fragment": "opt", "steps": [m("a", "b", "y", "call")], "end": "a"}),
+        "message without from": _seq_base({"to": "b", "label": "x", "type": "call"}),
+        "message without to": _seq_base({"from": "a", "label": "x", "type": "call"}),
+        "message blank label": _seq_base(m("a", "b", " ", "call")),
+        "message label number": _seq_base(m("a", "b", 3, "call")),
+        "message unknown sender": _seq_base(m("z", "b", "x", "call")),
+        "message unknown receiver": _seq_base(m("a", "z", "x", "call")),
+        "message without type": _seq_base({"from": "a", "to": "b", "label": "x"}),
+        "message type return": _seq_base(m("a", "b", "x", "return")),
+        "message type number": _seq_base(m("a", "b", "x", 5)),
+        "message type prototype name": _seq_base(m("a", "b", "x", "constructor")),
+        "create false": _seq_base(m("a", "b", "x", "call", create=False)),
+        "create a string": _seq_base(m("a", "b", "x", "call", create="yes")),
+        "create null": _seq_base(m("a", "b", "x", "call", create=None)),
+        "self create": _seq_base(m("a", "a", "x", "call", create=True)),
+        "created twice": _seq_base(m("a", "b", "x", "call", create=True), m("c", "b", "y", "call", create=True)),
+        "touch before create": _seq_base(m("b", "c", "x", "call"), m("a", "b", "y", "call", create=True)),
+        "note before create": _seq_base({"note": "n", "over": ["b"]}, m("a", "b", "y", "call", create=True)),
+        "end before create": _seq_base({"end": "b"}, m("a", "b", "y", "call", create=True)),
+        "touch after end": _seq_base(m("a", "b", "x", "call"), {"end": "b"}, m("a", "b", "y", "call")),
+        "note after end": _seq_base(m("a", "b", "x", "call"), {"end": "b"}, {"note": "n", "over": ["b"]}),
+        "ended twice": _seq_base(m("a", "b", "x", "call"), {"end": "b"}, {"end": "b"}),
+        "create inside a fragment then touch above": _seq_base(m("b", "c", "x", "call"), {"fragment": "opt", "steps": [m("a", "b", "y", "call", create=True)]}),
+        "note without text": _seq_base(m("a", "b", "x", "call"), {"over": ["a"], "note": " "}),
+        "note without over": _seq_base(m("a", "b", "x", "call"), {"note": "n"}),
+        "note over empty": _seq_base(m("a", "b", "x", "call"), {"note": "n", "over": []}),
+        "note over a string": _seq_base(m("a", "b", "x", "call"), {"note": "n", "over": "a"}),
+        "note over unknown": _seq_base(m("a", "b", "x", "call"), {"note": "n", "over": ["z"]}),
+        "note over a number": _seq_base(m("a", "b", "x", "call"), {"note": "n", "over": [3]}),
+        "end unknown": _seq_base(m("a", "b", "x", "call"), {"end": "z"}),
+        "end a number": _seq_base(m("a", "b", "x", "call"), {"end": 3}),
+        "fragment unknown type": _seq_base({"fragment": "critical", "steps": [m("a", "b", "x", "call")]}),
+        "fragment type number": _seq_base({"fragment": 3, "steps": [m("a", "b", "x", "call")]}),
+        "fragment blank label": _seq_base({"fragment": "opt", "label": " ", "steps": [m("a", "b", "x", "call")]}),
+        "fragment null label": _seq_base({"fragment": "opt", "label": None, "steps": [m("a", "b", "x", "call")]}),
+        "fragment label number": _seq_base({"fragment": "opt", "label": 3, "steps": [m("a", "b", "x", "call")]}),
+        "alt one branch": _seq_base({"fragment": "alt", "branches": [{"label": "x", "steps": [m("a", "b", "x", "call")]}]}),
+        "par one branch": _seq_base({"fragment": "par", "branches": [{"label": "x", "steps": [m("a", "b", "x", "call")]}]}),
+        "alt without branches": _seq_base({"fragment": "alt", "steps": [m("a", "b", "x", "call")]}),
+        "alt branches not a list": _seq_base({"fragment": "alt", "branches": {"label": "x"}}),
+        "alt branch without label": _seq_base({"fragment": "alt", "branches": [{"steps": [m("a", "b", "x", "call")]}, {"label": "y", "steps": [m("a", "b", "y", "call")]}]}),
+        "alt branch blank label": _seq_base({"fragment": "alt", "branches": [{"label": " ", "steps": [m("a", "b", "x", "call")]}, {"label": "y", "steps": [m("a", "b", "y", "call")]}]}),
+        "alt branch not an object": _seq_base({"fragment": "alt", "branches": ["x", {"label": "y", "steps": [m("a", "b", "y", "call")]}]}),
+        "alt branch without steps": _seq_base({"fragment": "alt", "branches": [{"label": "x"}, {"label": "y", "steps": [m("a", "b", "y", "call")]}]}),
+        "alt branch empty steps": _seq_base({"fragment": "alt", "branches": [{"label": "x", "steps": []}, {"label": "y", "steps": [m("a", "b", "y", "call")]}]}),
+        "loop without steps": _seq_base(m("a", "b", "x", "call"), {"fragment": "loop"}),
+        "loop empty steps": _seq_base(m("a", "b", "x", "call"), {"fragment": "loop", "steps": []}),
+        "loop steps not a list": _seq_base(m("a", "b", "x", "call"), {"fragment": "loop", "steps": {"from": "a"}}),
+        "opt holding a bad message": _seq_base({"fragment": "opt", "steps": [m("a", "z", "x", "call")]}),
+        "traces not a list": traced(*ok_steps, ) | {"traces": {"id": "t"}},
+        "traces null": _seq_base(traces=None),
+        "trace not an object": _seq_base(traces=["t"]),
+        "trace without id": traced(*ok_steps) | {"traces": [{"label": "T", "steps": ok_steps}]},
+        "trace blank id": traced(*ok_steps) | {"traces": [{"id": " ", "label": "T", "steps": ok_steps}]},
+        "trace blank label": traced(*ok_steps) | {"traces": [{"id": "t", "label": " ", "steps": ok_steps}]},
+        "duplicate trace ids": traced(*ok_steps) | {"traces": [{"id": "t", "label": "T", "steps": ok_steps}, {"id": "t", "label": "U", "steps": ok_steps}]},
+        "trace steps not a list": traced(*ok_steps) | {"traces": [{"id": "t", "label": "T", "steps": {"a": 1}}]},
+        "trace one step": traced(ok_steps[0]),
+        "trace step not an object": traced(ok_steps[0], "m2"),
+        "trace step without message": traced(ok_steps[0], {"value": 1}),
+        "trace step without value": traced(ok_steps[0], {"message": "m2"}),
+        "trace step message number": traced(ok_steps[0], {"message": 2, "value": 1}),
+        "trace step unknown message": traced(ok_steps[0], {"message": "nope", "value": 1}),
+        "trace step names a participant": traced(ok_steps[0], {"message": "a", "value": 1}),
+        "trace step note null": traced(ok_steps[0], {"message": "m2", "value": 1, "note": None}),
+        "trace step note number": traced(ok_steps[0], {"message": "m2", "value": 1, "note": 3}),
+        "trace step value null is a value": traced(ok_steps[0], {"message": "m2", "value": None}),
+        "trace value over 400 lines": traced(ok_steps[0], {"message": "m2", "value": list(range(400))}),
+        "trace value at 400 lines": traced(ok_steps[0], {"message": "m2", "value": list(range(398))}),
+        "trace value lone surrogate": traced(ok_steps[0], {"message": "m2", "value": "x\ud800"}),
+    }
+    return cases
+
+
+def test_seq_runtime_accepts_and_rejects_exactly_what_the_python_check_does(seq_page: Path) -> None:
+    sys.path.insert(0, str(SKILL / "scripts"))
+    from htmlkit import kitcheck
+
+    def python_verdict(text: str) -> str:
+        builder = kitcheck._TreeBuilder()
+        builder.feed(f'<q-sequence summary="s"><script type="application/json">{text}</script></q-sequence>')
+        builder.close()
+        builder.finish()
+        node = next(n for n in builder.nodes if n.tag == "q-sequence")
+        return "error" if kitcheck._validate_sequence_node(node, lambda _l, _m: None, lambda _l, _m: None) is None else "true"
+
+    texts = {name: json.dumps(data) for name, data in _seq_cases().items()}
+    texts.update(_seq_bad_text_cases())
+    names = list(texts)
+    expected = [python_verdict(texts[name]) for name in names]
+    assert "true" in expected and "error" in expected
+    out = run(
+        seq_page,
+        ev(
+            """(async (texts) => {
+              const host = document.createElement('div');
+              document.body.appendChild(host);
+              const els = texts.map((text) => {
+                const el = document.createElement('q-sequence');
+                el.setAttribute('summary', 's');
+                const script = document.createElement('script');
+                script.type = 'application/json';
+                script.textContent = text;
+                el.appendChild(script);
+                host.appendChild(el);
+                return el;
+              });
+              for (let i = 0; i < 100 && !els.every((el) => el.hasAttribute('data-q-sequence-ready')); i += 1) {
+                await new Promise((r) => setTimeout(r, 100));
+              }
+              return els.map((el) => el.getAttribute('data-q-sequence-ready'));
+            })(""" + json.dumps([texts[n] for n in names]) + ")",
+            "got",
+        ),
+    )
+    assert_clean(out)
+    got = out["results"]["got"]
+    assert len(got) == len(names)
+    mismatches = [(n, e, g) for n, e, g in zip(names, expected, got) if e != g]
+    assert mismatches == []

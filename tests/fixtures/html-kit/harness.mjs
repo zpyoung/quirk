@@ -156,12 +156,27 @@ try {
   if (spec.javaScript !== false) {
     try {
       await page.waitForFunction(
-        () => [...document.querySelectorAll("q-flow, q-schema")].every((el) => el.hasAttribute("data-q-flow-ready")),
+        () =>
+          [["q-flow", "q-flow"], ["q-schema", "q-flow"], ["q-sequence", "q-sequence"]].every(([tag, flag]) =>
+            [...document.querySelectorAll(tag)].every((el) => el.hasAttribute(`data-${flag}-ready`)),
+          ),
         null,
         { timeout: 10000 },
       );
     } catch (err) {
-      out.failedSteps.push({ index: -1, step: { waitFor: "q-flow, q-schema" }, error: String(err.message).split("\n")[0] });
+      const pending = await page
+        .evaluate(() =>
+          [["q-flow", "q-flow"], ["q-schema", "q-flow"], ["q-sequence", "q-sequence"]].filter(([tag, flag]) =>
+            [...document.querySelectorAll(tag)].some((el) => !el.hasAttribute(`data-${flag}-ready`)),
+          ),
+        )
+        .then((pairs) => pairs.map(([tag]) => tag))
+        .catch(() => []);
+      out.failedSteps.push({
+        index: -1,
+        step: { waitFor: pending.length ? pending.join(" and ") : "q-flow, q-schema or q-sequence" },
+        error: String(err.message).split("\n")[0],
+      });
     }
   }
 
@@ -187,7 +202,10 @@ try {
         await page.reload({ waitUntil: "load" });
         if (spec.javaScript !== false) {
           await page.waitForFunction(
-            () => [...document.querySelectorAll("q-flow, q-schema")].every((el) => el.hasAttribute("data-q-flow-ready")),
+            () =>
+          [["q-flow", "q-flow"], ["q-schema", "q-flow"], ["q-sequence", "q-sequence"]].every(([tag, flag]) =>
+            [...document.querySelectorAll(tag)].every((el) => el.hasAttribute(`data-${flag}-ready`)),
+          ),
             null,
             { timeout: 10000 },
           );

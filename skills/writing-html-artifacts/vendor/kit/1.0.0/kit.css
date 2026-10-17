@@ -34,7 +34,7 @@
   display: none !important;
 }
 
-:where(q-tabs, q-timeline, q-code, q-chart, q-diff, q-grid, q-panel, q-compare, q-flow, q-schema) {
+:where(q-tabs, q-timeline, q-code, q-chart, q-diff, q-grid, q-panel, q-compare, q-flow, q-schema, q-sequence) {
   display: block;
   min-width: 0;
   max-width: 100%;
@@ -1525,6 +1525,143 @@ q-flow aside :where([data-q-flow-change="removed"] :is([data-q-flow-key], [data-
   text-decoration: line-through;
 }
 
+/* q-sequence */
+
+q-sequence {
+  position: relative;
+  box-sizing: border-box;
+  margin: var(--q-space-4) 0;
+}
+
+q-sequence > :where([data-q-sequence-controls]) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--q-space-1);
+  margin: 0 0 var(--q-space-2);
+}
+
+q-sequence > :where([data-q-sequence-controls]:empty) {
+  display: none;
+}
+
+q-sequence > :where([data-q-sequence-pinned]) {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid var(--q-color-border);
+  border-bottom: 0;
+  border-radius: var(--q-radius-md) var(--q-radius-md) 0 0;
+  background: var(--q-color-bg);
+}
+
+q-sequence :where([data-q-sequence-pinned-row]) {
+  position: relative;
+}
+
+q-sequence :where([data-q-sequence-pinned-row]) > button {
+  position: absolute;
+  top: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 4px var(--q-space-2) 0;
+  overflow: hidden;
+  border: 1px solid var(--q-color-border);
+  border-top: 0;
+  border-radius: 0 0 var(--q-radius-sm) var(--q-radius-sm);
+  background: var(--q-color-surface);
+  color: var(--q-color-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  cursor: pointer;
+}
+
+q-sequence [data-q-sequence-pinned-row] > button:enabled:hover {
+  border-color: var(--q-color-border);
+  background: var(--q-color-surface);
+  color: var(--q-color-text);
+}
+
+q-sequence :where([data-q-sequence-pinned]:not([data-q-sequence-stuck])) > :where([data-q-sequence-pinned-row]) > button[data-q-sequence-late]:not(:focus) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+q-sequence :where([data-q-sequence-accent]) {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: var(--q-sequence-accent, var(--q-color-border));
+}
+
+q-sequence :where([data-q-sequence-kind-tag]) {
+  color: var(--q-color-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 15px;
+}
+
+q-sequence :where([data-q-sequence-header-label]) {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+q-sequence > :where([data-q-sequence-stage]) {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-md);
+  background: var(--q-color-bg);
+}
+
+q-sequence > :where([data-q-sequence-pinned]) + :where([data-q-sequence-stage]) {
+  border-top: 0;
+  border-radius: 0 0 var(--q-radius-md) var(--q-radius-md);
+}
+
+q-sequence :where([data-q-sequence-svg]) {
+  display: block;
+  max-width: none;
+}
+
+q-sequence :where([data-q-sequence-notice]) {
+  margin: 0;
+  padding: var(--q-space-4);
+  color: var(--q-color-text-muted);
+  font-size: var(--q-size-small);
+}
+
+q-sequence > details {
+  position: relative;
+  z-index: 4;
+  max-width: 100%;
+  margin-top: var(--q-space-2);
+}
+
+q-sequence > details > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+q-sequence :where([data-q-sequence-list-steps], [data-q-sequence-list-steps] ol, [data-q-sequence-list-trace] ol) {
+  list-style: none;
+}
+
 @media (max-width: 700px) {
   :is(q-flow, q-schema) :where([data-q-flow-controls]) > button,
   q-flow aside :where(.q-flow-trace-buttons > button, [data-q-flow-trace-dot]),
@@ -1545,6 +1682,11 @@ q-flow aside :where([data-q-flow-change="removed"] :is([data-q-flow-key], [data-
     border-left: 0;
     border-top: 1px solid var(--q-color-border);
     border-radius: var(--q-radius-md) var(--q-radius-md) 0 0;
+  }
+
+  q-sequence :where([data-q-sequence-pinned-row]) > button {
+    min-width: 44px;
+    min-height: 44px;
   }
 }
 
@@ -1667,5 +1809,17 @@ q-schema :where([data-q-schema-drawer-stereotype]) {
   :is(q-flow, q-schema) [data-q-flow-drawer],
   q-flow [data-q-flow-trace-panel] {
     display: none;
+  }
+
+  q-sequence [data-q-sequence-controls] {
+    display: none;
+  }
+
+  q-sequence > [data-q-sequence-pinned] {
+    position: static;
+  }
+
+  q-sequence > [data-q-sequence-stage] {
+    overflow: visible;
   }
 }
