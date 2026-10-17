@@ -50,17 +50,21 @@ uncommitted changes under review are included.
    mutations, guards, matching/keying, failure-isolation (must-not-retry) paths —
    and cap at ~8 mutants. Record in your returned notes which risky candidates you
    did **not** probe (no silent truncation).
-3. **One minimal mutant at a time.** Break exactly the behavior a test claims to
+3. **One minimal mutant at a time.** Save the file's bytes (`cp <file> <file>.orig`
+   inside the copy) before mutating. Break exactly the behavior a test claims to
    protect, then re-run **only the targeted test(s)** (not the whole suite) under a hard
    timeout (for example `timeout 120`); a timeout counts as a killed mutant, and the file
    is reverted before anything else runs:
    flip a comparison (`<= 0` → `== 0`), negate/remove a guard, no-op a branch or an
    early `return`, change a metric name or a low-cardinality dimension value, or
    weaken a composite key (drop a field / its normalization), swap an argument.
-4. **Interpret + revert.** Record survive/kill, then **immediately** revert
-   (`git checkout -- <file>` inside the copy). Mutate **only production files, never
-   tests**. Never commit. Before ending, including when the probe aborts, remove the
-   copy and confirm `git status --porcelain` is empty in the source root.
+4. **Interpret + revert.** Record survive/kill, then **immediately** restore the saved
+   bytes (`mv <file>.orig <file>` inside the copy). Never revert with `git checkout`:
+   in `--local` mode the copy holds uncommitted changes that a checkout would replace with
+   the committed content. Mutate **only production files, never tests**. Never commit.
+   Capture `git status --porcelain` in the source root before the probe starts. Before
+   ending, including when the probe aborts, remove the copy and confirm the source root's
+   `git status --porcelain` output is identical to what was captured.
 
 ### Reporting
 A mutation-confirmed finding carries the surviving mutant in `issue` (e.g. "key
@@ -69,6 +73,6 @@ specialist's notes with a **Surviving mutants** line listing every production
 mutation no test caught, plus any risky candidate you could not probe.
 
 **Hard rules:** opt-in; private disposable copy only; production-only; targeted
-tests only; bounded count; reverted after every mutant; never committed; tree clean
-at exit. (This is the *only* place the review touches code, and only transiently —
+tests only; bounded count; restored after every mutant; never committed; source tree
+unchanged at exit. (This is the *only* place the review touches code, and only transiently —
 see the Boundaries section of SKILL.md.)

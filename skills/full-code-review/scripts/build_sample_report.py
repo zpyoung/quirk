@@ -23,7 +23,8 @@ TEMPLATE = os.path.join(SKILL_ROOT, "assets", "report.html")
 SAMPLE = os.path.join(SKILL_ROOT, "assets", "sample-report.json")
 
 
-def main():
+def render_sample():
+    """Return assets/report.html with its slots refilled from sample-report.json."""
     import json
 
     report = json.load(io.open(SAMPLE, encoding="utf-8"))
@@ -35,10 +36,14 @@ def main():
     body = renderer._content(prepared)
     filled = renderer.replace_slot(
         template, "main", "<!-- slot:main -->\n%s\n<!-- /slot:main -->" % body)
-    filled = renderer.replace_slot(
+    return renderer.replace_slot(
         filled, "title",
         "<!-- slot:title --><title>%s</title><!-- /slot:title -->"
         % renderer._esc(prepared["meta"]["title"]))
+
+
+def main():
+    filled = render_sample()
     io.open(TEMPLATE, "w", encoding="utf-8").write(filled)
     print("refilled %s (%d bytes)" % (os.path.relpath(TEMPLATE, SKILL_ROOT), len(filled)))
 

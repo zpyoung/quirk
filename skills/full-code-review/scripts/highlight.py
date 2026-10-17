@@ -225,15 +225,19 @@ def _tokens(source, name):
             yield None, source[:bom]
         body = source[bom:]
         emitted = 0
+        lexed = []
         for ttype, text in _pygments_lexer(name).get_tokens(body):
             text = text[:max(0, len(body) - emitted)]
             emitted += len(text)
             kind = _pygments_kind(ttype)
             if name in _DATA_LANGUAGES and kind in ("tag", "attribute"):
                 kind = "property"
-            yield kind, text
+            lexed.append((kind, text))
         if emitted < len(body):
-            yield None, body[emitted:]
+            lexed.append((None, body[emitted:]))
+        if "".join(text for _, text in lexed) != body:
+            lexed = [(None, body)]
+        yield from lexed
         return
     cursor = 0
     for match in _regex(name).finditer(source):

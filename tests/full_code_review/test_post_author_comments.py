@@ -10,6 +10,18 @@ from forge.github import GitHubForge
 from forge.gitlab import GitLabForge
 from .fakes import DIFF, HEAD, MERGE_BASE, FakeGitHub
 
+LIVE_MR = {"iid": 7, "state": "opened", "sha": HEAD, "author": {"id": 1},
+           "diff_refs": {"base_sha": MERGE_BASE, "start_sha": MERGE_BASE, "head_sha": HEAD}}
+
+
+def with_live_mr(api, **overrides):
+    """Wrap a GitLab API fake so the open-change read answers `LIVE_MR` and the rest reaches `api`."""
+    def call(host, method, endpoint, payload=None, timeout=120):
+        if method == "GET" and endpoint.endswith("/merge_requests/7"):
+            return dict(LIVE_MR, **overrides)
+        return api(host, method, endpoint, payload)
+    return call
+
 
 def report(forge="github"):
     return {"meta": {"target": "change", "forge": forge, "number": 7, "project": "o/r",
@@ -67,7 +79,7 @@ def test_gitlab_requires_a_diffnote_and_keeps_earlier_receipts(tmp_path):
     bodies = {"findings": {"F1": {"body": "one", "post": True}, "F2": {"body": "two", "post": True}}}
     with pytest.raises(ForgeError):
         m.post(two_in_diff, context("gitlab"), signed(bodies, two_in_diff), ["F1", "F2"], out,
-               forge=GitLabForge("gitlab.example", "o/r", api_call=api))
+               forge=GitLabForge("gitlab.example", "o/r", api_call=with_live_mr(api)))
     assert sorted(json.loads(open(out).read())) == ["F1"]
     position = calls[0][2]["position"]
     assert calls[0][1] == "projects/o%2Fr/merge_requests/7/discussions"
@@ -88,10 +100,15 @@ def test_cli_rejects_a_reviewer_seat_context(tmp_path, capsys):
 class RecordingForge:
     """Posts every in-diff line, failing the create numbers listed in `fail_on`."""
 
-    def __init__(self, fail_on=()):
+    def __init__(self, fail_on=(), head=HEAD):
         self.fail_on = set(fail_on)
+        self.head = head
         self.posted = []
         self.targets = []
+
+    def live_change(self, number):
+        refs = {"base_sha": MERGE_BASE, "start_sha": MERGE_BASE, "head_sha": self.head}
+        return {}, refs, {"id": 1}
 
     def inline_target(self, refs, old_path, new_path, line, diff_text, side="new"):
         self.targets.append((old_path, new_path, line, side))
@@ -151,7 +168,7 @@ def test_gitlab_rename_carries_both_paths(tmp_path):
     value["findings"] = [dict(value["findings"][0], file="new.py", line="2")]
     m.post(value, dict(context("gitlab"), diff=RENAME_DIFF),
            signed({"findings": {"F1": TWO["findings"]["F1"]}}, value),
-           ["F1"], str(tmp_path / "r.json"), forge=GitLabForge("gitlab.example", "o/r", api_call=api))
+           ["F1"], str(tmp_path / "r.json"), forge=GitLabForge("gitlab.example", "o/r", api_call=with_live_mr(api)))
     position = calls[0]["position"]
     assert position["old_path"] == "old.py" and position["new_path"] == "new.py"
 
@@ -166,7 +183,7 @@ def test_gitlab_off_diff_line_is_skipped_and_the_batch_continues(tmp_path):
     value = two_finding_report()
     value["findings"][1]["line"] = "99"
     receipts, warnings = m.post(value, context("gitlab"), signed(TWO, value), ["F1", "F2"],
-                                str(tmp_path / "r.json"), forge=GitLabForge("gitlab.example", "o/r", api_call=api))
+                                str(tmp_path / "r.json"), forge=GitLabForge("gitlab.example", "o/r", api_call=with_live_mr(api)))
     assert sorted(receipts) == ["F1"]
     assert any("F2" in w and "outside the diff" in w for w in warnings)
     assert len(calls) == 1
@@ -197,7 +214,7 @@ def test_gitlab_overview_posts_a_plain_note_once(tmp_path):
         return {"id": 31}
 
     out = str(tmp_path / "r.json")
-    forge = GitLabForge("gitlab.example", "o/r", api_call=api)
+    forge = GitLabForge("gitlab.example", "o/r", api_call=with_live_mr(api))
     only_overview = signed({"findings": {}, "overview": "summary"}, two_finding_report())
     m.post(two_finding_report(), context("gitlab"), only_overview, [], out, overview=True, forge=forge)
     assert calls == [("POST", "projects/o%2Fr/merge_requests/7/notes", {"body": "summary"})]
@@ -366,7 +383,7 @@ def test_stray_plain_comment_is_recorded_named_and_not_retried(tmp_path):
         return {"id": "d9", "notes": [{"id": 31, "type": "DiscussionNote"}]}
 
     out = str(tmp_path / "r.json")
-    forge = GitLabForge("gitlab.example", "o/r", api_call=api)
+    forge = GitLabForge("gitlab.example", "o/r", api_call=with_live_mr(api))
     with pytest.raises(m.PostFailed) as caught:
         m.post(two_finding_report(), context("gitlab"), signed(TWO, two_finding_report()), ["F1"], out, forge=forge)
     assert caught.value.finding_id == "F1" and "d9" in str(caught.value) and "31" in str(caught.value)
@@ -414,3 +431,21 @@ def test_receipt_write_failure_after_a_create_names_the_comment_as_posted(tmp_pa
     assert failure["failed_id"] == "F1" and "created on the forge" in failure["error"]
     assert failure["unsaved_receipt"] == {"F1": {"published": True, "note_id": 1}}
     assert forge.posted == ["one"]
+
+
+def test_a_moved_head_aborts_before_any_create(tmp_path):
+    forge = RecordingForge(head="d" * 40)
+    with pytest.raises(ValueError, match="head moved"):
+        m.post(two_finding_report(), context("gitlab"), signed(TWO, two_finding_report()), ["F1"],
+               str(tmp_path / "r.json"), overview=True, forge=forge)
+    assert forge.posted == []
+
+
+def test_a_closed_change_aborts_before_any_create(tmp_path):
+    forge = RecordingForge()
+    closed = ForgeError("MR !7 is not open")
+    forge.live_change = lambda number: (_ for _ in ()).throw(closed)
+    with pytest.raises(ForgeError, match="not open"):
+        m.post(two_finding_report(), context("gitlab"), signed(TWO, two_finding_report()), ["F1"],
+               str(tmp_path / "r.json"), forge=forge)
+    assert forge.posted == []

@@ -1,6 +1,5 @@
 # Example org pack. Point the review at it with --pack, or copy it to
 # ~/.config/quirk/review/ to apply it to every repo you review.
-severity_floor: Should fix
 critical_paths: ["src/payments/**", "src/auth/**"]
 models:
   correctness: opus

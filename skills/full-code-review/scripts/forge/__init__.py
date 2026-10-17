@@ -4,8 +4,8 @@ The adapters in this package own every forge call: reads, posting, staging, publ
 the reviewer's completion verdict. Scripts work on these shapes and on the `Forge`
 protocol, and build an adapter with `make_forge`.
 
-Helpers such as `forge.gitlab.draft_summary` and `discussion_resolved` read the draft and
-thread dicts that both adapters return.
+`draft_summary` and `discussion_resolved` read the draft and thread dicts that both adapters
+return.
 """
 from __future__ import annotations
 
@@ -73,6 +73,23 @@ def valid_sha(value, label):
     if not isinstance(value, str) or not SHA_RE.match(value):
         raise ForgeError("%s must be a full lowercase SHA" % label, "validation")
     return value
+
+
+def draft_summary(item):
+    """A short, single-line description of a staged draft or pending-review item."""
+    position = item.get("position") if isinstance(item.get("position"), dict) else {}
+    path = position.get("new_path") or position.get("old_path")
+    line = position.get("new_line") or position.get("old_line")
+    note = item.get("note") if isinstance(item.get("note"), str) else ""
+    return {"id": item.get("id"), "anchor": "%s:%s" % (path, line) if path else None,
+            "note": note.replace("\n", " ")[:120]}
+
+
+def discussion_resolved(discussion):
+    """Whether a discussion thread is resolved, by its own flag or its root note's."""
+    notes = discussion.get("notes") if isinstance(discussion.get("notes"), list) else []
+    root = notes[0] if notes and isinstance(notes[0], dict) else {}
+    return bool(discussion.get("resolved") or root.get("resolved"))
 
 
 _HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")

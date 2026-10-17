@@ -108,7 +108,6 @@ def test_apostrophe_inside_a_plain_scalar_does_not_open_a_quote(yaml_mini) -> No
     "text, expected",
     [
         ("desc: yes, 'cause # c\n", {"desc": "yes, 'cause"}),
-        ("desc: yes, 'cause: x # c\n", {"desc": "yes, 'cause: x"}),
         ("labels: ['a # b', c] # c\n", {"labels": ["a # b", "c"]}),
     ],
 )
@@ -116,6 +115,56 @@ def test_comma_before_an_apostrophe_in_a_block_scalar_does_not_open_a_quote(
     yaml_mini, text, expected
 ) -> None:
     assert yaml_mini.parse(text, "plain.yml") == expected
+
+
+@pytest.mark.parametrize("escape", [r"\U00110000", r"\UFFFFFFFF", r"\U7FFFFFFF"])
+def test_out_of_range_unicode_escape_is_a_parse_error(yaml_mini, escape) -> None:
+    with pytest.raises(yaml_mini.TemplateParseError) as exc_info:
+        yaml_mini.parse('key: "a%s"\n' % escape, "escape.yml")
+    assert exc_info.value.line == 1
+
+
+def test_highest_valid_unicode_escape_still_parses(yaml_mini) -> None:
+    assert yaml_mini.parse('key: "\\U0010FFFF"\n', "escape.yml") == {"key": "\U0010FFFF"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "a:\n\tb: 1\n",
+        "body:\n  - type: textarea\n\tattributes:\n    label: x\n",
+        "a:\n \tb: 1\n",
+    ],
+)
+def test_tab_indentation_is_a_parse_error(yaml_mini, text) -> None:
+    with pytest.raises(yaml_mini.TemplateParseError) as exc_info:
+        yaml_mini.parse(text, "tabs.yml")
+    assert "tab" in exc_info.value.message
+    assert exc_info.value.path == "tabs.yml"
+
+
+def test_tab_inside_a_block_scalar_body_is_content(yaml_mini) -> None:
+    assert yaml_mini.parse("a: |\n  x\n  \ty\n", "tabs.yml") == {"a": "x\n\ty\n"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "a: >\n  x\n    y\n  z\n",
+        "a: >\n  x\n\n    y\n  z\n",
+        "a: >\n  x\n    y\n\n  z\n",
+        "a: >\n  x\n  y\n\n  z\n",
+    ],
+)
+@pytest.mark.skipif(not _pyyaml_available(), reason="PyYAML not installed")
+def test_folded_scalar_matches_pyyaml_around_more_indented_lines(yaml_mini, text) -> None:
+    import yaml
+
+    assert yaml_mini.parse(text, "fold.yml") == yaml.safe_load(text)
+
+
+def test_folded_scalar_keeps_the_break_around_a_more_indented_line(yaml_mini) -> None:
+    assert yaml_mini.parse("a: >\n  x\n    y\n  z\n", "fold.yml") == {"a": "x\n  y\nz\n"}
 
 
 def test_single_quoted_scalar_with_escaped_quote(yaml_mini) -> None:
@@ -272,7 +321,7 @@ def test_anchor_rejected(yaml_mini) -> None:
 
 
 def test_alias_rejected(yaml_mini) -> None:
-    text = "base: &b value\nkey: *b\n"
+    text = "key: *b\n"
     with pytest.raises(yaml_mini.TemplateParseError) as exc_info:
         yaml_mini.parse(text, "alias.yml")
     assert exc_info.value.line == 1

@@ -10,7 +10,7 @@ import sys
 from pathlib import Path, PurePosixPath
 
 from jsonio import load_object, write_json
-from prepare_diff import _path_from_diff_git, _strip_ab
+from prepare_diff import _path_from_diff_git, _strip_ab, is_test_file
 
 
 _IMPORT = re.compile(r"^\s*import\s+([\w.]+(?:\s*,\s*[\w.]+)*)\b")
@@ -137,15 +137,29 @@ def _module_targets(importer: str, dots: int, module: str,
 
 
 def _is_test(name: str) -> bool:
-    return PurePosixPath(name).name.startswith("test_") and name.endswith(".py")
+    return is_test_file(name)
+
+
+_SUBJECT_NAME_PATTERNS = (
+    (re.compile(r"^test_(.+)$"), r"\1"),
+    (re.compile(r"^(.+)_(?:test|spec)(\.[^.]+)$"), r"\1\2"),
+    (re.compile(r"^(.+)\.(?:test|spec)(\.[^.]+)$"), r"\1\2"),
+    (re.compile(r"^(.+?)Tests?(\.[^.]+)$"), r"\1\2"),
+)
+
+
+def _subject_names(test_name: str) -> list[str]:
+    """Basenames a test file named `test_name` conventionally exercises."""
+    return [pattern.sub(replacement, test_name) for pattern, replacement in _SUBJECT_NAME_PATTERNS
+            if pattern.match(test_name)]
 
 
 def _test_pairs(changed_files: list[str]) -> list[tuple[str, str]]:
-    subjects = [name for name in changed_files if name.endswith(".py") and not _is_test(name)]
+    subjects = [name for name in changed_files if not _is_test(name)]
     pairs = []
     for test in (name for name in changed_files if _is_test(name)):
-        stem = PurePosixPath(test).name[5:]
-        matches = [name for name in subjects if PurePosixPath(name).name == stem]
+        stems = _subject_names(PurePosixPath(test).name)
+        matches = [name for name in subjects if PurePosixPath(name).name in stems]
         if matches:
             directory = set(PurePosixPath(test).parts[:-1]) - {"tests", "test"}
             best = max(matches, key=lambda name: (len(directory & set(PurePosixPath(name).parts[:-1])),
@@ -338,12 +352,13 @@ def _questions(area: dict, risk: dict | None) -> list[str]:
             questions.append("For %s, is the %s risk real: %s?" % (
                 representative, level.strip(), note.strip()))
         caveats = risk.get("caveats")
-        if isinstance(caveats, str):
+        if isinstance(caveats, (str, dict)):
             caveats = [caveats]
         if isinstance(caveats, list):
             for caveat in caveats:
-                if isinstance(caveat, str) and caveat.strip():
-                    questions.append("For %s, does this caveat hold: %s?" % (representative, caveat.strip()))
+                text = caveat.get("body_md") if isinstance(caveat, dict) else caveat
+                if isinstance(text, str) and text.strip():
+                    questions.append("For %s, does this caveat hold: %s?" % (representative, text.strip()))
                     break
     path = PurePosixPath(representative)
     if path.suffix == ".py":

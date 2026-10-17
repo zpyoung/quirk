@@ -6,6 +6,7 @@ import pytest
 
 import comment_body
 from forge import gitlab as gitlab_forge
+from forge.github import GitHubForge
 import post_reviewer_review as m  # noqa: E402
 
 HEAD = "a" * 40
@@ -208,6 +209,7 @@ def test_blocking_finding_outside_the_diff_is_listed_in_the_staged_overview(tmp_
     assert "**Not anchored inline**" in visible
     assert "- **Blocking:** Trusted bug (`a.py:50`)" in visible
     assert any("F1 anchors on a line outside the diff" in warning for warning in state["warnings"])
+    assert state["completion"]["suggested"] == "request-changes"
 
 
 def test_blocking_finding_on_a_collapsed_file_is_listed_in_the_staged_overview(tmp_path, monkeypatch):
@@ -217,6 +219,7 @@ def test_blocking_finding_on_a_collapsed_file_is_listed_in_the_staged_overview(t
     assert [item["kind"] for item in state["created"]] == ["overview", "inline"]
     assert not any(item.get("finding_id") == "F1" for item in state["created"])
     assert any("diff the forge collapsed" in warning for warning in state["warnings"])
+    assert state["completion"]["suggested"] == "request-changes"
 
 
 def test_preexisting_draft_blocks_all_creation(tmp_path, monkeypatch):
@@ -476,12 +479,13 @@ def test_target_movement_with_unchanged_head_blocks_staging_even_with_allow(tmp_
     assert not any(call[0] == "POST" for call in fake.calls)
 
 
-def test_target_movement_after_staging_blocks_bulk(tmp_path, monkeypatch):
+@pytest.mark.parametrize("field", ["base_sha", "start_sha"])
+def test_target_movement_after_staging_blocks_bulk(tmp_path, monkeypatch, field):
     fake = FakeGitLab()
     monkeypatch.setattr(m, "_api", fake)
     paths = files(tmp_path)
     assert invoke(m.stage, stage_args(paths))[0] == 0
-    fake.refs["base_sha"] = "f" * 40
+    fake.refs[field] = "f" * 40
     yes = _publish_args(paths)
     rc, result = invoke(m.publish, yes)
     assert rc == 2 and "diff refs changed" in result["error"]
@@ -519,6 +523,19 @@ def test_concurrent_foreign_draft_is_surfaced_but_never_offered_for_deletion(tmp
     assert [item["id"] for item in state["unrecognized_drafts"]] == [900]
     assert not any("draft_notes/900" in command for command in state["cleanup_commands"])
     assert len(state["cleanup_commands"]) == 3
+
+
+def test_reconciled_orphans_keep_their_kind_so_comment_ids_are_not_cleaned_as_reviews(monkeypatch):
+    body = "overview body"
+    live = [{"id": 900, "kind": "review", "note": body, "position": None},
+            {"id": 1000, "kind": "comment", "note": body, "position": {"new_path": "a.py", "new_line": 2}}]
+    monkeypatch.setattr(m, "_list_drafts", lambda ctx: live)
+    state = {"expected_username": "reviewer", "created": []}
+    m._reconcile_orphans(state, body)
+    assert [(item["draft_id"], item["kind"]) for item in state["reconciled"]] == [(900, "review"), (1000, "comment")]
+    commands = GitHubForge("github.com", "o/r").cleanup_commands(
+        dict(state, review_id=None, host="github.com", project="o/r", number=7))
+    assert [command.rsplit("/", 1)[1] for command in commands] == ["900"]
 
 
 def test_reconcile_list_outage_reports_incomplete_cleanup(tmp_path, monkeypatch):
@@ -630,6 +647,18 @@ def test_memory_enabled_stage_reconciles_live_discussions_before_drafts(tmp_path
     assert all(item.get("finding_id") != "F1" for item in state["created"])
     assert state["completion"]["suggested"] == "request-changes"
     assert not any("bulk_publish" in call[1] for call in fake.calls)
+
+
+@pytest.mark.parametrize("severity, slot, suggested", [
+    ("Must fix", "fix", "request-changes"),
+    ("Nit", "fix", "approve"),
+    ("Must fix", "later", "approve"),
+], ids=["blocking-thread", "nit-thread", "later-slot-thread"])
+def test_an_already_posted_thread_suggests_request_changes_only_when_blocking(severity, slot, suggested):
+    prepared = {"findings": [{"id": "F1", "severity": severity}]}
+    omitted = [{"id": "F1", "reason": "already posted in an open thread", "disposition": "Blocking",
+                "decision": {"slot": slot}}]
+    assert m._suggested_completion(prepared, [], omitted) == suggested
 
 
 def test_failed_memory_cross_check_blocks_stage_before_any_draft(tmp_path, monkeypatch):

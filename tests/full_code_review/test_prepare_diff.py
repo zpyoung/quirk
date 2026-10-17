@@ -862,6 +862,55 @@ def test_c_quoted_paths_round_trip_through_diff_helpers():
     assert m.batch_files(m.split_diff_by_file(diff), 1)[0]["files"] == ["a\tb.py"]
 
 
+def test_c_quoted_control_character_escapes_decode_to_their_bytes():
+    path = "a\x0bb\x0cc\x07d\x08e.py"
+    quoted = m._quote_git_path(path)
+    assert quoted == '"a\\vb\\fc\\ad\\be.py"'
+    assert m._decode_git_path(quoted) == path
+
+
+def test_octal_escape_above_a_byte_degrades_instead_of_raising():
+    diff = 'diff --git "a/x\\777" "b/x\\777"\n@@ -1 +1 @@\n-a\n+b\n'
+    assert m.changed_files_from_diff(diff) == ["x\udcff"]
+
+
+def test_local_diff_keeps_paths_with_control_characters_in_the_manifest(tmp_path):
+    repo = Path(tmp_path) / "ctl"
+    repo.mkdir()
+    _repo_git(repo, "init", "-q")
+    odd = repo / "a\x0bb\x0cc\x07d.py"
+    odd.write_text("old\n")
+    _repo_git(repo, "add", ".")
+    _repo_git(repo, "commit", "-qm", "init")
+    odd.write_text("new\n")
+    out = Path(tmp_path) / "ctl.json"
+    assert m.main(["--local", "--cwd", str(repo), "--out", str(out)]) == 0
+    assert json.loads(out.read_text())["changed_files"] == ["a\x0bb\x0cc\x07d.py"]
+
+
+def test_git_output_keeps_carriage_returns(repo):
+    (repo / "win.txt").write_bytes(b"one\r\ntwo\rzz\n")
+    _repo_git(repo, "add", ".")
+    diff_text = m.git_diff_local(3, str(repo))
+    assert "+one\r\n" in diff_text
+    assert "+two\rzz\n" in diff_text
+    assert list(m.split_diff_by_file(diff_text)) == ["win.txt"]
+
+
+def test_local_diff_keeps_reviewing_when_one_untracked_file_cannot_be_diffed(repo, monkeypatch):
+    (repo / "bad.py").write_text("bad\n")
+    (repo / "good.py").write_text("good\n")
+    real = m._untracked_diff
+    monkeypatch.setattr(m, "_untracked_diff",
+                        lambda path, cwd: None if path == "bad.py" else real(path, cwd))
+    metadata = {}
+    diff_text = m.git_diff_local(3, str(repo), metadata)
+    assert diff_text is not None and "diff --git a/good.py b/good.py" in diff_text
+    assert metadata["untracked_files"] == ["good.py"]
+    assert metadata["diff_unavailable"] == ["bad.py"]
+    assert sorted(metadata["changed_files"]) == ["bad.py", "good.py"]
+
+
 def test_unescaped_spaces_in_diff_git_paths_are_parsed():
     diff = (
         "diff --git a/a b.py b/a b.py\n"
@@ -1309,7 +1358,7 @@ LINE_BREAKERS = ["\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u20
 @pytest.mark.parametrize("char", LINE_BREAKERS)
 def test_diff_helpers_only_break_lines_on_newline(char):
     text = ("diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n"
-            "@@ -1,2 +1,2 @@\n-a\n+b%sc\n ctx\n" % char)
+            "@@ -1,2 +1,2 @@\n-a\n+b%s-c\n ctx\n" % char)
 
     assert m.split_diff_by_file(text) == {"f.txt": text.rstrip("\n")}
     assert m.count_changed_lines(text) == 2
@@ -1317,7 +1366,8 @@ def test_diff_helpers_only_break_lines_on_newline(char):
 
 
 def test_binary_metadata_check_ignores_content_split_on_exotic_breaks():
-    section = "diff --git a/f b/f\n@@ -1 +1 @@\n+x\u2028GIT binary patch\n"
+    section = ("diff --git a/f b/f\n@@ -1 +1 @@\n+x\u2028diff --git a/y b/y\n"
+               "+z\u2028GIT binary patch\n")
     assert m._section_has_binary_metadata(section) is False
 
 

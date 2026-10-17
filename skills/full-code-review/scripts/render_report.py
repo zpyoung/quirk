@@ -76,7 +76,7 @@ def target_slug(meta):
         return str(meta.get("number", ""))
     if target == "branch":
         branch = meta.get("branch", "")
-        digest = hashlib.sha256(branch.encode("utf-8")).hexdigest()[:6]
+        digest = hashlib.sha256(branch.encode("utf-8", "backslashreplace")).hexdigest()[:6]
         return "%s-%s" % (slugify(branch) or "branch", digest)
     if target == "local":
         return "local"
@@ -163,7 +163,7 @@ def finding_digest(findings):
                         item.get("recommendation_md") or "",
                         item.get("impact") or "", item.get("fix_md") or "")
                        for item in rank_findings(findings))
-    return hashlib.sha256(source.encode("utf-8")).hexdigest()[:10]
+    return hashlib.sha256(source.encode("utf-8", "backslashreplace")).hexdigest()[:10]
 
 
 def storage_key(meta, findings):
@@ -757,6 +757,18 @@ def _checker_failure_text(deep):
         "%s (%s)" % (key, reason.strip()) for key, reason in sorted(failures.items()))
 
 
+def _budget_overrun_text(deep):
+    """One sentence stating the deep time budget was exceeded, or empty."""
+    if not isinstance(deep, dict):
+        return ""
+    budget, elapsed = deep.get("budget_minutes"), deep.get("elapsed_minutes")
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in (budget, elapsed)):
+        return ""
+    if elapsed <= budget:
+        return ""
+    return "The deep review exceeded its time budget (%gm of %gm)" % (elapsed, budget)
+
+
 def _what_was_run(report):
     """Render the run conditions as records in one Section: rows, not a grid of panels."""
     run = report.get("run") or {}
@@ -777,12 +789,18 @@ def _what_was_run(report):
         if not failed and deep.get("unreached_areas"):
             failed = "Unreached areas: %s" % ", ".join(deep["unreached_areas"])
         checker = _checker_failure_text(deep)
+        overrun = _budget_overrun_text(deep)
         if failed:
             body = "%s did not finish, so a short findings list here is not a clean bill." % _esc(failed)
             if checker:
                 body += " %s." % _esc(checker)
-        elif checker:
-            body = "%s. A short findings list here is not a clean bill." % _esc(checker)
+            if overrun:
+                body += " %s." % _esc(overrun)
+        elif checker or overrun:
+            body = "%s. A short findings list here is not a clean bill." % _esc(
+                ". ".join(part for part in (checker, overrun) if part))
+        elif deep:
+            body = "Some deep checks did not finish, so a short findings list here is not a clean bill."
         else:
             body = "unknown lenses did not finish, so a short findings list here is not a clean bill."
         out.append(_banner("warning", "Incomplete review.", body))
@@ -1456,9 +1474,11 @@ def _content(report, report_path=None):
     if deep and run.get("incomplete"):
         unreached = ", ".join(deep.get("unreached_areas") or [])
         checker = _checker_failure_text(deep)
+        overrun = _budget_overrun_text(deep)
         body = " ".join(part for part in (
             ("Unreached areas: %s." % unreached) if unreached else "",
-            ("%s." % checker) if checker else "") if part)
+            ("%s." % checker) if checker else "",
+            ("%s." % overrun) if overrun else "") if part)
         body = body or "Some deep checks did not finish."
         out.append(_banner("warning", "Incomplete review.", _esc(body)))
     out.append('<div class="panes">')
@@ -1515,12 +1535,18 @@ def _render_md_prepared(report):
         if not failed and deep.get("unreached_areas"):
             failed = "unreached areas (%s)" % ", ".join(deep["unreached_areas"])
         checker = _checker_failure_text(deep)
+        overrun = _budget_overrun_text(deep)
         if failed:
             text = "%s did not finish; this report is not a clean bill." % failed
             if checker:
                 text += " %s." % checker
-        elif checker:
-            text = "%s; this report is not a clean bill." % checker
+            if overrun:
+                text += " %s." % overrun
+        elif checker or overrun:
+            text = "%s; this report is not a clean bill." % ". ".join(
+                part for part in (checker, overrun) if part)
+        elif deep:
+            text = "some deep checks did not finish; this report is not a clean bill."
         else:
             text = "some lenses did not finish; this report is not a clean bill."
         lines.extend(["**Incomplete:** %s" % text, ""])
@@ -1660,7 +1686,7 @@ def _write_text(path, text):
     fd, temp = tempfile.mkstemp(prefix=".%s." % os.path.basename(path), suffix=".tmp", dir=directory,
                                 text=True)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        with os.fdopen(fd, "w", encoding="utf-8", errors="backslashreplace") as handle:
             handle.write(text)
         os.replace(temp, path)
     finally:

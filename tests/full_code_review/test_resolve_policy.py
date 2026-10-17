@@ -257,6 +257,26 @@ def test_apply_excludes_generated_and_skip_glob_files_and_recomputes_size(tmp_pa
     assert ctx["batches"] == [{"files": ["src/app.py"], "diff": ctx["diff"].rstrip("\n")}]
 
 
+def test_apply_drops_a_batch_whose_files_are_all_excluded(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    _write(repo / ".gitattributes", "gen/** linguist-generated\n")
+    _write(repo / "REVIEW.md", "---\nskip_globs: [\"**/*.lock\"]\n---\n")
+    _commit(repo)
+    changed = ("src/app.py", "gen/client.py", "poetry.lock")
+    ctx_path = _context(tmp_path, changed, batched=True)
+    ctx = json.loads(ctx_path.read_text())
+    ctx["batches"] = [{"files": ["src/app.py"], "diff": _diff("src/app.py")},
+                      {"files": ["gen/client.py", "poetry.lock"], "diff": _diff("gen/client.py", "poetry.lock")}]
+    ctx_path.write_text(json.dumps(ctx))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "no-config"))
+    with contextlib.redirect_stdout(io.StringIO()):
+        rc = m.main(["--context", str(ctx_path), "--lenses-dir", str(LENSES), "--source-root", str(repo),
+                     "--out", str(tmp_path / "out" / "policy.json"), "--apply"])
+    assert rc == 0
+    batches = json.loads(ctx_path.read_text())["batches"]
+    assert [b["files"] for b in batches] == [["src/app.py"]]
+
+
 def test_reviewer_seat_reads_gitattributes_from_the_target_ref_only(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
     _write(repo / ".gitattributes", "gen/** linguist-generated\n")
@@ -279,7 +299,7 @@ def test_reviewer_seat_requires_a_policy_ref(tmp_path, monkeypatch):
     target = _commit(repo, "target")
     rc, policy, _, out = _resolve(tmp_path, repo, seat="reviewer", monkeypatch=monkeypatch)
     assert rc == 2 and policy is None
-    assert "--policy-ref" in json.loads(out)["error"]
+    assert "merge-base SHA" in json.loads(out)["error"]
     rc, policy, _, _ = _resolve(tmp_path, repo, seat="reviewer", ref=target, monkeypatch=monkeypatch)
     assert rc == 0 and policy is not None
 
@@ -390,6 +410,25 @@ def test_cross_family_and_cross_repo_settings_come_from_a_pack(tmp_path, monkeyp
     assert rc == 0
     assert policy["cross_family"] == {"enabled": True, "alias": "codex"}
     assert policy["cross_repo"] == {"search_agent": "code-search-agent"}
+
+
+def test_cross_family_enabled_without_an_alias_exits_2(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    pack = tmp_path / "pack"
+    _write(pack / "pack.yaml", "cross_family:\n  enabled: true\n")
+    rc, policy, _, out = _resolve(tmp_path, repo, pack=pack, monkeypatch=monkeypatch)
+    assert rc == 2 and policy is None
+    assert "cross_family.enabled requires an alias" in json.loads(out)["error"]
+
+
+def test_cross_family_enabled_keeps_an_alias_set_by_a_lower_layer(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    user = tmp_path / "config" / "quirk" / "review"
+    _write(user / "pack.yaml", "cross_family:\n  alias: codex\n")
+    _write(repo / "REVIEW.md", "---\ncross_family:\n  enabled: true\n---\n")
+    rc, policy, _, _ = _resolve(tmp_path, repo, user_config=tmp_path / "config", monkeypatch=monkeypatch)
+    assert rc == 0
+    assert policy["cross_family"] == {"enabled": True, "alias": "codex"}
 
 
 def test_skip_globs_union_across_layers_and_exclude_files(tmp_path, monkeypatch):
@@ -525,6 +564,16 @@ def test_reviewer_seat_follows_a_symlinked_review_md_to_its_in_repo_target(tmp_p
 def test_reviewer_seat_rejects_a_symlink_that_leaves_the_repo(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
     (repo / "REVIEW.md").symlink_to("../outside.md")
+    target = _commit(repo, "target")
+    rc, policy, _, out = _resolve(tmp_path, repo, ref=target, monkeypatch=monkeypatch)
+    assert rc == 2 and policy is None
+    assert "REVIEW.md" in json.loads(out)["error"]
+
+
+def test_reviewer_seat_rejects_a_symlink_cycle(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    (repo / "REVIEW.md").symlink_to("B.md")
+    (repo / "B.md").symlink_to("REVIEW.md")
     target = _commit(repo, "target")
     rc, policy, _, out = _resolve(tmp_path, repo, ref=target, monkeypatch=monkeypatch)
     assert rc == 2 and policy is None

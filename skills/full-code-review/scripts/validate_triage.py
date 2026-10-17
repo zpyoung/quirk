@@ -32,7 +32,7 @@ def expected_order(prepared):
     return {
         finding["id"]: {
             "file": finding["file"], "line": finding["line"],
-            "severity": finding["severity"], "title": finding["title"],
+            "severity": finding["severity"],
             "open_threads": {entry["note_id"] for entry in render_report.open_human_threads(finding)},
         }
         for finding in prepared["findings"]
@@ -86,7 +86,6 @@ def parse_export(text, prepared):
             finding_id = item_match.group(1)
             if finding_id in seen:
                 raise ValueError("duplicate finding ID %s" % finding_id)
-            pasted_title = item_match.group(2).rstrip()
             index += 1
             if index >= len(lines):
                 raise ValueError("finding %s is missing its anchor" % finding_id)
@@ -112,7 +111,7 @@ def parse_export(text, prepared):
             seen[finding_id] = {
                 "id": finding_id, "slot": slot, "disposition": label,
                 "anchor": anchor, "severity": severity,
-                "note": "\n".join(notes), "pasted_title": pasted_title,
+                "note": "\n".join(notes),
             }
             if reply_note_id is not None:
                 seen[finding_id]["reply_note_id"] = reply_note_id

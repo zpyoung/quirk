@@ -7,6 +7,8 @@ LENSES = SKILL_DIR / "references" / "lenses"
 RUN_WHEN = {"always", "has_description", "code_changed", "source_or_config_changed",
             "tests_changed", "source_without_tests", "not_diff_only"}
 MODELS = {"sonnet", "opus", "haiku"}
+LENS_COUNT = 14
+DEEP_PROMPTS = ("_area-finder", "_contract", "_checker")
 
 
 def _front_matter(text):
@@ -38,7 +40,7 @@ def test_deep_flag_routes_to_its_runbook_without_expanding_the_skill():
 
 
 def test_deep_prompts_are_separate_from_the_standard_lens_roster():
-    assert len(_lens_ids()) == 14
+    assert not set(DEEP_PROMPTS) & set(_lens_ids())
     for lens_id, escalation in (("_area-finder", "false"), ("_contract", "false"),
                                 ("_checker", "true")):
         path = LENSES / (lens_id + ".md")
@@ -83,7 +85,7 @@ def test_every_bundled_path_skill_md_names_exists():
 
 
 def test_every_lens_has_valid_front_matter():
-    assert len(_lens_ids()) == 14
+    assert len(_lens_ids()) == LENS_COUNT
     for lens_id in _lens_ids():
         meta = _front_matter((LENSES / (lens_id + ".md")).read_text(encoding="utf-8"))
         assert meta["id"] == lens_id
@@ -95,7 +97,8 @@ def test_every_lens_has_valid_front_matter():
 
 def test_memory_roster_and_orchestration_table_match_the_lens_files():
     skill = SKILL_MD.read_text(encoding="utf-8")
-    assert sorted(set(re.findall(r"--dimension ([a-z-]+)", skill))) == _lens_ids()
+    assert re.findall(r"--dimension ([a-z-]+)", skill) == []
+    assert "d['lenses']+d['skipped']" in skill
     orchestration = (SKILL_DIR / "references" / "orchestration.md").read_text(encoding="utf-8")
     table = re.findall(r"^\| `([a-z-]+)` \| (?:sonnet|opus|haiku)", orchestration, re.M)
     assert sorted(table) == _lens_ids()
@@ -123,3 +126,24 @@ def test_claim_table_is_routed_to_process_notes_not_a_section():
         text = path.read_text(encoding="utf-8")
         assert "Claim Verification section" not in text, path.name
         assert "process_notes" in text, path.name
+
+
+def _documented_script_commands():
+    texts = [SKILL_DIR / "references" / "deep.md"] + [LENSES / (name + ".md") for name in DEEP_PROMPTS]
+    for path in texts:
+        text = path.read_text(encoding="utf-8")
+        for match in re.finditer(r'python3 "\$SCRIPTS/(\w+)\.py"([^`]*?)(?=python3 "\$SCRIPTS/|`|\Z)', text, re.S):
+            command = match.group(2).split(" -- ")[0]
+            yield path.name, match.group(1), command
+
+
+def test_deep_commands_use_subcommands_and_flags_the_scripts_define():
+    commands = list(_documented_script_commands())
+    assert {script for _, script, _ in commands} >= {"deep_sandbox", "build_area_map", "merge_deep_findings"}
+    for doc, script, command in commands:
+        source = (SKILL_DIR / "scripts" / (script + ".py")).read_text(encoding="utf-8")
+        for flag in re.findall(r"(?<!\S)--([a-z][a-z-]*)", command):
+            assert '"--%s"' % flag in source or '"%s"' % flag in source, (doc, script, flag)
+        if script == "deep_sandbox":
+            subcommand = command.split()[0]
+            assert 'add_parser("%s")' % subcommand in source, (doc, subcommand)

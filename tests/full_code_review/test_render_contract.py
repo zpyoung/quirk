@@ -199,3 +199,9 @@ def test_deep_reproduced_evidence_requires_reproduction():
     value["findings"][0]["repro"] = {"command": "python3 test.py", "output": "failed"}
     prepared, _ = m._prepare_report(value)
     assert prepared["findings"][0]["repro"] == value["findings"][0]["repro"]
+
+
+def test_committed_sample_asset_matches_the_renderer():
+    import build_sample_report
+
+    assert build_sample_report.render_sample() == TEMPLATE

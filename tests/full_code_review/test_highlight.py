@@ -187,3 +187,11 @@ def test_highlight_lines_carries_a_token_across_line_breaks(language):
 def test_highlight_lines_passes_through_empty_and_unknown_input():
     assert h.highlight_lines([], "python") == []
     assert h.highlight_lines(["<a>"], None) == ["&lt;a&gt;"]
+
+
+def test_lexer_that_rewrites_text_falls_back_to_plain_source():
+    pytest.importorskip("pygments")
+    source = "*** Test Cases ***\nCase\n\tLog    x\n"
+    out = h.highlight(source, "robotframework")
+    assert STRIP.sub("", out) == html.escape(source, quote=True)
+    assert "<span" not in out

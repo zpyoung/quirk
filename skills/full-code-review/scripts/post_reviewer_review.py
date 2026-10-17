@@ -20,7 +20,7 @@ import render_report
 import review_memory
 from jsonio import load_object, write_json
 from forge import ForgeError, positive_int as _positive_int, valid_sha as _valid_sha
-from forge import change_label, default_run, make_forge
+from forge import change_label, default_run, discussion_resolved, draft_summary, make_forge
 from forge import gitlab as _gitlab
 from forge import github as _github
 
@@ -132,7 +132,7 @@ def _list_drafts(ctx):
 
 
 def _draft_summary(item):
-    return _gitlab.draft_summary(item)
+    return draft_summary(item)
 
 
 _report_digest = review_memory._report_digest
@@ -375,8 +375,10 @@ def _reconcile_orphans(state, failed_body):
         # only the failed POST can have committed without an ack, so only a
         # body match proves ownership; anything else may be the user's own draft
         if digest == failed_digest:
-            orphans.append({"draft_id": draft_id, "body_sha256": digest,
-                            "matches_failed_note": True})
+            orphan = {"draft_id": draft_id, "body_sha256": digest, "matches_failed_note": True}
+            if item.get("kind"):
+                orphan["kind"] = item["kind"]
+            orphans.append(orphan)
         else:
             unrecognized.append(_draft_summary(item))
     if orphans:
@@ -388,8 +390,9 @@ def _reconcile_orphans(state, failed_body):
 def _suggested_completion(prepared, posted, omitted):
     """Pick the completion action to suggest; an incomplete review is never offered as approvable.
 
-    Only findings that are staged as Blocking, or already stand as a Blocking thread from an
-    earlier run, count toward request-changes; a plausible or unplaced finding never does.
+    Findings that are staged as Blocking, already stand as a Blocking thread from an earlier
+    run, or are Blocking but could not be anchored inline count toward request-changes; a
+    plausible finding or a Nit never does.
     """
     if (prepared.get("run") or {}).get("incomplete"):
         return "comment-only"
@@ -398,6 +401,10 @@ def _suggested_completion(prepared, posted, omitted):
     blocking = blocking or any(
         str(item.get("reason", "")).startswith("already posted")
         and (item.get("decision") or {}).get("slot") == "fix"
+        and severity.get(item["id"]) not in (None, "Nit")
+        for item in omitted)
+    blocking = blocking or any(
+        item.get("unplaced") and item["disposition"] == "Blocking"
         and severity.get(item["id"]) not in (None, "Nit")
         for item in omitted)
     return "request-changes" if blocking else "approve"
@@ -420,7 +427,7 @@ def stage(args):
             by_id = {row["id"]: row for row in decisions["decisions"]}
         _, live_refs = _revalidate(ctx)
         # head partitioning can't salvage a moved diff basis: the findings were
-        # judged against a diff GitLab no longer serves, so only a rerun is safe
+        # judged against a diff the forge no longer serves, so only a rerun is safe
         if (live_refs["base_sha"] != ctx["expected_base"]
                 or live_refs["start_sha"] != ctx["expected_start"]):
             raise ReviewError("Change base/start diff refs changed since the review was prepared "
@@ -619,7 +626,7 @@ def _memory_publish_crosscheck(state, ctx):
 
 
 def _discussion_resolved(discussion):
-    return _gitlab.discussion_resolved(discussion)
+    return discussion_resolved(discussion)
 
 
 def _memory_receipts(state, refs, discussions=None):

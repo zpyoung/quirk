@@ -20,12 +20,12 @@
 
 **Coupling map.** Every script imports from `forge/` after Task 2; `comment_body.py`, `post_reviewer_review.py`, and `validate_triage.py` import `review_memory.py`; `render_report.py` imports `md_render.py` and `highlight.py` and reads `assets/report.html`; the triage paste grammar couples `assets/report.html` and `validate_triage.py`. Tasks are a strictly ordered PR stack, so no two run concurrently; each task's `scope.files` is its audit boundary.
 
-**Session setup** (run at the start of every session; all commands below run from the repo root `/Users/zpyoung/orca/workspaces/quirk/code-review`):
+**Session setup** (run at the start of every session; all commands below run from the repo root; set `SAKURA_CACHE` to your installed sakura plugin directory first, for example `~/.claude/plugins/cache/sakura/sakura/<version>`):
 
 `COMMAND:`
 ```bash
-export SRCS=/Users/zpyoung/.claude/plugins/cache/sakura/sakura/1.9.7/skills/review-mr-combined
-export SRCSH=/Users/zpyoung/.claude/plugins/cache/sakura/sakura/1.9.7/shared/mr
+export SRCS="$SAKURA_CACHE/skills/review-mr-combined"
+export SRCSH="$SAKURA_CACHE/shared/mr"
 export V39="${V39:-$(mktemp -d)/venv39}"
 [ -x "$V39/bin/python" ] || { python3.9 -m venv "$V39" && "$V39/bin/pip" install -q pytest; }
 export V312="${V312:-$(mktemp -d)/venv312}"

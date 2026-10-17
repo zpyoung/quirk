@@ -5,7 +5,7 @@ Layers, lowest to highest: the built-in lens roster, the user pack (or --pack), 
 project pack at <source-root>/.quirk/review/, then REVIEW.md files (the root one plus any
 in an ancestor directory of a changed file; deeper overrides shallower key by key).
 
-With --policy-ref (reviewer seat: the target branch SHA) the project pack and REVIEW.md
+With --policy-ref (reviewer seat: the merge-base SHA, refs.base) the project pack and REVIEW.md
 are read from that ref, never the working tree, so a change cannot weaken its own review.
 Files read from a ref are written under <out-dir>/policy-files/ so lenses can read them.
 
@@ -163,6 +163,12 @@ def _list_of_strings(value, label, key):
 
 
 class Policy:
+    """Accumulates the lens roster and settings across policy layers.
+
+    Layers apply lowest to highest; a later layer wins per key, while `skip`,
+    `critical_paths` and `skip_globs` accumulate. Raises PolicyError on invalid settings.
+    """
+
     def __init__(self, diff_only=False):
         self.diff_only = diff_only
         self.lenses = {}
@@ -226,6 +232,9 @@ class Policy:
             if (not isinstance(value, dict) or not isinstance(value.get("enabled", False), bool)
                     or not isinstance(value.get("alias"), (str, type(None)))):
                 raise PolicyError("%s: cross_family needs enabled (true/false) and an alias string" % label)
+            effective = {**self.settings["cross_family"], **value}
+            if effective["enabled"] and not effective.get("alias"):
+                raise PolicyError("%s: cross_family.enabled requires an alias string" % label)
             self.settings["cross_family"].update({k: value[k] for k in ("enabled", "alias") if k in value})
         if "cross_repo" in values:
             value = values["cross_repo"]
@@ -335,13 +344,13 @@ def resolve_policy(context, source_root, lenses_dir, out_dir, policy_ref=None, p
 
     Raises PolicyError on a malformed pack or REVIEW.md, and when the context's seat is
     reviewer but no `policy_ref` was given: a reviewer run must read project policy from the
-    target branch, never from the change under review. A `diff_only` run has no source
+    merge-base commit, never from the change under review. A `diff_only` run has no source
     checkout, so it skips the project pack and REVIEW.md instead of reading them.
     """
     if diff_only and policy_ref:
         raise PolicyError("--diff-only has no source to read a --policy-ref from")
     if not policy_ref and not diff_only and context.get("seat") == "reviewer":
-        raise PolicyError("reviewer seat requires --policy-ref (the target branch SHA) or --diff-only")
+        raise PolicyError("reviewer seat requires --policy-ref (the merge-base SHA, refs.base) or --diff-only")
     policy = Policy(diff_only)
     lenses_dir = Path(lenses_dir)
     for path in sorted(lenses_dir.glob("*.md")):

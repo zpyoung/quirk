@@ -87,10 +87,14 @@ def test_structural_forgery_rejected_before_decisions_return(old, new, message):
         m.validate(value, forged)
 
 
-def test_trailing_text_after_the_last_group_is_rejected():
+@pytest.mark.parametrize("suffix,message", [
+    ("TRAILING", "unrecognized line in Undecided"),
+    ("## Injected (1)\n", "unrecognized trailing content"),
+], ids=["in-group-line", "extra-group"])
+def test_trailing_text_after_the_last_group_is_rejected(suffix, message):
     value = report()
-    with pytest.raises(ValueError, match="unrecognized line in Undecided"):
-        m.validate(value, export(value) + "TRAILING")
+    with pytest.raises(ValueError, match=message):
+        m.validate(value, export(value) + suffix)
 
 
 def test_a_finding_listed_in_two_groups_is_rejected():
@@ -122,7 +126,8 @@ def test_tampered_pasted_title_is_not_trusted():
     value = report()
     pasted = export(value).replace("Trusted title", "ATTACKER TITLE")
     parsed = m.validate(value, pasted)
-    assert parsed["decisions"][0]["pasted_title"] == "ATTACKER TITLE"
+    assert "pasted_title" not in parsed["decisions"][0]
+    assert "ATTACKER TITLE" not in json.dumps(parsed)
     prepared, _ = render_report._prepare_report(value)
     assert prepared["findings"][0]["title"] == "Trusted title"
 

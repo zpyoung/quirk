@@ -136,7 +136,17 @@ def _at_close(text, pos, closing):
     return False
 
 
-def _tokenize(text, pos=0, closing=None):
+def _tokenize(text, pos=0, closing=None, memo=None):
+    """Tokenize from ``pos`` until ``closing``; each (pos, closing) is scanned once per text."""
+    if memo is None:
+        memo = {}
+    key = (pos, closing)
+    if key not in memo:
+        memo[key] = _scan(text, pos, closing, memo)
+    return memo[key]
+
+
+def _scan(text, pos, closing, memo):
     tokens = []
     while pos < len(text):
         if closing and _at_close(text, pos, closing):
@@ -179,7 +189,7 @@ def _tokenize(text, pos=0, closing=None):
                 continue
 
         if text.startswith("**", pos):
-            children, end, closed = _tokenize(text, pos + 2, "**") if _can_open(text, pos, 2) else (None, pos, False)
+            children, end, closed = _tokenize(text, pos + 2, "**", memo) if _can_open(text, pos, 2) else (None, pos, False)
             if closed:
                 tokens.append(("STRONG", children))
                 pos = end
@@ -189,7 +199,7 @@ def _tokenize(text, pos=0, closing=None):
             continue
 
         if ch == "*" and not text.startswith("**", pos):
-            children, end, closed = _tokenize(text, pos + 1, "*") if _can_open(text, pos, 1) else (None, pos, False)
+            children, end, closed = _tokenize(text, pos + 1, "*", memo) if _can_open(text, pos, 1) else (None, pos, False)
             if closed:
                 tokens.append(("EM", children))
                 pos = end

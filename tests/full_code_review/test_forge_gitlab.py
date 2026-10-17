@@ -137,12 +137,6 @@ def test_read_failures_keep_a_stderr_snippet():
         gitlab.current_user(run, "gitlab.example")
 
 
-def test_forge_wrappers_still_return_none_when_the_read_fails():
-    forge = GitLabForge("gitlab.example", "o/r", run=_runner(stderr="boom", returncode=1))
-    assert forge.change_details(7) is None
-    assert forge.current_user() is None
-
-
 def test_last_error_records_the_failure_cause_and_clears_on_success():
     forge = GitLabForge("gitlab.example", "o/r", run=_runner(stderr="401 Unauthorized", returncode=1))
     assert forge.change_details(7) is None and "401 Unauthorized" in forge.last_error
@@ -273,3 +267,17 @@ def test_list_drafts_rejects_malformed_and_duplicate_pages():
     full = [{"id": i} for i in range(1, 101)]
     with pytest.raises(ForgeError, match="duplicate id 1"):
         gitlab.list_drafts(pages(full, [{"id": 1}]), "gitlab.example", "o/r", 7)
+    ids = iter(range(1, 10001))
+    endless = lambda host, method, endpoint, payload=None: [{"id": next(ids)} for _ in range(100)]
+    with pytest.raises(ForgeError, match="exceeded 100 pages"):
+        gitlab.list_drafts(endless, "gitlab.example", "o/r", 7)
+
+
+@pytest.mark.parametrize("failure", [FileNotFoundError("glab"), subprocess.TimeoutExpired("glab", 120)])
+def test_get_json_wraps_launch_failures_and_timeouts_as_forge_errors(monkeypatch, failure):
+    def boom(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(gitlab.subprocess, "run", boom)
+    with pytest.raises(ForgeError, match="discussion request failed"):
+        gitlab.get_json("gitlab.example", "projects/1/merge_requests/7/discussions")

@@ -40,7 +40,7 @@ _CODE_SPAN_OR_MENTION_RE = re.compile(
 _LINE_BREAK_RE = re.compile(r"\r\n|[\r\u2028\u2029]")
 _POSTED_SLOTS = ("fix", "later", "detail")
 _DIGITS_RE = re.compile(r"[0-9]+")
-_SENTENCE_END_RE = re.compile(r"[.?!](?=\s|$)")
+_SENTENCE_END_RE = re.compile(r"(?<!\be\.g)(?<!\bi\.e)(?<!\bvs)(?<!\betc)[.?!](?=\s|$)", re.IGNORECASE)
 _SEATS = ("author", "reviewer")
 _RISK_METRICS = (("likelihood", "Likelihood"), ("impact", "Impact"),
                  ("blast_radius", "Blast radius"), ("detection", "Detection"),
@@ -263,6 +263,11 @@ def _line(value):
     return _neutralize(" ".join(str(value).split()), inline=True)
 
 
+def _paragraph(value):
+    """A collapsed one-line `value` as its own paragraph, so a leading fence is balanced."""
+    return _neutralize(" ".join(str(value).split()))
+
+
 def _quote(text):
     return "\n".join("> " + line if line.strip() else ">" for line in text.split("\n"))
 
@@ -401,7 +406,7 @@ def finding_body(finding, *, seat, lead, note="", head_sha=None):
     if _text(note):
         parts.append("> **Reviewer note:** " + _quote(_md(note, inline=True))[2:])
     if why:
-        parts.append(_line(why))
+        parts.append(_paragraph(why))
     if fix:
         parts.append("**Fix:** %s" % _line(fix))
     parts.extend(_details_parts(finding, why, None))
@@ -421,7 +426,7 @@ def support_body(finding, *, disposition, discussion_id, note_id, note="", head_
         {"supports_discussion": str(discussion_id), "supports_note": note_id})
     parts = ["**Agree · %s** · quirk full-code-review found this independently" % disposition]
     if why:
-        parts.append(_line(why))
+        parts.append(_paragraph(why))
     if fix:
         parts.append("**Fix:** %s" % _line(fix))
     parts.extend(_details_parts(finding, why, _text(note)))

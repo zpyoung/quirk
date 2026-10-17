@@ -69,13 +69,13 @@ def parse(text: str, path: str = "<string>") -> Any:
     plain/single/double-quoted scalars, booleans, `|`/`>` block scalars with `-`, `+` or
     default chomping, `#` comments, and flow sequences whose items are all scalars
     (`[a, "b", c]`, including the empty `[]`). Not supported: flow mappings, flow sequences
-    containing a nested collection, nested block sequences (`- - x`), anchors/aliases, multi-document separators, tags,
-    merge keys.
+    containing a nested collection, nested block sequences (`- - x`), anchors/aliases,
+    multi-document separators, tags, merge keys, tab indentation.
 
     Raises TemplateParseError naming `path` and the offending line for anything outside
     that subset.
     """
-    cur = _Cursor(text.splitlines())
+    cur = _Cursor(text.splitlines(), path)
     try:
         node = _parse_node(cur, 0, path, 0)
     except RecursionError as exc:  # pragma: no cover - _MAX_DEPTH fires first
@@ -90,8 +90,9 @@ def parse(text: str, path: str = "<string>") -> Any:
 class _Cursor:
     """A one-directional walk over `raw` lines that skips blank and comment-only ones."""
 
-    def __init__(self, raw: List[str]):
+    def __init__(self, raw: List[str], path: str = "<string>"):
         self.raw = raw
+        self.path = path
         self.n = len(raw)
         self.i = 0
 
@@ -103,8 +104,10 @@ class _Cursor:
             if stripped.strip() == "":
                 j += 1
                 continue
-            indent = len(stripped) - len(stripped.lstrip(" "))
-            return (j, indent, stripped.strip())
+            leading = stripped[: len(stripped) - len(stripped.lstrip(" \t"))]
+            if "\t" in leading:
+                raise TemplateParseError("tabs are not allowed for indentation", self.path, j + 1)
+            return (j, len(leading), stripped.strip())
         return None
 
     def advance_to(self, j: int) -> None:
@@ -384,14 +387,20 @@ def _fold(lines: List[str]) -> str:
     out: List[str] = []
     blank_run = 0
     started = False
+    previous = ""
     for line in lines:
         if line == "":
             blank_run += 1
             continue
         if started:
-            out.append("\n" * blank_run if blank_run else " ")
+            more_indented = line[0] in " \t" or previous[0] in " \t"
+            if blank_run:
+                out.append("\n" * (blank_run + 1 if more_indented else blank_run))
+            else:
+                out.append("\n" if more_indented else " ")
         out.append(line)
         started = True
+        previous = line
         blank_run = 0
     return "".join(out)
 
@@ -525,7 +534,12 @@ def _parse_double_quoted(raw: str, path: str, lineno: int) -> str:
                 raise TemplateParseError(
                     rf"expected {width} hex digits after \{esc} in {raw!r}", path, lineno
                 )
-            out.append(chr(int(digits, 16)))
+            codepoint = int(digits, 16)
+            if codepoint > 0x10FFFF:
+                raise TemplateParseError(
+                    rf"\{esc}{digits} is not a valid code point in {raw!r}", path, lineno
+                )
+            out.append(chr(codepoint))
             i += 2 + width
             continue
         if esc not in _DOUBLE_ESCAPES:

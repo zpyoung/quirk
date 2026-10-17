@@ -401,13 +401,19 @@ def test_protected_paths_treat_sandbox_denied_stat_as_absent(tmp_path, monkeypat
     forge_dir.mkdir()
     (forge_dir / "gh").write_text("#!/bin/sh\n", encoding="utf-8")
     monkeypatch.setenv("PATH", str(forge_dir))
+    _, visible = m._protected_paths()
+    assert str(forge_dir / "gh") in visible
 
-    def denied(self, *args, **kwargs):
-        raise PermissionError(1, "Operation not permitted", str(self))
+    real_stat = os.stat
 
-    monkeypatch.setattr(Path, "exists", denied)
+    def denied(path, *args, **kwargs):
+        if os.fspath(path) == str(forge_dir / "gh"):
+            raise PermissionError(1, "Operation not permitted", str(path))
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", denied)
     _, executables = m._protected_paths()
-    assert str(forge_dir / "gh") in executables
+    assert str(forge_dir / "gh") not in executables
 
 
 def test_exec_bounds_captured_output_and_reports_what_was_dropped(tmp_path, monkeypatch):
@@ -598,3 +604,89 @@ def test_invalid_head_and_missing_manifest_are_json_errors(tmp_path):
                  ("acquire", "--source-root", str(repo))):
         code, result = invoke(*args)
         assert code == 2 and "error" in result
+
+
+def test_acquire_works_for_shallow_source_clone_and_linked_worktree(tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    origin, _ = repository(tmp_path)
+    (origin / "data.txt").write_text("second\n", encoding="utf-8")
+    git(origin, "commit", "-am", "second")
+    shallow = tmp_path / "shallow"
+    subprocess.run(["git", "clone", "-q", "--depth=1", "file://" + str(origin), str(shallow)],
+                   check=True, env=m._git_environment())
+    linked = tmp_path / "linked"
+    git(shallow, "worktree", "add", "-q", "--detach", str(linked))
+    for index, source in enumerate((shallow, linked)):
+        sha = git(source, "rev-parse", "HEAD")
+        out = tmp_path / ("shallow-%d.json" % index)
+        manifest = m.acquire_copy(str(source), sha, str(out))
+        try:
+            copy = Path(manifest["copy_dir"])
+            assert git(copy, "rev-parse", "HEAD") == sha
+            assert (copy / ".git" / "shallow").is_file()
+            assert (copy / "data.txt").read_text(encoding="utf-8") == "second\n"
+            assert manifest["source_state"]["local_changes"] is False
+        finally:
+            m.release_copy(str(out))
+
+
+def test_exec_and_release_do_not_depend_on_the_current_tmpdir(tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    repo, sha = repository(tmp_path)
+    out = tmp_path / "copy.json"
+    manifest = m.acquire_copy(str(repo), sha, str(out))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.setenv("TMPDIR", str(elsewhere))
+    monkeypatch.setattr(m.tempfile, "tempdir", None)
+    result = m.exec_in_copy(str(out), ["true"])
+    assert result["exit_code"] == 0
+    assert m.release_copy(str(out))["released"] is True
+    assert not Path(manifest["copy_dir"]).exists()
+    assert list(elsewhere.iterdir()) == []
+
+
+def test_manifest_with_foreign_registry_root_is_rejected(tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    repo, sha = repository(tmp_path)
+    out = tmp_path / "copy.json"
+    manifest = m.acquire_copy(str(repo), sha, str(out))
+    decoy = tmp_path / "decoy" / m._registry_name()
+    lease = decoy / manifest["lease_id"]
+    (lease / "copy").mkdir(parents=True)
+    (lease / "environment").mkdir()
+    decoy.chmod(0o755)
+    forged = dict(manifest, registry_root=str(decoy), copy_dir=str(lease / "copy"),
+                  env_dir=str(lease / "environment"))
+    (lease / "record.json").write_text(json.dumps(forged), encoding="utf-8")
+    forged_path = tmp_path / "forged.json"
+    forged_path.write_text(json.dumps(forged), encoding="utf-8")
+    try:
+        code, error = invoke("release", "--manifest", str(forged_path))
+        assert code == 2 and "error" in error and lease.is_dir()
+    finally:
+        m.release_copy(str(out))
+
+
+def test_acquire_prunes_only_abandoned_leases(tmp_path, monkeypatch):
+    fallback(monkeypatch)
+    repo, sha = repository(tmp_path)
+    registry = m._registry_root()
+    stale = registry / ("lease-" + "a" * 32)
+    fresh = registry / ("lease-" + "b" * 32)
+    unrelated = registry / "keep-me"
+    for entry in (stale, fresh, unrelated):
+        entry.mkdir()
+        (entry / "record.json").write_text("{}", encoding="utf-8")
+    old = stale.stat().st_mtime - 2 * 24 * 60 * 60
+    for entry in (stale, stale / "record.json", unrelated, unrelated / "record.json"):
+        os.utime(entry, (old, old))
+    out = tmp_path / "copy.json"
+    try:
+        m.acquire_copy(str(repo), sha, str(out))
+        assert not stale.exists()
+        assert fresh.is_dir() and unrelated.is_dir()
+    finally:
+        m.release_copy(str(out))
+        shutil.rmtree(fresh)
+        shutil.rmtree(unrelated)

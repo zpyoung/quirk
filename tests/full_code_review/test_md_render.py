@@ -222,3 +222,18 @@ def test_diff_fence_colours_each_side_as_one_source():
 def test_fenced_code_keeps_unicode_line_separators_inside_one_line(separator):
     rendered = m.render_markdown("```\na%sb\nnext\n```" % separator)
     assert rendered == '<pre class="snippet"><code>a%sb\nnext</code></pre>' % separator
+
+
+def test_unclosed_emphasis_openers_tokenize_in_polynomial_time():
+    import time
+
+    text = "*a " * 40 + "**b " * 40
+    started = time.monotonic()
+    rendered = m.render_inline(text)
+    assert time.monotonic() - started < 2
+    assert rendered.count("*") == 120 and "<em>" not in rendered
+
+
+def test_memoized_tokenizer_still_pairs_nested_emphasis():
+    assert m.render_inline("*a **b** c* and **d *e* f**") == (
+        "<em>a <strong>b</strong> c</em> and <strong>d <em>e</em> f</strong>")

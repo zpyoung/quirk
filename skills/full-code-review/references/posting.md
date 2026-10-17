@@ -71,7 +71,9 @@ overview lists what actually posted, rebuilt from the receipts. The report must 
 the context's change and project, and its head too when `meta.head_sha` is present
 (author reports usually omit it; `meta.source_branch` is compared when both sides name
 one). Every requested finding needs a numeric line, or the script exits 2 before the
-first create.
+first create. The script also re-reads the live change before the first create: a change
+that is no longer open, or whose head differs from the context's `refs.head`, exits 2 with
+nothing posted, so rerun the review.
 
 Two rules that cost the most time when missed:
 
@@ -370,7 +372,7 @@ python3 "$SCRIPTS/post_reviewer_review.py" complete --staged "$REVIEW_RUN_DIR/st
   --action approve|request-changes|comment-only
 ```
 
-- any Blocking finding suggests request-changes;
+- any Blocking finding suggests request-changes, including one that could not be anchored inline and is listed in the overview;
 - otherwise approve may be suggested;
 - approve is bound to the reviewed SHA;
 - request-changes uses GitLab's merge-request reviewer-state mutation, or a `REQUEST_CHANGES` pull-request review on GitHub;

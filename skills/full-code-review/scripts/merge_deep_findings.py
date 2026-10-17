@@ -74,8 +74,19 @@ def _line(value: object, label: str) -> str:
     if not isinstance(value, bool) and isinstance(value, (str, int)):
         text = re.sub(r"\s*-\s*", "-", str(value).strip())
         if _REPORT_LINE.fullmatch(text):
-            return text
+            start, _, end = text.partition("-")
+            if not end or int(end) >= int(start):
+                return text
     raise ValueError("%s must be a line number or start-end range" % label)
+
+
+def _audit_line(value: object) -> str:
+    """Best-effort anchor for a dropped entry, which is audit-only and must never abort the merge."""
+    try:
+        return _line(value, "line")
+    except ValueError:
+        found = re.search(r"[1-9][0-9]*", str(value)) if not isinstance(value, bool) else None
+        return found[0] if found else "1"
 
 
 def _assumptions(source: dict, identifier: str) -> list[str]:
@@ -199,8 +210,9 @@ def _overlaps(first: str, second: str) -> bool:
 
 def _same_defect(first: dict, second: dict) -> bool:
     key = first.get("dedup_key")
-    if key and key == second.get("dedup_key"):
-        return True
+    other_key = second.get("dedup_key")
+    if key and other_key:
+        return key == other_key
     if first["file"] != second["file"]:
         return False
     if first["line"] == second["line"]:
@@ -310,7 +322,7 @@ def merge_deep_run(
                 "area": "lens:%s" % _first_text(source.get("dimension"), dimensions[0]) if is_lens
                         else _first_text(source.get("area"), "unknown"),
                 "file": _required_text(source.get("file"), "file for %s" % identifier),
-                "line": _line(source.get("line"), "line for %s" % identifier),
+                "line": _audit_line(source.get("line")),
                 "title": _elided(_required_text(_title(source), "title for %s" % identifier), 80),
                 "reason": _required_text(checker.get("reason"), "reason for %s" % identifier),
             })

@@ -224,3 +224,21 @@ def test_changed_files_list_with_non_utf8_names_is_read_and_withholds_guidance(t
     target = json.loads(capsys.readouterr().out)["target_repo"]
     assert target["changed_guidance"] == ["AGENTS.md"]
     assert target["other"] == []
+
+
+def test_gather_avoids_the_python_310_glob_root_dir_keyword(tmp_path, monkeypatch):
+    root = Path(tmp_path) / "repo"
+    (root / ".claude" / "skills" / "review-x" / "references").mkdir(parents=True)
+    (root / ".claude" / "skills" / "review-x" / "SKILL.md").write_text("x")
+    (root / ".claude" / "skills" / "review-x" / "references" / "index.md").write_text("i")
+    real_glob = m.glob.glob
+
+    def glob_39(pattern, *, recursive=False):
+        return real_glob(pattern, recursive=recursive)
+
+    monkeypatch.setattr(m.glob, "glob", glob_39)
+
+    target = m.gather(str(root), [])
+
+    assert _rel(root, target["repo_skills"]) == [".claude/skills/review-x/SKILL.md"]
+    assert _rel(root, target["repo_skill_references"]) == [".claude/skills/review-x/references/index.md"]

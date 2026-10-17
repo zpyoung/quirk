@@ -160,7 +160,8 @@ def _decode_git_path(field: str) -> str | None:
     if len(field) < 2 or not field.endswith('"'):
         return None
     data = bytearray()
-    escapes = {"\\": 0x5c, '"': 0x22, "t": 0x09, "n": 0x0a, "r": 0x0d}
+    escapes = {"\\": 0x5c, '"': 0x22, "a": 0x07, "b": 0x08, "t": 0x09, "n": 0x0a,
+               "v": 0x0b, "f": 0x0c, "r": 0x0d}
     i, end = 1, len(field) - 1
     while i < end:
         char = field[i]
@@ -644,7 +645,7 @@ def _discussion_details(discussions: list[dict], fp: str | None, finding: dict, 
             continue
         # Unmarked positioned comments are context only.
         position = discussion.get("position") or (notes[0].get("position") if notes and isinstance(notes[0], dict) else {})
-        if isinstance(position, dict) and position.get("new_path", position.get("old_path")) == file:
+        if isinstance(position, dict) and file in (position.get("new_path"), position.get("old_path")):
             pos_line = position.get("new_line") if position.get("new_line") is not None else position.get("old_line")
             if wanted is not None and _line_number(pos_line) == wanted:
                 root = notes[0] if notes and isinstance(notes[0], dict) else {}
@@ -922,6 +923,8 @@ def commit_report(report: dict, decisions: dict | None = None, receipts: dict | 
                 if not fp or counts[fp] != 1:
                     continue
                 previous = merged.get(fp, {})
+                if previous and not _same_finding(previous, finding):
+                    previous = {}
                 entry = _safe_record({**finding, **fm, "seat": seat})
                 if "receipt" in previous:
                     entry["receipt"] = copy.deepcopy(previous["receipt"])

@@ -854,12 +854,6 @@ def test_template_handoff_marks_findings_as_data_and_defangs_angle_brackets():
     assert "on GitLab from this handoff" not in TEMPLATE and "forgeName()" in TEMPLATE
 
 
-def test_template_triage_shortcuts_only_act_on_the_findings_tab():
-    keydown = TEMPLATE[TEMPLATE.index('document.addEventListener("keydown"'):]
-    keydown = keydown[:keydown.index("Object.keys(DISPS)")]
-    assert 'getElementById("pane-findings").classList.contains("is-active")' in keydown
-
-
 def test_risk_without_metrics_keeps_plain_verbatim():
     value = report()
     value["risk"].pop("metrics")
@@ -1009,13 +1003,6 @@ def test_diff_only_forces_unverified_and_renders_limitation():
     assert "Temporary clone was declined" in html
 
 
-def test_reset_counts_a_toggled_off_reply_as_a_change():
-    start = TEMPLATE.index('getElementById("btn-reset")')
-    block = TEMPLATE[start:TEMPLATE.index('flash("Reset")', start)]
-    assert "replyTarget[card.id] && record.reply === false" in block
-    assert "state = { __seat: SEAT };" in block and "entry(card.id)" in block
-
-
 def handoff_blob(rendered):
     match = re.search(r'<script type="application/json" id="handoff-data">(.*?)</script>', rendered, re.S)
     return json.loads(match.group(1)) if match else None
@@ -1105,7 +1092,7 @@ const named = {};
 ["tnav", "no-match", "saved", "progress", "decide-bar", "tdetail", "btn-export", "btn-reset",
  "pane-findings", "export-left"].forEach((id) => { named[id] = root.appendChild(new El()); named[id].id = id; });
 named["btn-export"].parentNode = new El(); named["btn-export"].parentNode.parentNode = new El();
-named["pane-findings"].classList.add("is-active");
+if (!spec.inactive) named["pane-findings"].classList.add("is-active");
 const masthead = root.appendChild(new El());
 Object.assign(masthead.dataset, spec.masthead);
 const handoff = root.appendChild(new El());
@@ -1117,10 +1104,12 @@ const cards = spec.cards.map((c) => {
   return card;
 });
 let copied = null;
+const writes = [];
+const docListeners = {};
 const doc = {
   documentElement: new El(), body: root,
   createElement: () => new El(), createTextNode: (t) => Object.assign(new El(), { textContent: t }),
-  addEventListener() {},
+  addEventListener: (t, f) => { (docListeners[t] = docListeners[t] || []).push(f); },
   getElementById: (id) => root.descendants().filter((e) => e.id === id)[0] || null,
   querySelector: (sel) => (sel === "[data-storage-key]" ? masthead : null),
   querySelectorAll: (sel) => (sel === ".finding" ? cards : []),
@@ -1131,18 +1120,26 @@ const sandbox = {
   setTimeout: () => 1, clearTimeout() {},
 };
 sandbox.window = Object.assign(sandbox, {
-  localStorage: { getItem: () => (spec.storage ? JSON.stringify(spec.storage) : null), setItem() {} },
+  localStorage: { getItem: () => (spec.storage ? JSON.stringify(spec.storage) : null),
+                  setItem: (k, v) => { writes.push(JSON.parse(v)); } },
   matchMedia: () => ({ matches: false }), confirm: () => true, addEventListener() {},
 });
 vm.createContext(sandbox);
 vm.runInContext(spec.script, sandbox);
+(spec.actions || []).forEach((a) => {
+  if (a.type === "click") named[a.id].listeners.click[0]();
+  else (docListeners.keydown || []).forEach((f) => f({ key: a.key, target: {}, preventDefault() {} }));
+});
 named["btn-export"].listeners.click[0]();
-process.stdout.write(copied);
+process.stdout.write(JSON.stringify({ copied, writes }));
 """
 
 
-def run_page_export(rendered, storage=None):
-    """Return the paste the rendered page's Copy button builds, from running its own script under node."""
+def run_page(rendered, storage=None, actions=(), inactive=False):
+    """Run the rendered page's own script under node, replay actions, then press Copy.
+
+    Returns the paste and every state object the page saved to localStorage.
+    """
     parse = DOM()
     parse.feed(rendered)
     page = [n for n in parse.nodes if "data-storage-key" in n][0]
@@ -1158,13 +1155,19 @@ def run_page_export(rendered, storage=None):
         "masthead": {re.sub(r"-(\w)", lambda g: g.group(1).upper(), key[5:]): value
                      for key, value in page.items() if key.startswith("data-")},
         "cards": cards, "handoff": handoff.group(1) if handoff else "", "storage": storage,
+        "actions": list(actions), "inactive": inactive,
         "script": re.findall(r"<script>(.*?)</script>", rendered, re.S)[-1],
     }
     # bytes, not text mode, so a stray \r in the paste isn't translated away before the validator sees it
     done = subprocess.run(["node", "-e", EXPORT_HARNESS], input=json.dumps(spec).encode("utf-8"),
                           capture_output=True, timeout=30)
     assert done.returncode == 0, done.stderr.decode("utf-8")
-    return done.stdout.decode("utf-8")
+    return json.loads(done.stdout.decode("utf-8"))
+
+
+def run_page_export(rendered, storage=None):
+    """Return the paste the rendered page's Copy button builds."""
+    return run_page(rendered, storage)["copied"]
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is needed to execute the page script")
@@ -1365,3 +1368,97 @@ def test_memory_pane_finding_ids_are_plain_text_not_dead_links():
     html = m.render_html(value, TEMPLATE)
     section = html[html.index('id="possible-regression"'):]
     assert 'href="#F' not in section[:section.index("</section>")]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed to execute the page script")
+def test_reset_button_clears_decisions_and_notes_in_the_exported_state():
+    value = report()
+    rendered = m.render_html(value, TEMPLATE)
+    prepared, _ = m._prepare_report(value)
+    first = prepared["findings"][0]["id"]
+    storage = {"__seat": "author", first: {"disp": "fix", "note": "keep me"}}
+    before = run_page(rendered, storage)
+    assert "keep me" in before["copied"].split(validate_triage.HANDOFF_DELIM)[0]
+    after = run_page(rendered, storage, [{"type": "click", "id": "btn-reset"}])
+    assert "keep me" not in after["copied"]
+    assert after["writes"][0][first] == {"disp": None, "note": "", "reply": True}
+    assert "## Will fix (0)" in after["copied"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed to execute the page script")
+@pytest.mark.parametrize("inactive,expected", [(False, "## Will fix (1)"), (True, "## Will fix (0)")])
+def test_disposition_shortcut_acts_only_on_the_findings_tab(inactive, expected):
+    rendered = m.render_html(report(), TEMPLATE)
+    result = run_page(rendered, {"__seat": "author"}, [{"type": "keydown", "key": "1"}], inactive=inactive)
+    assert expected in result["copied"]
+    assert bool(result["writes"]) is not inactive
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed to execute the page script")
+def test_reset_counts_a_toggled_off_reply_as_a_change():
+    value = reply_report("reviewer", [{"note_id": 4, "discussion_id": "d", "resolved": False,
+                                       "author": "bob", "body": "hi"}])
+    rendered = m.render_html(value, TEMPLATE)
+    prepared, _ = m._prepare_report(value)
+    first = prepared["findings"][0]["id"]
+    storage = {"__seat": "reviewer", first: {"disp": None, "note": "", "reply": False}}
+    result = run_page(rendered, storage, [{"type": "click", "id": "btn-reset"}])
+    assert result["writes"][0][first]["reply"] is True
+    assert "reply: 4" in result["copied"].split(validate_triage.HANDOFF_DELIM)[0]
+
+
+def test_lone_surrogates_from_non_utf8_text_do_not_abort_rendering(tmp_path):
+    value = report()
+    value["findings"][0]["body_md"] = "bad byte \udce9 here"
+    value["meta"] = {"target": "branch", "branch": "feat/\udce9", "title": "x", "verdict": "Approve"}
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(value), encoding="utf-8")
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(io.StringIO()):
+        rc = m.main(["--in", str(path), "--out-dir", str(tmp_path), "--no-open", "--format", "both"])
+    payload = json.loads(stdout.getvalue())
+    assert rc == 0
+    assert "\\udce9" in Path(payload["html"]).read_text(encoding="utf-8")
+    assert "\\udce9" in Path(payload["md"]).read_text(encoding="utf-8")
+
+
+def over_budget_report(**deep):
+    value = report()
+    value["run"]["incomplete"] = True
+    value["run"]["deep"] = dict({"enabled": True, "budget_minutes": 30, "elapsed_minutes": 41.5}, **deep)
+    return value
+
+
+def test_over_budget_deep_run_names_the_budget_not_unknown_lenses():
+    value = over_budget_report()
+    rendered = m.render_html(value, TEMPLATE)
+    assert rendered.count("The deep review exceeded its time budget (41.5m of 30m)") == 2
+    assert "unknown lenses" not in rendered
+    md = m.render_md(value)
+    assert "**Incomplete:** The deep review exceeded its time budget (41.5m of 30m); this report is not a clean bill." in md
+    assert "some lenses" not in md
+
+
+def test_incomplete_deep_run_without_a_stated_cause_does_not_blame_lenses():
+    value = over_budget_report(elapsed_minutes=10)
+    assert "unknown lenses" not in m.render_html(value, TEMPLATE)
+    assert "some lenses" not in m.render_md(value)
+
+
+def test_over_budget_is_added_alongside_other_incomplete_causes():
+    value = over_budget_report(checker_failures={"A1.1": "timed out"})
+    md = m.render_md(value)
+    assert "Unchecked claims withheld: A1.1 (timed out)" in md and "exceeded its time budget" in md
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed to execute the page script")
+def test_handoff_carries_plausible_status_and_reproduction():
+    value = report()
+    value["run"]["deep"] = {"enabled": True}
+    value["findings"][0].update(verification_status="plausible", what_would_confirm="Run <it> twice",
+                                evidence="reproduced", repro={"command": "pytest -k a", "output": "1 failed\n<x>"})
+    paste = run_page_export(m.render_html(value, TEMPLATE), {"__seat": "author"})
+    handoff = paste.split(validate_triage.HANDOFF_DELIM)[1]
+    assert "Status: Plausible, unconfirmed. What would confirm: Run &lt;it> twice" in handoff
+    assert "<reproduction>\n$ pytest -k a\n1 failed\n&lt;x>\n</reproduction>" in handoff
+    assert "Confirm a finding marked Plausible" in handoff

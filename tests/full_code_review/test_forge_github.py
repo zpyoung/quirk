@@ -93,10 +93,11 @@ def test_cleanup_commands_shell_quote_the_host_and_endpoint():
 
 def test_cleanup_commands_cover_the_recorded_and_reconciled_reviews_once_each():
     state = {"review_id": 5, "host": HOST, "project": "o/r", "number": 7,
-             "reconciled": [{"draft_id": 5}, {"draft_id": 9}]}
+             "reconciled": [{"draft_id": 5, "kind": "review"}, {"draft_id": 9, "kind": "review"},
+                            {"draft_id": 11, "kind": "comment"}]}
     commands = GitHubForge(HOST, PROJECT).cleanup_commands(state)
     assert [c.rsplit("/", 1)[1] for c in commands] == ["5", "9"]
-    orphan_only = dict(state, review_id=None, reconciled=[{"draft_id": 9}])
+    orphan_only = dict(state, review_id=None, reconciled=[{"draft_id": 9, "kind": "review"}])
     assert [c.rsplit("/", 1)[1] for c in GitHubForge(HOST, PROJECT).cleanup_commands(orphan_only)] == ["9"]
     assert GitHubForge(HOST, PROJECT).cleanup_commands(dict(state, review_id=None, reconciled=[])) == []
 
@@ -407,6 +408,13 @@ def test_stage_is_one_pending_review_and_off_diff_findings_are_omitted(tmp_path,
     review_id = state["review_id"]
     assert [item["draft_id"] for item in state["created"]] == [review_id, fake.review_comments[review_id][0]["id"]]
     assert state["cleanup_commands"] == ["gh api --hostname github.com -X DELETE repos/o/r/pulls/7/reviews/%d" % review_id]
+
+
+def test_pending_tags_each_item_as_a_review_or_a_comment(fake):
+    fake.reviews.append({"id": 3, "body": "mine", "state": "PENDING", "user": {"login": "reviewer"}})
+    fake.review_comments[3] = [{"id": 4, "path": "a.py", "line": 2, "body": "inline"}]
+    assert [(item["id"], item["kind"]) for item in forge(fake).pending(NUMBER, "reviewer")] == [
+        (3, "review"), (4, "comment")]
 
 
 def test_stage_and_pending_ignore_submitted_reviews_and_other_users_pending_reviews(tmp_path, fake):

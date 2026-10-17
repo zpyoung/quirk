@@ -402,60 +402,45 @@ def test_trust_that_disallows_execution_needs_no_consent_field():
     assert result["coverage_notes"] == ["⚠ Deep repros disabled: fork author"]
 
 
-def test_cli_writes_json_via_report_helper(tmp_path):
+def cli_run(tmp_path, consent=True, overrides=None, raw=None):
+    """Write the six merge inputs under tmp_path and run the CLI; raw maps a flag to literal file text."""
     inputs = {"lens-findings": [], "deep-candidates": [candidate()],
               "checker-verdicts": [verdict()], "area-map": {"areas": []},
-              "trust": {"allowed": True, "consent": False},
+              "trust": {"allowed": True, "consent": consent},
               "budget": {"budget_minutes": 60, "elapsed_minutes": 0, "cutoff_reached": False}}
+    inputs.update(overrides or {})
     argv = []
     for flag, content in inputs.items():
         path = tmp_path / (flag + ".json")
-        path.write_text(json.dumps(content), encoding="utf-8")
+        if raw and flag in raw:
+            if raw[flag] is not None:
+                path.write_text(raw[flag], encoding="utf-8")
+        else:
+            path.write_text(json.dumps(content), encoding="utf-8")
         argv.extend(["--" + flag, str(path)])
     target = tmp_path / "nested" / "merged.json"
     result = subprocess.run([sys.executable, str(SCRIPT), *argv, "--out", str(target)], capture_output=True, text=True)
+    return result, target
+
+
+def test_cli_writes_json_via_report_helper(tmp_path):
+    result, target = cli_run(tmp_path, consent=False)
     assert result.returncode == 0, result.stdout + result.stderr
     assert json.loads(target.read_text(encoding="utf-8"))["findings"][0]["id"] == "A1.1"
 
 
 def test_cli_deeply_nested_json_exits_two_with_json_error(tmp_path):
-    inputs = {"lens-findings": [], "deep-candidates": [candidate()],
-              "checker-verdicts": [verdict()], "area-map": {"areas": []},
-              "trust": {"allowed": True, "consent": True},
-              "budget": {"budget_minutes": 60, "elapsed_minutes": 0, "cutoff_reached": False}}
-    argv = []
-    for flag, content in inputs.items():
-        path = tmp_path / (flag + ".json")
-        path.write_text("[" * 100000 if flag == "deep-candidates" else json.dumps(content), encoding="utf-8")
-        argv.extend(["--" + flag, str(path)])
-    result = subprocess.run([sys.executable, str(SCRIPT), *argv, "--out", str(tmp_path / "out.json")],
-                            capture_output=True, text=True)
+    result, _ = cli_run(tmp_path, raw={"deep-candidates": "[" * 100000})
     assert result.returncode == 2
     assert isinstance(json.loads(result.stdout)["error"], str)
 
 
 @pytest.mark.parametrize("invalid_input", ["missing", "invalid-json", "wrong-type", "missing-verdict"])
 def test_cli_invalid_input_exits_two_with_json_error(tmp_path, invalid_input):
-    inputs = {"lens-findings": [], "deep-candidates": [candidate()],
-              "checker-verdicts": [verdict()], "area-map": {"areas": []},
-              "trust": {"allowed": True, "consent": True},
-              "budget": {"budget_minutes": 60, "elapsed_minutes": 0, "cutoff_reached": False}}
-    if invalid_input == "missing-verdict":
-        inputs["checker-verdicts"] = []
-    argv = []
-    for flag, content in inputs.items():
-        path = tmp_path / (flag + ".json")
-        if flag == "deep-candidates" and invalid_input == "missing":
-            pass
-        elif flag == "deep-candidates" and invalid_input == "invalid-json":
-            path.write_text("{broken", encoding="utf-8")
-        elif flag == "deep-candidates" and invalid_input == "wrong-type":
-            path.write_text("{}", encoding="utf-8")
-        else:
-            path.write_text(json.dumps(content), encoding="utf-8")
-        argv.extend(["--" + flag, str(path)])
-    target = tmp_path / "out.json"
-    result = subprocess.run([sys.executable, str(SCRIPT), *argv, "--out", str(target)], capture_output=True, text=True)
+    overrides = {"checker-verdicts": []} if invalid_input == "missing-verdict" else None
+    raw = {"missing": {"deep-candidates": None}, "invalid-json": {"deep-candidates": "{broken"},
+           "wrong-type": {"deep-candidates": "{}"}}.get(invalid_input)
+    result, target = cli_run(tmp_path, overrides=overrides, raw=raw)
     assert result.returncode == 2
     assert isinstance(json.loads(result.stdout)["error"], str)
     assert not target.exists()
@@ -526,3 +511,25 @@ def test_non_numeric_line_anchors_are_rejected_naming_the_candidate(value):
 def test_non_numeric_checker_refined_line_is_rejected_naming_the_candidate():
     with pytest.raises(ValueError, match="line for A1.1"):
         merge(candidates=[candidate()], verdicts=[verdict(refined_line="L12, L14")])
+
+
+def test_same_line_findings_with_different_dedup_keys_stay_separate():
+    candidates = [candidate("A1.1", summary="First defect", dedup_key="k1"),
+                  candidate("A1.2", summary="Second defect", dedup_key="k2")]
+    verdicts = [verdict("A1.1", severity="Should fix"), verdict("A1.2", severity="Must fix")]
+    findings = merge(candidates=candidates, verdicts=verdicts)["findings"]
+    assert sorted(finding["id"] for finding in findings) == ["A1.1", "A1.2"]
+
+
+@pytest.mark.parametrize("value, expected", [("L40, 41", "40"), ("40-L41", "40"), ("n/a", "1"), (None, "1"), ("48-42", "48")])
+def test_malformed_line_on_a_refuted_candidate_does_not_abort_the_merge(value, expected):
+    result = merge(candidates=[candidate(line=value), candidate("A1.2", line="20")],
+                   verdicts=[verdict(verdict="refuted", reason="Guarded."), verdict("A1.2")])
+    assert [entry["line"] for entry in result["deep"]["checked_and_dropped"]] == [expected]
+    assert [finding["id"] for finding in result["findings"]] == ["A1.2"]
+
+
+@pytest.mark.parametrize("value", ["48-42", "10-0", "5-4"])
+def test_descending_or_zero_ended_line_ranges_are_rejected(value):
+    with pytest.raises(ValueError, match="line for A1.1 must be a line number or start-end range"):
+        merge(candidates=[candidate(line=value)], verdicts=[verdict()])

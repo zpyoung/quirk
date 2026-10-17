@@ -1134,3 +1134,125 @@ def test_validate_snapshot_rejects_a_seat_that_differs_from_the_context():
     snapshot["seat"] = "reviewer"
     with pytest.raises(ValueError, match="seat"):
         m.validate_snapshot(snapshot, context())
+
+
+def test_git_control_character_escapes_decode_to_their_bytes():
+    path = "a\x07b\x08c\x0bd\x0ce.py"
+    quoted = '"a\\007b\\010c\\013d\\014e.py"'
+    named = '"a\\ab\\bc\\vd\\fe.py"'
+    assert m._decode_git_path(named) == path == m._decode_git_path(quoted)
+    diff = ('diff --git "a/%s" "b/%s"\n--- "a/%s"\n+++ "b/%s"\n@@ -1 +1 @@\n-old\n+new value\n'
+            % ((named[1:-1],) * 4))
+    assert m._anchor(diff, path, "1") == "new value"
+    assert list(m._file_hashes({"diff": diff})) == [path]
+
+
+def test_old_side_anchor_numbers_lines_by_the_old_hunk_start():
+    diff = ("diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -5,2 +8,2 @@\n ctx\n-removed\n+added\n")
+    assert m._anchor(diff, "a.py", "6", "old") == "removed"
+    assert m._anchor(diff, "a.py", "9", "old") is None
+    assert m._anchor(diff, "a.py", "9", "new") == "added"
+    assert m._anchor(diff, "a.py", "6", "new") is None
+
+
+def two_file_ctx():
+    ctx = context()
+    ctx["diff"] += ctx["diff"].replace("a.py", "b.py").replace("new value", "other value")
+    ctx["changed_files"] = ["a.py", "b.py"]
+    return ctx
+
+
+def test_commit_report_binds_decisions_to_severity_ranked_ids():
+    ctx = two_file_ctx()
+    value = report()
+    value["findings"][0].update({"severity": "Nit", "file": "b.py", "title": "Style", "body_md": "Style nit"})
+    value["findings"].append({"severity": "Must fix", "dimension": DIMENSION, "file": "a.py", "line": "1",
+                              "title": "Breaks refunds", "body_md": "Refunds break here."})
+    result = enriched(load(ctx), ctx, value)
+    ids = {row["fingerprint"]: row["id"] for row in m.check_plan(value, ctx, load(ctx))["findings"]}
+    must_fp, nit_fp = (result["findings"][1]["memory"]["fingerprint"], result["findings"][0]["memory"]["fingerprint"])
+    assert (ids[must_fp], ids[nit_fp]) == ("F1", "F2")
+    bound = decisions(result)
+    bound["decisions"] = [{"id": "F1", "slot": "fix", "note": ""}, {"id": "F2", "slot": "ignore", "note": ""}]
+    assert m.commit_report(result, bound)["saved"]
+    stored = {row["fingerprint"]: row["disposition"] for row in load(ctx)["findings"]}
+    assert stored == {must_fp: "fix", nit_fp: "ignore"}
+
+
+def test_check_plan_refreshes_discussions_after_a_failed_snapshot_fetch(monkeypatch):
+    fp = remember("fix", posted=True)["findings"][0]["memory"]["fingerprint"]
+
+    def broken(*args, **kwargs):
+        raise OSError("offline")
+    monkeypatch.setattr(m, "fetch_discussions", broken)
+    snapshot = load()
+    assert snapshot["discussions_available"] is False
+    live_discussions(monkeypatch, [thread(fp)])
+    [row] = plan_for(snapshot)
+    assert (row["suppress_post"], row["state"]) == (True, "carried")
+
+
+def test_distinct_invalid_bytes_hash_differently():
+    first, second = (m._fingerprint("a.py", "caf%s line" % ch) for ch in ("\udce9", "\udcea"))
+    assert first != second
+    assert first[1] == hashlib.sha256(b"caf\xe9 line").hexdigest()
+    assert m._fingerprint("caf\udce9.py", "v")[0] != m._fingerprint("caf\udcea.py", "v")[0]
+    assert m._fingerprint("caf\udce9.py", "v")[0] == hashlib.sha256(
+        b"caf\xe9.py\0" + m._fingerprint("x", "v")[1].encode()).hexdigest()
+    hashes = []
+    for raw in (b"caf\xe9 line", b"caf\xea line"):
+        ctx = context()
+        ctx["diff"] = ctx["diff"].replace("new value", raw.decode("utf-8", "surrogateescape"))
+        hashes.append(load(ctx)["file_hashes"]["a.py"])
+    assert hashes[0] != hashes[1]
+    ctx = context()
+    ctx["diff"] = ctx["diff"].replace("new value", "caf\udce9 line")
+    expected = hashlib.sha256(
+        b"diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-old\n+caf\xe9 line").hexdigest()
+    assert load(ctx)["file_hashes"]["a.py"] == expected
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "DELETE"])
+def test_default_api_refuses_non_get_requests(method):
+    with pytest.raises(ValueError, match="GET"):
+        m._default_api("h", method, "/x")
+
+
+@pytest.mark.parametrize("host, project, number", [
+    ("", "g/p", 1), ("h", "", 1), ("h", "g/p", 0), ("h", "g/p", -1), ("h", "g/p", "x")])
+def test_fetch_discussions_rejects_incomplete_targets_before_any_request(host, project, number):
+    def api(*args, **kwargs):
+        raise AssertionError("no request may be made")
+    with pytest.raises(ValueError):
+        FETCH_DISCUSSIONS(host, project, number, api)
+
+
+@pytest.mark.parametrize("position", [
+    {"old_path": "a.py", "old_line": 99, "new_path": None, "new_line": None},
+    {"old_path": "a.py", "old_line": 99, "new_path": "a.py", "new_line": None},
+])
+def test_human_thread_on_a_removed_line_is_context_for_a_finding_there(position):
+    snapshot, value = load(), report()
+    value["findings"][0]["line"] = "99"
+    value["findings"][0]["anchor_side"] = "old"
+    snapshot["discussions"] = [{"id": "human", "notes": [{"id": 7, "body": "Why remove this?",
+        "author": {"username": "human"}, "position": position}]}]
+    memory = enriched(snapshot, value=value)["findings"][0]["memory"]
+    assert memory["human_context"][0]["author"] == "human"
+    assert not memory["suppress_post"]
+
+
+def test_a_reworded_finding_on_a_repeated_anchor_does_not_inherit_the_prior_receipt():
+    ctx = repeated_line_ctx()
+    first = enriched(load(ctx), ctx, repeated_line_report(
+        "2", "Silent None hides refund failure", "Returning None here makes the caller skip the refund."))
+    fp = first["findings"][0]["memory"]["fingerprint"]
+    receipt = {"F1": {"published": True, "note_id": 9, "discussion_id": "discussion-9"}}
+    assert m.commit_report(first, decisions(first, "fix", "Will do"), receipt)["saved"]
+    second = enriched(load(ctx), ctx, repeated_line_report(
+        "2", "Race in cache eviction", "Two workers evict the same key concurrently."))
+    assert second["findings"][0]["memory"]["match"] is None
+    assert m.commit_report(second, decisions(second, "later", ""))["saved"]
+    [stored] = [row for row in load(ctx)["findings"] if row["fingerprint"] == fp]
+    assert stored["title"] == "Race in cache eviction"
+    assert "receipt" not in stored and stored["disposition"] == "later"

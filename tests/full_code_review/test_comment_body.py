@@ -117,6 +117,10 @@ def test_first_sentence_cases():
     assert cb.first_sentence("Really?  Yes.") == "Really?"
     assert cb.first_sentence("Stop! Now.") == "Stop!"
     assert cb.first_sentence("First line no stop\nSecond. Third") == "First line no stop Second."
+    assert cb.first_sentence("Refunds use a stale rate, e.g. in EU stores. Next.") == (
+        "Refunds use a stale rate, e.g. in EU stores.")
+    assert cb.first_sentence("Pick one, i.e. the newest. Next.") == "Pick one, i.e. the newest."
+    assert cb.first_sentence("Fast vs. slow paths differ. Next.") == "Fast vs. slow paths differ."
     assert cb.first_sentence("v1.5 is  bad. ok") == "v1.5 is bad."
     assert cb.first_sentence("ends at eof.") == "ends at eof."
     assert cb.first_sentence("no punctuation   here") == "no punctuation here"
@@ -164,15 +168,10 @@ def test_finding_body_author_seat_has_no_disposition_and_no_fp_when_missing():
     assert "fp" not in cb.parse_block(cb.finding_body(uppercase, seat="author", lead="Nit")[0])
 
 
-@pytest.mark.parametrize("line", ["\u00b2", "\u0663\u0664", "1\u00b2"])
+@pytest.mark.parametrize("line", ["\u00b2", "\u0663\u0664", "1\u00b2", "2-4"])
 def test_finding_body_non_ascii_digit_line_stays_text(line):
     body, _ = cb.finding_body(make_finding(line=line), seat="author", lead="Nit")
     assert cb.parse_block(body)["line"] == line
-
-
-def test_finding_body_non_numeric_line_stays_text():
-    body, _ = cb.finding_body(make_finding(line="2-4"), seat="author", lead="Nit")
-    assert cb.parse_block(body)["line"] == "2-4"
 
 
 def test_finding_body_fixed_sentences():
@@ -1069,3 +1068,16 @@ def test_fence_marker_after_an_inline_prefix_does_not_add_a_stray_fence(marker):
     body, _ = cb.finding_body(finding, seat="author", lead="Must fix")
     assert "**Fix:** %s bar\n" % marker in body
     assert body.count(marker) == 1
+
+
+@pytest.mark.parametrize("marker", ["``` oops", "~~~", "```py"])
+@pytest.mark.parametrize("build", ["finding", "support"])
+def test_a_leading_fence_in_the_why_line_leaves_no_unbalanced_fence(marker, build):
+    finding = make_finding(impact=marker)
+    if build == "finding":
+        body, _ = cb.finding_body(finding, seat="author", lead="Must fix")
+    else:
+        body, _ = cb.support_body(finding, disposition="Blocking", discussion_id="d1", note_id=5)
+    visible = body.split("<details>")[0]
+    fences = [line for line in visible.split("\n") if line.lstrip().startswith(("```", "~~~"))]
+    assert len(fences) % 2 == 0

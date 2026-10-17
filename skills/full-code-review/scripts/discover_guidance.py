@@ -68,8 +68,8 @@ def skill_references(git_root):
     cannot flood the payload; dropped_count is reported rather than hidden.
     """
     found = []
-    for rel in glob.glob(".claude/skills/*/references", root_dir=git_root):
-        top = Path(git_root) / rel
+    for match in glob.glob(os.path.join(glob.escape(str(git_root)), ".claude/skills/*/references")):
+        top = Path(match)
         if not _inside(Path(git_root).resolve(), top):
             continue
         for dirpath, dirnames, filenames in os.walk(top, followlinks=False):
@@ -82,7 +82,7 @@ def skill_references(git_root):
 
 def _glob_in(git_root, pattern):
     """Sorted absolute matches of a root-relative pattern; a bracket in the root is literal."""
-    return sorted(str(Path(git_root) / rel) for rel in glob.glob(pattern, root_dir=git_root))
+    return sorted(glob.glob(os.path.join(glob.escape(str(git_root)), pattern)))
 
 
 def _inside(root_real, path):

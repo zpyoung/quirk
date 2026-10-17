@@ -611,9 +611,9 @@ delimiter, never reads past it, and reports `handoff_present`. A paste without t
 delimiter validates exactly as before. Notes in the decisions block are quoted with
 `  > `, so a note can't produce a bare delimiter line.
 
-The section holds numbered instructions for a fresh session (apply the `fix` slot, list
-`later` back, ask about `detail`, leave `ignore` and Undecided alone, post nothing), a
-`### Target` list (label, seat, verdict, project, change URL, branch, change state, head SHA,
+The section holds numbered instructions for a fresh session (apply the `fix` slot after
+confirming any Plausible finding against the code, list `later` back, ask about `detail`,
+leave `ignore` and Undecided alone, post nothing), a `### Target` list (label, seat, verdict, project, change URL, branch, change state, head SHA,
 repo checkout, ticket, report JSON path), and one block per finding in every slot, in
 export group order:
 
@@ -622,6 +622,8 @@ export group order:
 F1: <title>
 Location: <file>:<line>          (adds "(old side of the diff)" for anchor_side old)
 Dimensions / Evidence / Impact / Fix: one line each, when present
+Status: Plausible, unconfirmed. What would confirm: <what_would_confirm>   (plausible findings only)
+<reproduction>$ command, then its output</reproduction>                    (findings with a repro)
 Reviewer note:                   (then "> " lines, normalized like the block above)
 <problem>body_md</problem>
 <recommendation>recommendation_md</recommendation>

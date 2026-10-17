@@ -44,7 +44,8 @@ def _decode_git_path(field):
         return None
     data = bytearray()
     i = 1
-    escapes = {"\\": 0x5c, '"': 0x22, "t": 0x09, "n": 0x0a, "r": 0x0d}
+    escapes = {"\\": 0x5c, '"': 0x22, "a": 0x07, "b": 0x08, "t": 0x09, "n": 0x0a,
+               "v": 0x0b, "f": 0x0c, "r": 0x0d}
     while i < len(field) - 1:
         char = field[i]
         if char != "\\":
@@ -60,7 +61,7 @@ def _decode_git_path(field):
             i += 1
         elif char in "01234567":
             match = re.match(r"[0-7]{1,3}", field[i:len(field) - 1])
-            data.append(int(match.group(0), 8))
+            data.append(int(match.group(0), 8) & 0xff)
             i += len(match.group(0))
         else:
             data.extend(char.encode("utf-8", "surrogateescape"))
@@ -137,7 +138,8 @@ def _quote_git_path(path):
     if all(0x21 <= byte <= 0x7e and byte not in (0x22, 0x5c) for byte in data):
         return path
     escaped = []
-    named = {0x09: r"\t", 0x0a: r"\n", 0x0d: r"\r", 0x22: r'\"', 0x5c: r"\\"}
+    named = {0x07: r"\a", 0x08: r"\b", 0x09: r"\t", 0x0a: r"\n", 0x0b: r"\v",
+             0x0c: r"\f", 0x0d: r"\r", 0x22: r'\"', 0x5c: r"\\"}
     for byte in data:
         if byte in named:
             escaped.append(named[byte])
@@ -406,8 +408,12 @@ def resolve_scope_intent(title=None, branch=None):
 
 
 def _run(cmd, timeout=90):
-    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                          errors="surrogateescape", timeout=timeout)
+    """Run `cmd` and return a CompletedProcess whose output is text with every byte, CR included, intact."""
+    raw = subprocess.run(cmd, capture_output=True, timeout=timeout)
+    return subprocess.CompletedProcess(
+        raw.args, raw.returncode,
+        raw.stdout.decode("utf-8", "surrogateescape"),
+        raw.stderr.decode("utf-8", "surrogateescape"))
 
 
 def _late_run(cmd, timeout=90, **_ignored):
@@ -789,7 +795,8 @@ def git_diff_local(context_lines, cwd=".", metadata=None, excluded_path=None):
 
     Paths are repository-root relative whatever `cwd` is inside the work tree. Untracked
     directories (nested git repos) have no diff and are reported on
-    `metadata["diff_unavailable"]` instead of `changed_files`. On failure
+    `metadata["diff_unavailable"]` instead of `changed_files`; an untracked file git cannot
+    diff is reported there too while the remaining files are still reviewed. On failure
     `metadata["error"]` names the failing git step with a stderr snippet.
     """
     try:
@@ -824,10 +831,12 @@ def git_diff_local(context_lines, cwd=".", metadata=None, excluded_path=None):
     changed_files = _deduplicate(
         unstaged_names.stdout.split("\0") + staged_names.stdout.split("\0") + untracked)
     parts = [unstaged.stdout or "", staged.stdout or ""]
+    unreadable = []
     for path in untracked:
         rendered = _untracked_diff(path, root)
         if rendered is None:
-            return _git_failed(metadata, "git diff of untracked file %s" % path)
+            unreadable.append(path)
+            continue
         parts.append(rendered)
     try:
         head_result = _run(["git", "-C", cwd, "rev-parse", "--verify", "HEAD^{commit}"],
@@ -839,8 +848,8 @@ def git_diff_local(context_lines, cwd=".", metadata=None, excluded_path=None):
     if diff_text and not head:
         return _git_failed(metadata, "git rev-parse HEAD", head_result)
     if metadata is not None:
-        metadata["untracked_files"] = untracked
-        metadata["diff_unavailable"] = directories
+        metadata["untracked_files"] = [path for path in untracked if path not in unreadable]
+        metadata["diff_unavailable"] = directories + unreadable
         metadata["changed_files"] = changed_files
         metadata["refs"] = {"base": head, "start": head, "head": head}
     return diff_text

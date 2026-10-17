@@ -122,9 +122,10 @@ def post(report, context, bodies, ids, out, overview=False, forge=None):
     Receipts already in `out` are kept and their ids are not posted again. Every id is
     validated before the first create (it must name a finding of the report, with a numeric
     line), `bodies` must have been built from this exact report, and the report must be for
-    the context's change (and head, when the report names one). Raises ValueError for any of
-    those or a context with no forge, and PostFailed (a ForgeError) on a failed create or when
-    a created comment's receipt cannot be written.
+    the context's change (and head, when the report names one). The change must still be open
+    at the context's head; a closed change raises the forge's ForgeError. Raises ValueError for
+    any of those or a context with no forge, and PostFailed (a ForgeError) on a failed create or
+    when a created comment's receipt cannot be written.
     """
     prepared, _ = render_report._prepare_report(report)
     findings = {f["id"]: f for f in prepared["findings"]}
@@ -142,6 +143,9 @@ def post(report, context, bodies, ids, out, overview=False, forge=None):
     if unknown:
         raise ValueError("%s is not a finding in this report" % ", ".join(unknown))
     lines = {i: _line(findings[i]["line"], i) for i in ids}
+    _, live_refs, _ = forge.live_change(change["number"])
+    if live_refs["head_sha"] != refs.get("head"):
+        raise ValueError("the change head moved since the review was prepared; re-run the review")
     receipts = _load(out) if os.path.exists(out) else {}
     strays_out = stray_receipt_path(out)
     strays = _load(strays_out) if os.path.exists(strays_out) else {}

@@ -20,7 +20,7 @@ including failure exits and ordering-dependent preconditions. Follow writes from
 approval through publication and receipts; check that identities and the reviewed
 revision stay bound across those steps.
 
-When execution was consented and the coordinator supplied a private copy manifest, a focused repro may run only through `python3 "$SCRIPTS/deep_sandbox.py" exec --manifest "<copy-manifest>" --timeout 120 -- <repro-argv...>`. Inspect the command's effects before running it. Never run target code in the source root or use a non-sandbox route. If execution is disabled, a dependency is unavailable, or the sandbox fails, continue read-only; set `execution_degraded_reason` to the specific obstacle, and do not present a missing test environment as proof against the bug. The coordinator releases your copy when you return.
+When execution was consented and the coordinator supplied a private copy manifest, a focused repro may run only through `python3 "$SCRIPTS/deep_sandbox.py" exec --manifest "<copy-manifest>" --timeout 120 -- <repro-argv...>`. Inspect the command's effects before running it. Never run target code in the source root or use a non-sandbox route. If execution is disabled, a dependency is unavailable, or the sandbox fails, continue read-only; set `execution_degraded_reason` to the specific obstacle, and do not present a missing test environment as proof against the bug. `$SCRIPTS` is the absolute scripts directory in your dispatch input; it is not set in your shell. The coordinator releases your copy when you return.
 
 Return only this JSON object, including an empty `candidates` array if nothing survives source inspection:
 

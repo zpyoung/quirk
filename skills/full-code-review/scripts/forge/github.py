@@ -346,9 +346,10 @@ class GitHubForge:
         """This user's unsubmitted review content, as draft-like items."""
         items = []
         for review in self._pending_reviews(number, username):
-            items.append({"id": review["id"], "note": review.get("body") or "", "position": None})
+            items.append({"id": review["id"], "kind": "review", "note": review.get("body") or "",
+                          "position": None})
             for comment in get_pages(self._api_call, self.host, self._pull(number, "/reviews/%s/comments" % review["id"])):
-                items.append({"id": comment["id"], "note": comment.get("body") or "",
+                items.append({"id": comment["id"], "kind": "comment", "note": comment.get("body") or "",
                               "position": {"new_path": comment.get("path"), "new_line": comment.get("line")}})
         return items
 
@@ -422,8 +423,12 @@ class GitHubForge:
         return {"review_id": data.get("id"), "state": data.get("state")}
 
     def cleanup_commands(self, state):
-        """Return one DELETE per pending review the staging recorded or adopted as an orphan."""
-        review_ids = [state.get("review_id")] + [item.get("draft_id") for item in state.get("reconciled") or []]
+        """Return one DELETE per pending review the staging recorded or adopted as an orphan.
+
+        Deleting a pending review removes its comments, so reconciled comment items add nothing.
+        """
+        review_ids = [state.get("review_id")] + [
+            item.get("draft_id") for item in state.get("reconciled") or [] if item.get("kind") == "review"]
         commands = []
         for review_id in dict.fromkeys(i for i in review_ids if i):
             endpoint = "repos/%s/pulls/%s/reviews/%s" % (state["project"], state["number"], review_id)

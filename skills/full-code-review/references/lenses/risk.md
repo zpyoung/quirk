@@ -32,7 +32,8 @@ target branch's recent history for a commit reverting these changes — a
 `Revert "<original title>"` subject, or a revert change request merged after this one:
 
 ```bash
-git log --oneline "origin/<target_branch>" -50 | grep -i revert
+TARGET_BRANCH="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["target_branch"])' "$CONTEXT")"
+git log --oneline -50 -i --grep=revert "origin/$TARGET_BRANCH" --
 ```
 
 If it has been reverted, lead with it:

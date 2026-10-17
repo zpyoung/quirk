@@ -23,6 +23,8 @@ from jsonio import load_object, write_json
 
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 _LABEL = re.compile(r"^[a-zA-Z0-9_-]+$")
+_LEASE_ID = re.compile(r"lease-[0-9a-f]{32}")
+_LEASE_RETENTION_SECONDS = 24 * 60 * 60
 _ENV_ALLOWLIST = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM")
 _FALLBACK_WARNING = (
     "environment-only isolation: filesystem access and nested absolute gh/glab execution "
@@ -234,16 +236,40 @@ def _checked_git(*args: str) -> subprocess.CompletedProcess:
     return result
 
 
-def _registry_root() -> Path:
-    root = Path(tempfile.gettempdir()).resolve() / ("deep-review-%s" % os.getuid())
-    try:
-        root.mkdir(mode=0o700)
-    except FileExistsError:
-        pass
+def _registry_name() -> str:
+    return "deep-review-%s" % os.getuid()
+
+
+def _owner_only_directory(root: Path) -> Path:
     info = root.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
         raise ValueError("unsafe deep-copy registry directory")
     return root
+
+
+def _registry_root() -> Path:
+    """Create, if needed, and return the owner-only registry that holds this user's leases."""
+    root = Path(tempfile.gettempdir()).resolve() / _registry_name()
+    try:
+        root.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    return _owner_only_directory(root)
+
+
+def _prune_stale_leases(registry: Path) -> None:
+    """Remove leases abandoned by a killed run so repository-sized copies do not accumulate."""
+    cutoff = time.time() - _LEASE_RETENTION_SECONDS
+    for entry in registry.iterdir():
+        try:
+            if entry.is_symlink() or not entry.is_dir() or not _LEASE_ID.fullmatch(entry.name):
+                continue
+            record = entry / "record.json"
+            stamp = (record if record.is_file() else entry).stat().st_mtime
+            if stamp < cutoff:
+                _remove_tree(entry)
+        except OSError:
+            continue
 
 
 def _source_git(root: Path) -> tuple[Path, Path]:
@@ -276,6 +302,8 @@ def _export_head(root: Path, stage: Path, head_sha: str) -> tuple[Path, bool]:
             shutil.copytree(origin, facade / "refs", dirs_exist_ok=True)
     (facade / "objects" / "info" / "alternates").write_text(
         str((common / "objects").resolve()) + "\n", encoding="utf-8")
+    if (common / "shallow").is_file():
+        shutil.copyfile(common / "shallow", facade / "shallow")
     actual = _checked_git("--git-dir=" + str(facade), "rev-parse", "--verify", "HEAD").stdout.strip()
     if actual != head_sha:
         raise ValueError("head_sha mismatch: source HEAD is %s" % actual)
@@ -412,7 +440,9 @@ def acquire_copy(source_root: str, head_sha: str, out_manifest: str,
     if not isinstance(source_root, str) or not os.path.isdir(source_root):
         raise ValueError("source_root must be an existing git directory")
     root = Path(source_root).resolve()
-    lease = _registry_root() / ("lease-" + secrets.token_hex(16))
+    registry = _registry_root()
+    _prune_stale_leases(registry)
+    lease = registry / ("lease-" + secrets.token_hex(16))
     lease.mkdir(mode=0o700)
     copy, environment = lease / "copy", lease / "environment"
     copy.mkdir()
@@ -422,6 +452,9 @@ def acquire_copy(source_root: str, head_sha: str, out_manifest: str,
             bundle, staged_changes = _export_head(root, Path(stage), head_sha)
             snapshot_kind = _snapshot(root, copy)
             _checked_git("init", "--template=", "-q", str(copy))
+            shallow = Path(stage, "source.git", "shallow")
+            if shallow.is_file():
+                shutil.copyfile(shallow, copy / ".git" / "shallow")
             for key, value in (("core.hooksPath", "/dev/null"), ("core.fsmonitor", "false"),
                                ("core.attributesFile", "/dev/null")):
                 _checked_git("-C", str(copy), "config", key, value)
@@ -436,7 +469,8 @@ def acquire_copy(source_root: str, head_sha: str, out_manifest: str,
             _stub(environment / "bin" / name)
         kind = probe_capabilities(str(root))["sandbox_kind"]
         credentials, executables = _protected_paths()
-        manifest = {"schema": 2, "lease_id": lease.name, "label": label,
+        manifest = {"schema": 2, "registry_root": str(registry), "lease_id": lease.name,
+                    "label": label,
                     "source_root": str(root), "head_sha": head_sha,
                     "copy_dir": str(copy), "env_dir": str(environment),
                     "copy_kind": "independent-copy", "snapshot_kind": snapshot_kind,
@@ -458,15 +492,22 @@ def acquire_copy(source_root: str, head_sha: str, out_manifest: str,
 def _manifest(manifest_path: str, require_active: bool = True) -> dict:
     manifest = load_object(manifest_path, "deep copy manifest")
     lease_id = manifest.get("lease_id")
-    if manifest.get("schema") != 2 or not isinstance(lease_id, str) or not re.fullmatch(
-            r"lease-[0-9a-f]{32}", lease_id):
+    recorded = manifest.get("registry_root")
+    if (manifest.get("schema") != 2 or not isinstance(lease_id, str)
+            or not _LEASE_ID.fullmatch(lease_id) or not isinstance(recorded, str)
+            or not os.path.isabs(recorded) or Path(recorded).name != _registry_name()):
         raise ValueError("invalid deep copy manifest")
-    lease = _registry_root() / lease_id
+    registry = Path(recorded)
+    lease = registry / lease_id
     if manifest.get("copy_dir") != str(lease / "copy") or manifest.get("env_dir") != str(
             lease / "environment") or manifest.get("copy_kind") != "independent-copy":
         raise ValueError("invalid deep copy manifest paths")
     if manifest.get("released") is True and not require_active:
         return manifest
+    try:
+        _owner_only_directory(registry)
+    except OSError:
+        raise ValueError("deep copy has already been released or is missing") from None
     if lease.is_symlink() or not lease.is_dir():
         raise ValueError("deep copy has already been released or is missing")
     record = load_object(str(lease / "record.json"), "deep copy registration")
@@ -633,8 +674,7 @@ def release_copy(manifest_path: str) -> dict:
     manifest = _manifest(manifest_path, require_active=False)
     copy_dir = manifest["copy_dir"]
     if not manifest.get("released"):
-        lease = _registry_root() / manifest["lease_id"]
-        _remove_tree(lease)
+        _remove_tree(Path(manifest["registry_root"]) / manifest["lease_id"])
         manifest["released"] = True
         write_json(manifest_path, manifest)
     return {"released": True, "copy_dir": copy_dir}

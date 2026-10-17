@@ -45,8 +45,9 @@ Dispatch the standard applicable lenses per Step 5 in parallel; in deep mode,
 they never execute reviewed code (no builds, tests, or mutation probes).
 Dispatch one `sonnet` finder per area using `$REFS/lenses/_area-finder.md`,
 with that area's files, diff hunks, enclosing functions, questions, source root,
-risk result, and execution permission. Dispatch one `sonnet` contract lens over
-the whole change using `$REFS/lenses/_contract.md`. Neither finder type receives
+risk result, execution permission, and the absolute scripts directory (the expanded
+`$SCRIPTS`, which is unset in agent shells). Dispatch one `sonnet` contract lens over
+the whole change using `$REFS/lenses/_contract.md`, with the same scripts directory. Neither finder type receives
 the memory snapshot. Keep the area map updated: `pending` before dispatch,
 `completed` on return, `read_only_degraded` with `degraded_reason` when execution
 was attempted but unavailable.
@@ -70,7 +71,7 @@ The coordinator owns acquisition and release; agents may invoke only `exec`. Rel
 
 ## Verify every significant claim with a fresh checker
 
-Collect finder and contract `candidates` in `deep-candidates.json`, giving each a stable `id`. Put standard-lens findings in `lens-findings.json` with stable `id` values; send every `Must fix` and `Should fix` finding, along with **every** deep candidate, to a fresh checker using `$REFS/lenses/_checker.md`. Nits need no new checker unless separately flagged. The checker gets only the candidate's `id`, `file`, `line`, `summary` (or `issue`), `failure_scenario`, and `repro_command` if present, plus the context/source at `refs.head`. Never send the finder's `repro_output`, reasoning, prior checker results, or memory.
+Collect finder and contract `candidates` in `deep-candidates.json`, giving each a stable `id`. Put standard-lens findings in `lens-findings.json` with stable `id` values; send every `Must fix` and `Should fix` finding, along with **every** deep candidate, to a fresh checker using `$REFS/lenses/_checker.md`. Nits need no new checker unless separately flagged. The checker gets only the candidate's `id`, `file`, `line`, `summary` (or `issue`), `failure_scenario`, and `repro_command` if present, plus the context/source at `refs.head` and the absolute scripts directory. Never send the finder's `repro_output`, reasoning, prior checker results, or memory.
 
 Use one fresh checker context per claim, not a batch sharing earlier judgments.
 Before merging, consolidate independently confirmed duplicates by the same root
@@ -81,7 +82,7 @@ Default checker `model: sonnet`. Escalate to `opus` if the risk level is `High` 
 
 ## Merge, reconcile, and clean up
 
-Save verdicts by candidate `id` to `checker-verdicts.json`. Write measured `budget_minutes`, `elapsed_minutes`, and `cutoff_reached` to `deep-budget.json`; record failed or unfinished checks as `checker_failures: {candidate_id: reason}`. Keep their candidates in the input so the merger can withhold them and mark coverage incomplete. A missing verdict without a declared failure is an input error, not a clean result. Merge the checked inputs:
+Save verdicts by candidate `id` to `checker-verdicts.json`. Write measured `budget_minutes`, `elapsed_minutes`, and `cutoff_reached` to `deep-budget.json`; record failed or unfinished checks as `checker_failures: {candidate_id: reason}`. Keep their candidates in the input so the merger can withhold them and mark coverage incomplete. A missing verdict without a declared failure is an input error, not a clean result. Checker text fields are capped (see `_checker.md`) and the merger rejects an over-cap field instead of truncating it; when the merge exits 2 with an error naming a candidate, re-run that checker or shorten the field in `checker-verdicts.json`, then merge again. Merge the checked inputs:
 
 ```bash
 python3 "$SCRIPTS/merge_deep_findings.py" \
@@ -100,7 +101,7 @@ In a `finally` path, release **every** remaining `copy-*.json` manifest through 
 
 ## Evaluate recall without leaking the key
 
-Pin the source and report to the answer-key revision. Run every applicable lens
+Pin the source and report to the answer-key revision; the report must set `meta.project`, `meta.number`, and the full `meta.head_sha` of that revision, whichever seat produced it. Run every applicable lens
 and every area afresh; never reuse an older report, seed claims from the key, or
 include key-specific defects in finder prompts. Use real dispatch results and
 measured elapsed time. Record independent spot-check verdicts by rendered finding

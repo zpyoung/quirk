@@ -117,6 +117,21 @@ def test_tests_pair_with_subject_not_other_same_name(tmp_path):
     assert graph[files[3]] == {files[2]}
 
 
+@pytest.mark.parametrize("subject, test", [
+    ("web/foo.ts", "web/foo.test.ts"),
+    ("web/foo.ts", "web/foo.spec.ts"),
+    ("pkg/baz.py", "pkg/baz_test.py"),
+    ("cmd/a.go", "cmd/a_test.go"),
+    ("src/Foo.java", "src/FooTest.java"),
+])
+def test_non_python_and_suffix_style_tests_pair_with_their_subject(tmp_path, subject, test):
+    module = area_map_module()
+    graph = module.build_coupling_graph([subject, test], str(tmp_path), "")
+    assert graph[subject] == {test}
+    area = module.build_area_map({"changed_files": [subject, test], "diff": ""}, str(tmp_path))["areas"][0]
+    assert area["test_files"] == [test]
+
+
 def test_partition_prioritizes_non_test_boundaries_before_tests():
     files = ["tests/test_a.py", "scripts/a.py", "scripts/b.py", "tests/test_b.py"]
     edges = {p: set() for p in files}
@@ -178,6 +193,14 @@ def test_risk_level_and_caveats_produce_targeted_questions(tmp_path):
     assert 2 <= len(questions) <= 5
     assert any("High" in q and "Path traversal" in q and "parse.py" in q for q in questions)
     assert any("C-quoted" in q and "parse.py" in q for q in questions)
+
+
+def test_report_shaped_caveats_seed_a_question(tmp_path):
+    file = put(tmp_path, "scripts/parse.py", "def parse(data): return data\n")
+    result = area_map_module().build_area_map(
+        {"changed_files": [file], "diff": ""}, str(tmp_path),
+        risk={"caveats": [{"title": "Quoting", "body_md": "The path may be C-quoted"}]})
+    assert any("C-quoted" in q and "parse.py" in q for q in result["areas"][0]["questions"])
 
 
 def test_html_styles_count_toward_review_size_limit(tmp_path):
