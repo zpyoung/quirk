@@ -3390,6 +3390,7 @@ def test_kit_css_rules_stay_at_or_below_one_class_except_the_named_lifts() -> No
         "q-flow aside button:enabled:hover",
         'q-flow aside button[aria-current="step"]:enabled:hover',
         "q-flow aside [data-q-flow-tree] details[open] > summary",
+        "q-sequence [data-q-sequence-pinned-row] > button:enabled:hover",
     }
     offenders: list[str] = []
     stack: list[str] = []

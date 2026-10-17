@@ -1590,7 +1590,7 @@ q-sequence [data-q-sequence-pinned-row] > button:enabled:hover {
   color: var(--q-color-text);
 }
 
-q-sequence :where([data-q-sequence-pinned]:not([data-q-sequence-stuck])) > :where([data-q-sequence-pinned-row]) > button[data-q-sequence-late]:not(:focus) {
+q-sequence :where([data-q-sequence-pinned]:not([data-q-sequence-stuck]) > [data-q-sequence-pinned-row] > button[data-q-sequence-late]:not(:focus)) {
   opacity: 0;
   pointer-events: none;
 }
