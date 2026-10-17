@@ -4611,10 +4611,57 @@ BADVIA_GRAPH = {
     ],
 }
 
+_WIDE_VALUE = {
+    "order_id": "ord_4172",
+    "status": "waiting",
+    "attempt": 1,
+    "wait_s": 2,
+    "idempotency_key": "idem_9c3e",
+    "customer": {"name": "Ada", "tags": ["vip"]},
+}
+WIDE_GRAPH = {
+    "nodes": [
+        {"id": "a", "label": "Checkout API"},
+        {"id": "b", "label": "Retry queue"},
+        {"id": "c", "label": "Retry worker"},
+        {"id": "d", "label": "Order ledger"},
+    ],
+    "edges": [
+        {"id": "a-b", "from": "a", "to": "b"},
+        {"id": "b-c", "from": "b", "to": "c"},
+        {"id": "c-d", "from": "c", "to": "d"},
+        {"id": "d-a", "from": "d", "to": "a", "loop": True},
+    ],
+    "traces": [
+        {
+            "id": "long",
+            "label": "Long walk",
+            "steps": [
+                {
+                    "node": node,
+                    **({"via": via} if via else {}),
+                    "value": {**_WIDE_VALUE, "attempt": n},
+                    "note": f"Step {n + 1} of the walk, with a note long enough to wrap onto a second line in the panel.",
+                }
+                for n, (node, via) in enumerate(
+                    [("a", None), ("b", "a-b"), ("c", "b-c"), ("d", "c-d")]
+                    + [("a", "d-a"), ("b", "a-b"), ("c", "b-c"), ("d", "c-d"), ("a", "d-a"), ("b", "a-b")]
+                )
+            ],
+        }
+    ],
+}
+
 FLOW_TRACES = f"""
 <q-flow id="renewal" summary="How a renewal order is priced, taxed and charged.">
   <script type="application/json">
   {json.dumps(RENEWAL_GRAPH, indent=2)}
+  </script>
+</q-flow>
+
+<q-flow id="wide" summary="A wide, shallow graph with a long trace." direction="right">
+  <script type="application/json">
+  {json.dumps(WIDE_GRAPH, indent=2)}
   </script>
 </q-flow>
 
@@ -6278,6 +6325,63 @@ def test_flow_trace_leaves_focus_mode_exactly_as_it_was_before_tracing(flow_trac
     r = out["results"]
     assert r["before"]["litNodes"] and r["before"]["drawer"] is True
     assert r["after"] == r["before"]
+
+
+def test_flow_trace_grows_a_shallow_stage_so_the_value_tree_is_visible_beside_it(flow_traces_page: Path) -> None:
+    probe = """(() => {
+      const f = document.querySelector('#wide');
+      const stage = f.querySelector('[data-q-flow-stage]').getBoundingClientRect();
+      const panel = f.querySelector('[data-q-flow-trace-panel]').getBoundingClientRect();
+      const top = f.querySelector('[data-q-flow-trace-value] li[data-q-flow-field]');
+      const li = top ? top.getBoundingClientRect() : null;
+      const m = f.querySelector('[data-q-flow-viewport]').getAttribute('transform').match(/scale\\(([-\\d.e]+)\\)/);
+      return {
+        stageHeight: stage.height,
+        panelBottom: panel.bottom,
+        fieldBottom: li ? li.bottom : null,
+        tracing: f.hasAttribute('data-q-flow-tracing'),
+        scale: m ? Number(m[1]) : null,
+      };
+    })()"""
+    out = run(
+        flow_traces_page,
+        ev(probe, "rest"),
+        {"click": "#wide [data-q-flow-action='trace']"},
+        ev(probe, "open"),
+        {"click": "#wide [data-q-flow-action='trace']"},
+        ev(probe, "closed"),
+        {"viewport": {"width": 375, "height": 800}},
+        {"click": "#wide [data-q-flow-action='trace']"},
+        ev(probe, "phone"),
+        viewport={"width": 1280, "height": 900},
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["open"]["tracing"] and r["open"]["stageHeight"] >= 440
+    assert r["open"]["fieldBottom"] is not None and r["open"]["fieldBottom"] <= r["open"]["panelBottom"]
+    assert not r["closed"]["tracing"] and r["closed"]["stageHeight"] < 440
+    assert r["closed"]["stageHeight"] == r["rest"]["stageHeight"]
+    assert r["phone"]["stageHeight"] < 440
+
+
+def test_flow_trace_button_looks_pressed_while_trace_mode_is_open(flow_traces_page: Path) -> None:
+    probe = """(() => {
+      const b = document.querySelector('#renewal [data-q-flow-action="trace"]');
+      const s = getComputedStyle(b);
+      return { pressed: b.getAttribute('aria-pressed'), border: s.borderTopColor, background: s.backgroundColor, color: s.color };
+    })()"""
+    out = run(
+        flow_traces_page,
+        ev(probe, "rest"),
+        {"click": TRACE_BTN},
+        ev(probe, "open"),
+        viewport={"width": 1280, "height": 900},
+    )
+    assert_clean(out)
+    rest, opened = out["results"]["rest"], out["results"]["open"]
+    assert rest["pressed"] == "false" and opened["pressed"] == "true"
+    assert opened["border"] != rest["border"]
+    assert opened["background"] != rest["background"]
 
 
 def test_flow_trace_panel_sits_below_the_stage_on_a_phone_and_beside_it_on_a_desktop(flow_traces_page: Path) -> None:

@@ -1296,6 +1296,10 @@ q-flow > details {
     grid-row: 1;
   }
 
+  q-flow:where([data-q-flow-tracing]:not([data-q-flow-expanded])) > :where([data-q-flow-stage]) {
+    min-height: 440px;
+  }
+
   q-flow:where([data-q-flow-tracing]) > :where([data-q-flow-trace-panel]) {
     grid-column: 2;
     grid-row: 1;
@@ -1419,6 +1423,12 @@ q-flow aside :where([data-q-flow-trace-dot]) {
 }
 
 q-flow aside :where([data-q-flow-trace-dot][aria-current="step"]) {
+  border-color: var(--q-color-accent);
+  background: var(--q-color-accent);
+  color: var(--q-color-accent-text);
+}
+
+q-flow :where([data-q-flow-controls]) > :where(button[data-q-flow-action="trace"][aria-pressed="true"]) {
   border-color: var(--q-color-accent);
   background: var(--q-color-accent);
   color: var(--q-color-accent-text);
