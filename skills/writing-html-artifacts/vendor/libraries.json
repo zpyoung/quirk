@@ -149,16 +149,16 @@
               "kind": "css",
               "position": "head",
               "inline": true,
-              "sha256": "e216f1b2d45a35c41383ae430f39cd3b50963df98dc7cb2fcda686ea5f7c67e3",
-              "inline_sha256": "e216f1b2d45a35c41383ae430f39cd3b50963df98dc7cb2fcda686ea5f7c67e3"
+              "sha256": "366aad203438d1ba20a80a24c0bcbe928b7699c28541686929cc30fd75a11168",
+              "inline_sha256": "366aad203438d1ba20a80a24c0bcbe928b7699c28541686929cc30fd75a11168"
             },
             {
               "path": "kit.js",
               "kind": "js",
               "position": "body-end",
               "inline": true,
-              "sha256": "fec5705e511058896263bd81e79680a01d2c79da01abca6e01f3d2bad941e1cb",
-              "inline_sha256": "fec5705e511058896263bd81e79680a01d2c79da01abca6e01f3d2bad941e1cb"
+              "sha256": "10170a237255926f6ff3a8c3fa810be8e5e7f469ca5c9d6f79937650a761eb3c",
+              "inline_sha256": "10170a237255926f6ff3a8c3fa810be8e5e7f469ca5c9d6f79937650a761eb3c"
             }
           ]
         }

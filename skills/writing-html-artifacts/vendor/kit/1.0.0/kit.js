@@ -3156,6 +3156,38 @@
     return JSON.stringify(value, null, 2);
   }
 
+  function traceStringOk(str) {
+    for (var i = 0; i < str.length; i += 1) {
+      var c = str.charCodeAt(i);
+      if (c >= 0xd800 && c <= 0xdbff) {
+        var d = str.charCodeAt(i + 1);
+        if (!(d >= 0xdc00 && d <= 0xdfff)) {
+          return false;
+        }
+        i += 1;
+      } else if (c >= 0xdc00 && c <= 0xdfff) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** Whether a trace value is JSON the Python build check also accepts: finite numbers, no unpaired surrogates in strings or keys. */
+  function traceValueOk(value) {
+    if (typeof value === 'number') {
+      return isFinite(value);
+    }
+    if (typeof value === 'string') {
+      return traceStringOk(value);
+    }
+    if (value === null || typeof value !== 'object') {
+      return true;
+    }
+    return traceChildren(value).every(function (pair) {
+      return (Array.isArray(value) || traceStringOk(pair[0])) && traceValueOk(pair[1]);
+    });
+  }
+
   function traceKind(value) {
     return Array.isArray(value) ? 'array' : (isRow(value) ? 'object' : 'scalar');
   }
@@ -3260,7 +3292,7 @@
         if (!has.call(nodeMap, s.node) || (s.note !== undefined && typeof s.note !== 'string')) {
           return null;
         }
-        if (tracePretty(s.value).split('\n').length > FLOW_TRACE_MAX_LINES) {
+        if (!traceValueOk(s.value) || tracePretty(s.value).split('\n').length > FLOW_TRACE_MAX_LINES) {
           return null;
         }
         var edge = null;

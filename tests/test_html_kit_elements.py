@@ -4652,6 +4652,37 @@ WIDE_GRAPH = {
     ],
 }
 
+# value placeholders swapped for non-JSON text after the build, so the build-time check never sees them
+BADVALUE_CASES = {
+    "inf": ('"BADVALUE"', "1e9999"),
+    "neginf": ('{"deep": [{"n": "BADVALUE"}]}', '{"deep": [{"n": -1e9999}]}'),
+    "sur": ('"BADVALUE"', r'"\ud800"'),
+    "surpair": ('"BADVALUE"', r'"\ud83d\ude00"'),
+    "surkey": ('{"BADVALUE": 1}', r'{"\udc00": 1}'),
+    "surdeep": ('{"a": [{"k": "BADVALUE"}]}', r'{"a": [{"k": "x\ud800y"}]}'),
+}
+
+
+def _badvalue_graph(value: object) -> dict:
+    return {
+        "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+        "edges": [{"from": "a", "to": "b"}],
+        "traces": [
+            {"id": "t", "label": "T", "steps": [{"node": "a", "value": 1}, {"node": "b", "value": value}]}
+        ],
+    }
+
+
+def _badvalue_flow(name: str, before: str) -> str:
+    graph = _badvalue_graph(json.loads(before.replace("BADVALUE", f"BAD_{name}")))
+    return (
+        f'<q-flow id="bv-{name}" summary="A trace value that is not JSON.">\n'
+        f'  <script type="application/json">\n  {json.dumps(graph)}\n  </script>\n</q-flow>'
+    )
+
+
+BADVALUE_FLOWS = "\n".join(_badvalue_flow(name, before) for name, (before, _after) in BADVALUE_CASES.items())
+
 FLOW_TRACES = f"""
 <q-flow id="renewal" summary="How a renewal order is priced, taxed and charged.">
   <script type="application/json">
@@ -4676,6 +4707,7 @@ FLOW_TRACES = f"""
   {json.dumps(BADVIA_GRAPH, indent=2)}
   </script>
 </q-flow>
+{BADVALUE_FLOWS}
 """
 
 
@@ -4719,7 +4751,12 @@ def flow_traces_page(tmp_path_factory: pytest.TempPathFactory) -> Path:
     html = built.read_text(encoding="utf-8")
     good = '"via": "ab"'
     assert html.count(good) == 1
-    built.write_text(html.replace(good, '"via": "tax-eu"'), encoding="utf-8")
+    html = html.replace(good, '"via": "tax-eu"')
+    for name, (before, after) in BADVALUE_CASES.items():
+        marker = '"value": ' + before.replace("BADVALUE", f"BAD_{name}")
+        assert html.count(marker) == 1, name
+        html = html.replace(marker, f'"value": {after}')
+    built.write_text(html, encoding="utf-8")
     return built
 
 
@@ -6368,20 +6405,76 @@ def test_flow_trace_button_looks_pressed_while_trace_mode_is_open(flow_traces_pa
     probe = """(() => {
       const b = document.querySelector('#renewal [data-q-flow-action="trace"]');
       const s = getComputedStyle(b);
-      return { pressed: b.getAttribute('aria-pressed'), border: s.borderTopColor, background: s.backgroundColor, color: s.color };
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--q-color-accent)';
+      probe.style.backgroundColor = 'var(--q-color-accent-text)';
+      document.body.append(probe);
+      const accent = getComputedStyle(probe).color;
+      const accentText = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return {
+        pressed: b.getAttribute('aria-pressed'), hovered: b.matches(':hover'),
+        border: s.borderTopColor, background: s.backgroundColor, color: s.color, accent, accentText,
+      };
     })()"""
     out = run(
         flow_traces_page,
+        {"hover": "#plain"},
         ev(probe, "rest"),
         {"click": TRACE_BTN},
+        {"hover": "#plain"},
         ev(probe, "open"),
         viewport={"width": 1280, "height": 900},
     )
     assert_clean(out)
     rest, opened = out["results"]["rest"], out["results"]["open"]
     assert rest["pressed"] == "false" and opened["pressed"] == "true"
-    assert opened["border"] != rest["border"]
+    assert not rest["hovered"] and not opened["hovered"]
+    assert opened["background"] == opened["accent"]
+    assert opened["color"] == opened["accentText"]
     assert opened["background"] != rest["background"]
+    assert opened["color"] != rest["color"]
+    assert opened["border"] != rest["border"]
+
+
+def test_flow_summary_keeps_its_44px_touch_target_on_a_graph_with_no_traces(flow_traces_page: Path) -> None:
+    out = run(
+        flow_traces_page,
+        ev(
+            """(() => {
+              const s = getComputedStyle(document.querySelector('#plain > details > summary'));
+              return { minHeight: s.minHeight, display: s.display, alignItems: s.alignItems, cursor: s.cursor };
+            })()""",
+            "summary",
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["summary"] == {"minHeight": "44px", "display": "flex", "alignItems": "center", "cursor": "pointer"}
+
+
+def test_flow_trace_value_that_is_not_json_fails_to_the_notice(flow_traces_page: Path) -> None:
+    out = run(
+        flow_traces_page,
+        ev(
+            """(() => Object.fromEntries([...document.querySelectorAll('q-flow[id^="bv-"]')].map((f) => [
+              f.id.slice(3),
+              { notice: f.querySelector('[data-q-flow-notice]') !== null, ready: f.getAttribute('data-q-flow-ready'),
+                button: f.querySelector('[data-q-flow-action="trace"]') !== null },
+            ])))()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    bad = {"notice": True, "ready": "error", "button": False}
+    good = {"notice": False, "ready": "true", "button": True}
+    assert out["results"]["d"] == {
+        "inf": bad,
+        "neginf": bad,
+        "sur": bad,
+        "surkey": bad,
+        "surdeep": bad,
+        "surpair": good,
+    }
 
 
 def test_flow_trace_panel_sits_below_the_stage_on_a_phone_and_beside_it_on_a_desktop(flow_traces_page: Path) -> None:
