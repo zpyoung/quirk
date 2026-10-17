@@ -3,9 +3,11 @@
  * Every rule that styles author content or kit-inserted nodes keeps its attribute, class and
  * state selectors inside :where(), so it stays below one class and a plain page rule wins. The
  * exceptions are rules that must beat the stylesheets under the kit: the hover rules (Simple.css
- * restyles button:enabled:hover), the q-tabs panel and q-board section and heading resets (the
- * report template's "main section + section" divider, Simple.css's "section h2:first-child"),
- * the highlight.js token colors (Simple.css's "pre span"), and the print rules. The two hiding rules carry !important because hidden state must hold
+ * restyles button:enabled:hover, including on the q-flow trace panel), the q-flow trace tree's
+ * open-summary margin reset (Simple.css's "details[open] > summary"), the q-tabs panel and q-board
+ * section and heading resets (the report template's "main section + section" divider, Simple.css's
+ * "section h2:first-child"), the highlight.js token colors (Simple.css's "pre span"), and the print
+ * rules. The two hiding rules carry !important because hidden state must hold
  * against any author display value.
  */
 
@@ -1282,15 +1284,233 @@ q-flow > details {
   margin-top: var(--q-space-2);
 }
 
-q-flow > details > summary {
-  min-height: 44px;
+@media (min-width: 701px) {
+  q-flow:where([data-q-flow-tracing]) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) min(22rem, 40%);
+    column-gap: var(--q-space-3);
+  }
+
+  q-flow:where([data-q-flow-tracing]) > :where([data-q-flow-stage]) {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  q-flow:where([data-q-flow-tracing]) > :where([data-q-flow-trace-panel]) {
+    grid-column: 2;
+    grid-row: 1;
+    contain: size;
+    overflow-y: auto;
+  }
+
+  q-flow:where([data-q-flow-tracing]) > details {
+    grid-column: 1 / -1;
+  }
+
+  q-flow:where([data-q-flow-expanded][data-q-flow-tracing]) {
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+}
+
+@media (max-width: 700px) {
+  q-flow:where([data-q-flow-expanded][data-q-flow-tracing]) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+    row-gap: var(--q-space-2);
+  }
+
+  q-flow:where([data-q-flow-expanded][data-q-flow-tracing]) > :where([data-q-flow-trace-panel]) {
+    grid-row: 2;
+    max-height: 45vh;
+    overflow-y: auto;
+  }
+}
+
+q-flow > aside:where([data-q-flow-trace-panel]) {
+  float: none;
+  box-sizing: border-box;
+  width: auto;
+  min-width: 0;
+  margin: var(--q-space-2) 0 0;
+  padding: var(--q-space-3);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-md);
+  background: var(--q-color-surface);
+  color: var(--q-color-text);
+  font-size: var(--q-size-small);
+  line-height: var(--q-size-leading);
+}
+
+q-flow:where([data-q-flow-tracing]) > aside:where([data-q-flow-trace-panel]) {
+  margin-top: 0;
+}
+
+q-flow aside :where([data-q-flow-trace-note], [data-q-flow-trace-counter], [data-q-flow-trace-empty]) {
+  margin: 0 0 var(--q-space-2);
+}
+
+q-flow aside :where(.q-flow-trace-pick) {
   display: flex;
   align-items: center;
+  gap: var(--q-space-2);
+  margin-bottom: var(--q-space-2);
+}
+
+q-flow aside :where(.q-flow-trace-pick > label) {
+  display: inline;
+}
+
+q-flow aside :where([data-q-flow-trace-picker]) {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  margin: 0;
+  padding: var(--q-space-1) var(--q-space-2);
+  padding-inline-end: 25px;
+  font: inherit;
+}
+
+q-flow aside :where([data-q-flow-trace-counter]) {
+  font-weight: 600;
+}
+
+q-flow aside :where(.q-flow-trace-buttons) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--q-space-1);
+  margin-bottom: var(--q-space-2);
+}
+
+q-flow aside :where(.q-flow-trace-buttons > button, [data-q-flow-trace-dot]) {
+  margin: 0;
+  min-width: 34px;
+  min-height: 32px;
+  padding: var(--q-space-1) var(--q-space-2);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-sm);
+  background: var(--q-color-bg);
+  color: var(--q-color-text);
+  font: inherit;
+  font-size: var(--q-size-small);
+  line-height: 1;
   cursor: pointer;
+}
+
+q-flow aside :where([data-q-flow-trace-dots]) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--q-space-1);
+  margin: 0 0 var(--q-space-2);
+  padding: 0;
+  list-style: none;
+}
+
+q-flow aside :where([data-q-flow-trace-dots] > li) {
+  margin: 0;
+  padding: 0;
+}
+
+q-flow aside :where([data-q-flow-trace-dot]) {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0 var(--q-space-1);
+  border-radius: var(--q-radius-pill);
+}
+
+q-flow aside :where([data-q-flow-trace-dot][aria-current="step"]) {
+  border-color: var(--q-color-accent);
+  background: var(--q-color-accent);
+  color: var(--q-color-accent-text);
+}
+
+q-flow aside button:enabled:hover {
+  border-color: var(--q-color-accent);
+  background: var(--q-color-surface);
+  color: var(--q-color-text);
+}
+
+q-flow aside button[aria-current="step"]:enabled:hover {
+  background: var(--q-color-accent);
+  color: var(--q-color-accent-text);
+}
+
+q-flow aside :where(.q-flow-trace-toggle) {
+  margin: 0 0 var(--q-space-2);
+  cursor: pointer;
+}
+
+q-flow aside :where([data-q-flow-tree], [data-q-flow-tree] ul) {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+q-flow aside :where([data-q-flow-tree] ul) {
+  padding-left: var(--q-space-3);
+}
+
+q-flow aside :where([data-q-flow-tree] details) {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+
+q-flow aside :where([data-q-flow-tree] summary) {
+  margin: 0;
+  padding: 0;
+  font-weight: 400;
+  word-break: normal;
+  cursor: pointer;
+}
+
+q-flow aside [data-q-flow-tree] details[open] > summary {
+  margin-bottom: 0;
+}
+
+q-flow aside :where([data-q-flow-field]) {
+  margin: 0;
+  padding: 1px 0;
+  font-family: var(--q-font-mono);
+  font-size: var(--q-size-small);
+  overflow-wrap: anywhere;
+}
+
+q-flow aside :where([data-q-flow-mark]) {
+  display: inline-block;
+  min-width: 1.25em;
+  font-weight: 700;
+}
+
+q-flow aside :where([data-q-flow-key], [data-q-flow-count], [data-q-flow-old]) {
+  color: var(--q-color-text-muted);
+}
+
+q-flow aside :where([data-q-flow-changes-only] [data-q-flow-field]:not([data-q-flow-has-change])) {
+  display: none;
+}
+
+q-flow aside :where([data-q-flow-change="added"] :is([data-q-flow-mark], [data-q-flow-key], [data-q-flow-val], [data-q-flow-count])) {
+  color: var(--q-color-good);
+}
+
+q-flow aside :where([data-q-flow-change="changed"] :is([data-q-flow-mark], [data-q-flow-new])) {
+  color: var(--q-color-accent);
+}
+
+q-flow aside :where([data-q-flow-change="removed"] :is([data-q-flow-mark], [data-q-flow-key], [data-q-flow-val], [data-q-flow-count])) {
+  color: var(--q-color-text-muted);
+}
+
+q-flow aside :where([data-q-flow-change="removed"] :is([data-q-flow-key], [data-q-flow-val])) {
+  text-decoration: line-through;
 }
 
 @media (max-width: 700px) {
   q-flow :where([data-q-flow-controls]) > button,
+  q-flow aside :where(.q-flow-trace-buttons > button, [data-q-flow-trace-dot]),
   q-flow :where([data-q-flow-drawer-close]),
   q-flow :where([data-q-flow-open-flow]),
   q-flow :where([data-q-flow-edge-btn]) {
@@ -1366,7 +1586,8 @@ q-flow > details > summary {
   }
 
   q-flow [data-q-flow-controls],
-  q-flow [data-q-flow-drawer] {
+  q-flow [data-q-flow-drawer],
+  q-flow [data-q-flow-trace-panel] {
     display: none;
   }
 }

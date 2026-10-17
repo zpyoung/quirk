@@ -3148,6 +3148,239 @@
     return d + ' L ' + pts[pts.length - 1].x + ' ' + pts[pts.length - 1].y;
   }
 
+  var FLOW_TRACE_MAX_LINES = 400;
+  var FLOW_TRACE_STEP_MS = 1500;
+
+  /** A trace value as the 2-space pretty print that the text list shows and the line limit counts. */
+  function tracePretty(value) {
+    return JSON.stringify(value, null, 2);
+  }
+
+  function traceKind(value) {
+    return Array.isArray(value) ? 'array' : (isRow(value) ? 'object' : 'scalar');
+  }
+
+  function traceEqual(a, b) {
+    var kind = traceKind(a);
+    if (kind !== traceKind(b)) {
+      return false;
+    }
+    if (kind === 'scalar') {
+      return a === b;
+    }
+    var keys = Object.keys(a);
+    if (kind === 'array' ? a.length !== b.length : keys.length !== Object.keys(b).length) {
+      return false;
+    }
+    return keys.every(function (k) {
+      return Object.prototype.hasOwnProperty.call(b, k) && traceEqual(a[k], b[k]);
+    });
+  }
+
+  function traceChildren(value) {
+    return Array.isArray(value)
+      ? value.map(function (item, i) { return [String(i), item]; })
+      : Object.keys(value).map(function (k) { return [k, value[k]]; });
+  }
+
+  /** A field and everything under it carrying one change, for a value that is wholly new or wholly gone. */
+  function traceWhole(key, value, change) {
+    var field = { key: key, change: change, value: value, hasChange: change !== 'same' };
+    if (traceKind(value) !== 'scalar') {
+      field.children = traceChildren(value).map(function (pair) {
+        return traceWhole(pair[0], pair[1], change);
+      });
+    }
+    return field;
+  }
+
+  function traceDiffField(key, prev, next) {
+    var kind = traceKind(next);
+    if (kind === 'scalar' || kind !== traceKind(prev)) {
+      if (traceEqual(prev, next)) {
+        return { key: key, change: 'same', value: next, hasChange: false };
+      }
+      return { key: key, change: 'changed', value: next, old: prev, hasChange: true };
+    }
+    var children = [];
+    var prevPairs = traceChildren(prev);
+    var prevByKey = Object.create(null);
+    prevPairs.forEach(function (pair) { prevByKey[pair[0]] = pair[1]; });
+    var nextKeys = Object.create(null);
+    traceChildren(next).forEach(function (pair) {
+      nextKeys[pair[0]] = true;
+      children.push(pair[0] in prevByKey
+        ? traceDiffField(pair[0], prevByKey[pair[0]], pair[1])
+        : traceWhole(pair[0], pair[1], 'added'));
+    });
+    prevPairs.forEach(function (pair) {
+      if (!nextKeys[pair[0]]) {
+        children.push(traceWhole(pair[0], pair[1], 'removed'));
+      }
+    });
+    return {
+      key: key,
+      change: 'same',
+      value: next,
+      children: children,
+      hasChange: children.some(function (c) { return c.hasChange; })
+    };
+  }
+
+  /**
+   * Cleans the `traces` payload, or returns null when any trace breaks the contract the build check
+   * enforces. Each step gains `edge`, the index of its incoming edge, found from `via` or inferred
+   * from the one edge that joins the two nodes.
+   */
+  function parseFlowTraces(raw, nodeMap, edges, edgeRefs) {
+    if (raw === undefined) {
+      return [];
+    }
+    if (!Array.isArray(raw)) {
+      return null;
+    }
+    var has = Object.prototype.hasOwnProperty;
+    var seen = Object.create(null);
+    var traces = [];
+    for (var ti = 0; ti < raw.length; ti += 1) {
+      var t = raw[ti];
+      if (!isRow(t) || typeof t.id !== 'string' || !t.id.trim() || typeof t.label !== 'string' || !t.label.trim()) {
+        return null;
+      }
+      if (seen[t.id] || !Array.isArray(t.steps) || t.steps.length < 2) {
+        return null;
+      }
+      seen[t.id] = true;
+      var steps = [];
+      for (var si = 0; si < t.steps.length; si += 1) {
+        var s = t.steps[si];
+        if (!isRow(s) || typeof s.node !== 'string' || !has.call(s, 'value')) {
+          return null;
+        }
+        if (!has.call(nodeMap, s.node) || (s.note !== undefined && typeof s.note !== 'string')) {
+          return null;
+        }
+        if (tracePretty(s.value).split('\n').length > FLOW_TRACE_MAX_LINES) {
+          return null;
+        }
+        var edge = null;
+        if (si === 0) {
+          if (s.via !== undefined) {
+            return null;
+          }
+        } else {
+          var from = steps[si - 1].node;
+          var candidates = edges.filter(function (e) { return e.from === from && e.to === s.node; });
+          if (s.via !== undefined) {
+            if (typeof s.via !== 'string' || !has.call(edgeRefs, s.via) || candidates.indexOf(edges[edgeRefs[s.via]]) < 0) {
+              return null;
+            }
+            edge = edgeRefs[s.via];
+          } else if (candidates.length === 1) {
+            edge = candidates[0].index;
+          } else {
+            return null;
+          }
+        }
+        steps.push({
+          node: s.node,
+          value: s.value,
+          note: typeof s.note === 'string' ? s.note : null,
+          via: typeof s.via === 'string' ? s.via : null,
+          edge: edge
+        });
+      }
+      traces.push({ id: t.id, label: t.label, steps: steps });
+    }
+    return traces;
+  }
+
+  /**
+   * Compares one trace step's value with the step before it. Fields match by name inside objects
+   * and by index inside arrays; a value whose type changes is one `changed` field, not a recursion.
+   * With no previous step every field is `same`.
+   */
+  function traceDiff(prev, next, hasPrev) {
+    return hasPrev ? traceDiffField(null, prev, next) : traceWhole(null, next, 'same');
+  }
+
+  var TRACE_MARKS = {
+    same: ['', ''],
+    added: ['+', 'added'],
+    removed: ['−', 'removed'],
+    changed: ['→', 'changed from']
+  };
+  var TRACE_OPEN_DEPTH = 3;
+
+  function traceSpan(attr, text) {
+    var span = document.createElement('span');
+    span.setAttribute(attr, '');
+    span.textContent = text;
+    return span;
+  }
+
+  function traceMark(change) {
+    var spec = TRACE_MARKS[change];
+    var mark = traceSpan('data-q-flow-mark', spec[0]);
+    if (spec[1]) {
+      var spoken = document.createElement('span');
+      spoken.className = 'q-visually-hidden';
+      spoken.textContent = spec[1];
+      mark.appendChild(spoken);
+    }
+    return mark;
+  }
+
+  /**
+   * Builds the list item for one diffed field. Branches nest as `details` and start open while
+   * shallow or holding a change; values are written with textContent only.
+   */
+  function renderTraceField(field, depth) {
+    var li = document.createElement('li');
+    li.setAttribute('data-q-flow-field', '');
+    li.setAttribute('data-q-flow-change', field.change);
+    if (field.hasChange) {
+      li.setAttribute('data-q-flow-has-change', '');
+    }
+    li.setAttribute('data-q-flow-depth', String(depth));
+    var key = field.key === null ? null : traceSpan('data-q-flow-key', field.key + ': ');
+    if (field.children) {
+      var branch = document.createElement('details');
+      branch.setAttribute('data-q-flow-branch', '');
+      branch.open = depth < TRACE_OPEN_DEPTH || field.hasChange;
+      var summary = document.createElement('summary');
+      summary.appendChild(traceMark(field.change));
+      if (key) {
+        summary.appendChild(key);
+      }
+      var isList = Array.isArray(field.value);
+      var size = isList ? field.value.length : Object.keys(field.value).length;
+      summary.appendChild(traceSpan('data-q-flow-count', isList ? '[' + size + ']' : '{' + size + '}'));
+      branch.appendChild(summary);
+      var nested = document.createElement('ul');
+      field.children.forEach(function (child) {
+        nested.appendChild(renderTraceField(child, depth + 1));
+      });
+      branch.appendChild(nested);
+      li.appendChild(branch);
+      return li;
+    }
+    li.appendChild(traceMark(field.change));
+    if (key) {
+      li.appendChild(key);
+    }
+    if (field.change === 'changed') {
+      li.appendChild(traceSpan('data-q-flow-old', JSON.stringify(field.old)));
+      li.appendChild(document.createTextNode(' → '));
+      var fresh = traceSpan('data-q-flow-new', JSON.stringify(field.value));
+      fresh.setAttribute('data-q-flow-val', '');
+      li.appendChild(fresh);
+    } else {
+      li.appendChild(traceSpan('data-q-flow-val', JSON.stringify(field.value)));
+    }
+    return li;
+  }
+
   class QFlow extends HTMLElement {
     static get observedAttributes() {
       return ['summary', 'direction', 'groups'];
@@ -3163,7 +3396,7 @@
       this._focusedAfterExpand = false;
       this._rovingId = null;
       this._onDocKey = this._onDocKey || function (e) {
-        if (e.key === 'Escape' && (self.hasAttribute('data-q-flow-expanded') || self._focusedNode || self._focusedGroup)) {
+        if (e.key === 'Escape' && (self.hasAttribute('data-q-flow-expanded') || self._focusedNode || self._focusedGroup || self._trace)) {
           self._handleEscape(e);
         }
       };
@@ -3196,6 +3429,7 @@
 
     disconnectedCallback() {
       this._stopPulse();
+      this._stopTracePlay();
       if (this._onDocKey) {
         document.removeEventListener('keydown', this._onDocKey);
       }
@@ -3330,6 +3564,7 @@
         }
       }
       var cleanEdges = [];
+      var edgeRefs = Object.create(null);
       for (var ei = 0; ei < edges.length; ei += 1) {
         var e = edges[ei];
         if (!isRow(e) || hasCoordKeys(e) || typeof e.from !== 'string' || typeof e.to !== 'string') {
@@ -3341,8 +3576,17 @@
         if (e.loop !== undefined && e.loop !== null && typeof e.loop !== 'boolean') {
           return null;
         }
+        var ref = null;
+        if (e.id !== undefined) {
+          if (typeof e.id !== 'string' || !e.id.trim() || Object.prototype.hasOwnProperty.call(edgeRefs, e.id)) {
+            return null;
+          }
+          ref = e.id;
+          edgeRefs[ref] = ei;
+        }
         cleanEdges.push({
           id: 'e' + ei,
+          ref: ref,
           index: ei,
           from: e.from,
           to: e.to,
@@ -3360,6 +3604,10 @@
           return null;
         }
       }
+      var traces = parseFlowTraces(raw.traces, nodeMap, cleanEdges, edgeRefs);
+      if (!traces) {
+        return null;
+      }
       return {
         kinds: kinds,
         groups: groups.map(function (g) { return groupMap[g.id]; }),
@@ -3367,6 +3615,7 @@
         nodes: nodes,
         nodeMap: nodeMap,
         edges: cleanEdges,
+        traces: traces,
         direction: (this.getAttribute('direction') || 'right').toLowerCase() === 'down' ? 'down' : 'right',
         groupsMode: groupsMode
       };
@@ -3396,6 +3645,8 @@
       if (data) {
         this._populateList(details, data);
       }
+      this._stage = stage;
+      this._buildTracePanel(data);
       var live = this.querySelector(':scope > [data-q-flow-live]');
       if (!live) {
         live = kitNode('div');
@@ -3407,6 +3658,151 @@
       this._stage = stage;
       this._details = details;
       this._live = live;
+    }
+
+    /**
+     * Creates the trace panel beside the stage, or drops it when the graph has no traces. The
+     * panel starts closed; `_openTrace` shows it. The shell is rebuilt on every layout so the
+     * picker always matches the traces in the payload.
+     */
+    _buildTracePanel(data) {
+      var self = this;
+      var panel = this.querySelector(':scope > [data-q-flow-trace-panel]');
+      this._traceEls = null;
+      if (!data || data.traces.length === 0) {
+        if (panel) {
+          panel.remove();
+        }
+        this._tracePanel = null;
+        return;
+      }
+      if (!panel) {
+        panel = kitNode('aside');
+        panel.className = 'q-flow-trace';
+        panel.setAttribute('data-q-flow-trace-panel', '');
+        panel.setAttribute('aria-label', 'Trace');
+        panel.setAttribute('tabindex', '-1');
+        this.insertBefore(panel, this._stage.nextSibling);
+      }
+      panel.setAttribute('data-q-inactive', '');
+      while (panel.firstChild) {
+        panel.removeChild(panel.firstChild);
+      }
+
+      function part(tag, attr, cls) {
+        var el = document.createElement(tag);
+        el.setAttribute(attr, '');
+        if (cls) {
+          el.className = cls;
+        }
+        return el;
+      }
+
+      function button(attr, text) {
+        var btn = part('button', attr);
+        btn.type = 'button';
+        btn.textContent = text;
+        return btn;
+      }
+
+      var pickerRow = document.createElement('div');
+      pickerRow.className = 'q-flow-trace-pick';
+      var pickerId = this._uid + '-trace-picker';
+      var pickerLabel = document.createElement('label');
+      pickerLabel.setAttribute('for', pickerId);
+      pickerLabel.textContent = 'Trace';
+      var picker = part('select', 'data-q-flow-trace-picker');
+      picker.id = pickerId;
+      data.traces.forEach(function (trace) {
+        var option = document.createElement('option');
+        option.value = trace.id;
+        option.textContent = trace.label;
+        picker.appendChild(option);
+      });
+      pickerRow.appendChild(pickerLabel);
+      pickerRow.appendChild(picker);
+      panel.appendChild(pickerRow);
+
+      var counter = part('p', 'data-q-flow-trace-counter', 'q-flow-trace-counter');
+      counter.setAttribute('aria-live', 'polite');
+      panel.appendChild(counter);
+
+      var buttons = document.createElement('div');
+      buttons.className = 'q-flow-trace-buttons';
+      var back = button('data-q-flow-trace-back', 'Back');
+      var next = button('data-q-flow-trace-next', 'Next');
+      var play = button('data-q-flow-trace-play', 'Play');
+      play.setAttribute('aria-pressed', 'false');
+      buttons.appendChild(back);
+      buttons.appendChild(next);
+      buttons.appendChild(play);
+      panel.appendChild(buttons);
+
+      var dots = part('ol', 'data-q-flow-trace-dots', 'q-flow-trace-dots');
+      panel.appendChild(dots);
+
+      var note = part('p', 'data-q-flow-trace-note', 'q-flow-trace-note');
+      note.setAttribute('data-q-inactive', '');
+      panel.appendChild(note);
+
+      var toggle = document.createElement('label');
+      toggle.className = 'q-flow-trace-toggle';
+      var changes = part('input', 'data-q-flow-trace-changes');
+      changes.type = 'checkbox';
+      toggle.appendChild(changes);
+      toggle.appendChild(document.createTextNode(' Changes only'));
+      panel.appendChild(toggle);
+
+      var value = part('div', 'data-q-flow-trace-value', 'q-flow-trace-value');
+      panel.appendChild(value);
+
+      back.addEventListener('click', function () {
+        self._traceStepBy(-1);
+      });
+      next.addEventListener('click', function () {
+        self._traceStepBy(1);
+      });
+      play.addEventListener('click', function () {
+        self._toggleTracePlay();
+      });
+      panel.addEventListener('keydown', function (ev) {
+        if (ev.target === picker || ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) {
+          return;
+        }
+        var delta = 0;
+        if (ev.key === 'ArrowRight' || ev.key === 'ArrowDown') {
+          delta = 1;
+        } else if (ev.key === 'ArrowLeft' || ev.key === 'ArrowUp') {
+          delta = -1;
+        }
+        if (delta !== 0 && self._trace) {
+          ev.preventDefault();
+          self._traceStepBy(delta);
+        }
+      });
+      picker.addEventListener('change', function () {
+        self._stopTracePlay();
+        self._startTrace(picker.selectedIndex);
+      });
+      changes.addEventListener('change', function () {
+        self._traceChangesOnly = changes.checked;
+        if (self._trace) {
+          self._renderTraceValue(self._trace.step);
+        }
+      });
+
+      this._tracePanel = panel;
+      this._traceEls = {
+        picker: picker,
+        counter: counter,
+        back: back,
+        next: next,
+        play: play,
+        dots: dots,
+        note: note,
+        changes: changes,
+        value: value
+      };
     }
 
     _populateList(details, data) {
@@ -3525,6 +3921,39 @@
         }
       });
       body.appendChild(rootUl);
+      data.traces.forEach(function (trace) {
+        var block = document.createElement('div');
+        block.setAttribute('data-q-flow-list-trace', trace.id);
+        var heading = document.createElement('p');
+        var headingText = document.createElement('strong');
+        headingText.textContent = 'Trace: ' + trace.label;
+        heading.appendChild(headingText);
+        block.appendChild(heading);
+        var ol = document.createElement('ol');
+        trace.steps.forEach(function (step, i) {
+          var li = document.createElement('li');
+          li.setAttribute('data-q-flow-list-step', String(i + 1));
+          var text = data.nodeMap[step.node].label;
+          var edge = step.edge === null ? null : data.edges[step.edge];
+          if (edge && (step.via !== null || edge.loop)) {
+            text += edge.label
+              ? ', via "' + edge.label + '"'
+              : (step.via !== null ? ', via "' + step.via + '"' : ', around the loop');
+          }
+          if (step.note) {
+            text += ': ' + step.note;
+          }
+          li.appendChild(document.createTextNode(text));
+          var pre = document.createElement('pre');
+          var code = document.createElement('code');
+          code.textContent = tracePretty(step.value);
+          pre.appendChild(code);
+          li.appendChild(pre);
+          ol.appendChild(li);
+        });
+        block.appendChild(ol);
+        body.appendChild(block);
+      });
       details.appendChild(body);
     }
 
@@ -3567,6 +3996,12 @@
       this._initialized = true;
       this._lastSig = this._signature();
       this.removeAttribute('data-q-flow-ready');
+      this._stopTracePlay();
+      if (this._trace) {
+        this._closeTrace(false);
+      }
+      this._traceChangesOnly = false;
+      this._lastTraceIndex = 0;
       var data = this._parseData();
       this._ensureScaffold(data);
       if (!data) {
@@ -4045,6 +4480,9 @@
         headerG.appendChild(hText);
         headerG.addEventListener('click', function (ev) {
           ev.stopPropagation();
+          if (self._trace) {
+            self._closeTrace(false);
+          }
           self._focusGroup(gid);
         });
         gEl.appendChild(headerG);
@@ -4296,7 +4734,11 @@
         nG.addEventListener('click', function (ev) {
           ev.stopPropagation();
           self._setRoving(node.id, false);
-          self._focusNode(node.id);
+          if (self._trace) {
+            self._traceNodeClick(node.id);
+          } else {
+            self._focusNode(node.id);
+          }
         });
         nG.addEventListener('keydown', function (ev) {
           self._onNodeKey(ev, node.id);
@@ -4306,7 +4748,7 @@
       });
 
       svg.addEventListener('click', function (ev) {
-        if (ev.target === svg || ev.target === viewport) {
+        if ((ev.target === svg || ev.target === viewport) && !self._trace) {
           self._clearFocus();
         }
       });
@@ -4350,6 +4792,12 @@
             self._zoomBy(0.8);
           } else if (action === 'fit') {
             self._fitBounds(self._bounds, false);
+          } else if (action === 'trace') {
+            if (self._trace) {
+              self._closeTrace(true);
+            } else {
+              self._openTrace(self._lastTraceIndex || 0);
+            }
           } else if (action === 'expand') {
             self._toggleExpand();
           }
@@ -4361,7 +4809,12 @@
       addBtn('zoom-in', 'Zoom in', '+');
       addBtn('zoom-out', 'Zoom out', '\u2212');
       addBtn('fit', 'Fit to view', 'Fit');
-      this._expandBtn = addBtn('expand', 'Expand graph', 'Expand');
+      this._traceBtn = null;
+      if (this._data && this._data.traces.length > 0) {
+        this._traceBtn = addBtn('trace', 'Step through a trace', 'Step through');
+        this._traceBtn.setAttribute('aria-pressed', this._trace ? 'true' : 'false');
+      }
+      this._expandBtn =addBtn('expand', 'Expand graph', 'Expand');
       this._expandBtn.setAttribute('aria-pressed', this.hasAttribute('data-q-flow-expanded') ? 'true' : 'false');
       this._stage.appendChild(bar);
     }
@@ -4519,6 +4972,10 @@
     _handleEscape(ev) {
       ev.preventDefault();
       ev.stopPropagation();
+      if (this._trace) {
+        this._closeTrace(true);
+        return;
+      }
       if (this.hasAttribute('data-q-flow-expanded') && !this._focusedAfterExpand) {
         this._toggleExpand();
         return;
@@ -4717,7 +5174,7 @@
       var startTime = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
 
       function step(now) {
-        if (!self.isConnected || !self._focusedNode) {
+        if (!self.isConnected || !(self._focusedNode || self._trace)) {
           self._pulseFrame = 0;
           return;
         }
@@ -5047,6 +5504,310 @@
       });
     }
 
+    /** Opens trace mode on a trace, the way the "Step through" button does, and moves focus to Next. */
+    _openTrace(traceIndex) {
+      if (this._startTrace(traceIndex) && this._traceEls) {
+        this._traceEls.next.focus();
+      }
+    }
+
+    /**
+     * Puts trace mode on step 1 of a trace: clears focus, opens the panel and fits the canvas to
+     * the narrower stage. Also what the picker runs, so it leaves DOM focus where it is.
+     */
+    _startTrace(traceIndex) {
+      var data = this._data;
+      var trace = data && data.traces[traceIndex];
+      if (!trace || !this._tracePanel) {
+        return false;
+      }
+      this._stopTracePlay();
+      this._clearFocus();
+      this._focusedAfterExpand = false;
+      var nodes = {};
+      var edges = {};
+      trace.steps.forEach(function (step) {
+        nodes[step.node] = true;
+        if (step.edge !== null) {
+          edges[step.edge] = true;
+        }
+      });
+      this._trace = { index: traceIndex, step: 0, nodes: nodes, edges: edges };
+      this._lastTraceIndex = traceIndex;
+      this.setAttribute('data-q-flow-tracing', '');
+      if (this._traceBtn) {
+        this._traceBtn.setAttribute('aria-pressed', 'true');
+      }
+      this._tracePanel.removeAttribute('data-q-inactive');
+      this._traceEls.picker.selectedIndex = traceIndex;
+      this._buildTraceDots(trace);
+      this._showTraceStep(0);
+      this._fitBounds(this._bounds, false);
+      this._ensureNodeVisible(trace.steps[0].node, false);
+      return true;
+    }
+
+    /** Leaves trace mode and returns the graph to rest; the button gets focus back when asked. */
+    _closeTrace(restoreFocus) {
+      this._stopTracePlay();
+      this._trace = null;
+      this.removeAttribute('data-q-flow-tracing');
+      if (this._traceBtn) {
+        this._traceBtn.setAttribute('aria-pressed', 'false');
+      }
+      if (this._tracePanel) {
+        this._tracePanel.setAttribute('data-q-inactive', '');
+      }
+      this._clearFocus();
+      this._fitBounds(this._bounds, false);
+      if (restoreFocus && this._traceBtn) {
+        this._traceBtn.focus();
+      }
+    }
+
+    /** Starts Play, or stops it when it is running. Play on the last step restarts from step 1. */
+    _toggleTracePlay() {
+      var self = this;
+      var tr = this._trace;
+      var data = this._data;
+      var els = this._traceEls;
+      if (!tr || !data || !els) {
+        return;
+      }
+      if (this._tracePlayToken) {
+        this._stopTracePlay();
+        return;
+      }
+      var steps = data.traces[tr.index].steps;
+      if (tr.step >= steps.length - 1) {
+        this._showTraceStep(0);
+      }
+      var token = {};
+      this._tracePlayToken = token;
+      els.play.textContent = 'Pause';
+      els.play.setAttribute('aria-pressed', 'true');
+      var shownAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+
+      function frame(now) {
+        if (self._tracePlayToken !== token || !self.isConnected || !self._trace) {
+          return;
+        }
+        var t = now || ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now());
+        if (t - shownAt >= FLOW_TRACE_STEP_MS) {
+          shownAt = t;
+          self._showTraceStep(self._trace.step + 1);
+          if (self._trace.step >= steps.length - 1) {
+            self._stopTracePlay();
+            return;
+          }
+        }
+        self._tracePlayFrame = nextFrame(frame);
+      }
+
+      this._tracePlayFrame = nextFrame(frame);
+    }
+
+    /** Stops Play, if it is running, and shows the button as Play again. */
+    _stopTracePlay() {
+      this._tracePlayToken = null;
+      if (this._tracePlayFrame) {
+        cancelFrame(this._tracePlayFrame);
+        this._tracePlayFrame = 0;
+      }
+      var els = this._traceEls;
+      if (els) {
+        els.play.textContent = 'Play';
+        els.play.setAttribute('aria-pressed', 'false');
+      }
+    }
+
+    _traceStepBy(delta) {
+      if (this._trace) {
+        this._stopTracePlay();
+        this._showTraceStep(this._trace.step + delta);
+      }
+    }
+
+    /**
+     * A click on a node while tracing. A node on the trace jumps to its next visit after the
+     * current step, or its first; a node off the trace leaves trace mode and takes focus.
+     */
+    _traceNodeClick(nodeId) {
+      var tr = this._trace;
+      var data = this._data;
+      if (!tr || !data) {
+        return;
+      }
+      this._stopTracePlay();
+      if (!tr.nodes[nodeId]) {
+        this._closeTrace(false);
+        this._focusNode(nodeId);
+        return;
+      }
+      var steps = data.traces[tr.index].steps;
+      var target = -1;
+      for (var i = 0; i < steps.length && target < 0; i += 1) {
+        if (steps[i].node === nodeId && i > tr.step) {
+          target = i;
+        }
+      }
+      for (var j = 0; j < steps.length && target < 0; j += 1) {
+        if (steps[j].node === nodeId) {
+          target = j;
+        }
+      }
+      this._showTraceStep(target);
+    }
+
+    _buildTraceDots(trace) {
+      var self = this;
+      var dots = this._traceEls.dots;
+      while (dots.firstChild) {
+        dots.removeChild(dots.firstChild);
+      }
+      trace.steps.forEach(function (step, i) {
+        var li = document.createElement('li');
+        var dot = document.createElement('button');
+        dot.type = 'button';
+        dot.setAttribute('data-q-flow-trace-dot', String(i + 1));
+        dot.setAttribute('aria-label', 'Step ' + (i + 1) + ': ' + self._data.nodeMap[step.node].label);
+        dot.textContent = String(i + 1);
+        dot.addEventListener('click', function () {
+          self._stopTracePlay();
+          self._showTraceStep(i);
+        });
+        li.appendChild(dot);
+        dots.appendChild(li);
+      });
+    }
+
+    /**
+     * Shows one trace step: the canvas lights the step's node and incoming edge and dims
+     * everything off the trace's path, and the panel shows the step's note and value.
+     */
+    _showTraceStep(stepIndex) {
+      var tr = this._trace;
+      var data = this._data;
+      if (!tr || !data) {
+        return;
+      }
+      var trace = data.traces[tr.index];
+      var i = Math.max(0, Math.min(trace.steps.length - 1, stepIndex));
+      var step = trace.steps[i];
+      tr.step = i;
+
+      Object.keys(this._nodeElements).forEach(function (nid) {
+        var el = this._nodeElements[nid];
+        var current = nid === step.node;
+        el.toggleAttribute('data-q-flow-selected', current);
+        el.toggleAttribute('data-q-flow-lit', current);
+        el.toggleAttribute('data-q-flow-dim', !tr.nodes[nid]);
+      }, this);
+
+      var holdsPath = {};
+      Object.keys(tr.nodes).forEach(function (nid) {
+        var gId = data.nodeMap[nid].group;
+        while (gId && data.groupMap[gId]) {
+          holdsPath[gId] = true;
+          gId = data.groupMap[gId].parent;
+        }
+      });
+      var groupEls = this._stage.querySelectorAll('[data-q-flow-group]');
+      for (var gi = 0; gi < groupEls.length; gi += 1) {
+        groupEls[gi].removeAttribute('data-q-flow-lit');
+        groupEls[gi].toggleAttribute('data-q-flow-dim', !holdsPath[groupEls[gi].getAttribute('data-q-flow-group')]);
+      }
+
+      var reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+      var uid = this._uid;
+      var currentRec = step.edge === null ? null : this._edgeRecords[step.edge];
+      this._edgeRecords.forEach(function (rec) {
+        var current = rec === currentRec;
+        rec.groupEl.removeAttribute('data-q-flow-hop');
+        rec.groupEl.toggleAttribute('data-q-flow-lit', current);
+        rec.groupEl.toggleAttribute('data-q-flow-dim', !tr.edges[rec.edge.index]);
+        rec.basePath.setAttribute('stroke', current ? 'var(--q-color-accent)' : 'var(--q-color-text-muted)');
+        rec.basePath.setAttribute('stroke-width', current ? (reduced ? '3.5' : '2') : '1.75');
+        rec.basePath.setAttribute('marker-end', 'url(#q-flow-arrow-' + (current ? 'lit-' : '') + uid + ')');
+        if (rec.edge.loop) {
+          rec.basePath.setAttribute('marker-start', 'url(#q-flow-return-' + (current ? 'lit-' : '') + uid + ')');
+        }
+        rec.pulsePath.setAttribute('data-q-inactive', '');
+        if (!current || reduced) {
+          rec.maskDots.forEach(function (dot) {
+            dot.setAttribute('data-q-inactive', '');
+          });
+        }
+      });
+
+      if (currentRec && !reduced) {
+        currentRec.pulsePath.removeAttribute('data-q-inactive');
+        this.setAttribute('data-q-flow-pulsing', '');
+        this._startPulse(pulseSchedule([{ rec: currentRec, down: true }], currentRec.edge.from));
+      } else {
+        this.removeAttribute('data-q-flow-pulsing');
+        this._stopPulse();
+      }
+
+      this._ensureNodeVisible(step.node, false);
+      this._renderTracePanel(i);
+    }
+
+    _renderTracePanel(i) {
+      var els = this._traceEls;
+      var data = this._data;
+      var trace = data.traces[this._trace.index];
+      var step = trace.steps[i];
+      var label = data.nodeMap[step.node].label;
+
+      els.counter.textContent = 'Step ' + (i + 1) + ' of ' + trace.steps.length;
+      var spoken = document.createElement('span');
+      spoken.className = 'q-visually-hidden';
+      spoken.textContent = ', ' + label + (step.note ? ': ' + step.note : '');
+      els.counter.appendChild(spoken);
+
+      els.back.disabled = i === 0;
+      els.next.disabled = i === trace.steps.length - 1;
+      var dots = els.dots.querySelectorAll('[data-q-flow-trace-dot]');
+      for (var d = 0; d < dots.length; d += 1) {
+        if (d === i) {
+          dots[d].setAttribute('aria-current', 'step');
+        } else {
+          dots[d].removeAttribute('aria-current');
+        }
+      }
+
+      els.note.textContent = step.note || '';
+      els.note.toggleAttribute('data-q-inactive', !step.note);
+      els.changes.checked = !!this._traceChangesOnly;
+      this._renderTraceValue(i);
+    }
+
+    _renderTraceValue(i) {
+      var box = this._traceEls.value;
+      var steps = this._data.traces[this._trace.index].steps;
+      var root = traceDiff(i > 0 ? steps[i - 1].value : undefined, steps[i].value, i > 0);
+      while (box.firstChild) {
+        box.removeChild(box.firstChild);
+      }
+      if (this._traceChangesOnly && !root.hasChange) {
+        var empty = document.createElement('p');
+        empty.setAttribute('data-q-flow-trace-empty', '');
+        empty.textContent = 'No changes at this step';
+        box.appendChild(empty);
+        return;
+      }
+      var tree = document.createElement('ul');
+      tree.setAttribute('data-q-flow-tree', '');
+      if (this._traceChangesOnly) {
+        tree.setAttribute('data-q-flow-changes-only', '');
+      }
+      (root.children && root.change !== 'changed' ? root.children : [root]).forEach(function (field) {
+        tree.appendChild(renderTraceField(field, 1));
+      });
+      box.appendChild(tree);
+    }
+
     _setRoving(nodeId, moveDomFocus) {
       if (!this._nodeElements || !this._nodeElements[nodeId]) {
         return;
@@ -5119,7 +5880,11 @@
       } else if (ev.key === 'Enter' || ev.key === ' ') {
         ev.preventDefault();
         ev.stopPropagation();
-        this._focusNode(nodeId);
+        if (this._trace) {
+          this._traceNodeClick(nodeId);
+        } else {
+          this._focusNode(nodeId);
+        }
       } else {
         this._onGraphKey(ev);
       }
