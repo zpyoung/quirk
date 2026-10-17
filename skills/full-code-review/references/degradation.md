@@ -13,7 +13,7 @@ Name each degradation that applied in the Summary and under Assumptions.
 | No test files in the diff | `test-adequacy` and `tests` skip; if production source changed, `test-coverage` runs instead. |
 | Code not locally runnable at `refs.head` (deps unavailable, baseline suite red, or a remote change not checked out) | The mutation probe is skipped; the test lenses use static reasoning and record it as an Assumption. |
 | Mutation consent withheld | Static test reasoning and an Assumption; refusal is never an error. |
-| Large diff | `prepare_diff.py` batches by file and never silently truncates. Past the size-gate hard block the review stops instead of running shallow. |
+| Large diff | `prepare_diff.py` batches by file and never silently truncates. |
 | The forge omitted a file's diff (GitLab does this for large files without setting `overflow`; GitHub drops the file's `patch`) | Recovered from local git using the change refs. Anything unrecoverable is listed in `diff_unavailable` and reported as not reviewed, never dropped silently. |
 | No other repository is searchable for `cross-repo` | The lens degrades to local heuristics and says so in each finding's `assumptions`. |
 | A mapped model is unavailable | The lens retries once on its built-in default tier; `run.models` and Assumptions name the model that ran. |

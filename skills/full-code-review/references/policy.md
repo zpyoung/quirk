@@ -54,7 +54,7 @@ models:                        # per-lens model tier: sonnet | opus | haiku
   correctness: opus
 skip: [observability]          # lenses to skip; a union across layers
 critical_paths: ["src/payments/**"]   # union across layers; feeds the risk lens
-skip_globs: ["**/*.lock"]      # union across layers; excluded from review and the size gate
+skip_globs: ["**/*.lock"]      # union across layers; excluded from review
 cross_family:                  # opt-in second-family verification of Must/Should findings
   enabled: false
   alias: codex

@@ -52,8 +52,8 @@ Record every lens whose condition did not hold in `run.dimensions_skipped` with 
  "batched":false,"batches":[{"files":[...],"diff":"..."}]}
 ```
 
-`size` drives the Step 2 gate in SKILL.md; it counts each path once even when a local
-run has the same file both staged and unstaged. `change` is `null` whenever no change
+`size` counts each path once even when a local run has the same file both staged and
+unstaged. `change` is `null` whenever no change
 request was resolved (a `--local` run, or a git fallback); `has_description` is the single
 flag the adversarial lens gates on — it is true only when a change request was resolved
 *and* its description is non-empty.

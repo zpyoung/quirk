@@ -36,7 +36,7 @@ Policy layers apply in this order, each overriding the last:
 3. Project pack at `<repo>/.quirk/review/`.
 4. `REVIEW.md`: YAML front matter for toggles, Markdown prose for rules, nearest file to the changed code wins.
 
-In the reviewer seat, the project pack and `REVIEW.md` are read from the target branch, so a PR cannot weaken its own review. `CLAUDE.md` and `AGENTS.md` feed the conventions lens. Files marked generated (`.gitattributes linguist-generated` or skip globs in policy) are dropped before the size gate and listed in the report summary.
+In the reviewer seat, the project pack and `REVIEW.md` are read from the target branch, so a PR cannot weaken its own review. `CLAUDE.md` and `AGENTS.md` feed the conventions lens. Files marked generated (`.gitattributes linguist-generated` or skip globs in policy) are dropped before any lens reads the diff and listed in the report summary.
 
 The risk lens runs first and its rating sets verification depth for the rest. The other applicable lenses then run in parallel, each at its mapped model tier, escalating to a stronger tier on High risk or Critical findings unless policy turns escalation off. If cross-family verification is enabled, a second model family tries to refute each Must/Should finding before it reaches the report. The coordinator dedupes, calibrates severity, ranks, and writes `report.json`.
 
@@ -70,7 +70,7 @@ A failed or timed-out lens marks the whole report incomplete and names the missi
 
 ### Large change
 
-After generated files are excluded, the review warns above 30 files or 600 changed lines and refuses above 75 files or 2,000 lines, asking for a split.
+No change is refused or flagged for its size. The diff is split into batches by file and never silently truncated, and the report states the size after generated files are excluded.
 
 ### A pack overrides risk and adds a lens
 
@@ -117,7 +117,7 @@ The pack's risk rubric replaces the generic one, the added lens appears in the r
 - Risk uses a generic rubric (blast radius, reversibility, rollout safety) plus critical paths each repo declares.
 - Cross-repo uses local heuristics, including searching sibling clones on disk, plus an optional search hook a pack can supply.
 - Must and Should findings are postable by default. Nits stay in the local report unless policy lowers the floor.
-- Marked generated files are excluded from review and the size gate, and disclosed.
+- Marked generated files are excluded from review and disclosed.
 - A partial run is marked incomplete and never shown as clean.
 
 ### Model mapping

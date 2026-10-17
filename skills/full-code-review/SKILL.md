@@ -43,7 +43,7 @@ MEMORY_SCRIPT="$SCRIPTS/review_memory.py"
 
 Shell state does not persist between Bash calls. Run this block once, note the printed
 `$REVIEW_OUT_DIR`, and begin every later call by setting `REVIEW_OUT_DIR` to that path and
-re-assigning the other variables (including `REVIEW_SOURCE_ROOT` from Step 3). The `:-`
+re-assigning the other variables (including `REVIEW_SOURCE_ROOT` from Step 2). The `:-`
 default keeps the same directory when `REVIEW_OUT_DIR` is already set; a bare re-run
 would mint a new one and orphan the context file.
 
@@ -144,29 +144,7 @@ Read the printed metadata (`forge`, `source`, `mode`, `refs`, `changed_files`, `
 - `untracked_files` and `file_list_recovery`: content that **is** in the diff; report
   them as provenance notes.
 
-## Step 2: size gate
-
-| | Files changed | Lines changed |
-|---|---|---|
-| **Warn** | > 30 | > 600 |
-| **Hard block** | > 75 | > 2000 |
-
-**Hard block**: stop and output exactly:
-
-> ⛔ **Change too large to review reliably** — N files, N lines changed.
->
-> A review at this size produces findings too shallow to be actionable. Please split
-> the change before requesting a review. If splitting is impractical, ask a human
-> reviewer instead.
-
-**Warn**: put this at the top of the report and continue:
-
-> ⚠️ **Large change** — N files, N lines changed. Review depth may be reduced for areas
-> with many small or mechanical changes. Consider splitting it for a more thorough pass.
-
-Note the size and any notice in the Summary either way.
-
-## Step 3: select the source root
+## Step 2: select the source root
 
 **Author seat and `--local`**: use the current repository root and bind it for every
 later step:
@@ -221,7 +199,7 @@ source-dependent lenses are skipped and named, and the reason goes in
 python3 "$SCRIPTS/borrow_review_source.py" release --manifest "$SOURCE_MANIFEST"
 ```
 
-## Step 4: policy, guidance, scope intent, and memory
+## Step 3: policy, guidance, scope intent, and memory
 
 **Policy.** Resolve the layers in `$REFS/policy.md` and drop generated files before
 anything else reads the diff:
@@ -240,8 +218,7 @@ out in the author seat. For a diff-only run there is no checkout to read, so rep
 Exit 2 means a malformed pack or `REVIEW.md`; show the named file and line and stop.
 `policy.json` fixes the lenses that run (`lenses`, each with its checklist path and
 model), `skipped`, `severity_floor`, `escalation`, `critical_paths`, `cross_family`,
-`cross_repo`, and `guidance_files`. Re-check the Step 2 size gate against the filtered
-`size`, and list `excluded_generated` in the Summary.
+`cross_repo`, and `guidance_files`. List `excluded_generated` in the Summary.
 
 **Repo conventions.** Against `REVIEW_SOURCE_ROOT`:
 
@@ -305,9 +282,9 @@ until a fresh cross-check succeeds. Never pass the snapshot, ledger, discussion 
 or previous reports to a lens; the coordinator may extract only `unchanged_files` and
 the prior head SHA for the neutral annotation in `orchestration.md`.
 
-## Step 5: fan out the lenses
+## Step 4: fan out the lenses
 
-With `--deep [minutes]`, follow `$REFS/deep.md` after Step 4: check execution trust,
+With `--deep [minutes]`, follow `$REFS/deep.md` after Step 3: check execution trust,
 ask once for consent only when allowed, run `risk`, then build the area map. Run standard
 lenses without executing code, plus area finders and the contract lens within its
 80% finder-start cutoff.
@@ -343,10 +320,10 @@ the dispatch: in reviewer seat only when the current manifest says
 `mutation_consent: true`, in author seat only after the user agrees. Refusal is not an
 error.
 
-## Step 6: coordinate
+## Step 5: coordinate
 
 In deep mode, send every deep candidate and standard-lens Must/Should finding to a fresh
-checker, merge checked results, then reconcile memory in Step 7.
+checker, merge checked results, then reconcile memory in Step 6.
 
 **Incomplete runs.** A lens that still fails after the model-fallback retry goes in
 `run.dimensions_failed`, and the report is incomplete: it is never presented as clean.
@@ -361,7 +338,7 @@ unreachable or cosmetic), rank, aggregate assumptions, and reduce across batches
 memory out of dedup, verification, and severity. Use the lexically first lens as the
 singular `dimension` after merging tags, consistently across runs.
 
-## Step 7: author `report.json`
+## Step 6: author `report.json`
 
 Author the structured findings and narrative blocks defined in `$REFS/html-report.md`
 (Summary, Risk Assessment, Findings, Assumptions, Recommendations) and write
@@ -401,7 +378,7 @@ Exact unique fingerprints carry decisions; fuzzy candidates, ambiguous anchors, 
 resolved matches need explicit triage; a missing anchor fails toward new. "Appears
 fixed" is an observation, never permission to resolve a discussion.
 
-## Step 8: render
+## Step 7: render
 
 ```bash
 python3 "$SCRIPTS/render_report.py" --in "$REPORT_JSON" --format <html|md|both> [--no-open]
@@ -412,7 +389,7 @@ terminal digest: tally and verdict, lenses run, skipped, and failed, any `run.co
 gap or unreviewed file, one line per Must/Should, and the artifact paths. A failed lens
 or unreviewed file must show in the digest, so it never reads as a clean review.
 
-## Step 9: triage
+## Step 8: triage
 
 ```bash
 python3 "$SCRIPTS/validate_triage.py" --report "$REPORT_JSON" \
@@ -437,7 +414,7 @@ failure, tell the user their triage decisions were not saved.
 
 Keep the report unchanged after validation; the decisions artifact is bound to it.
 
-## Step 10: deliver
+## Step 9: deliver
 
 Follow `$REFS/posting.md`. With no supported forge, delivery is the rendered report and
 `report.json` path; nothing posts. Headless runs stop after the report.
