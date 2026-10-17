@@ -1089,3 +1089,187 @@ def test_flow_node_limits_and_edge_label_warning_and_coordinates_rejected() -> N
 
     with_coords = {"nodes": [{"id": "a", "label": "A", "x": 10, "y": 20}]}
     assert any("positions are laid out automatically" in m for m in messages(flow_markup(with_coords)))
+
+
+def decision_graph(exits: list[dict], label: str = "Paid?", extra_nodes: list[dict] | None = None) -> dict:
+    return {
+        "nodes": [
+            {"id": "paid", "label": label, "shape": "decision"},
+            {"id": "ship", "label": "Ship"},
+            {"id": "retry", "label": "Retry"},
+            *(extra_nodes or []),
+        ],
+        "edges": [{"from": "paid", **x} for x in exits],
+    }
+
+
+def test_flow_unknown_shape_fails() -> None:
+    payload = {"nodes": [{"id": "a", "label": "A", "shape": "oval"}]}
+    assert messages(flow_markup(payload)) == ['<q-flow> node "a" has unknown shape "oval"; use box, decision or subprocess']
+    assert messages(flow_markup({"nodes": [{"id": "a", "label": "A", "shape": "box"}]})) == []
+
+
+def test_flow_decision_needs_two_exits() -> None:
+    one_exit = decision_graph([{"to": "ship", "label": "Yes"}])
+    assert messages(flow_markup(one_exit)) == ['<q-flow> decision "paid" needs at least 2 exits']
+    no_exit = decision_graph([])
+    assert messages(flow_markup(no_exit)) == ['<q-flow> decision "paid" needs at least 2 exits']
+
+
+def test_flow_decision_exits_need_labels() -> None:
+    expected = ['<q-flow> every exit of decision "paid" needs a label']
+    missing = decision_graph([{"to": "ship", "label": "Yes"}, {"to": "retry"}])
+    assert messages(flow_markup(missing)) == expected
+    empty = decision_graph([{"to": "ship", "label": "Yes"}, {"to": "retry", "label": "  "}])
+    assert messages(flow_markup(empty)) == expected
+
+
+def test_flow_loop_exit_counts_toward_a_decisions_two_exits_and_needs_a_label() -> None:
+    labelled = decision_graph([{"to": "ship", "label": "Yes"}, {"to": "retry", "label": "No", "loop": True}])
+    assert messages(flow_markup(labelled)) == []
+    unlabelled = decision_graph([{"to": "ship", "label": "Yes"}, {"to": "retry", "loop": True}])
+    assert messages(flow_markup(unlabelled)) == ['<q-flow> every exit of decision "paid" needs a label']
+    self_exit = decision_graph([{"to": "ship", "label": "Yes"}, {"to": "paid", "label": "Again"}])
+    assert messages(flow_markup(self_exit)) == []
+
+
+def test_flow_decision_label_over_24_characters_warns() -> None:
+    exits = [{"to": "ship", "label": "Yes"}, {"to": "retry", "label": "No"}]
+    long_label = "Has the customer confirmed their address?"
+    payload = decision_graph(exits, label=long_label)
+    assert messages(flow_markup(payload)) == []
+    assert warn_messages(flow_markup(payload)) == [
+        '<q-flow> decision "paid" label is 41 characters: decision labels over 24 characters overflow the diamond'
+    ]
+    assert warn_messages(flow_markup(decision_graph(exits, label="x" * 24))) == []
+    long_box = {"nodes": [{"id": "a", "label": long_label}]}
+    assert warn_messages(flow_markup(long_box)) == []
+
+
+def test_flow_decision_exits_with_the_same_label_warn() -> None:
+    twice = decision_graph([{"to": "ship", "label": "Yes"}, {"to": "retry", "label": "Yes"}])
+    assert messages(flow_markup(twice)) == []
+    assert warn_messages(flow_markup(twice)) == ['<q-flow> decision "paid" has two exits labelled "Yes"']
+    differing_case = decision_graph([{"to": "ship", "label": "Yes"}, {"to": "retry", "label": "yes"}])
+    assert warn_messages(flow_markup(differing_case)) == []
+
+
+def test_flow_names_a_flow_only_on_a_subprocess() -> None:
+    expected = ['<q-flow> node "a" names a flow, but only a subprocess can name a flow']
+    for shape in ({}, {"shape": "box"}, {"shape": "decision"}):
+        payload = {"nodes": [{"id": "a", "label": "A", "flow": "other", **shape}]}
+        assert expected[0] in messages(flow_markup(payload)), shape
+    non_string = {"nodes": [{"id": "a", "label": "A", "flow": 7}]}
+    assert messages(flow_markup(non_string)) == expected
+
+
+def test_flow_subprocess_flow_must_be_a_non_empty_string() -> None:
+    expected = ['<q-flow> node "a" flow must be the id of another q-flow']
+    for bad in ("", "  ", 7, True, ["x"]):
+        payload = {"nodes": [{"id": "a", "label": "A", "shape": "subprocess", "flow": bad}]}
+        assert messages(flow_markup(payload)) == expected, bad
+    without_flow = {"nodes": [{"id": "a", "label": "A", "shape": "subprocess"}]}
+    assert messages(flow_markup(without_flow)) == []
+
+
+def test_flow_subprocess_flow_names_another_graph_on_the_page() -> None:
+    main = {"nodes": [{"id": "a", "label": "A", "shape": "subprocess", "flow": "refund-flow"}]}
+    other = {"nodes": [{"id": "r", "label": "Refund"}]}
+    page = flow_markup(main, attrs='id="main-flow" summary="Main."') + flow_markup(
+        other, attrs='id="refund-flow" summary="Refund."'
+    )
+    assert messages(page) == []
+    assert warn_messages(page) == []
+
+    swapped = flow_markup(other, attrs='id="refund-flow" summary="Refund."') + flow_markup(
+        main, attrs='id="main-flow" summary="Main."'
+    )
+    assert messages(swapped) == []
+
+
+def test_flow_subprocess_flow_naming_no_graph_or_its_own_graph_fails() -> None:
+    main = {"nodes": [{"id": "a", "label": "A", "shape": "subprocess", "flow": "refunds"}]}
+    lone = flow_markup(main, attrs='id="main-flow" summary="Main."')
+    assert messages(lone) == ['<q-flow> flow "refunds" names no q-flow on this page']
+
+    elsewhere = flow_markup({"nodes": [{"id": "r", "label": "R"}]}, attrs='id="refund-flow" summary="R."')
+    assert messages(lone + elsewhere) == ['<q-flow> flow "refunds" names no q-flow on this page']
+
+    own = {"nodes": [{"id": "a", "label": "A", "shape": "subprocess", "flow": "main-flow"}]}
+    assert messages(flow_markup(own, attrs='id="main-flow" summary="Main."')) == [
+        '<q-flow> flow "main-flow" names no q-flow on this page'
+    ]
+
+
+def test_flow_loop_must_be_a_boolean() -> None:
+    expected = ["<q-flow> edge loop must be true or false"]
+    for bad in ("yes", 1, "true", ["x"]):
+        payload = {
+            "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+            "edges": [{"from": "a", "to": "b"}, {"from": "b", "to": "a", "loop": bad}],
+        }
+        assert messages(flow_markup(payload)) == expected, bad
+
+
+def test_flow_cycle_over_forward_edges_warns_once_per_component() -> None:
+    payload = {
+        "nodes": [{"id": n, "label": n.upper()} for n in ("a", "b", "c", "d", "e", "f")],
+        "edges": [
+            {"from": "e", "to": "f"},
+            {"from": "f", "to": "e"},
+            {"from": "a", "to": "b"},
+            {"from": "b", "to": "c"},
+            {"from": "c", "to": "a"},
+            {"from": "c", "to": "d"},
+        ],
+    }
+    assert messages(flow_markup(payload)) == []
+    assert warn_messages(flow_markup(payload)) == [
+        '<q-flow> has a cycle with no loop edge through "a", "b", "c": mark the return edge with loop: true',
+        '<q-flow> has a cycle with no loop edge through "e", "f": mark the return edge with loop: true',
+    ]
+
+
+def test_flow_cycle_broken_by_a_loop_edge_or_a_self_loop_does_not_warn() -> None:
+    marked = {
+        "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+        "edges": [{"from": "a", "to": "b"}, {"from": "b", "to": "a", "loop": True}],
+    }
+    assert warn_messages(flow_markup(marked)) == []
+    self_loop = {
+        "nodes": [{"id": "poll", "label": "Status poller"}],
+        "edges": [{"from": "poll", "to": "poll", "label": "every 30s"}],
+    }
+    assert messages(flow_markup(self_loop)) == []
+    assert warn_messages(flow_markup(self_loop)) == []
+    marked_self_loop = {**self_loop, "edges": [{"from": "poll", "to": "poll", "loop": True}]}
+    assert warn_messages(flow_markup(marked_self_loop)) == []
+
+
+def test_flow_graph_using_every_new_field_passes_clean() -> None:
+    main = {
+        "kinds": {"ui": 1, "worker": 2, "queue": 3},
+        "nodes": [
+            {"id": "checkout", "label": "Checkout", "kind": "ui"},
+            {"id": "charge", "label": "Charge worker", "kind": "worker"},
+            {"id": "paid", "label": "Paid?", "kind": "worker", "shape": "decision"},
+            {"id": "ship", "label": "Ship", "kind": "worker"},
+            {"id": "retry", "label": "Retry queue", "kind": "queue"},
+            {"id": "refund", "label": "Issue refund", "shape": "subprocess", "flow": "refund-flow"},
+            {"id": "poll", "label": "Status poller"},
+        ],
+        "edges": [
+            {"from": "checkout", "to": "charge", "label": "order.created", "async": True},
+            {"from": "charge", "to": "paid"},
+            {"from": "paid", "to": "ship", "label": "Yes"},
+            {"from": "paid", "to": "retry", "label": "No"},
+            {"from": "retry", "to": "charge", "label": "retry up to 3x", "loop": True},
+            {"from": "ship", "to": "refund", "label": "on return"},
+            {"from": "poll", "to": "poll", "label": "every 30s"},
+        ],
+    }
+    page = flow_markup(main, attrs='id="checkout-flow" summary="Checkout."') + flow_markup(
+        {"nodes": [{"id": "r", "label": "Refund"}]}, attrs='id="refund-flow" summary="Refund."'
+    )
+    assert messages(page) == []
+    assert warn_messages(page) == []
