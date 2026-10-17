@@ -156,12 +156,12 @@ try {
   if (spec.javaScript !== false) {
     try {
       await page.waitForFunction(
-        () => [...document.querySelectorAll("q-flow")].every((el) => el.hasAttribute("data-q-flow-ready")),
+        () => [...document.querySelectorAll("q-flow, q-schema")].every((el) => el.hasAttribute("data-q-flow-ready")),
         null,
         { timeout: 10000 },
       );
     } catch (err) {
-      out.failedSteps.push({ index: -1, step: { waitFor: "q-flow" }, error: String(err.message).split("\n")[0] });
+      out.failedSteps.push({ index: -1, step: { waitFor: "q-flow, q-schema" }, error: String(err.message).split("\n")[0] });
     }
   }
 
@@ -187,7 +187,7 @@ try {
         await page.reload({ waitUntil: "load" });
         if (spec.javaScript !== false) {
           await page.waitForFunction(
-            () => [...document.querySelectorAll("q-flow")].every((el) => el.hasAttribute("data-q-flow-ready")),
+            () => [...document.querySelectorAll("q-flow, q-schema")].every((el) => el.hasAttribute("data-q-flow-ready")),
             null,
             { timeout: 10000 },
           );

@@ -6630,3 +6630,1013 @@ def test_flow_trace_panel_is_hidden_with_the_controls_when_printing(flow_traces_
     )
     assert_clean(out)
     assert out["results"]["display"] == ["none", "none", "none"]
+
+
+# --- q-schema ---------------------------------------------------------------------------------
+
+
+def _schema_field(name: str, ftype: str, key: object = None, nullable: bool = False) -> dict:
+    field: dict = {"name": name, "type": ftype}
+    if key:
+        field["key"] = key
+    if nullable:
+        field["nullable"] = True
+    return field
+
+
+def _schema_rel(src: str, dst: str, from_card: str, to_card: str, label: str | None = None) -> dict:
+    rel = {"from": src, "to": dst, "from_card": from_card, "to_card": to_card}
+    if label:
+        rel["label"] = label
+    return rel
+
+
+def _schema_tag(tag_id: str, summary: str, data: dict, notation: str | None = None) -> str:
+    attr = f' notation="{notation}"' if notation else ""
+    return (
+        f'<q-schema id="{tag_id}" summary="{summary}"{attr}>\n  <script type="application/json">\n'
+        f"{json.dumps(data, indent=2)}\n  </script>\n</q-schema>\n"
+    )
+
+
+SCHEMA_BILLING_DATA = {
+    "kinds": {"core": 1, "billing": 2},
+    "groups": [{"id": "billing", "label": "Billing"}],
+    "entities": [
+        {
+            "id": "customer",
+            "label": "Customer",
+            "kind": "core",
+            "fields": [
+                _schema_field("id", "int", "PK"),
+                _schema_field("email", "text", "UK"),
+                _schema_field("first_name", "text"),
+                _schema_field("last_name", "text"),
+                _schema_field("created_at", "timestamp"),
+            ],
+        },
+        {
+            "id": "subscription",
+            "label": "Subscription",
+            "kind": "billing",
+            "group": "billing",
+            "detail": "<p>A recurring order for one customer.</p>",
+            "fields": [
+                _schema_field("id", "int", "PK"),
+                _schema_field("customer_id", "int", "FK"),
+                _schema_field("product_title", "text"),
+                _schema_field("status", "text"),
+                _schema_field("next_charge_date", "date"),
+                _schema_field("interval", "text"),
+            ],
+        },
+        {
+            "id": "charge",
+            "label": "Charge",
+            "kind": "billing",
+            "group": "billing",
+            "fields": [
+                _schema_field("id", "int", "PK"),
+                _schema_field("status", "text"),
+                _schema_field("total_price", "decimal"),
+                _schema_field("currency", "text"),
+                _schema_field("scheduled_at", "timestamp"),
+                _schema_field("processed_at", "timestamp"),
+                _schema_field("error_type", "text"),
+                _schema_field("error", "text"),
+                _schema_field("retry_count", "int"),
+                _schema_field("tags", "text"),
+                _schema_field("note", "text"),
+                _schema_field("created_at", "timestamp"),
+                _schema_field("updated_at", "timestamp"),
+                _schema_field("customer_id", "int", "FK"),
+                _schema_field("subscription_id", "int", "FK", nullable=True),
+            ],
+        },
+        {
+            "id": "line_item",
+            "label": "Line item",
+            "kind": "billing",
+            "group": "billing",
+            "fields": [
+                _schema_field("id", "int", "PK"),
+                _schema_field("charge_id", "int", "FK"),
+                _schema_field("title", "text"),
+                _schema_field("quantity", "int"),
+                _schema_field("price", "decimal"),
+            ],
+        },
+    ],
+    "relationships": [
+        _schema_rel("subscription.customer_id", "customer.id", "zero-or-many", "one", "has"),
+        _schema_rel("charge.customer_id", "customer.id", "zero-or-many", "one", "is billed"),
+        _schema_rel("charge.subscription_id", "subscription.id", "zero-or-many", "zero-or-one", "generates"),
+        _schema_rel("line_item.charge_id", "charge.id", "one-or-many", "one", "contains"),
+    ],
+}
+
+SCHEMA_EMPLOYEE_DATA = {
+    "entities": [
+        {
+            "id": "employee",
+            "label": "Employee",
+            "fields": [
+                _schema_field("id", "int", "PK"),
+                _schema_field("manager_id", "int", "FK", nullable=True),
+                _schema_field("name", "text"),
+            ],
+        }
+    ],
+    "relationships": [_schema_rel("employee.manager_id", "employee.id", "zero-or-many", "zero-or-one", "manages")],
+}
+
+SCHEMA_SMALL_DATA = {
+    "entities": [
+        {"id": "author", "label": "Author", "fields": [_schema_field("id", "int", "PK"), _schema_field("name", "text")]},
+        {
+            "id": "book",
+            "label": "Book",
+            "fields": [
+                _schema_field("id", "int", "PK"),
+                _schema_field("author_id", "int", "FK"),
+                _schema_field("title", "text"),
+            ],
+        },
+    ],
+    "relationships": [_schema_rel("book.author_id", "author.id", "zero-or-many", "one", "wrote")],
+}
+
+SCHEMA_BROKEN_DATA = {
+    "entities": [
+        {"id": "note", "label": "Note", "fields": [_schema_field("id", "int", "PK"), _schema_field("body", "text")]},
+        {"id": "tag", "label": "Tag", "fields": [_schema_field("id", "int", "PK"), _schema_field("note_id", "int", "FK")]},
+    ],
+    "relationships": [_schema_rel("tag.note_id", "note.id", "zero-or-many", "one")],
+}
+
+SCHEMA_CLASS_DATA = {
+    "entities": [
+        {"id": "parser", "label": "Parser", "stereotype": "interface", "methods": [{"signature": "parse(src: str) -> Ast"}]},
+        {
+            "id": "lexer",
+            "label": "Lexer",
+            "fields": [{"name": "src", "type": "str", "visibility": "private"}, {"name": "limit", "visibility": "public", "static": True}],
+            "methods": [{"signature": "next() -> Token", "visibility": "public"}],
+        },
+    ],
+    "relationships": [
+        {"from": "parser", "to": "lexer", "type": "composition", "to_mult": "1", "label": "owns"},
+        {"from": "lexer", "to": "parser", "type": "dependency"},
+    ],
+}
+
+SCHEMA_PAGE = (
+    '<button type="button" id="schema-before">Before the models</button>\n'
+    + _schema_tag(
+        "schema-billing", "Customers, their subscriptions, and the charges and line items billing creates.", SCHEMA_BILLING_DATA
+    )
+    + _schema_tag("schema-employee", "Employees and their managers.", SCHEMA_EMPLOYEE_DATA)
+    + _schema_tag("schema-small", "Authors and their books.", SCHEMA_SMALL_DATA)
+    + _schema_tag("schema-broken", "Notes and their tags.", SCHEMA_BROKEN_DATA)
+    + _schema_tag("schema-uml", "Authors and their books, in an unknown notation.", SCHEMA_SMALL_DATA)
+    + _schema_tag("schema-class", "Parsing classes.", SCHEMA_CLASS_DATA, notation="class")
+)
+
+
+@pytest.fixture(scope="module")
+def schema_page(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    reason = _node_ready()
+    if reason:
+        pytest.skip(reason)
+    work = tmp_path_factory.mktemp("kit-schema")
+    src = work / "schema.src.html"
+    src.write_text(HEADER + SCHEMA_PAGE, encoding="utf-8")
+    built = _build(src, work / "schema.html")
+    # the failing models are edited in after the build so the build-time check never sees them
+    html = built.read_text(encoding="utf-8")
+    bad_end = '"to": "note.id"'
+    assert html.count(bad_end) == 1
+    html = html.replace(bad_end, '"to": "note.uuid"')
+    unknown = '<q-schema id="schema-uml" summary="Authors and their books, in an unknown notation.">'
+    assert unknown in html
+    html = html.replace(unknown, unknown.replace(">", ' notation="uml">'))
+    built.write_text(html, encoding="utf-8")
+    return built
+
+
+SCHEMA_GEOMETRY_JS = """
+  const num = (s) => (s.match(/-?\\d+(?:\\.\\d+)?(?:e-?\\d+)?/g) || []).map(Number);
+  const pathPoints = (d) => { const n = num(d); const out = []; for (let i = 0; i + 1 < n.length; i += 2) out.push({ x: n[i], y: n[i + 1] }); return out; };
+  const card = (m, id) => m.querySelector('[data-q-schema-entity="' + id + '"]');
+  const cardBox = (m, id) => card(m, id).querySelector('[data-q-schema-card]').getBBox();
+  const rowY = (m, id, name) => Number(card(m, id).querySelector('[data-q-schema-field="' + name + '"]').getAttribute('data-q-schema-row-y'));
+  const relAt = (m, idx) => m.querySelector('[data-q-schema-rel="' + idx + '"]');
+  const lineOf = (rel) => rel.querySelector('[data-q-flow-edge-line]');
+  const segDistance = (p, a, b) => {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy;
+    const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2));
+    return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+  };
+  const markKind = (m, url) => {
+    const id = (url || '').replace(/^url\\(#/, '').replace(/\\)$/, '');
+    const mk = m.querySelector('[id="' + id + '"]');
+    return mk && mk.getAttribute('data-q-schema-mark');
+  };
+  const entityIds = (m, attr) => [...m.querySelectorAll('[data-q-schema-entity][' + attr + ']')].map((e) => e.getAttribute('data-q-schema-entity')).sort();
+  const relIdx = (m, attr) => [...m.querySelectorAll('[data-q-schema-rel][' + attr + ']')].map((e) => Number(e.getAttribute('data-q-schema-rel'))).sort();
+  const drawerState = (m) => {
+    const d = m.querySelector('[data-q-flow-drawer]');
+    return {
+      open: !d.hasAttribute('data-q-inactive'),
+      heading: d.querySelector('h3') && d.querySelector('h3').textContent,
+      fields: [...d.querySelectorAll('[data-q-schema-drawer-field]')].map((e) => e.textContent),
+      buttons: [...d.querySelectorAll('[data-q-flow-edge-btn]')].map((e) => e.textContent),
+    };
+  };
+"""
+
+SCHEMA_RELS = [
+    (0, "subscription", "customer_id", "customer", "id", "zero-or-many", "one", "has"),
+    (1, "charge", "customer_id", "customer", "id", "zero-or-many", "one", "is billed"),
+    (2, "charge", "subscription_id", "subscription", "id", "zero-or-many", "zero-or-one", "generates"),
+    (3, "line_item", "charge_id", "charge", "id", "one-or-many", "one", "contains"),
+]
+
+
+def test_schema_billing_draws_four_cards_with_three_inside_the_billing_panel(schema_page: Path) -> None:
+    out = run(
+        schema_page,
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-billing');
+              const g = m.querySelector('[data-q-flow-group="billing"] [data-q-flow-group-box]');
+              const gb = {{ x: +g.getAttribute('x'), y: +g.getAttribute('y'), w: +g.getAttribute('width'), h: +g.getAttribute('height') }};
+              const inside = (id) => {{
+                const b = cardBox(m, id);
+                return b.x >= gb.x && b.y >= gb.y && b.x + b.width <= gb.x + gb.w && b.y + b.height <= gb.y + gb.h;
+              }};
+              const accent = (id) => card(m, id).querySelector('[data-q-schema-accent]').getAttribute('fill');
+              return {{
+                ready: m.getAttribute('data-q-flow-ready'),
+                cards: [...m.querySelectorAll('[data-q-schema-entity]')].map((e) => e.getAttribute('data-q-schema-entity')),
+                inside: ['customer', 'subscription', 'charge', 'line_item'].map(inside),
+                accents: ['customer', 'subscription', 'charge', 'line_item'].map(accent),
+                rels: m.querySelectorAll('[data-q-schema-rel]').length,
+                groupLabel: m.querySelector('[data-q-flow-group-header] text').textContent,
+                role: card(m, 'charge').getAttribute('role'),
+                aria: card(m, 'charge').getAttribute('aria-label'),
+                listOpen: m.querySelector('[data-q-flow-list]').open,
+              }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["ready"] == "true"
+    assert d["cards"] == ["customer", "subscription", "charge", "line_item"]
+    assert d["inside"] == [False, True, True, True]
+    assert d["accents"] == ["var(--q-color-chart-1)"] + ["var(--q-color-chart-2)"] * 3
+    assert d["rels"] == 4
+    assert d["groupLabel"] == "Billing"
+    assert d["role"] == "button"
+    assert d["aria"] == "Charge, billing, 15 fields, 3 relationships"
+    assert d["listOpen"] is False
+
+
+def test_schema_each_line_runs_between_the_field_rows_it_names_with_its_marks_and_label(schema_page: Path) -> None:
+    out = run(
+        schema_page,
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-billing');
+              return {json.dumps(SCHEMA_RELS)}.map(([idx, fromE, fromF, toE, toF]) => {{
+                const rel = relAt(m, idx);
+                const line = lineOf(rel);
+                const pts = pathPoints(line.getAttribute('d'));
+                const first = pts[0], last = pts[pts.length - 1];
+                const toBox = cardBox(m, toE), fromBox = cardBox(m, fromE);
+                const lbl = rel.querySelector('[data-q-schema-rel-label]');
+                const lb = lbl.querySelector('rect').getBBox();
+                const centre = {{ x: lb.x + lb.width / 2, y: lb.y + lb.height / 2 }};
+                let near = Infinity;
+                for (let i = 0; i + 1 < pts.length; i += 1) near = Math.min(near, segDistance(centre, pts[i], pts[i + 1]));
+                return {{
+                  from: rel.getAttribute('data-q-schema-from'),
+                  to: rel.getAttribute('data-q-schema-to'),
+                  fromMark: rel.getAttribute('data-q-schema-from-mark'),
+                  toMark: rel.getAttribute('data-q-schema-to-mark'),
+                  startRow: Math.abs(first.y - rowY(m, toE, toF)),
+                  startEdge: Math.abs(first.x - (toBox.x + toBox.width)),
+                  endRow: Math.abs(last.y - rowY(m, fromE, fromF)),
+                  endEdge: Math.abs(last.x - fromBox.x),
+                  startMarker: markKind(m, line.getAttribute('marker-start')),
+                  endMarker: markKind(m, line.getAttribute('marker-end')),
+                  label: lbl.textContent,
+                  labelOffLine: near,
+                }};
+              }});
+            }})()""",
+            "rels",
+        ),
+    )
+    assert_clean(out)
+    for (idx, from_e, _ff, to_e, _tf, from_card, to_card, label), got in zip(SCHEMA_RELS, out["results"]["rels"]):
+        assert (got["from"], got["to"]) == (from_e, to_e), idx
+        assert (got["fromMark"], got["toMark"]) == (from_card, to_card), idx
+        assert got["startRow"] <= 1 and got["endRow"] <= 1, (idx, got)
+        assert got["startEdge"] <= 1 and got["endEdge"] <= 1, (idx, got)
+        assert got["startMarker"] == to_card and got["endMarker"] == from_card, (idx, got)
+        assert got["label"] == label, idx
+        assert got["labelOffLine"] <= 14, (idx, got)
+
+
+def test_schema_marks_are_scoped_markers_with_theme_colours_per_model(schema_page: Path) -> None:
+    out = run(
+        schema_page,
+        ev(
+            """(() => {
+              const ids = (m) => [...m.querySelectorAll('marker')].map((e) => e.id);
+              const billing = document.querySelector('#schema-billing');
+              const small = document.querySelector('#schema-small');
+              const some = billing.querySelector('marker');
+              const kinds = [...new Set([...billing.querySelectorAll('marker[data-q-schema-mark]')].map((e) => e.getAttribute('data-q-schema-mark')))].sort();
+              return {
+                orient: some.getAttribute('orient'),
+                kinds,
+                disjoint: ids(billing).every((id) => !ids(small).includes(id)),
+                sameSvgIds: new Set(ids(billing)).size === ids(billing).length,
+                strokes: [...billing.querySelectorAll('marker *')].every((e) => ['stroke', 'fill'].every((a) => !e.hasAttribute(a) || e.getAttribute(a) === 'none' || e.getAttribute(a).startsWith('var(--q-color-'))),
+              };
+            })()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["orient"] == "auto-start-reverse"
+    assert d["kinds"] == ["one", "one-or-many", "zero-or-many", "zero-or-one"]
+    assert d["disjoint"] is True and d["sameSvgIds"] is True and d["strokes"] is True
+
+
+def test_schema_charge_folds_to_eight_rows_with_keys_and_related_fields_shown(schema_page: Path) -> None:
+    out = run(
+        schema_page,
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-billing');
+              const c = card(m, 'charge');
+              const rows = [...c.querySelectorAll('[data-q-schema-field]')];
+              const more = c.querySelectorAll('[data-q-schema-more]');
+              const lastRow = rows[rows.length - 1];
+              const moreY = Number(more[0].querySelector('[data-q-schema-row-bg]').getAttribute('y'));
+              return {{
+                names: rows.map((r) => r.getAttribute('data-q-schema-field')),
+                types: rows.map((r) => r.querySelector('[data-q-schema-type]').textContent),
+                badges: [...c.querySelectorAll('[data-q-schema-badge]')].map((b) => b.getAttribute('data-q-schema-badge') + ':' + b.textContent),
+                moreCount: more.length,
+                moreText: more[0].textContent,
+                moreBelowRows: moreY >= Number(lastRow.getAttribute('data-q-schema-row-y')),
+                customerMore: card(m, 'customer').querySelectorAll('[data-q-schema-more]').length,
+                customerRows: card(m, 'customer').querySelectorAll('[data-q-schema-field]').length,
+                nullableNote: rows[rows.length - 1].textContent,
+              }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["names"] == [
+        "id",
+        "status",
+        "total_price",
+        "currency",
+        "scheduled_at",
+        "processed_at",
+        "customer_id",
+        "subscription_id",
+    ]
+    assert d["types"][0] == "int" and d["types"][2] == "decimal"
+    assert d["badges"] == ["PK:PK", "FK:FK", "FK:FK"]
+    assert d["moreCount"] == 1 and d["moreText"] == "+7 more" and d["moreBelowRows"] is True
+    assert d["customerMore"] == 0 and d["customerRows"] == 5
+
+
+def test_schema_self_relationship_is_a_loop_from_the_manager_row_to_the_id_row(schema_page: Path) -> None:
+    out = run(
+        schema_page,
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-employee');
+              const rel = relAt(m, 0);
+              const line = lineOf(rel);
+              const d = line.getAttribute('d');
+              const pts = pathPoints(d);
+              const b = cardBox(m, 'employee');
+              const lbl = rel.querySelector('[data-q-schema-rel-label]');
+              return {{
+                ready: m.getAttribute('data-q-flow-ready'),
+                startRow: Math.abs(pts[0].y - rowY(m, 'employee', 'manager_id')),
+                endRow: Math.abs(pts[pts.length - 1].y - rowY(m, 'employee', 'id')),
+                startEdge: Math.abs(pts[0].x - (b.x + b.width)),
+                endEdge: Math.abs(pts[pts.length - 1].x - (b.x + b.width)),
+                reach: Math.max(...pts.map((p) => p.x)) - (b.x + b.width),
+                rounded: d.includes('Q'),
+                pointCount: pts.length,
+                startMarker: markKind(m, line.getAttribute('marker-start')),
+                endMarker: markKind(m, line.getAttribute('marker-end')),
+                label: lbl.textContent,
+                labelBeside: lbl.querySelector('rect').getBBox().x >= b.x + b.width,
+                cards: m.querySelectorAll('[data-q-schema-entity]').length,
+              }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["ready"] == "true" and d["cards"] == 1
+    assert d["startRow"] <= 1 and d["endRow"] <= 1
+    assert d["startEdge"] <= 1 and d["endEdge"] <= 1
+    assert 20 <= d["reach"] <= 30
+    assert d["rounded"] is True and d["pointCount"] > 2
+    assert (d["startMarker"], d["endMarker"]) == ("zero-or-many", "zero-or-one")
+    assert d["label"] == "manages" and d["labelBeside"] is True
+
+
+def test_schema_focus_lights_a_card_its_lines_and_direct_neighbours_and_opens_its_drawer(schema_page: Path) -> None:
+    out = run(
+        schema_page,
+        {"click": '#schema-billing [data-q-schema-entity="subscription"]'},
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-billing');
+              return {{
+                lit: entityIds(m, 'data-q-flow-lit'),
+                dim: entityIds(m, 'data-q-flow-dim'),
+                selected: entityIds(m, 'data-q-flow-selected'),
+                litRels: relIdx(m, 'data-q-flow-lit'),
+                dimRels: relIdx(m, 'data-q-flow-dim'),
+                drawer: drawerState(m),
+                kind: m.querySelector('[data-q-flow-drawer-kind]').textContent,
+                detail: m.querySelector('[data-q-flow-drawer-detail]').textContent,
+                live: m.querySelector('[data-q-flow-live]').textContent,
+                pulsing: m.hasAttribute('data-q-flow-pulsing'),
+              }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["lit"] == ["charge", "customer", "subscription"]
+    assert d["dim"] == ["line_item"]
+    assert d["selected"] == ["subscription"]
+    assert d["litRels"] == [0, 2]
+    assert d["dimRels"] == [1, 3]
+    assert d["drawer"]["open"] is True
+    assert d["drawer"]["heading"] == "Subscription"
+    assert d["drawer"]["fields"] == [
+        "id: int, PK",
+        "customer_id: int, FK",
+        "product_title: text",
+        "status: text",
+        "next_charge_date: date",
+        "interval: text",
+    ]
+    assert d["drawer"]["buttons"] == ["has: Customer (customer_id → id)", "generates: Charge (subscription_id → id)"]
+    assert d["kind"] == "billing"
+    assert d["detail"] == "A recurring order for one customer."
+    assert d["live"] == "Subscription, billing, 6 fields, 2 relationships"
+    assert d["pulsing"] is False
+
+
+def test_schema_relationship_button_refocuses_the_entity_at_the_other_end(schema_page: Path) -> None:
+    out = run(
+        schema_page,
+        {"click": '#schema-billing [data-q-schema-entity="subscription"]'},
+        {"click": '#schema-billing [data-q-flow-edge-btn][data-q-flow-target="charge"]'},
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-billing');
+              const drawer = drawerState(m);
+              return {{
+                lit: entityIds(m, 'data-q-flow-lit'),
+                selected: entityIds(m, 'data-q-flow-selected'),
+                heading: drawer.heading,
+                fieldCount: drawer.fields.length,
+                last: drawer.fields[drawer.fields.length - 1],
+                buttons: drawer.buttons,
+              }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["lit"] == ["charge", "customer", "line_item", "subscription"]
+    assert d["selected"] == ["charge"]
+    assert d["heading"] == "Charge" and d["fieldCount"] == 15
+    assert d["last"] == "subscription_id: int, FK, can be empty"
+    assert d["buttons"] == [
+        "is billed: Customer (customer_id → id)",
+        "generates: Subscription (subscription_id → id)",
+        "contains: Line item (charge_id \u2192 id)",
+    ]
+
+
+def test_schema_more_row_click_focuses_the_entity_and_lists_every_field(schema_page: Path) -> None:
+    out = run(
+        schema_page,
+        {"click": "#schema-billing [data-q-schema-more]"},
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-billing');
+              return {{ selected: entityIds(m, 'data-q-flow-selected'), drawer: drawerState(m) }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["selected"] == ["charge"]
+    assert d["drawer"]["open"] is True and d["drawer"]["heading"] == "Charge"
+    assert len(d["drawer"]["fields"]) == 15
+
+
+SCHEMA_CLEARED_JS = f"""(() => {{
+  {SCHEMA_GEOMETRY_JS}
+  const m = document.querySelector('#schema-billing');
+  return {{
+    lit: entityIds(m, 'data-q-flow-lit'),
+    dim: entityIds(m, 'data-q-flow-dim'),
+    selected: entityIds(m, 'data-q-flow-selected'),
+    litRels: relIdx(m, 'data-q-flow-lit'),
+    dimRels: relIdx(m, 'data-q-flow-dim'),
+    drawerOpen: drawerState(m).open,
+  }};
+}})()"""
+SCHEMA_NOT_FOCUSED = {"lit": [], "dim": [], "selected": [], "litRels": [], "dimRels": [], "drawerOpen": False}
+SCHEMA_FOCUS_SUBSCRIPTION = {"click": '#schema-billing [data-q-schema-entity="subscription"]'}
+
+
+def test_schema_escape_empty_canvas_and_close_button_each_clear_focus(schema_page: Path) -> None:
+    out = run(
+        schema_page,
+        SCHEMA_FOCUS_SUBSCRIPTION,
+        {"press": "Escape"},
+        ev(SCHEMA_CLEARED_JS, "escape"),
+        SCHEMA_FOCUS_SUBSCRIPTION,
+        ev(
+            "document.querySelector('#schema-billing [data-q-flow-svg]').dispatchEvent(new MouseEvent('click', { bubbles: true })), 1",
+            "tap",
+        ),
+        ev(SCHEMA_CLEARED_JS, "empty"),
+        SCHEMA_FOCUS_SUBSCRIPTION,
+        {"click": "#schema-billing [data-q-flow-drawer-close]"},
+        ev(SCHEMA_CLEARED_JS, "close"),
+    )
+    assert_clean(out)
+    for key in ("escape", "empty", "close"):
+        assert out["results"][key] == SCHEMA_NOT_FOCUSED, key
+
+
+def test_schema_group_header_click_dims_the_cards_outside_it_and_opens_no_drawer(schema_page: Path) -> None:
+    out = run(
+        schema_page,
+        {"click": '#schema-billing [data-q-flow-group-header="billing"]'},
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-billing');
+              return {{
+                lit: entityIds(m, 'data-q-flow-lit'),
+                dim: entityIds(m, 'data-q-flow-dim'),
+                drawerOpen: drawerState(m).open,
+                dimRels: relIdx(m, 'data-q-flow-dim'),
+                litRels: relIdx(m, 'data-q-flow-lit'),
+              }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["d"] == {
+        "lit": ["charge", "line_item", "subscription"],
+        "dim": ["customer"],
+        "drawerOpen": False,
+        "dimRels": [0, 1],
+        "litRels": [2, 3],
+    }
+
+
+def test_schema_keyboard_roving_tabindex_arrows_enter_announce_and_zoom_keys(schema_page: Path) -> None:
+    out = run(
+        schema_page,
+        ev(
+            "document.querySelector('#schema-billing [data-q-flow-viewport]').getAttribute('transform')",
+            "t0",
+        ),
+        {"focus": "#schema-before"},
+        {"press": "Tab"},
+        ev(
+            """(() => {
+              const m = document.querySelector('#schema-billing');
+              return {
+                onCard: document.activeElement.getAttribute('data-q-schema-entity'),
+                roving: m.querySelectorAll('[data-q-schema-entity][tabindex="0"]').length,
+              };
+            })()""",
+            "entered",
+        ),
+        {"press": "Tab"},
+        ev("document.activeElement.hasAttribute('data-q-schema-entity')", "stillOnCard"),
+        {"focus": '#schema-billing [data-q-schema-entity][tabindex="0"]'},
+        {"press": "ArrowRight"},
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-billing');
+              const from = cardBox(m, 'customer');
+              const fx = from.x + from.width / 2, fy = from.y + from.height / 2;
+              let best = null, bestScore = Infinity;
+              for (const id of ['subscription', 'charge', 'line_item']) {{
+                const b = cardBox(m, id);
+                const dx = b.x + b.width / 2 - fx, dy = b.y + b.height / 2 - fy;
+                if (dx > 2 && dx + Math.abs(dy) * 1.5 < bestScore) {{ best = id; bestScore = dx + Math.abs(dy) * 1.5; }}
+              }}
+              return {{ moved: document.activeElement.getAttribute('data-q-schema-entity'), expected: best }};
+            }})()""",
+            "arrow",
+        ),
+        {"focus": '#schema-billing [data-q-schema-entity="subscription"]'},
+        {"press": "Enter"},
+        ev("document.querySelector('#schema-billing [data-q-flow-live]').textContent", "live"),
+        ev("document.querySelector('#schema-billing [data-q-flow-drawer]').hasAttribute('data-q-inactive')", "drawerClosed"),
+        {"press": "+"},
+        ev("document.querySelector('#schema-billing [data-q-flow-viewport]').getAttribute('transform')", "tPlus"),
+        {"press": "-"},
+        ev("document.querySelector('#schema-billing [data-q-flow-viewport]').getAttribute('transform')", "tMinus"),
+        {"press": "0"},
+        ev("document.querySelector('#schema-billing [data-q-flow-viewport]').getAttribute('transform')", "tFit"),
+    )
+    assert_clean(out)
+    res = out["results"]
+    assert res["entered"] == {"onCard": "customer", "roving": 1}
+    assert res["stillOnCard"] is False
+    assert res["arrow"]["moved"] == res["arrow"]["expected"] and res["arrow"]["moved"] is not None
+    assert res["live"] == "Subscription, billing, 6 fields, 2 relationships"
+    assert res["drawerClosed"] is False
+    scale = lambda t: float(re.search(r"scale\(([-0-9.e]+)\)", t).group(1))  # noqa: E731
+    assert scale(res["tPlus"]) > scale(res["t0"])
+    assert scale(res["tMinus"]) < scale(res["tPlus"])
+    assert res["tFit"] == res["t0"]
+
+
+def test_schema_theme_toggle_recolours_without_moving_cards(schema_page: Path) -> None:
+    out = run(
+        schema_page,
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-billing');
+              const svg = m.querySelector('[data-q-flow-svg]');
+              const snap = () => ['customer', 'subscription', 'charge', 'line_item'].map((id) => {{
+                const b = cardBox(m, id);
+                return [b.x, b.y, b.width, b.height];
+              }});
+              const rect = card(m, 'charge').querySelector('[data-q-schema-card]');
+              const line = lineOf(relAt(m, 0));
+              document.documentElement.setAttribute('data-theme', 'light');
+              const before = snap();
+              const lightFill = getComputedStyle(rect).fill;
+              const lightStroke = getComputedStyle(line).stroke;
+              document.documentElement.setAttribute('data-theme', 'dark');
+              const after = snap();
+              const attrs = [rect.getAttribute('fill'), rect.getAttribute('stroke'), line.getAttribute('stroke'),
+                card(m, 'charge').querySelector('[data-q-schema-accent]').getAttribute('fill')];
+              return {{
+                samePositions: JSON.stringify(before) === JSON.stringify(after),
+                sameSvg: m.querySelector('[data-q-flow-svg]') === svg,
+                fillChanged: lightFill !== getComputedStyle(rect).fill,
+                strokeChanged: lightStroke !== getComputedStyle(line).stroke,
+                attrs,
+              }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["samePositions"] is True and d["sameSvg"] is True
+    assert d["fillChanged"] is True and d["strokeChanged"] is True
+    assert all(a.startswith("var(--q-color-") for a in d["attrs"]), d["attrs"]
+
+
+def test_schema_expand_fills_the_screen_and_escape_returns_it_to_the_page(schema_page: Path) -> None:
+    out = run(
+        schema_page,
+        {"click": '#schema-billing [data-q-flow-action="expand"]'},
+        ev("document.querySelector('#schema-billing').hasAttribute('data-q-flow-expanded')", "expanded"),
+        {"press": "Escape"},
+        ev("document.querySelector('#schema-billing').hasAttribute('data-q-flow-expanded')", "after"),
+    )
+    assert_clean(out)
+    assert out["results"]["expanded"] is True
+    assert out["results"]["after"] is False
+
+
+def test_schema_drawer_is_a_bottom_sheet_on_a_phone(schema_page: Path) -> None:
+    out = run(
+        schema_page,
+        {"viewport": {"width": 375, "height": 800}},
+        {"click": '#schema-billing [data-q-schema-entity="charge"]'},
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-billing');
+              const stage = m.querySelector('[data-q-flow-stage]').getBoundingClientRect();
+              const drawer = m.querySelector('[data-q-flow-drawer]').getBoundingClientRect();
+              return {{
+                fullWidth: Math.abs(drawer.width - stage.width) <= 2,
+                atBottom: Math.abs(drawer.bottom - stage.bottom) <= 2,
+                topFraction: (drawer.top - stage.top) / stage.height,
+                lit: entityIds(m, 'data-q-flow-lit'),
+                btnHeights: [...m.querySelectorAll('[data-q-flow-edge-btn]')].map((b) => b.getBoundingClientRect().height >= 44),
+              }};
+            }})()""",
+            "sheet",
+        ),
+    )
+    assert_clean(out)
+    sheet = out["results"]["sheet"]
+    assert sheet["fullWidth"] is True and sheet["atBottom"] is True
+    assert sheet["topFraction"] >= 0.45 - 0.01
+    assert sheet["lit"] == ["charge", "customer", "line_item", "subscription"]
+    assert sheet["btnHeights"] == [True, True, True]
+
+
+SCHEMA_LIST_JS = """(() => {
+  const lists = {};
+  for (const id of ['schema-billing', 'schema-employee', 'schema-small', 'schema-class']) {
+    const d = document.querySelector('#' + id + ' [data-q-flow-list]');
+    lists[id] = {
+      summary: d.querySelector('summary').textContent,
+      text: d.querySelector('[data-q-flow-list-body]').textContent,
+      entities: [...d.querySelectorAll('[data-q-schema-list-entity]')].map((e) => e.getAttribute('data-q-schema-list-entity') + '|' + e.textContent),
+      groups: [...d.querySelectorAll('[data-q-flow-list-group]')].map((e) => e.getAttribute('data-q-flow-list-group')),
+      rels: [...d.querySelectorAll('[data-q-schema-list-rels] > li')].map((e) => e.textContent),
+    };
+  }
+  return lists;
+})()"""
+
+
+def test_schema_js_text_list_equals_the_python_fallback_list(schema_page: Path) -> None:
+    js = run(schema_page, ev(SCHEMA_LIST_JS, "lists"))
+    assert_clean(js)
+    nojs = run(schema_page, ev(SCHEMA_LIST_JS, "lists"), javaScript=False)
+    assert nojs["failedSteps"] == [] and nojs["pageErrors"] == []
+    js_lists, py_lists = js["results"]["lists"], nojs["results"]["lists"]
+    assert js_lists == py_lists
+    billing = js_lists["schema-billing"]
+    assert billing["summary"] == "Data model as a list"
+    assert billing["groups"] == ["billing"]
+    assert billing["rels"][0] == (
+        "Each Customer has zero or many Subscriptions, and each Subscription has one Customer "
+        "(subscription.customer_id → customer.id)"
+    )
+    assert js_lists["schema-class"]["summary"] == "Class diagram as a list"
+
+
+def test_schema_without_javascript_shows_the_notice_and_the_open_list(schema_page: Path) -> None:
+    out = run(
+        schema_page,
+        ev(
+            """(() => {
+              const m = document.querySelector('#schema-billing');
+              const notice = m.querySelector('[data-q-flow-notice]');
+              const details = m.querySelector('[data-q-flow-list]');
+              return {
+                notice: notice.textContent,
+                noticeVisible: notice.getBoundingClientRect().height > 0,
+                open: details.open,
+                listVisible: details.querySelector('[data-q-flow-list-body]').getBoundingClientRect().height > 0,
+                entities: details.querySelectorAll('[data-q-schema-list-entity]').length,
+                ready: m.hasAttribute('data-q-flow-ready'),
+              };
+            })()""",
+            "d",
+        ),
+        javaScript=False,
+    )
+    assert out["failedSteps"] == [] and out["pageErrors"] == []
+    assert out["results"]["d"] == {
+        "notice": "JavaScript is off, so this data model is shown as a list below.",
+        "noticeVisible": True,
+        "open": True,
+        "listVisible": True,
+        "entities": 4,
+        "ready": False,
+    }
+
+
+def test_schema_failing_models_show_the_notice_and_the_open_list_while_others_render(schema_page: Path) -> None:
+    out = run(
+        schema_page,
+        ev(
+            """(() => {
+              const state = (id) => {
+                const m = document.querySelector('#' + id);
+                const notice = m.querySelector('[data-q-flow-notice]');
+                return {
+                  ready: m.getAttribute('data-q-flow-ready'),
+                  notice: notice && notice.textContent,
+                  open: m.querySelector('[data-q-flow-list]').open,
+                  svg: !!m.querySelector('[data-q-flow-svg]'),
+                  entities: m.querySelectorAll('[data-q-schema-list-entity]').length,
+                };
+              };
+              return { broken: state('schema-broken'), uml: state('schema-uml'), cls: state('schema-class'), billing: state('schema-billing'), small: state('schema-small') };
+            })()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["broken"] == {"ready": "error", "notice": "This data model could not be drawn.", "open": True, "svg": False, "entities": 2}
+    assert d["uml"]["ready"] == "error" and d["uml"]["notice"] == "This data model could not be drawn."
+    assert d["cls"] == {"ready": "error", "notice": "This class diagram could not be drawn.", "open": True, "svg": False, "entities": 2}
+    assert d["billing"]["ready"] == "true" and d["billing"]["svg"] is True
+    assert d["small"]["ready"] == "true" and d["small"]["open"] is False
+
+
+def test_schema_models_keep_their_own_focus(schema_page: Path) -> None:
+    out = run(
+        schema_page,
+        {"click": '#schema-small [data-q-schema-entity="author"]'},
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-billing');
+              const s = document.querySelector('#schema-small');
+              return {{
+                billing: {{ lit: entityIds(m, 'data-q-flow-lit'), dim: entityIds(m, 'data-q-flow-dim'), drawer: drawerState(m).open }},
+                small: {{ lit: entityIds(s, 'data-q-flow-lit'), selected: entityIds(s, 'data-q-flow-selected'), drawer: drawerState(s).heading }},
+              }};
+            }})()""",
+            "first",
+        ),
+        {"click": '#schema-billing [data-q-schema-entity="customer"]'},
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const s = document.querySelector('#schema-small');
+              return {{ selected: entityIds(s, 'data-q-flow-selected'), drawer: drawerState(s).heading }};
+            }})()""",
+            "second",
+        ),
+    )
+    assert_clean(out)
+    first, second = out["results"]["first"], out["results"]["second"]
+    assert first["billing"] == {"lit": [], "dim": [], "drawer": False}
+    assert first["small"] == {"lit": ["author", "book"], "selected": ["author"], "drawer": "Author"}
+    assert second == {"selected": ["author"], "drawer": "Author"}
+
+
+SCHEMA_BAD_MODELS = {
+    "duplicate entity id": {"entities": [{"id": "a", "label": "A", "fields": [{"name": "id", "type": "int"}]}] * 2},
+    "entity id with a dot": {"entities": [{"id": "a.b", "label": "A", "fields": [{"name": "id", "type": "int"}]}]},
+    "no entities": {"entities": []},
+    "blank label": {"entities": [{"id": "a", "label": "  ", "fields": [{"name": "id", "type": "int"}]}]},
+    "no fields": {"entities": [{"id": "a", "label": "A", "fields": []}]},
+    "null fields": {"entities": [{"id": "a", "label": "A", "fields": None}]},
+    "duplicate field": {"entities": [{"id": "a", "label": "A", "fields": [{"name": "id", "type": "int"}] * 2}]},
+    "unknown key": {"entities": [{"id": "a", "label": "A", "fields": [{"name": "id", "type": "int", "key": "PRIMARY"}]}]},
+    "coordinates": {"entities": [{"id": "a", "label": "A", "x": 1, "fields": [{"name": "id", "type": "int"}]}]},
+    "undeclared kind": {"entities": [{"id": "a", "label": "A", "kind": "audit", "fields": [{"name": "id", "type": "int"}]}]},
+    "unknown group": {"entities": [{"id": "a", "label": "A", "group": "ledger", "fields": [{"name": "id", "type": "int"}]}]},
+    "group loop": {
+        "groups": [{"id": "g", "label": "G", "parent": "h"}, {"id": "h", "label": "H", "parent": "g"}],
+        "entities": [{"id": "a", "label": "A", "fields": [{"name": "id", "type": "int"}]}],
+    },
+    "script in detail": {"entities": [{"id": "a", "label": "A", "detail": "<script>1</script>", "fields": [{"name": "id", "type": "int"}]}]},
+    "nine kinds": {
+        "kinds": {f"k{i}": 1 for i in range(9)},
+        "entities": [{"id": "a", "label": "A", "fields": [{"name": "id", "type": "int"}]}],
+    },
+    "methods on an entity": {"entities": [{"id": "a", "label": "A", "methods": [], "fields": [{"name": "id", "type": "int"}]}]},
+    "stereotype on an entity": {"entities": [{"id": "a", "label": "A", "stereotype": "enum", "fields": [{"name": "id", "type": "int"}]}]},
+    "relationship to an unknown entity": {
+        "entities": [{"id": "a", "label": "A", "fields": [{"name": "id", "type": "int"}]}],
+        "relationships": [_schema_rel("a.id", "b.id", "one", "one")],
+    },
+    "relationship to an unknown field": {
+        "entities": [{"id": "a", "label": "A", "fields": [{"name": "id", "type": "int"}]}],
+        "relationships": [_schema_rel("a.id", "a.uuid", "one", "one")],
+    },
+    "relationship end without a field": {
+        "entities": [{"id": "a", "label": "A", "fields": [{"name": "id", "type": "int"}]}],
+        "relationships": [_schema_rel("a", "a.id", "one", "one")],
+    },
+    "unknown cardinality": {
+        "entities": [{"id": "a", "label": "A", "fields": [{"name": "id", "type": "int"}]}],
+        "relationships": [_schema_rel("a.id", "a.id", "many", "one")],
+    },
+    "blank relationship label": {
+        "entities": [{"id": "a", "label": "A", "fields": [{"name": "id", "type": "int"}]}],
+        "relationships": [_schema_rel("a.id", "a.id", "one", "one", " ")],
+    },
+    "relationship type in a data model": {
+        "entities": [{"id": "a", "label": "A", "fields": [{"name": "id", "type": "int"}]}],
+        "relationships": [{**_schema_rel("a.id", "a.id", "one", "one"), "type": "inherits"}],
+    },
+}
+SCHEMA_MUTUAL_FIELDS = [_schema_field("id", "int", "PK"), _schema_field("a_id", "int", "FK"), _schema_field("b_id", "int", "FK")]
+SCHEMA_GOOD_MODELS = {
+    "mutual references": {
+        "entities": [
+            {"id": "a", "label": "A", "fields": SCHEMA_MUTUAL_FIELDS},
+            {"id": "b", "label": "B", "fields": SCHEMA_MUTUAL_FIELDS},
+        ],
+        "relationships": [
+            _schema_rel("a.b_id", "b.id", "zero-or-many", "one", "points at"),
+            _schema_rel("b.a_id", "a.id", "zero-or-many", "one", "points back"),
+            _schema_rel("b.a_id", "a.id", "one", "zero-or-one"),
+        ],
+    },
+    "nested groups with cross-group lines": {
+        "groups": [{"id": "outer", "label": "Outer"}, {"id": "inner", "label": "Inner", "parent": "outer"}],
+        "entities": [
+            {"id": "a", "label": "A", "group": "inner", "fields": SCHEMA_MUTUAL_FIELDS},
+            {"id": "b", "label": "B", "group": "outer", "fields": SCHEMA_MUTUAL_FIELDS},
+            {"id": "c", "label": "C", "fields": SCHEMA_MUTUAL_FIELDS},
+        ],
+        "relationships": [
+            _schema_rel("a.b_id", "b.id", "zero-or-many", "one"),
+            _schema_rel("c.a_id", "a.id", "one-or-many", "zero-or-one", "owns"),
+            _schema_rel("c.b_id", "b.id", "one", "one"),
+        ],
+    },
+    "two self-relationships on one card": {
+        "entities": [
+            {
+                "id": "node",
+                "label": "Node",
+                "fields": [_schema_field("id", "int", "PK"), _schema_field("parent_id", "int", "FK"), _schema_field("prev_id", "int", "FK")],
+            }
+        ],
+        "relationships": [
+            _schema_rel("node.parent_id", "node.id", "zero-or-many", "zero-or-one", "parent"),
+            _schema_rel("node.prev_id", "node.id", "zero-or-one", "zero-or-one", "previous"),
+            _schema_rel("node.id", "node.id", "one", "one"),
+        ],
+    },
+    "two-key field": {"entities": [{"id": "a", "label": "A", "fields": [{"name": "id", "type": "int", "key": ["PK", "FK"]}]}]},
+    "a label with spaces around": {
+        "entities": [{"id": "a", "label": "A", "fields": [{"name": "id", "type": "int", "note": "n"}]}],
+        "relationships": [_schema_rel("a.id", "a.id", "one", "zero-or-one", " owns ")],
+    },
+}
+
+
+def test_schema_runtime_rejects_the_same_data_the_kit_check_fails(schema_page: Path) -> None:
+    cases = {**{name: data for name, data in SCHEMA_BAD_MODELS.items()}, **SCHEMA_GOOD_MODELS}
+    out = run(
+        schema_page,
+        ev(
+            f"""(async () => {{
+              const cases = {json.dumps(cases)};
+              const mount = Object.entries(cases).map(([name, data]) => {{
+                const el = document.createElement('q-schema');
+                el.setAttribute('summary', name);
+                const s = document.createElement('script');
+                s.type = 'application/json';
+                s.textContent = JSON.stringify(data);
+                el.appendChild(s);
+                document.body.appendChild(el);
+                return [name, el];
+              }});
+              const wait = (el) => new Promise((resolve) => {{
+                const t0 = Date.now();
+                const poll = () => (el.hasAttribute('data-q-flow-ready') || Date.now() - t0 > 8000 ? resolve(el.getAttribute('data-q-flow-ready')) : setTimeout(poll, 20));
+                poll();
+              }});
+              return Object.fromEntries(await Promise.all(mount.map(async ([name, el]) => [name, await wait(el)])));
+            }})()""",
+            "ready",
+        ),
+    )
+    assert_clean(out)
+    ready = out["results"]["ready"]
+    assert {name: ready[name] for name in SCHEMA_BAD_MODELS} == {name: "error" for name in SCHEMA_BAD_MODELS}
+    assert {name: ready[name] for name in SCHEMA_GOOD_MODELS} == {name: "true" for name in SCHEMA_GOOD_MODELS}

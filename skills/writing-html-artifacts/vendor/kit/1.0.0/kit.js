@@ -6070,6 +6070,1906 @@
     }
   }
 
+  var SCHEMA_KEYS = ['PK', 'FK', 'UK'];
+  var SCHEMA_CARDS = ['zero-or-one', 'one', 'zero-or-many', 'one-or-many'];
+  var SCHEMA_CARD_WORDS = {
+    'zero-or-one': 'zero or one',
+    'one': 'one',
+    'zero-or-many': 'zero or many',
+    'one-or-many': 'one or many'
+  };
+  var SCHEMA_VISIBILITIES = ['public', 'private', 'protected', 'package'];
+  var SCHEMA_STEREOTYPES = ['interface', 'abstract', 'enum'];
+  var SCHEMA_REL_TYPES = ['inherits', 'implements', 'composition', 'aggregation', 'association', 'dependency'];
+  var SCHEMA_VERBS = {
+    inherits: 'inherits from',
+    implements: 'implements',
+    composition: 'is composed of',
+    aggregation: 'aggregates',
+    association: 'is associated with',
+    dependency: 'depends on'
+  };
+  var SCHEMA_MAX_ENTITIES = 80;
+  var SCHEMA_FOLD_ROWS = 8;
+  var SCHEMA_HEADER_H = 34;
+  var SCHEMA_ROW_H = 24;
+  var SCHEMA_CARD_MIN_W = 168;
+  var SCHEMA_LOOP_OUT = 24;
+  var SCHEMA_BAD = { schemaBad: true };
+
+  function schemaMap() {
+    return Object.create(null);
+  }
+
+  function schemaHas(obj, key) {
+    return Object.prototype.hasOwnProperty.call(obj, key);
+  }
+
+  function schemaText(value) {
+    return typeof value === 'string' && !isBlankFlowId(value);
+  }
+
+  // python str.strip parity, through isBlankFlowId's character set
+  function schemaStrip(text) {
+    var start = 0;
+    var end = text.length;
+    while (start < end && isBlankFlowId(text.charAt(start))) {
+      start += 1;
+    }
+    while (end > start && isBlankFlowId(text.charAt(end - 1))) {
+      end -= 1;
+    }
+    return text.slice(start, end);
+  }
+
+  function schemaMultiplicityOk(value) {
+    if (typeof value !== 'string' || !/^(\*|[0-9]+|[0-9]+\.\.([0-9]+|\*))$/.test(value)) {
+      return false;
+    }
+    if (value.indexOf('..') < 0) {
+      return true;
+    }
+    var parts = value.split('..');
+    if (parts[1] === '*') {
+      return true;
+    }
+    var low = parts[0].replace(/^0+/, '') || '0';
+    var high = parts[1].replace(/^0+/, '') || '0';
+    return low.length < high.length || (low.length === high.length && low <= high);
+  }
+
+  /** The English plural of a label as written: consonant + y to ies, s/x/z/ch/sh add es, else add s. */
+  function schemaPlural(label) {
+    var lowered = label.toLowerCase();
+    var n = label.length;
+    if (n >= 2 && /y$/.test(lowered) && /\p{L}/u.test(label.charAt(n - 2)) && 'aeiou'.indexOf(lowered.charAt(n - 2)) < 0) {
+      return label.slice(0, n - 1) + 'ies';
+    }
+    if (/(s|x|z|ch|sh)$/.test(lowered)) {
+      return label + 'es';
+    }
+    return label + 's';
+  }
+
+  function schemaFieldLine(field) {
+    var line = field.name + ': ' + field.type;
+    field.keys.forEach(function (key) {
+      line += ', ' + key;
+    });
+    if (field.nullable) {
+      line += ', can be empty';
+    }
+    return field.note ? line + ' (' + field.note + ')' : line;
+  }
+
+  function schemaMemberLine(member, isMethod) {
+    var body = isMethod ? member.signature : (member.type ? member.name + ': ' + member.type : member.name);
+    var parts = [member.visibility, member.static ? 'static' : null, member.abstract ? 'abstract' : null, body];
+    var line = parts.filter(function (p) { return p; }).join(' ');
+    return member.note ? line + ' (' + member.note + ')' : line;
+  }
+
+  function schemaRelSentence(data, rel) {
+    var source = data.entityMap[rel.fromEntity].label;
+    var target = data.entityMap[rel.toEntity].label;
+    if (data.notation === 'class') {
+      var sentence = source + ' ' + SCHEMA_VERBS[rel.type];
+      if (rel.type !== 'inherits' && rel.type !== 'implements' && rel.toMult) {
+        sentence += ' ' + rel.toMult;
+      }
+      sentence += ' ' + target;
+      var extras = [];
+      if (rel.fromMult) {
+        extras.push(rel.fromMult + ' ' + source + ' per ' + target);
+      }
+      if (rel.label) {
+        extras.push(rel.label);
+      }
+      return extras.length ? sentence + ' (' + extras.join('; ') + ')' : sentence;
+    }
+    function form(card, label) {
+      return SCHEMA_CARD_WORDS[card] + ' ' + (/many$/.test(card) ? schemaPlural(label) : label);
+    }
+    return 'Each ' + target + ' ' + (rel.label || 'has') + ' ' + form(rel.fromCard, source)
+      + ', and each ' + source + ' has ' + form(rel.toCard, target)
+      + ' (' + rel.fromEntity + '.' + rel.fromField + ' \u2192 ' + rel.toEntity + '.' + rel.toField + ')';
+  }
+
+  /** The text of the entity's focus announcement and the card's aria-label. */
+  function schemaAnnounce(data, entity) {
+    var isClass = data.notation === 'class';
+    var members = entity.fields.length + (isClass ? entity.methods.length : 0);
+    var relCount = data.relationships.filter(function (r) {
+      return r.fromEntity === entity.id || r.toEntity === entity.id;
+    }).length;
+    var parts = [entity.label];
+    if (entity.kind) {
+      parts.push(entity.kind);
+    }
+    if (entity.stereotype) {
+      parts.push(entity.stereotype);
+    }
+    parts.push(members + ' ' + (isClass ? (members === 1 ? 'member' : 'members') : (members === 1 ? 'field' : 'fields')));
+    parts.push(relCount + ' ' + (relCount === 1 ? 'relationship' : 'relationships'));
+    return parts.join(', ');
+  }
+
+  /** ER fold: every keyed or related field stays, then the rest in order until the card shows 8; the data order is kept. */
+  function schemaFoldFields(entity, used) {
+    var fields = entity.fields;
+    if (fields.length <= SCHEMA_FOLD_ROWS) {
+      return fields.slice();
+    }
+    var must = fields.map(function (f) {
+      return f.keys.length > 0 || Boolean(used[entity.id + '\u0000' + f.name]);
+    });
+    var room = Math.max(0, SCHEMA_FOLD_ROWS - must.filter(Boolean).length);
+    return fields.filter(function (f, i) {
+      if (must[i]) {
+        return true;
+      }
+      if (room > 0) {
+        room -= 1;
+        return true;
+      }
+      return false;
+    });
+  }
+
+  /** The children of one crow's-foot marker, drawn so the line end sits at x = 24 and the marks extend back along the line. */
+  function schemaMarkShapes(kind, color) {
+    var attrs = { fill: 'none', stroke: color, 'stroke-width': '1.5', 'stroke-linecap': 'round' };
+    function bar(x) {
+      return svgNode('line', Object.assign({ x1: x, y1: 3, x2: x, y2: 13 }, attrs));
+    }
+    function foot(apex) {
+      return svgNode('path', Object.assign({ d: 'M ' + apex + ' 8 L 24 2 M ' + apex + ' 8 L 24 14 M ' + apex + ' 8 L 24 8' }, attrs));
+    }
+    function ring(cx) {
+      return svgNode('circle', { cx: cx, cy: 8, r: 4, fill: 'var(--q-color-bg)', stroke: color, 'stroke-width': '1.5' });
+    }
+    if (kind === 'zero-or-one') {
+      return [ring(11), bar(20)];
+    }
+    if (kind === 'one') {
+      return [bar(20), bar(14)];
+    }
+    if (kind === 'zero-or-many') {
+      return [foot(13), ring(5)];
+    }
+    return [foot(14), bar(9)];
+  }
+
+  class QSchema extends HTMLElement {
+    static get observedAttributes() {
+      return ['summary', 'notation'];
+    }
+
+    connectedCallback() {
+      var self = this;
+      this._uid = this._uid || uid('q-schema-');
+      this._layoutSeq = (this._layoutSeq || 0) + 1;
+      this._focusedNode = null;
+      this._focusedGroup = null;
+      this._focusedAfterExpand = false;
+      this._rovingId = null;
+      this._onDocKey = this._onDocKey || function (e) {
+        if (e.key === 'Escape' && (self.hasAttribute('data-q-flow-expanded') || self._focusedNode || self._focusedGroup)) {
+          self._handleEscape(e);
+        }
+      };
+      this._onResize = this._onResize || function () {
+        if (self.isConnected && self._bounds && !self.hasAttribute('data-q-flow-expanded')) {
+          self._fitBounds(self._bounds, false);
+        }
+      };
+      document.addEventListener('keydown', this._onDocKey);
+      window.addEventListener('resize', this._onResize);
+      onTheme(this, function () {
+        self._applyTheme();
+      });
+      watchChildren(this, { childList: true, characterData: true, subtree: true }, function () {
+        if (self.isConnected && self._signature() !== self._lastSig) {
+          self._setup();
+        }
+      });
+    }
+
+    _signature() {
+      var script = this.querySelector(':scope > script[type="application/json"]');
+      return [
+        script ? (script.textContent || '') : '',
+        this.getAttribute('summary') || '',
+        this.getAttribute('notation') || ''
+      ].join('\u0000');
+    }
+
+    disconnectedCallback() {
+      if (this._onDocKey) {
+        document.removeEventListener('keydown', this._onDocKey);
+      }
+      if (this._onResize) {
+        window.removeEventListener('resize', this._onResize);
+      }
+      var stopTheme = themeWatchers.get(this);
+      if (stopTheme) {
+        stopTheme();
+      }
+    }
+
+    attributeChangedCallback() {
+      if (this.isConnected && this._initialized && this._signature() !== this._lastSig) {
+        this._setup();
+      }
+    }
+
+    /** Cleaned data of the model, or null when it breaks any rule of the kit check (the browser never warns). */
+    _parseData() {
+      var notationAttr = this.getAttribute('notation');
+      var notation = notationAttr === null ? 'er' : notationAttr;
+      if (notation !== 'er' && notation !== 'class') {
+        return null;
+      }
+      var script = this.querySelector(':scope > script[type="application/json"]');
+      if (!script) {
+        return null;
+      }
+      var raw;
+      try {
+        raw = JSON.parse(script.textContent || '');
+      } catch (_e) {
+        return null;
+      }
+      try {
+        return this._cleanData(raw, notation);
+      } catch (err) {
+        if (err === SCHEMA_BAD) {
+          return null;
+        }
+        throw err;
+      }
+    }
+
+    _cleanData(raw, notation) {
+      var isClass = notation === 'class';
+      function bad() {
+        throw SCHEMA_BAD;
+      }
+      function noCoords(obj) {
+        if (hasCoordKeys(obj)) {
+          bad();
+        }
+      }
+      function optionalFlag(obj, key) {
+        var value = obj[key];
+        if (value !== undefined && value !== null && typeof value !== 'boolean') {
+          bad();
+        }
+        return value === true;
+      }
+      function optionalNote(obj) {
+        var value = obj.note;
+        if (value === undefined || value === null) {
+          return null;
+        }
+        if (!schemaText(value)) {
+          bad();
+        }
+        return value;
+      }
+      function optionalVisibility(obj) {
+        var value = obj.visibility;
+        if (value === undefined || value === null) {
+          return null;
+        }
+        if (typeof value !== 'string' || SCHEMA_VISIBILITIES.indexOf(value) < 0) {
+          bad();
+        }
+        return value;
+      }
+      function cleanLabel(obj) {
+        var value = obj.label;
+        if (value === undefined || value === null) {
+          return null;
+        }
+        if (typeof value !== 'string' || isBlankFlowId(value)) {
+          bad();
+        }
+        return schemaStrip(value);
+      }
+
+      if (!isRow(raw)) {
+        bad();
+      }
+      noCoords(raw);
+
+      var kinds = {};
+      if (schemaHas(raw, 'kinds')) {
+        if (!isRow(raw.kinds)) {
+          bad();
+        }
+        kinds = raw.kinds;
+        var kindKeys = Object.keys(kinds);
+        if (kindKeys.length > 8) {
+          bad();
+        }
+        kindKeys.forEach(function (name) {
+          var c = kinds[name];
+          if (!schemaText(name) || typeof c !== 'number' || c < 1 || c > 8 || Math.floor(c) !== c) {
+            bad();
+          }
+        });
+      }
+
+      var rawGroups = [];
+      if (schemaHas(raw, 'groups')) {
+        if (!Array.isArray(raw.groups)) {
+          bad();
+        }
+        rawGroups = raw.groups;
+      }
+      var seenIds = schemaMap();
+      var groupMap = schemaMap();
+      var groups = [];
+      rawGroups.forEach(function (g) {
+        if (!isRow(g)) {
+          bad();
+        }
+        noCoords(g);
+        if (!schemaText(g.id) || !schemaText(g.label) || seenIds[g.id]) {
+          bad();
+        }
+        seenIds[g.id] = true;
+        var entry = { id: g.id, label: g.label, parent: typeof g.parent === 'string' && g.parent ? g.parent : null };
+        groupMap[g.id] = entry;
+        groups.push(entry);
+      });
+      groups.forEach(function (g) {
+        var walk = g.parent;
+        var visited = schemaMap();
+        visited[g.id] = true;
+        while (walk) {
+          if (!groupMap[walk] || visited[walk]) {
+            bad();
+          }
+          visited[walk] = true;
+          walk = groupMap[walk].parent;
+        }
+      });
+
+      if (!Array.isArray(raw.entities) || raw.entities.length === 0 || raw.entities.length > SCHEMA_MAX_ENTITIES) {
+        bad();
+      }
+      var entityMap = schemaMap();
+      var entities = [];
+      raw.entities.forEach(function (e) {
+        if (!isRow(e)) {
+          bad();
+        }
+        noCoords(e);
+        if (!schemaText(e.id) || !schemaText(e.label) || seenIds[e.id]) {
+          bad();
+        }
+        if (!isClass && e.id.indexOf('.') >= 0) {
+          bad();
+        }
+        seenIds[e.id] = true;
+        if (e.kind !== undefined && e.kind !== null && (typeof e.kind !== 'string' || !schemaHas(kinds, e.kind))) {
+          bad();
+        }
+        if (e.group !== undefined && e.group !== null && (typeof e.group !== 'string' || !groupMap[e.group])) {
+          bad();
+        }
+        if (e.detail !== undefined && e.detail !== null && (typeof e.detail !== 'string' || !isValidFlowDetail(e.detail))) {
+          bad();
+        }
+        var stereotype = null;
+        if (isClass) {
+          if (e.stereotype !== undefined && e.stereotype !== null) {
+            if (typeof e.stereotype !== 'string' || SCHEMA_STEREOTYPES.indexOf(e.stereotype) < 0) {
+              bad();
+            }
+            stereotype = e.stereotype;
+          }
+        } else if (schemaHas(e, 'stereotype') || schemaHas(e, 'methods')) {
+          bad();
+        }
+
+        var rawFields = e.fields;
+        if (isClass && !schemaHas(e, 'fields')) {
+          rawFields = [];
+        }
+        if (!Array.isArray(rawFields) || (!isClass && rawFields.length === 0)) {
+          bad();
+        }
+        var fields = [];
+        var seenNames = schemaMap();
+        rawFields.forEach(function (f) {
+          if (!isRow(f)) {
+            bad();
+          }
+          noCoords(f);
+          if (!schemaText(f.name) || seenNames[f.name]) {
+            bad();
+          }
+          seenNames[f.name] = true;
+          if (isClass) {
+            if (f.type !== undefined && f.type !== null && !schemaText(f.type)) {
+              bad();
+            }
+            if (schemaHas(f, 'key')) {
+              bad();
+            }
+            fields.push({
+              name: f.name,
+              type: f.type === undefined || f.type === null ? null : f.type,
+              visibility: optionalVisibility(f),
+              static: optionalFlag(f, 'static'),
+              note: optionalNote(f)
+            });
+            return;
+          }
+          if (!schemaText(f.type)) {
+            bad();
+          }
+          var keys = [];
+          if (f.key !== undefined && f.key !== null) {
+            (Array.isArray(f.key) ? f.key : [f.key]).forEach(function (k) {
+              if (typeof k !== 'string' || SCHEMA_KEYS.indexOf(k) < 0) {
+                bad();
+              }
+              if (keys.indexOf(k) < 0) {
+                keys.push(k);
+              }
+            });
+          }
+          fields.push({
+            name: f.name,
+            type: f.type,
+            keys: keys,
+            nullable: optionalFlag(f, 'nullable'),
+            note: optionalNote(f)
+          });
+        });
+
+        var methods = [];
+        if (isClass && schemaHas(e, 'methods')) {
+          if (!Array.isArray(e.methods)) {
+            bad();
+          }
+          var seenSignatures = schemaMap();
+          e.methods.forEach(function (m) {
+            if (!isRow(m)) {
+              bad();
+            }
+            noCoords(m);
+            if (!schemaText(m.signature) || seenSignatures[m.signature]) {
+              bad();
+            }
+            seenSignatures[m.signature] = true;
+            methods.push({
+              signature: m.signature,
+              visibility: optionalVisibility(m),
+              static: optionalFlag(m, 'static'),
+              abstract: optionalFlag(m, 'abstract'),
+              note: optionalNote(m)
+            });
+          });
+        }
+
+        var cleanEntity = {
+          id: e.id,
+          label: e.label,
+          kind: typeof e.kind === 'string' ? e.kind : null,
+          group: typeof e.group === 'string' ? e.group : null,
+          stereotype: stereotype,
+          detail: typeof e.detail === 'string' ? e.detail : null,
+          fields: fields,
+          methods: methods
+        };
+        entityMap[e.id] = cleanEntity;
+        entities.push(cleanEntity);
+      });
+
+      var rawRels = [];
+      if (schemaHas(raw, 'relationships')) {
+        if (!Array.isArray(raw.relationships)) {
+          bad();
+        }
+        rawRels = raw.relationships;
+      }
+      var relationships = [];
+      rawRels.forEach(function (r, index) {
+        if (!isRow(r)) {
+          bad();
+        }
+        noCoords(r);
+        var label = cleanLabel(r);
+        if (isClass) {
+          if (typeof r.from !== 'string' || !entityMap[r.from] || typeof r.to !== 'string' || !entityMap[r.to]) {
+            bad();
+          }
+          if (typeof r.type !== 'string' || SCHEMA_REL_TYPES.indexOf(r.type) < 0) {
+            bad();
+          }
+          if (schemaHas(r, 'from_card') || schemaHas(r, 'to_card')) {
+            bad();
+          }
+          ['from_mult', 'to_mult'].forEach(function (side) {
+            if (r[side] !== undefined && r[side] !== null && !schemaMultiplicityOk(r[side])) {
+              bad();
+            }
+          });
+          if (r.directed !== undefined && r.directed !== null && (typeof r.directed !== 'boolean' || r.type !== 'association')) {
+            bad();
+          }
+          relationships.push({
+            index: index,
+            fromEntity: r.from,
+            toEntity: r.to,
+            type: r.type,
+            fromMult: typeof r.from_mult === 'string' ? r.from_mult : null,
+            toMult: typeof r.to_mult === 'string' ? r.to_mult : null,
+            label: label,
+            directed: r.directed === true
+          });
+          return;
+        }
+        if (schemaHas(r, 'type')) {
+          bad();
+        }
+        function end(side) {
+          var value = r[side];
+          if (typeof value !== 'string') {
+            bad();
+          }
+          var dot = value.indexOf('.');
+          if (dot < 1 || dot === value.length - 1) {
+            bad();
+          }
+          var entity = entityMap[value.slice(0, dot)];
+          var name = value.slice(dot + 1);
+          if (!entity || !entity.fields.some(function (f) { return f.name === name; })) {
+            bad();
+          }
+          return { entity: entity.id, field: name };
+        }
+        var from = end('from');
+        var to = end('to');
+        if (typeof r.from_card !== 'string' || SCHEMA_CARDS.indexOf(r.from_card) < 0
+          || typeof r.to_card !== 'string' || SCHEMA_CARDS.indexOf(r.to_card) < 0) {
+          bad();
+        }
+        relationships.push({
+          index: index,
+          fromEntity: from.entity,
+          fromField: from.field,
+          toEntity: to.entity,
+          toField: to.field,
+          fromCard: r.from_card,
+          toCard: r.to_card,
+          label: label
+        });
+      });
+
+      if (isClass) {
+        var incoming = schemaMap();
+        var onward = schemaMap();
+        entities.forEach(function (e) {
+          incoming[e.id] = 0;
+          onward[e.id] = [];
+        });
+        relationships.forEach(function (r) {
+          if (r.type === 'inherits' || r.type === 'implements') {
+            incoming[r.toEntity] += 1;
+            onward[r.fromEntity].push(r.toEntity);
+          }
+        });
+        var ready = entities.filter(function (e) { return incoming[e.id] === 0; }).map(function (e) { return e.id; });
+        var settled = 0;
+        while (ready.length) {
+          var current = ready.pop();
+          settled += 1;
+          onward[current].forEach(function (next) {
+            incoming[next] -= 1;
+            if (incoming[next] === 0) {
+              ready.push(next);
+            }
+          });
+        }
+        if (settled < entities.length) {
+          bad();
+        }
+      }
+
+      return {
+        notation: notation,
+        kinds: kinds,
+        groups: groups,
+        groupMap: groupMap,
+        entities: entities,
+        entityMap: entityMap,
+        relationships: relationships
+      };
+    }
+
+    _noun() {
+      return this.getAttribute('notation') === 'class' ? 'class diagram' : 'data model';
+    }
+
+    _ensureScaffold(data) {
+      var stage = this.querySelector(':scope > [data-q-flow-stage]');
+      if (!stage) {
+        stage = kitNode('div');
+        stage.className = 'q-flow-stage';
+        stage.setAttribute('data-q-flow-stage', '');
+        var existingDetails = this.querySelector(':scope > details[data-q-flow-list]');
+        if (existingDetails) {
+          this.insertBefore(stage, existingDetails);
+        } else {
+          this.appendChild(stage);
+        }
+      }
+      var details = this.querySelector(':scope > details[data-q-flow-list]');
+      if (!details) {
+        details = kitNode('details');
+        details.className = 'q-flow-list';
+        details.setAttribute('data-q-flow-list', '');
+        details.open = true;
+        this.appendChild(details);
+      }
+      if (data) {
+        this._populateList(details, data);
+      }
+      var live = this.querySelector(':scope > [data-q-flow-live]');
+      if (!live) {
+        live = kitNode('div');
+        live.className = 'q-visually-hidden';
+        live.setAttribute('aria-live', 'polite');
+        live.setAttribute('data-q-flow-live', '');
+        this.appendChild(live);
+      }
+      this._stage = stage;
+      this._details = details;
+      this._live = live;
+    }
+
+    /** Fills the text list; its text is the same as the build's no-JS fallback for the same model. */
+    _populateList(details, data) {
+      while (details.firstChild) {
+        details.removeChild(details.firstChild);
+      }
+      var isClass = data.notation === 'class';
+      var summary = document.createElement('summary');
+      summary.textContent = isClass ? 'Class diagram as a list' : 'Data model as a list';
+      details.appendChild(summary);
+
+      var body = document.createElement('div');
+      body.setAttribute('data-q-flow-list-body', '');
+
+      function renderEntityItem(entity) {
+        var li = document.createElement('li');
+        li.setAttribute('data-q-schema-list-entity', entity.id);
+        var title = document.createElement('strong');
+        title.textContent = entity.label;
+        li.appendChild(title);
+        var meta = [entity.kind, entity.stereotype].filter(function (m) { return m; });
+        if (meta.length) {
+          li.appendChild(document.createTextNode(' (' + meta.join(', ') + ')'));
+        }
+        if (entity.detail) {
+          var det = document.createElement('div');
+          det.setAttribute('data-q-flow-list-detail', '');
+          det.appendChild(sanitizeFlowDetail(entity.detail));
+          li.appendChild(det);
+        }
+        var lines = isClass
+          ? entity.fields.map(function (f) { return schemaMemberLine(f, false); })
+            .concat(entity.methods.map(function (m) { return schemaMemberLine(m, true); }))
+          : entity.fields.map(schemaFieldLine);
+        if (lines.length) {
+          var ul = document.createElement('ul');
+          lines.forEach(function (line) {
+            var item = document.createElement('li');
+            item.textContent = line;
+            ul.appendChild(item);
+          });
+          li.appendChild(ul);
+        }
+        return li;
+      }
+
+      function renderGroupItem(g) {
+        var li = document.createElement('li');
+        li.setAttribute('data-q-flow-list-group', g.id);
+        var title = document.createElement('strong');
+        title.textContent = g.label;
+        li.appendChild(title);
+        var subUl = document.createElement('ul');
+        data.groups.forEach(function (child) {
+          if (child.parent === g.id) {
+            subUl.appendChild(renderGroupItem(child));
+          }
+        });
+        data.entities.forEach(function (e) {
+          if (e.group === g.id) {
+            subUl.appendChild(renderEntityItem(e));
+          }
+        });
+        if (subUl.firstChild) {
+          li.appendChild(subUl);
+        }
+        return li;
+      }
+
+      var rootUl = document.createElement('ul');
+      data.groups.forEach(function (g) {
+        if (!g.parent) {
+          rootUl.appendChild(renderGroupItem(g));
+        }
+      });
+      data.entities.forEach(function (e) {
+        if (!e.group) {
+          rootUl.appendChild(renderEntityItem(e));
+        }
+      });
+      body.appendChild(rootUl);
+      if (data.relationships.length) {
+        var heading = document.createElement('p');
+        heading.textContent = 'Relationships';
+        body.appendChild(heading);
+        var relUl = document.createElement('ul');
+        relUl.setAttribute('data-q-schema-list-rels', '');
+        data.relationships.forEach(function (r) {
+          var item = document.createElement('li');
+          item.textContent = schemaRelSentence(data, r);
+          relUl.appendChild(item);
+        });
+        body.appendChild(relUl);
+      }
+      details.appendChild(body);
+    }
+
+    _failLayout() {
+      if (this._stage) {
+        while (this._stage.firstChild) {
+          this._stage.removeChild(this._stage.firstChild);
+        }
+        var p = document.createElement('p');
+        p.className = 'q-flow-notice';
+        p.setAttribute('data-q-flow-notice', '');
+        p.textContent = 'This ' + this._noun() + ' could not be drawn.';
+        this._stage.appendChild(p);
+      }
+      if (this._details) {
+        this._details.open = true;
+      }
+      this.setAttribute('data-q-flow-ready', 'error');
+    }
+
+    _measureTextFactory() {
+      return canvasMeasureFactory(this);
+    }
+
+    _setup() {
+      var self = this;
+      this._initialized = true;
+      this._lastSig = this._signature();
+      this.removeAttribute('data-q-flow-ready');
+      var data = this._parseData();
+      this._ensureScaffold(data);
+      if (!data) {
+        this._failLayout();
+        return;
+      }
+      if (!window.quirkFlow || typeof window.quirkFlow.ELK !== 'function') {
+        this._failLayout();
+        return;
+      }
+      if (data.notation === 'class') {
+        this._failLayout();
+        return;
+      }
+      this._data = data;
+      var seq = ++this._layoutSeq;
+      var fontsReady = (document.fonts && document.fonts.ready && typeof document.fonts.ready.then === 'function')
+        ? document.fonts.ready.catch(function () {})
+        : Promise.resolve();
+
+      fontsReady.then(function () {
+        if (!self.isConnected || seq !== self._layoutSeq) {
+          return;
+        }
+        self._runLayout(data, seq);
+      });
+    }
+
+    /** Sizes every card, hands ELK one node per card with a port pair per related row, and draws the result. */
+    _runLayout(data, seq) {
+      var self = this;
+      var measure = this._measureTextFactory();
+
+      var used = {};
+      data.relationships.forEach(function (r) {
+        used[r.fromEntity + '\u0000' + r.fromField] = true;
+        used[r.toEntity + '\u0000' + r.toField] = true;
+      });
+
+      var cards = {};
+      var selfRels = {};
+      data.relationships.forEach(function (r) {
+        if (r.fromEntity === r.toEntity) {
+          (selfRels[r.fromEntity] = selfRels[r.fromEntity] || []).push(r);
+        }
+      });
+      data.entities.forEach(function (entity) {
+        var shown = schemaFoldFields(entity, used);
+        var nameW = 0;
+        var typeW = 0;
+        var badgesW = 0;
+        var rows = shown.map(function (field) {
+          var badges = field.keys.map(function (key) {
+            return { key: key, width: measure(key, 9, '600') + 10 };
+          });
+          var rowBadgesW = badges.reduce(function (sum, b) { return sum + b.width + 4; }, 0) - (badges.length ? 4 : 0);
+          nameW = Math.max(nameW, measure(field.name, 12, '500'));
+          typeW = Math.max(typeW, measure(field.type, 11, '400'));
+          badgesW = Math.max(badgesW, rowBadgesW);
+          return { field: field, badges: badges, badgesW: rowBadgesW };
+        });
+        var hidden = entity.fields.length - shown.length;
+        var kindW = entity.kind ? measure(entity.kind.toUpperCase(), 10, '600') + 16 : 0;
+        var headerW = 20 + measure(entity.label, 13, '600') + kindW + 14;
+        var rowsW = 12 + nameW + 16 + typeW + (badgesW ? 14 + badgesW : 0) + 12;
+        var width = Math.ceil(Math.max(SCHEMA_CARD_MIN_W, headerW, rowsW));
+        var loops = selfRels[entity.id] || [];
+        var extra = 0;
+        loops.forEach(function (r, k) {
+          var labelW = r.label ? measure(r.label, 11, '500') + 14 : 0;
+          extra = Math.max(extra, SCHEMA_LOOP_OUT + k * 12 + (labelW ? 6 + labelW : 0));
+        });
+        cards[entity.id] = {
+          entity: entity,
+          rows: rows,
+          hidden: hidden,
+          nameW: nameW,
+          typeW: typeW,
+          width: width,
+          height: SCHEMA_HEADER_H + (rows.length + (hidden ? 1 : 0)) * SCHEMA_ROW_H + 8,
+          extra: extra
+        };
+      });
+      this._cards = cards;
+
+      function rowCentre(card, fieldName) {
+        for (var i = 0; i < card.rows.length; i += 1) {
+          if (card.rows[i].field.name === fieldName) {
+            return SCHEMA_HEADER_H + i * SCHEMA_ROW_H + SCHEMA_ROW_H / 2;
+          }
+        }
+        return null;
+      }
+
+      var ports = {};
+      function portId(entityId, fieldName, side) {
+        return 'port:' + entityId + ':' + fieldName + ':' + side;
+      }
+      data.relationships.forEach(function (r) {
+        if (r.fromEntity === r.toEntity) {
+          return;
+        }
+        [[r.fromEntity, r.fromField], [r.toEntity, r.toField]].forEach(function (end) {
+          var card = cards[end[0]];
+          var y = rowCentre(card, end[1]);
+          [['WEST', -1], ['EAST', card.width]].forEach(function (side) {
+            var id = portId(end[0], end[1], side[0]);
+            if (!ports[id]) {
+              ports[id] = {
+                entity: end[0],
+                port: {
+                  id: id,
+                  x: side[1],
+                  y: y,
+                  width: 0,
+                  height: 0,
+                  layoutOptions: { 'elk.port.side': side[0] }
+                }
+              };
+            }
+          });
+        });
+      });
+
+      function elkNode(entity) {
+        var card = cards[entity.id];
+        return {
+          id: entity.id,
+          width: card.width + card.extra,
+          height: card.height,
+          layoutOptions: { 'elk.portConstraints': 'FIXED_POS' },
+          ports: Object.keys(ports).filter(function (id) {
+            return ports[id].entity === entity.id;
+          }).map(function (id) {
+            return ports[id].port;
+          })
+        };
+      }
+
+      function buildElkGroup(g) {
+        var children = [];
+        data.groups.forEach(function (cg) {
+          if (cg.parent === g.id) {
+            children.push(buildElkGroup(cg));
+          }
+        });
+        data.entities.forEach(function (e) {
+          if (e.group === g.id) {
+            children.push(elkNode(e));
+          }
+        });
+        return {
+          id: g.id,
+          width: Math.max(120, measure(g.label, 12, '600') + 36),
+          height: 60,
+          layoutOptions: { 'elk.padding': '[top=38,left=18,bottom=18,right=18]' },
+          children: children
+        };
+      }
+
+      var rootChildren = [];
+      data.groups.forEach(function (g) {
+        if (!g.parent) {
+          rootChildren.push(buildElkGroup(g));
+        }
+      });
+      data.entities.forEach(function (e) {
+        if (!e.group) {
+          rootChildren.push(elkNode(e));
+        }
+      });
+
+      var elkEdges = [];
+      data.relationships.forEach(function (r) {
+        if (r.fromEntity === r.toEntity) {
+          return;
+        }
+        var labels = [];
+        if (r.label) {
+          labels.push({ text: r.label, width: measure(r.label, 11, '500') + 14, height: 20 });
+        }
+        elkEdges.push({
+          id: 'rel' + r.index,
+          sources: [portId(r.toEntity, r.toField, 'EAST')],
+          targets: [portId(r.fromEntity, r.fromField, 'WEST')],
+          labels: labels
+        });
+      });
+
+      var elkGraph = {
+        id: 'root',
+        layoutOptions: {
+          'elk.algorithm': 'layered',
+          'elk.direction': 'RIGHT',
+          'elk.hierarchyHandling': 'INCLUDE_CHILDREN',
+          'elk.edgeRouting': 'ORTHOGONAL',
+          'elk.json.shapeCoords': 'ROOT',
+          'elk.json.edgeCoords': 'ROOT',
+          'elk.layered.spacing.nodeNodeBetweenLayers': '52',
+          'elk.spacing.nodeNode': '28',
+          'elk.spacing.edgeNode': '24',
+          'elk.edgeLabels.inline': 'true'
+        },
+        children: rootChildren,
+        edges: elkEdges
+      };
+
+      try {
+        var elk = new window.quirkFlow.ELK();
+        Promise.resolve(elk.layout(elkGraph)).then(function (laidOut) {
+          if (!self.isConnected || seq !== self._layoutSeq) {
+            return;
+          }
+          if (!laidOut || !Array.isArray(laidOut.children)) {
+            self._failLayout();
+            return;
+          }
+          self._renderGraph(data, laidOut);
+        }).catch(function () {
+          if (!self.isConnected || seq !== self._layoutSeq) {
+            return;
+          }
+          self._failLayout();
+        });
+      } catch (_err) {
+        this._failLayout();
+      }
+    }
+
+    _renderGraph(data, laidOut) {
+      var self = this;
+      var cards = this._cards;
+      var groupBoxes = {};
+      var nodeBoxes = {};
+      var groupOrder = [];
+
+      function collectShapes(items, depth) {
+        (items || []).forEach(function (item) {
+          if (data.groupMap[item.id]) {
+            groupBoxes[item.id] = {
+              id: item.id,
+              x: item.x || 0,
+              y: item.y || 0,
+              width: item.width || 120,
+              height: item.height || 80,
+              depth: depth
+            };
+            groupOrder.push(item.id);
+            collectShapes(item.children, depth + 1);
+          } else if (data.entityMap[item.id]) {
+            nodeBoxes[item.id] = {
+              id: item.id,
+              x: item.x || 0,
+              y: item.y || 0,
+              width: cards[item.id].width,
+              height: cards[item.id].height
+            };
+          }
+        });
+      }
+      collectShapes(laidOut.children, 0);
+
+      function rowY(entityId, fieldName) {
+        var card = cards[entityId];
+        for (var i = 0; i < card.rows.length; i += 1) {
+          if (card.rows[i].field.name === fieldName) {
+            return nodeBoxes[entityId].y + SCHEMA_HEADER_H + i * SCHEMA_ROW_H + SCHEMA_ROW_H / 2;
+          }
+        }
+        return nodeBoxes[entityId].y;
+      }
+
+      var laidOutEdges = {};
+      (laidOut.edges || []).forEach(function (le) {
+        laidOutEdges[le.id] = le;
+      });
+
+      var minX = Infinity;
+      var minY = Infinity;
+      var maxX = -Infinity;
+      var maxY = -Infinity;
+      function expandBounds(x, y, w, h) {
+        if (x < minX) { minX = x; }
+        if (y < minY) { minY = y; }
+        if (x + w > maxX) { maxX = x + w; }
+        if (y + h > maxY) { maxY = y + h; }
+      }
+      Object.keys(groupBoxes).forEach(function (gid) {
+        var b = groupBoxes[gid];
+        expandBounds(b.x, b.y, b.width, b.height);
+      });
+      Object.keys(nodeBoxes).forEach(function (nid) {
+        var b = nodeBoxes[nid];
+        expandBounds(b.x, b.y, b.width, b.height);
+      });
+
+      var selfCount = {};
+      var relShapes = data.relationships.map(function (r) {
+        var fromBox = nodeBoxes[r.fromEntity];
+        var toBox = nodeBoxes[r.toEntity];
+        var fromY = rowY(r.fromEntity, r.fromField);
+        var toY = rowY(r.toEntity, r.toField);
+        var pts = [];
+        var label = null;
+        if (r.fromEntity === r.toEntity) {
+          var k = selfCount[r.fromEntity] || 0;
+          selfCount[r.fromEntity] = k + 1;
+          var edgeX = fromBox.x + fromBox.width;
+          var outX = edgeX + SCHEMA_LOOP_OUT + k * 12;
+          var yA = fromY === toY ? fromY - 6 : fromY;
+          var yB = fromY === toY ? toY + 6 : toY;
+          pts = [
+            { x: edgeX, y: yA },
+            { x: outX, y: yA },
+            { x: outX, y: yB },
+            { x: edgeX, y: yB }
+          ];
+          if (r.label) {
+            var loopW = self._measureTextFactory()(r.label, 11, '500') + 14;
+            label = { x: outX + 6, y: (yA + yB) / 2 - 10, width: loopW, height: 20 };
+          }
+        } else {
+          var le = laidOutEdges['rel' + r.index] || {};
+          (le.sections || []).forEach(function (sec) {
+            if (sec.startPoint && pts.length === 0) {
+              pts.push({ x: sec.startPoint.x, y: sec.startPoint.y });
+            }
+            (sec.bendPoints || []).forEach(function (bp) {
+              pts.push({ x: bp.x, y: bp.y });
+            });
+            if (sec.endPoint) {
+              pts.push({ x: sec.endPoint.x, y: sec.endPoint.y });
+            }
+          });
+          if (pts.length < 2) {
+            pts = [
+              { x: toBox.x + toBox.width, y: toY },
+              { x: fromBox.x, y: fromY }
+            ];
+          }
+          var first = pts[0];
+          var last = pts[pts.length - 1];
+          first.x = toBox.x + toBox.width;
+          first.y = toY;
+          last.x = fromBox.x;
+          last.y = fromY;
+          if (r.label && le.labels && le.labels[0]) {
+            label = {
+              x: le.labels[0].x || 0,
+              y: le.labels[0].y || 0,
+              width: le.labels[0].width || 60,
+              height: le.labels[0].height || 20
+            };
+          }
+        }
+        pts.forEach(function (p) {
+          expandBounds(p.x, p.y, 0, 0);
+        });
+        if (!label && r.label) {
+          var a = pts[0];
+          var z = pts[pts.length - 1];
+          label = { x: (a.x + z.x) / 2 - 30, y: (a.y + z.y) / 2 - 10, width: 60, height: 20 };
+        }
+        if (label) {
+          expandBounds(label.x, label.y, label.width, label.height);
+        }
+        return { pts: pts, label: label, self: r.fromEntity === r.toEntity };
+      });
+      if (!isFinite(minX)) {
+        minX = 0; minY = 0; maxX = 320; maxY = 180;
+      }
+
+      this._groupBoxes = groupBoxes;
+      this._nodeBoxes = nodeBoxes;
+      this._bounds = {
+        x: minX - 20,
+        y: minY - 20,
+        width: Math.max(160, (maxX - minX) + 40),
+        height: Math.max(100, (maxY - minY) + 40)
+      };
+
+      while (this._stage.firstChild) {
+        this._stage.removeChild(this._stage.firstChild);
+      }
+
+      var capH = Math.min(640, Math.max(260, Math.round((window.innerHeight || 800) * 0.66)));
+      var naturalH = Math.round(this._bounds.height + 56);
+      this._stage.style.height = Math.max(240, Math.min(capH, naturalH)) + 'px';
+
+      var uidValue = this._uid;
+      var svg = svgNode('svg', {
+        'class': 'q-flow-svg',
+        'data-q-flow-svg': '',
+        'role': 'group',
+        'aria-label': this.getAttribute('summary') || 'Interactive data model'
+      });
+
+      var defs = svgNode('defs');
+      this._markerIds = {};
+      SCHEMA_CARDS.forEach(function (kind) {
+        [['', 'var(--q-color-text-muted)'], ['lit-', 'var(--q-color-accent)']].forEach(function (variant) {
+          var id = 'q-schema-mark-' + variant[0] + kind + '-' + uidValue;
+          var marker = svgNode('marker', {
+            id: id,
+            'data-q-schema-mark': kind,
+            viewBox: '0 0 24 16',
+            refX: '24',
+            refY: '8',
+            markerWidth: '24',
+            markerHeight: '16',
+            markerUnits: 'userSpaceOnUse',
+            orient: 'auto-start-reverse',
+            overflow: 'visible'
+          });
+          schemaMarkShapes(kind, variant[1]).forEach(function (shape) {
+            marker.appendChild(shape);
+          });
+          defs.appendChild(marker);
+          self._markerIds[variant[0] + kind] = 'url(#' + id + ')';
+        });
+      });
+      svg.appendChild(defs);
+
+      var viewport = svgNode('g', { 'data-q-flow-viewport': '' });
+      var groupsLayer = svgNode('g', { 'data-q-flow-groups': '' });
+      var edgesLayer = svgNode('g', { 'data-q-flow-edges': '' });
+      var nodesLayer = svgNode('g', { 'data-q-flow-nodes': '' });
+      viewport.appendChild(groupsLayer);
+      viewport.appendChild(edgesLayer);
+      viewport.appendChild(nodesLayer);
+      svg.appendChild(viewport);
+
+      groupOrder.forEach(function (gid) {
+        var g = data.groupMap[gid];
+        var box = groupBoxes[gid];
+        if (!g || !box) {
+          return;
+        }
+        var gEl = svgNode('g', {
+          'class': 'q-flow-group',
+          'data-q-flow-group': gid,
+          'data-q-flow-lane': 'false'
+        });
+        var tint = box.depth === 0
+          ? 'color-mix(in srgb, var(--q-color-accent) 6%, var(--q-color-surface))'
+          : 'color-mix(in srgb, var(--q-color-accent) 12%, var(--q-color-surface))';
+        gEl.appendChild(svgNode('rect', {
+          'data-q-flow-group-box': '',
+          x: box.x,
+          y: box.y,
+          width: box.width,
+          height: box.height,
+          rx: 8,
+          fill: tint,
+          stroke: 'var(--q-color-border)',
+          'stroke-width': '1'
+        }));
+        var headerG = svgNode('g', {
+          'data-q-flow-group-header': gid,
+          'role': 'button',
+          'aria-label': 'Focus group ' + g.label
+        });
+        headerG.appendChild(svgNode('rect', {
+          x: box.x,
+          y: box.y,
+          width: box.width,
+          height: 28,
+          rx: 8,
+          fill: 'transparent'
+        }));
+        headerG.appendChild(svgNode('line', {
+          x1: box.x,
+          y1: box.y + 28,
+          x2: box.x + box.width,
+          y2: box.y + 28,
+          stroke: 'var(--q-color-border)',
+          'stroke-width': '1'
+        }));
+        var hText = svgNode('text', {
+          x: box.x + 12,
+          y: box.y + 18,
+          fill: 'var(--q-color-text)',
+          'font-size': '12',
+          'font-weight': '600'
+        });
+        hText.textContent = g.label;
+        headerG.appendChild(hText);
+        headerG.addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          self._focusGroup(gid);
+        });
+        gEl.appendChild(headerG);
+        groupsLayer.appendChild(gEl);
+      });
+
+      this._relRecords = [];
+      data.relationships.forEach(function (r, idx) {
+        var shape = relShapes[idx];
+        var pts = shape.pts;
+        var d = shape.self
+          ? roundedFlowPath(pts, 8)
+          : pts.map(function (p, i) {
+            return (i === 0 ? 'M ' : 'L ') + p.x + ' ' + p.y;
+          }).join(' ');
+        var eG = svgNode('g', {
+          'class': 'q-flow-edge',
+          'data-q-schema-rel': String(idx),
+          'data-q-schema-from': r.fromEntity,
+          'data-q-schema-to': r.toEntity,
+          'data-q-schema-from-mark': r.fromCard,
+          'data-q-schema-to-mark': r.toCard
+        });
+        // the path runs from the referenced end to the referencing end, except a self-relationship, which starts at its from row
+        var startMark = shape.self ? r.fromCard : r.toCard;
+        var endMark = shape.self ? r.toCard : r.fromCard;
+        var path = svgNode('path', {
+          'data-q-flow-edge-line': '',
+          d: d,
+          fill: 'none',
+          stroke: 'var(--q-color-text-muted)',
+          'stroke-width': '1.75',
+          'marker-start': self._markerIds[startMark],
+          'marker-end': self._markerIds[endMark]
+        });
+        eG.appendChild(path);
+        if (r.label && shape.label) {
+          var lbl = shape.label;
+          var lblG = svgNode('g', { 'data-q-schema-rel-label': '' });
+          lblG.appendChild(svgNode('rect', {
+            x: lbl.x,
+            y: lbl.y,
+            width: lbl.width,
+            height: lbl.height,
+            rx: '4',
+            fill: 'var(--q-color-bg)',
+            stroke: 'var(--q-color-border)',
+            'stroke-width': '1'
+          }));
+          var lblT = svgNode('text', {
+            x: lbl.x + lbl.width / 2,
+            y: lbl.y + 14,
+            'text-anchor': 'middle',
+            fill: 'var(--q-color-text-muted)',
+            'font-size': '11'
+          });
+          lblT.textContent = r.label;
+          lblG.appendChild(lblT);
+          eG.appendChild(lblG);
+        }
+        edgesLayer.appendChild(eG);
+        self._relRecords.push({
+          rel: r,
+          groupEl: eG,
+          path: path,
+          startMark: startMark,
+          endMark: endMark
+        });
+      });
+
+      this._focusedNode = null;
+      this._focusedGroup = null;
+      this._rovingId = data.entities[0].id;
+      this._nodeElements = {};
+      data.entities.forEach(function (entity, idx) {
+        var box = nodeBoxes[entity.id];
+        var card = cards[entity.id];
+        if (!box) {
+          return;
+        }
+        var colorIdx = entity.kind ? data.kinds[entity.kind] : null;
+        var accent = colorIdx ? 'var(--q-color-chart-' + colorIdx + ')' : 'var(--q-color-border)';
+        var nG = svgNode('g', {
+          'class': 'q-schema-entity',
+          'data-q-schema-entity': entity.id,
+          'data-q-flow-kind': entity.kind || '',
+          'role': 'button',
+          'tabindex': idx === 0 ? '0' : '-1',
+          'aria-label': schemaAnnounce(data, entity)
+        });
+        if (entity.stereotype) {
+          nG.setAttribute('data-q-schema-stereotype', entity.stereotype);
+        }
+        nG.appendChild(svgNode('rect', {
+          'data-q-schema-card': '',
+          x: box.x,
+          y: box.y,
+          width: box.width,
+          height: box.height,
+          rx: '6',
+          fill: 'var(--q-color-surface)',
+          stroke: 'var(--q-color-border)',
+          'stroke-width': '1'
+        }));
+        nG.appendChild(svgNode('rect', {
+          'data-q-schema-accent': '',
+          x: box.x,
+          y: box.y,
+          width: '5',
+          height: SCHEMA_HEADER_H,
+          rx: '2',
+          fill: accent
+        }));
+        var title = svgNode('text', {
+          'data-q-schema-label': '',
+          x: box.x + 16,
+          y: box.y + 22,
+          fill: 'var(--q-color-text)',
+          'font-size': '13',
+          'font-weight': '600'
+        });
+        title.textContent = entity.label;
+        nG.appendChild(title);
+        if (entity.kind) {
+          var kindText = svgNode('text', {
+            'data-q-schema-kind': '',
+            x: box.x + box.width - 12,
+            y: box.y + 21,
+            'text-anchor': 'end',
+            fill: 'var(--q-color-text-muted)',
+            'font-size': '10',
+            'font-weight': '600',
+            'letter-spacing': '0.06em'
+          });
+          kindText.textContent = entity.kind.toUpperCase();
+          nG.appendChild(kindText);
+        }
+        nG.appendChild(svgNode('line', {
+          x1: box.x,
+          y1: box.y + SCHEMA_HEADER_H,
+          x2: box.x + box.width,
+          y2: box.y + SCHEMA_HEADER_H,
+          stroke: 'var(--q-color-border)',
+          'stroke-width': '1'
+        }));
+
+        card.rows.forEach(function (row, i) {
+          var top = box.y + SCHEMA_HEADER_H + i * SCHEMA_ROW_H;
+          var centre = top + SCHEMA_ROW_H / 2;
+          var rG = svgNode('g', {
+            'data-q-schema-field': row.field.name,
+            'data-q-schema-row-y': centre
+          });
+          rG.appendChild(svgNode('rect', {
+            'data-q-schema-row-bg': '',
+            x: box.x + 1,
+            y: top,
+            width: box.width - 2,
+            height: SCHEMA_ROW_H
+          }));
+          var nameText = svgNode('text', {
+            'data-q-schema-name': '',
+            x: box.x + 12,
+            y: centre + 4,
+            fill: 'var(--q-color-text)',
+            'font-size': '12',
+            'font-weight': '500'
+          });
+          nameText.textContent = row.field.name;
+          rG.appendChild(nameText);
+          var typeText = svgNode('text', {
+            'data-q-schema-type': '',
+            x: box.x + 12 + card.nameW + 16,
+            y: centre + 4,
+            fill: 'var(--q-color-text-muted)',
+            'font-size': '11'
+          });
+          typeText.textContent = row.field.type;
+          rG.appendChild(typeText);
+          var bx = box.x + box.width - 12 - row.badgesW;
+          row.badges.forEach(function (badge) {
+            var bG = svgNode('g', { 'data-q-schema-badge': badge.key });
+            bG.appendChild(svgNode('rect', {
+              x: bx,
+              y: centre - 8,
+              width: badge.width,
+              height: 16,
+              rx: '3'
+            }));
+            var bT = svgNode('text', {
+              x: bx + badge.width / 2,
+              y: centre + 3,
+              'text-anchor': 'middle'
+            });
+            bT.textContent = badge.key;
+            bG.appendChild(bT);
+            rG.appendChild(bG);
+            bx += badge.width + 4;
+          });
+          nG.appendChild(rG);
+        });
+
+        if (card.hidden) {
+          var moreTop = box.y + SCHEMA_HEADER_H + card.rows.length * SCHEMA_ROW_H;
+          var mG = svgNode('g', { 'data-q-schema-more': '' });
+          mG.appendChild(svgNode('rect', {
+            'data-q-schema-row-bg': '',
+            x: box.x + 1,
+            y: moreTop,
+            width: box.width - 2,
+            height: SCHEMA_ROW_H
+          }));
+          var moreText = svgNode('text', {
+            x: box.x + 12,
+            y: moreTop + SCHEMA_ROW_H / 2 + 4
+          });
+          moreText.textContent = '+' + card.hidden + ' more';
+          mG.appendChild(moreText);
+          nG.appendChild(mG);
+        }
+
+        nG.addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          self._setRoving(entity.id, false);
+          self._focusNode(entity.id);
+        });
+        nG.addEventListener('keydown', function (ev) {
+          self._onNodeKey(ev, entity.id);
+        });
+        nodesLayer.appendChild(nG);
+        self._nodeElements[entity.id] = nG;
+      });
+
+      svg.addEventListener('click', function (ev) {
+        if (ev.target === svg || ev.target === viewport) {
+          self._clearFocus();
+        }
+      });
+      svg.addEventListener('keydown', function (ev) {
+        self._onGraphKey(ev);
+      });
+
+      this._svg = svg;
+      this._viewport = viewport;
+      this._stage.appendChild(svg);
+      this._buildControls();
+      this._buildDrawer();
+      this._setupZoom();
+      this._fitBounds(this._bounds, false);
+
+      if (this._details) {
+        this._details.open = false;
+      }
+      this.setAttribute('data-q-flow-ready', 'true');
+    }
+
+    _buildControls() {
+      canvasBuildControls(this, 'model');
+    }
+
+    _buildDrawer() {
+      canvasBuildDrawer(this, 'Entity details');
+    }
+
+    _setupZoom() {
+      canvasSetupZoom(this);
+    }
+
+    _applyTransform(x, y, k) {
+      canvasApplyTransform(this, x, y, k);
+    }
+
+    _zoomBy(factor) {
+      canvasZoomBy(this, factor);
+    }
+
+    _fitBounds(bounds, reserveDrawer) {
+      canvasFitBounds(this, bounds, reserveDrawer);
+    }
+
+    _ensureNodeVisible(nodeId, avoidDrawer) {
+      canvasEnsureVisible(this, nodeId, avoidDrawer);
+    }
+
+    _toggleExpand() {
+      canvasToggleExpand(this);
+    }
+
+    _setRoving(nodeId, moveDomFocus) {
+      canvasSetRoving(this, nodeId, moveDomFocus);
+    }
+
+    _nearestNeighbor(fromId, key) {
+      return canvasNearestNeighbor(this, fromId, key, this._data.entities.map(function (e) { return e.id; }));
+    }
+
+    _handleEscape(ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (this.hasAttribute('data-q-flow-expanded') && !this._focusedAfterExpand) {
+        this._toggleExpand();
+        return;
+      }
+      if (this._focusedNode || this._focusedGroup) {
+        this._clearFocus();
+        this._focusedAfterExpand = false;
+        return;
+      }
+      if (this.hasAttribute('data-q-flow-expanded')) {
+        this._toggleExpand();
+      }
+    }
+
+    /** Sets lit or dim on a card, group or line element, clearing the other. */
+    _mark(el, lit) {
+      if (lit) {
+        el.setAttribute('data-q-flow-lit', '');
+        el.removeAttribute('data-q-flow-dim');
+      } else {
+        el.removeAttribute('data-q-flow-lit');
+        el.setAttribute('data-q-flow-dim', '');
+      }
+    }
+
+    _paintRel(rec, lit) {
+      rec.path.setAttribute('stroke', lit ? 'var(--q-color-accent)' : 'var(--q-color-text-muted)');
+      rec.path.setAttribute('stroke-width', lit ? '2' : '1.75');
+      rec.path.setAttribute('marker-start', this._markerIds[(lit ? 'lit-' : '') + rec.startMark]);
+      rec.path.setAttribute('marker-end', this._markerIds[(lit ? 'lit-' : '') + rec.endMark]);
+    }
+
+    _focusNode(entityId) {
+      var self = this;
+      var data = this._data;
+      if (!data || !data.entityMap[entityId]) {
+        return;
+      }
+      if (this.hasAttribute('data-q-flow-expanded')) {
+        this._focusedAfterExpand = true;
+      }
+      this._focusedNode = entityId;
+      this._focusedGroup = null;
+
+      var litNodes = {};
+      litNodes[entityId] = true;
+      var litRels = {};
+      data.relationships.forEach(function (r) {
+        if (r.fromEntity === entityId || r.toEntity === entityId) {
+          litRels[r.index] = true;
+          litNodes[r.fromEntity] = true;
+          litNodes[r.toEntity] = true;
+        }
+      });
+      var litGroups = {};
+      Object.keys(litNodes).forEach(function (nid) {
+        var gId = data.entityMap[nid].group;
+        while (gId && data.groupMap[gId]) {
+          litGroups[gId] = true;
+          gId = data.groupMap[gId].parent;
+        }
+      });
+
+      Object.keys(this._nodeElements).forEach(function (nid) {
+        var el = self._nodeElements[nid];
+        if (nid === entityId) {
+          el.setAttribute('data-q-flow-selected', '');
+        } else {
+          el.removeAttribute('data-q-flow-selected');
+        }
+        self._mark(el, Boolean(litNodes[nid]));
+      });
+      var groupEls = this._stage.querySelectorAll('[data-q-flow-group]');
+      for (var gi = 0; gi < groupEls.length; gi += 1) {
+        this._mark(groupEls[gi], Boolean(litGroups[groupEls[gi].getAttribute('data-q-flow-group')]));
+      }
+      this._relRecords.forEach(function (rec) {
+        var lit = Boolean(litRels[rec.rel.index]);
+        self._mark(rec.groupEl, lit);
+        self._paintRel(rec, lit);
+      });
+
+      this._openDrawer(data.entityMap[entityId]);
+      this._ensureNodeVisible(entityId, true);
+      if (this._live) {
+        this._live.textContent = schemaAnnounce(data, data.entityMap[entityId]);
+      }
+    }
+
+    _openDrawer(entity) {
+      var self = this;
+      var data = this._data;
+      var drawer = this._drawer;
+      if (!drawer || !entity || !data) {
+        return;
+      }
+      while (drawer.firstChild) {
+        drawer.removeChild(drawer.firstChild);
+      }
+      var head = document.createElement('div');
+      head.setAttribute('data-q-flow-drawer-head', '');
+      var h3 = document.createElement('h3');
+      h3.textContent = entity.label;
+      head.appendChild(h3);
+      var closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.setAttribute('data-q-flow-drawer-close', '');
+      closeBtn.setAttribute('aria-label', 'Close details');
+      closeBtn.textContent = 'Close';
+      closeBtn.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        self._clearFocus();
+      });
+      head.appendChild(closeBtn);
+      drawer.appendChild(head);
+
+      if (entity.kind) {
+        var kindBadge = document.createElement('div');
+        kindBadge.setAttribute('data-q-flow-drawer-kind', '');
+        var colorIdx = data.kinds[entity.kind];
+        if (colorIdx) {
+          kindBadge.style.setProperty('--q-flow-kind-color', 'var(--q-color-chart-' + colorIdx + ')');
+        }
+        kindBadge.textContent = entity.kind;
+        drawer.appendChild(kindBadge);
+      }
+
+      if (entity.detail) {
+        var detBox = document.createElement('div');
+        detBox.setAttribute('data-q-flow-drawer-detail', '');
+        detBox.appendChild(sanitizeFlowDetail(entity.detail));
+        drawer.appendChild(detBox);
+      }
+
+      var fieldsBox = document.createElement('div');
+      fieldsBox.setAttribute('data-q-flow-drawer-edges', 'fields');
+      var fieldsHead = document.createElement('h4');
+      fieldsHead.textContent = 'Fields';
+      fieldsBox.appendChild(fieldsHead);
+      var fieldsUl = document.createElement('ul');
+      entity.fields.forEach(function (f) {
+        var li = document.createElement('li');
+        li.setAttribute('data-q-schema-drawer-field', f.name);
+        li.textContent = schemaFieldLine(f);
+        fieldsUl.appendChild(li);
+      });
+      fieldsBox.appendChild(fieldsUl);
+      drawer.appendChild(fieldsBox);
+
+      var rels = data.relationships.filter(function (r) {
+        return r.fromEntity === entity.id || r.toEntity === entity.id;
+      });
+      if (rels.length) {
+        var relBox = document.createElement('div');
+        relBox.setAttribute('data-q-flow-drawer-edges', 'relationships');
+        var relHead = document.createElement('h4');
+        relHead.textContent = 'Relationships';
+        relBox.appendChild(relHead);
+        var relUl = document.createElement('ul');
+        rels.forEach(function (r) {
+          var otherId = r.fromEntity === entity.id ? r.toEntity : r.fromEntity;
+          var li = document.createElement('li');
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.setAttribute('data-q-flow-edge-btn', '');
+          btn.setAttribute('data-q-flow-target', otherId);
+          btn.textContent = (r.label || 'has') + ': ' + data.entityMap[otherId].label
+            + ' (' + r.fromField + ' \u2192 ' + r.toField + ')';
+          btn.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            self._setRoving(otherId, false);
+            self._focusNode(otherId);
+          });
+          li.appendChild(btn);
+          relUl.appendChild(li);
+        });
+        relBox.appendChild(relUl);
+        drawer.appendChild(relBox);
+      }
+      drawer.removeAttribute('data-q-inactive');
+    }
+
+    _focusGroup(groupId) {
+      var self = this;
+      var data = this._data;
+      if (!data || !data.groupMap[groupId]) {
+        return;
+      }
+      this._focusedGroup = groupId;
+      this._focusedNode = null;
+      if (this._drawer) {
+        this._drawer.setAttribute('data-q-inactive', '');
+      }
+
+      var inGroup = {};
+      inGroup[groupId] = true;
+      var changed = true;
+      while (changed) {
+        changed = false;
+        data.groups.forEach(function (g) {
+          if (g.parent && inGroup[g.parent] && !inGroup[g.id]) {
+            inGroup[g.id] = true;
+            changed = true;
+          }
+        });
+      }
+      var members = {};
+      data.entities.forEach(function (e) {
+        if (e.group && inGroup[e.group]) {
+          members[e.id] = true;
+        }
+      });
+
+      Object.keys(this._nodeElements).forEach(function (nid) {
+        var el = self._nodeElements[nid];
+        el.removeAttribute('data-q-flow-selected');
+        self._mark(el, Boolean(members[nid]));
+      });
+      var groupEls = this._stage.querySelectorAll('[data-q-flow-group]');
+      for (var gi = 0; gi < groupEls.length; gi += 1) {
+        this._mark(groupEls[gi], Boolean(inGroup[groupEls[gi].getAttribute('data-q-flow-group')]));
+      }
+      this._relRecords.forEach(function (rec) {
+        self._mark(rec.groupEl, Boolean(members[rec.rel.fromEntity] && members[rec.rel.toEntity]));
+        self._paintRel(rec, false);
+      });
+
+      var gBox = this._groupBoxes && this._groupBoxes[groupId];
+      if (gBox) {
+        this._fitBounds({
+          x: gBox.x - 16,
+          y: gBox.y - 16,
+          width: gBox.width + 32,
+          height: gBox.height + 32
+        }, false);
+      }
+    }
+
+    _clearFocus() {
+      var self = this;
+      this._focusedNode = null;
+      this._focusedGroup = null;
+      if (this._drawer) {
+        this._drawer.setAttribute('data-q-inactive', '');
+      }
+      if (!this._stage) {
+        return;
+      }
+      Object.keys(this._nodeElements || {}).forEach(function (nid) {
+        var el = self._nodeElements[nid];
+        el.removeAttribute('data-q-flow-selected');
+        el.removeAttribute('data-q-flow-lit');
+        el.removeAttribute('data-q-flow-dim');
+      });
+      var groupEls = this._stage.querySelectorAll('[data-q-flow-group]');
+      for (var gi = 0; gi < groupEls.length; gi += 1) {
+        groupEls[gi].removeAttribute('data-q-flow-lit');
+        groupEls[gi].removeAttribute('data-q-flow-dim');
+      }
+      (this._relRecords || []).forEach(function (rec) {
+        rec.groupEl.removeAttribute('data-q-flow-lit');
+        rec.groupEl.removeAttribute('data-q-flow-dim');
+        self._paintRel(rec, false);
+      });
+    }
+
+    _onNodeKey(ev, entityId) {
+      if (ev.key === 'ArrowRight' || ev.key === 'ArrowLeft' || ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        var nextId = this._nearestNeighbor(entityId, ev.key);
+        if (nextId) {
+          this._setRoving(nextId, true);
+        }
+      } else if (ev.key === 'Enter' || ev.key === ' ') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        this._focusNode(entityId);
+      } else {
+        this._onGraphKey(ev);
+      }
+    }
+
+    _onGraphKey(ev) {
+      if (ev.key === '+' || ev.key === '=') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        this._zoomBy(1.25);
+      } else if (ev.key === '-' || ev.key === '_') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        this._zoomBy(0.8);
+      } else if (ev.key === '0') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        this._fitBounds(this._bounds, false);
+      } else if (ev.key === 'Escape') {
+        this._handleEscape(ev);
+      }
+    }
+
+    _applyTheme() {
+      /* SVG and drawer colors use var(--q-color-*) custom properties, so they update live without re-layout. */
+    }
+  }
+
   define('q-tabs', QTabs);
   define('q-timeline', QTimeline);
   define('q-code', QCode);
@@ -6082,4 +7982,5 @@
   define('q-sidenote', QSidenote);
   define('q-compare', QCompare);
   define('q-flow', QFlow);
+  define('q-schema', QSchema);
 })();

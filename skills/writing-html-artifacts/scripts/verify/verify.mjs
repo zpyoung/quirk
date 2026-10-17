@@ -226,12 +226,12 @@ async function verify(browser, label, sha) {
       if (!noJs) {
         try {
           await page.waitForFunction(
-            () => [...document.querySelectorAll("q-flow")].every((el) => el.hasAttribute("data-q-flow-ready")),
+            () => [...document.querySelectorAll("q-flow, q-schema")].every((el) => el.hasAttribute("data-q-flow-ready")),
             null,
             { timeout: 10000 },
           );
         } catch {
-          consoleDetails.push(`${run}: q-flow did not finish laying out within 10s`);
+          consoleDetails.push(`${run}: q-flow or q-schema did not finish laying out within 10s`);
         }
       }
       await page.waitForTimeout(150);
