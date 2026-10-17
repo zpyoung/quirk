@@ -1104,12 +1104,12 @@ q-flow :where([data-q-flow-node]:focus-visible) {
   outline: none;
 }
 
-q-flow :where([data-q-flow-node]:focus-visible) > rect:where([data-q-flow-box]) {
+q-flow :where([data-q-flow-node]:focus-visible) > :where([data-q-flow-box]) {
   stroke: var(--q-color-focus);
   stroke-width: 2.5px;
 }
 
-q-flow :where([data-q-flow-node][data-q-flow-selected]) > rect:where([data-q-flow-box]) {
+q-flow :where([data-q-flow-node][data-q-flow-selected]) > :where([data-q-flow-box]) {
   stroke: var(--q-color-accent);
   stroke-width: 2px;
 }
@@ -1213,6 +1213,30 @@ q-flow :where([data-q-flow-drawer-detail]) > :where(:first-child) {
   margin-top: 0;
 }
 
+q-flow :where([data-q-flow-drawer-flow]) {
+  margin-top: var(--q-space-3);
+  font-size: var(--q-size-small);
+}
+
+q-flow :where([data-q-flow-flow-missing]) {
+  margin: 0;
+  color: var(--q-color-text-muted);
+}
+
+q-flow :where([data-q-flow-open-flow]) {
+  display: inline-flex;
+  align-items: center;
+  margin: 0;
+  padding: var(--q-space-1) var(--q-space-2);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-sm);
+  background: var(--q-color-bg);
+  color: var(--q-color-text);
+  font: inherit;
+  font-size: var(--q-size-small);
+  cursor: pointer;
+}
+
 q-flow :where([data-q-flow-drawer-edges]) {
   margin-top: var(--q-space-3);
   padding-top: var(--q-space-2);
@@ -1268,6 +1292,7 @@ q-flow > details > summary {
 @media (max-width: 700px) {
   q-flow :where([data-q-flow-controls]) > button,
   q-flow :where([data-q-flow-drawer-close]),
+  q-flow :where([data-q-flow-open-flow]),
   q-flow :where([data-q-flow-edge-btn]) {
     min-height: 44px;
     min-width: 44px;
