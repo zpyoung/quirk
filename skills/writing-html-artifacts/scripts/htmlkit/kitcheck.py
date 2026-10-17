@@ -2283,8 +2283,8 @@ def _render_schema_fallback_html(parsed: dict[str, Any]) -> str:
 
 
 _SCHEMA_CLOSER = re.compile(r"</q-schema\s*>\Z", re.IGNORECASE)
-_SCHEMA_SCAN = re.compile(r"<!--|<script\b[^>]*>|<q-schema\b[^>]*>|</q-schema\s*>", re.IGNORECASE)
-_SCRIPT_END = re.compile(r"</script\b", re.IGNORECASE)
+_SCHEMA_SCAN = re.compile(r"<!--|<script(?=[\s/>])[^>]*>|<q-schema(?=[\s/>])[^>]*>|</q-schema\s*>", re.IGNORECASE)
+_SCRIPT_END = re.compile(r"</script(?=[\s/>])", re.IGNORECASE)
 _COMMENT_END = re.compile(r"-->|--!>")
 
 

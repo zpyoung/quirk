@@ -2330,6 +2330,20 @@ def test_schema_fallback_ignores_opener_text_inside_scripts_and_comments() -> No
     assert kitcheck.inject_schema_fallbacks(out) == out
 
 
+def test_schema_fallback_ends_a_script_only_at_a_real_script_end_tag() -> None:
+    real = schema_markup(billing_model())
+    # </script-thing> and <q-schema-x> look like tag names to a \b match but are not script or q-schema tags
+    decoys = (
+        '<script>var s = "</script-thing> <q-schema summary=\'fake\'>";</script>\n'
+        '<q-schema-x summary="other"></q-schema-x>\n'
+        "<script-x></script-x>\n"
+    )
+    out = kitcheck.inject_schema_fallbacks(decoys + real)
+    assert out.count("data-q-flow-list-body") == 1
+    assert out.index("data-q-flow-list-body") > out.index(real[:40])
+    assert kitcheck.inject_schema_fallbacks(out) == out
+
+
 def test_schema_fallback_skips_an_entity_detail_nested_past_the_recursion_limit() -> None:
     def deep(m):
         m["entities"][0]["detail"] = "<ul><li>" * 1100 + "x" + "</li></ul>" * 1100
