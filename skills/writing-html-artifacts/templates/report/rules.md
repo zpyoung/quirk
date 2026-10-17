@@ -27,7 +27,8 @@ Read after the [design reference](../../references/design-reference.md). These r
 ## Charts and tables
 
 - Bar, line and area charts use `<q-chart>`, sortable tables use `<q-table>`, and explorable graphs of services, pipelines or data flows use `<q-flow>`. Attributes and examples are in [components](../../references/components.md); the element supplies the accessible label, the fallback view and the theme rebuild. Reuse the same `kinds` names and `--q-color-chart-*` numbers across artifacts.
-- `<q-flow>` is the tool for every flowchart on an HTML page, including decisions (`shape: "decision"`), retries (`loop: true`) and steps that are their own process (`shape: "subprocess"`, optional `flow`). Mermaid diagrams go in a `q-chart` wrapper with a text description beside them; use Mermaid for state charts and sequence and ER diagrams.
+- `<q-flow>` is the tool for every flowchart on an HTML page, including decisions (`shape: "decision"`), retries (`loop: true`) and steps that are their own process (`shape: "subprocess"`, optional `flow`). Mermaid diagrams go in a `q-chart` wrapper with a text description beside them; use Mermaid for state charts and sequence diagrams.
+- `<q-schema>` is the tool for every data model, entity-relationship diagram and class diagram on an HTML page, with `notation="class"` for a class diagram. Pass the model as JSON and never write coordinates.
 - Scatter and histogram charts stay hand-written Chart.js, under section 9 of the design reference.
 
 ## Scripts and data

@@ -142,9 +142,10 @@ def test_flow_evals_are_balanced_and_unique() -> None:
     assert all(set(e) == {"id", "prompt", "expected"} for e in evals)
     assert all(isinstance(e["id"], int) and not isinstance(e["id"], bool) for e in evals)
     assert all(isinstance(e["prompt"], str) and e["prompt"].strip() for e in evals)
-    assert all(e["expected"] in ("q-flow", "mermaid") for e in evals)
+    assert all(e["expected"] in ("q-flow", "mermaid", "q-schema") for e in evals)
     assert sum(e["expected"] == "q-flow" for e in evals) >= 6
     assert sum(e["expected"] == "mermaid" for e in evals) >= 6
+    assert sum(e["expected"] == "q-schema" for e in evals) >= 2
     assert len({e["prompt"] for e in evals}) == len(evals)
     assert len({e["id"] for e in evals}) == len(evals)
 

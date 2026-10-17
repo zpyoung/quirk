@@ -69,7 +69,7 @@
     {
       "id": 14,
       "prompt": "Add an entity-relationship diagram of the users, subscriptions, and charges tables to the HTML design write-up.",
-      "expected": "mermaid"
+      "expected": "q-schema"
     },
     {
       "id": 15,
@@ -79,7 +79,7 @@
     {
       "id": 16,
       "prompt": "Include a class diagram of the parser interfaces in our HTML technical overview.",
-      "expected": "mermaid"
+      "expected": "q-schema"
     },
     {
       "id": 17,
@@ -110,6 +110,16 @@
       "id": 22,
       "prompt": "Put a flowchart with a decision and a retry loop for the nightly import job in our docs/runbook.md.",
       "expected": "mermaid"
+    },
+    {
+      "id": 23,
+      "prompt": "Put an ER diagram of the orders and customers tables in the project README.",
+      "expected": "mermaid"
+    },
+    {
+      "id": 24,
+      "prompt": "Add a class diagram of the plugin interfaces I can click through to the HTML architecture page.",
+      "expected": "q-schema"
     }
   ]
 }

@@ -50,9 +50,9 @@ Read after the [design reference](../../references/design-reference.md). These r
 
 ## Kit elements
 
-- Write `q-*` elements (`q-chart`, `q-stat`, `q-table`, `q-tabs`, `q-board`, `q-flow` and the rest) in a view's JSX and the build inlines the kit, Chart.js for `q-chart`, and the flow layout library for `q-flow`. The attributes and markup each one takes are in [the component reference](../../references/components.md); the build's `kit` check fails an unknown tag, a missing required attribute or a bad literal value, naming the `src/` file and line.
+- Write `q-*` elements (`q-chart`, `q-stat`, `q-table`, `q-tabs`, `q-board`, `q-flow` and the rest) in a view's JSX and the build inlines the kit, Chart.js for `q-chart`, and the flow layout library for `q-flow` and `q-schema`. The attributes and markup each one takes are in [the component reference](../../references/components.md); the build's `kit` check fails an unknown tag, a missing required attribute or a bad literal value, naming the `src/` file and line.
 - Use `className`, not `class`.
-- Keep a `q-*` element's direct children stable. Change rows or attributes, or give the element a `key` to remount it, because the element builds its own DOM from those children. For `q-flow`, pass the JSON child as `<script type="application/json">{JSON.stringify(graph)}</script>` and reuse the same `kinds` names and chart colors across views.
+- Keep a `q-*` element's direct children stable. Change rows or attributes, or give the element a `key` to remount it, because the element builds its own DOM from those children. For `q-flow` and `q-schema`, pass the JSON child as `<script type="application/json">{JSON.stringify(graph)}</script>` and reuse the same `kinds` names and chart colors across views.
 - Never let React re-render `q-board` cards: the board owns card placement and saves it.
 
 ## Modes and network
