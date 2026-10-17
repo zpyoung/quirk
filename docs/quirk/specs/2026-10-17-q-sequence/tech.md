@@ -2,7 +2,7 @@
 
 **Status**: Reviewed (tech-spec reviewer, fixes applied) · Logic spec: [logic.md](logic.md) · Builds on [the q-flow tech spec](/docs/quirk/specs/2026-10-16-q-flow/tech.md) and [the q-flow traces tech spec](/docs/quirk/specs/2026-10-17-q-flow-traces/tech.md)
 
-All paths are relative to the repository root. `S` = `skills/writing-html-artifacts`, `K` = `skills/writing-html-artifacts/vendor/kit/1.0.0`, `H` = `skills/writing-html-artifacts/scripts/htmlkit`. Line numbers are from commit `c4e34ff`.
+All paths are relative to the repository root. `S` = `skills/writing-html-artifacts`, `K` = `skills/writing-html-artifacts/vendor/kit/1.0.0`, `H` = `skills/writing-html-artifacts/scripts/htmlkit`. Line numbers are from commit `c4e34ff`, before the rebase onto q-schema; task prompts carry re-resolved anchors.
 
 ## Architecture
 
@@ -20,7 +20,7 @@ Back-links: [Conceptual model](logic.md#conceptual-model), [Data flow](logic.md#
 
 No new library. The renderer is plain SVG in `kit.js`; nothing new touches `window.quirkFlow`, so `needs_flow` and the flow bundle are unchanged.
 
-**Reuse model.** Trace mode reuses q-flow's panel by borrowing `QFlow.prototype` methods onto `QSequence.prototype` (contract 5), not by copying them and not by moving them. The one q-flow change is a step-label hook. The pulse is borrowed the same way. Module-level pure helpers (`traceDiff`, `renderTraceField`, `traceValueOk`, `tracePretty`, `sanitizeFlowDetail`, `isValidFlowDetail`, `isBlankFlowId`, `svgNode`, `kitNode`, `uid`, `onTheme`, `watchChildren`, `nextFrame`, `pulseSchedule`) are called directly.
+**Reuse model.** Trace mode reuses q-flow's panel by borrowing `QFlow.prototype` methods onto `QSequence.prototype` (contract 5), not by copying them and not by moving them. The one q-flow change is a step-label hook. The pulse is borrowed the same way. Shared canvas helpers that fit: `canvasMeasureFactory` for label widths and `canvasBuildDrawer` for the drawer shell; `canvasBuildControls` does not fit, because it always adds zoom, fit and expand over a canvas. Module-level pure helpers (`traceDiff`, `renderTraceField`, `traceValueOk`, `tracePretty`, `sanitizeFlowDetail`, `isValidFlowDetail`, `isBlankFlowId`, `svgNode`, `kitNode`, `uid`, `onTheme`, `watchChildren`, `nextFrame`, `pulseSchedule`) are called directly.
 
 ## Code references
 
@@ -221,7 +221,7 @@ CONTRACT: QSequence parse result
 | message | `g[data-q-sequence-message="<N>"][role=button][tabindex]` with a line, arrowhead, label text and `aria-label="Message N of M, <from> to <to>, <label>, <type>"` (M = message count; SC-12's announcement is this label) |
 | lifeline, bar, fragment, note | `[data-q-sequence-lifeline="<id>"]`, `[data-q-sequence-bar="<id>"]`, `[data-q-sequence-fragment="<type>"]`, `[data-q-sequence-note]` |
 | created header | `g[data-q-sequence-created="<id>"]` in the SVG at the creating row, a click target but not in the roving order (the strip header is the participant's roving stop); end `[data-q-sequence-end="<id>"]` X |
-| drawer | `aside[data-q-sequence-drawer][aria-label="Details"][data-q-inactive]` |
+| drawer | `aside.q-flow-drawer[data-q-flow-drawer][aria-label="Details"][data-q-inactive]`, built by the shared `canvasBuildDrawer(host, label, parent)` with `parent` = the element (the helper's optional third argument, defaulting to `host._stage` for q-flow and q-schema); styled only from the q-sequence block |
 | live region | `div.q-visually-hidden[aria-live=polite][data-q-sequence-live]` |
 | trace panel | built by the borrowed `_buildTracePanel`, so it is `aside[data-q-flow-trace-panel]` with spec 2's parts and `data-q-flow-*` names |
 | list | contract 4 |
