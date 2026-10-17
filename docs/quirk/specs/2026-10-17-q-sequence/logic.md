@@ -1,6 +1,6 @@
 # Logic spec: `q-sequence`, an interactive sequence diagram element
 
-**Status**: Approved
+**Status**: Approved · Tech spec: authored (`tech.md`; tier gate fired: crosses subsystem boundaries and touches >3 source files)
 
 Agents draw sequence diagrams in Mermaid today. Mermaid gives a static picture: the reader can't open
 a message to see what it carries, can't pick out one participant's part in a long exchange, and can't
