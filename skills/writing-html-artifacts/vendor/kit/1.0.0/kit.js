@@ -3172,20 +3172,78 @@
     return true;
   }
 
-  /** Whether a trace value is JSON the Python build check also accepts: finite numbers, no unpaired surrogates in strings or keys. */
+  /**
+   * Whether a trace value is JSON the Python build check also accepts: finite numbers, no unpaired
+   * surrogates in strings or keys, and shallow enough to walk and pretty-print. Walks with an explicit
+   * stack so a very deep value can't overflow the call stack.
+   */
   function traceValueOk(value) {
-    if (typeof value === 'number') {
-      return isFinite(value);
+    try {
+      var stack = [value];
+      while (stack.length) {
+        var v = stack.pop();
+        if (typeof v === 'number') {
+          if (!isFinite(v)) {
+            return false;
+          }
+        } else if (typeof v === 'string') {
+          if (!traceStringOk(v)) {
+            return false;
+          }
+        } else if (v !== null && typeof v === 'object') {
+          var keys = Object.keys(v);
+          for (var i = 0; i < keys.length; i += 1) {
+            if (!Array.isArray(v) && !traceStringOk(keys[i])) {
+              return false;
+            }
+            stack.push(v[keys[i]]);
+          }
+        }
+      }
+      return tracePretty(value).split('\n').length <= FLOW_TRACE_MAX_LINES;
+    } catch (_e) {
+      return false;
     }
-    if (typeof value === 'string') {
-      return traceStringOk(value);
+  }
+
+  /**
+   * Whether every string and object key in the graph data can be written as UTF-8. Trace step values
+   * are left to `traceValueOk`, which reports them under its own rule.
+   */
+  function flowGraphTextOk(raw) {
+    var childCtx = {
+      root: { traces: 'traces' },
+      trace: { steps: 'steps' },
+      step: { value: null }
+    };
+    var stack = [{ v: raw, ctx: 'root' }];
+    while (stack.length) {
+      var item = stack.pop();
+      var v = item.v;
+      if (typeof v === 'string') {
+        if (!traceStringOk(v)) {
+          return false;
+        }
+      } else if (Array.isArray(v)) {
+        var next = item.ctx === 'traces' ? 'trace' : (item.ctx === 'steps' ? 'step' : 'any');
+        for (var i = 0; i < v.length; i += 1) {
+          stack.push({ v: v[i], ctx: next });
+        }
+      } else if (v !== null && typeof v === 'object') {
+        var keys = Object.keys(v);
+        var rules = childCtx[item.ctx] || {};
+        for (var k = 0; k < keys.length; k += 1) {
+          if (!traceStringOk(keys[k])) {
+            return false;
+          }
+          var ctx = Object.prototype.hasOwnProperty.call(rules, keys[k]) ? rules[keys[k]] : 'any';
+          if (ctx !== null) {
+            stack.push({ v: v[keys[k]], ctx: ctx });
+          }
+        }
+      }
     }
-    if (value === null || typeof value !== 'object') {
-      return true;
-    }
-    return traceChildren(value).every(function (pair) {
-      return (Array.isArray(value) || traceStringOk(pair[0])) && traceValueOk(pair[1]);
-    });
+    return true;
   }
 
   function traceKind(value) {
@@ -3292,7 +3350,7 @@
         if (!has.call(nodeMap, s.node) || (s.note !== undefined && typeof s.note !== 'string')) {
           return null;
         }
-        if (!traceValueOk(s.value) || tracePretty(s.value).split('\n').length > FLOW_TRACE_MAX_LINES) {
+        if (!traceValueOk(s.value)) {
           return null;
         }
         var edge = null;
@@ -3492,6 +3550,9 @@
         return null;
       }
       if (!isRow(raw) || hasCoordKeys(raw) || !Array.isArray(raw.nodes) || raw.nodes.length === 0 || raw.nodes.length > 200) {
+        return null;
+      }
+      if (!flowGraphTextOk(raw)) {
         return null;
       }
       var kinds = isRow(raw.kinds) ? raw.kinds : {};
