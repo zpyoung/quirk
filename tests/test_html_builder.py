@@ -1124,4 +1124,5 @@ def test_q_flow_trace_list_names_loop_and_edge_id_when_unlabelled(tmp_path, env,
 def test_q_flow_without_traces_has_no_trace_block(tmp_path, env, project):
     rc, result, out = report_build(tmp_path, env, project, FLOW, name="flownotraces")
     assert rc == 0, result
-    assert "data-q-flow-list-trace" not in out.read_text(encoding="utf-8")
+    # the inlined kit.js names the attribute too, so look for the rendered block only
+    assert '<div data-q-flow-list-trace="' not in out.read_text(encoding="utf-8")
