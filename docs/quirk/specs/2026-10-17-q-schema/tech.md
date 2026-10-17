@@ -71,7 +71,7 @@ Back-links: [Key decisions and rationale](logic.md#key-decisions-and-rationale),
 ```
 CONTRACT: module-level functions in K/kit.js, each taking the host element first
 canvasMeasureFactory(host) -> (text, sizePx, weight?) -> int
-canvasBuildControls(host, noun)            // noun: 'graph' | 'model' | 'diagram'
+canvasBuildControls(host, noun, addExtra?) // noun: 'graph' | 'model' | 'diagram'; addExtra(addBtn) adds buttons before Expand, addBtn(action, label, text, onClick)
 canvasBuildDrawer(host, label)             // label: aria-label of the aside
 canvasSetupZoom(host)
 canvasApplyTransform(host, x, y, k)
@@ -86,6 +86,7 @@ canvasNearestNeighbor(host, fromId, key, order) -> id | null   // order: ids for
 - **Host field contract** (read and written by the helpers, already QFlow's names): `_stage`, `_svg`, `_viewport`, `_drawer`, `_transform`, `_bounds`, `_nodeBoxes` (id → `{x, y, width, height}`, ROOT coordinates), `_nodeElements` (id → focusable SVG `g`), `_expandBtn`, `_d3Zoom`, `_d3Selection`, `_rovingId`, `_focusedAfterExpand`.
 - **Host method contract**: helpers that call back (`canvasBuildControls`, `canvasSetRoving`) call `host._zoomBy`, `host._fitBounds`, `host._toggleExpand`, `host._ensureNodeVisible`, so both classes keep those method names.
 - **Preconditions and errors**: unchanged from today's methods: each helper returns without effect when `_stage` (or `_svg` for zoom setup, or the box for `canvasEnsureVisible`) is missing, and zoom degrades to setting the viewport transform when `window.quirkFlow.zoom` is absent.
+- **Toolbar hook**: q-flow's trace button ("Step through", from the q-flow traces spec) is added through `addExtra`, so the toolbar order stays zoom in, zoom out, fit, step through, expand.
 - **Postcondition**: each `QFlow` method listed in Code references becomes a one-line delegate with the same signature, passing the exact strings it uses today (`canvasBuildControls(this, 'graph')` yields "Graph controls" and "Expand graph"; `canvasBuildDrawer(this, 'Node details')`; `_nearestNeighbor` passes `this._data.nodes` ids as `order`). Every attribute, class, aria string, number and fallback is byte-identical in effect. The existing q-flow browser tests in `T/test_html_kit_elements.py` (including `FLOW_SHAPES`) pass unmodified.
 - **Invariant**: no other `QFlow` method changes. In particular `_parseData`, `_populateList`, `_runLayout`, `_renderGraph`, `_focusNode`, `_openDrawer`, `_openLinkedFlow`, `_focusGroup`, `_clearFocus`, `_handleEscape`, `_onNodeKey`, `_onGraphKey` and the pulse methods are not edited (DO-NOT-CHANGE).
 
