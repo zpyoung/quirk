@@ -123,6 +123,7 @@ Failures go through `report_fail` at the `<q-sequence>` start line; the element 
 | more than 16 participants | `<q-sequence> has <P> participants; at most 16` |
 | a participant `kind` not in `kinds` | `<q-sequence> participant "<id>" has undeclared kind "<kind>"` |
 | a detail failing the whitelist | `<q-sequence> detail may hold only paragraphs, lists, code and links` |
+| a detail whose elements nest more than 32 deep (counted the same way in both runtimes, without recursion) | `<q-sequence> detail may hold only paragraphs, lists, code and links` |
 | a duplicate participant or message id | `<q-sequence> has duplicate id "<id>"` (once per id) |
 | `steps` not a non-empty list, or no message anywhere | `<q-sequence> needs at least one message` |
 | a malformed step | `<q-sequence> step must be one message, note, end or fragment` |
@@ -227,7 +228,7 @@ CONTRACT: QSequence parse result
 | list | contract 4 |
 
 **Layout.**
-- Columns in `participants` order. Spacing: adjacent column centres sit at least the widest header apart; any message between columns `a < b` forces `x[b] − x[a] ≥` its label width plus padding; a self-message forces room to the right of its column. Labels wrap at 16em; rows grow to fit wrapped labels.
+- Columns in `participants` order. Spacing: adjacent column centres sit at least the widest header apart; any message between columns `a < b` forces `x[b] − x[a] ≥` its label width plus padding; a self-message forces room to the right of its column. Labels and notes wrap at 16em, and a single word wider than that breaks across lines, so nothing draws outside the SVG; rows grow to fit wrapped text.
 - Rows top to bottom: each message, note and end is a row; a self-message row is taller; a fragment adds a tab row at its top, a divider row between branches, and a closing row.
 - A fragment spans from the leftmost to the rightmost column any of its steps touch (nested steps included), inset per nesting level so both edges show.
 - Message styles from SC-3: call solid with a filled head, reply dashed with an open head, async solid with an open head. The label reads `<N>. <label>`.
@@ -270,7 +271,7 @@ QFlow gains: _traceStepLabel(step) -> data.nodeMap[step.node].label  (its only c
 - Clicks while tracing: a message on the trace jumps to its next visit after the current step, else its first; a message off the trace or a header: `_closeTrace(false)`, then the normal focus; empty space: nothing. Escape, or the toolbar button again: `_closeTrace(true)`.
 - The borrowed `_startPulse` keeps running while `self._focusedNode || self._trace`; `QSequence` never sets `_focusedNode`, so the pulse runs only in trace mode.
 
-**Ready flag.** `data-q-sequence-ready` is absent while setting up, `"true"` once drawn, `"error"` after a parse failure.
+**Ready flag.** Every setup, including one whose parse fails, invalidates any draw still waiting on fonts, so a stale draw never replaces the error notice. `data-q-sequence-ready` is absent while setting up, `"true"` once drawn, `"error"` after a parse failure.
 
 ### 6. Skill guidance and evals
 Back-links: [Choosing](logic.md#choosing), [Success criteria](logic.md#success-criteria).
