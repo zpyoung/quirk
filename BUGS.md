@@ -165,3 +165,12 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: low
 - **Proposed fix**: skip only when a tag outside the JSON script carries a data-q-flow-list attribute, as `inject_schema_fallbacks` does.
 - **Blocker for**: no-JS readers of a graph whose data mentions the attribute name
+
+## BUG-17: q-flow keys its id maps on plain objects, so ids like "constructor" misbehave
+- **Observed**: 2026-10-17 (q-schema SDD checkpoint review)
+- **File**: skills/writing-html-artifacts/vendor/kit/1.0.0/kit.js:3507
+- **Description**: QFlow's parse, layout and focus code index author-supplied node and group ids into plain `{}` objects (`seenIds`, `groupMap`, `nodeMap`, `outByNode`, `nodeSizes`, ...). An id such as `constructor`, `toString` or `__proto__` resolves to an inherited property. The same pattern in q-schema crashed layout before readiness was set; q-flow was not reproduced here and is fenced from this branch. q-schema now uses prototype-free maps (commit 76cd7b9).
+- **Introduced by**: unknown (q-flow runtime, before d6895d2)
+- **Severity**: medium
+- **Proposed fix**: use `Object.create(null)` or `Map` for every QFlow dictionary keyed by an author id, and add a browser test with those ids.
+- **Blocker for**: graphs whose node or group ids collide with Object.prototype names
