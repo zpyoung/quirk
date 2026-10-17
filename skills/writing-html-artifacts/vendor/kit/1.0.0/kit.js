@@ -3765,21 +3765,26 @@
       play.addEventListener('click', function () {
         self._toggleTracePlay();
       });
-      panel.addEventListener('keydown', function (ev) {
-        if (ev.target === picker || ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) {
-          return;
-        }
-        var delta = 0;
-        if (ev.key === 'ArrowRight' || ev.key === 'ArrowDown') {
-          delta = 1;
-        } else if (ev.key === 'ArrowLeft' || ev.key === 'ArrowUp') {
-          delta = -1;
-        }
-        if (delta !== 0 && self._trace) {
-          ev.preventDefault();
-          self._traceStepBy(delta);
-        }
-      });
+      if (!panel._qFlowKeys) {
+        // the panel outlives re-layouts, so the listener is installed once and reads the live picker
+        panel._qFlowKeys = true;
+        panel.addEventListener('keydown', function (ev) {
+          var els = self._traceEls;
+          if (!els || ev.target === els.picker || ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) {
+            return;
+          }
+          var delta = 0;
+          if (ev.key === 'ArrowRight' || ev.key === 'ArrowDown') {
+            delta = 1;
+          } else if (ev.key === 'ArrowLeft' || ev.key === 'ArrowUp') {
+            delta = -1;
+          }
+          if (delta !== 0 && self._trace) {
+            ev.preventDefault();
+            self._traceStepBy(delta);
+          }
+        });
+      }
       picker.addEventListener('change', function () {
         self._stopTracePlay();
         self._startTrace(picker.selectedIndex);

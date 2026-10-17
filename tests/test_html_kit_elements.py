@@ -6085,6 +6085,39 @@ def test_flow_trace_arrow_keys_step_from_the_panel_but_not_from_the_picker(flow_
     assert r["nodeArrowKeepsFocusOnNodes"] is not None
 
 
+def test_flow_trace_arrow_keys_step_once_after_the_graph_re_lays_out(flow_traces_page: Path) -> None:
+    out = run(
+        flow_traces_page,
+        ev(FLOW_TRACE_HELPERS, "h"),
+        ev("window.__tr.f.setAttribute('summary', 'Renewal flow, edited once.')", "edit1"),
+        {"wait": 300},
+        ev("window.__tr.f.setAttribute('summary', 'Renewal flow, edited twice.')", "edit2"),
+        {"wait": 300},
+        {"click": TRACE_BTN},
+        ev(
+            """(() => {
+              window.__stepCalls = 0;
+              const f = window.__tr.f;
+              const real = f._traceStepBy;
+              f._traceStepBy = function (d) { window.__stepCalls += 1; return real.call(this, d); };
+              return document.activeElement === f.querySelector('[data-q-flow-trace-next]');
+            })()""",
+            "focusOnNext",
+        ),
+        {"press": "ArrowRight"},
+        ev("({ counter: window.__tr.counter().slice(0, 9), calls: window.__stepCalls })", "right"),
+        {"focus": TRACE_PICKER},
+        ev("window.__stepCalls = 0", "reset"),
+        {"press": "ArrowDown"},
+        ev("window.__stepCalls", "pickerCalls"),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["focusOnNext"] is True
+    assert r["right"] == {"counter": "Step 2 of", "calls": 1}
+    assert r["pickerCalls"] == 0
+
+
 def test_flow_trace_escape_closes_trace_mode_first_and_returns_focus_to_the_button(flow_traces_page: Path) -> None:
     out = run(
         flow_traces_page,
