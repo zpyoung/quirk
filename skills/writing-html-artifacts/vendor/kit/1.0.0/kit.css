@@ -1284,6 +1284,13 @@ q-flow > details {
   margin-top: var(--q-space-2);
 }
 
+q-flow > details > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
 @media (min-width: 701px) {
   q-flow:where([data-q-flow-tracing]) {
     display: grid;
@@ -1428,7 +1435,7 @@ q-flow aside :where([data-q-flow-trace-dot][aria-current="step"]) {
   color: var(--q-color-accent-text);
 }
 
-q-flow :where([data-q-flow-controls]) > :where(button[data-q-flow-action="trace"][aria-pressed="true"]) {
+q-flow :where([data-q-flow-controls]) > button:where([data-q-flow-action="trace"][aria-pressed="true"]) {
   border-color: var(--q-color-accent);
   background: var(--q-color-accent);
   color: var(--q-color-accent-text);
