@@ -1,6 +1,6 @@
 # Logic spec: `q-flow`, an explorable graph element for `writing-html-artifacts`
 
-**Status**: Draft, awaiting the user's review
+**Status**: Approved · Tech spec: authored (`tech.md`; tier gate fired: crosses subsystem boundaries and touches >3 source files)
 
 `q-flow` is a kit element that draws a read-only graph of things and the data moving between them,
 which the reader can pan, zoom and click through. Agents today have Mermaid, which draws a static
@@ -174,15 +174,15 @@ so it always carries everything the canvas does.
    - **Given** the orders graph from SC-1 plus a Refund worker in Billing that sends "refund.issued"
      to Ledger, nothing focused
    - **When** the reader clicks Charge worker
-   - **Then** Charge worker's whole upstream and downstream path stays lit and the rest dims, a pulse
-     travels the lit edges hop by hop in flow order and loops, and the drawer opens with Charge
-     worker's detail and its edges
+   - **Then** Charge worker's whole upstream and downstream path stays lit and the rest dims, pulses
+     travel the lit edges in flow order at one steady speed, a new one leaving before the last
+     arrives, and the drawer opens with Charge worker's detail and its edges
    - **Data before:** **Graph**: nothing focused; drawer closed
    - **Walkthrough:**
      1. The reader clicks Charge worker
      2. The element finds the path: upstream Checkout; downstream Ledger and Retry queue
-     3. The pulse runs Checkout to Charge worker, then Charge worker to Ledger and to Retry queue,
-        then starts again
+     3. Each pulse runs Checkout to Charge worker, then Charge worker to Ledger and to Retry queue,
+        taking longer on a longer edge, and the next pulse leaves Checkout while it is still on its way
    - **Data after:** **Graph**: ✓ Checkout, Charge worker, Ledger, Retry queue lit; ✓ Refund worker
      and its "refund.issued" edge dimmed, because Refund worker is neither upstream nor downstream of
      Charge worker; **Drawer**: ✓ open on the right; ✓ shows "Charge worker", kind "worker", the
@@ -192,7 +192,7 @@ so it always carries everything the canvas does.
 
      | Element | Shown |
      |---|---|
-     | edges on the path | ✓ full color, pulsing hop by hop; async edges stay dashed, sync edges stay solid |
+     | edges on the path | ✓ full color, pulsing in flow order at one speed; async edges stay dashed, sync edges stay solid |
      | edges and nodes off the path | ✓ dimmed |
      | drawer | ✓ open, beside the graph, not covering Charge worker |
 
@@ -369,8 +369,8 @@ Data-flow animation:
   (chosen on the companion over a traveling dot, marching dashes, a highlight sweep and a dot riding a
   pulse; the pulse and the combined option were added at the user's request).
 - Edges pulse only on the focused path.
-- The pulse loops while the path stays focused.
-- The pulse moves hop by hop in flow order.
+- Pulses keep coming while the path stays focused: a new one leaves before the last one arrives.
+- Pulses move in flow order at one speed, so a longer edge takes longer to cross.
 - With reduced motion, the focused path is a thicker static line with arrowheads.
 
 Scope and approach:
@@ -507,6 +507,10 @@ lanes that run along the flow (classic team swimlanes).
 
 ## Status & amendments
 
-**Status**: Draft, awaiting the user's review
+**Status**: Approved · Tech spec: authored (`tech.md`; tier gate fired: crosses subsystem boundaries and touches >3 source files)
 
-**Amendments:** none yet.
+**Amendments:**
+
+- 2026-10-16: pulses travel at one speed instead of one fixed time per hop, and stream at a steady
+  interval instead of waiting for the last one to finish the path (requested by the user after
+  seeing the example page).

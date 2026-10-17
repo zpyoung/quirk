@@ -223,6 +223,17 @@ async function verify(browser, label, sha) {
         await context.close();
         break runs;
       }
+      if (!noJs) {
+        try {
+          await page.waitForFunction(
+            () => [...document.querySelectorAll("q-flow")].every((el) => el.hasAttribute("data-q-flow-ready")),
+            null,
+            { timeout: 10000 },
+          );
+        } catch {
+          consoleDetails.push(`${run}: q-flow did not finish laying out within 10s`);
+        }
+      }
       await page.waitForTimeout(150);
 
       const shot = path.join(outDir, `${width}-${scheme}${noJs ? "-nojs" : ""}.png`);

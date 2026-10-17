@@ -1,0 +1,85 @@
+{
+  "skill_name": "writing-html-artifacts",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Make an interactive HTML map of our billing services that I can click through to see each worker's retry rules and follow how an order event moves upstream and downstream.",
+      "expected": "q-flow"
+    },
+    {
+      "id": 2,
+      "prompt": "Build an HTML explainer of our 35-node data pipeline where new engineers can pan and zoom around, click a job to read its inputs and outputs in a drawer, and highlight everything connected to it.",
+      "expected": "q-flow"
+    },
+    {
+      "id": 3,
+      "prompt": "I want a single-file web page showing our checkout, fraud, and ledger subsystems as grouped boxes I can zoom into and explore hop by hop.",
+      "expected": "q-flow"
+    },
+    {
+      "id": 4,
+      "prompt": "Create an explorable architecture page for the webhook router with stage lanes from intake to delivery, where clicking any service lights up its call path and shows its runbook notes.",
+      "expected": "q-flow"
+    },
+    {
+      "id": 5,
+      "prompt": "Turn our dependency graph of 25 microservices and queues into an offline HTML artifact I can pan, zoom, and click to inspect each service's upstream callers and downstream dependencies.",
+      "expected": "q-flow"
+    },
+    {
+      "id": 6,
+      "prompt": "Make an HTML runbook page with an interactive topology diagram of our regional caches, databases, and workers so on-call can click a failing node and trace every affected path.",
+      "expected": "q-flow"
+    },
+    {
+      "id": 7,
+      "prompt": "Show our event-driven fulfillment flow on a companion screen as an interactive graph I can pan and click through to inspect each queue and worker before we pick a design.",
+      "expected": "q-flow"
+    },
+    {
+      "id": 8,
+      "prompt": "Build an HTML page that maps how customer events flow across our analytics collectors, Kafka topics, and warehouse tables, with clickable nodes that open each table's schema notes.",
+      "expected": "q-flow"
+    },
+    {
+      "id": 9,
+      "prompt": "Add a simple static flowchart of the 4-step login redirect check to this HTML report.",
+      "expected": "mermaid"
+    },
+    {
+      "id": 10,
+      "prompt": "Include a sequence diagram showing the OAuth token exchange between the browser, the auth server, and the API gateway on the HTML explainer page.",
+      "expected": "mermaid"
+    },
+    {
+      "id": 11,
+      "prompt": "Draw a state chart of an order's lifecycle (draft, pending, paid, refunded, voided) in the HTML page.",
+      "expected": "mermaid"
+    },
+    {
+      "id": 12,
+      "prompt": "Put a small static diagram of the three-box retry loop in the report page; nobody needs to click or zoom it.",
+      "expected": "mermaid"
+    },
+    {
+      "id": 13,
+      "prompt": "Write a diagram of the retry flow for this README in Markdown.",
+      "expected": "mermaid"
+    },
+    {
+      "id": 14,
+      "prompt": "Add an entity-relationship diagram of the users, subscriptions, and charges tables to the HTML design write-up.",
+      "expected": "mermaid"
+    },
+    {
+      "id": 15,
+      "prompt": "Show a quick static Mermaid diagram on the companion screen using the diagram field to illustrate the two-step approval sequence.",
+      "expected": "mermaid"
+    },
+    {
+      "id": 16,
+      "prompt": "Include a class diagram of the parser interfaces in our HTML technical overview.",
+      "expected": "mermaid"
+    }
+  ]
+}

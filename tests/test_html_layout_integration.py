@@ -23,12 +23,11 @@ from tests.test_html_companion import server, session  # noqa: F401  (fixtures)
 from tests.test_html_layout_shapes import (  # noqa: F401  (fixtures and helpers)
     CLI,
     SKILL,
+    REGIONS,
     TEMPLATES,
-    ASIDE,
     MAIN,
     NAV,
     SUMMARY,
-    _expected_regions,
     _example,
     _regions,
     at,
@@ -108,19 +107,12 @@ def test_a_companion_screen_with_no_layout_stays_at_960(server) -> None:
 # --- 2. tier-1 parity across templates ---------------------------------------------------------
 
 
-def _without_aside(regions: list[str]) -> list[str]:
-    return [r for r in regions if r != "aside"]
-
-
 @pytest.mark.parametrize("shape", LAYOUTS)
 def test_the_report_and_components_examples_agree_on_layout_region_order_and_nav(pages: dict, shape: str) -> None:
     report_layout, report_regions = _regions(pages[("report", shape)][0])
     components_layout, components_regions = _regions(pages[("components", shape)][0])
     assert report_layout == components_layout == shape
-    # the components template declares no aside slot, so only the report example carries one
-    assert _without_aside(report_regions) == components_regions
-    assert ("aside" in report_regions) is (shape == "report")
-    assert ("nav" in report_regions) is ("nav" in components_regions)
+    assert report_regions == components_regions == REGIONS[shape]
 
 
 def _source_for(template: str, shape: str, as_template: str, dest: Path) -> Path:
@@ -149,7 +141,7 @@ def test_a_freshly_created_template_builds_every_shape_with_the_same_region_orde
         assert read_header(out.read_text(encoding="utf-8"))["layout"] == shape
         layout, regions = _regions(out)
         assert layout == shape
-        assert regions == _regions(pages[(base, shape)][0])[1] == _expected_regions(base, shape), shape
+        assert regions == _regions(pages[(base, shape)][0])[1] == REGIONS[shape], shape
 
 
 # --- 3. rebuild stability through the CLI ------------------------------------------------------
@@ -181,7 +173,7 @@ def test_a_rebuild_after_deleting_layout_from_the_source_keeps_the_shape_and_nav
     assert again["layout"] == shape and again["layout_defaulted"] is False
     meta = read_header(out.read_text(encoding="utf-8"))
     assert meta["layout"] == shape and "layout_defaulted" not in meta
-    assert _regions(out) == before == (shape, _expected_regions("report", shape))
+    assert _regions(out) == before == (shape, REGIONS[shape])
     _, note = run_cli("note", out, "--project-dir", project, env=env)
     assert "no layout named" not in note["markdown"]
 
@@ -190,16 +182,16 @@ def test_a_page_built_with_no_layout_says_so_in_the_note_on_the_first_build_and_
     home: tuple[Path, dict], tmp_path: Path
 ) -> None:
     project, env = home
-    src = _source_for("report", "report", "report", tmp_path / "p.src.html")
+    src = _source_for("report", "explainer", "report", tmp_path / "p.src.html")
     _without_key(src, "layout")
     out = tmp_path / "p.html"
     for attempt in ("first build", "rebuild"):
         code, result = run_cli("build", src, "--out", out, "--project-dir", project, env=env)
         assert code == 0, (attempt, result)
-        assert result["layout"] == "report" and result["layout_defaulted"] is True, attempt
-        assert _regions(out) == ("report", _expected_regions("report", "report")), attempt
+        assert result["layout"] == "explainer" and result["layout_defaulted"] is True, attempt
+        assert _regions(out) == ("explainer", REGIONS["explainer"]), attempt
         _, note = run_cli("note", out, "--project-dir", project, env=env)
-        assert "- Layout: report (no layout named)" in note["markdown"].splitlines(), attempt
+        assert "- Layout: explainer (no layout named)" in note["markdown"].splitlines(), attempt
 
 
 # --- 5. the layout check across tiers ----------------------------------------------------------
@@ -211,7 +203,7 @@ def test_a_hand_written_grid_in_a_slot_style_fails_the_tier_1_build_and_names_q_
     home: tuple[Path, dict], tmp_path: Path
 ) -> None:
     project, env = home
-    src = _source_for("report", "report", "report", tmp_path / "p.src.html")
+    src = _source_for("report", "explainer", "report", tmp_path / "p.src.html")
     src.write_text(src.read_text(encoding="utf-8") + f"\n<style>{HAND_GRID}</style>\n", encoding="utf-8")
     code, result = run_cli("build", src, "--out", tmp_path / "p.html", "--project-dir", project, env=env)
     assert code == 1 and result["checks"]["passed"] is False
@@ -222,7 +214,7 @@ def test_a_hand_written_grid_in_a_slot_style_fails_the_tier_1_build_and_names_q_
 
 # --- 4 and 5. tier 2 (real pnpm build) ---------------------------------------------------------
 
-TIER_2_SHAPES = ("report", "reference", "tool")
+TIER_2_SHAPES = ("explainer", "reference", "tool")
 
 
 def _scaffold_app(project: Path, slug: str, shape: str) -> Path:
@@ -267,9 +259,7 @@ def test_the_app_page_has_the_region_order_and_layout_of_the_tier_1_example(page
 
 @NETWORK
 @pytest.mark.usefixtures("browser_ready")
-def test_at_1280_the_app_report_aside_the_reference_nav_pane_and_the_tool_summary_sit_beside_main(app_pages: dict) -> None:
-    report = _app_view(app_pages["report"], 1280, ("aside", rect(ASIDE)), ("main", rect(MAIN)))
-    assert report["aside"]["left"] >= report["main"]["right"]
+def test_at_1280_the_app_reference_nav_pane_and_the_tool_summary_sit_beside_main(app_pages: dict) -> None:
     reference = _app_view(app_pages["reference"], 1280, ("nav", rect(NAV)), ("main", rect(MAIN)))
     assert reference["nav"]["right"] <= reference["main"]["left"]
     tool = _app_view(app_pages["tool"], 1280, ("summary", rect(SUMMARY)), ("main", rect(MAIN)))
@@ -283,7 +273,7 @@ def test_a_hand_written_grid_in_an_app_css_source_fails_the_tier_2_build_and_nam
     project = tmp_path / "project"
     project.mkdir()
     env = {**os.environ, "QUIRK_HTML_USER_DIR": str(tmp_path / "user")}
-    src = _scaffold_app(project, "cards", "report")
+    src = _scaffold_app(project, "cards", "explainer")
     (src / "src" / "views" / "cards.css").write_text(HAND_GRID + "\n", encoding="utf-8")
     code, result = build_app(project, env, "cards", "--title", "cards example")
     assert code == 1 and result["checks"]["passed"] is False, result

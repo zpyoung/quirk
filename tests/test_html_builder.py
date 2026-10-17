@@ -185,7 +185,7 @@ def test_report_template_declares_its_contract():
     tpl = manifest.load_template(SKILL / "templates" / "report")
     assert tpl.libraries == ["simple-css", "alpine"]
     assert tpl.optional_libraries == ["chartjs", "mermaid"]
-    assert tpl.slots["main"]["required"] is True and tpl.slots["aside"]["required"] is False
+    assert tpl.slots["main"]["required"] is True and "aside" not in tpl.slots
     rules = (SKILL / "templates" / "report" / "rules.md").read_text(encoding="utf-8")
     assert "q-chart" in rules and "references/components.md" in rules
 
@@ -312,7 +312,7 @@ def test_unknown_placeholder_in_skeleton_is_exit_2(tmp_path, env, project):
 
 
 def test_missing_required_slot_is_exit_2(tmp_path, env, project):
-    src = write_src(tmp_path / "m.src.html", {"template": "report", "title": "T"}, {"aside": "<aside>x</aside>"})
+    src = write_src(tmp_path / "m.src.html", {"template": "report", "title": "T"}, {"summary": "<p>x</p>"})
     rc, result = build(src, tmp_path / "m.html", env, project)
     assert rc == 2 and "main" in result["error"]
 
@@ -915,3 +915,37 @@ def test_the_rebuilt_check_of_a_bad_page_cites_the_built_file(tmp_path, env, pro
     assert rc == 1
     details = [f["detail"] for f in check["failures"] if f["check"] == "kit"]
     assert len(details) == 1 and details[0].startswith("bad.html line ") and details[0].endswith("unknown element <q-stats>")
+
+
+FLOW = (
+    '<q-flow summary="Orders flow from checkout to ledger.">'
+    '<script type="application/json">'
+    '{"kinds":{"ui":1,"db":3},"groups":[{"id":"billing","label":"Billing"}],'
+    '"nodes":[{"id":"checkout","label":"Checkout","kind":"ui"},'
+    '{"id":"ledger","label":"Ledger","kind":"db","group":"billing","detail":"<p>Stores entries.</p>"}],'
+    '"edges":[{"from":"checkout","to":"ledger","label":"order.created","async":true}]}'
+    "</script></q-flow>"
+)
+
+
+def test_q_flow_pulls_in_flow_and_kit_and_injects_the_text_list_fallback(tmp_path, env, project):
+    rc, result, out = report_build(tmp_path, env, project, FLOW, name="flow")
+    assert rc == 0 and result["checks"]["passed"] is True, result["checks"]
+    assert list(result["libraries"]) == ["simple-css", "flow", "kit", "alpine"]
+    html = out.read_text(encoding="utf-8")
+    positions = [html.index(f'<script data-quirk-lib="{lib}@') for lib in ("flow", "kit", "alpine")]
+    assert positions == sorted(positions)
+    assert "<!-- license: flow 0.12.0 EPL-2.0 AND ISC" in html
+    assert "<!-- license: kit 1.0.0 MIT" in html
+    assert "<details class=\"q-flow-list\" data-q-kit data-q-flow-list open>" in html
+    assert "<summary>Graph as a list</summary>" in html
+    assert "Stores entries." in html
+    assert "\u2192 Ledger (order.created, async)" in html
+
+
+def test_q_flow_warnings_are_reported_in_build_checks(tmp_path, env, project):
+    long_edge = FLOW.replace('"order.created"', '"' + ("e" * 45) + '"')
+    rc, result, _ = report_build(tmp_path, env, project, long_edge, name="flowwarn")
+    assert rc == 0 and result["checks"]["passed"] is True
+    kit_warns = [w["detail"] for w in result["checks"]["warnings"] if w["check"] == "kit"]
+    assert any("edge labels over 30 characters crowd the layout" in w for w in kit_warns), kit_warns

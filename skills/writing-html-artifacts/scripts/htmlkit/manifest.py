@@ -22,7 +22,7 @@ from .tokens import validate_tokens
 NAME_RE = re.compile(r"^[a-z0-9-]{1,40}\Z")
 SLOT_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 REQUIRED_PLACEHOLDERS = ("{{header}}", "{{title}}", "{{head}}", "{{chrome}}", "{{body_end}}")
-REGION_SLOTS = ("main", "aside")
+REGION_SLOTS = ("main",)
 _SLOT_PLACEHOLDER = re.compile(r"\{\{slot:([^{}]*)\}\}")
 _LIB_KINDS = ("js", "css")
 _LIB_POSITIONS = ("head", "body-end")

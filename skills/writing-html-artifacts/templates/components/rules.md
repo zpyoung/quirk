@@ -5,13 +5,12 @@ Read after the [design reference](../../references/design-reference.md). These r
 ## Layout
 
 - The skeleton gives you the page: a masthead with the theme toggle and the `<h1>` (from `title`), then the page shape you named. Do not write an `<h1>` or a second theme toggle in a slot.
-- Name the shape in the header's `layout` field. All seven work in this template; the one-per-shape examples are in `examples/<shape>.src.html`, and widths and breakpoints are in section 8 of the [design reference](../../references/design-reference.md).
+- Name the shape in the header's `layout` field. All six work in this template; the one-per-shape examples are in `examples/<shape>.src.html`, and widths and breakpoints are in section 8 of the [design reference](../../references/design-reference.md).
 - **`summary` is required.** Write a `<!-- slot: summary -->` slot holding what the shape's summary is (see the table in section 8). For most shapes that is a one-paragraph `class="q-lede"` conclusion. Do not repeat it at the top of `main`.
 - Open `main` with a source or scope line (`class="q-meta"`), then the components in `<section aria-labelledby="...">` blocks with `<h2>` headings.
-- This template declares no `aside` slot, so the `report` aside is not available here.
 - Do not write grid or fixed-width CSS in a slot. Use `q-grid`, `q-panel`, `q-sidenote` or `q-compare` from [components](../../references/components.md); the layout check fails hand-written layout CSS. The section nav is generated, so do not write a table of contents.
 - Helper classes the skeleton defines: `q-lede`, `q-meta`, `q-stack` (a vertical stack with `--q-space-4` gaps), `q-chart` (a wrapper for Mermaid diagrams), `q-table-wrap`, and `num` on `th` and `td` for right-aligned numbers.
-- Prose is capped at 70ch. Tables and charts fill the column.
+- Prose, tables and charts fill the column.
 
 ## Web Awesome
 
@@ -24,7 +23,7 @@ Read after the [design reference](../../references/design-reference.md). These r
 
 ## Charts and tables
 
-- Bar, line and area charts use `<q-chart>`, and sortable tables use `<q-table>`. Attributes and examples are in [components](../../references/components.md).
+- Bar, line and area charts use `<q-chart>`, sortable tables use `<q-table>`, and explorable service or data-flow graphs use `<q-flow>` (reusing `kinds` names and chart colors across artifacts; keep Mermaid for static pictures, sequence diagrams and state charts). Attributes and examples are in [components](../../references/components.md).
 - Scatter and histogram charts stay hand-written Chart.js, under section 9 of the design reference. The theme toggle also sets the `wa-dark` class on `<html>`, so components and charts switch together.
 
 ## Scripts and data

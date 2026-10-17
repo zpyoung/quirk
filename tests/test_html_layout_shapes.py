@@ -1,4 +1,4 @@
-"""Page-shape geometry: the seven examples per template build, verify and lay out as specified.
+"""Page-shape geometry: the six examples per template build, verify and lay out as specified.
 
 Builds always run. The browser tests need `scripts/verify/node_modules`, node and a launchable
 browser, and skip otherwise; nothing here touches the network. Pages are driven at fixed viewport
@@ -36,7 +36,6 @@ IDS = [f"{template}-{shape}" for template, shape in EXAMPLES]
 
 # DOM order of the regions each example carries, per the shape table in the tech spec
 REGIONS = {
-    "report": ["summary", "main", "aside"],
     "explainer": ["summary", "nav", "main"],
     "longform": ["summary", "nav", "main"],
     "tool": ["main", "summary"],
@@ -44,14 +43,7 @@ REGIONS = {
     "dashboard": ["summary", "main"],
     "reference": ["summary", "nav", "main"],
 }
-REPORT_ASIDE_FREE = ("explainer", "longform", "tool", "comparison", "dashboard", "reference")
 NON_DASHBOARD = [shape for shape in LAYOUTS if shape != "dashboard"]
-
-
-def _expected_regions(template: str, shape: str) -> list[str]:
-    """The components template declares no aside slot, so only the report template's report example carries one."""
-    regions = REGIONS[shape]
-    return [r for r in regions if not (r == "aside" and template != "report")]
 
 
 def _example(template: str, shape: str) -> Path:
@@ -82,7 +74,7 @@ def _page(pages: dict, template: str, shape: str) -> Path:
     return pages[(template, shape)][0]
 
 
-def test_there_are_fourteen_examples() -> None:
+def test_there_are_twelve_examples() -> None:
     found = sorted(p.relative_to(SKILL / "templates").as_posix() for p in (SKILL / "templates").glob("*/examples/*.src.html"))
     assert found == sorted(f"{t}/examples/{s}.src.html" for t, s in EXAMPLES)
 
@@ -144,14 +136,12 @@ def _regions(page: Path) -> tuple[str | None, list[str]]:
 def test_dom_order_matches_the_shape_table(pages: dict, template: str, shape: str) -> None:
     layout, regions = _regions(_page(pages, template, shape))
     assert layout == shape
-    assert regions == _expected_regions(template, shape)
+    assert regions == REGIONS[shape]
 
 
-@pytest.mark.parametrize("template", TEMPLATES)
-def test_only_the_report_shape_carries_an_aside(pages: dict, template: str) -> None:
-    for shape in REPORT_ASIDE_FREE:
-        assert "aside" not in _regions(_page(pages, template, shape))[1]
-    assert ("aside" in _regions(_page(pages, template, "report"))[1]) is (template == "report")
+@pytest.mark.parametrize(("template", "shape"), EXAMPLES, ids=IDS)
+def test_no_example_places_an_aside_region(pages: dict, template: str, shape: str) -> None:
+    assert "aside" not in _regions(_page(pages, template, shape))[1]
 
 
 @pytest.mark.parametrize("template", TEMPLATES)
@@ -170,7 +160,7 @@ def browser_ready(pages: dict) -> None:
         pytest.skip(reason)
     if shutil.which("node") is None:
         pytest.skip("node is not installed")
-    page = _page(pages, "report", "report")
+    page = _page(pages, "report", "explainer")
     proc = subprocess.run(
         [sys.executable, str(CLI), "verify", str(page), "--out-dir", str(page.with_suffix(".probe"))],
         capture_output=True,
@@ -196,7 +186,7 @@ def rect(selector: str) -> str:
 
 
 NO_SCROLL = "document.documentElement.scrollWidth <= window.innerWidth"
-SUMMARY, NAV, MAIN, ASIDE = ".q-page > .q-summary", ".q-page > .q-nav", ".q-page > main", ".q-page > aside"
+SUMMARY, NAV, MAIN = ".q-page > .q-summary", ".q-page > .q-nav", ".q-page > main"
 
 
 @pytest.mark.usefixtures("browser_ready")
@@ -243,15 +233,16 @@ def test_every_other_shape_keeps_its_content_within_1440_and_centered_at_2000(pa
 
 @pytest.mark.usefixtures("browser_ready")
 @pytest.mark.parametrize("template", TEMPLATES)
-def test_prose_is_capped_at_70ch_in_every_shape(pages: dict, template: str) -> None:
+def test_prose_and_the_lede_fill_their_column_in_every_shape(pages: dict, template: str) -> None:
     probe = (
-        "(() => { const p = document.querySelector('.q-page > main > p, .q-page > main section p');"
-        " const probe = document.createElement('div'); probe.style.cssText = 'position:absolute;visibility:hidden;width:70ch'; p.appendChild(probe);"
-        " const cap = probe.getBoundingClientRect().width; probe.remove();"
-        " return p.getBoundingClientRect().width <= cap + 1; })()"
+        "(() => [document.querySelector('.q-page > main > p, .q-page > main section p'), document.querySelector('.q-summary > p')]"
+        ".filter(Boolean).map((p) => { const box = p.parentElement; const s = getComputedStyle(box);"
+        " const inner = box.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight);"
+        " return Math.abs(p.getBoundingClientRect().width - inner) <= 1; }))()"
     )
     for shape in LAYOUTS:
-        assert at(_page(pages, template, shape), 1600, ("capped", probe))["capped"] is True, shape
+        fills = at(_page(pages, template, shape), 1600, ("fills", probe))["fills"]
+        assert fills and all(fills), shape
 
 
 @pytest.mark.usefixtures("browser_ready")
@@ -300,20 +291,6 @@ def test_the_reference_pane_starts_at_900_and_the_other_rails_at_1100(pages: dic
     assert at(_page(pages, template, "reference"), 899, ("rail", rail))["rail"] is False
     assert at(_page(pages, template, "explainer"), 1100, ("rail", rail))["rail"] is True
     assert at(_page(pages, template, "explainer"), 1099, ("rail", rail))["rail"] is False
-
-
-@pytest.mark.usefixtures("browser_ready")
-def test_report_aside_sits_beside_main_at_1280_and_below_it_at_375(pages: dict) -> None:
-    page = _page(pages, "report", "report")
-    wide = at(page, 1280, ("aside", rect(ASIDE)), ("main", rect(MAIN)), ("pos", f"getComputedStyle(document.querySelector('{ASIDE}')).position"))
-    assert wide["aside"]["left"] >= wide["main"]["right"]
-    assert abs(wide["aside"]["top"] - wide["main"]["top"]) <= 40
-    assert wide["pos"] == "sticky"
-    edge = at(page, 900, ("aside", rect(ASIDE)), ("main", rect(MAIN)))
-    assert edge["aside"]["left"] >= edge["main"]["right"]
-    narrow = at(page, 375, ("aside", rect(ASIDE)), ("main", rect(MAIN)), ("fits", NO_SCROLL))
-    assert narrow["aside"]["top"] >= narrow["main"]["bottom"]
-    assert narrow["fits"]
 
 
 @pytest.mark.usefixtures("browser_ready")
@@ -436,97 +413,33 @@ def test_a_page_without_a_nav_has_no_aria_current(pages: dict, template: str) ->
     assert results["marked"] == 0
 
 
-OVERLAP = """(() => {
-  const main = document.querySelector('.q-page > main');
-  const notes = [...main.querySelectorAll('q-sidenote')];
-  const text = [...main.querySelectorAll('p, li, h2, h3, h4, table, pre, figure, q-grid, q-chart, q-table, q-compare, q-code, q-panel, blockquote')]
-    .filter((e) => !e.closest('q-sidenote'));
-  const hit = (a, b) => a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
-  const overlaps = [];
-  const info = notes.map((n) => {
-    const r = n.getBoundingClientRect();
-    const own = n.closest('p, li, blockquote');
-    for (const t of text) {
-      if (t === own || t.contains(n)) continue;
-      if (hit(r, t.getBoundingClientRect())) overlaps.push(n.textContent.slice(0, 20) + ' vs ' + t.tagName + ':' + (t.textContent || '').slice(0, 20));
-    }
-    const ownBox = own ? own.getBoundingClientRect() : null;
-    return {left: r.left, right: r.right, width: r.width, float: getComputedStyle(n).float, display: getComputedStyle(n).display,
-            beyondOwn: ownBox ? r.left >= ownBox.right - 0.5 : null};
-  });
-  return {count: notes.length, info, overlaps, fits: document.documentElement.scrollWidth <= innerWidth, right: Math.max(...info.map((i) => i.right))};
+NOTES = """(() => {
+  const notes = [...document.querySelectorAll('.q-page q-sidenote')];
+  const shown = (e) => getComputedStyle(e).display !== 'none' && e.getBoundingClientRect().width > 0;
+  return {count: notes.length, ready: notes.every((n) => n.hasAttribute('data-q-ready')),
+          closed: notes.every((n) => !shown(n.querySelector('[slot="note"]')))};
+})()"""
+
+OPEN_EACH = """(() => {
+  const out = [];
+  for (const words of document.querySelectorAll('.q-page q-sidenote')) {
+    words.click();
+    const box = words.querySelector('[slot="note"]').getBoundingClientRect();
+    out.push(box.width > 0 && box.left >= 0 && box.right <= innerWidth);
+    words.click();
+  }
+  return {inside: out, fits: document.documentElement.scrollWidth <= innerWidth};
 })()"""
 
 
 @pytest.mark.usefixtures("browser_ready")
 @pytest.mark.parametrize("template", TEMPLATES)
-@pytest.mark.parametrize("width", [1100, 1280, 1440, 1920])
-def test_longform_sidenotes_sit_in_the_margin_without_overlapping_the_text(pages: dict, template: str, width: int) -> None:
-    out = at(_page(pages, template, "longform"), width, ("notes", OVERLAP), ("nav", rect(NAV)), height=900)
-    notes = out["notes"]
-    assert out["nav"] is not None and notes["count"] >= 2
-    assert notes["overlaps"] == []
-    assert notes["fits"] is True
-    assert notes["right"] <= width
-    for info in notes["info"]:
-        assert info["float"] == "right" and info["width"] > 0
-        assert info["beyondOwn"] is True
-
-
-FULL_WIDTH_AFTER_NOTE = """(() => {
-  const own = document.querySelector('.q-page > main q-sidenote').closest('p');
-  const figure = document.createElement('figure');
-  figure.style.cssText = 'margin:0;width:100%;height:120px;background:#ccc';
-  own.after(figure);
-  const chart = document.createElement('div');
-  chart.setAttribute('data-probe', 'full');
-  chart.style.cssText = 'width:100%;height:80px;background:#999';
-  figure.after(chart);
-  return true;
-})()"""
-
-CONTENT_EDGE = """(() => {
-  const main = document.querySelector('.q-page > main');
-  const style = getComputedStyle(main);
-  const content = main.getBoundingClientRect().right - parseFloat(style.paddingRight) - parseFloat(style.borderRightWidth);
-  return [...main.querySelectorAll('q-sidenote')].map((n) => n.getBoundingClientRect().left - content);
-})()"""
-
-
-@pytest.mark.usefixtures("browser_ready")
-@pytest.mark.parametrize("template", TEMPLATES)
-@pytest.mark.parametrize("width", [1100, 1280, 1440, 1920])
-def test_longform_sidenotes_stay_outside_mains_content_box_beside_full_width_elements(pages: dict, template: str, width: int) -> None:
-    out = at(
-        _page(pages, template, "longform"),
-        width,
-        ("notes", OVERLAP),
-        ("gaps", CONTENT_EDGE),
-        steps=({"eval": FULL_WIDTH_AFTER_NOTE, "as": "inject"},),
-        height=900,
-    )
-    assert out["notes"]["overlaps"] == []
-    assert out["notes"]["fits"] is True
-    assert out["gaps"] and all(gap >= -0.5 for gap in out["gaps"]), out["gaps"]
-
-
-@pytest.mark.usefixtures("browser_ready")
-@pytest.mark.parametrize("template", TEMPLATES)
-def test_longform_sidenotes_are_inline_toggles_at_375(pages: dict, template: str) -> None:
-    out = at(
-        _page(pages, template, "longform"),
-        375,
-        ("notes", OVERLAP),
-        (
-            "toggles",
-            "[...document.querySelectorAll('.q-page > main button[data-q-sidenote-toggle]')].map((b) => getComputedStyle(b).display !== 'none' && b.getBoundingClientRect().width > 0)",
-        ),
-        ("fits", NO_SCROLL),
-    )
-    assert out["notes"]["overlaps"] == []
-    assert out["notes"]["count"] >= 2 and len(out["toggles"]) == out["notes"]["count"] and all(out["toggles"])
-    assert all(info["float"] == "none" for info in out["notes"]["info"])
-    assert out["fits"]
+@pytest.mark.parametrize("width", [375, 1280, 1920])
+def test_longform_notes_are_highlighted_phrases_whose_notes_open_inside_the_page(pages: dict, template: str, width: int) -> None:
+    out = at(_page(pages, template, "longform"), width, ("notes", NOTES), ("open", OPEN_EACH), ("fits", NO_SCROLL))
+    assert out["notes"]["count"] >= 2 and out["notes"]["ready"] and out["notes"]["closed"]
+    assert out["open"]["inside"] and all(out["open"]["inside"]), out["open"]
+    assert out["open"]["fits"] and out["fits"]
 
 
 @pytest.mark.usefixtures("browser_ready")
@@ -538,7 +451,7 @@ def test_print_is_one_column_in_dom_order_with_the_nav_as_a_plain_list(pages: di
         " return {page: columns('.q-page'), rail: shown('.q-nav-rail'), menu: shown('.q-nav-menu'), chrome: shown('.q-chrome'),"
         " sticky: [...document.querySelectorAll('.q-page > *')].some((e) => getComputedStyle(e).position === 'sticky')}; })()"
     )
-    for shape, expect_nav in (("explainer", True), ("report", False), ("tool", False), ("reference", True)):
+    for shape, expect_nav in (("explainer", True), ("tool", False), ("reference", True)):
         out = run(
             _page(pages, template, shape),
             {"emulate": {"media": "print"}},
@@ -626,7 +539,7 @@ body {{ display: block; margin: 0; }}
 @pytest.mark.usefixtures("browser_ready")
 @pytest.mark.parametrize(
     ("layout", "expected"),
-    [("explainer", 1440), ("report", 1440), ("longform", 1440), ("tool", 1440), ("comparison", 1440), ("reference", 1440), ("dashboard", None), ("", 960)],
+    [("explainer", 1440), ("longform", 1440), ("tool", 1440), ("comparison", 1440), ("reference", 1440), ("dashboard", None), ("", 960)],
 )
 @pytest.mark.parametrize("viewport", [1600, 2000])
 def test_companion_screens_widen_only_when_they_name_a_layout(tmp_path: Path, layout: str, expected: int | None, viewport: int) -> None:
@@ -656,15 +569,13 @@ def test_a_page_without_q_page_keeps_uncapped_paragraphs(tmp_path: Path) -> None
     assert sizes["width"] > sizes["cap"] + 1
 
 
-def _build_src(work: Path, name: str, layout: str, summary: str, main: str, aside: str = "") -> Path:
+def _build_src(work: Path, name: str, layout: str, summary: str, main: str) -> Path:
     project = work / "project"
     project.mkdir(exist_ok=True)
     user = work / "user"
     user.mkdir(exist_ok=True)
     meta = {"template": "report", "title": f"Probe {name}", "mode": "offline", "layout": layout}
     parts = [f"<!-- quirk-src {json.dumps(meta)} -->", "<!-- slot: summary -->", summary, "<!-- slot: main -->", main]
-    if aside:
-        parts += ["<!-- slot: aside -->", aside]
     src = work / f"{name}.src.html"
     src.write_text("\n".join(parts) + "\n", encoding="utf-8")
     page = work / f"{name}.html"
@@ -695,9 +606,6 @@ def compare_pages(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     return {
         "nav5": _build_src(work, "nav5", "comparison", summary, _sections(5) + _compare_html(5)),
         "nav8": _build_src(work, "nav8", "comparison", summary, _sections(5) + _compare_html(8)),
-        "aside8": _build_src(
-            work, "aside8", "report", summary, _sections(4) + _compare_html(8), aside='<aside aria-label="Notes"><h2>Aside</h2><p>Related notes.</p></aside>'
-        ),
         "plain12": _build_src(work, "plain12", "comparison", summary, _sections(3) + _compare_html(12)),
     }
 
@@ -705,7 +613,7 @@ def compare_pages(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
 COMPARE_BOXES = """(() => {
   const r = (s) => { const e = document.querySelector(s); if (!e) return null; const b = e.getBoundingClientRect(); return {left: b.left, right: b.right, width: b.width}; };
   const host = document.querySelector('q-compare');
-  return {cmp: r('q-compare'), nav: r('.q-page > .q-nav'), aside: r('.q-page > aside'), main: r('.q-page > main'),
+  return {cmp: r('q-compare'), nav: r('.q-page > .q-nav'), main: r('.q-page > main'),
           fits: document.documentElement.scrollWidth <= window.innerWidth, scrolls: host.scrollWidth > host.clientWidth + 1};
 })()"""
 
@@ -721,16 +629,6 @@ def test_a_wide_compare_beside_the_nav_rail_never_overflows_the_page_or_covers_t
 
 
 @pytest.mark.usefixtures("browser_ready")
-@pytest.mark.parametrize("width", [1100, 1280])
-def test_a_wide_compare_beside_the_report_aside_stays_clear_of_it_and_on_screen(compare_pages: dict, width: int) -> None:
-    out = at(compare_pages["aside8"], width, ("boxes", COMPARE_BOXES))["boxes"]
-    assert out["aside"] is not None and out["fits"] is True
-    assert out["cmp"]["left"] >= 0
-    assert out["cmp"]["right"] <= out["aside"]["left"] + 0.5
-    assert out["scrolls"] is True
-
-
-@pytest.mark.usefixtures("browser_ready")
 def test_a_compare_wider_than_a_centred_column_still_widens_past_it(compare_pages: dict) -> None:
     out = at(compare_pages["plain12"], 2000, ("boxes", COMPARE_BOXES))["boxes"]
     assert out["nav"] is None and out["fits"] is True
@@ -739,18 +637,9 @@ def test_a_compare_wider_than_a_centred_column_still_widens_past_it(compare_page
 
 
 @pytest.mark.usefixtures("browser_ready")
-@pytest.mark.parametrize("width", [1100, 1280])
-def test_a_longform_sidenote_in_the_summary_stays_on_the_page_and_is_visible(tmp_path: Path, width: int) -> None:
-    summary = '<p>The build got faster<q-sidenote>Measured on main, excluding reruns.</q-sidenote> this quarter.</p>'
+@pytest.mark.parametrize("width", [375, 1280])
+def test_a_longform_sidenote_in_the_summary_opens_inside_the_page(tmp_path: Path, width: int) -> None:
+    summary = '<p>The build got <q-sidenote>faster<span slot="note">Measured on main, excluding reruns.</span></q-sidenote> this quarter.</p>'
     page = _build_src(tmp_path, "lf", "longform", summary, _sections(5))
-    probe = """(() => {
-      const note = document.querySelector('.q-summary q-sidenote');
-      const toggle = document.querySelector('.q-summary button[data-q-sidenote-toggle]');
-      const shown = (e) => !!e && getComputedStyle(e).display !== 'none' && e.getBoundingClientRect().width > 0;
-      const box = note.getBoundingClientRect();
-      return {fits: document.documentElement.scrollWidth <= innerWidth, float: getComputedStyle(note).float,
-              visible: shown(note) || shown(toggle), right: box.right};
-    })()"""
-    out = at(page, width, ("note", probe))["note"]
-    assert out["fits"] is True and out["float"] == "none" and out["visible"] is True
-    assert out["right"] <= width
+    out = at(page, width, ("open", OPEN_EACH))["open"]
+    assert out["inside"] == [True] and out["fits"] is True

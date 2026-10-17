@@ -320,14 +320,18 @@
     },
     {
       "tag": "q-sidenote",
-      "use_when": "Use when a short aside, source or caveat belongs beside a sentence without interrupting it.",
+      "use_when": "Use when a short aside, source or caveat explains a phrase without interrupting the sentence.",
       "parent": null,
       "interactive": true,
       "attributes": [],
-      "requires": [],
+      "requires": [
+        [
+          "[slot=note]"
+        ]
+      ],
       "rules": [],
-      "children": "Inline text placed inside a paragraph, right after the words it annotates. On a longform page of 1100px or wider it sits numbered in the right margin. Narrower, a numbered button in the text opens it in place. Without JavaScript, and in print, it reads inline in parentheses.",
-      "example": "<p>Median build time fell to nine minutes<q-sidenote>Measured on the main branch, excluding reruns.</q-sidenote> after the cache moved to the shared runner.</p>"
+      "children": "The words being annotated, then one child marked slot=\"note\" holding the note. The words are highlighted, and the note opens below them while a mouse hovers them or they have keyboard focus; a tap or click keeps it open. Without JavaScript, and in print, the note reads inline in parentheses after the words.",
+      "example": "<p>Median build time fell to <q-sidenote>nine minutes<span slot=\"note\">Measured on the main branch, excluding reruns.</span></q-sidenote> after the cache moved to the shared runner.</p>"
     },
     {
       "tag": "q-compare",
@@ -350,8 +354,54 @@
       "rules": [
         "compare-recommended"
       ],
-      "children": "A <table> whose first row is the header: the first cell names the criteria column and each other header cell is one option. Every later row is one criterion, with its name in the first cell. At 700px and below each option becomes its own block, the recommended one first. Wider, the table widens past the page column when the options do not fit and nothing sits beside the column; beside a nav rail, aside, pane or margin column it scrolls inside its own box. Without JavaScript the table scrolls inside its own box.",
+      "children": "A <table> whose first row is the header: the first cell names the criteria column and each other header cell is one option. Every later row is one criterion, with its name in the first cell. At 700px and below each option becomes its own block, the recommended one first. Wider, the table widens past the page column when the options do not fit and nothing sits beside the column; beside a nav rail or pane it scrolls inside its own box. Without JavaScript the table scrolls inside its own box.",
       "example": "<q-compare recommended=\"2\">\n  <table>\n    <thead>\n      <tr><th>Criterion</th><th>Self-host</th><th>Managed</th><th>Hybrid</th></tr>\n    </thead>\n    <tbody>\n      <tr><th>Monthly cost</th><td>$900</td><td>$2,400</td><td>$1,500</td></tr>\n      <tr><th>Setup time</th><td>3 weeks</td><td>2 days</td><td>1 week</td></tr>\n      <tr><th>On-call load</th><td>High</td><td>Low</td><td>Medium</td></tr>\n    </tbody>\n  </table>\n</q-compare>"
+    },
+    {
+      "tag": "q-flow",
+      "use_when": "Use when a system, pipeline or architecture has paths, groups or node details the reader will pan, zoom and click through to explore.",
+      "parent": null,
+      "interactive": true,
+      "attributes": [
+        {
+          "name": "summary",
+          "required": true,
+          "kind": "text",
+          "description": "One sentence stating what the graph shows; it becomes the graph's accessible label."
+        },
+        {
+          "name": "direction",
+          "required": false,
+          "kind": "enum",
+          "values": [
+            "right",
+            "down"
+          ],
+          "default": "right",
+          "description": "Flow direction: left to right or top to bottom."
+        },
+        {
+          "name": "groups",
+          "required": false,
+          "kind": "enum",
+          "values": [
+            "panels",
+            "lanes"
+          ],
+          "default": "panels",
+          "description": "How top-level groups are drawn: tinted panels or stage bands across the flow."
+        }
+      ],
+      "requires": [
+        [
+          "script"
+        ]
+      ],
+      "rules": [
+        "flow-data"
+      ],
+      "children": "A <script type=\"application/json\"> child holding the graph data: optional kinds (mapping each kind name to a chart color 1 to 8), optional groups (id, label, optional parent), required nodes (id, label, optional kind, group and short HTML detail), and optional edges (from, to, optional label and async boolean). Never write coordinates; the element lays the graph out and builds a \"Graph as a list\" disclosure below the canvas.",
+      "example": "<q-flow summary=\"Orders flow from checkout through billing to the ledger.\" direction=\"right\" groups=\"panels\">\n  <script type=\"application/json\">\n  {\n    \"kinds\": {\"ui\": 1, \"worker\": 2, \"database\": 3, \"queue\": 4},\n    \"groups\": [\n      {\"id\": \"billing\", \"label\": \"Billing\"}\n    ],\n    \"nodes\": [\n      {\"id\": \"checkout\", \"label\": \"Checkout\", \"kind\": \"ui\"},\n      {\"id\": \"charge\", \"label\": \"Charge worker\", \"kind\": \"worker\", \"group\": \"billing\", \"detail\": \"<p>Retries 3x with exponential backoff, then dead-letters.</p>\"},\n      {\"id\": \"ledger\", \"label\": \"Ledger\", \"kind\": \"database\", \"group\": \"billing\"},\n      {\"id\": \"retries\", \"label\": \"Retry queue\", \"kind\": \"queue\", \"group\": \"billing\"}\n    ],\n    \"edges\": [\n      {\"from\": \"checkout\", \"to\": \"charge\", \"label\": \"order.created\", \"async\": true},\n      {\"from\": \"charge\", \"to\": \"ledger\", \"label\": \"charge.settled\"},\n      {\"from\": \"charge\", \"to\": \"retries\", \"label\": \"charge.failed\", \"async\": true}\n    ]\n  }\n  </script>\n</q-flow>"
     }
   ]
 }

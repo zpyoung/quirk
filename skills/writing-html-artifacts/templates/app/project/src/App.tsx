@@ -15,7 +15,7 @@ function Shell() {
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   const mode = useThemeMode()
   const active = views.find((view) => view.path === pathname) ?? views[0]
-  const { summary, aside }: { summary?: ReactNode; aside?: ReactNode } = active
+  const { summary }: { summary?: ReactNode } = active
 
   return (
     <Layout
@@ -40,7 +40,7 @@ function Shell() {
       content={
         <LayoutContent label={active.label} padding={4} isScrollable={false}>
           <VStack id="panel" role="tabpanel" gap={4} paddingBlockEnd={8}>
-            <PageLayout summary={summary} aside={aside}>
+            <PageLayout summary={summary}>
               <Outlet />
             </PageLayout>
           </VStack>

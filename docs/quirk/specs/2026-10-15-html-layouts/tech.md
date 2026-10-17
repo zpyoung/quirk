@@ -10,7 +10,7 @@ Back-links: [conceptual model](logic.md#conceptual-model), [data flow](logic.md#
 
 | Unit | Files | Role |
 |---|---|---|
-| Shape registry and regions | new `S/scripts/htmlkit/layouts.py` | The seven shape names, per-shape region order and nav policy, nav generation, region rendering |
+| Shape registry and regions | new `S/scripts/htmlkit/layouts.py` | The six shape names, per-shape region order and nav policy, nav generation, region rendering |
 | Source and build | `S/scripts/htmlkit/assemble.py`, `S/scripts/htmlkit/manifest.py` | Parse `layout` and `nav`, accept the reserved `summary` slot, substitute `{{regions}}` / `{{layout}}`, inline `theme/layout.css`, record `layout` in the header, add the note line |
 | Layout stylesheet | new `S/theme/layout.css`; `S/scripts/htmlkit/tokens.py` (print-light block) | All shape geometry, breakpoints and print rules |
 | Layout check | new `S/scripts/htmlkit/layoutcheck.py`; `S/scripts/htmlkit/checks.py` | Fail hand-written layout CSS inside the region wrapper (tier 1) and in app sources (tier 2) |
@@ -19,7 +19,7 @@ Back-links: [conceptual model](logic.md#conceptual-model), [data flow](logic.md#
 | Built-in skeletons | `S/templates/{report,components}/skeleton.html`, `S/templates/report/template.json`, `S/scripts/htmlkit/create.py` (`SKELETON`) | Switch to `{{regions}}`; move geometry into `layout.css` |
 | Companion | `S/scripts/companion.py`, `S/templates/companion/skeleton.html` | `layout` in `screen.json`; question is the summary |
 | Tier 2 | `S/scripts/htmlkit/app.py`, `S/templates/app/project/src/*`, `S/templates/app/rules.md` | `layout` in `quirk-app.json`, `quirk-layout.css` copy, `PageLayout` component |
-| Docs | `S/SKILL.md`, `S/references/{design-reference,templates,companion}.md`, `S/templates/*/rules.md` | Seven shapes, inference, announcement, summary slot, layout elements |
+| Docs | `S/SKILL.md`, `S/references/{design-reference,templates,companion}.md`, `S/templates/*/rules.md` | Six shapes, inference, announcement, summary slot, layout elements |
 | Examples and evals | `S/templates/{report,components}/examples/`, `S/templates/companion/examples/`, `S/templates/app/examples/`, new `S/evals/layout-evals.json` | One example per shape per template; the inference eval |
 
 Technologies: Python 3.11+ stdlib (`html.parser`, `re`, `json`), plain CSS (grid, `:has()`, `:where()`), the existing light-DOM kit pattern, React 19 + Vite single-file for tier 2, Playwright via `S/scripts/verify/verify.mjs` (unchanged).
@@ -59,10 +59,10 @@ Technologies: Python 3.11+ stdlib (`html.parser`, `re`, `json`), plain CSS (grid
 - `SKELETON` `:50-85` (one-slot skeleton for `--from` on plain HTML); `_skeleton_template` `:192-215`.
 
 ### Skeletons and templates
-- `S/templates/report/skeleton.html`: geometry `:10-28` (`.q-wrap` 1440px `:11`, `.q-layout` `:18-24`, sticky aside `:24`, prose cap `:26-28`); regions `:49-54`.
+- `S/templates/report/skeleton.html`: masthead and chrome styling `:9-30`; regions `:39-41`.
 - `S/templates/components/skeleton.html`: geometry `:10-19`; regions `:40-44`.
 - `S/templates/companion/skeleton.html`: `.q-wrap` 960px `:12`; `main` `:44-57`.
-- `S/templates/report/template.json:10` (aside description).
+- `S/templates/report/template.json`: declares the `main` slot only.
 - `S/templates/app/project/src/theme.css:1-4` imports, `.q-grid` table class `:33-55`; `src/App.tsx:11-46` `Shell`; `src/quirk-kit.d.ts:8-22`; `src/main.tsx:6`.
 
 ### Kit
@@ -78,27 +78,26 @@ Back-link: [conceptual model](logic.md#conceptual-model).
 
 ```
 CONTRACT:
-LAYOUTS: tuple[str, ...] = ("report","explainer","longform","tool","comparison","dashboard","reference")
-DEFAULT_LAYOUT = "report"
+LAYOUTS: tuple[str, ...] = ("explainer","longform","tool","comparison","dashboard","reference")
+DEFAULT_LAYOUT = "explainer"
 NAV_MODES = ("auto","on","off")
 def validate_layout(value: object) -> str            # raises SourceError
 def build_nav(main_html: str, *, layout: str, nav: str, reserved_ids: set[str]) -> tuple[Optional[str], str]
-def render_regions(layout: str, *, summary: str, main: str, aside: str, nav: Optional[str], legacy: bool) -> str
+def render_regions(layout: str, *, summary: str, main: str, nav: Optional[str], legacy: bool) -> str
 ```
 
-- `validate_layout`: pre: any value. Post: returns the name. Error: `SourceError` whose message lists all seven names. Invariant: `LAYOUTS` order is the documented order everywhere (docs, eval, errors).
-- `build_nav`: pre: `main_html` is the `main` slot text; `reserved_ids` holds every `id` already present in the summary and aside slots and the skeleton (the builder collects them, at least `main` and `quirk-data`). Post: returns `(nav_html or None, main_html)` where `main_html` is unchanged except that `h2`/`h3` lacking an `id` gain one. Ids: lowercase heading text, runs of non `[a-z0-9]` → `-`, trimmed; empty → `section`; a collision with `reserved_ids` or an earlier id gets `-2`, `-3`… Headings inside `q-panel`, `q-compare`, `q-tabs` or `q-board` are neither counted nor listed. Nav appears when `nav == "on"`, or `nav == "auto"` and (`layout == "reference"` or the counted h2s ≥ 5). Errors: `nav == "off"` with `layout == "reference"` raises `SourceError` ("reference always has its section nav"); `nav == "on"` with zero h2s raises `SourceError` ("nav needs at least one h2 in main").
+- `validate_layout`: pre: any value. Post: returns the name. Error: `SourceError` whose message lists all six names; `report` is not one of them, so it fails like any unknown name. Invariant: `LAYOUTS` order is the documented order everywhere (docs, eval, errors).
+- `build_nav`: pre: `main_html` is the `main` slot text; `reserved_ids` holds every `id` already present in the summary slot and the skeleton (the builder collects them, at least `main` and `quirk-data`). Post: returns `(nav_html or None, main_html)` where `main_html` is unchanged except that `h2`/`h3` lacking an `id` gain one. Ids: lowercase heading text, runs of non `[a-z0-9]` → `-`, trimmed; empty → `section`; a collision with `reserved_ids` or an earlier id gets `-2`, `-3`… Headings inside `q-panel`, `q-compare`, `q-tabs` or `q-board` are neither counted nor listed. Nav appears when `nav == "on"`, or `nav == "auto"` and (`layout == "reference"` or the counted h2s ≥ 5). Errors: `nav == "off"` with `layout == "reference"` raises `SourceError` ("reference always has its section nav"); `nav == "on"` with zero h2s raises `SourceError` ("nav needs at least one h2 in main").
 - Nav markup: `<nav class="q-nav" aria-label="On this page">` (`"Sections"` on reference) holding two renderings of the same list: a `<details class="q-nav-menu">` with a `<summary>` reading "On this page" / "Sections" and an `<ol>`, and an `<ol class="q-nav-rail">`. Each is an ordered list of h2 links with nested h3 lists. `layout.css` shows the menu below the rail breakpoint and the rail at and above it; the other is `display:none`, so assistive tech meets one list. Print shows the rail copy as a plain list.
-- `render_regions`: pre: `layout` in `LAYOUTS` (else `ValueError`, a programming error since the builder validated it); `summary` may be `""` only on the legacy-summary path (Cross-cutting). Post: one wrapper `<div class="q-page" data-layout="<layout>">` holding the regions in the shape's DOM order below. When `legacy` is false the main content is wrapped in `<main id="main">`; when true it is not (the legacy skeleton already wraps it). The summary region is `<section class="q-summary" aria-label="Summary">`; the aside slot is emitted as written (it is its own `<aside>`).
+- `render_regions`: pre: `layout` in `LAYOUTS` (else `ValueError`, a programming error since the builder validated it); `summary` may be `""` only on the legacy-summary path (Cross-cutting). Post: one wrapper `<div class="q-page" data-layout="<layout>">` holding the regions in the shape's DOM order below. When `legacy` is false the main content is wrapped in `<main id="main">`; when true it is not (the legacy skeleton already wraps it). The summary region is `<section class="q-summary" aria-label="Summary">`.
 
 | Shape | DOM order (also phone and print order) |
 |---|---|
-| `report` | summary, nav, main, aside |
 | `explainer`, `longform`, `reference`, `comparison`, `dashboard` | summary, nav, main |
 | `tool` | nav, main, summary |
 
 - Invariant: visual placement never contradicts DOM order within a row of reading; `layout.css` only places regions side by side or stacks them in DOM order. `tool`'s result follows its inputs in the DOM so the phone rule (result directly below the inputs) holds without reordering.
-- An `aside` slot on any shape other than `report` raises `SourceError` ("only the report shape places an aside").
+- There is no aside region: `REGION_SLOTS` is `("main",)`, and a source with an `aside` slot fails as an undeclared slot on every shape.
 
 ### Source header and slots
 Back-links: [data flow](logic.md#data-flow), [edge cases](logic.md#edge-cases).
@@ -110,15 +109,15 @@ SCHEMA: source header (line 1), additions
 ```
 
 - Pre: header passes today's validation. Post: `Source.layout` is a valid name or `None`; `Source.nav` is valid. Error: invalid value → `SourceError` → exit 2 (`quirk_html.py:41`).
-- Layout resolution order at build: `Source.layout`, else the `layout` in the existing output's header, else `DEFAULT_LAYOUT`. `--upgrade` does not affect it; it concerns library versions only. When the default is used, `BuildResult["layout_defaulted"] = True`, the header records `"layout_defaulted": true`, and the note says "Layout: report (no layout named)". A rebuild whose source still names no layout and whose existing header carries `layout_defaulted` stays defaulted; naming a layout in the source clears it.
+- Layout resolution order at build: `Source.layout`, else the `layout` in the existing output's header, else `DEFAULT_LAYOUT`. `--upgrade` does not affect it; it concerns library versions only. When the default is used, `BuildResult["layout_defaulted"] = True`, the header records `"layout_defaulted": true`, and the note says "Layout: explainer (no layout named)". A rebuild whose source still names no layout and whose existing header carries `layout_defaulted` stays defaulted; naming a layout in the source clears it.
 - `summary` is a reserved slot name that region-bearing templates take without it appearing in `template.json`; the companion, which is not region-bearing, rejects one. It is required for every template whose skeleton contains `{{regions}}` or `{{slot:main}}` (the legacy path). Missing → `SourceError` naming the shape and where the summary goes (text per shape from the [summary placement table](logic.md#conceptual-model)). Templates may not declare a slot named `summary` themselves (`_tier1_problems` reports it).
-- Invariant: a source with no `layout` field and no prior build builds as `report`; the region structure differs from today only by the added summary region.
+- Invariant: a source with no `layout` field and no prior build builds as `explainer`; the region structure differs from today only by the added summary region.
 
 ### Skeleton placeholders
 Back-link: [conceptual model](logic.md#conceptual-model).
 
-- `{{regions}}` (optional): replaced by `render_regions(..., legacy=False)`. The template still declares `main` (required) and may declare `aside`; with `{{regions}}` present, those two declared slots are satisfied by `{{regions}}` and their `{{slot:main}}` / `{{slot:aside}}` placeholders must be absent. `_tier1_problems` (`manifest.py:264-269`) relaxes its bidirectional slot/placeholder rule for exactly `main` and `aside` when `{{regions}}` is present; every other declared slot still needs its placeholder. A skeleton containing both `{{regions}}` and `{{slot:main}}` is invalid.
-- Legacy path: a skeleton without `{{regions}}` but with `{{slot:main}}` gets `render_regions(..., legacy=True, aside="")` substituted into `{{slot:main}}`; its `{{slot:aside}}` and other slots substitute as today, outside the wrapper. Known gap: the layout check does not see a legacy skeleton's aside.
+- `{{regions}}` (optional): replaced by `render_regions(..., legacy=False)`. The template declares `main` (required); with `{{regions}}` present, that slot is satisfied by `{{regions}}` and its `{{slot:main}}` placeholder must be absent. `_tier1_problems` (`manifest.py:264-269`) relaxes its bidirectional slot/placeholder rule for exactly `main` when `{{regions}}` is present; every other declared slot still needs its placeholder. A skeleton containing both `{{regions}}` and `{{slot:main}}` is invalid.
+- Legacy path: a skeleton without `{{regions}}` but with `{{slot:main}}` gets `render_regions(..., legacy=True)` substituted into `{{slot:main}}`; its other slots substitute as today, outside the wrapper. Known gap: the layout check does not see content in those slots.
 - Region-bearing skeleton: one with `{{regions}}` or `{{slot:main}}`. Only these resolve a default layout and require `summary`.
 - `{{layout}}` (optional): replaced by the resolved layout name for region-bearing skeletons; for any other skeleton (the companion), by the source's `layout` or `""` when none is named.
 - Neither placeholder is added to `REQUIRED_PLACEHOLDERS`; existing custom skeletons stay valid and their `verified.json` stays valid (theme files are not hashed, `manifest.py:378-386`).
@@ -128,18 +127,16 @@ Back-link: [conceptual model](logic.md#conceptual-model).
 Back-links: [behavior](logic.md#each-shape-at-desktop-width-on-a-phone-and-in-print), [width decisions](logic.md#decisions-locked).
 
 - Inlined into `{{head}}` for every tier-1 build after base.css, and copied into tier-2 apps as `src/quirk-layout.css`.
-- Owns all page geometry: `.q-wrap` caps, region grid per `data-layout`, sticky rail and aside, phone collapse, print. Built-in skeletons keep only masthead and chrome styling.
+- Owns all page geometry: `.q-wrap` caps, region grid per `data-layout`, sticky rail, phone collapse, print. Built-in skeletons keep only masthead and chrome styling.
 - Observable thresholds it must produce:
   - Every shape except `dashboard`: page content max 1440px, centered. `comparison`'s `q-compare` may exceed it (see kit).
   - `dashboard`: no max width (fluid).
   - Nav rail beside main from 1100px, sticky, with its own scroll (`max-height` of the viewport) when taller than the screen; collapsed menu below 1100px, placed after the summary.
-  - Report aside beside main and sticky from 900px.
   - `tool`: summary (result) beside main from 900px; below main narrower.
-  - `longform`: a right margin column for `q-sidenote` from 1100px; main's content, figures included, stays within 70ch so notes never overlap it.
   - `reference`: section nav as a left pane from 900px.
-  - Prose (`p, ul, ol, blockquote` in main) capped at 70ch in every shape.
+  - Prose (`p, ul, ol, blockquote`) fills its column in every shape; no measure cap.
   - At 375px no shape scrolls horizontally (verify's existing check).
-  - `@media print`: one column in DOM order, nav shown as a plain list after the summary, aside and sidenotes inline, masthead chrome hidden.
+  - `@media print`: one column in DOM order, nav shown as a plain list after the summary, sidenotes inline, masthead chrome hidden.
 - Specificity: rules default to `:where()`-wrapped low specificity. Rules that must beat legacy skeleton geometry (for example a custom skeleton's own `.q-wrap { max-width }`) key on `:root:has(.q-page[data-layout="dashboard"])` or similar, above one class. Sticky elements set `align-self: start` and have no ancestor with `overflow` other than `visible`/`clip`.
 - Spacing comes only from `--q-space-*`; one rhythm for every shape.
 
@@ -159,7 +156,7 @@ def check_app_sources(paths: list[Path], *, root: Path) -> list[dict]
 
 - Tier 1 input: the built page, the same `html` string `run_checks` already receives. Scope: only `<style>` elements and `style=""` attributes that are descendants of the `.q-page` wrapper (slot content). `<head>` styles (tokens, base, layout, kit, skeleton) are never inspected. A page with no `.q-page` wrapper (the companion) yields no findings. `detail` cites built-page line numbers.
 - Tier 2 input: file paths under the app's `src/`. Scope: `src/**/*.css` except `theme.css`, `quirk-tokens.css`, `quirk-layout.css`; and `style={{…}}` objects in `src/**/*.tsx` for the camel-cased equivalents. `detail` cites `<relative path> line N`.
-- Flags any of: `display: grid | inline-grid`; any `grid-template*`, `grid`, `grid-column*`, `grid-row*`, `grid-area`; `float: left | right | inline-start | inline-end`; `columns` / `column-count`; `width`, `min-width`, `max-width` with an absolute length ≥ 400px or ≥ 25rem/em. Declarations inside `@media`/`@container` blocks are scanned like top-level ones. `width`, `min-width` and `max-width` values using `%`, `calc()`, `var()`, `min()`, `max()`, `clamp()` or viewport units are never flagged; the grid, float and column properties are flagged whatever their value.
+- Flags any of: `display: grid | inline-grid`; any `grid-template*`, `grid`, `grid-column*`, `grid-row*`, `grid-area`; `float: left | right | inline-start | inline-end`; `columns` / `column-count`; `width`, `min-width`, `max-width` with an absolute length ≥ 400px or ≥ 25rem/em. Declarations inside `@media`/`@container` blocks are scanned like top-level ones. `width`, `min-width` and `max-width` values using `%`, `calc()`, `var()`, `min()`, `max()`, `clamp()` or viewport units are never flagged; the grid, float and column properties are flagged whatever their value. Exception: grid properties pass on and inside the page's own custom elements (a hyphenated tag not starting with `q-` or `wa-`). In a `<style>`, that means every selector in the rule's list has such an element as its subject or followed by a descendant or child combinator, with `:is()`, `:not()` and attribute contents ignored. In a `style=""`, the element or one of its ancestors is one. Widths, floats and columns get no exemption. Tier-2 `.css` files get the same selector rule; `style={{…}}` objects do not.
 - Detail names the property and the element to use: grid properties → "use q-grid (and q-panel for titled panels)"; widths, floats and columns → "page shapes set widths; set \"layout\" in the header".
 - Errors: `check_html` never raises; CSS it cannot tokenize is skipped declaration by declaration. `check_app_sources` reports an unreadable file as a failure `{"check":"layout","detail":"cannot read <path>"}` and continues.
 - Wiring: `run_checks` runs the layout check for `tier == 1` after `kit` with no new parameter; `check_artifact` inherits it. `app.py` calls `check_app_sources` after the Vite build and appends its failures to the build's checks. Failure → exit 1, like every static check.
@@ -185,8 +182,8 @@ q-compare: parent null, interactive true,
 - `compare-recommended` is a new `KNOWN_RULES` entry implemented in `kitcheck.py`: `recommended` must be between 1 and the number of option columns (header cells of the table's first row minus the criteria column); otherwise a `kit` failure naming the allowed range.
 - `q-grid`: children flow into equal columns: 1 at 700px and below, up to 2 from 701px to 1099px, up to 4 from 1100px to 1799px, up to 6 at 1800px and above (viewport widths). A child `q-panel[span]` (or any child with `data-span`) spans that many columns, clamped to the row. Gaps are `--q-space-*`.
 - `q-panel`: a bordered panel (`--q-radius-md`, 1px `--q-color-border`) whose required first heading is its title. A panel with no h2–h4 fails the kit check (`requires`).
-- `q-sidenote`: inline in a paragraph. Wide `longform`: floated into the right margin column, numbered with a CSS counter. Narrow: the upgrade inserts a numbered toggle button (`aria-expanded`) that shows the note in place; without the script the note reads inline in parentheses style. Print: inline.
-- `q-compare`: wraps a `<table>` with options as columns. `recommended` is the 1-based option column (excluding the criteria column). At 700px and below the upgrade renders one block per option, recommended first, each a heading plus a criteria list; the table is hidden with `display:none`. Without the script the table scrolls inside its own wrapper. Above 700px, when the table's natural width exceeds the 1440px column and nothing sits beside the column it widens up to the viewport minus page gutters, centered, instead of scrolling; beside a nav rail, aside, pane or margin column, and inside `q-panel`/`q-grid`, it stays within its column and scrolls inside its own box.
+- `q-sidenote`: wraps the annotated words, with the note in a `slot="note"` child (`requires`). The upgrade highlights the words, makes them focusable with `aria-describedby` on the note (`role="tooltip"`), and shows the note as a popover below them on mouse hover or focus; a click or tap pins it, Escape closes it, and the popover shifts or flips to stay in the viewport. Without the script, and in print, the note reads inline in parentheses.
+- `q-compare`: wraps a `<table>` with options as columns. `recommended` is the 1-based option column (excluding the criteria column). At 700px and below the upgrade renders one block per option, recommended first, each a heading plus a criteria list; the table is hidden with `display:none`. Without the script the table scrolls inside its own wrapper. Above 700px, when the table's natural width exceeds the 1440px column and nothing sits beside the column it widens up to the viewport minus page gutters, centered, instead of scrolling; beside a nav rail or pane, and inside `q-panel`/`q-grid`, it stays within its column and scrolls inside its own box.
 - Catalog `example` for each must pass `kitcheck.check_html` (`tests/test_html_kit_check.py:57`) and contain no `<script>`.
 - After editing `kit.css`/`kit.js`: restamp with `pins.py stamp kit 1.0.0`; kit version stays `1.0.0`. Consequence: pages built before the restamp fail `check` on the kit checksum until rebuilt (the same trade the 1440px baseline commit made).
 - Add the four tags to `S/templates/app/project/src/quirk-kit.d.ts:8-22` (a test requires that list to equal the catalog tags).
@@ -212,9 +209,9 @@ SCHEMA: quirk-app.json addition
 "layout": one of LAYOUTS   (optional; flag --layout on build-app overrides)
 ```
 
-- `build-app` gains `--layout`, merged like `--mode` (`app.py:221-226`), validated with `validate_layout`, saved in `quirk-app.json`, recorded in the tier-2 header meta (`app.py:315-332`). Default `report`.
+- `build-app` gains `--layout`, merged like `--mode` (`app.py:221-226`), validated with `validate_layout`, saved in `quirk-app.json`, recorded in the tier-2 header meta (`app.py:315-332`). Default `explainer`.
 - Each build copies `S/theme/layout.css` to `src/quirk-layout.css` (next to the `quirk-tokens.css` write) and writes `src/quirk-page.ts` exporting the layout name. `theme.css` imports `./quirk-layout.css`. Both files are rewritten every build; edit neither by hand (same rule as `quirk-tokens.css`).
-- New scaffold component `src/PageLayout.tsx`: renders the same wrapper and region DOM as `render_regions(legacy=False)` (class names, `data-layout`, region order). Props: `summary`, `children` (main), optional `aside`. It builds the nav at runtime from the rendered main content's h2/h3 with the same id, threshold and markup rules as `build_nav`, because app content exists only at runtime. `Shell` (`App.tsx:11-46`) renders each route inside `PageLayout`.
+- New scaffold component `src/PageLayout.tsx`: renders the same wrapper and region DOM as `render_regions(legacy=False)` (class names, `data-layout`, region order). Props: `summary`, `children` (main). It builds the nav at runtime from the rendered main content's h2/h3 with the same id, threshold and markup rules as `build_nav`, because app content exists only at runtime. `Shell` (`App.tsx:11-46`) renders each route inside `PageLayout`.
 - Rename the scaffold's table class `.q-grid` (`theme.css:33-55`) and its uses to `.q-data-grid`, so it is not confused with the `<q-grid>` element. Existing app sources are never overwritten, so they keep their class.
 - `check_app_sources` runs on every build; its failures join `checks.failures` (exit 1).
 
@@ -240,16 +237,16 @@ SCHEMA: S/evals/layout-evals.json
  "evals": [{"id": int, "prompt": str, "expected_layout": one of LAYOUTS}]}
 ```
 
-- At least two prompts per shape (14 or more), unique prompts, every shape covered.
+- At least two prompts per shape (12 or more), unique prompts, every shape covered.
 
 Examples (one per shape per template; the existing `example` file each `template.json` names stays as is):
 
 ```
 SCHEMA: example locations
-S/templates/report/examples/<shape>.src.html        (7)
-S/templates/components/examples/<shape>.src.html    (7)
-S/templates/companion/examples/<shape>.screen.json  (7)
-S/templates/app/examples/<shape>/                   (7 overlays copied over project/ like example/, each with quirk-app.json "layout")
+S/templates/report/examples/<shape>.src.html        (6)
+S/templates/components/examples/<shape>.src.html    (6)
+S/templates/companion/examples/<shape>.screen.json  (6)
+S/templates/app/examples/<shape>/                   (6 overlays copied over project/ like example/, each with quirk-app.json "layout")
 ```
 
 ## DO-NOT-CHANGE fences
@@ -267,7 +264,7 @@ Back-link: [scope and non-goals](logic.md#scope-and-non-goals).
 
 ## Always / Ask / Never
 
-- **Always**: keep DOM order summary → nav → main → aside; run `pins.py stamp kit 1.0.0` and `kit_docs.py reference` after kit edits; keep every built-in example passing `check`; use `--q-*` tokens only.
+- **Always**: keep each shape's DOM order from the table above; run `pins.py stamp kit 1.0.0` and `kit_docs.py reference` after kit edits; keep every built-in example passing `check`; use `--q-*` tokens only.
 - **Ask**: before changing any locked width or threshold (1440px, 1800px, 1100px, 900px, 700px, 5 h2s); before exempting anything else from the layout check.
 - **Never**: add a token group; bump the kit version; make layout geometry depend on JavaScript; edit a built file instead of its source; touch the fences above.
 
@@ -277,7 +274,7 @@ Back-links: [data flow](logic.md#data-flow), [edge cases](logic.md#edge-cases).
 
 - Security: no new network surface; offline mode and external-refs checks are unchanged. Generated heading ids are derived from text and escaped.
 - Rollback: a page's layout is in its header; reverting the feature makes rebuilds ignore the field (unknown header keys are ignored).
-- Migration: the logic spec requires both "a missing summary fails the build" and "a page built before this change rebuilds as report, unchanged". They reconcile this way: when the output path already holds a page whose header has no `layout` key (built before this change) and the source has no `summary` slot, the build succeeds with the summary region omitted and a `checks.warnings` entry asking for a summary, and records `"layout": "report", "legacy_summary": true` in the header. A later rebuild whose existing header carries `"legacy_summary": true` gets the same exemption, so the exemption does not lapse after the first rebuild; adding a `summary` slot clears the flag. Every other build without `summary` fails as specified.
+- Migration: the logic spec requires both "a missing summary fails the build" and "a page built before this change rebuilds as explainer, unchanged". They reconcile this way: when the output path already holds a page whose header has no `layout` key (built before this change) and the source has no `summary` slot, the build succeeds with the summary region omitted and a `checks.warnings` entry asking for a summary, and records `"layout": "explainer", "legacy_summary": true` in the header. A later rebuild whose existing header carries `"legacy_summary": true` gets the same exemption, so the exemption does not lapse after the first rebuild; adding a `summary` slot clears the flag. Every other build without `summary` fails as specified.
 
 ## Testing strategy
 

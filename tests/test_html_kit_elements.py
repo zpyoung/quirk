@@ -3781,19 +3781,16 @@ def test_diff_without_long_lines_does_not_scroll_sideways(highlight_page: Path) 
     assert out["results"]["fits"] is True
 
 
-# --- report layout ---------------------------------------------------------------------------------
+# --- default page shape ---------------------------------------------------------------------------------
 
 
-def test_report_uses_wide_screens_and_keeps_the_aside_in_view(tmp_path: Path) -> None:
+def test_the_default_shape_uses_wide_screens_and_its_prose_fills_the_column(tmp_path: Path) -> None:
     reason = _node_ready()
     if reason:
         pytest.skip(reason)
-    filler = "\n".join(f"<p>Paragraph {i} of the report body, long enough to wrap at the prose measure.</p>" for i in range(60))
+    filler = "\n".join(f"<p>Paragraph {i} of the page body, long enough to wrap at the prose measure.</p>" for i in range(60))
     src = tmp_path / "wide.src.html"
-    src.write_text(
-        HEADER + filler + "\n<!-- slot: aside -->\n<aside aria-label=\"About these numbers\"><p>Sample data.</p></aside>\n",
-        encoding="utf-8",
-    )
+    src.write_text(HEADER + filler + "\n", encoding="utf-8")
     page = _build(src, tmp_path / "wide.html")
     out = run(
         page,
@@ -3802,11 +3799,9 @@ def test_report_uses_wide_screens_and_keeps_the_aside_in_view(tmp_path: Path) ->
             """(() => {
               const main = document.querySelector('main').getBoundingClientRect();
               const p = document.querySelector('main p').getBoundingClientRect();
-              const aside = document.querySelector('aside').getBoundingClientRect();
               return {
                 wideMain: main.width > 960,
-                proseCapped: p.width < main.width,
-                asideInView: aside.top >= 0 && aside.top < window.innerHeight,
+                proseFills: Math.abs(p.width - main.width) <= 1,
                 fits: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
               };
             })()""",
@@ -3816,4 +3811,559 @@ def test_report_uses_wide_screens_and_keeps_the_aside_in_view(tmp_path: Path) ->
     )
     assert_clean(out)
     assert out["results"]["scrolled"] is True
-    assert out["results"]["layout"] == {"wideMain": True, "proseCapped": True, "asideInView": True, "fits": True}
+    assert out["results"]["layout"] == {"wideMain": True, "proseFills": True, "fits": True}
+
+
+# --- q-flow -----------------------------------------------------------------------------------
+
+FLOW_ORDERS = """
+<q-flow id="flow-orders" summary="Orders flow from checkout through billing to the ledger." direction="right" groups="panels">
+  <script type="application/json">
+  {
+    "kinds": {"ui": 1, "worker": 2, "database": 3, "queue": 4},
+    "groups": [
+      {"id": "billing", "label": "Billing"}
+    ],
+    "nodes": [
+      {"id": "checkout", "label": "Checkout", "kind": "ui"},
+      {"id": "charge", "label": "Charge worker", "kind": "worker", "group": "billing",
+       "detail": "<p>Retries 3x with backoff, then dead-letters.</p><ul><li>Max wait: 32s</li></ul>"},
+      {"id": "ledger", "label": "Ledger", "kind": "database", "group": "billing",
+       "detail": "<p>Append-only journal.</p>"},
+      {"id": "retries", "label": "Retry queue", "kind": "queue", "group": "billing"},
+      {"id": "refund", "label": "Refund worker", "kind": "worker", "group": "billing"}
+    ],
+    "edges": [
+      {"from": "checkout", "to": "charge", "label": "order.created", "async": true},
+      {"from": "charge", "to": "ledger", "label": "charge.settled"},
+      {"from": "charge", "to": "retries", "label": "charge.failed", "async": true},
+      {"from": "refund", "to": "ledger", "label": "refund.issued"}
+    ]
+  }
+  </script>
+</q-flow>
+
+<q-flow id="flow-lanes" summary="Pipeline stages from intake through billing to settlement." direction="right" groups="lanes">
+  <script type="application/json">
+  {
+    "kinds": {"ui": 1, "worker": 2, "database": 3, "queue": 4},
+    "groups": [
+      {"id": "intake", "label": "Intake"},
+      {"id": "billing", "label": "Billing"},
+      {"id": "retries", "label": "Retries", "parent": "billing"},
+      {"id": "settlement", "label": "Settlement"}
+    ],
+    "nodes": [
+      {"id": "checkout", "label": "Checkout", "kind": "ui", "group": "intake"},
+      {"id": "charge", "label": "Charge worker", "kind": "worker", "group": "billing"},
+      {"id": "retry_q", "label": "Retry queue", "kind": "queue", "group": "retries"},
+      {"id": "ledger", "label": "Ledger", "kind": "database", "group": "settlement"}
+    ],
+    "edges": [
+      {"from": "checkout", "to": "charge", "label": "order.created", "async": true},
+      {"from": "charge", "to": "retry_q", "label": "charge.failed", "async": true},
+      {"from": "charge", "to": "ledger", "label": "charge.settled"}
+    ]
+  }
+  </script>
+</q-flow>
+
+<q-flow id="flow-lanes-down" summary="Top-to-bottom stages." direction="down" groups="lanes">
+  <script type="application/json">
+  {
+    "groups": [
+      {"id": "intake", "label": "Intake"},
+      {"id": "billing", "label": "Billing"},
+      {"id": "settlement", "label": "Settlement"}
+    ],
+    "nodes": [
+      {"id": "checkout", "label": "Checkout", "group": "intake"},
+      {"id": "charge", "label": "Charge worker", "group": "billing"},
+      {"id": "ledger", "label": "Ledger", "group": "settlement"}
+    ],
+    "edges": [
+      {"from": "checkout", "to": "charge"},
+      {"from": "charge", "to": "ledger"}
+    ]
+  }
+  </script>
+</q-flow>
+"""
+
+
+@pytest.fixture(scope="module")
+def flow_page(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    reason = _node_ready()
+    if reason:
+        pytest.skip(reason)
+    work = tmp_path_factory.mktemp("kit-flow")
+    src = work / "flow.src.html"
+    src.write_text(HEADER + FLOW_ORDERS, encoding="utf-8")
+    return _build(src, work / "flow.html")
+
+
+def test_flow_renders_at_rest_with_controls_closed_list_and_sync_async_edges(flow_page: Path) -> None:
+    out = run(
+        flow_page,
+        ev(
+            """(() => {
+              const f = document.querySelector('#flow-orders');
+              const svg = f.querySelector('[data-q-flow-svg]');
+              const checkout = f.querySelector('[data-q-flow-node="checkout"] > [data-q-flow-box]').getBoundingClientRect();
+              const charge = f.querySelector('[data-q-flow-node="charge"] > [data-q-flow-box]').getBoundingClientRect();
+              const billing = f.querySelector('[data-q-flow-group="billing"] > [data-q-flow-group-box]').getBoundingClientRect();
+              const edges = [...f.querySelectorAll('[data-q-flow-edge]')].map((e) => ({
+                from: e.getAttribute('data-q-flow-from'),
+                to: e.getAttribute('data-q-flow-to'),
+                dash: e.querySelector('[data-q-flow-edge-line]').getAttribute('stroke-dasharray'),
+                marker: e.querySelector('[data-q-flow-edge-line]').getAttribute('marker-end'),
+              }));
+              const actions = [...f.querySelectorAll('[data-q-flow-controls] button')].map((b) => b.getAttribute('data-q-flow-action'));
+              const details = f.querySelector('details[data-q-flow-list]');
+              return {
+                ready: f.getAttribute('data-q-flow-ready'),
+                ariaLabel: svg.getAttribute('aria-label'),
+                pulsing: f.hasAttribute('data-q-flow-pulsing'),
+                drawerHidden: f.querySelector('[data-q-flow-drawer]').hasAttribute('data-q-inactive'),
+                checkoutLeftOfBilling: checkout.right <= billing.left + 4,
+                chargeInsideBilling: charge.left >= billing.left && charge.right <= billing.right,
+                actions,
+                edges,
+                detailsOpen: details.open,
+                listNodes: details.querySelectorAll('[data-q-flow-list-node]').length,
+              };
+            })()""",
+            "state",
+        ),
+    )
+    assert_clean(out)
+    st = out["results"]["state"]
+    assert st["ready"] == "true"
+    assert st["ariaLabel"] == "Orders flow from checkout through billing to the ledger."
+    assert st["pulsing"] is False
+    assert st["drawerHidden"] is True
+    assert st["checkoutLeftOfBilling"] is True
+    assert st["chargeInsideBilling"] is True
+    assert st["actions"] == ["zoom-in", "zoom-out", "fit", "expand"]
+    assert st["detailsOpen"] is False
+    assert st["listNodes"] == 5
+    by_pair = {(e["from"], e["to"]): e for e in st["edges"]}
+    assert by_pair[("checkout", "charge")]["dash"] == "6 4"
+    assert by_pair[("charge", "retries")]["dash"] == "6 4"
+    assert by_pair[("charge", "ledger")]["dash"] is None
+    assert all(e["marker"].startswith("url(#q-flow-arrow-") for e in st["edges"])
+
+
+def test_flow_focusing_a_node_lights_path_dims_unconnected_pulses_hop_by_hop_and_opens_drawer(flow_page: Path) -> None:
+    out = run(
+        flow_page,
+        {"click": '#flow-orders [data-q-flow-node="charge"]'},
+        ev(
+            """(() => {
+              const f = document.querySelector('#flow-orders');
+              const litNodes = [...f.querySelectorAll('[data-q-flow-node][data-q-flow-lit]')].map((n) => n.getAttribute('data-q-flow-node')).sort();
+              const dimNodes = [...f.querySelectorAll('[data-q-flow-node][data-q-flow-dim]')].map((n) => n.getAttribute('data-q-flow-node')).sort();
+              const hops = {};
+              for (const e of f.querySelectorAll('[data-q-flow-edge][data-q-flow-lit]')) {
+                hops[e.getAttribute('data-q-flow-from') + '->' + e.getAttribute('data-q-flow-to')] = Number(e.getAttribute('data-q-flow-hop'));
+              }
+              const dimEdges = [...f.querySelectorAll('[data-q-flow-edge][data-q-flow-dim]')].map(
+                (e) => e.getAttribute('data-q-flow-from') + '->' + e.getAttribute('data-q-flow-to')
+              );
+              const drawer = f.querySelector('[data-q-flow-drawer]');
+              const chargeBox = f.querySelector('[data-q-flow-node="charge"] > [data-q-flow-box]').getBoundingClientRect();
+              const drawerBox = drawer.getBoundingClientRect();
+              return {
+                pulsing: f.hasAttribute('data-q-flow-pulsing'),
+                litNodes,
+                dimNodes,
+                hops,
+                dimEdges,
+                drawerOpen: !drawer.hasAttribute('data-q-inactive'),
+                drawerTitle: drawer.querySelector('h3').textContent,
+                drawerKind: drawer.querySelector('[data-q-flow-drawer-kind]').textContent,
+                drawerDetail: drawer.querySelector('[data-q-flow-drawer-detail]').textContent,
+                notCovered: chargeBox.right <= drawerBox.left + 2,
+              };
+            })()""",
+            "focused",
+        ),
+        {"click": '#flow-orders [data-q-flow-drawer] [data-q-flow-target="ledger"]'},
+        ev(
+            """(() => {
+              const f = document.querySelector('#flow-orders');
+              return {
+                title: f.querySelector('[data-q-flow-drawer] h3').textContent,
+                litNodes: [...f.querySelectorAll('[data-q-flow-node][data-q-flow-lit]')].map((n) => n.getAttribute('data-q-flow-node')).sort(),
+              };
+            })()""",
+            "moved",
+        ),
+        {"press": "Escape"},
+        ev(
+            """(() => {
+              const f = document.querySelector('#flow-orders');
+              return {
+                pulsing: f.hasAttribute('data-q-flow-pulsing'),
+                drawerHidden: f.querySelector('[data-q-flow-drawer]').hasAttribute('data-q-inactive'),
+                dimCount: f.querySelectorAll('[data-q-flow-dim]').length,
+              };
+            })()""",
+            "cleared",
+        ),
+    )
+    assert_clean(out)
+    foc = out["results"]["focused"]
+    assert foc["pulsing"] is True
+    assert foc["litNodes"] == ["charge", "checkout", "ledger", "retries"]
+    assert foc["dimNodes"] == ["refund"]
+    assert foc["hops"] == {"checkout->charge": 0, "charge->ledger": 1, "charge->retries": 1}
+    assert foc["dimEdges"] == ["refund->ledger"]
+    assert foc["drawerOpen"] is True
+    assert foc["drawerTitle"] == "Charge worker"
+    assert foc["drawerKind"] == "worker"
+    assert "Retries 3x with backoff" in foc["drawerDetail"]
+    assert foc["notCovered"] is True
+
+    moved = out["results"]["moved"]
+    assert moved["title"] == "Ledger"
+    assert moved["litNodes"] == ["charge", "checkout", "ledger", "refund"]
+
+    cleared = out["results"]["cleared"]
+    assert cleared == {"pulsing": False, "drawerHidden": True, "dimCount": 0}
+
+
+# a fake clock drives the pulse frame by frame, so dot positions are read at exact times
+FLOW_FAKE_CLOCK = """(() => {
+  window.__now = 1000;
+  window.__frames = [];
+  performance.now = () => window.__now;
+  window.requestAnimationFrame = (fn) => { window.__frames.push(fn); return window.__frames.length; };
+  window.cancelAnimationFrame = () => {};
+  window.__tick = (t) => {
+    window.__now = t;
+    const frames = window.__frames;
+    window.__frames = [];
+    frames.forEach((fn) => fn(t));
+  };
+  window.__arcs = (f, from, to) => {
+    const g = f.querySelector(`[data-q-flow-edge][data-q-flow-from="${from}"][data-q-flow-to="${to}"]`);
+    const line = g.querySelector('[data-q-flow-edge-line]');
+    const maskId = g.querySelector('[data-q-flow-edge-pulse]').getAttribute('mask').slice(5, -1);
+    const len = line.getTotalLength();
+    const arcs = [...f.querySelector('#' + CSS.escape(maskId)).querySelectorAll('circle')]
+      .filter((c) => !c.hasAttribute('data-q-inactive'))
+      .map((c) => {
+        const cx = Number(c.getAttribute('cx'));
+        const cy = Number(c.getAttribute('cy'));
+        let best = 0;
+        let bestD = Infinity;
+        for (let s = 0; s <= len; s += 0.5) {
+          const p = line.getPointAtLength(s);
+          const d = Math.hypot(p.x - cx, p.y - cy);
+          if (d < bestD) { bestD = d; best = s; }
+        }
+        return best;
+      })
+      .sort((a, b) => a - b);
+    return { len, arcs };
+  };
+  return true;
+})()"""
+
+
+def test_flow_pulse_travels_at_one_speed_and_streams_before_the_last_one_lands(flow_page: Path) -> None:
+    out = run(
+        flow_page,
+        ev(FLOW_FAKE_CLOCK, "clock"),
+        {"click": '#flow-orders [data-q-flow-node="charge"]'},
+        ev(
+            """(() => {
+              const f = document.querySelector('#flow-orders');
+              window.__tick(1150);
+              const first = window.__arcs(f, 'checkout', 'charge');
+              const speed = first.arcs[0] / 0.15;
+              window.__tick(1000 + (1000 * (first.len + 20)) / speed);
+              const ledger = window.__arcs(f, 'charge', 'ledger');
+              const retries = window.__arcs(f, 'charge', 'retries');
+              const longer = ledger.len > retries.len ? ['charge', 'ledger'] : ['charge', 'retries'];
+              const lifetime = (1000 * (first.len + Math.max(ledger.len, retries.len))) / speed;
+              window.__tick(1000 + lifetime - 30);
+              const laterOnFirst = window.__arcs(f, 'checkout', 'charge').arcs.length;
+              const onLonger = window.__arcs(f, longer[0], longer[1]).arcs.length;
+              return {
+                lens: [first.len, ledger.len, retries.len],
+                firstArcs: first.arcs,
+                ledgerArc: ledger.arcs[ledger.arcs.length - 1],
+                retriesArc: retries.arcs[retries.arcs.length - 1],
+                laterWaves: laterOnFirst + (onLonger - 1),
+              };
+            })()""",
+            "pulse",
+        ),
+    )
+    assert_clean(out)
+    p = out["results"]["pulse"]
+    first_len, ledger_len, retries_len = p["lens"]
+    # the speed check only discriminates when the edges differ in length
+    assert abs(ledger_len - first_len) > 10 or abs(retries_len - first_len) > 10, p
+    assert p["firstArcs"], p
+    assert abs(p["ledgerArc"] - 20) < 3, p
+    assert abs(p["retriesArc"] - 20) < 3, p
+    assert p["laterWaves"] >= 1, p
+
+
+def test_flow_group_focus_zooms_and_dims_without_pulsing_or_opening_drawer(flow_page: Path) -> None:
+    out = run(
+        flow_page,
+        ev("document.querySelector('#flow-orders [data-q-flow-viewport]').getAttribute('transform')", "before"),
+        {"click": '#flow-orders [data-q-flow-group-header="billing"]'},
+        ev(
+            """(() => {
+              const f = document.querySelector('#flow-orders');
+              return {
+                after: f.querySelector('[data-q-flow-viewport]').getAttribute('transform'),
+                pulsing: f.hasAttribute('data-q-flow-pulsing'),
+                drawerHidden: f.querySelector('[data-q-flow-drawer]').hasAttribute('data-q-inactive'),
+                dimNodes: [...f.querySelectorAll('[data-q-flow-node][data-q-flow-dim]')].map((n) => n.getAttribute('data-q-flow-node')),
+              };
+            })()""",
+            "group",
+        ),
+    )
+    assert_clean(out)
+    grp = out["results"]["group"]
+    assert grp["after"] != out["results"]["before"]
+    assert grp["pulsing"] is False
+    assert grp["drawerHidden"] is True
+    assert grp["dimNodes"] == ["checkout"]
+
+
+def test_flow_two_graphs_and_lanes_in_both_directions_with_nested_panel(flow_page: Path) -> None:
+    out = run(
+        flow_page,
+        {"click": '#flow-orders [data-q-flow-node="charge"]'},
+        ev(
+            """(() => {
+              const f2 = document.querySelector('#flow-lanes');
+              const r = (sel) => f2.querySelector(sel).getBoundingClientRect();
+              const intake = r('[data-q-flow-group="intake"] > [data-q-flow-group-box]');
+              const billing = r('[data-q-flow-group="billing"] > [data-q-flow-group-box]');
+              const settlement = r('[data-q-flow-group="settlement"] > [data-q-flow-group-box]');
+              const retries = r('[data-q-flow-group="retries"] > [data-q-flow-group-box]');
+              const f3 = document.querySelector('#flow-lanes-down');
+              const r3 = (sel) => f3.querySelector(sel).getBoundingClientRect();
+              const dIntake = r3('[data-q-flow-group="intake"] > [data-q-flow-group-box]');
+              const dBilling = r3('[data-q-flow-group="billing"] > [data-q-flow-group-box]');
+              const dSettlement = r3('[data-q-flow-group="settlement"] > [data-q-flow-group-box]');
+              return {
+                f2Isolated: !f2.hasAttribute('data-q-flow-pulsing') && f2.querySelector('[data-q-flow-drawer]').hasAttribute('data-q-inactive'),
+                lanesOrderRight: intake.left < billing.left && billing.left < settlement.left,
+                lanesSameHeight: Math.abs(intake.height - billing.height) <= 1 && Math.abs(billing.height - settlement.height) <= 1,
+                retriesIsPanelInsideBilling:
+                  f2.querySelector('[data-q-flow-group="retries"]').getAttribute('data-q-flow-lane') === 'false' &&
+                  retries.left >= billing.left && retries.right <= billing.right,
+                lanesOrderDown: dIntake.top < dBilling.top && dBilling.top < dSettlement.top,
+                lanesSameWidthDown: Math.abs(dIntake.width - dBilling.width) <= 1 && Math.abs(dBilling.width - dSettlement.width) <= 1,
+              };
+            })()""",
+            "lanes",
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["lanes"] == {
+        "f2Isolated": True,
+        "lanesOrderRight": True,
+        "lanesSameHeight": True,
+        "retriesIsPanelInsideBilling": True,
+        "lanesOrderDown": True,
+        "lanesSameWidthDown": True,
+    }
+
+
+def test_flow_keyboard_roving_tabindex_arrows_enter_live_region_zoom_keys_and_expand(flow_page: Path) -> None:
+    out = run(
+        flow_page,
+        {"focus": '#flow-orders [data-q-flow-node][tabindex="0"]'},
+        ev("document.querySelectorAll('#flow-orders [data-q-flow-node][tabindex=\"0\"]').length", "rovingCount"),
+        {"press": "ArrowRight"},
+        ev("document.activeElement.getAttribute('data-q-flow-node')", "movedFocus"),
+        {"focus": '#flow-orders [data-q-flow-node="charge"]'},
+        {"press": "Enter"},
+        ev("document.querySelector('#flow-orders [data-q-flow-live]').textContent", "live"),
+        ev("document.querySelector('#flow-orders [data-q-flow-viewport]').getAttribute('transform')", "t0"),
+        {"press": "+"},
+        ev("document.querySelector('#flow-orders [data-q-flow-viewport]').getAttribute('transform')", "tPlus"),
+        {"press": "0"},
+        ev("document.querySelector('#flow-orders [data-q-flow-viewport]').getAttribute('transform')", "tFit"),
+        {"click": '#flow-orders [data-q-flow-action="expand"]'},
+        ev("document.querySelector('#flow-orders').hasAttribute('data-q-flow-expanded')", "expanded"),
+        {"press": "Escape"},
+        ev(
+            """(() => {
+              const f = document.querySelector('#flow-orders');
+              return {
+                expanded: f.hasAttribute('data-q-flow-expanded'),
+                stillFocused: !f.querySelector('[data-q-flow-drawer]').hasAttribute('data-q-inactive'),
+              };
+            })()""",
+            "afterEscapeExpand",
+        ),
+    )
+    assert_clean(out)
+    res = out["results"]
+    assert res["rovingCount"] == 1
+    assert res["movedFocus"] != "checkout"
+    assert res["live"] == "Charge worker, worker, 1 upstream, 2 downstream"
+    assert res["tPlus"] != res["t0"]
+    assert res["tFit"] == res["t0"]
+    assert res["expanded"] is True
+    assert res["afterEscapeExpand"] == {"expanded": False, "stillFocused": True}
+
+
+def test_flow_plain_wheel_does_not_zoom_while_ctrl_wheel_zooms_and_phone_uses_bottom_sheet(flow_page: Path) -> None:
+    out = run(
+        flow_page,
+        ev(
+            """(() => {
+              const svg = document.querySelector('#flow-orders [data-q-flow-svg]');
+              const vp = document.querySelector('#flow-orders [data-q-flow-viewport]');
+              const before = vp.getAttribute('transform');
+              svg.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true }));
+              const afterPlain = vp.getAttribute('transform');
+              svg.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, ctrlKey: true, bubbles: true, cancelable: true }));
+              const afterCtrl = vp.getAttribute('transform');
+              return { unchangedOnPlain: afterPlain === before, changedOnCtrl: afterCtrl !== before };
+            })()""",
+            "wheel",
+        ),
+        {"viewport": {"width": 375, "height": 800}},
+        {"click": '#flow-orders [data-q-flow-node="charge"]'},
+        ev(
+            """(() => {
+              const stage = document.querySelector('#flow-orders [data-q-flow-stage]').getBoundingClientRect();
+              const drawer = document.querySelector('#flow-orders [data-q-flow-drawer]').getBoundingClientRect();
+              return {
+                fullWidth: Math.abs(drawer.width - stage.width) <= 2,
+                atBottom: Math.abs(drawer.bottom - stage.bottom) <= 2,
+                lowerHalf: drawer.top > stage.top + 40,
+              };
+            })()""",
+            "sheet",
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["wheel"] == {"unchangedOnPlain": True, "changedOnCtrl": True}
+    assert out["results"]["sheet"] == {"fullWidth": True, "atBottom": True, "lowerHalf": True}
+
+
+def test_flow_reduced_motion_and_no_js_and_layout_failure_fallbacks(flow_page: Path, tmp_path: Path) -> None:
+    reduced = run(
+        flow_page,
+        {"click": '#flow-orders [data-q-flow-node="charge"]'},
+        ev(
+            """(() => {
+              const f = document.querySelector('#flow-orders');
+              const line = f.querySelector('[data-q-flow-edge][data-q-flow-lit] [data-q-flow-edge-line]');
+              return {
+                pulsing: f.hasAttribute('data-q-flow-pulsing'),
+                width: line.getAttribute('stroke-width'),
+                marker: line.getAttribute('marker-end').includes('arrow-lit'),
+              };
+            })()""",
+            "reduced",
+        ),
+        initScripts=[
+            """
+            const orig = window.matchMedia;
+            window.matchMedia = (q) => q.includes('prefers-reduced-motion: reduce')
+              ? { matches: true, media: q, addEventListener() {}, removeEventListener() {} }
+              : orig(q);
+            """
+        ],
+    )
+    assert_clean(reduced)
+    assert reduced["results"]["reduced"] == {"pulsing": False, "width": "3.5", "marker": True}
+
+    nojs = run(
+        flow_page,
+        ev(
+            """(() => {
+              const f = document.querySelector('#flow-orders');
+              const details = f.querySelector('details[data-q-flow-list]');
+              return {
+                noticeVisible: f.querySelector('[data-q-flow-notice]').getBoundingClientRect().height > 0,
+                detailsOpen: details.open,
+                nodeItems: details.querySelectorAll('[data-q-flow-list-node]').length,
+              };
+            })()""",
+            "nojs",
+        ),
+        javaScript=False,
+    )
+    assert_clean(nojs)
+    assert nojs["results"]["nojs"] == {"noticeVisible": True, "detailsOpen": True, "nodeItems": 5}
+
+    failed = run(
+        flow_page,
+        ev(
+            """(() => {
+              const f = document.querySelector('#flow-orders');
+              const details = f.querySelector('details[data-q-flow-list]');
+              return {
+                ready: f.getAttribute('data-q-flow-ready'),
+                notice: f.querySelector('[data-q-flow-notice]').textContent,
+                detailsOpen: details.open,
+              };
+            })()""",
+            "failed",
+        ),
+        initScripts=[
+            """
+            Object.defineProperty(window, 'quirkFlow', {
+              configurable: true,
+              get() { return { ELK: function () { return { layout() { return Promise.reject(new Error('boom')); } }; } }; },
+              set() {}
+            });
+            """
+        ],
+    )
+    assert_clean(failed)
+    assert failed["results"]["failed"]["ready"] == "error"
+    assert "could not be drawn" in failed["results"]["failed"]["notice"]
+    assert failed["results"]["failed"]["detailsOpen"] is True
+
+
+def test_flow_theme_toggle_recolors_without_relayout_and_touch_allows_only_two_fingers(flow_page: Path) -> None:
+    out = run(
+        flow_page,
+        ev(
+            """(() => {
+              const f = document.querySelector('#flow-orders');
+              const svg = f.querySelector('[data-q-flow-svg]');
+              const stripe = f.querySelector('[data-q-flow-node="checkout"] [data-q-flow-stripe]');
+              const box = f.querySelector('[data-q-flow-node="checkout"] [data-q-flow-box]');
+              document.documentElement.setAttribute('data-theme', 'light');
+              const lightFill = getComputedStyle(box).fill;
+              const lightStripe = getComputedStyle(stripe).fill;
+              document.documentElement.setAttribute('data-theme', 'dark');
+              const darkFill = getComputedStyle(box).fill;
+              const darkStripe = getComputedStyle(stripe).fill;
+              const sameSvg = f.querySelector('[data-q-flow-svg]') === svg;
+              const touchAction = getComputedStyle(svg).touchAction;
+              return {
+                recoloredBox: lightFill !== darkFill,
+                recoloredStripe: lightStripe !== darkStripe,
+                sameSvg,
+                touchAction,
+              };
+            })()""",
+            "themeAndTouch",
+        ),
+    )
+    assert_clean(out)
+    res = out["results"]["themeAndTouch"]
+    assert res["recoloredBox"] is True
+    assert res["recoloredStripe"] is True
+    assert res["sameSvg"] is True
+    assert res["touchAction"] in ("manipulation", "pan-x pan-y pinch-zoom") and res["touchAction"] != "none"

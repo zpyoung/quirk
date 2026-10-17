@@ -8,6 +8,29 @@
 <h2 id="match-h">Matching an alert to a rule</h2>
 <p>Each alert arrives with a service name, a severity and a few labels. The router checks the rules from the top of the list and uses the first one that matches. Rule order therefore matters more than rule count: a broad rule near the top hides every narrower rule below it.</p>
 <p>An alert that matches no rule goes to the catch-all channel, which is read once a day. If something important arrives late, check this first.</p>
+<q-flow summary="Incoming alerts pass through rule matching, service grouping and the severity delay timer before reaching a notification channel." direction="right" groups="lanes">
+  <script type="application/json">
+  {
+    "kinds": {"ui": 1, "worker": 2, "queue": 4},
+    "groups": [
+      {"id": "intake", "label": "Matching"},
+      {"id": "hold", "label": "Grouping and delay"},
+      {"id": "send", "label": "Delivery"}
+    ],
+    "nodes": [
+      {"id": "matcher", "label": "Rule matcher", "kind": "worker", "group": "intake", "detail": "<p>Evaluates rules top to bottom; first match wins.</p>"},
+      {"id": "grouper", "label": "Alert grouper", "kind": "queue", "group": "hold", "detail": "<p>Batches alerts sharing service and rule over a 30s window.</p>"},
+      {"id": "timer", "label": "Delay timer", "kind": "queue", "group": "hold", "detail": "<p>Waits 1m for critical, 5m for warning, 60m for info.</p>"},
+      {"id": "channel", "label": "Channel sender", "kind": "ui", "group": "send", "detail": "<p>Pages on-call, posts to chat, or queues the daily digest.</p>"}
+    ],
+    "edges": [
+      {"from": "matcher", "to": "grouper", "label": "rule.matched"},
+      {"from": "grouper", "to": "timer", "label": "group.ready", "async": true},
+      {"from": "timer", "to": "channel", "label": "alert.send", "async": true}
+    ]
+  }
+  </script>
+</q-flow>
 </section>
 
 <section aria-labelledby="group-h">

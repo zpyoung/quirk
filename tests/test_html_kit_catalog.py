@@ -76,8 +76,19 @@ SECTION_3_4: dict[str, tuple[Any, bool, dict[str, tuple[bool, str, Any, Any]], l
         [["h2", "h3", "h4"]],
         [],
     ),
-    "q-sidenote": (None, True, {}, [], []),
+    "q-sidenote": (None, True, {}, [["[slot=note]"]], []),
     "q-compare": (None, True, {"recommended": (True, "integer", None, None)}, [["table"]], ["compare-recommended"]),
+    "q-flow": (
+        None,
+        True,
+        {
+            "summary": (True, "text", None, None),
+            "direction": (False, "enum", ["right", "down"], "right"),
+            "groups": (False, "enum", ["panels", "lanes"], "panels"),
+        },
+        [["script"]],
+        ["flow-data"],
+    ),
 }
 
 
@@ -148,9 +159,10 @@ def test_element_documentation_is_complete(catalog: Any, tag: str) -> None:
     if tag == "q-chart":
         assert scripts == ['<script type="application/json">'] or scripts == []
         assert "<table" in el.example
+    elif tag == "q-flow":
+        assert scripts == ['<script type="application/json">']
     else:
         assert scripts == []
-
 
 def test_stat_example_shows_three_adjacent_stats(catalog: Any) -> None:
     example = catalog.elements["q-stat"].example
@@ -209,6 +221,7 @@ def test_known_rules_are_exactly_the_spec_set() -> None:
         "board-columns",
         "timeline-items",
         "compare-recommended",
+        "flow-data",
     }
 
 

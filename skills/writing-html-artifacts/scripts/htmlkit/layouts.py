@@ -1,7 +1,7 @@
 """Page shapes: the registry of layout names, the generated section nav and region placement.
 
-Every tier-1 page has one of seven shapes. The build emits the same regions (summary, nav, main,
-aside) in each shape's own DOM order and ``theme/layout.css`` places them, so tab order, phones
+Every tier-1 page has one of six shapes. The build emits the same regions (summary, nav, main)
+in each shape's own DOM order and ``theme/layout.css`` places them, so tab order, phones
 and print all follow the document. ``validate_layout`` guards the names, ``build_nav`` derives the
 section nav from the page's headings, and ``render_regions`` assembles the region wrapper.
 """
@@ -12,8 +12,8 @@ import re
 from html.parser import HTMLParser
 from typing import Optional
 
-LAYOUTS: tuple[str, ...] = ("report", "explainer", "longform", "tool", "comparison", "dashboard", "reference")
-DEFAULT_LAYOUT = "report"
+LAYOUTS: tuple[str, ...] = ("explainer", "longform", "tool", "comparison", "dashboard", "reference")
+DEFAULT_LAYOUT = "explainer"
 NAV_MODES = ("auto", "on", "off")
 NAV_MIN_H2 = 5
 
@@ -23,7 +23,6 @@ _ID_ATTR = re.compile(r"""\bid\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))""", re.
 _NON_SLUG = re.compile(r"[^a-z0-9]+")
 
 SUMMARY_PLACEMENT = {
-    "report": "the answer or findings under the h1",
     "explainer": "the answer or findings under the h1",
     "longform": "the answer or findings under the h1",
     "comparison": "the recommendation line above the table",
@@ -40,7 +39,7 @@ def _source_error(message: str) -> Exception:
 
 
 def validate_layout(value: object, *, origin: str = "header field 'layout'") -> str:
-    """Return ``value`` when it names a shape; raises SourceError listing all seven names otherwise.
+    """Return ``value`` when it names a shape; raises SourceError listing all six names otherwise.
 
     ``origin`` names where the value came from (the source header, ``screen.json``, ``quirk-app.json``
     or the ``--layout`` flag) so the error points the author at the place to fix.
@@ -196,7 +195,7 @@ def build_nav(main_html: str, *, layout: str, nav: str, reserved_ids: set[str]) 
     return markup, page
 
 
-def render_regions(layout: str, *, summary: str, main: str, aside: str, nav: Optional[str], legacy: bool) -> str:
+def render_regions(layout: str, *, summary: str, main: str, nav: Optional[str], legacy: bool) -> str:
     """Wrap the regions in ``<div class="q-page" data-layout=...>`` in the shape's DOM order.
 
     ``main`` is wrapped in ``<main id="main">`` unless ``legacy`` is set, because a legacy skeleton
@@ -209,8 +208,6 @@ def render_regions(layout: str, *, summary: str, main: str, aside: str, nav: Opt
     main_html = main if legacy else f'<main id="main">\n{main}\n</main>'
     if layout == "tool":
         order = [nav, main_html, summary_html]
-    elif layout == "report":
-        order = [summary_html, nav, main_html, aside]
     else:
         order = [summary_html, nav, main_html]
     body = "\n".join(part for part in order if part)

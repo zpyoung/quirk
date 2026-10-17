@@ -22,7 +22,7 @@ sys.path.insert(0, str(SKILL / "scripts"))
 from htmlkit import assemble, header, layouts, manifest, tokens  # noqa: E402
 
 CLI = SKILL / "scripts" / "quirk_html.py"
-SEVEN = ("report", "explainer", "longform", "tool", "comparison", "dashboard", "reference")
+SHAPES = ("explainer", "longform", "tool", "comparison", "dashboard", "reference")
 
 # a custom skeleton as `templates new` wrote it before shapes existed: {{slot:main}}, no {{regions}}
 LEGACY_SKELETON = (
@@ -35,7 +35,6 @@ REGIONS_SKELETON = (
 )
 DESCRIPTION = "Use when you need a fixture template for the layout tests."
 SUMMARY_HINT = {
-    "report": "the answer or findings under the h1",
     "explainer": "the answer or findings under the h1",
     "longform": "the answer or findings under the h1",
     "comparison": "the recommendation line above the table",
@@ -120,22 +119,22 @@ def custom_template(project: Path, skeleton: str, name: str = "fx", slots: dict 
 # --- validate_layout -------------------------------------------------------------------------
 
 
-def test_layouts_are_the_seven_shapes_in_documented_order() -> None:
-    assert layouts.LAYOUTS == SEVEN
-    assert layouts.DEFAULT_LAYOUT == "report"
+def test_layouts_are_the_six_shapes_in_documented_order() -> None:
+    assert layouts.LAYOUTS == SHAPES
+    assert layouts.DEFAULT_LAYOUT == "explainer"
     assert layouts.NAV_MODES == ("auto", "on", "off")
 
 
-@pytest.mark.parametrize("name", SEVEN)
+@pytest.mark.parametrize("name", SHAPES)
 def test_validate_layout_returns_a_valid_name(name: str) -> None:
     assert layouts.validate_layout(name) == name
 
 
-@pytest.mark.parametrize("bad", ["Report", "slides", "", None, 3, ["report"]])
-def test_validate_layout_rejects_anything_else_and_lists_all_seven(bad: object) -> None:
+@pytest.mark.parametrize("bad", ["Report", "report", "slides", "", None, 3, ["explainer"]])
+def test_validate_layout_rejects_anything_else_and_lists_all_six(bad: object) -> None:
     with pytest.raises(assemble.SourceError) as info:
         layouts.validate_layout(bad)
-    assert ", ".join(SEVEN) in str(info.value)
+    assert ", ".join(SHAPES) in str(info.value)
 
 
 def test_validate_layout_names_the_origin_it_is_given() -> None:
@@ -252,12 +251,12 @@ def test_build_nav_rejects_an_unknown_mode() -> None:
 # --- render_regions --------------------------------------------------------------------------
 
 
-def regions(layout: str, *, legacy: bool = False, nav: str | None = "<nav>N</nav>", aside: str = "<aside>A</aside>") -> str:
-    return layouts.render_regions(layout, summary="<p>S</p>", main="<p>M</p>", aside=aside, nav=nav, legacy=legacy)
+def regions(layout: str, *, legacy: bool = False, nav: str | None = "<nav>N</nav>") -> str:
+    return layouts.render_regions(layout, summary="<p>S</p>", main="<p>M</p>", nav=nav, legacy=legacy)
 
 
 def order(html: str) -> list[str]:
-    marks = {"S": "<p>S</p>", "N": "<nav>N</nav>", "M": "<p>M</p>", "A": "<aside>A</aside>"}
+    marks = {"S": "<p>S</p>", "N": "<nav>N</nav>", "M": "<p>M</p>"}
     found = [(html.index(text), key) for key, text in marks.items() if text in html]
     return [key for _, key in sorted(found)]
 
@@ -265,7 +264,6 @@ def order(html: str) -> list[str]:
 @pytest.mark.parametrize(
     "layout, expected",
     [
-        ("report", ["S", "N", "M", "A"]),
         ("explainer", ["S", "N", "M"]),
         ("longform", ["S", "N", "M"]),
         ("reference", ["S", "N", "M"]),
@@ -281,25 +279,26 @@ def test_regions_follow_the_shapes_dom_order(layout: str, expected: list[str]) -
     assert '<section class="q-summary" aria-label="Summary">\n<p>S</p>\n</section>' in html
 
 
-def test_only_the_report_shape_emits_an_aside() -> None:
-    assert "<aside>A</aside>" in regions("report")
-    assert "<aside>" not in regions("explainer")
+def test_render_regions_takes_no_aside() -> None:
+    with pytest.raises(TypeError):
+        layouts.render_regions("explainer", summary="<p>S</p>", main="<p>M</p>", aside="<aside>A</aside>", nav=None, legacy=False)
 
 
 def test_main_is_wrapped_unless_the_skeleton_already_does() -> None:
-    assert '<main id="main">\n<p>M</p>\n</main>' in regions("report", legacy=False)
-    legacy = regions("report", legacy=True)
+    assert '<main id="main">\n<p>M</p>\n</main>' in regions("explainer", legacy=False)
+    legacy = regions("explainer", legacy=True)
     assert "<main" not in legacy and "<p>M</p>" in legacy
 
 
 def test_absent_nav_and_empty_summary_are_left_out() -> None:
-    html = layouts.render_regions("explainer", summary="", main="<p>M</p>", aside="", nav=None, legacy=False)
+    html = layouts.render_regions("explainer", summary="", main="<p>M</p>", nav=None, legacy=False)
     assert "q-summary" not in html and "<nav" not in html and "<p>M</p>" in html
 
 
-def test_render_regions_rejects_an_unknown_layout() -> None:
+@pytest.mark.parametrize("name", ["slides", "report"])
+def test_render_regions_rejects_an_unknown_layout(name: str) -> None:
     with pytest.raises(ValueError):
-        regions("slides")
+        regions(name)
 
 
 # --- parse_source ----------------------------------------------------------------------------
@@ -321,7 +320,7 @@ def test_parse_source_rejects_bad_layout_and_nav(tmp_path: Path, meta: dict, fra
 
 def test_a_bad_layout_in_the_header_exits_2_and_lists_the_shapes(tmp_path: Path, env: dict, project: Path) -> None:
     rc, result = build(report_src(tmp_path, {"layout": "slides"}), tmp_path / "o.html", env, project)
-    assert rc == 2 and ", ".join(SEVEN) in result["error"]
+    assert rc == 2 and ", ".join(SHAPES) in result["error"]
     assert result["error"].startswith("header field 'layout' must be one of")
     assert not (tmp_path / "o.html").exists()
 
@@ -331,14 +330,14 @@ def test_a_bad_layout_in_quirk_app_json_is_reported_as_that_key(tmp_path: Path, 
     source.mkdir(parents=True)
     (source / "quirk-app.json").write_text(json.dumps({"layout": "poster"}))
     rc, result = run_cli("build-app", "demo", "--project-dir", project, "--title", "T", env=env)
-    assert rc == 2 and ", ".join(SEVEN) in result["error"]
+    assert rc == 2 and ", ".join(SHAPES) in result["error"]
     assert result["error"].startswith("quirk-app.json key 'layout' must be one of")
     assert "header field" not in result["error"]
 
 
 def test_a_bad_layout_flag_is_reported_as_the_flag_not_a_header_field(tmp_path: Path, env: dict, project: Path) -> None:
     rc, result = run_cli("build-app", "demo", "--project-dir", project, "--title", "T", "--layout", "poster", env=env)
-    assert rc == 2 and ", ".join(SEVEN) in result["error"]
+    assert rc == 2 and ", ".join(SHAPES) in result["error"]
     assert result["error"].startswith("--layout flag must be one of")
     assert "header field" not in result["error"]
 
@@ -346,7 +345,7 @@ def test_a_bad_layout_flag_is_reported_as_the_flag_not_a_header_field(tmp_path: 
 # --- build: layout record and rebuild --------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", SEVEN)
+@pytest.mark.parametrize("name", SHAPES)
 def test_every_shape_builds_on_the_report_template_and_is_recorded(name: str, tmp_path: Path, env: dict, project: Path) -> None:
     out = tmp_path / f"{name}.html"
     slots = {"summary": "<p>The answer.</p>", "main": "<h2>Part</h2>\n<p>Body.</p>"}
@@ -378,26 +377,26 @@ def test_a_source_layout_beats_the_recorded_one(tmp_path: Path, env: dict, proje
     assert rc == 0 and result["layout"] == "dashboard" and page_header(out)["layout"] == "dashboard"
 
 
-def test_no_layout_anywhere_builds_as_report_and_the_note_says_so(tmp_path: Path, env: dict, project: Path) -> None:
+def test_no_layout_anywhere_builds_as_explainer_and_the_note_says_so(tmp_path: Path, env: dict, project: Path) -> None:
     out = tmp_path / "o.html"
     rc, result = build(report_src(tmp_path), out, env, project)
-    assert rc == 0 and result["layout"] == "report" and result["layout_defaulted"] is True
-    assert page_header(out)["layout"] == "report"
+    assert rc == 0 and result["layout"] == "explainer" and result["layout_defaulted"] is True
+    assert page_header(out)["layout"] == "explainer"
     rc, note = run_cli("note", out, "--project-dir", project, env=env)
     lines = note["markdown"].splitlines()
     template_at = next(i for i, line in enumerate(lines) if line.startswith("- Template:"))
-    assert lines[template_at + 1] == "- Layout: report (no layout named)"
+    assert lines[template_at + 1] == "- Layout: explainer (no layout named)"
 
 
 def test_a_rebuild_with_no_layout_stays_defaulted_until_the_source_names_one(tmp_path: Path, env: dict, project: Path) -> None:
     out = tmp_path / "o.html"
     for _ in range(2):
         rc, result = build(report_src(tmp_path), out, env, project)
-        assert rc == 0 and result["layout"] == "report" and result["layout_defaulted"] is True
+        assert rc == 0 and result["layout"] == "explainer" and result["layout_defaulted"] is True
         assert page_header(out)["layout_defaulted"] is True
         _, note = run_cli("note", out, "--project-dir", project, env=env)
-        assert "- Layout: report (no layout named)" in note["markdown"]
-    rc, result = build(report_src(tmp_path, {"layout": "report"}), out, env, project)
+        assert "- Layout: explainer (no layout named)" in note["markdown"]
+    rc, result = build(report_src(tmp_path, {"layout": "explainer"}), out, env, project)
     assert rc == 0 and result["layout_defaulted"] is False and "layout_defaulted" not in page_header(out)
     rc, result = build(report_src(tmp_path), out, env, project)
     assert rc == 0 and result["layout_defaulted"] is False and "layout_defaulted" not in page_header(out)
@@ -431,16 +430,15 @@ def test_nav_errors_exit_2(tmp_path: Path, env: dict, project: Path) -> None:
     assert rc == 2 and "nav needs at least one h2 in main" in result["error"]
 
 
-def test_generated_ids_avoid_ids_in_the_summary_and_aside(tmp_path: Path, env: dict, project: Path) -> None:
+def test_generated_ids_avoid_ids_in_the_summary(tmp_path: Path, env: dict, project: Path) -> None:
     slots = {
         "summary": '<p id="part-1">S</p>',
         "main": h2s(5),
-        "aside": '<aside aria-label="n" id="part-2"><p>n</p></aside>',
     }
     out = tmp_path / "o.html"
-    rc, _ = build(report_src(tmp_path, {"layout": "report"}, slots), out, env, project)
+    rc, _ = build(report_src(tmp_path, {"layout": "explainer"}, slots), out, env, project)
     html = out.read_text(encoding="utf-8")
-    assert rc == 0 and '<h2 id="part-1-2">Part 1</h2>' in html and '<h2 id="part-2-2">Part 2</h2>' in html
+    assert rc == 0 and '<h2 id="part-1-2">Part 1</h2>' in html and '<h2 id="part-2">Part 2</h2>' in html
 
 
 def test_layout_css_is_inlined_after_base_css(tmp_path: Path, env: dict, project: Path) -> None:
@@ -453,10 +451,10 @@ def test_layout_css_is_inlined_after_base_css(tmp_path: Path, env: dict, project
     assert html.index(base) < html.index(layout_css)
 
 
-# --- build: summary rule and aside rule ------------------------------------------------------
+# --- build: summary rule and retired report shape ------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", SEVEN)
+@pytest.mark.parametrize("name", SHAPES)
 def test_a_missing_summary_fails_and_says_where_it_goes(name: str, tmp_path: Path, env: dict, project: Path) -> None:
     src = report_src(tmp_path, {"layout": name}, {"main": "<p>Body.</p>"}, name=name)
     rc, result = build(src, tmp_path / "o.html", env, project)
@@ -466,9 +464,9 @@ def test_a_missing_summary_fails_and_says_where_it_goes(name: str, tmp_path: Pat
     assert not (tmp_path / "o.html").exists()
 
 
-def test_a_missing_summary_on_a_fresh_default_names_report(tmp_path: Path, env: dict, project: Path) -> None:
+def test_a_missing_summary_on_a_fresh_default_names_explainer(tmp_path: Path, env: dict, project: Path) -> None:
     rc, result = build(report_src(tmp_path, slots={"main": "<p>x</p>"}), tmp_path / "o.html", env, project)
-    assert rc == 2 and "the report shape needs a summary slot" in result["error"]
+    assert rc == 2 and "the explainer shape needs a summary slot" in result["error"]
 
 
 def test_a_blank_summary_counts_as_missing(tmp_path: Path, env: dict, project: Path) -> None:
@@ -476,19 +474,30 @@ def test_a_blank_summary_counts_as_missing(tmp_path: Path, env: dict, project: P
     assert rc == 2 and "summary slot" in result["error"]
 
 
-@pytest.mark.parametrize("name", [n for n in SEVEN if n != "report"])
-def test_an_aside_on_any_other_shape_is_an_error(name: str, tmp_path: Path, env: dict, project: Path) -> None:
+def test_the_report_shape_is_gone_and_the_error_lists_the_six(tmp_path: Path, env: dict, project: Path) -> None:
+    rc, result = build(report_src(tmp_path, {"layout": "report"}), tmp_path / "o.html", env, project)
+    assert rc == 2 and ", ".join(SHAPES) in result["error"]
+    assert not (tmp_path / "o.html").exists()
+
+
+def test_the_report_template_declares_no_aside_slot(tmp_path: Path, env: dict, project: Path) -> None:
     slots = {"summary": "<p>S</p>", "main": "<p>M</p>", "aside": '<aside aria-label="x"><p>n</p></aside>'}
-    rc, result = build(report_src(tmp_path, {"layout": name}, slots), tmp_path / "o.html", env, project)
-    assert rc == 2 and "only the report shape places an aside" in result["error"]
+    rc, result = build(report_src(tmp_path, slots=slots), tmp_path / "o.html", env, project)
+    assert rc == 2 and "source has slots the template does not declare: aside" in result["error"]
 
 
-def test_a_report_aside_follows_main_in_the_dom(tmp_path: Path, env: dict, project: Path) -> None:
-    slots = {"summary": "<p>S</p>", "main": "<p>M</p>", "aside": '<aside aria-label="x"><p>side</p></aside>'}
+def test_a_page_recorded_as_report_rebuilds_as_a_defaulted_explainer(tmp_path: Path, env: dict, project: Path) -> None:
     out = tmp_path / "o.html"
-    rc, _ = build(report_src(tmp_path, {"layout": "report"}, slots), out, env, project)
-    html = out.read_text(encoding="utf-8")
-    assert rc == 0 and html.index("q-summary") < html.index("<p>M</p>") < html.index("<aside")
+    build(report_src(tmp_path), out, env, project)
+    text = out.read_text(encoding="utf-8")
+    meta = page_header(out)
+    meta["layout"] = "report"
+    meta.pop("layout_defaulted", None)
+    lines = text.split("\n")
+    lines[1] = header.render_header(meta)
+    out.write_text("\n".join(lines), encoding="utf-8")
+    rc, result = build(report_src(tmp_path), out, env, project)
+    assert rc == 0 and result["layout"] == "explainer" and result["layout_defaulted"] is True
 
 
 def test_summary_is_not_a_slot_a_template_can_declare(tmp_path: Path) -> None:
@@ -518,10 +527,10 @@ def test_a_pre_shapes_page_rebuilds_without_a_summary_and_keeps_doing_so(tmp_pat
     bare = report_src(tmp_path, slots={"main": "<p>Body.</p>"}, name="bare")
 
     rc, result = build(bare, out, env, project)
-    assert rc == 0 and result["layout"] == "report" and result["legacy_summary"] is True
+    assert rc == 0 and result["layout"] == "explainer" and result["legacy_summary"] is True
     assert any(w["check"] == "summary" and "summary" in w["detail"] for w in result["checks"]["warnings"])
     meta = page_header(out)
-    assert meta["layout"] == "report" and meta["legacy_summary"] is True
+    assert meta["layout"] == "explainer" and meta["legacy_summary"] is True
     assert 'class="q-summary"' not in out.read_text(encoding="utf-8")
 
     rc, result = build(bare, out, env, project)
@@ -532,7 +541,7 @@ def test_a_pre_shapes_page_rebuilds_without_a_summary_and_keeps_doing_so(tmp_pat
     assert "q-summary" in out.read_text(encoding="utf-8")
 
     rc, result = build(bare, out, env, project)
-    assert rc == 2 and "the report shape needs a summary slot" in result["error"]
+    assert rc == 2 and "the explainer shape needs a summary slot" in result["error"]
 
 
 def test_a_pre_shapes_page_takes_a_named_layout(tmp_path: Path, env: dict, project: Path) -> None:
@@ -553,7 +562,7 @@ def test_a_page_with_a_recorded_layout_gets_no_exemption(tmp_path: Path, env: di
 # --- build: custom skeletons -----------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", SEVEN)
+@pytest.mark.parametrize("name", SHAPES)
 def test_a_legacy_custom_skeleton_builds_every_shape(name: str, tmp_path: Path, env: dict, project: Path) -> None:
     custom_template(project, LEGACY_SKELETON)
     out = tmp_path / "o.html"
@@ -583,13 +592,13 @@ def test_a_legacy_skeletons_aside_stays_outside_the_wrapper(tmp_path: Path, env:
     assert rc == 0 and html.index("</div></main>") < html.index("<aside")
 
 
-def test_a_regions_skeleton_places_main_and_aside_itself(tmp_path: Path, env: dict, project: Path) -> None:
+def test_a_regions_skeleton_places_another_declared_slot_itself(tmp_path: Path, env: dict, project: Path) -> None:
     slots = {"main": {"required": True}, "aside": {"required": False}}
-    custom_template(project, REGIONS_SKELETON, slots=slots)
+    custom_template(project, REGIONS_SKELETON.replace("{{regions}}", "{{regions}}{{slot:aside}}"), slots=slots)
     out = tmp_path / "o.html"
     src = src_file(
         tmp_path / "r.src.html",
-        {"template": "fx", "title": "T", "layout": "report"},
+        {"template": "fx", "title": "T", "layout": "explainer"},
         {"summary": "<p>S</p>", "main": "<p>M</p>", "aside": '<aside aria-label="n">side</aside>'},
     )
     rc, result = build(src, out, env, project)
@@ -667,8 +676,8 @@ MAIN_ONLY = {"main": {"required": True}}
 MAIN_ASIDE = {"main": {"required": True}, "aside": {"required": False}}
 
 
-def test_manifest_accepts_regions_without_main_or_aside_placeholders(tmp_path: Path) -> None:
-    assert _tier1_problems(tmp_path, REGIONS_SKELETON, MAIN_ASIDE) == []
+def test_manifest_accepts_regions_without_a_main_placeholder(tmp_path: Path) -> None:
+    assert _tier1_problems(tmp_path, REGIONS_SKELETON, MAIN_ONLY) == []
 
 
 def test_manifest_accepts_the_layout_placeholder_with_either_main_style(tmp_path: Path) -> None:
@@ -681,9 +690,9 @@ def test_manifest_rejects_regions_mixed_with_slot_main(tmp_path: Path) -> None:
     assert any("{{regions}}" in p and "{{slot:main}}" in p for p in problems)
 
 
-def test_manifest_rejects_regions_mixed_with_slot_aside(tmp_path: Path) -> None:
-    problems = _tier1_problems(tmp_path, REGIONS_SKELETON.replace("{{regions}}", "{{regions}}{{slot:aside}}"), MAIN_ASIDE)
-    assert any("{{slot:aside}}" in p for p in problems)
+def test_manifest_treats_aside_as_an_ordinary_slot_beside_regions(tmp_path: Path) -> None:
+    assert any("{{slot:aside}}" in p for p in _tier1_problems(tmp_path, REGIONS_SKELETON, MAIN_ASIDE))
+    assert _tier1_problems(tmp_path, REGIONS_SKELETON.replace("{{regions}}", "{{regions}}{{slot:aside}}"), MAIN_ASIDE) == []
 
 
 def test_manifest_still_needs_other_declared_slots_beside_regions(tmp_path: Path) -> None:

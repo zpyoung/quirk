@@ -18,6 +18,7 @@
  *     {press: "ArrowRight"}                    keyboard press on the focused element
  *     {focus: "css"}                           focus the first match
  *     {click: "css"}                           real mouse click on the first match
+ *     {hover: "css"}                           move the mouse over the first match
  *     {type: "text"}                           type text into the focused element, one key at a time
  *     {drag: {from, to, at}}                   mouse press near the top of `from`, move to `to`, release; `at` is where in
  *                                              `to` to land: "center" (default), "top" or "bottom"
@@ -152,6 +153,17 @@ try {
   if (spec.media) await page.emulateMedia({ media: spec.media });
 
   await page.goto(pathToFileURL(path.resolve(spec.file)).href, { waitUntil: "load" });
+  if (spec.javaScript !== false) {
+    try {
+      await page.waitForFunction(
+        () => [...document.querySelectorAll("q-flow")].every((el) => el.hasAttribute("data-q-flow-ready")),
+        null,
+        { timeout: 10000 },
+      );
+    } catch (err) {
+      out.failedSteps.push({ index: -1, step: { waitFor: "q-flow" }, error: String(err.message).split("\n")[0] });
+    }
+  }
 
   const steps = spec.steps || [];
   for (let i = 0; i < steps.length; i += 1) {
@@ -167,10 +179,20 @@ try {
       else if ("copyFile" in step) copyFileSync(step.copyFile.from, step.copyFile.to);
       else if ("focus" in step) await page.locator(step.focus).first().focus();
       else if ("click" in step) await page.locator(step.click).first().click();
+      else if ("hover" in step) await page.locator(step.hover).first().hover();
       else if ("eval" in step) out.results[step.as ?? String(i)] = await page.evaluate(step.eval);
       else if ("emulate" in step) await page.emulateMedia(step.emulate);
       else if ("viewport" in step) await page.setViewportSize(step.viewport);
-      else if ("reload" in step) await page.reload({ waitUntil: "load" });
+      else if ("reload" in step) {
+        await page.reload({ waitUntil: "load" });
+        if (spec.javaScript !== false) {
+          await page.waitForFunction(
+            () => [...document.querySelectorAll("q-flow")].every((el) => el.hasAttribute("data-q-flow-ready")),
+            null,
+            { timeout: 10000 },
+          );
+        }
+      }
       else if ("wait" in step) await page.waitForTimeout(step.wait);
       else if ("waitFor" in step) await page.waitForFunction(step.waitFor, null, { timeout: step.timeout ?? 5000 });
       else throw new Error(`unknown step: ${JSON.stringify(step)}`);

@@ -212,7 +212,7 @@ def build_app(
     """Build the tier-2 app ``slug`` and return a ``BuildResult`` dict (see tech.md section 4.1).
 
     ``title``, ``mode``, ``signal``, ``template_name`` and ``layout`` come from ``quirk-app.json`` in the
-    source folder when ``None`` (``layout`` then defaults to ``report``); a value given overrides the saved one and is saved. The first
+    source folder when ``None`` (``layout`` then defaults to ``explainer``); a value given overrides the saved one and is saved. The first
     build needs a title. ``pnpm-lock.yaml`` pins every npm dependency, so ``upgrade`` only moves
     the kit and Chart.js, which come from the skill and otherwise stay at the version in the existing
     output's header; an app that uses no kit gets a warning saying ``upgrade`` has no effect. The
@@ -267,11 +267,12 @@ def build_app(
     if not source.exists():
         _scaffold(template.dir, template.project or "project/", template.example, source)
     kit_files = _kit_sources(source)
-    uses_kit, uses_chartjs, uses_highlight = False, False, False
+    uses_kit, uses_chartjs, uses_highlight, uses_flow = False, False, False, False
     for _, text in kit_files:
         kit, chartjs = kitcheck.needs(text)
         uses_kit, uses_chartjs = uses_kit or kit, uses_chartjs or chartjs
         uses_highlight = uses_highlight or kitcheck.needs_highlight(text)
+        uses_flow = uses_flow or kitcheck.needs_flow(text)
     if upgrade and not uses_kit:
         warnings.append("--upgrade has no effect on tier 2: pnpm-lock.yaml pins every dependency version")
     try:
@@ -313,7 +314,12 @@ def build_app(
     if uses_kit:
         store = _skill_store(skill, template.dir)
         frozen = _frozen_versions(out_path)
-        names = (["chartjs"] if uses_chartjs else []) + (["highlightjs"] if uses_highlight else []) + ["kit"]
+        names = (
+            (["chartjs"] if uses_chartjs else [])
+            + (["highlightjs"] if uses_highlight else [])
+            + (["flow"] if uses_flow else [])
+            + ["kit"]
+        )
         try:
             for name in names:
                 lv = store.resolve(name, None if upgrade else frozen.get(name))

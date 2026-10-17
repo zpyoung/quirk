@@ -13,6 +13,27 @@
 <section aria-labelledby="path-h">
 <h2 id="path-h">What happens to one failed call</h2>
 <p>A call that fails with a retryable error is written to the queue together with the order id and an idempotency key. A worker picks it up when its wait is over and calls the provider again.</p>
+<q-flow summary="Failed payment calls move from checkout into the retry queue, through the retry worker to the payment provider, and end at the order ledger or dead-letter queue." direction="right" groups="panels">
+  <script type="application/json">
+  {
+    "kinds": {"ui": 1, "worker": 2, "database": 3, "queue": 4},
+    "groups": [
+      {"id": "billing", "label": "Billing retry pipeline"}
+    ],
+    "nodes": [
+      {"id": "checkout", "label": "Checkout API", "kind": "ui", "detail": "<p>Generates the idempotency key once when the order is placed.</p>"},
+      {"id": "queue", "label": "Retry queue", "kind": "queue", "group": "billing", "detail": "<p>Holds failed calls with exponential backoff from 2s to 32s.</p>"},
+      {"id": "worker", "label": "Retry worker", "kind": "worker", "group": "billing", "detail": "<p>Attempts up to 5 times using the stored idempotency key.</p>"},
+      {"id": "ledger", "label": "Order ledger", "kind": "database", "group": "billing", "detail": "<p>Marks the order paid or payment failed once settled.</p>"}
+    ],
+    "edges": [
+      {"from": "checkout", "to": "queue", "label": "payment.retry", "async": true},
+      {"from": "queue", "to": "worker", "label": "attempt.due", "async": true},
+      {"from": "worker", "to": "ledger", "label": "order.settled"}
+    ]
+  }
+  </script>
+</q-flow>
 <h3 id="path-success">If the retry succeeds</h3>
 <p>The order moves to paid, the shopper's page updates, and the queue entry is deleted.</p>
 <h3 id="path-fail">If it fails again</h3>

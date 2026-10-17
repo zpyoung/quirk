@@ -9,8 +9,6 @@ export interface ViewDef {
   component: () => ReactElement
   /** The page's opening answer, shown in the summary region for every shape. */
   summary?: ReactNode
-  /** Side notes beside the main content; the report shape only. */
-  aside?: ReactNode
 }
 
 function Home() {

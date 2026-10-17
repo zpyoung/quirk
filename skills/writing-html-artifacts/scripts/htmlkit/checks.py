@@ -358,34 +358,41 @@ def _reference_failures(page: _Page, mode: str, tier: int) -> list[dict]:
     return [{"check": "external-refs", "detail": detail} for detail in dict.fromkeys(found)]
 
 
-def _kit_failures(
+def _kit_failures_and_warnings(
     html: str,
     meta: Optional[dict],
     labels: Iterable[str],
     store: VendorStore,
     kit_source: Optional[tuple[str, str]],
-) -> list[dict]:
+) -> tuple[list[dict], list[dict]]:
     label, text = kit_source if kit_source is not None else ("page", html)
     first = kitcheck.KIT_TAG.search(text)
     if first is None:
-        return []
+        return [], []
     libraries = meta.get("libraries") if meta else None
     recorded = libraries.get("kit") if isinstance(libraries, dict) else None
     failures: list[dict] = []
+    warnings: list[dict] = []
     try:
         catalog = kitcheck.load_catalog(store, recorded if isinstance(recorded, str) else None)
     except kitcheck.KitError as exc:
         failures.append({"check": "kit", "detail": f"cannot load the kit catalog: {exc}"})
     else:
         failures.extend(kitcheck.check_html(text, catalog, label=label))
+        warnings.extend(kitcheck.check_html_warnings(text, catalog, label=label))
     scans_the_page = kit_source is None or kit_source[1] == html
     if scans_the_page and not any(name.startswith("kit@") for name in labels):
         line = text.count("\n", 0, first.start()) + 1
         failures.append(
             {"check": "kit", "detail": f"{label} line {line}: kit elements are used but the kit is not inlined"}
         )
-    return failures
-
+    flow_match = kitcheck.FLOW_TAG.search(text) if scans_the_page else None
+    if flow_match is not None and not any(name.startswith("flow@") for name in labels):
+        line = text.count("\n", 0, flow_match.start()) + 1
+        failures.append(
+            {"check": "kit", "detail": f"{label} line {line}: q-flow elements are used but flow is not inlined"}
+        )
+    return failures, warnings
 
 def run_checks(
     html: str,
@@ -436,7 +443,9 @@ def run_checks(
         if failure:
             failures.append(failure)
     failures.extend(_reference_failures(page, mode, tier))
-    failures.extend(_kit_failures(html, meta, labels, vendor, kit_source))
+    kit_fails, kit_warns = _kit_failures_and_warnings(html, meta, labels, vendor, kit_source)
+    failures.extend(kit_fails)
+    warnings.extend(kit_warns)
     if tier == 1:
         failures.extend(layoutcheck.check_html(html, label="page"))
 

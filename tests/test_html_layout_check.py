@@ -22,7 +22,7 @@ WIDTH_HINT = 'page shapes set widths; set "layout" in the header'
 def page(slot: str, head: str = "") -> str:
     return (
         f"<!doctype html>\n<html><head><title>t</title>{head}</head><body>\n"
-        f'<div class="q-page" data-layout="report">\n{slot}\n</div>\n</body></html>\n'
+        f'<div class="q-page" data-layout="explainer">\n{slot}\n</div>\n</body></html>\n'
     )
 
 
@@ -182,6 +182,84 @@ def test_untokenizable_css_is_skipped_declaration_by_declaration() -> None:
     assert any("float" in d for d in got)
 
 
+@pytest.mark.parametrize(
+    "selector",
+    [
+        "seat-map",
+        "seat-map .row",
+        "seat-map > .row",
+        "main seat-map",
+        ".panel seat-map.big > li",
+        "seat-map .row + .row",
+        "seat-map .row ~ .row",
+        "seat-map[data-mode='a'] .cell:hover",
+        "seat-map, seat-map > ol",
+        "x-1 .row",
+    ],
+)
+def test_grid_is_allowed_on_and_inside_a_custom_element(selector: str) -> None:
+    css = f"{selector} {{ display: grid; grid-template-columns: repeat(8, 1fr); grid-area: a }}"
+    assert check(page(f"<style>{css}</style><seat-map></seat-map>")) == []
+
+
+def test_grid_inside_a_custom_element_is_allowed_within_at_rules() -> None:
+    css = "@media (min-width: 600px) { seat-map .row { display: grid } }"
+    assert check(page(f"<style>{css}</style>")) == []
+
+
+@pytest.mark.parametrize(
+    "selector",
+    [
+        ".row",
+        "seat-map + .row",
+        "seat-map ~ section",
+        "seat-map, .row",
+        ":not(seat-map) .row",
+        ":is(seat-map, .a) + .row",
+        ".seat-map .row",
+        "#seat-map .row",
+        "[data-x='seat-map'] .row",
+        "q-panel .row",
+        "q-grid",
+        "wa-card .row",
+    ],
+)
+def test_grid_outside_a_custom_element_still_fails(selector: str) -> None:
+    got = check(page(f"<style>{selector} {{ display: grid }}</style>"))
+    assert len(got) == 1
+    assert GRID_HINT in got[0]
+
+
+@pytest.mark.parametrize(
+    "decl", ["width: 600px", "float: left", "columns: 2", "column-count: 3"],
+)
+def test_a_custom_element_does_not_exempt_width_float_or_columns(decl: str) -> None:
+    got = check(page(f"<style>seat-map .row {{ {decl} }}</style>"))
+    assert len(got) == 1
+    assert WIDTH_HINT in got[0]
+
+
+def test_a_grid_style_attribute_is_allowed_on_and_inside_a_custom_element() -> None:
+    html = page(
+        '<seat-map style="display: grid"><ol style="display: grid; grid-template-columns: 1fr 1fr">'
+        '<li style="grid-column: span 2">a</li></ol></seat-map>'
+    )
+    assert check(html) == []
+
+
+def test_a_grid_style_attribute_outside_a_custom_element_still_fails() -> None:
+    html = page(
+        '<seat-map></seat-map><div style="display: grid"></div>'
+        '<q-panel title="t"><div style="display: grid"></div></q-panel>'
+    )
+    assert len(check(html)) == 2
+
+
+def test_a_custom_element_style_attribute_still_fails_on_width() -> None:
+    got = check(page('<seat-map style="width: 900px"></seat-map>'))
+    assert len(got) == 1 and WIDTH_HINT in got[0]
+
+
 @pytest.mark.parametrize("junk", ["<style>", "<div style='", '<div class="q-page"><style>.a{', "\x00<style>}{;:"])
 def test_check_html_never_raises(junk: str) -> None:
     layoutcheck.check_html(junk, label="page")
@@ -213,6 +291,12 @@ def test_app_sources_flag_a_css_file_with_a_relative_path_and_line(tmp_path: Pat
     assert [f["check"] for f in got] == ["layout"]
     assert got[0]["detail"].startswith("src/pages/card.css line 5: ")
     assert GRID_HINT in got[0]["detail"]
+
+
+def test_app_css_allows_grid_inside_a_custom_element_but_not_width(tmp_path: Path) -> None:
+    paths = sources(tmp_path, {"src/seat-map.css": "seat-map .row { display: grid; width: 900px }\n"})
+    got = layoutcheck.check_app_sources(paths, root=tmp_path)
+    assert len(got) == 1 and WIDTH_HINT in got[0]["detail"]
 
 
 def test_app_sources_flag_inline_style_objects_in_tsx(tmp_path: Path) -> None:
@@ -274,7 +358,7 @@ def _header_meta() -> dict:
 
 
 def built(slot: str, *, wrapper: bool = True) -> str:
-    body = f'<div class="q-page" data-layout="report">{slot}</div>' if wrapper else slot
+    body = f'<div class="q-page" data-layout="explainer">{slot}</div>' if wrapper else slot
     return f"<!doctype html>\n{header.render_header(_header_meta())}\n<html><head><title>t</title></head><body>\n{body}\n</body></html>\n"
 
 

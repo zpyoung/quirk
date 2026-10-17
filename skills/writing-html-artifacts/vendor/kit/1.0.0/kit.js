@@ -5,7 +5,7 @@
  *
  * Helpers every element builds on: define, whenReady, token, onTheme, bindData, readTable.
  * Elements so far: q-tabs, q-timeline, q-code, q-stat, q-table, q-chart, q-diff, q-diff-note, q-board,
- * q-sidenote, q-compare. q-grid and q-panel are CSS only.
+ * q-sidenote, q-compare, q-flow. q-grid and q-panel are CSS only.
  */
 (function () {
   'use strict';
@@ -2583,21 +2583,11 @@
     }
   }
 
-  /** Numbers every sidenote on the page in document order, so each toggle matches its neighbours. */
-  function numberSidenotes() {
-    Array.prototype.forEach.call(document.querySelectorAll('q-sidenote'), function (note, i) {
-      if (note._toggle) {
-        note._toggle.textContent = String(i + 1);
-        note._toggle.setAttribute('aria-label', 'Note ' + (i + 1));
-      }
-    });
-  }
-
   /**
-   * q-sidenote: inserts a numbered toggle button before the note and collapses the note behind it.
-   * The stylesheet decides where the note shows: in the margin of a wide longform page it is always
-   * visible and the toggle is hidden; elsewhere the toggle opens the note in place. Without this
-   * script the note reads inline in parentheses.
+   * q-sidenote: highlights the words it wraps and shows its slot="note" child as a popover while
+   * a mouse hovers the words or the note, or while the words have keyboard focus. A tap or click
+   * keeps the note open until the next one, and Escape closes it. Without this script, and in
+   * print, the note reads inline in parentheses after the words.
    */
   class QSidenote extends HTMLElement {
     connectedCallback() {
@@ -2610,39 +2600,130 @@
     }
 
     disconnectedCallback() {
-      if (this._toggle) {
-        this._toggle.remove();
-        this._toggle = null;
+      if (this._listeners) {
+        this._listeners.abort();
+        this._listeners = null;
       }
-      this.removeAttribute('data-q-collapsed');
+      if (this._note) {
+        this._note.removeAttribute('data-q-open');
+        this._note.removeAttribute('data-q-above');
+        this._note.style.removeProperty('left');
+        this._note = null;
+      }
+      this.removeAttribute('data-q-ready');
+      this.removeAttribute('tabindex');
+      this.removeAttribute('aria-describedby');
     }
 
     _build() {
-      if (this._toggle) {
+      if (this._note) {
         return;
       }
-      if (!this.id) {
-        this.id = uid('q-sidenote-');
+      var note = this.querySelector(':scope > [slot="note"]');
+      if (!note) {
+        return;
       }
-      var button = kitNode('button');
-      button.type = 'button';
-      button.setAttribute('data-q-sidenote-toggle', '');
-      button.setAttribute('aria-expanded', 'false');
-      button.setAttribute('aria-controls', this.id);
+      this._note = note;
+      if (!note.id) {
+        note.id = uid('q-sidenote-');
+      }
+      note.setAttribute('role', 'tooltip');
+      this.setAttribute('tabindex', '0');
+      this.setAttribute('aria-describedby', note.id);
+      this.setAttribute('data-q-ready', '');
+
       var self = this;
-      button.addEventListener('click', function () {
-        var open = button.getAttribute('aria-expanded') !== 'true';
-        button.setAttribute('aria-expanded', open ? 'true' : 'false');
-        if (open) {
-          self.removeAttribute('data-q-collapsed');
-        } else {
-          self.setAttribute('data-q-collapsed', '');
-        }
+      var pinned = false;
+      var hovered = false;
+      var focused = false;
+      var leaveTimer = null;
+      var controller = new AbortController();
+      var on = { signal: controller.signal };
+      this._listeners = controller;
+      controller.signal.addEventListener('abort', function () {
+        clearTimeout(leaveTimer);
       });
-      this.parentNode.insertBefore(button, this);
-      this._toggle = button;
-      this.setAttribute('data-q-collapsed', '');
-      numberSidenotes();
+
+      function render() {
+        var open = pinned || hovered || focused;
+        if (open === note.hasAttribute('data-q-open')) {
+          return;
+        }
+        if (!open) {
+          note.removeAttribute('data-q-open');
+          return;
+        }
+        note.removeAttribute('data-q-above');
+        note.style.removeProperty('left');
+        note.setAttribute('data-q-open', '');
+        self._place();
+      }
+
+      this.addEventListener('pointerenter', function (event) {
+        if (event.pointerType === 'mouse') {
+          clearTimeout(leaveTimer);
+          hovered = true;
+          render();
+        }
+      }, on);
+      // a short grace period lets the pointer cross the gap between the words and the note
+      this.addEventListener('pointerleave', function (event) {
+        if (event.pointerType === 'mouse') {
+          clearTimeout(leaveTimer);
+          leaveTimer = setTimeout(function () {
+            hovered = false;
+            render();
+          }, 150);
+        }
+      }, on);
+      this.addEventListener('focusin', function () {
+        focused = true;
+        render();
+      }, on);
+      this.addEventListener('focusout', function (event) {
+        if (!self.contains(event.relatedTarget)) {
+          focused = false;
+          render();
+        }
+      }, on);
+      this.addEventListener('click', function (event) {
+        if (note.contains(event.target)) {
+          return;
+        }
+        pinned = !pinned;
+        if (!pinned) {
+          hovered = false;
+          focused = false;
+        }
+        render();
+      }, on);
+      this.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && note.hasAttribute('data-q-open')) {
+          pinned = hovered = focused = false;
+          render();
+        }
+      }, on);
+    }
+
+    /** Keeps an open note inside the viewport: shifted left from the right edge, flipped above near the bottom. */
+    _place() {
+      var note = this._note;
+      var gutter = 8;
+      var box = note.getBoundingClientRect();
+      var shift = 0;
+      if (box.right > window.innerWidth - gutter) {
+        shift = window.innerWidth - gutter - box.right;
+      }
+      if (box.left + shift < gutter) {
+        shift = gutter - box.left;
+      }
+      if (shift) {
+        note.style.left = shift + 'px';
+      }
+      var words = this.getBoundingClientRect();
+      if (box.bottom > window.innerHeight - gutter && words.top - box.height > gutter) {
+        note.setAttribute('data-q-above', '');
+      }
     }
   }
 
@@ -2789,6 +2870,1933 @@
       });
     }
   }
+  var FLOW_COORD_KEYS = ['x', 'y', 'position', 'positions'];
+  var FLOW_DETAIL_TAGS = {
+    P: true, UL: true, OL: true, LI: true, CODE: true, PRE: true, A: true,
+    EM: true, STRONG: true, B: true, I: true, BR: true, SPAN: true, KBD: true,
+    SAMP: true, SUB: true, SUP: true, DL: true, DT: true, DD: true
+  };
+
+  function isSafeFlowHref(href) {
+    var trimmed = String(href || '').replace(/[\s\u0000-\u001f]+/g, '').toLowerCase();
+    if (!trimmed) {
+      return false;
+    }
+    if (trimmed.charAt(0) === '#' || trimmed.charAt(0) === '/' || trimmed.indexOf('./') === 0 || trimmed.indexOf('../') === 0) {
+      return true;
+    }
+    return /^(https?:|mailto:)/.test(trimmed);
+  }
+
+  function sanitizeFlowDetail(html) {
+    var frag = document.createDocumentFragment();
+    if (!html || typeof html !== 'string') {
+      return frag;
+    }
+    var tpl = document.createElement('template');
+    tpl.innerHTML = html;
+    function clean(node) {
+      if (node.nodeType === 3) {
+        return document.createTextNode(node.nodeValue || '');
+      }
+      if (node.nodeType !== 1) {
+        return null;
+      }
+      var tag = node.tagName ? node.tagName.toUpperCase() : '';
+      if (!FLOW_DETAIL_TAGS[tag]) {
+        return null;
+      }
+      var out = document.createElement(tag.toLowerCase());
+      if (tag === 'A' && node.hasAttribute('href')) {
+        var href = node.getAttribute('href') || '';
+        if (isSafeFlowHref(href)) {
+          out.setAttribute('href', href);
+        }
+      }
+      var children = node.childNodes;
+      for (var i = 0; i < children.length; i += 1) {
+        var child = clean(children[i]);
+        if (child) {
+          out.appendChild(child);
+        }
+      }
+      return out;
+    }
+    var roots = tpl.content.childNodes;
+    for (var i = 0; i < roots.length; i += 1) {
+      var cleaned = clean(roots[i]);
+      if (cleaned) {
+        frag.appendChild(cleaned);
+      }
+    }
+    return frag;
+  }
+
+  function isValidFlowDetail(html) {
+    if (!html || typeof html !== 'string') {
+      return true;
+    }
+    if (/<(script|style|form|input|button|img|iframe|object|embed|svg|math|table)\b/i.test(html)) {
+      return false;
+    }
+    var tpl = document.createElement('template');
+    tpl.innerHTML = html;
+    var ok = true;
+    function walk(node) {
+      if (!ok) {
+        return;
+      }
+      if (node.nodeType === 1) {
+        var tag = node.tagName ? node.tagName.toUpperCase() : '';
+        if (!FLOW_DETAIL_TAGS[tag]) {
+          ok = false;
+          return;
+        }
+        var attrs = node.attributes || [];
+        for (var i = 0; i < attrs.length; i += 1) {
+          var name = attrs[i].name.toLowerCase();
+          var val = attrs[i].value || '';
+          if (name.indexOf('on') === 0 || name === 'src' || name === 'srcset' || name === 'action' || name === 'style') {
+            ok = false;
+            return;
+          }
+          if (name === 'href' && (tag !== 'A' || !isSafeFlowHref(val))) {
+            ok = false;
+            return;
+          }
+        }
+      }
+      var children = node.childNodes || [];
+      for (var j = 0; j < children.length; j += 1) {
+        walk(children[j]);
+      }
+    }
+    walk(tpl.content);
+    return ok;
+  }
+
+  function hasCoordKeys(obj) {
+    if (!isRow(obj)) {
+      return false;
+    }
+    for (var i = 0; i < FLOW_COORD_KEYS.length; i += 1) {
+      if (Object.prototype.hasOwnProperty.call(obj, FLOW_COORD_KEYS[i])) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function svgNode(tag, attrs) {
+    var el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    if (attrs) {
+      Object.keys(attrs).forEach(function (k) {
+        if (attrs[k] !== null && attrs[k] !== undefined) {
+          el.setAttribute(k, String(attrs[k]));
+        }
+      });
+    }
+    return el;
+  }
+
+  var FLOW_PULSE_SPEED = 180;
+  var FLOW_PULSE_INTERVAL = 700;
+
+  function edgeLength(rec) {
+    try {
+      var len = rec.basePath.getTotalLength();
+      if (len > 0) {
+        return len;
+      }
+    } catch (_e) {}
+    var total = 0;
+    for (var i = 1; i < rec.points.length; i += 1) {
+      total += Math.hypot(rec.points[i].x - rec.points[i - 1].x, rec.points[i].y - rec.points[i - 1].y);
+    }
+    return Math.max(1, total);
+  }
+
+  /**
+   * Time each lit edge so a pulse moving at FLOW_PULSE_SPEED crosses every edge at the same pace
+   * and reaches the focused node, then leaves it, at one instant whichever branch it took.
+   * Returns one {rec, offset, duration} per pulse, in milliseconds from the start of a wave.
+   */
+  function pulseSchedule(activePulses, focusId) {
+    var items = activePulses.map(function (item) {
+      return { rec: item.rec, down: item.down, len: edgeLength(item.rec) };
+    });
+    var toFocus = Object.create(null);
+    toFocus[focusId] = 0;
+    var fromFocus = Object.create(null);
+    fromFocus[focusId] = 0;
+    var changed = true;
+    for (var pass = 0; changed && pass <= items.length; pass += 1) {
+      changed = false;
+      items.forEach(function (it) {
+        var e = it.rec.edge;
+        var known = it.down ? fromFocus : toFocus;
+        var near = it.down ? e.from : e.to;
+        var far = it.down ? e.to : e.from;
+        if (near in known && (!(far in known) || known[near] + it.len < known[far])) {
+          known[far] = known[near] + it.len;
+          changed = true;
+        }
+      });
+    }
+    var lead = 0;
+    items.forEach(function (it) {
+      if (!it.down && it.rec.edge.to in toFocus) {
+        lead = Math.max(lead, toFocus[it.rec.edge.to] + it.len);
+      }
+    });
+    var msPerPx = 1000 / FLOW_PULSE_SPEED;
+    return items.map(function (it) {
+      var e = it.rec.edge;
+      var start = it.down ? lead + (fromFocus[e.from] || 0) : lead - (toFocus[e.to] || 0) - it.len;
+      return { rec: it.rec, offset: start * msPerPx, duration: it.len * msPerPx };
+    });
+  }
+
+  class QFlow extends HTMLElement {
+    static get observedAttributes() {
+      return ['summary', 'direction', 'groups'];
+    }
+
+    connectedCallback() {
+      var self = this;
+      this._uid = this._uid || uid('q-flow-');
+      this._layoutSeq = (this._layoutSeq || 0) + 1;
+      this._pulseFrame = 0;
+      this._focusedNode = null;
+      this._focusedGroup = null;
+      this._focusedAfterExpand = false;
+      this._rovingId = null;
+      this._onDocKey = this._onDocKey || function (e) {
+        if (e.key === 'Escape' && (self.hasAttribute('data-q-flow-expanded') || self._focusedNode || self._focusedGroup)) {
+          self._handleEscape(e);
+        }
+      };
+      this._onResize = this._onResize || function () {
+        if (self.isConnected && self._bounds && !self.hasAttribute('data-q-flow-expanded')) {
+          self._fitBounds(self._bounds, false);
+        }
+      };
+      document.addEventListener('keydown', this._onDocKey);
+      window.addEventListener('resize', this._onResize);
+      onTheme(this, function () {
+        self._applyTheme();
+      });
+      watchChildren(this, { childList: true, characterData: true, subtree: true }, function () {
+        if (self.isConnected && self._signature() !== self._lastSig) {
+          self._setup();
+        }
+      });
+    }
+
+    _signature() {
+      var script = this.querySelector(':scope > script[type="application/json"]');
+      return [
+        script ? (script.textContent || '') : '',
+        this.getAttribute('summary') || '',
+        this.getAttribute('direction') || '',
+        this.getAttribute('groups') || ''
+      ].join('\u0000');
+    }
+
+    disconnectedCallback() {
+      this._stopPulse();
+      if (this._onDocKey) {
+        document.removeEventListener('keydown', this._onDocKey);
+      }
+      if (this._onResize) {
+        window.removeEventListener('resize', this._onResize);
+      }
+      var stopTheme = themeWatchers.get(this);
+      if (stopTheme) {
+        stopTheme();
+      }
+    }
+
+    attributeChangedCallback() {
+      if (this.isConnected && this._initialized && this._signature() !== this._lastSig) {
+        this._setup();
+      }
+    }
+
+    _parseData() {
+      var script = this.querySelector(':scope > script[type="application/json"]');
+      if (!script) {
+        return null;
+      }
+      var raw;
+      try {
+        raw = JSON.parse(script.textContent || '');
+      } catch (_e) {
+        return null;
+      }
+      if (!isRow(raw) || hasCoordKeys(raw) || !Array.isArray(raw.nodes) || raw.nodes.length === 0 || raw.nodes.length > 200) {
+        return null;
+      }
+      var kinds = isRow(raw.kinds) ? raw.kinds : {};
+      var kindKeys = Object.keys(kinds);
+      if (kindKeys.length > 8) {
+        return null;
+      }
+      for (var k = 0; k < kindKeys.length; k += 1) {
+        var c = kinds[kindKeys[k]];
+        if (typeof c !== 'number' || c < 1 || c > 8 || Math.floor(c) !== c) {
+          return null;
+        }
+      }
+      var groups = Array.isArray(raw.groups) ? raw.groups : [];
+      var edges = Array.isArray(raw.edges) ? raw.edges : [];
+      var seenIds = {};
+      var groupMap = {};
+      for (var gi = 0; gi < groups.length; gi += 1) {
+        var g = groups[gi];
+        if (!isRow(g) || hasCoordKeys(g) || typeof g.id !== 'string' || !g.id || typeof g.label !== 'string' || !g.label) {
+          return null;
+        }
+        if (seenIds[g.id]) {
+          return null;
+        }
+        seenIds[g.id] = 'group';
+        groupMap[g.id] = { id: g.id, label: g.label, parent: typeof g.parent === 'string' && g.parent ? g.parent : null };
+      }
+      for (var gj = 0; gj < groups.length; gj += 1) {
+        var grp = groupMap[groups[gj].id];
+        var walk = grp.parent;
+        var visited = {};
+        visited[grp.id] = true;
+        while (walk) {
+          if (!groupMap[walk] || visited[walk]) {
+            return null;
+          }
+          visited[walk] = true;
+          walk = groupMap[walk].parent;
+        }
+      }
+      var nodeMap = {};
+      var nodes = [];
+      for (var ni = 0; ni < raw.nodes.length; ni += 1) {
+        var n = raw.nodes[ni];
+        if (!isRow(n) || hasCoordKeys(n) || typeof n.id !== 'string' || !n.id || typeof n.label !== 'string' || !n.label) {
+          return null;
+        }
+        if (n.detail !== undefined && n.detail !== null && (typeof n.detail !== 'string' || !isValidFlowDetail(n.detail))) {
+          return null;
+        }
+        if (seenIds[n.id]) {
+          return null;
+        }
+        if (n.kind !== undefined && n.kind !== null) {
+          if (typeof n.kind !== 'string' || !Object.prototype.hasOwnProperty.call(kinds, n.kind)) {
+            return null;
+          }
+        }
+        if (n.group !== undefined && n.group !== null) {
+          if (typeof n.group !== 'string' || !groupMap[n.group]) {
+            return null;
+          }
+        }
+        seenIds[n.id] = 'node';
+        var cleanNode = {
+          id: n.id,
+          label: n.label,
+          kind: typeof n.kind === 'string' ? n.kind : null,
+          group: typeof n.group === 'string' ? n.group : null,
+          detail: typeof n.detail === 'string' ? n.detail : null
+        };
+        nodeMap[n.id] = cleanNode;
+        nodes.push(cleanNode);
+      }
+      var groupsMode = (this.getAttribute('groups') || 'panels').toLowerCase() === 'lanes' ? 'lanes' : 'panels';
+      var topGroups = groups.filter(function (g) { return !groupMap[g.id].parent; });
+      if (groupsMode === 'lanes') {
+        if (topGroups.length === 0) {
+          return null;
+        }
+        for (var nl = 0; nl < nodes.length; nl += 1) {
+          if (!nodes[nl].group) {
+            return null;
+          }
+        }
+      }
+      var cleanEdges = [];
+      for (var ei = 0; ei < edges.length; ei += 1) {
+        var e = edges[ei];
+        if (!isRow(e) || hasCoordKeys(e) || typeof e.from !== 'string' || typeof e.to !== 'string') {
+          return null;
+        }
+        if (!nodeMap[e.from] || !nodeMap[e.to]) {
+          return null;
+        }
+        cleanEdges.push({
+          id: 'e' + ei,
+          index: ei,
+          from: e.from,
+          to: e.to,
+          label: typeof e.label === 'string' && e.label.trim() ? e.label.trim() : null,
+          async: e.async === true
+        });
+      }
+      return {
+        kinds: kinds,
+        groups: groups.map(function (g) { return groupMap[g.id]; }),
+        groupMap: groupMap,
+        nodes: nodes,
+        nodeMap: nodeMap,
+        edges: cleanEdges,
+        direction: (this.getAttribute('direction') || 'right').toLowerCase() === 'down' ? 'down' : 'right',
+        groupsMode: groupsMode
+      };
+    }
+
+    _ensureScaffold(data) {
+      var stage = this.querySelector(':scope > [data-q-flow-stage]');
+      if (!stage) {
+        stage = kitNode('div');
+        stage.className = 'q-flow-stage';
+        stage.setAttribute('data-q-flow-stage', '');
+        var existingDetails = this.querySelector(':scope > details[data-q-flow-list]');
+        if (existingDetails) {
+          this.insertBefore(stage, existingDetails);
+        } else {
+          this.appendChild(stage);
+        }
+      }
+      var details = this.querySelector(':scope > details[data-q-flow-list]');
+      if (!details) {
+        details = kitNode('details');
+        details.className = 'q-flow-list';
+        details.setAttribute('data-q-flow-list', '');
+        details.open = true;
+        this.appendChild(details);
+      }
+      if (data) {
+        this._populateList(details, data);
+      }
+      var live = this.querySelector(':scope > [data-q-flow-live]');
+      if (!live) {
+        live = kitNode('div');
+        live.className = 'q-visually-hidden';
+        live.setAttribute('aria-live', 'polite');
+        live.setAttribute('data-q-flow-live', '');
+        this.appendChild(live);
+      }
+      this._stage = stage;
+      this._details = details;
+      this._live = live;
+    }
+
+    _populateList(details, data) {
+      while (details.firstChild) {
+        details.removeChild(details.firstChild);
+      }
+      var summary = document.createElement('summary');
+      summary.textContent = 'Graph as a list';
+      details.appendChild(summary);
+
+      var body = document.createElement('div');
+      body.setAttribute('data-q-flow-list-body', '');
+
+      var outByNode = {};
+      data.edges.forEach(function (e) {
+        if (!outByNode[e.from]) {
+          outByNode[e.from] = [];
+        }
+        outByNode[e.from].push(e);
+      });
+
+      function renderNodeItem(n) {
+        var li = document.createElement('li');
+        li.setAttribute('data-q-flow-list-node', n.id);
+        var title = document.createElement('strong');
+        title.textContent = n.label;
+        li.appendChild(title);
+        if (n.kind) {
+          li.appendChild(document.createTextNode(' (' + n.kind + ')'));
+        }
+        if (n.detail) {
+          var det = document.createElement('div');
+          det.setAttribute('data-q-flow-list-detail', '');
+          det.appendChild(sanitizeFlowDetail(n.detail));
+          li.appendChild(det);
+        }
+        var outs = outByNode[n.id] || [];
+        if (outs.length) {
+          var edgeUl = document.createElement('ul');
+          outs.forEach(function (e) {
+            var eli = document.createElement('li');
+            var targetLabel = data.nodeMap[e.to] ? data.nodeMap[e.to].label : e.to;
+            var meta = [];
+            if (e.label) {
+              meta.push(e.label);
+            }
+            if (e.async) {
+              meta.push('async');
+            }
+            eli.textContent = '\u2192 ' + targetLabel + (meta.length ? ' (' + meta.join(', ') + ')' : '');
+            edgeUl.appendChild(eli);
+          });
+          li.appendChild(edgeUl);
+        }
+        return li;
+      }
+
+      function renderGroupItem(g) {
+        var li = document.createElement('li');
+        li.setAttribute('data-q-flow-list-group', g.id);
+        var title = document.createElement('strong');
+        title.textContent = g.label;
+        li.appendChild(title);
+        var subUl = document.createElement('ul');
+        data.groups.forEach(function (childG) {
+          if (childG.parent === g.id) {
+            subUl.appendChild(renderGroupItem(childG));
+          }
+        });
+        data.nodes.forEach(function (n) {
+          if (n.group === g.id) {
+            subUl.appendChild(renderNodeItem(n));
+          }
+        });
+        if (subUl.firstChild) {
+          li.appendChild(subUl);
+        }
+        return li;
+      }
+
+      var rootUl = document.createElement('ul');
+      data.groups.forEach(function (g) {
+        if (!g.parent) {
+          rootUl.appendChild(renderGroupItem(g));
+        }
+      });
+      data.nodes.forEach(function (n) {
+        if (!n.group) {
+          rootUl.appendChild(renderNodeItem(n));
+        }
+      });
+      body.appendChild(rootUl);
+      details.appendChild(body);
+    }
+
+    _failLayout(msg) {
+      this._stopPulse();
+      if (this._stage) {
+        while (this._stage.firstChild) {
+          this._stage.removeChild(this._stage.firstChild);
+        }
+        var p = document.createElement('p');
+        p.className = 'q-flow-notice';
+        p.setAttribute('data-q-flow-notice', '');
+        p.textContent = msg;
+        this._stage.appendChild(p);
+      }
+      if (this._details) {
+        this._details.open = true;
+      }
+      this.setAttribute('data-q-flow-ready', 'error');
+    }
+
+    _measureTextFactory() {
+      var canvas = document.createElement('canvas');
+      var ctx = canvas.getContext && canvas.getContext('2d');
+      var fontFamily = getComputedStyle(this).fontFamily || 'sans-serif';
+      return function (text, sizePx, weight) {
+        if (!text) {
+          return 0;
+        }
+        if (ctx) {
+          ctx.font = (weight || '400') + ' ' + sizePx + 'px ' + fontFamily;
+          return Math.ceil(ctx.measureText(text).width);
+        }
+        return Math.ceil(String(text).length * sizePx * 0.6);
+      };
+    }
+
+    _setup() {
+      var self = this;
+      this._initialized = true;
+      this._lastSig = this._signature();
+      this.removeAttribute('data-q-flow-ready');
+      var data = this._parseData();
+      this._ensureScaffold(data);
+      if (!data) {
+        this._failLayout('This graph could not be drawn. The full graph is listed below.');
+        return;
+      }
+      if (!window.quirkFlow || typeof window.quirkFlow.ELK !== 'function') {
+        this._failLayout('This graph could not be drawn. The full graph is listed below.');
+        return;
+      }
+      this._data = data;
+      var seq = ++this._layoutSeq;
+      var fontsReady = (document.fonts && document.fonts.ready && typeof document.fonts.ready.then === 'function')
+        ? document.fonts.ready.catch(function () {})
+        : Promise.resolve();
+
+      fontsReady.then(function () {
+        if (!self.isConnected || seq !== self._layoutSeq) {
+          return;
+        }
+        self._runLayout(data, seq);
+      });
+    }
+
+    _runLayout(data, seq) {
+      var self = this;
+      var measure = this._measureTextFactory();
+      var nodeSizes = {};
+      data.nodes.forEach(function (n) {
+        var labelW = measure(n.label, 13, '600');
+        var kindW = n.kind ? measure(n.kind.toUpperCase(), 10, '600') + 8 : 0;
+        nodeSizes[n.id] = {
+          width: Math.max(112, Math.max(labelW, kindW) + 28),
+          height: n.kind ? 48 : 38
+        };
+      });
+
+      var topLanes = data.groups.filter(function (g) { return !g.parent; });
+      var laneIndexByGroup = {};
+      topLanes.forEach(function (g, idx) {
+        laneIndexByGroup[g.id] = idx;
+      });
+      function topLaneIndex(groupId) {
+        var cur = groupId;
+        while (cur && data.groupMap[cur]) {
+          if (!data.groupMap[cur].parent) {
+            return laneIndexByGroup[cur];
+          }
+          cur = data.groupMap[cur].parent;
+        }
+        return 0;
+      }
+
+      function buildElkGroup(g) {
+        var opts = {
+          'elk.padding': '[top=38,left=18,bottom=18,right=18]'
+        };
+        if (data.groupsMode === 'lanes') {
+          opts['elk.partitioning.partition'] = String(topLaneIndex(g.id));
+        }
+        var children = [];
+        data.groups.forEach(function (cg) {
+          if (cg.parent === g.id) {
+            children.push(buildElkGroup(cg));
+          }
+        });
+        data.nodes.forEach(function (n) {
+          if (n.group === g.id) {
+            var nOpts = {};
+            if (data.groupsMode === 'lanes') {
+              nOpts['elk.partitioning.partition'] = String(topLaneIndex(g.id));
+            }
+            children.push({
+              id: n.id,
+              width: nodeSizes[n.id].width,
+              height: nodeSizes[n.id].height,
+              layoutOptions: nOpts
+            });
+          }
+        });
+        var minW = Math.max(120, measure(g.label, 12, '600') + 36);
+        return {
+          id: g.id,
+          width: minW,
+          height: 60,
+          layoutOptions: opts,
+          children: children
+        };
+      }
+
+      var rootChildren = [];
+      data.groups.forEach(function (g) {
+        if (!g.parent) {
+          rootChildren.push(buildElkGroup(g));
+        }
+      });
+      data.nodes.forEach(function (n) {
+        if (!n.group) {
+          rootChildren.push({
+            id: n.id,
+            width: nodeSizes[n.id].width,
+            height: nodeSizes[n.id].height
+          });
+        }
+      });
+
+      var elkEdges = data.edges.map(function (e) {
+        var labels = [];
+        if (e.label) {
+          labels.push({
+            text: e.label,
+            width: measure(e.label, 11, '500') + 14,
+            height: 20
+          });
+        }
+        return {
+          id: e.id,
+          sources: [e.from],
+          targets: [e.to],
+          labels: labels
+        };
+      });
+
+      var rootOptions = {
+        'elk.algorithm': 'layered',
+        'elk.direction': data.direction === 'down' ? 'DOWN' : 'RIGHT',
+        'elk.hierarchyHandling': 'INCLUDE_CHILDREN',
+        'elk.edgeRouting': 'ORTHOGONAL',
+        'elk.json.shapeCoords': 'ROOT',
+        'elk.json.edgeCoords': 'ROOT',
+        'elk.layered.spacing.nodeNodeBetweenLayers': '52',
+        'elk.spacing.nodeNode': '28',
+        'elk.spacing.edgeNode': '24',
+        'elk.edgeLabels.inline': 'true'
+      };
+      if (data.groupsMode === 'lanes') {
+        rootOptions['elk.partitioning.activate'] = 'true';
+      }
+
+      var elkGraph = {
+        id: 'root',
+        layoutOptions: rootOptions,
+        children: rootChildren,
+        edges: elkEdges
+      };
+
+      try {
+        var elk = new window.quirkFlow.ELK();
+        Promise.resolve(elk.layout(elkGraph)).then(function (laidOut) {
+          if (!self.isConnected || seq !== self._layoutSeq) {
+            return;
+          }
+          if (!laidOut || !Array.isArray(laidOut.children)) {
+            self._failLayout('This graph could not be drawn. The full graph is listed below.');
+            return;
+          }
+          self._renderGraph(data, laidOut);
+        }).catch(function () {
+          if (!self.isConnected || seq !== self._layoutSeq) {
+            return;
+          }
+          self._failLayout('This graph could not be drawn. The full graph is listed below.');
+        });
+      } catch (_err) {
+        this._failLayout('This graph could not be drawn. The full graph is listed below.');
+      }
+    }
+
+    _renderGraph(data, laidOut) {
+      var self = this;
+      var groupBoxes = {};
+      var nodeBoxes = {};
+      var groupOrder = [];
+
+      function collectShapes(items, depth) {
+        (items || []).forEach(function (item) {
+          if (data.groupMap[item.id]) {
+            groupBoxes[item.id] = {
+              id: item.id,
+              x: item.x || 0,
+              y: item.y || 0,
+              width: item.width || 120,
+              height: item.height || 80,
+              depth: depth
+            };
+            groupOrder.push(item.id);
+            if (item.children) {
+              collectShapes(item.children, depth + 1);
+            }
+          } else if (data.nodeMap[item.id]) {
+            nodeBoxes[item.id] = {
+              id: item.id,
+              x: item.x || 0,
+              y: item.y || 0,
+              width: item.width || 112,
+              height: item.height || 40
+            };
+          }
+        });
+      }
+      collectShapes(laidOut.children, 0);
+
+      var minX = Infinity;
+      var minY = Infinity;
+      var maxX = -Infinity;
+      var maxY = -Infinity;
+      function expandBounds(x, y, w, h) {
+        if (x < minX) { minX = x; }
+        if (y < minY) { minY = y; }
+        if (x + w > maxX) { maxX = x + w; }
+        if (y + h > maxY) { maxY = y + h; }
+      }
+      Object.keys(groupBoxes).forEach(function (gid) {
+        var b = groupBoxes[gid];
+        expandBounds(b.x, b.y, b.width, b.height);
+      });
+      Object.keys(nodeBoxes).forEach(function (nid) {
+        var b = nodeBoxes[nid];
+        expandBounds(b.x, b.y, b.width, b.height);
+      });
+      (laidOut.edges || []).forEach(function (le) {
+        (le.sections || []).forEach(function (sec) {
+          if (sec.startPoint) { expandBounds(sec.startPoint.x, sec.startPoint.y, 0, 0); }
+          if (sec.endPoint) { expandBounds(sec.endPoint.x, sec.endPoint.y, 0, 0); }
+          (sec.bendPoints || []).forEach(function (bp) {
+            expandBounds(bp.x, bp.y, 0, 0);
+          });
+        });
+        (le.labels || []).forEach(function (lbl) {
+          expandBounds(lbl.x || 0, lbl.y || 0, lbl.width || 0, lbl.height || 0);
+        });
+      });
+      if (!isFinite(minX)) {
+        minX = 0; minY = 0; maxX = 320; maxY = 180;
+      }
+
+      if (data.groupsMode === 'lanes') {
+        data.groups.forEach(function (g) {
+          if (!g.parent && groupBoxes[g.id]) {
+            var b = groupBoxes[g.id];
+            if (data.direction === 'down') {
+              b.x = minX;
+              b.width = maxX - minX;
+            } else {
+              b.y = minY;
+              b.height = maxY - minY;
+            }
+          }
+        });
+      }
+
+      this._groupBoxes = groupBoxes;
+      this._nodeBoxes = nodeBoxes;
+      this._bounds = {
+        x: minX - 20,
+        y: minY - 20,
+        width: Math.max(160, (maxX - minX) + 40),
+        height: Math.max(100, (maxY - minY) + 40)
+      };
+
+      while (this._stage.firstChild) {
+        this._stage.removeChild(this._stage.firstChild);
+      }
+
+      var capH = Math.min(640, Math.max(260, Math.round((window.innerHeight || 800) * 0.66)));
+      var naturalH = Math.round(this._bounds.height + 56);
+      this._stage.style.height = Math.max(240, Math.min(capH, naturalH)) + 'px';
+
+      var uid = this._uid;
+      var svg = svgNode('svg', {
+        'class': 'q-flow-svg',
+        'data-q-flow-svg': '',
+        'role': 'group',
+        'aria-label': this.getAttribute('summary') || 'Interactive graph'
+      });
+
+      var defs = svgNode('defs');
+      var markerNorm = svgNode('marker', {
+        id: 'q-flow-arrow-' + uid,
+        viewBox: '0 0 10 10',
+        refX: '9',
+        refY: '5',
+        markerWidth: '6',
+        markerHeight: '6',
+        orient: 'auto-start-reverse'
+      });
+      markerNorm.appendChild(svgNode('path', { d: 'M 0 1 L 10 5 L 0 9 z', fill: 'var(--q-color-text-muted)' }));
+      defs.appendChild(markerNorm);
+
+      var markerLit = svgNode('marker', {
+        id: 'q-flow-arrow-lit-' + uid,
+        viewBox: '0 0 10 10',
+        refX: '9',
+        refY: '5',
+        markerWidth: '6',
+        markerHeight: '6',
+        orient: 'auto-start-reverse'
+      });
+      markerLit.appendChild(svgNode('path', { d: 'M 0 1 L 10 5 L 0 9 z', fill: 'var(--q-color-accent)' }));
+      defs.appendChild(markerLit);
+
+      var grad = svgNode('radialGradient', { id: 'q-flow-grad-' + uid });
+      grad.appendChild(svgNode('stop', { offset: '0%', 'stop-color': '#ffffff', 'stop-opacity': '1' }));
+      grad.appendChild(svgNode('stop', { offset: '55%', 'stop-color': '#ffffff', 'stop-opacity': '1' }));
+      grad.appendChild(svgNode('stop', { offset: '100%', 'stop-color': '#ffffff', 'stop-opacity': '0' }));
+      defs.appendChild(grad);
+      svg.appendChild(defs);
+
+      var viewport = svgNode('g', { 'data-q-flow-viewport': '' });
+      var groupsLayer = svgNode('g', { 'data-q-flow-groups': '' });
+      var edgesLayer = svgNode('g', { 'data-q-flow-edges': '' });
+      var nodesLayer = svgNode('g', { 'data-q-flow-nodes': '' });
+      viewport.appendChild(groupsLayer);
+      viewport.appendChild(edgesLayer);
+      viewport.appendChild(nodesLayer);
+      svg.appendChild(viewport);
+
+      groupOrder.forEach(function (gid) {
+        var g = data.groupMap[gid];
+        var box = groupBoxes[gid];
+        if (!g || !box) {
+          return;
+        }
+        var isLane = data.groupsMode === 'lanes' && !g.parent;
+        var gEl = svgNode('g', {
+          'class': 'q-flow-group',
+          'data-q-flow-group': gid,
+          'data-q-flow-lane': isLane ? 'true' : 'false'
+        });
+        var tint = isLane
+          ? 'color-mix(in srgb, var(--q-color-surface) 65%, var(--q-color-bg))'
+          : (box.depth === 0
+            ? 'color-mix(in srgb, var(--q-color-accent) 6%, var(--q-color-surface))'
+            : 'color-mix(in srgb, var(--q-color-accent) 12%, var(--q-color-surface))');
+        gEl.appendChild(svgNode('rect', {
+          'data-q-flow-group-box': '',
+          x: box.x,
+          y: box.y,
+          width: box.width,
+          height: box.height,
+          rx: isLane ? 4 : 8,
+          fill: tint,
+          stroke: 'var(--q-color-border)',
+          'stroke-width': '1'
+        }));
+        var headerG = svgNode('g', {
+          'data-q-flow-group-header': gid,
+          'role': 'button',
+          'aria-label': 'Focus group ' + g.label
+        });
+        headerG.appendChild(svgNode('rect', {
+          x: box.x,
+          y: box.y,
+          width: box.width,
+          height: 28,
+          rx: isLane ? 4 : 8,
+          fill: 'transparent'
+        }));
+        headerG.appendChild(svgNode('line', {
+          x1: box.x,
+          y1: box.y + 28,
+          x2: box.x + box.width,
+          y2: box.y + 28,
+          stroke: 'var(--q-color-border)',
+          'stroke-width': '1'
+        }));
+        var hText = svgNode('text', {
+          x: box.x + 12,
+          y: box.y + 18,
+          fill: 'var(--q-color-text)',
+          'font-size': '12',
+          'font-weight': '600'
+        });
+        hText.textContent = g.label;
+        headerG.appendChild(hText);
+        headerG.addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          self._focusGroup(gid);
+        });
+        gEl.appendChild(headerG);
+        groupsLayer.appendChild(gEl);
+      });
+
+      var laidOutEdges = laidOut.edges || [];
+      this._edgeRecords = [];
+      data.edges.forEach(function (edge, idx) {
+        var le = laidOutEdges[idx] || {};
+        var pts = [];
+        (le.sections || []).forEach(function (sec) {
+          if (sec.startPoint && pts.length === 0) {
+            pts.push(sec.startPoint);
+          }
+          (sec.bendPoints || []).forEach(function (bp) {
+            pts.push(bp);
+          });
+          if (sec.endPoint) {
+            pts.push(sec.endPoint);
+          }
+        });
+        if (pts.length < 2) {
+          var fbFrom = nodeBoxes[edge.from];
+          var fbTo = nodeBoxes[edge.to];
+          if (fbFrom && fbTo) {
+            pts = [
+              { x: fbFrom.x + fbFrom.width, y: fbFrom.y + fbFrom.height / 2 },
+              { x: fbTo.x, y: fbTo.y + fbTo.height / 2 }
+            ];
+          } else {
+            pts = [{ x: 0, y: 0 }, { x: 10, y: 0 }];
+          }
+        }
+        var d = pts.map(function (p, i) {
+          return (i === 0 ? 'M ' : 'L ') + p.x + ' ' + p.y;
+        }).join(' ');
+
+        var maskId = 'q-flow-mask-' + uid + '-' + idx;
+        var mask = svgNode('mask', {
+          id: maskId,
+          maskUnits: 'userSpaceOnUse',
+          x: self._bounds.x - 40,
+          y: self._bounds.y - 40,
+          width: self._bounds.width + 80,
+          height: self._bounds.height + 80
+        });
+        var maskDot = svgNode('circle', {
+          'data-q-flow-mask-dot': '',
+          cx: pts[0].x,
+          cy: pts[0].y,
+          r: '24',
+          fill: 'url(#q-flow-grad-' + uid + ')'
+        });
+        mask.appendChild(maskDot);
+        defs.appendChild(mask);
+
+        var eG = svgNode('g', {
+          'class': 'q-flow-edge',
+          'data-q-flow-edge': String(idx),
+          'data-q-flow-from': edge.from,
+          'data-q-flow-to': edge.to,
+          'data-q-flow-async': edge.async ? 'true' : 'false'
+        });
+        var lineAttrs = {
+          'data-q-flow-edge-line': '',
+          d: d,
+          fill: 'none',
+          stroke: 'var(--q-color-text-muted)',
+          'stroke-width': '1.75',
+          'marker-end': 'url(#q-flow-arrow-' + uid + ')'
+        };
+        if (edge.async) {
+          lineAttrs['stroke-dasharray'] = '6 4';
+        }
+        var basePath = svgNode('path', lineAttrs);
+        eG.appendChild(basePath);
+
+        var pulseAttrs = {
+          'data-q-flow-edge-pulse': '',
+          'data-q-inactive': '',
+          d: d,
+          fill: 'none',
+          stroke: 'var(--q-color-accent)',
+          'stroke-width': '6',
+          'stroke-linecap': 'round',
+          mask: 'url(#' + maskId + ')'
+        };
+        if (edge.async) {
+          pulseAttrs['stroke-dasharray'] = '6 4';
+        }
+        var pulsePath = svgNode('path', pulseAttrs);
+        eG.appendChild(pulsePath);
+
+        if (edge.label) {
+          var lbl = (le.labels && le.labels[0]) || {
+            x: (pts[0].x + pts[pts.length - 1].x) / 2 - 30,
+            y: (pts[0].y + pts[pts.length - 1].y) / 2 - 10,
+            width: 60,
+            height: 20
+          };
+          var lblG = svgNode('g', { 'data-q-flow-edge-label': '' });
+          lblG.appendChild(svgNode('rect', {
+            x: lbl.x,
+            y: lbl.y,
+            width: lbl.width,
+            height: lbl.height,
+            rx: '4',
+            fill: 'var(--q-color-bg)',
+            stroke: 'var(--q-color-border)',
+            'stroke-width': '1'
+          }));
+          var lblT = svgNode('text', {
+            x: lbl.x + lbl.width / 2,
+            y: lbl.y + 14,
+            'text-anchor': 'middle',
+            fill: 'var(--q-color-text-muted)',
+            'font-size': '11'
+          });
+          lblT.textContent = edge.label;
+          lblG.appendChild(lblT);
+          eG.appendChild(lblG);
+        }
+
+        edgesLayer.appendChild(eG);
+        self._edgeRecords.push({
+          edge: edge,
+          groupEl: eG,
+          basePath: basePath,
+          pulsePath: pulsePath,
+          mask: mask,
+          maskDots: [maskDot],
+          points: pts
+        });
+      });
+
+      this._rovingId = data.nodes[0].id;
+      this._nodeElements = {};
+      data.nodes.forEach(function (node, idx) {
+        var box = nodeBoxes[node.id];
+        if (!box) {
+          return;
+        }
+        var colorIdx = node.kind ? data.kinds[node.kind] : null;
+        var stripeColor = colorIdx ? 'var(--q-color-chart-' + colorIdx + ')' : 'var(--q-color-border)';
+        var nG = svgNode('g', {
+          'class': 'q-flow-node',
+          'data-q-flow-node': node.id,
+          'data-q-flow-kind': node.kind || '',
+          'role': 'button',
+          'tabindex': idx === 0 ? '0' : '-1',
+          'aria-label': node.label + (node.kind ? ' (' + node.kind + ')' : '')
+        });
+        nG.appendChild(svgNode('rect', {
+          'data-q-flow-box': '',
+          x: box.x,
+          y: box.y,
+          width: box.width,
+          height: box.height,
+          rx: '6',
+          fill: 'var(--q-color-surface)',
+          stroke: 'var(--q-color-border)',
+          'stroke-width': '1'
+        }));
+        nG.appendChild(svgNode('rect', {
+          'data-q-flow-stripe': '',
+          x: box.x,
+          y: box.y,
+          width: '4',
+          height: box.height,
+          rx: '2',
+          fill: stripeColor
+        }));
+        if (node.kind) {
+          var kText = svgNode('text', {
+            'data-q-flow-kind-label': '',
+            x: box.x + 12,
+            y: box.y + 16,
+            fill: 'var(--q-color-text-muted)',
+            'font-size': '10',
+            'font-weight': '600',
+            'letter-spacing': '0.06em'
+          });
+          kText.textContent = node.kind.toUpperCase();
+          nG.appendChild(kText);
+          var lText = svgNode('text', {
+            'data-q-flow-label': '',
+            x: box.x + 12,
+            y: box.y + 34,
+            fill: 'var(--q-color-text)',
+            'font-size': '13',
+            'font-weight': '600'
+          });
+          lText.textContent = node.label;
+          nG.appendChild(lText);
+        } else {
+          var cText = svgNode('text', {
+            'data-q-flow-label': '',
+            x: box.x + 12,
+            y: box.y + 24,
+            fill: 'var(--q-color-text)',
+            'font-size': '13',
+            'font-weight': '600'
+          });
+          cText.textContent = node.label;
+          nG.appendChild(cText);
+        }
+
+        nG.addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          self._setRoving(node.id, false);
+          self._focusNode(node.id);
+        });
+        nG.addEventListener('keydown', function (ev) {
+          self._onNodeKey(ev, node.id);
+        });
+        nodesLayer.appendChild(nG);
+        self._nodeElements[node.id] = nG;
+      });
+
+      svg.addEventListener('click', function (ev) {
+        if (ev.target === svg || ev.target === viewport) {
+          self._clearFocus();
+        }
+      });
+      svg.addEventListener('keydown', function (ev) {
+        self._onGraphKey(ev);
+      });
+
+      this._svg = svg;
+      this._viewport = viewport;
+      this._stage.appendChild(svg);
+      this._buildControls();
+      this._buildDrawer();
+      this._setupZoom();
+      this._fitBounds(this._bounds, false);
+
+      if (this._details) {
+        this._details.open = false;
+      }
+      this.setAttribute('data-q-flow-ready', 'true');
+    }
+
+    _buildControls() {
+      var self = this;
+      var bar = kitNode('div');
+      bar.className = 'q-flow-controls';
+      bar.setAttribute('data-q-flow-controls', '');
+      bar.setAttribute('role', 'toolbar');
+      bar.setAttribute('aria-label', 'Graph controls');
+
+      function addBtn(action, label, text) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.setAttribute('data-q-flow-action', action);
+        btn.setAttribute('aria-label', label);
+        btn.textContent = text;
+        btn.addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          if (action === 'zoom-in') {
+            self._zoomBy(1.25);
+          } else if (action === 'zoom-out') {
+            self._zoomBy(0.8);
+          } else if (action === 'fit') {
+            self._fitBounds(self._bounds, false);
+          } else if (action === 'expand') {
+            self._toggleExpand();
+          }
+        });
+        bar.appendChild(btn);
+        return btn;
+      }
+
+      addBtn('zoom-in', 'Zoom in', '+');
+      addBtn('zoom-out', 'Zoom out', '\u2212');
+      addBtn('fit', 'Fit to view', 'Fit');
+      this._expandBtn = addBtn('expand', 'Expand graph', 'Expand');
+      this._expandBtn.setAttribute('aria-pressed', this.hasAttribute('data-q-flow-expanded') ? 'true' : 'false');
+      this._stage.appendChild(bar);
+    }
+
+    _buildDrawer() {
+      var drawer = kitNode('aside');
+      drawer.className = 'q-flow-drawer';
+      drawer.setAttribute('data-q-flow-drawer', '');
+      drawer.setAttribute('aria-label', 'Node details');
+      drawer.setAttribute('data-q-inactive', '');
+      this._drawer = drawer;
+      this._stage.appendChild(drawer);
+    }
+
+    _setupZoom() {
+      var self = this;
+      var qf = window.quirkFlow;
+      this._transform = { x: 0, y: 0, k: 1 };
+      if (!qf || !qf.zoom || !qf.select) {
+        return;
+      }
+      this._d3Zoom = qf.zoom()
+        .scaleExtent([0.2, 4])
+        .filter(function (event) {
+          if (event.type === 'wheel') {
+            return Boolean(event.ctrlKey || event.metaKey);
+          }
+          if (event.type === 'touchstart' || event.type === 'touchmove') {
+            return Boolean(event.touches && event.touches.length >= 2);
+          }
+          if (event.type === 'mousedown') {
+            return event.button === 0;
+          }
+          return !event.button;
+        })
+        .on('zoom', function (event) {
+          var t = event.transform;
+          self._transform = { x: t.x, y: t.y, k: t.k };
+          if (self._viewport) {
+            self._viewport.setAttribute('transform', 'translate(' + t.x + ',' + t.y + ') scale(' + t.k + ')');
+          }
+        });
+      this._d3Selection = qf.select(this._svg);
+      this._d3Selection.call(this._d3Zoom);
+      this._d3Selection.on('dblclick.zoom', null);
+    }
+
+    _applyTransform(x, y, k) {
+      var qf = window.quirkFlow;
+      var clampedK = Math.max(0.2, Math.min(4, k));
+      this._transform = { x: x, y: y, k: clampedK };
+      if (this._d3Selection && this._d3Zoom && qf && qf.zoomIdentity) {
+        this._d3Selection.call(this._d3Zoom.transform, qf.zoomIdentity.translate(x, y).scale(clampedK));
+      } else if (this._viewport) {
+        this._viewport.setAttribute('transform', 'translate(' + x + ',' + y + ') scale(' + clampedK + ')');
+      }
+    }
+
+    _zoomBy(factor) {
+      var rect = this._stage.getBoundingClientRect();
+      var cx = (rect.width || 600) / 2;
+      var cy = (rect.height || 320) / 2;
+      var t = this._transform || { x: 0, y: 0, k: 1 };
+      var nextK = Math.max(0.2, Math.min(4, t.k * factor));
+      var ratio = nextK / t.k;
+      var nextX = cx - (cx - t.x) * ratio;
+      var nextY = cy - (cy - t.y) * ratio;
+      this._applyTransform(nextX, nextY, nextK);
+    }
+
+    _fitBounds(bounds, reserveDrawer) {
+      if (!bounds || !this._stage) {
+        return;
+      }
+      var rect = this._stage.getBoundingClientRect();
+      var availW = rect.width || 640;
+      var availH = rect.height || 320;
+      if (reserveDrawer && this._drawer && !this._drawer.hasAttribute('data-q-inactive')) {
+        var dRect = this._drawer.getBoundingClientRect();
+        if ((window.innerWidth || 1024) > 700) {
+          availW = Math.max(160, availW - dRect.width);
+        } else {
+          availH = Math.max(120, availH - dRect.height);
+        }
+      }
+      var pad = 28;
+      var scaleX = Math.max(80, availW - pad * 2) / Math.max(1, bounds.width);
+      var scaleY = Math.max(80, availH - pad * 2) / Math.max(1, bounds.height);
+      var k = Math.max(0.2, Math.min(1.5, Math.min(scaleX, scaleY)));
+      var tx = (availW - bounds.width * k) / 2 - bounds.x * k;
+      var ty = (availH - bounds.height * k) / 2 - bounds.y * k;
+      this._applyTransform(tx, ty, k);
+    }
+
+    _ensureNodeVisible(nodeId, avoidDrawer) {
+      var box = this._nodeBoxes && this._nodeBoxes[nodeId];
+      if (!box || !this._stage) {
+        return;
+      }
+      var sRect = this._stage.getBoundingClientRect();
+      var availW = sRect.width || 640;
+      var availH = sRect.height || 320;
+      if (avoidDrawer && this._drawer && !this._drawer.hasAttribute('data-q-inactive')) {
+        var dRect = this._drawer.getBoundingClientRect();
+        if ((window.innerWidth || 1024) > 700) {
+          availW = Math.max(140, availW - dRect.width - 12);
+        } else {
+          availH = Math.max(100, availH - dRect.height - 12);
+        }
+      }
+      var t = this._transform || { x: 0, y: 0, k: 1 };
+      var left = box.x * t.k + t.x;
+      var right = (box.x + box.width) * t.k + t.x;
+      var top = box.y * t.k + t.y;
+      var bottom = (box.y + box.height) * t.k + t.y;
+      var nx = t.x;
+      var ny = t.y;
+      var margin = 20;
+      if (right > availW - margin) {
+        nx -= (right - (availW - margin));
+      }
+      if (left + (nx - t.x) < margin) {
+        nx += (margin - (left + (nx - t.x)));
+      }
+      if (bottom > availH - margin) {
+        ny -= (bottom - (availH - margin));
+      }
+      if (top + (ny - t.y) < margin) {
+        ny += (margin - (top + (ny - t.y)));
+      }
+      if (nx !== t.x || ny !== t.y) {
+        this._applyTransform(nx, ny, t.k);
+      }
+    }
+
+    _toggleExpand() {
+      var expanding = !this.hasAttribute('data-q-flow-expanded');
+      if (expanding) {
+        this.setAttribute('data-q-flow-expanded', '');
+        this._focusedAfterExpand = false;
+        if (this._expandBtn) {
+          this._expandBtn.setAttribute('aria-pressed', 'true');
+          this._expandBtn.textContent = 'Close';
+        }
+      } else {
+        this.removeAttribute('data-q-flow-expanded');
+        this._focusedAfterExpand = false;
+        if (this._expandBtn) {
+          this._expandBtn.setAttribute('aria-pressed', 'false');
+          this._expandBtn.textContent = 'Expand';
+        }
+      }
+    }
+
+    _handleEscape(ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (this.hasAttribute('data-q-flow-expanded') && !this._focusedAfterExpand) {
+        this._toggleExpand();
+        return;
+      }
+      if (this._focusedNode || this._focusedGroup) {
+        this._clearFocus();
+        this._focusedAfterExpand = false;
+        return;
+      }
+      if (this.hasAttribute('data-q-flow-expanded')) {
+        this._toggleExpand();
+      }
+    }
+
+    _focusNode(nodeId) {
+      var data = this._data;
+      if (!data || !data.nodeMap[nodeId]) {
+        return;
+      }
+      if (this.hasAttribute('data-q-flow-expanded')) {
+        this._focusedAfterExpand = true;
+      }
+      this._focusedNode = nodeId;
+      this._focusedGroup = null;
+
+      var upNodes = {};
+      var upEdges = {};
+      var upDist = {};
+      upDist[nodeId] = 0;
+      var qUp = [nodeId];
+      while (qUp.length) {
+        var curUp = qUp.shift();
+        data.edges.forEach(function (e) {
+          if (e.to === curUp) {
+            upEdges[e.index] = true;
+            if (!Object.prototype.hasOwnProperty.call(upDist, e.from)) {
+              upDist[e.from] = upDist[curUp] + 1;
+              if (e.from !== nodeId) {
+                upNodes[e.from] = true;
+              }
+              qUp.push(e.from);
+            }
+          }
+        });
+      }
+
+      var downNodes = {};
+      var downEdges = {};
+      var downDist = {};
+      downDist[nodeId] = 0;
+      var qDown = [nodeId];
+      while (qDown.length) {
+        var curDown = qDown.shift();
+        data.edges.forEach(function (e) {
+          if (e.from === curDown) {
+            downEdges[e.index] = true;
+            if (!Object.prototype.hasOwnProperty.call(downDist, e.to)) {
+              downDist[e.to] = downDist[curDown] + 1;
+              if (e.to !== nodeId) {
+                downNodes[e.to] = true;
+              }
+              qDown.push(e.to);
+            }
+          }
+        });
+      }
+
+      var maxUp = 0;
+      Object.keys(upEdges).forEach(function (eIdx) {
+        var edge = data.edges[Number(eIdx)];
+        var d = upDist[edge.from] || 1;
+        if (d > maxUp) {
+          maxUp = d;
+        }
+      });
+
+      var edgeHops = {};
+      Object.keys(upEdges).forEach(function (eIdx) {
+        var edge = data.edges[Number(eIdx)];
+        var d = upDist[edge.from] || 1;
+        var hop = Math.max(0, maxUp - d);
+        edgeHops[eIdx] = hop;
+      });
+      Object.keys(downEdges).forEach(function (eIdx) {
+        var edge = data.edges[Number(eIdx)];
+        var d = downDist[edge.from] || 0;
+        var hop = maxUp + d;
+        edgeHops[eIdx] = hop;
+      });
+
+      var litNodes = {};
+      litNodes[nodeId] = true;
+      Object.keys(upNodes).forEach(function (id) { litNodes[id] = true; });
+      Object.keys(downNodes).forEach(function (id) { litNodes[id] = true; });
+
+      var litGroups = {};
+      Object.keys(litNodes).forEach(function (nid) {
+        var gId = data.nodeMap[nid] && data.nodeMap[nid].group;
+        while (gId && data.groupMap[gId]) {
+          litGroups[gId] = true;
+          gId = data.groupMap[gId].parent;
+        }
+      });
+
+      Object.keys(this._nodeElements).forEach(function (nid) {
+        var el = this._nodeElements[nid];
+        if (nid === nodeId) {
+          el.setAttribute('data-q-flow-selected', '');
+        } else {
+          el.removeAttribute('data-q-flow-selected');
+        }
+        if (litNodes[nid]) {
+          el.setAttribute('data-q-flow-lit', '');
+          el.removeAttribute('data-q-flow-dim');
+        } else {
+          el.removeAttribute('data-q-flow-lit');
+          el.setAttribute('data-q-flow-dim', '');
+        }
+      }, this);
+
+      var groupEls = this._stage.querySelectorAll('[data-q-flow-group]');
+      for (var gi = 0; gi < groupEls.length; gi += 1) {
+        var gEl = groupEls[gi];
+        var gid = gEl.getAttribute('data-q-flow-group');
+        if (litGroups[gid]) {
+          gEl.setAttribute('data-q-flow-lit', '');
+          gEl.removeAttribute('data-q-flow-dim');
+        } else {
+          gEl.removeAttribute('data-q-flow-lit');
+          gEl.setAttribute('data-q-flow-dim', '');
+        }
+      }
+
+      var reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+      var uid = this._uid;
+      var activePulses = [];
+      this._edgeRecords.forEach(function (rec, idx) {
+        var isLit = Object.prototype.hasOwnProperty.call(edgeHops, idx);
+        if (isLit) {
+          var hop = edgeHops[idx];
+          rec.groupEl.setAttribute('data-q-flow-lit', '');
+          rec.groupEl.setAttribute('data-q-flow-hop', String(hop));
+          rec.groupEl.removeAttribute('data-q-flow-dim');
+          rec.basePath.setAttribute('stroke', 'var(--q-color-accent)');
+          rec.basePath.setAttribute('stroke-width', reduced ? '3.5' : '2');
+          rec.basePath.setAttribute('marker-end', 'url(#q-flow-arrow-lit-' + uid + ')');
+          if (reduced) {
+            rec.pulsePath.setAttribute('data-q-inactive', '');
+          } else {
+            rec.pulsePath.removeAttribute('data-q-inactive');
+            activePulses.push({ rec: rec, down: Object.prototype.hasOwnProperty.call(downEdges, idx) });
+          }
+        } else {
+          rec.groupEl.removeAttribute('data-q-flow-lit');
+          rec.groupEl.removeAttribute('data-q-flow-hop');
+          rec.groupEl.setAttribute('data-q-flow-dim', '');
+          rec.basePath.setAttribute('stroke', 'var(--q-color-text-muted)');
+          rec.basePath.setAttribute('stroke-width', '1.75');
+          rec.basePath.setAttribute('marker-end', 'url(#q-flow-arrow-' + uid + ')');
+          rec.pulsePath.setAttribute('data-q-inactive', '');
+        }
+      });
+
+      if (reduced || activePulses.length === 0) {
+        this.removeAttribute('data-q-flow-pulsing');
+        this._stopPulse();
+      } else {
+        this.setAttribute('data-q-flow-pulsing', '');
+        this._startPulse(pulseSchedule(activePulses, nodeId));
+      }
+
+      this._openDrawer(data.nodeMap[nodeId]);
+      this._ensureNodeVisible(nodeId, true);
+
+      var upCount = Object.keys(upNodes).length;
+      var downCount = Object.keys(downNodes).length;
+      var node = data.nodeMap[nodeId];
+      if (this._live) {
+        this._live.textContent = node.label + (node.kind ? ', ' + node.kind : '') + ', ' + upCount + ' upstream, ' + downCount + ' downstream';
+      }
+    }
+
+    _startPulse(schedule) {
+      var self = this;
+      this._stopPulse();
+      var startTime = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+
+      function step(now) {
+        if (!self.isConnected || !self._focusedNode) {
+          self._pulseFrame = 0;
+          return;
+        }
+        var elapsed = (now || Date.now()) - startTime;
+        for (var i = 0; i < schedule.length; i += 1) {
+          self._placePulseDots(schedule[i], elapsed);
+        }
+        self._pulseFrame = nextFrame(step);
+      }
+
+      step(startTime);
+    }
+
+    _placePulseDots(item, elapsed) {
+      var rec = item.rec;
+      var sinceFirst = elapsed - item.offset;
+      var used = 0;
+      if (sinceFirst >= 0) {
+        for (var t = sinceFirst % FLOW_PULSE_INTERVAL; t <= item.duration && t <= sinceFirst; t += FLOW_PULSE_INTERVAL) {
+          var dot = rec.maskDots[used];
+          if (!dot) {
+            dot = rec.maskDots[0].cloneNode(false);
+            rec.mask.appendChild(dot);
+            rec.maskDots.push(dot);
+          }
+          var pt = this._pointAlong(rec.basePath, rec.points, t / item.duration);
+          dot.setAttribute('cx', String(pt.x));
+          dot.setAttribute('cy', String(pt.y));
+          dot.removeAttribute('data-q-inactive');
+          used += 1;
+        }
+      }
+      for (var j = used; j < rec.maskDots.length; j += 1) {
+        rec.maskDots[j].setAttribute('data-q-inactive', '');
+      }
+    }
+
+    _pointAlong(pathEl, pts, frac) {
+      var clamped = Math.max(0, Math.min(1, frac));
+      try {
+        if (pathEl && typeof pathEl.getTotalLength === 'function') {
+          var len = pathEl.getTotalLength();
+          if (len > 0) {
+            return pathEl.getPointAtLength(clamped * len);
+          }
+        }
+      } catch (_e) {}
+      var a = pts[0] || { x: 0, y: 0 };
+      var b = pts[pts.length - 1] || a;
+      return {
+        x: a.x + (b.x - a.x) * clamped,
+        y: a.y + (b.y - a.y) * clamped
+      };
+    }
+
+    _stopPulse() {
+      if (this._pulseFrame) {
+        cancelFrame(this._pulseFrame);
+        this._pulseFrame = 0;
+      }
+    }
+
+    _openDrawer(node) {
+      var self = this;
+      var data = this._data;
+      var drawer = this._drawer;
+      if (!drawer || !node || !data) {
+        return;
+      }
+      while (drawer.firstChild) {
+        drawer.removeChild(drawer.firstChild);
+      }
+      var head = document.createElement('div');
+      head.setAttribute('data-q-flow-drawer-head', '');
+      var h3 = document.createElement('h3');
+      h3.textContent = node.label;
+      head.appendChild(h3);
+
+      var closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.setAttribute('data-q-flow-drawer-close', '');
+      closeBtn.setAttribute('aria-label', 'Close details');
+      closeBtn.textContent = 'Close';
+      closeBtn.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        self._clearFocus();
+      });
+      head.appendChild(closeBtn);
+      drawer.appendChild(head);
+
+      if (node.kind) {
+        var kindBadge = document.createElement('div');
+        kindBadge.setAttribute('data-q-flow-drawer-kind', '');
+        var colorIdx = data.kinds[node.kind];
+        if (colorIdx) {
+          kindBadge.style.setProperty('--q-flow-kind-color', 'var(--q-color-chart-' + colorIdx + ')');
+        }
+        kindBadge.textContent = node.kind;
+        drawer.appendChild(kindBadge);
+      }
+
+      if (node.detail) {
+        var detBox = document.createElement('div');
+        detBox.setAttribute('data-q-flow-drawer-detail', '');
+        detBox.appendChild(sanitizeFlowDetail(node.detail));
+        drawer.appendChild(detBox);
+      }
+
+      var incoming = data.edges.filter(function (e) { return e.to === node.id; });
+      var outgoing = data.edges.filter(function (e) { return e.from === node.id; });
+
+      function addEdgeSection(titleText, dirKey, list, isIncoming) {
+        if (!list.length) {
+          return;
+        }
+        var sec = document.createElement('div');
+        sec.setAttribute('data-q-flow-drawer-edges', dirKey);
+        var h4 = document.createElement('h4');
+        h4.textContent = titleText;
+        sec.appendChild(h4);
+        var ul = document.createElement('ul');
+        list.forEach(function (e) {
+          var otherId = isIncoming ? e.from : e.to;
+          var otherNode = data.nodeMap[otherId];
+          var otherLabel = otherNode ? otherNode.label : otherId;
+          var li = document.createElement('li');
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.setAttribute('data-q-flow-edge-btn', '');
+          btn.setAttribute('data-q-flow-target', otherId);
+          var parts = [];
+          if (e.label) {
+            parts.push(e.label);
+          }
+          parts.push((isIncoming ? 'from ' : 'to ') + otherLabel);
+          if (e.async) {
+            parts.push('(async)');
+          }
+          btn.textContent = parts.join(' ');
+          btn.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            self._setRoving(otherId, false);
+            self._focusNode(otherId);
+          });
+          li.appendChild(btn);
+          ul.appendChild(li);
+        });
+        sec.appendChild(ul);
+        drawer.appendChild(sec);
+      }
+
+      addEdgeSection('Incoming', 'in', incoming, true);
+      addEdgeSection('Outgoing', 'out', outgoing, false);
+      drawer.removeAttribute('data-q-inactive');
+    }
+
+    _focusGroup(groupId) {
+      var data = this._data;
+      if (!data || !data.groupMap[groupId]) {
+        return;
+      }
+      this._focusedGroup = groupId;
+      this._focusedNode = null;
+      this._stopPulse();
+      this.removeAttribute('data-q-flow-pulsing');
+      if (this._drawer) {
+        this._drawer.setAttribute('data-q-inactive', '');
+      }
+
+      var inGroup = {};
+      inGroup[groupId] = true;
+      var changed = true;
+      while (changed) {
+        changed = false;
+        data.groups.forEach(function (g) {
+          if (g.parent && inGroup[g.parent] && !inGroup[g.id]) {
+            inGroup[g.id] = true;
+            changed = true;
+          }
+        });
+      }
+
+      var memberNodes = {};
+      data.nodes.forEach(function (n) {
+        if (n.group && inGroup[n.group]) {
+          memberNodes[n.id] = true;
+        }
+      });
+
+      Object.keys(this._nodeElements).forEach(function (nid) {
+        var el = this._nodeElements[nid];
+        el.removeAttribute('data-q-flow-selected');
+        if (memberNodes[nid]) {
+          el.setAttribute('data-q-flow-lit', '');
+          el.removeAttribute('data-q-flow-dim');
+        } else {
+          el.removeAttribute('data-q-flow-lit');
+          el.setAttribute('data-q-flow-dim', '');
+        }
+      }, this);
+
+      var groupEls = this._stage.querySelectorAll('[data-q-flow-group]');
+      for (var gi = 0; gi < groupEls.length; gi += 1) {
+        var gEl = groupEls[gi];
+        var gid = gEl.getAttribute('data-q-flow-group');
+        if (inGroup[gid]) {
+          gEl.setAttribute('data-q-flow-lit', '');
+          gEl.removeAttribute('data-q-flow-dim');
+        } else {
+          gEl.removeAttribute('data-q-flow-lit');
+          gEl.setAttribute('data-q-flow-dim', '');
+        }
+      }
+
+      var uid = this._uid;
+      this._edgeRecords.forEach(function (rec) {
+        var inside = memberNodes[rec.edge.from] && memberNodes[rec.edge.to];
+        rec.pulsePath.setAttribute('data-q-inactive', '');
+        rec.groupEl.removeAttribute('data-q-flow-hop');
+        rec.basePath.setAttribute('stroke', 'var(--q-color-text-muted)');
+        rec.basePath.setAttribute('stroke-width', '1.75');
+        rec.basePath.setAttribute('marker-end', 'url(#q-flow-arrow-' + uid + ')');
+        if (inside) {
+          rec.groupEl.setAttribute('data-q-flow-lit', '');
+          rec.groupEl.removeAttribute('data-q-flow-dim');
+        } else {
+          rec.groupEl.removeAttribute('data-q-flow-lit');
+          rec.groupEl.setAttribute('data-q-flow-dim', '');
+        }
+      });
+
+      var gBox = this._groupBoxes && this._groupBoxes[groupId];
+      if (gBox) {
+        this._fitBounds({
+          x: gBox.x - 16,
+          y: gBox.y - 16,
+          width: gBox.width + 32,
+          height: gBox.height + 32
+        }, false);
+      }
+    }
+
+    _clearFocus() {
+      this._focusedNode = null;
+      this._focusedGroup = null;
+      this._stopPulse();
+      this.removeAttribute('data-q-flow-pulsing');
+      if (this._drawer) {
+        this._drawer.setAttribute('data-q-inactive', '');
+      }
+      if (!this._stage) {
+        return;
+      }
+      Object.keys(this._nodeElements || {}).forEach(function (nid) {
+        var el = this._nodeElements[nid];
+        el.removeAttribute('data-q-flow-selected');
+        el.removeAttribute('data-q-flow-lit');
+        el.removeAttribute('data-q-flow-dim');
+      }, this);
+      var groupEls = this._stage.querySelectorAll('[data-q-flow-group]');
+      for (var gi = 0; gi < groupEls.length; gi += 1) {
+        groupEls[gi].removeAttribute('data-q-flow-lit');
+        groupEls[gi].removeAttribute('data-q-flow-dim');
+      }
+      var uid = this._uid;
+      (this._edgeRecords || []).forEach(function (rec) {
+        rec.groupEl.removeAttribute('data-q-flow-lit');
+        rec.groupEl.removeAttribute('data-q-flow-dim');
+        rec.groupEl.removeAttribute('data-q-flow-hop');
+        rec.basePath.setAttribute('stroke', 'var(--q-color-text-muted)');
+        rec.basePath.setAttribute('stroke-width', '1.75');
+        rec.basePath.setAttribute('marker-end', 'url(#q-flow-arrow-' + uid + ')');
+        rec.pulsePath.setAttribute('data-q-inactive', '');
+      });
+    }
+
+    _setRoving(nodeId, moveDomFocus) {
+      if (!this._nodeElements || !this._nodeElements[nodeId]) {
+        return;
+      }
+      this._rovingId = nodeId;
+      Object.keys(this._nodeElements).forEach(function (nid) {
+        this._nodeElements[nid].setAttribute('tabindex', nid === nodeId ? '0' : '-1');
+      }, this);
+      if (moveDomFocus) {
+        this._nodeElements[nodeId].focus();
+        this._ensureNodeVisible(nodeId, true);
+      }
+    }
+
+    _nearestNeighbor(fromId, key) {
+      var boxes = this._nodeBoxes;
+      if (!boxes || !boxes[fromId]) {
+        return null;
+      }
+      var cur = boxes[fromId];
+      var cx = cur.x + cur.width / 2;
+      var cy = cur.y + cur.height / 2;
+      var bestId = null;
+      var bestScore = Infinity;
+      Object.keys(boxes).forEach(function (nid) {
+        if (nid === fromId) {
+          return;
+        }
+        var b = boxes[nid];
+        var bx = b.x + b.width / 2;
+        var by = b.y + b.height / 2;
+        var dx = bx - cx;
+        var dy = by - cy;
+        var primary = 0;
+        var secondary = 0;
+        if (key === 'ArrowRight' && dx > 2) { primary = dx; secondary = Math.abs(dy); }
+        else if (key === 'ArrowLeft' && dx < -2) { primary = -dx; secondary = Math.abs(dy); }
+        else if (key === 'ArrowDown' && dy > 2) { primary = dy; secondary = Math.abs(dx); }
+        else if (key === 'ArrowUp' && dy < -2) { primary = -dy; secondary = Math.abs(dx); }
+        if (primary > 0) {
+          var score = primary + secondary * 1.5;
+          if (score < bestScore) {
+            bestScore = score;
+            bestId = nid;
+          }
+        }
+      });
+      if (bestId) {
+        return bestId;
+      }
+      var ids = this._data.nodes.map(function (n) { return n.id; });
+      var idx = ids.indexOf(fromId);
+      if (idx < 0) {
+        return null;
+      }
+      if (key === 'ArrowRight' || key === 'ArrowDown') {
+        return ids[(idx + 1) % ids.length];
+      }
+      return ids[(idx - 1 + ids.length) % ids.length];
+    }
+
+    _onNodeKey(ev, nodeId) {
+      if (ev.key === 'ArrowRight' || ev.key === 'ArrowLeft' || ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        var nextId = this._nearestNeighbor(nodeId, ev.key);
+        if (nextId) {
+          this._setRoving(nextId, true);
+        }
+      } else if (ev.key === 'Enter' || ev.key === ' ') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        this._focusNode(nodeId);
+      } else {
+        this._onGraphKey(ev);
+      }
+    }
+
+    _onGraphKey(ev) {
+      if (ev.key === '+' || ev.key === '=') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        this._zoomBy(1.25);
+      } else if (ev.key === '-' || ev.key === '_') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        this._zoomBy(0.8);
+      } else if (ev.key === '0') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        this._fitBounds(this._bounds, false);
+      } else if (ev.key === 'Escape') {
+        this._handleEscape(ev);
+      }
+    }
+
+    _applyTheme() {
+      /* SVG and drawer colors use var(--q-color-*) custom properties, so they update live without re-layout. */
+    }
+  }
 
   define('q-tabs', QTabs);
   define('q-timeline', QTimeline);
@@ -2801,4 +4809,5 @@
   define('q-board', QBoard);
   define('q-sidenote', QSidenote);
   define('q-compare', QCompare);
+  define('q-flow', QFlow);
 })();

@@ -4,7 +4,7 @@ Generated from `vendor/kit/1.0.0/catalog.json` by `scripts/kit_docs.py reference
 
 ## How inclusion works
 
-Write any `q-*` tag in a source and the builder inlines the kit automatically; `q-chart` also inlines Chart.js. Never list `kit` in the source header's `libraries`. A tag that breaks its element's contract below fails the build's `kit` check, which names the element and the problem.
+Write any `q-*` tag in a source and the builder inlines the kit automatically; `q-chart` also inlines Chart.js and `q-flow` inlines the flow layout library. Never list `kit` or `flow` in the source header's `libraries`. A tag that breaks its element's contract below fails the build's `kit` check, which names the element and the problem.
 
 ## Tag index
 
@@ -21,6 +21,7 @@ Write any `q-*` tag in a source and the builder inlines the kit automatically; `
 - [`q-panel`](#q-panel)
 - [`q-sidenote`](#q-sidenote)
 - [`q-compare`](#q-compare)
+- [`q-flow`](#q-flow)
 
 ## `q-tabs`
 
@@ -399,7 +400,7 @@ Companion option html: allowed
 
 ## `q-sidenote`
 
-Use when a short aside, source or caveat belongs beside a sentence without interrupting it.
+Use when a short aside, source or caveat explains a phrase without interrupting the sentence.
 
 ### Attributes
 
@@ -407,12 +408,12 @@ This element takes no attributes of its own.
 
 ### Children
 
-Inline text placed inside a paragraph, right after the words it annotates. On a longform page of 1100px or wider it sits numbered in the right margin. Narrower, a numbered button in the text opens it in place. Without JavaScript, and in print, it reads inline in parentheses.
+The words being annotated, then one child marked slot="note" holding the note. The words are highlighted, and the note opens below them while a mouse hovers them or they have keyboard focus; a tap or click keeps it open. Without JavaScript, and in print, the note reads inline in parentheses after the words.
 
 ### Example
 
 ```html
-<p>Median build time fell to nine minutes<q-sidenote>Measured on the main branch, excluding reruns.</q-sidenote> after the cache moved to the shared runner.</p>
+<p>Median build time fell to <q-sidenote>nine minutes<span slot="note">Measured on the main branch, excluding reruns.</span></q-sidenote> after the cache moved to the shared runner.</p>
 ```
 
 Companion option html: not allowed (interactive)
@@ -429,7 +430,7 @@ Use when two or more options are judged against the same criteria and one of the
 
 ### Children
 
-A `<table>` whose first row is the header: the first cell names the criteria column and each other header cell is one option. Every later row is one criterion, with its name in the first cell. At 700px and below each option becomes its own block, the recommended one first. Wider, the table widens past the page column when the options do not fit and nothing sits beside the column; beside a nav rail, aside, pane or margin column it scrolls inside its own box. Without JavaScript the table scrolls inside its own box.
+A `<table>` whose first row is the header: the first cell names the criteria column and each other header cell is one option. Every later row is one criterion, with its name in the first cell. At 700px and below each option becomes its own block, the recommended one first. Wider, the table widens past the page column when the options do not fit and nothing sits beside the column; beside a nav rail or pane it scrolls inside its own box. Without JavaScript the table scrolls inside its own box.
 
 ### Example
 
@@ -446,6 +447,50 @@ A `<table>` whose first row is the header: the first cell names the criteria col
     </tbody>
   </table>
 </q-compare>
+```
+
+Companion option html: not allowed (interactive)
+
+## `q-flow`
+
+Use when a system, pipeline or architecture has paths, groups or node details the reader will pan, zoom and click through to explore.
+
+### Attributes
+
+| Name | Required | Kind | Values | Default | Description |
+|---|---|---|---|---|---|
+| `summary` | yes | text | - | - | One sentence stating what the graph shows; it becomes the graph's accessible label. |
+| `direction` | no | enum | `right`, `down` | `right` | Flow direction: left to right or top to bottom. |
+| `groups` | no | enum | `panels`, `lanes` | `panels` | How top-level groups are drawn: tinted panels or stage bands across the flow. |
+
+### Children
+
+A `<script type="application/json">` child holding the graph data: optional kinds (mapping each kind name to a chart color 1 to 8), optional groups (id, label, optional parent), required nodes (id, label, optional kind, group and short HTML detail), and optional edges (from, to, optional label and async boolean). Never write coordinates; the element lays the graph out and builds a "Graph as a list" disclosure below the canvas.
+
+### Example
+
+```html
+<q-flow summary="Orders flow from checkout through billing to the ledger." direction="right" groups="panels">
+  <script type="application/json">
+  {
+    "kinds": {"ui": 1, "worker": 2, "database": 3, "queue": 4},
+    "groups": [
+      {"id": "billing", "label": "Billing"}
+    ],
+    "nodes": [
+      {"id": "checkout", "label": "Checkout", "kind": "ui"},
+      {"id": "charge", "label": "Charge worker", "kind": "worker", "group": "billing", "detail": "<p>Retries 3x with exponential backoff, then dead-letters.</p>"},
+      {"id": "ledger", "label": "Ledger", "kind": "database", "group": "billing"},
+      {"id": "retries", "label": "Retry queue", "kind": "queue", "group": "billing"}
+    ],
+    "edges": [
+      {"from": "checkout", "to": "charge", "label": "order.created", "async": true},
+      {"from": "charge", "to": "ledger", "label": "charge.settled"},
+      {"from": "charge", "to": "retries", "label": "charge.failed", "async": true}
+    ]
+  }
+  </script>
+</q-flow>
 ```
 
 Companion option html: not allowed (interactive)

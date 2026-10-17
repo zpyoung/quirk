@@ -65,7 +65,7 @@ python3 "$SKILL_DIR/scripts/quirk_html.py" build-app SLUG --title TITLE [--layou
 ```
 
 - The first build copies the template's project to `<project>/.quirk/html/<slug>/`, installs, builds, and writes `<project>/.quirk/html/<slug>.html`. Title, layout, mode and signal are saved in `quirk-app.json` there, so later builds need only the slug. Edit the files under `<slug>/src/` and run `build-app SLUG` again; the source folder is never overwritten. The `app` template's `rules.md` lists the scaffold files.
-- Pass `--signal` with the signal you chose in step 2, and `--layout` with the shape you named in step 4. The app takes `summary` and `aside` from `routes.tsx`; see the `app` template's `rules.md`.
+- Pass `--signal` with the signal you chose in step 2, and `--layout` with the shape you named in step 4. The app takes each view's `summary` from `routes.tsx`; see the `app` template's `rules.md`.
 - **Exit 3 means tier 2 is unavailable here:** Node or pnpm is missing, install failed, or the build failed. The JSON carries a `reason`. Do not retry in a loop. Fall back to a tier-1 build of the same idea and list every cut (a view merged, a grid made read-only) in the delivery note.
 - Installs run `pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile`, so no package script or pnpmfile hook runs at install. Building still runs the template's own build code (`vite.config.ts`, the build script), so build only project or user tier-2 templates you trust.
 - Never commit `node_modules/`.
@@ -88,19 +88,18 @@ Every page has exactly one shape, set by the `layout` header field and available
 
 | Shape | For | The `summary` slot holds |
 |---|---|---|
-| `report` | findings and evidence | the answer or findings under the h1 |
-| `explainer` | how-it-works pages and write-ups | the answer or findings under the h1 |
-| `longform` | long prose with margin notes | the answer or findings under the h1 |
+| `explainer` | findings with their evidence, how-it-works pages and write-ups | the answer or findings under the h1 |
+| `longform` | long prose with notes on its phrases | the answer or findings under the h1 |
 | `tool` | calculators, estimators, converters | the live result beside the inputs |
 | `comparison` | picking between options | the recommendation line above the table |
 | `dashboard` | status and metrics | the headline metric, top left |
 | `reference` | runbooks and references read by section | a one-line purpose under the h1 |
 
-- **Every source needs a `layout` field and a `summary` slot.** A source with no `layout` builds as `report` and the note says "Layout: report (no layout named)", so always name one. A missing `summary` fails the build and says where it goes for that shape. Templates do not declare `summary`. Region-bearing templates (`report`, `components`, and custom ones with `{{regions}}` or the legacy `{{slot:main}}`) require it; the companion takes its question as the summary and rejects a `summary` slot.
-- **A rebuild keeps the recorded shape.** The source's `layout` wins, then the one in the built page's header, then `report`.
+- **Every source needs a `layout` field and a `summary` slot.** A source with no `layout` builds as `explainer` and the note says "Layout: explainer (no layout named)", so always name one. A missing `summary` fails the build and says where it goes for that shape. Templates do not declare `summary`. Region-bearing templates (`report`, `components`, and custom ones with `{{regions}}` or the legacy `{{slot:main}}`) require it; the companion takes its question as the summary and rejects a `summary` slot.
+- **A rebuild keeps the recorded shape.** The source's `layout` wins, then the one in the built page's header, then `explainer`.
 - **The nav is generated.** It lists the h2 sections with their h3s, appears at 5 or more h2s, and is always on for `reference`. The header field `"nav": "on"` or `"off"` forces it; `off` fails on `reference`. Do not write a table of contents.
-- **Only `report` takes an `aside` slot.**
-- **Arrange content with four layout elements:** `q-grid` (columns that stack on phones), `q-panel` (a titled box, the title is required), `q-sidenote` (a margin note, `longform`) and `q-compare` (the comparison table, `comparison`). Their attributes are in [components](references/components.md). Hand-written grid or fixed-width CSS in a slot fails the layout check: a grid failure names `q-grid`, a width failure points at the `layout` field.
+- **No shape has a side column for notes.** Put caveats and how the numbers were counted in a last section of `main`.
+- **Arrange content with four layout elements:** `q-grid` (columns that stack on phones), `q-panel` (a titled box, the title is required), `q-sidenote` (a highlighted phrase with a note that opens on hover, `longform`) and `q-compare` (the comparison table, `comparison`). Their attributes are in [components](references/components.md). Hand-written grid or fixed-width CSS in a slot fails the layout check: a grid failure names `q-grid`, a width failure points at the `layout` field. Grid on and inside an element you build yourself passes; see [design reference](references/design-reference.md) section 10.
 - **Examples, one per shape:** `templates/report/examples/<shape>.src.html`, `templates/components/examples/<shape>.src.html`, `templates/companion/examples/<shape>.screen.json` and `templates/app/examples/<shape>/`. Copy the closest one's structure.
 
 Widths, breakpoints and print rules are in [design reference](references/design-reference.md) section 8.
@@ -136,8 +135,7 @@ A project or user template gets every guarantee a built-in one has, and the user
 
 ## Charts and the theme
 
-The chrome fires a `quirk-theme` event on `document` when the theme changes. A page that draws a chart listens for it and rebuilds the chart; CSS variables switch everything else on their own. Bar, line and area charts use the `<q-chart>` element, which handles the rebuild itself; scatter and histogram charts are hand-written and rebuild on the event. Details are in [design reference](references/design-reference.md) section 9 and [components](references/components.md).
-
+The chrome fires a `quirk-theme` event on `document` when the theme changes. A page that draws a chart listens for it and rebuilds the chart; CSS variables switch everything else on their own. Bar, line and area charts use the `<q-chart>` element, which handles the rebuild itself; scatter and histogram charts are hand-written and rebuild on the event. For graphs of services, pipelines or data flows that the reader will pan, zoom and click through (following a path, opening a node's detail, or focusing a group), use `<q-flow>` and reuse the same `kinds` names and `--q-color-chart-*` numbers across artifacts; keep Mermaid for static diagrams, sequence diagrams, state charts, and diagrams inside Markdown. Details are in [design reference](references/design-reference.md) section 9 and [components](references/components.md).
 ## Companion
 
 The companion is a local page that asks the user one question at a time and sends the click back. Brainstorming and exploring-ideas use it for visual questions, and you can run it when a choice is easier to make by seeing it. A screen may name a `layout` to get the room its content needs. Start it with `python3 "$SKILL_DIR/scripts/companion.py" start SESSION_DIR` (a session directory under `.quirk/brainstorm/`), drive it with `show` and `wait`, and end it with `stop`. A timeout on `wait` (exit 1) is normal, so re-run it. Typed input in the terminal outranks a click. The full protocol, `screen.json` format, exit codes and security notes are in [companion](references/companion.md); screen design is section 12 of the [design reference](references/design-reference.md).
@@ -147,4 +145,4 @@ The companion is a local page that asks the user one question at a time and send
 - [Design reference](references/design-reference.md): the house design standard, direction brief, banned tells, tokens, page shapes and widths, verify checklist
 - [Templates](references/templates.md): template lookup, `template.json`, source file format, the `layout` and `nav` fields, region placeholders, tokens, custom and tier-2 templates
 - [Companion](references/companion.md): the companion loop, commands, screen format and per-shape example screens
-- [Components](references/components.md): the `q-*` elements (tabs, charts, tables, stats, timelines, code, diffs, boards, and the layout elements grid, panel, sidenote, compare), their attributes and examples
+- [Components](references/components.md): the `q-*` elements (tabs, charts, tables, stats, timelines, code, diffs, boards, explorable `q-flow` graphs, and the layout elements grid, panel, sidenote, compare), their attributes and examples

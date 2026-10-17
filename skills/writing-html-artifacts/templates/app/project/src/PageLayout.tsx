@@ -120,20 +120,14 @@ function PageNav({ items, currentId }: { items: NavItem[]; currentId: string | n
  * The page-shape wrapper every view renders inside: the same `q-wrap` width cap, regions, class names
  * and DOM order that the build emits for a tier-1 page of this shape, placed by `quirk-layout.css`.
  *
- * `summary` is the page's answer or headline (where it sits depends on the shape), `children` is the
- * main content, and `aside` is an `<aside>` element that only the report shape places. The shape comes
- * from `quirk-page.ts`, which every build rewrites from the app's `layout` setting.
+ * `summary` is the page's answer or headline (where it sits depends on the shape) and `children` is the
+ * main content. The shape comes from `quirk-page.ts`, which every build rewrites from the app's
+ * `layout` setting.
  */
-export function PageLayout({ summary, children, aside }: { summary: ReactNode; children: ReactNode; aside?: ReactNode }) {
+export function PageLayout({ summary, children }: { summary: ReactNode; children: ReactNode }) {
   const mainRef = useRef<HTMLElement>(null)
   const [items, setItems] = useState<NavItem[] | null>(null)
   const [currentId, setCurrentId] = useState<string | null>(null)
-  const hasAside = aside !== undefined && aside !== null && aside !== false
-
-  useEffect(() => {
-    if (hasAside && layout !== 'report') console.warn(`PageLayout: the ${layout} shape has no aside region, so the aside is not rendered`)
-  }, [hasAside])
-
   useLayoutEffect(() => {
     const main = mainRef.current
     if (!main) return
@@ -196,7 +190,6 @@ export function PageLayout({ summary, children, aside }: { summary: ReactNode; c
             {summaryRegion}
             {nav}
             {main}
-            {layout === 'report' && hasAside ? aside : null}
           </>
         )}
       </div>

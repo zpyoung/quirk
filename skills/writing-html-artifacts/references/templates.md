@@ -71,7 +71,7 @@ For a tier-1 template you write `<slug>.src.html`, and `scripts/quirk_html.py bu
 - Text before the first slot line, other than the header, is an error.
 
 ```html
-<!-- quirk-src {"template": "report", "title": "Test timings, week 41", "layout": "report", "mode": "offline", "libraries": ["chartjs"], "interactions": ["sort the table by column"], "data": "timings.json"} -->
+<!-- quirk-src {"template": "report", "title": "Test timings, week 41", "layout": "explainer", "mode": "offline", "libraries": ["chartjs"], "interactions": ["sort the table by column"], "data": "timings.json"} -->
 <!-- slot: summary -->
 <p class="q-lede">Median suite time fell from 14 to 9 minutes.</p>
 <!-- slot: main -->
@@ -80,11 +80,11 @@ For a tier-1 template you write `<slug>.src.html`, and `scripts/quirk_html.py bu
 
 Header fields:
 
-- `template` and `title` are required. Name a `layout` on every source; one without it builds as `report` (see [Page shapes in a source](#page-shapes-in-a-source)).
-- `layout` is one of the seven shapes, in this order: `report`, `explainer`, `longform`, `tool`, `comparison`, `dashboard`, `reference`. Any other value is exit 2 and the error lists all seven.
+- `template` and `title` are required. Name a `layout` on every source; one without it builds as `explainer` (see [Page shapes in a source](#page-shapes-in-a-source)).
+- `layout` is one of the six shapes, in this order: `explainer`, `longform`, `tool`, `comparison`, `dashboard`, `reference`. Any other value is exit 2 and the error lists all six.
 - `nav` is `auto` (the default), `on` or `off`. It forces the generated section nav on or off.
 - `mode` is `offline` (the default) or `connected`.
-- `libraries` must be a subset of the template's `optional_libraries`. The builder adds `kit` and `chartjs` automatically when `q-*` tags appear, so `kit` may not be listed by hand.
+- `libraries` must be a subset of the template's `optional_libraries`. The builder adds `kit`, `chartjs`, `highlightjs` and `flow` automatically when `q-*` tags appear, so `kit` and `flow` may not be listed by hand.
 - `interactions` lists what the page lets the reader do; it may be empty.
 - `data` is an optional JSON or CSV path relative to the source file. Data too large to embed moves to a sidecar file next to the page.
 - `tier_reason` is optional; set it when you overrode the tier signals.
@@ -96,20 +96,19 @@ Slot names match `^<!-- slot: ([a-z][a-z0-9-]{0,30}) -->$`. A rebuild of an exis
 Every tier-1 source names a shape in `layout` and writes a `summary` slot. What each shape is for and its widths are in [design reference](design-reference.md) section 8; this section is how the build treats the field.
 
 - **`summary` is a reserved slot.** Region-bearing templates take it without declaring it, and none may declare it. It is required whenever the skeleton holds `{{regions}}` or `{{slot:main}}`. A missing summary is exit 2, and the error names the shape and where its summary goes. A skeleton with neither placeholder, the companion's, has no summary slot and rejects one.
-- **`aside` is for `report` only.** An `aside` slot on any other shape is exit 2.
 - **The nav is generated from `main`.** Headings inside `q-panel`, `q-compare`, `q-tabs` and `q-board` are neither counted nor listed. A heading without an `id` gains one made from its text, kept unique against ids already on the page. `"nav": "off"` on `reference`, `"nav": "on"` with no h2, and a `reference` page whose `main` has no h2 or h3 (its section nav would be empty) are exit 2.
-- **Layout resolution at build.** The source's `layout`, else the `layout` in the existing output's header, else `report`. `--upgrade` does not change it; it only moves library versions.
-- **A defaulted layout is recorded as defaulted.** When no source or earlier build named one, the header gets `"layout_defaulted": true` and the delivery note says `Layout: report (no layout named)`. A rebuild whose source still names no layout stays defaulted; naming one in the source clears it.
+- **Layout resolution at build.** The source's `layout`, else the `layout` in the existing output's header, else `explainer`. `--upgrade` does not change it; it only moves library versions.
+- **A defaulted layout is recorded as defaulted.** When no source or earlier build named one, the header gets `"layout_defaulted": true` and the delivery note says `Layout: explainer (no layout named)`. A rebuild whose source still names no layout stays defaulted; naming one in the source clears it.
 - **The header records the result.** Built pages carry `"layout"`, and `"layout_defaulted": true` or `"legacy_summary": true` when they apply. Never edit these by hand: rebuild from the source.
 - **The delivery note has a `Layout:` line**, for example `Layout: dashboard`. Keep it when you restate the note's facts.
-- **Older pages rebuild unchanged.** A page built before shapes existed has no `layout` in its header. If its source has no `summary`, the build still succeeds as `report`, omits the summary region, records `"legacy_summary": true`, and puts a `summary` warning in `checks.warnings`. Add a `summary` slot to clear it.
+- **Older pages rebuild unchanged.** A page built before shapes existed has no `layout` in its header. If its source has no `summary`, the build still succeeds as `explainer`, omits the summary region, records `"legacy_summary": true`, and puts a `summary` warning in `checks.warnings`. Add a `summary` slot to clear it.
 
 ## Skeleton placeholders for shapes
 
 A skeleton chooses how it receives the regions with one of two placeholders. A skeleton with neither is not region-bearing: it resolves no default layout and requires no `summary`.
 
-- **`{{regions}}`** is replaced by the page wrapper (`<div class="q-page" data-layout="...">`) holding summary, nav, `main` and `aside` in the shape's DOM order. It also satisfies the declared `main` and `aside` slots, so the skeleton must not also contain `{{slot:main}}` or `{{slot:aside}}`. Every other declared slot still needs its own `{{slot:<name>}}`. A skeleton with both `{{regions}}` and `{{slot:main}}` is invalid. All built-in templates and new custom ones use `{{regions}}`.
-- **`{{slot:main}}` alone is the legacy path**, for a custom skeleton written before shapes. The build puts the whole region wrapper, without `aside`, where `{{slot:main}}` stands, and the skeleton keeps its own `<main>`. Its `{{slot:aside}}` and other slots fill as before, outside the wrapper. The layout check does not see that aside.
+- **`{{regions}}`** is replaced by the page wrapper (`<div class="q-page" data-layout="...">`) holding summary, nav and `main` in the shape's DOM order. It also satisfies the declared `main` slot, so the skeleton must not also contain `{{slot:main}}`. Every other declared slot still needs its own `{{slot:<name>}}`. A skeleton with both `{{regions}}` and `{{slot:main}}` is invalid. All built-in templates and new custom ones use `{{regions}}`.
+- **`{{slot:main}}` alone is the legacy path**, for a custom skeleton written before shapes. The build puts the whole region wrapper where `{{slot:main}}` stands, and the skeleton keeps its own `<main>`. Its other slots fill as before, outside the wrapper.
 - **`{{layout}}`** is replaced by the resolved layout name in a region-bearing skeleton. In any other skeleton it is the source's `layout`, or an empty string when none is named. The companion uses it to size its page; see [companion](companion.md).
 - `layout.css` is inlined into the head of every tier-1 build after the base styles, so a custom skeleton keeps only its masthead and chrome styling. Do not repeat the page width, grid or breakpoints in a skeleton.
 - Editing the layout stylesheet or a placeholder does not invalidate a custom template's `verified.json`: the theme files are not hashed.
@@ -191,7 +190,7 @@ A tier-2 template sets `"tier": 2` and `"project": "project/"`, and ships its ow
 A template is skipped, with a warning, when:
 
 - `template.json` is missing, unparseable, or fails the schema table above (this includes `name` not matching the directory)
-- the skeleton is missing or lacks a required placeholder, holds both `{{regions}}` and `{{slot:main}}` (or `{{slot:aside}}`), or leaves a declared slot other than `main` and `aside` without its placeholder
+- the skeleton is missing or lacks a required placeholder, holds both `{{regions}}` and `{{slot:main}}`, or leaves a declared slot other than `main` without its placeholder
 - `template.json` declares a slot named `summary`
 - a library does not resolve, or a vendored file's checksum does not match
 - the example is missing

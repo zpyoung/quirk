@@ -243,7 +243,7 @@ def test_quirk_app_json_round_trips_and_flags_override(project, fake_env):
         "title": "First",
         "mode": "connected",
         "tier_signal": "multi view",
-        "layout": "report",
+        "layout": "explainer",
     }
 
     rc, result = build_app(project, fake_env)
@@ -259,7 +259,7 @@ def test_quirk_app_json_round_trips_and_flags_override(project, fake_env):
         "title": "Second",
         "mode": "offline",
         "tier_signal": "multi view",
-        "layout": "report",
+        "layout": "explainer",
     }
 
 
@@ -647,11 +647,11 @@ def test_layout_round_trips_through_quirk_app_json_and_the_header(project, fake_
 
 
 @needs_node
-def test_a_build_with_no_layout_is_a_report(project, fake_env):
+def test_a_build_with_no_layout_is_an_explainer(project, fake_env):
     rc, result = build_app(project, fake_env, "demo", "--title", "Plain")
-    assert rc == 0 and result["layout"] == "report"
-    assert json.loads((source_dir(project) / "quirk-app.json").read_text())["layout"] == "report"
-    assert _built_header(project)["layout"] == "report"
+    assert rc == 0 and result["layout"] == "explainer"
+    assert json.loads((source_dir(project) / "quirk-app.json").read_text())["layout"] == "explainer"
+    assert _built_header(project)["layout"] == "explainer"
 
 
 @needs_node
@@ -1008,7 +1008,7 @@ def _assert_fills_up_to_the_cap(boxes: dict, shape: str) -> None:
     shutil.which("pnpm") is None or NODE is None or os.environ.get("QUIRK_HTML_NETWORK_TESTS") != "1",
     reason="needs node, pnpm on PATH and QUIRK_HTML_NETWORK_TESTS=1",
 )
-@pytest.mark.parametrize("shape", ["report", "reference"])
+@pytest.mark.parametrize("shape", ["explainer", "reference"])
 def test_an_app_page_fills_the_viewport_up_to_1440_and_is_centred(project, tmp_path, shape):
     env = {**os.environ, "QUIRK_HTML_USER_DIR": str(tmp_path / "user")}
     _assert_fills_up_to_the_cap(_page_boxes(project, env, tmp_path, shape), shape)
@@ -1023,3 +1023,20 @@ def test_a_dashboard_app_page_stays_fluid_past_1440(project, tmp_path):
     boxes = _page_boxes(project, env, tmp_path, "dashboard")
     assert boxes["2400"]["wrap"]["width"] > 1440, boxes
     assert boxes["2400"]["page"]["width"] > 1440, boxes
+
+
+@needs_node
+def test_tier_2_q_flow_inlines_flow_and_kit_and_checks_jsx(project, fake_env):
+    assert build_app(project, fake_env, "demo", "--title", "Demo")[0] == 0
+    add_source(
+        project,
+        "src/FlowView.tsx",
+        'export const FlowView = () => <q-flow summary="Orders flow." direction="right" groups="panels"><script type="application/json">{"nodes":[{"id":"a","label":"A"}]}</script></q-flow>;\n',
+    )
+    rc, result = build_app(project, fake_env)
+    assert rc == 0 and result["checks"]["passed"] is True, result
+    assert "flow" in result["libraries"] and "kit" in result["libraries"]
+    html = Path(result["path"]).read_text(encoding="utf-8")
+    assert 'data-quirk-lib="flow@0.12.0"' in html
+    assert 'data-quirk-lib="kit@1.0.0"' in html
+    assert "<!-- license: flow 0.12.0 EPL-2.0 AND ISC" in html

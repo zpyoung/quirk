@@ -188,7 +188,7 @@ def test_from_a_quirk_built_artifact_copies_its_template_and_source(env):
     dest = env["project"] / ".quirk/html-templates/notes-kit"
     assert code == 0, out
     meta = json.loads((dest / "template.json").read_text())
-    assert meta["name"] == "notes-kit" and list(meta["slots"]) == ["main", "aside"]
+    assert meta["name"] == "notes-kit" and list(meta["slots"]) == ["main"]
     example = (dest / "example.src.html").read_text()
     assert example.startswith('<!-- quirk-src {"template": "notes-kit", "title": "Weekly notes"')
     assert '<p class="q-lede">Nothing broke this week.</p>' in example

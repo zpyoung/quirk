@@ -542,8 +542,7 @@ COMMAND: `python3 $SKILL/scripts/kit_docs.py reference [--check]` ·
   example).
   - Each is a `report`-template source with header
     `{"template": "report", "title": "<tag> example", "mode": "offline", "interactions": []}`, a
-    `main` slot holding the catalog example, and an `aside` slot only when the report template
-    requires one.
+    `main` slot holding the catalog example.
   - Both commands print one JSON object: `{"written": [paths]}`, or `{"stale": true|false}` for
     `--check`.
 

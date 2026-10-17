@@ -7,7 +7,6 @@ export interface ViewDef {
   label: string
   component: () => ReactElement
   summary?: ReactNode
-  aside?: ReactNode
 }
 
 export const views: ViewDef[] = [

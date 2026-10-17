@@ -834,3 +834,19 @@ def test_a_stalled_client_is_disconnected_within_the_handler_timeout(tmp_path: P
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_companion_screen_with_q_flow_in_content_inlines_flow_and_kit_and_passes(server: Server) -> None:
+    flow = (
+        '<q-flow summary="Orders flow from checkout to ledger.">'
+        '<script type="application/json">'
+        '{"nodes":[{"id":"a","label":"Checkout"},{"id":"b","label":"Ledger"}],'
+        '"edges":[{"from":"a","to":"b","label":"order.created"}]}'
+        "</script></q-flow>"
+    )
+    shown = server.show(screen_with(content=flow))
+    assert shown["checks"]["passed"] is True, shown["checks"]
+    page = (server.session / "screens" / f"{shown['screen']}.html").read_text(encoding="utf-8")
+    assert 'data-quirk-lib="flow@0.12.0"' in page
+    assert 'data-quirk-lib="kit@1.0.0"' in page
+    assert "<summary>Graph as a list</summary>" in page

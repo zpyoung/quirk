@@ -149,16 +149,37 @@
               "kind": "css",
               "position": "head",
               "inline": true,
-              "sha256": "1e8282361a3fa936f9de8e49c6ba2d5df5509bb49c659c58f29c1495d1cbf7c8",
-              "inline_sha256": "1e8282361a3fa936f9de8e49c6ba2d5df5509bb49c659c58f29c1495d1cbf7c8"
+              "sha256": "4ecf831535a5185cf8c0b81fd783efe7a1fcca34fb3a18addfb68d00d8e2ed4c",
+              "inline_sha256": "4ecf831535a5185cf8c0b81fd783efe7a1fcca34fb3a18addfb68d00d8e2ed4c"
             },
             {
               "path": "kit.js",
               "kind": "js",
               "position": "body-end",
               "inline": true,
-              "sha256": "41d090af9adc40deddbd8c2a9b8f23e4ba53e6d20ba1997e5282962996d18fda",
-              "inline_sha256": "41d090af9adc40deddbd8c2a9b8f23e4ba53e6d20ba1997e5282962996d18fda"
+              "sha256": "594795de7d1a243b739bc1c8d238433808c017eb27c9a985d80db1ec9442106e",
+              "inline_sha256": "594795de7d1a243b739bc1c8d238433808c017eb27c9a985d80db1ec9442106e"
+            }
+          ]
+        }
+      }
+    },
+    "flow": {
+      "current": "0.12.0",
+      "versions": {
+        "0.12.0": {
+          "package": "elkjs",
+          "license": "EPL-2.0 AND ISC",
+          "license_file": "LICENSE",
+          "source": "https://registry.npmjs.org/elkjs/-/elkjs-0.12.0.tgz",
+          "files": [
+            {
+              "path": "flow.bundle.js",
+              "kind": "js",
+              "position": "body-end",
+              "inline": true,
+              "sha256": "159744cecdc26c92a3a7ef9a50746ed7ec6e1572e7e62c2bb30a98b3b0ae46f7",
+              "inline_sha256": "159744cecdc26c92a3a7ef9a50746ed7ec6e1572e7e62c2bb30a98b3b0ae46f7"
             }
           ]
         }

@@ -13,9 +13,9 @@ Read after the [design reference](../../references/design-reference.md). These r
 
 | File | Role |
 |---|---|
-| `src/routes.tsx` | the `views` list: one `{path, label, component, summary, aside?}` per view; each becomes a tab and a hash route. Edit this first |
+| `src/routes.tsx` | the `views` list: one `{path, label, component, summary}` per view; each becomes a tab and a hash route. Edit this first |
 | `src/App.tsx` | page shell, view tabs, theme toggle and the router; renders each view inside `PageLayout`; rarely needs edits |
-| `src/PageLayout.tsx` | the region wrapper: summary, the section nav, the view as `main`, and the report aside, in the same DOM order and markup as a tier-1 page |
+| `src/PageLayout.tsx` | the region wrapper: summary, the section nav and the view as `main`, in the same DOM order and markup as a tier-1 page |
 | `src/theme.css` | imports `src/quirk-tokens.css` and `src/quirk-layout.css` and adds the `q-table-wrap` and `q-data-grid` classes |
 | `src/quirk-tokens.css` | the merged house, user, project and template tokens as `--q-*` variables for light and dark; every build rewrites it, so put brand changes in a tokens file, not here |
 | `src/quirk-layout.css` | a copy of the skill's shared page-shape stylesheet; every build rewrites it |
@@ -23,14 +23,14 @@ Read after the [design reference](../../references/design-reference.md). These r
 | `src/theme.ts` | `useThemeMode`, `setThemeMode`; the toggle shares the `quirk-theme` storage key with tier-1 pages |
 | `src/main.tsx` | mounts the app inside a `QueryClientProvider` |
 
-- **Never edit `quirk-layout.css` or `quirk-page.ts` by hand**, as with `quirk-tokens.css`. Change the shape with `--layout` or the `layout` field in `quirk-app.json`, then rebuild. The default is `report`.
+- **Never edit `quirk-layout.css` or `quirk-page.ts` by hand**, as with `quirk-tokens.css`. Change the shape with `--layout` or the `layout` field in `quirk-app.json`, then rebuild. The default is `explainer`.
 - The page `<h1>` is the `--title` you gave. Do not render another `<h1>`; start views at `Heading level={2}`.
 - Routing uses hash history so it works from `file://`. Keep views statically imported: no `React.lazy`, no route-level code splitting. The bundle is one chunk by design.
 - Shared state goes in the query cache (see `useFlags` in the example) or a context at the root. Do not keep it in a view that unmounts when the tab changes.
 
 ## Page shape
 
-- Every view needs a `summary` in `routes.tsx`: the JSX that fills the shape's summary region (the table in section 8 of the [design reference](../../references/design-reference.md)). `PageLayout` places it, so do not render it again inside the view. Pass `aside` only on a `report` app; any other shape ignores it.
+- Every view needs a `summary` in `routes.tsx`: the JSX that fills the shape's summary region (the table in section 8 of the [design reference](../../references/design-reference.md)). `PageLayout` places it, so do not render it again inside the view.
 - The view's own component is the `main` region. `PageLayout` builds the section nav from its rendered h2 and h3 headings at run time, with the same rules as a tier-1 page: at 5 or more h2s, and always on `reference`. Headings inside `q-panel`, `q-compare`, `q-tabs` and `q-board` are not listed.
 - Arrange content with `q-grid`, `q-panel`, `q-sidenote` and `q-compare` from [components](../../references/components.md), written in JSX. Do not write `display: grid`, `grid-template-*` or a fixed width in a `.css` file or a `style={{...}}` object under `src/`: the layout check runs over those sources on every build, fails the build (exit 1) and names the file and line.
 - Rename nothing in `theme.css`: the scaffold's table class is `q-data-grid`, so `q-grid` always means the layout element.
@@ -50,9 +50,9 @@ Read after the [design reference](../../references/design-reference.md). These r
 
 ## Kit elements
 
-- Write `q-*` elements (`q-chart`, `q-stat`, `q-table`, `q-tabs`, `q-board` and the rest) in a view's JSX and the build inlines the kit, and Chart.js for `q-chart`. The attributes and markup each one takes are in [the component reference](../../references/components.md); the build's `kit` check fails an unknown tag, a missing required attribute or a bad literal value, naming the `src/` file and line.
+- Write `q-*` elements (`q-chart`, `q-stat`, `q-table`, `q-tabs`, `q-board`, `q-flow` and the rest) in a view's JSX and the build inlines the kit, Chart.js for `q-chart`, and the flow layout library for `q-flow`. The attributes and markup each one takes are in [the component reference](../../references/components.md); the build's `kit` check fails an unknown tag, a missing required attribute or a bad literal value, naming the `src/` file and line.
 - Use `className`, not `class`.
-- Keep a `q-*` element's direct children stable. Change rows or attributes, or give the element a `key` to remount it, because the element builds its own DOM from those children.
+- Keep a `q-*` element's direct children stable. Change rows or attributes, or give the element a `key` to remount it, because the element builds its own DOM from those children. For `q-flow`, pass the JSON child as `<script type="application/json">{JSON.stringify(graph)}</script>` and reuse the same `kinds` names and chart colors across views.
 - Never let React re-render `q-board` cards: the board owns card placement and saves it.
 
 ## Modes and network

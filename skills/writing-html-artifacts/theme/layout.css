@@ -1,4 +1,4 @@
-/* Page-shape geometry: placement of the summary, nav, main and aside regions for every layout, and print rules. */
+/* Page-shape geometry: placement of the summary, nav and main regions for every layout, and print rules. */
 
 /* Width caps and the page wrapper. Low specificity so a custom skeleton's own .q-wrap still wins. */
 
@@ -13,7 +13,6 @@
   max-width: none;
 }
 
-.q-wrap[data-layout="report"],
 .q-wrap[data-layout="explainer"],
 .q-wrap[data-layout="longform"],
 .q-wrap[data-layout="tool"],
@@ -47,10 +46,6 @@
 
 :where(.q-page > :is(main, .q-summary)) > :last-child {
   margin-bottom: 0;
-}
-
-:where(.q-page > :is(main, .q-summary)) :is(p, ul, ol, blockquote) {
-  max-width: 70ch;
 }
 
 .q-page > .q-summary {
@@ -123,21 +118,7 @@
   display: none;
 }
 
-/* Report aside and the tool's result keep Simple.css's floated aside and section looks out of the grid. */
-
-.q-page > aside {
-  float: none;
-  width: auto;
-  box-sizing: border-box;
-  margin: 0;
-  padding: var(--q-space-3) var(--q-space-4);
-  font-size: var(--q-size-small);
-}
-
-.q-page > aside h2 {
-  margin-top: var(--q-space-2);
-  font-size: var(--q-size-h4);
-}
+/* The tool's result keeps Simple.css's section look out of the grid. */
 
 .q-page[data-layout="tool"] > .q-summary {
   box-sizing: border-box;
@@ -147,23 +128,9 @@
   background: var(--q-color-surface);
 }
 
-/* Aside beside main, and the tool's result beside its inputs, from 900px. */
+/* The tool's result beside its inputs from 900px. */
 
 @media (min-width: 900px) {
-  :where(.q-page[data-layout="report"]:has(> main):has(> aside)) {
-    grid-template-columns: minmax(0, 1fr) 18rem;
-    grid-template-areas:
-      "summary summary"
-      "main aside";
-  }
-
-  :where(.q-page[data-layout="report"]:has(> main):has(> aside):has(> .q-nav)) {
-    grid-template-areas:
-      "summary summary"
-      "nav nav"
-      "main aside";
-  }
-
   :where(.q-page[data-layout="tool"]:has(> main)) {
     grid-template-columns: minmax(0, 1fr) 22rem;
     grid-template-areas: "main summary";
@@ -182,25 +149,16 @@
       "nav main";
   }
 
-  :where(.q-page:has(> main):is([data-layout="report"]:has(> aside), [data-layout="tool"], [data-layout="reference"]:has(> .q-nav))) > .q-summary {
+  :where(.q-page:has(> main):is([data-layout="tool"], [data-layout="reference"]:has(> .q-nav))) > .q-summary {
     grid-area: summary;
   }
 
-  :where(.q-page:has(> main):is([data-layout="report"]:has(> aside), [data-layout="tool"], [data-layout="reference"]:has(> .q-nav))) > main {
+  :where(.q-page:has(> main):is([data-layout="tool"], [data-layout="reference"]:has(> .q-nav))) > main {
     grid-area: main;
   }
 
-  :where(.q-page:has(> main):is([data-layout="report"]:has(> aside), [data-layout="tool"], [data-layout="reference"]:has(> .q-nav))) > .q-nav {
+  :where(.q-page:has(> main):is([data-layout="tool"], [data-layout="reference"]:has(> .q-nav))) > .q-nav {
     grid-area: nav;
-  }
-
-  :where(.q-page[data-layout="report"]:has(> main) > aside) {
-    grid-area: aside;
-    position: sticky;
-    top: var(--q-space-4);
-    align-self: start;
-    max-height: calc(100vh - 2 * var(--q-space-4));
-    overflow-y: auto;
   }
 
   :where(.q-page[data-layout="tool"]:has(> main) > .q-summary) {
@@ -237,7 +195,7 @@
   }
 }
 
-/* Nav rail on the left, sticky with its own scroll, and longform's margin column, from 1100px. */
+/* Nav rail on the left, sticky with its own scroll, from 1100px. */
 
 @media (min-width: 1100px) {
   .q-page:has(> main) .q-nav-rail {
@@ -275,29 +233,15 @@
     grid-area: main;
   }
 
-  :where(.q-page[data-layout="report"]:has(> main):has(> aside):has(> .q-nav)) {
-    grid-template-columns: 14rem minmax(0, 1fr) 18rem;
-    grid-template-areas:
-      "nav summary summary"
-      "nav main aside";
-  }
-
   :where(.q-page[data-layout="tool"]:has(> main):has(> .q-nav)) {
     grid-template-columns: 14rem minmax(0, 1fr) 22rem;
     grid-template-areas: "nav main summary";
   }
-
-  :where(.q-page[data-layout="longform"]:has(> main) > main) {
-    box-sizing: content-box;
-    max-width: 70ch;
-    padding-inline-end: 17rem;
-  }
 }
 
-/* A q-compare widens past its column only where the column is centred on the page; beside a rail, aside, result or margin column it stays in its column and scrolls in its own box. */
+/* A q-compare widens past its column only where the column is centred on the page; beside a rail or result it stays in its column and scrolls in its own box. */
 
 @media (min-width: 900px) {
-  .q-page[data-layout="report"]:has(> main):has(> aside) q-compare,
   .q-page[data-layout="tool"]:has(> main) q-compare,
   .q-page[data-layout="reference"]:has(> main):has(> .q-nav) q-compare {
     position: static;
@@ -310,8 +254,7 @@
 }
 
 @media (min-width: 1100px) {
-  .q-page:has(> main):has(> .q-nav) q-compare,
-  .q-page[data-layout="longform"]:has(> main) q-compare {
+  .q-page:has(> main):has(> .q-nav) q-compare {
     position: static;
     left: auto;
     width: auto;

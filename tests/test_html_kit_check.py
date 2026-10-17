@@ -992,3 +992,100 @@ def test_implied_ends_for_lists_and_tables_match_the_html_rules() -> None:
     assert messages("<q-code><dl><dt>a<dd>b<dt>c</dl><table><tr><td>1<td>2<tr><td>3</table></q-code>") == [
         "<q-code> needs one of: pre"
     ]
+
+
+# -- q-flow: rule flow-data and warnings (SC-3) -----------------------------------------------------
+
+
+def flow_markup(payload: dict, attrs: str = 'summary="Orders flow."') -> str:
+    return f'<q-flow {attrs}><script type="application/json">{json.dumps(payload)}</script></q-flow>'
+
+
+def warn_messages(text: str) -> list[str]:
+    return [w["detail"].split(": ", 1)[1] for w in kitcheck.check_html_warnings(text, CATALOG, label="page.html")]
+
+
+def test_flow_valid_graph_passes_with_no_warnings() -> None:
+    payload = {
+        "kinds": {"ui": 1, "worker": 2},
+        "groups": [{"id": "billing", "label": "Billing"}],
+        "nodes": [
+            {"id": "checkout", "label": "Checkout", "kind": "ui"},
+            {"id": "charge", "label": "Charge worker", "kind": "worker", "group": "billing", "detail": "<p>Retries 3x.</p>"},
+        ],
+        "edges": [{"from": "checkout", "to": "charge", "label": "order.created", "async": True}],
+    }
+    assert messages(flow_markup(payload)) == []
+    assert warn_messages(flow_markup(payload)) == []
+
+
+def test_flow_missing_summary_and_duplicate_id_and_unknown_edge_node() -> None:
+    assert messages('<q-flow><script type="application/json">{"nodes":[{"id":"a","label":"A"}]}</script></q-flow>') == [
+        "<q-flow> needs attribute summary"
+    ]
+    dup = {"nodes": [{"id": "charge", "label": "Charge"}, {"id": "charge", "label": "Charge 2"}]}
+    assert any('duplicate id "charge"' in m for m in messages(flow_markup(dup)))
+    unknown_edge = {"nodes": [{"id": "a", "label": "A"}], "edges": [{"from": "a", "to": "ledgr"}]}
+    assert any('edge points at unknown node "ledgr"' in m for m in messages(flow_markup(unknown_edge)))
+
+
+def test_flow_undeclared_kind_and_more_than_eight_kinds() -> None:
+    undeclared = {"kinds": {"ui": 1}, "nodes": [{"id": "a", "label": "A", "kind": "cache"}]}
+    assert any('undeclared kind "cache"' in m for m in messages(flow_markup(undeclared)))
+    nine_kinds = {
+        "kinds": {f"k{i}": min(i, 8) for i in range(1, 10)},
+        "nodes": [{"id": "a", "label": "A"}],
+    }
+    assert any("at most eight kinds, one per chart color" in m for m in messages(flow_markup(nine_kinds)))
+
+
+def test_flow_group_nesting_loop_and_lane_mode_membership() -> None:
+    self_loop = {
+        "groups": [{"id": "g1", "label": "G1", "parent": "g1"}],
+        "nodes": [{"id": "a", "label": "A", "group": "g1"}],
+    }
+    assert any("group nesting loops" in m for m in messages(flow_markup(self_loop)))
+    cycle = {
+        "groups": [{"id": "g1", "label": "G1", "parent": "g2"}, {"id": "g2", "label": "G2", "parent": "g1"}],
+        "nodes": [{"id": "a", "label": "A", "group": "g1"}],
+    }
+    assert any("group nesting loops" in m for m in messages(flow_markup(cycle)))
+    outside_lane = {
+        "groups": [{"id": "intake", "label": "Intake"}],
+        "nodes": [{"id": "a", "label": "A", "group": "intake"}, {"id": "b", "label": "B"}],
+    }
+    assert any(
+        "in lane mode every node belongs to a lane" in m
+        for m in messages(flow_markup(outside_lane, attrs='summary="s" groups="lanes"'))
+    )
+
+
+def test_flow_detail_rejects_scripts_forms_and_external_images() -> None:
+    for bad_detail in (
+        "<script>alert(1)</script>",
+        "<form><input></form>",
+        '<img src="https://example.com/x.png">',
+        '<p onclick="evil()">hi</p>',
+        '<a href="javascript:alert(1)">bad</a>',
+    ):
+        payload = {"nodes": [{"id": "a", "label": "A", "detail": bad_detail}]}
+        assert any("detail may hold only paragraphs, lists, code and links" in m for m in messages(flow_markup(payload))), bad_detail
+
+
+def test_flow_node_limits_and_edge_label_warning_and_coordinates_rejected() -> None:
+    warn_75 = {"nodes": [{"id": f"n{i}", "label": f"Node {i}"} for i in range(75)]}
+    assert messages(flow_markup(warn_75)) == []
+    assert any("large graphs read poorly, split into groups or several graphs" in w for w in warn_messages(flow_markup(warn_75)))
+
+    fail_210 = {"nodes": [{"id": f"n{i}", "label": f"Node {i}"} for i in range(210)]}
+    assert any("more than 200 nodes" in m for m in messages(flow_markup(fail_210)))
+
+    long_lbl = {
+        "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+        "edges": [{"from": "a", "to": "b", "label": "x" * 45}],
+    }
+    assert messages(flow_markup(long_lbl)) == []
+    assert any("edge labels over 30 characters crowd the layout" in w for w in warn_messages(flow_markup(long_lbl)))
+
+    with_coords = {"nodes": [{"id": "a", "label": "A", "x": 10, "y": 20}]}
+    assert any("positions are laid out automatically" in m for m in messages(flow_markup(with_coords)))

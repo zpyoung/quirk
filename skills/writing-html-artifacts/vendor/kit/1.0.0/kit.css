@@ -32,7 +32,7 @@
   display: none !important;
 }
 
-:where(q-tabs, q-timeline, q-code, q-chart, q-diff, q-grid, q-panel, q-compare) {
+:where(q-tabs, q-timeline, q-code, q-chart, q-diff, q-grid, q-panel, q-compare, q-flow) {
   display: block;
   min-width: 0;
   max-width: 100%;
@@ -519,8 +519,7 @@ q-diff :where([data-q-note]) {
   position: sticky;
   left: var(--q-space-2);
   box-sizing: border-box;
-  max-width: 44rem;
-  width: min(100cqw - 2 * var(--q-space-2), 44rem);
+  width: calc(100cqw - 2 * var(--q-space-2));
   color: var(--q-color-text);
   font-size: var(--q-size-body);
   line-height: var(--q-size-leading);
@@ -882,73 +881,57 @@ q-panel > h4 {
 
 /* q-sidenote */
 
-/* one counter for the page, or each paragraph's first note would restart at 1 */
-:where(body) {
-  counter-reset: q-sidenote;
-}
-
-:where(q-sidenote) {
-  counter-increment: q-sidenote;
-}
-
-q-sidenote {
+q-sidenote > :where([slot="note"]) {
   color: var(--q-color-text-muted);
   font-size: var(--q-size-small);
   line-height: var(--q-size-leading-tight);
 }
 
-q-sidenote::before { content: " ("; }
-q-sidenote::after { content: ")"; }
+q-sidenote > :where([slot="note"])::before { content: " ("; }
+q-sidenote > :where([slot="note"])::after { content: ")"; }
 
-q-sidenote:where([data-q-collapsed]) {
-  display: none;
+q-sidenote:where([data-q-ready]) {
+  position: relative;
+  border-radius: var(--q-radius-sm);
+  background: color-mix(in srgb, var(--q-color-accent) 14%, transparent);
+  box-shadow: inset 0 -1px 0 var(--q-color-accent);
+  cursor: help;
 }
 
-button:where([data-q-sidenote-toggle]) {
-  display: inline-block;
-  min-width: 24px;
-  min-height: 24px;
-  margin: 0 var(--q-space-1);
-  padding: 0 var(--q-space-1);
+q-sidenote:where([data-q-ready]) > :where([slot="note"]) {
+  position: absolute;
+  z-index: 20;
+  top: 100%;
+  left: 0;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: min(24rem, calc(100vw - 2 * var(--q-space-3)));
+  margin-top: var(--q-space-1);
+  padding: var(--q-space-2) var(--q-space-3);
   border: 1px solid var(--q-color-border);
-  border-radius: var(--q-radius-pill);
+  border-radius: var(--q-radius-md);
   background: var(--q-color-surface);
-  color: var(--q-color-accent);
-  font: inherit;
-  font-size: var(--q-size-small);
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-  vertical-align: baseline;
-  cursor: pointer;
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--q-color-text) 18%, transparent);
+  color: var(--q-color-text);
+  font-weight: 400;
+  white-space: normal;
+  cursor: auto;
 }
 
-button:where([data-q-sidenote-toggle][aria-expanded="true"]) {
-  background: var(--q-color-accent);
-  color: var(--q-color-bg);
+q-sidenote:where([data-q-ready]) > :where([slot="note"][data-q-above]) {
+  top: auto;
+  bottom: 100%;
+  margin-top: 0;
+  margin-bottom: var(--q-space-1);
 }
 
-@media (min-width: 1100px) {
-  :where([data-layout="longform"]) main q-sidenote {
-    display: block;
-    float: right;
-    clear: right;
-    box-sizing: border-box;
-    width: 16rem;
-    margin: 0 -17rem var(--q-space-3) 0;
-  }
+q-sidenote:where([data-q-ready]) > :where([slot="note"])::before,
+q-sidenote:where([data-q-ready]) > :where([slot="note"])::after {
+  content: none;
+}
 
-  :where([data-layout="longform"]) main q-sidenote::before {
-    content: counter(q-sidenote) ". ";
-    font-weight: 700;
-  }
-
-  :where([data-layout="longform"]) main q-sidenote::after {
-    content: none;
-  }
-
-  :where([data-layout="longform"]) main button:where([data-q-sidenote-toggle]) {
-    display: none;
-  }
+q-sidenote:where([data-q-ready]) > :where([slot="note"]:not([data-q-open])) {
+  display: none;
 }
 
 /* q-compare */
@@ -975,8 +958,9 @@ q-compare > table :is(th, td) {
   vertical-align: top;
 }
 
+/* a tint of the accent, because the header row already uses the surface colour */
 q-compare > table :is(th, td):where([data-q-recommended]) {
-  background: var(--q-color-surface);
+  background: color-mix(in srgb, var(--q-color-accent) 12%, var(--q-color-bg));
 }
 
 q-compare > table thead :is(th, td):where([data-q-recommended]) {
@@ -1059,6 +1043,249 @@ q-compare > :where([data-q-stack]) dd {
   }
 }
 
+/* q-flow */
+
+q-flow {
+  position: relative;
+  box-sizing: border-box;
+  margin: var(--q-space-4) 0;
+}
+
+q-flow:where([data-q-flow-expanded]) {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: var(--q-space-3);
+  background: var(--q-color-bg);
+  overflow: auto;
+}
+
+q-flow > :where([data-q-flow-stage]) {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 240px;
+  overflow: hidden;
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-md);
+  background: var(--q-color-bg);
+}
+
+q-flow:where([data-q-flow-expanded]) > :where([data-q-flow-stage]) {
+  flex: 1 1 auto;
+  height: auto !important;
+  max-height: none !important;
+}
+
+q-flow :where([data-q-flow-notice]) {
+  margin: 0;
+  padding: var(--q-space-4);
+  color: var(--q-color-text-muted);
+  font-size: var(--q-size-small);
+}
+
+q-flow :where([data-q-flow-svg]) {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: pan-x pan-y pinch-zoom;
+  user-select: none;
+}
+
+q-flow :where([data-q-flow-node]),
+q-flow :where([data-q-flow-group-header]) {
+  cursor: pointer;
+}
+
+q-flow :where([data-q-flow-node]:focus-visible) {
+  outline: none;
+}
+
+q-flow :where([data-q-flow-node]:focus-visible) > rect:where([data-q-flow-box]) {
+  stroke: var(--q-color-focus);
+  stroke-width: 2.5px;
+}
+
+q-flow :where([data-q-flow-node][data-q-flow-selected]) > rect:where([data-q-flow-box]) {
+  stroke: var(--q-color-accent);
+  stroke-width: 2px;
+}
+
+q-flow :where([data-q-flow-dim]) {
+  opacity: 0.22;
+}
+
+q-flow :where([data-q-flow-controls]) {
+  position: absolute;
+  top: var(--q-space-2);
+  left: var(--q-space-2);
+  z-index: 4;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--q-space-1);
+  padding: var(--q-space-1);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-md);
+  background: var(--q-color-surface);
+}
+
+q-flow :where([data-q-flow-controls]) > button {
+  margin: 0;
+  min-width: 34px;
+  min-height: 32px;
+  padding: var(--q-space-1) var(--q-space-2);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-sm);
+  background: var(--q-color-bg);
+  color: var(--q-color-text);
+  font: inherit;
+  font-size: var(--q-size-small);
+  line-height: 1;
+  cursor: pointer;
+}
+
+q-flow :where([data-q-flow-drawer]) {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  box-sizing: border-box;
+  width: min(20rem, 44%);
+  margin: 0;
+  float: none;
+  overflow-y: auto;
+  padding: var(--q-space-3) var(--q-space-4);
+  border: 0;
+  border-left: 1px solid var(--q-color-border);
+  background: var(--q-color-surface);
+  color: var(--q-color-text);
+  font-size: var(--q-size-small);
+  line-height: var(--q-size-leading);
+}
+
+q-flow :where([data-q-flow-drawer-head]) {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--q-space-2);
+  margin-bottom: var(--q-space-2);
+}
+
+q-flow :where([data-q-flow-drawer-head]) > h3 {
+  margin: 0;
+  font-size: var(--q-size-h4);
+  line-height: var(--q-size-leading-tight);
+}
+
+q-flow :where([data-q-flow-drawer-close]) {
+  margin: 0;
+  min-height: 30px;
+  padding: var(--q-space-1) var(--q-space-2);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-sm);
+  background: var(--q-color-bg);
+  color: var(--q-color-text);
+  font: inherit;
+  font-size: var(--q-size-small);
+  line-height: 1;
+  cursor: pointer;
+}
+
+q-flow :where([data-q-flow-drawer-kind]) {
+  display: inline-block;
+  margin: 0 0 var(--q-space-2);
+  padding: 2px var(--q-space-2);
+  border-left: 3px solid var(--q-flow-kind-color, var(--q-color-accent));
+  border-radius: var(--q-radius-sm);
+  background: var(--q-color-bg);
+  color: var(--q-color-text-muted);
+  font-size: var(--q-size-small);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+q-flow :where([data-q-flow-drawer-detail]) > :where(:first-child) {
+  margin-top: 0;
+}
+
+q-flow :where([data-q-flow-drawer-edges]) {
+  margin-top: var(--q-space-3);
+  padding-top: var(--q-space-2);
+  border-top: 1px solid var(--q-color-border);
+}
+
+q-flow :where([data-q-flow-drawer-edges]) > h4 {
+  margin: 0 0 var(--q-space-1);
+  color: var(--q-color-text-muted);
+  font-size: var(--q-size-small);
+  font-weight: 600;
+}
+
+q-flow :where([data-q-flow-drawer-edges]) > ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+q-flow :where([data-q-flow-drawer-edges]) > ul > li {
+  margin: 0 0 var(--q-space-1);
+}
+
+q-flow :where([data-q-flow-edge-btn]) {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--q-space-1);
+  width: 100%;
+  margin: 0;
+  padding: var(--q-space-1) var(--q-space-2);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-sm);
+  background: var(--q-color-bg);
+  color: var(--q-color-text);
+  font: inherit;
+  font-size: var(--q-size-small);
+  text-align: left;
+  cursor: pointer;
+}
+
+q-flow > details {
+  max-width: 100%;
+  margin-top: var(--q-space-2);
+}
+
+q-flow > details > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+@media (max-width: 700px) {
+  q-flow :where([data-q-flow-controls]) > button,
+  q-flow :where([data-q-flow-drawer-close]),
+  q-flow :where([data-q-flow-edge-btn]) {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  q-flow :where([data-q-flow-drawer]) {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    max-height: 55%;
+    border-left: 0;
+    border-top: 1px solid var(--q-color-border);
+    border-radius: var(--q-radius-md) var(--q-radius-md) 0 0;
+  }
+}
+
 @media print {
   q-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -1072,28 +1299,26 @@ q-compare > :where([data-q-stack]) dd {
     break-inside: avoid;
   }
 
-  q-sidenote,
-  :where([data-layout="longform"]) main q-sidenote {
+  q-sidenote:where([data-q-ready]) {
+    background: none;
+    box-shadow: none;
+  }
+
+  q-sidenote > [slot="note"] {
     display: inline;
-    float: none;
+    position: static;
     width: auto;
+    max-width: none;
     margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    box-shadow: none;
+    color: var(--q-color-text-muted);
   }
 
-  q-sidenote::before,
-  :where([data-layout="longform"]) main q-sidenote::before {
-    content: " (";
-    font-weight: inherit;
-  }
-
-  q-sidenote::after,
-  :where([data-layout="longform"]) main q-sidenote::after {
-    content: ")";
-  }
-
-  button:where([data-q-sidenote-toggle]) {
-    display: none;
-  }
+  q-sidenote > [slot="note"]::before { content: " ("; }
+  q-sidenote > [slot="note"]::after { content: ")"; }
 
   q-compare {
     position: static;
@@ -1113,5 +1338,10 @@ q-compare > :where([data-q-stack]) dd {
 
   q-compare > :where([data-q-stack]) > :where([data-q-option]) {
     break-inside: avoid;
+  }
+
+  q-flow [data-q-flow-controls],
+  q-flow [data-q-flow-drawer] {
+    display: none;
   }
 }

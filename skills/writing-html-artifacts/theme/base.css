@@ -79,6 +79,11 @@ h2 { font-size: var(--q-size-h2); }
 h3 { font-size: var(--q-size-h3); }
 h4 { font-size: var(--q-size-h4); }
 
+/* only inline code: Simple.css also paints "pre span" with --code, which would recolor plain spans in code blocks */
+:not(pre, a) > code {
+  color: var(--q-color-syntax-keyword);
+}
+
 small {
   font-size: var(--q-size-small);
 }

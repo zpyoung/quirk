@@ -5,14 +5,14 @@ Read after the [design reference](../../references/design-reference.md). These r
 ## Layout
 
 - The skeleton gives you the page: a masthead with the theme toggle and the `<h1>` (from `title`), then the page shape you named. Do not write an `<h1>` or a second theme toggle in a slot.
-- Name the shape in the header's `layout` field. All seven work in this template; the one-per-shape examples are in `examples/<shape>.src.html`, and widths and breakpoints are in section 8 of the design reference.
-- **`summary` is required.** Write a `<!-- slot: summary -->` slot that holds what the shape's summary is (the table in the [design reference](../../references/design-reference.md) section 8). For `report` that is the conclusion paragraph (`class="q-lede"`). It is the first thing after the `<h1>`; do not repeat it as the first paragraph of `main`.
+- Name the shape in the header's `layout` field. All six work in this template; the one-per-shape examples are in `examples/<shape>.src.html`, and widths and breakpoints are in section 8 of the design reference.
+- **`summary` is required.** Write a `<!-- slot: summary -->` slot that holds what the shape's summary is (the table in the [design reference](../../references/design-reference.md) section 8). For `explainer` that is the conclusion paragraph (`class="q-lede"`). It is the first thing after the `<h1>`; do not repeat it as the first paragraph of `main`.
 - `main` holds the body. Open with a line for the data source or date (`class="q-meta"`), then a "Findings" section of 3 to 5 one-sentence facts, then the evidence. Other shapes follow their own examples.
 - Do not write grid or fixed-width CSS in a slot. Use `q-grid`, `q-panel`, `q-sidenote` or `q-compare` from [components](../../references/components.md); the layout check fails hand-written layout CSS.
 - The section nav is generated. Do not write a table of contents.
 - Wrap each section in `<section aria-labelledby="...">` with an `<h2>`. Sections are separated by spacing, not boxes.
-- `aside` is optional and for the `report` shape only; any other shape with an `aside` slot fails the build. When you use it, the slot content is the whole element: `<aside aria-label="About these numbers">`. At 900px and up it sits right of `main` and stays in view as the reader scrolls, so keep it shorter than one screen; below that it follows `main`. Use it for definitions and caveats, not for navigation.
-- Prose is capped at 70ch by the skeleton. Tables, charts, code, diffs and boards fill the column.
+- Put definitions and caveats, such as how the numbers were counted, in a last section of `main`. No shape has a side column for them.
+- Prose, tables, charts, code, diffs and boards fill the column.
 
 ## Helper classes the skeleton defines
 
@@ -26,8 +26,8 @@ Read after the [design reference](../../references/design-reference.md). These r
 
 ## Charts and tables
 
-- Bar, line and area charts use `<q-chart>`, and sortable tables use `<q-table>`. Attributes and examples are in [components](../../references/components.md); the element supplies the accessible label, the table view and the theme rebuild.
-- Mermaid diagrams go in a `q-chart` wrapper with a text description beside them.
+- Bar, line and area charts use `<q-chart>`, sortable tables use `<q-table>`, and explorable graphs of services, pipelines or data flows use `<q-flow>`. Attributes and examples are in [components](../../references/components.md); the element supplies the accessible label, the fallback view and the theme rebuild. Reuse the same `kinds` names and `--q-color-chart-*` numbers across artifacts.
+- Mermaid diagrams go in a `q-chart` wrapper with a text description beside them; use Mermaid for static pictures, sequence diagrams and state charts, and `<q-flow>` when the reader will pan, zoom or click through paths and node details.
 - Scatter and histogram charts stay hand-written Chart.js, under section 9 of the design reference.
 
 ## Scripts and data

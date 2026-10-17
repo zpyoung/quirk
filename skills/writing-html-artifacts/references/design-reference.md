@@ -48,7 +48,7 @@ These are the marks of a default model-generated page. Each has a replacement. *
 | Full-bleed gradient hero | a plain header: h1, one-sentence lede, the summary |
 | Emoji section headers | text headings; an inline SVG with `<title>` only if the icon carries meaning |
 | Glassmorphism (blur, translucent panels) | opaque `--q-color-surface` |
-| Everything centered | left-aligned text at a 60-75ch measure; center only a single short title or an empty state |
+| Everything centered | left-aligned text; center only a single short title or an empty state |
 | Four-stat hero row on a page that is not a dashboard | state the one number that matters in a sentence; put the rest in a table |
 | Decorative icon dividers | a `<hr>` or whitespace |
 | One radius on every element | the radius scale in section 7: `sm` for controls, `md` for panels, `pill` for tags |
@@ -91,7 +91,7 @@ Rules for using them:
 ## 5. Type
 
 - Body text is 16 to 18px (`--q-size-body`), line-height 1.5 to 1.6.
-- Measure is 60 to 75ch. Cap prose at `max-width: 70ch`; tables and charts may run wider.
+- Prose fills its column. Do not cap it with `max-width`; the page's 1440px cap and the shape's columns set the line length.
 - Use one scale ratio, 1.25 or 1.333, for headings. Use the `--q-size-h1` to `--q-size-h4` tokens and do not add a fifth heading size.
 - `--q-size-small` is for captions, table footers, and metadata only. It is not a way to fit more text.
 - Numbers in tables, stat readouts, and anything that updates: `font-variant-numeric: tabular-nums`.
@@ -127,9 +127,8 @@ Pick the shape from the direction brief, write it in the source header's `layout
 
 | Shape | Use when | Summary slot holds | At desktop width |
 |---|---|---|---|
-| `report` | findings and evidence | the answer or findings under the h1 | one column; optional sticky aside on the right from 900px |
-| `explainer` | a how-it-works page or write-up | the answer or findings under the h1 | prose with full-width figures, tables and code |
-| `longform` | long prose with margin notes | the answer or findings under the h1 | prose in the left 70ch, `q-sidenote` notes in a right margin from 1100px |
+| `explainer` | findings with their evidence, or a how-it-works page or write-up | the answer or findings under the h1 | one column of prose with full-width figures, charts, tables and code |
+| `longform` | long prose with notes on its phrases | the answer or findings under the h1 | prose fills the column; `q-sidenote` phrases are highlighted and open their note on hover |
 | `tool` | a calculator, estimator or converter | the live result, in an `aria-live` region | inputs on the left, the result beside them from 900px, sticky |
 | `comparison` | picking between options | the recommendation line: the pick and the one reason | `q-compare` with options as columns and criteria as rows |
 | `dashboard` | status and metrics | the headline metric, top left, with its unit and comparison period | fluid width; a `q-grid` of titled `q-panel` items |
@@ -137,16 +136,15 @@ Pick the shape from the direction brief, write it in the source header's `layout
 
 Widths and breakpoints, measured on the viewport:
 
-- **Width cap.** Page content is at most 1440px and centered, in every shape except `dashboard`, which is fluid. A `q-compare` may widen past 1440px when its options do not fit and nothing sits beside the column; next to a nav rail, aside, pane or margin column it scrolls inside its own box instead.
-- **Prose** (`p`, `ul`, `ol`, `blockquote` in `main`) is capped at 70ch in every shape. Tables, charts, code, diffs and boards fill the column. On `longform`, `main` including figures stays within 70ch so margin notes never overlap it.
+- **Width cap.** Page content is at most 1440px and centered, in every shape except `dashboard`, which is fluid. A `q-compare` may widen past 1440px when its options do not fit and nothing sits beside the column; next to a nav rail or pane it scrolls inside its own box instead.
+- **Prose** fills its column in every shape, the summary included, as do tables, charts, graphs, code, diffs and boards.
 - **Nav rail.** From 1100px the generated section nav is a sticky rail on the left that scrolls on its own when it is taller than the screen. Below 1100px it is a collapsed "On this page" menu ahead of `main`. It appears at 5 or more h2 sections, and always on `reference`, where it is the left pane from 900px and a collapsed "Sections" menu below that. A `"nav"` header field of `on` or `off` overrides the h2 count.
-- **Report aside.** From 900px the aside sits right of `main` and stays in view. Keep it shorter than one screen. Below 900px it follows `main`.
 - **Tool.** From 900px the result sits beside the inputs. Below that it sits directly under them.
-- **Longform margin.** From 1100px `q-sidenote` notes sit in the right margin. Below that each is a numbered toggle that opens the note in place.
+- **Notes.** A `q-sidenote` highlights its words at every width; the note opens below them on hover or keyboard focus, and a tap keeps it open.
 - **Dashboard columns.** A `q-grid` is 1 column at 700px and below, 2 columns from 701px, 4 from 1100px and 6 from 1800px.
 - **Comparison on a phone.** `q-compare` becomes one block per option at 700px and below, the recommended one first.
 - **Phone.** At 375px every shape is one column in DOM order and does not scroll horizontally.
-- **Print.** One column in DOM order: the nav as a plain list after the summary, aside and notes inline, masthead controls hidden.
+- **Print.** One column in DOM order: the nav as a plain list after the summary, notes inline, masthead controls hidden.
 
 Notes that apply to every shape:
 
@@ -154,7 +152,7 @@ Notes that apply to every shape:
 - Put the date or data source under the h1 in `--q-size-small`.
 - Do not center the whole layout. The stylesheet centers the container; left-align its contents.
 - Tables that are wider than the screen scroll inside their own `overflow-x: auto` wrapper, never the page.
-- Sticky headers only when the page is longer than three screens. The sticky rail, aside and result are the exception; each stays shorter than one screen or scrolls on its own.
+- Sticky headers only when the page is longer than three screens. The sticky rail and result are the exception; each stays shorter than one screen or scrolls on its own.
 
 ## 9. Tables and data visualization
 
@@ -197,14 +195,26 @@ Scatter and histogram charts stay hand-written Chart.js, so they need these by h
 - Colors read from the page's custom properties with `getComputedStyle`, and the chart rebuilt on the `quirk-theme` event (fired on `document`, `detail: {mode, effective}`). Re-read the properties inside the handler.
 - When it reads data through `window.quirkData()`, `window.quirkData.onChange(callback)` re-renders it after the viewer picks a different file.
 
+### Diagrams and graphs
+
+- Reach for `<q-flow>` when the reader will explore a graph: follow an upstream and downstream path through a system, open a node to read its detail, or focus one subsystem group. Reach for Mermaid when a static picture does the job, for sequence diagrams and state charts, and inside Markdown documents.
+- Never write coordinates in `<q-flow>`; pass `kinds`, `groups`, `nodes` and `edges` as JSON data and let the element lay the graph out and build its "Graph as a list" disclosure.
+- Reuse the same `kinds` names and `--q-color-chart-*` numbers (1 to 8) across artifacts (for example `ui`: 1, `worker`: 2, `database`: 3, `queue`: 4) so node categories keep the same color from page to page.
 ## 10. Interaction and motion
 
 - Every interaction you build is declared in the source file's `interactions` list, because verify and the delivery note refer to it.
 - Prefer native behavior: `<details>`, `<dialog>`, form controls, `:target`, CSS `:has()`. Reach for Alpine only for state those cannot hold.
+- Build your own element when the content needs one that neither native HTML nor [components](components.md) has, such as a step-through of an algorithm or a clickable state diagram. Do not bend a kit element into a job it was not made for. Your element must follow these rules:
+  - Its name does not start with `q-`. That prefix belongs to the kit, and the kit check fails any `q-` tag it does not know.
+  - Colors, spacing, type and radii come from the `--q-*` tokens, so it switches with the theme.
+  - It renders in the light DOM. The static checks read the page's HTML, and they cannot see inside a shadow root.
+  - It lays out its own contents, not the page. Grid is allowed on the element and inside it: in a rule whose selector ends on the element or reaches into it with a descendant or child combinator, or in a `style=""` on the element or anything inside it. Floats, columns and any width of 400px or 25rem or more still fail the layout check there. A name starting with `q-` or `wa-` belongs to a library and gets no grid exemption. Put the element in a `q-grid` or `q-panel` to sit it beside other content.
+  - Its script and styles are inline in the source, like everything else on an offline page.
+  - It meets section 11, and anything it lets the reader do goes in the `interactions` list.
 - A readout that changes because of an input updates in place and is announced; see section 11.
-- At most one orchestrated moment per page: a single entrance for the summary, or one transition when a view changes. No scroll-jacking, parallax, staggered card reveals, or looping animation.
-- Motion lasts 150 to 250ms, uses `ease-out`, and animates only `opacity` and `transform`.
-- Wrap all motion in `@media (prefers-reduced-motion: no-preference)`, so the default is none. Do not animate on reduced motion.
+- At most one orchestrated moment per page: a single entrance for the summary, or one transition when a view changes. No scroll-jacking, parallax, staggered card reveals, or ambient looping animation. The one exception is `<q-flow>`'s traveling pulse along a focused node's path, which loops only while a node is focused and stops as soon as focus clears.
+- Motion lasts 150 to 250ms, uses `ease-out`, and animates only `opacity` and `transform` (plus `<q-flow>`'s SVG pulse mask while a node is focused).
+- Wrap all motion in `@media (prefers-reduced-motion: no-preference)`, so the default is none. Do not animate on reduced motion; `<q-flow>` shows a thicker static line with arrowheads instead.
 - Hover is never the only way to reach something. Touch and keyboard users get the same content.
 - Controls show a state for hover, focus, active, and disabled. A disabled control says why nearby.
 - State that matters (a filter, a selected tab) is reflected in the URL hash only if the user will share the page; otherwise keep it in memory.

@@ -2,14 +2,13 @@
 
 **Status**: Approved by the user, 2026-10-15 · Tech spec: [tech.md](tech.md) (gate fired: requested by the user; crosses the build, kit, companion and tier-2 subsystems)
 
-Pages built by `writing-html-artifacts` get one of seven named shapes, chosen by a `layout` field
-that works on every template. Today every tier-1 page is a single column with an optional right
-aside, so dense content gets squeezed and runbooks, references and long write-ups have nowhere that
+Pages built by `writing-html-artifacts` get one of six named shapes, chosen by a `layout` field
+that works on every template. Today every tier-1 page is a single column, so dense content gets squeezed and runbooks, references and long write-ups have nowhere that
 fits. Section 8 of the design reference describes recipes no skeleton builds, so agents either
 ignore them or hand-write grid CSS that varies page to page and overflows on phones.
 
-This spec builds on the uncommitted 1440px baseline in the worktree (both skeletons at 1440px, a
-sticky report aside, section 8 widths raised). That work is committed on its own before this change
+This spec builds on the uncommitted 1440px baseline in the worktree (both skeletons at 1440px,
+section 8 widths raised). That work is committed on its own before this change
 starts. The skill itself is specified in
 [the writing-html-artifacts logic spec](../2026-10-13-writing-html-artifacts/logic.md), and the kit
 this extends in [the component kit logic spec](../2026-10-14-html-component-kit/logic.md).
@@ -20,9 +19,8 @@ A **shape** is a named page arrangement, and every page has exactly one:
 
 | Shape | For |
 |---|---|
-| `report` | findings and evidence; today's page |
-| `explainer` | how-it-works pages and write-ups |
-| `longform` | long prose with margin notes |
+| `explainer` | findings with their evidence, and how-it-works write-ups read top to bottom; the default |
+| `longform` | long prose with notes on its phrases |
 | `tool` | calculators, estimators, converters |
 | `comparison` | picking between options |
 | `dashboard` | status and metrics |
@@ -32,10 +30,9 @@ Every shape is made of the same **regions**, and the build places them per shape
 
 | Region | Written by | Placement |
 |---|---|---|
-| `summary` (required) | the agent, in a `summary` slot | report, explainer, longform: the answer or findings under the h1. comparison: the recommendation line above the table. tool: the live result beside the inputs. dashboard: the headline metric, top-left. reference: a one-line purpose under the h1 |
+| `summary` (required) | the agent, in a `summary` slot | explainer, longform: the answer or findings under the h1. comparison: the recommendation line above the table. tool: the live result beside the inputs. dashboard: the headline metric, top-left. reference: a one-line purpose under the h1 |
 | `main` (required) | the agent | the body |
 | `nav` | the build, from the page's h2 and h3 headings | a sticky left rail. It appears at 5 or more h2 sections, and always on `reference`, where it is the left pane |
-| `aside` (optional) | the agent | sticky on the right, report only, as today |
 
 Inside `main` the agent arranges content with four new kit elements. They are light-DOM elements
 styled by CSS attribute selectors, so their geometry never waits on a script:
@@ -44,7 +41,7 @@ styled by CSS attribute selectors, so their geometry never waits on a script:
   on phones.
 - **`q-panel`** is a titled box for one dashboard item. A panel without a title fails the build.
   Charts and tables inside it already carry their table view.
-- **`q-sidenote`** is a margin note. On `longform` at wide widths it sits in the right margin.
+- **`q-sidenote`** highlights a phrase and opens its note on hover or focus.
   Narrower, it becomes a small numbered toggle in the text that opens the note in place. In print it
   is inline.
 - **`q-compare`** is the comparison table: options as columns, criteria as rows. On phones it becomes
@@ -63,7 +60,7 @@ template.
    Before building, it names the template, its level, the tier and the layout, so the user can
    override any of them.
 2. **Authoring.** The agent writes `"layout": "<shape>"` in the source header, a `summary` slot and a
-   `main` slot (plus `aside` on a report). The companion's `screen.json` and the tier-2 app's
+   `main` slot. The companion's `screen.json` and the tier-2 app's
    `quirk-app.json` take the same field.
 3. **Building.** The build checks the layout name and that `summary` is present. It generates the nav
    when the page qualifies, emits the regions in the shape's own DOM order (nav before main on
@@ -71,18 +68,19 @@ template.
    page with the shape, and inlines the layout stylesheet. It records the layout in the built page's
    header, as it does library versions.
 4. **Rebuilding.** A rebuild uses the source's `layout` field, then the layout recorded in the built
-   page's header. A page built before this change has neither and rebuilds as `report`, unchanged.
+   page's header. A page built before this change has neither and rebuilds as `explainer`, unchanged.
 5. **Checking.** The kit check covers the four new elements. A new layout check fails the build when
    the page's own CSS sets layout by hand (grid templates, fixed widths) and names the kit element to
-   use instead.
+   use instead. Grid on and inside an element the page defines itself passes, because it arranges that
+   element's contents rather than the page.
 6. **Verifying.** Verify runs at 375px and 1280px as today.
 7. **Tier 2.** The app scaffold gets a layout component that emits the same regions and uses the same
    stylesheet, so an app page and a tier-1 page of the same shape look alike.
 
 ## Key decisions and rationale
 
-- **One `layout` field on every template, not a template per shape.** Seven shapes across four
-  templates stays one switch instead of 28 templates, and branded custom templates get every shape
+- **One `layout` field on every template, not a template per shape.** Six shapes across four
+  templates stays one switch instead of 24 templates, and branded custom templates get every shape
   for free.
 - **The build emits the regions; one stylesheet places them.** Tab order and screen readers follow
   the DOM, not the visual grid, and some shapes need the nav before main while others need it after.
@@ -108,9 +106,8 @@ template.
 
 | Shape | Desktop (1280px and up) | Phone (375px) | Print |
 |---|---|---|---|
-| `report` | 1440px column, prose at 70ch, sticky aside on the right from 900px | aside follows main | one column, aside inline |
-| `explainer` | summary, then prose with full-width figures; nav rail on the left at 5+ h2s | an "On this page" menu under the summary | nav as a list under the summary |
-| `longform` | as explainer, plus `q-sidenote`s in the right margin | notes become numbered toggles in the text | notes inline |
+| `explainer` | summary (the answer or findings), then prose, metrics, charts and tables at full width; nav rail on the left at 5+ h2s | an "On this page" menu under the summary | nav as a list under the summary |
+| `longform` | as explainer, plus `q-sidenote` phrases highlighted, each note opening on hover or focus | a tap opens a note | notes inline |
 | `tool` | inputs on the left, the result (summary) beside them from 900px, inside 1440px | result directly below the inputs | one column |
 | `comparison` | recommendation line, then `q-compare`; 1440px unless the options do not fit | one stacked block per option, recommended first | one column of blocks |
 | `dashboard` | fluid width; headline metric top-left; `q-grid` of titled panels, 4 across up to about 1800px, then 5 or 6 | panels stack | one column |
@@ -129,18 +126,20 @@ light, whatever theme the reader has on, with the theme toggle and data picker h
 
 ### Edge cases
 
-- **Unknown layout name:** the build exits 2 and lists the seven shapes.
+- **Unknown layout name:** the build exits 2 and lists the six shapes. `report` is not a shape, so `layout: report` fails the same way.
 - **No `summary` slot:** the build fails and says where the summary goes for that shape.
 - **A `q-panel` without a title:** the kit check fails.
 - **`grid-template-columns` or a fixed width in the page's own `<style>`:** the layout check fails and
   names `q-grid`.
 - **An explainer with 4 h2 sections:** no nav unless the header forces it.
 - **A comparison with more options than fit at 1440px:** the table widens past 1440px instead of
-  scrolling sideways. When a nav rail, aside, pane or margin sits beside the content, it scrolls
+  scrolling sideways. When a nav rail or pane sits beside the content, it scrolls
   inside its own box instead; the page itself never scrolls sideways.
 - **A dashboard on a 2560px screen:** 5 or 6 panels across.
 - **A source with no `layout` field and no built page:** the agent was expected to name one; the build
-  uses `report` and the delivery note says so.
+  uses `explainer` and the delivery note says so.
+- **A source with an `aside` slot:** the build fails, because no shape declares one. Caveats and notes on
+  how numbers were counted go in `main` as a final section.
 - **A custom project template:** every shape works through the shared stylesheet with no change to the
   template.
 
@@ -148,7 +147,7 @@ light, whatever theme the reader has on, with the theme toggle and data picker h
 
 In scope, shipped as one change:
 
-- the seven shapes, the `layout` field, inference and the announcement
+- the six shapes, the `layout` field, inference and the announcement
 - the required summary slot and the generated nav
 - the shared layout stylesheet and the four kit elements
 - the layout check
@@ -172,8 +171,8 @@ Not in scope:
 ## Decisions Locked
 
 **Page shapes**
-- Build explainer, tool, comparison and dashboard for real, alongside report.
-- Add two new shapes: a two-pane reference and long-form with margin notes.
+- Six shapes: explainer, longform, tool, comparison, dashboard and reference. Explainer covers findings
+  with evidence and how-it-works write-ups, and is the default.
 - Every template gets the shapes: report, components, companion and the tier-2 app.
 - Each shape has a required summary slot that the skeleton places.
 
@@ -187,7 +186,7 @@ Not in scope:
 **Responsive behavior**
 - Comparison on a phone: one stacked block per option.
 - Reference on a phone: a collapsed "Sections" menu at the top.
-- Margin notes when narrow: numbered toggles in the text.
+- Notes on a phone: a tap on the highlighted phrase opens its note.
 - Tool on a phone: the result directly below the inputs.
 
 **Packaging**
@@ -210,7 +209,7 @@ Not in scope:
 **Print**
 - The basics only: one readable column, chrome hidden.
 - Always light.
-- The nav prints as a list under the summary; asides and notes print inline.
+- The nav prints as a list under the summary; notes print inline.
 - Verify stays screen-only.
 
 **Approach**
@@ -273,8 +272,8 @@ Open for the tech spec:
 
 ## Glossary
 
-- **Shape**: one of the seven named page arrangements. Set by the `layout` field.
-- **Region**: a named part of a page (summary, main, nav, aside) that a shape places.
+- **Shape**: one of the six named page arrangements. Set by the `layout` field.
+- **Region**: a named part of a page (summary, main, nav) that a shape places.
 - **Summary**: the required region holding the one thing the reader needs first; where it sits
   depends on the shape.
 - **Nav**: the section list the build generates from headings; a sticky rail, or the left pane on
@@ -288,6 +287,6 @@ Open for the tech spec:
 **Amendments:**
 
 - 2026-10-15: a `q-compare` widens past 1440px only when nothing sits beside the content. Beside a
-  nav rail, aside, reference pane or longform margin it stays in its column and scrolls inside its
+  nav rail or reference pane it stays in its column and scrolls inside its
   own box, because widening there slid the table under the rail or off-screen. Approved by the
   user.

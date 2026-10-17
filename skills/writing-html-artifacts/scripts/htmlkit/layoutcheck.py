@@ -2,7 +2,8 @@
 
 Tier 1 scans the ``<style>`` elements and ``style=""`` attributes inside the ``q-page`` wrapper of
 a built page; the head (tokens, base, layout, kit) is never inspected, and a page without the
-wrapper yields no findings. Tier 2 scans an app's own ``src/`` stylesheets and ``style={{...}}``
+wrapper yields no findings. Grid is allowed on and inside the page's own custom elements, because
+it arranges the element's contents rather than the page; widths, floats and columns are not. Tier 2 scans an app's own ``src/`` stylesheets and ``style={{...}}``
 objects in ``.tsx`` files.
 
 Both entry points return ``[{"check": "layout", "detail": ...}]`` and never raise. CSS that cannot
@@ -32,6 +33,9 @@ _VOID = frozenset(
 )
 _STYLE_OBJECT = re.compile(r"\bstyle\s*=\s*\{\s*\{")
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
+_LIBRARY_PREFIXES = ("q-", "wa-")
+_TYPE_SELECTOR = re.compile(r"(?<![\w.#:-])([a-z][a-z0-9]*-[a-z0-9-]*)")
+_COMPOUND_END = re.compile(r"[\s>+~]")
 
 
 def _flag(prop: str, value: str) -> Optional[str]:
@@ -52,6 +56,61 @@ def _flag(prop: str, value: str) -> Optional[str]:
     return None
 
 
+def _is_custom_element(tag: str) -> bool:
+    return "-" in tag and not tag.startswith(_LIBRARY_PREFIXES)
+
+
+def _strip_nested(selector: str) -> str:
+    """``selector`` with every ``(...)`` and ``[...]`` group blanked, so only top-level parts remain."""
+    out, depth = [], 0
+    for ch in selector:
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth = max(0, depth - 1)
+            ch = " "
+        out.append(" " if depth else ch)
+    return "".join(out)
+
+
+def _split_selector_list(selectors: str) -> list[str]:
+    parts, depth, start = [], 0, 0
+    for i, ch in enumerate(selectors):
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth = max(0, depth - 1)
+        elif ch == "," and depth == 0:
+            parts.append(selectors[start:i])
+            start = i + 1
+    parts.append(selectors[start:])
+    return parts
+
+
+def _targets_custom_element(selectors: str) -> bool:
+    """True when every selector in the list matches only a custom element or something inside one.
+
+    A selector qualifies when a custom element's compound is its subject, or is followed by a
+    descendant or child combinator; a sibling combinator straight after it leaves the element.
+    """
+    for selector in _split_selector_list(selectors.lower()):
+        flat = _strip_nested(selector).strip()
+        if not flat:
+            return False
+        inside = False
+        for match in _TYPE_SELECTOR.finditer(flat):
+            if not _is_custom_element(match.group(1)):
+                continue
+            end = _COMPOUND_END.search(flat, match.end())
+            rest = flat[end.start():].lstrip() if end else ""
+            if not rest or rest[0] not in "+~":
+                inside = True
+                break
+        if not inside:
+            return False
+    return True
+
+
 def _wide(value: str) -> bool:
     """True for a plain absolute length at or over the threshold; every other form is exempt."""
     m = _LENGTH.fullmatch(value.strip())
@@ -68,17 +127,19 @@ def _message(prop: str, value: str, hint: str) -> str:
     return f"`{shown}` is not allowed in slot content; {hint}"
 
 
-def _declarations(css: str) -> Iterator[tuple[int, str, str]]:
-    """Yield ``(offset, property, value)`` for each declaration, offset pointing at the property.
+def _declarations(css: str) -> Iterator[tuple[int, str, str, str]]:
+    """Yield ``(offset, property, value, selector)`` for each declaration, offset pointing at the property.
 
     Segments that end at ``{`` are selectors or at-rule preludes and are dropped, so declarations
-    inside ``@media`` and ``@container`` blocks come out like top-level ones.
+    inside ``@media`` and ``@container`` blocks come out like top-level ones. ``selector`` is the
+    innermost enclosing rule's selector list, or an empty string when there is none.
     """
     css = _COMMENT.sub(lambda m: re.sub(r"[^\n]", " ", m.group()), css)
     start = depth = i = 0
     quote = ""
     n = len(css)
-    segments: list[tuple[int, int]] = []
+    segments: list[tuple[int, int, str]] = []
+    preludes: list[str] = []
     while i < n:
         ch = css[i]
         if quote:
@@ -93,25 +154,36 @@ def _declarations(css: str) -> Iterator[tuple[int, str, str]]:
         elif ch == ")":
             depth = max(0, depth - 1)
         elif ch == "{":
+            preludes.append(css[start:i].strip())
             start, depth = i + 1, 0
         elif ch == "}" or (ch == ";" and depth == 0):
-            segments.append((start, i))
+            segments.append((start, i, _innermost_selector(preludes)))
+            if ch == "}" and preludes:
+                preludes.pop()
             start, depth = i + 1, 0
         i += 1
-    segments.append((start, n))
-    for a, b in segments:
+    segments.append((start, n, _innermost_selector(preludes)))
+    for a, b, selector in segments:
         m = _DECLARATION.match(css, a, b)
         if m is None:
             continue
         value = _IMPORTANT.sub("", m.group(2)).strip().lower()
-        yield m.start(1), m.group(1).lower(), value
+        yield m.start(1), m.group(1).lower(), value, selector
 
 
-def _css_findings(css: str) -> Iterator[tuple[int, str]]:
-    for offset, prop, value in _declarations(css):
+def _innermost_selector(preludes: list[str]) -> str:
+    return next((p for p in reversed(preludes) if not p.startswith("@")), "")
+
+
+def _css_findings(css: str, *, in_custom_element: bool = False) -> Iterator[tuple[int, str]]:
+    """Flagged declarations in ``css``; grid passes when ``in_custom_element`` or its rule targets one."""
+    for offset, prop, value, selector in _declarations(css):
         hint = _flag(prop, value)
-        if hint is not None:
-            yield offset, _message(prop, value, hint)
+        if hint is None:
+            continue
+        if hint == GRID_HINT and (in_custom_element or (selector and _targets_custom_element(selector))):
+            continue
+        yield offset, _message(prop, value, hint)
 
 
 class _SlotScanner(HTMLParser):
@@ -150,7 +222,8 @@ class _SlotScanner(HTMLParser):
                 continue
             m = re.search(r"\bstyle\s*=", text)
             line = self.getpos()[0] + (text.count("\n", 0, m.start()) if m else 0)
-            for offset, message in _css_findings(value):
+            scoped = _is_custom_element(tag) or any(_is_custom_element(t) for t, _ in self._stack)
+            for offset, message in _css_findings(value, in_custom_element=scoped):
                 self.findings.append((line + value.count("\n", 0, offset), message))
 
     def handle_data(self, data):

@@ -117,7 +117,7 @@ def test_reference_sections_carry_the_catalog_content() -> None:
         for attribute in element.attributes:
             assert f"| `{attribute.name}` |" in text
     assert text.count("Companion option html: allowed") == 7
-    assert text.count("Companion option html: not allowed (interactive)") == 6
+    assert text.count("Companion option html: not allowed (interactive)") == 7
 
 
 def test_reference_attribute_table_columns() -> None:
@@ -162,7 +162,7 @@ def test_examples_parse_as_report_sources(tmp_path: Path) -> None:
         assert source.slots["main"].strip() == catalog.elements[tag].example.strip()
 
 
-def test_examples_add_an_aside_only_when_the_template_requires_one(tmp_path: Path) -> None:
+def test_examples_add_a_placeholder_only_for_required_slots(tmp_path: Path) -> None:
     skill = _skill_copy(tmp_path)
     plain = tmp_path / "plain"
     assert kit_docs.main(["examples", str(plain)], skill_dir=skill) == 0
@@ -170,11 +170,11 @@ def test_examples_add_an_aside_only_when_the_template_requires_one(tmp_path: Pat
 
     template = skill / "templates" / "report" / "template.json"
     data = json.loads(template.read_text())
-    data["slots"]["aside"]["required"] = True
+    data["slots"]["notes"] = {"required": True, "description": "Notes."}
     template.write_text(json.dumps(data))
     needing = tmp_path / "needing"
     assert kit_docs.main(["examples", str(needing)], skill_dir=skill) == 0
-    assert set(assemble.parse_source(needing / "q-code.src.html").slots) == {"main", "summary", "aside"}
+    assert set(assemble.parse_source(needing / "q-code.src.html").slots) == {"main", "summary", "notes"}
 
 
 def test_examples_are_deterministic(tmp_path: Path) -> None:

@@ -44,6 +44,27 @@ checkout-deploy status --service checkout --watch</code></pre>
 <section aria-labelledby="latency-h">
 <h2 id="latency-h">Latency</h2>
 <p>Check the region panel first. A single slow region points at that region's cache or network, and a slow everywhere points at the payment provider or the database.</p>
+<q-flow summary="Checkout requests read from the region cache, call the primary or secondary payment provider, and fall back to the retry queue." direction="right" groups="panels">
+  <script type="application/json">
+  {
+    "kinds": {"ui": 1, "worker": 2, "database": 3, "queue": 4},
+    "groups": [
+      {"id": "payments", "label": "Payment path"}
+    ],
+    "nodes": [
+      {"id": "api", "label": "Checkout service", "kind": "ui", "detail": "<p>Routes live traffic and checks region cache before charging.</p>"},
+      {"id": "primary", "label": "Primary provider", "kind": "worker", "group": "payments", "detail": "<p>Default payment gateway; switch away after 10m of failed health checks.</p>"},
+      {"id": "secondary", "label": "Secondary provider", "kind": "worker", "group": "payments", "detail": "<p>Failover gateway; keep active until primary is healthy for 30m.</p>"},
+      {"id": "retry", "label": "Retry queue", "kind": "queue", "group": "payments", "detail": "<p>Buffers transient failures; cap worker pool at 40.</p>"}
+    ],
+    "edges": [
+      {"from": "api", "to": "primary", "label": "charge.request"},
+      {"from": "api", "to": "secondary", "label": "failover.charge"},
+      {"from": "primary", "to": "retry", "label": "charge.retry", "async": true}
+    ]
+  }
+  </script>
+</q-flow>
 <h3 id="latency-cache">Cache</h3>
 <p>The cache hit rate should be above 90%. Below 80%, flush the stale region from the cache console and watch the rate recover over 10 minutes.</p>
 <h3 id="latency-provider">Payment provider</h3>

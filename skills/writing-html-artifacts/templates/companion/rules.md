@@ -11,7 +11,7 @@ Read after section 12 of the [design reference](../../references/design-referenc
 
 ## Page shape
 
-- `layout` is an optional `screen.json` key, one of the seven shapes (`report`, `explainer`, `longform`, `tool`, `comparison`, `dashboard`, `reference`). `show` validates it and exits 2 on any other value.
+- `layout` is an optional `screen.json` key, one of the six shapes (`explainer`, `longform`, `tool`, `comparison`, `dashboard`, `reference`). `show` validates it and exits 2 on any other value.
 - Naming one widens the screen from 960px to 1440px, and `dashboard` to fluid. A screen with no `layout` stays at 960px. Name one only when the question needs the room; most screens do not.
 - Screens have no `summary` slot: the `question` is the summary. The layout check does not run on screens, because `content` and option `html` draw mockups of other layouts.
 - One example screen per shape is in `examples/<shape>.screen.json`. The key's details are in the [companion guide](../../references/companion.md#screen-width-and-layout).
@@ -32,5 +32,5 @@ Read after section 12 of the [design reference](../../references/design-referenc
 
 ## Diagrams
 
-- `diagram` is Mermaid source. The screen loads Mermaid from the companion server at `/_quirk/lib/mermaid/<version>/mermaid.min.js`; it is never inlined, so a diagram screen stays small.
-- The diagram renders above the options and follows the light and dark theme. Keep it to what the question needs: one flow or one relationship map.
+- `diagram` is Mermaid source for a static diagram. The screen loads Mermaid from the companion server at `/_quirk/lib/mermaid/<version>/mermaid.min.js`; it is never inlined, so a diagram screen stays small.
+- The diagram renders above the options and follows the light and dark theme. Keep it to what the question needs: one flow or one relationship map. When the user needs to pan, zoom or click through a graph on the screen, put `<q-flow>` in `content` instead (never in an option's `html`, because `<q-flow>` is interactive).

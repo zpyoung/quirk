@@ -35,11 +35,10 @@ def _compare(element_id: str, options: list[str], recommended: int) -> str:
 MANY_OPTIONS = [f"Option {i}" for i in range(1, 11)]
 
 SIDENOTES = """<div data-layout="longform" id="long"><main>
-<p id="para">The build got faster<q-sidenote id="note1">Measured on main, excluding reruns.</q-sidenote> after the cache moved,
-and the queue shrank<q-sidenote id="note2">Queue depth is sampled every minute.</q-sidenote> as well.</p>
-<p id="para2">A later paragraph<q-sidenote id="note3">Its note keeps counting from the first paragraph.</q-sidenote> follows.</p>
+<p id="para">The build got <q-sidenote id="sn1">faster<span slot="note" id="note1">Measured on main, excluding reruns.</span></q-sidenote> after the cache moved,
+and the <q-sidenote id="sn2">queue shrank<span slot="note" id="note2">Queue depth is sampled every minute.</span></q-sidenote> as well.</p>
+<p id="edge" style="text-align: right">Near the right edge sits <q-sidenote id="sn3">this phrase<span slot="note" id="note3">A long note that has to shift left to stay inside the viewport, even on a narrow phone screen.</span></q-sidenote></p>
 </main></div>
-<div id="plain"><p>A plain page note<q-sidenote id="plain-note">Outside longform.</q-sidenote> stays in the text.</p></div>
 """
 
 BODY = (
@@ -177,113 +176,116 @@ def test_panel_is_a_bordered_box_with_its_heading_as_title(layout_page: Path) ->
 # --- q-sidenote -------------------------------------------------------------------------------
 
 
-def _note_state(note: str, toggle: str) -> str:
+def _note(words: str, note: str) -> str:
     return f"""(() => {{
+      const words = document.querySelector('{words}');
       const note = document.querySelector('{note}');
-      const toggle = document.querySelector('{toggle}');
-      const style = getComputedStyle(note);
+      const box = note.getBoundingClientRect();
       return {{
-        display: style.display,
-        toggleShown: !!toggle && getComputedStyle(toggle).display !== 'none',
-        expanded: toggle && toggle.getAttribute('aria-expanded'),
-        toggleText: toggle && toggle.textContent,
+        open: getComputedStyle(note).display !== 'none' && box.width > 0,
+        left: box.left,
+        right: box.right,
+        position: getComputedStyle(note).position,
+        highlight: getComputedStyle(words).backgroundColor,
       }};
     }})()"""
 
 
-TOGGLE = "button[data-q-sidenote-toggle]"
+NOTE1 = _note("#sn1", "#note1")
 
 
-@pytest.mark.parametrize("width", [375, 900])
-def test_sidenote_is_a_numbered_toggle_when_narrow(layout_page: Path, width: int) -> None:
+def test_sidenote_highlights_its_words_and_wires_them_to_a_hidden_note(layout_page: Path) -> None:
     out = run(
         layout_page,
-        ev(_note_state("#note1", "#para button[data-q-sidenote-toggle]"), "closed"),
-        ev("[...document.querySelectorAll('#para button[data-q-sidenote-toggle]')].map((b) => b.textContent)", "numbers"),
-        {"click": "#para button[data-q-sidenote-toggle]"},
-        ev(_note_state("#note1", "#para button[data-q-sidenote-toggle]"), "open"),
-        ev("document.querySelector('#note1').getBoundingClientRect().width > 0", "noteVisible"),
-        {"click": "#para button[data-q-sidenote-toggle]"},
-        ev(_note_state("#note1", "#para button[data-q-sidenote-toggle]"), "again"),
-        ev(NO_SCROLL, "fits"),
+        ev(
+            """(() => {
+              const words = document.querySelector('#sn1');
+              const note = document.querySelector('#note1');
+              return {
+                ready: words.hasAttribute('data-q-ready'),
+                tabindex: words.getAttribute('tabindex'),
+                describedBy: words.getAttribute('aria-describedby'),
+                role: note.getAttribute('role'),
+              };
+            })()""",
+            "wiring",
+        ),
+        ev(NOTE1, "note"),
+        viewport={"width": 1280, "height": 800},
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["wiring"] == {"ready": True, "tabindex": "0", "describedBy": "note1", "role": "tooltip"}
+    assert r["note"]["open"] is False
+    assert r["note"]["highlight"] not in ("rgba(0, 0, 0, 0)", "transparent")
+
+
+@pytest.mark.parametrize("width", [375, 1280])
+def test_sidenote_opens_on_hover_stays_open_on_its_note_and_closes_after_the_pointer_leaves(layout_page: Path, width: int) -> None:
+    out = run(
+        layout_page,
+        {"hover": "#sn1"},
+        ev(NOTE1, "hovered"),
+        {"hover": "#note1"},
+        {"wait": 300},
+        ev(NOTE1, "onNote"),
+        {"hover": "#grid"},
+        {"wait": 300},
+        ev(NOTE1, "left"),
         viewport={"width": width, "height": 800},
     )
     assert_clean(out)
     r = out["results"]
-    assert r["closed"]["toggleShown"] is True and r["closed"]["expanded"] == "false"
-    assert r["closed"]["display"] == "none"
-    assert r["numbers"] == ["1", "2"]
-    assert r["open"]["expanded"] == "true" and r["open"]["display"] != "none"
-    assert r["noteVisible"] is True
-    assert r["again"]["expanded"] == "false" and r["again"]["display"] == "none"
-    assert r["fits"] is True
+    assert r["hovered"]["open"] is True and r["hovered"]["position"] == "absolute"
+    assert r["onNote"]["open"] is True
+    assert r["left"]["open"] is False
 
 
-def test_sidenote_toggle_is_a_labelled_button_wired_to_its_note(layout_page: Path) -> None:
+def test_a_clicked_sidenote_stays_open_until_clicked_again(layout_page: Path) -> None:
     out = run(
         layout_page,
-        ev(
-            """(() => {
-              const toggle = document.querySelector('#para button[data-q-sidenote-toggle]');
-              return {
-                tag: toggle.tagName,
-                type: toggle.type,
-                label: toggle.getAttribute('aria-label'),
-                controls: toggle.getAttribute('aria-controls'),
-                before: toggle.nextElementSibling && toggle.nextElementSibling.id,
-              };
-            })()""",
-            "toggle",
-        ),
+        {"click": "#sn1"},
+        {"hover": "#grid"},
+        {"wait": 300},
+        ev(NOTE1, "pinned"),
+        {"click": "#sn1"},
+        ev(NOTE1, "unpinned"),
         viewport={"width": 375, "height": 800},
     )
     assert_clean(out)
-    toggle = out["results"]["toggle"]
-    assert toggle == {"tag": "BUTTON", "type": "button", "label": "Note 1", "controls": "note1", "before": "note1"}
+    assert out["results"]["pinned"]["open"] is True
+    assert out["results"]["unpinned"]["open"] is False
 
 
-def test_sidenote_sits_in_the_right_margin_of_a_wide_longform_page(layout_page: Path) -> None:
+def test_sidenote_opens_on_keyboard_focus_and_escape_closes_it(layout_page: Path) -> None:
     out = run(
         layout_page,
-        ev(
-            """(() => {
-              const para = document.querySelector('#para').getBoundingClientRect();
-              const note = document.querySelector('#note1');
-              const box = note.getBoundingClientRect();
-              const style = getComputedStyle(note);
-              const toggle = document.querySelector('#para button[data-q-sidenote-toggle]');
-              return {
-                float: style.float,
-                display: style.display,
-                right: box.left >= para.right - 1,
-                inViewport: box.right <= window.innerWidth,
-                lead: getComputedStyle(note, '::before').content,
-                toggleShown: getComputedStyle(toggle).display !== 'none',
-              };
-            })()""",
-            "wide",
-        ),
+        {"focus": "#sn1"},
+        ev(NOTE1, "focused"),
+        {"press": "Escape"},
+        ev(NOTE1, "escaped"),
+        viewport={"width": 1280, "height": 800},
+    )
+    assert_clean(out)
+    assert out["results"]["focused"]["open"] is True
+    assert out["results"]["escaped"]["open"] is False
+
+
+@pytest.mark.parametrize("width", [375, 1280])
+def test_an_open_sidenote_near_the_edge_stays_inside_the_viewport(layout_page: Path, width: int) -> None:
+    out = run(
+        layout_page,
+        {"click": "#sn3"},
+        ev(_note("#sn3", "#note3"), "note"),
+        ev("window.innerWidth", "viewport"),
         ev(NO_SCROLL, "fits"),
-        viewport={"width": 1280, "height": 800},
+        viewport={"width": width, "height": 800},
     )
     assert_clean(out)
-    wide = out["results"]["wide"]
-    assert wide["float"] == "right" and wide["display"] == "block"
-    assert wide["right"] is True and wide["inViewport"] is True
-    assert "counter(q-sidenote)" in wide["lead"]
-    assert wide["toggleShown"] is False
+    note = out["results"]["note"]
+    assert note["open"] is True
+    assert note["left"] >= 0 and note["right"] <= out["results"]["viewport"]
     assert out["results"]["fits"] is True
-
-
-def test_sidenote_outside_longform_stays_a_toggle_at_wide_width(layout_page: Path) -> None:
-    out = run(
-        layout_page,
-        ev(_note_state("#plain-note", "#plain button[data-q-sidenote-toggle]"), "state"),
-        viewport={"width": 1280, "height": 800},
-    )
-    assert_clean(out)
-    state = out["results"]["state"]
-    assert state["toggleShown"] is True and state["display"] == "none"
 
 
 @pytest.mark.parametrize("width", [375, 1280])
@@ -292,15 +294,13 @@ def test_sidenote_reads_inline_without_the_script(nojs_page: Path, width: int) -
         nojs_page,
         ev(
             """(() => {
-              const note = document.querySelector('#plain-note');
-              const style = getComputedStyle(note);
+              const note = document.querySelector('#note1');
               return {
-                display: style.display,
-                float: style.float,
+                display: getComputedStyle(note).display,
                 before: getComputedStyle(note, '::before').content,
                 after: getComputedStyle(note, '::after').content,
-                toggles: document.querySelectorAll('button[data-q-sidenote-toggle]').length,
                 visible: note.getBoundingClientRect().width > 0,
+                ready: document.querySelector('#sn1').hasAttribute('data-q-ready'),
               };
             })()""",
             "note",
@@ -311,9 +311,8 @@ def test_sidenote_reads_inline_without_the_script(nojs_page: Path, width: int) -
     )
     assert_clean(out)
     note = out["results"]["note"]
-    assert note["display"] == "inline" and note["float"] == "none" and note["visible"] is True
+    assert note["display"] == "inline" and note["visible"] is True and note["ready"] is False
     assert "(" in note["before"] and ")" in note["after"]
-    assert note["toggles"] == 0
     assert out["results"]["fits"] is True
 
 
@@ -324,13 +323,7 @@ def test_sidenote_prints_inline(layout_page: Path) -> None:
             """(() => {
               const note = document.querySelector('#note1');
               const style = getComputedStyle(note);
-              const toggle = document.querySelector('#para button[data-q-sidenote-toggle]');
-              return {
-                display: style.display,
-                float: style.float,
-                before: getComputedStyle(note, '::before').content,
-                toggle: getComputedStyle(toggle).display,
-              };
+              return { display: style.display, position: style.position, before: getComputedStyle(note, '::before').content };
             })()""",
             "print",
         ),
@@ -339,8 +332,8 @@ def test_sidenote_prints_inline(layout_page: Path) -> None:
     )
     assert_clean(out)
     printed = out["results"]["print"]
-    assert printed["display"] == "inline" and printed["float"] == "none"
-    assert "(" in printed["before"] and printed["toggle"] == "none"
+    assert printed["display"] == "inline" and printed["position"] == "static"
+    assert "(" in printed["before"]
 
 
 # --- q-compare --------------------------------------------------------------------------------
@@ -394,10 +387,11 @@ def test_compare_shows_the_table_with_the_recommended_column_marked_at_desktop_w
         ev(
             """(() => {
               const marked = [...document.querySelectorAll('#cmp thead th')].map((th) => th.hasAttribute('data-q-recommended'));
+              const backgrounds = [...document.querySelectorAll('#cmp tr > :nth-child(2), #cmp tr > :nth-child(3)')].map((c) => getComputedStyle(c).backgroundColor);
               const badges = document.querySelectorAll('#cmp thead [data-q-badge]').length;
               const host = document.querySelector('#cmp').getBoundingClientRect();
               const column = document.querySelector('main').getBoundingClientRect();
-              return { marked, badges, hostWidth: host.width, columnWidth: column.width };
+              return { marked, badges, backgrounds, hostWidth: host.width, columnWidth: column.width };
             })()""",
             "table",
         ),
@@ -408,6 +402,8 @@ def test_compare_shows_the_table_with_the_recommended_column_marked_at_desktop_w
     r = out["results"]
     assert r["stack"]["tableDisplay"] == "table" and r["stack"]["stackDisplay"] == "none"
     assert r["table"]["marked"] == [False, False, True, False]
+    other, chosen = r["table"]["backgrounds"][0::2], r["table"]["backgrounds"][1::2]
+    assert len(set(chosen)) == 1 and not set(chosen) & set(other)
     assert r["table"]["badges"] == 1
     assert r["table"]["hostWidth"] == pytest.approx(r["table"]["columnWidth"], abs=1.5)
     assert r["fits"] is True
@@ -579,17 +575,3 @@ def test_the_stacked_blocks_hold_no_duplicate_ids(tmp_path: Path) -> None:
     out = run(page, ev("document.querySelectorAll('#dup').length", "count"), viewport={"width": 375, "height": 800})
     assert_clean(out)
     assert out["results"]["count"] == 1
-
-
-def test_sidenote_numbers_continue_across_paragraphs(layout_page: Path) -> None:
-    # css counter values are not exposed to scripts, so assert the page-level reset and the toggle numbers
-    out = run(
-        layout_page,
-        ev("getComputedStyle(document.body).counterReset", "reset"),
-        ev("document.querySelector('#para2 button[data-q-sidenote-toggle]').textContent", "third"),
-        viewport={"width": 375, "height": 800},
-    )
-    assert_clean(out)
-    assert "q-sidenote" in out["results"]["reset"]
-    assert out["results"]["third"].strip().startswith("3")
-

@@ -272,8 +272,8 @@ def _library_order(template: Template, source: Source) -> list[str]:
 
 
 def _with_auto_libraries(names: list[str], raw_source: str) -> list[str]:
-    """Add the libraries the source's q-* markup needs: Chart.js, highlight.js, then the kit, Alpine
-    still last.
+    """Add the libraries the source's q-* markup needs: Chart.js, highlight.js, flow, then the kit,
+    Alpine still last.
 
     The scan is over the raw source text, so a q-* tag a script or template builds at runtime pulls
     the kit in too. These libraries are automatic, so none has to be an optional library of the
@@ -281,7 +281,13 @@ def _with_auto_libraries(names: list[str], raw_source: str) -> list[str]:
     """
     kit, chartjs = kitcheck.needs(raw_source)
     highlight = kit and kitcheck.needs_highlight(raw_source)
-    wanted = (["chartjs"] if chartjs else []) + (["highlightjs"] if highlight else []) + (["kit"] if kit else [])
+    flow = kit and kitcheck.needs_flow(raw_source)
+    wanted = (
+        (["chartjs"] if chartjs else [])
+        + (["highlightjs"] if highlight else [])
+        + (["flow"] if flow else [])
+        + (["kit"] if kit else [])
+    )
     names = list(dict.fromkeys(names + wanted))
     return [n for n in names if n != "alpine"] + [n for n in names if n == "alpine"]
 
@@ -312,7 +318,7 @@ def _plan_regions(source: Source, skeleton: str, existing: Optional[dict]) -> _R
     """Resolve the shape and render the regions for ``skeleton``; raises SourceError on a bad combination.
 
     Shape: the source's ``layout``, else the one in ``existing`` (the output's current header), else
-    ``report``. A header carrying ``layout_defaulted`` keeps the page defaulted until a source names a
+    ``explainer``. A header carrying ``layout_defaulted`` keeps the page defaulted until a source names a
     shape. Only a skeleton with ``{{regions}}`` or ``{{slot:main}}`` resolves a default and
     requires ``summary``. A missing summary is allowed once for a page whose header predates shapes
     (no ``layout`` key) and stays allowed while the header carries ``legacy_summary``.
@@ -326,8 +332,6 @@ def _plan_regions(source: Source, skeleton: str, existing: Optional[dict]) -> _R
     if layout is None and region_bearing:
         layout = recorded if recorded in LAYOUTS else DEFAULT_LAYOUT
         defaulted = recorded not in LAYOUTS or existing.get("layout_defaulted") is True
-    if layout is not None and layout != "report" and source.slots.get("aside", "").strip():
-        raise SourceError("the source has an aside slot, but only the report shape places an aside")
     if not region_bearing:
         if source.slots.get("summary", "").strip():
             raise SourceError(
@@ -348,7 +352,7 @@ def _plan_regions(source: Source, skeleton: str, existing: Optional[dict]) -> _R
             )
         legacy_summary = True
         summary = ""
-    reserved = collect_ids(summary, source.slots.get("aside", ""), skeleton, _chrome("x")) | {"main", "quirk-data"}
+    reserved = collect_ids(summary, skeleton, _chrome("x")) | {"main", "quirk-data"}
     nav_html, main_html = build_nav(
         source.slots.get("main", ""), layout=layout, nav=source.nav, reserved_ids=reserved
     )
@@ -356,7 +360,6 @@ def _plan_regions(source: Source, skeleton: str, existing: Optional[dict]) -> _R
         layout,
         summary=summary,
         main=main_html,
-        aside="" if legacy_skeleton else source.slots.get("aside", ""),
         nav=nav_html,
         legacy=legacy_skeleton,
     )
@@ -517,11 +520,13 @@ def build_tier1(
             "data": embedded,
             "body_end": body_end,
         }
-        values.update({f"slot:{name}": source.slots.get(name, "") for name in template.slots})
+        values.update(
+            {f"slot:{name}": kitcheck.inject_flow_fallbacks(source.slots.get(name, "")) for name in template.slots}
+        )
         values["layout"] = plan.layout
         values["regions"] = ""
         if plan.region_bearing:
-            values["slot:main" if plan.legacy_skeleton else "regions"] = plan.html
+            values["slot:main" if plan.legacy_skeleton else "regions"] = kitcheck.inject_flow_fallbacks(plan.html)
         return _substitute(skeleton, values)
 
     sidecar_name: Optional[str] = None
@@ -713,7 +718,12 @@ def delivery_note(
         lines.append("- Static checks: failed")
         lines.extend(f"  - {f['check']}: {f['detail']}" for f in checked["failures"])
     if size > SIZE_WARN:
-        why = " Mermaid alone is about 5 MB, so this is expected." if "mermaid" in libraries else ""
+        if "mermaid" in libraries:
+            why = " Mermaid alone is about 5 MB, so this is expected."
+        elif "flow" in libraries:
+            why = " The flow layout engine is about 1.5 MB, so this is expected."
+        else:
+            why = ""
         lines.append(f"- Size: over 2 MB, so the file may be slow to open.{why}")
     lines.extend(f"- {line}" if not line.startswith("  ") else line for line in _verify_line(report_path, stale))
     lines.append("")

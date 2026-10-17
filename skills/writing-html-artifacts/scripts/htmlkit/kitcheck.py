@@ -14,6 +14,7 @@ because tests match them.
 from __future__ import annotations
 
 import bisect
+import html as html_lib
 import json
 import math
 import re
@@ -22,14 +23,16 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Callable, Iterator, Optional
-
 from .vendor import VendorError, VendorStore
 
 KIT_TAG = re.compile(r"<q-[a-z]", re.IGNORECASE)
 CHART_TAG = re.compile(r"<q-chart[\s/>]", re.IGNORECASE)
 CODE_TAG = re.compile(r"<q-(?:code|diff)[\s/>]", re.IGNORECASE)
+FLOW_TAG = re.compile(r"<q-flow[\s/>]", re.IGNORECASE)
 
-KNOWN_RULES = frozenset({"max-series", "diff-notes", "heading-sections", "board-columns", "timeline-items", "compare-recommended"})
+KNOWN_RULES = frozenset(
+    {"max-series", "diff-notes", "heading-sections", "board-columns", "timeline-items", "compare-recommended", "flow-data"}
+)
 ATTRIBUTE_KINDS = ("text", "enum", "boolean", "number-list", "integer", "ident")
 
 _TAG = re.compile(r"^q-[a-z]+(-[a-z]+)*\Z")
@@ -89,6 +92,14 @@ def needs_highlight(text: str) -> bool:
     """
     return bool(CODE_TAG.search(text))
 
+
+
+def needs_flow(text: str) -> bool:
+    """Report whether ``text`` uses ``<q-flow>``, which lays out and zooms with the flow bundle.
+
+    The scan is textual, like ``needs``.
+    """
+    return bool(FLOW_TAG.search(text))
 
 def load_catalog(store: VendorStore, version: Optional[str]) -> Catalog:
     """Load and validate the catalog of kit ``version`` (``None`` means the registry's current).
@@ -853,6 +864,400 @@ def _rule_compare_recommended(node: _Node, report: Report, index: _Index) -> Non
         report(node.line, f'<{node.tag}> recommended="{raw}" must be between 1 and {options} (the option columns)')
 
 
+_FLOW_MAX_KINDS = 8
+_FLOW_WARN_NODES = 60
+_FLOW_MAX_NODES = 200
+_FLOW_WARN_EDGE_LABEL = 30
+_FLOW_COORD_KEYS = frozenset({"x", "y", "position", "positions"})
+_FLOW_DETAIL_TAGS = frozenset(
+    "p ul ol li code pre a em strong b i br span kbd samp sub sup dl dt dd".split()
+)
+_FLOW_FORBIDDEN_RAW = re.compile(
+    r"<\s*/?\s*(?:script|style|form|input|button|select|textarea|img|iframe|object|embed|svg|math|table|video|audio|link|meta|base)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_safe_flow_href(href: str) -> bool:
+    cleaned = re.sub(r"[\s\x00-\x1f]+", "", html_lib.unescape(href)).lower()
+    if not cleaned:
+        return False
+    if cleaned.startswith(("#", "/", "./", "../")):
+        return not cleaned.startswith("//")
+    if cleaned.startswith(("http:", "https:", "mailto:")):
+        return True
+    scheme_sep = cleaned.find(":")
+    slash_sep = cleaned.find("/")
+    return scheme_sep < 0 or (0 <= slash_sep < scheme_sep)
+
+
+def _check_and_sanitize_flow_detail(detail: str) -> Optional[str]:
+    """Return sanitized HTML when ``detail`` uses only allowed prose/list/code/link markup, else ``None``."""
+    if _FLOW_FORBIDDEN_RAW.search(detail):
+        return None
+    builder = _TreeBuilder()
+    try:
+        builder.feed(detail)
+        builder.close()
+    except Exception:  # noqa: BLE001
+        return None
+    builder.finish()
+    for n in builder.nodes:
+        if n.tag not in _FLOW_DETAIL_TAGS:
+            return None
+        for attr_name, attr_val in n.attrs.items():
+            name = attr_name.lower()
+            if name.startswith("on") or name in ("src", "srcset", "action", "formaction", "data", "background", "poster", "style"):
+                return None
+            if name == "href":
+                if n.tag != "a" or not _is_safe_flow_href(attr_val):
+                    return None
+
+    def render_clean(cur: _Node) -> str:
+        parts: list[str] = []
+        for item in cur.content:
+            if isinstance(item, str):
+                parts.append(html_lib.escape(item))
+            elif isinstance(item, _Node) and item.tag in _FLOW_DETAIL_TAGS:
+                if item.tag == "br":
+                    parts.append("<br>")
+                elif item.tag == "a" and "href" in item.attrs and _is_safe_flow_href(item.attrs["href"]):
+                    href = html_lib.escape(item.attrs["href"], quote=True)
+                    parts.append(f'<a href="{href}">{render_clean(item)}</a>')
+                else:
+                    parts.append(f"<{item.tag}>{render_clean(item)}</{item.tag}>")
+        return "".join(parts)
+
+    return render_clean(builder.root)
+
+
+def _validate_flow_node(
+    node: _Node, report_fail: Report, report_warn: Report
+) -> Optional[dict[str, Any]]:
+    scripts = [c for c in node.children if c.tag == "script"]
+    if not scripts:
+        return None
+    json_script = next(
+        (s for s in scripts if s.attrs.get("type", "").strip().lower() == "application/json"),
+        None,
+    )
+    if json_script is None:
+        report_fail(node.line, '<q-flow> needs a <script type="application/json"> child holding a JSON object')
+        return None
+    raw_json = _text(json_script)
+    try:
+        data = json.loads(raw_json)
+    except (ValueError, RecursionError):
+        if _FLOW_FORBIDDEN_RAW.search(raw_json):
+            report_fail(node.line, "<q-flow> detail may hold only paragraphs, lists, code and links")
+        else:
+            report_fail(node.line, '<q-flow> needs a <script type="application/json"> child holding a JSON object')
+        return None
+    if not isinstance(data, dict):
+        report_fail(node.line, '<q-flow> needs a <script type="application/json"> child holding a JSON object')
+        return None
+
+    before_fails: list[int] = []
+
+    def fail(line: int, msg: str) -> None:
+        before_fails.append(1)
+        report_fail(line, msg)
+
+    if _FLOW_COORD_KEYS & set(data):
+        fail(node.line, "<q-flow> positions are laid out automatically; remove coordinates")
+
+    kinds = data.get("kinds", {})
+    if not isinstance(kinds, dict):
+        fail(node.line, "<q-flow> kinds must be a JSON object")
+        kinds = {}
+    else:
+        if len(kinds) > _FLOW_MAX_KINDS:
+            fail(node.line, f"<q-flow> declares {len(kinds)} kinds; at most eight kinds, one per chart color")
+        for k, v in kinds.items():
+            if not _is_text(k) or isinstance(v, bool) or not isinstance(v, int) or not (1 <= v <= _FLOW_MAX_KINDS):
+                fail(node.line, f'<q-flow> kind "{k}" color must be an integer from 1 to 8')
+
+    raw_groups = data.get("groups", [])
+    if not isinstance(raw_groups, list):
+        fail(node.line, "<q-flow> groups must be a list")
+        raw_groups = []
+
+    seen_ids: set[str] = set()
+    dup_reported: set[str] = set()
+    group_map: dict[str, dict[str, Any]] = {}
+    clean_groups: list[dict[str, Any]] = []
+    for g in raw_groups:
+        if not isinstance(g, dict):
+            fail(node.line, "<q-flow> each group must be an object")
+            continue
+        if _FLOW_COORD_KEYS & set(g):
+            fail(node.line, "<q-flow> positions are laid out automatically; remove coordinates")
+        gid = g.get("id")
+        glabel = g.get("label")
+        if not _is_text(gid) or not _is_text(glabel):
+            fail(node.line, "<q-flow> each group needs an id and a label")
+            continue
+        if gid in seen_ids:
+            if gid not in dup_reported:
+                fail(node.line, f'<q-flow> has duplicate id "{gid}"')
+                dup_reported.add(gid)
+            continue
+        seen_ids.add(gid)
+        parent = g.get("parent")
+        entry = {"id": gid, "label": glabel, "parent": parent if isinstance(parent, str) and parent else None}
+        group_map[gid] = entry
+        clean_groups.append(entry)
+
+    cycle_reported = False
+    for gid, g in group_map.items():
+        parent = g["parent"]
+        if parent is not None:
+            if parent not in group_map:
+                fail(node.line, f'<q-flow> group "{gid}" points at unknown group "{parent}"')
+            elif not cycle_reported:
+                visited = {gid}
+                cur: Optional[str] = parent
+                while cur is not None and cur in group_map:
+                    if cur in visited:
+                        fail(node.line, f'<q-flow> group nesting loops at "{gid}"')
+                        cycle_reported = True
+                        break
+                    visited.add(cur)
+                    cur = group_map[cur]["parent"]
+
+    raw_nodes = data.get("nodes")
+    if not isinstance(raw_nodes, list) or not raw_nodes:
+        fail(node.line, "<q-flow> needs a non-empty nodes list")
+        raw_nodes = []
+    else:
+        if len(raw_nodes) > _FLOW_MAX_NODES:
+            fail(
+                node.line,
+                f"<q-flow> has {len(raw_nodes)} nodes (more than 200 nodes); split into groups or several graphs",
+            )
+        elif len(raw_nodes) > _FLOW_WARN_NODES:
+            report_warn(
+                node.line,
+                f"<q-flow> has {len(raw_nodes)} nodes: large graphs read poorly, split into groups or several graphs",
+            )
+
+    is_lanes = node.attrs.get("groups", "panels").strip().lower() == "lanes"
+    top_groups = [g for g in clean_groups if g["parent"] is None]
+    lane_reported = False
+    if is_lanes and not top_groups and raw_nodes:
+        fail(node.line, "<q-flow> in lane mode every node belongs to a lane")
+        lane_reported = True
+
+    node_map: dict[str, dict[str, Any]] = {}
+    clean_nodes: list[dict[str, Any]] = []
+    for n in raw_nodes:
+        if not isinstance(n, dict):
+            fail(node.line, "<q-flow> each node must be an object")
+            continue
+        if _FLOW_COORD_KEYS & set(n):
+            fail(node.line, "<q-flow> positions are laid out automatically; remove coordinates")
+        nid = n.get("id")
+        nlabel = n.get("label")
+        if not _is_text(nid) or not _is_text(nlabel):
+            fail(node.line, "<q-flow> each node needs an id and a label")
+            continue
+        if nid in seen_ids:
+            if nid not in dup_reported:
+                fail(node.line, f'<q-flow> has duplicate id "{nid}"')
+                dup_reported.add(nid)
+        else:
+            seen_ids.add(nid)
+        nkind = n.get("kind")
+        if nkind is not None and (not isinstance(nkind, str) or nkind not in kinds):
+            fail(node.line, f'<q-flow> node "{nid}" has undeclared kind "{nkind}"')
+        ngroup = n.get("group")
+        if ngroup is not None and (not isinstance(ngroup, str) or ngroup not in group_map):
+            fail(node.line, f'<q-flow> node "{nid}" points at unknown group "{ngroup}"')
+        if is_lanes and not lane_reported and (not isinstance(ngroup, str) or ngroup not in group_map):
+            fail(node.line, f'<q-flow> node "{nid}" is outside every lane: in lane mode every node belongs to a lane')
+            lane_reported = True
+        ndetail = n.get("detail")
+        clean_detail: Optional[str] = None
+        if ndetail is not None:
+            if not isinstance(ndetail, str):
+                fail(node.line, f'<q-flow> node "{nid}" detail may hold only paragraphs, lists, code and links')
+            else:
+                clean_detail = _check_and_sanitize_flow_detail(ndetail)
+                if clean_detail is None:
+                    fail(node.line, f'<q-flow> node "{nid}" detail may hold only paragraphs, lists, code and links')
+        entry = {
+            "id": nid,
+            "label": nlabel,
+            "kind": nkind if isinstance(nkind, str) else None,
+            "group": ngroup if isinstance(ngroup, str) else None,
+            "detail_html": clean_detail,
+        }
+        node_map[nid] = entry
+        clean_nodes.append(entry)
+
+    raw_edges = data.get("edges", [])
+    if not isinstance(raw_edges, list):
+        fail(node.line, "<q-flow> edges must be a list")
+        raw_edges = []
+
+    clean_edges: list[dict[str, Any]] = []
+    for e in raw_edges:
+        if not isinstance(e, dict):
+            fail(node.line, "<q-flow> each edge must be an object")
+            continue
+        if _FLOW_COORD_KEYS & set(e):
+            fail(node.line, "<q-flow> positions are laid out automatically; remove coordinates")
+        efrom = e.get("from")
+        eto = e.get("to")
+        if not isinstance(efrom, str) or efrom not in node_map:
+            fail(node.line, f'<q-flow> edge points at unknown node "{efrom}"')
+        if not isinstance(eto, str) or eto not in node_map:
+            fail(node.line, f'<q-flow> edge points at unknown node "{eto}"')
+        elabel = e.get("label")
+        if elabel is not None:
+            if not isinstance(elabel, str):
+                fail(node.line, "<q-flow> edge label must be a string")
+            elif len(elabel) > _FLOW_WARN_EDGE_LABEL:
+                report_warn(
+                    node.line,
+                    f'<q-flow> edge label "{elabel}" is {len(elabel)} characters: edge labels over 30 characters crowd the layout',
+                )
+        easync = e.get("async")
+        if easync is not None and not isinstance(easync, bool):
+            fail(node.line, "<q-flow> edge async must be true or false")
+        if isinstance(efrom, str) and isinstance(eto, str) and efrom in node_map and eto in node_map:
+            clean_edges.append(
+                {
+                    "from": efrom,
+                    "to": eto,
+                    "label": elabel.strip() if isinstance(elabel, str) and elabel.strip() else None,
+                    "async": easync is True,
+                }
+            )
+
+    if before_fails:
+        return None
+    return {
+        "groups": clean_groups,
+        "group_map": group_map,
+        "nodes": clean_nodes,
+        "node_map": node_map,
+        "edges": clean_edges,
+    }
+
+
+def _rule_flow_data(node: _Node, report: Report, index: _Index) -> None:
+    _validate_flow_node(node, report, lambda _line, _msg: None)
+
+
+def check_html_warnings(text: str, catalog: Catalog, *, label: str) -> list[dict]:
+    """Return non-fatal kit warnings for ``text`` (such as large ``q-flow`` graphs or long edge labels)."""
+    if not FLOW_TAG.search(text):
+        return []
+    builder = _TreeBuilder()
+    try:
+        builder.feed(text)
+        builder.close()
+    except Exception:  # noqa: BLE001
+        pass
+    builder.finish()
+    found: list[tuple[int, int, str]] = []
+
+    def report_warn(line: int, message: str) -> None:
+        found.append((line, len(found), message))
+
+    for node in builder.nodes:
+        if node.tag == "q-flow" and "q-flow" in catalog.elements:
+            _validate_flow_node(node, lambda _line, _msg: None, report_warn)
+    found.sort()
+    return [{"check": "kit", "detail": f"{label} line {line}: {message}"} for line, _, message in found]
+
+
+def _render_flow_fallback_html(parsed: dict[str, Any]) -> str:
+    groups = parsed["groups"]
+    nodes = parsed["nodes"]
+    node_map = parsed["node_map"]
+    edges = parsed["edges"]
+
+    out_by_node: dict[str, list[dict[str, Any]]] = {}
+    for e in edges:
+        out_by_node.setdefault(e["from"], []).append(e)
+
+    def render_node(n: dict[str, Any]) -> str:
+        nid = html_lib.escape(n["id"], quote=True)
+        label = html_lib.escape(n["label"])
+        kind_str = f" ({html_lib.escape(n['kind'])})" if n["kind"] else ""
+        detail_str = f'<div data-q-flow-list-detail>{n["detail_html"]}</div>' if n["detail_html"] else ""
+        outs = out_by_node.get(n["id"], [])
+        edge_str = ""
+        if outs:
+            items = []
+            for e in outs:
+                tlabel = html_lib.escape(node_map[e["to"]]["label"])
+                meta = []
+                if e["label"]:
+                    meta.append(html_lib.escape(e["label"]))
+                if e["async"]:
+                    meta.append("async")
+                suffix = f" ({', '.join(meta)})" if meta else ""
+                items.append(f"<li>\u2192 {tlabel}{suffix}</li>")
+            edge_str = f"<ul>{''.join(items)}</ul>"
+        return f'<li data-q-flow-list-node="{nid}"><strong>{label}</strong>{kind_str}{detail_str}{edge_str}</li>'
+
+    def render_group(g: dict[str, Any]) -> str:
+        gid = html_lib.escape(g["id"], quote=True)
+        glabel = html_lib.escape(g["label"])
+        children_items = [render_group(cg) for cg in groups if cg["parent"] == g["id"]]
+        children_items.extend(render_node(n) for n in nodes if n["group"] == g["id"])
+        sub = f"<ul>{''.join(children_items)}</ul>" if children_items else ""
+        return f'<li data-q-flow-list-group="{gid}"><strong>{glabel}</strong>{sub}</li>'
+
+    top_items = [render_group(g) for g in groups if g["parent"] is None]
+    top_items.extend(render_node(n) for n in nodes if n["group"] is None)
+    list_html = f"<ul>{''.join(top_items)}</ul>"
+    return (
+        '<div class="q-flow-stage" data-q-kit data-q-flow-stage>'
+        '<p class="q-flow-notice" data-q-flow-notice>JavaScript is off, so this graph is shown as a list below.</p>'
+        "</div>"
+        '<details class="q-flow-list" data-q-kit data-q-flow-list open>'
+        "<summary>Graph as a list</summary>"
+        f"<div data-q-flow-list-body>{list_html}</div>"
+        "</details>"
+    )
+
+
+_FLOW_BLOCK = re.compile(r"(<q-flow\b[^>]*>.*?</q-flow\s*>)", re.IGNORECASE | re.DOTALL)
+_FLOW_CLOSER = re.compile(r"</q-flow\s*>\Z", re.IGNORECASE)
+
+
+def inject_flow_fallbacks(html: str) -> str:
+    """Insert the static notice and ``<details open>`` text list into valid ``<q-flow>`` elements in ``html``."""
+    if not FLOW_TAG.search(html):
+        return html
+
+    def replace_block(match: "re.Match[str]") -> str:
+        block = match.group(1)
+        if "data-q-flow-list" in block:
+            return block
+        builder = _TreeBuilder()
+        try:
+            builder.feed(block)
+            builder.close()
+        except Exception:  # noqa: BLE001
+            return block
+        builder.finish()
+        qflow = next((n for n in builder.nodes if n.tag == "q-flow"), None)
+        if qflow is None or qflow.self_closed or "summary" not in qflow.attrs:
+            return block
+        parsed = _validate_flow_node(qflow, lambda _l, _m: None, lambda _l, _m: None)
+        if parsed is None:
+            return block
+        fallback = _render_flow_fallback_html(parsed)
+        return _FLOW_CLOSER.sub(lambda m: fallback + m.group(0), block, count=1)
+
+    return _FLOW_BLOCK.sub(replace_block, html)
+
+
 _RULES: dict[str, Callable[[_Node, Report, _Index], None]] = {
     "max-series": _rule_max_series,
     "diff-notes": _rule_diff_notes,
@@ -860,6 +1265,7 @@ _RULES: dict[str, Callable[[_Node, Report, _Index], None]] = {
     "board-columns": _rule_heading_sections,
     "timeline-items": _rule_timeline_items,
     "compare-recommended": _rule_compare_recommended,
+    "flow-data": _rule_flow_data,
 }
 assert set(_RULES) == KNOWN_RULES
 

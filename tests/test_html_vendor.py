@@ -55,6 +55,7 @@ def test_manifest_lists_v1_libraries_at_pinned_versions() -> None:
         "webawesome": "3.14.0",
         "highlightjs": "11.12.0",
         "kit": "1.0.0",
+        "flow": "0.12.0",
     }
     alpine_file = manifest["libraries"]["alpine"]["versions"]["3.17.4"]["files"][0]
     assert alpine_file["position"] == "body-end"
@@ -195,3 +196,12 @@ def test_webawesome_css_is_self_contained() -> None:
 def test_webawesome_notes_record_the_dark_class() -> None:
     lines = (WEBAWESOME_DIR / "NOTES.md").read_text(encoding="utf-8").splitlines()
     assert any(re.fullmatch(r"dark-class: \S+", line) for line in lines)
+
+
+def test_flow_bundle_is_a_single_file_iife() -> None:
+    flow_dir = VENDOR / "flow" / "0.12.0"
+    text = (flow_dir / "flow.bundle.js").read_text(encoding="utf-8")
+    assert not re.search(r"^\s*(import|export)\s", text, re.MULTILINE)
+    assert "quirkFlow" in text
+    lic = (flow_dir / "LICENSE").read_text(encoding="utf-8")
+    assert "EPL-2.0" in lic and "ISC" in lic

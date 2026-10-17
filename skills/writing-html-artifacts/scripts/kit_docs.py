@@ -93,8 +93,9 @@ def render_reference(catalog: kitcheck.Catalog) -> str:
         "## How inclusion works",
         "",
         "Write any `q-*` tag in a source and the builder inlines the kit automatically; `q-chart` also inlines "
-        "Chart.js. Never list `kit` in the source header's `libraries`. A tag that breaks its element's contract "
-        "below fails the build's `kit` check, which names the element and the problem.",
+        "Chart.js and `q-flow` inlines the flow layout library. Never list `kit` or `flow` in the source header's "
+        "`libraries`. A tag that breaks its element's contract below fails the build's `kit` check, which names the "
+        "element and the problem.",
         "",
         "## Tag index",
         "",
@@ -109,8 +110,6 @@ def render_reference(catalog: kitcheck.Catalog) -> str:
 
 
 def _placeholder(slot: str) -> str:
-    if slot == "aside":
-        return '<aside aria-label="Notes">\n<p>Supporting notes for the example.</p>\n</aside>'
     return f"<p>Content for the {slot} slot.</p>"
 
 

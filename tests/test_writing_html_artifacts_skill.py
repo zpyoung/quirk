@@ -14,6 +14,7 @@ SKILL_DIR = REPO_ROOT / "skills" / "writing-html-artifacts"
 SKILL_PATH = SKILL_DIR / "SKILL.md"
 EVALS_PATH = SKILL_DIR / "evals" / "trigger-evals.json"
 LAYOUT_EVALS_PATH = SKILL_DIR / "evals" / "layout-evals.json"
+FLOW_EVALS_PATH = SKILL_DIR / "evals" / "flow-evals.json"
 
 sys.path.insert(0, str(SKILL_DIR / "scripts"))
 
@@ -131,3 +132,17 @@ def test_skill_names_every_shape_in_documented_order() -> None:
     positions = [body.find(f"`{layout}`") for layout in LAYOUTS]
     assert all(p >= 0 for p in positions), positions
     assert positions == sorted(positions)
+
+
+def test_flow_evals_are_balanced_and_unique() -> None:
+    data = json.loads(FLOW_EVALS_PATH.read_text())
+    assert data["skill_name"] == "writing-html-artifacts"
+    evals = data["evals"]
+    assert all(set(e) == {"id", "prompt", "expected"} for e in evals)
+    assert all(isinstance(e["id"], int) and not isinstance(e["id"], bool) for e in evals)
+    assert all(isinstance(e["prompt"], str) and e["prompt"].strip() for e in evals)
+    assert all(e["expected"] in ("q-flow", "mermaid") for e in evals)
+    assert sum(e["expected"] == "q-flow" for e in evals) >= 6
+    assert sum(e["expected"] == "mermaid" for e in evals) >= 6
+    assert len({e["prompt"] for e in evals}) == len(evals)
+    assert len({e["id"] for e in evals}) == len(evals)

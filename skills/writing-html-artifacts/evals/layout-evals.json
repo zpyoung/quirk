@@ -4,12 +4,12 @@
     {
       "id": 1,
       "prompt": "Write up what we found in last week's checkout latency data as an HTML page: the headline number, the three or four findings, and the evidence behind each.",
-      "expected_layout": "report"
+      "expected_layout": "explainer"
     },
     {
       "id": 2,
       "prompt": "Make a one-page HTML report of the Q3 flaky-test investigation. Lead with the conclusion, list the findings, then show the supporting tables and charts. Add a short note on how the numbers were measured.",
-      "expected_layout": "report"
+      "expected_layout": "explainer"
     },
     {
       "id": 3,
@@ -74,7 +74,7 @@
     {
       "id": 15,
       "prompt": "Write up the results of our Postgres 15 upgrade trial as an HTML page. I want to say whether it was worth doing, what we measured, and what went wrong along the way.",
-      "expected_layout": "report"
+      "expected_layout": "explainer"
     },
     {
       "id": 16,
