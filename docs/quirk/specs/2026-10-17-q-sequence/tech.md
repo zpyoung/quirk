@@ -175,6 +175,7 @@ details.q-sequence-list[data-q-kit][data-q-sequence-list] > summary "Diagram as 
       ol[data-q-sequence-list-steps]          one li per step:
         message   li[data-q-sequence-list-message="<N>"]  "<N>. <from label> → <to label>: <label> (<type>)"
                   create adds ", creates <to label>" inside the parentheses
+                  a message with a detail appends div[data-q-sequence-list-detail] holding the sanitized detail
         note      li[data-q-sequence-list-note]  "Note over <labels joined by ', '>: <text>"
         end       li[data-q-sequence-list-end]   "<label> ends"
         fragment  li[data-q-sequence-list-fragment="<type>"]  "<type>: <label>" then a nested ol of its steps;
