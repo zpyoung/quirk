@@ -998,11 +998,16 @@ def _flow_forward_cycles(node_ids: list[str], edges: list[dict[str, Any]]) -> li
 
 
 def _flow_value_lines(value: Any) -> Optional[int]:
-    """Line count of ``value`` pretty-printed with 2-space indent, or ``None`` when it isn't strict JSON."""
+    """Line count of ``value`` pretty-printed with 2-space indent, or ``None`` when it isn't strict JSON.
+
+    A string or key holding an unpaired surrogate counts as not JSON: it can't be written as UTF-8.
+    """
     try:
-        return json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False).count("\n") + 1
+        text = json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False)
+        text.encode("utf-8")
     except (ValueError, RecursionError):
         return None
+    return text.count("\n") + 1
 
 
 def _validate_flow_traces(

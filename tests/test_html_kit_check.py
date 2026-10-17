@@ -1514,6 +1514,13 @@ def test_flow_trace_value_must_be_json() -> None:
         assert got == ['<q-flow> trace "t" step 2 has a value that isn\'t JSON'], bad
 
 
+def test_flow_trace_value_with_a_lone_surrogate_is_not_json() -> None:
+    expected = ['<q-flow> trace "t" step 2 has a value that isn\'t JSON']
+    for bad in ("\ud800", {"k\udc00": 1}, {"a": [{"b": "x\ud800y"}]}):
+        assert messages(renewal(pair({"value": bad}))) == expected, bad
+    assert messages(renewal(pair({"value": "\U0001f600"}))) == []
+
+
 def test_flow_trace_value_over_400_lines_fails() -> None:
     got = messages(renewal(pair({"value": list(range(399))})))
     assert got == ['<q-flow> trace "t" step 2 value is 401 lines; at most 400']
