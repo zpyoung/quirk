@@ -6271,6 +6271,40 @@ def test_flow_trace_escape_closes_trace_mode_first_and_returns_focus_to_the_butt
     assert r["expandedAfter"] is False
 
 
+def test_flow_trace_escape_in_one_graph_closes_only_that_trace_and_never_moves_focus_into_another(
+    flow_traces_page: Path,
+) -> None:
+    state = """(() => {
+      const a = document.querySelector('#renewal');
+      const b = document.querySelector('#wide');
+      const btn = (f) => f.querySelector('[data-q-flow-action="trace"]');
+      return {
+        aTracing: a.hasAttribute('data-q-flow-tracing'),
+        bTracing: b.hasAttribute('data-q-flow-tracing'),
+        activeIsABtn: document.activeElement === btn(a),
+        activeInB: b.contains(document.activeElement),
+      };
+    })()"""
+    out = run(
+        flow_traces_page,
+        {"click": TRACE_BTN},
+        {"click": '#wide [data-q-flow-action="trace"]'},
+        ev(state, "both"),
+        {"focus": TRACE_NEXT},
+        {"press": "Escape"},
+        ev(state, "afterA"),
+        ev("document.activeElement.blur()", "blur"),
+        {"press": "Escape"},
+        ev(state, "afterBody"),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["both"]["aTracing"] is True and r["both"]["bTracing"] is True
+    assert r["afterA"] == {"aTracing": False, "bTracing": True, "activeIsABtn": True, "activeInB": False}
+    assert r["afterBody"]["bTracing"] is False
+    assert r["afterBody"]["activeInB"] is False
+
+
 def test_flow_trace_reduced_motion_steps_and_plays_without_pulse_dots_and_with_a_thick_current_edge(
     flow_traces_page: Path,
 ) -> None:

@@ -3487,7 +3487,16 @@
       this._rovingId = null;
       this._onDocKey = this._onDocKey || function (e) {
         if (e.key === 'Escape' && (self.hasAttribute('data-q-flow-expanded') || self._focusedNode || self._focusedGroup || self._trace)) {
-          self._handleEscape(e);
+          if (self._trace) {
+            // every graph listens on document, so a tracing graph yields to the graph the key came from
+            var host = e.target && e.target.closest ? e.target.closest('q-flow') : null;
+            if (host && host !== self) {
+              return;
+            }
+            self._handleEscape(e, host === self);
+            return;
+          }
+          self._handleEscape(e, true);
         }
       };
       this._onResize = this._onResize || function () {
@@ -5067,11 +5076,11 @@
       }
     }
 
-    _handleEscape(ev) {
+    _handleEscape(ev, restoreFocus) {
       ev.preventDefault();
       ev.stopPropagation();
       if (this._trace) {
-        this._closeTrace(true);
+        this._closeTrace(restoreFocus !== false);
         return;
       }
       if (this.hasAttribute('data-q-flow-expanded') && !this._focusedAfterExpand) {
