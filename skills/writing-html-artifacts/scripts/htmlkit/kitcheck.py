@@ -1743,7 +1743,9 @@ def _validate_sequence_node(
         located = _is_text(frm) and _is_text(to) and _is_text(label)
         if not located:
             problem(f"message {number} needs from, to and a label")
-        else:
+        if "id" in step and not _is_text(step["id"]):
+            problem(f"message {number} id must be a non-empty string")
+        if located:
             for pid in dict.fromkeys((frm, to)):
                 if pid not in part_map:
                     problem(f'message {number} names unknown participant "{pid}"')
@@ -1828,6 +1830,8 @@ def _validate_sequence_node(
             return None
         flabel = step.get("label")
         label = flabel if _is_text(flabel) else None
+        if "label" in step and label is None:
+            problem(f"{ftype} label must be a non-empty string")
         title = label or ftype
 
         def run_steps(raw: Any) -> list[dict[str, Any]]:
@@ -2861,29 +2865,45 @@ def _render_sequence_fallback_html(parsed: dict[str, Any]) -> str:
         return f"{name(m['from'])} \u2192 {name(m['to'])}"
 
     def render_steps(steps: list[dict[str, Any]]) -> str:
-        return "".join(render_step(s) for s in steps)
-
-    def render_step(step: dict[str, Any]) -> str:
-        if "message" in step:
-            m = by_number[step["message"]]
-            meta = f"{m['type']}, creates {name(m['to'])}" if m["create"] else m["type"]
-            detail = f"<div data-q-sequence-list-detail>{m['detail']}</div>" if m["detail"] else ""
-            return (
-                f'<li data-q-sequence-list-message="{m["number"]}">'
-                f"{m['number']}. {describe(m)}: {esc(m['label'])} ({meta}){detail}</li>"
-            )
-        if "note" in step:
-            labels = ", ".join(name(pid) for pid in step["over"])
-            return f"<li data-q-sequence-list-note>Note over {labels}: {esc(step['note'])}</li>"
-        if "end" in step:
-            return f"<li data-q-sequence-list-end>{name(step['end'])} ends</li>"
-        kind = html_lib.escape(step["fragment"], quote=True)
-        if "branches" in step:
-            titles = " / ".join(esc(b["label"]) for b in step["branches"])
-            branches = "".join(f"<li>{esc(b['label'])}<ol>{render_steps(b['steps'])}</ol></li>" for b in step["branches"])
-            return f'<li data-q-sequence-list-fragment="{kind}">{kind}: {titles}<ol>{branches}</ol></li>'
-        title = f"{kind}: {esc(step['label'])}" if step["label"] else kind
-        return f'<li data-q-sequence-list-fragment="{kind}">{title}<ol>{render_steps(step["steps"])}</ol></li>'
+        """Render ``steps`` with an explicit stack so nesting depth never meets Python's recursion limit."""
+        out: list[str] = []
+        pending: list[Any] = list(reversed(steps))
+        while pending:
+            item = pending.pop()
+            if isinstance(item, str):
+                out.append(item)
+                continue
+            step = item
+            if "message" in step:
+                m = by_number[step["message"]]
+                meta = f"{m['type']}, creates {name(m['to'])}" if m["create"] else m["type"]
+                detail = f"<div data-q-sequence-list-detail>{m['detail']}</div>" if m["detail"] else ""
+                out.append(
+                    f'<li data-q-sequence-list-message="{m["number"]}">'
+                    f"{m['number']}. {describe(m)}: {esc(m['label'])} ({meta}){detail}</li>"
+                )
+            elif "note" in step:
+                labels = ", ".join(name(pid) for pid in step["over"])
+                out.append(f"<li data-q-sequence-list-note>Note over {labels}: {esc(step['note'])}</li>")
+            elif "end" in step:
+                out.append(f"<li data-q-sequence-list-end>{name(step['end'])} ends</li>")
+            else:
+                kind = html_lib.escape(step["fragment"], quote=True)
+                tail: list[Any] = []
+                if "branches" in step:
+                    titles = " / ".join(esc(b["label"]) for b in step["branches"])
+                    out.append(f'<li data-q-sequence-list-fragment="{kind}">{kind}: {titles}<ol>')
+                    for b in step["branches"]:
+                        tail.append(f"<li>{esc(b['label'])}<ol>")
+                        tail.extend(b["steps"])
+                        tail.append("</ol></li>")
+                else:
+                    title = f"{kind}: {esc(step['label'])}" if step["label"] else kind
+                    out.append(f'<li data-q-sequence-list-fragment="{kind}">{title}<ol>')
+                    tail.extend(step["steps"])
+                tail.append("</ol></li>")
+                pending.extend(reversed(tail))
+        return "".join(out)
 
     def render_participant(p: dict[str, Any]) -> str:
         kind = f" ({esc(p['kind'])})" if p["kind"] else ""
@@ -2921,6 +2941,11 @@ def _render_sequence_fallback_html(parsed: dict[str, Any]) -> str:
     )
 
 
+def _is_sequence_list_marker(node: _Node) -> bool:
+    """Whether ``node`` is a list or stage element a previous injection (or the author) already placed."""
+    return ("data-q-sequence-list" in node.attrs and node.tag == "details") or "data-q-sequence-stage" in node.attrs
+
+
 _SEQUENCE_BLOCK = re.compile(r"(<q-sequence(?=[\s/>])[^>]*>.*?</q-sequence\s*>)", re.IGNORECASE | re.DOTALL)
 _SEQUENCE_CLOSER = re.compile(r"</q-sequence\s*>\Z", re.IGNORECASE)
 
@@ -2936,8 +2961,6 @@ def inject_sequence_fallbacks(html: str) -> str:
 
     def replace_block(match: "re.Match[str]") -> str:
         block = match.group(1)
-        if "data-q-sequence-list" in block:
-            return block
         builder = _TreeBuilder()
         try:
             builder.feed(block)
@@ -2947,6 +2970,8 @@ def inject_sequence_fallbacks(html: str) -> str:
         builder.finish()
         element = next((n for n in builder.nodes if n.tag == "q-sequence"), None)
         if element is None or element.self_closed or "summary" not in element.attrs:
+            return block
+        if any(_is_sequence_list_marker(child) for child in element.children):
             return block
         parsed = _validate_sequence_node(element, lambda _l, _m: None, lambda _l, _m: None)
         if parsed is None:

@@ -1658,6 +1658,47 @@ def test_sequence_fallback_skip_rules() -> None:
     assert seq_injected(no_script) == no_script
 
 
+def test_sequence_fallback_renders_every_nesting_depth_the_check_accepts() -> None:
+    from htmlkit import kitcheck
+
+    depth = 300
+    step: dict = {"from": "a", "to": "b", "label": "go", "type": "async"}
+    for _ in range(depth):
+        step = {"fragment": "opt", "steps": [step]}
+    payload = {"participants": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}], "steps": [step]}
+    page = seq_page(payload)
+    node = next(n for n in _tree_nodes(page) if n.tag == "q-sequence")
+    parsed = kitcheck._validate_sequence_node(node, lambda _l, _m: None, lambda _l, _m: None)
+    assert parsed is not None
+    injected = seq_injected(page)
+    innermost = '<li data-q-sequence-list-message="1">1. A \u2192 B: go (async)</li>'
+    assert injected.count("data-q-sequence-list-fragment=\"opt\"") == depth
+    assert ('<li data-q-sequence-list-fragment="opt">opt<ol>' * depth + innermost + "</ol></li>" * depth) in injected
+
+
+def _tree_nodes(page: str):
+    from htmlkit import kitcheck
+
+    builder = kitcheck._TreeBuilder()
+    builder.feed(page)
+    builder.close()
+    builder.finish()
+    return builder.nodes
+
+
+def test_sequence_fallback_is_injected_when_a_label_spells_the_list_attribute() -> None:
+    payload = {
+        "participants": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+        "steps": [{"from": "a", "to": "b", "label": "data-q-sequence-list", "type": "call"}],
+    }
+    page = seq_page(payload)
+    injected = seq_injected(page)
+    assert injected != page
+    assert injected.count("<details ") == 1
+    assert "data-q-sequence-list-body" in injected
+    assert seq_injected(injected) == injected
+
+
 def test_sequence_fallback_handles_several_sequences_and_leaves_q_flow_alone() -> None:
     flow = FLOW
     page = seq_page(SEQ_SMALL) + flow + seq_page(SEQ_SMALL)

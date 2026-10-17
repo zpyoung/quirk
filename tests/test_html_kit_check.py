@@ -3014,6 +3014,27 @@ def test_sequence_deeply_nested_fragments_do_not_crash() -> None:
     assert isinstance(kitcheck.inject_sequence_fallbacks(page), str)
 
 
+def test_sequence_a_supplied_message_id_must_be_a_non_empty_string() -> None:
+    for bad in ("", "  ", 7, None, ["x"]):
+        got = seq_messages(small(msg("a", "b", kind="async", id=bad)))
+        assert got == ["<q-sequence> message 1 id must be a non-empty string"], bad
+    assert seq_messages(small(msg("a", "b", kind="async"))) == []
+
+
+def test_sequence_a_supplied_fragment_label_must_be_a_non_empty_string() -> None:
+    inner = msg("a", "b", kind="async")
+    for kind in ("opt", "loop"):
+        for bad in ("", "  ", 7, None):
+            step = {"fragment": kind, "label": bad, "steps": [inner]}
+            assert seq_messages(small(step)) == [f"<q-sequence> {kind} label must be a non-empty string"], (kind, bad)
+    for kind in ("alt", "par"):
+        for bad in ("", 7):
+            branches = [{"label": "x", "steps": [inner]}, {"label": "y", "steps": [inner]}]
+            step = {"fragment": kind, "label": bad, "branches": branches}
+            assert seq_messages(small(step)) == [f"<q-sequence> {kind} label must be a non-empty string"], (kind, bad)
+    assert seq_messages(small({"fragment": "opt", "steps": [inner]})) == []
+
+
 def test_sequence_traces_must_be_a_list_with_id_label_and_two_steps() -> None:
     def patch(value):
         return lambda p: p.update(traces=value)
