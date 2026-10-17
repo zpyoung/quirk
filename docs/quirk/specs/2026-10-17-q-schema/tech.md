@@ -2,7 +2,7 @@
 
 **Status**: Reviewed (one review round, fixes applied) · Logic spec: [logic.md](logic.md) · Builds on [the q-flow tech spec](/docs/quirk/specs/2026-10-16-q-flow/tech.md) and [the q-flow shapes tech spec](/docs/quirk/specs/2026-10-17-q-flow-shapes/tech.md)
 
-All paths are relative to the repository root. `S` = `skills/writing-html-artifacts`, `K` = `S/vendor/kit/1.0.0`, `H` = `S/scripts/htmlkit`, `T` = `tests`. Line numbers are from commit `d0d2618`.
+All paths are relative to the repository root. `S` = `skills/writing-html-artifacts`, `K` = `S/vendor/kit/1.0.0`, `H` = `S/scripts/htmlkit`, `T` = `tests`. Line numbers are from commit `d0d2618`, except the `K/kit.js` lines, which are re-resolved after the canvas helpers landed (commit `4103840`).
 
 ## Architecture
 
@@ -29,11 +29,10 @@ Spike result (2026-10-17, elkjs from `S/vendor/flow/0.12.0/flow.bundle.js`): `el
 Back-link: [Scope and non-goals](logic.md#scope-and-non-goals).
 
 ### `K/kit.js`
-- Module helpers to reuse unchanged: `svgNode` `:2995`, `roundedFlowPath` `:3131`, `sanitizeFlowDetail` `:2891`, `isValidFlowDetail` `:2940`, `isBlankFlowId` `:2936`, `hasCoordKeys` `:2983`, `kitNode` `:250`, `watchChildren` `:278`, `onTheme` `:57`, `uid` `:244`.
-- `QFlow` methods to factor (contract 1): `_measureTextFactory` `:3549-3563`, `_buildControls` `:4331-4367`, `_buildDrawer` `:4369-4377`, `_setupZoom` `:4379-4410`, `_applyTransform` `:4412-4421`, `_zoomBy` `:4423-4433`, `_fitBounds` `:4435-4457`, `_ensureNodeVisible` `:4459-4498`, `_toggleExpand` `:4500-4517`, `_setRoving` `:5050-5062`, `_nearestNeighbor` `:5064-5109`.
-- Patterns to mirror, not edit: `connectedCallback` `:3156-3185` (Escape, resize refit, `onTheme`, `watchChildren`), `_signature` `:3187`, `_ensureScaffold` `:3375-3410`, `_failLayout` `:3531-3547`, `_setup` `:3565-3592` (`document.fonts.ready`, `window.quirkFlow.ELK` guard), ELK root options in `_runLayout` `:3707`, `collectShapes` in `_renderGraph` `:3758`, group drawing in `_renderGraph`, `_focusGroup` `:4924-5011`, `_clearFocus` `:5013-5048`, `_onNodeKey`/`_onGraphKey` `:5111-5144`.
-- New block of canvas helpers: insert after `roundedFlowPath` and before `class QFlow` (`:3149-3151`).
-- New `class QSchema`: insert after `QFlow` ends (`:5149`), before the `define` calls `:5151-5162`; add `define('q-schema', QSchema)` after `:5162`.
+- Module helpers to reuse unchanged: `svgNode` `:2995`, `roundedFlowPath` `:3131`, `sanitizeFlowDetail` `:2891`, `isValidFlowDetail` `:2940`, `isBlankFlowId` `:2936`, `hasCoordKeys` `:2983`, `kitNode` `:250`, `watchChildren` `:278`, `onTheme` `:57`, `uid` `:244`, and the `canvas*` helpers `:3152-3412` (contract 1, landed).
+- `QFlow` methods factored (contract 1, landed): `_measureTextFactory`, `_buildControls`, `_buildDrawer`, `_setupZoom`, `_applyTransform`, `_zoomBy`, `_fitBounds`, `_ensureNodeVisible`, `_toggleExpand`, `_setRoving`, `_nearestNeighbor` are now one-line delegates inside `class QFlow` `:3414-5191`.
+- Patterns to mirror, not edit: `connectedCallback` `:3419` (Escape, resize refit, `onTheme`, `watchChildren`), `_signature` `:3450`, `_ensureScaffold` `:3638`, `_failLayout` `:3794`, `_setup` `:3816` (`document.fonts.ready`, `window.quirkFlow.ELK` guard), ELK root options in `_runLayout` (`:3845`, options at `:3959`), `collectShapes` and group drawing in `_renderGraph` `:4003`, `_focusGroup` `:5019`, `_clearFocus` `:5108`, `_onNodeKey`/`_onGraphKey` `:5153-5186`.
+- New `class QSchema`: insert after `QFlow` ends (`:5191`), before the `define` calls `:5193-5204`; add `define('q-schema', QSchema)` after `define('q-flow', QFlow)` `:5204`.
 
 ### `K/kit.css`
 - `display:block` list `:35`: add `q-schema`.
@@ -213,9 +212,9 @@ Contract 2 is the data model. The Python cleaned dict per entity: `{id, label, k
 
 Back-link: [Decisions Locked](logic.md#decisions-locked).
 
-- **`QFlow` methods outside contract 1's list** (`K/kit.js:3151-5149`). Specs 2 (q-flow traces) and 3 (q-sequence) edit them in parallel; touching them causes merge conflicts.
+- **`QFlow` methods outside contract 1's list** (`K/kit.js:3414-5191`). Specs 2 (q-flow traces) and 3 (q-sequence) edit them in parallel; touching them causes merge conflicts.
 - **Factored `QFlow` behaviour.** Every string, attribute, number and fallback in contract 1's methods stays the same; the q-flow browser tests pin them.
-- **q-flow's ELK root options and free ports** (`K/kit.js:3707`). QSchema sets its own options in its own graph; q-flow keeps free ports for ELK #1192.
+- **q-flow's ELK root options and free ports** (`K/kit.js:3959`). QSchema sets its own options in its own graph; q-flow keeps free ports for ELK #1192.
 - **`_validate_flow_node`, `_render_flow_fallback_html`, `inject_flow_fallbacks`** (`H/kitcheck.py:995-1391`). Builder and companion tests pin them; schema code sits beside them.
 - **The q-flow catalog entry and `flow-data` rule.** `T/test_html_kit_catalog.py` pins them.
 - **`data-q-flow-ready` semantics** (removed at setup, `true` or `error` after). verify and the harness depend on them.
