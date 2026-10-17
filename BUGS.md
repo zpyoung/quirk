@@ -192,3 +192,22 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: low
 - **Proposed fix**: reserve the toolbar's height at the top when fitting, at least on narrow stages.
 - **Blocker for**: reading the top node of a tall graph on a phone without panning
+
+## BUG-23: q-flow's detail sanitizer crashes the build on deeply nested detail HTML
+- **Observed**: 2026-10-17
+- **File**: skills/writing-html-artifacts/scripts/htmlkit/kitcheck.py:906
+- **Description**: _check_and_sanitize_flow_detail recurses per nested element, so a q-flow node detail with about 1,100 nested lists raises an uncaught RecursionError and aborts the build. q-schema now catches it and reports a validation failure (commit 797d789); q-flow does not. Observed 2026-10-17 in the q-schema SDD final review.
+- **Introduced by**: unknown (q-flow kit check, before d6895d2)
+- **Severity**: low
+- **Proposed fix**: Sanitize iteratively, or cap nesting depth with a validation failure.
+- **Blocker for**: builds of q-flow pages whose node detail is pathologically nested
+
+## BUG-24: QSchema change detection joins its parts with NUL, so some changes could skip a re-render
+- **Observed**: 2026-10-17
+- **File**: skills/writing-html-artifacts/vendor/kit/1.0.0/kit.js:6577
+- **Description**: QSchema._signature joins the JSON text, summary and notation with a NUL separator to decide whether to re-render, so two different attribute and data combinations containing NUL could compare equal and leave a stale drawing. Observed 2026-10-17 in the q-schema SDD final review.
+- **Introduced by**: this session (q-schema runtime)
+- **Severity**: low
+- **Proposed fix**: Compare the parts separately, or encode them unambiguously.
+- **Blocker for**: live edits of a q-schema whose summary or data contains NUL
+
