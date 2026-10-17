@@ -1,6 +1,6 @@
 # Logic spec: stepping through a value in `q-flow`
 
-**Status**: Approved
+**Status**: Approved · Tech spec: authored (`tech.md`; tier gate fired: crosses subsystem boundaries and touches >3 source files)
 
 A `q-flow` graph shows what connects to what, but not what happens to the data on the way. A reader
 can see that a renewal order goes from Pricing to Tax to Charge worker. They can't see that Pricing
@@ -401,7 +401,8 @@ In scope:
 - the text list and the no-script fallback
 - the skill's text on when to add a trace, in SKILL.md and the design reference; the generated
   components reference; "walk through how the order changes" prompts in the evals
-- an example page with the renewal graph and its two traces
+- two traces on the report explainer example's retry flow: one that succeeds on a retry and one that
+  gives up
 
 Not in scope:
 
@@ -535,6 +536,10 @@ Build-only questions for the tech spec:
 
 ## Status & amendments
 
-**Status**: Approved
+**Status**: Approved · Tech spec: authored (`tech.md`; tier gate fired: crosses subsystem boundaries and touches >3 source files)
 
-**Amendments:** none yet.
+**Amendments:**
+
+- 2026-10-17: the example is two traces on the report explainer's existing retry flow rather than a
+  new renewal graph page, because the shape examples are a fixed set of twelve pages and the retry
+  flow already has the decision and loop a trace needs to show (tech spec authoring).
