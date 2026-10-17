@@ -850,3 +850,20 @@ def test_companion_screen_with_q_flow_in_content_inlines_flow_and_kit_and_passes
     assert 'data-quirk-lib="flow@0.12.0"' in page
     assert 'data-quirk-lib="kit@1.0.0"' in page
     assert "<summary>Graph as a list</summary>" in page
+
+
+def test_companion_screen_with_q_schema_in_content_inlines_flow_and_kit_and_passes(server: Server) -> None:
+    schema = (
+        '<q-schema summary="Customers and the charges billed to them.">'
+        '<script type="application/json">'
+        '{"entities":[{"id":"customer","label":"Customer","fields":[{"name":"id","type":"int","key":"PK"}]},'
+        '{"id":"charge","label":"Charge","fields":[{"name":"customer_id","type":"int","key":"FK"}]}],'
+        '"relationships":[{"from":"charge.customer_id","to":"customer.id","from_card":"zero-or-many","to_card":"one"}]}'
+        "</script></q-schema>"
+    )
+    shown = server.show(screen_with(content=schema))
+    assert shown["checks"]["passed"] is True, shown["checks"]
+    page = (server.session / "screens" / f"{shown['screen']}.html").read_text(encoding="utf-8")
+    assert 'data-quirk-lib="flow@0.12.0"' in page
+    assert 'data-quirk-lib="kit@1.0.0"' in page
+    assert "<summary>Data model as a list</summary>" in page

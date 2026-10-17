@@ -1622,3 +1622,655 @@ def test_flow_trace_failures_keep_id_label_duplicate_steps_order() -> None:
         '<q-flow> has duplicate trace id "t"',
         '<q-flow> trace "t" needs at least 2 steps',
     ]
+
+# -- q-schema: rule schema-data and warnings (SC-3, SC-4, SC-29, SC-30) -----------------------------
+
+
+def schema_markup(payload: dict, attrs: str = 'summary="A model."') -> str:
+    return f'<q-schema {attrs}><script type="application/json">{json.dumps(payload)}</script></q-schema>'
+
+
+def _er_fields(*names: str) -> list[dict]:
+    return [{"name": n, "type": "text"} for n in names]
+
+
+def billing_model() -> dict:
+    charge_fields = [
+        {"name": "id", "type": "int", "key": "PK"},
+        *_er_fields(
+            "status", "total_price", "currency", "scheduled_at", "processed_at", "error_type",
+            "error", "retry_count", "tags", "note", "created_at", "updated_at",
+        ),
+        {"name": "customer_id", "type": "int", "key": "FK"},
+        {"name": "subscription_id", "type": "int", "key": "FK", "nullable": True},
+    ]
+    return {
+        "kinds": {"core": 1, "billing": 2},
+        "groups": [{"id": "billing", "label": "Billing"}],
+        "entities": [
+            {
+                "id": "customer", "label": "Customer", "kind": "core",
+                "fields": [
+                    {"name": "id", "type": "int", "key": "PK"},
+                    {"name": "email", "type": "text", "key": "UK"},
+                    *_er_fields("first_name", "last_name", "created_at"),
+                ],
+            },
+            {
+                "id": "subscription", "label": "Subscription", "kind": "billing", "group": "billing",
+                "detail": "<p>A recurring order.</p>",
+                "fields": [
+                    {"name": "id", "type": "int", "key": "PK"},
+                    {"name": "customer_id", "type": "int", "key": "FK"},
+                    *_er_fields("product_title", "status", "next_charge_date", "interval"),
+                ],
+            },
+            {"id": "charge", "label": "Charge", "kind": "billing", "group": "billing", "fields": charge_fields},
+            {
+                "id": "line_item", "label": "Line item", "kind": "billing", "group": "billing",
+                "fields": [
+                    {"name": "id", "type": "int", "key": "PK"},
+                    {"name": "charge_id", "type": "int", "key": "FK"},
+                    *_er_fields("title", "quantity", "price"),
+                ],
+            },
+        ],
+        "relationships": [
+            {"from": "subscription.customer_id", "to": "customer.id", "from_card": "zero-or-many", "to_card": "one", "label": "has"},
+            {"from": "charge.customer_id", "to": "customer.id", "from_card": "zero-or-many", "to_card": "one", "label": "is billed"},
+            {"from": "charge.subscription_id", "to": "subscription.id", "from_card": "zero-or-many", "to_card": "zero-or-one", "label": "generates"},
+            {"from": "line_item.charge_id", "to": "charge.id", "from_card": "one-or-many", "to_card": "one", "label": "contains"},
+        ],
+    }
+
+
+def _cls(cid: str, label: str, **rest) -> dict:
+    return {"id": cid, "label": label, **rest}
+
+
+def parser_model() -> dict:
+    private = lambda name, type_: {"name": name, "type": type_, "visibility": "private"}  # noqa: E731
+    return {
+        "kinds": {"api": 1, "internals": 3},
+        "entities": [
+            _cls("parser", "Parser", kind="api", stereotype="interface",
+                 methods=[{"signature": "parse(src: str) -> Ast", "visibility": "public"}]),
+            _cls("recursivedescentparser", "RecursiveDescentParser", kind="internals",
+                 fields=[
+                     {"name": "max_depth", "type": "int", "visibility": "public", "static": True},
+                     private("lexer", "Lexer"), private("pos", "int"), private("depth", "int"),
+                     private("errors", "list"), private("options", "dict"),
+                 ],
+                 methods=[
+                     {"signature": "parse(src: str) -> Ast", "visibility": "public"},
+                     {"signature": "expr() -> Ast", "visibility": "private"},
+                     {"signature": "term() -> Ast", "visibility": "private"},
+                     {"signature": "factor() -> Ast", "visibility": "private"},
+                     {"signature": "expect(kind: TokenKind) -> Token", "visibility": "private"},
+                     {"signature": "peek() -> Token", "visibility": "private"},
+                     {"signature": "error(msg: str)", "visibility": "private"},
+                 ]),
+            _cls("lexer", "Lexer", kind="internals",
+                 fields=[private("src", "str"), private("pos", "int")],
+                 methods=[{"signature": "next() -> Token", "visibility": "public"},
+                          {"signature": "peek() -> Token", "visibility": "public"}]),
+            _cls("token", "Token", kind="internals",
+                 fields=[{"name": "kind", "type": "TokenKind", "visibility": "public"},
+                         {"name": "text", "type": "str", "visibility": "public"},
+                         {"name": "line", "type": "int", "visibility": "public"}]),
+            _cls("tokenkind", "TokenKind", kind="internals", stereotype="enum",
+                 fields=[{"name": n} for n in ("NUMBER", "IDENT", "PLUS", "LPAREN", "RPAREN", "EOF")]),
+            _cls("ast", "Ast", kind="api", stereotype="abstract",
+                 methods=[{"signature": "accept(v: Visitor)", "visibility": "public", "abstract": True}]),
+            _cls("binaryexpr", "BinaryExpr", kind="api",
+                 fields=[{"name": "left", "type": "Ast", "visibility": "public"},
+                         {"name": "op", "type": "TokenKind", "visibility": "public"},
+                         {"name": "right", "type": "Ast", "visibility": "public"}]),
+        ],
+        "relationships": [
+            {"from": "recursivedescentparser", "to": "parser", "type": "implements"},
+            {"from": "recursivedescentparser", "to": "lexer", "type": "composition", "to_mult": "1"},
+            {"from": "lexer", "to": "token", "type": "dependency", "label": "produces"},
+            {"from": "token", "to": "tokenkind", "type": "association", "directed": True},
+            {"from": "binaryexpr", "to": "ast", "type": "inherits"},
+            {"from": "binaryexpr", "to": "ast", "type": "aggregation", "to_mult": "2", "label": "operands"},
+            {"from": "parser", "to": "ast", "type": "dependency", "label": "returns"},
+        ],
+    }
+
+
+CLASS_ATTRS = 'notation="class" summary="A diagram."'
+
+
+def er_with(change) -> dict:
+    model = billing_model()
+    change(model)
+    return model
+
+
+def class_with(change) -> dict:
+    model = parser_model()
+    change(model)
+    return model
+
+
+def schema_failures(payload: dict, attrs: str = 'summary="A model."') -> list[str]:
+    return messages(schema_markup(payload, attrs))
+
+
+def schema_warnings(payload: dict, attrs: str = 'summary="A model."') -> list[str]:
+    return warn_messages(schema_markup(payload, attrs))
+
+
+def test_schema_billing_model_and_parser_diagram_pass_with_no_warnings() -> None:
+    assert schema_failures(billing_model()) == []
+    assert schema_warnings(billing_model()) == []
+    assert schema_failures(parser_model(), CLASS_ATTRS) == []
+    assert schema_warnings(parser_model(), CLASS_ATTRS) == []
+    assert schema_failures(billing_model(), 'notation="er" summary="A model."') == []
+
+
+def test_schema_missing_summary_and_unknown_notation_report_only_the_catalog_message() -> None:
+    assert messages(
+        f'<q-schema><script type="application/json">{json.dumps(billing_model())}</script></q-schema>'
+    ) == ["<q-schema> needs attribute summary"]
+    assert schema_failures(billing_model(), 'notation="uml" summary="s"') == [
+        '<q-schema> notation="uml" is not one of er, class'
+    ]
+    assert schema_failures(parser_model(), 'notation="uml" summary="s"') == [
+        '<q-schema> notation="uml" is not one of er, class'
+    ]
+    assert messages('<q-schema summary="s" notation="uml"></q-schema>') == [
+        '<q-schema> notation="uml" is not one of er, class',
+        "<q-schema> needs one of: script",
+    ]
+    assert schema_warnings(billing_model(), 'notation="uml" summary="s"') == []
+
+
+def test_schema_needs_a_json_script_child() -> None:
+    assert messages('<q-schema summary="s"></q-schema>') == ["<q-schema> needs one of: script"]
+    assert messages('<q-schema summary="s"><script>1</script></q-schema>') == [
+        '<q-schema> needs a <script type="application/json"> child holding a JSON object'
+    ]
+    assert messages('<q-schema summary="s"><script type="application/json">[1]</script></q-schema>') == [
+        '<q-schema> needs a <script type="application/json"> child holding a JSON object'
+    ]
+    assert messages('<q-schema summary="s"><script type="application/json">{oops</script></q-schema>') == [
+        '<q-schema> needs a <script type="application/json"> child holding a JSON object'
+    ]
+
+
+def test_schema_duplicate_entity_id_and_duplicate_field() -> None:
+    def two_charges(m):
+        m["entities"].append({"id": "charge", "label": "Charge again", "fields": _er_fields("id")})
+
+    assert schema_failures(er_with(two_charges)) == ['<q-schema> duplicate entity id "charge"']
+
+    def repeated_status(m):
+        m["entities"][2]["fields"].append({"name": "status", "type": "text"})
+
+    assert schema_failures(er_with(repeated_status)) == ['<q-schema> duplicate field "status" in "charge"']
+
+    def group_clash(m):
+        m["entities"][0]["id"] = "billing"
+        m["relationships"] = []
+
+    assert schema_failures(er_with(group_clash)) == ['<q-schema> has duplicate id "billing"']
+
+
+def test_schema_relationship_ends() -> None:
+    def to_customers(m):
+        m["relationships"][0]["to"] = "customers.id"
+
+    assert schema_failures(er_with(to_customers)) == ['<q-schema> relationship names unknown entity "customers"']
+
+    def to_uuid(m):
+        m["relationships"][0]["to"] = "customer.uuid"
+
+    assert schema_failures(er_with(to_uuid)) == ['<q-schema> relationship names unknown field "customer.uuid"']
+
+    def no_field(m):
+        m["relationships"][0]["to"] = "customer"
+
+    assert schema_failures(er_with(no_field)) == ['<q-schema> relationship ends are written entity.field']
+
+    def empty_parts(m):
+        m["relationships"][0]["to"] = "customer."
+        m["relationships"][1]["to"] = ".id"
+        m["relationships"][2]["from"] = 7
+
+    assert schema_failures(er_with(empty_parts)) == ["<q-schema> relationship ends are written entity.field"] * 3
+
+
+def test_schema_relationship_end_splits_on_the_first_dot() -> None:
+    def dotted_field(m):
+        m["entities"][0]["fields"].append({"name": "meta.id", "type": "int"})
+        m["relationships"][0]["to"] = "customer.meta.id"
+
+    assert schema_failures(er_with(dotted_field)) == []
+
+    def dotted_entity(m):
+        m["entities"][0]["id"] = "cust.omer"
+        m["relationships"] = []
+
+    assert schema_failures(er_with(dotted_entity)) == ['<q-schema> entity ids may not contain \'.\': "cust.omer"']
+
+
+def test_schema_unknown_cardinality_and_key() -> None:
+    def many(m):
+        m["relationships"][0]["from_card"] = "many"
+
+    assert schema_failures(er_with(many)) == [
+        '<q-schema> unknown cardinality "many"; use zero-or-one, one, zero-or-many or one-or-many'
+    ]
+
+    def no_card(m):
+        del m["relationships"][0]["to_card"]
+
+    assert schema_failures(er_with(no_card)) == ["<q-schema> relationship needs to_card"]
+
+    def primary(m):
+        m["entities"][0]["fields"][0]["key"] = "PRIMARY"
+
+    assert schema_failures(er_with(primary)) == ['<q-schema> unknown key "PRIMARY"; use PK, FK or UK']
+
+    def key_list(m):
+        m["entities"][0]["fields"][0]["key"] = ["PK", "FK"]
+
+    assert schema_failures(er_with(key_list)) == []
+
+    def bad_in_list(m):
+        m["entities"][0]["fields"][0]["key"] = ["PK", "XX"]
+
+    assert schema_failures(er_with(bad_in_list)) == ['<q-schema> unknown key "XX"; use PK, FK or UK']
+
+
+def test_schema_coordinates_are_rejected_wherever_they_appear() -> None:
+    expected = ["<q-schema> positions are not allowed; the element lays the model out"]
+
+    def on_entity(m):
+        m["entities"][0].update({"x": 10, "y": 20})
+
+    def on_root(m):
+        m["position"] = {"x": 1}
+
+    def on_field(m):
+        m["entities"][0]["fields"][0]["y"] = 3
+
+    def on_group(m):
+        m["groups"][0]["x"] = 3
+
+    def on_relationship(m):
+        m["relationships"][0]["positions"] = []
+
+    for change in (on_entity, on_root, on_field, on_group, on_relationship):
+        assert schema_failures(er_with(change)) == expected, change.__name__
+
+    def on_method(m):
+        m["entities"][0]["methods"] = [{"signature": "f()", "x": 1}]
+
+    assert schema_failures(class_with(on_method), CLASS_ATTRS) == expected
+
+
+def test_schema_kinds_groups_and_detail() -> None:
+    def nine(m):
+        m["kinds"] = {f"k{i}": min(i, 8) for i in range(1, 10)}
+        for e in m["entities"]:
+            e.pop("kind", None)
+
+    assert schema_failures(er_with(nine)) == ["<q-schema> at most eight kinds, one per chart color"]
+
+    def audit(m):
+        m["entities"][0]["kind"] = "audit"
+
+    assert schema_failures(er_with(audit)) == ['<q-schema> undeclared kind "audit"']
+
+    def ledger(m):
+        m["entities"][0]["group"] = "ledger"
+
+    assert schema_failures(er_with(ledger)) == ['<q-schema> unknown group "ledger"']
+
+    def self_parent(m):
+        m["groups"][0]["parent"] = "billing"
+
+    assert schema_failures(er_with(self_parent)) == ["<q-schema> group nesting loops"]
+
+    def child_parent(m):
+        m["groups"] = [{"id": "a", "label": "A", "parent": "b"}, {"id": "b", "label": "B", "parent": "a"}]
+        for e in m["entities"]:
+            e.pop("group", None)
+
+    assert schema_failures(er_with(child_parent)) == ["<q-schema> group nesting loops"]
+
+    for bad in ("<script>alert(1)</script>", "<form><input></form>", '<img src="https://example.com/x.png">'):
+
+        def detail(m, bad=bad):
+            m["entities"][0]["detail"] = bad
+
+        assert schema_failures(er_with(detail)) == [
+            "<q-schema> detail may hold only paragraphs, lists, code and links"
+        ], bad
+
+    raw_script = '<q-schema summary="s"><script type="application/json">{"detail": <script>}</script></q-schema>'
+    assert messages(raw_script) == ["<q-schema> detail may hold only paragraphs, lists, code and links"]
+
+
+def test_schema_size_limits() -> None:
+    def many(count: int) -> dict:
+        return {"entities": [{"id": f"e{i}", "label": f"E{i}", "fields": _er_fields("id")} for i in range(count)]}
+
+    assert schema_failures(many(85)) == ["<q-schema> more than 80 entities"]
+    assert schema_failures(many(80)) == []
+    assert schema_warnings(many(80)) == [
+        "<q-schema> large models read poorly, split them into groups or several models"
+    ]
+    assert schema_warnings(many(30)) == []
+    assert schema_warnings(many(34)) == [
+        "<q-schema> large models read poorly, split them into groups or several models"
+    ]
+
+
+def test_schema_entity_must_have_fields_and_summary_is_the_catalogs() -> None:
+    def none(m):
+        del m["entities"][0]["fields"]
+        m["relationships"] = []
+
+    assert schema_failures(er_with(none)) == ['<q-schema> entity "customer" needs a non-empty fields list']
+
+    def empty(m):
+        m["entities"][0]["fields"] = []
+        m["relationships"] = []
+
+    assert schema_failures(er_with(empty)) == ['<q-schema> entity "customer" needs a non-empty fields list']
+    assert schema_failures({"entities": []}) == ["<q-schema> needs a non-empty entities list"]
+
+
+def test_schema_warnings_for_wide_entities_and_foreign_keys() -> None:
+    def forty_five(m):
+        m["entities"][2]["fields"] += _er_fields(*(f"extra_{i}" for i in range(30)))
+
+    assert schema_failures(er_with(forty_five)) == []
+    assert schema_warnings(er_with(forty_five)) == ['<q-schema> "charge" has more than 40 fields']
+
+    def forty(m):
+        m["entities"][2]["fields"] += _er_fields(*(f"extra_{i}" for i in range(25)))
+
+    assert schema_warnings(er_with(forty)) == []
+
+    def unused_fk(m):
+        del m["relationships"][3]
+
+    assert schema_failures(er_with(unused_fk)) == []
+    assert schema_warnings(er_with(unused_fk)) == ['<q-schema> FK field "line_item.charge_id" has no relationship']
+
+    def not_fk(m):
+        m["relationships"].append(
+            {"from": "charge.status", "to": "customer.id", "from_card": "zero-or-many", "to_card": "one"}
+        )
+
+    assert schema_failures(er_with(not_fk)) == []
+    assert schema_warnings(er_with(not_fk)) == [
+        '<q-schema> relationship starts at "charge.status", which isn\'t marked FK'
+    ]
+
+
+def test_schema_er_rejects_class_only_data() -> None:
+    expected = ['<q-schema> methods, stereotypes and relationship types belong to class diagrams; add notation="class"']
+
+    def methods(m):
+        m["entities"][0]["methods"] = [{"signature": "f()"}]
+
+    def stereotype(m):
+        m["entities"][0]["stereotype"] = "enum"
+
+    def rel_type(m):
+        m["relationships"][0]["type"] = "inherits"
+
+    for change in (methods, stereotype, rel_type):
+        assert schema_failures(er_with(change)) == expected, change.__name__
+
+
+def test_schema_class_duplicates_and_unknown_classes() -> None:
+    def two_lexers(m):
+        m["entities"].append(_cls("lexer", "Lexer again"))
+
+    assert schema_failures(class_with(two_lexers), CLASS_ATTRS) == ['<q-schema> duplicate class id "lexer"']
+
+    def repeated_attribute(m):
+        m["entities"][2]["fields"].append({"name": "pos", "type": "int"})
+
+    assert schema_failures(class_with(repeated_attribute), CLASS_ATTRS) == ['<q-schema> duplicate member in "lexer"']
+
+    def repeated_method(m):
+        m["entities"][2]["methods"].append({"signature": "peek() -> Token"})
+
+    assert schema_failures(class_with(repeated_method), CLASS_ATTRS) == ['<q-schema> duplicate member in "lexer"']
+
+    def same_name_attribute_and_method(m):
+        m["entities"][2]["methods"].append({"signature": "pos"})
+
+    assert schema_failures(class_with(same_name_attribute_and_method), CLASS_ATTRS) == []
+
+    def tokenizer(m):
+        m["relationships"][2]["to"] = "tokenizer"
+
+    assert schema_failures(class_with(tokenizer), CLASS_ATTRS) == ['<q-schema> relationship names unknown class "tokenizer"']
+
+    def member_end(m):
+        m["relationships"][2]["from"] = "lexer.next"
+
+    assert schema_failures(class_with(member_end), CLASS_ATTRS) == [
+        "<q-schema> class relationships join classes, not members"
+    ]
+
+    def dotted_class_id(m):
+        m["entities"].append(_cls("a.b", "AB"))
+        m["relationships"][2]["to"] = "a.b"
+
+    assert schema_failures(class_with(dotted_class_id), CLASS_ATTRS) == []
+
+
+def test_schema_class_unknown_type_visibility_stereotype_and_multiplicity() -> None:
+    def extends(m):
+        m["relationships"][4]["type"] = "extends"
+
+    assert schema_failures(class_with(extends), CLASS_ATTRS) == [
+        '<q-schema> unknown relationship type "extends"; '
+        "use inherits, implements, composition, aggregation, association or dependency"
+    ]
+
+    def no_type(m):
+        del m["relationships"][4]["type"]
+
+    assert len(schema_failures(class_with(no_type), CLASS_ATTRS)) == 1
+
+    def internal(m):
+        m["entities"][2]["fields"][0]["visibility"] = "internal"
+
+    assert schema_failures(class_with(internal), CLASS_ATTRS) == [
+        '<q-schema> unknown visibility "internal"; use public, private, protected or package'
+    ]
+
+    def method_internal(m):
+        m["entities"][2]["methods"][0]["visibility"] = "internal"
+
+    assert schema_failures(class_with(method_internal), CLASS_ATTRS) == [
+        '<q-schema> unknown visibility "internal"; use public, private, protected or package'
+    ]
+
+    def mixin(m):
+        m["entities"][2]["stereotype"] = "mixin"
+
+    assert schema_failures(class_with(mixin), CLASS_ATTRS) == [
+        '<q-schema> unknown stereotype "mixin"; use interface, abstract or enum'
+    ]
+
+    for bad in ("many", "", "1..", "..2", "2..1", "-1", "1..2..3", "1\n", "*..2", "١"):
+
+        def multiplicity(m, bad=bad):
+            m["relationships"][1]["to_mult"] = bad
+
+        assert schema_failures(class_with(multiplicity), CLASS_ATTRS) == [
+            f'<q-schema> unknown multiplicity "{bad}"; use 1, 0..1, *, 0..*, 1..* or n..m'
+        ], repr(bad)
+
+    for good in ("1", "0..1", "*", "0..*", "1..*", "2..5", "3..3", "10"):
+
+        def fine(m, good=good):
+            m["relationships"][1]["from_mult"] = good
+
+        assert schema_failures(class_with(fine), CLASS_ATTRS) == [], good
+
+
+def test_schema_class_inheritance_loops_cover_inherits_and_implements() -> None:
+    def mutual(m):
+        m["relationships"] += [
+            {"from": "ast", "to": "binaryexpr", "type": "inherits"},
+        ]
+
+    assert schema_failures(class_with(mutual), CLASS_ATTRS) == ["<q-schema> inheritance loops"]
+
+    def mixed(m):
+        m["relationships"] += [{"from": "parser", "to": "recursivedescentparser", "type": "inherits"}]
+
+    assert schema_failures(class_with(mixed), CLASS_ATTRS) == ["<q-schema> inheritance loops"]
+
+    def self_loop(m):
+        m["relationships"] += [{"from": "token", "to": "token", "type": "inherits"}]
+
+    assert schema_failures(class_with(self_loop), CLASS_ATTRS) == ["<q-schema> inheritance loops"]
+
+    def composition_cycle(m):
+        m["relationships"] += [{"from": "ast", "to": "binaryexpr", "type": "composition"}]
+
+    assert schema_failures(class_with(composition_cycle), CLASS_ATTRS) == []
+
+
+def test_schema_class_directed_only_on_association() -> None:
+    def on_dependency(m):
+        m["relationships"][2]["directed"] = True
+
+    assert schema_failures(class_with(on_dependency), CLASS_ATTRS) == [
+        "<q-schema> directed is only valid on an association"
+    ]
+
+    def not_a_boolean(m):
+        m["relationships"][3]["directed"] = "yes"
+
+    assert schema_failures(class_with(not_a_boolean), CLASS_ATTRS) == ["<q-schema> directed must be true or false"]
+
+
+def test_schema_class_rejects_keys_and_cardinality() -> None:
+    expected = ["<q-schema> keys and cardinality belong to data models; this is a class diagram"]
+
+    def key(m):
+        m["entities"][2]["fields"][0]["key"] = "PK"
+
+    def cardinality(m):
+        m["relationships"][1]["from_card"] = "one"
+
+    for change in (key, cardinality):
+        assert schema_failures(class_with(change), CLASS_ATTRS) == expected, change.__name__
+
+
+def test_schema_class_shares_the_coordinate_kind_group_detail_and_size_rules() -> None:
+    def audit(m):
+        m["entities"][0]["kind"] = "audit"
+
+    assert schema_failures(class_with(audit), CLASS_ATTRS) == ['<q-schema> undeclared kind "audit"']
+
+    def ledger(m):
+        m["entities"][0]["group"] = "ledger"
+
+    assert schema_failures(class_with(ledger), CLASS_ATTRS) == ['<q-schema> unknown group "ledger"']
+
+    def detail(m):
+        m["entities"][0]["detail"] = "<form></form>"
+
+    assert schema_failures(class_with(detail), CLASS_ATTRS) == [
+        "<q-schema> detail may hold only paragraphs, lists, code and links"
+    ]
+
+    big = {"entities": [{"id": f"c{i}", "label": f"C{i}"} for i in range(85)]}
+    assert schema_failures(big, CLASS_ATTRS) == ["<q-schema> more than 80 classes"]
+    assert schema_failures({"entities": [{"id": "c", "label": "C"}]}, CLASS_ATTRS) == []
+
+
+def test_schema_class_warnings() -> None:
+    thirty_four = {"entities": [{"id": f"c{i}", "label": f"C{i}"} for i in range(34)]}
+    assert schema_warnings(thirty_four, CLASS_ATTRS) == [
+        "<q-schema> large diagrams read poorly, split them into groups or several diagrams"
+    ]
+
+    def members(m):
+        m["entities"][1]["fields"] += [{"name": f"extra_{i}"} for i in range(30)]
+
+    assert schema_warnings(class_with(members), CLASS_ATTRS) == [
+        '<q-schema> "recursivedescentparser" has more than 40 members'
+    ]
+
+    def implements_lexer(m):
+        m["relationships"].append({"from": "token", "to": "lexer", "type": "implements"})
+
+    assert schema_failures(class_with(implements_lexer), CLASS_ATTRS) == []
+    assert schema_warnings(class_with(implements_lexer), CLASS_ATTRS) == [
+        '<q-schema> "lexer" is implemented but isn\'t an interface'
+    ]
+
+    def inherits_parser(m):
+        m["relationships"].append({"from": "token", "to": "parser", "type": "inherits"})
+
+    assert schema_failures(class_with(inherits_parser), CLASS_ATTRS) == []
+    assert schema_warnings(class_with(inherits_parser), CLASS_ATTRS) == [
+        '<q-schema> "parser" is an interface; use implements'
+    ]
+
+
+def test_schema_fallback_is_skipped_for_data_that_fails_the_check() -> None:
+    bad = er_with(lambda m: m["relationships"][0].update({"to": "nobody.id"}))
+    markup = schema_markup(bad)
+    assert kitcheck.inject_schema_fallbacks(markup) == markup
+    assert kitcheck.inject_schema_fallbacks(schema_markup(billing_model(), 'notation="uml" summary="s"')).count("data-q-flow-list") == 0
+
+
+def test_schema_fallback_skips_blocks_that_already_hold_a_list_or_have_no_summary() -> None:
+    good = schema_markup(billing_model())
+    once = kitcheck.inject_schema_fallbacks(good)
+    assert "data-q-schema-list-rels" in once
+    assert kitcheck.inject_schema_fallbacks(once) == once
+    no_summary = schema_markup(billing_model(), "")
+    assert kitcheck.inject_schema_fallbacks(no_summary) == no_summary
+    assert kitcheck.inject_schema_fallbacks('<q-schema summary="s"/>') == '<q-schema summary="s"/>'
+    assert kitcheck.inject_schema_fallbacks("<p>none</p>") == "<p>none</p>"
+
+
+def test_needs_flow_matches_both_tags() -> None:
+    assert kitcheck.needs_flow('<q-schema summary="s"></q-schema>')
+    assert kitcheck.needs_flow("<q-flow>")
+    assert not kitcheck.needs_flow("<q-chart>")
+    assert not kitcheck.needs_flow("&lt;q-schema")
+
+
+def test_a_built_page_with_q_schema_and_no_flow_block_names_the_tag() -> None:
+    html = page(schema_markup(billing_model()), libraries={"kit": "1.0.0"}, blocks=kit_blocks())
+    line = html[: html.index("<q-schema")].count("\n") + 1
+    result = run(html, REAL_STORE)
+    assert [f["detail"] for f in result["failures"] if f["check"] == "kit"] == [
+        f"page line {line}: q-schema elements are used but flow is not inlined"
+    ]
+    flow_page = page(flow_markup({"nodes": [{"id": "a", "label": "A"}]}), libraries={"kit": "1.0.0"}, blocks=kit_blocks())
+    flow_line = flow_page[: flow_page.index("<q-flow")].count("\n") + 1
+    result = run(flow_page, REAL_STORE)
+    assert [f["detail"] for f in result["failures"] if f["check"] == "kit"] == [
+        f"page line {flow_line}: q-flow elements are used but flow is not inlined"
+    ]
+
+
+def test_a_built_page_with_q_schema_and_the_flow_block_passes() -> None:
+    flow_lv = REAL_STORE.resolve("flow", None)
+    flow_blocks = REAL_STORE.license_comment(flow_lv) + "\n" + "\n".join(b.text for b in REAL_STORE.inline_blocks(flow_lv)) + "\n"
+    html = page(
+        schema_markup(billing_model()), libraries={"kit": "1.0.0", "flow": flow_lv.version}, blocks=flow_blocks + kit_blocks()
+    )
+    result = run(html, REAL_STORE)
+    assert [f for f in result["failures"] if f["check"] == "kit"] == []

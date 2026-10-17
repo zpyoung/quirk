@@ -93,7 +93,7 @@ def render_reference(catalog: kitcheck.Catalog) -> str:
         "## How inclusion works",
         "",
         "Write any `q-*` tag in a source and the builder inlines the kit automatically; `q-chart` also inlines "
-        "Chart.js and `q-flow` inlines the flow layout library. Never list `kit` or `flow` in the source header's "
+        "Chart.js, and `q-flow` and `q-schema` inline the flow layout library. Never list `kit` or `flow` in the source header's "
         "`libraries`. A tag that breaks its element's contract below fails the build's `kit` check, which names the "
         "element and the problem.",
         "",

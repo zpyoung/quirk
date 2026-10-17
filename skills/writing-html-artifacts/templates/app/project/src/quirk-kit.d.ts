@@ -22,6 +22,7 @@ declare module 'react' {
       'q-sidenote': KitElementProps
       'q-compare': KitElementProps
       'q-flow': KitElementProps
+      'q-schema': KitElementProps
     }
   }
 }

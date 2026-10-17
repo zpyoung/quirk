@@ -1180,3 +1180,190 @@ def test_q_flow_without_traces_has_no_trace_block(tmp_path, env, project):
     assert rc == 0, result
     # the inlined kit.js names the attribute too, so look for the rendered block only
     assert '<div data-q-flow-list-trace="' not in out.read_text(encoding="utf-8")
+
+def _schema_page(payload: dict, attrs: str = 'summary="A model."') -> str:
+    return f'<q-schema {attrs}><script type="application/json">{json.dumps(payload)}</script></q-schema>'
+
+
+def _er(*names: str) -> list[dict]:
+    return [{"name": n, "type": "text"} for n in names]
+
+
+BILLING = {
+    "kinds": {"core": 1, "billing": 2},
+    "groups": [{"id": "billing", "label": "Billing"}],
+    "entities": [
+        {
+            "id": "customer", "label": "Customer", "kind": "core",
+            "fields": [{"name": "id", "type": "int", "key": "PK"}, {"name": "email", "type": "text", "key": "UK"}],
+        },
+        {
+            "id": "subscription", "label": "Subscription", "kind": "billing", "group": "billing",
+            "detail": "<p>A recurring order.</p>",
+            "fields": [{"name": "id", "type": "int", "key": "PK"}, {"name": "customer_id", "type": "int", "key": "FK"}],
+        },
+        {
+            "id": "charge", "label": "Charge", "kind": "billing", "group": "billing",
+            "fields": [
+                {"name": "id", "type": "int", "key": "PK"},
+                *_er("status", "total_price", "currency", "scheduled_at", "processed_at", "error_type",
+                     "error", "retry_count", "tags", "note", "created_at", "updated_at"),
+                {"name": "customer_id", "type": "int", "key": "FK"},
+                {"name": "subscription_id", "type": "int", "key": "FK", "nullable": True, "note": "set for recurring orders"},
+            ],
+        },
+        {
+            "id": "line_item", "label": "Line item", "kind": "billing", "group": "billing",
+            "fields": [{"name": "id", "type": "int", "key": "PK"}, {"name": "charge_id", "type": "int", "key": "FK"}],
+        },
+    ],
+    "relationships": [
+        {"from": "subscription.customer_id", "to": "customer.id", "from_card": "zero-or-many", "to_card": "one", "label": "has"},
+        {"from": "charge.customer_id", "to": "customer.id", "from_card": "zero-or-many", "to_card": "one", "label": "is billed"},
+        {"from": "charge.subscription_id", "to": "subscription.id", "from_card": "zero-or-many", "to_card": "zero-or-one", "label": "generates"},
+        {"from": "line_item.charge_id", "to": "charge.id", "from_card": "one-or-many", "to_card": "one"},
+    ],
+}
+PARSER = {
+    "kinds": {"api": 1, "internals": 3},
+    "entities": [
+        {"id": "parser", "label": "Parser", "kind": "api", "stereotype": "interface",
+         "methods": [{"signature": "parse(src: str) -> Ast", "visibility": "public"}]},
+        {"id": "recursivedescentparser", "label": "RecursiveDescentParser", "kind": "internals",
+         "fields": [{"name": "max_depth", "type": "int", "visibility": "public", "static": True}]},
+        {"id": "lexer", "label": "Lexer", "kind": "internals",
+         "fields": [{"name": "src", "type": "str", "visibility": "private", "note": "raw text"}],
+         "methods": [{"signature": "next() -> Token", "visibility": "public"}]},
+        {"id": "token", "label": "Token", "kind": "internals"},
+        {"id": "tokenkind", "label": "TokenKind", "kind": "internals", "stereotype": "enum",
+         "fields": [{"name": "NUMBER"}, {"name": "IDENT"}]},
+        {"id": "ast", "label": "Ast", "kind": "api", "stereotype": "abstract",
+         "methods": [{"signature": "accept(v: Visitor)", "visibility": "public", "abstract": True},
+                     {"signature": "walk()", "static": True}]},
+        {"id": "binaryexpr", "label": "BinaryExpr", "kind": "api"},
+    ],
+    "relationships": [
+        {"from": "recursivedescentparser", "to": "parser", "type": "implements"},
+        {"from": "recursivedescentparser", "to": "lexer", "type": "composition", "to_mult": "1"},
+        {"from": "lexer", "to": "token", "type": "dependency", "label": "produces"},
+        {"from": "token", "to": "tokenkind", "type": "association", "directed": True},
+        {"from": "binaryexpr", "to": "ast", "type": "inherits"},
+        {"from": "binaryexpr", "to": "ast", "type": "aggregation", "to_mult": "2", "label": "operands"},
+        {"from": "parser", "to": "ast", "type": "association", "from_mult": "0..*", "to_mult": "1", "label": "returns"},
+    ],
+}
+PARSER_ATTRS = 'notation="class" summary="The parser and its AST."'
+
+
+def test_q_schema_pulls_in_flow_and_kit_in_the_same_order_as_q_flow(tmp_path, env, project):
+    rc, result, out = report_build(tmp_path, env, project, _schema_page(BILLING), name="schema")
+    assert rc == 0 and result["checks"]["passed"] is True, result["checks"]
+    assert list(result["libraries"]) == ["simple-css", "flow", "kit", "alpine"]
+    html = out.read_text(encoding="utf-8")
+    positions = [html.index(f'<script data-quirk-lib="{lib}@') for lib in ("flow", "kit", "alpine")]
+    assert positions == sorted(positions)
+    assert "<!-- license: flow 0.12.0 EPL-2.0 AND ISC" in html
+
+
+def test_a_page_with_q_flow_and_q_schema_inlines_flow_once(tmp_path, env, project):
+    rc, result, out = report_build(tmp_path, env, project, FLOW + _schema_page(BILLING), name="both")
+    assert rc == 0 and result["checks"]["passed"] is True, result["checks"]
+    assert list(result["libraries"]) == ["simple-css", "flow", "kit", "alpine"]
+    html = out.read_text(encoding="utf-8")
+    assert html.count('data-quirk-lib="flow@') == 1
+    assert html.count("<summary>Graph as a list</summary>") == 1
+    assert html.count("<summary>Data model as a list</summary>") == 1
+
+
+def test_q_schema_billing_fallback_carries_the_model_as_text(tmp_path, env, project):
+    rc, result, out = report_build(tmp_path, env, project, _schema_page(BILLING), name="billing")
+    assert rc == 0 and result["checks"]["passed"] is True, result["checks"]
+    html = out.read_text(encoding="utf-8")
+    assert '<details class="q-flow-list" data-q-kit data-q-flow-list open>' in html
+    assert "<summary>Data model as a list</summary>" in html
+    assert "JavaScript is off, so this data model is shown as a list below." in html
+    assert (
+        "Each Customer has zero or many Subscriptions, and each Subscription has one Customer "
+        "(subscription.customer_id → customer.id)"
+    ) in html
+    assert "Each Charge generates zero or many Subscriptions" not in html
+    assert (
+        "Each Subscription generates zero or many Charges, and each Charge has zero or one Subscription "
+        "(charge.subscription_id → subscription.id)"
+    ) in html
+    assert "Each Charge has one or many Line items, and each Line item has one Charge (line_item.charge_id → charge.id)" in html
+    assert "subscription_id: int, FK, can be empty (set for recurring orders)" in html
+    assert "<li>id: int, PK</li>" in html and "<li>email: text, UK</li>" in html
+    charge = html.split('data-q-schema-list-entity="charge"', 1)[1].split("</ul>", 1)[0]
+    assert charge.count("<li>") == 15
+    assert "<strong>Charge</strong> (billing)<ul>" in html
+    assert "<strong>Customer</strong> (core)<ul>" in html
+    assert '<li data-q-flow-list-group="billing"><strong>Billing</strong><ul>' in html
+    assert "<div data-q-flow-list-detail><p>A recurring order.</p></div>" in html
+    assert "<p>Relationships</p><ul data-q-schema-list-rels>" in html
+
+
+def test_q_schema_class_fallback_carries_the_diagram_as_text(tmp_path, env, project):
+    rc, result, out = report_build(tmp_path, env, project, _schema_page(PARSER, PARSER_ATTRS), name="parser")
+    assert rc == 0 and result["checks"]["passed"] is True, result["checks"]
+    html = out.read_text(encoding="utf-8")
+    assert "<summary>Class diagram as a list</summary>" in html
+    assert "JavaScript is off, so this class diagram is shown as a list below." in html
+    assert "<strong>Parser</strong> (api, interface)" in html
+    assert "<strong>TokenKind</strong> (internals, enum)" in html
+    assert "<strong>Ast</strong> (api, abstract)" in html
+    for sentence in (
+        "RecursiveDescentParser implements Parser",
+        "BinaryExpr inherits from Ast",
+        "RecursiveDescentParser is composed of 1 Lexer",
+        "BinaryExpr aggregates 2 Ast (operands)",
+        "Token is associated with TokenKind",
+        "Lexer depends on Token (produces)",
+    ):
+        assert f"<li>{sentence}</li>" in html, sentence
+    assert "<li>Parser is associated with 1 Ast (0..* Parser per Ast; returns)</li>" in html
+    assert "<li>public parse(src: str) -&gt; Ast</li>" in html
+    assert "<li>public static max_depth: int</li>" in html
+    assert "<li>private src: str (raw text)</li>" in html
+    assert "<li>public abstract accept(v: Visitor)</li>" in html
+    assert "<li>static walk()</li>" in html
+    assert "<li>NUMBER</li>" in html
+    assert "data-q-schema-list-entity=\"token\"><strong>Token</strong> (internals)</li>" in html
+
+
+def test_q_schema_fallback_escapes_author_text(tmp_path, env, project):
+    payload = {
+        "entities": [
+            {"id": "a", "label": "<b>A&B</b>", "fields": [{"name": "x", "type": "a<b", "note": "\"q\""}]},
+            {"id": "b", "label": "Box", "fields": [{"name": "y", "type": "int"}]},
+        ],
+        "relationships": [
+            {"from": "a.x", "to": "b.y", "from_card": "one", "to_card": "one", "label": "<i>owns</i>"}
+        ],
+    }
+    rc, result, out = report_build(tmp_path, env, project, _schema_page(payload), name="escape")
+    assert rc == 0, result["checks"]
+    html = out.read_text(encoding="utf-8")
+    fallback = html.split("data-q-flow-list-body>", 1)[1].split("</details>", 1)[0]
+    assert "<strong>&lt;b&gt;A&amp;B&lt;/b&gt;</strong>" in fallback
+    assert "<b>" not in fallback and "<i>" not in fallback
+    assert "x: a&lt;b (&quot;q&quot;)" in fallback
+    assert "&lt;i&gt;owns&lt;/i&gt;" in fallback
+
+
+def test_q_schema_warnings_are_reported_in_build_checks(tmp_path, env, project):
+    unused = json.loads(json.dumps(BILLING))
+    del unused["relationships"][3]
+    rc, result, _ = report_build(tmp_path, env, project, _schema_page(unused), name="schemawarn")
+    assert rc == 0 and result["checks"]["passed"] is True
+    kit_warns = [w["detail"] for w in result["checks"]["warnings"] if w["check"] == "kit"]
+    assert any('FK field "line_item.charge_id" has no relationship' in w for w in kit_warns), kit_warns
+
+
+def test_a_bad_q_schema_fails_the_build_and_gets_no_fallback(tmp_path, env, project):
+    bad = json.loads(json.dumps(BILLING))
+    bad["relationships"][0]["to"] = "customers.id"
+    rc, result, _ = report_build(tmp_path, env, project, _schema_page(bad), name="schemabad")
+    assert rc == 1
+    kit = [f["detail"] for f in result["checks"]["failures"] if f["check"] == "kit"]
+    assert len(kit) == 1 and kit[0].endswith('<q-schema> relationship names unknown entity "customers"')

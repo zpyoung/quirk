@@ -386,12 +386,14 @@ def _kit_failures_and_warnings(
         failures.append(
             {"check": "kit", "detail": f"{label} line {line}: kit elements are used but the kit is not inlined"}
         )
-    flow_match = kitcheck.FLOW_TAG.search(text) if scans_the_page else None
-    if flow_match is not None and not any(name.startswith("flow@") for name in labels):
-        line = text.count("\n", 0, flow_match.start()) + 1
-        failures.append(
-            {"check": "kit", "detail": f"{label} line {line}: q-flow elements are used but flow is not inlined"}
+    if scans_the_page and kitcheck.needs_flow(text) and not any(name.startswith("flow@") for name in labels):
+        first_flow = min(
+            (m for m in (kitcheck.FLOW_TAG.search(text), kitcheck.SCHEMA_TAG.search(text)) if m is not None),
+            key=lambda m: m.start(),
         )
+        tag = "q-schema" if first_flow.re is kitcheck.SCHEMA_TAG else "q-flow"
+        line = text.count("\n", 0, first_flow.start()) + 1
+        failures.append({"check": "kit", "detail": f"{label} line {line}: {tag} elements are used but flow is not inlined"})
     return failures, warnings
 
 def run_checks(

@@ -4,7 +4,7 @@ Generated from `vendor/kit/1.0.0/catalog.json` by `scripts/kit_docs.py reference
 
 ## How inclusion works
 
-Write any `q-*` tag in a source and the builder inlines the kit automatically; `q-chart` also inlines Chart.js and `q-flow` inlines the flow layout library. Never list `kit` or `flow` in the source header's `libraries`. A tag that breaks its element's contract below fails the build's `kit` check, which names the element and the problem.
+Write any `q-*` tag in a source and the builder inlines the kit automatically; `q-chart` also inlines Chart.js, and `q-flow` and `q-schema` inline the flow layout library. Never list `kit` or `flow` in the source header's `libraries`. A tag that breaks its element's contract below fails the build's `kit` check, which names the element and the problem.
 
 ## Tag index
 
@@ -22,6 +22,7 @@ Write any `q-*` tag in a source and the builder inlines the kit automatically; `
 - [`q-sidenote`](#q-sidenote)
 - [`q-compare`](#q-compare)
 - [`q-flow`](#q-flow)
+- [`q-schema`](#q-schema)
 
 ## `q-tabs`
 
@@ -502,6 +503,85 @@ A `<script type="application/json">` child holding the graph data: optional kind
   }
   </script>
 </q-flow>
+```
+
+Companion option html: not allowed (interactive)
+
+## `q-schema`
+
+Use when an HTML page needs a data model, entity-relationship diagram or class diagram the reader can pan, zoom and click through, with tables or classes, their fields and the relationships between them.
+
+### Attributes
+
+| Name | Required | Kind | Values | Default | Description |
+|---|---|---|---|---|---|
+| `summary` | yes | text | - | - | One sentence stating what the model shows; it becomes the model's accessible label. |
+| `notation` | no | enum | `er`, `class` | `er` | What the data describes: an entity-relationship data model with tables, fields and cardinality, or a UML class diagram. |
+
+### Children
+
+A `<script type="application/json">` child holding the model: optional kinds (mapping each kind name to a chart color 1 to 8), optional groups (id, label, optional parent) and required entities (id, label, optional kind, group and short HTML detail). In er notation each entity has a required non-empty fields list (name, type, optional key of PK, FK or UK or a list of them, nullable boolean and note) and relationships name their ends as entity.field with from_card and to_card of zero-or-one, one, zero-or-many or one-or-many and an optional label. In class notation an entity may have a stereotype of interface, abstract or enum, optional fields as attributes (name, optional type, visibility, static and note) and optional methods (a free-text signature, optional visibility, static, abstract and note), and relationships join two entities by id with a type of inherits, implements, composition, aggregation, association or dependency, optional from_mult and to_mult such as 1, 0..1, * or 0..*, an optional label and, on an association only, directed. Never write coordinates; the element lays the model out and builds a "Data model as a list" (class notation: "Class diagram as a list") disclosure below the canvas.
+
+### Example
+
+```html
+<q-schema summary="Customers, their subscriptions, and the charges and line items billing creates.">
+  <script type="application/json">
+  {
+    "kinds": {"core": 1, "billing": 2},
+    "groups": [
+      {"id": "billing", "label": "Billing"}
+    ],
+    "entities": [
+      {"id": "customer", "label": "Customer", "kind": "core", "fields": [
+        {"name": "id", "type": "int", "key": "PK"},
+        {"name": "email", "type": "text", "key": "UK"},
+        {"name": "first_name", "type": "text"},
+        {"name": "last_name", "type": "text"},
+        {"name": "created_at", "type": "timestamp"}
+      ]},
+      {"id": "subscription", "label": "Subscription", "kind": "billing", "group": "billing", "detail": "<p>A recurring order that creates a charge each interval.</p>", "fields": [
+        {"name": "id", "type": "int", "key": "PK"},
+        {"name": "customer_id", "type": "int", "key": "FK"},
+        {"name": "product_title", "type": "text"},
+        {"name": "status", "type": "text"},
+        {"name": "next_charge_date", "type": "date"},
+        {"name": "interval", "type": "text"}
+      ]},
+      {"id": "charge", "label": "Charge", "kind": "billing", "group": "billing", "fields": [
+        {"name": "id", "type": "int", "key": "PK"},
+        {"name": "status", "type": "text"},
+        {"name": "total_price", "type": "decimal"},
+        {"name": "currency", "type": "text"},
+        {"name": "scheduled_at", "type": "timestamp"},
+        {"name": "processed_at", "type": "timestamp", "nullable": true},
+        {"name": "error_type", "type": "text", "nullable": true},
+        {"name": "error", "type": "text", "nullable": true},
+        {"name": "retry_count", "type": "int"},
+        {"name": "tags", "type": "text", "nullable": true},
+        {"name": "note", "type": "text", "nullable": true},
+        {"name": "created_at", "type": "timestamp"},
+        {"name": "updated_at", "type": "timestamp"},
+        {"name": "customer_id", "type": "int", "key": "FK"},
+        {"name": "subscription_id", "type": "int", "key": "FK", "nullable": true}
+      ]},
+      {"id": "line_item", "label": "Line item", "kind": "billing", "group": "billing", "fields": [
+        {"name": "id", "type": "int", "key": "PK"},
+        {"name": "charge_id", "type": "int", "key": "FK"},
+        {"name": "title", "type": "text"},
+        {"name": "quantity", "type": "int"},
+        {"name": "price", "type": "decimal"}
+      ]}
+    ],
+    "relationships": [
+      {"from": "subscription.customer_id", "to": "customer.id", "from_card": "zero-or-many", "to_card": "one", "label": "has"},
+      {"from": "charge.customer_id", "to": "customer.id", "from_card": "zero-or-many", "to_card": "one", "label": "is billed"},
+      {"from": "charge.subscription_id", "to": "subscription.id", "from_card": "zero-or-many", "to_card": "zero-or-one", "label": "generates"},
+      {"from": "line_item.charge_id", "to": "charge.id", "from_card": "one-or-many", "to_card": "one", "label": "contains"}
+    ]
+  }
+  </script>
+</q-schema>
 ```
 
 Companion option html: not allowed (interactive)

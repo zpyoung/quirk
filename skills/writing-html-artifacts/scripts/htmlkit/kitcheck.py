@@ -29,9 +29,10 @@ KIT_TAG = re.compile(r"<q-[a-z]", re.IGNORECASE)
 CHART_TAG = re.compile(r"<q-chart[\s/>]", re.IGNORECASE)
 CODE_TAG = re.compile(r"<q-(?:code|diff)[\s/>]", re.IGNORECASE)
 FLOW_TAG = re.compile(r"<q-flow[\s/>]", re.IGNORECASE)
+SCHEMA_TAG = re.compile(r"<q-schema[\s/>]", re.IGNORECASE)
 
 KNOWN_RULES = frozenset(
-    {"max-series", "diff-notes", "heading-sections", "board-columns", "timeline-items", "compare-recommended", "flow-data"}
+    {"max-series", "diff-notes", "heading-sections", "board-columns", "timeline-items", "compare-recommended", "flow-data", "schema-data"}
 )
 ATTRIBUTE_KINDS = ("text", "enum", "boolean", "number-list", "integer", "ident")
 
@@ -95,11 +96,11 @@ def needs_highlight(text: str) -> bool:
 
 
 def needs_flow(text: str) -> bool:
-    """Report whether ``text`` uses ``<q-flow>``, which lays out and zooms with the flow bundle.
+    """Report whether ``text`` uses ``<q-flow>`` or ``<q-schema>``, which lay out and zoom with the flow bundle.
 
     The scan is textual, like ``needs``.
     """
-    return bool(FLOW_TAG.search(text))
+    return bool(FLOW_TAG.search(text) or SCHEMA_TAG.search(text))
 
 def load_catalog(store: VendorStore, version: Optional[str]) -> Catalog:
     """Load and validate the catalog of kit ``version`` (``None`` means the registry's current).
@@ -1458,9 +1459,528 @@ def _rule_flow_data(node: _Node, report: Report, index: _Index) -> None:
     _validate_flow_node(node, report, lambda _line, _msg: None, page_flow_ids=page_flow_ids)
 
 
+_SCHEMA_MAX_ENTITIES = 80
+_SCHEMA_WARN_ENTITIES = 30
+_SCHEMA_WARN_ROWS = 40
+_SCHEMA_NOTATIONS = ("er", "class")
+_SCHEMA_KEYS = ("PK", "FK", "UK")
+_SCHEMA_CARDS = ("zero-or-one", "one", "zero-or-many", "one-or-many")
+_SCHEMA_VISIBILITIES = ("public", "private", "protected", "package")
+_SCHEMA_STEREOTYPES = ("interface", "abstract", "enum")
+_SCHEMA_REL_TYPES = ("inherits", "implements", "composition", "aggregation", "association", "dependency")
+_SCHEMA_MULTIPLICITY = re.compile(r"(\*|[0-9]+|[0-9]+\.\.([0-9]+|\*))")
+
+
+def _schema_shown(value: Any) -> str:
+    return value if isinstance(value, str) else json.dumps(value)
+
+
+def _schema_multiplicity_ok(value: Any) -> bool:
+    """True for UML's short multiplicity form: ``*``, ``n`` or ``n..m`` / ``n..*`` with n <= m."""
+    if not isinstance(value, str) or not _SCHEMA_MULTIPLICITY.fullmatch(value):
+        return False
+    if ".." not in value:
+        return True
+    low, high = value.split("..")
+    if high == "*":
+        return True
+    low, high = low.lstrip("0") or "0", high.lstrip("0") or "0"
+    return (len(low), low) <= (len(high), high)
+
+
+def _validate_schema_node(node: _Node, report_fail: Report, report_warn: Report) -> Optional[dict[str, Any]]:
+    """Validate one ``<q-schema>`` and return its cleaned data, or ``None`` when it cannot be used.
+
+    Failures and warnings go to the two callbacks as they are found. An unknown ``notation`` is left
+    to the catalog's enum check, so nothing further is validated or reported here.
+    """
+    notation = node.attrs.get("notation", "er")
+    if notation not in _SCHEMA_NOTATIONS:
+        return None
+    scripts = [c for c in node.children if c.tag == "script"]
+    if not scripts:
+        return None
+    json_script = next(
+        (s for s in scripts if s.attrs.get("type", "").strip().lower() == "application/json"),
+        None,
+    )
+    if json_script is None:
+        report_fail(node.line, '<q-schema> needs a <script type="application/json"> child holding a JSON object')
+        return None
+    raw_json = _text(json_script)
+    try:
+        data = json.loads(raw_json)
+    except (ValueError, RecursionError):
+        if _FLOW_FORBIDDEN_RAW.search(raw_json):
+            report_fail(node.line, "<q-schema> detail may hold only paragraphs, lists, code and links")
+        else:
+            report_fail(node.line, '<q-schema> needs a <script type="application/json"> child holding a JSON object')
+        return None
+    if not isinstance(data, dict):
+        report_fail(node.line, '<q-schema> needs a <script type="application/json"> child holding a JSON object')
+        return None
+
+    is_class = notation == "class"
+    noun = "class" if is_class else "entity"
+    failed: list[int] = []
+    once: set[str] = set()
+
+    def fail(msg: str) -> None:
+        failed.append(1)
+        report_fail(node.line, f"<q-schema> {msg}")
+
+    def fail_once(msg: str) -> None:
+        if msg not in once:
+            once.add(msg)
+            fail(msg)
+
+    def warn(msg: str) -> None:
+        report_warn(node.line, f"<q-schema> {msg}")
+
+    def no_coords(obj: dict[str, Any]) -> None:
+        if _FLOW_COORD_KEYS & set(obj):
+            fail_once("positions are not allowed; the element lays the model out")
+
+    no_coords(data)
+
+    kinds = data.get("kinds", {})
+    if not isinstance(kinds, dict):
+        fail("kinds must be a JSON object")
+        kinds = {}
+    else:
+        if len(kinds) > _FLOW_MAX_KINDS:
+            fail("at most eight kinds, one per chart color")
+        for k, v in kinds.items():
+            if not _is_text(k) or isinstance(v, bool) or not isinstance(v, int) or not (1 <= v <= _FLOW_MAX_KINDS):
+                fail(f'kind "{k}" color must be an integer from 1 to 8')
+
+    raw_groups = data.get("groups", [])
+    if not isinstance(raw_groups, list):
+        fail("groups must be a list")
+        raw_groups = []
+
+    seen_ids: set[str] = set()
+    group_map: dict[str, dict[str, Any]] = {}
+    clean_groups: list[dict[str, Any]] = []
+    for g in raw_groups:
+        if not isinstance(g, dict):
+            fail("each group must be an object")
+            continue
+        no_coords(g)
+        gid = g.get("id")
+        glabel = g.get("label")
+        if not _is_text(gid) or not _is_text(glabel):
+            fail("each group needs an id and a label")
+            continue
+        if gid in seen_ids:
+            fail_once(f'has duplicate id "{gid}"')
+            continue
+        seen_ids.add(gid)
+        parent = g.get("parent")
+        entry = {"id": gid, "label": glabel, "parent": parent if isinstance(parent, str) and parent else None}
+        group_map[gid] = entry
+        clean_groups.append(entry)
+
+    cycle_reported = False
+    for gid, g in group_map.items():
+        parent = g["parent"]
+        if parent is None:
+            continue
+        if parent not in group_map:
+            fail(f'group "{gid}" points at unknown group "{parent}"')
+        elif not cycle_reported:
+            visited = {gid}
+            cur: Optional[str] = parent
+            while cur is not None and cur in group_map:
+                if cur in visited:
+                    fail("group nesting loops")
+                    cycle_reported = True
+                    break
+                visited.add(cur)
+                cur = group_map[cur]["parent"]
+
+    raw_entities = data.get("entities")
+    plural = "classes" if is_class else "entities"
+    if not isinstance(raw_entities, list) or not raw_entities:
+        fail("needs a non-empty entities list")
+        raw_entities = []
+    elif len(raw_entities) > _SCHEMA_MAX_ENTITIES:
+        fail(f"more than {_SCHEMA_MAX_ENTITIES} {plural}")
+    elif len(raw_entities) > _SCHEMA_WARN_ENTITIES:
+        if is_class:
+            warn("large diagrams read poorly, split them into groups or several diagrams")
+        else:
+            warn("large models read poorly, split them into groups or several models")
+
+    def clean_flag(obj: dict[str, Any], key: str, owner: str) -> bool:
+        value = obj.get(key)
+        if value is not None and not isinstance(value, bool):
+            fail(f'{key} of "{owner}" must be true or false')
+        return value is True
+
+    def clean_note(obj: dict[str, Any], owner: str) -> Optional[str]:
+        note = obj.get("note")
+        if note is None:
+            return None
+        if not _is_text(note):
+            fail(f'note of "{owner}" must be non-blank text')
+            return None
+        return note
+
+    def clean_visibility(obj: dict[str, Any]) -> Optional[str]:
+        value = obj.get("visibility")
+        if value is None:
+            return None
+        if not isinstance(value, str) or value not in _SCHEMA_VISIBILITIES:
+            fail(f'unknown visibility "{_schema_shown(value)}"; use public, private, protected or package')
+            return None
+        return value
+
+    def clean_er_field(eid: str, f: Any) -> Optional[dict[str, Any]]:
+        if not isinstance(f, dict):
+            fail(f'each field of "{eid}" must be an object')
+            return None
+        no_coords(f)
+        name, ftype = f.get("name"), f.get("type")
+        if not _is_text(name) or not _is_text(ftype):
+            fail(f'each field of "{eid}" needs a name and a type')
+            return None
+        raw_key = f.get("key")
+        keys: list[str] = []
+        if raw_key is not None:
+            for k in raw_key if isinstance(raw_key, list) else [raw_key]:
+                if not isinstance(k, str) or k not in _SCHEMA_KEYS:
+                    fail(f'unknown key "{_schema_shown(k)}"; use PK, FK or UK')
+                elif k not in keys:
+                    keys.append(k)
+        owner = f"{eid}.{name}"
+        return {
+            "name": name,
+            "type": ftype,
+            "keys": keys,
+            "nullable": clean_flag(f, "nullable", owner),
+            "note": clean_note(f, owner),
+        }
+
+    def clean_class_field(eid: str, f: Any) -> Optional[dict[str, Any]]:
+        if not isinstance(f, dict):
+            fail(f'each attribute of "{eid}" must be an object')
+            return None
+        no_coords(f)
+        name, ftype = f.get("name"), f.get("type")
+        if not _is_text(name) or (ftype is not None and not _is_text(ftype)):
+            fail(f'each attribute of "{eid}" needs a name, and a type when it has one')
+            return None
+        if "key" in f:
+            fail_once("keys and cardinality belong to data models; this is a class diagram")
+        owner = f"{eid}.{name}"
+        return {
+            "name": name,
+            "type": ftype,
+            "visibility": clean_visibility(f),
+            "static": clean_flag(f, "static", owner),
+            "note": clean_note(f, owner),
+        }
+
+    def clean_method(eid: str, m: Any) -> Optional[dict[str, Any]]:
+        if not isinstance(m, dict):
+            fail(f'each method of "{eid}" must be an object')
+            return None
+        no_coords(m)
+        signature = m.get("signature")
+        if not _is_text(signature):
+            fail(f'each method of "{eid}" needs a signature')
+            return None
+        owner = f"{eid}.{signature}"
+        return {
+            "signature": signature,
+            "visibility": clean_visibility(m),
+            "static": clean_flag(m, "static", owner),
+            "abstract": clean_flag(m, "abstract", owner),
+            "note": clean_note(m, owner),
+        }
+
+    entity_map: dict[str, dict[str, Any]] = {}
+    clean_entities: list[dict[str, Any]] = []
+    for e in raw_entities:
+        if not isinstance(e, dict):
+            fail(f"each {noun} must be an object")
+            continue
+        no_coords(e)
+        eid = e.get("id")
+        elabel = e.get("label")
+        if not _is_text(eid) or not _is_text(elabel):
+            fail(f"each {noun} needs an id and a label")
+            continue
+        if not is_class and "." in eid:
+            fail_once(f"entity ids may not contain '.': \"{eid}\"")
+        if eid in seen_ids:
+            fail_once(f'duplicate {noun} id "{eid}"' if eid in entity_map else f'has duplicate id "{eid}"')
+            continue
+        seen_ids.add(eid)
+        ekind = e.get("kind")
+        if ekind is not None and (not isinstance(ekind, str) or ekind not in kinds):
+            fail(f'undeclared kind "{_schema_shown(ekind)}"')
+        egroup = e.get("group")
+        if egroup is not None and (not isinstance(egroup, str) or egroup not in group_map):
+            fail(f'unknown group "{_schema_shown(egroup)}"')
+        edetail = e.get("detail")
+        clean_detail: Optional[str] = None
+        if edetail is not None:
+            clean_detail = _check_and_sanitize_flow_detail(edetail) if isinstance(edetail, str) else None
+            if clean_detail is None:
+                fail("detail may hold only paragraphs, lists, code and links")
+        stereotype = e.get("stereotype")
+        if is_class:
+            if stereotype is not None and (not isinstance(stereotype, str) or stereotype not in _SCHEMA_STEREOTYPES):
+                fail(f'unknown stereotype "{_schema_shown(stereotype)}"; use interface, abstract or enum')
+                stereotype = None
+        else:
+            if "stereotype" in e or "methods" in e:
+                fail_once('methods, stereotypes and relationship types belong to class diagrams; add notation="class"')
+            stereotype = None
+
+        raw_fields = e.get("fields")
+        fields: list[dict[str, Any]] = []
+        methods: list[dict[str, Any]] = []
+        member_count = 0
+        duplicate_member = False
+        if raw_fields is None and is_class:
+            raw_fields = []
+        if not isinstance(raw_fields, list) or (not is_class and not raw_fields):
+            fail(f'{noun} "{eid}" needs a non-empty fields list' if not is_class else f'"{eid}" fields must be a list')
+        else:
+            member_count += len(raw_fields)
+            seen_names: set[str] = set()
+            for f in raw_fields:
+                cleaned = clean_class_field(eid, f) if is_class else clean_er_field(eid, f)
+                if cleaned is None:
+                    continue
+                if cleaned["name"] in seen_names:
+                    if is_class:
+                        duplicate_member = True
+                    else:
+                        fail_once(f'duplicate field "{cleaned["name"]}" in "{eid}"')
+                    continue
+                seen_names.add(cleaned["name"])
+                fields.append(cleaned)
+        if is_class:
+            raw_methods = e.get("methods")
+            if raw_methods is None:
+                raw_methods = []
+            if not isinstance(raw_methods, list):
+                fail(f'"{eid}" methods must be a list')
+            else:
+                member_count += len(raw_methods)
+                seen_signatures: set[str] = set()
+                for m in raw_methods:
+                    cleaned = clean_method(eid, m)
+                    if cleaned is None:
+                        continue
+                    if cleaned["signature"] in seen_signatures:
+                        duplicate_member = True
+                        continue
+                    seen_signatures.add(cleaned["signature"])
+                    methods.append(cleaned)
+            if duplicate_member:
+                fail_once(f'duplicate member in "{eid}"')
+        if member_count > _SCHEMA_WARN_ROWS:
+            warn(f'"{eid}" has more than {_SCHEMA_WARN_ROWS} {"members" if is_class else "fields"}')
+
+        entry = {
+            "id": eid,
+            "label": elabel,
+            "kind": ekind if isinstance(ekind, str) else None,
+            "group": egroup if isinstance(egroup, str) else None,
+            "stereotype": stereotype if isinstance(stereotype, str) else None,
+            "detail_html": clean_detail,
+            "fields": fields,
+            "methods": methods,
+        }
+        entity_map[eid] = entry
+        clean_entities.append(entry)
+
+    raw_rels = data.get("relationships", [])
+    if not isinstance(raw_rels, list):
+        fail("relationships must be a list")
+        raw_rels = []
+
+    def clean_label(r: dict[str, Any]) -> Optional[str]:
+        label = r.get("label")
+        if label is None:
+            return None
+        if not isinstance(label, str):
+            fail("relationship label must be a string")
+            return None
+        return label.strip() or None
+
+    def er_end(r: dict[str, Any], side: str) -> Optional[tuple[str, str]]:
+        raw = r.get(side)
+        entity_id, _, field_name = raw.partition(".") if isinstance(raw, str) else ("", "", "")
+        if not entity_id or not field_name:
+            fail("relationship ends are written entity.field")
+            return None
+        if entity_id not in entity_map:
+            fail(f'relationship names unknown entity "{entity_id}"')
+            return None
+        if not any(f["name"] == field_name for f in entity_map[entity_id]["fields"]):
+            fail(f'relationship names unknown field "{raw}"')
+            return None
+        return entity_id, field_name
+
+    def class_end(r: dict[str, Any], side: str) -> Optional[str]:
+        raw = r.get(side)
+        if isinstance(raw, str) and raw in entity_map:
+            return raw
+        if isinstance(raw, str) and "." in raw:
+            fail("class relationships join classes, not members")
+        else:
+            fail(f'relationship names unknown class "{_schema_shown(raw)}"')
+        return None
+
+    clean_rels: list[dict[str, Any]] = []
+    for r in raw_rels:
+        if not isinstance(r, dict):
+            fail("each relationship must be an object")
+            continue
+        no_coords(r)
+        label = clean_label(r)
+        if is_class:
+            src, dst = class_end(r, "from"), class_end(r, "to")
+            rtype = r.get("type")
+            if rtype is None:
+                fail("relationship needs a type; use inherits, implements, composition, aggregation, association or dependency")
+            elif not isinstance(rtype, str) or rtype not in _SCHEMA_REL_TYPES:
+                fail(
+                    f'unknown relationship type "{_schema_shown(rtype)}"; '
+                    "use inherits, implements, composition, aggregation, association or dependency"
+                )
+                rtype = None
+            if "from_card" in r or "to_card" in r:
+                fail_once("keys and cardinality belong to data models; this is a class diagram")
+            mults: dict[str, Optional[str]] = {}
+            for side in ("from_mult", "to_mult"):
+                value = r.get(side)
+                mults[side] = None
+                if value is None:
+                    continue
+                if _schema_multiplicity_ok(value):
+                    mults[side] = value
+                else:
+                    fail(f'unknown multiplicity "{_schema_shown(value)}"; use 1, 0..1, *, 0..*, 1..* or n..m')
+            directed = r.get("directed")
+            if directed is not None:
+                if not isinstance(directed, bool):
+                    fail("directed must be true or false")
+                elif rtype is not None and rtype != "association":
+                    fail("directed is only valid on an association")
+            if src is not None and dst is not None and isinstance(rtype, str):
+                clean_rels.append(
+                    {
+                        "from_entity": src,
+                        "to_entity": dst,
+                        "type": rtype,
+                        "from_mult": mults["from_mult"],
+                        "to_mult": mults["to_mult"],
+                        "label": label,
+                        "directed": directed is True,
+                    }
+                )
+        else:
+            if "type" in r:
+                fail_once('methods, stereotypes and relationship types belong to class diagrams; add notation="class"')
+            src_end, dst_end = er_end(r, "from"), er_end(r, "to")
+            cards: dict[str, Optional[str]] = {}
+            for side in ("from_card", "to_card"):
+                value = r.get(side)
+                cards[side] = None
+                if value is None:
+                    fail(f"relationship needs {side}")
+                elif not isinstance(value, str) or value not in _SCHEMA_CARDS:
+                    fail(
+                        f'unknown cardinality "{_schema_shown(value)}"; '
+                        "use zero-or-one, one, zero-or-many or one-or-many"
+                    )
+                else:
+                    cards[side] = value
+            if src_end is not None and dst_end is not None and cards["from_card"] and cards["to_card"]:
+                clean_rels.append(
+                    {
+                        "from_entity": src_end[0],
+                        "from_field": src_end[1],
+                        "to_entity": dst_end[0],
+                        "to_field": dst_end[1],
+                        "from_card": cards["from_card"],
+                        "to_card": cards["to_card"],
+                        "label": label,
+                    }
+                )
+
+    if is_class:
+        edges = [(r["from_entity"], r["to_entity"]) for r in clean_rels if r["type"] in ("inherits", "implements")]
+        incoming = {eid: 0 for eid in entity_map}
+        onward: dict[str, list[str]] = {eid: [] for eid in entity_map}
+        for src, dst in edges:
+            incoming[dst] += 1
+            onward[src].append(dst)
+        ready = [eid for eid, n in incoming.items() if n == 0]
+        settled = 0
+        while ready:
+            current = ready.pop()
+            settled += 1
+            for nxt in onward[current]:
+                incoming[nxt] -= 1
+                if incoming[nxt] == 0:
+                    ready.append(nxt)
+        if settled < len(entity_map):
+            fail("inheritance loops")
+        for r in clean_rels:
+            target = entity_map[r["to_entity"]]
+            if r["type"] == "implements" and target["stereotype"] != "interface":
+                message = f'"{target["id"]}" is implemented but isn\'t an interface'
+            elif r["type"] == "inherits" and target["stereotype"] == "interface":
+                message = f'"{target["id"]}" is an interface; use implements'
+            else:
+                continue
+            if message not in once:
+                once.add(message)
+                warn(message)
+    else:
+        used = {(r["from_entity"], r["from_field"]) for r in clean_rels} | {
+            (r["to_entity"], r["to_field"]) for r in clean_rels
+        }
+        for entry in clean_entities:
+            for f in entry["fields"]:
+                if "FK" in f["keys"] and (entry["id"], f["name"]) not in used:
+                    warn(f'FK field "{entry["id"]}.{f["name"]}" has no relationship')
+        for r in clean_rels:
+            source = next(f for f in entity_map[r["from_entity"]]["fields"] if f["name"] == r["from_field"])
+            if "FK" not in source["keys"]:
+                message = f'relationship starts at "{r["from_entity"]}.{r["from_field"]}", which isn\'t marked FK'
+                if message not in once:
+                    once.add(message)
+                    warn(message)
+
+    if failed:
+        return None
+    return {
+        "notation": notation,
+        "kinds": kinds,
+        "groups": clean_groups,
+        "group_map": group_map,
+        "entities": clean_entities,
+        "entity_map": entity_map,
+        "relationships": clean_rels,
+    }
+
+
+def _rule_schema_data(node: _Node, report: Report, index: _Index) -> None:
+    _validate_schema_node(node, report, lambda _line, _msg: None)
+
+
 def check_html_warnings(text: str, catalog: Catalog, *, label: str) -> list[dict]:
     """Return non-fatal kit warnings for ``text`` (such as large ``q-flow`` graphs or long edge labels)."""
-    if not FLOW_TAG.search(text):
+    if not (FLOW_TAG.search(text) or SCHEMA_TAG.search(text)):
         return []
     builder = _TreeBuilder()
     try:
@@ -1477,6 +1997,8 @@ def check_html_warnings(text: str, catalog: Catalog, *, label: str) -> list[dict
     for node in builder.nodes:
         if node.tag == "q-flow" and "q-flow" in catalog.elements:
             _validate_flow_node(node, lambda _line, _msg: None, report_warn)
+        elif node.tag == "q-schema" and "q-schema" in catalog.elements:
+            _validate_schema_node(node, lambda _line, _msg: None, report_warn)
     found.sort()
     return [{"check": "kit", "detail": f"{label} line {line}: {message}"} for line, _, message in found]
 
@@ -1615,6 +2137,161 @@ def inject_flow_fallbacks(html: str) -> str:
     return _FLOW_BLOCK.sub(replace_block, html)
 
 
+_SCHEMA_CARD_WORDS = {
+    "zero-or-one": "zero or one",
+    "one": "one",
+    "zero-or-many": "zero or many",
+    "one-or-many": "one or many",
+}
+_SCHEMA_VERBS = {
+    "inherits": "inherits from",
+    "implements": "implements",
+    "composition": "is composed of",
+    "aggregation": "aggregates",
+    "association": "is associated with",
+    "dependency": "depends on",
+}
+
+
+def _schema_plural(label: str) -> str:
+    """The English plural of ``label`` as written: consonant+y to ies, s/x/z/ch/sh add es, else add s."""
+    lowered = label.lower()
+    if len(label) >= 2 and lowered.endswith("y") and label[-2].isalpha() and lowered[-2] not in "aeiou":
+        return label[:-1] + "ies"
+    if lowered.endswith(("s", "x", "z", "ch", "sh")):
+        return label + "es"
+    return label + "s"
+
+
+def _schema_member_line(member: dict[str, Any], *, is_method: bool) -> str:
+    """The text of one class attribute or method, with visibility, static and abstract in words."""
+    if is_method:
+        body = member["signature"]
+    else:
+        body = f'{member["name"]}: {member["type"]}' if member["type"] else member["name"]
+    parts = [member["visibility"], "static" if member["static"] else None, "abstract" if member.get("abstract") else None, body]
+    line = " ".join(p for p in parts if p)
+    return f'{line} ({member["note"]})' if member["note"] else line
+
+
+def _schema_field_line(field: dict[str, Any]) -> str:
+    """The text of one data model field: name, type, keys, nullability and note."""
+    line = f'{field["name"]}: {field["type"]}'
+    for key in field["keys"]:
+        line += f", {key}"
+    if field["nullable"]:
+        line += ", can be empty"
+    return f'{line} ({field["note"]})' if field["note"] else line
+
+
+def _schema_relationship_sentence(parsed: dict[str, Any], rel: dict[str, Any]) -> str:
+    """One relationship as a sentence, from the entity labels as written."""
+    entities = parsed["entity_map"]
+    source = entities[rel["from_entity"]]["label"]
+    target = entities[rel["to_entity"]]["label"]
+    if parsed["notation"] == "class":
+        sentence = f'{source} {_SCHEMA_VERBS[rel["type"]]}'
+        if rel["type"] not in ("inherits", "implements") and rel["to_mult"]:
+            sentence += f' {rel["to_mult"]}'
+        sentence += f" {target}"
+        extras = []
+        if rel["from_mult"]:
+            extras.append(f'{rel["from_mult"]} {source} per {target}')
+        if rel["label"]:
+            extras.append(rel["label"])
+        return f'{sentence} ({"; ".join(extras)})' if extras else sentence
+
+    def form(card: str, label: str) -> str:
+        many = card.endswith("many")
+        return f'{_SCHEMA_CARD_WORDS[card]} {_schema_plural(label) if many else label}'
+
+    verb = rel["label"] or "has"
+    return (
+        f"Each {target} {verb} {form(rel['from_card'], source)}, and each {source} has {form(rel['to_card'], target)} "
+        f"({rel['from_entity']}.{rel['from_field']} → {rel['to_entity']}.{rel['to_field']})"
+    )
+
+
+def _render_schema_fallback_html(parsed: dict[str, Any]) -> str:
+    groups = parsed["groups"]
+    entities = parsed["entities"]
+    is_class = parsed["notation"] == "class"
+    noun = "class diagram" if is_class else "data model"
+
+    def render_entity(entity: dict[str, Any]) -> str:
+        eid = html_lib.escape(entity["id"], quote=True)
+        meta = [html_lib.escape(m) for m in (entity["kind"], entity["stereotype"]) if m]
+        meta_str = f" ({', '.join(meta)})" if meta else ""
+        detail_str = f'<div data-q-flow-list-detail>{entity["detail_html"]}</div>' if entity["detail_html"] else ""
+        if is_class:
+            lines = [_schema_member_line(f, is_method=False) for f in entity["fields"]]
+            lines += [_schema_member_line(m, is_method=True) for m in entity["methods"]]
+        else:
+            lines = [_schema_field_line(f) for f in entity["fields"]]
+        rows = f"<ul>{''.join(f'<li>{html_lib.escape(line)}</li>' for line in lines)}</ul>" if lines else ""
+        label = html_lib.escape(entity["label"])
+        return f'<li data-q-schema-list-entity="{eid}"><strong>{label}</strong>{meta_str}{detail_str}{rows}</li>'
+
+    def render_group(g: dict[str, Any]) -> str:
+        gid = html_lib.escape(g["id"], quote=True)
+        glabel = html_lib.escape(g["label"])
+        children = [render_group(cg) for cg in groups if cg["parent"] == g["id"]]
+        children.extend(render_entity(e) for e in entities if e["group"] == g["id"])
+        sub = f"<ul>{''.join(children)}</ul>" if children else ""
+        return f'<li data-q-flow-list-group="{gid}"><strong>{glabel}</strong>{sub}</li>'
+
+    top_items = [render_group(g) for g in groups if g["parent"] is None]
+    top_items.extend(render_entity(e) for e in entities if e["group"] is None)
+    body = f"<ul>{''.join(top_items)}</ul>"
+    if parsed["relationships"]:
+        sentences = "".join(
+            f"<li>{html_lib.escape(_schema_relationship_sentence(parsed, r))}</li>" for r in parsed["relationships"]
+        )
+        body += f"<p>Relationships</p><ul data-q-schema-list-rels>{sentences}</ul>"
+    title = "Class diagram as a list" if is_class else "Data model as a list"
+    return (
+        '<div class="q-flow-stage" data-q-kit data-q-flow-stage>'
+        f'<p class="q-flow-notice" data-q-flow-notice>JavaScript is off, so this {noun} is shown as a list below.</p>'
+        "</div>"
+        '<details class="q-flow-list" data-q-kit data-q-flow-list open>'
+        f"<summary>{title}</summary>"
+        f"<div data-q-flow-list-body>{body}</div>"
+        "</details>"
+    )
+
+
+_SCHEMA_BLOCK = re.compile(r"(<q-schema\b[^>]*>.*?</q-schema\s*>)", re.IGNORECASE | re.DOTALL)
+_SCHEMA_CLOSER = re.compile(r"</q-schema\s*>\Z", re.IGNORECASE)
+
+
+def inject_schema_fallbacks(html: str) -> str:
+    """Insert the static notice and ``<details open>`` text list into valid ``<q-schema>`` elements in ``html``."""
+    if not SCHEMA_TAG.search(html):
+        return html
+
+    def replace_block(match: "re.Match[str]") -> str:
+        block = match.group(1)
+        if "data-q-flow-list" in block:
+            return block
+        builder = _TreeBuilder()
+        try:
+            builder.feed(block)
+            builder.close()
+        except Exception:  # noqa: BLE001
+            return block
+        builder.finish()
+        qschema = next((n for n in builder.nodes if n.tag == "q-schema"), None)
+        if qschema is None or qschema.self_closed or "summary" not in qschema.attrs:
+            return block
+        parsed = _validate_schema_node(qschema, lambda _l, _m: None, lambda _l, _m: None)
+        if parsed is None:
+            return block
+        fallback = _render_schema_fallback_html(parsed)
+        return _SCHEMA_CLOSER.sub(lambda m: fallback + m.group(0), block, count=1)
+
+    return _SCHEMA_BLOCK.sub(replace_block, html)
+
+
 _RULES: dict[str, Callable[[_Node, Report, _Index], None]] = {
     "max-series": _rule_max_series,
     "diff-notes": _rule_diff_notes,
@@ -1623,6 +2300,7 @@ _RULES: dict[str, Callable[[_Node, Report, _Index], None]] = {
     "timeline-items": _rule_timeline_items,
     "compare-recommended": _rule_compare_recommended,
     "flow-data": _rule_flow_data,
+    "schema-data": _rule_schema_data,
 }
 assert set(_RULES) == KNOWN_RULES
 

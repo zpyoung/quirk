@@ -1040,3 +1040,20 @@ def test_tier_2_q_flow_inlines_flow_and_kit_and_checks_jsx(project, fake_env):
     assert 'data-quirk-lib="flow@0.12.0"' in html
     assert 'data-quirk-lib="kit@1.0.0"' in html
     assert "<!-- license: flow 0.12.0 EPL-2.0 AND ISC" in html
+
+
+@needs_node
+def test_tier_2_q_schema_inlines_flow_and_kit_and_checks_jsx(project, fake_env):
+    assert build_app(project, fake_env, "demo", "--title", "Demo")[0] == 0
+    add_source(
+        project,
+        "src/SchemaView.tsx",
+        'export const SchemaView = () => <q-schema summary="Customers and charges."><script type="application/json">{"entities":[{"id":"customer","label":"Customer","fields":[{"name":"id","type":"int","key":"PK"}]},{"id":"charge","label":"Charge","fields":[{"name":"customer_id","type":"int","key":"FK"}]}],"relationships":[{"from":"charge.customer_id","to":"customer.id","from_card":"zero-or-many","to_card":"one"}]}</script></q-schema>;\n',
+    )
+    rc, result = build_app(project, fake_env)
+    assert rc == 0 and result["checks"]["passed"] is True, result
+    assert "flow" in result["libraries"] and "kit" in result["libraries"]
+    html = Path(result["path"]).read_text(encoding="utf-8")
+    assert 'data-quirk-lib="flow@0.12.0"' in html
+    assert 'data-quirk-lib="kit@1.0.0"' in html
+    assert "<!-- license: flow 0.12.0 EPL-2.0 AND ISC" in html

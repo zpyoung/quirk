@@ -521,12 +521,15 @@ def build_tier1(
             "body_end": body_end,
         }
         values.update(
-            {f"slot:{name}": kitcheck.inject_flow_fallbacks(source.slots.get(name, "")) for name in template.slots}
+            {
+                f"slot:{name}": kitcheck.inject_schema_fallbacks(kitcheck.inject_flow_fallbacks(source.slots.get(name, "")))
+                for name in template.slots
+            }
         )
         values["layout"] = plan.layout
         values["regions"] = ""
         if plan.region_bearing:
-            values["slot:main" if plan.legacy_skeleton else "regions"] = kitcheck.inject_flow_fallbacks(plan.html)
+            values["slot:main" if plan.legacy_skeleton else "regions"] = kitcheck.inject_schema_fallbacks(kitcheck.inject_flow_fallbacks(plan.html))
         return _substitute(skeleton, values)
 
     sidecar_name: Optional[str] = None

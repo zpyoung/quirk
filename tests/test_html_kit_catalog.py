@@ -89,6 +89,16 @@ SECTION_3_4: dict[str, tuple[Any, bool, dict[str, tuple[bool, str, Any, Any]], l
         [["script"]],
         ["flow-data"],
     ),
+    "q-schema": (
+        None,
+        True,
+        {
+            "summary": (True, "text", None, None),
+            "notation": (False, "enum", ["er", "class"], "er"),
+        },
+        [["script"]],
+        ["schema-data"],
+    ),
 }
 
 
@@ -159,7 +169,7 @@ def test_element_documentation_is_complete(catalog: Any, tag: str) -> None:
     if tag == "q-chart":
         assert scripts == ['<script type="application/json">'] or scripts == []
         assert "<table" in el.example
-    elif tag == "q-flow":
+    elif tag in ("q-flow", "q-schema"):
         assert scripts == ['<script type="application/json">']
     else:
         assert scripts == []
@@ -168,6 +178,19 @@ def test_stat_example_shows_three_adjacent_stats(catalog: Any) -> None:
     example = catalog.elements["q-stat"].example
     assert example.count("<q-stat") == 3
     assert example.count("</q-stat>") == 3
+
+
+def test_schema_example_is_the_billing_model_in_er_notation(catalog: Any) -> None:
+    example = catalog.elements["q-schema"].example
+    assert example.count("<q-schema") == 1 and "notation=" not in example
+    data = json.loads(re.search(r"<script[^>]*>(.*?)</script>", example, re.S).group(1))
+    assert data["kinds"] == {"core": 1, "billing": 2}
+    assert [e["id"] for e in data["entities"]] == ["customer", "subscription", "charge", "line_item"]
+    charge = next(e for e in data["entities"] if e["id"] == "charge")
+    assert len(charge["fields"]) == 15
+    assert [r["label"] for r in data["relationships"]] == ["has", "is billed", "generates", "contains"]
+    assert kitcheck.check_html(example, catalog, label="x") == []
+    assert kitcheck.check_html_warnings(example, catalog, label="x") == []
 
 
 def test_diff_example_has_a_valid_note(catalog: Any) -> None:
@@ -222,6 +245,7 @@ def test_known_rules_are_exactly_the_spec_set() -> None:
         "timeline-items",
         "compare-recommended",
         "flow-data",
+        "schema-data",
     }
 
 
