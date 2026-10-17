@@ -141,3 +141,10 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: low
 - **Status**: fixed on branch zpyoung/q-flow-traces (graph-level UTF-8 check)
 
+## BUG-17: q-flow keeps pulsing when reduced motion is switched on mid-pulse
+- **Observed**: 2026-10-17
+- **File**: skills/writing-html-artifacts/vendor/kit/1.0.0/kit.js:5840
+- **Description**: Reduced motion is read only when a trace step is shown (and when a node is focused). If the reader turns on prefers-reduced-motion while a trace edge or a focused path is pulsing, the pulse keeps running until the next step, a new focus, or trace mode closes; there is no change listener on the media query. Focus mode had the same gap before traces. Found 2026-10-17 by the q-flow traces final review (HX1), logged instead of a fourth review round.
+- **Severity**: low
+- **Proposed fix**: Listen for changes to the reduced-motion query while pulsing; stop the pulse and apply the static 3.5px lit style.
+
