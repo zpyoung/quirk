@@ -6260,6 +6260,277 @@
     return [foot(14), bar(9)];
   }
 
+  var SCHEMA_VIS_SYMBOLS = { public: '+', private: '-', protected: '#', package: '~' };
+  var SCHEMA_DRAWER_VERBS = {
+    inherits: 'inherits from',
+    implements: 'implements',
+    composition: 'composed of',
+    aggregation: 'aggregates',
+    association: 'associated with',
+    dependency: 'depends on'
+  };
+  var SCHEMA_DRAWER_REVERSE_VERBS = {
+    inherits: 'inherited by',
+    implements: 'implemented by',
+    composition: 'part of',
+    aggregation: 'aggregated by',
+    association: 'associated with',
+    dependency: 'used by'
+  };
+  var SCHEMA_CLASS_MARK_KINDS = ['triangle', 'diamond-filled', 'diamond-hollow', 'arrow'];
+  var SCHEMA_CLASS_HEADER_H = 34;
+  var SCHEMA_CLASS_STEREOTYPE_H = 14;
+  var SCHEMA_COMPARTMENT_PAD = 8;
+  var SCHEMA_MARK_CLEARANCE = { none: 12, arrow: 20, triangle: 26, 'diamond-filled': 30, 'diamond-hollow': 30 };
+
+  /** The mark kinds a class relationship draws at its from and to ends. */
+  function schemaClassMarks(rel) {
+    if (rel.type === 'inherits' || rel.type === 'implements') {
+      return ['none', 'triangle'];
+    }
+    if (rel.type === 'composition') {
+      return ['diamond-filled', 'none'];
+    }
+    if (rel.type === 'aggregation') {
+      return ['diamond-hollow', 'none'];
+    }
+    if (rel.type === 'dependency') {
+      return ['none', 'arrow'];
+    }
+    return ['none', rel.directed ? 'arrow' : 'none'];
+  }
+
+  /** Class fold: 8 member rows; 4 and 4 when both compartments overflow, else the shorter keeps all and the other takes the rest. */
+  function schemaFoldMembers(entity) {
+    var attrs = entity.fields;
+    var methods = entity.methods;
+    var half = SCHEMA_FOLD_ROWS / 2;
+    if (attrs.length + methods.length <= SCHEMA_FOLD_ROWS) {
+      return { attrs: attrs.slice(), methods: methods.slice() };
+    }
+    if (attrs.length > half && methods.length > half) {
+      return { attrs: attrs.slice(0, half), methods: methods.slice(0, half) };
+    }
+    if (attrs.length <= half) {
+      return { attrs: attrs.slice(), methods: methods.slice(0, SCHEMA_FOLD_ROWS - attrs.length) };
+    }
+    return { attrs: attrs.slice(0, SCHEMA_FOLD_ROWS - methods.length), methods: methods.slice() };
+  }
+
+  /** The row text of a class member: visibility symbol, then name and type or the signature. */
+  function schemaMemberText(member, isMethod) {
+    var body = isMethod ? member.signature : (member.type ? member.name + ': ' + member.type : member.name);
+    var symbol = member.visibility ? SCHEMA_VIS_SYMBOLS[member.visibility] : '';
+    return symbol ? symbol + ' ' + body : body;
+  }
+
+  /** Marker children for the class marks; the line end sits at x = 24 and the shapes extend back along the line. */
+  function schemaClassMarkShapes(kind, color) {
+    var stroke = { stroke: color, 'stroke-width': '1.5', 'stroke-linejoin': 'round', 'stroke-linecap': 'round' };
+    if (kind === 'triangle') {
+      return [svgNode('path', Object.assign({ d: 'M 24 8 L 6 1.5 L 6 14.5 Z', fill: 'var(--q-color-bg)' }, stroke))];
+    }
+    if (kind === 'diamond-filled' || kind === 'diamond-hollow') {
+      return [svgNode('path', Object.assign({
+        d: 'M 24 8 L 12 2.5 L 0 8 L 12 13.5 Z',
+        fill: kind === 'diamond-filled' ? color : 'var(--q-color-bg)'
+      }, stroke))];
+    }
+    return [svgNode('path', Object.assign({ d: 'M 9 2 L 24 8 L 9 14', fill: 'none' }, stroke))];
+  }
+
+  /** Returns a lookup from a class id to the set of classes reachable from it over inherits and implements edges. */
+  function schemaAncestors(data) {
+    var parents = schemaMap();
+    data.entities.forEach(function (e) {
+      parents[e.id] = [];
+    });
+    data.relationships.forEach(function (r) {
+      if (r.type === 'inherits' || r.type === 'implements') {
+        parents[r.fromEntity].push(r.toEntity);
+      }
+    });
+    var cache = schemaMap();
+    return function (id) {
+      if (cache[id]) {
+        return cache[id];
+      }
+      var set = schemaMap();
+      var stack = parents[id].slice();
+      while (stack.length) {
+        var next = stack.pop();
+        if (!set[next]) {
+          set[next] = true;
+          stack = stack.concat(parents[next]);
+        }
+      }
+      cache[id] = set;
+      return set;
+    };
+  }
+
+  /** The ELK children of the root: groups as compound nodes (nesting as in q-flow) and ungrouped entities, via `elkNode`. */
+  function schemaElkTree(data, measure, elkNode) {
+    function buildElkGroup(g) {
+      var children = [];
+      data.groups.forEach(function (cg) {
+        if (cg.parent === g.id) {
+          children.push(buildElkGroup(cg));
+        }
+      });
+      data.entities.forEach(function (e) {
+        if (e.group === g.id) {
+          children.push(elkNode(e));
+        }
+      });
+      return {
+        id: g.id,
+        width: Math.max(120, measure(g.label, 12, '600') + 36),
+        height: 60,
+        layoutOptions: { 'elk.padding': '[top=38,left=18,bottom=18,right=18]' },
+        children: children
+      };
+    }
+    var rootChildren = [];
+    data.groups.forEach(function (g) {
+      if (!g.parent) {
+        rootChildren.push(buildElkGroup(g));
+      }
+    });
+    data.entities.forEach(function (e) {
+      if (!e.group) {
+        rootChildren.push(elkNode(e));
+      }
+    });
+    return rootChildren;
+  }
+
+  /** The point where a line from the box centre toward (tx, ty) leaves the box. */
+  function schemaBorderPoint(box, tx, ty) {
+    var cx = box.x + box.width / 2;
+    var cy = box.y + box.height / 2;
+    var dx = tx - cx;
+    var dy = ty - cy;
+    if (!dx && !dy) {
+      return { x: cx, y: box.y };
+    }
+    var t = Math.min(dx ? (box.width / 2) / Math.abs(dx) : Infinity, dy ? (box.height / 2) / Math.abs(dy) : Infinity);
+    return { x: cx + dx * t, y: cy + dy * t };
+  }
+
+  /**
+   * Puts a path end that ELK left on the widened part of a card (room kept for a self-loop) back on the drawn card.
+   * `end` is 'start' or 'end'; returns the points, with a jog added when a straight vertical line has to shift.
+   */
+  function schemaClampEnd(pts, end, box) {
+    var atStart = end === 'start';
+    var i = atStart ? 0 : pts.length - 1;
+    var p = pts[i];
+    var right = box.x + box.width;
+    if (p.x <= right + 0.5) {
+      return pts;
+    }
+    var onEastSide = p.y > box.y + 0.5 && p.y < box.y + box.height - 0.5;
+    if (onEastSide) {
+      p.x = right;
+      return pts;
+    }
+    var oldX = p.x;
+    p.x = right - 12;
+    var q = pts[atStart ? 1 : pts.length - 2];
+    if (pts.length > 2) {
+      if (q.x === oldX) {
+        q.x = p.x;
+      }
+      return pts;
+    }
+    var midY = (p.y + q.y) / 2;
+    var jog = [{ x: p.x, y: midY }, { x: q.x, y: midY }];
+    return atStart ? [p].concat(jog, [q]) : [q].concat(jog.reverse(), [p]);
+  }
+
+  /** The multiplicity text of one line end: just inside the mark along the line and off to its side. */
+  function schemaMultiplicityText(side, text, end, next, markKind, below, textW) {
+    var dx = next.x - end.x;
+    var dy = next.y - end.y;
+    var len = Math.hypot(dx, dy) || 1;
+    var clearance = SCHEMA_MARK_CLEARANCE[markKind] || SCHEMA_MARK_CLEARANCE.none;
+    var bx = end.x + (dx / len) * clearance;
+    var by = end.y + (dy / len) * clearance;
+    var x;
+    var y;
+    var anchor;
+    if (Math.abs(dy) >= Math.abs(dx)) {
+      anchor = 'start';
+      x = end.x + 6;
+      y = by + 4;
+    } else {
+      anchor = 'middle';
+      x = bx;
+      y = below ? end.y + 16 : end.y - 6;
+    }
+    var left = anchor === 'middle' ? x - textW / 2 : x;
+    return {
+      side: side,
+      text: text,
+      x: x,
+      y: y,
+      anchor: anchor,
+      box: { x: left - 2, y: y - 11, width: textW + 4, height: 14 }
+    };
+  }
+
+  /** Draws a class card's attribute and method compartments and the rule between them. */
+  function schemaDrawClassRows(nG, box, card) {
+    function drawRows(rows, top, isMethod) {
+      rows.forEach(function (row, i) {
+        var rowTop = top + SCHEMA_COMPARTMENT_PAD / 2 + i * SCHEMA_ROW_H;
+        var centre = rowTop + SCHEMA_ROW_H / 2;
+        var attrs = { 'data-q-schema-row-y': centre };
+        attrs[isMethod ? 'data-q-schema-method' : 'data-q-schema-field'] = isMethod ? String(row.index) : row.member.name;
+        var rG = svgNode('g', attrs);
+        rG.appendChild(svgNode('rect', {
+          'data-q-schema-row-bg': '',
+          x: box.x + 1,
+          y: rowTop,
+          width: box.width - 2,
+          height: SCHEMA_ROW_H
+        }));
+        var textAttrs = {
+          'data-q-schema-text': '',
+          x: box.x + 12,
+          y: centre + 4,
+          fill: 'var(--q-color-text)',
+          'font-size': '12',
+          'font-weight': '500'
+        };
+        if (row.member.static) {
+          textAttrs['text-decoration'] = 'underline';
+        }
+        if (row.member.abstract) {
+          textAttrs['font-style'] = 'italic';
+        }
+        var text = svgNode('text', textAttrs);
+        text.textContent = row.text;
+        rG.appendChild(text);
+        nG.appendChild(rG);
+      });
+    }
+    var attrTop = box.y + card.headerH;
+    drawRows(card.attrs, attrTop, false);
+    var ruleY = attrTop + card.attrH;
+    nG.appendChild(svgNode('line', {
+      'data-q-schema-rule': '',
+      x1: box.x,
+      y1: ruleY,
+      x2: box.x + box.width,
+      y2: ruleY,
+      stroke: 'var(--q-color-border)',
+      'stroke-width': '1'
+    }));
+    drawRows(card.methods, ruleY, true);
+  }
+
   class QSchema extends HTMLElement {
     static get observedAttributes() {
       return ['summary', 'notation'];
@@ -6908,10 +7179,6 @@
         this._failLayout();
         return;
       }
-      if (data.notation === 'class') {
-        this._failLayout();
-        return;
-      }
       this._data = data;
       var fontsReady = (document.fonts && document.fonts.ready && typeof document.fonts.ready.then === 'function')
         ? document.fonts.ready.catch(function () {})
@@ -6927,7 +7194,10 @@
 
     /** Sizes every card, hands ELK one node per card with a port pair per related row, and draws the result. */
     _runLayout(data, seq) {
-      var self = this;
+      if (data.notation === 'class') {
+        this._runClassLayout(data, seq);
+        return;
+      }
       var measure = this._measureTextFactory();
 
       var used = schemaMap();
@@ -7036,38 +7306,7 @@
         };
       }
 
-      function buildElkGroup(g) {
-        var children = [];
-        data.groups.forEach(function (cg) {
-          if (cg.parent === g.id) {
-            children.push(buildElkGroup(cg));
-          }
-        });
-        data.entities.forEach(function (e) {
-          if (e.group === g.id) {
-            children.push(elkNode(e));
-          }
-        });
-        return {
-          id: g.id,
-          width: Math.max(120, measure(g.label, 12, '600') + 36),
-          height: 60,
-          layoutOptions: { 'elk.padding': '[top=38,left=18,bottom=18,right=18]' },
-          children: children
-        };
-      }
-
-      var rootChildren = [];
-      data.groups.forEach(function (g) {
-        if (!g.parent) {
-          rootChildren.push(buildElkGroup(g));
-        }
-      });
-      data.entities.forEach(function (e) {
-        if (!e.group) {
-          rootChildren.push(elkNode(e));
-        }
-      });
+      var rootChildren = schemaElkTree(data, measure, elkNode);
 
       var elkEdges = [];
       data.relationships.forEach(function (r) {
@@ -7104,6 +7343,118 @@
         edges: elkEdges
       };
 
+      this._runElk(elkGraph, data, seq);
+    }
+
+    /** Sizes every class card and hands ELK the cards and class-to-class edges, laid out top to bottom with parents first. */
+    _runClassLayout(data, seq) {
+      var measure = this._measureTextFactory();
+      var selfRels = schemaMap();
+      data.relationships.forEach(function (r) {
+        if (r.fromEntity === r.toEntity) {
+          (selfRels[r.fromEntity] = selfRels[r.fromEntity] || []).push(r);
+        }
+      });
+
+      var cards = schemaMap();
+      data.entities.forEach(function (entity) {
+        var shown = schemaFoldMembers(entity);
+        function rowFor(member, isMethod, index) {
+          var text = schemaMemberText(member, isMethod);
+          return { member: member, index: index, text: text, width: measure(text, 12, '500') };
+        }
+        var attrs = shown.attrs.map(function (f, i) { return rowFor(f, false, i); });
+        var methods = shown.methods.map(function (m, i) { return rowFor(m, true, i); });
+        var hidden = entity.fields.length + entity.methods.length - attrs.length - methods.length;
+        var rowsW = 0;
+        attrs.concat(methods).forEach(function (row) {
+          rowsW = Math.max(rowsW, row.width);
+        });
+        var headerH = SCHEMA_CLASS_HEADER_H + (entity.stereotype ? SCHEMA_CLASS_STEREOTYPE_H : 0);
+        var kindW = entity.kind ? measure(entity.kind.toUpperCase(), 10, '600') + 16 : 0;
+        var titleW = Math.max(
+          measure(entity.label, 13, '600'),
+          entity.stereotype ? measure('«' + entity.stereotype + '»', 10, '400') : 0
+        );
+        var width = Math.ceil(Math.max(SCHEMA_CARD_MIN_W, 20 + titleW + kindW + 14, 24 + rowsW + 12));
+        var extra = 0;
+        (selfRels[entity.id] || []).forEach(function (r, k) {
+          var labelW = r.label ? measure(r.label, 11, '500') + 14 : 0;
+          extra = Math.max(extra, SCHEMA_LOOP_OUT + k * 12 + (labelW ? 6 + labelW : 0));
+        });
+        var attrH = attrs.length * SCHEMA_ROW_H + SCHEMA_COMPARTMENT_PAD;
+        var methodH = methods.length * SCHEMA_ROW_H + SCHEMA_COMPARTMENT_PAD;
+        cards[entity.id] = {
+          entity: entity,
+          attrs: attrs,
+          methods: methods,
+          hidden: hidden,
+          width: width,
+          headerH: headerH,
+          attrH: attrH,
+          methodH: methodH,
+          height: headerH + attrH + methodH + (hidden ? SCHEMA_ROW_H + 4 : 0),
+          extra: extra
+        };
+      });
+      this._cards = cards;
+
+      function elkNode(entity) {
+        var card = cards[entity.id];
+        return { id: entity.id, width: card.width + card.extra, height: card.height };
+      }
+
+      var ancestorsOf = schemaAncestors(data);
+      var elkSources = [];
+      var elkEdges = [];
+      data.relationships.forEach(function (r) {
+        if (r.fromEntity === r.toEntity) {
+          return;
+        }
+        var general = r.type === 'inherits' || r.type === 'implements';
+        var source = general ? r.toEntity : r.fromEntity;
+        var target = general ? r.fromEntity : r.toEntity;
+        if (!general && ancestorsOf(source)[target]) {
+          source = r.toEntity;
+          target = r.fromEntity;
+        }
+        elkSources[r.index] = source;
+        var labels = [];
+        if (r.label) {
+          labels.push({ text: r.label, width: measure(r.label, 11, '500') + 14, height: 20 });
+        }
+        elkEdges.push({
+          id: 'rel' + r.index,
+          sources: [source],
+          targets: [target],
+          labels: labels,
+          layoutOptions: { 'elk.layered.priority.direction': general ? '10' : '0' }
+        });
+      });
+      this._elkSources = elkSources;
+
+      this._runElk({
+        id: 'root',
+        layoutOptions: {
+          'elk.algorithm': 'layered',
+          'elk.direction': 'DOWN',
+          'elk.hierarchyHandling': 'INCLUDE_CHILDREN',
+          'elk.edgeRouting': 'ORTHOGONAL',
+          'elk.json.shapeCoords': 'ROOT',
+          'elk.json.edgeCoords': 'ROOT',
+          'elk.layered.spacing.nodeNodeBetweenLayers': '56',
+          'elk.spacing.nodeNode': '32',
+          'elk.spacing.edgeNode': '24',
+          'elk.edgeLabels.inline': 'true'
+        },
+        children: schemaElkTree(data, measure, elkNode),
+        edges: elkEdges
+      }, data, seq);
+    }
+
+    /** Hands the graph to ELK and draws the result unless the element moved on; any rejection takes the failure path. */
+    _runElk(elkGraph, data, seq) {
+      var self = this;
       try {
         var elk = new window.quirkFlow.ELK();
         Promise.resolve(elk.layout(elkGraph)).then(function (laidOut) {
@@ -7126,39 +7477,10 @@
       }
     }
 
-    _renderGraph(data, laidOut) {
+    /** Path points and label of each data-model relationship; a path runs from the referenced field's row to the referencing one. */
+    _erRelShapes(data, nodeBoxes, laidOutEdges) {
       var self = this;
       var cards = this._cards;
-      var groupBoxes = schemaMap();
-      var nodeBoxes = schemaMap();
-      var groupOrder = [];
-
-      function collectShapes(items, depth) {
-        (items || []).forEach(function (item) {
-          if (data.groupMap[item.id]) {
-            groupBoxes[item.id] = {
-              id: item.id,
-              x: item.x || 0,
-              y: item.y || 0,
-              width: item.width || 120,
-              height: item.height || 80,
-              depth: depth
-            };
-            groupOrder.push(item.id);
-            collectShapes(item.children, depth + 1);
-          } else if (data.entityMap[item.id]) {
-            nodeBoxes[item.id] = {
-              id: item.id,
-              x: item.x || 0,
-              y: item.y || 0,
-              width: cards[item.id].width,
-              height: cards[item.id].height
-            };
-          }
-        });
-      }
-      collectShapes(laidOut.children, 0);
-
       function rowY(entityId, fieldName) {
         var card = cards[entityId];
         for (var i = 0; i < card.rows.length; i += 1) {
@@ -7168,30 +7490,6 @@
         }
         return nodeBoxes[entityId].y;
       }
-
-      var laidOutEdges = schemaMap();
-      (laidOut.edges || []).forEach(function (le) {
-        laidOutEdges[le.id] = le;
-      });
-
-      var minX = Infinity;
-      var minY = Infinity;
-      var maxX = -Infinity;
-      var maxY = -Infinity;
-      function expandBounds(x, y, w, h) {
-        if (x < minX) { minX = x; }
-        if (y < minY) { minY = y; }
-        if (x + w > maxX) { maxX = x + w; }
-        if (y + h > maxY) { maxY = y + h; }
-      }
-      Object.keys(groupBoxes).forEach(function (gid) {
-        var b = groupBoxes[gid];
-        expandBounds(b.x, b.y, b.width, b.height);
-      });
-      Object.keys(nodeBoxes).forEach(function (nid) {
-        var b = nodeBoxes[nid];
-        expandBounds(b.x, b.y, b.width, b.height);
-      });
 
       var selfCount = schemaMap();
       var relShapes = data.relationships.map(function (r) {
@@ -7252,18 +7550,193 @@
             };
           }
         }
-        pts.forEach(function (p) {
-          expandBounds(p.x, p.y, 0, 0);
-        });
         if (!label && r.label) {
           var a = pts[0];
           var z = pts[pts.length - 1];
           label = { x: (a.x + z.x) / 2 - 30, y: (a.y + z.y) / 2 - 10, width: 60, height: 20 };
         }
-        if (label) {
-          expandBounds(label.x, label.y, label.width, label.height);
+        // the path runs from the referenced end to the referencing end, except a self-relationship, which starts at its from row
+        var isSelf = r.fromEntity === r.toEntity;
+        return {
+          pts: pts,
+          label: label,
+          self: isSelf,
+          fromMark: r.fromCard,
+          toMark: r.toCard,
+          startMark: isSelf ? r.fromCard : r.toCard,
+          endMark: isSelf ? r.toCard : r.fromCard,
+          dashed: false,
+          mults: []
+        };
+      });
+      return relShapes;
+    }
+
+    /** Path points, label box and multiplicity texts of each class relationship; a path always runs from the from end to the to end. */
+    _classRelShapes(data, nodeBoxes, laidOutEdges) {
+      var measure = this._measureTextFactory();
+      var elkSources = this._elkSources || [];
+      var selfCount = schemaMap();
+      return data.relationships.map(function (r) {
+        var fromBox = nodeBoxes[r.fromEntity];
+        var toBox = nodeBoxes[r.toEntity];
+        var marks = schemaClassMarks(r);
+        var isSelf = r.fromEntity === r.toEntity;
+        var pts = [];
+        var label = null;
+        if (isSelf) {
+          var k = selfCount[r.fromEntity] || 0;
+          selfCount[r.fromEntity] = k + 1;
+          var edgeX = fromBox.x + fromBox.width;
+          var outX = edgeX + SCHEMA_LOOP_OUT + k * 12;
+          var mid = fromBox.y + fromBox.height / 2;
+          var half = Math.min(14, Math.max(6, fromBox.height * 0.18));
+          var yA = Math.max(fromBox.y + 6, mid - half - k * 6);
+          var yB = Math.min(fromBox.y + fromBox.height - 6, mid + half + k * 6);
+          pts = [
+            { x: edgeX, y: yA },
+            { x: outX, y: yA },
+            { x: outX, y: yB },
+            { x: edgeX, y: yB }
+          ];
+          if (r.label) {
+            label = { x: outX + 6, y: (yA + yB) / 2 - 10, width: measure(r.label, 11, '500') + 14, height: 20 };
+          }
+        } else {
+          var le = laidOutEdges['rel' + r.index] || {};
+          (le.sections || []).forEach(function (sec) {
+            if (sec.startPoint && pts.length === 0) {
+              pts.push({ x: sec.startPoint.x, y: sec.startPoint.y });
+            }
+            (sec.bendPoints || []).forEach(function (bp) {
+              pts.push({ x: bp.x, y: bp.y });
+            });
+            if (sec.endPoint) {
+              pts.push({ x: sec.endPoint.x, y: sec.endPoint.y });
+            }
+          });
+          var reversed = elkSources[r.index] !== r.fromEntity;
+          var srcBox = reversed ? toBox : fromBox;
+          var tgtBox = reversed ? fromBox : toBox;
+          if (pts.length < 2) {
+            pts = [
+              schemaBorderPoint(srcBox, tgtBox.x + tgtBox.width / 2, tgtBox.y + tgtBox.height / 2),
+              schemaBorderPoint(tgtBox, srcBox.x + srcBox.width / 2, srcBox.y + srcBox.height / 2)
+            ];
+          }
+          pts = schemaClampEnd(pts, 'start', srcBox);
+          pts = schemaClampEnd(pts, 'end', tgtBox);
+          if (reversed) {
+            pts.reverse();
+          }
+          if (r.label && le.labels && le.labels[0]) {
+            label = {
+              x: le.labels[0].x || 0,
+              y: le.labels[0].y || 0,
+              width: le.labels[0].width || 60,
+              height: le.labels[0].height || 20
+            };
+          }
         }
-        return { pts: pts, label: label, self: r.fromEntity === r.toEntity };
+        if (!label && r.label) {
+          var a = pts[0];
+          var z = pts[pts.length - 1];
+          label = { x: (a.x + z.x) / 2 - 30, y: (a.y + z.y) / 2 - 10, width: 60, height: 20 };
+        }
+
+        var mults = [];
+        [['from', r.fromMult, pts[0], pts[1], marks[0], false], ['to', r.toMult, pts[pts.length - 1], pts[pts.length - 2], marks[1], true]]
+          .forEach(function (end) {
+            if (end[1]) {
+              mults.push(schemaMultiplicityText(end[0], end[1], end[2], end[3], end[4], end[5] && isSelf, measure(end[1], 11, '400')));
+            }
+          });
+
+        return {
+          pts: pts,
+          label: label,
+          self: isSelf,
+          fromMark: marks[0],
+          toMark: marks[1],
+          startMark: marks[0],
+          endMark: marks[1],
+          dashed: r.type === 'implements' || r.type === 'dependency',
+          mults: mults
+        };
+      });
+    }
+
+    _renderGraph(data, laidOut) {
+      var self = this;
+      var cards = this._cards;
+      var groupBoxes = schemaMap();
+      var nodeBoxes = schemaMap();
+      var groupOrder = [];
+
+      function collectShapes(items, depth) {
+        (items || []).forEach(function (item) {
+          if (data.groupMap[item.id]) {
+            groupBoxes[item.id] = {
+              id: item.id,
+              x: item.x || 0,
+              y: item.y || 0,
+              width: item.width || 120,
+              height: item.height || 80,
+              depth: depth
+            };
+            groupOrder.push(item.id);
+            collectShapes(item.children, depth + 1);
+          } else if (data.entityMap[item.id]) {
+            nodeBoxes[item.id] = {
+              id: item.id,
+              x: item.x || 0,
+              y: item.y || 0,
+              width: cards[item.id].width,
+              height: cards[item.id].height
+            };
+          }
+        });
+      }
+      collectShapes(laidOut.children, 0);
+
+      var laidOutEdges = schemaMap();
+      (laidOut.edges || []).forEach(function (le) {
+        laidOutEdges[le.id] = le;
+      });
+
+      var isClass = data.notation === 'class';
+      var relShapes = isClass
+        ? this._classRelShapes(data, nodeBoxes, laidOutEdges)
+        : this._erRelShapes(data, nodeBoxes, laidOutEdges);
+
+      var minX = Infinity;
+      var minY = Infinity;
+      var maxX = -Infinity;
+      var maxY = -Infinity;
+      function expandBounds(x, y, w, h) {
+        if (x < minX) { minX = x; }
+        if (y < minY) { minY = y; }
+        if (x + w > maxX) { maxX = x + w; }
+        if (y + h > maxY) { maxY = y + h; }
+      }
+      Object.keys(groupBoxes).forEach(function (gid) {
+        var b = groupBoxes[gid];
+        expandBounds(b.x, b.y, b.width, b.height);
+      });
+      Object.keys(nodeBoxes).forEach(function (nid) {
+        var b = nodeBoxes[nid];
+        expandBounds(b.x, b.y, b.width, b.height);
+      });
+      relShapes.forEach(function (shape) {
+        shape.pts.forEach(function (p) {
+          expandBounds(p.x, p.y, 0, 0);
+        });
+        if (shape.label) {
+          expandBounds(shape.label.x, shape.label.y, shape.label.width, shape.label.height);
+        }
+        shape.mults.forEach(function (m) {
+          expandBounds(m.box.x, m.box.y, m.box.width, m.box.height);
+        });
       });
       if (!isFinite(minX)) {
         minX = 0; minY = 0; maxX = 320; maxY = 180;
@@ -7291,12 +7764,12 @@
         'class': 'q-flow-svg',
         'data-q-flow-svg': '',
         'role': 'group',
-        'aria-label': this.getAttribute('summary') || 'Interactive data model'
+        'aria-label': this.getAttribute('summary') || (isClass ? 'Interactive class diagram' : 'Interactive data model')
       });
 
       var defs = svgNode('defs');
       this._markerIds = schemaMap();
-      SCHEMA_CARDS.forEach(function (kind) {
+      (isClass ? SCHEMA_CLASS_MARK_KINDS : SCHEMA_CARDS).forEach(function (kind) {
         [['', 'var(--q-color-text-muted)'], ['lit-', 'var(--q-color-accent)']].forEach(function (variant) {
           var id = 'q-schema-mark-' + variant[0] + kind + '-' + uidValue;
           var marker = svgNode('marker', {
@@ -7311,7 +7784,7 @@
             orient: 'auto-start-reverse',
             overflow: 'visible'
           });
-          schemaMarkShapes(kind, variant[1]).forEach(function (shape) {
+          (isClass ? schemaClassMarkShapes : schemaMarkShapes)(kind, variant[1]).forEach(function (shape) {
             marker.appendChild(shape);
           });
           defs.appendChild(marker);
@@ -7406,21 +7879,27 @@
           'data-q-schema-rel': String(idx),
           'data-q-schema-from': r.fromEntity,
           'data-q-schema-to': r.toEntity,
-          'data-q-schema-from-mark': r.fromCard,
-          'data-q-schema-to-mark': r.toCard
+          'data-q-schema-from-mark': shape.fromMark,
+          'data-q-schema-to-mark': shape.toMark
         });
-        // the path runs from the referenced end to the referencing end, except a self-relationship, which starts at its from row
-        var startMark = shape.self ? r.fromCard : r.toCard;
-        var endMark = shape.self ? r.toCard : r.fromCard;
+        var startMark = shape.startMark;
+        var endMark = shape.endMark;
         var path = svgNode('path', {
           'data-q-flow-edge-line': '',
           d: d,
           fill: 'none',
           stroke: 'var(--q-color-text-muted)',
-          'stroke-width': '1.75',
-          'marker-start': self._markerIds[startMark],
-          'marker-end': self._markerIds[endMark]
+          'stroke-width': '1.75'
         });
+        if (self._markerIds[startMark]) {
+          path.setAttribute('marker-start', self._markerIds[startMark]);
+        }
+        if (self._markerIds[endMark]) {
+          path.setAttribute('marker-end', self._markerIds[endMark]);
+        }
+        if (shape.dashed) {
+          path.setAttribute('stroke-dasharray', '6 4');
+        }
         eG.appendChild(path);
         if (r.label && shape.label) {
           var lbl = shape.label;
@@ -7446,6 +7925,21 @@
           lblG.appendChild(lblT);
           eG.appendChild(lblG);
         }
+        shape.mults.forEach(function (m) {
+          var multText = svgNode('text', {
+            'data-q-schema-mult': m.side,
+            x: m.x,
+            y: m.y,
+            'text-anchor': m.anchor,
+            fill: 'var(--q-color-text-muted)',
+            'font-size': '11',
+            stroke: 'var(--q-color-bg)',
+            'stroke-width': '3',
+            'paint-order': 'stroke'
+          });
+          multText.textContent = m.text;
+          eG.appendChild(multText);
+        });
         edgesLayer.appendChild(eG);
         self._relRecords.push({
           rel: r,
@@ -7479,6 +7973,8 @@
         if (entity.stereotype) {
           nG.setAttribute('data-q-schema-stereotype', entity.stereotype);
         }
+        var headerH = isClass ? card.headerH : SCHEMA_HEADER_H;
+        var titleY = isClass && entity.stereotype ? 36 : 22;
         nG.appendChild(svgNode('rect', {
           'data-q-schema-card': '',
           x: box.x,
@@ -7495,14 +7991,25 @@
           x: box.x,
           y: box.y,
           width: '5',
-          height: SCHEMA_HEADER_H,
+          height: headerH,
           rx: '2',
           fill: accent
         }));
+        if (isClass && entity.stereotype) {
+          var stereo = svgNode('text', {
+            'data-q-schema-stereo': '',
+            x: box.x + 16,
+            y: box.y + 15,
+            fill: 'var(--q-color-text-muted)',
+            'font-size': '10'
+          });
+          stereo.textContent = '\u00ab' + entity.stereotype + '\u00bb';
+          nG.appendChild(stereo);
+        }
         var title = svgNode('text', {
           'data-q-schema-label': '',
           x: box.x + 16,
-          y: box.y + 22,
+          y: box.y + titleY,
           fill: 'var(--q-color-text)',
           'font-size': '13',
           'font-weight': '600'
@@ -7513,7 +8020,7 @@
           var kindText = svgNode('text', {
             'data-q-schema-kind': '',
             x: box.x + box.width - 12,
-            y: box.y + 21,
+            y: box.y + titleY - 1,
             'text-anchor': 'end',
             fill: 'var(--q-color-text-muted)',
             'font-size': '10',
@@ -7525,14 +8032,17 @@
         }
         nG.appendChild(svgNode('line', {
           x1: box.x,
-          y1: box.y + SCHEMA_HEADER_H,
+          y1: box.y + headerH,
           x2: box.x + box.width,
-          y2: box.y + SCHEMA_HEADER_H,
+          y2: box.y + headerH,
           stroke: 'var(--q-color-border)',
           'stroke-width': '1'
         }));
 
-        card.rows.forEach(function (row, i) {
+        if (isClass) {
+          schemaDrawClassRows(nG, box, card);
+        }
+        (isClass ? [] : card.rows).forEach(function (row, i) {
           var top = box.y + SCHEMA_HEADER_H + i * SCHEMA_ROW_H;
           var centre = top + SCHEMA_ROW_H / 2;
           var rG = svgNode('g', {
@@ -7589,7 +8099,9 @@
         });
 
         if (card.hidden) {
-          var moreTop = box.y + SCHEMA_HEADER_H + card.rows.length * SCHEMA_ROW_H;
+          var moreTop = isClass
+            ? box.y + headerH + card.attrH + card.methodH
+            : box.y + SCHEMA_HEADER_H + card.rows.length * SCHEMA_ROW_H;
           var mG = svgNode('g', { 'data-q-schema-more': '' });
           mG.appendChild(svgNode('rect', {
             'data-q-schema-row-bg': '',
@@ -7644,11 +8156,11 @@
     }
 
     _buildControls() {
-      canvasBuildControls(this, 'model');
+      canvasBuildControls(this, this._data && this._data.notation === 'class' ? 'diagram' : 'model');
     }
 
     _buildDrawer() {
-      canvasBuildDrawer(this, 'Entity details');
+      canvasBuildDrawer(this, this._data && this._data.notation === 'class' ? 'Class details' : 'Entity details');
     }
 
     _setupZoom() {
@@ -7714,8 +8226,14 @@
     _paintRel(rec, lit) {
       rec.path.setAttribute('stroke', lit ? 'var(--q-color-accent)' : 'var(--q-color-text-muted)');
       rec.path.setAttribute('stroke-width', lit ? '2' : '1.75');
-      rec.path.setAttribute('marker-start', this._markerIds[(lit ? 'lit-' : '') + rec.startMark]);
-      rec.path.setAttribute('marker-end', this._markerIds[(lit ? 'lit-' : '') + rec.endMark]);
+      var ids = this._markerIds;
+      var prefix = lit ? 'lit-' : '';
+      if (ids[prefix + rec.startMark]) {
+        rec.path.setAttribute('marker-start', ids[prefix + rec.startMark]);
+      }
+      if (ids[prefix + rec.endMark]) {
+        rec.path.setAttribute('marker-end', ids[prefix + rec.endMark]);
+      }
     }
 
     _focusNode(entityId) {
@@ -7813,6 +8331,13 @@
         drawer.appendChild(kindBadge);
       }
 
+      if (entity.stereotype) {
+        var stereotypeLine = document.createElement('div');
+        stereotypeLine.setAttribute('data-q-schema-drawer-stereotype', '');
+        stereotypeLine.textContent = '\u00ab' + entity.stereotype + '\u00bb';
+        drawer.appendChild(stereotypeLine);
+      }
+
       if (entity.detail) {
         var detBox = document.createElement('div');
         detBox.setAttribute('data-q-flow-drawer-detail', '');
@@ -7820,20 +8345,32 @@
         drawer.appendChild(detBox);
       }
 
-      var fieldsBox = document.createElement('div');
-      fieldsBox.setAttribute('data-q-flow-drawer-edges', 'fields');
-      var fieldsHead = document.createElement('h4');
-      fieldsHead.textContent = 'Fields';
-      fieldsBox.appendChild(fieldsHead);
-      var fieldsUl = document.createElement('ul');
-      entity.fields.forEach(function (f) {
-        var li = document.createElement('li');
-        li.setAttribute('data-q-schema-drawer-field', f.name);
-        li.textContent = schemaFieldLine(f);
-        fieldsUl.appendChild(li);
-      });
-      fieldsBox.appendChild(fieldsUl);
-      drawer.appendChild(fieldsBox);
+      var isClass = data.notation === 'class';
+      function addMemberList(kind, heading, items, lineOf, hook) {
+        if (!items.length && isClass) {
+          return;
+        }
+        var box = document.createElement('div');
+        box.setAttribute('data-q-flow-drawer-edges', kind);
+        var head2 = document.createElement('h4');
+        head2.textContent = heading;
+        box.appendChild(head2);
+        var ul = document.createElement('ul');
+        items.forEach(function (item, index) {
+          var li = document.createElement('li');
+          li.setAttribute(hook, hook === 'data-q-schema-drawer-method' ? String(index) : item.name);
+          li.textContent = lineOf(item);
+          ul.appendChild(li);
+        });
+        box.appendChild(ul);
+        drawer.appendChild(box);
+      }
+      if (isClass) {
+        addMemberList('attributes', 'Attributes', entity.fields, function (f) { return schemaMemberLine(f, false); }, 'data-q-schema-drawer-field');
+        addMemberList('methods', 'Methods', entity.methods, function (m) { return schemaMemberLine(m, true); }, 'data-q-schema-drawer-method');
+      } else {
+        addMemberList('fields', 'Fields', entity.fields, schemaFieldLine, 'data-q-schema-drawer-field');
+      }
 
       var rels = data.relationships.filter(function (r) {
         return r.fromEntity === entity.id || r.toEntity === entity.id;
@@ -7852,8 +8389,15 @@
           btn.type = 'button';
           btn.setAttribute('data-q-flow-edge-btn', '');
           btn.setAttribute('data-q-flow-target', otherId);
-          btn.textContent = (r.label || 'has') + ': ' + data.entityMap[otherId].label
-            + ' (' + r.fromField + ' \u2192 ' + r.toField + ')';
+          var otherLabel = data.entityMap[otherId].label;
+          if (isClass) {
+            btn.textContent = r.fromEntity === entity.id
+              ? (r.label || SCHEMA_DRAWER_VERBS[r.type]) + ': ' + otherLabel
+              : SCHEMA_DRAWER_REVERSE_VERBS[r.type] + ': ' + otherLabel;
+          } else {
+            btn.textContent = (r.label || 'has') + ': ' + otherLabel
+              + ' (' + r.fromField + ' \u2192 ' + r.toField + ')';
+          }
           btn.addEventListener('click', function (ev) {
             ev.stopPropagation();
             self._setRoving(otherId, false);

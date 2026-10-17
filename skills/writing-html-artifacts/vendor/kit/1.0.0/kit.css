@@ -1573,7 +1573,7 @@ q-schema :where([data-q-schema-row-bg]) {
   fill: transparent;
 }
 
-q-schema :where([data-q-schema-field]:hover, [data-q-schema-more]:hover) > :where([data-q-schema-row-bg]) {
+q-schema :where([data-q-schema-field]:hover, [data-q-schema-method]:hover, [data-q-schema-more]:hover) > :where([data-q-schema-row-bg]) {
   fill: color-mix(in srgb, var(--q-color-accent) 10%, var(--q-color-surface));
 }
 
@@ -1601,6 +1601,12 @@ q-schema :where([data-q-schema-more]:hover) > :where(text) {
 
 q-schema :where([data-q-schema-rel]) {
   pointer-events: none;
+}
+
+q-schema :where([data-q-schema-drawer-stereotype]) {
+  margin: 0 0 var(--q-space-2);
+  color: var(--q-color-text-muted);
+  font-size: var(--q-size-small);
 }
 
 @media print {

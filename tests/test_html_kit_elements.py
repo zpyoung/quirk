@@ -7475,7 +7475,7 @@ def test_schema_failing_models_show_the_notice_and_the_open_list_while_others_re
     d = out["results"]["d"]
     assert d["broken"] == {"ready": "error", "notice": "This data model could not be drawn.", "open": True, "svg": False, "entities": 0}
     assert d["uml"]["ready"] == "error" and d["uml"]["notice"] == "This data model could not be drawn."
-    assert d["cls"] == {"ready": "error", "notice": "This class diagram could not be drawn.", "open": True, "svg": False, "entities": 2}
+    assert d["cls"]["ready"] == "true" and d["cls"]["svg"] is True and d["cls"]["open"] is False
     assert d["billing"]["ready"] == "true" and d["billing"]["svg"] is True
     assert d["small"]["ready"] == "true" and d["small"]["open"] is False
 
@@ -7737,7 +7737,7 @@ def test_schema_a_pending_layout_never_replaces_a_later_failure(schema_page: Pat
               invalid.querySelector('script').textContent = '{{ not json';
               const toClass = mountSchema(valid);
               const script = toClass.querySelector('script');
-              script.textContent = JSON.stringify({json.dumps(SCHEMA_CLASS_DATA)});
+              script.textContent = JSON.stringify({json.dumps(SCHEMA_CLASS_LOOP_DATA)}).replace('dependency', 'inherits');
               toClass.setAttribute('notation', 'class');
               await sleep(1500);
               return {{ invalid: failureState(invalid), toClass: failureState(toClass) }};
@@ -7859,3 +7859,813 @@ def test_schema_click_on_blank_panel_space_clears_entity_focus_and_closes_the_dr
     assert d["found"] is True
     assert d["focused"] == {"selected": ["charge"], "drawerOpen": True}
     assert d["after"] == {"selected": [], "lit": [], "drawerOpen": False}
+
+
+# --- q-schema, class notation -----------------------------------------------------------------
+
+
+def _class_attr(name: str, ftype: str | None = None, visibility: str | None = "private", static: bool = False) -> dict:
+    attr: dict = {"name": name}
+    if ftype:
+        attr["type"] = ftype
+    if visibility:
+        attr["visibility"] = visibility
+    if static:
+        attr["static"] = True
+    return attr
+
+
+def _class_method(signature: str, visibility: str | None = "private", abstract: bool = False) -> dict:
+    method: dict = {"signature": signature}
+    if visibility:
+        method["visibility"] = visibility
+    if abstract:
+        method["abstract"] = True
+    return method
+
+
+SCHEMA_PARSER_DATA = {
+    "kinds": {"api": 1, "internals": 3},
+    "entities": [
+        {"id": "parser", "label": "Parser", "kind": "api", "stereotype": "interface", "methods": [_class_method("parse(src: str) -> Ast", "public")]},
+        {
+            "id": "recursivedescentparser",
+            "label": "RecursiveDescentParser",
+            "kind": "internals",
+            "fields": [
+                _class_attr("max_depth", "int", "public", static=True),
+                _class_attr("lexer", "Lexer"),
+                _class_attr("pos", "int"),
+                _class_attr("depth", "int"),
+                _class_attr("errors", "list"),
+                _class_attr("options", "dict"),
+            ],
+            "methods": [
+                _class_method("parse(src: str) -> Ast", "public"),
+                _class_method("expr() -> Ast"),
+                _class_method("term() -> Ast"),
+                _class_method("factor() -> Ast"),
+                _class_method("expect(kind: TokenKind) -> Token"),
+                _class_method("peek() -> Token"),
+                _class_method("error(msg: str)"),
+            ],
+        },
+        {
+            "id": "lexer",
+            "label": "Lexer",
+            "kind": "internals",
+            "fields": [_class_attr("src", "str"), _class_attr("pos", "int")],
+            "methods": [_class_method("next() -> Token", "public"), _class_method("peek() -> Token", "public")],
+        },
+        {
+            "id": "token",
+            "label": "Token",
+            "kind": "internals",
+            "fields": [_class_attr("kind", "TokenKind", "public"), _class_attr("text", "str", "public"), _class_attr("line", "int", "public")],
+        },
+        {
+            "id": "tokenkind",
+            "label": "TokenKind",
+            "kind": "internals",
+            "stereotype": "enum",
+            "fields": [_class_attr(v, None, None) for v in ("NUMBER", "IDENT", "PLUS", "LPAREN", "RPAREN", "EOF")],
+        },
+        {
+            "id": "ast",
+            "label": "Ast",
+            "kind": "api",
+            "stereotype": "abstract",
+            "methods": [_class_method("accept(v: Visitor)", "public", abstract=True)],
+        },
+        {
+            "id": "binaryexpr",
+            "label": "BinaryExpr",
+            "kind": "api",
+            "fields": [_class_attr("left", "Ast", "public"), _class_attr("op", "TokenKind", "public"), _class_attr("right", "Ast", "public")],
+        },
+    ],
+    "relationships": [
+        {"from": "recursivedescentparser", "to": "parser", "type": "implements"},
+        {"from": "recursivedescentparser", "to": "lexer", "type": "composition", "to_mult": "1"},
+        {"from": "lexer", "to": "token", "type": "dependency", "label": "produces"},
+        {"from": "token", "to": "tokenkind", "type": "association", "directed": True},
+        {"from": "binaryexpr", "to": "ast", "type": "inherits"},
+        {"from": "binaryexpr", "to": "ast", "type": "aggregation", "to_mult": "2", "label": "operands"},
+        {"from": "parser", "to": "ast", "type": "dependency", "label": "returns"},
+    ],
+}
+
+SCHEMA_CLASS_SELF_DATA = {
+    "entities": [
+        {"id": "node", "label": "Node", "fields": [_class_attr("value", "int")], "methods": [_class_method("walk()", "public")]},
+        {"id": "leaf", "label": "Leaf", "methods": [_class_method("value() -> int", "public")]},
+        {"id": "root", "label": "Root", "methods": [_class_method("build()", "public")]},
+    ],
+    "relationships": [
+        {"from": "node", "to": "node", "type": "aggregation", "from_mult": "0..1", "to_mult": "*", "label": "children"},
+        {"from": "leaf", "to": "node", "type": "inherits"},
+        {"from": "root", "to": "node", "type": "composition", "to_mult": "1"},
+    ],
+}
+
+SCHEMA_CLASS_LOOP_SUMMARY = "Two classes that will inherit each other."
+SCHEMA_CLASS_LOOP_DATA = {
+    "entities": [
+        {"id": "a", "label": "A", "methods": [_class_method("run()", "public")]},
+        {"id": "b", "label": "B", "methods": [_class_method("run()", "public")]},
+    ],
+    "relationships": [{"from": "a", "to": "b", "type": "inherits"}, {"from": "b", "to": "a", "type": "dependency"}],
+}
+
+SCHEMA_CLASS_PAGE = (
+    _schema_tag(
+        "schema-parser",
+        "The parser's public interface, its recursive descent implementation and the AST it returns.",
+        SCHEMA_PARSER_DATA,
+        notation="class",
+    )
+    + _schema_tag("schema-class-self", "A tree node that contains nodes.", SCHEMA_CLASS_SELF_DATA, notation="class")
+    + _schema_tag("schema-small", "Authors and their books.", SCHEMA_SMALL_DATA)
+    + (
+        f'<q-schema id="schema-class-loop" summary="{SCHEMA_CLASS_LOOP_SUMMARY}" notation="class">'
+        f'<script type="application/json">{json.dumps(SCHEMA_CLASS_LOOP_DATA, separators=(",", ":"))}</script></q-schema>\n'
+    )
+)
+
+
+@pytest.fixture(scope="module")
+def schema_class_page(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    reason = _node_ready()
+    if reason:
+        pytest.skip(reason)
+    work = tmp_path_factory.mktemp("kit-schema-class")
+    src = work / "schema-class.src.html"
+    src.write_text(HEADER + SCHEMA_CLASS_PAGE, encoding="utf-8")
+    built = _build(src, work / "schema-class.html")
+    # the inheritance loop is edited in after the build so the build-time check never sees it
+    html = built.read_text(encoding="utf-8")
+    loop_edge = '"type":"dependency"'
+    assert html.count(loop_edge) == 1
+    built.write_text(html.replace(loop_edge, '"type":"inherits"'), encoding="utf-8")
+    return built
+
+
+SCHEMA_CLASS_UML_MARKS = [
+    # (index, from entity, to entity, from mark, to mark, dashed, from mult, to mult, label)
+    (0, "recursivedescentparser", "parser", "none", "triangle", True, None, None, None),
+    (1, "recursivedescentparser", "lexer", "diamond-filled", "none", False, None, "1", None),
+    (2, "lexer", "token", "none", "arrow", True, None, None, "produces"),
+    (3, "token", "tokenkind", "none", "arrow", False, None, None, None),
+    (4, "binaryexpr", "ast", "none", "triangle", False, None, None, None),
+    (5, "binaryexpr", "ast", "diamond-hollow", "none", False, None, "2", "operands"),
+    (6, "parser", "ast", "none", "arrow", True, None, None, "returns"),
+]
+
+
+def test_schema_class_parser_draws_seven_compartmented_cards_with_stereotypes_and_modifiers(schema_class_page: Path) -> None:
+    out = run(
+        schema_class_page,
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-parser');
+              const header = (id) => card(m, id).querySelector('[data-q-schema-stereo]');
+              const midY = (id) => {{ const b = cardBox(m, id); return b.y + b.height / 2; }};
+              const rowText = (id, attr, key) => card(m, id).querySelector('[' + attr + '="' + key + '"] text');
+              const style = (el) => getComputedStyle(el);
+              const rules = (id) => card(m, id).querySelectorAll('[data-q-schema-rule]').length;
+              return {{
+                ready: m.getAttribute('data-q-flow-ready'),
+                cards: [...m.querySelectorAll('[data-q-schema-entity]')].map((e) => e.getAttribute('data-q-schema-entity')),
+                stereotypes: Object.fromEntries([...m.querySelectorAll('[data-q-schema-stereotype]')].map((e) => [e.getAttribute('data-q-schema-entity'), e.getAttribute('data-q-schema-stereotype')])),
+                parserHeader: header('parser').textContent,
+                astHeader: header('ast').textContent,
+                enumHeader: header('tokenkind').textContent,
+                lexerHeader: header('lexer'),
+                enumRows: [...card(m, 'tokenkind').querySelectorAll('[data-q-schema-field]')].map((r) => r.querySelector('text').textContent),
+                labels: Object.fromEntries([...m.querySelectorAll('[data-q-schema-entity]')].map((e) => [e.getAttribute('data-q-schema-entity'), e.querySelector('[data-q-schema-label]').textContent])),
+                parserAbove: midY('parser') < midY('recursivedescentparser'),
+                astAbove: midY('ast') < midY('binaryexpr'),
+                staticUnderlined: style(rowText('recursivedescentparser', 'data-q-schema-field', 'max_depth')).textDecorationLine.includes('underline'),
+                plainNotUnderlined: !style(rowText('recursivedescentparser', 'data-q-schema-field', 'lexer')).textDecorationLine.includes('underline'),
+                abstractItalic: style(rowText('ast', 'data-q-schema-method', '0')).fontStyle,
+                plainNotItalic: style(rowText('lexer', 'data-q-schema-method', '0')).fontStyle,
+                texts: [card(m, 'recursivedescentparser').querySelector('[data-q-schema-field="max_depth"] text').textContent,
+                        card(m, 'recursivedescentparser').querySelector('[data-q-schema-field="lexer"] text').textContent,
+                        card(m, 'ast').querySelector('[data-q-schema-method="0"] text').textContent,
+                        card(m, 'token').querySelector('[data-q-schema-field="line"] text').textContent],
+                rules: rules('lexer'),
+                accents: ['parser', 'lexer'].map((id) => card(m, id).querySelector('[data-q-schema-accent]').getAttribute('fill')),
+                listOpen: m.querySelector('[data-q-flow-list]').open,
+                ariaLexer: card(m, 'lexer').getAttribute('aria-label'),
+                noun: m.querySelector('[data-q-flow-controls]').getAttribute('aria-label'),
+                drawerLabel: m.querySelector('[data-q-flow-drawer]').getAttribute('aria-label'),
+                expandLabel: m.querySelector('[data-q-flow-action="expand"]').getAttribute('aria-label'),
+              }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["ready"] == "true"
+    assert d["cards"] == ["parser", "recursivedescentparser", "lexer", "token", "tokenkind", "ast", "binaryexpr"]
+    assert d["stereotypes"] == {"parser": "interface", "tokenkind": "enum", "ast": "abstract"}
+    assert "«interface»" in d["parserHeader"] and "«abstract»" in d["astHeader"] and "«enum»" in d["enumHeader"]
+    assert d["lexerHeader"] is None
+    assert d["enumRows"] == ["NUMBER", "IDENT", "PLUS", "LPAREN", "RPAREN", "EOF"]
+    assert d["labels"]["parser"] == "Parser" and d["labels"]["recursivedescentparser"] == "RecursiveDescentParser"
+    assert d["parserAbove"] is True
+    assert d["astAbove"] is True
+    assert d["staticUnderlined"] is True and d["plainNotUnderlined"] is True
+    assert d["abstractItalic"] == "italic" and d["plainNotItalic"] == "normal"
+    assert d["texts"] == ["+ max_depth: int", "- lexer: Lexer", "+ accept(v: Visitor)", "+ line: int"]
+    assert d["rules"] == 1
+    assert d["accents"] == ["var(--q-color-chart-1)", "var(--q-color-chart-3)"]
+    assert d["listOpen"] is False
+    assert d["ariaLexer"] == "Lexer, internals, 4 members, 2 relationships"
+    assert d["noun"] == "Diagram controls"
+    assert d["drawerLabel"] == "Class details"
+    assert d["expandLabel"] == "Expand diagram"
+
+
+def test_schema_class_lines_run_between_the_cards_with_uml_marks_multiplicities_and_labels(schema_class_page: Path) -> None:
+    out = run(
+        schema_class_page,
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-parser');
+              const onBorder = (p, id) => {{
+                const b = cardBox(m, id);
+                const inX = p.x >= b.x - 1 && p.x <= b.x + b.width + 1;
+                const inY = p.y >= b.y - 1 && p.y <= b.y + b.height + 1;
+                const edge = (Math.abs(p.x - b.x) <= 1 || Math.abs(p.x - b.x - b.width) <= 1) && inY
+                  || (Math.abs(p.y - b.y) <= 1 || Math.abs(p.y - b.y - b.height) <= 1) && inX;
+                return edge;
+              }};
+              return {json.dumps(SCHEMA_CLASS_UML_MARKS)}.map(([idx, fromE, toE]) => {{
+                const rel = relAt(m, idx);
+                const line = lineOf(rel);
+                const pts = pathPoints(line.getAttribute('d'));
+                const first = pts[0], last = pts[pts.length - 1];
+                const mult = (side) => {{
+                  const el = rel.querySelector('[data-q-schema-mult="' + side + '"]');
+                  if (!el) return null;
+                  const x = +el.getAttribute('x'), y = +el.getAttribute('y');
+                  return {{ text: el.textContent, nearFrom: Math.hypot(x - first.x, y - first.y), nearTo: Math.hypot(x - last.x, y - last.y) }};
+                }};
+                const lbl = rel.querySelector('[data-q-schema-rel-label]');
+                return {{
+                  from: rel.getAttribute('data-q-schema-from'),
+                  to: rel.getAttribute('data-q-schema-to'),
+                  fromMark: rel.getAttribute('data-q-schema-from-mark'),
+                  toMark: rel.getAttribute('data-q-schema-to-mark'),
+                  startMarker: markKind(m, line.getAttribute('marker-start')),
+                  endMarker: markKind(m, line.getAttribute('marker-end')),
+                  dash: line.getAttribute('stroke-dasharray'),
+                  firstOnFrom: onBorder(first, fromE),
+                  lastOnTo: onBorder(last, toE),
+                  fromMult: mult('from'),
+                  toMult: mult('to'),
+                  label: lbl && lbl.textContent,
+                }};
+              }});
+            }})()""",
+            "rels",
+        ),
+    )
+    assert_clean(out)
+    for (idx, from_e, to_e, from_mark, to_mark, dashed, from_mult, to_mult, label), got in zip(SCHEMA_CLASS_UML_MARKS, out["results"]["rels"]):
+        where = f"rel {idx}"
+        assert (got["from"], got["to"]) == (from_e, to_e), where
+        assert (got["fromMark"], got["toMark"]) == (from_mark, to_mark), where
+        # the path runs from the from end to the to end, so the markers sit where the data says
+        assert got["startMarker"] == (None if from_mark == "none" else from_mark), where
+        assert got["endMarker"] == (None if to_mark == "none" else to_mark), where
+        assert bool(got["dash"]) is dashed, where
+        assert got["firstOnFrom"] and got["lastOnTo"], where
+        assert (got["fromMult"] and got["fromMult"]["text"]) == from_mult, where
+        assert (got["toMult"] and got["toMult"]["text"]) == to_mult, where
+        assert got["label"] == label, where
+        if to_mult:
+            assert got["toMult"]["nearTo"] < got["toMult"]["nearFrom"] and got["toMult"]["nearTo"] < 48, where
+
+
+def test_schema_class_card_fold_shows_four_and_four_with_a_more_row_and_short_cards_show_everything(schema_class_page: Path) -> None:
+    out = run(
+        schema_class_page,
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-parser');
+              const state = (id) => {{
+                const c = card(m, id);
+                const more = c.querySelectorAll('[data-q-schema-more]');
+                const rows = [...c.querySelectorAll('[data-q-schema-field], [data-q-schema-method]')];
+                const lastRow = Math.max(...rows.map((r) => Number(r.getAttribute('data-q-schema-row-y'))));
+                return {{
+                  attrs: [...c.querySelectorAll('[data-q-schema-field]')].map((r) => r.getAttribute('data-q-schema-field')),
+                  methods: [...c.querySelectorAll('[data-q-schema-method]')].map((r) => r.getAttribute('data-q-schema-method')),
+                  more: [...more].map((e) => e.textContent),
+                  moreBelow: more.length ? Number(more[0].querySelector('[data-q-schema-row-bg]').getAttribute('y')) >= lastRow : null,
+                  inside: rows.every((r) => Number(r.getAttribute('data-q-schema-row-y')) < cardBox(m, id).y + cardBox(m, id).height),
+                }};
+              }};
+              return {{ rdp: state('recursivedescentparser'), lexer: state('lexer') }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["rdp"]["attrs"] == ["max_depth", "lexer", "pos", "depth"]
+    assert d["rdp"]["methods"] == ["0", "1", "2", "3"]
+    assert d["rdp"]["more"] == ["+5 more"] and d["rdp"]["moreBelow"] is True and d["rdp"]["inside"] is True
+    assert d["lexer"] == {"attrs": ["src", "pos"], "methods": ["0", "1"], "more": [], "moreBelow": None, "inside": True}
+
+
+def test_schema_class_focus_lights_the_card_its_lines_and_neighbours_and_the_drawer_lists_members_and_buttons(
+    schema_class_page: Path,
+) -> None:
+    out = run(
+        schema_class_page,
+        {"click": '#schema-parser [data-q-schema-entity="lexer"]'},
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-parser');
+              const d = m.querySelector('[data-q-flow-drawer]');
+              return {{
+                lit: entityIds(m, 'data-q-flow-lit'),
+                dim: entityIds(m, 'data-q-flow-dim'),
+                selected: entityIds(m, 'data-q-flow-selected'),
+                litRels: relIdx(m, 'data-q-flow-lit'),
+                dimRels: relIdx(m, 'data-q-flow-dim'),
+                drawer: drawerState(m),
+                methods: [...d.querySelectorAll('[data-q-schema-drawer-method]')].map((e) => e.textContent),
+                live: m.querySelector('[data-q-flow-live]').textContent,
+              }};
+            }})()""",
+            "d",
+        ),
+        {"click": '#schema-parser [data-q-flow-edge-btn][data-q-flow-target="token"]'},
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-parser');
+              return {{ selected: entityIds(m, 'data-q-flow-selected'), buttons: drawerState(m).buttons, fields: drawerState(m).fields }};
+            }})()""",
+            "next",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["lit"] == ["lexer", "recursivedescentparser", "token"]
+    assert d["dim"] == ["ast", "binaryexpr", "parser", "tokenkind"]
+    assert d["selected"] == ["lexer"]
+    assert d["litRels"] == [1, 2] and d["dimRels"] == [0, 3, 4, 5, 6]
+    assert d["drawer"]["open"] is True and d["drawer"]["heading"] == "Lexer"
+    assert d["drawer"]["fields"] == ["private src: str", "private pos: int"]
+    assert d["methods"] == ["public next() -> Token", "public peek() -> Token"]
+    assert d["drawer"]["buttons"] == ["part of: RecursiveDescentParser", "produces: Token"]
+    assert d["live"] == "Lexer, internals, 4 members, 2 relationships"
+    nxt = out["results"]["next"]
+    assert nxt["selected"] == ["token"]
+    assert nxt["buttons"] == ["used by: Lexer", "associated with: TokenKind"]
+    assert nxt["fields"] == ["public kind: TokenKind", "public text: str", "public line: int"]
+
+
+def test_schema_class_drawer_says_stereotype_static_and_abstract_in_words_and_reverse_verbs(schema_class_page: Path) -> None:
+    out = run(
+        schema_class_page,
+        {"click": '#schema-parser [data-q-schema-entity="ast"]'},
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-parser');
+              const d = m.querySelector('[data-q-flow-drawer]');
+              const st = d.querySelector('[data-q-schema-drawer-stereotype]');
+              return {{ stereotype: st && st.textContent, methods: [...d.querySelectorAll('[data-q-schema-drawer-method]')].map((e) => e.textContent), buttons: drawerState(m).buttons }};
+            }})()""",
+            "ast",
+        ),
+        {"click": '#schema-parser [data-q-schema-entity="recursivedescentparser"]'},
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-parser');
+              const d = m.querySelector('[data-q-flow-drawer]');
+              return {{
+                fields: drawerState(m).fields,
+                methods: [...d.querySelectorAll('[data-q-schema-drawer-method]')].map((e) => e.textContent),
+                buttons: drawerState(m).buttons,
+              }};
+            }})()""",
+            "rdp",
+        ),
+    )
+    assert_clean(out)
+    ast, rdp = out["results"]["ast"], out["results"]["rdp"]
+    assert ast["stereotype"] == "«abstract»"
+    assert ast["methods"] == ["public abstract accept(v: Visitor)"]
+    assert ast["buttons"] == ["inherited by: BinaryExpr", "aggregated by: BinaryExpr", "used by: Parser"]
+    assert rdp["fields"][0] == "public static max_depth: int" and len(rdp["fields"]) == 6
+    assert len(rdp["methods"]) == 7 and rdp["methods"][6] == "private error(msg: str)"
+    assert rdp["buttons"] == ["implements: Parser", "composed of: Lexer"]
+
+
+def test_schema_class_more_row_click_focuses_the_class_and_lists_every_member(schema_class_page: Path) -> None:
+    out = run(
+        schema_class_page,
+        {"click": "#schema-parser [data-q-schema-more]"},
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-parser');
+              const d = m.querySelector('[data-q-flow-drawer]');
+              return {{ selected: entityIds(m, 'data-q-flow-selected'), fields: drawerState(m).fields.length, methods: d.querySelectorAll('[data-q-schema-drawer-method]').length }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["d"] == {"selected": ["recursivedescentparser"], "fields": 6, "methods": 7}
+
+
+def test_schema_class_self_relationship_is_a_loop_off_the_east_edge_that_keeps_neighbours_clear(schema_class_page: Path) -> None:
+    out = run(
+        schema_class_page,
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-class-self');
+              const rel = relAt(m, 0);
+              const pts = pathPoints(lineOf(rel).getAttribute('d'));
+              const b = cardBox(m, 'node');
+              const xs = pts.map((p) => p.x);
+              const lbl = rel.querySelector('[data-q-schema-rel-label]');
+              const lb = lbl.getBBox();
+              const others = ['leaf', 'root'].map((id) => cardBox(m, id));
+              const loopRight = Math.max(...xs, lb.x + lb.width);
+              const clashes = others.filter((o) => o.x < loopRight + 4 && o.x + o.width > b.x + b.width && o.y < b.y + b.height && o.y + o.height > b.y);
+              const edgeEnds = [0, 1, 2].map((i) => {{
+                const p = pathPoints(lineOf(relAt(m, i)).getAttribute('d'));
+                return [p[0], p[p.length - 1]];
+              }});
+              const onAnyBorder = (p) => ['node', 'leaf', 'root'].some((id) => {{
+                const c = cardBox(m, id);
+                const inX = p.x >= c.x - 1 && p.x <= c.x + c.width + 1, inY = p.y >= c.y - 1 && p.y <= c.y + c.height + 1;
+                return ((Math.abs(p.x - c.x) <= 1 || Math.abs(p.x - c.x - c.width) <= 1) && inY) || ((Math.abs(p.y - c.y) <= 1 || Math.abs(p.y - c.y - c.height) <= 1) && inX);
+              }});
+              return {{
+                ready: m.getAttribute('data-q-flow-ready'),
+                startsOnEast: Math.abs(pts[0].x - (b.x + b.width)) <= 1,
+                endsOnEast: Math.abs(pts[pts.length - 1].x - (b.x + b.width)) <= 1,
+                out: Math.max(...xs) - (b.x + b.width),
+                distinctRows: Math.abs(pts[0].y - pts[pts.length - 1].y) > 4,
+                marks: [rel.getAttribute('data-q-schema-from-mark'), rel.getAttribute('data-q-schema-to-mark')],
+                mults: [rel.querySelector('[data-q-schema-mult="from"]').textContent, rel.querySelector('[data-q-schema-mult="to"]').textContent],
+                label: lbl.textContent,
+                clashes: clashes.length,
+                allEndsOnCards: edgeEnds.flat().every(onAnyBorder),
+              }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["ready"] == "true"
+    assert d["startsOnEast"] and d["endsOnEast"] and d["distinctRows"]
+    assert d["out"] >= 20
+    assert d["marks"] == ["diamond-hollow", "none"]
+    assert d["mults"] == ["0..1", "*"] and d["label"] == "children"
+    assert d["clashes"] == 0
+    assert d["allEndsOnCards"] is True
+
+
+def test_schema_class_marks_are_scoped_to_the_model_and_recolour_with_the_theme(schema_class_page: Path) -> None:
+    out = run(
+        schema_class_page,
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const parser = document.querySelector('#schema-parser');
+              const small = document.querySelector('#schema-small');
+              const kinds = (m) => [...new Set([...m.querySelectorAll('marker[data-q-schema-mark]')].map((e) => e.getAttribute('data-q-schema-mark')))].sort();
+              const ids = (m) => [...m.querySelectorAll('marker')].map((e) => e.id);
+              const colours = [...parser.querySelectorAll('marker[data-q-schema-mark] [stroke]')].map((e) => e.getAttribute('stroke'));
+              return {{
+                parserKinds: kinds(parser),
+                smallKinds: kinds(small),
+                shared: ids(parser).filter((id) => ids(small).includes(id)).length,
+                themed: colours.every((c) => c.startsWith('var(--q-color-')),
+              }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["parserKinds"] == ["arrow", "diamond-filled", "diamond-hollow", "triangle"]
+    assert d["smallKinds"] == ["one", "one-or-many", "zero-or-many", "zero-or-one"]
+    assert d["shared"] == 0 and d["themed"] is True
+
+
+SCHEMA_PARSER_LIST_JS = """(() => {
+  const d = document.querySelector('#schema-parser [data-q-flow-list]');
+  return {
+    summary: d.querySelector('summary').textContent,
+    text: d.querySelector('[data-q-flow-list-body]').textContent,
+    entities: [...d.querySelectorAll('[data-q-schema-list-entity]')].map((e) => e.getAttribute('data-q-schema-list-entity') + '|' + e.textContent),
+    rels: [...d.querySelectorAll('[data-q-schema-list-rels] > li')].map((e) => e.textContent),
+  };
+})()"""
+
+
+def test_schema_class_js_text_list_equals_the_python_fallback_list(schema_class_page: Path) -> None:
+    js = run(schema_class_page, ev(SCHEMA_PARSER_LIST_JS, "list"))
+    assert_clean(js)
+    nojs = run(schema_class_page, ev(SCHEMA_PARSER_LIST_JS, "list"), javaScript=False)
+    assert nojs["failedSteps"] == [] and nojs["pageErrors"] == []
+    assert js["results"]["list"] == nojs["results"]["list"]
+    listing = js["results"]["list"]
+    assert listing["summary"] == "Class diagram as a list"
+    assert listing["rels"] == [
+        "RecursiveDescentParser implements Parser",
+        "RecursiveDescentParser is composed of 1 Lexer",
+        "Lexer depends on Token (produces)",
+        "Token is associated with TokenKind",
+        "BinaryExpr inherits from Ast",
+        "BinaryExpr aggregates 2 Ast (operands)",
+        "Parser depends on Ast (returns)",
+    ]
+    assert any(e.startswith("parser|Parser (api, interface)") for e in listing["entities"])
+
+
+def test_schema_class_without_javascript_says_class_diagram_in_the_notice(schema_class_page: Path) -> None:
+    out = run(
+        schema_class_page,
+        ev(
+            """(() => {
+              const m = document.querySelector('#schema-parser');
+              return { notice: m.querySelector('[data-q-flow-notice]').textContent, open: m.querySelector('[data-q-flow-list]').open };
+            })()""",
+            "d",
+        ),
+        javaScript=False,
+    )
+    assert out["failedSteps"] == [] and out["pageErrors"] == []
+    assert out["results"]["d"] == {"notice": "JavaScript is off, so this class diagram is shown as a list below.", "open": True}
+
+
+def test_schema_class_data_that_fails_shows_the_class_notice_and_the_open_list(schema_class_page: Path) -> None:
+    out = run(
+        schema_class_page,
+        ev(
+            f"""(() => {{
+              {SCHEMA_MOUNT_JS}
+              const m = document.querySelector('#schema-class-loop');
+              return {{ loop: failureState(m), parser: document.querySelector('#schema-parser').getAttribute('data-q-flow-ready') }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["loop"] == {
+        "ready": "error",
+        "notice": "This class diagram could not be drawn.",
+        "svg": False,
+        "open": True,
+        "title": "Class diagram as a list",
+        "entities": 0,
+    }
+    assert d["parser"] == "true"
+
+
+SCHEMA_CLASS_BAD_MODELS = {
+    "cross-notation key on an attribute": {"entities": [{"id": "a", "label": "A", "fields": [{"name": "id", "key": "PK"}]}]},
+    "cross-notation cardinality": {
+        "entities": [{"id": "a", "label": "A"}],
+        "relationships": [{"from": "a", "to": "a", "type": "dependency", "from_card": "one"}],
+    },
+    "unknown stereotype": {"entities": [{"id": "a", "label": "A", "stereotype": "mixin"}]},
+    "unknown visibility on an attribute": {"entities": [{"id": "a", "label": "A", "fields": [{"name": "x", "visibility": "internal"}]}]},
+    "unknown visibility on a method": {"entities": [{"id": "a", "label": "A", "methods": [{"signature": "f()", "visibility": "internal"}]}]},
+    "null fields": {"entities": [{"id": "a", "label": "A", "fields": None}]},
+    "null methods": {"entities": [{"id": "a", "label": "A", "methods": None}]},
+    "duplicate attribute": {"entities": [{"id": "a", "label": "A", "fields": [{"name": "x"}, {"name": "x"}]}]},
+    "duplicate method": {"entities": [{"id": "a", "label": "A", "methods": [{"signature": "f()"}, {"signature": "f()"}]}]},
+    "unknown class": {"entities": [{"id": "a", "label": "A"}], "relationships": [{"from": "a", "to": "b", "type": "dependency"}]},
+    "member-level end": {
+        "entities": [{"id": "a", "label": "A", "fields": [{"name": "x"}]}],
+        "relationships": [{"from": "a.x", "to": "a", "type": "dependency"}],
+    },
+    "unknown relationship type": {"entities": [{"id": "a", "label": "A"}], "relationships": [{"from": "a", "to": "a", "type": "extends"}]},
+    "missing relationship type": {"entities": [{"id": "a", "label": "A"}], "relationships": [{"from": "a", "to": "a"}]},
+    "multiplicity many": {
+        "entities": [{"id": "a", "label": "A"}],
+        "relationships": [{"from": "a", "to": "a", "type": "association", "to_mult": "many"}],
+    },
+    "multiplicity n greater than m": {
+        "entities": [{"id": "a", "label": "A"}],
+        "relationships": [{"from": "a", "to": "a", "type": "association", "from_mult": "3..2"}],
+    },
+    "directed on a dependency": {
+        "entities": [{"id": "a", "label": "A"}],
+        "relationships": [{"from": "a", "to": "a", "type": "dependency", "directed": True}],
+    },
+    "inheritance loop": {
+        "entities": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+        "relationships": [{"from": "a", "to": "b", "type": "inherits"}, {"from": "b", "to": "a", "type": "implements"}],
+    },
+    "class that inherits itself": {"entities": [{"id": "a", "label": "A"}], "relationships": [{"from": "a", "to": "a", "type": "inherits"}]},
+    "coordinates on a method": {"entities": [{"id": "a", "label": "A", "methods": [{"signature": "f()", "x": 1}]}]},
+}
+SCHEMA_CLASS_GOOD_MODELS = {
+    "empty class with no members": {"entities": [{"id": "a", "label": "A"}]},
+    "dotted class ids": {"entities": [{"id": "a.b", "label": "AB"}, {"id": "c", "label": "C"}], "relationships": [{"from": "a.b", "to": "c", "type": "dependency"}]},
+    "diamond of inheritance": {
+        "entities": [{"id": n, "label": n.upper()} for n in "abcd"],
+        "relationships": [
+            {"from": "b", "to": "a", "type": "inherits"},
+            {"from": "c", "to": "a", "type": "inherits"},
+            {"from": "d", "to": "b", "type": "inherits"},
+            {"from": "d", "to": "c", "type": "implements"},
+        ],
+    },
+    "aggregating its own parent": {
+        "entities": [{"id": "p", "label": "P"}, {"id": "c", "label": "C"}],
+        "relationships": [{"from": "c", "to": "p", "type": "inherits"}, {"from": "c", "to": "p", "type": "aggregation"}, {"from": "p", "to": "c", "type": "composition"}],
+    },
+    "two self relationships and a stereotype": {
+        "entities": [{"id": "n", "label": "N", "stereotype": "abstract", "methods": [{"signature": "f()", "abstract": True}]}],
+        "relationships": [
+            {"from": "n", "to": "n", "type": "aggregation", "label": "kids", "to_mult": "0..*"},
+            {"from": "n", "to": "n", "type": "association", "directed": True, "label": "next"},
+        ],
+    },
+    "grouped classes": {
+        "groups": [{"id": "g", "label": "G"}],
+        "entities": [{"id": "a", "label": "A", "group": "g"}, {"id": "b", "label": "B", "group": "g"}, {"id": "c", "label": "C"}],
+        "relationships": [{"from": "a", "to": "b", "type": "inherits"}, {"from": "c", "to": "a", "type": "dependency"}],
+    },
+    "prototype-named ids": {
+        "entities": [{"id": "constructor", "label": "C", "methods": [{"signature": "f()"}]}, {"id": "__proto__", "label": "P"}],
+        "relationships": [{"from": "constructor", "to": "__proto__", "type": "inherits"}],
+    },
+}
+
+
+def test_schema_class_runtime_rejects_the_same_data_the_kit_check_fails(schema_class_page: Path) -> None:
+    cases = {**SCHEMA_CLASS_BAD_MODELS, **SCHEMA_CLASS_GOOD_MODELS}
+    out = run(
+        schema_class_page,
+        ev(
+            f"""(async () => {{
+              {SCHEMA_MOUNT_JS}
+              const cases = {json.dumps(cases)};
+              const mount = Object.entries(cases).map(([name, data]) => [name, mountSchema(data, {{ notation: 'class' }})]);
+              return Object.fromEntries(await Promise.all(mount.map(async ([name, el]) => [name, await settle(el)])));
+            }})()""",
+            "ready",
+        ),
+    )
+    assert_clean(out)
+    ready = out["results"]["ready"]
+    assert {name: ready[name] for name in SCHEMA_CLASS_BAD_MODELS} == {name: "error" for name in SCHEMA_CLASS_BAD_MODELS}
+    assert {name: ready[name] for name in SCHEMA_CLASS_GOOD_MODELS} == {name: "true" for name in SCHEMA_CLASS_GOOD_MODELS}
+
+
+def test_schema_class_fold_follows_the_four_four_and_spare_row_rules(schema_class_page: Path) -> None:
+    def entity(attrs: int, methods: int) -> dict:
+        return {
+            "id": "c",
+            "label": "C",
+            "fields": [{"name": f"a{i}", "type": "int"} for i in range(attrs)],
+            "methods": [{"signature": f"m{i}()"} for i in range(methods)],
+        }
+
+    shapes = [(6, 7), (2, 9), (11, 1), (3, 4), (5, 3), (0, 10), (9, 0)]
+    out = run(
+        schema_class_page,
+        ev(
+            f"""(async () => {{
+              {SCHEMA_MOUNT_JS}
+              const cases = {json.dumps([{"entities": [entity(a, m)]} for a, m in shapes])};
+              const els = cases.map((data) => mountSchema(data, {{ notation: 'class' }}));
+              await Promise.all(els.map(settle));
+              return els.map((el) => {{
+                const more = el.querySelector('[data-q-schema-more]');
+                return [el.querySelectorAll('[data-q-schema-field]').length, el.querySelectorAll('[data-q-schema-method]').length, more && more.textContent];
+              }});
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["d"] == [[4, 4, "+5 more"], [2, 6, "+3 more"], [7, 1, "+4 more"], [3, 4, None], [5, 3, None], [0, 8, "+2 more"], [8, 0, "+1 more"]]
+
+
+def test_schema_class_keyboard_enter_announces_and_escape_clears(schema_class_page: Path) -> None:
+    out = run(
+        schema_class_page,
+        {"focus": '#schema-parser [data-q-schema-entity="parser"]'},
+        {"press": "Enter"},
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-parser');
+              return {{ live: m.querySelector('[data-q-flow-live]').textContent, selected: entityIds(m, 'data-q-flow-selected'), drawer: drawerState(m).open }};
+            }})()""",
+            "entered",
+        ),
+        {"press": "Escape"},
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-parser');
+              return {{ selected: entityIds(m, 'data-q-flow-selected'), drawer: drawerState(m).open }};
+            }})()""",
+            "cleared",
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["entered"] == {"live": "Parser, api, interface, 1 member, 2 relationships", "selected": ["parser"], "drawer": True}
+    assert out["results"]["cleared"] == {"selected": [], "drawer": False}
+
+
+def test_schema_class_theme_toggle_recolours_without_moving_cards(schema_class_page: Path) -> None:
+    out = run(
+        schema_class_page,
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-parser');
+              window.__before = ['parser', 'ast', 'binaryexpr'].map((id) => JSON.stringify(cardBox(m, id)));
+              window.__svg = m.querySelector('[data-q-flow-svg]');
+              return true;
+            }})()""",
+            "before",
+        ),
+        {"emulate": {"colorScheme": "dark"}},
+        ev(
+            f"""(() => {{
+              {SCHEMA_GEOMETRY_JS}
+              const m = document.querySelector('#schema-parser');
+              return {{
+                same: ['parser', 'ast', 'binaryexpr'].map((id) => JSON.stringify(cardBox(m, id))).join() === window.__before.join(),
+                sameSvg: window.__svg === m.querySelector('[data-q-flow-svg]'),
+                ready: m.getAttribute('data-q-flow-ready'),
+              }};
+            }})()""",
+            "after",
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["after"] == {"same": True, "sameSvg": True, "ready": "true"}
+
+
+REFERENCE_EXAMPLE = SKILL / "templates" / "report" / "examples" / "reference.src.html"
+
+
+def test_schema_reference_example_builds_clean_and_draws_both_models(tmp_path: Path) -> None:
+    reason = _node_ready()
+    if reason:
+        pytest.skip(reason)
+    page = tmp_path / "reference.html"
+    proc = subprocess.run(
+        [sys.executable, str(CLI), "build", str(REFERENCE_EXAMPLE), "--out", str(page)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    result = json.loads(proc.stdout)
+    assert result["checks"]["passed"] is True and result["checks"]["failures"] == []
+    assert result["warnings"] == []
+    out = run(
+        page,
+        ev(
+            f"""(async () => {{
+              {SCHEMA_MOUNT_JS}
+              const models = [...document.querySelectorAll('q-schema')];
+              await Promise.all(models.map(settle));
+              return models.map((m) => ({{
+                notation: m.getAttribute('notation'),
+                ready: m.getAttribute('data-q-flow-ready'),
+                cards: m.querySelectorAll('[data-q-schema-entity]').length,
+                lines: m.querySelectorAll('[data-q-schema-rel]').length,
+                summary: (m.getAttribute('summary') || '').split('. ').length,
+              }}));
+            }})()""",
+            "models",
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["models"] == [
+        {"notation": None, "ready": "true", "cards": 4, "lines": 4, "summary": 1},
+        {"notation": "class", "ready": "true", "cards": 7, "lines": 7, "summary": 1},
+    ]

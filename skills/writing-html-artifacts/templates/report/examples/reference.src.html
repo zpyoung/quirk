@@ -90,6 +90,473 @@ checkout-config show payment.provider</code></pre>
 <p>Switch back once the first provider has been healthy for 30 minutes, not before.</p>
 </section>
 
+<section aria-labelledby="billing-h">
+<h2 id="billing-h">Billing data</h2>
+<p>When a charge fails, read these tables in order: the customer, the subscription that generated the charge, then the charge itself. Click a table to see every field and how it connects.</p>
+<q-schema summary="Customers, their subscriptions, and the charges and line items billing creates.">
+  <script type="application/json">
+  {
+    "kinds": {
+      "core": 1,
+      "billing": 2
+    },
+    "groups": [
+      {
+        "id": "billing",
+        "label": "Billing"
+      }
+    ],
+    "entities": [
+      {
+        "id": "customer",
+        "label": "Customer",
+        "kind": "core",
+        "detail": "<p>The shopper. Every subscription and charge points back here.</p>",
+        "fields": [
+          {
+            "name": "id",
+            "type": "int",
+            "key": "PK"
+          },
+          {
+            "name": "email",
+            "type": "text",
+            "key": "UK"
+          },
+          {
+            "name": "first_name",
+            "type": "text"
+          },
+          {
+            "name": "last_name",
+            "type": "text"
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp"
+          }
+        ]
+      },
+      {
+        "id": "subscription",
+        "label": "Subscription",
+        "kind": "billing",
+        "group": "billing",
+        "fields": [
+          {
+            "name": "id",
+            "type": "int",
+            "key": "PK"
+          },
+          {
+            "name": "customer_id",
+            "type": "int",
+            "key": "FK"
+          },
+          {
+            "name": "product_title",
+            "type": "text"
+          },
+          {
+            "name": "status",
+            "type": "text"
+          },
+          {
+            "name": "next_charge_date",
+            "type": "date"
+          },
+          {
+            "name": "interval",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "charge",
+        "label": "Charge",
+        "kind": "billing",
+        "group": "billing",
+        "detail": "<p>One attempt to collect money. Failed charges keep their error type and retry count.</p>",
+        "fields": [
+          {
+            "name": "id",
+            "type": "int",
+            "key": "PK"
+          },
+          {
+            "name": "status",
+            "type": "text"
+          },
+          {
+            "name": "total_price",
+            "type": "decimal"
+          },
+          {
+            "name": "currency",
+            "type": "text"
+          },
+          {
+            "name": "scheduled_at",
+            "type": "timestamp"
+          },
+          {
+            "name": "processed_at",
+            "type": "timestamp"
+          },
+          {
+            "name": "error_type",
+            "type": "text"
+          },
+          {
+            "name": "error",
+            "type": "text"
+          },
+          {
+            "name": "retry_count",
+            "type": "int"
+          },
+          {
+            "name": "tags",
+            "type": "text"
+          },
+          {
+            "name": "note",
+            "type": "text"
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp"
+          },
+          {
+            "name": "updated_at",
+            "type": "timestamp"
+          },
+          {
+            "name": "customer_id",
+            "type": "int",
+            "key": "FK"
+          },
+          {
+            "name": "subscription_id",
+            "type": "int",
+            "key": "FK",
+            "nullable": true
+          }
+        ]
+      },
+      {
+        "id": "line_item",
+        "label": "Line item",
+        "kind": "billing",
+        "group": "billing",
+        "fields": [
+          {
+            "name": "id",
+            "type": "int",
+            "key": "PK"
+          },
+          {
+            "name": "charge_id",
+            "type": "int",
+            "key": "FK"
+          },
+          {
+            "name": "title",
+            "type": "text"
+          },
+          {
+            "name": "quantity",
+            "type": "int"
+          },
+          {
+            "name": "price",
+            "type": "decimal"
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "from": "subscription.customer_id",
+        "to": "customer.id",
+        "from_card": "zero-or-many",
+        "to_card": "one",
+        "label": "has"
+      },
+      {
+        "from": "charge.customer_id",
+        "to": "customer.id",
+        "from_card": "zero-or-many",
+        "to_card": "one",
+        "label": "is billed"
+      },
+      {
+        "from": "charge.subscription_id",
+        "to": "subscription.id",
+        "from_card": "zero-or-many",
+        "to_card": "zero-or-one",
+        "label": "generates"
+      },
+      {
+        "from": "line_item.charge_id",
+        "to": "charge.id",
+        "from_card": "one-or-many",
+        "to_card": "one",
+        "label": "contains"
+      }
+    ]
+  }
+  </script>
+</q-schema>
+<h3 id="billing-promo">Promo codes</h3>
+<p>Checkout reads promo codes with a small expression parser. A code that is rejected with a parse error points at one of these classes.</p>
+<q-schema notation="class" summary="The parser's public interface, its recursive descent implementation and the AST it returns.">
+  <script type="application/json">
+  {
+    "kinds": {
+      "api": 1,
+      "internals": 3
+    },
+    "entities": [
+      {
+        "id": "parser",
+        "label": "Parser",
+        "kind": "api",
+        "stereotype": "interface",
+        "methods": [
+          {
+            "signature": "parse(src: str) -> Ast",
+            "visibility": "public"
+          }
+        ]
+      },
+      {
+        "id": "recursivedescentparser",
+        "label": "RecursiveDescentParser",
+        "kind": "internals",
+        "fields": [
+          {
+            "name": "max_depth",
+            "type": "int",
+            "visibility": "public",
+            "static": true
+          },
+          {
+            "name": "lexer",
+            "type": "Lexer",
+            "visibility": "private"
+          },
+          {
+            "name": "pos",
+            "type": "int",
+            "visibility": "private"
+          },
+          {
+            "name": "depth",
+            "type": "int",
+            "visibility": "private"
+          },
+          {
+            "name": "errors",
+            "type": "list",
+            "visibility": "private"
+          },
+          {
+            "name": "options",
+            "type": "dict",
+            "visibility": "private"
+          }
+        ],
+        "methods": [
+          {
+            "signature": "parse(src: str) -> Ast",
+            "visibility": "public"
+          },
+          {
+            "signature": "expr() -> Ast",
+            "visibility": "private"
+          },
+          {
+            "signature": "term() -> Ast",
+            "visibility": "private"
+          },
+          {
+            "signature": "factor() -> Ast",
+            "visibility": "private"
+          },
+          {
+            "signature": "expect(kind: TokenKind) -> Token",
+            "visibility": "private"
+          },
+          {
+            "signature": "peek() -> Token",
+            "visibility": "private"
+          },
+          {
+            "signature": "error(msg: str)",
+            "visibility": "private"
+          }
+        ]
+      },
+      {
+        "id": "lexer",
+        "label": "Lexer",
+        "kind": "internals",
+        "fields": [
+          {
+            "name": "src",
+            "type": "str",
+            "visibility": "private"
+          },
+          {
+            "name": "pos",
+            "type": "int",
+            "visibility": "private"
+          }
+        ],
+        "methods": [
+          {
+            "signature": "next() -> Token",
+            "visibility": "public"
+          },
+          {
+            "signature": "peek() -> Token",
+            "visibility": "public"
+          }
+        ]
+      },
+      {
+        "id": "token",
+        "label": "Token",
+        "kind": "internals",
+        "fields": [
+          {
+            "name": "kind",
+            "type": "TokenKind",
+            "visibility": "public"
+          },
+          {
+            "name": "text",
+            "type": "str",
+            "visibility": "public"
+          },
+          {
+            "name": "line",
+            "type": "int",
+            "visibility": "public"
+          }
+        ]
+      },
+      {
+        "id": "tokenkind",
+        "label": "TokenKind",
+        "kind": "internals",
+        "stereotype": "enum",
+        "fields": [
+          {
+            "name": "NUMBER"
+          },
+          {
+            "name": "IDENT"
+          },
+          {
+            "name": "PLUS"
+          },
+          {
+            "name": "LPAREN"
+          },
+          {
+            "name": "RPAREN"
+          },
+          {
+            "name": "EOF"
+          }
+        ]
+      },
+      {
+        "id": "ast",
+        "label": "Ast",
+        "kind": "api",
+        "stereotype": "abstract",
+        "methods": [
+          {
+            "signature": "accept(v: Visitor)",
+            "visibility": "public",
+            "abstract": true
+          }
+        ]
+      },
+      {
+        "id": "binaryexpr",
+        "label": "BinaryExpr",
+        "kind": "api",
+        "fields": [
+          {
+            "name": "left",
+            "type": "Ast",
+            "visibility": "public"
+          },
+          {
+            "name": "op",
+            "type": "TokenKind",
+            "visibility": "public"
+          },
+          {
+            "name": "right",
+            "type": "Ast",
+            "visibility": "public"
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "from": "recursivedescentparser",
+        "to": "parser",
+        "type": "implements"
+      },
+      {
+        "from": "recursivedescentparser",
+        "to": "lexer",
+        "type": "composition",
+        "to_mult": "1"
+      },
+      {
+        "from": "lexer",
+        "to": "token",
+        "type": "dependency",
+        "label": "produces"
+      },
+      {
+        "from": "token",
+        "to": "tokenkind",
+        "type": "association",
+        "directed": true
+      },
+      {
+        "from": "binaryexpr",
+        "to": "ast",
+        "type": "inherits"
+      },
+      {
+        "from": "binaryexpr",
+        "to": "ast",
+        "type": "aggregation",
+        "to_mult": "2",
+        "label": "operands"
+      },
+      {
+        "from": "parser",
+        "to": "ast",
+        "type": "dependency",
+        "label": "returns"
+      }
+    ]
+  }
+  </script>
+</q-schema>
+</section>
+
 <section aria-labelledby="contacts-h">
 <h2 id="contacts-h">Contacts</h2>
 <ul>
