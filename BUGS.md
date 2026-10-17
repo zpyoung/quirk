@@ -134,3 +134,9 @@ entries' IDs; manual edits to fix typos are fine.
 - **Description**: test_connected_navigation_timeout_is_a_network_failure_with_a_report fails locally: verify reports network passed=True where the test expects a navigation-timeout network failure. Reproduces at a36dcfc (before the q-flow traces work) when run through the BUG-14 node relay shim, so the traces branch did not cause it. The relay or the local network may change how the connected-navigation timeout surfaces. Found 2026-10-17 during the q-flow traces wave-1 gate.
 - **Severity**: low
 
+## BUG-16: A q-flow label, kind or detail with an escaped lone surrogate breaks the page build
+- **Observed**: 2026-10-17
+- **File**: skills/writing-html-artifacts/scripts/htmlkit/kitcheck.py:1284
+- **Description**: The no-JS fallback that inject_flow_fallbacks writes for a <q-flow> copies node labels (and other graph strings) from the JSON. A JSON escape such as "\ud800" decodes to a lone surrogate that passes the kit check, and the assembled page then raises UnicodeEncodeError when written as UTF-8. Reproduced with a node label "A \ud800". Trace values get the same treatment in the q-flow traces branch, where they fail the check as not JSON; labels, kinds, group labels, edge labels and details predate that and still crash. Found 2026-10-17 in the q-flow traces final review.
+- **Severity**: low
+
