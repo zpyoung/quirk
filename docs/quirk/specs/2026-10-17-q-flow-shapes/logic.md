@@ -281,8 +281,8 @@ In scope:
 - the text list and the no-script fallback
 - the skill's text: `q-flow` for every flowchart on an HTML page, in SKILL.md, the design reference
   and the template rules; the generated components reference; flowchart prompts in the routing evals
-- an example page with a checkout flow: a decision, a retry loop, a self-loop poll and a linked
-  refund subprocess
+- an example page with a checkout flow: a decision, a retry loop, a self-loop poll and a
+  subprocess linked to a second graph
 
 Not in scope:
 
@@ -441,4 +441,8 @@ Build-only questions for the tech spec:
 
 **Status**: Approved · Tech spec: authored (`tech.md`; tier gate fired: crosses subsystem boundaries and touches >3 source files)
 
-**Amendments:** none yet.
+**Amendments:**
+
+- 2026-10-17: the example page's linked subprocess is "Pay another way", not a refund. The
+  report explainer is about payment retries, so its subprocess opens the pay-another-way graph;
+  "refund" in the scope line was illustrative. Raised in the final review.
