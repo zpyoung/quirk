@@ -2932,6 +2932,11 @@
     return frag;
   }
 
+  // python str.strip parity: String.prototype.trim differs on U+FEFF, U+001C-U+001F and U+0085
+  function isBlankFlowId(text) {
+    return /^[\t-\r\u001c-\u001f \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$/.test(text);
+  }
+
   function isValidFlowDetail(html) {
     if (!html || typeof html !== 'string') {
       return true;
@@ -3294,7 +3299,7 @@
         }
         var flow = null;
         if (n.flow !== undefined && n.flow !== null) {
-          if (shape !== 'subprocess' || typeof n.flow !== 'string' || !n.flow.trim()) {
+          if (shape !== 'subprocess' || typeof n.flow !== 'string' || isBlankFlowId(n.flow)) {
             return null;
           }
           flow = n.flow;

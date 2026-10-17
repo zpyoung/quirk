@@ -4443,6 +4443,48 @@ FLOW_SHAPES = """
   </script>
 </q-flow>
 
+<q-flow id="flow-bom-link" summary="A subprocess whose flow is a lone byte order mark.">
+  <script type="application/json">
+  {
+    "nodes": [
+      {"id": "bom", "label": "Bom", "shape": "subprocess", "flow": "\ufeff"},
+      {"id": "after", "label": "After"}
+    ],
+    "edges": [{"from": "bom", "to": "after"}]
+  }
+  </script>
+</q-flow>
+
+<q-flow id="&#xFEFF;" summary="The graph a byte order mark names.">
+  <script type="application/json">
+  {"nodes": [{"id": "only", "label": "Only"}], "edges": []}
+  </script>
+</q-flow>
+
+<q-flow id="flow-blank-nel" summary="A subprocess whose flow is a lone next-line character.">
+  <script type="application/json">
+  {
+    "nodes": [
+      {"id": "nel", "label": "Nel", "shape": "subprocess", "flow": "refund-flow"},
+      {"id": "after", "label": "After"}
+    ],
+    "edges": [{"from": "nel", "to": "after"}]
+  }
+  </script>
+</q-flow>
+
+<q-flow id="flow-blank-us" summary="A subprocess whose flow is a lone unit separator.">
+  <script type="application/json">
+  {
+    "nodes": [
+      {"id": "us", "label": "Us", "shape": "subprocess", "flow": "refund-flow"},
+      {"id": "after", "label": "After"}
+    ],
+    "edges": [{"from": "us", "to": "after"}]
+  }
+  </script>
+</q-flow>
+
 <q-flow id="flow-bad-oval" summary="A graph with an unknown shape.">
   <script type="application/json">
   {"nodes": [{"id": "odd", "label": "Odd", "shape": "box"}], "edges": []}
@@ -4482,6 +4524,10 @@ def flow_shapes_page(tmp_path_factory: pytest.TempPathFactory) -> Path:
     lost = '{"id": "lost", "label": "Lost", "shape": "subprocess", "flow": "refund-flow"}'
     assert lost in html
     html = html.replace(lost, '{"id": "lost", "label": "Lost", "shape": "subprocess", "flow": "nowhere"}')
+    for node_id, escape in (("nel", "\\u0085"), ("us", "\\u001f")):
+        wired = f'{{"id": "{node_id}", "label": "{node_id.capitalize()}", "shape": "subprocess", "flow": "refund-flow"}}'
+        assert wired in html
+        html = html.replace(wired, wired.replace("refund-flow", escape))
     built.write_text(html, encoding="utf-8")
     return built
 
@@ -4717,6 +4763,25 @@ def test_flow_unknown_shape_and_decision_with_one_exit_fail_to_the_notice(flow_s
     assert_clean(out)
     for state in out["results"]["d"]:
         assert state == {"ready": "error", "notice": True, "svg": False}
+
+
+def test_flow_blank_subprocess_flow_follows_python_strip(flow_shapes_page: Path) -> None:
+    out = run(
+        flow_shapes_page,
+        ev(
+            """(() => ['flow-bom-link', 'flow-blank-nel', 'flow-blank-us'].map((id) => {
+              const f = document.querySelector('#' + id);
+              return { id, ready: f.getAttribute('data-q-flow-ready') };
+            }))()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["d"] == [
+        {"id": "flow-bom-link", "ready": "true"},
+        {"id": "flow-blank-nel", "ready": "error"},
+        {"id": "flow-blank-us", "ready": "error"},
+    ]
 
 
 def test_flow_focus_follows_forward_edges_only_and_lights_a_loop_between_lit_ends(flow_shapes_page: Path) -> None:
