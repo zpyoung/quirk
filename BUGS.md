@@ -139,4 +139,5 @@ entries' IDs; manual edits to fix typos are fine.
 - **File**: skills/writing-html-artifacts/scripts/htmlkit/kitcheck.py:1284
 - **Description**: The no-JS fallback that inject_flow_fallbacks writes for a <q-flow> copies node labels (and other graph strings) from the JSON. A JSON escape such as "\ud800" decodes to a lone surrogate that passes the kit check, and the assembled page then raises UnicodeEncodeError when written as UTF-8. Reproduced with a node label "A \ud800". Trace values get the same treatment in the q-flow traces branch, where they fail the check as not JSON; labels, kinds, group labels, edge labels and details predate that and still crash. Found 2026-10-17 in the q-flow traces final review.
 - **Severity**: low
+- **Status**: fixed on branch zpyoung/q-flow-traces (graph-level UTF-8 check)
 
