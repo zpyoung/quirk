@@ -3057,6 +3057,92 @@
     });
   }
 
+  var FLOW_DECISION_LINE_MAX = 120;
+  var FLOW_DECISION_LINE_HEIGHT = 16;
+  var FLOW_SUBPROCESS_EXTRA = 16;
+  var FLOW_LOOP_PREFIX = '\u21a9 ';
+
+  /**
+   * Splits a decision label on word boundaries into lines no wider than the
+   * cap. A single word wider than the cap keeps a line of its own.
+   */
+  function wrapFlowLabel(label, measure) {
+    var lines = [];
+    var current = '';
+    label.split(/\s+/).forEach(function (word) {
+      if (!word) {
+        return;
+      }
+      var candidate = current ? current + ' ' + word : word;
+      if (current && measure(candidate, 13, '600') > FLOW_DECISION_LINE_MAX) {
+        lines.push(current);
+        current = word;
+      } else {
+        current = candidate;
+      }
+    });
+    if (current) {
+      lines.push(current);
+    }
+    return lines.length ? lines : [label];
+  }
+
+  /**
+   * Moves one end of an axis-aligned edge along its own segment, back into the
+   * node, until it meets the outline of the diamond inscribed in the node's
+   * box. Returns a new point list; ends that are not axis-aligned are kept.
+   */
+  function snapFlowEndToDiamond(pts, atStart, box) {
+    var last = pts.length - 1;
+    var p = atStart ? pts[0] : pts[last];
+    var nb = atStart ? pts[1] : pts[last - 1];
+    var a = box.width / 2;
+    var b = box.height / 2;
+    var cx = box.x + a;
+    var cy = box.y + b;
+    var moved = null;
+    if (nb.y === p.y && nb.x !== p.x && Math.abs(p.y - cy) < b && p.x !== cx) {
+      var sx = p.x > cx ? 1 : -1;
+      var nx = cx + sx * a * (1 - Math.abs(p.y - cy) / b);
+      if ((nb.x - cx) * sx > 0 && (nb.x - nx) * sx > 0) {
+        moved = { x: nx, y: p.y };
+      }
+    } else if (nb.x === p.x && nb.y !== p.y && Math.abs(p.x - cx) < a && p.y !== cy) {
+      var sy = p.y > cy ? 1 : -1;
+      var ny = cy + sy * b * (1 - Math.abs(p.x - cx) / a);
+      if ((nb.y - cy) * sy > 0 && (nb.y - ny) * sy > 0) {
+        moved = { x: p.x, y: ny };
+      }
+    }
+    if (!moved) {
+      return pts;
+    }
+    var out = pts.slice();
+    out[atStart ? 0 : last] = moved;
+    return out;
+  }
+
+  /** Draws a polyline with each corner rounded by up to `radius` pixels. */
+  function roundedFlowPath(pts, radius) {
+    var d = 'M ' + pts[0].x + ' ' + pts[0].y;
+    for (var i = 1; i < pts.length - 1; i += 1) {
+      var p0 = pts[i - 1];
+      var p1 = pts[i];
+      var p2 = pts[i + 1];
+      var len1 = Math.sqrt((p1.x - p0.x) * (p1.x - p0.x) + (p1.y - p0.y) * (p1.y - p0.y));
+      var len2 = Math.sqrt((p2.x - p1.x) * (p2.x - p1.x) + (p2.y - p1.y) * (p2.y - p1.y));
+      var r = Math.min(radius, len1 / 2, len2 / 2);
+      if (r <= 0) {
+        d += ' L ' + p1.x + ' ' + p1.y;
+        continue;
+      }
+      d += ' L ' + (p1.x + (p0.x - p1.x) / len1 * r) + ' ' + (p1.y + (p0.y - p1.y) / len1 * r)
+        + ' Q ' + p1.x + ' ' + p1.y + ' '
+        + (p1.x + (p2.x - p1.x) / len2 * r) + ' ' + (p1.y + (p2.y - p1.y) / len2 * r);
+    }
+    return d + ' L ' + pts[pts.length - 1].x + ' ' + pts[pts.length - 1].y;
+  }
+
   class QFlow extends HTMLElement {
     static get observedAttributes() {
       return ['summary', 'direction', 'groups'];
@@ -3199,13 +3285,29 @@
             return null;
           }
         }
+        var shape = 'box';
+        if (n.shape !== undefined && n.shape !== null) {
+          if (n.shape !== 'box' && n.shape !== 'decision' && n.shape !== 'subprocess') {
+            return null;
+          }
+          shape = n.shape;
+        }
+        var flow = null;
+        if (n.flow !== undefined && n.flow !== null) {
+          if (shape !== 'subprocess' || typeof n.flow !== 'string' || !n.flow.trim()) {
+            return null;
+          }
+          flow = n.flow;
+        }
         seenIds[n.id] = 'node';
         var cleanNode = {
           id: n.id,
           label: n.label,
           kind: typeof n.kind === 'string' ? n.kind : null,
           group: typeof n.group === 'string' ? n.group : null,
-          detail: typeof n.detail === 'string' ? n.detail : null
+          detail: typeof n.detail === 'string' ? n.detail : null,
+          shape: shape,
+          flow: flow
         };
         nodeMap[n.id] = cleanNode;
         nodes.push(cleanNode);
@@ -3231,14 +3333,27 @@
         if (!nodeMap[e.from] || !nodeMap[e.to]) {
           return null;
         }
+        if (e.loop !== undefined && e.loop !== null && typeof e.loop !== 'boolean') {
+          return null;
+        }
         cleanEdges.push({
           id: 'e' + ei,
           index: ei,
           from: e.from,
           to: e.to,
           label: typeof e.label === 'string' && e.label.trim() ? e.label.trim() : null,
-          async: e.async === true
+          async: e.async === true,
+          loop: e.loop === true || e.from === e.to
         });
+      }
+      for (var di = 0; di < nodes.length; di += 1) {
+        if (nodes[di].shape !== 'decision') {
+          continue;
+        }
+        var exits = cleanEdges.filter(function (ce) { return ce.from === nodes[di].id; });
+        if (exits.length < 2 || exits.some(function (ce) { return !ce.label; })) {
+          return null;
+        }
       }
       return {
         kinds: kinds,
@@ -3314,8 +3429,29 @@
         var title = document.createElement('strong');
         title.textContent = n.label;
         li.appendChild(title);
+        var titleMeta = [];
+        if (n.shape !== 'box') {
+          titleMeta.push(n.shape);
+        }
         if (n.kind) {
-          li.appendChild(document.createTextNode(' (' + n.kind + ')'));
+          titleMeta.push(n.kind);
+        }
+        if (titleMeta.length) {
+          li.appendChild(document.createTextNode(' (' + titleMeta.join(', ') + ')'));
+        }
+        var outs = outByNode[n.id] || [];
+        if (n.shape === 'subprocess' && n.flow) {
+          li.appendChild(document.createTextNode(': '));
+          var flowLink = document.createElement('a');
+          flowLink.setAttribute('href', '#' + n.flow);
+          flowLink.textContent = 'opens the "' + n.flow + '" graph';
+          li.appendChild(flowLink);
+        }
+        if (n.shape === 'decision') {
+          li.appendChild(document.createTextNode(': ' + outs.map(function (e) {
+            var exitTarget = data.nodeMap[e.to] ? data.nodeMap[e.to].label : e.to;
+            return (e.label || '') + (e.loop ? ' \u21a9 ' : ' \u2192 ') + exitTarget + (e.async ? ' (async)' : '');
+          }).join(', ')));
         }
         if (n.detail) {
           var det = document.createElement('div');
@@ -3323,12 +3459,17 @@
           det.appendChild(sanitizeFlowDetail(n.detail));
           li.appendChild(det);
         }
-        var outs = outByNode[n.id] || [];
-        if (outs.length) {
+        if (outs.length && n.shape !== 'decision') {
           var edgeUl = document.createElement('ul');
           outs.forEach(function (e) {
             var eli = document.createElement('li');
             var targetLabel = data.nodeMap[e.to] ? data.nodeMap[e.to].label : e.to;
+            if (e.loop) {
+              eli.textContent = '\u21a9 returns to ' + (e.from === e.to ? 'itself' : targetLabel)
+                + (e.label ? ': ' + e.label : '') + (e.async ? ' (async)' : '');
+              edgeUl.appendChild(eli);
+              return;
+            }
             var meta = [];
             if (e.label) {
               meta.push(e.label);
@@ -3449,14 +3590,26 @@
       var self = this;
       var measure = this._measureTextFactory();
       var nodeSizes = {};
+      var decisionLines = {};
       data.nodes.forEach(function (n) {
+        if (n.shape === 'decision') {
+          var lines = wrapFlowLabel(n.label, measure);
+          var widest = Math.max.apply(null, lines.map(function (line) { return measure(line, 13, '600'); }));
+          decisionLines[n.id] = lines;
+          nodeSizes[n.id] = {
+            width: Math.max(96, 2 * (widest + 12)),
+            height: Math.max(64, 2 * (lines.length * FLOW_DECISION_LINE_HEIGHT + 8))
+          };
+          return;
+        }
         var labelW = measure(n.label, 13, '600');
         var kindW = n.kind ? measure(n.kind.toUpperCase(), 10, '600') + 8 : 0;
         nodeSizes[n.id] = {
-          width: Math.max(112, Math.max(labelW, kindW) + 28),
+          width: Math.max(112, Math.max(labelW, kindW) + 28) + (n.shape === 'subprocess' ? FLOW_SUBPROCESS_EXTRA : 0),
           height: n.kind ? 48 : 38
         };
       });
+      this._decisionLines = decisionLines;
 
       var topLanes = data.groups.filter(function (g) { return !g.parent; });
       var laneIndexByGroup = {};
@@ -3530,16 +3683,18 @@
       var elkEdges = data.edges.map(function (e) {
         var labels = [];
         if (e.label) {
+          var labelText = (e.loop ? FLOW_LOOP_PREFIX : '') + e.label;
           labels.push({
-            text: e.label,
-            width: measure(e.label, 11, '500') + 14,
+            text: labelText,
+            width: measure(labelText, 11, '500') + 14,
             height: 20
           });
         }
+        var turned = e.loop && e.from !== e.to;
         return {
           id: e.id,
-          sources: [e.from],
-          targets: [e.to],
+          sources: [turned ? e.to : e.from],
+          targets: [turned ? e.from : e.to],
           labels: labels
         };
       });
@@ -3623,6 +3778,64 @@
       }
       collectShapes(laidOut.children, 0);
 
+      var laidOutEdges = laidOut.edges || [];
+      var edgeShapes = data.edges.map(function (edge, idx) {
+        var le = laidOutEdges[idx] || {};
+        var pts = [];
+        (le.sections || []).forEach(function (sec) {
+          if (sec.startPoint && pts.length === 0) {
+            pts.push(sec.startPoint);
+          }
+          (sec.bendPoints || []).forEach(function (bp) {
+            pts.push(bp);
+          });
+          if (sec.endPoint) {
+            pts.push(sec.endPoint);
+          }
+        });
+        var fbFrom = nodeBoxes[edge.from];
+        var fbTo = nodeBoxes[edge.to];
+        var arcLabel = null;
+        if (pts.length >= 2) {
+          if (edge.loop && edge.from !== edge.to) {
+            pts.reverse();
+          }
+        } else if (edge.from === edge.to && fbFrom) {
+          if (data.direction === 'down') {
+            var sideX = fbFrom.x + fbFrom.width;
+            pts = [
+              { x: sideX, y: fbFrom.y + fbFrom.height * 0.35 },
+              { x: sideX + 18, y: fbFrom.y + fbFrom.height * 0.35 },
+              { x: sideX + 18, y: fbFrom.y + fbFrom.height * 0.65 },
+              { x: sideX, y: fbFrom.y + fbFrom.height * 0.65 }
+            ];
+            arcLabel = { x: sideX + 24, y: fbFrom.y + fbFrom.height / 2 - 10, width: 60, height: 20 };
+          } else {
+            pts = [
+              { x: fbFrom.x + fbFrom.width * 0.35, y: fbFrom.y },
+              { x: fbFrom.x + fbFrom.width * 0.35, y: fbFrom.y - 18 },
+              { x: fbFrom.x + fbFrom.width * 0.65, y: fbFrom.y - 18 },
+              { x: fbFrom.x + fbFrom.width * 0.65, y: fbFrom.y }
+            ];
+            arcLabel = { x: fbFrom.x + fbFrom.width / 2 - 30, y: fbFrom.y - 42, width: 60, height: 20 };
+          }
+        } else if (fbFrom && fbTo) {
+          pts = [
+            { x: fbFrom.x + fbFrom.width, y: fbFrom.y + fbFrom.height / 2 },
+            { x: fbTo.x, y: fbTo.y + fbTo.height / 2 }
+          ];
+        } else {
+          pts = [{ x: 0, y: 0 }, { x: 10, y: 0 }];
+        }
+        if (fbFrom && data.nodeMap[edge.from].shape === 'decision') {
+          pts = snapFlowEndToDiamond(pts, true, fbFrom);
+        }
+        if (fbTo && data.nodeMap[edge.to].shape === 'decision') {
+          pts = snapFlowEndToDiamond(pts, false, fbTo);
+        }
+        return { pts: pts, arcLabel: arcLabel };
+      });
+
       var minX = Infinity;
       var minY = Infinity;
       var maxX = -Infinity;
@@ -3652,6 +3865,14 @@
         (le.labels || []).forEach(function (lbl) {
           expandBounds(lbl.x || 0, lbl.y || 0, lbl.width || 0, lbl.height || 0);
         });
+      });
+      edgeShapes.forEach(function (es) {
+        if (es.arcLabel) {
+          es.pts.forEach(function (pt) {
+            expandBounds(pt.x, pt.y, 0, 0);
+          });
+          expandBounds(es.arcLabel.x, es.arcLabel.y, es.arcLabel.width, es.arcLabel.height);
+        }
       });
       if (!isFinite(minX)) {
         minX = 0; minY = 0; maxX = 320; maxY = 180;
@@ -3721,6 +3942,27 @@
       });
       markerLit.appendChild(svgNode('path', { d: 'M 0 1 L 10 5 L 0 9 z', fill: 'var(--q-color-accent)' }));
       defs.appendChild(markerLit);
+
+      [['q-flow-return-', 'var(--q-color-text-muted)'], ['q-flow-return-lit-', 'var(--q-color-accent)']].forEach(function (spec) {
+        var returnMarker = svgNode('marker', {
+          id: spec[0] + uid,
+          viewBox: '0 0 10 10',
+          refX: '5',
+          refY: '5',
+          markerWidth: '6',
+          markerHeight: '6',
+          orient: 'auto'
+        });
+        returnMarker.appendChild(svgNode('circle', {
+          cx: '5',
+          cy: '5',
+          r: '3',
+          fill: 'var(--q-color-bg)',
+          stroke: spec[1],
+          'stroke-width': '1.5'
+        }));
+        defs.appendChild(returnMarker);
+      });
 
       var grad = svgNode('radialGradient', { id: 'q-flow-grad-' + uid });
       grad.appendChild(svgNode('stop', { offset: '0%', 'stop-color': '#ffffff', 'stop-opacity': '1' }));
@@ -3804,37 +4046,15 @@
         groupsLayer.appendChild(gEl);
       });
 
-      var laidOutEdges = laidOut.edges || [];
       this._edgeRecords = [];
       data.edges.forEach(function (edge, idx) {
         var le = laidOutEdges[idx] || {};
-        var pts = [];
-        (le.sections || []).forEach(function (sec) {
-          if (sec.startPoint && pts.length === 0) {
-            pts.push(sec.startPoint);
-          }
-          (sec.bendPoints || []).forEach(function (bp) {
-            pts.push(bp);
-          });
-          if (sec.endPoint) {
-            pts.push(sec.endPoint);
-          }
-        });
-        if (pts.length < 2) {
-          var fbFrom = nodeBoxes[edge.from];
-          var fbTo = nodeBoxes[edge.to];
-          if (fbFrom && fbTo) {
-            pts = [
-              { x: fbFrom.x + fbFrom.width, y: fbFrom.y + fbFrom.height / 2 },
-              { x: fbTo.x, y: fbTo.y + fbTo.height / 2 }
-            ];
-          } else {
-            pts = [{ x: 0, y: 0 }, { x: 10, y: 0 }];
-          }
-        }
-        var d = pts.map(function (p, i) {
-          return (i === 0 ? 'M ' : 'L ') + p.x + ' ' + p.y;
-        }).join(' ');
+        var pts = edgeShapes[idx].pts;
+        var d = edge.from === edge.to
+          ? roundedFlowPath(pts, 8)
+          : pts.map(function (p, i) {
+            return (i === 0 ? 'M ' : 'L ') + p.x + ' ' + p.y;
+          }).join(' ');
 
         var maskId = 'q-flow-mask-' + uid + '-' + idx;
         var mask = svgNode('mask', {
@@ -3862,6 +4082,9 @@
           'data-q-flow-to': edge.to,
           'data-q-flow-async': edge.async ? 'true' : 'false'
         });
+        if (edge.loop) {
+          eG.setAttribute('data-q-flow-loop', '');
+        }
         var lineAttrs = {
           'data-q-flow-edge-line': '',
           d: d,
@@ -3872,6 +4095,9 @@
         };
         if (edge.async) {
           lineAttrs['stroke-dasharray'] = '6 4';
+        }
+        if (edge.loop) {
+          lineAttrs['marker-start'] = 'url(#q-flow-return-' + uid + ')';
         }
         var basePath = svgNode('path', lineAttrs);
         eG.appendChild(basePath);
@@ -3893,7 +4119,7 @@
         eG.appendChild(pulsePath);
 
         if (edge.label) {
-          var lbl = (le.labels && le.labels[0]) || {
+          var lbl = (le.labels && le.labels[0]) || edgeShapes[idx].arcLabel || {
             x: (pts[0].x + pts[pts.length - 1].x) / 2 - 30,
             y: (pts[0].y + pts[pts.length - 1].y) / 2 - 10,
             width: 60,
@@ -3917,7 +4143,7 @@
             fill: 'var(--q-color-text-muted)',
             'font-size': '11'
           });
-          lblT.textContent = edge.label;
+          lblT.textContent = (edge.loop ? FLOW_LOOP_PREFIX : '') + edge.label;
           lblG.appendChild(lblT);
           eG.appendChild(lblG);
         }
@@ -3943,67 +4169,123 @@
         }
         var colorIdx = node.kind ? data.kinds[node.kind] : null;
         var stripeColor = colorIdx ? 'var(--q-color-chart-' + colorIdx + ')' : 'var(--q-color-border)';
+        var ariaMeta = [];
+        if (node.shape !== 'box') {
+          ariaMeta.push(node.shape);
+        }
+        if (node.kind) {
+          ariaMeta.push(node.kind);
+        }
         var nG = svgNode('g', {
           'class': 'q-flow-node',
           'data-q-flow-node': node.id,
           'data-q-flow-kind': node.kind || '',
+          'data-q-flow-shape': node.shape,
           'role': 'button',
           'tabindex': idx === 0 ? '0' : '-1',
-          'aria-label': node.label + (node.kind ? ' (' + node.kind + ')' : '')
+          'aria-label': node.label + (ariaMeta.length ? ' (' + ariaMeta.join(', ') + ')' : '')
         });
-        nG.appendChild(svgNode('rect', {
-          'data-q-flow-box': '',
-          x: box.x,
-          y: box.y,
-          width: box.width,
-          height: box.height,
-          rx: '6',
-          fill: 'var(--q-color-surface)',
-          stroke: 'var(--q-color-border)',
-          'stroke-width': '1'
-        }));
-        nG.appendChild(svgNode('rect', {
-          'data-q-flow-stripe': '',
-          x: box.x,
-          y: box.y,
-          width: '4',
-          height: box.height,
-          rx: '2',
-          fill: stripeColor
-        }));
-        if (node.kind) {
-          var kText = svgNode('text', {
-            'data-q-flow-kind-label': '',
-            x: box.x + 12,
-            y: box.y + 16,
-            fill: 'var(--q-color-text-muted)',
-            'font-size': '10',
-            'font-weight': '600',
-            'letter-spacing': '0.06em'
-          });
-          kText.textContent = node.kind.toUpperCase();
-          nG.appendChild(kText);
-          var lText = svgNode('text', {
+        if (node.shape === 'decision') {
+          var cx = box.x + box.width / 2;
+          var cy = box.y + box.height / 2;
+          nG.appendChild(svgNode('polygon', {
+            'data-q-flow-box': '',
+            points: [
+              cx + ',' + box.y,
+              (box.x + box.width) + ',' + cy,
+              cx + ',' + (box.y + box.height),
+              box.x + ',' + cy
+            ].join(' '),
+            fill: 'var(--q-color-surface)',
+            stroke: colorIdx ? stripeColor : 'var(--q-color-border)',
+            'stroke-width': colorIdx ? '2' : '1'
+          }));
+          var dLines = (self._decisionLines && self._decisionLines[node.id]) || [node.label];
+          var dText = svgNode('text', {
             'data-q-flow-label': '',
-            x: box.x + 12,
-            y: box.y + 34,
+            'text-anchor': 'middle',
             fill: 'var(--q-color-text)',
             'font-size': '13',
             'font-weight': '600'
           });
-          lText.textContent = node.label;
-          nG.appendChild(lText);
+          dLines.forEach(function (line, li) {
+            var tspan = svgNode('tspan', {
+              x: cx,
+              y: cy + (li - (dLines.length - 1) / 2) * FLOW_DECISION_LINE_HEIGHT + 4.5
+            });
+            tspan.textContent = line;
+            dText.appendChild(tspan);
+          });
+          nG.appendChild(dText);
         } else {
-          var cText = svgNode('text', {
-            'data-q-flow-label': '',
-            x: box.x + 12,
-            y: box.y + 24,
-            fill: 'var(--q-color-text)',
-            'font-size': '13',
-            'font-weight': '600'
-          });
-          cText.textContent = node.label;
-          nG.appendChild(cText);
+          var inset = node.shape === 'subprocess' ? FLOW_SUBPROCESS_EXTRA : 0;
+          nG.appendChild(svgNode('rect', {
+            'data-q-flow-box': '',
+            x: box.x,
+            y: box.y,
+            width: box.width,
+            height: box.height,
+            rx: '6',
+            fill: 'var(--q-color-surface)',
+            stroke: 'var(--q-color-border)',
+            'stroke-width': '1'
+          }));
+          if (node.shape === 'subprocess') {
+            [box.x + 8, box.x + box.width - 8].forEach(function (ruleX) {
+              nG.appendChild(svgNode('line', {
+                'data-q-flow-subprocess-rule': '',
+                x1: ruleX,
+                y1: box.y,
+                x2: ruleX,
+                y2: box.y + box.height,
+                stroke: 'var(--q-color-border)',
+                'stroke-width': '1'
+              }));
+            });
+          }
+          nG.appendChild(svgNode('rect', {
+            'data-q-flow-stripe': '',
+            x: box.x + inset,
+            y: box.y,
+            width: '4',
+            height: box.height,
+            rx: '2',
+            fill: stripeColor
+          }));
+          if (node.kind) {
+            var kText = svgNode('text', {
+              'data-q-flow-kind-label': '',
+              x: box.x + 12 + inset,
+              y: box.y + 16,
+              fill: 'var(--q-color-text-muted)',
+              'font-size': '10',
+              'font-weight': '600',
+              'letter-spacing': '0.06em'
+            });
+            kText.textContent = node.kind.toUpperCase();
+            nG.appendChild(kText);
+            var lText = svgNode('text', {
+              'data-q-flow-label': '',
+              x: box.x + 12 + inset,
+              y: box.y + 34,
+              fill: 'var(--q-color-text)',
+              'font-size': '13',
+              'font-weight': '600'
+            });
+            lText.textContent = node.label;
+            nG.appendChild(lText);
+          } else {
+            var cText = svgNode('text', {
+              'data-q-flow-label': '',
+              x: box.x + 12 + inset,
+              y: box.y + 24,
+              fill: 'var(--q-color-text)',
+              'font-size': '13',
+              'font-weight': '600'
+            });
+            cText.textContent = node.label;
+            nG.appendChild(cText);
+          }
         }
 
         nG.addEventListener('click', function (ev) {
@@ -4265,7 +4547,7 @@
       while (qUp.length) {
         var curUp = qUp.shift();
         data.edges.forEach(function (e) {
-          if (e.to === curUp) {
+          if (!e.loop && e.to === curUp) {
             upEdges[e.index] = true;
             if (!Object.prototype.hasOwnProperty.call(upDist, e.from)) {
               upDist[e.from] = upDist[curUp] + 1;
@@ -4286,7 +4568,7 @@
       while (qDown.length) {
         var curDown = qDown.shift();
         data.edges.forEach(function (e) {
-          if (e.from === curDown) {
+          if (!e.loop && e.from === curDown) {
             downEdges[e.index] = true;
             if (!Object.prototype.hasOwnProperty.call(downDist, e.to)) {
               downDist[e.to] = downDist[curDown] + 1;
@@ -4369,16 +4651,23 @@
       var uid = this._uid;
       var activePulses = [];
       this._edgeRecords.forEach(function (rec, idx) {
-        var isLit = Object.prototype.hasOwnProperty.call(edgeHops, idx);
+        var isLoop = !!rec.edge.loop;
+        var isLit = isLoop
+          ? !!(litNodes[rec.edge.from] && litNodes[rec.edge.to])
+          : Object.prototype.hasOwnProperty.call(edgeHops, idx);
         if (isLit) {
-          var hop = edgeHops[idx];
           rec.groupEl.setAttribute('data-q-flow-lit', '');
-          rec.groupEl.setAttribute('data-q-flow-hop', String(hop));
+          if (isLoop) {
+            rec.groupEl.removeAttribute('data-q-flow-hop');
+            rec.basePath.setAttribute('marker-start', 'url(#q-flow-return-lit-' + uid + ')');
+          } else {
+            rec.groupEl.setAttribute('data-q-flow-hop', String(edgeHops[idx]));
+          }
           rec.groupEl.removeAttribute('data-q-flow-dim');
           rec.basePath.setAttribute('stroke', 'var(--q-color-accent)');
           rec.basePath.setAttribute('stroke-width', reduced ? '3.5' : '2');
           rec.basePath.setAttribute('marker-end', 'url(#q-flow-arrow-lit-' + uid + ')');
-          if (reduced) {
+          if (reduced || isLoop) {
             rec.pulsePath.setAttribute('data-q-inactive', '');
           } else {
             rec.pulsePath.removeAttribute('data-q-inactive');
@@ -4391,6 +4680,9 @@
           rec.basePath.setAttribute('stroke', 'var(--q-color-text-muted)');
           rec.basePath.setAttribute('stroke-width', '1.75');
           rec.basePath.setAttribute('marker-end', 'url(#q-flow-arrow-' + uid + ')');
+          if (isLoop) {
+            rec.basePath.setAttribute('marker-start', 'url(#q-flow-return-' + uid + ')');
+          }
           rec.pulsePath.setAttribute('data-q-inactive', '');
         }
       });
@@ -4410,7 +4702,7 @@
       var downCount = Object.keys(downNodes).length;
       var node = data.nodeMap[nodeId];
       if (this._live) {
-        this._live.textContent = node.label + (node.kind ? ', ' + node.kind : '') + ', ' + upCount + ' upstream, ' + downCount + ' downstream';
+        this._live.textContent = node.label + (node.shape !== 'box' ? ', ' + node.shape : '') + (node.kind ? ', ' + node.kind : '') + ', ' + upCount + ' upstream, ' + downCount + ' downstream';
       }
     }
 
@@ -4529,6 +4821,29 @@
         drawer.appendChild(detBox);
       }
 
+      if (node.shape === 'subprocess' && node.flow) {
+        var flowBox = document.createElement('div');
+        flowBox.setAttribute('data-q-flow-drawer-flow', '');
+        var linked = document.getElementById(node.flow);
+        if (linked && linked !== self && linked.isConnected && linked.tagName === 'Q-FLOW') {
+          var openBtn = document.createElement('button');
+          openBtn.type = 'button';
+          openBtn.setAttribute('data-q-flow-open-flow', '');
+          openBtn.textContent = 'Open flow';
+          openBtn.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            self._openLinkedFlow(linked);
+          });
+          flowBox.appendChild(openBtn);
+        } else {
+          var missing = document.createElement('p');
+          missing.setAttribute('data-q-flow-flow-missing', '');
+          missing.textContent = 'The linked flow "' + node.flow + '" isn\'t on this page.';
+          flowBox.appendChild(missing);
+        }
+        drawer.appendChild(flowBox);
+      }
+
       var incoming = data.edges.filter(function (e) { return e.to === node.id; });
       var outgoing = data.edges.filter(function (e) { return e.from === node.id; });
 
@@ -4575,6 +4890,30 @@
       addEdgeSection('Incoming', 'in', incoming, true);
       addEdgeSection('Outgoing', 'out', outgoing, false);
       drawer.removeAttribute('data-q-inactive');
+    }
+
+    /**
+     * Brings another graph on the page into view from a subprocess drawer.
+     * This graph's focus and drawer stay as they were; the target's own focus is left alone.
+     */
+    _openLinkedFlow(target) {
+      if (this.hasAttribute('data-q-flow-expanded')) {
+        this._toggleExpand();
+      }
+      var reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+      target.scrollIntoView({ block: 'start', behavior: reduced ? 'auto' : 'smooth' });
+      var entry = target.getAttribute('data-q-flow-ready') === 'true' && target._stage
+        ? target._stage.querySelector('[data-q-flow-node][tabindex="0"]')
+        : null;
+      if (entry) {
+        target._fitBounds(target._bounds, false);
+        entry.focus({ preventScroll: true });
+      } else {
+        if (!target.hasAttribute('tabindex')) {
+          target.setAttribute('tabindex', '-1');
+        }
+        target.focus({ preventScroll: true });
+      }
     }
 
     _focusGroup(groupId) {
@@ -4643,6 +4982,9 @@
         rec.basePath.setAttribute('stroke', 'var(--q-color-text-muted)');
         rec.basePath.setAttribute('stroke-width', '1.75');
         rec.basePath.setAttribute('marker-end', 'url(#q-flow-arrow-' + uid + ')');
+        if (rec.edge.loop) {
+          rec.basePath.setAttribute('marker-start', 'url(#q-flow-return-' + uid + ')');
+        }
         if (inside) {
           rec.groupEl.setAttribute('data-q-flow-lit', '');
           rec.groupEl.removeAttribute('data-q-flow-dim');
@@ -4693,6 +5035,9 @@
         rec.basePath.setAttribute('stroke', 'var(--q-color-text-muted)');
         rec.basePath.setAttribute('stroke-width', '1.75');
         rec.basePath.setAttribute('marker-end', 'url(#q-flow-arrow-' + uid + ')');
+        if (rec.edge.loop) {
+          rec.basePath.setAttribute('marker-start', 'url(#q-flow-return-' + uid + ')');
+        }
         rec.pulsePath.setAttribute('data-q-inactive', '');
       });
     }

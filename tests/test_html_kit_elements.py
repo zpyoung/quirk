@@ -4367,3 +4367,674 @@ def test_flow_theme_toggle_recolors_without_relayout_and_touch_allows_only_two_f
     assert res["recoloredStripe"] is True
     assert res["sameSvg"] is True
     assert res["touchAction"] in ("manipulation", "pan-x pan-y pinch-zoom") and res["touchAction"] != "none"
+
+
+FLOW_SHAPES = """
+<q-flow id="flow-checkout" summary="Checkout with a payment decision, a retry loop and a refund subprocess.">
+  <script type="application/json">
+  {
+    "kinds": {"ui": 1, "worker": 2, "queue": 4},
+    "nodes": [
+      {"id": "checkout", "label": "Checkout", "kind": "ui"},
+      {"id": "charge", "label": "Charge worker", "kind": "worker"},
+      {"id": "paid", "label": "Paid?", "kind": "worker", "shape": "decision"},
+      {"id": "ship", "label": "Ship", "kind": "worker"},
+      {"id": "retry_q", "label": "Retry queue", "kind": "queue"},
+      {"id": "refund", "label": "Issue refund", "kind": "worker", "shape": "subprocess", "flow": "refund-flow"}
+    ],
+    "edges": [
+      {"from": "checkout", "to": "charge", "label": "order.created", "async": true},
+      {"from": "charge", "to": "paid"},
+      {"from": "paid", "to": "ship", "label": "Yes"},
+      {"from": "paid", "to": "retry_q", "label": "No"},
+      {"from": "retry_q", "to": "charge", "label": "retry up to 3x", "loop": true},
+      {"from": "ship", "to": "refund", "label": "on return"}
+    ]
+  }
+  </script>
+</q-flow>
+
+<div style="height: 1400px" aria-hidden="true"></div>
+
+<q-flow id="refund-flow" summary="The refund process.">
+  <script type="application/json">
+  {
+    "nodes": [
+      {"id": "request", "label": "Refund requested"},
+      {"id": "approve", "label": "Approve"},
+      {"id": "payout", "label": "Pay out"}
+    ],
+    "edges": [
+      {"from": "request", "to": "approve"},
+      {"from": "approve", "to": "payout"}
+    ]
+  }
+  </script>
+</q-flow>
+
+<q-flow id="flow-poller" summary="A poller that loops on itself.">
+  <script type="application/json">
+  {
+    "nodes": [
+      {"id": "poller", "label": "Status poller"},
+      {"id": "done", "label": "Done"}
+    ],
+    "edges": [
+      {"from": "poller", "to": "poller", "label": "every 30s"},
+      {"from": "poller", "to": "done"}
+    ]
+  }
+  </script>
+</q-flow>
+
+<q-flow id="flow-links" summary="Subprocesses with and without a linked flow.">
+  <script type="application/json">
+  {
+    "nodes": [
+      {"id": "wired", "label": "Wired", "shape": "subprocess", "flow": "refund-flow"},
+      {"id": "lost", "label": "Lost", "shape": "subprocess", "flow": "refund-flow"},
+      {"id": "bare", "label": "Bare", "shape": "subprocess"}
+    ],
+    "edges": [
+      {"from": "wired", "to": "lost"},
+      {"from": "lost", "to": "bare"}
+    ]
+  }
+  </script>
+</q-flow>
+
+<q-flow id="flow-bad-oval" summary="A graph with an unknown shape.">
+  <script type="application/json">
+  {"nodes": [{"id": "odd", "label": "Odd", "shape": "box"}], "edges": []}
+  </script>
+</q-flow>
+
+<q-flow id="flow-bad-exit" summary="A decision with one exit.">
+  <script type="application/json">
+  {
+    "nodes": [
+      {"id": "lone", "label": "Lone?", "shape": "box"},
+      {"id": "next", "label": "Next"}
+    ],
+    "edges": [{"from": "lone", "to": "next", "label": "Yes"}]
+  }
+  </script>
+</q-flow>
+"""
+
+
+@pytest.fixture(scope="module")
+def flow_shapes_page(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    reason = _node_ready()
+    if reason:
+        pytest.skip(reason)
+    work = tmp_path_factory.mktemp("kit-flow-shapes")
+    src = work / "shapes.src.html"
+    src.write_text(HEADER + FLOW_SHAPES, encoding="utf-8")
+    built = _build(src, work / "shapes.html")
+    # the failing graphs and the dangling subprocess link are edited in after the build so the build-time check never sees them
+    html = built.read_text(encoding="utf-8")
+    oval = '{"id": "odd", "label": "Odd", "shape": "box"}'
+    lone = '{"id": "lone", "label": "Lone?", "shape": "box"}'
+    assert oval in html and lone in html
+    html = html.replace(oval, '{"id": "odd", "label": "Odd", "shape": "oval"}')
+    html = html.replace(lone, '{"id": "lone", "label": "Lone?", "shape": "decision"}')
+    lost = '{"id": "lost", "label": "Lost", "shape": "subprocess", "flow": "refund-flow"}'
+    assert lost in html
+    html = html.replace(lost, '{"id": "lost", "label": "Lost", "shape": "subprocess", "flow": "nowhere"}')
+    built.write_text(html, encoding="utf-8")
+    return built
+
+
+FLOW_GEOMETRY_JS = """
+  const num = (s) => (s.match(/-?\\d+(?:\\.\\d+)?(?:e-?\\d+)?/g) || []).map(Number);
+  const pathPoints = (d) => { const n = num(d); const out = []; for (let i = 0; i + 1 < n.length; i += 2) out.push({ x: n[i], y: n[i + 1] }); return out; };
+  const box = (f, id) => f.querySelector('[data-q-flow-node="' + id + '"] [data-q-flow-box]').getBBox();
+  const centreX = (b) => b.x + b.width / 2;
+  const onRectEdge = (p, b, tol) => {
+    const inX = p.x >= b.x - tol && p.x <= b.x + b.width + tol;
+    const inY = p.y >= b.y - tol && p.y <= b.y + b.height + tol;
+    const onVert = Math.abs(p.x - b.x) <= tol || Math.abs(p.x - (b.x + b.width)) <= tol;
+    const onHorz = Math.abs(p.y - b.y) <= tol || Math.abs(p.y - (b.y + b.height)) <= tol;
+    return inX && inY && (onVert || onHorz);
+  };
+  const edgeOf = (f, from, to) => f.querySelector('[data-q-flow-edge][data-q-flow-from="' + from + '"][data-q-flow-to="' + to + '"]');
+"""
+
+
+def test_flow_decision_draws_a_diamond_with_kind_outline_labelled_exits_and_a_left_to_right_chain(
+    flow_shapes_page: Path,
+) -> None:
+    out = run(
+        flow_shapes_page,
+        ev(
+            f"""(() => {{
+              {FLOW_GEOMETRY_JS}
+              const f = document.querySelector('#flow-checkout');
+              const node = f.querySelector('[data-q-flow-node="paid"]');
+              const poly = node.querySelector('[data-q-flow-box]');
+              const b = poly.getBBox();
+              const a = b.width / 2, h = b.height / 2, cx = b.x + a, cy = b.y + h;
+              const startOfYes = pathPoints(edgeOf(f, 'paid', 'ship').querySelector('[data-q-flow-edge-line]').getAttribute('d'))[0];
+              const onOutline = Math.abs(Math.abs(startOfYes.x - cx) / a + Math.abs(startOfYes.y - cy) / h - 1) * Math.min(a, h);
+              const labels = [...f.querySelectorAll('[data-q-flow-edge-label] text')].map((t) => t.textContent);
+              return {{
+                ready: f.getAttribute('data-q-flow-ready'),
+                shapeAttr: node.getAttribute('data-q-flow-shape'),
+                tag: poly.tagName.toLowerCase(),
+                pointCount: poly.getAttribute('points').trim().split(/\\s+/).length,
+                stroke: poly.getAttribute('stroke'),
+                stripe: node.querySelectorAll('[data-q-flow-stripe]').length,
+                kindTag: node.querySelectorAll('[data-q-flow-kind-label]').length,
+                label: node.querySelector('[data-q-flow-label]').textContent,
+                aria: node.getAttribute('aria-label'),
+                boxShape: f.querySelector('[data-q-flow-node="ship"]').getAttribute('data-q-flow-shape'),
+                yes: labels.includes('Yes'),
+                no: labels.includes('No'),
+                xs: ['checkout', 'charge', 'paid', 'ship'].map((id) => centreX(box(f, id))),
+                outlineDistance: onOutline,
+              }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["ready"] == "true"
+    assert d["shapeAttr"] == "decision"
+    assert d["boxShape"] == "box"
+    assert d["tag"] == "polygon"
+    assert d["pointCount"] == 4
+    assert d["stroke"] == "var(--q-color-chart-2)"
+    assert d["stripe"] == 0
+    assert d["kindTag"] == 0
+    assert d["label"] == "Paid?"
+    assert "decision" in d["aria"]
+    assert d["yes"] is True and d["no"] is True
+    assert d["xs"] == sorted(d["xs"]) and len(set(d["xs"])) == 4
+    assert d["outlineDistance"] < 1.5
+
+
+def test_flow_loop_edge_runs_from_to_with_return_marker_and_prefixed_label(flow_shapes_page: Path) -> None:
+    out = run(
+        flow_shapes_page,
+        ev(
+            f"""(() => {{
+              {FLOW_GEOMETRY_JS}
+              const f = document.querySelector('#flow-checkout');
+              const g = edgeOf(f, 'retry_q', 'charge');
+              const base = g.querySelector('[data-q-flow-edge-line]');
+              const pts = pathPoints(base.getAttribute('d'));
+              const fwd = edgeOf(f, 'charge', 'paid');
+              return {{
+                loopAttr: g.hasAttribute('data-q-flow-loop'),
+                forwardLoopAttr: fwd.hasAttribute('data-q-flow-loop'),
+                startOnRetry: onRectEdge(pts[0], box(f, 'retry_q'), 1.5),
+                endOnCharge: onRectEdge(pts[pts.length - 1], box(f, 'charge'), 1.5),
+                markerStart: base.getAttribute('marker-start'),
+                markerEnd: base.getAttribute('marker-end'),
+                forwardMarkerStart: fwd.querySelector('[data-q-flow-edge-line]').getAttribute('marker-start'),
+                label: g.querySelector('[data-q-flow-edge-label] text').textContent,
+                markerIds: [...f.querySelectorAll('marker')].map((m) => m.id),
+              }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["loopAttr"] is True
+    assert d["forwardLoopAttr"] is False
+    assert d["startOnRetry"] is True
+    assert d["endOnCharge"] is True
+    assert d["markerStart"].startswith("url(#q-flow-return-")
+    assert d["markerEnd"].startswith("url(#q-flow-arrow-")
+    assert d["forwardMarkerStart"] is None
+    assert d["label"].startswith("↩ ") and d["label"].endswith("retry up to 3x")
+    assert any(i.startswith("q-flow-return-lit-") for i in d["markerIds"])
+
+
+def test_flow_self_loop_draws_an_arc_above_the_node_with_its_label(flow_shapes_page: Path) -> None:
+    out = run(
+        flow_shapes_page,
+        ev(
+            f"""(() => {{
+              {FLOW_GEOMETRY_JS}
+              const f = document.querySelector('#flow-poller');
+              const g = edgeOf(f, 'poller', 'poller');
+              const pts = pathPoints(g.querySelector('[data-q-flow-edge-line]').getAttribute('d'));
+              const b = box(f, 'poller');
+              return {{
+                ready: f.getAttribute('data-q-flow-ready'),
+                loopAttr: g.hasAttribute('data-q-flow-loop'),
+                pointCount: pts.length,
+                minY: Math.min(...pts.map((p) => p.y)),
+                nodeTop: b.y,
+                label: g.querySelector('[data-q-flow-edge-label] text').textContent,
+              }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["ready"] == "true"
+    assert d["loopAttr"] is True
+    assert d["pointCount"] > 2
+    assert d["minY"] < d["nodeTop"]
+    assert d["label"] == "↩ every 30s"
+
+
+def test_flow_subprocess_draws_double_rules_and_keeps_stripe_and_kind_tag(flow_shapes_page: Path) -> None:
+    out = run(
+        flow_shapes_page,
+        ev(
+            f"""(() => {{
+              {FLOW_GEOMETRY_JS}
+              const f = document.querySelector('#flow-checkout');
+              const node = f.querySelector('[data-q-flow-node="refund"]');
+              const b = box(f, 'refund');
+              const plain = box(f, 'ship');
+              const rules = [...node.querySelectorAll('line[data-q-flow-subprocess-rule]')].map((l) => ({{
+                x1: +l.getAttribute('x1'), x2: +l.getAttribute('x2'), y1: +l.getAttribute('y1'), y2: +l.getAttribute('y2'),
+              }}));
+              const texts = [...node.querySelectorAll('text')].map((t) => +t.getAttribute('x'));
+              return {{
+                shapeAttr: node.getAttribute('data-q-flow-shape'),
+                rules, boxX: b.x, boxY: b.y, boxW: b.width, boxH: b.height,
+                stripe: node.querySelectorAll('[data-q-flow-stripe]').length,
+                kindTag: node.querySelector('[data-q-flow-kind-label]').textContent,
+                texts,
+                widerThanPlain: b.width >= plain.width + 16,
+                aria: node.getAttribute('aria-label'),
+              }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["shapeAttr"] == "subprocess"
+    assert len(d["rules"]) == 2
+    for r in d["rules"]:
+        assert r["x1"] == r["x2"]
+        assert abs(r["y1"] - d["boxY"]) < 0.5 and abs(r["y2"] - (d["boxY"] + d["boxH"])) < 0.5
+    xs = sorted(r["x1"] for r in d["rules"])
+    assert xs[0] == pytest.approx(d["boxX"] + 8) and xs[1] == pytest.approx(d["boxX"] + d["boxW"] - 8)
+    assert d["stripe"] == 1
+    assert d["kindTag"] == "WORKER"
+    assert all(x > xs[0] for x in d["texts"])
+    assert d["widerThanPlain"] is True
+    assert "subprocess" in d["aria"]
+
+
+def test_flow_list_reads_decisions_loops_self_loops_and_subprocess_links(flow_shapes_page: Path) -> None:
+    out = run(
+        flow_shapes_page,
+        ev(
+            """(() => {
+              const text = (id, sel) => document.querySelector('#' + id + ' details[data-q-flow-list]').textContent;
+              const checkout = document.querySelector('#flow-checkout details[data-q-flow-list]');
+              const link = checkout.querySelector('a[href="#refund-flow"]');
+              const paid = checkout.querySelector('[data-q-flow-list-node="paid"]');
+              return {
+                checkout: checkout.textContent,
+                poller: text('flow-poller'),
+                linkText: link && link.textContent,
+                paidNested: paid.querySelectorAll('ul').length,
+                refundEntry: checkout.querySelector('[data-q-flow-list-node="refund"]').textContent,
+              };
+            })()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert "Paid? (decision, worker): Yes → Ship, No → Retry queue" in d["checkout"]
+    assert "↩ returns to Charge worker: retry up to 3x" in d["checkout"]
+    assert "→ Issue refund (on return)" in d["checkout"]
+    assert "↩ returns to itself: every 30s" in d["poller"]
+    assert d["linkText"] == 'opens the "refund-flow" graph'
+    assert d["paidNested"] == 0
+    assert d["refundEntry"] == 'Issue refund (subprocess, worker): opens the "refund-flow" graph'
+
+
+def test_flow_unknown_shape_and_decision_with_one_exit_fail_to_the_notice(flow_shapes_page: Path) -> None:
+    out = run(
+        flow_shapes_page,
+        ev(
+            """(() => ['flow-bad-oval', 'flow-bad-exit'].map((id) => {
+              const f = document.querySelector('#' + id);
+              return {
+                ready: f.getAttribute('data-q-flow-ready'),
+                notice: !!f.querySelector('[data-q-flow-notice]'),
+                svg: !!f.querySelector('[data-q-flow-svg]'),
+              };
+            }))()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    for state in out["results"]["d"]:
+        assert state == {"ready": "error", "notice": True, "svg": False}
+
+
+def test_flow_focus_follows_forward_edges_only_and_lights_a_loop_between_lit_ends(flow_shapes_page: Path) -> None:
+    out = run(
+        flow_shapes_page,
+        {"click": '#flow-checkout [data-q-flow-node="ship"]'},
+        ev(
+            f"""(() => {{
+              {FLOW_GEOMETRY_JS}
+              const f = document.querySelector('#flow-checkout');
+              const ids = (attr) => [...f.querySelectorAll('[data-q-flow-node][' + attr + ']')].map((n) => n.getAttribute('data-q-flow-node')).sort();
+              const loop = edgeOf(f, 'retry_q', 'charge');
+              return {{
+                lit: ids('data-q-flow-lit'),
+                dim: ids('data-q-flow-dim'),
+                noEdgeDim: edgeOf(f, 'paid', 'retry_q').hasAttribute('data-q-flow-dim'),
+                loopDim: loop.hasAttribute('data-q-flow-dim'),
+                loopLit: loop.hasAttribute('data-q-flow-lit'),
+                loopMarker: loop.querySelector('[data-q-flow-edge-line]').getAttribute('marker-start'),
+              }};
+            }})()""",
+            "ship",
+        ),
+        {"click": '#flow-checkout [data-q-flow-node="charge"]'},
+        ev(
+            f"""(() => {{
+              {FLOW_GEOMETRY_JS}
+              const f = document.querySelector('#flow-checkout');
+              const loop = edgeOf(f, 'retry_q', 'charge');
+              const line = loop.querySelector('[data-q-flow-edge-line]');
+              return {{
+                dimNodes: f.querySelectorAll('[data-q-flow-node][data-q-flow-dim]').length,
+                litNodes: f.querySelectorAll('[data-q-flow-node][data-q-flow-lit]').length,
+                loopLit: loop.hasAttribute('data-q-flow-lit'),
+                loopHop: loop.hasAttribute('data-q-flow-hop'),
+                stroke: line.getAttribute('stroke'),
+                markerStart: line.getAttribute('marker-start'),
+                markerEnd: line.getAttribute('marker-end'),
+                forwardHop: edgeOf(f, 'charge', 'paid').hasAttribute('data-q-flow-hop'),
+              }};
+            }})()""",
+            "charge",
+        ),
+        {"click": '#flow-checkout [data-q-flow-node="ship"]'},
+        ev(
+            f"""(() => {{
+              {FLOW_GEOMETRY_JS}
+              const f = document.querySelector('#flow-checkout');
+              const line = edgeOf(f, 'retry_q', 'charge').querySelector('[data-q-flow-edge-line]');
+              return {{ markerStart: line.getAttribute('marker-start'), stroke: line.getAttribute('stroke') }};
+            }})()""",
+            "back",
+        ),
+        {"press": "Escape"},
+        ev(
+            f"""(() => {{
+              {FLOW_GEOMETRY_JS}
+              const f = document.querySelector('#flow-checkout');
+              const loop = edgeOf(f, 'retry_q', 'charge');
+              const line = loop.querySelector('[data-q-flow-edge-line]');
+              return {{
+                markerStart: line.getAttribute('marker-start'),
+                flags: ['data-q-flow-lit', 'data-q-flow-dim', 'data-q-flow-hop'].map((a) => loop.hasAttribute(a)),
+              }};
+            }})()""",
+            "cleared",
+        ),
+    )
+    assert_clean(out)
+    ship = out["results"]["ship"]
+    assert ship["lit"] == ["charge", "checkout", "paid", "refund", "ship"]
+    assert ship["dim"] == ["retry_q"]
+    assert ship["noEdgeDim"] is True
+    assert ship["loopDim"] is True and ship["loopLit"] is False
+    assert ship["loopMarker"].startswith("url(#q-flow-return-") and "-lit-" not in ship["loopMarker"]
+    charge = out["results"]["charge"]
+    assert charge["dimNodes"] == 0 and charge["litNodes"] == 6
+    assert charge["loopLit"] is True
+    assert charge["loopHop"] is False
+    assert charge["stroke"] == "var(--q-color-accent)"
+    assert charge["markerStart"].startswith("url(#q-flow-return-lit-")
+    assert charge["markerEnd"].startswith("url(#q-flow-arrow-lit-")
+    assert charge["forwardHop"] is True
+    back = out["results"]["back"]
+    assert back["markerStart"].startswith("url(#q-flow-return-") and "-lit-" not in back["markerStart"]
+    assert back["stroke"] == "var(--q-color-text-muted)"
+    cleared = out["results"]["cleared"]
+    assert cleared["markerStart"].startswith("url(#q-flow-return-") and "-lit-" not in cleared["markerStart"]
+    assert cleared["flags"] == [False, False, False]
+
+
+FLOW_LOOP_DOTS_JS = """
+  window.__loopDots = (f, from, to) => {
+    const g = f.querySelector(`[data-q-flow-edge][data-q-flow-from="${from}"][data-q-flow-to="${to}"]`);
+    const pulse = g.querySelector('[data-q-flow-edge-pulse]');
+    const maskId = pulse.getAttribute('mask').slice(5, -1);
+    const start = g.querySelector('[data-q-flow-edge-line]').getPointAtLength(0);
+    const visible = [...f.querySelector('#' + CSS.escape(maskId)).querySelectorAll('circle')]
+      .filter((c) => !c.hasAttribute('data-q-inactive'))
+      .filter((c) => Math.hypot(Number(c.getAttribute('cx')) - start.x, Number(c.getAttribute('cy')) - start.y) > 1).length;
+    return { visible, pulseInactive: pulse.hasAttribute('data-q-inactive') };
+  };
+"""
+
+
+def test_flow_loop_edges_never_pulse_while_forward_edges_do(flow_shapes_page: Path) -> None:
+    out = run(
+        flow_shapes_page,
+        ev(FLOW_FAKE_CLOCK, "clock"),
+        ev(FLOW_LOOP_DOTS_JS + "true", "helpers"),
+        {"click": '#flow-checkout [data-q-flow-node="charge"]'},
+        ev(
+            """(() => {
+              const f = document.querySelector('#flow-checkout');
+              const loopSeen = [];
+              let forwardSeen = 0;
+              for (let t = 1100; t <= 4400; t += 100) {
+                window.__tick(t);
+                loopSeen.push(window.__loopDots(f, 'retry_q', 'charge'));
+                forwardSeen += window.__loopDots(f, 'checkout', 'charge').visible;
+              }
+              return {
+                steps: loopSeen.length,
+                loopVisible: loopSeen.reduce((n, s) => n + s.visible, 0),
+                loopInactive: loopSeen.every((s) => s.pulseInactive),
+                forwardSeen,
+                pulsing: f.hasAttribute('data-q-flow-pulsing'),
+              };
+            })()""",
+            "checkout",
+        ),
+        {"click": '#flow-poller [data-q-flow-node="poller"]'},
+        ev(
+            """(() => {
+              const f = document.querySelector('#flow-poller');
+              const selfSeen = [];
+              let forwardSeen = 0;
+              for (let t = 5000; t <= 8000; t += 100) {
+                window.__tick(t);
+                selfSeen.push(window.__loopDots(f, 'poller', 'poller'));
+                forwardSeen += window.__loopDots(f, 'poller', 'done').visible;
+              }
+              return {
+                selfVisible: selfSeen.reduce((n, s) => n + s.visible, 0),
+                selfInactive: selfSeen.every((s) => s.pulseInactive),
+                selfLit: f.querySelector('[data-q-flow-edge][data-q-flow-from="poller"][data-q-flow-to="poller"]').hasAttribute('data-q-flow-lit'),
+                forwardSeen,
+              };
+            })()""",
+            "poller",
+        ),
+    )
+    assert_clean(out)
+    checkout = out["results"]["checkout"]
+    assert checkout["steps"] >= 30
+    assert checkout["pulsing"] is True
+    assert checkout["loopVisible"] == 0 and checkout["loopInactive"] is True
+    assert checkout["forwardSeen"] > 0
+    poller = out["results"]["poller"]
+    assert poller["selfLit"] is True
+    assert poller["selfVisible"] == 0 and poller["selfInactive"] is True
+    assert poller["forwardSeen"] > 0
+
+
+def test_flow_reduced_motion_lights_a_loop_edge_statically(flow_shapes_page: Path) -> None:
+    out = run(
+        flow_shapes_page,
+        {"emulate": {"reducedMotion": "reduce"}},
+        {"click": '#flow-checkout [data-q-flow-node="charge"]'},
+        ev(
+            """(() => {
+              const f = document.querySelector('#flow-checkout');
+              const g = f.querySelector('[data-q-flow-edge][data-q-flow-from="retry_q"][data-q-flow-to="charge"]');
+              return {
+                lit: g.hasAttribute('data-q-flow-lit'),
+                width: g.querySelector('[data-q-flow-edge-line]').getAttribute('stroke-width'),
+                pulseInactive: g.querySelector('[data-q-flow-edge-pulse]').hasAttribute('data-q-inactive'),
+                pulsing: f.hasAttribute('data-q-flow-pulsing'),
+              };
+            })()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["d"] == {"lit": True, "width": "3.5", "pulseInactive": True, "pulsing": False}
+
+
+def test_flow_enter_on_a_decision_announces_its_shape(flow_shapes_page: Path) -> None:
+    out = run(
+        flow_shapes_page,
+        {"focus": '#flow-checkout [data-q-flow-node="paid"]'},
+        {"press": "Enter"},
+        ev("document.querySelector('#flow-checkout [aria-live=polite]').textContent", "live"),
+    )
+    assert_clean(out)
+    assert out["results"]["live"].startswith("Paid?, decision, worker,")
+
+
+FLOW_REFUND_IN_VIEW = """(() => {
+  const r = document.querySelector('#refund-flow').getBoundingClientRect();
+  return r.top >= -2 && r.top < window.innerHeight - 40;
+})()"""
+
+FLOW_OPENED_STATE = """(() => {
+  const target = document.querySelector('#refund-flow');
+  const f = document.querySelector('#flow-checkout');
+  const active = document.activeElement;
+  return {
+    top: target.getBoundingClientRect().top,
+    selected: f.querySelector('[data-q-flow-node="refund"]').hasAttribute('data-q-flow-selected'),
+    drawerOpen: !f.querySelector('[data-q-flow-drawer]').hasAttribute('data-q-inactive'),
+    expanded: f.hasAttribute('data-q-flow-expanded'),
+    activeIsNode: !!active && active.hasAttribute('data-q-flow-node') && !!active.closest('#refund-flow'),
+    targetDrawerClosed: target.querySelector('[data-q-flow-drawer]').hasAttribute('data-q-inactive'),
+  };
+})()"""
+
+
+def test_flow_subprocess_drawer_opens_the_linked_flow_and_focuses_its_node(flow_shapes_page: Path) -> None:
+    out = run(
+        flow_shapes_page,
+        ev("document.querySelector('#refund-flow').getBoundingClientRect().top > window.innerHeight", "offscreen"),
+        {"click": '#flow-checkout [data-q-flow-node="refund"]'},
+        ev(
+            """(() => {
+              const btn = document.querySelector('#flow-checkout [data-q-flow-drawer-flow] button');
+              return {
+                text: btn && btn.textContent,
+                type: btn && btn.getAttribute('type'),
+                attr: btn && btn.hasAttribute('data-q-flow-open-flow'),
+                missing: document.querySelectorAll('#flow-checkout [data-q-flow-flow-missing]').length,
+                sections: document.querySelectorAll('#flow-checkout [data-q-flow-drawer-flow]').length,
+              };
+            })()""",
+            "drawer",
+        ),
+        {"click": "#flow-checkout [data-q-flow-open-flow]"},
+        {"waitFor": FLOW_REFUND_IN_VIEW, "timeout": 8000},
+        {"wait": 300},
+        ev(FLOW_OPENED_STATE, "opened"),
+    )
+    assert_clean(out)
+    assert out["results"]["offscreen"] is True
+    assert out["results"]["drawer"] == {
+        "text": "Open flow",
+        "type": "button",
+        "attr": True,
+        "missing": 0,
+        "sections": 1,
+    }
+    opened = out["results"]["opened"]
+    assert -2 <= opened["top"] < 400, opened
+    assert opened["selected"] is True and opened["drawerOpen"] is True
+    assert opened["expanded"] is False
+    assert opened["activeIsNode"] is True
+    assert opened["targetDrawerClosed"] is True
+
+
+def test_flow_open_flow_returns_an_expanded_graph_to_the_page_first(flow_shapes_page: Path) -> None:
+    out = run(
+        flow_shapes_page,
+        {"click": '#flow-checkout [data-q-flow-action="expand"]'},
+        ev("document.querySelector('#flow-checkout').hasAttribute('data-q-flow-expanded')", "expanded"),
+        {"click": '#flow-checkout [data-q-flow-node="refund"]'},
+        {"click": "#flow-checkout [data-q-flow-open-flow]"},
+        {"waitFor": FLOW_REFUND_IN_VIEW, "timeout": 8000},
+        {"wait": 300},
+        ev(FLOW_OPENED_STATE, "opened"),
+    )
+    assert_clean(out)
+    assert out["results"]["expanded"] is True
+    opened = out["results"]["opened"]
+    assert opened["expanded"] is False
+    assert opened["selected"] is True and opened["drawerOpen"] is True
+    assert opened["activeIsNode"] is True
+
+
+def test_flow_subprocess_link_to_a_missing_flow_reads_as_a_notice_without_a_button(
+    flow_shapes_page: Path,
+) -> None:
+    out = run(
+        flow_shapes_page,
+        {"click": '#flow-links [data-q-flow-node="lost"]'},
+        ev(
+            """(() => {
+              const f = document.querySelector('#flow-links');
+              const p = f.querySelector('p[data-q-flow-flow-missing]');
+              return {
+                text: p && p.textContent,
+                buttons: f.querySelectorAll('[data-q-flow-open-flow]').length,
+                sections: f.querySelectorAll('[data-q-flow-drawer-flow]').length,
+              };
+            })()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["d"] == {
+        "text": 'The linked flow "nowhere" isn\'t on this page.',
+        "buttons": 0,
+        "sections": 1,
+    }
+
+
+def test_flow_subprocess_without_a_flow_has_no_flow_section(flow_shapes_page: Path) -> None:
+    out = run(
+        flow_shapes_page,
+        {"click": '#flow-links [data-q-flow-node="bare"]'},
+        ev(
+            """(() => {
+              const f = document.querySelector('#flow-links');
+              return {
+                sections: f.querySelectorAll('[data-q-flow-drawer-flow]').length,
+                drawerOpen: !f.querySelector('[data-q-flow-drawer]').hasAttribute('data-q-inactive'),
+              };
+            })()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["d"] == {"sections": 0, "drawerOpen": True}
