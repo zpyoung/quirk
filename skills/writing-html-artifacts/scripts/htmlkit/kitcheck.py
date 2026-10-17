@@ -873,6 +873,11 @@ _FLOW_WARN_NODES = 60
 _FLOW_MAX_NODES = 200
 _FLOW_WARN_EDGE_LABEL = 30
 _FLOW_WARN_DECISION_LABEL = 24
+_FLOW_MIN_TRACE_STEPS = 2
+_FLOW_WARN_TRACE_STEPS = 30
+_FLOW_WARN_VALUE_LINES = 40
+_FLOW_MAX_VALUE_LINES = 400
+_FLOW_WARN_NOTE_CHARS = 120
 _FLOW_SHAPES = ("box", "decision", "subprocess")
 _FLOW_COORD_KEYS = frozenset({"x", "y", "position", "positions"})
 _FLOW_DETAIL_TAGS = frozenset(
@@ -990,6 +995,140 @@ def _flow_forward_cycles(node_ids: list[str], edges: list[dict[str, Any]]) -> li
                     components.append(sorted(members, key=position.__getitem__))
     components.sort(key=lambda c: position[c[0]])
     return components
+
+
+def _flow_value_lines(value: Any) -> Optional[int]:
+    """Line count of ``value`` pretty-printed with 2-space indent, or ``None`` when it isn't strict JSON."""
+    try:
+        return json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False).count("\n") + 1
+    except (ValueError, RecursionError):
+        return None
+
+
+def _validate_flow_traces(
+    data: dict[str, Any],
+    line: int,
+    node_map: dict[str, dict[str, Any]],
+    clean_edges: list[dict[str, Any]],
+    fail: Callable[[int, str], None],
+    report_warn: Report,
+) -> list[dict[str, Any]]:
+    """Check ``data["traces"]`` and return the cleaned traces; every failure goes through ``fail``."""
+    raw_traces = data.get("traces", [])
+    if not isinstance(raw_traces, list):
+        fail(line, "<q-flow> traces must be a list")
+        return []
+
+    clean_traces: list[dict[str, Any]] = []
+    seen_trace_ids: set[str] = set()
+    dup_trace_ids: set[str] = set()
+    for trace in raw_traces:
+        if not isinstance(trace, dict):
+            fail(line, "<q-flow> each trace needs an id and a label")
+            continue
+        tid = trace.get("id")
+        tlabel = trace.get("label")
+        if not _is_text(tid) or not _is_text(tlabel):
+            fail(line, "<q-flow> each trace needs an id and a label")
+            t = "?"
+        else:
+            t = tid
+            if tid in seen_trace_ids:
+                if tid not in dup_trace_ids:
+                    fail(line, f'<q-flow> has duplicate trace id "{tid}"')
+                    dup_trace_ids.add(tid)
+            else:
+                seen_trace_ids.add(tid)
+
+        raw_steps = trace.get("steps")
+        if not isinstance(raw_steps, list) or len(raw_steps) < _FLOW_MIN_TRACE_STEPS:
+            fail(line, f'<q-flow> trace "{t}" needs at least 2 steps')
+        if not isinstance(raw_steps, list):
+            continue
+        if len(raw_steps) > _FLOW_WARN_TRACE_STEPS:
+            report_warn(
+                line,
+                f'<q-flow> trace "{t}" has {len(raw_steps)} steps: traces over 30 steps are hard to follow; split it',
+            )
+
+        clean_steps: list[dict[str, Any]] = []
+        prev_node: Optional[str] = None
+        for n, step in enumerate(raw_steps, start=1):
+            where = f'<q-flow> trace "{t}" step {n}'
+            if not isinstance(step, dict):
+                fail(line, f"{where} needs a node and a value")
+                prev_node = None
+                continue
+            snode = step.get("node")
+            has_value = "value" in step
+            if not isinstance(snode, str) or not has_value:
+                fail(line, f"{where} needs a node and a value")
+            known = isinstance(snode, str) and snode in node_map
+            if isinstance(snode, str) and not known:
+                fail(line, f'{where} points at unknown node "{snode}"')
+            note = step.get("note")
+            if "note" in step and not isinstance(note, str):
+                fail(line, f"{where} note must be a string")
+
+            via = step.get("via")
+            has_via = "via" in step
+            edge_index: Optional[int] = None
+            if has_via and n == 1:
+                fail(line, f"{where} has no incoming edge; remove via")
+            elif n > 1 and known and prev_node is not None:
+                candidates = [i for i, e in enumerate(clean_edges) if e["from"] == prev_node and e["to"] == snode]
+                if has_via:
+                    named = next(
+                        (i for i, e in enumerate(clean_edges) if isinstance(via, str) and e["ref"] == via), None
+                    )
+                    if named is None:
+                        fail(line, f'{where} names unknown edge "{via}"')
+                    elif named not in candidates:
+                        fail(line, f'{where}: edge "{via}" doesn\'t run from "{prev_node}" to "{snode}"')
+                    else:
+                        edge_index = named
+                elif not candidates:
+                    fail(line, f'{where}: no edge from "{prev_node}" to "{snode}"')
+                elif len(candidates) > 1:
+                    fail(
+                        line,
+                        f'{where}: {len(candidates)} edges run from "{prev_node}" to "{snode}"; name one with via',
+                    )
+                else:
+                    edge_index = candidates[0]
+
+            if has_value:
+                lines = _flow_value_lines(step["value"])
+                if lines is None:
+                    fail(line, f"{where} has a value that isn't JSON")
+                elif lines > _FLOW_MAX_VALUE_LINES:
+                    fail(line, f"{where} value is {lines} lines; at most 400")
+                elif lines > _FLOW_WARN_VALUE_LINES:
+                    report_warn(
+                        line,
+                        f"{where} value is {lines} lines: values over 40 lines are hard to scan; "
+                        "keep the fields the reader needs",
+                    )
+            if isinstance(note, str) and len(note) > _FLOW_WARN_NOTE_CHARS:
+                report_warn(
+                    line,
+                    f"{where} note is {len(note)} characters: notes over 120 characters crowd the panel",
+                )
+
+            clean_steps.append(
+                {
+                    "node": snode,
+                    "value": step.get("value"),
+                    "note": note if isinstance(note, str) else None,
+                    "via": via if isinstance(via, str) else None,
+                    "edge": edge_index,
+                }
+            )
+            prev_node = snode if known else None
+
+        if t != "?":
+            clean_traces.append({"id": t, "label": tlabel, "steps": clean_steps})
+    return clean_traces
 
 
 def _validate_flow_node(
@@ -1179,6 +1318,8 @@ def _validate_flow_node(
         raw_edges = []
 
     clean_edges: list[dict[str, Any]] = []
+    seen_edge_ids: set[str] = set()
+    dup_edge_ids: set[str] = set()
     for e in raw_edges:
         if not isinstance(e, dict):
             fail(node.line, "<q-flow> each edge must be an object")
@@ -1206,6 +1347,19 @@ def _validate_flow_node(
         eloop = e.get("loop")
         if eloop is not None and not isinstance(eloop, bool):
             fail(node.line, "<q-flow> edge loop must be true or false")
+        eref: Optional[str] = None
+        if "id" in e:
+            eid = e["id"]
+            if not _is_text(eid):
+                fail(node.line, "<q-flow> edge id must be a non-empty string")
+            else:
+                eref = eid
+                if eid in seen_edge_ids:
+                    if eid not in dup_edge_ids:
+                        fail(node.line, f'<q-flow> has duplicate edge id "{eid}"')
+                        dup_edge_ids.add(eid)
+                else:
+                    seen_edge_ids.add(eid)
         if isinstance(efrom, str) and isinstance(eto, str) and efrom in node_map and eto in node_map:
             clean_edges.append(
                 {
@@ -1214,6 +1368,7 @@ def _validate_flow_node(
                     "label": elabel.strip() if isinstance(elabel, str) and elabel.strip() else None,
                     "async": easync is True,
                     "loop": eloop is True or efrom == eto,
+                    "ref": eref,
                 }
             )
 
@@ -1239,6 +1394,8 @@ def _validate_flow_node(
         through = ", ".join(f'"{nid}"' for nid in cycle)
         report_warn(node.line, f"<q-flow> has a cycle with no loop edge through {through}: mark the return edge with loop: true")
 
+    clean_traces = _validate_flow_traces(data, node.line, node_map, clean_edges, fail, report_warn)
+
     if before_fails:
         return None
     return {
@@ -1247,6 +1404,7 @@ def _validate_flow_node(
         "nodes": clean_nodes,
         "node_map": node_map,
         "edges": clean_edges,
+        "traces": clean_traces,
     }
 
 
@@ -1337,6 +1495,29 @@ def _render_flow_fallback_html(parsed: dict[str, Any]) -> str:
             edge_str = f"<ul>{''.join(items)}</ul>"
         return f'<li data-q-flow-list-node="{nid}"><strong>{label}</strong>{kind_str}{lead}{detail_str}{edge_str}</li>'
 
+    def render_trace(trace: dict[str, Any]) -> str:
+        items = []
+        for n, step in enumerate(trace["steps"], start=1):
+            edge = edges[step["edge"]] if step["edge"] is not None else None
+            via_part = ""
+            if edge is not None and (step["via"] is not None or edge["loop"]):
+                if edge["label"]:
+                    via_part = f", via &quot;{html_lib.escape(edge['label'])}&quot;"
+                elif step["via"] is not None:
+                    via_part = f", via &quot;{html_lib.escape(step['via'])}&quot;"
+                else:
+                    via_part = ", around the loop"
+            note_part = f": {html_lib.escape(step['note'])}" if step["note"] is not None else ""
+            pretty = json.dumps(step["value"], indent=2, ensure_ascii=False, allow_nan=False)
+            items.append(
+                f'<li data-q-flow-list-step="{n}">{html_lib.escape(node_map[step["node"]]["label"])}'
+                f"{via_part}{note_part}<pre><code>{html_lib.escape(pretty)}</code></pre></li>"
+            )
+        return (
+            f'<div data-q-flow-list-trace="{html_lib.escape(trace["id"], quote=True)}">'
+            f"<p><strong>Trace: {html_lib.escape(trace['label'])}</strong></p><ol>{''.join(items)}</ol></div>"
+        )
+
     def render_group(g: dict[str, Any]) -> str:
         gid = html_lib.escape(g["id"], quote=True)
         glabel = html_lib.escape(g["label"])
@@ -1348,6 +1529,7 @@ def _render_flow_fallback_html(parsed: dict[str, Any]) -> str:
     top_items = [render_group(g) for g in groups if g["parent"] is None]
     top_items.extend(render_node(n) for n in nodes if n["group"] is None)
     list_html = f"<ul>{''.join(top_items)}</ul>"
+    list_html += "".join(render_trace(t) for t in parsed.get("traces", []))
     return (
         '<div class="q-flow-stage" data-q-kit data-q-flow-stage>'
         '<p class="q-flow-notice" data-q-flow-notice>JavaScript is off, so this graph is shown as a list below.</p>'
