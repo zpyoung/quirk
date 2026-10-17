@@ -1273,3 +1273,270 @@ def test_flow_graph_using_every_new_field_passes_clean() -> None:
     )
     assert messages(page) == []
     assert warn_messages(page) == []
+
+
+# -- q-flow: traces and edge ids ---------------------------------------------------------------------
+
+ORDER_V1 = {"order": "R-1042", "status": "queued", "lines": [{"item": "Coffee beans", "qty": 2, "price": 18}]}
+ORDER_V2 = {**ORDER_V1, "subtotal": 36, "discount": {"code": "LOYALTY10", "amount": 3.6}, "total": 32.4}
+ORDER_V3 = {**ORDER_V2, "tax": 2.67, "total": 35.07}
+ORDER_V4 = {**ORDER_V3, "status": "declined", "attempt": 1, "decline": "insufficient_funds"}
+ORDER_V6 = {**ORDER_V4, "status": "retry_scheduled", "retry_at": "2026-10-18T09:00Z"}
+ORDER_V7 = {
+    **{k: v for k, v in ORDER_V6.items() if k not in ("decline", "retry_at")},
+    "status": "paid",
+    "attempt": 2,
+    "charge": "ch_88",
+}
+ORDER_V9 = {**ORDER_V7, "status": "settled", "settled_at": "2026-10-18T09:02Z"}
+
+RENEWAL_GRAPH = {
+    "nodes": [
+        {"id": "scheduler", "label": "Renewal scheduler"},
+        {"id": "pricing", "label": "Pricing"},
+        {"id": "tax", "label": "Tax"},
+        {"id": "charge", "label": "Charge worker"},
+        {"id": "paid", "label": "Paid?", "shape": "decision"},
+        {"id": "retry", "label": "Retry queue"},
+        {"id": "settle", "label": "Settlement"},
+    ],
+    "edges": [
+        {"from": "scheduler", "to": "pricing"},
+        {"from": "pricing", "to": "tax", "label": "domestic quote", "id": "tax-domestic"},
+        {"from": "pricing", "to": "tax", "label": "cross-border quote", "id": "tax-intl"},
+        {"from": "tax", "to": "charge"},
+        {"from": "charge", "to": "paid"},
+        {"from": "paid", "to": "settle", "label": "Yes"},
+        {"from": "paid", "to": "retry", "label": "No"},
+        {"from": "retry", "to": "charge", "label": "retry up to 3x", "id": "retry", "loop": True},
+    ],
+    "traces": [
+        {
+            "id": "succeeds",
+            "label": "Card succeeds",
+            "steps": [
+                {"node": "scheduler", "value": ORDER_V1},
+                {"node": "pricing", "value": ORDER_V2},
+                {"node": "tax", "value": ORDER_V3, "via": "tax-domestic"},
+                {"node": "charge", "value": ORDER_V3},
+                {"node": "paid", "value": ORDER_V3},
+                {"node": "settle", "value": ORDER_V9},
+            ],
+        },
+        {
+            "id": "declined",
+            "label": "Card declined, retried",
+            "steps": [
+                {"node": "scheduler", "value": ORDER_V1},
+                {"node": "pricing", "value": ORDER_V2, "note": "Pricing applies the loyalty discount"},
+                {"node": "tax", "value": ORDER_V3, "via": "tax-domestic", "note": "Tax adds 8.25% sales tax"},
+                {"node": "charge", "value": ORDER_V4, "note": "The card is declined"},
+                {"node": "paid", "value": ORDER_V4, "note": "Paid? answers No"},
+                {"node": "retry", "value": ORDER_V6, "note": "The retry is booked for tomorrow"},
+                {"node": "charge", "value": ORDER_V7, "note": "The second attempt succeeds"},
+                {"node": "paid", "value": ORDER_V7, "note": "Paid? answers Yes"},
+                {"node": "settle", "value": ORDER_V9, "note": "The order settles"},
+            ],
+        },
+    ],
+}
+
+
+def renewal(traces: object = None, **edge_patch: object) -> str:
+    """The renewal graph as markup, with ``traces`` swapped in (a missing key keeps the originals)."""
+    payload = json.loads(json.dumps(RENEWAL_GRAPH))
+    if traces is not None:
+        payload["traces"] = traces
+    payload.update(edge_patch)
+    return flow_markup(payload)
+
+
+def one_trace(*steps: dict, id: str = "t", label: str = "T") -> list[dict]:
+    return [{"id": id, "label": label, "steps": list(steps)}]
+
+
+def pair(second: dict) -> list[dict]:
+    return one_trace({"node": "scheduler", "value": 1}, {"node": "pricing", "value": 2, **second})
+
+
+def test_flow_renewal_graph_with_both_traces_passes_clean() -> None:
+    assert messages(renewal()) == []
+    assert warn_messages(renewal()) == []
+
+
+def test_flow_trace_steps_may_run_along_loop_edges_and_self_loops() -> None:
+    loop = one_trace(
+        {"node": "retry", "value": 1}, {"node": "charge", "value": 2}, {"node": "paid", "value": 3}
+    )
+    assert messages(renewal(loop)) == []
+    assert warn_messages(renewal(loop)) == []
+    payload = {
+        "nodes": [{"id": "poll", "label": "Poller"}],
+        "edges": [{"from": "poll", "to": "poll"}],
+        "traces": one_trace({"node": "poll", "value": 1}, {"node": "poll", "value": 2}),
+    }
+    assert messages(flow_markup(payload)) == []
+    assert warn_messages(flow_markup(payload)) == []
+
+
+def test_flow_trace_value_may_be_null() -> None:
+    assert messages(renewal(one_trace({"node": "scheduler", "value": None}, {"node": "pricing", "value": None}))) == []
+
+
+def test_flow_edge_id_must_be_a_non_empty_string() -> None:
+    for bad in ("", "  ", 5, None, ["a"]):
+        edges = [{"from": "a", "to": "b", "id": bad}]
+        payload = {"nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}], "edges": edges}
+        assert messages(flow_markup(payload)) == ["<q-flow> edge id must be a non-empty string"], bad
+
+
+def test_flow_duplicate_edge_id_is_reported_once_per_id() -> None:
+    nodes = [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}]
+    three = [{"from": "a", "to": "b", "id": "x"}] * 3 + [{"from": "b", "to": "a", "id": "y"}] * 2
+    assert messages(flow_markup({"nodes": nodes, "edges": three})) == [
+        '<q-flow> has duplicate edge id "x"',
+        '<q-flow> has duplicate edge id "y"',
+    ]
+
+
+def test_flow_traces_must_be_a_list() -> None:
+    assert messages(renewal({"id": "t"})) == ["<q-flow> traces must be a list"]
+    assert messages(flow_markup({**RENEWAL_GRAPH, "traces": None})) == ["<q-flow> traces must be a list"]
+
+
+def test_flow_each_trace_needs_an_id_and_a_label() -> None:
+    steps = one_trace({"node": "scheduler", "value": 1}, {"node": "pricing", "value": 2})[0]["steps"]
+    for bad in ("nope", 3, {"label": "L", "steps": steps}, {"id": "t", "steps": steps}, {"id": " ", "label": "L", "steps": steps}, {"id": "t", "label": 4, "steps": steps}):
+        assert messages(renewal([bad])) == ["<q-flow> each trace needs an id and a label"], bad
+
+
+def test_flow_bad_trace_id_still_checks_its_steps_under_a_question_mark() -> None:
+    bad = [{"label": "L", "steps": [{"node": "nope", "value": 1}, {"node": "pricing", "value": 2}]}]
+    assert messages(renewal(bad)) == [
+        "<q-flow> each trace needs an id and a label",
+        '<q-flow> trace "?" step 1 points at unknown node "nope"',
+    ]
+
+
+def test_flow_duplicate_trace_id_is_reported_once_per_id() -> None:
+    steps = [{"node": "scheduler", "value": 1}, {"node": "pricing", "value": 2}]
+    trace = {"id": "t", "label": "T", "steps": steps}
+    other = {"id": "u", "label": "U", "steps": steps}
+    assert messages(renewal([trace, trace, trace, other, other])) == [
+        '<q-flow> has duplicate trace id "t"',
+        '<q-flow> has duplicate trace id "u"',
+    ]
+
+
+def test_flow_trace_needs_at_least_two_steps() -> None:
+    expected = ['<q-flow> trace "t" needs at least 2 steps']
+    assert messages(renewal(one_trace({"node": "scheduler", "value": 1}))) == expected
+    assert messages(renewal(one_trace())) == expected
+    assert messages(renewal([{"id": "t", "label": "T", "steps": "nope"}])) == expected
+    assert messages(renewal([{"id": "t", "label": "T"}])) == expected
+
+
+def test_flow_trace_step_needs_a_node_and_a_value() -> None:
+    expected = ['<q-flow> trace "t" step 2 needs a node and a value']
+    for bad in ("pricing", 7, {"value": 2}, {"node": 4, "value": 2}, {"node": "pricing"}):
+        assert messages(renewal(one_trace({"node": "scheduler", "value": 1}, bad))) == expected, bad
+
+
+def test_flow_trace_step_must_point_at_a_known_node() -> None:
+    got = messages(renewal(one_trace({"node": "scheduler", "value": 1}, {"node": "nope", "value": 2})))
+    assert got == ['<q-flow> trace "t" step 2 points at unknown node "nope"']
+
+
+def test_flow_trace_step_note_must_be_a_string() -> None:
+    assert messages(renewal(pair({"note": 5}))) == ['<q-flow> trace "t" step 2 note must be a string']
+
+
+def test_flow_trace_first_step_cannot_name_via() -> None:
+    first = one_trace({"node": "scheduler", "value": 1, "via": "retry"}, {"node": "pricing", "value": 2})
+    assert messages(renewal(first)) == ['<q-flow> trace "t" step 1 has no incoming edge; remove via']
+
+
+def test_flow_trace_via_must_name_an_edge() -> None:
+    for bad in ("missing", 5):
+        assert messages(renewal(pair({"via": bad}))) == [f'<q-flow> trace "t" step 2 names unknown edge "{bad}"']
+
+
+def test_flow_trace_via_must_run_between_the_two_steps() -> None:
+    assert messages(renewal(pair({"via": "retry"}))) == [
+        '<q-flow> trace "t" step 2: edge "retry" doesn\'t run from "scheduler" to "pricing"'
+    ]
+
+
+def test_flow_trace_step_without_an_edge_between_its_nodes_fails() -> None:
+    got = messages(renewal(one_trace({"node": "scheduler", "value": 1}, {"node": "tax", "value": 2})))
+    assert got == ['<q-flow> trace "t" step 2: no edge from "scheduler" to "tax"']
+
+
+def test_flow_trace_step_with_several_edges_needs_via() -> None:
+    got = messages(renewal(one_trace({"node": "pricing", "value": 1}, {"node": "tax", "value": 2})))
+    assert got == ['<q-flow> trace "t" step 2: 2 edges run from "pricing" to "tax"; name one with via']
+    named = one_trace({"node": "pricing", "value": 1}, {"node": "tax", "value": 2, "via": "tax-intl"})
+    assert messages(renewal(named)) == []
+
+
+def test_flow_trace_edge_checks_skip_steps_with_an_unknown_node() -> None:
+    steps = one_trace(
+        {"node": "nope", "value": 1}, {"node": "pricing", "value": 2, "via": "missing"}, {"node": "tax", "value": 3, "via": "tax-intl"}
+    )
+    assert messages(renewal(steps)) == ['<q-flow> trace "t" step 1 points at unknown node "nope"']
+
+
+def test_flow_trace_value_must_be_json() -> None:
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        got = messages(renewal(pair({"value": {"a": [bad]}})))
+        assert got == ['<q-flow> trace "t" step 2 has a value that isn\'t JSON'], bad
+
+
+def test_flow_trace_value_over_400_lines_fails() -> None:
+    got = messages(renewal(pair({"value": list(range(399))})))
+    assert got == ['<q-flow> trace "t" step 2 value is 401 lines; at most 400']
+    assert messages(renewal(pair({"value": list(range(398))}))) == []
+
+
+def test_flow_trace_value_over_40_lines_warns() -> None:
+    warned = renewal(pair({"value": list(range(39))}))
+    assert messages(warned) == []
+    assert warn_messages(warned) == [
+        '<q-flow> trace "t" step 2 value is 41 lines: values over 40 lines are hard to scan; keep the fields the reader needs'
+    ]
+    assert warn_messages(renewal(pair({"value": list(range(38))}))) == []
+
+
+def test_flow_trace_note_over_120_characters_warns() -> None:
+    long_note = renewal(pair({"note": "n" * 121}))
+    assert messages(long_note) == []
+    assert warn_messages(long_note) == [
+        '<q-flow> trace "t" step 2 note is 121 characters: notes over 120 characters crowd the panel'
+    ]
+    assert warn_messages(renewal(pair({"note": "n" * 120}))) == []
+
+
+def test_flow_trace_over_30_steps_warns() -> None:
+    def loop_trace(count: int) -> str:
+        payload = {
+            "nodes": [{"id": "poll", "label": "Poller"}],
+            "edges": [{"from": "poll", "to": "poll"}],
+            "traces": one_trace(*[{"node": "poll", "value": i} for i in range(count)]),
+        }
+        return flow_markup(payload)
+
+    assert messages(loop_trace(31)) == []
+    assert warn_messages(loop_trace(31)) == [
+        '<q-flow> trace "t" has 31 steps: traces over 30 steps are hard to follow; split it'
+    ]
+    assert warn_messages(loop_trace(30)) == []
+
+
+def test_flow_trace_failures_keep_id_label_duplicate_steps_order() -> None:
+    steps = [{"node": "nope", "value": 1}, {"node": "pricing", "value": 2}]
+    traces = [{"id": "t", "label": "T", "steps": steps}, {"id": "t", "label": "T", "steps": [{"node": "pricing", "value": 1}]}]
+    assert messages(renewal(traces)) == [
+        '<q-flow> trace "t" step 1 points at unknown node "nope"',
+        '<q-flow> has duplicate trace id "t"',
+        '<q-flow> trace "t" needs at least 2 steps',
+    ]

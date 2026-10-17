@@ -999,3 +999,129 @@ def test_q_flow_warnings_are_reported_in_build_checks(tmp_path, env, project):
     assert rc == 0 and result["checks"]["passed"] is True
     kit_warns = [w["detail"] for w in result["checks"]["warnings"] if w["check"] == "kit"]
     assert any("edge labels over 30 characters crowd the layout" in w for w in kit_warns), kit_warns
+
+
+RENEWAL_V1 = {"order": "R-1042", "status": "queued", "lines": [{"item": "Coffee beans", "qty": 2, "price": 18}]}
+RENEWAL_V2 = {**RENEWAL_V1, "subtotal": 36, "discount": {"code": "LOYALTY10", "amount": 3.6}, "total": 32.4}
+RENEWAL_V3 = {**RENEWAL_V2, "tax": 2.67, "total": 35.07}
+RENEWAL_V4 = {**RENEWAL_V3, "status": "declined", "attempt": 1, "decline": "insufficient_funds"}
+RENEWAL_V6 = {**RENEWAL_V4, "status": "retry_scheduled", "retry_at": "2026-10-18T09:00Z"}
+RENEWAL_V7 = {
+    **{k: v for k, v in RENEWAL_V6.items() if k not in ("decline", "retry_at")},
+    "status": "paid",
+    "attempt": 2,
+    "charge": "ch_88",
+}
+RENEWAL_V9 = {**RENEWAL_V7, "status": "settled", "settled_at": "2026-10-18T09:02Z"}
+RENEWAL_GRAPH = {
+    "nodes": [
+        {"id": "scheduler", "label": "Renewal scheduler"},
+        {"id": "pricing", "label": "Pricing"},
+        {"id": "tax", "label": "Tax"},
+        {"id": "charge", "label": "Charge worker"},
+        {"id": "paid", "label": "Paid?", "shape": "decision"},
+        {"id": "retry", "label": "Retry queue"},
+        {"id": "settle", "label": "Settlement"},
+    ],
+    "edges": [
+        {"from": "scheduler", "to": "pricing"},
+        {"from": "pricing", "to": "tax", "label": "domestic quote", "id": "tax-domestic"},
+        {"from": "pricing", "to": "tax", "label": "cross-border quote", "id": "tax-intl"},
+        {"from": "tax", "to": "charge"},
+        {"from": "charge", "to": "paid"},
+        {"from": "paid", "to": "settle", "label": "Yes"},
+        {"from": "paid", "to": "retry", "label": "No"},
+        {"from": "retry", "to": "charge", "label": "retry up to 3x", "id": "retry", "loop": True},
+    ],
+    "traces": [
+        {
+            "id": "succeeds",
+            "label": "Card succeeds",
+            "steps": [
+                {"node": "scheduler", "value": RENEWAL_V1},
+                {"node": "pricing", "value": RENEWAL_V2},
+                {"node": "tax", "value": RENEWAL_V3, "via": "tax-domestic"},
+                {"node": "charge", "value": RENEWAL_V3},
+                {"node": "paid", "value": RENEWAL_V3},
+                {"node": "settle", "value": RENEWAL_V9},
+            ],
+        },
+        {
+            "id": "declined",
+            "label": "Card declined, retried",
+            "steps": [
+                {"node": "scheduler", "value": RENEWAL_V1},
+                {"node": "pricing", "value": RENEWAL_V2, "note": "Pricing applies the loyalty discount"},
+                {"node": "tax", "value": RENEWAL_V3, "via": "tax-domestic", "note": "Tax adds 8.25% sales tax"},
+                {"node": "charge", "value": RENEWAL_V4, "note": "The card is declined"},
+                {"node": "paid", "value": RENEWAL_V4, "note": "Paid? answers No"},
+                {"node": "retry", "value": RENEWAL_V6, "note": "The retry is booked for tomorrow"},
+                {"node": "charge", "value": RENEWAL_V7, "note": "The second attempt succeeds"},
+                {"node": "paid", "value": RENEWAL_V7, "note": "Paid? answers Yes"},
+                {"node": "settle", "value": RENEWAL_V9, "note": "The order settles"},
+            ],
+        },
+    ],
+}
+
+
+def trace_flow_markup(graph: dict, flow_id: str) -> str:
+    return (
+        f'<q-flow id="{flow_id}" summary="Traced graph."><script type="application/json">'
+        f"{json.dumps(graph)}</script></q-flow>"
+    )
+
+
+def test_q_flow_text_list_appends_one_block_per_trace(tmp_path, env, project):
+    page = trace_flow_markup(RENEWAL_GRAPH, "renewal")
+    rc, result, out = report_build(tmp_path, env, project, page, name="flowtraces")
+    assert rc == 0 and result["checks"]["passed"] is True, result["checks"]
+    html = out.read_text(encoding="utf-8")
+    body = html.split("<div data-q-flow-list-body>", 1)[1].split("</details>", 1)[0]
+    assert body.index("</ul><div data-q-flow-list-trace=\"succeeds\">") < body.index('data-q-flow-list-trace="declined"')
+    assert '<div data-q-flow-list-trace="declined"><p><strong>Trace: Card declined, retried</strong></p><ol>' in html
+    assert (
+        '<li data-q-flow-list-step="3">Tax, via &quot;domestic quote&quot;: Tax adds 8.25% sales tax<pre><code>' in html
+    )
+    assert (
+        '<li data-q-flow-list-step="7">Charge worker, via &quot;retry up to 3x&quot;: The second attempt succeeds<pre><code>'
+        in html
+    )
+    assert '<li data-q-flow-list-step="2">Pricing: Pricing applies the loyalty discount<pre><code>' in html
+    declined = html.split('data-q-flow-list-trace="declined"', 1)[1].split("</div>", 1)[0]
+    assert declined.endswith("</code></pre></li></ol>")
+    assert "{\n  &quot;order&quot;: &quot;R-1042&quot;,\n  &quot;status&quot;: &quot;queued&quot;," in declined
+    assert "&quot;price&quot;: 18\n    }\n  ]\n}</code></pre></li>" in declined
+
+
+def test_q_flow_trace_list_names_loop_and_edge_id_when_unlabelled(tmp_path, env, project):
+    graph = {
+        "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+        "edges": [
+            {"from": "a", "to": "b", "id": "go"},
+            {"from": "b", "to": "a", "loop": True},
+        ],
+        "traces": [
+            {
+                "id": "t",
+                "label": "T",
+                "steps": [
+                    {"node": "a", "value": 1},
+                    {"node": "b", "value": 2, "via": "go", "note": "<b>x</b>"},
+                    {"node": "a", "value": None},
+                ],
+            }
+        ],
+    }
+    page = trace_flow_markup(graph, "loops")
+    rc, result, out = report_build(tmp_path, env, project, page, name="flowtraceloop")
+    assert rc == 0 and result["checks"]["passed"] is True, result["checks"]
+    html = out.read_text(encoding="utf-8")
+    assert '<li data-q-flow-list-step="2">B, via &quot;go&quot;: &lt;b&gt;x&lt;/b&gt;<pre><code>2</code></pre></li>' in html
+    assert '<li data-q-flow-list-step="3">A, around the loop<pre><code>null</code></pre></li>' in html
+
+
+def test_q_flow_without_traces_has_no_trace_block(tmp_path, env, project):
+    rc, result, out = report_build(tmp_path, env, project, FLOW, name="flownotraces")
+    assert rc == 0, result
+    assert "data-q-flow-list-trace" not in out.read_text(encoding="utf-8")
