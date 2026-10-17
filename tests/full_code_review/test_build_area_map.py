@@ -1,7 +1,9 @@
 """Contracts for coupled review areas and the command-line area-map writer."""
 
 import importlib
+import inspect
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -203,7 +205,7 @@ def test_report_shaped_caveats_seed_a_question(tmp_path):
     assert any("C-quoted" in q and "parse.py" in q for q in result["areas"][0]["questions"])
 
 
-def test_html_styles_count_toward_review_size_limit(tmp_path):
+def test_whole_file_weight_is_the_fallback_when_no_diff_section_exists(tmp_path):
     html = "<style>\n" + "p { color: red; }\n" * 100 + "</style>\n"
     files = [put(tmp_path, "page.html", html),
              put(tmp_path, "reader.py", "TEMPLATE = 'page.html'\n")]
@@ -297,3 +299,263 @@ def test_risk_question_states_the_level_once(tmp_path):
         risk={"level": "Medium", "verbatim_md": "Thin coverage"})
     question = next(q for q in result["areas"][0]["questions"] if "Thin coverage" in q)
     assert question.count("Medium") == 1
+
+
+def modify_diff(path, old_lines, new_lines, header="@@ -1,3 +1,3 @@"):
+    body = "".join("-%s\n" % line for line in old_lines) + "".join("+%s\n" % line for line in new_lines)
+    return "diff --git a/%s b/%s\n--- a/%s\n+++ b/%s\n%s\n %s\n%s" % (
+        path, path, path, path, header, "ctx", body)
+
+
+def build(files, diff, root=None, **kwargs):
+    return area_map_module().build_area_map(
+        {"changed_files": files, "diff": diff}, str(root) if root else None, **kwargs)
+
+
+def test_modified_file_weighs_changed_lines_not_file_length(tmp_path):
+    name = put(tmp_path, "scripts/big.py", "x = 1\n" * 500)
+    diff = modify_diff(name, ["x = 1"], ["x = 2"])
+    area = build([name], diff, tmp_path)["areas"][0]
+    assert area["lines"] == 2
+
+
+def test_new_file_counts_in_full(tmp_path):
+    name = put(tmp_path, "scripts/new.py", "x = 1\n" * 40)
+    diff = ("diff --git a/%s b/%s\nnew file mode 100644\n--- /dev/null\n+++ b/%s\n"
+            "@@ -0,0 +1,40 @@\n" % (name, name, name)) + "+x = 1\n" * 40
+    assert build([name], diff, tmp_path)["areas"][0]["lines"] == 40
+
+
+def test_file_header_lines_are_not_counted_as_changes():
+    diff = modify_diff("a.py", [], ["new"])
+    assert build(["a.py"], diff)["areas"][0]["lines"] == 1
+
+
+def test_hunkless_section_weighs_one_even_when_source_file_is_long(tmp_path):
+    name = put(tmp_path, "scripts/moved.py", "x = 1\n" * 90)
+    diff = ("diff --git a/old.py b/%s\nsimilarity index 100%%\nrename from old.py\nrename to %s\n"
+            % (name, name))
+    assert build([name], diff, tmp_path)["areas"][0]["lines"] == 1
+
+
+def test_area_lines_sum_file_weights(tmp_path):
+    files = [put(tmp_path, "scripts/a.py", "x\n" * 100), put(tmp_path, "scripts/b.py", "x\n" * 100)]
+    diff = modify_diff(files[0], ["a"], ["b"]) + modify_diff(files[1], [], ["c", "d", "e"])
+    area = build(files, diff, tmp_path)["areas"][0]
+    assert area["lines"] == 2 + 3
+
+
+def test_default_size_cap_is_600_in_function_and_cli(tmp_path):
+    module = area_map_module()
+    for function in (module.partition_areas, module.build_area_map):
+        assert inspect.signature(function).parameters["max_lines"].default == 600
+    files = ["a/x.py", "a/y.py"]
+    assert len(module.partition_areas(files, {f: set() for f in files}, {files[0]: 300, files[1]: 300})) == 1
+    assert len(module.partition_areas(files, {f: set() for f in files}, {files[0]: 300, files[1]: 301})) == 2
+    context = tmp_path / "context.json"
+    changes = "".join("+l%d\n" % i for i in range(301))
+    diff = "".join("diff --git a/%s b/%s\n--- a/%s\n+++ b/%s\n@@ -0,0 +1,301 @@\n%s" % (f, f, f, f, changes)
+                   for f in files)
+    context.write_text(json.dumps({"changed_files": files, "diff": diff}))
+    result = subprocess.run([sys.executable, str(SCRIPTS / "build_area_map.py"), "--context", str(context),
+                             "--out", str(tmp_path / "map.json")], capture_output=True, text=True, check=False)
+    assert result.returncode == 0
+    assert len(json.loads(result.stdout)["areas"]) == 2
+
+
+def test_hunks_get_area_scoped_ids_and_exact_headers_across_files():
+    first = ("diff --git a/scripts/a.py b/scripts/a.py\n--- a/scripts/a.py\n+++ b/scripts/a.py\n"
+             "@@ -1,2 +1,2 @@ def f():\n-x\n+y\n z\n@@ -40,2 +40,3 @@\n k\n+m\n n\n")
+    second = modify_diff("scripts/b.py", ["p"], ["q"], header="@@ -5 +5 @@")
+    area = build(["scripts/a.py", "scripts/b.py"], first + second)["areas"][0]
+    assert area["hunks"] == [
+        {"id": "A1.h1", "file": "scripts/a.py", "header": "@@ -1,2 +1,2 @@ def f():"},
+        {"id": "A1.h2", "file": "scripts/a.py", "header": "@@ -40,2 +40,3 @@"},
+        {"id": "A1.h3", "file": "scripts/b.py", "header": "@@ -5 +5 @@"},
+    ]
+    assert area["hunkless_files"] == []
+
+
+def test_hunk_numbering_restarts_per_area_and_follows_area_file_order():
+    files = ["a/one.py", "b/two.py"]
+    diff = modify_diff(files[1], ["a"], ["b"], "@@ -2 +2 @@") + modify_diff(files[0], ["a"], ["b"], "@@ -1 +1 @@")
+    areas = build(files, diff, max_files=1)["areas"]
+    assert [a["hunks"] for a in areas] == [
+        [{"id": "A1.h1", "file": "a/one.py", "header": "@@ -1 +1 @@"}],
+        [{"id": "A2.h1", "file": "b/two.py", "header": "@@ -2 +2 @@"}],
+    ]
+
+
+def test_repeated_sections_for_one_path_contribute_in_order():
+    diff = (modify_diff("a.py", ["a"], ["b"], "@@ -1 +1 @@") + modify_diff("a.py", ["c"], ["d"], "@@ -9 +9 @@"))
+    area = build(["a.py"], diff)["areas"][0]
+    assert [h["header"] for h in area["hunks"]] == ["@@ -1 +1 @@", "@@ -9 +9 @@"]
+    assert [h["id"] for h in area["hunks"]] == ["A1.h1", "A1.h2"]
+    assert area["lines"] == 4
+
+
+def test_test_files_hunks_are_listed_once_after_their_position_in_the_area():
+    files = ["scripts/a.py", "tests/test_a.py"]
+    diff = (modify_diff(files[1], ["a"], ["b"], "@@ -3 +3 @@") + modify_diff(files[0], ["a"], ["b"], "@@ -1 +1 @@"))
+    area = build(files, diff)["areas"][0]
+    assert area["test_files"] == [files[1]]
+    assert [h["file"] for h in area["hunks"]] == files
+
+
+def test_renamed_and_quoted_paths_map_to_their_new_name():
+    files = ["scripts/new name.py", "scripts/renamed.py"]
+    diff = ('diff --git "a/scripts/new name.py" "b/scripts/new name.py"\n'
+            '--- "a/scripts/new name.py"\n+++ "b/scripts/new name.py"\n@@ -1 +1 @@\n-a\n+b\n'
+            "diff --git a/scripts/old.py b/scripts/renamed.py\nsimilarity index 80%\n"
+            "rename from scripts/old.py\nrename to scripts/renamed.py\n"
+            "--- a/scripts/old.py\n+++ b/scripts/renamed.py\n@@ -2 +2 @@\n-a\n+b\n")
+    hunks = build(files, diff)["areas"][0]["hunks"]
+    assert [(h["file"], h["header"]) for h in hunks] == [
+        ("scripts/new name.py", "@@ -1 +1 @@"), ("scripts/renamed.py", "@@ -2 +2 @@")]
+
+
+def test_pure_rename_and_binary_files_are_hunkless():
+    files = ["scripts/moved.py", "assets/logo.png", "scripts/edit.py"]
+    diff = ("diff --git a/scripts/old.py b/scripts/moved.py\nsimilarity index 100%\n"
+            "rename from scripts/old.py\nrename to scripts/moved.py\n"
+            "diff --git a/assets/logo.png b/assets/logo.png\nBinary files a/assets/logo.png and b/assets/logo.png differ\n"
+            + modify_diff("scripts/edit.py", ["a"], ["b"]))
+    areas = build(files, diff, max_files=8)["areas"]
+    assert sorted(f for a in areas for f in a["hunkless_files"]) == sorted(files[:2])
+    assert [h["file"] for a in areas for h in a["hunks"]] == ["scripts/edit.py"]
+
+
+def test_empty_diff_gives_no_hunks_and_every_file_hunkless():
+    files = ["scripts/a.py", "tests/test_a.py"]
+    area = build(files, "")["areas"][0]
+    assert area["hunks"] == []
+    assert area["hunkless_files"] == files
+
+
+def test_priority_ranks_by_non_test_changed_lines_then_edges_then_id():
+    files = ["a/p.py", "b/q.py", "c/r.py", "d/s.py", "e/t.py"]
+    sizes = {"a/p.py": 3, "b/q.py": 9, "c/r.py": 3, "d/s.py": 3, "e/t.py": 1}
+    diff = "".join("diff --git a/%s b/%s\n--- a/%s\n+++ b/%s\n@@ -0,0 +1,%d @@\n%s" % (
+        f, f, f, f, n, "+x\n" * n) for f, n in sizes.items())
+    areas = build(files, diff, max_files=1)["areas"]
+    assert [(a["id"], a["priority"]) for a in areas] == [
+        ("A1", 2), ("A2", 1), ("A3", 3), ("A4", 4), ("A5", 5)]
+
+
+def test_priority_breaks_ties_by_coupled_edge_count(tmp_path):
+    files = [put(tmp_path, "one/a.py", "pass\n"), put(tmp_path, "two/b.py", "import c\n"),
+             put(tmp_path, "two/c.py", "pass\n")]
+    diff = "".join("diff --git a/%s b/%s\n--- a/%s\n+++ b/%s\n@@ -0,0 +1,2 @@\n+x\n+y\n" % (f, f, f, f)
+                   for f in files)
+    areas = build(files, diff, tmp_path, max_files=2)["areas"]
+    by_files = {tuple(a["files"]): a for a in areas}
+    coupled = next(a for a in areas if len(a["files"]) == 2)
+    alone = next(a for a in areas if len(a["files"]) == 1)
+    assert coupled["coupled_edges"] and not alone["coupled_edges"]
+    assert coupled["priority"] == 1 and alone["priority"] == 2
+    assert len(by_files) == 2
+
+
+def test_priority_ignores_test_file_lines():
+    files = ["a/p.py", "tests/test_x.py"]
+    diff = (modify_diff("a/p.py", ["a"], ["b"]) + "".join(
+        "diff --git a/%s b/%s\n--- a/%s\n+++ b/%s\n@@ -0,0 +1,50 @@\n%s" % (f, f, f, f, "+x\n" * 50)
+        for f in files[1:]))
+    areas = build(files, diff, max_files=1)["areas"]
+    prod = next(a for a in areas if a["files"] == ["a/p.py"])
+    only_tests = next(a for a in areas if a["files"] == ["tests/test_x.py"])
+    assert prod["priority"] == 1 and only_tests["priority"] == 2
+
+
+def test_existing_area_keys_are_unchanged():
+    area = build(["a.py"], "")["areas"][0]
+    assert {"id", "title", "files", "test_files", "coupled_edges", "lines", "questions", "status",
+            "degraded_reason", "hunks", "hunkless_files", "priority"} == set(area)
+
+
+def test_estimate_capacity_fitting_budget():
+    result = area_map_module().estimate_capacity(6, 60, 3)
+    assert result == {"areas": 6, "waves": 2, "estimated_minutes": 16.0, "available_minutes": 48.0,
+                      "fits": True, "fit_count": 6, "finder_minutes": 8.0, "concurrency": 3}
+
+
+def test_estimate_capacity_not_fitting_budget_counts_areas_that_fit():
+    result = area_map_module().estimate_capacity(10, 30, 2, finder_minutes=8.0, elapsed_minutes=4.0)
+    assert result["waves"] == 5 and result["estimated_minutes"] == 40.0
+    assert math.isclose(result["available_minutes"], 20.0)
+    assert result["fits"] is False
+    assert result["fit_count"] == 2 * 2
+
+
+def test_estimate_capacity_fit_count_is_capped_at_area_count_and_floored_at_zero():
+    module = area_map_module()
+    assert module.estimate_capacity(3, 600, 5)["fit_count"] == 3
+    exhausted = module.estimate_capacity(3, 10, 2, elapsed_minutes=9.0)
+    assert exhausted["fit_count"] == 0 and exhausted["fits"] is False
+
+
+def test_estimate_capacity_with_no_areas_fits():
+    result = area_map_module().estimate_capacity(0, 10, 2)
+    assert result["waves"] == 0 and result["estimated_minutes"] == 0 and result["fits"] is True
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"budget_minutes": 0}, {"budget_minutes": -5}, {"budget_minutes": math.nan},
+    {"budget_minutes": math.inf}, {"budget_minutes": True}, {"budget_minutes": "60"},
+    {"concurrency": 0}, {"concurrency": -1}, {"concurrency": 2.5}, {"concurrency": True},
+    {"finder_minutes": 0}, {"finder_minutes": -1.0}, {"finder_minutes": math.nan},
+    {"finder_minutes": False}, {"elapsed_minutes": -1}, {"elapsed_minutes": math.nan},
+    {"elapsed_minutes": math.inf}, {"elapsed_minutes": True},
+])
+def test_estimate_capacity_rejects_invalid_values(kwargs):
+    arguments = {"area_count": 4, "budget_minutes": 60, "concurrency": 2, **kwargs}
+    with pytest.raises(ValueError):
+        area_map_module().estimate_capacity(**arguments)
+
+
+def run_cli(tmp_path, *extra):
+    context = tmp_path / "context.json"
+    context.write_text(json.dumps({"changed_files": ["a.py", "b/c.py"], "diff": ""}))
+    return subprocess.run([sys.executable, str(SCRIPTS / "build_area_map.py"), "--context", str(context),
+                           "--out", str(tmp_path / "map.json"), "--max-files", "1", *extra],
+                          capture_output=True, text=True, check=False)
+
+
+def test_cli_emits_capacity_when_budget_is_given(tmp_path):
+    result = run_cli(tmp_path, "--budget-minutes", "20", "--concurrency", "1", "--elapsed-minutes", "2",
+                     "--finder-minutes", "5")
+    assert result.returncode == 0
+    output = json.loads(result.stdout)
+    assert json.loads((tmp_path / "map.json").read_text()) == output
+    assert output["capacity"] == {"areas": 2, "waves": 2, "estimated_minutes": 10.0,
+                                  "available_minutes": 14.0, "fits": True, "fit_count": 2,
+                                  "finder_minutes": 5.0, "concurrency": 1}
+
+
+def test_cli_capacity_defaults_elapsed_zero_and_finder_eight(tmp_path):
+    output = json.loads(run_cli(tmp_path, "--budget-minutes", "100", "--concurrency", "2").stdout)
+    assert output["capacity"]["finder_minutes"] == 8.0
+    assert output["capacity"]["available_minutes"] == 80.0
+
+
+def test_cli_omits_capacity_without_budget(tmp_path):
+    result = run_cli(tmp_path)
+    assert result.returncode == 0
+    assert "capacity" not in json.loads(result.stdout)
+
+
+@pytest.mark.parametrize("extra", [
+    ["--budget-minutes", "0", "--concurrency", "1"],
+    ["--budget-minutes", "-5", "--concurrency", "1"],
+    ["--budget-minutes", "nan", "--concurrency", "1"],
+    ["--budget-minutes", "60"],
+    ["--budget-minutes", "60", "--concurrency", "0"],
+    ["--budget-minutes", "60", "--concurrency", "1.5"],
+    ["--budget-minutes", "60", "--concurrency", "1", "--elapsed-minutes", "-1"],
+    ["--budget-minutes", "60", "--concurrency", "1", "--finder-minutes", "0"],
+    ["--budget-minutes", "wat", "--concurrency", "1"],
+])
+def test_cli_rejects_invalid_capacity_inputs(tmp_path, extra):
+    result = run_cli(tmp_path, *extra)
+    assert result.returncode == 2
+    assert isinstance(json.loads(result.stdout)["error"], str)

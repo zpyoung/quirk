@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 from pathlib import Path, PurePosixPath
@@ -71,10 +72,36 @@ def _diff_sections(diff_text: str) -> dict[str, tuple[str, int]]:
     return sections
 
 
+def _diff_hunks(diff_text: str) -> dict[str, dict]:
+    """Per-path hunk headers and added-plus-removed line counts, mapped like `_diff_sections`."""
+    found: dict[str, dict] = {}
+    current = None
+    in_hunk = False
+    for line in diff_text.split("\n"):
+        if line.startswith("diff --git "):
+            current = _path_from_diff_git(line)
+            if current is not None:
+                found.setdefault(current, {"headers": [], "changed": 0})
+            in_hunk = False
+        elif line.startswith("+++ ") and not in_hunk:
+            name = _strip_ab(line[4:])
+            if name and name != "/dev/null":
+                current = name
+                found.setdefault(current, {"headers": [], "changed": 0})
+        elif line.startswith("@@"):
+            in_hunk = current is not None
+            if in_hunk:
+                found[current]["headers"].append(line)
+        elif in_hunk and line.startswith(("+", "-")):
+            found[current]["changed"] += 1
+    return found
+
+
 def _contents(changed_files: list[str], source_root: str | None,
               diff_text: str) -> tuple[dict[str, str], dict[str, int]]:
     root = _root(source_root)
     sections = _diff_sections(diff_text)
+    changes = _diff_hunks(diff_text)
     texts, weights = {}, {}
     for name in changed_files:
         path = root / name if root else None
@@ -84,11 +111,12 @@ def _contents(changed_files: list[str], source_root: str | None,
             except OSError as exc:
                 raise ValueError("could not read changed file %s: %s" % (name, exc)) from exc
             texts[name] = text
-            weights[name] = max(1, text.count("\n") + int(bool(text and not text.endswith("\n"))))
+            whole_file = max(1, text.count("\n") + int(bool(text and not text.endswith("\n"))))
         else:
             text, lines = sections.get(name, ("", 0))
             texts[name] = text
-            weights[name] = max(1, lines)
+            whole_file = max(1, lines)
+        weights[name] = max(1, changes[name]["changed"]) if name in changes else whole_file
     return texts, weights
 
 
@@ -230,7 +258,7 @@ def _graph_from_texts(files: list[str], texts: dict[str, str]) -> dict[str, set[
 
 
 def partition_areas(changed_files: list[str], coupling: dict[str, set[str]],
-                    file_lines: dict[str, int], max_lines: int = 1800,
+                    file_lines: dict[str, int], max_lines: int = 600,
                     max_files: int = 8) -> list[dict]:
     """Pack producer/consumer pairs before tests while enforcing both area limits."""
     files = _validate_files(changed_files)
@@ -378,7 +406,7 @@ def _questions(area: dict, risk: dict | None) -> list[str]:
 
 
 def build_area_map(context: dict, source_root: str | None = None, risk: dict | None = None,
-                   max_lines: int = 1800, max_files: int = 8) -> dict:
+                   max_lines: int = 600, max_files: int = 8) -> dict:
     """Return deterministic review areas covering every changed path exactly once."""
     if not isinstance(context, dict):
         raise ValueError("context must be a JSON object")
@@ -393,7 +421,58 @@ def build_area_map(context: dict, source_root: str | None = None, risk: dict | N
     areas = partition_areas(files, graph, weights, max_lines, max_files)
     for area in areas:
         area["questions"] = _questions(area, risk)
+    attach_hunks(areas, diff)
     return {"schema_version": 1, "areas": areas}
+
+
+def attach_hunks(areas: list[dict], diff_text: str) -> None:
+    """Give each area the diff hunks its finder must cover, its hunkless paths, and a hunt priority."""
+    found = _diff_hunks(diff_text)
+
+    def headers(path: str) -> list[str]:
+        return found[path]["headers"] if path in found else []
+
+    for area in areas:
+        paths = list(dict.fromkeys([*area["files"], *area["test_files"]]))
+        listed = [(path, header) for path in paths for header in headers(path)]
+        area["hunks"] = [{"id": "%s.h%d" % (area["id"], number), "file": path, "header": header}
+                         for number, (path, header) in enumerate(listed, 1)]
+        area["hunkless_files"] = [path for path in paths if not headers(path)]
+
+    def hunt_order(area: dict) -> tuple[int, int, int]:
+        production = sum(found[path]["changed"] for path in area["files"]
+                         if path in found and path not in area["test_files"])
+        return (-production, -len(area["coupled_edges"]), int(area["id"][1:]))
+
+    for rank, area in enumerate(sorted(areas, key=hunt_order), 1):
+        area["priority"] = rank
+
+
+def _positive_number(value: object, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+        raise ValueError("%s must be a finite number greater than 0" % name)
+    return value
+
+
+def estimate_capacity(area_count: int, budget_minutes: float, concurrency: int,
+                      finder_minutes: float = 8.0, elapsed_minutes: float = 0.0) -> dict:
+    """State whether finders at `concurrency` can cover `area_count` areas within 80% of the budget."""
+    if isinstance(area_count, bool) or not isinstance(area_count, int) or area_count < 0:
+        raise ValueError("area_count must be a non-negative integer")
+    _positive_number(budget_minutes, "budget_minutes")
+    _positive_number(finder_minutes, "finder_minutes")
+    if isinstance(concurrency, bool) or not isinstance(concurrency, int) or concurrency < 1:
+        raise ValueError("concurrency must be a positive integer")
+    if (isinstance(elapsed_minutes, bool) or not isinstance(elapsed_minutes, (int, float))
+            or not math.isfinite(elapsed_minutes) or elapsed_minutes < 0):
+        raise ValueError("elapsed_minutes must be a finite number of at least 0")
+    waves = math.ceil(area_count / concurrency)
+    estimated = waves * finder_minutes
+    available = 0.8 * budget_minutes - elapsed_minutes
+    fit_count = min(area_count, max(0, math.floor(available / finder_minutes)) * concurrency)
+    return {"areas": area_count, "waves": waves, "estimated_minutes": estimated,
+            "available_minutes": available, "fits": estimated <= available, "fit_count": fit_count,
+            "finder_minutes": finder_minutes, "concurrency": concurrency}
 
 
 class _JsonArgumentParser(argparse.ArgumentParser):
@@ -407,14 +486,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--context", required=True)
     parser.add_argument("--source-root")
     parser.add_argument("--risk")
-    parser.add_argument("--max-lines", type=int, default=1800)
+    parser.add_argument("--max-lines", type=int, default=600)
     parser.add_argument("--max-files", type=int, default=8)
+    parser.add_argument("--budget-minutes", type=float)
+    parser.add_argument("--elapsed-minutes", type=float, default=0.0)
+    parser.add_argument("--concurrency", type=int)
+    parser.add_argument("--finder-minutes", type=float, default=8.0)
     parser.add_argument("--out", required=True)
     try:
         args = parser.parse_args(argv)
         context = load_object(args.context, "context")
         risk = load_object(args.risk, "risk") if args.risk else None
+        if args.budget_minutes is not None and args.concurrency is None:
+            raise ValueError("--concurrency is required with --budget-minutes")
         result = build_area_map(context, args.source_root, risk, args.max_lines, args.max_files)
+        if args.budget_minutes is not None:
+            result["capacity"] = estimate_capacity(
+                len(result["areas"]), args.budget_minutes, args.concurrency,
+                args.finder_minutes, args.elapsed_minutes)
         write_json(args.out, result)
     except (ValueError, OSError) as exc:
         print(json.dumps({"error": str(exc)}))
