@@ -1175,3 +1175,28 @@ def test_plausible_reviewer_finding_is_never_staged_or_counted_as_blocking(slot)
     assert omitted == [{"id": "F1", "file": "a.py", "line": "2", "severity": "Must fix",
                         "reason": "plausible finding (never posted)"}]
     assert warnings == []
+
+
+DELTA_SINCE = {"ref": "abc", "sha": "d" * 40, "merge_commits": 0}
+
+
+def test_context_helper_refuses_a_delta_context():
+    with pytest.raises(m.ReviewError, match=r"delta review \(--since\) is report-only"):
+        m._context(dict(context(), since=DELTA_SINCE))
+    assert m._context(context())["number"] == 42
+
+
+@pytest.mark.parametrize("where", ["context", "report"])
+def test_stage_refuses_a_delta_review_before_any_forge_call(tmp_path, monkeypatch, where):
+    fake = FakeGitLab()
+    monkeypatch.setattr(m, "_api", fake)
+    paths = files(tmp_path)
+    if where == "context":
+        paths["context"].write_text(json.dumps(dict(context(), since=DELTA_SINCE)))
+    else:
+        value = report()
+        value["run"]["since"] = DELTA_SINCE
+        paths["report"].write_text(json.dumps(value))
+    rc, result = invoke(m.stage, stage_args(paths))
+    assert rc == 2 and "delta review (--since) is report-only" in result["error"]
+    assert fake.calls == []

@@ -1519,3 +1519,231 @@ def test_per_file_recovery_failure_cause_is_recorded(monkeypatch):
         [change], {"base": "BASE", "head": "HEAD"}, metadata=metadata)
     assert unavailable == ["big.py"]
     assert metadata["diff_unavailable_cause"] == "git diff of big.py failed: fatal: bad object"
+
+
+def _fix_commit(tmp_path, review, name="fix.txt", merge_side=False):
+    """Push a follow-up commit to origin/feature and fetch it into `review`; return its sha."""
+    seed = Path(tmp_path) / "seed"
+    _repo_git(seed, "checkout", "-q", "feature")
+    if merge_side:
+        _repo_git(seed, "checkout", "-q", "-b", "side", "HEAD~1")
+        (seed / "side.txt").write_text("side\n")
+        _repo_git(seed, "add", ".")
+        _repo_git(seed, "commit", "-qm", "side")
+        _repo_git(seed, "checkout", "-q", "feature")
+        _repo_git(seed, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+    (seed / name).write_text("fix\n")
+    _repo_git(seed, "add", ".")
+    _repo_git(seed, "commit", "-qm", "fix")
+    _repo_git(seed, "push", "-q", "origin", "feature")
+    _repo_git(review, "fetch", "-q", "origin")
+    return _repo_git(seed, "rev-parse", "HEAD")
+
+
+def _run_main(argv, tmp_path):
+    out = Path(tmp_path) / "since_ctx.json"
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        rc = m.main(argv + ["--out", str(out)])
+    return rc, out, stdout.getvalue(), stderr.getvalue()
+
+
+def _branch_args(review, *extra):
+    return ["--forge", "none", "--branch", "feature", "--target-branch", "main",
+            "--cwd", str(review), *extra]
+
+
+def test_branch_since_reviews_only_later_commits_and_keeps_full_refs(tmp_path):
+    review, base, target, first_head = _branch_repo(tmp_path)
+    new_head = _fix_commit(tmp_path, review)
+    rc, full_out, _, _ = _run_main(_branch_args(review), tmp_path)
+    assert rc == 0
+    full = json.loads(full_out.read_text())
+    rc, out, stdout, stderr = _run_main(_branch_args(review, "--since", first_head), tmp_path)
+    assert rc == 0 and stderr == ""
+    ctx = json.loads(out.read_text())
+    assert full["changed_files"] == ["feature.txt", "fix.txt"]
+    assert ctx["changed_files"] == ["fix.txt"]
+    assert "fix.txt" in ctx["diff"] and "feature.txt" not in ctx["diff"]
+    assert ctx["refs"] == full["refs"] and ctx["refs"]["head"] == new_head
+    assert ctx["since"] == {"ref": first_head, "sha": first_head, "merge_commits": 0}
+    assert json.loads(stdout)["since"] == ctx["since"]
+    assert ctx["size"]["files"] == 1
+
+
+def test_branch_since_resolves_symbolic_refs_and_records_the_ref_as_given(tmp_path):
+    review, base, target, first_head = _branch_repo(tmp_path)
+    _fix_commit(tmp_path, review)
+    rc, out, _, _ = _run_main(_branch_args(review, "--since", "origin/feature~1"), tmp_path)
+    assert rc == 0
+    since = json.loads(out.read_text())["since"]
+    assert since["ref"] == "origin/feature~1" and since["sha"] == first_head
+
+
+def test_no_since_key_without_the_flag(tmp_path):
+    review, *_ = _branch_repo(tmp_path)
+    rc, out, stdout, _ = _run_main(_branch_args(review), tmp_path)
+    assert rc == 0
+    assert "since" not in json.loads(out.read_text())
+    assert "since" not in json.loads(stdout)
+
+
+def _since_error(rc, out, stderr):
+    assert rc == 1 and not out.exists()
+    return json.loads(stderr)["error"]["message"]
+
+
+def test_branch_since_unknown_ref_fails_naming_the_ref(tmp_path):
+    review, *_ = _branch_repo(tmp_path)
+    rc, out, _, stderr = _run_main(_branch_args(review, "--since", "no-such-ref"), tmp_path)
+    assert "no-such-ref" in _since_error(rc, out, stderr)
+
+
+def test_branch_since_not_an_ancestor_of_head_fails(tmp_path):
+    review, base, target, head = _branch_repo(tmp_path)
+    _repo_git(review, "checkout", "-q", "-b", "side", base)
+    (review / "side.txt").write_text("side\n")
+    _repo_git(review, "add", ".")
+    _repo_git(review, "commit", "-qm", "side")
+    side = _repo_git(review, "rev-parse", "HEAD")
+    rc, out, _, stderr = _run_main(_branch_args(review, "--since", side), tmp_path)
+    message = _since_error(rc, out, stderr)
+    assert "not an ancestor" in message and "run without --since for a full review" in message
+
+
+def test_branch_since_older_than_the_merge_base_fails(tmp_path):
+    review, base, target, head = _branch_repo(tmp_path)
+    rc, out, _, stderr = _run_main(_branch_args(review, "--since", base), tmp_path)
+    message = _since_error(rc, out, stderr)
+    assert "merge base" in message and "run without --since for a full review" in message
+
+
+def test_branch_since_equal_to_head_fails(tmp_path):
+    review, base, target, head = _branch_repo(tmp_path)
+    rc, out, _, stderr = _run_main(_branch_args(review, "--since", head), tmp_path)
+    message = _since_error(rc, out, stderr)
+    assert "nothing to review" in message and "run without --since for a full review" in message
+
+
+def test_branch_since_warns_and_counts_merge_commits_in_range(tmp_path):
+    review, base, target, first_head = _branch_repo(tmp_path)
+    _fix_commit(tmp_path, review, merge_side=True)
+    rc, out, _, stderr = _run_main(_branch_args(review, "--since", first_head), tmp_path)
+    assert rc == 0
+    assert json.loads(out.read_text())["since"]["merge_commits"] == 1
+    warnings = [line for line in stderr.splitlines() if line.strip()]
+    assert len(warnings) == 1 and "1 merge commit" in warnings[0]
+
+
+def _local_since_repo(repo):
+    first = _repo_git(repo, "rev-parse", "HEAD")
+    (repo / "committed.py").write_text("committed\n")
+    _repo_git(repo, "add", ".")
+    _repo_git(repo, "commit", "-qm", "committed")
+    return first
+
+
+def test_local_since_covers_committed_working_tree_and_untracked_changes(repo, tmp_path):
+    since = _local_since_repo(repo)
+    head = _repo_git(repo, "rev-parse", "HEAD")
+    (repo / "base.py").write_text("base\nunstaged\n")
+    (repo / "staged.py").write_text("staged\n")
+    _repo_git(repo, "add", "staged.py")
+    (repo / "untracked.py").write_text("untracked\n")
+    rc, out, stdout, _ = _run_main(["--local", "--cwd", str(repo), "--since", since], tmp_path)
+    assert rc == 0
+    ctx = json.loads(out.read_text())
+    assert sorted(ctx["changed_files"]) == ["base.py", "committed.py", "staged.py", "untracked.py"]
+    assert ctx["untracked_files"] == ["untracked.py"]
+    assert ctx["refs"] == {"base": head, "start": head, "head": head}
+    assert ctx["since"] == {"ref": since, "sha": since, "merge_commits": 0}
+    assert json.loads(stdout)["since"] == ctx["since"]
+
+
+def test_local_since_at_head_reviews_the_dirty_tree(repo, tmp_path):
+    head = _repo_git(repo, "rev-parse", "HEAD")
+    (repo / "base.py").write_text("base\nedit\n")
+    rc, out, _, _ = _run_main(["--local", "--cwd", str(repo), "--since", head], tmp_path)
+    assert rc == 0
+    assert json.loads(out.read_text())["changed_files"] == ["base.py"]
+
+
+def test_local_since_at_head_with_a_clean_tree_fails(repo, tmp_path):
+    head = _repo_git(repo, "rev-parse", "HEAD")
+    rc, out, _, stderr = _run_main(["--local", "--cwd", str(repo), "--since", head], tmp_path)
+    message = _since_error(rc, out, stderr)
+    assert "nothing to review" in message and "run without --since for a full review" in message
+
+
+def test_local_since_not_an_ancestor_of_head_fails(repo, tmp_path):
+    _repo_git(repo, "checkout", "-q", "-b", "other")
+    (repo / "other.py").write_text("other\n")
+    _repo_git(repo, "add", ".")
+    _repo_git(repo, "commit", "-qm", "other")
+    other = _repo_git(repo, "rev-parse", "HEAD")
+    _repo_git(repo, "checkout", "-q", "-")
+    rc, out, _, stderr = _run_main(["--local", "--cwd", str(repo), "--since", other], tmp_path)
+    assert "not an ancestor" in _since_error(rc, out, stderr)
+
+
+def test_git_diff_local_since_uses_one_diff_against_the_commit(repo):
+    since = _local_since_repo(repo)
+    (repo / "base.py").write_text("base\nmore\n")
+    metadata = {}
+    diff = m.git_diff_local(3, str(repo), metadata, since=since)
+    assert m.changed_files_from_diff(diff) == ["base.py", "committed.py"]
+    assert metadata["changed_files"] == ["base.py", "committed.py"]
+
+
+def test_change_since_substitutes_the_delta_after_the_identity_check(seat_gate, monkeypatch):
+    since_sha = "9" * 40
+    delta = ("diff --git a/fix.py b/fix.py\nnew file mode 100644\n--- /dev/null\n+++ b/fix.py\n"
+             "@@ -0,0 +1 @@\n+fix\n")
+    real_run = m._run
+    calls = []
+
+    def fake_run(cmd, timeout=90):
+        tail = cmd[3:]
+        if tail[:2] == ["rev-parse", "--verify"]:
+            return SimpleNamespace(returncode=0, stdout=since_sha + "\n", stderr="")
+        if tail[:2] == ["merge-base", "--is-ancestor"]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if tail[:2] == ["rev-list", "--merges"]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return real_run(cmd, timeout)
+
+    def fake_range(base, head, cwd=".", context_lines=None, metadata=None):
+        calls.append((base, head, context_lines))
+        return delta
+
+    monkeypatch.setattr(m, "_run", fake_run)
+    monkeypatch.setattr(m, "_git_diff_range", fake_range)
+    monkeypatch.setattr(m, "_git_changed_files_range",
+                        lambda base, head, cwd=".", metadata=None: ["fix.py"])
+    rc, out, _, _ = seat_gate(
+        selector=("--change", "42", "--since", "feature~1"),
+        metadata={"changed_files": ["foo.py", "bar/baz.txt"], "diff_unavailable": ["gone.py"],
+                  "diff_unavailable_cause": "boom", "not_text_reviewable": ["img.png"],
+                  "unanchorable_files": ["big.json"], "file_list_recovery": {"recovered_from": "git"}})
+    assert rc == 0
+    ctx = json.loads(out.read_text())
+    assert calls == [(since_sha, GOOD_REFS["head"], 3)]
+    assert ctx["refs"] == GOOD_REFS
+    assert ctx["diff"] == delta and ctx["changed_files"] == ["fix.py"]
+    assert ctx["since"] == {"ref": "feature~1", "sha": since_sha, "merge_commits": 0}
+    assert ctx["diff_unavailable"] == [] and ctx["diff_unavailable_cause"] is None
+    assert ctx["not_text_reviewable"] == [] and ctx["unanchorable_files"] == []
+    assert ctx["file_list_recovery"] is None
+    assert ctx["size"]["files"] == 1
+
+
+def test_change_since_is_not_resolved_when_the_identity_check_fails(seat_gate, monkeypatch):
+    def fail_run(cmd, timeout=90):
+        raise AssertionError("since must not be resolved before the identity check passes")
+
+    real_run = m._run
+    monkeypatch.setattr(m, "_run", lambda cmd, timeout=90: (
+        fail_run(cmd) if cmd[3:5] == ["rev-parse", "--verify"] else real_run(cmd, timeout)))
+    rc, out, error, _ = seat_gate(details={**GOOD_DETAILS, "sha": "d" * 40},
+                                  selector=("--change", "42", "--since", "x"))
+    assert rc == 1 and "head moved" in error["error"]["message"]

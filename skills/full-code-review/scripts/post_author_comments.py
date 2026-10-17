@@ -73,6 +73,16 @@ def _same(left, right):
     return left is not None and str(left) == str(right)
 
 
+DELTA_REFUSAL = "delta review (--since) is report-only; it cannot be posted to the forge"
+
+
+def _refuse_delta(report, context):
+    """Raise ValueError when the context or the report's run belongs to a delta review."""
+    run = report.get("run") if isinstance(report, dict) else None
+    if "since" in context or (isinstance(run, dict) and "since" in run):
+        raise ValueError(DELTA_REFUSAL)
+
+
 def _check_binding(meta, change, refs, source_branch=None):
     """Require the report to describe the change the context will write to.
 
@@ -122,11 +132,13 @@ def post(report, context, bodies, ids, out, overview=False, forge=None):
     Receipts already in `out` are kept and their ids are not posted again. Every id is
     validated before the first create (it must name a finding of the report, with a numeric
     line), `bodies` must have been built from this exact report, and the report must be for
-    the context's change (and head, when the report names one). The change must still be open
+    the context's change (and head, when the report names one). A delta-review (`since`)
+    context or report is refused. The change must still be open
     at the context's head; a closed change raises the forge's ForgeError. Raises ValueError for
     any of those or a context with no forge, and PostFailed (a ForgeError) on a failed create or
     when a created comment's receipt cannot be written.
     """
+    _refuse_delta(report, context)
     prepared, _ = render_report._prepare_report(report)
     findings = {f["id"]: f for f in prepared["findings"]}
     change = context.get("change") or {}

@@ -449,3 +449,25 @@ def test_a_closed_change_aborts_before_any_create(tmp_path):
         m.post(two_finding_report(), context("gitlab"), signed(TWO, two_finding_report()), ["F1"],
                str(tmp_path / "r.json"), forge=forge)
     assert forge.posted == []
+
+
+@pytest.mark.parametrize("where", ["context", "report"])
+def test_delta_review_is_refused_before_anything_posts(tmp_path, where):
+    since = {"ref": "abc", "sha": "d" * 40, "merge_commits": 0}
+    ctx, value = context(), report()
+    if where == "context":
+        ctx["since"] = since
+    else:
+        value["run"] = {"since": since}
+    fake = FakeGitHub()
+    with pytest.raises(ValueError, match=r"delta review \(--since\) is report-only"):
+        m.post(value, ctx, signed(BODIES, value), ["F1"], str(tmp_path / "r.json"),
+               forge=GitHubForge("github.com", "o/r", api_call=fake))
+    assert fake.calls == []
+
+
+def test_cli_exits_2_for_a_delta_context(tmp_path, capsys):
+    paths = write_inputs(tmp_path, dict(context("gitlab"), since={"ref": "abc", "sha": "d" * 40,
+                                                                  "merge_commits": 0}))
+    assert m.main(cli_args(paths)) == 2
+    assert "delta review (--since) is report-only" in json.loads(capsys.readouterr().out)["error"]
