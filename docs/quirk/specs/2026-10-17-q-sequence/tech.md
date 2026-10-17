@@ -127,6 +127,7 @@ Failures go through `report_fail` at the `<q-sequence>` start line; the element 
 | `steps` not a non-empty list, or no message anywhere | `<q-sequence> needs at least one message` |
 | a malformed step | `<q-sequence> step must be one message, note, end or fragment` |
 | a message without `from`, `to` or a non-empty `label` | `<q-sequence> message N needs from, to and a label` |
+| a message `id` present and not a non-empty string | `<q-sequence> message N id must be a non-empty string` |
 | `from` or `to` not a participant | `<q-sequence> message N names unknown participant "<id>"` |
 | `type` not call, reply or async | `<q-sequence> message N has unknown type "<type>"; use call, reply or async` |
 | `create` present and not `true` | `<q-sequence> message N create must be true` |
@@ -139,6 +140,7 @@ Failures go through `report_fail` at the `<q-sequence>` start line; the element 
 | a note over an unknown id | `<q-sequence> note names unknown participant "<id>"` |
 | an end naming an unknown id | `<q-sequence> end names unknown participant "<id>"` |
 | a fragment type outside the four | `<q-sequence> unknown fragment type "<type>"; use alt, opt, loop or par` |
+| a fragment `label` present and not a non-empty string | `<q-sequence> <type> label must be a non-empty string` |
 | `alt`/`par` with `branches` missing or fewer than 2 | `<q-sequence> alt needs at least 2 branches` (`par` likewise) |
 | a branch without a non-empty `label` | `<q-sequence> each alt branch needs a label` (`par` likewise) |
 | `opt`/`loop` with `steps` missing or empty, or a branch with no steps | `<q-sequence> fragment "<label or type>" has no steps` |
@@ -161,6 +163,7 @@ Warnings go through `report_warn` and never affect `passed`:
 | trace value over 40 lines, note over 120 characters, trace over 30 steps | the shared helper's warnings with the `<q-sequence>` prefix |
 
 - Checks that need a known participant or message run only when it is known.
+- Any nesting depth the validator accepts must also render in both runtimes' text lists; neither renderer may overflow a recursion limit on a sequence the check passed.
 - The JS element applies every failure that JSON can carry and returns `null` on any (the fail-hard notice). JS emits no warnings.
 - Invariant: every q-flow message, its order and its line are unchanged.
 
@@ -188,6 +191,7 @@ details.q-sequence-list[data-q-kit][data-q-sequence-list] > summary "Diagram as 
 
 - In a trace step's entry `K` is the trace step, so the text is `"<K>. message <N>, <from label> → <to label>, <label>"`, then `": <note>"` when present, then the code block, as in SC-18's `4. message 5, Stripe → Billing, card declined`.
 
+- The injector skips an element only when it already has a direct-child list or stage element (`details[data-q-sequence-list]` or `[data-q-sequence-stage]`), never because the attribute name appears in its JSON or text.
 - The no-JS fallback is `div.q-sequence-stage[data-q-kit][data-q-sequence-stage] > p.q-sequence-notice[data-q-sequence-notice]` "JavaScript is off, so the diagram is shown as a list below." followed by the list with `open`.
 - Python writes no whitespace between tags and escapes with `html_lib.escape` (`quote=True` in attributes). JS uses `textContent`; the detail goes through `sanitizeFlowDetail`.
 - The two allowed differences are spec 2's (integral floats, integer-like key order).
