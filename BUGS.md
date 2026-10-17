@@ -128,3 +128,9 @@ entries' IDs; manual edits to fix typos are fine.
 - **Description**: The harness waitForFunction (rAF polling) for data-q-flow-ready times out at 10s and also at 30s, though the page is ready ~120ms after load when the same harness.mjs runs directly from zsh or perl (<1s total). Any Python parent (rye 3.11, homebrew, /usr/bin) reproduces it, including os.system; close_fds, start_new_session, stdin DEVNULL and the shell's __CF_USER_TEXT_ENCODING made no difference. Interval polling and Chrome's --disable-renderer-backgrounding/--disable-background-timer-throttling/--disable-backgrounding-occluded-windows flags also made no difference: the page itself takes 10-25s to become ready. Verified: relaying the harness call through a node server started from zsh (so Chrome has no Python ancestor) makes the same pytest tests pass in about 3s, so the cause is the Python ancestry, not CPU load. Affects the q-flow tests in tests/test_html_kit_elements.py (runner _run_harness at :91), e.g. test_flow_renders_at_rest_with_controls_closed_list_and_sync_async_edges and test_flow_pulse_travels_at_one_speed_and_streams_before_the_last_one_lands, on zpyoung/q-flow-shapes at efa903b, unmodified. Blocks local browser verification; CI unknown.
 - **Severity**: medium
 
+## BUG-15: Verify's connected-navigation timeout test reports network passed under the local relay
+- **Observed**: 2026-10-17
+- **File**: tests/test_html_verify.py:300
+- **Description**: test_connected_navigation_timeout_is_a_network_failure_with_a_report fails locally: verify reports network passed=True where the test expects a navigation-timeout network failure. Reproduces at a36dcfc (before the q-flow traces work) when run through the BUG-14 node relay shim, so the traces branch did not cause it. The relay or the local network may change how the connected-navigation timeout surfaces. Found 2026-10-17 during the q-flow traces wave-1 gate.
+- **Severity**: low
+
