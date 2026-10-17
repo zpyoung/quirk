@@ -198,6 +198,12 @@ def _validate_inputs(report: dict, answer_key: dict, spot_check: dict | None,
             area_ids.add(identifier)
             if "status" in area:
                 _text(area["status"], "report.run.deep area status")
+            if "hunks" in area:
+                for hunk in _require_list(area["hunks"], "report.run.deep area hunks"):
+                    _text(_require_object(hunk, "report.run.deep area hunk").get("id"),
+                          "report.run.deep area hunk id")
+            if "examined" in area:
+                _string_list(area["examined"], "report.run.deep area examined")
     elapsed = deep.get("elapsed_minutes")
     if elapsed is not None:
         _finite_number(elapsed, "report.run.deep.elapsed_minutes")
@@ -224,6 +230,14 @@ def match_defect(defect: dict, findings: list[dict]) -> dict | None:
                 continue
         return finding
     return None
+
+
+def _has_unexamined_hunks(area: dict) -> bool:
+    """True when an area lists hunks its finder did not record as examined."""
+    if "hunks" not in area:
+        return False
+    examined = set(area.get("examined", []))
+    return any(hunk["id"] not in examined for hunk in area["hunks"])
 
 
 def score_report(report: dict, answer_key: dict, spot_check: dict | None = None,
@@ -265,7 +279,8 @@ def score_report(report: dict, answer_key: dict, spot_check: dict | None = None,
                 and not run.get("dimensions_failed") and not deep.get("unreached_areas")
                 and not deep.get("checker_failures")
                 and bool(areas)
-                and all(area.get("status") in _COMPLETED_AREAS for area in areas))
+                and all(area.get("status") in _COMPLETED_AREAS and not _has_unexamined_hunks(area)
+                        for area in areas))
     evidence_errors = []
     if not target_matches:
         evidence_errors.append("target_missing_or_mismatched")

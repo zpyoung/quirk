@@ -1958,10 +1958,15 @@ html:not(.js) .dnote, html:not(.js) .dreply { display: none; }
         "1. Work in the target below. Use the repo checkout if one is listed, otherwise check out the branch or change request. " +
         "If HEAD differs from the head SHA, locate each finding by the code it describes instead of trusting line numbers.",
         "2. Apply every finding marked " + dispLabel("fix") + ", then verify with the repo's tests and linters. " +
-        "Confirm a finding marked Plausible against the code before applying its fix, and skip it if it does not hold.",
+        "Confirm a finding marked Plausible against the code before applying its fix, and skip it if it does not hold. " +
+        "For each fix you apply, add or name a test that fails without the fix: revert the fix, run the test and see it fail, then restore the fix. " +
+        "Run the tests on every runtime version the repo's CI covers.",
         "3. List the " + dispLabel("later") + " findings back as follow-ups and ask the user about each " + dispLabel("detail") +
         " finding. Leave " + dispLabel("ignore") + " and Undecided findings alone unless the user asks.",
-        "4. Don't post, reply to, or resolve anything on " + forgeName() + " from this handoff.", "",
+        "4. Don't post, reply to, or resolve anything on " + forgeName() + " from this handoff.",
+        "5. After committing the fixes, re-run the review with `--since` followed by " +
+        (handoff.head_sha ? "`" + defang(handoff.head_sha) + "`" : "the head SHA listed under Target") +
+        ", so only the fix commits are reviewed.", "",
         "### Target", ""];
       function row(label, value) { if (value !== undefined && value !== null && value !== "") lines.push("- " + label + ": " + defang(value)); }
       row("Review", (handoff.title || "") + " (" + handoff.label + ", " + handoff.seat + " seat)");

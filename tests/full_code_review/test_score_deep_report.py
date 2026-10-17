@@ -343,6 +343,51 @@ def test_read_only_degraded_area_counts_as_complete():
     assert score["complete_deep_run"] is score["passed"] is True
 
 
+def _hunk_area(examined, hunk_ids=("A1.h1", "A1.h2")):
+    area = {"id": "A1", "status": "completed",
+            "hunks": [{"id": hunk_id, "file": "a.py", "header": "@@"} for hunk_id in hunk_ids]}
+    if examined is not None:
+        area["examined"] = examined
+    return area
+
+
+@pytest.mark.parametrize("examined", [["A1.h1"], [], None])
+def test_area_with_unexamined_hunks_is_not_a_complete_deep_run(examined):
+    report = _report()
+    report["run"]["deep"]["areas"] = [_hunk_area(examined)]
+    score = scorer.score_report(report, _key(_defect()), {"F1": "confirmed"})
+    assert score["recall"] == 1.0
+    assert score["complete_deep_run"] is score["passed"] is False
+    assert "deep_run_disabled_incomplete_or_unproven" in score["evidence_errors"]
+
+
+def test_fully_examined_hunks_still_count_as_complete():
+    report = _report()
+    report["run"]["deep"]["areas"] = [_hunk_area(["A1.h2", "A1.h1"])]
+    score = scorer.score_report(report, _key(_defect()), {"F1": "confirmed"})
+    assert score["complete_deep_run"] is score["passed"] is True
+
+
+def test_reports_without_hunks_keep_passing():
+    report = _report()
+    assert "hunks" not in report["run"]["deep"]["areas"][0]
+    assert scorer.score_report(report, _key(_defect()), {"F1": "confirmed"})["passed"] is True
+
+
+@pytest.mark.parametrize("area", [
+    {"id": "A1", "status": "completed", "hunks": "A1.h1"},
+    {"id": "A1", "status": "completed", "hunks": ["A1.h1"]},
+    {"id": "A1", "status": "completed", "hunks": [{"id": 1}]},
+    {"id": "A1", "status": "completed", "hunks": [], "examined": "A1.h1"},
+    {"id": "A1", "status": "completed", "hunks": [], "examined": [1]},
+])
+def test_malformed_hunk_evidence_is_rejected(area):
+    report = _report()
+    report["run"]["deep"]["areas"] = [area]
+    with pytest.raises(ValueError):
+        scorer.score_report(report, _key(_defect()), {"F1": "confirmed"})
+
+
 def test_absent_completeness_flag_cannot_pass():
     report = _report()
     del report["run"]["incomplete"]
