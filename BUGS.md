@@ -122,3 +122,9 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: medium
 - **Proposed fix**: Style the kit's own inserted controls and the q-code pre in kit.css instead of inheriting from the host stylesheet; add a tier-2 verify screenshot of a non-first route so this is caught.
 
+## BUG-14: q-flow browser tests time out when Chrome is launched from a Python parent
+- **Observed**: 2026-10-17
+- **File**: tests/fixtures/html-kit/harness.mjs:156
+- **Description**: The harness waitForFunction (rAF polling) for data-q-flow-ready times out at 10s and also at 30s, though the page is ready ~120ms after load when the same harness.mjs runs directly from zsh or perl (<1s total). Any Python parent (rye 3.11, homebrew, /usr/bin) reproduces it, including os.system; close_fds, start_new_session, stdin DEVNULL and the shell's __CF_USER_TEXT_ENCODING made no difference. Unverified lead: rAF never fires in Chrome launched under a Python parent, since the flows reach ready while rAF polling never resolves. Affects the q-flow tests in tests/test_html_kit_elements.py (runner _run_harness at :91), e.g. test_flow_renders_at_rest_with_controls_closed_list_and_sync_async_edges and test_flow_pulse_travels_at_one_speed_and_streams_before_the_last_one_lands, on zpyoung/q-flow-shapes at efa903b, unmodified. Blocks local browser verification; CI unknown.
+- **Severity**: medium
+
