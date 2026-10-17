@@ -2655,6 +2655,15 @@ def test_sequence_without_a_json_child_or_with_bad_json_fails() -> None:
     assert messages(other) == [needs_json]
 
 
+def test_sequence_non_json_constants_fail_like_the_browser_parse() -> None:
+    needs_json = '<q-sequence> needs a <script type="application/json"> child holding a JSON object'
+    base = json.dumps(checkout())[:-1]
+    for constant in ("NaN", "Infinity", "-Infinity"):
+        body = f'{base}, "extra": {constant}}}'
+        page = f'<q-sequence summary="s"><script type="application/json">{body}</script></q-sequence>'
+        assert messages(page) == [needs_json], constant
+
+
 def test_sequence_unparseable_json_naming_forbidden_markup_reports_the_detail_rule() -> None:
     page = '<q-sequence summary="s"><script type="application/json">{"detail": "<script>x</script>" oops</script></q-sequence>'
     assert messages(page) == ["<q-sequence> detail may hold only paragraphs, lists, code and links"]

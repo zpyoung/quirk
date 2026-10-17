@@ -1190,11 +1190,22 @@ def _flow_has_unwritable_text(data: dict[str, Any]) -> bool:
     return False
 
 
-def _json_child(node: _Node, tag: str, report_fail: Report) -> Optional[dict[str, Any]]:
+def _reject_json_constant(name: str) -> Any:
+    raise ValueError(f"{name} is not JSON")
+
+
+def _json_child(
+    node: _Node,
+    tag: str,
+    report_fail: Report,
+    *,
+    strict_constants: bool = False,
+) -> Optional[dict[str, Any]]:
     """Parse the ``<script type="application/json">`` child of ``node`` into its JSON object.
 
     Returns ``None`` when there is no script at all (the catalog's ``requires`` reports that) or after
-    reporting one failure naming ``<tag>``.
+    reporting one failure naming ``<tag>``. With ``strict_constants``, ``NaN`` and ``Infinity`` fail
+    the parse the way the browser's ``JSON.parse`` does.
     """
     scripts = [c for c in node.children if c.tag == "script"]
     if not scripts:
@@ -1209,7 +1220,7 @@ def _json_child(node: _Node, tag: str, report_fail: Report) -> Optional[dict[str
         return None
     raw_json = _text(json_script)
     try:
-        data = json.loads(raw_json)
+        data = json.loads(raw_json, parse_constant=_reject_json_constant if strict_constants else None)
     except (ValueError, RecursionError):
         if _FLOW_FORBIDDEN_RAW.search(raw_json):
             report_fail(node.line, f"<{tag}> detail may hold only paragraphs, lists, code and links")
@@ -1641,7 +1652,7 @@ def _validate_sequence_node(
     Failures go through ``report_fail`` and warnings through ``report_warn``, all at the element's line.
     Messages are numbered in drawn order, the same numbering the browser element uses.
     """
-    data = _json_child(node, "q-sequence", report_fail)
+    data = _json_child(node, "q-sequence", report_fail, strict_constants=True)
     if data is None:
         return None
     line = node.line

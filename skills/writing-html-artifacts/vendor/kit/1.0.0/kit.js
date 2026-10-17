@@ -8627,6 +8627,7 @@
   var SEQ_TOP = 12;
   var SEQ_HEAD_PAD = 20;
   var SEQ_NOTE_PAD = 14;
+  var SEQ_FRAGMENT_INSET = 8;
 
   function seqText(value) {
     return typeof value === 'string' && !isBlankFlowId(value);
@@ -9043,7 +9044,7 @@
       }
     }
 
-    function collect(steps) {
+    function collect(steps, enclosing) {
       var lo = count;
       var hi = -1;
       var depth = 0;
@@ -9063,9 +9064,9 @@
           if (m.self) {
             var room = SEQ_SELF_WIDTH + 8 + labelW;
             if (a + 1 < count) {
-              need(a, a + 1, room + 20);
+              need(a, a + 1, room + 20 + SEQ_FRAGMENT_INSET * enclosing);
             } else {
-              rightExtent[a] = Math.max(rightExtent[a], room + 8);
+              rightExtent[a] = Math.max(rightExtent[a], room + 8 + SEQ_FRAGMENT_INSET * enclosing);
             }
           } else {
             need(a, b, labelW + 40 + (m.create ? headW / 2 : 0));
@@ -9078,11 +9079,14 @@
           var nhi = Math.max.apply(null, idx);
           info.set(step, { lines: noteLines, textW: textW, lo: nlo, hi: nhi });
           span(nlo, nhi);
+          var noteInset = SEQ_FRAGMENT_INSET * enclosing;
           if (nlo < nhi) {
             need(nlo, nhi, textW + 16 - 2 * SEQ_NOTE_PAD);
+            leftExtent[nlo] = Math.max(leftExtent[nlo], SEQ_NOTE_PAD + noteInset);
+            rightExtent[nhi] = Math.max(rightExtent[nhi], SEQ_NOTE_PAD + noteInset);
           } else {
-            leftExtent[nlo] = Math.max(leftExtent[nlo], (textW + 16) / 2);
-            rightExtent[nlo] = Math.max(rightExtent[nlo], (textW + 16) / 2);
+            leftExtent[nlo] = Math.max(leftExtent[nlo], (textW + 16) / 2 + noteInset);
+            rightExtent[nlo] = Math.max(rightExtent[nlo], (textW + 16) / 2 + noteInset);
           }
         } else if (step.kind === 'end') {
           var e = data.partMap[step.id].index;
@@ -9090,7 +9094,7 @@
         } else {
           var inner = { lo: count, hi: -1, depth: 0 };
           step.branches.forEach(function (branch) {
-            var r = collect(branch.steps);
+            var r = collect(branch.steps, enclosing + 1);
             inner.lo = Math.min(inner.lo, r.lo);
             inner.hi = Math.max(inner.hi, r.hi);
             inner.depth = Math.max(inner.depth, r.depth);
@@ -9121,7 +9125,7 @@
       });
       return { lo: lo, hi: hi, depth: depth };
     }
-    collect(data.steps);
+    collect(data.steps, 0);
 
     var gaps = [];
     for (var gi = 0; gi + 1 < count; gi += 1) {
@@ -9166,6 +9170,8 @@
       return row;
     }
 
+    var openFragments = [];
+
     function place(steps, entry) {
       var state = entry;
       steps.forEach(function (step) {
@@ -9200,7 +9206,12 @@
             }
             arrowY = y + arrowOff;
           }
-          addRow('message', height, state, after, { message: m, arrowY: arrowY, lines: meta.lines, labelW: meta.labelW });
+          var messageRow = addRow('message', height, state, after, { message: m, arrowY: arrowY, lines: meta.lines, labelW: meta.labelW });
+          if (m.self) {
+            openFragments.forEach(function (open) {
+              open.selfRows.push(messageRow);
+            });
+          }
           if (m.create) {
             created[m.to] = { y: arrowY, row: rows.length - 1 };
           }
@@ -9209,6 +9220,12 @@
           var nmeta = info.get(step);
           var boxH = SEQ_LINE * nmeta.lines.length + 12;
           addRow('note', boxH + 12, state, state, { note: step, lines: nmeta.lines, textW: nmeta.textW, lo: nmeta.lo, hi: nmeta.hi, boxH: boxH });
+          var noteLeft = nmeta.lo === nmeta.hi ? cx[nmeta.lo] - (nmeta.textW + 16) / 2 : cx[nmeta.lo] - SEQ_NOTE_PAD;
+          var noteRight = nmeta.lo === nmeta.hi ? cx[nmeta.lo] + (nmeta.textW + 16) / 2 : cx[nmeta.hi] + SEQ_NOTE_PAD;
+          openFragments.forEach(function (open) {
+            open.itemLeft = Math.min(open.itemLeft, noteLeft);
+            open.itemRight = Math.max(open.itemRight, noteRight);
+          });
         } else if (step.kind === 'end') {
           var kept = state.filter(function (c) { return c.callee !== step.id; });
           var endRow = addRow('end', 34, state, kept, { end: step, arrowY: y + 17 });
@@ -9217,8 +9234,12 @@
           state = kept;
         } else {
           var meta2 = info.get(step);
-          var frag = { node: step, lo: meta2.lo, hi: meta2.hi, level: meta2.level, margin: meta2.margin, tabW: meta2.tabW, needW: meta2.needW, dividers: [] };
+          var frag = { node: step, lo: meta2.lo, hi: meta2.hi, level: meta2.level, margin: meta2.margin, tabW: meta2.tabW, needW: meta2.needW, dividers: [], selfRows: [], itemLeft: Infinity, itemRight: -Infinity, children: [] };
+          if (openFragments.length) {
+            openFragments[openFragments.length - 1].children.push(frag);
+          }
           fragments.push(frag);
+          openFragments.push(frag);
           var tabRow = addRow('tab', 30, state, state, { fragment: frag });
           frag.top = tabRow.y + 6;
           var afters = [];
@@ -9235,6 +9256,7 @@
           });
           var closeRow = addRow('close', 10, afters[afters.length - 1], result, { fragment: frag });
           frag.bottom = closeRow.y + 4;
+          openFragments.pop();
           state = result;
         }
       });
@@ -9273,6 +9295,33 @@
       row.x1 = row.dir > 0 ? right(m.from, a) : left(m.from, a);
       row.x2 = m.create ? cx[b] - row.dir * headW / 2 : (row.dir > 0 ? left(m.to, b) : right(m.to, b));
     });
+
+    rows.forEach(function (row) {
+      if (row.kind === 'message' && row.message.self) {
+        row.selfLeft = row.x1 - 6;
+        row.selfRight = row.x1 + SEQ_SELF_WIDTH + 8 + row.labelW + 8;
+      }
+    });
+    for (var fi = fragments.length - 1; fi >= 0; fi -= 1) {
+      var fr = fragments[fi];
+      var boxLeft = cx[fr.lo] - fr.margin;
+      var boxRight = cx[fr.hi] + fr.margin;
+      var itemLeft = fr.itemLeft;
+      var itemRight = fr.itemRight;
+      fr.selfRows.forEach(function (row) {
+        itemLeft = Math.min(itemLeft, row.selfLeft);
+        itemRight = Math.max(itemRight, row.selfRight);
+      });
+      boxLeft = Math.min(boxLeft, itemLeft - SEQ_FRAGMENT_INSET);
+      boxRight = Math.max(boxRight, itemRight + SEQ_FRAGMENT_INSET);
+      fr.children.forEach(function (child) {
+        boxLeft = Math.min(boxLeft, child.left - SEQ_FRAGMENT_INSET);
+        boxRight = Math.max(boxRight, child.right + SEQ_FRAGMENT_INSET);
+      });
+      fr.left = Math.max(boxLeft, 0);
+      fr.right = Math.max(boxRight, fr.left + fr.needW);
+      width = Math.max(width, Math.ceil(fr.right) + 8);
+    }
 
     var bars = [];
     var open = Object.create(null);
@@ -9329,9 +9378,9 @@
     };
   }
 
-  var seqPagePad = { saved: '', owners: [] };
+  var seqPagePad = { saved: '', owners: [], heights: [] };
 
-  /** Gives the page bottom padding equal to `px` while `owner` has a fixed panel open, and restores what the page had once no owner does. */
+  /** Pads the page bottom by the tallest fixed panel any owner has open, and restores what the page had once no owner does. */
   function seqSetPagePad(owner, px) {
     var at = seqPagePad.owners.indexOf(owner);
     if (px > 0) {
@@ -9340,13 +9389,18 @@
           seqPagePad.saved = document.body.style.paddingBottom;
         }
         seqPagePad.owners.push(owner);
+        seqPagePad.heights.push(px);
+      } else {
+        seqPagePad.heights[at] = px;
       }
-      document.body.style.paddingBottom = px + 'px';
     } else if (at >= 0) {
       seqPagePad.owners.splice(at, 1);
-      if (!seqPagePad.owners.length) {
-        document.body.style.paddingBottom = seqPagePad.saved;
-      }
+      seqPagePad.heights.splice(at, 1);
+    }
+    if (seqPagePad.owners.length) {
+      document.body.style.paddingBottom = Math.max.apply(null, seqPagePad.heights) + 'px';
+    } else if (at >= 0) {
+      document.body.style.paddingBottom = seqPagePad.saved;
     }
   }
 
@@ -9408,7 +9462,7 @@
     }
 
     _signature() {
-      var script = this.querySelector(':scope > script[type="application/json"]');
+      var script = this._jsonScript();
       return [script ? (script.textContent || '') : '', this.getAttribute('summary') || ''].join('\u0000');
     }
 
@@ -9437,9 +9491,20 @@
       }
     }
 
+    /** The first direct script child whose type reads as application/json once trimmed and lowercased, the way the Python check reads it. */
+    _jsonScript() {
+      var kids = this.children;
+      for (var i = 0; i < kids.length; i += 1) {
+        if (kids[i].localName === 'script' && (kids[i].getAttribute('type') || '').trim().toLowerCase() === 'application/json') {
+          return kids[i];
+        }
+      }
+      return null;
+    }
+
     /** The parsed sequence from the JSON child, or null when it is missing, unreadable or breaks the contract. */
     _parseData() {
-      var script = this.querySelector(':scope > script[type="application/json"]');
+      var script = this._jsonScript();
       if (!script) {
         return null;
       }
@@ -9773,8 +9838,8 @@
       var bars = layer('bars');
       var fragments = layer('fragments');
       L.fragments.forEach(function (f) {
-        var left = L.cx[f.lo] - f.margin;
-        var right = Math.max(L.cx[f.hi] + f.margin, left + f.needW);
+        var left = f.left;
+        var right = f.right;
         var branched = f.node.type === 'alt' || f.node.type === 'par';
         var g = svgNode('g', { 'data-q-sequence-fragment': f.node.type });
         g.appendChild(svgNode('rect', {

@@ -11069,3 +11069,138 @@ def test_seq_escape_from_inside_a_schema_leaves_a_tracing_or_focused_sequence_al
     assert r["tracing"] == {"tracing": True, "focus": None, "drawer": False}
     assert r["tracingFromSchema"] == {"tracing": True, "focus": None, "drawer": False}
     assert r["fromOutside"] == {"tracing": False, "focus": None, "drawer": False}
+
+
+def _seq_traced(value: dict) -> dict:
+    return {
+        "participants": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+        "steps": [_seq_msg("a", "b", "go", "call", "go"), _seq_msg("b", "a", "back", "reply", "back")],
+        "traces": [{"id": "t", "label": "T", "steps": [{"message": "go", "value": value}, {"message": "back", "value": value}]}],
+    }
+
+
+def test_seq_page_padding_follows_the_tallest_open_trace_panel(seq_page: Path) -> None:
+    tall = {f"field{i}": f"value {i}" for i in range(14)}
+    out = run(
+        seq_page,
+        {"viewport": {"width": 375, "height": 900}},
+        _seq_eval(
+            SEQ_MAKE
+            + """
+            document.body.style.paddingBottom = '3px';
+            const tall = make(%s, 'padtall');
+            const short = make(%s, 'padshort');
+            await settle(tall);
+            await settle(short);
+            const toggle = (el) => el.querySelector('[data-q-sequence-action="trace"]').click();
+            const panelH = (el) => Math.round(el.querySelector(':scope > [data-q-flow-trace-panel]').getBoundingClientRect().height);
+            const pad = () => parseFloat(document.body.style.paddingBottom);
+            const wait = () => new Promise((r) => setTimeout(r, 150));
+            const out = {};
+            toggle(tall);
+            await wait();
+            toggle(short);
+            await wait();
+            out.heights = [panelH(tall), panelH(short)];
+            out.both = pad();
+            toggle(short);
+            await wait();
+            out.afterShort = pad();
+            toggle(short);
+            await wait();
+            toggle(tall);
+            await wait();
+            out.afterTall = pad();
+            toggle(short);
+            await wait();
+            out.afterBoth = document.body.style.paddingBottom;
+            return out;
+            """
+            % (json.dumps(_seq_traced(tall)), json.dumps(_seq_traced({"x": 1})))
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    taller = max(d["heights"])
+    assert taller - min(d["heights"]) > 40, d
+    assert abs(d["both"] - taller) <= 1, d
+    assert abs(d["afterShort"] - taller) <= 1, d
+    assert abs(d["afterTall"] - min(d["heights"])) <= 1, d
+    assert d["afterBoth"] == "3px", d
+
+
+def test_seq_json_script_type_is_matched_trimmed_and_case_insensitive(seq_page: Path) -> None:
+    out = run(
+        seq_page,
+        _seq_eval(
+            SEQ_MAKE
+            + """
+            const el = document.createElement('q-sequence');
+            el.id = 'padded';
+            el.setAttribute('summary', 's');
+            const script = document.createElement('script');
+            script.setAttribute('type', ' Application/JSON ');
+            script.textContent = JSON.stringify(%s);
+            el.appendChild(script);
+            document.body.appendChild(el);
+            const ready = await settle(el);
+            const sig = el._signature();
+            script.textContent = JSON.stringify(%s);
+            await new Promise((r) => setTimeout(r, 400));
+            return { ready, hasSig: sig.length > 20, svgs: el.querySelectorAll('[data-q-sequence-svg]').length, labels: el.querySelectorAll('[data-q-sequence-message]').length };
+            """
+            % (json.dumps(_seq_base()), json.dumps(_seq_base(_seq_msg("a", "b", "x", "call"), _seq_msg("b", "c", "y", "call"))))
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["d"] == {"ready": "true", "hasSig": True, "svgs": 1, "labels": 2}
+
+
+def test_seq_fragment_boxes_contain_the_notes_and_self_messages_drawn_inside_them(seq_page: Path) -> None:
+    out = run(
+        seq_page,
+        {"viewport": {"width": 1280, "height": 900}},
+        _seq_eval(
+            SEQ_MAKE
+            + """
+            const box = (el) => { const x = num(el, 'x'); const y = num(el, 'y'); return { l: x, r: x + num(el, 'width'), t: y, b: y + num(el, 'height') }; };
+            const root = q('checkout');
+            const note = box(root.querySelector('[data-q-sequence-note] rect'));
+            const alt = box(root.querySelector('[data-q-sequence-fragment="alt"] [data-q-sequence-fragment-box]'));
+            const loop = box(root.querySelector('[data-q-sequence-fragment="loop"] [data-q-sequence-fragment-box]'));
+            const svgW = num(root.querySelector('[data-q-sequence-svg]'), 'width');
+            const self = make(%s, 'selfbox');
+            await settle(self);
+            const outer = box(self.querySelector('[data-q-sequence-fragment="loop"] [data-q-sequence-fragment-box]'));
+            const inner = box(self.querySelector('[data-q-sequence-fragment="opt"] [data-q-sequence-fragment-box]'));
+            const hit = box(self.querySelector('[data-q-sequence-message="1"] [data-q-sequence-hit]'));
+            const text = self.querySelector('[data-q-sequence-message="1"] text').getBoundingClientRect();
+            const sr = self.querySelector('[data-q-sequence-svg]').getBoundingClientRect();
+            return { note, alt, loop, svgW, outer, inner, hit, textRight: text.right - sr.left, selfW: num(self.querySelector('[data-q-sequence-svg]'), 'width') };
+            """
+            % json.dumps(
+                {
+                    "participants": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+                    "steps": [
+                        {
+                            "fragment": "loop",
+                            "label": "retry",
+                            "steps": [{"fragment": "opt", "label": "x", "steps": [_seq_msg("b", "b", "validates the whole cart before it goes out", "call")]}],
+                        }
+                    ],
+                }
+            )
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    note, alt, loop = d["note"], d["alt"], d["loop"]
+    assert alt["l"] <= note["l"] and note["r"] <= alt["r"], d
+    assert loop["l"] <= note["l"] and note["r"] <= loop["r"], d
+    assert loop["l"] < alt["l"] and alt["r"] < loop["r"], d
+    assert loop["l"] >= 0 and loop["r"] <= d["svgW"], d
+    outer, inner = d["outer"], d["inner"]
+    assert inner["l"] <= d["hit"]["l"] and d["hit"]["r"] <= inner["r"], d
+    assert inner["r"] >= d["textRight"], d
+    assert outer["l"] < inner["l"] and inner["r"] < outer["r"], d
+    assert outer["r"] <= d["selfW"], d
