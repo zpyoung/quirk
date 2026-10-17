@@ -3471,7 +3471,7 @@
     return li;
   }
 
-  /** Canvas helpers shared by q-flow and q-schema (q-sequence uses canvasMeasureFactory only); `host` carries _stage, _svg, _viewport, _drawer, _transform, _bounds, _nodeBoxes, _nodeElements, _expandBtn, _d3Zoom, _d3Selection, _rovingId and _focusedAfterExpand. */
+  /** Canvas helpers shared by q-flow and q-schema (q-sequence uses canvasMeasureFactory and canvasBuildDrawer only); `host` carries _stage, _svg, _viewport, _drawer, _transform, _bounds, _nodeBoxes, _nodeElements, _expandBtn, _d3Zoom, _d3Selection, _rovingId and _focusedAfterExpand. */
   function canvasMeasureFactory(host) {
     var canvas = document.createElement('canvas');
     var ctx = canvas.getContext && canvas.getContext('2d');
@@ -3531,14 +3531,15 @@
     host._stage.appendChild(bar);
   }
 
-  function canvasBuildDrawer(host, label) {
+  /** Builds the closed details drawer on `host._drawer`, inside `parent` (the host's stage unless given). */
+  function canvasBuildDrawer(host, label, parent) {
     var drawer = kitNode('aside');
     drawer.className = 'q-flow-drawer';
     drawer.setAttribute('data-q-flow-drawer', '');
     drawer.setAttribute('aria-label', label);
     drawer.setAttribute('data-q-inactive', '');
     host._drawer = drawer;
-    host._stage.appendChild(drawer);
+    (parent || host._stage).appendChild(drawer);
   }
 
   function canvasSetupZoom(host) {
@@ -5869,6 +5870,11 @@
       this._showTraceStep(target);
     }
 
+    /** The words that name a trace step in the counter and the step dots: the node's label. */
+    _traceStepLabel(step) {
+      return this._data.nodeMap[step.node].label;
+    }
+
     _buildTraceDots(trace) {
       var self = this;
       var dots = this._traceEls.dots;
@@ -5880,7 +5886,7 @@
         var dot = document.createElement('button');
         dot.type = 'button';
         dot.setAttribute('data-q-flow-trace-dot', String(i + 1));
-        dot.setAttribute('aria-label', 'Step ' + (i + 1) + ': ' + self._data.nodeMap[step.node].label);
+        dot.setAttribute('aria-label', 'Step ' + (i + 1) + ': ' + self._traceStepLabel(step));
         dot.textContent = String(i + 1);
         dot.addEventListener('click', function () {
           self._stopTracePlay();
@@ -5968,7 +5974,7 @@
       var data = this._data;
       var trace = data.traces[this._trace.index];
       var step = trace.steps[i];
-      var label = data.nodeMap[step.node].label;
+      var label = this._traceStepLabel(step);
 
       els.counter.textContent = 'Step ' + (i + 1) + ' of ' + trace.steps.length;
       var spoken = document.createElement('span');
@@ -9144,6 +9150,8 @@
     var fragments = [];
     var created = Object.create(null);
     var endY = Object.create(null);
+    var answers = Object.create(null);
+    var answeredBy = Object.create(null);
     var y = SEQ_TOP;
 
     function addRow(kind, height, before, after, extra) {
@@ -9172,6 +9180,8 @@
             for (var i = state.length - 1; i >= 0; i -= 1) {
               if (state[i].caller === m.to && state[i].callee === m.from) {
                 after = state.slice(0, i).concat(state.slice(i + 1));
+                answers[m.number] = state[i].number;
+                (answeredBy[state[i].number] = answeredBy[state[i].number] || []).push(m.number);
                 break;
               }
             }
@@ -9313,8 +9323,31 @@
       bars: bars,
       fragments: fragments,
       created: created,
-      endY: endY
+      endY: endY,
+      answers: answers,
+      answeredBy: answeredBy
     };
+  }
+
+  var seqPagePad = { saved: '', owners: [] };
+
+  /** Gives the page bottom padding equal to `px` while `owner` has a fixed panel open, and restores what the page had once no owner does. */
+  function seqSetPagePad(owner, px) {
+    var at = seqPagePad.owners.indexOf(owner);
+    if (px > 0) {
+      if (at < 0) {
+        if (!seqPagePad.owners.length) {
+          seqPagePad.saved = document.body.style.paddingBottom;
+        }
+        seqPagePad.owners.push(owner);
+      }
+      document.body.style.paddingBottom = px + 'px';
+    } else if (at >= 0) {
+      seqPagePad.owners.splice(at, 1);
+      if (!seqPagePad.owners.length) {
+        document.body.style.paddingBottom = seqPagePad.saved;
+      }
+    }
   }
 
   /**
@@ -9332,14 +9365,38 @@
       var self = this;
       this._uid = this._uid || uid('q-sequence-');
       this._lastSig = null;
+      this._pulseFrame = 0;
       this._onViewportChange = this._onViewportChange || function () {
         self._updateStuck();
+        if (self._trace) {
+          self._syncPanelPad();
+        }
       };
       this._onStageScroll = this._onStageScroll || function () {
         self._syncStrip();
       };
+      this._onDocKey = this._onDocKey || function (e) {
+        if (e.key !== 'Escape' || !(self._focused || self._trace)) {
+          return;
+        }
+        // every diagram listens on document, so this one yields to the diagram the key came from
+        var host = e.target && e.target.closest ? e.target.closest('q-sequence, q-flow, q-schema') : null;
+        if (host && host !== self) {
+          return;
+        }
+        self._handleEscape(e, host === self);
+      };
+      this._onClick = this._onClick || function (e) {
+        self._handleClick(e);
+      };
+      this._onKeydown = this._onKeydown || function (e) {
+        self._handleKey(e);
+      };
       window.addEventListener('scroll', this._onViewportChange, { passive: true });
       window.addEventListener('resize', this._onViewportChange);
+      document.addEventListener('keydown', this._onDocKey);
+      this.addEventListener('click', this._onClick);
+      this.addEventListener('keydown', this._onKeydown);
       onTheme(this, function () {
         self._applyTheme();
       });
@@ -9356,8 +9413,14 @@
     }
 
     disconnectedCallback() {
+      this._stopTracePlay();
+      this._stopPulse();
+      seqSetPagePad(this, 0);
       window.removeEventListener('scroll', this._onViewportChange);
       window.removeEventListener('resize', this._onViewportChange);
+      document.removeEventListener('keydown', this._onDocKey);
+      this.removeEventListener('click', this._onClick);
+      this.removeEventListener('keydown', this._onKeydown);
       if (this._boundStage) {
         this._boundStage.removeEventListener('scroll', this._onStageScroll);
         this._boundStage = null;
@@ -9391,7 +9454,7 @@
 
     /**
      * Finds or creates the parts around the diagram and puts them in order: toolbar, pinned strip,
-     * scroll box, live region, list. A stage or list the build injected for the no-JS page is reused.
+     * scroll box, trace panel, drawer, live region, list. A stage or list the build injected for the no-JS page is reused.
      */
     _ensureScaffold(data) {
       var stage = this.querySelector(':scope > [data-q-sequence-stage]');
@@ -9416,7 +9479,13 @@
       }
       var controls = this.querySelector(':scope > [data-q-sequence-controls]');
       var strip = this.querySelector(':scope > [data-q-sequence-pinned]');
+      var drawer = this.querySelector(':scope > aside[data-q-flow-drawer]');
+      var panel = this.querySelector(':scope > aside[data-q-flow-trace-panel]');
       if (data) {
+        if (!drawer) {
+          canvasBuildDrawer(this, 'Details', this);
+          drawer = this._drawer;
+        }
         if (!controls) {
           controls = kitNode('div');
           controls.className = 'q-sequence-controls';
@@ -9431,13 +9500,15 @@
         }
         this._populateList(details, data);
       } else {
-        [controls, strip].forEach(function (node) {
+        [controls, strip, drawer, panel].forEach(function (node) {
           if (node) {
             node.remove();
           }
         });
         controls = null;
         strip = null;
+        drawer = null;
+        panel = null;
         if (!details.firstChild) {
           var summary = document.createElement('summary');
           summary.textContent = 'Diagram as a list';
@@ -9445,7 +9516,7 @@
         }
       }
       var host = this;
-      [controls, strip, stage, live, details].forEach(function (node) {
+      [controls, strip, stage, panel, drawer, live, details].forEach(function (node) {
         if (node) {
           host.appendChild(node);
         }
@@ -9453,6 +9524,7 @@
       this._controls = controls;
       this._strip = strip;
       this._stage = stage;
+      this._drawer = drawer;
       this._live = live;
       this._details = details;
     }
@@ -9604,7 +9676,16 @@
       this.removeAttribute('data-q-sequence-ready');
       var seq = (this._layoutSeq = (this._layoutSeq || 0) + 1);
       var data = this._parseData();
+      this._resetTrace();
       this._ensureScaffold(data);
+      this._buildTracePanel(data);
+      this._addTraceCollapse();
+      this._buildToolbar(data);
+      this._clearFocus();
+      this._els = null;
+      this._pulseRecs = null;
+      this._headers = null;
+      this._rovingStop = null;
       if (!data) {
         this._failLayout('This diagram could not be drawn. The full diagram is listed below.');
         return;
@@ -9634,6 +9715,7 @@
       }
       this._stage.appendChild(this._buildSvg(data, layout));
       this._buildStrip(data, layout);
+      this._rovingStop = { type: 'header', id: data.participants[0].id };
       if (this._boundStage !== this._stage) {
         if (this._boundStage) {
           this._boundStage.removeEventListener('scroll', this._onStageScroll);
@@ -9651,6 +9733,8 @@
       var total = data.messages.length;
       var measure = canvasMeasureFactory(this);
       var summary = this.getAttribute('summary') || 'Sequence diagram';
+      var els = { messages: [], lifelines: Object.create(null), bars: [], notes: [], ends: [], created: Object.create(null) };
+      this._els = els;
       var svg = svgNode('svg', {
         width: L.width,
         height: L.height,
@@ -9659,6 +9743,14 @@
         'aria-label': summary,
         'data-q-sequence-svg': ''
       });
+      var defs = svgNode('defs');
+      var grad = svgNode('radialGradient', { id: this._uid + '-pulse-grad' });
+      grad.appendChild(svgNode('stop', { offset: '0%', 'stop-color': '#ffffff', 'stop-opacity': '1' }));
+      grad.appendChild(svgNode('stop', { offset: '55%', 'stop-color': '#ffffff', 'stop-opacity': '1' }));
+      grad.appendChild(svgNode('stop', { offset: '100%', 'stop-color': '#ffffff', 'stop-opacity': '0' }));
+      defs.appendChild(grad);
+      svg.appendChild(defs);
+      this._pulseRecs = [];
       function layer(name) {
         var g = svgNode('g', { 'data-q-sequence-layer': name });
         svg.appendChild(g);
@@ -9736,7 +9828,7 @@
       data.participants.forEach(function (p, i) {
         var from = L.created[p.id] ? L.created[p.id].y + L.headH / 2 : 0;
         var to = L.endY[p.id] !== undefined ? L.endY[p.id] : L.height;
-        lifelines.appendChild(svgNode('line', {
+        els.lifelines[p.id] = svgNode('line', {
           'data-q-sequence-lifeline': p.id,
           x1: L.cx[i],
           y1: from,
@@ -9745,12 +9837,13 @@
           stroke: 'var(--q-color-border)',
           'stroke-width': '1.5',
           'stroke-dasharray': '4 4'
-        }));
+        });
+        lifelines.appendChild(els.lifelines[p.id]);
       });
 
       L.bars.forEach(function (bar) {
         var c = bar.call;
-        bars.appendChild(svgNode('rect', {
+        var barRect = svgNode('rect', {
           'data-q-sequence-bar': c.callee,
           'data-q-sequence-call': c.number,
           x: L.cx[data.partMap[c.callee].index] - SEQ_BAR_WIDTH / 2 + SEQ_BAR_STEP * c.level,
@@ -9760,7 +9853,9 @@
           fill: 'var(--q-color-surface)',
           stroke: 'var(--q-color-text-muted)',
           'stroke-width': '1'
-        }));
+        });
+        els.bars.push({ el: barRect, id: c.callee });
+        bars.appendChild(barRect);
       });
 
       var notes = layer('notes');
@@ -9783,6 +9878,7 @@
             'stroke-width': '1'
           }));
           g.appendChild(textLines(row.lines, { fill: 'var(--q-color-text)', 'font-size': String(SEQ_NOTE_FONT), 'text-anchor': 'middle' }, x + w / 2, row.y + 6 + 6 + 13, SEQ_LINE));
+          els.notes.push({ el: g, over: row.note.over });
           notes.appendChild(g);
         } else if (row.kind === 'end') {
           var ex = L.cx[data.partMap[row.end.id].index];
@@ -9797,9 +9893,11 @@
               'stroke-width': '2'
             }));
           });
+          els.ends.push({ el: eg, id: row.end.id });
           marks.appendChild(eg);
         } else if (row.kind === 'message') {
-          messages.appendChild(this._buildMessage(data, L, row, total));
+          els.messages[row.message.number - 1] = this._buildMessage(data, L, row, total, defs);
+          messages.appendChild(els.messages[row.message.number - 1]);
         }
       }, this);
 
@@ -9827,12 +9925,13 @@
           textY += 15;
         }
         g.appendChild(textLines(seqWrap(p.label, measure, L.wrapW, 13, '600'), { 'data-q-sequence-header-label': '', fill: 'var(--q-color-text)', 'font-size': '13', 'font-weight': '600', 'text-anchor': 'middle' }, L.cx[i], textY + 12, 16));
+        els.created[p.id] = g;
         marks.appendChild(g);
       }, this);
       return svg;
     }
 
-    _buildMessage(data, L, row, total) {
+    _buildMessage(data, L, row, total, defs) {
       var m = row.message;
       var filled = m.type === 'call';
       var g = svgNode('g', {
@@ -9866,14 +9965,43 @@
         height: row.h,
         fill: 'transparent'
       }));
-      g.appendChild(svgNode('path', {
+      var basePath = svgNode('path', {
         'data-q-sequence-line': '',
         d: d,
         fill: 'none',
         stroke: 'var(--q-color-text)',
         'stroke-width': '1.5',
         'stroke-dasharray': m.type === 'reply' ? '6 4' : null
-      }));
+      });
+      g.appendChild(basePath);
+      var points = m.self
+        ? [{ x: row.x1, y: row.y1 }, { x: row.x1 + SEQ_SELF_WIDTH, y: row.y1 }, { x: row.x1 + SEQ_SELF_WIDTH, y: row.y2 }, { x: row.x1, y: row.y2 }]
+        : [{ x: row.x1, y: row.arrowY }, { x: row.x2, y: row.arrowY }];
+      var maskId = this._uid + '-pulse-mask-' + m.number;
+      var mask = svgNode('mask', { id: maskId, maskUnits: 'userSpaceOnUse', x: 0, y: 0, width: L.width, height: L.height });
+      var maskDot = svgNode('circle', {
+        'data-q-sequence-mask-dot': '',
+        'data-q-inactive': '',
+        cx: points[0].x,
+        cy: points[0].y,
+        r: '24',
+        fill: 'url(#' + this._uid + '-pulse-grad)'
+      });
+      mask.appendChild(maskDot);
+      defs.appendChild(mask);
+      var pulsePath = svgNode('path', {
+        'data-q-sequence-pulse': '',
+        'data-q-inactive': '',
+        d: d,
+        fill: 'none',
+        stroke: 'var(--q-color-accent)',
+        'stroke-width': '6',
+        'stroke-linecap': 'round',
+        'stroke-dasharray': m.type === 'reply' ? '6 4' : null,
+        mask: 'url(#' + maskId + ')'
+      });
+      g.appendChild(pulsePath);
+      this._pulseRecs[m.number - 1] = { edge: { from: m.from, to: m.to }, basePath: basePath, pulsePath: pulsePath, mask: mask, maskDots: [maskDot], points: points };
       var back = tip.x - row.dir * 9;
       g.appendChild(svgNode('path', {
         'data-q-sequence-head': filled ? 'filled' : 'open',
@@ -9907,6 +10035,8 @@
         strip.removeChild(strip.firstChild);
       }
       strip.style.height = (L.headH + 1) + 'px';
+      this.style.setProperty('--q-sequence-strip-h', (L.headH + 1) + 'px');
+      var headers = Object.create(null);
       var inner = document.createElement('div');
       inner.setAttribute('data-q-sequence-pinned-row', '');
       inner.style.width = L.width + 'px';
@@ -9937,9 +10067,11 @@
         label.textContent = p.label;
         button.appendChild(label);
         inner.appendChild(button);
+        headers[p.id] = button;
       });
       strip.appendChild(inner);
       this._stripRow = inner;
+      this._headers = headers;
     }
 
     /** Slides the strip's headers sideways by the scroll box's offset so each stays over its lifeline. */
@@ -9965,10 +10097,649 @@
       }
     }
 
+    /** Toggles focus from a pointer: a strip header or created header, a message, or empty diagram space. */
+    _handleClick(e) {
+      var t = e.target;
+      if (!this._data || !this._els || !t || !t.closest || (this._drawer && this._drawer.contains(t))) {
+        return;
+      }
+      var header = this._strip && this._strip.contains(t) ? t.closest('[data-q-sequence-header]') : null;
+      if (header) {
+        this._toggleParticipant(header.getAttribute('data-q-sequence-header'));
+        return;
+      }
+      if (!this._stage || !this._stage.contains(t)) {
+        return;
+      }
+      var created = t.closest('[data-q-sequence-created]');
+      var message = t.closest('[data-q-sequence-message]');
+      if (created) {
+        this._toggleParticipant(created.getAttribute('data-q-sequence-created'));
+      } else if (message) {
+        this._toggleMessage(Number(message.getAttribute('data-q-sequence-message')));
+      } else if (this._focused) {
+        this._clearFocus();
+      }
+    }
+
+    /** Arrow keys rove between headers and messages; Enter and Space act on a message as a click does. */
+    _handleKey(e) {
+      var t = e.target;
+      var data = this._data;
+      if (!data || !this._els || !t || !t.closest || e.altKey || e.ctrlKey || e.metaKey) {
+        return;
+      }
+      var header = this._strip && this._strip.contains(t) ? t.closest('[data-q-sequence-header]') : null;
+      var created = !header && this._stage && this._stage.contains(t) ? t.closest('[data-q-sequence-created]') : null;
+      var message = !header && !created && this._stage && this._stage.contains(t) ? t.closest('[data-q-sequence-message]') : null;
+      var key = e.key;
+      if (header || created) {
+        var id = header ? header.getAttribute('data-q-sequence-header') : created.getAttribute('data-q-sequence-created');
+        var index = data.partMap[id].index;
+        if (key === 'ArrowRight' || key === 'ArrowLeft') {
+          e.preventDefault();
+          var next = data.participants[Math.max(0, Math.min(data.participants.length - 1, index + (key === 'ArrowRight' ? 1 : -1)))];
+          this._setRoving({ type: 'header', id: next.id }, true);
+        } else if (key === 'ArrowDown') {
+          e.preventDefault();
+          var first = data.messages.filter(function (m) { return m.from === id || m.to === id; })[0];
+          if (first) {
+            this._setRoving({ type: 'message', n: first.number }, true);
+          }
+        } else if (created && (key === 'Enter' || key === ' ')) {
+          e.preventDefault();
+          this._toggleParticipant(id);
+        }
+      } else if (message) {
+        var n = Number(message.getAttribute('data-q-sequence-message'));
+        if (key === 'ArrowDown') {
+          e.preventDefault();
+          this._setRoving({ type: 'message', n: Math.min(data.messages.length, n + 1) }, true);
+        } else if (key === 'ArrowUp') {
+          e.preventDefault();
+          this._setRoving(n === 1 ? { type: 'header', id: data.messages[0].from } : { type: 'message', n: n - 1 }, true);
+        } else if (key === 'Enter' || key === ' ') {
+          e.preventDefault();
+          this._toggleMessage(n);
+        }
+      }
+    }
+
+    /** Leaves trace mode on Escape, else clears focus; `restoreFocus` puts DOM focus back on the trace button, or on the roving stop when it was in the drawer. */
+    _handleEscape(ev, restoreFocus) {
+      ev.preventDefault();
+      if (this._trace) {
+        this._closeTrace(restoreFocus);
+      } else {
+        this._closeFocus(restoreFocus);
+      }
+    }
+
+    _closeFocus(restoreFocus) {
+      var inDrawer = this._drawer && this._drawer.contains(document.activeElement);
+      this._clearFocus();
+      if (restoreFocus && inDrawer && this._rovingStop) {
+        this._setRoving(this._rovingStop, true);
+      }
+    }
+
+    _toggleParticipant(id) {
+      if (this._trace) {
+        this._closeTrace(false);
+      }
+      this._setRoving({ type: 'header', id: id }, false);
+      if (this._focused && this._focused.type === 'participant' && this._focused.id === id) {
+        this._clearFocus();
+      } else {
+        this._focusParticipant(id);
+      }
+    }
+
+    _toggleMessage(n) {
+      this._setRoving({ type: 'message', n: n }, false);
+      if (this._trace) {
+        if (this._trace.messages[n]) {
+          this._traceMessageClick(n);
+          return;
+        }
+        this._closeTrace(false);
+      }
+      if (this._focused && this._focused.type === 'message' && this._focused.n === n) {
+        this._clearFocus();
+      } else {
+        this._focusMessage(n);
+      }
+    }
+
+    /** Moves focus to the participant or message a drawer button names, and brings it into view. */
+    _goto(stop) {
+      if (stop.type === 'message') {
+        this._focusMessage(stop.n);
+      } else {
+        this._focusParticipant(stop.id);
+      }
+      this._setRoving(stop, true);
+    }
+
+    /** Lights a participant's lifeline and messages, dims the rest, and opens its drawer. */
+    _focusParticipant(id) {
+      var p = this._data && this._data.partMap[id];
+      if (!p) {
+        return;
+      }
+      this._focused = { type: 'participant', id: id };
+      this.setAttribute('data-q-sequence-focus', id);
+      this.removeAttribute('data-q-sequence-focus-message');
+      this._applyMarks();
+      this._renderDrawer();
+      var sent = this._data.messages.filter(function (m) { return m.from === id; }).length;
+      var received = this._data.messages.filter(function (m) { return m.to === id && m.from !== id; }).length;
+      this._announce(p.label + ', ' + (p.kind ? p.kind + ', ' : '') + 'sends ' + sent + ', receives ' + received);
+    }
+
+    /** Lights one message and its two headers, dims the rest, and opens its drawer. */
+    _focusMessage(n) {
+      var m = this._data && this._data.messages[n - 1];
+      if (!m) {
+        return;
+      }
+      this._focused = { type: 'message', n: n };
+      this.setAttribute('data-q-sequence-focus-message', String(n));
+      this.removeAttribute('data-q-sequence-focus');
+      this._applyMarks();
+      this._renderDrawer();
+      this._announce(this._els.messages[n - 1].getAttribute('aria-label'));
+    }
+
+    /** Drops any focus, its marks and the drawer. */
+    _clearFocus() {
+      this._focused = null;
+      this.removeAttribute('data-q-sequence-focus');
+      this.removeAttribute('data-q-sequence-focus-message');
+      if (this._drawer) {
+        this._drawer.setAttribute('data-q-inactive', '');
+      }
+      this._applyMarks();
+    }
+
+    _announce(text) {
+      if (this._live) {
+        this._live.textContent = text;
+      }
+    }
+
+    /** Sets lit and dim on the messages, lifelines, bars, notes, ends and headers for the current focus; fragment boxes keep neither. */
+    _applyMarks() {
+      var els = this._els;
+      var headers = this._headers;
+      if (!els || !headers) {
+        return;
+      }
+      var f = this._focused;
+      var data = this._data;
+      function mark(el, state) {
+        if (state === 'lit') {
+          el.setAttribute('data-q-sequence-lit', '');
+          el.removeAttribute('data-q-sequence-dim');
+        } else if (state === 'dim') {
+          el.setAttribute('data-q-sequence-dim', '');
+          el.removeAttribute('data-q-sequence-lit');
+        } else {
+          el.removeAttribute('data-q-sequence-lit');
+          el.removeAttribute('data-q-sequence-dim');
+        }
+      }
+      function pick(on) {
+        return f ? (on ? 'lit' : 'dim') : null;
+      }
+      var id = f && f.type === 'participant' ? f.id : null;
+      var focused = f && f.type === 'message' ? data.messages[f.n - 1] : null;
+      function touches(a, b) {
+        return id !== null && (a === id || b === id);
+      }
+      function onFocusedMessage(pid) {
+        return focused !== null && (pid === focused.from || pid === focused.to);
+      }
+      els.messages.forEach(function (g, i) {
+        var m = data.messages[i];
+        mark(g, pick(focused ? m === focused : touches(m.from, m.to)));
+      });
+      Object.keys(els.lifelines).forEach(function (pid) {
+        mark(els.lifelines[pid], pick(pid === id));
+      });
+      els.bars.forEach(function (bar) {
+        mark(bar.el, pick(bar.id === id));
+      });
+      els.notes.forEach(function (note) {
+        mark(note.el, pick(id !== null && note.over.indexOf(id) >= 0));
+      });
+      els.ends.forEach(function (end) {
+        mark(end.el, pick(end.id === id));
+      });
+      Object.keys(els.created).forEach(function (pid) {
+        mark(els.created[pid], pick(pid === id || onFocusedMessage(pid)));
+      });
+      Object.keys(headers).forEach(function (pid) {
+        if (f && (pid === id || onFocusedMessage(pid))) {
+          headers[pid].setAttribute('data-q-sequence-lit', '');
+        } else {
+          headers[pid].removeAttribute('data-q-sequence-lit');
+        }
+      });
+    }
+
+    /** Fills the drawer for the focused participant or message and opens it. */
+    _renderDrawer() {
+      var self = this;
+      var data = this._data;
+      var drawer = this._drawer;
+      var f = this._focused;
+      if (!drawer || !data || !f) {
+        return;
+      }
+      while (drawer.firstChild) {
+        drawer.removeChild(drawer.firstChild);
+      }
+      var participant = f.type === 'participant' ? data.partMap[f.id] : null;
+      var message = f.type === 'message' ? data.messages[f.n - 1] : null;
+
+      function goto(text, stop) {
+        var button = document.createElement('button');
+        button.type = 'button';
+        if (stop.type === 'message') {
+          button.setAttribute('data-q-sequence-goto-message', String(stop.n));
+        } else {
+          button.setAttribute('data-q-sequence-goto-participant', stop.id);
+        }
+        button.textContent = text;
+        button.addEventListener('click', function () {
+          self._goto(stop);
+        });
+        return button;
+      }
+      function paragraph(attr) {
+        var p = document.createElement('p');
+        p.setAttribute(attr, '');
+        return p;
+      }
+      function links(attr, entries) {
+        var box = document.createElement('div');
+        box.setAttribute(attr, '');
+        var list = document.createElement('ul');
+        entries.forEach(function (entry) {
+          var li = document.createElement('li');
+          li.appendChild(goto(entry.text, entry.stop));
+          list.appendChild(li);
+        });
+        box.appendChild(list);
+        return box;
+      }
+      function describe(m, verb) {
+        return verb + ' ' + m.number + '. ' + m.label;
+      }
+
+      var head = document.createElement('div');
+      head.setAttribute('data-q-flow-drawer-head', '');
+      var title = document.createElement('h3');
+      title.textContent = participant ? participant.label : message.number + '. ' + message.label;
+      head.appendChild(title);
+      var close = document.createElement('button');
+      close.type = 'button';
+      close.setAttribute('data-q-flow-drawer-close', '');
+      close.setAttribute('aria-label', 'Close details');
+      close.textContent = 'Close';
+      close.addEventListener('click', function () {
+        self._closeFocus(true);
+      });
+      head.appendChild(close);
+      drawer.appendChild(head);
+
+      var detail = null;
+      if (participant) {
+        if (participant.kind) {
+          var tag = document.createElement('div');
+          tag.setAttribute('data-q-flow-drawer-kind', '');
+          tag.style.setProperty('--q-flow-kind-color', 'var(--q-color-chart-' + participant.color + ')');
+          tag.textContent = participant.kind;
+          drawer.appendChild(tag);
+        }
+        detail = participant.detail;
+        var entries = [];
+        data.messages.forEach(function (m) {
+          if (m.from === participant.id || m.to === participant.id) {
+            entries.push({ text: describe(m, m.from === participant.id ? 'sends' : 'receives'), stop: { type: 'message', n: m.number } });
+          }
+        });
+        if (entries.length) {
+          drawer.appendChild(links('data-q-sequence-drawer-messages', entries));
+        }
+      } else {
+        var route = paragraph('data-q-sequence-drawer-route');
+        route.appendChild(goto(data.partMap[message.from].label, { type: 'participant', id: message.from }));
+        route.appendChild(document.createTextNode(' → '));
+        route.appendChild(goto(data.partMap[message.to].label, { type: 'participant', id: message.to }));
+        drawer.appendChild(route);
+        var type = paragraph('data-q-sequence-drawer-type');
+        type.textContent = message.type;
+        drawer.appendChild(type);
+        var pairs = [];
+        var layout = this._layout;
+        function pair(verb, number) {
+          pairs.push({ text: describe(data.messages[number - 1], verb), stop: { type: 'message', n: number } });
+        }
+        if (layout.answers[message.number]) {
+          pair('answers', layout.answers[message.number]);
+        }
+        (layout.answeredBy[message.number] || []).forEach(function (number) {
+          pair('answered by', number);
+        });
+        if (pairs.length) {
+          drawer.appendChild(links('data-q-sequence-drawer-pair', pairs));
+        }
+        if (message.frags.length) {
+          var inside = paragraph('data-q-sequence-drawer-fragments');
+          inside.textContent = 'inside ' + message.frags.map(function (ref) {
+            var label = ref.fragment.branches[ref.branch].label || ref.fragment.label;
+            return label ? ref.fragment.type + ': ' + label : ref.fragment.type;
+          }).join(', ');
+          drawer.appendChild(inside);
+        }
+        detail = message.detail;
+      }
+      if (detail) {
+        var box = document.createElement('div');
+        box.setAttribute('data-q-flow-drawer-detail', '');
+        box.appendChild(sanitizeFlowDetail(detail));
+        drawer.appendChild(box);
+      }
+      drawer.scrollTop = 0;
+      drawer.removeAttribute('data-q-inactive');
+    }
+
+    /**
+     * Makes one header or message the single tab stop. With `moveDom` it also takes DOM focus and
+     * scrolls the page and the scroll box so it is in view, clear of the pinned strip and a bottom sheet.
+     */
+    _setRoving(stop, moveDom) {
+      var headers = this._headers;
+      var els = this._els;
+      var target = headers && els ? (stop.type === 'header' ? headers[stop.id] : els.messages[stop.n - 1]) : null;
+      if (!target) {
+        return;
+      }
+      this._rovingStop = stop;
+      Object.keys(headers).forEach(function (pid) {
+        headers[pid].setAttribute('tabindex', headers[pid] === target ? '0' : '-1');
+      });
+      els.messages.forEach(function (g) {
+        g.setAttribute('tabindex', g === target ? '0' : '-1');
+      });
+      if (moveDom) {
+        target.focus({ preventScroll: true });
+        this._reveal(target);
+      }
+    }
+
+    /** Scrolls the scroll box sideways and the page down or up just enough to show `el`, clear of the strip and of a fixed bottom sheet or trace panel. */
+    _reveal(el) {
+      var reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+      var behavior = reduced ? 'instant' : 'smooth';
+      var pad = 8;
+      var rect = el.getBoundingClientRect();
+      var box = this._stage.getBoundingClientRect();
+      var dx = 0;
+      if (rect.left < box.left + pad || rect.width > box.width - 2 * pad) {
+        dx = rect.left - box.left - pad;
+      } else if (rect.right > box.right - pad) {
+        dx = rect.right - box.right + pad;
+      }
+      if (dx) {
+        this._stage.scrollTo({ left: this._stage.scrollLeft + dx, behavior: behavior });
+      }
+      var inStrip = this._strip && this._strip.contains(el);
+      var top = this._strip && !inStrip ? this._strip.getBoundingClientRect().height : 0;
+      var sheetEl = this._trace && this._tracePanel ? this._tracePanel : this._drawer;
+      var sheet = sheetEl && !sheetEl.hasAttribute('data-q-inactive') && getComputedStyle(sheetEl).position === 'fixed'
+        ? sheetEl.getBoundingClientRect().height
+        : 0;
+      var bottom = window.innerHeight - sheet;
+      var dy = 0;
+      if (rect.top < top + pad || rect.height > bottom - top - 2 * pad) {
+        dy = rect.top - top - pad;
+      } else if (rect.bottom > bottom - pad) {
+        dy = rect.bottom - bottom + pad;
+      }
+      if (dy) {
+        window.scrollBy({ top: dy, behavior: behavior });
+      }
+    }
+
+    /** Fills the toolbar: the "Step through" button when the sequence has traces, nothing otherwise. */
+    _buildToolbar(data) {
+      var self = this;
+      var bar = this._controls;
+      this._traceBtn = null;
+      if (!bar) {
+        return;
+      }
+      while (bar.firstChild) {
+        bar.removeChild(bar.firstChild);
+      }
+      if (!data || data.traces.length === 0) {
+        return;
+      }
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.setAttribute('data-q-sequence-action', 'trace');
+      btn.setAttribute('aria-label', 'Step through a trace');
+      btn.setAttribute('aria-pressed', 'false');
+      btn.textContent = 'Step through';
+      btn.addEventListener('click', function () {
+        if (self._trace) {
+          self._closeTrace(true);
+        } else {
+          self._openTrace(self._lastTraceIndex || 0);
+        }
+      });
+      bar.appendChild(btn);
+      this._traceBtn = btn;
+    }
+
+    /** Adds the phone-only collapse button to the panel's button row; runs after every `_buildTracePanel`, which empties the panel. */
+    _addTraceCollapse() {
+      var self = this;
+      var panel = this._tracePanel;
+      var row = panel ? panel.querySelector('.q-flow-trace-buttons') : null;
+      if (!row) {
+        return;
+      }
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.setAttribute('data-q-sequence-trace-collapse', '');
+      btn.textContent = 'Details';
+      btn.setAttribute('aria-expanded', this._traceCollapsed ? 'false' : 'true');
+      panel.toggleAttribute('data-q-sequence-collapsed', !!this._traceCollapsed);
+      btn.addEventListener('click', function () {
+        self._traceCollapsed = !self._traceCollapsed;
+        btn.setAttribute('aria-expanded', self._traceCollapsed ? 'false' : 'true');
+        panel.toggleAttribute('data-q-sequence-collapsed', self._traceCollapsed);
+        self._syncPanelPad();
+        var current = self._trace && self._els ? self._els.messages[self._trace.messageAt] : null;
+        if (current) {
+          self._reveal(current);
+        }
+      });
+      row.appendChild(btn);
+    }
+
+    /** Pads the page by the fixed trace panel's height so the last row can scroll above it. */
+    _syncPanelPad() {
+      var panel = this._tracePanel;
+      var px = 0;
+      if (this._trace && panel && getComputedStyle(panel).position === 'fixed') {
+        px = Math.ceil(panel.getBoundingClientRect().height);
+      }
+      seqSetPagePad(this, px);
+    }
+
+    /** Drops trace state without touching the diagram, for a rebuild that replaces the diagram anyway. */
+    _resetTrace() {
+      this._stopTracePlay();
+      this._stopPulse();
+      this._trace = null;
+      this._traceCollapsed = false;
+      this.removeAttribute('data-q-sequence-tracing');
+      seqSetPagePad(this, 0);
+    }
+
+    /** The words that name a trace step in the counter and the step dots. */
+    _traceStepLabel(step) {
+      var m = this._data.messages[step.message];
+      return 'message ' + m.number + ', ' + this._data.partMap[m.from].label + ' to ' + this._data.partMap[m.to].label + ', ' + m.label;
+    }
+
+    /** Opens trace mode on a trace, the way the "Step through" button does, and moves focus to Next. */
+    _openTrace(traceIndex) {
+      if (this._startTrace(traceIndex) && this._traceEls) {
+        this._traceEls.next.focus();
+      }
+    }
+
+    /** Puts trace mode on step 1 of a trace: clears focus and the drawer, opens the panel and shows the step. Also what the picker runs, so it leaves DOM focus where it is. */
+    _startTrace(traceIndex) {
+      var data = this._data;
+      var trace = data && data.traces[traceIndex];
+      if (!trace || !this._tracePanel || !this._els) {
+        return false;
+      }
+      this._stopTracePlay();
+      this._clearFocus();
+      var messages = Object.create(null);
+      trace.steps.forEach(function (step) {
+        messages[data.messages[step.message].number] = true;
+      });
+      this._trace = { index: traceIndex, step: 0, messages: messages, messageAt: trace.steps[0].message };
+      this._lastTraceIndex = traceIndex;
+      this.setAttribute('data-q-sequence-tracing', '');
+      if (this._traceBtn) {
+        this._traceBtn.setAttribute('aria-pressed', 'true');
+      }
+      this._tracePanel.removeAttribute('data-q-inactive');
+      this._traceEls.picker.selectedIndex = traceIndex;
+      this._buildTraceDots(trace);
+      this._showTraceStep(0);
+      return true;
+    }
+
+    /** Leaves trace mode and returns the diagram to rest; the button gets focus back when asked. */
+    _closeTrace(restoreFocus) {
+      this._stopTracePlay();
+      this._stopPulse();
+      this._trace = null;
+      this.removeAttribute('data-q-sequence-tracing');
+      if (this._traceBtn) {
+        this._traceBtn.setAttribute('aria-pressed', 'false');
+      }
+      if (this._tracePanel) {
+        this._tracePanel.setAttribute('data-q-inactive', '');
+      }
+      (this._pulseRecs || []).forEach(function (rec, i) {
+        var g = this._els.messages[i];
+        g.removeAttribute('data-q-sequence-current');
+        rec.basePath.setAttribute('stroke-width', '1.5');
+        rec.pulsePath.setAttribute('data-q-inactive', '');
+        rec.maskDots.forEach(function (dot) {
+          dot.setAttribute('data-q-inactive', '');
+        });
+      }, this);
+      this._clearFocus();
+      seqSetPagePad(this, 0);
+      if (restoreFocus && this._traceBtn) {
+        this._traceBtn.focus();
+      }
+    }
+
+    /** A click on a message while tracing: one on the trace jumps to its next visit after the current step, or its first. */
+    _traceMessageClick(n) {
+      var tr = this._trace;
+      var data = this._data;
+      if (!tr || !data) {
+        return;
+      }
+      this._stopTracePlay();
+      var steps = data.traces[tr.index].steps;
+      var target = -1;
+      for (var i = 0; i < steps.length && target < 0; i += 1) {
+        if (steps[i].message === n - 1 && i > tr.step) {
+          target = i;
+        }
+      }
+      for (var j = 0; j < steps.length && target < 0; j += 1) {
+        if (steps[j].message === n - 1) {
+          target = j;
+        }
+      }
+      this._showTraceStep(target);
+    }
+
+    /**
+     * Shows one trace step: lights the step's message and pulses its arrow, dims the messages and
+     * notes the trace never reaches, brings the message into view, and fills the panel.
+     */
+    _showTraceStep(stepIndex) {
+      var tr = this._trace;
+      var data = this._data;
+      if (!tr || !data) {
+        return;
+      }
+      var trace = data.traces[tr.index];
+      var i = Math.max(0, Math.min(trace.steps.length - 1, stepIndex));
+      var step = trace.steps[i];
+      tr.step = i;
+      tr.messageAt = step.message;
+      var reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+      var currentRec = this._pulseRecs[step.message];
+
+      this._els.messages.forEach(function (g, idx) {
+        var current = idx === step.message;
+        var rec = this._pulseRecs[idx];
+        g.toggleAttribute('data-q-sequence-current', current);
+        g.toggleAttribute('data-q-sequence-lit', current);
+        g.toggleAttribute('data-q-sequence-dim', !tr.messages[idx + 1]);
+        rec.basePath.setAttribute('stroke-width', current && reduced ? '3.5' : '1.5');
+        rec.pulsePath.setAttribute('data-q-inactive', '');
+        if (!current || reduced) {
+          rec.maskDots.forEach(function (dot) {
+            dot.setAttribute('data-q-inactive', '');
+          });
+        }
+      }, this);
+      this._els.notes.forEach(function (note) {
+        note.el.removeAttribute('data-q-sequence-lit');
+        note.el.setAttribute('data-q-sequence-dim', '');
+      });
+
+      if (!reduced) {
+        currentRec.pulsePath.removeAttribute('data-q-inactive');
+        this._startPulse(pulseSchedule([{ rec: currentRec, down: true }], currentRec.edge.from));
+      } else {
+        this._stopPulse();
+      }
+
+      this._renderTracePanel(i);
+      this._syncPanelPad();
+      this._reveal(this._els.messages[step.message]);
+    }
+
     _applyTheme() {
       /* every colour is a var(--q-*) token, so the diagram follows the theme without a redraw */
     }
   }
+
+  ['_buildTracePanel', '_renderTracePanel', '_renderTraceValue', '_buildTraceDots', '_toggleTracePlay', '_stopTracePlay', '_traceStepBy',
+    '_startPulse', '_placePulseDots', '_pointAlong', '_stopPulse'].forEach(function (name) {
+    QSequence.prototype[name] = QFlow.prototype[name];
+  });
 
   define('q-tabs', QTabs);
   define('q-timeline', QTimeline);

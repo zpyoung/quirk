@@ -3387,9 +3387,9 @@ def test_kit_css_rules_stay_at_or_below_one_class_except_the_named_lifts() -> No
         "q-table th > [data-q-sort]:enabled:hover",
         "q-board > section:not([hidden])",
         "q-board > section > :is(h2, h3, h4, h5, h6):first-child",
-        "q-flow aside button:enabled:hover",
-        'q-flow aside button[aria-current="step"]:enabled:hover',
-        "q-flow aside [data-q-flow-tree] details[open] > summary",
+        ":is(q-flow, q-sequence) aside button:enabled:hover",
+        ':is(q-flow, q-sequence) aside button[aria-current="step"]:enabled:hover',
+        ":is(q-flow, q-sequence) aside [data-q-flow-tree] details[open] > summary",
         "q-sequence [data-q-sequence-pinned-row] > button:enabled:hover",
     }
     offenders: list[str] = []
@@ -8903,6 +8903,12 @@ def _seq_msg(frm: str, to: str, label: str, mtype: str, mid: str | None = None, 
     return step
 
 
+_SEQ_V1 = {"order": "C-2207", "items": 2, "total": 48}
+_SEQ_V2 = {**_SEQ_V1, "amount": 48, "currency": "usd"}
+_SEQ_V3 = {**_SEQ_V2, "attempt": 1, "card": "•••• 4242"}
+_SEQ_V5 = {**_SEQ_V3, "attempt": 2}
+_SEQ_V6 = {**_SEQ_V5, "charge": "ch_91", "status": "succeeded"}
+
 SEQ_CHECKOUT_DATA = {
     "kinds": SEQ_KINDS,
     "participants": [
@@ -8944,26 +8950,26 @@ SEQ_CHECKOUT_DATA = {
             "id": "succeeds",
             "label": "Card succeeds",
             "steps": [
-                {"message": "place-order", "value": {"order": "C-2207", "items": 2, "total": 48}},
-                {"message": "charge-order", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd"}},
-                {"message": "create-charge", "value": {"order": "C-2207", "amount": 48, "currency": "usd", "attempt": 1, "card": "•••• 4242"}},
-                {"message": "charge-ok", "value": {"order": "C-2207", "attempt": 1, "charge": "ch_91", "status": "succeeded"}},
-                {"message": "record", "value": {"order": "C-2207", "charge": "ch_91", "status": "succeeded"}, "note": "async, nothing waits for it"},
-                {"message": "paid", "value": {"order": "C-2207", "charge": "ch_91", "status": "paid"}},
+                {"message": "place-order", "value": _SEQ_V1},
+                {"message": "charge-order", "value": _SEQ_V2},
+                {"message": "create-charge", "value": _SEQ_V3},
+                {"message": "charge-ok", "value": {**_SEQ_V3, "charge": "ch_91", "status": "succeeded"}},
+                {"message": "record", "value": {**_SEQ_V3, "charge": "ch_91", "status": "succeeded"}, "note": "async, nothing waits for it"},
+                {"message": "paid", "value": {**_SEQ_V3, "charge": "ch_91", "status": "paid"}},
             ],
         },
         {
             "id": "declined",
             "label": "Declined, then retried",
             "steps": [
-                {"message": "place-order", "value": {"order": "C-2207", "items": 2, "total": 48}},
-                {"message": "charge-order", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd"}},
-                {"message": "create-charge", "value": {"order": "C-2207", "amount": 48, "currency": "usd", "attempt": 1, "card": "•••• 4242"}},
-                {"message": "charge-declined", "value": {"order": "C-2207", "attempt": 1, "decline": "insufficient_funds"}},
-                {"message": "create-charge", "value": {"order": "C-2207", "attempt": 2, "card": "•••• 4242"}},
-                {"message": "charge-ok", "value": {"order": "C-2207", "attempt": 2, "charge": "ch_91", "status": "succeeded"}},
-                {"message": "record", "value": {"order": "C-2207", "charge": "ch_91", "status": "succeeded"}},
-                {"message": "paid", "value": {"order": "C-2207", "charge": "ch_91", "status": "paid"}},
+                {"message": "place-order", "value": _SEQ_V1},
+                {"message": "charge-order", "value": _SEQ_V2},
+                {"message": "create-charge", "value": _SEQ_V3},
+                {"message": "charge-declined", "value": {**_SEQ_V3, "decline": "insufficient_funds"}},
+                {"message": "create-charge", "value": _SEQ_V5},
+                {"message": "charge-ok", "value": _SEQ_V6},
+                {"message": "record", "value": _SEQ_V6},
+                {"message": "paid", "value": {**_SEQ_V6, "status": "paid"}},
             ],
         },
     ],
@@ -9074,7 +9080,7 @@ def test_seq_draws_one_shell_in_order_with_the_summary_as_the_svg_label(seq_page
             const controls = root.querySelector(':scope > [data-q-sequence-controls]');
             return {
               ready: root.getAttribute('data-q-sequence-ready'),
-              children: [...root.children].map((c) => c.tagName.toLowerCase() + (c.getAttribute('data-q-sequence-controls') !== null ? ':controls' : c.hasAttribute('data-q-sequence-pinned') ? ':pinned' : c.hasAttribute('data-q-sequence-stage') ? ':stage' : c.hasAttribute('data-q-sequence-live') ? ':live' : c.hasAttribute('data-q-sequence-list') ? ':list' : '')),
+              children: [...root.children].map((c) => c.tagName.toLowerCase() + (c.getAttribute('data-q-sequence-controls') !== null ? ':controls' : c.hasAttribute('data-q-sequence-pinned') ? ':pinned' : c.hasAttribute('data-q-sequence-stage') ? ':stage' : c.hasAttribute('data-q-flow-trace-panel') ? ':trace' : c.hasAttribute('data-q-flow-drawer') ? ':drawer' : c.hasAttribute('data-q-sequence-live') ? ':live' : c.hasAttribute('data-q-sequence-list') ? ':list' : '')),
               controlsRole: controls.getAttribute('role'),
               controlsLabel: controls.getAttribute('aria-label'),
               buttons: controls.querySelectorAll('button').length,
@@ -9098,8 +9104,8 @@ def test_seq_draws_one_shell_in_order_with_the_summary_as_the_svg_label(seq_page
     assert_clean(out)
     d = out["results"]["d"]
     assert d["ready"] == "true"
-    assert d["children"] == ["script", "div:controls", "div:pinned", "div:stage", "div:live", "details:list"]
-    assert (d["controlsRole"], d["controlsLabel"], d["buttons"]) == ("toolbar", "Diagram controls", 0)
+    assert d["children"] == ["script", "div:controls", "div:pinned", "div:stage", "aside:trace", "aside:drawer", "div:live", "details:list"]
+    assert (d["controlsRole"], d["controlsLabel"], d["buttons"]) == ("toolbar", "Diagram controls", 1)
     assert d["svgParent"] and d["svgRole"] == "img"
     assert d["svgLabel"] == "Checkout charges the card through Billing and Stripe, retrying a declined card."
     assert d["live"] == "polite" and d["liveHidden"]
@@ -10052,3 +10058,1014 @@ def test_seq_detail_nesting_passes_at_32_deep_and_fails_hard_at_33(seq_page: Pat
     ok = {"ready": "true", "notice": 0, "svg": 1}
     bad = {"ready": "error", "notice": 1, "svg": 0}
     assert out["results"]["d"] == {"part32": ok, "part33": bad, "msg32": ok, "msg33": bad}
+
+
+SEQ_FOCUS_JS = """
+const root = q('checkout');
+const drawer = () => root.querySelector(':scope > aside[data-q-flow-drawer]');
+const numbers = (sel) => [...root.querySelectorAll(sel)].map((m) => Number(m.getAttribute('data-q-sequence-message')));
+const ids = (sel, attr) => [...new Set([...root.querySelectorAll(sel)].map((e) => e.getAttribute(attr)))].sort();
+const state = () => {
+  const d = drawer();
+  const h3 = d.querySelector('h3');
+  return {
+    focus: root.getAttribute('data-q-sequence-focus'),
+    focusMessage: root.getAttribute('data-q-sequence-focus-message'),
+    litMessages: numbers('[data-q-sequence-message][data-q-sequence-lit]'),
+    dimMessages: numbers('[data-q-sequence-message][data-q-sequence-dim]'),
+    litLifelines: ids('[data-q-sequence-lifeline][data-q-sequence-lit]', 'data-q-sequence-lifeline'),
+    dimLifelines: ids('[data-q-sequence-lifeline][data-q-sequence-dim]', 'data-q-sequence-lifeline'),
+    litBars: ids('[data-q-sequence-bar][data-q-sequence-lit]', 'data-q-sequence-bar'),
+    dimBars: ids('[data-q-sequence-bar][data-q-sequence-dim]', 'data-q-sequence-bar'),
+    litNotes: root.querySelectorAll('[data-q-sequence-note][data-q-sequence-lit]').length,
+    dimNotes: root.querySelectorAll('[data-q-sequence-note][data-q-sequence-dim]').length,
+    litHeaders: ids('[data-q-sequence-header][data-q-sequence-lit]', 'data-q-sequence-header'),
+    dimHeaders: root.querySelectorAll('[data-q-sequence-header][data-q-sequence-dim]').length,
+    fragmentMarks: root.querySelectorAll('[data-q-sequence-fragment][data-q-sequence-lit], [data-q-sequence-fragment][data-q-sequence-dim], [data-q-sequence-fragment] [data-q-sequence-lit], [data-q-sequence-fragment] [data-q-sequence-dim]').length,
+    open: !d.hasAttribute('data-q-inactive'),
+    title: h3 ? h3.textContent : null,
+    text: d.textContent,
+    buttons: [...d.querySelectorAll('button')].map((b) => b.textContent).filter((t) => t !== 'Close'),
+    active: document.activeElement ? (document.activeElement.getAttribute('data-q-sequence-message') || document.activeElement.getAttribute('data-q-sequence-header')) : null,
+  };
+};
+"""
+
+SEQ_STRIPE = '#checkout [data-q-sequence-header="stripe"]'
+SEQ_MSG_HIT = '#checkout [data-q-sequence-message="{n}"] [data-q-sequence-hit]'
+
+
+def test_seq_clicking_a_participant_lights_its_messages_dims_the_rest_and_opens_its_drawer(seq_page: Path) -> None:
+    out = run(
+        seq_page,
+        {"viewport": {"width": 1280, "height": 800}},
+        {"click": SEQ_STRIPE},
+        _seq_eval(
+            SEQ_FOCUS_JS
+            + """
+            const s = state();
+            const d = drawer();
+            s.kindTag = d.querySelector('[data-q-flow-drawer-kind]').textContent;
+            s.strong = d.querySelector('[data-q-flow-drawer-detail] strong').textContent;
+            s.directChild = d.parentElement === root && d.classList.contains('q-flow-drawer');
+            s.label = d.getAttribute('aria-label');
+            const dimmed = msg(root, 1);
+            const lit = msg(root, 3);
+            s.dimOpacity = getComputedStyle(dimmed).opacity;
+            s.litOpacity = getComputedStyle(lit).opacity;
+            s.litStroke = getComputedStyle(lit.querySelector('[data-q-sequence-line]')).strokeWidth;
+            s.litLifeline = getComputedStyle(root.querySelector('[data-q-sequence-lifeline="stripe"]')).strokeWidth;
+            s.fragmentOpacity = getComputedStyle(root.querySelector('[data-q-sequence-fragment]')).opacity;
+            return s;
+            """,
+            "on",
+        ),
+        {"click": SEQ_STRIPE},
+        _seq_eval(SEQ_FOCUS_JS + "return state();", "off"),
+    )
+    assert_clean(out)
+    on, off = out["results"]["on"], out["results"]["off"]
+    assert on["focus"] == "stripe" and on["focusMessage"] is None
+    assert on["litMessages"] == [3, 4, 5] and on["dimMessages"] == [1, 2, 6, 7, 8]
+    assert on["litLifelines"] == ["stripe"] and on["dimLifelines"] == ["billing", "checkout", "ledger", "shopper"]
+    assert on["litBars"] == ["stripe"] and on["dimBars"] == ["billing", "checkout"]
+    assert (on["litNotes"], on["dimNotes"]) == (0, 1)
+    assert on["litHeaders"] == ["stripe"] and on["dimHeaders"] == 0
+    assert on["fragmentMarks"] == 0 and on["fragmentOpacity"] == "1"
+    assert (on["dimOpacity"], on["litOpacity"], on["litStroke"], on["litLifeline"]) == ("0.22", "1", "2.5px", "2.5px")
+    assert on["open"] is True and on["directChild"] is True and on["label"] == "Details"
+    assert on["title"] == "Stripe" and on["kindTag"] == "external" and on["strong"] == "idempotent"
+    assert "Card processor. Charges are idempotent." in on["text"]
+    assert on["buttons"] == ["receives 3. create charge", "sends 4. charge succeeded", "sends 5. card declined"]
+    assert off["focus"] is None and off["focusMessage"] is None and off["open"] is False
+    for key in ("litMessages", "dimMessages", "litLifelines", "dimLifelines", "litBars", "dimBars", "litHeaders"):
+        assert off[key] == [], key
+    assert (off["litNotes"], off["dimNotes"], off["fragmentMarks"]) == (0, 0, 0)
+
+
+def test_seq_clicking_a_message_opens_its_drawer_with_the_pair_the_fragments_and_the_detail(seq_page: Path) -> None:
+    out = run(
+        seq_page,
+        {"viewport": {"width": 1280, "height": 800}},
+        {"click": SEQ_MSG_HIT.format(n=2)},
+        _seq_eval(SEQ_FOCUS_JS + "return state();", "two"),
+        {"click": '#checkout [data-q-sequence-goto-message="7"]'},
+        _seq_eval(SEQ_FOCUS_JS + "const s = state(); s.roving = msg(root, 7).getAttribute('tabindex'); return s;", "seven"),
+        {"click": SEQ_MSG_HIT.format(n=5)},
+        _seq_eval(SEQ_FOCUS_JS + "return state();", "five"),
+        {"click": SEQ_MSG_HIT.format(n=3)},
+        _seq_eval(SEQ_FOCUS_JS + "return state();", "three"),
+        {"click": "#checkout > aside[data-q-flow-drawer] [data-q-flow-drawer-close]"},
+        _seq_eval(SEQ_FOCUS_JS + "return state();", "closed"),
+        {"click": SEQ_MSG_HIT.format(n=2)},
+        {"click": SEQ_MSG_HIT.format(n=2)},
+        _seq_eval(SEQ_FOCUS_JS + "return state();", "again"),
+        {"click": SEQ_MSG_HIT.format(n=2)},
+        _seq_eval(SEQ_FOCUS_JS + "root.querySelector('[data-q-sequence-svg]').dispatchEvent(new MouseEvent('click', { bubbles: true })); return state();", "empty"),
+    )
+    assert_clean(out)
+    two, seven, five, three = (out["results"][k] for k in ("two", "seven", "five", "three"))
+    assert two["focusMessage"] == "2" and two["focus"] is None
+    assert two["litMessages"] == [2] and two["dimMessages"] == [1, 3, 4, 5, 6, 7, 8]
+    assert two["litHeaders"] == ["billing", "checkout"] and two["dimHeaders"] == 0
+    assert two["litLifelines"] == [] and two["dimLifelines"] == ["billing", "checkout", "ledger", "shopper", "stripe"]
+    assert (two["litNotes"], two["dimNotes"], two["fragmentMarks"]) == (0, 1, 0)
+    assert two["title"] == "2. charge order" and two["open"] is True
+    assert "Checkout → Billing" in two["text"] and "call" in two["text"]
+    assert "answered by 7. order paid" in two["buttons"]
+    assert seven["focusMessage"] == "7" and seven["litMessages"] == [7] and seven["title"] == "7. order paid"
+    assert "answers 2. charge order" in seven["buttons"] and seven["roving"] == "0" and seven["active"] == "7"
+    assert five["title"] == "5. card declined"
+    assert "inside loop: up to 3 attempts, alt: card declined" in five["text"]
+    assert "answers 3. create charge" in five["buttons"]
+    assert [t for t in three["buttons"] if t.startswith("answer")] == ["answered by 4. charge succeeded", "answered by 5. card declined"]
+    at = {k: three["text"].index(k) for k in ("3. create charge", "Billing → Stripe", "answered by 4.", "answered by 5.", "inside loop: up to 3 attempts", "payment_method")}
+    assert list(at.values()) == sorted(at.values()), at
+    closed, again, empty = (out["results"][k] for k in ("closed", "again", "empty"))
+    for gone in (closed, again, empty):
+        assert gone["focusMessage"] is None and gone["open"] is False and gone["litMessages"] == [] and gone["dimMessages"] == []
+    assert closed["active"] == "3"
+
+
+def test_seq_keyboard_roves_headers_and_messages_and_announces_the_focused_message(seq_page: Path) -> None:
+    before = "const b = document.createElement('button'); b.id = 'before-' + '{id}'; b.textContent = 'before'; q('{id}').before(b); b.focus();"
+    where = """
+    const a = document.activeElement;
+    return { header: a.getAttribute('data-q-sequence-header'), message: a.getAttribute('data-q-sequence-message'), tag: a.tagName.toLowerCase(), inList: !!a.closest('details[data-q-sequence-list]'), inRoot: !!a.closest('#checkout') };
+    """
+    out = run(
+        seq_page,
+        {"viewport": {"width": 1280, "height": 800}},
+        _seq_eval(before.format(id="checkout")),
+        {"press": "Tab"},
+        _seq_eval("return document.activeElement.getAttribute('data-q-sequence-action');", "toolbar"),
+        {"press": "Tab"},
+        _seq_eval(where, "tab"),
+        _seq_eval(
+            """
+            const stops = [...q('checkout').querySelectorAll('[data-q-sequence-header], [data-q-sequence-message]')];
+            return { total: stops.length, zero: stops.filter((e) => e.getAttribute('tabindex') === '0').map((e) => e.getAttribute('data-q-sequence-header')) };
+            """,
+            "roving",
+        ),
+        {"press": "Tab"},
+        _seq_eval(where, "out"),
+        {"press": "Shift+Tab"},
+        _seq_eval(where, "back"),
+        {"press": "ArrowRight"},
+        _seq_eval(where, "right"),
+        {"press": "ArrowLeft"},
+        _seq_eval(where, "left"),
+        {"press": "ArrowLeft"},
+        _seq_eval(where, "leftEdge"),
+        {"focus": SEQ_STRIPE},
+        {"press": "ArrowDown"},
+        _seq_eval(where, "downFromStripe"),
+        {"press": "ArrowDown"},
+        _seq_eval(where, "four"),
+        {"press": "ArrowDown"},
+        _seq_eval(where, "five"),
+        {"press": "ArrowUp"},
+        _seq_eval(where, "upToFour"),
+        {"focus": '#checkout [data-q-sequence-message="8"]'},
+        {"press": "ArrowDown"},
+        _seq_eval(where, "pastEnd"),
+        {"focus": '#checkout [data-q-sequence-message="1"]'},
+        {"press": "ArrowUp"},
+        _seq_eval(where, "upFromOne"),
+        {"focus": '#checkout [data-q-sequence-message="3"]'},
+        {"press": "Enter"},
+        _seq_eval(SEQ_FOCUS_JS + "return { live: root.querySelector(':scope > [data-q-sequence-live]').textContent, label: msg(root, 3).getAttribute('aria-label'), state: state() };", "enter"),
+        {"press": "Escape"},
+        _seq_eval(SEQ_FOCUS_JS + "return { live: root.querySelector(':scope > [data-q-sequence-live]').textContent, state: state() };", "escape"),
+        {"focus": '#checkout [data-q-sequence-header="billing"]'},
+        {"press": "Enter"},
+        _seq_eval(SEQ_FOCUS_JS + "return { live: root.querySelector(':scope > [data-q-sequence-live]').textContent, state: state() };", "headerEnter"),
+        _seq_eval(before.format(id="session")),
+        {"press": "Tab"},
+        _seq_eval(where, "sessionTab"),
+        {"press": "ArrowRight"},
+        _seq_eval(
+            where
+            + """
+            """,
+            "created",
+        ),
+        _seq_eval(
+            """
+            const a = document.activeElement;
+            return { late: a.hasAttribute('data-q-sequence-late'), opacity: getComputedStyle(a).opacity, tabindex: a.getAttribute('tabindex') };
+            """,
+            "createdLook",
+        ),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["toolbar"] == "trace"
+    assert (r["tab"]["header"], r["tab"]["tag"]) == ("shopper", "button")
+    assert r["roving"] == {"total": 5 + 8, "zero": ["shopper"]}
+    assert r["out"]["inList"] and r["out"]["tag"] == "summary" and r["out"]["header"] is None
+    assert r["back"]["header"] == "shopper"
+    assert r["right"]["header"] == "checkout" and r["left"]["header"] == "shopper" and r["leftEdge"]["header"] == "shopper"
+    assert r["downFromStripe"]["message"] == "3"
+    assert r["four"]["message"] == "4" and r["five"]["message"] == "5" and r["upToFour"]["message"] == "4"
+    assert r["pastEnd"]["message"] == "8"
+    assert r["upFromOne"]["header"] == "shopper"
+    announced = "Message 3 of 8, Billing to Stripe, create charge, call"
+    assert r["enter"]["live"] == announced == r["enter"]["label"]
+    assert r["enter"]["state"]["focusMessage"] == "3" and r["enter"]["state"]["open"] is True
+    esc = r["escape"]["state"]
+    assert esc["focusMessage"] is None and esc["open"] is False and esc["active"] == "3"
+    assert r["headerEnter"]["live"] == "Billing, service, sends 3, receives 3"
+    assert r["headerEnter"]["state"]["focus"] == "billing" and r["headerEnter"]["state"]["active"] == "billing"
+    assert r["sessionTab"]["header"] == "billing"
+    assert r["created"]["header"] == "receipt-worker"
+    assert r["createdLook"] == {"late": True, "opacity": "1", "tabindex": "0"}
+
+
+def test_seq_moving_keyboard_focus_scrolls_the_target_into_view_under_reduced_motion(seq_page: Path) -> None:
+    out = run(
+        seq_page,
+        {"viewport": {"width": 375, "height": 500}},
+        {"emulate": {"reducedMotion": "reduce"}},
+        _seq_eval("window.scrollTo(0, q('checkout').getBoundingClientRect().top + window.scrollY - 20)"),
+        {"focus": '#checkout [data-q-sequence-header="shopper"]'},
+        {"press": "ArrowRight"},
+        {"press": "ArrowRight"},
+        {"press": "ArrowRight"},
+        {"wait": 700},
+        _seq_eval(
+            """
+            const root = q('checkout');
+            const stage = root.querySelector('[data-q-sequence-stage]');
+            const strip = root.querySelector('[data-q-sequence-pinned]');
+            const h = document.activeElement.getBoundingClientRect();
+            const s = stage.getBoundingClientRect();
+            return { id: document.activeElement.getAttribute('data-q-sequence-header'), left: h.left - s.left, right: s.right - h.right, scrolled: stage.scrollLeft > 100, strip: strip.scrollLeft, page: window.scrollX };
+            """,
+            "header",
+        ),
+        *[{"press": "ArrowDown"}] * 6,
+        {"wait": 700},
+        _seq_eval(
+            """
+            const root = q('checkout');
+            const strip = root.querySelector('[data-q-sequence-pinned]').getBoundingClientRect();
+            const m = document.activeElement.getBoundingClientRect();
+            return { n: document.activeElement.getAttribute('data-q-sequence-message'), top: m.top - strip.bottom, bottom: window.innerHeight - m.bottom };
+            """,
+            "message",
+        ),
+        *[{"press": "ArrowUp"}] * 7,
+        {"wait": 700},
+        _seq_eval(
+            """
+            const root = q('checkout');
+            const strip = root.querySelector('[data-q-sequence-pinned]').getBoundingClientRect();
+            const m = document.activeElement.getBoundingClientRect();
+            return { n: document.activeElement.getAttribute('data-q-sequence-message'), top: m.top - strip.bottom };
+            """,
+            "up",
+        ),
+    )
+    assert_clean(out)
+    header, message, up = (out["results"][k] for k in ("header", "message", "up"))
+    assert header["id"] == "stripe" and header["scrolled"] and header["left"] >= -1 and header["right"] >= -1
+    assert header["strip"] == 0 and header["page"] == 0
+    assert message["n"] == "8" and message["top"] >= 0 and message["bottom"] >= 0
+    assert up["n"] == "1" and up["top"] >= 0
+
+
+def test_seq_the_drawer_is_a_bottom_sheet_on_a_phone_and_a_sticky_second_column_beside_the_diagram(seq_page: Path) -> None:
+    probe = """
+    const root = q('checkout');
+    const d = root.querySelector(':scope > aside[data-q-flow-drawer]');
+    const cs = getComputedStyle(d);
+    const r = d.getBoundingClientRect();
+    const stage = root.querySelector('[data-q-sequence-stage]').getBoundingClientRect();
+    return { position: cs.position, maxHeight: cs.maxHeight, left: r.left, right: r.right, top: r.top, bottom: r.bottom, height: r.height, width: r.width,
+      vh: window.innerHeight, vw: document.documentElement.clientWidth, cssTop: cs.top, column: cs.gridColumnStart, rootDisplay: getComputedStyle(root).display,
+      columns: getComputedStyle(root).gridTemplateColumns.split(' ').length, stageRight: stage.right, overflowY: cs.overflowY, shown: cs.display !== 'none' };
+    """
+    out = run(
+        seq_page,
+        {"viewport": {"width": 375, "height": 800}},
+        {"click": SEQ_MSG_HIT.format(n=1)},
+        _seq_eval(probe, "phone"),
+        {"viewport": {"width": 1280, "height": 800}},
+        _seq_eval("window.scrollTo(0, 0)"),
+        {"click": SEQ_MSG_HIT.format(n=2)},
+        _seq_eval(probe, "wideTop"),
+        _seq_eval("window.scrollTo(0, q('checkout').getBoundingClientRect().top + window.scrollY + 200)"),
+        {"wait": 700},
+        _seq_eval(probe, "wideScrolled"),
+        _seq_eval("window.scrollTo(0, 0)"),
+        {"click": "#checkout [data-q-flow-drawer-close]"},
+        _seq_eval(probe, "wideClosed"),
+        {"emulate": {"media": "print"}},
+        _seq_eval(
+            """
+            const d = q('checkout').querySelector(':scope > aside[data-q-flow-drawer]');
+            return { display: getComputedStyle(d).display };
+            """,
+            "print",
+        ),
+    )
+    assert_clean(out)
+    phone, top, scrolled, closed = (out["results"][k] for k in ("phone", "wideTop", "wideScrolled", "wideClosed"))
+    assert phone["position"] == "fixed" and phone["maxHeight"] == "440px" and phone["overflowY"] == "auto"
+    assert phone["left"] == 0 and phone["width"] == phone["vw"] and phone["bottom"] == phone["vh"] and phone["height"] <= 440
+    assert phone["rootDisplay"] == "block"
+    assert top["rootDisplay"] == "grid" and top["columns"] == 2 and top["column"] == "2" and top["position"] == "sticky"
+    assert top["left"] >= top["stageRight"] - 1
+    assert scrolled["position"] == "sticky" and scrolled["top"] >= 0 and scrolled["bottom"] <= scrolled["vh"]
+    assert abs(scrolled["top"] - float(scrolled["cssTop"].removesuffix("px"))) <= 1
+    assert closed["rootDisplay"] == "block" and closed["shown"] is False
+    assert out["results"]["print"]["display"] == "none"
+
+
+SEQ_WITH_FLOW = _seq_element("checkout", "Checkout charges the card through Billing and Stripe, retrying a declined card.", SEQ_CHECKOUT_DATA) + _seq_element(
+    "selfmsg", "Billing validates a cart it was sent.", SEQ_SELF_DATA
+) + """
+<q-flow id="plain" summary="A graph with no traces.">
+  <script type="application/json">
+  {"nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}], "edges": [{"from": "a", "to": "b"}]}
+  </script>
+</q-flow>
+"""
+
+
+@pytest.fixture(scope="module")
+def seq_flow_page(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    reason = _node_ready()
+    if reason:
+        pytest.skip(reason)
+    work = tmp_path_factory.mktemp("kit-sequence-flow")
+    src = work / "sequence-flow.src.html"
+    src.write_text(HEADER + SEQ_WITH_FLOW, encoding="utf-8")
+    return _build(src, work / "sequence-flow.html")
+
+
+def test_seq_escape_clears_focus_unless_the_key_came_from_inside_another_diagram(seq_flow_page: Path) -> None:
+    probe = """
+    const root = q('checkout');
+    const d = root.querySelector(':scope > aside[data-q-flow-drawer]');
+    const a = document.activeElement;
+    return { focus: root.getAttribute('data-q-sequence-focus-message'), open: !d.hasAttribute('data-q-inactive'), active: a ? (a.id || a.getAttribute('data-q-flow-node') || a.getAttribute('data-q-sequence-message')) : null };
+    """
+    outside = "const b = document.createElement('button'); b.id = 'outside'; b.textContent = 'outside'; document.body.prepend(b); b.focus();"
+    out = run(
+        seq_flow_page,
+        {"viewport": {"width": 1280, "height": 800}},
+        {"click": SEQ_MSG_HIT.format(n=2)},
+        _seq_eval(probe, "focused"),
+        {"focus": "#plain [data-q-flow-node]"},
+        {"press": "Escape"},
+        _seq_eval(probe, "fromFlow"),
+        {"focus": '#selfmsg [data-q-sequence-message="1"]'},
+        {"press": "Escape"},
+        _seq_eval(probe, "fromOtherSequence"),
+        _seq_eval(outside),
+        {"press": "Escape"},
+        _seq_eval(probe, "fromOutside"),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["focused"]["focus"] == "2" and r["focused"]["open"] is True
+    assert r["fromFlow"]["focus"] == "2" and r["fromFlow"]["open"] is True
+    assert r["fromOtherSequence"]["focus"] == "2" and r["fromOtherSequence"]["open"] is True
+    assert r["fromOutside"]["focus"] is None and r["fromOutside"]["open"] is False
+    assert r["fromOutside"]["active"] == "outside"
+
+
+# --- q-sequence trace mode --------------------------------------------------------------------
+
+SEQ_TRACE_BTN = '#checkout [data-q-sequence-action="trace"]'
+SEQ_TRACE_NEXT = "#checkout [data-q-flow-trace-next]"
+SEQ_TRACE_PICKER = "#checkout [data-q-flow-trace-picker]"
+SEQ_TRACE_COLLAPSE = "#checkout [data-q-sequence-trace-collapse]"
+
+SEQ_TRACE_HELPERS = """
+const root = q('checkout');
+const panel = root.querySelector(':scope > [data-q-flow-trace-panel]');
+const numberOf = (g) => Number(g.getAttribute('data-q-sequence-message'));
+const msgs = () => [...root.querySelectorAll('[data-q-sequence-message]')];
+const keyOf = (li) => li.querySelector(':scope > [data-q-flow-key], :scope > details > summary > [data-q-flow-key]').textContent.replace(/: $/, '');
+const changes = () => [...panel.querySelectorAll('[data-q-flow-trace-value] > ul > li[data-q-flow-field]')]
+  .filter((li) => li.getAttribute('data-q-flow-change') !== 'same')
+  .map((li) => [keyOf(li), li.getAttribute('data-q-flow-change')]);
+const maskDotsActive = (g) => {
+  const pulse = g.querySelector('[data-q-sequence-pulse]');
+  const id = pulse.getAttribute('mask').replace(/^url\\(#|\\)$/g, '');
+  return [...document.getElementById(id).querySelectorAll('circle')].filter((c) => !c.hasAttribute('data-q-inactive')).length;
+};
+const state = () => ({
+  tracing: root.hasAttribute('data-q-sequence-tracing'),
+  pressed: root.querySelector('[data-q-sequence-action="trace"]').getAttribute('aria-pressed'),
+  panelOpen: !panel.hasAttribute('data-q-inactive'),
+  drawerOpen: !root.querySelector(':scope > aside[data-q-flow-drawer]').hasAttribute('data-q-inactive'),
+  focus: root.getAttribute('data-q-sequence-focus') || root.getAttribute('data-q-sequence-focus-message'),
+  counter: panel.querySelector('[data-q-flow-trace-counter]').textContent,
+  current: msgs().filter((g) => g.hasAttribute('data-q-sequence-current')).map(numberOf),
+  lit: msgs().filter((g) => g.hasAttribute('data-q-sequence-lit')).map(numberOf),
+  dim: msgs().filter((g) => g.hasAttribute('data-q-sequence-dim')).map(numberOf),
+  notesDim: [...root.querySelectorAll('[data-q-sequence-note]')].map((n) => n.hasAttribute('data-q-sequence-dim')),
+  pulsing: msgs().filter((g) => !g.querySelector('[data-q-sequence-pulse]').hasAttribute('data-q-inactive')).map(numberOf),
+  dots: msgs().map(maskDotsActive).reduce((a, b) => a + b, 0),
+  dotsOf: msgs().filter((g) => maskDotsActive(g) > 0).map(numberOf),
+  widths: msgs().map((g) => g.querySelector('[data-q-sequence-line]').getAttribute('stroke-width')),
+});
+"""
+
+
+def _seq_trace_eval(body: str, name: str = "d") -> dict:
+    return ev(f"(async () => {{ {SEQ_HELPERS} {SEQ_TRACE_HELPERS} {body} }})()", name)
+
+
+def _seq_pick(label: str) -> dict:
+    return {"select": {"selector": SEQ_TRACE_PICKER, "label": label}}
+
+
+def test_seq_step_through_shows_only_with_traces_and_opens_on_step_one_clearing_focus(seq_page: Path) -> None:
+    out = run(
+        seq_page,
+        {"viewport": {"width": 1280, "height": 800}},
+        _seq_eval(
+            """
+            const other = q('selfmsg');
+            return {
+              buttons: other.querySelectorAll('[data-q-sequence-action]').length,
+              controlsEmpty: other.querySelector('[data-q-sequence-controls]').children.length,
+              panel: other.querySelector('[data-q-flow-trace-panel]') !== null,
+              aria: q('checkout').querySelector('[data-q-sequence-action="trace"]').getAttribute('aria-pressed'),
+              text: q('checkout').querySelector('[data-q-sequence-action="trace"]').textContent,
+              label: q('checkout').querySelector('[data-q-sequence-action="trace"]').getAttribute('aria-label'),
+              actions: [...q('checkout').querySelectorAll('[data-q-sequence-controls] button')].map((b) => b.getAttribute('data-q-sequence-action')),
+            };
+            """,
+            "plain",
+        ),
+        {"click": '#checkout [data-q-sequence-header="stripe"]'},
+        _seq_trace_eval("return state();", "focused"),
+        {"click": SEQ_TRACE_BTN},
+        _seq_trace_eval(
+            """
+            const p = panel.getBoundingClientRect();
+            const stage = root.querySelector('[data-q-sequence-stage]').getBoundingClientRect();
+            const cs = getComputedStyle(panel);
+            return Object.assign(state(), {
+              focusAttrs: [root.hasAttribute('data-q-sequence-focus'), root.hasAttribute('data-q-sequence-focus-message')],
+              headersLit: root.querySelectorAll('[data-q-sequence-header][data-q-sequence-lit]').length,
+              picker: panel.querySelector('[data-q-flow-trace-picker]').value,
+              options: [...panel.querySelectorAll('[data-q-flow-trace-picker] option')].map((o) => o.textContent),
+              marks: panel.querySelectorAll('[data-q-flow-trace-value] [data-q-flow-change]:not([data-q-flow-change="same"])').length,
+              rootDisplay: getComputedStyle(root).display,
+              position: cs.position,
+              column: cs.gridColumnStart,
+              besideStage: p.left >= stage.right - 1,
+              activeIsNext: document.activeElement === panel.querySelector('[data-q-flow-trace-next]'),
+              backDisabled: panel.querySelector('[data-q-flow-trace-back]').disabled,
+              stepDots: panel.querySelectorAll('[data-q-flow-trace-dot]').length,
+              ariaDot: panel.querySelector('[data-q-flow-trace-dot="1"]').getAttribute('aria-label'),
+              pulseDots: maskDotsActive(msg(root, 1)),
+              pulseWidth: msg(root, 1).querySelector('[data-q-sequence-pulse]').getAttribute('stroke-width'),
+              pulseBases: root.querySelectorAll('defs mask').length,
+              grad: root.querySelectorAll('defs radialGradient').length,
+              maskIds: [...root.querySelectorAll('defs mask')].every((m) => m.id.startsWith(root._uid)),
+              gradId: root.querySelector('defs radialGradient').id.startsWith(root._uid),
+              lineStroke: getComputedStyle(msg(root, 1).querySelector('[data-q-sequence-line]')).stroke,
+              accent: getComputedStyle(root).getPropertyValue('--q-color-accent'),
+            });
+            """,
+            "open",
+        ),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["plain"] == {
+        "buttons": 0,
+        "controlsEmpty": 0,
+        "panel": False,
+        "aria": "false",
+        "text": "Step through",
+        "label": "Step through a trace",
+        "actions": ["trace"],
+    }
+    assert r["focused"]["focus"] == "stripe" and r["focused"]["drawerOpen"] is True and r["focused"]["tracing"] is False
+    assert r["focused"]["panelOpen"] is False and r["focused"]["dim"] == [1, 2, 6, 7, 8]
+    o = r["open"]
+    assert o["focusAttrs"] == [False, False] and o["focus"] is None and o["drawerOpen"] is False
+    assert o["tracing"] is True and o["pressed"] == "true" and o["panelOpen"] is True
+    assert o["counter"] == "Step 1 of 6, message 1, Shopper to Checkout, place order"
+    assert o["picker"] == "succeeds" and o["options"] == ["Card succeeds", "Declined, then retried"]
+    assert o["current"] == [1] and o["lit"] == [1]
+    assert o["dim"] == [5, 8] and o["notesDim"] == [True]
+    assert o["headersLit"] == 0
+    assert o["pulsing"] == [1] and o["dotsOf"] == [1] and o["pulseDots"] >= 1 and o["dots"] == o["pulseDots"]
+    assert o["pulseWidth"] == "6"
+    assert o["pulseBases"] == 8 and o["grad"] == 1 and o["maskIds"] is True and o["gradId"] is True
+    assert o["marks"] == 0
+    assert o["rootDisplay"] == "grid" and o["position"] == "sticky" and o["column"] == "2" and o["besideStage"] is True
+    assert o["activeIsNext"] is True and o["backDisabled"] is True
+    assert o["stepDots"] == 6
+    assert o["ariaDot"] == "Step 1: message 1, Shopper to Checkout, place order"
+    assert o["widths"] == ["1.5"] * 8
+
+
+def test_seq_declined_trace_marks_each_step_and_returns_to_message_three_on_the_retry(seq_page: Path) -> None:
+    after_next = """
+    const s = state();
+    const cur = s.current[0];
+    return {
+      counter: s.counter,
+      current: s.current,
+      changes: changes(),
+      pulsing: s.pulsing,
+      dotsOf: s.dotsOf,
+      dim: s.dim,
+      lit: s.lit,
+      line: msg(root, cur).querySelector('[data-q-sequence-line]').getAttribute('stroke-width'),
+    };
+    """
+    steps: list[dict] = [
+        {"viewport": {"width": 1280, "height": 800}},
+        {"click": SEQ_TRACE_BTN},
+        _seq_pick("Declined, then retried"),
+        _seq_trace_eval(after_next, "s1"),
+    ]
+    for n in range(2, 9):
+        steps += [{"click": SEQ_TRACE_NEXT}, _seq_trace_eval(after_next, f"s{n}")]
+    steps.append(_seq_trace_eval("return { next: panel.querySelector('[data-q-flow-trace-next]').disabled, dots: panel.querySelectorAll('[data-q-flow-trace-dot]').length };", "end"))
+    out = run(seq_page, *steps)
+    assert_clean(out)
+    r = out["results"]
+    expected_current = [1, 2, 3, 5, 3, 4, 6, 7]
+    expected_changes = [
+        [],
+        [["amount", "added"], ["currency", "added"]],
+        [["attempt", "added"], ["card", "added"]],
+        [["decline", "added"]],
+        [["attempt", "changed"], ["decline", "removed"]],
+        [["charge", "added"], ["status", "added"]],
+        [],
+        [["status", "changed"]],
+    ]
+    for step in range(1, 9):
+        s = r[f"s{step}"]
+        n = expected_current[step - 1]
+        assert s["counter"].startswith(f"Step {step} of 8, message {n}, "), s["counter"]
+        assert s["current"] == [n] and s["lit"] == [n], (step, s)
+        assert s["changes"] == expected_changes[step - 1], (step, s["changes"])
+        assert s["pulsing"] == [n], (step, s["pulsing"])
+        assert s["dotsOf"] == [n], (step, s["dotsOf"])
+        assert s["dim"] == [8], (step, s["dim"])
+    assert r["s5"]["current"] == r["s3"]["current"] == [3]
+    assert r["end"] == {"next": True, "dots": 8}
+
+
+def test_seq_trace_counter_and_dots_name_the_message_from_to_and_label(seq_page: Path) -> None:
+    out = run(
+        seq_page,
+        {"viewport": {"width": 1280, "height": 800}},
+        {"click": SEQ_TRACE_BTN},
+        {"click": SEQ_TRACE_NEXT},
+        {"click": SEQ_TRACE_NEXT},
+        _seq_trace_eval(
+            """
+            const counter = panel.querySelector('[data-q-flow-trace-counter]');
+            return {
+              text: counter.textContent,
+              live: counter.getAttribute('aria-live'),
+              hidden: counter.querySelector('.q-visually-hidden').textContent,
+              dot: panel.querySelector('[data-q-flow-trace-dot="3"]').getAttribute('aria-label'),
+              current: [...panel.querySelectorAll('[data-q-flow-trace-dot][aria-current="step"]')].map((b) => b.textContent),
+              note: panel.querySelector('[data-q-flow-trace-note]').hasAttribute('data-q-inactive'),
+            };
+            """,
+            "d",
+        ),
+        {"click": '#checkout [data-q-flow-trace-dot="5"]'},
+        _seq_trace_eval(
+            """
+            return {
+              text: panel.querySelector('[data-q-flow-trace-counter]').textContent,
+              note: panel.querySelector('[data-q-flow-trace-note]').textContent,
+              noteShown: !panel.querySelector('[data-q-flow-trace-note]').hasAttribute('data-q-inactive'),
+              current: state().current,
+            };
+            """,
+            "noted",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["text"] == "Step 3 of 6, message 3, Billing to Stripe, create charge"
+    assert d["live"] == "polite" and d["hidden"] == ", message 3, Billing to Stripe, create charge"
+    assert d["dot"] == "Step 3: message 3, Billing to Stripe, create charge"
+    assert d["current"] == ["3"] and d["note"] is True
+    noted = out["results"]["noted"]
+    assert noted["text"] == "Step 5 of 6, message 6, Billing to Ledger, record payment: async, nothing waits for it"
+    assert noted["note"] == "async, nothing waits for it" and noted["noteShown"] is True and noted["current"] == [6]
+
+
+def test_seq_clicks_while_tracing_jump_to_the_next_visit_and_an_off_trace_message_leaves_trace_mode(seq_page: Path) -> None:
+    out = run(
+        seq_page,
+        {"viewport": {"width": 1280, "height": 800}},
+        {"click": SEQ_TRACE_BTN},
+        _seq_pick("Declined, then retried"),
+        {"click": SEQ_TRACE_NEXT},
+        _seq_trace_eval("return state().counter.slice(0, 9);", "at2"),
+        {"click": SEQ_MSG_HIT.format(n=3)},
+        _seq_trace_eval("return state().counter.slice(0, 9);", "first"),
+        {"click": SEQ_MSG_HIT.format(n=3)},
+        _seq_trace_eval("return state().counter.slice(0, 9);", "second"),
+        {"click": SEQ_MSG_HIT.format(n=3)},
+        _seq_trace_eval("return state().counter.slice(0, 9);", "wrapped"),
+        {"click": SEQ_MSG_HIT.format(n=5)},
+        _seq_trace_eval("return state().counter.slice(0, 9);", "back"),
+        _seq_eval(
+            """
+            q('checkout').querySelector('[data-q-sequence-svg]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            return null;
+            """,
+            "emptyClick",
+        ),
+        _seq_trace_eval("return { counter: state().counter.slice(0, 9), tracing: state().tracing, panelOpen: state().panelOpen };", "afterEmpty"),
+        {"click": SEQ_MSG_HIT.format(n=8)},
+        _seq_trace_eval(
+            """
+            const drawer = root.querySelector(':scope > aside[data-q-flow-drawer]');
+            return Object.assign(state(), {
+              title: drawer.querySelector('h3').textContent,
+              dimCount: msgs().filter((g) => g.hasAttribute('data-q-sequence-dim')).length,
+              pulseVisible: root.querySelectorAll('[data-q-sequence-pulse]:not([data-q-inactive])').length,
+              currentAttr: root.querySelectorAll('[data-q-sequence-current]').length,
+              panelShown: getComputedStyle(panel).display !== 'none',
+              bodyPad: document.body.style.paddingBottom,
+            });
+            """,
+            "off",
+        ),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["at2"] == "Step 2 of"
+    assert r["first"] == "Step 3 of"
+    assert r["second"] == "Step 5 of"
+    assert r["wrapped"] == "Step 3 of"
+    assert r["back"] == "Step 4 of"
+    assert r["afterEmpty"] == {"counter": "Step 4 of", "tracing": True, "panelOpen": True}
+    off = r["off"]
+    assert off["tracing"] is False and off["panelOpen"] is False and off["pressed"] == "false" and off["panelShown"] is False
+    assert off["drawerOpen"] is True and off["focus"] == "8" and off["title"] == "8. show receipt"
+    assert off["dim"] == [1, 2, 3, 4, 5, 6, 7] and off["lit"] == [8]
+    assert off["pulseVisible"] == 0 and off["currentAttr"] == 0 and off["dots"] == 0 and off["bodyPad"] == ""
+
+
+def test_seq_a_header_click_leaves_trace_mode_and_escape_or_the_button_close_it_returning_to_rest(seq_page: Path) -> None:
+    rest = """
+    const s = state();
+    return {
+      tracing: s.tracing,
+      pressed: s.pressed,
+      panelOpen: s.panelOpen,
+      dimOrLit: s.dim.length + s.lit.length + s.current.length + s.notesDim.filter(Boolean).length,
+      pulsing: s.pulsing.length,
+      dots: s.dots,
+      widths: [...new Set(s.widths)],
+      active: document.activeElement === root.querySelector('[data-q-sequence-action="trace"]'),
+      drawer: s.drawerOpen,
+    };
+    """
+    out = run(
+        seq_page,
+        {"viewport": {"width": 1280, "height": 800}},
+        {"click": SEQ_TRACE_BTN},
+        {"click": '#checkout [data-q-sequence-header="ledger"]'},
+        _seq_trace_eval("return Object.assign(state(), { title: root.querySelector(':scope > aside[data-q-flow-drawer] h3').textContent });", "header"),
+        {"click": SEQ_TRACE_BTN},
+        {"click": SEQ_TRACE_NEXT},
+        {"press": "Escape"},
+        _seq_trace_eval(rest, "escape"),
+        {"click": SEQ_TRACE_BTN},
+        {"click": SEQ_TRACE_BTN},
+        _seq_trace_eval(rest, "toggled"),
+        {"click": SEQ_TRACE_BTN},
+        {"click": '#checkout [data-q-flow-trace-dot="4"]'},
+        _seq_trace_eval("return state().counter.slice(0, 9);", "dot"),
+        {"focus": '#checkout [data-q-sequence-message="1"]'},
+        {"press": "Enter"},
+        _seq_trace_eval("return state().counter.slice(0, 9);", "enter"),
+    )
+    assert_clean(out)
+    r = out["results"]
+    h = r["header"]
+    assert h["tracing"] is False and h["panelOpen"] is False and h["drawerOpen"] is True and h["focus"] == "ledger" and h["title"] == "Ledger"
+    assert h["dim"] == [1, 2, 3, 4, 5, 7, 8] and h["pulsing"] == [] and h["dots"] == 0
+    resting = {"tracing": False, "pressed": "false", "panelOpen": False, "dimOrLit": 0, "pulsing": 0, "dots": 0, "widths": ["1.5"], "drawer": False}
+    assert r["escape"] == {**resting, "active": True}
+    assert r["toggled"] == {**resting, "active": True}
+    assert r["dot"] == "Step 4 of"
+    assert r["enter"] == "Step 1 of"
+
+
+def test_seq_reduced_motion_steps_without_pulse_dots_and_draws_the_current_line_thick(seq_page: Path) -> None:
+    probe = """
+    const s = state();
+    const cur = msg(root, s.current[0]);
+    const line = cur.querySelector('[data-q-sequence-line]');
+    return {
+      counter: s.counter.slice(0, 9),
+      current: s.current,
+      dots: s.dots,
+      pulsing: s.pulsing,
+      attr: line.getAttribute('stroke-width'),
+      computed: getComputedStyle(line).strokeWidth,
+      others: msgs().filter((g) => g !== cur).map((g) => g.querySelector('[data-q-sequence-line]').getAttribute('stroke-width')),
+      head: cur.querySelector('[data-q-sequence-head]') !== null,
+    };
+    """
+    out = run(
+        seq_page,
+        {"viewport": {"width": 1280, "height": 800}},
+        {"emulate": {"reducedMotion": "reduce"}},
+        {"click": SEQ_TRACE_BTN},
+        _seq_trace_eval(probe, "s1"),
+        {"click": SEQ_TRACE_NEXT},
+        _seq_trace_eval(probe, "s2"),
+        {"click": SEQ_TRACE_NEXT},
+        {"wait": 1500},
+        _seq_trace_eval(probe, "s3"),
+        {"click": '#checkout [data-q-flow-trace-play]'},
+        {"waitFor": "document.querySelector('#checkout [data-q-flow-trace-counter]').textContent.startsWith('Step 6 of 6')", "timeout": 20000},
+        _seq_trace_eval(probe, "played"),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert [r[k]["counter"] for k in ("s1", "s2", "s3", "played")] == ["Step 1 of", "Step 2 of", "Step 3 of", "Step 6 of"]
+    assert [r[k]["current"] for k in ("s1", "s2", "s3", "played")] == [[1], [2], [3], [7]]
+    for key in ("s1", "s2", "s3", "played"):
+        assert r[key]["dots"] == 0 and r[key]["pulsing"] == [], (key, r[key])
+        assert r[key]["attr"] == "3.5" and r[key]["computed"] == "3.5px", (key, r[key])
+        assert set(r[key]["others"]) == {"1.5"} and r[key]["head"] is True
+
+
+def test_seq_reduced_motion_scrolls_land_immediately_for_trace_steps_and_keyboard_moves(seq_page: Path) -> None:
+    out = run(
+        seq_page,
+        {"viewport": {"width": 1280, "height": 400}},
+        {"emulate": {"reducedMotion": "reduce"}},
+        _seq_eval(
+            """
+            window.scrollTo({ top: q('checkout').getBoundingClientRect().top + window.scrollY - 20, behavior: 'instant' });
+            return { smooth: getComputedStyle(document.documentElement).scrollBehavior };
+            """,
+            "setup",
+        ),
+        {"click": SEQ_TRACE_BTN},
+        _seq_trace_eval(
+            """
+            const next = panel.querySelector('[data-q-flow-trace-next]');
+            const before = window.scrollY;
+            const seen = [];
+            for (let i = 0; i < 5; i += 1) {
+              next.click();
+              seen.push(window.scrollY);
+            }
+            const strip = root.querySelector('[data-q-sequence-pinned]').getBoundingClientRect();
+            const cur = root.querySelector('[data-q-sequence-current]').getBoundingClientRect();
+            await new Promise((r) => setTimeout(r, 900));
+            return { before, seen, settled: window.scrollY, curTop: cur.top - strip.bottom, curBottom: window.innerHeight - cur.bottom, counter: state().counter.slice(0, 9) };
+            """,
+            "trace",
+        ),
+        {"click": SEQ_TRACE_BTN},
+        _seq_eval("window.scrollTo({ top: q('checkout').getBoundingClientRect().top + window.scrollY - 20, behavior: 'instant' });", "reset"),
+        {"focus": '#checkout [data-q-sequence-message="1"]'},
+        _seq_trace_eval(
+            """
+            const before = window.scrollY;
+            const seen = [];
+            for (let i = 0; i < 6; i += 1) {
+              document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+              seen.push(window.scrollY);
+            }
+            await new Promise((r) => setTimeout(r, 900));
+            return { before, seen, settled: window.scrollY, n: document.activeElement.getAttribute('data-q-sequence-message') };
+            """,
+            "keys",
+        ),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["setup"]["smooth"] == "smooth"
+    t = r["trace"]
+    assert t["counter"] == "Step 6 of"
+    assert t["seen"][-1] == t["settled"] and t["settled"] > t["before"], t
+    assert t["curTop"] >= 0 and t["curBottom"] >= 0, t
+    k = r["keys"]
+    assert k["n"] == "7"
+    assert k["seen"][-1] == k["settled"] and k["settled"] > k["before"], k
+
+
+def test_seq_phone_pins_the_panel_to_the_bottom_collapses_it_and_keeps_the_current_message_above_it(seq_page: Path) -> None:
+    probe = """
+    const p = panel.getBoundingClientRect();
+    const cs = getComputedStyle(panel);
+    const strip = root.querySelector('[data-q-sequence-pinned]').getBoundingClientRect();
+    const cur = root.querySelector('[data-q-sequence-current]');
+    const c = cur ? cur.getBoundingClientRect() : null;
+    const shown = (sel) => panel.querySelector(sel).getClientRects().length > 0;
+    const btn = panel.querySelector('[data-q-sequence-trace-collapse]');
+    return {
+      position: cs.position, maxHeight: cs.maxHeight, overflowY: cs.overflowY, left: p.left, right: p.right, bottom: p.bottom, height: p.height, vh: window.innerHeight, vw: document.documentElement.clientWidth,
+      rootDisplay: getComputedStyle(root).display,
+      expanded: btn.getAttribute('aria-expanded'), collapseShown: getComputedStyle(btn).display !== 'none', collapseInButtons: btn.parentElement.classList.contains('q-flow-trace-buttons'), collapseLast: btn.parentElement.lastElementChild === btn,
+      value: shown('[data-q-flow-trace-value]'), dots: shown('[data-q-flow-trace-dots]'), picker: shown('[data-q-flow-trace-picker]'), toggle: shown('.q-flow-trace-toggle'),
+      counter: shown('[data-q-flow-trace-counter]'), back: shown('[data-q-flow-trace-back]'), next: shown('[data-q-flow-trace-next]'), play: shown('[data-q-flow-trace-play]'),
+      aboveBy: c ? p.top - c.bottom : null, belowStrip: c ? c.top - strip.bottom : null,
+      pad: getComputedStyle(document.body).paddingBottom, inlinePad: document.body.style.paddingBottom,
+      touch: [...panel.querySelectorAll('.q-flow-trace-buttons > button')].map((b) => Math.round(Math.min(b.getBoundingClientRect().width, b.getBoundingClientRect().height))),
+    };
+    """
+    out = run(
+        seq_page,
+        {"viewport": {"width": 375, "height": 700}},
+        _seq_eval("window.scrollTo({ top: q('checkout').getBoundingClientRect().top + window.scrollY - 440, behavior: 'instant' })"),
+        {"click": SEQ_TRACE_BTN},
+        {"wait": 800},
+        _seq_trace_eval(probe, "open"),
+        {"click": SEQ_TRACE_NEXT},
+        {"click": SEQ_TRACE_NEXT},
+        {"click": SEQ_TRACE_NEXT},
+        {"click": SEQ_TRACE_NEXT},
+        {"click": SEQ_TRACE_NEXT},
+        {"wait": 800},
+        _seq_trace_eval(probe, "stepped"),
+        {"click": SEQ_TRACE_COLLAPSE},
+        _seq_trace_eval(probe, "collapsed"),
+        {"click": "#checkout [data-q-flow-trace-back]"},
+        {"wait": 800},
+        _seq_trace_eval(probe, "collapsedStep"),
+        {"click": SEQ_TRACE_COLLAPSE},
+        _seq_trace_eval(probe, "expanded"),
+        {"viewport": {"width": 1280, "height": 800}},
+        _seq_trace_eval(probe, "wide"),
+        {"viewport": {"width": 375, "height": 700}},
+        {"click": SEQ_TRACE_BTN},
+        _seq_trace_eval("return { inlinePad: document.body.style.paddingBottom, tracing: state().tracing };", "closed"),
+    )
+    assert_clean(out)
+    r = out["results"]
+    o = r["open"]
+    assert o["position"] == "fixed" and o["maxHeight"] == "350px" and o["overflowY"] == "auto"
+    assert o["left"] == 0 and o["right"] == o["vw"] and o["bottom"] == o["vh"] and o["height"] <= 350
+    assert o["rootDisplay"] == "block"
+    assert o["aboveBy"] >= 0 and o["belowStrip"] >= 0, o
+    assert o["expanded"] == "true" and o["collapseShown"] and o["collapseInButtons"] and o["collapseLast"]
+    assert o["value"] and o["dots"] and o["picker"] and o["toggle"]
+    assert abs(float(o["pad"].removesuffix("px")) - o["height"]) <= 1 and o["inlinePad"] != ""
+    assert all(size >= 44 for size in o["touch"]), o["touch"]
+    s = r["stepped"]
+    assert s["aboveBy"] >= 0 and s["belowStrip"] >= 0, s
+    assert abs(float(s["pad"].removesuffix("px")) - s["height"]) <= 1
+    c = r["collapsed"]
+    assert c["expanded"] == "false" and c["collapseShown"]
+    assert (c["counter"], c["back"], c["next"], c["play"]) == (True, True, True, True)
+    assert (c["value"], c["dots"], c["picker"], c["toggle"]) == (False, False, False, False)
+    assert c["height"] < s["height"] and c["bottom"] == c["vh"]
+    assert abs(float(c["pad"].removesuffix("px")) - c["height"]) <= 1
+    cs = r["collapsedStep"]
+    assert cs["aboveBy"] >= 0 and cs["belowStrip"] >= 0, cs
+    e = r["expanded"]
+    assert e["expanded"] == "true" and e["value"] is True and e["height"] > c["height"]
+    w = r["wide"]
+    assert w["position"] == "sticky" and w["collapseShown"] is False and w["value"] is True and w["rootDisplay"] == "grid"
+    assert r["closed"] == {"inlinePad": "", "tracing": False}
+
+
+def test_seq_a_rebuild_keeps_one_collapse_button_last_in_the_panel_buttons(seq_page: Path) -> None:
+    out = run(
+        seq_page,
+        {"viewport": {"width": 375, "height": 700}},
+        {"click": SEQ_TRACE_BTN},
+        _seq_trace_eval(
+            """
+            const script = root.querySelector(':scope > script[type="application/json"]');
+            script.textContent = script.textContent + ' ';
+            await new Promise((r) => setTimeout(r, 400));
+            const again = root.querySelector(':scope > [data-q-flow-trace-panel]');
+            const s = state();
+            return {
+              ready: root.getAttribute('data-q-sequence-ready'),
+              collapse: again.querySelectorAll('[data-q-sequence-trace-collapse]').length,
+              last: again.querySelector('.q-flow-trace-buttons').lastElementChild.hasAttribute('data-q-sequence-trace-collapse'),
+              panels: root.querySelectorAll(':scope > [data-q-flow-trace-panel]').length,
+              tracing: root.hasAttribute('data-q-sequence-tracing'),
+              panelOpen: !again.hasAttribute('data-q-inactive'),
+              buttons: root.querySelectorAll('[data-q-sequence-action="trace"]').length,
+              pressed: root.querySelector('[data-q-sequence-action="trace"]').getAttribute('aria-pressed'),
+              order: [...root.children].map((c) => c.hasAttribute('data-q-flow-trace-panel') ? 'panel' : c.hasAttribute('data-q-sequence-stage') ? 'stage' : c.hasAttribute('data-q-flow-drawer') ? 'drawer' : c.tagName.toLowerCase()),
+              bodyPad: document.body.style.paddingBottom,
+            };
+            """,
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["ready"] == "true" and d["collapse"] == 1 and d["last"] is True and d["panels"] == 1
+    assert d["tracing"] is False and d["panelOpen"] is False and d["buttons"] == 1 and d["pressed"] == "false"
+    assert d["order"] == ["script", "div", "div", "stage", "panel", "drawer", "div", "details"]
+    assert d["bodyPad"] == ""
+
+
+SEQ_WITH_TRACING_FLOW = (
+    _seq_element("checkout", "Checkout charges the card through Billing and Stripe, retrying a declined card.", SEQ_CHECKOUT_DATA)
+    + f"""<q-flow id="renewal" summary="How a renewal order is priced, taxed and charged.">
+  <script type="application/json">
+  {json.dumps(RENEWAL_GRAPH, indent=2)}
+  </script>
+</q-flow>
+"""
+    + _schema_tag("schema-small", "Authors and their books.", SCHEMA_SMALL_DATA)
+)
+
+
+@pytest.fixture(scope="module")
+def seq_trace_escape_page(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    reason = _node_ready()
+    if reason:
+        pytest.skip(reason)
+    work = tmp_path_factory.mktemp("kit-sequence-trace-escape")
+    src = work / "sequence-trace-escape.src.html"
+    src.write_text(HEADER + SEQ_WITH_TRACING_FLOW, encoding="utf-8")
+    return _build(src, work / "sequence-trace-escape.html")
+
+
+def test_seq_escape_inside_the_sequence_closes_both_traces_and_inside_the_graph_only_the_graphs(seq_trace_escape_page: Path) -> None:
+    state = """
+    const seq = q('checkout');
+    const flow = q('renewal');
+    return {
+      seq: seq.hasAttribute('data-q-sequence-tracing'),
+      flow: flow.hasAttribute('data-q-flow-tracing'),
+      seqBtnFocused: document.activeElement === seq.querySelector('[data-q-sequence-action="trace"]'),
+      flowBtnFocused: document.activeElement === flow.querySelector('[data-q-flow-action="trace"]'),
+    };
+    """
+    out = run(
+        seq_trace_escape_page,
+        {"viewport": {"width": 1280, "height": 900}},
+        {"click": SEQ_TRACE_BTN},
+        {"click": '#renewal [data-q-flow-action="trace"]'},
+        _seq_eval(state, "both"),
+        {"focus": "#renewal [data-q-flow-trace-next]"},
+        {"press": "Escape"},
+        _seq_eval(state, "fromGraph"),
+        {"click": '#renewal [data-q-flow-action="trace"]'},
+        {"focus": SEQ_TRACE_NEXT},
+        {"press": "Escape"},
+        _seq_eval(state, "fromSequence"),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["both"] == {"seq": True, "flow": True, "seqBtnFocused": False, "flowBtnFocused": False}
+    assert r["fromGraph"] == {"seq": True, "flow": False, "seqBtnFocused": False, "flowBtnFocused": True}
+    assert r["fromSequence"] == {"seq": False, "flow": False, "seqBtnFocused": True, "flowBtnFocused": False}
+
+
+def test_seq_escape_from_inside_a_schema_leaves_a_tracing_or_focused_sequence_alone(seq_trace_escape_page: Path) -> None:
+    state = """
+    const seq = q('checkout');
+    return {
+      tracing: seq.hasAttribute('data-q-sequence-tracing'),
+      focus: seq.getAttribute('data-q-sequence-focus-message'),
+      drawer: !seq.querySelector(':scope > aside[data-q-flow-drawer]').hasAttribute('data-q-inactive'),
+    };
+    """
+    out = run(
+        seq_trace_escape_page,
+        {"viewport": {"width": 1280, "height": 900}},
+        {"click": SEQ_MSG_HIT.format(n=2)},
+        _seq_eval(state, "focused"),
+        {"focus": "#schema-small [data-q-schema-entity]"},
+        {"press": "Escape"},
+        _seq_eval(state, "focusedFromSchema"),
+        {"click": SEQ_TRACE_BTN},
+        _seq_eval(state, "tracing"),
+        {"focus": "#schema-small [data-q-schema-entity]"},
+        {"press": "Escape"},
+        _seq_eval(state, "tracingFromSchema"),
+        _seq_eval("const b = document.createElement('button'); b.id = 'outside'; document.body.prepend(b); b.focus();"),
+        {"press": "Escape"},
+        _seq_eval(state, "fromOutside"),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["focused"] == {"tracing": False, "focus": "2", "drawer": True}
+    assert r["focusedFromSchema"] == {"tracing": False, "focus": "2", "drawer": True}
+    assert r["tracing"] == {"tracing": True, "focus": None, "drawer": False}
+    assert r["tracingFromSchema"] == {"tracing": True, "focus": None, "drawer": False}
+    assert r["fromOutside"] == {"tracing": False, "focus": None, "drawer": False}

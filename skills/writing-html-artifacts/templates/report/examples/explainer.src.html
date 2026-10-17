@@ -137,6 +137,68 @@
 </q-code>
 </section>
 
+<section aria-labelledby="charge-h">
+<h2 id="charge-h">What one card payment goes through</h2>
+<p>Before a failed call ever reaches the queue, checkout has already handed the order to Billing, and Billing has asked Stripe to charge the card. Billing tries the charge up to 3 times, waits 2 seconds after a decline, and writes the payment to the ledger only once Stripe accepts it.</p>
+<q-sequence id="charge-sequence" summary="Checkout charges the card through Billing and Stripe, retrying a declined card.">
+  <script type="application/json">
+  {
+    "kinds": {"person": 1, "ui": 2, "service": 3, "external": 4, "store": 5},
+    "participants": [
+      {"id": "shopper", "label": "Shopper", "kind": "person"},
+      {"id": "checkout", "label": "Checkout", "kind": "ui", "detail": "<p>The page the shopper pays on.</p>"},
+      {"id": "billing", "label": "Billing", "kind": "service"},
+      {"id": "stripe", "label": "Stripe", "kind": "external", "detail": "<p>Card processor. Charges are <strong>idempotent</strong>.</p>"},
+      {"id": "ledger", "label": "Ledger", "kind": "store"}
+    ],
+    "steps": [
+      {"from": "shopper", "to": "checkout", "label": "place order", "type": "call", "id": "place-order", "detail": "<p>The cart and the shipping address.</p>"},
+      {"from": "checkout", "to": "billing", "label": "charge order", "type": "call", "id": "charge-order"},
+      {"fragment": "loop", "label": "up to 3 attempts", "steps": [
+        {"from": "billing", "to": "stripe", "label": "create charge", "type": "call", "id": "create-charge", "detail": "<p>Sends the amount and a <code>payment_method</code>.</p>"},
+        {"fragment": "alt", "branches": [
+          {"label": "card valid", "steps": [
+            {"from": "stripe", "to": "billing", "label": "charge succeeded", "type": "reply", "id": "charge-ok"}
+          ]},
+          {"label": "card declined", "steps": [
+            {"from": "stripe", "to": "billing", "label": "card declined", "type": "reply", "id": "charge-declined"},
+            {"note": "waits 2 seconds before retrying", "over": ["billing"]}
+          ]}
+        ]}
+      ]},
+      {"fragment": "opt", "label": "charge succeeded", "steps": [
+        {"from": "billing", "to": "ledger", "label": "record payment", "type": "async", "id": "record"}
+      ]},
+      {"from": "billing", "to": "checkout", "label": "order paid", "type": "reply", "id": "paid"},
+      {"from": "checkout", "to": "shopper", "label": "show receipt", "type": "reply", "id": "show-receipt"}
+    ],
+    "traces": [
+      {"id": "succeeds", "label": "Card succeeds", "steps": [
+        {"message": "place-order", "value": {"order": "C-2207", "items": 2, "total": 48}},
+        {"message": "charge-order", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd"}},
+        {"message": "create-charge", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd", "attempt": 1, "card": "•••• 4242"}},
+        {"message": "charge-ok", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd", "attempt": 1, "card": "•••• 4242", "charge": "ch_91", "status": "succeeded"}},
+        {"message": "record", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd", "attempt": 1, "card": "•••• 4242", "charge": "ch_91", "status": "succeeded"}, "note": "async, nothing waits for it"},
+        {"message": "paid", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd", "attempt": 1, "card": "•••• 4242", "charge": "ch_91", "status": "paid"}}
+      ]},
+      {"id": "declined", "label": "Declined, then retried", "steps": [
+        {"message": "place-order", "value": {"order": "C-2207", "items": 2, "total": 48}},
+        {"message": "charge-order", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd"}},
+        {"message": "create-charge", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd", "attempt": 1, "card": "•••• 4242"}},
+        {"message": "charge-declined", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd", "attempt": 1, "card": "•••• 4242", "decline": "insufficient_funds"}},
+        {"message": "create-charge", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd", "attempt": 2, "card": "•••• 4242"}},
+        {"message": "charge-ok", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd", "attempt": 2, "card": "•••• 4242", "charge": "ch_91", "status": "succeeded"}},
+        {"message": "record", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd", "attempt": 2, "card": "•••• 4242", "charge": "ch_91", "status": "succeeded"}},
+        {"message": "paid", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd", "attempt": 2, "card": "•••• 4242", "charge": "ch_91", "status": "paid"}}
+      ]}
+    ]
+  }
+  </script>
+</q-sequence>
+<p>Press "Step through" to follow the order's payload message by message. "Card succeeds" is the plain case. "Declined, then retried" shows Stripe turning the card down once, Billing asking again, and the second attempt going through.</p>
+<p>This loop is Billing's own, inside one payment request. It is not the retry queue, which never retries a decline.</p>
+</section>
+
 <section aria-labelledby="limits-h">
 <h2 id="limits-h">What the queue does not cover</h2>
 <p>Declined cards are not retried, because a decline is an answer and not a failure. Calls that fail because the order itself is invalid are not retried either. Both go straight to payment failed with the provider's reason.</p>
