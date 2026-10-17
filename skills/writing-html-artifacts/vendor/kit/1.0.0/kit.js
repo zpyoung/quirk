@@ -3471,6 +3471,275 @@
     return li;
   }
 
+  /** Canvas helpers shared by q-flow and q-schema; `host` carries _stage, _svg, _viewport, _drawer, _transform, _bounds, _nodeBoxes, _nodeElements, _expandBtn, _d3Zoom, _d3Selection, _rovingId and _focusedAfterExpand. */
+  function canvasMeasureFactory(host) {
+    var canvas = document.createElement('canvas');
+    var ctx = canvas.getContext && canvas.getContext('2d');
+    var fontFamily = getComputedStyle(host).fontFamily || 'sans-serif';
+    return function (text, sizePx, weight) {
+      if (!text) {
+        return 0;
+      }
+      if (ctx) {
+        ctx.font = (weight || '400') + ' ' + sizePx + 'px ' + fontFamily;
+        return Math.ceil(ctx.measureText(text).width);
+      }
+      return Math.ceil(String(text).length * sizePx * 0.6);
+    };
+  }
+
+  /** Builds the zoom, fit and expand toolbar; `addExtra(addBtn)`, when given, adds element-specific buttons before Expand, each with its own click handler. */
+  function canvasBuildControls(host, noun, addExtra) {
+    var bar = kitNode('div');
+    bar.className = 'q-flow-controls';
+    bar.setAttribute('data-q-flow-controls', '');
+    bar.setAttribute('role', 'toolbar');
+    bar.setAttribute('aria-label', noun.charAt(0).toUpperCase() + noun.slice(1) + ' controls');
+
+    function addBtn(action, label, text, onClick) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.setAttribute('data-q-flow-action', action);
+      btn.setAttribute('aria-label', label);
+      btn.textContent = text;
+      btn.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        if (action === 'zoom-in') {
+          host._zoomBy(1.25);
+        } else if (action === 'zoom-out') {
+          host._zoomBy(0.8);
+        } else if (action === 'fit') {
+          host._fitBounds(host._bounds, false);
+        } else if (action === 'expand') {
+          host._toggleExpand();
+        } else if (onClick) {
+          onClick();
+        }
+      });
+      bar.appendChild(btn);
+      return btn;
+    }
+
+    addBtn('zoom-in', 'Zoom in', '+');
+    addBtn('zoom-out', 'Zoom out', '\u2212');
+    addBtn('fit', 'Fit to view', 'Fit');
+    if (addExtra) {
+      addExtra(addBtn);
+    }
+    host._expandBtn = addBtn('expand', 'Expand ' + noun, 'Expand');
+    host._expandBtn.setAttribute('aria-pressed', host.hasAttribute('data-q-flow-expanded') ? 'true' : 'false');
+    host._stage.appendChild(bar);
+  }
+
+  function canvasBuildDrawer(host, label) {
+    var drawer = kitNode('aside');
+    drawer.className = 'q-flow-drawer';
+    drawer.setAttribute('data-q-flow-drawer', '');
+    drawer.setAttribute('aria-label', label);
+    drawer.setAttribute('data-q-inactive', '');
+    host._drawer = drawer;
+    host._stage.appendChild(drawer);
+  }
+
+  function canvasSetupZoom(host) {
+    var qf = window.quirkFlow;
+    host._transform = { x: 0, y: 0, k: 1 };
+    if (!qf || !qf.zoom || !qf.select) {
+      return;
+    }
+    host._d3Zoom = qf.zoom()
+      .scaleExtent([0.2, 4])
+      .filter(function (event) {
+        if (event.type === 'wheel') {
+          return Boolean(event.ctrlKey || event.metaKey);
+        }
+        if (event.type === 'touchstart' || event.type === 'touchmove') {
+          return Boolean(event.touches && event.touches.length >= 2);
+        }
+        if (event.type === 'mousedown') {
+          return event.button === 0;
+        }
+        return !event.button;
+      })
+      .on('zoom', function (event) {
+        var t = event.transform;
+        host._transform = { x: t.x, y: t.y, k: t.k };
+        if (host._viewport) {
+          host._viewport.setAttribute('transform', 'translate(' + t.x + ',' + t.y + ') scale(' + t.k + ')');
+        }
+      });
+    host._d3Selection = qf.select(host._svg);
+    host._d3Selection.call(host._d3Zoom);
+    host._d3Selection.on('dblclick.zoom', null);
+  }
+
+  function canvasApplyTransform(host, x, y, k) {
+    var qf = window.quirkFlow;
+    var clampedK = Math.max(0.2, Math.min(4, k));
+    host._transform = { x: x, y: y, k: clampedK };
+    if (host._d3Selection && host._d3Zoom && qf && qf.zoomIdentity) {
+      host._d3Selection.call(host._d3Zoom.transform, qf.zoomIdentity.translate(x, y).scale(clampedK));
+    } else if (host._viewport) {
+      host._viewport.setAttribute('transform', 'translate(' + x + ',' + y + ') scale(' + clampedK + ')');
+    }
+  }
+
+  function canvasZoomBy(host, factor) {
+    var rect = host._stage.getBoundingClientRect();
+    var cx = (rect.width || 600) / 2;
+    var cy = (rect.height || 320) / 2;
+    var t = host._transform || { x: 0, y: 0, k: 1 };
+    var nextK = Math.max(0.2, Math.min(4, t.k * factor));
+    var ratio = nextK / t.k;
+    var nextX = cx - (cx - t.x) * ratio;
+    var nextY = cy - (cy - t.y) * ratio;
+    canvasApplyTransform(host, nextX, nextY, nextK);
+  }
+
+  function canvasFitBounds(host, bounds, reserveDrawer) {
+    if (!bounds || !host._stage) {
+      return;
+    }
+    var rect = host._stage.getBoundingClientRect();
+    var availW = rect.width || 640;
+    var availH = rect.height || 320;
+    if (reserveDrawer && host._drawer && !host._drawer.hasAttribute('data-q-inactive')) {
+      var dRect = host._drawer.getBoundingClientRect();
+      if ((window.innerWidth || 1024) > 700) {
+        availW = Math.max(160, availW - dRect.width);
+      } else {
+        availH = Math.max(120, availH - dRect.height);
+      }
+    }
+    var pad = 28;
+    var scaleX = Math.max(80, availW - pad * 2) / Math.max(1, bounds.width);
+    var scaleY = Math.max(80, availH - pad * 2) / Math.max(1, bounds.height);
+    var k = Math.max(0.2, Math.min(1.5, Math.min(scaleX, scaleY)));
+    var tx = (availW - bounds.width * k) / 2 - bounds.x * k;
+    var ty = (availH - bounds.height * k) / 2 - bounds.y * k;
+    canvasApplyTransform(host, tx, ty, k);
+  }
+
+  function canvasEnsureVisible(host, boxId, avoidDrawer) {
+    var box = host._nodeBoxes && host._nodeBoxes[boxId];
+    if (!box || !host._stage) {
+      return;
+    }
+    var sRect = host._stage.getBoundingClientRect();
+    var availW = sRect.width || 640;
+    var availH = sRect.height || 320;
+    if (avoidDrawer && host._drawer && !host._drawer.hasAttribute('data-q-inactive')) {
+      var dRect = host._drawer.getBoundingClientRect();
+      if ((window.innerWidth || 1024) > 700) {
+        availW = Math.max(140, availW - dRect.width - 12);
+      } else {
+        availH = Math.max(100, availH - dRect.height - 12);
+      }
+    }
+    var t = host._transform || { x: 0, y: 0, k: 1 };
+    var left = box.x * t.k + t.x;
+    var right = (box.x + box.width) * t.k + t.x;
+    var top = box.y * t.k + t.y;
+    var bottom = (box.y + box.height) * t.k + t.y;
+    var nx = t.x;
+    var ny = t.y;
+    var margin = 20;
+    if (right > availW - margin) {
+      nx -= (right - (availW - margin));
+    }
+    if (left + (nx - t.x) < margin) {
+      nx += (margin - (left + (nx - t.x)));
+    }
+    if (bottom > availH - margin) {
+      ny -= (bottom - (availH - margin));
+    }
+    if (top + (ny - t.y) < margin) {
+      ny += (margin - (top + (ny - t.y)));
+    }
+    if (nx !== t.x || ny !== t.y) {
+      canvasApplyTransform(host, nx, ny, t.k);
+    }
+  }
+
+  function canvasToggleExpand(host) {
+    var expanding = !host.hasAttribute('data-q-flow-expanded');
+    if (expanding) {
+      host.setAttribute('data-q-flow-expanded', '');
+      host._focusedAfterExpand = false;
+      if (host._expandBtn) {
+        host._expandBtn.setAttribute('aria-pressed', 'true');
+        host._expandBtn.textContent = 'Close';
+      }
+    } else {
+      host.removeAttribute('data-q-flow-expanded');
+      host._focusedAfterExpand = false;
+      if (host._expandBtn) {
+        host._expandBtn.setAttribute('aria-pressed', 'false');
+        host._expandBtn.textContent = 'Expand';
+      }
+    }
+  }
+
+  function canvasSetRoving(host, boxId, moveDomFocus) {
+    if (!host._nodeElements || !host._nodeElements[boxId]) {
+      return;
+    }
+    host._rovingId = boxId;
+    Object.keys(host._nodeElements).forEach(function (nid) {
+      host._nodeElements[nid].setAttribute('tabindex', nid === boxId ? '0' : '-1');
+    });
+    if (moveDomFocus) {
+      host._nodeElements[boxId].focus();
+      host._ensureNodeVisible(boxId, true);
+    }
+  }
+
+  function canvasNearestNeighbor(host, fromId, key, order) {
+    var boxes = host._nodeBoxes;
+    if (!boxes || !boxes[fromId]) {
+      return null;
+    }
+    var cur = boxes[fromId];
+    var cx = cur.x + cur.width / 2;
+    var cy = cur.y + cur.height / 2;
+    var bestId = null;
+    var bestScore = Infinity;
+    Object.keys(boxes).forEach(function (nid) {
+      if (nid === fromId) {
+        return;
+      }
+      var b = boxes[nid];
+      var bx = b.x + b.width / 2;
+      var by = b.y + b.height / 2;
+      var dx = bx - cx;
+      var dy = by - cy;
+      var primary = 0;
+      var secondary = 0;
+      if (key === 'ArrowRight' && dx > 2) { primary = dx; secondary = Math.abs(dy); }
+      else if (key === 'ArrowLeft' && dx < -2) { primary = -dx; secondary = Math.abs(dy); }
+      else if (key === 'ArrowDown' && dy > 2) { primary = dy; secondary = Math.abs(dx); }
+      else if (key === 'ArrowUp' && dy < -2) { primary = -dy; secondary = Math.abs(dx); }
+      if (primary > 0) {
+        var score = primary + secondary * 1.5;
+        if (score < bestScore) {
+          bestScore = score;
+          bestId = nid;
+        }
+      }
+    });
+    if (bestId) {
+      return bestId;
+    }
+    var idx = order.indexOf(fromId);
+    if (idx < 0) {
+      return null;
+    }
+    if (key === 'ArrowRight' || key === 'ArrowDown') {
+      return order[(idx + 1) % order.length];
+    }
+    return order[(idx - 1 + order.length) % order.length];
+  }
+
   class QFlow extends HTMLElement {
     static get observedAttributes() {
       return ['summary', 'direction', 'groups'];
@@ -4083,19 +4352,7 @@
     }
 
     _measureTextFactory() {
-      var canvas = document.createElement('canvas');
-      var ctx = canvas.getContext && canvas.getContext('2d');
-      var fontFamily = getComputedStyle(this).fontFamily || 'sans-serif';
-      return function (text, sizePx, weight) {
-        if (!text) {
-          return 0;
-        }
-        if (ctx) {
-          ctx.font = (weight || '400') + ' ' + sizePx + 'px ' + fontFamily;
-          return Math.ceil(ctx.measureText(text).width);
-        }
-        return Math.ceil(String(text).length * sizePx * 0.6);
-      };
+      return canvasMeasureFactory(this);
     }
 
     _setup() {
@@ -4879,201 +5136,47 @@
 
     _buildControls() {
       var self = this;
-      var bar = kitNode('div');
-      bar.className = 'q-flow-controls';
-      bar.setAttribute('data-q-flow-controls', '');
-      bar.setAttribute('role', 'toolbar');
-      bar.setAttribute('aria-label', 'Graph controls');
-
-      function addBtn(action, label, text) {
-        var btn = document.createElement('button');
-        btn.type = 'button';
-        btn.setAttribute('data-q-flow-action', action);
-        btn.setAttribute('aria-label', label);
-        btn.textContent = text;
-        btn.addEventListener('click', function (ev) {
-          ev.stopPropagation();
-          if (action === 'zoom-in') {
-            self._zoomBy(1.25);
-          } else if (action === 'zoom-out') {
-            self._zoomBy(0.8);
-          } else if (action === 'fit') {
-            self._fitBounds(self._bounds, false);
-          } else if (action === 'trace') {
+      canvasBuildControls(this, 'graph', function (addBtn) {
+        self._traceBtn = null;
+        if (self._data && self._data.traces.length > 0) {
+          self._traceBtn = addBtn('trace', 'Step through a trace', 'Step through', function () {
             if (self._trace) {
               self._closeTrace(true);
             } else {
               self._openTrace(self._lastTraceIndex || 0);
             }
-          } else if (action === 'expand') {
-            self._toggleExpand();
-          }
-        });
-        bar.appendChild(btn);
-        return btn;
-      }
-
-      addBtn('zoom-in', 'Zoom in', '+');
-      addBtn('zoom-out', 'Zoom out', '\u2212');
-      addBtn('fit', 'Fit to view', 'Fit');
-      this._traceBtn = null;
-      if (this._data && this._data.traces.length > 0) {
-        this._traceBtn = addBtn('trace', 'Step through a trace', 'Step through');
-        this._traceBtn.setAttribute('aria-pressed', this._trace ? 'true' : 'false');
-      }
-      this._expandBtn =addBtn('expand', 'Expand graph', 'Expand');
-      this._expandBtn.setAttribute('aria-pressed', this.hasAttribute('data-q-flow-expanded') ? 'true' : 'false');
-      this._stage.appendChild(bar);
+          });
+          self._traceBtn.setAttribute('aria-pressed', self._trace ? 'true' : 'false');
+        }
+      });
     }
 
     _buildDrawer() {
-      var drawer = kitNode('aside');
-      drawer.className = 'q-flow-drawer';
-      drawer.setAttribute('data-q-flow-drawer', '');
-      drawer.setAttribute('aria-label', 'Node details');
-      drawer.setAttribute('data-q-inactive', '');
-      this._drawer = drawer;
-      this._stage.appendChild(drawer);
+      canvasBuildDrawer(this, 'Node details');
     }
 
     _setupZoom() {
-      var self = this;
-      var qf = window.quirkFlow;
-      this._transform = { x: 0, y: 0, k: 1 };
-      if (!qf || !qf.zoom || !qf.select) {
-        return;
-      }
-      this._d3Zoom = qf.zoom()
-        .scaleExtent([0.2, 4])
-        .filter(function (event) {
-          if (event.type === 'wheel') {
-            return Boolean(event.ctrlKey || event.metaKey);
-          }
-          if (event.type === 'touchstart' || event.type === 'touchmove') {
-            return Boolean(event.touches && event.touches.length >= 2);
-          }
-          if (event.type === 'mousedown') {
-            return event.button === 0;
-          }
-          return !event.button;
-        })
-        .on('zoom', function (event) {
-          var t = event.transform;
-          self._transform = { x: t.x, y: t.y, k: t.k };
-          if (self._viewport) {
-            self._viewport.setAttribute('transform', 'translate(' + t.x + ',' + t.y + ') scale(' + t.k + ')');
-          }
-        });
-      this._d3Selection = qf.select(this._svg);
-      this._d3Selection.call(this._d3Zoom);
-      this._d3Selection.on('dblclick.zoom', null);
+      canvasSetupZoom(this);
     }
 
     _applyTransform(x, y, k) {
-      var qf = window.quirkFlow;
-      var clampedK = Math.max(0.2, Math.min(4, k));
-      this._transform = { x: x, y: y, k: clampedK };
-      if (this._d3Selection && this._d3Zoom && qf && qf.zoomIdentity) {
-        this._d3Selection.call(this._d3Zoom.transform, qf.zoomIdentity.translate(x, y).scale(clampedK));
-      } else if (this._viewport) {
-        this._viewport.setAttribute('transform', 'translate(' + x + ',' + y + ') scale(' + clampedK + ')');
-      }
+      canvasApplyTransform(this, x, y, k);
     }
 
     _zoomBy(factor) {
-      var rect = this._stage.getBoundingClientRect();
-      var cx = (rect.width || 600) / 2;
-      var cy = (rect.height || 320) / 2;
-      var t = this._transform || { x: 0, y: 0, k: 1 };
-      var nextK = Math.max(0.2, Math.min(4, t.k * factor));
-      var ratio = nextK / t.k;
-      var nextX = cx - (cx - t.x) * ratio;
-      var nextY = cy - (cy - t.y) * ratio;
-      this._applyTransform(nextX, nextY, nextK);
+      canvasZoomBy(this, factor);
     }
 
     _fitBounds(bounds, reserveDrawer) {
-      if (!bounds || !this._stage) {
-        return;
-      }
-      var rect = this._stage.getBoundingClientRect();
-      var availW = rect.width || 640;
-      var availH = rect.height || 320;
-      if (reserveDrawer && this._drawer && !this._drawer.hasAttribute('data-q-inactive')) {
-        var dRect = this._drawer.getBoundingClientRect();
-        if ((window.innerWidth || 1024) > 700) {
-          availW = Math.max(160, availW - dRect.width);
-        } else {
-          availH = Math.max(120, availH - dRect.height);
-        }
-      }
-      var pad = 28;
-      var scaleX = Math.max(80, availW - pad * 2) / Math.max(1, bounds.width);
-      var scaleY = Math.max(80, availH - pad * 2) / Math.max(1, bounds.height);
-      var k = Math.max(0.2, Math.min(1.5, Math.min(scaleX, scaleY)));
-      var tx = (availW - bounds.width * k) / 2 - bounds.x * k;
-      var ty = (availH - bounds.height * k) / 2 - bounds.y * k;
-      this._applyTransform(tx, ty, k);
+      canvasFitBounds(this, bounds, reserveDrawer);
     }
 
     _ensureNodeVisible(nodeId, avoidDrawer) {
-      var box = this._nodeBoxes && this._nodeBoxes[nodeId];
-      if (!box || !this._stage) {
-        return;
-      }
-      var sRect = this._stage.getBoundingClientRect();
-      var availW = sRect.width || 640;
-      var availH = sRect.height || 320;
-      if (avoidDrawer && this._drawer && !this._drawer.hasAttribute('data-q-inactive')) {
-        var dRect = this._drawer.getBoundingClientRect();
-        if ((window.innerWidth || 1024) > 700) {
-          availW = Math.max(140, availW - dRect.width - 12);
-        } else {
-          availH = Math.max(100, availH - dRect.height - 12);
-        }
-      }
-      var t = this._transform || { x: 0, y: 0, k: 1 };
-      var left = box.x * t.k + t.x;
-      var right = (box.x + box.width) * t.k + t.x;
-      var top = box.y * t.k + t.y;
-      var bottom = (box.y + box.height) * t.k + t.y;
-      var nx = t.x;
-      var ny = t.y;
-      var margin = 20;
-      if (right > availW - margin) {
-        nx -= (right - (availW - margin));
-      }
-      if (left + (nx - t.x) < margin) {
-        nx += (margin - (left + (nx - t.x)));
-      }
-      if (bottom > availH - margin) {
-        ny -= (bottom - (availH - margin));
-      }
-      if (top + (ny - t.y) < margin) {
-        ny += (margin - (top + (ny - t.y)));
-      }
-      if (nx !== t.x || ny !== t.y) {
-        this._applyTransform(nx, ny, t.k);
-      }
+      canvasEnsureVisible(this, nodeId, avoidDrawer);
     }
 
     _toggleExpand() {
-      var expanding = !this.hasAttribute('data-q-flow-expanded');
-      if (expanding) {
-        this.setAttribute('data-q-flow-expanded', '');
-        this._focusedAfterExpand = false;
-        if (this._expandBtn) {
-          this._expandBtn.setAttribute('aria-pressed', 'true');
-          this._expandBtn.textContent = 'Close';
-        }
-      } else {
-        this.removeAttribute('data-q-flow-expanded');
-        this._focusedAfterExpand = false;
-        if (this._expandBtn) {
-          this._expandBtn.setAttribute('aria-pressed', 'false');
-          this._expandBtn.textContent = 'Expand';
-        }
-      }
+      canvasToggleExpand(this);
     }
 
     _handleEscape(ev, restoreFocus) {
@@ -5916,64 +6019,11 @@
     }
 
     _setRoving(nodeId, moveDomFocus) {
-      if (!this._nodeElements || !this._nodeElements[nodeId]) {
-        return;
-      }
-      this._rovingId = nodeId;
-      Object.keys(this._nodeElements).forEach(function (nid) {
-        this._nodeElements[nid].setAttribute('tabindex', nid === nodeId ? '0' : '-1');
-      }, this);
-      if (moveDomFocus) {
-        this._nodeElements[nodeId].focus();
-        this._ensureNodeVisible(nodeId, true);
-      }
+      canvasSetRoving(this, nodeId, moveDomFocus);
     }
 
     _nearestNeighbor(fromId, key) {
-      var boxes = this._nodeBoxes;
-      if (!boxes || !boxes[fromId]) {
-        return null;
-      }
-      var cur = boxes[fromId];
-      var cx = cur.x + cur.width / 2;
-      var cy = cur.y + cur.height / 2;
-      var bestId = null;
-      var bestScore = Infinity;
-      Object.keys(boxes).forEach(function (nid) {
-        if (nid === fromId) {
-          return;
-        }
-        var b = boxes[nid];
-        var bx = b.x + b.width / 2;
-        var by = b.y + b.height / 2;
-        var dx = bx - cx;
-        var dy = by - cy;
-        var primary = 0;
-        var secondary = 0;
-        if (key === 'ArrowRight' && dx > 2) { primary = dx; secondary = Math.abs(dy); }
-        else if (key === 'ArrowLeft' && dx < -2) { primary = -dx; secondary = Math.abs(dy); }
-        else if (key === 'ArrowDown' && dy > 2) { primary = dy; secondary = Math.abs(dx); }
-        else if (key === 'ArrowUp' && dy < -2) { primary = -dy; secondary = Math.abs(dx); }
-        if (primary > 0) {
-          var score = primary + secondary * 1.5;
-          if (score < bestScore) {
-            bestScore = score;
-            bestId = nid;
-          }
-        }
-      });
-      if (bestId) {
-        return bestId;
-      }
-      var ids = this._data.nodes.map(function (n) { return n.id; });
-      var idx = ids.indexOf(fromId);
-      if (idx < 0) {
-        return null;
-      }
-      if (key === 'ArrowRight' || key === 'ArrowDown') {
-        return ids[(idx + 1) % ids.length];
-      }
-      return ids[(idx - 1 + ids.length) % ids.length];
+      return canvasNearestNeighbor(this, fromId, key, this._data.nodes.map(function (n) { return n.id; }));
     }
 
     _onNodeKey(ev, nodeId) {
