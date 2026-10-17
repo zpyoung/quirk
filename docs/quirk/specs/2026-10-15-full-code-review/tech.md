@@ -328,6 +328,7 @@ Back-links: [Behavior & scenarios](logic.md#behavior--scenarios).
 | `--format html\|md\|both`, `--no-open` | render options | render_report.py |
 | `--add-guidance "<note>"` | capture a lesson, then stop | add_guidance.py |
 | `--stats` | per-lens keep/dismiss rates, then stop | review_memory.py stats |
+| `--since <ref>` | delta review of changes after `<ref>`; report only | prepare_diff.py `resolve_since` |
 | `--deep [minutes]` | opt-in deep defect hunt | the [deep spec](../2026-10-16-full-code-review-deep/tech.md) |
 
 ## Data models / schemas
@@ -361,9 +362,14 @@ SCHEMA:
   },
   "has_description": bool,
   "scope_intent": {"guess": str, "basis": str, "statement"?: str, "source"?: str},
-  "size": {"files": int, "lines": int}
+  "size": {"files": int, "lines": int},
+  "since"?: {"ref": str, "sha": str, "merge_commits": int}
 }
 ```
+
+`since` is present only for a `--since` run. `diff`, `changed_files`, the file lists, `batches` and `size` then describe the delta, while `refs` stay those of the full change. `since.sha` is the resolved ref and must be an ancestor of `refs.head`; outside `--local` it must also descend from `refs.base` and differ from `refs.head`. Local mode accepts `since.sha == refs.head` only when uncommitted changes exist. `merge_commits` counts merges between `since.sha` and head, and a nonzero count prints a warning. A ref that fails any check exits with an error advising a full review.
+
+Delta runs are report only. `review_memory.py` load, reconcile and check-plan raise for a context that has `since`, and save writes nothing for a report whose `run` has `since`. `post_author_comments.py` and `post_reviewer_review.py` refuse a context or report that carries it.
 
 `mode: "mr"` and the `mr` object become `"change"` and `change` in the rename phase; until then the sakura names stay.
 
@@ -424,12 +430,14 @@ SCHEMA (new or changed keys; everything else as in SRC `render_report.py:_prepar
   "verification": {"enabled": bool, "model": str|null, "checked": int, "refuted": int, "fallback": str|null},
   "excluded_generated": [str],
   "policy_sources": [{"kind": str, "path": str, "ref": str|null}],
-  "severity_floor": str
+  "severity_floor": str,
+  "since"?: {"ref": str, "sha": str}
 }
 ```
 
 - `meta.target: "mr"` and `meta.iid` are replaced by `"change"` and `meta.number`.
 - The renderer refuses a clean verdict when `run.incomplete` is true and shows a banner listing `dimensions_failed`.
+- `run.since` marks a delta review. The renderer requires a non-empty `ref` and a 40-character lowercase hex `sha`, and shows a "Reviewed since" row in the summary and the Markdown report.
 - Findings below `run.severity_floor` render on the page but get `post: false` in `comment_body.py` output and are omitted by `post_reviewer_review.py stage`.
 - Additive-only rule: later versions may add keys; removing or retyping a key requires a new `schema_version`.
 

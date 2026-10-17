@@ -4,7 +4,8 @@
 
 **Status:** Approved — Tech spec: authored (gate: user requested; >3 files; crosses subsystems; multi-session)
 
-**Amendments:** none yet.
+**Amendments:**
+- 2026-10-17: Added `--since <ref>` delta reviews (scenario "Review only the fix commits", a Decisions Locked line under Verdict and output). Delta runs are report only.
 
 ## Purpose
 
@@ -63,6 +64,10 @@ Same lenses and report. Posting is replaced by an exported findings file in Mark
 ### Re-review after new pushes
 
 Findings that match exactly keep your earlier decision. Findings on changed or moved code come back for a fresh decision, so a dismissal lapses when the code it covered changes. Findings already posted are recognized from markers in your own comments and are not posted again.
+
+### Review only the fix commits
+
+You pass `--since <ref>` after pushing fixes for an earlier review, and the review covers only what changed after that commit. The ref must be an ancestor of the head, and in a change or branch run it must also sit after the change's merge base, so target-branch history never enters the review. A ref equal to the head is refused as empty, except in `--local` when uncommitted changes remain. A merge commit in the range draws a warning, because it can carry target-branch changes into the delta. The report says which ref it was reviewed since, and the run is report only: nothing posts, and the ledger is neither read nor written. The exported triage handoff asks the fixer to prove each fix with a test that fails without it, to run the tests on every runtime version CI covers, and then to re-review with `--since <head SHA>`.
 
 ### A lens fails or a mapped model is unavailable
 
@@ -129,6 +134,7 @@ The pack's risk rubric replaces the generic one, the added lens appears in the r
 ### Verdict and output
 - Advisory only. The skill never gates a merge and never emits a pass/fail exit code.
 - Headless runs never post. They write the report and stop.
+- Delta (`--since`) runs are report only: they never post and never read or write review memory.
 - `report.json` carries a schema version, changes only additively, and is documented.
 
 ### Quality measurement

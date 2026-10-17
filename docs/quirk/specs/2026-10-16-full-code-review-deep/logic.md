@@ -4,7 +4,8 @@
 
 **Status:** Approved — Tech spec: authored (gate: >3 files; crosses subsystems; multi-session)
 
-**Amendments:** none yet.
+**Amendments:**
+- 2026-10-17: Deep coverage planning. Areas hold up to 600 changed lines, weighted by the lines the diff changes. Each area lists its diff hunks, and a finder must examine every one. Before finders start, a capacity estimate checks whether the areas fit the budget (data flow steps 4 and 5; scenarios 9 and 10). Exceeding the time budget alone no longer makes a report incomplete (scenario 11; Decisions Locked, Cost and time budget).
 
 ## Purpose
 
@@ -25,13 +26,13 @@ Running code is what found the extra bugs, so it is also the risk. Code only eve
 1. Steps 1 to 3 run as today: prepare the diff, source root, policy, guidance and memory.
 2. If the seat may run code, one consent prompt says what will run and where. A fork, an untrusted author, or any GitLab reviewer run gets no prompt and no repros.
 3. The risk lens runs first, as today.
-4. The coordinator builds the area map. It splits the change into size-bounded areas, keeps files that feed each other in the same area, and writes a few questions for each area from the risk result and the diff. The map is shown in the report.
-5. The standard lenses, one area finder per area, and the contract lens run in parallel within the budget.
+4. The coordinator builds the area map. It splits the change into areas of up to 600 changed lines, keeps files that feed each other in the same area, lists the diff hunks each area's finder must cover, ranks the areas by priority, and writes a few questions for each area from the risk result and the diff. It then estimates whether the finders can cover every area in the time available. If they can't, an interactive run asks once whether to raise the budget, hunt only the top-priority areas, or continue anyway; a headless run hunts the top-priority areas that fit. The map is shown in the report.
+5. The standard lenses, one area finder per area, and the contract lens run in parallel within the budget. Each finder reports which hunks it examined. A hunk it skipped goes to a follow-up finder, and time left before the 80% mark can go to second-wave finders that look at the change from a different angle.
 6. Every deep candidate goes to a fresh checker. In deep mode, Must fix and Should fix findings from the standard lenses go to a checker too.
 7. The coordinator merges deep findings with lens findings, drops duplicates, tags each finding with its evidence, and puts refuted candidates in a collapsed "checked and dropped" list.
 8. Render and triage run as today.
 
-The time budget covers the whole run. At about 80% of it, no new finders start, candidates already in hand still go to checkers, and the report is marked incomplete with the areas it didn't reach.
+The time budget covers the whole run. At about 80% of it, no new finders start, candidates already in hand still go to checkers, and the report is marked incomplete with the areas it didn't reach. The report is also marked incomplete when areas were left unhunted for capacity or hunks were left unexamined, and it names them. A run that covers everything but finishes after the budget is complete and carries a note saying so.
 
 ## Key decisions & rationale
 
@@ -41,6 +42,8 @@ The time budget covers the whole run. At about 80% of it, no new finders start, 
 - **Areas are bounded by size, and files that feed each other stay together.** Recall collapses on large diffs, and several missed bugs sat between a producer and its consumer, such as the triage export in `report.html` and `validate_triage.py`.
 - **One trust rule decides who runs code.** It is the mutation probe's rule: the author seat, or the reviewer seat when the PR is not from a fork and the author is trusted.
 - **Running out of budget ends in checking, never raw output.** You always get checked findings, and the incomplete label keeps a partial run from reading as a clean one.
+- **Incomplete means something went unreviewed.** Finishing late doesn't make a review less thorough, so it is a note. Areas not hunted, hunks not examined and unchecked claims are the gaps that earn the label.
+- **Hunks, not areas, are the unit of coverage.** An area can complete while its finder skipped a hunk, so the finder reports what it examined and the coordinator follows up on the rest.
 - **Deep mode hunts defects only.** Reuse, simplification and efficiency stay with the standard lenses, which cover them cheaply.
 - **Lens Must fix and Should fix findings are checked in deep mode.** Today nothing drops one that fails source verification; the checker closes that gap when it is already running.
 
@@ -96,6 +99,28 @@ The time budget covers the whole run. At about 80% of it, no new finders start, 
    - **When** you run the scoring script on the report
    - **Then** ✓ it lists each answer-key defect as caught or missed; ✓ it reports recall and the share of shown findings that were refuted on spot check
 
+9. **A change too large for the budget**
+   - **Given** `--deep 20` on a PR the map splits into 12* areas, with 4* finders running at a time
+   - **When** the coordinator estimates capacity: 3* waves of about 8* minutes is 24*, but only 16* minutes (80% of 20) are available, so 8* areas fit
+   - **Then** ✓ an interactive run asks once to raise the budget, hunt only the top-priority areas, or continue anyway; ✓ a headless run hunts the 8* highest-priority areas and lists the other 4 as not hunted; ✗ no area is silently skipped
+   - **Walkthrough:**
+     1. In a headless run, the coordinator ranks the 12 areas by priority and starts the top 8.
+     2. The 4 lowest-priority areas are marked not hunted, with the reason "over capacity".
+     3. The report renders with the incomplete label.
+   - **Data after:** **Report**: ✓ verdict "Incomplete review"; ✓ coverage line names the 4 areas not hunted and says they were over capacity; ✗ no area shown as reviewed that wasn't
+
+10. **A finder leaves hunks unexamined**
+    - **Given** area A3 has four hunks, A3.h1 to A3.h4, and its finder returns having examined A3.h1, A3.h2 and A3.h4
+    - **When** the coordinator records what the finder examined
+    - **Then** ✓ a follow-up finder is dispatched for A3.h3; ✓ if it examines A3.h3, A3 counts as covered; ✗ if time runs out or A3.h3 is still unexamined, A3 is reported as incomplete with A3.h3 named
+    - **Data after:** **Report**: ✓ when the follow-up fails, verdict "Incomplete review" and the coverage line names A3.h3 as unexamined
+
+11. **A run finishes over budget with every area covered**
+    - **Given** `--deep 30` where all 9* areas are completed with every hunk examined
+    - **When** the last checker returns at minute 33*
+    - **Then** ✓ the report is complete and its verdict is not "Incomplete review"; ✓ the coverage line notes the review took 33m against a 30m budget; ✗ no unreached areas are listed
+    - **Data after:** **Report**: ✓ budget note in the coverage line; ✗ no incomplete banner. The run does not count toward the success criteria below, which need two runs inside the budget.
+
 ## Success criteria
 
 Deep mode is done when two deep runs of PR #50 at `3605fd8`, each inside the 60-minute default budget, each catch every defect in the answer key, and no more than 1 in 5 shown findings in either run is refuted on spot check.
@@ -124,6 +149,9 @@ Not in scope:
 **Cost and time budget**
 - A time budget bounds the run, 60 minutes by default, set per run with `--deep <minutes>`.
 - When the budget runs out, finding stops, what's in hand is checked, and the report is marked incomplete with the unreached areas named.
+- Before finders start, the coordinator estimates whether the areas fit in 80% of the budget. A change that doesn't fit prompts once in an interactive run. A headless run hunts the top-priority areas that fit and names the rest as not hunted.
+- A finder must examine every diff hunk in its area. Unexamined hunks get a follow-up, and any still unexamined make the report incomplete and are named.
+- Exceeding the budget alone is a note, not an incomplete review. A run that is over budget still fails the success criteria.
 - Finders and checkers use Sonnet, with today's risk-based escalation for checkers.
 
 **Noise and output**
@@ -160,7 +188,8 @@ Not in scope:
 
 ## Glossary
 
-- **Area:** a size-bounded group of changed files that feed each other, with the questions to check for it.
+- **Area:** a size-bounded group of changed files that feed each other, up to 600 changed lines, with the diff hunks and questions to check for it.
+- **Hunk:** one `@@` block of the diff. A finder must examine every hunk in its area.
 - **Area finder:** a deep-mode agent that reviews one area line by line and may run code in its copy.
 - **Contract lens:** a lens that checks one file's output against the file that reads it, and documented commands against the scripts.
 - **Checker:** a fresh agent that judges one candidate from its claim and the code, and reruns any repro.
