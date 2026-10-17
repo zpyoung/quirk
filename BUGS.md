@@ -150,7 +150,7 @@ entries' IDs; manual edits to fix typos are fine.
 
 ## BUG-18: q-flow's no-JS fallback crashes the build on very deep group nesting
 - **Observed**: 2026-10-17 (q-schema SDD checkpoint review)
-- **File**: skills/writing-html-artifacts/scripts/htmlkit/kitcheck.py:1863
+- **File**: skills/writing-html-artifacts/scripts/htmlkit/kitcheck.py:2086
 - **Description**: `_render_flow_fallback_html` renders groups with a recursive `render_group`, so a q-flow graph whose groups nest about 1,000 deep raises an uncaught RecursionError during fallback injection and aborts the build instead of reporting a check failure. q-schema had the same pattern and now uses an explicit stack (commit 6f59893).
 - **Introduced by**: unknown (q-flow fallback, before d6895d2)
 - **Severity**: low
@@ -159,18 +159,36 @@ entries' IDs; manual edits to fix typos are fine.
 
 ## BUG-19: Text "data-q-flow-list" inside q-flow data suppresses the no-JS fallback
 - **Observed**: 2026-10-17 (q-schema SDD checkpoint review)
-- **File**: skills/writing-html-artifacts/scripts/htmlkit/kitcheck.py:1896
+- **File**: skills/writing-html-artifacts/scripts/htmlkit/kitcheck.py:2120
 - **Description**: `inject_flow_fallbacks` skips any block whose raw text contains "data-q-flow-list", including that text inside a node label or detail in the JSON, so such a graph ships with no no-JS list. q-schema had the same guard and now checks for a real element attribute outside the JSON script (commit 6f59893).
 - **Introduced by**: unknown (q-flow fallback, before d6895d2)
 - **Severity**: low
 - **Proposed fix**: skip only when a tag outside the JSON script carries a data-q-flow-list attribute, as `inject_schema_fallbacks` does.
 - **Blocker for**: no-JS readers of a graph whose data mentions the attribute name
 
-## BUG-17: q-flow keys its id maps on plain objects, so ids like "constructor" misbehave
+## BUG-20: q-flow keys its id maps on plain objects, so ids like "constructor" misbehave
 - **Observed**: 2026-10-17 (q-schema SDD checkpoint review)
-- **File**: skills/writing-html-artifacts/vendor/kit/1.0.0/kit.js:3507
+- **File**: skills/writing-html-artifacts/vendor/kit/1.0.0/kit.js:3849
 - **Description**: QFlow's parse, layout and focus code index author-supplied node and group ids into plain `{}` objects (`seenIds`, `groupMap`, `nodeMap`, `outByNode`, `nodeSizes`, ...). An id such as `constructor`, `toString` or `__proto__` resolves to an inherited property. The same pattern in q-schema crashed layout before readiness was set; q-flow was not reproduced here and is fenced from this branch. q-schema now uses prototype-free maps (commit 76cd7b9).
 - **Introduced by**: unknown (q-flow runtime, before d6895d2)
 - **Severity**: medium
 - **Proposed fix**: use `Object.create(null)` or `Map` for every QFlow dictionary keyed by an author id, and add a browser test with those ids.
 - **Blocker for**: graphs whose node or group ids collide with Object.prototype names
+
+## BUG-21: Text "</q-flow>" inside q-flow data stops the no-JS fallback injection early
+- **Observed**: 2026-10-17 (q-schema SDD final review)
+- **File**: skills/writing-html-artifacts/scripts/htmlkit/kitcheck.py:2109
+- **Description**: `inject_flow_fallbacks` finds each element with the non-greedy regex `_FLOW_BLOCK`, which stops at the text `</q-flow>` when it appears inside the JSON script (valid JSON; browsers end a script only at `</script`). A graph whose data contains that text builds with no no-JS list. q-schema had the same pattern and now scans for the real closing tag while skipping script content.
+- **Introduced by**: unknown (q-flow fallback, before d6895d2)
+- **Severity**: low
+- **Proposed fix**: locate the closing tag with the script-aware scan `inject_schema_fallbacks` uses.
+- **Blocker for**: no-JS readers of a graph whose data mentions the closing tag
+
+## BUG-22: On a phone the graph toolbar covers the top of a fitted q-flow or q-schema
+- **Observed**: 2026-10-17 (q-schema visual check at 375px)
+- **File**: skills/writing-html-artifacts/vendor/kit/1.0.0/kit.js:3599
+- **Description**: `canvasFitBounds` fits the drawing to the whole stage with a 28px pad, but the zoom/fit/expand toolbar overlays the stage's top-left corner. At 375px a tall drawing is scaled so its top row sits under the toolbar (the parser class diagram's Parser card was hidden behind it). The shared fit predates q-schema, so q-flow behaves the same.
+- **Introduced by**: unknown (q-flow canvas, before d6895d2)
+- **Severity**: low
+- **Proposed fix**: reserve the toolbar's height at the top when fitting, at least on narrow stages.
+- **Blocker for**: reading the top node of a tall graph on a phone without panning
