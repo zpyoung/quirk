@@ -2289,6 +2289,33 @@ def test_schema_fallback_keeps_group_children_in_order_and_entities_after_subgro
     )
 
 
+def test_schema_fallback_survives_a_closing_tag_spelled_inside_the_data() -> None:
+    def noted(m):
+        m["entities"][0]["fields"][0]["note"] = "ends like </q-schema> but is only text"
+
+    payload = er_with(noted)
+    before, after = "<p>before</p>\n", "\n<p>after</p>"
+    markup = before + schema_markup(payload) + after
+    out = kitcheck.inject_schema_fallbacks(markup)
+    assert out != markup
+    assert out.count("data-q-flow-list-body") == 1
+    tail = len("</q-schema>" + after)
+    assert out[: len(markup) - tail] == markup[: len(markup) - tail]
+    assert out[len(out) - tail :] == markup[len(markup) - tail :]
+    assert out[len(markup) - tail : len(out) - tail].endswith("</details>")
+    assert kitcheck.inject_schema_fallbacks(out) == out
+
+
+def test_schema_fallback_fills_two_consecutive_blocks() -> None:
+    one = schema_markup(billing_model(), 'summary="One."')
+    two = schema_markup(parser_model(), 'notation="class" summary="Two."')
+    out = kitcheck.inject_schema_fallbacks(one + "\n" + two)
+    assert out.count("data-q-flow-list-body") == 2
+    first, second = out.split("</q-schema>")[:2]
+    assert "Data model as a list" in first and "Class diagram as a list" not in first
+    assert "Class diagram as a list" in second
+
+
 def test_schema_fallback_skip_guard_ignores_the_marker_text_inside_the_data() -> None:
     def noted(m):
         m["entities"][0]["fields"][0]["note"] = "search for data-q-flow-list in the code"

@@ -2279,8 +2279,41 @@ def _render_schema_fallback_html(parsed: dict[str, Any]) -> str:
     )
 
 
-_SCHEMA_BLOCK = re.compile(r"(<q-schema\b[^>]*>.*?</q-schema\s*>)", re.IGNORECASE | re.DOTALL)
+_SCHEMA_OPENER = re.compile(r"<q-schema\b[^>]*>", re.IGNORECASE)
 _SCHEMA_CLOSER = re.compile(r"</q-schema\s*>\Z", re.IGNORECASE)
+_SCHEMA_SCAN = re.compile(r"<script\b[^>]*>|</q-schema\s*>", re.IGNORECASE)
+_SCRIPT_END = re.compile(r"</script\b", re.IGNORECASE)
+
+
+def _schema_blocks(html: str) -> list[tuple[int, int]]:
+    """Spans of each ``<q-schema>`` element, ending at the first closing tag that is not inside a ``<script>``.
+
+    A browser ends a script only at ``</script``, so the text ``</q-schema>`` inside the JSON is data.
+    """
+    spans: list[tuple[int, int]] = []
+    pos = 0
+    while True:
+        opener = _SCHEMA_OPENER.search(html, pos)
+        if opener is None:
+            return spans
+        cursor = opener.end()
+        end = None
+        while True:
+            hit = _SCHEMA_SCAN.search(html, cursor)
+            if hit is None:
+                break
+            if hit.group(0)[1] == "/":
+                end = hit.end()
+                break
+            script_end = _SCRIPT_END.search(html, hit.end())
+            if script_end is None:
+                break
+            cursor = script_end.end()
+        if end is None:
+            pos = opener.end()
+            continue
+        spans.append((opener.start(), end))
+        pos = end
 
 
 def inject_schema_fallbacks(html: str) -> str:
@@ -2288,8 +2321,7 @@ def inject_schema_fallbacks(html: str) -> str:
     if not SCHEMA_TAG.search(html):
         return html
 
-    def replace_block(match: "re.Match[str]") -> str:
-        block = match.group(1)
+    def fill_block(block: str) -> str:
         builder = _TreeBuilder()
         try:
             builder.feed(block)
@@ -2308,7 +2340,14 @@ def inject_schema_fallbacks(html: str) -> str:
         fallback = _render_schema_fallback_html(parsed)
         return _SCHEMA_CLOSER.sub(lambda m: fallback + m.group(0), block, count=1)
 
-    return _SCHEMA_BLOCK.sub(replace_block, html)
+    out: list[str] = []
+    last = 0
+    for start, end in _schema_blocks(html):
+        out.append(html[last:start])
+        out.append(fill_block(html[start:end]))
+        last = end
+    out.append(html[last:])
+    return "".join(out)
 
 
 _RULES: dict[str, Callable[[_Node, Report, _Index], None]] = {

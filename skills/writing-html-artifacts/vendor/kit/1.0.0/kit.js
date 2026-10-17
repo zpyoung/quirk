@@ -6090,6 +6090,7 @@
     dependency: 'depends on'
   };
   var SCHEMA_MAX_ENTITIES = 80;
+  var SCHEMA_LIST_MAX_DEPTH = 64;
   var SCHEMA_FOLD_ROWS = 8;
   var SCHEMA_HEADER_H = 34;
   var SCHEMA_ROW_H = 24;
@@ -6370,37 +6371,32 @@
   }
 
   /** The ELK children of the root: groups as compound nodes (nesting as in q-flow) and ungrouped entities, via `elkNode`. */
+  /** ELK node id of a group; built from its index so no group, entity, port or edge id can collide with another. */
+  function schemaGroupElkId(group) {
+    return 'g' + group.index;
+  }
+
+  function schemaEntityElkId(entity) {
+    return 'n' + entity.index;
+  }
+
   function schemaElkTree(data, measure, elkNode) {
-    function buildElkGroup(g) {
-      var children = [];
-      data.groups.forEach(function (cg) {
-        if (cg.parent === g.id) {
-          children.push(buildElkGroup(cg));
-        }
-      });
-      data.entities.forEach(function (e) {
-        if (e.group === g.id) {
-          children.push(elkNode(e));
-        }
-      });
-      return {
-        id: g.id,
+    var elkGroups = schemaMap();
+    data.groups.forEach(function (g) {
+      elkGroups[g.id] = {
+        id: schemaGroupElkId(g),
         width: Math.max(120, measure(g.label, 12, '600') + 36),
         height: 60,
         layoutOptions: { 'elk.padding': '[top=38,left=18,bottom=18,right=18]' },
-        children: children
+        children: []
       };
-    }
+    });
     var rootChildren = [];
     data.groups.forEach(function (g) {
-      if (!g.parent) {
-        rootChildren.push(buildElkGroup(g));
-      }
+      (g.parent ? elkGroups[g.parent].children : rootChildren).push(elkGroups[g.id]);
     });
     data.entities.forEach(function (e) {
-      if (!e.group) {
-        rootChildren.push(elkNode(e));
-      }
+      (e.group ? elkGroups[e.group].children : rootChildren).push(elkNode(e));
     });
     return rootChildren;
   }
@@ -6727,7 +6723,7 @@
           bad();
         }
         seenIds[g.id] = true;
-        var entry = { id: g.id, label: g.label, parent: typeof g.parent === 'string' && g.parent ? g.parent : null };
+        var entry = { id: g.id, label: g.label, parent: typeof g.parent === 'string' && g.parent ? g.parent : null, index: groups.length };
         groupMap[g.id] = entry;
         groups.push(entry);
       });
@@ -6866,6 +6862,7 @@
 
         var cleanEntity = {
           id: e.id,
+          index: entities.length,
           label: e.label,
           kind: typeof e.kind === 'string' ? e.kind : null,
           group: typeof e.group === 'string' ? e.group : null,
@@ -7028,9 +7025,21 @@
       if (data) {
         this._populateList(details, data);
       } else {
-        var staleBody = details.querySelector(':scope > [data-q-flow-list-body]');
-        if (staleBody) {
-          details.removeChild(staleBody);
+        var summary = details.querySelector(':scope > summary');
+        if (!summary) {
+          summary = document.createElement('summary');
+          details.insertBefore(summary, details.firstChild);
+        }
+        summary.textContent = this.getAttribute('notation') === 'class' ? 'Class diagram as a list' : 'Data model as a list';
+        var body = details.querySelector(':scope > [data-q-flow-list-body]');
+        if (body) {
+          while (body.firstChild) {
+            body.removeChild(body.firstChild);
+          }
+        } else {
+          body = document.createElement('div');
+          body.setAttribute('data-q-flow-list-body', '');
+          details.appendChild(body);
         }
       }
       var live = this.querySelector(':scope > [data-q-flow-live]');
@@ -7091,40 +7100,60 @@
         return li;
       }
 
-      function renderGroupItem(g) {
+      var rootUl = document.createElement('ul');
+      var subGroups = schemaMap();
+      var groupEntities = schemaMap();
+      var rootGroups = [];
+      var rootEntities = [];
+      data.groups.forEach(function (g) {
+        if (g.parent) {
+          (subGroups[g.parent] = subGroups[g.parent] || []).push(g);
+        } else {
+          rootGroups.push(g);
+        }
+      });
+      data.entities.forEach(function (e) {
+        if (e.group) {
+          (groupEntities[e.group] = groupEntities[e.group] || []).push(e);
+        } else {
+          rootEntities.push(e);
+        }
+      });
+
+      // groups nested past SCHEMA_LIST_MAX_DEPTH join the list at that depth, keeping their reading order; the
+      // browser crashes laying out list nesting thousands deep
+      var pending = [];
+      function pushChildren(groups, entities, depth, ul) {
+        for (var ei = entities.length - 1; ei >= 0; ei -= 1) {
+          pending.push({ entity: entities[ei], ul: ul });
+        }
+        for (var gi = groups.length - 1; gi >= 0; gi -= 1) {
+          pending.push({ group: groups[gi], depth: depth, ul: ul });
+        }
+      }
+      pushChildren(rootGroups, rootEntities, 0, rootUl);
+      while (pending.length) {
+        var task = pending.pop();
+        if (task.entity) {
+          task.ul.appendChild(renderEntityItem(task.entity));
+          continue;
+        }
+        var g = task.group;
         var li = document.createElement('li');
         li.setAttribute('data-q-flow-list-group', g.id);
         var title = document.createElement('strong');
         title.textContent = g.label;
         li.appendChild(title);
-        var subUl = document.createElement('ul');
-        data.groups.forEach(function (child) {
-          if (child.parent === g.id) {
-            subUl.appendChild(renderGroupItem(child));
-          }
-        });
-        data.entities.forEach(function (e) {
-          if (e.group === g.id) {
-            subUl.appendChild(renderEntityItem(e));
-          }
-        });
-        if (subUl.firstChild) {
-          li.appendChild(subUl);
+        task.ul.appendChild(li);
+        var childGroups = subGroups[g.id] || [];
+        var childEntities = groupEntities[g.id] || [];
+        var childUl = task.ul;
+        if ((childGroups.length || childEntities.length) && task.depth < SCHEMA_LIST_MAX_DEPTH) {
+          childUl = document.createElement('ul');
+          li.appendChild(childUl);
         }
-        return li;
+        pushChildren(childGroups, childEntities, task.depth + 1, childUl);
       }
-
-      var rootUl = document.createElement('ul');
-      data.groups.forEach(function (g) {
-        if (!g.parent) {
-          rootUl.appendChild(renderGroupItem(g));
-        }
-      });
-      data.entities.forEach(function (e) {
-        if (!e.group) {
-          rootUl.appendChild(renderEntityItem(e));
-        }
-      });
       body.appendChild(rootUl);
       if (data.relationships.length) {
         var heading = document.createElement('p');
@@ -7169,8 +7198,14 @@
       this._lastSig = this._signature();
       var seq = ++this._layoutSeq;
       this.removeAttribute('data-q-flow-ready');
-      var data = this._parseData();
-      this._ensureScaffold(data);
+      var data;
+      try {
+        data = this._parseData();
+        this._ensureScaffold(data);
+      } catch (_err) {
+        this._failUnexpected();
+        return;
+      }
       if (!data) {
         this._failLayout();
         return;
@@ -7188,8 +7223,24 @@
         if (!self.isConnected || seq !== self._layoutSeq) {
           return;
         }
-        self._runLayout(data, seq);
+        try {
+          self._runLayout(data, seq);
+        } catch (_err) {
+          self._failUnexpected();
+        }
       });
+    }
+
+    /** Failure path for a throw nothing else handles: rebuilds a bare scaffold if the throw came before it existed. */
+    _failUnexpected() {
+      try {
+        if (!this._stage || !this._details) {
+          this._ensureScaffold(null);
+        }
+      } catch (_err) {
+        return;
+      }
+      this._failLayout();
     }
 
     /** Sizes every card, hands ELK one node per card with a port pair per related row, and draws the result. */
@@ -7252,18 +7303,18 @@
       });
       this._cards = cards;
 
-      function rowCentre(card, fieldName) {
+      function rowIndex(card, fieldName) {
         for (var i = 0; i < card.rows.length; i += 1) {
           if (card.rows[i].field.name === fieldName) {
-            return SCHEMA_HEADER_H + i * SCHEMA_ROW_H + SCHEMA_ROW_H / 2;
+            return i;
           }
         }
-        return null;
+        return -1;
       }
 
       var ports = schemaMap();
       function portId(entityId, fieldName, side) {
-        return 'port:' + entityId + ':' + fieldName + ':' + side;
+        return 'p' + cards[entityId].entity.index + '.' + rowIndex(cards[entityId], fieldName) + side;
       }
       data.relationships.forEach(function (r) {
         if (r.fromEntity === r.toEntity) {
@@ -7271,7 +7322,7 @@
         }
         [[r.fromEntity, r.fromField], [r.toEntity, r.toField]].forEach(function (end) {
           var card = cards[end[0]];
-          var y = rowCentre(card, end[1]);
+          var y = SCHEMA_HEADER_H + rowIndex(card, end[1]) * SCHEMA_ROW_H + SCHEMA_ROW_H / 2;
           [['WEST', -1], ['EAST', card.width]].forEach(function (side) {
             var id = portId(end[0], end[1], side[0]);
             if (!ports[id]) {
@@ -7294,7 +7345,7 @@
       function elkNode(entity) {
         var card = cards[entity.id];
         return {
-          id: entity.id,
+          id: schemaEntityElkId(entity),
           width: card.width + card.extra,
           height: card.height,
           layoutOptions: { 'elk.portConstraints': 'FIXED_POS' },
@@ -7401,7 +7452,7 @@
 
       function elkNode(entity) {
         var card = cards[entity.id];
-        return { id: entity.id, width: card.width + card.extra, height: card.height };
+        return { id: schemaEntityElkId(entity), width: card.width + card.extra, height: card.height };
       }
 
       var ancestorsOf = schemaAncestors(data);
@@ -7425,8 +7476,8 @@
         }
         elkEdges.push({
           id: 'rel' + r.index,
-          sources: [source],
-          targets: [target],
+          sources: [schemaEntityElkId(data.entityMap[source])],
+          targets: [schemaEntityElkId(data.entityMap[target])],
           labels: labels,
           layoutOptions: { 'elk.layered.priority.direction': general ? '10' : '0' }
         });
@@ -7672,32 +7723,51 @@
       var groupBoxes = schemaMap();
       var nodeBoxes = schemaMap();
       var groupOrder = [];
+      var elkGroups = schemaMap();
+      var elkEntities = schemaMap();
+      data.groups.forEach(function (g) {
+        elkGroups[schemaGroupElkId(g)] = g;
+      });
+      data.entities.forEach(function (e) {
+        elkEntities[schemaEntityElkId(e)] = e;
+      });
 
-      function collectShapes(items, depth) {
-        (items || []).forEach(function (item) {
-          if (data.groupMap[item.id]) {
-            groupBoxes[item.id] = {
-              id: item.id,
+      function collectShapes(roots) {
+        var stack = [];
+        for (var r = roots.length - 1; r >= 0; r -= 1) {
+          stack.push({ item: roots[r], depth: 0 });
+        }
+        while (stack.length) {
+          var top = stack.pop();
+          var item = top.item;
+          var group = elkGroups[item.id];
+          var entity = elkEntities[item.id];
+          if (group) {
+            groupBoxes[group.id] = {
+              id: group.id,
               x: item.x || 0,
               y: item.y || 0,
               width: item.width || 120,
               height: item.height || 80,
-              depth: depth
+              depth: top.depth
             };
-            groupOrder.push(item.id);
-            collectShapes(item.children, depth + 1);
-          } else if (data.entityMap[item.id]) {
-            nodeBoxes[item.id] = {
-              id: item.id,
+            groupOrder.push(group.id);
+            var kids = item.children || [];
+            for (var k = kids.length - 1; k >= 0; k -= 1) {
+              stack.push({ item: kids[k], depth: top.depth + 1 });
+            }
+          } else if (entity) {
+            nodeBoxes[entity.id] = {
+              id: entity.id,
               x: item.x || 0,
               y: item.y || 0,
-              width: cards[item.id].width,
-              height: cards[item.id].height
+              width: cards[entity.id].width,
+              height: cards[entity.id].height
             };
           }
-        });
+        }
       }
-      collectShapes(laidOut.children, 0);
+      collectShapes(laidOut.children || []);
 
       var laidOutEdges = schemaMap();
       (laidOut.edges || []).forEach(function (le) {

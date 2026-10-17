@@ -7726,6 +7726,93 @@ def test_schema_entity_ids_named_like_object_properties_still_draw_and_focus(sch
     assert d["focusProto"] == {"selected": ["__proto__"], "heading": "__proto__", "open": True}
 
 
+def test_schema_endpoints_whose_ids_and_field_names_hold_colons_keep_their_own_ports(schema_page: Path) -> None:
+    model = {
+        "entities": [
+            {"id": "a:b", "label": "AB", "fields": [_schema_field("id", "int", "PK"), _schema_field("c", "int", "FK")]},
+            {
+                "id": "a",
+                "label": "A",
+                "fields": [_schema_field("id", "int", "PK"), _schema_field("x", "text"), _schema_field("b:c", "int", "FK")],
+            },
+            {"id": "z", "label": "Z", "fields": [_schema_field("id", "int", "PK")]},
+        ],
+        "relationships": [
+            _schema_rel("a:b.c", "z.id", "zero-or-many", "one"),
+            _schema_rel("a.b:c", "z.id", "zero-or-many", "one"),
+        ],
+    }
+    out = run(
+        schema_page,
+        ev(
+            f"""(async () => {{
+              {SCHEMA_MOUNT_JS}
+              {SCHEMA_GEOMETRY_JS}
+              const el = mountSchema({json.dumps(model)});
+              const ready = await settle(el);
+              const ends = (idx, fromId, fromField) => {{
+                const pts = pathPoints(lineOf(relAt(el, idx)).getAttribute('d'));
+                const first = pts[0], last = pts[pts.length - 1];
+                const zBox = cardBox(el, 'z'), fBox = cardBox(el, fromId);
+                const segs = pts.slice(1).map((p, i) => Math.abs(p.x - pts[i].x) < 1 || Math.abs(p.y - pts[i].y) < 1);
+                return {{
+                  startDy: Math.abs(first.y - rowY(el, 'z', 'id')),
+                  endDy: Math.abs(last.y - rowY(el, fromId, fromField)),
+                  startX: first.x - (zBox.x + zBox.width),
+                  endX: last.x - fBox.x,
+                  orthogonal: segs.every(Boolean),
+                }};
+              }};
+              return {{ ready, first: ends(0, 'a:b', 'c'), second: ends(1, 'a', 'b:c') }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["ready"] == "true"
+    for key in ("first", "second"):
+        got = d[key]
+        assert got["startDy"] <= 1 and got["endDy"] <= 1, (key, got)
+        assert abs(got["startX"]) <= 1 and abs(got["endX"]) <= 1, (key, got)
+        assert got["orthogonal"] is True, (key, got)
+
+
+def test_schema_ids_named_like_the_layout_graph_keep_every_card_and_line(schema_page: Path) -> None:
+    ids = ["root", "rel0", "port:root:id:WEST"]
+    fields = [_schema_field("id", "int", "PK"), _schema_field("ref", "int", "FK")]
+    entities = [{"id": eid, "label": eid, "fields": fields} for eid in ids]
+    entities[0]["group"] = "n0"
+    model = {
+        "groups": [{"id": "n0", "label": "Group"}],
+        "entities": entities,
+        "relationships": [
+            _schema_rel(f"{ids[i]}.ref", f"{ids[(i + 1) % 3]}.id", "zero-or-many", "one") for i in range(3)
+        ],
+    }
+    out = run(
+        schema_page,
+        ev(
+            f"""(async () => {{
+              {SCHEMA_MOUNT_JS}
+              const el = mountSchema({json.dumps(model)});
+              const ready = await settle(el);
+              return {{
+                ready,
+                cards: [...el.querySelectorAll('[data-q-schema-entity]')].map((e) => e.getAttribute('data-q-schema-entity')).sort(),
+                rels: el.querySelectorAll('[data-q-schema-rel]').length,
+                groups: el.querySelectorAll('[data-q-flow-group]').length,
+              }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["ready"] == "true"
+    assert d["cards"] == sorted(ids) and d["rels"] == 3 and d["groups"] == 1
+
+
 def test_schema_a_pending_layout_never_replaces_a_later_failure(schema_page: Path) -> None:
     out = run(
         schema_page,
@@ -7828,6 +7915,95 @@ def test_schema_a_model_that_stops_parsing_empties_the_list_but_keeps_it_open(sc
     assert after["ready"] == "error" and after["entities"] == 0 and after["open"] is True
     assert after["title"] == "Data model as a list"
     assert after["notice"] == "This data model could not be drawn."
+
+
+def test_schema_data_that_never_parsed_still_gets_a_titled_open_list(schema_page: Path) -> None:
+    out = run(
+        schema_page,
+        ev(
+            f"""(async () => {{
+              {SCHEMA_MOUNT_JS}
+              const mountBroken = (notation) => {{
+                const el = document.createElement('q-schema');
+                el.setAttribute('summary', 'x');
+                if (notation) el.setAttribute('notation', notation);
+                const s = document.createElement('script');
+                s.setAttribute('type', 'application/json');
+                s.textContent = '{{not json';
+                el.appendChild(s);
+                document.body.appendChild(el);
+                return el;
+              }};
+              const er = mountBroken(null);
+              const cls = mountBroken('class');
+              const toClass = mountSchema({json.dumps(SCHEMA_SMALL_DATA)});
+              const toEr = mountSchema({json.dumps(SCHEMA_CLASS_DATA)}, {{ notation: 'class' }});
+              await Promise.all([settle(er), settle(cls), settle(toClass), settle(toEr)]);
+              toClass.querySelector('script').textContent = '{{not json';
+              toClass.setAttribute('notation', 'class');
+              toEr.querySelector('script').textContent = '{{not json';
+              toEr.removeAttribute('notation');
+              await sleep(300);
+              const bodies = (el) => el.querySelectorAll('[data-q-flow-list-body]').length;
+              return {{
+                er: {{ ...failureState(er), bodies: bodies(er), lists: er.querySelectorAll('[data-q-flow-list]').length }},
+                cls: {{ ...failureState(cls), bodies: bodies(cls), lists: cls.querySelectorAll('[data-q-flow-list]').length }},
+                toClass: {{ ...failureState(toClass), bodies: bodies(toClass), lists: toClass.querySelectorAll('[data-q-flow-list]').length }},
+                toEr: {{ ...failureState(toEr), bodies: bodies(toEr), lists: toEr.querySelectorAll('[data-q-flow-list]').length }},
+              }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    for key, title, noun in (
+        ("er", "Data model as a list", "data model"),
+        ("cls", "Class diagram as a list", "class diagram"),
+        ("toClass", "Class diagram as a list", "class diagram"),
+        ("toEr", "Data model as a list", "data model"),
+    ):
+        got = d[key]
+        assert got["ready"] == "error" and got["svg"] is False, key
+        assert got["notice"] == f"This {noun} could not be drawn.", key
+        assert got["open"] is True and got["title"] == title, key
+        assert got["entities"] == 0 and got["bodies"] == 1 and got["lists"] == 1, key
+
+
+def test_schema_thousands_of_nested_groups_reach_a_ready_state_without_a_page_error(schema_page: Path) -> None:
+    depth = 4000
+    groups = [{"id": f"g{i}", "label": f"G{i}", **({"parent": f"g{i - 1}"} if i else {})} for i in range(depth)]
+    model = {
+        "groups": groups,
+        "entities": [{"id": "deep", "label": "Deep", "group": f"g{depth - 1}", "fields": [_schema_field("id", "int", "PK")]}],
+    }
+    out = run(
+        schema_page,
+        ev(
+            f"""(async () => {{
+              {SCHEMA_MOUNT_JS}
+              const el = mountSchema({json.dumps(model)});
+              const ready = await settle(el);
+              await sleep(300);
+              el.getBoundingClientRect();
+              let nesting = 0;
+              const stack = [[el, 0]];
+              while (stack.length) {{
+                const [node, level] = stack.pop();
+                nesting = Math.max(nesting, level);
+                for (const child of node.children) stack.push([child, level + 1]);
+              }}
+              return {{ ready, nesting, state: failureState(el), groups: el.querySelectorAll('[data-q-flow-list-group]').length }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["ready"] in ("true", "error")
+    assert d["groups"] == depth and d["nesting"] < 300
+    if d["ready"] == "error":
+        assert d["state"]["open"] is True and d["state"]["notice"] == "This data model could not be drawn."
 
 
 def test_schema_click_on_blank_panel_space_clears_entity_focus_and_closes_the_drawer(schema_page: Path) -> None:
