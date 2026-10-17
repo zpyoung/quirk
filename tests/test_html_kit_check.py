@@ -2477,3 +2477,817 @@ def test_a_built_page_with_q_schema_and_the_flow_block_passes() -> None:
     )
     result = run(html, REAL_STORE)
     assert [f for f in result["failures"] if f["check"] == "kit"] == []
+
+
+
+# -- q-sequence: rule sequence-data and warnings ---------------------------------------------------
+
+
+def seq_markup(payload: object, attrs: str = 'summary="Checkout charges the card."') -> str:
+    return f'<q-sequence {attrs}><script type="application/json">{json.dumps(payload)}</script></q-sequence>'
+
+
+def seq_messages(payload: object) -> list[str]:
+    return messages(seq_markup(payload))
+
+
+def seq_warnings(payload: object) -> list[str]:
+    return warn_messages(seq_markup(payload))
+
+
+def checkout(patch=None) -> dict:
+    """The logic spec's checkout sequence, with ids on every message the traces name."""
+    payload = {
+        "kinds": {"person": 1, "ui": 2, "service": 3, "external": 4, "store": 5},
+        "participants": [
+            {"id": "shopper", "label": "Shopper", "kind": "person"},
+            {"id": "checkout", "label": "Checkout", "kind": "ui"},
+            {"id": "billing", "label": "Billing", "kind": "service"},
+            {"id": "stripe", "label": "Stripe", "kind": "external", "detail": "<p>Card processor.</p>"},
+            {"id": "ledger", "label": "Ledger", "kind": "store"},
+        ],
+        "steps": [
+            {"id": "place-order", "from": "shopper", "to": "checkout", "label": "place order", "type": "call"},
+            {"id": "charge-order", "from": "checkout", "to": "billing", "label": "charge order", "type": "call"},
+            {
+                "fragment": "loop",
+                "label": "up to 3 attempts",
+                "steps": [
+                    {"id": "create-charge", "from": "billing", "to": "stripe", "label": "create charge", "type": "call"},
+                    {
+                        "fragment": "alt",
+                        "branches": [
+                            {
+                                "label": "card valid",
+                                "steps": [
+                                    {"id": "charge-ok", "from": "stripe", "to": "billing", "label": "charge succeeded", "type": "reply"}
+                                ],
+                            },
+                            {
+                                "label": "card declined",
+                                "steps": [
+                                    {"id": "charge-declined", "from": "stripe", "to": "billing", "label": "card declined", "type": "reply"},
+                                    {"note": "waits 2 seconds before retrying", "over": ["billing"]},
+                                ],
+                            },
+                        ],
+                    },
+                ],
+            },
+            {
+                "fragment": "opt",
+                "label": "charge succeeded",
+                "steps": [{"id": "record", "from": "billing", "to": "ledger", "label": "record payment", "type": "async"}],
+            },
+            {"id": "paid", "from": "billing", "to": "checkout", "label": "order paid", "type": "reply"},
+            {"id": "show-receipt", "from": "checkout", "to": "shopper", "label": "show receipt", "type": "reply"},
+        ],
+        "traces": [
+            {
+                "id": "succeeds",
+                "label": "Card succeeds",
+                "steps": [
+                    {"message": "place-order", "value": {"order": "C-2207", "items": 2, "total": 48.0}},
+                    {"message": "charge-order", "value": {"order": "C-2207", "amount": 48.0}, "note": "Checkout asks Billing."},
+                    {"message": "create-charge", "value": {"attempt": 1}},
+                    {"message": "charge-ok", "value": {"charge": "ch_91", "status": "succeeded"}},
+                    {"message": "record", "value": {"charge": "ch_91"}},
+                    {"message": "paid", "value": {"status": "paid"}},
+                ],
+            },
+            {
+                "id": "declined",
+                "label": "Declined, then retried",
+                "steps": [
+                    {"message": "place-order", "value": 1},
+                    {"message": "charge-order", "value": 2},
+                    {"message": "create-charge", "value": 3},
+                    {"message": "charge-declined", "value": 4},
+                    {"message": "create-charge", "value": 5},
+                    {"message": "charge-ok", "value": 6},
+                    {"message": "record", "value": 7},
+                    {"message": "paid", "value": 8},
+                ],
+            },
+        ],
+    }
+    if patch is not None:
+        patch(payload)
+    return payload
+
+
+def small(*steps: dict, extra: dict | None = None) -> dict:
+    """Three participants a, b, c and the given steps."""
+    return {
+        "participants": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}, {"id": "c", "label": "C"}],
+        "steps": list(steps),
+        **(extra or {}),
+    }
+
+
+def msg(frm: str, to: str, label: str = "m", kind: str = "call", **more: object) -> dict:
+    return {"from": frm, "to": to, "label": label, "type": kind, **more}
+
+
+def parsed_sequence(payload: dict) -> dict | None:
+    builder = kitcheck._TreeBuilder()
+    builder.feed(seq_markup(payload))
+    builder.close()
+    builder.finish()
+    node = next(n for n in builder.nodes if n.tag == "q-sequence")
+    return kitcheck._validate_sequence_node(node, lambda _l, _m: None, lambda _l, _m: None)
+
+
+def test_sequence_tag_and_rule_are_registered() -> None:
+    assert kitcheck.SEQUENCE_TAG.search("<q-sequence summary='x'>")
+    assert not kitcheck.SEQUENCE_TAG.search("<q-sequences>")
+    assert "sequence-data" in kitcheck.KNOWN_RULES
+    assert "sequence-data" in CATALOG.elements["q-sequence"].rules
+
+
+def test_sequence_checkout_with_both_traces_passes_with_no_warnings() -> None:
+    assert seq_messages(checkout()) == []
+    assert seq_warnings(checkout()) == []
+
+
+def test_sequence_cleaned_data_numbers_messages_in_drawn_order() -> None:
+    cleaned = parsed_sequence(checkout())
+    assert cleaned is not None
+    assert [m["number"] for m in cleaned["messages"]] == list(range(1, 9))
+    assert [m["id"] for m in cleaned["messages"]] == [
+        "place-order", "charge-order", "create-charge", "charge-ok", "charge-declined", "record", "paid", "show-receipt",
+    ]
+    assert cleaned["messages"][3] == {
+        "number": 4, "id": "charge-ok", "from": "stripe", "to": "billing",
+        "label": "charge succeeded", "type": "reply", "detail": None, "create": False,
+    }
+    assert [p["id"] for p in cleaned["participants"]] == ["shopper", "checkout", "billing", "stripe", "ledger"]
+    assert cleaned["participants"][3]["detail"] == "<p>Card processor.</p>"
+    assert cleaned["part_map"]["stripe"] is cleaned["participants"][3]
+    loop = cleaned["steps"][2]
+    assert loop["fragment"] == "loop" and loop["label"] == "up to 3 attempts"
+    assert loop["steps"][0] == {"message": 3}
+    alt = loop["steps"][1]
+    assert [b["label"] for b in alt["branches"]] == ["card valid", "card declined"]
+    assert alt["branches"][1]["steps"] == [{"message": 5}, {"note": "waits 2 seconds before retrying", "over": ["billing"]}]
+    assert [t["id"] for t in cleaned["traces"]] == ["succeeds", "declined"]
+    assert [s["message"] for s in cleaned["traces"][1]["steps"]] == [1, 2, 3, 5, 3, 4, 6, 7]
+    assert cleaned["traces"][0]["steps"][1] == {"message": 2, "value": {"order": "C-2207", "amount": 48.0}, "note": "Checkout asks Billing."}
+    assert cleaned["traces"][0]["steps"][0]["note"] is None
+
+
+def test_sequence_failure_returns_none() -> None:
+    assert parsed_sequence(small(msg("a", "nope"))) is None
+
+
+def test_sequence_missing_summary_uses_the_catalog_message() -> None:
+    payload = small(msg("a", "b"))
+    assert messages(seq_markup(payload, attrs="")) == ["<q-sequence> needs attribute summary"]
+
+
+def test_sequence_without_a_json_child_or_with_bad_json_fails() -> None:
+    assert messages('<q-sequence summary="s"></q-sequence>') == ["<q-sequence> needs one of: script"]
+    needs_json = '<q-sequence> needs a <script type="application/json"> child holding a JSON object'
+    for body in ("{", "[]", '"text"', "7"):
+        page = f'<q-sequence summary="s"><script type="application/json">{body}</script></q-sequence>'
+        assert messages(page) == [needs_json], body
+    other = '<q-sequence summary="s"><script type="text/plain">{}</script></q-sequence>'
+    assert messages(other) == [needs_json]
+
+
+def test_sequence_unparseable_json_naming_forbidden_markup_reports_the_detail_rule() -> None:
+    page = '<q-sequence summary="s"><script type="application/json">{"detail": "<script>x</script>" oops</script></q-sequence>'
+    assert messages(page) == ["<q-sequence> detail may hold only paragraphs, lists, code and links"]
+
+
+def test_sequence_kinds_checks() -> None:
+    def set_kinds(value):
+        return lambda p: p.update(kinds=value)
+
+    assert seq_messages(checkout(set_kinds([]))) == ["<q-sequence> kinds must be a JSON object"] + [
+        f'<q-sequence> participant "{pid}" has undeclared kind "{kind}"'
+        for pid, kind in (("shopper", "person"), ("checkout", "ui"), ("billing", "service"), ("stripe", "external"), ("ledger", "store"))
+    ]
+    nine = {f"k{i}": min(i, 8) for i in range(1, 10)}
+    got = seq_messages(small(msg("a", "b"), extra={"kinds": nine}))
+    assert got == ["<q-sequence> declares 9 kinds; at most eight kinds, one per chart color"]
+    for color in (0, 9, "1", 1.5, True, None):
+        got = seq_messages(small(msg("a", "b"), extra={"kinds": {"k": color}}))
+        assert got == ['<q-sequence> kind "k" color must be an integer from 1 to 8'], color
+
+
+def test_sequence_needs_a_non_empty_participant_list() -> None:
+    for value in (None, [], "a", {"id": "a"}):
+        payload = {"steps": [msg("a", "b")]}
+        if value is not None:
+            payload["participants"] = value
+        got = seq_messages(payload)
+        assert got[0] == "<q-sequence> needs at least one participant", value
+
+
+def test_sequence_participant_needs_id_and_label() -> None:
+    bad = [{"id": "a"}, {"label": "A"}, {"id": " ", "label": "A"}, {"id": "a", "label": ""}, 5, None, {"id": 3, "label": "A"}]
+    for entry in bad:
+        payload = small(msg("b", "c"))
+        payload["participants"].append(entry)
+        assert seq_messages(payload) == ["<q-sequence> each participant needs an id and a label"], entry
+
+
+def test_sequence_more_than_16_participants_fails_and_9_warns() -> None:
+    def with_participants(count: int) -> dict:
+        return {
+            "participants": [{"id": f"p{i}", "label": f"P{i}"} for i in range(count)],
+            "steps": [msg("p0", "p1", kind="async")],
+        }
+
+    assert seq_messages(with_participants(17)) == ["<q-sequence> has 17 participants; at most 16"]
+    assert seq_warnings(with_participants(17)) == []
+    assert seq_messages(with_participants(16)) == []
+    assert seq_warnings(with_participants(16)) == [
+        "<q-sequence> has 16 participants: sequences over 8 participants are hard to follow; split it"
+    ]
+    assert seq_messages(with_participants(9)) == []
+    assert seq_warnings(with_participants(9)) == [
+        "<q-sequence> has 9 participants: sequences over 8 participants are hard to follow; split it"
+    ]
+    assert not any("participants" in w for w in seq_warnings(with_participants(8)))
+
+
+def test_sequence_participant_kind_must_be_declared() -> None:
+    def patch(p: dict) -> None:
+        p["participants"][0]["kind"] = "cache"
+
+    assert seq_messages(checkout(patch)) == ['<q-sequence> participant "shopper" has undeclared kind "cache"']
+
+    def non_string(p: dict) -> None:
+        p["participants"][0]["kind"] = 4
+
+    assert seq_messages(checkout(non_string)) == ['<q-sequence> participant "shopper" has undeclared kind "4"']
+
+
+@pytest.mark.parametrize(
+    "bad_detail",
+    ["<script>alert(1)</script>", "<form><input></form>", '<img src="https://x/y.png">', '<p onclick="e()">hi</p>', '<a href="javascript:alert(1)">bad</a>', 7],
+)
+def test_sequence_detail_whitelist_applies_to_participants_and_messages(bad_detail) -> None:
+    detail_rule = ["<q-sequence> detail may hold only paragraphs, lists, code and links"]
+
+    def on_participant(p: dict) -> None:
+        p["participants"][4]["detail"] = bad_detail
+
+    def on_message(p: dict) -> None:
+        p["steps"][0]["detail"] = bad_detail
+
+    assert seq_messages(checkout(on_participant)) == detail_rule
+    assert seq_messages(checkout(on_message)) == detail_rule
+
+
+def test_sequence_message_detail_is_sanitized_into_the_cleaned_message() -> None:
+    cleaned = parsed_sequence(small(msg("a", "b", detail="<p>Hello <b>there</b></p>")))
+    assert cleaned is not None
+    assert cleaned["messages"][0]["detail"] == "<p>Hello <b>there</b></p>"
+
+
+def test_sequence_duplicate_ids_are_reported_once_each() -> None:
+    dup_participants = {"participants": [{"id": "billing", "label": "A"}, {"id": "billing", "label": "B"}], "steps": [msg("billing", "billing", kind="async")]}
+    assert seq_messages(dup_participants) == ['<q-sequence> has duplicate id "billing"']
+
+    def message_clash(p: dict) -> None:
+        p["traces"] = []
+        p["steps"][0]["id"] = "billing"
+
+    assert seq_messages(checkout(message_clash)) == ['<q-sequence> has duplicate id "billing"']
+
+    def message_twice(p: dict) -> None:
+        p["traces"] = []
+        p["steps"][0]["id"] = "paid"
+
+    assert seq_messages(checkout(message_twice)) == ['<q-sequence> has duplicate id "paid"']
+
+    def thrice(p: dict) -> None:
+        p["traces"] = []
+        for step in p["steps"][:2]:
+            step["id"] = "billing"
+
+    assert seq_messages(checkout(thrice)) == ['<q-sequence> has duplicate id "billing"']
+
+
+def test_sequence_trace_ids_are_their_own_namespace() -> None:
+    def patch(p: dict) -> None:
+        p["traces"][0]["id"] = "billing"
+
+    assert seq_messages(checkout(patch)) == []
+
+
+def test_sequence_needs_at_least_one_message() -> None:
+    expected = ["<q-sequence> needs at least one message"]
+    for steps in (None, [], "x", {}, [{"note": "n", "over": ["a"]}], [{"end": "a"}], [{"fragment": "opt", "steps": [{"end": "a"}]}]):
+        payload = small()
+        del payload["steps"]
+        if steps is not None:
+            payload["steps"] = steps
+        assert seq_messages(payload) == expected, steps
+
+
+def test_sequence_malformed_steps() -> None:
+    malformed = "<q-sequence> step must be one message, note, end or fragment"
+    cases = [
+        {},
+        5,
+        None,
+        "text",
+        [1],
+        {"label": "only a label"},
+        {"note": "n", "over": ["a"], "end": "a"},
+        {"end": "a", "from": "a", "to": "b", "label": "m", "type": "call"},
+        {"fragment": "opt", "note": "n", "over": ["a"], "steps": [msg("a", "b")]},
+    ]
+    for case in cases:
+        payload = small(msg("a", "b", kind="async"), case)
+        assert seq_messages(payload) == [malformed], case
+
+
+def test_sequence_message_needs_from_to_and_label() -> None:
+    needs = "<q-sequence> message 1 needs from, to and a label"
+    for bad in (
+        {"from": "a", "label": "m", "type": "call"},
+        {"from": "a", "to": "b", "type": "call"},
+        {"from": "a", "to": "b", "label": " ", "type": "call"},
+        {"from": "", "to": "b", "label": "m", "type": "call"},
+        {"from": 3, "to": "b", "label": "m", "type": "call"},
+        {"from": "a", "to": ["b"], "label": "m", "type": "call"},
+    ):
+        assert seq_messages(small(bad)) == [needs], bad
+
+
+def test_sequence_message_must_name_known_participants() -> None:
+    assert seq_messages(small(msg("a", "b"), msg("b", "strip"))) == [
+        '<q-sequence> message 2 names unknown participant "strip"'
+    ]
+    assert seq_messages(small(msg("x", "y"))) == [
+        '<q-sequence> message 1 names unknown participant "x"',
+        '<q-sequence> message 1 names unknown participant "y"',
+    ]
+    assert seq_messages(small(msg("x", "x"))) == ['<q-sequence> message 1 names unknown participant "x"']
+    assert seq_messages(small({"id": "m1", "from": "m1", "to": "a", "label": "x", "type": "call"})) == [
+        '<q-sequence> message 1 names unknown participant "m1"'
+    ]
+
+
+def test_sequence_message_type_must_be_call_reply_or_async() -> None:
+    steps = [msg("a", "b", f"m{i}", "async") for i in range(6)] + [msg("a", "b", "bad", "return")]
+    assert seq_messages(small(*steps)) == ['<q-sequence> message 7 has unknown type "return"; use call, reply or async']
+    missing = {"from": "a", "to": "b", "label": "m"}
+    assert seq_messages(small(missing)) == ['<q-sequence> message 1 has unknown type ""; use call, reply or async']
+    assert seq_messages(small(msg("a", "b", kind=3))) == ['<q-sequence> message 1 has unknown type "3"; use call, reply or async']
+
+
+def test_sequence_create_must_be_true_and_cannot_be_a_self_message() -> None:
+    for value in (False, 1, "yes", None):
+        got = seq_messages(small(msg("a", "b", create=value)))
+        assert got == ["<q-sequence> message 1 create must be true"], value
+    assert seq_messages(small(msg("a", "b", create=True))) == []
+    assert seq_messages(small(msg("a", "a", kind="async", create=True))) == [
+        "<q-sequence> message 1 can't create its own sender"
+    ]
+
+
+def worker_sequence(*steps: dict) -> dict:
+    return {
+        "participants": [{"id": "billing", "label": "Billing"}, {"id": "worker", "label": "Receipt worker"}],
+        "steps": list(steps),
+    }
+
+
+def start(**more: object) -> dict:
+    return msg("billing", "worker", "start session", "call", create=True, **more)
+
+
+def test_sequence_create_and_end_checkout_passes() -> None:
+    payload = worker_sequence(
+        start(),
+        msg("worker", "billing", "session ready", "reply"),
+        msg("billing", "worker", "send receipt", "async"),
+        {"end": "worker"},
+    )
+    assert seq_messages(payload) == []
+    assert seq_warnings(payload) == []
+
+
+def test_sequence_touch_before_creation_fails_for_messages_notes_and_ends() -> None:
+    before = worker_sequence(msg("worker", "billing", "early", "async"), start(), {"end": "worker"})
+    assert seq_messages(before) == ['<q-sequence> message 1 touches "Receipt worker" before it is created']
+    note = worker_sequence({"note": "hi", "over": ["worker"]}, start(), {"end": "worker"})
+    assert seq_messages(note) == ['<q-sequence> note touches "Receipt worker" before it is created']
+    early_end = worker_sequence({"end": "worker"}, start())
+    assert seq_messages(early_end)[0] == '<q-sequence> end touches "Receipt worker" before it is created'
+    numbered = worker_sequence(
+        msg("billing", "billing", "tick", "async"),
+        msg("billing", "worker", "too soon", "async"),
+        start(),
+        {"end": "worker"},
+    )
+    assert seq_messages(numbered) == ['<q-sequence> message 2 touches "Receipt worker" before it is created']
+
+
+def test_sequence_touch_after_end_fails_for_messages_notes_and_ends() -> None:
+    steps = [start(), {"end": "worker"}]
+    for i, (extra, expected) in enumerate(
+        (
+            (msg("billing", "worker", "late", "async"), '<q-sequence> message 2 touches "Receipt worker" after it ends'),
+            (msg("worker", "billing", "late", "async"), '<q-sequence> message 2 touches "Receipt worker" after it ends'),
+            ({"note": "late", "over": ["billing", "worker"]}, '<q-sequence> note touches "Receipt worker" after it ends'),
+        )
+    ):
+        assert seq_messages(worker_sequence(*steps, extra)) == [expected], i
+    spec_example = worker_sequence(
+        start(),
+        msg("worker", "billing", "session ready", "reply"),
+        msg("billing", "worker", "send receipt", "async"),
+        {"end": "worker"},
+        msg("billing", "worker", "again", "async"),
+    )
+    assert seq_messages(spec_example) == ['<q-sequence> message 4 touches "Receipt worker" after it ends']
+
+
+def test_sequence_participant_created_twice_or_ended_twice_fails() -> None:
+    twice = worker_sequence(start(), start())
+    assert seq_messages(twice) == ['<q-sequence> "Receipt worker" is created twice']
+    ends = worker_sequence(start(), {"end": "worker"}, {"end": "worker"})
+    assert seq_messages(ends) == ['<q-sequence> "Receipt worker" ends twice']
+
+
+def test_sequence_a_participant_may_end_without_being_created() -> None:
+    payload = worker_sequence(msg("billing", "worker", "hi", "async"), {"end": "billing"})
+    assert seq_messages(payload) == []
+
+
+def test_sequence_creation_inside_alt_branches_follows_drawn_order() -> None:
+    payload = worker_sequence(
+        {
+            "fragment": "alt",
+            "branches": [
+                {"label": "first", "steps": [start()]},
+                {"label": "second", "steps": [msg("billing", "worker", "again", "async")]},
+            ],
+        }
+    )
+    assert seq_messages(payload) == []
+
+
+def test_sequence_note_needs_text_and_over() -> None:
+    needs = ["<q-sequence> note needs text and the participants it sits over"]
+    for bad in (
+        {"note": "", "over": ["a"]},
+        {"note": " ", "over": ["a"]},
+        {"note": 4, "over": ["a"]},
+        {"note": "n"},
+        {"note": "n", "over": []},
+        {"note": "n", "over": "a"},
+    ):
+        assert seq_messages(small(msg("a", "b", kind="async"), bad)) == needs, bad
+
+
+def test_sequence_note_and_end_must_name_known_participants() -> None:
+    base = msg("a", "b", kind="async")
+    assert seq_messages(small(base, {"note": "n", "over": ["a", "ledgr"]})) == [
+        '<q-sequence> note names unknown participant "ledgr"'
+    ]
+    assert seq_messages(small(base, {"note": "n", "over": ["ledgr", "ledgr"]})) == [
+        '<q-sequence> note names unknown participant "ledgr"'
+    ]
+    assert seq_messages(small(base, {"end": "ledgr"})) == ['<q-sequence> end names unknown participant "ledgr"']
+    assert seq_messages(small(base, {"end": 5})) == ['<q-sequence> end names unknown participant "5"']
+
+
+def test_sequence_unknown_fragment_type() -> None:
+    payload = small(msg("a", "b", kind="async"), {"fragment": "critical", "steps": [msg("a", "b", kind="async")]})
+    assert seq_messages(payload) == ['<q-sequence> unknown fragment type "critical"; use alt, opt, loop or par']
+
+
+@pytest.mark.parametrize("kind", ["alt", "par"])
+def test_sequence_alt_and_par_need_two_branches(kind: str) -> None:
+    one = {"fragment": kind, "branches": [{"label": "only", "steps": [msg("a", "b", kind="async")]}]}
+    for branches in (None, [], "x", one["branches"]):
+        step = {"fragment": kind}
+        if branches is not None:
+            step["branches"] = branches
+        assert seq_messages(small(msg("a", "b", kind="async"), step)) == [f"<q-sequence> {kind} needs at least 2 branches"], branches
+
+
+@pytest.mark.parametrize("kind", ["alt", "par"])
+def test_sequence_each_branch_needs_a_label(kind: str) -> None:
+    for bad in ({"steps": [msg("a", "b", kind="async")]}, {"label": " ", "steps": [msg("a", "b", kind="async")]}, 3):
+        step = {"fragment": kind, "branches": [{"label": "ok", "steps": [msg("a", "b", kind="async")]}, bad]}
+        assert seq_messages(small(step)) == [f"<q-sequence> each {kind} branch needs a label"], bad
+
+
+def test_sequence_fragments_and_branches_need_steps() -> None:
+    base = msg("a", "b", kind="async")
+    for step in (
+        {"fragment": "loop", "label": "up to 3 attempts"},
+        {"fragment": "loop", "label": "up to 3 attempts", "steps": []},
+        {"fragment": "loop", "label": "up to 3 attempts", "steps": "x"},
+    ):
+        assert seq_messages(small(base, step)) == ['<q-sequence> fragment "up to 3 attempts" has no steps'], step
+    assert seq_messages(small(base, {"fragment": "opt", "steps": []})) == ['<q-sequence> fragment "opt" has no steps']
+    branchless = {"fragment": "alt", "label": "pick", "branches": [{"label": "x", "steps": [base]}, {"label": "y", "steps": []}]}
+    assert seq_messages(small(branchless)) == ['<q-sequence> fragment "pick" has no steps']
+    unlabelled = {"fragment": "par", "branches": [{"label": "x"}, {"label": "y", "steps": [base]}]}
+    assert seq_messages(small(unlabelled)) == ['<q-sequence> fragment "par" has no steps']
+
+
+def test_sequence_nested_fragment_data_is_checked_at_depth() -> None:
+    inner = {"fragment": "loop", "label": "retry", "steps": [msg("a", "nope", kind="async")]}
+    outer = {"fragment": "opt", "steps": [{"fragment": "alt", "branches": [{"label": "x", "steps": [inner]}, {"label": "y", "steps": [msg("a", "b", kind="async")]}]}]}
+    assert seq_messages(small(outer)) == ['<q-sequence> message 1 names unknown participant "nope"']
+
+
+def test_sequence_deeply_nested_fragments_do_not_crash() -> None:
+    step: dict = msg("a", "b", kind="async")
+    for _ in range(400):
+        step = {"fragment": "opt", "steps": [step]}
+    got = seq_messages(small(step))
+    assert got == [] or got == ["<q-sequence> step must be one message, note, end or fragment"]
+    page = seq_markup(small(step))
+    assert isinstance(kitcheck.check_html_warnings(page, CATALOG, label="page.html"), list)
+    assert isinstance(kitcheck.inject_sequence_fallbacks(page), str)
+
+
+def test_sequence_traces_must_be_a_list_with_id_label_and_two_steps() -> None:
+    def patch(value):
+        return lambda p: p.update(traces=value)
+
+    assert seq_messages(checkout(patch({}))) == ["<q-sequence> traces must be a list"]
+    assert seq_messages(checkout(patch("x"))) == ["<q-sequence> traces must be a list"]
+    for trace in (5, {"label": "T", "steps": []}, {"id": "t"}, {"id": "", "label": "T"}, {"id": "t", "label": " "}):
+        got = seq_messages(checkout(patch([trace])))
+        assert got[0] == "<q-sequence> each trace needs an id and a label", trace
+    short = {"id": "t", "label": "T", "steps": [{"message": "paid", "value": 1}]}
+    assert seq_messages(checkout(patch([short]))) == ['<q-sequence> trace "t" needs at least 2 steps']
+    nosteps = {"id": "t", "label": "T"}
+    assert seq_messages(checkout(patch([nosteps]))) == ['<q-sequence> trace "t" needs at least 2 steps']
+    dup = [
+        {"id": "t", "label": "T", "steps": [{"message": "paid", "value": 1}, {"message": "paid", "value": 2}]},
+        {"id": "t", "label": "T2", "steps": [{"message": "paid", "value": 1}, {"message": "paid", "value": 2}]},
+        {"id": "t", "label": "T3", "steps": [{"message": "paid", "value": 1}, {"message": "paid", "value": 2}]},
+    ]
+    assert seq_messages(checkout(patch(dup))) == ['<q-sequence> has duplicate trace id "t"']
+
+
+def trace_with(*steps: dict):
+    return lambda p: p.update(traces=[{"id": "t", "label": "T", "steps": list(steps)}])
+
+
+PAID = {"message": "paid", "value": 1}
+
+
+def test_sequence_trace_step_needs_message_and_value() -> None:
+    needs = ['<q-sequence> trace "t" step 2 needs a message and a value']
+    for bad in ({"value": 1}, {"message": "paid"}, {"message": 4, "value": 1}, 5, None, "paid"):
+        assert seq_messages(checkout(trace_with(PAID, bad))) == needs, bad
+    assert seq_messages(checkout(trace_with(PAID, {"message": "paid", "value": None}))) == []
+
+
+def test_sequence_trace_step_must_name_a_message_id() -> None:
+    got = seq_messages(checkout(trace_with(PAID, {"message": "charge-retry", "value": 1})))
+    assert got == ['<q-sequence> trace "t" step 2 names unknown message "charge-retry"']
+    got = seq_messages(checkout(trace_with(PAID, {"message": "billing", "value": 1})))
+    assert got == ['<q-sequence> trace "t" step 2 names unknown message "billing"']
+
+
+def test_sequence_trace_value_and_note_rules_match_q_flow() -> None:
+    def step(**more):
+        return {"message": "paid", "value": 1, **more}
+
+    got = seq_messages(checkout(trace_with(PAID, {"message": "paid", "value": "\ud800"})))
+    assert got == ['<q-sequence> trace "t" step 2 has a value that isn\'t JSON']
+    got = seq_messages(checkout(trace_with(PAID, step(value=list(range(399))))))
+    assert got == ['<q-sequence> trace "t" step 2 value is 401 lines; at most 400']
+    assert seq_messages(checkout(trace_with(PAID, step(value=list(range(398)))))) == []
+    assert seq_messages(checkout(trace_with(PAID, step(note=5)))) == ['<q-sequence> trace "t" step 2 note must be a string']
+    assert seq_messages(checkout(trace_with(PAID, step(note=None)))) == ['<q-sequence> trace "t" step 2 note must be a string']
+
+
+def test_sequence_text_with_an_unpaired_surrogate_fails_once() -> None:
+    expected = ["<q-sequence> sequence data holds text that can't be written as UTF-8"]
+
+    def patch(p: dict) -> None:
+        p["participants"][0]["label"] = "Shopper \ud800"
+        p["steps"][0]["label"] = "place \udfff order"
+        p["traces"][0]["steps"][1]["note"] = "x \ud800"
+
+    assert seq_messages(checkout(patch)) == expected
+
+    def key(p: dict) -> None:
+        p["kinds"]["bad\ud800"] = 6
+
+    assert seq_messages(checkout(key)) == expected
+
+
+def test_sequence_text_with_a_valid_surrogate_pair_passes() -> None:
+    def patch(p: dict) -> None:
+        p["participants"][0]["label"] = "Shopper \U0001f600"
+        p["traces"][0]["steps"][1]["note"] = "ok \U0001f600"
+
+    assert seq_messages(checkout(patch)) == []
+
+
+def test_sequence_failures_keep_check_order() -> None:
+    payload = small(
+        msg("a", "nope", "m", "return", create=False),
+        {"note": "n", "over": ["ledgr"]},
+        extra={"kinds": {"k": 0}, "traces": {}},
+    )
+    payload["participants"][0]["kind"] = "undeclared"
+    assert seq_messages(payload) == [
+        '<q-sequence> kind "k" color must be an integer from 1 to 8',
+        '<q-sequence> participant "a" has undeclared kind "undeclared"',
+        '<q-sequence> message 1 names unknown participant "nope"',
+        '<q-sequence> message 1 has unknown type "return"; use call, reply or async',
+        "<q-sequence> message 1 create must be true",
+        '<q-sequence> note names unknown participant "ledgr"',
+        "<q-sequence> traces must be a list",
+    ]
+
+
+def test_sequence_id_constructor_is_an_ordinary_id() -> None:
+    payload = {
+        "kinds": {"constructor": 1},
+        "participants": [
+            {"id": "constructor", "label": "Constructor", "kind": "constructor"},
+            {"id": "__proto__", "label": "Proto"},
+        ],
+        "steps": [
+            msg("constructor", "__proto__", "call it", "call", id="hasOwnProperty"),
+            msg("__proto__", "constructor", "back", "reply", id="toString"),
+        ],
+        "traces": [
+            {"id": "constructor", "label": "T", "steps": [{"message": "hasOwnProperty", "value": 1}, {"message": "toString", "value": 2}]}
+        ],
+    }
+    assert seq_messages(payload) == []
+    assert seq_warnings(payload) == []
+    unknown = small(msg("a", "toString"), msg("constructor", "a"))
+    assert seq_messages(unknown) == [
+        '<q-sequence> message 1 names unknown participant "toString"',
+        '<q-sequence> message 2 names unknown participant "constructor"',
+    ]
+    trace = checkout(trace_with(PAID, {"message": "constructor", "value": 1}))
+    assert seq_messages(trace) == ['<q-sequence> trace "t" step 2 names unknown message "constructor"']
+
+
+# warnings
+
+
+def test_sequence_label_over_40_characters_warns() -> None:
+    long = small(msg("a", "b", "x" * 41, "async"))
+    assert seq_messages(long) == []
+    assert seq_warnings(long) == [
+        "<q-sequence> message 1 label is 41 characters: labels over 40 characters crowd the row; move the rest to the detail"
+    ]
+    assert seq_warnings(small(msg("a", "b", "x" * 40, "async"))) == []
+    spec = small(msg("a", "b", "x" * 52, "async"))
+    assert "is 52 characters" in seq_warnings(spec)[0]
+
+
+def test_sequence_over_60_messages_warns() -> None:
+    def many(count: int) -> dict:
+        return small(*[msg("a", "b", f"m{i}", "async") for i in range(count)])
+
+    assert seq_messages(many(64)) == []
+    assert seq_warnings(many(64)) == [
+        "<q-sequence> has 64 messages: sequences over 60 messages are hard to follow; split it"
+    ]
+    assert seq_warnings(many(61)) != []
+    assert seq_warnings(many(60)) == []
+
+
+def test_sequence_trace_warnings_use_the_sequence_prefix() -> None:
+    def step(**more):
+        return {"message": "paid", "value": 1, **more}
+
+    got = seq_warnings(checkout(trace_with(PAID, step(value=list(range(39))))))
+    assert got == [
+        '<q-sequence> trace "t" step 2 value is 41 lines: values over 40 lines are hard to scan; '
+        "keep the fields the reader needs"
+    ]
+    assert seq_warnings(checkout(trace_with(PAID, step(value=list(range(38)))))) == []
+    got = seq_warnings(checkout(trace_with(PAID, step(note="n" * 121))))
+    assert got == ['<q-sequence> trace "t" step 2 note is 121 characters: notes over 120 characters crowd the panel']
+    assert seq_warnings(checkout(trace_with(PAID, step(note="n" * 120)))) == []
+    got = seq_warnings(checkout(trace_with(*[step() for _ in range(31)])))
+    assert got == ['<q-sequence> trace "t" has 31 steps: traces over 30 steps are hard to follow; split it']
+    assert seq_warnings(checkout(trace_with(*[step() for _ in range(30)]))) == []
+
+
+def no_reply(number: int, label: str = "m") -> str:
+    return f'<q-sequence> call {number} "{label}" has no matching reply'
+
+
+def stray(number: int, label: str = "m") -> str:
+    return f'<q-sequence> reply {number} "{label}" answers no call'
+
+
+def test_sequence_a_call_no_reply_answers_warns() -> None:
+    payload = checkout(lambda p: p["steps"][4].update(type="async"))
+    assert seq_messages(payload) == []
+    assert seq_warnings(payload) == [no_reply(2, "charge order")]
+    assert seq_warnings(small(msg("a", "b", "ask"))) == [no_reply(1, "ask")]
+
+
+def test_sequence_reply_with_no_open_call_warns() -> None:
+    assert seq_warnings(small(msg("b", "a", "done", "reply"))) == [stray(1, "done")]
+    assert seq_warnings(small(msg("a", "b", "ask"), msg("a", "b", "wrong way", "reply"))) == [
+        no_reply(1, "ask"),
+        stray(2, "wrong way"),
+    ]
+
+
+def test_sequence_reply_closes_the_most_recent_open_call_between_the_pair() -> None:
+    payload = small(msg("a", "b", "first"), msg("a", "b", "second"), msg("b", "a", "answer", "reply"))
+    assert seq_warnings(payload) == [no_reply(1, "first")]
+    other_pair = small(msg("a", "b", "ab"), msg("a", "c", "ac"), msg("c", "a", "answer", "reply"), msg("b", "a", "answer", "reply"))
+    assert seq_warnings(other_pair) == []
+
+
+def test_sequence_async_and_self_messages_open_nothing() -> None:
+    assert seq_warnings(small(msg("a", "b", "fire", "async"), msg("a", "a", "think", "call"))) == []
+    stray_self = small(msg("a", "a", "back", "reply"))
+    assert seq_warnings(stray_self) == []
+
+
+def test_sequence_ending_a_participant_with_an_open_call_to_it_warns() -> None:
+    payload = small(msg("a", "b", "ask"), {"end": "b"})
+    assert seq_warnings(payload) == [no_reply(1, "ask")]
+    answered = small(msg("a", "b", "ask"), msg("b", "a", "ok", "reply"), {"end": "b"})
+    assert seq_warnings(answered) == []
+    caller_ends = small(msg("a", "b", "ask"), {"end": "a"}, msg("b", "a", "ok", "reply"))
+    assert seq_messages(caller_ends) == ['<q-sequence> message 2 touches "A" after it ends']
+
+
+def alt_of(kind: str, *branches: list[dict]) -> dict:
+    return {"fragment": kind, "branches": [{"label": f"b{i}", "steps": steps} for i, steps in enumerate(branches)]}
+
+
+def test_sequence_alt_answers_a_call_only_when_every_branch_replies() -> None:
+    reply = msg("b", "a", "ok", "reply")
+    ping = msg("a", "b", "ping", "async")
+    both = small(msg("a", "b", "ask"), alt_of("alt", [reply], [dict(reply)]))
+    assert seq_warnings(both) == []
+    one = small(msg("a", "b", "ask"), alt_of("alt", [reply], [ping]))
+    assert seq_warnings(one) == [no_reply(1, "ask")]
+
+
+def test_sequence_par_answers_a_call_when_any_branch_replies() -> None:
+    reply = msg("b", "a", "ok", "reply")
+    ping = msg("a", "b", "ping", "async")
+    one = small(msg("a", "b", "ask"), alt_of("par", [reply], [ping]))
+    assert seq_warnings(one) == []
+    neither = small(msg("a", "b", "ask"), alt_of("par", [ping], [dict(ping)]))
+    assert seq_warnings(neither) == [no_reply(1, "ask")]
+
+
+def test_sequence_a_call_opened_in_a_branch_and_not_answered_there_warns() -> None:
+    reply = msg("b", "a", "ok", "reply")
+    ping = msg("a", "b", "ping", "async")
+    payload = small(alt_of("alt", [msg("a", "b", "ask")], [ping]), reply)
+    assert seq_warnings(payload) == [no_reply(1, "ask"), stray(3, "ok")]
+    par = small(alt_of("par", [msg("a", "b", "ask")], [ping]), reply)
+    assert seq_warnings(par) == [no_reply(1, "ask"), stray(3, "ok")]
+
+
+def test_sequence_alt_branches_start_from_the_calls_open_when_it_began() -> None:
+    first = small(
+        msg("a", "b", "ask"),
+        alt_of("alt", [msg("b", "a", "ok", "reply")], [msg("b", "a", "no", "reply")]),
+        msg("b", "a", "again", "reply"),
+    )
+    assert seq_warnings(first) == [stray(4, "again")]
+
+
+def test_sequence_opt_and_loop_answer_calls_when_the_body_does() -> None:
+    reply = msg("b", "a", "ok", "reply")
+    for kind in ("opt", "loop"):
+        answered = small(msg("a", "b", "ask"), {"fragment": kind, "steps": [dict(reply)]})
+        assert seq_warnings(answered) == [], kind
+        opened = small({"fragment": kind, "steps": [msg("a", "b", "ask")]}, dict(reply))
+        assert seq_warnings(opened) == [no_reply(1, "ask"), stray(2, "ok")], kind
+        within = small({"fragment": kind, "steps": [msg("a", "b", "ask"), dict(reply)]})
+        assert seq_warnings(within) == [], kind
+
+
+def test_sequence_warnings_do_not_run_the_matching_while_a_failure_stands() -> None:
+    payload = small(msg("a", "b", "ask"), msg("a", "nope", "bad"))
+    assert seq_messages(payload) == ['<q-sequence> message 2 names unknown participant "nope"']
+    assert seq_warnings(payload) == []
+
+
+def test_sequence_warnings_never_affect_passed() -> None:
+    html = page(seq_markup(small(msg("a", "b", "x" * 50))), libraries={"kit": "1.0.0"}, blocks=kit_blocks())
+    result = run(html, REAL_STORE)
+    assert result["passed"] is True and result["failures"] == []
+    assert [w["detail"].split(": ", 1)[1] for w in result["warnings"]] == [
+        "<q-sequence> message 1 label is 50 characters: labels over 40 characters crowd the row; move the rest to the detail",
+        no_reply(1, "x" * 50),
+    ]

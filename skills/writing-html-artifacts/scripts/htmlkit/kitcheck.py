@@ -30,9 +30,20 @@ CHART_TAG = re.compile(r"<q-chart[\s/>]", re.IGNORECASE)
 CODE_TAG = re.compile(r"<q-(?:code|diff)[\s/>]", re.IGNORECASE)
 FLOW_TAG = re.compile(r"<q-flow[\s/>]", re.IGNORECASE)
 SCHEMA_TAG = re.compile(r"<q-schema[\s/>]", re.IGNORECASE)
+SEQUENCE_TAG = re.compile(r"<q-sequence[\s/>]", re.IGNORECASE)
 
 KNOWN_RULES = frozenset(
-    {"max-series", "diff-notes", "heading-sections", "board-columns", "timeline-items", "compare-recommended", "flow-data", "schema-data"}
+    {
+        "max-series",
+        "diff-notes",
+        "heading-sections",
+        "board-columns",
+        "timeline-items",
+        "compare-recommended",
+        "flow-data",
+        "schema-data",
+        "sequence-data",
+    }
 )
 ATTRIBUTE_KINDS = ("text", "enum", "boolean", "number-list", "integer", "ident")
 
@@ -1011,6 +1022,30 @@ def _flow_value_lines(value: Any) -> Optional[int]:
     return text.count("\n") + 1
 
 
+def _check_trace_step_payload(
+    where: str, step: dict[str, Any], line: int, fail: Callable[[int, str], None], report_warn: Report
+) -> None:
+    """Check one trace step's ``value`` and ``note`` size; ``where`` is the message prefix naming the step.
+
+    Shared by the q-flow and q-sequence validators so a trace reads the same on both elements.
+    """
+    if "value" in step:
+        lines = _flow_value_lines(step["value"])
+        if lines is None:
+            fail(line, f"{where} has a value that isn't JSON")
+        elif lines > _FLOW_MAX_VALUE_LINES:
+            fail(line, f"{where} value is {lines} lines; at most 400")
+        elif lines > _FLOW_WARN_VALUE_LINES:
+            report_warn(
+                line,
+                f"{where} value is {lines} lines: values over 40 lines are hard to scan; "
+                "keep the fields the reader needs",
+            )
+    note = step.get("note")
+    if isinstance(note, str) and len(note) > _FLOW_WARN_NOTE_CHARS:
+        report_warn(line, f"{where} note is {len(note)} characters: notes over 120 characters crowd the panel")
+
+
 def _validate_flow_traces(
     data: dict[str, Any],
     line: int,
@@ -1104,23 +1139,7 @@ def _validate_flow_traces(
                 else:
                     edge_index = candidates[0]
 
-            if has_value:
-                lines = _flow_value_lines(step["value"])
-                if lines is None:
-                    fail(line, f"{where} has a value that isn't JSON")
-                elif lines > _FLOW_MAX_VALUE_LINES:
-                    fail(line, f"{where} value is {lines} lines; at most 400")
-                elif lines > _FLOW_WARN_VALUE_LINES:
-                    report_warn(
-                        line,
-                        f"{where} value is {lines} lines: values over 40 lines are hard to scan; "
-                        "keep the fields the reader needs",
-                    )
-            if isinstance(note, str) and len(note) > _FLOW_WARN_NOTE_CHARS:
-                report_warn(
-                    line,
-                    f"{where} note is {len(note)} characters: notes over 120 characters crowd the panel",
-                )
+            _check_trace_step_payload(where, step, line, fail, report_warn)
 
             clean_steps.append(
                 {
@@ -1171,13 +1190,12 @@ def _flow_has_unwritable_text(data: dict[str, Any]) -> bool:
     return False
 
 
-def _validate_flow_node(
-    node: _Node,
-    report_fail: Report,
-    report_warn: Report,
-    *,
-    page_flow_ids: Optional[frozenset[str]] = None,
-) -> Optional[dict[str, Any]]:
+def _json_child(node: _Node, tag: str, report_fail: Report) -> Optional[dict[str, Any]]:
+    """Parse the ``<script type="application/json">`` child of ``node`` into its JSON object.
+
+    Returns ``None`` when there is no script at all (the catalog's ``requires`` reports that) or after
+    reporting one failure naming ``<tag>``.
+    """
     scripts = [c for c in node.children if c.tag == "script"]
     if not scripts:
         return None
@@ -1185,20 +1203,34 @@ def _validate_flow_node(
         (s for s in scripts if s.attrs.get("type", "").strip().lower() == "application/json"),
         None,
     )
+    needs_json = f'<{tag}> needs a <script type="application/json"> child holding a JSON object'
     if json_script is None:
-        report_fail(node.line, '<q-flow> needs a <script type="application/json"> child holding a JSON object')
+        report_fail(node.line, needs_json)
         return None
     raw_json = _text(json_script)
     try:
         data = json.loads(raw_json)
     except (ValueError, RecursionError):
         if _FLOW_FORBIDDEN_RAW.search(raw_json):
-            report_fail(node.line, "<q-flow> detail may hold only paragraphs, lists, code and links")
+            report_fail(node.line, f"<{tag}> detail may hold only paragraphs, lists, code and links")
         else:
-            report_fail(node.line, '<q-flow> needs a <script type="application/json"> child holding a JSON object')
+            report_fail(node.line, needs_json)
         return None
     if not isinstance(data, dict):
-        report_fail(node.line, '<q-flow> needs a <script type="application/json"> child holding a JSON object')
+        report_fail(node.line, needs_json)
+        return None
+    return data
+
+
+def _validate_flow_node(
+    node: _Node,
+    report_fail: Report,
+    report_warn: Report,
+    *,
+    page_flow_ids: Optional[frozenset[str]] = None,
+) -> Optional[dict[str, Any]]:
+    data = _json_child(node, "q-flow", report_fail)
+    if data is None:
         return None
 
     before_fails: list[int] = []
@@ -1447,6 +1479,439 @@ def _validate_flow_node(
         "nodes": clean_nodes,
         "node_map": node_map,
         "edges": clean_edges,
+        "traces": clean_traces,
+    }
+
+
+def _validate_sequence_traces(
+    data: dict[str, Any],
+    line: int,
+    message_numbers: dict[str, int],
+    fail: Callable[[int, str], None],
+    report_warn: Report,
+) -> list[dict[str, Any]]:
+    """Check ``data["traces"]`` against the message ids and return the cleaned traces."""
+    raw_traces = data.get("traces", [])
+    if not isinstance(raw_traces, list):
+        fail(line, "<q-sequence> traces must be a list")
+        return []
+
+    clean_traces: list[dict[str, Any]] = []
+    seen_trace_ids: set[str] = set()
+    dup_trace_ids: set[str] = set()
+    for trace in raw_traces:
+        if not isinstance(trace, dict):
+            fail(line, "<q-sequence> each trace needs an id and a label")
+            continue
+        tid = trace.get("id")
+        tlabel = trace.get("label")
+        header_ok = _is_text(tid) and _is_text(tlabel)
+        if not header_ok:
+            fail(line, "<q-sequence> each trace needs an id and a label")
+            t = "?"
+        else:
+            t = tid
+            if tid in seen_trace_ids:
+                if tid not in dup_trace_ids:
+                    fail(line, f'<q-sequence> has duplicate trace id "{tid}"')
+                    dup_trace_ids.add(tid)
+            else:
+                seen_trace_ids.add(tid)
+
+        raw_steps = trace.get("steps")
+        if not isinstance(raw_steps, list) or len(raw_steps) < _FLOW_MIN_TRACE_STEPS:
+            fail(line, f'<q-sequence> trace "{t}" needs at least 2 steps')
+        if not isinstance(raw_steps, list):
+            continue
+        if len(raw_steps) > _FLOW_WARN_TRACE_STEPS:
+            report_warn(
+                line,
+                f'<q-sequence> trace "{t}" has {len(raw_steps)} steps: traces over 30 steps are hard to follow; split it',
+            )
+
+        clean_steps: list[dict[str, Any]] = []
+        for n, step in enumerate(raw_steps, start=1):
+            where = f'<q-sequence> trace "{t}" step {n}'
+            if not isinstance(step, dict):
+                fail(line, f"{where} needs a message and a value")
+                continue
+            smessage = step.get("message")
+            if not isinstance(smessage, str) or "value" not in step:
+                fail(line, f"{where} needs a message and a value")
+            known = isinstance(smessage, str) and smessage in message_numbers
+            if isinstance(smessage, str) and not known:
+                fail(line, f'{where} names unknown message "{smessage}"')
+            note = step.get("note")
+            if "note" in step and not isinstance(note, str):
+                fail(line, f"{where} note must be a string")
+            _check_trace_step_payload(where, step, line, fail, report_warn)
+            clean_steps.append(
+                {
+                    "message": message_numbers[smessage] if known else None,
+                    "value": step.get("value"),
+                    "note": note if isinstance(note, str) else None,
+                }
+            )
+
+        if header_ok:
+            clean_traces.append({"id": t, "label": tlabel, "steps": clean_steps})
+    return clean_traces
+
+
+_SEQ_MAX_PARTICIPANTS = 16
+_SEQ_WARN_PARTICIPANTS = 8
+_SEQ_WARN_LABEL_CHARS = 40
+_SEQ_WARN_MESSAGES = 60
+_SEQ_MESSAGE_TYPES = ("call", "reply", "async")
+_SEQ_FRAGMENTS = ("alt", "opt", "loop", "par")
+_SEQ_BRANCHED = ("alt", "par")
+_SEQ_STEP_KEYS = ("fragment", "note", "end", "from")
+_SEQ_DETAIL_RULE = "<q-sequence> detail may hold only paragraphs, lists, code and links"
+
+
+def _shown(value: Any) -> str:
+    """``value`` as it reads inside a quoted failure message: strings as they are, other JSON as JSON."""
+    if value is None:
+        return ""
+    return value if isinstance(value, str) else json.dumps(value)
+
+
+def _sequence_open_calls(steps: list[dict[str, Any]], messages: list[dict[str, Any]]) -> list[tuple[int, str]]:
+    """Walk cleaned ``steps`` in drawn order and return the reply-matching warnings as ``(number, message)``.
+
+    Implements the call and reply pairing of the activation contract: a reply closes the most recent
+    open call from its receiver, an ``alt`` answers a call only when every branch does, a ``par`` when
+    any branch does, and a call left open at the end of its branch, fragment, participant or diagram has
+    no matching reply. Results are ordered by message number.
+    """
+    by_number = {m["number"]: m for m in messages}
+    unanswered: list[int] = []
+    stray: list[int] = []
+
+    def walk(items: list[dict[str, Any]], entry: list[tuple[str, str, int]]) -> list[tuple[str, str, int]]:
+        state = list(entry)
+        for step in items:
+            if "message" in step:
+                m = by_number[step["message"]]
+                if m["from"] == m["to"] or m["type"] == "async":
+                    continue
+                if m["type"] == "call":
+                    state.append((m["from"], m["to"], m["number"]))
+                    continue
+                for i in range(len(state) - 1, -1, -1):
+                    if state[i][0] == m["to"] and state[i][1] == m["from"]:
+                        del state[i]
+                        break
+                else:
+                    stray.append(m["number"])
+            elif "end" in step:
+                unanswered.extend(c[2] for c in state if c[1] == step["end"])
+                state = [c for c in state if c[1] != step["end"]]
+            elif "branches" in step:
+                open_after: list[set[int]] = []
+                for branch in step["branches"]:
+                    after = walk(branch["steps"], state)
+                    entered = {c[2] for c in state}
+                    unanswered.extend(c[2] for c in after if c[2] not in entered)
+                    open_after.append({c[2] for c in after})
+                quantifier = any if step["fragment"] == "alt" else all
+                state = [c for c in state if quantifier(c[2] in still for still in open_after)]
+            elif "steps" in step:
+                after = walk(step["steps"], state)
+                entered = {c[2] for c in state}
+                unanswered.extend(c[2] for c in after if c[2] not in entered)
+                still_open = {c[2] for c in after}
+                state = [c for c in state if c[2] in still_open]
+        return state
+
+    unanswered.extend(c[2] for c in walk(steps, []))
+    found = [(n, f'<q-sequence> call {n} "{by_number[n]["label"]}" has no matching reply') for n in unanswered]
+    found += [(n, f'<q-sequence> reply {n} "{by_number[n]["label"]}" answers no call') for n in stray]
+    return sorted(found)
+
+
+def _validate_sequence_node(
+    node: _Node,
+    report_fail: Report,
+    report_warn: Report,
+) -> Optional[dict[str, Any]]:
+    """Check one ``<q-sequence>`` and return its cleaned data, or ``None`` after reporting any failure.
+
+    Failures go through ``report_fail`` and warnings through ``report_warn``, all at the element's line.
+    Messages are numbered in drawn order, the same numbering the browser element uses.
+    """
+    data = _json_child(node, "q-sequence", report_fail)
+    if data is None:
+        return None
+    line = node.line
+    failed: list[int] = []
+
+    def fail(at: int, message: str) -> None:
+        failed.append(1)
+        report_fail(at, message)
+
+    def problem(message: str) -> None:
+        fail(line, f"<q-sequence> {message}")
+
+    kinds = data.get("kinds", {})
+    if not isinstance(kinds, dict):
+        problem("kinds must be a JSON object")
+        kinds = {}
+    else:
+        if len(kinds) > _FLOW_MAX_KINDS:
+            problem(f"declares {len(kinds)} kinds; at most eight kinds, one per chart color")
+        for k, v in kinds.items():
+            if not _is_text(k) or isinstance(v, bool) or not isinstance(v, int) or not (1 <= v <= _FLOW_MAX_KINDS):
+                problem(f'kind "{k}" color must be an integer from 1 to 8')
+
+    seen_ids: set[str] = set()
+    dup_reported: set[str] = set()
+
+    def claim_id(ident: str) -> bool:
+        """Record ``ident`` in the shared participant and message namespace; ``False`` when it was taken."""
+        if ident in seen_ids:
+            if ident not in dup_reported:
+                problem(f'has duplicate id "{ident}"')
+                dup_reported.add(ident)
+            return False
+        seen_ids.add(ident)
+        return True
+
+    def clean_detail(raw: Any) -> Optional[str]:
+        if raw is None:
+            return None
+        cleaned = _check_and_sanitize_flow_detail(raw) if isinstance(raw, str) else None
+        if cleaned is None:
+            fail(line, _SEQ_DETAIL_RULE)
+        return cleaned
+
+    raw_participants = data.get("participants")
+    participants: list[dict[str, Any]] = []
+    part_map: dict[str, dict[str, Any]] = {}
+    if not isinstance(raw_participants, list) or not raw_participants:
+        problem("needs at least one participant")
+    else:
+        listed = []
+        for p in raw_participants:
+            if isinstance(p, dict) and _is_text(p.get("id")) and _is_text(p.get("label")):
+                listed.append(p)
+            else:
+                problem("each participant needs an id and a label")
+        if len(raw_participants) > _SEQ_MAX_PARTICIPANTS:
+            problem(f"has {len(raw_participants)} participants; at most {_SEQ_MAX_PARTICIPANTS}")
+        elif len(raw_participants) > _SEQ_WARN_PARTICIPANTS:
+            report_warn(
+                line,
+                f"<q-sequence> has {len(raw_participants)} participants: "
+                "sequences over 8 participants are hard to follow; split it",
+            )
+        entries = []
+        for p in listed:
+            kind = p.get("kind")
+            if kind is not None and (not isinstance(kind, str) or kind not in kinds):
+                problem(f'participant "{p["id"]}" has undeclared kind "{_shown(kind)}"')
+            entries.append(
+                {
+                    "id": p["id"],
+                    "label": p["label"],
+                    "kind": kind if isinstance(kind, str) else None,
+                    "detail": clean_detail(p.get("detail")),
+                }
+            )
+        for entry in entries:
+            if claim_id(entry["id"]):
+                participants.append(entry)
+                part_map[entry["id"]] = entry
+
+    messages: list[dict[str, Any]] = []
+    message_numbers: dict[str, int] = {}
+    created: dict[str, int] = {}
+    ended: dict[str, int] = {}
+    created_twice: set[str] = set()
+    ended_twice: set[str] = set()
+    touches: list[tuple[int, str, str, bool]] = []
+    counters = {"message": 0, "position": 0}
+
+    def touch(describe: str, pid: str, *, is_end: bool = False) -> None:
+        touches.append((counters["position"], describe, pid, is_end))
+
+    def walk_message(step: dict[str, Any]) -> Optional[dict[str, Any]]:
+        counters["message"] += 1
+        counters["position"] += 1
+        number = counters["message"]
+        frm, to, label = step.get("from"), step.get("to"), step.get("label")
+        located = _is_text(frm) and _is_text(to) and _is_text(label)
+        if not located:
+            problem(f"message {number} needs from, to and a label")
+        else:
+            for pid in dict.fromkeys((frm, to)):
+                if pid not in part_map:
+                    problem(f'message {number} names unknown participant "{pid}"')
+        mtype = step.get("type")
+        if not isinstance(mtype, str) or mtype not in _SEQ_MESSAGE_TYPES:
+            problem(f'message {number} has unknown type "{_shown(mtype)}"; use call, reply or async')
+        create = step.get("create")
+        if "create" in step and create is not True:
+            problem(f"message {number} create must be true")
+        elif create is True and located and frm == to:
+            problem(f"message {number} can't create its own sender")
+        elif create is True and located and to in part_map:
+            if to in created:
+                if to not in created_twice:
+                    problem(f'"{part_map[to]["label"]}" is created twice')
+                    created_twice.add(to)
+            else:
+                created[to] = counters["position"]
+        mid = step.get("id")
+        if _is_text(mid) and claim_id(mid):
+            message_numbers[mid] = number
+        detail = clean_detail(step.get("detail"))
+        if not located:
+            return None
+        if len(label) > _SEQ_WARN_LABEL_CHARS:
+            report_warn(
+                line,
+                f"<q-sequence> message {number} label is {len(label)} characters: "
+                "labels over 40 characters crowd the row; move the rest to the detail",
+            )
+        for pid in dict.fromkeys((frm, to)):
+            if pid in part_map:
+                touch(f"message {number}", pid)
+        entry = {
+            "number": number,
+            "id": mid if _is_text(mid) else None,
+            "from": frm,
+            "to": to,
+            "label": label,
+            "type": mtype,
+            "detail": detail,
+            "create": create is True,
+        }
+        messages.append(entry)
+        return {"message": number}
+
+    def walk_note(step: dict[str, Any]) -> Optional[dict[str, Any]]:
+        counters["position"] += 1
+        text, over = step.get("note"), step.get("over")
+        if not _is_text(text) or not isinstance(over, list) or not over:
+            problem("note needs text and the participants it sits over")
+            return None
+        known = []
+        for item in dict.fromkeys(_shown(x) if not isinstance(x, str) else x for x in over):
+            if item in part_map:
+                known.append(item)
+            else:
+                problem(f'note names unknown participant "{item}"')
+        for pid in known:
+            touch("note", pid)
+        return {"note": text, "over": [x for x in over if isinstance(x, str)]}
+
+    def walk_end(step: dict[str, Any]) -> Optional[dict[str, Any]]:
+        counters["position"] += 1
+        pid = step.get("end")
+        if not isinstance(pid, str) or pid not in part_map:
+            problem(f'end names unknown participant "{_shown(pid)}"')
+            return None
+        touch("end", pid, is_end=True)
+        if pid in ended:
+            if pid not in ended_twice:
+                problem(f'"{part_map[pid]["label"]}" ends twice')
+                ended_twice.add(pid)
+        else:
+            ended[pid] = counters["position"]
+        return {"end": pid}
+
+    def walk_fragment(step: dict[str, Any]) -> Optional[dict[str, Any]]:
+        ftype = step.get("fragment")
+        if not isinstance(ftype, str) or ftype not in _SEQ_FRAGMENTS:
+            problem(f'unknown fragment type "{_shown(ftype)}"; use alt, opt, loop or par')
+            return None
+        flabel = step.get("label")
+        label = flabel if _is_text(flabel) else None
+        title = label or ftype
+
+        def run_steps(raw: Any) -> list[dict[str, Any]]:
+            if not isinstance(raw, list) or not raw:
+                problem(f'fragment "{title}" has no steps')
+                return []
+            return walk_steps(raw)
+
+        if ftype in _SEQ_BRANCHED:
+            raw_branches = step.get("branches")
+            if not isinstance(raw_branches, list) or len(raw_branches) < 2:
+                problem(f"{ftype} needs at least 2 branches")
+                raw_branches = raw_branches if isinstance(raw_branches, list) else []
+            branches = []
+            for branch in raw_branches:
+                if not isinstance(branch, dict) or not _is_text(branch.get("label")):
+                    problem(f"each {ftype} branch needs a label")
+                    if not isinstance(branch, dict):
+                        continue
+                branches.append({"label": branch.get("label"), "steps": run_steps(branch.get("steps"))})
+            return {"fragment": ftype, "label": label, "branches": branches}
+        return {"fragment": ftype, "label": label, "steps": run_steps(step.get("steps"))}
+
+    def walk_steps(raw: list[Any]) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for step in raw:
+            present = [k for k in _SEQ_STEP_KEYS if isinstance(step, dict) and k in step]
+            if len(present) != 1:
+                problem("step must be one message, note, end or fragment")
+                continue
+            walker = {
+                "fragment": walk_fragment,
+                "note": walk_note,
+                "end": walk_end,
+                "from": walk_message,
+            }[present[0]]
+            clean = walker(step)
+            if clean is not None:
+                out.append(clean)
+        return out
+
+    raw_steps = data.get("steps")
+    steps: list[dict[str, Any]] = []
+    if not isinstance(raw_steps, list) or not raw_steps:
+        problem("needs at least one message")
+    else:
+        try:
+            steps = walk_steps(raw_steps)
+        except RecursionError:
+            problem("step must be one message, note, end or fragment")
+        else:
+            if counters["message"] == 0:
+                problem("needs at least one message")
+
+    for position, describe, pid, is_end in touches:
+        label = part_map[pid]["label"]
+        if position < created.get(pid, 0):
+            problem(f'{describe} touches "{label}" before it is created')
+        elif not is_end and position > ended.get(pid, position):
+            problem(f'{describe} touches "{label}" after it ends')
+
+    if counters["message"] > _SEQ_WARN_MESSAGES:
+        report_warn(
+            line,
+            f"<q-sequence> has {counters['message']} messages: sequences over 60 messages are hard to follow; split it",
+        )
+
+    clean_traces = _validate_sequence_traces(data, line, message_numbers, fail, report_warn)
+
+    if _flow_has_unwritable_text(data):
+        problem("sequence data holds text that can't be written as UTF-8")
+
+    if failed:
+        return None
+    try:
+        for _number, text in _sequence_open_calls(steps, messages):
+            report_warn(line, text)
+    except RecursionError:
+        pass
+    return {
+        "participants": participants,
+        "part_map": part_map,
+        "messages": messages,
+        "steps": steps,
         "traces": clean_traces,
     }
 
@@ -1982,9 +2447,13 @@ def _rule_schema_data(node: _Node, report: Report, index: _Index) -> None:
     _validate_schema_node(node, report, lambda _line, _msg: None)
 
 
+def _rule_sequence_data(node: _Node, report: Report, index: _Index) -> None:
+    _validate_sequence_node(node, report, lambda _line, _msg: None)
+
+
 def check_html_warnings(text: str, catalog: Catalog, *, label: str) -> list[dict]:
-    """Return non-fatal kit warnings for ``text`` (such as large ``q-flow`` graphs or long edge labels)."""
-    if not (FLOW_TAG.search(text) or SCHEMA_TAG.search(text)):
+    """Return non-fatal kit warnings for ``text`` (such as large ``q-flow`` graphs, long edge labels or long ``q-sequence`` message labels)."""
+    if not (FLOW_TAG.search(text) or SCHEMA_TAG.search(text) or SEQUENCE_TAG.search(text)):
         return []
     builder = _TreeBuilder()
     try:
@@ -2003,6 +2472,8 @@ def check_html_warnings(text: str, catalog: Catalog, *, label: str) -> list[dict
             _validate_flow_node(node, lambda _line, _msg: None, report_warn)
         elif node.tag == "q-schema" and "q-schema" in catalog.elements:
             _validate_schema_node(node, lambda _line, _msg: None, report_warn)
+        elif node.tag == "q-sequence" and "q-sequence" in catalog.elements:
+            _validate_sequence_node(node, lambda _line, _msg: None, report_warn)
     found.sort()
     return [{"check": "kit", "detail": f"{label} line {line}: {message}"} for line, _, message in found]
 
@@ -2372,6 +2843,120 @@ def inject_schema_fallbacks(html: str) -> str:
     return "".join(out)
 
 
+def _render_sequence_fallback_html(parsed: dict[str, Any]) -> str:
+    """The no-script notice and open ``<details>`` text list for one cleaned ``<q-sequence>``.
+
+    The list text is the one the browser element writes, so both runtimes give a reader the same view.
+    """
+    part_map = parsed["part_map"]
+    by_number = {m["number"]: m for m in parsed["messages"]}
+
+    def esc(text: str) -> str:
+        return html_lib.escape(text)
+
+    def name(pid: str) -> str:
+        return esc(part_map[pid]["label"])
+
+    def describe(m: dict[str, Any]) -> str:
+        return f"{name(m['from'])} \u2192 {name(m['to'])}"
+
+    def render_steps(steps: list[dict[str, Any]]) -> str:
+        return "".join(render_step(s) for s in steps)
+
+    def render_step(step: dict[str, Any]) -> str:
+        if "message" in step:
+            m = by_number[step["message"]]
+            meta = f"{m['type']}, creates {name(m['to'])}" if m["create"] else m["type"]
+            detail = f"<div data-q-sequence-list-detail>{m['detail']}</div>" if m["detail"] else ""
+            return (
+                f'<li data-q-sequence-list-message="{m["number"]}">'
+                f"{m['number']}. {describe(m)}: {esc(m['label'])} ({meta}){detail}</li>"
+            )
+        if "note" in step:
+            labels = ", ".join(name(pid) for pid in step["over"])
+            return f"<li data-q-sequence-list-note>Note over {labels}: {esc(step['note'])}</li>"
+        if "end" in step:
+            return f"<li data-q-sequence-list-end>{name(step['end'])} ends</li>"
+        kind = html_lib.escape(step["fragment"], quote=True)
+        if "branches" in step:
+            titles = " / ".join(esc(b["label"]) for b in step["branches"])
+            branches = "".join(f"<li>{esc(b['label'])}<ol>{render_steps(b['steps'])}</ol></li>" for b in step["branches"])
+            return f'<li data-q-sequence-list-fragment="{kind}">{kind}: {titles}<ol>{branches}</ol></li>'
+        title = f"{kind}: {esc(step['label'])}" if step["label"] else kind
+        return f'<li data-q-sequence-list-fragment="{kind}">{title}<ol>{render_steps(step["steps"])}</ol></li>'
+
+    def render_participant(p: dict[str, Any]) -> str:
+        kind = f" ({esc(p['kind'])})" if p["kind"] else ""
+        detail = f": {p['detail']}" if p["detail"] else ""
+        return f"<li>{esc(p['label'])}{kind}{detail}</li>"
+
+    def render_trace(trace: dict[str, Any]) -> str:
+        items = []
+        for k, step in enumerate(trace["steps"], start=1):
+            m = by_number[step["message"]]
+            note = f": {esc(step['note'])}" if step["note"] else ""
+            pretty = json.dumps(step["value"], indent=2, ensure_ascii=False, allow_nan=False)
+            items.append(
+                f'<li data-q-sequence-list-step="{k}">{k}. message {m["number"]}, {describe(m)}, '
+                f"{esc(m['label'])}{note}<pre><code>{esc(pretty)}</code></pre></li>"
+            )
+        return (
+            f'<div data-q-sequence-list-trace="{html_lib.escape(trace["id"], quote=True)}">'
+            f"<p><strong>Trace: {esc(trace['label'])}</strong></p><ol>{''.join(items)}</ol></div>"
+        )
+
+    list_html = (
+        f"<ul data-q-sequence-list-participants>{''.join(render_participant(p) for p in parsed['participants'])}</ul>"
+        f"<ol data-q-sequence-list-steps>{render_steps(parsed['steps'])}</ol>"
+    )
+    list_html += "".join(render_trace(t) for t in parsed["traces"])
+    return (
+        '<div class="q-sequence-stage" data-q-kit data-q-sequence-stage>'
+        '<p class="q-sequence-notice" data-q-sequence-notice>JavaScript is off, so the diagram is shown as a list below.</p>'
+        "</div>"
+        '<details class="q-sequence-list" data-q-kit data-q-sequence-list open>'
+        "<summary>Diagram as a list</summary>"
+        f"<div data-q-sequence-list-body>{list_html}</div>"
+        "</details>"
+    )
+
+
+_SEQUENCE_BLOCK = re.compile(r"(<q-sequence(?=[\s/>])[^>]*>.*?</q-sequence\s*>)", re.IGNORECASE | re.DOTALL)
+_SEQUENCE_CLOSER = re.compile(r"</q-sequence\s*>\Z", re.IGNORECASE)
+
+
+def inject_sequence_fallbacks(html: str) -> str:
+    """Insert the static notice and ``<details open>`` text list into valid ``<q-sequence>`` elements in ``html``.
+
+    A sequence is left as written when it already carries a list, has no ``summary``, is self-closed
+    or fails the kit check.
+    """
+    if not SEQUENCE_TAG.search(html):
+        return html
+
+    def replace_block(match: "re.Match[str]") -> str:
+        block = match.group(1)
+        if "data-q-sequence-list" in block:
+            return block
+        builder = _TreeBuilder()
+        try:
+            builder.feed(block)
+            builder.close()
+        except Exception:  # noqa: BLE001
+            return block
+        builder.finish()
+        element = next((n for n in builder.nodes if n.tag == "q-sequence"), None)
+        if element is None or element.self_closed or "summary" not in element.attrs:
+            return block
+        parsed = _validate_sequence_node(element, lambda _l, _m: None, lambda _l, _m: None)
+        if parsed is None:
+            return block
+        fallback = _render_sequence_fallback_html(parsed)
+        return _SEQUENCE_CLOSER.sub(lambda m: fallback + m.group(0), block, count=1)
+
+    return _SEQUENCE_BLOCK.sub(replace_block, html)
+
+
 _RULES: dict[str, Callable[[_Node, Report, _Index], None]] = {
     "max-series": _rule_max_series,
     "diff-notes": _rule_diff_notes,
@@ -2381,6 +2966,7 @@ _RULES: dict[str, Callable[[_Node, Report, _Index], None]] = {
     "compare-recommended": _rule_compare_recommended,
     "flow-data": _rule_flow_data,
     "schema-data": _rule_schema_data,
+    "sequence-data": _rule_sequence_data,
 }
 assert set(_RULES) == KNOWN_RULES
 

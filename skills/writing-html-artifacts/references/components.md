@@ -23,6 +23,7 @@ Write any `q-*` tag in a source and the builder inlines the kit automatically; `
 - [`q-compare`](#q-compare)
 - [`q-flow`](#q-flow)
 - [`q-schema`](#q-schema)
+- [`q-sequence`](#q-sequence)
 
 ## `q-tabs`
 
@@ -582,6 +583,57 @@ A `<script type="application/json">` child holding the model: optional kinds (ma
   }
   </script>
 </q-schema>
+```
+
+Companion option html: not allowed (interactive)
+
+## `q-sequence`
+
+Use when the reader needs to follow who calls whom, in what order and what comes back, and for any sequence diagram on an HTML page, including replies, retries, alternatives and the payload at each message.
+
+### Attributes
+
+| Name | Required | Kind | Values | Default | Description |
+|---|---|---|---|---|---|
+| `summary` | yes | text | - | - | One sentence stating what the sequence shows; it becomes the diagram's accessible label. |
+
+### Children
+
+A `<script type="application/json">` child holding the sequence data: optional kinds (mapping each kind name to a chart color 1 to 8), required participants (id, label, optional kind and short HTML detail; one column each, in the order listed, at most 16), and required steps, an ordered list of messages, notes, ends and fragments. A message has from, to, a short label, a type of call, reply or async, an optional id, an optional short HTML detail and an optional create: true that draws its receiver's header at that row; give every call a reply from the receiver back to the caller, and give an id to each message a trace names. A note has text and over, a list of participant ids. An end names a participant id and draws its lifeline ending in an X. A fragment is alt, opt, loop or par with an optional label and its nested steps; alt and par hold at least 2 branches, each with a label and steps. Optional traces let the reader step through the payload as it moves through the messages: each trace has an id, a label and steps (at least 2), and each step has a message (a message id), a value (the whole payload at that message, trimmed to the fields the reader needs) and an optional note. Never write positions or activation bars; the element numbers the messages, works out the bars and builds a "Diagram as a list" disclosure below the diagram.
+
+### Example
+
+```html
+<q-sequence summary="Checkout asks Billing to charge the card, and Billing checks the card before it answers.">
+  <script type="application/json">
+  {
+    "kinds": {"person": 1, "ui": 2, "service": 3},
+    "participants": [
+      {"id": "shopper", "label": "Shopper", "kind": "person"},
+      {"id": "checkout", "label": "Checkout", "kind": "ui"},
+      {"id": "billing", "label": "Billing", "kind": "service", "detail": "<p>Charges the card and retries a declined card once.</p>"}
+    ],
+    "steps": [
+      {"id": "place-order", "from": "shopper", "to": "checkout", "label": "place order", "type": "call"},
+      {"id": "charge-order", "from": "checkout", "to": "billing", "label": "charge order", "type": "call"},
+      {"fragment": "loop", "label": "up to 2 attempts", "steps": [
+        {"from": "billing", "to": "billing", "label": "check card", "type": "call"},
+        {"note": "waits 2 seconds before a retry", "over": ["billing"]}
+      ]},
+      {"id": "paid", "from": "billing", "to": "checkout", "label": "order paid", "type": "reply", "detail": "<p>Carries the charge id.</p>"},
+      {"id": "show-receipt", "from": "checkout", "to": "shopper", "label": "show receipt", "type": "reply"}
+    ],
+    "traces": [
+      {"id": "paid-order", "label": "Order is paid", "steps": [
+        {"message": "place-order", "value": {"order": "C-2207", "total": 48}, "note": "The shopper places the order."},
+        {"message": "charge-order", "value": {"order": "C-2207", "total": 48, "currency": "usd"}, "note": "Checkout asks Billing to charge it."},
+        {"message": "paid", "value": {"order": "C-2207", "status": "paid"}, "note": "Billing confirms the charge."},
+        {"message": "show-receipt", "value": {"order": "C-2207", "status": "paid", "receipt": "R-91"}}
+      ]}
+    ]
+  }
+  </script>
+</q-sequence>
 ```
 
 Companion option html: not allowed (interactive)

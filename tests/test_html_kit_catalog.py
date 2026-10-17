@@ -99,6 +99,13 @@ SECTION_3_4: dict[str, tuple[Any, bool, dict[str, tuple[bool, str, Any, Any]], l
         [["script"]],
         ["schema-data"],
     ),
+    "q-sequence": (
+        None,
+        True,
+        {"summary": (True, "text", None, None)},
+        [["script"]],
+        ["sequence-data"],
+    ),
 }
 
 
@@ -169,7 +176,7 @@ def test_element_documentation_is_complete(catalog: Any, tag: str) -> None:
     if tag == "q-chart":
         assert scripts == ['<script type="application/json">'] or scripts == []
         assert "<table" in el.example
-    elif tag in ("q-flow", "q-schema"):
+    elif tag in ("q-flow", "q-schema", "q-sequence"):
         assert scripts == ['<script type="application/json">']
     else:
         assert scripts == []
@@ -246,6 +253,7 @@ def test_known_rules_are_exactly_the_spec_set() -> None:
         "compare-recommended",
         "flow-data",
         "schema-data",
+        "sequence-data",
     }
 
 

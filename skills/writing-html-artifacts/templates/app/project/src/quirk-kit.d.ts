@@ -23,6 +23,7 @@ declare module 'react' {
       'q-compare': KitElementProps
       'q-flow': KitElementProps
       'q-schema': KitElementProps
+      'q-sequence': KitElementProps
     }
   }
 }

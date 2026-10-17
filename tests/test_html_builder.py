@@ -1413,3 +1413,328 @@ def test_a_bad_q_schema_fails_the_build_and_gets_no_fallback(tmp_path, env, proj
     assert rc == 1
     kit = [f["detail"] for f in result["checks"]["failures"] if f["check"] == "kit"]
     assert len(kit) == 1 and kit[0].endswith('<q-schema> relationship names unknown entity "customers"')
+
+
+
+# -- q-sequence: no-JS list, injection rules and libraries ---------------------------------------
+
+
+def seq_page(payload: dict, attrs: str = 'summary="Checkout charges the card."') -> str:
+    return f'<q-sequence {attrs}><script type="application/json">{json.dumps(payload)}</script></q-sequence>'
+
+
+SEQ_SMALL = {
+    "kinds": {"person": 1, "service": 3},
+    "participants": [
+        {"id": "shopper", "label": "Shopper", "kind": "person"},
+        {"id": "billing", "label": "Billing & Co", "kind": "service", "detail": "<p>Takes <code>x</code>.</p>"},
+        {"id": "worker", "label": "Receipt worker"},
+    ],
+    "steps": [
+        {"id": "order", "from": "shopper", "to": "billing", "label": "place <order>", "type": "call"},
+        {
+            "fragment": "loop",
+            "label": "up to 3 attempts",
+            "steps": [
+                {"id": "start", "from": "billing", "to": "worker", "label": "start session", "type": "call", "create": True},
+                {
+                    "fragment": "alt",
+                    "label": "ignored for alt",
+                    "branches": [
+                        {
+                            "label": "card valid",
+                            "steps": [{"id": "ok", "from": "worker", "to": "billing", "label": "ok", "type": "reply"}],
+                        },
+                        {"label": "card declined", "steps": [{"note": "wait", "over": ["billing", "worker"]}]},
+                    ],
+                },
+            ],
+        },
+        {"fragment": "opt", "steps": [{"id": "send", "from": "billing", "to": "worker", "label": "send", "type": "async"}]},
+        {"id": "done", "from": "billing", "to": "shopper", "label": "done", "type": "reply"},
+        {"end": "worker"},
+    ],
+    "traces": [
+        {
+            "id": "t",
+            "label": "Trace <T>",
+            "steps": [
+                {"message": "order", "value": {"a": "<b>"}, "note": "n & m"},
+                {"message": "ok", "value": 2},
+                {"message": "done", "value": None, "note": ""},
+            ],
+        }
+    ],
+}
+
+SEQ_SMALL_LIST = (
+    '<div class="q-sequence-stage" data-q-kit data-q-sequence-stage>'
+    '<p class="q-sequence-notice" data-q-sequence-notice>JavaScript is off, so the diagram is shown as a list below.</p>'
+    "</div>"
+    '<details class="q-sequence-list" data-q-kit data-q-sequence-list open>'
+    "<summary>Diagram as a list</summary>"
+    "<div data-q-sequence-list-body>"
+    "<ul data-q-sequence-list-participants>"
+    "<li>Shopper (person)</li>"
+    "<li>Billing &amp; Co (service): <p>Takes <code>x</code>.</p></li>"
+    "<li>Receipt worker</li>"
+    "</ul>"
+    "<ol data-q-sequence-list-steps>"
+    '<li data-q-sequence-list-message="1">1. Shopper → Billing &amp; Co: place &lt;order&gt; (call)</li>'
+    '<li data-q-sequence-list-fragment="loop">loop: up to 3 attempts<ol>'
+    '<li data-q-sequence-list-message="2">2. Billing &amp; Co → Receipt worker: start session (call, creates Receipt worker)</li>'
+    '<li data-q-sequence-list-fragment="alt">alt: card valid / card declined<ol>'
+    '<li>card valid<ol><li data-q-sequence-list-message="3">3. Receipt worker → Billing &amp; Co: ok (reply)</li></ol></li>'
+    "<li>card declined<ol><li data-q-sequence-list-note>Note over Billing &amp; Co, Receipt worker: wait</li></ol></li>"
+    "</ol></li></ol></li>"
+    '<li data-q-sequence-list-fragment="opt">opt<ol>'
+    '<li data-q-sequence-list-message="4">4. Billing &amp; Co → Receipt worker: send (async)</li></ol></li>'
+    '<li data-q-sequence-list-message="5">5. Billing &amp; Co → Shopper: done (reply)</li>'
+    "<li data-q-sequence-list-end>Receipt worker ends</li>"
+    "</ol>"
+    '<div data-q-sequence-list-trace="t"><p><strong>Trace: Trace &lt;T&gt;</strong></p><ol>'
+    '<li data-q-sequence-list-step="1">1. message 1, Shopper → Billing &amp; Co, place &lt;order&gt;: n &amp; m'
+    "<pre><code>{\n  &quot;a&quot;: &quot;&lt;b&gt;&quot;\n}</code></pre></li>"
+    '<li data-q-sequence-list-step="2">2. message 3, Receipt worker → Billing &amp; Co, ok<pre><code>2</code></pre></li>'
+    '<li data-q-sequence-list-step="3">3. message 5, Billing &amp; Co → Shopper, done<pre><code>null</code></pre></li>'
+    "</ol></div>"
+    "</div>"
+    "</details>"
+)
+
+
+def _message(frm: str, to: str, label: str, kind: str, mid: str | None = None, **more: object) -> dict:
+    return {**({"id": mid} if mid else {}), "from": frm, "to": to, "label": label, "type": kind, **more}
+
+
+CHECKOUT_SEQUENCE = {
+    "kinds": {"person": 1, "ui": 2, "service": 3, "external": 4, "store": 5},
+    "participants": [
+        {"id": "shopper", "label": "Shopper", "kind": "person"},
+        {"id": "checkout", "label": "Checkout", "kind": "ui"},
+        {"id": "billing", "label": "Billing", "kind": "service"},
+        {"id": "stripe", "label": "Stripe", "kind": "external", "detail": "<p>Card processor.</p>"},
+        {"id": "ledger", "label": "Ledger", "kind": "store"},
+        {"id": "worker", "label": "Receipt worker", "kind": "service"},
+    ],
+    "steps": [
+        _message("shopper", "checkout", "place order", "call", "place-order"),
+        _message("checkout", "billing", "charge order", "call", "charge-order"),
+        {
+            "fragment": "loop",
+            "label": "up to 3 attempts",
+            "steps": [
+                _message("billing", "stripe", "create charge", "call", "create-charge"),
+                {
+                    "fragment": "alt",
+                    "branches": [
+                        {"label": "card valid", "steps": [_message("stripe", "billing", "charge succeeded", "reply", "charge-ok")]},
+                        {
+                            "label": "card declined",
+                            "steps": [
+                                _message("stripe", "billing", "card declined", "reply", "charge-declined"),
+                                {"note": "waits 2 seconds before retrying", "over": ["billing"]},
+                            ],
+                        },
+                    ],
+                },
+            ],
+        },
+        {
+            "fragment": "opt",
+            "label": "charge succeeded",
+            "steps": [_message("billing", "ledger", "record payment", "async", "record")],
+        },
+        _message("billing", "checkout", "order paid", "reply", "paid"),
+        _message("checkout", "shopper", "show receipt", "reply", "show-receipt"),
+        _message("billing", "worker", "start session", "call", "start", create=True),
+        _message("worker", "billing", "session ready", "reply"),
+        {"end": "worker"},
+    ],
+    "traces": [
+        {
+            "id": "succeeds",
+            "label": "Card succeeds",
+            "steps": [
+                {"message": "place-order", "value": {"order": "C-2207"}},
+                {"message": "charge-order", "value": {"order": "C-2207", "amount": 48}},
+                {"message": "create-charge", "value": {"attempt": 1}},
+                {"message": "charge-ok", "value": {"status": "succeeded"}},
+                {"message": "record", "value": {"charge": "ch_91"}},
+                {"message": "paid", "value": {"status": "paid"}},
+            ],
+        },
+        {
+            "id": "declined",
+            "label": "Declined, then retried",
+            "steps": [
+                {"message": "place-order", "value": {"order": "C-2207"}},
+                {"message": "charge-order", "value": {"order": "C-2207", "amount": 48}},
+                {"message": "create-charge", "value": {"attempt": 1}},
+                {"message": "charge-declined", "value": {"decline": "insufficient_funds"}, "note": "The card is declined."},
+                {"message": "create-charge", "value": {"attempt": 2}},
+                {"message": "charge-ok", "value": {"status": "succeeded"}},
+                {"message": "record", "value": {"charge": "ch_91"}},
+                {"message": "paid", "value": {"status": "paid"}},
+            ],
+        },
+    ],
+}
+
+
+def without_scripts(html: str) -> str:
+    return re.sub(r"<script\b.*?</script>", "", html, flags=re.S)
+
+
+def seq_injected(page: str) -> str:
+    from htmlkit import kitcheck
+
+    return kitcheck.inject_sequence_fallbacks(page)
+
+
+def test_sequence_fallback_writes_the_exact_list_for_every_part() -> None:
+    page = seq_page(SEQ_SMALL)
+    assert seq_injected(page) == page.replace("</q-sequence>", SEQ_SMALL_LIST + "</q-sequence>")
+
+
+def test_sequence_fallback_appends_a_message_detail_inside_its_li() -> None:
+    payload = {
+        "participants": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+        "steps": [
+            {"from": "a", "to": "b", "label": "go", "type": "call", "detail": "<p>Sends <code>x</code> &amp; <b>more</b>.</p>"},
+            {"from": "b", "to": "a", "label": "back", "type": "reply"},
+        ],
+    }
+    injected = seq_injected(seq_page(payload))
+    assert (
+        '<li data-q-sequence-list-message="1">1. A \u2192 B: go (call)'
+        "<div data-q-sequence-list-detail><p>Sends <code>x</code> &amp; <b>more</b>.</p></div></li>"
+    ) in injected
+    assert '<li data-q-sequence-list-message="2">2. B \u2192 A: back (reply)</li>' in injected
+
+
+def test_sequence_fallback_has_no_whitespace_between_tags() -> None:
+    injected = seq_injected(seq_page(SEQ_SMALL))
+    fallback = injected.split("</script>", 1)[1]
+    assert not re.search(r">[ \t\r]+<", fallback)
+
+
+def test_sequence_fallback_without_traces_or_kinds_has_no_trace_block() -> None:
+    payload = {
+        "participants": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+        "steps": [{"from": "a", "to": "b", "label": "go", "type": "async"}],
+    }
+    injected = seq_injected(seq_page(payload))
+    assert "<li>A</li><li>B</li>" in injected
+    assert "data-q-sequence-list-trace" not in injected
+
+
+def test_sequence_fallback_escapes_attribute_values() -> None:
+    payload = {
+        "participants": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+        "steps": [{"id": 'x"y', "from": "a", "to": "b", "label": "go", "type": "async"}],
+        "traces": [
+            {"id": 'q"1', "label": "T", "steps": [{"message": 'x"y', "value": 1}, {"message": 'x"y', "value": 2}]}
+        ],
+    }
+    assert 'data-q-sequence-list-trace="q&quot;1"' in seq_injected(seq_page(payload))
+
+
+def test_sequence_fallback_skip_rules() -> None:
+    good = seq_page(SEQ_SMALL)
+    assert seq_injected("<p>no sequence here</p>") == "<p>no sequence here</p>"
+    once = seq_injected(good)
+    assert seq_injected(once) == once
+    assert once.count("data-q-sequence-list-body") == 1
+    no_summary = seq_page(SEQ_SMALL, attrs="")
+    assert seq_injected(no_summary) == no_summary
+    self_closed = '<q-sequence summary="s" />'
+    assert seq_injected(self_closed) == self_closed
+    invalid = seq_page({**SEQ_SMALL, "steps": [{"from": "shopper", "to": "nobody", "label": "x", "type": "call"}], "traces": []})
+    assert seq_injected(invalid) == invalid
+    unparseable = '<q-sequence summary="s"><script type="application/json">{</script></q-sequence>'
+    assert seq_injected(unparseable) == unparseable
+    no_script = '<q-sequence summary="s"></q-sequence>'
+    assert seq_injected(no_script) == no_script
+
+
+def test_sequence_fallback_handles_several_sequences_and_leaves_q_flow_alone() -> None:
+    flow = FLOW
+    page = seq_page(SEQ_SMALL) + flow + seq_page(SEQ_SMALL)
+    injected = seq_injected(page)
+    assert injected.count("data-q-sequence-list-body") == 2
+    assert "data-q-flow-list" not in injected
+    assert flow in injected
+
+
+def test_sequence_with_scripts_off_fallback_covers_the_checkout_sequence(tmp_path, env, project):
+    rc, result, out = report_build(tmp_path, env, project, seq_page(CHECKOUT_SEQUENCE), name="seqcheckout")
+    assert rc == 0 and result["checks"]["passed"] is True, result["checks"]
+    html = without_scripts(out.read_text(encoding="utf-8"))
+    body = html.split("<div data-q-sequence-list-body>", 1)[1].split("</details>", 1)[0]
+    texts = [re.sub(r"<[^>]+>", "", m) for m in re.findall(r"<li data-q-sequence-list-message=\"\d+\">.*?</li>", body)]
+    assert texts == [
+        "1. Shopper → Checkout: place order (call)",
+        "2. Checkout → Billing: charge order (call)",
+        "3. Billing → Stripe: create charge (call)",
+        "4. Stripe → Billing: charge succeeded (reply)",
+        "5. Stripe → Billing: card declined (reply)",
+        "6. Billing → Ledger: record payment (async)",
+        "7. Billing → Checkout: order paid (reply)",
+        "8. Checkout → Shopper: show receipt (reply)",
+        "9. Billing → Receipt worker: start session (call, creates Receipt worker)",
+        "10. Receipt worker → Billing: session ready (reply)",
+    ]
+    assert '<li data-q-sequence-list-fragment="loop">loop: up to 3 attempts<ol>' in body
+    assert '<li data-q-sequence-list-fragment="alt">alt: card valid / card declined<ol><li>card valid<ol>' in body
+    assert "<li>card declined<ol><li data-q-sequence-list-message=\"5\">" in body
+    assert '<li data-q-sequence-list-note>Note over Billing: waits 2 seconds before retrying</li>' in body
+    assert '<li data-q-sequence-list-fragment="opt">opt: charge succeeded<ol>' in body
+    assert "<li data-q-sequence-list-end>Receipt worker ends</li>" in body
+    assert "<li>Stripe (external): <p>Card processor.</p></li>" in body
+    declined = body.split('data-q-sequence-list-trace="declined"', 1)[1]
+    assert '<li data-q-sequence-list-step="4">4. message 5, Stripe → Billing, card declined: The card is declined.<pre><code>' in declined
+    assert '<li data-q-sequence-list-step="5">5. message 3, Billing → Stripe, create charge<pre><code>' in declined
+    assert "&quot;decline&quot;: &quot;insufficient_funds&quot;" in declined
+    assert 'data-q-sequence-list-trace="succeeds"' in body
+
+
+def test_page_with_only_q_sequence_lists_kit_and_not_flow(tmp_path, env, project):
+    rc, result, out = report_build(tmp_path, env, project, seq_page(SEQ_SMALL), name="seqonly")
+    assert rc == 0 and result["checks"]["passed"] is True, result["checks"]
+    assert list(result["libraries"]) == ["simple-css", "kit", "alpine"]
+    assert "flow" not in result["libraries"]
+    html = out.read_text(encoding="utf-8")
+    assert 'data-quirk-lib="flow@' not in html
+    assert "<!-- license: flow " not in html
+    assert 'data-quirk-lib="kit@' in html
+
+
+def test_page_with_a_q_sequence_and_a_q_flow_carries_flow_once(tmp_path, env, project):
+    rc, result, out = report_build(tmp_path, env, project, seq_page(SEQ_SMALL) + FLOW, name="seqflow")
+    assert rc == 0 and result["checks"]["passed"] is True, result["checks"]
+    assert list(result["libraries"]) == ["simple-css", "flow", "kit", "alpine"]
+    html = out.read_text(encoding="utf-8")
+    assert html.count('data-quirk-lib="flow@') == 1
+    rendered = without_scripts(html)
+    assert rendered.count("<div data-q-sequence-list-body>") == 1 and rendered.count("<div data-q-flow-list-body>") == 1
+
+
+def test_q_sequence_warnings_are_reported_in_build_checks(tmp_path, env, project):
+    payload = {
+        "participants": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+        "steps": [{"from": "a", "to": "b", "label": "ask", "type": "call"}],
+    }
+    rc, result, _ = report_build(tmp_path, env, project, seq_page(payload), name="seqwarn")
+    assert rc == 0 and result["checks"]["passed"] is True
+    kit_warns = [w["detail"] for w in result["checks"]["warnings"] if w["check"] == "kit"]
+    assert len(kit_warns) == 1 and kit_warns[0].endswith('<q-sequence> call 1 "ask" has no matching reply'), kit_warns
+
+
+def test_q_sequence_failure_fails_the_build_without_a_list(tmp_path, env, project):
+    payload = {**SEQ_SMALL, "steps": [{"from": "shopper", "to": "nobody", "label": "x", "type": "call"}], "traces": []}
+    rc, result, out = report_build(tmp_path, env, project, seq_page(payload), name="seqbad")
+    assert rc == 1 and result["checks"]["passed"] is False
+    kit = [f["detail"] for f in result["checks"]["failures"] if f["check"] == "kit"]
+    assert len(kit) == 1 and kit[0].endswith('<q-sequence> message 1 names unknown participant "nobody"'), kit
+    assert "data-q-sequence-list-body" not in without_scripts(out.read_text(encoding="utf-8"))

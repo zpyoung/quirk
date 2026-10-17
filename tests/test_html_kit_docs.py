@@ -117,7 +117,7 @@ def test_reference_sections_carry_the_catalog_content() -> None:
         for attribute in element.attributes:
             assert f"| `{attribute.name}` |" in text
     assert text.count("Companion option html: allowed") == 7
-    assert text.count("Companion option html: not allowed (interactive)") == 8
+    assert text.count("Companion option html: not allowed (interactive)") == 9
 
 
 def test_reference_attribute_table_columns() -> None:
