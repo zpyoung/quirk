@@ -12,8 +12,8 @@
 
 <section aria-labelledby="path-h">
 <h2 id="path-h">What happens to one failed call</h2>
-<p>A call that fails with a retryable error is written to the queue together with the order id and an idempotency key. A worker picks it up when its wait is over and calls the provider again.</p>
-<q-flow summary="Failed payment calls move from checkout into the retry queue, through the retry worker to the payment provider, and end at the order ledger or dead-letter queue." direction="right" groups="panels">
+<p>A call that fails with a retryable error is written to the queue together with the order id and an idempotency key. A worker checks the queue every second, picks up an entry when its wait is over and calls the provider again.</p>
+<q-flow id="retry-flow" summary="Failed payment calls move from checkout into the retry queue and the retry worker, which either settles the order in the ledger, sends it back to the queue with a longer wait, or hands it to the pay another way process after the last attempt." direction="right" groups="panels">
   <script type="application/json">
   {
     "kinds": {"ui": 1, "worker": 2, "database": 3, "queue": 4},
@@ -23,13 +23,21 @@
     "nodes": [
       {"id": "checkout", "label": "Checkout API", "kind": "ui", "detail": "<p>Generates the idempotency key once when the order is placed.</p>"},
       {"id": "queue", "label": "Retry queue", "kind": "queue", "group": "billing", "detail": "<p>Holds failed calls with exponential backoff from 2s to 32s.</p>"},
-      {"id": "worker", "label": "Retry worker", "kind": "worker", "group": "billing", "detail": "<p>Attempts up to 5 times using the stored idempotency key.</p>"},
-      {"id": "ledger", "label": "Order ledger", "kind": "database", "group": "billing", "detail": "<p>Marks the order paid or payment failed once settled.</p>"}
+      {"id": "worker", "label": "Retry worker", "kind": "worker", "group": "billing", "detail": "<p>Checks the queue every second and attempts a call once its wait is over, using the stored idempotency key.</p>"},
+      {"id": "paid", "label": "Paid?", "shape": "decision", "group": "billing", "detail": "<p>The provider's answer to the attempt.</p>"},
+      {"id": "left", "label": "Attempts left?", "shape": "decision", "group": "billing", "detail": "<p>Each order gets 5 attempts in all.</p>"},
+      {"id": "ledger", "label": "Order ledger", "kind": "database", "group": "billing", "detail": "<p>Marks the order paid once settled.</p>"},
+      {"id": "another", "label": "Pay another way", "shape": "subprocess", "flow": "pay-another-way", "detail": "<p>Marks the order payment failed and asks the shopper to pay by another route.</p>"}
     ],
     "edges": [
       {"from": "checkout", "to": "queue", "label": "payment.retry", "async": true},
       {"from": "queue", "to": "worker", "label": "attempt.due", "async": true},
-      {"from": "worker", "to": "ledger", "label": "order.settled"}
+      {"from": "worker", "to": "worker", "label": "polls every 1s"},
+      {"from": "worker", "to": "paid"},
+      {"from": "paid", "to": "ledger", "label": "Yes"},
+      {"from": "paid", "to": "left", "label": "No"},
+      {"from": "left", "to": "queue", "label": "Yes, wait doubles", "loop": true},
+      {"from": "left", "to": "another", "label": "No"}
     ]
   }
   </script>
@@ -38,6 +46,24 @@
 <p>The order moves to paid, the shopper's page updates, and the queue entry is deleted.</p>
 <h3 id="path-fail">If it fails again</h3>
 <p>The wait doubles and the entry goes back on the queue. After the fifth failure the order moves to payment failed and the shopper gets an email with a link to pay another way.</p>
+<q-flow id="pay-another-way" summary="After the fifth failure the order is marked payment failed, the shopper gets an email with a payment link, and the order is settled in the ledger once they pay." direction="right" groups="panels">
+  <script type="application/json">
+  {
+    "kinds": {"ui": 1, "worker": 2, "database": 3, "queue": 4},
+    "nodes": [
+      {"id": "failed", "label": "Payment failed", "kind": "database", "detail": "<p>The order is marked payment failed after the fifth failure.</p>"},
+      {"id": "email", "label": "Email to shopper", "kind": "worker", "detail": "<p>Sent once, with a link to pay another way.</p>"},
+      {"id": "link", "label": "Payment link", "kind": "ui", "detail": "<p>Opens a payment page for the same order.</p>"},
+      {"id": "ledger", "label": "Order ledger", "kind": "database", "detail": "<p>Marks the order paid once the shopper pays.</p>"}
+    ],
+    "edges": [
+      {"from": "failed", "to": "email", "label": "payment.failed", "async": true},
+      {"from": "email", "to": "link", "label": "shopper opens link"},
+      {"from": "link", "to": "ledger", "label": "order.settled"}
+    ]
+  }
+  </script>
+</q-flow>
 </section>
 
 <section aria-labelledby="waits-h">

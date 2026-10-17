@@ -197,7 +197,8 @@ Scatter and histogram charts stay hand-written Chart.js, so they need these by h
 
 ### Diagrams and graphs
 
-- Reach for `<q-flow>` when the reader will explore a graph: follow an upstream and downstream path through a system, open a node to read its detail, or focus one subsystem group. Reach for Mermaid when a static picture does the job, for sequence diagrams and state charts, and inside Markdown documents.
+- `<q-flow>` is the tool for every flowchart on an HTML page: a graph the reader explores (follow a path through a system, open a node to read its detail, focus one subsystem group) and a flowchart with decisions (`shape: "decision"`), retries (`loop: true`) or steps that are their own process (`shape: "subprocess"`, optional `flow`). Mermaid stays for diagrams inside Markdown, state charts, and sequence and ER diagrams.
+- Label every exit of a decision with its answer, and keep the question under about 24 characters so it fits the diamond. Mark the return edge of a retry with `loop: true` so the layout keeps the main flow running one way. Give a subprocess a `flow` naming the id of another `<q-flow>` on the page when that process has its own graph.
 - Never write coordinates in `<q-flow>`; pass `kinds`, `groups`, `nodes` and `edges` as JSON data and let the element lay the graph out and build its "Graph as a list" disclosure.
 - Reuse the same `kinds` names and `--q-color-chart-*` numbers (1 to 8) across artifacts (for example `ui`: 1, `worker`: 2, `database`: 3, `queue`: 4) so node categories keep the same color from page to page.
 ## 10. Interaction and motion

@@ -453,7 +453,7 @@ Companion option html: not allowed (interactive)
 
 ## `q-flow`
 
-Use when a system, pipeline or architecture has paths, groups or node details the reader will pan, zoom and click through to explore.
+Use when a system, pipeline or architecture has paths, groups or node details the reader will pan, zoom and click through to explore, and for any flowchart on an HTML page, including decisions, retries and sub-processes.
 
 ### Attributes
 
@@ -465,12 +465,12 @@ Use when a system, pipeline or architecture has paths, groups or node details th
 
 ### Children
 
-A `<script type="application/json">` child holding the graph data: optional kinds (mapping each kind name to a chart color 1 to 8), optional groups (id, label, optional parent), required nodes (id, label, optional kind, group and short HTML detail), and optional edges (from, to, optional label and async boolean). Never write coordinates; the element lays the graph out and builds a "Graph as a list" disclosure below the canvas.
+A `<script type="application/json">` child holding the graph data: optional kinds (mapping each kind name to a chart color 1 to 8), optional groups (id, label, optional parent), required nodes (id, label, optional kind, group and short HTML detail, optional shape of box, decision or subprocess, and for a subprocess an optional flow naming the id of another q-flow on the page), and optional edges (from, to, optional label, async boolean and loop boolean for a return edge). A decision labels every exit with its answer. Never write coordinates; the element lays the graph out and builds a "Graph as a list" disclosure below the canvas.
 
 ### Example
 
 ```html
-<q-flow summary="Orders flow from checkout through billing to the ledger." direction="right" groups="panels">
+<q-flow summary="Orders flow from checkout through billing to the ledger, and a failed charge retries until it succeeds or is given up." direction="right" groups="panels">
   <script type="application/json">
   {
     "kinds": {"ui": 1, "worker": 2, "database": 3, "queue": 4},
@@ -480,13 +480,16 @@ A `<script type="application/json">` child holding the graph data: optional kind
     "nodes": [
       {"id": "checkout", "label": "Checkout", "kind": "ui"},
       {"id": "charge", "label": "Charge worker", "kind": "worker", "group": "billing", "detail": "<p>Retries 3x with exponential backoff, then dead-letters.</p>"},
+      {"id": "paid", "label": "Charge settled?", "shape": "decision", "group": "billing"},
       {"id": "ledger", "label": "Ledger", "kind": "database", "group": "billing"},
       {"id": "retries", "label": "Retry queue", "kind": "queue", "group": "billing"}
     ],
     "edges": [
       {"from": "checkout", "to": "charge", "label": "order.created", "async": true},
-      {"from": "charge", "to": "ledger", "label": "charge.settled"},
-      {"from": "charge", "to": "retries", "label": "charge.failed", "async": true}
+      {"from": "charge", "to": "paid"},
+      {"from": "paid", "to": "ledger", "label": "Yes"},
+      {"from": "paid", "to": "retries", "label": "No", "async": true},
+      {"from": "retries", "to": "charge", "label": "wait doubles", "loop": true}
     ]
   }
   </script>
