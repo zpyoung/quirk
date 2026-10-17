@@ -148,3 +148,20 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: low
 - **Proposed fix**: Listen for changes to the reduced-motion query while pulsing; stop the pulse and apply the static 3.5px lit style.
 
+## BUG-18: q-flow's no-JS fallback crashes the build on very deep group nesting
+- **Observed**: 2026-10-17 (q-schema SDD checkpoint review)
+- **File**: skills/writing-html-artifacts/scripts/htmlkit/kitcheck.py:1863
+- **Description**: `_render_flow_fallback_html` renders groups with a recursive `render_group`, so a q-flow graph whose groups nest about 1,000 deep raises an uncaught RecursionError during fallback injection and aborts the build instead of reporting a check failure. q-schema had the same pattern and now uses an explicit stack (commit 6f59893).
+- **Introduced by**: unknown (q-flow fallback, before d6895d2)
+- **Severity**: low
+- **Proposed fix**: render the group tree with an explicit stack, as `_render_schema_fallback_html` does.
+- **Blocker for**: nothing in practice; only pathological input
+
+## BUG-19: Text "data-q-flow-list" inside q-flow data suppresses the no-JS fallback
+- **Observed**: 2026-10-17 (q-schema SDD checkpoint review)
+- **File**: skills/writing-html-artifacts/scripts/htmlkit/kitcheck.py:1896
+- **Description**: `inject_flow_fallbacks` skips any block whose raw text contains "data-q-flow-list", including that text inside a node label or detail in the JSON, so such a graph ships with no no-JS list. q-schema had the same guard and now checks for a real element attribute outside the JSON script (commit 6f59893).
+- **Introduced by**: unknown (q-flow fallback, before d6895d2)
+- **Severity**: low
+- **Proposed fix**: skip only when a tag outside the JSON script carries a data-q-flow-list attribute, as `inject_schema_fallbacks` does.
+- **Blocker for**: no-JS readers of a graph whose data mentions the attribute name
