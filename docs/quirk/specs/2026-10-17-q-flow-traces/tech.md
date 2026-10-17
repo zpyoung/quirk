@@ -126,7 +126,7 @@ After the root `ul` inside `div[data-q-flow-list-body]`, one block per trace, in
 ```
 
 - **Via part** appears only when the step names `via` or its incoming edge is a loop: `, via "<edge label>"` when the edge has a label; otherwise `, via "<edge id>"` for a named `via`, or `, around the loop` for an unlabelled loop edge.
-- **Note part:** `: <note>` when the step has a note.
+- **Note part:** `: <note>` when the step has a non-empty note; an empty note reads as no note.
 - **Pretty JSON:** the 2-space pretty print from contract 1, unescaped in JS (`textContent`), `html_lib.escape`d in Python.
 - **Numbers** print in each runtime's own JSON form, the one place the two lists may differ: Python writes an integral float such as `18.0` with its `.0`, JS writes `18`. Tests compare the two lists only on values without integral floats.
 - Python escapes every label, id and note with `html_lib.escape` (`quote=True` in attributes). JS uses `textContent` and `setAttribute`.
