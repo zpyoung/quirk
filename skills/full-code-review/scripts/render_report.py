@@ -26,7 +26,7 @@ _META_FIELDS = {"target", "forge", "number", "branch", "project", "ticket", "hea
 _RUN_FIELDS = {"dimensions_run", "dimensions_skipped", "diff_size", "coverage", "guidance",
                "clean_notes", "notes_md", "source_access", "source_access_reason",
                "mutation_consent", "incomplete", "dimensions_failed", "models", "verification",
-               "excluded_generated", "policy_sources", "severity_floor", "deep"}
+               "excluded_generated", "policy_sources", "severity_floor", "deep", "since"}
 DEFAULT_SEVERITY_FLOOR = "Should fix"
 _INCOMPLETE_OK_VERDICTS = {"fix, then merge", "request changes", "incomplete review"}
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -371,6 +371,31 @@ def _warn_unknown(mapping, allowed, label, warnings):
         warnings.append("Unknown %s field ignored: %s" % (label, key))
 
 
+def _validate_deep_hunk_fields(deep):
+    """Reject malformed per-hunk coverage fields on deep areas and the deep summaries."""
+    for area in deep.get("areas") or []:
+        if "hunks" in area:
+            hunks = area["hunks"]
+            if not isinstance(hunks, list) or any(
+                    not isinstance(hunk, dict)
+                    or any(not isinstance(hunk.get(key), str) for key in ("id", "file", "header"))
+                    for hunk in hunks):
+                raise ValueError("run.deep.areas.hunks must be a list of objects with string id, file, and header")
+        for key in ("examined", "hunkless_files"):
+            if key in area:
+                _list_of_strings(area[key], "run.deep.areas.%s" % key)
+        if "priority" in area and (type(area["priority"]) is not int):
+            raise ValueError("run.deep.areas.priority must be an integer")
+    if "unexamined" in deep:
+        unexamined = deep["unexamined"]
+        if not isinstance(unexamined, dict):
+            raise ValueError("run.deep.unexamined must map area ids to lists of hunk ids")
+        for identifier, ids in unexamined.items():
+            _list_of_strings(ids, "run.deep.unexamined")
+    if "hunk_coverage" in deep and not isinstance(deep["hunk_coverage"], dict):
+        raise ValueError("run.deep.hunk_coverage must be an object")
+
+
 def _validate_contract_run(run, meta, warnings):
     """Validate the schema_version 1 run keys and enforce the incomplete-report rule."""
     if "incomplete" in run and not isinstance(run["incomplete"], bool):
@@ -388,6 +413,11 @@ def _validate_contract_run(run, meta, warnings):
     if "policy_sources" in run and (not isinstance(run["policy_sources"], list) or
                                     any(not isinstance(v, dict) for v in run["policy_sources"])):
         raise ValueError("run.policy_sources must be a list of objects")
+    if "since" in run:
+        since = run["since"]
+        if (not isinstance(since, dict) or not isinstance(since.get("ref"), str) or not since["ref"].strip()
+                or not isinstance(since.get("sha"), str) or not _SHA_RE.match(since["sha"])):
+            raise ValueError("run.since must be an object with a non-empty ref and a 40-character lowercase hex sha")
     if "deep" in run:
         deep = run["deep"]
         if not isinstance(deep, dict):
@@ -397,6 +427,7 @@ def _validate_contract_run(run, meta, warnings):
             raise ValueError("run.deep.areas must be a list of objects")
         if "unreached_areas" in deep:
             _list_of_strings(deep["unreached_areas"], "run.deep.unreached_areas")
+        _validate_deep_hunk_fields(deep)
         unreached = list(deep.get("unreached_areas") or [])
         for area in deep.get("areas") or []:
             status = area.get("status")
@@ -769,6 +800,52 @@ def _budget_overrun_text(deep):
     return "The deep review exceeded its time budget (%gm of %gm)" % (elapsed, budget)
 
 
+def _since_text(run):
+    """One line naming the delta-review base, or empty when the run is not a delta review."""
+    since = run.get("since")
+    if not isinstance(since, dict):
+        return ""
+    return "%s (%s); delta review, report only" % (since["ref"], since["sha"][:12])
+
+
+def _hunk_coverage_text(deep):
+    """One line summarizing self-reported hunk coverage, or empty when none was recorded."""
+    coverage = deep.get("hunk_coverage")
+    if not isinstance(coverage, dict):
+        return ""
+    text = "%s of %s hunks examined across %s areas (self-reported)" % (
+        coverage.get("examined"), coverage.get("hunks"), coverage.get("areas"))
+    mean = coverage.get("mean_area_lines")
+    if isinstance(mean, (int, float)) and not isinstance(mean, bool):
+        text += "; mean %g lines per area" % mean
+    return text
+
+
+def _area_hunk_text(area):
+    """Lines and self-reported examined count for an area that carries hunks, or empty."""
+    hunks = area.get("hunks")
+    if not isinstance(hunks, list):
+        return ""
+    ids = {hunk.get("id") for hunk in hunks if isinstance(hunk, dict)}
+    examined = len({item for item in _string_list(area.get("examined")) if item in ids})
+    parts = []
+    if isinstance(area.get("lines"), (int, float)) and not isinstance(area["lines"], bool):
+        parts.append("%g lines" % area["lines"])
+    parts.append("examined %d/%d hunks (self-reported)" % (examined, len(hunks)))
+    return "; ".join(parts)
+
+
+def _unexamined_hunks(area, deep):
+    """The area's unexamined hunks as (id, file, header), looked up in its hunk list."""
+    unexamined = deep.get("unexamined") if isinstance(deep.get("unexamined"), dict) else {}
+    by_id = {hunk.get("id"): hunk for hunk in area.get("hunks") or [] if isinstance(hunk, dict)}
+    missing = []
+    for identifier in _string_list(unexamined.get(area.get("id"))):
+        hunk = by_id.get(identifier) or {}
+        missing.append((identifier, hunk.get("file") or "", hunk.get("header") or ""))
+    return missing
+
+
 def _what_was_run(report):
     """Render the run conditions as records in one Section: rows, not a grid of panels."""
     run = report.get("run") or {}
@@ -811,6 +888,8 @@ def _what_was_run(report):
         rows.append(_row("Source access", _esc(run["source_access"])))
     if coverage:
         rows.append(_row("Coverage", _esc(coverage)))
+    if _since_text(run):
+        rows.append(_row("Reviewed since", _esc(_since_text(run))))
     if guidance:
         rows.append(_row("Guidance", '<div class="taglist">%s</div>' %
                          "".join(_token(item) for item in guidance)))
@@ -840,12 +919,16 @@ def _what_was_run(report):
                            ("sandbox_kind", "Deep sandbox")):
             if deep.get(key) is not None:
                 rows.append(_row(label, _esc(deep[key])))
+    if _hunk_coverage_text(deep):
+        rows.append(_row("Hunk coverage", _esc(_hunk_coverage_text(deep))))
     if deep.get("checker_failures"):
         rows.append(_row("Checker failures", "".join(
             "<div><span class=\"mono\">%s</span> %s</div>" % (_esc(key), _esc(reason))
             for key, reason in sorted(deep["checker_failures"].items()))))
     if rows:
         out.append('<div class="rows">%s</div>' % "".join(rows))
+    if not run.get("incomplete") and _budget_overrun_text(deep):
+        out.append('<div class="section-note">%s</div>' % _esc(_budget_overrun_text(deep)))
     if "areas" in deep:
         out.append('<h3 class="astryx-heading" data-level="3">Area map</h3>')
         area_rows = []
@@ -856,6 +939,14 @@ def _what_was_run(report):
             detail = "<strong>%s</strong>" % title
             if files:
                 detail += '<div class="mono">%s</div>' % _esc(files)
+            hunk_text = _area_hunk_text(area)
+            if hunk_text:
+                detail += "<div>%s</div>" % _esc(hunk_text)
+            missing = _unexamined_hunks(area, deep)
+            if missing:
+                detail += "<div>Unexamined hunks:</div><ul>%s</ul>" % "".join(
+                    '<li><span class="mono">%s</span> %s <span class="mono">%s</span></li>' % (
+                        _esc(identifier), _esc(file), _esc(header)) for identifier, file, header in missing)
             if questions:
                 detail += "<ul>%s</ul>" % "".join("<li>%s</li>" % _esc(q) for q in questions)
             status = _esc(area.get("status", "pending"))
@@ -1569,6 +1660,12 @@ def _render_md_prepared(report):
         lines.extend(["**Diff size:** %s" % run["diff_size"], ""])
     if run.get("coverage"):
         lines.extend(["**Coverage:** %s" % run["coverage"], ""])
+    if _since_text(run):
+        lines.extend(["**Reviewed since:** %s" % _since_text(run), ""])
+    if _hunk_coverage_text(deep):
+        lines.extend(["**Hunk coverage:** %s" % _hunk_coverage_text(deep), ""])
+    if not run.get("incomplete") and _budget_overrun_text(deep):
+        lines.extend(["**Time budget:** %s" % _budget_overrun_text(deep), ""])
     probe = report.get("mutation_probe")
     if isinstance(probe, dict):
         lines.extend(["**Mutation probe:** run — %s mutants, %s killed, %s survived" %
@@ -1587,9 +1684,13 @@ def _render_md_prepared(report):
             status = str(area.get("status", "pending"))
             if area.get("status") == "read_only_degraded" and area.get("degraded_reason"):
                 status += " (%s)" % area["degraded_reason"]
-            lines.append("- **%s** — %s%s; %s%s" %
+            hunk_text = _area_hunk_text(area)
+            lines.append("- **%s** — %s%s; %s%s%s" %
                          (area.get("id", ""), title, " (`%s`)" % files if files else "",
-                          status, "; %s" % questions if questions else ""))
+                          status, "; %s" % hunk_text if hunk_text else "",
+                          "; %s" % questions if questions else ""))
+            for identifier, file, header in _unexamined_hunks(area, deep):
+                lines.append("  - Unexamined: `%s` %s %s" % (identifier, file, header))
         lines.append("")
 
     risk = report.get("risk")

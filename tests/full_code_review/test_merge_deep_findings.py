@@ -327,7 +327,9 @@ def test_bad_budget_fields_are_rejected(budget):
 
 def test_zero_elapsed_and_out_of_float_range_integers_are_accepted_and_compared_exactly():
     result = merge(budget={"budget_minutes": 10 ** 400, "elapsed_minutes": 10 ** 400 + 1, "cutoff_reached": False})
-    assert result["incomplete"] is True
+    assert any(note.startswith("Deep review exceeded its time budget") for note in result["coverage_notes"])
+    assert merge(budget={"budget_minutes": 10 ** 400, "elapsed_minutes": 10 ** 400, "cutoff_reached": False})[
+        "coverage_notes"] == []
     assert merge(budget={"budget_minutes": 60, "elapsed_minutes": 0, "cutoff_reached": False})["incomplete"] is False
 
 
@@ -336,6 +338,138 @@ def test_area_without_a_completed_status_is_unreached(area):
     result = merge(areas={"areas": [area]})
     assert result["deep"]["unreached_areas"] == ["A1"]
     assert result["incomplete"] is True
+
+
+def hunk(area, number, file="a.py", header="@@ -1,3 +1,4 @@"):
+    return {"id": "%s.h%d" % (area, number), "file": file, "header": header}
+
+
+def hunk_area(identifier="A3", count=4, examined=None, status="completed", **overrides):
+    item = {"id": identifier, "status": status, "lines": 100,
+            "hunks": [hunk(identifier, number) for number in range(1, count + 1)]}
+    if examined is not None:
+        item["examined"] = examined
+    item.update(overrides)
+    return item
+
+
+@pytest.mark.parametrize("status,extra", [
+    ("completed", {}),
+    ("read_only_degraded", {"degraded_reason": "sandbox unavailable"}),
+])
+def test_area_with_unexamined_hunks_is_unreached_with_a_note(status, extra):
+    area = hunk_area("A3", examined=["A3.h1", "A3.h3"], status=status, **extra)
+    result = merge(areas={"areas": [area]})
+    assert result["deep"]["unreached_areas"] == ["A3"]
+    assert result["deep"]["unexamined"] == {"A3": ["A3.h2", "A3.h4"]}
+    assert "⚠ Incomplete deep review: hunks left unexamined in A3 (A3.h2, A3.h4)" in result["coverage_notes"]
+    assert result["incomplete"] is True
+    assert result["verdict_override"] == "Incomplete review"
+
+
+def test_missing_examined_key_means_every_hunk_is_unexamined():
+    result = merge(areas={"areas": [hunk_area("A1", count=2)]})
+    assert result["deep"]["unexamined"] == {"A1": ["A1.h1", "A1.h2"]}
+
+
+def test_fully_examined_area_is_complete_and_has_no_unexamined_key_entries():
+    result = merge(areas={"areas": [hunk_area("A1", count=2, examined=["A1.h2", "A1.h1"])]})
+    assert result["deep"]["unreached_areas"] == []
+    assert result["deep"]["unexamined"] == {}
+    assert result["incomplete"] is False
+
+
+def test_hunk_gap_note_lists_every_affected_area_in_one_note():
+    areas = {"areas": [hunk_area("A3", count=2, examined=["A3.h1"]), hunk_area("A4", count=1, examined=["A4.h1"]),
+                       hunk_area("A5", count=1, examined=[])]}
+    result = merge(areas=areas)
+    notes = [note for note in result["coverage_notes"] if "hunks left unexamined" in note]
+    assert notes == ["⚠ Incomplete deep review: hunks left unexamined in A3 (A3.h2), A5 (A5.h1)"]
+    assert result["deep"]["unreached_areas"] == ["A3", "A5"]
+
+
+def test_area_without_a_hunks_key_skips_the_hunk_check():
+    result = merge(areas={"areas": [{"id": "A1", "status": "completed", "examined": ["bogus"]}]})
+    assert result["deep"]["unreached_areas"] == []
+    assert result["deep"]["unexamined"] == {}
+    assert "hunk_coverage" not in result["deep"]
+
+
+def test_unreached_area_with_hunks_is_not_hunk_checked():
+    area = hunk_area("A1", status="unreached", examined=["nope"])
+    result = merge(areas={"areas": [area]})
+    assert result["deep"]["unreached_areas"] == ["A1"]
+    assert result["deep"]["unexamined"] == {}
+    assert result["coverage_notes"] == ["⚠ Incomplete deep review: budget expired before reaching A1"]
+
+
+def test_examined_id_outside_the_areas_hunks_is_an_input_error():
+    with pytest.raises(ValueError, match="A3.h9.*A3"):
+        merge(areas={"areas": [hunk_area("A3", examined=["A3.h1", "A3.h9"])]})
+
+
+@pytest.mark.parametrize("hunks", [
+    "A3.h1",
+    ["A3.h1"],
+    [{"id": "", "file": "a.py", "header": "@@"}],
+    [{"id": "A3.h1", "file": 3, "header": "@@"}],
+    [{"id": "A3.h1", "file": "a.py"}],
+    [{"id": "A3.h1", "file": "a.py", "header": "@@"}, {"id": "A3.h1", "file": "a.py", "header": "@@"}],
+])
+def test_malformed_hunks_are_an_input_error(hunks):
+    with pytest.raises(ValueError, match="A3"):
+        merge(areas={"areas": [{"id": "A3", "status": "completed", "hunks": hunks}]})
+
+
+@pytest.mark.parametrize("examined", ["A3.h1", [1], None])
+def test_malformed_examined_is_an_input_error(examined):
+    area = hunk_area("A3")
+    area["examined"] = examined
+    with pytest.raises(ValueError, match="A3"):
+        merge(areas={"areas": [area]})
+
+
+def test_capacity_skipped_areas_get_their_own_note_and_budget_wording_is_kept_for_the_rest():
+    areas = {"areas": [
+        {"id": "A6", "status": "unreached"},
+        {"id": "A7", "status": "unreached", "degraded_reason": "capacity"},
+        {"id": "A8", "status": "unreached", "degraded_reason": "capacity"},
+        {"id": "A9", "status": "completed", "degraded_reason": "capacity"},
+    ]}
+    result = merge(areas=areas)
+    assert "⚠ Incomplete deep review: not hunted (over capacity): A7, A8" in result["coverage_notes"]
+    assert "⚠ Incomplete deep review: budget expired before reaching A6" in result["coverage_notes"]
+    assert result["deep"]["unreached_areas"] == ["A6", "A7", "A8"]
+
+
+def test_only_capacity_areas_emit_no_budget_expired_note():
+    result = merge(areas={"areas": [{"id": "A7", "status": "unreached", "degraded_reason": "capacity"}]})
+    assert result["coverage_notes"] == ["⚠ Incomplete deep review: not hunted (over capacity): A7"]
+
+
+def test_hunk_coverage_counts_areas_hunks_examined_and_mean_lines():
+    areas = {"areas": [
+        hunk_area("A1", count=3, examined=["A1.h1", "A1.h2"], lines=100),
+        hunk_area("A2", count=2, examined=["A2.h1", "A2.h2"], lines=51),
+        {"id": "A3", "status": "completed", "lines": "n/a"},
+        {"id": "A4", "status": "unreached", "lines": 10},
+    ]}
+    coverage = merge(areas=areas)["deep"]["hunk_coverage"]
+    assert coverage == {"areas": 2, "hunks": 5, "examined": 4, "mean_area_lines": 53.7}
+
+
+def test_hunk_coverage_mean_is_null_without_numeric_lines():
+    area = hunk_area("A1", count=1, examined=["A1.h1"])
+    del area["lines"]
+    assert merge(areas={"areas": [area]})["deep"]["hunk_coverage"]["mean_area_lines"] is None
+
+
+def test_hunk_checks_do_not_mutate_or_replace_the_input_areas():
+    areas = {"areas": [hunk_area("A3", examined=["A3.h1"])]}
+    snapshot = json.loads(json.dumps(areas))
+    result = merge(areas=areas)
+    assert areas == snapshot
+    assert result["deep"]["areas"] == areas["areas"]
 
 
 @pytest.mark.parametrize("trust,note", [
@@ -361,11 +495,24 @@ def test_isolation_warning_is_reported_only_when_execution_is_enabled():
     assert disabled["assumptions"] == []
 
 
-def test_over_budget_run_is_incomplete_with_override_and_note():
+def test_over_budget_alone_is_not_incomplete_and_its_note_has_no_warning_prefix():
     result = merge(budget={"budget_minutes": 60, "elapsed_minutes": 61, "cutoff_reached": False})
+    assert result["incomplete"] is False
+    assert result["verdict_override"] is None
+    assert "Deep review exceeded its time budget (61m of 60m)" in result["coverage_notes"]
+    assert not any(note.startswith("⚠") for note in result["coverage_notes"])
+
+
+def test_over_budget_note_formats_fractional_minutes_with_g():
+    result = merge(budget={"budget_minutes": 60, "elapsed_minutes": 61.5, "cutoff_reached": False})
+    assert "Deep review exceeded its time budget (61.5m of 60m)" in result["coverage_notes"]
+
+
+def test_over_budget_with_unreached_area_stays_incomplete():
+    result = merge(areas={"areas": [{"id": "A1", "status": "unreached"}]},
+                   budget={"budget_minutes": 60, "elapsed_minutes": 61, "cutoff_reached": True})
     assert result["incomplete"] is True
     assert result["verdict_override"] == "Incomplete review"
-    assert "⚠ Deep review exceeded its time budget" in result["coverage_notes"]
 
 
 def test_checker_verdict_and_failure_inputs_must_be_unambiguous():

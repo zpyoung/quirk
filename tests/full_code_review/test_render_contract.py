@@ -205,3 +205,67 @@ def test_committed_sample_asset_matches_the_renderer():
     import build_sample_report
 
     assert build_sample_report.render_sample() == TEMPLATE
+
+
+SINCE = {"ref": "origin/main~3", "sha": "b" * 40}
+
+
+def test_run_since_is_accepted_without_an_unknown_field_warning():
+    prepared, warnings = m._prepare_report(report(since=dict(SINCE)))
+    assert prepared["run"]["since"] == SINCE
+    assert not [warning for warning in warnings if "Unknown" in warning]
+
+
+@pytest.mark.parametrize("since", [
+    "origin/main", [], {"ref": "main"}, {"sha": "b" * 40}, {"ref": "", "sha": "b" * 40},
+    {"ref": "  ", "sha": "b" * 40}, {"ref": 3, "sha": "b" * 40}, {"ref": "main", "sha": "B" * 40},
+    {"ref": "main", "sha": "b" * 39}, {"ref": "main", "sha": None},
+])
+def test_malformed_run_since_is_rejected(since):
+    with pytest.raises(ValueError, match="run.since"):
+        m._prepare_report(report(since=since))
+
+
+def hunk_deep(**area):
+    base = {"id": "A1", "status": "completed", "lines": 40,
+            "hunks": [{"id": "A1.h1", "file": "a.py", "header": "@@ -1 +1 @@"}],
+            "hunkless_files": ["bin.dat"], "examined": ["A1.h1"], "priority": 1}
+    base.update(area)
+    return {"enabled": True, "areas": [base], "unexamined": {"A1": ["A1.h1"]},
+            "hunk_coverage": {"areas": 1, "hunks": 1, "examined": 1, "mean_area_lines": 40.0}}
+
+
+def test_hunk_shaped_deep_areas_are_accepted_without_warnings():
+    _, warnings = m._prepare_report(report(deep=hunk_deep()))
+    assert not [warning for warning in warnings if "Unknown" in warning]
+
+
+@pytest.mark.parametrize("area, path", [
+    ({"hunks": "A1.h1"}, "run.deep.areas.hunks"),
+    ({"hunks": ["A1.h1"]}, "run.deep.areas.hunks"),
+    ({"hunks": [{"id": "A1.h1", "file": "a.py"}]}, "run.deep.areas.hunks"),
+    ({"hunks": [{"id": 1, "file": "a.py", "header": "@@"}]}, "run.deep.areas.hunks"),
+    ({"examined": "A1.h1"}, "run.deep.areas.examined"),
+    ({"examined": [1]}, "run.deep.areas.examined"),
+    ({"hunkless_files": "bin.dat"}, "run.deep.areas.hunkless_files"),
+    ({"hunkless_files": [2]}, "run.deep.areas.hunkless_files"),
+    ({"priority": "1"}, "run.deep.areas.priority"),
+    ({"priority": True}, "run.deep.areas.priority"),
+    ({"priority": 1.5}, "run.deep.areas.priority"),
+])
+def test_malformed_deep_area_hunk_keys_are_rejected(area, path):
+    with pytest.raises(ValueError, match=path):
+        m._prepare_report(report(deep=hunk_deep(**area)))
+
+
+@pytest.mark.parametrize("key, value, path", [
+    ("unexamined", ["A1.h1"], "run.deep.unexamined"),
+    ("unexamined", {"A1": "A1.h1"}, "run.deep.unexamined"),
+    ("unexamined", {"A1": [1]}, "run.deep.unexamined"),
+    ("hunk_coverage", [], "run.deep.hunk_coverage"),
+])
+def test_malformed_deep_hunk_summaries_are_rejected(key, value, path):
+    deep = hunk_deep()
+    deep[key] = value
+    with pytest.raises(ValueError, match=path):
+        m._prepare_report(report(deep=deep))

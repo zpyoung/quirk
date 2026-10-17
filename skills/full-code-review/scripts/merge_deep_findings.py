@@ -269,6 +269,65 @@ def _deduplicate(findings: list[dict]) -> list[dict]:
     return merged
 
 
+_HUNK_CHECKED_STATUSES = ("completed", "read_only_degraded")
+
+
+def _minutes(value: int | float) -> str:
+    try:
+        return "%g" % value
+    except OverflowError:
+        return str(value)
+
+
+def _area_hunk_ids(area: dict, identifier: str) -> list[str]:
+    """Return the area's hunk ids in hunk order, rejecting a malformed `hunks` list."""
+    hunks = area["hunks"]
+    if not isinstance(hunks, list):
+        raise ValueError("hunks for %s must be an array" % identifier)
+    ids = []
+    for hunk in hunks:
+        if not isinstance(hunk, dict):
+            raise ValueError("each hunk in %s must be a JSON object" % identifier)
+        hunk_id = _required_text(hunk.get("id"), "hunk id in %s" % identifier)
+        _required_text(hunk.get("file"), "hunk file for %s" % hunk_id)
+        _required_text(hunk.get("header"), "hunk header for %s" % hunk_id)
+        if hunk_id in ids:
+            raise ValueError("duplicate hunk id %s in %s" % (hunk_id, identifier))
+        ids.append(hunk_id)
+    return ids
+
+
+def _examined_ids(area: dict, identifier: str, hunk_ids: list[str]) -> list[str]:
+    examined = area.get("examined", [])
+    if not isinstance(examined, list) or any(not isinstance(item, str) for item in examined):
+        raise ValueError("examined for %s must be an array of hunk id strings" % identifier)
+    for hunk_id in examined:
+        if hunk_id not in hunk_ids:
+            raise ValueError("examined hunk %s is not a hunk of area %s" % (hunk_id, identifier))
+    return examined
+
+
+def _unexamined_hunks(area: dict, identifier: str) -> list[str]:
+    """Hunk ids of a completed area that its finder never recorded as examined, in hunk order."""
+    hunk_ids = _area_hunk_ids(area, identifier)
+    examined = set(_examined_ids(area, identifier, hunk_ids))
+    return [hunk_id for hunk_id in hunk_ids if hunk_id not in examined]
+
+
+def _hunk_coverage(areas: list[dict]) -> dict | None:
+    """Summarize self-reported hunk coverage, or None when no area carries hunks."""
+    with_hunks = [area for area in areas if "hunks" in area]
+    if not with_hunks:
+        return None
+    total = sum(len(area["hunks"]) for area in with_hunks if isinstance(area["hunks"], list))
+    examined = sum(len(set(area.get("examined", []))) for area in with_hunks
+                   if area.get("status") in _HUNK_CHECKED_STATUSES)
+    lines = [area["lines"] for area in areas
+             if isinstance(area.get("lines"), (int, float)) and not isinstance(area["lines"], bool)]
+    return {"areas": len(with_hunks), "hunks": total, "examined": examined,
+            "mean_area_lines": round(sum(lines) / len(lines), 1) if lines else None}
+
+
 def merge_deep_run(
     lens_findings: list[dict],
     deep_candidates: list[dict],
@@ -355,21 +414,37 @@ def merge_deep_run(
         assumptions.append(isolation_warning)
 
     unreached = []
+    budget_expired = []
+    over_capacity = []
+    unexamined = {}
     for area in areas:
         identifier = _required_text(area.get("id"), "area id")
-        if area.get("status") == "read_only_degraded":
+        status = area.get("status")
+        if status == "read_only_degraded":
             reason = _required_text(area.get("degraded_reason"), "degraded reason for %s" % identifier)
             coverage_notes.append("⚠ Area %s ran read-only: %s" % (identifier, reason))
-        elif area.get("status") != "completed":
+        if status not in _HUNK_CHECKED_STATUSES:
             unreached.append(identifier)
-    if unreached:
-        coverage_notes.append("⚠ Incomplete deep review: budget expired before reaching " + ", ".join(unreached))
+            (over_capacity if area.get("degraded_reason") == "capacity" else budget_expired).append(identifier)
+        elif "hunks" in area:
+            missing = _unexamined_hunks(area, identifier)
+            if missing:
+                unexamined[identifier] = missing
+                unreached.append(identifier)
+    if budget_expired:
+        coverage_notes.append("⚠ Incomplete deep review: budget expired before reaching " + ", ".join(budget_expired))
+    if over_capacity:
+        coverage_notes.append("⚠ Incomplete deep review: not hunted (over capacity): " + ", ".join(over_capacity))
+    if unexamined:
+        coverage_notes.append("⚠ Incomplete deep review: hunks left unexamined in " + ", ".join(
+            "%s (%s)" % (identifier, ", ".join(missing)) for identifier, missing in unexamined.items()))
     if checker_failures:
         coverage_notes.append("⚠ Unchecked claims withheld: " + ", ".join(checker_failures))
-    over_budget = budget_info["elapsed_minutes"] > budget_info["budget_minutes"]
-    if over_budget:
-        coverage_notes.append("⚠ Deep review exceeded its time budget")
-    incomplete = bool(unreached or checker_failures or over_budget)
+    elapsed, budget = budget_info["elapsed_minutes"], budget_info["budget_minutes"]
+    if elapsed > budget:
+        coverage_notes.append("Deep review exceeded its time budget (%sm of %sm)" % (
+            _minutes(elapsed), _minutes(budget)))
+    incomplete = bool(unreached or checker_failures)
 
     deep = {
         "enabled": True,
@@ -387,9 +462,13 @@ def merge_deep_run(
         "isolation_warning": isolation_warning,
         "areas": areas,
         "unreached_areas": unreached,
+        "unexamined": unexamined,
         "checked_and_dropped": dropped,
         "checker_failures": dict(checker_failures),
     }
+    hunk_coverage = _hunk_coverage(areas)
+    if hunk_coverage:
+        deep["hunk_coverage"] = hunk_coverage
     return {"findings": _deduplicate(findings), "deep": deep, "incomplete": incomplete,
             "verdict_override": "Incomplete review" if incomplete else None,
             "coverage_notes": coverage_notes, "assumptions": assumptions}

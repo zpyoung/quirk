@@ -1462,3 +1462,144 @@ def test_handoff_carries_plausible_status_and_reproduction():
     assert "Status: Plausible, unconfirmed. What would confirm: Run &lt;it> twice" in handoff
     assert "<reproduction>\n$ pytest -k a\n1 failed\n&lt;x>\n</reproduction>" in handoff
     assert "Confirm a finding marked Plausible" in handoff
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed to execute the page script")
+def test_handoff_demands_failing_first_tests_all_ci_runtimes_and_a_since_rereview():
+    value = report()
+    value["meta"]["head_sha"] = "a" * 40
+    paste = run_page_export(m.render_html(value, TEMPLATE), {"__seat": "author"})
+    handoff = paste.split(validate_triage.HANDOFF_DELIM)[1]
+    assert "add or name a test that fails without the fix" in handoff
+    assert "revert the fix, run the test and see it fail, then restore the fix" in handoff
+    assert "on every runtime version the repo's CI covers" in handoff
+    assert "5. After committing the fixes, re-run the review with `--since` followed by `" + "a" * 40 + "`" in handoff
+    assert "so only the fix commits are reviewed" in handoff
+    assert "4. Don't post, reply to, or resolve anything on" in handoff
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is needed to execute the page script")
+def test_handoff_since_instruction_points_at_target_when_no_head_sha_is_known():
+    value = report()
+    value["meta"].pop("head_sha", None)
+    paste = run_page_export(m.render_html(value, TEMPLATE), {"__seat": "author"})
+    handoff = paste.split(validate_triage.HANDOFF_DELIM)[1]
+    assert "re-run the review with `--since` followed by the head SHA listed under Target" in handoff
+
+
+SINCE_SHA ="0123456789abcdef0123456789abcdef01234567"
+
+
+def hunk_report(examined=("A1.h1",), over_budget=False, since=False):
+    value = report()
+    area = {"id": "A1", "title": "Producer <one>", "files": ["a.py"], "status": "completed", "lines": 120,
+            "hunks": [{"id": "A1.h1", "file": "a.py", "header": "@@ -1,3 +1,4 @@"},
+                      {"id": "A1.h2", "file": "a.py", "header": "@@ -20,2 +21,3 @@ <fn>"}],
+            "examined": list(examined)}
+    missing = [h["id"] for h in area["hunks"] if h["id"] not in examined]
+    value["run"]["deep"] = {
+        "enabled": True, "areas": [area, {"id": "A2", "title": "Plain", "files": ["b.py"], "status": "completed"}],
+        "unexamined": {"A1": missing} if missing else {},
+        "hunk_coverage": {"areas": 1, "hunks": 2, "examined": len(examined), "mean_area_lines": 120.0}}
+    if missing:
+        value["run"]["incomplete"] = True
+        value["run"]["deep"]["unreached_areas"] = ["A1"]
+    if over_budget:
+        value["run"]["deep"].update(budget_minutes=30, elapsed_minutes=41.5)
+    if since:
+        value["run"]["since"] = {"ref": "origin/<main>~2", "sha": SINCE_SHA}
+    return value
+
+
+def test_run_since_row_renders_in_both_formats_with_escaping():
+    value = hunk_report(since=True)
+    rendered = m.render_html(value, TEMPLATE)
+    assert ('Reviewed since</div><div class="row-v">origin/&lt;main&gt;~2 (0123456789ab); '
+            'delta review, report only</div>') in rendered
+    assert "origin/<main>" not in rendered
+    assert "**Reviewed since:** origin/<main>~2 (0123456789ab); delta review, report only" in m.render_md(value)
+
+
+def test_no_since_row_when_the_report_is_not_a_delta_review():
+    value = hunk_report()
+    assert "Reviewed since" not in m.render_html(value, TEMPLATE)
+    assert "Reviewed since" not in m.render_md(value)
+
+
+def test_bad_run_since_is_rejected_by_both_renderers():
+    value = hunk_report()
+    value["run"]["since"] = {"ref": "main", "sha": "short"}
+    with pytest.raises(ValueError, match="run.since"):
+        m.render_html(value, TEMPLATE)
+    with pytest.raises(ValueError, match="run.since"):
+        m.render_md(value)
+
+
+def test_area_rows_show_lines_and_self_reported_hunk_counts_in_both_formats():
+    value = hunk_report()
+    value["run"]["deep"]["areas"][0]["examined"].append("not-a-hunk")
+    rendered = m.render_html(value, TEMPLATE)
+    assert "120 lines" in rendered and "examined 1/2 hunks (self-reported)" in rendered
+    md = m.render_md(value)
+    assert "120 lines" in md and "examined 1/2 hunks (self-reported)" in md
+    assert md.count("self-reported") == 2
+
+
+def test_area_without_hunks_shows_no_hunk_counts():
+    value = hunk_report()
+    value["run"]["deep"]["areas"] = [value["run"]["deep"]["areas"][1]]
+    assert "hunks (self-reported)" not in m.render_html(value, TEMPLATE).split("Area map")[1]
+    assert "examined " not in m.render_md(value).split("**Area map:**")[1]
+
+
+def test_unexamined_hunks_are_listed_with_file_and_header_in_both_formats():
+    value = hunk_report(examined=())
+    rendered = m.render_html(value, TEMPLATE)
+    assert "examined 0/2 hunks (self-reported)" in rendered
+    assert "A1.h2" in rendered and "a.py" in rendered
+    assert "@@ -20,2 +21,3 @@ &lt;fn&gt;" in rendered and "&lt;fn&gt;" in rendered and "<fn>" not in rendered
+    md = m.render_md(value)
+    assert "Unexamined" in md and "`A1.h1` a.py @@ -1,3 +1,4 @@" in md
+    assert "`A1.h2` a.py @@ -20,2 +21,3 @@ <fn>" in md
+
+
+def test_fully_examined_area_lists_no_unexamined_hunks():
+    value = hunk_report(examined=("A1.h1", "A1.h2"))
+    assert "Unexamined" not in m.render_html(value, TEMPLATE)
+    assert "Unexamined" not in m.render_md(value)
+
+
+def test_hunk_coverage_row_renders_in_both_formats():
+    value = hunk_report()
+    rendered = m.render_html(value, TEMPLATE)
+    text = "1 of 2 hunks examined across 1 areas (self-reported); mean 120 lines per area"
+    assert "Hunk coverage</div><div class=\"row-v\">%s</div>" % text in rendered
+    assert "**Hunk coverage:** %s" % text in m.render_md(value)
+
+
+def test_hunk_coverage_row_omits_the_mean_when_null():
+    value = hunk_report()
+    value["run"]["deep"]["hunk_coverage"]["mean_area_lines"] = None
+    assert "1 of 2 hunks examined across 1 areas (self-reported)</div>" in m.render_html(value, TEMPLATE)
+    assert "mean" not in m.render_md(value).split("**Hunk coverage:**")[1].splitlines()[0]
+
+
+def test_over_budget_but_complete_run_gets_one_neutral_note_per_format():
+    value = hunk_report(examined=("A1.h1", "A1.h2"), over_budget=True)
+    value["meta"]["verdict"] = "Approve"
+    rendered = m.render_html(value, TEMPLATE)
+    assert rendered.count("The deep review exceeded its time budget (41.5m of 30m)") == 1
+    assert '<div class="astryx-banner"' not in rendered
+    assert "<strong>Incomplete review.</strong>" not in rendered
+    assert '<div class="section-note">The deep review exceeded its time budget (41.5m of 30m)</div>' in rendered
+    md = m.render_md(value)
+    assert md.count("The deep review exceeded its time budget (41.5m of 30m)") == 1
+    assert "**Verdict:** Approve" in md
+    assert "Incomplete review" not in md and "**Incomplete:**" not in md
+
+
+def test_within_budget_run_shows_no_overrun_note():
+    value = hunk_report(examined=("A1.h1", "A1.h2"), over_budget=True)
+    value["run"]["deep"]["elapsed_minutes"] = 10
+    assert "exceeded its time budget" not in m.render_html(value, TEMPLATE)
+    assert "exceeded its time budget" not in m.render_md(value)
