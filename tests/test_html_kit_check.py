@@ -2742,6 +2742,22 @@ def test_sequence_detail_whitelist_applies_to_participants_and_messages(bad_deta
     assert seq_messages(checkout(on_message)) == detail_rule
 
 
+def test_sequence_a_detail_nested_too_deeply_fails_with_the_detail_rule() -> None:
+    detail_rule = ["<q-sequence> detail may hold only paragraphs, lists, code and links"]
+    deep = "<ul><li>" * 1200 + "x" + "</li></ul>" * 1200
+
+    def on_participant(p: dict) -> None:
+        p["participants"][4]["detail"] = deep
+
+    def on_message(p: dict) -> None:
+        p["steps"][0]["detail"] = deep
+
+    for patch in (on_participant, on_message):
+        page = seq_markup(checkout(patch))
+        assert messages(page) == detail_rule
+        assert kitcheck.inject_sequence_fallbacks(page) == page
+
+
 def test_sequence_message_detail_is_sanitized_into_the_cleaned_message() -> None:
     cleaned = parsed_sequence(small(msg("a", "b", detail="<p>Hello <b>there</b></p>")))
     assert cleaned is not None

@@ -1680,7 +1680,10 @@ def _validate_sequence_node(
     def clean_detail(raw: Any) -> Optional[str]:
         if raw is None:
             return None
-        cleaned = _check_and_sanitize_flow_detail(raw) if isinstance(raw, str) else None
+        try:
+            cleaned = _check_and_sanitize_flow_detail(raw) if isinstance(raw, str) else None
+        except RecursionError:
+            cleaned = None
         if cleaned is None:
             fail(line, _SEQ_DETAIL_RULE)
         return cleaned
@@ -2758,24 +2761,27 @@ def _render_schema_fallback_html(parsed: dict[str, Any]) -> str:
 
 
 _SCHEMA_CLOSER = re.compile(r"</q-schema\s*>\Z", re.IGNORECASE)
-_SCHEMA_SCAN = re.compile(r"<!--|<script(?=[\s/>])[^>]*>|<q-schema(?=[\s/>])[^>]*>|</q-schema\s*>", re.IGNORECASE)
 _SCRIPT_END = re.compile(r"</script(?=[\s/>])", re.IGNORECASE)
 _COMMENT_END = re.compile(r"-->|--!>")
 
 
-def _schema_blocks(html: str) -> list[tuple[int, int]]:
-    """Spans of each ``<q-schema>`` element, from its opening tag to the first closing tag that is real markup.
+def _element_blocks(html: str, tag: str) -> list[tuple[int, int]]:
+    """Spans of each ``<tag>`` element, from its opening tag to the first closing tag that is real markup.
 
     Script content and comments are skipped both when looking for an opening tag and for the closing
-    one: a browser ends a script only at ``</script`` and a comment only at ``-->``, so ``<q-schema>``
-    or ``</q-schema>`` text inside either is data.
+    one: a browser ends a script only at ``</script`` and a comment only at ``-->``, so an opening or
+    closing ``tag`` inside either is data. ``tag`` matches by its exact name, so ``<tag-x>`` is not it.
     """
+    scan = re.compile(
+        rf"<!--|<script(?=[\s/>])[^>]*>|<{re.escape(tag)}(?=[\s/>])[^>]*>|</{re.escape(tag)}\s*>",
+        re.IGNORECASE,
+    )
     spans: list[tuple[int, int]] = []
     start: Optional[int] = None
     resume = 0
     cursor = 0
     while True:
-        hit = _SCHEMA_SCAN.search(html, cursor)
+        hit = scan.search(html, cursor)
         if hit is None:
             if start is None:
                 return spans
@@ -2839,7 +2845,7 @@ def inject_schema_fallbacks(html: str) -> str:
 
     out: list[str] = []
     last = 0
-    for start, end in _schema_blocks(html):
+    for start, end in _element_blocks(html, "q-schema"):
         out.append(html[last:start])
         out.append(fill_block(html[start:end]))
         last = end
@@ -2946,7 +2952,6 @@ def _is_sequence_list_marker(node: _Node) -> bool:
     return ("data-q-sequence-list" in node.attrs and node.tag == "details") or "data-q-sequence-stage" in node.attrs
 
 
-_SEQUENCE_BLOCK = re.compile(r"(<q-sequence(?=[\s/>])[^>]*>.*?</q-sequence\s*>)", re.IGNORECASE | re.DOTALL)
 _SEQUENCE_CLOSER = re.compile(r"</q-sequence\s*>\Z", re.IGNORECASE)
 
 
@@ -2959,8 +2964,7 @@ def inject_sequence_fallbacks(html: str) -> str:
     if not SEQUENCE_TAG.search(html):
         return html
 
-    def replace_block(match: "re.Match[str]") -> str:
-        block = match.group(1)
+    def fill_block(block: str) -> str:
         builder = _TreeBuilder()
         try:
             builder.feed(block)
@@ -2979,7 +2983,14 @@ def inject_sequence_fallbacks(html: str) -> str:
         fallback = _render_sequence_fallback_html(parsed)
         return _SEQUENCE_CLOSER.sub(lambda m: fallback + m.group(0), block, count=1)
 
-    return _SEQUENCE_BLOCK.sub(replace_block, html)
+    out: list[str] = []
+    last = 0
+    for start, end in _element_blocks(html, "q-sequence"):
+        out.append(html[last:start])
+        out.append(fill_block(html[start:end]))
+        last = end
+    out.append(html[last:])
+    return "".join(out)
 
 
 _RULES: dict[str, Callable[[_Node, Report, _Index], None]] = {

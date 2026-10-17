@@ -1658,6 +1658,49 @@ def test_sequence_fallback_skip_rules() -> None:
     assert seq_injected(no_script) == no_script
 
 
+def _seq_small_with_label(label: str) -> dict:
+    return {
+        "participants": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
+        "steps": [{"from": "a", "to": "b", "label": label, "type": "async"}],
+    }
+
+
+def test_sequence_fallback_survives_a_closing_tag_inside_the_json_data() -> None:
+    page = seq_page(_seq_small_with_label("end </q-sequence> tag"))
+    out = seq_injected(page)
+    assert out.count("data-q-sequence-list-body") == 1
+    assert out.endswith("</details></q-sequence>")
+    assert out.index("data-q-sequence-list-body") > out.index("</script>")
+    assert "A \u2192 B: end &lt;/q-sequence&gt; tag (async)" in out
+    assert seq_injected(out) == out
+
+
+def test_sequence_fallback_ignores_opener_text_inside_scripts_and_comments() -> None:
+    real = seq_page(SEQ_SMALL)
+    decoys = (
+        '<script>var s = "<q-sequence summary=\'x\'></q-sequence>";</script>\n'
+        "<!-- <q-sequence summary='y'> -->\n"
+    )
+    out = seq_injected(decoys + real)
+    assert out.startswith(decoys)
+    assert out.count("data-q-sequence-list-body") == 1
+    assert out.index("data-q-sequence-list-body") > out.index(real[:40])
+    assert seq_injected(out) == out
+
+
+def test_sequence_fallback_matches_the_tag_name_exactly() -> None:
+    real = seq_page(SEQ_SMALL)
+    decoys = (
+        '<q-sequences summary="other"><script type="application/json">{}</script></q-sequences>\n'
+        '<q-sequence-x summary="other"></q-sequence-x>\n'
+    )
+    out = seq_injected(decoys + real)
+    assert out.startswith(decoys)
+    assert out.count("data-q-sequence-list-body") == 1
+    assert out.index("data-q-sequence-list-body") > out.index(real[:40])
+    assert seq_injected(decoys) == decoys
+
+
 def test_sequence_fallback_renders_every_nesting_depth_the_check_accepts() -> None:
     from htmlkit import kitcheck
 
