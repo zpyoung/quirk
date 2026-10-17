@@ -21,6 +21,9 @@ The default budget is 60 minutes. Eligible runs ask before executing repros in
 throwaway copies; plausible findings stay visible but cannot be posted.
 See the [deep-mode runbook](skills/full-code-review/references/deep.md).
 
+`--since <ref>` reviews only the changes after `<ref>`, such as the fix commits made since
+the last review's head SHA. A delta review is report only: it loads no memory and posts nothing.
+
 ## Typed artifacts
 
 A discipline for routing deferred observations into structured markdown files instead of burying them in prose ("pre-existing", "out of scope", "skipped for brevity").

@@ -1,7 +1,11 @@
+import fnmatch
 import re
 from pathlib import Path
 
-SKILL_DIR = Path(__file__).resolve().parents[2] / "skills" / "full-code-review"
+import resolve_policy
+
+REPO = Path(__file__).resolve().parents[2]
+SKILL_DIR = REPO / "skills" / "full-code-review"
 SKILL_MD = SKILL_DIR / "SKILL.md"
 LENSES = SKILL_DIR / "references" / "lenses"
 RUN_WHEN = {"always", "has_description", "code_changed", "source_or_config_changed",
@@ -147,3 +151,61 @@ def test_deep_commands_use_subcommands_and_flags_the_scripts_define():
         if script == "deep_sandbox":
             subcommand = command.split()[0]
             assert 'add_parser("%s")' % subcommand in source, (doc, subcommand)
+
+
+ZSH_GUIDANCE = "bash <file>"
+
+
+def test_deep_runbook_documents_coverage_planning_and_hunk_tracking():
+    runbook = (SKILL_DIR / "references" / "deep.md").read_text(encoding="utf-8")
+    for term in ("examined", "capacity", "hunks", "--budget-minutes", "--concurrency",
+                 "--elapsed-minutes", "hunkless_files", "priority", "id_prefix", "skip_globs"):
+        assert term in runbook, term
+
+
+def test_area_finder_prompt_takes_hunks_and_returns_examined_ids():
+    text = (LENSES / "_area-finder.md").read_text(encoding="utf-8")
+    for term in ("examined", "id_prefix", "hunks", "angle"):
+        assert term in text, term
+    assert '"hunk": "A1.h1"' in text
+
+
+def test_skill_md_exposes_the_since_flag():
+    text = SKILL_MD.read_text(encoding="utf-8")
+    assert "[--since <ref>]" in _front_matter(text)["argument-hint"]
+    assert "| `--since <ref>` |" in text
+    assert "run.since" in text
+
+
+def test_shell_guidance_reaches_every_agent_prompt():
+    paths = [LENSES / (name + ".md") for name in DEEP_PROMPTS]
+    paths.append(SKILL_DIR / "references" / "orchestration.md")
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        assert "zsh" in text, path.name
+        assert ZSH_GUIDANCE in text, path.name
+
+
+def test_degradation_table_covers_coverage_and_delta_paths():
+    text = (SKILL_DIR / "references" / "degradation.md").read_text(encoding="utf-8")
+    for term in ("over capacity", "unexamined", "time budget", "--since"):
+        assert term in text, term
+
+
+def test_report_docs_describe_delta_and_hunk_fields():
+    refs = SKILL_DIR / "references"
+    schema = (refs / "html-report.md").read_text(encoding="utf-8")
+    for term in ("run.since", "hunks", "examined", "hunkless_files", "priority",
+                 "unexamined", "hunk_coverage", "--since"):
+        assert term in schema, term
+    template = (refs / "report-template.md").read_text(encoding="utf-8")
+    assert "since" in template and "unexamined" in template
+
+
+def test_repo_review_md_excludes_the_answer_keys():
+    path = REPO / "REVIEW.md"
+    settings, body = resolve_policy.split_front_matter(path.read_text(encoding="utf-8"), "REVIEW.md")
+    answer_key = next((REPO / "tests" / "fixtures" / "full-code-review" / "answer-keys").glob("*.json"))
+    relative = answer_key.relative_to(REPO).as_posix()
+    assert any(fnmatch.fnmatch(relative, pattern) for pattern in settings["skip_globs"])
+    assert body.strip()

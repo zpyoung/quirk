@@ -96,6 +96,7 @@ remains `branch`.
 | `excluded_generated` | Paths dropped as generated (`linguist-generated` or `skip_globs`) before review. |
 | `policy_sources` | `policy.sources` from `resolve_policy.py`: `{kind, path, ref}` per layer that applied. |
 | `severity_floor` | `Must fix`, `Should fix` (default), or `Nit`. Findings below it render but never post. |
+| `since` | Optional (`run.since`) `{"ref": "…", "sha": "<40-char lowercase hex>"}`, copied from `context.since` for a `--since` delta review (`prepare_diff.py --since`); rendered as a Reviewed since row. A report that carries it is report only: `review_memory.py save` and both posting scripts refuse it. |
 | `deep` | Optional deep-mode object; see below. Omit in standard runs. |
 
 `run.deep` records the bounded hunt, not another lens in `dimensions_run`:
@@ -114,8 +115,10 @@ remains `branch`.
   "snapshot_kind": "clonefile",
   "os_enforced": true,
   "isolation_warning": null,
-  "areas": [{"id": "A1", "files": ["src/parser.py"], "questions": ["Does the caller accept an empty result?"], "status": "completed", "degraded_reason": null}],
+  "areas": [{"id": "A1", "files": ["src/parser.py"], "questions": ["Does the caller accept an empty result?"], "status": "completed", "degraded_reason": null, "hunks": [{"id": "A1.h1", "file": "src/parser.py", "header": "@@ -40,6 +40,9 @@ def parse(text):"}], "hunkless_files": [], "priority": 1, "examined": ["A1.h1"]}],
   "unreached_areas": [],
+  "unexamined": {},
+  "hunk_coverage": {"areas": 1, "hunks": 1, "examined": 1, "mean_area_lines": 212},
   "checker_failures": {},
   "checked_and_dropped": [{"id": "A1.2", "area": "A1", "file": "src/parser.py", "line": "42", "title": "An empty result crashes", "reason": "The caller guards empty results at src/caller.py:18."}]
 }
@@ -127,8 +130,20 @@ execution/sandbox status in What was run; show a collapsed **Checked and dropped
 list with the checker's reason, not as live findings. Pending or unreached areas
 must appear in `unreached_areas` and warning coverage. `checker_failures` maps
 withheld claim IDs to failure reasons; it is not a list of refuted defects.
-Either coverage gap forces `run.incomplete: true` and
-`meta.verdict: "Incomplete review"`, visible above the tab contents. Execution
+`hunks` lists the diff hunks the area's finder must examine, `hunkless_files` the
+binary, pure-rename and no-hunk paths with nothing to examine, `priority` the hunt order
+(1 first), and `examined` the hunk ids the coordinator recorded from finder output. A
+completed area must have `examined` covering every hunk; `unexamined` maps each area
+that fell short to its missing hunk ids, and `hunk_coverage` totals the counts. The
+renderer shows "examined X/Y hunks (self-reported)" per area, lists unexamined hunks, and
+adds a Hunk coverage row; the counts are the finders' own claims. An area with
+`status: "unreached"` and `degraded_reason: "capacity"` was not hunted for lack of
+capacity.
+
+Either coverage gap, or any unexamined hunk, forces `run.incomplete: true` and
+`meta.verdict: "Incomplete review"`, visible above the tab contents. Exceeding the
+time budget alone does neither: it adds the neutral coverage note "Deep review exceeded
+its time budget (Xm of Ym)". Execution
 refusal, isolation limitations and read-only degradation belong in coverage and
 Assumptions; consent alone is not evidence that a command ran.
 
@@ -612,8 +627,10 @@ delimiter validates exactly as before. Notes in the decisions block are quoted w
 `  > `, so a note can't produce a bare delimiter line.
 
 The section holds numbered instructions for a fresh session (apply the `fix` slot after
-confirming any Plausible finding against the code, list `later` back, ask about `detail`,
-leave `ignore` and Undecided alone, post nothing), a `### Target` list (label, seat, verdict, project, change URL, branch, change state, head SHA,
+confirming any Plausible finding against the code, add a failing-first test per fix and
+run the tests on every CI runtime version, list `later` back, ask about `detail`,
+leave `ignore` and Undecided alone, post nothing, then re-run the review with
+`--since <head SHA>` after committing the fixes), a `### Target` list (label, seat, verdict, project, change URL, branch, change state, head SHA,
 repo checkout, ticket, report JSON path), and one block per finding in every slot, in
 export group order:
 

@@ -2,7 +2,7 @@
 name: full-code-review
 description: Use when asked for a full, multi-lens code review of a GitHub pull request, a GitLab merge request, a branch, or local changes ("full review", "full code review", "review this PR", "review this MR"). Runs up to 14 specialist lenses in parallel (correctness, safety, risk, claim verification, scope, data layer, cross-repo impact, conventions, comments, observability, resilience, and three test lenses), merges them into one deduped, severity-ranked report with an HTML triage page, remembers triage decisions across re-reviews, and posts only human-approved findings (author inline comments, or one batched reviewer review). Advisory only; it never approves or merges on its own.
 user-invocable: true
-argument-hint: '[--stats] [--change <number> | --branch <name> | --local] [-R <project>] [--forge github|gitlab|none] [--pack <dir>] [--seat author|reviewer] [--fresh] [--no-escalate] [--deep [minutes]] [--add-guidance "<note>"] [--format html|md|both] [--no-open]'
+argument-hint: '[--stats] [--change <number> | --branch <name> | --local] [-R <project>] [--forge github|gitlab|none] [--pack <dir>] [--seat author|reviewer] [--fresh] [--no-escalate] [--deep [minutes]] [--since <ref>] [--add-guidance "<note>"] [--format html|md|both] [--no-open]'
 allowed-tools: Bash, Read, Grep, Glob, Agent
 ---
 
@@ -23,8 +23,8 @@ The seat is never configured: it comes from the change author and the authentica
 forge user, and is announced before review work starts.
 
 Re-reviews use a local decision ledger plus a read-only cross-check of the change's
-discussions. Lenses always review the full diff independently; only the coordinator
-sees prior findings.
+discussions. Lenses always review the full diff independently (unless `--since` narrows it); only
+the coordinator sees prior findings.
 
 ## Setup
 
@@ -68,6 +68,7 @@ A review with no supported forge still runs and delivers locally.
 | `--fresh` | Discard remembered triage decisions for this target. |
 | `--no-escalate` | Keep every lens on its default model tier. |
 | `--deep [minutes]` | Opt-in deep defect hunt; default 60m. Start its clock at invocation, before Step 1; follow `$REFS/deep.md`. |
+| `--since <ref>` | Review only changes after `<ref>` (for example the head SHA of the last review, to check fix commits). Report only: no memory, no posting. |
 | `--format html\|md\|both`, `--no-open` | Render options. |
 | `--add-guidance "<note>"` | Capture a review lesson, then stop. |
 | `--stats` | Show per-lens keep/dismiss rates from the ledger, then stop. |
@@ -115,6 +116,13 @@ python3 "$SCRIPTS/prepare_diff.py" --change <number> [-R <project>] [--host <hos
 python3 "$SCRIPTS/prepare_diff.py" --branch <name> [--host <host>] [--forge <name>] --out "$CONTEXT"
 python3 "$SCRIPTS/prepare_diff.py" --local --out "$CONTEXT"
 ```
+
+Pass `--since <ref>` through to any of these when the flag was given. The script narrows
+the diff to changes after that ref and writes `context.since` (`ref`, `sha`, `merge_commits`);
+`refs` still describe the whole change. A delta run is report only: copy `context.since`
+`ref` and `sha` into `run.since` when authoring `report.json`, skip memory load,
+reconcile and save (the authored report is `REPORT_JSON`), and never post. Deliver
+the report alone.
 
 The script detects the forge from the git remote (github.com and gitlab.com directly; a
 self-hosted host by which of `gh`/`glab` is authenticated for it), fetches the canonical

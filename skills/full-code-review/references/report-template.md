@@ -35,9 +35,13 @@ text-reviewable)`), with `untracked` and `forge file list was truncated — rebu
 git` noted separately as provenance for files that *were* reviewed. Repeat any of it
 under Assumptions. A report that omits coverage while files went unreviewed is wrong.
 
+A `--since` delta review sets `run.since` (`ref` and `sha`); the Summary states it as
+"Reviewed since" and names the review as report only.
+
 For deep mode, `run.deep` adds the budget, elapsed time, execution consent and
 sandbox status, and each area's ID, files, hotspot questions, status, and any
-read-only degradation to the Summary. Name `unreached_areas` explicitly and set
+read-only degradation to the Summary, plus hunk coverage (`run.deep.hunk_coverage`) and any
+`run.deep.unexamined` hunks. Name `unreached_areas` explicitly and set
 `run.incomplete` and `meta.verdict` to `Incomplete review` rather than implying
 those files were checked.
 
