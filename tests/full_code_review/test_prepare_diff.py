@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1598,6 +1599,25 @@ def test_branch_since_unknown_ref_fails_naming_the_ref(tmp_path):
     rc, out, _, stderr = _run_main(_branch_args(review, "--since", "no-such-ref"), tmp_path)
     message = _since_error(rc, out, stderr)
     assert "no-such-ref" in message and "run without --since for a full review" in message
+
+
+@pytest.mark.parametrize("failing", ["merge-base", "rev-list"])
+def test_since_git_failures_after_resolving_still_suggest_a_full_review(monkeypatch, failing):
+    sha = "a" * 40
+
+    def fake_run(args, timeout=30):
+        if "rev-parse" in args:
+            return subprocess.CompletedProcess(args, 0, sha + "\n", "")
+        if failing in args:
+            return subprocess.CompletedProcess(args, 128, "", "fatal: object missing")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(m, "_run", fake_run)
+    metadata = {}
+    assert m.resolve_since("HEAD~1", "branch", {"head": "b" * 40, "base": "c" * 40},
+                           metadata=metadata) is None
+    assert "object missing" in metadata["error"]
+    assert "run without --since for a full review" in metadata["error"]
 
 
 @pytest.mark.parametrize("value", ["", "   "])

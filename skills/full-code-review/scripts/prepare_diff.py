@@ -916,6 +916,7 @@ def resolve_since(ref, mode, refs, cwd=".", metadata=None):
         return None
     on_head = _is_ancestor(sha, head, cwd, metadata, refetch=(head,))
     if on_head is None:
+        metadata["error"] += "; %s" % advice
         return None
     if not on_head:
         metadata["error"] = "--since %s is not an ancestor of the review head; %s" % (ref, advice)
@@ -923,6 +924,7 @@ def resolve_since(ref, mode, refs, cwd=".", metadata=None):
     if mode != "local":
         after_base = _is_ancestor(base, sha, cwd, metadata, refetch=(base,))
         if after_base is None:
+            metadata["error"] += "; %s" % advice
             return None
         if not after_base:
             metadata["error"] = ("--since %s is older than the merge base of the change; %s"
@@ -936,9 +938,13 @@ def resolve_since(ref, mode, refs, cwd=".", metadata=None):
         merges = _run(["git", "-C", cwd, "rev-list", "--merges", "%s..%s" % (sha, head)],
                       timeout=30)
     except Exception as exc:
-        return _git_failed(metadata, "git rev-list --merges", exc)
+        _git_failed(metadata, "git rev-list --merges", exc)
+        metadata["error"] += "; %s" % advice
+        return None
     if merges.returncode != 0:
-        return _git_failed(metadata, "git rev-list --merges", merges)
+        _git_failed(metadata, "git rev-list --merges", merges)
+        metadata["error"] += "; %s" % advice
+        return None
     count = len([line for line in merges.stdout.splitlines() if line.strip()])
     if count:
         print("warning: %d merge commit(s) between --since %s and the review head; they can "
