@@ -1,6 +1,6 @@
 # Logic spec: decisions, loops and subprocesses in `q-flow`
 
-**Status**: Approved
+**Status**: Approved · Tech spec: authored (`tech.md`; tier gate fired: crosses subsystem boundaries and touches >3 source files)
 
 `q-flow` draws every node as a rectangle and has no idea what a loop is. It accepts cycles, but the
 layout engine silently picks which edge to run backwards, and that choice can bend the main path. A
@@ -439,6 +439,6 @@ Build-only questions for the tech spec:
 
 ## Status & amendments
 
-**Status**: Approved
+**Status**: Approved · Tech spec: authored (`tech.md`; tier gate fired: crosses subsystem boundaries and touches >3 source files)
 
 **Amendments:** none yet.
