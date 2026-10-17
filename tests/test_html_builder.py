@@ -1385,6 +1385,27 @@ def test_q_schema_note_that_mentions_the_list_marker_still_gets_the_fallback(tmp
     assert "<details class=\"q-flow-list\"" in html and 'data-q-schema-list-entity="a"' in html
 
 
+def test_q_schema_after_script_and_comment_decoys_still_gets_its_fallback(tmp_path, env, project):
+    good = json.loads(json.dumps(BILLING))
+    real = _schema_page(good).replace("</script></q-schema>", "</script><!-- </q-schema> --></q-schema>")
+    page = "<script>var s = \"<q-schema summary='x'>\";</script>\n" + real
+    rc, result, out = report_build(tmp_path, env, project, page, name="schemadecoys")
+    assert rc == 0, result["checks"]
+    html = out.read_text(encoding="utf-8")
+    assert html.count('<details class="q-flow-list"') == 1
+    assert html.index('<details class="q-flow-list"') > html.index("<!-- </q-schema> -->")
+    assert 'data-q-schema-list-entity="charge"' in html
+
+
+def test_q_schema_with_an_overnested_detail_fails_the_build_without_crashing(tmp_path, env, project):
+    bad = json.loads(json.dumps(BILLING))
+    bad["entities"][0]["detail"] = "<ul><li>" * 1100 + "x" + "</li></ul>" * 1100
+    rc, result, out = report_build(tmp_path, env, project, _schema_page(bad), name="schemaoverdetail")
+    assert rc == 1
+    kit = [f["detail"] for f in result["checks"]["failures"] if f["check"] == "kit"]
+    assert any(d.endswith("<q-schema> detail may hold only paragraphs, lists, code and links") for d in kit), kit
+
+
 def test_a_bad_q_schema_fails_the_build_and_gets_no_fallback(tmp_path, env, project):
     bad = json.loads(json.dumps(BILLING))
     bad["relationships"][0]["to"] = "customers.id"

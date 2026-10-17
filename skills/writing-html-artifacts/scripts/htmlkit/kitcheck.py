@@ -1727,7 +1727,10 @@ def _validate_schema_node(node: _Node, report_fail: Report, report_warn: Report)
         edetail = e.get("detail")
         clean_detail: Optional[str] = None
         if edetail is not None:
-            clean_detail = _check_and_sanitize_flow_detail(edetail) if isinstance(edetail, str) else None
+            try:
+                clean_detail = _check_and_sanitize_flow_detail(edetail) if isinstance(edetail, str) else None
+            except RecursionError:
+                clean_detail = None
             if clean_detail is None:
                 fail("detail may hold only paragraphs, lists, code and links")
         stereotype = e.get("stereotype")
@@ -2279,41 +2282,60 @@ def _render_schema_fallback_html(parsed: dict[str, Any]) -> str:
     )
 
 
-_SCHEMA_OPENER = re.compile(r"<q-schema\b[^>]*>", re.IGNORECASE)
 _SCHEMA_CLOSER = re.compile(r"</q-schema\s*>\Z", re.IGNORECASE)
-_SCHEMA_SCAN = re.compile(r"<script\b[^>]*>|</q-schema\s*>", re.IGNORECASE)
+_SCHEMA_SCAN = re.compile(r"<!--|<script\b[^>]*>|<q-schema\b[^>]*>|</q-schema\s*>", re.IGNORECASE)
 _SCRIPT_END = re.compile(r"</script\b", re.IGNORECASE)
+_COMMENT_END = re.compile(r"-->|--!>")
 
 
 def _schema_blocks(html: str) -> list[tuple[int, int]]:
-    """Spans of each ``<q-schema>`` element, ending at the first closing tag that is not inside a ``<script>``.
+    """Spans of each ``<q-schema>`` element, from its opening tag to the first closing tag that is real markup.
 
-    A browser ends a script only at ``</script``, so the text ``</q-schema>`` inside the JSON is data.
+    Script content and comments are skipped both when looking for an opening tag and for the closing
+    one: a browser ends a script only at ``</script`` and a comment only at ``-->``, so ``<q-schema>``
+    or ``</q-schema>`` text inside either is data.
     """
     spans: list[tuple[int, int]] = []
-    pos = 0
+    start: Optional[int] = None
+    resume = 0
+    cursor = 0
     while True:
-        opener = _SCHEMA_OPENER.search(html, pos)
-        if opener is None:
-            return spans
-        cursor = opener.end()
-        end = None
-        while True:
-            hit = _SCHEMA_SCAN.search(html, cursor)
-            if hit is None:
-                break
-            if hit.group(0)[1] == "/":
-                end = hit.end()
-                break
+        hit = _SCHEMA_SCAN.search(html, cursor)
+        if hit is None:
+            if start is None:
+                return spans
+            start, cursor = None, resume
+            continue
+        token = hit.group(0)
+        if token == "<!--":
+            comment_end = _COMMENT_END.search(html, hit.start() + 2)
+            if comment_end is None:
+                if start is None:
+                    return spans
+                start, cursor = None, resume
+                continue
+            cursor = comment_end.end()
+        elif token[1] in "sS":
             script_end = _SCRIPT_END.search(html, hit.end())
             if script_end is None:
-                break
+                if start is None:
+                    return spans
+                start, cursor = None, resume
+                continue
             cursor = script_end.end()
-        if end is None:
-            pos = opener.end()
-            continue
-        spans.append((opener.start(), end))
-        pos = end
+        elif token[1] == "/":
+            if start is None:
+                cursor = hit.end()
+                continue
+            spans.append((start, hit.end()))
+            start = None
+            cursor = hit.end()
+        elif start is None:
+            start = hit.start()
+            resume = hit.end()
+            cursor = hit.end()
+        else:
+            cursor = hit.end()
 
 
 def inject_schema_fallbacks(html: str) -> str:

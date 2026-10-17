@@ -7778,6 +7778,39 @@ def test_schema_endpoints_whose_ids_and_field_names_hold_colons_keep_their_own_p
         assert got["orthogonal"] is True, (key, got)
 
 
+def test_schema_fold_ignores_a_related_field_whose_joined_id_and_name_collide_with_another(schema_page: Path) -> None:
+    plain = [f"p{i}" for i in range(1, 9)]
+    model = {
+        "entities": [
+            {"id": "a", "label": "A", "fields": [*[_schema_field(n, "text") for n in plain], _schema_field("b\u0000c", "text")]},
+            {"id": "a\u0000b", "label": "AB", "fields": [_schema_field("id", "int", "PK"), _schema_field("c", "int", "FK")]},
+            {"id": "z", "label": "Z", "fields": [_schema_field("id", "int", "PK")]},
+        ],
+        "relationships": [_schema_rel("a\u0000b.c", "z.id", "zero-or-many", "one")],
+    }
+    out = run(
+        schema_page,
+        ev(
+            f"""(async () => {{
+              {SCHEMA_MOUNT_JS}
+              const el = mountSchema({json.dumps(model)});
+              const ready = await settle(el);
+              const c = el.querySelector('[data-q-schema-entity="a"]');
+              return {{
+                ready,
+                names: [...c.querySelectorAll('[data-q-schema-field]')].map((r) => r.getAttribute('data-q-schema-field')),
+              }};
+            }})()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    d = out["results"]["d"]
+    assert d["ready"] == "true"
+    assert d["names"] == plain
+    assert d["names"][7] == "p8"
+
+
 def test_schema_ids_named_like_the_layout_graph_keep_every_card_and_line(schema_page: Path) -> None:
     ids = ["root", "rel0", "port:root:id:WEST"]
     fields = [_schema_field("id", "int", "PK"), _schema_field("ref", "int", "FK")]

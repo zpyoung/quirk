@@ -6222,7 +6222,7 @@
       return fields.slice();
     }
     var must = fields.map(function (f) {
-      return f.keys.length > 0 || Boolean(used[entity.id + '\u0000' + f.name]);
+      return f.keys.length > 0 || Boolean(used[entity.id] && used[entity.id][f.name]);
     });
     var room = Math.max(0, SCHEMA_FOLD_ROWS - must.filter(Boolean).length);
     return fields.filter(function (f, i) {
@@ -7253,8 +7253,8 @@
 
       var used = schemaMap();
       data.relationships.forEach(function (r) {
-        used[r.fromEntity + '\u0000' + r.fromField] = true;
-        used[r.toEntity + '\u0000' + r.toField] = true;
+        (used[r.fromEntity] = used[r.fromEntity] || schemaMap())[r.fromField] = true;
+        (used[r.toEntity] = used[r.toEntity] || schemaMap())[r.toField] = true;
       });
 
       var cards = schemaMap();

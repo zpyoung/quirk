@@ -2306,6 +2306,40 @@ def test_schema_fallback_survives_a_closing_tag_spelled_inside_the_data() -> Non
     assert kitcheck.inject_schema_fallbacks(out) == out
 
 
+def test_schema_fallback_ignores_a_closing_tag_spelled_inside_a_comment() -> None:
+    markup = schema_markup(billing_model()).replace(
+        "</script></q-schema>", "</script><!-- </q-schema> --></q-schema>"
+    )
+    out = kitcheck.inject_schema_fallbacks(markup)
+    assert out.count("data-q-flow-list-body") == 1
+    assert out.index("data-q-flow-list-body") > out.index("<!-- </q-schema> -->")
+    assert out.endswith("</details></q-schema>")
+    assert kitcheck.inject_schema_fallbacks(out) == out
+
+
+def test_schema_fallback_ignores_opener_text_inside_scripts_and_comments() -> None:
+    real = schema_markup(billing_model())
+    decoys = (
+        '<script>var s = "<q-schema summary=\'x\'>";</script>\n'
+        "<!-- <q-schema summary='y'> -->\n"
+    )
+    out = kitcheck.inject_schema_fallbacks(decoys + real)
+    assert out.startswith(decoys)
+    assert out.count("data-q-flow-list-body") == 1
+    assert out.index("data-q-flow-list-body") > out.index(real[:40])
+    assert kitcheck.inject_schema_fallbacks(out) == out
+
+
+def test_schema_fallback_skips_an_entity_detail_nested_past_the_recursion_limit() -> None:
+    def deep(m):
+        m["entities"][0]["detail"] = "<ul><li>" * 1100 + "x" + "</li></ul>" * 1100
+
+    payload = er_with(deep)
+    markup = schema_markup(payload)
+    assert schema_failures(payload) == ["<q-schema> detail may hold only paragraphs, lists, code and links"]
+    assert kitcheck.inject_schema_fallbacks(markup) == markup
+
+
 def test_schema_fallback_fills_two_consecutive_blocks() -> None:
     one = schema_markup(billing_model(), 'summary="One."')
     two = schema_markup(parser_model(), 'notation="class" summary="Two."')
