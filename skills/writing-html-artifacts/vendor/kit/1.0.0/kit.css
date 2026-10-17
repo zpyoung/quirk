@@ -1338,7 +1338,7 @@ q-compare > :where([data-q-stack]) dd {
   }
 }
 
-q-flow > aside:where([data-q-flow-trace-panel]) {
+:is(q-flow, q-sequence) > aside:where([data-q-flow-trace-panel]) {
   float: none;
   box-sizing: border-box;
   width: auto;
@@ -1357,22 +1357,22 @@ q-flow:where([data-q-flow-tracing]) > aside:where([data-q-flow-trace-panel]) {
   margin-top: 0;
 }
 
-q-flow aside :where([data-q-flow-trace-note], [data-q-flow-trace-counter], [data-q-flow-trace-empty]) {
+:is(q-flow, q-sequence) aside :where([data-q-flow-trace-note], [data-q-flow-trace-counter], [data-q-flow-trace-empty]) {
   margin: 0 0 var(--q-space-2);
 }
 
-q-flow aside :where(.q-flow-trace-pick) {
+:is(q-flow, q-sequence) aside :where(.q-flow-trace-pick) {
   display: flex;
   align-items: center;
   gap: var(--q-space-2);
   margin-bottom: var(--q-space-2);
 }
 
-q-flow aside :where(.q-flow-trace-pick > label) {
+:is(q-flow, q-sequence) aside :where(.q-flow-trace-pick > label) {
   display: inline;
 }
 
-q-flow aside :where([data-q-flow-trace-picker]) {
+:is(q-flow, q-sequence) aside :where([data-q-flow-trace-picker]) {
   flex: 1 1 auto;
   width: auto;
   min-width: 0;
@@ -1382,18 +1382,18 @@ q-flow aside :where([data-q-flow-trace-picker]) {
   font: inherit;
 }
 
-q-flow aside :where([data-q-flow-trace-counter]) {
+:is(q-flow, q-sequence) aside :where([data-q-flow-trace-counter]) {
   font-weight: 600;
 }
 
-q-flow aside :where(.q-flow-trace-buttons) {
+:is(q-flow, q-sequence) aside :where(.q-flow-trace-buttons) {
   display: flex;
   flex-wrap: wrap;
   gap: var(--q-space-1);
   margin-bottom: var(--q-space-2);
 }
 
-q-flow aside :where(.q-flow-trace-buttons > button, [data-q-flow-trace-dot]) {
+:is(q-flow, q-sequence) aside :where(.q-flow-trace-buttons > button, [data-q-flow-trace-dot]) {
   margin: 0;
   min-width: 34px;
   min-height: 32px;
@@ -1408,7 +1408,7 @@ q-flow aside :where(.q-flow-trace-buttons > button, [data-q-flow-trace-dot]) {
   cursor: pointer;
 }
 
-q-flow aside :where([data-q-flow-trace-dots]) {
+:is(q-flow, q-sequence) aside :where([data-q-flow-trace-dots]) {
   display: flex;
   flex-wrap: wrap;
   gap: var(--q-space-1);
@@ -1417,19 +1417,19 @@ q-flow aside :where([data-q-flow-trace-dots]) {
   list-style: none;
 }
 
-q-flow aside :where([data-q-flow-trace-dots] > li) {
+:is(q-flow, q-sequence) aside :where([data-q-flow-trace-dots] > li) {
   margin: 0;
   padding: 0;
 }
 
-q-flow aside :where([data-q-flow-trace-dot]) {
+:is(q-flow, q-sequence) aside :where([data-q-flow-trace-dot]) {
   min-width: 28px;
   min-height: 28px;
   padding: 0 var(--q-space-1);
   border-radius: var(--q-radius-pill);
 }
 
-q-flow aside :where([data-q-flow-trace-dot][aria-current="step"]) {
+:is(q-flow, q-sequence) aside :where([data-q-flow-trace-dot][aria-current="step"]) {
   border-color: var(--q-color-accent);
   background: var(--q-color-accent);
   color: var(--q-color-accent-text);
@@ -1441,33 +1441,33 @@ q-flow :where([data-q-flow-controls]) > button:where([data-q-flow-action="trace"
   color: var(--q-color-accent-text);
 }
 
-q-flow aside button:enabled:hover {
+:is(q-flow, q-sequence) aside button:enabled:hover {
   border-color: var(--q-color-accent);
   background: var(--q-color-surface);
   color: var(--q-color-text);
 }
 
-q-flow aside button[aria-current="step"]:enabled:hover {
+:is(q-flow, q-sequence) aside button[aria-current="step"]:enabled:hover {
   background: var(--q-color-accent);
   color: var(--q-color-accent-text);
 }
 
-q-flow aside :where(.q-flow-trace-toggle) {
+:is(q-flow, q-sequence) aside :where(.q-flow-trace-toggle) {
   margin: 0 0 var(--q-space-2);
   cursor: pointer;
 }
 
-q-flow aside :where([data-q-flow-tree], [data-q-flow-tree] ul) {
+:is(q-flow, q-sequence) aside :where([data-q-flow-tree], [data-q-flow-tree] ul) {
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-q-flow aside :where([data-q-flow-tree] ul) {
+:is(q-flow, q-sequence) aside :where([data-q-flow-tree] ul) {
   padding-left: var(--q-space-3);
 }
 
-q-flow aside :where([data-q-flow-tree] details) {
+:is(q-flow, q-sequence) aside :where([data-q-flow-tree] details) {
   margin: 0;
   padding: 0;
   border: 0;
@@ -1475,7 +1475,7 @@ q-flow aside :where([data-q-flow-tree] details) {
   background: none;
 }
 
-q-flow aside :where([data-q-flow-tree] summary) {
+:is(q-flow, q-sequence) aside :where([data-q-flow-tree] summary) {
   margin: 0;
   padding: 0;
   font-weight: 400;
@@ -1483,11 +1483,11 @@ q-flow aside :where([data-q-flow-tree] summary) {
   cursor: pointer;
 }
 
-q-flow aside [data-q-flow-tree] details[open] > summary {
+:is(q-flow, q-sequence) aside [data-q-flow-tree] details[open] > summary {
   margin-bottom: 0;
 }
 
-q-flow aside :where([data-q-flow-field]) {
+:is(q-flow, q-sequence) aside :where([data-q-flow-field]) {
   margin: 0;
   padding: 1px 0;
   font-family: var(--q-font-mono);
@@ -1495,33 +1495,33 @@ q-flow aside :where([data-q-flow-field]) {
   overflow-wrap: anywhere;
 }
 
-q-flow aside :where([data-q-flow-mark]) {
+:is(q-flow, q-sequence) aside :where([data-q-flow-mark]) {
   display: inline-block;
   min-width: 1.25em;
   font-weight: 700;
 }
 
-q-flow aside :where([data-q-flow-key], [data-q-flow-count], [data-q-flow-old]) {
+:is(q-flow, q-sequence) aside :where([data-q-flow-key], [data-q-flow-count], [data-q-flow-old]) {
   color: var(--q-color-text-muted);
 }
 
-q-flow aside :where([data-q-flow-changes-only] [data-q-flow-field]:not([data-q-flow-has-change])) {
+:is(q-flow, q-sequence) aside :where([data-q-flow-changes-only] [data-q-flow-field]:not([data-q-flow-has-change])) {
   display: none;
 }
 
-q-flow aside :where([data-q-flow-change="added"] :is([data-q-flow-mark], [data-q-flow-key], [data-q-flow-val], [data-q-flow-count])) {
+:is(q-flow, q-sequence) aside :where([data-q-flow-change="added"] :is([data-q-flow-mark], [data-q-flow-key], [data-q-flow-val], [data-q-flow-count])) {
   color: var(--q-color-good);
 }
 
-q-flow aside :where([data-q-flow-change="changed"] :is([data-q-flow-mark], [data-q-flow-new])) {
+:is(q-flow, q-sequence) aside :where([data-q-flow-change="changed"] :is([data-q-flow-mark], [data-q-flow-new])) {
   color: var(--q-color-accent);
 }
 
-q-flow aside :where([data-q-flow-change="removed"] :is([data-q-flow-mark], [data-q-flow-key], [data-q-flow-val], [data-q-flow-count])) {
+:is(q-flow, q-sequence) aside :where([data-q-flow-change="removed"] :is([data-q-flow-mark], [data-q-flow-key], [data-q-flow-val], [data-q-flow-count])) {
   color: var(--q-color-text-muted);
 }
 
-q-flow aside :where([data-q-flow-change="removed"] :is([data-q-flow-key], [data-q-flow-val])) {
+:is(q-flow, q-sequence) aside :where([data-q-flow-change="removed"] :is([data-q-flow-key], [data-q-flow-val])) {
   text-decoration: line-through;
 }
 
@@ -1542,6 +1542,27 @@ q-sequence > :where([data-q-sequence-controls]) {
 
 q-sequence > :where([data-q-sequence-controls]:empty) {
   display: none;
+}
+
+q-sequence :where([data-q-sequence-controls]) > button {
+  margin: 0;
+  min-width: 34px;
+  min-height: 32px;
+  padding: var(--q-space-1) var(--q-space-2);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-sm);
+  background: var(--q-color-bg);
+  color: var(--q-color-text);
+  font: inherit;
+  font-size: var(--q-size-small);
+  line-height: 1;
+  cursor: pointer;
+}
+
+q-sequence :where([data-q-sequence-controls]) > button:where([data-q-sequence-action="trace"][aria-pressed="true"]) {
+  border-color: var(--q-color-accent);
+  background: var(--q-color-accent);
+  color: var(--q-color-accent-text);
 }
 
 q-sequence > :where([data-q-sequence-pinned]) {
@@ -1662,9 +1683,201 @@ q-sequence :where([data-q-sequence-list-steps], [data-q-sequence-list-steps] ol,
   list-style: none;
 }
 
+q-sequence :where([data-q-sequence-message], [data-q-sequence-created]) {
+  cursor: pointer;
+}
+
+q-sequence :where([data-q-sequence-message]:focus-visible, [data-q-sequence-created]:focus-visible) {
+  outline: none;
+}
+
+q-sequence :where([data-q-sequence-message]:focus-visible) > :where([data-q-sequence-hit]) {
+  stroke: var(--q-color-focus);
+  stroke-width: 2px;
+}
+
+q-sequence :where([data-q-sequence-created]:focus-visible) > :where(rect:first-child) {
+  stroke: var(--q-color-focus);
+  stroke-width: 2.5px;
+}
+
+q-sequence :where([data-q-sequence-pinned-row] > button:focus-visible) {
+  outline: 2px solid var(--q-color-focus);
+  outline-offset: -3px;
+}
+
+q-sequence :where([data-q-sequence-dim]) {
+  opacity: 0.22;
+}
+
+q-sequence :where([data-q-sequence-lifeline][data-q-sequence-lit]) {
+  stroke: var(--q-color-accent);
+  stroke-width: 2.5px;
+}
+
+q-sequence :where([data-q-sequence-message][data-q-sequence-lit]) :where([data-q-sequence-line], [data-q-sequence-head]) {
+  stroke: var(--q-color-accent);
+  stroke-width: 2.5px;
+}
+
+q-sequence :where([data-q-sequence-message][data-q-sequence-lit]) :where([data-q-sequence-head="filled"]) {
+  fill: var(--q-color-accent);
+}
+
+q-sequence :where([data-q-sequence-message][data-q-sequence-lit]) :where([data-q-sequence-label]) {
+  font-weight: 600;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  q-sequence :where([data-q-sequence-message][data-q-sequence-current]) :where([data-q-sequence-line]) {
+    stroke-width: 3.5px;
+  }
+}
+
+q-sequence :where([data-q-sequence-pinned-row]) > button:where([data-q-sequence-lit]) {
+  box-shadow: inset 0 0 0 2px var(--q-color-accent);
+}
+
+q-sequence > aside:where([data-q-flow-drawer]) {
+  box-sizing: border-box;
+  width: auto;
+  margin: 0;
+  float: none;
+  overflow-y: auto;
+  padding: var(--q-space-3) var(--q-space-4);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-md);
+  background: var(--q-color-surface);
+  color: var(--q-color-text);
+  font-size: var(--q-size-small);
+  line-height: var(--q-size-leading);
+}
+
+q-sequence > aside:where([data-q-flow-drawer]) :where([data-q-flow-drawer-head]) {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--q-space-2);
+  margin-bottom: var(--q-space-2);
+}
+
+q-sequence > aside:where([data-q-flow-drawer]) :where([data-q-flow-drawer-head]) > h3 {
+  margin: 0;
+  font-size: var(--q-size-h4);
+  line-height: var(--q-size-leading-tight);
+}
+
+q-sequence > aside:where([data-q-flow-drawer]) :where([data-q-flow-drawer-close], [data-q-sequence-drawer-route] > button, [data-q-sequence-drawer-messages] button, [data-q-sequence-drawer-pair] button) {
+  margin: 0;
+  padding: var(--q-space-1) var(--q-space-2);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-sm);
+  background: var(--q-color-bg);
+  color: var(--q-color-text);
+  font: inherit;
+  font-size: var(--q-size-small);
+  line-height: 1.3;
+  text-align: left;
+  cursor: pointer;
+}
+
+q-sequence > aside:where([data-q-flow-drawer]) :where([data-q-flow-drawer-close]) {
+  min-height: 30px;
+  line-height: 1;
+}
+
+q-sequence > aside:where([data-q-flow-drawer]) :where([data-q-sequence-drawer-messages] button, [data-q-sequence-drawer-pair] button) {
+  display: inline-flex;
+  width: 100%;
+}
+
+q-sequence > aside:where([data-q-flow-drawer]) :where([data-q-flow-drawer-kind]) {
+  display: inline-block;
+  margin: 0 0 var(--q-space-2);
+  padding: 2px var(--q-space-2);
+  border-left: 3px solid var(--q-flow-kind-color, var(--q-color-accent));
+  border-radius: var(--q-radius-sm);
+  background: var(--q-color-bg);
+  color: var(--q-color-text-muted);
+  font-size: var(--q-size-small);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+q-sequence > aside:where([data-q-flow-drawer]) :where([data-q-flow-drawer-detail]) > :where(:first-child) {
+  margin-top: 0;
+}
+
+q-sequence > aside:where([data-q-flow-drawer]) :where([data-q-sequence-drawer-route], [data-q-sequence-drawer-type], [data-q-sequence-drawer-fragments]) {
+  margin: 0 0 var(--q-space-2);
+}
+
+q-sequence > aside:where([data-q-flow-drawer]) :where([data-q-sequence-drawer-type]) {
+  color: var(--q-color-text-muted);
+}
+
+q-sequence > aside:where([data-q-flow-drawer]) :where([data-q-sequence-drawer-messages], [data-q-sequence-drawer-pair]) {
+  margin: 0 0 var(--q-space-2);
+}
+
+q-sequence > aside:where([data-q-flow-drawer]) :where([data-q-sequence-drawer-messages], [data-q-sequence-drawer-pair]) > ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+q-sequence > aside:where([data-q-flow-drawer]) :where([data-q-sequence-drawer-messages], [data-q-sequence-drawer-pair]) > ul > li {
+  margin: 0 0 var(--q-space-1);
+}
+
+@media (min-width: 701px) {
+  q-sequence:where([data-q-sequence-focus], [data-q-sequence-focus-message], [data-q-sequence-tracing]) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) min(22rem, 40%);
+    column-gap: var(--q-space-3);
+    align-items: start;
+  }
+
+  q-sequence:where([data-q-sequence-focus], [data-q-sequence-focus-message], [data-q-sequence-tracing]) > :where(*) {
+    grid-column: 1;
+  }
+
+  q-sequence:where([data-q-sequence-focus], [data-q-sequence-focus-message], [data-q-sequence-tracing]) > :where([data-q-sequence-controls]) {
+    grid-row: 1;
+  }
+
+  q-sequence:where([data-q-sequence-focus], [data-q-sequence-focus-message], [data-q-sequence-tracing]) > :where([data-q-sequence-pinned], [data-q-sequence-stage]) {
+    grid-row: 2;
+  }
+
+  q-sequence:where([data-q-sequence-focus], [data-q-sequence-focus-message], [data-q-sequence-tracing]) > :where([data-q-sequence-stage]) {
+    margin-top: var(--q-sequence-strip-h, 0);
+  }
+
+  q-sequence:where([data-q-sequence-focus], [data-q-sequence-focus-message], [data-q-sequence-tracing]) > details {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+
+  q-sequence:where([data-q-sequence-focus], [data-q-sequence-focus-message], [data-q-sequence-tracing]) > aside:where([data-q-flow-drawer], [data-q-flow-trace-panel]) {
+    grid-column: 2;
+    grid-row: 1 / 3;
+    margin-top: 0;
+    position: sticky;
+    top: calc(var(--q-sequence-strip-h, 0px) + var(--q-space-2));
+    max-height: calc(100vh - var(--q-sequence-strip-h, 0px) - var(--q-space-4));
+    overflow-y: auto;
+  }
+}
+
+q-sequence aside :where([data-q-sequence-trace-collapse]) {
+  display: none;
+}
+
 @media (max-width: 700px) {
   :is(q-flow, q-schema) :where([data-q-flow-controls]) > button,
-  q-flow aside :where(.q-flow-trace-buttons > button, [data-q-flow-trace-dot]),
+  :is(q-flow, q-sequence) aside :where(.q-flow-trace-buttons > button, [data-q-flow-trace-dot]),
   :is(q-flow, q-schema) :where([data-q-flow-drawer-close]),
   :is(q-flow, q-schema) :where([data-q-flow-open-flow]),
   :is(q-flow, q-schema) :where([data-q-flow-edge-btn]) {
@@ -1684,9 +1897,45 @@ q-sequence :where([data-q-sequence-list-steps], [data-q-sequence-list-steps] ol,
     border-radius: var(--q-radius-md) var(--q-radius-md) 0 0;
   }
 
-  q-sequence :where([data-q-sequence-pinned-row]) > button {
+  q-sequence :where([data-q-sequence-controls]) > button,
+  q-sequence :where([data-q-sequence-pinned-row]) > button,
+  q-sequence > aside:where([data-q-flow-drawer]) :where([data-q-flow-drawer-close], [data-q-sequence-drawer-route] > button, [data-q-sequence-drawer-messages] button, [data-q-sequence-drawer-pair] button) {
     min-width: 44px;
     min-height: 44px;
+  }
+
+  q-sequence > aside:where([data-q-flow-drawer]) {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 10;
+    width: 100%;
+    max-height: 55vh;
+    border-width: 1px 0 0;
+    border-radius: var(--q-radius-md) var(--q-radius-md) 0 0;
+  }
+
+  q-sequence > aside:where([data-q-flow-trace-panel]) {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 10;
+    width: 100%;
+    max-height: 50vh;
+    margin: 0;
+    overflow-y: auto;
+    border-width: 1px 0 0;
+    border-radius: var(--q-radius-md) var(--q-radius-md) 0 0;
+  }
+
+  q-sequence aside :where([data-q-sequence-trace-collapse]) {
+    display: inline-block;
+  }
+
+  q-sequence aside:where([data-q-sequence-collapsed]) :where(.q-flow-trace-pick, [data-q-flow-trace-dots], [data-q-flow-trace-note], .q-flow-trace-toggle, [data-q-flow-trace-value]) {
+    display: none;
   }
 }
 
@@ -1807,11 +2056,12 @@ q-schema :where([data-q-schema-drawer-stereotype]) {
 
   :is(q-flow, q-schema) [data-q-flow-controls],
   :is(q-flow, q-schema) [data-q-flow-drawer],
-  q-flow [data-q-flow-trace-panel] {
+  :is(q-flow, q-sequence) [data-q-flow-trace-panel] {
     display: none;
   }
 
-  q-sequence [data-q-sequence-controls] {
+  q-sequence [data-q-sequence-controls],
+  q-sequence > [data-q-flow-drawer] {
     display: none;
   }
 
