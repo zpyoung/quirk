@@ -4660,6 +4660,7 @@ BADVALUE_CASES = {
     "surpair": ('"BADVALUE"', r'"\ud83d\ude00"'),
     "surkey": ('{"BADVALUE": 1}', r'{"\udc00": 1}'),
     "surdeep": ('{"a": [{"k": "BADVALUE"}]}', r'{"a": [{"k": "x\ud800y"}]}'),
+    "nested": ('"BADVALUE"', "[" * 12000 + "]" * 12000),
 }
 
 
@@ -4681,7 +4682,25 @@ def _badvalue_flow(name: str, before: str) -> str:
     )
 
 
-BADVALUE_FLOWS = "\n".join(_badvalue_flow(name, before) for name, (before, _after) in BADVALUE_CASES.items())
+# graph text swapped after the build: a lone surrogate must fail the whole graph, a valid pair must not
+BADTEXT_CASES = {
+    "label": r'"\ud800"',
+    "emoji": r'"\ud83d\ude00 ok"',
+}
+
+
+def _badtext_flow(name: str) -> str:
+    graph = {
+        "nodes": [{"id": "a", "label": f"BADTEXT_{name}"}, {"id": "b", "label": "B"}],
+        "edges": [{"from": "a", "to": "b"}],
+    }
+    return (
+        f'<q-flow id="bt-{name}" summary="A node label that may not be UTF-8.">\n'
+        f'  <script type="application/json">\n  {json.dumps(graph)}\n  </script>\n</q-flow>'
+    )
+
+
+BADVALUE_FLOWS = "\n".join(_badtext_flow(name) for name in BADTEXT_CASES) + "\n" + "\n".join(_badvalue_flow(name, before) for name, (before, _after) in BADVALUE_CASES.items())
 
 FLOW_TRACES = f"""
 <q-flow id="renewal" summary="How a renewal order is priced, taxed and charged.">
@@ -4756,6 +4775,10 @@ def flow_traces_page(tmp_path_factory: pytest.TempPathFactory) -> Path:
         marker = '"value": ' + before.replace("BADVALUE", f"BAD_{name}")
         assert html.count(marker) == 1, name
         html = html.replace(marker, f'"value": {after}')
+    for name, after in BADTEXT_CASES.items():
+        marker = f'"BADTEXT_{name}"'
+        assert html.count(marker) == 1, name
+        html = html.replace(marker, after)
     built.write_text(html, encoding="utf-8")
     return built
 
@@ -6474,6 +6497,27 @@ def test_flow_trace_value_that_is_not_json_fails_to_the_notice(flow_traces_page:
         "surkey": bad,
         "surdeep": bad,
         "surpair": good,
+        "nested": bad,
+    }
+
+
+def test_flow_graph_text_with_a_lone_surrogate_fails_to_the_notice_and_a_valid_pair_draws(
+    flow_traces_page: Path,
+) -> None:
+    out = run(
+        flow_traces_page,
+        ev(
+            """(() => Object.fromEntries([...document.querySelectorAll('q-flow[id^="bt-"]')].map((f) => [
+              f.id.slice(3),
+              { notice: f.querySelector('[data-q-flow-notice]') !== null, ready: f.getAttribute('data-q-flow-ready') },
+            ])))()""",
+            "d",
+        ),
+    )
+    assert_clean(out)
+    assert out["results"]["d"] == {
+        "label": {"notice": True, "ready": "error"},
+        "emoji": {"notice": False, "ready": "true"},
     }
 
 
