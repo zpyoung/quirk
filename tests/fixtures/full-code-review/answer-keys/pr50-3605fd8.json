@@ -1,0 +1,601 @@
+{
+  "schema_version": 1,
+  "target": {
+    "project": "zpyoung/quirk",
+    "number": 50,
+    "head_sha": "3605fd8777b60646bcad11aba08f83c2c858e6b9",
+    "base_ref": "main"
+  },
+  "membership_policy": {
+    "rule": "Every first-wave candidate confirmed to produce a reachable, non-cosmetic wrong result, plus the six standard-run Should fix findings. Input rarity does not lower security or data-loss defects to Nit. External behavior not established by code or an isolated reproduction remains plausible.",
+    "required_standard_source_ids": ["F1", "F2", "F3", "F4", "F5", "F6"],
+    "standard_membership_note": "F1-F6 remain members by the approved logic spec, including F6's test-adequacy finding. Other missing-assertion and mutation-coverage candidates are not promoted solely because F6 is required.",
+    "verification_scope": "All cited source was read at the full pinned head. Reproduced means a focused offline snippet in a throwaway directory, not a test-suite run. No forge CLI or network was used. Read-from-code findings distinguish deterministic local behavior from unexercised server or model behavior."
+  },
+  "defects": [
+    {
+      "id": "AK-01",
+      "title": "Inline anchoring fails for git C-quoted paths",
+      "source_ids": ["F1", "A1.2", "A2.1", "A3.3"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/forge/__init__.py", "line_min": 65, "line_max": 100}],
+      "keywords": ["_header_path", "quoted", "C-quote", "hunk_lines", "inline_target"],
+      "evidence": "reproduced",
+      "verification_note": "A canonical quoted my file.py diff produces empty old/new hunk sets for the actual path. _header_path removes a/ or b/ only before an opening quote, so both forge adapters reject a valid inline location. Required standard member F1."
+    },
+    {
+      "id": "AK-02",
+      "title": "Review memory drops anchors and fingerprints for C-quoted diff paths",
+      "source_ids": ["F2", "A5.3"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/review_memory.py", "line_min": 146, "line_max": 162},
+        {"file": "skills/full-code-review/scripts/review_memory.py", "line_min": 339, "line_max": 350}
+      ],
+      "keywords": ["_paths_from_header", "_diff_sections", "quoted", "fingerprint", "_anchor"],
+      "evidence": "reproduced",
+      "verification_note": "_anchor on the same quoted my file.py diff returns None. Header consumers retain the quotes and _diff_sections rejects quoted diff --git headers, preventing remembered identity and posted-marker suppression. Required standard member F2."
+    },
+    {
+      "id": "AK-03",
+      "title": "JSON writing fails for non-UTF-8 diff bytes decoded with surrogateescape",
+      "source_ids": ["F3", "A1.1", "A5.1"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/jsonio.py", "line_min": 12, "line_max": 22},
+        {"file": "skills/full-code-review/scripts/prepare_diff.py", "line_min": 404, "line_max": 406},
+        {"file": "skills/full-code-review/scripts/prepare_diff.py", "line_min": 1034, "line_max": 1041}
+      ],
+      "keywords": ["surrogate", "utf-8", "ensure_ascii", "write_json", "UnicodeEncodeError"],
+      "evidence": "reproduced",
+      "verification_note": "Serializing a surrogateescaped byte 0xe9 with ensure_ascii=False and strict UTF-8 raises UnicodeEncodeError. prepare_diff._run produces those surrogates and write_json writes strict UTF-8, so legitimate non-UTF-8 source aborts context creation. Required standard member F3."
+    },
+    {
+      "id": "AK-04",
+      "title": "Guidance discovery follows directory symlink loops and crashes on cyclic guidance links",
+      "source_ids": ["F4", "A4.3"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/discover_guidance.py", "line_min": 60, "line_max": 75}],
+      "keywords": ["symlink", "glob", "recursive", "resolve", "loop"],
+      "evidence": "reproduced",
+      "verification_note": "gather on a self-referential rules/loop.md symlink raises uncaught RuntimeError. The recursive glob also expands directory links before applying REFERENCE_CAP; the previously reported exponential hang was not rerun. Required standard member F4."
+    },
+    {
+      "id": "AK-05",
+      "title": "A non-DiffNote GitLab create response loses the already-created comment receipt",
+      "source_ids": ["F5", "A2.5"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/forge/gitlab.py", "line_min": 510, "line_max": 519},
+        {"file": "skills/full-code-review/scripts/post_author_comments.py", "line_min": 92, "line_max": 96}
+      ],
+      "keywords": ["DiffNote", "plain comment", "receipt", "post_inline", "stale", "DiscussionNote"],
+      "evidence": "read from code",
+      "verification_note": "After POST succeeds, a response whose first note is not DiffNote raises before returning its IDs; the author poster cannot persist that receipt. The receipt-loss branch is established from code. Live stale-position degradation was not exercised. Required standard member F5 is retained independently of that unexercised server premise."
+    },
+    {
+      "id": "AK-06",
+      "title": "Risk tone test passes when only the embedded CSS stylesheet has the expected tone",
+      "source_ids": ["F6"],
+      "severity": "Should fix",
+      "anchors": [{"file": "tests/full_code_review/test_render_report.py", "line_min": 775, "line_max": 789}],
+      "keywords": ["test_risk_kpis_tone_per_metric", "dot--warn", "stylesheet", "CSS", "tone"],
+      "evidence": "read from code",
+      "verification_note": "The assertions search the complete HTML, including template stylesheet selectors, rather than the relevant metric element. This is a required standard member F6 even though other test-hygiene candidates do not independently enter the first-wave defect set. No mutation or test suite was rerun."
+    },
+    {
+      "id": "AK-07",
+      "title": "Triage export escapes an anchor path but validation compares the raw file and line",
+      "source_ids": ["B1", "A7.4", "A8.1", "A9b.3"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/assets/report.html", "line_min": 1914, "line_max": 1926},
+        {"file": "skills/full-code-review/scripts/validate_triage.py", "line_min": 131, "line_max": 135}
+      ],
+      "keywords": ["defang", "&lt;", "anchor mismatch", "dataset.file", "validate_triage"],
+      "evidence": "read from code",
+      "verification_note": "B1 confirmed: markdown() changes a literal < in dataset.file to &lt;, while expected_anchor is constructed from the raw path. Every paste for such a valid POSIX path fails exact comparison; reviewer posting has no severity fallback."
+    },
+    {
+      "id": "AK-08",
+      "title": "Changing the set of lens tags changes a finding fingerprint and reposts duplicates",
+      "source_ids": ["B2", "A5.2", "A9b.1"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/review_memory.py", "line_min": 416, "line_max": 419},
+        {"file": "skills/full-code-review/scripts/review_memory.py", "line_min": 593, "line_max": 608}
+      ],
+      "keywords": ["fingerprint", "dimension", "sorted", "duplicate", "lens subset"],
+      "evidence": "read from code",
+      "verification_note": "B2 confirmed: absent an explicit dimension, the lexically first reported lens becomes part of the hash. A different reporting subset changes identity for unchanged code; exact thread matching and same-dimension fuzzy matching then miss the previously posted finding."
+    },
+    {
+      "id": "AK-09",
+      "title": "An invalid explicit policy pack silently bypasses the default user pack",
+      "source_ids": ["B3", "A6.4", "A9a.2"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/resolve_policy.py", "line_min": 277, "line_max": 313}],
+      "keywords": ["--pack", "is_dir", "user_dir", "silently", "load_pack"],
+      "evidence": "read from code",
+      "verification_note": "B3 confirmed for a nonexistent explicit pack: _user_pack_dir selects it instead of the default pack, and the is_dir guard skips it without error or warning. Required review policy is silently absent. An intentionally empty existing pack is not itself evidence of a defect."
+    },
+    {
+      "id": "AK-10",
+      "title": "A non-numeric report line crashes author posting midway through a batch",
+      "source_ids": ["B4", "A2.3", "A9b.2"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/post_author_comments.py", "line_min": 47, "line_max": 48},
+        {"file": "skills/full-code-review/scripts/post_author_comments.py", "line_min": 74, "line_max": 96},
+        {"file": "skills/full-code-review/scripts/render_report.py", "line_min": 472, "line_max": 482}
+      ],
+      "keywords": ["int(", "_line", "ValueError", "non-numeric", "line range"],
+      "evidence": "read from code",
+      "verification_note": "B4 confirmed: renderer validation accepts a nonempty single-line L12 or en-dash range, but the poster calls int on it inside the create loop, after earlier comments may have been published. The preflight validates IDs, not all requested positions."
+    },
+    {
+      "id": "AK-11",
+      "title": "Complete can approve an unreviewed published head after allow-unaffected",
+      "source_ids": ["B5", "A3.2"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/post_reviewer_review.py", "line_min": 454, "line_max": 467},
+        {"file": "skills/full-code-review/scripts/post_reviewer_review.py", "line_min": 540, "line_max": 548},
+        {"file": "skills/full-code-review/scripts/post_reviewer_review.py", "line_min": 742, "line_max": 746}
+      ],
+      "keywords": ["publish_head_sha", "report_head_sha", "expected_head", "approve", "allow-unaffected"],
+      "evidence": "read from code",
+      "verification_note": "B5 confirmed: stage preserves separate reviewed and live heads, but _state_context binds expected_head to publish_head_sha and complete passes that live head to the adapter. After allow-unaffected, approval targets commits no lens reviewed, contrary to posting.md:343. No live approval was attempted."
+    },
+    {
+      "id": "AK-12",
+      "title": "Posting instructions use undefined JSON shell variables",
+      "source_ids": ["B6", "A9a.5"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/references/posting.md", "line_min": 64, "line_max": 75},
+        {"file": "skills/full-code-review/references/posting.md", "line_min": 234, "line_max": 237},
+        {"file": "skills/full-code-review/references/posting.md", "line_min": 310, "line_max": 311},
+        {"file": "skills/full-code-review/references/posting.md", "line_min": 336, "line_max": 338}
+      ],
+      "keywords": ["DECISIONS_JSON", "CONTEXT_JSON", "STAGED_JSON", "empty expansion", "triage"],
+      "evidence": "read from code",
+      "verification_note": "B6 confirmed: setup defines CONTEXT and REVIEW_RUN_DIR, not the three variables used here. Empty --decisions is treated as no decisions by comment_body._decision_rows:655-656, making ignored findings eligible again; reviewer commands instead receive empty paths."
+    },
+    {
+      "id": "AK-13",
+      "title": "Bare fnmatch skip globs miss direct children and directory patterns",
+      "source_ids": ["B7", "A6.6"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/resolve_policy.py", "line_min": 335, "line_max": 338}],
+      "keywords": ["skip_globs", "fnmatch", "_matches", "src/**/*.py", "directory pattern"],
+      "evidence": "reproduced",
+      "verification_note": "B7 confirmed: _matches('src/a.py', 'src/**/*.py') is False. The special case only strips an initial **/, so an interior **/ cannot match zero directories and documented skip policy reviews files that should be excluded."
+    },
+    {
+      "id": "AK-14",
+      "title": "Raw diff size hard-blocks before policy filters generated files",
+      "source_ids": ["B8", "A9a.3"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/SKILL.md", "line_min": 146, "line_max": 159},
+        {"file": "skills/full-code-review/SKILL.md", "line_min": 224, "line_max": 242}
+      ],
+      "keywords": ["hard block", "size gate", "generated", "skip_globs", "filtered"],
+      "evidence": "read from code",
+      "verification_note": "B8 confirmed: Step 2 requires stopping on raw size before Step 4 applies policy. The later instruction to re-check filtered size cannot resume a run already stopped, contradicting policy.md:74-76's generated-file exclusion from the gate."
+    },
+    {
+      "id": "AK-15",
+      "title": "Test file detection omits common test directory and filename patterns",
+      "source_ids": ["B9", "A1.5"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/prepare_diff.py", "line_min": 327, "line_max": 352}],
+      "keywords": ["is_test_file", "test/", "_test.rb", "Tests.cs", "tests.py", "test_files"],
+      "evidence": "reproduced",
+      "verification_note": "B9 confirmed: test/foo.rb, foo_test.rb, FooTests.cs, and tests.py all return False. These conventions are real test files, so test lenses are skipped or the source-without-tests lens is enabled incorrectly."
+    },
+    {
+      "id": "AK-16",
+      "title": "Reconcile rejects an allowed branch target when the change number is discovered",
+      "source_ids": ["B10", "A5.8", "A9a.6"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/review_memory.py", "line_min": 108, "line_max": 126},
+        {"file": "skills/full-code-review/scripts/review_memory.py", "line_min": 544, "line_max": 555},
+        {"file": "skills/full-code-review/references/html-report.md", "line_min": 74, "line_max": 76}
+      ],
+      "keywords": ["target", "branch", "change", "reconcile", "_target_identity", "_validate_report_binding"],
+      "evidence": "read from code",
+      "verification_note": "B10 confirmed: a discovered change number forces snapshot target change, but the report contract explicitly permits meta.target to remain branch. Exact binding then rejects that documented report after review work has completed."
+    },
+    {
+      "id": "AK-17",
+      "title": "Author posting does not check report binding or the live head",
+      "source_ids": ["B12", "A2.4"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/post_author_comments.py", "line_min": 59, "line_max": 73}],
+      "keywords": ["head_sha", "binding", "live head", "wrong change", "report_sha256", "post_author_comments"],
+      "evidence": "read from code",
+      "verification_note": "B12 confirmed: report-to-bodies digest validation does not bind either artifact to context.change or context.refs, and no live-head read occurs. A correctly paired report and bodies can therefore be sent to another context's change request."
+    },
+    {
+      "id": "AK-18",
+      "title": "Author overview counts skipped unanchorable findings as posted",
+      "source_ids": ["B13", "A2.8"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/post_author_comments.py", "line_min": 83, "line_max": 100},
+        {"file": "skills/full-code-review/scripts/comment_body.py", "line_min": 707, "line_max": 718}
+      ],
+      "keywords": ["overview", "post_overview", "Posted:", "unanchorable", "skipped"],
+      "evidence": "read from code",
+      "verification_note": "B13 confirmed: the builder counts every eligible finding in posted before forge anchoring. The poster later skips collapsed or off-diff locations but sends the unchanged overview, falsely claiming those comments exist."
+    },
+    {
+      "id": "AK-19",
+      "title": "Discussion fetch failure allows duplicate posting of carried published findings",
+      "source_ids": ["B16", "A5.6"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/review_memory.py", "line_min": 642, "line_max": 651},
+        {"file": "skills/full-code-review/scripts/post_author_comments.py", "line_min": 59, "line_max": 81}
+      ],
+      "keywords": ["discussions_available", "suppress_post", "carried", "cross-check", "published"],
+      "evidence": "read from code",
+      "verification_note": "B16 confirmed: an unavailable discussion snapshot leaves suppress_post False even for a published prior receipt. The author builder treats it as eligible and post() has no mandatory live-discussion gate, contrary to degradation.md:27."
+    },
+    {
+      "id": "AK-20",
+      "title": "Backticks in an unplaced file path escape the overview's code span and expose mentions",
+      "source_ids": ["B14", "A4.6"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/comment_body.py", "line_min": 512, "line_max": 526}],
+      "keywords": ["_unplaced_section", "backtick", "mention", "code span", "unplaced"],
+      "evidence": "reproduced",
+      "verification_note": "B14 confirmed: file src/a` @victim `b.py produces (`src/a` @victim `b.py:3`). _line first treats the path's paired backticks as code and preserves the mention, then the wrapper's additional backticks put it outside code. The attack uses a legal path and the approved unplaced-overview path; rarity does not make it cosmetic."
+    },
+    {
+      "id": "AK-21",
+      "title": "Mention neutralization mistakes unequal backtick runs and mid-line fences for protected code",
+      "source_ids": ["B15", "A4.7"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/comment_body.py", "line_min": 32, "line_max": 39},
+        {"file": "skills/full-code-review/scripts/comment_body.py", "line_min": 191, "line_max": 224}
+      ],
+      "keywords": ["_defuse_mentions", "backtick", "mention", "fence", "_neutralize"],
+      "evidence": "reproduced",
+      "verification_note": "B15 confirmed: _neutralize('`a @victim ``') returns the live mention unchanged. The regex accepts a prefix of a longer closing run, unlike equal-length Markdown code delimiters. Fence recognition also runs before fields are embedded after labels, so a supposed opening fence can be mid-line in the final comment. The local bypass is reproduced; an actual notification was not sent."
+    },
+    {
+      "id": "AK-22",
+      "title": "Review-source cleanup deletes registrations for unrelated temporarily missing worktrees",
+      "source_ids": ["B18", "A4.5"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/borrow_review_source.py", "line_min": 260, "line_max": 276}],
+      "keywords": ["worktree prune", "registration", "unrelated", "missing worktree", "_drop_review_ref"],
+      "evidence": "reproduced",
+      "verification_note": "B18 confirmed: in a throwaway repo, temporarily renaming another linked worktree, running the exact repo-wide prune command, and restoring the directory makes git status fail with not-a-git-repository. Release and failed acquire both call this cleanup against the user's matching clone. This damages unrelated worktree state, not just cleanup aesthetics."
+    },
+    {
+      "id": "AK-23",
+      "title": "An explicitly empty change or branch argument silently reviews local changes instead",
+      "source_ids": ["B19", "A1.6"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/prepare_diff.py", "line_min": 877, "line_max": 915}],
+      "keywords": ["empty", "--change", "--branch", "truthiness", "local"],
+      "evidence": "reproduced",
+      "verification_note": "B19 confirmed: main with --change '' --forge none returns success with mode local in an isolated repo. Argparse records the selected option but truthiness discards it. An empty shell expansion therefore reviews the wrong target instead of failing. The branch arm uses the same condition."
+    },
+    {
+      "id": "AK-24",
+      "title": "Local review from a subdirectory omits untracked files and uses the wrong path namespace",
+      "source_ids": ["B20", "A1.4"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/prepare_diff.py", "line_min": 775, "line_max": 804}],
+      "keywords": ["ls-files", "untracked", "subdirectory", "cwd", "root-relative"],
+      "evidence": "reproduced",
+      "verification_note": "B20 confirmed: git_diff_local called from sub/ reports only inside.py, renders +++ b/inside.py rather than sub/inside.py, and omits an untracked outside.py at the root. Tracked diffs remain root-relative, so both coverage and source/anchor lookup are wrong. The omitted file is absent from coverage gaps too."
+    },
+    {
+      "id": "AK-25",
+      "title": "An empty diff succeeds and the workflow can issue a review of nothing",
+      "source_ids": ["B21", "A9a.4"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/SKILL.md", "line_min": 129, "line_max": 144},
+        {"file": "skills/full-code-review/scripts/prepare_diff.py", "line_min": 921, "line_max": 922},
+        {"file": "skills/full-code-review/scripts/prepare_diff.py", "line_min": 1034, "line_max": 1041}
+      ],
+      "keywords": ["empty diff", "zero files", "stop", "fan-out", "no changes"],
+      "evidence": "reproduced",
+      "verification_note": "B21 confirmed: --local on a clean isolated repo exits 0 and writes diff '' and size 0/0. The workflow only stops for unsuccessful or missing diff sources, not a successful empty diff, although degradation.md:28 forbids reviewing an empty diff. The code permits this invalid review state; a model's eventual Approve verdict was not exercised."
+    },
+    {
+      "id": "AK-26",
+      "title": "Policy reads interpret a valid repository path as unsupported git pathspec magic",
+      "source_ids": ["B23", "A6.2"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/resolve_policy.py", "line_min": 84, "line_max": 97}],
+      "keywords": ["ls-tree", "literal", "pathspec", ":(glob)", "PolicyError"],
+      "evidence": "reproduced",
+      "verification_note": "B23 confirmed: a committed :(glob)x/REVIEW.md is a legal path, but git ls-tree HEAD -- :(glob)x/REVIEW.md returns 128 because glob magic is unsupported. _RefSource.read raises PolicyError and blocks reviewer policy resolution. -- does not disable pathspec magic."
+    },
+    {
+      "id": "AK-27",
+      "title": "Canonical git diff flags silently remove submodule pointer changes",
+      "source_ids": ["B25", "A1.3"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/prepare_diff.py", "line_min": 28, "line_max": 34}],
+      "keywords": ["ignore-submodules", "gitlink", "submodule", "pointer", "omitted"],
+      "evidence": "reproduced",
+      "verification_note": "B25 confirmed: an isolated staged mode-160000 entry appears in normal git diff, but both the patch and --name-only output are empty with --ignore-submodules=all. Shared flags therefore hide dependency commit changes without recording them as unreviewed."
+    },
+    {
+      "id": "AK-28",
+      "title": "Publication checks staged IDs but not the approved draft bodies",
+      "source_ids": ["B31", "A3.5"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/post_reviewer_review.py", "line_min": 472, "line_max": 478},
+        {"file": "skills/full-code-review/scripts/post_reviewer_review.py", "line_min": 659, "line_max": 667}
+      ],
+      "keywords": ["body_sha256", "body digest", "edited draft", "approved preview", "same IDs"],
+      "evidence": "read from code",
+      "verification_note": "B31 confirmed: stage records body_sha256, but publish reduces live content to an ID set and never compares the saved hashes before bulk publication. Editing an existing pending body without changing its ID is not detected, so final confirmation is not bound to the previewed text. No remote draft was edited or published."
+    },
+    {
+      "id": "AK-29",
+      "title": "An unreadable staged artifact falsely reports that an already-published review was not published",
+      "source_ids": ["B32", "A3.7"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/post_reviewer_review.py", "line_min": 726, "line_max": 730},
+        {"file": "skills/full-code-review/scripts/post_reviewer_review.py", "line_min": 751, "line_max": 754}
+      ],
+      "keywords": ["review_published", "unreadable", "published", "unknown", "false"],
+      "evidence": "reproduced",
+      "verification_note": "B32 confirmed: complete with corrupt staged JSON emits review_published:false before any state could be read; publish similarly defaults to published:false. A published review whose local artifact was lost or damaged is therefore reported as unpublished rather than unknown, inviting duplicate delivery. The false status output was reproduced without contacting a forge."
+    },
+    {
+      "id": "AK-30",
+      "title": "Changed guidance remains trusted when discovered through an in-repository symlink alias",
+      "source_ids": ["B34", "A4.1"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/discover_guidance.py", "line_min": 100, "line_max": 110}],
+      "keywords": ["exclude-changed", "symlink", "alias", "trusted guidance", "resolved path"],
+      "evidence": "reproduced",
+      "verification_note": "B34 confirmed: with CLAUDE.md -> AGENTS.md and changed_files=['AGENTS.md'], gather with exclude_changed returns CLAUDE.md as trusted while withholding only AGENTS.md. Both paths expose the changed bytes. The separate case-insensitive-filesystem variant was read from code, not independently exercised."
+    },
+    {
+      "id": "AK-31",
+      "title": "Borrowing an untrusted review head executes checkout hooks against that head without consent",
+      "source_ids": ["B35", "A4.2"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/borrow_review_source.py", "line_min": 110, "line_max": 126}],
+      "keywords": ["post-checkout", "hooksPath", "worktree add", "untrusted", "mutation_consent"],
+      "evidence": "reproduced",
+      "verification_note": "B35 confirmed: in an isolated repo, the same worktree add --detach command runs a post-checkout hook which invokes a script from the checked-out head and creates a marker. _add_worktree has no hook suppression and runs even when mutation_consent is false, including fork reviews. A user-installed hook that delegates to repository content is the explicit reachable prerequisite; no hook or code in the caller checkout was run."
+    },
+    {
+      "id": "AK-32",
+      "title": "Identical anchor lines at different locations inherit an unrelated finding's decision or suppression",
+      "source_ids": ["B37", "A5.4"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/review_memory.py", "line_min": 412, "line_max": 419},
+        {"file": "skills/full-code-review/scripts/review_memory.py", "line_min": 624, "line_max": 648}
+      ],
+      "keywords": ["fingerprint", "identical anchor", "collision", "position", "restored-decision", "suppression"],
+      "evidence": "reproduced",
+      "verification_note": "B37 confirmed: a prior ignored correctness finding at a.py:2 anchored on return result is restored onto an unrelated current finding at a.py:19 with the same text. The within-run ambiguity guard does not help when each run contains only one occurrence. Live thread matching uses the same colliding fingerprint and can also suppress the unrelated issue."
+    },
+    {
+      "id": "AK-33",
+      "title": "BOM or noncanonical opening fence silently discards review policy front matter",
+      "source_ids": ["B38", "A6.3"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/resolve_policy.py", "line_min": 129, "line_max": 138}],
+      "keywords": ["front matter", "BOM", "startswith", "severity_floor", "trailing space"],
+      "evidence": "reproduced",
+      "verification_note": "B38 confirmed: split_front_matter on an opening --- followed by a space returns empty settings and the full text as prose, without warning. The same exact-prefix check rejects a UTF-8 BOM. A saved severity floor, skip list, or model override is silently ignored; this is policy loss rather than formatting alone."
+    },
+    {
+      "id": "AK-34",
+      "title": "The documented gitignore exception leaves the project policy pack ignored",
+      "source_ids": ["B39", "A6.5"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/references/policy.md", "line_min": 12, "line_max": 17}],
+      "keywords": ["gitignore", "!.quirk/review/", "ignored parent", "project pack", "re-include"],
+      "evidence": "reproduced",
+      "verification_note": "B39 confirmed: with .quirk/ ignored and the instructed !.quirk/review/ exception added, git check-ignore still reports .quirk/review/pack.yaml ignored. Git cannot re-include a child of an excluded parent. Following this recipe leaves intended shared review policy uncommitted."
+    },
+    {
+      "id": "AK-35",
+      "title": "The bounded YAML parser treats quotes inside plain scalars as delimiters and retains comments",
+      "source_ids": ["B41", "A6.8"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/filing-requests/scripts/_yaml_mini.py", "line_min": 114, "line_max": 148},
+        {"file": "skills/full-code-review/scripts/policy_yaml.py", "line_min": 114, "line_max": 148}
+      ],
+      "keywords": ["_opens_quote", "plain scalar", "comment", "quoted", "YAML"],
+      "evidence": "reproduced",
+      "verification_note": "B41 confirmed: parsing name: use \"quote # comment retains # comment as part of the plain scalar. A quote after whitespace inside an already-started plain scalar is not a YAML quote delimiter, but _opens_quote enters quoted mode there. Policy uses the same parser, so actual setting and template text changes, not just display formatting."
+    },
+    {
+      "id": "AK-36",
+      "title": "A valid all-Unicode branch name blocks report rendering",
+      "source_ids": ["B42", "A7.1"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/render_report.py", "line_min": 65, "line_max": 79},
+        {"file": "skills/full-code-review/scripts/render_report.py", "line_min": 500, "line_max": 504}
+      ],
+      "keywords": ["Unicode", "non-ASCII", "slugify", "branch", "empty slug"],
+      "evidence": "reproduced",
+      "verification_note": "B42 confirmed: git check-ref-format --branch accepts 修正, but _prepare_report rejects it because slugify returns ''. target_slug already appends a nonempty hash, so this additional check needlessly blocks HTML, Markdown, triage, and delivery for a valid branch."
+    },
+    {
+      "id": "AK-37",
+      "title": "Valid fenced recommendations lose code content or swallow following prose",
+      "source_ids": ["B43", "A7.2"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/md_render.py", "line_min": 15, "line_max": 17},
+        {"file": "skills/full-code-review/scripts/md_render.py", "line_min": 309, "line_max": 316},
+        {"file": "skills/full-code-review/scripts/md_render.py", "line_min": 474, "line_max": 492}
+      ],
+      "keywords": ["fence", "indented", "info string", "_FENCE", "code block"],
+      "evidence": "reproduced",
+      "verification_note": "B43 confirmed: an indented Python fence becomes one inline span containing the language and flattened code. With a multi-word info string, x = a * b * c is parsed as prose with emphasis, removing the multiplication markers; the closing fence instead opens a new block. This corrupts code recommendations, beyond a colour or layout nit."
+    },
+    {
+      "id": "AK-38",
+      "title": "Highlighting a BOM-prefixed snippet changes its source text",
+      "source_ids": ["B44", "A7.3"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/highlight.py", "line_min": 213, "line_max": 233}],
+      "keywords": ["BOM", "Pygments", "emitted", "source text", "tail repair"],
+      "evidence": "reproduced",
+      "verification_note": "B44 confirmed with installed Pygments: tokenizing U+FEFF followed by x = 1 and a newline concatenates to x = 1 plus two newlines, not the original source. Pygments strips the BOM but emitted counts the transformed stream, so the positional tail repair appends the wrong suffix. The function's lossless-source contract is violated."
+    },
+    {
+      "id": "AK-39",
+      "title": "A failed report write truncates an existing complete artifact",
+      "source_ids": ["B47", "A7.7"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/render_report.py", "line_min": 1482, "line_max": 1489}],
+      "keywords": ["atomic", "truncate", "partial", "write failure", "existing report"],
+      "evidence": "reproduced",
+      "verification_note": "B47 confirmed: an isolated process with a small file-size limit renders over an existing report, exits 2 with File too large, and leaves only the first 32 bytes of the replacement. Direct open(..., 'w') destroys the old complete artifact before the new write succeeds. No fault was applied to the caller checkout."
+    },
+    {
+      "id": "AK-40",
+      "title": "Markdown memory locations insert literal escape characters into code-span paths",
+      "source_ids": ["B48", "A7.8"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/scripts/render_report.py", "line_min": 1023, "line_max": 1027},
+        {"file": "skills/full-code-review/scripts/render_report.py", "line_min": 1113, "line_max": 1120}
+      ],
+      "keywords": ["code span", "_memory_md_text", "escaped path", "backslash", "Markdown"],
+      "evidence": "reproduced",
+      "verification_note": "B48 confirmed for locations: _memory_md_text('src/my_file.py') returns src/my\\_file\\.py, which is then wrapped in backticks. Backslash escapes are literal inside a Markdown code span, so displayed/copied locations are no longer real paths. The candidate's separate nonexistent #F links were read from code, not used to establish this member."
+    },
+    {
+      "id": "AK-41",
+      "title": "Handoff export rewrites literal less-than operators inside code and fixes",
+      "source_ids": ["B49", "A8.2"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/assets/report.html", "line_min": 1939, "line_max": 1942}, {"file": "skills/full-code-review/assets/report.html", "line_min": 1980, "line_max": 1992}],
+      "keywords": ["defang", "&lt;", "handoff", "code block", "less-than"],
+      "evidence": "read from code",
+      "verification_note": "B49 confirmed: textLines applies defang before exporting body_md, recommendation_md and fix_md, so a fenced if (x < y) becomes if (x &lt; y). The result is plain clipboard/textarea text with no entity-decoding step. A later session receives corrupted executable recommendations and possibly changed paths; XML-wrapper safety does not make source corruption cosmetic."
+    },
+    {
+      "id": "AK-42",
+      "title": "Memory links to re-found findings leave their target hidden in another tab",
+      "source_ids": ["B50", "A8.3"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/render_report.py", "line_min": 1074, "line_max": 1090}, {"file": "skills/full-code-review/assets/report.html", "line_min": 1492, "line_max": 1520}],
+      "keywords": ["href", "#F", "tab", "hidden pane", "Re-found", "Possible regression"],
+      "evidence": "read from code",
+      "verification_note": "B50 confirmed: memory rows emit ordinary #F links, but Findings is a hidden pane while Review memory is selected. The tab controller only responds to tab button click/keyboard events and has no hash navigation path. Clicking the provided finding link cannot reveal its target; this is broken navigation, not styling. Browser interaction was not exercised."
+    },
+    {
+      "id": "AK-43",
+      "title": "Unnormalized handoff evidence can make the complete triage export unvalidatable",
+      "source_ids": ["B51", "A8.4"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/assets/report.html", "line_min": 1983, "line_max": 1985},
+        {"file": "skills/full-code-review/scripts/validate_triage.py", "line_min": 42, "line_max": 55}
+      ],
+      "keywords": ["Evidence", "Dimensions", "U+2028", "non-canonical", "handoff", "line separator"],
+      "evidence": "reproduced",
+      "verification_note": "B51 confirmed: renderer accepts evidence containing U+2028, and handoffLines emits it through defang rather than textLines. parse_export rejects noncanonical separators in the entire paste before stripping the supposedly ignored handoff. A valid decisions block plus this generated handoff fails with paste contains a non-canonical line separator."
+    },
+    {
+      "id": "AK-44",
+      "title": "The documented outside-checkout project flag cannot resolve a forge host",
+      "source_ids": ["B53", "A9a.7"],
+      "severity": "Should fix",
+      "anchors": [
+        {"file": "skills/full-code-review/SKILL.md", "line_min": 62, "line_max": 64},
+        {"file": "skills/full-code-review/scripts/prepare_diff.py", "line_min": 853, "line_max": 857},
+        {"file": "skills/full-code-review/scripts/forge/__init__.py", "line_min": 209, "line_max": 218}
+      ],
+      "keywords": ["-R", "--host", "outside", "checkout", "no origin", "forge detection"],
+      "evidence": "reproduced",
+      "verification_note": "B53 confirmed: without an origin, detect_forge returns none with no host; -R only supplies project after detection. Even forcing github leaves make_forge without a host and raises. The advertised outside-checkout form requires an additional --host plus forge choice, neither supplied by that instruction. No forge CLI was invoked."
+    },
+    {
+      "id": "AK-45",
+      "title": "Reviewer memory tests invoke the real forge transport before installing their replacement",
+      "source_ids": ["B61", "A10.6"],
+      "severity": "Should fix",
+      "anchors": [{"file": "tests/full_code_review/test_post_reviewer_review.py", "line_min": 545, "line_max": 567}, {"file": "tests/full_code_review/test_post_reviewer_review.py", "line_min": 582, "line_max": 605}],
+      "keywords": ["load_snapshot", "fetch_discussions", "glab", "network", "stub", "transport"],
+      "evidence": "read from code",
+      "verification_note": "B61 confirmed: _memory_stage_files calls load_snapshot with a real change context before each of the three tests replaces fetch_discussions. load_snapshot:278-284 calls the default transport, which reaches subprocess glab api in forge/gitlab.py:55-58. Thus the unit tests can access user CLI configuration and the network or wait 120 seconds; unlike a missing assertion, this is an actual isolation defect. No test or forge CLI was run in this audit."
+    },
+    {
+      "id": "AK-46",
+      "title": "Policy filtering removes changed guidance from the list used to withhold untrusted instructions",
+      "source_ids": ["F7", "A4.4", "A9a.1"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/SKILL.md", "line_min": 224, "line_max": 256}, {"file": "skills/full-code-review/scripts/resolve_policy.py", "line_min": 379, "line_max": 386}],
+      "keywords": ["exclude-changed", "excluded_generated", "changed_files", "filtered guidance", "trusted"],
+      "evidence": "read from code",
+      "verification_note": "Confirmed first-wave candidate, previously matched to standard Nit F7: --apply removes generated/skip-glob guidance from changed_files before changed.txt is built. discover_guidance then returns the edited file as unchanged trusted guidance. A base policy skipping Markdown is enough to let PR-authored guidance cross the trust boundary. This is separate from B34's alias comparison bug."
+    },
+    {
+      "id": "AK-47",
+      "title": "Unicode line separators in diff content shift review-memory anchors onto different source lines",
+      "source_ids": ["F8", "A5.7"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/review_memory.py", "line_min": 146, "line_max": 157}, {"file": "skills/full-code-review/scripts/review_memory.py", "line_min": 361, "line_max": 405}],
+      "keywords": ["splitlines", "form feed", "U+2028", "wrong anchor", "fingerprint"],
+      "evidence": "reproduced",
+      "verification_note": "Confirmed first-wave candidate, previously matched to standard Nit F8: a form feed inside one added line makes _anchor for the following source line return '# break' from the preceding line. str.splitlines invents line boundaries that git does not count, corrupting fingerprints and remembered decisions; _diff_sections has the same parsing mistake."
+    },
+    {
+      "id": "AK-48",
+      "title": "GitHub cleanup omits an owned pending review recovered after an ambiguous create failure",
+      "source_ids": ["F20", "A3.6"],
+      "severity": "Should fix",
+      "anchors": [{"file": "skills/full-code-review/scripts/forge/github.py", "line_min": 419, "line_max": 424}, {"file": "skills/full-code-review/scripts/post_reviewer_review.py", "line_min": 365, "line_max": 379}],
+      "keywords": ["cleanup_commands", "reconciled", "orphan", "pending review", "review_id"],
+      "evidence": "read from code",
+      "verification_note": "Confirmed first-wave candidate, previously matched to standard Nit F20: after a committed create loses its response and immediate adoption fails, later body-digest reconciliation records the owned review in reconciled. GitHub cleanup_commands reads only review_id, so it returns no deletion command and leaves an owned pending review blocking every future stage. The ambiguous-create recovery path is explicit in stage_notes and stage's exception handler; no live server failure was induced."
+    }
+  ],
+  "examined_non_defects": [
+    {"source_id": "B11", "file": "skills/full-code-review/scripts/forge/github.py", "line": 289, "disposition": "plausible", "reason": "The query includes no pending-state discriminator and publish would reject its own fingerprints if reviewThreads returned the viewer's pending comments. Whether the real service exposes those comments in this query remains unestablished offline. A fake response only proves the conditional branch, not the server premise; no live API was called."},
+    {"source_id": "B17", "file": "skills/full-code-review/scripts/post_reviewer_review.py", "line": 181, "disposition": "confirmed_nit", "reason": "The cited report/context seat, number, project and head guards are present. The tests exercise decision head/target/digest rejection but do not directly exercise each report/context mismatch. That is a test-adequacy gap, not an observed wrong result in the pinned implementation. Earlier mutation-survivor claims were not rerun."},
+    {"source_id": "B22", "file": ".github/workflows/test.yml", "line": 24, "disposition": "confirmed_nit", "reason": "CI selects only Python 3.12 and installs pytest/pygments, while optional YAML parity tests skip without PyYAML. This is a compatibility/parity coverage gap; the workflow alone does not establish an existing Python 3.9 failure or parsing regression."},
+    {"source_id": "B24", "file": "skills/full-code-review/scripts/resolve_policy.py", "line": 322, "disposition": "refuted", "reason": "Merging ancestor REVIEW.md settings repo-wide is the documented contract in resolve_policy.py:4-6 and policy.md:16-17. The implementation follows it; a different scoping preference is not a defect."},
+    {"source_id": "B26", "file": "skills/full-code-review/scripts/prepare_diff.py", "line": 965, "disposition": "refuted", "reason": "mixed_authorship returns None when commit authors cannot be read, and --seat is rejected unless mixed authorship is established. SKILL.md:66 and :126-130 explicitly limit the override to mixed authorship and say to record unknown authors as an assumption. Conservative refusal matches that contract."},
+    {"source_id": "B27", "file": "skills/full-code-review/scripts/post_reviewer_review.py", "line": 743, "disposition": "confirmed_nit", "reason": "The post-publication head-movement guard is implemented and rejects completion before calling the adapter. test_completion_is_explicit_and_requires_published_state never moves the head, so coverage is missing; no current guard bypass is established. The earlier mutant was not rerun."},
+    {"source_id": "B28", "file": "skills/full-code-review/scripts/forge/gitlab.py", "line": 58, "disposition": "confirmed_nit", "reason": "get_json directly calls subprocess.run instead of the injectable adapter runner, while mapping nonzero and invalid-JSON results to ForgeError. Direct transport coupling is a testability concern; no distinct production wrong result follows merely from that choice. The concrete accidental test transport calls are covered by B61."},
+    {"source_id": "B29", "file": "skills/full-code-review/scripts/forge/github.py", "line": 375, "disposition": "plausible", "reason": "Exact body digests are compared on adoption and staged-comment lookup. A server-side trailing-newline normalization would break those comparisons, but no code or offline reproduction establishes that GitHub performs that normalization. Raw digest sensitivity alone does not confirm the external premise."},
+    {"source_id": "B30", "file": "skills/full-code-review/scripts/post_reviewer_review.py", "line": 487, "disposition": "plausible", "reason": "stage demonstrably emits the complete memory_report including untrusted discussion text, which can make output large. The claimed security action or loss of the approval preview depends on coordinator/model behavior or tool-output truncation not established by the pinned script. Do not certify prompt-injection execution merely from carrying untrusted text."},
+    {"source_id": "B33", "file": "skills/full-code-review/scripts/post_reviewer_review.py", "line": 399, "disposition": "refuted", "reason": "The snapshot-less path is explicit: stage and _memory_publish_crosscheck condition memory behavior on memory_enabled, and posting.md:245 and :320 qualify the live marker check as memory-enabled. A caller skipping the workflow's reconciliation loses duplicate protection, but the candidate does not show an unexpected bypass within the documented memory-enabled path; that path fails closed on fetch errors."},
+    {"source_id": "B36", "file": "skills/full-code-review/scripts/borrow_review_source.py", "line": 241, "disposition": "plausible", "reason": "A Git worktree can contain outward symlinks and acquire does not reject them. The proposed secret exfiltration additionally requires a lens to follow the link and publish its contents, which was not established. discover_guidance explicitly drops outward-resolving guidance. The observable symlink is not itself proof of the model-dependent read or leak."},
+    {"source_id": "B40", "file": "skills/full-code-review/scripts/resolve_policy.py", "line": 192, "disposition": "plausible", "reason": "Policy accepts an arbitrary alias string and orchestration.md:396-401 shows a shell-command template. There is no executable interpolation sink in the pinned Python: shell injection additionally requires the coordinator to substitute the value without quoting. That external behavior was not exercised, so the candidate remains plausible rather than a confirmed security defect or cosmetic nit."},
+    {"source_id": "B45", "file": "skills/full-code-review/scripts/render_report.py", "line": 683, "disposition": "confirmed_nit", "reason": "The explanatory incomplete banner is confined to What was run, but _validate_contract_run:380-385 forces an incomplete or blocking verdict and the masthead displays that verdict. The candidate's claim that an incomplete review can look clean because this banner is in another tab is not established; warning placement is a presentation issue."},
+    {"source_id": "B46", "file": "skills/full-code-review/scripts/render_report.py", "line": 388, "disposition": "refuted", "reason": "_prepare_report accepts legacy reports without schema_version and validates the actual meta, finding, run and memory shapes. Accepting a version marker without equality checking is observable, but the candidate supplies no unsupported payload that is misinterpreted or wrongly posted. The marker alone does not establish a reachable semantic defect."},
+    {"source_id": "B52", "file": "skills/full-code-review/scripts/render_report.py", "line": 109, "disposition": "confirmed_nit", "reason": "An explicitly blank title stays blank. The export ITEM_RE can still match the trailing spaces and validation intentionally does not require title equality, so the alleged complete-paste failure does not follow. The remaining issue is an unhelpful empty heading, not lost decisions or blocked posting."},
+    {"source_id": "B54", "file": "skills/full-code-review/SKILL.md", "line": 44, "disposition": "confirmed_nit", "reason": "The setup block assigns REVIEW_OUT_DIR but does not print it although the next paragraph calls it printed. That is a wording/example omission; the assigned path remains available to the shell and no incorrect file operation is forced by the block."},
+    {"source_id": "B55", "file": "skills/full-code-review/references/orchestration.md", "line": 412, "disposition": "confirmed_nit", "reason": "Fallback is explicitly recorded in run.verification, and the renderer validates that field but does not render its details. This is missing human-facing provenance, not proof that fallback was unrecorded or that a finding was wrongly accepted. Neither live model selection nor a report claiming full cross-family independence was exercised."},
+    {"source_id": "B56", "file": "skills/full-code-review/references/lenses/risk.md", "line": 30, "disposition": "confirmed_nit", "reason": "The revert-history rule is present, while change-mode preparation requires an open change and ordinary empty reverted diffs have no ongoing code to assess. This audit establishes an awkward historical-risk instruction, not a concrete valid reviewed change whose production risk is incorrectly downgraded."},
+    {"source_id": "B57", "file": "skills/full-code-review/references/orchestration.md", "line": 183, "disposition": "confirmed_nit", "reason": "The table's single-source wording conflicts with the immediately preceding front-matter-wins rule. Policy resolution and SKILL.md dispatch explicitly use policy models. No executable path ignores the resolved model; a coordinator choosing the contradictory sentence is unestablished. The confirmed part is inconsistent guidance wording."},
+    {"source_id": "B58", "file": "skills/full-code-review/references/orchestration.md", "line": 155, "disposition": "confirmed_nit", "reason": "The instruction to analyse repository guidance as untrusted data is in tension with using it as conventions. Applying review criteria need not mean obeying arbitrary embedded operational instructions, and no actual ignored policy or model trust bypass is established by the wording alone. Concrete changed-guidance trust bypasses are separately included as B34 and AK-46."},
+    {"source_id": "B59", "file": "tests/full_code_review/test_review_memory.py", "line": 243, "disposition": "confirmed_nit", "reason": "The test writes receipts, then overwrites the decision before asserting the final value, so it cannot independently prove preservation immediately after the receipts-only save. Production contains the preservation branch. This is a missing intermediate assertion, not an observed decision loss; prior mutants were not rerun."},
+    {"source_id": "B60", "file": "skills/full-code-review/scripts/prepare_diff.py", "line": 636, "disposition": "confirmed_nit", "reason": "The pinned code marks collapsed and too_large files unanchorable and detects a lower-bound reported count. Existing collapsed recovery tests do not assert the unanchorable metadata and do not establish the exact N+ boundary case. Those are coverage gaps; the candidate identifies no incorrect current routing or truncation behavior."},
+    {"source_id": "A1.7", "source_ids": ["F21", "A1.7"], "file": "skills/full-code-review/scripts/prepare_diff.py", "line": 763, "disposition": "confirmed_nit", "reason": "A failed untracked-file diff aborts local preparation instead of delivering a silently incomplete diff, consistent with git_diff_local's complete-or-fail contract and SKILL.md's prohibition on fan-out over partial input. Nested-repository diagnostics could identify the cause more clearly. The first-wave candidate does not establish a wrong successful review."},
+    {"source_id": "A10.7", "source_ids": ["F23", "A10.7"], "file": "tests/full_code_review/test_borrow_review_source.py", "line": 169, "disposition": "confirmed_nit", "reason": "Acquire-based tests exercise intentionally refused cleanup without a fixture owning the script-created system temporary roots. This is test resource hygiene rather than a demonstrated review-result or production cleanup defect. The previously reported directory-count reproduction was not rerun."}
+  ]
+}

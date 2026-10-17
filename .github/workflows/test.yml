@@ -10,6 +10,9 @@ permissions:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.12"]
     # several tests make throwaway git commits, which fail on a runner with no identity
     env:
       GIT_AUTHOR_NAME: ci
@@ -21,8 +24,16 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
-      - run: pip install pytest
+      - run: pip install pytest pygments pyyaml
+
+      # the kernel-sandbox tests skip when no sandbox works, so fail here rather than skip silently
+      - name: Install bubblewrap and verify it can isolate
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --unshare-pid --die-with-parent --ro-bind / / --dev /dev --proc /proc /bin/true
 
       - run: pytest -q
