@@ -7356,6 +7356,67 @@ def test_schema_expand_fills_the_screen_and_escape_returns_it_to_the_page(schema
     assert out["results"]["after"] is False
 
 
+GROUPED_ROUTING = """
+  {
+    "groups": [{"id": "intake", "label": "Matching"}, {"id": "hold", "label": "Grouping and delay"}, {"id": "send", "label": "Delivery"}],
+    "nodes": [
+      {"id": "matcher", "label": "Rule matcher", "group": "intake"},
+      {"id": "matched", "label": "Rule matched?", "shape": "decision", "group": "intake"},
+      {"id": "grouper", "label": "Alert grouper", "group": "hold"},
+      {"id": "timer", "label": "Delay timer", "group": "hold"},
+      {"id": "channel", "label": "Channel sender", "group": "send"},
+      {"id": "catchall", "label": "Catch-all channel", "group": "send"}
+    ],
+    "edges": [
+      {"from": "matcher", "to": "matched"},
+      {"from": "matched", "to": "grouper", "label": "Yes"},
+      {"from": "matched", "to": "catchall", "label": "No"},
+      {"from": "grouper", "to": "grouper", "label": "collects for 30s"},
+      {"from": "grouper", "to": "timer"},
+      {"from": "timer", "to": "channel"},
+      {"from": "channel", "to": "grouper", "label": "severity rises", "loop": true}
+    ]
+  }
+"""
+
+GROUPED_PAGE = f"""
+<q-flow id="grouped-lanes" summary="Alert routing in lanes." groups="lanes"><script type="application/json">{GROUPED_ROUTING}</script></q-flow>
+<q-flow id="grouped-panels" summary="Alert routing in panels." groups="panels"><script type="application/json">{GROUPED_ROUTING}</script></q-flow>
+"""
+
+EDGE_SEGMENTS_JS = """(() => [...document.querySelectorAll('q-flow')].map((f) => {
+  const b = f._nodeBoxes;
+  const segs = [...f.querySelectorAll('[data-q-flow-edge-line]')].map((line) => {
+    const n = (line.getAttribute('d').match(/-?[\\d.]+/g) || []).map(Number);
+    const len = (i, j) => Math.hypot(n[j] - n[i], n[j + 1] - n[i + 1]);
+    return {edge: line.closest('[data-q-flow-edge]').getAttribute('data-q-flow-from') + '->' + line.closest('[data-q-flow-edge]').getAttribute('data-q-flow-to'),
+            first: len(0, 2), last: len(n.length - 4, n.length - 2)};
+  });
+  return {id: f.id, gap: b.matched.x - (b.matcher.x + b.matcher.width), segs};
+}))()"""
+
+
+@pytest.fixture(scope="module")
+def grouped_flow_page(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    reason = _node_ready()
+    if reason:
+        pytest.skip(reason)
+    work = tmp_path_factory.mktemp("kit-flow-grouped")
+    src = work / "grouped.src.html"
+    src.write_text(HEADER + GROUPED_PAGE, encoding="utf-8")
+    return _build(src, work / "grouped.html")
+
+
+def test_grouped_flow_keeps_the_root_spacing_and_a_straight_run_into_every_node(grouped_flow_page: Path) -> None:
+    # elk doesn't pass layout options down to a group, so nodes inside one used elk's 20px layer gap and 10px end stubs
+    out = run(grouped_flow_page, ev(EDGE_SEGMENTS_JS, "flows"))
+    assert_clean(out)
+    for flow in out["results"]["flows"]:
+        assert flow["gap"] >= 52, flow
+        for seg in flow["segs"]:
+            assert seg["first"] >= 24 and seg["last"] >= 24, (flow["id"], seg)
+
+
 @pytest.mark.parametrize(("fixture", "host"), [("flow_page", "#flow-orders"), ("schema_page", "#schema-billing")])
 def test_expand_fits_the_diagram_to_the_full_screen_stage(request: pytest.FixtureRequest, fixture: str, host: str) -> None:
     page = request.getfixturevalue(fixture)

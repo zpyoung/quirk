@@ -3488,6 +3488,23 @@
     };
   }
 
+  /** Shortest straight run, in layout pixels, an edge keeps at a node it leaves or enters, including a self-loop's legs, so its arrow reads as pointing at that node. */
+  var CANVAS_EDGE_STUB = 32;
+
+  /**
+   * ELK spacing for one level of a canvas graph. ELK doesn't pass layout options down to a compound
+   * node, so the root and every group take their own copy; `betweenLayers` and `nodeNode` are in pixels.
+   */
+  function canvasSpacing(betweenLayers, nodeNode) {
+    return {
+      'elk.layered.spacing.nodeNodeBetweenLayers': String(betweenLayers),
+      'elk.spacing.nodeNode': String(nodeNode),
+      'elk.spacing.edgeNode': '24',
+      'elk.layered.spacing.edgeNodeBetweenLayers': String(CANVAS_EDGE_STUB),
+      'elk.spacing.nodeSelfLoop': String(CANVAS_EDGE_STUB)
+    };
+  }
+
   /** Builds the zoom, fit and expand toolbar; `addExtra(addBtn)`, when given, adds element-specific buttons before Expand, each with its own click handler. */
   function canvasBuildControls(host, noun, addExtra) {
     var bar = kitNode('div');
@@ -4434,9 +4451,9 @@
       }
 
       function buildElkGroup(g) {
-        var opts = {
+        var opts = Object.assign({
           'elk.padding': '[top=38,left=18,bottom=18,right=18]'
-        };
+        }, canvasSpacing(52, 28));
         if (data.groupsMode === 'lanes') {
           opts['elk.partitioning.partition'] = String(topLaneIndex(g.id));
         }
@@ -4505,18 +4522,15 @@
         };
       });
 
-      var rootOptions = {
+      var rootOptions = Object.assign({
         'elk.algorithm': 'layered',
         'elk.direction': data.direction === 'down' ? 'DOWN' : 'RIGHT',
         'elk.hierarchyHandling': 'INCLUDE_CHILDREN',
         'elk.edgeRouting': 'ORTHOGONAL',
         'elk.json.shapeCoords': 'ROOT',
         'elk.json.edgeCoords': 'ROOT',
-        'elk.layered.spacing.nodeNodeBetweenLayers': '52',
-        'elk.spacing.nodeNode': '28',
-        'elk.spacing.edgeNode': '24',
         'elk.edgeLabels.inline': 'true'
-      };
+      }, canvasSpacing(52, 28));
       if (data.groupsMode === 'lanes') {
         rootOptions['elk.partitioning.activate'] = 'true';
       }
@@ -4611,19 +4625,19 @@
             var sideX = fbFrom.x + fbFrom.width;
             pts = [
               { x: sideX, y: fbFrom.y + fbFrom.height * 0.35 },
-              { x: sideX + 18, y: fbFrom.y + fbFrom.height * 0.35 },
-              { x: sideX + 18, y: fbFrom.y + fbFrom.height * 0.65 },
+              { x: sideX + CANVAS_EDGE_STUB, y: fbFrom.y + fbFrom.height * 0.35 },
+              { x: sideX + CANVAS_EDGE_STUB, y: fbFrom.y + fbFrom.height * 0.65 },
               { x: sideX, y: fbFrom.y + fbFrom.height * 0.65 }
             ];
-            arcLabel = { x: sideX + 24, y: fbFrom.y + fbFrom.height / 2 - 10, width: 60, height: 20 };
+            arcLabel = { x: sideX + CANVAS_EDGE_STUB + 6, y: fbFrom.y + fbFrom.height / 2 - 10, width: 60, height: 20 };
           } else {
             pts = [
               { x: fbFrom.x + fbFrom.width * 0.35, y: fbFrom.y },
-              { x: fbFrom.x + fbFrom.width * 0.35, y: fbFrom.y - 18 },
-              { x: fbFrom.x + fbFrom.width * 0.65, y: fbFrom.y - 18 },
+              { x: fbFrom.x + fbFrom.width * 0.35, y: fbFrom.y - CANVAS_EDGE_STUB },
+              { x: fbFrom.x + fbFrom.width * 0.65, y: fbFrom.y - CANVAS_EDGE_STUB },
               { x: fbFrom.x + fbFrom.width * 0.65, y: fbFrom.y }
             ];
-            arcLabel = { x: fbFrom.x + fbFrom.width / 2 - 30, y: fbFrom.y - 42, width: 60, height: 20 };
+            arcLabel = { x: fbFrom.x + fbFrom.width / 2 - 30, y: fbFrom.y - CANVAS_EDGE_STUB - 24, width: 60, height: 20 };
           }
         } else if (fbFrom && fbTo) {
           pts = [
@@ -6387,14 +6401,14 @@
     return 'n' + entity.index;
   }
 
-  function schemaElkTree(data, measure, elkNode) {
+  function schemaElkTree(data, measure, elkNode, spacing) {
     var elkGroups = schemaMap();
     data.groups.forEach(function (g) {
       elkGroups[g.id] = {
         id: schemaGroupElkId(g),
         width: Math.max(120, measure(g.label, 12, '600') + 36),
         height: 60,
-        layoutOptions: { 'elk.padding': '[top=38,left=18,bottom=18,right=18]' },
+        layoutOptions: Object.assign({ 'elk.padding': '[top=38,left=18,bottom=18,right=18]' }, spacing),
         children: []
       };
     });
@@ -7364,7 +7378,8 @@
         };
       }
 
-      var rootChildren = schemaElkTree(data, measure, elkNode);
+      var spacing = canvasSpacing(52, 28);
+      var rootChildren = schemaElkTree(data, measure, elkNode, spacing);
 
       var elkEdges = [];
       data.relationships.forEach(function (r) {
@@ -7385,18 +7400,15 @@
 
       var elkGraph = {
         id: 'root',
-        layoutOptions: {
+        layoutOptions: Object.assign({
           'elk.algorithm': 'layered',
           'elk.direction': 'RIGHT',
           'elk.hierarchyHandling': 'INCLUDE_CHILDREN',
           'elk.edgeRouting': 'ORTHOGONAL',
           'elk.json.shapeCoords': 'ROOT',
           'elk.json.edgeCoords': 'ROOT',
-          'elk.layered.spacing.nodeNodeBetweenLayers': '52',
-          'elk.spacing.nodeNode': '28',
-          'elk.spacing.edgeNode': '24',
           'elk.edgeLabels.inline': 'true'
-        },
+        }, spacing),
         children: rootChildren,
         edges: elkEdges
       };
@@ -7491,21 +7503,19 @@
       });
       this._elkSources = elkSources;
 
+      var spacing = canvasSpacing(56, 32);
       this._runElk({
         id: 'root',
-        layoutOptions: {
+        layoutOptions: Object.assign({
           'elk.algorithm': 'layered',
           'elk.direction': 'DOWN',
           'elk.hierarchyHandling': 'INCLUDE_CHILDREN',
           'elk.edgeRouting': 'ORTHOGONAL',
           'elk.json.shapeCoords': 'ROOT',
           'elk.json.edgeCoords': 'ROOT',
-          'elk.layered.spacing.nodeNodeBetweenLayers': '56',
-          'elk.spacing.nodeNode': '32',
-          'elk.spacing.edgeNode': '24',
           'elk.edgeLabels.inline': 'true'
-        },
-        children: schemaElkTree(data, measure, elkNode),
+        }, spacing),
+        children: schemaElkTree(data, measure, elkNode, spacing),
         edges: elkEdges
       }, data, seq);
     }
