@@ -8,7 +8,7 @@
 <h2 id="match-h">Matching an alert to a rule</h2>
 <p>Each alert arrives with a service name, a severity and a few labels. The router checks the rules from the top of the list and uses the first one that matches. Rule order therefore matters more than rule count: a broad rule near the top hides every narrower rule below it.</p>
 <p>An alert that matches no rule goes to the catch-all channel, which is read once a day. If something important arrives late, check this first.</p>
-<q-flow summary="Incoming alerts pass through rule matching, service grouping and the severity delay timer before reaching a notification channel." direction="right" groups="lanes">
+<q-flow id="routing-flow" summary="An alert is matched to a rule or sent to the catch-all channel, grouped with similar alerts, held for its severity's delay, and then either dropped because it resolved or sent to the rule's channel." direction="right" groups="lanes">
   <script type="application/json">
   {
     "kinds": {"ui": 1, "worker": 2, "queue": 4},
@@ -19,18 +19,55 @@
     ],
     "nodes": [
       {"id": "matcher", "label": "Rule matcher", "kind": "worker", "group": "intake", "detail": "<p>Evaluates rules top to bottom; first match wins.</p>"},
+      {"id": "matched", "label": "Rule matched?", "shape": "decision", "group": "intake", "detail": "<p>An alert that matches no rule skips grouping and the delay.</p>"},
       {"id": "grouper", "label": "Alert grouper", "kind": "queue", "group": "hold", "detail": "<p>Batches alerts sharing service and rule over a 30s window.</p>"},
       {"id": "timer", "label": "Delay timer", "kind": "queue", "group": "hold", "detail": "<p>Waits 1m for critical, 5m for warning, 60m for info.</p>"},
-      {"id": "channel", "label": "Channel sender", "kind": "ui", "group": "send", "detail": "<p>Pages on-call, posts to chat, or queues the daily digest.</p>"}
+      {"id": "resolved", "label": "Resolved in the wait?", "shape": "decision", "group": "hold", "detail": "<p>Checked once, when the delay ends.</p>"},
+      {"id": "channel", "label": "Channel sender", "kind": "ui", "group": "send", "detail": "<p>Pages on-call, posts to chat, or queues the daily digest.</p>"},
+      {"id": "catchall", "label": "Catch-all channel", "kind": "ui", "group": "send", "detail": "<p>Read once a day.</p>"},
+      {"id": "dropped", "label": "Nothing sent", "group": "send", "detail": "<p>The group is closed and the routing trace records why.</p>"},
+      {"id": "escalation", "label": "Escalation", "shape": "subprocess", "group": "send", "detail": "<p>Moves an unacknowledged page from the primary on-call to the secondary and then the engineering manager.</p>"}
     ],
     "edges": [
-      {"from": "matcher", "to": "grouper", "label": "rule.matched"},
+      {"from": "matcher", "to": "matched"},
+      {"from": "matched", "to": "grouper", "label": "Yes"},
+      {"from": "matched", "to": "catchall", "label": "No"},
+      {"from": "grouper", "to": "grouper", "label": "collects for 30s"},
       {"from": "grouper", "to": "timer", "label": "group.ready", "async": true},
-      {"from": "timer", "to": "channel", "label": "alert.send", "async": true}
+      {"from": "timer", "to": "resolved", "label": "delay over"},
+      {"from": "resolved", "to": "dropped", "label": "Yes"},
+      {"from": "resolved", "to": "channel", "label": "No"},
+      {"from": "channel", "to": "grouper", "label": "severity rises", "loop": true},
+      {"from": "channel", "to": "escalation", "label": "page.unacknowledged", "async": true}
+    ],
+    "traces": [
+      {"id": "pages", "label": "Critical alert pages on-call", "steps": [
+        {"node": "matcher", "value": {"alert": "al_7731", "service": "checkout", "severity": "critical"}, "note": "Arrives with a service, a severity and a few labels."},
+        {"node": "matched", "value": {"alert": "al_7731", "service": "checkout", "severity": "critical", "rule": "checkout-errors"}, "note": "The third rule is the first one that matches."},
+        {"node": "grouper", "value": {"alert": "al_7731", "service": "checkout", "severity": "critical", "rule": "checkout-errors", "group_size": 1}, "note": "The first alert opens a 30 second window."},
+        {"node": "grouper", "value": {"alert": "al_7731", "service": "checkout", "severity": "critical", "rule": "checkout-errors", "group_size": 4}, "note": "Three more checkout errors arrive inside the window and join the group."},
+        {"node": "timer", "value": {"alert": "al_7731", "service": "checkout", "severity": "critical", "rule": "checkout-errors", "group_size": 4, "delay_s": 60}, "note": "Critical waits 1 minute."},
+        {"node": "resolved", "value": {"alert": "al_7731", "service": "checkout", "severity": "critical", "rule": "checkout-errors", "group_size": 4, "status": "firing"}, "note": "Still firing after the minute, so the answer is No."},
+        {"node": "channel", "value": {"alert": "al_7731", "service": "checkout", "severity": "critical", "rule": "checkout-errors", "group_size": 4, "status": "firing", "sent_to": "pager"}, "note": "One page for four alerts."}
+      ]},
+      {"id": "resolves", "label": "Warning resolves during the wait", "steps": [
+        {"node": "matcher", "value": {"alert": "al_7740", "service": "search", "severity": "warning"}},
+        {"node": "matched", "value": {"alert": "al_7740", "service": "search", "severity": "warning", "rule": "search-latency"}},
+        {"node": "grouper", "value": {"alert": "al_7740", "service": "search", "severity": "warning", "rule": "search-latency", "group_size": 1}, "note": "Nothing else arrives in the window."},
+        {"node": "timer", "value": {"alert": "al_7740", "service": "search", "severity": "warning", "rule": "search-latency", "group_size": 1, "delay_s": 300}, "note": "Warnings wait 5 minutes."},
+        {"node": "resolved", "value": {"alert": "al_7740", "service": "search", "severity": "warning", "rule": "search-latency", "group_size": 1, "status": "resolved"}, "note": "Latency recovered after 2 minutes, so the answer is Yes."},
+        {"node": "dropped", "value": {"alert": "al_7740", "service": "search", "severity": "warning", "rule": "search-latency", "group_size": 1, "status": "resolved", "sent_to": null}, "note": "Nobody is told about a spike that fixed itself."}
+      ]},
+      {"id": "unmatched", "label": "No rule matches", "steps": [
+        {"node": "matcher", "value": {"alert": "al_7752", "service": "ledger-export", "severity": "critical"}, "note": "A new service that no rule names yet."},
+        {"node": "matched", "value": {"alert": "al_7752", "service": "ledger-export", "severity": "critical", "rule": null}, "note": "No rule matches, so the severity is never read."},
+        {"node": "catchall", "value": {"alert": "al_7752", "service": "ledger-export", "severity": "critical", "rule": null, "sent_to": "catch-all"}, "note": "A critical alert waits for tomorrow's read."}
+      ]}
     ]
   }
   </script>
 </q-flow>
+<p>Press "Step through" on the graph to follow one alert: a critical one that pages, a warning that resolves before anyone is told, and one that no rule matches.</p>
 </section>
 
 <section aria-labelledby="group-h">
@@ -67,6 +104,61 @@
 <section aria-labelledby="escalate-h">
 <h2 id="escalate-h">Escalation when nobody answers</h2>
 <p>An acknowledged page stops escalating. An unacknowledged one goes to the secondary on-call after 10 minutes, and to the engineering manager after 15. Acknowledging does not resolve the alert, and an acknowledged alert that stays open for an hour pages again.</p>
+<q-sequence id="escalation-sequence" summary="The router opens a page, the pager tells the primary on-call, and an unanswered page moves to the secondary and then the engineering manager.">
+  <script type="application/json">
+  {
+    "kinds": {"service": 2, "external": 4, "person": 1},
+    "participants": [
+      {"id": "router", "label": "Alert router", "kind": "service"},
+      {"id": "pager", "label": "Pager", "kind": "external", "detail": "<p>Calls, texts and pushes until someone acknowledges.</p>"},
+      {"id": "primary", "label": "Primary on-call", "kind": "person"},
+      {"id": "secondary", "label": "Secondary on-call", "kind": "person"},
+      {"id": "manager", "label": "Engineering manager", "kind": "person"}
+    ],
+    "steps": [
+      {"from": "router", "to": "pager", "label": "open page", "type": "call", "id": "open-page", "detail": "<p>Carries the alert group and the rule's escalation times.</p>"},
+      {"from": "pager", "to": "router", "label": "page id", "type": "reply", "id": "page-id"},
+      {"from": "pager", "to": "primary", "label": "notify", "type": "async", "id": "notify-primary"},
+      {"fragment": "alt", "branches": [
+        {"label": "acknowledged within 10 minutes", "steps": [
+          {"from": "primary", "to": "pager", "label": "acknowledge", "type": "async", "id": "ack-primary"}
+        ]},
+        {"label": "no answer after 10 minutes", "steps": [
+          {"from": "pager", "to": "secondary", "label": "notify", "type": "async", "id": "notify-secondary"},
+          {"fragment": "opt", "label": "no answer after 15 minutes", "steps": [
+            {"from": "pager", "to": "manager", "label": "notify", "type": "async", "id": "notify-manager"},
+            {"from": "manager", "to": "pager", "label": "acknowledge", "type": "async", "id": "ack-manager"}
+          ]}
+        ]}
+      ]},
+      {"from": "pager", "to": "router", "label": "page acknowledged", "type": "async", "id": "acked"},
+      {"fragment": "opt", "label": "still open after an hour", "steps": [
+        {"note": "an acknowledged page that stays open pages again", "over": ["router", "pager"]},
+        {"from": "router", "to": "pager", "label": "page again", "type": "async", "id": "repage"}
+      ]}
+    ],
+    "traces": [
+      {"id": "answered", "label": "Primary answers", "steps": [
+        {"message": "open-page", "value": {"page": null, "alert": "al_7731", "status": "opening"}},
+        {"message": "page-id", "value": {"page": "pg_310", "alert": "al_7731", "status": "open"}},
+        {"message": "notify-primary", "value": {"page": "pg_310", "alert": "al_7731", "status": "open", "notified": ["primary"]}},
+        {"message": "ack-primary", "value": {"page": "pg_310", "alert": "al_7731", "status": "acknowledged", "notified": ["primary"], "acked_by": "primary", "after_min": 3}, "note": "Three minutes in, so nobody else is told."},
+        {"message": "acked", "value": {"page": "pg_310", "alert": "al_7731", "status": "acknowledged", "notified": ["primary"], "acked_by": "primary", "after_min": 3}}
+      ]},
+      {"id": "escalates", "label": "Escalates to the manager", "steps": [
+        {"message": "open-page", "value": {"page": null, "alert": "al_7731", "status": "opening"}},
+        {"message": "page-id", "value": {"page": "pg_311", "alert": "al_7731", "status": "open"}},
+        {"message": "notify-primary", "value": {"page": "pg_311", "alert": "al_7731", "status": "open", "notified": ["primary"]}},
+        {"message": "notify-secondary", "value": {"page": "pg_311", "alert": "al_7731", "status": "open", "notified": ["primary", "secondary"]}, "note": "Ten minutes without an answer."},
+        {"message": "notify-manager", "value": {"page": "pg_311", "alert": "al_7731", "status": "open", "notified": ["primary", "secondary", "manager"]}, "note": "Fifteen minutes without an answer."},
+        {"message": "ack-manager", "value": {"page": "pg_311", "alert": "al_7731", "status": "acknowledged", "notified": ["primary", "secondary", "manager"], "acked_by": "manager", "after_min": 17}},
+        {"message": "acked", "value": {"page": "pg_311", "alert": "al_7731", "status": "acknowledged", "notified": ["primary", "secondary", "manager"], "acked_by": "manager", "after_min": 17}}
+      ]}
+    ]
+  }
+  </script>
+</q-sequence>
+<p>Press "Step through" to see who has been told at each message. "Escalates to the manager" is the case to rehearse: everyone on the list is notified once, and nobody is notified twice.</p>
 </section>
 
 <section aria-labelledby="debug-h">

@@ -1,6 +1,64 @@
 import { Heading } from '@astryxdesign/core/Heading'
 import { VStack } from '@astryxdesign/core/Layout'
 
+const sub = { subscription: 'sub_812', charge: 'ch_5520' }
+
+const retryGraph = {
+  kinds: { ui: 1, worker: 2, database: 3, queue: 4 },
+  nodes: [
+    { id: 'charge', label: 'Renewal charge', kind: 'worker', detail: '<p>Runs on the billing date, and again for each retry.</p>' },
+    { id: 'ok', label: 'Charge succeeded?', shape: 'decision' },
+    { id: 'stolen', label: 'Lost or stolen?', shape: 'decision', detail: '<p>Read from the decline code.</p>' },
+    { id: 'left', label: 'Retries left?', shape: 'decision', detail: '<p>Four retries in all.</p>' },
+    { id: 'wait', label: 'Wait for the next retry', kind: 'queue', detail: '<p>1, 3, 7 and 7 days, moved later for insufficient funds.</p>' },
+    { id: 'updated', label: 'Customer updates card', kind: 'ui', detail: '<p>From the link in either email.</p>' },
+    { id: 'renewed', label: 'Subscription renewed', kind: 'database' },
+    { id: 'pastdue', label: 'Past due', kind: 'database', detail: '<p>Nothing more is charged until the card is updated.</p>' },
+  ],
+  edges: [
+    { from: 'charge', to: 'ok' },
+    { from: 'ok', to: 'renewed', label: 'Yes' },
+    { from: 'ok', to: 'stolen', label: 'No' },
+    { from: 'stolen', to: 'pastdue', label: 'Yes' },
+    { from: 'stolen', to: 'left', label: 'No' },
+    { from: 'left', to: 'wait', label: 'Yes' },
+    { from: 'left', to: 'pastdue', label: 'No' },
+    { from: 'wait', to: 'charge', label: 'retry', loop: true },
+    { from: 'updated', to: 'charge', label: 'charged at once' },
+  ],
+  traces: [
+    {
+      id: 'recovered',
+      label: 'Recovered on the second retry',
+      steps: [
+        { node: 'charge', value: { ...sub, retry: 0, status: 'pending' }, note: 'The renewal charge on the billing date.' },
+        { node: 'ok', value: { ...sub, retry: 0, status: 'declined', decline: 'issuer_unavailable' }, note: 'The bank did not answer in time.' },
+        { node: 'stolen', value: { ...sub, retry: 0, status: 'declined', decline: 'issuer_unavailable' } },
+        { node: 'left', value: { ...sub, retry: 0, status: 'declined', decline: 'issuer_unavailable', retries_left: 4 } },
+        { node: 'wait', value: { ...sub, retry: 1, status: 'waiting', wait_days: 1 }, note: 'The first retry waits one day.' },
+        { node: 'charge', value: { ...sub, retry: 1, status: 'pending' } },
+        { node: 'ok', value: { ...sub, retry: 1, status: 'declined', decline: 'issuer_unavailable' } },
+        { node: 'stolen', value: { ...sub, retry: 1, status: 'declined', decline: 'issuer_unavailable' } },
+        { node: 'left', value: { ...sub, retry: 1, status: 'declined', decline: 'issuer_unavailable', retries_left: 3 } },
+        { node: 'wait', value: { ...sub, retry: 2, status: 'waiting', wait_days: 3 }, note: 'The second retry waits three days.' },
+        { node: 'charge', value: { ...sub, retry: 2, status: 'pending' } },
+        { node: 'ok', value: { ...sub, retry: 2, status: 'succeeded' }, note: 'This time the bank answers.' },
+        { node: 'renewed', value: { ...sub, retry: 2, status: 'active' } },
+      ],
+    },
+    {
+      id: 'stolen',
+      label: 'Card reported stolen',
+      steps: [
+        { node: 'charge', value: { ...sub, retry: 0, status: 'pending' } },
+        { node: 'ok', value: { ...sub, retry: 0, status: 'declined', decline: 'stolen_card' } },
+        { node: 'stolen', value: { ...sub, retry: 0, status: 'declined', decline: 'stolen_card' }, note: 'A retry cannot help, so none is tried.' },
+        { node: 'pastdue', value: { ...sub, retry: 0, status: 'past_due', decline: 'stolen_card' } },
+      ],
+    },
+  ],
+}
+
 export function RetriesView() {
   return (
     <VStack gap={4}>
@@ -51,6 +109,16 @@ export function RetriesView() {
           After the fourth retry fails, or at once for a card reported lost or stolen, the subscription moves to past due.
           Nothing more is charged until the customer updates their card.
         </p>
+      </section>
+      <section>
+        <Heading level={2}>Follow one failed charge</Heading>
+        <p>Choose Step through on the graph to watch a charge come back on its second retry, or stop at once for a stolen card.</p>
+        <q-flow
+          summary="A failed renewal charge stops at once for a lost or stolen card, otherwise waits and retries up to four times before the subscription moves to past due."
+          direction="right"
+        >
+          <script type="application/json">{JSON.stringify(retryGraph)}</script>
+        </q-flow>
       </section>
       <section>
         <Heading level={2}>What the customer sees</Heading>
