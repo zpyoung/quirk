@@ -326,10 +326,11 @@ It carries two traces:
       when it pans
 
 14. **SC-14**
-    - **Given** the canvas zoomed in on Renewal scheduler and Pricing
-    - **When** the reader steps to Settlement, which is out of view
-    - **Then** the canvas pans, keeping the zoom, until Settlement is in view; it doesn't move when the
-      current node is already in view
+    - **Given** a trace open on a graph fitted below a zoom of 1.5
+    - **When** the reader opens the trace or moves to any step
+    - **Then** the canvas eases to centre the current node at a zoom of 1.5, or keeps the reader's zoom
+      when they have zoomed in further; expanding or resizing while tracing centres it again instead of
+      fitting the whole graph
 
 ### Leaving trace mode
 
@@ -447,8 +448,8 @@ Reading:
   step dots, Play, the note and the value. Escape, or a click on a node off the trace, leaves trace
   mode.
 - The canvas lights the current node and the edge it came in on, dims everything off the trace's path,
-  and pulses only the current edge. Clicking a node on the trace jumps to its step. If the current node
-  leaves the view, the canvas pans to it.
+  and pulses only the current edge. Clicking a node on the trace jumps to its step. Each step centres the
+  canvas on the current node at a readable zoom.
 - The value is an indented tree. Added fields are marked `+`, changed fields show `old → new`, removed
   fields appear struck through for one step. Marks use a symbol and a color, never color alone. A
   "Changes only" toggle hides unchanged fields. Nesting deeper than 3 levels starts collapsed.
@@ -543,3 +544,6 @@ Build-only questions for the tech spec:
 - 2026-10-17: the example is two traces on the report explainer's existing retry flow rather than a
   new renewal graph page, because the shape examples are a fixed set of twelve pages and the retry
   flow already has the decision and loop a trace needs to show (tech spec authoring).
+- 2026-10-18: SC-14 changed from panning a node that left the view at the same zoom to centring every
+  step's node at a zoom of at least 1.5, because a fitted graph left the current node too small to
+  follow (user request after the examples review).

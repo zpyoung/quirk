@@ -5388,6 +5388,8 @@ FLOW_TRACE_HELPERS = """(() => {
 TRACE_BTN = '#renewal [data-q-flow-action="trace"]'
 TRACE_NEXT = "#renewal [data-q-flow-trace-next]"
 TRACE_PICKER = "#renewal [data-q-flow-trace-picker]"
+# each step zooms in on its node, so a test that clicks another node presses Fit first, as a reader would
+TRACE_FIT = '#renewal [data-q-flow-action="fit"]'
 
 
 def _trace_dot(n: int) -> str:
@@ -5805,6 +5807,7 @@ def test_flow_trace_node_click_jumps_to_its_next_visit_and_dots_jump_to_a_step(f
         _pick_trace("Card declined, retried"),
         {"click": TRACE_NEXT},
         ev("window.__tr.counter().slice(0, 9)", "start"),
+        {"click": TRACE_FIT},
         {"click": '#renewal [data-q-flow-node="charge"]'},
         ev("window.__tr.counter().slice(0, 9)", "first"),
         {"click": '#renewal [data-q-flow-node="charge"]'},
@@ -5872,6 +5875,7 @@ def test_flow_trace_off_path_click_leaves_empty_canvas_stays_and_the_button_togg
         flow_traces_page,
         ev(FLOW_TRACE_HELPERS, "h"),
         {"click": TRACE_BTN},
+        {"click": TRACE_FIT},
         {"click": '#renewal [data-q-flow-node="retry"]'},
         ev(
             """(() => {
@@ -6083,6 +6087,7 @@ def test_flow_trace_play_stops_on_any_manual_step_dot_picker_node_click_close_an
         {"click": _trace_dot(5)},
         after(30000, "dot"),
         *started("p4"),
+        {"click": TRACE_FIT},
         {"click": '#renewal [data-q-flow-node="tax"]'},
         after(40000, "node"),
         *started("p5"),
@@ -6382,6 +6387,7 @@ def test_flow_trace_pans_an_off_screen_current_node_into_view_at_the_same_zoom(f
         {"click": _trace_dot(1)},
         ev(probe, "before"),
         {"click": _trace_dot(6)},
+        {"wait": 500},
         ev(probe, "after"),
     )
     assert_clean(out)
@@ -6390,6 +6396,58 @@ def test_flow_trace_pans_an_off_screen_current_node_into_view_at_the_same_zoom(f
     assert r["before"]["k"] > 1.5
     assert r["after"]["inside"] is True
     assert r["after"]["k"] == r["before"]["k"]
+
+
+TRACE_FRAME_JS = """(() => {
+  const f = document.querySelector('#renewal');
+  const stage = f.querySelector('[data-q-flow-stage]').getBoundingClientRect();
+  const id = f.querySelector('[data-q-flow-node][data-q-flow-selected]')?.getAttribute('data-q-flow-node') ?? null;
+  const n = id && f.querySelector(`[data-q-flow-node="${id}"]`).getBoundingClientRect();
+  const m = f.querySelector('[data-q-flow-viewport]').getAttribute('transform').match(/scale\\(([-\\d.e]+)\\)/);
+  return {
+    id,
+    k: Number(m[1]),
+    dx: n ? Math.abs(n.left + n.width / 2 - (stage.left + stage.width / 2)) : null,
+    dy: n ? Math.abs(n.top + n.height / 2 - (stage.top + stage.height / 2)) : null,
+  };
+})()"""
+
+
+def test_flow_trace_zooms_in_on_the_current_node_at_each_step(flow_traces_page: Path) -> None:
+    out = run(
+        flow_traces_page,
+        ev(TRACE_FRAME_JS, "rest"),
+        {"click": TRACE_BTN},
+        {"wait": 500},
+        ev(TRACE_FRAME_JS, "first"),
+        {"click": TRACE_NEXT},
+        {"wait": 500},
+        ev(TRACE_FRAME_JS, "second"),
+        {"click": _trace_dot(6)},
+        {"wait": 500},
+        ev(TRACE_FRAME_JS, "sixth"),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["rest"]["k"] < 1.5
+    for name in ("first", "second", "sixth"):
+        frame = r[name]
+        assert frame["k"] >= 1.5 and frame["dx"] <= 2 and frame["dy"] <= 2, (name, frame)
+    assert r["first"]["id"] != r["second"]["id"]
+
+
+def test_flow_trace_expand_keeps_the_current_node_centred_instead_of_fitting_the_graph(flow_traces_page: Path) -> None:
+    out = run(
+        flow_traces_page,
+        {"emulate": {"reducedMotion": "reduce"}},
+        {"click": TRACE_BTN},
+        {"click": _trace_dot(4)},
+        {"click": '#renewal [data-q-flow-action="expand"]'},
+        ev(TRACE_FRAME_JS, "expanded"),
+    )
+    assert_clean(out)
+    frame = out["results"]["expanded"]
+    assert frame["k"] >= 1.5 and frame["dx"] <= 2 and frame["dy"] <= 2, frame
 
 
 def test_flow_trace_leaves_focus_mode_exactly_as_it_was_before_tracing(flow_traces_page: Path) -> None:

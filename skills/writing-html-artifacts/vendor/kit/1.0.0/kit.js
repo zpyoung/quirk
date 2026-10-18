@@ -3150,6 +3150,7 @@
 
   var FLOW_TRACE_MAX_LINES = 400;
   var FLOW_TRACE_STEP_MS = 1500;
+  var FLOW_TRACE_ZOOM = 1.5;
 
   /** A trace value as the 2-space pretty print that the text list shows and the line limit counts. */
   function tracePretty(value) {
@@ -3638,6 +3639,38 @@
     canvasApplyTransform(host, tx, ty, k);
   }
 
+  /**
+   * Centres box `boxId` in the stage at zoom `minK` or the current zoom, whichever is larger. Eases
+   * over 300ms unless `jump` is set or the reader prefers reduced motion.
+   */
+  function canvasCenterOn(host, boxId, minK, jump) {
+    var box = host._nodeBoxes && host._nodeBoxes[boxId];
+    if (!box || !host._stage) {
+      return;
+    }
+    var rect = host._stage.getBoundingClientRect();
+    // d3's zoom ease dips the scale mid-flight, so a step taken during one starts from where it was heading
+    var t = host._centerGoal || host._transform || { x: 0, y: 0, k: 1 };
+    var k = Math.max(0.2, Math.min(4, Math.max(t.k, minK)));
+    var x = (rect.width || 640) / 2 - (box.x + box.width / 2) * k;
+    var y = (rect.height || 320) / 2 - (box.y + box.height / 2) * k;
+    var qf = window.quirkFlow;
+    var reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (jump || reduced || !qf || !qf.zoomIdentity || !host._d3Selection || !host._d3Selection.transition) {
+      canvasApplyTransform(host, x, y, k);
+      return;
+    }
+    var goal = { x: x, y: y, k: k };
+    host._centerGoal = goal;
+    host._d3Selection.transition().duration(300)
+      .call(host._d3Zoom.transform, qf.zoomIdentity.translate(x, y).scale(k))
+      .on('end interrupt', function () {
+        if (host._centerGoal === goal) {
+          host._centerGoal = null;
+        }
+      });
+  }
+
   function canvasEnsureVisible(host, boxId, avoidDrawer) {
     var box = host._nodeBoxes && host._nodeBoxes[boxId];
     if (!box || !host._stage) {
@@ -3688,7 +3721,11 @@
         host._expandBtn.setAttribute('aria-pressed', 'true');
         host._expandBtn.textContent = 'Close';
       }
-      host._fitBounds(host._bounds, false);
+      if (host._trace && host._frameTraceStep) {
+        host._frameTraceStep(true);
+      } else {
+        host._fitBounds(host._bounds, false);
+      }
     } else {
       host.removeAttribute('data-q-flow-expanded');
       host._focusedAfterExpand = false;
@@ -3788,7 +3825,12 @@
         }
       };
       this._onResize = this._onResize || function () {
-        if (self.isConnected && self._bounds && !self.hasAttribute('data-q-flow-expanded')) {
+        if (!self.isConnected || !self._bounds) {
+          return;
+        }
+        if (self._trace) {
+          self._frameTraceStep(true);
+        } else if (!self.hasAttribute('data-q-flow-expanded')) {
           self._fitBounds(self._bounds, false);
         }
       };
@@ -5738,8 +5780,8 @@
     }
 
     /**
-     * Puts trace mode on step 1 of a trace: clears focus, opens the panel and fits the canvas to
-     * the narrower stage. Also what the picker runs, so it leaves DOM focus where it is.
+     * Puts trace mode on step 1 of a trace: clears focus, opens the panel and zooms in on step 1's
+     * node. Also what the picker runs, so it leaves DOM focus where it is.
      */
     _startTrace(traceIndex) {
       var data = this._data;
@@ -5768,8 +5810,6 @@
       this._traceEls.picker.selectedIndex = traceIndex;
       this._buildTraceDots(trace);
       this._showTraceStep(0);
-      this._fitBounds(this._bounds, false);
-      this._ensureNodeVisible(trace.steps[0].node, false);
       return true;
     }
 
@@ -5980,8 +6020,17 @@
         this._stopPulse();
       }
 
-      this._ensureNodeVisible(step.node, false);
+      this._frameTraceStep(false);
       this._renderTracePanel(i);
+    }
+
+    /** Centres the current step's node at a readable zoom; `jump` skips the easing. */
+    _frameTraceStep(jump) {
+      var tr = this._trace;
+      if (!tr || !this._data) {
+        return;
+      }
+      canvasCenterOn(this, this._data.traces[tr.index].steps[tr.step].node, FLOW_TRACE_ZOOM, jump);
     }
 
     _renderTracePanel(i) {
