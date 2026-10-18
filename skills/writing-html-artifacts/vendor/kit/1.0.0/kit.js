@@ -3671,6 +3671,7 @@
         host._expandBtn.setAttribute('aria-pressed', 'true');
         host._expandBtn.textContent = 'Close';
       }
+      host._fitBounds(host._bounds, false);
     } else {
       host.removeAttribute('data-q-flow-expanded');
       host._focusedAfterExpand = false;

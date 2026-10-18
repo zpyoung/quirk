@@ -7356,6 +7356,27 @@ def test_schema_expand_fills_the_screen_and_escape_returns_it_to_the_page(schema
     assert out["results"]["after"] is False
 
 
+@pytest.mark.parametrize(("fixture", "host"), [("flow_page", "#flow-orders"), ("schema_page", "#schema-billing")])
+def test_expand_fits_the_diagram_to_the_full_screen_stage(request: pytest.FixtureRequest, fixture: str, host: str) -> None:
+    page = request.getfixturevalue(fixture)
+    transform = f"document.querySelector('{host} [data-q-flow-viewport]').getAttribute('transform')"
+    # zoom in first so a kept transform can't pass for a fit
+    out = run(
+        page,
+        {"click": f'{host} [data-q-flow-action="zoom-in"]'},
+        {"click": f'{host} [data-q-flow-action="zoom-in"]'},
+        ev(transform, "zoomed"),
+        {"click": f'{host} [data-q-flow-action="expand"]'},
+        ev(transform, "expanded"),
+        {"click": f'{host} [data-q-flow-action="fit"]'},
+        ev(transform, "fitted"),
+    )
+    assert_clean(out)
+    r = out["results"]
+    assert r["expanded"] != r["zoomed"]
+    assert r["expanded"] == r["fitted"]
+
+
 def test_schema_drawer_is_a_bottom_sheet_on_a_phone(schema_page: Path) -> None:
     out = run(
         schema_page,
