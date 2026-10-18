@@ -57,7 +57,9 @@ uncommitted changes under review are included.
    is reverted before anything else runs:
    flip a comparison (`<= 0` → `== 0`), negate/remove a guard, no-op a branch or an
    early `return`, change a metric name or a low-cardinality dimension value, or
-   weaken a composite key (drop a field / its normalization), swap an argument.
+   weaken a composite key (drop a field / its normalization), swap an argument, or
+   replace an argument at the call site with its default or `None` (or drop the
+   keyword), which exposes tests that only call the callee with the value supplied.
 4. **Interpret + revert.** Record survive/kill, then **immediately** restore the saved
    bytes (`mv <file>.orig <file>` inside the copy). Never revert with `git checkout`:
    in `--local` mode the copy holds uncommitted changes that a checkout would replace with

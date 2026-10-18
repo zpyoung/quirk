@@ -300,7 +300,7 @@ Back-links: [Lens roster](logic.md#lens-roster).
 CONFIG: `cross_repo.search_agent: <subagent type>` in a pack or `REVIEW.md`.
 
 - When set, the cross-repo lens dispatches that agent with the changed exported symbols and treats its results as evidence.
-- Always: also scan sibling clones (`git -C <dir> rev-parse` succeeds) in the parent directory of the repo root, depth 1, at most 20 repos, `git grep -n -w <symbol>` with a 10-second timeout per repo.
+- Always: also scan sibling clones (`git -C <dir> rev-parse` succeeds) in the parent directory of the repo root, depth 1, at most 20 repos, `git grep -n -w -F -e <symbol> --` with a 10-second timeout per repo. The coordinator may supply extra roots (for example a ticket workspace), scanned the same way in addition to the parent directory, never instead of it.
 
 ### Smoke checker
 

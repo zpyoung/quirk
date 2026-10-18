@@ -186,6 +186,36 @@ def test_shell_guidance_reaches_every_agent_prompt():
         assert ZSH_GUIDANCE in text, path.name
 
 
+def _flat(path):
+    # prose wraps at ~90 columns, so phrase checks must not depend on where lines break
+    return " ".join(path.read_text(encoding="utf-8").split())
+
+
+def test_test_adequacy_checks_values_handed_between_functions():
+    text = _flat(LENSES / "test-adequacy.md")
+    assert "through the caller" in text
+    assert "supplied by hand" in text
+
+
+def test_mutation_guidance_includes_the_call_site_mutant():
+    for name in ("_mutation-probe", "_area-finder"):
+        text = _flat(LENSES / (name + ".md"))
+        assert "at the call site" in text, name
+        assert "`None`" in text, name
+
+
+def test_every_lens_is_told_to_work_through_its_whole_checklist():
+    for path in (SKILL_DIR / "references" / "orchestration.md", SKILL_MD):
+        assert "every item of its checklist" in _flat(path), path.name
+
+
+def test_cross_repo_scan_keeps_the_caller_parent_as_a_sibling_root():
+    skill = _flat(SKILL_MD)
+    assert "parent directory of the caller's checkout" in skill
+    assert "never replace it" in skill
+    assert "extra roots" in _flat(LENSES / "cross-repo.md")
+
+
 def test_degradation_table_covers_coverage_and_delta_paths():
     text = (SKILL_DIR / "references" / "degradation.md").read_text(encoding="utf-8")
     for term in ("over capacity", "unexamined", "time budget", "--since"):

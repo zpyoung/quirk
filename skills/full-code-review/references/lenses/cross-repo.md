@@ -30,7 +30,9 @@ consumers in **other** repositories. Return findings in the schema from
      `git -C <dir> grep -n -w -F -e <symbol> --` with a 10-second timeout per repo; pass the
      symbol as one quoted argv element, never through a shell, so route-like symbols
      (`/orders/[id]`) match literally and a leading `-` is not read as an option. Treat a
-     hit as evidence only after reading the surrounding code.
+     hit as evidence only after reading the surrounding code. Scan any extra roots the
+     dispatch supplies (for example a ticket workspace) the same way, in addition to
+     the parent directory, never instead of it.
    - **A pack search hook.** If `policy.cross_repo.search_agent` names a subagent type
      (an org's code-search agent), dispatch it with the changed symbols and treat its
      `file:line` results as evidence.

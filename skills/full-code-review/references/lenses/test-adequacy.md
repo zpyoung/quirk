@@ -23,6 +23,11 @@ production code warrants them.
    randomness with no seed or control.
 5. **Assertions on implementation details** — mock call counts, internal state —
    rather than on behavior.
+6. **Values handed between functions with no test through the caller.** When the diff
+   computes a value in one function and passes it to another (a new argument, keyword,
+   or field), check that some test drives the caller. Tests that call the callee with
+   the value supplied by hand do not cover the hand-off; if dropping or defaulting the
+   argument at the call site would leave the suite green, that is the gap.
 
 Severity: `Should fix` by default; never `Must fix` for missing coverage alone, matching
 `test-coverage`. A test that passes without asserting a money, auth, or data-mutation

@@ -18,7 +18,9 @@ Check value boundaries (encoding, escaping, numeric ranges and empty inputs), st
 transitions (identity binding, stale reads, partial side effects and retries), and
 trust boundaries (filesystem traversal, configuration and executable content).
 For test changes, determine whether assertions fail when the protected behavior
-breaks; a passing suite alone is not evidence that an assertion protects it.
+breaks; a passing suite alone is not evidence that an assertion protects it. When the
+diff passes a value from one function to another, break the hand-off too: replace the
+argument at the call site with its default or `None`, not only the callee's logic.
 
 If the coordinator enabled execution and supplied your private copy manifest, run a focused, bounded reproduction only through:
 

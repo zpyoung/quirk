@@ -161,6 +161,8 @@ builds, or the mutation probe unless the dispatch states `mutation probe: enable
 coordinator adds that line only to the three test lenses, and only with consent. Each
 prompt also says that the shell may be zsh, so commands stay POSIX and bash-only syntax (arrays,
 `${var//x/y}`, `[[ ]]`, process substitution) goes in a script file run with `bash <file>`.
+It also says that the lens works through every item of its checklist and reports every
+qualifying finding, not only the strongest; the severity floor and triage filter the rest.
 
 | Specialist | Model | Checklist source | Runs when |
 |---|---|---|---|
