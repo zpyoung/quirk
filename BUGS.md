@@ -232,3 +232,10 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: low
 - **Proposed fix**: Raise a distinct error from the constant hook and report the JSON-child message for it before the forbidden-markup search.
 
+## BUG-28: The diagram list disclosure renders as plain text in tier-2 app builds
+- **Observed**: 2026-10-18
+- **File**: skills/writing-html-artifacts/vendor/kit/1.0.0/kit.css:1282
+- **Description**: In tier-2 app builds the "Graph as a list" and "Diagram as a list" disclosures under q-flow and q-sequence render as plain unstyled text, with no bordered box or chevron. Tier-1 report and components pages show a bordered disclosure with a chevron. The kit's own rules (kit.css:1282 for q-flow and q-schema, :1668 for q-sequence) only set height, layout and cursor; the box and chevron on tier-1 pages come from the base stylesheet (Simple.css or Web Awesome), which the app's Astryx theme doesn't supply. Seen 2026-10-18 building templates/app/examples/explainer and reference at 4fe1e65 and screenshotting at 1280px light.
+- **Severity**: low
+- **Proposed fix**: Give the kit's diagram disclosures their own border, padding and marker so they look the same without a base stylesheet, or add matching details styles to the app theme.
+
