@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "orca",
+    "computer",
+    "list-apps",
+    "--json"
+  ],
+  "returncode": 0,
+  "stdout": "{\n  \"id\": \"d38f060d-fc92-4274-925c-ed9f3be2ba46\",\n  \"ok\": true,\n  \"result\": {\n    \"apps\": [\n      {\n        \"name\": \"UALA Fixture\",\n        \"pid\": 30794,\n        \"useCount\": null,\n        \"isRunning\": true,\n        \"lastUsedAt\": null,\n        \"bundleId\": \"dev.quirk.uala.fixture\"\n      },\n      {\n        \"bundleId\": \"com.apple.finder\",\n        \"isRunning\": true,\n        \"lastUsedAt\": null,\n        \"useCount\": null,\n        \"pid\": 669,\n        \"name\": \"Finder\"\n      }\n    ]\n  },\n  \"_meta\": {\n    \"runtimeId\": \"c0ea6465-33fd-42b2-8069-764fc8ab98f1\"\n  }\n}",
+  "stderr": "",
+  "files": {}
+}

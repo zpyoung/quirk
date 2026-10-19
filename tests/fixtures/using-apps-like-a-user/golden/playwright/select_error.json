@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "playwright-cli",
+    "-s=golden",
+    "select",
+    "e10",
+    "x"
+  ],
+  "returncode": 1,
+  "stdout": "### Error\nError: Error: Element is not a <select> element\nCall log:\n\u001b[2m  - waiting for locator('aria-ref=e10')\u001b[22m\n\u001b[2m    - locator resolved to <input id=\"notes\" type=\"text\"/>\u001b[22m\n\u001b[2m  - attempting select option action\u001b[22m\n\u001b[2m    - waiting for element to be visible and enabled\u001b[22m\n\n",
+  "stderr": "",
+  "files": {}
+}

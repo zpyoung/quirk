@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "orca",
+    "computer",
+    "click",
+    "--app",
+    "dev.quirk.uala.fixture",
+    "--element-index",
+    "999",
+    "--json",
+    "--no-screenshot"
+  ],
+  "returncode": 1,
+  "stdout": "{\n  \"id\": \"7577b3ac-c3fa-451f-90e1-87740088dddb\",\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"element_not_found\",\n    \"message\": \"element 999 is stale; run get-app-state again and use a fresh element index\",\n    \"data\": {\n      \"nextSteps\": [\n        \"Run `orca computer get-app-state --app <app> --json` again and use an element index from the fresh tree.\",\n        \"Do not infer valid indexes from `elementCount` or reuse indexes after navigation, scrolling, focus changes, or delays.\"\n      ]\n    }\n  },\n  \"_meta\": {\n    \"runtimeId\": \"c0ea6465-33fd-42b2-8069-764fc8ab98f1\"\n  }\n}\n",
+  "stderr": "",
+  "files": {}
+}

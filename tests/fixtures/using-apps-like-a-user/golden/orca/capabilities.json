@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "orca",
+    "computer",
+    "capabilities",
+    "--json"
+  ],
+  "returncode": 0,
+  "stdout": "{\n  \"id\": \"0d60281f-8298-4f54-95bc-ddc4b9daffd1\",\n  \"ok\": true,\n  \"result\": {\n    \"provider\": \"orca-computer-use-macos\",\n    \"providerVersion\": \"1.0.0\",\n    \"supports\": {\n      \"apps\": {\n        \"list\": true,\n        \"bundleIds\": true,\n        \"pids\": true\n      },\n      \"actions\": {\n        \"click\": true,\n        \"drag\": true,\n        \"pasteText\": true,\n        \"pressKey\": true,\n        \"scroll\": true,\n        \"setValue\": true,\n        \"performAction\": true,\n        \"typeText\": true,\n        \"hotkey\": true\n      },\n      \"windows\": {\n        \"list\": true,\n        \"targetById\": true,\n        \"focus\": false,\n        \"moveResize\": false,\n        \"targetByIndex\": true\n      },\n      \"observation\": {\n        \"annotatedScreenshot\": false,\n        \"elementFrames\": true,\n        \"screenshot\": true,\n        \"ocr\": false\n      },\n      \"surfaces\": {\n        \"menus\": false,\n        \"dialogs\": false,\n        \"dock\": false,\n        \"menubar\": false\n      }\n    },\n    \"protocolVersion\": 1,\n    \"platform\": \"darwin\"\n  },\n  \"_meta\": {\n    \"runtimeId\": \"c0ea6465-33fd-42b2-8069-764fc8ab98f1\"\n  }\n}\n",
+  "stderr": "",
+  "files": {}
+}

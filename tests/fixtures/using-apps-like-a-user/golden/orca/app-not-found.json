@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "orca",
+    "computer",
+    "click",
+    "--app",
+    "no.such.app",
+    "--element-index",
+    "1",
+    "--json",
+    "--no-screenshot"
+  ],
+  "returncode": 1,
+  "stdout": "{\n  \"id\": \"af5e6556-bd8b-4bf6-b4a7-f9c5bdc45071\",\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"app_not_found\",\n    \"message\": \"app 'no.such.app' not found\",\n    \"data\": {\n      \"nextSteps\": [\n        \"Run `orca computer list-apps --json` and retry with the exact app name or bundle ID.\",\n        \"If the target is a website or web app such as Gmail, choose the desktop browser app/window that contains it; `orca computer` app selectors refer to desktop apps, not website names.\",\n        \"Do not retry the same `orca computer ... --app <web app>` command unchanged.\",\n        \"If the desired browser is not listed, open or focus that browser first, then retry `orca computer list-apps --json` and `orca computer list-windows --app <browser> --json`.\"\n      ]\n    }\n  },\n  \"_meta\": {\n    \"runtimeId\": \"c0ea6465-33fd-42b2-8069-764fc8ab98f1\"\n  }\n}\n",
+  "stderr": "",
+  "files": {}
+}

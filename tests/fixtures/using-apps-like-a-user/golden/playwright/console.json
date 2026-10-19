@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "playwright-cli",
+    "-s=golden",
+    "console",
+    "error"
+  ],
+  "returncode": 0,
+  "stdout": "### Result\nTotal messages: 2 (Errors: 2, Warnings: 0)\n\n[ERROR] fixture: analytics bundle failed to load @ http://127.0.0.1:64361/:66\n[ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://127.0.0.1:64361/api/avatar:0\n",
+  "stderr": "",
+  "files": {}
+}

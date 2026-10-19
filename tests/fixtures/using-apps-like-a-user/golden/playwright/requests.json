@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "playwright-cli",
+    "-s=golden",
+    "requests",
+    "--static"
+  ],
+  "returncode": 0,
+  "stdout": "### Result\n1. [GET] http://127.0.0.1:64361/ => [200] OK\n2. [POST] http://127.0.0.1:64361/api/hit/working => [204] No Content\n3. [POST] http://127.0.0.1:64361/api/hit/working => [204] No Content\n4. [POST] http://127.0.0.1:64361/api/hit/working => [204] No Content\n5. [POST] http://127.0.0.1:64361/api/text => [204] No Content\n6. [POST] http://127.0.0.1:64361/api/text => [204] No Content\n7. [POST] http://127.0.0.1:64361/api/text => [204] No Content\n8. [POST] http://127.0.0.1:64361/api/text => [204] No Content\n9. [POST] http://127.0.0.1:64361/api/text => [204] No Content\n10. [POST] http://127.0.0.1:64361/api/text => [204] No Content\n11. [POST] http://127.0.0.1:64361/api/text => [204] No Content\n12. [POST] http://127.0.0.1:64361/api/avatar => [500] Internal Server Error\n",
+  "stderr": "",
+  "files": {}
+}

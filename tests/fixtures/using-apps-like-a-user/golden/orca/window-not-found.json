@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "orca",
+    "computer",
+    "click",
+    "--app",
+    "dev.quirk.uala.fixture",
+    "--element-index",
+    "2",
+    "--window-id",
+    "1",
+    "--json",
+    "--no-screenshot"
+  ],
+  "returncode": 1,
+  "stdout": "{\n  \"id\": \"021bd747-e5e8-42ee-ae97-da639921f4b3\",\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"window_not_found\",\n    \"message\": \"app 'UALA Fixture' has no on-screen window\",\n    \"data\": {\n      \"nextSteps\": [\n        \"Run `orca computer list-windows --app <app> --json` and target one of the listed windows.\",\n        \"If the app is listed but no usable window is visible, retry observation once with `--restore-window`.\",\n        \"If no window is listed, open or focus the app first; `orca computer` does not launch closed desktop apps.\"\n      ]\n    }\n  },\n  \"_meta\": {\n    \"runtimeId\": \"c0ea6465-33fd-42b2-8069-764fc8ab98f1\"\n  }\n}\n",
+  "stderr": "",
+  "files": {}
+}

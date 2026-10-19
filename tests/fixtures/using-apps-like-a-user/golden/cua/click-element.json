@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "cua-driver",
+    "call",
+    "click",
+    "{\"pid\":82986,\"window_id\":84869,\"element_token\":\"s00000011:1\",\"session\":\"golden\"}"
+  ],
+  "returncode": 0,
+  "stdout": "{\n  \"delivery\": {\n    \"mode\": \"background\"\n  },\n  \"effect\": \"unverifiable\",\n  \"route\": \"accessibility\",\n  \"summary\": \"\u2705 Performed AXPress on [1] AXButton \\\"Working button\\\".\"\n}\n",
+  "stderr": "",
+  "files": {}
+}

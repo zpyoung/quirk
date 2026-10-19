@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "playwright-cli",
+    "-s=golden",
+    "type",
+    " world"
+  ],
+  "returncode": 0,
+  "stdout": "### Ran Playwright code\n```js\n// Press  world\nawait page.keyboard.type(' world');\n```\n",
+  "stderr": "",
+  "files": {}
+}

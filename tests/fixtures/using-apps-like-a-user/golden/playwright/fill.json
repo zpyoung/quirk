@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "playwright-cli",
+    "-s=golden",
+    "fill",
+    "e10",
+    "hello"
+  ],
+  "returncode": 0,
+  "stdout": "### Ran Playwright code\n```js\nawait page.getByRole('textbox', { name: 'Notes' }).fill('hello');\n```\n",
+  "stderr": "",
+  "files": {}
+}
