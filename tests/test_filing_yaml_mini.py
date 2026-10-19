@@ -69,6 +69,104 @@ def test_block_scalar_folded(yaml_mini) -> None:
     }
 
 
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("a: |\n  x\n  y\nb: z\n", "x\ny\n"),
+        ("a: |-\n  x\n  y\nb: z\n", "x\ny"),
+        ("a: |+\n  x\n\n\nb: z\n", "x\n\n\n"),
+        ("a: >\n  x\n  y\nb: z\n", "x y\n"),
+        ("a: >-\n  x\n  y\nb: z\n", "x y"),
+        ("a: >+\n  x\n  y\n\nb: z\n", "x y\n\n"),
+        ("a: |-\n\nb: z\n", ""),
+        ("a: |+\n\nb: z\n", "\n"),
+    ],
+)
+def test_block_scalar_chomping(yaml_mini, text, expected) -> None:
+    assert yaml_mini.parse(text, "chomp.yml")["a"] == expected
+
+
+def test_block_sequence_at_the_key_indent(yaml_mini) -> None:
+    text = "skip_globs:\n- \"*.lock\"\n- dist/**\nseverity_floor: Must fix\n"
+    assert yaml_mini.parse(text, "flush.yml") == {
+        "skip_globs": ["*.lock", "dist/**"],
+        "severity_floor": "Must fix",
+    }
+
+
+def test_block_sequence_at_the_key_indent_inside_a_list_item(yaml_mini) -> None:
+    text = "items:\n- a:\n  - x\n  - y\n  b: two\n- c\n"
+    assert yaml_mini.parse(text, "flush.yml") == {"items": [{"a": ["x", "y"], "b": "two"}, "c"]}
+
+
+def test_apostrophe_inside_a_plain_scalar_does_not_open_a_quote(yaml_mini) -> None:
+    text = "a: don't touch # note\nb: 1\n"
+    assert yaml_mini.parse(text, "plain.yml") == {"a": "don't touch", "b": "1"}
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("desc: yes, 'cause # c\n", {"desc": "yes, 'cause"}),
+        ("labels: ['a # b', c] # c\n", {"labels": ["a # b", "c"]}),
+    ],
+)
+def test_comma_before_an_apostrophe_in_a_block_scalar_does_not_open_a_quote(
+    yaml_mini, text, expected
+) -> None:
+    assert yaml_mini.parse(text, "plain.yml") == expected
+
+
+@pytest.mark.parametrize("escape", [r"\U00110000", r"\UFFFFFFFF", r"\U7FFFFFFF"])
+def test_out_of_range_unicode_escape_is_a_parse_error(yaml_mini, escape) -> None:
+    with pytest.raises(yaml_mini.TemplateParseError) as exc_info:
+        yaml_mini.parse('key: "a%s"\n' % escape, "escape.yml")
+    assert exc_info.value.line == 1
+
+
+def test_highest_valid_unicode_escape_still_parses(yaml_mini) -> None:
+    assert yaml_mini.parse('key: "\\U0010FFFF"\n', "escape.yml") == {"key": "\U0010FFFF"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "a:\n\tb: 1\n",
+        "body:\n  - type: textarea\n\tattributes:\n    label: x\n",
+        "a:\n \tb: 1\n",
+    ],
+)
+def test_tab_indentation_is_a_parse_error(yaml_mini, text) -> None:
+    with pytest.raises(yaml_mini.TemplateParseError) as exc_info:
+        yaml_mini.parse(text, "tabs.yml")
+    assert "tab" in exc_info.value.message
+    assert exc_info.value.path == "tabs.yml"
+
+
+def test_tab_inside_a_block_scalar_body_is_content(yaml_mini) -> None:
+    assert yaml_mini.parse("a: |\n  x\n  \ty\n", "tabs.yml") == {"a": "x\n\ty\n"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "a: >\n  x\n    y\n  z\n",
+        "a: >\n  x\n\n    y\n  z\n",
+        "a: >\n  x\n    y\n\n  z\n",
+        "a: >\n  x\n  y\n\n  z\n",
+    ],
+)
+@pytest.mark.skipif(not _pyyaml_available(), reason="PyYAML not installed")
+def test_folded_scalar_matches_pyyaml_around_more_indented_lines(yaml_mini, text) -> None:
+    import yaml
+
+    assert yaml_mini.parse(text, "fold.yml") == yaml.safe_load(text)
+
+
+def test_folded_scalar_keeps_the_break_around_a_more_indented_line(yaml_mini) -> None:
+    assert yaml_mini.parse("a: >\n  x\n    y\n  z\n", "fold.yml") == {"a": "x\n  y\nz\n"}
+
+
 def test_single_quoted_scalar_with_escaped_quote(yaml_mini) -> None:
     text = "title: 'It''s broken'\n"
     assert yaml_mini.parse(text, "single.yml") == {"title": "It's broken"}
@@ -223,7 +321,7 @@ def test_anchor_rejected(yaml_mini) -> None:
 
 
 def test_alias_rejected(yaml_mini) -> None:
-    text = "base: &b value\nkey: *b\n"
+    text = "key: *b\n"
     with pytest.raises(yaml_mini.TemplateParseError) as exc_info:
         yaml_mini.parse(text, "alias.yml")
     assert exc_info.value.line == 1
@@ -295,6 +393,18 @@ PARITY_FIXTURES = [
     'labels: ["bug", "needs-triage"]\n',
     "labels: []\n",
     "labels: [bug, needs-triage,]\n",
+    "a: |-\n  x\n  y\nb: z\n",
+    "a: >+\n  x\n  y\n\nb: z\n",
+    "skip_globs:\n- \"*.lock\"\n- dist/**\nseverity_floor: Must fix\n",
+    "a: don't touch # note\nb: it's 'q' # c\n",
+    "a: [don't, 'x, y', \"q\"]\n",
+    "k: don't ' #c\n",
+    'k: a "b #c\n',
+    "k: a ' b #c\n",
+    "k: 'q #c' # real\n",
+    "- 'x # y' # real\n",
+    "desc: yes, 'cause # c\n",
+    "labels: ['a, b', c] # c\n",
 ]
 
 
@@ -387,7 +497,17 @@ def test_quoted_mapping_keys_parse_to_the_same_key_as_unquoted(yaml_mini, text) 
     # document whose keys nothing matches, so a valid template resolves to no fields at all --
     # on exactly the machines this tier exists to serve.
     parsed = yaml_mini.parse(text, "quoted.yml")
-    assert all("'" not in key and '"' not in key for key in parsed)
+
+    def keys(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                yield key
+                yield from keys(value)
+        elif isinstance(node, list):
+            for item in node:
+                yield from keys(item)
+
+    assert all("'" not in key and '"' not in key for key in keys(parsed))
 
 
 def test_quoted_key_template_survives_discovery_on_the_mini_tier(yaml_mini) -> None:
@@ -412,3 +532,22 @@ def test_quoted_key_parsing_matches_pyyaml(yaml_mini, text) -> None:
     import yaml
 
     assert yaml_mini.parse(text, "quoted.yml") == yaml.safe_load(text)
+
+
+@pytest.mark.parametrize("text", ["- - x\n", "- - - z\n", "k:\n  - - x\n", "- - k: v\n"])
+def test_nested_block_sequence_is_rejected_not_kept_as_text(yaml_mini, text) -> None:
+    with pytest.raises(yaml_mini.TemplateParseError, match="nested sequences"):
+        yaml_mini.parse(text, "nested.yml")
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("k: don't ' #c\n", {"k": "don't '"}),
+        ('k: a "b #c\n', {"k": 'a "b'}),
+        ("k: a ' b #c\n", {"k": "a ' b"}),
+        ("k: 'q #c' # real\n", {"k": "q #c"}),
+    ],
+)
+def test_quote_inside_a_plain_scalar_does_not_hide_a_trailing_comment(yaml_mini, text, expected) -> None:
+    assert yaml_mini.parse(text, "plain.yml") == expected

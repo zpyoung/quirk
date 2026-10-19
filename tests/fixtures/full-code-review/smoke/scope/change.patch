@@ -1,0 +1,18 @@
+diff --git a/limits.py b/limits.py
+index b34c181..9a75c17 100644
+--- a/limits.py
++++ b/limits.py
+@@ -1,4 +1,4 @@
+-MAX_RETRIES = 3
++MAX_RETRIES = 5
+ 
+ 
+ def should_retry(attempt):
+diff --git a/naming.py b/naming.py
+index a87b878..394756b 100644
+--- a/naming.py
++++ b/naming.py
+@@ -1,2 +1,2 @@
+-def fmt_name(first, last):
++def format_full_name(first, last):
+     return "%s %s" % (first, last)

@@ -1,0 +1,7 @@
+{
+  "lens": "scope",
+  "file": "naming.py",
+  "line_min": 1,
+  "line_max": 2,
+  "intent": "Raise the retry limit to 5."
+}
