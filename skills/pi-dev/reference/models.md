@@ -4,7 +4,7 @@ When the user says "use pi codex" or "with a pi gemini agent" they are picking a
 
 **Source of truth:** `pi --list-models`. This catalog reflects the providers/models the local pi install can actually dispatch to. The pi.dev catalog also lists `openrouter`, `mistral`, `groq`, `cerebras`, `fireworks`, `huggingface`, `cloudflare-*`, `vercel-ai-gateway`, `moonshotai`, `minimax`, `deepseek`, `xai`, `amazon-bedrock`, `azure-openai-responses`, but those will only resolve here if the user has authenticated to them. Always re-run `pi --list-models` to confirm before scripting against a non-default provider.
 
-**Substring filter:** `pi --list-models <pattern>` scopes the output to entries whose model name contains `<pattern>`. Use this instead of dumping the full table when you only need to confirm one family — e.g., `pi --list-models 5.5`, `pi --list-models opus-4-7`, `pi --list-models codex-max`. Output still goes to stderr.
+**Substring filter:** `pi --list-models <pattern>` scopes the output to entries whose model name contains `<pattern>`. Use this instead of dumping the full table when you only need to confirm one family — e.g., `pi --list-models 5.5`, `pi --list-models opus-5-5`, `pi --list-models luna`. pi writes the table to stderr before 1.0 and to stdout from 1.0, so capture both streams.
 
 ## Pro-tier variants — avoid by default
 
@@ -15,6 +15,7 @@ Some catalog entries are "pro" / "deep-research" tiers that are **dramatically m
 | `gpt-5-pro`, `gpt-5.2-pro`, `gpt-5.4-pro`, `gpt-5.5-pro` | `openai` | ~10–30× cost vs base, multi-minute latency |
 | `o1-pro`, `o3-pro` | `openai` | Pro reasoning tier — same cost/latency profile |
 | `o3-deep-research`, `o4-mini-deep-research` | `openai` | Deep-research toolchains — extended duration |
+| `gpt-6-astra` | `openai`, `openai-codex`, `github-copilot` | $10/$50, 5× GPT-6 Sol |
 
 GPT-5.6's high-cost lever is **not** a separate model: **Sol Pro** and **Ultra mode** are request-time params on `gpt-5.6-sol` (`reasoning.mode: "pro"`, parallel-sub-agent Ultra), gated to Pro/Enterprise plans. There is no `gpt-5.6-pro` catalog ID to alias, and these modes stay out of default routing for the same cost/latency reasons.
 
@@ -39,29 +40,29 @@ Mixing them up will produce "model not found" errors.
 
 ## Default
 
-If no provider/model is specified by the user, dispatch the codex alias and let it resolve through the fallback ladder. Currently lands on `openai-codex/gpt-5.6-sol` locally (the flagship GPT-5.6 tier), then `gpt-5.5` / `gpt-5.4` / `gpt-5.3-codex` as fallbacks — auto-upgrading as newer models ship.
+If no provider/model is specified by the user, dispatch the codex alias and let it resolve through the fallback ladder. It lands on `gpt-6.1-sol` (the flagship GPT-6 tier) via whichever OpenAI provider is authed, then falls back to `gpt-6-sol` / `gpt-5.6-sol` / `gpt-5.5` — auto-upgrading as newer models ship.
 
 ```bash
 # Resolve via preference list (auto-upgrades as newer models ship):
 read PI_PROVIDER PI_MODEL PI_THINKING < <(resolve_pi_model medium \
+    openai-codex/gpt-6.1-sol openai/gpt-6.1-sol github-copilot/gpt-6.1-sol \
+    openai-codex/gpt-6-sol openai/gpt-6-sol github-copilot/gpt-6-sol \
     openai-codex/gpt-5.6-sol openai/gpt-5.6-sol github-copilot/gpt-5.6-sol \
-    openai-codex/gpt-5.5 openai/gpt-5.5 \
-    openai-codex/gpt-5.4 openai/gpt-5.4 github-copilot/gpt-5.4 \
-    openai-codex/gpt-5.3-codex openai/gpt-5.3-codex github-copilot/gpt-5.3-codex)
+    openai-codex/gpt-5.5 openai/gpt-5.5)
 pi --provider "$PI_PROVIDER" --model "$PI_MODEL" --thinking "$PI_THINKING" "..."
 ```
 
-`:medium` is the codex alias default; `:max` is the deepest reasoning level (native on GPT-5.6 Sol) — use the `codex-max` alias or pass `--thinking max` for a maximum-effort pass. Override the alias resolution only when the user explicitly names a different model.
+`:medium` is the codex alias default; `:max` is the deepest reasoning level (native on Sol) — use the `codex-max` alias or pass `--thinking max` for a maximum-effort pass. Override the alias resolution only when the user explicitly names a different model.
 
 ## Newest-first principle
 
-Generic aliases (`codex`, `sonnet`, `opus`, `haiku`, `gemini pro`) target the newest model that *might* exist on pi, then ladder down to versions that currently ship. This means each alias has speculative top entries — `gpt-5.6-sol`, `claude-opus-4-7`, `claude-sonnet-4-7`, `gemini-3.2-pro-preview` — that may not yet be in `pi --list-models` on every install. **That is intentional.** The fallback algorithm:
+Generic aliases (`codex`, `sonnet`, `opus`, `haiku`, `gemini pro`) target the newest model that *might* exist on pi, then ladder down to versions that currently ship. This means each alias has top entries — `gpt-6.1-sol`, `claude-opus-5-5`, `claude-sonnet-5-5` — that an older pi binary may not list yet. **That is intentional.** The fallback algorithm:
 
 1. Walks the preference list top-to-bottom.
 2. Skips combos missing from `pi --list-models` (silently — they're not errors).
 3. Dispatches the first combo that's both authed and available.
 
-Net effect: the moment pi ships a newer model, the alias auto-upgrades with no skill edits. When bumping the ladder for a freshly-released model, only ever *prepend* new entries — never remove old ones, since they remain valid fallbacks.
+Net effect: the moment pi ships a newer model, the alias auto-upgrades with no skill edits. When bumping the ladder for a freshly-released model, prepend the new entries. Remove an entry only when the pinned pi-ai catalog stops shipping it: pi-watch can't dispatch it, and if an older pi binary lists it, resolution stops there with an SDK-skew error instead of falling through.
 
 **Explicit version pins skip the ladder.** A user saying "gpt-5.4" or "claude-sonnet-4-6" wants that exact version — preference list collapses to just the providers offering that ID.
 
@@ -71,21 +72,22 @@ When the user's request includes any of these phrases (case-insensitive), resolv
 
 | User phrase | Default thinking | Preference list (first authed wins; → = fall through) |
 |---|---|---|
-| (no model specified), `use pi`, `pi agent`, `pi subagent`, `pi worker` | `medium` | `openai-codex/gpt-5.6-sol` → `openai/gpt-5.6-sol` → `github-copilot/gpt-5.6-sol` → `openai-codex/gpt-5.5` → `openai/gpt-5.5` → `openai-codex/gpt-5.4` → `openai/gpt-5.4` → `github-copilot/gpt-5.4` → `openai-codex/gpt-5.3-codex` → `openai/gpt-5.3-codex` → `github-copilot/gpt-5.3-codex` |
+| (no model specified), `use pi`, `pi agent`, `pi subagent`, `pi worker` | `medium` | `openai-codex/gpt-6.1-sol` → `openai/gpt-6.1-sol` → `github-copilot/gpt-6.1-sol` → `openai-codex/gpt-6-sol` → `openai/gpt-6-sol` → `github-copilot/gpt-6-sol` → `openai-codex/gpt-5.6-sol` → `openai/gpt-5.6-sol` → `github-copilot/gpt-5.6-sol` → `openai-codex/gpt-5.5` → `openai/gpt-5.5` |
 | `pi codex`, `codex`, `with codex`, `codex agent` | `medium` | (same as above) |
-| `pi codex max`, `codex max` | `max` | `openai-codex/gpt-5.6-sol` → `openai/gpt-5.6-sol` → `github-copilot/gpt-5.6-sol` → `openai-codex/gpt-5.5-codex-max` → `openai/gpt-5.5-codex-max` → `openai-codex/gpt-5.4-codex-max` → `openai/gpt-5.4-codex-max` → `openai-codex/gpt-5.1-codex-max` → `openai/gpt-5.1-codex-max` → `github-copilot/gpt-5.1-codex-max` |
-| `pi codex mini`, `codex mini`, `pi mini` | `medium` | `openai-codex/gpt-5.6-luna` → `openai/gpt-5.6-luna` → `github-copilot/gpt-5.6-luna` → `openai-codex/gpt-5.4-mini` → `openai/gpt-5.4-mini` → `github-copilot/gpt-5.4-mini` → `openai-codex/gpt-5.1-codex-mini` → `openai/gpt-5.1-codex-mini` → `github-copilot/gpt-5.1-codex-mini` |
-| `pi codex spark`, `codex spark` | `high` | `openai-codex/gpt-5.4-codex-spark` → `openai-codex/gpt-5.3-codex-spark` → `openai/gpt-5.3-codex-spark` |
-| `pi terra`, `terra`, `codex terra` | `high` | `openai-codex/gpt-5.6-terra` → `openai/gpt-5.6-terra` → `github-copilot/gpt-5.6-terra` → `openai-codex/gpt-5.4` → `openai/gpt-5.4` → `github-copilot/gpt-5.4` |
-| `pi flagship`, `pi gpt` | `xhigh` | `openai-codex/gpt-5.6-sol` → `openai/gpt-5.6-sol` → `github-copilot/gpt-5.6-sol` → `openai-codex/gpt-5.5` → `openai/gpt-5.5` → `openai-codex/gpt-5.4` → `openai/gpt-5.4` → `github-copilot/gpt-5.4` |
+| `pi codex max`, `codex max` | `max` | `openai-codex/gpt-6.1-sol` → `openai/gpt-6.1-sol` → `github-copilot/gpt-6.1-sol` → `openai-codex/gpt-6-sol` → `openai/gpt-6-sol` → `github-copilot/gpt-6-sol` → `openai-codex/gpt-5.6-sol` → `openai/gpt-5.6-sol` → `github-copilot/gpt-5.6-sol` |
+| `pi codex mini`, `codex mini`, `pi mini` | `medium` | `openai-codex/gpt-6-luna` → `openai/gpt-6-luna` → `github-copilot/gpt-6-luna` → `openai-codex/gpt-5.6-luna` → `openai/gpt-5.6-luna` → `github-copilot/gpt-5.6-luna` |
+| `pi codex spark`, `codex spark` | `high` | `openai-codex/gpt-5.3-codex-spark` → `openai/gpt-5.3-codex-spark` |
+| `pi terra`, `terra`, `codex terra` | `high` | `openai-codex/gpt-5.6-terra` → `openai/gpt-5.6-terra` → `github-copilot/gpt-5.6-terra` → `openai/gpt-5.4` → `github-copilot/gpt-5.4` |
+| `pi flagship`, `pi gpt` | `xhigh` | `openai-codex/gpt-6.1-sol` → `openai/gpt-6.1-sol` → `github-copilot/gpt-6.1-sol` → `openai-codex/gpt-6-sol` → `openai/gpt-6-sol` → `github-copilot/gpt-6-sol` → `openai-codex/gpt-5.6-sol` → `openai/gpt-5.6-sol` → `github-copilot/gpt-5.6-sol` → `openai-codex/gpt-5.5` → `openai/gpt-5.5` |
 | `gpt-5.4` (explicit pin) | `xhigh` | `openai-codex/gpt-5.4` → `openai/gpt-5.4` → `github-copilot/gpt-5.4` |
 | `gpt-5.1` (explicit pin) | `xhigh` | `openai-codex/gpt-5.1` → `openai/gpt-5.1` → `github-copilot/gpt-5.1` |
-| `pi sonnet`, `sonnet`, `claude sonnet`, `pi claude` | `high` | `anthropic/claude-sonnet-4-7` → `github-copilot/claude-sonnet-4.7` → `anthropic/claude-sonnet-4-6` → `github-copilot/claude-sonnet-4.6` |
-| `pi opus`, `opus`, `claude opus` | `high` | `anthropic/claude-opus-4-7` → `github-copilot/claude-opus-4.7` → `anthropic/claude-opus-4-6` → `github-copilot/claude-opus-4.6` |
-| `pi haiku`, `haiku`, `claude haiku` | `medium` | `anthropic/claude-haiku-4-6` → `github-copilot/claude-haiku-4.6` → `anthropic/claude-haiku-4-5` → `github-copilot/claude-haiku-4.5` |
-| `pi gemini`, `gemini`, `gemini pro`, `pi gemini agent` | `high` | `google/gemini-3.2-pro-preview` → `google/gemini-3.1-pro-preview` → `github-copilot/gemini-3.1-pro-preview` → `google/gemini-3-pro-preview` → `github-copilot/gemini-3-pro-preview` |
-| `pi gemini flash`, `gemini flash`, `pi flash` | `medium` | `google/gemini-flash-latest` → `google/gemini-3-flash-preview` → `github-copilot/gemini-3-flash-preview` |
-| `pi grok`, `grok`, `xai grok` | `medium` | `github-copilot/grok-code-fast-1` |
+| `pi sonnet`, `sonnet`, `claude sonnet`, `pi claude` | `high` | `anthropic/claude-sonnet-5-5` → `github-copilot/claude-sonnet-5.5` → `anthropic/claude-sonnet-5` → `github-copilot/claude-sonnet-5` → `anthropic/claude-sonnet-4-6` → `github-copilot/claude-sonnet-4.6` |
+| `pi opus`, `opus`, `claude opus` | `high` | `anthropic/claude-opus-5-5` → `github-copilot/claude-opus-5.5` → `anthropic/claude-opus-5` → `github-copilot/claude-opus-5` → `anthropic/claude-opus-4-8` → `github-copilot/claude-opus-4.8` → `anthropic/claude-opus-4-7` → `github-copilot/claude-opus-4.7` |
+| `pi fable`, `fable`, `claude fable` | `high` | `anthropic/claude-fable-5-1` → `github-copilot/claude-fable-5.1` → `anthropic/claude-fable-5` → `github-copilot/claude-fable-5` |
+| `pi haiku`, `haiku`, `claude haiku` | `medium` | `anthropic/claude-haiku-5-5` → `github-copilot/claude-haiku-5.5` → `anthropic/claude-haiku-4-5` → `github-copilot/claude-haiku-4.5` |
+| `pi gemini`, `gemini`, `gemini pro`, `pi gemini agent` | `high` | `google/gemini-3.1-pro-preview` |
+| `pi gemini flash`, `gemini flash`, `pi flash` | `medium` | `google/gemini-flash-latest` → `google/gemini-3.8-flash` → `github-copilot/gemini-3.8-flash` → `google/gemini-3-flash-preview` |
+| `pi grok`, `grok`, `xai grok` | `medium` | `xai/grok-4.7` → `github-copilot/grok-4.7` → `xai/grok-4.6` → `github-copilot/grok-4.6` |
 
 If the user names a model NOT in this table, run `pi --list-models <pattern>` to scope candidates, then either use the literal model ID (if exactly one match) or ask one `AskUserQuestion` multiple-choice clarification (if multiple matches or any pro-tier candidates appear). Never silently pick a `*-pro` variant. See "Disambiguation rule" above.
 
@@ -95,23 +97,18 @@ Models exposed by more than one provider on this install. Use this when construc
 
 | Logical model | Providers (in fallback order) |
 |---|---|
-| GPT-5.6 Sol (flagship) | `openai-codex` → `openai` → `github-copilot` |
-| GPT-5.6 Terra (balanced) | `openai-codex` → `openai` → `github-copilot` |
-| GPT-5.6 Luna (fast/cheap) | `openai-codex` → `openai` → `github-copilot` |
-| Codex flagship (`gpt-5.3-codex`) | `openai-codex` → `openai` → `github-copilot` |
-| Codex max (`gpt-5.1-codex-max`) | `openai-codex` → `openai` → `github-copilot` |
-| Codex mini (`gpt-5.1-codex-mini`) | `openai-codex` → `openai` → `github-copilot` |
+| GPT-6 / 6.1 Sol (flagship) | `openai-codex` → `openai` → `github-copilot` |
+| GPT-6 Luna (fast/cheap) | `openai-codex` → `openai` → `github-copilot` |
+| GPT-5.6 Sol / Terra / Luna | `openai-codex` → `openai` → `github-copilot` |
 | Codex spark (`gpt-5.3-codex-spark`) | `openai-codex` → `openai` |
 | GPT-5.4 | `openai-codex` → `openai` → `github-copilot` |
 | GPT-5.1 / GPT-5.2 | `openai-codex` → `openai` → `github-copilot` |
 | GPT-5 / GPT-5-mini | `openai` → `github-copilot` (not in `openai-codex`) |
-| Claude sonnet 4.6 | `anthropic` (`-4-6`) → `github-copilot` (`-4.6`) |
-| Claude opus 4.6 | `anthropic` (`-4-6`) → `github-copilot` (`-4.6`) |
-| Claude haiku 4.5 | `anthropic` (`-4-5`) → `github-copilot` (`-4.5`) |
-| Gemini 3.1 Pro | `google` → `github-copilot` |
-| Gemini 3 Pro preview | `google` → `github-copilot` |
-| Gemini 3 Flash preview | `google` → `github-copilot` |
-| Grok-code-fast-1 | `github-copilot` only (locally) |
+| Claude sonnet / opus / haiku 5.5, fable 5.1 | `anthropic` (`-5-5`, `-5-1`) → `github-copilot` (`-5.5`, `-5.1`) |
+| Claude sonnet 4.6, opus 4.8, haiku 4.5 | `anthropic` (`-4-6`) → `github-copilot` (`-4.6`) |
+| Gemini 3.1 Pro | `google` only |
+| Gemini 3.8 Flash | `google` → `github-copilot` |
+| Grok 4.6 / 4.7 | `xai` → `github-copilot` |
 
 Order rationale: direct API providers come first (lowest latency, highest rate limits, billed via their own credit), then `github-copilot` as a subscription fallback. Override the order if the user prefers Copilot for cost reasons.
 
@@ -121,11 +118,11 @@ Steps:
 
 ```
 1. User says "use pi <alias>" → look up the alias's preference list above.
-2. Run `pi --list-models 2>&1 >/dev/null` once per session (table is on STDERR);
+2. Run `pi --list-models 2>&1` once per session (stderr before pi 1.0, stdout from 1.0);
    parse with `awk 'NR>1 && NF>=2 {print $1"/"$2}'`; cache as PI_AVAILABLE.
 3. Walk preference list; first combo present in PI_AVAILABLE wins.
 4. Dispatch with that (provider, model, default-thinking-level).
-5. Log the resolved triple ("codex routed via github-copilot/gpt-5.3-codex —
+5. Log the resolved triple ("codex routed via github-copilot/gpt-6.1-sol —
    direct OpenAI key not set"). Silent fallback hides bugs.
 6. On runtime auth/billing failure: retry once with the next entry in the list
    (excluding the failed one). If that also fails or no fallback remains, ABORT.
@@ -136,7 +133,7 @@ Steps:
 Bash implementation:
 
 ```bash
-PI_AVAILABLE="$(pi --list-models 2>&1 >/dev/null | awk 'NR>1 && NF>=2 {print $1"/"$2}')"
+PI_AVAILABLE="$(pi --list-models 2>&1 | awk 'NR>1 && NF>=2 {print $1"/"$2}')"
 
 resolve_pi_model() {
     local thinking="$1"; shift
@@ -151,10 +148,10 @@ resolve_pi_model() {
 
 # Usage — codex alias:
 read PI_PROVIDER PI_MODEL PI_THINKING < <(resolve_pi_model medium \
+    openai-codex/gpt-6.1-sol openai/gpt-6.1-sol github-copilot/gpt-6.1-sol \
+    openai-codex/gpt-6-sol openai/gpt-6-sol github-copilot/gpt-6-sol \
     openai-codex/gpt-5.6-sol openai/gpt-5.6-sol github-copilot/gpt-5.6-sol \
     openai-codex/gpt-5.5 openai/gpt-5.5 \
-    openai-codex/gpt-5.4 openai/gpt-5.4 github-copilot/gpt-5.4 \
-    openai-codex/gpt-5.3-codex openai/gpt-5.3-codex github-copilot/gpt-5.3-codex \
 ) || { echo "no codex provider authed"; exit 1; }
 ```
 
@@ -201,9 +198,9 @@ gpt-5.3-codex-spark
 gpt-5.4
 gpt-5.4-mini
 gpt-5.5
-gpt-5.6-luna            ← codex-mini alias (fast/cheap)
-gpt-5.6-sol             ← project default (flagship)
-gpt-5.6-terra           ← terra alias (balanced)
+gpt-5.6-luna
+gpt-5.6-sol
+gpt-5.6-terra
 ```
 
 ### `--provider openai`

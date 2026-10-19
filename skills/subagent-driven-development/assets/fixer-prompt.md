@@ -45,6 +45,10 @@ riding in on a reviewed one.
 Run these exactly as written after your fixes. A fix that closes a finding and breaks the build has
 not closed anything.
 
+`{{ACCEPTANCE}}` is scoped to this component's owned test files and fast targeted checks. Run it
+exactly as written; never run the full repository test suite when it targets specific test files.
+Step 7's wave gate runs the full suite once.
+
 ## Method
 
 Fix the cause, not the symptom. A finding that says "this crashes on empty input" is closed by

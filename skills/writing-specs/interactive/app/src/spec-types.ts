@@ -34,6 +34,20 @@ export interface Behavior {
   detail?: Markdown
 }
 
+/** A titled block of Markdown beside or instead of the data-state parts: a table, a list, a code sample. */
+export interface ScenarioDetails {
+  title: string
+  body: Markdown
+}
+
+/** A worked example for a scenario: data-state parts (records before, steps, records after), a titled details section, or both. */
+export interface ScenarioExample {
+  before?: Markdown
+  steps?: string[]
+  after?: Markdown
+  details?: ScenarioDetails
+}
+
 export interface Scenario {
   id: ScenarioId
   behavior: BehaviorId
@@ -55,6 +69,7 @@ export interface Scenario {
   flagged?: true
   /** The reviewer comment Claude answered or acted on; the page clears that comment when its text still matches. */
   answeredComment?: string
+  example?: ScenarioExample
 }
 
 export interface Constraint {
@@ -354,6 +369,8 @@ export interface LogicSpecPayload {
   itemHashes: Record<string, string>
   logicMarkdown: string
   priorDecisions: Export | null
+  /** Open `[ASK]` questions per scenario, as judged by the renderer; the page never decides this itself. */
+  openAsks: Record<ScenarioId, string[]>
   comparison?: Comparison
   comparisonId?: string
 }

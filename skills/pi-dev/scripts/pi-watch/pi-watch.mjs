@@ -20,10 +20,9 @@ import { spawnSync } from "node:child_process";
 import { statSync } from "node:fs";
 import { getBuiltinModel as getModel } from "@earendil-works/pi-ai/providers/all";
 import {
-    AuthStorage,
     createAgentSession,
     createExtensionRuntime,
-    ModelRegistry,
+    ModelRuntime,
     SessionManager,
     SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -34,93 +33,97 @@ import {
 // auto-upgrade as new models ship. Pro-tier variants are intentionally absent
 // (~10–30× cost, multi-minute latency) — only dispatch on explicit request.
 const ALIASES = {
-    // Default coding alias — gpt flagship via codex routing. GPT-5.6 Sol is the
-    // flagship tier (successor to gpt-5.5, same $5/$30 price point).
+    // Default coding alias — GPT-6 Sol, the flagship tier. Falls back to the
+    // GPT-5.6 generation for pi binaries that predate GPT-6.
     codex: {
         thinking: "medium",
         prefs: [
+            "openai-codex/gpt-6.1-sol", "openai/gpt-6.1-sol", "github-copilot/gpt-6.1-sol",
+            "openai-codex/gpt-6-sol", "openai/gpt-6-sol", "github-copilot/gpt-6-sol",
             "openai-codex/gpt-5.6-sol", "openai/gpt-5.6-sol", "github-copilot/gpt-5.6-sol",
             "openai-codex/gpt-5.5", "openai/gpt-5.5",
-            "openai-codex/gpt-5.4", "openai/gpt-5.4", "github-copilot/gpt-5.4",
-            "openai-codex/gpt-5.3-codex", "openai/gpt-5.3-codex", "github-copilot/gpt-5.3-codex",
         ],
     },
-    // Deepest reasoning. GPT-5.6 folded the standalone -codex-max model into Sol,
-    // the only tier that natively supports the `max` reasoning effort; older
-    // fallback models clamp max→xhigh.
+    // Deepest reasoning: Sol at `max` effort. GPT-6 Astra ($10/$50, 5× Sol) is
+    // deliberately absent — it is priced like a pro tier.
     "codex-max": {
         thinking: "max",
         prefs: [
+            "openai-codex/gpt-6.1-sol", "openai/gpt-6.1-sol", "github-copilot/gpt-6.1-sol",
+            "openai-codex/gpt-6-sol", "openai/gpt-6-sol", "github-copilot/gpt-6-sol",
             "openai-codex/gpt-5.6-sol", "openai/gpt-5.6-sol", "github-copilot/gpt-5.6-sol",
-            "openai-codex/gpt-5.5-codex-max", "openai/gpt-5.5-codex-max",
-            "openai-codex/gpt-5.4-codex-max", "openai/gpt-5.4-codex-max",
-            "openai-codex/gpt-5.1-codex-max", "openai/gpt-5.1-codex-max", "github-copilot/gpt-5.1-codex-max",
         ],
     },
-    // Fast / cheapest coding tier. GPT-5.6 Luna is the mini/spark successor.
+    // Fast / cheapest coding tier — Luna.
     "codex-mini": {
         thinking: "medium",
         prefs: [
+            "openai-codex/gpt-6-luna", "openai/gpt-6-luna", "github-copilot/gpt-6-luna",
             "openai-codex/gpt-5.6-luna", "openai/gpt-5.6-luna", "github-copilot/gpt-5.6-luna",
-            "openai-codex/gpt-5.4-mini", "openai/gpt-5.4-mini", "github-copilot/gpt-5.4-mini",
-            "openai-codex/gpt-5.1-codex-mini", "openai/gpt-5.1-codex-mini", "github-copilot/gpt-5.1-codex-mini",
         ],
     },
     "codex-spark": {
         thinking: "high",
-        prefs: [
-            "openai-codex/gpt-5.4-codex-spark",
-            "openai-codex/gpt-5.3-codex-spark", "openai/gpt-5.3-codex-spark",
-        ],
+        prefs: ["openai-codex/gpt-5.3-codex-spark", "openai/gpt-5.3-codex-spark"],
     },
-    // Balanced everyday coding tier — GPT-5.6 Terra ($2.50/$15, ~gpt-5.5-class at
-    // half the cost). Falls back to gpt-5.4, the same-priced balanced predecessor.
+    // GPT-6 has no Terra tier, so this stays on GPT-5.6 Terra.
     terra: {
         thinking: "high",
         prefs: [
             "openai-codex/gpt-5.6-terra", "openai/gpt-5.6-terra", "github-copilot/gpt-5.6-terra",
-            "openai-codex/gpt-5.4", "openai/gpt-5.4", "github-copilot/gpt-5.4",
+            "openai/gpt-5.4", "github-copilot/gpt-5.4",
         ],
     },
     sonnet: {
         thinking: "high",
         prefs: [
-            "anthropic/claude-sonnet-4-7", "github-copilot/claude-sonnet-4.7",
+            "anthropic/claude-sonnet-5-5", "github-copilot/claude-sonnet-5.5",
+            "anthropic/claude-sonnet-5", "github-copilot/claude-sonnet-5",
             "anthropic/claude-sonnet-4-6", "github-copilot/claude-sonnet-4.6",
         ],
     },
     opus: {
         thinking: "high",
         prefs: [
+            "anthropic/claude-opus-5-5", "github-copilot/claude-opus-5.5",
+            "anthropic/claude-opus-5", "github-copilot/claude-opus-5",
+            "anthropic/claude-opus-4-8", "github-copilot/claude-opus-4.8",
             "anthropic/claude-opus-4-7", "github-copilot/claude-opus-4.7",
-            "anthropic/claude-opus-4-6", "github-copilot/claude-opus-4.6",
         ],
     },
     haiku: {
         thinking: "medium",
         prefs: [
-            "anthropic/claude-haiku-4-6", "github-copilot/claude-haiku-4.6",
+            "anthropic/claude-haiku-5-5", "github-copilot/claude-haiku-5.5",
             "anthropic/claude-haiku-4-5", "github-copilot/claude-haiku-4.5",
+        ],
+    },
+    // Opt-in only: Fable costs 2.5× Opus 5.5, so it never sits in the opus ladder.
+    fable: {
+        thinking: "high",
+        prefs: [
+            "anthropic/claude-fable-5-1", "github-copilot/claude-fable-5.1",
+            "anthropic/claude-fable-5", "github-copilot/claude-fable-5",
         ],
     },
     gemini: {
         thinking: "high",
-        prefs: [
-            "google/gemini-3.2-pro-preview",
-            "google/gemini-3.1-pro-preview", "github-copilot/gemini-3.1-pro-preview",
-            "google/gemini-3-pro-preview", "github-copilot/gemini-3-pro-preview",
-        ],
+        prefs: ["google/gemini-3.1-pro-preview"],
     },
     flash: {
         thinking: "medium",
         prefs: [
             "google/gemini-flash-latest",
-            "google/gemini-3-flash-preview", "github-copilot/gemini-3-flash-preview",
+            "google/gemini-3.8-flash", "github-copilot/gemini-3.8-flash",
+            "google/gemini-3-flash-preview",
         ],
     },
     grok: {
         thinking: "medium",
-        prefs: ["github-copilot/grok-code-fast-1"],
+        prefs: [
+            "xai/grok-4.7", "github-copilot/grok-4.7",
+            "xai/grok-4.6", "github-copilot/grok-4.6",
+        ],
     },
 };
 
@@ -243,7 +246,8 @@ function scanTrailer(text, key) {
 
 // ---- Resolve provider/model/thinking -------------------------------------
 function listAvailable() {
-    // pi --list-models writes the table to STDERR. Fast (~0.5s) and does not
+    // pi --list-models writes the table to stderr before 1.0 and to stdout
+    // from 1.0, so both streams are parsed. Fast (~0.5s) and does not
     // trigger pi's slow cwd resource scan, so safe to call from any directory.
     // We rely on `pi` (not the SDK registry) to resolve auth — it handles env
     // vars, ~/.pi/agent/auth.json, OAuth subscription tokens, and models.json
@@ -392,30 +396,35 @@ const resourceLoader = {
     getThemes: () => ({ themes: [], diagnostics: [] }),
     getAgentsFiles: () => ({ agentsFiles: [] }),
     getSystemPrompt: () => "You are a coding assistant. Be concise and direct.",
+    getSystemPromptSource: () => undefined,
     getAppendSystemPrompt: () => [],
+    getAppendSystemPromptSources: () => [],
     extendResources: () => {},
     reload: async () => {},
 };
 
 const cwd = opts.cwd ?? process.cwd();
 const home = process.env.HOME ?? "";
-const authStorage = AuthStorage.create(`${home}/.pi/agent/auth.json`);
-const modelRegistry = ModelRegistry.inMemory(authStorage);
 const settingsManager = SettingsManager.inMemory({
     compaction: { enabled: false },
     retry: { enabled: true, maxRetries: 2 },
+    // warming refreshes the prompt cache with extra paid requests; a one-shot run never reuses it.
+    cacheWarming: "off",
 });
 
 process.stderr.write(`  ▶ resolved ${resolved.provider}/${resolved.model}:${resolved.thinking}${resolved.triedFromAlias ? ` (alias ${opts.alias})` : ""}\n`);
 
 try {
+    const modelRuntime = await ModelRuntime.create({
+        authPath: `${home}/.pi/agent/auth.json`,
+        modelsPath: `${home}/.pi/agent/models.json`,
+    });
     const { session } = await createAgentSession({
         cwd,
         agentDir: `${home}/.pi/agent`,
         model,
         thinkingLevel: resolved.thinking,
-        authStorage,
-        modelRegistry,
+        modelRuntime,
         resourceLoader,
         tools: opts.tools,
         sessionManager: SessionManager.inMemory(cwd),
@@ -435,6 +444,20 @@ try {
     });
 
     await session.prompt(opts.prompt);
+
+    // provider failures (expired auth, aborts, output-limit cutoffs) resolve prompt() instead of throwing.
+    const last = session.state.messages.at(-1);
+    const failure = last?.role !== "assistant" ? null
+        : last.stopReason === "error" || last.stopReason === "aborted" ? (last.errorMessage || `request ${last.stopReason}`)
+        : last.stopReason === "length" ? "response truncated at the model's output token limit"
+        : null;
+    if (failure) {
+        await Promise.all([
+            new Promise((resolve) => process.stdout.write("\n", resolve)),
+            new Promise((resolve) => process.stderr.write(`\n  ✖ error: ${failure}\n`, resolve)),
+        ]);
+        process.exit(1);
+    }
 
     let doneLine = "  ✔ done\n";
     if (opts.requireTrailer !== null) {

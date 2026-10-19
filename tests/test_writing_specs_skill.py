@@ -15,11 +15,19 @@ LOGIC = SKILL_DIR / "logic-spec.md"
 TECH = SKILL_DIR / "tech-spec.md"
 REVIEWER = SKILL_DIR / "tech-spec-reviewer-prompt.md"
 INTERACTIVE = SKILL_DIR / "interactive-logic-spec.md"
+EXAMPLES = SKILL_DIR / "scenario-examples.md"
 
 
 def test_skill_files_exist() -> None:
-    for path in (HUB, LOGIC, TECH, REVIEWER, INTERACTIVE):
+    for path in (HUB, LOGIC, TECH, REVIEWER, INTERACTIVE, EXAMPLES):
         assert path.is_file(), f"missing {path.relative_to(REPO_ROOT)}"
+
+
+def test_both_rubrics_link_the_scenario_examples_reference() -> None:
+    for rubric in (LOGIC, INTERACTIVE):
+        assert "(scenario-examples.md" in rubric.read_text(), (
+            f"{rubric.name} must link scenario-examples.md"
+        )
 
 
 def test_frontmatter() -> None:
@@ -130,3 +138,17 @@ def test_cross_file_links_and_anchors_resolve() -> None:
             if anchor and anchor not in _heading_slugs(resolved.read_text()):
                 broken.append(f"{source.relative_to(REPO_ROOT)} -> {target} (no such heading)")
     assert not broken, f"unresolvable links: {broken}"
+
+
+def test_scenario_examples_documents_details_sections() -> None:
+    """The shared conventions file is the one home for the details-section rules."""
+    body = EXAMPLES.read_text()
+    assert "## Details sections" in body
+    for literal in ("`details`", "`title`", "`body`"):
+        assert literal in body, f"scenario-examples.md does not document {literal}"
+    for rubric in (LOGIC, INTERACTIVE):
+        text = rubric.read_text()
+        assert "(scenario-examples.md" in text, f"{rubric.name} must still link scenario-examples.md"
+        assert "(scenario-examples.md#details-sections)" in text, (
+            f"{rubric.name} must link the details-sections section"
+        )
