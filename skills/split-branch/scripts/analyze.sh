@@ -4,18 +4,155 @@
 # Analyzes git diff and outputs structured JSON for branch splitting
 #
 # Usage: ./analyze.sh [target_branch]
-# Output: JSON with file stats, directory groups, and suggested splits
+# Output: JSON with per-line review-weighted totals, directory groups, and per-file rows
 #
 
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Colors for stderr messages (not captured in JSON output)
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Target lines per split (configurable via env)
-TARGET_LINES_PER_SPLIT="${TARGET_LINES_PER_SPLIT:-300}"
+# Split goals, review weights and file patterns resolve per key, highest first: env var, project
+# config (<repo>/.quirk/split-branch.json), user config (~/.quirk/split-branch.json), built-in
+# default. A changed line costs its file's weight, capped by every line discount that applies to
+# it; weigh.awk documents the rule.
+GOAL_VARS="TARGET_LINES_PER_SPLIT HARD_CAP SKIP_THRESHOLD"
+WEIGHT_VARS="TEST_WEIGHT FIXTURE_WEIGHT RISKY_WEIGHT PROSE_WEIGHT COMMENT_WEIGHT IMPORT_WEIGHT MOVED_WEIGHT DELETION_WEIGHT"
+
+USER_CFG="$HOME/.quirk/split-branch.json"
+PROJECT_CFG=""
+CONFIG_KEYS='["target_lines_per_split","hard_cap","skip_threshold","weights","patterns"]'
+WEIGHT_KEYS='["test","fixture","risky","prose","comment","import","moved","deletion"]'
+PATTERN_KEYS='["exclude","fixture","risky","prose"]'
+CONFIG_FILES=()
+
+# Files matching these patterns are excluded from the budget — generated/vendored content
+# dominates diffs but isn't substantively reviewed.
+DEFAULT_EXCLUDE_PATTERNS='(^|/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|poetry\.lock|Cargo\.lock|Gemfile\.lock|go\.sum|composer\.lock)$|(^|/)(node_modules|vendor|dist|build|\.next|\.nuxt|target)/|\.min\.(js|css)$|\.generated\.|__generated__|_pb\.go$|_pb2\.py$'
+
+# Bulk data nobody reads line by line.
+DEFAULT_FIXTURE_PATTERNS='(^|/)(__snapshots__|fixtures?|testdata|goldens?|snapshots)/|\.snap$|\.golden$'
+
+# Small diffs here deserve a smaller PR: schema, auth/security, CI and infrastructure.
+DEFAULT_RISKY_PATTERNS='(^|/)(migrations?|alembic)/|(^|/)db/migrate/|(^|/)schema\.(rb|sql|prisma)$|\.prisma$|(^|/)(auth|authn|authz|security|crypto|permissions?)(/|[._-])|(^|/)\.github/workflows/|(^|/)\.gitlab-ci\.yml$|\.tf$|(^|/)(terraform|helm|k8s)/|(^|/)Dockerfile'
+
+DEFAULT_PROSE_PATTERNS='\.(md|mdx|rst|txt|adoc)$'
+
+die() {
+    echo >&2 -e "${RED}Error: $*${NC}"
+    exit 1
+}
+
+load_config() {
+    local root file unknown
+    root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+    PROJECT_CFG="$root/.quirk/split-branch.json"
+    for file in "$USER_CFG" "$PROJECT_CFG"; do
+        [[ -f "$file" ]] || continue
+        jq -e 'type == "object"' "$file" >/dev/null 2>&1 || die "$file is not a valid JSON object"
+        unknown=$(jq -r --argjson top "$CONFIG_KEYS" --argjson w "$WEIGHT_KEYS" --argjson p "$PATTERN_KEYS" '
+            (keys - $top | .[]),
+            (if (.weights // {} | type) != "object" then "weights (must be an object)"
+             else (.weights // {} | keys - $w | .[] | "weights." + .) end),
+            (if (.patterns // {} | type) != "object" then "patterns (must be an object)"
+             else (.patterns // {} | keys - $p | .[] | "patterns." + .) end)' "$file")
+        [[ -z "$unknown" ]] || die "$file: unknown or malformed key(s): $(echo $unknown)"
+        CONFIG_FILES+=("$file")
+    done
+}
+
+# Prints the value at a jq path in one config file (an array joined with `|`); fails when the
+# file or the key is absent, so a 0 weight still counts as set.
+cfg_get() {
+    local file="$1" path="$2"
+    [[ -n "$file" && -f "$file" ]] || return 1
+    jq -er "$path | if type == \"array\" then join(\"|\") else . end // empty" "$file" 2>/dev/null
+}
+
+# Sets NAME and NAME_SOURCE (env, project, user or default).
+resolve() {
+    local name="$1" path="$2" default="$3" value source
+    if [[ -n "${!name:-}" ]]; then
+        value="${!name}"; source="env"
+    elif value=$(cfg_get "$PROJECT_CFG" "$path"); then
+        source="project"
+    elif value=$(cfg_get "$USER_CFG" "$path"); then
+        source="user"
+    else
+        value="$default"; source="default"
+    fi
+    printf -v "$name" '%s' "$value"
+    printf -v "${name}_SOURCE" '%s' "$source"
+}
+
+# An env pattern replaces the built-in; a config pattern extends it.
+resolve_pattern() {
+    local name="$1" key="$2" default="$3" extra
+    [[ -n "${!name:-}" ]] && return
+    if extra=$(cfg_get "$PROJECT_CFG" ".patterns.$key") || extra=$(cfg_get "$USER_CFG" ".patterns.$key"); then
+        printf -v "$name" '%s' "$default|$extra"
+    else
+        printf -v "$name" '%s' "$default"
+    fi
+}
+
+describe_source() {
+    case "$1" in
+        project) echo "project config: $PROJECT_CFG" ;;
+        user) echo "user config: $USER_CFG" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+validate_settings() {
+    local number_re='^([0-9]+(\.[0-9]*)?|\.[0-9]+)$'
+    local integer_re='^[1-9][0-9]*$'
+    local var source
+    for var in $WEIGHT_VARS; do
+        [[ "${!var}" =~ $number_re ]] && continue
+        source="${var}_SOURCE"
+        die "$var must be a non-negative number, got '${!var}' ($(describe_source "${!source}"))"
+    done
+    for var in $GOAL_VARS; do
+        [[ "${!var}" =~ $integer_re ]] && continue
+        source="${var}_SOURCE"
+        die "$var must be a positive integer, got '${!var}' ($(describe_source "${!source}"))"
+    done
+    if (( SKIP_THRESHOLD > TARGET_LINES_PER_SPLIT || TARGET_LINES_PER_SPLIT > HARD_CAP )); then
+        die "split goals must satisfy skip_threshold ($SKIP_THRESHOLD) <= target_lines_per_split ($TARGET_LINES_PER_SPLIT) <= hard_cap ($HARD_CAP)"
+    fi
+}
+
+load_settings() {
+    load_config
+
+    resolve TARGET_LINES_PER_SPLIT .target_lines_per_split 300
+    resolve HARD_CAP .hard_cap 600
+    resolve SKIP_THRESHOLD .skip_threshold 200
+
+    resolve TEST_WEIGHT .weights.test 0.5
+    resolve FIXTURE_WEIGHT .weights.fixture 0.1
+    resolve RISKY_WEIGHT .weights.risky 1.5
+    resolve PROSE_WEIGHT .weights.prose 0.5
+    resolve COMMENT_WEIGHT .weights.comment 0.25
+    resolve IMPORT_WEIGHT .weights.import 0.25
+    resolve MOVED_WEIGHT .weights.moved 0.1
+    resolve DELETION_WEIGHT .weights.deletion 0.5
+
+    resolve_pattern EXCLUDE_PATTERNS exclude "$DEFAULT_EXCLUDE_PATTERNS"
+    resolve_pattern FIXTURE_PATTERNS fixture "$DEFAULT_FIXTURE_PATTERNS"
+    resolve_pattern RISKY_PATTERNS risky "$DEFAULT_RISKY_PATTERNS"
+    resolve_pattern PROSE_PATTERNS prose "$DEFAULT_PROSE_PATTERNS"
+
+    validate_settings
+
+    export TEST_WEIGHT FIXTURE_WEIGHT RISKY_WEIGHT PROSE_WEIGHT COMMENT_WEIGHT IMPORT_WEIGHT MOVED_WEIGHT DELETION_WEIGHT
+    export EXCLUDE_PATTERNS FIXTURE_PATTERNS RISKY_PATTERNS PROSE_PATTERNS
+}
 
 # Detect target branch
 detect_target_branch() {
@@ -58,110 +195,29 @@ get_current_branch() {
     git branch --show-current
 }
 
-# Analyze diff and output file statistics
-analyze_diff() {
+merge_base_of() {
     local target_branch="$1"
-    local current_branch
-    current_branch=$(get_current_branch)
-
-    # Get merge base for accurate diff
-    local merge_base
-    merge_base=$(git merge-base "$target_branch" HEAD 2>/dev/null || echo "$target_branch")
-
-    # Get numstat for line counts
-    git diff --numstat "$merge_base"...HEAD 2>/dev/null || git diff --numstat "$target_branch"...HEAD
+    git merge-base "$target_branch" HEAD 2>/dev/null || echo "$target_branch"
 }
 
 # Detect binary files
 detect_binary_files() {
     local target_branch="$1"
-    local merge_base
-    merge_base=$(git merge-base "$target_branch" HEAD 2>/dev/null || echo "$target_branch")
-
-    git diff --numstat "$merge_base"...HEAD 2>/dev/null | grep -E "^-\s+-\s+" | awk '{print $3}' || true
+    git diff --numstat "$(merge_base_of "$target_branch")"...HEAD 2>/dev/null | grep -E "^-\s+-\s+" | awk '{print $3}' || true
 }
 
-# Group files by directory
-# Files matching these patterns are excluded from the budget — generated/vendored content
-# dominates diffs but isn't substantively reviewed. Override with EXCLUDE_PATTERNS env.
-DEFAULT_EXCLUDE_PATTERNS='(^|/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|poetry\.lock|Cargo\.lock|Gemfile\.lock|go\.sum|composer\.lock)$|(^|/)(node_modules|vendor|dist|build|\.next|\.nuxt|target)/|\.min\.(js|css)$|\.generated\.|__generated__|_pb\.go$|_pb2\.py$'
-EXCLUDE_PATTERNS="${EXCLUDE_PATTERNS:-$DEFAULT_EXCLUDE_PATTERNS}"
-
-# Classify a file path: "source", "test", or "excluded"
-classify_file() {
-    local filepath="$1"
-
-    if [[ "$filepath" =~ $EXCLUDE_PATTERNS ]]; then
-        echo "excluded"
-        return
-    fi
-
-    # Heuristic test detection
-    if [[ "$filepath" =~ (^|/)(test|tests|spec|specs|__tests__)/|\.(test|spec)\.[a-zA-Z]+$|_test\.[a-zA-Z]+$|Test\.[a-zA-Z]+$ ]]; then
-        echo "test"
-        return
-    fi
-
-    echo "source"
-}
-
-# Bash 3.2-compatible: emit per-file `dir<TAB>kind<TAB>lines<TAB>filepath` rows
-# from stdin, then aggregate via awk. Avoids associative arrays.
-group_by_directory() {
-    awk -F'\t' -v exclude_re="$EXCLUDE_PATTERNS" '
-        function classify(fp) {
-            if (fp ~ exclude_re) return "excluded"
-            # Heuristic: files under test/, tests/, spec/, specs/, __tests__/, or
-            # ending in .test.X, .spec.X, _test.X, Test.X
-            if (fp ~ /(^|\/)(tests?|specs?|__tests__)\//) return "test"
-            if (fp ~ /\.(test|spec)\.[a-zA-Z]+$/) return "test"
-            if (fp ~ /(_test|Test)\.[a-zA-Z]+$/) return "test"
-            return "source"
-        }
-        function dirof(fp,    i) {
-            i = index(fp, "/")
-            if (i == 0) return "(root)"
-            return substr(fp, 1, i - 1)
-        }
-        NF >= 3 && $1 != "-" {
-            dir = dirof($3)
-            kind = classify($3)
-            lines = $1 + $2
-            src[dir] += (kind == "source") ? lines : 0
-            tst[dir] += (kind == "test")   ? lines : 0
-            exc[dir] += (kind == "excluded") ? lines : 0
-            count[dir] += 1
-            seen[dir] = 1
-        }
-        END {
-            n = 0
-            for (d in seen) dirs[++n] = d
-            # Stable sort dirs alphabetically for deterministic output
-            for (i = 1; i <= n; i++) {
-                for (j = i + 1; j <= n; j++) {
-                    if (dirs[j] < dirs[i]) { tmp = dirs[i]; dirs[i] = dirs[j]; dirs[j] = tmp }
-                }
-            }
-            print "["
-            for (i = 1; i <= n; i++) {
-                d = dirs[i]
-                # Manually JSON-escape directory name
-                gsub(/\\/, "\\\\", d); gsub(/"/, "\\\"", d)
-                printf "    {\n"
-                printf "      \"directory\": \"%s\",\n", d
-                printf "      \"source_lines\": %d,\n", src[dirs[i]]
-                printf "      \"test_lines\": %d,\n", tst[dirs[i]]
-                printf "      \"excluded_lines\": %d,\n", exc[dirs[i]]
-                printf "      \"file_count\": %d\n", count[dirs[i]]
-                printf "    }%s\n", (i < n ? "," : "")
-            }
-            print "]"
-        }
-    '
+# Zero-context diff with fixed a/ b/ prefixes, so user diff config can't change what weigh.awk parses.
+weigh_diff() {
+    local target_branch="$1"
+    git -c core.quotePath=false diff -U0 -M --no-color --no-ext-diff --no-textconv \
+        --src-prefix=a/ --dst-prefix=b/ "$(merge_base_of "$target_branch")"...HEAD \
+        | awk -f "$SCRIPT_DIR/weigh.awk"
 }
 
 # Main execution
 main() {
+    load_settings
+
     local target_branch
     target_branch=$(detect_target_branch "${1:-}")
 
@@ -194,76 +250,33 @@ main() {
         warnings+=("binary files detected: ${binary_files[*]}")
     fi
 
-    # Get diff stats
-    local diff_output
-    diff_output=$(analyze_diff "$target_branch")
+    local weighed
+    weighed=$(weigh_diff "$target_branch")
 
-    # Calculate totals, classifying each file as source / test / excluded
-    local total_files=0
-    local total_source_lines=0
-    local total_test_lines=0
-    local total_excluded_lines=0
-    local total_added=0
-    local total_deleted=0
-    local -a file_stats=()
-    local -a excluded_files=()
-
-    while IFS=$'\t' read -r added deleted filepath; do
-        [[ -z "$filepath" ]] && continue
-        ((total_files++))
-
-        local kind="binary"
-        if [[ "$added" != "-" ]]; then
-            ((total_added += added))
-            ((total_deleted += deleted))
-            local lines=$((added + deleted))
-            kind=$(classify_file "$filepath")
-            case "$kind" in
-                source)   ((total_source_lines += lines)) ;;
-                test)     ((total_test_lines += lines)) ;;
-                excluded) ((total_excluded_lines += lines)); excluded_files+=("$filepath") ;;
-            esac
-        fi
-
-        file_stats+=("{\"file\": $(echo -n "$filepath" | jq -Rs .), \"added\": \"$added\", \"deleted\": \"$deleted\", \"kind\": \"$kind\"}")
-    done <<< "$diff_output"
-
-    local total_lines=$((total_added + total_deleted))
-    # Reviewer-weighted budget: source counts 1x, tests 0.5x, excluded 0x.
-    # Use integer math: weighted = source + (test / 2). Skill-side documents 0.5x.
-    local weighted_review_lines=$(( total_source_lines + (total_test_lines / 2) ))
-
-    if (( ${#excluded_files[@]} > 0 )); then
-        warnings+=("excluded ${#excluded_files[@]} generated/lockfile/vendored files from review-weighted budget (${total_excluded_lines} lines)")
+    local excluded_count excluded_lines
+    excluded_count=$(echo "$weighed" | jq '.excluded_files | length')
+    excluded_lines=$(echo "$weighed" | jq '.total_excluded_lines')
+    if (( excluded_count > 0 )); then
+        warnings+=("excluded ${excluded_count} generated/lockfile/vendored files from review-weighted budget (${excluded_lines} lines)")
     fi
 
-    # Group by directory
-    local dir_groups
-    dir_groups=$(echo "$diff_output" | group_by_directory)
-
-    # Build JSON output
-    cat <<EOF
+    local header
+    header=$(cat <<EOF
 {
   "current_branch": $(echo -n "$current_branch" | jq -Rs .),
   "target_branch": $(echo -n "$target_branch" | jq -Rs .),
-  "total_files": $total_files,
-  "total_lines_added": $total_added,
-  "total_lines_deleted": $total_deleted,
-  "total_lines": $total_lines,
-  "total_source_lines": $total_source_lines,
-  "total_test_lines": $total_test_lines,
-  "total_excluded_lines": $total_excluded_lines,
-  "weighted_review_lines": $weighted_review_lines,
   "target_lines_per_split": $TARGET_LINES_PER_SPLIT,
-  "directory_groups": $dir_groups,
-  "files": [
-$(IFS=,; echo "    ${file_stats[*]:-}" | sed 's/},{/},\n    {/g')
-  ],
+  "hard_cap": $HARD_CAP,
+  "skip_threshold": $SKIP_THRESHOLD,
+  "goal_sources": {"target_lines_per_split": "$TARGET_LINES_PER_SPLIT_SOURCE", "hard_cap": "$HARD_CAP_SOURCE", "skip_threshold": "$SKIP_THRESHOLD_SOURCE"},
+  "config_files": $(printf '%s\n' "${CONFIG_FILES[@]:-}" | jq -Rs 'split("\n") | map(select(length > 0))'),
   "warnings": $(printf '%s\n' "${warnings[@]:-}" | jq -Rs 'split("\n") | map(select(length > 0))'),
-  "binary_files": $(printf '%s\n' "${binary_files[@]:-}" | jq -Rs 'split("\n") | map(select(length > 0))'),
-  "excluded_files": $(printf '%s\n' "${excluded_files[@]:-}" | jq -Rs 'split("\n") | map(select(length > 0))')
+  "binary_files": $(printf '%s\n' "${binary_files[@]:-}" | jq -Rs 'split("\n") | map(select(length > 0))')
 }
 EOF
+)
+
+    printf '%s\n%s\n' "$header" "$weighed" | jq -s 'add'
 }
 
 # Run main with all arguments
