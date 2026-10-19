@@ -10,7 +10,8 @@ allowed-tools: Bash, Read, Grep, Glob, Agent
 
 Run **one** review across up to 14 lenses and deliver a single deduped,
 severity-ranked report. The review is advisory: it never approves, requests changes,
-merges, or posts without an explicit human choice.
+merges, or posts without an explicit human choice. Every run takes every step below,
+whatever the diff size and whether or not anyone is watching (Step 4).
 
 The same machinery serves two detected seats:
 
@@ -42,11 +43,11 @@ MEMORY_SCRIPT="$SCRIPTS/review_memory.py"
 echo "REVIEW_OUT_DIR=$REVIEW_OUT_DIR"
 ```
 
-Shell state does not persist between Bash calls. Run this block once, note the printed
+Shell state does not persist between Bash calls. Run this block verbatim once, note the printed
 `$REVIEW_OUT_DIR`, and begin every later call by setting `REVIEW_OUT_DIR` to that path and
-re-assigning the other variables (including `REVIEW_SOURCE_ROOT` from Step 2). The `:-`
-default keeps the same directory when `REVIEW_OUT_DIR` is already set; a bare re-run
-would mint a new one and orphan the context file.
+re-assigning the other variables (including `REVIEW_SOURCE_ROOT` from Step 2). Keep the `:-`
+default: a caller that sets `REVIEW_OUT_DIR` reads the report there, and a bare `mktemp`
+would mint a new directory and orphan the context file.
 
 The ledger lives at `${XDG_STATE_HOME:-$HOME/.local/state}/quirk/review-memory/`. It keeps
 finding prose and hashed anchors, never plaintext anchor source, and prunes targets
@@ -290,6 +291,14 @@ or previous reports to a lens; the coordinator may extract only `unchanged_files
 the prior head SHA for the neutral annotation in `orchestration.md`.
 
 ## Step 4: fan out the lenses
+
+Diff size never shortens the run. A one-line change gets the same `risk` pass, lens
+fan-out, `report.json`, and render as a large one, so never review the diff inline or
+report findings anywhere else: triage, memory, and posting all read `report.json`.
+Dispatch one `Agent` per lens, never several lenses in one agent, and never run a lens's
+pass yourself. A lens is skipped only when its `run_when` fails, `policy.json` skips it,
+or its dispatch fails. A small diff, a headless run, a missing forge, or cost is never a
+skip reason; a report that gives one is a failed review.
 
 With `--deep [minutes]`, follow `$REFS/deep.md` after Step 3: check execution trust,
 ask once for consent only when allowed, run `risk`, then build the area map. Run standard

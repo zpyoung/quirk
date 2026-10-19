@@ -209,6 +209,22 @@ def test_every_lens_is_told_to_work_through_its_whole_checklist():
         assert "every item of its checklist" in _flat(path), path.name
 
 
+def test_small_diffs_still_get_the_full_fan_out_and_report():
+    # headless runs reviewed 2-9 line diffs inline and wrote no report.json
+    skill = _flat(SKILL_MD)
+    assert "Diff size never shortens the run" in skill
+    assert "never review the diff inline" in skill
+    assert "one `Agent` per lens" in skill
+    # the lenses that skipped named diff size and headless mode as their reason
+    assert "a headless run" in skill and "never a skip reason" in skill
+
+
+def test_setup_keeps_a_caller_set_review_out_dir():
+    skill = _flat(SKILL_MD)
+    assert "Run this block verbatim" in skill
+    assert "a caller that sets `REVIEW_OUT_DIR` reads the report there" in skill
+
+
 def test_cross_repo_scan_keeps_the_caller_parent_as_a_sibling_root():
     skill = _flat(SKILL_MD)
     assert "parent directory of the caller's checkout" in skill
