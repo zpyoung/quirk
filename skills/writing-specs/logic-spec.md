@@ -17,6 +17,7 @@ the user read and signed off on. It is never silently overridden downstream.
   & non-goals, glossary — precise architecture, components, error handling, and testing belong in
   the tech spec authored later at execution when warranted (see [tech-spec.md](tech-spec.md)); name
   file-level structure here only when it is itself the user-facing decision
+- Give each scenario with something to show an example per [scenario-examples.md](scenario-examples.md): Data before, Walkthrough and Data after, a [details section](scenario-examples.md#details-sections), or both, written in the same pass as the scenario
 - Include these sections, in addition to the coverage above:
   - **Decisions Locked** — the gray-area decisions confirmed during drill-in (one bullet per locked decision, grouped by area)
   - **Industry Insights** — distilled key findings from research agents, with source URLs; mark "(offline mode — validation pending)" if research was skipped
@@ -34,6 +35,7 @@ After writing the logic spec, look at it with fresh eyes:
 2. **Internal consistency:** Do any sections contradict each other? Does the architecture match the feature descriptions?
 3. **Scope check:** Is this focused enough for a single implementation plan, or does it need decomposition?
 4. **Ambiguity check:** Could any requirement be interpreted two different ways? If so, pick one and make it explicit.
+5. **Example check:** Does every example agree with its Then, and is each open `[ASK]` a question the design didn't already answer? See [scenario-examples.md](scenario-examples.md#self-review-check).
 
 Fix any issues inline. No need to re-review — just fix and move on.
 
@@ -42,6 +44,8 @@ Fix any issues inline. No need to re-review — just fix and move on.
 After the spec review loop passes, ask the user to review the written spec before proceeding:
 
 > "Logic spec written and committed to `<path>`. Please review it and let me know if you want to make any changes before we move to implementation — for larger work, the execution skill may first author a tech spec from it."
+
+List every open `[ASK]` with its scenario when you present the spec. Each answer goes into that scenario's Then (or becomes a new scenario) before approval, and you rewrite the example to match; see [scenario-examples.md](scenario-examples.md#keeping-an-example-in-sync).
 
 Wait for the user's response. If they request changes, make them and re-run the spec review loop.
 Only proceed once the user approves.

@@ -108,25 +108,50 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: medium
 - **Proposed fix**: Have fold carry notes into the requirement (e.g. reviewNote) or print them on stderr so Claude must act on them; and either let the page set certainty directly or document that notes are advisory. Omit stage-1 items from the stage-2 record, or mark them as pinned.
 
-## BUG-12: SKILL.md and orchestration.md disagree on which dispatches carry the mutation-probe line
+## BUG-12: pi-watch dispatch prints nothing when the provider request fails
+- **Observed**: 2026-10-15
+- **File**: skills/pi-dev/scripts/pi-watch/pi-watch.mjs:442
+- **Description**: With an expired anthropic OAuth token, pi-watch --alias sonnet --tools read --require-trailer STATUS wrote empty stdout and exited 6 (missing trailer). Without --require-trailer it exits 0 with empty output. Raw pi -p --provider anthropic --model claude-sonnet-4-6 prints 'OAuth refresh failed for anthropic: ... invalid_grant'. session.prompt() does not throw on a provider error, so pi-watch's catch never runs; the failure sits on the final assistant message (stopReason/errorMessage), which pi-watch never inspects. Callers such as adversarial-review read the empty reply as a reviewer result. This is the dispatch side of the expired-token case in BUG-9. Seen while verifying the 1.x SDK port on zpyoung/fix-pi-watch; BUG-9 shows the same empty-reply symptom on the pre-port SDK.
+- **Severity**: high
+- **Proposed fix**: After session.prompt(), check the last assistant message's stopReason; on error, write errorMessage to stderr and exit non-zero.
+- **Resolved**: 2026-10-15. After session.prompt(), pi-watch reads the last assistant message the way pi's print mode does: stopReason error or aborted exits 1 with errorMessage on stderr, and length exits 1 as truncated. The check runs before --require-trailer, so a provider failure no longer surfaces as exit 6. BUG-9 (--check passing an expired token) stays open.
+
+## BUG-13: Review page markdown renders in quadratic time on long runs of unmatched '['
+- **Observed**: 2026-10-15
+- **File**: skills/writing-specs/interactive/app/src/views/scenario-example.tsx:51
+- **Description**: The Astryx 0.6.2 Markdown parser is quadratic on long runs of unmatched '['. It affects every markdown field on the writing-specs review page, examples included, through SpecMarkdown in src/views/shared.tsx too. Timings: 100k '[' 92ms, 200k 334ms, 400k 1301ms, 800k 5172ms. Found by the round-5 security review of scenario-data-states. Triggering it takes a hostile 400k+ character spec field, and spec JSON is Claude-written.
+- **Introduced by**: upstream @astryxdesign/core 0.6.2 Markdown parser (pre-dates scenario-data-states)
+- **Severity**: low
+- **Proposed fix**: Bound example and markdown field length in spec validation, or escape pathological unmatched delimiters before parsing.
+- **Resolved**: 2026-10-15. render_spec.py validation now rejects any logic.json string over MAX_TEXT_CHARS (10,000), reported at its JSON pointer. The parser cost is per paragraph, so the cap bounds every render site (SpecMarkdown, the example panes, and the generated logic.md in SpecView) to about 24ms per field in the worst case. The parser itself is unchanged.
+
+## BUG-14: Review page links lose their underscores' meaning: SpecMarkdown inserts zero-width spaces into link URLs
+- **Observed**: 2026-10-15
+- **File**: skills/writing-specs/interactive/app/src/views/shared.tsx:37
+- **Description**: SpecMarkdown's page-wide underscore guard (children.replace(/_/g, '_\u200b')) also rewrites Markdown link destinations, so [r](https://x.test/a_b) renders href="https://x.test/a_\u200bb" and the link opens the wrong URL. Affects every SpecMarkdown field on the review page: explanations, details, custom views. Found by the round-1 correctness review of the details sections, which fixed the same defect in scenario-example.tsx; shared.tsx is fenced in that work.
+- **Introduced by**: pre-dates the details-section work (SpecMarkdown underscore guard)
+- **Severity**: medium
+- **Proposed fix**: Skip link destinations and autolinks when applying the underscore guard, as scenario-example.tsx now does.
+
+## BUG-15: SKILL.md and orchestration.md disagree on which dispatches carry the mutation-probe line
 - **Observed**: 2026-10-18
 - **File**: skills/full-code-review/SKILL.md:318
 - **Description**: SKILL.md Step 4 says to state the mutation-probe line in every dispatch, but orchestration.md's 'Every specialist prompt also says' paragraph says the coordinator adds 'mutation probe: enabled' only to the three test lenses, and only with consent. A coordinator can't tell whether every dispatch needs a mutation-probe line (disabled for the non-test lenses) or only the test lenses do. Doc-only. Found while fixing the gaps the MR !722 re-review exposed.
 - **Severity**: low
 - **Proposed fix**: Pick one rule: either every dispatch states the probe status (enabled or disabled), or only the test lenses get the line. Then make both files say the same thing.
 
-## BUG-13: full-code-review lets the coordinator skip the lens fan-out on small diffs
+## BUG-16: full-code-review lets the coordinator skip the lens fan-out on small diffs
 - **Observed**: 2026-10-19
 - **File**: skills/full-code-review/SKILL.md:292
 - **Description**: In a headless smoke-corpus run (claude -p "/quirk:full-code-review --local --no-open", Sonnet 5.5 default, 2026-10-19), all 5 smoke cases reviewed the 2-9 line diff inline instead of dispatching lenses and wrote no report.json (one used the ReportFindings tool, one wrote a Markdown report). One also overrode a pre-exported REVIEW_OUT_DIR with its own mktemp despite the ${REVIEW_OUT_DIR:-...} default in Setup. SKILL.md never says the fan-out runs regardless of diff size, so the smoke corpus can't run without a prompt override and real tiny-diff reviews silently drop to one inline pass.
 - **Severity**: medium
 - **Proposed fix**: State in SKILL.md (Setup + Step 4) that the lens fan-out and report.json are mandatory at any diff size with no inline shortcut, and that a pre-set REVIEW_OUT_DIR is kept; add a test pinning that wording.
-- **Resolved**: 2026-10-19. Wording alone (fan-out at any size, keep REVIEW_OUT_DIR) fixed the out-dir override but still left 3 of 5 plain-prompt runs skipping, now citing "headless run on a one-line diff". Closing those excuses by name (one Agent per lens; skip only on run_when, policy, or failed dispatch; diff size, headless, no forge, or cost is never a skip reason) brought all 5 to a full fan-out, report.json in the caller's dir, and a passing smoke_check. Residual lens-packing is BUG-14.
+- **Resolved**: 2026-10-19. Wording alone (fan-out at any size, keep REVIEW_OUT_DIR) fixed the out-dir override but still left 3 of 5 plain-prompt runs skipping, now citing "headless run on a one-line diff". Closing those excuses by name (one Agent per lens; skip only on run_when, policy, or failed dispatch; diff size, headless, no forge, or cost is never a skip reason) brought all 5 to a full fan-out, report.json in the caller's dir, and a passing smoke_check. Residual lens-packing is BUG-17.
 
-## BUG-14: full-code-review coordinator occasionally packs several lenses into one agent
+## BUG-17: full-code-review coordinator occasionally packs several lenses into one agent
 - **Observed**: 2026-10-19
 - **File**: skills/full-code-review/SKILL.md:298
-- **Description**: In the 2026-10-19 plain-prompt smoke run after the BUG-13 fix, 1 of 54 lens dispatches (correctness case) combined comments, db and observability into one agent despite SKILL.md Step 4 saying one Agent per lens. A packed agent shares one context across checklists, so a lens can get a shallower pass than its own dispatch would give, and run.models then reports per-lens models for a single dispatch. Earlier rounds also packed lenses (test-adequacy case, 2 multi-lens agents).
+- **Description**: In the 2026-10-19 plain-prompt smoke run after the BUG-16 fix, 1 of 54 lens dispatches (correctness case) combined comments, db and observability into one agent despite SKILL.md Step 4 saying one Agent per lens. A packed agent shares one context across checklists, so a lens can get a shallower pass than its own dispatch would give, and run.models then reports per-lens models for a single dispatch. Earlier rounds also packed lenses (test-adequacy case, 2 multi-lens agents).
 - **Severity**: low
 - **Proposed fix**: Re-run the smoke corpus a few times to measure the rate; if it persists, have the coordinator check its dispatch count against policy.json's runnable lenses before Step 5, or record per-lens agent ids in run so a packed dispatch is visible in the report.
 

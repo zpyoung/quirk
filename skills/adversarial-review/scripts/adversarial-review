@@ -13,6 +13,8 @@ signal that the run failed rather than found nothing.
 from __future__ import annotations
 
 import argparse
+import ast
+import fnmatch
 import hashlib
 import json
 import os
@@ -22,7 +24,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
+import time
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 PROFILES = ("code-diff", "spec-design", "plan", "prose-claim")
@@ -41,6 +44,40 @@ EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 CODE_QUICK_MAX = 50
 CODE_DEEP_MIN = 151
 PROSE_QUICK_MAX = 499
+
+DEFAULT_EXCLUDE_DIRS: frozenset[str] = frozenset({
+    "vendor", "node_modules", "dist", "build", ".venv", "__pycache__",
+})
+DEFAULT_EXCLUDE_PATTERNS: tuple[str, ...] = (
+    "*.min.js", "*.min.css", "*.bundle.js",
+    "*.lock", "pnpm-lock.yaml", "package-lock.json",
+    "yarn.lock", "Cargo.lock", "poetry.lock", "uv.lock",
+)
+EXCERPT_FALLBACK_MAX_LINES = 200
+EXCERPT_CONTEXT_LINES = 15
+
+
+def is_excluded_path(rel_path: str, include_all: bool = False) -> bool:
+    """Whether default diff hygiene omits a repository-relative file."""
+    if include_all:
+        return False
+    parts = PurePosixPath(rel_path).parts
+    return bool(parts) and (
+        any(part in DEFAULT_EXCLUDE_DIRS for part in parts[:-1])
+        or any(fnmatch.fnmatchcase(parts[-1], pat) for pat in DEFAULT_EXCLUDE_PATTERNS)
+    )
+
+
+def diff_pathspecs(include_all: bool) -> list[str]:
+    """Bound git's exclusion arguments independently of the number of changed files."""
+    if include_all:
+        return []
+    patterns = [f"{directory}/**" for directory in sorted(DEFAULT_EXCLUDE_DIRS)]
+    patterns.extend(DEFAULT_EXCLUDE_PATTERNS)
+    return ["--", ".", *(
+        f":(exclude,glob){prefix}{pattern}"
+        for pattern in patterns for prefix in ("", "**/")
+    )]
 
 # `other` is documented in the composition contract: the author was a family this
 # ladder does not dispatch to (a human, a local model). It matches no candidate, so
@@ -114,7 +151,7 @@ def has_head(repo_root: Path) -> bool:
 
 
 def read_diff(target: str, repo_root: Path, diff_file: str | None,
-              untracked_only: list[str] | None = None) -> str:
+              untracked_only: list[str] | None = None, include_all: bool = False) -> str:
     if diff_file is not None:
         path = Path(diff_file)
         if not path.is_file():
@@ -134,6 +171,7 @@ def read_diff(target: str, repo_root: Path, diff_file: str | None,
         # baseline — otherwise a staged new file falls in the gap between `git diff`
         # (which cannot see it) and the untracked scan (which skips anything staged).
         argv.append("HEAD" if has_head(repo_root) else EMPTY_TREE)
+    argv.extend(diff_pathspecs(include_all))
     try:
         completed = subprocess.run(
             argv, cwd=repo_root, capture_output=True, text=True, errors="replace"
@@ -150,11 +188,11 @@ def read_diff(target: str, repo_root: Path, diff_file: str | None,
             f"{detail[0] if detail else f'git diff exited {completed.returncode}'}"
         )
     if not target or target.strip() == "WORKTREE":
-        return completed.stdout + untracked_diff(repo_root, untracked_only)
+        return completed.stdout + untracked_diff(repo_root, untracked_only, include_all)
     return completed.stdout
 
 
-def untracked_paths(repo_root: Path) -> list[str]:
+def untracked_paths(repo_root: Path, include_all: bool = True) -> list[str]:
     """The untracked files that count as work under review, in git's own order.
 
     `--exclude-standard` keeps ignored files out, since those are not work under review.
@@ -178,10 +216,42 @@ def untracked_paths(repo_root: Path) -> list[str]:
             f"cannot enumerate untracked files: "
             f"{detail[0] if detail else f'git ls-files exited {listing.returncode}'}"
         )
-    return [p for p in listing.stdout.split("\0") if p.strip()]
+    return [p for p in listing.stdout.split("\0")
+            if p.strip() and not is_excluded_path(p, include_all)]
 
 
-def untracked_diff(repo_root: Path, only: list[str] | None = None) -> str:
+def collect_excluded_paths(
+    target: str, repo_root: Path, diff_file: str | None,
+    untracked_only: list[str] | None = None, include_all: bool = False,
+) -> list[str]:
+    """Report omitted files and their changed-line counts without parsing diff headers."""
+    if include_all or diff_file is not None or classify_target(target) == "path":
+        return []
+    worktree = classify_target(target) == "worktree"
+    baseline = ("HEAD" if has_head(repo_root) else EMPTY_TREE) if worktree else target
+    completed = subprocess.run(
+        ["git", "--no-pager", "diff", "--numstat", "-z", "--no-renames", baseline],
+        cwd=repo_root, capture_output=True, text=True, errors="replace",
+    )
+    if completed.returncode != 0:
+        raise UsageError(f"cannot read target {target or 'WORKTREE'}: {completed.stderr.strip()}")
+    counts: dict[str, int] = {}
+    for entry in completed.stdout.split("\0"):
+        if not entry:
+            continue
+        added, deleted, path = entry.split("\t", 2)
+        if is_excluded_path(path):
+            counts[path] = sum(int(value) if value != "-" else 0 for value in (added, deleted))
+    if worktree:
+        paths = untracked_paths(repo_root, include_all=True) if untracked_only is None else untracked_only
+        for path in paths:
+            if is_excluded_path(path):
+                counts[path] = len((repo_root / path).read_bytes().splitlines())
+    return sorted(f"{path} ({count} lines)" for path, count in counts.items())
+
+
+def untracked_diff(repo_root: Path, only: list[str] | None = None,
+                   include_all: bool = False) -> str:
     """The uncommitted work git will not diff for you.
 
     A brand-new module is uncommitted work, and `git diff` in any form ignores it
@@ -196,11 +266,11 @@ def untracked_diff(repo_root: Path, only: list[str] | None = None) -> str:
     Re-deriving the hash over everything present *now* would refuse an honest review of
     a stock Rust project on its first run.
     """
-    listed = untracked_paths(repo_root) if only is None else list(only)
+    listed = untracked_paths(repo_root, include_all) if only is None else list(only)
 
     parts: list[str] = []
     for relative in listed:
-        if not relative.strip():
+        if not relative.strip() or is_excluded_path(relative, include_all):
             continue
         # A recorded path that has since been deleted renders as nothing rather than
         # raising, so the check reports a changed artifact instead of an unreadable one.
@@ -305,7 +375,7 @@ def suggest_depth(profile: str, size_metric: int, contract_surface: bool) -> str
 
 def artifact_hash_of(
     target: str, repo_root: Path, diff_file: str | None, diff: str | None = None,
-    untracked_only: list[str] | None = None,
+    untracked_only: list[str] | None = None, include_all: bool = False,
 ) -> str:
     """The replay identity of a target — one definition, so every stage derives it alike.
 
@@ -324,12 +394,13 @@ def artifact_hash_of(
         # would share one replay identity.
         return hashlib.sha256(path.read_bytes()).hexdigest()
     if diff is None:
-        diff = read_diff(target, repo_root, diff_file, untracked_only)
+        diff = read_diff(target, repo_root, diff_file, untracked_only, include_all)
     return hashlib.sha256(diff.encode()).hexdigest()
 
 
 def resolve_target(
-    target: str, profile: str | None, repo_root: Path, diff_file: str | None
+    target: str, profile: str | None, repo_root: Path, diff_file: str | None,
+    include_all: bool = False,
 ) -> dict[str, Any]:
     if profile is not None and profile not in PROFILES:
         raise UsageError(f"unknown profile: {profile} (expected one of {', '.join(PROFILES)})")
@@ -356,9 +427,12 @@ def resolve_target(
             "size_metric": size_metric,
             "depth_suggestion": suggest_depth(resolved_profile, size_metric, False),
             "contract_surface": False,
+            "include_all": include_all,
+            "excluded_paths": [],
+            "full_worktree_hash": None,
         }
 
-    diff = read_diff(target, repo_root, diff_file)
+    diff = read_diff(target, repo_root, diff_file, include_all=include_all)
     size_metric = diff_size(resolved_profile, diff)
     contract_surface = has_contract_surface(diff)
     return {
@@ -366,6 +440,17 @@ def resolve_target(
         "target_kind": target_kind,
         "target_ref": target or "WORKTREE",
         "artifact_hash": artifact_hash_of(target, repo_root, diff_file, diff),
+        "include_all": include_all,
+        "excluded_paths": collect_excluded_paths(
+            target, repo_root, diff_file, include_all=include_all,
+        ),
+        "full_worktree_hash": (
+            artifact_hash_of(
+                target, repo_root, diff_file,
+                untracked_only=untracked_paths(repo_root, include_all=True) if not diff_file else [],
+                include_all=True,
+            ) if target_kind == "worktree" else None
+        ),
         # Absolute: the later stages that re-derive this hash need not share a cwd with
         # the invocation that recorded it.
         "diff_file": str(Path(diff_file).resolve()) if diff_file else None,
@@ -373,7 +458,7 @@ def resolve_target(
         # stages that re-derive the hash scan exactly these, so a file the review's own
         # checks create is not mistaken for the artifact moving underneath it.
         "untracked_paths": (
-            untracked_paths(repo_root)
+            untracked_paths(repo_root, include_all=include_all)
             if not diff_file and target_kind == "worktree" else []
         ),
         "size_metric": size_metric,
@@ -421,8 +506,84 @@ def discover_code_checks(repo_root: Path, overrides: list[str]) -> list[str]:
     return [cmd for marker, cmd in CODE_CHECK_DISCOVERY if (repo_root / marker).is_file()]
 
 
+def current_tree_hash(repo_root: Path) -> str | None:
+    """Return the committed tree identity, or None before a repository has a commit."""
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD^{tree}"], cwd=repo_root,
+            capture_output=True, text=True,
+        )
+    except OSError:
+        return None
+    return completed.stdout.strip() if completed.returncode == 0 else None
+
+
+def verify_reused_checks(
+    reuse_path: str, repo_root: Path, expected_commands: list[str],
+    resolved: dict[str, Any] | None,
+    target: str = "", diff_file: str | None = None,
+) -> list[dict[str, Any]]:
+    """Accept check results only when their tree, worktree and command identities match."""
+    if not isinstance(resolved, dict) or resolved.get("target_kind") not in ("git-range", "worktree"):
+        raise UsageError("reuse-check requires a resolved git-range or worktree target")
+    target = target or resolved.get("target_ref", "")
+    if diff_file is None:
+        diff_file = resolved.get("diff_file")
+    record = load_json(reuse_path, "reuse-check")
+    if not isinstance(record, dict):
+        raise UsageError("reuse-check input must be a JSON object")
+    tree_hash = record.get("tree_hash")
+    if not isinstance(tree_hash, str) or not tree_hash or tree_hash != current_tree_hash(repo_root):
+        raise UsageError("reuse-check tree_hash does not match the current committed tree")
+    if not isinstance(record.get("clean_tree"), bool):
+        raise UsageError("reuse-check clean_tree must be a JSON boolean")
+    if resolved.get("target_kind") == "git-range":
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=repo_root, capture_output=True, text=True,
+        )
+        if not record["clean_tree"] or status.returncode != 0 or status.stdout.strip():
+            raise UsageError("reuse-check requires a clean tracked tree for git-range targets")
+    elif resolved.get("target_kind") == "worktree":
+        full_hash = record.get("full_worktree_hash")
+        live_hash = artifact_hash_of(
+            target, repo_root, diff_file,
+            untracked_only=untracked_paths(repo_root, include_all=True), include_all=True,
+        )
+        if not isinstance(full_hash, str) or not full_hash or full_hash != live_hash:
+            raise UsageError("reuse-check full_worktree_hash does not match the current worktree")
+    checks = record.get("checks")
+    if not isinstance(checks, list) or not checks:
+        raise UsageError("reuse-check checks must be a non-empty array of objects")
+    by_command: dict[str, dict[str, Any]] = {}
+    for check in checks:
+        if not isinstance(check, dict):
+            raise UsageError("reuse-check checks must contain JSON objects")
+        exit_code = check.get("exit_code")
+        duration = check.get("duration_ms", 0)
+        if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+            raise UsageError("reuse-check exit_code must be an integer")
+        if check.get("status") != ("pass" if exit_code == 0 else "fail"):
+            raise UsageError("reuse-check status does not match exit_code")
+        if not isinstance(check.get("output"), str):
+            raise UsageError("reuse-check output must be a string")
+        if not isinstance(duration, int) or isinstance(duration, bool) or duration < 0:
+            raise UsageError("reuse-check duration_ms must be a non-negative integer")
+        command = check.get("command")
+        if isinstance(command, str):
+            by_command[command] = check
+    if any(command not in by_command for command in expected_commands):
+        raise UsageError("reuse-check is missing an expected command")
+    return [
+        {**by_command[command], "name": by_command[command].get("name", "code-check"),
+         "duration_ms": by_command[command].get("duration_ms", 0), "reused": True}
+        for command in expected_commands
+    ]
+
+
 def run_check(command: str, repo_root: Path) -> dict[str, Any]:
     """Run a declared check verbatim through the shell, as the profile wrote it."""
+    started = time.monotonic()
     completed = subprocess.run(
         command, cwd=repo_root, shell=True, capture_output=True, text=True, errors="replace"
     )
@@ -432,6 +593,8 @@ def run_check(command: str, repo_root: Path) -> dict[str, Any]:
         "exit_code": completed.returncode,
         "status": "pass" if completed.returncode == 0 else "fail",
         "output": (completed.stdout + completed.stderr)[-4000:],
+        "duration_ms": int((time.monotonic() - started) * 1000),
+        "reused": False,
     }
 
 
@@ -771,9 +934,16 @@ def check_sections(text: str, profile: str) -> dict[str, Any]:
 def run_prepass(
     profile: str, target: str, repo_root: Path, check_cmds: list[str],
     diff_file: str | None = None, untracked_only: list[str] | None = None,
+    include_all: bool = False, reuse_check_path: str | None = None,
+    resolved: dict[str, Any] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     if profile not in PROFILES:
         raise UsageError(f"unknown profile: {profile} (expected one of {', '.join(PROFILES)})")
+    if reuse_check_path is not None and profile != "code-diff":
+        raise UsageError("--reuse-check is only supported for profile code-diff")
+    include_all = bool(resolved.get("include_all", include_all)) \
+        if isinstance(resolved, dict) else include_all
+    tree_hash = current_tree_hash(repo_root)
 
     # Hashed before the checks run, never after: a test suite writes `.pytest_cache/`
     # and `__pycache__/` into the tree, and the worktree diff counts untracked files, so
@@ -781,7 +951,7 @@ def run_prepass(
     # never matches what `resolve` saw.
     try:
         observed = artifact_hash_of(target, repo_root, diff_file,
-                                    untracked_only=untracked_only)
+                                    untracked_only=untracked_only, include_all=include_all)
     except UsageError:
         # An artifact that cannot be read cannot be hashed, and that is already what
         # `could-not-run` means. Failing hard here would turn the input to the
@@ -797,7 +967,13 @@ def run_prepass(
 
     if profile == "code-diff":
         commands = discover_code_checks(repo_root, check_cmds)
-        checks = [run_check(command, repo_root) for command in commands]
+        checks = (
+            verify_reused_checks(
+                reuse_check_path, repo_root, commands, resolved or {},
+                target=target, diff_file=diff_file,
+            ) if reuse_check_path is not None
+            else [run_check(command, repo_root) for command in commands]
+        )
     else:
         path = Path(target)
         if not path.is_absolute():
@@ -805,7 +981,7 @@ def run_prepass(
         if not path.is_file():
             # No check could run at all — distinct from a check that ran and failed.
             return 1, {"status": "could-not-run", "checks": [], "findings": [],
-                       "observed_artifact_hash": observed}
+                       "observed_artifact_hash": observed, "tree_hash": tree_hash}
         text = path.read_text(errors="replace")
         reference_check, findings = check_references(
             text, repo_root, profile, path.parent, path
@@ -815,7 +991,7 @@ def run_prepass(
 
     if not checks:
         return 1, {"status": "could-not-run", "checks": [], "findings": [],
-                   "observed_artifact_hash": observed}
+                   "observed_artifact_hash": observed, "tree_hash": tree_hash}
 
     # The invariant, enforced once for every branch rather than per branch: the
     # verdict is computed from findings alone, so a failure that stops at `checks[]`
@@ -838,6 +1014,7 @@ def run_prepass(
         # truth describes a different artifact than the one under review is worse than
         # no pre-pass, because `gate` reports its silence as a clean bill of health.
         "observed_artifact_hash": observed,
+        "tree_hash": tree_hash,
     }
 
 
@@ -851,11 +1028,11 @@ def run_prepass(
 # within each family; the ladder is walked in this order once the author's family
 # is filtered out.
 ALIAS_LADDER = (
-    ("codex", "openai", "openai-codex/gpt-5.6-sol", "high"),
-    ("gemini", "google", "google/gemini-3.2-pro-preview", "high"),
+    ("codex", "openai", "openai-codex/gpt-6.1-sol", "high"),
+    ("gemini", "google", "google/gemini-3.1-pro-preview", "high"),
     ("terra", "openai", "openai-codex/gpt-5.6-terra", "high"),
-    ("opus", "anthropic", "anthropic/claude-opus-4-7", "high"),
-    ("sonnet", "anthropic", "anthropic/claude-sonnet-4-7", "high"),
+    ("opus", "anthropic", "anthropic/claude-opus-5-5", "high"),
+    ("sonnet", "anthropic", "anthropic/claude-sonnet-5-5", "high"),
     ("flash", "google", "google/gemini-flash-latest", "medium"),
 )
 
@@ -1075,6 +1252,7 @@ VERDICT_EXIT = {"PASS": 0, "NEEDS_FIXES": 1, "CRITICAL_ISSUES": 3, "NOT_REVIEWAB
 SCOPE_BOUNDING_FIELDS = (
     "contested_count",    # pending disputes; the result is not final
     "unreviewed_paths",   # appeared after capture; no stage saw them
+    "excluded_paths",
     "advisory_count",     # real findings that no stage beyond promote stood behind
     "limitations",        # the protocol could not evaluate these
     "questions",          # decisions needing their owner
@@ -1089,6 +1267,29 @@ def load_json(path_arg: str, label: str) -> Any:
         return json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
         raise UsageError(f"cannot read {label} input {path}: {exc}") from exc
+
+
+def validate_evidence_item(item: Any, label: str) -> None:
+    """Require a typed evidence object with usable fields for its declared kind."""
+    if not isinstance(item, dict):
+        raise UsageError(f"{label} has a non-object evidence item")
+    kind = item.get("kind")
+    if not isinstance(kind, str) or kind not in EVIDENCE_REQUIRED_FIELDS:
+        raise UsageError(f"{label} has an evidence item with invalid kind: {kind}")
+    for field in EVIDENCE_REQUIRED_FIELDS[kind]:
+        if field not in item:
+            raise UsageError(f"{label} evidence of kind {kind} is missing field: {field}")
+        value = item[field]
+        if not isinstance(value, str):
+            raise UsageError(f"{label} evidence of kind {kind} has a non-string {field}")
+        if not value.strip() and not (kind == "absence" and field == "output"):
+            hint = (
+                ". A search that proves nothing was found is `kind: \"absence\"` "
+                "(command, ref, output) — `command` means a run whose output shows "
+                "the failure, so it cannot be empty"
+                if kind == "command" and field == "output" else ""
+            )
+            raise UsageError(f"{label} evidence of kind {kind} has an empty {field}{hint}")
 
 
 def validate_finding(finding: Any, index: int, id_prefix: str = "F") -> None:
@@ -1160,39 +1361,12 @@ def validate_finding(finding: Any, index: int, id_prefix: str = "F") -> None:
     if not isinstance(evidence, list) or not evidence:
         raise UsageError(f"finding {index} must carry at least one evidence item")
     for item in evidence:
-        kind = item.get("kind") if isinstance(item, dict) else None
-        if kind not in EVIDENCE_REQUIRED_FIELDS:
-            raise UsageError(f"finding {index} has an evidence item with invalid kind: {kind}")
-        for field in EVIDENCE_REQUIRED_FIELDS[kind]:
-            if field not in item:
-                raise UsageError(
-                    f"finding {index} evidence of kind {kind} is missing field: {field}"
-                )
-            # Presence is not content. An empty `command`/`output` pair would
-            # otherwise satisfy the schema and buy reproduction credit, holding a
-            # finding at HIGH confidence on evidence of nothing.
-            # An absence claim is the one case where empty output *is* the content:
-            # it asserts the cited search came back with nothing. The field must be
-            # present — omitting it asserts nothing at all — but it may be empty.
-            value = item[field]
-            if not isinstance(value, str):
-                raise UsageError(
-                    f"finding {index} evidence of kind {kind} has a non-string {field}"
-                )
-            if not value.strip() and not (kind == "absence" and field == "output"):
-                # Real reviewers reach for `command` to prove an absence and leave the
-                # output empty, which used to fail with no hint that a kind exists for
-                # exactly that. The reply is refused whole, so the message has to say
-                # what to change or a whole promote round is discarded over wording.
-                hint = (
-                    ". A search that proves nothing was found is `kind: \"absence\"` "
-                    "(command, ref, output) — `command` means a run whose output shows "
-                    "the failure, so it cannot be empty"
-                    if kind == "command" and field == "output" else ""
-                )
-                raise UsageError(
-                    f"finding {index} evidence of kind {kind} has an empty {field}{hint}"
-                )
+        validate_evidence_item(item, f"finding {index}")
+    if "counter_evidence" in finding:
+        if not isinstance(finding["counter_evidence"], list):
+            raise UsageError(f"finding {index} has non-array counter_evidence")
+        for item in finding["counter_evidence"]:
+            validate_evidence_item(item, f"finding {index} counter_evidence")
 
 
 def evidence_resolves(item: dict[str, Any], repo_root: Path) -> bool:
@@ -1356,7 +1530,9 @@ def unreviewed_since_capture(resolved: dict[str, Any], repo_root: Path) -> list[
         return []
     captured = set(resolved.get("untracked_paths") or [])
     try:
-        return sorted(p for p in untracked_paths(repo_root) if p not in captured)
+        return sorted(set(untracked_paths(
+            repo_root, include_all=bool(resolved.get("include_all", False)),
+        )) - captured)
     except UsageError:
         # Outside a worktree there is nothing to enumerate. That is not a review defect
         # and must not turn a completed review into a crash.
@@ -1378,6 +1554,7 @@ def verify_artifact_is_current(resolved: dict[str, Any], repo_root: Path) -> Non
     current = artifact_hash_of(
         resolved.get("target_ref", ""), repo_root, resolved.get("diff_file"),
         untracked_only=resolved.get("untracked_paths") or [],
+        include_all=bool(resolved.get("include_all", False)),
     )
     if current == resolved.get("artifact_hash"):
         return
@@ -1685,10 +1862,13 @@ def run_gate(
         # silently stopped short of real new work would be the same lie by omission the
         # suppressed count exists to prevent, so the caller is told either way.
         "unreviewed_paths": unreviewed,
+        "excluded_paths": resolved.get("excluded_paths", []) if isinstance(resolved, dict) else [],
         "regrade_count": sum(1 for f in survivors if f.get(ADJUDICATED_SEVERITY)),
     }
     if gate_chain:
         payload["chain"] = gate_chain
+    if contested and isinstance(resolved, dict):
+        payload["contested_excerpts"] = extract_diff_excerpts(contested, resolved, repo_root)
     return VERDICT_EXIT[verdict], payload
 
 
@@ -1741,8 +1921,161 @@ def compute_verdict(
 CLAIM_FIELDS = ("id", "severity", "confidence", "category", "claim", "evidence")
 
 
+def resolved_artifact_text(resolved: dict[str, Any], repo_root: Path) -> str:
+    """Read the artifact using the same captured scope as resolve and the currency check."""
+    target = resolved.get("target_ref", "")
+    if resolved.get("target_kind") == "path":
+        path = Path(target)
+        return (path if path.is_absolute() else repo_root / path).read_text(errors="replace")
+    return read_diff(
+        target, repo_root, resolved.get("diff_file"),
+        untracked_only=resolved.get("untracked_paths") or [],
+        include_all=bool(resolved.get("include_all", False)),
+    )
+
+
+def diff_hunks(diff: str) -> list[tuple[str, int, int, str, str]]:
+    """Return post-change hunk ranges and file headers in their original diff order."""
+    lines = diff.splitlines(keepends=True)
+    hunks: list[tuple[str, int, int, str, str]] = []
+    path = ""
+    old_header = ""
+    headers = ""
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        header = HUNK_HEADER.match(line)
+        if header:
+            start = index
+            old_left = int(header.group(2) if header.group(2) is not None else 1)
+            new_count = int(header.group(4) if header.group(4) is not None else 1)
+            new_left = new_count
+            index += 1
+            while index < len(lines) and (old_left > 0 or new_left > 0):
+                content = lines[index]
+                if HUNK_HEADER.match(content) or content.startswith("diff --git "):
+                    break
+                index += 1
+                if content.startswith("\\"):
+                    continue
+                if content.startswith("-"):
+                    old_left -= 1
+                elif content.startswith("+"):
+                    new_left -= 1
+                else:
+                    old_left -= 1
+                    new_left -= 1
+            if index < len(lines) and lines[index].startswith("\\"):
+                index += 1
+            hunks.append((path, int(header.group(3)), new_count, headers,
+                          "".join(lines[start:index])))
+            continue
+        if line.startswith("--- "):
+            old_header = line
+        elif line.startswith("+++ "):
+            raw_path = line[4:].rstrip("\n").split("\t", 1)[0]
+            if raw_path.startswith('"'):
+                ascii_path = "".join(
+                    chr(byte) if byte < 128 else f"\\{byte:03o}"
+                    for byte in raw_path.encode("utf-8")
+                )
+                raw_path = ast.literal_eval("b" + ascii_path).decode("utf-8", errors="replace")
+            path = raw_path[2:] if raw_path.startswith("b/") else raw_path
+            headers = old_header + line
+        index += 1
+    return hunks
+
+
+def extract_diff_excerpts(
+    findings: list[dict[str, Any]], resolved: Any, repo_root: Path,
+) -> str:
+    """Supply cited post-change hunks and nearby numbered source without repeated windows."""
+    if not isinstance(resolved, dict):
+        return ""
+    artifact = resolved_artifact_text(resolved, repo_root)
+    references: dict[str, list[tuple[int, int]]] = {}
+    for finding in findings:
+        for item in [*finding.get("evidence", []), *finding.get("counter_evidence", [])]:
+            if not isinstance(item, dict) \
+                    or item.get("kind") not in ("file-line", "quote", "absence") \
+                    or not isinstance(item.get("ref"), str):
+                continue
+            match = re.fullmatch(r"(.+):([1-9]\d*)(?:-([1-9]\d*))?", item["ref"])
+            if match:
+                path, first, last = match.groups()
+                start, end = int(first), int(last or first)
+                if end >= start:
+                    references.setdefault(str(PurePosixPath(path)), []).append((start, end))
+    if resolved.get("size_metric", 0) <= EXCERPT_FALLBACK_MAX_LINES or not references:
+        return artifact
+
+    hunks = diff_hunks(artifact) if resolved.get("target_kind") != "path" else []
+    file_order = list(dict.fromkeys(path for path, *_ in hunks if path in references))
+    file_order.extend(sorted(set(references) - set(file_order)))
+    selected: dict[str, list[str]] = {}
+    file_headers: dict[str, str] = {}
+    for path, start, count, headers, hunk in hunks:
+        if any(first <= start + max(count, 1) - 1 and last >= start
+               for first, last in references.get(path, [])):
+            selected.setdefault(path, []).append(hunk)
+            file_headers[path] = headers
+
+    parts: list[str] = []
+    root = repo_root.resolve()
+    target_kind = resolved.get("target_kind")
+    include_all = bool(resolved.get("include_all", False)) or bool(resolved.get("diff_file"))
+    target_path = None
+    if target_kind == "path" and resolved.get("target_ref"):
+        target = Path(resolved.get("target_ref", ""))
+        target_path = (target if target.is_absolute() else repo_root / target).resolve()
+    excluded = resolved.get("excluded_paths", [])
+    if excluded:
+        parts.append("# Excluded by default diff hygiene: " + ", ".join(excluded) + "\n")
+    for path in file_order:
+        relative_path = PurePosixPath(path)
+        if target_kind != "path" and (
+            relative_path.is_absolute() or ".." in relative_path.parts
+        ):
+            continue
+        try:
+            source = Path(path)
+            source = (source if source.is_absolute() else repo_root / source).resolve()
+        except (OSError, RuntimeError):
+            continue
+        if target_kind == "path":
+            if source != target_path or not source.is_file():
+                continue
+        else:
+            if source == root or not source.is_relative_to(root):
+                continue
+            if is_excluded_path(path, include_all) \
+                    or is_excluded_path(source.relative_to(root).as_posix(), include_all):
+                continue
+        if path in selected:
+            parts.append(file_headers[path] + "".join(selected[path]))
+        if not source.is_file():
+            continue
+        lines = source.read_text(errors="replace").splitlines()
+        windows: list[tuple[int, int]] = []
+        for first, last in sorted(references[path]):
+            start = max(1, first - EXCERPT_CONTEXT_LINES)
+            end = min(len(lines), last + EXCERPT_CONTEXT_LINES)
+            if start > end:
+                continue
+            if windows and start <= windows[-1][1] + 1:
+                windows[-1] = (windows[-1][0], max(windows[-1][1], end))
+            else:
+                windows.append((start, end))
+        if windows:
+            parts.append(f"# {path}\n")
+            for start, end in windows:
+                parts.append("".join(f"{number}: {lines[number - 1]}\n"
+                                     for number in range(start, end + 1)))
+    return "".join(parts)
+
+
 def build_claims(findings_path: str, resolve_path: str,
-                 id_prefix: str = "F") -> dict[str, Any]:
+                 id_prefix: str = "F", repo_root: Path | None = None) -> dict[str, Any]:
     """Assign IDs, then split what refute judges from what it has no mandate over.
 
     Refute keys judgments by id, so ids must exist before it runs, not after.
@@ -1778,6 +2111,8 @@ def build_claims(findings_path: str, resolve_path: str,
     carried = [f for f in findings if f.get("kind", "finding") != "finding"]
     return {
         "claims": [{k: f[k] for k in CLAIM_FIELDS} for f in judged],
+        "diff_excerpts": extract_diff_excerpts(judged, resolved, repo_root or Path(".")),
+        "excluded_paths": resolved.get("excluded_paths", []),
         "findings": findings,
         "carried_kinds": sorted({f["kind"] for f in carried}),
         "chain": link,
@@ -1892,6 +2227,8 @@ def merge_judgments(
                 raise UsageError(
                     f"judgment for {judgment_id} has non-array counter_evidence"
                 )
+            for item in judgment["counter_evidence"]:
+                validate_evidence_item(item, f"judgment for {judgment_id} counter_evidence")
             finding["counter_evidence"] = judgment["counter_evidence"]
 
     # Tiebreak rules on the contested set and nothing else. Without this it could
@@ -2016,8 +2353,11 @@ def build_manifest(
         "lens": lens,
         "prepass": {
             "status": prepass.get("status"),
+            "tree_hash": prepass.get("tree_hash"),
             "checks": [
-                {k: check.get(k) for k in ("name", "command", "exit_code", "status")}
+                {**{k: check.get(k) for k in ("name", "command", "exit_code", "status")},
+                 "reused": bool(check.get("reused", False)),
+                 "duration_ms": check.get("duration_ms", 0)}
                 for check in prepass.get("checks", [])
             ],
         },
@@ -2035,6 +2375,7 @@ def build_manifest(
         # Part of the replay record because it bounds what the verdict covered: these
         # appeared after the artifact was captured and no stage looked at them.
         "unreviewed_paths": gate_result.get("unreviewed_paths", []),
+        "excluded_paths": gate_result.get("excluded_paths", resolved.get("excluded_paths", [])),
         "verdict": gate_result.get("verdict"),
     }
 
@@ -2052,6 +2393,8 @@ def build_parser() -> argparse.ArgumentParser:
     resolve_cmd.add_argument("--target", default="", help="path, git range, or empty for worktree")
     resolve_cmd.add_argument("--profile", help=f"override detection ({', '.join(PROFILES)})")
     resolve_cmd.add_argument("--repo-root", default=".", help="repository root")
+    resolve_cmd.add_argument("--include-all", action="store_true",
+                             help="include generated, vendored and lockfile changes")
     resolve_cmd.add_argument(
         "--diff-file", help="read the diff from a file instead of git (testing seam)"
     )
@@ -2062,6 +2405,7 @@ def build_parser() -> argparse.ArgumentParser:
     prepass_cmd.add_argument("--repo-root", default=".", help="repository root")
     prepass_cmd.add_argument("--resolve", required=True,
                              help="ResolveResult JSON — anchors the pre-pass to this run")
+    prepass_cmd.add_argument("--reuse-check", help="reuse verified check-record JSON")
     prepass_cmd.add_argument(
         "--diff-file", help="read the diff from a file instead of git (testing seam)"
     )
@@ -2110,6 +2454,7 @@ def build_parser() -> argparse.ArgumentParser:
     claims_cmd.add_argument("--findings", required=True, help="promote stage output")
     claims_cmd.add_argument("--resolve", required=True,
                             help="ResolveResult JSON — anchors the claims to this run")
+    claims_cmd.add_argument("--repo-root", default=".", help="repository root")
     claims_cmd.add_argument(
         "--id-prefix", default="F",
         help="prefix for assigned finding IDs; must match the later gate invocation")
@@ -2150,7 +2495,9 @@ def main(argv: list[str] | None = None) -> int:
         if hasattr(args, "repo_root") and not repo_root.is_dir():
             raise UsageError(f"repo root does not exist: {repo_root}")
         if args.command == "resolve":
-            payload = resolve_target(args.target, args.profile, repo_root, args.diff_file)
+            payload = resolve_target(
+                args.target, args.profile, repo_root, args.diff_file, args.include_all,
+            )
             payload["chain"] = {
                 "run_id": secrets.token_hex(8),
                 "artifact_hash": payload["artifact_hash"],
@@ -2168,7 +2515,8 @@ def main(argv: list[str] | None = None) -> int:
             if isinstance(resolved, dict) and resolved.get("untracked_paths") is not None:
                 untracked = resolved["untracked_paths"]
             exit_code, payload = run_prepass(
-                args.profile, args.target, repo_root, args.check_cmd, diff_file, untracked
+                args.profile, args.target, repo_root, args.check_cmd, diff_file, untracked,
+                resolved=resolved, reuse_check_path=args.reuse_check,
             )
             payload["chain"] = link_from(resolved, "prepass", "resolve")
         elif args.command == "select-model":
@@ -2182,7 +2530,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.id_prefix, args.resolve, not args.no_verify_artifact,
             )
         elif args.command == "claims":
-            payload = build_claims(args.findings, args.resolve, args.id_prefix)
+            payload = build_claims(args.findings, args.resolve, args.id_prefix, repo_root)
         elif args.command == "merge":
             payload = merge_judgments(args.findings, args.judgments, args.stage)
         elif args.command == "manifest":

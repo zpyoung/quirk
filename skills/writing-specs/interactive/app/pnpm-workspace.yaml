@@ -1,0 +1,3 @@
+allowBuilds:
+  '@astryxdesign/core': true
+  esbuild: true

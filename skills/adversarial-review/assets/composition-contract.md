@@ -12,6 +12,11 @@ this skill from another skill, this file is the interface — read it before wir
   lens?         : str          # narrows the open mandate to one concern
   depth?        : "quick" | "standard" | "deep"                          # else auto-suggested
   model?        : str          # pi alias; overrides family selection
+  id_prefix?    : "C" | "S" | "X" | "F"
+  resolve_file? : str          # shared resolve.json across concurrent lenses
+  prepass_file? : str          # shared prepass.json across concurrent lenses
+  reuse_check?  : str          # path to ReusedCheckInput JSON for prepass --reuse-check
+  include_all?  : bool         # disables default diff exclusions when true
   author_family?: "anthropic" | "openai" | "google" | "other"
   criteria      : str          # what the artifact was supposed to achieve — VERBATIM
   dismissed[]   : {id, claim, ruling_reason}
@@ -30,6 +35,14 @@ content framed as external. Independence here is structural: asymmetric context 
 model family. It is not something prompt wording can substitute for, so a caller that "helpfully"
 stages the author's rationale has disabled the mechanism, not enriched it.
 
+In closure rounds (rounds >= 2), `criteria` includes a `### Closure Round Verification` block
+carrying only that lens's prior accepted findings, filtered by `id_prefix`, plus the fix delta and
+touched contract seams. These are verification obligations, never `dismissed[]` entries.
+`resolve_file` and `prepass_file` let concurrent lenses share one resolution and pre-pass per round;
+use distinct `id_prefix` values at `claims` and `gate`. `reuse_check` supplies a verified
+`ReusedCheckInput` record to `prepass --reuse-check`; `include_all: true` disables default diff
+hygiene when excluded paths must be reviewed.
+
 **`author_family` resolves in this order:** the explicit input; else the family recorded in the
 manifest of the run that produced the artifact, when one exists; else the family of the invoking
 session. A *wrong* guess among the known families degrades to `independence: "reduced"` rather than
@@ -40,7 +53,8 @@ not one of `anthropic`, `google`, `openai` must pass `other` — naming the gap 
 guessing a label the script does not know is a usage error.
 
 **The refute seam is mechanical, not prose.** Run `claims` before the refute dispatch and `merge`
-after it. `claims` assigns IDs (promote emits `id: null`, but refute keys judgments by ID), holds
+after it. `claims` assigns IDs (`id: null` for new findings; original IDs for still-open closure
+findings or evidenced re-reports), holds
 `limitation`/`question` records back from a stage that has no mandate over them, and refuses a
 finding some stage already ruled on — re-staging one discards the ruling and buys a second refute
 round to overturn it. `merge` proves the stage ran: every judgment needs a `reason`, and it fails when a claim went unjudged, when a judgment
@@ -91,9 +105,10 @@ original `id` — a re-report reuses it rather than getting a fresh one, which i
 match a finding to its prior ruling across rounds.
 
 The gate assigns IDs to **every** finding it is given, before dispositions are applied, so entries in
-`suppressed[]` and `contested[]` carry real IDs too. Reviewers are told to emit `id: null`; a
-dismissal a caller cannot name is a dismissal it cannot carry forward. IDs are assigned in severity
-order, so a suppressed finding leaves a gap in the surviving sequence rather than renumbering it.
+`suppressed[]` and `contested[]` carry real IDs too. Reviewers emit `id: null` for new findings,
+retaining original IDs for still-open closure findings and evidenced re-reports. A dismissal a
+caller cannot name is a dismissal it cannot carry forward. IDs are assigned in severity order, so
+a suppressed finding leaves a gap in the surviving sequence rather than renumbering it.
 
 ## Output
 
@@ -114,12 +129,20 @@ order, so a suppressed finding leaves a gap in the surviving sequence rather tha
   advisory_count   : int
   contested_count  : int        # pending disputes; non-zero means the result is not final
   unreviewed_paths[] : str      # appeared after the artifact was captured; no stage saw them
+  excluded_paths[] : str        # default diff hygiene omissions; --include-all disables them
+  contested_excerpts? : str     # cited contested/counter-evidence hunks and context
   regrade_count    : int        # findings a later stage re-graded
   manifest         : { reviewer, target, profile, depth, lens, prepass, verdict,
                        suppressed_count, severity_histogram, blocking_count,
-                       advisory_count, regrade_count, limitation_count, question_count }
+                       advisory_count, regrade_count, limitation_count, question_count,
+                       unreviewed_paths[], excluded_paths[] }
 }
 ```
+
+`manifest.prepass.tree_hash` binds checks to `HEAD^{tree}`. `manifest.prepass.checks[].reused`
+records verified reuse, and `manifest.prepass.checks[].duration_ms` records each check's duration.
+Both `gate` and `manifest` report `excluded_paths[]` alongside `unreviewed_paths[]`: exclusions
+bound the captured artifact; unreviewed paths appeared after capture.
 
 `verdict` is computed from the **effective severity of the blocking findings**. Effective severity
 is `adjudicated_severity` when a stage that attacked the finding supplied one, else the severity
@@ -211,6 +234,10 @@ any exit        + unreviewed_paths nonempty -> the verdict does not cover those 
                                              stage saw them. Usually the review's own check
                                              output; when it is real work, `PASS` stopped
                                              short of it and only this says so.
+any exit        + excluded_paths nonempty  -> default diff hygiene omitted vendored,
+                                             generated, or lockfile paths from the
+                                             artifact; pass --include-all if those
+                                             paths must be reviewed.
 any exit        + advisory_count > 0      -> real findings that no stage beyond promote stood
                                              behind. Reported, not blocking; `PASS` does not
                                              mean they were dismissed.
