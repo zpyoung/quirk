@@ -7,10 +7,9 @@ htmlcov/
 *.bak.*
 .lock
 .memsearch/
-.quirk/isles/
 
 # git worktrees
 .worktrees/
 
-# local Agent Isles install (copied from npx cache, has `live`)
+# node dependencies
 node_modules/

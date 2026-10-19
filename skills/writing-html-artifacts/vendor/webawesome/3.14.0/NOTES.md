@@ -1,0 +1,1 @@
+dark-class: wa-dark

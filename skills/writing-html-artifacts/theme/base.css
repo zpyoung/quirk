@@ -1,0 +1,145 @@
+/* House theme layer: maps --q-* tokens onto Simple.css and Web Awesome variables. */
+
+:root,
+::backdrop,
+:root[data-theme="light"],
+:root[data-theme="dark"],
+:root:not([data-theme="light"]) {
+  --bg: var(--q-color-bg);
+  --accent-bg: var(--q-color-surface);
+  --text: var(--q-color-text);
+  --text-light: var(--q-color-text-muted);
+  --border: var(--q-color-border);
+  --accent: var(--q-color-accent);
+  --accent-hover: color-mix(in srgb, var(--q-color-accent) 82%, var(--q-color-text));
+  --accent-text: var(--q-color-accent-text);
+  --code: var(--q-color-text);
+  --preformatted: var(--q-color-text);
+  --marked: color-mix(in srgb, var(--q-color-warn) 28%, var(--q-color-bg));
+  --disabled: var(--q-color-surface);
+  --sans-font: var(--q-font-sans);
+  --mono-font: var(--q-font-mono);
+  --standard-border-radius: var(--q-radius-md);
+
+  --wa-color-brand-fill-loud: var(--q-color-accent);
+  --wa-color-brand-fill-normal: color-mix(in srgb, var(--q-color-accent) 22%, var(--q-color-bg));
+  --wa-color-brand-fill-quiet: color-mix(in srgb, var(--q-color-accent) 10%, var(--q-color-bg));
+  --wa-color-brand-border-loud: var(--q-color-accent);
+  --wa-color-brand-border-normal: color-mix(in srgb, var(--q-color-accent) 45%, var(--q-color-bg));
+  --wa-color-brand-on-loud: var(--q-color-accent-text);
+  --wa-color-brand-on-normal: var(--q-color-text);
+  --wa-color-brand-on-quiet: var(--q-color-text);
+  --wa-color-surface-default: var(--q-color-bg);
+  --wa-color-surface-raised: var(--q-color-surface);
+  --wa-color-surface-lowered: var(--q-color-surface);
+  --wa-color-surface-border: var(--q-color-border);
+  --wa-color-text-normal: var(--q-color-text);
+  --wa-color-text-quiet: var(--q-color-text-muted);
+  --wa-color-text-link: var(--q-color-accent);
+  --wa-font-family-body: var(--q-font-sans);
+  --wa-font-family-code: var(--q-font-mono);
+  --wa-border-radius-s: var(--q-radius-sm);
+  --wa-border-radius-m: var(--q-radius-md);
+  --wa-border-radius-pill: var(--q-radius-pill);
+}
+
+:root,
+::backdrop {
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+body {
+  font-family: var(--q-font-sans);
+  font-size: var(--q-size-body);
+  line-height: var(--q-size-leading);
+  background: var(--q-color-bg);
+  color: var(--q-color-text);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--q-font-display);
+  line-height: var(--q-size-leading-tight);
+}
+
+h1 { font-size: var(--q-size-h1); }
+h2 { font-size: var(--q-size-h2); }
+h3 { font-size: var(--q-size-h3); }
+h4 { font-size: var(--q-size-h4); }
+
+/* only inline code: Simple.css also paints "pre span" with --code, which would recolor plain spans in code blocks */
+:not(pre, a) > code {
+  color: var(--q-color-syntax-keyword);
+}
+
+small {
+  font-size: var(--q-size-small);
+}
+
+:focus-visible {
+  outline: 2px solid var(--q-color-focus);
+  outline-offset: 2px;
+}
+
+[x-cloak] {
+  display: none !important;
+}
+
+.q-theme-toggle {
+  position: fixed;
+  top: var(--q-space-3);
+  right: var(--q-space-3);
+  z-index: 1000;
+  margin: 0;
+  padding: var(--q-space-1) var(--q-space-3);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-pill);
+  background: var(--q-color-surface);
+  color: var(--q-color-text);
+  font: inherit;
+  font-size: var(--q-size-small);
+  line-height: var(--q-size-leading-tight);
+  cursor: pointer;
+}
+
+.q-theme-toggle:hover {
+  border-color: var(--q-color-accent);
+}
+
+.q-data-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--q-space-2);
+  margin: var(--q-space-4) 0;
+  padding: var(--q-space-3) var(--q-space-4);
+  border: 1px dashed var(--q-color-border);
+  border-radius: var(--q-radius-md);
+  background: var(--q-color-surface);
+  color: var(--q-color-text);
+  font-size: var(--q-size-small);
+}
+
+.q-data-picker input[type="file"] {
+  max-width: 100%;
+  font: inherit;
+  color: inherit;
+}
+
+@media print {
+  .q-theme-toggle,
+  .q-data-picker {
+    display: none;
+  }
+}

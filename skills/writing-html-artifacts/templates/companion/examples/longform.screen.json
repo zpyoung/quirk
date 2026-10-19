@@ -1,0 +1,25 @@
+{
+  "title": "Longform: migration retrospective",
+  "question": "How should the migration retrospective be organised?",
+  "select": "single",
+  "options": [
+    {
+      "id": "chronological",
+      "label": "Chronological",
+      "description": "Month by month from decision to cutover. Reads like a story and is easy to write.",
+      "html": "<div style=\"display:flex;flex-direction:column;justify-content:space-between;height:72px\"><div style=\"border:1px solid currentColor;opacity:.5;height:6px;width:100%\"></div><div style=\"border:1px solid currentColor;opacity:.5;height:6px;width:90%\"></div><div style=\"border:1px solid currentColor;opacity:.5;height:6px;width:95%\"></div><div style=\"border:1px solid currentColor;opacity:.5;height:6px;width:60%\"></div></div>"
+    },
+    {
+      "id": "by-theme",
+      "label": "By theme",
+      "description": "Planning, data, rollout and people as separate chapters. Easier to skim, loses the sequence."
+    },
+    {
+      "id": "decisions",
+      "label": "By decision",
+      "description": "One chapter per decision, each with the alternatives rejected."
+    }
+  ],
+  "content": "<p>The retrospective runs about 4,000 words and will be read once, start to finish, by the team that did not do the work.</p>",
+  "layout": "longform"
+}

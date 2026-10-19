@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "name": "report",
+  "description": "Use when the user wants a report, explainer, form or small interactive tool as one self-contained page, with optional charts, diagrams and sortable tables.",
+  "tier": 1,
+  "libraries": ["simple-css", "alpine"],
+  "optional_libraries": ["chartjs", "mermaid"],
+  "slots": {
+    "main": { "required": true, "description": "The page body: lede, findings, sections, charts and tables. No h1; the title becomes it." }
+  },
+  "skeleton": "skeleton.html",
+  "rules": "rules.md",
+  "example": "example.src.html"
+}

@@ -1,0 +1,137 @@
+<!-- quirk-src {"template": "report", "title": "Checkout service status", "mode": "offline", "layout": "dashboard"} -->
+<!-- slot: summary -->
+<q-stat direction="up-good" points="98.6,98.9,99.0,99.1,99.2">
+<span slot="label">Checkout success rate</span>
+<span slot="value">99.2%</span>
+<span slot="delta">+0.4 pts</span>
+<span slot="definition">Completed checkouts divided by started checkouts, last 24 hours, against the previous 24 hours.</span>
+</q-stat>
+<!-- slot: main -->
+<p class="q-meta">Data as of 15 Oct 2026, 09:00 UTC. Sample figures for this template.</p>
+
+<h2>Service health</h2>
+<q-grid>
+<q-stat direction="down-good" points="530,490,440,412,408">
+<span slot="label">p95 latency</span>
+<span slot="value">408 ms</span>
+<span slot="delta">-122 ms</span>
+<span slot="definition">95th percentile checkout response time, last 24 hours, against 7 days ago.</span>
+</q-stat>
+<q-stat direction="down-good">
+<span slot="label">Error rate</span>
+<span slot="value">0.8%</span>
+<span slot="delta">-0.4 pts</span>
+<span slot="definition">Share of checkout requests that returned a 5xx response, last 24 hours.</span>
+</q-stat>
+<q-stat direction="up-good">
+<span slot="label">Orders placed</span>
+<span slot="value">48,210</span>
+<span slot="delta">+6.1%</span>
+<span slot="definition">Orders completed in the last 24 hours, against the previous 24 hours.</span>
+</q-stat>
+<q-stat direction="down-good">
+<span slot="label">Open incidents</span>
+<span slot="value">1</span>
+<span slot="definition">Incidents without a resolved status, right now.</span>
+</q-stat>
+</q-grid>
+
+<h2>Panels</h2>
+<q-grid>
+<q-panel>
+<h3>Latency by hour</h3>
+<q-chart type="line" summary="Checkout p95 latency stayed between 395 and 430 ms over the last six hours." y="p95 (ms)">
+<table>
+<thead><tr><th>Hour (UTC)</th><th>p95 (ms)</th></tr></thead>
+<tbody>
+<tr><td>04:00</td><td>402</td></tr>
+<tr><td>05:00</td><td>398</td></tr>
+<tr><td>06:00</td><td>411</td></tr>
+<tr><td>07:00</td><td>425</td></tr>
+<tr><td>08:00</td><td>416</td></tr>
+<tr><td>09:00</td><td>408</td></tr>
+</tbody>
+</table>
+</q-chart>
+</q-panel>
+<q-panel>
+<h3>Errors by service</h3>
+<q-chart type="bar" horizontal summary="The payment adapter produced most checkout errors in the last 24 hours, with 212 of 391." y="Errors">
+<table>
+<thead><tr><th>Service</th><th>Errors</th></tr></thead>
+<tbody>
+<tr><td>payment-adapter</td><td>212</td></tr>
+<tr><td>tax</td><td>96</td></tr>
+<tr><td>inventory</td><td>58</td></tr>
+<tr><td>shipping-rates</td><td>25</td></tr>
+</tbody>
+</table>
+</q-chart>
+</q-panel>
+<q-panel>
+<h3>Retry queue</h3>
+<q-stat direction="down-good">
+<span slot="label">Queue depth</span>
+<span slot="value">23</span>
+<span slot="definition">Payment calls waiting for a retry, right now. Normal is under 50.</span>
+</q-stat>
+<p>Oldest entry is 18 seconds old.</p>
+</q-panel>
+<q-panel>
+<h3>Open incidents</h3>
+<ul>
+<li>INC-482: ap-southeast latency above 500 ms, opened 08:12 UTC.</li>
+</ul>
+<p>No other incident is open.</p>
+</q-panel>
+<q-panel>
+<h3>Deploys today</h3>
+<q-table>
+<table>
+<caption>Checkout deploys in the last 24 hours</caption>
+<thead><tr><th scope="col">Time (UTC)</th><th scope="col">Version</th><th scope="col">Result</th></tr></thead>
+<tbody>
+<tr><td>02:14</td><td>2.4.7</td><td>Succeeded</td></tr>
+<tr><td>07:40</td><td>2.4.8</td><td>Succeeded</td></tr>
+<tr><td>08:55</td><td>2.4.9</td><td>Rolled back</td></tr>
+</tbody>
+</table>
+</q-table>
+</q-panel>
+<q-panel>
+<h3>Orders by region</h3>
+<q-chart type="donut" summary="US East placed 42% of orders in the last 24 hours, more than any other region." y="Orders">
+<table>
+<thead><tr><th>Region</th><th>Orders</th></tr></thead>
+<tbody>
+<tr><td>us-east</td><td>20250</td></tr>
+<tr><td>eu-west</td><td>12550</td></tr>
+<tr><td>us-west</td><td>9640</td></tr>
+<tr><td>ap-southeast</td><td>5770</td></tr>
+</tbody>
+</table>
+</q-chart>
+</q-panel>
+<q-panel>
+<h3>Slowest endpoints</h3>
+<q-table>
+<table>
+<caption>p95 latency by endpoint, last 24 hours</caption>
+<thead><tr><th scope="col">Endpoint</th><th scope="col" class="num">p95 (ms)</th><th scope="col" class="num">Calls</th></tr></thead>
+<tbody>
+<tr><td>/pay</td><td class="num">612</td><td class="num">48,210</td></tr>
+<tr><td>/quote</td><td class="num">388</td><td class="num">91,400</td></tr>
+<tr><td>/cart</td><td class="num">204</td><td class="num">214,900</td></tr>
+</tbody>
+</table>
+</q-table>
+</q-panel>
+<q-panel>
+<h3>Error budget</h3>
+<q-stat direction="up-good">
+<span slot="label">Budget left this month</span>
+<span slot="value">71%</span>
+<span slot="definition">Share of the monthly 99.5% availability budget not yet spent, as of today.</span>
+</q-stat>
+</q-panel>
+</q-grid>

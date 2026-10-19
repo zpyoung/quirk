@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "name": "app",
+  "description": "Use when the page needs several views, an editable grid, state shared across views, or the user explicitly asks for an app. Builds a React project with Astryx components, TanStack Table, Query and Router into one file.",
+  "tier": 2,
+  "project": "project/",
+  "rules": "rules.md",
+  "example": "example/"
+}

@@ -1,0 +1,101 @@
+{
+  "skill_name": "writing-html-artifacts",
+  "queries": [
+    {
+      "query": "Make me an HTML page that compares these three database options",
+      "should_trigger": true
+    },
+    {
+      "query": "Can you build a single-file web page where I can paste CSV data and sort it?",
+      "should_trigger": true
+    },
+    {
+      "query": "I want an interactive calculator for loan payments as a web page",
+      "should_trigger": true
+    },
+    {
+      "query": "Turn this week's test timings into a dashboard I can open in the browser",
+      "should_trigger": true
+    },
+    {
+      "query": "Write up the incident analysis as a report page with charts I can send to the team",
+      "should_trigger": true
+    },
+    {
+      "query": "I need an offline HTML file that works without internet, with a filterable table of our feature flags",
+      "should_trigger": true
+    },
+    {
+      "query": "Make an interactive tool for converting between our internal unit codes, in one HTML file",
+      "should_trigger": true
+    },
+    {
+      "query": "Build a small web app with a few views and an editable grid for tracking migration tasks",
+      "should_trigger": true
+    },
+    {
+      "query": "Can you show me that as a styled page instead of a wall of text?",
+      "should_trigger": true
+    },
+    {
+      "query": "Create a self-contained HTML explainer of how our retry logic works, with a diagram",
+      "should_trigger": true
+    },
+    {
+      "query": "Start the visual companion so I can pick between layouts for the settings screen",
+      "should_trigger": true
+    },
+    {
+      "query": "Show me mockups of the two navigation options in the browser and let me click the one I prefer",
+      "should_trigger": true
+    },
+    {
+      "query": "Fix the sorting bug in the DataTable component of our React app",
+      "should_trigger": false
+    },
+    {
+      "query": "Write a README for this repo in Markdown",
+      "should_trigger": false
+    },
+    {
+      "query": "Explain how CSS grid auto-fit and minmax work",
+      "should_trigger": false
+    },
+    {
+      "query": "Make a Jupyter notebook that plots monthly signups with matplotlib",
+      "should_trigger": false
+    },
+    {
+      "query": "Publish the report I already built to claude.ai so my team can see it",
+      "should_trigger": false
+    },
+    {
+      "query": "Scrape the pricing table from this web page and give me the rows as JSON",
+      "should_trigger": false
+    },
+    {
+      "query": "Why does my dev server return a 404 for /api/users?",
+      "should_trigger": false
+    },
+    {
+      "query": "Draft an email to the team about the Friday deploy freeze",
+      "should_trigger": false
+    },
+    {
+      "query": "Make me a slide deck for the quarterly review",
+      "should_trigger": false
+    },
+    {
+      "query": "Add a mermaid sequence diagram of the login flow to our design doc in Markdown",
+      "should_trigger": false
+    },
+    {
+      "query": "Refactor this Vue component to use the composition API",
+      "should_trigger": false
+    },
+    {
+      "query": "Write a bash script that renames these files by date",
+      "should_trigger": false
+    }
+  ]
+}

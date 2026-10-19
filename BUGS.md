@@ -133,25 +133,156 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: medium
 - **Proposed fix**: Skip link destinations and autolinks when applying the underscore guard, as scenario-example.tsx now does.
 
-## BUG-15: SKILL.md and orchestration.md disagree on which dispatches carry the mutation-probe line
+## BUG-15: pi-watch crashes at import: unpinned pi-coding-agent no longer exports AuthStorage
+- **Observed**: 2026-10-13
+- **File**: skills/pi-dev/scripts/pi-watch/pi-watch.mjs:23
+- **Description**: skills/pi-dev/scripts/pi-watch/package.json declares @earendil-works/pi-coding-agent and pi-ai as "*". The installed version (pi 0.87.1) no longer exports AuthStorage, so pi-watch --check codex|gemini|opus exits 1 with: SyntaxError: The requested module '@earendil-works/pi-coding-agent' does not provide an export named 'AuthStorage'. Every pi-backed path (SDD pi implementers, adversarial-review reviewers) is dead; the SDD run on zpyoung/writing-artifacts fell back to Claude Agent reviewers with reduced independence.
+- **Severity**: high
+- **Proposed fix**: Pin both deps to a known-good version with a frozen lockfile install, and adapt to the new export if AuthStorage moved.
+
+## BUG-16: Kit elements render unstyled in tier-2 apps
+- **Observed**: 2026-10-14
+- **File**: skills/writing-html-artifacts/vendor/kit/1.0.0/kit.css:715
+- **Description**: kit.css relies on Simple.css for pre, button, select and summary styling. In a tier-2 build (Astryx reset.css, no Simple.css), q-code's <pre> body has no background, border or padding and sits outside the header bar's box; q-board's Reset / Copy as Markdown buttons and Move to… selects look like plain text; q-chart's Table view summary has no affordance. Tier-1 report pages look correct. Repro: build-app kit-showcase-app, then The change > Rollback tab, and the Follow-ups tab.
+- **Severity**: medium
+- **Proposed fix**: Style the kit's own inserted controls and the q-code pre in kit.css instead of inheriting from the host stylesheet; add a tier-2 verify screenshot of a non-first route so this is caught.
+
+## BUG-17: q-flow browser tests time out when Chrome is launched from a Python parent
+- **Observed**: 2026-10-17
+- **File**: tests/fixtures/html-kit/harness.mjs:156
+- **Description**: The harness waitForFunction (rAF polling) for data-q-flow-ready times out at 10s and also at 30s, though the page is ready ~120ms after load when the same harness.mjs runs directly from zsh or perl (<1s total). Any Python parent (rye 3.11, homebrew, /usr/bin) reproduces it, including os.system; close_fds, start_new_session, stdin DEVNULL and the shell's __CF_USER_TEXT_ENCODING made no difference. Interval polling and Chrome's --disable-renderer-backgrounding/--disable-background-timer-throttling/--disable-backgrounding-occluded-windows flags also made no difference: the page itself takes 10-25s to become ready. Verified: relaying the harness call through a node server started from zsh (so Chrome has no Python ancestor) makes the same pytest tests pass in about 3s, so the cause is the Python ancestry, not CPU load. Affects the q-flow tests in tests/test_html_kit_elements.py (runner _run_harness at :91), e.g. test_flow_renders_at_rest_with_controls_closed_list_and_sync_async_edges and test_flow_pulse_travels_at_one_speed_and_streams_before_the_last_one_lands, on zpyoung/q-flow-shapes at efa903b, unmodified. Blocks local browser verification; CI unknown.
+- **Severity**: medium
+
+## BUG-18: Verify's connected-navigation timeout test reports network passed under the local relay
+- **Observed**: 2026-10-17
+- **File**: tests/test_html_verify.py:300
+- **Description**: test_connected_navigation_timeout_is_a_network_failure_with_a_report fails locally: verify reports network passed=True where the test expects a navigation-timeout network failure. Reproduces at a36dcfc (before the q-flow traces work) when run through the BUG-17 node relay shim, so the traces branch did not cause it. The relay or the local network may change how the connected-navigation timeout surfaces. Found 2026-10-17 during the q-flow traces wave-1 gate.
+- **Severity**: low
+
+## BUG-19: A q-flow label, kind or detail with an escaped lone surrogate breaks the page build
+- **Observed**: 2026-10-17
+- **File**: skills/writing-html-artifacts/scripts/htmlkit/kitcheck.py:1284
+- **Description**: The no-JS fallback that inject_flow_fallbacks writes for a <q-flow> copies node labels (and other graph strings) from the JSON. A JSON escape such as "\ud800" decodes to a lone surrogate that passes the kit check, and the assembled page then raises UnicodeEncodeError when written as UTF-8. Reproduced with a node label "A \ud800". Trace values get the same treatment in the q-flow traces branch, where they fail the check as not JSON; labels, kinds, group labels, edge labels and details predate that and still crash. Found 2026-10-17 in the q-flow traces final review.
+- **Severity**: low
+- **Status**: fixed on branch zpyoung/q-flow-traces (graph-level UTF-8 check)
+
+## BUG-20: q-flow keeps pulsing when reduced motion is switched on mid-pulse
+- **Observed**: 2026-10-17
+- **File**: skills/writing-html-artifacts/vendor/kit/1.0.0/kit.js:5840
+- **Description**: Reduced motion is read only when a trace step is shown (and when a node is focused). If the reader turns on prefers-reduced-motion while a trace edge or a focused path is pulsing, the pulse keeps running until the next step, a new focus, or trace mode closes; there is no change listener on the media query. Focus mode had the same gap before traces. Found 2026-10-17 by the q-flow traces final review (HX1), logged instead of a fourth review round.
+- **Severity**: low
+- **Proposed fix**: Listen for changes to the reduced-motion query while pulsing; stop the pulse and apply the static 3.5px lit style.
+
+## BUG-21: q-flow's no-JS fallback crashes the build on very deep group nesting
+- **Observed**: 2026-10-17 (q-schema SDD checkpoint review)
+- **File**: skills/writing-html-artifacts/scripts/htmlkit/kitcheck.py:2086
+- **Description**: `_render_flow_fallback_html` renders groups with a recursive `render_group`, so a q-flow graph whose groups nest about 1,000 deep raises an uncaught RecursionError during fallback injection and aborts the build instead of reporting a check failure. q-schema had the same pattern and now uses an explicit stack (commit 6f59893).
+- **Introduced by**: unknown (q-flow fallback, before d6895d2)
+- **Severity**: low
+- **Proposed fix**: render the group tree with an explicit stack, as `_render_schema_fallback_html` does.
+- **Blocker for**: nothing in practice; only pathological input
+
+## BUG-22: Text "data-q-flow-list" inside q-flow data suppresses the no-JS fallback
+- **Observed**: 2026-10-17 (q-schema SDD checkpoint review)
+- **File**: skills/writing-html-artifacts/scripts/htmlkit/kitcheck.py:2120
+- **Description**: `inject_flow_fallbacks` skips any block whose raw text contains "data-q-flow-list", including that text inside a node label or detail in the JSON, so such a graph ships with no no-JS list. q-schema had the same guard and now checks for a real element attribute outside the JSON script (commit 6f59893).
+- **Introduced by**: unknown (q-flow fallback, before d6895d2)
+- **Severity**: low
+- **Proposed fix**: skip only when a tag outside the JSON script carries a data-q-flow-list attribute, as `inject_schema_fallbacks` does.
+- **Blocker for**: no-JS readers of a graph whose data mentions the attribute name
+
+## BUG-23: q-flow keys its id maps on plain objects, so ids like "constructor" misbehave
+- **Observed**: 2026-10-17 (q-schema SDD checkpoint review)
+- **File**: skills/writing-html-artifacts/vendor/kit/1.0.0/kit.js:3849
+- **Description**: QFlow's parse, layout and focus code index author-supplied node and group ids into plain `{}` objects (`seenIds`, `groupMap`, `nodeMap`, `outByNode`, `nodeSizes`, ...). An id such as `constructor`, `toString` or `__proto__` resolves to an inherited property. The same pattern in q-schema crashed layout before readiness was set; q-flow was not reproduced here and is fenced from this branch. q-schema now uses prototype-free maps (commit 76cd7b9).
+- **Introduced by**: unknown (q-flow runtime, before d6895d2)
+- **Severity**: medium
+- **Proposed fix**: use `Object.create(null)` or `Map` for every QFlow dictionary keyed by an author id, and add a browser test with those ids.
+- **Blocker for**: graphs whose node or group ids collide with Object.prototype names
+
+## BUG-24: Text "</q-flow>" inside q-flow data stops the no-JS fallback injection early
+- **Observed**: 2026-10-17 (q-schema SDD final review)
+- **File**: skills/writing-html-artifacts/scripts/htmlkit/kitcheck.py:2109
+- **Description**: `inject_flow_fallbacks` finds each element with the non-greedy regex `_FLOW_BLOCK`, which stops at the text `</q-flow>` when it appears inside the JSON script (valid JSON; browsers end a script only at `</script`). A graph whose data contains that text builds with no no-JS list. q-schema had the same pattern and now scans for the real closing tag while skipping script content.
+- **Introduced by**: unknown (q-flow fallback, before d6895d2)
+- **Severity**: low
+- **Proposed fix**: locate the closing tag with the script-aware scan `inject_schema_fallbacks` uses.
+- **Blocker for**: no-JS readers of a graph whose data mentions the closing tag
+
+## BUG-25: On a phone the graph toolbar covers the top of a fitted q-flow or q-schema
+- **Observed**: 2026-10-17 (q-schema visual check at 375px)
+- **File**: skills/writing-html-artifacts/vendor/kit/1.0.0/kit.js:3599
+- **Description**: `canvasFitBounds` fits the drawing to the whole stage with a 28px pad, but the zoom/fit/expand toolbar overlays the stage's top-left corner. At 375px a tall drawing is scaled so its top row sits under the toolbar (the parser class diagram's Parser card was hidden behind it). The shared fit predates q-schema, so q-flow behaves the same.
+- **Introduced by**: unknown (q-flow canvas, before d6895d2)
+- **Severity**: low
+- **Proposed fix**: reserve the toolbar's height at the top when fitting, at least on narrow stages.
+- **Blocker for**: reading the top node of a tall graph on a phone without panning
+
+## BUG-26: q-flow's detail sanitizer crashes the build on deeply nested detail HTML
+- **Observed**: 2026-10-17
+- **File**: skills/writing-html-artifacts/scripts/htmlkit/kitcheck.py:906
+- **Description**: _check_and_sanitize_flow_detail recurses per nested element, so a q-flow node detail with about 1,100 nested lists raises an uncaught RecursionError and aborts the build. q-schema now catches it and reports a validation failure (commit 797d789); q-flow does not. Observed 2026-10-17 in the q-schema SDD final review.
+- **Introduced by**: unknown (q-flow kit check, before d6895d2)
+- **Severity**: low
+- **Proposed fix**: Sanitize iteratively, or cap nesting depth with a validation failure.
+- **Blocker for**: builds of q-flow pages whose node detail is pathologically nested
+
+## BUG-27: QSchema change detection joins its parts with NUL, so some changes could skip a re-render
+- **Observed**: 2026-10-17
+- **File**: skills/writing-html-artifacts/vendor/kit/1.0.0/kit.js:6577
+- **Description**: QSchema._signature joins the JSON text, summary and notation with a NUL separator to decide whether to re-render, so two different attribute and data combinations containing NUL could compare equal and leave a stale drawing. Observed 2026-10-17 in the q-schema SDD final review.
+- **Introduced by**: this session (q-schema runtime)
+- **Severity**: low
+- **Proposed fix**: Compare the parts separately, or encode them unambiguously.
+- **Blocker for**: live edits of a q-schema whose summary or data contains NUL
+
+## BUG-28: q-flow and q-schema pass the kit check with JSON their browser elements reject
+- **Observed**: 2026-10-17
+- **File**: skills/writing-html-artifacts/scripts/htmlkit/kitcheck.py:1197
+- **Description**: The Python kit check accepts two payloads the browser elements reject. One is NaN or Infinity anywhere in the data, which json.loads accepts and JSON.parse does not. The other is a JSON script child whose type has surrounding whitespace or other case: Python strips and lowercases it, while QFlow and QSchema select script[type="application/json"] exactly (kit.js:3790, :3821 and the QSchema equivalents). The build passes and injects a no-JS list, while the element shows the fail-hard notice. Reproduced for q-flow with "extra": NaN and with type=" Application/JSON ". q-sequence fixed both on its own path: strict_constants in _json_child, and QSequence._jsonScript. Found 2026-10-17 in the q-sequence final review.
+- **Severity**: low
+- **Proposed fix**: Pass strict_constants=True from the q-flow and q-schema callers of _json_child, and select the JSON child by trimmed, lowercased type in QFlow and QSchema, as q-sequence does.
+
+## BUG-29: q-sequence phone pinned-header test can race the page's smooth scroll
+- **Observed**: 2026-10-17
+- **File**: tests/test_html_kit_elements.py:9413
+- **Description**: test_seq_phone_scrolls_sideways_at_full_size_with_headers_pinned_and_in_step failed once during the q-sequence build and passed on every run after it, including four full-file runs. The report template sets scroll-behavior: smooth on html, so a page scroll the test starts can still be animating when the test reads the pinned strip's position. Found 2026-10-17 by the q-sequence trace-mode implementer.
+- **Severity**: low
+- **Proposed fix**: Scroll with behavior 'instant' in the test (or set scroll-behavior: auto on the test page), and wait for the stuck attribute before measuring.
+
+## BUG-30: A q-sequence payload with NaN and markup text in a string reports the detail rule
+- **Observed**: 2026-10-17
+- **File**: skills/writing-html-artifacts/scripts/htmlkit/kitcheck.py:1223
+- **Description**: _json_child's parse-failure branch searches the whole raw payload for forbidden markup before choosing its message. A q-sequence payload that holds NaN (rejected by strict_constants) and also a string such as "<img" elsewhere therefore fails with '<q-sequence> detail may hold only paragraphs, lists, code and links' instead of the JSON-child message. The page still fails the check, so only the diagnostic is wrong. Found 2026-10-17 by the q-sequence closure review (CL1).
+- **Severity**: low
+- **Proposed fix**: Raise a distinct error from the constant hook and report the JSON-child message for it before the forbidden-markup search.
+
+## BUG-31: The diagram list disclosure renders as plain text in tier-2 app builds
+- **Observed**: 2026-10-18
+- **File**: skills/writing-html-artifacts/vendor/kit/1.0.0/kit.css:1282
+- **Description**: In tier-2 app builds the "Graph as a list" and "Diagram as a list" disclosures under q-flow and q-sequence render as plain unstyled text, with no bordered box or chevron. Tier-1 report and components pages show a bordered disclosure with a chevron. The kit's own rules (kit.css:1282 for q-flow and q-schema, :1668 for q-sequence) only set height, layout and cursor; the box and chevron on tier-1 pages come from the base stylesheet (Simple.css or Web Awesome), which the app's Astryx theme doesn't supply. Seen 2026-10-18 building templates/app/examples/explainer and reference at 4fe1e65 and screenshotting at 1280px light.
+- **Severity**: low
+- **Proposed fix**: Give the kit's diagram disclosures their own border, padding and marker so they look the same without a base stylesheet, or add matching details styles to the app theme.
+
+## BUG-32: SKILL.md and orchestration.md disagree on which dispatches carry the mutation-probe line
 - **Observed**: 2026-10-18
 - **File**: skills/full-code-review/SKILL.md:318
 - **Description**: SKILL.md Step 4 says to state the mutation-probe line in every dispatch, but orchestration.md's 'Every specialist prompt also says' paragraph says the coordinator adds 'mutation probe: enabled' only to the three test lenses, and only with consent. A coordinator can't tell whether every dispatch needs a mutation-probe line (disabled for the non-test lenses) or only the test lenses do. Doc-only. Found while fixing the gaps the MR !722 re-review exposed.
 - **Severity**: low
 - **Proposed fix**: Pick one rule: either every dispatch states the probe status (enabled or disabled), or only the test lenses get the line. Then make both files say the same thing.
 
-## BUG-16: full-code-review lets the coordinator skip the lens fan-out on small diffs
+## BUG-33: full-code-review lets the coordinator skip the lens fan-out on small diffs
 - **Observed**: 2026-10-19
 - **File**: skills/full-code-review/SKILL.md:292
 - **Description**: In a headless smoke-corpus run (claude -p "/quirk:full-code-review --local --no-open", Sonnet 5.5 default, 2026-10-19), all 5 smoke cases reviewed the 2-9 line diff inline instead of dispatching lenses and wrote no report.json (one used the ReportFindings tool, one wrote a Markdown report). One also overrode a pre-exported REVIEW_OUT_DIR with its own mktemp despite the ${REVIEW_OUT_DIR:-...} default in Setup. SKILL.md never says the fan-out runs regardless of diff size, so the smoke corpus can't run without a prompt override and real tiny-diff reviews silently drop to one inline pass.
 - **Severity**: medium
 - **Proposed fix**: State in SKILL.md (Setup + Step 4) that the lens fan-out and report.json are mandatory at any diff size with no inline shortcut, and that a pre-set REVIEW_OUT_DIR is kept; add a test pinning that wording.
-- **Resolved**: 2026-10-19. Wording alone (fan-out at any size, keep REVIEW_OUT_DIR) fixed the out-dir override but still left 3 of 5 plain-prompt runs skipping, now citing "headless run on a one-line diff". Closing those excuses by name (one Agent per lens; skip only on run_when, policy, or failed dispatch; diff size, headless, no forge, or cost is never a skip reason) brought all 5 to a full fan-out, report.json in the caller's dir, and a passing smoke_check. Residual lens-packing is BUG-17.
+- **Resolved**: 2026-10-19. Wording alone (fan-out at any size, keep REVIEW_OUT_DIR) fixed the out-dir override but still left 3 of 5 plain-prompt runs skipping, now citing "headless run on a one-line diff". Closing those excuses by name (one Agent per lens; skip only on run_when, policy, or failed dispatch; diff size, headless, no forge, or cost is never a skip reason) brought all 5 to a full fan-out, report.json in the caller's dir, and a passing smoke_check. Residual lens-packing is BUG-34.
 
-## BUG-17: full-code-review coordinator occasionally packs several lenses into one agent
+## BUG-34: full-code-review coordinator occasionally packs several lenses into one agent
 - **Observed**: 2026-10-19
 - **File**: skills/full-code-review/SKILL.md:298
-- **Description**: In the 2026-10-19 plain-prompt smoke run after the BUG-16 fix, 1 of 54 lens dispatches (correctness case) combined comments, db and observability into one agent despite SKILL.md Step 4 saying one Agent per lens. A packed agent shares one context across checklists, so a lens can get a shallower pass than its own dispatch would give, and run.models then reports per-lens models for a single dispatch. Earlier rounds also packed lenses (test-adequacy case, 2 multi-lens agents).
+- **Description**: In the 2026-10-19 plain-prompt smoke run after the BUG-33 fix, 1 of 54 lens dispatches (correctness case) combined comments, db and observability into one agent despite SKILL.md Step 4 saying one Agent per lens. A packed agent shares one context across checklists, so a lens can get a shallower pass than its own dispatch would give, and run.models then reports per-lens models for a single dispatch. Earlier rounds also packed lenses (test-adequacy case, 2 multi-lens agents).
 - **Severity**: low
 - **Proposed fix**: Re-run the smoke corpus a few times to measure the rate; if it persists, have the coordinator check its dispatch count against policy.json's runnable lenses before Step 5, or record per-lens agent ids in run so a packed dispatch is visible in the report.
 

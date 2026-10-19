@@ -1,0 +1,79 @@
+<!-- quirk-src {"template": "components", "title": "Deploy alert settings", "mode": "offline", "libraries": [], "interactions": ["switch between the General, Alerts and Data tabs", "choose how often the digest is sent", "turn alerts on or off", "open the reset dialog and confirm or cancel it"]} -->
+<!-- slot: summary -->
+<p class="q-lede">Choose which deploy events notify the platform team and how often the digest goes out. Changes apply to the whole team.</p>
+<!-- slot: main -->
+<div x-data="alertSettings()">
+<p class="q-meta">Scope: the payments platform team, 14 members.</p>
+
+<section aria-labelledby="settings-h">
+<h2 id="settings-h">Settings</h2>
+<wa-tab-group>
+<wa-tab panel="general">General</wa-tab>
+<wa-tab panel="alerts">Alerts</wa-tab>
+<wa-tab panel="data">Data</wa-tab>
+
+<wa-tab-panel name="general">
+<div class="q-stack">
+<wa-select label="Digest frequency" x-effect="$el.value = digest" @change="digest = $event.target.value; saved = true">
+<wa-option value="daily">Daily at 09:00 UTC</wa-option>
+<wa-option value="weekly">Weekly on Monday</wa-option>
+<wa-option value="never">Never</wa-option>
+</wa-select>
+<wa-switch x-effect="$el.checked = flaky" @change="flaky = $event.target.checked; saved = true">Include flaky-test report in the digest</wa-switch>
+</div>
+</wa-tab-panel>
+
+<wa-tab-panel name="alerts">
+<div class="q-stack">
+<wa-switch x-effect="$el.checked = failedDeploys" @change="failedDeploys = $event.target.checked; saved = true">Alert on failed deploys</wa-switch>
+<wa-switch x-effect="$el.checked = rollbacks" @change="rollbacks = $event.target.checked; saved = true">Alert on rollbacks</wa-switch>
+</div>
+</wa-tab-panel>
+
+<wa-tab-panel name="data">
+<div class="q-stack">
+<p>Reset returns every setting to its default and clears the alert history shown on the dashboard.</p>
+<wa-button variant="danger" @click="confirmOpen = true">Reset all settings</wa-button>
+</div>
+</wa-tab-panel>
+</wa-tab-group>
+</section>
+
+<section aria-labelledby="current-h">
+<h2 id="current-h">Current choices</h2>
+<p aria-live="polite" x-text="summary">Digest weekly; failed-deploy alerts on; rollback alerts on.</p>
+<p class="q-meta" x-show="saved" x-cloak>Changes are saved for this session only.</p>
+</section>
+
+<wa-dialog label="Reset all settings?" x-effect="$el.open = confirmOpen" @wa-after-hide.self="confirmOpen = false">
+<p>Every setting goes back to its default. This cannot be undone.</p>
+<wa-button slot="footer" appearance="outlined" @click="confirmOpen = false">Keep my settings</wa-button>
+<wa-button slot="footer" variant="danger" @click="reset()">Reset settings</wa-button>
+</wa-dialog>
+</div>
+
+<script>
+document.addEventListener('alpine:init', function () {
+  var defaults = { digest: 'weekly', flaky: true, failedDeploys: true, rollbacks: true };
+  Alpine.data('alertSettings', function () {
+    return {
+      confirmOpen: false,
+      saved: false,
+      digest: defaults.digest,
+      flaky: defaults.flaky,
+      failedDeploys: defaults.failedDeploys,
+      rollbacks: defaults.rollbacks,
+      get summary() {
+        var onOff = function (v) { return v ? 'on' : 'off'; };
+        return 'Digest ' + this.digest + '; failed-deploy alerts ' + onOff(this.failedDeploys) +
+          '; rollback alerts ' + onOff(this.rollbacks) + '; flaky-test report ' + onOff(this.flaky) + '.';
+      },
+      reset: function () {
+        Object.assign(this, defaults);
+        this.confirmOpen = false;
+        this.saved = false;
+      }
+    };
+  });
+});
+</script>

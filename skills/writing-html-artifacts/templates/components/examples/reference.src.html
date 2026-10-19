@@ -1,0 +1,136 @@
+<!-- quirk-src {"template": "components", "title": "Alert settings reference", "mode": "offline", "layout": "reference"} -->
+<!-- slot: summary -->
+<p class="q-lede">Every alert setting the payments team can change, what it does, and its default.</p>
+<!-- slot: main -->
+<p class="q-meta">Reflects the router as configured on 14 Oct 2026.</p>
+
+<section aria-labelledby="rules-h">
+<h2 id="rules-h">Rules</h2>
+<p>A rule decides which alerts it matches, how they are grouped and where they go. Rules are checked from the top of the list and the first match wins.</p>
+<h3 id="rules-match">Match</h3>
+<p>Matches on service, severity and labels. An empty field matches everything.</p>
+<h3 id="rules-order">Order</h3>
+<p>Move a rule up to make it win over a broader one. Moving a rule is safer than editing it.</p>
+</section>
+
+<section aria-labelledby="model-h">
+<h2 id="model-h">How the settings connect</h2>
+<p>Every setting on this page hangs off a rule or a channel. A rule names one channel and one escalation policy, and a channel names its owner and its members. Click a table to see its fields and what points at it.</p>
+<q-schema id="settings-model" summary="Rules point at a channel and an escalation policy; channels have an owner, members and quiet hours.">
+  <script type="application/json">
+  {
+    "kinds": {"routing": 2, "people": 1},
+    "groups": [
+      {"id": "routing", "label": "Routing"},
+      {"id": "people", "label": "Who is reached"}
+    ],
+    "entities": [
+      {"id": "rule", "label": "Rule", "kind": "routing", "group": "routing", "detail": "<p>Checked in <code>position</code> order; the first match wins.</p>", "fields": [
+        {"name": "id", "type": "int", "key": "PK"},
+        {"name": "position", "type": "int", "key": "UK"},
+        {"name": "match_service", "type": "text", "nullable": true, "note": "empty matches every service"},
+        {"name": "match_severity", "type": "text", "nullable": true},
+        {"name": "group_window_s", "type": "int"},
+        {"name": "channel_id", "type": "int", "key": "FK"},
+        {"name": "escalation_id", "type": "int", "key": "FK"}
+      ]},
+      {"id": "delay", "label": "Severity delay", "kind": "routing", "group": "routing", "fields": [
+        {"name": "severity", "type": "text", "key": "PK"},
+        {"name": "delay_s", "type": "int", "note": "0 sends at once"}
+      ]},
+      {"id": "escalation", "label": "Escalation policy", "kind": "routing", "group": "routing", "fields": [
+        {"name": "id", "type": "int", "key": "PK"},
+        {"name": "secondary_after_min", "type": "int"},
+        {"name": "manager_after_min", "type": "int"},
+        {"name": "repage_after_min", "type": "int"}
+      ]},
+      {"id": "channel", "label": "Channel", "kind": "people", "group": "people", "fields": [
+        {"name": "id", "type": "int", "key": "PK"},
+        {"name": "name", "type": "text", "key": "UK"},
+        {"name": "type", "type": "text", "note": "pager, chat or email"},
+        {"name": "owner_id", "type": "int", "key": "FK"}
+      ]},
+      {"id": "member", "label": "Member", "kind": "people", "group": "people", "detail": "<p>A channel with no member rows sends to its owner.</p>", "fields": [
+        {"name": "channel_id", "type": "int", "key": ["PK", "FK"]},
+        {"name": "person_id", "type": "int", "key": ["PK", "FK"]}
+      ]},
+      {"id": "person", "label": "Person", "kind": "people", "group": "people", "fields": [
+        {"name": "id", "type": "int", "key": "PK"},
+        {"name": "email", "type": "text", "key": "UK"},
+        {"name": "name", "type": "text"}
+      ]},
+      {"id": "quiet", "label": "Quiet hours", "kind": "people", "group": "people", "fields": [
+        {"name": "channel_id", "type": "int", "key": ["PK", "FK"]},
+        {"name": "start", "type": "time"},
+        {"name": "end", "type": "time"}
+      ]}
+    ],
+    "relationships": [
+      {"from": "rule.channel_id", "to": "channel.id", "from_card": "zero-or-many", "to_card": "one", "label": "sends to"},
+      {"from": "rule.escalation_id", "to": "escalation.id", "from_card": "zero-or-many", "to_card": "one", "label": "escalates by"},
+      {"from": "channel.owner_id", "to": "person.id", "from_card": "zero-or-many", "to_card": "one", "label": "is owned by"},
+      {"from": "member.channel_id", "to": "channel.id", "from_card": "zero-or-many", "to_card": "one", "label": "belongs to"},
+      {"from": "member.person_id", "to": "person.id", "from_card": "zero-or-many", "to_card": "one", "label": "is"},
+      {"from": "quiet.channel_id", "to": "channel.id", "from_card": "zero-or-one", "to_card": "one", "label": "mutes"}
+    ]
+  }
+  </script>
+</q-schema>
+<p>Severity delays stand alone: they apply to every rule, so no rule points at them.</p>
+</section>
+
+<section aria-labelledby="grouping-h">
+<h2 id="grouping-h">Grouping</h2>
+<q-table>
+<table>
+<caption>Grouping settings</caption>
+<thead><tr><th scope="col">Setting</th><th scope="col">Values</th><th scope="col">Default</th></tr></thead>
+<tbody>
+<tr><td>Group by</td><td>Service and rule</td><td>Service and rule</td></tr>
+<tr><td>Window</td><td>0 to 600 seconds</td><td>30 seconds</td></tr>
+<tr><td>Repage on severity rise</td><td>On, off</td><td>On</td></tr>
+</tbody>
+</table>
+</q-table>
+<h3 id="grouping-window">Window</h3>
+<p>How long the router waits after the first alert before it sends. A longer window sends fewer pages and delays the first one.</p>
+</section>
+
+<section aria-labelledby="delays-h">
+<h2 id="delays-h">Delays</h2>
+<h3 id="delays-severity">By severity</h3>
+<p>Each severity has its own delay. Setting a delay to 0 sends at once and skips the chance for an alert to resolve itself.</p>
+<h3 id="delays-quiet">Quiet hours</h3>
+<p>During quiet hours a channel is muted, but critical pages still reach the pager.</p>
+<q-code filename="quiet-hours.yaml">
+<pre><code>quiet_hours:
+  start: "22:00"
+  end: "07:00"
+  channels: [chat, email]</code></pre>
+</q-code>
+</section>
+
+<section aria-labelledby="channels-h">
+<h2 id="channels-h">Channels</h2>
+<p>A channel is a place a person can be reached. Every channel has one owner and at least one member.</p>
+<h3 id="channels-members">Members</h3>
+<p>Owners add and remove members. A channel with no members sends to its owner.</p>
+<h3 id="channels-types">Types</h3>
+<ul>
+<li>Pager, for critical alerts.</li>
+<li>Team chat, for warnings.</li>
+<li>Email, for the daily digest.</li>
+</ul>
+</section>
+
+<section aria-labelledby="escalation-h">
+<h2 id="escalation-h">Escalation</h2>
+<p>An unacknowledged page goes to the secondary on-call after 10 minutes and to the engineering manager after 15. Both times can be changed per rule.</p>
+<h3 id="escalation-ack">Acknowledging</h3>
+<p>An acknowledged page stops escalating. It pages again if the alert is still open after an hour.</p>
+</section>
+
+<section aria-labelledby="audit-h">
+<h2 id="audit-h">Audit log</h2>
+<p>Every change to a rule, channel or delay is recorded with who made it and when. The log is kept for 12 months and can be exported as a CSV from the settings page.</p>
+</section>

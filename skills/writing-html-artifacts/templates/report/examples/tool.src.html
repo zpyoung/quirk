@@ -1,0 +1,58 @@
+<!-- quirk-src {"template": "report", "title": "Build runner capacity estimator", "mode": "offline", "layout": "tool", "interactions": ["change the engineer count, builds per engineer, minutes per build, peak multiplier or headroom and read the runner estimate update"]} -->
+<!-- slot: summary -->
+<p class="q-lede" aria-live="polite" x-data x-text="$store.capacity.sentence">With the defaults you need 15 runners, which is 6 runners on average and 25% spare capacity at the busiest hour.</p>
+<!-- slot: main -->
+<p class="q-meta">Estimates how many CI runners a team needs. Change any input and the result updates.</p>
+
+<form x-data @submit.prevent>
+<h2>Inputs</h2>
+<p>
+<label for="engineers">Engineers who push code</label>
+<input id="engineers" type="number" min="1" step="1" x-model.number="$store.capacity.engineers" value="40">
+</p>
+<p>
+<label for="builds">Builds per engineer per day</label>
+<input id="builds" type="number" min="0" step="1" x-model.number="$store.capacity.builds" value="6">
+</p>
+<p>
+<label for="minutes">Minutes per build</label>
+<input id="minutes" type="number" min="1" step="1" x-model.number="$store.capacity.minutes" value="12">
+</p>
+<p>
+<label for="peak">Busiest hour compared with the average</label>
+<select id="peak" x-model.number="$store.capacity.peak">
+<option value="1.5">1.5 times</option>
+<option value="2" selected>2 times</option>
+<option value="3">3 times</option>
+</select>
+</p>
+<p>
+<label for="headroom">Spare capacity (%)</label>
+<input id="headroom" type="number" min="0" max="100" step="5" x-model.number="$store.capacity.headroom" value="25">
+</p>
+</form>
+
+<h2>How the estimate is built</h2>
+<p>Demand is engineers times builds times minutes, spread over an 8 hour working day. That gives the average number of runners busy at once. The result multiplies it by the busiest-hour factor, then adds the spare capacity and rounds up.</p>
+<p>The estimate assumes every build uses one runner for its whole duration. Builds that split across several runners need the total runner minutes as the build length.</p>
+<script>
+document.addEventListener('alpine:init', function () {
+  Alpine.store('capacity', {
+    engineers: 40,
+    builds: 6,
+    minutes: 12,
+    peak: 2,
+    headroom: 25,
+    get average() {
+      return (this.engineers * this.builds * this.minutes) / (8 * 60);
+    },
+    get runners() {
+      return Math.ceil(this.average * this.peak * (1 + this.headroom / 100));
+    },
+    get sentence() {
+      var avg = Math.round(this.average * 10) / 10;
+      return 'You need ' + this.runners + ' runners, which is ' + avg + ' runners on average and ' + this.headroom + '% spare capacity at the busiest hour.';
+    }
+  });
+});
+</script>

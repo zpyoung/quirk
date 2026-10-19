@@ -1,0 +1,567 @@
+<!-- quirk-src {"template": "report", "title": "Checkout service runbook", "mode": "offline", "layout": "reference"} -->
+<!-- slot: summary -->
+<p class="q-lede">What to do when the checkout service pages you: where to look first, how to roll back, and who to call.</p>
+<!-- slot: main -->
+<p class="q-meta">Owner: platform team. Last reviewed 13 Oct 2026.</p>
+
+<section aria-labelledby="alerts-h">
+<h2 id="alerts-h">Alerts</h2>
+<p>Every checkout alert lands in the on-call channel. Start with the alert's own dashboard link, then use the table below to find the matching section.</p>
+<q-table>
+<table>
+<caption>Checkout alerts and where to start</caption>
+<thead><tr><th scope="col">Alert</th><th scope="col">Fires when</th><th scope="col">Start at</th></tr></thead>
+<tbody>
+<tr><td>checkout-error-rate</td><td>5xx above 2% for 5 minutes</td><td>Rollback</td></tr>
+<tr><td>checkout-latency</td><td>p95 above 800 ms for 10 minutes</td><td>Latency</td></tr>
+<tr><td>retry-queue-depth</td><td>depth above 500 for 10 minutes</td><td>Queue drain</td></tr>
+<tr><td>provider-unreachable</td><td>payment provider health check fails</td><td>Failover</td></tr>
+</tbody>
+</table>
+</q-table>
+<h3 id="alerts-ack">Acknowledging</h3>
+<p>Acknowledge within 10 minutes. An unacknowledged page escalates to the engineering manager at the 15 minute mark.</p>
+<h3 id="alerts-mute">Muting</h3>
+<p>Mute an alert only during a planned change, and only for the length of the change. Write the reason in the channel when you do.</p>
+</section>
+
+<section aria-labelledby="rollback-h">
+<h2 id="rollback-h">Rollback</h2>
+<p>If errors started within an hour of a deploy, roll back first and investigate afterwards.</p>
+<h3 id="rollback-steps">Steps</h3>
+<ol>
+<li>Open the deploy page and find the last version marked healthy.</li>
+<li>Choose Roll back to this version and confirm.</li>
+<li>Watch the error rate for 5 minutes. It should fall below 1%.</li>
+</ol>
+<h3 id="rollback-cli">From the command line</h3>
+<q-code filename="rollback.sh">
+<pre><code>checkout-deploy rollback --service checkout --to previous
+checkout-deploy status --service checkout --watch</code></pre>
+</q-code>
+</section>
+
+<section aria-labelledby="latency-h">
+<h2 id="latency-h">Latency</h2>
+<p>Check the region panel first. A single slow region points at that region's cache or network, and a slow everywhere points at the payment provider or the database.</p>
+<q-flow summary="Checkout requests read from the region cache, call the primary or secondary payment provider, and fall back to the retry queue." direction="right" groups="panels">
+  <script type="application/json">
+  {
+    "kinds": {"ui": 1, "worker": 2, "database": 3, "queue": 4},
+    "groups": [
+      {"id": "payments", "label": "Payment path"}
+    ],
+    "nodes": [
+      {"id": "api", "label": "Checkout service", "kind": "ui", "detail": "<p>Routes live traffic and checks region cache before charging.</p>"},
+      {"id": "primary", "label": "Primary provider", "kind": "worker", "group": "payments", "detail": "<p>Default payment gateway; switch away after 10m of failed health checks.</p>"},
+      {"id": "secondary", "label": "Secondary provider", "kind": "worker", "group": "payments", "detail": "<p>Failover gateway; keep active until primary is healthy for 30m.</p>"},
+      {"id": "retry", "label": "Retry queue", "kind": "queue", "group": "payments", "detail": "<p>Buffers transient failures; cap worker pool at 40.</p>"}
+    ],
+    "edges": [
+      {"from": "api", "to": "primary", "label": "charge.request"},
+      {"from": "api", "to": "secondary", "label": "failover.charge"},
+      {"from": "primary", "to": "retry", "label": "charge.retry", "async": true}
+    ]
+  }
+  </script>
+</q-flow>
+<h3 id="latency-cache">Cache</h3>
+<p>The cache hit rate should be above 90%. Below 80%, flush the stale region from the cache console and watch the rate recover over 10 minutes.</p>
+<h3 id="latency-provider">Payment provider</h3>
+<p>The provider's status page is linked from the dashboard. If it reports a partial outage, move on to Failover.</p>
+</section>
+
+<section aria-labelledby="queue-h">
+<h2 id="queue-h">Queue drain</h2>
+<p>The retry queue is safe to leave alone. Entries are persisted before they are attempted, so a restart loses nothing.</p>
+<h3 id="queue-stuck">Workers stuck</h3>
+<p>If the oldest entry keeps growing while the depth is flat, restart the worker pool from the deploy page.</p>
+<h3 id="queue-backlog">Backlog after an outage</h3>
+<p>Do not raise the worker count above 40. The provider's rate limit starts rejecting calls beyond that, which only lengthens the backlog.</p>
+</section>
+
+<section aria-labelledby="failover-h">
+<h2 id="failover-h">Failover</h2>
+<p>The service can send payments through a second provider. Switch only when the first provider reports an outage or the health check has failed for 10 minutes.</p>
+<q-code filename="failover.sh">
+<pre><code>checkout-config set payment.provider secondary
+checkout-config show payment.provider</code></pre>
+</q-code>
+<p>Switch back once the first provider has been healthy for 30 minutes, not before.</p>
+</section>
+
+<section aria-labelledby="billing-h">
+<h2 id="billing-h">Billing data</h2>
+<p>When a charge fails, read these tables in order: the customer, the subscription that generated the charge, then the charge itself. Click a table to see every field and how it connects.</p>
+<q-schema summary="Customers, their subscriptions, and the charges and line items billing creates.">
+  <script type="application/json">
+  {
+    "kinds": {
+      "core": 1,
+      "billing": 2
+    },
+    "groups": [
+      {
+        "id": "billing",
+        "label": "Billing"
+      }
+    ],
+    "entities": [
+      {
+        "id": "customer",
+        "label": "Customer",
+        "kind": "core",
+        "detail": "<p>The shopper. Every subscription and charge points back here.</p>",
+        "fields": [
+          {
+            "name": "id",
+            "type": "int",
+            "key": "PK"
+          },
+          {
+            "name": "email",
+            "type": "text",
+            "key": "UK"
+          },
+          {
+            "name": "first_name",
+            "type": "text"
+          },
+          {
+            "name": "last_name",
+            "type": "text"
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp"
+          }
+        ]
+      },
+      {
+        "id": "subscription",
+        "label": "Subscription",
+        "kind": "billing",
+        "group": "billing",
+        "fields": [
+          {
+            "name": "id",
+            "type": "int",
+            "key": "PK"
+          },
+          {
+            "name": "customer_id",
+            "type": "int",
+            "key": "FK"
+          },
+          {
+            "name": "product_title",
+            "type": "text"
+          },
+          {
+            "name": "status",
+            "type": "text"
+          },
+          {
+            "name": "next_charge_date",
+            "type": "date"
+          },
+          {
+            "name": "interval",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "charge",
+        "label": "Charge",
+        "kind": "billing",
+        "group": "billing",
+        "detail": "<p>One attempt to collect money. Failed charges keep their error type and retry count.</p>",
+        "fields": [
+          {
+            "name": "id",
+            "type": "int",
+            "key": "PK"
+          },
+          {
+            "name": "status",
+            "type": "text"
+          },
+          {
+            "name": "total_price",
+            "type": "decimal"
+          },
+          {
+            "name": "currency",
+            "type": "text"
+          },
+          {
+            "name": "scheduled_at",
+            "type": "timestamp"
+          },
+          {
+            "name": "processed_at",
+            "type": "timestamp"
+          },
+          {
+            "name": "error_type",
+            "type": "text"
+          },
+          {
+            "name": "error",
+            "type": "text"
+          },
+          {
+            "name": "retry_count",
+            "type": "int"
+          },
+          {
+            "name": "tags",
+            "type": "text"
+          },
+          {
+            "name": "note",
+            "type": "text"
+          },
+          {
+            "name": "created_at",
+            "type": "timestamp"
+          },
+          {
+            "name": "updated_at",
+            "type": "timestamp"
+          },
+          {
+            "name": "customer_id",
+            "type": "int",
+            "key": "FK"
+          },
+          {
+            "name": "subscription_id",
+            "type": "int",
+            "key": "FK",
+            "nullable": true
+          }
+        ]
+      },
+      {
+        "id": "line_item",
+        "label": "Line item",
+        "kind": "billing",
+        "group": "billing",
+        "fields": [
+          {
+            "name": "id",
+            "type": "int",
+            "key": "PK"
+          },
+          {
+            "name": "charge_id",
+            "type": "int",
+            "key": "FK"
+          },
+          {
+            "name": "title",
+            "type": "text"
+          },
+          {
+            "name": "quantity",
+            "type": "int"
+          },
+          {
+            "name": "price",
+            "type": "decimal"
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "from": "subscription.customer_id",
+        "to": "customer.id",
+        "from_card": "zero-or-many",
+        "to_card": "one",
+        "label": "has"
+      },
+      {
+        "from": "charge.customer_id",
+        "to": "customer.id",
+        "from_card": "zero-or-many",
+        "to_card": "one",
+        "label": "is billed"
+      },
+      {
+        "from": "charge.subscription_id",
+        "to": "subscription.id",
+        "from_card": "zero-or-many",
+        "to_card": "zero-or-one",
+        "label": "generates"
+      },
+      {
+        "from": "line_item.charge_id",
+        "to": "charge.id",
+        "from_card": "one-or-many",
+        "to_card": "one",
+        "label": "contains"
+      }
+    ]
+  }
+  </script>
+</q-schema>
+<h3 id="billing-promo">Promo codes</h3>
+<p>Checkout reads promo codes with a small expression parser. A code that is rejected with a parse error points at one of these classes.</p>
+<q-schema notation="class" summary="The parser's public interface, its recursive descent implementation and the AST it returns.">
+  <script type="application/json">
+  {
+    "kinds": {
+      "api": 1,
+      "internals": 3
+    },
+    "entities": [
+      {
+        "id": "parser",
+        "label": "Parser",
+        "kind": "api",
+        "stereotype": "interface",
+        "methods": [
+          {
+            "signature": "parse(src: str) -> Ast",
+            "visibility": "public"
+          }
+        ]
+      },
+      {
+        "id": "recursivedescentparser",
+        "label": "RecursiveDescentParser",
+        "kind": "internals",
+        "fields": [
+          {
+            "name": "max_depth",
+            "type": "int",
+            "visibility": "public",
+            "static": true
+          },
+          {
+            "name": "lexer",
+            "type": "Lexer",
+            "visibility": "private"
+          },
+          {
+            "name": "pos",
+            "type": "int",
+            "visibility": "private"
+          },
+          {
+            "name": "depth",
+            "type": "int",
+            "visibility": "private"
+          },
+          {
+            "name": "errors",
+            "type": "list",
+            "visibility": "private"
+          },
+          {
+            "name": "options",
+            "type": "dict",
+            "visibility": "private"
+          }
+        ],
+        "methods": [
+          {
+            "signature": "parse(src: str) -> Ast",
+            "visibility": "public"
+          },
+          {
+            "signature": "expr() -> Ast",
+            "visibility": "private"
+          },
+          {
+            "signature": "term() -> Ast",
+            "visibility": "private"
+          },
+          {
+            "signature": "factor() -> Ast",
+            "visibility": "private"
+          },
+          {
+            "signature": "expect(kind: TokenKind) -> Token",
+            "visibility": "private"
+          },
+          {
+            "signature": "peek() -> Token",
+            "visibility": "private"
+          },
+          {
+            "signature": "error(msg: str)",
+            "visibility": "private"
+          }
+        ]
+      },
+      {
+        "id": "lexer",
+        "label": "Lexer",
+        "kind": "internals",
+        "fields": [
+          {
+            "name": "src",
+            "type": "str",
+            "visibility": "private"
+          },
+          {
+            "name": "pos",
+            "type": "int",
+            "visibility": "private"
+          }
+        ],
+        "methods": [
+          {
+            "signature": "next() -> Token",
+            "visibility": "public"
+          },
+          {
+            "signature": "peek() -> Token",
+            "visibility": "public"
+          }
+        ]
+      },
+      {
+        "id": "token",
+        "label": "Token",
+        "kind": "internals",
+        "fields": [
+          {
+            "name": "kind",
+            "type": "TokenKind",
+            "visibility": "public"
+          },
+          {
+            "name": "text",
+            "type": "str",
+            "visibility": "public"
+          },
+          {
+            "name": "line",
+            "type": "int",
+            "visibility": "public"
+          }
+        ]
+      },
+      {
+        "id": "tokenkind",
+        "label": "TokenKind",
+        "kind": "internals",
+        "stereotype": "enum",
+        "fields": [
+          {
+            "name": "NUMBER"
+          },
+          {
+            "name": "IDENT"
+          },
+          {
+            "name": "PLUS"
+          },
+          {
+            "name": "LPAREN"
+          },
+          {
+            "name": "RPAREN"
+          },
+          {
+            "name": "EOF"
+          }
+        ]
+      },
+      {
+        "id": "ast",
+        "label": "Ast",
+        "kind": "api",
+        "stereotype": "abstract",
+        "methods": [
+          {
+            "signature": "accept(v: Visitor)",
+            "visibility": "public",
+            "abstract": true
+          }
+        ]
+      },
+      {
+        "id": "binaryexpr",
+        "label": "BinaryExpr",
+        "kind": "api",
+        "fields": [
+          {
+            "name": "left",
+            "type": "Ast",
+            "visibility": "public"
+          },
+          {
+            "name": "op",
+            "type": "TokenKind",
+            "visibility": "public"
+          },
+          {
+            "name": "right",
+            "type": "Ast",
+            "visibility": "public"
+          }
+        ]
+      }
+    ],
+    "relationships": [
+      {
+        "from": "recursivedescentparser",
+        "to": "parser",
+        "type": "implements"
+      },
+      {
+        "from": "recursivedescentparser",
+        "to": "lexer",
+        "type": "composition",
+        "to_mult": "1"
+      },
+      {
+        "from": "lexer",
+        "to": "token",
+        "type": "dependency",
+        "label": "produces"
+      },
+      {
+        "from": "token",
+        "to": "tokenkind",
+        "type": "association",
+        "directed": true
+      },
+      {
+        "from": "binaryexpr",
+        "to": "ast",
+        "type": "inherits"
+      },
+      {
+        "from": "binaryexpr",
+        "to": "ast",
+        "type": "aggregation",
+        "to_mult": "2",
+        "label": "operands"
+      },
+      {
+        "from": "parser",
+        "to": "ast",
+        "type": "dependency",
+        "label": "returns"
+      }
+    ]
+  }
+  </script>
+</q-schema>
+</section>
+
+<section aria-labelledby="contacts-h">
+<h2 id="contacts-h">Contacts</h2>
+<ul>
+<li>Platform on-call: page through the on-call tool, service name checkout.</li>
+<li>Payments provider support: 24 hour line, in the shared vault under Providers.</li>
+<li>Engineering manager: escalation at the 15 minute mark.</li>
+</ul>
+</section>

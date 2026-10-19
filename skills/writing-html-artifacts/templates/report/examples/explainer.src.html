@@ -1,0 +1,212 @@
+<!-- quirk-src {"template": "report", "title": "How the checkout retry queue works", "mode": "offline", "layout": "explainer"} -->
+<!-- slot: summary -->
+<p class="q-lede">When a payment call fails, checkout puts it on a retry queue instead of telling the shopper to try again. The queue waits longer between each attempt, gives up after five, and never charges the same order twice.</p>
+<!-- slot: main -->
+<p class="q-meta">Applies to checkout service version 2.4 and later. Last reviewed 13 Oct 2026.</p>
+
+<section aria-labelledby="why-h">
+<h2 id="why-h">Why checkout retries at all</h2>
+<p>Payment providers fail for short, boring reasons: a dropped connection, a deploy on their side, a brief rate limit. About 2 in 100 payment calls fail this way, and about 9 in 10 of those succeed a few seconds later. Asking the shopper to press the button again turns a hiccup the shopper cannot fix into a lost sale.</p>
+<p>So the service takes the failed call, tells the shopper the order is being confirmed, and tries again itself. The shopper sees a spinner for a few seconds instead of an error.</p>
+</section>
+
+<section aria-labelledby="path-h">
+<h2 id="path-h">What happens to one failed call</h2>
+<p>A call that fails with a retryable error is written to the queue together with the order id and an idempotency key. A worker checks the queue every second, picks up an entry when its wait is over and calls the provider again.</p>
+<q-flow id="retry-flow" summary="Failed payment calls move from checkout into the retry queue and the retry worker, which either settles the order in the ledger, sends it back to the queue with a longer wait, or hands it to the pay another way process after the last attempt." direction="right" groups="panels">
+  <script type="application/json">
+  {
+    "kinds": {"ui": 1, "worker": 2, "database": 3, "queue": 4},
+    "groups": [
+      {"id": "billing", "label": "Billing retry pipeline"}
+    ],
+    "nodes": [
+      {"id": "checkout", "label": "Checkout API", "kind": "ui", "detail": "<p>Generates the idempotency key once when the order is placed.</p>"},
+      {"id": "queue", "label": "Retry queue", "kind": "queue", "group": "billing", "detail": "<p>Holds failed calls with exponential backoff from 2s to 32s.</p>"},
+      {"id": "worker", "label": "Retry worker", "kind": "worker", "group": "billing", "detail": "<p>Checks the queue every second and attempts a call once its wait is over, using the stored idempotency key.</p>"},
+      {"id": "paid", "label": "Paid?", "shape": "decision", "group": "billing", "detail": "<p>The provider's answer to the attempt.</p>"},
+      {"id": "left", "label": "Attempts left?", "shape": "decision", "group": "billing", "detail": "<p>Each order gets 5 attempts in all.</p>"},
+      {"id": "ledger", "label": "Order ledger", "kind": "database", "group": "billing", "detail": "<p>Marks the order paid once settled.</p>"},
+      {"id": "another", "label": "Pay another way", "shape": "subprocess", "flow": "pay-another-way", "detail": "<p>Marks the order payment failed and asks the shopper to pay by another route.</p>"}
+    ],
+    "edges": [
+      {"from": "checkout", "to": "queue", "label": "payment.retry", "async": true},
+      {"from": "queue", "to": "worker", "label": "attempt.due", "async": true},
+      {"from": "worker", "to": "worker", "label": "polls every 1s"},
+      {"from": "worker", "to": "paid"},
+      {"from": "paid", "to": "ledger", "label": "Yes"},
+      {"from": "paid", "to": "left", "label": "No"},
+      {"from": "left", "to": "queue", "label": "Yes, wait doubles", "loop": true},
+      {"from": "left", "to": "another", "label": "No"}
+    ],
+    "traces": [
+      {"id": "succeeds", "label": "Retry succeeds", "steps": [
+        {"node": "checkout", "value": {"order_id": "ord_4172", "status": "retry_queued", "idempotency_key": "idem_9c3e"}, "note": "The first call failed with a retryable error. The key was made when the order was placed."},
+        {"node": "queue", "value": {"order_id": "ord_4172", "status": "waiting", "attempt": 1, "wait_s": 2, "idempotency_key": "idem_9c3e"}, "note": "Attempt 1 waits 2 seconds."},
+        {"node": "worker", "value": {"order_id": "ord_4172", "status": "calling_provider", "attempt": 1, "idempotency_key": "idem_9c3e"}, "note": "The wait is over, so the worker calls the provider with the stored key."},
+        {"node": "paid", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 1, "idempotency_key": "idem_9c3e"}, "note": "The provider times out, so the answer is No."},
+        {"node": "left", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 1, "idempotency_key": "idem_9c3e"}, "note": "Attempt 1 of 5, so attempts are left."},
+        {"node": "queue", "value": {"order_id": "ord_4172", "status": "waiting", "attempt": 2, "wait_s": 4, "idempotency_key": "idem_9c3e"}, "note": "Back on the queue, and the wait doubles to 4 seconds."},
+        {"node": "worker", "value": {"order_id": "ord_4172", "status": "calling_provider", "attempt": 2, "idempotency_key": "idem_9c3e"}, "note": "Same key as before, so a lost answer cannot charge the shopper twice."},
+        {"node": "paid", "value": {"order_id": "ord_4172", "status": "paid", "attempt": 2, "idempotency_key": "idem_9c3e"}, "note": "This time the provider says Yes."},
+        {"node": "ledger", "value": {"order_id": "ord_4172", "status": "paid", "attempt": 2, "idempotency_key": "idem_9c3e"}, "note": "The order is marked paid and the queue entry is deleted."}
+      ]},
+      {"id": "gives-up", "label": "Gives up after five", "steps": [
+        {"node": "checkout", "value": {"order_id": "ord_4172", "status": "retry_queued", "idempotency_key": "idem_9c3e"}, "note": "The first call failed with a retryable error."},
+        {"node": "queue", "value": {"order_id": "ord_4172", "status": "waiting", "attempt": 1, "wait_s": 2, "idempotency_key": "idem_9c3e"}, "note": "Attempt 1 waits 2 seconds."},
+        {"node": "worker", "value": {"order_id": "ord_4172", "status": "calling_provider", "attempt": 1, "idempotency_key": "idem_9c3e"}, "note": "The worker calls the provider with the same key."},
+        {"node": "paid", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 1, "idempotency_key": "idem_9c3e"}, "note": "The provider answers No."},
+        {"node": "left", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 1, "idempotency_key": "idem_9c3e"}, "note": "Attempt 1 of 5, so attempts are left."},
+        {"node": "queue", "value": {"order_id": "ord_4172", "status": "waiting", "attempt": 2, "wait_s": 4, "idempotency_key": "idem_9c3e"}, "note": "The wait doubles to 4 seconds."},
+        {"node": "worker", "value": {"order_id": "ord_4172", "status": "calling_provider", "attempt": 2, "idempotency_key": "idem_9c3e"}, "note": "Attempt 2 of 5, with the same key."},
+        {"node": "paid", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 2, "idempotency_key": "idem_9c3e"}, "note": "The provider answers No."},
+        {"node": "left", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 2, "idempotency_key": "idem_9c3e"}, "note": "Attempt 2 of 5, so attempts are left."},
+        {"node": "queue", "value": {"order_id": "ord_4172", "status": "waiting", "attempt": 3, "wait_s": 8, "idempotency_key": "idem_9c3e"}, "note": "The wait doubles to 8 seconds."},
+        {"node": "worker", "value": {"order_id": "ord_4172", "status": "calling_provider", "attempt": 3, "idempotency_key": "idem_9c3e"}, "note": "Attempt 3 of 5, with the same key."},
+        {"node": "paid", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 3, "idempotency_key": "idem_9c3e"}, "note": "The provider answers No."},
+        {"node": "left", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 3, "idempotency_key": "idem_9c3e"}, "note": "Attempt 3 of 5, so attempts are left."},
+        {"node": "queue", "value": {"order_id": "ord_4172", "status": "waiting", "attempt": 4, "wait_s": 16, "idempotency_key": "idem_9c3e"}, "note": "The wait doubles to 16 seconds."},
+        {"node": "worker", "value": {"order_id": "ord_4172", "status": "calling_provider", "attempt": 4, "idempotency_key": "idem_9c3e"}, "note": "Attempt 4 of 5, with the same key."},
+        {"node": "paid", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 4, "idempotency_key": "idem_9c3e"}, "note": "The provider answers No."},
+        {"node": "left", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 4, "idempotency_key": "idem_9c3e"}, "note": "Attempt 4 of 5, so attempts are left."},
+        {"node": "queue", "value": {"order_id": "ord_4172", "status": "waiting", "attempt": 5, "wait_s": 32, "idempotency_key": "idem_9c3e"}, "note": "The last wait is 32 seconds."},
+        {"node": "worker", "value": {"order_id": "ord_4172", "status": "calling_provider", "attempt": 5, "idempotency_key": "idem_9c3e"}, "note": "Attempt 5 of 5, with the same key."},
+        {"node": "paid", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 5, "idempotency_key": "idem_9c3e"}, "note": "The fifth answer is still No."},
+        {"node": "left", "value": {"order_id": "ord_4172", "status": "not_paid", "attempt": 5, "idempotency_key": "idem_9c3e"}, "note": "That was attempt 5, so none are left."},
+        {"node": "another", "value": {"order_id": "ord_4172", "status": "payment_failed", "attempt": 5, "idempotency_key": "idem_9c3e"}, "note": "The order is marked payment failed and the shopper gets an email."}
+      ]}
+    ]
+  }
+  </script>
+</q-flow>
+<p>Press "Step through" on the graph to follow one call from checkout to its end, either a retry that succeeds or one that gives up.</p>
+<h3 id="path-success">If the retry succeeds</h3>
+<p>The order moves to paid, the shopper's page updates, and the queue entry is deleted.</p>
+<h3 id="path-fail">If it fails again</h3>
+<p>The wait doubles and the entry goes back on the queue. After the fifth failure the order moves to payment failed and the shopper gets an email with a link to pay another way.</p>
+<q-flow id="pay-another-way" summary="After the fifth failure the order is marked payment failed, the shopper gets an email with a payment link, and the order is settled in the ledger once they pay." direction="right" groups="panels">
+  <script type="application/json">
+  {
+    "kinds": {"ui": 1, "worker": 2, "database": 3, "queue": 4},
+    "nodes": [
+      {"id": "failed", "label": "Payment failed", "kind": "database", "detail": "<p>The order is marked payment failed after the fifth failure.</p>"},
+      {"id": "email", "label": "Email to shopper", "kind": "worker", "detail": "<p>Sent once, with a link to pay another way.</p>"},
+      {"id": "link", "label": "Payment link", "kind": "ui", "detail": "<p>Opens a payment page for the same order.</p>"},
+      {"id": "ledger", "label": "Order ledger", "kind": "database", "detail": "<p>Marks the order paid once the shopper pays.</p>"}
+    ],
+    "edges": [
+      {"from": "failed", "to": "email", "label": "payment.failed", "async": true},
+      {"from": "email", "to": "link", "label": "shopper opens link"},
+      {"from": "link", "to": "ledger", "label": "order.settled"}
+    ]
+  }
+  </script>
+</q-flow>
+</section>
+
+<section aria-labelledby="waits-h">
+<h2 id="waits-h">How long it waits</h2>
+<p>Each wait is twice the one before, with a random spread of up to 20% so that a burst of failures does not return as a burst of retries.</p>
+<q-table>
+<table>
+<caption>Wait before each attempt</caption>
+<thead><tr><th scope="col">Attempt</th><th scope="col" class="num">Base wait (s)</th><th scope="col" class="num">Longest with spread (s)</th></tr></thead>
+<tbody>
+<tr><td>1</td><td class="num">2</td><td class="num">2.4</td></tr>
+<tr><td>2</td><td class="num">4</td><td class="num">4.8</td></tr>
+<tr><td>3</td><td class="num">8</td><td class="num">9.6</td></tr>
+<tr><td>4</td><td class="num">16</td><td class="num">19.2</td></tr>
+<tr><td>5</td><td class="num">32</td><td class="num">38.4</td></tr>
+</tbody>
+</table>
+</q-table>
+</section>
+
+<section aria-labelledby="idempotency-h">
+<h2 id="idempotency-h">Why the shopper is never charged twice</h2>
+<p>Every call carries the idempotency key stored with the queue entry. If the provider already processed a call whose answer was lost on the way back, it recognizes the key and returns the first result instead of charging again.</p>
+<p>The key is created once, when the order is placed, and never regenerated by a retry. That is the single rule the whole design rests on.</p>
+<q-code filename="retry.py">
+<pre><code>def attempt(entry):
+    result = provider.charge(entry.order_id, key=entry.idempotency_key)
+    if result.ok:
+        return mark_paid(entry)
+    if entry.attempts &gt;= 5 or not result.retryable:
+        return mark_failed(entry)
+    requeue(entry, wait=2 ** entry.attempts)</code></pre>
+</q-code>
+</section>
+
+<section aria-labelledby="charge-h">
+<h2 id="charge-h">What one card payment goes through</h2>
+<p>Before a failed call ever reaches the queue, checkout has already handed the order to Billing, and Billing has asked Stripe to charge the card. Billing tries the charge up to 3 times, waits 2 seconds after a decline, and writes the payment to the ledger only once Stripe accepts it.</p>
+<q-sequence id="charge-sequence" summary="Checkout charges the card through Billing and Stripe, retrying a declined card.">
+  <script type="application/json">
+  {
+    "kinds": {"person": 1, "ui": 2, "service": 3, "external": 4, "store": 5},
+    "participants": [
+      {"id": "shopper", "label": "Shopper", "kind": "person"},
+      {"id": "checkout", "label": "Checkout", "kind": "ui", "detail": "<p>The page the shopper pays on.</p>"},
+      {"id": "billing", "label": "Billing", "kind": "service"},
+      {"id": "stripe", "label": "Stripe", "kind": "external", "detail": "<p>Card processor. Charges are <strong>idempotent</strong>.</p>"},
+      {"id": "ledger", "label": "Ledger", "kind": "store"}
+    ],
+    "steps": [
+      {"from": "shopper", "to": "checkout", "label": "place order", "type": "call", "id": "place-order", "detail": "<p>The cart and the shipping address.</p>"},
+      {"from": "checkout", "to": "billing", "label": "charge order", "type": "call", "id": "charge-order"},
+      {"fragment": "loop", "label": "up to 3 attempts", "steps": [
+        {"from": "billing", "to": "stripe", "label": "create charge", "type": "call", "id": "create-charge", "detail": "<p>Sends the amount and a <code>payment_method</code>.</p>"},
+        {"fragment": "alt", "branches": [
+          {"label": "card valid", "steps": [
+            {"from": "stripe", "to": "billing", "label": "charge succeeded", "type": "reply", "id": "charge-ok"}
+          ]},
+          {"label": "card declined", "steps": [
+            {"from": "stripe", "to": "billing", "label": "card declined", "type": "reply", "id": "charge-declined"},
+            {"note": "waits 2 seconds before retrying", "over": ["billing"]}
+          ]}
+        ]}
+      ]},
+      {"fragment": "opt", "label": "charge succeeded", "steps": [
+        {"from": "billing", "to": "ledger", "label": "record payment", "type": "async", "id": "record"}
+      ]},
+      {"from": "billing", "to": "checkout", "label": "order paid", "type": "reply", "id": "paid"},
+      {"from": "checkout", "to": "shopper", "label": "show receipt", "type": "reply", "id": "show-receipt"}
+    ],
+    "traces": [
+      {"id": "succeeds", "label": "Card succeeds", "steps": [
+        {"message": "place-order", "value": {"order": "C-2207", "items": 2, "total": 48}},
+        {"message": "charge-order", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd"}},
+        {"message": "create-charge", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd", "attempt": 1, "card": "•••• 4242"}},
+        {"message": "charge-ok", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd", "attempt": 1, "card": "•••• 4242", "charge": "ch_91", "status": "succeeded"}},
+        {"message": "record", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd", "attempt": 1, "card": "•••• 4242", "charge": "ch_91", "status": "succeeded"}, "note": "async, nothing waits for it"},
+        {"message": "paid", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd", "attempt": 1, "card": "•••• 4242", "charge": "ch_91", "status": "paid"}}
+      ]},
+      {"id": "declined", "label": "Declined, then retried", "steps": [
+        {"message": "place-order", "value": {"order": "C-2207", "items": 2, "total": 48}},
+        {"message": "charge-order", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd"}},
+        {"message": "create-charge", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd", "attempt": 1, "card": "•••• 4242"}},
+        {"message": "charge-declined", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd", "attempt": 1, "card": "•••• 4242", "decline": "insufficient_funds"}},
+        {"message": "create-charge", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd", "attempt": 2, "card": "•••• 4242"}},
+        {"message": "charge-ok", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd", "attempt": 2, "card": "•••• 4242", "charge": "ch_91", "status": "succeeded"}},
+        {"message": "record", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd", "attempt": 2, "card": "•••• 4242", "charge": "ch_91", "status": "succeeded"}},
+        {"message": "paid", "value": {"order": "C-2207", "items": 2, "total": 48, "amount": 48, "currency": "usd", "attempt": 2, "card": "•••• 4242", "charge": "ch_91", "status": "paid"}}
+      ]}
+    ]
+  }
+  </script>
+</q-sequence>
+<p>Press "Step through" to follow the order's payload message by message. "Card succeeds" is the plain case. "Declined, then retried" shows Stripe turning the card down once, Billing asking again, and the second attempt going through.</p>
+<p>This loop is Billing's own, inside one payment request. It is not the retry queue, which never retries a decline.</p>
+</section>
+
+<section aria-labelledby="limits-h">
+<h2 id="limits-h">What the queue does not cover</h2>
+<p>Declined cards are not retried, because a decline is an answer and not a failure. Calls that fail because the order itself is invalid are not retried either. Both go straight to payment failed with the provider's reason.</p>
+<p>The queue also does not reorder anything. Two orders from the same shopper are retried independently, and either can finish first.</p>
+</section>
+
+<section aria-labelledby="watch-h">
+<h2 id="watch-h">How to tell it is working</h2>
+<p>Three numbers on the checkout dashboard describe the queue: its depth, the age of its oldest entry, and the share of entries that end in payment failed. Depth under 50 and an oldest entry under 40 seconds is normal. A failure share above 10% for more than ten minutes pages the on-call engineer.</p>
+<p>If the oldest entry keeps growing while the depth stays flat, workers are stuck rather than busy. Restarting the worker pool is safe, because every entry is persisted before it is attempted.</p>
+</section>

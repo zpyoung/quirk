@@ -6,7 +6,7 @@ Version: **2026.7.9**
 
 ## What ships
 
-- **26 skills** under `skills/` covering TDD, systematic debugging, brainstorming (which produces a logic spec), deep-research/brainstorming exploration (with a `--involve` user-inclusion dial: checkpoints, mid-run steering, and idea-gate co-creation), divergent ideation, the two-document spec rubric (logic spec + tech spec) and plan writing, scannable-prose revision, code review, a full multi-lens pre-merge review for GitHub and GitLab, adversarial review (typed profiles, a promote/refute two-stage, and an evidence gate), parallel agent dispatch, guided bug/feature/code-change filing with provenance-marked artifacts, gating simplification behind a correctness check, and more.
+- **27 skills** under `skills/` covering TDD, systematic debugging, brainstorming (which produces a logic spec), deep-research/brainstorming exploration (with a `--involve` user-inclusion dial: checkpoints, mid-run steering, and idea-gate co-creation), divergent ideation, the two-document spec rubric (logic spec + tech spec) and plan writing, scannable-prose revision, code review, a full multi-lens pre-merge review for GitHub and GitLab, adversarial review (typed profiles, a promote/refute two-stage, and an evidence gate), parallel agent dispatch, guided bug/feature/code-change filing with provenance-marked artifacts, gating simplification behind a correctness check, and more.
 - **Typed artifacts** (added in 5.1.0) — surface-routing for observations Claude cannot act on. See below.
 
 ## Installation
@@ -70,16 +70,13 @@ generate `logic.md`, and use a local `review.html` for decisions and sign-off.
 The page and decision exports are not committed. See
 [the interactive rubric](skills/writing-specs/interactive-logic-spec.md).
 
-## Agent Isles bridge
+## HTML artifacts and the visual companion
 
-Quirk can author Agent Isles-aware artifacts while keeping Markdown canonical and Agent Isles optional. The stdlib-only helper in `bin/agent_isles.py` detects a local `isles` binary, an `isles` on `PATH`, or an explicit `npx agent-isles@next` fallback; it never silently installs packages.
-
-```bash
-python3 bin/agent_isles.py doctor
-python3 bin/agent_isles.py command examples/agent-isles/typed-artifacts-summary.md
-```
-
-The experimental local component pack lives in `packs/quirk/` and covers typed artifact summaries, TDD cycle reports, plan readiness, and review findings. Examples live in `examples/agent-isles/`. See `docs/agent-isles-artifacts.md` for the authoring contract: Markdown source is canonical, generated HTML under `.quirk/isles/` is disposable by default, and the Quirk pack is trusted local code.
+The `writing-html-artifacts` skill builds offline, single-file HTML pages from templates and
+vendored libraries, and runs the brainstorming visual companion: a small local Python server
+that shows option screens in a browser and sends clicks back to the agent. Brainstorming and
+exploring-ideas both use it. Markdown stays the canonical source for specs; the companion needs
+Python 3 only.
 
 ## Development
 

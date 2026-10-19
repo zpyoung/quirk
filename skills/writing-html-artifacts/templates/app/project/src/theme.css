@@ -1,0 +1,56 @@
+@import '@astryxdesign/core/reset.css';
+@import '@astryxdesign/core/astryx.css';
+@import '@astryxdesign/theme-neutral/theme.css';
+@import './quirk-tokens.css';
+@import './quirk-layout.css';
+
+:root {
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+  }
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: var(--color-background-body, var(--q-color-bg));
+  color: var(--q-color-text);
+  font-family: var(--q-font-sans);
+  font-size: var(--q-size-body);
+  line-height: var(--q-size-leading);
+}
+
+.q-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-md);
+}
+
+.q-data-grid {
+  width: 100%;
+  min-width: 40rem;
+  border-collapse: collapse;
+}
+
+.q-data-grid th,
+.q-data-grid td {
+  padding: var(--q-space-2) var(--q-space-3);
+  border-bottom: 1px solid var(--q-color-border);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.q-data-grid th {
+  font-size: var(--q-size-small);
+  color: var(--q-color-text-muted);
+  background: var(--q-color-surface);
+}
+
+.q-data-grid tr:last-child td {
+  border-bottom: 0;
+}
