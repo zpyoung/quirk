@@ -1,0 +1,189 @@
+{
+  "schema": 1,
+  "libraries": {
+    "simple-css": {
+      "current": "2.3.7",
+      "versions": {
+        "2.3.7": {
+          "package": "simpledotcss",
+          "license": "MIT",
+          "license_file": "LICENSE",
+          "source": "https://registry.npmjs.org/simpledotcss/-/simpledotcss-2.3.7.tgz",
+          "files": [
+            {
+              "path": "simple.min.css",
+              "kind": "css",
+              "sha256": "fb0624582679e4af905268e0fb461128583a49b5d9e5d8675d1c9e2fc34c7d3d",
+              "inline_sha256": "fb0624582679e4af905268e0fb461128583a49b5d9e5d8675d1c9e2fc34c7d3d",
+              "position": "head",
+              "inline": true
+            }
+          ]
+        }
+      }
+    },
+    "alpine": {
+      "current": "3.17.4",
+      "versions": {
+        "3.17.4": {
+          "package": "alpinejs",
+          "license": "MIT",
+          "license_file": "LICENSE",
+          "source": "https://registry.npmjs.org/alpinejs/-/alpinejs-3.17.4.tgz",
+          "files": [
+            {
+              "path": "alpine.min.js",
+              "kind": "js",
+              "sha256": "232519394c6c8fdba6f362b1d9da16106db513cdbf899011f00daab4051df31c",
+              "inline_sha256": "232519394c6c8fdba6f362b1d9da16106db513cdbf899011f00daab4051df31c",
+              "position": "body-end",
+              "inline": true
+            }
+          ]
+        }
+      }
+    },
+    "chartjs": {
+      "current": "4.5.1",
+      "versions": {
+        "4.5.1": {
+          "package": "chart.js",
+          "license": "MIT",
+          "license_file": "LICENSE",
+          "source": "https://registry.npmjs.org/chart.js/-/chart.js-4.5.1.tgz",
+          "files": [
+            {
+              "path": "chart.umd.js",
+              "kind": "js",
+              "sha256": "ecc3cd1eeb8c34d2178e3f59fd63ec5a3d84358c11730af0b9958dc886d7652a",
+              "inline_sha256": "ecc3cd1eeb8c34d2178e3f59fd63ec5a3d84358c11730af0b9958dc886d7652a",
+              "position": "body-end",
+              "inline": true
+            }
+          ]
+        }
+      }
+    },
+    "mermaid": {
+      "current": "12.2.0",
+      "versions": {
+        "12.2.0": {
+          "package": "mermaid",
+          "license": "MIT",
+          "license_file": "LICENSE",
+          "source": "https://registry.npmjs.org/mermaid/-/mermaid-12.2.0.tgz",
+          "files": [
+            {
+              "path": "mermaid.min.js",
+              "kind": "js",
+              "sha256": "a8a6a6f805b074a8261a2825c86f99c8054acb3b35f50bb7e24a4f9f2c3c3b9f",
+              "inline_sha256": "a8a6a6f805b074a8261a2825c86f99c8054acb3b35f50bb7e24a4f9f2c3c3b9f",
+              "position": "body-end",
+              "inline": true
+            }
+          ]
+        }
+      }
+    },
+    "webawesome": {
+      "versions": {
+        "3.14.0": {
+          "package": "@awesome.me/webawesome",
+          "license": "MIT",
+          "license_file": "LICENSE",
+          "source": "https://registry.npmjs.org/@awesome.me/webawesome/-/webawesome-3.14.0.tgz",
+          "files": [
+            {
+              "path": "webawesome.css",
+              "kind": "css",
+              "sha256": "0e6fcb9cab6938d4b7d00b8f2d1d4abc6fb76e6f2d1d9b72c70530010c4c6b3c",
+              "inline_sha256": "0e6fcb9cab6938d4b7d00b8f2d1d4abc6fb76e6f2d1d9b72c70530010c4c6b3c",
+              "position": "head",
+              "inline": true
+            },
+            {
+              "path": "webawesome.bundle.js",
+              "kind": "js",
+              "sha256": "abe2a5cd98f5d8b71a4176e48f1930bc372bfa6e6313c55fbbcda4c113469a7b",
+              "inline_sha256": "abe2a5cd98f5d8b71a4176e48f1930bc372bfa6e6313c55fbbcda4c113469a7b",
+              "position": "body-end",
+              "inline": true
+            }
+          ]
+        }
+      },
+      "current": "3.14.0"
+    },
+    "highlightjs": {
+      "current": "11.12.0",
+      "versions": {
+        "11.12.0": {
+          "package": "@highlightjs/cdn-assets",
+          "license": "BSD-3-Clause",
+          "license_file": "LICENSE",
+          "source": "https://registry.npmjs.org/@highlightjs/cdn-assets/-/cdn-assets-11.12.0.tgz",
+          "files": [
+            {
+              "path": "highlight.min.js",
+              "kind": "js",
+              "sha256": "8ab71eb09c51f501e5e25157d9cff100e46cc29bcbfc744d0b746d451fca7f53",
+              "inline_sha256": "8ab71eb09c51f501e5e25157d9cff100e46cc29bcbfc744d0b746d451fca7f53",
+              "position": "body-end",
+              "inline": true
+            }
+          ]
+        }
+      }
+    },
+    "kit": {
+      "current": "1.0.0",
+      "versions": {
+        "1.0.0": {
+          "package": "quirk-kit",
+          "license": "MIT",
+          "license_file": "LICENSE",
+          "first_party": true,
+          "files": [
+            {
+              "path": "kit.css",
+              "kind": "css",
+              "position": "head",
+              "inline": true,
+              "sha256": "14bcc599ca338302e1d69289f2248c27e0c4d7db4e2079d903683e4d0bb7e3ce",
+              "inline_sha256": "14bcc599ca338302e1d69289f2248c27e0c4d7db4e2079d903683e4d0bb7e3ce"
+            },
+            {
+              "path": "kit.js",
+              "kind": "js",
+              "position": "body-end",
+              "inline": true,
+              "sha256": "83fb3cfa2234bfe2288a38097b47e290f5644f45119545880233c3d78242ab8c",
+              "inline_sha256": "83fb3cfa2234bfe2288a38097b47e290f5644f45119545880233c3d78242ab8c"
+            }
+          ]
+        }
+      }
+    },
+    "flow": {
+      "current": "0.12.0",
+      "versions": {
+        "0.12.0": {
+          "package": "elkjs",
+          "license": "EPL-2.0 AND ISC",
+          "license_file": "LICENSE",
+          "source": "https://registry.npmjs.org/elkjs/-/elkjs-0.12.0.tgz",
+          "files": [
+            {
+              "path": "flow.bundle.js",
+              "kind": "js",
+              "position": "body-end",
+              "inline": true,
+              "sha256": "159744cecdc26c92a3a7ef9a50746ed7ec6e1572e7e62c2bb30a98b3b0ae46f7",
+              "inline_sha256": "159744cecdc26c92a3a7ef9a50746ed7ec6e1572e7e62c2bb30a98b3b0ae46f7"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

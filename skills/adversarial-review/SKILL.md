@@ -86,6 +86,13 @@ against `HEAD`), and untracked files that git would not diff at all. A brand-new
 uncommitted work, and omitting it would review everything except the new code. `.gitignore` is
 honoured.
 
+For `code-diff`, `resolve` excludes vendored, generated, and lockfile paths by default:
+`vendor/`, `node_modules/`, `dist/`, `build/`, `.venv/`, `__pycache__/`, `*.min.js`,
+`*.min.css`, `*.bundle.js`, `*.lock`, `pnpm-lock.yaml`, `package-lock.json`, `yarn.lock`,
+`Cargo.lock`, `poetry.lock`, and `uv.lock`. `ResolveResult.excluded_paths` records each omitted
+path with its line count; `WORKTREE` also records `full_worktree_hash` over the unfiltered capture.
+Pass `--include-all` to disable these default exclusions when those paths need review.
+
 The artifact is fixed here, at capture. Work that appears afterwards is not in it and no stage will
 see it — the later stages re-derive their hash over exactly this set, which is what stops the
 review's own check output from reading as the artifact moving. `gate` reports anything that showed
@@ -107,6 +114,19 @@ alone, so a failure that stops at `checks[]` is a failure that silently passes. 
 their own, more specific findings (reference resolution) are covered by those; everything else gets
 a generic `failing-check` finding. The default for a new check is *covered*, so forgetting to wire
 one up fails safe.
+
+For `code-diff`, `prepass --reuse-check <path>` accepts a verified check record instead of
+re-running checks. Reuse requires matching `tree_hash` (`HEAD^{tree}`), boolean `clean_tree`,
+exact command coverage, consistent `status`/`exit_code`, and a live `observed_artifact_hash`
+matching the resolved artifact; `WORKTREE` additionally requires matching `full_worktree_hash`.
+A mismatch exits 2, not a green result: run prepass live without `--reuse-check`. A valid reused
+failing check still emits a prepass finding and exits 1. Each check records `"reused": true` when
+reused and `"duration_ms"`;
+`prepass.json` and `manifest.prepass` record `"tree_hash"`.
+
+When a caller runs concurrent lenses (`C`, `S`, `X`) over the same target in one round, run
+`resolve` and `prepass` once and share `resolve.json` and `prepass.json` across all three lenses.
+Pass a distinct `--id-prefix` to each lens's `claims` and `gate` calls.
 
 **4. Select the adversary.**
 
@@ -137,16 +157,20 @@ here and do not treat it as a pass.
 ```bash
 "$SCRIPT" claims --findings "$WORK/findings.json" --resolve "$WORK/resolve.json" \
   > "$WORK/claims.json"
-# stage assets/refute-prompt.md with claims.json's .claims, dispatch, collect to refute.json
+# stage assets/refute-prompt.md with .claims and .diff_excerpts from claims.json; collect refute.json
 "$SCRIPT" merge --findings "$WORK/claims.json" --judgments "$WORK/refute.json" \
   > "$WORK/merged.json"
 ```
 
 `claims` assigns the IDs and emits `.claims` — the six fields `id`, `severity`, `confidence`,
-`category`, `claim`, `evidence[]` — alongside the full `.findings`. Promote emits `id: null` and
-refute keys its judgments by `id`, so the IDs have to exist before the dispatch. `claims` also
-withholds `limitation` and `question` records: refute has no mandate over a claim nobody offered as
-a defect, and staged as claims they come back `refuted`.
+`category`, `claim`, `evidence[]` — alongside the full `.findings`, `.diff_excerpts`, and
+`.excluded_paths`. Substitute `claims.json`'s `.diff_excerpts` into `{{ARTIFACT}}` when staging
+`assets/refute-prompt.md`: these are the cited hunks and ±15-line context windows, not another
+multi-hundred-kilobyte full diff. Full files remain readable via `read`. Promote emits `id: null`
+for new findings, retaining original IDs for still-open closure findings or evidenced re-reports;
+refute keys its judgments by `id`, so IDs must exist before dispatch. `claims` also withholds
+`limitation` and `question` records: refute has no mandate over a claim nobody offered as a defect,
+and staged as claims they come back `refuted`.
 
 It takes the promote stage's output and **refuses an already-adjudicated finding** — anything at
 stage `refute` or `tiebreak`, or carrying a `disposition` other than `standing`. Re-staging a ruled
@@ -229,9 +253,12 @@ The evidence gate runs *before* the tie is routed, so a `contested` finding whos
 demonstrably false is suppressed as `falsified` rather than sent to tiebreak. A falsehood is not a
 disagreement, and adjudicating one costs a third dispatch to learn nothing.
 
-**8. Tiebreak.** At `deep` depth only, and only if `gate.json` has a non-empty `contested[]`. Stage
-`assets/tiebreak-prompt.md` with those findings — including each one's `ruling_reason`, so the third
-family sees both sides — dispatch to a **third** family, then:
+**8. Tiebreak.** At `deep` depth only, and only if `gate.json` has a non-empty `contested[]`.
+`gate` emits `contested_excerpts` and `excluded_paths`; substitute `gate.json`'s
+`.contested_excerpts` into `{{ARTIFACT}}` when staging `assets/tiebreak-prompt.md`, not the full
+diff. These excerpts cover `contested[]` and `counter_evidence[]` citations with ±15-line context.
+Stage the contested findings including each one's `ruling_reason`, so the third family sees both
+sides, dispatch to a **third** family, then:
 
 ```bash
 "$SCRIPT" merge --findings "$WORK/merged.json" --judgments "$WORK/tiebreak.json" \
@@ -312,11 +339,12 @@ verdict. `CRITICAL` is exempt. Nothing is dropped; the rule decides what buys a 
 gets reported. Full rule in [`assets/composition-contract.md`](assets/composition-contract.md).
 
 **So `PASS` does not mean "clean".** It means *no unresolved finding met the blocking bar under this
-scope and protocol*. Report `advisory_count`, `limitations[]`, `questions[]`, and
-`unreviewed_paths[]` alongside it, or the reader will hear a completeness guarantee this protocol
-cannot give. `unreviewed_paths[]` is the scope one: files that appeared after the artifact was
-captured, which no stage looked at. Usually that is the review's own check output and means nothing;
-when it is real new work, the verdict stopped short of it and only this says so.
+scope and protocol*. Report `advisory_count`, `limitations[]`, `questions[]`, `unreviewed_paths[]`,
+and `excluded_paths[]` alongside it, or the reader will hear a completeness guarantee this protocol
+cannot give. `gate` and `manifest` report both scope-bounding path fields: `unreviewed_paths[]`
+lists files that appeared after capture, which no stage saw; `excluded_paths[]` lists vendored,
+generated, or lockfile paths omitted by default diff hygiene unless `--include-all` was passed.
+Check output appearing after capture is usually harmless; real new work is outside the verdict.
 
 **`NOT_REVIEWABLE` is never a synonym for `PASS`.** It means the review did not happen — nothing was
 examined and nothing was cleared. Handle all four verdicts by name. A caller writing `if verdict !=
@@ -359,6 +387,12 @@ Then the findings array verbatim, then the manifest.
 
 Both stage paths get `read`, `grep`, `find`, `ls`, and **read-only `bash`**. Tiebreak gets the first
 four only. No stage ever gets `edit` or `write`.
+
+Pin reasoning effort per stage: `high` for promote and refute reviewers, `medium` for tiebreak
+arbiters. On `pi-watch`, set `THINKING` to the lower of that stage target and `model.json`'s
+`thinking` ceiling under `low < medium < high` (for example, `flash` caps at `medium`).
+`manifest.reviewer.thinking` continues to record `model.json`'s `thinking` value, not this
+stage-specific cap. On `Agent` dispatches, specify the stage's effort level explicitly.
 
 **`pi-watch` path** — preferred for cross-family independence.
 
@@ -431,7 +465,13 @@ do not continue the old one's.
 4. Do not reopen the whole artifact. A finding outside the touched scope is
    `out-of-campaign-scope` — record it, do not fix it in this campaign.
 
-Carry the prior findings in `dismissed[]` with their IDs so a re-report has to bring new evidence.
+For closure rounds (rounds >= 2), target `LAST_ROUND_HEAD..HEAD`. Filter prior accepted findings
+by lens `id_prefix`: `C` receives only `C1..Cn`, `S` receives `S1..Sn`, and `X` receives `X1..Xn`.
+Stage them in a `### Closure Round Verification` section inside `{{CRITERIA}}`, alongside the
+fix delta (`LAST_ROUND_HEAD..HEAD`) and touched contract seams; never in `dismissed[]`.
+The reviewer omits findings now fixed, re-reports still-open findings with their original `id`,
+and reports new regressions in the fix delta or seams with `"id": null`. Only findings actually
+dismissed by the caller belong in `dismissed[]`, with their original IDs and rulings.
 
 **Measure marginal yield in new, independently confirmed blockers** — not raw findings. A round that
 returns four advisories and two limitations has converged; a caller counting rows has not noticed.

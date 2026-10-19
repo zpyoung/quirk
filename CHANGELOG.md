@@ -5,6 +5,46 @@ calendar-based (**CalVer**, `YYYY.M.D` unpadded); the `releasing-quirk` skill
 stamps and prepends each entry (newest on top). Since the version no longer encodes
 compatibility, breaking changes are called out in a `### ⚠️ BREAKING` subsection.
 
+## 2026.10.19.1
+
+### Changes
+- feat(writing-html-artifacts): add the HTML artifacts skill, component kit, diagrams and visual companion (#52)
+
+## 2026.10.19
+
+### Changes
+Add `quirk:full-code-review`, a multi-lens pre-merge review for GitHub, GitLab, and local changes with author and reviewer seats, policy packs, human-gated posting, an opt-in `--deep [minutes]` defect hunt with per-hunk coverage planning, fresh verification and evidence-aware scoring, and report-only `--since <ref>` delta reviews.
+
+## 2026.10.18
+
+### Changes
+- feat(sdd): cut wall-clock time with tree-once caching, tiered human gates, and closure rounds (#51)
+
+## 2026.10.15.1
+
+### Changes
+- feat(writing-specs): data-state examples for logic-spec scenarios (#49)
+
+## 2026.10.15
+
+### Changes
+- fix(pi-dev): port pi-watch to pi 1.x, fail on provider errors, refresh alias ladders (#48)
+
+## 2026.10.12.1
+
+### Changes
+- fix(writing-specs): harden stage-3 validation and make signed stages read-only (#47)
+
+## 2026.10.12
+
+### Changes
+- Stage 3: compare approaches in the interactive spec review (#46)
+
+## 2026.10.8.1
+
+### Changes
+- Scenario review: focus modal for undecided scenarios, comments, and flags (#45)
+
 ## 2026.10.8
 
 ### Changes

@@ -1,0 +1,12 @@
+diff --git a/pager.py b/pager.py
+index 80d8bbe..96866a3 100644
+--- a/pager.py
++++ b/pager.py
+@@ -1,6 +1,6 @@
+ def page_slices(items, size):
+     """Split items into consecutive pages of at most `size` items."""
+     pages = []
+-    for start in range(0, len(items), size):
++    for start in range(0, len(items) - size, size):
+         pages.append(items[start:start + size])
+     return pages

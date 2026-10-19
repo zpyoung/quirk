@@ -59,6 +59,10 @@ equivalent, and do not narrow the test selection to the tests you expect to pass
 runs the identical command; if yours differs, one of you gets a different answer and the run stalls
 resolving it.
 
+`{{ACCEPTANCE}}` is scoped to this task's owned test files and fast targeted checks. Run it exactly
+as written; never run the full repository test suite when it targets specific test files.
+Step 7's wave gate runs the full suite once.
+
 ## Method
 
 Follow **quirk:test-driven-development**: write the failing test first, watch it fail for the right

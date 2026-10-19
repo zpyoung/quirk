@@ -1,0 +1,10 @@
+.q-config {
+  margin: 0;
+  padding: var(--q-space-3);
+  overflow-x: auto;
+  background: var(--q-color-surface);
+  border: 1px solid var(--q-color-border);
+  border-radius: var(--q-radius-md);
+  font-family: var(--q-font-mono);
+  font-size: var(--q-size-small);
+}

@@ -1,0 +1,25 @@
+{
+  "title": "Reference: API error codes",
+  "question": "How should the error code reference be organised?",
+  "select": "single",
+  "options": [
+    {
+      "id": "alphabetical",
+      "label": "Alphabetical",
+      "description": "Every code in one list. Fast when you already know the code.",
+      "html": "<div style=\"display:flex;flex-direction:column;justify-content:space-between;height:72px\"><div style=\"border:1px solid currentColor;opacity:.5;height:6px;width:100%\"></div><div style=\"border:1px solid currentColor;opacity:.5;height:6px;width:90%\"></div><div style=\"border:1px solid currentColor;opacity:.5;height:6px;width:95%\"></div><div style=\"border:1px solid currentColor;opacity:.5;height:6px;width:60%\"></div><div style=\"border:1px solid currentColor;opacity:.5;height:6px;width:100%\"></div></div>"
+    },
+    {
+      "id": "by-endpoint",
+      "label": "By endpoint",
+      "description": "Codes grouped under the endpoint that returns them. Best when you arrive from a failing call."
+    },
+    {
+      "id": "by-cause",
+      "label": "By cause",
+      "description": "Grouped as client, auth, rate limit and server errors, with a section nav."
+    }
+  ],
+  "content": "<p>There are about 60 error codes. Engineers land here from a log line or a failed request and want the meaning and the fix quickly.</p>",
+  "layout": "reference"
+}

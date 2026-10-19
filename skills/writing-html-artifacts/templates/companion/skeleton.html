@@ -1,0 +1,60 @@
+<!doctype html>
+{{header}}
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+{{head}}
+<style>
+[hidden] { display: none !important; }
+body { display: block; margin: 0; }
+.q-wrap { box-sizing: border-box; max-width: 960px; margin-inline: auto; padding-inline: clamp(var(--q-space-4), 4vw, var(--q-space-6)); }
+body > header.q-masthead { background: none; text-align: left; margin: 0; padding: var(--q-space-4) 0 var(--q-space-5); border-bottom: 1px solid var(--q-color-border); }
+body > header.q-masthead > .q-wrap { margin-block-start: 0; }
+body > header.q-masthead h1 { max-width: none; margin: var(--q-space-3) 0 0; font-size: var(--q-size-h3); color: var(--q-color-text-muted); }
+.q-chrome { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--q-space-3); }
+.q-chrome .q-theme-toggle { position: static; }
+main.q-wrap { padding-block: var(--q-space-5) var(--q-space-7); }
+main h2 { margin-top: 0; font-size: var(--q-size-h2); }
+.q-banner { margin-block: 0 var(--q-space-4); padding: var(--q-space-3) var(--q-space-4); border: 1px solid var(--q-color-warn); border-radius: var(--q-radius-md); background: var(--q-color-surface); }
+.q-banner button { margin-inline-start: var(--q-space-3); }
+.q-content { margin-block: var(--q-space-4); }
+.q-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: var(--q-space-4); margin-block: var(--q-space-4); }
+.q-option { display: flex; flex-direction: column; align-items: stretch; gap: var(--q-space-2); box-sizing: border-box; width: 100%; min-height: 44px; margin: 0; padding: var(--q-space-4); text-align: left; font: inherit; color: var(--q-color-text); background: var(--q-color-surface); border: 1px solid var(--q-color-border); border-radius: var(--q-radius-md); cursor: pointer; }
+.q-option:enabled:hover { background: var(--q-color-surface); border-color: var(--q-color-accent); }
+.q-option[aria-pressed="true"], .q-option[aria-checked="true"] { border-color: var(--q-color-accent); background: color-mix(in srgb, var(--q-color-accent) 12%, var(--q-color-bg)); }
+.q-option:disabled { cursor: not-allowed; opacity: 0.6; }
+.q-option-label { font-weight: 600; font-size: var(--q-size-h4); }
+.q-option-desc { color: var(--q-color-text-muted); }
+.q-option-mockup { display: block; margin-top: var(--q-space-2); pointer-events: none; }
+.q-actions { display: flex; flex-direction: column; align-items: flex-start; gap: var(--q-space-2); }
+.q-actions textarea { box-sizing: border-box; width: 100%; max-width: 40rem; }
+.q-actions button { min-height: 44px; margin: 0; }
+.q-status { min-height: 1.5em; margin-block: var(--q-space-3) 0; color: var(--q-color-text-muted); }
+</style>
+</head>
+<body>
+<header class="q-masthead">
+<div class="q-wrap" data-layout="{{layout}}">
+<div class="q-chrome">{{chrome}}</div>
+<h1>{{title}}</h1>
+</div>
+</header>
+<main class="q-wrap" id="main" data-layout="{{layout}}">
+<div class="q-banner" id="q-superseded" role="alert" hidden>This question was replaced by a newer screen, so your choices here are no longer sent. <button type="button" data-quirk-reload>Show the newer screen</button></div>
+{{slot:question}}
+<div class="q-content">
+{{slot:content}}
+</div>
+{{slot:options}}
+<div class="q-actions">
+<label for="q-note">Note for the agent (optional)</label>
+<textarea id="q-note" rows="3" data-quirk-note></textarea>
+<button type="button" id="q-proceed" data-quirk-proceed>Proceed</button>
+</div>
+<p class="q-status" id="q-status" role="status"></p>
+</main>
+{{body_end}}
+</body>
+</html>

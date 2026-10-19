@@ -1,0 +1,170 @@
+{
+  "skill_name": "writing-html-artifacts",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Make an interactive HTML map of our billing services that I can click through to see each worker's retry rules and follow how an order event moves upstream and downstream.",
+      "expected": "q-flow"
+    },
+    {
+      "id": 2,
+      "prompt": "Build an HTML explainer of our 35-node data pipeline where new engineers can pan and zoom around, click a job to read its inputs and outputs in a drawer, and highlight everything connected to it.",
+      "expected": "q-flow"
+    },
+    {
+      "id": 3,
+      "prompt": "I want a single-file web page showing our checkout, fraud, and ledger subsystems as grouped boxes I can zoom into and explore hop by hop.",
+      "expected": "q-flow"
+    },
+    {
+      "id": 4,
+      "prompt": "Create an explorable architecture page for the webhook router with stage lanes from intake to delivery, where clicking any service lights up its call path and shows its runbook notes.",
+      "expected": "q-flow"
+    },
+    {
+      "id": 5,
+      "prompt": "Turn our dependency graph of 25 microservices and queues into an offline HTML artifact I can pan, zoom, and click to inspect each service's upstream callers and downstream dependencies.",
+      "expected": "q-flow"
+    },
+    {
+      "id": 6,
+      "prompt": "Make an HTML runbook page with an interactive topology diagram of our regional caches, databases, and workers so on-call can click a failing node and trace every affected path.",
+      "expected": "q-flow"
+    },
+    {
+      "id": 7,
+      "prompt": "Show our event-driven fulfillment flow on a companion screen as an interactive graph I can pan and click through to inspect each queue and worker before we pick a design.",
+      "expected": "q-flow"
+    },
+    {
+      "id": 8,
+      "prompt": "Build an HTML page that maps how customer events flow across our analytics collectors, Kafka topics, and warehouse tables, with clickable nodes that open each table's schema notes.",
+      "expected": "q-flow"
+    },
+    {
+      "id": 9,
+      "prompt": "Add a simple static flowchart of the 4-step login redirect check to this HTML report.",
+      "expected": "mermaid"
+    },
+    {
+      "id": 10,
+      "prompt": "Include a sequence diagram showing the OAuth token exchange between the browser, the auth server, and the API gateway on the HTML explainer page.",
+      "expected": "q-sequence"
+    },
+    {
+      "id": 11,
+      "prompt": "Draw a state chart of an order's lifecycle (draft, pending, paid, refunded, voided) in the HTML page.",
+      "expected": "mermaid"
+    },
+    {
+      "id": 12,
+      "prompt": "Put a small static diagram of the three-box retry loop in the report page; nobody needs to click or zoom it.",
+      "expected": "mermaid"
+    },
+    {
+      "id": 13,
+      "prompt": "Write a diagram of the retry flow for this README in Markdown.",
+      "expected": "mermaid"
+    },
+    {
+      "id": 14,
+      "prompt": "Add an entity-relationship diagram of the users, subscriptions, and charges tables to the HTML design write-up.",
+      "expected": "q-schema"
+    },
+    {
+      "id": 15,
+      "prompt": "Show a quick static Mermaid diagram on the companion screen using the diagram field to illustrate the two-step approval sequence.",
+      "expected": "mermaid"
+    },
+    {
+      "id": 16,
+      "prompt": "Include a class diagram of the parser interfaces in our HTML technical overview.",
+      "expected": "q-schema"
+    },
+    {
+      "id": 17,
+      "prompt": "Build an HTML page that walks support agents through our refund approval as a flowchart: a decision for amounts over $500, a retry if the bank rejects the payout, and each branch clickable for the policy notes.",
+      "expected": "q-flow"
+    },
+    {
+      "id": 18,
+      "prompt": "Make a single-file HTML explainer of our webhook delivery flowchart where a failed delivery loops back through exponential backoff, and the 'escalate to a human' step opens its own separate flowchart.",
+      "expected": "q-flow"
+    },
+    {
+      "id": 19,
+      "prompt": "Add a flowchart to this HTML onboarding guide that asks 'Is the account verified?' and 'Is the plan paid?', with labelled yes and no exits, and a node for the KYC sub-process that readers can open.",
+      "expected": "q-flow"
+    },
+    {
+      "id": 20,
+      "prompt": "Add a flowchart of the retry-then-give-up logic to the README for the payments package.",
+      "expected": "mermaid"
+    },
+    {
+      "id": 21,
+      "prompt": "Draw the deploy approval process as a flowchart with yes/no decisions inside this Markdown design doc.",
+      "expected": "mermaid"
+    },
+    {
+      "id": 22,
+      "prompt": "Put a flowchart with a decision and a retry loop for the nightly import job in our docs/runbook.md.",
+      "expected": "mermaid"
+    },
+    {
+      "id": 23,
+      "prompt": "Put an ER diagram of the orders and customers tables in the project README.",
+      "expected": "mermaid"
+    },
+    {
+      "id": 24,
+      "prompt": "Add a class diagram of the plugin interfaces I can click through to the HTML architecture page.",
+      "expected": "q-schema"
+    },
+    {
+      "id": 25,
+      "prompt": "Build an HTML page that shows how checkout, the payment service, and the ledger call each other when a customer pays, with replies and an async webhook at the end.",
+      "expected": "q-sequence"
+    },
+    {
+      "id": 26,
+      "prompt": "Make a web page for the on-call runbook with a sequence diagram of the cache-miss path between the client, the API, the cache, and the database, including an alt for hit versus miss.",
+      "expected": "q-sequence"
+    },
+    {
+      "id": 27,
+      "prompt": "Create an HTML explainer of our login handshake as a sequence diagram where I can step through the request payload at each message.",
+      "expected": "q-sequence"
+    },
+    {
+      "id": 28,
+      "prompt": "Show the order fulfillment calls between the storefront, the order service, and the warehouse on an HTML page, with a loop that polls for shipment status.",
+      "expected": "q-sequence"
+    },
+    {
+      "id": 29,
+      "prompt": "Add a sequence diagram to this HTML design review showing the retry protocol between the worker and the queue, with an opt block for the dead-letter hop and a par block for the two notifications.",
+      "expected": "q-sequence"
+    },
+    {
+      "id": 30,
+      "prompt": "On the companion screen, draw who calls whom during the subscription renewal, as a sequence diagram I can play through one message at a time.",
+      "expected": "q-sequence"
+    },
+    {
+      "id": 31,
+      "prompt": "Add a sequence diagram of the OAuth token exchange to the README for the auth package.",
+      "expected": "mermaid"
+    },
+    {
+      "id": 32,
+      "prompt": "Include a sequence diagram of the webhook delivery calls in this Markdown design doc.",
+      "expected": "mermaid"
+    },
+    {
+      "id": 33,
+      "prompt": "Draw a state chart of the subscription lifecycle (active, paused, cancelled, expired) on the HTML report page.",
+      "expected": "mermaid"
+    }
+  ]
+}

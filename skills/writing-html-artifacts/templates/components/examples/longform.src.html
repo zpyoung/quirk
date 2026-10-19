@@ -1,0 +1,40 @@
+<!-- quirk-src {"template": "components", "title": "Why we rebuilt the settings page", "mode": "offline", "layout": "longform"} -->
+<!-- slot: summary -->
+<p class="q-lede">The old settings page had 61 options on one scrolling screen, and support answered the same six questions about it every week. The rebuilt page groups settings by what they affect, and support tickets about it fell by half in the first month.</p>
+<!-- slot: main -->
+<p class="q-meta">By the product team, 8 Oct 2026. About a ten minute read.</p>
+
+<section aria-labelledby="before-h">
+<h2 id="before-h">What the old page looked like</h2>
+<p>The old page was a single list of options <q-sidenote>in the order they had been added<span slot="note">The first option dated from 2019 and the last was added the week before we started.</span></q-sidenote>. Nobody had decided that order; it was an archive. A merchant looking for the setting that controls reminder emails scrolled past billing, shipping and three kinds of discount to find it.</p>
+<p>Each option had a short label written by whoever added it, in whatever words they happened to use. The same idea appeared as skip, pause and snooze in three places.</p>
+</section>
+
+<section aria-labelledby="tickets-h">
+<h2 id="tickets-h">What support kept hearing</h2>
+<p>We read 400 tickets that mentioned the page. <q-sidenote>Six questions covered more than half of them<span slot="note">The remaining tickets were mostly about billing and had nothing to do with settings.</span></q-sidenote>, and in every one the answer was a setting that already existed. People were not missing a feature. They could not find it, or they found two that looked the same and picked the wrong one.</p>
+<p>That told us the work was about naming and grouping, not about adding anything.</p>
+</section>
+
+<section aria-labelledby="groups-h">
+<h2 id="groups-h">How we grouped the options</h2>
+<p>We started with a card sort with twelve merchants. The groups they made did not match our code, which had a section per feature team. They grouped by what a setting affects: the customer, the order, the money, or the store itself.</p>
+<p>We kept those four groups and a fifth called Advanced for the eleven settings that almost nobody changes. Putting rarely used settings in their own group did more for the page than any change to the common ones.</p>
+</section>
+
+<section aria-labelledby="labels-h">
+<h2 id="labels-h">Writing the labels again</h2>
+<p>Every label now says what happens when you turn it on, in a short sentence, and <q-sidenote>the three words for skip became one<span slot="note">We chose skip, because it was the word merchants used when we asked them unprompted.</span></q-sidenote>. Help text moved from a link to the line under the label, because nobody followed the link.</p>
+<p>It took longer than building the new layout. It was also the change that mattered most.</p>
+</section>
+
+<section aria-labelledby="results-h">
+<h2 id="results-h">What happened after the release</h2>
+<p>Tickets about the settings page fell from about 90 a month to about 45. The share of merchants who changed at least one setting in their first week <q-sidenote>rose from 31% to 44%<span slot="note">Measured over the four weeks before the release and the four weeks after, for new accounts only.</span></q-sidenote>. We do not know how much of that is the page and how much is the other onboarding changes that shipped the same month.</p>
+</section>
+
+<section aria-labelledby="next-h">
+<h2 id="next-h">What we would do next</h2>
+<p>Search is the obvious next step, and we resisted it on purpose. A search box would have hidden the grouping problem rather than fixed it. Now that the groups are stable, a search that jumps to a setting inside its group is worth building.</p>
+<p>We will also stop adding settings without a label that a stranger can read, which is a rule we should have had in 2019.</p>
+</section>

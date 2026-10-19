@@ -30,6 +30,10 @@ RENDER_OUTPUT_FIELDS_V2 = RENDER_OUTPUT_FIELDS | {
     "rejectReason",
     "researchRequest",
     "originalCertainty",
+    # a reviewer's bookmark, not content, so toggling it must never look like a changed item
+    "flagged",
+    # marks a comment as handled without touching the scenario, so it must not reset decisions either
+    "answeredComment",
 }
 SCOPE_CONDITIONS = ("no-code", "under-10", "under-30")
 PLACEMENTS = ("in", "conditional", "out")
@@ -63,6 +67,168 @@ UNSAFE_OBJECT_IDS = frozenset(
         "__lookupSetter__",
     )
 )
+COMPARISON_KIND = "quirk-approach-comparison"
+COMPARE_EXPORT_KIND = "quirk-approach-comparison-challenges"
+UNSIGNED_COMPARISON_WARNING = "comparison.json ignored: stage 3 waits for stage-2 sign-off"
+COMPARE_EXPORT_REFUSAL = "stage-3 exports carry challenges, not decisions; use check-export or challenges"
+# size label -> (low, high) points; shared by validation and the app's effort display
+POINT_MAP: Dict[str, Tuple[int, int]] = {
+    "S": (2, 2),
+    "S-M": (2, 3),
+    "M": (3, 3),
+    "M-L": (3, 5),
+    "L": (5, 5),
+    "L-XL": (5, 8),
+    "XL": (8, 8),
+}
+SCORE_STATUSES = ("met", "met with workaround", "very hard", "not met")
+SLICE_BANDS = ("v1", "fast-follow", "optional")
+FLOW_KINDS = ("new", "changed", "reused")
+MESSAGE_KINDS = ("call", "return", "async", "focal")
+TABLE_STATUSES = ("new", "changed", "existing")
+COLUMN_CHIPS = ("PK", "FK", "UQ")
+REF_KINDS = ("fk", "json")
+DEPLOY_STATUSES = ("stated", "implied", "not-stated")
+HISTORY_OUTCOMES = ("revised", "held")
+FINDING_TYPES = ("disputes", "same score, different design")
+CONFIDENCE_LEVELS = ("low", "medium", "high")
+COMPARE_TAB_KEYS = ("overview", "approaches", "effort", "blast", "tradeoffs")
+SEQUENCE_MAX_PARTICIPANTS = 5
+SEQUENCE_MAX_MESSAGES = 12
+SCHEMA_MAX_TABLES = 5
+SCHEMA_MAX_REFS = 6
+
+
+OPEN_ASK_RE = re.compile(r"\[ASK: ([^\[\]\n]+)\]")
+ASK_LOOKALIKE_RE = re.compile(r"\[\s*ask\b", re.IGNORECASE)
+EXAMPLE_KEYS = ("before", "steps", "after", "details")
+DATA_STATE_KEYS = ("before", "steps", "after")
+DATA_STATE_LABELS = ("data before", "walkthrough", "data after")
+DETAILS_TITLE_FORBIDDEN = re.compile(r"[\n\r*_`\[\]<>]")
+MALFORMED_ASK_MESSAGE = "malformed [ASK] marker; write [ASK: <question>]"
+
+
+def _example_parts(example: dict) -> List[str]:
+    """Every text part of an example in reading order: before, steps, after, then the details body."""
+    parts: List[str] = []
+    if "before" in example:
+        parts.append(example["before"])
+        parts.extend(example["steps"])
+        parts.append(example["after"])
+    if "details" in example:
+        parts.append(example["details"]["body"])
+    return parts
+
+
+def scenario_open_asks(scenario: dict) -> List[str]:
+    """Questions of every open [ASK: ...] gap in the scenario's example, in reading order; [] without one."""
+    example = scenario.get("example")
+    if not example:
+        return []
+    return [match.group(1) for part in _example_parts(example) for match in OPEN_ASK_RE.finditer(part)]
+
+
+def _normalized_lines(text: str) -> List[str]:
+    return text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+
+def _example_part_lines(first_prefix: str, indent: str, text: str) -> List[str]:
+    rows = _normalized_lines(text)
+    lines = [first_prefix + rows[0]] + [indent + row for row in rows[1:]]
+    return [line + "  " for line in lines[:-1]] + lines[-1:]
+
+
+def _example_markdown_lines(example: dict) -> List[str]:
+    """Sub-bullets for a scenario's example: data-state parts when present, then the titled details block.
+
+    Newlines inside a data-state part become hard breaks; the details body keeps ordinary Markdown newlines so
+    tables, lists and code blocks survive.
+    """
+    lines: List[str] = []
+    if "before" in example:
+        lines.extend(_example_part_lines("   - **Data before:** ", "     ", example["before"]))
+        lines.append("   - **Walkthrough:**")
+        for number, step in enumerate(example["steps"], 1):
+            lines.extend(_example_part_lines("     " + str(number) + ". ", "        ", step))
+        lines.extend(_example_part_lines("   - **Data after:** ", "     ", example["after"]))
+    if "details" in example:
+        details = example["details"]
+        lines.extend(["   - **" + details["title"] + ":**", ""])
+        lines.extend("     " + row if row else "" for row in _normalized_lines(details["body"]))
+        lines.append("")
+    return lines
+
+
+def _validate_example_details(v: "Validator", raw: Any, details_path: str) -> Optional[str]:
+    """Validate `example.details`; returns the body when it is a usable string, for the [ASK] check."""
+    details = v.object(raw, details_path)
+    if details is None:
+        return None
+    for key in details:
+        if key not in ("title", "body"):
+            v.error(pointer(details_path, key), "unexpected key")
+    if "title" not in details:
+        _required(v, details, "title", details_path)
+    else:
+        title_path = pointer(details_path, "title")
+        title = details["title"]
+        if v.string(title, title_path, nonempty=True):
+            if DETAILS_TITLE_FORBIDDEN.search(title):
+                v.error(title_path, "details title must be one line of plain text")
+            else:
+                label = title.strip()
+                if label.endswith(":"):
+                    label = label[:-1].strip()
+                if label.lower() in DATA_STATE_LABELS:
+                    v.error(title_path, "details title reuses a data-state label")
+    if "body" not in details:
+        _required(v, details, "body", details_path)
+        return None
+    body_path = pointer(details_path, "body")
+    return details["body"] if v.string(details["body"], body_path, nonempty=True) else None
+
+
+def _validate_scenario_example(v: "Validator", item: dict, path: str) -> bool:
+    """Validate `example`; True when it is well formed enough for scenario_open_asks."""
+    errors_before = len(v.errors)
+    example_path = pointer(path, "example")
+    example = v.object(item["example"], example_path)
+    if example is None:
+        return False
+    for key in example:
+        if key not in EXAMPLE_KEYS:
+            v.error(pointer(example_path, key), "unexpected key")
+    if not any(key in example for key in EXAMPLE_KEYS):
+        v.error(example_path, "example needs before, steps and after, or details")
+    parts: List[Tuple[str, str]] = []
+    if any(key in example for key in DATA_STATE_KEYS):
+        for key in ("before", "after"):
+            if key not in example:
+                _required(v, example, key, example_path)
+            elif v.string(example[key], pointer(example_path, key), nonempty=True):
+                parts.append((pointer(example_path, key), example[key]))
+        if "steps" not in example:
+            _required(v, example, "steps", example_path)
+        else:
+            steps_path = pointer(example_path, "steps")
+            steps = v.array(example["steps"], steps_path)
+            if steps is not None:
+                if not steps:
+                    v.error(steps_path, "must not be empty")
+                for index, step in enumerate(steps):
+                    if v.string(step, pointer(steps_path, index), nonempty=True):
+                        parts.append((pointer(steps_path, index), step))
+    if "details" in example:
+        details_path = pointer(example_path, "details")
+        body = _validate_example_details(v, example["details"], details_path)
+        if body is not None:
+            parts.append((pointer(details_path, "body"), body))
+    for part_path, text in parts:
+        for match in ASK_LOOKALIKE_RE.finditer(text):
+            if not OPEN_ASK_RE.match(text, match.start()):
+                v.error(part_path, MALFORMED_ASK_MESSAGE)
+                break
+    return len(v.errors) == errors_before
 
 
 class Validator:
@@ -892,6 +1058,7 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
                     v.string(item["rejectReason"], pointer(path, "rejectReason"))
 
     scenario_rows: List[Any] = []
+    checked_example_rows: set = set()
     scenarios = _required(v, root, "scenarios", "")
     if "scenarios" in root:
         rows = v.array(scenarios, "/scenarios")
@@ -926,6 +1093,13 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
                             _required(v, reopened, "raisedAt", reopened_path)
                 if "reapprovedHash" in item:
                     v.string(item["reapprovedHash"], pointer(path, "reapprovedHash"), nonempty=True)
+                if "flagged" in item and item["flagged"] is not True:
+                    v.error(pointer(path, "flagged"), "must be true when present")
+                if "answeredComment" in item:
+                    v.string(item["answeredComment"], pointer(path, "answeredComment"), nonempty=True)
+                if "example" in item:
+                    if _validate_scenario_example(v, item, path):
+                        checked_example_rows.add(index)
                 if "reopened" in item and "reapprovedHash" in item:
                     v.error(pointer(path, "reapprovedHash"), "reopened and reapprovedHash cannot both be present")
 
@@ -1286,7 +1460,7 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
         for index, raw in enumerate(scenario_rows):
             if not isinstance(raw, dict):
                 continue
-            for field in ("dropReason", "reopened", "reapprovedHash"):
+            for field in ("dropReason", "reopened", "reapprovedHash", "flagged"):
                 if field in raw:
                     v.error(pointer(pointer("/scenarios", index), field), "must be absent in stage 1")
         for index, raw in enumerate(constraint_rows):
@@ -1311,9 +1485,17 @@ def validate_logic_v2(logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
     elif stage == 2:
         if not root.get("stage1Pin"):
             v.error("/stage1Pin", "required in stage 2")
+        for index, raw in enumerate(scenario_rows):
+            if isinstance(raw, dict) and "answeredComment" in raw:
+                v.error(pointer(pointer("/scenarios", index), "answeredComment"), "must be absent in stage 2")
         for index, raw in enumerate(constraint_rows):
             if isinstance(raw, dict) and "ruling" not in raw:
                 v.error(pointer(pointer("/constraints", index), "ruling"), "required in stage 2")
+
+        for index in sorted(checked_example_rows):
+            raw = scenario_rows[index]
+            if "dropReason" not in raw and scenario_open_asks(raw):
+                v.error(pointer(pointer("/scenarios", index), "example"), "open [ASK] after stage-1 sign-off")
 
         approved_scenario_ids = {
             item["id"]
@@ -1377,6 +1559,22 @@ def _validate_stage1_lock(v: Validator, root: dict) -> None:
         v.error(pointer("/stage1Pin/itemHashes", ident), "stage-1 item changed after sign-off")
 
 
+def oversized_text_errors(value: Any, path: str = "") -> List[Tuple[str, str]]:
+    """Report every string longer than MAX_TEXT_CHARS, so no markdown paragraph is long enough to stall the review page's quadratic parser."""
+    if isinstance(value, str):
+        if len(value) <= MAX_TEXT_CHARS:
+            return []
+        message = f"text is {len(value)} characters; the review page renders at most {MAX_TEXT_CHARS} per field, so shorten or split it"
+        return [(path or "/", message)]
+    if isinstance(value, dict):
+        children = value.items()
+    elif isinstance(value, list):
+        children = enumerate(value)
+    else:
+        return []
+    return [error for key, child in children for error in oversized_text_errors(child, pointer(path, key))]
+
+
 def validate_logic_dispatch(logic: Any) -> Tuple[List[Tuple[str, str]], List[str]]:
     """Validate logic.json against the schema for its declared schemaVersion."""
     v = Validator()
@@ -1386,9 +1584,11 @@ def validate_logic_dispatch(logic: Any) -> Tuple[List[Tuple[str, str]], List[str
     version = root.get("schemaVersion")
     if not v.exact_version(version, "/schemaVersion", (1, 2)):
         return v.errors, []
+    oversized = oversized_text_errors(root)
     if version == 1:
-        return validate_logic(logic), []
-    return validate_logic_v2(logic)
+        return validate_logic(logic) + oversized, []
+    errors, warnings = validate_logic_v2(logic)
+    return errors + oversized, warnings
 
 
 def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
@@ -1467,12 +1667,18 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
                 for ident, value in mapping.items():
                     v.string(value, pointer("/state/scenarioDrops", ident))
 
-        # optional: exports from pages built before update feedback existed omit it
-        if "scenarioUpdates" in state:
-            mapping = v.object(state["scenarioUpdates"], "/state/scenarioUpdates")
+        # optional: exports from pages built before update feedback, comments, or flags existed omit them
+        for key in ("scenarioUpdates", "scenarioComments"):
+            if key in state:
+                mapping = v.object(state[key], pointer("/state", key))
+                if mapping is not None:
+                    for ident, value in mapping.items():
+                        v.string(value, pointer(pointer("/state", key), ident))
+        if "scenarioFlags" in state:
+            mapping = v.object(state["scenarioFlags"], "/state/scenarioFlags")
             if mapping is not None:
                 for ident, value in mapping.items():
-                    v.string(value, pointer("/state/scenarioUpdates", ident))
+                    v.boolean(value, pointer("/state/scenarioFlags", ident))
 
         requests = _required(v, state, "scenarioRequests", "/state")
         if "scenarioRequests" in state:
@@ -1607,6 +1813,7 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
                 "scenarioOutcomes",
                 "scenarioDrops",
                 "scenarioUpdates",
+                "scenarioComments",
                 "constraintRulings",
                 "assumptions",
                 "blindSpots",
@@ -1653,6 +1860,10 @@ def validate_export_shape(export: Any) -> List[Tuple[str, str]]:
                             v.string(dropped, pointer(path, "dropped"))
                         if item.get("update") is not None:
                             v.string(item["update"], pointer(path, "update"))
+                        if item.get("comment") is not None:
+                            v.string(item["comment"], pointer(path, "comment"))
+                        if "flagged" in item:
+                            v.boolean(item["flagged"], pointer(path, "flagged"))
                         _string_field(v, item, "then", path)
                         v.boolean(_required(v, item, "changesSpec", path), pointer(path, "changesSpec"))
 
@@ -1786,9 +1997,10 @@ def logic_reference_errors(export: dict, logic: dict) -> List[Tuple[str, str]]:
 
     state = export["state"]
     updates = state.get("scenarioUpdates", {})
-    for ident in updates:
-        if ident not in scenario_ids:
-            errors.append((pointer(pointer("/state", "scenarioUpdates"), ident), "unknown scenario id: " + ident))
+    for key in ("scenarioUpdates", "scenarioComments", "scenarioFlags"):
+        for ident in state.get(key, {}):
+            if ident not in scenario_ids:
+                errors.append((pointer(pointer("/state", key), ident), "unknown scenario id: " + ident))
     for key, known, label in (
         ("scenarioApproved", scenario_ids, "scenario"),
         ("scenarioDrops", scenario_ids, "scenario"),
@@ -1942,6 +2154,7 @@ def _reject_json_constant(constant: str) -> Any:
 
 
 JSON_MAX_DEPTH = 200
+MAX_TEXT_CHARS = 10_000
 
 
 def _json_depth_exceeded(value: Any, limit: int = JSON_MAX_DEPTH) -> Optional[str]:
@@ -2006,6 +2219,846 @@ def load_logic(spec_dir: Path) -> Tuple[Optional[dict], Optional[str]]:
     except ValueError as exc:
         print("/: " + str(exc), file=sys.stderr)
         return None, None
+
+
+SCORE_TARGET_FIELDS = ("status", "qualifier", "wording", "note", "citations", "requirementHash")
+MAX_SAFE_INTEGER = 9007199254740991
+SLICE_TARGET_FIELDS = ("name", "size", "band", "lines")
+
+
+def spec_is_signed_stage2(logic: dict) -> bool:
+    """True when logic.json is a v2 spec whose stage-2 sign-off has been folded in."""
+    return (
+        logic.get("schemaVersion") == 2
+        and logic.get("stage") == 2
+        and str(logic.get("status", "")).startswith("Approved")
+        and "signoff" in logic
+    )
+
+
+def comparison_id(comparison: dict) -> str:
+    try:
+        return sha256(canonical_json(comparison).encode("utf-8")).hexdigest()[:12]
+    except RecursionError:
+        raise ValueError("comparison.json is too deeply nested to render")
+
+
+def target_hash(obj: dict, kind: str) -> str:
+    """Hash of the content a reviewer argues with, so checks and history never invalidate a draft."""
+    if kind == "score":
+        fields = SCORE_TARGET_FIELDS
+    elif kind == "slice":
+        fields = SLICE_TARGET_FIELDS
+    else:
+        raise ValueError("unknown target kind: " + str(kind))
+    hashed = {name: obj[name] for name in fields if name in obj}
+    return sha256(canonical_json(hashed).encode("utf-8")).hexdigest()[:12]
+
+
+def _is_int(value: Any) -> bool:
+    return type(value) is int
+
+
+def _optional_string(v: Validator, obj: dict, key: str, path: str) -> None:
+    if key in obj:
+        v.string(obj[key], pointer(path, key))
+
+
+def _required_string_array(v: Validator, obj: dict, key: str, path: str) -> None:
+    if key in obj:
+        v.string_array(obj[key], pointer(path, key))
+    else:
+        v.error(pointer(path, key), "required key is missing")
+
+
+def _validate_read_at(v: Validator, value: Any, path: str) -> None:
+    if not v.string(value, path, nonempty=True):
+        return
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        v.error(path, "expected a YYYY-MM-DD date")
+        return
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        v.error(path, "expected a real calendar date")
+
+
+def _validate_slices(v: Validator, raw: Any, path: str) -> None:
+    slices = v.array(raw, path)
+    if slices is None:
+        return
+    seen: Dict[str, str] = {}
+    for index, slice_raw in enumerate(slices):
+        base = pointer(path, index)
+        item = v.object(slice_raw, base)
+        if item is None:
+            continue
+        ident = _required(v, item, "id", base)
+        if "id" in item and v.string(ident, pointer(base, "id"), nonempty=True):
+            if ident in seen:
+                v.error(pointer(base, "id"), "duplicate slice id; first used at " + seen[ident])
+            else:
+                seen[ident] = pointer(base, "id")
+        for key in ("name", "area", "risk"):
+            _string_field(v, item, key, base, nonempty=True)
+        size = _required(v, item, "size", base)
+        if "size" in item:
+            v.enum(size, tuple(POINT_MAP), pointer(base, "size"))
+        band = _required(v, item, "band", base)
+        if "band" in item:
+            v.enum(band, SLICE_BANDS, pointer(base, "band"))
+        _optional_string(v, item, "riskHeadline", base)
+        if "lines" in item:
+            lines_path = pointer(base, "lines")
+            lines = v.object(item["lines"], lines_path)
+            for repo, span in (lines or {}).items():
+                span_path = pointer(lines_path, repo)
+                if not repo.isascii():
+                    v.error(span_path, "repo name keys must be ASCII so both validators hash them identically")
+                elif not isinstance(span, list) or len(span) != 2 or not all(_is_int(n) and 0 <= n <= MAX_SAFE_INTEGER for n in span):
+                    v.error(span_path, "expected [lo, hi] with integers from 0 to 2^53-1")
+                elif span[0] > span[1]:
+                    v.error(span_path, "lo must not exceed hi")
+
+
+def _validate_flow(v: Validator, approach: dict, path: str, flow_stages: Optional[list]) -> None:
+    flow = v.array(approach["flow"], pointer(path, "flow"))
+    if flow is None:
+        return
+    allowed = {stage for stage in flow_stages if isinstance(stage, str)} if isinstance(flow_stages, list) else set()
+    cells: Dict[Tuple[str, str], str] = {}
+    for index, box_raw in enumerate(flow):
+        base = pointer(pointer(path, "flow"), index)
+        box = v.object(box_raw, base)
+        if box is None:
+            continue
+        stage = _required(v, box, "stage", base)
+        lane = _required(v, box, "lane", base)
+        for key in ("stage", "lane"):
+            if key in box:
+                v.string(box[key], pointer(base, key), nonempty=True)
+        _string_field(v, box, "text", base)
+        kind = _required(v, box, "kind", base)
+        if "kind" in box:
+            v.enum(kind, FLOW_KINDS, pointer(base, "kind"))
+        if "focal" in box:
+            v.boolean(box["focal"], pointer(base, "focal"))
+        if isinstance(stage, str) and stage:
+            if stage not in allowed:
+                v.error(pointer(base, "stage"), "stage is not listed in flowStages: " + stage)
+            if isinstance(lane, str) and lane:
+                previous = cells.get((lane, stage))
+                if previous is not None:
+                    v.error(base, "second box in lane " + lane + " at stage " + stage + "; first at " + previous)
+                else:
+                    cells[(lane, stage)] = base
+
+
+def _reject_repeats(v: Validator, items: list, path: str, label: str) -> None:
+    """Flags every repeat of an earlier nonempty string at its own index; the diagrams address these entries by name."""
+    seen: set = set()
+    for index, item in enumerate(items):
+        if isinstance(item, str) and item:
+            if item in seen:
+                v.error(pointer(path, index), "duplicate " + label + ": " + item)
+            seen.add(item)
+
+
+def _validate_sequence(v: Validator, raw: Any, path: str) -> None:
+    sequence = v.object(raw, path)
+    if sequence is None:
+        return
+    participants_raw = _required(v, sequence, "participants", path)
+    participants: List[str] = []
+    if "participants" in sequence:
+        listed = v.string_array(participants_raw, pointer(path, "participants"), nonempty_items=True)
+        participants = [name for name in (listed or []) if isinstance(name, str)]
+        _reject_repeats(v, listed or [], pointer(path, "participants"), "participant")
+        if listed is not None and len(listed) > SEQUENCE_MAX_PARTICIPANTS:
+            v.error(pointer(path, "participants"), "at most " + str(SEQUENCE_MAX_PARTICIPANTS) + " participants")
+    messages_raw = _required(v, sequence, "messages", path)
+    if "messages" not in sequence:
+        return
+    messages = v.array(messages_raw, pointer(path, "messages"))
+    if messages is None:
+        return
+    if len(messages) > SEQUENCE_MAX_MESSAGES:
+        v.error(pointer(path, "messages"), "at most " + str(SEQUENCE_MAX_MESSAGES) + " messages")
+    for index, message_raw in enumerate(messages):
+        base = pointer(pointer(path, "messages"), index)
+        message = v.object(message_raw, base)
+        if message is None:
+            continue
+        for key in ("from", "to"):
+            name = _required(v, message, key, base)
+            if key in message and v.string(name, pointer(base, key), nonempty=True) and name not in participants:
+                v.error(pointer(base, key), "unknown participant: " + name)
+        _string_field(v, message, "label", base)
+        kind = _required(v, message, "kind", base)
+        if "kind" in message:
+            v.enum(kind, MESSAGE_KINDS, pointer(base, "kind"))
+
+
+def _validate_schema_diagram(v: Validator, raw: Any, path: str) -> None:
+    diagram = v.object(raw, path)
+    if diagram is None:
+        return
+    columns_by_table: Dict[str, set] = {}
+    tables_raw = _required(v, diagram, "tables", path)
+    if "tables" in diagram:
+        tables = v.array(tables_raw, pointer(path, "tables"))
+        if tables is not None and len(tables) > SCHEMA_MAX_TABLES:
+            v.error(pointer(path, "tables"), "at most " + str(SCHEMA_MAX_TABLES) + " tables")
+        for index, table_raw in enumerate(tables or []):
+            base = pointer(pointer(path, "tables"), index)
+            table = v.object(table_raw, base)
+            if table is None:
+                continue
+            name = _required(v, table, "name", base)
+            names: set = set()
+            if "name" in table and v.string(name, pointer(base, "name"), nonempty=True):
+                if name in columns_by_table:
+                    v.error(pointer(base, "name"), "duplicate table name: " + name)
+                columns_by_table.setdefault(name, names)
+                names = columns_by_table[name]
+            status = _required(v, table, "status", base)
+            if "status" in table:
+                v.enum(status, TABLE_STATUSES, pointer(base, "status"))
+            columns = _required_array(v, table, "columns", base)
+            table_columns: set = set()
+            for col_index, column_raw in enumerate(columns or []):
+                col_path = pointer(pointer(base, "columns"), col_index)
+                column = v.object(column_raw, col_path)
+                if column is None:
+                    continue
+                col_name = _string_field(v, column, "name", col_path, nonempty=True)
+                if isinstance(col_name, str):
+                    if col_name and col_name in table_columns:
+                        v.error(pointer(col_path, "name"), "duplicate column name: " + col_name)
+                    table_columns.add(col_name)
+                    names.add(col_name)
+                _string_field(v, column, "type", col_path)
+                chip = column.get("chip")
+                if "chip" in column and chip is not None:
+                    v.enum(chip, COLUMN_CHIPS, pointer(col_path, "chip"))
+                if "highlight" in column:
+                    v.boolean(column["highlight"], pointer(col_path, "highlight"))
+            _optional_string(v, table, "moreColumns", base)
+    refs_raw = _required(v, diagram, "refs", path)
+    if "refs" not in diagram:
+        return
+    refs = v.array(refs_raw, pointer(path, "refs"))
+    if refs is None:
+        return
+    if len(refs) > SCHEMA_MAX_REFS:
+        v.error(pointer(path, "refs"), "at most " + str(SCHEMA_MAX_REFS) + " refs (fk and json together)")
+    for index, ref_raw in enumerate(refs):
+        base = pointer(pointer(path, "refs"), index)
+        ref = v.object(ref_raw, base)
+        if ref is None:
+            continue
+        for key in ("from", "to"):
+            end = _required(v, ref, key, base)
+            if key not in ref:
+                continue
+            end_path = pointer(base, key)
+            if not isinstance(end, list) or len(end) != 2 or not all(isinstance(part, str) for part in end):
+                v.error(end_path, "expected [table, column]")
+            elif end[0] not in columns_by_table:
+                v.error(end_path, "unknown table: " + end[0])
+            elif end[1] not in columns_by_table[end[0]]:
+                v.error(end_path, "unknown column: " + end[0] + "." + end[1])
+        kind = _required(v, ref, "kind", base)
+        if "kind" in ref:
+            v.enum(kind, REF_KINDS, pointer(base, "kind"))
+
+
+def _validate_approach(v: Validator, raw: Any, path: str, flow_stages: Optional[list], example_stages: Optional[list]) -> None:
+    approach = v.object(raw, path)
+    if approach is None:
+        return
+    for key in ("title", "overview", "revision", "schemaChange"):
+        _string_field(v, approach, key, path, nonempty=True)
+    anchors = _required_array(v, approach, "anchors", path)
+    for index, anchor_raw in enumerate(anchors or []):
+        base = pointer(pointer(path, "anchors"), index)
+        anchor = v.object(anchor_raw, base)
+        if anchor is not None:
+            _string_field(v, anchor, "repo", base, nonempty=True)
+            _string_field(v, anchor, "commit", base, nonempty=True)
+    if "readAt" in approach:
+        _validate_read_at(v, approach["readAt"], pointer(path, "readAt"))
+    else:
+        v.error(pointer(path, "readAt"), "required key is missing")
+    _optional_string(v, approach, "specMarkdown", path)
+    repos = _required_array(v, approach, "repos", path)
+    seen_repos: set = set()
+    for index, repo_raw in enumerate(repos or []):
+        base = pointer(pointer(path, "repos"), index)
+        repo = v.object(repo_raw, base)
+        if repo is None:
+            continue
+        _string_field(v, repo, "name", base, nonempty=True)
+        repo_name = repo.get("name")
+        if isinstance(repo_name, str):
+            if not repo_name.isascii():
+                v.error(pointer(base, "name"), "repo name must be ASCII so both validators hash it identically")
+            if repo_name in seen_repos:
+                v.error(pointer(base, "name"), f'duplicate repo name "{repo_name}"')
+            seen_repos.add(repo_name)
+        files = _required(v, repo, "files", base)
+        if "files" in repo and (not _is_int(files) or files < 0):
+            v.error(pointer(base, "files"), "expected a non-negative integer")
+    _required_string_array(v, approach, "hotPaths", path)
+    deploy_raw = _required(v, approach, "deploy", path)
+    deploy = v.object(deploy_raw, pointer(path, "deploy")) if "deploy" in approach else None
+    if deploy is not None:
+        status = _required(v, deploy, "status", pointer(path, "deploy"))
+        if "status" in deploy:
+            v.enum(status, DEPLOY_STATUSES, pointer(pointer(path, "deploy"), "status"))
+        _required_string_array(v, deploy, "steps", pointer(path, "deploy"))
+    if "criticalPath" not in approach:
+        v.error(pointer(path, "criticalPath"), "required key is missing")
+    elif approach["criticalPath"] is not None:
+        v.string(approach["criticalPath"], pointer(path, "criticalPath"))
+    if "slices" in approach:
+        _validate_slices(v, approach["slices"], pointer(path, "slices"))
+    else:
+        v.error(pointer(path, "slices"), "required key is missing")
+    if "flow" in approach:
+        _validate_flow(v, approach, path, flow_stages)
+    if "sequence" in approach:
+        _validate_sequence(v, approach["sequence"], pointer(path, "sequence"))
+    if "schema" in approach:
+        _validate_schema_diagram(v, approach["schema"], pointer(path, "schema"))
+    if "exampleTrace" in approach:
+        trace = v.string_array(approach["exampleTrace"], pointer(path, "exampleTrace"))
+        if trace is not None and (example_stages is None or len(trace) != len(example_stages)):
+            expected = "example.stages" if example_stages is None else str(len(example_stages)) + " entries (one per example.stages)"
+            v.error(pointer(path, "exampleTrace"), "must have " + expected)
+    for key in ("restsOn", "effortGaps"):
+        if key in approach:
+            v.string_array(approach[key], pointer(path, key))
+    if "undo" in approach:
+        undo_path = pointer(path, "undo")
+        undo = v.object(approach["undo"], undo_path)
+        for key in ("flagOff", "hardToReverse", "cheapestNext"):
+            if undo is not None:
+                _string_field(v, undo, key, undo_path)
+
+
+def _validate_scores(v: Validator, root: dict, logic: dict, approach_ids: List[str], warnings: List[str]) -> None:
+    requirements = {
+        item["id"]: item
+        for item in logic.get("requirements", [])
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    hashes = item_hashes(logic)
+    if "scores" not in root:
+        v.error("/scores", "required key is missing")
+        return
+    scores = v.object(root["scores"], "/scores")
+    if scores is None:
+        return
+    for requirement_id in scores:
+        if requirement_id not in requirements:
+            v.error(pointer("/scores", requirement_id), "unknown requirement id: " + requirement_id)
+    for requirement_id, requirement in requirements.items():
+        if requirement.get("scope") != "out" and requirement_id not in scores:
+            v.error(pointer("/scores", requirement_id), "in-scope requirement has no scores")
+    for requirement_id, per_approach_raw in scores.items():
+        req_path = pointer("/scores", requirement_id)
+        per_approach = v.object(per_approach_raw, req_path)
+        if per_approach is None:
+            continue
+        for approach_id in per_approach:
+            if approach_id not in approach_ids:
+                v.error(pointer(req_path, approach_id), "unknown approach id: " + approach_id)
+        requirement = requirements.get(requirement_id)
+        if requirement is None or requirement.get("scope") == "out":
+            continue
+        for approach_id in approach_ids:
+            if approach_id not in per_approach:
+                v.error(pointer(req_path, approach_id), "missing score for approach " + approach_id)
+    for requirement_id, per_approach_raw in scores.items():
+        if not isinstance(per_approach_raw, dict):
+            continue
+        for approach_id, score_raw in per_approach_raw.items():
+            path = pointer(pointer("/scores", requirement_id), approach_id)
+            score = v.object(score_raw, path)
+            if score is None:
+                continue
+            status = _required(v, score, "status", path)
+            if "status" in score:
+                v.enum(status, SCORE_STATUSES, pointer(path, "status"))
+            _optional_string(v, score, "qualifier", path)
+            for key in ("wording", "note", "requirementHash", "requirementText"):
+                _string_field(v, score, key, path)
+            _required_string_array(v, score, "citations", path)
+            if "check" in score:
+                v.string(score["check"], pointer(path, "check"), nonempty=True)
+            if "history" in score:
+                _validate_history(v, score["history"], pointer(path, "history"))
+            current = hashes.get(requirement_id)
+            claimed = score.get("requirementHash")
+            if current is not None and isinstance(claimed, str) and claimed != current:
+                warnings.append("warning: " + path + ": scored against older requirement text")
+
+
+def _validate_history(v: Validator, raw: Any, path: str) -> None:
+    for index, entry_raw in enumerate(v.array(raw, path) or []):
+        base = pointer(path, index)
+        entry = v.object(entry_raw, base)
+        if entry is None:
+            continue
+        previous = _required(v, entry, "previous", base)
+        if "previous" in entry:
+            previous_path = pointer(base, "previous")
+            previous_obj = v.object(previous, previous_path)
+            if previous_obj is not None:
+                prior_status = _required(v, previous_obj, "status", previous_path)
+                if "status" in previous_obj:
+                    v.enum(prior_status, SCORE_STATUSES, pointer(previous_path, "status"))
+                _optional_string(v, previous_obj, "qualifier", previous_path)
+        _string_field(v, entry, "challenge", base)
+        _string_field(v, entry, "reply", base)
+        outcome = _required(v, entry, "outcome", base)
+        if "outcome" in entry:
+            v.enum(outcome, HISTORY_OUTCOMES, pointer(base, "outcome"))
+
+
+def _approach_id_map(v: Validator, raw: Any, path: str, approach_ids: List[str]) -> None:
+    mapping = v.object(raw, path)
+    for key, value in (mapping or {}).items():
+        if key not in approach_ids:
+            v.error(pointer(path, key), "unknown approach id: " + key)
+        v.string(value, pointer(path, key))
+
+
+def _validate_findings(v: Validator, root: dict, requirement_ids: set, approach_ids: List[str]) -> None:
+    for index, finding_raw in enumerate(v.array(root["findings"], "/findings") or []):
+        base = pointer("/findings", index)
+        finding = v.object(finding_raw, base)
+        if finding is None:
+            continue
+        requirement = _required(v, finding, "requirementId", base)
+        if "requirementId" in finding and v.string(requirement, pointer(base, "requirementId"), nonempty=True):
+            if requirement not in requirement_ids:
+                v.error(pointer(base, "requirementId"), "unknown requirement id: " + requirement)
+        approaches = _required(v, finding, "approaches", base)
+        if "approaches" in finding and approaches != "all":
+            listed = v.array(approaches, pointer(base, "approaches"))
+            for item_index, ident in enumerate(listed or []):
+                item_path = pointer(pointer(base, "approaches"), item_index)
+                if v.string(ident, item_path, nonempty=True) and ident not in approach_ids:
+                    v.error(item_path, "unknown approach id: " + ident)
+        kind = _required(v, finding, "type", base)
+        if "type" in finding:
+            v.enum(kind, FINDING_TYPES, pointer(base, "type"))
+        _string_field(v, finding, "text", base)
+        _string_field(v, finding, "citation", base, nonempty=True)
+
+
+def _validate_guidance(v: Validator, raw: Any, requirement_ids: set, approach_ids: List[str]) -> None:
+    guidance = v.object(raw, "/guidance")
+    if guidance is None:
+        return
+    _string_field(v, guidance, "intro", "/guidance")
+    steps = _required_array(v, guidance, "steps", "/guidance")
+    for index, step_raw in enumerate(steps or []):
+        base = pointer("/guidance/steps", index)
+        step = v.object(step_raw, base)
+        if step is None:
+            continue
+        _string_field(v, step, "title", base)
+        _string_field(v, step, "body", base)
+        tab = _required(v, step, "tab", base)
+        if "tab" in step:
+            v.enum(tab, COMPARE_TAB_KEYS, pointer(base, "tab"))
+    if "questions" in guidance:
+        v.string_array(guidance["questions"], "/guidance/questions")
+    else:
+        v.error("/guidance/questions", "required key is missing")
+    recommendation_raw = _required(v, guidance, "recommendation", "/guidance")
+    if "recommendation" in guidance:
+        rec_path = "/guidance/recommendation"
+        rec = v.object(recommendation_raw, rec_path)
+        if rec is not None:
+            approach = _required(v, rec, "approachId", rec_path)
+            if "approachId" in rec and v.string(approach, pointer(rec_path, "approachId"), nonempty=True):
+                if approach not in approach_ids:
+                    v.error(pointer(rec_path, "approachId"), "unknown approach id: " + approach)
+            _string_field(v, rec, "headline", rec_path)
+            confidence = _required(v, rec, "confidence", rec_path)
+            if "confidence" in rec:
+                v.enum(confidence, CONFIDENCE_LEVELS, pointer(rec_path, "confidence"))
+            _string_field(v, rec, "confidenceReason", rec_path)
+            for key in ("why", "costs", "changeMyMind"):
+                _required_string_array(v, rec, key, rec_path)
+    suggested = _required_array(v, guidance, "suggestedChallenges", "/guidance")
+    for index, entry_raw in enumerate(suggested or []):
+        base = pointer("/guidance/suggestedChallenges", index)
+        entry = v.object(entry_raw, base)
+        if entry is None:
+            continue
+        for key, known in (("requirementId", requirement_ids), ("approachId", set(approach_ids))):
+            ident = _required(v, entry, key, base)
+            if key in entry and v.string(ident, pointer(base, key), nonempty=True) and ident not in known:
+                v.error(pointer(base, key), "unknown " + ("requirement" if key == "requirementId" else "approach") + " id: " + ident)
+        _string_field(v, entry, "note", base, nonempty=True)
+        want = _required(v, entry, "want", base)
+        if "want" in entry:
+            v.enum(want, SCORE_STATUSES, pointer(base, "want"))
+    _optional_string(v, guidance, "changeNote", "/guidance")
+
+
+def _check_safe_integers(v: Validator, value: Any, path: str) -> None:
+    """Flags every integer beyond +-(2^53-1) so the page, which parses JSON into doubles, reads the numbers Python hashed."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _check_safe_integers(v, item, pointer(path, key))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _check_safe_integers(v, item, pointer(path, index))
+    elif type(value) is int and abs(value) > MAX_SAFE_INTEGER:
+        v.error(path, "integer is outside the safe range of +-2^53-1")
+    elif type(value) is float and value.is_integer() and abs(value) > MAX_SAFE_INTEGER:
+        v.error(path, "integer is outside the safe range of +-2^53-1")
+
+
+def validate_comparison(comparison: Any, logic: dict) -> Tuple[List[Tuple[str, str]], List[str]]:
+    """Errors and warnings for comparison.json against its signed logic.json; errors block the render."""
+    v = Validator()
+    warnings: List[str] = []
+    root = v.object(comparison, "")
+    if root is None:
+        return v.errors, warnings
+    _check_safe_integers(v, root, "")
+    kind = _required(v, root, "kind", "")
+    if "kind" in root and kind != COMPARISON_KIND:
+        v.error("/kind", 'expected "' + COMPARISON_KIND + '"')
+    if "schemaVersion" in root:
+        v.exact_version(root["schemaVersion"], "/schemaVersion", (1,))
+    else:
+        v.error("/schemaVersion", "required key is missing")
+    built = _required(v, root, "builtAgainst", "")
+    if "builtAgainst" in root:
+        built_obj = v.object(built, "/builtAgainst")
+        if built_obj is not None:
+            signoff_id = _string_field(v, built_obj, "signoffRenderId", "/builtAgainst", nonempty=True)
+            expected = (logic.get("signoff") or {}).get("renderId") if isinstance(logic.get("signoff"), dict) else None
+            if isinstance(signoff_id, str) and expected is not None and signoff_id != expected:
+                warnings.append("warning: /builtAgainst/signoffRenderId differs from logic.signoff.renderId")
+
+    flow_stages: Optional[list] = None
+    if "flowStages" in root:
+        listed = v.string_array(root["flowStages"], "/flowStages", nonempty_items=True)
+        if listed is not None:
+            flow_stages = listed
+            _reject_repeats(v, listed, "/flowStages", "flow stage")
+            if not 3 <= len(listed) <= 8:
+                v.error("/flowStages", "expected 3 to 8 stages")
+    example_stages: Optional[list] = None
+    if "example" in root:
+        example = v.object(root["example"], "/example")
+        if example is not None:
+            _string_field(v, example, "scenario", "/example")
+            stages = _required(v, example, "stages", "/example")
+            if "stages" in example:
+                example_stages = v.string_array(stages, "/example/stages")
+
+    approach_ids: List[str] = []
+    approaches_raw = _required(v, root, "approaches", "")
+    if "approaches" in root:
+        approaches = v.array(approaches_raw, "/approaches")
+        if approaches is not None:
+            if not 2 <= len(approaches) <= 5:
+                v.error("/approaches", "expected 2 to 5 approaches, found " + str(len(approaches)))
+            seen: Dict[str, str] = {}
+            for index, raw in enumerate(approaches):
+                path = pointer("/approaches", index)
+                if isinstance(raw, dict) and "id" in raw:
+                    ident = raw["id"]
+                    id_path = pointer(path, "id")
+                    if not isinstance(ident, str) or not re.fullmatch(r"[A-Z]", ident):
+                        v.error(id_path, "expected a single uppercase letter A-Z")
+                    elif ident in seen:
+                        v.error(id_path, "duplicate approach id; first used at " + seen[ident])
+                    else:
+                        seen[ident] = id_path
+                        approach_ids.append(ident)
+                elif isinstance(raw, dict):
+                    v.error(pointer(path, "id"), "required key is missing")
+                _validate_approach(v, raw, path, flow_stages, example_stages)
+            for index, raw in enumerate(approaches):
+                if isinstance(raw, dict) and "rivalClaims" in raw:
+                    claims_path = pointer(pointer("/approaches", index), "rivalClaims")
+                    claims = v.object(raw["rivalClaims"], claims_path)
+                    for other, items in (claims or {}).items():
+                        if other not in approach_ids:
+                            v.error(pointer(claims_path, other), "unknown approach id: " + other)
+                        elif other == raw.get("id"):
+                            v.error(pointer(claims_path, other), "an approach cannot rival itself")
+                        v.string_array(items, pointer(claims_path, other))
+
+    requirement_ids = {
+        item["id"]
+        for item in logic.get("requirements", [])
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    _validate_scores(v, root, logic, approach_ids, warnings)
+    if "findings" in root:
+        _validate_findings(v, root, requirement_ids, approach_ids)
+    for index, pairing_raw in enumerate(v.array(root["pairings"], "/pairings") or [] if "pairings" in root else []):
+        base = pointer("/pairings", index)
+        pairing = v.object(pairing_raw, base)
+        if pairing is None:
+            continue
+        _string_field(v, pairing, "name", base, nonempty=True)
+        _string_field(v, pairing, "text", base)
+        items = _required(v, pairing, "items", base)
+        if "items" in pairing:
+            _approach_id_map(v, items, pointer(base, "items"), approach_ids)
+    for index, choice_raw in enumerate(v.array(root["choices"], "/choices") or [] if "choices" in root else []):
+        base = pointer("/choices", index)
+        choice = v.object(choice_raw, base)
+        if choice is None:
+            continue
+        _string_field(v, choice, "question", base, nonempty=True)
+        answers = _required(v, choice, "answers", base)
+        if "answers" in choice:
+            _approach_id_map(v, answers, pointer(base, "answers"), approach_ids)
+    if "keyDifferences" in root:
+        v.string_array(root["keyDifferences"], "/keyDifferences")
+    if "guidance" in root:
+        _validate_guidance(v, root["guidance"], requirement_ids, approach_ids)
+    return v.errors, warnings
+
+
+def load_comparison(spec_dir: Path, logic: dict) -> Tuple[Optional[dict], Optional[str], int]:
+    """Load comparison.json beside logic.json. Status 0 means loaded or absent; 1 means invalid."""
+    if logic.get("schemaVersion") != 2:
+        return None, None, 0
+    path = spec_dir / "comparison.json"
+    if not path.exists():
+        return None, None, 0
+    if not spec_is_signed_stage2(logic):
+        print(UNSIGNED_COMPARISON_WARNING, file=sys.stderr)
+        return None, None, 0
+    value, errors = load_json(path, str(path))
+    warnings: List[str] = []
+    if not errors:
+        errors, warnings = validate_comparison(value, logic)
+    if errors:
+        emit_errors(errors)
+        return None, None, 1
+    for warning in warnings:
+        print(warning, file=sys.stderr)
+    try:
+        return value, comparison_id(value), 0
+    except UnicodeError as exc:
+        print("/: comparison.json contains invalid Unicode: " + str(exc), file=sys.stderr)
+        return None, None, 1
+    except ValueError as exc:
+        print("/: " + str(exc), file=sys.stderr)
+        return None, None, 1
+
+
+def _export_kind(export_path: Path) -> Optional[str]:
+    """The export's "kind" alone, so callers can route before full shape validation; None when unreadable."""
+    value, errors = load_json(export_path, str(export_path))
+    if errors or not isinstance(value, dict):
+        return None
+    kind = value.get("kind")
+    return kind if isinstance(kind, str) else None
+
+
+def validate_compare_export_shape(export: Any) -> List[Tuple[str, str]]:
+    v = Validator()
+    root = v.object(export, "")
+    if root is None:
+        return v.errors
+    kind = _required(v, root, "kind", "")
+    if "kind" in root and kind != COMPARE_EXPORT_KIND:
+        v.error("/kind", 'expected "' + COMPARE_EXPORT_KIND + '"')
+    if "schemaVersion" in root:
+        v.exact_version(root["schemaVersion"], "/schemaVersion", (1,))
+    else:
+        v.error("/schemaVersion", "required key is missing")
+    for key in ("slug", "renderId", "comparisonId"):
+        _string_field(v, root, key, "", nonempty=True)
+    exported_at = _required(v, root, "exportedAt", "")
+    if "exportedAt" in root:
+        v.iso_datetime(exported_at, "/exportedAt")
+    challenges_raw = _required(v, root, "challenges", "")
+    if "challenges" in root:
+        seen: Dict[str, str] = {}
+        for index, raw in enumerate(v.array(challenges_raw, "/challenges") or []):
+            base = pointer("/challenges", index)
+            challenge = v.object(raw, base)
+            if challenge is None:
+                continue
+            ident = _required(v, challenge, "id", base)
+            if "id" in challenge and v.string(ident, pointer(base, "id"), nonempty=True):
+                if ident in seen:
+                    v.error(pointer(base, "id"), "duplicate challenge id; first used at " + seen[ident])
+                else:
+                    seen[ident] = pointer(base, "id")
+            target_type = _validate_challenge_target(v, challenge, base)
+            _string_field(v, challenge, "note", base, nonempty=True)
+            want = _required(v, challenge, "want", base)
+            if "want" in challenge and target_type is not None:
+                choices = SCORE_STATUSES if target_type == "score" else tuple(POINT_MAP)
+                v.enum(want, choices, pointer(base, "want"))
+            elif "want" in challenge:
+                v.string(want, pointer(base, "want"), nonempty=True)
+            _string_field(v, challenge, "targetHash", base, nonempty=True)
+    stars = _required(v, root, "stars", "")
+    if "stars" in root:
+        v.string_array(stars, "/stars", nonempty_items=True)
+    revisions = _required(v, root, "approachRevisions", "")
+    if "approachRevisions" in root:
+        revisions_obj = v.object(revisions, "/approachRevisions")
+        for key, value in (revisions_obj or {}).items():
+            v.string(value, pointer("/approachRevisions", key))
+    return v.errors
+
+
+def _validate_challenge_target(v: Validator, challenge: dict, base: str) -> Optional[str]:
+    target_path = pointer(base, "target")
+    target = v.object(challenge["target"], target_path) if "target" in challenge else None
+    if "target" not in challenge:
+        v.error(target_path, "required key is missing")
+    if target is None:
+        return None
+    target_type = _required(v, target, "type", target_path)
+    if "type" not in target or not v.enum(target_type, ("score", "slice"), pointer(target_path, "type")):
+        return None
+    keys = ("requirementId", "approachId") if target_type == "score" else ("approachId", "sliceId")
+    for key in keys:
+        _string_field(v, target, key, target_path, nonempty=True)
+    return target_type
+
+
+def _resolve_challenge_target(comparison: dict, target: dict) -> Optional[Tuple[str, dict]]:
+    """The score or slice a challenge aims at, with its target kind, or None when it no longer exists."""
+    approach_id = target["approachId"]
+    if target["type"] == "score":
+        score = comparison.get("scores", {}).get(target["requirementId"], {}).get(approach_id)
+        return ("score", score) if isinstance(score, dict) else None
+    for approach in comparison.get("approaches", []):
+        if approach.get("id") == approach_id:
+            for item in approach.get("slices", []):
+                if item.get("id") == target["sliceId"]:
+                    return "slice", item
+    return None
+
+
+def _check_compare_export(spec_dir: Path, export_path: Path) -> Tuple[Optional[dict], Optional[dict], Optional[dict], int]:
+    """Shared validation for stage-3 check-export and challenges: (export, comparison, logic, exit code)."""
+    logic, current_id = load_logic(spec_dir)
+    if logic is None or current_id is None:
+        return None, None, None, 1
+    comparison, current_comparison_id, status = load_comparison(spec_dir, logic)
+    if status:
+        return None, None, None, 1
+    value, errors = load_export_file(export_path)
+    if not errors:
+        errors = validate_compare_export_shape(value)
+    if errors:
+        emit_errors(errors)
+        return None, None, None, 1
+    if value.get("slug") != spec_dir.name:
+        print("export belongs to a different spec", file=sys.stderr)
+        return None, None, None, 3
+    if value.get("renderId") != current_id:
+        print("signed spec changed since this export", file=sys.stderr)
+        return None, None, None, 3
+    if comparison is None or value.get("comparisonId") != current_comparison_id:
+        print("comparison changed since this export", file=sys.stderr)
+        return None, None, None, 3
+    unresolved = [
+        (pointer(pointer("/challenges", index), "target"), "target does not resolve to a score or slice in comparison.json")
+        for index, challenge in enumerate(value["challenges"])
+        if _resolve_challenge_target(comparison, challenge["target"]) is None
+    ]
+    starrable = {
+        item["id"]
+        for item in logic.get("requirements", [])
+        if isinstance(item, dict) and item.get("scope") != "out" and item.get("id") in comparison.get("scores", {})
+    }
+    unresolved.extend(
+        (pointer("/stars", index), "star does not name an in-scope requirement scored in comparison.json")
+        for index, star in enumerate(value["stars"])
+        if star not in starrable
+    )
+    if unresolved:
+        emit_errors(unresolved)
+        return None, None, None, 1
+    return value, comparison, logic, 0
+
+
+def command_check_compare_export(spec_dir: Path, export_path: Path) -> int:
+    export, _, _, code = _check_compare_export(spec_dir, export_path)
+    if export is None:
+        return code
+    print("stage-3: " + str(len(export["challenges"])) + " challenges, " + str(len(export["stars"])) + " stars")
+    return 0
+
+
+def command_challenges(spec_dir: Path, export_path: Path, as_json: bool) -> int:
+    """Print a stage-3 export's challenges grouped by approach, ready to route to each proponent."""
+    export, comparison, logic, code = _check_compare_export(spec_dir, export_path)
+    if export is None or comparison is None or logic is None:
+        return code
+    requirement_text = {
+        item["id"]: item.get("text", "")
+        for item in logic.get("requirements", [])
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    groups: Dict[str, List[dict]] = {}
+    for challenge in export["challenges"]:
+        target = challenge["target"]
+        kind, current = _resolve_challenge_target(comparison, target) or ("", {})
+        entry: Dict[str, Any] = {"id": challenge["id"], "type": target["type"]}
+        if kind == "score":
+            entry["requirementId"] = target["requirementId"]
+            entry["requirementText"] = requirement_text.get(target["requirementId"], "")
+            entry["current"] = current.get("status")
+            if current.get("qualifier"):
+                entry["currentQualifier"] = current["qualifier"]
+        else:
+            entry["sliceId"] = target["sliceId"]
+            entry["sliceName"] = current.get("name", "")
+            entry["current"] = current.get("size")
+        entry["note"] = challenge["note"]
+        entry["want"] = challenge["want"]
+        entry["targetChanged"] = target_hash(current, kind) != challenge["targetHash"]
+        groups.setdefault(target["approachId"], []).append(entry)
+    ordered = {
+        approach["id"]: groups[approach["id"]]
+        for approach in comparison.get("approaches", [])
+        if approach.get("id") in groups
+    }
+    if as_json:
+        print(json.dumps({**ordered, "stars": export["stars"]}, ensure_ascii=False, indent=2))
+        return 0
+    for approach_id, entries in ordered.items():
+        print("Approach " + approach_id)
+        for entry in entries:
+            if entry["type"] == "score":
+                print("  [" + entry["id"] + "] " + entry["requirementId"] + ": " + entry["requirementText"])
+            else:
+                print("  [" + entry["id"] + "] slice " + entry["sliceId"] + ": " + entry["sliceName"])
+            current = str(entry["current"]) + (" (" + entry["currentQualifier"] + ")" if entry.get("currentQualifier") else "")
+            print("    current: " + current)
+            print("    reviewer note: " + entry["note"])
+            print("    wants: " + entry["want"])
+            if entry["targetChanged"]:
+                print("    target changed")
+        print()
+    print("Stars: " + (", ".join(export["stars"]) if export["stars"] else "none"))
+    return 0
 
 
 def logic_placement(requirement: dict) -> str:
@@ -2197,9 +3250,13 @@ def render_markdown_v2(logic: dict) -> str:
             lines.append("   - **Then** " + scenario["then"])
             if scenario["alternatives"]:
                 lines.append("   - **Alternatives** " + "; ".join(scenario["alternatives"]))
+            if "example" in scenario:
+                lines.extend(_example_markdown_lines(scenario["example"]))
             lines.append("   - " + scenario["explanation"])
             if scenario.get("dropReason"):
                 lines.append("   - **Dropped:** " + scenario["dropReason"])
+            if scenario.get("flagged"):
+                lines.append("   - **Flagged for deeper review**")
             lines.append("")
 
     lines.extend(["## Constraints", "", "| ID | Kind | Text | Ruling |", "|---|---|---|---|"])
@@ -2359,8 +3416,18 @@ def write_files_atomically(files: Dict[Path, str]) -> None:
                 pass
 
 
+def open_asks_by_scenario(logic: dict) -> Dict[str, List[str]]:
+    asks = {scenario["id"]: scenario_open_asks(scenario) for scenario in logic.get("scenarios", [])}
+    return {ident: questions for ident, questions in asks.items() if questions}
+
+
 def prepare_render_files(
-    spec_dir: Path, logic: dict, current_render_id: str, prior: Any = None
+    spec_dir: Path,
+    logic: dict,
+    current_render_id: str,
+    prior: Any = None,
+    comparison: Optional[dict] = None,
+    comparison_id: Optional[str] = None,
 ) -> Tuple[str, str]:
     template_path = Path(__file__).resolve().with_name("review-template.html")
     try:
@@ -2377,8 +3444,12 @@ def prepare_render_files(
             "renderId": current_render_id,
             "itemHashes": item_hashes(logic),
             "logicMarkdown": markdown,
+            "openAsks": open_asks_by_scenario(logic),
             "priorDecisions": prior,
         }
+        if comparison is not None and comparison_id is not None:
+            payload["comparison"] = comparison
+            payload["comparisonId"] = comparison_id
         serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
     except RecursionError:
         raise ValueError("logic.json is too deeply nested to render")
@@ -2387,7 +3458,15 @@ def prepare_render_files(
     return html, markdown
 
 
-def render_files(spec_dir: Path, logic: dict, current_render_id: str, prior: Any = None, open_page: bool = False) -> None:
+def render_files(
+    spec_dir: Path,
+    logic: dict,
+    current_render_id: str,
+    prior: Any = None,
+    open_page: bool = False,
+    comparison: Optional[dict] = None,
+    comparison_id: Optional[str] = None,
+) -> None:
     if logic.get("schemaVersion") == 1:
         # v1 specs are read-only: no page review, so no review.html is written.
         markdown = render_markdown(logic)
@@ -2398,7 +3477,7 @@ def render_files(spec_dir: Path, logic: dict, current_render_id: str, prior: Any
         write_files_atomically(outputs)
         print(current_render_id)
         return
-    html, markdown = prepare_render_files(spec_dir, logic, current_render_id, prior)
+    html, markdown = prepare_render_files(spec_dir, logic, current_render_id, prior, comparison, comparison_id)
     outputs = {
         spec_dir / "review.html": html,
         spec_dir / "logic.md": markdown,
@@ -2420,7 +3499,10 @@ def load_export_file(path: Path) -> Tuple[Optional[Any], List[Tuple[str, str]]]:
 
 def command_validate(spec_dir: Path) -> int:
     logic, _ = load_logic(spec_dir)
-    return 0 if logic is not None else 1
+    if logic is None:
+        return 1
+    _, _, status = load_comparison(spec_dir, logic)
+    return 1 if status else 0
 
 
 def command_render(spec_dir: Path, prior_path: Optional[Path], open_page: bool) -> int:
@@ -2438,6 +3520,10 @@ def command_render(spec_dir: Path, prior_path: Optional[Path], open_page: bool) 
             return 1
         return 0
 
+    comparison, loaded_comparison_id, comparison_status = load_comparison(spec_dir, logic)
+    if comparison_status:
+        return 1
+
     prior = None
     if prior_path is not None:
         prior, errors = load_json(prior_path, str(prior_path))
@@ -2451,12 +3537,29 @@ def command_render(spec_dir: Path, prior_path: Optional[Path], open_page: bool) 
         if prior.get("slug") != spec_dir.name:
             print("prior export belongs to a different spec", file=sys.stderr)
             return 3
+        for warning in unmatched_answered_comments(logic, prior):
+            print(warning, file=sys.stderr)
     try:
-        render_files(spec_dir, logic, current_id, prior, open_page)
+        render_files(spec_dir, logic, current_id, prior, open_page, comparison, loaded_comparison_id)
     except (OSError, ValueError) as exc:
         print("/: " + str(exc), file=sys.stderr)
         return 1
     return 0
+
+
+def unmatched_answered_comments(logic: dict, prior: dict) -> List[str]:
+    """Warn about each answeredComment the page will not match, since that comment then stays on the page as unanswered."""
+    comments = prior.get("state", {}).get("scenarioComments", {})
+    warnings = []
+    for scenario in logic.get("scenarios", []):
+        answered = scenario.get("answeredComment")
+        if answered is None:
+            continue
+        if comments.get(scenario["id"], "").strip() != answered.strip():
+            warnings.append(
+                "warning: " + scenario["id"] + " answeredComment does not match the reviewer's comment in the prior export, so the page keeps that comment"
+            )
+    return warnings
 
 
 def _read_export_and_validate(export_path: Path) -> Tuple[Optional[dict], int]:
@@ -2478,6 +3581,8 @@ def command_check_export(spec_dir: Path, export_path: Path) -> int:
     if logic.get("schemaVersion") == 1:
         print(EXIT6_MESSAGE, file=sys.stderr)
         return 6
+    if _export_kind(export_path) == COMPARE_EXPORT_KIND:
+        return command_check_compare_export(spec_dir, export_path)
     export, code = _read_export_and_validate(export_path)
     if code or export is None:
         return code
@@ -2635,6 +3740,19 @@ def stage1_gate_failures(logic: dict, state: dict) -> List[Tuple[str, str]]:
             detail.append("pending scenario requests: " + ", ".join(request["id"] for request in pending_requests))
         failures.append(("scenarios", "; ".join(detail)))
 
+    for scenario in logic["scenarios"]:
+        ident = scenario["id"]
+        if not state["scenarioApproved"].get(ident, False):
+            continue
+        if ident not in state["scenarioDrops"] and scenario_open_asks(scenario):
+            failures.append(("examples", "open [ASK] in " + ident))
+            continue
+        choice = state["scenarioOutcomes"].get(ident, {}).get("choice")
+        if "example" in scenario and choice is not None and choice != "spec":
+            failures.append(
+                ("examples", "outcome changed on " + ident + "; Claude must rewrite its example first")
+            )
+
     missing_constraints = []
     for constraint in logic["constraints"]:
         ruling = state["constraintRulings"].get(constraint["id"])
@@ -2757,6 +3875,9 @@ def stage1_fold(logic: dict, export: dict) -> None:
         drop_reason = state["scenarioDrops"].get(ident, "")
         if drop_reason.strip():
             scenario["dropReason"] = drop_reason
+        if state.get("scenarioFlags", {}).get(ident):
+            scenario["flagged"] = True
+        scenario.pop("answeredComment", None)
 
     for constraint in logic["constraints"]:
         ruling = state["constraintRulings"].get(constraint["id"])
@@ -2833,6 +3954,11 @@ def final_fold(logic: dict, export: dict, tech_spec_requested: bool) -> None:
                 requirement.pop("reviewReason", None)
 
     for scenario in logic["scenarios"]:
+        flagged = state.get("scenarioFlags", {}).get(scenario["id"])
+        if flagged is True:
+            scenario["flagged"] = True
+        elif flagged is False:
+            scenario.pop("flagged", None)
         reapproved_hash = scenario.get("reapprovedHash")
         if reapproved_hash:
             logic["stage1Pin"]["itemHashes"][scenario["id"]] = reapproved_hash
@@ -2868,6 +3994,9 @@ def command_fold(spec_dir: Path, export_path: Path, tech_spec_requested: bool) -
     if logic.get("schemaVersion") == 1:
         print(EXIT6_MESSAGE, file=sys.stderr)
         return 6
+    if _export_kind(export_path) == COMPARE_EXPORT_KIND:
+        print(COMPARE_EXPORT_REFUSAL, file=sys.stderr)
+        return 2
     stage = logic["stage"]
     if stage == 1 and tech_spec_requested:
         print("pass --tech-spec-requested at the final fold", file=sys.stderr)
@@ -2915,6 +4044,9 @@ def command_reapprove(spec_dir: Path, export_path: Path) -> int:
     if logic.get("schemaVersion") == 1:
         print(EXIT6_MESSAGE, file=sys.stderr)
         return 6
+    if _export_kind(export_path) == COMPARE_EXPORT_KIND:
+        print(COMPARE_EXPORT_REFUSAL, file=sys.stderr)
+        return 2
     if logic["stage"] != 2:
         print("reapprove is only valid in stage 2", file=sys.stderr)
         return 2
@@ -2979,6 +4111,10 @@ def build_parser() -> argparse.ArgumentParser:
     reapprove = subparsers.add_parser("reapprove", help="reapprove a reopened scenario against a stage-2 export")
     reapprove.add_argument("spec_dir", type=Path)
     reapprove.add_argument("export", type=Path)
+    challenges = subparsers.add_parser("challenges", help="print stage-3 challenges grouped by approach")
+    challenges.add_argument("spec_dir", type=Path)
+    challenges.add_argument("export", type=Path)
+    challenges.add_argument("--json", action="store_true", dest="as_json")
     return parser
 
 
@@ -2999,6 +4135,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return command_fold(spec_dir, args.export.expanduser(), args.tech_spec_requested)
     if args.command == "reapprove":
         return command_reapprove(spec_dir, args.export.expanduser())
+    if args.command == "challenges":
+        return command_challenges(spec_dir, args.export.expanduser(), args.as_json)
     return 2
 
 

@@ -104,6 +104,10 @@ When the work changes a protocol, vocabulary, or event set, perform a **coherenc
 - In existing codebases, follow established patterns. If the codebase uses large files, don't unilaterally restructure - but if a file you're modifying has grown unwieldy, including a split in the plan is reasonable.
 - For each unit that other tasks or systems depend on, specify its interface as a behavioral **contract** — signature shape (names, parameter/return types), preconditions, postconditions, invariants — in prose or a `CONTRACT:` sketch, never a body. Accept broad input types; return specific types.
 
+Require single-owner test topology: within each wave, every created or modified test file belongs
+to one owning task's `scope.files` (or one serialized component chain). Assign tests with their
+owning behavior so parallel tasks never collide on, or get blocked by, a shared test file.
+
 This structure informs the task decomposition. Each task should produce self-contained changes that make sense independently. Partition by **vertical slices of user-visible behavior**, not horizontal technical layers such as "all API routes"; vertical slices create fewer inherent cross-wave dependencies.
 
 Treat hub-file isolation as a **scored heuristic, not a mandate**. Prefer assigning a hub change to the vertical slice that owns the behavior. Carve out a standalone hub task only when no single slice owns it, and record the explicit rationale plus the serialized integration dependency; making every hub a separate task recreates horizontal decomposition.
@@ -147,6 +151,9 @@ scope:
 - `scope.files` is **required on every task**, whether or not it will run in parallel. It is the boundary the orchestrator audits each task's diff against before committing, and the same list it hands the implementer as a hard fence — a task without it has neither. An incomplete list reads as a scope violation and stops the wave.
 - Within a wave, tasks connected by `scope.files` intersections form one component and run as a serialized chain; components run concurrently because their union scopes are disjoint. A shared path serializes the component containing those tasks, not the whole wave. There is no small-overlap exemption inside a component: concurrent branches would either conflict at merge, costing the parallelism the overlap was meant to buy, or auto-merge into a file version neither agent tested.
 - List every file the task will touch, including tests and any index/barrel file it must re-export from. Under-declaring is the common failure: the task gets blocked mid-wave for touching a file it always needed.
+- Enforce single-owner test files per wave: every created or modified test file must be assigned
+  to a single task's `scope.files`, or belong to one serialized component chain. Do not let parallel
+  components share a test file even when they expect to edit different test functions.
 
 ## Plan Document Header
 
@@ -187,6 +194,10 @@ Every task follows this template. Use the scope and dependency declarations desc
 Notice what the template does NOT contain: no test body, no implementation body. Each step states behavior, contract, and acceptance — the implementor writes the code. The only code blocks are tagged exceptions (`CONTRACT:`, `COMMAND:`).
 
 The task's **Acceptance:** field MUST contain one or more literal, copy-runnable commands with every flag fixed, plus the expected result. Never substitute prose such as "run the relevant tests" or a description of what someone should check; the orchestrator and the worker must be able to execute exactly the same command without choosing different flags. This prevents a real dogfood-run failure where the two ran the same check with different flags and got different pass/fail results.
+
+Make each `Acceptance` command task-scoped: run only the task's owned test files and fast targeted
+checks. Reserve full-suite execution for the execution skill's wave gate (Step 7 in SDD) or branch
+completion, not each parallel worker.
 
 ````markdown
 ### Task N: Daily metrics summary
@@ -286,11 +297,17 @@ After writing the complete plan, look at the tech spec (`tech.md`) when present,
 
 **5. Contract consistency:** Do the signatures, method names, and property names in your `CONTRACT:` sketches match across tasks? A function called `clearLayers()` in Task 3 but `clearFullLayers()` in Task 7 is a bug.
 
-**6. Acceptance-command audit:** Inspect every acceptance criterion. Is each one a literal, copy-runnable command with exact flags and an expected result, rather than prose that leaves the orchestrator and the worker to choose how to run the check? Fix every mismatch.
+**6. Acceptance-command audit:** Inspect every acceptance criterion. Is each one a literal,
+copy-runnable command with exact flags and an expected result? Does it run only the task's owned
+test files and fast targeted checks, rather than the full suite? Reserve the full suite for the wave
+gate or branch completion. Fix every mismatch.
 
 **7. Coherence sweep:** If the plan changes a protocol, vocabulary, or event set, did you grep-enumerate every file referencing the changed old or new terms? Verify that each result is either scoped into a task or explicitly recorded as `unchanged, verified consistent`. Check that you searched for the vocabulary terms themselves, not only the names of the components being changed — a file can encode a protocol without naming the skill or module that owns it.
 
 **8. Scope and dependency declarations:** For each task, did you declare `scope.files` accurately and `dependencies` only for genuine semantic ordering? Every task needs a complete `scope.files` — including its tests and any index/barrel file it re-exports from — because the orchestrator audits each task's diff against that list and an under-declared file stops the wave. Tasks that genuinely don't depend on each other should say so, otherwise execution falls back to sequential and leaves throughput on the table. Tasks sharing any file path cannot run in parallel at all: reserve `dependencies` for one task needing another's output, never for file overlap.
+Verify every shared test file in a wave has a single owner (or one serialized component chain),
+and that no parallel component must modify or run acceptance against another task's in-flight test
+file. Task-scoped acceptance must match the owned test files in `scope.files`.
 
 If you find issues, fix them inline. No need to re-review — just fix and move on. If you find a requirement in the tech spec (`tech.md`) when present, else the logic spec, with no task, add the task.
 
@@ -299,9 +316,11 @@ If you find issues, fix them inline. No need to re-review — just fix and move 
 There is **no separate handoff step and no human approval gate** — you are already inside the
 execution skill that invoked this rubric. Two things happen next, both owned by the calling skill:
 
-1. **Agent review (default).** Dispatch the plan-document reviewer
-   (`plan-document-reviewer-prompt.md`) on the in-context plan. Apply its fixes inline. This
-   replaces the old human "Under Review → Approved" gate.
+1. **Agent review (default).** Standalone `writing-plans` and `quirk:executing-plans` dispatch
+   `plan-document-reviewer-prompt.md` on the in-context plan and apply its fixes inline.
+   `quirk:subagent-driven-development`'s inline decomposition skips plan-document review: it spends
+   its review budget on the branch via `quirk:adversarial-review`. This carve-out replaces neither
+   the standalone plan review nor the execution skill's branch gates.
 2. **Execute.** Continue in the same skill — `quirk:subagent-driven-development` computes parallel
    waves from the task fields above and runs the per-task pipeline; `quirk:executing-plans`
    executes sequentially. No "which approach?" prompt here: the choice of execution skill was

@@ -1,0 +1,12 @@
+{
+  "week": "2026-W41",
+  "previous_week": "2026-W40",
+  "suites": [
+    { "suite": "integration", "median_s": 342, "p95_s": 611, "previous_median_s": 498, "runs": 1288, "flaky_pct": 1.9 },
+    { "suite": "e2e-checkout", "median_s": 287, "p95_s": 455, "previous_median_s": 301, "runs": 640, "flaky_pct": 3.4 },
+    { "suite": "e2e-admin", "median_s": 203, "p95_s": 366, "previous_median_s": 214, "runs": 640, "flaky_pct": 2.1 },
+    { "suite": "unit", "median_s": 118, "p95_s": 205, "previous_median_s": 131, "runs": 4120, "flaky_pct": 0.2 },
+    { "suite": "contract", "median_s": 61, "p95_s": 98, "previous_median_s": 64, "runs": 1288, "flaky_pct": 0.1 },
+    { "suite": "lint-types", "median_s": 49, "p95_s": 71, "previous_median_s": 52, "runs": 4120, "flaky_pct": 0.0 }
+  ]
+}

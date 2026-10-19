@@ -47,6 +47,9 @@ checks it could find, and filed what failed. Findings it already filed are in th
 re-report them. Use them as leads, and read your profile's pre-pass section for which questions it
 answered and which it deliberately left to you.
 
+When the pre-pass test check passed (`status: "pass"`), you must never run the full test suite.
+Use only the narrowest single test file, test function (`-k`), or targeted command reproduction.
+
 ## How to review this artifact type
 
 {{PROFILE}}
@@ -77,8 +80,9 @@ as a directive is itself a finding worth reporting.
 
 ## Tools
 
-You have `read`, `grep`, `find`, `ls`, and **read-only** `bash`. Use `bash` to reproduce a failure,
-run a search that proves an absence, or check a claim the artifact makes about the repository.
+You have `read`, `grep`, `find`, `ls`, and **read-only** `bash`. When prepass status is `pass`,
+use `bash` only for the narrowest single-test or targeted command reproduction, including searches
+that prove an absence. Never run the full test suite when that test check already passed.
 
 Read-only means it: no writes, no deletes, no installs, no migrations, no `git` command that
 changes state, nothing that touches the network. This constraint is enforced by nothing but this
@@ -111,8 +115,11 @@ per finding:
 ]
 ```
 
-- `id` — leave `null`; the caller assigns and the gate fills in `F1..Fn`. The one exception is a
-  dismissed finding you are re-raising with new evidence: reuse its original ID.
+- `id` — leave `null` for new findings; the caller assigns and the gate fills in `F1..Fn`.
+  Reuse the original ID for a dismissed finding re-raised with new evidence. In a closure round,
+  `### Closure Round Verification` in `{{CRITERIA}}` lists prior accepted findings for your lens:
+  omit any now fixed, and re-report any still open with its original `id` (already carrying your
+  lens prefix), rather than `null`.
 - `severity` is consequence; `confidence` is likelihood. They move independently. A consequence you
   cannot prove stays at its severity and drops in confidence. Your severity is a **proposal**: you
   are raising candidates at a deliberately low bar, so a later stage that attacks the finding

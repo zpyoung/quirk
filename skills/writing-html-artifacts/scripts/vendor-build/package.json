@@ -1,0 +1,23 @@
+{
+  "name": "writing-html-artifacts-vendor-build",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Maintainer-only build of the single-file Web Awesome and Flow vendor bundles; run when pins are bumped.",
+  "scripts": {
+    "build": "node build-webawesome.mjs && node build-flow.mjs",
+    "build:flow": "node build-flow.mjs"
+  },
+  "dependencies": {
+    "@awesome.me/webawesome": "3.14.0",
+    "d3-selection": "3.0.0",
+    "d3-zoom": "3.0.0",
+    "elkjs": "0.12.0",
+    "esbuild": "0.28.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

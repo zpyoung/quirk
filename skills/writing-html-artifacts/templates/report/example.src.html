@@ -1,0 +1,67 @@
+<!-- quirk-src {"template": "report", "title": "CI test timings, week 41", "mode": "offline", "interactions": ["sort the suite table by any column", "show or hide the median and p95 series from the chart legend"], "data": "timings.json"} -->
+<!-- slot: summary -->
+<p class="q-lede">The integration suite now takes 5 min 42 s at the median, down from 8 min 18 s, and accounts for most of the week's improvement. Checkout end-to-end is the flakiest suite at 3.4% of runs.</p>
+<!-- slot: main -->
+<p class="q-meta">Source: CI run export for 5 to 11 Oct 2026 (sample data for this template).</p>
+
+<q-stat direction="down-good" points="498,342">
+<span slot="label">Integration median</span>
+<span slot="value">5 min 42 s</span>
+<span slot="delta">−31%</span>
+<span slot="definition">Median time of the integration suite, week 41 against week 40.</span>
+</q-stat>
+<q-stat>
+<span slot="label">Integration p95</span>
+<span slot="value">10 min 11 s</span>
+<span slot="definition">95th percentile time of the integration suite, the longest tail of any suite.</span>
+</q-stat>
+<q-stat>
+<span slot="label">Flakiest suite</span>
+<span slot="value">3.4%</span>
+<span slot="definition">Share of end-to-end checkout runs that failed and then passed on an automatic retry.</span>
+</q-stat>
+
+<section aria-labelledby="findings-h">
+<h2 id="findings-h">Findings</h2>
+<ul>
+<li>Integration median fell 31%, from 8 min 18 s to 5 min 42 s.</li>
+<li>Integration p95 is 10 min 11 s, the longest tail of any suite.</li>
+<li>End-to-end checkout failed and then passed on retry in 3.4% of its 640 runs.</li>
+<li>The other five suites each moved by less than 10%.</li>
+</ul>
+</section>
+
+<section aria-labelledby="chart-h">
+<h2 id="chart-h">Time by suite</h2>
+<q-chart type="bar" horizontal data-from="suites" summary="Integration is the slowest suite at 342 s median and 611 s at the 95th percentile; lint-types is the fastest at 49 s median.">
+<table>
+<thead><tr><th data-key="suite">Suite</th><th class="num" data-key="median_s">Median (s)</th><th class="num" data-key="p95_s">p95 (s)</th></tr></thead>
+<tbody></tbody>
+</table>
+</q-chart>
+</section>
+
+<section aria-labelledby="table-h">
+<h2 id="table-h">All suites</h2>
+<q-table data-from="suites">
+<table>
+<caption>Test timings by suite, week 41 against week 40</caption>
+<thead>
+<tr>
+<th scope="col" data-key="suite">Suite</th>
+<th scope="col" class="num" data-key="median_s">Median (s)</th>
+<th scope="col" class="num" data-key="p95_s">p95 (s)</th>
+<th scope="col" class="num" data-key="previous_median_s">Week 40 median (s)</th>
+<th scope="col" class="num" data-key="runs">Runs</th>
+<th scope="col" class="num" data-key="flaky_pct">Flaky (%)</th>
+</tr>
+</thead>
+<tbody></tbody>
+</table>
+</q-table>
+</section>
+
+<section aria-labelledby="method-h">
+<h2 id="method-h">About these numbers</h2>
+<p>Medians and 95th percentiles cover every CI run on the main branch during the week. Flaky means the suite failed and then passed on an automatic retry. The week 40 median is the baseline the median change is measured against.</p>
+</section>

@@ -1,3 +1,5 @@
+import type { Comparison } from './compare-types'
+
 export type Markdown = string
 export type IsoDateTime = string
 export type RequirementId = string
@@ -32,6 +34,20 @@ export interface Behavior {
   detail?: Markdown
 }
 
+/** A titled block of Markdown beside or instead of the data-state parts: a table, a list, a code sample. */
+export interface ScenarioDetails {
+  title: string
+  body: Markdown
+}
+
+/** A worked example for a scenario: data-state parts (records before, steps, records after), a titled details section, or both. */
+export interface ScenarioExample {
+  before?: Markdown
+  steps?: string[]
+  after?: Markdown
+  details?: ScenarioDetails
+}
+
 export interface Scenario {
   id: ScenarioId
   behavior: BehaviorId
@@ -49,6 +65,11 @@ export interface Scenario {
   dropReason?: string
   reopened?: { requirementId: RequirementId; reason: string; raisedAt: IsoDateTime }
   reapprovedHash?: string
+  /** The reviewer's bookmark for deeper review elsewhere; written by the folds, never by Claude, and excluded from item hashes. */
+  flagged?: true
+  /** The reviewer comment Claude answered or acted on; the page clears that comment when its text still matches. */
+  answeredComment?: string
+  example?: ScenarioExample
 }
 
 export interface Constraint {
@@ -258,6 +279,10 @@ export interface ReviewState {
   scenarioApproved: Record<ScenarioId, boolean>
   scenarioDrops: Record<ScenarioId, string>
   scenarioUpdates: Record<ScenarioId, string>
+  /** Notes for Claude that never count as a decision. */
+  scenarioComments: Record<ScenarioId, string>
+  /** The reviewer's override of each scenario's `flagged`; unlike decisions, it survives a scenario rewrite. */
+  scenarioFlags: Record<ScenarioId, boolean>
   scenarioRequests: ScenarioRequest[]
   constraintRulings: Record<ConstraintId, ConstraintRulingDecision>
   assumptions: Record<AssumptionId, AssumptionDecision>
@@ -284,6 +309,8 @@ export interface DecisionRecord {
     approved: boolean
     dropped: string | null
     update: string | null
+    comment: string | null
+    flagged: boolean
     then: string
     changesSpec: boolean
   }[]
@@ -342,4 +369,8 @@ export interface LogicSpecPayload {
   itemHashes: Record<string, string>
   logicMarkdown: string
   priorDecisions: Export | null
+  /** Open `[ASK]` questions per scenario, as judged by the renderer; the page never decides this itself. */
+  openAsks: Record<ScenarioId, string[]>
+  comparison?: Comparison
+  comparisonId?: string
 }

@@ -1,0 +1,29 @@
+<!-- quirk-src {"template": "report", "title": "Choosing a queue for order events", "mode": "offline", "layout": "comparison"} -->
+<!-- slot: summary -->
+<p class="q-lede"><strong>Recommendation: Managed Pub/Sub.</strong> It meets the delivery guarantee we need with the least on-call work, and its cost stays below the budget of $2,000 a month at three times today's volume.</p>
+<!-- slot: main -->
+<p class="q-meta">Compared on 13 Oct 2026 against the order-events requirements: at-least-once delivery, 5,000 messages per second at peak, 7 days of replay.</p>
+
+<h2>Options against the criteria</h2>
+<q-compare recommended="2">
+<table>
+<thead>
+<tr><th>Criterion</th><th>Self-hosted Kafka</th><th>Managed Pub/Sub</th><th>RabbitMQ cluster</th></tr>
+</thead>
+<tbody>
+<tr><th>Monthly cost at 3x volume</th><td>$1,150</td><td>$1,720</td><td>$980</td></tr>
+<tr><th>Delivery guarantee</th><td>At least once, ordered per partition</td><td>At least once, ordering keys</td><td>At least once, per queue</td></tr>
+<tr><th>Replay of the last 7 days</th><td>Yes, native</td><td>Yes, by seeking to a time</td><td>No, needs a separate store</td></tr>
+<tr><th>Setup time</th><td>4 weeks</td><td>3 days</td><td>2 weeks</td></tr>
+<tr><th>On-call load</th><td>High: brokers, disks, upgrades</td><td>Low: managed by the provider</td><td>Medium: cluster and disk alarms</td></tr>
+<tr><th>Team experience</th><td>Two engineers</td><td>Five engineers</td><td>One engineer</td></tr>
+<tr><th>Main risk</th><td>Operating it well takes a dedicated owner</td><td>Provider quota limits at peak</td><td>No replay means a second system</td></tr>
+</tbody>
+</table>
+</q-compare>
+
+<h2>How the options were scored</h2>
+<p>We scored each option on the six rows above and weighed on-call load and setup time most heavily, because the platform team has two people and the order stream is on the critical path for checkout.</p>
+
+<h2>What would change the recommendation</h2>
+<p>If monthly volume passes eight times today's, Managed Pub/Sub costs more than $4,500 and self-hosted Kafka becomes the cheaper choice, though only if someone owns it. If the replay window has to grow past 30 days, the managed option needs a second store and the gap in cost closes.</p>

@@ -1,0 +1,59 @@
+{
+  "schema": 1,
+  "color": {
+    "bg": ["#fbfaf8", "#151513"],
+    "surface": ["#f1eee7", "#201f1c"],
+    "text": ["#1d1c1a", "#ece9e2"],
+    "text-muted": ["#57534b", "#a8a398"],
+    "border": ["#d9d4c9", "#3a3832"],
+    "accent": ["#0a6464", "#4fc3bd"],
+    "accent-text": ["#ffffff", "#0b1a1a"],
+    "good": ["#1b6a38", "#6fcf8e"],
+    "warn": ["#85500a", "#e0a64a"],
+    "critical": ["#b3261e", "#f28b82"],
+    "focus": ["#1a5fb4", "#7ab7ff"],
+    "chart-1": ["#c18600", "#e69f00"],
+    "chart-2": ["#4999c6", "#56b4e9"],
+    "chart-3": ["#009e73", "#009e73"],
+    "chart-4": ["#9c942b", "#f0e442"],
+    "chart-5": ["#0072b2", "#0072b2"],
+    "chart-6": ["#d55e00", "#d55e00"],
+    "chart-7": ["#c8779d", "#cc79a0"],
+    "chart-8": ["#1d1c1a", "#ece9e2"],
+    "syntax-keyword": ["#a3214f", "#f497b4"],
+    "syntax-string": ["#1d6b3a", "#93d3a2"],
+    "syntax-number": ["#9a4a00", "#f2b679"],
+    "syntax-comment": ["#5f5a51", "#a8a398"],
+    "syntax-name": ["#1a56a6", "#8fbcff"]
+  },
+  "font": {
+    "sans": "system-ui, -apple-system, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
+    "mono": "ui-monospace, \"SF Mono\", Menlo, Consolas, \"Liberation Mono\", monospace",
+    "display": "ui-serif, Georgia, \"Iowan Old Style\", \"Times New Roman\", serif"
+  },
+  "size": {
+    "body": "17px",
+    "small": "14px",
+    "h1": "2.25rem",
+    "h2": "1.75rem",
+    "h3": "1.35rem",
+    "h4": "1.1rem",
+    "leading": "1.6",
+    "leading-tight": "1.25"
+  },
+  "space": {
+    "1": "4px",
+    "2": "8px",
+    "3": "12px",
+    "4": "16px",
+    "5": "24px",
+    "6": "32px",
+    "7": "48px",
+    "8": "64px"
+  },
+  "radius": {
+    "sm": "4px",
+    "md": "6px",
+    "pill": "999px"
+  }
+}

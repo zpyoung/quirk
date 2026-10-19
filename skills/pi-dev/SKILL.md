@@ -42,21 +42,22 @@ The ✓/✗ report prints to **stderr** (like pi-watch's other progress output) 
 
 | Alias | Default thinking | Routes to |
 |---|---|---|
-| `codex` (default coding) | `medium` | gpt-5.6-sol → 5.5 → 5.4 → 5.3-codex (across `openai-codex`/`openai`/`github-copilot`) |
-| `codex-max` | `max` | gpt-5.6-sol → 5.5-codex-max → 5.4-codex-max → 5.1-codex-max |
-| `codex-mini` | `medium` | gpt-5.6-luna → 5.4-mini → 5.1-codex-mini |
-| `codex-spark` | `high` | gpt-5.4-codex-spark → 5.3-codex-spark |
+| `codex` (default coding) | `medium` | gpt-6.1-sol → 6-sol → 5.6-sol → 5.5 (across `openai-codex`/`openai`/`github-copilot`) |
+| `codex-max` | `max` | gpt-6.1-sol → 6-sol → 5.6-sol, at `max` effort |
+| `codex-mini` | `medium` | gpt-6-luna → 5.6-luna |
+| `codex-spark` | `high` | gpt-5.3-codex-spark |
 | `terra` (balanced) | `high` | gpt-5.6-terra → 5.4 |
-| `sonnet` | `high` | claude-sonnet-4-7 → 4-6 (anthropic + copilot) |
-| `opus` | `high` | claude-opus-4-7 → 4-6 |
-| `haiku` | `medium` | claude-haiku-4-6 → 4-5 |
-| `gemini` | `high` | gemini-3.2-pro-preview → 3.1 → 3 |
-| `flash` | `medium` | gemini-flash-latest → 3-flash-preview |
-| `grok` | `medium` | github-copilot/grok-code-fast-1 |
+| `sonnet` | `high` | claude-sonnet-5-5 → 5 → 4-6 (anthropic + copilot) |
+| `opus` | `high` | claude-opus-5-5 → 5 → 4-8 → 4-7 |
+| `haiku` | `medium` | claude-haiku-5-5 → 4-5 |
+| `fable` (opt-in) | `high` | claude-fable-5-1 → 5 |
+| `gemini` | `high` | gemini-3.1-pro-preview |
+| `flash` | `medium` | gemini-flash-latest → 3.8-flash → 3-flash-preview |
+| `grok` | `medium` | grok-4.7 → 4.6 (xai, then copilot) |
 
-GPT-5.6 replaced the suffix ladder with three capability tiers: **Sol** (flagship, $5/$30, the only tier that unlocks `max` reasoning effort), **Terra** (balanced, $2.50/$15), **Luna** (fast/cheapest, $1/$6). Sol takes over `codex`/`codex-max`, Luna takes over `codex-mini`, and Terra gets its own `terra` alias.
+GPT-6 ships three tiers: **Sol** (flagship, $2/$10) backs `codex` and `codex-max`, **Luna** (fastest and cheapest, $0.10/$0.50) backs `codex-mini`, and **Astra** ($10/$50) is excluded like a pro tier. GPT-6 has no Terra tier, so `terra` stays on GPT-5.6 Terra ($2/$12), which now costs more than GPT-6 Sol. Claude **Fable** ($10/$50, 2.5× Opus 5.5) gets the opt-in `fable` alias and never appears in the `opus` ladder.
 
-Aliases auto-upgrade as new models ship — newest entries at the top of each ladder are speculative and skipped if not yet in `pi --list-models`. **OpenAI pro / deep-research tiers are deliberately excluded** from alias ladders: `gpt-5-pro`, `gpt-5.x-pro`, `o1-pro`, `o3-pro`, `o3-deep-research`, `o4-mini-deep-research` (~10–30× cost, multi-minute latency). GPT-5.6's **Sol Pro** and **Ultra mode** are the same lever — they're request-time params (`reasoning.mode`), not separate model IDs, so there's no alias for them. Dispatch pro-tier only on explicit user request via `--provider`/`--model`. *(Note: `gemini-*-pro-preview` is Google's standard tier, not a pro tier — it routes via the `gemini` alias.)*
+Aliases auto-upgrade as new models ship — newest entries at the top of each ladder are speculative and skipped if not yet in `pi --list-models`. **OpenAI pro / deep-research tiers are deliberately excluded** from alias ladders: `gpt-5-pro`, `gpt-5.x-pro`, `o1-pro`, `o3-pro`, `o3-deep-research`, `o4-mini-deep-research` (~10–30× cost, multi-minute latency), and `gpt-6-astra` (5× GPT-6 Sol). GPT-5.6's **Sol Pro** and **Ultra mode** are the same lever — they're request-time params (`reasoning.mode`), not separate model IDs, so there's no alias for them. Dispatch pro-tier only on explicit user request via `--provider`/`--model`. *(Note: `gemini-*-pro-preview` is Google's standard tier, not a pro tier — it routes via the `gemini` alias.)*
 
 To see the full ladders: `pi-watch --list-aliases`.
 
@@ -120,7 +121,7 @@ QUIRK="$(node -e 'const fs=require("fs"),os=require("os"),p=require("path");cons
 install -m755 "$QUIRK/skills/pi-dev/scripts/pi-watch/pi-watch" ~/.local/bin/pi-watch  # or any PATH dir
 ```
 
-Verify: `pi --version` → expect ≥ 0.65.1. `pi /login` for any subscription provider you want (Claude, ChatGPT, Copilot). Then `pi-watch --check` to confirm which aliases resolve to an authed model — the first run also auto-installs the current version's Node deps if they're missing.
+Verify: `pi --version` → expect ≥ 0.65.1, and `node --version` → expect ≥ 22.19 (the pi SDK's floor). `pi /login` for any subscription provider you want (Claude, ChatGPT, Copilot). Then `pi-watch --check` to confirm which aliases resolve to an authed model — the first run also auto-installs the current version's Node deps if they're missing or outdated.
 
 **Updating:** `claude plugin update quirk` is enough — `pi-watch` auto-follows. Run `pi-watch --where` to see which version/dir it resolves to (and whether that copy has the current alias ladder). Re-run the `install` line above only if the launcher script itself changes (rare); mjs/alias updates are picked up automatically.
 

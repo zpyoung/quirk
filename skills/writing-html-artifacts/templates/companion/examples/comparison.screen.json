@@ -1,0 +1,25 @@
+{
+  "title": "Comparison: queue options",
+  "question": "How should the queue comparison present its three options?",
+  "select": "single",
+  "options": [
+    {
+      "id": "table",
+      "label": "One table",
+      "description": "Options as columns, criteria as rows, a recommendation line above. Best for scanning differences.",
+      "html": "<div style=\"display:grid;gap:6px;height:72px;grid-template-columns:1fr 1fr 1fr;\"><div style=\"border:1px solid currentColor\"></div><div style=\"border:1px solid currentColor\"></div><div style=\"border:1px solid currentColor\"></div></div>"
+    },
+    {
+      "id": "cards",
+      "label": "Side-by-side cards",
+      "description": "One card per option with pros and cons. Reads well, harder to compare one criterion across all three."
+    },
+    {
+      "id": "matrix-plus-notes",
+      "label": "Table plus notes",
+      "description": "The table for the numbers and a short paragraph per option for the nuance."
+    }
+  ],
+  "content": "<p>The team is choosing between Pub/Sub, SQS and a database-backed queue. The decision turns on cost, ordering guarantees and operational load.</p>",
+  "layout": "comparison"
+}

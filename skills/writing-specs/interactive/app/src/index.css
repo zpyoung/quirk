@@ -36,3 +36,79 @@ tr[data-changed='true'] > td {
   background-color: var(--color-background-red);
   color: var(--color-text-red);
 }
+
+.scenario-example {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.example-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 720px) {
+  .example-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.example-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+}
+.example-pane > ol {
+  margin: 0;
+  padding-left: 20px;
+}
+.example-before {
+  background: var(--color-background-muted);
+}
+.example-after {
+  background: color-mix(in srgb, var(--color-background-green) 35%, transparent);
+}
+.example-details {
+  background: var(--color-background-muted);
+}
+.example-details table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+.example-details th,
+.example-details td {
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  text-align: left;
+  vertical-align: top;
+}
+.example-details th {
+  background: color-mix(in srgb, var(--color-background-muted) 60%, transparent);
+}
+.scenario-example strong {
+  color: var(--color-text-blue);
+}
+.scenario-example ol > li::marker {
+  color: var(--color-text-purple);
+  font-weight: 700;
+}
+.example-result {
+  color: var(--color-text-green);
+  font-weight: 700;
+}
+.example-rejection {
+  color: var(--color-text-red);
+}
+.example-invented {
+  color: var(--color-text-secondary);
+  font-style: italic;
+}
+.example-gap {
+  color: var(--color-text-orange);
+  background: color-mix(in srgb, var(--color-background-yellow) 45%, transparent);
+  text-decoration: underline;
+}
