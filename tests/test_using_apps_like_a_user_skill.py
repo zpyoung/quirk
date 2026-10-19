@@ -147,5 +147,6 @@ def test_readme_skill_count_matches_skill_directories() -> None:
 
 
 def test_readme_what_ships_bullet_mentions_the_skill() -> None:
-    bullet = next(line for line in README_PATH.read_text().splitlines() if "**26 skills**" in line)
+    skill_count = re.compile(r"^- \*\*\d+ skills\*\* under `skills/`")
+    bullet = next(line for line in README_PATH.read_text().splitlines() if skill_count.match(line))
     assert "like a user" in bullet.lower()
