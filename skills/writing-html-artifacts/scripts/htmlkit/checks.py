@@ -109,12 +109,15 @@ class _Scanner(HTMLParser):
 
     def __init__(self, page: _Page) -> None:
         super().__init__(convert_charrefs=True)
+        # newer stdlib parsers skip parse_marked_section for <![CDATA[ unless this is off
+        self._support_cdata = False
         self.page = page
         self._foreign = 0
         self._capture: Optional[_Capture] = None
 
     def set_cdata_mode(self, elem, *, escapable=False):
         self.cdata_elem = elem.lower()
+        self._escapable = escapable
         self.interesting = re.compile(r"</%s(?=[\t\n\r\f />])" % re.escape(self.cdata_elem), re.IGNORECASE)
 
     def parse_comment(self, i, report=True):
