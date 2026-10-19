@@ -1,0 +1,15 @@
+diff --git a/report.py b/report.py
+index 7101a65..1687605 100644
+--- a/report.py
++++ b/report.py
+@@ -1,5 +1,6 @@
+ def order_totals(conn, customer_ids):
+-    rows = conn.execute(
+-        "SELECT customer_id, SUM(amount) FROM orders WHERE customer_id IN (%s) GROUP BY customer_id"
+-        % ",".join("?" * len(customer_ids)), customer_ids)
+-    return dict(rows.fetchall())
++    totals = {}
++    for customer_id in customer_ids:
++        row = conn.execute("SELECT SUM(amount) FROM orders WHERE customer_id = ?", (customer_id,)).fetchone()
++        totals[customer_id] = row[0]
++    return totals

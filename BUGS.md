@@ -264,3 +264,25 @@ entries' IDs; manual edits to fix typos are fine.
 - **Severity**: low
 - **Proposed fix**: Give the kit's diagram disclosures their own border, padding and marker so they look the same without a base stylesheet, or add matching details styles to the app theme.
 
+## BUG-32: SKILL.md and orchestration.md disagree on which dispatches carry the mutation-probe line
+- **Observed**: 2026-10-18
+- **File**: skills/full-code-review/SKILL.md:318
+- **Description**: SKILL.md Step 4 says to state the mutation-probe line in every dispatch, but orchestration.md's 'Every specialist prompt also says' paragraph says the coordinator adds 'mutation probe: enabled' only to the three test lenses, and only with consent. A coordinator can't tell whether every dispatch needs a mutation-probe line (disabled for the non-test lenses) or only the test lenses do. Doc-only. Found while fixing the gaps the MR !722 re-review exposed.
+- **Severity**: low
+- **Proposed fix**: Pick one rule: either every dispatch states the probe status (enabled or disabled), or only the test lenses get the line. Then make both files say the same thing.
+
+## BUG-33: full-code-review lets the coordinator skip the lens fan-out on small diffs
+- **Observed**: 2026-10-19
+- **File**: skills/full-code-review/SKILL.md:292
+- **Description**: In a headless smoke-corpus run (claude -p "/quirk:full-code-review --local --no-open", Sonnet 5.5 default, 2026-10-19), all 5 smoke cases reviewed the 2-9 line diff inline instead of dispatching lenses and wrote no report.json (one used the ReportFindings tool, one wrote a Markdown report). One also overrode a pre-exported REVIEW_OUT_DIR with its own mktemp despite the ${REVIEW_OUT_DIR:-...} default in Setup. SKILL.md never says the fan-out runs regardless of diff size, so the smoke corpus can't run without a prompt override and real tiny-diff reviews silently drop to one inline pass.
+- **Severity**: medium
+- **Proposed fix**: State in SKILL.md (Setup + Step 4) that the lens fan-out and report.json are mandatory at any diff size with no inline shortcut, and that a pre-set REVIEW_OUT_DIR is kept; add a test pinning that wording.
+- **Resolved**: 2026-10-19. Wording alone (fan-out at any size, keep REVIEW_OUT_DIR) fixed the out-dir override but still left 3 of 5 plain-prompt runs skipping, now citing "headless run on a one-line diff". Closing those excuses by name (one Agent per lens; skip only on run_when, policy, or failed dispatch; diff size, headless, no forge, or cost is never a skip reason) brought all 5 to a full fan-out, report.json in the caller's dir, and a passing smoke_check. Residual lens-packing is BUG-34.
+
+## BUG-34: full-code-review coordinator occasionally packs several lenses into one agent
+- **Observed**: 2026-10-19
+- **File**: skills/full-code-review/SKILL.md:298
+- **Description**: In the 2026-10-19 plain-prompt smoke run after the BUG-33 fix, 1 of 54 lens dispatches (correctness case) combined comments, db and observability into one agent despite SKILL.md Step 4 saying one Agent per lens. A packed agent shares one context across checklists, so a lens can get a shallower pass than its own dispatch would give, and run.models then reports per-lens models for a single dispatch. Earlier rounds also packed lenses (test-adequacy case, 2 multi-lens agents).
+- **Severity**: low
+- **Proposed fix**: Re-run the smoke corpus a few times to measure the rate; if it persists, have the coordinator check its dispatch count against policy.json's runnable lenses before Step 5, or record per-lens agent ids in run so a packed dispatch is visible in the report.
+

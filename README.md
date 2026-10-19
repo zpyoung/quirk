@@ -6,12 +6,23 @@ Version: **2026.7.9**
 
 ## What ships
 
-- **26 skills** under `skills/` covering TDD, systematic debugging, brainstorming (which produces a logic spec), deep-research/brainstorming exploration (with a `--involve` user-inclusion dial: checkpoints, mid-run steering, and idea-gate co-creation), divergent ideation, the two-document spec rubric (logic spec + tech spec) and plan writing, scannable-prose revision, code review, adversarial review (typed profiles, a promote/refute two-stage, and an evidence gate), parallel agent dispatch, guided bug/feature/code-change filing with provenance-marked artifacts, gating simplification behind a correctness check, and more.
+- **27 skills** under `skills/` covering TDD, systematic debugging, brainstorming (which produces a logic spec), deep-research/brainstorming exploration (with a `--involve` user-inclusion dial: checkpoints, mid-run steering, and idea-gate co-creation), divergent ideation, the two-document spec rubric (logic spec + tech spec) and plan writing, scannable-prose revision, code review, a full multi-lens pre-merge review for GitHub and GitLab, adversarial review (typed profiles, a promote/refute two-stage, and an evidence gate), parallel agent dispatch, guided bug/feature/code-change filing with provenance-marked artifacts, gating simplification behind a correctness check, and more.
 - **Typed artifacts** (added in 5.1.0) — surface-routing for observations Claude cannot act on. See below.
 
 ## Installation
 
 Install via the quirk-dev marketplace (`.claude-plugin/marketplace.json`).
+
+## Deep code review
+
+`/quirk:full-code-review --deep [minutes]` adds bounded area finders, cross-file
+contract checking, and fresh candidate verification to the standard review.
+The default budget is 60 minutes. Eligible runs ask before executing repros in
+throwaway copies; plausible findings stay visible but cannot be posted.
+See the [deep-mode runbook](skills/full-code-review/references/deep.md).
+
+`--since <ref>` reviews only the changes after `<ref>`, such as the fix commits made since
+the last review's head SHA. A delta review is report only: it loads no memory and posts nothing.
 
 ## Typed artifacts
 

@@ -1,0 +1,22 @@
+diff --git a/discount.py b/discount.py
+index 0a8d1b3..c061acc 100644
+--- a/discount.py
++++ b/discount.py
+@@ -1,2 +1,4 @@
+ def apply_discount(total, percent):
+-    return total
++    if percent < 0 or percent > 100:
++        raise ValueError("percent must be between 0 and 100")
++    return total - total * percent // 100
+diff --git a/test_discount.py b/test_discount.py
+index 1a6a234..ddfe9de 100644
+--- a/test_discount.py
++++ b/test_discount.py
+@@ -3,3 +3,7 @@ from discount import apply_discount
+ 
+ def test_no_discount():
+     assert apply_discount(100, 0) == 100
++
++
++def test_discount_runs():
++    apply_discount(100, 15)

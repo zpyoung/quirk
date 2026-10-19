@@ -31,3 +31,10 @@ Reviewed every 2 weeks. Use `/quirk:artifacts:test-skip` to append.
 - **Edge cases to cover**: brainstorming step 9 reads logic-spec.md and writes logic.md with all six required sections; brainstorming halts at the user review gate; subagent-driven-development Step 2 resolves quirk:writing-specs and reads tech-spec.md when the complexity gate fires; executing-plans Step 0 does the same on the no-subagent path
 - **Priority**: P2
 
+## TEST-3: Two complete Sonnet deep-mode recall acceptance runs
+- **File under test**: skills/full-code-review/references/deep.md
+- **Test type**: e2e
+- **Reason skipped**: Sonnet runtime dispatch failed Anthropic OAuth refresh with invalid_grant. Historical eval-run1/eval-run2 were invalidated because they reused old lenses, supplied literal timings, seeded prompts, and claimed unvisited areas complete. No qualifying recall run has been established.
+- **Edge cases to cover**: After reauthenticating Anthropic, run every applicable lens and every area twice at 3605fd8777b60646bcad11aba08f83c2c858e6b9 with unseeded prompts, measured whole-run budgets, fresh per-claim checkers, and independent spot checks; score against the corrected answer key.
+- **Priority**: P1
+

@@ -5,6 +5,11 @@ calendar-based (**CalVer**, `YYYY.M.D` unpadded); the `releasing-quirk` skill
 stamps and prepends each entry (newest on top). Since the version no longer encodes
 compatibility, breaking changes are called out in a `### ⚠️ BREAKING` subsection.
 
+## 2026.10.19
+
+### Changes
+Add `quirk:full-code-review`, a multi-lens pre-merge review for GitHub, GitLab, and local changes with author and reviewer seats, policy packs, human-gated posting, an opt-in `--deep [minutes]` defect hunt with per-hunk coverage planning, fresh verification and evidence-aware scoring, and report-only `--since <ref>` delta reviews.
+
 ## 2026.10.18
 
 ### Changes
