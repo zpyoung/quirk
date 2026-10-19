@@ -5,6 +5,11 @@ calendar-based (**CalVer**, `YYYY.M.D` unpadded); the `releasing-quirk` skill
 stamps and prepends each entry (newest on top). Since the version no longer encodes
 compatibility, breaking changes are called out in a `### ⚠️ BREAKING` subsection.
 
+## 2026.10.19.2
+
+### Changes
+- feat(using-apps-like-a-user): dogfood web, Electron, and native macOS apps through a no-false-pass guard (#53)
+
 ## 2026.10.19.1
 
 ### Changes
