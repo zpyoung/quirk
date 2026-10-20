@@ -10,7 +10,8 @@
 #
 # Exit codes:
 #   0 rebased (and pushed / retargeted when asked)
-#   1 usage or precondition failure, or the post-rebase verification failed
+#   1 usage or precondition failure (including a rebase, merge, cherry-pick, revert, or bisect
+#     already in progress), or the post-rebase verification failed
 #   2 rebase conflict: rebase aborted, branch restored to its pre-run head
 #   3 <b> is checked out in another worktree: nothing changed
 #   4 push rejected (lease or includes check): local rebase and backup kept
@@ -180,10 +181,29 @@ other_worktree_of() {
     return 0
 }
 
+# Print the name of a git operation already in progress in this worktree; nothing when idle.
+operation_in_progress() {
+    local entry marker
+    for entry in rebase-merge:rebase rebase-apply:rebase MERGE_HEAD:merge \
+        CHERRY_PICK_HEAD:cherry-pick REVERT_HEAD:revert BISECT_LOG:bisect; do
+        if [[ -e "$(git rev-parse --git-path "${entry%%:*}")" ]]; then
+            marker="${entry#*:}"
+            printf '%s' "$marker"
+            return 0
+        fi
+    done
+    return 0
+}
+
 check_preconditions() {
-    local other cli
+    local other cli busy
 
     git rev-parse --git-dir >/dev/null 2>&1 || fail 1 "not inside a git repository"
+
+    busy=$(operation_in_progress)
+    if [[ -n "$busy" ]]; then
+        fail 1 "a $busy is in progress; finish or abort it first"
+    fi
 
     if ! git diff --quiet || ! git diff --cached --quiet; then
         fail 1 "uncommitted changes detected; commit or stash first"
@@ -245,9 +265,12 @@ restore_start_point() {
 
 replay() {
     local expected
-    if ! GIT_EDITOR=true git rebase --onto "$ONTO_REF_RESOLVED" "$OLD_TIP_SHA" "$BRANCH" >&2 2>&1; then
+    if ! GIT_EDITOR=true git rebase --no-update-refs --onto "$ONTO_REF_RESOLVED" "$OLD_TIP_SHA" "$BRANCH" >&2 2>&1; then
         CONFLICTED_FILES=$(git diff --name-only --diff-filter=U || true)
-        git rebase --abort >&2 2>&1 || true
+        # preconditions guarantee no rebase was running, so one in progress now is ours
+        if [[ "$(operation_in_progress)" == "rebase" ]]; then
+            git rebase --abort >&2 2>&1 || true
+        fi
         restore_start_point
         if [[ -n "$CONFLICTED_FILES" ]]; then
             fail 2 "rebase conflict replaying '$BRANCH' onto $ONTO_REF_RESOLVED; branch restored (backup: $BACKUP_BRANCH)"
