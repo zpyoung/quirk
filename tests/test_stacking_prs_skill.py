@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -192,6 +193,45 @@ def test_manage_backup_filter_deletes_long_and_abbreviated_update_refs() -> None
     assert out == (
         "pick abc123 first\nupdate-ref refs/heads/auth-api\nu refs/heads/auth-ui\n"
     )
+
+
+def test_manage_ts_recovery_ignores_backups_of_prefix_sharing_branches(tmp_path: Path) -> None:
+    text = MANAGE_PATH.read_text()
+    assert text.count("re-derive") == 1
+    para, _, rest = text[text.index("re-derive") :].partition("\n\n")
+    block = re.match(r"```bash\n(.*?)```", rest, re.S) if para.endswith(":") else None
+    if block:
+        snippet = block.group(1)
+    else:
+        snippet = "\n".join(c for c in re.findall(r"`([^`]+)`", para) if "TS=" in c)
+    assert snippet.count("for-each-ref") == 1, snippet
+
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
+    }
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=tmp_path, env=env, check=True, capture_output=True)
+
+    def recover() -> str:
+        return subprocess.run(
+            ["bash", "-c", "LAYERS=(topic)\n" + snippet + '\nprintf %s "$TS"'],
+            cwd=tmp_path, env=env, text=True, capture_output=True, check=True,
+        ).stdout
+
+    git("init", "-b", "main")
+    git("commit", "--allow-empty", "-m", "init")
+    for name in (
+        "topic_extra_20261021_120000",
+        "topic_2_20261022_000000",
+    ):
+        git("branch", f"backup/{name}")
+    assert recover() == ""
+    for name in ("topic", "backup/topic_20261020_141500", "backup/topic_20261019_090000"):
+        git("branch", name)
+    assert recover() == "20261020_141500"
 
 
 def test_split_step_4_rebase_ignores_rebase_update_refs() -> None:
