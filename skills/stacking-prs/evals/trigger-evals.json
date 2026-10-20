@@ -1,0 +1,125 @@
+{
+  "skill_name": "stacking-prs",
+  "queries": [
+    {
+      "query": "This PR is too big, split it into smaller ones",
+      "should_trigger": true
+    },
+    {
+      "query": "My feature branch is 1,800 lines of diff. Can you break it into a stack of PRs?",
+      "should_trigger": true
+    },
+    {
+      "query": "The reviewer asked me to make this PR smaller",
+      "should_trigger": true
+    },
+    {
+      "query": "Split my branch into stacked PRs, one per layer",
+      "should_trigger": true
+    },
+    {
+      "query": "Turn this branch into a chain of reviewable merge requests",
+      "should_trigger": true
+    },
+    {
+      "query": "The reviewer left comments on PR 2 of my stack, can you address them?",
+      "should_trigger": true
+    },
+    {
+      "query": "Main moved, update my stacked branches",
+      "should_trigger": true
+    },
+    {
+      "query": "One of my stacked PRs needs a fix in a lower layer and the PRs above it need to follow",
+      "should_trigger": true
+    },
+    {
+      "query": "My stack's PRs are all behind main now, restack them",
+      "should_trigger": true
+    },
+    {
+      "query": "PR 1 of my stack merged, what now?",
+      "should_trigger": true
+    },
+    {
+      "query": "Help me land this stack",
+      "should_trigger": true
+    },
+    {
+      "query": "The bottom PR in my stack was squash-merged and the next PR still targets the old branch",
+      "should_trigger": true
+    },
+    {
+      "query": "Is the bottom PR of my stack ready to merge?",
+      "should_trigger": true
+    },
+    {
+      "query": "Check my stacked MRs before I merge the first one",
+      "should_trigger": true
+    },
+    {
+      "query": "/stacking-prs",
+      "should_trigger": true
+    },
+    {
+      "query": "Review this PR for bugs",
+      "should_trigger": false
+    },
+    {
+      "query": "Write a description for my pull request",
+      "should_trigger": false
+    },
+    {
+      "query": "Resolve the merge conflict in src/app.py",
+      "should_trigger": false
+    },
+    {
+      "query": "git stash my changes so I can switch branches",
+      "should_trigger": false
+    },
+    {
+      "query": "Split this 2,000-line file into smaller modules",
+      "should_trigger": false
+    },
+    {
+      "query": "Cherry-pick the hotfix commit onto the release branch",
+      "should_trigger": false
+    },
+    {
+      "query": "Squash my last three commits into one",
+      "should_trigger": false
+    },
+    {
+      "query": "Create a new branch and open a PR for this one-line fix",
+      "should_trigger": false
+    },
+    {
+      "query": "Why is CI failing on my pull request?",
+      "should_trigger": false
+    },
+    {
+      "query": "Rebase my feature branch onto main",
+      "should_trigger": false
+    },
+    {
+      "query": "Merge main into my branch and push",
+      "should_trigger": false
+    },
+    {
+      "query": "Revert the last commit on main",
+      "should_trigger": false
+    },
+    {
+      "query": "Split this long function into smaller helpers",
+      "should_trigger": false
+    },
+    {
+      "query": "Summarize the changes in PR 123 for the release notes",
+      "should_trigger": false
+    },
+    {
+      "query": "Delete my merged local branches",
+      "should_trigger": false
+    }
+  ]
+}

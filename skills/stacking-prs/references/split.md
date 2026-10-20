@@ -1,17 +1,12 @@
----
-name: split-branch
-description: Use when a feature branch exceeds ~400 lines of diff, when a reviewer asks to "make this PR smaller", when planning a large feature so it ships in reviewable chunks, or when the user invokes /split-branch
----
+# Split: cut a branch into stacked PRs/MRs
 
-# Splitting Branches Into Stacked PRs/MRs
+This is the Split phase of the stacking-prs skill. The router (`../SKILL.md`) has already run `stack.sh`, so its JSON (`forge`, `mode`, `native_available`, `gh_stack_installed`, `warnings`) is the input to the preflight, native registration, and header steps below.
 
 ## Overview
 
 Split a large branch into a stack of smaller PRs/MRs where each (except the bottom) targets the previous one — true stacked PRs, not "expanding-snapshot" PRs that all target `main`.
 
-**Core principle:** 200-400 line PRs correlate with the highest defect-detection rates and best architectural feedback; beyond ~400 lines feedback degrades to surface-level. Use as a heuristic, not a law — split aggressively, target ~300 lines, adjust per language.
-
-**Announce:** "I'm using the split-branch skill to plan/execute the split."
+**Core principle:** smaller diffs are easier to review well, but the evidence that size speeds up merging is weak. Google's review guide calls about 100 lines a reasonable change. SmartBear/Cisco's review study recommends keeping a review under 400 lines. Kudrjavets et al. 2022 found PR size doesn't relate to time-to-merge across 845K PRs, so the targets below are a review-load heuristic, not a promise of speed. Split for reviewability, target ~300 weighted lines, and adjust per language.
 
 ## Targets and Weighting
 
@@ -48,7 +43,7 @@ Re-indents are whitespace-only except in indentation-significant files (Python, 
 
 These weights make the same branch read smaller than a raw line count, so the targets are looser on churny diffs (comments, moves, re-indents) and tighter on risky ones. Don't split tests away from their source to hit a number.
 
-**Configuration.** `analyze.sh` reads `~/.quirk/split-branch.json` (user), then `<repo>/.quirk/split-branch.json` (project). Each setting resolves on its own, highest first: env var, project config, user config, built-in default. A file only needs the keys it changes:
+**Configuration.** `analyze.sh` reads `~/.quirk/stacking-prs.json` (user), then `<repo>/.quirk/stacking-prs.json` (project). Each setting resolves on its own, highest first: env var, project config, user config, built-in default. A file only needs the keys it changes:
 
 ```json
 {
@@ -60,7 +55,7 @@ These weights make the same branch read smaller than a raw line count, so the ta
 
 Top-level keys are `target_lines_per_split`, `hard_cap`, `skip_threshold`, `weights`, and `patterns`. Config patterns (a regex, or an array of regexes) **extend** the built-in pattern, while a `*_PATTERNS` env var replaces it. Unknown keys, bad values, and goals out of order (`skip_threshold ≤ target_lines_per_split ≤ hard_cap`) stop `analyze.sh` with an error naming the file.
 
-Sources (correlational): SmartBear/Cisco (2,500 reviews), LinearB 2025 (6.1M PRs, elite teams <219 LOC/PR). Graphite reports 50-line PRs merge ~40% faster than 250-line ones.
+Sources: Google's small-CLs guide (about 100 lines is reasonable), SmartBear/Cisco (under 400 lines per review), Kudrjavets et al. 2022 (845K PRs, size doesn't relate to time-to-merge), and LinearB 2026 (vendor data: elite teams are under 100 lines at p75). The 0.5× test weight is a configurable choice with no study behind it.
 
 **Skip the split** if `weighted_review_lines` is below the confirmed skip threshold — confirm with the user before proceeding anyway.
 
@@ -140,7 +135,7 @@ Set `ORIG_BASE` to the existing PR's base (or `DEFAULT_BASE`). **Stop** if: not 
 ### Step 2: Analyze and confirm split goals
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/skills/split-branch/scripts/analyze.sh" "$ORIG_BASE"
+"${CLAUDE_PLUGIN_ROOT}/skills/stacking-prs/scripts/analyze.sh" "$ORIG_BASE"
 ```
 
 Use the JSON's `weighted_review_lines`, `directory_groups[].weighted_lines`, `files[].weighted_lines`, and `excluded_files[]` to design splits. The `weights` object echoes the weights in effect, and `config_files` lists the config files that were loaded.
@@ -155,7 +150,7 @@ Split goals for this run:
 - Skip the split below: 200 (default)
 ```
 
-Options: (A) use these, (B) change them, then ask for the new numbers. The answers apply to this run only. Never write them to a config file; if the user wants new defaults, point them to `.quirk/split-branch.json`. Ask only about the goals, not the weights.
+Options: (A) use these, (B) change them, then ask for the new numbers. The answers apply to this run only. Never write them to a config file; if the user wants new defaults, point them to `.quirk/stacking-prs.json`. Ask only about the goals, not the weights.
 
 **Detect non-linear history:**
 ```bash
@@ -164,6 +159,16 @@ git log --merges --oneline "$ORIG_BASE..HEAD"
 If merge commits exist, `git rebase --onto` linearizes by default. Surface to user; default to **cherry-pick extraction** instead of `--rebase-merges`.
 
 ### Step 3: Present the plan (REQUIRED — never skip)
+
+**Off-ramp check.** As soon as the plan's size is known, compare it to the thresholds, using the target the user confirmed in Step 2:
+
+| Plan | What to show |
+|---|---|
+| More than 4 layers | Warn that practitioners report 3-4 layers as the practical limit, then offer the alternatives below |
+| `weighted_review_lines` under 2× the target (for example 480 against a target of 300, since 480 < 600) | Say a single PR is likely easier, then offer the alternatives below |
+| 2-4 layers and at least 2× the target | The stack plan only. No off-ramps |
+
+The alternatives are (E) one PR with atomic commits, reviewed commit by commit, and (F) sequential PRs to trunk behind a feature flag (Strategy 4). The stack plan stays the default and the user picks. If the user picks an alternative, end the split flow here. Neither path is built by this skill.
 
 Use AskUserQuestion. Format:
 
@@ -180,7 +185,7 @@ Existing PR #456 → main; will retarget to PR #5.
 Branch protections: none / [list]
 ```
 
-Options: (A) execute, (B) modify groupings, (C) change names, (D) cancel. **Get explicit approval before any git operation.** Execute one split at a time.
+Options: (A) execute, (B) modify groupings, (C) change names, (D) cancel, plus (E) and (F) when the off-ramp check applies. **Get explicit approval before any git operation.** Execute one split at a time.
 
 ### Step 4: Execute one split
 
@@ -191,7 +196,7 @@ ORIG_BASE_SHA=$(git merge-base "$ORIG_BASE" HEAD)
 CURRENT="$(git branch --show-current)"
 SPLIT_BASE="<new_branch_name>"
 
-"${CLAUDE_PLUGIN_ROOT}/skills/split-branch/scripts/extract.sh" \
+"${CLAUDE_PLUGIN_ROOT}/skills/stacking-prs/scripts/extract.sh" \
   "$SPLIT_BASE" "$ORIG_BASE" <file1> <file2> ...
 
 git rebase --onto "$SPLIT_BASE" "$ORIG_BASE_SHA" "$CURRENT"
@@ -222,9 +227,30 @@ HTTP endpoints in #4, UI in #5 (layer-boundary self-containment exception).
 
 Draft these with branch names in place of `#N`. PR numbers don't exist until Step 6, and Step 7 fills them in.
 
+**Native header.** That is the classic four-section header. When `native_available` is true (the stack gets registered in Step 6f), GitHub draws the stack map and the review order itself, so the description carries two sections only:
+
+```markdown
+## Feature Goal
+Add user payment method management.
+
+## Intentionally Missing
+HTTP endpoints in #4, UI in #5 (layer-boundary self-containment exception).
+```
+
+Any other stack gets the classic four-section header. When `forge` is `github` and `gh_stack_installed` is false, end your closing message to the user with one line, and keep it out of the PR descriptions: "Tip: `gh extension install github/gh-stack` lets GitHub manage this stack natively."
+
 ### Step 6: Push, create, retarget — in this order
 
 Order matters: a new branch must exist on the remote before any PR can target it.
+
+**CI preflight (GitHub and GHES, when `native_available` is false).** No PRs exist yet, so ask `stack.sh` which workflows would skip the planned bases. Pass every split branch, since each one becomes a non-trunk base:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/skills/stacking-prs/scripts/stack.sh" --check-ci "${SPLIT_BRANCHES[@]}"
+# {"schema":1,"skipped":[{"base":"auth-schema","files":[".github/workflows/test.yml"]}]}
+```
+
+An empty `skipped` means go ahead. Otherwise stop before any push, name each workflow file and the bases it skips (for example: `test.yml` runs on `pull_request` with `branches: [main]`, so it won't run on layers 2 and up), and give two fixes. Either register the stack natively so CI runs against the stack base, or widen the `branches:` filter. Don't edit workflow files. The user decides whether to continue. The scan is a line-based heuristic, so a trigger written in a shape it can't read gives no warning.
 
 ```bash
 # a. Push every new split branch
@@ -246,9 +272,17 @@ gh pr edit <existing_pr> --base "$NEW_TOP"
 #   On failure: print the web URL and ask the user to retarget manually.
 ```
 
+**f. Register natively (only when `native_available` is true).** Once every PR exists and is retargeted, list the stack's branches bottom to top:
+
+```bash
+gh stack link "$SPLIT_1" "$SPLIT_2" ... "$CURRENT"   # <bottom> ... <top>
+```
+
+`gh stack link` accepts branch names, PR numbers, or PR URLs in stack order. `native_available` is true only on github.com, with `gh stack` installed and no cross-fork layer. If it's false, the stack stays classic, and Step 5 already chose the four-section header.
+
 ### Step 7: Refresh every stack header, then mark the bottom ready
 
-Now that every PR number exists, rewrite the stack header on **every** PR in the stack, bottom to top. That includes the existing PR, whose description predates the split and has no header yet. Replace only the header sections (Stack Position through Intentionally Missing) and leave the rest of each description as its author wrote it. For a PR with no header, prepend one.
+Now that every PR number exists, rewrite the stack header on **every** PR in the stack, bottom to top. That includes the existing PR, whose description predates the split and has no header yet. Replace only the header sections (Stack Position through Intentionally Missing, or Feature Goal and Intentionally Missing for a native stack) and leave the rest of each description as its author wrote it. For a PR with no header, prepend one.
 
 ```bash
 gh pr view "$PR" --json body --jq .body > "$TMPDIR/pr-$PR.md"
@@ -272,6 +306,15 @@ git branch -D $(git branch --list 'backup/*' --format='%(refname:short)')
 Don't auto-delete — user may need to recover from a bad rebase.
 
 **Commit history:** rebasing rewrites SHAs. `Co-authored-by:` trailers survive but references break. Re-sign signed commits (`git rebase --signoff`). Review Conventional Commits history before pushing if you use `release-please`/`semantic-release`.
+
+### Per-forge notes for this phase
+
+| Forge | What changes |
+|---|---|
+| GitHub, native-capable (`native_available`) | Run Step 6f after the PRs exist. Use the two-section header. Skip the CI preflight, because native stacks run CI against the stack base |
+| GitHub without `gh stack` | Classic stack, four-section header, the CI preflight, and the one-line tip |
+| GHES, or a cross-fork stack (`cross_fork` warning) | Classic stack, four-section header, the CI preflight. No tip, because native isn't available here |
+| GitLab | Classic stack. Create each MR with `glab mr create --draft --source-branch <head> --target-branch <base>`, and use `glab mr update` as shown in Steps 6 and 7. Only 4 open MRs retarget automatically when a target merges, so if the plan is deeper than 4, say that Land will retarget the rest by hand |
 
 ## Quick Reference
 
@@ -315,12 +358,8 @@ Don't auto-delete — user may need to recover from a bad rebase.
 
 ## Bundled Scripts
 
-`${CLAUDE_PLUGIN_ROOT}/skills/split-branch/scripts/`:
+`${CLAUDE_PLUGIN_ROOT}/skills/stacking-prs/scripts/`:
 - `analyze.sh <target>` — JSON budget breakdown: raw lines per file kind and line kind, weighted totals per file and directory. Bash 3.2+, BSD awk.
 - `weigh.awk` — the per-line weighing `analyze.sh` runs over the diff.
+- `stack.sh --check-ci <base>...` — read-only CI-filter scan for the planned bases, used by the Step 6 preflight. The router runs `stack.sh` itself for detection.
 - `extract.sh <new> <target> <files>...` — creates timestamped backup, then a new branch from target, populates from feature branch. Handles **modifies, adds, AND deletes**. For renames pass both old and new paths.
-
-## Integration
-
-- `using-git-worktrees` — stage splits in isolated worktrees
-- `finishing-a-development-branch` — once the bottom merges and the stack collapses
