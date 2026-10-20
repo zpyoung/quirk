@@ -72,7 +72,9 @@ Invariants:
 - **It never writes.** No fetch, checkout, branch, push, or forge mutation. Only `gh`/`glab` read
   calls, `gh api` GETs among them.
 - **A forge failure degrades, never aborts.** A missing or unauthenticated `gh`/`glab`, or a failing
-  call, falls back to local mode and adds a `forge_unavailable` warning. The script still exits 0.
+  chain-listing call, falls back to local mode and adds a `forge_unavailable` warning. A failing
+  per-layer enrichment call (GitLab pipeline or approvals) keeps the chain, sets that layer's `ci` or
+  `review` to `unknown`, and adds `forge_unavailable`. The script still exits 0.
 - Output is deterministic for the same refs and forge responses: layers in bottom-to-top order, and
   warnings in a fixed code order.
 
@@ -94,7 +96,15 @@ Chain building (forge modes):
   against `glab api --help` and document what's used.
 - Walk down from `--branch`: follow each open PR's base to the open PR whose head equals it, until
   the base is trunk. Walk up the same way: an open PR whose base equals the current top's head. If two
-  open PRs share a base on the walk up, stop at the fork and add `branched_stack`.
+  open PRs share a base anywhere along the chain, in either direction, add `branched_stack`; on the
+  walk up, stop at the fork.
+- When `--branch` has no open PR, two cases still read the forge chain before local fallback applies:
+  - **Merged anchor.** `--branch` is the head of a merged PR and open PRs target it. The chain is
+    the open PRs walked up from that base. `merged_parents[]` names `--branch`, and no layer is
+    `is_current`. This is the Land phase's normal post-merge position.
+  - **Unpublished bottom.** `--branch` has no PR, but open PRs target it. Layer 1 is `--branch`
+    itself, with `state: "local"`, `number: null`, and `base` from local ancestry (the local-mode
+    parent rule), followed by the open PRs walked up from it.
 - `in_stack` is true when the chain has 2 or more layers. A lone PR targeting trunk, or no PR at all
   with no local chain, is `in_stack: false` (SC-1).
 
@@ -149,8 +159,9 @@ CI-filter scan (`ci_filter`, and the `--check-ci` mode): for each `.github/workf
 find a `pull_request` or `pull_request_target` trigger with a `branches:` or `branches-ignore:` list,
 in either flow (`[a, b]`) or block (`- a`) style. A base is skipped when a `branches` list matches
 none of its entries, or when a `branches-ignore` entry matches it. Patterns match as bash globs,
-with `**` treated as `*`. This is a line-oriented awk heuristic, not a YAML parser. A trigger written
-in a shape it can't read produces no warning. Never guess a positive. `--check-ci <base>...` runs only
+with `**` treated as `*`. This is a line-oriented awk heuristic, not a YAML parser. It reads only
+keys nested under a top-level `on:` key. A trigger written in a shape it can't read, including quoted
+entries it can't split safely, produces no warning. Never guess a positive. `--check-ci <base>...` runs only
 this scan for the given planned bases. The Split phase calls it before push, because no PRs exist yet
 then.
 
@@ -227,9 +238,13 @@ Back-links: [Conceptual model](logic.md#conceptual-model), [Decisions Locked](lo
   - the one-line tip for when it's false on github.com (SC-9)
   - the native two-section header vs the classic four-section header (SC-8, SC-9)
   - its own per-forge block
+  - for "Split this layer further" on a non-top layer: after the split, restack every layer above it
+    bottom-up with `restack.sh --onto <its parent> --old-tip <parent's pre-split head>`, then refresh
+    every header
 - `references/manage.md`:
   - the fixup → backups → `git rebase -i --autosquash --update-refs` → per-branch lease push → verify
-    sequence (SC-11), with `GIT_SEQUENCE_EDITOR=:` so the autosquash rebase runs non-interactively.
+    sequence (SC-11). The sequence editor runs non-interactively and deletes every
+    `update-ref refs/heads/backup/` line from the todo list, so `--update-refs` never moves a backup.
     Verify means each layer's own diff changed only where the fix landed, shown to the user with
     `git range-diff <backup-parent>..<backup> <parent>..<branch>` per moved branch
   - the worktree stop (SC-12). The "rebase that layer separately afterward" option runs
@@ -329,7 +344,8 @@ Back-link: [Scope and non-goals](logic.md#scope-and-non-goals).
   and `restack.sh` copies its backup format.
 - **The split-flow guidance in `references/split.md`: weights tables, Strategies 0-4, Steps 1-8,
   Quick Reference, and Common Mistakes.** Move it verbatim except for the evidence edits, the path
-  edits, and the additions listed under Skill documents. It's approved, tested behavior, and the logic
+  edits, the additions listed under Skill documents, and adding `--force-if-includes` to every
+  `--force-with-lease` push (the router's force-push rule overrides the fence there). It's approved, tested behavior, and the logic
   spec changes only what it lists.
 - **`README.md:9` skill count.** A rename keeps it at 27. Bumping it breaks
   `tests/test_adhd_skill.py:157-164` and `tests/test_simplifying_safely_skill.py:86-95`.
