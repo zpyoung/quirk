@@ -123,22 +123,38 @@ branch_exists() { [[ -n "$(tip_ref "$1")" ]]; }
 
 # ---- CI filter scan --------------------------------------------------------
 
-# Line-oriented heuristic, not a YAML parser. For each pull_request / pull_request_target trigger it
-# prints "G" then one "B<TAB>pattern" (branches) or "I<TAB>pattern" (branches-ignore) per entry, or
-# "U" when the trigger is written in a shape it cannot read, which means no verdict.
+# Line-oriented heuristic, not a YAML parser. For each pull_request / pull_request_target trigger that
+# is a direct child of a top-level "on:" block it prints "G" then one "B<TAB>pattern" (branches) or
+# "I<TAB>pattern" (branches-ignore) per entry, or "U" when the trigger is written in a shape it cannot read, which means no verdict.
 CI_AWK=$(
     cat <<'AWK'
 function ind(s) { match(s, /^ */); return RLENGTH }
 function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
-function unq(s,   q) {
-    q = substr(s, 1, 1)
-    if ((q == "\"" || q == "\047") && length(s) >= 2 && substr(s, length(s), 1) == q) s = substr(s, 2, length(s) - 2)
-    return s
-}
-function add(kind, p) {
-    p = unq(trim(p))
+function add(kind, p,   q, body) {
+    p = trim(p)
+    q = substr(p, 1, 1)
+    if (q == "\"" || q == "\047") {
+        body = substr(p, 2, length(p) - 2)
+        if (length(p) < 2 || substr(p, length(p), 1) != q || index(body, q) > 0) { bad = 1; return }
+        p = body
+    } else if (index(p, "\"") > 0 || index(p, "\047") > 0) { bad = 1; return }
     if (p == "" || p ~ /^!/ || p ~ /[][{}]/ || p ~ /:[ \t]/) { bad = 1; return }
     n++; k[n] = kind; v[n] = p; cnt++
+}
+function flow(inner,   i, c, q, cur) {
+    q = ""; cur = ""
+    for (i = 1; i <= length(inner); i++) {
+        c = substr(inner, i, 1)
+        if (q != "") {
+            if (c == "\\" && q == "\"") { bad = 1; return }
+            if (c == q) q = ""
+            cur = cur c
+        } else if (c == "\"" || c == "\047") { q = c; cur = cur c }
+        else if (c == ",") { add(kk, cur); cur = "" }
+        else cur = cur c
+    }
+    if (q != "") { bad = 1; return }
+    add(kk, cur)
 }
 function endlist() { if (inlist && cnt == 0) bad = 1; inlist = 0 }
 function flush(   i) {
@@ -155,6 +171,16 @@ function flush(   i) {
     if (t == "" || t ~ /^#/) next
     body = trim(t); sub(/[ \t]#.*$/, "", body); body = trim(body)
     d = ind(line)
+    if (d == 0) {
+        flush()
+        inon = 0
+        if (body ~ /^("on"|\047on\047|on)[ \t]*:/) {
+            if (trim(substr(body, index(body, ":") + 1)) == "") { inon = 1; oind = 0 }
+        }
+        next
+    }
+    if (!inon) next
+    if (oind == 0) oind = d
     if (inlist) {
         if (body ~ /^-([ \t]|$)/ && d >= kind_ind) { add(kk, substr(body, 2)); next }
         endlist()
@@ -172,14 +198,13 @@ function flush(   i) {
                 else {
                     inner = substr(rest, 2, length(rest) - 2)
                     if (trim(inner) == "") bad = 1
-                    m = split(inner, parts, ",")
-                    for (j = 1; j <= m; j++) add(kk, parts[j])
+                    flow(inner)
                 }
             } else bad = 1
         }
         next
     }
-    if (body ~ /^(pull_request|pull_request_target)[ \t]*:/) {
+    if (d == oind && body ~ /^(pull_request|pull_request_target)[ \t]*:/) {
         ingrp = 1; tind = d; cind = 0; n = 0; bad = 0
         if (trim(substr(body, index(body, ":") + 1)) != "") bad = 1
     }
@@ -347,6 +372,9 @@ fetch_gitlab() {
 # ---- chain building --------------------------------------------------------
 
 # Walk down from the branch's PR to the bottom, then up while exactly one open PR targets the top.
+# Without a PR for the branch, open PRs that target it still anchor a chain: when the branch is the head
+# of a merged PR the chain starts at the one open PR above it, otherwise the branch itself is layer 1 as
+# a local layer. fork_heads lists every set of open PRs sharing a base anywhere along the chain.
 CHAIN_JQ='
 def o: $open | sort_by(.number);
 def by_head($h): [o[] | select(.head == $h)] | first;
@@ -359,17 +387,40 @@ def down:
 def up:
     until(. as $c | (kids($c) | length) != 1;
           . as $c | $c + [kids($c)[0]]);
+def forks($c):
+    ([$c[] | by_base(.head)]
+     + (if ($c[0].local // false) or $c[0].base == $trunk then [] else [by_base($c[0].base)] end))
+    | map(select(length > 1) | map(.head))
+    | add // []
+    | reduce .[] as $h ([]; if index($h) == null then . + [$h] else . end);
+def found($c): {found: true, chain: $c, fork_heads: forks($c)};
+def local_layer:
+    {number: null, url: null, head: $branch, base: $local_base, draft: false, sha: $local_sha,
+     author: null, cross: false, ci: "unknown", review: "unknown", local: true};
 (by_head($branch)) as $start
-| if $start == null then {found: false}
-  else ([$start] | down | up) as $chain
-       | {found: true, chain: $chain,
-          fork_heads: (if (kids($chain) | length) > 1 then (kids($chain) | map(.head)) else [] end)}
+| (by_base($branch)) as $targets
+| if $start != null then found([$start] | down | up)
+  elif $branch == $trunk or ($targets | length) == 0 then {found: false}
+  elif ($merged | any(.head == $branch)) then
+      if ($targets | length) == 1 then found([$targets[0]] | up) else {found: false} end
+  else found([local_layer] | up)
   end'
 
 PR_CHAIN_FOUND=0
 
+# build_pr_chain: fills $TMP/chain.json from the open PRs. A branch with no PR that open PRs target
+# needs its local parent, so the ancestry tables are only built for that case.
 build_pr_chain() {
-    jq -n --argjson open "$(cat "$TMP/open.json")" --arg branch "$BRANCH" --arg trunk "$TRUNK" \
+    local local_base="" local_sha=""
+    if [[ "$BRANCH" != "$TRUNK" ]] &&
+        jq -e --arg b "$BRANCH" 'any(.[]; .head == $b) | not' "$TMP/open.json" >/dev/null &&
+        jq -e --arg b "$BRANCH" 'any(.[]; .base == $b)' "$TMP/open.json" >/dev/null; then
+        prepare_eligible
+        local_base=$(parent_of "$BRANCH")
+        local_sha=$(git rev-parse "$(tip_ref "$BRANCH")")
+    fi
+    jq -n --argjson open "$(cat "$TMP/open.json")" --argjson merged "$(cat "$TMP/merged.json")" \
+        --arg branch "$BRANCH" --arg trunk "$TRUNK" --arg local_base "$local_base" --arg local_sha "$local_sha" \
         "$CHAIN_JQ" >"$TMP/chain.json"
     [[ "$(jq -r '.found' "$TMP/chain.json")" == "true" ]] && PR_CHAIN_FOUND=1
     return 0
@@ -405,10 +456,15 @@ parent_of() {
     echo "${best:-$TRUNK}"
 }
 
-build_local_chain() {
-    local cur parent guard=0 kids count rows="" head
+# prepare_eligible: writes the local branches parent_of may pick from (no backups, no trunk)
+prepare_eligible() {
     git for-each-ref --format='%(refname:short)' refs/heads |
         { grep -v '^backup/' || true; } | { grep -vxF -- "$TRUNK" || true; } >"$TMP/eligible"
+}
+
+build_local_chain() {
+    local cur parent guard=0 kids count rows="" head
+    prepare_eligible
     : >"$TMP/parents"
     {
         cat "$TMP/eligible"
@@ -494,7 +550,7 @@ gitlab_enrich_layers() {
         jq --argjson iid "$iid" --arg ci "$ci" --arg review "$review" \
             '.chain |= map(if .number == $iid then .ci = $ci | .review = $review else . end)' \
             "$TMP/chain.json" >"$TMP/chain.new" && mv "$TMP/chain.new" "$TMP/chain.json"
-    done < <(jq -r '.chain[].number' "$TMP/chain.json")
+    done < <(jq -r '.chain[] | select(.number != null) | .number' "$TMP/chain.json")
 }
 
 # native_stack_number: prints the stack number (or "null") when the bottom PR belongs to a native stack
@@ -655,7 +711,7 @@ jq -n \
     | ($layers | length) as $n
     | ($layers | map(select(.state != "local")) | length) as $open_n
     | ($chain | map(select(.cross) | .head)) as $cross
-    | (if $n > 0 and $mode != "local" then
+    | (if $n > 0 and $mode != "local" and $layers[0].state != "local" then
          ($merged | map(select(.head == $layers[0].base)) | sort_by(.number) | last)
        else null end) as $mp
     | ($notes | split("\n") | map(select(length > 0)) | unique | join("; ")) as $unavailable
@@ -678,7 +734,7 @@ jq -n \
             (if ($unavailable | length) > 0
              then {code: "forge_unavailable", message: ("forge data unavailable: " + $unavailable)}
              else empty end),
-            (if $n > 0 and $mode != "local" and ($mp != null or ($base_exists | not))
+            (if $n > 0 and $mode != "local" and $layers[0].state != "local" and ($mp != null or ($base_exists | not))
              then {code: "broken_chain",
                    message: ("the base of " + $layers[0].branch + " (" + $layers[0].base
                              + ") is "
