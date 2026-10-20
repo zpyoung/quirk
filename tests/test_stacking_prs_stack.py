@@ -693,7 +693,7 @@ def test_merged_anchor_reads_the_forge_chain_above_the_merged_head(sb: Sandbox) 
     }]
 
 
-def test_merged_anchor_with_two_open_children_falls_back_to_local(sb: Sandbox) -> None:
+def test_merged_anchor_with_two_open_children_keeps_forge_mode_and_names_each_child(sb: Sandbox) -> None:
     sb.branch("auth-schema", "main")
     sb.branch("auth-api", "auth-schema")
     sb.branch("auth-docs", "auth-schema")
@@ -702,8 +702,15 @@ def test_merged_anchor_with_two_open_children_falls_back_to_local(sb: Sandbox) -
         merged=[gh_merged(41, "auth-schema")],
     )
     out = sb.detect("--branch", "auth-schema", fixture=fixture)
-    assert out["mode"] == "local"
-    assert out["merged_parents"] == []
+    assert out["mode"] == "classic"
+    assert out["layers"] == []
+    assert out["in_stack"] is False
+    assert [(m["branch"], m["number"], m["child"]) for m in out["merged_parents"]] == [
+        ("auth-schema", 41, "auth-api"),
+        ("auth-schema", 41, "auth-docs"),
+    ]
+    assert warning(out, "branched_stack")["branches"] == ["auth-api", "auth-docs"]
+    assert "broken_chain" not in codes(out)
 
 
 def test_unpublished_bottom_is_layer_one_above_the_open_prs(sb: Sandbox) -> None:
@@ -942,6 +949,25 @@ def test_sc10_quoted_flow_entry_with_a_comma_is_one_pattern(sb: Sandbox) -> None
 def test_sc10_a_quoted_entry_it_cannot_split_safely_gives_no_warning(sb: Sandbox, entries: str) -> None:
     _write_workflow(sb, f"on:\n  pull_request:\n    branches: [{entries}, main]\n")
     assert sb.detect("--check-ci", "auth-schema", forge=None)["skipped"] == []
+
+
+def test_sc10_block_entry_with_an_escape_is_unreadable_and_gives_no_warning(sb: Sandbox) -> None:
+    _write_workflow(sb, 'on:\n  pull_request:\n    branches:\n      - "auth\\u002dschema"\n')
+    assert sb.detect("--check-ci", "auth-schema", forge=None)["skipped"] == []
+
+
+@pytest.mark.parametrize("entry", ["'a''b'", "\"a\\\"b\"", "'a' b", "a'b"])
+def test_sc10_a_block_entry_it_cannot_decode_safely_gives_no_warning(sb: Sandbox, entry: str) -> None:
+    _write_workflow(sb, f"on:\n  pull_request:\n    branches:\n      - {entry}\n")
+    assert sb.detect("--check-ci", "auth-schema", forge=None)["skipped"] == []
+
+
+@pytest.mark.parametrize("entry", ['"main"', "'main'"])
+def test_sc10_a_simple_quoted_block_entry_is_unquoted_before_matching(sb: Sandbox, entry: str) -> None:
+    _write_workflow(sb, f"on:\n  pull_request:\n    branches:\n      - {entry}\n")
+    assert sb.detect("--check-ci", "auth-schema", "main", forge=None)["skipped"] == [
+        {"base": "auth-schema", "files": [WORKFLOW]}
+    ]
 
 
 HEREDOC = (

@@ -136,6 +136,7 @@ function add(kind, p,   q, body) {
     if (q == "\"" || q == "\047") {
         body = substr(p, 2, length(p) - 2)
         if (length(p) < 2 || substr(p, length(p), 1) != q || index(body, q) > 0) { bad = 1; return }
+        if (q == "\"" && index(body, "\\") > 0) { bad = 1; return }
         p = body
     } else if (index(p, "\"") > 0 || index(p, "\047") > 0) { bad = 1; return }
     if (p == "" || p ~ /^!/ || p ~ /[][{}]/ || p ~ /:[ \t]/) { bad = 1; return }
@@ -374,7 +375,9 @@ fetch_gitlab() {
 # Walk down from the branch's PR to the bottom, then up while exactly one open PR targets the top.
 # Without a PR for the branch, open PRs that target it still anchor a chain: when the branch is the head
 # of a merged PR the chain starts at the one open PR above it, otherwise the branch itself is layer 1 as
-# a local layer. fork_heads lists every set of open PRs sharing a base anywhere along the chain.
+# a local layer. With several open PRs above a merged head there is no single chain: the result has an empty
+# chain and anchor_children naming each of them. fork_heads lists every set of open PRs sharing a base
+# anywhere along the chain.
 CHAIN_JQ='
 def o: $open | sort_by(.number);
 def by_head($h): [o[] | select(.head == $h)] | first;
@@ -402,7 +405,8 @@ def local_layer:
 | if $start != null then found([$start] | down | up)
   elif $branch == $trunk or ($targets | length) == 0 then {found: false}
   elif ($merged | any(.head == $branch)) then
-      if ($targets | length) == 1 then found([$targets[0]] | up) else {found: false} end
+      if ($targets | length) == 1 then found([$targets[0]] | up)
+      else {found: true, chain: [], fork_heads: ($targets | map(.head)), anchor_children: ($targets | map(.head))} end
   else found([local_layer] | up)
   end'
 
@@ -663,7 +667,7 @@ if command -v gh >/dev/null 2>&1 && gh stack --help >/dev/null 2>&1; then
 fi
 
 BOTTOM_BASE_EXISTS=true
-if [[ $PR_CHAIN_FOUND -eq 1 ]]; then
+if [[ $PR_CHAIN_FOUND -eq 1 && "$(jq -r '.chain | length' "$TMP/chain.json")" -gt 0 ]]; then
     _bottom_base=$(jq -r '.chain[0].base' "$TMP/chain.json")
     if [[ "$_bottom_base" != "$TRUNK" ]] && ! branch_exists "$_bottom_base"; then
         BOTTOM_BASE_EXISTS=false
@@ -711,8 +715,11 @@ jq -n \
     | ($layers | length) as $n
     | ($layers | map(select(.state != "local")) | length) as $open_n
     | ($chain | map(select(.cross) | .head)) as $cross
+    | ($cf.anchor_children // []) as $anchor_kids
     | (if $n > 0 and $mode != "local" and $layers[0].state != "local" then
          ($merged | map(select(.head == $layers[0].base)) | sort_by(.number) | last)
+       elif ($anchor_kids | length) > 0 then
+         ($merged | map(select(.head == $current)) | sort_by(.number) | last)
        else null end) as $mp
     | ($notes | split("\n") | map(select(length > 0)) | unique | join("; ")) as $unavailable
     | {
@@ -728,6 +735,9 @@ jq -n \
         stack_number: $stack_number,
         layers: $layers,
         merged_parents: (if $mp == null then []
+                         elif ($anchor_kids | length) > 0 then
+                             [$anchor_kids[] | {branch: $mp.head, number: $mp.number, head_sha: $mp.sha,
+                                                merge_sha: $mp.merge_sha, child: .}]
                          else [{branch: $mp.head, number: $mp.number, head_sha: $mp.sha,
                                 merge_sha: $mp.merge_sha, child: $layers[0].branch}] end),
         warnings: ([
