@@ -257,7 +257,7 @@ An empty `skipped` means go ahead. Otherwise stop before any push, name each wor
 for b in "${SPLIT_BRANCHES[@]}"; do git push -u origin "$b"; done
 
 # b. Force-push the rebased current branch
-git push --force-with-lease origin "$CURRENT"   # never plain --force
+git push --force-with-lease --force-if-includes origin "$CURRENT"   # never plain --force
 
 # c. Notify reviewers BEFORE retargeting (inline comments may be invalidated)
 gh pr comment <existing_pr> --body "Splitting into a stack. Old diff: <commit-permalink>. New base: \`$NEW_TOP\`."
@@ -279,6 +279,22 @@ gh stack link "$SPLIT_1" "$SPLIT_2" ... "$CURRENT"   # <bottom> ... <top>
 ```
 
 `gh stack link` accepts branch names, PR numbers, or PR URLs in stack order. `native_available` is true only on github.com, with `gh stack` installed and no cross-fork layer. If it's false, the stack stays classic, and Step 5 already chose the four-section header.
+
+### Split this layer further: restack the layers above it
+
+Use this section when Step 4's `CURRENT` is a layer with other layers above it (the router's "Split this layer further" on a non-top layer). The split rewrites only `CURRENT`, so every layer above it still sits on `CURRENT`'s old history and its PR diff would stop being incremental. Skip this section when `CURRENT` is the top layer.
+
+`extract.sh` made `backup/<CURRENT>_<timestamp>`, which holds `CURRENT`'s pre-split head. After Step 6 pushes `CURRENT`, restack the layers above it bottom to top. Each layer's `--old-tip` is its parent's head before the parent moved:
+
+```bash
+RESTACK="${CLAUDE_PLUGIN_ROOT}/skills/stacking-prs/scripts/restack.sh"
+"$RESTACK" --branch <layer above CURRENT> --onto "$CURRENT" \
+  --old-tip "$(git rev-parse backup/<CURRENT>_<timestamp>)" --pr <its number>
+# read old_head from its JSON, then the next layer up:
+"$RESTACK" --branch <next layer> --onto <layer above CURRENT> --old-tip <old_head> --pr <its number>
+```
+
+Read the exit code after every layer, as [Land](land.md#post-merge-sync) does. Then refresh every header with Step 7, because the stack's shape changed.
 
 ### Step 7: Refresh every stack header, then mark the bottom ready
 
@@ -345,7 +361,7 @@ Don't auto-delete — user may need to recover from a bad rebase.
 - **Confusing `ORIG_BASE` and `SPLIT_BASE` in rebase** — pin `ORIG_BASE_SHA` *before* extract; verify with `git log --oneline "$SPLIT_BASE..$CURRENT"`.
 - **Retargeting without warning reviewers** — comment first, link the old commit SHA.
 - **Pushing in the wrong order** — branches must be on the remote *before* PRs can target them.
-- **`--force` instead of `--force-with-lease`** — silently overwrites collaborators.
+- **`--force` instead of `--force-with-lease --force-if-includes`** — silently overwrites collaborators.
 - **Splitting after the fact** — for new features, plan layers up front.
 
 ## Red Flags — STOP

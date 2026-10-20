@@ -43,10 +43,11 @@ TS=$(date +%Y%m%d_%H%M%S)
 for b in "${LAYERS[@]}"; do git branch "backup/${b}_${TS}" "$b"; done
 
 BASE=$(git merge-base "<remote>/<trunk>" "$TOP")
-GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash --update-refs "$BASE"
+GIT_SEQUENCE_EDITOR="sed -i.bak -e '/^update-ref refs\/heads\/backup\//d'" \
+  git rebase -i --autosquash --update-refs "$BASE"
 ```
 
-`GIT_SEQUENCE_EDITOR=:` accepts the autosquashed todo list as written, so the rebase runs without opening an editor. The backup names match `extract.sh`. Backups stay local and are never pushed.
+The sequence editor runs the rebase without opening an editor, and it deletes every `update-ref refs/heads/backup/` line from the todo list. Without that, `--update-refs` moves the backups along with their layers, which loses the recovery points and makes the step 4 and step 5 comparisons against the backups meaningless. The `sed -i.bak` form works on both GNU and BSD sed. The backup names match `extract.sh`. Backups stay local and are never pushed.
 
 On a conflict, run `git rebase --abort`, report the files, point to the backups, and don't auto-resolve.
 
@@ -76,7 +77,12 @@ When the bottom's `behind_parent` is above 0, or the user asks to update the sta
 1. Show the plan (which layers move, onto which ref) and get approval.
 2. `git fetch <remote>`.
 3. Back up every layer, as in step 3 above. If a layer has a `worktree`, stop as in step 1.
-4. Rebase once from the top: `git rebase --update-refs <remote>/<trunk> "$TOP"`.
+4. Rebase once from the top, with the same backup-skipping sequence editor as step 3, because a plain `--update-refs` rebase also moves the backups:
+
+   ```bash
+   GIT_SEQUENCE_EDITOR="sed -i.bak -e '/^update-ref refs\/heads\/backup\//d'" \
+     git rebase -i --update-refs <remote>/<trunk> "$TOP"
+   ```
 5. Push every layer with lease, bottom to top, as in step 4.
 6. Refresh every header, using [Split Step 7](split.md#step-7-refresh-every-stack-header-then-mark-the-bottom-ready), because the stack's commits changed.
 
@@ -90,6 +96,6 @@ Run the `git range-diff` verify from step 5 on each moved layer. On a conflict, 
 
 | Forge | What changes |
 |---|---|
-| GitHub, native | Make the fixup on the layer being amended, fold it in with a single-layer `GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <parent>`, then run `gh stack rebase --upstack` instead of the `--update-refs` rebase to carry the layers above it, and `gh stack push` instead of per-branch pushes. For trunk moves, run `gh stack rebase`. `gh stack push` still checks each branch with a lease, but isn't atomic, so rerun it if one branch is rejected. Make the backups first and run the range-diff verify afterward, as above. On a conflict, resolve it, `git add`, and run `gh stack rebase --continue`, or `--abort` to restore every branch |
+| GitHub, native | Make the fixup on the layer being amended, fold it in with a single-layer `git rebase -i --autosquash <parent>` using step 3's sequence editor, then run `gh stack rebase --upstack` instead of the `--update-refs` rebase to carry the layers above it, and `gh stack push` instead of per-branch pushes. For trunk moves, run `gh stack rebase`. `gh stack push` still checks each branch with a lease, but isn't atomic, so rerun it if one branch is rejected. Make the backups first and run the range-diff verify afterward, as above. On a conflict, resolve it, `git add`, and run `gh stack rebase --continue`, or `--abort` to restore every branch |
 | GitHub, classic, and GHES | Everything above as written. GHES is always classic |
 | GitLab | Classic, as written, with `glab mr update` for any retarget or description change. GitLab retargets only up to 4 open MRs when a target merges. If `gitlab_retarget_cap` is in the warnings, tell the user the rest will be checked and retargeted by hand at land time. If `gitlab_mixed_authors` is in the warnings, tell the user GitLab's stack view stops at the first MR with a different author |
