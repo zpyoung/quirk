@@ -272,6 +272,15 @@ gh pr edit <existing_pr> --base "$NEW_TOP"
 #   On failure: print the web URL and ask the user to retarget manually.
 ```
 
+After the retarget, check whether the existing PR is now a non-bottom layer and still ready for review (not a draft). If so, convert it to draft so it follows the rule that non-bottom PRs stay in draft:
+
+```bash
+gh pr ready <existing_pr> --undo
+# GitLab: glab mr update <iid> --draft --repo "$NS/$PROJECT"
+```
+
+Tell the user the PR went back to draft and that its existing approvals stay on it. Step 7 marks the bottom PR ready once every header is right.
+
 **f. Register natively (only when `native_available` is true).** Once every PR exists and is retargeted, list the stack's branches bottom to top:
 
 ```bash
